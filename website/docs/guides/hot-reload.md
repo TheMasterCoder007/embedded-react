@@ -29,7 +29,7 @@ target board without leaving the tab.
 
 ## On the desktop
 
-Inside the repository, `npm run sim -- thermostat` from `bridges/quickjs/js` runs esbuild in watch
+Inside the repository, `npm run sim -- thermostat` from `packages/embedded-react` runs esbuild in watch
 mode and launches the SDL simulator, which reloads the window on change. It reads a demo's source
 directly against the in-repo library, with no install step. Build the simulator once first, from
 the repository root:

@@ -24,7 +24,7 @@ tools/font-converter/build/
 tests/*/build/
 Testing/
 
-# Node deps / tool caches (real deps live in bridges/quickjs/js; this catches stray caches at any level)
+# Node deps / tool caches (real deps live in packages/embedded-react; this catches stray caches at any level)
 node_modules/
 .vite/
 
@@ -32,7 +32,7 @@ node_modules/
 # npm package, never committed (mirrors how dist/ is handled). See tools/web-sim/README.md.
 tools/web-sim/public/
 # Prebuilt sim assets staged into the npm package by build.mjs (shipped via the package's files whitelist).
-bridges/quickjs/js/sim/
+packages/embedded-react/sim/
 
 # OS
 .DS_Store

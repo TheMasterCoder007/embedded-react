@@ -137,9 +137,13 @@ const gitTagWrite = (text, version) =>
 // Version-bearing manifests — each independently published artifact, the engine's C header, the README
 // install pins, and the example fetch-template tags.
 const MANIFESTS = [
-  {path: 'bridges/quickjs/js/package.json', read: jsonRead, write: jsonWrite},
   {
-    path: 'bridges/quickjs/js/package-lock.json',
+    path: 'packages/embedded-react/package.json',
+    read: jsonRead,
+    write: jsonWrite,
+  },
+  {
+    path: 'packages/embedded-react/package-lock.json',
     read: lockRead,
     write: lockWrite,
   },
@@ -202,7 +206,11 @@ const MANIFESTS = [
 // LICENSE and NOTICE. The repo-root copies are the source of truth; mirror them into each package dir so
 // `npm pack` / `compote upload` / `pio publish` include them (and never drift — --check verifies).
 const LEGAL_FILES = ['LICENSE', 'NOTICE'];
-const PACKAGE_DIRS = ['bridges/quickjs/js', 'create-embedded-react', 'engine'];
+const PACKAGE_DIRS = [
+  'packages/embedded-react',
+  'create-embedded-react',
+  'engine',
+];
 const legalMirrors = () =>
   PACKAGE_DIRS.flatMap(dir => LEGAL_FILES.map(f => `${dir}/${f}`));
 

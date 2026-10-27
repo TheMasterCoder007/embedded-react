@@ -51,7 +51,7 @@ runs the JavaScript runtime tiers against both.
 
 ## The JavaScript package: three tiers
 
-From `bridges/quickjs/js`:
+From `packages/embedded-react`:
 
 | Command                 | What it runs                                                                                                                                                                                                                                                        | Needs                                  |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
@@ -93,7 +93,7 @@ A refactor of the compiler must leave its output exactly as it was, and the unit
 fragments of it. Record a baseline before the change and compare after each step:
 
 ```bash
-cd bridges/quickjs/js
+cd packages/embedded-react
 npm run aot:baseline -- --ref HEAD   # without --ref: the working tree as it is now
 npm run aot:same                     # compiles the same inputs again; prints the first difference
 ```

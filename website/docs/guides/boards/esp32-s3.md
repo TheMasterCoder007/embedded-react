@@ -85,9 +85,9 @@ I (xxx) embedded-react: alive: 120 frames, …
 why (`No config loaded`, `Couldn't load config: <reason>`); if the panel itself fails to initialise,
 the host falls back to a headless backend so the JavaScript side still runs and logs.
 
-Inside the repository, `cd bridges/quickjs/js && npm run pack` packs one of the demos instead
+Inside the repository, `cd packages/embedded-react && npm run pack` packs one of the demos instead
 (`npm run pack -- watch-face` picks another), and the container lands in
-`bridges/quickjs/js/dist/app.erpkg`.
+`packages/embedded-react/dist/app.erpkg`.
 
 ## Hot reload over USB
 

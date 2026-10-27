@@ -15,9 +15,11 @@ backends/               Hardware adapters, one folder per rendering API or perip
 
 bridges/                Frontends that drive the engine.
   quickjs/              Flow A: the NativeUI C bridge and er_runtime host core over QuickJS.
-  quickjs/js/           The npm package `embedded-react`: components, reconciler, bundler,
+
+packages/               The npm packages.
+  embedded-react/       The npm package `embedded-react`: components, reconciler, bundler,
                         asset bakers, and the dev/export/build CLI.
-  quickjs/js/aot/       Flow B: the JSX-to-C ahead-of-time compiler.
+  embedded-react/aot/   Flow B: the JSX-to-C ahead-of-time compiler.
 
 create-embedded-react/  The `npm create embedded-react` scaffolder and its starter templates.
 
@@ -43,7 +45,7 @@ is not a stylistic preference; it is what makes the two flows possible.
 
 ```text
         React on QuickJS                    JSX compiled to C
-        (bridges/quickjs)                   (bridges/quickjs/js/aot)
+        (bridges/quickjs)                   (packages/embedded-react/aot)
                │                                    │
                └──────────────┬─────────────────────┘
                               ▼
@@ -66,7 +68,7 @@ engine's neutrality is an implementation choice that keeps the two flows honest 
 
 ## The layers, top down
 
-**The npm package** (`bridges/quickjs/js/src/`) is what an app imports. `embedded-react/` holds the
+**The npm package** (`packages/embedded-react/src/`) is what an app imports. `embedded-react/` holds the
 public surface: the component tags, `StyleSheet`, `Animated`, `PanResponder`, `AppRegistry`, the
 hooks. Beside it, `host-config.js` is the `react-reconciler` host config that turns React's
 `createInstance`/`appendChild`/`commitUpdate` into `NativeUI.*` calls, `renderer.js` creates the
@@ -83,7 +85,7 @@ overlay. `er_js_alloc.c` is the allocator that reports real block sizes so Quick
 works on bare metal. `er_hotreload.c` parses the USB reload frames. `er_assets.c` registers an ERPK
 pack. [NativeUI bridge](../api/native-ui-bridge.md) documents the surface.
 
-**The AOT compiler** (`bridges/quickjs/js/aot/`) parses the app's JSX with Babel, folds
+**The AOT compiler** (`packages/embedded-react/aot/`) parses the app's JSX with Babel, folds
 module-level constants (including the `screen` size), and emits `app.gen.c`: node construction, a
 `useState` state machine, handlers as C functions, animations as engine calls, `PanResponder` configs
 as responder registrations. It rejects anything it cannot lower, by message, at build time.
@@ -132,7 +134,7 @@ relative `add_subdirectory`; nothing is installed.
 | --------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Engine and its tests  | `cmake -S engine -B build -DBUILD_TESTING=ON && cmake --build build`                       | A static library, `embedded-react`; `ctest --test-dir build` runs the suites                                                                                 |
 | QuickJS bridge        | `cmake -S bridges/quickjs -B bridges/quickjs/build && cmake --build bridges/quickjs/build` | Also builds `er-bridge-quickjs-runtest` (the headless test harness) and `er-bridge-quickjs-compile` (the bytecode precompiler `npm run pack` needs)          |
-| The npm package       | `cd bridges/quickjs/js && npm install`                                                     | `npm run pack -- <demo>`, `npm run aot -- <demo>`, `npm run sim -- <demo>`, `npm test`, `npm run parity`; the `-- <demo>` names a folder in `demos/`         |
+| The npm package       | `cd packages/embedded-react && npm install`                                                | `npm run pack -- <demo>`, `npm run aot -- <demo>`, `npm run sim -- <demo>`, `npm test`, `npm run parity`; the `-- <demo>` names a folder in `demos/`         |
 | Desktop hosts         | `cmake -S examples/linux -B examples/linux/build` (and `examples/linux-aot`)               | [Linux](../guides/boards/linux.md)                                                                                                                           |
 | SDL simulator         | `cmake -S tools/simulator -B tools/simulator/build && cmake --build tools/simulator/build` | Then `npm run sim -- <demo>` from the npm package launches it with a watch loop                                                                              |
 | WebAssembly simulator | `node tools/web-sim/build.mjs`                                                             | Needs the Emscripten SDK (`emcc` on PATH); writes the wasm and stages it into the package's `sim/`. `node tools/web-sim/dev.mjs [demo]` is the repo dev loop |
@@ -140,6 +142,6 @@ relative `add_subdirectory`; nothing is installed.
 | This site             | `cd website && npm install && npm start`                                                   | `npm run build` for the static site; the changelog and roadmap pages are generated from the repo-root files on every start and build                         |
 
 The bytecode precompiler is not the Flow B compiler: it turns a Flow A bundle into QuickJS bytecode
-that the VM still runs, while the Flow B compiler in `bridges/quickjs/js/aot/` emits C and drops
+that the VM still runs, while the Flow B compiler in `packages/embedded-react/aot/` emits C and drops
 QuickJS entirely. The WebAssembly module is built by CI and shipped inside the npm package, so only
 someone changing the engine or the bridge needs Emscripten.

@@ -4,7 +4,7 @@
 #
 # Flow B needs NO QuickJS (the app is compiled C): this pulls in the embedded-react engine + the
 # pico-spi-lcd backend — from the LOCAL monorepo checkout when building in-tree, else fetched from
-# GitHub. The AOT app itself (bridges/quickjs/js/dist/app.gen.c) is generated separately by
+# GitHub. The AOT app itself (packages/embedded-react/dist/app.gen.c) is generated separately by
 # `npm run aot` (see below).
 #
 # The pico-sdk is located via the standard shim: set PICO_SDK_PATH, or PICO_SDK_FETCH_FROM_GIT=1 to
@@ -40,13 +40,13 @@ pico_sdk_init()
 
 # --- AOT app (generated, NOT committed) ------------------------------------------------------------
 # Generate it first, sized for this board's 240x280 panel:
-#   (in bridges/quickjs/js)  ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face
-set(APP_GEN "${EMBEDDED_REACT_SRC_DIR}/bridges/quickjs/js/dist/app.gen.c")
-set(APP_GEN_DIR "${EMBEDDED_REACT_SRC_DIR}/bridges/quickjs/js/dist")
+#   (in packages/embedded-react)  ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face
+set(APP_GEN "${EMBEDDED_REACT_SRC_DIR}/packages/embedded-react/dist/app.gen.c")
+set(APP_GEN_DIR "${EMBEDDED_REACT_SRC_DIR}/packages/embedded-react/dist")
 if(NOT EXISTS "${APP_GEN}")
     message(FATAL_ERROR
         "No AOT app at ${APP_GEN} — generate it first (sized for this board):\n"
-        "    cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face")
+        "    cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face")
 endif()
 
 # --- embedded-react engine, RAM-tuned for the RP2040 (264 KB SRAM, no FPU) -------------------------

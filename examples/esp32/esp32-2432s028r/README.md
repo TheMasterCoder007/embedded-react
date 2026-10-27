@@ -18,7 +18,7 @@ ESP-IDF v5.3 or newer (tested on v6.1), exported.
 ```bash
 # 1. compile the app to C at the panel size (from your app project, or the repo equivalent below)
 npx embedded-react build --aot --screen 240x320
-#    in-repo: cd bridges/quickjs/js && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat
+#    in-repo: cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat
 
 # 2. build and flash, over the USB-C port
 cd examples/esp32/esp32-2432s028r

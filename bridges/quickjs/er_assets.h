@@ -19,7 +19,7 @@
 
 /*
  * er_assets — portable loader for the ERPK binary asset pack (images + fonts), produced by the JS
- * baker (bridges/quickjs/js/assets/emit-pack.mjs). Parses a pack from a memory buffer and registers
+ * baker (packages/embedded-react/assets/emit-pack.mjs). Parses a pack from a memory buffer and registers
  * its images and fonts with the engine (er_image_load / er_font_register). Platform-neutral and
  * filesystem-free — the buffer can be a file read into RAM (simulator) or a pointer into flash (a
  * config container on a device). It is also the asset section of the ERCF config container.

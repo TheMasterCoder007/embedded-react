@@ -29,7 +29,7 @@
  *
  * Flash a config to the 'config' partition separately from the firmware (see ../README.md):
  *   parttool.py write_partition --partition-name=config \
- *       --input ../../bridges/quickjs/js/dist/app.erpkg
+ *       --input dist/app.erpkg
  *
  * See ../README.md.
  */

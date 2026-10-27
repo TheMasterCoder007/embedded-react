@@ -155,7 +155,7 @@ Carried over from the C output:
 - **Fast Refresh.** The SDL/WASM simulators preserve `useState` across reloads via a
   Babel transform; full per-component Fast Refresh (no keying fragility) is a later
   upgrade.
-- **Workspace packages.** The JS layer incubates in-repo at `bridges/quickjs/js`. Once
+- **Workspace packages.** The JS layer incubates in-repo at `packages/embedded-react`. Once
   the public surface stabilizes, extract it into published workspace packages.
 
 > **Done:** `embedded-react build` now produces the device artifact from a consumer project —

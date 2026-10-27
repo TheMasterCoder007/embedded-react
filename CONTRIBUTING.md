@@ -14,7 +14,7 @@ The short version:
   (every scratch buffer is static, sized by the `ERUI_*` flags).
 - **Code style.** C is formatted with clang-format (`cmake -S . -B build && cmake --build build
   --target format`); JavaScript with Prettier, run from the npm package
-  (`cd bridges/quickjs/js && npm run format`); the site's Markdown with the same Prettier, as the
+  (`cd packages/embedded-react && npm run format`); the site's Markdown with the same Prettier, as the
   contributing page shows. Every function carries a description, its parameters
   and its return value; comments say what the code does, not its history.
 - **Changes that need more than code.** A user-facing change gets a bullet under `## [Unreleased]`

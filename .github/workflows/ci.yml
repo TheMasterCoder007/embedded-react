@@ -24,19 +24,19 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: bridges/quickjs/js/package-lock.json
+          cache-dependency-path: packages/embedded-react/package-lock.json
       - run: npm ci
       - run: npx vitest run
       - run: npm run typecheck
       - name: Version + LICENSE/NOTICE in sync with VERSION
-        run: node ../../../tools/sync-version.mjs --check
+        run: node ../../tools/sync-version.mjs --check
 
   engine:
     name: Engine build + ctests
@@ -145,17 +145,17 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: bridges/quickjs/js/package-lock.json
+          cache-dependency-path: packages/embedded-react/package-lock.json
       - name: Install JS dependencies
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         run: npm ci
       - name: Runtime tests
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         env:
           ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci
         run: npm run test:runtime
       - name: Runtime tests (bytecode)
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         env:
           ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci
         run: npm run test:bytecode
@@ -172,12 +172,12 @@ jobs:
         run: ctest --test-dir bridges/quickjs/build-ci-shim --output-on-failure
       # The runtime tests again on this allocator; bytecode on it is the combination an MCU runs.
       - name: Runtime tests (bare-metal size-prefix allocator)
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         env:
           ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci-shim
         run: npm run test:runtime
       - name: Runtime tests (bytecode, bare-metal size-prefix allocator)
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         env:
           ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci-shim
         run: npm run test:bytecode
@@ -187,27 +187,27 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: bridges/quickjs/js/package-lock.json
+          cache-dependency-path: packages/embedded-react/package-lock.json
       - run: npm ci
       # gcc the generated C against the public engine headers — no SDL, no display. -fsyntax-only still
       # evaluates the version-pin _Static_assert, so an ABI/version mismatch fails here.
       - name: watch-face → C → gcc
         run: |
           ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mts watch-face
-          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
-          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
+          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/app.gen.c
+          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/assets.generated.c
       - name: thermostat (solo) → C → gcc
         run: |
           ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mts thermostat
-          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
-          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/assets.generated.c
+          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/app.gen.c
+          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/assets.generated.c
 
   consumer:
     name: Consumer smoke (pack + install + build)
@@ -228,7 +228,7 @@ jobs:
       - name: Build the prebuilt WASM simulator
         run: node tools/web-sim/build.mjs
       - name: Install the package's dependencies
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         run: npm ci
       - name: Pack → install → build (Flow A + AOT)
         run: node tools/consumer-smoke.mjs

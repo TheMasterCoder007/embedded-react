@@ -28,7 +28,7 @@ What `sync-version` keeps in step:
 
 | File                                                         | What carries the version                                                                                           |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `bridges/quickjs/js/package.json`, `package-lock.json`       | The `embedded-react` package                                                                                       |
+| `packages/embedded-react/package.json`, `package-lock.json`  | The `embedded-react` package                                                                                       |
 | `create-embedded-react/package.json`                         | The scaffolder                                                                                                     |
 | `demos/*/package.json`                                       | Each demo's `embedded-react` dependency (the scaffolder's templates carry a placeholder it fills at scaffold time) |
 | `library.json`                                               | PlatformIO                                                                                                         |

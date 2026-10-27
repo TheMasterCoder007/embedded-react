@@ -26,7 +26,7 @@
  *
  * Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
  * tools/web-sim/build.mjs); the AOT path (app.gen.c) and the TypeScript-template typecheck always run.
- * Packs the staged package (tools/stage-npm-package.mjs), so it needs `npm ci` in bridges/quickjs/js.
+ * Packs the staged package (tools/stage-npm-package.mjs), so it needs `npm ci` in packages/embedded-react.
  * Exits non-zero on any failure.
  */
 
@@ -44,7 +44,7 @@ import {fileURLToPath} from 'node:url';
 import {stageNpmPackage} from './stage-npm-package.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const JS = resolve(ROOT, 'bridges/quickjs/js');
+const JS = resolve(ROOT, 'packages/embedded-react');
 const CER = resolve(ROOT, 'create-embedded-react');
 
 const run = (cmd, args, cwd) =>

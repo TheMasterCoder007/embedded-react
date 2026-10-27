@@ -21,7 +21,7 @@
 
 /*
  * Runtime asset-pack loader for the simulator (see tools/simulator/README.md). Reads an ERPK binary
- * pack (produced by the JS bakers via bridges/quickjs/js/assets/emit-pack.mjs) and registers its
+ * pack (produced by the JS bakers via packages/embedded-react/assets/emit-pack.mjs) and registers its
  * images and fonts with the engine (er_image_load / er_font_register). This is how the simulator
  * hot-reloads assets without a rebuild; on a real device, assets stay baked into the binary.
  */

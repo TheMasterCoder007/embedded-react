@@ -9,7 +9,7 @@ project(embedded-react-desktop-aot C)
 # the generated C; the QuickJS bridge is deliberately absent.
 #
 # Generate the app first, then build:
-#   (in bridges/quickjs/js)  npm run aot -- watch-face   # → dist/app.gen.{c,h}
+#   (in packages/embedded-react)  npm run aot -- watch-face   # → dist/app.gen.{c,h}
 #   cmake -S examples/linux-aot -B examples/linux-aot/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/...vcpkg.cmake]
 #   cmake --build examples/linux-aot/build
 # ---------------------------------------------------------------------------
@@ -39,13 +39,13 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../engine       ${CMAKE_CURRENT_
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../backends/sdl ${CMAKE_CURRENT_BINARY_DIR}/backends/sdl)
 
 # The AOT-generated app translation unit — produced out-of-band by `npm run aot` into
-# bridges/quickjs/js/dist. Like Flow A's bundle it's a generated artifact (not committed); fail with a
+# packages/embedded-react/dist. Like Flow A's bundle it's a generated artifact (not committed); fail with a
 # clear message if it hasn't been generated yet.
-set(ER_APP_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs/js/dist")
+set(ER_APP_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/embedded-react/dist")
 if (NOT EXISTS "${ER_APP_GEN_DIR}/app.gen.c")
     message(FATAL_ERROR
             "No AOT app at ${ER_APP_GEN_DIR}/app.gen.c — generate it first:\n"
-            "    cd bridges/quickjs/js && npm run aot -- <demo>   (e.g. watch-face)")
+            "    cd packages/embedded-react && npm run aot -- <demo>   (e.g. watch-face)")
 endif ()
 
 # app.gen.c + assets.generated.c are produced together by `npm run aot`: the app tree and the baked-image

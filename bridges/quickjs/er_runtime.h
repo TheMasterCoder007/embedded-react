@@ -280,7 +280,7 @@ const char* er_runtime_container_status_str(ErContainerStatus status);
  * privately by each of them, because a divergence does not fail loudly — a frame or container simply
  * stops loading with a CRC mismatch and nothing says why.
  *
- * The JS side (bridges/quickjs/js/assets/emit-container.mjs, which hotreload/protocol.mjs imports) is the
+ * The JS side (packages/embedded-react/assets/emit-container.mjs, which hotreload/protocol.mjs imports) is the
  * fourth copy and cannot share this one; it carries a note pointing back here, and container.unit.test.js
  * pins both to the standard "123456789" -> 0xCBF43926 check vector.
  *

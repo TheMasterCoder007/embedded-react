@@ -5,9 +5,9 @@
 #
 # The firmware builds standalone (no app needed at build time, just like real firmware). Flash a config
 # to the 'config' partition separately, then reboot:
-#   (in bridges/quickjs/js)  npm run pack            # → dist/app.erpkg
+#   (in packages/embedded-react)  npm run pack            # → dist/app.erpkg
 #   parttool.py write_partition --partition-name=config \
-#       --input ../../bridges/quickjs/js/dist/app.erpkg
+#       --input dist/app.erpkg
 # Until a config is flashed, the device shows a "No config loaded" panel.
 
 # On-device hot reload over USB-Serial-JTAG (DEV ONLY) — `embedded-react dev --device <port>` streams a

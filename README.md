@@ -128,16 +128,16 @@ lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.18.0
 ## Repository layout
 
 ```
-engine/                 Pure C99 runtime: scene graph, layout, rendering, text, animation.
-backends/               Hardware adapters, one folder per rendering API or peripheral.
-bridges/quickjs/        Flow A: the NativeUI C bridge and er_runtime host core over QuickJS.
-bridges/quickjs/js/     The npm package `embedded-react`: components, reconciler, bundler,
-                        asset bakers, the dev/export/build CLI, and the Flow B compiler (aot/).
-create-embedded-react/  The `npm create embedded-react` scaffolder and its templates.
-demos/                  The thermostat and watch-face demo apps; each builds through both flows.
-examples/               Board firmware projects: one engine + one backend + one flow per board.
-tools/                  The SDL simulator, the WebAssembly simulator build, the release scripts.
-website/                The documentation site.
+engine/                   Pure C99 runtime: scene graph, layout, rendering, text, animation.
+backends/                 Hardware adapters, one folder per rendering API or peripheral.
+bridges/quickjs/          Flow A: the NativeUI C bridge and er_runtime host core over QuickJS.
+packages/embedded-react/  The npm package `embedded-react`: components, reconciler, bundler,
+                          asset bakers, the dev/export/build CLI, and the Flow B compiler (aot/).
+create-embedded-react/    The `npm create embedded-react` scaffolder and its templates.
+demos/                    The thermostat and watch-face demo apps; each builds through both flows.
+examples/                 Board firmware projects: one engine + one backend + one flow per board.
+tools/                    The SDL simulator, the WebAssembly simulator build, the release scripts.
+website/                  The documentation site.
 ```
 
 Each folder's README says how to build what is in it and points at the relevant docs page.

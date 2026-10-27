@@ -138,7 +138,7 @@ endif ()
 
 # ---------------------------------------------------------------------------
 # Headless runtime-test harness — loads a bundled JS test (esbuild output) and runs it under the
-# bridge + engine with a no-op backend, no window. Driven by `npm run test:runtime` in js/.
+# bridge + engine with a no-op backend, no window. Driven by `npm run test:runtime` in packages/embedded-react.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_RUNTEST "Build the headless runtime-test harness" ON)
 
@@ -150,7 +150,7 @@ endif ()
 # ---------------------------------------------------------------------------
 # Split round-trip harness — loads a vendor/app SPLIT boot container then an app-only frame (no reset),
 # verifying the resident vendor is reused and usePersistentState survives. The desktop proof of the device
-# hot-reload mechanism. Driven by `node test/runtime/split-roundtrip.mjs` in js/.
+# hot-reload mechanism. Driven by `node test/runtime/split-roundtrip.mjs` in packages/embedded-react.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_SPLITTEST "Build the vendor/app split round-trip harness" ON)
 
@@ -189,7 +189,7 @@ endif ()
 # embedding in MCU flash). Links only `qjs` (no engine/bridge needed to compile). Hosts load the
 # blob with JS_ReadObject instead of parsing source — the §4 boot/RAM lever for ESP32-S3 / STM32H7.
 # NOTE: this is a parse-time optimization for Flow A; the QuickJS VM still runs the bytecode. It is
-# NOT the Flow B AOT compiler (which compiles JSX to C and removes QuickJS) — see js/aot/.
+# NOT the Flow B AOT compiler (which compiles JSX to C and removes QuickJS) — see packages/embedded-react/aot/.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_COMPILE "Build the QuickJS bytecode precompiler tool" ON)
 

@@ -39,7 +39,7 @@ jobs:
           node-version: 24
           registry-url: 'https://registry.npmjs.org'
           cache: npm
-          cache-dependency-path: bridges/quickjs/js/package-lock.json
+          cache-dependency-path: packages/embedded-react/package-lock.json
           # OIDC trusted publishing: with `id-token: write`, npm >= 11.5.1, and a trusted publisher set up
           # on npmjs.com, npm authenticates with no token. GOTCHA: the trusted publisher's owner/repo must
           # match the GitHub OIDC claim's EXACT case — `TheMasterCoder007`, not `themastercoder007` — or the
@@ -65,7 +65,7 @@ jobs:
 
       # Fast, display-free verification before anything is published.
       - name: JS tests
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         run: npm ci && npx vitest run
       - name: Engine ctests
         run: |
@@ -73,10 +73,10 @@ jobs:
           cmake --build engine/build-ci
           ctest --test-dir engine/build-ci --output-on-failure
       - name: AOT compile smoke
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         run: |
           ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mts watch-face
-          gcc -std=c99 -fsyntax-only -I ../../../engine/include -I dist dist/app.gen.c
+          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/app.gen.c
 
       # Build the prebuilt WASM simulator (engine + QuickJS + backends → embedded-react.{js,wasm}) and stage
       # it into the npm package's sim/ dir so `npx embedded-react dev` ships ready-to-run — consumers need no
@@ -102,7 +102,7 @@ jobs:
       # Enable by setting repo variable PUBLISH_NPM=true AFTER configuring the trusted publisher on npmjs.com.
       - name: Publish to npm
         if: ${{ vars.PUBLISH_NPM == 'true' }}
-        working-directory: bridges/quickjs/js
+        working-directory: packages/embedded-react
         run: |
           # OIDC trusted publishing needs npm >= 11.5.1. Pinned to the npm 11 line rather than @latest, so a
           # new npm major never lands mid-release.
@@ -117,7 +117,7 @@ jobs:
             # Publish the staged copy: the same files, with the TypeScript compiled to JavaScript, since an
             # installed package cannot run TypeScript (tools/stage-npm-package.mjs). Assigned first, so a
             # failed staging stops the step instead of publishing an empty path.
-            staged=$(node ../../../tools/stage-npm-package.mjs)
+            staged=$(node ../../tools/stage-npm-package.mjs)
             npm publish "$staged" --provenance --access public
           fi
 
