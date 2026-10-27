@@ -7,7 +7,7 @@
 # to the 'config' partition separately, then reboot:
 #   (in packages/embedded-react)  npm run pack            # → dist/app.erpkg
 #   parttool.py write_partition --partition-name=config \
-#       --input ../../packages/embedded-react/dist/app.erpkg
+#       --input dist/app.erpkg
 # Until a config is flashed, the device shows a "No config loaded" panel.
 
 # On-device hot reload over USB-Serial-JTAG (DEV ONLY) — `embedded-react dev --device <port>` streams a
