@@ -105,12 +105,52 @@ extern "C"
 #define ERUI_MAX_NODES 512
 #endif
 
+/**
+ * @brief The engine ABI level a Flow B package is checked against, and the oldest one this engine still runs.
+ *
+ * Bump ER_ABI when a prop, node type, event, animated property or enum value is added. Raise ER_ABI_MIN when
+ * one is removed or changes meaning. The prop ids a package names are listed in runtime/erb_props.c.
+ */
+#define ER_ABI 1
+#define ER_ABI_MIN 1
+
     /*----------------------------------------------------------------------------------------------------------------------
      - Types
      ---------------------------------------------------------------------------------------------------------------------*/
 
     /** @brief Opaque scene graph node. Obtain via er_node_create(). */
     typedef struct ERNode ERNode;
+
+    /**
+     * @brief A reference to one node that stops resolving once that node is destroyed.
+     *
+     * A tag alone is a pool slot, and a destroyed node's slot is handed to the next node created — possibly by
+     * the very handler that destroyed it. Held across app code, a tag can name a node that was never involved.
+     *
+     * Serials are 32 bits and wrap after 2^32 creations, so a reference is for holding across callbacks, not
+     * for keeping: only a reference that outlived that many creations could match a later node.
+     */
+    typedef struct
+    {
+        uint16_t tag;
+        uint32_t serial;
+    } ERNodeRef;
+
+    /**
+     * @brief The engine's pool sizes, as this build was configured. A Flow B package's needs are checked
+     *        against them at load.
+     */
+    typedef struct
+    {
+        uint16_t nodes;         /**< ERUI_MAX_NODES. */
+        uint16_t vector_nodes;  /**< ERUI_MAX_VECTOR_NODES. */
+        uint16_t anim_values;   /**< ERUI_MAX_ANIM_VALUES. */
+        uint16_t animations;    /**< ERUI_MAX_ANIMATIONS. */
+        uint16_t anim_groups;   /**< ERUI_MAX_ANIM_GROUPS. */
+        uint16_t group_entries; /**< ERUI_MAX_GROUP_ENTRIES. */
+        uint16_t images;        /**< ERUI_IMAGE_REGISTRY_MAX. */
+        uint16_t font_families; /**< Font families the registry holds. */
+    } ERPoolLimits;
 
     /**
      * @brief Axis-aligned rectangle used for clipping and layout.
@@ -982,6 +1022,14 @@ extern "C"
     ERNode* er_node_next_sibling(const ERNode* node);
 
     /**
+     * @brief Returns a node's parent, or NULL for a node that isn't in a tree (or is the root).
+     *
+     * @param[in] node  Node to query (NULL → NULL).
+     * @return The parent, or NULL.
+     */
+    ERNode* er_node_parent(const ERNode* node);
+
+    /**
      * @brief Returns a node's type.
      *
      * Lets a host dispatch on the kind of node behind a handle — e.g. the bridge delivering
@@ -1009,6 +1057,31 @@ extern "C"
      * @return Count of in-use nodes in the pool.
      */
     int er_node_in_use_count(void);
+
+    /**
+     * @brief Makes a reference to a node that er_node_deref() resolves only while that same node lives.
+     *
+     * @param[in] node  Node to reference; NULL makes a reference that never resolves.
+     *
+     * @return The reference.
+     */
+    ERNodeRef er_node_ref(const ERNode* node);
+
+    /**
+     * @brief Resolves a reference made by er_node_ref().
+     *
+     * @param[in] ref  Reference to resolve.
+     *
+     * @return The node, or NULL once it has been destroyed — even if another node now occupies its slot.
+     */
+    ERNode* er_node_deref(ERNodeRef ref);
+
+    /**
+     * @brief Reports the engine's pool sizes, as this build was configured.
+     *
+     * @param[out] limits  Receives the sizes.
+     */
+    void er_pool_limits(ERPoolLimits* limits);
 
     /**
      * @brief Initialises an ERProps to its defaults, ready for the caller to set specific fields.
@@ -1249,6 +1322,27 @@ extern "C"
      * @param[in] h           Image height in pixels.
      */
     void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h);
+
+    /**
+     * @brief Reports whether an image is registered under a name.
+     *
+     * @param[in] name  Null-terminated image asset name.
+     *
+     * @return true when er_image_load() or er_image_load_rgb565() registered it.
+     */
+    bool er_image_exists(const char* name);
+
+    /**
+     * @brief Unregisters every image. er_reset() keeps them; a host loading a different app's assets calls
+     *        this first, so a name the new app doesn't have stops pointing at the old app's pixels.
+     */
+    void er_image_clear(void);
+
+    /**
+     * @brief Unregisters every font registered with er_font_register() or er_font_load(). The built-in font
+     *        stays.
+     */
+    void er_font_clear(void);
 
     /**
      * @brief Starts an animation on a node property.

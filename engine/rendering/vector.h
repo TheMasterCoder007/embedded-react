@@ -201,6 +201,9 @@ void er_vector_free(int slot);
 /** @brief Releases every storage slot back to the pool (part of er_reset()). */
 void er_vector_reset(void);
 
+/** @brief The number of storage slots: vector nodes that can hold geometry at once. */
+int er_vector_capacity(void);
+
 /** @brief Returns a slot's op-tape and writes its float count to @p n_ops (NULL/0 for an empty slot). */
 const float* er_vector_slot_ops(int slot, int* n_ops);
 

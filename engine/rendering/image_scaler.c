@@ -553,6 +553,16 @@ void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h
     image_registry_store(name, rgb565_buf, w, h, ER_IMG_RGB565);
 }
 
+bool er_image_exists(const char* name)
+{
+    return name && image_registry_get(name) != NULL;
+}
+
+void er_image_clear(void)
+{
+    image_registry_init();
+}
+
 void er_image_render(const ERImageProps* props, int x, int y, int w, int h, const ERRect* box)
 {
     if (!props || w <= 0 || h <= 0)

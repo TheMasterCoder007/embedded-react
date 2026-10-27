@@ -20,7 +20,9 @@
 #include "er_limits.h"
 #include "er_node_internal.h"
 #include "er_perf.h"
+#include "font_registry.h"
 #include "gradient.h"
+#include "image_registry.h"
 #include "image_scaler.h"
 #include "layout_anim.h"
 #include "layout_engine.h"
@@ -3127,6 +3129,16 @@ ERNode* er_node_deref(ERNodeRef ref)
     return (node && node->serial == ref.serial) ? node : NULL;
 }
 
+void er_pool_limits(ERPoolLimits* limits)
+{
+    memset(limits, 0, sizeof(*limits));
+    limits->nodes = (uint16_t)ERUI_MAX_NODES;
+    limits->vector_nodes = (uint16_t)er_vector_capacity();
+    limits->images = (uint16_t)ERUI_IMAGE_REGISTRY_MAX;
+    limits->font_families = (uint16_t)FONT_REGISTRY_MAX;
+    er_anim_pool_limits(limits);
+}
+
 ERNode* er_get_root_node(void)
 {
     return er_get_node(s_root_tag);
@@ -3150,6 +3162,11 @@ ERNode* er_node_first_child(const ERNode* node)
 ERNode* er_node_next_sibling(const ERNode* node)
 {
     return node ? er_get_node(node->next_sibling_tag) : NULL;
+}
+
+ERNode* er_node_parent(const ERNode* node)
+{
+    return node ? er_get_node(node->parent_tag) : NULL;
 }
 
 ERNodeType er_node_get_type(const ERNode* node)

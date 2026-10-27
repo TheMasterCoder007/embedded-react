@@ -30,6 +30,19 @@ add_library(er-runtime STATIC
         er_hotreload.c
 )
 
+# The Flow B runtime: loader, verifier and VM for compiled packages. No QuickJS, no allocation.
+add_library(erb-runtime STATIC
+        erb_props.c
+        erb_verify.c
+        erb_vm.c
+        erb_runtime.c
+)
+
+target_link_libraries(erb-runtime
+        PUBLIC
+        er-runtime
+)
+
 target_link_libraries(er-runtime
         PUBLIC
         embedded-react
@@ -56,4 +69,14 @@ if (ER_RUNTIME_TESTS)
     add_executable(er-runtime-container-test tests/container_test.c)
     target_link_libraries(er-runtime-container-test PRIVATE er-runtime)
     add_test(NAME runtime-container COMMAND er-runtime-container-test)
+
+    add_executable(erb-verify-test tests/erb_verify_test.c)
+    target_link_libraries(erb-verify-test PRIVATE erb-runtime)
+    add_test(NAME runtime-erb-verify COMMAND erb-verify-test)
+
+    # The VM tests fire events the way the engine does, so they see its node internals.
+    add_executable(erb-vm-test tests/erb_vm_test.c)
+    target_link_libraries(erb-vm-test PRIVATE erb-runtime)
+    target_include_directories(erb-vm-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../engine/scene)
+    add_test(NAME runtime-erb-vm COMMAND erb-vm-test)
 endif ()

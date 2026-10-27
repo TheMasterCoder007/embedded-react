@@ -412,6 +412,13 @@ void er_anim_tick(uint32_t delta_ms);
 void er_anim_reset(void);
 
 /**
+ * @brief Reports the animation pools' sizes (part of er_pool_limits()).
+ *
+ * @param[out] limits  Receives animations, anim_groups, group_entries and anim_values.
+ */
+void er_anim_pool_limits(ERPoolLimits* limits);
+
+/**
  * @brief Re-applies the current value of every ERAnimValue bound to this node.
  *
  * Call after er_node_set_props so a declarative prop update does not clobber a native-driver

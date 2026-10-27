@@ -188,6 +188,12 @@ void er_font_load(const char* name, const void* buf, size_t len)
     (void)font_blob_register(name, buf, (uint32_t)len);
 }
 
+void er_font_clear(void)
+{
+    font_registry_init();
+    font_blob_init(0);
+}
+
 void er_font_register(const char* family, const BitmapFont* font)
 {
     /* Public, zero-copy companion to er_font_load: the BitmapFont is referenced by pointer (no font

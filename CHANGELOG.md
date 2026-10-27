@@ -10,6 +10,10 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
+  QuickJS and no heap. The compiler doesn't emit packages yet.
 
 ## [0.19.0] - 2026-10-27
 ### Changed
