@@ -305,9 +305,14 @@ reached by index, through tables the verifier has checked or handles the runtime
 
 ### Instructions
 
-Every instruction is one 32-bit word: an 8-bit opcode and three 8-bit operands `A B C`, or `A` and a
-16-bit `Bx` (an index or a signed offset). An instruction that needs more takes one extension word. A
-branch offset counts words from the next instruction. The families:
+Every instruction is one 32-bit word, little-endian: the opcode in bits 0–7, `A` in 8–15, then either
+`B` in 16–23 and `C` in 24–31, or a 16-bit `Bx` in 16–31. `Bx` is unsigned for an index and two's
+complement for a branch offset, which counts words from the next instruction. An instruction that needs
+more takes one extension word after it.
+
+Each opcode has one fixed form and length, from one opcode list the compiler and the runtime share. So
+the verifier walks a function from its first word and knows where every instruction starts; an
+extension word is never an instruction, and a branch into one is rejected. The families:
 
 | Family        | Instructions                                                                                                                                                                                     |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -374,8 +379,12 @@ runtime delivers like any other.
 written by nothing else, so every loop runs at most a known number of times. With an acyclic call graph
 that makes the worst case of every entry point a number the verifier works out at load.
 
-Each event has an instruction budget, `ERB_EVENT_BUDGET` in the firmware (100,000 by default), counted
-in instructions executed. The verifier works out each entry point's worst case in the same unit:
+Each run of an entry point has an instruction budget, `ERB_EVENT_BUDGET` in the firmware (100,000 by
+default), counted in instructions executed. A run is one call from the runtime: a handler, one update
+pass, one effect, or one queued event. An event as a whole is bounded by the pass limit in
+[Running an event](#running-an-event), not by the budget.
+
+The verifier works out each entry point's worst case in the same unit:
 straight-line code counts its length, a loop its body's worst case times its bound, a call its callee's
 worst case, and a `BUILD` the nodes its template creates.
 
