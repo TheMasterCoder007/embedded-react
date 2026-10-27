@@ -104,7 +104,7 @@ npm install embedded-react react@18.3.1     # embedded-react pins React to 18.3.
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.18.0
+  GIT_TAG        v0.19.0
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -114,13 +114,13 @@ target_link_libraries(my_firmware PRIVATE embedded-react)
 `FetchContent` (it also needs QuickJS, which is not an IDF component):
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.18.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.19.0"
 ```
 
 **PlatformIO** — the engine (Flow B) as a library:
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.18.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.19.0
 ```
 
 [Installation](https://embedded-react.dev/getting-started/installation) has the details for each.
