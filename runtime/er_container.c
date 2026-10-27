@@ -96,15 +96,17 @@ ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, Er
     }
 
     /* The length fields are unverified until the CRC is checked, so every one is bounds-checked against
-     * buffer_length: a malformed blob is rejected, never over-read. */
+     * buffer_length: a malformed blob is rejected, never over-read. offset never passes buffer_length, so
+     * each check compares with the bytes left instead of adding to offset, which could wrap a 32-bit size_t
+     * when buffer_length is a loose upper bound. */
     size_t offset = HEADER_SIZE;
-    if (offset + 2u > buffer_length)
+    if (buffer_length - offset < 2u)
     {
         return ER_CONTAINER_BAD_VERSION;
     }
     container->tag_length = read_le16(bytes + offset);
     offset += 2u;
-    if (offset + (size_t)container->tag_length + 4u > buffer_length)
+    if (buffer_length - offset < (size_t)container->tag_length + 4u)
     {
         return ER_CONTAINER_BAD_VERSION;
     }
@@ -119,7 +121,7 @@ ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, Er
 
     for (uint32_t section_index = 0; section_index < container->section_count; section_index++)
     {
-        if (offset + SECTION_HEADER_SIZE > buffer_length)
+        if (buffer_length - offset < SECTION_HEADER_SIZE)
         {
             return ER_CONTAINER_BAD_VERSION;
         }
@@ -127,9 +129,7 @@ ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, Er
         const uint32_t section_length = read_le32(bytes + offset + 4u);
         section->type = read_le32(bytes + offset);
         offset += SECTION_HEADER_SIZE;
-
-        /* Compared as a remainder, so a length near 4 GB can't wrap a 32-bit size_t past the check. */
-        if (section_length > buffer_length - offset)
+        if (buffer_length - offset < section_length)
         {
             return ER_CONTAINER_BAD_VERSION;
         }
