@@ -15,7 +15,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
   QuickJS and no heap.
 - `embedded-react build --aot --package` writes a Flow B package and prints the RAM, nodes, and flash
-  it needs. For now, it only takes apps with no state.
+  it needs. It takes state, handlers, and values worked out from the screen size, so the thermostat
+  demo builds as a package. Timers, effects, lists, animations, PanResponder, and `<Svg>` come next.
 - `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it.
 
 ### Changed

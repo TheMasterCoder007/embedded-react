@@ -39,7 +39,7 @@ The package is the React Native analog: hooks come from `react`, everything else
 | `npx embedded-react dev --device` | The same, streamed to a connected board over USB (a firmware built with hot reload) |
 | `npx embedded-react build` | The Flow A device artifact, `dist/app.erpkg` (bytecode + baked assets + CRC) |
 | `npx embedded-react build --aot --screen WxH` | The Flow B artifact, `app.gen.c` + `assets.generated.c`, to compile into firmware |
-| `npx embedded-react build --aot --package --screen WxH` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. Apps with no state only, for now |
+| `npx embedded-react build --aot --package --screen WxH` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. State and handlers so far; not yet timers, effects, lists, animations, PanResponder or `<Svg>` |
 | `npx embedded-react export` | A self-contained static copy of the simulator with your app, for any static host |
 
 ## Where to read more

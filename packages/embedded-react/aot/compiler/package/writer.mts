@@ -98,6 +98,12 @@ export interface ProgramBinding {
   target: number;
 }
 
+export interface ProgramInput {
+  /** Its name's string index. */
+  name: number;
+  slot: number;
+}
+
 export interface ProgramFunction {
   kind: number;
   params: number;
@@ -123,6 +129,8 @@ export interface Program {
   templates: ProgramTemplate[];
   bindings: ProgramBinding[];
   functions: ProgramFunction[];
+  /** Host-fed values, sorted by name. */
+  inputs: ProgramInput[];
 }
 
 /** The bytes of one table, for the resource report. */
@@ -370,6 +378,14 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
   table(Table.code, out =>
     program.functions.forEach(fn => fn.code.forEach(word => out.u32(word))),
   );
+  if (program.inputs.length) {
+    table(Table.inputs, out => {
+      for (const input of program.inputs) {
+        out.u16(input.name);
+        out.u16(input.slot);
+      }
+    });
+  }
   return tables;
 }
 

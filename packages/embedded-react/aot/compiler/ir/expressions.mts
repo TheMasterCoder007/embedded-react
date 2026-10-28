@@ -68,8 +68,17 @@ export type FloatMath =
   | 'pow'
   | 'mod';
 
-/** A touch field of the handler's event. */
-export type EventField = 'x' | 'y' | 'dx' | 'dy' | 'vx' | 'vy';
+/** A touch field of the handler's event, or the value a <Dial> or <TextInput> hands its callback. */
+export type EventField =
+  | 'x'
+  | 'y'
+  | 'dx'
+  | 'dy'
+  | 'vx'
+  | 'vy'
+  | 'value'
+  | 'value_start'
+  | 'changed_text';
 
 /** A field of the onLayout rect. */
 export type LayoutField = 'x' | 'y' | 'width' | 'height';

@@ -65,6 +65,7 @@ import {
   isTime,
   refType,
   slotOf,
+  stateType,
 } from './ir/types.mts';
 import type {IrDepEffect} from './ir/functions.mts';
 import type {IrSource} from './ir/source.mts';
@@ -740,6 +741,7 @@ function inlineHelperCall(
         lit: argExpr.lit,
         wide: argExpr.wide,
         source: argExpr.source,
+        expr: argExpr.expr,
       });
     }
   });
@@ -1071,6 +1073,7 @@ function lowerHandlerExprImpl(
         isBool: targetState.isBool,
         ...(targetState.widened === 'number' ? {lit: true} : {}),
         source: {kind: 'state', state: targetState, loc: undefined},
+        expr: {kind: 'state', state: targetState, type: stateType(targetState)},
       });
     }
 
@@ -1345,8 +1348,7 @@ export function lowerEffect(
 
   // A mount-once effect (`[]`) runs once, from er_app_build.
   const isMount =
-    effect.deps.type === 'ArrayExpression' &&
-    effect.deps.elements.length === 0;
+    effect.deps.type === 'ArrayExpression' && effect.deps.elements.length === 0;
   if (isMount) {
     const ctx: StatementContext = {
       stateChanged: false,
@@ -1521,6 +1523,8 @@ export function lowerHandler(
  * @param cType  The value's C kind.
  * @param secondValueCode  C for a second parameter's value (a range <Dial>'s low end), if any.
  * @param isBool  The value is a boolean, so text prints it as true/false.
+ * @param valueExpr  The value as a typed expression.
+ * @param secondValueExpr  The second parameter's value as a typed expression, if any.
  *
  * @returns The callback.
  */
@@ -1533,20 +1537,26 @@ export function lowerValueHandler(
   cType: CType = 'int',
   secondValueCode: string | null = null,
   isBool = false,
+  valueExpr?: IrExpr,
+  secondValueExpr?: IrExpr,
 ): IrCallback {
   // A <Switch> hands its callback a boolean; carry that so `'on=' + v` prints true/false, not 1/0.
   const valueParam =
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
   const locals = new Map<string, Local>(env.locals);
   if (valueParam) {
-    locals.set(valueParam, {code: valueCode, cType, isBool});
+    locals.set(valueParam, {code: valueCode, cType, isBool, expr: valueExpr});
   }
 
   // A RANGE <Dial>'s second parameter binds the same way, lowering to data->value_start with no object on device.
   const secondParam =
     fnNode.params[1]?.type === 'Identifier' ? fnNode.params[1].name : null;
   if (secondParam && secondValueCode) {
-    locals.set(secondParam, {code: secondValueCode, cType});
+    locals.set(secondParam, {
+      code: secondValueCode,
+      cType,
+      expr: secondValueExpr,
+    });
   }
 
   // Lower the body (an expression body is a single statement); it re-applies state once if it set any.

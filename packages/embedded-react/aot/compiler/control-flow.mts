@@ -483,6 +483,7 @@ export function emitComponent(
         lit: cExpr.lit,
         wide: cExpr.wide,
         source: cExpr.source,
+        expr: cExpr.expr,
       });
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }

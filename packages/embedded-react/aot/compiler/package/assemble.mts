@@ -96,7 +96,7 @@ export function compilePackageImpl(
   stores: IrSlotStore[],
 ): PackageResult {
   const app = lowerApp(src, opts, wide, stores);
-  const program = lowerPackage(app, opts.screen);
+  const program = lowerPackage(app, opts);
   const written = writeProgram(program);
   return {
     program: written.bytes,

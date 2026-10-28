@@ -21,7 +21,9 @@
 import {colorLiteral} from '../../style-map.mts';
 import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
-import {asCond, emitExpr, lowerExpr} from '../expressions.mts';
+import {asCond, lowerExpr} from '../expressions.mts';
+import {toCExpr} from '../c/expressions.mts';
+import {BOOL} from '../ir/types.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
 import {lowerValueHandler} from '../handlers.mts';
@@ -211,7 +213,8 @@ export function emitSwitch(
 
     // Compile onValueChange into an ER_EVENT_PRESS handler, passing the next switch value.
     const handlerName = `er_handler_${out.handlers.length}`;
-    const toggled = `(!(${asCond(emitExpr(valueNode, env))}))`; // the engine toggles on press → param is !value
+    const value = lowerExpr(valueNode, env);
+    const toggled = `(!(${asCond(toCExpr(value))}))`; // the engine toggles on press → param is !value
     out.handlers.push({
       kind: 'callback',
       name: handlerName,
@@ -224,6 +227,7 @@ export function emitSwitch(
         'int',
         null,
         true,
+        {kind: 'unary', op: '!', operand: value, type: BOOL},
       ),
     });
     node.wiring.push({

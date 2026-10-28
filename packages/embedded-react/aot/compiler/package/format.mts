@@ -109,6 +109,83 @@ export const Region = {
 /** Cells each VM frame keeps besides its registers. */
 export const FRAME_CELLS = 3;
 
+/** Register and slot value types. A 64-bit type, or a node handle, takes two register cells, the first even. */
+export const ValueType = {
+  pair: 0,
+  int: 1,
+  bool: 2,
+  float: 3,
+  int64: 4,
+  double: 5,
+  string: 6,
+  enum: 7,
+  node: 8,
+  anim: 9,
+  avalue: 10,
+  list: 11,
+} as const;
+
+/** Slot flag bits. */
+export const SlotFlag = {
+  tracked: 0x01,
+  bootOnly: 0x02,
+} as const;
+
+/** Binding kinds. */
+export const BindingKind = {
+  event: 1,
+  query: 2,
+  animated: 3,
+  tape: 4,
+} as const;
+
+/** Function kinds. Below `query`, a kind is the EREventType its handler is bound to. */
+export const FunctionKind = {
+  query: 0x40,
+  timer: 0x80,
+  effect: 0x81,
+  update: 0x82,
+  boot: 0x83,
+  helper: 0x84,
+  animDone: 0x85,
+} as const;
+
+/** Event data fields EVT reads. */
+export const EventField = {
+  x: 0,
+  y: 1,
+  dx: 2,
+  dy: 3,
+  vx: 4,
+  vy: 5,
+  scrollX: 6,
+  scrollY: 7,
+  layoutX: 8,
+  layoutY: 9,
+  layoutW: 10,
+  layoutH: 11,
+  value: 12,
+  valueStart: 13,
+  finished: 14,
+} as const;
+
+/** FMATH and DMATH functions. */
+export const MathFn = {
+  sin: 0,
+  cos: 1,
+  tan: 2,
+  sqrt: 3,
+  abs: 4,
+  round: 5,
+  floor: 6,
+  ceil: 7,
+  min: 8,
+  max: 9,
+  atan2: 10,
+  pow: 11,
+  mod: 12,
+} as const;
+
 /** Template kinds. */
 export const TemplateKind = {
   root: 1,
@@ -558,4 +635,24 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_GRADIENT_LINEAR', 1],
   ['ER_GRADIENT_RADIAL', 2],
   ['ER_GRADIENT_CONIC', 3],
+  ['ER_EVENT_PRESS', 0],
+  ['ER_EVENT_LONG_PRESS', 1],
+  ['ER_EVENT_PRESS_IN', 2],
+  ['ER_EVENT_PRESS_OUT', 3],
+  ['ER_EVENT_TOUCH_START', 4],
+  ['ER_EVENT_TOUCH_MOVE', 5],
+  ['ER_EVENT_TOUCH_END', 6],
+  ['ER_EVENT_TOUCH_CANCEL', 7],
+  ['ER_EVENT_SCROLL', 8],
+  ['ER_EVENT_RESPONDER_GRANT', 9],
+  ['ER_EVENT_RESPONDER_REJECT', 10],
+  ['ER_EVENT_RESPONDER_MOVE', 11],
+  ['ER_EVENT_RESPONDER_RELEASE', 12],
+  ['ER_EVENT_RESPONDER_TERMINATE', 13],
+  ['ER_EVENT_LAYOUT', 14],
+  ['ER_EVENT_CHANGE_TEXT', 15],
+  ['ER_EVENT_SUBMIT_EDITING', 16],
+  ['ER_EVENT_FOCUS', 17],
+  ['ER_EVENT_BLUR', 18],
+  ['ER_EVENT_VALUE_CHANGE', 19],
 ]);
