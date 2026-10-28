@@ -65,8 +65,8 @@ export const OP: Record<string, {code: number; words: number}> =
     OPCODES.map(([name, , words], index) => [name, {code: index + 1, words}]),
   );
 
-/** Registers a function may have: a register operand is one byte. */
-const MAX_REGISTERS = 256;
+/** Register cells a function may have: the function record counts them in a byte. */
+const MAX_REGISTERS = 255;
 
 /** The register types that take two cells. */
 const WIDE: ReadonlySet<RegisterType> = new Set(['int64', 'double', 'node']);
@@ -118,6 +118,18 @@ export class FunctionBuilder {
     const register = {index: reused ?? this.newRegister(type), type};
     this.taken.push(register);
     return register;
+  }
+
+  /**
+   * A register of a type that is never released, for the rest of the function. Registers start at zero, so
+   * one nothing writes keeps that value.
+   *
+   * @param type  Its type.
+   *
+   * @returns The register.
+   */
+  reserved(type: RegisterType): Register {
+    return {index: this.newRegister(type), type};
   }
 
   private newRegister(type: RegisterType): number {

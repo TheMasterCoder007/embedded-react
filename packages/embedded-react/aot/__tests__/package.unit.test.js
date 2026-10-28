@@ -37,6 +37,10 @@ import {
   ValueType,
 } from '../compiler/package/format.mts';
 import {floatBits, readConstant} from '../compiler/package/props.mts';
+import {Arena} from '../compiler/package/arena.mts';
+import {FunctionBuilder, OP} from '../compiler/package/bytecode.mts';
+import {Codegen} from '../compiler/package/codegen.mts';
+import {ProgramTables} from '../compiler/package/tables.mts';
 
 const STATIC_APP = `
 import {View, Text, StyleSheet} from 'embedded-react';
@@ -441,5 +445,50 @@ export function App() {
       `  flash: ${file.bytes.length} B (program ${result.program.length} B)`,
     );
     expect(report[2]).toMatch(/templates \d+/);
+  });
+});
+
+describe('bytecode', () => {
+  it('keeps a function within the 255 register cells its record counts', () => {
+    const fn = new FunctionBuilder(FunctionKind.update, 'the update');
+    for (let index = 0; index < 255; index++) {
+      fn.register('int');
+    }
+    expect(() => fn.register('int')).toThrow(/more than 255 registers/);
+  });
+
+  it('keeps the empty string register out of the pool', () => {
+    const fn = new FunctionBuilder(FunctionKind.update, 'the update');
+    const tables = new ProgramTables();
+    const codegen = new Codegen(fn, {
+      arena: new Arena(),
+      tables,
+      states: new Map(),
+      refs: new Map(),
+      boot: new Map(),
+      stringLocals: new Map(),
+      enums: new Map(),
+    });
+    const loadString = text => {
+      const register = fn.register('string');
+      fn.abx('LOADS', register.index, tables.string(text));
+      return register;
+    };
+
+    // A string test, a string written in another scope, then the test again.
+    codegen.scoped(() => codegen.truthy(loadString('a')));
+    codegen.scoped(() => loadString('b'));
+    codegen.scoped(() => codegen.truthy(loadString('c')));
+
+    const {code} = fn.finish();
+    const opOf = word => word & 0xff;
+    const empty = code
+      .filter(word => opOf(word) === OP.SEQ.code)
+      .map(word => word >>> 24);
+    expect(new Set(empty).size).toBe(1);
+    const written = code
+      .filter(word => opOf(word) === OP.LOADS.code)
+      .map(word => (word >> 8) & 0xff);
+    expect(written).not.toContain(empty[0]);
   });
 });

@@ -183,7 +183,7 @@ export class Codegen {
   private readonly inDoubles: boolean;
   private readonly input: InputText | null;
   private readonly locals = new Map<string, LocalBinding>();
-  /** A string register nothing writes, so it stays the empty string. */
+  /** A string register nothing writes, so it stays the empty string. Reserved, so no release reuses it. */
   private emptyString: Register | null = null;
 
   /**
@@ -559,7 +559,7 @@ export class Codegen {
     }
     const test = this.fn.register('bool');
     if (register.type === 'string') {
-      this.emptyString ??= this.fn.register('string');
+      this.emptyString ??= this.fn.reserved('string');
       this.fn.abc('SEQ', test.index, register.index, this.emptyString.index);
     } else {
       const zero = this.load(register.type as CType, 0);
