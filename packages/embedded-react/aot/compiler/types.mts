@@ -156,6 +156,7 @@ export interface Caps {
   listCap: number;
   listStrCap: number;
   maxTextSpans: number;
+  maxTimers: number;
 }
 
 /**

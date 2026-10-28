@@ -24,7 +24,14 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {FRAME_CELLS, Region, SlotFlag, ValueType} from './format.mts';
+import {
+  EVENT_SIZE,
+  FRAME_CELLS,
+  Region,
+  SlotFlag,
+  TIMER_SIZE,
+  ValueType,
+} from './format.mts';
 import type {ProgramRegion, ProgramSlot} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -67,6 +74,8 @@ export class Arena {
   private readonly strings: Slot[] = [];
   private readonly handles: Slot[] = [];
   private dirtyBits = 0;
+  private timers = 0;
+  private events = 0;
   private laidOut: ProgramRegion[] | null = null;
 
   /**
@@ -123,7 +132,26 @@ export class Arena {
   }
 
   /**
-   * Lays the slots out: values, the dirty bits, strings, then node handles. Code may name slots from here on.
+   * Gives the arena a timer table.
+   *
+   * @param count  Timers that run at once.
+   */
+  timerTable(count: number): void {
+    this.timers = count;
+  }
+
+  /**
+   * Gives the arena an event queue, which holds the effects an update pass queues.
+   *
+   * @param count  Events it holds.
+   */
+  eventQueue(count: number): void {
+    this.events = count;
+  }
+
+  /**
+   * Lays the slots out: values, the dirty bits, strings, node handles, then the timer table. Code may name
+   * slots from here on.
    */
   layOut(): void {
     const regions: ProgramRegion[] = [];
@@ -154,6 +182,11 @@ export class Arena {
     }
     region(Region.strings, this.strings, slot => (slot.cap + 1 + 3) & ~3);
     region(Region.handles, this.handles, () => 8);
+    if (this.timers) {
+      const bytes = this.timers * TIMER_SIZE;
+      regions.push({kind: Region.timers, count: this.timers, offset, bytes});
+      offset += bytes;
+    }
 
     [...this.values, ...this.strings, ...this.handles].forEach(
       (slot, index) => {
@@ -182,7 +215,7 @@ export class Arena {
   }
 
   /**
-   * The arena's regions, with the register stack after the slots.
+   * The arena's regions, with the register stack after the slots, then the event queue.
    *
    * @param stackCells  Cells the deepest function needs, frame included.
    *
@@ -197,12 +230,20 @@ export class Arena {
       0,
     );
     const cells = Math.max(stackCells, FRAME_CELLS);
-    return {
-      regions: [
-        ...this.laidOut,
-        {kind: Region.stack, count: cells, offset: end, bytes: cells * 4},
-      ],
-      bytes: end + cells * 4,
-    };
+    const regions = [
+      ...this.laidOut,
+      {kind: Region.stack, count: cells, offset: end, bytes: cells * 4},
+    ];
+    let bytes = end + cells * 4;
+    if (this.events) {
+      regions.push({
+        kind: Region.events,
+        count: this.events,
+        offset: bytes,
+        bytes: this.events * EVENT_SIZE,
+      });
+      bytes += this.events * EVENT_SIZE;
+    }
+    return {regions, bytes};
   }
 }

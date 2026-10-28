@@ -56,6 +56,7 @@ beforeEach(() => {
     'ER_AOT_LIST_CAP',
     'ER_AOT_LIST_STR_CAP',
     'ER_AOT_MAX_TEXT_SPANS',
+    'ER_AOT_MAX_TIMERS',
   ]) {
     vi.stubEnv(name, undefined);
   }
@@ -182,6 +183,7 @@ describe('AOT compile options', () => {
     ['ER_AOT_LIST_CAP', '-1'],
     ['ER_AOT_LIST_STR_CAP', '1.5'],
     ['ER_AOT_MAX_TEXT_SPANS', '0'],
+    ['ER_AOT_MAX_TIMERS', '4097'],
     ['ER_AOT_SCREEN_W', '1e21'],
     ['ER_AOT_SCREEN_H', 'Infinity'],
     ['ER_AOT_LIST_CAP', 'abc'],

@@ -109,6 +109,10 @@ export const Region = {
 /** Cells each VM frame keeps besides its registers. */
 export const FRAME_CELLS = 3;
 
+/** Bytes a timer takes in the timer table, and an event in the event queue. */
+export const TIMER_SIZE = 16;
+export const EVENT_SIZE = 32;
+
 /** Register and slot value types. A 64-bit type, or a node handle, takes two register cells, the first even. */
 export const ValueType = {
   pair: 0,

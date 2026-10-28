@@ -30,12 +30,17 @@ import {aotError, constantText} from '../diagnostics.mts';
 import {EventField, MathFn} from './format.mts';
 import {abiProp, floatBits, readConstant} from './props.mts';
 import type {Arena, Slot} from './arena.mts';
-import type {FunctionBuilder, Register, RegisterType} from './bytecode.mts';
+import type {
+  FunctionBuilder,
+  Label,
+  Register,
+  RegisterType,
+} from './bytecode.mts';
 import type {ProgramTables} from './tables.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr, LayoutField, WholeHelper} from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
-import type {IrStmt} from '../ir/statements.mts';
+import type {IrStmt, IrTimer} from '../ir/statements.mts';
 import type {IrTextPart} from '../ir/text.mts';
 import type {RefRecord, ScalarState} from '../types.mts';
 
@@ -70,6 +75,12 @@ export interface ProgramSlots {
   stringLocals: Map<string, Slot>;
   /** The string states held as interned enums. */
   enums: Map<ScalarState, EnumSet>;
+  /** The slot each effect local its cleanup reads is kept in, by its C name. */
+  hoisted: Map<string, Slot>;
+  /** Each effect's flag that its last run reached its cleanup, by the flag's C name. */
+  armed: Map<string, Slot>;
+  /** Each timer callback's function, by its C name. */
+  timerFunctions: Map<string, number>;
 }
 
 /** The <TextInput> a CHANGE_TEXT handler reads its new text from, and the buffer it reads it into. */
@@ -164,6 +175,10 @@ const LAYOUT_FIELDS: Record<LayoutField, number> = {
 const DISPLAY_FLEX = 0;
 const DISPLAY_NONE = 1;
 
+/** A timer delay is ToInt32 of the value: its low 32 bits. */
+const TWO_TO_32 = 2 ** 32;
+const INT32_MAX = 0x7fffffff;
+
 /** C's int range, for an immediate that fits LOADI. */
 const IMMEDIATE_MIN = -32768;
 const IMMEDIATE_MAX = 32767;
@@ -182,6 +197,7 @@ export class Codegen {
   private readonly program: ProgramSlots;
   private readonly inDoubles: boolean;
   private readonly input: InputText | null;
+  private readonly onReturn: Label | null;
   private readonly locals = new Map<string, LocalBinding>();
   /** A string register nothing writes, so it stays the empty string. Reserved, so no release reuses it. */
   private emptyString: Register | null = null;
@@ -191,16 +207,18 @@ export class Codegen {
    * @param program  The program's slots and tables.
    * @param options  inDoubles: fractions are worked out in double precision, as C works out a value at boot.
    *                 input: the <TextInput> a CHANGE_TEXT handler reads.
+   *                 onReturn: where an effect's early `return` goes.
    */
   constructor(
     fn: FunctionBuilder,
     program: ProgramSlots,
-    options: {inDoubles?: boolean; input?: InputText} = {},
+    options: {inDoubles?: boolean; input?: InputText; onReturn?: Label} = {},
   ) {
     this.fn = fn;
     this.program = program;
     this.inDoubles = options.inDoubles ?? false;
     this.input = options.input ?? null;
+    this.onReturn = options.onReturn ?? null;
   }
 
   /*--------------------------------------------------------------------------------------------------------------------
@@ -242,10 +260,12 @@ export class Codegen {
         if (expr.local.expr) {
           return this.typeOf(expr.local.expr);
         }
-        const binding = this.locals.get(expr.local.code);
-        return binding && 'register' in binding
-          ? (binding.register.type as CType)
-          : 'string';
+        const binding = this.binding(expr.local.code);
+        return !binding
+          ? 'string'
+          : 'register' in binding
+            ? (binding.register.type as CType)
+            : slotType(binding.slot);
       }
       case 'event':
         return expr.field === 'changed_text'
@@ -616,7 +636,34 @@ export class Codegen {
     return register;
   }
 
-  private get(slot: Slot): Register {
+  /**
+   * Whether two registers of one type hold the same value, as C's `==`, or strcmp() for strings, finds it.
+   *
+   * @param left  One.
+   * @param right  The other.
+   *
+   * @returns A bool register.
+   */
+  same(left: Register, right: Register): Register {
+    const register = this.fn.register('bool');
+    const op =
+      left.type === 'string'
+        ? 'SEQ'
+        : left.type === 'bool' || left.type === 'enum'
+          ? 'EQ'
+          : COMPARE_OPS[left.type][0];
+    this.fn.abc(op, register.index, left.index, right.index);
+    return register;
+  }
+
+  /**
+   * A slot's value in a register of its type.
+   *
+   * @param slot  The slot.
+   *
+   * @returns The register.
+   */
+  get(slot: Slot): Register {
     const type = slotType(slot);
     const register = this.fn.register(type as RegisterType);
     const op =
@@ -672,11 +719,17 @@ export class Codegen {
     if (expr.local.expr) {
       return this.value(expr.local.expr);
     }
-    const binding = this.locals.get(expr.local.code);
+    const binding = this.binding(expr.local.code);
     if (!binding) {
       return notYet('the value an element passes its callback');
     }
     return 'register' in binding ? binding.register : this.get(binding.slot);
+  }
+
+  /** A local's value, by its C name: this function's own, or an effect local kept in a slot. */
+  private binding(code: string): LocalBinding | undefined {
+    const hoisted = this.program.hoisted.get(code);
+    return this.locals.get(code) ?? (hoisted && {slot: hoisted});
   }
 
   private unary(op: '-' | '+' | '!', operand: IrExpr, type: CType): Register {
@@ -856,12 +909,18 @@ export class Codegen {
     const {fn} = this;
     switch (stmt.kind) {
       case 'declareLocal': {
-        if (stmt.isHoisted) {
-          notYet('effects');
+        const hoisted = this.program.hoisted.get(stmt.name);
+        if (stmt.isHoisted && !hoisted) {
+          throw new Error(`AOT internal: no slot for local "${stmt.name}"`);
+        }
+        if (hoisted && slotType(hoisted) !== 'string') {
+          this.scoped(() => this.set(hoisted, this.value(stmt.init)));
+          this.locals.set(stmt.name, {slot: hoisted});
+          return;
         }
         if (this.typeOf(stmt.init) === 'string') {
           // A string local is a copy of its own, so a later write to the state it was read from can't change it.
-          const slot = this.program.stringLocals.get(stmt.name)!;
+          const slot = hoisted ?? this.program.stringLocals.get(stmt.name)!;
           const checkpoint = fn.checkpoint();
           this.text([{kind: 'value', value: stmt.init}]);
           fn.abx('FMTSET', 0, slot.index);
@@ -934,8 +993,10 @@ export class Codegen {
         return;
       }
       case 'startTimer':
+        this.startTimer(stmt.timer, stmt.idLocal?.name ?? null);
+        return;
       case 'clearTimer':
-        notYet('timers');
+        this.scoped(() => fn.abc('TCLEAR', this.valueAs(stmt.id, 'int').index));
         return;
       case 'clearList':
       case 'appendItem':
@@ -951,12 +1012,99 @@ export class Codegen {
         notYet('animations');
         return;
       case 'return':
+        if (!this.onReturn) {
+          throw new Error('AOT internal: a `return` outside an effect');
+        }
+        fn.branch('JMP', this.onReturn);
+        return;
       case 'armCleanup':
-        notYet('effects');
+        this.scoped(() =>
+          this.set(
+            required(this.program.armed.get(stmt.flag), stmt.flag),
+            this.load('bool', 1),
+          ),
+        );
         return;
       case 'updateVector':
         notYet('updateVector');
     }
+  }
+
+  /**
+   * Starts a timer, keeping its id in a local when the app names it.
+   *
+   * @param timer  The timer.
+   * @param idLocal  The local's C name, or null.
+   */
+  private startTimer(timer: IrTimer, idLocal: string | null): void {
+    const {fn} = this;
+    const hoisted =
+      idLocal === null ? undefined : this.program.hoisted.get(idLocal);
+    const start = (id: Register): void =>
+      this.scoped(() => {
+        fn.abc(
+          'TSTART',
+          id.index,
+          this.timerDelay(timer.delay).index,
+          timer.isRepeating ? 1 : 0,
+          required(
+            this.program.timerFunctions.get(timer.fn),
+            `timer "${timer.fn}"`,
+          ),
+        );
+        if (hoisted) {
+          this.set(hoisted, id);
+        }
+      });
+    if (idLocal === null || hoisted) {
+      this.scoped(() => start(fn.register('int')));
+      if (hoisted) {
+        this.locals.set(idLocal!, {slot: hoisted});
+      }
+      return;
+    }
+    // The id outlives this statement, so its register is taken outside the scope.
+    const id = fn.register('int');
+    start(id);
+    this.locals.set(idLocal, {register: id});
+  }
+
+  /**
+   * A timer's delay in ms, as the C output converts it: a 64-bit or fractional delay through ToInt32, with a
+   * negative one as 0. (The runtime, like er_timer_add, waits at least 1 ms.)
+   *
+   * @param delay  The delay, or null for none.
+   *
+   * @returns An int register.
+   */
+  private timerDelay(delay: IrExpr | null): Register {
+    if (!delay) {
+      return this.load('int', 0);
+    }
+    const kind = delay.type.kind;
+    if (kind !== 'int64' && kind !== 'float') {
+      return this.valueAs(delay, 'int');
+    }
+
+    // app_delay_msf takes a float, and makes it a 64-bit int as app_delay_ms64 takes; the VM's saturates.
+    const {fn} = this;
+    const whole =
+      kind === 'float'
+        ? this.convert(this.valueAs(delay, 'float'), 'int64')
+        : this.valueAs(delay, 'int64');
+    const modulus = this.load('int64', TWO_TO_32);
+    const low = fn.register('int64');
+    fn.abc('MODL', low.index, whole.index, modulus.index);
+    fn.abc('ADDL', low.index, low.index, modulus.index);
+    fn.abc('MODL', low.index, low.index, modulus.index);
+    const tooBig = fn.register('bool');
+    fn.abc('LLT', tooBig.index, this.load('int64', INT32_MAX).index, low.index);
+    return this.choose(
+      tooBig,
+      () => this.load('int', 0),
+      () => this.convert(low, 'int'),
+      'int',
+    );
   }
 
   private writeRef(ref: RefRecord, op: string, value: IrExpr): void {
@@ -1223,18 +1371,18 @@ export function notYet(what: string): never {
 }
 
 /**
- * A slot that has to have been planned.
+ * A slot or function that has to have been planned.
  *
- * @param slot  The slot, if it was.
+ * @param planned  The slot or function, if it was.
  * @param what  What it holds, for the error.
  *
- * @returns The slot.
+ * @returns The slot or function.
  */
-function required(slot: Slot | undefined, what: string): Slot {
-  if (!slot) {
-    throw new Error(`AOT internal: no slot for ${what}`);
+function required<T>(planned: T | undefined, what: string): T {
+  if (planned === undefined) {
+    throw new Error(`AOT internal: nothing planned for ${what}`);
   }
-  return slot;
+  return planned;
 }
 
 /**

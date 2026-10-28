@@ -100,6 +100,8 @@ describe('package format copy', () => {
     expect(format.FRAME_CELLS).toBe(
       defineValue(formatHeader, 'ERB_FRAME_CELLS'),
     );
+    expect(format.TIMER_SIZE).toBe(defineValue(formatHeader, 'ERB_TIMER_SIZE'));
+    expect(format.EVENT_SIZE).toBe(defineValue(formatHeader, 'ERB_EVENT_SIZE'));
     expect(format.SlotFlag).toEqual({
       tracked: defineValue(formatHeader, 'ERB_SLOT_TRACKED'),
       bootOnly: defineValue(formatHeader, 'ERB_SLOT_BOOT_ONLY'),

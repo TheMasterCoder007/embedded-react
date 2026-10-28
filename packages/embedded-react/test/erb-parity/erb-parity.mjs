@@ -96,6 +96,45 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '200,142 200,142',
   },
+  // The mount effect's interval ticks through the frames the host settles for.
+  {name: 'timers', file: fixture('timers'), screen: [240, 320]},
+  // Two timeouts, then an interval started and cleared before the last frame.
+  {
+    name: 'timers-taps',
+    file: fixture('timers'),
+    screen: [240, 320],
+    taps: '45,30 120,30 195,30',
+  },
+  // A tap's interval left running, and a timeout started again over its own.
+  {
+    name: 'timers-running',
+    file: fixture('timers'),
+    screen: [240, 320],
+    taps: '120,30 45,30 45,30',
+  },
+  {name: 'effects', file: fixture('effects'), screen: [240, 320]},
+  // + twice, then the mode: the mode effect's write shows when the + effect's timeout fires.
+  {
+    name: 'effects-taps',
+    file: fixture('effects'),
+    screen: [240, 320],
+    taps: '45,30 45,30 120,30',
+  },
+  // Taps on nothing until the mount's timeout has fired, then the mode: its effect's write waits for the next
+  // update, which never comes.
+  {
+    name: 'effects-stale',
+    file: fixture('effects'),
+    screen: [240, 320],
+    taps: '200,300 200,300 200,300 120,30',
+  },
+  // The mode, then +: the + shows the mode effect's write, and its timeout the + effect's.
+  {
+    name: 'effects-mode',
+    file: fixture('effects'),
+    screen: [240, 320],
+    taps: '120,30 45,30',
+  },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
   // + twice, then Heat and Auto (Auto turns on the dial's gradient).

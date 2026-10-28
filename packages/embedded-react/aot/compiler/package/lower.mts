@@ -18,10 +18,17 @@
  * The package backend: lowers the IR to a Flow B program for one panel.
  *
  * The tree becomes the root template and its constant prop sets. State, refs and values worked out at boot are
- * slots in the arena. Handlers, the boot function and the update function are bytecode (codegen.mts). The
- * update re-sets a node when a state it reads changed, as app_update() does, and sets the props of a node that
- * reads only boot values once, in its first pass. What isn't lowered yet (timers, effects, lists, animations,
- * responders, drawings, the keyboard) is refused with what it is.
+ * slots in the arena. Handlers, timer callbacks, effects, the boot function and the update function are
+ * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, as app_update() does, sets
+ * the props of a node that reads only boot values once, in its first pass, and queues the effects. What isn't
+ * lowered yet (lists, animations, responders, drawings, the keyboard) is refused with what it is.
+ *
+ * Effects run as the C output runs them. An effect runs inside app_update(), so the state it sets shows at
+ * the next app_update(), not at once. The VM runs a pass whenever state changed, so a pass that only an
+ * effect's write started keeps what changed in a pending flag, and the next pass a handler, a timer or the
+ * load started sets it. A dep-driven effect checks its deps itself, when it runs, as app_update() checks
+ * each in turn. The mount effects run one after another, after the first pass; one that set state has the
+ * pass after it queue the next.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -42,6 +49,7 @@ import {
   branchElements,
 } from '../ir/nodes.mts';
 import {nodeReads} from '../ir/reads.mts';
+import {armedFlag} from '../c/functions.mts';
 import {Arena} from './arena.mts';
 import {FunctionBuilder} from './bytecode.mts';
 import {internedStates} from './enums.mts';
@@ -68,11 +76,12 @@ import {
 import {ProgramTables} from './tables.mts';
 import type {Program as BabelProgram, Node} from '@babel/types';
 import type {Slot} from './arena.mts';
-import type {InputText, ProgramSlots} from './codegen.mts';
+import type {CType, InputText, ProgramSlots} from './codegen.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr} from '../ir/expressions.mts';
+import type {IrDepEffect, IrMountEffect} from '../ir/functions.mts';
 import type {IrCallback, IrStmt} from '../ir/statements.mts';
 import type {IrElement, IrNode, IrWire} from '../ir/nodes.mts';
 import type {ResolvedOptions} from '../options.mts';
@@ -100,6 +109,24 @@ interface HandlerFunction {
   input: InputText | undefined;
 }
 
+/** A dep-driven effect's copy of one dep, and the type C keeps it in. */
+interface DepCopy {
+  slot: Slot;
+  type: CType;
+}
+
+/** What the effects keep between runs, and the passes that run them. */
+interface EffectSlots {
+  /** Each dep-driven effect's copy of each dep. */
+  copies: Map<IrDepEffect, DepCopy[]>;
+  /** Each state an effect sets, by its slot: set while a change no app_update() has set yet waits. */
+  pending: Map<Slot, Slot>;
+  /** The bits that start an app_update(): a handler's or timer's request, the load, and the host. */
+  realBits: Slot[];
+  /** The next mount effect the update queues, plus one; 0 for none. */
+  mountNext: Slot | null;
+}
+
 /** Everything lowering one program shares. */
 interface Lowering {
   app: IrApp;
@@ -116,6 +143,9 @@ interface Lowering {
   requested: Slot | null;
   /** Set only at load: it guards the props the update sets once, and runs the update's first pass. */
   once: Slot | null;
+  effects: EffectSlots;
+  /** The function each dep-driven effect checks its deps in, and each mount effect's. */
+  effectFunctions: {checks: number[]; mounts: number[]};
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -212,12 +242,6 @@ function firstCall(
 function checkSupported(app: IrApp): void {
   const {out} = app;
   const uses: [boolean, string, string[]][] = [
-    [out.timerFns.length > 0, 'timers', ['setTimeout', 'setInterval']],
-    [
-      out.effectFns.length > 0 || out.mountEffects.length > 0,
-      'effects',
-      ['useEffect', 'useLayoutEffect'],
-    ],
     [
       app.animations.length > 0 || out.animCbs.length > 0,
       'animations',
@@ -287,19 +311,99 @@ function stringLocals(stmts: IrStmt[], found: Map<string, number>): void {
 }
 
 /**
+ * Every state a statement list sets.
+ *
+ * @param stmts  The statements.
+ * @param found  Collects the states.
+ */
+function statesSet(stmts: IrStmt[], found: Set<ScalarState>): void {
+  for (const stmt of stmts) {
+    if (stmt.kind === 'setState' || stmt.kind === 'setStateText') {
+      found.add(stmt.state);
+    } else if (stmt.kind === 'if') {
+      statesSet(stmt.consequent, found);
+      statesSet(stmt.alternate ?? [], found);
+    }
+  }
+}
+
+/**
+ * The type C keeps a dep's copy in.
+ *
+ * @param dep  The dep.
+ *
+ * @returns Its C type.
+ */
+function depType(dep: IrExpr): CType {
+  switch (dep.type.kind) {
+    case 'bool':
+    case 'float':
+    case 'int64':
+    case 'string':
+      return dep.type.kind;
+    default:
+      return 'int';
+  }
+}
+
+/**
+ * Whether a mount effect sets state, so app_update() runs after it.
+ *
+ * @param mountEffect  The mount effect.
+ *
+ * @returns Whether it does.
+ */
+const mountUpdates = (mountEffect: IrMountEffect): boolean =>
+  mountEffect.kind === 'inline'
+    ? mountEffect.callback.updatesState
+    : mountEffect.kind === 'call' && mountEffect.updatesState;
+
+/**
+ * Every statement list the program runs outside the update and boot functions.
+ *
+ * @param app  The app.
+ *
+ * @returns The lists.
+ */
+function bodies(app: IrApp): IrStmt[][] {
+  const {out} = app;
+  return [
+    ...out.handlers.flatMap(handler =>
+      handler.kind === 'callback' ? [handler.callback.body] : [],
+    ),
+    ...out.timerFns.map(timer => timer.callback!.body),
+    ...out.effectFns.map(effectFunction =>
+      effectFunction.kind === 'mount'
+        ? effectFunction.body
+        : effectFunction.kind === 'cleanup'
+          ? effectFunction.effect.cleanup!
+          : effectFunction.effect.body,
+    ),
+    ...out.mountEffects.flatMap(mountEffect =>
+      mountEffect.kind === 'inline' ? [mountEffect.callback.body] : [],
+    ),
+  ];
+}
+
+/**
  * Plans every slot the program uses, then lays the arena out.
  *
  * @param app  The app.
  * @param tables  The program's tables.
- * @param listStrCap  The C output's string buffer size, NUL included.
+ * @param caps  The C output's buffer sizes, and the timers that run at once.
  *
- * @returns The slots, the node handles, and the two bookkeeping bits.
+ * @returns The slots, the node handles, and the bookkeeping bits.
  */
 function planSlots(
   app: IrApp,
   tables: ProgramTables,
-  listStrCap: number,
-): Pick<Lowering, 'slots' | 'handles' | 'inputText' | 'requested' | 'once'> {
+  caps: ResolvedOptions['caps'],
+): Pick<
+  Lowering,
+  'slots' | 'handles' | 'inputText' | 'requested' | 'once' | 'effects'
+> {
+  const {listStrCap} = caps;
+  const {out} = app;
   const arena = new Arena();
   const slots: ProgramSlots = {
     arena,
@@ -309,6 +413,9 @@ function planSlots(
     boot: new Map(),
     stringLocals: new Map(),
     enums: new Map(),
+    hoisted: new Map(),
+    armed: new Map(),
+    timerFunctions: new Map(),
   };
 
   // String state with a closed set of values is an interned enum, starting at its initial value (the first).
@@ -344,7 +451,8 @@ function planSlots(
                 state.isBool ? ValueType.bool : ValueType.int,
                 Math.trunc(Number(state.initial)) | 0,
               );
-    if (state.isWatched) {
+    // A host value an effect's deps may read runs app_update() when it is set, as its C setter does.
+    if (state.isWatched || (state.host && out.depEffects.length)) {
       arena.track(slot);
     }
     slots.states.set(state, slot);
@@ -387,14 +495,53 @@ function planSlots(
     slots.boot.set(bootSlot, slot);
   }
 
-  const locals = new Map<string, number>();
-  for (const handler of app.out.handlers) {
-    if (handler.kind === 'callback') {
-      stringLocals(handler.callback.body, locals);
+  // The effect locals a cleanup reads, and each effect's armed flag and copy of each dep, kept as C keeps them.
+  for (const decl of out.effectDecls) {
+    if (decl.kind === 'local') {
+      slots.hoisted.set(
+        decl.name,
+        decl.cType === 'string'
+          ? arena.slot(ValueType.string, undefined, listStrCap - 1)
+          : arena.slot(
+              decl.cType === 'i64'
+                ? ValueType.int64
+                : decl.cType === 'float'
+                  ? ValueType.float
+                  : ValueType.int,
+            ),
+      );
+    } else if (decl.kind === 'armed') {
+      slots.armed.set(armedFlag(decl.effect.id), arena.slot(ValueType.bool));
     }
   }
+  const copies = new Map<IrDepEffect, DepCopy[]>();
+  for (const effect of out.depEffects) {
+    copies.set(
+      effect,
+      effect.deps.map(dep => {
+        const type = depType(dep);
+        return {
+          type,
+          slot:
+            type === 'string'
+              ? arena.slot(ValueType.string, undefined, listStrCap - 1)
+              : arena.slot(ValueType[type]),
+        };
+      }),
+    );
+  }
+
+  const locals = new Map<string, number>();
+  for (const body of bodies(app)) {
+    stringLocals(body, locals);
+  }
   for (const [name, cap] of locals) {
-    slots.stringLocals.set(name, arena.slot(ValueType.string, undefined, cap));
+    if (!slots.hoisted.has(name)) {
+      slots.stringLocals.set(
+        name,
+        arena.slot(ValueType.string, undefined, cap),
+      );
+    }
   }
 
   const nodes = nodesOf(app.root);
@@ -413,18 +560,62 @@ function planSlots(
     ? arena.slot(ValueType.string, undefined, ENGINE_STRING_MAX.ER_TEXT_MAX)
     : null;
 
-  const handlerSetsState = app.out.handlers.some(
-    handler => handler.kind === 'callback' && handler.callback.updatesState,
-  );
-  const requested = handlerSetsState
+  const requestsUpdate =
+    out.handlers.some(
+      handler => handler.kind === 'callback' && handler.callback.updatesState,
+    ) ||
+    out.timerFns.some(timer => timer.callback!.updatesState) ||
+    out.mountEffects.some(mountUpdates);
+  const requested = requestsUpdate
     ? arena.track(arena.slot(ValueType.bool))
     : null;
-  const once = nodes.some(node => isStateDriven(node) || isSetOnce(node))
-    ? arena.track(arena.slot(ValueType.bool))
+  const hasEffects = out.depEffects.length > 0 || out.mountEffects.length > 0;
+  const once =
+    hasEffects || nodes.some(node => isStateDriven(node) || isSetOnce(node))
+      ? arena.track(arena.slot(ValueType.bool))
+      : null;
+
+  // A state an effect sets that a node reads waits for the next app_update() in a pending flag.
+  const effectWrites = new Set<ScalarState>();
+  for (const effect of out.depEffects) {
+    statesSet(effect.body, effectWrites);
+    statesSet(effect.cleanup ?? [], effectWrites);
+  }
+  const pending = new Map<Slot, Slot>();
+  for (const state of effectWrites) {
+    const slot = slots.states.get(state)!;
+    if (slot.flags & SlotFlag.tracked) {
+      pending.set(slot, arena.slot(ValueType.bool));
+    }
+  }
+  const realBits = [requested, once].filter(slot => slot !== null);
+  for (const [state, slot] of slots.states) {
+    if (state.host && slot.flags & SlotFlag.tracked) {
+      realBits.push(slot);
+    }
+  }
+  // The first mount effect is queued by the first pass.
+  const mountNext = out.mountEffects.length
+    ? arena.slot(ValueType.int, 1)
     : null;
 
+  if (out.timerFns.length) {
+    arena.timerTable(caps.maxTimers);
+  }
+  // A pass queues each dep-driven effect and the next mount effect, and a mount effect the one after it.
+  if (hasEffects) {
+    arena.eventQueue(out.depEffects.length + 1);
+  }
+
   arena.layOut();
-  return {slots, handles, inputText, requested, once};
+  return {
+    slots,
+    handles,
+    inputText,
+    requested,
+    once,
+    effects: {copies, pending, realBits, mountNext},
+  };
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -672,13 +863,13 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
 }
 
 /**
- * Runs `body` only when one of a set of dirty bits is set in this update pass.
+ * The dirty bits of a set of slots, as a mask per dirty word.
  *
- * @param fn  The update function.
- * @param slots  The slots whose bits guard it.
- * @param body  Emits what it guards.
+ * @param slots  The slots.
+ *
+ * @returns Each word's mask.
  */
-function whenDirty(fn: FunctionBuilder, slots: Slot[], body: () => void): void {
+function dirtyMasks(slots: Slot[]): Map<number, number> {
   const words = new Map<number, number>();
   for (const slot of slots) {
     const word = slot.dirtyBit >> 5;
@@ -687,10 +878,34 @@ function whenDirty(fn: FunctionBuilder, slots: Slot[], body: () => void): void {
       ((words.get(word) ?? 0) | (1 << (slot.dirtyBit & 31))) >>> 0,
     );
   }
+  return words;
+}
+
+/**
+ * Runs `body` only when one of a set of dirty bits is set in this update pass, or one of a set of pending flags.
+ *
+ * @param fn  The update function.
+ * @param slots  The slots whose bits guard it.
+ * @param body  Emits what it guards.
+ * @param pending  The pending flags that guard it too.
+ */
+function whenDirty(
+  fn: FunctionBuilder,
+  slots: Slot[],
+  body: () => void,
+  pending: Slot[] = [],
+): void {
   const run = fn.label();
   const skip = fn.label();
-  for (const [word, mask] of words) {
+  for (const [word, mask] of dirtyMasks(slots)) {
     fn.branchIfDirty(word, mask, run);
+  }
+  for (const flag of pending) {
+    const checkpoint = fn.checkpoint();
+    const set = fn.register('bool');
+    fn.abx('GET32', set.index, flag.index);
+    fn.branch('JT', run, set);
+    fn.release(checkpoint);
   }
   fn.branch('JMP', skip);
   fn.place(run);
@@ -699,23 +914,47 @@ function whenDirty(fn: FunctionBuilder, slots: Slot[], body: () => void): void {
 }
 
 /**
+ * Writes a constant to a 4-byte slot.
+ *
+ * @param codegen  The function's codegen.
+ * @param slot  The slot.
+ * @param value  The value.
+ */
+function setConstant(codegen: Codegen, slot: Slot, value: number): void {
+  codegen.scoped(() =>
+    codegen.fn.abx(
+      'SET32',
+      codegen.load(slot.type === ValueType.bool ? 'bool' : 'int', value).index,
+      slot.index,
+    ),
+  );
+}
+
+/**
  * The update function: what app_update() sets again, each node when a state it reads changed, and the nodes set
- * once in the first pass.
+ * once in the first pass; then the effects it runs, queued.
  *
  * @param lowering  The program being lowered.
  *
  * @returns The function, or null when nothing needs it.
  */
 function updateFunction(lowering: Lowering): ProgramFunction | null {
+  const {out} = lowering.app;
   const nodes = nodesOf(lowering.app.root);
   const updated = nodes.filter(isStateDriven);
   const setOnce = nodes.filter(isSetOnce);
-  if (!updated.length && !setOnce.length) {
+  if (
+    !updated.length &&
+    !setOnce.length &&
+    !out.depEffects.length &&
+    !out.mountEffects.length
+  ) {
     return null;
   }
 
   const fn = new FunctionBuilder(FunctionKind.update, 'the update');
   const codegen = new Codegen(fn, lowering.slots);
+  const {pending, realBits, mountNext} = lowering.effects;
   const located = (node: IrNode, lower: () => void): void => {
     try {
       lower();
@@ -724,6 +963,20 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
       throw error;
     }
   };
+
+  // A pass only an effect's writes started is no app_update(): it keeps what they changed for the next one.
+  const end = fn.label();
+  if (pending.size) {
+    const real = fn.label();
+    for (const [word, mask] of dirtyMasks(realBits)) {
+      fn.branchIfDirty(word, mask, real);
+    }
+    for (const [state, flag] of pending) {
+      whenDirty(fn, [state], () => setConstant(codegen, flag, 1));
+    }
+    fn.branch('JMP', end);
+    fn.place(real);
+  }
 
   if (setOnce.length) {
     whenDirty(fn, [lowering.once!], () =>
@@ -745,18 +998,78 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
           )
         : [];
       if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
-        whenDirty(fn, bits, () => setNode(codegen, node, lowering));
+        whenDirty(
+          fn,
+          bits,
+          () => setNode(codegen, node, lowering),
+          bits.flatMap(slot => pending.get(slot) ?? []),
+        );
       } else {
         setNode(codegen, node, lowering);
       }
     });
   }
+  for (const flag of pending.values()) {
+    setConstant(codegen, flag, 0);
+  }
+
+  // Each dep-driven effect checks its deps when it runs, as app_update() checks each in turn.
+  for (const check of lowering.effectFunctions.checks) {
+    fn.abx('EFFECT', 0, check);
+  }
+
+  // The first mount effect, then each one after a mount effect that set state.
+  if (mountNext) {
+    const {mounts} = lowering.effectFunctions;
+    const queued = out.mountEffects.flatMap((_, index) =>
+      index === 0 || mountUpdates(out.mountEffects[index - 1]) ? [index] : [],
+    );
+    for (const index of queued) {
+      codegen.scoped(() => {
+        const skip = fn.label();
+        const next = fn.register('int');
+        const isNext = fn.register('bool');
+        fn.abx('GET32', next.index, mountNext.index);
+        fn.abc(
+          'EQ',
+          isNext.index,
+          next.index,
+          codegen.load('int', index + 1).index,
+        );
+        fn.branch('JF', skip, isNext);
+        fn.abx('EFFECT', 0, mounts[index]);
+        fn.place(skip);
+      });
+    }
+    setConstant(codegen, mountNext, 0);
+  }
+  fn.place(end);
   return fn.finish();
 }
 
 /**
- * A handler's function. One that set state toggles the request bit, so the update runs even when no value
- * changed, as the C output calls app_update().
+ * Toggles the request bit, so the update runs after a function that set state, even when no value changed, as
+ * the C output calls app_update().
+ *
+ * @param codegen  The function's codegen.
+ * @param lowering  The program being lowered.
+ */
+function requestUpdate(codegen: Codegen, lowering: Lowering): void {
+  const {requested} = lowering;
+  if (!requested) {
+    return;
+  }
+  const {fn} = codegen;
+  codegen.scoped(() => {
+    const flag = fn.register('bool');
+    fn.abx('GET32', flag.index, requested.index);
+    fn.abc('NOT', flag.index, flag.index);
+    fn.abx('SET32', flag.index, requested.index);
+  });
+}
+
+/**
+ * A handler's function.
  *
  * @param handler  The handler.
  * @param lowering  The program being lowered.
@@ -770,14 +1083,153 @@ function handlerBody(
   const fn = new FunctionBuilder(handler.event, `handler ${handler.name}`);
   const codegen = new Codegen(fn, lowering.slots, {input: handler.input});
   codegen.statements(handler.callback.body);
-  if (handler.callback.updatesState && lowering.requested) {
-    const {requested} = lowering;
+  if (handler.callback.updatesState) {
+    requestUpdate(codegen, lowering);
+  }
+  return fn.finish();
+}
+
+/**
+ * A setTimeout or setInterval callback's function.
+ *
+ * @param name  The callback's C name.
+ * @param callback  The callback.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function.
+ */
+function timerBody(
+  name: string,
+  callback: IrCallback,
+  lowering: Lowering,
+): ProgramFunction {
+  const fn = new FunctionBuilder(FunctionKind.timer, `timer ${name}`);
+  const codegen = new Codegen(fn, lowering.slots);
+  codegen.statements(callback.body);
+  if (callback.updatesState) {
+    requestUpdate(codegen, lowering);
+  }
+  return fn.finish();
+}
+
+/**
+ * A dep-driven effect's run: the last run's cleanup, if that run reached it, then the body.
+ *
+ * @param effect  The effect.
+ * @param codegen  The function's codegen.
+ * @param lowering  The program being lowered.
+ */
+function runEffect(
+  effect: IrDepEffect,
+  codegen: Codegen,
+  lowering: Lowering,
+): void {
+  const {fn} = codegen;
+  if (effect.hasCleanup) {
+    const armed = lowering.slots.armed.get(armedFlag(effect.id))!;
+    const skip = fn.label();
     codegen.scoped(() => {
       const flag = fn.register('bool');
-      fn.abx('GET32', flag.index, requested.index);
-      fn.abc('NOT', flag.index, flag.index);
-      fn.abx('SET32', flag.index, requested.index);
+      fn.abx('GET32', flag.index, armed.index);
+      fn.branch('JF', skip, flag);
     });
+    setConstant(codegen, armed, 0);
+    codegen.statements(effect.cleanup ?? []);
+    fn.place(skip);
+  }
+  codegen.statements(effect.body);
+}
+
+/**
+ * The function a dep-driven effect runs in after an update pass: it copies each dep that changed, as
+ * app_update() does, and runs the effect if one did.
+ *
+ * @param effect  The effect.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function.
+ */
+function checkedEffect(
+  effect: IrDepEffect,
+  lowering: Lowering,
+): ProgramFunction {
+  const fn = new FunctionBuilder(FunctionKind.effect, `effect ${effect.id}`);
+  const end = fn.label();
+  const codegen = new Codegen(fn, lowering.slots, {onReturn: end});
+  const copies = lowering.effects.copies.get(effect)!;
+  const changed = fn.register('bool');
+  fn.abx('LOADI', changed.index, 0);
+  effect.deps.forEach((dep, index) => {
+    const {slot, type} = copies[index];
+    codegen.scoped(() => {
+      const value = codegen.valueAs(dep, type);
+      const same = fn.label();
+      fn.branch('JT', same, codegen.same(value, codegen.get(slot)));
+      codegen.set(slot, value);
+      fn.abx('LOADI', changed.index, 1);
+      fn.place(same);
+    });
+  });
+  fn.branch('JF', end, changed);
+  runEffect(effect, codegen, lowering);
+  fn.place(end);
+  return fn.finish();
+}
+
+/**
+ * The function a mount effect runs in, as er_app_build() runs it after the first app_update(). One that set
+ * state has the next pass queue the mount effect after it; any other queues it itself.
+ *
+ * @param index  The mount effect's place in the order.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function.
+ */
+function mountEffect(index: number, lowering: Lowering): ProgramFunction {
+  const {out} = lowering.app;
+  const mount = out.mountEffects[index];
+  const fn = new FunctionBuilder(FunctionKind.effect, `mount effect ${index}`);
+  const end = fn.label();
+  const codegen = new Codegen(fn, lowering.slots, {onReturn: end});
+  switch (mount.kind) {
+    case 'inline':
+      codegen.statements(mount.callback.body);
+      break;
+    case 'call': {
+      const called = out.effectFns.find(
+        effectFunction =>
+          effectFunction.kind === 'mount' && effectFunction.name === mount.name,
+      );
+      codegen.statements(called?.kind === 'mount' ? called.body : []);
+      break;
+    }
+    case 'depEffect':
+      runEffect(mount.effect, codegen, lowering);
+      break;
+  }
+  fn.place(end);
+
+  // A dep-driven effect keeps a copy of each dep, taken after it ran.
+  if (mount.kind === 'depEffect') {
+    const copies = lowering.effects.copies.get(mount.effect)!;
+    mount.effect.deps.forEach((dep, depIndex) =>
+      codegen.scoped(() =>
+        codegen.set(
+          copies[depIndex].slot,
+          codegen.valueAs(dep, copies[depIndex].type),
+        ),
+      ),
+    );
+  }
+
+  const hasNext = index + 1 < out.mountEffects.length;
+  if (mountUpdates(mount)) {
+    requestUpdate(codegen, lowering);
+    if (hasNext) {
+      setConstant(codegen, lowering.effects.mountNext!, index + 2);
+    }
+  } else if (hasNext) {
+    fn.abx('EFFECT', 0, lowering.effectFunctions.mounts[index + 1]);
   }
   return fn.finish();
 }
@@ -833,10 +1285,11 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   const tables = new ProgramTables();
   const lowering: Lowering = {
     app,
-    ...planSlots(app, tables, opts.caps.listStrCap),
+    ...planSlots(app, tables, opts.caps),
     images: new Set(app.images.map(image => image.name)),
     handlers: new Map(),
     bindings: [],
+    effectFunctions: {checks: [], mounts: []},
   };
 
   // A panel-sized root the app's tree fills, as er_app_build() makes one.
@@ -856,10 +1309,27 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   templateNodes(app.root, lowering, nodes);
   checkSupported(app);
 
-  // Handlers first, as the bindings number them, then the boot and update functions.
-  const functions = [...lowering.handlers.values()].map(handler =>
-    handlerBody(handler, lowering),
-  );
+  // Handlers first, as the bindings number them, then the timer callbacks, the effects, and the boot and
+  // update functions. Each is numbered before any code is written, since code names them.
+  const {out} = app;
+  let next = lowering.handlers.size;
+  for (const timer of out.timerFns) {
+    lowering.slots.timerFunctions.set(timer.name, next++);
+  }
+  lowering.effectFunctions = {
+    checks: out.depEffects.map(() => next++),
+    mounts: out.mountEffects.map(() => next++),
+  };
+  const functions = [
+    ...[...lowering.handlers.values()].map(handler =>
+      handlerBody(handler, lowering),
+    ),
+    ...out.timerFns.map(timer =>
+      timerBody(timer.name, timer.callback!, lowering),
+    ),
+    ...out.depEffects.map(effect => checkedEffect(effect, lowering)),
+    ...out.mountEffects.map((_, index) => mountEffect(index, lowering)),
+  ];
   const boot = bootFunction(app.boot.slots, lowering, screen);
   const update = updateFunction(lowering);
   const bootIndex = boot ? functions.push(boot) - 1 : NONE;

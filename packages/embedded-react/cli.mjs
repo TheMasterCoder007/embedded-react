@@ -67,9 +67,9 @@ Usage:
                                                            responsive app folds to that board's layout
                                                            (e.g. --screen 240x320)
                                                  --aot --package  → app.erpkg (Flow B package for the
-                                                           Flow B runtime; state and handlers so far,
-                                                           not yet timers, effects, lists, animations,
-                                                           PanResponder or <Svg>)
+                                                           Flow B runtime; state, handlers, timers
+                                                           and effects so far, not yet lists,
+                                                           animations, PanResponder or <Svg>)
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.
