@@ -677,11 +677,11 @@ bool er_runtime_container_has_vendor(const void* buf, size_t len)
     return false;
 }
 
-/** @brief True when the engine would register the whole pack: its registries drop what doesn't fit. */
-static bool asset_pack_fits(const ErContainerSection* section, bool copy_assets)
+/** @brief True when the engine would register all of a container's packs: its registries drop what doesn't fit. */
+static bool asset_packs_fit(const ErContainer* container, bool copy_assets)
 {
     ErAssetsInfo info;
-    if (!er_assets_check_pack(section->data, section->length, &info))
+    if (!er_assets_check_container(container, &info))
     {
         return false;
     }
@@ -713,18 +713,18 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
         return ER_CONTAINER_BAD_QJS;
     }
 
-    /* Verified. Find the sections and check every asset pack before registering any, so a container that
-     * fails here leaves the engine as it was. */
+    /* Verified. Check the asset packs, together, before registering any, so a container that fails here leaves
+     * the engine as it was. */
+    if (!asset_packs_fit(&container, copy_assets))
+    {
+        return ER_CONTAINER_BAD_ASSETS;
+    }
     const ErContainerSection* vendor = NULL;
     const ErContainerSection* bytecode = NULL;
     for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
     {
         const ErContainerSection* section = &container.sections[section_index];
-        if (section->type == ER_SECTION_ASSET_PACK && !asset_pack_fits(section, copy_assets))
-        {
-            return ER_CONTAINER_BAD_ASSETS;
-        }
-        else if (section->type == ER_SECTION_BYTECODE)
+        if (section->type == ER_SECTION_BYTECODE)
         {
             bytecode = section;
         }

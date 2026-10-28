@@ -403,6 +403,27 @@ bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info)
     return ok;
 }
 
+bool er_assets_check_container(const ErContainer* container, ErAssetsInfo* info)
+{
+    /* One walk over every pack, so the counts and the families seen carry from one pack to the next. */
+    ErAssetsWalk walk;
+    memset(&walk, 0, sizeof(walk));
+    bool ok = container != NULL;
+    for (uint32_t section_index = 0; ok && section_index < container->section_count; section_index++)
+    {
+        const ErContainerSection* section = &container->sections[section_index];
+        if (section->type == ER_SECTION_ASSET_PACK)
+        {
+            ok = er_assets_walk(section->data, section->length, &walk);
+        }
+    }
+    if (info)
+    {
+        *info = walk.info;
+    }
+    return ok;
+}
+
 /** @brief An image name in the pack as rd_name reads it: at most 127 bytes, up to a NUL. */
 static void image_name(const uint8_t* pack, uint32_t name_record, const uint8_t** bytes, uint32_t* length)
 {

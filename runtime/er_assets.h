@@ -39,6 +39,7 @@
  * a config mmap'd from flash costs no RAM for its pixels — keep it for production boot + desktop.
  */
 
+#include "er_container.h"
 #include "er_scene.h" /* BitmapFont, GlyphInfo, ExtraGlyph */
 
 #include <stdbool.h>
@@ -113,6 +114,17 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
  * @return true when the whole pack reads cleanly, so loading it can't fail part way for its own sake.
  */
 bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info);
+
+/**
+ * @brief Checks every asset pack in a container as one, without registering anything.
+ *
+ * @param[in]  container  A container er_container_read returned.
+ * @param[out] info       Receives the counts over all of its packs (may be NULL). A font family in two packs
+ *                        counts once, as the font registry would hold it.
+ *
+ * @return true when every pack reads cleanly (also when there are none).
+ */
+bool er_assets_check_container(const ErContainer* container, ErAssetsInfo* info);
 
 /**
  * @brief Like er_assets_check_pack, and also lists the pack's images sorted by name, for er_assets_find_image.

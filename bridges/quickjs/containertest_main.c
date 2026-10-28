@@ -92,7 +92,7 @@ static void container_seal(void)
 
 static const uint8_t s_bytecode[] = {0u};
 
-/** @brief A container with one asset pack, then bytecode that throws if it runs. */
+/** @brief A container with one asset pack, then bytecode that fails to load. */
 static void build_with_pack(const TestPack* pack)
 {
     container_begin(2u);
@@ -100,6 +100,27 @@ static void build_with_pack(const TestPack* pack)
     container_section(ER_SECTION_ASSET_PACK, pack->bytes, pack->length);
     container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
     container_seal();
+}
+
+/** @brief A container with two asset packs, then bytecode that fails to load. */
+static void build_with_packs(const TestPack* first, const TestPack* second)
+{
+    container_begin(3u);
+    container_section(ER_SECTION_ASSET_PACK, first->bytes, first->length);
+    container_section(ER_SECTION_ASSET_PACK, second->bytes, second->length);
+    container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
+    container_seal();
+}
+
+/** @brief A pack of @p family_count fonts, families named from @p first_family on. */
+static void build_font_pack(TestPack* pack, char first_family, uint32_t family_count)
+{
+    tpack_begin(pack, 0u, family_count);
+    for (uint32_t family_index = 0; family_index < family_count; family_index++)
+    {
+        const char family[] = {(char)(first_family + family_index), '\0'};
+        tpack_font(pack, family, ERUI_FONT_FMT_1BIT);
+    }
 }
 
 /** @brief A container with a good pack, then a pack with an unknown image format, then bytecode. */
@@ -158,6 +179,25 @@ static void test_too_many_font_families_fails_the_load(void)
     CHECK(!er_image_exists("early"), "nothing from it is registered");
 }
 
+static void test_packs_are_counted_together(void)
+{
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    const uint32_t half = limits.font_families / 2u + 1u;
+    static TestPack first;
+    static TestPack second;
+    build_font_pack(&first, 'a', half);
+    build_font_pack(&second, (char)('a' + half), half);
+    build_with_packs(&first, &second);
+    CHECK(er_runtime_load_container(s_container, s_container_length) == ER_CONTAINER_BAD_ASSETS,
+          "two packs that each fit but not together fail the load");
+
+    build_font_pack(&second, 'a', half);
+    build_with_packs(&first, &second);
+    CHECK(er_runtime_load_container(s_container, s_container_length) == ER_CONTAINER_LOAD_FAILED,
+          "the same families in both packs take one slot each");
+}
+
 static void test_odd_rgb565_pixels_fail_the_load(void)
 {
     static TestPack pack;
@@ -169,7 +209,7 @@ static void test_odd_rgb565_pixels_fail_the_load(void)
     CHECK(er_runtime_load_container(s_container, s_container_length) == ER_CONTAINER_BAD_ASSETS,
           "RGB565 pixels on an odd address fail the load");
     CHECK(!er_image_exists("rgb565"), "the image isn't registered");
-    /* The bytecode throws, so a pack that passes ends in LOAD_FAILED. */
+    /* The bytecode fails to load, so a pack that passes ends in LOAD_FAILED. */
     CHECK(er_runtime_load_container_ex(s_container, s_container_length, true) == ER_CONTAINER_LOAD_FAILED,
           "a copy is aligned, so the same pack loads");
     CHECK(er_image_exists("rgb565"), "the copy's image is registered");
@@ -196,6 +236,7 @@ int main(void)
 
     test_bad_pack_fails_the_load();
     test_too_many_font_families_fails_the_load();
+    test_packs_are_counted_together();
     test_odd_rgb565_pixels_fail_the_load();
 
     if (s_failed)

@@ -213,8 +213,9 @@ void er_runtime_set_wall_clock(int64_t epoch_ms);
  * The buffer is referenced (image pixels / font bitmaps point into it) and must outlive use. Call
  * er_runtime_reset first if replacing a running app.
  *
- * An asset pack that is malformed, uses a format this firmware doesn't know, or holds more images or fonts
- * than the registries do fails the load with ER_CONTAINER_BAD_ASSETS. Those checks, and the CRC, QuickJS and
+ * An asset pack that is malformed, uses a format this firmware doesn't know, or (loaded in place) has RGB565
+ * pixels on an odd address fails the load with ER_CONTAINER_BAD_ASSETS, as do packs that together hold more
+ * images or fonts than the registries do. Those checks, and the CRC, QuickJS and
  * missing-bytecode checks, run before anything is registered, so they leave the engine as it was. Running out
  * of memory for a pack also returns ER_CONTAINER_BAD_ASSETS, but packs before it stay registered, as they do
  * when the app throws.

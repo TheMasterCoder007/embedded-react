@@ -17,9 +17,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Changed
 
-- A container whose asset pack fails to load now fails with `ER_CONTAINER_BAD_ASSETS` instead of
-  running with missing images and fonts. That includes a pack with an image format this firmware
-  doesn't know, from a newer emitter, and one with more images or fonts than the registries hold.
+- A container whose asset packs fail to load, or don't fit the image and font registries, now fails
+  with `ER_CONTAINER_BAD_ASSETS` instead of running with missing images and fonts. That includes an
+  image format this firmware doesn't know, from a newer emitter, and RGB565 pixels on an odd address.
 - `er_assets_load_pack` and friends now check the whole pack first and register nothing when it fails.
 
 ## [0.19.0] - 2026-10-27
