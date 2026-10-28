@@ -264,7 +264,8 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
             walk->info.images++;
             walk->info.misaligned += ((uintptr_t)pixels & (bytes_per_pixel - 1u)) ? 1u : 0u;
             walk->info.empty_images += (width == 0u || height == 0u) ? 1u : 0u;
-            walk->info.odd_rgb565 += (format == 1u && ((uintptr_t)pixels & 1u)) ? 1u : 0u;
+            walk->info.odd_rgb565 +=
+                (format == 1u && width != 0u && height != 0u && ((uintptr_t)pixels & 1u)) ? 1u : 0u;
             if (walk->image_names && walk->info.images <= walk->image_capacity)
             {
                 walk->image_names[walk->info.images - 1u] = name_record;

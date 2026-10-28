@@ -274,10 +274,11 @@ const char* er_runtime_container_status_str(ErContainerStatus status);
  *        bad hot reload is visible, like a bad boot config).
  *
  * Picks the reload mode from the container: one carrying a vendor section is a full reload (resets the
- * runtime first); an app-only frame reloads incrementally against the resident vendor with no reset (see
- * er_runtime_container_has_vendor). Shared by every board's shim so they stay thin. MUST be called from the
- * task that owns the runtime and frame loop. It loads with copy_assets=true, so @p erpkg does NOT need to
- * stay live afterward — the receiver may immediately reuse the staging buffer for the next upload (which is
+ * runtime first, once the container passes the checks er_runtime_load_container makes before touching the
+ * engine, so one that fails them keeps the resident context); an app-only frame reloads incrementally against the
+ * resident vendor with no reset (see er_runtime_container_has_vendor). Shared by every board's shim so they stay thin.
+ * MUST be called from the task that owns the runtime and frame loop. It loads with copy_assets=true, so @p erpkg does
+ * NOT need to stay live afterward — the receiver may immediately reuse the staging buffer for the next upload (which is
  * what lets the old UI stay on screen during a reload, no teardown).
  *
  * @param[in] erpkg         Container bytes received in a frame (the er_hotreload parser's staging buffer).

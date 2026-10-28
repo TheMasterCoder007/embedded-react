@@ -55,7 +55,7 @@ typedef struct
     uint32_t extra_glyphs;   /**< Extra-glyph records (codepoints past a font's range), over every font. */
     uint32_t misaligned;     /**< Images whose pixels don't sit on their word size (only a v1 pack can have them). */
     uint32_t empty_images;   /**< Images with no width or no height, which the engine won't register. */
-    uint32_t odd_rgb565;     /**< RGB565 images whose pixels sit on an odd address, which the engine won't register. */
+    uint32_t odd_rgb565;     /**< Non-empty RGB565 images on an odd address, which the engine won't register. */
     uint32_t font_families;  /**< Distinct family names, as the font registry compares them. */
     uint32_t largest_family; /**< The most sizes one family has. */
 } ErAssetsInfo;

@@ -124,6 +124,19 @@ static void test_storage_that_doesnt_fit_registers_nothing(void)
     CHECK(room.fonts_used == 1u && room.glyphs_used == 1u && room.extras_used == 0u, "the storage it took");
 }
 
+static void test_empty_rgb565_isnt_counted_as_odd(void)
+{
+    tpack_begin(&s_pack, 2u, 0u);
+    tpack_image_sized(&s_pack, "empty", 1u, 0u, 1u);
+    tpack_image(&s_pack, "drawn", 1u);
+    /* One byte in, so every image's pixels sit on an odd address. */
+    static uint8_t shifted[sizeof(s_pack.bytes) + 1u];
+    memcpy(shifted + 1, s_pack.bytes, s_pack.length);
+    ErAssetsInfo info;
+    CHECK(er_assets_check_pack(shifted + 1, s_pack.length, &info), "the shifted pack reads");
+    CHECK(info.empty_images == 1u && info.odd_rgb565 == 1u, "only the drawn image counts as odd");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Main
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -136,6 +149,7 @@ int main(void)
     test_truncated_pack_registers_nothing();
     test_copy_registers_nothing_on_failure();
     test_storage_that_doesnt_fit_registers_nothing();
+    test_empty_rgb565_isnt_counted_as_odd();
 
     if (s_failed)
     {

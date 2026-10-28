@@ -33,7 +33,7 @@
 
 typedef struct
 {
-    uint8_t bytes[1024];
+    uint8_t bytes[4096];
     size_t length;
 } TestPack;
 
@@ -72,20 +72,26 @@ static void tpack_begin(TestPack* pack, uint32_t image_count, uint32_t font_coun
     tpack_u32(pack, font_count);
 }
 
-/** @brief Adds a 1x1 image (format 0 = ARGB8888, 1 = RGB565). */
-static void tpack_image(TestPack* pack, const char* name, uint8_t format)
+/** @brief Adds a @p width by @p height image (format 0 = ARGB8888, 1 = RGB565). */
+static void tpack_image_sized(TestPack* pack, const char* name, uint8_t format, uint32_t width, uint32_t height)
 {
     tpack_name(pack, name);
-    tpack_u32(pack, 1u);
-    tpack_u32(pack, 1u);
+    tpack_u32(pack, width);
+    tpack_u32(pack, height);
     tpack_u8(pack, format);
     while (pack->length & 3u)
     {
         tpack_u8(pack, 0u);
     }
-    const size_t pixel_bytes = format == 1u ? 2u : 4u;
+    const size_t pixel_bytes = (size_t)width * height * (format == 1u ? 2u : 4u);
     memset(pack->bytes + pack->length, 0xFF, pixel_bytes);
     pack->length += pixel_bytes;
+}
+
+/** @brief Adds a 1x1 image (format 0 = ARGB8888, 1 = RGB565). */
+static void tpack_image(TestPack* pack, const char* name, uint8_t format)
+{
+    tpack_image_sized(pack, name, format, 1u, 1u);
 }
 
 /** @brief Adds a font of family @p family with one 1x1 glyph for 'A'. */

@@ -25,6 +25,7 @@
 #include "erpk_pack.h"
 #include "host_harness.h"
 #include "native_renderer.h"
+#include "quickjs.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -49,7 +50,7 @@ static int s_failed = 0;
 static const char QJS_TAG[] = "v0.15.0";
 
 /* Word-aligned, so where a section lands depends only on its offset. */
-static uint32_t s_container_words[512];
+static uint32_t s_container_words[2048];
 static uint8_t* const s_container = (uint8_t*)s_container_words;
 static size_t s_container_length;
 static size_t s_pack_offset; /* where build_with_pack put the pack */
@@ -198,6 +199,52 @@ static void test_packs_are_counted_together(void)
           "the same families in both packs take one slot each");
 }
 
+static void test_empty_images_take_no_slot(void)
+{
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    static TestPack pack;
+    tpack_begin(&pack, limits.images + 1u, 0u);
+    for (uint32_t image_index = 0; image_index < limits.images; image_index++)
+    {
+        char name[8];
+        snprintf(name, sizeof(name), "i%u", (unsigned)image_index);
+        tpack_image(&pack, name, 0u);
+    }
+    tpack_image_sized(&pack, "empty", 0u, 0u, 1u);
+    er_image_clear();
+    build_with_pack(&pack);
+    CHECK(er_runtime_load_container(s_container, s_container_length) == ER_CONTAINER_LOAD_FAILED,
+          "a full registry's worth of images plus an empty one fits");
+    er_image_clear();
+}
+
+static void test_failed_full_reload_keeps_the_context(void)
+{
+    static TestPack bad_pack;
+    tpack_begin(&bad_pack, 1u, 0u);
+    tpack_image(&bad_pack, "late", TPACK_UNKNOWN_IMAGE_FORMAT);
+    container_begin(3u);
+    container_section(ER_SECTION_VENDOR_BYTECODE, s_bytecode, sizeof(s_bytecode));
+    container_section(ER_SECTION_ASSET_PACK, bad_pack.bytes, bad_pack.length);
+    container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
+    container_seal();
+
+    JSContext* context = er_runtime_context();
+    JSValue global = JS_GetGlobalObject(context);
+    JS_SetPropertyStr(context, global, "__kept", JS_NewInt32(context, 1));
+    JS_FreeValue(context, global);
+
+    CHECK(er_hotreload_apply(s_container, s_container_length) == ER_CONTAINER_BAD_ASSETS,
+          "a full reload with a bad pack fails");
+    context = er_runtime_context();
+    global = JS_GetGlobalObject(context);
+    JSValue kept = JS_GetPropertyStr(context, global, "__kept");
+    CHECK(JS_IsNumber(kept), "the context wasn't reset");
+    JS_FreeValue(context, kept);
+    JS_FreeValue(context, global);
+}
+
 static void test_odd_rgb565_pixels_fail_the_load(void)
 {
     static TestPack pack;
@@ -238,6 +285,8 @@ int main(void)
     test_too_many_font_families_fails_the_load();
     test_packs_are_counted_together();
     test_odd_rgb565_pixels_fail_the_load();
+    test_empty_images_take_no_slot();
+    test_failed_full_reload_keeps_the_context();
 
     if (s_failed)
     {
