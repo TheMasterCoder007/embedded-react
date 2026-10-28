@@ -34,6 +34,7 @@
  *
  *   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
  *   npm run aot -- watch-face        # a specific demo by folder name
+ *   npm run aot -- <demo> --package  # a Flow B package (dist/app.erpkg) instead of C
  *
  * This file is the entry: compileSource(src) compiles a source string (pure, so it can be unit-tested on
  * inline JSX), and the CLI at the bottom reads a demo's App.jsx and writes dist/app.gen.{c,h}. The
@@ -64,6 +65,7 @@
  *   compiler/lower.mts           lowerApp — run the stages above over the parsed app
  *   compiler/check.mts           the check pass — the values lowering recorded, checked in order
  *   compiler/assemble.mts        writeApp — write the lowered app as app.gen.{c,h}
+ *   compiler/package/*.mts       the package backend: the IR as a Flow B program, its container and report
  *
  * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mjs
  * compiles it to JavaScript for the npm package.
@@ -82,7 +84,7 @@ import {
 } from 'node:fs';
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {bakeAssets} from '../assets/index.mjs';
+import {bakeAssetPackBytes, bakeAssets} from '../assets/index.mjs';
 import {warnMissingGlyphs} from '../assets/glyph-coverage.mjs';
 import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mjs';
 import {formatAotError} from './compiler/diagnostics.mts';
@@ -90,8 +92,14 @@ import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
 import {demoMarker, compileSourceImpl} from './compiler/assemble.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
+import {
+  compilePackageImpl,
+  packPackage,
+  resourceReport,
+} from './compiler/package/assemble.mts';
 import type {CompileOptions, ResolvedOptions} from './compiler/options.mts';
 import type {CompileResult} from './compiler/assemble.mts';
+import type {PackageResult} from './compiler/package/assemble.mts';
 import type {IrSlotStore} from './compiler/ir/source.mts';
 import type {SlotWidths} from './compiler/ir/types.mts';
 
@@ -108,7 +116,7 @@ const distDir = resolve(aotDir, '..', 'dist');
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
-export {bakeSvgArtifacts, demoMarker};
+export {bakeSvgArtifacts, demoMarker, packPackage, resourceReport};
 
 /**
  * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
@@ -116,26 +124,22 @@ export {bakeSvgArtifacts, demoMarker};
  * infers from them which slots have to hold 64 bits, following a timestamp through every slot it reaches; the
  * app is then compiled again with those slots widened, so every read of a slot sees its final type.
  *
- * @param src  The App.jsx/App.tsx source text.
- * @param demo  Demo name (only used in the generated-by header comment).
- * @param opts  compileSource's options, resolved (see resolveOptions).
+ * @param compileOnce  One compile with the given slots widened, recording the values stored into int slots.
  *
- * @returns The generated app.gen.c and app.gen.h, and what they contain.
+ * @returns What the last compile produced.
  */
-function compileWidened(
-  src: string,
-  demo: string,
-  opts: ResolvedOptions,
-): CompileResult {
+function compileWidened<Result>(
+  compileOnce: (wide: SlotWidths, stores: IrSlotStore[]) => Result,
+): Result {
   // The slots found so far that need 64 bits; every pass compiles with all of them widened.
   let wide: SlotWidths = new Map();
   for (;;) {
     // Run one pass, holding on to its error instead of throwing it straight away.
     const stores: IrSlotStore[] = [];
-    let result: CompileResult | undefined;
+    let result: Result | undefined;
     let error: unknown;
     try {
-      result = compileSourceImpl(src, demo, opts, wide, stores);
+      result = compileOnce(wide, stores);
     } catch (caught) {
       error = caught;
     }
@@ -154,23 +158,26 @@ function compileWidened(
 }
 
 /**
- * Public entry: compile JSX source → { c, h, ... }. On an AOT error, annotate it with file:line:col + a
- * source code-frame (+ hint) so the failure points at the exact unsupported construct.
+ * Runs a compilation, annotating an AOT error with file:line:col + a source code-frame (+ hint) so the failure
+ * points at the exact unsupported construct.
  *
  * @param src  The App.jsx/App.tsx source text.
- * @param demo  Demo name (only used in the generated-by header comment).
- * @param opts  filename, svgArtifacts, ts, and the screen and caps resolveOptions documents.
+ * @param demo  Demo name, for the file the error names when opts has none.
+ * @param opts  The compile's options.
+ * @param resolved  The same options, resolved.
+ * @param compileOnce  One compile, as compileWidened runs it.
  *
- * @returns The generated app.gen.c and app.gen.h, and what they contain.
+ * @returns What the compile produced.
  */
-export function compileSource(
+function compileLocated<Result>(
   src: string,
-  demo = 'app',
-  opts: CompileOptions = {},
-): CompileResult {
-  const resolved = resolveOptions(opts);
+  demo: string,
+  opts: CompileOptions,
+  resolved: ResolvedOptions,
+  compileOnce: (wide: SlotWidths, stores: IrSlotStore[]) => Result,
+): Result {
   try {
-    return compileWidened(src, demo, resolved);
+    return compileWidened(compileOnce);
   } catch (error: any) {
     // Point an AOT error at its place in the source; any other error passes through unchanged.
     if (
@@ -190,13 +197,59 @@ export function compileSource(
   }
 }
 
+/**
+ * Public entry: compile JSX source → { c, h, ... }. On an AOT error, annotate it with file:line:col + a
+ * source code-frame (+ hint) so the failure points at the exact unsupported construct.
+ *
+ * @param src  The App.jsx/App.tsx source text.
+ * @param demo  Demo name (only used in the generated-by header comment).
+ * @param opts  filename, svgArtifacts, ts, and the screen and caps resolveOptions documents.
+ *
+ * @returns The generated app.gen.c and app.gen.h, and what they contain.
+ */
+export function compileSource(
+  src: string,
+  demo = 'app',
+  opts: CompileOptions = {},
+): CompileResult {
+  const resolved = resolveOptions(opts);
+  return compileLocated(src, demo, opts, resolved, (wide, stores) =>
+    compileSourceImpl(src, demo, resolved, wide, stores),
+  );
+}
+
+/**
+ * Public entry for the package output: compile JSX source to a Flow B program section. Errors are annotated
+ * as compileSource's are.
+ *
+ * @param src  The App.jsx/App.tsx source text.
+ * @param demo  Demo name, for the file an error names when opts has none.
+ * @param opts  As compileSource takes them.
+ *
+ * @returns The program section, and what the package holds.
+ */
+export function compilePackage(
+  src: string,
+  demo = 'app',
+  opts: CompileOptions = {},
+): PackageResult {
+  const resolved = resolveOptions(opts);
+  return compileLocated(src, demo, opts, resolved, (wide, stores) =>
+    compilePackageImpl(src, resolved, wide, stores),
+  );
+}
+
 // CLI entry (`node aot/compile.mts [demo]`), only when run directly: compile a demo into dist/app.gen.{c,h}.
 if (
   process.argv[1] &&
   resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
 ) {
-  // Find the demo's App.jsx, listing the available demos when it is missing.
-  const demo = process.argv[2] || process.env.DEMO || 'thermostat';
+  // Find the demo's App.jsx, listing the available demos when it is missing. --package writes a Flow B package
+  // instead of C.
+  const args = process.argv.slice(2);
+  const asPackage = args.includes('--package');
+  const demo =
+    args.find(arg => !arg.startsWith('--')) || process.env.DEMO || 'thermostat';
   const appPath = resolve(demosDir, demo, 'App.jsx');
   const availableDemos = existsSync(demosDir)
     ? readdirSync(demosDir, {withFileTypes: true})
@@ -212,13 +265,15 @@ if (
 
   // Compile the app, baking <Svg source> .svg imports first so the compile itself stays pure (no I/O).
   const src = readFileSync(appPath, 'utf8');
-  let result;
+  let result: CompileResult | PackageResult;
   try {
-    const svgArtifacts = await bakeSvgArtifacts(src, resolve(demosDir, demo));
-    result = compileSource(src, demo, {
+    const options: CompileOptions = {
       filename: resolve(demosDir, demo, 'App.jsx'),
-      svgArtifacts,
-    });
+      svgArtifacts: await bakeSvgArtifacts(src, resolve(demosDir, demo)),
+    };
+    result = asPackage
+      ? compilePackage(src, demo, options)
+      : compileSource(src, demo, options);
   } catch (error: any) {
     // Print just the message, no JS stack: a located AOT error already carries its location, code frame and hint.
     console.error(
@@ -229,8 +284,10 @@ if (
 
   // Write the generated C.
   mkdirSync(distDir, {recursive: true});
-  writeFileSync(resolve(distDir, 'app.gen.c'), result.c);
-  writeFileSync(resolve(distDir, 'app.gen.h'), result.h);
+  if (!('program' in result)) {
+    writeFileSync(resolve(distDir, 'app.gen.c'), result.c);
+    writeFileSync(resolve(distDir, 'app.gen.h'), result.h);
+  }
 
   // Locate the images the app imports; each importPath is source-relative to the demo's App.jsx.
   const imageJobs = result.images.map(image => ({
@@ -252,10 +309,21 @@ if (
   warnMissingGlyphs({source: src, jsx: true});
   warnFontSizes({used: analyzeFontSizes(src)});
 
-  // Bake images with Flow A's baker, even with none (a no-op), so the AOT host can always build and call it.
-  const baked = bakeAssets({images: imageJobs, fonts: [], outDir: distDir});
-  console.log(
-    `AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ` +
-      `${result.handlers} handler(s), ${result.updates} dynamic) + ${baked.images} image(s) -> dist/assets.generated.c`,
-  );
+  if ('program' in result) {
+    // The package carries its images as an asset pack.
+    const file = packPackage(
+      result,
+      imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
+    );
+    writeFileSync(resolve(distDir, 'app.erpkg'), file.bytes);
+    console.log(`AOT: compiled demo "${demo}" -> dist/app.erpkg`);
+    console.log(resourceReport(result, file).join('\n'));
+  } else {
+    // Bake images with Flow A's baker, even with none (a no-op), so the AOT host can always build and call it.
+    const baked = bakeAssets({images: imageJobs, fonts: [], outDir: distDir});
+    console.log(
+      `AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ` +
+        `${result.handlers} handler(s), ${result.updates} dynamic) + ${baked.images} image(s) -> dist/assets.generated.c`,
+    );
+  }
 }

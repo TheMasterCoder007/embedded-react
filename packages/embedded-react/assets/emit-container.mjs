@@ -163,3 +163,60 @@ export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
   head.u32(crc32(bodyBytes));
   return Buffer.concat([head.done(), bodyBytes]);
 }
+
+export const SECTION_PROGRAM = 4;
+export const SECTION_DEBUG = 5;
+
+/**
+ * Serializes a Flow B package into an ERCF container tagged `erb`: the asset pack, the program, then the debug
+ * table. Every section starts 4-aligned in the container, since the runtime reads each in place.
+ *
+ * @param {object} opts
+ * @param {Uint8Array} opts.program               The program section (aot/compiler/package/writer.mts).
+ * @param {Uint8Array} [opts.assetPack]           ERPK asset pack bytes; omitted/empty → no asset section.
+ * @param {Uint8Array} [opts.debug]               The debug section; omitted for a release build.
+ * @returns {{bytes: Buffer, sections: Array<{type:number, offset:number, bytes:number}>}} The container, and
+ *          where each non-padding section's data starts in it.
+ */
+export function emitPackageContainer({program, assetPack, debug}) {
+  if (!program || !program.length)
+    throw new Error('emitPackageContainer: program is required');
+
+  const tag = 'erb';
+  const sections = [];
+  if (assetPack && assetPack.length)
+    sections.push([SECTION_ASSET_PACK, assetPack]);
+  sections.push([SECTION_PROGRAM, program]);
+  if (debug && debug.length) sections.push([SECTION_DEBUG, debug]);
+
+  const withPads = [];
+  const placed = [];
+  let off = 12 + 2 + Buffer.byteLength(tag, 'utf8') + 4; // header + tag + section_count
+  for (const [type, data] of sections) {
+    if ((off + 8) % 4) {
+      // A padding section has its own 8-byte header, so its data has to cover what is left after it.
+      const pad = (4 - ((off + 16) % 4)) % 4;
+      withPads.push([SECTION_PAD, Buffer.alloc(pad)]);
+      off += 8 + pad;
+    }
+    placed.push({type, offset: off + 8, bytes: data.length});
+    withPads.push([type, data]);
+    off += 8 + data.length;
+  }
+
+  const body = new Writer();
+  body.str(tag);
+  body.u32(withPads.length);
+  for (const [type, data] of withPads) {
+    body.u32(type);
+    body.u32(data.length);
+    body.bytes(data);
+  }
+  const bodyBytes = body.done();
+
+  const head = new Writer();
+  head.bytes(Buffer.from('ERCF', 'ascii'));
+  head.u32(FORMAT_VERSION);
+  head.u32(crc32(bodyBytes));
+  return {bytes: Buffer.concat([head.done(), bodyBytes]), sections: placed};
+}

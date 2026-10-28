@@ -104,6 +104,20 @@ The baseline is every `compileSource` call the AOT tests make plus both demos at
 with the C each one produced or the error it threw. When a change to the output is intended (a
 reworded error, say), check that `aot:same` shows only that change, then record a new baseline.
 
+## Flow B packages against the C output
+
+`npm run erb:parity` compiles each scenario twice, to `app.gen.c` and to a Flow B package, and
+`tools/erb-parity` builds a headless host around each: the C app, and the Flow B runtime loading the
+package. Both render through the software backend with no window, run the scenario's taps, and must
+end on the same pixels. A frame that differs is written as PNGs (C, VM, and a diff) under
+`tools/erb-parity/build/out`. Each package's resource report is printed as it is built.
+
+A scenario the package output can't lower yet is skipped with the reason, so the list shows how far
+the package output has come. It needs CMake and a C compiler, and CI runs it.
+
+The compiler's copy of the package format is held to `runtime/erb_format.h`, `runtime/erb_props.c`
+and `er_scene.h` by `aot/__tests__/package-format.unit.test.js`.
+
 ## Parity
 
 `npm run parity` renders the same demo through both flows and asserts the framebuffers match

@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {colorLiteral} from '../../style-map.mts';
-import {aotError} from '../diagnostics.mts';
+import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
@@ -166,6 +166,7 @@ export function emitModal(
 
   const node: IrNode = {
     id: nodeId,
+    loc: currentLoc(),
     type: 'ER_NODE_MODAL',
     constantProps: staticAssigns,
     stateProps: dynAssigns,

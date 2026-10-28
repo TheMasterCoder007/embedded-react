@@ -66,6 +66,9 @@ Usage:
                                                  --aot --screen <WxH>  bake the target panel size so a
                                                            responsive app folds to that board's layout
                                                            (e.g. --screen 240x320)
+                                                 --aot --package  → app.erpkg (Flow B package for the
+                                                           Flow B runtime; apps with no state only,
+                                                           for now)
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.
@@ -379,10 +382,19 @@ function resolveAppComponent(cwd, explicit) {
   process.exit(1);
 }
 
-/** Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. */
-async function buildAot(cwd, explicit, outDir, screen) {
-  const {compileSource, bakeSvgArtifacts} = await import('./aot/compile.mts');
-  const {bakeAssets} = await import('./assets/index.mjs');
+/**
+ * Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. With
+ * --package, to a Flow B package (app.erpkg) with its assets inside, for the Flow B runtime to load.
+ */
+async function buildAot(cwd, explicit, outDir, screen, asPackage) {
+  const {
+    compilePackage,
+    compileSource,
+    bakeSvgArtifacts,
+    packPackage,
+    resourceReport,
+  } = await import('./aot/compile.mts');
+  const {bakeAssetPackBytes, bakeAssets} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
   const {analyzeFontSizes, warnFontSizes} =
     await import('./assets/font-sizes.mjs');
@@ -397,7 +409,8 @@ async function buildAot(cwd, explicit, outDir, screen) {
     // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
     // The target panel size (--screen <WxH>) folds a responsive app's `screen.width` branch to the one
     // that the board renders. Without it, the compiler falls back to ER_AOT_SCREEN_W/H, then 800x480.
-    result = compileSource(src, projectIdentity(appPath), {
+    const compile = asPackage ? compilePackage : compileSource;
+    result = compile(src, projectIdentity(appPath), {
       filename: appPath,
       svgArtifacts,
       screen, // null without --screen
@@ -406,8 +419,10 @@ async function buildAot(cwd, explicit, outDir, screen) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
     process.exit(1);
   }
-  writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
-  writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
+  if (!asPackage) {
+    writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
+    writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
+  }
 
   // Optional per-image overrides (same file the JS flows read): assets.config.js
   //   export default { images: { 'bg': { format: 'rgb565' } } }
@@ -432,6 +447,18 @@ async function buildAot(cwd, explicit, outDir, screen) {
   // and its font sizes against what that font actually covers.
   warnMissingGlyphs({source: src, jsx: true});
   warnFontSizes({used: analyzeFontSizes(src)});
+  if (asPackage) {
+    const file = packPackage(
+      result,
+      imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
+    );
+    writeFileSync(resolve(outDir, 'app.erpkg'), file.bytes);
+    console.log(
+      `✓ Flow B package → ${relative(cwd, outDir) || '.'}/app.erpkg (${imageJobs.length} image(s))`,
+    );
+    console.log(resourceReport(result, file).join('\n'));
+    return;
+  }
   const baked = bakeAssets({images: imageJobs, fonts: [], outDir});
   console.log(
     `✓ Flow B (AOT) → ${relative(cwd, outDir) || '.'}/app.gen.c (+ app.gen.h, assets.generated.c — ${baked.images} image(s))`,
@@ -495,10 +522,16 @@ async function buildContainer(cwd, explicit, outDir) {
   );
 }
 
-/** `embedded-react build [--aot] [entry] [--out dir] [--screen WxH]` — produce the device artifact. */
+/** `embedded-react build [--aot [--package]] [entry] [--out dir] [--screen WxH]` — produce the device artifact. */
 async function build(args) {
   const cwd = process.cwd();
   const aot = args.includes('--aot');
+  const asPackage = args.includes('--package');
+  if (asPackage && !aot) {
+    console.error('--package only applies to --aot.\n');
+    usage();
+    process.exit(1);
+  }
   const outIdx = args.indexOf('--out');
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
 
@@ -533,7 +566,7 @@ async function build(args) {
   const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
 
   mkdirSync(outDir, {recursive: true});
-  if (aot) await buildAot(cwd, explicit, outDir, screen);
+  if (aot) await buildAot(cwd, explicit, outDir, screen, asPackage);
   else await buildContainer(cwd, explicit, outDir);
 }
 

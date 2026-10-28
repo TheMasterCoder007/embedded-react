@@ -20,7 +20,7 @@
 
 import {check, checkNumber, DIAL_MAX_GRADIENT_STOPS} from '../check.mts';
 import {colorLiteral} from '../../style-map.mts';
-import {aotError} from '../diagnostics.mts';
+import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
 import {floatLit} from '../c-syntax.mts';
 import {lowerExpr} from '../expressions.mts';
@@ -367,6 +367,7 @@ export function emitDial(
   // Animated bindings: style props plus an animated `value` (ER_PROP_ARC_VALUE).
   const node: IrNode = {
     id: nodeID,
+    loc: currentLoc(),
     type: 'ER_NODE_ARC',
     constantProps: staticAssigns,
     stateProps: dynAssigns,

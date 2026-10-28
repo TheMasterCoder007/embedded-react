@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {colorLiteral} from '../../style-map.mts';
-import {aotError} from '../diagnostics.mts';
+import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {asCond, emitExpr, lowerExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
@@ -181,6 +181,7 @@ export function emitSwitch(
 
   const node: IrNode = {
     id: nodeId,
+    loc: currentLoc(),
     type: 'ER_NODE_SWITCH',
     constantProps: staticAssigns,
     stateProps: dynAssigns,

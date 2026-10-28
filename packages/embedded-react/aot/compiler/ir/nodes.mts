@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {isBootOnlyNode, isBootOnlyVector} from './reads.mts';
+import type {SourcePosition} from '../diagnostics.mts';
 import type {AnimBind, TextSpan} from '../style-text.mts';
 import type {ListState, StaticAssign} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
@@ -108,6 +109,8 @@ export type IrWire =
 export interface IrNode {
   /** The node's variable (`n<id>`); its handle is `s_n<id>`. */
   id: string;
+  /** Where its element is in the source, for errors raised after lowering. */
+  loc: SourcePosition | undefined;
   /** The engine node type, an ER_NODE_* name. */
   type: string;
   /** Props folded at build time. */

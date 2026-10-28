@@ -29,7 +29,7 @@ import {
   PAINT_STRIDE,
   scaleVectorArtifact,
 } from '../../src/embedded-react/svg-ops.js';
-import {aotError} from './diagnostics.mts';
+import {aotError, currentLoc} from './diagnostics.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
 import {
@@ -1247,6 +1247,7 @@ function lowerSvgBox(
   );
   const node: IrNode = {
     id: nodeId,
+    loc: currentLoc(),
     type,
     constantProps: [...size, ...staticAssigns],
     stateProps: [],

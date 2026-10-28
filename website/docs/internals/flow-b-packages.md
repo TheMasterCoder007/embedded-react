@@ -7,11 +7,12 @@ This page is the spec for Flow B's package: the file the compiler will emit in p
 `app.gen.c`, and the fixed runtime in the firmware that checks it and runs it. It is written for
 the people building the loader, the VM, and the compiler's package output.
 
-:::info[Runtime built, compiler output not yet]
+:::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
-`erb_format.h`). The compiler still emits C; its package output is the next step, and the
-[roadmap](/roadmap) tracks it. Once packages pass the same tests as the C output, the C backend is
-retired.
+`erb_format.h`). `embedded-react build --aot --package` writes a package for one panel, but only for an
+app with no state yet; the compiler emits C for everything else while the rest of its package output
+lands, as the [roadmap](/roadmap) tracks. Once packages pass the same tests as the C output, the C
+backend is retired.
 :::
 
 ## In one picture
