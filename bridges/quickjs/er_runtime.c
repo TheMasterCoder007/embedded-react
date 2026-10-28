@@ -734,26 +734,19 @@ ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
     return er_runtime_load_container_ex(vbuf, len, false);
 }
 
-ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
+/** @brief Loads a container check_container passed: registers its asset packs, then runs its bytecode. */
+static ErContainerStatus load_checked_container(const ErContainer* container, bool copy_assets)
 {
-    /* Every check runs before anything is registered, so a container that fails one leaves the engine as it
-     * was. */
-    ErContainer container;
-    const ErContainerStatus status = check_container(vbuf, len, copy_assets, &container);
-    if (status != ER_CONTAINER_OK)
-    {
-        return status;
-    }
-    const ErContainerSection* vendor = find_section(&container, ER_SECTION_VENDOR_BYTECODE);
-    const ErContainerSection* bytecode = find_section(&container, ER_SECTION_BYTECODE);
+    const ErContainerSection* vendor = find_section(container, ER_SECTION_VENDOR_BYTECODE);
+    const ErContainerSection* bytecode = find_section(container, ER_SECTION_BYTECODE);
 
     /* Register the asset packs first (so <Image>/<Text> resolve when the app mounts). This can still fail
      * when memory runs out. Then run the vendor chunk if present — it installs the module registry +
      * require() shim the app resolves its imports through — and finally the app last, regardless of section
      * order. A container with no vendor section is a plain monolithic app and loads exactly as before. */
-    for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
+    for (uint32_t section_index = 0; section_index < container->section_count; section_index++)
     {
-        const ErContainerSection* section = &container.sections[section_index];
+        const ErContainerSection* section = &container->sections[section_index];
         if (section->type == ER_SECTION_ASSET_PACK
             && !er_assets_load_pack_ex(section->data, section->length, copy_assets))
         {
@@ -765,6 +758,15 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
         return ER_CONTAINER_LOAD_FAILED;
     }
     return er_runtime_load_bytecode(bytecode->data, bytecode->length) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
+}
+
+ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
+{
+    /* Every check runs before anything is registered, so a container that fails one leaves the engine as it
+     * was. */
+    ErContainer container;
+    const ErContainerStatus status = check_container(vbuf, len, copy_assets, &container);
+    return status == ER_CONTAINER_OK ? load_checked_container(&container, copy_assets) : status;
 }
 
 ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
@@ -787,7 +789,7 @@ ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
         {
             er_runtime_reset();
         }
-        status = er_runtime_load_container_ex(erpkg, erpkg_length, true);
+        status = load_checked_container(&container, true);
     }
     if (status != ER_CONTAINER_OK)
     {
