@@ -264,6 +264,8 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
             walk->info.images++;
             walk->info.misaligned += ((uintptr_t)pixels & (bytes_per_pixel - 1u)) ? 1u : 0u;
             walk->info.empty_images += (width == 0u || height == 0u) ? 1u : 0u;
+            walk->info.odd_rgb565 +=
+                (format == 1u && width != 0u && height != 0u && ((uintptr_t)pixels & 1u)) ? 1u : 0u;
             if (walk->image_names && walk->info.images <= walk->image_capacity)
             {
                 walk->image_names[walk->info.images - 1u] = name_record;
@@ -402,6 +404,27 @@ bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info)
     return ok;
 }
 
+bool er_assets_check_container(const ErContainer* container, ErAssetsInfo* info)
+{
+    /* One walk over every pack, so the counts and the families seen carry from one pack to the next. */
+    ErAssetsWalk walk;
+    memset(&walk, 0, sizeof(walk));
+    bool ok = container != NULL;
+    for (uint32_t section_index = 0; ok && section_index < container->section_count; section_index++)
+    {
+        const ErContainerSection* section = &container->sections[section_index];
+        if (section->type == ER_SECTION_ASSET_PACK)
+        {
+            ok = er_assets_walk(section->data, section->length, &walk);
+        }
+    }
+    if (info)
+    {
+        *info = walk.info;
+    }
+    return ok;
+}
+
 /** @brief An image name in the pack as rd_name reads it: at most 127 bytes, up to a NUL. */
 static void image_name(const uint8_t* pack, uint32_t name_record, const uint8_t** bytes, uint32_t* length)
 {
@@ -532,6 +555,12 @@ bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count
     return false;
 }
 
+/** @brief True when a caller storage array of @p capacity entries at @p base has room for @p needed. */
+static bool storage_fits(const void* base, uint32_t capacity, uint32_t needed)
+{
+    return needed == 0u || (base && needed <= capacity);
+}
+
 bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage)
 {
     if (!storage)
@@ -541,6 +570,14 @@ bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* stor
     storage->fonts_used = 0u;
     storage->glyphs_used = 0u;
     storage->extras_used = 0u;
+    /* Checked first, so a pack that fails registers nothing. */
+    ErAssetsInfo info;
+    if (!er_assets_check_pack(buf, len, &info) || !storage_fits(storage->fonts, storage->font_count, info.fonts)
+        || !storage_fits(storage->glyphs, storage->glyph_count, info.glyphs)
+        || !storage_fits(storage->extras, storage->extra_count, info.extra_glyphs))
+    {
+        return false;
+    }
     ErAssetsWalk walk;
     memset(&walk, 0, sizeof(walk));
     walk.registering = true;

@@ -16,8 +16,9 @@
 
 /*
  * er_assets_heap — er_assets_load_pack and er_assets_load_pack_ex, which take font tables (and, for a
- * volatile source, a copy of the pack) from the heap. Kept apart from er_assets.c so a firmware that only
- * checks packs or loads them into caller storage never links the allocator.
+ * volatile source, a copy of the pack) from the heap, then register through er_assets_load_pack_into. Kept
+ * apart from er_assets.c so a firmware that only checks packs or loads them into caller storage never links
+ * the allocator.
  */
 
 #include "er_assets_internal.h"
@@ -36,37 +37,6 @@ static uint8_t* s_pack_copy = NULL;
 static size_t s_pack_copy_cap = 0;
 
 /*----------------------------------------------------------------------------------------------------------------------
- - Heap font tables
- ---------------------------------------------------------------------------------------------------------------------*/
-
-static void heap_release(BitmapFont* font, GlyphInfo* glyphs, ExtraGlyph* extras)
-{
-    free(font);
-    free(glyphs);
-    free(extras);
-}
-
-static bool heap_tables(ErAssetsWalk* walk,
-                        uint16_t glyph_count,
-                        uint16_t extras_count,
-                        BitmapFont** font,
-                        GlyphInfo** glyphs,
-                        ExtraGlyph** extras)
-{
-    (void)walk;
-    *font = (BitmapFont*)calloc(1, sizeof(BitmapFont));
-    *glyphs = (GlyphInfo*)calloc(glyph_count ? glyph_count : 1, sizeof(GlyphInfo));
-    *extras = extras_count ? (ExtraGlyph*)calloc(extras_count, sizeof(ExtraGlyph)) : NULL;
-    if (!*font || !*glyphs || (extras_count && !*extras))
-    {
-        heap_release(*font, *glyphs, *extras);
-        *font = NULL;
-        return false;
-    }
-    return true;
-}
-
-/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -77,36 +47,57 @@ bool er_assets_load_pack(const void* buf, size_t len)
 
 bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
 {
-    if (!buf || len < 16)
+    /* Check the whole pack, then take everything it needs, before registering anything: a pack that fails
+     * leaves the registries (and the previous copy) as they were. */
+    ErAssetsInfo info;
+    if (!er_assets_check_pack(buf, len, &info))
     {
         return false;
     }
+
+    /* One block per table for the whole pack, kept for the process (see er_assets.h). */
+    ErAssetsStorage storage;
+    memset(&storage, 0, sizeof(storage));
+    storage.fonts = info.fonts ? (BitmapFont*)calloc(info.fonts, sizeof(BitmapFont)) : NULL;
+    storage.glyphs = info.glyphs ? (GlyphInfo*)calloc(info.glyphs, sizeof(GlyphInfo)) : NULL;
+    storage.extras = info.extra_glyphs ? (ExtraGlyph*)calloc(info.extra_glyphs, sizeof(ExtraGlyph)) : NULL;
+    storage.font_count = info.fonts;
+    storage.glyph_count = info.glyphs;
+    storage.extra_count = info.extra_glyphs;
+    bool ok =
+        (!info.fonts || storage.fonts) && (!info.glyphs || storage.glyphs) && (!info.extra_glyphs || storage.extras);
 
     /* When the source is volatile (a hot-reload staging buffer about to be reused for the next upload),
      * take our own copy and register the engine against it, so the caller's buffer is free after load.
      * The default (copy=false) references @p buf in place — zero RAM cost from mmap'd flash — and the
      * caller keeps it live (production boot, desktop sim). */
     const uint8_t* src = (const uint8_t*)buf;
-    if (copy)
+    if (ok && copy)
     {
         if (s_pack_copy_cap < len)
         {
             uint8_t* grown = (uint8_t*)realloc(s_pack_copy, len);
-            if (!grown)
+            ok = grown != NULL; /* OOM: prior copy left intact */
+            if (grown)
             {
-                return false; /* OOM: prior copy left intact; the load fails cleanly */
+                s_pack_copy = grown;
+                s_pack_copy_cap = len;
             }
-            s_pack_copy = grown;
-            s_pack_copy_cap = len;
         }
-        memcpy(s_pack_copy, buf, len);
-        src = s_pack_copy;
+        if (ok)
+        {
+            memcpy(s_pack_copy, buf, len);
+            src = s_pack_copy;
+        }
     }
 
-    ErAssetsWalk walk;
-    memset(&walk, 0, sizeof(walk));
-    walk.registering = true;
-    walk.tables = heap_tables;
-    walk.release = heap_release;
-    return er_assets_walk(src, len, &walk);
+    /* er_assets_load_pack_into registers nothing when it fails, so the tables are free to give back. */
+    if (ok && er_assets_load_pack_into(src, len, &storage))
+    {
+        return true;
+    }
+    free(storage.fonts);
+    free(storage.glyphs);
+    free(storage.extras);
+    return false;
 }

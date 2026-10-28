@@ -677,57 +677,96 @@ bool er_runtime_container_has_vendor(const void* buf, size_t len)
     return false;
 }
 
+/** @brief True when the engine would register all of a container's packs: its registries drop what doesn't fit. */
+static bool asset_packs_fit(const ErContainer* container, bool copy_assets)
+{
+    ErAssetsInfo info;
+    if (!er_assets_check_container(container, &info))
+    {
+        return false;
+    }
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    /* A copy is word-aligned, and a v2 pack aligns its pixels from its own first byte. */
+    const bool odd_pixels = !copy_assets && info.odd_rgb565 != 0u;
+    /* The registry doesn't store empty images, so they take no slot. */
+    return !odd_pixels && info.images - info.empty_images <= limits.images && info.font_families <= limits.font_families
+           && info.largest_family <= limits.font_sizes;
+}
+
+/** @brief The container's last section of @p type, or NULL. */
+static const ErContainerSection* find_section(const ErContainer* container, uint32_t type)
+{
+    const ErContainerSection* found = NULL;
+    for (uint32_t section_index = 0; section_index < container->section_count; section_index++)
+    {
+        if (container->sections[section_index].type == type)
+        {
+            found = &container->sections[section_index];
+        }
+    }
+    return found;
+}
+
+/** @brief Every check a container load makes before it touches the engine. */
+static ErContainerStatus check_container(const void* buf, size_t len, bool copy_assets, ErContainer* container)
+{
+    /* Integrity, then version compatibility, then the asset packs, together. */
+    const ErContainerStatus status = er_container_read(buf, len, container);
+    if (status != ER_CONTAINER_OK)
+    {
+        return status;
+    }
+    if (container->tag_length != strlen(ER_QUICKJS_TAG)
+        || memcmp(container->tag, ER_QUICKJS_TAG, container->tag_length) != 0)
+    {
+        return ER_CONTAINER_BAD_QJS;
+    }
+    if (!asset_packs_fit(container, copy_assets))
+    {
+        return ER_CONTAINER_BAD_ASSETS;
+    }
+    return find_section(container, ER_SECTION_BYTECODE) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
+}
+
 ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
 {
     return er_runtime_load_container_ex(vbuf, len, false);
 }
 
-ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
+/** @brief Loads a container check_container passed: registers its asset packs, then runs its bytecode. */
+static ErContainerStatus load_checked_container(const ErContainer* container, bool copy_assets)
 {
-    /* Integrity, then version compatibility — both before touching the engine. */
-    ErContainer container;
-    const ErContainerStatus status = er_container_read(vbuf, len, &container);
-    if (status != ER_CONTAINER_OK)
-    {
-        return status;
-    }
-    if (container.tag_length != strlen(ER_QUICKJS_TAG)
-        || memcmp(container.tag, ER_QUICKJS_TAG, container.tag_length) != 0)
-    {
-        return ER_CONTAINER_BAD_QJS;
-    }
+    const ErContainerSection* vendor = find_section(container, ER_SECTION_VENDOR_BYTECODE);
+    const ErContainerSection* bytecode = find_section(container, ER_SECTION_BYTECODE);
 
-    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts). Then run the
-     * vendor chunk if present — it installs the module registry + require() shim the app resolves its
-     * imports through — and finally the app last, regardless of section order. A container with no vendor
-     * section is a plain monolithic app and loads exactly as before. */
-    const ErContainerSection* vendor = NULL;
-    const ErContainerSection* bytecode = NULL;
-    for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
+    /* Register the asset packs first (so <Image>/<Text> resolve when the app mounts). This can still fail
+     * when memory runs out. Then run the vendor chunk if present — it installs the module registry +
+     * require() shim the app resolves its imports through — and finally the app last, regardless of section
+     * order. A container with no vendor section is a plain monolithic app and loads exactly as before. */
+    for (uint32_t section_index = 0; section_index < container->section_count; section_index++)
     {
-        const ErContainerSection* section = &container.sections[section_index];
-        if (section->type == ER_SECTION_ASSET_PACK)
+        const ErContainerSection* section = &container->sections[section_index];
+        if (section->type == ER_SECTION_ASSET_PACK
+            && !er_assets_load_pack_ex(section->data, section->length, copy_assets))
         {
-            er_assets_load_pack_ex(section->data, section->length, copy_assets);
+            return ER_CONTAINER_BAD_ASSETS;
         }
-        else if (section->type == ER_SECTION_BYTECODE)
-        {
-            bytecode = section;
-        }
-        else if (section->type == ER_SECTION_VENDOR_BYTECODE)
-        {
-            vendor = section;
-        }
-    }
-    if (!bytecode)
-    {
-        return ER_CONTAINER_LOAD_FAILED;
     }
     if (vendor && !er_runtime_load_bytecode(vendor->data, vendor->length))
     {
         return ER_CONTAINER_LOAD_FAILED;
     }
     return er_runtime_load_bytecode(bytecode->data, bytecode->length) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
+}
+
+ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
+{
+    /* Every check runs before anything is registered, so a container that fails one leaves the engine as it
+     * was. */
+    ErContainer container;
+    const ErContainerStatus status = check_container(vbuf, len, copy_assets, &container);
+    return status == ER_CONTAINER_OK ? load_checked_container(&container, copy_assets) : status;
 }
 
 ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
@@ -739,13 +778,19 @@ ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
      *     react/reconciler stay parsed and __erPersist survives; loading just re-evaluates the app, which
      *     re-renders into the resident root (a "soft" reload).
      * Either way assets are copied (copy_assets=true) since @p erpkg is a staging buffer the receiver
-     * reuses for the next upload — that copy lets the old UI stay on screen until the new one mounts. On
-     * failure, paint the on-screen panel. */
-    if (er_runtime_container_has_vendor(erpkg, erpkg_length))
+     * reuses for the next upload — that copy lets the old UI stay on screen until the new one mounts. The
+     * container's checks run before the reset, so one that fails them keeps the resident context (the vendor
+     * and persisted state). On failure, paint the on-screen panel. */
+    ErContainer container;
+    ErContainerStatus status = check_container(erpkg, erpkg_length, true, &container);
+    if (status == ER_CONTAINER_OK)
     {
-        er_runtime_reset();
+        if (find_section(&container, ER_SECTION_VENDOR_BYTECODE))
+        {
+            er_runtime_reset();
+        }
+        status = load_checked_container(&container, true);
     }
-    const ErContainerStatus status = er_runtime_load_container_ex(erpkg, erpkg_length, true);
     if (status != ER_CONTAINER_OK)
     {
         er_runtime_show_message(

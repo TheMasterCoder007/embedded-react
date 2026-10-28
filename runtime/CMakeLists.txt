@@ -93,6 +93,10 @@ if (ER_RUNTIME_TESTS)
     target_link_libraries(er-runtime-container-test PRIVATE er-runtime)
     add_test(NAME runtime-container COMMAND er-runtime-container-test)
 
+    add_executable(er-runtime-assets-test tests/assets_test.c)
+    target_link_libraries(er-runtime-assets-test PRIVATE er-runtime)
+    add_test(NAME runtime-assets COMMAND er-runtime-assets-test)
+
     add_executable(erb-verify-test tests/erb_verify_test.c)
     target_link_libraries(erb-verify-test PRIVATE erb-runtime)
     add_test(NAME runtime-erb-verify COMMAND erb-verify-test)

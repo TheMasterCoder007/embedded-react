@@ -25,9 +25,12 @@
  * config container on a device). It is also the asset section of the ERCF config container.
  *
  * The buffer must stay live for as long as the assets are used: image pixels and font bitmaps are
- * referenced by pointer into it. er_assets_load_pack's per-font GlyphInfo/ExtraGlyph arrays + BitmapFont
- * structs are heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than
- * risk a dangling reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
+ * referenced by pointer into it. er_assets_load_pack's GlyphInfo/ExtraGlyph arrays + BitmapFont structs are
+ * heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than risk a
+ * dangling reference; fine for the few-KB-per-reload dev/config-swap case).
+ *
+ * The loaders check the whole pack before registering anything, so a pack that fails to load leaves the
+ * registries as they were. That includes an image pixel format this firmware doesn't know.
  *
  * For a VOLATILE source — a hot-reload staging buffer that gets reused for the next upload — use
  * er_assets_load_pack_ex(buf, len, copy=true): it takes its own (reused) copy of the pack and points the
@@ -36,6 +39,7 @@
  * a config mmap'd from flash costs no RAM for its pixels — keep it for production boot + desktop.
  */
 
+#include "er_container.h"
 #include "er_scene.h" /* BitmapFont, GlyphInfo, ExtraGlyph */
 
 #include <stdbool.h>
@@ -51,6 +55,7 @@ typedef struct
     uint32_t extra_glyphs;   /**< Extra-glyph records (codepoints past a font's range), over every font. */
     uint32_t misaligned;     /**< Images whose pixels don't sit on their word size (only a v1 pack can have them). */
     uint32_t empty_images;   /**< Images with no width or no height, which the engine won't register. */
+    uint32_t odd_rgb565;     /**< Non-empty RGB565 images on an odd address, which the engine won't register. */
     uint32_t font_families;  /**< Distinct family names, as the font registry compares them. */
     uint32_t largest_family; /**< The most sizes one family has. */
 } ErAssetsInfo;
@@ -77,8 +82,8 @@ typedef struct
  * @param[in] buf  Pack bytes (caller-owned; must outlive use).
  * @param[in] len  Byte length.
  *
- * @return true if parsed and registered; false on a malformed/truncated pack (a wrong magic or an
- *         over-read leaves whatever was registered before untouched).
+ * @return true if parsed and registered; false on a malformed pack or an allocation failure, with nothing
+ *         registered.
  */
 bool er_assets_load_pack(const void* buf, size_t len);
 
@@ -91,7 +96,8 @@ bool er_assets_load_pack(const void* buf, size_t len);
  *                  the copy, so @p buf may be reused/freed immediately (hot reload from a staging buffer).
  *                  false → reference @p buf in place (identical to er_assets_load_pack).
  *
- * @return true if parsed and registered; false on a malformed pack or (copy=true) an allocation failure.
+ * @return true if parsed and registered; false on a malformed pack or an allocation failure, with nothing
+ *         registered and the previous copy left intact.
  */
 bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
 
@@ -108,6 +114,17 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
  * @return true when the whole pack reads cleanly, so loading it can't fail part way for its own sake.
  */
 bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info);
+
+/**
+ * @brief Checks every asset pack in a container as one, without registering anything.
+ *
+ * @param[in]  container  A container er_container_read returned.
+ * @param[out] info       Receives the counts over all of its packs (may be NULL). A font family in two packs
+ *                        counts once, as the font registry would hold it.
+ *
+ * @return true when every pack reads cleanly (also when there are none).
+ */
+bool er_assets_check_container(const ErContainer* container, ErAssetsInfo* info);
 
 /**
  * @brief Like er_assets_check_pack, and also lists the pack's images sorted by name, for er_assets_find_image.
@@ -141,7 +158,8 @@ bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count
  * @param[in]     len      Byte length.
  * @param[in,out] storage  Font table storage; its *_used fields report what was taken.
  *
- * @return true if parsed and registered; false on a malformed pack or a font table that doesn't fit.
+ * @return true if parsed and registered; false on a malformed pack or font tables that don't fit, with nothing
+ *         registered.
  */
 bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage);
 

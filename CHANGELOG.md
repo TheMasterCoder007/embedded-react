@@ -15,6 +15,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
   QuickJS and no heap. The compiler doesn't emit packages yet.
 
+### Changed
+
+- A container whose asset packs fail to load, or don't fit the image and font registries, now fails
+  with `ER_CONTAINER_BAD_ASSETS` instead of running with missing images and fonts. That includes an
+  image format this firmware doesn't know, from a newer emitter, and RGB565 pixels on an odd address.
+- `er_assets_load_pack` and friends now check the whole pack first and register nothing when it fails.
+
 ## [0.19.0] - 2026-10-27
 ### Changed
 
