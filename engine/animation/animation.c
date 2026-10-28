@@ -191,6 +191,14 @@ static uint16_t s_next_handle = 1; /**< Monotonically increasing handle counter;
  - Functions: Public — reset
  ---------------------------------------------------------------------------------------------------------------------*/
 
+void er_anim_pool_limits(ERPoolLimits* limits)
+{
+    limits->animations = (uint16_t)ERUI_MAX_ANIMATIONS;
+    limits->anim_groups = (uint16_t)ERUI_MAX_ANIM_GROUPS;
+    limits->group_entries = (uint16_t)ERUI_MAX_GROUP_ENTRIES;
+    limits->anim_values = (uint16_t)ERUI_MAX_ANIM_VALUES;
+}
+
 void er_anim_reset(void)
 {
     /* All three pools are plain value arrays whose "free" state is all-zero (active/in_use = false),

@@ -146,6 +146,11 @@ void er_vector_free(int slot)
     }
 }
 
+int er_vector_capacity(void)
+{
+    return ERUI_MAX_VECTOR_NODES;
+}
+
 void er_vector_reset(void)
 {
     /* Free every storage slot. The rasterizer's scratch (vector.c) is reset per shape inside

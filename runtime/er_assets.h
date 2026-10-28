@@ -25,9 +25,9 @@
  * config container on a device). It is also the asset section of the ERCF config container.
  *
  * The buffer must stay live for as long as the assets are used: image pixels and font bitmaps are
- * referenced by pointer into it. Per-font GlyphInfo/ExtraGlyph arrays + BitmapFont structs are
- * heap-allocated and kept for the process (a reload leaks the previous set rather than risk a dangling
- * reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
+ * referenced by pointer into it. er_assets_load_pack's per-font GlyphInfo/ExtraGlyph arrays + BitmapFont
+ * structs are heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than
+ * risk a dangling reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
  *
  * For a VOLATILE source — a hot-reload staging buffer that gets reused for the next upload — use
  * er_assets_load_pack_ex(buf, len, copy=true): it takes its own (reused) copy of the pack and points the
@@ -36,8 +36,38 @@
  * a config mmap'd from flash costs no RAM for its pixels — keep it for production boot + desktop.
  */
 
+#include "er_scene.h" /* BitmapFont, GlyphInfo, ExtraGlyph */
+
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+/** @brief What a pack holds, as er_assets_check_pack counts it. */
+typedef struct
+{
+    uint32_t images;         /**< Images. */
+    uint32_t fonts;          /**< Fonts (one per family and size). */
+    uint32_t glyphs;         /**< Glyph records, over every font. */
+    uint32_t extra_glyphs;   /**< Extra-glyph records (codepoints past a font's range), over every font. */
+    uint32_t misaligned;     /**< Images whose pixels don't sit on their word size (only a v1 pack can have them). */
+    uint32_t empty_images;   /**< Images with no width or no height, which the engine won't register. */
+    uint32_t font_families;  /**< Distinct family names, as the font registry compares them. */
+    uint32_t largest_family; /**< The most sizes one family has. */
+} ErAssetsInfo;
+
+/** @brief Caller storage for the font tables a pack registers, for a firmware with no heap. */
+typedef struct
+{
+    BitmapFont* fonts;    /**< One per font. */
+    uint32_t font_count;  /**< Length of fonts. */
+    GlyphInfo* glyphs;    /**< Glyph records. */
+    uint32_t glyph_count; /**< Length of glyphs. */
+    ExtraGlyph* extras;   /**< Extra-glyph records. */
+    uint32_t extra_count; /**< Length of extras. */
+    uint32_t fonts_used;  /**< Set by er_assets_load_pack_into: entries it took. */
+    uint32_t glyphs_used;
+    uint32_t extras_used;
+} ErAssetsStorage;
 
 /**
  * @brief Parses an ERPK asset pack from memory and registers its images and fonts with the engine
@@ -64,5 +94,55 @@ bool er_assets_load_pack(const void* buf, size_t len);
  * @return true if parsed and registered; false on a malformed pack or (copy=true) an allocation failure.
  */
 bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
+
+/**
+ * @brief Checks a pack without registering anything, and counts what it holds.
+ *
+ * @param[in]  buf   Pack bytes.
+ * @param[in]  len   Byte length.
+ * @param[out] info  Receives the counts (may be NULL).
+ *
+ * Every font must be drawable: a known format, a dense glyph array that covers [first, last], every glyph's
+ * bitmap inside the font's, and extra glyphs in ascending codepoint order.
+ *
+ * @return true when the whole pack reads cleanly, so loading it can't fail part way for its own sake.
+ */
+bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info);
+
+/**
+ * @brief Like er_assets_check_pack, and also lists the pack's images sorted by name, for er_assets_find_image.
+ *
+ * @param[in]  buf       Pack bytes.
+ * @param[in]  len       Byte length.
+ * @param[out] info      Receives the counts (may be NULL).
+ * @param[out] names     Receives each image's name record, as an offset into the pack, sorted by name.
+ * @param[in]  capacity  Length of names. Images past it are counted in info but not listed.
+ *
+ * @return true when the whole pack reads cleanly.
+ */
+bool er_assets_check_pack_images(const void* buf, size_t len, ErAssetsInfo* info, uint32_t* names, uint32_t capacity);
+
+/**
+ * @brief Looks an image up by name in a list er_assets_check_pack_images made, by binary search.
+ *
+ * @param[in] buf    The same pack bytes.
+ * @param[in] names  The sorted list.
+ * @param[in] count  Entries in it.
+ * @param[in] name   Null-terminated image name.
+ *
+ * @return true when the pack has the image.
+ */
+bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count, const char* name);
+
+/**
+ * @brief Like er_assets_load_pack (in place), with font tables taken from @p storage instead of the heap.
+ *
+ * @param[in]     buf      Pack bytes (caller-owned; must outlive use).
+ * @param[in]     len      Byte length.
+ * @param[in,out] storage  Font table storage; its *_used fields report what was taken.
+ *
+ * @return true if parsed and registered; false on a malformed pack or a font table that doesn't fit.
+ */
+bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage);
 
 #endif
