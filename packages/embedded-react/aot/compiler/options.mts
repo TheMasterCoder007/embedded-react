@@ -46,6 +46,8 @@ export interface CompileOptions {
   listStrCap?: number;
   /** Inline segments in a nested <Text>. */
   maxTextSpans?: number;
+  /** Timers that run at once, in the package output. */
+  maxTimers?: number;
 }
 
 /** compileSource's options with the screen and the caps filled in. */
@@ -69,6 +71,7 @@ const MAX_SCREEN = 32767;
 const MAX_LIST_CAP = 32767;
 const MAX_LIST_STR_CAP = 32767;
 const MAX_TEXT_SPANS = 255;
+const MAX_TIMERS = 4096;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -117,9 +120,12 @@ function wholeInRange(
  *   listStrCap    ER_AOT_LIST_STR_CAP     48       Characters per string buffer (list field, string state).
  *   maxTextSpans  ER_AOT_MAX_TEXT_SPANS   4        Inline segments in a nested <Text>. Must match the
  *                                                  engine's ER_TEXT_MAX_SPANS.
+ *   maxTimers     ER_AOT_MAX_TIMERS       8        Timers that run at once. Sizes the package's timer
+ *                                                  table; the C output takes it as a C define instead.
  *
  * Each value must be a whole number from 1 up: to 32767 for the screen and the list caps, to 255 for
- * maxTextSpans. One that isn't, from the options or a variable, is an `AOT:` error that names it.
+ * maxTextSpans, to 4096 for maxTimers. One that isn't, from the options or a variable, is an `AOT:` error
+ * that names it.
  *
  * @param opts  The options the caller passed.
  *
@@ -183,6 +189,13 @@ export function resolveOptions(opts: CompileOptions): ResolvedOptions {
         'ER_AOT_MAX_TEXT_SPANS',
         4,
         MAX_TEXT_SPANS,
+      ),
+      maxTimers: fromOption(
+        opts.maxTimers,
+        'maxTimers',
+        'ER_AOT_MAX_TIMERS',
+        8,
+        MAX_TIMERS,
       ),
     },
   };

@@ -32,6 +32,7 @@ import {
   FunctionKind,
   NONE,
   PropKind,
+  Region,
   SlotFlag,
   Table,
   ValueType,
@@ -59,6 +60,10 @@ const styles = StyleSheet.create({
 });`;
 
 const SCREEN = {screen: {width: 240, height: 320}};
+
+const OP_NAMES = Object.fromEntries(
+  Object.entries(OP).map(([name, {code}]) => [code, name]),
+);
 
 /** The program section's header, panel and table directory. */
 function readProgram(bytes) {
@@ -124,6 +129,42 @@ describe('constant props', () => {
     expect(ABI_PROPS.get('spans[1].color')).toEqual({id: 168, kind: 'color'});
   });
 });
+
+/** Each function's kind and its instructions, decoded. */
+function functionsOf(bytes) {
+  const {u32, tables} = readProgram(bytes);
+  const functions = tables.get(Table.functions);
+  const code = tables.get(Table.code);
+  const word = index => u32(code.offset + index * 4);
+  return Array.from({length: functions.length / 16}, (_, index) => {
+    const at = functions.offset + index * 16;
+    const start = u32(at);
+    const ops = [];
+    for (let pc = start; pc < start + u32(at + 4); ) {
+      const first = word(pc);
+      const name = OP_NAMES[first & 0xff];
+      ops.push({
+        name,
+        a: (first >>> 8) & 0xff,
+        bx: first >>> 16,
+        c: first >>> 24,
+        ext: OP[name].words === 2 ? word(pc + 1) : undefined,
+      });
+      pc += OP[name].words;
+    }
+    return {kind: u32(at + 12) >>> 24, ops};
+  });
+}
+
+/** The arena's regions. */
+function regionsOf(bytes) {
+  const {u16, u32, tables} = readProgram(bytes);
+  const arena = tables.get(Table.arena);
+  return Array.from({length: arena.length / 12}, (_, index) => {
+    const at = arena.offset + index * 12;
+    return {kind: u16(at), count: u16(at + 2), bytes: u32(at + 8)};
+  });
+}
 
 describe('package output', () => {
   it('writes the header, the panel and the required tables', () => {
@@ -223,14 +264,15 @@ describe('package output', () => {
 
   it('refuses what it does not lower yet, at its place in the source', () => {
     const src = `
-import {useState} from 'react';
-import {Pressable, Text} from 'embedded-react';
+import {useState, useRef} from 'react';
+import {View, Text, PanResponder} from 'embedded-react';
 export function App() {
-  const [count, setCount] = useState(0);
-  return <Pressable onPress={() => setInterval(() => setCount(count + 1), 100)}><Text>{count}</Text></Pressable>;
+  const [x, setX] = useState(0);
+  const pan = useRef(PanResponder.create({onPanResponderMove: (e, g) => setX(g.dx)})).current;
+  return <View {...pan.panHandlers}><Text>{x}</Text></View>;
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support timers yet[\s\S]*App\.jsx:6:/,
+      /the package output doesn't support PanResponder yet[\s\S]*App\.jsx:7:/,
     );
   });
 
@@ -357,17 +399,17 @@ export function App() {
 
   it('points what has no node of its own at its first call', () => {
     const src = `
-import {useEffect, useRef} from 'react';
-import {View} from 'embedded-react';
+import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
 export function App() {
-  const mounted = useRef(0);
-  useEffect(() => {
-    mounted.current = 1;
-  }, []);
-  return <View />;
+  const fade = useAnimatedValue(0);
+  return (
+    <Pressable onPress={() => Animated.timing(fade, {toValue: 1, duration: 100}).start()}>
+      <Text>go</Text>
+    </Pressable>
+  );
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support effects yet[\s\S]*App\.jsx:6:3/,
+      /the package output doesn't support animations yet[\s\S]*App\.jsx:4:16/,
     );
   });
 
@@ -450,6 +492,168 @@ export function App() {
   });
 });
 
+describe('timers and effects', () => {
+  const TIMER_APP = `
+import {useState, useRef} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+export function App() {
+  const [ticks, setTicks] = useState(0);
+  const timer = useRef(-1);
+  return (
+    <View>
+      <Pressable onPress={() => { const id = setInterval(() => setTicks(ticks + 1), 100); timer.current = id; }}>
+        <Text>{ticks}</Text>
+      </Pressable>
+      <Pressable onPress={() => clearInterval(timer.current)}><Text>stop</Text></Pressable>
+    </View>
+  );
+}`;
+
+  const EFFECT_APP = `
+import {useState, useEffect} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [count, setCount] = useState(0);
+  const [doubled, setDoubled] = useState(0);
+  useEffect(() => {
+    setDoubled(count * 2);
+    const id = setTimeout(() => setCount(count), 100);
+    return () => clearTimeout(id);
+  }, [count]);
+  useEffect(() => {
+    setCount(1);
+  }, []);
+  return <Pressable onPress={() => setCount(count + 1)}><Text>{count} {doubled}</Text></Pressable>;
+}`;
+
+  const names = fn => fn.ops.map(op => op.name);
+
+  it('starts each timer on its callback, in a table maxTimers sizes', () => {
+    const {program} = compilePackage(TIMER_APP, 'app', SCREEN);
+    const functions = functionsOf(program);
+    expect(functions.map(fn => fn.kind)).toEqual([
+      0, // ER_EVENT_PRESS
+      0,
+      FunctionKind.timer,
+      FunctionKind.update,
+    ]);
+    // A repeating timer on function 2, and the clear.
+    expect(functions[0].ops.find(op => op.name === 'TSTART')).toMatchObject({
+      c: 1,
+      ext: 2,
+    });
+    expect(names(functions[1])).toContain('TCLEAR');
+    // The callback set state, so it requests the update as a handler does.
+    expect(names(functions[2])).toContain('NOT');
+
+    const timers = regions =>
+      regions.find(region => region.kind === Region.timers);
+    expect(timers(regionsOf(program))).toEqual({
+      kind: Region.timers,
+      count: 8,
+      bytes: 128,
+    });
+    const smaller = compilePackage(TIMER_APP, 'app', {...SCREEN, maxTimers: 3});
+    expect(timers(regionsOf(smaller.program))).toMatchObject({
+      count: 3,
+      bytes: 48,
+    });
+    // No effect queues anything, so there is no event queue.
+    expect(
+      regionsOf(program).some(region => region.kind === Region.events),
+    ).toBe(false);
+  });
+
+  it('converts a fractional delay as app_delay_msf does, and a whole one as it is', () => {
+    const delayed = delay => `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [done, setDone] = useState(0);
+  return <Pressable onPress={() => setTimeout(() => setDone(1), ${delay})}><Text>{done}</Text></Pressable>;
+}`;
+    const handler = delay =>
+      names(
+        functionsOf(compilePackage(delayed(delay), 'app', SCREEN).program)[0],
+      );
+    // ToInt32 is the low 32 bits; past 2^31 - 1 the delay is 0.
+    const fraction = handler('1.5');
+    expect(fraction).toEqual(
+      expect.arrayContaining(['FTOL', 'MODL', 'LLT', 'LTOI', 'TSTART']),
+    );
+    expect(fraction.indexOf('FTOL')).toBeLessThan(fraction.indexOf('TSTART'));
+    expect(handler('100')).not.toContain('MODL');
+  });
+
+  it('queues each effect from the update, and the mount effects one after another', () => {
+    const {program} = compilePackage(EFFECT_APP, 'app', SCREEN);
+    const functions = functionsOf(program);
+    // The press, the timeout, the dep check, the two mount effects, then the update.
+    expect(functions.map(fn => fn.kind)).toEqual([
+      0,
+      FunctionKind.timer,
+      FunctionKind.effect,
+      FunctionKind.effect,
+      FunctionKind.effect,
+      FunctionKind.update,
+    ]);
+    const [, , check, firstMount, secondMount, update] = functions;
+    const effects = fn =>
+      fn.ops.filter(op => op.name === 'EFFECT').map(op => op.bx);
+    // Every pass queues the dep check; the first one, the first mount effect too.
+    expect(effects(update)).toEqual([2, 3]);
+    // The dep-driven mount effect sets no app_update(), so it queues the next one itself.
+    expect(effects(firstMount)).toEqual([4]);
+    expect(effects(secondMount)).toEqual([]);
+    expect(names(secondMount)).toContain('NOT');
+    // Each run clears the last run's timeout, then starts its own.
+    expect(names(check).indexOf('TCLEAR')).toBeLessThan(
+      names(check).indexOf('TSTART'),
+    );
+    // A pass only the effect's write started returns before it sets anything.
+    expect(update.ops[0].name).toBe('JDIRTY');
+
+    expect(
+      regionsOf(program).find(region => region.kind === Region.events),
+    ).toEqual({kind: Region.events, count: 2, bytes: 64});
+  });
+
+  it('keeps an effect local its cleanup reads, the armed flag and the dep copy in slots', () => {
+    const {program} = compilePackage(EFFECT_APP, 'app', SCREEN);
+    const {u16, tables} = readProgram(program);
+    const slots = tables.get(Table.slots);
+    const untracked = Array.from({length: slots.length / 16}, (_, index) =>
+      u16(slots.offset + index * 16),
+    ).filter(word => !(word >> 8) && (word & 0xff) !== ValueType.node);
+    // The timeout's id, the armed flag and the copy of count, then the pending flag and the mount's next.
+    expect(untracked.map(word => word & 0xff).sort()).toEqual(
+      [
+        ValueType.int,
+        ValueType.bool,
+        ValueType.int,
+        ValueType.bool,
+        ValueType.int,
+      ].sort(),
+    );
+  });
+
+  it('refuses an effect without deps, as the C output does', () => {
+    const src = `
+import {useEffect, useRef} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const runs = useRef(0);
+  useEffect(() => {
+    runs.current += 1;
+  });
+  return <View />;
+}`;
+    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+      'useEffect needs a dependency list',
+    );
+  });
+});
+
 describe('bytecode', () => {
   it('keeps a function within the 255 register cells its record counts', () => {
     const fn = new FunctionBuilder(FunctionKind.update, 'the update');
@@ -470,6 +674,9 @@ describe('bytecode', () => {
       boot: new Map(),
       stringLocals: new Map(),
       enums: new Map(),
+      hoisted: new Map(),
+      armed: new Map(),
+      timerFunctions: new Map(),
     });
     const loadString = text => {
       const register = fn.register('string');
