@@ -8,6 +8,7 @@
 # plus the parts from runtime/ that no JS engine owns:
 #   er_container.c     — the ERCF container reader and CRC
 #   er_assets.c        — the portable ERPK asset-pack parser (the container's asset section)
+#   er_assets_heap.c   — its heap-backed loader (er_assets_load_pack)
 #   er_hotreload.c     — the portable ERHR transport-frame parser for on-device hot reload (the RX task
 #                        in hotreload_usb.c feeds received USB/serial bytes into it)
 # They need er_scene.h (engine) and quickjs.h (quickjs).
@@ -21,6 +22,7 @@ idf_component_register(
          "${BRIDGE_DIR}/overlay/message_overlay.qbc.c" # precompiled error overlay (parser-less safe)
          "${RUNTIME_DIR}/er_container.c"
          "${RUNTIME_DIR}/er_assets.c"
+         "${RUNTIME_DIR}/er_assets_heap.c"
          "${RUNTIME_DIR}/er_hotreload.c"
     INCLUDE_DIRS "${BRIDGE_DIR}" "${RUNTIME_DIR}"
     REQUIRES engine quickjs

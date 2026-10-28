@@ -1398,6 +1398,10 @@ static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError*
     {
         return fail(error, ERB_ERR_ASSETS, "image pixels not word-aligned (a v1 pack)");
     }
+    if (info.empty_images)
+    {
+        return fail(error, ERB_ERR_ASSETS, "an image with no width or height");
+    }
     ERPoolLimits limits;
     er_pool_limits(&limits);
     const ErAssetsStorage* fonts = config->fonts;
@@ -1405,6 +1409,10 @@ static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError*
         || info.glyphs > (fonts ? fonts->glyph_count : 0u) || info.extra_glyphs > (fonts ? fonts->extra_count : 0u))
     {
         return fail(error, ERB_ERR_ASSETS, "asset pack doesn't fit the image registry or ERB_FONTS and ERB_GLYPHS");
+    }
+    if (info.font_families > limits.font_families || info.largest_family > limits.font_sizes)
+    {
+        return fail(error, ERB_ERR_ASSETS, "asset pack has more font families or sizes than the font registry holds");
     }
     return true;
 }

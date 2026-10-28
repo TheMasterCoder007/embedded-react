@@ -233,7 +233,7 @@ typedef struct
     const char* debug_strings[4];
     uint32_t debug_string_count;
 
-    uint8_t assets[128];
+    uint8_t assets[1024];
     uint32_t assets_length;
 
     /* Ways to break the container and directory that the structs above can't express. */

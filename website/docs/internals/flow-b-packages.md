@@ -292,8 +292,9 @@ of the runtime's footprint, not the package's.
 Fonts need a change to the asset loader too. `er_assets_load_pack()` allocates each font's glyph tables
 with `calloc`, and the Flow B runtime has no heap. It gets a variant that takes those tables from
 storage the caller provides, sized by the firmware (`ERB_FONTS`, `ERB_GLYPHS`) and checked against the
-package's font and glyph needs. The table layout depends on the firmware's structs, so it can't live in
-the arena.
+package's font and glyph needs. The heap path lives in its own file (`er_assets_heap.c`), so a Flow B
+firmware never links the allocator. The table layout depends on the firmware's structs, so it can't
+live in the arena.
 
 ### The RP2040
 
@@ -552,7 +553,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Imports   | Every import resolves to a native function the firmware registered with the same name, version and signature                                                                                                                                                                          | missing native module _name_       |
 | Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                       | bad input                          |
 | Debug     | `build_id` matches; the parts inside the section, in order and not overlapping; `function_count` equals the program's function count; entries sorted, each on a real instruction; every `file` and function name a valid index into its string table, which is checked like `strings` | debug table does not match         |
-| Assets    | The asset pack passes the check-only pass, its pixels are word-aligned, and its fonts fit `ERB_FONTS` and `ERB_GLYPHS`                                                                                                                                                                | asset pack failed to load          |
+| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit `ERB_FONTS`, `ERB_GLYPHS` and the font registry                                                                                                                   | asset pack failed to load          |
 
 ### Run-time checks
 

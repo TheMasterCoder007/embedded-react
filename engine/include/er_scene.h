@@ -150,6 +150,7 @@ extern "C"
         uint16_t group_entries; /**< ERUI_MAX_GROUP_ENTRIES. */
         uint16_t images;        /**< ERUI_IMAGE_REGISTRY_MAX. */
         uint16_t font_families; /**< Font families the registry holds. */
+        uint16_t font_sizes;    /**< Sizes the registry holds per family. */
     } ERPoolLimits;
 
     /**
@@ -1340,7 +1341,8 @@ extern "C"
 
     /**
      * @brief Unregisters every font registered with er_font_register() or er_font_load(). The built-in font
-     *        stays.
+     *        stays. The registry doesn't own the fonts: whoever made a font's tables still owns them (the
+     *        heap tables er_assets_load_pack makes are kept for the process).
      */
     void er_font_clear(void);
 

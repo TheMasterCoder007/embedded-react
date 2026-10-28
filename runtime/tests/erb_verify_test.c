@@ -747,6 +747,188 @@ static void test_assets(void)
     static ErAssetsStorage storage = {fonts, 1, glyphs, 1, NULL, 0, 0, 0, 0};
     s_config.fonts = &storage;
     EXPECT(ERB_OK, "the same font with room for it");
+
+    base();
+    s_pkg.assets[21] = 0u; /* the image's width */
+    EXPECT(ERB_ERR_ASSETS, "an image with no width");
+}
+
+/** @brief A font for the test pack: each glyph is glyph_width by 1 pixel at bitmap_offset. */
+typedef struct
+{
+    const char* family;
+    uint8_t pixel_size;
+    uint8_t format;
+    uint16_t first;
+    uint16_t last;
+    uint16_t glyph_count;
+    uint8_t glyph_width;
+    uint32_t bitmap_offset;
+    uint32_t bitmap_length;
+    uint16_t extras_count;
+    uint32_t extra_codepoints[2];
+} TestFont;
+
+/** @brief A font that passes every check: 'A' only, one 1-bit pixel. */
+static TestFont good_font(const char* family, uint8_t pixel_size)
+{
+    return (TestFont){family, pixel_size, ERUI_FONT_FMT_1BIT, 'A', 'A', 1u, 1u, 0u, 1u, 0u, {0u, 0u}};
+}
+
+static void put_u8(uint8_t value)
+{
+    s_pkg.assets[s_pkg.assets_length++] = value;
+}
+
+static void put_u16(uint32_t value)
+{
+    put_u8(value & 0xFFu);
+    put_u8((value >> 8) & 0xFFu);
+}
+
+static void put_u32(uint32_t value)
+{
+    put_u16(value & 0xFFFFu);
+    put_u16(value >> 16);
+}
+
+static void put_glyph(const TestFont* font)
+{
+    put_u32(font->bitmap_offset);
+    put_u8(font->glyph_width);
+    put_u8(1u); /* height */
+    put_u8(0u);
+    put_u8(0u);
+    put_u8(font->glyph_width); /* advance */
+}
+
+/** @brief Appends @p font to the baseline pack and counts it in the pack's header. */
+static void add_font(const TestFont* font)
+{
+    s_pkg.assets[12]++;
+    const size_t name_length = strlen(font->family);
+    put_u16((uint32_t)name_length);
+    memcpy(s_pkg.assets + s_pkg.assets_length, font->family, name_length);
+    s_pkg.assets_length += (uint32_t)name_length;
+    put_u8(font->pixel_size);
+    put_u8(font->pixel_size + 2u); /* line height */
+    put_u8(font->pixel_size - 2u); /* baseline */
+    put_u8(font->format);
+    put_u16(font->first);
+    put_u16(font->last);
+    put_u16(font->glyph_count);
+    put_u16(font->extras_count);
+    put_u32(font->bitmap_length);
+    for (uint16_t glyph_index = 0; glyph_index < font->glyph_count; glyph_index++)
+    {
+        put_glyph(font);
+    }
+    for (uint16_t extra_index = 0; extra_index < font->extras_count; extra_index++)
+    {
+        put_u32(font->extra_codepoints[extra_index]);
+        put_glyph(font);
+    }
+    for (uint32_t byte_index = 0; byte_index < font->bitmap_length; byte_index++)
+    {
+        put_u8(0xFFu);
+    }
+}
+
+/** @brief Storage for as many one-glyph fonts as the font registry can be asked to hold, and more. */
+#define FONT_STORAGE_FONTS 32u
+
+static void give_font_storage(void)
+{
+    static BitmapFont fonts[FONT_STORAGE_FONTS];
+    static GlyphInfo glyphs[FONT_STORAGE_FONTS];
+    static ExtraGlyph extras[FONT_STORAGE_FONTS];
+    static ErAssetsStorage storage;
+    storage =
+        (ErAssetsStorage){fonts, FONT_STORAGE_FONTS, glyphs, FONT_STORAGE_FONTS, extras, FONT_STORAGE_FONTS, 0, 0, 0};
+    s_config.fonts = &storage;
+}
+
+/** @brief The baseline package with one font, and room for its tables. */
+static void expect_font(const TestFont* font, ErbStatus status, const char* what, int line)
+{
+    base();
+    add_font(font);
+    give_font_storage();
+    expect(status, what, line);
+}
+
+static void test_fonts(void)
+{
+    TestFont font = good_font("f", 16u);
+    expect_font(&font, ERB_OK, "a font that passes every check", __LINE__);
+    font.format = 3u;
+    expect_font(&font, ERB_ERR_ASSETS, "a font format the engine can't draw", __LINE__);
+    font = good_font("f", 16u);
+    font.first = 'B';
+    expect_font(&font, ERB_ERR_ASSETS, "a font whose range ends before it starts", __LINE__);
+    font = good_font("f", 16u);
+    font.last = 'B';
+    expect_font(&font, ERB_ERR_ASSETS, "a dense glyph array shorter than its range", __LINE__);
+    font = good_font("f", 16u);
+    font.bitmap_offset = 1u;
+    expect_font(&font, ERB_ERR_ASSETS, "a glyph that starts past its font's bitmap", __LINE__);
+    font = good_font("f", 16u);
+    font.glyph_width = 9u; /* two bytes a row at 1 bit */
+    expect_font(&font, ERB_ERR_ASSETS, "a glyph that runs past its font's bitmap", __LINE__);
+    font = good_font("f", 16u);
+    font.extras_count = 2u;
+    font.extra_codepoints[0] = 300u;
+    font.extra_codepoints[1] = 200u;
+    expect_font(&font, ERB_ERR_ASSETS, "extra glyphs out of codepoint order", __LINE__);
+    font.extra_codepoints[1] = 400u;
+    expect_font(&font, ERB_OK, "extra glyphs in order", __LINE__);
+
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    static const char* const families[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n"};
+    if (limits.font_families + 1u > sizeof(families) / sizeof(families[0])
+        || limits.font_sizes + 1u > FONT_STORAGE_FONTS)
+    {
+        CHECK(false, "the test has enough family names and font storage for the registry's limits");
+        return;
+    }
+    base();
+    give_font_storage();
+    for (uint32_t family_index = 0; family_index < limits.font_families; family_index++)
+    {
+        font = good_font(families[family_index], 16u);
+        add_font(&font);
+    }
+    EXPECT(ERB_OK, "as many font families as the registry holds");
+    font = good_font(families[limits.font_families], 16u);
+    add_font(&font);
+    EXPECT(ERB_ERR_ASSETS, "one family more than the registry holds");
+
+    /* The registry compares ER_FONT_FAMILY_MAX bytes, so these two are one family. */
+    base();
+    give_font_storage();
+    for (uint32_t family_index = 0; family_index + 1u < limits.font_families; family_index++)
+    {
+        font = good_font(families[family_index], 16u);
+        add_font(&font);
+    }
+    font = good_font("a family name longer than the registry keeps: one", 16u);
+    add_font(&font);
+    font = good_font("a family name longer than the registry keeps: two", 18u);
+    add_font(&font);
+    EXPECT(ERB_OK, "names that differ past ER_FONT_FAMILY_MAX are one family");
+
+    base();
+    give_font_storage();
+    for (uint32_t size_index = 0; size_index < limits.font_sizes; size_index++)
+    {
+        font = good_font("f", (uint8_t)(8u + size_index));
+        add_font(&font);
+    }
+    EXPECT(ERB_OK, "as many sizes of one family as the registry holds");
+    font = good_font("f", (uint8_t)(8u + limits.font_sizes));
+    add_font(&font);
+    EXPECT(ERB_ERR_ASSETS, "one size more than the registry holds");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -823,6 +1005,7 @@ int main(void)
     test_imports_and_inputs();
     test_debug();
     test_assets();
+    test_fonts();
     test_messages();
 
     if (s_failed)

@@ -25,9 +25,9 @@
  * config container on a device). It is also the asset section of the ERCF config container.
  *
  * The buffer must stay live for as long as the assets are used: image pixels and font bitmaps are
- * referenced by pointer into it. Per-font GlyphInfo/ExtraGlyph arrays + BitmapFont structs are
- * heap-allocated and kept for the process (a reload leaks the previous set rather than risk a dangling
- * reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
+ * referenced by pointer into it. er_assets_load_pack's per-font GlyphInfo/ExtraGlyph arrays + BitmapFont
+ * structs are heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than
+ * risk a dangling reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
  *
  * For a VOLATILE source — a hot-reload staging buffer that gets reused for the next upload — use
  * er_assets_load_pack_ex(buf, len, copy=true): it takes its own (reused) copy of the pack and points the
@@ -45,11 +45,14 @@
 /** @brief What a pack holds, as er_assets_check_pack counts it. */
 typedef struct
 {
-    uint32_t images;       /**< Images. */
-    uint32_t fonts;        /**< Fonts (one per family and size). */
-    uint32_t glyphs;       /**< Glyph records, over every font. */
-    uint32_t extra_glyphs; /**< Extra-glyph records (codepoints past a font's range), over every font. */
-    uint32_t misaligned;   /**< Images whose pixels don't sit on their word size (only a v1 pack can have them). */
+    uint32_t images;         /**< Images. */
+    uint32_t fonts;          /**< Fonts (one per family and size). */
+    uint32_t glyphs;         /**< Glyph records, over every font. */
+    uint32_t extra_glyphs;   /**< Extra-glyph records (codepoints past a font's range), over every font. */
+    uint32_t misaligned;     /**< Images whose pixels don't sit on their word size (only a v1 pack can have them). */
+    uint32_t empty_images;   /**< Images with no width or no height, which the engine won't register. */
+    uint32_t font_families;  /**< Distinct family names, as the font registry compares them. */
+    uint32_t largest_family; /**< The most sizes one family has. */
 } ErAssetsInfo;
 
 /** @brief Caller storage for the font tables a pack registers, for a firmware with no heap. */
@@ -98,6 +101,9 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
  * @param[in]  buf   Pack bytes.
  * @param[in]  len   Byte length.
  * @param[out] info  Receives the counts (may be NULL).
+ *
+ * Every font must be drawable: a known format, a dense glyph array that covers [first, last], every glyph's
+ * bitmap inside the font's, and extra glyphs in ascending codepoint order.
  *
  * @return true when the whole pack reads cleanly, so loading it can't fail part way for its own sake.
  */

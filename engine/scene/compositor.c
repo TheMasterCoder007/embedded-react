@@ -3136,6 +3136,7 @@ void er_pool_limits(ERPoolLimits* limits)
     limits->vector_nodes = (uint16_t)er_vector_capacity();
     limits->images = (uint16_t)ERUI_IMAGE_REGISTRY_MAX;
     limits->font_families = (uint16_t)FONT_REGISTRY_MAX;
+    limits->font_sizes = (uint16_t)FONT_FAMILY_MAX_SIZES;
     er_anim_pool_limits(limits);
 }
 
