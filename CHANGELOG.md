@@ -13,7 +13,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Added
 
 - The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
-  QuickJS and no heap. The compiler doesn't emit packages yet.
+  QuickJS and no heap.
+- `embedded-react build --aot --package` writes a Flow B package and prints the RAM, nodes, and flash
+  it needs. For now, it only takes apps with no state.
+- `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it.
 
 ### Changed
 
@@ -54,7 +57,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - With the fade cache on, a node fading inside a faded parent now updates instead of freezing.
 - Paint props on `<Svg>` now apply to its shapes in both flows, like a `<G>` around them all. Flow B
   no longer refuses them.
-- Named colors now resolve the same in Flow A styles, SVG paint and Flow B: one shared list with CSS
+- Named colors now resolve the same in Flow A styles, SVG paint, and Flow B: one shared list with CSS
   values (`green` is `#008000`), matched in any case.
 - Types: `index.d.ts` now matches the runtime for `StyleSheet`, `Animated`, `Easing` and `flexBasis`
   percentages.

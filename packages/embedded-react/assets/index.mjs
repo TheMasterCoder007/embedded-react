@@ -70,6 +70,22 @@ export function bakeAssets({
 }
 
 /**
+ * Bakes the given assets into ERPK pack bytes, with the same bakers as bakeAssets, without writing a file.
+ *
+ * @param {object} opts
+ * @param {Array<{path:string,name:string}>} [opts.images]
+ * @param {Array<{path:string,family:string,sizes:number[],bpp:number,glyphs:any,extraGlyphs:any}>}
+ *        [opts.fonts]
+ * @returns {Buffer} The pack.
+ */
+export function bakeAssetPackBytes({images = [], fonts = []}) {
+  return emitAssetPack({
+    images: images.map(i => bakeImage(i)),
+    fonts: fonts.map(f => bakeFont(f)),
+  });
+}
+
+/**
  * Bakes the given assets into a binary ERPK pack the simulator loads at runtime (hot-reloadable),
  * using the same bakers as bakeAssets so the result is pixel-identical.
  *
