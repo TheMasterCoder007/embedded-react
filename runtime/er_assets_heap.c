@@ -91,12 +91,13 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
         }
     }
 
-    if (!ok)
+    /* er_assets_load_pack_into registers nothing when it fails, so the tables are free to give back. */
+    if (ok && er_assets_load_pack_into(src, len, &storage))
     {
-        free(storage.fonts);
-        free(storage.glyphs);
-        free(storage.extras);
-        return false;
+        return true;
     }
-    return er_assets_load_pack_into(src, len, &storage);
+    free(storage.fonts);
+    free(storage.glyphs);
+    free(storage.extras);
+    return false;
 }

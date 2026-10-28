@@ -677,6 +677,22 @@ bool er_runtime_container_has_vendor(const void* buf, size_t len)
     return false;
 }
 
+/** @brief True when the engine would register the whole pack: its registries drop what doesn't fit. */
+static bool asset_pack_fits(const ErContainerSection* section, bool copy_assets)
+{
+    ErAssetsInfo info;
+    if (!er_assets_check_pack(section->data, section->length, &info))
+    {
+        return false;
+    }
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    /* A copy is word-aligned, and a v2 pack aligns its pixels from its own first byte. */
+    const bool odd_pixels = !copy_assets && info.odd_rgb565 != 0u;
+    return !odd_pixels && info.images <= limits.images && info.font_families <= limits.font_families
+           && info.largest_family <= limits.font_sizes;
+}
+
 ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
 {
     return er_runtime_load_container_ex(vbuf, len, false);
@@ -704,7 +720,7 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
     for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
     {
         const ErContainerSection* section = &container.sections[section_index];
-        if (section->type == ER_SECTION_ASSET_PACK && !er_assets_check_pack(section->data, section->length, NULL))
+        if (section->type == ER_SECTION_ASSET_PACK && !asset_pack_fits(section, copy_assets))
         {
             return ER_CONTAINER_BAD_ASSETS;
         }

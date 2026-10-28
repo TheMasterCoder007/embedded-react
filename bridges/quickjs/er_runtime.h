@@ -210,10 +210,14 @@ void er_runtime_set_wall_clock(int64_t epoch_ms);
  *        then evaluates its bytecode (and pumps).
  *
  * The universal "load a config" path — desktop, embedded bin, or a flash/config region on a device.
- * The buffer is referenced (image pixels / font bitmaps point into it) and must outlive use. On any
- * failure the engine is left as it was (call er_runtime_reset first if replacing a running app). An asset
- * pack that is malformed, uses a format this firmware doesn't know, or can't be allocated fails the load with
- * ER_CONTAINER_BAD_ASSETS, before the app runs.
+ * The buffer is referenced (image pixels / font bitmaps point into it) and must outlive use. Call
+ * er_runtime_reset first if replacing a running app.
+ *
+ * An asset pack that is malformed, uses a format this firmware doesn't know, or holds more images or fonts
+ * than the registries do fails the load with ER_CONTAINER_BAD_ASSETS. Those checks, and the CRC, QuickJS and
+ * missing-bytecode checks, run before anything is registered, so they leave the engine as it was. Running out
+ * of memory for a pack also returns ER_CONTAINER_BAD_ASSETS, but packs before it stay registered, as they do
+ * when the app throws.
  *
  * @p len may be an UPPER BOUND, not the exact byte count: the loader walks the container's
  * self-describing sections (bounds-checked against @p len) to find its true end, then verifies the CRC

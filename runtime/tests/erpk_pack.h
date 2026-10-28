@@ -33,7 +33,7 @@
 
 typedef struct
 {
-    uint8_t bytes[512];
+    uint8_t bytes[1024];
     size_t length;
 } TestPack;
 

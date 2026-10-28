@@ -48,8 +48,11 @@ static int s_failed = 0;
 /** @brief The QuickJS tag er_runtime accepts. */
 static const char QJS_TAG[] = "v0.15.0";
 
-static uint8_t s_container[2048];
+/* Word-aligned, so where a section lands depends only on its offset. */
+static uint32_t s_container_words[512];
+static uint8_t* const s_container = (uint8_t*)s_container_words;
 static size_t s_container_length;
+static size_t s_pack_offset; /* where build_with_pack put the pack */
 
 static void put_u32(uint8_t* destination, uint32_t value)
 {
@@ -87,7 +90,19 @@ static void container_seal(void)
     put_u32(s_container + 8, er_crc32(s_container + 12, s_container_length - 12u));
 }
 
-/** @brief A container with a good pack, then a pack with an unknown image format, then (unrun) bytecode. */
+static const uint8_t s_bytecode[] = {0u};
+
+/** @brief A container with one asset pack, then bytecode that throws if it runs. */
+static void build_with_pack(const TestPack* pack)
+{
+    container_begin(2u);
+    s_pack_offset = s_container_length + 8u;
+    container_section(ER_SECTION_ASSET_PACK, pack->bytes, pack->length);
+    container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
+    container_seal();
+}
+
+/** @brief A container with a good pack, then a pack with an unknown image format, then bytecode. */
 static void build_with_bad_pack(void)
 {
     static TestPack good_pack;
@@ -97,12 +112,11 @@ static void build_with_bad_pack(void)
     tpack_begin(&bad_pack, 2u, 0u);
     tpack_image(&bad_pack, "early", 0u);
     tpack_image(&bad_pack, "late", TPACK_UNKNOWN_IMAGE_FORMAT);
-    static const uint8_t bytecode[] = {0u};
 
     container_begin(3u);
     container_section(ER_SECTION_ASSET_PACK, good_pack.bytes, good_pack.length);
     container_section(ER_SECTION_ASSET_PACK, bad_pack.bytes, bad_pack.length);
-    container_section(ER_SECTION_BYTECODE, bytecode, sizeof(bytecode));
+    container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
     container_seal();
 }
 
@@ -122,6 +136,43 @@ static void test_bad_pack_fails_the_load(void)
     CHECK(!er_image_exists("good") && !er_image_exists("early"), "no pack is registered from the copy");
     CHECK(strcmp(er_runtime_container_status_str(ER_CONTAINER_BAD_ASSETS), "unknown") != 0,
           "the status has a reason to show");
+}
+
+static void test_too_many_font_families_fails_the_load(void)
+{
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    static TestPack pack;
+    const uint32_t family_count = limits.font_families + 1u;
+    tpack_begin(&pack, 1u, family_count);
+    tpack_image(&pack, "early", 0u);
+    for (uint32_t family_index = 0; family_index < family_count; family_index++)
+    {
+        const char family[] = {(char)('a' + family_index), '\0'};
+        tpack_font(&pack, family, ERUI_FONT_FMT_1BIT);
+    }
+    er_image_clear();
+    build_with_pack(&pack);
+    CHECK(er_runtime_load_container(s_container, s_container_length) == ER_CONTAINER_BAD_ASSETS,
+          "more font families than the registry holds fails the load");
+    CHECK(!er_image_exists("early"), "nothing from it is registered");
+}
+
+static void test_odd_rgb565_pixels_fail_the_load(void)
+{
+    static TestPack pack;
+    tpack_begin(&pack, 1u, 0u);
+    tpack_image(&pack, "rgb565", 1u);
+    er_image_clear();
+    build_with_pack(&pack);
+    CHECK((uintptr_t)(s_container + s_pack_offset) & 1u, "the pack starts on an odd address");
+    CHECK(er_runtime_load_container(s_container, s_container_length) == ER_CONTAINER_BAD_ASSETS,
+          "RGB565 pixels on an odd address fail the load");
+    CHECK(!er_image_exists("rgb565"), "the image isn't registered");
+    /* The bytecode throws, so a pack that passes ends in LOAD_FAILED. */
+    CHECK(er_runtime_load_container_ex(s_container, s_container_length, true) == ER_CONTAINER_LOAD_FAILED,
+          "a copy is aligned, so the same pack loads");
+    CHECK(er_image_exists("rgb565"), "the copy's image is registered");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -144,6 +195,8 @@ int main(void)
     }
 
     test_bad_pack_fails_the_load();
+    test_too_many_font_families_fails_the_load();
+    test_odd_rgb565_pixels_fail_the_load();
 
     if (s_failed)
     {
