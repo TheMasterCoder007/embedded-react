@@ -284,10 +284,12 @@ export const OPCODES: readonly OpcodeInfo[] = [
 export interface AbiProp {
   id: number;
   kind: PropKindName;
+  /** An enum's largest value. */
+  max?: number;
 }
 
-/** The props with ids 1 to 150, in id order, as erb_props.c lists them. */
-const PROPS_IN_ORDER: [field: string, kind: PropKindName][] = [
+/** The props with ids 1 to 150, in id order, as erb_props.c lists them, with each enum's largest value. */
+const PROPS_IN_ORDER: [field: string, kind: PropKindName, max?: number][] = [
   ['left', 'i16'],
   ['top', 'i16'],
   ['right', 'i16'],
@@ -314,14 +316,14 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName][] = [
   ['flex_grow', 'i16'],
   ['flex_shrink', 'i16'],
   ['flex_basis', 'i16'],
-  ['flex_direction', 'enum'],
-  ['flex_wrap', 'enum'],
-  ['align_items', 'enum'],
-  ['align_self', 'enum'],
-  ['align_content', 'enum'],
-  ['justify_content', 'enum'],
-  ['position', 'enum'],
-  ['display', 'enum'],
+  ['flex_direction', 'enum', 3],
+  ['flex_wrap', 'enum', 2],
+  ['align_items', 'enum', 4],
+  ['align_self', 'enum', 4],
+  ['align_content', 'enum', 5],
+  ['justify_content', 'enum', 5],
+  ['position', 'enum', 1],
+  ['display', 'enum', 1],
   ['aspect_ratio', 'float'],
   ['margin_horizontal', 'i16'],
   ['margin_vertical', 'i16'],
@@ -350,11 +352,11 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName][] = [
   ['border_top_color', 'color'],
   ['border_right_color', 'color'],
   ['border_bottom_color', 'color'],
-  ['border_style', 'enum'],
+  ['border_style', 'enum', 2],
   ['z_index', 'i16'],
   ['opacity', 'opacity'],
-  ['overflow', 'enum'],
-  ['pointer_events', 'enum'],
+  ['overflow', 'enum', 2],
+  ['pointer_events', 'enum', 3],
   ['hit_slop_left', 'i16'],
   ['hit_slop_top', 'i16'],
   ['hit_slop_right', 'i16'],
@@ -364,16 +366,16 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName][] = [
   ['font_family', 'string'],
   ['color', 'color'],
   ['font_size', 'u8'],
-  ['font_weight', 'enum'],
-  ['font_style', 'enum'],
-  ['text_align', 'enum'],
+  ['font_weight', 'enum', 1],
+  ['font_style', 'enum', 1],
+  ['text_align', 'enum', 2],
   ['number_of_lines', 'u8'],
-  ['ellipsize_mode', 'enum'],
-  ['text_decoration', 'enum'],
+  ['ellipsize_mode', 'enum', 3],
+  ['text_decoration', 'enum', 2],
   ['line_height', 'i16'],
   ['letter_spacing', 'i16'],
   ['image_name', 'image'],
-  ['resize_mode', 'enum'],
+  ['resize_mode', 'enum', 4],
   ['tint_color', 'color'],
   ['transform_translate_x', 'float'],
   ['transform_translate_y', 'float'],
@@ -423,13 +425,13 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName][] = [
   ['arc_knob_color', 'color'],
   ['arc_knob_border_color', 'color'],
   ['arc_segments', 'u8'],
-  ['arc_cap', 'enum'],
-  ['arc_knob', 'enum'],
+  ['arc_cap', 'enum', 1],
+  ['arc_knob', 'enum', 3],
   ['arc_adjustable', 'bool'],
   ['arc_range', 'bool'],
-  ['gradient_type', 'enum'],
+  ['gradient_type', 'enum', 3],
   ['gradient_angle', 'float'],
-  ['gradient_stop_count', 'enum'],
+  ['gradient_stop_count', 'enum', 4],
   ['gradient_stops[0].color', 'color'],
   ['gradient_stops[1].color', 'color'],
   ['gradient_stops[2].color', 'color'],
@@ -457,9 +459,9 @@ const SPAN_FIELDS: [field: string, kind: PropKindName][] = [
 
 /** Every ABI prop, by the ERProps field it sets. */
 export const ABI_PROPS: ReadonlyMap<string, AbiProp> = new Map([
-  ...PROPS_IN_ORDER.map(([field, kind], index): [string, AbiProp] => [
+  ...PROPS_IN_ORDER.map(([field, kind, max], index): [string, AbiProp] => [
     field,
-    {id: index + 1, kind},
+    max === undefined ? {id: index + 1, kind} : {id: index + 1, kind, max},
   ]),
   ...Array.from({length: MAX_SPANS}, (_, span) =>
     SPAN_FIELDS.map(([field, kind], fieldIndex): [string, AbiProp] => [

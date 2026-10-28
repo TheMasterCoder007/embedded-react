@@ -240,6 +240,26 @@ export function App() {
     );
   });
 
+  it('refuses a constant its prop cannot hold, at the element', () => {
+    for (const [style, message] of [
+      ['fontSize: 300', /`font_size` is 300, but the engine holds 0 to 255/],
+      [
+        'width: 40000',
+        /`width` is 40000, but the engine holds -32768 to 32767/,
+      ],
+      ['zIndex: -40000', /`z_index` is -40000/],
+    ]) {
+      const src = `
+import {Text} from 'embedded-react';
+export function App() {
+  return <Text style={{${style}}}>x</Text>;
+}`;
+      expect(() => compilePackage(src, 'app', SCREEN), style).toThrow(
+        new RegExp(`${message.source}[\\s\\S]*App\\.jsx:4:10`),
+      );
+    }
+  });
+
   it('refuses an image the package does not bake', () => {
     const src = `
 import {Image} from 'embedded-react';

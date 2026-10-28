@@ -25,7 +25,7 @@
 
 import {aotError} from '../diagnostics.mts';
 import {ABI_PROPS, ENGINE_VALUES, PropKind} from './format.mts';
-import type {AbiProp} from './format.mts';
+import type {AbiProp, PropKindName} from './format.mts';
 import type {ProgramPropEntry} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -34,6 +34,17 @@ import type {ProgramPropEntry} from './writer.mts';
 
 // A cast the C output puts in front of a constant, which doesn't change its value here.
 const CAST = /^\((?:u?int(?:8|16|32)_t|float|double)\)\s*/;
+
+// The values each whole-number kind holds, as the runtime checks them at load. A float holds any, and an
+// enum's largest value is its prop's own.
+const RANGES: Partial<Record<PropKindName, [min: number, max: number]>> = {
+  i16: [-32768, 32767],
+  u8: [0, 255],
+  opacity: [0, 255],
+  u16: [0, 65535],
+  bool: [0, 1],
+  color: [0, 0xffffffff],
+};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -119,15 +130,24 @@ export function constantPropEntry(
     );
   }
 
+  if (prop.kind === 'float') {
+    return {prop: prop.id, kind: PropKind.float, value: floatBits(value)};
+  }
+
+  // The C output would wrap a value its field can't hold; the runtime refuses the package instead.
+  const whole = Math.trunc(value);
+  const [min, max] = prop.kind === 'enum' ? [0, prop.max!] : RANGES[prop.kind]!;
+  if (whole < min || whole > max) {
+    throw aotError(
+      `AOT: \`${field}\` is ${whole}, but the engine holds ${min} to ${max} there`,
+      'use a value in that range.',
+    );
+  }
+
   return {
     prop: prop.id,
     kind: PropKind[prop.kind],
-    value:
-      prop.kind === 'float'
-        ? floatBits(value)
-        : prop.kind === 'color'
-          ? value >>> 0
-          : Math.trunc(value) | 0,
+    value: prop.kind === 'color' ? whole >>> 0 : whole | 0,
   };
 }
 

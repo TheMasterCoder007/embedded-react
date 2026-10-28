@@ -142,16 +142,24 @@ describe('package format copy', () => {
   });
 
   it('has the ABI prop table', () => {
+    // An enum's largest value is an er_scene.h enumerator or a define.
+    const largest = name =>
+      sceneEnums.get(name) ??
+      defineValue(propsHeader, name) ??
+      defineValue(sceneHeader, name);
     const props = new Map(
       [
         ...propsSource.matchAll(
-          /\[(\d+)\] = \{offsetof\(ERProps, ([\w.[\]]+)\), ERB_PK_(\w+)/g,
+          /\[(\d+)\] = \{offsetof\(ERProps, ([\w.[\]]+)\), ERB_PK_(\w+), \w+, (\w+)\}/g,
         ),
-      ].map(([, id, field, kind]) => [
+      ].map(([, id, field, kind, max]) => [
         field,
-        {id: Number(id), kind: kind.toLowerCase()},
+        kind === 'ENUM'
+          ? {id: Number(id), kind: 'enum', max: largest(max)}
+          : {id: Number(id), kind: kind.toLowerCase()},
       ]),
     );
+    expect(props.size).toBe(150);
     const spanFields = enumValues(propsHeader);
     const spanKinds = [
       ...propsSource.matchAll(
