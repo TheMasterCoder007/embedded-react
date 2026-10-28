@@ -114,7 +114,7 @@ interface Lowering {
   bindings: ProgramBinding[];
   /** Toggled by a handler that set state, so the update runs as app_update() would. */
   requested: Slot | null;
-  /** Set only at load, for the props the update sets once. */
+  /** Set only at load: it guards the props the update sets once, and runs the update's first pass. */
   once: Slot | null;
 }
 
@@ -419,7 +419,7 @@ function planSlots(
   const requested = handlerSetsState
     ? arena.track(arena.slot(ValueType.bool))
     : null;
-  const once = nodes.some(isSetOnce)
+  const once = nodes.some(node => isStateDriven(node) || isSetOnce(node))
     ? arena.track(arena.slot(ValueType.bool))
     : null;
 

@@ -106,6 +106,8 @@ describe('constant props', () => {
     expect(readConstant('12')).toBe(12);
     expect(readConstant('-5')).toBe(-5);
     expect(readConstant('0xFF0D0D0Fu')).toBe(0xff0d0d0f);
+    expect(readConstant('0u')).toBe(0);
+    expect(readConstant('255u')).toBe(255);
     expect(readConstant('0.5f')).toBe(0.5);
     expect(readConstant('1e3f')).toBe(1000);
     expect(readConstant('ER_ALIGN_CENTER')).toBe(3);

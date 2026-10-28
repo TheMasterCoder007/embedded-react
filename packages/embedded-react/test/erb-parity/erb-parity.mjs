@@ -71,6 +71,8 @@ const SCENARIOS = [
     taps: '120,240',
   },
   {name: 'style', file: fixture('style'), screen: [240, 320]},
+  {name: 'spans', file: fixture('spans'), screen: [240, 320]},
+  {name: 'ref', file: fixture('ref'), screen: [240, 320]},
   {name: 'inputs', file: fixture('inputs'), screen: [240, 320]},
   // The switch, then "hi" typed on the engine's keyboard.
   {

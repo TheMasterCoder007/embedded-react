@@ -103,6 +103,10 @@ export function readConstant(code: string): number | null {
     return Number.parseInt(text.replace(/u$/i, ''), 16);
   }
 
+  if (/^\d+u$/i.test(text)) {
+    return Number(text.slice(0, -1));
+  }
+
   if (/^\d+(\.\d*)?(e[+-]?\d+)?f?$/i.test(text)) {
     return Number(text.replace(/f$/i, ''));
   }
