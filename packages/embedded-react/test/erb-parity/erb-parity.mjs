@@ -71,8 +71,61 @@ const SCENARIOS = [
     taps: '120,240',
   },
   {name: 'style', file: fixture('style'), screen: [240, 320]},
+  {name: 'spans', file: fixture('spans'), screen: [240, 320]},
+  {name: 'ref', file: fixture('ref'), screen: [240, 320]},
+  {name: 'inputs', file: fixture('inputs'), screen: [240, 320]},
+  // The switch, then "hi" typed on the engine's keyboard.
+  {
+    name: 'inputs-typed',
+    file: fixture('inputs'),
+    screen: [240, 320],
+    taps: '36,103 120,30 140,247 177,217',
+  },
+  {name: 'counter', file: fixture('counter'), screen: [240, 320]},
+  // Four presses of +, one of -, then the toggle.
+  {
+    name: 'counter-taps',
+    file: fixture('counter'),
+    screen: [240, 320],
+    taps: '122,142 122,142 122,142 122,142 43,142 200,142',
+  },
+  // The toggle twice: back off, with the interned mood set to its other value.
+  {
+    name: 'counter-mood',
+    file: fixture('counter'),
+    screen: [240, 320],
+    taps: '200,142 200,142',
+  },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
+  // + twice, then Heat and Auto (Auto turns on the dial's gradient).
+  {
+    name: 'thermostat-modes',
+    file: demo('thermostat'),
+    screen: [320, 480],
+    taps: '280,341 280,341 124,395 197,395',
+  },
+  // A tap on the dial's track sets the temperature, through onValueChange.
+  {
+    name: 'thermostat-dial',
+    file: demo('thermostat'),
+    screen: [320, 480],
+    taps: '60,200',
+  },
+  // The cog opens the settings sheet.
+  {
+    name: 'thermostat-settings',
+    file: demo('thermostat'),
+    screen: [320, 480],
+    taps: '290,32',
+  },
+  // Settings, then °C, then close: the main screen in Celsius.
+  {
+    name: 'thermostat-units',
+    file: demo('thermostat'),
+    screen: [320, 480],
+    taps: '290,32 222,277 266,199',
+  },
 ];
 
 // What the package output refuses until it lowers it.

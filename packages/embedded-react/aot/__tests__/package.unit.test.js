@@ -28,11 +28,19 @@ import {
   FLAG_DEBUG,
   FORMAT_MAJOR,
   FORMAT_MINOR,
+  BindingKind,
+  FunctionKind,
   NONE,
   PropKind,
+  SlotFlag,
   Table,
+  ValueType,
 } from '../compiler/package/format.mts';
 import {floatBits, readConstant} from '../compiler/package/props.mts';
+import {Arena} from '../compiler/package/arena.mts';
+import {FunctionBuilder, OP} from '../compiler/package/bytecode.mts';
+import {Codegen} from '../compiler/package/codegen.mts';
+import {ProgramTables} from '../compiler/package/tables.mts';
 
 const STATIC_APP = `
 import {View, Text, StyleSheet} from 'embedded-react';
@@ -98,6 +106,8 @@ describe('constant props', () => {
     expect(readConstant('12')).toBe(12);
     expect(readConstant('-5')).toBe(-5);
     expect(readConstant('0xFF0D0D0Fu')).toBe(0xff0d0d0f);
+    expect(readConstant('0u')).toBe(0);
+    expect(readConstant('255u')).toBe(255);
     expect(readConstant('0.5f')).toBe(0.5);
     expect(readConstant('1e3f')).toBe(1000);
     expect(readConstant('ER_ALIGN_CENTER')).toBe(3);
@@ -217,10 +227,131 @@ import {useState} from 'react';
 import {Pressable, Text} from 'embedded-react';
 export function App() {
   const [count, setCount] = useState(0);
-  return <Pressable onPress={() => setCount(count + 1)}><Text>{count}</Text></Pressable>;
+  return <Pressable onPress={() => setInterval(() => setCount(count + 1), 100)}><Text>{count}</Text></Pressable>;
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support event handlers yet[\s\S]*App\.jsx:6:10/,
+      /the package output doesn't support timers yet[\s\S]*App\.jsx:6:/,
+    );
+  });
+
+  it('binds a handler to its event, and re-sets what state drives in the update', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [count, setCount] = useState(0);
+  return <Pressable onPress={() => setCount(count + 1)}><Text>{count}</Text></Pressable>;
+}`;
+    const {u16, u32, tables, panel} = readProgram(
+      compilePackage(src, 'app', SCREEN).program,
+    );
+    const functions = tables.get(Table.functions);
+    const kinds = Array.from(
+      {length: functions.length / 16},
+      (_, index) => u32(functions.offset + index * 16 + 12) >>> 24,
+    );
+    expect(kinds).toEqual([0, FunctionKind.update]); // ER_EVENT_PRESS, then the update
+    expect(panel.update).toBe(1);
+    expect(panel.boot).toBe(NONE);
+
+    // One binding: the press, to function 0.
+    const bindings = tables.get(Table.bindings);
+    expect(bindings.length).toBe(4);
+    expect(u32(bindings.offset)).toBe(BindingKind.event | (0 << 8) | (0 << 16));
+
+    // The count is an int slot with a dirty bit; the handler's request bit is a tracked bool.
+    const slots = tables.get(Table.slots);
+    const slot = index => ({
+      type: u16(slots.offset + index * 16) & 0xff,
+      flags: u16(slots.offset + index * 16) >> 8,
+    });
+    expect(slot(0)).toEqual({type: ValueType.int, flags: SlotFlag.tracked});
+    expect(slot(1)).toEqual({type: ValueType.bool, flags: SlotFlag.tracked});
+  });
+
+  it('works out values from the screen size in a boot function, in doubles as C does', () => {
+    const src = `
+import {View} from 'embedded-react';
+const HALF = screen.width / 2;
+export function App() {
+  return <View style={{width: HALF, height: 10}} />;
+}`;
+    const {u16, u32, tables, panel} = readProgram(
+      compilePackage(src, 'app', SCREEN).program,
+    );
+    const functions = tables.get(Table.functions);
+    expect(u32(functions.offset + panel.boot * 16 + 12) >>> 24).toBe(
+      FunctionKind.boot,
+    );
+    const slots = tables.get(Table.slots);
+    const types = Array.from({length: slots.length / 16}, (_, index) =>
+      u16(slots.offset + index * 16),
+    );
+    expect(types).toContain(ValueType.double | (SlotFlag.bootOnly << 8));
+  });
+
+  it('interns a string state that holds one of a closed set of values', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [mode, setMode] = useState('cool');
+  const [label, setLabel] = useState('none');
+  return (
+    <Pressable onPress={() => { setMode('heat'); setLabel(label + '!'); }}>
+      <Text style={{color: mode === 'heat' ? '#ff0000' : '#0000ff'}}>{mode} {label}</Text>
+    </Pressable>
+  );
+}`;
+    const result = compilePackage(src, 'app', SCREEN);
+    const {u16, u32, tables} = readProgram(result.program);
+    const strings = tables.get(Table.strings);
+    const string = index => {
+      const start = strings.offset + u32(strings.offset + 4 + index * 4);
+      return Buffer.from(
+        result.program.subarray(start, result.program.indexOf(0, start)),
+      ).toString();
+    };
+
+    // mode is an enum slot of set 0, which holds its initial value and the one it is set to.
+    const slots = tables.get(Table.slots);
+    expect(u16(slots.offset) & 0xff).toBe(ValueType.enum);
+    expect(u16(slots.offset + 14)).toBe(0);
+    const enums = tables.get(Table.enums);
+    expect(u32(enums.offset)).toBe(1);
+    expect(u32(enums.offset + 4)).toBe(0 | (2 << 16));
+    expect(
+      [0, 1].map(index => string(u16(enums.offset + 8 + index * 2))),
+    ).toEqual(['cool', 'heat']);
+
+    // label is read as a string to build its next value, so it stays a buffer.
+    const types = Array.from(
+      {length: slots.length / 16},
+      (_, index) => u16(slots.offset + index * 16) & 0xff,
+    );
+    expect(types.filter(type => type === ValueType.enum)).toHaveLength(1);
+    expect(types).toContain(ValueType.string);
+  });
+
+  it('lists the values the host feeds, by name', () => {
+    const src = `
+import {Text, useHostValue} from 'embedded-react';
+export function App() {
+  const zeta = useHostValue(0);
+  const alpha = useHostValue(0.5);
+  return <Text>{zeta} {alpha}</Text>;
+}`;
+    const result = compilePackage(src, 'app', SCREEN);
+    const {u16, u32, tables} = readProgram(result.program);
+    const inputs = tables.get(Table.inputs);
+    const strings = tables.get(Table.strings);
+    const string = index => {
+      const start = strings.offset + u32(strings.offset + 4 + index * 4);
+      const end = result.program.indexOf(0, start);
+      return Buffer.from(result.program.subarray(start, end)).toString();
+    };
+    expect([0, 1].map(index => string(u16(inputs.offset + index * 4)))).toEqual(
+      ['alpha', 'zeta'],
     );
   });
 
@@ -316,5 +447,50 @@ export function App() {
       `  flash: ${file.bytes.length} B (program ${result.program.length} B)`,
     );
     expect(report[2]).toMatch(/templates \d+/);
+  });
+});
+
+describe('bytecode', () => {
+  it('keeps a function within the 255 register cells its record counts', () => {
+    const fn = new FunctionBuilder(FunctionKind.update, 'the update');
+    for (let index = 0; index < 255; index++) {
+      fn.register('int');
+    }
+    expect(() => fn.register('int')).toThrow(/more than 255 registers/);
+  });
+
+  it('keeps the empty string register out of the pool', () => {
+    const fn = new FunctionBuilder(FunctionKind.update, 'the update');
+    const tables = new ProgramTables();
+    const codegen = new Codegen(fn, {
+      arena: new Arena(),
+      tables,
+      states: new Map(),
+      refs: new Map(),
+      boot: new Map(),
+      stringLocals: new Map(),
+      enums: new Map(),
+    });
+    const loadString = text => {
+      const register = fn.register('string');
+      fn.abx('LOADS', register.index, tables.string(text));
+      return register;
+    };
+
+    // A string test, a string written in another scope, then the test again.
+    codegen.scoped(() => codegen.truthy(loadString('a')));
+    codegen.scoped(() => loadString('b'));
+    codegen.scoped(() => codegen.truthy(loadString('c')));
+
+    const {code} = fn.finish();
+    const opOf = word => word & 0xff;
+    const empty = code
+      .filter(word => opOf(word) === OP.SEQ.code)
+      .map(word => word >>> 24);
+    expect(new Set(empty).size).toBe(1);
+    const written = code
+      .filter(word => opOf(word) === OP.LOADS.code)
+      .map(word => (word >> 8) & 0xff);
+    expect(written).not.toContain(empty[0]);
   });
 });

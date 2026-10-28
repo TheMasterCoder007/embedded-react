@@ -1811,14 +1811,18 @@ export const emitExprWide = (node: t.Node, env: Env): CExpr =>
  * @param node  The expression.
  * @param env  The expression environment.
  *
- * @returns The expression as C, and its source.
+ * @returns The expression as C, its source, and the typed expression.
  */
 export function emitSourcedWide(
   node: t.Node,
   env: Env,
-): CExpr & {source: IrSource} {
+): CExpr & {source: IrSource; expr: IrExpr} {
   const lowered = lowerSource(node, env);
-  return {...toCExpr(lowered.expr), source: lowered.source};
+  return {
+    ...toCExpr(lowered.expr),
+    source: lowered.source,
+    expr: lowered.expr,
+  };
 }
 
 /**

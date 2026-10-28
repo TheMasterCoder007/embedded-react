@@ -98,6 +98,12 @@ export interface ProgramBinding {
   target: number;
 }
 
+export interface ProgramInput {
+  /** Its name's string index. */
+  name: number;
+  slot: number;
+}
+
 export interface ProgramFunction {
   kind: number;
   params: number;
@@ -119,10 +125,14 @@ export interface Program {
   const64: bigint[];
   regions: ProgramRegion[];
   slots: ProgramSlot[];
+  /** Interned string sets: each one's values, as string indices. */
+  enums: number[][];
   propSets: ProgramPropEntry[][];
   templates: ProgramTemplate[];
   bindings: ProgramBinding[];
   functions: ProgramFunction[];
+  /** Host-fed values, sorted by name. */
+  inputs: ProgramInput[];
 }
 
 /** The bytes of one table, for the resource report. */
@@ -236,6 +246,20 @@ function headedTable<Record>(
 }
 
 /**
+ * Bytes padded with zeros to a multiple of 4.
+ *
+ * @param bytes  The bytes.
+ *
+ * @returns The padded bytes.
+ */
+function padded(bytes: Uint8Array): Uint8Array {
+  const out = new ByteWriter();
+  out.bytes(bytes);
+  out.pad4();
+  return out.done();
+}
+
+/**
  * The strings table: the count, each string's byte offset from the table's start, then the NUL-terminated UTF-8.
  *
  * @param strings  The strings.
@@ -307,6 +331,10 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
       out.u16(slot.aux);
     }
   });
+  if (program.enums.length) {
+    const enums = headedTable(program.enums, (out, value) => out.u16(value));
+    tables.set(Table.enums, padded(enums));
+  }
   if (program.propSets.length) {
     tables.set(
       Table.props,
@@ -370,6 +398,14 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
   table(Table.code, out =>
     program.functions.forEach(fn => fn.code.forEach(word => out.u32(word))),
   );
+  if (program.inputs.length) {
+    table(Table.inputs, out => {
+      for (const input of program.inputs) {
+        out.u16(input.name);
+        out.u16(input.slot);
+      }
+    });
+  }
   return tables;
 }
 

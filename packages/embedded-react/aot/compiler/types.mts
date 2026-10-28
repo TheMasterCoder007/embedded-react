@@ -21,6 +21,7 @@
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrPropValue, IrShow} from './ir/nodes.mts';
+import type {IrExpr} from './ir/expressions.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrStaticDecl} from './ir/functions.mts';
 import type {IrSlotStore, IrSource} from './ir/source.mts';
@@ -72,6 +73,8 @@ export interface Local extends CExpr {
   list?: ListState;
   /** What it was set from, which the typing pass reads when it infers slot widths. */
   source?: IrSource;
+  /** The typed expression it stands for, when every read of it is that expression (a memo, a prop). */
+  expr?: IrExpr;
 }
 
 /** What a useState / useHostValue slot and a list state have in common. */

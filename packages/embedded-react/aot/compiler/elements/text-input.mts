@@ -36,6 +36,7 @@ import {
   lowerRefBinds,
 } from '../nodes.mts';
 import {elementSpec} from './props.mts';
+import {STRING} from '../ir/types.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
@@ -195,6 +196,9 @@ export function emitTextInput(
         state,
         out,
         'string',
+        null,
+        false,
+        {kind: 'event', field: 'changed_text', type: STRING},
       ),
     });
     node.wiring.push({

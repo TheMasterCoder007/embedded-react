@@ -9,9 +9,10 @@ the people building the loader, the VM, and the compiler's package output.
 
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
-`erb_format.h`). `embedded-react build --aot --package` writes a package for one panel, but only for an
-app with no state yet; the compiler emits C for everything else while the rest of its package output
-lands, as the [roadmap](/roadmap) tracks. Once packages pass the same tests as the C output, the C
+`erb_format.h`). `embedded-react build --aot --package` writes a package for one panel. It takes state,
+handlers and values worked out from the screen size, but not yet timers, effects, lists, animations,
+PanResponder or `<Svg>`; the compiler emits C for those while the rest of its package output lands, as the
+[roadmap](/roadmap) tracks. Once packages pass the same tests as the C output, the C
 backend is retired.
 :::
 

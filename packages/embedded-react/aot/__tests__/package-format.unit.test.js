@@ -100,6 +100,10 @@ describe('package format copy', () => {
     expect(format.FRAME_CELLS).toBe(
       defineValue(formatHeader, 'ERB_FRAME_CELLS'),
     );
+    expect(format.SlotFlag).toEqual({
+      tracked: defineValue(formatHeader, 'ERB_SLOT_TRACKED'),
+      bootOnly: defineValue(formatHeader, 'ERB_SLOT_BOOT_ONLY'),
+    });
     expect(formatHeader).toContain(`#define ERB_TAG "${format.PACKAGE_TAG}"`);
     expect(format.SECTION_PROGRAM).toBe(formatEnums.get('ERB_SECTION_PROGRAM'));
     expect(format.SECTION_DEBUG).toBe(formatEnums.get('ERB_SECTION_DEBUG'));
@@ -131,6 +135,11 @@ describe('package format copy', () => {
       [format.Resource, 'ERB_RES_'],
       [format.TemplateKind, 'ERB_TPL_'],
       [format.PropKind, 'ERB_PK_'],
+      [format.ValueType, 'ERB_T_'],
+      [format.BindingKind, 'ERB_BIND_'],
+      [format.FunctionKind, 'ERB_FN_'],
+      [format.EventField, 'ERB_EVT_'],
+      [format.MathFn, 'ERB_MATH_'],
     ];
     for (const [group, prefix] of groups) {
       for (const [name, value] of Object.entries(group)) {

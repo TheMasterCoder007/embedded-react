@@ -37,6 +37,7 @@ import {emitChildren} from '../control-flow.mts';
 import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
 import {at, elementSpec} from './props.mts';
 import {imageNameFromSource} from './image.mts';
+import {FLOAT} from '../ir/types.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
 import type {Env, Scope, StateTable} from '../types.mts';
@@ -410,6 +411,9 @@ export function emitDial(
         out,
         'float',
         'data->value_start',
+        false,
+        {kind: 'event', field: 'value', type: FLOAT},
+        {kind: 'event', field: 'value_start', type: FLOAT},
       ),
     });
     node.wiring.push({

@@ -343,6 +343,7 @@ function lowerProgram(
         lit: cExpr.lit,
         wide: cExpr.wide,
         source: cExpr.source,
+        expr: cExpr.expr,
       });
       delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }
