@@ -1466,9 +1466,11 @@ static ErbStatus start(const ErbConfig* config)
     const ErbProgram* program = &g_erb.program;
     if (program->assets)
     {
-        const bool loaded = config->fonts
-                                ? er_assets_load_pack_into(program->assets, program->assets_length, config->fonts)
-                                : er_assets_load_pack(program->assets, program->assets_length);
+        /* A pack with fonts only verifies with storage for them, so no storage means no fonts to place. */
+        ErAssetsStorage no_fonts;
+        memset(&no_fonts, 0, sizeof(no_fonts));
+        const bool loaded = er_assets_load_pack_into(
+            program->assets, program->assets_length, config->fonts ? config->fonts : &no_fonts);
         if (!loaded)
         {
             return erb_rt_fault(ERB_ERR_ASSETS, "registering the checked pack failed", NULL, ERB_NONE, 0u);

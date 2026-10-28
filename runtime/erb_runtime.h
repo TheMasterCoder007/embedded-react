@@ -64,6 +64,16 @@
 #define ERB_MAX_IMPORTS 32u
 #endif
 
+/**
+ * @brief Most images a package's asset pack may have: as many as the engine's image registry holds. Sizes the
+ *        verifier's image name index (4 bytes each). It follows ERUI_IMAGE_REGISTRY_MAX; set that, not this.
+ */
+#ifdef ERUI_IMAGE_REGISTRY_MAX
+#define ERB_MAX_IMAGES ERUI_IMAGE_REGISTRY_MAX
+#else
+#define ERB_MAX_IMAGES 128u /* the engine's default */
+#endif
+
 /** @brief Deepest a template's tree may nest. */
 #ifndef ERB_MAX_TEMPLATE_DEPTH
 #define ERB_MAX_TEMPLATE_DEPTH 32u

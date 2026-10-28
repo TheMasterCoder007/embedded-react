@@ -97,9 +97,9 @@ Then, in order:
   templates and functions that differ are stored per panel.
 - **Needs**, 8 bytes each: `resource u16`, `reserved u16`, `amount u32`. The engine pools the package
   uses besides nodes: vector nodes (1), animation values (2), concurrent animations (3), animation
-  groups (4), registered images (5), fonts (6), glyphs (7) and extra glyphs (8). A firmware that
-  doesn't know a resource id rejects the package, so a later pool can be added without a format
-  change.
+  groups (4), registered images (5), fonts (6), glyphs (7) and extra glyphs (8), each at most once.
+  A firmware that doesn't know a resource id rejects the package, so a later pool can be added
+  without a format change.
 - **Table directory**, 12 bytes each: `id u16`, `reserved u16`, `offset u32`, `length u32`.
 
 **The engine ABI level** is a number the engine bumps when it adds a prop, node type, event, animated
@@ -291,7 +291,7 @@ of the runtime's footprint, not the package's.
 
 Fonts need a change to the asset loader too. `er_assets_load_pack()` allocates each font's glyph tables
 with `calloc`, and the Flow B runtime has no heap. It gets a variant that takes those tables from
-storage the caller provides, sized by the firmware (`ERB_FONTS`, `ERB_GLYPHS`) and checked against the
+storage the caller provides, arrays the firmware sizes (`ErbConfig::fonts`), and checked against the
 package's font and glyph needs. The heap path lives in its own file (`er_assets_heap.c`), so a Flow B
 firmware never links the allocator. The table layout depends on the firmware's structs, so it can't
 live in the arena.
@@ -412,8 +412,8 @@ runtime delivers like any other.
 written by nothing else, so every loop runs at most a known number of times. With an acyclic call graph
 that makes the worst case of every entry point a number the verifier works out at load.
 
-Each run of an entry point has an instruction budget, `ERB_EVENT_BUDGET` in the firmware (100,000 by
-default), counted in instructions executed. A run is one call from the runtime: a handler, one update
+Each run of an entry point has an instruction budget, the firmware's `ERB_EVENT_BUDGET` (a CMake
+option, 100,000 by default), counted in instructions executed. A run is one call from the runtime: a handler, one update
 pass, one effect, or one queued event. An event as a whole is bounded by the pass limit in
 [Running an event](#running-an-event), not by the budget.
 
@@ -531,12 +531,12 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Header    | `format_major` equal, `format_minor` not newer, flag bits known                                                                                                                                                                                                                       | built for a newer runtime          |
 | Header    | `engine_abi` within the firmware's range                                                                                                                                                                                                                                              | built for engine ABI _n_           |
 | Header    | A panel matches the real size                                                                                                                                                                                                                                                         | no layout for _w_ × _h_            |
-| Header    | The panel's arena bytes, nodes and each need fit what the firmware reserves; every resource id is known                                                                                                                                                                               | needs _n_ B, firmware reserves _m_ |
+| Header    | The panel's arena bytes, nodes and each need fit what the firmware reserves; every resource id is known and named once                                                                                                                                                                | needs _n_ B, firmware reserves _m_ |
 | Tables    | Every table in the section's bounds, 4-aligned, not overlapping another, with a length that is a whole number of records                                                                                                                                                              | malformed table                    |
 | Tables    | The required tables are present (`arena`, `slots`, `templates`, `functions`, `types`, `code`); no unknown table id                                                                                                                                                                    | malformed table                    |
 | Strings   | Every offset in bounds and in order; every string NUL-terminated inside the table and valid UTF-8                                                                                                                                                                                     | malformed string                   |
 | Arena     | Regions inside `arena_bytes`, aligned, not overlapping; their sum is what the panel declares                                                                                                                                                                                          | bad arena layout                   |
-| Slots     | A known type; inside its region, aligned to its type; not overlapping; a dirty bit in range for tracked slots; a valid `init` for the type; an enum set or row layout that exists                                                                                                     | bad state layout                   |
+| Slots     | A known type; inside its region, aligned to its type; not overlapping; a dirty bit in range for tracked slots; a valid `init` for the type; an enum set or row layout that exists; no more animated values than the needs declare                                                     | bad state layout                   |
 | Lists     | Row fields inside the row size, a known type, a cap for each string field; the pool holds `cap` rows                                                                                                                                                                                  | bad state layout                   |
 | Props     | Every prop id is in the firmware's ABI table; the value's kind matches the prop's; an enum value in range; a string index valid and, for a text prop, not past the firmware's cap; an image name in the asset pack or built in                                                        | bad prop                           |
 | Templates | Known node types; child counts consistent, so the pre-order list is one tree; a node count within the panel's; handle slots of type `node`; an element's children allowed for its type                                                                                                | bad template                       |
@@ -553,7 +553,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Imports   | Every import resolves to a native function the firmware registered with the same name, version and signature                                                                                                                                                                          | missing native module _name_       |
 | Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                       | bad input                          |
 | Debug     | `build_id` matches; the parts inside the section, in order and not overlapping; `function_count` equals the program's function count; entries sorted, each on a real instruction; every `file` and function name a valid index into its string table, which is checked like `strings` | debug table does not match         |
-| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit `ERB_FONTS`, `ERB_GLYPHS` and the font registry                                                                                                                   | asset pack failed to load          |
+| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit the firmware's font storage and the font registry                                                                                                                 | asset pack failed to load          |
 
 ### Run-time checks
 
@@ -692,8 +692,15 @@ er_commit();
 
 A native's signature is its result, a colon, then its parameters, each `i` (int), `b` (bool) or `f`
 (float); `v` as the result means none. Firmware with fonts in its packages gives the runtime storage
-for their tables (`ErbConfig::fonts`), sized by `ERB_FONTS` and `ERB_GLYPHS`. `on_fault` replaces the
-error screen when the firmware wants to handle a fault itself, and `log` receives the reported limits.
+for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs and extra glyphs, as many as its apps
+need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`
+receives the reported limits.
+
+**Limits.** How large an app the firmware accepts is set by CMake options in `runtime/CMakeLists.txt`:
+`ERB_EVENT_BUDGET`, `ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`,
+`ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. The defaults suit most apps, and a package past one
+is rejected with the reason. The engine's pool sizes stay the engine's `ERUI_*` options. The runtime
+reads them at load time, so each is set once; its image name index follows `ERUI_IMAGE_REGISTRY_MAX`.
 
 `erb_input_find("steps")` looks an input up once, and `erb_input_set_int()` (or `_bool`, `_float`,
 `_string`) sets it after that. `erb_set_wall_clock()` replaces `er_app_set_wall_clock()`. A board with

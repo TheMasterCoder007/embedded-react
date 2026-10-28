@@ -93,6 +93,10 @@ static void expect(ErbStatus expected, const char* what, int line)
 /** @brief A header flag bit no format version defines. */
 #define UNKNOWN_FLAG 0x8000u
 
+/* The image and font counts in an ERPK pack's header. */
+#define TEST_IMAGE_COUNT_AT 8u
+#define TEST_FONT_COUNT_AT 12u
+
 /** @brief A slot flag bit no format version defines. */
 #define UNKNOWN_SLOT_FLAG 0x80u
 
@@ -212,6 +216,14 @@ static void test_panel_and_needs(void)
     EXPECT(ERB_ERR_TOO_BIG, "an unknown resource");
     base()->needs[0].resource = ERB_RES_FONTS;
     EXPECT(ERB_ERR_TOO_BIG, "fonts with no font storage");
+    static GlyphInfo glyphs[1];
+    static ErAssetsStorage no_array = {NULL, 1, glyphs, 1, NULL, 0, 0, 0, 0};
+    s_config.fonts = &no_array;
+    EXPECT(ERB_ERR_TOO_BIG, "font storage with a count but no array");
+    base()->needs[1].resource = ERB_RES_ANIM_VALUES;
+    EXPECT(ERB_ERR_TABLE, "a resource needed twice");
+    base()->needs[0].amount = 0u;
+    EXPECT(ERB_ERR_STATE, "more animated value slots than the needs declare");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -738,10 +750,10 @@ static void test_assets(void)
         1, 0, 'f', 16, 18, 14, 1, 'A', 0, 'A', 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0xFF,
     };
     base();
-    s_pkg.assets[12] = 1u; /* one font */
+    s_pkg.assets[TEST_FONT_COUNT_AT] = 1u;
     memcpy(s_pkg.assets + s_pkg.assets_length, font, sizeof(font));
     s_pkg.assets_length += sizeof(font);
-    EXPECT(ERB_ERR_ASSETS, "a font that doesn't fit ERB_FONTS and ERB_GLYPHS");
+    EXPECT(ERB_ERR_ASSETS, "a font that doesn't fit the firmware's font storage");
     static BitmapFont fonts[1];
     static GlyphInfo glyphs[1];
     static ErAssetsStorage storage = {fonts, 1, glyphs, 1, NULL, 0, 0, 0, 0};
@@ -751,6 +763,13 @@ static void test_assets(void)
     base();
     s_pkg.assets[21] = 0u; /* the image's width */
     EXPECT(ERB_ERR_ASSETS, "an image with no width");
+
+    base()->assets[TEST_FONT_COUNT_AT] = 1u;
+    memcpy(s_pkg.assets + s_pkg.assets_length, font, sizeof(font));
+    s_pkg.assets_length += sizeof(font);
+    static ErAssetsStorage no_fonts_array = {NULL, 1, glyphs, 1, NULL, 0, 0, 0, 0};
+    s_config.fonts = &no_fonts_array;
+    EXPECT(ERB_ERR_ASSETS, "a font with font storage that has a count but no array");
 }
 
 /** @brief A font for the test pack: each glyph is glyph_width by 1 pixel at bitmap_offset. */
@@ -805,7 +824,7 @@ static void put_glyph(const TestFont* font)
 /** @brief Appends @p font to the baseline pack and counts it in the pack's header. */
 static void add_font(const TestFont* font)
 {
-    s_pkg.assets[12]++;
+    s_pkg.assets[TEST_FONT_COUNT_AT]++;
     const size_t name_length = strlen(font->family);
     put_u16((uint32_t)name_length);
     memcpy(s_pkg.assets + s_pkg.assets_length, font->family, name_length);
@@ -832,6 +851,59 @@ static void add_font(const TestFont* font)
     {
         put_u8(0xFFu);
     }
+}
+
+/** @brief Appends a 1x1 ARGB image to the baseline pack (before any font) and counts it in the pack's header. */
+static void add_image(const char* name)
+{
+    s_pkg.assets[TEST_IMAGE_COUNT_AT]++;
+    const size_t name_length = strlen(name);
+    put_u16((uint32_t)name_length);
+    memcpy(s_pkg.assets + s_pkg.assets_length, name, name_length);
+    s_pkg.assets_length += (uint32_t)name_length;
+    put_u32(1u);
+    put_u32(1u);
+    put_u8(0u); /* ARGB8888 */
+    while (s_pkg.assets_length % 4u)
+    {
+        put_u8(0u);
+    }
+    put_u32(COLOR_WHITE);
+}
+
+static void test_image_index(void)
+{
+    base();
+    add_image("c");
+    add_image("a");
+    add_image("imh");
+    add_image("b");
+    uint32_t names[8];
+    ErAssetsInfo info;
+    CHECK(er_assets_check_pack_images(s_pkg.assets, s_pkg.assets_length, &info, names, 8u) && info.images == 5u,
+          "a pack's images are listed");
+    static const char* const present[] = {"a", "b", "c", "img", "imh"};
+    for (uint32_t index = 0; index < 5u; index++)
+    {
+        CHECK(er_assets_find_image(s_pkg.assets, names, info.images, present[index]), "a listed image is found");
+    }
+    static const char* const absent[] = {"", "d", "im", "imgs", "A"};
+    for (uint32_t index = 0; index < 5u; index++)
+    {
+        CHECK(!er_assets_find_image(s_pkg.assets, names, info.images, absent[index]), "an image it lacks isn't");
+    }
+    ERPoolLimits limits;
+    er_pool_limits(&limits);
+    if (limits.images >= info.images)
+    {
+        EXPECT(ERB_OK, "an image prop is found among several images");
+    }
+    else
+    {
+        EXPECT(ERB_ERR_ASSETS, "more images than the image registry holds");
+    }
+    CHECK(er_assets_check_pack_images(s_pkg.assets, s_pkg.assets_length, &info, names, 2u) && info.images == 5u,
+          "images past the list's capacity are still counted");
 }
 
 /** @brief Storage for as many one-glyph fonts as the font registry can be asked to hold, and more. */
@@ -1006,6 +1078,7 @@ int main(void)
     test_debug();
     test_assets();
     test_fonts();
+    test_image_index();
     test_messages();
 
     if (s_failed)

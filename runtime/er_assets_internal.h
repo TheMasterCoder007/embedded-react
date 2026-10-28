@@ -61,8 +61,8 @@ struct ErAssetsWalk
     ErAssetsReleaseFn release; /**< Registering: gives back a font's tables when it isn't registered. */
     ErAssetsStorage* storage;  /**< Caller storage, for tables that come from it. */
     ErAssetsInfo info;         /**< Counts so far. */
-    const char* find;          /**< Non-NULL: an image name to look for. */
-    bool found;                /**< The image named by find was seen. */
+    uint32_t* image_names;     /**< Non-NULL: receives each image's name record, as an offset into the pack. */
+    uint32_t image_capacity;   /**< Length of image_names; later images are counted but not listed. */
     ErAssetsFamily families[ER_ASSETS_MAX_FAMILIES];
 };
 

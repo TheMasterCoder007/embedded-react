@@ -110,15 +110,29 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
 bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info);
 
 /**
- * @brief Reports whether a pack holds an image by this name.
+ * @brief Like er_assets_check_pack, and also lists the pack's images sorted by name, for er_assets_find_image.
  *
- * @param[in] buf   Pack bytes.
- * @param[in] len   Byte length.
- * @param[in] name  Null-terminated image name.
+ * @param[in]  buf       Pack bytes.
+ * @param[in]  len       Byte length.
+ * @param[out] info      Receives the counts (may be NULL).
+ * @param[out] names     Receives each image's name record, as an offset into the pack, sorted by name.
+ * @param[in]  capacity  Length of names. Images past it are counted in info but not listed.
  *
- * @return true when the pack is well formed and has the image.
+ * @return true when the whole pack reads cleanly.
  */
-bool er_assets_pack_has_image(const void* buf, size_t len, const char* name);
+bool er_assets_check_pack_images(const void* buf, size_t len, ErAssetsInfo* info, uint32_t* names, uint32_t capacity);
+
+/**
+ * @brief Looks an image up by name in a list er_assets_check_pack_images made, by binary search.
+ *
+ * @param[in] buf    The same pack bytes.
+ * @param[in] names  The sorted list.
+ * @param[in] count  Entries in it.
+ * @param[in] name   Null-terminated image name.
+ *
+ * @return true when the pack has the image.
+ */
+bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count, const char* name);
 
 /**
  * @brief Like er_assets_load_pack (in place), with font tables taken from @p storage instead of the heap.

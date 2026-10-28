@@ -132,6 +132,9 @@ static void rd_glyph(Cur* c, GlyphInfo* g)
  - The pack walk
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** @brief Longest name rd_name keeps, in bytes. */
+#define IMAGE_NAME_READ_MAX 127u
+
 /** @brief Bytes one row of a glyph's bitmap takes in a font of @p format, or 0 for a format the engine can't draw. */
 static uint32_t glyph_row_bytes(uint8_t format, uint32_t width)
 {
@@ -231,10 +234,11 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
     const uint32_t image_count = rd_u32(&cursor);
     const uint32_t font_count = rd_u32(&cursor);
 
-    char name[128];
+    char name[IMAGE_NAME_READ_MAX + 1u];
 
     for (uint32_t image_index = 0; image_index < image_count && cursor.ok; image_index++)
     {
+        const uint32_t name_record = (uint32_t)(cursor.p - source);
         rd_name(&cursor, name, sizeof(name));
         const uint32_t width = rd_u32(&cursor);
         const uint32_t height = rd_u32(&cursor);
@@ -260,9 +264,9 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
             walk->info.images++;
             walk->info.misaligned += ((uintptr_t)pixels & (bytes_per_pixel - 1u)) ? 1u : 0u;
             walk->info.empty_images += (width == 0u || height == 0u) ? 1u : 0u;
-            if (walk->find && strcmp(walk->find, name) == 0)
+            if (walk->image_names && walk->info.images <= walk->image_capacity)
             {
-                walk->found = true;
+                walk->image_names[walk->info.images - 1u] = name_record;
             }
             /* Both reference the pixels in the pack (the caller keeps it live). */
             if (walk->registering && format == 1u)
@@ -398,12 +402,134 @@ bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info)
     return ok;
 }
 
-bool er_assets_pack_has_image(const void* buf, size_t len, const char* name)
+/** @brief An image name in the pack as rd_name reads it: at most 127 bytes, up to a NUL. */
+static void image_name(const uint8_t* pack, uint32_t name_record, const uint8_t** bytes, uint32_t* length)
+{
+    const uint8_t* record = pack + name_record;
+    const uint32_t stored = (uint32_t)(record[0] | (record[1] << 8));
+    const uint32_t kept = stored < IMAGE_NAME_READ_MAX ? stored : IMAGE_NAME_READ_MAX;
+    *bytes = record + 2;
+    *length = 0u;
+    while (*length < kept && (*bytes)[*length] != '\0')
+    {
+        (*length)++;
+    }
+}
+
+/** @brief Orders two names as strcmp does: by unsigned bytes, a prefix first. */
+static int compare_names(const uint8_t* first, uint32_t first_length, const uint8_t* second, uint32_t second_length)
+{
+    const uint32_t shorter = first_length < second_length ? first_length : second_length;
+    const int order = memcmp(first, second, shorter);
+    if (order != 0)
+    {
+        return order;
+    }
+    return first_length < second_length ? -1 : first_length > second_length ? 1 : 0;
+}
+
+static int compare_image_names(const uint8_t* pack, uint32_t first_record, uint32_t second_record)
+{
+    const uint8_t* first;
+    const uint8_t* second;
+    uint32_t first_length;
+    uint32_t second_length;
+    image_name(pack, first_record, &first, &first_length);
+    image_name(pack, second_record, &second, &second_length);
+    return compare_names(first, first_length, second, second_length);
+}
+
+/** @brief Moves names[root] down until it is no smaller than its children (a heap of @p count names). */
+static void sift_down(const uint8_t* pack, uint32_t* names, uint32_t root, uint32_t count)
+{
+    for (;;)
+    {
+        uint32_t largest = root;
+        const uint32_t left_child = 2u * root + 1u;
+        const uint32_t right_child = left_child + 1u;
+        if (left_child < count && compare_image_names(pack, names[left_child], names[largest]) > 0)
+        {
+            largest = left_child;
+        }
+        if (right_child < count && compare_image_names(pack, names[right_child], names[largest]) > 0)
+        {
+            largest = right_child;
+        }
+        if (largest == root)
+        {
+            return;
+        }
+        const uint32_t swapped = names[root];
+        names[root] = names[largest];
+        names[largest] = swapped;
+        root = largest;
+    }
+}
+
+/** @brief Heapsort: no recursion, no allocation, O(n log n) on any input. */
+static void sort_image_names(const uint8_t* pack, uint32_t* names, uint32_t count)
+{
+    for (uint32_t root = count / 2u; root-- > 0u;)
+    {
+        sift_down(pack, names, root, count);
+    }
+    for (uint32_t end = count; end-- > 1u;)
+    {
+        const uint32_t largest = names[0];
+        names[0] = names[end];
+        names[end] = largest;
+        sift_down(pack, names, 0u, end);
+    }
+}
+
+bool er_assets_check_pack_images(const void* buf, size_t len, ErAssetsInfo* info, uint32_t* names, uint32_t capacity)
 {
     ErAssetsWalk walk;
     memset(&walk, 0, sizeof(walk));
-    walk.find = name;
-    return name && er_assets_walk((const uint8_t*)buf, len, &walk) && walk.found;
+    walk.image_names = names;
+    walk.image_capacity = names ? capacity : 0u;
+    const bool ok = er_assets_walk((const uint8_t*)buf, len, &walk);
+    if (ok && names)
+    {
+        sort_image_names((const uint8_t*)buf, names, walk.info.images < capacity ? walk.info.images : capacity);
+    }
+    if (info)
+    {
+        *info = walk.info;
+    }
+    return ok;
+}
+
+bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count, const char* name)
+{
+    if (!buf || !names || !name)
+    {
+        return false;
+    }
+    const uint32_t name_length = (uint32_t)strlen(name);
+    uint32_t low = 0u;
+    uint32_t high = count;
+    while (low < high)
+    {
+        const uint32_t middle = low + (high - low) / 2u;
+        const uint8_t* candidate;
+        uint32_t candidate_length;
+        image_name((const uint8_t*)buf, names[middle], &candidate, &candidate_length);
+        const int order = compare_names(candidate, candidate_length, (const uint8_t*)name, name_length);
+        if (order == 0)
+        {
+            return true;
+        }
+        if (order < 0)
+        {
+            low = middle + 1u;
+        }
+        else
+        {
+            high = middle;
+        }
+    }
+    return false;
 }
 
 bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage)

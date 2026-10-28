@@ -39,6 +39,28 @@ add_library(erb-runtime STATIC
         erb_runtime.c
 )
 
+# Flow B limits: how large an app this firmware accepts. Most size the verifier's fixed scratch, and a package
+# past one is rejected with the reason. The engine's pool sizes are its own ERUI_* options, which the runtime
+# reads at load time; its image index follows ERUI_IMAGE_REGISTRY_MAX.
+set(ERB_EVENT_BUDGET "100000" CACHE STRING "Flow B: instructions one run of an entry point may execute (ErbConfig::budget overrides it)")
+set(ERB_MAX_FUNCTIONS "256" CACHE STRING "Flow B: functions per package (8 B of verifier scratch each)")
+set(ERB_MAX_FUNCTION_WORDS "16384" CACHE STRING "Flow B: instruction words per function (1 bit of verifier scratch each)")
+set(ERB_MAX_LOOPS "32" CACHE STRING "Flow B: loops per function")
+set(ERB_MAX_IMPORTS "32" CACHE STRING "Flow B: native imports per package")
+set(ERB_MAX_TEMPLATE_DEPTH "32" CACHE STRING "Flow B: how deeply a template may nest")
+set(ERB_REPORT_PLACES "32" CACHE STRING "Flow B: places a limit is reported from before repeats stop being filtered")
+
+# PUBLIC: erb_internal.h sizes structs by these, so every file that includes it must agree.
+target_compile_definitions(erb-runtime PUBLIC
+        ERB_EVENT_BUDGET=${ERB_EVENT_BUDGET}
+        ERB_MAX_FUNCTIONS=${ERB_MAX_FUNCTIONS}
+        ERB_MAX_FUNCTION_WORDS=${ERB_MAX_FUNCTION_WORDS}
+        ERB_MAX_LOOPS=${ERB_MAX_LOOPS}
+        ERB_MAX_IMPORTS=${ERB_MAX_IMPORTS}
+        ERB_MAX_TEMPLATE_DEPTH=${ERB_MAX_TEMPLATE_DEPTH}
+        ERB_REPORT_PLACES=${ERB_REPORT_PLACES}
+)
+
 target_link_libraries(erb-runtime
         PUBLIC
         er-runtime

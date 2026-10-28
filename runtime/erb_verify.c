@@ -90,6 +90,10 @@ static Loop s_loops[ERB_MAX_LOOPS];
 static uint32_t s_loop_count;
 static uint16_t s_tree[ERB_MAX_ANIM_TREE];
 
+/* The asset pack's image names, sorted, so each image prop is a binary search rather than a walk of the pack. */
+static uint32_t s_image_names[ERB_MAX_IMAGES];
+static uint32_t s_image_count;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -99,6 +103,12 @@ static bool fail(ErbError* error, ErbStatus status, const char* detail)
     error->status = status;
     error->detail = detail;
     return false;
+}
+
+/** @brief Entries a caller storage array holds: none when it isn't there, whatever its count says. */
+static uint32_t storage_room(const void* array, uint32_t count)
+{
+    return array ? count : 0u;
 }
 
 static bool too_big(ErbError* error, uint16_t resource, uint32_t needed, uint32_t available)
@@ -431,6 +441,7 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
         return too_big(error, ERB_RESOURCE_NODES, program->node_count, nodes_available);
     }
     const ErAssetsStorage* fonts = config->fonts;
+    uint32_t named = 0u; /* resources already named, one bit each */
     for (uint16_t index = 0; index < need_count; index++)
     {
         const uint8_t* need = section + ERB_HEADER_SIZE + panel_count * ERB_PANEL_SIZE + index * ERB_NEED_SIZE;
@@ -455,13 +466,13 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
                 available = limits.images;
                 break;
             case ERB_RES_FONTS:
-                available = fonts ? fonts->font_count : 0u;
+                available = fonts ? storage_room(fonts->fonts, fonts->font_count) : 0u;
                 break;
             case ERB_RES_GLYPHS:
-                available = fonts ? fonts->glyph_count : 0u;
+                available = fonts ? storage_room(fonts->glyphs, fonts->glyph_count) : 0u;
                 break;
             case ERB_RES_EXTRA_GLYPHS:
-                available = fonts ? fonts->extra_count : 0u;
+                available = fonts ? storage_room(fonts->extras, fonts->extra_count) : 0u;
                 break;
             default:
                 error->resource = resource;
@@ -469,10 +480,17 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
                 error->available = 0u;
                 return fail(error, ERB_ERR_TOO_BIG, "unknown resource");
         }
+        /* Named twice, each need could pass alone while the two together don't fit. */
+        if (named & (1u << resource))
+        {
+            return fail(error, ERB_ERR_TABLE, "a resource needed twice");
+        }
+        named |= 1u << resource;
         if (amount > available)
         {
             return too_big(error, resource, amount, available);
         }
+        program->needs[resource] = amount;
     }
     return true;
 }
@@ -769,6 +787,7 @@ static bool check_slots(ErbProgram* program, ErbError* error)
         return fail(error, ERB_ERR_STATE, "too many slots");
     }
     uint32_t next = 0;
+    uint32_t animated_values = 0;
     for (uint32_t index = 0; index < program->slot_count; index++)
     {
         const uint8_t* slot = erb_slot(program, index);
@@ -836,6 +855,12 @@ static bool check_slots(ErbProgram* program, ErbError* error)
         {
             return fail(error, ERB_ERR_STATE, "slot initial value");
         }
+        animated_values += type == ERB_T_AVALUE ? 1u : 0u;
+    }
+    /* Each one is made at load, after the running app is gone; the need was held to the engine's pool. */
+    if (animated_values > program->needs[ERB_RES_ANIM_VALUES])
+    {
+        return fail(error, ERB_ERR_STATE, "more animated values than the package's needs declare");
     }
     return true;
 }
@@ -860,7 +885,7 @@ static bool check_prop_value(const ErbProgram* program, const ErbPropInfo* info,
             return value < program->string_count && string_length(program, value) <= info->max;
         case ERB_PK_IMAGE:
             return value < program->string_count && string_length(program, value) <= info->max && program->assets
-                   && er_assets_pack_has_image(program->assets, program->assets_length, erb_string(program, value));
+                   && er_assets_find_image(program->assets, s_image_names, s_image_count, erb_string(program, value));
         default:
             return true;
     }
@@ -1389,7 +1414,7 @@ static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError*
         return true;
     }
     ErAssetsInfo info;
-    if (!er_assets_check_pack(program->assets, program->assets_length, &info))
+    if (!er_assets_check_pack_images(program->assets, program->assets_length, &info, s_image_names, ERB_MAX_IMAGES))
     {
         return fail(error, ERB_ERR_ASSETS, "asset pack malformed");
     }
@@ -1404,11 +1429,17 @@ static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError*
     }
     ERPoolLimits limits;
     er_pool_limits(&limits);
-    const ErAssetsStorage* fonts = config->fonts;
-    if (info.images > limits.images || info.fonts > (fonts ? fonts->font_count : 0u)
-        || info.glyphs > (fonts ? fonts->glyph_count : 0u) || info.extra_glyphs > (fonts ? fonts->extra_count : 0u))
+    if (info.images > ERB_MAX_IMAGES)
     {
-        return fail(error, ERB_ERR_ASSETS, "asset pack doesn't fit the image registry or ERB_FONTS and ERB_GLYPHS");
+        return fail(error, ERB_ERR_ASSETS, "more images than the image registry holds");
+    }
+    s_image_count = info.images;
+    const ErAssetsStorage* fonts = config->fonts;
+    if (info.images > limits.images || info.fonts > (fonts ? storage_room(fonts->fonts, fonts->font_count) : 0u)
+        || info.glyphs > (fonts ? storage_room(fonts->glyphs, fonts->glyph_count) : 0u)
+        || info.extra_glyphs > (fonts ? storage_room(fonts->extras, fonts->extra_count) : 0u))
+    {
+        return fail(error, ERB_ERR_ASSETS, "asset pack doesn't fit the image registry or the firmware's font storage");
     }
     if (info.font_families > limits.font_families || info.largest_family > limits.font_sizes)
     {

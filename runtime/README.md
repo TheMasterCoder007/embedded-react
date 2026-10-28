@@ -21,6 +21,11 @@ Running a container's program is the caller's job: `er_runtime_load_container` i
 `bridges/quickjs/er_runtime.h` checks the QuickJS tag and runs the bytecode, and `er_hotreload_apply`
 there loads a received frame. A Flow B package (tag `erb`) goes to `erb_load` in `erb_runtime.h`.
 
+Flow B's limits (how large an app the firmware accepts) are CMake options: `ERB_EVENT_BUDGET`,
+`ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`,
+`ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. Engine pool sizes stay the engine's `ERUI_*` options;
+the runtime reads them at load time.
+
 ```bash
 cmake -S runtime -B runtime/build
 cmake --build runtime/build
