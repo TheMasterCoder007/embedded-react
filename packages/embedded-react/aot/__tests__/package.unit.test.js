@@ -220,7 +220,34 @@ export function App() {
   return <Pressable onPress={() => setCount(count + 1)}><Text>{count}</Text></Pressable>;
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support event handlers yet/,
+      /the package output doesn't support event handlers yet[\s\S]*App\.jsx:6:10/,
+    );
+  });
+
+  it('points what has no node of its own at its first call', () => {
+    const src = `
+import {useEffect, useRef} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const mounted = useRef(0);
+  useEffect(() => {
+    mounted.current = 1;
+  }, []);
+  return <View />;
+}`;
+    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+      /the package output doesn't support effects yet[\s\S]*App\.jsx:6:3/,
+    );
+  });
+
+  it('refuses an image the package does not bake', () => {
+    const src = `
+import {Image} from 'embedded-react';
+export function App() {
+  return <Image source={{uri: 'logo'}} style={{width: 20, height: 20}} />;
+}`;
+    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+      /the package has no image named "logo"[\s\S]*App\.jsx:4:10/,
     );
   });
 

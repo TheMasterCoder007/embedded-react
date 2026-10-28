@@ -24,7 +24,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {aotError, constantText} from '../diagnostics.mts';
+import {traverse} from '@babel/core';
+import {aotError, constantText, locateError} from '../diagnostics.mts';
 import {hasRuntimeProps} from '../ir/nodes.mts';
 import {
   ENGINE_VALUES,
@@ -36,8 +37,10 @@ import {
   TemplateKind,
 } from './format.mts';
 import {constantPropEntry, stringPropEntry} from './props.mts';
+import type {Program as BabelProgram, Node} from '@babel/types';
+import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
-import type {IrElement, IrNode} from '../ir/nodes.mts';
+import type {IrElement, IrNode, IrWire} from '../ir/nodes.mts';
 import type {Screen} from '../options.mts';
 import type {
   Program,
@@ -104,39 +107,103 @@ class ProgramTables {
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** What each wiring a node can have needs, as a refusal names it. */
+const WIRING_USES: Record<IrWire['kind'], string> = {
+  bind: 'animations',
+  ref: 'refs',
+  event: 'event handlers',
+  responder: 'PanResponder',
+  vectorTables: '<Svg>',
+  stateDrivenVector: '<Svg>',
+};
+
 /**
  * Refuses what the package output can't lower yet.
  *
  * @param what  What the app uses.
+ * @param loc  Where in the source, when it is known.
  */
-function notYet(what: string): never {
-  throw aotError(
+function notYet(what: string, loc?: SourcePosition): never {
+  const error = aotError(
     `AOT: the package output doesn't support ${what} yet`,
     'build without --package to get the C output, which supports it.',
   );
+  locateError(error, loc);
+  throw error;
 }
 
 /**
- * Refuses an app that needs anything besides its tree: those parts are all bytecode.
+ * Where the module first calls one of the given functions, for a refusal of what has no node of its own.
+ *
+ * @param program  The parsed module.
+ * @param names  The functions: a bare name (`useEffect`), or an object and member (`Animated.timing`), with
+ *               `*` for any member.
+ *
+ * @returns The call's position, or undefined when there is none.
+ */
+function firstCall(
+  program: BabelProgram,
+  names: string[],
+): SourcePosition | undefined {
+  const named = (callee: Node): string | null =>
+    callee.type === 'Identifier'
+      ? callee.name
+      : callee.type === 'MemberExpression' &&
+          callee.object.type === 'Identifier' &&
+          callee.property.type === 'Identifier'
+        ? `${callee.object.name}.${callee.property.name}`
+        : null;
+  const matches = (name: string | null): boolean =>
+    name !== null &&
+    names.some(wanted =>
+      wanted.endsWith('.*')
+        ? name.startsWith(wanted.slice(0, -1))
+        : name === wanted || name.endsWith(`.${wanted}`),
+    );
+
+  let found: SourcePosition | undefined;
+  traverse(program, {
+    'CallExpression|NewExpression'(path) {
+      const call = path.node as Node & {callee: Node};
+      if (matches(named(call.callee))) {
+        found = call.loc?.start;
+        path.stop();
+      }
+    },
+  });
+  return found;
+}
+
+/**
+ * Refuses an app that needs anything besides its tree that no node of it shows: those parts are all bytecode.
+ * What a node uses is refused at the node, while its template is built.
  *
  * @param app  The app.
  */
 function checkStatic(app: IrApp): void {
   const {out} = app;
-  const uses: [boolean, string][] = [
-    [out.handlers.length > 0, 'event handlers'],
-    [out.timerFns.length > 0, 'timers'],
-    [out.effectFns.length > 0 || out.mountEffects.length > 0, 'effects'],
-    [app.animations.length > 0 || out.animCbs.length > 0, 'animations'],
-    [out.panResponders.length > 0, 'PanResponder'],
-    [out.vectors.length > 0, '<Svg>'],
-    [app.keyboard !== null, 'setKeyboardConfig'],
-    [app.boot.slots.length > 0, 'values worked out from the screen size'],
-    [app.hasUpdate, 'state that changes what is shown'],
+  const uses: [boolean, string, string[]][] = [
+    [out.handlers.length > 0, 'event handlers', []],
+    [out.timerFns.length > 0, 'timers', ['setTimeout', 'setInterval']],
+    [
+      out.effectFns.length > 0 || out.mountEffects.length > 0,
+      'effects',
+      ['useEffect', 'useLayoutEffect'],
+    ],
+    [
+      app.animations.length > 0 || out.animCbs.length > 0,
+      'animations',
+      ['Animated.*', 'useAnimatedValue'],
+    ],
+    [out.panResponders.length > 0, 'PanResponder', ['PanResponder.create']],
+    [out.vectors.length > 0, '<Svg>', []],
+    [app.keyboard !== null, 'setKeyboardConfig', ['setKeyboardConfig']],
+    [app.boot.slots.length > 0, 'values worked out from the screen size', []],
+    [app.hasUpdate, 'state that changes what is shown', []],
   ];
-  for (const [used, what] of uses) {
+  for (const [used, what, calls] of uses) {
     if (used) {
-      notYet(what);
+      notYet(what, calls.length ? firstCall(out.program, calls) : undefined);
     }
   }
 }
@@ -146,10 +213,15 @@ function checkStatic(app: IrApp): void {
  *
  * @param node  The node.
  * @param tables  The program's tables.
+ * @param images  The images the package's asset pack holds.
  *
  * @returns The set's entries.
  */
-function nodeProps(node: IrNode, tables: ProgramTables): ProgramPropEntry[] {
+function nodeProps(
+  node: IrNode,
+  tables: ProgramTables,
+  images: ReadonlySet<string>,
+): ProgramPropEntry[] {
   if (hasRuntimeProps(node)) {
     notYet('props, text or images that state drives');
   }
@@ -172,7 +244,14 @@ function nodeProps(node: IrNode, tables: ProgramTables): ProgramPropEntry[] {
     entries.push(stringPropEntry('text', tables.string(text)));
   }
 
+  // The runtime only loads a package whose images are all in its own asset pack.
   if (node.image?.kind === 'static') {
+    if (!images.has(node.image.name)) {
+      throw aotError(
+        `AOT: the package has no image named "${node.image.name}"`,
+        'import the image file, so the build bakes it into the package.',
+      );
+    }
     entries.push(stringPropEntry('image_name', tables.string(node.image.name)));
   }
 
@@ -180,44 +259,56 @@ function nodeProps(node: IrNode, tables: ProgramTables): ProgramPropEntry[] {
 }
 
 /**
- * An element and everything under it as template nodes, each before its children.
+ * An element and everything under it as template nodes, each before its children. What a node needs that the
+ * package output can't lower yet is refused at the node's element.
  *
  * @param element  The element.
  * @param tables  The program's tables.
+ * @param images  The images the package's asset pack holds.
  * @param nodes  Collects the template nodes.
  */
 function templateNodes(
   element: IrElement,
   tables: ProgramTables,
+  images: ReadonlySet<string>,
   nodes: ProgramTemplateNode[],
 ): void {
   if (element.kind === 'component') {
-    templateNodes(element.root, tables, nodes);
+    templateNodes(element.root, tables, images, nodes);
     return;
   }
 
   const {node} = element;
-  if (node.wiring.some(wire => wire.kind !== 'ref')) {
-    notYet(`${node.wiring.find(wire => wire.kind !== 'ref')!.kind} wiring`);
+  let children: IrElement[];
+  try {
+    // A ref needs nothing itself; the code that reads one is refused on its own.
+    const wire = node.wiring.find(wiring => wiring.kind !== 'ref');
+    if (wire) {
+      notYet(WIRING_USES[wire.kind]);
+    }
+
+    children = node.children.map(child =>
+      child.kind === 'element'
+        ? child.element
+        : notYet(
+            child.kind === 'pool' ? 'lists of state' : 'conditionals on state',
+          ),
+    );
+    nodes.push({
+      type: ENGINE_VALUES.get(node.type)!,
+      children: children.length,
+      props: tables.propSet(nodeProps(node, tables, images)),
+      handle: NONE,
+      bindings: 0,
+      bindingCount: 0,
+    });
+  } catch (error) {
+    locateError(error, node.loc);
+    throw error;
   }
 
-  const children = node.children.map(child =>
-    child.kind === 'element'
-      ? child.element
-      : notYet(
-          child.kind === 'pool' ? 'lists of state' : 'conditionals on state',
-        ),
-  );
-  nodes.push({
-    type: ENGINE_VALUES.get(node.type)!,
-    children: children.length,
-    props: tables.propSet(nodeProps(node, tables)),
-    handle: NONE,
-    bindings: 0,
-    bindingCount: 0,
-  });
   for (const child of children) {
-    templateNodes(child, tables, nodes);
+    templateNodes(child, tables, images, nodes);
   }
 }
 
@@ -230,7 +321,6 @@ function templateNodes(
  * @returns The program.
  */
 export function lowerPackage(app: IrApp, screen: Screen): Program {
-  checkStatic(app);
   const tables = new ProgramTables();
 
   // A panel-sized root the app's tree fills, as er_app_build() makes one.
@@ -248,7 +338,9 @@ export function lowerPackage(app: IrApp, screen: Screen): Program {
       bindingCount: 0,
     },
   ];
-  templateNodes(app.root, tables, nodes);
+  const images = new Set(app.images.map(image => image.name));
+  templateNodes(app.root, tables, images, nodes);
+  checkStatic(app);
 
   // With no functions, the register stack only has to exist.
   const stackCells = FRAME_CELLS;

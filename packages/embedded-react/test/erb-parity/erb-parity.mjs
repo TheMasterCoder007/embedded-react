@@ -63,6 +63,13 @@ const demo = name => join(ROOT, 'demos', name, 'App.jsx');
 const SCENARIOS = [
   {name: 'layout', file: fixture('layout'), screen: [240, 320]},
   {name: 'text', file: fixture('text'), screen: [240, 320]},
+  // Focusing the TextInput brings up the engine's keyboard, with no app code involved.
+  {
+    name: 'text-focused',
+    file: fixture('text'),
+    screen: [240, 320],
+    taps: '120,240',
+  },
   {name: 'style', file: fixture('style'), screen: [240, 320]},
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},

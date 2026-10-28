@@ -24,6 +24,7 @@ import {
   aotError,
   checkEngineString,
   constantText,
+  currentLoc,
   withLoc,
 } from './diagnostics.mts';
 import {buildValueOf, foldBoot} from './boot.mts';
@@ -795,6 +796,7 @@ function emitNodeImpl(
 
   const node: IrNode = {
     id: nodeId,
+    loc: currentLoc(),
     type: nodeType,
     constantProps: staticAssigns,
     stateProps: dynAssigns,

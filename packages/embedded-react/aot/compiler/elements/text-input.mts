@@ -19,7 +19,12 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {colorLiteral} from '../../style-map.mts';
-import {aotError, checkEngineString, constantText} from '../diagnostics.mts';
+import {
+  aotError,
+  currentLoc,
+  checkEngineString,
+  constantText,
+} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr, lowerText} from '../expressions.mts';
 import {isFn} from '../collect.mts';
@@ -159,6 +164,7 @@ export function emitTextInput(
   // state-driven value re-synced each app_update.
   const node: IrNode = {
     id: nodeId,
+    loc: currentLoc(),
     type: 'ER_NODE_TEXT_INPUT',
     constantProps: staticAssigns,
     stateProps: dynAssigns,
