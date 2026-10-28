@@ -78,6 +78,8 @@ const char* er_container_status_str(ErContainerStatus status)
             return "built for a different QuickJS version";
         case ER_CONTAINER_LOAD_FAILED:
             return "app load failed";
+        case ER_CONTAINER_BAD_ASSETS:
+            return "asset pack failed to load";
         default:
             return "unknown";
     }

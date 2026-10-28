@@ -25,9 +25,12 @@
  * config container on a device). It is also the asset section of the ERCF config container.
  *
  * The buffer must stay live for as long as the assets are used: image pixels and font bitmaps are
- * referenced by pointer into it. er_assets_load_pack's per-font GlyphInfo/ExtraGlyph arrays + BitmapFont
- * structs are heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than
- * risk a dangling reference — the engine has no "unregister"; fine for the few-KB-per-reload dev/config-swap case).
+ * referenced by pointer into it. er_assets_load_pack's GlyphInfo/ExtraGlyph arrays + BitmapFont structs are
+ * heap-allocated (er_assets_heap.c) and kept for the process (a reload leaks the previous set rather than risk a
+ * dangling reference; fine for the few-KB-per-reload dev/config-swap case).
+ *
+ * The loaders check the whole pack before registering anything, so a pack that fails to load leaves the
+ * registries as they were. That includes an image pixel format this firmware doesn't know.
  *
  * For a VOLATILE source — a hot-reload staging buffer that gets reused for the next upload — use
  * er_assets_load_pack_ex(buf, len, copy=true): it takes its own (reused) copy of the pack and points the
@@ -77,8 +80,8 @@ typedef struct
  * @param[in] buf  Pack bytes (caller-owned; must outlive use).
  * @param[in] len  Byte length.
  *
- * @return true if parsed and registered; false on a malformed/truncated pack (a wrong magic or an
- *         over-read leaves whatever was registered before untouched).
+ * @return true if parsed and registered; false on a malformed pack or an allocation failure, with nothing
+ *         registered.
  */
 bool er_assets_load_pack(const void* buf, size_t len);
 
@@ -91,7 +94,8 @@ bool er_assets_load_pack(const void* buf, size_t len);
  *                  the copy, so @p buf may be reused/freed immediately (hot reload from a staging buffer).
  *                  false → reference @p buf in place (identical to er_assets_load_pack).
  *
- * @return true if parsed and registered; false on a malformed pack or (copy=true) an allocation failure.
+ * @return true if parsed and registered; false on a malformed pack or an allocation failure, with nothing
+ *         registered and the previous copy left intact.
  */
 bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
 
@@ -141,7 +145,8 @@ bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count
  * @param[in]     len      Byte length.
  * @param[in,out] storage  Font table storage; its *_used fields report what was taken.
  *
- * @return true if parsed and registered; false on a malformed pack or a font table that doesn't fit.
+ * @return true if parsed and registered; false on a malformed pack or font tables that don't fit, with nothing
+ *         registered.
  */
 bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage);
 

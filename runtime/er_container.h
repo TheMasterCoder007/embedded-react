@@ -69,6 +69,7 @@ typedef enum
     ER_CONTAINER_BAD_CRC,     /**< Integrity check failed — corrupt or partially written. */
     ER_CONTAINER_BAD_QJS,     /**< Built for a different QuickJS version than this firmware (er_runtime). */
     ER_CONTAINER_LOAD_FAILED, /**< No bytecode section, or the app threw on evaluation (er_runtime). */
+    ER_CONTAINER_BAD_ASSETS,  /**< An asset pack is malformed, or couldn't be loaded (er_runtime). */
 } ErContainerStatus;
 
 /** @brief One section of a container. @ref data points into the container buffer. */

@@ -697,18 +697,16 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
         return ER_CONTAINER_BAD_QJS;
     }
 
-    /* Verified: register asset packs first (so <Image>/<Text> resolve when the app mounts). Then run the
-     * vendor chunk if present — it installs the module registry + require() shim the app resolves its
-     * imports through — and finally the app last, regardless of section order. A container with no vendor
-     * section is a plain monolithic app and loads exactly as before. */
+    /* Verified. Find the sections and check every asset pack before registering any, so a container that
+     * fails here leaves the engine as it was. */
     const ErContainerSection* vendor = NULL;
     const ErContainerSection* bytecode = NULL;
     for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
     {
         const ErContainerSection* section = &container.sections[section_index];
-        if (section->type == ER_SECTION_ASSET_PACK)
+        if (section->type == ER_SECTION_ASSET_PACK && !er_assets_check_pack(section->data, section->length, NULL))
         {
-            er_assets_load_pack_ex(section->data, section->length, copy_assets);
+            return ER_CONTAINER_BAD_ASSETS;
         }
         else if (section->type == ER_SECTION_BYTECODE)
         {
@@ -722,6 +720,20 @@ ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, boo
     if (!bytecode)
     {
         return ER_CONTAINER_LOAD_FAILED;
+    }
+
+    /* Register the asset packs first (so <Image>/<Text> resolve when the app mounts). This can still fail
+     * when memory runs out. Then run the vendor chunk if present — it installs the module registry +
+     * require() shim the app resolves its imports through — and finally the app last, regardless of section
+     * order. A container with no vendor section is a plain monolithic app and loads exactly as before. */
+    for (uint32_t section_index = 0; section_index < container.section_count; section_index++)
+    {
+        const ErContainerSection* section = &container.sections[section_index];
+        if (section->type == ER_SECTION_ASSET_PACK
+            && !er_assets_load_pack_ex(section->data, section->length, copy_assets))
+        {
+            return ER_CONTAINER_BAD_ASSETS;
+        }
     }
     if (vendor && !er_runtime_load_bytecode(vendor->data, vendor->length))
     {

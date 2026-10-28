@@ -211,7 +211,9 @@ void er_runtime_set_wall_clock(int64_t epoch_ms);
  *
  * The universal "load a config" path — desktop, embedded bin, or a flash/config region on a device.
  * The buffer is referenced (image pixels / font bitmaps point into it) and must outlive use. On any
- * failure the engine is left as it was (call er_runtime_reset first if replacing a running app).
+ * failure the engine is left as it was (call er_runtime_reset first if replacing a running app). An asset
+ * pack that is malformed, uses a format this firmware doesn't know, or can't be allocated fails the load with
+ * ER_CONTAINER_BAD_ASSETS, before the app runs.
  *
  * @p len may be an UPPER BOUND, not the exact byte count: the loader walks the container's
  * self-describing sections (bounds-checked against @p len) to find its true end, then verifies the CRC

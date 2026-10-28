@@ -171,6 +171,23 @@ if (ER_BRIDGE_QUICKJS_SPLITTEST)
 endif ()
 
 # ---------------------------------------------------------------------------
+# Container load test — a container whose asset pack fails to load fails with its own status, before
+# anything is registered or run. No JS is evaluated, so it builds for ER_BRIDGE_QUICKJS_LITE too.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_CONTAINERTEST "Build the container load test" ON)
+
+if (ER_BRIDGE_QUICKJS_CONTAINERTEST)
+    add_executable(er-bridge-quickjs-containertest containertest_main.c)
+    target_link_libraries(er-bridge-quickjs-containertest PRIVATE er-bridge-quickjs)
+    target_include_directories(er-bridge-quickjs-containertest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/tests)
+
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_test(NAME container-load COMMAND er-bridge-quickjs-containertest)
+    endif ()
+endif ()
+
+# ---------------------------------------------------------------------------
 # JS heap-accounting test — guards the GC trigger itself. QuickJS runs its GC (and enforces
 # memory_limit) purely off js_malloc_usable_size(); when that reports 0 the collector never fires and
 # the app grows until the heap is exhausted. Platform-dependent in the wild, but reproducible anywhere

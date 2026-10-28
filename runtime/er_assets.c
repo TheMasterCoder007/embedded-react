@@ -532,6 +532,12 @@ bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count
     return false;
 }
 
+/** @brief True when a caller storage array of @p capacity entries at @p base has room for @p needed. */
+static bool storage_fits(const void* base, uint32_t capacity, uint32_t needed)
+{
+    return needed == 0u || (base && needed <= capacity);
+}
+
 bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage)
 {
     if (!storage)
@@ -541,6 +547,14 @@ bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* stor
     storage->fonts_used = 0u;
     storage->glyphs_used = 0u;
     storage->extras_used = 0u;
+    /* Checked first, so a pack that fails registers nothing. */
+    ErAssetsInfo info;
+    if (!er_assets_check_pack(buf, len, &info) || !storage_fits(storage->fonts, storage->font_count, info.fonts)
+        || !storage_fits(storage->glyphs, storage->glyph_count, info.glyphs)
+        || !storage_fits(storage->extras, storage->extra_count, info.extra_glyphs))
+    {
+        return false;
+    }
     ErAssetsWalk walk;
     memset(&walk, 0, sizeof(walk));
     walk.registering = true;
