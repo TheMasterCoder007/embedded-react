@@ -1,5 +1,5 @@
-// State and handlers: a counter, a toggle, a string built from state, a ref, a conditional, and sizes worked
-// out from the screen.
+// State and handlers: a counter, a toggle, a string built from state, a string state with a closed set of
+// values (interned), a ref, a conditional, and sizes worked out from the screen.
 import {useState, useRef} from 'react';
 import {View, Text, Pressable, StyleSheet} from 'embedded-react';
 
@@ -11,6 +11,7 @@ export function App() {
   const [count, setCount] = useState(0);
   const [on, setOn] = useState(false);
   const [label, setLabel] = useState('none yet');
+  const [mood, setMood] = useState('calm');
   const presses = useRef(0);
 
   const bump = step => {
@@ -41,7 +42,14 @@ export function App() {
         </Pressable>
         <Pressable
           style={[styles.button, {width: BUTTON, opacity: on ? 1 : 0.4}]}
-          onPress={() => setOn(!on)}>
+          onPress={() => {
+            setOn(!on);
+            if (on) {
+              setMood('calm');
+            } else {
+              setMood('busy');
+            }
+          }}>
           <Text style={styles.buttonText}>{on ? 'on' : 'off'}</Text>
         </Pressable>
       </View>
@@ -51,6 +59,13 @@ export function App() {
       ) : (
         <Text style={styles.label}>switched off</Text>
       )}
+      <Text
+        style={[
+          styles.label,
+          {color: mood === 'busy' ? '#ffc040' : '#80c0ff'},
+        ]}>
+        mood: {mood}
+      </Text>
     </View>
   );
 }

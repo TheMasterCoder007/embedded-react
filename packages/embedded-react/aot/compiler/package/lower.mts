@@ -44,6 +44,7 @@ import {
 import {nodeReads} from '../ir/reads.mts';
 import {Arena} from './arena.mts';
 import {FunctionBuilder} from './bytecode.mts';
+import {internedStates} from './enums.mts';
 import {Codegen, notYet} from './codegen.mts';
 import {
   BindingKind,
@@ -307,15 +308,26 @@ function planSlots(
     refs: new Map(),
     boot: new Map(),
     stringLocals: new Map(),
+    enums: new Map(),
   };
+
+  // String state with a closed set of values is an interned enum, starting at its initial value (the first).
+  for (const [state, values] of internedStates(app)) {
+    slots.enums.set(state, {
+      set: slots.enums.size,
+      values,
+    });
+  }
 
   // State, each with a dirty bit when a node reads it.
   for (const state of app.state) {
     if (state.kind === 'list') {
       continue;
     }
-    const slot =
-      state.cType === 'string'
+    const interned = slots.enums.get(state);
+    const slot = interned
+      ? Object.assign(arena.slot(ValueType.enum, 0), {aux: interned.set})
+      : state.cType === 'string'
         ? arena.slot(
             ValueType.string,
             tables.string(String(state.initial)),
@@ -894,6 +906,9 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     const64: tables.const64,
     regions,
     slots: lowering.slots.arena.slots,
+    enums: [...lowering.slots.enums.values()].map(({values}) =>
+      values.map(value => tables.string(value)),
+    ),
     propSets: tables.propSets,
     templates: [{kind: TemplateKind.root, nodes}],
     bindings: lowering.bindings,

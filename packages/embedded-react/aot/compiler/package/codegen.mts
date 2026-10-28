@@ -26,7 +26,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {aotError} from '../diagnostics.mts';
+import {aotError, constantText} from '../diagnostics.mts';
 import {EventField, MathFn} from './format.mts';
 import {abiProp, floatBits, readConstant} from './props.mts';
 import type {Arena, Slot} from './arena.mts';
@@ -43,8 +43,21 @@ import type {RefRecord, ScalarState} from '../types.mts';
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** The type C works a value out in. A boolean is C's int holding 0 or 1. */
-export type CType = 'int' | 'bool' | 'float' | 'double' | 'int64' | 'string';
+/** The type C works a value out in. A boolean is C's int holding 0 or 1; an enum is an interned string. */
+export type CType =
+  | 'int'
+  | 'bool'
+  | 'float'
+  | 'double'
+  | 'int64'
+  | 'string'
+  | 'enum';
+
+/** An interned string state's set: its index in the enums table, and its values. */
+export interface EnumSet {
+  set: number;
+  values: string[];
+}
 
 /** The slots the program's code names, by what they hold. */
 export interface ProgramSlots {
@@ -55,6 +68,8 @@ export interface ProgramSlots {
   boot: Map<IrBootSlot, Slot>;
   /** The buffer each string local is copied into, by its C name. */
   stringLocals: Map<string, Slot>;
+  /** The string states held as interned enums. */
+  enums: Map<ScalarState, EnumSet>;
 }
 
 /** The <TextInput> a CHANGE_TEXT handler reads its new text from, and the buffer it reads it into. */
@@ -215,7 +230,10 @@ export class Codegen {
       case 'boolean':
         return 'bool';
       case 'state':
-        return slotType(this.stateSlot(expr.state));
+        // An interned state is still a string to C.
+        return this.program.enums.has(expr.state)
+          ? 'string'
+          : slotType(this.stateSlot(expr.state));
       case 'boot':
         return slotType(this.bootSlot(expr.slot));
       case 'ref':
@@ -289,6 +307,11 @@ export class Codegen {
       case 'boolean':
         return this.load('bool', expr.value ? 1 : 0);
       case 'state':
+        if (this.program.enums.has(expr.state)) {
+          throw new Error(
+            `AOT internal: state "${expr.state.name}" is interned, but read as a string`,
+          );
+        }
         return this.get(this.stateSlot(expr.state));
       case 'boot':
         return this.get(this.bootSlot(expr.slot));
@@ -367,6 +390,9 @@ export class Codegen {
       case 'compare':
         return this.compare(expr.op, expr.left, expr.right);
       case 'stringEquals': {
+        if (this.enumOf(expr.left) || this.enumOf(expr.right)) {
+          return this.enumEquals(expr.op, expr.left, expr.right);
+        }
         const register = fn.register('bool');
         fn.abc(
           'SEQ',
@@ -398,6 +424,67 @@ export class Codegen {
           type,
         );
     }
+  }
+
+  /**
+   * The set of an interned state an expression reads, or null when it reads none.
+   *
+   * @param expr  The expression.
+   *
+   * @returns The set.
+   */
+  private enumOf(expr: IrExpr): EnumSet | null {
+    return expr.kind === 'state'
+      ? (this.program.enums.get(expr.state) ?? null)
+      : null;
+  }
+
+  /**
+   * A comparison of an interned state with a literal, or with itself, as an int compare. A literal it never
+   * holds is never equal.
+   *
+   * @param op  `==` or `!=`.
+   * @param left  One side.
+   * @param right  The other.
+   *
+   * @returns A bool register.
+   */
+  private enumEquals(op: '==' | '!=', left: IrExpr, right: IrExpr): Register {
+    const read = (this.enumOf(left) ? left : right) as IrExpr & {kind: 'state'};
+    const other = read === left ? right : left;
+    const {set, values} = this.enumOf(read)!;
+    if (other.kind !== 'string') {
+      return this.load('bool', op === '==' ? 1 : 0);
+    }
+    const index = values.indexOf(other.value);
+    if (index < 0) {
+      return this.load('bool', op === '==' ? 0 : 1);
+    }
+    const register = this.fn.register('bool');
+    this.fn.abc(
+      'EQ',
+      register.index,
+      this.get(this.stateSlot(read.state)).index,
+      this.enumValue(set, index).index,
+    );
+    if (op === '!=') {
+      this.fn.abc('NOT', register.index, register.index);
+    }
+    return register;
+  }
+
+  /**
+   * One value of an enum set in a register.
+   *
+   * @param set  The set.
+   * @param index  The value's index in it.
+   *
+   * @returns The register.
+   */
+  private enumValue(set: number, index: number): Register {
+    const register = this.fn.register('enum');
+    this.fn.abx('LOADE', register.index, index, set);
+    return register;
   }
 
   /**
@@ -726,6 +813,13 @@ export class Codegen {
         }
       } else if (part.kind === 'booleanWord') {
         fn.abc('FMTB', this.condition(part.value).index);
+      } else if (this.enumOf(part.value)) {
+        const value = part.value as IrExpr & {kind: 'state'};
+        fn.abx(
+          'FMTE',
+          this.get(this.stateSlot(value.state)).index,
+          this.enumOf(value)!.set,
+        );
       } else {
         // The spec is by the value's IR type: a float is printed from a float, so a boot double is narrowed first.
         const type = part.value.type.kind;
@@ -769,7 +863,7 @@ export class Codegen {
           // A string local is a copy of its own, so a later write to the state it was read from can't change it.
           const slot = this.program.stringLocals.get(stmt.name)!;
           const checkpoint = fn.checkpoint();
-          fn.abc('FMTS', this.valueAs(stmt.init, 'string').index);
+          this.text([{kind: 'value', value: stmt.init}]);
           fn.abx('FMTSET', 0, slot.index);
           fn.release(checkpoint);
           this.locals.set(stmt.name, {slot});
@@ -790,6 +884,17 @@ export class Codegen {
         return;
       case 'setStateText':
         this.scoped(() => {
+          // An interned state is set to the index of the constant it is given.
+          const set = this.program.enums.get(stmt.state);
+          if (set) {
+            const index = set.values.indexOf(constantText(stmt.text)!);
+            fn.abx(
+              'SET32',
+              this.enumValue(set.set, index).index,
+              this.stateSlot(stmt.state).index,
+            );
+            return;
+          }
           this.text(stmt.text.parts);
           fn.abx('FMTSET', 0, this.stateSlot(stmt.state).index);
         });
@@ -1148,6 +1253,7 @@ export function slotType(slot: Slot): CType {
       4: 'int64',
       5: 'double',
       6: 'string',
+      7: 'enum',
     } as Record<number, CType>
   )[slot.type];
 }

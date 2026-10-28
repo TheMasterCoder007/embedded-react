@@ -284,6 +284,49 @@ export function App() {
     expect(types).toContain(ValueType.double | (SlotFlag.bootOnly << 8));
   });
 
+  it('interns a string state that holds one of a closed set of values', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [mode, setMode] = useState('cool');
+  const [label, setLabel] = useState('none');
+  return (
+    <Pressable onPress={() => { setMode('heat'); setLabel(label + '!'); }}>
+      <Text style={{color: mode === 'heat' ? '#ff0000' : '#0000ff'}}>{mode} {label}</Text>
+    </Pressable>
+  );
+}`;
+    const result = compilePackage(src, 'app', SCREEN);
+    const {u16, u32, tables} = readProgram(result.program);
+    const strings = tables.get(Table.strings);
+    const string = index => {
+      const start = strings.offset + u32(strings.offset + 4 + index * 4);
+      return Buffer.from(
+        result.program.subarray(start, result.program.indexOf(0, start)),
+      ).toString();
+    };
+
+    // mode is an enum slot of set 0, which holds its initial value and the one it is set to.
+    const slots = tables.get(Table.slots);
+    expect(u16(slots.offset) & 0xff).toBe(ValueType.enum);
+    expect(u16(slots.offset + 14)).toBe(0);
+    const enums = tables.get(Table.enums);
+    expect(u32(enums.offset)).toBe(1);
+    expect(u32(enums.offset + 4)).toBe(0 | (2 << 16));
+    expect(
+      [0, 1].map(index => string(u16(enums.offset + 8 + index * 2))),
+    ).toEqual(['cool', 'heat']);
+
+    // label is read as a string to build its next value, so it stays a buffer.
+    const types = Array.from(
+      {length: slots.length / 16},
+      (_, index) => u16(slots.offset + index * 16) & 0xff,
+    );
+    expect(types.filter(type => type === ValueType.enum)).toHaveLength(1);
+    expect(types).toContain(ValueType.string);
+  });
+
   it('lists the values the host feeds, by name', () => {
     const src = `
 import {Text, useHostValue} from 'embedded-react';

@@ -39,6 +39,7 @@ export type RegisterType =
   | 'int64'
   | 'double'
   | 'string'
+  | 'enum'
   | 'node';
 
 /** A register: its first cell, and the type it holds for the whole function. */

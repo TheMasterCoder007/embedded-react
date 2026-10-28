@@ -40,6 +40,8 @@ export interface Slot {
   init: number;
   /** A string's most bytes, without its NUL. */
   cap: number;
+  /** An enum's set. */
+  aux: number;
   index: number;
   offset: number;
 }
@@ -89,6 +91,7 @@ export class Arena {
       dirtyBit: 0,
       init: init ?? (wide || type === ValueType.string ? NO_INIT : 0),
       cap,
+      aux: 0,
       index: -1,
       offset: -1,
     };
@@ -169,7 +172,7 @@ export class Arena {
       offset: slot.offset,
       init: slot.init,
       cap: slot.cap,
-      aux: 0,
+      aux: slot.aux,
     }));
   }
 

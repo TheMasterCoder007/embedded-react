@@ -87,6 +87,13 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '122,142 122,142 122,142 122,142 43,142 200,142',
   },
+  // The toggle twice: back off, with the interned mood set to its other value.
+  {
+    name: 'counter-mood',
+    file: fixture('counter'),
+    screen: [240, 320],
+    taps: '200,142 200,142',
+  },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
   // + twice, then Heat and Auto (Auto turns on the dial's gradient).
