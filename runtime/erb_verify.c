@@ -1019,6 +1019,35 @@ static bool check_functions(ErbProgram* program, ErbError* error)
     return true;
 }
 
+static bool check_interps(ErbProgram* program, ErbError* error)
+{
+    const uint32_t length = program->table_length[ERB_TABLE_INTERPS];
+    if (length % ERB_INTERP_SIZE)
+    {
+        return fail(error, ERB_ERR_TABLE, "interps table not whole records");
+    }
+    program->interps = program->table[ERB_TABLE_INTERPS];
+    program->interp_count = length / ERB_INTERP_SIZE;
+    if (program->interp_count > ERB_NONE)
+    {
+        return fail(error, ERB_ERR_ANIMATION, "too many interpolations");
+    }
+    for (uint32_t index = 0; index < program->interp_count; index++)
+    {
+        const uint8_t* interp = erb_interp(program, index);
+        const uint16_t slot = erb_u16(interp + ERB_INTERP_SLOT_AT);
+        const uint8_t points = interp[ERB_INTERP_POINT_COUNT_AT];
+        if (slot >= program->slot_count || erb_slot(program, slot)[ERB_SLOT_TYPE_AT] != ERB_T_AVALUE || points < 2u
+            || points > ER_INTERPOLATE_MAX_POINTS || (interp[ERB_INTERP_FLAGS_AT] & ~ERB_INTERP_FLAGS_KNOWN)
+            || interp[ERB_INTERP_EXTRAPOLATE_LEFT_AT] > ER_EXTRAPOLATE_IDENTITY
+            || interp[ERB_INTERP_EXTRAPOLATE_RIGHT_AT] > ER_EXTRAPOLATE_IDENTITY)
+        {
+            return fail(error, ERB_ERR_ANIMATION, "interpolation value, points, flags or extrapolation");
+        }
+    }
+    return true;
+}
+
 static bool check_bindings(ErbProgram* program, ErbError* error)
 {
     const uint32_t length = program->table_length[ERB_TABLE_BINDINGS];
@@ -1043,9 +1072,18 @@ static bool check_bindings(ErbProgram* program, ErbError* error)
                 break;
             case ERB_BIND_ANIMATED:
             {
+                /* A color takes only an interpolation onto colors, as the engine binds one. */
                 const ErbPropInfo* info = erb_prop_info(event);
-                ok = info && info->anim != ERB_NO_ANIM && target < program->slot_count
+                ok = info && info->anim != ERB_NO_ANIM && info->kind != ERB_PK_COLOR && target < program->slot_count
                      && erb_slot(program, target)[ERB_SLOT_TYPE_AT] == ERB_T_AVALUE;
+                break;
+            }
+            case ERB_BIND_INTERPOLATED:
+            {
+                const ErbPropInfo* info = erb_prop_info(event);
+                ok = info && info->anim != ERB_NO_ANIM && target < program->interp_count
+                     && ((erb_interp(program, target)[ERB_INTERP_FLAGS_AT] & ERB_INTERP_FLAG_COLOR) != 0u)
+                            == (info->kind == ERB_PK_COLOR);
                 break;
             }
             case ERB_BIND_TAPE:
@@ -2269,11 +2307,12 @@ bool erb_verify(
     {
         return fail(error, ERB_ERR_NO_PACKAGE, "no package");
     }
-    /* Tapes come before bindings, which name them, so the tables are checked in this order. */
+    /* Tapes and interpolations come before bindings, which name them, so the tables are checked in this order. */
     return check_container(package, package_bytes, program, error) && check_header(config, program, error)
            && check_directory(program, error) && check_data_tables(program, error) && check_arena(program, error)
            && check_slots(program, error) && check_assets(config, program, error) && check_props(program, error)
-           && check_functions(program, error) && check_tapes(program, error) && check_bindings(program, error)
-           && check_templates(program, error) && check_anims(program, error) && check_imports(config, program, error)
-           && check_inputs(program, error) && check_code(config, program, error) && check_debug(program, error);
+           && check_functions(program, error) && check_tapes(program, error) && check_interps(program, error)
+           && check_bindings(program, error) && check_templates(program, error) && check_anims(program, error)
+           && check_imports(config, program, error) && check_inputs(program, error)
+           && check_code(config, program, error) && check_debug(program, error);
 }

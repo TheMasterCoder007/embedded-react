@@ -713,6 +713,68 @@ static void test_animations(void)
     }
     CHECK(slot_int(S_COUNT) == 100, "and nothing of the stopped tree runs on");
     CHECK(erb_running(), "the app runs on");
+
+    /* A parallel group of a delay and a timing: done when both are, and not finished once the timing stops. */
+    base();
+    {
+        s_pkg.anims[2] = (TAnim){ERB_ANIM_PARALLEL, 0, 0, ERB_NONE, 0, 3, 2, 0, 0, 0, {0, 0, 0, 0}};
+        s_pkg.anims[3] = (TAnim){ERB_ANIM_TIMING, 0, 0, ERB_NONE, 0, 0, 0, 200, 0, 0, {0, 0, 0, 0}};
+        s_pkg.anims[4] =
+            (TAnim){ERB_ANIM_TIMING, ER_EASE_LINEAR, 0, S_FADE, 0, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
+        s_pkg.anim_count = 5;
+        const uint8_t types[] = {ERB_T_ANIM};
+        const uint32_t start[] = {OP_ABX(ASTART, 0, 2), ERB_PACK16(F_DONE, ERB_NO_REGISTER), OP_ABC(RET, 0, 0, 0)};
+        tpkg_set_code(&s_pkg, press, types, 1, start, 3);
+        const uint8_t done_types[] = {ERB_T_BOOL, ERB_T_INT};
+        const uint32_t done[] = {
+            OP_ABC(EVT, 0, ERB_EVT_FINISHED, 0),
+            OP_ABX(LOADI, 1, 100),
+            OP_ABX(JF, 0, 1),
+            OP_ABX(LOADI, 1, 200),
+            OP_ABX(SET32, 1, S_COUNT),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        tpkg_set_code(&s_pkg, F_DONE, done_types, 2, done, 6);
+    }
+    s_pkg.has_debug = false;
+    CHECK(load(), "a parallel group loads");
+    root = slot_node(S_ROOT, 0);
+    memcpy(&fade, slot(S_FADE), sizeof(fade));
+    fire(root, ER_EVENT_PRESS);
+    for (int step = 0; step < 5; step++)
+    {
+        embedded_renderer_tick(20);
+        erb_tick(20);
+    }
+    CHECK(slot_int(S_COUNT) == 5, "the group waits for its delay after the timing ends");
+    for (int step = 0; step < 6; step++)
+    {
+        embedded_renderer_tick(20);
+        erb_tick(20);
+    }
+    CHECK(slot_int(S_COUNT) == 200, "and is done, finished, once both are");
+
+    er_anim_value_set((ERAnimValueHandle)fade, 0.0f);
+    fire(root, ER_EVENT_PRESS);
+    embedded_renderer_tick(20);
+    erb_tick(20);
+    er_anim_value_set((ERAnimValueHandle)fade, 0.5f);
+    CHECK(slot_int(S_COUNT) == 100, "a stopped child ends it at once, not finished, before its delay is up");
+
+    /* An interpolated binding maps the value onto the prop. */
+    base();
+    s_pkg.bindings[3] = s_pkg.bindings[0];
+    s_pkg.bindings[4] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 0};
+    s_pkg.binding_count = 5;
+    s_pkg.nodes[0].bindings = 3;
+    s_pkg.nodes[0].binding_count = 2;
+    s_pkg.has_debug = false;
+    CHECK(load(), "an interpolated binding loads");
+    memcpy(&fade, slot(S_FADE), sizeof(fade));
+    er_anim_value_set((ERAnimValueHandle)fade, 0.5f);
+    CHECK(slot_node(S_ROOT, 0)->tp_rotate_z == 45.0f, "and drives its prop through the interpolation");
+    er_anim_value_set((ERAnimValueHandle)fade, 3.0f);
+    CHECK(slot_node(S_ROOT, 0)->tp_rotate_z == 90.0f, "clamped past its range");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

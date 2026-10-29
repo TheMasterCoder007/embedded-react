@@ -117,6 +117,31 @@ export interface ProgramInput {
   slot: number;
 }
 
+/** An animation descriptor. Its floats are their 32 bits. */
+export interface ProgramAnim {
+  kind: number;
+  easing: number;
+  flags: number;
+  target: number;
+  prop: number;
+  first: number;
+  count: number;
+  amount: number;
+  delayMs: number;
+  to: number;
+  params: [number, number, number, number];
+}
+
+/** An interpolation: the animated value, the breakpoints, and the outputs as floats' or colors' 32 bits. */
+export interface ProgramInterp {
+  slot: number;
+  flags: number;
+  extrapolateLeft: number;
+  extrapolateRight: number;
+  input: number[];
+  output: number[];
+}
+
 export interface ProgramFunction {
   kind: number;
   params: number;
@@ -145,8 +170,10 @@ export interface Program {
   templates: ProgramTemplate[];
   bindings: ProgramBinding[];
   functions: ProgramFunction[];
+  anims: ProgramAnim[];
   /** Host-fed values, sorted by name. */
   inputs: ProgramInput[];
+  interps: ProgramInterp[];
 }
 
 /** The bytes of one table, for the resource report. */
@@ -160,6 +187,13 @@ export interface WrittenProgram {
   buildId: number;
   tables: TableSize[];
 }
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The breakpoints an interpolation record has room for (ER_INTERPOLATE_MAX_POINTS). */
+const MAX_POINTS = 8;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
@@ -431,11 +465,46 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
   table(Table.code, out =>
     program.functions.forEach(fn => fn.code.forEach(word => out.u32(word))),
   );
+  if (program.anims.length) {
+    table(Table.anims, out => {
+      for (const anim of program.anims) {
+        out.u8(anim.kind);
+        out.u8(anim.easing);
+        out.u8(anim.flags);
+        out.u8(0);
+        out.u16(anim.target);
+        out.u16(anim.prop);
+        out.u16(anim.first);
+        out.u16(anim.count);
+        out.u32(anim.amount);
+        out.u32(anim.delayMs);
+        out.u32(anim.to);
+        anim.params.forEach(bits => out.u32(bits));
+      }
+    });
+  }
   if (program.inputs.length) {
     table(Table.inputs, out => {
       for (const input of program.inputs) {
         out.u16(input.name);
         out.u16(input.slot);
+      }
+    });
+  }
+  if (program.interps.length) {
+    table(Table.interps, out => {
+      for (const interp of program.interps) {
+        out.u16(interp.slot);
+        out.u8(interp.input.length);
+        out.u8(interp.flags);
+        out.u8(interp.extrapolateLeft);
+        out.u8(interp.extrapolateRight);
+        out.u16(0);
+        for (const values of [interp.input, interp.output]) {
+          for (let point = 0; point < MAX_POINTS; point++) {
+            out.u32(values[point] ?? 0);
+          }
+        }
       }
     });
   }

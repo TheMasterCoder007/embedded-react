@@ -67,6 +67,8 @@ enum
     ANIM_WAIT = 3,    /**< A staggered child waiting `value` ms to start. */
     ANIM_DONE = 4,
     ANIM_STOPPED = 5, /**< Its tree is being stopped; engine callbacks for it are ignored. */
+    ANIM_DELAY_DUE = 6, /**< A delay leaf whose time ran out this tick. */
+    ANIM_WAIT_DUE = 7,  /**< A staggered child whose wait ran out this tick. */
 };
 
 ErbRuntime g_erb;
@@ -767,6 +769,43 @@ void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats)
 }
 
 /** @brief Wires one template node's bindings. */
+/** @brief Binds an animated value to @p prop through interpolation @p index, copied out of the package. */
+static void bind_interpolated(ERNode* node, ERAnimProp prop, uint16_t index)
+{
+    const uint8_t* interp = erb_interp(&g_erb.program, index);
+    uint32_t handle;
+    memcpy(&handle, slot_data(erb_u16(interp + ERB_INTERP_SLOT_AT)), sizeof(handle));
+    const uint8_t points = interp[ERB_INTERP_POINT_COUNT_AT];
+    const ERExtrapolate left = (ERExtrapolate)interp[ERB_INTERP_EXTRAPOLATE_LEFT_AT];
+    const ERExtrapolate right = (ERExtrapolate)interp[ERB_INTERP_EXTRAPOLATE_RIGHT_AT];
+    if (interp[ERB_INTERP_FLAGS_AT] & ERB_INTERP_FLAG_COLOR)
+    {
+        ERColorInterpolation colors;
+        memset(&colors, 0, sizeof(colors));
+        for (uint8_t point = 0; point < points; point++)
+        {
+            colors.input_range[point] = erb_f32(interp + ERB_INTERP_INPUT_AT + point * 4u);
+            colors.output_range[point] = erb_u32(interp + ERB_INTERP_OUTPUT_AT + point * 4u);
+        }
+        colors.point_count = points;
+        colors.extrapolate_left = left;
+        colors.extrapolate_right = right;
+        er_anim_value_bind_color((ERAnimValueHandle)handle, node, prop, &colors);
+        return;
+    }
+    ERInterpolation mapping;
+    memset(&mapping, 0, sizeof(mapping));
+    for (uint8_t point = 0; point < points; point++)
+    {
+        mapping.input_range[point] = erb_f32(interp + ERB_INTERP_INPUT_AT + point * 4u);
+        mapping.output_range[point] = erb_f32(interp + ERB_INTERP_OUTPUT_AT + point * 4u);
+    }
+    mapping.point_count = points;
+    mapping.extrapolate_left = left;
+    mapping.extrapolate_right = right;
+    er_anim_value_bind_interpolated((ERAnimValueHandle)handle, node, prop, &mapping);
+}
+
 static void bind(ERNode* node, const uint8_t* record, uint32_t instance)
 {
     const ErbProgram* program = &g_erb.program;
@@ -792,6 +831,9 @@ static void bind(ERNode* node, const uint8_t* record, uint32_t instance)
                     (ERAnimValueHandle)handle, node, (ERAnimProp)erb_prop_info(binding[ERB_BINDING_EVENT_AT])->anim);
                 break;
             }
+            case ERB_BIND_INTERPOLATED:
+                bind_interpolated(node, (ERAnimProp)erb_prop_info(binding[ERB_BINDING_EVENT_AT])->anim, target);
+                break;
             default:
             {
                 const uint8_t* tape = erb_tape(program, target);
@@ -1088,14 +1130,15 @@ static void anim_complete(uint32_t index, bool finished)
             break;
         }
         default:
-            /* Parallel and stagger: done when every child is. One stopped child makes the whole stopped. */
+            /* Parallel and stagger: done when every child is, and not finished as soon as one stops, as the C
+               output ends a joined run. The rest run on. */
             if (!finished)
             {
-                parent->passes = 1u;
+                anim_complete(parent_index, false);
             }
-            if (--parent->step == 0u)
+            else if (--parent->step == 0u)
             {
-                anim_complete(parent_index, parent->passes == 0u);
+                anim_complete(parent_index, true);
             }
             break;
     }
@@ -1331,9 +1374,11 @@ void erb_rt_anim_stop(uint32_t handle)
 
 static void tick_anims(uint32_t elapsed_ms)
 {
+    /* Every wait counts down before any that ran out moves on, so a wait one of them starts waits its full time,
+       as the C output's completion waits do. */
     const uint32_t count = g_erb.program.regions[ERB_REGION_ANIMS].count;
     ErbAnimEntry* entries = anim_entries();
-    for (uint32_t index = 0; index < count && g_erb.loaded && !g_erb.faulted; index++)
+    for (uint32_t index = 0; index < count; index++)
     {
         ErbAnimEntry* entry = &entries[index];
         if (entry->state != ANIM_DELAY && entry->state != ANIM_WAIT)
@@ -1341,16 +1386,20 @@ static void tick_anims(uint32_t elapsed_ms)
             continue;
         }
         entry->value -= (float)elapsed_ms;
-        if (entry->value > 0.0f)
+        if (entry->value <= 0.0f)
         {
-            continue;
+            entry->state = entry->state == ANIM_DELAY ? ANIM_DELAY_DUE : ANIM_WAIT_DUE;
         }
-        if (entry->state == ANIM_DELAY)
+    }
+    for (uint32_t index = 0; index < count && g_erb.loaded && !g_erb.faulted; index++)
+    {
+        ErbAnimEntry* entry = &entries[index];
+        if (entry->state == ANIM_DELAY_DUE)
         {
             entry->state = ANIM_RUNNING;
             anim_complete(index, true);
         }
-        else
+        else if (entry->state == ANIM_WAIT_DUE)
         {
             anim_start_entry(index);
         }
@@ -1560,8 +1609,9 @@ void erb_tick(uint32_t elapsed_ms)
 {
     if (g_erb.loaded && !g_erb.faulted)
     {
-        tick_timers(elapsed_ms);
+        /* Animation waits first, as the C output counts its completion waits down before its timers. */
         tick_anims(elapsed_ms);
+        tick_timers(elapsed_ms);
     }
     if (s_fault_pending)
     {

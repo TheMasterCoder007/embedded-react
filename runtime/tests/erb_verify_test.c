@@ -379,6 +379,35 @@ static void test_bindings(void)
     EXPECT(ERB_ERR_BINDING, "an unknown binding kind");
     base()->nodes[0].binding_count = 9u;
     EXPECT(ERB_ERR_BINDING, "node bindings past the table");
+    base()->bindings[2] = (TBinding){ERB_BIND_ANIMATED, PROP_BACKGROUND_COLOR, S_FADE};
+    EXPECT(ERB_ERR_BINDING, "a plain animated binding to a color");
+
+    base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 0};
+    EXPECT(ERB_OK, "an interpolated binding");
+    base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_BACKGROUND_COLOR, 1};
+    EXPECT(ERB_OK, "an interpolation onto colors, bound to a color");
+    base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_BACKGROUND_COLOR, 0};
+    EXPECT(ERB_ERR_BINDING, "an interpolation onto numbers, bound to a color");
+    base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 1};
+    EXPECT(ERB_ERR_BINDING, "an interpolation onto colors, bound to a number");
+    base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_WIDTH, 0};
+    EXPECT(ERB_ERR_BINDING, "an interpolation bound to a prop that can't animate");
+    base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 2};
+    EXPECT(ERB_ERR_BINDING, "an interpolation that doesn't exist");
+}
+
+static void test_interps(void)
+{
+    base()->interps[0].point_count = 1u;
+    EXPECT(ERB_ERR_ANIMATION, "an interpolation of one point");
+    base()->interps[0].point_count = ER_INTERPOLATE_MAX_POINTS + 1u;
+    EXPECT(ERB_ERR_ANIMATION, "more points than the engine holds");
+    base()->interps[0].slot = S_COUNT;
+    EXPECT(ERB_ERR_ANIMATION, "an interpolation of a slot that isn't an animated value");
+    base()->interps[0].extrapolate_right = ER_EXTRAPOLATE_IDENTITY + 1u;
+    EXPECT(ERB_ERR_ANIMATION, "an unknown extrapolation");
+    base()->interps[0].flags = 0x02u;
+    EXPECT(ERB_ERR_ANIMATION, "an unknown interpolation flag");
 }
 
 static void test_anims(void)
@@ -1067,6 +1096,7 @@ int main(void)
     test_props();
     test_templates();
     test_bindings();
+    test_interps();
     test_anims();
     test_tapes();
     test_functions();

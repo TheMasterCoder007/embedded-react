@@ -24,15 +24,20 @@ import {crc32} from '../../assets/emit-container.mjs';
 import {compilePackage, packPackage, resourceReport} from '../compile.mts';
 import {
   ABI_PROPS,
+  AnimFlag,
+  AnimKind,
   ENGINE_ABI,
+  ENGINE_VALUES,
   FLAG_DEBUG,
   FORMAT_MAJOR,
   FORMAT_MINOR,
   BindingKind,
   FunctionKind,
+  InterpFlag,
   NONE,
   PropKind,
   Region,
+  Resource,
   SlotFlag,
   Table,
   TemplateKind,
@@ -400,17 +405,14 @@ export function App() {
 
   it('points what has no node of its own at its first call', () => {
     const src = `
-import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
+import {View, setKeyboardConfig} from 'embedded-react';
+
+setKeyboardConfig({rowHeight: 30});
 export function App() {
-  const fade = useAnimatedValue(0);
-  return (
-    <Pressable onPress={() => Animated.timing(fade, {toValue: 1, duration: 100}).start()}>
-      <Text>go</Text>
-    </Pressable>
-  );
+  return <View />;
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support animations yet[\s\S]*App\.jsx:4:16/,
+      /the package output doesn't support setKeyboardConfig yet[\s\S]*App\.jsx:4:1/,
     );
   });
 
@@ -895,6 +897,354 @@ export function App() {
     expect(() => compilePackage(input, 'app', CAPS)).toThrow(
       "doesn't support onChangeText in a list row yet",
     );
+  });
+});
+
+describe('animations', () => {
+  const ANIM_APP = `
+import {useState} from 'react';
+import {View, Pressable, Text, Animated, Easing, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const [status, setStatus] = useState('idle');
+  const [to, setTo] = useState(2);
+  const fade = useAnimatedValue(0.5);
+  const slide = useAnimatedValue(0);
+  return (
+    <View>
+      <Pressable onPress={() => Animated.timing(fade, {toValue: 1, duration: 300, delay: 20, easing: Easing.out(Easing.quad)}).start(({finished}) => setStatus(finished ? 'done' : 'cut'))}>
+        <Text>{status}</Text>
+      </Pressable>
+      <Pressable onPress={() => Animated.spring(slide, {toValue: to, stiffness: 90}).start()}><Text>go</Text></Pressable>
+      <Pressable onPress={() => Animated.timing(fade, {toValue: 0}).stop()}><Text>stop</Text></Pressable>
+      <View style={{opacity: fade, transform: [{translateX: slide.interpolate({inputRange: [0, 2], outputRange: [0, 50], extrapolate: 'clamp'})}]}} />
+      <View style={{backgroundColor: slide.interpolate({inputRange: [0, 1], outputRange: ['#000000', '#ff8000']})}} />
+    </View>
+  );
+}`;
+
+  const names = fn => fn.ops.map(op => op.name);
+
+  /** The slots: each one's type and initial value. */
+  function slotsOf(bytes) {
+    const {u32, tables, view} = readProgram(bytes);
+    const {offset, length} = tables.get(Table.slots);
+    return Array.from({length: length / 16}, (_, index) => ({
+      type: view.getUint8(offset + index * 16),
+      init: u32(offset + index * 16 + 8),
+    }));
+  }
+
+  /** The animation descriptors. */
+  function animsOf(bytes) {
+    const {u16, u32, tables, view} = readProgram(bytes);
+    const {offset, length} = tables.get(Table.anims);
+    return Array.from({length: length / 40}, (_, index) => {
+      const at = offset + index * 40;
+      return {
+        kind: view.getUint8(at),
+        easing: view.getUint8(at + 1),
+        flags: view.getUint8(at + 2),
+        target: u16(at + 4),
+        first: u16(at + 8),
+        count: u16(at + 10),
+        amount: u32(at + 12),
+        delayMs: u32(at + 16),
+        to: u32(at + 20),
+        params: [0, 1, 2, 3].map(param => u32(at + 24 + param * 4)),
+      };
+    });
+  }
+
+  /** The bindings. */
+  function bindingsOf(bytes) {
+    const {u16, tables, view} = readProgram(bytes);
+    const {offset, length} = tables.get(Table.bindings);
+    return Array.from({length: length / 4}, (_, index) => ({
+      kind: view.getUint8(offset + index * 4),
+      event: view.getUint8(offset + index * 4 + 1),
+      target: u16(offset + index * 4 + 2),
+    }));
+  }
+
+  it('keeps each animated value in a slot, and declares the values and their animations as needs', () => {
+    const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
+    const values = slotsOf(program).filter(
+      slot => slot.type === ValueType.avalue,
+    );
+    expect(values.map(slot => slot.init)).toEqual([
+      floatBits(0.5),
+      floatBits(0),
+    ]);
+
+    const {u16, u32} = readProgram(program);
+    const needs = Array.from({length: u16(20)}, (_, index) => ({
+      resource: u16(24 + 16 + index * 8),
+      amount: u32(24 + 16 + index * 8 + 4),
+    }));
+    expect(needs).toEqual([
+      {resource: Resource.animValues, amount: 2},
+      {resource: Resource.animations, amount: 2},
+    ]);
+    // A value's animation, and one more while a start cancels it.
+    expect(
+      regionsOf(program).find(region => region.kind === Region.anims),
+    ).toEqual({kind: Region.anims, count: 3, bytes: 60});
+  });
+
+  it('starts each animation as a leaf, its toValue held in the descriptor or passed in a register', () => {
+    const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
+    const anims = animsOf(program);
+    const slots = slotsOf(program);
+    const fade = slots.findIndex(slot => slot.type === ValueType.avalue);
+    expect(anims[0]).toEqual({
+      kind: AnimKind.timing,
+      easing: ENGINE_VALUES.get('ER_EASE_QUAD_OUT'),
+      flags: 0,
+      target: fade,
+      first: 0,
+      count: 0,
+      amount: 300,
+      delayMs: 20,
+      to: floatBits(1),
+      params: [0, 0, 0, 0],
+    });
+    expect(anims[1]).toMatchObject({
+      kind: AnimKind.spring,
+      flags: AnimFlag.toRegister,
+      target: fade + 1,
+      params: [floatBits(90), floatBits(18), floatBits(1), 0],
+    });
+
+    const functions = functionsOf(program);
+    const press = functions[0].ops.find(op => op.name === 'ASTART');
+    expect(press.bx).toBe(0);
+    expect(press.ext >>> 16).toBe(0xff);
+    const go = functions[1].ops.find(op => op.name === 'ASTART');
+    expect(go).toMatchObject({bx: 1, ext: NONE | (go.ext & 0xff0000)});
+    expect(go.ext >>> 16).not.toBe(0xff);
+    // The stop freezes the value where it is.
+    expect(names(functions[2])).toEqual(['AVGET', 'AVSET', 'RET']);
+  });
+
+  it('runs a completion as a helper, entered through a done function and called with finished', () => {
+    const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
+    const functions = functionsOf(program);
+    const done = functions.findIndex(fn => fn.kind === FunctionKind.animDone);
+    const helper = functions.findIndex(fn => fn.kind === FunctionKind.helper);
+    expect(functions[0].ops.find(op => op.name === 'ASTART').ext & 0xffff).toBe(
+      done,
+    );
+    expect(names(functions[done])).toEqual(['EVT', 'CALL', 'RET']);
+    expect(functions[done].ops[1].bx).toBe(helper);
+    // The helper comes after every caller, and requests the update its setState needs.
+    expect(helper).toBeGreaterThan(done);
+    expect(names(functions[helper])).toContain('NOT');
+
+    // The register stack holds the done function's frame and the helper's.
+    const {u32, tables} = readProgram(program);
+    const records = tables.get(Table.functions);
+    const cells = index => u32(records.offset + index * 16 + 12) & 0xff;
+    const stack = regionsOf(program).find(
+      region => region.kind === Region.stack,
+    );
+    expect(stack.count).toBeGreaterThanOrEqual(
+      3 + cells(done) + 3 + cells(helper),
+    );
+  });
+
+  it('binds a value straight, or through an interpolation onto numbers or colors', () => {
+    const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
+    const {u16, u32, tables, view} = readProgram(program);
+    const prop = field => ABI_PROPS.get(field).id;
+    const slots = slotsOf(program);
+    const fade = slots.findIndex(slot => slot.type === ValueType.avalue);
+    expect(
+      bindingsOf(program).filter(binding => binding.kind !== BindingKind.event),
+    ).toEqual([
+      {kind: BindingKind.animated, event: prop('opacity'), target: fade},
+      {
+        kind: BindingKind.interpolated,
+        event: prop('transform_translate_x'),
+        target: 0,
+      },
+      {
+        kind: BindingKind.interpolated,
+        event: prop('background_color'),
+        target: 1,
+      },
+    ]);
+
+    const {offset, length} = tables.get(Table.interps);
+    expect(length).toBe(2 * 72);
+    const record = index => {
+      const at = offset + index * 72;
+      return {
+        slot: u16(at),
+        points: view.getUint8(at + 2),
+        flags: view.getUint8(at + 3),
+        left: view.getUint8(at + 4),
+        right: view.getUint8(at + 5),
+        input: [u32(at + 8), u32(at + 12), u32(at + 16)],
+        output: [u32(at + 40), u32(at + 44), u32(at + 48)],
+      };
+    };
+    expect(record(0)).toEqual({
+      slot: fade + 1,
+      points: 2,
+      flags: 0,
+      left: ENGINE_VALUES.get('ER_EXTRAPOLATE_CLAMP'),
+      right: ENGINE_VALUES.get('ER_EXTRAPOLATE_CLAMP'),
+      input: [floatBits(0), floatBits(2), 0],
+      output: [floatBits(0), floatBits(50), 0],
+    });
+    expect(record(1)).toMatchObject({
+      flags: InterpFlag.color,
+      left: ENGINE_VALUES.get('ER_EXTRAPOLATE_EXTEND'),
+      output: [0xff000000, 0xffff8000, 0],
+    });
+  });
+
+  it('chains a sequence through done functions, and waits on a trailing delay with a delay leaf', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  const a = useAnimatedValue(0);
+  return (
+    <Pressable onPress={() => Animated.sequence([Animated.timing(a, {toValue: 1, duration: 100}), Animated.timing(a, {toValue: 0, duration: 100}), Animated.delay(250)]).start(() => setN(n + 1))}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const functions = functionsOf(program);
+    const anims = animsOf(program);
+    const dones = functions.flatMap((fn, index) =>
+      fn.kind === FunctionKind.animDone ? [index] : [],
+    );
+    // The completion's, the wait's, then the second step's.
+    expect(dones).toHaveLength(3);
+    const [completion, wait, second] = dones;
+    expect(functions[0].ops.find(op => op.name === 'ASTART').ext & 0xffff).toBe(
+      second,
+    );
+    expect(
+      functions[second].ops.find(op => op.name === 'ASTART').ext & 0xffff,
+    ).toBe(wait);
+    // An interrupted step calls the completion as not finished.
+    expect(names(functions[second]).slice(0, 3)).toEqual(['EVT', 'JT', 'CALL']);
+    const delay = functions[wait].ops.find(op => op.name === 'ASTART');
+    expect(delay.ext & 0xffff).toBe(completion);
+    expect(anims[delay.bx]).toMatchObject({
+      kind: AnimKind.timing,
+      target: NONE,
+      amount: 250,
+    });
+    // The wait's handle is kept where a stop of the sequence finds it.
+    expect(names(functions[wait])).toContain('SET32');
+  });
+
+  it('joins a spring and a longer delay as a parallel group', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  const a = useAnimatedValue(0);
+  return (
+    <Pressable onPress={() => Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.delay(500)]).start(() => setN(n + 1))}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const anims = animsOf(program);
+    expect(anims.map(anim => anim.kind)).toEqual([
+      AnimKind.parallel,
+      AnimKind.timing,
+      AnimKind.spring,
+    ]);
+    expect(anims[0]).toMatchObject({first: 1, count: 2});
+    expect(anims[1]).toMatchObject({target: NONE, amount: 500});
+    const start = functionsOf(program)[0].ops.find(op => op.name === 'ASTART');
+    expect(start.bx).toBe(0);
+  });
+
+  it('gives an app that only waits a running-animation table for its delay', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text, Animated} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  return (
+    <Pressable onPress={() => Animated.delay(250).start(() => setN(n + 1))}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const regions = regionsOf(program);
+    expect(regions.find(region => region.kind === Region.anims)).toEqual({
+      kind: Region.anims,
+      count: 17,
+      bytes: 340,
+    });
+    expect(
+      regions.find(region => region.kind === Region.events).count,
+    ).toBeGreaterThan(0);
+    const start = functionsOf(program)[0].ops.find(op => op.name === 'ASTART');
+    expect(animsOf(program)[start.bx]).toMatchObject({
+      target: NONE,
+      amount: 250,
+    });
+  });
+
+  it('sizes the event queue for an app whose values nothing starts', () => {
+    const src = `
+import {View, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const fade = useAnimatedValue(0.5);
+  return <View style={{opacity: fade}} />;
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    expect(
+      regionsOf(program).find(region => region.kind === Region.events),
+    ).toEqual({kind: Region.events, count: 2, bytes: 64});
+  });
+
+  it("fades a <TouchableOpacity> before the app's own handler runs", () => {
+    const src = `
+import {useState} from 'react';
+import {TouchableOpacity, Text} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  return (
+    <TouchableOpacity activeOpacity={0.4} onPressIn={() => setN(n + 1)}>
+      <Text>{n}</Text>
+    </TouchableOpacity>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const functions = functionsOf(program);
+    const anims = animsOf(program);
+    const pressIn = functions.find(
+      fn => fn.kind === ENGINE_VALUES.get('ER_EVENT_PRESS_IN'),
+    );
+    expect(names(pressIn)[0]).toBe('ASTART');
+    expect(names(pressIn)).toContain('SET32');
+    const fade = anims[pressIn.ops[0].bx];
+    expect(fade).toMatchObject({
+      kind: AnimKind.timing,
+      easing: ENGINE_VALUES.get('ER_EASE_QUAD_IN_OUT'),
+      amount: 0,
+      to: floatBits(0.4),
+    });
+    const pressOut = functions.find(
+      fn => fn.kind === ENGINE_VALUES.get('ER_EVENT_PRESS_OUT'),
+    );
+    expect(names(pressOut)).toEqual(['ASTART', 'RET']);
+    expect(anims[pressOut.ops[0].bx]).toMatchObject({to: floatBits(1)});
   });
 });
 

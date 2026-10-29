@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 0u
+#define ERB_FORMAT_MINOR 1u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -133,7 +133,8 @@ enum
     ERB_TABLE_TAPES = 15,
     ERB_TABLE_IMPORTS = 16,
     ERB_TABLE_INPUTS = 17,
-    ERB_TABLE_COUNT_ = 18,
+    ERB_TABLE_INTERPS = 18, /**< Since minor 1. */
+    ERB_TABLE_COUNT_ = 19,
 };
 
 /** @brief Record sizes, in bytes. */
@@ -155,6 +156,7 @@ enum
 #define ERB_STOP_SIZE 8u
 #define ERB_IMPORT_SIZE 8u
 #define ERB_INPUT_SIZE 4u
+#define ERB_INTERP_SIZE 72u
 
 /** @brief The strings table: a count, then one u32 byte offset per string. */
 #define ERB_STRINGS_COUNT_AT 0u
@@ -237,6 +239,19 @@ enum
 #define ERB_ANIM_PARAM1_AT 28u /**< Spring damping, decay deceleration, or bezier y1. */
 #define ERB_ANIM_PARAM2_AT 32u /**< Spring mass, or bezier x2. */
 #define ERB_ANIM_PARAM3_AT 36u /**< Spring velocity, or bezier y2. */
+
+/** @brief Interpolation: the animated value, its breakpoints, and the inputs then the outputs (f32, or ARGB). */
+#define ERB_INTERP_SLOT_AT 0u
+#define ERB_INTERP_POINT_COUNT_AT 2u
+#define ERB_INTERP_FLAGS_AT 3u
+#define ERB_INTERP_EXTRAPOLATE_LEFT_AT 4u
+#define ERB_INTERP_EXTRAPOLATE_RIGHT_AT 5u
+#define ERB_INTERP_INPUT_AT 8u
+#define ERB_INTERP_OUTPUT_AT 40u
+
+/** @brief Interpolation flag bits. */
+#define ERB_INTERP_FLAG_COLOR 0x01u /**< The outputs are ARGB8888 colors. */
+#define ERB_INTERP_FLAGS_KNOWN ERB_INTERP_FLAG_COLOR
 
 /** @brief The tapes table's header, a tape record, and the paints, gradients and stops it names. */
 #define ERB_TAPES_COUNT_AT 0u
@@ -347,6 +362,7 @@ enum
     ERB_BIND_QUERY = 2,    /**< event: ERResponderQuery; target: a query function for it. */
     ERB_BIND_ANIMATED = 3, /**< event: prop id; target: an animated-value slot. */
     ERB_BIND_TAPE = 4,     /**< target: a tape, committed when the node is built. */
+    ERB_BIND_INTERPOLATED = 5, /**< event: prop id; target: an interpolation. Since minor 1. */
 };
 
 /**

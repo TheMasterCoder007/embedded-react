@@ -59,7 +59,8 @@ const EXE = process.platform === 'win32' ? '.exe' : '';
 const fixture = name => join(HERE, 'fixtures', `${name}.jsx`);
 const demo = name => join(ROOT, 'demos', name, 'App.jsx');
 
-// `taps` is "x,y x,y ...", the same for both hosts.
+// `taps` is "x,y x,y ...", the same for both hosts. `settle` is how many ms the hosts run after the last tap
+// before they take the frame (500 when it is left out), so a scenario can sample an animation as it runs.
 const SCENARIOS = [
   {name: 'layout', file: fixture('layout'), screen: [240, 320]},
   {name: 'text', file: fixture('text'), screen: [240, 320]},
@@ -156,6 +157,161 @@ const SCENARIOS = [
     file: fixture('lists'),
     screen: [240, 320],
     taps: '20,92 20,76 160,20 204,20 20,60 28,20 28,20 72,20',
+  },
+  // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
+  // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
+  {name: 'animations', file: fixture('animations'), screen: [240, 320]},
+  {
+    name: 'anim-fade',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '28,23',
+    settle: 200,
+  },
+  // The second fade cancels the first, whose completion runs as not finished; the third starts from the second's.
+  {
+    name: 'anim-fade-again',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '28,23 28,23',
+    settle: 600,
+  },
+  {
+    name: 'anim-spring',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '74,23',
+    settle: 150,
+  },
+  {
+    name: 'anim-seq',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '120,23',
+    settle: 250,
+  },
+  {
+    name: 'anim-seq-done',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '120,23',
+    settle: 700,
+  },
+  {
+    name: 'anim-loop',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '166,23',
+    settle: 220,
+  },
+  {
+    name: 'anim-loop-done',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '166,23',
+    settle: 600,
+  },
+  // A fade and a sequence, both stopped mid-way.
+  {
+    name: 'anim-stop',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '28,23 120,23 212,23',
+    settle: 600,
+  },
+  {
+    name: 'anim-join',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '28,59',
+    settle: 500,
+  },
+  {
+    name: 'anim-join-done',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '28,59',
+    settle: 900,
+  },
+  // The wait's timing, then the stagger cuts it: its completion runs as not finished, so says nothing.
+  {
+    name: 'anim-wait',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '74,59',
+    settle: 300,
+  },
+  {
+    name: 'anim-wait-done',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '74,59',
+    settle: 600,
+  },
+  {
+    name: 'anim-stagger',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '120,59',
+    settle: 150,
+  },
+  {
+    name: 'anim-decay',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '166,59',
+    settle: 200,
+  },
+  {
+    name: 'anim-sleep',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '212,59',
+    settle: 400,
+  },
+  {
+    name: 'anim-held',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '28,95',
+    settle: 500,
+  },
+  // The endless chain, an empty sequence's completion at once, and a join stopped as it starts.
+  {
+    name: 'anim-ever',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '74,95 120,95 166,95',
+    settle: 400,
+  },
+  {
+    name: 'anim-twice',
+    file: fixture('animations'),
+    screen: [240, 320],
+    taps: '212,95',
+    settle: 420,
+  },
+  {name: 'interpolate', file: fixture('interpolate'), screen: [240, 320]},
+  {
+    name: 'interpolate-spin',
+    file: fixture('interpolate'),
+    screen: [240, 320],
+    settle: 250,
+  },
+  // A press of each <TouchableOpacity>, the frame taken while the second fades back.
+  {
+    name: 'interpolate-press',
+    file: fixture('interpolate'),
+    screen: [240, 320],
+    taps: '80,174 80,218',
+    settle: 60,
+  },
+  {
+    name: 'interpolate-pressed',
+    file: fixture('interpolate'),
+    screen: [240, 320],
+    taps: '80,174 80,174',
+    settle: 500,
   },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
@@ -302,13 +458,21 @@ function compareScenario(scenario, packagePath) {
   const cFrame = join(OUT_DIR, `${scenario.name}.c.raw`);
   const vmFrame = join(OUT_DIR, `${scenario.name}.vm.raw`);
   const taps = scenario.taps || '';
-  run(host('erb-parity-c'), [cFrame, String(width), String(height), taps]);
+  const settle = String(scenario.settle ?? 500);
+  run(host('erb-parity-c'), [
+    cFrame,
+    String(width),
+    String(height),
+    taps,
+    settle,
+  ]);
   run(host('erb-parity-vm'), [
     vmFrame,
     String(width),
     String(height),
     packagePath,
     taps,
+    settle,
   ]);
 
   const c = readFrame(cFrame);
@@ -350,7 +514,7 @@ for (const dir of [OUT_DIR, APPS_DIR]) {
 let failed = 0;
 let passed = 0;
 for (const scenario of scenarios) {
-  const label = `${scenario.name} @ ${scenario.screen.join('x')}${scenario.taps ? ` taps[${scenario.taps}]` : ''}`;
+  const label = `${scenario.name} @ ${scenario.screen.join('x')}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
   try {
     const {appDir, packagePath, report} = await compileScenario(scenario);
     buildHosts(appDir);

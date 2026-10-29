@@ -25,6 +25,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {
+  ANIM_ENTRY_SIZE,
   EVENT_SIZE,
   FRAME_CELLS,
   LIST_HEADER_SIZE,
@@ -79,6 +80,7 @@ export class Arena {
   private readonly handles: Slot[] = [];
   private dirtyBits = 0;
   private timers = 0;
+  private anims = 0;
   private events = 0;
   private laidOut: ProgramRegion[] | null = null;
 
@@ -164,17 +166,27 @@ export class Arena {
   }
 
   /**
-   * Gives the arena an event queue, which holds the effects an update pass queues.
+   * Gives the arena a running-animation table, which the trees ASTART starts are laid out in.
    *
-   * @param count  Events it holds.
+   * @param count  Entries it holds.
    */
-  eventQueue(count: number): void {
-    this.events = count;
+  animTable(count: number): void {
+    this.anims = count;
   }
 
   /**
-   * Lays the slots out: values, the dirty bits, strings, list pools, node handles, then the timer table. Code may
-   * name slots from here on.
+   * Gives the arena's event queue room for more events: the effects an update pass queues, or the animation
+   * completions that arrive while a function runs.
+   *
+   * @param count  Events it holds besides.
+   */
+  eventQueue(count: number): void {
+    this.events += count;
+  }
+
+  /**
+   * Lays the slots out: values, the dirty bits, strings, list pools, node handles, then the timer and animation
+   * tables. Code may name slots from here on.
    */
   layOut(): void {
     const regions: ProgramRegion[] = [];
@@ -213,6 +225,11 @@ export class Arena {
     if (this.timers) {
       const bytes = this.timers * TIMER_SIZE;
       regions.push({kind: Region.timers, count: this.timers, offset, bytes});
+      offset += bytes;
+    }
+    if (this.anims) {
+      const bytes = this.anims * ANIM_ENTRY_SIZE;
+      regions.push({kind: Region.anims, count: this.anims, offset, bytes});
       offset += bytes;
     }
 

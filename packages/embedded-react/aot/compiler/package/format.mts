@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 0;
+export const FORMAT_MINOR = 1;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -60,6 +60,8 @@ export const TEMPLATE_SIZE = 8;
 export const NODE_SIZE = 12;
 export const BINDING_SIZE = 4;
 export const FUNCTION_SIZE = 16;
+export const ANIM_SIZE = 40;
+export const INTERP_SIZE = 72;
 
 /** Engine resources a package names in its needs, besides nodes. */
 export const Resource = {
@@ -92,6 +94,7 @@ export const Table = {
   tapes: 15,
   imports: 16,
   inputs: 17,
+  interps: 18,
 } as const;
 
 /** Arena region kinds, written in this order. */
@@ -111,8 +114,9 @@ export const Region = {
 /** Cells each VM frame keeps besides its registers. */
 export const FRAME_CELLS = 3;
 
-/** Bytes a timer takes in the timer table, and an event in the event queue. */
+/** Bytes a timer takes in the timer table, a running animation in the anims region, and an event in the queue. */
 export const TIMER_SIZE = 16;
+export const ANIM_ENTRY_SIZE = 20;
 export const EVENT_SIZE = 32;
 
 /** Bytes a list pool keeps before its rows: the row count. */
@@ -146,7 +150,48 @@ export const BindingKind = {
   query: 2,
   animated: 3,
   tape: 4,
+  interpolated: 5,
 } as const;
+
+/** Animation descriptor kinds. */
+export const AnimKind = {
+  timing: 1,
+  spring: 2,
+  decay: 3,
+  sequence: 4,
+  parallel: 5,
+  stagger: 6,
+  loop: 7,
+} as const;
+
+/** Animation descriptor flag bits. */
+export const AnimFlag = {
+  loop: 0x01,
+  loopReverse: 0x02,
+  toRegister: 0x04,
+} as const;
+
+/** Interpolation flag bits. */
+export const InterpFlag = {
+  color: 0x01,
+} as const;
+
+/** Each ERAnimProp an animated value drives, as the ERProps field its ABI prop is. */
+export const ANIM_PROP_FIELDS: ReadonlyMap<string, string> = new Map([
+  ['ER_PROP_BACKGROUND_COLOR', 'background_color'],
+  ['ER_PROP_OPACITY', 'opacity'],
+  ['ER_PROP_COLOR', 'color'],
+  ['ER_PROP_TRANSLATE_X', 'transform_translate_x'],
+  ['ER_PROP_TRANSLATE_Y', 'transform_translate_y'],
+  ['ER_PROP_SCALE_X', 'transform_scale_x'],
+  ['ER_PROP_SCALE_Y', 'transform_scale_y'],
+  ['ER_PROP_ROTATE_Z', 'transform_rotate_z'],
+  ['ER_PROP_ROTATE_X', 'transform_rotate_x'],
+  ['ER_PROP_ROTATE_Y', 'transform_rotate_y'],
+  ['ER_PROP_SWITCH_THUMB', 'switch_value'],
+  ['ER_PROP_ARC_VALUE', 'arc_value'],
+  ['ER_PROP_ARC_VALUE_START', 'arc_value_start'],
+]);
 
 /** Function kinds. Below `query`, a kind is the EREventType its handler is bound to. */
 export const FunctionKind = {
@@ -664,4 +709,21 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_EVENT_FOCUS', 17],
   ['ER_EVENT_BLUR', 18],
   ['ER_EVENT_VALUE_CHANGE', 19],
+  ['ER_EASE_LINEAR', 0],
+  ['ER_EASE_EASE', 1],
+  ['ER_EASE_EASE_IN', 2],
+  ['ER_EASE_EASE_OUT', 3],
+  ['ER_EASE_EASE_IN_OUT', 4],
+  ['ER_EASE_QUAD_IN', 5],
+  ['ER_EASE_QUAD_OUT', 6],
+  ['ER_EASE_QUAD_IN_OUT', 7],
+  ['ER_EASE_CUBIC_IN', 8],
+  ['ER_EASE_CUBIC_OUT', 9],
+  ['ER_EASE_CUBIC_IN_OUT', 10],
+  ['ER_EASE_BOUNCE_OUT', 11],
+  ['ER_EASE_ELASTIC_OUT', 12],
+  ['ER_EASE_BEZIER', 13],
+  ['ER_EXTRAPOLATE_EXTEND', 0],
+  ['ER_EXTRAPOLATE_CLAMP', 1],
+  ['ER_EXTRAPOLATE_IDENTITY', 2],
 ]);
