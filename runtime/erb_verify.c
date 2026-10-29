@@ -2388,12 +2388,20 @@ static bool check_debug(ErbProgram* program, ErbError* error)
     for (uint32_t at = 0; at < length;)
     {
         const uint8_t* table = debug + at;
-        const uint32_t table_length = length - at < ERB_DEBUG_HEADER_SIZE ? 0u : erb_u32(table + ERB_DEBUG_LENGTH_AT);
-        const uint16_t panel = table_length ? erb_u16(table + ERB_DEBUG_PANEL_AT) : ERB_NONE;
-        if (table_length < ERB_DEBUG_HEADER_SIZE || table_length > length - at || !erb_aligned4(table_length)
-            || (panel != ERB_NONE && panel >= panel_count))
+        if (length - at < ERB_DEBUG_HEADER_SIZE)
         {
-            return fail(error, ERB_ERR_DEBUG, "a table past the section, or for a panel the package doesn't declare");
+            return fail(error, ERB_ERR_DEBUG, "a table past the section");
+        }
+        const uint32_t table_length = erb_u32(table + ERB_DEBUG_LENGTH_AT);
+        if (table_length < ERB_DEBUG_HEADER_SIZE || table_length > length - at || !erb_aligned4(table_length))
+        {
+            return fail(error, ERB_ERR_DEBUG, "a table past the section");
+        }
+        /* Read only once the whole header is known to be in the section. */
+        const uint16_t panel = erb_u16(table + ERB_DEBUG_PANEL_AT);
+        if (panel != ERB_NONE && panel >= panel_count)
+        {
+            return fail(error, ERB_ERR_DEBUG, "a table for a panel the package doesn't declare");
         }
         if (panel == ERB_NONE || panel == program->panel)
         {
