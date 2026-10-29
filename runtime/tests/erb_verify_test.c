@@ -282,6 +282,13 @@ static void test_panel_tables(void)
     s_pkg.extra_table_id = ERB_TABLE_CODE;
     s_pkg.extra_table_panel = 1u;
     EXPECT(ERB_ERR_TABLE, "a required table only another panel has");
+    two_panels()->panel_field_zero = true;
+    s_pkg.minor = ERB_FORMAT_MINOR_PANELS - 1u;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_OK, "an older package's tables on its second panel");
+    two_panels()->panel_field_zero = true;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_ERR_TABLE, "panel 0's tables only, on the second panel");
 }
 
 static void test_strings(void)

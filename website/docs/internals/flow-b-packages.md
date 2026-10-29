@@ -106,7 +106,8 @@ Then, in order:
 - **Table directory**, 12 bytes each: `id u16`, `panel u16`, `offset u32`, `length u32`. `panel`
   (since minor 4) is the panel the table is for, or `0xFFFF` for every panel. A panel sees at most one
   table of each id, its own or the shared one, and the runtime skips the rest. Panels whose copies of a
-  table are the same list one entry each, at the same bytes.
+  table are the same list one entry each, at the same bytes. Before minor 4 the field was reserved, and
+  every table is every panel's.
 
 **The engine ABI level** is a number the engine bumps when it adds a prop, node type, event, animated
 property, or enum value, and it raises its oldest supported level when one is removed or changes

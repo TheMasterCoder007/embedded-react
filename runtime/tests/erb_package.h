@@ -280,6 +280,7 @@ typedef struct
     uint16_t extra_table_id;     /**< Also list a table with this id (0: none). */
     uint16_t extra_table_panel;  /**< The panel the extra table is for (ERB_NONE: every panel). */
     bool per_panel;              /**< List each table once per panel, every panel's at the same bytes. */
+    bool panel_field_zero;       /**< Write 0 in each table's panel field, as a package before minor 4 did. */
     bool overlap_tables;         /**< Point the code table at the types table. */
 } TPkg;
 
@@ -727,7 +728,7 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
     }
     for (uint32_t listing = 0; listing < listings; listing++)
     {
-        const uint16_t panel = pkg->per_panel ? (uint16_t)listing : ERB_NONE;
+        const uint16_t panel = pkg->per_panel ? (uint16_t)listing : pkg->panel_field_zero ? 0u : ERB_NONE;
         for (uint32_t id = 1; id < ERB_TABLE_COUNT_; id++)
         {
             if (!present[id])

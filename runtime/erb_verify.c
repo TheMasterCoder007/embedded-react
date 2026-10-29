@@ -508,12 +508,13 @@ static bool check_directory(ErbProgram* program, ErbError* error)
     const uint16_t table_count = erb_u16(section + ERB_HEADER_TABLE_COUNT_AT);
     const uint8_t* directory = section + ERB_HEADER_SIZE + panel_count * ERB_PANEL_SIZE + need_count * ERB_NEED_SIZE;
     const uint32_t data_start = (uint32_t)(directory - section) + table_count * ERB_DIRECTORY_SIZE;
+    const bool has_panels = erb_u16(section + ERB_HEADER_FORMAT_MINOR_AT) >= ERB_FORMAT_MINOR_PANELS;
 
     for (uint16_t index = 0; index < table_count; index++)
     {
         const uint8_t* entry = directory + index * ERB_DIRECTORY_SIZE;
         const uint16_t id = erb_u16(entry + ERB_DIRECTORY_ID_AT);
-        const uint16_t panel = erb_u16(entry + ERB_DIRECTORY_PANEL_AT);
+        const uint16_t panel = has_panels ? erb_u16(entry + ERB_DIRECTORY_PANEL_AT) : ERB_NONE;
         const uint32_t offset = erb_u32(entry + ERB_DIRECTORY_OFFSET_AT);
         const uint32_t length = erb_u32(entry + ERB_DIRECTORY_LENGTH_AT);
         if (id == 0u || id >= ERB_TABLE_COUNT_)
