@@ -21,7 +21,11 @@
  * slots in the arena. Handlers, timer callbacks, effects, the boot function and the update function are
  * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, as app_update() does, sets
  * the props of a node that reads only boot values once, in its first pass, and queues the effects. What isn't
- * lowered yet (lists, animations, responders, drawings, the keyboard) is refused with what it is.
+ * lowered yet (animations, responders, drawings, the keyboard) is refused with what it is.
+ *
+ * A list is a pool of rows in the arena. Its `.map` is a row template, built once per row in the update's first
+ * pass, as er_app_build() builds every row; a row shows while the list holds it. Rows whose nodes and handlers
+ * are the same share a template, and a row handler reads its item through the row it was built for.
  *
  * Effects run as the C output runs them. An effect runs inside app_update(), so the state it sets shows at
  * the next app_update(), not at once. The VM runs a pass whenever state changed, so a pass that only an
@@ -76,6 +80,7 @@ import {
 import {ProgramTables} from './tables.mts';
 import type {Program as BabelProgram, Node} from '@babel/types';
 import type {Slot} from './arena.mts';
+import type {Register} from './bytecode.mts';
 import type {CType, InputText, ProgramSlots} from './codegen.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
@@ -86,12 +91,14 @@ import type {IrCallback, IrStmt} from '../ir/statements.mts';
 import type {IrElement, IrNode, IrWire} from '../ir/nodes.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {TextSpan} from '../style-text.mts';
-import type {ScalarState} from '../types.mts';
+import type {ListState, ScalarState, StateRecord} from '../types.mts';
 import type {
   Program,
   ProgramBinding,
   ProgramFunction,
   ProgramPropEntry,
+  ProgramRow,
+  ProgramTemplate,
   ProgramTemplateNode,
 } from './writer.mts';
 
@@ -107,6 +114,24 @@ interface HandlerFunction {
   name: string;
   /** For a <TextInput>'s onChangeText, the input it reads. */
   input: InputText | undefined;
+  /** Bound in a list row: entered with the row it was built for. */
+  inRow: boolean;
+}
+
+/** A node in a list row that code reaches: its handle array, and its row. */
+interface RowHandle {
+  array: Slot;
+  row: number;
+}
+
+/** A `.map` over a list: where its rows are built, and each row's template. */
+interface Pool {
+  list: ListState;
+  rows: IrElement[];
+  parent: IrNode;
+  /** The node the rows go before, or null for the end. */
+  anchor: IrNode | null;
+  templates: number[];
 }
 
 /** A dep-driven effect's copy of one dep, and the type C keeps it in. */
@@ -132,8 +157,14 @@ interface Lowering {
   app: IrApp;
   slots: ProgramSlots;
   images: ReadonlySet<string>;
-  /** Each node handle code reaches, by node. */
+  /** Each node handle code reaches, by node, outside the list rows. */
   handles: Map<IrNode, Slot>;
+  rowHandles: Map<IrNode, RowHandle>;
+  /** Each list's row layout. */
+  rows: ProgramRow[];
+  pools: Pool[];
+  /** The row templates, after the root. */
+  templates: ProgramTemplate[];
   /** The buffer a <TextInput>'s onChangeText reads its text into. */
   inputText: Slot | null;
   /** Handlers by name and event, in function order. */
@@ -161,6 +192,12 @@ const WIRING_USES: Record<IrWire['kind'], string> = {
   vectorTables: '<Svg>',
   stateDrivenVector: '<Svg>',
 };
+
+/** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes, the row fields. */
+const MAX_U16 = 0xffff;
+
+/** The most fields a row has: ROWGET names one in a byte. */
+const MAX_ROW_FIELDS = 255;
 
 /** The span fields a TextSpan spells, in its ABI ids' order. */
 const SPAN_FIELDS = [
@@ -311,15 +348,17 @@ function stringLocals(stmts: IrStmt[], found: Map<string, number>): void {
 }
 
 /**
- * Every state a statement list sets.
+ * Every state and list a statement list sets.
  *
  * @param stmts  The statements.
  * @param found  Collects the states.
  */
-function statesSet(stmts: IrStmt[], found: Set<ScalarState>): void {
+function statesSet(stmts: IrStmt[], found: Set<StateRecord>): void {
   for (const stmt of stmts) {
     if (stmt.kind === 'setState' || stmt.kind === 'setStateText') {
       found.add(stmt.state);
+    } else if ('list' in stmt) {
+      found.add(stmt.list);
     } else if (stmt.kind === 'if') {
       statesSet(stmt.consequent, found);
       statesSet(stmt.alternate ?? [], found);
@@ -386,6 +425,77 @@ function bodies(app: IrApp): IrStmt[][] {
 }
 
 /**
+ * A state's slot: a scalar's own, or a list's pool.
+ *
+ * @param state  The state.
+ * @param slots  The program's slots.
+ *
+ * @returns The slot.
+ */
+const stateSlotOf = (state: StateRecord, slots: ProgramSlots): Slot =>
+  state.kind === 'list'
+    ? slots.lists.get(state)!.slot
+    : slots.states.get(state)!;
+
+/**
+ * The first node an element builds.
+ *
+ * @param element  The element.
+ *
+ * @returns The node.
+ */
+const firstNode = (element: IrElement): IrNode =>
+  element.kind === 'component' ? firstNode(element.root) : element.node;
+
+/**
+ * Every `.map` over a list under an element, in tree order, with the node its rows go under and the one they go
+ * before. A list inside a list's row is refused.
+ *
+ * @param element  The element.
+ * @param found  Collects the pools.
+ */
+function poolsOf(element: IrElement, found: Pool[]): void {
+  if (element.kind === 'component') {
+    poolsOf(element.root, found);
+    return;
+  }
+  const {node} = element;
+  node.children.forEach((child, index) => {
+    if (child.kind === 'element') {
+      poolsOf(child.element, found);
+    } else if (child.kind === 'conditional') {
+      branchElements(child).forEach(branch => poolsOf(branch, found));
+    } else {
+      for (const row of child.rows) {
+        const nested = nodesOf(row).find(rowNode =>
+          rowNode.children.some(rowChild => rowChild.kind === 'pool'),
+        );
+        if (nested) {
+          notYetAt('a list inside a list row', nested.loc);
+        }
+      }
+      // The rows go before the next node the parent builds itself.
+      const after = node.children
+        .slice(index + 1)
+        .flatMap(sibling =>
+          sibling.kind === 'element'
+            ? [sibling.element]
+            : sibling.kind === 'conditional'
+              ? branchElements(sibling)
+              : [],
+        );
+      found.push({
+        list: child.list,
+        rows: child.rows,
+        parent: node,
+        anchor: after.length ? firstNode(after[0]) : null,
+        templates: [],
+      });
+    }
+  });
+}
+
+/**
  * Plans every slot the program uses, then lays the arena out.
  *
  * @param app  The app.
@@ -400,7 +510,15 @@ function planSlots(
   caps: ResolvedOptions['caps'],
 ): Pick<
   Lowering,
-  'slots' | 'handles' | 'inputText' | 'requested' | 'once' | 'effects'
+  | 'slots'
+  | 'handles'
+  | 'rowHandles'
+  | 'rows'
+  | 'pools'
+  | 'inputText'
+  | 'requested'
+  | 'once'
+  | 'effects'
 > {
   const {listStrCap} = caps;
   const {out} = app;
@@ -409,6 +527,7 @@ function planSlots(
     arena,
     tables,
     states: new Map(),
+    lists: new Map(),
     refs: new Map(),
     boot: new Map(),
     stringLocals: new Map(),
@@ -456,6 +575,59 @@ function planSlots(
       arena.track(slot);
     }
     slots.states.set(state, slot);
+  }
+
+  // A list is a pool of rows, empty at load; the boot function appends its first items. Each row field is
+  // 4-aligned, and a string field holds what C's char array does.
+  const rows: ProgramRow[] = [];
+  for (const state of app.state) {
+    if (state.kind !== 'list') {
+      continue;
+    }
+    if (!state.struct.fields.length) {
+      notYet(`list state "${state.name}", whose items have no fields`);
+    }
+    if (state.struct.fields.length > MAX_ROW_FIELDS) {
+      throw aotError(
+        `AOT: list state "${state.name}" has ${state.struct.fields.length} fields, but a package row holds ${MAX_ROW_FIELDS}`,
+        'give the items fewer fields.',
+      );
+    }
+    let size = 0;
+    const fields = state.struct.fields.map(field => {
+      const cap = field.kind === 'string' ? listStrCap - 1 : 0;
+      const entry = {type: ValueType[field.kind], cap, offset: size};
+      size += field.kind === 'string' ? (cap + 1 + 3) & ~3 : 4;
+      return entry;
+    });
+    if (size > MAX_U16) {
+      throw aotError(
+        `AOT: a row of list state "${state.name}" takes ${size} bytes, but a package row holds ${MAX_U16 - 3}`,
+        'lower ER_AOT_LIST_STR_CAP (the listStrCap option), or give the items fewer text fields.',
+      );
+    }
+    const slot = arena.list(rows.length, size, state.cap);
+    rows.push({size, fields});
+    if (state.isWatched) {
+      arena.track(slot);
+    }
+    // An appended item's text is built in a buffer of its own, then copied into the row.
+    const buffers = new Map(
+      state.struct.fields
+        .filter(field => field.kind === 'string')
+        .map(field => [
+          field.key,
+          arena.slot(ValueType.string, undefined, listStrCap - 1),
+        ]),
+    );
+    slots.lists.set(state, {slot, buffers});
+  }
+  const fieldCount = rows.reduce((count, row) => count + row.fields.length, 0);
+  if (fieldCount > MAX_U16) {
+    throw aotError(
+      `AOT: the lists have ${fieldCount} fields in all, but a package holds ${MAX_U16}`,
+      'use fewer lists, or give their items fewer fields.',
+    );
   }
 
   for (const ref of app.refs) {
@@ -551,8 +723,36 @@ function planSlots(
     node.wiring.some(
       wire => wire.kind === 'event' && wire.event === 'ER_EVENT_CHANGE_TEXT',
     );
+  const reached = (node: IrNode): boolean =>
+    isStateDriven(node) || isSetOnce(node) || readsInput(node);
+
+  // A row's node keeps its handle in an array by the row, one array for each place in the row that needs one.
+  const pools: Pool[] = [];
+  poolsOf(app.root, pools);
+  const rowHandles = new Map<IrNode, RowHandle>();
+  for (const pool of pools) {
+    const arrays: Slot[] = [];
+    pool.rows.forEach((rowElement, row) =>
+      nodesOf(rowElement).forEach((node, place) => {
+        if (readsInput(node)) {
+          notYetAt('onChangeText in a list row', node.loc);
+        }
+        if (reached(node)) {
+          arrays[place] ??= arena.slot(ValueType.node, 0, pool.list.cap);
+          rowHandles.set(node, {array: arrays[place], row});
+        }
+      }),
+    );
+  }
+
+  // The rows are built under their parent, before the node after them.
+  const builtUnder = new Set(
+    pools.flatMap(pool =>
+      pool.anchor ? [pool.parent, pool.anchor] : [pool.parent],
+    ),
+  );
   for (const node of nodes) {
-    if (isStateDriven(node) || isSetOnce(node) || readsInput(node)) {
+    if (!rowHandles.has(node) && (reached(node) || builtUnder.has(node))) {
       handles.set(node, arena.slot(ValueType.node));
     }
   }
@@ -571,19 +771,21 @@ function planSlots(
     : null;
   const hasEffects = out.depEffects.length > 0 || out.mountEffects.length > 0;
   const once =
-    hasEffects || nodes.some(node => isStateDriven(node) || isSetOnce(node))
+    hasEffects ||
+    pools.length ||
+    nodes.some(node => isStateDriven(node) || isSetOnce(node))
       ? arena.track(arena.slot(ValueType.bool))
       : null;
 
   // A state an effect sets that a node reads waits for the next app_update() in a pending flag.
-  const effectWrites = new Set<ScalarState>();
+  const effectWrites = new Set<StateRecord>();
   for (const effect of out.depEffects) {
     statesSet(effect.body, effectWrites);
     statesSet(effect.cleanup ?? [], effectWrites);
   }
   const pending = new Map<Slot, Slot>();
   for (const state of effectWrites) {
-    const slot = slots.states.get(state)!;
+    const slot = stateSlotOf(state, slots);
     if (slot.flags & SlotFlag.tracked) {
       pending.set(slot, arena.slot(ValueType.bool));
     }
@@ -611,6 +813,9 @@ function planSlots(
   return {
     slots,
     handles,
+    rowHandles,
+    rows,
+    pools,
     inputText,
     requested,
     once,
@@ -664,12 +869,14 @@ function constantProps(node: IrNode, lowering: Lowering): ProgramPropEntry[] {
 /**
  * The handler function an event on a node runs, made the first time. A handler bound to two events is one
  * function per event, since a function's kind is the event it is entered with, and an onChangeText one per
- * input, since it reads its own.
+ * input, since it reads its own. Each row has its own handler, as C has; rows whose handlers have the same
+ * code share one function, so they can share a template.
  *
  * @param name  The handler.
  * @param eventName  The event, an ER_EVENT_* name.
  * @param node  The node it is bound to.
  * @param lowering  The program being lowered.
+ * @param inRow  Whether the node is in a list row.
  *
  * @returns The function's index.
  */
@@ -678,13 +885,8 @@ function handlerFunction(
   eventName: string,
   node: IrNode,
   lowering: Lowering,
+  inRow: boolean,
 ): number {
-  const readsInput = eventName === 'ER_EVENT_CHANGE_TEXT';
-  const key = `${name} ${eventName}${readsInput ? ` ${node.id}` : ''}`;
-  const existing = lowering.handlers.get(key);
-  if (existing) {
-    return existing.index;
-  }
   // A PanResponder's handlers are wired as a responder, not by name.
   const handler = lowering.app.out.handlers.find(
     candidate => candidate.kind !== 'panEvent' && candidate.name === name,
@@ -695,35 +897,46 @@ function handlerFunction(
   if (handler.kind === 'pressFade') {
     return notYet('the press fade of a <TouchableOpacity>');
   }
-  const index = lowering.handlers.size;
-  lowering.handlers.set(key, {
-    index,
+  const readsInput = eventName === 'ER_EVENT_CHANGE_TEXT';
+  const made: Omit<HandlerFunction, 'index'> = {
     callback: handler.callback,
     event: ENGINE_VALUES.get(eventName)!,
     name,
     input: readsInput
       ? {node: lowering.handles.get(node)!, text: lowering.inputText!}
       : undefined,
-  });
+    inRow,
+  };
+  const key = inRow
+    ? `row ${JSON.stringify(handlerBody({...made, index: NONE}, lowering))}`
+    : `${name} ${eventName}${readsInput ? ` ${node.id}` : ''}`;
+  const existing = lowering.handlers.get(key);
+  if (existing) {
+    return existing.index;
+  }
+  const index = lowering.handlers.size;
+  lowering.handlers.set(key, {...made, index});
   return index;
 }
 
 /**
  * An element and everything under it as template nodes, each before its children. A conditional's branches
- * are all built, and the update shows the chosen one. What a node needs that the package output can't lower
- * yet is refused at the node's element.
+ * are all built, and the update shows the chosen one. A list's rows are row templates of their own. What a node
+ * needs that the package output can't lower yet is refused at the node's element.
  *
  * @param element  The element.
  * @param lowering  The program being lowered.
  * @param nodes  Collects the template nodes.
+ * @param inRow  Whether the element is a list row's.
  */
 function templateNodes(
   element: IrElement,
   lowering: Lowering,
   nodes: ProgramTemplateNode[],
+  inRow = false,
 ): void {
   if (element.kind === 'component') {
-    templateNodes(element.root, lowering, nodes);
+    templateNodes(element.root, lowering, nodes, inRow);
     return;
   }
 
@@ -736,7 +949,13 @@ function templateNodes(
         bindings.push({
           kind: BindingKind.event,
           event: ENGINE_VALUES.get(wire.event)!,
-          target: handlerFunction(wire.handler, wire.event, node, lowering),
+          target: handlerFunction(
+            wire.handler,
+            wire.event,
+            node,
+            lowering,
+            inRow,
+          ),
         });
       } else if (wire.kind !== 'ref') {
         // A ref needs nothing itself; the code that reads one is refused on its own.
@@ -749,11 +968,13 @@ function templateNodes(
         ? [child.element]
         : child.kind === 'conditional'
           ? branchElements(child)
-          : notYet('lists of state'),
+          : [],
     );
 
     // A node the update sets starts with no props, as er_app_build() leaves it.
-    const handle = lowering.handles.get(node);
+    const handle = inRow
+      ? lowering.rowHandles.get(node)?.array
+      : lowering.handles.get(node);
     nodes.push({
       type: ENGINE_VALUES.get(node.type)!,
       children: children.length,
@@ -772,7 +993,39 @@ function templateNodes(
   }
 
   for (const child of children) {
-    templateNodes(child, lowering, nodes);
+    templateNodes(child, lowering, nodes, inRow);
+  }
+}
+
+/**
+ * Each list row's template. Rows whose nodes and bindings are the same share one.
+ *
+ * @param lowering  The program being lowered.
+ */
+function rowTemplates(lowering: Lowering): void {
+  const made = new Map<string, number>();
+  for (const pool of lowering.pools) {
+    pool.templates = pool.rows.map(row => {
+      const first = lowering.bindings.length;
+      const nodes: ProgramTemplateNode[] = [];
+      templateNodes(row, lowering, nodes, true);
+      const key = JSON.stringify({
+        nodes: nodes.map(node => ({
+          ...node,
+          bindings: node.bindingCount ? node.bindings - first : 0,
+        })),
+        bindings: lowering.bindings.slice(first),
+      });
+      const existing = made.get(key);
+      if (existing !== undefined) {
+        lowering.bindings.length = first;
+        return existing;
+      }
+      // The root template is first, so a row template's index is its place after it.
+      const index = lowering.templates.push({kind: TemplateKind.row, nodes});
+      made.set(key, index);
+      return index;
+    });
   }
 }
 
@@ -855,11 +1108,70 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
     fn.abc('SPANS', spans.length);
   }
 
-  codegen.scoped(() => {
-    const handle = fn.register('node');
+  codegen.scoped(() =>
+    fn.abc('COMMIT', nodeHandle(codegen, node, lowering).index),
+  );
+}
+
+/**
+ * A node's handle: from its slot, or a list row's from its handle array.
+ *
+ * @param codegen  The function's codegen.
+ * @param node  The node.
+ * @param lowering  The program being lowered.
+ *
+ * @returns A node register.
+ */
+function nodeHandle(
+  codegen: Codegen,
+  node: IrNode,
+  lowering: Lowering,
+): Register {
+  const {fn} = codegen;
+  const handle = fn.register('node');
+  const inRow = lowering.rowHandles.get(node);
+  if (inRow) {
+    fn.abc(
+      'GETNI',
+      handle.index,
+      codegen.load('int', inRow.row).index,
+      0,
+      inRow.array.index,
+    );
+  } else {
     fn.abx('GET64', handle.index, lowering.handles.get(node)!.index);
-    fn.abc('COMMIT', handle.index);
-  });
+  }
+  return handle;
+}
+
+/**
+ * Builds every list row, in order, under its parent and before the node after it, as er_app_build() builds them.
+ *
+ * @param codegen  The update function's codegen.
+ * @param lowering  The program being lowered.
+ */
+function buildRows(codegen: Codegen, lowering: Lowering): void {
+  const {fn} = codegen;
+  for (const pool of lowering.pools) {
+    codegen.scoped(() => {
+      const parent = nodeHandle(codegen, pool.parent, lowering);
+      // BUILD before the parent itself puts the row last.
+      const before = pool.anchor
+        ? nodeHandle(codegen, pool.anchor, lowering)
+        : parent;
+      pool.templates.forEach((template, row) =>
+        codegen.scoped(() =>
+          fn.abc(
+            'BUILD',
+            fn.register('node').index,
+            parent.index,
+            before.index,
+            template | (codegen.load('int', row).index << 16),
+          ),
+        ),
+      );
+    });
+  }
 }
 
 /**
@@ -978,12 +1290,13 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     fn.place(real);
   }
 
-  if (setOnce.length) {
-    whenDirty(fn, [lowering.once!], () =>
+  if (setOnce.length || lowering.pools.length) {
+    whenDirty(fn, [lowering.once!], () => {
+      buildRows(codegen, lowering);
       setOnce.forEach(node =>
         located(node, () => setNode(codegen, node, lowering)),
-      ),
-    );
+      );
+    });
   }
 
   for (const node of updated) {
@@ -991,11 +1304,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
       // A node that reads something no state write flags (a ref, the clock) is set on every pass.
       const reads = nodeReads(node);
       const bits = reads
-        ? [...reads].map(state =>
-            state.kind === 'list'
-              ? notYet('lists of state')
-              : lowering.slots.states.get(state)!,
-          )
+        ? [...reads].map(state => stateSlotOf(state, lowering.slots))
         : [];
       if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
         whenDirty(
@@ -1081,12 +1390,14 @@ function handlerBody(
   lowering: Lowering,
 ): ProgramFunction {
   const fn = new FunctionBuilder(handler.event, `handler ${handler.name}`);
-  const codegen = new Codegen(fn, lowering.slots, {input: handler.input});
+  // A row's handler is entered with its row, in its first register.
+  const row = handler.inRow ? fn.reserved('int') : undefined;
+  const codegen = new Codegen(fn, lowering.slots, {input: handler.input, row});
   codegen.statements(handler.callback.body);
   if (handler.callback.updatesState) {
     requestUpdate(codegen, lowering);
   }
-  return fn.finish();
+  return fn.finish(row ? 1 : 0);
 }
 
 /**
@@ -1235,7 +1546,59 @@ function mountEffect(index: number, lowering: Lowering): ProgramFunction {
 }
 
 /**
- * The boot function: the values worked out from the panel size, in double precision as C works them out.
+ * Appends a list's first items, as C's initializer fills its array: a missing field is 0 or "", and a whole
+ * number field is the value rounded.
+ *
+ * @param list  The list.
+ * @param codegen  The boot function's codegen.
+ * @param lowering  The program being lowered.
+ */
+function appendInitialItems(
+  list: ListState,
+  codegen: Codegen,
+  lowering: Lowering,
+): void {
+  const {fn} = codegen;
+  const {fields} = list.struct;
+  for (const item of list.items) {
+    codegen.scoped(() => {
+      const row = fn.consecutive(
+        fields.map(field => (field.kind === 'string' ? 'string' : field.kind)),
+      );
+      fields.forEach((field, index) => {
+        const value = item[field.key];
+        if (field.kind === 'string') {
+          fn.abx(
+            'LOADS',
+            row[index].index,
+            lowering.slots.tables.string(String(value ?? '')),
+          );
+          return;
+        }
+        const number = Number(value) || 0;
+        codegen.scoped(() =>
+          fn.abc(
+            'MOVE',
+            row[index].index,
+            codegen.load(
+              field.kind as 'int' | 'float',
+              field.kind === 'float' ? number : Math.round(number),
+            ).index,
+          ),
+        );
+      });
+      fn.abx(
+        'APPEND',
+        row[0].index,
+        lowering.slots.lists.get(list)!.slot.index,
+      );
+    });
+  }
+}
+
+/**
+ * The boot function: the values worked out from the panel size, in double precision as C works them out, and
+ * each list's first items.
  *
  * @param bootSlots  The values.
  * @param lowering  The program being lowered.
@@ -1248,11 +1611,18 @@ function bootFunction(
   lowering: Lowering,
   screen: {width: number; height: number},
 ): ProgramFunction | null {
-  if (!bootSlots.length) {
+  const lists = lowering.app.state.filter(
+    (state): state is ListState =>
+      state.kind === 'list' && state.items.length > 0,
+  );
+  if (!bootSlots.length && !lists.length) {
     return null;
   }
   const fn = new FunctionBuilder(FunctionKind.boot, 'the boot values');
   const codegen = new Codegen(fn, lowering.slots, {inDoubles: true});
+  for (const list of lists) {
+    appendInitialItems(list, codegen, lowering);
+  }
   for (const bootSlot of bootSlots) {
     const slot = lowering.slots.boot.get(bootSlot)!;
     const {init} = bootSlot;
@@ -1289,8 +1659,16 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     images: new Set(app.images.map(image => image.name)),
     handlers: new Map(),
     bindings: [],
+    templates: [],
     effectFunctions: {checks: [], mounts: []},
   };
+  const {out} = app;
+
+  // A row's handlers are compared by their code before the functions are numbered, so each timer they start
+  // stands in by its own place until then.
+  out.timerFns.forEach((timer, index) =>
+    lowering.slots.timerFunctions.set(timer.name, index),
+  );
 
   // A panel-sized root the app's tree fills, as er_app_build() makes one.
   const nodes: ProgramTemplateNode[] = [
@@ -1307,11 +1685,31 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     },
   ];
   templateNodes(app.root, lowering, nodes);
+  rowTemplates(lowering);
+
+  // Every row is built, whether the list holds it or not.
+  const nodeCount =
+    nodes.length +
+    lowering.pools.reduce(
+      (count, pool) =>
+        count +
+        pool.templates.reduce(
+          (rowNodes, template) =>
+            rowNodes + lowering.templates[template - 1].nodes.length,
+          0,
+        ),
+      0,
+    );
+  if (nodeCount > MAX_U16) {
+    throw aotError(
+      `AOT: the app needs ${nodeCount} nodes, but a package holds ${MAX_U16}`,
+      'lower ER_AOT_LIST_CAP (the listCap option), or give the list rows fewer nodes.',
+    );
+  }
   checkSupported(app);
 
   // Handlers first, as the bindings number them, then the timer callbacks, the effects, and the boot and
   // update functions. Each is numbered before any code is written, since code names them.
-  const {out} = app;
   let next = lowering.handlers.size;
   for (const timer of out.timerFns) {
     lowering.slots.timerFunctions.set(timer.name, next++);
@@ -1362,7 +1760,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
         width: screen.width,
         height: screen.height,
         arenaBytes: bytes,
-        nodeCount: nodes.length,
+        nodeCount,
         rootTemplate: 0,
         bootFunction: bootIndex,
         updateFunction: updateIndex,
@@ -1379,8 +1777,9 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     enums: [...lowering.slots.enums.values()].map(({values}) =>
       values.map(value => tables.string(value)),
     ),
+    rows: lowering.rows,
     propSets: tables.propSets,
-    templates: [{kind: TemplateKind.root, nodes}],
+    templates: [{kind: TemplateKind.root, nodes}, ...lowering.templates],
     bindings: lowering.bindings,
     functions,
     inputs,

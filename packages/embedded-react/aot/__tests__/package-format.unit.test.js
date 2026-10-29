@@ -102,6 +102,9 @@ describe('package format copy', () => {
     );
     expect(format.TIMER_SIZE).toBe(defineValue(formatHeader, 'ERB_TIMER_SIZE'));
     expect(format.EVENT_SIZE).toBe(defineValue(formatHeader, 'ERB_EVENT_SIZE'));
+    expect(format.LIST_HEADER_SIZE).toBe(
+      defineValue(formatHeader, 'ERB_LIST_HEADER_SIZE'),
+    );
     expect(format.SlotFlag).toEqual({
       tracked: defineValue(formatHeader, 'ERB_SLOT_TRACKED'),
       bootOnly: defineValue(formatHeader, 'ERB_SLOT_BOOT_ONLY'),
@@ -118,6 +121,8 @@ describe('package format copy', () => {
       'REGION',
       'SLOT',
       'SET',
+      'ROW',
+      'FIELD',
       'PROP',
       'TEMPLATE',
       'NODE',

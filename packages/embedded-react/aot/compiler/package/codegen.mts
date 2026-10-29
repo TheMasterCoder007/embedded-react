@@ -40,9 +40,9 @@ import type {ProgramTables} from './tables.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr, LayoutField, WholeHelper} from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
-import type {IrStmt, IrTimer} from '../ir/statements.mts';
+import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
 import type {IrTextPart} from '../ir/text.mts';
-import type {RefRecord, ScalarState} from '../types.mts';
+import type {ListState, Local, RefRecord, ScalarState} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -64,11 +64,18 @@ export interface EnumSet {
   values: string[];
 }
 
+/** A list's pool, and the buffer an appended item's text is built in, by field. */
+export interface ListPool {
+  slot: Slot;
+  buffers: Map<string, Slot>;
+}
+
 /** The slots the program's code names, by what they hold. */
 export interface ProgramSlots {
   arena: Arena;
   tables: ProgramTables;
   states: Map<ScalarState, Slot>;
+  lists: Map<ListState, ListPool>;
   refs: Map<RefRecord, Slot>;
   boot: Map<IrBootSlot, Slot>;
   /** The buffer each string local is copied into, by its C name. */
@@ -198,6 +205,7 @@ export class Codegen {
   private readonly inDoubles: boolean;
   private readonly input: InputText | null;
   private readonly onReturn: Label | null;
+  private readonly row: Register | null;
   private readonly locals = new Map<string, LocalBinding>();
   /** A string register nothing writes, so it stays the empty string. Reserved, so no release reuses it. */
   private emptyString: Register | null = null;
@@ -208,17 +216,24 @@ export class Codegen {
    * @param options  inDoubles: fractions are worked out in double precision, as C works out a value at boot.
    *                 input: the <TextInput> a CHANGE_TEXT handler reads.
    *                 onReturn: where an effect's early `return` goes.
+   *                 row: the row a list row's handler was built for, which its item reads.
    */
   constructor(
     fn: FunctionBuilder,
     program: ProgramSlots,
-    options: {inDoubles?: boolean; input?: InputText; onReturn?: Label} = {},
+    options: {
+      inDoubles?: boolean;
+      input?: InputText;
+      onReturn?: Label;
+      row?: Register;
+    } = {},
   ) {
     this.fn = fn;
     this.program = program;
     this.inDoubles = options.inDoubles ?? false;
     this.input = options.input ?? null;
     this.onReturn = options.onReturn ?? null;
+    this.row = options.row ?? null;
   }
 
   /*--------------------------------------------------------------------------------------------------------------------
@@ -275,6 +290,8 @@ export class Codegen {
             : 'int';
       case 'clock':
         return 'int64';
+      case 'itemField':
+        return expr.field.kind;
       case 'pi':
       case 'toFloat':
       case 'floatDivide':
@@ -339,9 +356,13 @@ export class Codegen {
         return this.get(this.refSlot(expr.ref));
       case 'local':
         return this.local(expr);
-      case 'listLength':
+      case 'listLength': {
+        const register = fn.register('int');
+        fn.abx('LEN', register.index, this.listPool(expr.list).slot.index);
+        return register;
+      }
       case 'itemField':
-        return notYet('lists of state');
+        return this.itemField(expr.item, expr.field.key, type);
       case 'gesture':
         return notYet('PanResponder');
       case 'event':
@@ -579,8 +600,7 @@ export class Codegen {
     }
     const test = this.fn.register('bool');
     if (register.type === 'string') {
-      this.emptyString ??= this.fn.reserved('string');
-      this.fn.abc('SEQ', test.index, register.index, this.emptyString.index);
+      this.fn.abc('SEQ', test.index, register.index, this.zero('string').index);
     } else {
       const zero = this.load(register.type as CType, 0);
       this.fn.abc(
@@ -712,6 +732,52 @@ export class Codegen {
     this.fn.abx('GET64', node.index, this.input.node.index);
     this.fn.abx('INPUT', node.index, this.input.text.index);
     return this.get(this.input.text);
+  }
+
+  /**
+   * A field of a list row's item. A row past the list's end, as a hidden row is, reads as zero or "".
+   *
+   * @param item  The row's item.
+   * @param key  The field.
+   * @param type  Its C type.
+   *
+   * @returns The register.
+   */
+  private itemField(item: Local, key: string, type: CType): Register {
+    const {fn} = this;
+    const list = required(item.list, `the list of "${item.code}"`);
+    const field = list.struct.fields.findIndex(entry => entry.key === key);
+    const pool = this.listPool(list).slot;
+    const row = this.row ?? this.load('int', required(item.row, item.code));
+    const count = fn.register('int');
+    const inUse = fn.register('bool');
+    fn.abx('LEN', count.index, pool.index);
+    fn.abc('LT', inUse.index, row.index, count.index);
+    return this.choose(
+      inUse,
+      () => {
+        const register = fn.register(type as RegisterType);
+        fn.abc(
+          'ROWGET',
+          register.index,
+          row.index,
+          0,
+          pool.index | (field << 16),
+        );
+        return register;
+      },
+      () => this.zero(type),
+      type,
+    );
+  }
+
+  /** Zero, or the empty string, in a register of a type. */
+  private zero(type: CType): Register {
+    if (type !== 'string') {
+      return this.load(type, 0);
+    }
+    this.emptyString ??= this.fn.reserved('string');
+    return this.emptyString;
   }
 
   private local(expr: IrExpr & {kind: 'local'}): Register {
@@ -999,11 +1065,34 @@ export class Codegen {
         this.scoped(() => fn.abc('TCLEAR', this.valueAs(stmt.id, 'int').index));
         return;
       case 'clearList':
+        fn.abx('CLEAR', 0, this.listPool(stmt.list).slot.index);
+        return;
       case 'appendItem':
+        this.scoped(() => this.appendItem(stmt));
+        return;
       case 'dropLastItem':
+        fn.abx('POP', 0, this.listPool(stmt.list).slot.index);
+        return;
       case 'keepFirstItems':
+        this.scoped(() =>
+          fn.abx(
+            'KEEP',
+            this.load('int', stmt.count).index,
+            this.listPool(stmt.list).slot.index,
+          ),
+        );
+        return;
       case 'sliceItems':
-        notYet('lists of state');
+        // app_slice_len is slice(0, end), as SLICE counts it.
+        this.scoped(() =>
+          fn.abc(
+            'SLICE',
+            this.load('int', 0).index,
+            this.valueAs(stmt.end, 'int').index,
+            0,
+            this.listPool(stmt.list).slot.index,
+          ),
+        );
         return;
       case 'stopAnimations':
       case 'startAnimations':
@@ -1028,6 +1117,42 @@ export class Codegen {
       case 'updateVector':
         notYet('updateVector');
     }
+  }
+
+  /**
+   * Appends an item, its fields worked out in order into consecutive registers. A full list drops it, as C does.
+   * A text field is built in its own buffer first.
+   *
+   * @param stmt  The append.
+   */
+  private appendItem(stmt: IrAppendItem): void {
+    const {fn} = this;
+    const pool = this.listPool(stmt.list);
+    const row = fn.consecutive(
+      stmt.values.map(({field}) =>
+        field.kind === 'string' ? 'string' : field.kind,
+      ),
+    );
+    stmt.values.forEach((itemValue, index) =>
+      this.scoped(() => {
+        if ('text' in itemValue) {
+          const buffer = required(
+            pool.buffers.get(itemValue.field.key),
+            `field "${itemValue.field.key}"`,
+          );
+          this.text(itemValue.text.parts);
+          fn.abx('FMTSET', 0, buffer.index);
+          fn.abx('GETS', row[index].index, buffer.index);
+        } else {
+          fn.abc(
+            'MOVE',
+            row[index].index,
+            this.valueAs(itemValue.value, itemValue.field.kind).index,
+          );
+        }
+      }),
+    );
+    fn.abx('APPEND', row[0].index, pool.slot.index);
   }
 
   /**
@@ -1319,7 +1444,16 @@ export class Codegen {
    */
   shown(show: IrShow): Register {
     if (show.kind === 'rowInUse') {
-      return notYet('lists of state');
+      const count = this.fn.register('int');
+      const register = this.fn.register('bool');
+      this.fn.abx('LEN', count.index, this.listPool(show.list).slot.index);
+      this.fn.abc(
+        'LT',
+        register.index,
+        this.load('int', show.row).index,
+        count.index,
+      );
+      return register;
     }
     const register = this.fn.register('bool');
     this.fn.abc('MOVE', register.index, this.condition(show.test).index);
@@ -1341,6 +1475,10 @@ export class Codegen {
 
   stateSlot(state: ScalarState): Slot {
     return required(this.program.states.get(state), `state "${state.name}"`);
+  }
+
+  listPool(list: ListState): ListPool {
+    return required(this.program.lists.get(list), `list "${list.name}"`);
   }
 
   refSlot(ref: RefRecord): Slot {

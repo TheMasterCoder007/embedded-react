@@ -86,6 +86,10 @@ export class FunctionBuilder {
   /** Each cell's type, as the types table holds it. */
   private readonly cellTypes: number[] = [];
   private readonly pool = new Map<RegisterType, number[]>();
+  /** Released runs of consecutive registers, by their types, at their first cell. */
+  private readonly runs = new Map<string, number[]>();
+  /** The types of each run, by its first cell. */
+  private readonly runTypes = new Map<number, string>();
   /** Registers in use, in the order they were taken, for checkpoints. */
   private readonly taken: Register[] = [];
 
@@ -132,6 +136,30 @@ export class FunctionBuilder {
     return {index: this.newRegister(type), type};
   }
 
+  /**
+   * Registers of one-cell types in consecutive cells, as APPEND reads a row: a released run of the same types when
+   * there is one, else new ones. A run is released whole, and only ever reused as a run.
+   *
+   * @param types  Their types.
+   *
+   * @returns The registers.
+   */
+  consecutive(types: RegisterType[]): Register[] {
+    const key = types.join(' ');
+    let first = this.runs.get(key)?.pop();
+    if (first === undefined) {
+      first = this.cellTypes.length;
+      types.forEach(type => this.newRegister(type));
+      this.runTypes.set(first, key);
+    }
+    const registers = types.map((type, index) => ({
+      index: first + index,
+      type,
+    }));
+    this.taken.push(registers[0]);
+    return registers;
+  }
+
   private newRegister(type: RegisterType): number {
     // A two-cell register starts on an even cell.
     if (WIDE.has(type) && this.cellTypes.length % 2) {
@@ -166,6 +194,11 @@ export class FunctionBuilder {
     const kept = this.taken.splice(checkpoint).filter(register => {
       if (keep.includes(register)) {
         return true;
+      }
+      const run = this.runTypes.get(register.index);
+      if (run !== undefined) {
+        this.runs.set(run, [...(this.runs.get(run) ?? []), register.index]);
+        return false;
       }
       const free = this.pool.get(register.type) ?? [];
       free.push(register.index);

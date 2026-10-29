@@ -35,6 +35,7 @@ import {
   Region,
   SlotFlag,
   Table,
+  TemplateKind,
   ValueType,
 } from '../compiler/package/format.mts';
 import {floatBits, readConstant} from '../compiler/package/props.mts';
@@ -650,6 +651,249 @@ export function App() {
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
       'useEffect needs a dependency list',
+    );
+  });
+});
+
+describe('lists', () => {
+  const LIST_APP = `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+export function App() {
+  const [items, setItems] = useState([{label: 'one', n: 1, w: 2.5}, {label: 'two', n: 2, w: 3}]);
+  const [picked, setPicked] = useState(0);
+  return (
+    <View>
+      <Pressable onPress={() => setItems([...items, {label: 'row ' + items.length, n: items.length, w: 1.5}])}><Text>add</Text></Pressable>
+      <Pressable onPress={() => setItems(items.slice(0, -1))}><Text>drop</Text></Pressable>
+      <Pressable onPress={() => setItems(items.slice(0, 1))}><Text>keep</Text></Pressable>
+      <Pressable onPress={() => setItems(items.slice(0, picked))}><Text>cut</Text></Pressable>
+      <Pressable onPress={() => setItems([])}><Text>clear</Text></Pressable>
+      {items.map((item, index) => (
+        <Pressable key={index} style={{width: item.w}} onPress={() => setPicked(picked + item.n)}>
+          <Text>{item.label} {index}</Text>
+        </Pressable>
+      ))}
+      <Text>{picked}</Text>
+    </View>
+  );
+}`;
+  const CAPS = {...SCREEN, listCap: 4};
+
+  const names = fn => fn.ops.map(op => op.name);
+
+  /** The templates: each one's kind and nodes. */
+  function templatesOf(bytes) {
+    const {u16, u32, tables} = readProgram(bytes);
+    const {offset} = tables.get(Table.templates);
+    const count = u32(offset);
+    const nodes = offset + 4 + count * 8;
+    return Array.from({length: count}, (_, index) => {
+      const at = offset + 4 + index * 8;
+      return {
+        kind: u16(at + 4),
+        nodes: Array.from({length: u16(at + 2)}, (_, node) => ({
+          handle: u16(nodes + (u16(at) + node) * 12 + 6),
+        })),
+      };
+    });
+  }
+
+  /** The slots: each one's type, flags, cap and aux. */
+  function slotsOf(bytes) {
+    const {u16, tables} = readProgram(bytes);
+    const {offset, length} = tables.get(Table.slots);
+    return Array.from({length: length / 16}, (_, index) => {
+      const at = offset + index * 16;
+      return {
+        type: u16(at) & 0xff,
+        flags: u16(at) >> 8,
+        cap: u16(at + 12),
+        aux: u16(at + 14),
+      };
+    });
+  }
+
+  it('keeps a list as a pool of rows, laid out by its row layout', () => {
+    const {program} = compilePackage(LIST_APP, 'app', CAPS);
+    const {u16, u32, tables} = readProgram(program);
+
+    // One layout: the label as a 48-byte string (47 and a NUL), then the int and the float.
+    const rows = tables.get(Table.rows);
+    expect(u32(rows.offset)).toBe(1);
+    expect([u16(rows.offset + 4), u16(rows.offset + 8)]).toEqual([56, 3]);
+    const fields = Array.from({length: 3}, (_, index) => {
+      const at = rows.offset + 12 + index * 8;
+      return {type: program[at], cap: u16(at + 2), offset: u32(at + 4)};
+    });
+    expect(fields).toEqual([
+      {type: ValueType.string, cap: 47, offset: 0},
+      {type: ValueType.int, cap: 0, offset: 48},
+      {type: ValueType.float, cap: 0, offset: 52},
+    ]);
+
+    // A node reads it, so it has a dirty bit; its pool is the row count, then four rows.
+    expect(slotsOf(program).find(slot => slot.type === ValueType.list)).toEqual(
+      {type: ValueType.list, flags: SlotFlag.tracked, cap: 4, aux: 0},
+    );
+    expect(
+      regionsOf(program).find(region => region.kind === Region.lists),
+    ).toEqual({kind: Region.lists, count: 0, bytes: 4 + 4 * 56});
+  });
+
+  it('builds every row from one row template, its handles in arrays by row', () => {
+    const {program} = compilePackage(LIST_APP, 'app', CAPS);
+    const templates = templatesOf(program);
+    expect(templates.map(template => template.kind)).toEqual([
+      TemplateKind.root,
+      TemplateKind.row,
+    ]);
+    const [root, row] = templates;
+    // The root, the view, five buttons with their text, the picked text; then four rows of two.
+    expect(readProgram(program).panel.nodeCount).toBe(
+      root.nodes.length + 4 * row.nodes.length,
+    );
+    expect(root.nodes.length).toBe(13);
+    const slots = slotsOf(program);
+    for (const {handle} of row.nodes) {
+      expect(slots[handle]).toMatchObject({type: ValueType.node, cap: 4});
+    }
+
+    const functions = functionsOf(program);
+    const update = functions.at(-1);
+    expect(update.kind).toBe(FunctionKind.update);
+    const builds = update.ops.filter(op => op.name === 'BUILD');
+    expect(builds.map(build => build.ext & 0xffff)).toEqual([1, 1, 1, 1]);
+    expect(names(update)).toContain('GETNI');
+    expect(names(update)).toContain('ROWGET');
+
+    // The boot function appends the first two items.
+    const boot = functions[readProgram(program).panel.boot];
+    expect(names(boot).filter(name => name === 'APPEND')).toHaveLength(2);
+  });
+
+  it('shares the rows one handler, entered with its row', () => {
+    const {program} = compilePackage(LIST_APP, 'app', CAPS);
+    const {u32, tables} = readProgram(program);
+    const functions = tables.get(Table.functions);
+    const records = Array.from({length: functions.length / 16}, (_, index) =>
+      u32(functions.offset + index * 16 + 12),
+    );
+    // Five buttons and one row press; only the row's takes its row.
+    const presses = records.filter(record => record >>> 24 === 0);
+    expect(presses).toHaveLength(6);
+    expect(presses.map(record => (record >>> 8) & 0xff)).toEqual([
+      0, 0, 0, 0, 0, 1,
+    ]);
+
+    const ops = functionsOf(program).slice(0, 5).map(names);
+    expect(ops[0]).toEqual(expect.arrayContaining(['FMTSET', 'APPEND']));
+    expect(ops[1]).toContain('POP');
+    expect(ops[2]).toContain('KEEP');
+    expect(ops[3]).toContain('SLICE');
+    expect(ops[4]).toContain('CLEAR');
+  });
+
+  it('gives rows that differ by their index their own templates', () => {
+    const src = `
+import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const [dots, setDots] = useState([{size: 4}]);
+  return <View>{dots.map((dot, index) => <View key={index} style={{width: dot.size}}><View style={{height: index % 2 ? 2 : 3}} /></View>)}</View>;
+}`;
+    const templates = templatesOf(compilePackage(src, 'app', CAPS).program);
+    expect(templates.map(template => template.kind)).toEqual([
+      TemplateKind.root,
+      TemplateKind.row,
+      TemplateKind.row,
+    ]);
+  });
+
+  it('refuses a row or a node count too big for its u16 field', () => {
+    const texts = `
+import {useState} from 'react';
+import {Text} from 'embedded-react';
+export function App() {
+  const [items] = useState([{a: 'x', b: 'y'}]);
+  return <Text>{items.length}</Text>;
+}`;
+    expect(() =>
+      compilePackage(texts, 'app', {...SCREEN, listStrCap: 32767}),
+    ).toThrow(
+      'a row of list state "items" takes 65536 bytes, but a package row holds 65532',
+    );
+
+    const rows = `
+import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const [items] = useState([{n: 1}]);
+  return <View>{items.map((item, index) => <View key={index} style={{width: item.n}}><View /><View /></View>)}</View>;
+}`;
+    expect(() =>
+      compilePackage(rows, 'app', {...SCREEN, listCap: 22000}),
+    ).toThrow('the app needs 66002 nodes, but a package holds 65535');
+  });
+
+  it('refuses more row fields than ROWGET and the rows table can name', () => {
+    const item = count =>
+      `{${Array.from({length: count}, (_, index) => `f${index}: ${index}`).join(', ')}}`;
+    const lists = (count, fields) => `
+import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  ${Array.from({length: count}, (_, index) => `const [l${index}] = useState([${item(fields)}]);`).join('\n  ')}
+  return <View />;
+}`;
+    expect(() => compilePackage(lists(1, 256), 'app', SCREEN)).toThrow(
+      'list state "l0" has 256 fields, but a package row holds 255',
+    );
+    expect(() => compilePackage(lists(258, 255), 'app', SCREEN)).toThrow(
+      'the lists have 65790 fields in all, but a package holds 65535',
+    );
+  });
+
+  it('reuses the registers each first item is appended from', () => {
+    const items = `[${Array.from({length: 16}, (_, index) => `{a: ${index}, b: 1.5, c: 'x', d: 2}`).join(', ')}]`;
+    const src = `
+import {useState} from 'react';
+import {Text} from 'embedded-react';
+export function App() {
+  ${Array.from({length: 5}, (_, index) => `const [l${index}] = useState(${items});`).join('\n  ')}
+  return <Text>{l0.length}</Text>;
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const boot = functionsOf(program)[readProgram(program).panel.boot];
+    expect(boot.ops.filter(op => op.name === 'APPEND')).toHaveLength(80);
+    // Each append reads the same four registers.
+    expect(
+      new Set(boot.ops.filter(op => op.name === 'APPEND').map(op => op.a)).size,
+    ).toBe(1);
+  });
+
+  it('refuses a list inside a list row, and onChangeText in one', () => {
+    const nested = `
+import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const [rows] = useState([{n: 1}]);
+  const [cells] = useState([{n: 2}]);
+  return <View>{rows.map((row, index) => <View key={index}>{cells.map((cell, at) => <View key={at} style={{width: cell.n}} />)}</View>)}</View>;
+}`;
+    expect(() => compilePackage(nested, 'app', CAPS)).toThrow(
+      /doesn't support a list inside a list row yet[\s\S]*App\.jsx:7:/,
+    );
+    const input = `
+import {useState} from 'react';
+import {View, TextInput} from 'embedded-react';
+export function App() {
+  const [rows] = useState([{n: 1}]);
+  const [text, setText] = useState('');
+  return <View>{rows.map((row, index) => <TextInput key={index} value={text} onChangeText={value => setText(value)} />)}</View>;
+}`;
+    expect(() => compilePackage(input, 'app', CAPS)).toThrow(
+      "doesn't support onChangeText in a list row yet",
     );
   });
 });

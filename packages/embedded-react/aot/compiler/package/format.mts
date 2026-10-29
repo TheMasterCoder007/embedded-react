@@ -53,6 +53,8 @@ export const DIRECTORY_SIZE = 12;
 export const REGION_SIZE = 12;
 export const SLOT_SIZE = 16;
 export const SET_SIZE = 4;
+export const ROW_SIZE = 8;
+export const FIELD_SIZE = 8;
 export const PROP_SIZE = 8;
 export const TEMPLATE_SIZE = 8;
 export const NODE_SIZE = 12;
@@ -112,6 +114,9 @@ export const FRAME_CELLS = 3;
 /** Bytes a timer takes in the timer table, and an event in the event queue. */
 export const TIMER_SIZE = 16;
 export const EVENT_SIZE = 32;
+
+/** Bytes a list pool keeps before its rows: the row count. */
+export const LIST_HEADER_SIZE = 4;
 
 /** Register and slot value types. A 64-bit type, or a node handle, takes two register cells, the first even. */
 export const ValueType = {
