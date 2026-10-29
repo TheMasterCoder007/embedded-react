@@ -193,6 +193,9 @@ const WIRING_USES: Record<IrWire['kind'], string> = {
   stateDrivenVector: '<Svg>',
 };
 
+/** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes. */
+const MAX_U16 = 0xffff;
+
 /** The span fields a TextSpan spells, in its ABI ids' order. */
 const SPAN_FIELDS = [
   'color',
@@ -588,6 +591,12 @@ function planSlots(
       size += field.kind === 'string' ? (cap + 1 + 3) & ~3 : 4;
       return entry;
     });
+    if (size > MAX_U16) {
+      throw aotError(
+        `AOT: a row of list state "${state.name}" takes ${size} bytes, but a package row holds ${MAX_U16 - 3}`,
+        'lower ER_AOT_LIST_STR_CAP (the listStrCap option), or give the items fewer text fields.',
+      );
+    }
     const slot = arena.list(rows.length, size, state.cap);
     rows.push({size, fields});
     if (state.isWatched) {
@@ -1661,6 +1670,26 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   ];
   templateNodes(app.root, lowering, nodes);
   rowTemplates(lowering);
+
+  // Every row is built, whether the list holds it or not.
+  const nodeCount =
+    nodes.length +
+    lowering.pools.reduce(
+      (count, pool) =>
+        count +
+        pool.templates.reduce(
+          (rowNodes, template) =>
+            rowNodes + lowering.templates[template - 1].nodes.length,
+          0,
+        ),
+      0,
+    );
+  if (nodeCount > MAX_U16) {
+    throw aotError(
+      `AOT: the app needs ${nodeCount} nodes, but a package holds ${MAX_U16}`,
+      'lower ER_AOT_LIST_CAP (the listCap option), or give the list rows fewer nodes.',
+    );
+  }
   checkSupported(app);
 
   // Handlers first, as the bindings number them, then the timer callbacks, the effects, and the boot and
@@ -1715,19 +1744,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
         width: screen.width,
         height: screen.height,
         arenaBytes: bytes,
-        // Every row is built, whether the list holds it or not.
-        nodeCount:
-          nodes.length +
-          lowering.pools.reduce(
-            (count, pool) =>
-              count +
-              pool.templates.reduce(
-                (rowNodes, template) =>
-                  rowNodes + lowering.templates[template - 1].nodes.length,
-                0,
-              ),
-            0,
-          ),
+        nodeCount,
         rootTemplate: 0,
         bootFunction: bootIndex,
         updateFunction: updateIndex,

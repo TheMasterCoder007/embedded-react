@@ -810,6 +810,32 @@ export function App() {
     ]);
   });
 
+  it('refuses a row or a node count too big for its u16 field', () => {
+    const texts = `
+import {useState} from 'react';
+import {Text} from 'embedded-react';
+export function App() {
+  const [items] = useState([{a: 'x', b: 'y'}]);
+  return <Text>{items.length}</Text>;
+}`;
+    expect(() =>
+      compilePackage(texts, 'app', {...SCREEN, listStrCap: 32767}),
+    ).toThrow(
+      'a row of list state "items" takes 65536 bytes, but a package row holds 65532',
+    );
+
+    const rows = `
+import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  const [items] = useState([{n: 1}]);
+  return <View>{items.map((item, index) => <View key={index} style={{width: item.n}}><View /><View /></View>)}</View>;
+}`;
+    expect(() =>
+      compilePackage(rows, 'app', {...SCREEN, listCap: 22000}),
+    ).toThrow('the app needs 66002 nodes, but a package holds 65535');
+  });
+
   it('refuses a list inside a list row, and onChangeText in one', () => {
     const nested = `
 import {useState} from 'react';
