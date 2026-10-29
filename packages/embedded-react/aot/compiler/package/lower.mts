@@ -21,7 +21,10 @@
  * slots in the arena. Handlers, timer callbacks, effects, the boot function and the update function are
  * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, as app_update() does, sets
  * the props of a node that reads only boot values once, in its first pass, and queues the effects. What isn't
- * lowered yet (animations, responders, drawings, the keyboard) is refused with what it is.
+ * lowered yet (responders, drawings, the keyboard) is refused with what it is.
+ *
+ * Animations run as the C output runs them (animations.mts): each animation a leaf descriptor, each C callback an
+ * animation-done function, each completion a helper.
  *
  * A list is a pool of rows in the arena. Its `.map` is a row template, built once per row in the update's first
  * pass, as er_app_build() builds every row; a row shows while the list holds it. Rows whose nodes and handlers
@@ -54,8 +57,9 @@ import {
 } from '../ir/nodes.mts';
 import {nodeReads} from '../ir/reads.mts';
 import {armedFlag} from '../c/functions.mts';
+import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
 import {Arena} from './arena.mts';
-import {FunctionBuilder} from './bytecode.mts';
+import {FunctionBuilder, OP} from './bytecode.mts';
 import {internedStates} from './enums.mts';
 import {Codegen, notYet} from './codegen.mts';
 import {
@@ -86,7 +90,12 @@ import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr} from '../ir/expressions.mts';
-import type {IrDepEffect, IrMountEffect} from '../ir/functions.mts';
+import type {IrCompletion} from '../ir/animations.mts';
+import type {
+  IrDepEffect,
+  IrMountEffect,
+  IrPressFade,
+} from '../ir/functions.mts';
 import type {IrCallback, IrStmt} from '../ir/statements.mts';
 import type {IrElement, IrNode, IrWire} from '../ir/nodes.mts';
 import type {ResolvedOptions} from '../options.mts';
@@ -110,6 +119,8 @@ import type {
 interface HandlerFunction {
   index: number;
   callback: IrCallback;
+  /** A <TouchableOpacity>'s fade, started before the callback. */
+  fade: IrPressFade | null;
   event: number;
   name: string;
   /** For a <TextInput>'s onChangeText, the input it reads. */
@@ -184,8 +195,7 @@ interface Lowering {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** What each wiring a node can have needs, as a refusal names it. */
-const WIRING_USES: Record<IrWire['kind'], string> = {
-  bind: 'animations',
+const WIRING_USES: Record<Exclude<IrWire['kind'], 'bind'>, string> = {
   ref: 'refs',
   event: 'event handlers',
   responder: 'PanResponder',
@@ -279,11 +289,6 @@ function firstCall(
 function checkSupported(app: IrApp): void {
   const {out} = app;
   const uses: [boolean, string, string[]][] = [
-    [
-      app.animations.length > 0 || out.animCbs.length > 0,
-      'animations',
-      ['Animated.*', 'useAnimatedValue'],
-    ],
     [out.panResponders.length > 0, 'PanResponder', ['PanResponder.create']],
     [out.vectors.length > 0, '<Svg>', []],
     [app.keyboard !== null, 'setKeyboardConfig', ['setKeyboardConfig']],
@@ -421,8 +426,21 @@ function bodies(app: IrApp): IrStmt[][] {
     ...out.mountEffects.flatMap(mountEffect =>
       mountEffect.kind === 'inline' ? [mountEffect.callback.body] : [],
     ),
+    ...completionsOf(app).map(completion => completion.body),
   ];
 }
+
+/**
+ * Every animation completion, in the order the app declares them.
+ *
+ * @param app  The app.
+ *
+ * @returns The completions.
+ */
+const completionsOf = (app: IrApp): IrCompletion[] =>
+  app.out.animCbs.flatMap(callback =>
+    callback.kind === 'completion' ? [callback.completion] : [],
+  );
 
 /**
  * A state's slot: a scalar's own, or a list's pool.
@@ -523,6 +541,7 @@ function planSlots(
   const {listStrCap} = caps;
   const {out} = app;
   const arena = new Arena();
+  const animations = new AnimationPlan(app, arena);
   const slots: ProgramSlots = {
     arena,
     tables,
@@ -535,6 +554,7 @@ function planSlots(
     hoisted: new Map(),
     armed: new Map(),
     timerFunctions: new Map(),
+    animations,
   };
 
   // String state with a closed set of values is an interned enum, starting at its initial value (the first).
@@ -765,7 +785,8 @@ function planSlots(
       handler => handler.kind === 'callback' && handler.callback.updatesState,
     ) ||
     out.timerFns.some(timer => timer.callback!.updatesState) ||
-    out.mountEffects.some(mountUpdates);
+    out.mountEffects.some(mountUpdates) ||
+    completionsOf(app).some(completion => completion.updatesState);
   const requested = requestsUpdate
     ? arena.track(arena.slot(ValueType.bool))
     : null;
@@ -894,12 +915,23 @@ function handlerFunction(
   if (!handler || handler.kind === 'panEvent') {
     throw new Error(`AOT internal: no handler "${name}"`);
   }
-  if (handler.kind === 'pressFade') {
-    return notYet('the press fade of a <TouchableOpacity>');
+  // A press fade runs the app's own handler for the event after it, when it has one.
+  const then =
+    handler.kind === 'pressFade'
+      ? handler.then
+        ? lowering.app.out.handlers.find(
+            candidate =>
+              candidate.kind === 'callback' && candidate.name === handler.then,
+          )
+        : null
+      : handler;
+  if (then === undefined || (then && then.kind !== 'callback')) {
+    throw new Error(`AOT internal: no handler for "${name}"`);
   }
   const readsInput = eventName === 'ER_EVENT_CHANGE_TEXT';
   const made: Omit<HandlerFunction, 'index'> = {
-    callback: handler.callback,
+    callback: then?.callback ?? {body: [], updatesState: false},
+    fade: handler.kind === 'pressFade' ? handler.fade : null,
     event: ENGINE_VALUES.get(eventName)!,
     name,
     input: readsInput
@@ -945,7 +977,9 @@ function templateNodes(
   try {
     const bindings: ProgramBinding[] = [];
     for (const wire of node.wiring) {
-      if (wire.kind === 'event') {
+      if (wire.kind === 'bind') {
+        bindings.push(lowering.slots.animations.binding(wire.bind));
+      } else if (wire.kind === 'event') {
         bindings.push({
           kind: BindingKind.event,
           event: ENGINE_VALUES.get(wire.event)!,
@@ -1393,6 +1427,9 @@ function handlerBody(
   // A row's handler is entered with its row, in its first register.
   const row = handler.inRow ? fn.reserved('int') : undefined;
   const codegen = new Codegen(fn, lowering.slots, {input: handler.input, row});
+  if (handler.fade) {
+    startPressFade(codegen, handler.fade, lowering.slots.animations);
+  }
   codegen.statements(handler.callback.body);
   if (handler.callback.updatesState) {
     requestUpdate(codegen, lowering);
@@ -1422,6 +1459,81 @@ function timerBody(
   }
   return fn.finish();
 }
+
+/**
+ * An animation completion's helper: entered with what it was passed, which the body reads as `finished`.
+ *
+ * @param completion  The completion.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function.
+ */
+function completionBody(
+  completion: IrCompletion,
+  lowering: Lowering,
+): ProgramFunction {
+  const fn = new FunctionBuilder(
+    FunctionKind.helper,
+    `completion ${completion.name}`,
+  );
+  const finished = fn.reserved('bool');
+  const codegen = new Codegen(fn, lowering.slots, {finished});
+  codegen.statements(completion.body);
+  if (completion.updatesState) {
+    requestUpdate(codegen, lowering);
+  }
+  return fn.finish(1);
+}
+
+/**
+ * The register-stack cells each function's deepest call path takes, its own frame included, as the runtime's
+ * verifier works it out. A function only calls later ones.
+ *
+ * @param functions  The functions.
+ *
+ * @returns The deepest.
+ */
+function stackCells(functions: ProgramFunction[]): number {
+  const depths: number[] = [];
+  for (let index = functions.length - 1; index >= 0; index--) {
+    const {code, types} = functions[index];
+    let deepest = 0;
+    for (let at = 0; at < code.length; at += wordsOf(code[at])) {
+      if ((code[at] & 0xff) === OP.CALL.code) {
+        deepest = Math.max(deepest, depths[code[at] >>> 16]);
+      }
+    }
+    depths[index] = FRAME_CELLS + types.length + deepest;
+  }
+  return Math.max(0, ...depths);
+}
+
+/**
+ * How many of some instructions a function has.
+ *
+ * @param fn  The function.
+ * @param names  The opcodes.
+ *
+ * @returns The count.
+ */
+function countOps(fn: ProgramFunction, names: string[]): number {
+  const codes = new Set(names.map(name => OP[name].code));
+  let count = 0;
+  for (let at = 0; at < fn.code.length; at += wordsOf(fn.code[at])) {
+    count += codes.has(fn.code[at] & 0xff) ? 1 : 0;
+  }
+  return count;
+}
+
+/**
+ * An instruction's length, from its first word.
+ *
+ * @param word  The word.
+ *
+ * @returns Its length in words.
+ */
+const wordsOf = (word: number): number =>
+  Object.values(OP).find(op => op.code === (word & 0xff))!.words;
 
 /**
  * A dep-driven effect's run: the last run's cleanup, if that run reached it, then the body.
@@ -1718,6 +1830,9 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     checks: out.depEffects.map(() => next++),
     mounts: out.mountEffects.map(() => next++),
   };
+  // Then the animations' done functions, and the completions they and the rest call, after every caller.
+  const {animations} = lowering.slots;
+  animations.number(next, next + animations.doneFunctions.size);
   const functions = [
     ...[...lowering.handlers.values()].map(handler =>
       handlerBody(handler, lowering),
@@ -1727,18 +1842,25 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     ),
     ...out.depEffects.map(effect => checkedEffect(effect, lowering)),
     ...out.mountEffects.map((_, index) => mountEffect(index, lowering)),
+    ...doneFunctions(animations, fn => new Codegen(fn, lowering.slots)),
+    ...[...animations.completions.values()].map(completion =>
+      completionBody(completion, lowering),
+    ),
   ];
   const boot = bootFunction(app.boot.slots, lowering, screen);
   const update = updateFunction(lowering);
   const bootIndex = boot ? functions.push(boot) - 1 : NONE;
   const updateIndex = update ? functions.push(update) - 1 : NONE;
 
-  // The register stack holds the largest frame: no function calls another.
-  const stackCells = Math.max(
-    0,
-    ...functions.map(fn => FRAME_CELLS + fn.types.length),
-  );
-  const {regions, bytes} = lowering.slots.arena.regions(stackCells);
+  // A completion that arrives while a function runs waits in the queue: each running tree's, and each one a
+  // single function's starts and stops can end at once.
+  if (animations.entries) {
+    const ends = Math.max(
+      ...functions.map(fn => countOps(fn, ['ASTART', 'AVSET', 'ASTOP'])),
+    );
+    lowering.slots.arena.eventQueue(animations.entries + 2 * ends);
+  }
+  const {regions, bytes} = lowering.slots.arena.regions(stackCells(functions));
 
   // Host values, by name, for erb_input_find().
   const inputs = app.state
@@ -1766,9 +1888,18 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
         updateFunction: updateIndex,
       },
     ],
-    needs: app.images.length
-      ? [{resource: Resource.images, amount: app.images.length}]
-      : [],
+    needs: [
+      // Each animated value runs one engine animation at a time.
+      ...(animations.values.size
+        ? [
+            {resource: Resource.animValues, amount: animations.values.size},
+            {resource: Resource.animations, amount: animations.values.size},
+          ]
+        : []),
+      ...(app.images.length
+        ? [{resource: Resource.images, amount: app.images.length}]
+        : []),
+    ],
     strings: tables.strings,
     const32: tables.const32,
     const64: tables.const64,
@@ -1782,6 +1913,8 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     templates: [{kind: TemplateKind.root, nodes}, ...lowering.templates],
     bindings: lowering.bindings,
     functions,
+    anims: animations.anims,
     inputs,
+    interps: animations.interps,
   };
 }

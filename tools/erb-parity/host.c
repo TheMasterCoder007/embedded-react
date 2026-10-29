@@ -20,11 +20,12 @@
  * backend into a framebuffer in RAM, run the same scripted taps, and write the final frame, so
  * packages/embedded-react/test/erb-parity/erb-parity.mjs can compare the two pixel for pixel.
  *
- *   erb-parity-c  <out.raw> <width> <height> [taps]
- *   erb-parity-vm <out.raw> <width> <height> <package.erpkg> [taps]
+ *   erb-parity-c  <out.raw> <width> <height> [taps [settle_ms]]
+ *   erb-parity-vm <out.raw> <width> <height> <package.erpkg> [taps [settle_ms]]
  *
  * taps is "x,y x,y ...": each is a press and release, with a 16 ms tick after each half. The frame is written
- * as width * height ARGB8888 words, little-endian, after the taps and a settle of SETTLE_MS.
+ * as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when it is
+ * left out), so a scenario can take its frame in the middle of an animation.
  */
 
 #include "er_scene.h"
@@ -45,7 +46,7 @@
 /** @brief Each tick, in ms, as a 60 Hz display loop runs. */
 #define FRAME_MS 16u
 
-/** @brief How long the app runs after the last tap before the frame is taken. */
+/** @brief How long the app runs after the last tap before the frame is taken, unless the scenario says. */
 #define SETTLE_MS 500u
 
 /** @brief Date.now() as both builds see it, so a run doesn't depend on the host's clock. */
@@ -126,13 +127,17 @@ int main(int argc, char** argv)
 #endif
     if (argc < fixed_args)
     {
-        fprintf(stderr, "usage: %s <out.raw> <width> <height>%s [taps]\n", argv[0], fixed_args == 5 ? " <package>" : "");
+        fprintf(stderr,
+                "usage: %s <out.raw> <width> <height>%s [taps [settle_ms]]\n",
+                argv[0],
+                fixed_args == 5 ? " <package>" : "");
         return 2;
     }
     const char* out_path = argv[1];
     const int width = atoi(argv[2]);
     const int height = atoi(argv[3]);
     const char* taps = argc > fixed_args ? argv[fixed_args] : "";
+    const uint32_t settle_ms = argc > fixed_args + 1 ? (uint32_t)atoi(argv[fixed_args + 1]) : SETTLE_MS;
     if (!er_software_backend_init(width, height))
     {
         fprintf(stderr, "can't make a %dx%d framebuffer\n", width, height);
@@ -175,7 +180,7 @@ int main(int argc, char** argv)
 
     er_commit();
     run_taps(taps);
-    for (uint32_t elapsed = 0; elapsed < SETTLE_MS; elapsed += FRAME_MS)
+    for (uint32_t elapsed = 0; elapsed < settle_ms; elapsed += FRAME_MS)
     {
         frame();
     }

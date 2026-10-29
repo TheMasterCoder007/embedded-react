@@ -157,6 +157,14 @@ typedef struct
 
 typedef struct
 {
+    uint16_t slot;
+    uint8_t point_count, flags, extrapolate_left, extrapolate_right;
+    float input[8];
+    uint32_t output[8]; /**< f32 bits, or ARGB with ERB_INTERP_FLAG_COLOR. */
+} TInterp;
+
+typedef struct
+{
     uint16_t function, file;
     uint32_t offset, line;
 } TDebugEntry;
@@ -224,6 +232,8 @@ typedef struct
     uint32_t import_count;
     TInput inputs[4];
     uint32_t input_count;
+    TInterp interps[4];
+    uint32_t interp_count;
 
     bool has_debug;
     uint32_t debug_build_id;
@@ -555,6 +565,22 @@ static bool tpkg_table(const TPkg* pkg, uint32_t id, TBuf* buf)
             {
                 tb_u16(buf, pkg->inputs[index].name);
                 tb_u16(buf, pkg->inputs[index].slot);
+            }
+            break;
+        case ERB_TABLE_INTERPS:
+            for (uint32_t index = 0; index < pkg->interp_count; index++)
+            {
+                const TInterp* interp = &pkg->interps[index];
+                tb_u16(buf, interp->slot);
+                tb_u8(buf, interp->point_count);
+                tb_u8(buf, interp->flags);
+                tb_u8(buf, interp->extrapolate_left);
+                tb_u8(buf, interp->extrapolate_right);
+                tb_u16(buf, 0u);
+                for (int point = 0; point < 8; point++)
+                    tb_f32(buf, interp->input[point]);
+                for (int point = 0; point < 8; point++)
+                    tb_u32(buf, interp->output[point]);
             }
             break;
         default:
@@ -1009,6 +1035,17 @@ static void tpkg_base(TPkg* pkg)
     pkg->import_count = 1;
     pkg->inputs[0] = (TInput){STR_STEPS, S_COUNT};
     pkg->input_count = 1;
+    /* The animated value 0 to 1 onto 0 to 90 degrees, then onto black to white. */
+    pkg->interps[0] =
+        (TInterp){S_FADE, 2, 0, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP, {0.0f, 1.0f}, {0u, 0x42B40000u}};
+    pkg->interps[1] = (TInterp){S_FADE,
+                                2,
+                                ERB_INTERP_FLAG_COLOR,
+                                ER_EXTRAPOLATE_EXTEND,
+                                ER_EXTRAPOLATE_EXTEND,
+                                {0.0f, 1.0f},
+                                {COLOR_BLACK, COLOR_WHITE}};
+    pkg->interp_count = 2;
 
     pkg->has_debug = true;
     pkg->debug_build_id = pkg->build_id;

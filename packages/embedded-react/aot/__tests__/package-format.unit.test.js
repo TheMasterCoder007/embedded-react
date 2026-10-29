@@ -101,6 +101,14 @@ describe('package format copy', () => {
       defineValue(formatHeader, 'ERB_FRAME_CELLS'),
     );
     expect(format.TIMER_SIZE).toBe(defineValue(formatHeader, 'ERB_TIMER_SIZE'));
+    expect(format.AnimFlag).toEqual({
+      loop: defineValue(formatHeader, 'ERB_ANIM_FLAG_LOOP'),
+      loopReverse: defineValue(formatHeader, 'ERB_ANIM_FLAG_LOOP_REVERSE'),
+      toRegister: defineValue(formatHeader, 'ERB_ANIM_FLAG_TO_REGISTER'),
+    });
+    expect(format.InterpFlag).toEqual({
+      color: defineValue(formatHeader, 'ERB_INTERP_FLAG_COLOR'),
+    });
     expect(format.EVENT_SIZE).toBe(defineValue(formatHeader, 'ERB_EVENT_SIZE'));
     expect(format.LIST_HEADER_SIZE).toBe(
       defineValue(formatHeader, 'ERB_LIST_HEADER_SIZE'),
@@ -128,6 +136,9 @@ describe('package format copy', () => {
       'NODE',
       'BINDING',
       'FUNCTION',
+      'ANIM',
+      'INTERP',
+      'ANIM_ENTRY',
     ]) {
       expect(format[`${name}_SIZE`], name).toBe(
         defineValue(formatHeader, `ERB_${name}_SIZE`),
@@ -144,6 +155,7 @@ describe('package format copy', () => {
       [format.PropKind, 'ERB_PK_'],
       [format.ValueType, 'ERB_T_'],
       [format.BindingKind, 'ERB_BIND_'],
+      [format.AnimKind, 'ERB_ANIM_'],
       [format.FunctionKind, 'ERB_FN_'],
       [format.EventField, 'ERB_EVT_'],
       [format.MathFn, 'ERB_MATH_'],
@@ -195,6 +207,16 @@ describe('package format copy', () => {
       }
     }
     expect(new Map(format.ABI_PROPS)).toEqual(props);
+
+    // Each animatable prop, by the ERAnimProp it drives.
+    const animated = new Map(
+      [
+        ...propsSource.matchAll(
+          /\{offsetof\(ERProps, (\w+)\), ERB_PK_\w+, (ER_PROP_\w+), \w+\}/g,
+        ),
+      ].map(([, field, anim]) => [anim, field]),
+    );
+    expect(new Map(format.ANIM_PROP_FIELDS)).toEqual(animated);
   });
 
   it('has the engine ABI level and the er_scene.h values constant props use', () => {

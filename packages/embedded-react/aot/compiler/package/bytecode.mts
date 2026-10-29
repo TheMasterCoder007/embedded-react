@@ -40,7 +40,8 @@ export type RegisterType =
   | 'double'
   | 'string'
   | 'enum'
-  | 'node';
+  | 'node'
+  | 'anim';
 
 /** A register: its first cell, and the type it holds for the whole function. */
 export interface Register {

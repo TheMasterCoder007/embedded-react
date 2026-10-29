@@ -155,6 +155,8 @@ typedef struct
     uint32_t import_count;
     const uint8_t* inputs;
     uint32_t input_count;
+    const uint8_t* interps;
+    uint32_t interp_count;
 
     const uint8_t* debug;
     uint32_t debug_length;
@@ -191,6 +193,11 @@ static inline const uint8_t* erb_template(const ErbProgram* program, uint32_t in
 static inline const uint8_t* erb_anim(const ErbProgram* program, uint32_t index)
 {
     return program->anims + index * ERB_ANIM_SIZE;
+}
+
+static inline const uint8_t* erb_interp(const ErbProgram* program, uint32_t index)
+{
+    return program->interps + index * ERB_INTERP_SIZE;
 }
 
 static inline const uint8_t* erb_tape(const ErbProgram* program, uint32_t index)

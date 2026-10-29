@@ -27,8 +27,10 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError, constantText} from '../diagnostics.mts';
+import {animationStatement} from './animations.mts';
 import {EventField, MathFn} from './format.mts';
 import {abiProp, floatBits, readConstant} from './props.mts';
+import type {AnimationPlan} from './animations.mts';
 import type {Arena, Slot} from './arena.mts';
 import type {
   FunctionBuilder,
@@ -88,6 +90,7 @@ export interface ProgramSlots {
   armed: Map<string, Slot>;
   /** Each timer callback's function, by its C name. */
   timerFunctions: Map<string, number>;
+  animations: AnimationPlan;
 }
 
 /** The <TextInput> a CHANGE_TEXT handler reads its new text from, and the buffer it reads it into. */
@@ -217,6 +220,7 @@ export class Codegen {
    *                 input: the <TextInput> a CHANGE_TEXT handler reads.
    *                 onReturn: where an effect's early `return` goes.
    *                 row: the row a list row's handler was built for, which its item reads.
+   *                 finished: what an animation completion was passed, which its `finished` reads.
    */
   constructor(
     fn: FunctionBuilder,
@@ -226,6 +230,7 @@ export class Codegen {
       input?: InputText;
       onReturn?: Label;
       row?: Register;
+      finished?: Register;
     } = {},
   ) {
     this.fn = fn;
@@ -234,6 +239,9 @@ export class Codegen {
     this.input = options.input ?? null;
     this.onReturn = options.onReturn ?? null;
     this.row = options.row ?? null;
+    if (options.finished) {
+      this.locals.set('finished', {register: options.finished});
+    }
   }
 
   /*--------------------------------------------------------------------------------------------------------------------
@@ -1098,7 +1106,7 @@ export class Codegen {
       case 'startAnimations':
       case 'startChain':
       case 'completeAfter':
-        notYet('animations');
+        animationStatement(this, stmt, this.program.animations);
         return;
       case 'return':
         if (!this.onReturn) {

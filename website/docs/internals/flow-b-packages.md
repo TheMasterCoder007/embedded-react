@@ -10,7 +10,7 @@ the people building the loader, the VM, and the compiler's package output.
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
 `erb_format.h`). `embedded-react build --aot --package` writes a package for one panel. It takes state,
-handlers, timers, effects, lists and values worked out from the screen size, but not yet animations,
+handlers, timers, effects, lists, animations and values worked out from the screen size, but not yet
 PanResponder or `<Svg>`; the compiler emits C for those while the rest of its package output lands, as the
 [roadmap](/roadmap) tracks. Once packages pass the same tests as the C output, the C
 backend is retired.
@@ -142,6 +142,7 @@ Every record's size is a multiple of 4. A table with a header array starts with 
 | 15  | `tapes`     | A tape directory, then the op-tape floats, paints, gradients and stops. See [Animations and vector tapes](#animations-and-vector-tapes)                                                                                                                                  |
 | 16  | `imports`   | Native functions the package calls: `name u16`, `version u16`, `signature u16`, `reserved u16` (string indices and a version number)                                                                                                                                     |
 | 17  | `inputs`    | Host-fed values (`useHostValue`): `name u16`, `slot u16`                                                                                                                                                                                                                 |
+| 18  | `interps`   | Interpolations an animated value is bound through, 72 bytes each (since minor 1). See [Animations and vector tapes](#animations-and-vector-tapes)                                                                                                                        |
 
 A template node record is `type u8`, `flags u8`, `children u16`, `props u16`, `handle u16`,
 `bindings u16`, `binding_count u8`, `reserved u8`. Nodes are listed in pre-order with a child count,
@@ -162,7 +163,9 @@ The codes these records hold, as `runtime/erb_format.h` defines them:
   each), running animations (7, 20 bytes each), register stack (8, cells), tape scratch (9, floats),
   event queue (10, 32 bytes each). Each kind at most once, in ascending order.
 - **Bindings**: an event (1; `event` is the `EREventType`), a responder query (2), an animated value
-  (3; `event` is the prop id, `target` the value's slot), a tape committed when the node is built (4).
+  (3; `event` is the prop id, `target` the value's slot), a tape committed when the node is built (4),
+  and an animated value through an interpolation (5, since minor 1; `event` is the prop id, `target` the
+  interpolation). A color prop takes only an interpolation onto colors, as the engine binds one.
 - **Function kinds**: below `0x40`, a handler for that `EREventType`; `0x40` plus an
   `ERResponderQuery`, a query (returns a bool); then timer (`0x80`), effect (`0x81`), update
   (`0x82`), boot (`0x83`), helper (`0x84`) and animation done (`0x85`). Only a helper can be called.
@@ -201,6 +204,16 @@ An animation descriptor is `kind u8`, `easing u8`, `flags u8`, `reserved u8`, `t
   those in leaf order. Bits 0 and 1 are the engine's `loop` and `loop_reverse`.
 - `param0`–`param3` are stiffness, damping, mass and velocity for spring, velocity and deceleration for decay,
   and the four control points for a bezier easing.
+- A parallel or stagger group is done when every child is, and done as not finished as soon as one child
+  stops; the others run on. This is how the C output ends a run joined at run time.
+- Delay leaves and staggered waits count down in `erb_tick()` before the timers, and every one counts down
+  before any that ran out moves on, so a wait a completion starts there waits its full time. The C output
+  counts its completion waits the same way.
+
+An interpolation is `slot u16` (the animated value), `point_count u8` (2 to `ER_INTERPOLATE_MAX_POINTS`),
+`flags u8` (bit 0: the outputs are ARGB colors), `extrapolate_left u8` and `extrapolate_right u8` (the
+engine's `ERExtrapolate`), `reserved u16`, then 8 inputs (`f32`) and 8 outputs (`f32`, or `u32` colors). The
+runtime copies it into an `ERInterpolation` or `ERColorInterpolation` when it binds the node.
 
 The `tapes` table starts with `count u32` and the byte offsets of its paints, gradients, and stops
 (`u32` each), then `count` 16-byte tape records: `floats u32` (byte offset), `float_count u16`,
@@ -542,7 +555,8 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Lists     | Row fields inside the row size, a known type, a cap for each string field; the pool holds `cap` rows                                                                                                                                                                                  | bad state layout                   |
 | Props     | Every prop id is in the firmware's ABI table; the value's kind matches the prop's; an enum value in range; a string index valid and, for a text prop, not past the firmware's cap; an image name in the asset pack or built in                                                        | bad prop                           |
 | Templates | Known node types; child counts consistent, so the pre-order list is one tree; a node count within the panel's; handle slots of type `node`; an element's children allowed for its type                                                                                                | bad template                       |
-| Bindings  | Each event bound to a function of the matching kind; each animated binding to an `anim` slot and an animatable prop; each tape index valid                                                                                                                                            | bad binding                        |
+| Bindings  | Each event bound to a function of the matching kind; each animated binding to an animated-value slot and an animatable prop that isn't a color; each interpolated one to an interpolation onto colors exactly when its prop is a color; each tape index valid                         | bad binding                        |
+| Interps   | An animated-value slot; 2 to `ER_INTERPOLATE_MAX_POINTS` points; known flags and extrapolation modes                                                                                                                                                                                  | bad animation                      |
 | Anims     | A known kind and easing; a group's children are later records and no child has two parents; at most `ERUI_MAX_GROUP_ENTRIES` children; the target a `node` or `anim` slot; the prop animatable                                                                                        | bad animation                      |
 | Tapes     | Each tape's floats parse as ops with their argument counts and fit `ERUI_VECTOR_TAPE_MAX`; paint and gradient counts within the firmware's caps; every paint, gradient and stop index in range; 2 to `ER_VGRAD_MAX_STOPS` stops                                                       | bad vector tape                    |
 | Functions | Code in bounds; register count and types valid; parameters and result typed; ends in `RET` or `TRAP`, so it can't run off its end                                                                                                                                                     | bad function                       |
@@ -652,6 +666,10 @@ What each part of today's `app.gen.c` becomes:
 | `_Static_assert(ERUI_MAX_NODES >= n)`             | The node count, checked at load                                      |
 | `assets.generated.c`                              | The asset pack, section 2                                            |
 | `ERNode*` statics                                 | Node handles in slots                                                |
+| `s_av_*` and `er_anim_value_bind*()`              | Animated-value slots, and animated or interpolated bindings          |
+| `er_anim_value_animate()` and its `ERAnimConfig`  | A leaf descriptor, started by `ASTART`                               |
+| `er_seqcb_*`, `er_waitcb_*`, `er_donecb_*`        | Animation-done functions; each completion a helper they `CALL`       |
+| `s_waits` and `app_wait_*()`                      | Delay leaves, and a parallel group for a joined run                  |
 
 ## The firmware's side
 
@@ -714,7 +732,5 @@ running app untouched.
 
 - **Keeping state across a reload** when the slot layout hasn't changed. The `build_id` and a hash of
   the slot table are enough to tell.
-- **Live `toValue`** for an animation whose target reads current state; the descriptor and `ASTART`
-  already take values from registers, so it is a compiler change.
 - **The ESP32's placement rules.** Its flash cache behaves like the RP2040's, but the dispatch loop only
   moves to IRAM once that is measured.
