@@ -836,6 +836,42 @@ export function App() {
     ).toThrow('the app needs 66002 nodes, but a package holds 65535');
   });
 
+  it('refuses more row fields than ROWGET and the rows table can name', () => {
+    const item = count =>
+      `{${Array.from({length: count}, (_, index) => `f${index}: ${index}`).join(', ')}}`;
+    const lists = (count, fields) => `
+import {useState} from 'react';
+import {View} from 'embedded-react';
+export function App() {
+  ${Array.from({length: count}, (_, index) => `const [l${index}] = useState([${item(fields)}]);`).join('\n  ')}
+  return <View />;
+}`;
+    expect(() => compilePackage(lists(1, 256), 'app', SCREEN)).toThrow(
+      'list state "l0" has 256 fields, but a package row holds 255',
+    );
+    expect(() => compilePackage(lists(258, 255), 'app', SCREEN)).toThrow(
+      'the lists have 65790 fields in all, but a package holds 65535',
+    );
+  });
+
+  it('reuses the registers each first item is appended from', () => {
+    const items = `[${Array.from({length: 16}, (_, index) => `{a: ${index}, b: 1.5, c: 'x', d: 2}`).join(', ')}]`;
+    const src = `
+import {useState} from 'react';
+import {Text} from 'embedded-react';
+export function App() {
+  ${Array.from({length: 5}, (_, index) => `const [l${index}] = useState(${items});`).join('\n  ')}
+  return <Text>{l0.length}</Text>;
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const boot = functionsOf(program)[readProgram(program).panel.boot];
+    expect(boot.ops.filter(op => op.name === 'APPEND')).toHaveLength(80);
+    // Each append reads the same four registers.
+    expect(
+      new Set(boot.ops.filter(op => op.name === 'APPEND').map(op => op.a)).size,
+    ).toBe(1);
+  });
+
   it('refuses a list inside a list row, and onChangeText in one', () => {
     const nested = `
 import {useState} from 'react';

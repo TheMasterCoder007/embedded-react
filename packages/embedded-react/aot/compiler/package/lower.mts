@@ -193,8 +193,11 @@ const WIRING_USES: Record<IrWire['kind'], string> = {
   stateDrivenVector: '<Svg>',
 };
 
-/** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes. */
+/** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes, the row fields. */
 const MAX_U16 = 0xffff;
+
+/** The most fields a row has: ROWGET names one in a byte. */
+const MAX_ROW_FIELDS = 255;
 
 /** The span fields a TextSpan spells, in its ABI ids' order. */
 const SPAN_FIELDS = [
@@ -584,6 +587,12 @@ function planSlots(
     if (!state.struct.fields.length) {
       notYet(`list state "${state.name}", whose items have no fields`);
     }
+    if (state.struct.fields.length > MAX_ROW_FIELDS) {
+      throw aotError(
+        `AOT: list state "${state.name}" has ${state.struct.fields.length} fields, but a package row holds ${MAX_ROW_FIELDS}`,
+        'give the items fewer fields.',
+      );
+    }
     let size = 0;
     const fields = state.struct.fields.map(field => {
       const cap = field.kind === 'string' ? listStrCap - 1 : 0;
@@ -612,6 +621,13 @@ function planSlots(
         ]),
     );
     slots.lists.set(state, {slot, buffers});
+  }
+  const fieldCount = rows.reduce((count, row) => count + row.fields.length, 0);
+  if (fieldCount > MAX_U16) {
+    throw aotError(
+      `AOT: the lists have ${fieldCount} fields in all, but a package holds ${MAX_U16}`,
+      'use fewer lists, or give their items fewer fields.',
+    );
   }
 
   for (const ref of app.refs) {
