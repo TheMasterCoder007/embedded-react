@@ -569,10 +569,16 @@ static void test_events_and_inputs(void)
 static void test_queries(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_BOOL};
-    const uint32_t code[] = {OP_ABX(LOADI, 0, 1), OP_ABC(RET, 0, 0, 0)};
+    /* Says yes while no finger is down. */
+    const uint8_t types[] = {ERB_T_BOOL, ERB_T_INT, ERB_T_INT};
+    const uint32_t code[] = {
+        OP_ABC(EVT, 1, ERB_EVT_TOUCHES, 0),
+        OP_ABX(LOADI, 2, 0),
+        OP_ABC(EQ, 0, 1, 2),
+        OP_ABC(RET, 0, 0, 0),
+    };
     const uint16_t query =
-        tpkg_function(&s_pkg, ERB_FN_QUERY + ER_QUERY_START_SHOULD_SET, 0, ERB_T_BOOL, types, 1, code, 2);
+        tpkg_function(&s_pkg, ERB_FN_QUERY + ER_QUERY_START_SHOULD_SET, 0, ERB_T_BOOL, types, 3, code, 4);
     s_pkg.bindings[3] = s_pkg.bindings[0];
     s_pkg.bindings[4] = (TBinding){ERB_BIND_QUERY, ER_QUERY_START_SHOULD_SET, query};
     s_pkg.binding_count = 5;

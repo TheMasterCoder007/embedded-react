@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 1;
+export const FORMAT_MINOR = 2;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -221,6 +221,7 @@ export const EventField = {
   value: 12,
   valueStart: 13,
   finished: 14,
+  touches: 15,
 } as const;
 
 /** FMATH and DMATH functions. */
@@ -709,6 +710,11 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_EVENT_FOCUS', 17],
   ['ER_EVENT_BLUR', 18],
   ['ER_EVENT_VALUE_CHANGE', 19],
+  ['ER_QUERY_START_SHOULD_SET', 0],
+  ['ER_QUERY_START_SHOULD_SET_CAPTURE', 1],
+  ['ER_QUERY_MOVE_SHOULD_SET', 2],
+  ['ER_QUERY_MOVE_SHOULD_SET_CAPTURE', 3],
+  ['ER_QUERY_TERMINATION_REQUEST', 4],
   ['ER_EASE_LINEAR', 0],
   ['ER_EASE_EASE', 1],
   ['ER_EASE_EASE_IN', 2],

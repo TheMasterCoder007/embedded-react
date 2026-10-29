@@ -285,9 +285,9 @@ typedef struct
 {
     uint16_t function;
     uint16_t instance;
-    uint8_t kind;     /**< ErbEventKind. */
-    uint8_t finished; /**< ANIM_DONE: the animation ran to its end. */
-    uint16_t reserved;
+    uint8_t kind;      /**< ErbEventKind. */
+    uint8_t finished;  /**< ANIM_DONE: the animation ran to its end. */
+    uint16_t touches;  /**< Fingers down when a touch arrived. */
     int16_t x;         /**< Touch x, or layout x. */
     int16_t y;         /**< Touch y, or layout y. */
     int16_t dx;        /**< Touch dx, or layout width. */

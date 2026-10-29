@@ -298,15 +298,16 @@ export class FunctionBuilder {
    * The finished function, ending in RET.
    *
    * @param params  Parameter cells.
+   * @param result  What it returns, for a function that returns a value.
    *
    * @returns The function.
    */
-  finish(params = 0): ProgramFunction {
-    this.abc('RET');
+  finish(params = 0, result?: Register): ProgramFunction {
+    this.abc('RET', result?.index ?? 0);
     return {
       kind: this.kind,
       params,
-      result: 0,
+      result: result ? ValueType[result.type] : 0,
       types: [...this.cellTypes],
       code: [...this.code],
     };

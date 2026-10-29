@@ -1535,7 +1535,7 @@ static uint8_t event_field_type(uint8_t kind, uint8_t field)
 {
     const bool touch = (kind >= ERB_FN_QUERY && kind < ERB_FN_QUERY + ER_RESPONDER_QUERY_COUNT)
                        || (kind <= ER_EVENT_RESPONDER_TERMINATE && kind != ER_EVENT_SCROLL);
-    if (touch && field <= ERB_EVT_DY)
+    if (touch && (field <= ERB_EVT_DY || field == ERB_EVT_TOUCHES))
     {
         return ERB_T_INT;
     }

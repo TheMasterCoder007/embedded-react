@@ -40,7 +40,12 @@ import type {
 } from './bytecode.mts';
 import type {ProgramTables} from './tables.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
-import type {IrExpr, LayoutField, WholeHelper} from '../ir/expressions.mts';
+import type {
+  IrExpr,
+  IrGesture,
+  LayoutField,
+  WholeHelper,
+} from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
 import type {IrTextPart} from '../ir/text.mts';
@@ -72,6 +77,15 @@ export interface ListPool {
   buffers: Map<string, Slot>;
 }
 
+/** A PanResponder's gesture state, as C keeps it: whether it is granted, the travel at the grant, and x0/y0. */
+export interface GestureSlots {
+  granted: Slot;
+  baseDx: Slot;
+  baseDy: Slot;
+  x0: Slot;
+  y0: Slot;
+}
+
 /** The slots the program's code names, by what they hold. */
 export interface ProgramSlots {
   arena: Arena;
@@ -91,6 +105,8 @@ export interface ProgramSlots {
   /** Each timer callback's function, by its C name. */
   timerFunctions: Map<string, number>;
   animations: AnimationPlan;
+  /** Each PanResponder's gesture state, by its C prefix. */
+  gestures: Map<string, GestureSlots>;
 }
 
 /** The <TextInput> a CHANGE_TEXT handler reads its new text from, and the buffer it reads it into. */
@@ -296,6 +312,8 @@ export class Codegen {
           : ['vx', 'vy', 'value', 'value_start'].includes(expr.field)
             ? 'float'
             : 'int';
+      case 'gesture':
+        return expr.field === 'vx' || expr.field === 'vy' ? 'float' : 'int';
       case 'clock':
         return 'int64';
       case 'itemField':
@@ -372,7 +390,7 @@ export class Codegen {
       case 'itemField':
         return this.itemField(expr.item, expr.field.key, type);
       case 'gesture':
-        return notYet('PanResponder');
+        return this.gesture(expr);
       case 'event':
         return expr.field === 'changed_text'
           ? this.changedText()
@@ -727,6 +745,45 @@ export class Codegen {
     const register = this.fn.register(type as RegisterType);
     this.fn.abc('EVT', register.index, field);
     return register;
+  }
+
+  /**
+   * A gestureState field, as C reads it: travel from the grant, x0/y0 from the responder's state, the rest
+   * off the event.
+   *
+   * @param expr  The field.
+   *
+   * @returns The register.
+   */
+  private gesture(expr: IrGesture): Register {
+    const slots = this.program.gestures.get(expr.statePrefix)!;
+    switch (expr.field) {
+      case 'dx':
+      case 'dy': {
+        const travel = this.event('int', EVENT_FIELDS[expr.field]);
+        const base = this.get(
+          expr.field === 'dx' ? slots.baseDx : slots.baseDy,
+        );
+        const register = this.fn.register('int');
+        this.fn.abc('SUB', register.index, travel.index, base.index);
+        return register;
+      }
+      case 'moveX':
+        return this.event('int', EventField.x);
+      case 'moveY':
+        return this.event('int', EventField.y);
+      case 'x0':
+        return this.get(slots.x0);
+      case 'y0':
+        return this.get(slots.y0);
+      case 'vx':
+      case 'vy':
+        return this.event('float', EVENT_FIELDS[expr.field]);
+      case 'numberActiveTouches':
+        return this.event('int', EventField.touches);
+      case 'stateID':
+        return this.load('int', expr.stateID);
+    }
   }
 
   /** The text a <TextInput> holds now, as its CHANGE_TEXT handler receives it. */

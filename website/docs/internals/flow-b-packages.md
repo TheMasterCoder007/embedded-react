@@ -10,8 +10,8 @@ the people building the loader, the VM, and the compiler's package output.
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
 `erb_format.h`). `embedded-react build --aot --package` writes a package for one panel. It takes state,
-handlers, timers, effects, lists, animations and values worked out from the screen size, but not yet
-PanResponder or `<Svg>`; the compiler emits C for those while the rest of its package output lands, as the
+handlers, timers, effects, lists, animations, PanResponder and values worked out from the screen size, but
+not yet `<Svg>`; the compiler emits C for that while the rest of its package output lands, as the
 [roadmap](/roadmap) tracks. Once packages pass the same tests as the C output, the C
 backend is retired.
 :::
@@ -376,7 +376,7 @@ extension word is never an instruction, and a branch into one is rejected. The f
 | Timers        | `TSTART` (function, ms, repeat; gives an id), `TCLEAR`                                                                                                                                           |
 | Animation     | `ASTART` (a descriptor, with `toValue`s from registers), `ASTOP`, `AVSET`, `AVGET`                                                                                                               |
 | Vectors       | `VTAPE` (copy a tape into the scratch), `VSET` (a float into one of the tape's arguments), `VCOMMIT` (to a node, with its paints), `VDIRTY`                                                      |
-| Event data    | `EVT` (`x`, `y`, `dx`, `dy`, `vx`, `vy`, a layout field), `NOW`, `DATENOW`                                                                                                                       |
+| Event data    | `EVT` (`x`, `y`, `dx`, `dy`, `vx`, `vy`, the fingers down since minor 2, a layout field), `NOW`, `DATENOW`                                                                                       |
 | Faults        | `TRAP`, with a reason: what a lowered `throw` or an unreachable branch becomes                                                                                                                   |
 | Effects       | `EFFECT` (queue an effect to run after this update pass)                                                                                                                                         |
 
@@ -670,6 +670,7 @@ What each part of today's `app.gen.c` becomes:
 | `er_anim_value_animate()` and its `ERAnimConfig`  | A leaf descriptor, started by `ASTART`                               |
 | `er_seqcb_*`, `er_waitcb_*`, `er_donecb_*`        | Animation-done functions; each completion a helper they `CALL`       |
 | `s_waits` and `app_wait_*()`                      | Delay leaves, and a parallel group for a joined run                  |
+| `er_pan_*` and `er_responder_query_set()`         | Responder handlers and query functions, in `bindings`                |
 
 ## The firmware's side
 

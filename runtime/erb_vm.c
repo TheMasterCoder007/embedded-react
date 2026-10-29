@@ -1423,6 +1423,9 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                     case ERB_EVT_VALUE_START:
                         set_float(&registers[operand_a], event->value_start);
                         break;
+                    case ERB_EVT_TOUCHES:
+                        registers[operand_a] = event->touches;
+                        break;
                     default:
                         registers[operand_a] = event->finished;
                         break;

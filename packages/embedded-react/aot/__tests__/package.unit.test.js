@@ -270,15 +270,16 @@ describe('package output', () => {
 
   it('refuses what it does not lower yet, at its place in the source', () => {
     const src = `
-import {useState, useRef} from 'react';
-import {View, Text, PanResponder} from 'embedded-react';
+import {View, Svg, Circle} from 'embedded-react';
 export function App() {
-  const [x, setX] = useState(0);
-  const pan = useRef(PanResponder.create({onPanResponderMove: (e, g) => setX(g.dx)})).current;
-  return <View {...pan.panHandlers}><Text>{x}</Text></View>;
+  return (
+    <View>
+      <Svg width={10} height={10}><Circle cx={5} cy={5} r={4} fill="#ffffff" /></Svg>
+    </View>
+  );
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support PanResponder yet[\s\S]*App\.jsx:7:/,
+      /the package output doesn't support <Svg> yet[\s\S]*App\.jsx:6:7/,
     );
   });
 
@@ -1245,6 +1246,140 @@ export function App() {
     );
     expect(names(pressOut)).toEqual(['ASTART', 'RET']);
     expect(anims[pressOut.ops[0].bx]).toMatchObject({to: floatBits(1)});
+  });
+});
+
+describe('PanResponder', () => {
+  const PAN_APP = `
+import {useState, useRef} from 'react';
+import {View, Text, PanResponder} from 'embedded-react';
+export function App() {
+  const [x, setX] = useState(0);
+  const pan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 4,
+    onPanResponderMove: (e, g) => setX(g.dx + g.y0 + g.numberActiveTouches),
+    onPanResponderReject: () => setX(0),
+  })).current;
+  return (
+    <View>
+      <View {...pan.panHandlers}><Text>{x}</Text></View>
+      <View {...pan.panHandlers} />
+    </View>
+  );
+}`;
+
+  const event = name => ENGINE_VALUES.get(name);
+  const query = name => FunctionKind.query + ENGINE_VALUES.get(name);
+  const names = fn => fn.ops.map(op => op.name);
+
+  /** Each function's result type. */
+  function resultsOf(bytes) {
+    const {u32, tables} = readProgram(bytes);
+    const functions = tables.get(Table.functions);
+    return Array.from(
+      {length: functions.length / 16},
+      (_, index) => (u32(functions.offset + index * 16 + 12) >>> 16) & 0xff,
+    );
+  }
+
+  it('binds a handler to each responder event and a query to each predicate, once for every node', () => {
+    const {program} = compilePackage(PAN_APP, 'app', SCREEN);
+    const kinds = functionsOf(program).map(fn => fn.kind);
+    expect(kinds).toEqual([
+      event('ER_EVENT_RESPONDER_GRANT'),
+      event('ER_EVENT_RESPONDER_RELEASE'),
+      event('ER_EVENT_RESPONDER_TERMINATE'),
+      event('ER_EVENT_RESPONDER_MOVE'),
+      event('ER_EVENT_RESPONDER_REJECT'),
+      query('ER_QUERY_START_SHOULD_SET'),
+      query('ER_QUERY_MOVE_SHOULD_SET'),
+      FunctionKind.update,
+    ]);
+    expect(resultsOf(program).slice(5, 7)).toEqual([
+      ValueType.bool,
+      ValueType.bool,
+    ]);
+
+    const {u16, tables, view} = readProgram(program);
+    const {offset, length} = tables.get(Table.bindings);
+    const bindings = Array.from({length: length / 4}, (_, index) => [
+      view.getUint8(offset + index * 4),
+      view.getUint8(offset + index * 4 + 1),
+      u16(offset + index * 4 + 2),
+    ]);
+    const wiring = [
+      [BindingKind.event, event('ER_EVENT_RESPONDER_GRANT'), 0],
+      [BindingKind.event, event('ER_EVENT_RESPONDER_RELEASE'), 1],
+      [BindingKind.event, event('ER_EVENT_RESPONDER_TERMINATE'), 2],
+      [BindingKind.event, event('ER_EVENT_RESPONDER_MOVE'), 3],
+      [BindingKind.event, event('ER_EVENT_RESPONDER_REJECT'), 4],
+      [BindingKind.query, ENGINE_VALUES.get('ER_QUERY_START_SHOULD_SET'), 5],
+      [BindingKind.query, ENGINE_VALUES.get('ER_QUERY_MOVE_SHOULD_SET'), 6],
+    ];
+    expect(bindings).toEqual([...wiring, ...wiring]);
+  });
+
+  it('keeps the gesture in slots: anchored by the grant, cleared after release and terminate', () => {
+    const {program} = compilePackage(PAN_APP, 'app', SCREEN);
+    const [grant, release, terminate, move, reject] = functionsOf(program);
+
+    // A second grant is ignored; the first sets granted, then the anchor and x0/y0 off the event.
+    expect(names(grant)).toEqual([
+      'GET32',
+      'JT',
+      'LOADI',
+      'SET32',
+      ...Array(4).fill(['EVT', 'SET32']).flat(),
+      'RET',
+    ]);
+    expect(
+      grant.ops.filter(op => op.name === 'EVT').map(op => op.bx & 0xff),
+    ).toEqual([2, 3, 0, 1]); // dx, dy, x, y
+
+    // With no callback, release and terminate only clear the gesture, and only while it is granted.
+    for (const fn of [release, terminate]) {
+      expect(names(fn)).toEqual([
+        'GET32',
+        'JF',
+        'LOADI',
+        'SET32',
+        'LOADI',
+        'SET32',
+        'SET32',
+        'RET',
+      ]);
+    }
+
+    // A move reads travel from the anchor, y0 from its slot and the fingers through EVT.
+    expect(names(move).slice(0, 2)).toEqual(['GET32', 'JF']);
+    expect(names(move)).toContain('SUB');
+    expect(
+      move.ops.filter(op => op.name === 'EVT').map(op => op.bx & 0xff),
+    ).toEqual([2, 15]); // dx, touches
+
+    // A reject runs as it is: the node never owned the gesture.
+    expect(names(reject)[0]).not.toBe('GET32');
+  });
+
+  it('keeps each responder its own gesture slots', () => {
+    const src = PAN_APP.replace(
+      '<View {...pan.panHandlers} />',
+      '<View {...other.panHandlers} />',
+    ).replace(
+      '  return (',
+      '  const other = useRef(PanResponder.create({onPanResponderGrant: (e, g) => setX(g.stateID)})).current;\n  return (',
+    );
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const fns = functionsOf(program);
+    // The second responder's grant, after the first's seven functions.
+    const otherGrant = fns[7];
+    expect(otherGrant.kind).toBe(event('ER_EVENT_RESPONDER_GRANT'));
+    expect(otherGrant.ops[0].bx).not.toBe(fns[0].ops[0].bx);
+    // stateID is a constant: the second responder is gesture 2.
+    expect(otherGrant.ops).toContainEqual(
+      expect.objectContaining({name: 'LOADI', bx: 2}),
+    );
   });
 });
 

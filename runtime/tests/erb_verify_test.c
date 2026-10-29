@@ -580,6 +580,16 @@ static void test_bytecode(void)
     }
     {
         const uint8_t types[] = {ERB_T_INT};
+        const uint32_t code[] = {OP_ABC(EVT, 0, ERB_EVT_TOUCHES, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(F_TIMER, types, 1, code, 2);
+        EXPECT(ERB_ERR_BYTECODE, "EVT touches in a timer");
+        base();
+        set_code_types(F_PRESS, types, 1, code, 2);
+        EXPECT(ERB_OK, "EVT touches in a press handler");
+    }
+    {
+        const uint8_t types[] = {ERB_T_INT};
         const uint32_t code[] = {OP_ABX(PSETI, 0, 73), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(F_TIMER, types, 1, code, 2);
