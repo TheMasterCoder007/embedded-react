@@ -132,6 +132,21 @@ export class FunctionBuilder {
     return {index: this.newRegister(type), type};
   }
 
+  /**
+   * New registers of one-cell types in consecutive cells, as APPEND reads a row. They are released like any other.
+   *
+   * @param types  Their types.
+   *
+   * @returns The registers.
+   */
+  consecutive(types: RegisterType[]): Register[] {
+    return types.map(type => {
+      const register = {index: this.newRegister(type), type};
+      this.taken.push(register);
+      return register;
+    });
+  }
+
   private newRegister(type: RegisterType): number {
     // A two-cell register starts on an even cell.
     if (WIDE.has(type) && this.cellTypes.length % 2) {

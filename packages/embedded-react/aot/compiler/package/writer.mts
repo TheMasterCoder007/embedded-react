@@ -71,6 +71,19 @@ export interface ProgramSlot {
   aux: number;
 }
 
+/** A list row's field: its type, a string's most bytes, and where it sits in the row. */
+export interface ProgramRowField {
+  type: number;
+  cap: number;
+  offset: number;
+}
+
+/** A list row layout. */
+export interface ProgramRow {
+  size: number;
+  fields: ProgramRowField[];
+}
+
 export interface ProgramPropEntry {
   prop: number;
   kind: number;
@@ -127,6 +140,7 @@ export interface Program {
   slots: ProgramSlot[];
   /** Interned string sets: each one's values, as string indices. */
   enums: number[][];
+  rows: ProgramRow[];
   propSets: ProgramPropEntry[][];
   templates: ProgramTemplate[];
   bindings: ProgramBinding[];
@@ -334,6 +348,25 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
   if (program.enums.length) {
     const enums = headedTable(program.enums, (out, value) => out.u16(value));
     tables.set(Table.enums, padded(enums));
+  }
+  if (program.rows.length) {
+    table(Table.rows, out => {
+      out.u32(program.rows.length);
+      let first = 0;
+      for (const row of program.rows) {
+        out.u16(row.size);
+        out.u16(first);
+        out.u16(row.fields.length);
+        out.u16(0);
+        first += row.fields.length;
+      }
+      for (const field of program.rows.flatMap(row => row.fields)) {
+        out.u8(field.type);
+        out.u8(0);
+        out.u16(field.cap);
+        out.u32(field.offset);
+      }
+    });
   }
   if (program.propSets.length) {
     tables.set(

@@ -135,6 +135,28 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '120,30 45,30',
   },
+  {name: 'lists', file: fixture('lists'), screen: [240, 320]},
+  // Two adds, a press on the new last row, then the dots twice (two dots each).
+  {
+    name: 'lists-adds',
+    file: fixture('lists'),
+    screen: [240, 320],
+    taps: '28,20 28,20 20,108 28,148 28,148',
+  },
+  // Drop, a row's press, keep, add, a row's press, then cut to none and add again.
+  {
+    name: 'lists-removes',
+    file: fixture('lists'),
+    screen: [240, 320],
+    taps: '72,20 20,76 116,20 28,20 20,60 160,20 28,20',
+  },
+  // Presses on two rows, cut by a negative end, clear, the dots (now where the first row was), then adds and a drop.
+  {
+    name: 'lists-clear',
+    file: fixture('lists'),
+    screen: [240, 320],
+    taps: '20,92 20,76 160,20 204,20 20,60 28,20 28,20 72,20',
+  },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
   // + twice, then Heat and Auto (Auto turns on the dial's gradient).

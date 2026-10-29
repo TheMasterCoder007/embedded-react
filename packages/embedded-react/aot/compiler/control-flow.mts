@@ -701,6 +701,7 @@ function emitDynamicMap(
         code: `${listState.arrayName}[${rowIndex}]`,
         struct: listState.struct,
         list: listState,
+        row: rowIndex,
       } as Local);
     }
 

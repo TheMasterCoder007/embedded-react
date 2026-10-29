@@ -71,6 +71,8 @@ export interface Local extends CExpr {
   struct?: ItemStruct;
   /** A list row's item: the list it is a row of. */
   list?: ListState;
+  /** A list row's item: the row it is. */
+  row?: number;
   /** What it was set from, which the typing pass reads when it infers slot widths. */
   source?: IrSource;
   /** The typed expression it stands for, when every read of it is that expression (a memo, a prop). */

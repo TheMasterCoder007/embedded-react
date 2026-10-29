@@ -27,6 +27,7 @@
 import {
   EVENT_SIZE,
   FRAME_CELLS,
+  LIST_HEADER_SIZE,
   Region,
   SlotFlag,
   TIMER_SIZE,
@@ -45,10 +46,12 @@ export interface Slot {
   dirtyBit: number;
   /** An immediate, or a constant or string index, by type. */
   init: number;
-  /** A string's most bytes, without its NUL. */
+  /** A string's most bytes, without its NUL; a list's rows; a handle array's handles. */
   cap: number;
-  /** An enum's set. */
+  /** An enum's set, or a list's row layout. */
   aux: number;
+  /** A list's row size. */
+  rowBytes: number;
   index: number;
   offset: number;
 }
@@ -72,6 +75,7 @@ const NO_INIT = 0xffffffff;
 export class Arena {
   private readonly values: Slot[] = [];
   private readonly strings: Slot[] = [];
+  private readonly lists: Slot[] = [];
   private readonly handles: Slot[] = [];
   private dirtyBits = 0;
   private timers = 0;
@@ -83,7 +87,7 @@ export class Arena {
    *
    * @param type  Its ValueType.
    * @param init  Its initial value: an immediate, or a constant or string index; none starts at zero.
-   * @param cap  A string's most bytes.
+   * @param cap  A string's most bytes, or a handle array's handles.
    *
    * @returns The slot.
    */
@@ -101,16 +105,35 @@ export class Arena {
       init: init ?? (wide || type === ValueType.string ? NO_INIT : 0),
       cap,
       aux: 0,
+      rowBytes: 0,
       index: -1,
       offset: -1,
     };
     (type === ValueType.string
       ? this.strings
-      : type === ValueType.node
-        ? this.handles
-        : this.values
+      : type === ValueType.list
+        ? this.lists
+        : type === ValueType.node
+          ? this.handles
+          : this.values
     ).push(slot);
     return slot;
+  }
+
+  /**
+   * Plans a list's pool: its row count, then `cap` rows, empty at load.
+   *
+   * @param layout  Its row layout.
+   * @param rowBytes  A row's size.
+   * @param cap  Rows it holds.
+   *
+   * @returns The slot.
+   */
+  list(layout: number, rowBytes: number, cap: number): Slot {
+    return Object.assign(this.slot(ValueType.list, 0, cap), {
+      aux: layout,
+      rowBytes,
+    });
   }
 
   /**
@@ -150,8 +173,8 @@ export class Arena {
   }
 
   /**
-   * Lays the slots out: values, the dirty bits, strings, node handles, then the timer table. Code may name
-   * slots from here on.
+   * Lays the slots out: values, the dirty bits, strings, list pools, node handles, then the timer table. Code may
+   * name slots from here on.
    */
   layOut(): void {
     const regions: ProgramRegion[] = [];
@@ -181,14 +204,19 @@ export class Arena {
       offset += bytes;
     }
     region(Region.strings, this.strings, slot => (slot.cap + 1 + 3) & ~3);
-    region(Region.handles, this.handles, () => 8);
+    region(
+      Region.lists,
+      this.lists,
+      slot => LIST_HEADER_SIZE + slot.cap * slot.rowBytes,
+    );
+    region(Region.handles, this.handles, slot => 8 * Math.max(slot.cap, 1));
     if (this.timers) {
       const bytes = this.timers * TIMER_SIZE;
       regions.push({kind: Region.timers, count: this.timers, offset, bytes});
       offset += bytes;
     }
 
-    [...this.values, ...this.strings, ...this.handles].forEach(
+    [...this.values, ...this.strings, ...this.lists, ...this.handles].forEach(
       (slot, index) => {
         slot.index = index;
       },
@@ -198,7 +226,12 @@ export class Arena {
 
   /** The slot table, in arena order. */
   get slots(): ProgramSlot[] {
-    return [...this.values, ...this.strings, ...this.handles].map(slot => ({
+    return [
+      ...this.values,
+      ...this.strings,
+      ...this.lists,
+      ...this.handles,
+    ].map(slot => ({
       type: slot.type,
       flags: slot.flags,
       dirtyBit: slot.dirtyBit,
