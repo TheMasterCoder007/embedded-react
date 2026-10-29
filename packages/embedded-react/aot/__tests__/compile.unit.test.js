@@ -3340,6 +3340,25 @@ import logo from './assets/logo.png';
       ),
     ).toThrow(/unsupported <Image resizeMode>/);
   });
+
+  it('rejects two image files of the same name, at the second import', () => {
+    expect(() =>
+      compileSource(
+        `import { View, Image } from 'embedded-react';\nimport tall from './portrait/icon.png';\nimport wide from './landscape/icon.png';\nexport function App() { return (<View><Image source={tall} /><Image source={wide} /></View>); }`,
+        'demo',
+      ),
+    ).toThrow(
+      /two images are named "icon" \(\.\/portrait\/icon\.png and \.\/landscape\/icon\.png\)[\s\S]*App\.jsx:3:1/,
+    );
+  });
+
+  it('accepts the same image file imported twice', () => {
+    const r = compileSource(
+      `import { View, Image } from 'embedded-react';\nimport a from './assets/icon.png';\nimport b from 'assets/icon.png';\nexport function App() { return (<View><Image source={a} /><Image source={b} /></View>); }`,
+      'demo',
+    );
+    expect(r.images.map(image => image.name)).toEqual(['icon']);
+  });
 });
 
 describe('AOT per-instance child state', () => {

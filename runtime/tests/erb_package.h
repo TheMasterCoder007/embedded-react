@@ -278,6 +278,9 @@ typedef struct
     bool program_twice;          /**< A second program section. */
     bool misalign_tables;        /**< Start the tables 2 bytes off 4-aligned. */
     uint16_t extra_table_id;     /**< Also list a table with this id (0: none). */
+    uint16_t extra_table_panel;  /**< The panel the extra table is for (ERB_NONE: every panel). */
+    bool per_panel;              /**< List each table once per panel, every panel's at the same bytes. */
+    bool panel_field_zero;       /**< Write 0 in each table's panel field, as a package before minor 4 did. */
     bool overlap_tables;         /**< Point the code table at the types table. */
 } TPkg;
 
@@ -667,7 +670,8 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
         lengths[id] = table.length;
         table_count += present[id];
     }
-    table_count += pkg->extra_table_id ? 1u : 0u;
+    const uint32_t listings = pkg->per_panel ? pkg->panel_count : 1u;
+    table_count = table_count * listings + (pkg->extra_table_id ? 1u : 0u);
 
     const uint32_t start = buf->length;
     tb_u16(buf, pkg->major);
@@ -722,26 +726,34 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
         memcpy(buf->data + buf->length, tables[id], lengths[id]);
         buf->length += lengths[id];
     }
-    for (uint32_t id = 1; id < ERB_TABLE_COUNT_; id++)
+    for (uint32_t listing = 0; listing < listings; listing++)
     {
-        if (!present[id])
+        const uint16_t panel = pkg->per_panel ? (uint16_t)listing : pkg->panel_field_zero ? 0u : ERB_NONE;
+        for (uint32_t id = 1; id < ERB_TABLE_COUNT_; id++)
         {
-            continue;
+            if (!present[id])
+            {
+                continue;
+            }
+            uint8_t* at = buf->data + directory + entry * ERB_DIRECTORY_SIZE;
+            const uint32_t offset =
+                (pkg->overlap_tables && id == ERB_TABLE_CODE) ? offsets[ERB_TABLE_TYPES] : offsets[id];
+            at[0] = (uint8_t)id;
+            at[1] = 0u;
+            at[2] = (uint8_t)panel;
+            at[3] = (uint8_t)(panel >> 8);
+            tb_put32(at + 4, offset);
+            tb_put32(at + 8, lengths[id]);
+            entry++;
         }
-        uint8_t* at = buf->data + directory + entry * ERB_DIRECTORY_SIZE;
-        const uint32_t offset = (pkg->overlap_tables && id == ERB_TABLE_CODE) ? offsets[ERB_TABLE_TYPES] : offsets[id];
-        at[0] = (uint8_t)id;
-        at[1] = 0u;
-        at[2] = at[3] = 0u;
-        tb_put32(at + 4, offset);
-        tb_put32(at + 8, lengths[id]);
-        entry++;
     }
     if (pkg->extra_table_id)
     {
         uint8_t* at = buf->data + directory + entry * ERB_DIRECTORY_SIZE;
         at[0] = (uint8_t)pkg->extra_table_id;
-        at[1] = at[2] = at[3] = 0u;
+        at[1] = 0u;
+        at[2] = (uint8_t)pkg->extra_table_panel;
+        at[3] = (uint8_t)(pkg->extra_table_panel >> 8);
         tb_put32(at + 4, buf->length - start);
         tb_put32(at + 8, 0u);
     }

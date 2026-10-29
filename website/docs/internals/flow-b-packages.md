@@ -9,9 +9,9 @@ the people building the loader, the VM, and the compiler's package output.
 
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
-`erb_format.h`). `embedded-react build --aot --package` writes a package for one panel. It takes state,
-handlers, timers, effects, lists, animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked
-out from the screen size. Multi-panel packages are still to come, as the [roadmap](/roadmap) tracks. Once
+`erb_format.h`). `embedded-react build --aot --package` writes a package, with a layout for each panel
+size `--screen` lists (`--screen 240x320,320x240`). It takes state, handlers, timers, effects, lists,
+animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen size. Once
 packages pass the same tests as the C output, the C backend is retired.
 :::
 
@@ -94,14 +94,20 @@ Then, in order:
 
 - **Panels**, 16 bytes each: `width u16`, `height u16`, `arena_bytes u32`, `node_count u16`,
   `root_template u16`, `boot_function u16`, `update_function u16` (`0xFFFF` for none). One entry per
-  declared panel size. Tables that are the same for several panels are stored once and shared; only
-  templates and functions that differ are stored per panel.
+  declared panel size, each compiled as the C output is for that size. Tables that are the same for
+  every panel are stored once and shared; one that differs, such as a panel's templates, is stored
+  per panel. Every panel's functions point into one `code` and one `types` table, so a function body
+  that is the same in several panels is stored once.
 - **Needs**, 8 bytes each: `resource u16`, `reserved u16`, `amount u32`. The engine pools the package
   uses besides nodes: vector nodes (1), animation values (2), concurrent animations (3), animation
   groups (4), registered images (5), fonts (6), glyphs (7) and extra glyphs (8), each at most once.
   A firmware that doesn't know a resource id rejects the package, so a later pool can be added
   without a format change.
-- **Table directory**, 12 bytes each: `id u16`, `reserved u16`, `offset u32`, `length u32`.
+- **Table directory**, 12 bytes each: `id u16`, `panel u16`, `offset u32`, `length u32`. `panel`
+  (since minor 4) is the panel the table is for, or `0xFFFF` for every panel. A panel sees at most one
+  table of each id, its own or the shared one, and the runtime skips the rest. Panels whose copies of a
+  table are the same list one entry each, at the same bytes. Before minor 4 the field was reserved, and
+  every table is every panel's.
 
 **The engine ABI level** is a number the engine bumps when it adds a prop, node type, event, animated
 property, or enum value, and it raises its oldest supported level when one is removed or changes
@@ -572,7 +578,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Header    | `engine_abi` within the firmware's range                                                                                                                                                                                                                                              | built for engine ABI _n_           |
 | Header    | A panel matches the real size                                                                                                                                                                                                                                                         | no layout for _w_ × _h_            |
 | Header    | The panel's arena bytes, nodes and each need fit what the firmware reserves; every resource id is known and named once                                                                                                                                                                | needs _n_ B, firmware reserves _m_ |
-| Tables    | Every table in the section's bounds, 4-aligned, not overlapping another, with a length that is a whole number of records                                                                                                                                                              | malformed table                    |
+| Tables    | Every table in the section's bounds, 4-aligned, for a declared panel or every panel; none of the panel's tables overlapping another or listed twice; a length that is a whole number of records                                                                                       | malformed table                    |
 | Tables    | The required tables are present (`arena`, `slots`, `templates`, `functions`, `types`, `code`); no unknown table id                                                                                                                                                                    | malformed table                    |
 | Strings   | Every offset in bounds and in order; every string NUL-terminated inside the table and valid UTF-8                                                                                                                                                                                     | malformed string                   |
 | Arena     | Regions inside `arena_bytes`, aligned, not overlapping; their sum is what the panel declares                                                                                                                                                                                          | bad arena layout                   |

@@ -18,8 +18,9 @@
 //
 // Each scenario is compiled twice, to app.gen.c and to a Flow B package. tools/erb-parity builds a headless
 // host around each (the C app, and the Flow B runtime loading the package), both run the scenario's taps
-// through the same engine and software backend, and their last frames must match pixel for pixel. Each
-// package's resource report is printed as it is built.
+// through the same engine and software backend, and their last frames must match pixel for pixel. A demo's
+// package has a layout for each of its boards' panels, as one build for all of them would, and each of its
+// scenarios runs at one of them. Each package's resource report is printed as it is built.
 //
 // A scenario the package output can't lower yet is skipped with the reason, so the list shows how far the
 // package output has come; any other failure fails the run. Frames that differ are written as PNGs
@@ -58,6 +59,15 @@ const EXE = process.platform === 'win32' ? '.exe' : '';
 
 const fixture = name => join(HERE, 'fixtures', `${name}.jsx`);
 const demo = name => join(ROOT, 'demos', name, 'App.jsx');
+
+// The panels each demo's boards use: the thermostat's CYD, portrait and landscape, and a 320x480; the watch
+// face's RP2040 1.69".
+const THERMOSTAT_PANELS = [
+  [240, 320],
+  [320, 240],
+  [320, 480],
+];
+const WATCH_PANELS = [[240, 280]];
 
 // `taps` is "x,y x,y ...", the same for both hosts; "x,y>x2,y2" is a drag. `settle` is how many ms the hosts run after the last tap
 // before they take the frame (500 when it is left out), so a scenario can sample an animation as it runs.
@@ -330,6 +340,13 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '40,154>200,150',
   },
+  // The second row dragged, then the third: each move names its own row.
+  {
+    name: 'drag-rows',
+    file: fixture('drag-rows'),
+    screen: [240, 320],
+    taps: '60,74>120,84 60,120>90,120',
+  },
   {name: 'svg', file: fixture('svg'), screen: [240, 320]},
   // The arc twice, then the toggle (a wider stroke and the gradient) and the mode (a stop's and a stroke's color).
   {
@@ -380,13 +397,121 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '120,30',
   },
-  {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
-  {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
+  {
+    name: 'watch-face',
+    file: demo('watch-face'),
+    screen: [240, 280],
+    panels: WATCH_PANELS,
+  },
+  // A swipe to the level, settled, and the clock a second on.
+  {
+    name: 'watch-face-level',
+    file: demo('watch-face'),
+    screen: [240, 280],
+    panels: WATCH_PANELS,
+    taps: '200,140>40,140',
+    settle: 1200,
+  },
+  // To the level and back again.
+  {
+    name: 'watch-face-back',
+    file: demo('watch-face'),
+    screen: [240, 280],
+    panels: WATCH_PANELS,
+    taps: '200,140>40,140 40,140>200,140',
+    settle: 1200,
+  },
+  // A drag too short to turn the page, taken as it eases back.
+  {
+    name: 'watch-face-short',
+    file: demo('watch-face'),
+    screen: [240, 280],
+    panels: WATCH_PANELS,
+    taps: '160,140>120,140',
+    settle: 60,
+  },
+  {
+    name: 'thermostat-cyd',
+    file: demo('thermostat'),
+    screen: [240, 320],
+    panels: THERMOSTAT_PANELS,
+  },
+  // The CYD's panel: + twice, then Heat and Auto.
+  {
+    name: 'thermostat-cyd-modes',
+    file: demo('thermostat'),
+    screen: [240, 320],
+    panels: THERMOSTAT_PANELS,
+    taps: '200,224 200,224 93,278 146,278',
+  },
+  {
+    name: 'thermostat-cyd-dial',
+    file: demo('thermostat'),
+    screen: [240, 320],
+    panels: THERMOSTAT_PANELS,
+    taps: '52,150',
+  },
+  {
+    name: 'thermostat-cyd-settings',
+    file: demo('thermostat'),
+    screen: [240, 320],
+    panels: THERMOSTAT_PANELS,
+    taps: '209,32',
+  },
+  {
+    name: 'thermostat-cyd-units',
+    file: demo('thermostat'),
+    screen: [240, 320],
+    panels: THERMOSTAT_PANELS,
+    taps: '209,32 163,197 186,120',
+  },
+  // Turned landscape, the modes are a column beside the dial.
+  {
+    name: 'thermostat-land',
+    file: demo('thermostat'),
+    screen: [320, 240],
+    panels: THERMOSTAT_PANELS,
+  },
+  {
+    name: 'thermostat-land-modes',
+    file: demo('thermostat'),
+    screen: [320, 240],
+    panels: THERMOSTAT_PANELS,
+    taps: '175,198 175,198 273,116 273,160',
+  },
+  {
+    name: 'thermostat-land-dial',
+    file: demo('thermostat'),
+    screen: [320, 240],
+    panels: THERMOSTAT_PANELS,
+    taps: '44,140',
+  },
+  {
+    name: 'thermostat-land-settings',
+    file: demo('thermostat'),
+    screen: [320, 240],
+    panels: THERMOSTAT_PANELS,
+    taps: '289,32',
+  },
+  {
+    name: 'thermostat-land-units',
+    file: demo('thermostat'),
+    screen: [320, 240],
+    panels: THERMOSTAT_PANELS,
+    taps: '289,32 223,157 266,80',
+  },
+  {
+    name: 'thermostat',
+    file: demo('thermostat'),
+    screen: [320, 480],
+    panels: THERMOSTAT_PANELS,
+  },
   // + twice, then Heat and Auto (Auto turns on the dial's gradient).
   {
     name: 'thermostat-modes',
     file: demo('thermostat'),
     screen: [320, 480],
+    panels: THERMOSTAT_PANELS,
     taps: '280,341 280,341 124,395 197,395',
   },
   // A tap on the dial's track sets the temperature, through onValueChange.
@@ -394,6 +519,7 @@ const SCENARIOS = [
     name: 'thermostat-dial',
     file: demo('thermostat'),
     screen: [320, 480],
+    panels: THERMOSTAT_PANELS,
     taps: '60,200',
   },
   // The cog opens the settings sheet.
@@ -401,6 +527,7 @@ const SCENARIOS = [
     name: 'thermostat-settings',
     file: demo('thermostat'),
     screen: [320, 480],
+    panels: THERMOSTAT_PANELS,
     taps: '290,32',
   },
   // Settings, then °C, then close: the main screen in Celsius.
@@ -408,6 +535,7 @@ const SCENARIOS = [
     name: 'thermostat-units',
     file: demo('thermostat'),
     screen: [320, 480],
+    panels: THERMOSTAT_PANELS,
     taps: '290,32 222,277 266,199',
   },
 ];
@@ -454,9 +582,10 @@ const readFrame = path => {
 async function compileScenario(scenario) {
   const src = readFileSync(scenario.file, 'utf8');
   const sourceDir = dirname(scenario.file);
+  const size = ([width, height]) => ({width, height});
   const options = {
     filename: scenario.file,
-    screen: {width: scenario.screen[0], height: scenario.screen[1]},
+    screen: size(scenario.screen),
     listCap: scenario.listCap,
     svgArtifacts: await bakeSvgArtifacts(src, sourceDir),
   };
@@ -467,7 +596,10 @@ async function compileScenario(scenario) {
     }));
 
   // The package first: one that can't be lowered yet skips the scenario before anything is built.
-  const packaged = compilePackage(src, scenario.name, options);
+  const packaged = compilePackage(src, scenario.name, {
+    ...options,
+    screens: (scenario.panels ?? [scenario.screen]).map(size),
+  });
   const packageImages = images(packaged);
   const file = packPackage(
     packaged,
@@ -582,7 +714,9 @@ for (const dir of [OUT_DIR, APPS_DIR]) {
 let failed = 0;
 let passed = 0;
 for (const scenario of scenarios) {
-  const label = `${scenario.name} @ ${scenario.screen.join('x')}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
+  const panels =
+    scenario.panels?.length > 1 ? ` of ${scenario.panels.length} panels` : '';
+  const label = `${scenario.name} @ ${scenario.screen.join('x')}${panels}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
   try {
     const {appDir, packagePath, report} = await compileScenario(scenario);
     buildHosts(appDir);

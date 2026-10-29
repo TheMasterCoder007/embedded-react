@@ -410,6 +410,7 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
             && erb_u16(candidate + ERB_PANEL_HEIGHT_AT) == config->screen_h)
         {
             panel = candidate;
+            program->panel = index;
             break;
         }
     }
@@ -507,30 +508,41 @@ static bool check_directory(ErbProgram* program, ErbError* error)
     const uint16_t table_count = erb_u16(section + ERB_HEADER_TABLE_COUNT_AT);
     const uint8_t* directory = section + ERB_HEADER_SIZE + panel_count * ERB_PANEL_SIZE + need_count * ERB_NEED_SIZE;
     const uint32_t data_start = (uint32_t)(directory - section) + table_count * ERB_DIRECTORY_SIZE;
+    const bool has_panels = erb_u16(section + ERB_HEADER_FORMAT_MINOR_AT) >= ERB_FORMAT_MINOR_PANELS;
 
     for (uint16_t index = 0; index < table_count; index++)
     {
         const uint8_t* entry = directory + index * ERB_DIRECTORY_SIZE;
         const uint16_t id = erb_u16(entry + ERB_DIRECTORY_ID_AT);
+        const uint16_t panel = has_panels ? erb_u16(entry + ERB_DIRECTORY_PANEL_AT) : ERB_NONE;
         const uint32_t offset = erb_u32(entry + ERB_DIRECTORY_OFFSET_AT);
         const uint32_t length = erb_u32(entry + ERB_DIRECTORY_LENGTH_AT);
         if (id == 0u || id >= ERB_TABLE_COUNT_)
         {
             return fail(error, ERB_ERR_TABLE, "unknown table id");
         }
-        if (program->table[id])
+        if (panel != ERB_NONE && panel >= panel_count)
         {
-            return fail(error, ERB_ERR_TABLE, "table listed twice");
+            return fail(error, ERB_ERR_TABLE, "a table for a panel the package doesn't declare");
         }
         if (offset < data_start || !erb_aligned4(offset) || !erb_aligned4(length)
             || !in_bounds(offset, length, program->section_length))
         {
             return fail(error, ERB_ERR_TABLE, "table out of bounds or unaligned");
         }
+        /* A table is every panel's (ERB_NONE) or one panel's; only this panel's are used. */
+        if (panel != ERB_NONE && panel != program->panel)
+        {
+            continue;
+        }
+        if (program->table[id])
+        {
+            return fail(error, ERB_ERR_TABLE, "table listed twice");
+        }
         program->table[id] = section + offset;
         program->table_length[id] = length;
     }
-    /* No two tables overlap. At most one of each id, so this is at most 17 x 17. */
+    /* No two of this panel's tables overlap. At most one of each id, so this is at most 17 x 17. */
     for (uint32_t first = 1; first < ERB_TABLE_COUNT_; first++)
     {
         for (uint32_t second = first + 1u; second < ERB_TABLE_COUNT_; second++)

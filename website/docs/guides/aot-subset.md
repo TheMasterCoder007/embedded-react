@@ -166,7 +166,9 @@ A branch that changes the tree is compiled for one panel: the `--screen WxH` you
 solely in the other side is fine, and a top-level `if (COMPACT) return ...` keeps a board's whole
 layout in one place. The same goes for a value the compiler has to know, such as a state's initial
 value or Svg geometry. `er_app_build()` checks these at boot: on a panel that picks another layout,
-it builds nothing and returns `false`, and `er_app_fits(w, h)` asks the same without building.
+it builds nothing and returns `false`, and `er_app_fits(w, h)` asks the same without building. A
+package takes several sizes (`--package --screen 240x320,320x240`), compiles each the same way, and
+the runtime picks the one that matches the panel.
 
 ## Fixed limits
 

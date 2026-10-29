@@ -18,10 +18,14 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   it needs. It takes state, handlers, timers, effects, lists, animations, PanResponder, `<Svg>`,
   `setKeyboardConfig`, and values worked out from the screen size, so the thermostat demo builds as a
   package.
-- `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it.
+- A package can hold a layout for several panel sizes (`--screen 240x320,320x240`), and the firmware's
+  panel picks one.
+- `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it. Both demos
+  match at each of their boards' sizes.
 
 ### Changed
 
+- Flow B refuses two image imports that share a file name, which used to show one image for both.
 - A container whose asset packs fail to load, or don't fit the image and font registries, now fails
   with `ER_CONTAINER_BAD_ASSETS` instead of running with missing images and fonts. That includes an
   image format this firmware doesn't know, from a newer emitter, and RGB565 pixels on an odd address.

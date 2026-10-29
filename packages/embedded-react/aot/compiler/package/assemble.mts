@@ -29,18 +29,24 @@ import {
   emitPackageContainer,
 } from '../../../assets/emit-container.mjs';
 import {lowerApp} from '../lower.mts';
-import {Table} from './format.mts';
+import {Resource, Table} from './format.mts';
 import {lowerPackage} from './lower.mts';
 import {writeProgram} from './writer.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {IrSlotStore} from '../ir/source.mts';
 import type {SlotWidths} from '../ir/types.mts';
 import type {AssetImport} from '../types.mts';
-import type {ProgramPanel, TableSize} from './writer.mts';
+import type {Program, ProgramPanel, TableSize} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/** One panel's program, and the images it shows. */
+export interface PanelProgram {
+  program: Program;
+  images: AssetImport[];
+}
 
 /** What one package compile produces before the assets are baked. */
 export interface PackageResult {
@@ -79,31 +85,55 @@ const TABLE_NAMES = Object.fromEntries(
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Compiles a Flow B app's source to a package's program section. Pure, like compileSourceImpl; compilePackage
+ * Compiles a Flow B app's source to one panel's program. Pure, like compileSourceImpl; compilePackage
  * (compile.mts) is the public entry around it.
  *
  * @param src  The App.jsx/App.tsx source text.
- * @param opts  compilePackage's options, resolved (see resolveOptions).
+ * @param opts  compilePackage's options, resolved (see resolveOptions), with the panel as the screen.
  * @param wide  State/ref slots to declare 64-bit.
  * @param stores  Collects every value stored into an int slot.
  *
- * @returns The program section, and what the package holds.
+ * @returns The panel's program, and its images.
  */
-export function compilePackageImpl(
+export function compilePanel(
   src: string,
   opts: ResolvedOptions,
   wide: SlotWidths,
   stores: IrSlotStore[],
-): PackageResult {
+): PanelProgram {
   const app = lowerApp(src, opts, wide, stores);
-  const program = lowerPackage(app, opts);
-  const written = writeProgram(program);
+  return {program: lowerPackage(app, opts), images: app.images};
+}
+
+/**
+ * Writes the program section for every panel. The asset pack holds each image any panel shows, so each
+ * panel needs room to register all of them.
+ *
+ * @param panels  Each panel's program, in the order the package lists them.
+ *
+ * @returns The program section, and what the package holds.
+ */
+export function assemblePackage(panels: PanelProgram[]): PackageResult {
+  const images = [
+    ...new Map(
+      panels.flatMap(panel => panel.images).map(image => [image.name, image]),
+    ).values(),
+  ];
+  const programs = panels.map(({program}) => ({
+    ...program,
+    needs: program.needs.map(need =>
+      need.resource === Resource.images
+        ? {...need, amount: images.length}
+        : need,
+    ),
+  }));
+  const written = writeProgram(programs);
   return {
     program: written.bytes,
     buildId: written.buildId,
-    panels: program.panels,
+    panels: programs.map(program => program.panels[0]),
     tables: written.tables,
-    images: app.images,
+    images,
   };
 }
 
@@ -152,9 +182,10 @@ export function resourceReport(
     section =>
       `${SECTION_NAMES[section.type] ?? `section ${section.type}`} ${section.bytes} B`,
   );
+  // A table stored once per panel lists each copy's size.
   const tables = result.tables
-    .filter(table => table.bytes > 0)
-    .map(table => `${TABLE_NAMES[table.id]} ${table.bytes}`);
+    .filter(table => table.bytes.some(bytes => bytes > 0))
+    .map(table => `${TABLE_NAMES[table.id]} ${table.bytes.join('+')}`);
   return [
     ...panels,
     `  flash: ${file.bytes.length} B (${sections.join(', ')})`,

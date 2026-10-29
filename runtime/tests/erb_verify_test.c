@@ -242,6 +242,53 @@ static void test_directory(void)
     EXPECT(ERB_ERR_TABLE, "an unknown table id");
     base()->extra_table_id = ERB_TABLE_STRINGS;
     EXPECT(ERB_ERR_TABLE, "a table listed twice");
+    base()->extra_table_id = ERB_TABLE_STRINGS;
+    s_pkg.extra_table_panel = 1u;
+    EXPECT(ERB_ERR_TABLE, "a table for a panel the package doesn't declare");
+}
+
+/** @brief Adds a second panel, the first one 80 px wider. */
+static TPkg* two_panels(void)
+{
+    base();
+    s_pkg.panels[1] = s_pkg.panels[0];
+    s_pkg.panels[1].width = TPKG_SCREEN + 80u;
+    s_pkg.panel_count = 2;
+    return &s_pkg;
+}
+
+static void test_panel_tables(void)
+{
+    two_panels()->per_panel = true;
+    EXPECT(ERB_OK, "each panel's own tables, stored once");
+    two_panels()->per_panel = true;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_OK, "the second panel's tables");
+
+    /* Another panel's table is skipped, and only this panel's must not overlap. */
+    two_panels()->extra_table_id = ERB_TABLE_STRINGS;
+    s_pkg.extra_table_panel = 1u;
+    EXPECT(ERB_OK, "a table for another panel");
+    two_panels()->extra_table_id = ERB_TABLE_STRINGS;
+    s_pkg.extra_table_panel = 1u;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_ERR_TABLE, "a panel's table beside the shared one");
+    two_panels()->per_panel = true;
+    s_pkg.extra_table_id = ERB_TABLE_CODE;
+    s_pkg.extra_table_panel = 0u;
+    EXPECT(ERB_ERR_TABLE, "a table listed twice for one panel");
+    two_panels()->per_panel = true;
+    s_pkg.omit[ERB_TABLE_CODE] = true;
+    s_pkg.extra_table_id = ERB_TABLE_CODE;
+    s_pkg.extra_table_panel = 1u;
+    EXPECT(ERB_ERR_TABLE, "a required table only another panel has");
+    two_panels()->panel_field_zero = true;
+    s_pkg.minor = ERB_FORMAT_MINOR_PANELS - 1u;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_OK, "an older package's tables on its second panel");
+    two_panels()->panel_field_zero = true;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_ERR_TABLE, "panel 0's tables only, on the second panel");
 }
 
 static void test_strings(void)
@@ -1183,6 +1230,7 @@ int main(void)
     test_header();
     test_panel_and_needs();
     test_directory();
+    test_panel_tables();
     test_strings();
     test_arena();
     test_slots();

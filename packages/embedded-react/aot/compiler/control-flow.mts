@@ -373,6 +373,7 @@ export function emitComponent(
         lit: descriptor.lit,
         wide: descriptor.wide,
         source: descriptor.source,
+        expr: descriptor.expr,
       });
 
       // A dynamic prop is a runtime binding; drop any same-named module const so no fold emits it instead.

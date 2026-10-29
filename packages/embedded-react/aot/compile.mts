@@ -93,7 +93,8 @@ import {bakeSvgArtifacts} from './compiler/collect.mts';
 import {demoMarker, compileSourceImpl} from './compiler/assemble.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
-  compilePackageImpl,
+  assemblePackage,
+  compilePanel,
   packPackage,
   resourceReport,
 } from './compiler/package/assemble.mts';
@@ -219,12 +220,13 @@ export function compileSource(
 }
 
 /**
- * Public entry for the package output: compile JSX source to a Flow B program section. Errors are annotated
- * as compileSource's are.
+ * Public entry for the package output: compile JSX source to a Flow B program section, with a layout for each
+ * panel in opts.screens (or the one screen). Each panel is compiled as compileSource compiles for it. Errors are
+ * annotated as compileSource's are.
  *
  * @param src  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file an error names when opts has none.
- * @param opts  As compileSource takes them.
+ * @param opts  As compileSource takes them, plus screens.
  *
  * @returns The program section, and what the package holds.
  */
@@ -233,10 +235,20 @@ export function compilePackage(
   demo = 'app',
   opts: CompileOptions = {},
 ): PackageResult {
-  const resolved = resolveOptions(opts);
-  return compileLocated(src, demo, opts, resolved, (wide, stores) =>
-    compilePackageImpl(src, resolved, wide, stores),
-  );
+  const screens = opts.screens?.length ? opts.screens : [opts.screen];
+  const seen = new Set<string>();
+  const panels = screens.map(screen => {
+    const resolved = resolveOptions({...opts, screen});
+    const size = `${resolved.screen.width}x${resolved.screen.height}`;
+    if (seen.has(size)) {
+      throw new Error(`AOT: the panel ${size} is listed twice`);
+    }
+    seen.add(size);
+    return compileLocated(src, demo, opts, resolved, (wide, stores) =>
+      compilePanel(src, resolved, wide, stores),
+    );
+  });
+  return assemblePackage(panels);
 }
 
 // CLI entry (`node aot/compile.mts [demo]`), only when run directly: compile a demo into dist/app.gen.{c,h}.
