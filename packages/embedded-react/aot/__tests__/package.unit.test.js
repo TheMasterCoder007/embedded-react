@@ -149,7 +149,7 @@ function functionsOf(bytes) {
     const at = functions.offset + index * 16;
     const start = u32(at);
     const ops = [];
-    for (let pc = start; pc < start + u32(at + 4); ) {
+    for (let pc = start; pc < start + u32(at + 4);) {
       const first = word(pc);
       const name = OP_NAMES[first & 0xff];
       ops.push({
@@ -490,6 +490,141 @@ export function App() {
       `  flash: ${file.bytes.length} B (program ${result.program.length} B)`,
     );
     expect(report[2]).toMatch(/templates \d+/);
+  });
+});
+
+describe('panels', () => {
+  const PANELS = {
+    screens: [
+      {width: 240, height: 320},
+      {width: 320, height: 240},
+    ],
+  };
+
+  // A layout picked from the panel's width, with state and a handler either way.
+  const RESPONSIVE_APP = `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+const WIDE = screen.width > screen.height;
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable onPress={() => setCount(count + 1)}>
+      {WIDE ? (
+        <View style={{flexDirection: 'row'}}>
+          <Text>{count}</Text>
+          <Text>wide</Text>
+        </View>
+      ) : (
+        <Text>{count}</Text>
+      )}
+    </Pressable>
+  );
+}`;
+
+  /** Each directory entry, with the panel it is for. */
+  function directoryOf(bytes) {
+    const {u16, u32, header} = readProgram(bytes);
+    const at = 24 + header.panelCount * 16 + u16(20) * 8;
+    return Array.from({length: u16(22)}, (_, index) => ({
+      id: u16(at + index * 12),
+      panel: u16(at + index * 12 + 2),
+      offset: u32(at + index * 12 + 4),
+      length: u32(at + index * 12 + 8),
+    }));
+  }
+
+  /** Each panel record. */
+  function panelsOf(bytes) {
+    const {u16, u32, header} = readProgram(bytes);
+    return Array.from({length: header.panelCount}, (_, index) => {
+      const at = 24 + index * 16;
+      return {
+        width: u16(at),
+        height: u16(at + 2),
+        arenaBytes: u32(at + 4),
+        nodeCount: u16(at + 8),
+      };
+    });
+  }
+
+  it('lists every table for every panel in a one-panel package', () => {
+    const {program} = compilePackage(STATIC_APP, 'app', SCREEN);
+    expect(directoryOf(program).every(entry => entry.panel === NONE)).toBe(
+      true,
+    );
+  });
+
+  it('has a panel for each size, the header naming the most any needs', () => {
+    const result = compilePackage(RESPONSIVE_APP, 'app', PANELS);
+    const panels = panelsOf(result.program);
+    expect(panels.map(panel => [panel.width, panel.height])).toEqual([
+      [240, 320],
+      [320, 240],
+    ]);
+    expect(panels[1].nodeCount).toBeGreaterThan(panels[0].nodeCount);
+    const {header} = readProgram(result.program);
+    expect(header.nodeCount).toBe(panels[1].nodeCount);
+    expect(header.arenaBytes).toBe(
+      Math.max(...panels.map(panel => panel.arenaBytes)),
+    );
+  });
+
+  it('stores a table the panels share once, and one that differs per panel', () => {
+    const {program} = compilePackage(RESPONSIVE_APP, 'app', PANELS);
+    const entries = directoryOf(program);
+    const of = id => entries.filter(entry => entry.id === Table[id]);
+    expect(of('templates').map(entry => entry.panel)).toEqual([0, 1]);
+    expect(of('templates')[0].offset).not.toBe(of('templates')[1].offset);
+    expect(of('arena').map(entry => entry.panel)).toEqual([NONE]);
+    // Every panel's function bodies are in one code table.
+    expect(of('code').map(entry => entry.panel)).toEqual([NONE]);
+  });
+
+  it("shares a copy two panels' tables have in common", () => {
+    const {program} = compilePackage(RESPONSIVE_APP, 'app', {
+      screens: [...PANELS.screens, {width: 400, height: 240}],
+    });
+    const templates = directoryOf(program).filter(
+      entry => entry.id === Table.templates,
+    );
+    expect(templates.map(entry => entry.panel)).toEqual([0, 1, 2]);
+    expect(templates[2].offset).toBe(templates[1].offset);
+    expect(templates[0].offset).not.toBe(templates[1].offset);
+  });
+
+  it('stores a function body the panels share once', () => {
+    // Both panels pick the narrow layout; only the boot function, which loads the panel's size, differs.
+    const one = compilePackage(RESPONSIVE_APP, 'app', SCREEN);
+    const two = compilePackage(RESPONSIVE_APP, 'app', {
+      screens: [
+        {width: 240, height: 320},
+        {width: 200, height: 300},
+      ],
+    });
+    const code = result =>
+      directoryOf(result.program).find(entry => entry.id === Table.code);
+    const boot = functionsOf(one.program).find(
+      fn => fn.kind === FunctionKind.boot,
+    );
+    const bootWords = boot.ops.reduce((sum, op) => sum + OP[op.name].words, 0);
+    expect(code(two).length).toBe(code(one).length + bootWords * 4);
+  });
+
+  it('refuses a panel listed twice', () => {
+    expect(() =>
+      compilePackage(STATIC_APP, 'app', {
+        screens: [PANELS.screens[0], PANELS.screens[0]],
+      }),
+    ).toThrow(/the panel 240x320 is listed twice/);
+  });
+
+  it('reports each panel, and each copy of a table stored per panel', () => {
+    const result = compilePackage(RESPONSIVE_APP, 'app', PANELS);
+    const report = resourceReport(result, packPackage(result));
+    expect(report[0]).toMatch(/^ {2}panel 240x320: arena \d+ B, \d+ nodes$/);
+    expect(report[1]).toMatch(/^ {2}panel 320x240: arena \d+ B, \d+ nodes$/);
+    expect(report[3]).toMatch(/templates \d+\+\d+/);
   });
 });
 
@@ -1420,7 +1555,7 @@ export function App() {
     expect(new Set(grantTargets)).toEqual(new Set([grant]));
   });
 
-  it("refuses a row component's responder that reads what the row passes it", () => {
+  it("lowers a row component's responder that reads what the row passes it", () => {
     const src = `
 import {useState, useRef} from 'react';
 import {View, Text, PanResponder} from 'embedded-react';
@@ -1435,9 +1570,7 @@ export function App() {
   const [items, setItems] = useState([{id: 1, name: 'a'}]);
   return <View>{items.map(item => <Row key={item.id} label={item.name} />)}</View>;
 }`;
-    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /doesn't support the value an element passes its callback yet/,
-    );
+    expect(() => compilePackage(src, 'app', SCREEN)).not.toThrow();
   });
 });
 

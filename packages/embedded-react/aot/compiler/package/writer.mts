@@ -32,6 +32,7 @@ import {
   GRADIENT_SIZE,
   HEADER_SIZE,
   NEED_SIZE,
+  NONE,
   PAINT_SIZE,
   PANEL_SIZE,
   Table,
@@ -237,10 +238,10 @@ export interface Program {
   keyboard: ProgramKeyboard | null;
 }
 
-/** The bytes of one table, for the resource report. */
+/** The bytes of one table, for the resource report: one size for each copy stored. */
 export interface TableSize {
   id: number;
-  bytes: number;
+  bytes: number[];
 }
 
 export interface WrittenProgram {
@@ -327,6 +328,42 @@ export class ByteWriter {
   }
 }
 
+/**
+ * Every panel's function bodies, each stored once: the code and types tables every panel's functions point
+ * into. A jump is relative to its function, so a body reads the same wherever it sits.
+ *
+ * @class Bodies
+ */
+class Bodies {
+  readonly code: number[] = [];
+  readonly types: number[] = [];
+  private codeAt = new Map<string, number>();
+  private typesAt = new Map<string, number>();
+
+  /** Where a function's code and register types sit, storing each the first time it is seen. */
+  place(fn: ProgramFunction): {code: number; types: number} {
+    return {
+      code: Bodies.store(this.codeAt, this.code, fn.code),
+      types: Bodies.store(this.typesAt, this.types, fn.types),
+    };
+  }
+
+  private static store(
+    placed: Map<string, number>,
+    into: number[],
+    values: number[],
+  ): number {
+    const key = values.join(',');
+    let at = placed.get(key);
+    if (at === undefined) {
+      at = into.length;
+      into.push(...values);
+      placed.set(key, at);
+    }
+    return at;
+  }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -397,13 +434,15 @@ export function stringsTable(strings: string[]): Uint8Array {
 }
 
 /**
- * Every table the program has, by id. Tables the runtime requires are written even when empty.
+ * Every table the program has, by id, but the code and types its functions are placed in. Tables the runtime
+ * requires are written even when empty.
  *
  * @param program  The program.
+ * @param bodies  Where its function bodies go.
  *
- * @returns The tables, in id order.
+ * @returns The tables.
  */
-function tablesOf(program: Program): Map<number, Uint8Array> {
+function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
   const tables = new Map<number, Uint8Array>();
   const table = (id: number, write: (out: ByteWriter) => void): void => {
     const out = new ByteWriter();
@@ -510,9 +549,8 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
     });
   }
   table(Table.functions, out => {
-    let code = 0;
-    let types = 0;
     for (const fn of program.functions) {
+      const {code, types} = bodies.place(fn);
       out.u32(code);
       out.u32(fn.code.length);
       out.u32(types);
@@ -520,17 +558,8 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
       out.u8(fn.params);
       out.u8(fn.result);
       out.u8(fn.kind);
-      code += fn.code.length;
-      types += fn.types.length;
     }
   });
-  table(Table.types, out => {
-    program.functions.forEach(fn => fn.types.forEach(type => out.u8(type)));
-    out.pad4();
-  });
-  table(Table.code, out =>
-    program.functions.forEach(fn => fn.code.forEach(word => out.u32(word))),
-  );
   if (program.anims.length) {
     table(Table.anims, out => {
       for (const anim of program.anims) {
@@ -701,28 +730,102 @@ function keyboardTable(keyboard: ProgramKeyboard): Uint8Array {
   return out.done();
 }
 
+/** Whether two tables hold the same bytes. */
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return (
+    left.length === right.length &&
+    left.every((byte, index) => byte === right[index])
+  );
+}
+
 /**
- * Writes a program section, its build_id worked out over the finished bytes.
+ * Each panel's needs together: the most any panel needs of each resource.
  *
- * @param program  The program.
+ * @param programs  Each panel's program.
+ *
+ * @returns The needs.
+ */
+function mergedNeeds(programs: Program[]): ProgramNeed[] {
+  const amounts = new Map<number, number>();
+  for (const need of programs.flatMap(program => program.needs)) {
+    amounts.set(
+      need.resource,
+      Math.max(amounts.get(need.resource) ?? 0, need.amount),
+    );
+  }
+  return [...amounts]
+    .sort(([left], [right]) => left - right)
+    .map(([resource, amount]) => ({resource, amount}));
+}
+
+/**
+ * Writes a program section, its build_id worked out over the finished bytes. Each program is one panel's. A
+ * table that is the same for every panel is listed once for all of them; any other is listed for each panel
+ * that has it, and panels whose copies are the same share its bytes. A function body the same in several
+ * panels is stored once.
+ *
+ * @param programs  Each panel's program, in the order the panel table lists them.
  *
  * @returns The section's bytes, its build_id, and each table's size.
  */
-export function writeProgram(program: Program): WrittenProgram {
-  const tables = tablesOf(program);
+export function writeProgram(programs: Program[]): WrittenProgram {
+  // Every panel's functions point into one code table and one types table.
+  const bodies = new Bodies();
+  const panelTables = programs.map(program => tablesOf(program, bodies));
+  const types = new ByteWriter();
+  bodies.types.forEach(type => types.u8(type));
+  types.pad4();
+  const code = new ByteWriter();
+  bodies.code.forEach(word => code.u32(word));
+  for (const tables of panelTables) {
+    tables.set(Table.types, types.done());
+    tables.set(Table.code, code.done());
+  }
+  const ids = [...new Set(panelTables.flatMap(tables => [...tables.keys()]))];
+  ids.sort((left, right) => left - right);
+
+  // The bytes stored, and the directory entries that name them.
+  const stored: Uint8Array[] = [];
+  const entries: {id: number; panel: number; data: number}[] = [];
+  const sizes: TableSize[] = [];
+  for (const id of ids) {
+    const copies = panelTables.map(tables => tables.get(id));
+    const first = copies[0];
+    if (first && copies.every(copy => copy && sameBytes(copy, first))) {
+      entries.push({id, panel: NONE, data: stored.push(first) - 1});
+      sizes.push({id, bytes: [first.length]});
+      continue;
+    }
+    const own: number[] = [];
+    copies.forEach((copy, panel) => {
+      if (!copy) {
+        return;
+      }
+      let data = own.find(index => sameBytes(stored[index], copy));
+      if (data === undefined) {
+        data = stored.push(copy) - 1;
+        own.push(data);
+      }
+      entries.push({id, panel, data});
+    });
+    sizes.push({id, bytes: own.map(index => stored[index].length)});
+  }
+
+  const panels = programs.map(program => program.panels[0]);
+  const needs = mergedNeeds(programs);
   const out = new ByteWriter();
   out.u16(FORMAT_MAJOR);
   out.u16(FORMAT_MINOR);
   out.u16(ENGINE_ABI);
-  out.u16(program.flags);
+  out.u16(programs[0].flags);
   const buildIdAt = out.length;
   out.u32(0);
-  out.u32(Math.max(...program.panels.map(panel => panel.arenaBytes)));
-  out.u16(Math.max(...program.panels.map(panel => panel.nodeCount)));
-  out.u16(program.panels.length);
-  out.u16(program.needs.length);
-  out.u16(tables.size);
-  for (const panel of program.panels) {
+  out.u32(Math.max(...panels.map(panel => panel.arenaBytes)));
+  out.u16(Math.max(...panels.map(panel => panel.nodeCount)));
+  out.u16(panels.length);
+  out.u16(needs.length);
+  out.u16(entries.length);
+  for (const panel of panels) {
     out.u16(panel.width);
     out.u16(panel.height);
     out.u32(panel.arenaBytes);
@@ -731,35 +834,35 @@ export function writeProgram(program: Program): WrittenProgram {
     out.u16(panel.bootFunction);
     out.u16(panel.updateFunction);
   }
-  for (const need of program.needs) {
+  for (const need of needs) {
     out.u16(need.resource);
     out.u16(0);
     out.u32(need.amount);
   }
 
   // The directory, then the tables, each starting 4-aligned since every one is a multiple of 4 long.
+  const offsets: number[] = [];
   let offset =
     HEADER_SIZE +
-    program.panels.length * PANEL_SIZE +
-    program.needs.length * NEED_SIZE +
-    tables.size * DIRECTORY_SIZE;
-  for (const [id, bytes] of tables) {
-    out.u16(id);
-    out.u16(0);
-    out.u32(offset);
-    out.u32(bytes.length);
+    panels.length * PANEL_SIZE +
+    needs.length * NEED_SIZE +
+    entries.length * DIRECTORY_SIZE;
+  for (const bytes of stored) {
+    offsets.push(offset);
     offset += bytes.length;
   }
-  for (const bytes of tables.values()) {
+  for (const entry of entries) {
+    out.u16(entry.id);
+    out.u16(entry.panel);
+    out.u32(offsets[entry.data]);
+    out.u32(stored[entry.data].length);
+  }
+  for (const bytes of stored) {
     out.bytes(bytes);
   }
 
   const bytes = out.done();
   const buildId = crc32(bytes);
   new DataView(bytes.buffer).setUint32(buildIdAt, buildId, true);
-  return {
-    bytes,
-    buildId,
-    tables: [...tables].map(([id, table]) => ({id, bytes: table.length})),
-  };
+  return {bytes, buildId, tables: sizes};
 }

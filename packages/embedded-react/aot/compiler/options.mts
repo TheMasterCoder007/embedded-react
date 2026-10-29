@@ -40,6 +40,8 @@ export interface CompileOptions {
   ts?: boolean;
   /** The target panel's size. The fallbacks for this and the caps below are listed on resolveOptions. */
   screen?: Screen | null;
+  /** The package output's panels, each compiled for its own size into one package. Overrides screen. */
+  screens?: Screen[];
   /** Rows a list state holds. */
   listCap?: number;
   /** Characters per string buffer. */

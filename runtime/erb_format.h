@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 3u
+#define ERB_FORMAT_MINOR 4u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -96,6 +96,7 @@ enum
 
 /** @brief Table directory entry. */
 #define ERB_DIRECTORY_ID_AT 0u
+#define ERB_DIRECTORY_PANEL_AT 2u
 #define ERB_DIRECTORY_OFFSET_AT 4u
 #define ERB_DIRECTORY_LENGTH_AT 8u
 

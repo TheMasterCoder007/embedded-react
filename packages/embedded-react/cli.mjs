@@ -70,6 +70,8 @@ Usage:
                                                            Flow B runtime; state, handlers, timers,
                                                            effects, lists, animations, PanResponder,
                                                            <Svg>, and the keyboard config)
+                                                 --aot --package --screen <WxH>,<WxH>  one package
+                                                           with a layout for each panel size
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.
@@ -387,7 +389,7 @@ function resolveAppComponent(cwd, explicit) {
  * Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. With
  * --package, to a Flow B package (app.erpkg) with its assets inside, for the Flow B runtime to load.
  */
-async function buildAot(cwd, explicit, outDir, screen, asPackage) {
+async function buildAot(cwd, explicit, outDir, screens, asPackage) {
   const {
     compilePackage,
     compileSource,
@@ -409,12 +411,14 @@ async function buildAot(cwd, explicit, outDir, screen, asPackage) {
     // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
     // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
     // The target panel size (--screen <WxH>) folds a responsive app's `screen.width` branch to the one
-    // that the board renders. Without it, the compiler falls back to ER_AOT_SCREEN_W/H, then 800x480.
+    // that the board renders. Without it, the compiler falls back to ER_AOT_SCREEN_W/H, then 800x480. A
+    // package takes several, and has a layout for each.
     const compile = asPackage ? compilePackage : compileSource;
     result = compile(src, projectIdentity(appPath), {
       filename: appPath,
       svgArtifacts,
-      screen, // null without --screen
+      screen: screens?.[0] ?? null, // null without --screen
+      screens: asPackage ? screens : undefined,
     });
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
@@ -523,7 +527,7 @@ async function buildContainer(cwd, explicit, outDir) {
   );
 }
 
-/** `embedded-react build [--aot [--package]] [entry] [--out dir] [--screen WxH]` — produce the device artifact. */
+/** `embedded-react build [--aot [--package]] [entry] [--out dir] [--screen WxH[,WxH…]]` — produce the device artifact. */
 async function build(args) {
   const cwd = process.cwd();
   const aot = args.includes('--aot');
@@ -537,9 +541,10 @@ async function build(args) {
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
 
   // --screen <WxH> (AOT only): the target panel size, baked so a responsive app folds to the branch that
-  // board renders (e.g., 240x320 → the compact layout). Flow A reads the screen from the host at runtime.
+  // board renders (e.g., 240x320 → the compact layout). Flow A reads the screen from the host at runtime. A
+  // package takes a comma-separated list, one layout for each.
   const screenIdx = args.indexOf('--screen');
-  let screen = null;
+  let screens = null;
   if (screenIdx >= 0) {
     if (!aot) {
       console.error(
@@ -549,15 +554,27 @@ async function build(args) {
       process.exit(1);
     }
     const raw = args[screenIdx + 1];
-    const m = raw && /^([1-9]\d*)x([1-9]\d*)$/i.exec(raw);
-    if (!m) {
+    const sizes = (raw ?? '')
+      .split(',')
+      .map(size => /^([1-9]\d*)x([1-9]\d*)$/i.exec(size));
+    if (!raw || sizes.some(size => !size)) {
       console.error(
         `--screen expects <width>x<height> (e.g. --screen 240x320), got: ${raw ?? '(nothing)'}\n`,
       );
       usage();
       process.exit(1);
     }
-    screen = {width: Number(m[1]), height: Number(m[2])};
+    if (sizes.length > 1 && !asPackage) {
+      console.error(
+        '--screen takes one size for the C output; build with --package for several.\n',
+      );
+      usage();
+      process.exit(1);
+    }
+    screens = sizes.map(size => ({
+      width: Number(size[1]),
+      height: Number(size[2]),
+    }));
   }
 
   // Consume the flag VALUES so they aren't mistaken for the entry (which is a bare, non-`--` token).
@@ -567,7 +584,7 @@ async function build(args) {
   const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
 
   mkdirSync(outDir, {recursive: true});
-  if (aot) await buildAot(cwd, explicit, outDir, screen, asPackage);
+  if (aot) await buildAot(cwd, explicit, outDir, screens, asPackage);
   else await buildContainer(cwd, explicit, outDir);
 }
 

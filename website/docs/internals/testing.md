@@ -110,7 +110,8 @@ reworded error, say), check that `aot:same` shows only that change, then record 
 `tools/erb-parity` builds a headless host around each: the C app, and the Flow B runtime loading the
 package. Both render through the software backend with no window, run the scenario's taps, and must
 end on the same pixels. A frame that differs is written as PNGs (C, VM, and a diff) under
-`tools/erb-parity/build/out`. Each package's resource report is printed as it is built.
+`tools/erb-parity/build/out`. Each package's resource report is printed as it is built. A demo's
+package has a layout for each of its boards' panels, and its scenarios run at each of them.
 
 A scenario the package output can't lower yet is skipped with the reason, so the list shows how far
 the package output has come. It needs CMake and a C compiler, and CI runs it.

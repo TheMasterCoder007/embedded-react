@@ -99,6 +99,7 @@ typedef struct
     uint32_t build_id;
 
     /* The panel that matched the screen. */
+    uint16_t panel;
     uint32_t arena_bytes;
     uint16_t node_count;
     uint16_t root_template;
