@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 1u
+#define ERB_FORMAT_MINOR 2u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -432,7 +432,8 @@ enum
     ERB_EVT_VALUE = 12,
     ERB_EVT_VALUE_START = 13,
     ERB_EVT_FINISHED = 14, /**< bool: an animation ran to its end (in an ERB_FN_ANIM_DONE function). */
-    ERB_EVT_COUNT_ = 15,
+    ERB_EVT_TOUCHES = 15,  /**< int: fingers down when the touch arrived. Since minor 2. */
+    ERB_EVT_COUNT_ = 16,
 };
 
 /** @brief FMATH and DMATH functions. Those from ERB_MATH_MIN on take two operands. */

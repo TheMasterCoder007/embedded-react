@@ -685,6 +685,7 @@ static void on_event(ERNode* node, const EREventData* data, void* user_data)
     event.motion_y = kind == ER_EVENT_SCROLL ? data->scroll_y : data->vy;
     event.value = data->value;
     event.value_start = data->value_start;
+    event.touches = (uint16_t)er_touch_active_count();
     dispatch(&event);
 }
 
@@ -706,6 +707,7 @@ static bool on_query(ERNode* node, const EREventData* data, void* user_data)
     g_erb.event.dy = (int16_t)data->dy;
     g_erb.event.motion_x = data->vx;
     g_erb.event.motion_y = data->vy;
+    g_erb.event.touches = (uint16_t)er_touch_active_count();
     int32_t answer = 0;
     if (run(g_erb.event.function, g_erb.event.instance, &answer) != ERB_OK)
     {

@@ -23,9 +23,10 @@
  *   erb-parity-c  <out.raw> <width> <height> [taps [settle_ms]]
  *   erb-parity-vm <out.raw> <width> <height> <package.erpkg> [taps [settle_ms]]
  *
- * taps is "x,y x,y ...": each is a press and release, with a 16 ms tick after each half. The frame is written
- * as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when it is
- * left out), so a scenario can take its frame in the middle of an animation.
+ * taps is "x,y x,y ...": each is a press and release, with a 16 ms tick after each half. "x,y>x2,y2" is a drag
+ * instead: a press at x,y, DRAG_STEPS moves to x2,y2 with a tick after each, and a release there. The frame is
+ * written as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when
+ * it is left out), so a scenario can take its frame in the middle of an animation.
  */
 
 #include "er_scene.h"
@@ -45,6 +46,9 @@
 
 /** @brief Each tick, in ms, as a 60 Hz display loop runs. */
 #define FRAME_MS 16u
+
+/** @brief The moves a drag takes from its press to its release. */
+#define DRAG_STEPS 8
 
 /** @brief How long the app runs after the last tap before the frame is taken, unless the scenario says. */
 #define SETTLE_MS 500u
@@ -97,7 +101,7 @@ static void frame(void)
     er_commit();
 }
 
-/** @brief Runs the taps in @p taps ("x,y x,y ..."). */
+/** @brief Runs the taps and drags in @p taps ("x,y x,y>x2,y2 ..."). */
 static void run_taps(const char* taps)
 {
     const char* cursor = taps;
@@ -111,9 +115,22 @@ static void run_taps(const char* taps)
             break;
         }
         cursor += used;
+        int end_x = x;
+        int end_y = y;
+        const bool drag = sscanf(cursor, ">%d,%d%n", &end_x, &end_y, &used) == 2;
+        if (drag)
+        {
+            cursor += used;
+        }
         embedded_renderer_touch(0, ER_TOUCH_DOWN, x, y);
         frame();
-        embedded_renderer_touch(0, ER_TOUCH_UP, x, y);
+        for (int step = 1; drag && step <= DRAG_STEPS; step++)
+        {
+            embedded_renderer_touch(
+                0, ER_TOUCH_MOVE, x + (end_x - x) * step / DRAG_STEPS, y + (end_y - y) * step / DRAG_STEPS);
+            frame();
+        }
+        embedded_renderer_touch(0, ER_TOUCH_UP, end_x, end_y);
         frame();
     }
 }

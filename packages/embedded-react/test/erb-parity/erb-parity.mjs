@@ -59,7 +59,7 @@ const EXE = process.platform === 'win32' ? '.exe' : '';
 const fixture = name => join(HERE, 'fixtures', `${name}.jsx`);
 const demo = name => join(ROOT, 'demos', name, 'App.jsx');
 
-// `taps` is "x,y x,y ...", the same for both hosts. `settle` is how many ms the hosts run after the last tap
+// `taps` is "x,y x,y ...", the same for both hosts; "x,y>x2,y2" is a drag. `settle` is how many ms the hosts run after the last tap
 // before they take the frame (500 when it is left out), so a scenario can sample an animation as it runs.
 const SCENARIOS = [
   {name: 'layout', file: fixture('layout'), screen: [240, 320]},
@@ -312,6 +312,23 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '80,174 80,174',
     settle: 500,
+  },
+  {name: 'drag', file: fixture('drag'), screen: [240, 320]},
+  // A tap on the knob: a grant and a release with no travel.
+  {name: 'drag-tap', file: fixture('drag'), screen: [240, 320], taps: '50,86'},
+  // The knob dragged right, then back from where it landed.
+  {
+    name: 'drag-knob',
+    file: fixture('drag'),
+    screen: [240, 320],
+    taps: '50,86>130,96 130,86>70,80',
+  },
+  // The pad, claimed once the finger is past its slop, so its travel starts from there.
+  {
+    name: 'drag-pad',
+    file: fixture('drag'),
+    screen: [240, 320],
+    taps: '40,154>200,150',
   },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},

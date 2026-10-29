@@ -21,7 +21,7 @@
  * slots in the arena. Handlers, timer callbacks, effects, the boot function and the update function are
  * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, as app_update() does, sets
  * the props of a node that reads only boot values once, in its first pass, and queues the effects. What isn't
- * lowered yet (responders, drawings, the keyboard) is refused with what it is.
+ * lowered yet (drawings, the keyboard) is refused with what it is.
  *
  * Animations run as the C output runs them (animations.mts): each animation a leaf descriptor, each C callback an
  * animation-done function, each completion a helper.
@@ -29,6 +29,10 @@
  * A list is a pool of rows in the arena. Its `.map` is a row template, built once per row in the update's first
  * pass, as er_app_build() builds every row; a row shows while the list holds it. Rows whose nodes and handlers
  * are the same share a template, and a row handler reads its item through the row it was built for.
+ *
+ * A PanResponder is a handler for each responder event and a query function for each should-set predicate,
+ * bound on each node that spreads it. Its gesture state is slots, kept by its grant, release and terminate
+ * handlers as C keeps its statics, and a callback reads the gesture through them and EVT.
  *
  * Effects run as the C output runs them. An effect runs inside app_update(), so the state it sets shows at
  * the next app_update(), not at once. The VM runs a pass whenever state changed, so a pass that only an
@@ -65,6 +69,7 @@ import {Codegen, notYet} from './codegen.mts';
 import {
   BindingKind,
   ENGINE_VALUES,
+  EventField,
   FLAG_DEBUG,
   FRAME_CELLS,
   FunctionKind,
@@ -84,7 +89,7 @@ import {
 import {ProgramTables} from './tables.mts';
 import type {Program as BabelProgram, Node} from '@babel/types';
 import type {Slot} from './arena.mts';
-import type {Register} from './bytecode.mts';
+import type {Label, Register} from './bytecode.mts';
 import type {CType, InputText, ProgramSlots} from './codegen.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
@@ -96,6 +101,7 @@ import type {
   IrMountEffect,
   IrPressFade,
 } from '../ir/functions.mts';
+import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
 import type {IrCallback, IrStmt} from '../ir/statements.mts';
 import type {IrElement, IrNode, IrWire} from '../ir/nodes.mts';
 import type {ResolvedOptions} from '../options.mts';
@@ -127,6 +133,10 @@ interface HandlerFunction {
   input: InputText | undefined;
   /** Bound in a list row: entered with the row it was built for. */
   inRow: boolean;
+  /** A PanResponder event's: the responder's gesture state, and what the handler keeps of it. */
+  gesture?: {statePrefix: string; role: IrPanRole};
+  /** A PanResponder query's predicate, which the function returns. */
+  test?: IrExpr;
 }
 
 /** A node in a list row that code reaches: its handle array, and its row. */
@@ -195,10 +205,12 @@ interface Lowering {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** What each wiring a node can have needs, as a refusal names it. */
-const WIRING_USES: Record<Exclude<IrWire['kind'], 'bind'>, string> = {
+const WIRING_USES: Record<
+  Exclude<IrWire['kind'], 'bind' | 'responder'>,
+  string
+> = {
   ref: 'refs',
   event: 'event handlers',
-  responder: 'PanResponder',
   vectorTables: '<Svg>',
   stateDrivenVector: '<Svg>',
 };
@@ -289,7 +301,6 @@ function firstCall(
 function checkSupported(app: IrApp): void {
   const {out} = app;
   const uses: [boolean, string, string[]][] = [
-    [out.panResponders.length > 0, 'PanResponder', ['PanResponder.create']],
     [out.vectors.length > 0, '<Svg>', []],
     [app.keyboard !== null, 'setKeyboardConfig', ['setKeyboardConfig']],
   ];
@@ -413,7 +424,11 @@ function bodies(app: IrApp): IrStmt[][] {
   const {out} = app;
   return [
     ...out.handlers.flatMap(handler =>
-      handler.kind === 'callback' ? [handler.callback.body] : [],
+      handler.kind === 'callback'
+        ? [handler.callback.body]
+        : handler.kind === 'panEvent' && handler.event.callback
+          ? [handler.event.callback.body]
+          : [],
     ),
     ...out.timerFns.map(timer => timer.callback!.body),
     ...out.effectFns.map(effectFunction =>
@@ -555,6 +570,7 @@ function planSlots(
     armed: new Map(),
     timerFunctions: new Map(),
     animations,
+    gestures: new Map(),
   };
 
   // String state with a closed set of values is an interned enum, starting at its initial value (the first).
@@ -780,9 +796,22 @@ function planSlots(
     ? arena.slot(ValueType.string, undefined, ENGINE_STRING_MAX.ER_TEXT_MAX)
     : null;
 
+  // Each PanResponder's gesture state.
+  for (const pan of out.panResponders) {
+    slots.gestures.set(pan.statePrefix, {
+      granted: arena.slot(ValueType.bool),
+      baseDx: arena.slot(ValueType.int),
+      baseDy: arena.slot(ValueType.int),
+      x0: arena.slot(ValueType.int),
+      y0: arena.slot(ValueType.int),
+    });
+  }
+
   const requestsUpdate =
-    out.handlers.some(
-      handler => handler.kind === 'callback' && handler.callback.updatesState,
+    out.handlers.some(handler =>
+      handler.kind === 'callback'
+        ? handler.callback.updatesState
+        : handler.kind === 'panEvent' && !!handler.event.callback?.updatesState,
     ) ||
     out.timerFns.some(timer => timer.callback!.updatesState) ||
     out.mountEffects.some(mountUpdates) ||
@@ -952,6 +981,61 @@ function handlerFunction(
 }
 
 /**
+ * A PanResponder's bindings: a handler for each of its events, then a query function for each predicate, as
+ * the C output wires them. Each function is made once, however many nodes spread the responder.
+ *
+ * @param pan  The responder.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The bindings.
+ */
+function responderBindings(
+  pan: IrPanResponder,
+  lowering: Lowering,
+): ProgramBinding[] {
+  const made = (key: string, entry: Omit<HandlerFunction, 'index'>): number => {
+    const existing = lowering.handlers.get(key);
+    if (existing) {
+      return existing.index;
+    }
+    const index = lowering.handlers.size;
+    lowering.handlers.set(key, {...entry, index});
+    return index;
+  };
+  const common = {fade: null, input: undefined, inRow: false};
+  return [
+    ...pan.events.map(event => {
+      const kind = ENGINE_VALUES.get(event.event)!;
+      return {
+        kind: BindingKind.event,
+        event: kind,
+        target: made(`pan ${pan.fnPrefix} ${event.role}`, {
+          ...common,
+          callback: event.callback ?? {body: [], updatesState: false},
+          event: kind,
+          name: `${pan.name} ${event.role}`,
+          gesture: {statePrefix: pan.statePrefix, role: event.role},
+        }),
+      };
+    }),
+    ...pan.queries.map(query => {
+      const kind = ENGINE_VALUES.get(query.query)!;
+      return {
+        kind: BindingKind.query,
+        event: kind,
+        target: made(`pan ${pan.fnPrefix} query ${kind}`, {
+          ...common,
+          callback: {body: [], updatesState: false},
+          event: FunctionKind.query + kind,
+          name: `${pan.name} query`,
+          test: query.test,
+        }),
+      };
+    }),
+  ];
+}
+
+/**
  * An element and everything under it as template nodes, each before its children. A conditional's branches
  * are all built, and the update shows the chosen one. A list's rows are row templates of their own. What a node
  * needs that the package output can't lower yet is refused at the node's element.
@@ -991,6 +1075,8 @@ function templateNodes(
             inRow,
           ),
         });
+      } else if (wire.kind === 'responder') {
+        bindings.push(...responderBindings(wire.pan, lowering));
       } else if (wire.kind !== 'ref') {
         // A ref needs nothing itself; the code that reads one is refused on its own.
         notYet(WIRING_USES[wire.kind]);
@@ -1427,14 +1513,74 @@ function handlerBody(
   // A row's handler is entered with its row, in its first register.
   const row = handler.inRow ? fn.reserved('int') : undefined;
   const codegen = new Codegen(fn, lowering.slots, {input: handler.input, row});
+  if (handler.test) {
+    return fn.finish(0, codegen.condition(handler.test));
+  }
   if (handler.fade) {
     startPressFade(codegen, handler.fade, lowering.slots.animations);
+  }
+  const end = fn.label();
+  if (handler.gesture) {
+    keepGesture(codegen, handler.gesture, 'before', end, lowering);
   }
   codegen.statements(handler.callback.body);
   if (handler.callback.updatesState) {
     requestUpdate(codegen, lowering);
   }
+  if (handler.gesture) {
+    keepGesture(codegen, handler.gesture, 'after', end, lowering);
+  }
+  fn.place(end);
   return fn.finish(row ? 1 : 0);
+}
+
+/**
+ * What a PanResponder event's handler keeps of the gesture around the app's callback, as C does: the grant
+ * anchors it, unless it is already granted; release and terminate clear it after the callback; those and move
+ * do nothing unless it is granted.
+ *
+ * @param codegen  The handler's codegen.
+ * @param gesture  The responder's gesture state, and the handler's role.
+ * @param when  Before the callback, or after it.
+ * @param end  The end of the handler, where it returns.
+ * @param lowering  The program being lowered.
+ */
+function keepGesture(
+  codegen: Codegen,
+  gesture: NonNullable<HandlerFunction['gesture']>,
+  when: 'before' | 'after',
+  end: Label,
+  lowering: Lowering,
+): void {
+  const {fn} = codegen;
+  const slots = lowering.slots.gestures.get(gesture.statePrefix)!;
+  const {role} = gesture;
+  codegen.scoped(() => {
+    if (when === 'before' && role !== 'reject') {
+      const granted = codegen.get(slots.granted);
+      fn.branch(role === 'grant' ? 'JT' : 'JF', end, granted);
+    }
+    if (when === 'before' && role === 'grant') {
+      codegen.set(slots.granted, codegen.load('bool', 1));
+      const fields: [Slot, number][] = [
+        [slots.baseDx, EventField.dx],
+        [slots.baseDy, EventField.dy],
+        [slots.x0, EventField.x],
+        [slots.y0, EventField.y],
+      ];
+      for (const [slot, field] of fields) {
+        const value = fn.register('int');
+        fn.abc('EVT', value.index, field);
+        codegen.set(slot, value);
+      }
+    }
+    if (when === 'after' && (role === 'release' || role === 'terminate')) {
+      codegen.set(slots.granted, codegen.load('bool', 0));
+      const zero = codegen.load('int', 0);
+      codegen.set(slots.baseDx, zero);
+      codegen.set(slots.baseDy, zero);
+    }
+  });
 }
 
 /**
