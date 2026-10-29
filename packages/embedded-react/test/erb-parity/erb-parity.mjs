@@ -345,6 +345,14 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '149,195 149,195 149,195 207,195 207,195',
   },
+  // Two rows added, then the toggle redraws every row. Four rows keep the drawings within the host's vector nodes.
+  {
+    name: 'svg-rows',
+    file: fixture('svg-rows'),
+    screen: [240, 320],
+    listCap: 4,
+    taps: '33,23 33,23 91,23',
+  },
   // The app's own keyboard, brought up by focusing the input.
   {
     name: 'keyboard',
@@ -449,6 +457,7 @@ async function compileScenario(scenario) {
   const options = {
     filename: scenario.file,
     screen: {width: scenario.screen[0], height: scenario.screen[1]},
+    listCap: scenario.listCap,
     svgArtifacts: await bakeSvgArtifacts(src, sourceDir),
   };
   const images = result =>
