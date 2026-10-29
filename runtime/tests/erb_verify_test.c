@@ -921,6 +921,8 @@ static void test_panel_debug(void)
     EXPECT(ERB_ERR_DEBUG, "two tables for one panel");
     base()->debug_panels[0] = 1u;
     EXPECT(ERB_ERR_DEBUG, "a table for a panel the package doesn't declare");
+    base()->debug_table_count = 0u;
+    EXPECT(ERB_ERR_DEBUG, "an empty debug section");
 }
 
 static void test_assets(void)

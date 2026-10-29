@@ -42,7 +42,7 @@
 
 /**
  * @brief The minor whose debug section holds a table for each panel, each naming its panel and length. Before it,
- * the section is one table for every panel, with a 16-byte header and a u32 function count.
+ * the section is one table for all panels, with a 16-byte header and a u32 function count.
  */
 #define ERB_FORMAT_MINOR_DEBUG_PANELS 5u
 

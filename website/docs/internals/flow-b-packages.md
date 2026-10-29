@@ -275,7 +275,7 @@ for every panel, or for one panel when the panels' tables differ. Each table has
 4. The string table, laid out like the program's `strings` table. `file` and the function names are
    0-based indices into it.
 
-Before format minor 5, the section is one table for every panel, with a 16-byte header that has a
+Before format minor 5, the section is one table for all panels, with a 16-byte header that has a
 `function_count u32` and no `panel` or `length`.
 
 The error screen uses the panel's table to turn a fault's function and offset into `App.jsx:41`. Without

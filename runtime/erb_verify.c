@@ -2366,7 +2366,7 @@ static bool check_debug(ErbProgram* program, ErbError* error)
     {
         return true;
     }
-    /* Before the minor that names panels, the section is one table for every panel. */
+    /* Before the minor that names panels, the section is one table for all panels. */
     if (erb_u16(program->section + ERB_HEADER_FORMAT_MINOR_AT) < ERB_FORMAT_MINOR_DEBUG_PANELS)
     {
         if (length < ERB_DEBUG_OLD_HEADER_SIZE)
@@ -2378,6 +2378,10 @@ static bool check_debug(ErbProgram* program, ErbError* error)
     }
 
     /* A table for every panel (ERB_NONE) or one panel's; only this panel's is checked and used. */
+    if (!length)
+    {
+        return fail(error, ERB_ERR_DEBUG, "an empty debug section");
+    }
     const uint16_t panel_count = erb_u16(program->section + ERB_HEADER_PANEL_COUNT_AT);
     const uint8_t* mine = NULL;
     uint32_t mine_length = 0;
