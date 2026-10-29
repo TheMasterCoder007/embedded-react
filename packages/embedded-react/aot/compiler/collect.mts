@@ -21,8 +21,8 @@
 import {checkNumber} from './check.mts';
 import {parse} from '@babel/parser';
 import {readFileSync, existsSync} from 'node:fs';
-import {resolve} from 'node:path';
-import {aotError} from './diagnostics.mts';
+import {posix, resolve} from 'node:path';
+import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {
   bootCheckpoint,
@@ -803,7 +803,8 @@ export function collectHelpers(
  * Collects image imports — `import wxSun from './assets/wx_sun.png'` → Map (local → { name, importPath }).
  * `name` is the file's basename without extension (the asset key `<Image source>` resolves to and that the
  * Flow A bundler also uses); `importPath` is the source-relative path the CLI bakes from. Mirrors the Flow A
- * esbuild asset plugin so the same `import → basename` convention holds in both flows.
+ * esbuild asset plugin so the same `import → basename` convention holds in both flows. Two different files of
+ * one name would be one asset, so they are refused.
  *
  * @param program  The parsed module.
  *
@@ -814,6 +815,9 @@ export function collectImageImports(
 ): Map<string, AssetImport> {
   // Map each default import of an image file to the file's basename.
   const byLocal = new Map<string, AssetImport>();
+  const pathOf = new Map<string, string>(); // name → the file it names
+  const normalized = (path: string): string =>
+    posix.normalize(path.replace(/\\/g, '/'));
   for (const stmt of program.body) {
     if (
       stmt.type !== 'ImportDeclaration' ||
@@ -826,6 +830,16 @@ export function collectImageImports(
     if (!IMAGE_EXT_RE.test(importPath)) continue;
 
     const name = importPath.split(/[\\/]/).pop()!.replace(IMAGE_EXT_RE, '');
+    const first = pathOf.get(name);
+    if (first !== undefined && normalized(first) !== normalized(importPath)) {
+      const error = aotError(
+        `AOT: two images are named "${name}" (${first} and ${importPath})`,
+        'an image is named by its file name, so rename one of the files.',
+      );
+      locateError(error, stmt.loc?.start);
+      throw error;
+    }
+    pathOf.set(name, importPath);
     for (const specifier of stmt.specifiers) {
       if (specifier.type === 'ImportDefaultSpecifier') {
         byLocal.set(specifier.local.name, {name, importPath});
