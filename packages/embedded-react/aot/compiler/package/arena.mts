@@ -186,12 +186,12 @@ export class Arena {
   }
 
   /**
-   * Gives the arena a tape scratch, as large as the largest tape code builds.
+   * Gives the arena a tape scratch, as large as the largest tape code builds. An empty tape still needs one.
    *
    * @param floats  The tape's floats.
    */
   tapeScratch(floats: number): void {
-    this.tapeFloats = Math.max(this.tapeFloats, floats);
+    this.tapeFloats = Math.max(this.tapeFloats, floats, 1);
   }
 
   /**

@@ -529,6 +529,10 @@ static void test_keyboard(void)
     EXPECT(ERB_ERR_TABLE, "a key label that isn't a string");
     keyboard()->keys[1].type = ER_KBD_KEY_LAYER + 1u;
     EXPECT(ERB_ERR_TABLE, "an unknown key type");
+    keyboard()->keys[1] = (TKey){STR_OFF, ERB_NONE, ER_KBD_KEY_LAYER, 0, 1, 0xFFu};
+    EXPECT(ERB_OK, "a layer key");
+    keyboard()->keys[1] = (TKey){STR_OFF, ERB_NONE, ER_KBD_KEY_LAYER, 1, 1, 0xFFu};
+    EXPECT(ERB_ERR_TABLE, "a layer key switching to a layer that isn't there");
     layout = keyboard();
     for (uint32_t index = 0; index <= ERB_MAX_KEYBOARD_LAYERS; index++)
     {

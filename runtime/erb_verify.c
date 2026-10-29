@@ -1502,7 +1502,8 @@ static bool check_keyboard(ErbProgram* program, ErbError* error)
         const uint16_t text = erb_u16(key + ERB_KEY_TEXT_AT);
         const uint8_t type = key[ERB_KEY_TYPE_AT];
         if ((label != ERB_NONE && label >= program->string_count) || (text != ERB_NONE && text >= program->string_count)
-            || type > ER_KBD_KEY_LAYER || (type == ER_KBD_KEY_CHAR && text == ERB_NONE))
+            || type > ER_KBD_KEY_LAYER || (type == ER_KBD_KEY_CHAR && text == ERB_NONE)
+            || (type == ER_KBD_KEY_LAYER && key[ERB_KEY_LAYER_AT] >= layers))
         {
             return fail(error, ERB_ERR_TABLE, "keyboard key");
         }

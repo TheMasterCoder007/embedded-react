@@ -1598,6 +1598,28 @@ export function App() {
     expect(tapesOf(program)).toHaveLength(2);
   });
 
+  it('gives an empty tape a scratch to copy into', () => {
+    const src = `
+import {useRef} from 'react';
+import {View, Pressable, Svg, updateVector} from 'embedded-react';
+export function App() {
+  const pad = useRef(null);
+  return (
+    <View>
+      <Pressable onPress={() => updateVector(pad, [])} />
+      <Svg ref={pad} width={100} height={20} />
+    </View>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    expect(tapesOf(program)[0].floats).toEqual([]);
+    expect(regionsOf(program)).toContainEqual({
+      kind: Region.tape,
+      count: 1,
+      bytes: 4,
+    });
+  });
+
   it('refuses an <Svg source> gradient the runtime would not load', () => {
     const artifact = {
       ops: [0, 0, 1, 0, 0, 2, 10, 10, 6],
