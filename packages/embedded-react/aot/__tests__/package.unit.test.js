@@ -1381,6 +1381,67 @@ export function App() {
       expect.objectContaining({name: 'LOADI', bx: 2}),
     );
   });
+
+  it('shares one responder across list rows, its functions entered with no row', () => {
+    const src = `
+import {useState, useRef} from 'react';
+import {View, Text, PanResponder} from 'embedded-react';
+export function App() {
+  const [items, setItems] = useState([{id: 1, name: 'a'}, {id: 2, name: 'b'}]);
+  const [x, setX] = useState(0);
+  const pan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderMove: (e, g) => setX(g.dx),
+  })).current;
+  return (
+    <View>
+      <Text>{x}</Text>
+      {items.map(item => <View key={item.id} {...pan.panHandlers}><Text>{item.name}</Text></View>)}
+    </View>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const {u32, tables, view} = readProgram(program);
+    const functions = tables.get(Table.functions);
+    const params = index =>
+      (u32(functions.offset + index * 16 + 12) >>> 8) & 0xff;
+    const kinds = functionsOf(program).map(fn => fn.kind);
+    const grant = kinds.indexOf(event('ER_EVENT_RESPONDER_GRANT'));
+    const startQuery = kinds.indexOf(query('ER_QUERY_START_SHOULD_SET'));
+    expect(params(grant)).toBe(0);
+    expect(params(startQuery)).toBe(0);
+
+    // Every row binds the same grant.
+    const {offset, length} = tables.get(Table.bindings);
+    const grantTargets = Array.from({length: length / 4}, (_, index) => ({
+      event: view.getUint8(offset + index * 4 + 1),
+      target: view.getUint16(offset + index * 4 + 2, true),
+    }))
+      .filter(binding => binding.event === event('ER_EVENT_RESPONDER_GRANT'))
+      .map(binding => binding.target);
+    expect(grantTargets.length).toBeGreaterThan(0);
+    expect(new Set(grantTargets)).toEqual(new Set([grant]));
+  });
+
+  it("refuses a row component's responder that reads what the row passes it", () => {
+    const src = `
+import {useState, useRef} from 'react';
+import {View, Text, PanResponder} from 'embedded-react';
+function Row({label}) {
+  const [n, setN] = useState(0);
+  const pan = useRef(PanResponder.create({
+    onPanResponderMove: (e, g) => setN((label === 'a' ? 100 : 200) + g.dx),
+  })).current;
+  return <View {...pan.panHandlers}><Text>{n}</Text></View>;
+}
+export function App() {
+  const [items, setItems] = useState([{id: 1, name: 'a'}]);
+  return <View>{items.map(item => <Row key={item.id} label={item.name} />)}</View>;
+}`;
+    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+      /doesn't support the value an element passes its callback yet/,
+    );
+  });
 });
 
 describe('bytecode', () => {
