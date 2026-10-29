@@ -33,8 +33,11 @@ import {
   FORMAT_MINOR,
   BindingKind,
   FunctionKind,
+  GradientField,
   InterpFlag,
+  MathFn,
   NONE,
+  PaintField,
   PropKind,
   Region,
   Resource,
@@ -270,16 +273,23 @@ describe('package output', () => {
 
   it('refuses what it does not lower yet, at its place in the source', () => {
     const src = `
-import {View, Svg, Circle} from 'embedded-react';
+import {useState, useRef} from 'react';
+import {View, Pressable, Svg, updateVector} from 'embedded-react';
 export function App() {
+  const [rows, setRows] = useState([{id: 1}]);
+  const pad = useRef(null);
   return (
-    <View>
-      <Svg width={10} height={10}><Circle cx={5} cy={5} r={4} fill="#ffffff" /></Svg>
-    </View>
+    <Pressable onPress={() => updateVector(pad, [{circle: [5, 5, 4], fill: '#fff'}])}>
+      {rows.map(row => (
+        <View key={row.id}>
+          <Svg ref={pad} width={10} height={10} />
+        </View>
+      ))}
+    </Pressable>
   );
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support <Svg> yet[\s\S]*App\.jsx:6:7/,
+      /the package output doesn't support updateVector on a node in a list row yet[\s\S]*App\.jsx:11:11/,
     );
   });
 
@@ -401,19 +411,6 @@ export function App() {
     };
     expect([0, 1].map(index => string(u16(inputs.offset + index * 4)))).toEqual(
       ['alpha', 'zeta'],
-    );
-  });
-
-  it('points what has no node of its own at its first call', () => {
-    const src = `
-import {View, setKeyboardConfig} from 'embedded-react';
-
-setKeyboardConfig({rowHeight: 30});
-export function App() {
-  return <View />;
-}`;
-    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support setKeyboardConfig yet[\s\S]*App\.jsx:4:1/,
     );
   });
 
@@ -1441,6 +1438,284 @@ export function App() {
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
       /doesn't support the value an element passes its callback yet/,
     );
+  });
+});
+
+describe('drawings and the keyboard', () => {
+  const names = fn => fn.ops.map(op => op.name);
+  const updateOf = program =>
+    functionsOf(program).find(fn => fn.kind === FunctionKind.update);
+
+  /** The tapes table: each tape's floats, and its paints' and gradients' counts. */
+  function tapesOf(bytes) {
+    const {u16, u32, view, tables} = readProgram(bytes);
+    const {offset} = tables.get(Table.tapes);
+    return Array.from({length: u32(offset)}, (_, index) => {
+      const at = offset + 16 + index * 16;
+      const floats = u32(at);
+      return {
+        floats: Array.from({length: u16(at + 4)}, (_, float) =>
+          view.getFloat32(offset + floats + float * 4, true),
+        ),
+        paints: u16(at + 8),
+        gradients: u16(at + 12),
+      };
+    });
+  }
+
+  /** Each template node's bindings, as [kind, event, target]. */
+  function bindingsOf(bytes) {
+    const {u16, view, tables} = readProgram(bytes);
+    const {offset, length} = tables.get(Table.bindings);
+    return Array.from({length: length / 4}, (_, index) => [
+      view.getUint8(offset + index * 4),
+      view.getUint8(offset + index * 4 + 1),
+      u16(offset + index * 4 + 2),
+    ]);
+  }
+
+  it('bakes a drawing into a tape its node commits when it is built', () => {
+    const src = `
+import {View, Svg, Circle, Path} from 'embedded-react';
+export function App() {
+  return (
+    <View>
+      <Svg width={40} height={40}>
+        <Circle cx={20} cy={20} r={10} fill="#ff0000" />
+        <Path d="M0 0 L10 10" stroke="#ffffff" strokeWidth={2} />
+      </Svg>
+      <Svg width={10} height={10} />
+    </View>
+  );
+}`;
+    const result = compilePackage(src, 'app', SCREEN);
+    const [tape] = tapesOf(result.program);
+    expect(tapesOf(result.program)).toHaveLength(1);
+    expect(tape.paints).toBe(2);
+    expect(tape.floats.slice(0, 2)).toEqual([0, 0]); // the first shape, with paint 0
+    expect(bindingsOf(result.program)).toEqual([[BindingKind.tape, 0, 0]]);
+    expect(updateOf(result.program)).toBeUndefined();
+    const {u16, u32} = readProgram(result.program);
+    // Panels, then the needs: the two vector nodes, the empty one included.
+    expect([u16(40), u32(44)]).toEqual([Resource.vectorNodes, 2]);
+  });
+
+  it('rebuilds a drawing state drives in the update, after the nodes, from its tape', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text, Svg, Arc} from 'embedded-react';
+export function App() {
+  const [level, setLevel] = useState(10);
+  return (
+    <Pressable onPress={() => setLevel(level + 5)}>
+      <Text>{level}</Text>
+      <Svg width={100} height={100}>
+        <Arc cx={50} cy={50} r={40} startAngle={-90} endAngle={level * 2} stroke="#f4a261" strokeWidth={8} />
+      </Svg>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const update = names(updateOf(program));
+    expect(update.indexOf('VTAPE')).toBeGreaterThan(update.indexOf('COMMIT'));
+    expect(update).toContain('VSET');
+    expect(update.at(-1)).toBe('RET');
+    expect(update).toContain('VCOMMIT');
+    expect(update).not.toContain('VPAINT');
+    const [tape] = tapesOf(program);
+    // A float state drives is 0 until the update works it out; the opcodes are in place.
+    expect(tape.floats).toContain(5);
+    expect(regionsOf(program)).toContainEqual({
+      kind: Region.tape,
+      count: tape.floats.length,
+      bytes: tape.floats.length * 4,
+    });
+    expect(
+      bindingsOf(program).some(([kind]) => kind === BindingKind.tape),
+    ).toBe(false);
+  });
+
+  it('sets the paints and gradients state drives in the scratch, and commits with them', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Svg, Rect} from 'embedded-react';
+export function App() {
+  const [on, setOn] = useState(false);
+  return (
+    <Pressable onPress={() => setOn(!on)}>
+      <Svg width={100} height={40}>
+        <Rect x={0} y={0} width={80} height={20} fill={on ? '#ff0000' : '#00ff00'} strokeWidth={on ? 4 : 2}
+          stroke="#ffffff"
+          fillGrad={on ? {type: 1, ax: 0, ay: 0, bx: 80, by: 0,
+            stops: [{color: '#000000', offset: 0}, {color: on ? '#ffffff' : '#808080', offset: 1}]} : null} />
+      </Svg>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const ops = updateOf(program).ops;
+    const fields = name => ops.filter(op => op.name === name).map(op => op.c);
+    expect(fields('VPAINT')).toEqual([
+      PaintField.fill,
+      PaintField.strokeWidth,
+      PaintField.fillGradient,
+    ]);
+    expect(fields('VGRAD')).toEqual([GradientField.stops + 2]);
+    expect(names({ops})).toContain('VCOMMITP');
+    expect(tapesOf(program)[0].gradients).toBe(1);
+  });
+
+  it('runs updateVector where it is called, with its damage hint in ints or worked out in floats', () => {
+    const src = `
+import {useRef} from 'react';
+import {View, Pressable, Svg, updateVector} from 'embedded-react';
+export function App() {
+  const pad = useRef(null);
+  const step = useRef(0);
+  return (
+    <View>
+      <Pressable onPress={() => {
+        step.current += 1;
+        updateVector(pad, [{rect: [step.current, 0, 10, 10], fill: '#ffffff'}], [0, 0, 20, 10]);
+      }} />
+      <Pressable onPress={() => updateVector(pad, [{circle: [5, 5, step.current / 3], fill: '#ff0000'}], [0, 0, step.current / 2, 10])} />
+      <Svg ref={pad} width={100} height={20} />
+    </View>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const [ints, floats] = functionsOf(program);
+    expect(names(ints)).toEqual(
+      expect.arrayContaining(['VTAPE', 'VSET', 'VCOMMIT', 'VDIRTY']),
+    );
+    expect(names(ints)).not.toContain('FMATH');
+    const rounding = floats.ops
+      .filter(op => op.name === 'FMATH')
+      .map(op => op.ext);
+    expect(rounding.slice(0, 2)).toEqual([MathFn.floor, MathFn.max]);
+    expect(rounding).toContain(MathFn.ceil);
+    expect(names(floats).at(-2)).toBe('VDIRTY');
+    expect(tapesOf(program)).toHaveLength(2);
+  });
+
+  it('gives an empty tape a scratch to copy into', () => {
+    const src = `
+import {useRef} from 'react';
+import {View, Pressable, Svg, updateVector} from 'embedded-react';
+export function App() {
+  const pad = useRef(null);
+  return (
+    <View>
+      <Pressable onPress={() => updateVector(pad, [])} />
+      <Svg ref={pad} width={100} height={20} />
+    </View>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    expect(tapesOf(program)[0].floats).toEqual([]);
+    expect(regionsOf(program)).toContainEqual({
+      kind: Region.tape,
+      count: 1,
+      bytes: 4,
+    });
+  });
+
+  it('refuses an <Svg source> gradient the runtime would not load', () => {
+    const artifact = {
+      ops: [0, 0, 1, 0, 0, 2, 10, 10, 6],
+      paints: [0xffffffff, 0, 0, 4, 0, 0, 0, 1, 0],
+      gradients: [{type: 1, stops: [{color: 0xff000000, offset: 0}], bx: 10}],
+      width: 10,
+      height: 10,
+    };
+    const src = `
+import {View, Svg} from 'embedded-react';
+import badge from './badge.svg';
+export function App() {
+  return (
+    <View>
+      <Svg source={badge} width={10} height={10} />
+    </View>
+  );
+}`;
+    expect(() =>
+      compilePackage(src, 'app', {...SCREEN, svgArtifacts: {badge: artifact}}),
+    ).toThrow(
+      /an <Svg> gradient has 1 stop, but the package output needs at least two[\s\S]*App\.jsx:7:7/,
+    );
+  });
+
+  it('writes setKeyboardConfig as the keyboard table', () => {
+    const src = `
+import {View, setKeyboardConfig} from 'embedded-react';
+setKeyboardConfig({
+  gridCols: 10,
+  rowHeight: 30,
+  keyColor: '#333',
+  layers: [
+    [[{char: 'a', span: 5}, {label: 'up', layer: 1, span: 5}], [{done: true}]],
+    [[{char: 'A'}, {backspace: true}]],
+  ],
+});
+export function App() {
+  return <View />;
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const {u16, u32, view, tables} = readProgram(program);
+    const {offset, length} = tables.get(Table.keyboard);
+    const u8 = at => view.getUint8(offset + at);
+    expect(length).toBe(28 + (2 + 3) * 4 + 5 * 8);
+    expect([0, 2, 4, 6].map(at => u16(offset + at))).toEqual([2, 3, 5, 30]);
+    expect([u8(8), u8(9), u32(offset + 16), u32(offset + 12)]).toEqual([
+      10, 0, 0xff333333, 0,
+    ]);
+    // Layers name their rows, rows their keys, each after the one before.
+    const groups = Array.from({length: 5}, (_, index) => [
+      u16(offset + 28 + index * 4),
+      u16(offset + 30 + index * 4),
+    ]);
+    expect(groups).toEqual([
+      [0, 2],
+      [2, 1],
+      [0, 2],
+      [2, 1],
+      [3, 2],
+    ]);
+    const key = index => {
+      const at = 48 + index * 8;
+      return [
+        u16(offset + at),
+        u16(offset + at + 2),
+        u8(at + 4),
+        u8(at + 5),
+        u8(at + 6),
+        u8(at + 7),
+      ];
+    };
+    const kind = name => ENGINE_VALUES.get(name);
+    expect(key(1).slice(1)).toEqual([
+      NONE,
+      kind('ER_KBD_KEY_LAYER'),
+      1,
+      5,
+      255,
+    ]);
+    expect(key(2)[2]).toBe(kind('ER_KBD_KEY_DONE'));
+    expect(key(3)[1]).not.toBe(NONE);
+  });
+
+  it('keeps the built-in layout when the config gives only a look', () => {
+    const src = `
+import {View, setKeyboardConfig} from 'embedded-react';
+setKeyboardConfig({labelColor: 'white'});
+export function App() {
+  return <View />;
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const {u16, u32, tables} = readProgram(program);
+    const {offset, length} = tables.get(Table.keyboard);
+    expect(length).toBe(28);
+    expect([u16(offset), u32(offset + 24)]).toEqual([0, 0xffffffff]);
   });
 });
 

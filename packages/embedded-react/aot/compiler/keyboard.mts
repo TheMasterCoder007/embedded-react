@@ -164,6 +164,24 @@ const lowerConfig = withLoc((configArg: t.Node): IrKeyboard => {
         return row.map(key => lowerKey(key, layerIndex));
       });
     });
+
+    // A layer key switching to a layer that isn't there would leave the keyboard with no keys.
+    const layerCount = layers.length;
+    for (const key of layers.flat(2)) {
+      if (
+        key.kind === 'layer' &&
+        !(
+          Number.isInteger(key.layer) &&
+          key.layer >= 0 &&
+          key.layer < layerCount
+        )
+      ) {
+        throw aotError(
+          `AOT: a setKeyboardConfig layer key switches to layer ${key.layer}, but there are only ${layerCount}`,
+          `use a layer from 0 to ${layerCount - 1}.`,
+        );
+      }
+    }
   }
 
   return {

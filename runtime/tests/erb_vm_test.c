@@ -29,6 +29,11 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The engine's vector store, from rendering/vector.h. */
+const float* er_vector_slot_ops(int slot, int* n_ops);
+const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints);
+const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads);
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Harness
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -520,6 +525,78 @@ static void test_templates(void)
     CHECK(s_status == ERB_ERR_STALE_NODE, "a debug package stops on a stale handle");
 }
 
+static void test_vectors(void)
+{
+    /* The vector node keeps its handle where the root's was, and its tape has a gradient. */
+    base()->nodes[0].handle = ERB_NONE;
+    s_pkg.nodes[3].handle = S_ROOT;
+    s_pkg.gradients[0] = (TGradient){ER_GRADIENT_LINEAR, 2, 0, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f};
+    s_pkg.gradient_count = 1;
+    s_pkg.stops[0] = (TStop){COLOR_WHITE, 0.0f};
+    s_pkg.stops[1] = (TStop){COLOR_BLACK, 1.0f};
+    s_pkg.stop_count = 2;
+    s_pkg.tapes[0].gradient_count = 1;
+    const uint32_t four = add_const(4.0f);
+    const uint32_t wide = add_const(2.5f);
+    s_pkg.const32[s_pkg.const32_count] = COLOR_BLUE;
+    const uint32_t blue = s_pkg.const32_count++;
+    const uint8_t types[] = {ERB_T_NODE, ERB_T_PAIR, ERB_T_FLOAT, ERB_T_INT};
+    const uint32_t own_code[] = {
+        OP_ABX(GET64, 0, S_ROOT),
+        OP_ABX(VTAPE, 0, 0),
+        OP_ABX(LOADK, 2, four),
+        OP_ABX(VSET, 2, 6),
+        OP_ABX(LOADK, 3, blue),
+        OP_ABC(VPAINT, 3, 0, ERB_VPAINT_FILL),
+        OP_ABC(VGRAD, 3, 0, ERB_VGRAD_STOPS + 2u),
+        OP_ABX(LOADK, 2, wide),
+        OP_ABC(VPAINT, 2, 0, ERB_VPAINT_STROKE_WIDTH),
+        OP_ABC(VGRAD, 2, 0, ERB_VGRAD_BX),
+        OP_ABX(VCOMMITP, 0, 0),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t own = helper(types, 4, 0, 0, own_code, 12);
+    const uint32_t tape_code[] = {
+        OP_ABX(GET64, 0, S_ROOT),
+        OP_ABX(VTAPE, 0, 0),
+        OP_ABX(LOADK, 3, blue),
+        OP_ABC(VPAINT, 3, 0, ERB_VPAINT_FILL),
+        OP_ABX(VCOMMIT, 0, 0),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t tape_paints = helper(types, 4, 0, 0, tape_code, 6);
+    CHECK(load(), "loads");
+
+    const ERNode* node = slot_node(S_ROOT, 0);
+    int count = 0;
+    CHECK(node && er_vector_slot_paints(node->vector_slot, &count)[0].fill == COLOR_WHITE,
+          "a tape binding commits the tape's own paints");
+    call(own, 0, 0);
+    const float* ops = er_vector_slot_ops(node->vector_slot, &count);
+    const ERVectorPaint* paint = er_vector_slot_paints(node->vector_slot, &count);
+    const ERVectorGradient* gradient = er_vector_slot_grads(node->vector_slot, &count);
+    CHECK(s_status == ERB_OK && ops[6] == 4.0f, "VSET writes a float of the scratch");
+    CHECK(paint[0].fill == COLOR_BLUE && paint[0].stroke_w == 2.5f, "VPAINT sets the scratch's paint fields");
+#if ERUI_GRADIENT
+    CHECK(count == 1 && gradient[0].stops[1].color == COLOR_BLUE && gradient[0].bx == 2.5f
+              && gradient[0].stops[0].color == COLOR_WHITE,
+          "VGRAD sets the scratch's gradient fields, and VTAPE loaded the rest");
+#else
+    (void)gradient; /* the engine keeps gradients only when it draws them */
+#endif
+    call(tape_paints, 0, 0);
+    ops = er_vector_slot_ops(node->vector_slot, &count);
+    CHECK(s_status == ERB_OK && ops[6] == 10.0f
+              && er_vector_slot_paints(node->vector_slot, &count)[0].fill == COLOR_WHITE,
+          "VCOMMIT commits the tape's own paints, as before minor 3");
+
+    /* A package's keyboard loads and is let go of with the app. */
+    base()->has_keyboard = true;
+    s_pkg.keyboard.colors[1] = COLOR_BLUE;
+    CHECK(load(), "a package with a keyboard loads");
+    erb_unload();
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Events, inputs and updates
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -922,6 +999,7 @@ int main(void)
     test_lists();
     test_props();
     test_templates();
+    test_vectors();
     test_events_and_inputs();
     test_queries();
     test_timers_and_effects();

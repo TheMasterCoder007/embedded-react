@@ -460,6 +460,90 @@ static void test_tapes(void)
     EXPECT(ERB_ERR_TAPE, "more paints than the firmware keeps");
 }
 
+/** @brief Checks one timer function of an int and a float register against the verifier. */
+static void expect_vector_code(ErbStatus expected, const char* what, uint32_t instruction, int line)
+{
+    const uint8_t types[] = {ERB_T_INT, ERB_T_FLOAT};
+    const uint32_t code[] = {OP_ABX(LOADI, 0, 1), OP_ABX(LOADK, 1, 0), instruction, OP_ABC(RET, 0, 0, 0)};
+    base();
+    set_code_types(F_TIMER, types, 2, code, 4);
+    expect(expected, what, line);
+}
+#define EXPECT_VECTOR_CODE(expected, what, instruction) expect_vector_code((expected), (what), (instruction), __LINE__)
+
+static void test_vector_code(void)
+{
+    EXPECT_VECTOR_CODE(ERB_OK, "a fill from an int", OP_ABC(VPAINT, 0, 0, ERB_VPAINT_FILL));
+    EXPECT_VECTOR_CODE(ERB_OK, "a stroke width from a float", OP_ABC(VPAINT, 1, 0, ERB_VPAINT_STROKE_WIDTH));
+    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a fill from a float", OP_ABC(VPAINT, 1, 0, ERB_VPAINT_FILL));
+    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "an unknown paint field", OP_ABC(VPAINT, 0, 0, ERB_VPAINT_COUNT_));
+    EXPECT_VECTOR_CODE(
+        ERB_ERR_BYTECODE, "a paint past the firmware's", OP_ABC(VPAINT, 0, ERUI_VECTOR_PAINTS_MAX, ERB_VPAINT_FILL));
+    EXPECT_VECTOR_CODE(ERB_OK, "a gradient's radius from a float", OP_ABC(VGRAD, 1, 0, ERB_VGRAD_RADIUS));
+    EXPECT_VECTOR_CODE(ERB_OK, "a stop's color from an int", OP_ABC(VGRAD, 0, 0, ERB_VGRAD_STOPS + 2u));
+    EXPECT_VECTOR_CODE(ERB_OK, "a stop's position from a float", OP_ABC(VGRAD, 1, 0, ERB_VGRAD_STOPS + 3u));
+    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a stop's position from an int", OP_ABC(VGRAD, 0, 0, ERB_VGRAD_STOPS + 1u));
+    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a field between the geometry and the stops", OP_ABC(VGRAD, 1, 0, 5u));
+    EXPECT_VECTOR_CODE(
+        ERB_ERR_BYTECODE, "a stop past the gradient's", OP_ABC(VGRAD, 0, 0, ERB_VGRAD_STOPS + 2u * ER_VGRAD_MAX_STOPS));
+    EXPECT_VECTOR_CODE(
+        ERB_ERR_BYTECODE, "a gradient past the firmware's", OP_ABC(VGRAD, 1, ERUI_VECTOR_GRADS_MAX, ERB_VGRAD_AX));
+    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a commit of a tape that doesn't exist", OP_ABX(VCOMMITP, 0, 1));
+}
+
+/** @brief The baseline package with a keyboard of one layer: a row of a key that types and a backspace. */
+static TKeyboard* keyboard(void)
+{
+    base()->has_keyboard = true;
+    TKeyboard* layout = &s_pkg.keyboard;
+    layout->layers[0] = (TGroup){0, 1};
+    layout->layer_count = 1;
+    layout->rows[0] = (TGroup){0, 2};
+    layout->row_count = 1;
+    layout->keys[0] = (TKey){ERB_NONE, STR_ON, ER_KBD_KEY_CHAR, 0, 2, 0xFFu};
+    layout->keys[1] = (TKey){STR_OFF, ERB_NONE, ER_KBD_KEY_BACKSPACE, 0, 1, 0xFFu};
+    layout->key_count = 2;
+    return layout;
+}
+
+static void test_keyboard(void)
+{
+    keyboard();
+    EXPECT(ERB_OK, "a keyboard layout");
+    base()->has_keyboard = true;
+    s_pkg.keyboard.colors[1] = COLOR_BLUE;
+    EXPECT(ERB_OK, "a keyboard's look over the built-in layout");
+    keyboard()->key_count = 3;
+    EXPECT(ERB_ERR_TABLE, "a keyboard table that isn't whole records");
+    keyboard()->rows[0].first = 1;
+    EXPECT(ERB_ERR_TABLE, "a row that doesn't start after the one before it");
+    keyboard()->rows[0].count = 1;
+    EXPECT(ERB_ERR_TABLE, "rows that leave a key out");
+    TKeyboard* layout = keyboard();
+    layout->layers[1] = (TGroup){1, 0};
+    layout->layer_count = 2;
+    EXPECT(ERB_ERR_TABLE, "a layer with no rows");
+    keyboard()->keys[0].text = ERB_NONE;
+    EXPECT(ERB_ERR_TABLE, "a key that types nothing");
+    keyboard()->keys[1].label = 40;
+    EXPECT(ERB_ERR_TABLE, "a key label that isn't a string");
+    keyboard()->keys[1].type = ER_KBD_KEY_LAYER + 1u;
+    EXPECT(ERB_ERR_TABLE, "an unknown key type");
+    keyboard()->keys[1] = (TKey){STR_OFF, ERB_NONE, ER_KBD_KEY_LAYER, 0, 1, 0xFFu};
+    EXPECT(ERB_OK, "a layer key");
+    keyboard()->keys[1] = (TKey){STR_OFF, ERB_NONE, ER_KBD_KEY_LAYER, 1, 1, 0xFFu};
+    EXPECT(ERB_ERR_TABLE, "a layer key switching to a layer that isn't there");
+    layout = keyboard();
+    for (uint32_t index = 0; index <= ERB_MAX_KEYBOARD_LAYERS; index++)
+    {
+        layout->layers[index] = (TGroup){(uint16_t)index, 1};
+        layout->rows[index] = (TGroup){(uint16_t)index, 1};
+        layout->keys[index] = layout->keys[0];
+    }
+    layout->layer_count = layout->row_count = layout->key_count = ERB_MAX_KEYBOARD_LAYERS + 1u;
+    EXPECT(ERB_ERR_TOO_BIG, "more keyboard layers than the firmware holds");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions and code
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1109,6 +1193,8 @@ int main(void)
     test_interps();
     test_anims();
     test_tapes();
+    test_vector_code();
+    test_keyboard();
     test_functions();
     test_bytecode();
     test_control_flow();

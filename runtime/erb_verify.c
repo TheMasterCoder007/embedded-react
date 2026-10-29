@@ -1445,6 +1445,73 @@ static bool check_inputs(ErbProgram* program, ErbError* error)
     return true;
 }
 
+/** @brief Whether a keyboard group array (layers or rows) names consecutive runs of the next level, in order. */
+static bool keyboard_groups(const uint8_t* groups, uint32_t count, uint32_t next_count, uint32_t max_each)
+{
+    uint32_t next = 0;
+    for (uint32_t index = 0; index < count; index++)
+    {
+        const uint8_t* group = groups + index * ERB_KEYBOARD_GROUP_SIZE;
+        const uint16_t size = erb_u16(group + ERB_KEYBOARD_COUNT_AT);
+        if (erb_u16(group + ERB_KEYBOARD_FIRST_AT) != next || size == 0u || size > max_each)
+        {
+            return false;
+        }
+        next += size;
+    }
+    return next == next_count;
+}
+
+static bool check_keyboard(ErbProgram* program, ErbError* error)
+{
+    const uint8_t* table = program->table[ERB_TABLE_KEYBOARD];
+    const uint32_t length = program->table_length[ERB_TABLE_KEYBOARD];
+    if (!table)
+    {
+        return true;
+    }
+    if (length < ERB_KEYBOARD_HEADER_SIZE)
+    {
+        return fail(error, ERB_ERR_TABLE, "keyboard header");
+    }
+    const uint16_t layers = erb_u16(table + ERB_KEYBOARD_LAYER_COUNT_AT);
+    const uint16_t rows = erb_u16(table + ERB_KEYBOARD_ROW_COUNT_AT);
+    const uint16_t keys = erb_u16(table + ERB_KEYBOARD_KEY_COUNT_AT);
+    if (length
+        != ERB_KEYBOARD_HEADER_SIZE + ((uint32_t)layers + rows) * ERB_KEYBOARD_GROUP_SIZE
+               + (uint32_t)keys * ERB_KEYBOARD_KEY_SIZE)
+    {
+        return fail(error, ERB_ERR_TABLE, "keyboard table not whole records");
+    }
+    if (layers > ERB_MAX_KEYBOARD_LAYERS || rows > ERB_MAX_KEYBOARD_ROWS || keys > ERB_MAX_KEYBOARD_KEYS)
+    {
+        return fail(error, ERB_ERR_TOO_BIG, "keyboard layout larger than the firmware holds");
+    }
+    /* The engine counts a layer's rows and a row's keys in a byte. */
+    const uint8_t* layer_groups = table + ERB_KEYBOARD_HEADER_SIZE;
+    const uint8_t* row_groups = layer_groups + layers * ERB_KEYBOARD_GROUP_SIZE;
+    if (!keyboard_groups(layer_groups, layers, rows, UINT8_MAX) || !keyboard_groups(row_groups, rows, keys, UINT8_MAX))
+    {
+        return fail(error, ERB_ERR_TABLE, "keyboard layers or rows");
+    }
+    const uint8_t* key_records = row_groups + rows * ERB_KEYBOARD_GROUP_SIZE;
+    for (uint32_t index = 0; index < keys; index++)
+    {
+        const uint8_t* key = key_records + index * ERB_KEYBOARD_KEY_SIZE;
+        const uint16_t label = erb_u16(key + ERB_KEY_LABEL_AT);
+        const uint16_t text = erb_u16(key + ERB_KEY_TEXT_AT);
+        const uint8_t type = key[ERB_KEY_TYPE_AT];
+        if ((label != ERB_NONE && label >= program->string_count) || (text != ERB_NONE && text >= program->string_count)
+            || type > ER_KBD_KEY_LAYER || (type == ER_KBD_KEY_CHAR && text == ERB_NONE)
+            || (type == ER_KBD_KEY_LAYER && key[ERB_KEY_LAYER_AT] >= layers))
+        {
+            return fail(error, ERB_ERR_TABLE, "keyboard key");
+        }
+    }
+    program->keyboard = table;
+    return true;
+}
+
 static bool check_assets(const ErbConfig* config, ErbProgram* program, ErbError* error)
 {
     if (!program->assets)
@@ -1904,6 +1971,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
             break;
         case ERB_OP_VTAPE:
         case ERB_OP_VCOMMIT:
+        case ERB_OP_VCOMMITP:
             if (operand_bx >= program->tape_count || !program->regions[ERB_REGION_TAPE].present
                 || erb_u16(erb_tape(program, operand_bx) + ERB_TAPE_FLOAT_COUNT_AT)
                        > program->regions[ERB_REGION_TAPE].count)
@@ -1913,6 +1981,24 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
             if (!program->regions[ERB_REGION_TAPE].present || operand_bx >= program->regions[ERB_REGION_TAPE].count)
                 BAD("tape scratch index");
             break;
+        case ERB_OP_VPAINT:
+        {
+            const uint8_t type = operand_c == ERB_VPAINT_STROKE_WIDTH ? ERB_T_FLOAT : ERB_T_INT;
+            if (operand_b >= ERUI_VECTOR_PAINTS_MAX || operand_c >= ERB_VPAINT_COUNT_
+                || !reg_is(context, operand_a, type))
+                BAD("VPAINT paint, field or register");
+            break;
+        }
+        case ERB_OP_VGRAD:
+        {
+            /* Geometry, then a color and a position for each stop. */
+            const bool geometry = operand_c <= ERB_VGRAD_RADIUS;
+            const bool stop = operand_c >= ERB_VGRAD_STOPS && operand_c < ERB_VGRAD_STOPS + 2u * ER_VGRAD_MAX_STOPS;
+            const uint8_t type = geometry || (stop && (operand_c - ERB_VGRAD_STOPS) % 2u) ? ERB_T_FLOAT : ERB_T_INT;
+            if (operand_b >= ERUI_VECTOR_GRADS_MAX || !(geometry || stop) || !reg_is(context, operand_a, type))
+                BAD("VGRAD gradient, field or register");
+            break;
+        }
         case ERB_OP_VDIRTY:
             for (uint32_t register_index = operand_b; register_index < (uint32_t)operand_b + 4u; register_index++)
             {
@@ -2313,6 +2399,6 @@ bool erb_verify(
            && check_slots(program, error) && check_assets(config, program, error) && check_props(program, error)
            && check_functions(program, error) && check_tapes(program, error) && check_interps(program, error)
            && check_bindings(program, error) && check_templates(program, error) && check_anims(program, error)
-           && check_imports(config, program, error) && check_inputs(program, error)
+           && check_imports(config, program, error) && check_inputs(program, error) && check_keyboard(program, error)
            && check_code(config, program, error) && check_debug(program, error);
 }

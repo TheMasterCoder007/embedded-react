@@ -82,6 +82,7 @@ export class Arena {
   private timers = 0;
   private anims = 0;
   private events = 0;
+  private tapeFloats = 0;
   private laidOut: ProgramRegion[] | null = null;
 
   /**
@@ -185,6 +186,15 @@ export class Arena {
   }
 
   /**
+   * Gives the arena a tape scratch, as large as the largest tape code builds. An empty tape still needs one.
+   *
+   * @param floats  The tape's floats.
+   */
+  tapeScratch(floats: number): void {
+    this.tapeFloats = Math.max(this.tapeFloats, floats, 1);
+  }
+
+  /**
    * Lays the slots out: values, the dirty bits, strings, list pools, node handles, then the timer and animation
    * tables. Code may name slots from here on.
    */
@@ -265,7 +275,7 @@ export class Arena {
   }
 
   /**
-   * The arena's regions, with the register stack after the slots, then the event queue.
+   * The arena's regions, with the register stack after the slots, then the tape scratch, and the event queue.
    *
    * @param stackCells  Cells the deepest function needs, frame included.
    *
@@ -285,6 +295,15 @@ export class Arena {
       {kind: Region.stack, count: cells, offset: end, bytes: cells * 4},
     ];
     let bytes = end + cells * 4;
+    if (this.tapeFloats) {
+      regions.push({
+        kind: Region.tape,
+        count: this.tapeFloats,
+        offset: bytes,
+        bytes: this.tapeFloats * 4,
+      });
+      bytes += this.tapeFloats * 4;
+    }
     if (this.events) {
       regions.push({
         kind: Region.events,

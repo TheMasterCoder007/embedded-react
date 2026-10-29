@@ -139,6 +139,14 @@ describe('package format copy', () => {
       'ANIM',
       'INTERP',
       'ANIM_ENTRY',
+      'TAPE',
+      'TAPE_HEADER',
+      'PAINT',
+      'GRADIENT',
+      'STOP',
+      'KEYBOARD_HEADER',
+      'KEYBOARD_GROUP',
+      'KEYBOARD_KEY',
     ]) {
       expect(format[`${name}_SIZE`], name).toBe(
         defineValue(formatHeader, `ERB_${name}_SIZE`),
@@ -159,6 +167,8 @@ describe('package format copy', () => {
       [format.FunctionKind, 'ERB_FN_'],
       [format.EventField, 'ERB_EVT_'],
       [format.MathFn, 'ERB_MATH_'],
+      [format.PaintField, 'ERB_VPAINT_'],
+      [format.GradientField, 'ERB_VGRAD_'],
     ];
     for (const [group, prefix] of groups) {
       for (const [name, value] of Object.entries(group)) {

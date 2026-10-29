@@ -26,7 +26,7 @@ import type {IrKeyboard, IrKeyboardKey, IrKeyKind} from '../ir/keyboard.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** Key kind → its ERKeyboardKey type. */
-const KEY_TYPES: Record<IrKeyKind, string> = {
+export const KEY_TYPES: Record<IrKeyKind, string> = {
   char: 'ER_KBD_KEY_CHAR',
   layer: 'ER_KBD_KEY_LAYER',
   backspace: 'ER_KBD_KEY_BACKSPACE',
@@ -34,7 +34,7 @@ const KEY_TYPES: Record<IrKeyKind, string> = {
 };
 
 /** The highlight layer that means "never highlighted". */
-const NEVER_HIGHLIGHTED = 255;
+export const NEVER_HIGHLIGHTED = 255;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation

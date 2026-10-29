@@ -81,7 +81,7 @@ describe('keyboard IR', () => {
     const keyboard = keyboardOf(`setKeyboardConfig({
       keyColor: '#333',
       gridCols: 10,
-      layers: [[[{char: 'q'}, {char: ' ', span: 4}, {label: 'shift', layer: 1, highlight: true}, {backspace: true}, {done: true}]]],
+      layers: [[[{char: 'q'}, {char: ' ', span: 4}, {label: 'shift', layer: 1, highlight: true}, {backspace: true}, {done: true}]], [[{char: 'Q'}]]],
     });`);
     expect(keyboard.layers[0][0]).toEqual([
       {
@@ -137,7 +137,7 @@ describe('keyboard IR', () => {
       '{ "shift", NULL, ER_KBD_KEY_LAYER, 1, 1, 0 }, { "<", NULL, ER_KBD_KEY_BACKSPACE, 0, 1, 255 }',
     );
     expect(data).toContain(
-      'static const ERKeyboardConfig kbd_cfg = { kbd_layers, 1, 10, 0, 0, 0, 0, 0, 0xFF333333u, 0, 0 };',
+      'static const ERKeyboardConfig kbd_cfg = { kbd_layers, 2, 10, 0, 0, 0, 0, 0, 0xFF333333u, 0, 0 };',
     );
     expect(setup).toBe('    er_keyboard_set_config(&kbd_cfg);');
   });
@@ -165,6 +165,16 @@ describe('keyboard IR', () => {
     expect(() =>
       keyboardOf('setKeyboardConfig({layers: [[[{char: "a"}]], []]});'),
     ).toThrow('AOT: setKeyboardConfig `layers[1]` needs at least one row');
+  });
+
+  it('rejects a layer key switching to a layer that is not there', () => {
+    expect(() =>
+      keyboardOf(
+        'setKeyboardConfig({layers: [[[{char: "a"}, {label: "up", layer: 1}]]]});',
+      ),
+    ).toThrow(
+      'AOT: a setKeyboardConfig layer key switches to layer 1, but there are only 1',
+    );
   });
 });
 

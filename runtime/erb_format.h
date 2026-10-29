@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 2u
+#define ERB_FORMAT_MINOR 3u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -133,8 +133,9 @@ enum
     ERB_TABLE_TAPES = 15,
     ERB_TABLE_IMPORTS = 16,
     ERB_TABLE_INPUTS = 17,
-    ERB_TABLE_INTERPS = 18, /**< Since minor 1. */
-    ERB_TABLE_COUNT_ = 19,
+    ERB_TABLE_INTERPS = 18,  /**< Since minor 1. */
+    ERB_TABLE_KEYBOARD = 19, /**< Since minor 3. */
+    ERB_TABLE_COUNT_ = 20,
 };
 
 /** @brief Record sizes, in bytes. */
@@ -157,6 +158,9 @@ enum
 #define ERB_IMPORT_SIZE 8u
 #define ERB_INPUT_SIZE 4u
 #define ERB_INTERP_SIZE 72u
+#define ERB_KEYBOARD_HEADER_SIZE 28u
+#define ERB_KEYBOARD_GROUP_SIZE 4u
+#define ERB_KEYBOARD_KEY_SIZE 8u
 
 /** @brief The strings table: a count, then one u32 byte offset per string. */
 #define ERB_STRINGS_COUNT_AT 0u
@@ -283,6 +287,52 @@ enum
 #define ERB_GRADIENT_RADIUS_AT 20u
 #define ERB_STOP_COLOR_AT 0u
 #define ERB_STOP_POSITION_AT 4u
+
+/** @brief What VPAINT sets in a paint of the scratch (C), and the register type each takes. */
+enum
+{
+    ERB_VPAINT_FILL = 0,            /**< int: ARGB. */
+    ERB_VPAINT_STROKE = 1,          /**< int: ARGB. */
+    ERB_VPAINT_STROKE_WIDTH = 2,    /**< float. */
+    ERB_VPAINT_FILL_GRADIENT = 3,   /**< int: a 1-based gradient, or 0 for none. */
+    ERB_VPAINT_STROKE_GRADIENT = 4, /**< int: a 1-based gradient, or 0 for none. */
+    ERB_VPAINT_COUNT_ = 5,
+};
+
+/** @brief What VGRAD sets in a gradient of the scratch (C): its geometry (floats), then each stop's color (int) and
+ *         position (float), stop k at ERB_VGRAD_STOPS + 2k. */
+enum
+{
+    ERB_VGRAD_AX = 0,
+    ERB_VGRAD_AY = 1,
+    ERB_VGRAD_BX = 2,
+    ERB_VGRAD_BY = 3,
+    ERB_VGRAD_RADIUS = 4,
+    ERB_VGRAD_STOPS = 8,
+};
+
+/** @brief The keyboard table (since minor 3): a header, then its layers, its rows and its keys. A layer names its
+ *         rows and a row its keys as `first u16`, `count u16`; each group follows the one before it. */
+#define ERB_KEYBOARD_LAYER_COUNT_AT 0u /**< 0 keeps the engine's built-in layout. */
+#define ERB_KEYBOARD_ROW_COUNT_AT 2u
+#define ERB_KEYBOARD_KEY_COUNT_AT 4u
+#define ERB_KEYBOARD_ROW_HEIGHT_AT 6u
+#define ERB_KEYBOARD_GRID_COLS_AT 8u
+#define ERB_KEYBOARD_KEY_GAP_AT 9u
+#define ERB_KEYBOARD_KEY_RADIUS_AT 10u
+#define ERB_KEYBOARD_FONT_SIZE_AT 11u
+#define ERB_KEYBOARD_PANEL_COLOR_AT 12u
+#define ERB_KEYBOARD_KEY_COLOR_AT 16u
+#define ERB_KEYBOARD_KEY_ACTIVE_COLOR_AT 20u
+#define ERB_KEYBOARD_LABEL_COLOR_AT 24u
+#define ERB_KEYBOARD_FIRST_AT 0u
+#define ERB_KEYBOARD_COUNT_AT 2u
+#define ERB_KEY_LABEL_AT 0u /**< A string, or ERB_NONE for none. */
+#define ERB_KEY_TEXT_AT 2u  /**< A string, or ERB_NONE for none. */
+#define ERB_KEY_TYPE_AT 4u  /**< An ERKeyboardKeyType. */
+#define ERB_KEY_LAYER_AT 5u
+#define ERB_KEY_SPAN_AT 6u
+#define ERB_KEY_HIGHLIGHT_AT 7u
 
 /** @brief Native import. */
 #define ERB_IMPORT_NAME_AT 0u
@@ -648,7 +698,7 @@ enum
     X(AVSET,    ERB_F_ABX, 1, 0, ERBO_F, ERBO_K, ERBO_X)  /* animated value slot Bx = A */                             \
     X(AVGET,    ERB_F_ABX, 1, 1, ERBO_F, ERBO_K, ERBO_X)                                                               \
     /* Vectors */                                                                                                      \
-    X(VTAPE,    ERB_F_ABX, 1, 0, ERBO_X, ERBO_K, ERBO_X)  /* copy tape Bx's floats into the scratch */                 \
+    X(VTAPE,    ERB_F_ABX, 1, 0, ERBO_X, ERBO_K, ERBO_X)  /* copy tape Bx's floats and paints into the scratch */      \
     X(VSET,     ERB_F_ABX, 1, 0, ERBO_F, ERBO_K, ERBO_X)  /* scratch[Bx] = A */                                        \
     X(VCOMMIT,  ERB_F_ABX, 1, 0, ERBO_N, ERBO_K, ERBO_X)  /* the scratch, with tape Bx's paints, onto node A */        \
     X(VDIRTY,   ERB_F_ABC, 1, 0, ERBO_N, ERBO_I, ERBO_X)  /* node A's dirty rect from ints B .. B + 3 */               \
@@ -658,7 +708,11 @@ enum
     X(DATENOW,  ERB_F_ABC, 1, 1, ERBO_L, ERBO_X, ERBO_X)                                                               \
     /* Faults and effects */                                                                                           \
     X(TRAP,     ERB_F_ABX, 1, 0, ERBO_X, ERBO_K, ERBO_X)  /* stop with strings[Bx] (or none) */                        \
-    X(EFFECT,   ERB_F_ABX, 1, 0, ERBO_X, ERBO_K, ERBO_X)  /* queue effect function Bx after this update pass */
+    X(EFFECT,   ERB_F_ABX, 1, 0, ERBO_X, ERBO_K, ERBO_X)  /* queue effect function Bx after this update pass */      \
+    /* Vectors, since minor 3 */                                                                                       \
+    X(VPAINT,   ERB_F_ABC, 1, 0, ERBO_R, ERBO_K, ERBO_K)  /* field C of the scratch's paint B = A */                   \
+    X(VGRAD,    ERB_F_ABC, 1, 0, ERBO_R, ERBO_K, ERBO_K)  /* field C of the scratch's gradient B = A */                \
+    X(VCOMMITP, ERB_F_ABX, 1, 0, ERBO_N, ERBO_K, ERBO_X)  /* the scratch, with its own paints, onto node A */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */

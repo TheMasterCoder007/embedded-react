@@ -30,6 +30,7 @@ import {aotError, constantText} from '../diagnostics.mts';
 import {animationStatement} from './animations.mts';
 import {EventField, MathFn} from './format.mts';
 import {abiProp, floatBits, readConstant} from './props.mts';
+import {updateVector} from './vectors.mts';
 import type {AnimationPlan} from './animations.mts';
 import type {Arena, Slot} from './arena.mts';
 import type {
@@ -39,6 +40,7 @@ import type {
   RegisterType,
 } from './bytecode.mts';
 import type {ProgramTables} from './tables.mts';
+import type {VectorPlan} from './vectors.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {
   IrExpr,
@@ -107,6 +109,7 @@ export interface ProgramSlots {
   animations: AnimationPlan;
   /** Each PanResponder's gesture state, by its C prefix. */
   gestures: Map<string, GestureSlots>;
+  vectors: VectorPlan;
 }
 
 /** The <TextInput> a CHANGE_TEXT handler reads its new text from, and the buffer it reads it into. */
@@ -1180,7 +1183,7 @@ export class Codegen {
         );
         return;
       case 'updateVector':
-        notYet('updateVector');
+        updateVector(this, stmt, this.program.vectors);
     }
   }
 
@@ -1353,6 +1356,21 @@ export class Codegen {
       // Any other field is a whole number: a fraction goes in truncated, as C converts it.
       fn.abx('PSETI', this.convert(result.register, 'int').index, prop.id);
     });
+  }
+
+  /**
+   * A state-driven prop value, such as a paint's color, in the type C works it out in.
+   *
+   * @param value  The value.
+   *
+   * @returns The register.
+   */
+  propRegister(value: IrPropValue): Register {
+    const result = this.propValue(value);
+    if (result.conversion) {
+      notYet(`a ${result.conversion} outside a prop`);
+    }
+    return result.register;
   }
 
   /**

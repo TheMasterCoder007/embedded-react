@@ -165,6 +165,31 @@ typedef struct
 
 typedef struct
 {
+    uint16_t first, count;
+} TGroup;
+
+typedef struct
+{
+    uint16_t label, text;
+    uint8_t type, layer, span, highlight;
+} TKey;
+
+/** @brief A keyboard table: its look, then its layers, rows and keys. */
+typedef struct
+{
+    uint16_t row_height;
+    uint8_t grid_cols, key_gap, key_radius, font_size;
+    uint32_t colors[4]; /**< Panel, key, active key and label. */
+    TGroup layers[12];
+    uint32_t layer_count;
+    TGroup rows[12];
+    uint32_t row_count;
+    TKey keys[16];
+    uint32_t key_count;
+} TKeyboard;
+
+typedef struct
+{
     uint16_t function, file;
     uint32_t offset, line;
 } TDebugEntry;
@@ -234,6 +259,8 @@ typedef struct
     uint32_t input_count;
     TInterp interps[4];
     uint32_t interp_count;
+    bool has_keyboard;
+    TKeyboard keyboard;
 
     bool has_debug;
     uint32_t debug_build_id;
@@ -583,6 +610,43 @@ static bool tpkg_table(const TPkg* pkg, uint32_t id, TBuf* buf)
                     tb_u32(buf, interp->output[point]);
             }
             break;
+        case ERB_TABLE_KEYBOARD:
+        {
+            const TKeyboard* keyboard = &pkg->keyboard;
+            if (!pkg->has_keyboard)
+                return false;
+            tb_u16(buf, (uint16_t)keyboard->layer_count);
+            tb_u16(buf, (uint16_t)keyboard->row_count);
+            tb_u16(buf, (uint16_t)keyboard->key_count);
+            tb_u16(buf, keyboard->row_height);
+            tb_u8(buf, keyboard->grid_cols);
+            tb_u8(buf, keyboard->key_gap);
+            tb_u8(buf, keyboard->key_radius);
+            tb_u8(buf, keyboard->font_size);
+            for (int color = 0; color < 4; color++)
+                tb_u32(buf, keyboard->colors[color]);
+            for (uint32_t index = 0; index < keyboard->layer_count; index++)
+            {
+                tb_u16(buf, keyboard->layers[index].first);
+                tb_u16(buf, keyboard->layers[index].count);
+            }
+            for (uint32_t index = 0; index < keyboard->row_count; index++)
+            {
+                tb_u16(buf, keyboard->rows[index].first);
+                tb_u16(buf, keyboard->rows[index].count);
+            }
+            for (uint32_t index = 0; index < keyboard->key_count; index++)
+            {
+                const TKey* key = &keyboard->keys[index];
+                tb_u16(buf, key->label);
+                tb_u16(buf, key->text);
+                tb_u8(buf, key->type);
+                tb_u8(buf, key->layer);
+                tb_u8(buf, key->span);
+                tb_u8(buf, key->highlight);
+            }
+            break;
+        }
         default:
             return false;
     }

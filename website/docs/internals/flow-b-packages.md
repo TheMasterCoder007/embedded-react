@@ -10,10 +10,9 @@ the people building the loader, the VM, and the compiler's package output.
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
 `erb_format.h`). `embedded-react build --aot --package` writes a package for one panel. It takes state,
-handlers, timers, effects, lists, animations, PanResponder and values worked out from the screen size, but
-not yet `<Svg>`; the compiler emits C for that while the rest of its package output lands, as the
-[roadmap](/roadmap) tracks. Once packages pass the same tests as the C output, the C
-backend is retired.
+handlers, timers, effects, lists, animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked
+out from the screen size. Multi-panel packages are still to come, as the [roadmap](/roadmap) tracks. Once
+packages pass the same tests as the C output, the C backend is retired.
 :::
 
 ## In one picture
@@ -143,6 +142,7 @@ Every record's size is a multiple of 4. A table with a header array starts with 
 | 16  | `imports`   | Native functions the package calls: `name u16`, `version u16`, `signature u16`, `reserved u16` (string indices and a version number)                                                                                                                                     |
 | 17  | `inputs`    | Host-fed values (`useHostValue`): `name u16`, `slot u16`                                                                                                                                                                                                                 |
 | 18  | `interps`   | Interpolations an animated value is bound through, 72 bytes each (since minor 1). See [Animations and vector tapes](#animations-and-vector-tapes)                                                                                                                        |
+| 19  | `keyboard`  | The on-screen keyboard's look and layout (since minor 3). See [The keyboard](#the-keyboard)                                                                                                                                                                              |
 
 A template node record is `type u8`, `flags u8`, `children u16`, `props u16`, `handle u16`,
 `bindings u16`, `binding_count u8`, `reserved u8`. Nodes are listed in pre-order with a child count,
@@ -228,6 +228,30 @@ The `tapes` table starts with `count u32` and the byte offsets of its paints, gr
 The runtime copies paints and gradients into the engine's `ERVectorPaint` and `ERVectorGradient` when it
 commits a tape, so the package doesn't depend on how the firmware lays those structs out.
 
+A drawing state drives is a tape too, its constant floats, paints and gradients in place, and the rest 0. The
+update copies it into the scratch with `VTAPE`, writes each float state drives with `VSET`, and commits it.
+When state drives a paint or a gradient too, it sets those fields of the scratch's copy (since minor 3) and
+commits with `VCOMMITP`, which keeps them:
+
+- `VPAINT A, B, C` sets field `C` of paint `B` to register `A`: the fill (0) and stroke (1) colors, the stroke
+  width (2, a float), and the fill (3) and stroke (4) gradients, 1-based or 0 for none.
+- `VGRAD A, B, C` sets field `C` of gradient `B`: `ax`, `ay`, `bx`, `by` and `radius` (0 to 4, floats), then
+  stop _k_'s color at `8 + 2k` and its position (a float) after it.
+
+### The keyboard
+
+The `keyboard` table is `setKeyboardConfig`: a 28-byte header, `layer_count u16`, `row_count u16`,
+`key_count u16`, `row_height u16`, `grid_cols u8`, `key_gap u8`, `key_radius u8`, `font_size u8`, then the
+panel, key, active key and label colors (`u32` each). A 0 size or color is the engine's default, and no
+layers keeps its built-in layout. Then `layer_count` layers and `row_count` rows, each `first u16`,
+`count u16` naming a run of the rows or keys after the ones before it, and `key_count` 8-byte keys:
+`label u16` and `text u16` (strings, or `0xFFFF` for none), `type u8` (the engine's `ERKeyboardKeyType`),
+`layer u8`, `span u8` and `highlight u8` (`0xFF` for never).
+
+The runtime copies the layout into the engine's structs, the strings left in place, and hands it to
+`er_keyboard_set_config()` once the root is built, as the C output's `er_app_build()` does. It hands the
+engine back its own keyboard when the app is torn down.
+
 ### The debug section
 
 Section 5 has four parts, in order:
@@ -301,8 +325,9 @@ rebuild, only a package whose `arena_bytes` still fits.
 **What is not in the arena.** The engine's pools (nodes, vector nodes, animations, the image registry,
 fonts) stay where they are, sized by the firmware's `ERUI_*` flags; the package's needs are checked
 against them. The runtime also keeps a few fixed statics of its own, the same size for every package:
-one `ERProps` scratch, one paint table for a vector update, and the current event's data. They are part
-of the runtime's footprint, not the package's.
+one `ERProps` scratch, one paint table for a vector update, the current event's data, and, with the
+engine's on-screen keyboard, a copy of a package's keyboard layout. They are part of the runtime's
+footprint, not the package's.
 
 Fonts need a change to the asset loader too. `er_assets_load_pack()` allocates each font's glyph tables
 with `calloc`, and the Flow B runtime has no heap. It gets a variant that takes those tables from
@@ -375,7 +400,7 @@ extension word is never an instruction, and a branch into one is rejected. The f
 | Nodes         | `BUILD` (a branch or row template), `DESTROY`, `SCROLL`, `FOCUS`, `BLUR`, `INPUT` (read a text input)                                                                                            |
 | Timers        | `TSTART` (function, ms, repeat; gives an id), `TCLEAR`                                                                                                                                           |
 | Animation     | `ASTART` (a descriptor, with `toValue`s from registers), `ASTOP`, `AVSET`, `AVGET`                                                                                                               |
-| Vectors       | `VTAPE` (copy a tape into the scratch), `VSET` (a float into one of the tape's arguments), `VCOMMIT` (to a node, with its paints), `VDIRTY`                                                      |
+| Vectors       | `VTAPE` (a tape and its paints into the scratch), `VSET` (a float of it), `VCOMMIT` (to a node, with the tape's paints), `VDIRTY`; since minor 3, `VPAINT`, `VGRAD`, `VCOMMITP`                  |
 | Event data    | `EVT` (`x`, `y`, `dx`, `dy`, `vx`, `vy`, the fingers down since minor 2, a layout field), `NOW`, `DATENOW`                                                                                       |
 | Faults        | `TRAP`, with a reason: what a lowered `throw` or an unreachable branch becomes                                                                                                                   |
 | Effects       | `EFFECT` (queue an effect to run after this update pass)                                                                                                                                         |
@@ -568,6 +593,8 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Calls     | The deepest frame sum from any entry point fits the register stack region                                                                                                                                                                                                             | stack too deep                     |
 | Imports   | Every import resolves to a native function the firmware registered with the same name, version and signature                                                                                                                                                                          | missing native module _name_       |
 | Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                       | bad input                          |
+| Keyboard  | Whole records; each layer and row names the runs after the ones before it, with 1 to 255 rows or keys; every key a known type with valid strings, and one that types something has its text                                                                                           | malformed table                    |
+| Keyboard  | No more layers, rows and keys than `ERB_MAX_KEYBOARD_LAYERS`, `ERB_MAX_KEYBOARD_ROWS` and `ERB_MAX_KEYBOARD_KEYS`                                                                                                                                                                     | needs more than firmware reserves  |
 | Debug     | `build_id` matches; the parts inside the section, in order and not overlapping; `function_count` equals the program's function count; entries sorted, each on a real instruction; every `file` and function name a valid index into its string table, which is checked like `strings` | debug table does not match         |
 | Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit the firmware's font storage and the font registry                                                                                                                 | asset pack failed to load          |
 
@@ -671,6 +698,9 @@ What each part of today's `app.gen.c` becomes:
 | `er_seqcb_*`, `er_waitcb_*`, `er_donecb_*`        | Animation-done functions; each completion a helper they `CALL`       |
 | `s_waits` and `app_wait_*()`                      | Delay leaves, and a parallel group for a joined run                  |
 | `er_pan_*` and `er_responder_query_set()`         | Responder handlers and query functions, in `bindings`                |
+| `s_svg*_ops`, `s_svg*_paints`, `s_svg*_grads`     | Tapes; a baked one committed by its node's binding                   |
+| `build_svg*()`, `updateVector`'s `s_uv*`          | `VTAPE`, `VSET`, `VPAINT` and a commit                               |
+| `kbd_cfg`, `er_keyboard_set_config()`             | The keyboard table, handed over at load                              |
 
 ## The firmware's side
 
@@ -713,15 +743,16 @@ er_commit();
 
 A native's signature is its result, a colon, then its parameters, each `i` (int), `b` (bool) or `f`
 (float); `v` as the result means none. Firmware with fonts in its packages gives the runtime storage
-for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs and extra glyphs, as many as its apps
+for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs, and extra glyphs, as many as its apps
 need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`
 receives the reported limits.
 
 **Limits.** How large an app the firmware accepts is set by CMake options in `runtime/CMakeLists.txt`:
 `ERB_EVENT_BUDGET`, `ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`,
-`ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. The defaults suit most apps, and a package past one
-is rejected with the reason. The engine's pool sizes stay the engine's `ERUI_*` options. The runtime
-reads them at load time, so each is set once; its image name index follows `ERUI_IMAGE_REGISTRY_MAX`.
+`ERB_MAX_KEYBOARD_KEYS`, `ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. The defaults suit most apps,
+and a package past one is rejected with the reason. The engine's pool sizes stay the engine's `ERUI_*`
+options. The runtime reads them at load time, so each is set once; its image name index follows
+`ERUI_IMAGE_REGISTRY_MAX`.
 
 `erb_input_find("steps")` looks an input up once, and `erb_input_set_int()` (or `_bool`, `_float`,
 `_string`) sets it after that. `erb_set_wall_clock()` replaces `er_app_set_wall_clock()`. A board with

@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 2;
+export const FORMAT_MINOR = 3;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -62,6 +62,14 @@ export const BINDING_SIZE = 4;
 export const FUNCTION_SIZE = 16;
 export const ANIM_SIZE = 40;
 export const INTERP_SIZE = 72;
+export const TAPE_SIZE = 16;
+export const TAPE_HEADER_SIZE = 16;
+export const PAINT_SIZE = 24;
+export const GRADIENT_SIZE = 24;
+export const STOP_SIZE = 8;
+export const KEYBOARD_HEADER_SIZE = 28;
+export const KEYBOARD_GROUP_SIZE = 4;
+export const KEYBOARD_KEY_SIZE = 8;
 
 /** Engine resources a package names in its needs, besides nodes. */
 export const Resource = {
@@ -95,6 +103,7 @@ export const Table = {
   imports: 16,
   inputs: 17,
   interps: 18,
+  keyboard: 19,
 } as const;
 
 /** Arena region kinds, written in this order. */
@@ -169,6 +178,25 @@ export const AnimFlag = {
   loop: 0x01,
   loopReverse: 0x02,
   toRegister: 0x04,
+} as const;
+
+/** The paint fields VPAINT sets. */
+export const PaintField = {
+  fill: 0,
+  stroke: 1,
+  strokeWidth: 2,
+  fillGradient: 3,
+  strokeGradient: 4,
+} as const;
+
+/** The gradient fields VGRAD sets: the geometry, then stop k's color at `stops + 2k` and its position after it. */
+export const GradientField = {
+  ax: 0,
+  ay: 1,
+  bx: 2,
+  by: 3,
+  radius: 4,
+  stops: 8,
 } as const;
 
 /** Interpolation flag bits. */
@@ -406,6 +434,9 @@ export const OPCODES: readonly OpcodeInfo[] = [
   ['DATENOW', 'abc', 1],
   ['TRAP', 'abx', 1],
   ['EFFECT', 'abx', 1],
+  ['VPAINT', 'abc', 1],
+  ['VGRAD', 'abc', 1],
+  ['VCOMMITP', 'abx', 1],
 ];
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -732,4 +763,8 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_EXTRAPOLATE_EXTEND', 0],
   ['ER_EXTRAPOLATE_CLAMP', 1],
   ['ER_EXTRAPOLATE_IDENTITY', 2],
+  ['ER_KBD_KEY_CHAR', 0],
+  ['ER_KBD_KEY_BACKSPACE', 1],
+  ['ER_KBD_KEY_DONE', 2],
+  ['ER_KBD_KEY_LAYER', 3],
 ]);

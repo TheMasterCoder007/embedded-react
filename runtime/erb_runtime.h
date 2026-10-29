@@ -74,6 +74,16 @@
 #define ERB_MAX_IMAGES 128u /* the engine's default */
 #endif
 
+/** @brief Most keys a package's keyboard layout may have, in all its layers. Sizes the runtime's copy of the layout
+ *         when the engine has its on-screen keyboard (12 bytes a key on a 32-bit MCU). */
+#ifndef ERB_MAX_KEYBOARD_KEYS
+#define ERB_MAX_KEYBOARD_KEYS 128u
+#endif
+
+/** @brief Most rows and layers a package's keyboard layout may have, in all. */
+#define ERB_MAX_KEYBOARD_ROWS 32u
+#define ERB_MAX_KEYBOARD_LAYERS 8u
+
 /** @brief Deepest a template's tree may nest. */
 #ifndef ERB_MAX_TEMPLATE_DEPTH
 #define ERB_MAX_TEMPLATE_DEPTH 32u
