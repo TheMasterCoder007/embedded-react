@@ -200,13 +200,14 @@ export class AnimationPlan {
       }
     }
 
-    // A completion a completion calls was lowered inside it, so before it: callers go first, as CALL needs.
+    // A completion that a completion calls was lowered inside it, so before it: callers go first, as CALL needs.
     for (const completion of completions.reverse()) {
       this.completions.set(completion.name, completion);
     }
 
-    // Each value runs one animation at a time, and one more while a start cancels it; each wait takes its own.
-    if (this.values.size) {
+    // Each value runs one animation at a time, and one more while a start cancels it; each wait takes its own,
+    // even in an app that only waits.
+    if (this.values.size || this.owners.size) {
       const waits = this.owners.size ? MAX_WAITS * WAIT_ENTRIES : 0;
       this.entries = this.values.size + 1 + waits;
       arena.animTable(this.entries);

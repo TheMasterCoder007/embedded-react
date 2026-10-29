@@ -1171,6 +1171,48 @@ export function App() {
     expect(start.bx).toBe(0);
   });
 
+  it('gives an app that only waits a running-animation table for its delay', () => {
+    const src = `
+import {useState} from 'react';
+import {Pressable, Text, Animated} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  return (
+    <Pressable onPress={() => Animated.delay(250).start(() => setN(n + 1))}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    const regions = regionsOf(program);
+    expect(regions.find(region => region.kind === Region.anims)).toEqual({
+      kind: Region.anims,
+      count: 17,
+      bytes: 340,
+    });
+    expect(
+      regions.find(region => region.kind === Region.events).count,
+    ).toBeGreaterThan(0);
+    const start = functionsOf(program)[0].ops.find(op => op.name === 'ASTART');
+    expect(animsOf(program)[start.bx]).toMatchObject({
+      target: NONE,
+      amount: 250,
+    });
+  });
+
+  it('sizes the event queue for an app whose values nothing starts', () => {
+    const src = `
+import {View, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const fade = useAnimatedValue(0.5);
+  return <View style={{opacity: fade}} />;
+}`;
+    const {program} = compilePackage(src, 'app', SCREEN);
+    expect(
+      regionsOf(program).find(region => region.kind === Region.events),
+    ).toEqual({kind: Region.events, count: 2, bytes: 64});
+  });
+
   it("fades a <TouchableOpacity> before the app's own handler runs", () => {
     const src = `
 import {useState} from 'react';

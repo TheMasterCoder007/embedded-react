@@ -1856,6 +1856,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   // single function's starts and stops can end at once.
   if (animations.entries) {
     const ends = Math.max(
+      0,
       ...functions.map(fn => countOps(fn, ['ASTART', 'AVSET', 'ASTOP'])),
     );
     lowering.slots.arena.eventQueue(animations.entries + 2 * ends);
