@@ -953,8 +953,9 @@ function handlerFunction(
       : undefined,
     inRow,
   };
+  // Compared by code alone, so where each handler is in the source doesn't keep two apart.
   const key = inRow
-    ? `row ${JSON.stringify(handlerBody({...made, index: NONE}, lowering))}`
+    ? `row ${JSON.stringify({...handlerBody({...made, index: NONE}, lowering), debug: undefined})}`
     : `${name} ${eventName}${readsInput ? ` ${node.id}` : ''}`;
   const existing = lowering.handlers.get(key);
   if (existing) {
@@ -1381,6 +1382,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
   const codegen = new Codegen(fn, lowering.slots);
   const {pending, realBits, mountNext} = lowering.effects;
   const located = (node: IrNode, lower: () => void): void => {
+    fn.at(node.loc);
     try {
       lower();
     } catch (error) {

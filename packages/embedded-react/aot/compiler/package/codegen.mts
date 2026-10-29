@@ -1041,6 +1041,7 @@ export class Codegen {
 
   private statement(stmt: IrStmt): void {
     const {fn} = this;
+    fn.at(stmt.loc);
     switch (stmt.kind) {
       case 'declareLocal': {
         const hoisted = this.program.hoisted.get(stmt.name);

@@ -25,7 +25,8 @@
 
 import {aotError} from '../diagnostics.mts';
 import {OPCODES, ValueType} from './format.mts';
-import type {ProgramFunction} from './writer.mts';
+import type {SourcePosition} from '../diagnostics.mts';
+import type {ProgramFunction, ProgramLine} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -93,6 +94,8 @@ export class FunctionBuilder {
   private readonly runTypes = new Map<number, string>();
   /** Registers in use, in the order they were taken, for checkpoints. */
   private readonly taken: Register[] = [];
+  /** Where each run of the code starts in the source, for the debug table. */
+  private readonly lines: ProgramLine[] = [];
 
   readonly kind: number;
   private readonly what: string;
@@ -109,6 +112,29 @@ export class FunctionBuilder {
   /** The next instruction's word index. */
   get position(): number {
     return this.code.length;
+  }
+
+  /**
+   * Marks the code from here on as lowered from a place in the source.
+   *
+   * @param loc  The place, if it has one.
+   */
+  at(loc: SourcePosition | undefined): void {
+    if (!loc) {
+      return;
+    }
+    // A mark nothing was written after is replaced.
+    if (this.lines.at(-1)?.offset === this.position) {
+      this.lines.pop();
+    }
+    const last = this.lines.at(-1);
+    if (last?.line !== loc.line || last.column !== loc.column) {
+      this.lines.push({
+        offset: this.position,
+        line: loc.line,
+        column: loc.column,
+      });
+    }
   }
 
   /**
@@ -310,6 +336,7 @@ export class FunctionBuilder {
       result: result ? ValueType[result.type] : 0,
       types: [...this.cellTypes],
       code: [...this.code],
+      debug: {name: this.what, lines: [...this.lines]},
     };
   }
 }

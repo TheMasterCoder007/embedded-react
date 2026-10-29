@@ -20,6 +20,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   package.
 - A package can hold a layout for several panel sizes (`--screen 240x320,320x240`), and the firmware's
   panel picks one.
+- A package carries a debug table, so the error screen names the source line (`App.jsx:41`).
+  `--release` leaves it out, writing it beside the package as `app.erdbg`, and `--bake` writes the
+  package as a C array (`app.erpkg.c`) for boards with no spare partition.
 - `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it. Both demos
   match at each of their boards' sizes.
 

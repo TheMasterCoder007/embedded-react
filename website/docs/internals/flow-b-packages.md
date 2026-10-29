@@ -10,9 +10,10 @@ the people building the loader, the VM, and the compiler's package output.
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
 `erb_format.h`). `embedded-react build --aot --package` writes a package, with a layout for each panel
-size `--screen` lists (`--screen 240x320,320x240`). It takes state, handlers, timers, effects, lists,
-animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen size. Once
-packages pass the same tests as the C output, the C backend is retired.
+size `--screen` lists (`--screen 240x320,320x240`), and its debug table. It takes state, handlers, timers,
+effects, lists, animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen
+size. `--release` and `--bake` build the package too. Once packages pass the same tests as the C output, the C
+backend is retired.
 :::
 
 ## In one picture
@@ -56,7 +57,7 @@ section types, and loaders already skip types they don't know.
 | Section 0, padding  | As today                                                                                           |
 | Section 2, assets   | The ERPK asset pack, unchanged, registered in place                                                |
 | Section 4, program  | **New.** The Flow B program, described below. Exactly one                                          |
-| Section 5, debug    | **New, optional.** Bytecode offsets to source lines. `--release` leaves it out                     |
+| Section 5, debug    | **New, optional.** Bytecode offsets to source lines, for each panel. `--release` leaves it out     |
 
 Sections 1 and 3 (QuickJS bytecode) never appear in a Flow B container. The emitter writes the asset
 pack, then the program, then the debug table.
@@ -260,20 +261,27 @@ engine back its own keyboard when the app is torn down.
 
 ### The debug section
 
-Section 5 has four parts, in order:
+Section 5 holds debug tables, one after another. Panels can have their own `functions` tables, so a table is
+for every panel, or for one panel when the panels' tables differ. Each table has four parts, in order:
 
-1. A 16-byte header: `build_id u32`, which must match the program's, `entry_count u32`,
-   `function_count u32`, and `strings u32`, the byte offset of the string table from the section's start.
+1. A 20-byte header: `build_id u32`, which must match the program's, `entry_count u32`,
+   `function_count u16`, `panel u16` (`0xFFFF` for every panel), `strings u32`, the byte offset of the
+   string table from the table's start, and `length u32`, the table's bytes, a multiple of 4.
 2. `entry_count` 16-byte entries, sorted by function and offset: `function u16`, `reserved u16`,
-   `offset u32` (in words), `file u16`, `column u16`, `line u32`.
+   `offset u32` (in words), `file u16`, `column u16` (1-based), `line u32`. An entry marks where the code
+   lowered from one statement or element starts.
 3. One name per program function, in the `functions` table's order (`u16` each), padded to a multiple
    of 4.
 4. The string table, laid out like the program's `strings` table. `file` and the function names are
    0-based indices into it.
 
-The error screen uses it to turn a fault's function and offset into `App.jsx:41`. Without it, the screen
-shows the function index, the offset, and the `build_id`. `--release` writes the same bytes beside the
-package instead, as `app.erdbg`, so the host can still map a fault back to the source.
+Before format minor 5, the section is one table for every panel, with a 16-byte header that has a
+`function_count u32` and no `panel` or `length`.
+
+The error screen uses the panel's table to turn a fault's function and offset into `App.jsx:41`. Without
+one, the screen shows the function index, the offset, and the `build_id`. `--release` writes the same bytes
+beside the package instead, as `app.erdbg`, and clears the debug flag, so the host can still map a fault
+back to the source.
 
 A debug table that doesn't match its program, or is malformed, fails the load like any other
 section: a package is checked whole.
@@ -293,7 +301,8 @@ loader. The loader doesn't know the difference: it gets a pointer and a length. 
 over the copy, which is what runs.
 
 **Baked mode.** A board with no spare partition links the package into the firmware as a const array:
-`embedded-react build --aot --bake` writes `app.erpkg.c` with the bytes, 4-aligned. It goes through
+`embedded-react build --aot --bake` writes `app.erpkg.c` with the bytes as `const uint32_t app_erpkg[]`,
+so they are 4-aligned with any compiler, and their length as `app_erpkg_bytes`. It goes through
 the same loader and the same verifier. This is what replaces the C backend on such boards, so there
 is one set of semantics, not two.
 
@@ -601,7 +610,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                       | bad input                          |
 | Keyboard  | Whole records; each layer and row names the runs after the ones before it, with 1 to 255 rows or keys; every key a known type with valid strings, and one that types something has its text                                                                                           | malformed table                    |
 | Keyboard  | No more layers, rows and keys than `ERB_MAX_KEYBOARD_LAYERS`, `ERB_MAX_KEYBOARD_ROWS` and `ERB_MAX_KEYBOARD_KEYS`                                                                                                                                                                     | needs more than firmware reserves  |
-| Debug     | `build_id` matches; the parts inside the section, in order and not overlapping; `function_count` equals the program's function count; entries sorted, each on a real instruction; every `file` and function name a valid index into its string table, which is checked like `strings` | debug table does not match         |
+| Debug     | Each table for a declared panel or all; one at most for this panel. Its `build_id` matches; parts in order, not overlapping; `function_count` is the program's; entries sorted, each on an instruction; each `file` and name an index into its strings, checked like `strings`        | debug table does not match         |
 | Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit the firmware's font storage and the font registry                                                                                                                 | asset pack failed to load          |
 
 ### Run-time checks

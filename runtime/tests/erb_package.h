@@ -263,6 +263,8 @@ typedef struct
     TKeyboard keyboard;
 
     bool has_debug;
+    uint16_t debug_panels[2]; /**< The panel each debug table is for (ERB_NONE: every panel). */
+    uint32_t debug_table_count;
     uint32_t debug_build_id;
     TDebugEntry debug_entries[8];
     uint32_t debug_entry_count;
@@ -759,14 +761,31 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
     }
 }
 
-static void tpkg_debug(const TPkg* pkg, TBuf* buf)
+/** @brief Writes one debug table: before ERB_FORMAT_MINOR_DEBUG_PANELS, the whole section. */
+static void tpkg_debug_table(const TPkg* pkg, uint16_t panel, TBuf* buf)
 {
+    const bool old = pkg->minor < ERB_FORMAT_MINOR_DEBUG_PANELS;
+    const uint32_t start = buf->length;
     tb_u32(buf, pkg->debug_build_id);
     tb_u32(buf, pkg->debug_entry_count);
-    tb_u32(buf, pkg->function_count);
-    const uint32_t strings =
-        ERB_DEBUG_HEADER_SIZE + pkg->debug_entry_count * ERB_DEBUG_ENTRY_SIZE + ((pkg->function_count * 2u + 3u) & ~3u);
+    if (old)
+    {
+        tb_u32(buf, pkg->function_count);
+    }
+    else
+    {
+        tb_u16(buf, (uint16_t)pkg->function_count);
+        tb_u16(buf, panel);
+    }
+    const uint32_t strings = (old ? ERB_DEBUG_OLD_HEADER_SIZE : ERB_DEBUG_HEADER_SIZE)
+                             + pkg->debug_entry_count * ERB_DEBUG_ENTRY_SIZE
+                             + ((pkg->function_count * 2u + 3u) & ~3u);
     tb_u32(buf, strings);
+    const uint32_t length_at = buf->length;
+    if (!old)
+    {
+        tb_u32(buf, 0u);
+    }
     for (uint32_t index = 0; index < pkg->debug_entry_count; index++)
     {
         const TDebugEntry* entry = &pkg->debug_entries[index];
@@ -783,6 +802,18 @@ static void tpkg_debug(const TPkg* pkg, TBuf* buf)
     }
     tb_pad4(buf);
     tb_strings(buf, pkg->debug_strings, pkg->debug_string_count);
+    if (!old)
+    {
+        tb_put32(buf->data + length_at, buf->length - start);
+    }
+}
+
+static void tpkg_debug(const TPkg* pkg, TBuf* buf)
+{
+    for (uint32_t index = 0; index < pkg->debug_table_count; index++)
+    {
+        tpkg_debug_table(pkg, pkg->debug_panels[index], buf);
+    }
 }
 
 /** @brief Adds a section, preceded by padding so its bytes start 4-aligned in the container. */
@@ -1124,6 +1155,8 @@ static void tpkg_base(TPkg* pkg)
     pkg->interp_count = 2;
 
     pkg->has_debug = true;
+    pkg->debug_panels[0] = ERB_NONE;
+    pkg->debug_table_count = 1;
     pkg->debug_build_id = pkg->build_id;
     pkg->debug_entries[0] = (TDebugEntry){F_PRESS, 0, 0, 41};
     pkg->debug_entry_count = 1;

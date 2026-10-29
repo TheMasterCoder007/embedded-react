@@ -21,7 +21,12 @@
 
 import {describe, it, expect} from 'vitest';
 import {crc32} from '../../assets/emit-container.mjs';
-import {compilePackage, packPackage, resourceReport} from '../compile.mts';
+import {
+  bakePackage,
+  compilePackage,
+  packPackage,
+  resourceReport,
+} from '../compile.mts';
 import {
   ABI_PROPS,
   AnimFlag,
@@ -149,7 +154,7 @@ function functionsOf(bytes) {
     const at = functions.offset + index * 16;
     const start = u32(at);
     const ops = [];
-    for (let pc = start; pc < start + u32(at + 4);) {
+    for (let pc = start; pc < start + u32(at + 4); ) {
       const first = word(pc);
       const name = OP_NAMES[first & 0xff];
       ops.push({
@@ -445,7 +450,7 @@ export function App() {
     );
   });
 
-  it('puts the program in an erb container, each section 4-aligned', () => {
+  it('puts the program and debug table in an erb container, each section 4-aligned', () => {
     const result = compilePackage(STATIC_APP, 'app', SCREEN);
     for (const assetPack of [undefined, new Uint8Array(13).fill(7)]) {
       const file = packPackage(result, assetPack);
@@ -472,10 +477,14 @@ export function App() {
         at += 8 + length;
       }
       expect(at).toBe(bytes.length);
-      expect(types).toEqual(assetPack ? [2, 4] : [4]);
+      expect(types).toEqual(assetPack ? [2, 4, 5] : [4, 5]);
+      const end = file.bytes.length - result.debug.length;
+      expect(Buffer.from(file.bytes.subarray(end))).toEqual(
+        Buffer.from(result.debug),
+      );
       expect(
         Buffer.from(
-          file.bytes.subarray(file.bytes.length - result.program.length),
+          file.bytes.subarray(end - 8 - result.program.length, end - 8),
         ),
       ).toEqual(Buffer.from(result.program));
     }
@@ -487,7 +496,7 @@ export function App() {
     const report = resourceReport(result, file);
     expect(report[0]).toMatch(/^ {2}panel 240x320: arena \d+ B, 4 nodes$/);
     expect(report[1]).toBe(
-      `  flash: ${file.bytes.length} B (program ${result.program.length} B)`,
+      `  flash: ${file.bytes.length} B (program ${result.program.length} B, debug ${result.debug.length} B)`,
     );
     expect(report[2]).toMatch(/templates \d+/);
   });
@@ -1897,5 +1906,197 @@ describe('bytecode', () => {
       .filter(word => opOf(word) === OP.LOADS.code)
       .map(word => (word >> 8) & 0xff);
     expect(written).not.toContain(empty[0]);
+  });
+});
+
+describe('debug table', () => {
+  const DEBUG_APP = `import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable
+      onPress={() => {
+        setCount(count + 1);
+        setCount(count + 2);
+      }}>
+      <Text>{count}</Text>
+    </Pressable>
+  );
+}`;
+  const OPTIONS = {...SCREEN, filename: '/projects/clock/src/App.jsx'};
+
+  /** Each of the section's tables: its header, entries, function names and strings. */
+  function readDebug(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+    const u16 = at => view.getUint16(at, true);
+    const u32 = at => view.getUint32(at, true);
+    const tables = [];
+    for (let start = 0; start < bytes.length; start += u32(start + 16)) {
+      const entryCount = u32(start + 4);
+      const functionCount = u16(start + 8);
+      const strings = start + u32(start + 12);
+      const text = index => {
+        const from = strings + u32(strings + 4 + index * 4);
+        return new TextDecoder().decode(
+          bytes.subarray(from, bytes.indexOf(0, from)),
+        );
+      };
+      const names = start + 20 + entryCount * 16;
+      tables.push({
+        buildId: u32(start),
+        panel: u16(start + 10),
+        file: text(0),
+        names: Array.from({length: functionCount}, (_, index) =>
+          text(u16(names + index * 2)),
+        ),
+        entries: Array.from({length: entryCount}, (_, index) => {
+          const at = start + 20 + index * 16;
+          return {
+            function: u16(at),
+            offset: u32(at + 4),
+            file: u16(at + 8),
+            column: u16(at + 10),
+            line: u32(at + 12),
+          };
+        }),
+      });
+    }
+    return tables;
+  }
+
+  /** The word offset of each instruction in each function. */
+  const startsOf = bytes =>
+    functionsOf(bytes).map(fn => {
+      let at = 0;
+      return fn.ops.map(op => {
+        const start = at;
+        at += OP[op.name].words;
+        return start;
+      });
+    });
+
+  it('maps each handler statement and node to its line, and names each function', () => {
+    const result = compilePackage(DEBUG_APP, 'app', OPTIONS);
+    const [table, ...others] = readDebug(result.debug);
+    expect(others).toEqual([]);
+    expect(table.buildId).toBe(result.buildId);
+    expect(table.panel).toBe(NONE);
+    expect(table.file).toBe('App.jsx');
+    expect(table.names.length).toBe(functionsOf(result.program).length);
+    const handler = table.names.findIndex(name => name.startsWith('handler'));
+    expect(handler).toBeGreaterThanOrEqual(0);
+    const at = fn =>
+      table.entries
+        .filter(entry => entry.function === fn)
+        .map(({line, column}) => [line, column]);
+    expect(at(handler)).toEqual([
+      [8, 9],
+      [9, 9],
+    ]);
+    expect(at(table.names.indexOf('the update'))).toEqual([[11, 7]]);
+
+    // Every entry is on an instruction, in order.
+    const starts = startsOf(result.program);
+    for (const entry of table.entries) {
+      expect(starts[entry.function]).toContain(entry.offset);
+      expect(entry.file).toBe(0);
+    }
+  });
+
+  it('is in a debug package, beside the debug flag', () => {
+    const result = compilePackage(DEBUG_APP, 'app', OPTIONS);
+    const file = packPackage(result);
+    expect(file.sections.map(section => section.type)).toEqual([4, 5]);
+    expect(readProgram(result.program).header.flags).toBe(FLAG_DEBUG);
+  });
+
+  it('is left out of a release package, which clears the flag', () => {
+    const debug = compilePackage(DEBUG_APP, 'app', OPTIONS);
+    const release = compilePackage(DEBUG_APP, 'app', {
+      ...OPTIONS,
+      release: true,
+    });
+    expect(release.release).toBe(true);
+    expect(packPackage(release).sections.map(section => section.type)).toEqual([
+      4,
+    ]);
+    const {header} = readProgram(release.program);
+    expect(header.flags).toBe(0);
+    expect(readDebug(release.debug)[0].buildId).toBe(release.buildId);
+    // The same program otherwise.
+    const without = bytes => {
+      const copy = Buffer.from(bytes);
+      copy.writeUInt16LE(0, 6);
+      copy.writeUInt32LE(0, 8);
+      return copy;
+    };
+    expect(without(release.program)).toEqual(without(debug.program));
+  });
+
+  it("has a table for each panel when the panels' functions differ", () => {
+    const RESPONSIVE_APP = `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+const WIDE = screen.width > screen.height;
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable onPress={() => setCount(count + 1)}>
+      {WIDE ? (
+        <View style={{flexDirection: 'row'}}>
+          <Text>{count}</Text>
+          <Text>wide</Text>
+        </View>
+      ) : (
+        <Text>{count}</Text>
+      )}
+    </Pressable>
+  );
+}`;
+    const narrow = {width: 240, height: 320};
+    const differ = compilePackage(RESPONSIVE_APP, 'app', {
+      screens: [narrow, {width: 320, height: 240}],
+    });
+    expect(readDebug(differ.debug).map(table => table.panel)).toEqual([0, 1]);
+    const same = compilePackage(RESPONSIVE_APP, 'app', {
+      screens: [narrow, {width: 200, height: 300}],
+    });
+    expect(readDebug(same.debug).map(table => table.panel)).toEqual([NONE]);
+  });
+
+  it('bakes a package as a word array, with its length', () => {
+    const file = packPackage(compilePackage(DEBUG_APP, 'app', OPTIONS));
+    const source = bakePackage(file.bytes);
+    const words = [...source.matchAll(/0x([0-9a-f]{8})u/g)].map(match =>
+      Number.parseInt(match[1], 16),
+    );
+    expect(source).toContain(`const uint32_t app_erpkg[${words.length}] = {`);
+    expect(source).toContain(
+      `const size_t app_erpkg_bytes = ${file.bytes.length}u;`,
+    );
+    const bytes = Buffer.alloc(words.length * 4);
+    words.forEach((word, index) => bytes.writeUInt32LE(word, index * 4));
+    expect(bytes.subarray(0, file.bytes.length)).toEqual(
+      Buffer.from(file.bytes),
+    );
+  });
+
+  it('marks code once for each place, replacing a mark nothing followed', () => {
+    const fn = new FunctionBuilder(FunctionKind.timer, 'timer tick');
+    fn.at({line: 3, column: 0});
+    fn.at({line: 4, column: 2});
+    fn.abx('LOADI', 0, 1);
+    fn.at({line: 4, column: 2});
+    fn.abx('LOADI', 0, 1);
+    fn.at(undefined);
+    fn.at({line: 5, column: 2});
+    expect(fn.finish().debug).toEqual({
+      name: 'timer tick',
+      lines: [
+        {offset: 0, line: 4, column: 2},
+        {offset: 2, line: 5, column: 2},
+      ],
+    });
   });
 });

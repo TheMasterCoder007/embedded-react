@@ -50,6 +50,8 @@ export interface CompileOptions {
   maxTextSpans?: number;
   /** Timers that run at once, in the package output. */
   maxTimers?: number;
+  /** Build the package for release: the debug flag clear, and the debug table left out of it. */
+  release?: boolean;
 }
 
 /** compileSource's options with the screen and the caps filled in. */

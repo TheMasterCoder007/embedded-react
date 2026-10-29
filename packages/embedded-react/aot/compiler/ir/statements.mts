@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import type {SourcePosition} from '../diagnostics.mts';
 import type {ItemField, ListState, RefRecord, ScalarState} from '../types.mts';
 import type {IrAnimationStart} from './animations.mts';
 import type {IrExpr} from './expressions.mts';
@@ -183,8 +184,8 @@ export interface IrCallback {
   updatesState: boolean;
 }
 
-/** A lowered handler, effect or timer statement, before any backend prints it. */
-export type IrStmt =
+/** A lowered handler, effect, or timer statement, before any backend prints it, and where it is in the source. */
+export type IrStmt = {loc?: SourcePosition} & (
   | IrDeclareLocal
   | IrStartTimer
   | IrClearTimer
@@ -202,4 +203,5 @@ export type IrStmt =
   | IrReturn
   | IrArmCleanup
   | IrAnimationStart
-  | IrUpdateVector;
+  | IrUpdateVector
+);

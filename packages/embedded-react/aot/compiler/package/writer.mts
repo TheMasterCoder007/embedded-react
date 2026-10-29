@@ -25,6 +25,8 @@
 
 import {crc32} from '../../../assets/emit-container.mjs';
 import {
+  DEBUG_ENTRY_SIZE,
+  DEBUG_HEADER_SIZE,
   DIRECTORY_SIZE,
   ENGINE_ABI,
   FORMAT_MAJOR,
@@ -202,6 +204,16 @@ export interface ProgramKeyboard {
   labelColor: number;
 }
 
+/** Where a run of a function's code starts in the source. */
+export interface ProgramLine {
+  /** The word the run starts at. */
+  offset: number;
+  /** 1-based. */
+  line: number;
+  /** 0-based, as Babel counts it. */
+  column: number;
+}
+
 export interface ProgramFunction {
   kind: number;
   params: number;
@@ -210,6 +222,8 @@ export interface ProgramFunction {
   types: number[];
   /** The instruction words. */
   code: number[];
+  /** What the debug table says of it. */
+  debug?: {name: string; lines: ProgramLine[]};
 }
 
 /** Everything a program section holds, before it is laid out. */
@@ -865,4 +879,84 @@ export function writeProgram(programs: Program[]): WrittenProgram {
   const buildId = crc32(bytes);
   new DataView(bytes.buffer).setUint32(buildIdAt, buildId, true);
   return {bytes, buildId, tables: sizes};
+}
+
+/**
+ * One panel's debug table: where each function's code is in the source, and each function's name.
+ *
+ * @param functions  The panel's functions.
+ * @param buildId  The program section's build_id.
+ * @param file  The source file, as the error screen names it.
+ * @param panel  The panel it is for, or NONE for every panel.
+ *
+ * @returns The table's bytes.
+ */
+function debugTable(
+  functions: ProgramFunction[],
+  buildId: number,
+  file: string,
+  panel: number,
+): Uint8Array {
+  const strings = [file];
+  const string = (text: string): number => {
+    const at = strings.indexOf(text);
+    return at >= 0 ? at : strings.push(text) - 1;
+  };
+  const names = functions.map(fn => string(fn.debug?.name ?? ''));
+  const entries = functions.flatMap((fn, index) =>
+    (fn.debug?.lines ?? []).map(line => ({...line, function: index})),
+  );
+  const stringBytes = stringsTable(strings);
+  const stringsAt =
+    DEBUG_HEADER_SIZE +
+    entries.length * DEBUG_ENTRY_SIZE +
+    Math.ceil(names.length / 2) * 4;
+
+  const out = new ByteWriter();
+  out.u32(buildId);
+  out.u32(entries.length);
+  out.u16(functions.length);
+  out.u16(panel);
+  out.u32(stringsAt);
+  out.u32(stringsAt + stringBytes.length);
+  for (const entry of entries) {
+    out.u16(entry.function);
+    out.u16(0);
+    out.u32(entry.offset);
+    out.u16(0);
+    // 1-based, as the compiler's errors show it.
+    out.u16(Math.min(entry.column + 1, NONE));
+    out.u32(entry.line);
+  }
+  names.forEach(name => out.u16(name));
+  out.pad4();
+  out.bytes(stringBytes);
+  return out.done();
+}
+
+/**
+ * Writes the debug section: a table for every panel when the panels' tables are the same, else one for each.
+ *
+ * @param programs  Each panel's program, in the order the panel table lists them.
+ * @param buildId  The program section's build_id.
+ * @param file  The source file, as the error screen names it.
+ *
+ * @returns The section's bytes.
+ */
+export function writeDebug(
+  programs: Program[],
+  buildId: number,
+  file: string,
+): Uint8Array {
+  const shared = programs.map(program =>
+    debugTable(program.functions, buildId, file, NONE),
+  );
+  if (shared.every(table => sameBytes(table, shared[0]))) {
+    return shared[0];
+  }
+  const out = new ByteWriter();
+  programs.forEach((program, panel) =>
+    out.bytes(debugTable(program.functions, buildId, file, panel)),
+  );
+  return out.done();
 }
