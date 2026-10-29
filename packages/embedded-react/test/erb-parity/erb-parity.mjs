@@ -330,6 +330,48 @@ const SCENARIOS = [
     screen: [240, 320],
     taps: '40,154>200,150',
   },
+  {name: 'svg', file: fixture('svg'), screen: [240, 320]},
+  // The arc twice, then the toggle (a wider stroke and the gradient) and the mode (a stop's and a stroke's color).
+  {
+    name: 'svg-state',
+    file: fixture('svg'),
+    screen: [240, 320],
+    taps: '50,120 50,120 33,195 91,195',
+  },
+  // updateVector three times with a hint in ints, then twice with one in floats.
+  {
+    name: 'svg-update',
+    file: fixture('svg'),
+    screen: [240, 320],
+    taps: '149,195 149,195 149,195 207,195 207,195',
+  },
+  // The app's own keyboard, brought up by focusing the input.
+  {
+    name: 'keyboard',
+    file: fixture('keyboard'),
+    screen: [240, 320],
+    taps: '120,30',
+  },
+  // "ab", the shift layer (its key lit), "C", a backspace, "E" and a space.
+  {
+    name: 'keyboard-typed',
+    file: fixture('keyboard'),
+    screen: [240, 320],
+    taps: '120,30 24,245 72,245 24,275 120,245 216,275 216,245 120,275',
+  },
+  // Then done, which puts the keyboard away.
+  {
+    name: 'keyboard-done',
+    file: fixture('keyboard'),
+    screen: [240, 320],
+    taps: '120,30 24,245 72,245 120,305',
+  },
+  {
+    name: 'keyboard-look',
+    file: fixture('keyboard-look'),
+    screen: [240, 320],
+    taps: '120,30',
+  },
   {name: 'watch-face', file: demo('watch-face'), screen: [240, 280]},
   {name: 'thermostat', file: demo('thermostat'), screen: [320, 480]},
   // + twice, then Heat and Auto (Auto turns on the dial's gradient).

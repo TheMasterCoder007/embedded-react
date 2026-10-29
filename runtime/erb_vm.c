@@ -1287,6 +1287,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             case ERB_OP_FOCUS:
             case ERB_OP_INPUT:
             case ERB_OP_VCOMMIT:
+            case ERB_OP_VCOMMITP:
             case ERB_OP_VDIRTY:
             {
                 ERNode* node = erb_rt_node(&registers[operand_a]);
@@ -1309,9 +1310,9 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                     const char* text = er_text_input_get_text(node);
                     store_string(slot, (char*)slot_data(slot), erb_u16(slot + ERB_SLOT_CAP_AT), text ? text : "");
                 }
-                else if (ERB_OP(word) == ERB_OP_VCOMMIT)
+                else if (ERB_OP(word) == ERB_OP_VCOMMIT || ERB_OP(word) == ERB_OP_VCOMMITP)
                 {
-                    erb_rt_commit_tape(node, operand_bx, tape);
+                    erb_rt_commit_tape(node, operand_bx, tape, ERB_OP(word) == ERB_OP_VCOMMITP);
                 }
                 else
                 {
@@ -1381,10 +1382,17 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 memcpy(tape,
                        program->tapes + erb_u32(record_tape + ERB_TAPE_FLOATS_AT),
                        erb_u16(record_tape + ERB_TAPE_FLOAT_COUNT_AT) * sizeof(float));
+                erb_rt_load_paints(operand_bx);
                 break;
             }
             case ERB_OP_VSET:
                 tape[operand_bx] = get_float(&registers[operand_a]);
+                break;
+            case ERB_OP_VPAINT:
+                erb_rt_set_paint(operand_b, operand_c, &registers[operand_a]);
+                break;
+            case ERB_OP_VGRAD:
+                erb_rt_set_gradient(operand_b, operand_c, &registers[operand_a]);
                 break;
 
             /* Event data and clocks */

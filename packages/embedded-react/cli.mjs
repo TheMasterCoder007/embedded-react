@@ -68,8 +68,8 @@ Usage:
                                                            (e.g. --screen 240x320)
                                                  --aot --package  → app.erpkg (Flow B package for the
                                                            Flow B runtime; state, handlers, timers,
-                                                           effects, lists, animations, and
-                                                           PanResponder so far, not yet <Svg>)
+                                                           effects, lists, animations, PanResponder,
+                                                           <Svg>, and the keyboard config)
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.

@@ -157,6 +157,7 @@ typedef struct
     uint32_t input_count;
     const uint8_t* interps;
     uint32_t interp_count;
+    const uint8_t* keyboard; /**< The keyboard table, or NULL to leave the engine's keyboard as it is. */
 
     const uint8_t* debug;
     uint32_t debug_length;
@@ -379,7 +380,10 @@ void erb_rt_pset_float(uint16_t prop, float value);
 bool erb_rt_pset_string(uint16_t prop, const char* value);
 ErbStatus erb_rt_build(uint16_t template_index, ERNode* parent, ERNode* before, int32_t instance, ERNode** out);
 void erb_rt_destroy(ERNode* node);
-void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats);
+void erb_rt_load_paints(uint16_t tape);
+void erb_rt_set_paint(uint8_t paint, uint8_t field, const int32_t* cell);
+void erb_rt_set_gradient(uint8_t gradient, uint8_t field, const int32_t* cell);
+void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats, bool own_paints);
 ErbStatus erb_rt_queue_effect(uint16_t function);
 int32_t erb_rt_timer_start(uint16_t function, int32_t interval_ms, bool repeat);
 void erb_rt_timer_clear(int32_t id);

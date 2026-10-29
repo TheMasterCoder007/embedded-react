@@ -29,10 +29,14 @@ import {
   ENGINE_ABI,
   FORMAT_MAJOR,
   FORMAT_MINOR,
+  GRADIENT_SIZE,
   HEADER_SIZE,
   NEED_SIZE,
+  PAINT_SIZE,
   PANEL_SIZE,
   Table,
+  TAPE_HEADER_SIZE,
+  TAPE_SIZE,
 } from './format.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -142,6 +146,61 @@ export interface ProgramInterp {
   output: number[];
 }
 
+/** A shape's paint, as the engine's ERVectorPaint holds it. */
+export interface ProgramPaint {
+  fill: number;
+  stroke: number;
+  strokeWidth: number;
+  miter: number;
+  cap: number;
+  join: number;
+  fillRule: number;
+  /** 1-based gradients of the tape, or 0 for none. */
+  fillGradient: number;
+  strokeGradient: number;
+}
+
+export interface ProgramGradient {
+  type: number;
+  stops: {color: number; position: number}[];
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+  radius: number;
+}
+
+/** A vector op-tape, with the paints and gradients its shapes name. */
+export interface ProgramTape {
+  floats: number[];
+  paints: ProgramPaint[];
+  gradients: ProgramGradient[];
+}
+
+/** A keyboard key. Its label and text are string indices, or NONE. */
+export interface ProgramKey {
+  label: number;
+  text: number;
+  type: number;
+  layer: number;
+  span: number;
+  highlight: number;
+}
+
+/** The on-screen keyboard's look, and its layout (no layers keeps the engine's own). */
+export interface ProgramKeyboard {
+  layers: ProgramKey[][][];
+  rowHeight: number;
+  gridCols: number;
+  keyGap: number;
+  keyRadius: number;
+  fontSize: number;
+  panelColor: number;
+  keyColor: number;
+  keyActiveColor: number;
+  labelColor: number;
+}
+
 export interface ProgramFunction {
   kind: number;
   params: number;
@@ -174,6 +233,8 @@ export interface Program {
   /** Host-fed values, sorted by name. */
   inputs: ProgramInput[];
   interps: ProgramInterp[];
+  tapes: ProgramTape[];
+  keyboard: ProgramKeyboard | null;
 }
 
 /** The bytes of one table, for the resource report. */
@@ -237,6 +298,11 @@ export class ByteWriter {
   u32(value: number): void {
     const at = this.reserve(4);
     this.view.setUint32(at, value >>> 0, true);
+  }
+
+  f32(value: number): void {
+    const at = this.reserve(4);
+    this.view.setFloat32(at, value, true);
   }
 
   bytes(data: Uint8Array): void {
@@ -508,7 +574,131 @@ function tablesOf(program: Program): Map<number, Uint8Array> {
       }
     });
   }
+  if (program.tapes.length) {
+    tables.set(Table.tapes, tapesTable(program.tapes));
+  }
+  if (program.keyboard) {
+    tables.set(Table.keyboard, keyboardTable(program.keyboard));
+  }
   return tables;
+}
+
+/**
+ * The tapes table: its header, the tape records, then every tape's floats, paints, gradients, and stops, each
+ * tape's after the one before it.
+ *
+ * @param tapes  The tapes.
+ *
+ * @returns The table's bytes.
+ */
+function tapesTable(tapes: ProgramTape[]): Uint8Array {
+  const floatCount = tapes.reduce(
+    (count, tape) => count + tape.floats.length,
+    0,
+  );
+  const paints = tapes.flatMap(tape => tape.paints);
+  const gradients = tapes.flatMap(tape => tape.gradients);
+  const floatsAt = TAPE_HEADER_SIZE + tapes.length * TAPE_SIZE;
+  const paintsAt = floatsAt + floatCount * 4;
+  const gradientsAt = paintsAt + paints.length * PAINT_SIZE;
+  const out = new ByteWriter();
+  out.u32(tapes.length);
+  out.u32(paintsAt);
+  out.u32(gradientsAt);
+  out.u32(gradientsAt + gradients.length * GRADIENT_SIZE);
+  let floatFirst = 0;
+  let paintFirst = 0;
+  let gradientFirst = 0;
+  for (const tape of tapes) {
+    out.u32(floatsAt + floatFirst * 4);
+    out.u16(tape.floats.length);
+    out.u16(paintFirst);
+    out.u16(tape.paints.length);
+    out.u16(gradientFirst);
+    out.u16(tape.gradients.length);
+    out.u16(0);
+    floatFirst += tape.floats.length;
+    paintFirst += tape.paints.length;
+    gradientFirst += tape.gradients.length;
+  }
+  tapes.forEach(tape => tape.floats.forEach(value => out.f32(value)));
+  for (const paint of paints) {
+    out.u32(paint.fill);
+    out.u32(paint.stroke);
+    out.f32(paint.strokeWidth);
+    out.f32(paint.miter);
+    out.u8(paint.cap);
+    out.u8(paint.join);
+    out.u8(paint.fillRule);
+    out.u8(0);
+    out.u16(paint.fillGradient);
+    out.u16(paint.strokeGradient);
+  }
+  let stopFirst = 0;
+  for (const gradient of gradients) {
+    out.u8(gradient.type);
+    out.u8(gradient.stops.length);
+    out.u16(stopFirst);
+    for (const value of [
+      gradient.ax,
+      gradient.ay,
+      gradient.bx,
+      gradient.by,
+      gradient.radius,
+    ]) {
+      out.f32(value);
+    }
+    stopFirst += gradient.stops.length;
+  }
+  for (const stop of gradients.flatMap(gradient => gradient.stops)) {
+    out.u32(stop.color);
+    out.f32(stop.position);
+  }
+  return out.done();
+}
+
+/**
+ * The keyboard table: its look, then its layers, rows and keys, each group's after the one before it.
+ *
+ * @param keyboard  The keyboard.
+ *
+ * @returns The table's bytes.
+ */
+function keyboardTable(keyboard: ProgramKeyboard): Uint8Array {
+  const rows = keyboard.layers.flat();
+  const keys = rows.flat();
+  const out = new ByteWriter();
+  out.u16(keyboard.layers.length);
+  out.u16(rows.length);
+  out.u16(keys.length);
+  out.u16(keyboard.rowHeight);
+  out.u8(keyboard.gridCols);
+  out.u8(keyboard.keyGap);
+  out.u8(keyboard.keyRadius);
+  out.u8(keyboard.fontSize);
+  out.u32(keyboard.panelColor);
+  out.u32(keyboard.keyColor);
+  out.u32(keyboard.keyActiveColor);
+  out.u32(keyboard.labelColor);
+  const groups = (sizes: number[]): void => {
+    let first = 0;
+    for (const size of sizes) {
+      out.u16(first);
+      out.u16(size);
+      first += size;
+    }
+  };
+  groups(keyboard.layers.map(layer => layer.length));
+  groups(rows.map(row => row.length));
+  for (const key of keys) {
+    out.u16(key.label);
+    out.u16(key.text);
+    out.u8(key.type);
+    out.u8(key.layer);
+    out.u8(key.span);
+    out.u8(key.highlight);
+  }
+  return out.done();
 }
 
 /**

@@ -47,6 +47,7 @@ set(ERB_MAX_FUNCTIONS "256" CACHE STRING "Flow B: functions per package (8 B of 
 set(ERB_MAX_FUNCTION_WORDS "16384" CACHE STRING "Flow B: instruction words per function (1 bit of verifier scratch each)")
 set(ERB_MAX_LOOPS "32" CACHE STRING "Flow B: loops per function")
 set(ERB_MAX_IMPORTS "32" CACHE STRING "Flow B: native imports per package")
+set(ERB_MAX_KEYBOARD_KEYS "128" CACHE STRING "Flow B: keys a package's keyboard layout may have (12 B each with the on-screen keyboard)")
 set(ERB_MAX_TEMPLATE_DEPTH "32" CACHE STRING "Flow B: how deeply a template may nest")
 set(ERB_REPORT_PLACES "32" CACHE STRING "Flow B: places a limit is reported from before repeats stop being filtered")
 
@@ -57,6 +58,7 @@ target_compile_definitions(erb-runtime PUBLIC
         ERB_MAX_FUNCTION_WORDS=${ERB_MAX_FUNCTION_WORDS}
         ERB_MAX_LOOPS=${ERB_MAX_LOOPS}
         ERB_MAX_IMPORTS=${ERB_MAX_IMPORTS}
+        ERB_MAX_KEYBOARD_KEYS=${ERB_MAX_KEYBOARD_KEYS}
         ERB_MAX_TEMPLATE_DEPTH=${ERB_MAX_TEMPLATE_DEPTH}
         ERB_REPORT_PLACES=${ERB_REPORT_PLACES}
 )
@@ -101,7 +103,7 @@ if (ER_RUNTIME_TESTS)
     target_link_libraries(erb-verify-test PRIVATE erb-runtime)
     add_test(NAME runtime-erb-verify COMMAND erb-verify-test)
 
-    # The VM tests fire events the way the engine does, so they see its node internals.
+    # The VM tests fire events the way the engine does, so they see its node and vector internals.
     add_executable(erb-vm-test tests/erb_vm_test.c)
     target_link_libraries(erb-vm-test PRIVATE erb-runtime)
     target_include_directories(erb-vm-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../engine/scene)

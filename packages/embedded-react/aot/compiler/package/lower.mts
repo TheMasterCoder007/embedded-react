@@ -20,8 +20,11 @@
  * The tree becomes the root template and its constant prop sets. State, refs and values worked out at boot are
  * slots in the arena. Handlers, timer callbacks, effects, the boot function and the update function are
  * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, as app_update() does, sets
- * the props of a node that reads only boot values once, in its first pass, and queues the effects. What isn't
- * lowered yet (drawings, the keyboard) is refused with what it is.
+ * the props of a node that reads only boot values once, in its first pass, and queues the effects.
+ *
+ * An <Svg> drawing is a tape (vectors.mts): a baked one is committed when its node is built, and the update
+ * rebuilds one state drives, after the nodes, as app_update() does. setKeyboardConfig is the keyboard table, which
+ * the runtime hands the engine at load.
  *
  * Animations run as the C output runs them (animations.mts): each animation a leaf descriptor, each C callback an
  * animation-done function, each completion a helper.
@@ -46,7 +49,6 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {traverse} from '@babel/core';
 import {
   aotError,
   constantText,
@@ -58,9 +60,12 @@ import {
   isStateDriven,
   nodesOf,
   branchElements,
+  stateDrivenVectorOf,
+  updatedVectorOf,
 } from '../ir/nodes.mts';
-import {nodeReads} from '../ir/reads.mts';
+import {nodeReads, vectorReads} from '../ir/reads.mts';
 import {armedFlag} from '../c/functions.mts';
+import {KEY_TYPES, NEVER_HIGHLIGHTED} from '../c/keyboard.mts';
 import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
 import {Arena} from './arena.mts';
 import {FunctionBuilder, OP} from './bytecode.mts';
@@ -87,12 +92,13 @@ import {
   stringPropEntry,
 } from './props.mts';
 import {ProgramTables} from './tables.mts';
-import type {Program as BabelProgram, Node} from '@babel/types';
+import {commitDrawing, VectorPlan} from './vectors.mts';
 import type {Slot} from './arena.mts';
 import type {Label, Register} from './bytecode.mts';
 import type {CType, InputText, ProgramSlots} from './codegen.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
+import type {IrKeyboard} from '../ir/keyboard.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr} from '../ir/expressions.mts';
 import type {IrCompletion} from '../ir/animations.mts';
@@ -102,8 +108,10 @@ import type {
   IrPressFade,
 } from '../ir/functions.mts';
 import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
-import type {IrCallback, IrStmt} from '../ir/statements.mts';
-import type {IrElement, IrNode, IrWire} from '../ir/nodes.mts';
+import type {IrCallback, IrStmt, IrUpdateVector} from '../ir/statements.mts';
+import type {IrElement, IrNode} from '../ir/nodes.mts';
+import type {IrStateDrivenVector} from '../ir/vectors.mts';
+import type {StateReads} from '../ir/reads.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {TextSpan} from '../style-text.mts';
 import type {ListState, ScalarState, StateRecord} from '../types.mts';
@@ -111,6 +119,7 @@ import type {
   Program,
   ProgramBinding,
   ProgramFunction,
+  ProgramKeyboard,
   ProgramPropEntry,
   ProgramRow,
   ProgramTemplate,
@@ -204,17 +213,6 @@ interface Lowering {
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** What each wiring a node can have needs, as a refusal names it. */
-const WIRING_USES: Record<
-  Exclude<IrWire['kind'], 'bind' | 'responder'>,
-  string
-> = {
-  ref: 'refs',
-  event: 'event handlers',
-  vectorTables: '<Svg>',
-  stateDrivenVector: '<Svg>',
-};
-
 /** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes, the row fields. */
 const MAX_U16 = 0xffff;
 
@@ -247,67 +245,6 @@ function notYetAt(what: string, loc?: SourcePosition): never {
   } catch (error) {
     locateError(error, loc);
     throw error;
-  }
-}
-
-/**
- * Where the module first calls one of the given functions, for a refusal of what has no node of its own.
- *
- * @param program  The parsed module.
- * @param names  The functions: a bare name (`useEffect`), or an object and member (`Animated.timing`), with
- *               `*` for any member.
- *
- * @returns The call's position, or undefined when there is none.
- */
-function firstCall(
-  program: BabelProgram,
-  names: string[],
-): SourcePosition | undefined {
-  const named = (callee: Node): string | null =>
-    callee.type === 'Identifier'
-      ? callee.name
-      : callee.type === 'MemberExpression' &&
-          callee.object.type === 'Identifier' &&
-          callee.property.type === 'Identifier'
-        ? `${callee.object.name}.${callee.property.name}`
-        : null;
-  const matches = (name: string | null): boolean =>
-    name !== null &&
-    names.some(wanted =>
-      wanted.endsWith('.*')
-        ? name.startsWith(wanted.slice(0, -1))
-        : name === wanted || name.endsWith(`.${wanted}`),
-    );
-
-  let found: SourcePosition | undefined;
-  traverse(program, {
-    'CallExpression|NewExpression'(path) {
-      const call = path.node as Node & {callee: Node};
-      if (matches(named(call.callee))) {
-        found = call.loc?.start;
-        path.stop();
-      }
-    },
-  });
-  return found;
-}
-
-/**
- * Refuses what the app uses, beyond its tree and handlers, that the package output doesn't lower yet. What a
- * node uses is refused at the node.
- *
- * @param app  The app.
- */
-function checkSupported(app: IrApp): void {
-  const {out} = app;
-  const uses: [boolean, string, string[]][] = [
-    [out.vectors.length > 0, '<Svg>', []],
-    [app.keyboard !== null, 'setKeyboardConfig', ['setKeyboardConfig']],
-  ];
-  for (const [used, what, calls] of uses) {
-    if (used) {
-      notYetAt(what, calls.length ? firstCall(out.program, calls) : undefined);
-    }
   }
 }
 
@@ -359,6 +296,23 @@ function stringLocals(stmts: IrStmt[], found: Map<string, number>): void {
     } else if (stmt.kind === 'if') {
       stringLocals(stmt.consequent, found);
       stringLocals(stmt.alternate ?? [], found);
+    }
+  }
+}
+
+/**
+ * Every updateVector call a statement list makes.
+ *
+ * @param stmts  The statements.
+ * @param found  Collects the calls.
+ */
+function updateVectors(stmts: IrStmt[], found: IrUpdateVector[]): void {
+  for (const stmt of stmts) {
+    if (stmt.kind === 'updateVector') {
+      found.push(stmt);
+    } else if (stmt.kind === 'if') {
+      updateVectors(stmt.consequent, found);
+      updateVectors(stmt.alternate ?? [], found);
     }
   }
 }
@@ -571,6 +525,7 @@ function planSlots(
     timerFunctions: new Map(),
     animations,
     gestures: new Map(),
+    vectors: new VectorPlan(arena),
   };
 
   // String state with a closed set of values is an interned enum, starting at its initial value (the first).
@@ -759,8 +714,26 @@ function planSlots(
     node.wiring.some(
       wire => wire.kind === 'event' && wire.event === 'ER_EVENT_CHANGE_TEXT',
     );
+  // An updateVector call draws on the node its ref holds: the last one built with it, as C keeps it.
+  const calls: IrUpdateVector[] = [];
+  for (const body of bodies(app)) {
+    updateVectors(body, calls);
+  }
+  const drawnRefs = new Set(calls.map(call => call.node));
+  const refNodes = new Map<string, IrNode>();
+  for (const node of nodes) {
+    for (const wire of node.wiring) {
+      if (wire.kind === 'ref' && drawnRefs.has(wire.slot)) {
+        refNodes.set(wire.slot, node);
+      }
+    }
+  }
+  const drawnOn = new Set(refNodes.values());
   const reached = (node: IrNode): boolean =>
-    isStateDriven(node) || isSetOnce(node) || readsInput(node);
+    isStateDriven(node) ||
+    isSetOnce(node) ||
+    readsInput(node) ||
+    stateDrivenVectorOf(node) !== null;
 
   // A row's node keeps its handle in an array by the row, one array for each place in the row that needs one.
   const pools: Pool[] = [];
@@ -772,6 +745,9 @@ function planSlots(
       nodesOf(rowElement).forEach((node, place) => {
         if (readsInput(node)) {
           notYetAt('onChangeText in a list row', node.loc);
+        }
+        if (drawnOn.has(node)) {
+          notYetAt('updateVector on a node in a list row', node.loc);
         }
         if (reached(node)) {
           arrays[place] ??= arena.slot(ValueType.node, 0, pool.list.cap);
@@ -788,9 +764,15 @@ function planSlots(
     ),
   );
   for (const node of nodes) {
-    if (!rowHandles.has(node) && (reached(node) || builtUnder.has(node))) {
+    if (
+      !rowHandles.has(node) &&
+      (reached(node) || builtUnder.has(node) || drawnOn.has(node))
+    ) {
       handles.set(node, arena.slot(ValueType.node));
     }
+  }
+  for (const [ref, node] of refNodes) {
+    slots.vectors.refNodes.set(ref, handles.get(node)!);
   }
   const inputText = nodes.some(readsInput)
     ? arena.slot(ValueType.string, undefined, ENGINE_STRING_MAX.ER_TEXT_MAX)
@@ -823,7 +805,10 @@ function planSlots(
   const once =
     hasEffects ||
     pools.length ||
-    nodes.some(node => isStateDriven(node) || isSetOnce(node))
+    nodes.some(
+      node =>
+        isStateDriven(node) || isSetOnce(node) || stateDrivenVectorOf(node),
+    )
       ? arena.track(arena.slot(ValueType.bool))
       : null;
 
@@ -1077,9 +1062,12 @@ function templateNodes(
         });
       } else if (wire.kind === 'responder') {
         bindings.push(...responderBindings(wire.pan, lowering));
-      } else if (wire.kind !== 'ref') {
-        // A ref needs nothing itself; the code that reads one is refused on its own.
-        notYet(WIRING_USES[wire.kind]);
+      } else if (wire.kind === 'vectorTables') {
+        // A drawing state drives is committed by the update instead, and a ref needs nothing itself.
+        const tape = lowering.slots.vectors.tableTape(wire.tables);
+        if (tape !== null) {
+          bindings.push({kind: BindingKind.tape, event: 0, target: tape});
+        }
       }
     }
 
@@ -1375,9 +1363,14 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
   const nodes = nodesOf(lowering.app.root);
   const updated = nodes.filter(isStateDriven);
   const setOnce = nodes.filter(isSetOnce);
+  const drawings = nodes.flatMap(node => {
+    const vector = stateDrivenVectorOf(node);
+    return vector ? [{node, vector}] : [];
+  });
   if (
     !updated.length &&
     !setOnce.length &&
+    !drawings.length &&
     !out.depEffects.length &&
     !out.mountEffects.length
   ) {
@@ -1395,6 +1388,29 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
       throw error;
     }
   };
+  const draw = (node: IrNode, vector: IrStateDrivenVector): void =>
+    located(node, () =>
+      commitDrawing(codegen, vector, lowering.slots.vectors, () =>
+        nodeHandle(codegen, node, lowering),
+      ),
+    );
+  // Set again when a state it reads changed; what reads something no state write flags (a ref, the clock) is
+  // set on every pass.
+  const whenRead = (reads: StateReads, lower: () => void): void => {
+    const bits = reads
+      ? [...reads].map(state => stateSlotOf(state, lowering.slots))
+      : [];
+    if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
+      whenDirty(
+        fn,
+        bits,
+        lower,
+        bits.flatMap(slot => pending.get(slot) ?? []),
+      );
+    } else {
+      lower();
+    }
+  };
 
   // A pass only an effect's writes started is no app_update(): it keeps what they changed for the next one.
   const end = fn.label();
@@ -1410,33 +1426,28 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     fn.place(real);
   }
 
-  if (setOnce.length || lowering.pools.length) {
+  // The rows, the props that read only boot values, and the drawings that do, built once, as er_app_build() does.
+  const builtOnce = drawings.filter(({node}) => !updatedVectorOf(node));
+  if (setOnce.length || lowering.pools.length || builtOnce.length) {
     whenDirty(fn, [lowering.once!], () => {
       buildRows(codegen, lowering);
       setOnce.forEach(node =>
         located(node, () => setNode(codegen, node, lowering)),
       );
+      builtOnce.forEach(({node, vector}) => draw(node, vector));
     });
   }
 
+  // The nodes, then the drawings, as app_update() sets them.
   for (const node of updated) {
-    located(node, () => {
-      // A node that reads something no state write flags (a ref, the clock) is set on every pass.
-      const reads = nodeReads(node);
-      const bits = reads
-        ? [...reads].map(state => stateSlotOf(state, lowering.slots))
-        : [];
-      if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
-        whenDirty(
-          fn,
-          bits,
-          () => setNode(codegen, node, lowering),
-          bits.flatMap(slot => pending.get(slot) ?? []),
-        );
-      } else {
-        setNode(codegen, node, lowering);
-      }
-    });
+    located(node, () =>
+      whenRead(nodeReads(node), () => setNode(codegen, node, lowering)),
+    );
+  }
+  for (const {node, vector} of drawings) {
+    if (updatedVectorOf(node)) {
+      whenRead(vectorReads(vector), () => draw(node, vector));
+    }
   }
   for (const flag of pending.values()) {
     setConstant(codegen, flag, 0);
@@ -1896,6 +1907,47 @@ function bootFunction(
   return fn.finish();
 }
 
+/**
+ * The keyboard table: setKeyboardConfig's look and layout, each size and key field cut to the bytes the engine's
+ * ERKeyboardConfig keeps it in, as C's initializer cuts it.
+ *
+ * @param keyboard  The keyboard.
+ * @param tables  The program's tables.
+ *
+ * @returns The table.
+ */
+function keyboardTable(
+  keyboard: IrKeyboard,
+  tables: ProgramTables,
+): ProgramKeyboard {
+  const byte = (value: number | null): number => (value ?? 0) & 0xff;
+  const string = (text: string | null): number =>
+    text == null ? NONE : tables.string(text);
+  return {
+    layers: (keyboard.layers ?? []).map(layer =>
+      layer.map(row =>
+        row.map(key => ({
+          label: string(key.label),
+          text: string(key.text),
+          type: ENGINE_VALUES.get(KEY_TYPES[key.kind])!,
+          layer: byte(key.layer),
+          span: byte(key.span),
+          highlight: byte(key.highlightLayer ?? NEVER_HIGHLIGHTED),
+        })),
+      ),
+    ),
+    rowHeight: (keyboard.rowHeight ?? 0) & 0xffff,
+    gridCols: byte(keyboard.gridCols),
+    keyGap: byte(keyboard.keyGap),
+    keyRadius: byte(keyboard.keyRadius),
+    fontSize: byte(keyboard.fontSize),
+    panelColor: keyboard.panelColor ?? 0,
+    keyColor: keyboard.keyColor ?? 0,
+    keyActiveColor: keyboard.keyActiveColor ?? 0,
+    labelColor: keyboard.labelColor ?? 0,
+  };
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Program
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1946,26 +1998,23 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   rowTemplates(lowering);
 
   // Every row is built, whether the list holds it or not.
-  const nodeCount =
-    nodes.length +
-    lowering.pools.reduce(
-      (count, pool) =>
-        count +
-        pool.templates.reduce(
-          (rowNodes, template) =>
-            rowNodes + lowering.templates[template - 1].nodes.length,
-          0,
-        ),
-      0,
-    );
+  const built = [
+    ...nodes,
+    ...lowering.pools.flatMap(pool =>
+      pool.templates.flatMap(
+        template => lowering.templates[template - 1].nodes,
+      ),
+    ),
+  ];
+  const nodeCount = built.length;
+  const vectorType = ENGINE_VALUES.get('ER_NODE_VECTOR');
+  const vectorNodes = built.filter(node => node.type === vectorType).length;
   if (nodeCount > MAX_U16) {
     throw aotError(
       `AOT: the app needs ${nodeCount} nodes, but a package holds ${MAX_U16}`,
       'lower ER_AOT_LIST_CAP (the listCap option), or give the list rows fewer nodes.',
     );
   }
-  checkSupported(app);
-
   // Handlers first, as the bindings number them, then the timer callbacks, the effects, and the boot and
   // update functions. Each is numbered before any code is written, since code names them.
   let next = lowering.handlers.size;
@@ -2036,6 +2085,9 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
       },
     ],
     needs: [
+      ...(vectorNodes
+        ? [{resource: Resource.vectorNodes, amount: vectorNodes}]
+        : []),
       // Each animated value runs one engine animation at a time.
       ...(animations.values.size
         ? [
@@ -2063,5 +2115,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     anims: animations.anims,
     inputs,
     interps: animations.interps,
+    tapes: lowering.slots.vectors.tapes,
+    keyboard: app.keyboard ? keyboardTable(app.keyboard, tables) : null,
   };
 }

@@ -77,6 +77,12 @@ ERProps g_erb_props;
 static ErbProgram s_candidate;
 static ERVectorPaint s_paints[ERUI_VECTOR_PAINTS_MAX];
 static ERVectorGradient s_gradients[ERUI_VECTOR_GRADS_MAX];
+#if ERUI_ONSCREEN_KEYBOARD
+static ERKeyboardKey s_keyboard_keys[ERB_MAX_KEYBOARD_KEYS];
+static ERKeyboardRow s_keyboard_rows[ERB_MAX_KEYBOARD_ROWS];
+static ERKeyboardLayer s_keyboard_layers[ERB_MAX_KEYBOARD_LAYERS];
+static ERKeyboardConfig s_keyboard;
+#endif
 static uint32_t s_queue_head;
 static uint32_t s_queue_count;
 static uint32_t s_queue_effects; /**< Effects at the front of the queue, run before any other event. */
@@ -724,7 +730,7 @@ static bool on_query(ERNode* node, const EREventData* data, void* user_data)
  - Nodes and templates
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats)
+void erb_rt_load_paints(uint16_t tape)
 {
     const ErbProgram* program = &g_erb.program;
     const uint8_t* record = erb_tape(program, tape);
@@ -766,8 +772,65 @@ void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats)
         out->by = erb_f32(gradient + ERB_GRADIENT_BY_AT);
         out->r = erb_f32(gradient + ERB_GRADIENT_RADIUS_AT);
     }
-    er_node_set_vector_ops(
-        node, floats, erb_u16(record + ERB_TAPE_FLOAT_COUNT_AT), s_paints, paint_count, s_gradients, gradient_count);
+}
+
+void erb_rt_set_paint(uint8_t paint, uint8_t field, const int32_t* cell)
+{
+    ERVectorPaint* out = &s_paints[paint];
+    switch (field)
+    {
+        case ERB_VPAINT_FILL:
+            out->fill = (uint32_t)*cell;
+            break;
+        case ERB_VPAINT_STROKE:
+            out->stroke = (uint32_t)*cell;
+            break;
+        case ERB_VPAINT_STROKE_WIDTH:
+            memcpy(&out->stroke_w, cell, sizeof(out->stroke_w));
+            break;
+        case ERB_VPAINT_FILL_GRADIENT:
+            out->fill_grad = (int16_t)*cell;
+            break;
+        default:
+            out->stroke_grad = (int16_t)*cell;
+            break;
+    }
+}
+
+void erb_rt_set_gradient(uint8_t gradient, uint8_t field, const int32_t* cell)
+{
+    ERVectorGradient* out = &s_gradients[gradient];
+    float* const geometry[] = {&out->ax, &out->ay, &out->bx, &out->by, &out->r};
+    if (field <= ERB_VGRAD_RADIUS)
+    {
+        memcpy(geometry[field], cell, sizeof(float));
+        return;
+    }
+    ERGradientStop* stop = &out->stops[(field - ERB_VGRAD_STOPS) / 2u];
+    if ((field - ERB_VGRAD_STOPS) % 2u)
+    {
+        memcpy(&stop->position, cell, sizeof(stop->position));
+    }
+    else
+    {
+        stop->color = (uint32_t)*cell;
+    }
+}
+
+void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats, bool own_paints)
+{
+    const uint8_t* record = erb_tape(&g_erb.program, tape);
+    if (!own_paints)
+    {
+        erb_rt_load_paints(tape);
+    }
+    er_node_set_vector_ops(node,
+                           floats,
+                           erb_u16(record + ERB_TAPE_FLOAT_COUNT_AT),
+                           s_paints,
+                           erb_u16(record + ERB_TAPE_PAINT_COUNT_AT),
+                           s_gradients,
+                           erb_u16(record + ERB_TAPE_GRADIENT_COUNT_AT));
 }
 
 /** @brief Wires one template node's bindings. */
@@ -839,7 +902,8 @@ static void bind(ERNode* node, const uint8_t* record, uint32_t instance)
             default:
             {
                 const uint8_t* tape = erb_tape(program, target);
-                erb_rt_commit_tape(node, target, (const float*)(program->tapes + erb_u32(tape + ERB_TAPE_FLOATS_AT)));
+                erb_rt_commit_tape(
+                    node, target, (const float*)(program->tapes + erb_u32(tape + ERB_TAPE_FLOATS_AT)), false);
                 break;
             }
         }
@@ -1412,13 +1476,76 @@ static void tick_anims(uint32_t elapsed_ms)
  - Loading and teardown
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Tears the app down: the scene, animations, registered assets, the arena and the queue. */
+/** @brief Hands the engine the package's keyboard, copied into its structs with the strings left in place. */
+static void apply_keyboard(void)
+{
+#if ERUI_ONSCREEN_KEYBOARD
+    const ErbProgram* program = &g_erb.program;
+    const uint8_t* table = program->keyboard;
+    if (!table)
+    {
+        return;
+    }
+    const uint16_t layers = erb_u16(table + ERB_KEYBOARD_LAYER_COUNT_AT);
+    const uint16_t rows = erb_u16(table + ERB_KEYBOARD_ROW_COUNT_AT);
+    const uint16_t keys = erb_u16(table + ERB_KEYBOARD_KEY_COUNT_AT);
+    const uint8_t* layer_groups = table + ERB_KEYBOARD_HEADER_SIZE;
+    const uint8_t* row_groups = layer_groups + layers * ERB_KEYBOARD_GROUP_SIZE;
+    const uint8_t* key_records = row_groups + rows * ERB_KEYBOARD_GROUP_SIZE;
+    for (uint32_t index = 0; index < keys; index++)
+    {
+        const uint8_t* key = key_records + index * ERB_KEYBOARD_KEY_SIZE;
+        const uint16_t label = erb_u16(key + ERB_KEY_LABEL_AT);
+        const uint16_t text = erb_u16(key + ERB_KEY_TEXT_AT);
+        s_keyboard_keys[index] = (ERKeyboardKey){
+            .label = label == ERB_NONE ? NULL : erb_string(program, label),
+            .text = text == ERB_NONE ? NULL : erb_string(program, text),
+            .type = key[ERB_KEY_TYPE_AT],
+            .layer = key[ERB_KEY_LAYER_AT],
+            .span = key[ERB_KEY_SPAN_AT],
+            .highlight_layer = key[ERB_KEY_HIGHLIGHT_AT],
+        };
+    }
+    for (uint32_t index = 0; index < rows; index++)
+    {
+        const uint8_t* group = row_groups + index * ERB_KEYBOARD_GROUP_SIZE;
+        s_keyboard_rows[index].keys = &s_keyboard_keys[erb_u16(group + ERB_KEYBOARD_FIRST_AT)];
+        s_keyboard_rows[index].count = (uint8_t)erb_u16(group + ERB_KEYBOARD_COUNT_AT);
+    }
+    for (uint32_t index = 0; index < layers; index++)
+    {
+        const uint8_t* group = layer_groups + index * ERB_KEYBOARD_GROUP_SIZE;
+        s_keyboard_layers[index].rows = &s_keyboard_rows[erb_u16(group + ERB_KEYBOARD_FIRST_AT)];
+        s_keyboard_layers[index].count = (uint8_t)erb_u16(group + ERB_KEYBOARD_COUNT_AT);
+    }
+    s_keyboard = (ERKeyboardConfig){
+        .layers = layers ? s_keyboard_layers : NULL,
+        .layer_count = (uint8_t)layers,
+        .grid_cols = table[ERB_KEYBOARD_GRID_COLS_AT],
+        .row_height_px = erb_u16(table + ERB_KEYBOARD_ROW_HEIGHT_AT),
+        .key_gap_px = table[ERB_KEYBOARD_KEY_GAP_AT],
+        .key_radius_px = table[ERB_KEYBOARD_KEY_RADIUS_AT],
+        .font_size_px = table[ERB_KEYBOARD_FONT_SIZE_AT],
+        .panel_color = erb_u32(table + ERB_KEYBOARD_PANEL_COLOR_AT),
+        .key_color = erb_u32(table + ERB_KEYBOARD_KEY_COLOR_AT),
+        .key_active_color = erb_u32(table + ERB_KEYBOARD_KEY_ACTIVE_COLOR_AT),
+        .label_color = erb_u32(table + ERB_KEYBOARD_LABEL_COLOR_AT),
+    };
+    er_keyboard_set_config(&s_keyboard);
+#endif
+}
+
+/** @brief Tears the app down: the scene, animations, registered assets, the keyboard, the arena and the queue. */
 static void teardown(void)
 {
     if (g_erb.loaded)
     {
         g_erb.loaded = false;
         er_reset(); /* nodes, animations, animated values, vectors and input */
+        if (g_erb.program.keyboard)
+        {
+            er_keyboard_set_config(NULL);
+        }
         er_image_clear();
         er_font_clear();
         memset(g_erb.arena, 0, g_erb.program.arena_bytes);
@@ -1547,6 +1674,7 @@ static ErbStatus start(const ErbConfig* config)
     {
         return status;
     }
+    apply_keyboard();
 
     /* Step 11 and 12: every state-driven prop's first value, the mount effects, then the root. */
     memset(dirty_words(), 0xFF, program->dirty_words * sizeof(uint32_t));
