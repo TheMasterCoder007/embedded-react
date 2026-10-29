@@ -70,7 +70,8 @@ const THERMOSTAT_PANELS = [
 const WATCH_PANELS = [[240, 280]];
 
 // `taps` is "x,y x,y ...", the same for both hosts; "x,y>x2,y2" is a drag. `settle` is how many ms the hosts run after the last tap
-// before they take the frame (500 when it is left out), so a scenario can sample an animation as it runs.
+// before they take the frame (500 when it is left out), so a scenario can sample an animation as it runs. `release`
+// builds the package for release, without its debug table.
 const SCENARIOS = [
   {name: 'layout', file: fixture('layout'), screen: [240, 320]},
   {name: 'text', file: fixture('text'), screen: [240, 320]},
@@ -99,6 +100,13 @@ const SCENARIOS = [
     file: fixture('counter'),
     screen: [240, 320],
     taps: '122,142 122,142 122,142 122,142 43,142 200,142',
+  },
+  {
+    name: 'counter-taps-release',
+    file: fixture('counter'),
+    screen: [240, 320],
+    taps: '122,142 122,142 122,142 122,142 43,142 200,142',
+    release: true,
   },
   // The toggle twice: back off, with the interned mood set to its other value.
   {
@@ -445,6 +453,14 @@ const SCENARIOS = [
     taps: '200,224 200,224 93,278 146,278',
   },
   {
+    name: 'thermostat-cyd-modes-release',
+    file: demo('thermostat'),
+    screen: [240, 320],
+    panels: THERMOSTAT_PANELS,
+    taps: '200,224 200,224 93,278 146,278',
+    release: true,
+  },
+  {
     name: 'thermostat-cyd-dial',
     file: demo('thermostat'),
     screen: [240, 320],
@@ -599,6 +615,7 @@ async function compileScenario(scenario) {
   const packaged = compilePackage(src, scenario.name, {
     ...options,
     screens: (scenario.panels ?? [scenario.screen]).map(size),
+    release: scenario.release,
   });
   const packageImages = images(packaged);
   const file = packPackage(
@@ -716,7 +733,7 @@ let passed = 0;
 for (const scenario of scenarios) {
   const panels =
     scenario.panels?.length > 1 ? ` of ${scenario.panels.length} panels` : '';
-  const label = `${scenario.name} @ ${scenario.screen.join('x')}${panels}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
+  const label = `${scenario.name} @ ${scenario.screen.join('x')}${panels}${scenario.release ? ' release' : ''}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
   try {
     const {appDir, packagePath, report} = await compileScenario(scenario);
     buildHosts(appDir);

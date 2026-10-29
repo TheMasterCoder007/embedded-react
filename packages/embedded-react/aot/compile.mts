@@ -82,7 +82,7 @@ import {
   existsSync,
   readdirSync,
 } from 'node:fs';
-import {resolve, dirname} from 'node:path';
+import {basename, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bakeAssetPackBytes, bakeAssets} from '../assets/index.mjs';
 import {warnMissingGlyphs} from '../assets/glyph-coverage.mjs';
@@ -94,6 +94,7 @@ import {demoMarker, compileSourceImpl} from './compiler/assemble.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
   assemblePackage,
+  bakePackage,
   compilePanel,
   packPackage,
   resourceReport,
@@ -117,7 +118,7 @@ const distDir = resolve(aotDir, '..', 'dist');
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
-export {bakeSvgArtifacts, demoMarker, packPackage, resourceReport};
+export {bakePackage, bakeSvgArtifacts, demoMarker, packPackage, resourceReport};
 
 /**
  * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
@@ -221,14 +222,14 @@ export function compileSource(
 
 /**
  * Public entry for the package output: compile JSX source to a Flow B program section, with a layout for each
- * panel in opts.screens (or the one screen). Each panel is compiled as compileSource compiles for it. Errors are
- * annotated as compileSource's are.
+ * panel in opts.screens (or the one screen), and its debug section. Each panel is compiled as compileSource
+ * compiles for it. Errors are annotated as compileSource's are.
  *
  * @param src  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file an error names when opts has none.
- * @param opts  As compileSource takes them, plus screens.
+ * @param opts  As compileSource takes them, plus screens and release.
  *
- * @returns The program section, and what the package holds.
+ * @returns The program and debug sections, and what the package holds.
  */
 export function compilePackage(
   src: string,
@@ -248,7 +249,11 @@ export function compilePackage(
       compilePanel(src, resolved, wide, stores),
     );
   });
-  return assemblePackage(panels);
+  return assemblePackage(
+    panels,
+    basename(opts.filename || 'App.jsx'),
+    opts.release,
+  );
 }
 
 // CLI entry (`node aot/compile.mts [demo]`), only when run directly: compile a demo into dist/app.gen.{c,h}.

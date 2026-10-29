@@ -72,6 +72,10 @@ Usage:
                                                            <Svg>, and the keyboard config)
                                                  --aot --package --screen <WxH>,<WxH>  one package
                                                            with a layout for each panel size
+                                                 --aot --release  → a package without its debug
+                                                           table, written beside it as app.erdbg
+                                                 --aot --bake  → app.erpkg.c (the package as a const
+                                                           array, for a board with no spare partition)
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.
@@ -387,10 +391,19 @@ function resolveAppComponent(cwd, explicit) {
 
 /**
  * Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. With
- * --package, to a Flow B package (app.erpkg) with its assets inside, for the Flow B runtime to load.
+ * --package, to a Flow B package (app.erpkg) with its assets inside, for the Flow B runtime to load: for release
+ * without its debug table (app.erdbg beside it), and baked as C (app.erpkg.c) to link into the firmware.
  */
-async function buildAot(cwd, explicit, outDir, screens, asPackage) {
+async function buildAot(
+  cwd,
+  explicit,
+  outDir,
+  screens,
+  asPackage,
+  {release = false, bake = false} = {},
+) {
   const {
+    bakePackage,
     compilePackage,
     compileSource,
     bakeSvgArtifacts,
@@ -419,6 +432,7 @@ async function buildAot(cwd, explicit, outDir, screens, asPackage) {
       svgArtifacts,
       screen: screens?.[0] ?? null, // null without --screen
       screens: asPackage ? screens : undefined,
+      release,
     });
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
@@ -457,10 +471,21 @@ async function buildAot(cwd, explicit, outDir, screens, asPackage) {
       result,
       imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
     );
-    writeFileSync(resolve(outDir, 'app.erpkg'), file.bytes);
-    console.log(
-      `✓ Flow B package → ${relative(cwd, outDir) || '.'}/app.erpkg (${imageJobs.length} image(s))`,
+    const out = relative(cwd, outDir) || '.';
+    const name = bake ? 'app.erpkg.c' : 'app.erpkg';
+    writeFileSync(
+      resolve(outDir, name),
+      bake ? bakePackage(file.bytes) : file.bytes,
     );
+    console.log(
+      `✓ Flow B package → ${out}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s))`,
+    );
+    if (release) {
+      writeFileSync(resolve(outDir, 'app.erdbg'), result.debug);
+      console.log(
+        `  Debug table → ${out}/app.erdbg (${result.debug.length} B), to map a fault back to the source`,
+      );
+    }
     console.log(resourceReport(result, file).join('\n'));
     return;
   }
@@ -527,15 +552,22 @@ async function buildContainer(cwd, explicit, outDir) {
   );
 }
 
-/** `embedded-react build [--aot [--package]] [entry] [--out dir] [--screen WxH[,WxH…]]` — produce the device artifact. */
+/**
+ * `embedded-react build [--aot [--package] [--release] [--bake]] [entry] [--out dir] [--screen WxH[,WxH…]]` —
+ * produce the device artifact. --release and --bake build the package.
+ */
 async function build(args) {
   const cwd = process.cwd();
   const aot = args.includes('--aot');
-  const asPackage = args.includes('--package');
-  if (asPackage && !aot) {
-    console.error('--package only applies to --aot.\n');
-    usage();
-    process.exit(1);
+  const release = args.includes('--release');
+  const bake = args.includes('--bake');
+  const asPackage = args.includes('--package') || release || bake;
+  for (const flag of ['--package', '--release', '--bake']) {
+    if (args.includes(flag) && !aot) {
+      console.error(`${flag} only applies to --aot.\n`);
+      usage();
+      process.exit(1);
+    }
   }
   const outIdx = args.indexOf('--out');
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
@@ -584,7 +616,8 @@ async function build(args) {
   const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
 
   mkdirSync(outDir, {recursive: true});
-  if (aot) await buildAot(cwd, explicit, outDir, screens, asPackage);
+  if (aot)
+    await buildAot(cwd, explicit, outDir, screens, asPackage, {release, bake});
   else await buildContainer(cwd, explicit, outDir);
 }
 

@@ -898,6 +898,31 @@ static void test_debug(void)
     EXPECT(ERB_ERR_DEBUG, "a malformed debug string");
     base()->has_debug = false;
     EXPECT(ERB_OK, "no debug table is fine");
+    base()->minor = ERB_FORMAT_MINOR_DEBUG_PANELS - 1u;
+    EXPECT(ERB_OK, "an older package's debug table");
+    CHECK(s_program.debug_entry_count == 1u, "is used");
+}
+
+static void test_panel_debug(void)
+{
+    /* Each panel's table names its panel; a package's panels can each have their own. */
+    two_panels()->debug_panels[0] = 1u;
+    s_pkg.debug_panels[1] = 0u;
+    s_pkg.debug_table_count = 2u;
+    s_config.screen_w = TPKG_SCREEN + 80u;
+    EXPECT(ERB_OK, "a table for each panel");
+    CHECK(s_program.debug_entries == s_program.debug + ERB_DEBUG_HEADER_SIZE, "the second panel's is the first");
+    two_panels()->debug_panels[0] = 1u;
+    s_pkg.debug_entries[0].offset = 1u;
+    EXPECT(ERB_OK, "another panel's table isn't checked");
+    CHECK(s_program.debug_entries == NULL, "and isn't used");
+    two_panels()->debug_panels[1] = 0u;
+    s_pkg.debug_table_count = 2u;
+    EXPECT(ERB_ERR_DEBUG, "two tables for one panel");
+    base()->debug_panels[0] = 1u;
+    EXPECT(ERB_ERR_DEBUG, "a table for a panel the package doesn't declare");
+    base()->debug_table_count = 0u;
+    EXPECT(ERB_ERR_DEBUG, "an empty debug section");
 }
 
 static void test_assets(void)
@@ -1250,6 +1275,7 @@ int main(void)
     test_budget();
     test_imports_and_inputs();
     test_debug();
+    test_panel_debug();
     test_assets();
     test_fonts();
     test_image_index();

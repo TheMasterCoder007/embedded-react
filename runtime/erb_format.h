@@ -35,10 +35,16 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 4u
+#define ERB_FORMAT_MINOR 5u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
+
+/**
+ * @brief The minor whose debug section holds a table for each panel, each naming its panel and length. Before it,
+ * the section is one table for all panels, with a 16-byte header and a u32 function count.
+ */
+#define ERB_FORMAT_MINOR_DEBUG_PANELS 5u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -513,13 +519,16 @@ enum
  - Debug section
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define ERB_DEBUG_HEADER_SIZE 16u
+#define ERB_DEBUG_HEADER_SIZE 20u
+#define ERB_DEBUG_OLD_HEADER_SIZE 16u
 #define ERB_DEBUG_ENTRY_SIZE 16u
 
 #define ERB_DEBUG_BUILD_ID_AT 0u
 #define ERB_DEBUG_ENTRY_COUNT_AT 4u
 #define ERB_DEBUG_FUNCTION_COUNT_AT 8u
+#define ERB_DEBUG_PANEL_AT 10u
 #define ERB_DEBUG_STRINGS_AT 12u
+#define ERB_DEBUG_LENGTH_AT 16u
 
 #define ERB_DEBUG_ENTRY_FUNCTION_AT 0u
 #define ERB_DEBUG_ENTRY_OFFSET_AT 4u

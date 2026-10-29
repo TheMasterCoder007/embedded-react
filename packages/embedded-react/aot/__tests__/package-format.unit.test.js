@@ -147,6 +147,8 @@ describe('package format copy', () => {
       'KEYBOARD_HEADER',
       'KEYBOARD_GROUP',
       'KEYBOARD_KEY',
+      'DEBUG_HEADER',
+      'DEBUG_ENTRY',
     ]) {
       expect(format[`${name}_SIZE`], name).toBe(
         defineValue(formatHeader, `ERB_${name}_SIZE`),

@@ -160,8 +160,11 @@ typedef struct
     uint32_t interp_count;
     const uint8_t* keyboard; /**< The keyboard table, or NULL to leave the engine's keyboard as it is. */
 
-    const uint8_t* debug;
+    const uint8_t* debug; /**< The debug section, or NULL. */
     uint32_t debug_length;
+    const uint8_t* debug_entries; /**< This panel's debug table, once verified: NULL when it has none. */
+    uint32_t debug_entry_count;
+    const uint8_t* debug_strings;
     const uint8_t* assets;
     uint32_t assets_length;
 

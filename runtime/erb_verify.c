@@ -2299,36 +2299,31 @@ static void mark_starts(const ErbProgram* program, uint32_t index)
     }
 }
 
-static bool check_debug(ErbProgram* program, ErbError* error)
+/** @brief Checks one debug table, whose header is @p header_size bytes and holds @p function_count. */
+static bool check_debug_table(ErbProgram* program, const uint8_t* table, uint32_t length, uint32_t header_size,
+                              uint32_t function_count, ErbError* error)
 {
-    const uint8_t* debug = program->debug;
-    const uint32_t length = program->debug_length;
-    if (!debug)
-    {
-        return true;
-    }
-    if (length < ERB_DEBUG_HEADER_SIZE || erb_u32(debug + ERB_DEBUG_BUILD_ID_AT) != program->build_id
-        || erb_u32(debug + ERB_DEBUG_FUNCTION_COUNT_AT) != program->function_count)
+    if (erb_u32(table + ERB_DEBUG_BUILD_ID_AT) != program->build_id || function_count != program->function_count)
     {
         return fail(error, ERB_ERR_DEBUG, "build id or function count");
     }
-    const uint32_t entry_count = erb_u32(debug + ERB_DEBUG_ENTRY_COUNT_AT);
-    const uint32_t strings = erb_u32(debug + ERB_DEBUG_STRINGS_AT);
-    if (entry_count > (length - ERB_DEBUG_HEADER_SIZE) / ERB_DEBUG_ENTRY_SIZE)
+    const uint32_t entry_count = erb_u32(table + ERB_DEBUG_ENTRY_COUNT_AT);
+    const uint32_t strings = erb_u32(table + ERB_DEBUG_STRINGS_AT);
+    if (entry_count > (length - header_size) / ERB_DEBUG_ENTRY_SIZE)
     {
         return fail(error, ERB_ERR_DEBUG, "entries past the section");
     }
-    const uint32_t names = ERB_DEBUG_HEADER_SIZE + entry_count * ERB_DEBUG_ENTRY_SIZE;
+    const uint32_t names = header_size + entry_count * ERB_DEBUG_ENTRY_SIZE;
     const uint32_t names_end = names + round4(program->function_count * sizeof(uint16_t));
     uint32_t string_count = 0;
     if (names_end > length || strings != names_end || !erb_aligned4(strings)
-        || !check_strings(debug + strings, length - strings, &string_count))
+        || !check_strings(table + strings, length - strings, &string_count))
     {
         return fail(error, ERB_ERR_DEBUG, "parts out of order, or a malformed string table");
     }
     for (uint32_t index = 0; index < program->function_count; index++)
     {
-        if (erb_u16(debug + names + index * sizeof(uint16_t)) >= string_count)
+        if (erb_u16(table + names + index * sizeof(uint16_t)) >= string_count)
         {
             return fail(error, ERB_ERR_DEBUG, "function name index");
         }
@@ -2337,7 +2332,7 @@ static bool check_debug(ErbProgram* program, ErbError* error)
     uint64_t previous = 0;
     for (uint32_t index = 0; index < entry_count; index++)
     {
-        const uint8_t* entry = debug + ERB_DEBUG_HEADER_SIZE + index * ERB_DEBUG_ENTRY_SIZE;
+        const uint8_t* entry = table + header_size + index * ERB_DEBUG_ENTRY_SIZE;
         const uint16_t function = erb_u16(entry + ERB_DEBUG_ENTRY_FUNCTION_AT);
         const uint32_t offset = erb_u32(entry + ERB_DEBUG_ENTRY_OFFSET_AT);
         const uint64_t key = ((uint64_t)function << 32) | offset;
@@ -2357,24 +2352,86 @@ static bool check_debug(ErbProgram* program, ErbError* error)
             return fail(error, ERB_ERR_DEBUG, "entry not on an instruction");
         }
     }
+    program->debug_entries = table + header_size;
+    program->debug_entry_count = entry_count;
+    program->debug_strings = table + strings;
     return true;
+}
+
+static bool check_debug(ErbProgram* program, ErbError* error)
+{
+    const uint8_t* debug = program->debug;
+    const uint32_t length = program->debug_length;
+    if (!debug)
+    {
+        return true;
+    }
+    /* Before the minor that names panels, the section is one table for all panels. */
+    if (erb_u16(program->section + ERB_HEADER_FORMAT_MINOR_AT) < ERB_FORMAT_MINOR_DEBUG_PANELS)
+    {
+        if (length < ERB_DEBUG_OLD_HEADER_SIZE)
+        {
+            return fail(error, ERB_ERR_DEBUG, "build id or function count");
+        }
+        return check_debug_table(program, debug, length, ERB_DEBUG_OLD_HEADER_SIZE,
+                                 erb_u32(debug + ERB_DEBUG_FUNCTION_COUNT_AT), error);
+    }
+
+    /* A table for every panel (ERB_NONE) or one panel's; only this panel's is checked and used. */
+    if (!length)
+    {
+        return fail(error, ERB_ERR_DEBUG, "an empty debug section");
+    }
+    const uint16_t panel_count = erb_u16(program->section + ERB_HEADER_PANEL_COUNT_AT);
+    const uint8_t* mine = NULL;
+    uint32_t mine_length = 0;
+    for (uint32_t at = 0; at < length;)
+    {
+        const uint8_t* table = debug + at;
+        if (length - at < ERB_DEBUG_HEADER_SIZE)
+        {
+            return fail(error, ERB_ERR_DEBUG, "a table past the section");
+        }
+        const uint32_t table_length = erb_u32(table + ERB_DEBUG_LENGTH_AT);
+        if (table_length < ERB_DEBUG_HEADER_SIZE || table_length > length - at || !erb_aligned4(table_length))
+        {
+            return fail(error, ERB_ERR_DEBUG, "a table past the section");
+        }
+        /* Read only once the whole header is known to be in the section. */
+        const uint16_t panel = erb_u16(table + ERB_DEBUG_PANEL_AT);
+        if (panel != ERB_NONE && panel >= panel_count)
+        {
+            return fail(error, ERB_ERR_DEBUG, "a table for a panel the package doesn't declare");
+        }
+        if (panel == ERB_NONE || panel == program->panel)
+        {
+            if (mine)
+            {
+                return fail(error, ERB_ERR_DEBUG, "two tables for one panel");
+            }
+            mine = table;
+            mine_length = table_length;
+        }
+        at += table_length;
+    }
+    return !mine
+           || check_debug_table(program, mine, mine_length, ERB_DEBUG_HEADER_SIZE,
+                                erb_u16(mine + ERB_DEBUG_FUNCTION_COUNT_AT), error);
 }
 
 void erb_debug_lookup(const ErbProgram* program, uint16_t function, uint32_t offset, const char** file, uint32_t* line)
 {
     *file = NULL;
     *line = 0;
-    if (!program->debug)
+    if (!program->debug_entries)
     {
         return;
     }
-    const uint8_t* debug = program->debug;
-    const uint32_t entry_count = erb_u32(debug + ERB_DEBUG_ENTRY_COUNT_AT);
-    const uint8_t* strings = debug + erb_u32(debug + ERB_DEBUG_STRINGS_AT);
+    const uint8_t* strings = program->debug_strings;
     /* The last entry at or before the offset, in this function. */
-    for (uint32_t index = 0; index < entry_count; index++)
+    for (uint32_t index = 0; index < program->debug_entry_count; index++)
     {
-        const uint8_t* entry = debug + ERB_DEBUG_HEADER_SIZE + index * ERB_DEBUG_ENTRY_SIZE;
+        const uint8_t* entry = program->debug_entries + index * ERB_DEBUG_ENTRY_SIZE;
         if (erb_u16(entry + ERB_DEBUG_ENTRY_FUNCTION_AT) > function
             || (erb_u16(entry + ERB_DEBUG_ENTRY_FUNCTION_AT) == function
                 && erb_u32(entry + ERB_DEBUG_ENTRY_OFFSET_AT) > offset))

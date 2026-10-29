@@ -20,6 +20,7 @@
 
 import {parseColor, parsePath} from '../../src/embedded-react/svg-ops.js';
 import {aotError, constantText, withLoc} from './diagnostics.mts';
+import type {SourcePosition} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {
   mix64Error,
@@ -1115,12 +1116,18 @@ export function lowerStmts(
   ctx: StatementContext,
 ): IrStmt[] {
   const lowered: IrStmt[] = [];
+  // What each statement lowers to is marked with where it is, once the next one starts.
+  let from = 0;
+  let loc: SourcePosition | undefined;
   for (
     let statementIndex = 0;
     statementIndex < statements.length;
     statementIndex++
   ) {
+    markLoc(lowered, from, loc);
     const statement = statements[statementIndex];
+    from = lowered.length;
+    loc = startOf(statement);
 
     // `const x = …` declares a local that the statements after it can read.
     if (statement.type === 'VariableDeclaration') {
@@ -1316,7 +1323,42 @@ export function lowerStmts(
     lowered.push(...lowerHandlerExpr(statement.expression, env, state, ctx));
   }
 
+  markLoc(lowered, from, loc);
   return lowered;
+}
+
+/**
+ * Where a statement starts. An expression body made into a statement has no location of its own.
+ *
+ * @param statement  The statement.
+ *
+ * @returns Its start, if it has one.
+ */
+function startOf(statement: t.Statement): SourcePosition | undefined {
+  return (
+    statement.loc?.start ??
+    (statement.type === 'ExpressionStatement'
+      ? statement.expression.loc?.start
+      : undefined)
+  );
+}
+
+/**
+ * Marks the statements lowered from one source statement with its location. One nested inside it, or inlined
+ * from a helper, keeps its own.
+ *
+ * @param lowered  The statements lowered so far.
+ * @param from  The first one the source statement lowered to.
+ * @param loc  Where the source statement is.
+ */
+function markLoc(
+  lowered: IrStmt[],
+  from: number,
+  loc: SourcePosition | undefined,
+): void {
+  for (let index = from; index < lowered.length; index++) {
+    lowered[index].loc ??= loc;
+  }
 }
 
 /**

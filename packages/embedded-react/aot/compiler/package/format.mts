@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 4;
+export const FORMAT_MINOR = 5;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -40,6 +40,10 @@ export const FLAG_DEBUG = 0x0001;
 
 /** "None", for any u16 index. */
 export const NONE = 0xffff;
+
+/** Each table of the debug section starts with its header; then its entries. */
+export const DEBUG_HEADER_SIZE = 20;
+export const DEBUG_ENTRY_SIZE = 16;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Program section
