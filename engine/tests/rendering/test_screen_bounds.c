@@ -132,6 +132,17 @@ int main(void)
     CHECK(root->computed.w == 40 && root->computed.h == 40, "a root inside the bounds keeps its size");
     CHECK(s_right <= BOUNDS_W && s_bottom <= BOUNDS_H, "a node past a small root stops at the bounds");
 
+    /* One limit: that axis stops at it, and the other keeps the root's size. */
+    er_set_screen_bounds(BOUNDS_W, 0);
+    root = commit_scene(40);
+    CHECK(s_right > 0 && s_right <= BOUNDS_W, "a width alone still stops the right edge");
+    CHECK(s_bottom > BOUNDS_H, "a width alone leaves the height free");
+
+    er_set_screen_bounds(0, BOUNDS_H);
+    root = commit_scene(40);
+    CHECK(s_bottom > 0 && s_bottom <= BOUNDS_H, "a height alone still stops the bottom edge");
+    CHECK(s_right > BOUNDS_W, "a height alone leaves the width free");
+
     er_set_screen_bounds(0, 0);
     er_reset();
     ERNode* free_root = er_node_create(ER_NODE_VIEW);

@@ -5794,10 +5794,12 @@ void er_commit(void)
             else
             {
                 /* With bounds set, nothing is drawn past them: a painter that works per pixel otherwise
-                 * only stops at its node's box, however far off screen that is. */
-                const bool bounded = s_bounds_w > 0 && s_bounds_h > 0;
+                 * only stops at its node's box, however far off screen that is. An axis with no limit
+                 * gets the largest extent a node can reach. */
+                const bool bounded = s_bounds_w > 0 || s_bounds_h > 0;
                 if (bounded)
-                    er_push_clip_rect(0, 0, s_bounds_w, s_bounds_h);
+                    er_push_clip_rect(
+                        0, 0, s_bounds_w > 0 ? s_bounds_w : INT16_MAX, s_bounds_h > 0 ? s_bounds_h : INT16_MAX);
                 render_tree(root, full_recomposite, false, 0, s_kbd_avoid_y);
                 er_keyboard_draw((int)root->computed.w, (int)root->computed.h);
                 if (bounded)

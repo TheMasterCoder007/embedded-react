@@ -1178,8 +1178,8 @@ extern "C"
      * The root's size is clamped to these bounds, and a full repaint draws nothing past them, so a node's size
      * can't make a frame paint a far larger area than the panel. er_reset() keeps them.
      *
-     * @param[in] width   Panel width in pixels; 0 removes the limit.
-     * @param[in] height  Panel height in pixels; 0 removes the limit.
+     * @param[in] width   Panel width in pixels; 0 removes the limit on this axis.
+     * @param[in] height  Panel height in pixels; 0 removes the limit on this axis.
      */
     void er_set_screen_bounds(int width, int height);
 
