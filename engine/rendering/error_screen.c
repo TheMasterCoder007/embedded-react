@@ -230,6 +230,8 @@ void er_error_screen_show(int screen_w, int screen_h, const ERErrorScreen* scree
     s_screen_w = screen_w > 0 ? screen_w : 0;
     s_screen_h = screen_h > 0 ? screen_h : 0;
     s_active = true;
+    /* A gesture in progress, and any move parked for it, ends here, so none reaches an app after it. */
+    er_input_reset();
     er_force_full_repaint();
 }
 

@@ -54,6 +54,7 @@ typedef struct
 static Recorded s_recorded;
 static int s_failures;
 static int s_touch_starts;
+static int s_touch_moves;
 
 #define CHECK(condition, message)                                                                                      \
     do                                                                                                                 \
@@ -128,6 +129,14 @@ static void on_touch_start(ERNode* node, const EREventData* data, void* user_dat
     s_touch_starts++;
 }
 
+static void on_touch_move(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)node;
+    (void)data;
+    (void)user_data;
+    s_touch_moves++;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -160,6 +169,7 @@ static void build_scene(void)
     props.background_color = SCENE_COLOR;
     er_node_set_props(root, &props);
     er_event_set(root, ER_EVENT_TOUCH_START, on_touch_start, NULL);
+    er_event_set(root, ER_EVENT_TOUCH_MOVE, on_touch_move, NULL);
     er_tree_set_root(root);
 }
 
@@ -211,6 +221,23 @@ static void test_paints_over_the_scene(void)
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
     embedded_renderer_touch(0, ER_TOUCH_UP, 10, 10);
     CHECK(s_touch_starts == 1, "and gets touches again");
+}
+
+static void test_ends_a_gesture_in_progress(void)
+{
+    use_backend(0);
+    build_scene();
+    commit();
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
+    embedded_renderer_touch(0, ER_TOUCH_MOVE, 30, 30);
+    CHECK(er_touch_active_count() == 1, "a finger is down with a move parked");
+
+    er_error_screen_show(SCREEN_W, SCREEN_H, &s_screen);
+    CHECK(er_touch_active_count() == 0, "the error screen ends the gesture");
+    er_error_screen_hide();
+    s_touch_moves = 0;
+    commit();
+    CHECK(s_touch_moves == 0, "and the parked move never reaches the app");
 }
 
 static void test_paints_without_a_scene(void)
@@ -288,6 +315,7 @@ static void test_fault_record(void)
 int main(void)
 {
     test_paints_over_the_scene();
+    test_ends_a_gesture_in_progress();
     test_paints_without_a_scene();
     test_paints_each_display_buffer();
     test_paints_in_bands();
