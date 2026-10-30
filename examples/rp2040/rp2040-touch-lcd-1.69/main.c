@@ -83,6 +83,11 @@ static uint32_t now_ms(void)
 /** @brief A native fault, kept in RAM the boot leaves alone so it survives the reset it causes. */
 static ERFaultRecord __uninitialized_ram(s_fault);
 
+/** @brief The hard fault handler's own stack, so recording a fault never needs the stack that may have overflowed. */
+#define FAULT_STACK_BYTES 256U
+static uint8_t __attribute__((aligned(8))) s_fault_stack[FAULT_STACK_BYTES];
+static uint8_t* const __attribute__((used)) s_fault_stack_top = s_fault_stack + FAULT_STACK_BYTES;
+
 /* Core 0's stack is 8 KB: SCRATCH_Y (PICO_STACK_SIZE, see CMakeLists.txt) plus this lower half in
  * SCRATCH_X. The watch face peaks at ~3.1 KB; the rest is headroom for deeper apps. This
  * claims SCRATCH_X the same way the SDK claims it for core 1's stack, so starting core 1 (or placing
@@ -136,7 +141,11 @@ void __attribute__((used, noreturn)) hard_fault_record(const uint32_t* exception
     }
 }
 
-/** @brief The hard fault vector: finds the stacked frame on the stack in use and hands it on. */
+/**
+ * @brief The hard fault vector: finds the stacked frame on the stack in use, moves to s_fault_stack, and hands
+ *        the frame on. A stack overflow that faults while the core stacks the frame locks up instead; the
+ *        watchdog resets it and the boot records that.
+ */
 void __attribute__((naked)) isr_hardfault(void)
 {
     __asm volatile("movs r0, #4\n"
@@ -146,7 +155,10 @@ void __attribute__((naked)) isr_hardfault(void)
                    "mrs r0, psp\n"
                    "b 2f\n"
                    "1: mrs r0, msp\n"
-                   "2: ldr r1, =hard_fault_record\n"
+                   "2: ldr r1, =s_fault_stack_top\n"
+                   "ldr r1, [r1]\n"
+                   "msr msp, r1\n"
+                   "ldr r1, =hard_fault_record\n"
                    "bx r1\n"
                    ".ltorg\n");
 }
