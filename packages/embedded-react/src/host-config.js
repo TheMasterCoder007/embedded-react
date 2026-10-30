@@ -100,11 +100,10 @@ function applyBindings(handle, bindings) {
 
 /**
  * Forgets what a handle was bound to. The engine releases the bindings itself when a node is destroyed
- * (er_anim_unbind_node), so this only drops our record — but it has to happen, because handles are
- * recycled: a record left behind would make the next node to claim that handle look already-bound.
- * Called on destroy for the node React hands us, and again on create because destroyNode reclaims a
- * whole SUBTREE in C — React never mentions the descendants, so their handles come back from the free
- * list still carrying a record.
+ * (er_anim_unbind_node), so this only drops our record — but it has to happen, or the map keeps a
+ * record for every destroyed node. Called on destroy for the node React hands us, and again from
+ * detachDeletedInstance because destroyNode reclaims a whole SUBTREE in C — React never hands
+ * removeChild the descendants, and detaching is where it names them.
  */
 function forgetBindings(handle) {
   boundValues.delete(handle);
@@ -419,14 +418,12 @@ export const hostConfig = {
     if (raster) {
       const handle = NativeUI.createNode('Image');
       if (handle === 0) return nextFailedInstance--;
-      forgetBindings(handle);
       applyProps('Image', handle, rasterImageProps(props, raster));
       applyEvents(handle, null, props);
       return handle;
     }
     const handle = NativeUI.createNode(type);
     if (handle === 0) return nextFailedInstance--;
-    forgetBindings(handle);
     const flatStyle = applyProps(type, handle, props);
     applyTextSpans(type, handle, props, flatStyle);
     applyVectorOps(type, handle, props);
@@ -515,6 +512,7 @@ export const hostConfig = {
   detachDeletedInstance(instance) {
     // Called for every host instance in a deleted subtree, including failed creates below its top.
     if (instance < 0) freeOrphans(instance);
+    else forgetBindings(instance);
   },
   getCurrentEventPriority() {
     return DefaultEventPriority;

@@ -1411,6 +1411,12 @@ static void anim_start_entry(uint32_t index)
                                        entry->value,
                                        &config);
             }
+            else if (cells[0] != 0 && (program->flags & ERB_FLAG_DEBUG))
+            {
+                /* An empty handle only means the node isn't built yet; this one outlived its node. */
+                erb_rt_fault(ERB_ERR_STALE_NODE, "a node handle outlived its node", NULL, ERB_NONE, 0u);
+                return;
+            }
         }
         /* An engine that already called back (a 0 ms animation) has moved the entry on. */
         if (entry->state == ANIM_RUNNING)

@@ -72,7 +72,7 @@ static ERNode s_nodes[ERUI_MAX_NODES];
 static uint16_t s_next_tag = 0;
 static uint16_t s_free_list[ERUI_MAX_NODES]; /**< LIFO stack of destroyed node slots available for reuse. */
 static uint16_t s_free_count = 0;            /**< Number of entries currently in s_free_list. */
-static uint32_t s_node_serial = 0;           /**< Next ERNode::serial; er_reset keeps counting. Wraps after 2^32. */
+static uint32_t s_node_serial = 1;           /**< Next ERNode::serial, never 0; er_reset keeps it. */
 static uint16_t s_root_tag = ER_INVALID_TAG;
 static uint64_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
@@ -3199,7 +3199,8 @@ ERNode* er_node_create(ERNodeType type)
     memset(n, 0, sizeof(ERNode));
 
     n->tag = tag;
-    n->serial = s_node_serial++;
+    n->serial = s_node_serial;
+    s_node_serial = er_node_next_serial(s_node_serial);
     n->parent_tag = ER_INVALID_TAG;
     n->first_child_tag = ER_INVALID_TAG;
     n->next_sibling_tag = ER_INVALID_TAG;

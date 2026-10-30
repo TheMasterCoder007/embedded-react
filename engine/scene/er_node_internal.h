@@ -516,6 +516,18 @@ struct ERNode
 ERNode* er_get_node(uint16_t tag);
 
 /**
+ * @brief The serial after this one. It skips 0 when it wraps, so a zeroed ERNodeRef never matches a node.
+ *
+ * @param[in] serial  The current serial.
+ *
+ * @return The next serial, never 0.
+ */
+static inline uint32_t er_node_next_serial(uint32_t serial)
+{
+    return serial == UINT32_MAX ? 1U : serial + 1U;
+}
+
+/**
  * @brief Returns the current scene root node.
  *
  * @return Root node, or NULL if no root is set.

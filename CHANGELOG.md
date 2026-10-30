@@ -37,6 +37,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   with `ER_CONTAINER_BAD_ASSETS` instead of running with missing images and fonts. That includes an
   image format this firmware doesn't know, from a newer emitter, and RGB565 pixels on an odd address.
 - `er_assets_load_pack` and friends now check the whole pack first and register nothing when it fails.
+- Flow A node handles carry a generation, so one kept after its node is destroyed does nothing instead
+  of reaching the next node to use its slot. Handles are no longer small integers.
+
+### Fixed
+
+- Flow B applies the stale-handle rule to a row built before a destroyed node, which used to go last, and
+  to an animation of a destroyed node, which didn't stop a debug package.
 
 ## [0.19.0] - 2026-10-27
 ### Changed

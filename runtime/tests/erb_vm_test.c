@@ -494,6 +494,17 @@ static void test_templates(void)
         OP_ABC(RET, 0, 0, 0),
     };
     const uint16_t build_past = helper(types, 5, 0, 0, past_code, 5);
+    const uint32_t build_before_code[] = {
+        OP_ABX(LOADI, 4, 2),
+        OP_ABC(GETNI, 0, 4, 0),
+        S_ROWS,
+        OP_ABX(GET64, 2, S_ROOT),
+        OP_ABX(LOADI, 4, 3),
+        OP_ABC(BUILD, 0, 2, 0),
+        ERB_PACK16(1u, 4u), /* template 1, instance index in r4, before the row r0 held */
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t build_before = helper(types, 5, 0, 0, build_before_code, 8);
     CHECK(load(), "loads");
 
     CHECK(er_node_in_use_count() == 4, "the root template's four nodes are built");
@@ -512,6 +523,9 @@ static void test_templates(void)
     call(commit, 0, 0);
     CHECK(s_status == ERB_OK && strstr(s_log, "stale node handle") != NULL,
           "a release package skips a stale handle and reports it");
+    call(build_before, 0, 0);
+    CHECK(s_status == ERB_OK && er_node_in_use_count() == 4,
+          "a release package skips a BUILD before a stale handle, rather than putting the row last");
     call(build_past, 0, 0);
     CHECK(s_status == ERB_ERR_LIST_INDEX, "a row index past the handle array stops the app");
 
@@ -524,6 +538,68 @@ static void test_templates(void)
     call(debug_destroy, 0, 0);
     call(debug_commit, 0, 0);
     CHECK(s_status == ERB_ERR_STALE_NODE, "a debug package stops on a stale handle");
+
+    base()->flags = ERB_FLAG_DEBUG;
+    const uint16_t before_build = helper(types, 5, 0, 0, build_code, 5);
+    const uint16_t before_destroy = helper(types, 5, 0, 0, destroy_code, 5);
+    const uint16_t before_stale = helper(types, 5, 0, 0, build_before_code, 8);
+    CHECK(load(), "a debug package loads");
+    call(before_build, 0, 0);
+    call(before_destroy, 0, 0);
+    call(before_stale, 0, 0);
+    CHECK(s_status == ERB_ERR_STALE_NODE, "a debug package stops on a BUILD before a stale handle");
+}
+
+/**
+ * @brief Adds a timing animation on the node in S_ROOT, and a helper that starts it.
+ *
+ * @return The helper's function index.
+ */
+static uint16_t node_animation(void)
+{
+    s_pkg.anims[2] =
+        (TAnim){ERB_ANIM_TIMING, ER_EASE_LINEAR, 0, S_ROOT, PROP_OPACITY, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
+    s_pkg.anim_count = 3;
+    static const uint8_t types[] = {ERB_T_ANIM};
+    static const uint32_t start[] = {OP_ABX(ASTART, 0, 2), ERB_PACK16(F_DONE, ERB_NO_REGISTER), OP_ABC(RET, 0, 0, 0)};
+    return helper(types, 1, 0, 0, start, 3);
+}
+
+static void test_stale_animation_target(void)
+{
+    static const uint8_t types[] = {ERB_T_NODE, ERB_T_PAIR};
+    static const uint32_t destroy_code[] = {
+        OP_ABX(GET64, 0, S_ROOT),
+        OP_ABC(DESTROY, 0, 0, 0),
+        OP_ABC(RET, 0, 0, 0),
+    };
+
+    base();
+    uint16_t start = node_animation();
+    uint16_t destroy = helper(types, 2, 0, 0, destroy_code, 3);
+    CHECK(load(), "a release package loads");
+    call(destroy, 0, 0);
+    call(start, 0, 0);
+    CHECK(s_status == ERB_OK && erb_running() && strstr(s_log, "animation not started") != NULL,
+          "a release package skips an animation of a destroyed node and reports it");
+
+    base()->flags = ERB_FLAG_DEBUG;
+    start = node_animation();
+    destroy = helper(types, 2, 0, 0, destroy_code, 3);
+    CHECK(load(), "a debug package loads");
+    call(destroy, 0, 0);
+    call(start, 0, 0);
+    CHECK(s_status == ERB_ERR_STALE_NODE && !erb_running(),
+          "a debug package stops on an animation of a destroyed node");
+
+    /* A node with no handle yet is not stale: only the report, even in a debug package. */
+    base()->flags = ERB_FLAG_DEBUG;
+    s_pkg.nodes[0].handle = ERB_NONE;
+    start = node_animation();
+    CHECK(load(), "a debug package with an empty handle loads");
+    call(start, 0, 0);
+    CHECK(s_status == ERB_OK && erb_running() && strstr(s_log, "animation not started") != NULL,
+          "an animation of a node with no handle yet is only reported");
 }
 
 static void test_vectors(void)
@@ -1002,6 +1078,7 @@ int main(void)
     test_lists();
     test_props();
     test_templates();
+    test_stale_animation_target();
     test_vectors();
     test_events_and_inputs();
     test_queries();

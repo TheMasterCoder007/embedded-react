@@ -34,14 +34,23 @@
  * @brief Capacity of the JS→ERNode* handle table.
  *
  * Should be >= the engine's ERUI_MAX_NODES so a handle exists for every node the engine
- * can allocate. Handle 0 is reserved as the invalid sentinel; usable handles are [1, N).
+ * can allocate. Slot 0 is reserved as the invalid sentinel; usable slots are [1, N).
  */
 #ifndef ER_BRIDGE_MAX_HANDLES
 #define ER_BRIDGE_MAX_HANDLES 1024
 #endif
 
-/** @brief Invalid handle sentinel returned by createNode on failure. */
+#if ER_BRIDGE_MAX_HANDLES > 65536
+#error "ER_BRIDGE_MAX_HANDLES must fit a handle (generation * ER_BRIDGE_MAX_HANDLES + slot) in a positive int32"
+#endif
+
+/** @brief Invalid handle sentinel returned by createNode on failure, and the slot no handle is bound to. */
 #define ER_BRIDGE_HANDLE_INVALID 0
+
+/**
+ * @brief A slot's generations cycle 1 to this, so a handle (generation * ER_BRIDGE_MAX_HANDLES + slot) stays positive.
+ */
+#define ER_BRIDGE_HANDLE_GENERATIONS 0x7FFFu
 
 /**
  * @brief Maximum number of concurrently scheduled timers (setTimeout + setInterval).
@@ -83,6 +92,9 @@
 /** @brief Slot -> node map. Index 0 is reserved (invalid handle); NULL means free. */
 static ERNode* s_node_by_handle[ER_BRIDGE_MAX_HANDLES];
 
+/** @brief Each slot's current generation, so a handle from before the slot was reused no longer matches. */
+static uint16_t s_handle_generation[ER_BRIDGE_MAX_HANDLES];
+
 /** @brief Stack of freed slot indices available for reuse. */
 static int32_t s_free_stack[ER_BRIDGE_MAX_HANDLES];
 
@@ -94,6 +106,9 @@ static int s_high_water = 1;
 
 /** @brief A createNode failure has been reported; the next success clears it, so a run of failures logs once. */
 static bool s_create_failure_logged = false;
+
+/** @brief A stale handle has been reported, so an app that keeps using one logs once. */
+static bool s_stale_handle_logged = false;
 
 /** @brief Context the bridge was installed into; used by the event trampoline. */
 static JSContext* s_bridge_ctx = NULL;
@@ -226,7 +241,7 @@ static void batch_leave(void)
  *
  * @param[in] node  Node to bind (must be non-NULL).
  *
- * @return Handle in [1, ER_BRIDGE_MAX_HANDLES), or ER_BRIDGE_HANDLE_INVALID if the table is full.
+ * @return Positive handle, or ER_BRIDGE_HANDLE_INVALID if the table is full.
  */
 static int32_t handle_alloc(ERNode* node)
 {
@@ -244,22 +259,50 @@ static int32_t handle_alloc(ERNode* node)
         return ER_BRIDGE_HANDLE_INVALID;
     }
     s_node_by_handle[slot] = node;
-    return slot;
+    s_handle_generation[slot] = (uint16_t)(s_handle_generation[slot] % ER_BRIDGE_HANDLE_GENERATIONS + 1u);
+    return (int32_t)s_handle_generation[slot] * ER_BRIDGE_MAX_HANDLES + slot;
 }
 
 /**
- * @brief Releases a handle slot, returning it to the free stack.
+ * @brief Releases a slot, returning it to the free stack.
  *
- * @param[in] handle  Handle previously returned by handle_alloc().
+ * @param[in] slot  Slot to release.
  */
-static void handle_free(int32_t handle)
+static void slot_free(int32_t slot)
 {
-    if (handle <= 0 || handle >= ER_BRIDGE_MAX_HANDLES || s_node_by_handle[handle] == NULL)
+    if (slot <= 0 || slot >= ER_BRIDGE_MAX_HANDLES || s_node_by_handle[slot] == NULL)
     {
         return;
     }
-    s_node_by_handle[handle] = NULL;
-    s_free_stack[s_free_top++] = handle;
+    s_node_by_handle[slot] = NULL;
+    s_free_stack[s_free_top++] = slot;
+}
+
+/**
+ * @brief Finds the slot a handle is bound to. A handle whose node was destroyed finds nothing, even once its slot
+ *        holds another node, and the first such handle is logged.
+ *
+ * @param[in] handle  Handle to resolve. 0 (no node) and negative values (a create that failed) are not stale.
+ *
+ * @return The slot, or ER_BRIDGE_HANDLE_INVALID.
+ */
+static int32_t handle_slot(int32_t handle)
+{
+    if (handle <= 0)
+    {
+        return ER_BRIDGE_HANDLE_INVALID;
+    }
+    const int32_t slot = handle % ER_BRIDGE_MAX_HANDLES;
+    if (s_node_by_handle[slot] && s_handle_generation[slot] == handle / ER_BRIDGE_MAX_HANDLES)
+    {
+        return slot;
+    }
+    if (!s_stale_handle_logged)
+    {
+        fprintf(stderr, "NativeUI: stale node handle; the call was skipped\n");
+        s_stale_handle_logged = true;
+    }
+    return ER_BRIDGE_HANDLE_INVALID;
 }
 
 /**
@@ -267,15 +310,11 @@ static void handle_free(int32_t handle)
  *
  * @param[in] handle  Handle to resolve.
  *
- * @return Bound node, or NULL if the handle is out of range or unbound.
+ * @return Bound node, or NULL if the handle is invalid or stale.
  */
 static ERNode* handle_node(int32_t handle)
 {
-    if (handle <= 0 || handle >= ER_BRIDGE_MAX_HANDLES)
-    {
-        return NULL;
-    }
-    return s_node_by_handle[handle];
+    return s_node_by_handle[handle_slot(handle)];
 }
 
 /**
@@ -3078,31 +3117,31 @@ ER_BRIDGE_MARSHAL_FN(js_create_node)
 }
 
 /**
- * @brief Finds the bridge handle currently mapped to a node, or ER_BRIDGE_HANDLE_INVALID.
+ * @brief Finds the slot currently mapped to a node, or ER_BRIDGE_HANDLE_INVALID.
  *
  * Scans only the live high-water range of the (small) handle table. Used to reclaim the handle of a node
  * reached by walking the scene tree — a deleted subtree's descendants never pass through js_destroy_node.
  */
-static int32_t handle_of_node(const ERNode* node)
+static int32_t slot_of_node(const ERNode* node)
 {
     if (!node)
     {
         return ER_BRIDGE_HANDLE_INVALID;
     }
-    for (int32_t h = 1; h < s_high_water; h++)
+    for (int32_t slot = 1; slot < s_high_water; slot++)
     {
-        if (s_node_by_handle[h] == node)
+        if (s_node_by_handle[slot] == node)
         {
-            return h;
+            return slot;
         }
     }
     return ER_BRIDGE_HANDLE_INVALID;
 }
 
 /** @brief Releases a node's JS event-handler refs and frees its bridge handle slot. */
-static void free_node_handle(JSContext* ctx, int32_t h)
+static void free_node_slot(JSContext* ctx, int32_t slot)
 {
-    if (h == ER_BRIDGE_HANDLE_INVALID)
+    if (slot == ER_BRIDGE_HANDLE_INVALID)
     {
         return;
     }
@@ -3110,14 +3149,14 @@ static void free_node_handle(JSContext* ctx, int32_t h)
     {
         for (uint32_t t = 0; t < ER_EVENT_TYPE_COUNT_; t++)
         {
-            JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)h * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
+            JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)slot * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
         }
         for (uint32_t q = 0; q < ER_RESPONDER_QUERY_COUNT; q++)
         {
-            JS_SetPropertyUint32(ctx, s_query_handlers, (uint32_t)h * ER_RESPONDER_QUERY_COUNT + q, JS_UNDEFINED);
+            JS_SetPropertyUint32(ctx, s_query_handlers, (uint32_t)slot * ER_RESPONDER_QUERY_COUNT + q, JS_UNDEFINED);
         }
     }
-    handle_free(h);
+    slot_free(slot);
 }
 
 /**
@@ -3142,7 +3181,7 @@ static void destroy_node_and_subtree(JSContext* ctx, ERNode* node)
         destroy_node_and_subtree(ctx, child);
         child = next;
     }
-    free_node_handle(ctx, handle_of_node(node));
+    free_node_slot(ctx, slot_of_node(node));
     er_node_destroy(node);
 }
 
@@ -3222,8 +3261,14 @@ ER_BRIDGE_MARSHAL_FN(js_insert_before)
     }
     ERNode* parent = node_arg(ctx, argv[0]);
     ERNode* child = node_arg(ctx, argv[1]);
-    ERNode* before = node_arg(ctx, argv[2]); /* NULL handle → append (handled by the engine). */
-    if (parent && child)
+    int32_t before_handle = 0;
+    if (JS_ToInt32(ctx, &before_handle, argv[2]) != 0)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* before = handle_node(before_handle); /* NULL handle → append (handled by the engine). */
+    /* A stale sibling is not "no sibling": skip, rather than move the child to the end. */
+    if (parent && child && (before || before_handle <= 0))
     {
         er_tree_insert_before(parent, child, before);
     }
@@ -3984,7 +4029,8 @@ ER_BRIDGE_MARSHAL_FN(js_set_event)
     {
         return JS_UNDEFINED;
     }
-    ERNode* node = handle_node(handle);
+    const int32_t slot = handle_slot(handle);
+    ERNode* node = s_node_by_handle[slot];
     if (!node)
     {
         return JS_UNDEFINED;
@@ -4006,7 +4052,7 @@ ER_BRIDGE_MARSHAL_FN(js_set_event)
 
     if (is_event)
     {
-        const uint32_t key = (uint32_t)handle * ER_EVENT_TYPE_COUNT_ + (uint32_t)type;
+        const uint32_t key = (uint32_t)slot * ER_EVENT_TYPE_COUNT_ + (uint32_t)type;
         if (JS_IsFunction(ctx, argv[2]))
         {
             JS_SetPropertyUint32(ctx, s_event_handlers, key, JS_DupValue(ctx, argv[2]));
@@ -4023,7 +4069,7 @@ ER_BRIDGE_MARSHAL_FN(js_set_event)
     {
         /* Responder queries ride the same prop path as events (host-config routes every on* prop
            here), but land in the engine's query table and their own registry. */
-        const uint32_t key = (uint32_t)handle * ER_RESPONDER_QUERY_COUNT + (uint32_t)query;
+        const uint32_t key = (uint32_t)slot * ER_RESPONDER_QUERY_COUNT + (uint32_t)query;
         if (JS_IsFunction(ctx, argv[2]))
         {
             JS_SetPropertyUint32(ctx, s_query_handlers, key, JS_DupValue(ctx, argv[2]));
@@ -4886,6 +4932,7 @@ void er_bridge_install(JSContext* ctx)
     s_free_top = 0;
     s_high_water = 1;
     s_create_failure_logged = false;
+    s_stale_handle_logged = false;
 
     /* Start every context with an empty timer pool (statics persist across re-install in tests). */
     for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)

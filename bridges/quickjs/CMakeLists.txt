@@ -187,6 +187,29 @@ if (ER_BRIDGE_QUICKJS_CONTAINERTEST)
 endif ()
 
 # ---------------------------------------------------------------------------
+# Node handle test: a handle whose node was destroyed never reaches the node that reused its slot. Needs
+# the parser.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_HANDLETEST "Build the node handle test" ON)
+
+if (ER_BRIDGE_QUICKJS_LITE AND ER_BRIDGE_QUICKJS_HANDLETEST)
+    message(STATUS "er-bridge-quickjs-handletest skipped (ER_BRIDGE_QUICKJS_LITE build has no parser)")
+    set(ER_BRIDGE_QUICKJS_HANDLETEST OFF)
+endif ()
+
+if (ER_BRIDGE_QUICKJS_HANDLETEST)
+    add_executable(er-bridge-quickjs-handletest handletest_main.c)
+    target_link_libraries(er-bridge-quickjs-handletest PRIVATE er-bridge-quickjs)
+    target_include_directories(er-bridge-quickjs-handletest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../engine/scene
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../engine/core)
+
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_test(NAME node-handles COMMAND er-bridge-quickjs-handletest)
+    endif ()
+endif ()
+
+# ---------------------------------------------------------------------------
 # Error screen test: a JS exception nothing caught shows the engine's error screen. Needs the parser.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_ERRORTEST "Build the error screen test" ON)

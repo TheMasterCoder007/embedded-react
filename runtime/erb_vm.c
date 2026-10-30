@@ -1248,7 +1248,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 ERNode* parent = erb_rt_node(&registers[operand_b]);
                 ERNode* before = operand_c == operand_b ? NULL : erb_rt_node(&registers[operand_c]);
                 next = pc + 2u;
-                if (!parent)
+                if (!parent || (operand_c != operand_b && !before))
                 {
                     erb_rt_set_node(&registers[operand_a], NULL);
                     status = stale();
@@ -1349,6 +1349,10 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 const uint8_t to_first = ERB_EXT_OPERAND(extension);
                 registers[operand_a] = (int32_t)erb_rt_anim_start(
                     operand_bx, ERB_LOW16(extension), to_first == ERB_NO_REGISTER ? NULL : &registers[to_first]);
+                if (g_erb.faulted)
+                {
+                    return g_erb.error.status;
+                }
                 if (registers[operand_a] == 0)
                 {
                     report("too many running animations; one didn't start (raise the anims region)");

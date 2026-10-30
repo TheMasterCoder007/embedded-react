@@ -458,10 +458,10 @@ describe('animated bindings are released when a prop stops being animated', () =
     expect(calls.setProps[0].p.value).toBe(42);
   });
 
-  it('a recycled handle is bound from scratch, not assumed to be bound already', () => {
+  it('a deleted descendant leaves no record, so its handle would bind from scratch', () => {
     // React hands removeChild only the TOP of a deleted subtree; destroyNode reclaims the descendants
-    // in C, so an inner node's handle returns to the free list without React ever naming it. A record
-    // left on that handle would tell the next node to claim it that it was already bound.
+    // in C. Their records go when React detaches them, or the map would keep one per destroyed node,
+    // and the handle would look already-bound if its generation ever wrapped back round to it.
     const v = new FakeAnimatedValue();
     const update = mount(el('View', {}, el('View', {style: {opacity: v}})));
     const inner = v.bound[0].h;
