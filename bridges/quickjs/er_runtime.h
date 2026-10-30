@@ -108,8 +108,8 @@ typedef struct
                                                 below the real stack size so deep React recursion raises a
                                                 JS error instead of running off the end of it. */
     size_t memory_limit;                       /**< JS_SetMemoryLimit value: hard cap on the JS heap so a runaway
-                                                app fails with a JS out-of-memory error (caught by the error
-                                                overlay) instead of exhausting the shared system heap. 0 = no cap.
+                                                app fails with a JS out-of-memory error (shown on the error
+                                                screen) instead of exhausting the shared system heap. 0 = no cap.
                                                 On an MCU, set to your JS arena size. Counted in the same bytes
                                                 as the GC, so it depends on a working `malloc_functions`
                                                 js_malloc_usable_size (see above). */
@@ -324,7 +324,7 @@ uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_le
  * @param[out] out_len  Receives the bytecode byte length (0 on failure).
  * @param[in]  strip    true → omit the embedded source text + debug tables (device/release: ~8x
  *                      smaller blob, but stack traces lose line numbers). false → keep them (dev
- *                      hot-reload, where the error overlay wants line numbers).
+ *                      hot-reload, where the error screen's stack wants line numbers).
  *
  * @return malloc'd bytecode buffer (er_runtime_free), or NULL on a compile error.
  */
@@ -424,11 +424,10 @@ void er_runtime_run_gc(void);
 const char* er_runtime_last_error(void);
 
 /**
- * @brief Renders a full-screen red message panel (RN-redbox) into the current scene.
+ * @brief Puts the engine's error screen up with a `title` / `body` / optional `hint`.
  *
- * Resets the engine scene and builds a `title` / `body` / optional `hint` screen via the bridge; the
- * caller's next commit paints it. Requires a live context + a render backend. The portable building
- * block for both JS-error and config-load-failure screens — a device shows the same panel as desktop.
+ * The caller's next commit paints it. It needs no JS context, so it works when the context is broken.
+ * Used for both JS errors and config-load failures; a successful load or er_runtime_reset() takes it down.
  *
  * @param[in] title  Heading (NULL → "Error").
  * @param[in] body   Detail text (NULL → empty).
@@ -437,10 +436,10 @@ const char* er_runtime_last_error(void);
 void er_runtime_show_message(const char* title, const char* body, const char* hint);
 
 /**
- * @brief Renders an on-screen error overlay (RN-redbox) from the last JS error into the current scene.
+ * @brief Puts the error screen up for the last JS error: its message, then its stack.
  *
- * Convenience wrapper over er_runtime_show_message for the "JS error" case. Useful after a failed
- * load/reload.
+ * A JS exception nothing caught (a handler, timer, promise job, animation callback or render that threw)
+ * shows it by itself. Call it after a failed load or reload.
  */
 void er_runtime_show_error(void);
 

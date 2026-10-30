@@ -65,6 +65,7 @@ add_library(er_engine STATIC
     "${E}/layout/layout_engine.c"
     "${E}/rendering/arc.c"
     "${E}/rendering/canvas_bindings.c"
+    "${E}/rendering/error_screen.c"
     "${E}/rendering/gradient.c"
     "${E}/rendering/image_registry.c"
     "${E}/rendering/image_scaler.c"

@@ -100,6 +100,10 @@ target_link_libraries(test_shadow_retire_damage PRIVATE embedded-react)
 target_include_directories(test_shadow_retire_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_shadow_retire_damage COMMAND test_shadow_retire_damage)
 
+add_executable(test_error_screen test_error_screen.c)
+target_link_libraries(test_error_screen PRIVATE embedded-react)
+add_test(NAME rendering_error_screen COMMAND test_error_screen)
+
 add_executable(test_multibuffer test_multibuffer.c)
 target_link_libraries(test_multibuffer PRIVATE embedded-react)
 add_test(NAME rendering_multibuffer COMMAND test_multibuffer)

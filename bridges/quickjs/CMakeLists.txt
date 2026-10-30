@@ -99,7 +99,6 @@ add_library(er-bridge-quickjs STATIC
         native_ui_bridge.c
         er_runtime.c
         er_js_alloc.c
-        overlay/message_overlay.qbc.c # precompiled error-overlay app (regen: see overlay/message_overlay.js)
 )
 
 # ---------------------------------------------------------------------------
@@ -184,6 +183,26 @@ if (ER_BRIDGE_QUICKJS_CONTAINERTEST)
     if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         enable_testing()
         add_test(NAME container-load COMMAND er-bridge-quickjs-containertest)
+    endif ()
+endif ()
+
+# ---------------------------------------------------------------------------
+# Error screen test: a JS exception nothing caught shows the engine's error screen. Needs the parser.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_ERRORTEST "Build the error screen test" ON)
+
+if (ER_BRIDGE_QUICKJS_LITE AND ER_BRIDGE_QUICKJS_ERRORTEST)
+    message(STATUS "er-bridge-quickjs-errortest skipped (ER_BRIDGE_QUICKJS_LITE build has no parser)")
+    set(ER_BRIDGE_QUICKJS_ERRORTEST OFF)
+endif ()
+
+if (ER_BRIDGE_QUICKJS_ERRORTEST)
+    add_executable(er-bridge-quickjs-errortest errortest_main.c)
+    target_link_libraries(er-bridge-quickjs-errortest PRIVATE er-bridge-quickjs)
+
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_test(NAME error-screen COMMAND er-bridge-quickjs-errortest)
     endif ()
 endif ()
 

@@ -17,6 +17,7 @@
 #include "arc.h"
 #include "arc_widget.h"
 #include "er_damage_internal.h"
+#include "er_error_screen.h"
 #include "er_limits.h"
 #include "er_node_internal.h"
 #include "er_perf.h"
@@ -5032,8 +5033,64 @@ static void render_slice_job(int worker, void* arg)
     er_pop_clip_rect();
 }
 
+/**
+ * @brief er_commit() while the error screen is up: paints it into each display buffer once, in strips on a
+ *        banded backend, and reports the whole screen as this commit's repaint.
+ */
+static void commit_error_screen(void)
+{
+    if (s_force_full_repaint)
+    {
+        debt_reset_all_full();
+        s_force_full_repaint = false;
+    }
+    ERDamageSlot* debt = &s_buf_debt[s_display_buffer_count > 1 ? s_cur_buf : 0];
+    if (!debt->full)
+        return;
+
+    int screen_w = 0;
+    int screen_h = 0;
+    er_error_screen_size(&screen_w, &screen_h);
+    const EmbeddedRenderBackend* backend = er_backend();
+    if (backend && backend->band_height > 0)
+    {
+        for (int strip_top = 0; strip_top < screen_h; strip_top += backend->band_height)
+        {
+            const int strip_h =
+                screen_h - strip_top < backend->band_height ? screen_h - strip_top : backend->band_height;
+            if (backend->band_begin)
+                backend->band_begin(0, strip_top, screen_w, strip_h, backend->ctx);
+            er_set_band(strip_top, strip_h);
+            er_error_screen_draw();
+            if (backend->band_flush)
+                backend->band_flush(backend->ctx);
+        }
+        er_set_band(0, 0);
+    }
+    else
+    {
+        er_error_screen_draw();
+    }
+
+    debt->full = false;
+    er_damage_set_clear(&debt->set);
+    s_dirty_rect.x = 0;
+    s_dirty_rect.y = 0;
+    s_dirty_rect.w = screen_w;
+    s_dirty_rect.h = screen_h;
+    s_has_dirty = screen_w > 0 && screen_h > 0;
+    er_damage_set_clear(&s_last_paint_set);
+    er_damage_set_add(&s_last_paint_set, 0, 0, screen_w, screen_h);
+}
+
 void er_commit(void)
 {
+    if (er_error_screen_active())
+    {
+        commit_error_screen();
+        return;
+    }
+
     er_input_flush_moves();
 
     if (s_root_tag == ER_INVALID_TAG)

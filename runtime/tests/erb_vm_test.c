@@ -19,6 +19,7 @@
  * calls, text, lists, props, templates, events, timers, effects, animations, inputs, reloads and faults.
  */
 
+#include "er_error_screen.h"
 #include "er_node_internal.h"
 #include "erb_internal.h"
 #include "erb_package.h"
@@ -734,7 +735,8 @@ static void test_timers_and_effects(void)
         tpkg_set_code(&s_pkg, F_EFFECT, types, 2, effect, 5);
     }
     CHECK(!load() && s_error.status == ERB_ERR_UPDATE_LOOP, "more than 50 update passes is a fault");
-    CHECK(!erb_running() && er_node_in_use_count() == 3, "and the error screen replaces the app");
+    CHECK(!erb_running() && er_node_in_use_count() == 0, "and the app is torn down");
+    CHECK(er_error_screen_active(), "for the error screen");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -879,7 +881,8 @@ static void test_faults(void)
     const ErbError* error = erb_last_error();
     CHECK(error->status == ERB_ERR_TRAP && error->name && strcmp(error->name, "boom") == 0, "with the trap's reason");
     CHECK(error->file && strcmp(error->file, "App.jsx") == 0 && error->line == 41, "and the source line");
-    CHECK(er_node_in_use_count() == 3, "the next tick shows the error screen");
+    CHECK(er_error_screen_active(), "the next tick shows the error screen");
+    CHECK(load() && !er_error_screen_active(), "and a good load takes it down");
 
     /* A timer that can run past the budget is counted, and stopped when it does. */
     base();

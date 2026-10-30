@@ -9,17 +9,17 @@ from [Engine and backends](../concepts/engine-and-backends.md) and the
 
 ## Folders
 
-| Folder       | What lives there                                                                                                                                                                   |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `include/`   | The public headers: `er_scene.h` (the scene API), `native_renderer.h` (the backend interface), `er_perf.h` and `perf_overlay.h` (instrumentation), `font_bitmap.h`, `er_version.h` |
-| `core/`      | Backend glue, the frame tick, time advance, the multi-core fork/join                                                                                                               |
-| `scene/`     | Node pool, the tree, props, dirty tracking, the damage set, render-pass orchestration, hit-testing                                                                                 |
-| `layout/`    | The Yoga-compatible flexbox solver                                                                                                                                                 |
-| `rendering/` | Rounded rectangles, shadows, transforms, gradients, image scaling, vectors, the arc rasteriser, the perf overlay                                                                   |
-| `text/`      | UTF-8 decoding, glyph rasterisation, multi-line layout                                                                                                                             |
-| `animation/` | `Animated.Value`, timing/spring/decay curves, the native driver                                                                                                                    |
-| `font/`      | The font registry, the runtime font-blob loader and the built-in font data                                                                                                         |
-| `tests/`     | The CTest suites. See [Testing](./testing.md)                                                                                                                                      |
+| Folder       | What lives there                                                                                                                                                                                                           |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `include/`   | The public headers: `er_scene.h` (the scene API), `native_renderer.h` (the backend interface), `er_perf.h` and `perf_overlay.h` (instrumentation), `er_error_screen.h` (the error screen), `font_bitmap.h`, `er_version.h` |
+| `core/`      | Backend glue, the frame tick, time advance, the multi-core fork/join                                                                                                                                                       |
+| `scene/`     | Node pool, the tree, props, dirty tracking, the damage set, render-pass orchestration, hit-testing                                                                                                                         |
+| `layout/`    | The Yoga-compatible flexbox solver                                                                                                                                                                                         |
+| `rendering/` | Rounded rectangles, shadows, transforms, gradients, image scaling, vectors, the arc rasteriser, the perf overlay                                                                                                           |
+| `text/`      | UTF-8 decoding, glyph rasterisation, multi-line layout                                                                                                                                                                     |
+| `animation/` | `Animated.Value`, timing/spring/decay curves, the native driver                                                                                                                                                            |
+| `font/`      | The font registry, the runtime font-blob loader and the built-in font data                                                                                                                                                 |
+| `tests/`     | The CTest suites. See [Testing](./testing.md)                                                                                                                                                                              |
 
 ```bash
 cmake -S engine -B build -DBUILD_TESTING=ON

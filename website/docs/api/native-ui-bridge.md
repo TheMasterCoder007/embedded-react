@@ -76,8 +76,8 @@ for (;;) {
 | `er_runtime_reset()`                                                                | Tears down the context and rebuilds it, for a full reload                                                                                                                                     |
 | `er_runtime_clear_persist()`                                                        | Forgets the persisted-state store                                                                                                                                                             |
 | `er_runtime_set_wall_clock(ms)`                                                     | Sets what `Date.now()` returns, from an RTC or NTP                                                                                                                                            |
-| `er_runtime_show_error()`, `er_runtime_last_error()`                                | Draw the on-screen redbox for the last JavaScript error; return its message and stack                                                                                                         |
-| `er_runtime_show_message(title, body, hint)`                                        | The same red panel with your own text, e.g. for a config that failed to load                                                                                                                  |
+| `er_runtime_show_error()`, `er_runtime_last_error()`                                | Show the error screen for the last JavaScript error; return its message and stack                                                                                                             |
+| `er_runtime_show_message(title, body, hint)`                                        | The same error screen with your own text, e.g. for a config that failed to load                                                                                                               |
 | `er_runtime_run_gc()`, `er_runtime_gc_threshold()`, `er_runtime_gc_accounting_ok()` | Collect on demand, read the live threshold, and check that the allocator's size accounting works                                                                                              |
 | `er_runtime_set_gc_threshold(bytes)`                                                | Change the GC floor at runtime, e.g. higher while an animation runs                                                                                                                           |
 | `er_runtime_shutdown()`                                                             | Frees the context and runtime; the engine and backend are left as they are                                                                                                                    |
@@ -106,7 +106,7 @@ opt-in per host through `ErRuntimeConfig.extra_intrinsics` (`ER_JS_INTRINSIC_DAT
 `_TYPED_ARRAYS`, `_WEAK_REF`, `_BIGINT`, `_EVAL`).
 
 Firmware that only runs precompiled bytecode can drop the JavaScript parser with
-`-DER_BRIDGE_QUICKJS_LITE=ON`, about 60 KB of flash; the error overlay still works there.
+`-DER_BRIDGE_QUICKJS_LITE=ON`, about 60 KB of flash; the error screen still works there, since the engine draws it.
 
 ## Heap accounting
 

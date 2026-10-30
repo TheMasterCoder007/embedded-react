@@ -26,8 +26,30 @@ extern "C"
 #endif
 
     /*------------------------------------------------------------------------------------------------------------------
+     - Types
+     -----------------------------------------------------------------------------------------------------------------*/
+
+    /**
+     * @brief Receives a JS exception nothing caught: a handler, timer, promise job, animation callback or
+     *        render that threw.
+     *
+     * @param[in] ctx        The context it was thrown in.
+     * @param[in] exception  The thrown value; borrowed, so the handler must not free it.
+     * @param[in] where      What threw, such as "timer callback".
+     */
+    typedef void (*ErBridgeUncaughtFn)(JSContext* ctx, JSValueConst exception, const char* where);
+
+    /*------------------------------------------------------------------------------------------------------------------
      - Functions: Public
      -----------------------------------------------------------------------------------------------------------------*/
+
+    /**
+     * @brief Sets what receives the JS exceptions nothing caught. er_runtime_init() sets one that shows the
+     *        error screen; NULL prints them to stderr.
+     *
+     * @param[in] handler  The handler, or NULL.
+     */
+    void er_bridge_set_uncaught_handler(ErBridgeUncaughtFn handler);
 
     /**
      * @brief Installs the NativeUI bridge object into a QuickJS global scope.

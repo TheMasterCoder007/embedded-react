@@ -1,7 +1,7 @@
 # The QuickJS bridge as an ESP-IDF component — the same sources the desktop links, compiled from
 # EMBEDDED_REACT_SRC_DIR (set by the top-level CMakeLists):
 #   native_ui_bridge.c — the NativeUI surface over er_scene.h
-#   er_runtime.c       — the portable QuickJS host core (context/globals/load/pump/reset/overlay +
+#   er_runtime.c       — the portable QuickJS host core (context/globals/load/pump/reset/error screen +
 #                        the config-container loader main.c uses, and the hot-reload apply step)
 #   er_js_alloc.c      — default JS-heap allocator with working GC size accounting (unused here: main.c
 #                        supplies its own PSRAM allocator, but er_runtime's boot-time probe lives with it)
@@ -19,7 +19,6 @@ idf_component_register(
     SRCS "${BRIDGE_DIR}/native_ui_bridge.c"
          "${BRIDGE_DIR}/er_runtime.c"
          "${BRIDGE_DIR}/er_js_alloc.c"
-         "${BRIDGE_DIR}/overlay/message_overlay.qbc.c" # precompiled error overlay (parser-less safe)
          "${RUNTIME_DIR}/er_container.c"
          "${RUNTIME_DIR}/er_assets.c"
          "${RUNTIME_DIR}/er_assets_heap.c"

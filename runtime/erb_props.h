@@ -48,7 +48,6 @@ enum
 /** @brief Prop values the engine has no name for. */
 #define ERB_FONT_WEIGHT_BOLD 1u
 #define ERB_OPACITY_OPAQUE 255u /**< The engine's opacity byte at 1. */
-#define ERB_FULL_PERCENT 100.0f
 
 /** @brief One prop. */
 typedef struct

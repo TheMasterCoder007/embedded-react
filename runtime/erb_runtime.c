@@ -25,6 +25,7 @@
  * error screen, so the engine is never reset from inside its own dispatch.
  */
 
+#include "er_error_screen.h"
 #include "erb_internal.h"
 #include "erb_props.h"
 
@@ -44,15 +45,18 @@
 /** @brief s_tree_parent of a tree's root. */
 #define TREE_NO_PARENT UINT8_MAX
 
-/* The error screen: a dark red panel with a white title and a pale red reason. */
-#define ERROR_SCREEN_BACKGROUND 0xFF7F1D1Du
-#define ERROR_SCREEN_TITLE_COLOR 0xFFFFFFFFu
-#define ERROR_SCREEN_REASON_COLOR 0xFFFECACAu
-#define ERROR_SCREEN_PADDING 16
-#define ERROR_SCREEN_GAP 8
-#define ERROR_SCREEN_TITLE_SIZE 20
-#define ERROR_SCREEN_REASON_SIZE 14
-#define ERROR_SCREEN_TITLE "App stopped"
+/** @brief The error screen's titles. */
+#define ERROR_TITLE_LOAD "App didn't load"
+#define ERROR_TITLE_RUN "App stopped"
+
+/** @brief Longest reason, amounts or location line, with its NUL. */
+#define ERROR_LINE_SIZE 128u
+
+/** @brief Longest amount written with its separators and unit, with its NUL. */
+#define AMOUNT_SIZE 24u
+
+/** @brief An amount's digits are grouped in threes. */
+#define AMOUNT_GROUP_DIGITS 3u
 
 /*----------------------------------------------------------------------------------------------------------------------
  - State
@@ -87,6 +91,8 @@ static uint32_t s_queue_head;
 static uint32_t s_queue_count;
 static uint32_t s_queue_effects; /**< Effects at the front of the queue, run before any other event. */
 static bool s_fault_pending;
+static uint16_t s_screen_w; /**< The panel size from the last erb_load(), for the error screen. */
+static uint16_t s_screen_h;
 static uint16_t s_anim_generation;
 static uint16_t s_tree[ERB_MAX_ANIM_TREE];
 static uint8_t s_tree_parent[ERB_MAX_ANIM_TREE];
@@ -185,7 +191,7 @@ static const char* resource_name(uint16_t resource)
     switch (resource)
     {
         case ERB_RESOURCE_ARENA:
-            return "arena bytes";
+            return "arena";
         case ERB_RESOURCE_NODES:
             return "nodes";
         case ERB_RES_VECTOR_NODES:
@@ -205,26 +211,74 @@ static const char* resource_name(uint16_t resource)
         case ERB_RES_EXTRA_GLYPHS:
             return "extra glyphs";
         default:
-            return "of an unknown resource";
+            return "an unknown resource";
     }
 }
 
-size_t erb_error_message(const ErbError* error, char* buffer, size_t capacity)
+/**
+ * @brief The length snprintf() wrote, cut to what fits.
+ *
+ * @param written   What snprintf() returned.
+ * @param capacity  The buffer's size.
+ */
+static size_t written_length(int written, size_t capacity)
 {
-    if (!buffer || capacity == 0u)
+    if (written < 0 || capacity == 0u)
     {
         return 0u;
     }
+    return (size_t)written < capacity ? (size_t)written : capacity - 1u;
+}
+
+/**
+ * @brief Writes @p amount with its digits grouped by commas, and " B" when it counts bytes.
+ *
+ * @param[in]  amount  The amount.
+ * @param[in]  bytes   true when it counts bytes.
+ * @param[out] buffer  Receives the text; AMOUNT_SIZE bytes.
+ */
+static void format_amount(uint32_t amount, bool bytes, char* buffer)
+{
+    char digits[AMOUNT_SIZE];
+    const size_t digit_count =
+        written_length(snprintf(digits, sizeof(digits), "%lu", (unsigned long)amount), sizeof(digits));
+    size_t length = 0u;
+    for (size_t digit = 0u; digit < digit_count; digit++)
+    {
+        if (digit > 0u && (digit_count - digit) % AMOUNT_GROUP_DIGITS == 0u)
+        {
+            buffer[length++] = ',';
+        }
+        buffer[length++] = digits[digit];
+    }
+    buffer[length] = '\0';
+    if (bytes)
+    {
+        strcat(buffer, " B");
+    }
+}
+
+/**
+ * @brief Writes the needed and available amounts of @p error, for the failures that have them.
+ *
+ * @return The length written, or 0 when @p error has no amounts.
+ */
+static size_t error_amounts(const ErbError* error, char* buffer, size_t capacity)
+{
+    char needed[AMOUNT_SIZE];
+    char available[AMOUNT_SIZE];
     int written;
     switch (error->status)
     {
         case ERB_ERR_TOO_BIG:
+            format_amount(error->needed, error->resource == ERB_RESOURCE_ARENA, needed);
+            format_amount(error->available, error->resource == ERB_RESOURCE_ARENA, available);
             written = snprintf(buffer,
                                capacity,
-                               "needs %lu %s, firmware reserves %lu",
-                               (unsigned long)error->needed,
+                               "%s: needs %s, firmware reserves %s",
                                resource_name(error->resource),
-                               (unsigned long)error->available);
+                               needed,
+                               available);
             break;
         case ERB_ERR_ENGINE_ABI:
             written = snprintf(buffer,
@@ -237,45 +291,102 @@ size_t erb_error_message(const ErbError* error, char* buffer, size_t capacity)
         case ERB_ERR_NO_PANEL:
             written = snprintf(buffer,
                                capacity,
-                               "no layout for %lu x %lu",
+                               "this screen is %lu x %lu",
                                (unsigned long)error->needed,
                                (unsigned long)error->available);
             break;
         case ERB_ERR_STACK:
-            written = snprintf(buffer,
-                               capacity,
-                               "stack too deep: needs %lu cells, the arena has %lu",
-                               (unsigned long)error->needed,
-                               (unsigned long)error->available);
+            format_amount(error->needed, false, needed);
+            format_amount(error->available, false, available);
+            written = snprintf(buffer, capacity, "needs %s cells, the arena has %s", needed, available);
             break;
         default:
-            written = snprintf(buffer,
-                               capacity,
-                               "%s%s%s",
-                               erb_status_str(error->status),
-                               error->name ? ": " : "",
-                               error->name ? error->name : "");
+            written = 0;
+            if (capacity > 0u)
+            {
+                buffer[0] = '\0';
+            }
             break;
     }
-    size_t length = written < 0 ? 0u : (size_t)written < capacity ? (size_t)written : capacity - 1u;
-    if (length + 1u < capacity && error->file)
+    return written_length(written, capacity);
+}
+
+/**
+ * @brief Writes where @p error happened: the source line from the debug table, or the function and offset.
+ *
+ * @return The length written, or 0 when it happened outside the app's code.
+ */
+static size_t error_location(const ErbError* error, char* buffer, size_t capacity)
+{
+    int written = 0;
+    if (error->file)
     {
-        written = snprintf(buffer + length, capacity - length, " at %s:%lu", error->file, (unsigned long)error->line);
+        written = snprintf(buffer, capacity, "%s:%lu", error->file, (unsigned long)error->line);
     }
-    else if (length + 1u < capacity && error->function != ERB_NONE)
+    else if (error->function != ERB_NONE)
     {
-        written = snprintf(buffer + length,
-                           capacity - length,
-                           " in function %u at %lu (build %08lx)",
+        written = snprintf(buffer,
+                           capacity,
+                           "function %u at %lu (build %08lx)",
                            (unsigned)error->function,
                            (unsigned long)error->offset,
                            (unsigned long)error->build_id);
     }
-    else
+    else if (capacity > 0u)
     {
-        written = 0;
+        buffer[0] = '\0';
     }
-    length += written < 0 ? 0u : (size_t)written < capacity - length ? (size_t)written : capacity - length - 1u;
+    return written_length(written, capacity);
+}
+
+/** @brief Writes the reason for @p error, with the module or trap message it names. */
+static size_t error_reason(const ErbError* error, char* buffer, size_t capacity)
+{
+    return written_length(snprintf(buffer,
+                                   capacity,
+                                   "%s%s%s",
+                                   erb_status_str(error->status),
+                                   error->name ? ": " : "",
+                                   error->name ? error->name : ""),
+                          capacity);
+}
+
+size_t erb_error_message(const ErbError* error, char* buffer, size_t capacity)
+{
+    if (!buffer || capacity == 0u)
+    {
+        return 0u;
+    }
+    size_t length;
+    switch (error->status)
+    {
+        case ERB_ERR_TOO_BIG:
+        case ERB_ERR_ENGINE_ABI:
+            length = error_amounts(error, buffer, capacity);
+            break;
+        case ERB_ERR_NO_PANEL:
+            length = written_length(snprintf(buffer,
+                                             capacity,
+                                             "no layout for %lu x %lu",
+                                             (unsigned long)error->needed,
+                                             (unsigned long)error->available),
+                                    capacity);
+            break;
+        case ERB_ERR_STACK:
+            length = written_length(snprintf(buffer, capacity, "stack too deep: "), capacity);
+            length += error_amounts(error, buffer + length, capacity - length);
+            break;
+        default:
+            length = error_reason(error, buffer, capacity);
+            break;
+    }
+    char location[ERROR_LINE_SIZE];
+    if (length + 1u < capacity && error_location(error, location, sizeof(location)) > 0u)
+    {
+        length += written_length(
+            snprintf(buffer + length, capacity - length, "%s%s", error->file ? " at " : " in ", location),
+            capacity - length);
+    }
     return length;
 }
 
@@ -1636,8 +1747,9 @@ static ErbStatus start(const ErbConfig* config)
     memset(&g_erb.error, 0, sizeof(g_erb.error));
     g_erb.error.function = ERB_NONE;
 
-    /* Step 7: an empty scene (an error screen may be up), then the asset pack, registered in place. It passed its
+    /* Step 7: an empty scene with no error screen up, then the asset pack, registered in place. It passed its
      * check-only pass, so this can't fail part way. */
+    er_error_screen_hide();
     er_reset();
     er_image_clear();
     er_font_clear();
@@ -1697,6 +1809,11 @@ bool erb_load(const void* package, size_t package_bytes, const ErbConfig* config
 {
     ErbError local;
     ErbError* out = error ? error : &local;
+    if (config)
+    {
+        s_screen_w = config->screen_w;
+        s_screen_h = config->screen_h;
+    }
     if (!config || !erb_verify(package, package_bytes, config ? config : &g_erb.config, &s_candidate, out))
     {
         if (!config)
@@ -1877,39 +1994,18 @@ void erb_set_wall_clock(int64_t epoch_ms)
 
 void erb_show_error(const ErbError* error)
 {
-    static ERProps props;
-    er_reset();
-
-    ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERNode* title = er_node_create(ER_NODE_TEXT);
-    ERNode* reason = er_node_create(ER_NODE_TEXT);
-    if (!root || !title || !reason)
-    {
-        return;
-    }
-    er_props_default(&props);
-    props.width_pct = ERB_FULL_PERCENT;
-    props.height_pct = ERB_FULL_PERCENT;
-    props.padding = ERROR_SCREEN_PADDING;
-    props.gap = ERROR_SCREEN_GAP;
-    props.justify_content = ER_JUSTIFY_CENTER;
-    props.background_color = ERROR_SCREEN_BACKGROUND;
-    er_node_set_props(root, &props);
-
-    er_props_default(&props);
-    props.color = ERROR_SCREEN_TITLE_COLOR;
-    props.font_size = ERROR_SCREEN_TITLE_SIZE;
-    props.font_weight = ERB_FONT_WEIGHT_BOLD;
-    strcpy(props.text, ERROR_SCREEN_TITLE);
-    er_node_set_props(title, &props);
-
-    er_props_default(&props);
-    props.color = ERROR_SCREEN_REASON_COLOR;
-    props.font_size = ERROR_SCREEN_REASON_SIZE;
-    erb_error_message(error, props.text, sizeof(props.text));
-    er_node_set_props(reason, &props);
-
-    er_tree_append_child(root, title);
-    er_tree_append_child(root, reason);
-    er_tree_set_root(root);
+    char reason[ERROR_LINE_SIZE];
+    char amounts[ERROR_LINE_SIZE];
+    char location[ERROR_LINE_SIZE];
+    error_reason(error, reason, sizeof(reason));
+    error_amounts(error, amounts, sizeof(amounts));
+    error_location(error, location, sizeof(location));
+    const ERErrorScreen screen = {
+        .title = error->status < ERB_ERR_BUDGET ? ERROR_TITLE_LOAD : ERROR_TITLE_RUN,
+        .reason = reason,
+        .amounts = amounts,
+        .location = location,
+        .detail = error->detail,
+    };
+    er_error_screen_show(s_screen_w, s_screen_h, &screen);
 }

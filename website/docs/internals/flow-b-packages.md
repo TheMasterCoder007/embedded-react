@@ -760,7 +760,9 @@ A native's signature is its result, a colon, then its parameters, each `i` (int)
 (float); `v` as the result means none. Firmware with fonts in its packages gives the runtime storage
 for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs, and extra glyphs, as many as its apps
 need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`
-receives the reported limits.
+receives the reported limits. The error screen is the engine's (`er_error_screen.h`): it shows the
+reason, the amounts (`arena: needs 41,210 B, firmware reserves 32,768 B`) and the source line. A
+package that fails to load leaves a running app under it until the next good load.
 
 **Limits.** How large an app the firmware accepts is set by CMake options in `runtime/CMakeLists.txt`:
 `ERB_EVENT_BUDGET`, `ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`,

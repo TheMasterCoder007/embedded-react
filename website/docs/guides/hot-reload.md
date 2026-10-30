@@ -39,7 +39,7 @@ cmake -S tools/simulator -B tools/simulator/build && cmake --build tools/simulat
 ```
 
 The SDL simulator is the maintainers' tool: it runs the real C engine natively, so it works under
-gdb and lldb, and it has a redbox overlay for JavaScript errors. Press **R** for a clean reset that
+gdb and lldb, and it shows JavaScript errors on the error screen. Press **R** for a clean reset that
 also forgets persisted state.
 
 ## On the device

@@ -148,6 +148,19 @@ also passes its render threads with `embedded_renderer_set_workers()` and calls
 split, and counts repainted pixels and pool usage; `perf_overlay.h` draws it on the panel. The
 [Performance](../guides/performance.md#measuring-on-the-device) guide shows how to read it.
 
+## The error screen
+
+`er_error_screen.h` draws one full-screen panel for any failure an app causes, in both flows: a title,
+the reason, the amounts involved, the source line, a hint, and a detail such as a stack trace.
+`er_error_screen_show()` copies the text, and while it is up `er_commit()` paints it with fills and the
+built-in font instead of the scene and drops touch input. `er_error_screen_hide()` gives the scene back.
+Flow A's `er_runtime_show_error()` and Flow B's `erb_show_error()` both use it.
+
+A fault in native code can't draw when it happens. The firmware keeps an `ERFaultRecord` in RAM the
+boot leaves alone, fills it from its fault handler with `er_fault_record()`, and calls
+`er_fault_show_recorded()` at the next boot. The RP2040 example does this for a hard fault and a
+watchdog reset.
+
 ## Building the engine
 
 ```bash

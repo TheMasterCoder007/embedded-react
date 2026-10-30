@@ -98,6 +98,9 @@ static bool s_create_failure_logged = false;
 /** @brief Context the bridge was installed into; used by the event trampoline. */
 static JSContext* s_bridge_ctx = NULL;
 
+/** @brief Receives JS exceptions nothing caught; NULL prints them to stderr. */
+static ErBridgeUncaughtFn s_uncaught_handler = NULL;
+
 /**
  * @brief JS object mapping encoded (handle, eventType) keys to JS handler functions.
  *
@@ -1380,6 +1383,11 @@ static void prop_atoms_init(JSContext* ctx)
 /**
  * @brief Drops the bridge state cached against the current JSRuntime.
  */
+void er_bridge_set_uncaught_handler(ErBridgeUncaughtFn handler)
+{
+    s_uncaught_handler = handler;
+}
+
 void er_bridge_release_runtime(void)
 {
     /* Forget, don't unref: every cached atom and string belongs to the runtime being torn down.
@@ -2495,6 +2503,42 @@ static JSValue bridge_call_batched(JSContext* ctx, JSValueConst fn, int argc, JS
 }
 
 /**
+ * @brief Hands a pending JS exception nothing caught to the uncaught handler, or prints it (message and
+ *        stack) to stderr when there is none, and clears it.
+ *
+ * @param[in] ctx    Context whose current exception should be reported.
+ * @param[in] where  Short label for the failure site (e.g. "timer callback").
+ */
+static void bridge_report_exception(JSContext* ctx, const char* where)
+{
+    JSValue exc = JS_GetException(ctx);
+    if (s_uncaught_handler)
+    {
+        s_uncaught_handler(ctx, exc, where);
+        JS_FreeValue(ctx, exc);
+        return;
+    }
+    const char* msg = JS_ToCString(ctx, exc);
+    fprintf(stderr, "JS %s exception: %s\n", where, msg ? msg : "(unknown)");
+    if (msg)
+    {
+        JS_FreeCString(ctx, msg);
+    }
+    JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+    if (!JS_IsUndefined(stack))
+    {
+        const char* st = JS_ToCString(ctx, stack);
+        if (st)
+        {
+            fprintf(stderr, "%s\n", st);
+            JS_FreeCString(ctx, st);
+        }
+    }
+    JS_FreeValue(ctx, stack);
+    JS_FreeValue(ctx, exc);
+}
+
+/**
  * @brief Engine event callback: dispatches to the JS handler registered for (node, type).
  *
  * The (handle, type) pair is encoded in user_data and the JS function is looked up in the
@@ -2549,14 +2593,7 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
         JSValue ret = bridge_call_batched(ctx, cb, argc2, argv2);
         if (JS_IsException(ret))
         {
-            JSValue exc = JS_GetException(ctx);
-            const char* msg = JS_ToCString(ctx, exc);
-            fprintf(stderr, "JS event handler exception: %s\n", msg ? msg : "(unknown)");
-            if (msg)
-            {
-                JS_FreeCString(ctx, msg);
-            }
-            JS_FreeValue(ctx, exc);
+            bridge_report_exception(ctx, "event handler");
         }
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, ev);
@@ -2598,14 +2635,7 @@ static bool bridge_query_trampoline(ERNode* node, const EREventData* data, void*
         JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &ev);
         if (JS_IsException(ret))
         {
-            JSValue exc = JS_GetException(ctx);
-            const char* msg = JS_ToCString(ctx, exc);
-            fprintf(stderr, "JS responder query exception: %s\n", msg ? msg : "(unknown)");
-            if (msg)
-            {
-                JS_FreeCString(ctx, msg);
-            }
-            JS_FreeValue(ctx, exc);
+            bridge_report_exception(ctx, "responder query");
         }
         else
         {
@@ -2621,35 +2651,6 @@ static bool bridge_query_trampoline(ERNode* node, const EREventData* data, void*
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — timers & job queue
  ---------------------------------------------------------------------------------------------------------------------*/
-
-/**
- * @brief Prints a pending JS exception (message + stack) to stderr and clears it.
- *
- * @param[in] ctx    Context whose current exception should be reported.
- * @param[in] where  Short label for the failure site (e.g. "timer callback").
- */
-static void bridge_report_exception(JSContext* ctx, const char* where)
-{
-    JSValue exc = JS_GetException(ctx);
-    const char* msg = JS_ToCString(ctx, exc);
-    fprintf(stderr, "JS %s exception: %s\n", where, msg ? msg : "(unknown)");
-    if (msg)
-    {
-        JS_FreeCString(ctx, msg);
-    }
-    JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
-    if (!JS_IsUndefined(stack))
-    {
-        const char* st = JS_ToCString(ctx, stack);
-        if (st)
-        {
-            fprintf(stderr, "%s\n", st);
-            JS_FreeCString(ctx, st);
-        }
-    }
-    JS_FreeValue(ctx, stack);
-    JS_FreeValue(ctx, exc);
-}
 
 /**
  * @brief Deactivates a timer slot and releases its callback array from the registry.

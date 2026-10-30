@@ -266,7 +266,7 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
     free(loaded);
     if (!ok)
     {
-        er_runtime_show_error(); /* JS error → redbox; the caller need not render one */
+        er_runtime_show_error(); /* JS error → error screen; the caller need not show one */
     }
     return ok;
 }

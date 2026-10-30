@@ -15,6 +15,7 @@
  */
 
 #include "native_renderer.h"
+#include "er_error_screen.h"
 #include "er_perf.h" /* per-blit accounting (compiled to nothing when ER_PERF_STATS == 0) */
 #include "er_scene.h"
 #include "font_blob.h"
@@ -712,6 +713,9 @@ void embedded_renderer_tick(uint32_t delta_ms)
 
 void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
 {
+    /* The app under the error screen gets no input. */
+    if (er_error_screen_active())
+        return;
     er_input_queue_touch(finger_id, phase, x, y);
 }
 
@@ -732,5 +736,7 @@ void embedded_renderer_set_touch_coalescing(bool enabled)
 
 void embedded_renderer_key(uint32_t keycode, const char* utf8_char)
 {
+    if (er_error_screen_active())
+        return;
     er_text_input_key(keycode, utf8_char);
 }
