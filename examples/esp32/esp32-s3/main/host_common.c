@@ -97,11 +97,11 @@ void show_reset_fault(bool touch)
     {
         return;
     }
-    ESP_LOGE(TAG, "restarted after a fault: %s", reason);
     ERFaultRecord record;
     er_fault_record(&record, reason, 0u, 0u);
     er_fault_show_recorded(&record, SCREEN_W, SCREEN_H);
     hold_error_screen(touch);
+    ESP_LOGE(TAG, "restarted after a fault: %s", reason); /* after the hold: the console is back by now */
 }
 
 #if ERUI_RENDER_WORKERS > 1

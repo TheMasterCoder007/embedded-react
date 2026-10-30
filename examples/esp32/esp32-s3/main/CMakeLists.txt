@@ -33,7 +33,7 @@ if(CONFIG_ER_WIFI)
 endif()
 
 # The Flow B build (sdkconfig.defaults.flow-b): loads a compiled package from a slot, in place of the QuickJS host
-# above, so none of that links in.
+# above. The REQUIRES below can't depend on this, so the QuickJS components compile nothing in that build.
 if(CONFIG_ER_FLOW_B)
     set(host_srcs "main_flow_b.c" "board.c" "host_common.c")
 endif()

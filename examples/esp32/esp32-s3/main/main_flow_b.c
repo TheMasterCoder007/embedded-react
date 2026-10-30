@@ -53,6 +53,14 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 /** @brief Room for one line of erb_error_message(). */
 #define ERROR_MESSAGE_BYTES 160
 
+/* Bring-up flips the CH422G's USB_SEL mux, and the native-USB console re-enumerates for about a second: the window
+ * the package loads in, so what happened is said again from the frame loop, once the console is back. */
+#define BOOT_REPORT_AFTER_MS 3000U
+#define BOOT_REPORT_BYTES (ERROR_MESSAGE_BYTES + 64)
+#define DISPLAY_FAILED_REPEAT_MS 2000U
+
+static char s_boot_report[BOOT_REPORT_BYTES];
+
 /* A forced failure, to check the error screen on hardware: `idf.py -DER_BOARD_CRASH_TEST=1` panics 5 s after boot,
  * and =2 hangs, which the task watchdog turns into a reset. Each shows the error screen after the reset, naming it,
  * then the app comes back and it happens again. */
@@ -103,20 +111,29 @@ static void load_package(bool touch)
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
+    char message[ERROR_MESSAGE_BYTES] = "";
     if (boot.error.status != ERB_OK)
     {
-        char message[ERROR_MESSAGE_BYTES];
         erb_error_message(&boot.error, message, sizeof(message));
-        ESP_LOGE(TAG, "package not loaded: %s", message);
         erb_package_slots_show_error(&boot);
     }
     if (running)
     {
-        ESP_LOGI(TAG, "package running from slot %c; slot %c is staging", 'a' + boot.active, 'a' + boot.staging);
+        snprintf(s_boot_report,
+                 sizeof(s_boot_report),
+                 "package running from slot %c; slot %c is staging%s%s",
+                 'a' + boot.active,
+                 'a' + boot.staging,
+                 message[0] ? "; rejected the newest: " : "",
+                 message);
         if (boot.error.status != ERB_OK)
         {
             hold_error_screen(touch);
         }
+    }
+    else
+    {
+        snprintf(s_boot_report, sizeof(s_boot_report), "package not loaded: %s", message);
     }
 }
 
@@ -124,15 +141,16 @@ static void load_package(bool touch)
 static void run_app(void)
 {
     esp_lcd_panel_handle_t panel = NULL;
-    if (!board_display_init(&panel))
+    const bool panel_up = board_display_init(&panel);
+    if (!panel_up || !er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION))
     {
-        ESP_LOGE(TAG, "display init failed: %s", board_display_last_error());
-        return;
-    }
-    if (!er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION))
-    {
-        ESP_LOGE(TAG, "render backend init failed — halting");
-        return;
+        /* Say so until someone reads the log: the console may not be back yet. */
+        for (;;)
+        {
+            ESP_LOGE(
+                TAG, "display init failed: %s", panel_up ? "the render backend failed" : board_display_last_error());
+            vTaskDelay(pdMS_TO_TICKS(DISPLAY_FAILED_REPEAT_MS));
+        }
     }
 #if ERUI_RENDER_WORKERS > 1
     install_render_workers(); /* after display init, so its heap needs come first */
@@ -188,6 +206,12 @@ static void run_app(void)
         embedded_renderer_tick(dt);
         erb_tick(dt);
         prev = now;
+
+        if (s_boot_report[0] && now - boot_ms >= BOOT_REPORT_AFTER_MS)
+        {
+            ESP_LOGI(TAG, "%s", s_boot_report);
+            s_boot_report[0] = '\0';
+        }
 
 #ifdef ER_BOARD_CRASH_TEST
         crash_test(now - boot_ms);

@@ -20,9 +20,9 @@
 /*
  * erb_package_slots — the two flash slots a board keeps packages in (website/docs/internals/flow-b-packages.md).
  *
- * A slot holds a 256-byte header, then a package:
+ * A slot holds a header in an erase sector of its own, then a package:
  *   magic "ERBS" | sequence u32 | package_bytes u32 | crc32 u32 (over the first 12 bytes) | 0xFF padding
- * The valid slot with the newest sequence is the active one, and the other is staging, where the next
+ * The header is written after the package, so a valid header means the whole package was written. The valid slot with the newest sequence is the active one, and the other is staging, where the next
  * package goes. A package that fails to load is given up on and the other slot runs, so the last good
  * package stays until a new one passes verification.
  *
@@ -40,8 +40,8 @@
 
 #define ERB_PACKAGE_SLOT_COUNT 2u
 
-/** @brief Bytes before a slot's package. A whole flash page, so a board can clear the header on its own. */
-#define ERB_PACKAGE_SLOT_HEADER_BYTES 256u
+/** @brief Bytes before a slot's package: one erase sector, so the header can be written, or cleared, on its own. */
+#define ERB_PACKAGE_SLOT_HEADER_BYTES 4096u
 
 #define ERB_PACKAGE_SLOT_MAGIC 0x53425245u
 

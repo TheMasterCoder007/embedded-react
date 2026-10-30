@@ -16,10 +16,11 @@
 
 // flash — writes a Flow B package into one of a board's two package slots.
 //
-// A slot holds a 256-byte header, then the package. The firmware (runtime/erb_package_slots.c) runs the valid
-// slot with the newest sequence and falls back to the other, so a new package always goes in the slot that
-// isn't the newest, with the next sequence. `pack` writes that image to a file, for a factory line or a
-// drag-and-drop UF2. `flash` reads the board's headers and writes it.
+// A slot holds a header in an erase sector of its own, then the package. The firmware
+// (runtime/erb_package_slots.c) runs the valid slot with the newest sequence and falls back to the other, so a
+// new package always goes in the slot that isn't the newest, with the next sequence. `flash` reads the board's
+// headers and writes the package, then the header, so a write cut short never leaves the newest sequence on a
+// partial package. `pack` writes the image to a file instead, for a factory line or a drag-and-drop UF2.
 
 import {spawnSync} from 'node:child_process';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
@@ -27,7 +28,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {crc32} from './assets/emit-container.mjs';
 
-export const SLOT_HEADER_BYTES = 256;
+export const SLOT_HEADER_BYTES = 4096; // bytes before the package: one erase sector
+const SLOT_HEADER_PAGE_BYTES = 256; // the part of it that is written
+const SEQUENCE_MAX = 0xffffffff;
 const SLOT_MAGIC = 0x53425245; // "ERBS", little-endian
 const SLOT_HEADER_CHECKED_BYTES = 12;
 const SLOT_NAMES = ['a', 'b'];
@@ -123,17 +126,24 @@ export function checkPackage(bytes) {
   }
 }
 
-/** A slot's image: the header, then the package. */
-export function slotImage(packageBytes, sequence) {
-  const header = Buffer.alloc(SLOT_HEADER_BYTES, 0xff);
+/** A slot's header page. */
+export function slotHeader(packageLength, sequence) {
+  const header = Buffer.alloc(SLOT_HEADER_PAGE_BYTES, 0xff);
   header.writeUInt32LE(SLOT_MAGIC, 0);
-  header.writeUInt32LE(sequence >>> 0, 4);
-  header.writeUInt32LE(packageBytes.length, 8);
+  header.writeUInt32LE(sequence, 4);
+  header.writeUInt32LE(packageLength, 8);
   header.writeUInt32LE(
     crc32(header.subarray(0, SLOT_HEADER_CHECKED_BYTES)),
     SLOT_HEADER_CHECKED_BYTES,
   );
-  return Buffer.concat([header, packageBytes]);
+  return header;
+}
+
+/** A slot's whole image: the header in its sector, then the package. */
+export function slotImage(packageBytes, sequence) {
+  const headerSector = Buffer.alloc(SLOT_HEADER_BYTES, 0xff);
+  slotHeader(packageBytes.length, sequence).copy(headerSector);
+  return Buffer.concat([headerSector, packageBytes]);
 }
 
 /** A slot's sequence from the first bytes of its flash, or null when it has no valid header. */
@@ -171,16 +181,32 @@ export function pickSlot([first, second]) {
   };
 }
 
-/** An image as UF2 blocks, for a drag-and-drop onto an RP2040 in BOOTSEL mode. */
-export function uf2(image, address) {
-  const blockCount = Math.ceil(image.length / UF2_PAYLOAD_BYTES);
+/**
+ * Runs of bytes as UF2 blocks, in the order given, for a drag-and-drop onto an RP2040 in BOOTSEL mode.
+ *
+ * @param {{address: number, bytes: Buffer}[]} runs  What to write where.
+ */
+export function uf2(runs) {
+  const pages = runs.flatMap(({address, bytes}) =>
+    Array.from(
+      {length: Math.ceil(bytes.length / UF2_PAYLOAD_BYTES)},
+      (_, page) => ({
+        address: address + page * UF2_PAYLOAD_BYTES,
+        bytes: bytes.subarray(
+          page * UF2_PAYLOAD_BYTES,
+          (page + 1) * UF2_PAYLOAD_BYTES,
+        ),
+      }),
+    ),
+  );
+  const blockCount = pages.length;
   const out = Buffer.alloc(blockCount * UF2_BLOCK_BYTES);
   for (let block = 0; block < blockCount; block++) {
     const at = block * UF2_BLOCK_BYTES;
     out.writeUInt32LE(UF2_MAGIC_START_0, at);
     out.writeUInt32LE(UF2_MAGIC_START_1, at + 4);
     out.writeUInt32LE(UF2_FLAG_FAMILY, at + 8);
-    out.writeUInt32LE(address + block * UF2_PAYLOAD_BYTES, at + 12);
+    out.writeUInt32LE(pages[block].address, at + 12);
     out.writeUInt32LE(UF2_PAYLOAD_BYTES, at + 16);
     out.writeUInt32LE(block, at + 20);
     out.writeUInt32LE(blockCount, at + 24);
@@ -191,12 +217,7 @@ export function uf2(image, address) {
       at + UF2_PAYLOAD_AT,
       at + UF2_PAYLOAD_AT + UF2_PAYLOAD_BYTES,
     );
-    image.copy(
-      out,
-      at + UF2_PAYLOAD_AT,
-      block * UF2_PAYLOAD_BYTES,
-      (block + 1) * UF2_PAYLOAD_BYTES,
-    );
+    pages[block].bytes.copy(out, at + UF2_PAYLOAD_AT);
     out.writeUInt32LE(UF2_MAGIC_END, at + UF2_MAGIC_END_AT);
   }
   return out;
@@ -294,7 +315,8 @@ const picoAccess = ({board, run}) => {
       'Install it (a build of the Pico SDK fetches one, without USB unless libusb is found), or set PICOTOOL.',
   };
   return {
-    // -f takes a running board into BOOTSEL through its USB serial, and back afterwards.
+    // -f takes a running board into BOOTSEL through its USB serial, and back afterwards. Addresses are memory
+    // addresses for both commands: load's -o defaults to 0x10000000, the start of flash.
     read: (address, bytes, file) =>
       runTool(
         names,
@@ -336,6 +358,12 @@ export function packSlot({
 }) {
   const slot = SLOT_NAMES.indexOf(slotName);
   if (slot < 0) throw new Error(`--slot takes a or b, got: ${slotName}`);
+  // 0 is valid: it is what comes after the sequence wraps.
+  if (!Number.isInteger(sequence) || sequence < 0 || sequence > SEQUENCE_MAX) {
+    throw new Error(
+      `--sequence takes a whole number from 0 to ${SEQUENCE_MAX}, got: ${sequence}`,
+    );
+  }
   checkPackage(packageBytes);
   const {address, bytes} = board.slots[slot];
   const image = slotImage(packageBytes, sequence);
@@ -346,7 +374,15 @@ export function packSlot({
   }
   const isUf2 = board.tool === 'picotool';
   const file = join(outDir, `app.slot-${slotName}.${isUf2 ? 'uf2' : 'bin'}`);
-  writeFileSync(file, isUf2 ? uf2(image, address) : image);
+  writeFileSync(
+    file,
+    isUf2
+      ? uf2([
+          {address: address + SLOT_HEADER_BYTES, bytes: packageBytes},
+          {address, bytes: slotHeader(packageBytes.length, sequence)},
+        ])
+      : image,
+  );
   return {file, address, sequence, slot: slotName};
 }
 
@@ -372,23 +408,28 @@ export function flashSlot({
     const slots = access.slots(dir);
     const sequences = slots.map((slot, index) => {
       const file = join(dir, `header-${index}.bin`);
-      access.read(slot.address, SLOT_HEADER_BYTES, file);
+      access.read(slot.address, SLOT_HEADER_PAGE_BYTES, file);
       return readSlotSequence(readFileSync(file), slot.bytes);
     });
     const {slot, sequence, lastGood} = pickSlot(sequences);
     const {address, bytes} = slots[slot];
-    const image = slotImage(packageBytes, sequence);
-    if (image.length > bytes) {
+    const slotBytesUsed = SLOT_HEADER_BYTES + packageBytes.length;
+    if (slotBytesUsed > bytes) {
       throw new Error(
-        `The package takes ${image.length} B with its header, and this board's slots hold ${bytes} B.`,
+        `The package takes ${slotBytesUsed} B with its header, and this board's slots hold ${bytes} B.`,
       );
     }
-    const file = join(dir, 'slot.bin');
-    writeFileSync(file, image);
+    const packageFile = join(dir, 'package.bin');
+    const headerFile = join(dir, 'header.bin');
+    writeFileSync(packageFile, packageBytes);
+    writeFileSync(headerFile, slotHeader(packageBytes.length, sequence));
     log(
-      `Writing slot ${SLOT_NAMES[slot]} at ${hex(address)}, sequence ${sequence} (${image.length} B)`,
+      `Writing slot ${SLOT_NAMES[slot]} at ${hex(address)}, sequence ${sequence} (${slotBytesUsed} B)`,
     );
-    access.write(address, file);
+    // The header last. Until then the slot still has its older sequence, or none, so it stays the one to write
+    // over if this is cut short, and the other slot stays the newest.
+    access.write(address + SLOT_HEADER_BYTES, packageFile);
+    access.write(address, headerFile);
     access.finish();
     return {
       address,

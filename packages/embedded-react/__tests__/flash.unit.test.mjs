@@ -46,13 +46,29 @@ const examples = resolve(
 const packageBytes = () =>
   Buffer.from(emitPackageContainer({program: Buffer.alloc(32, 0x5a)}).bytes);
 
-const SLOT_BYTES = 0x1000;
+const SLOT_BYTES = 0x10000;
 
 /** The same 16 bytes as runtime/tests/erb_package_slots_test.c, so the writer and the reader can't drift apart. */
 const GOLDEN_HEADER = Buffer.from([
   0x45, 0x52, 0x42, 0x53, 0x07, 0x00, 0x00, 0x00, 0x34, 0x12, 0x00, 0x00, 0xb5,
   0xd9, 0x79, 0x48,
 ]);
+
+/** The bytes `pack` writes for slot a of the RP2040 example. */
+function packSlotToTemp() {
+  const outDir = mkdtempSync(join(tmpdir(), 'er-pack-'));
+  try {
+    const packed = packSlot({
+      packageBytes: packageBytes(),
+      board: BOARDS['rp2040-touch-lcd-1.69'],
+      boardName: 'rp2040-touch-lcd-1.69',
+      outDir,
+    });
+    return readFileSync(packed.file);
+  } finally {
+    rmSync(outDir, {recursive: true, force: true});
+  }
+}
 
 /** A partition table with the given (label, address, bytes) entries, closed by an erased entry. */
 function partitionTable(entries) {
@@ -182,8 +198,7 @@ describe('checking a package', () => {
 
 describe('UF2', () => {
   it('writes whole pages from the address up, with the RP2040 family', () => {
-    const image = Buffer.alloc(300, 0xcd);
-    const file = uf2(image, 0x10100000);
+    const file = uf2([{address: 0x10100000, bytes: Buffer.alloc(300, 0xcd)}]);
     expect(file.length).toBe(1024);
     expect(file.readUInt32LE(0)).toBe(0x0a324655);
     expect(file.readUInt32LE(4)).toBe(0x9e5d5157);
@@ -196,6 +211,20 @@ describe('UF2', () => {
     expect(file.readUInt32LE(512 + 20)).toBe(1);
     expect(file[512 + 32 + 43]).toBe(0xcd);
     expect(file[512 + 32 + 44]).toBe(0xff); // the rest of the last page stays erased
+  });
+});
+
+describe('the UF2 of a slot', () => {
+  it('holds the header last, at the start of the slot', () => {
+    const packed = packSlotToTemp();
+    const blocks = packed.length / 512;
+    expect(packed.readUInt32LE(12)).toBe(0x10100000 + SLOT_HEADER_BYTES);
+    const last = (blocks - 1) * 512;
+    expect(packed.readUInt32LE(last + 12)).toBe(0x10100000);
+    expect(packed.readUInt32LE(last + 20)).toBe(blocks - 1);
+    expect(
+      readSlotSequence(packed.subarray(last + 32, last + 288), 0x80000),
+    ).toBe(1);
   });
 });
 
@@ -239,14 +268,34 @@ describe('flashing', () => {
       slot: 'a',
       lastGood: null,
     });
-    expect(board.writes).toHaveLength(1);
-    expect(board.writes[0].address).toBe(0x180000);
-    expect(board.writes[0].image.subarray(SLOT_HEADER_BYTES)).toEqual(
-      packageBytes(),
-    );
+    expect(board.writes).toHaveLength(2);
+    expect(board.writes[0].address).toBe(0x180000 + SLOT_HEADER_BYTES);
+    expect(board.writes[0].image).toEqual(packageBytes());
+    expect(board.writes[1].address).toBe(0x180000);
+    expect(readSlotSequence(board.writes[1].image, 0x140000)).toBe(1);
     expect(board.calls[0]).toEqual(
       expect.arrayContaining(['--chip', 'esp32', '--port', '/dev/cu.test']),
     );
+  });
+
+  it('never leaves the newest sequence on a partial package', () => {
+    const board = fakeBoard({0x8000: partitionTable(espSlots)});
+    const run = (command, args, inherit) => {
+      if (args.includes('write_flash') && board.writes.length === 1) {
+        return {status: 1, stderr: 'the cable came out', stdout: ''};
+      }
+      return board.run(command, args, inherit);
+    };
+    expect(() =>
+      flashSlot({
+        packageBytes: packageBytes(),
+        board: BOARDS['esp32-2432s028r'],
+        run,
+      }),
+    ).toThrow(/the cable came out/);
+    // The package landed and the header didn't, so the slot still reads as it did.
+    expect(board.writes).toHaveLength(1);
+    expect(board.writes[0].address).toBe(0x180000 + SLOT_HEADER_BYTES);
   });
 
   it('leaves the last good package alone', () => {
@@ -333,6 +382,11 @@ describe('flashing', () => {
       '-r',
       '0x10100000',
     ]);
+    // Memory addresses, as picotool's load -o takes them: the package, then the header.
+    expect(board.writes.map(write => write.address)).toEqual([
+      0x10180000 + SLOT_HEADER_BYTES,
+      0x10180000,
+    ]);
     expect(board.calls.at(-1)).toEqual(['picotool', 'reboot', '-f']);
   });
 
@@ -390,7 +444,31 @@ describe('packing', () => {
         outDir,
       });
       expect(packed.file.endsWith('app.slot-a.uf2')).toBe(true);
-      expect(readFileSync(packed.file).readUInt32LE(12)).toBe(0x10100000);
+      expect(readFileSync(packed.file).readUInt32LE(12)).toBe(
+        0x10100000 + SLOT_HEADER_BYTES,
+      );
+    }));
+
+  it('takes every sequence the header can hold, and no other', () =>
+    inDir(outDir => {
+      const pack = sequence =>
+        packSlot({
+          packageBytes: packageBytes(),
+          board: BOARDS['esp32-s3'],
+          boardName: 'esp32-s3',
+          sequence,
+          outDir,
+        });
+      for (const sequence of [0, 0xffffffff]) {
+        const packed = pack(sequence);
+        expect(packed.sequence).toBe(sequence);
+        expect(readSlotSequence(readFileSync(packed.file), 0x200000)).toBe(
+          sequence,
+        );
+      }
+      for (const sequence of [-1, 1.5, 0x100000000, NaN]) {
+        expect(() => pack(sequence)).toThrow(/--sequence takes a whole number/);
+      }
     }));
 
   it('refuses a slot that does not exist and a package that does not fit', () =>

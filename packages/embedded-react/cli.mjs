@@ -665,9 +665,6 @@ function pack(args) {
   const sequence = Number(optValue(args, '--sequence')?.value ?? 1);
   try {
     const board = boardByName(boardName);
-    if (!Number.isInteger(sequence) || sequence < 1) {
-      throw new Error('--sequence takes a whole number from 1.');
-    }
     const [explicit] = bareArgs(args, [
       '--board',
       '--slot',

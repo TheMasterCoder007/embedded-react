@@ -777,8 +777,8 @@ options. The runtime reads them at load time, so each is set once; its image nam
 
 ### Package slots
 
-A board keeps two packages in flash, each in a slot the firmware memory-maps. A slot is a 256-byte header, then
-the package, read in place:
+A board keeps two packages in flash, each in a slot the firmware memory-maps. A slot is a header in a 4 KB erase
+sector of its own, then the package, read in place:
 
 | Offset | Type  | Field           | Meaning                          |
 | ------ | ----- | --------------- | -------------------------------- |
@@ -786,11 +786,12 @@ the package, read in place:
 | 4      | `u32` | `sequence`      | One more than the newest slot's  |
 | 8      | `u32` | `package_bytes` | The package's length             |
 | 12     | `u32` | `crc`           | CRC-32 of the 12 bytes before it |
-| 16     |       |                 | `0xFF` up to byte 256            |
+| 16     |       |                 | `0xFF` to the end of the sector  |
 
 There is no separate record of which slot is which. The valid slot with the newest sequence is **active**, and
 the other is **staging**. A new package goes in staging with the next sequence, so writing one never touches the
-package that is running, and a power cut part way through leaves a package that fails its CRC.
+package that is running. The package is written first and the header last, so a write cut short leaves the slot
+with its older sequence or none, and it is still the one to write over.
 
 `erb_package_slots_boot()` runs at boot, in place of `erb_load()`:
 
@@ -806,7 +807,8 @@ package that is running, and a power cut part way through leaves a package that 
 The firmware gives it the mapped slots and a function that clears a header. `runtime/port/erb_package_slots_esp32.c`
 does this on ESP-IDF, and the RP2040 example does it in `main.c`.
 
-`embedded-react flash` reads both headers from the board and writes staging, through `esptool` or `picotool`. On an
+`embedded-react flash` reads both headers from the board and writes staging, through `esptool` or `picotool`, then
+resets it. That boot clears a package that fails, so the next `flash` doesn't take it for the last good one. On an
 ESP32 it finds the slots in the board's partition table, as the partitions labelled `erb_a` and `erb_b`.
 `embedded-react pack` writes a slot's image to a file instead, as a UF2 on the RP2040, for a factory line or a
 board that isn't attached. On-device hot reload will receive into staging the same way.

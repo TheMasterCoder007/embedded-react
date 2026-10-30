@@ -1,6 +1,7 @@
 # The Flow B runtime as an ESP-IDF component: it checks a package and runs it, with no QuickJS and no heap.
-# Compiled from EMBEDDED_REACT_SRC_DIR (set by the top-level CMakeLists), and only in the Flow B build; the
-# Flow A build carries none of it, and gets the container reader and asset parser from er-bridge-quickjs.
+# Compiled from EMBEDDED_REACT_SRC_DIR (set by the top-level CMakeLists), and only in the Flow B build, where
+# er-bridge-quickjs compiles nothing. The Flow A build carries none of it, and gets the container reader and asset
+# parser from er-bridge-quickjs.
 set(R "${EMBEDDED_REACT_SRC_DIR}/runtime")
 
 set(erb_srcs "")
