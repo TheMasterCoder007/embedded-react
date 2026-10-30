@@ -635,7 +635,7 @@ static int16_t offered_width(const ERLayoutSpec* L, const ERLayoutSpec* cl, cons
     if (inner_w == ER_LAYOUT_AUTO)
         return ER_LAYOUT_AUTO;
     if (cl->width_pct > 0.0f)
-        return (int16_t)((float)inner_w * cl->width_pct / 100.0f + 0.5f);
+        return round_px((float)inner_w * cl->width_pct / 100.0f);
     if (cl->width != ER_LAYOUT_AUTO || (is_row_dir(L->flex_direction) && L->overflow == ER_OVERFLOW_SCROLL))
         return ER_LAYOUT_AUTO;
     const int16_t margin_x = (int16_t)(edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin));
@@ -661,7 +661,7 @@ static int16_t aspect_main_size(const ERLayoutSpec* cl, const bool is_row, const
     {
         if (cross_size == ER_LAYOUT_AUTO)
             return ER_LAYOUT_AUTO;
-        cross = (int16_t)((float)cross_size * cross_pct / 100.0f + 0.5f);
+        cross = round_px((float)cross_size * cross_pct / 100.0f);
     }
     else if (cross == ER_LAYOUT_AUTO)
         return ER_LAYOUT_AUTO;
@@ -729,7 +729,7 @@ static int16_t base_main_size(const uint16_t tag,
     int16_t hypo_main;
     if (cl->flex_basis_pct > 0.0f)
     {
-        hypo_main = (int16_t)((float)main_size * cl->flex_basis_pct / 100.0f + 0.5f);
+        hypo_main = round_px((float)main_size * cl->flex_basis_pct / 100.0f);
     }
     else if (cl->flex_basis != ER_LAYOUT_AUTO)
     {
@@ -740,7 +740,7 @@ static int16_t base_main_size(const uint16_t tag,
         const int16_t mainsz = is_row ? cl->width : cl->height;
         const float main_pct = is_row ? cl->width_pct : cl->height_pct;
         if (main_pct > 0.0f)
-            hypo_main = (int16_t)((float)main_size * main_pct / 100.0f + 0.5f);
+            hypo_main = round_px((float)main_size * main_pct / 100.0f);
         else if (mainsz != ER_LAYOUT_AUTO)
             hypo_main = mainsz;
         else if ((hypo_main = aspect_main_size(cl, is_row, cross_size)) == ER_LAYOUT_AUTO)
@@ -1307,7 +1307,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             int16_t hypo_cross;
             int16_t measured_w = ER_LAYOUT_AUTO;
             if (cross_pct > 0.0f)
-                hypo_cross = (int16_t)((float)cross_avail * cross_pct / 100.0f + 0.5f);
+                hypo_cross = round_px((float)cross_avail * cross_pct / 100.0f);
             else if (crosssz != ER_LAYOUT_AUTO)
                 hypo_cross = crosssz;
             else if (cross_via_aspect)
@@ -1822,7 +1822,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             if (!have_w || !have_h)
             {
                 int16_t intr_w = 0, intr_h = 0;
-                measure_content(ct, have_w ? (int16_t)(cw + 0.5f) : ER_LAYOUT_AUTO, &intr_w, &intr_h);
+                measure_content(ct, have_w ? round_px(cw) : ER_LAYOUT_AUTO, &intr_w, &intr_h);
                 if (!have_w)
                     cw = (float)intr_w;
                 if (!have_h)

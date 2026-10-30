@@ -121,6 +121,18 @@ the package output has come. It needs CMake and a C compiler, and CI runs it.
 The compiler's copy of the package format is held to `runtime/erb_format.h`, `runtime/erb_props.c`
 and `er_scene.h` by `aot/__tests__/package-format.unit.test.js`.
 
+## Fuzzing the package loader and VM
+
+`tools/erb-fuzz` is a libFuzzer target that mutates real packages, loads them, and runs whatever passes
+on the engine and the software backend, with tapping, typing, and reloads, under ASan and UBSan. CI runs
+it for five minutes on every push and pull request, and any crash, hang, or sanitizer report fails the job.
+
+The corpus is in the repo. Its seeds are both demos and each parity fixture; `npm run erb:corpus` rewrites
+them after a format change, and the job fails when one stops loading. A failure's input goes in
+`corpus/regressions/` with its fix. The tool's
+[README](https://github.com/TheMasterCoder007/embedded-react/blob/master/tools/erb-fuzz/README.md) covers
+running it and replaying a failure, which works on a Mac too.
+
 ## Parity
 
 `npm run parity` renders the same demo through both flows and asserts the framebuffers match
@@ -157,8 +169,9 @@ on the board), so a claim about speed is a claim about a board.
 
 ## What CI runs
 
-Every push and pull request runs five jobs, all required to merge: **JS tests + version drift**
+Every push and pull request runs seven jobs, all required to merge: **JS tests + version drift**
 (`npm test`, `npm run typecheck` and `sync-version --check`), **Engine build + ctests** (the six flag passes), **QuickJS
 bridge build + heap-accounting test** (two allocator builds, each with the runtime and bytecode
-tiers), **AOT compile smoke** (generated C through `gcc`), and **Consumer smoke**. The docs site has
+tiers), **AOT compile smoke** (generated C through `gcc`), **Flow B package vs C output** (`npm run
+erb:parity`), **Fuzz the package loader and VM**, and **Consumer smoke**. The docs site has
 its own workflow that builds on a pull request and deploys on `master`.

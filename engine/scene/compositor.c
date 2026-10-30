@@ -74,6 +74,8 @@ static uint16_t s_free_list[ERUI_MAX_NODES]; /**< LIFO stack of destroyed node s
 static uint16_t s_free_count = 0;            /**< Number of entries currently in s_free_list. */
 static uint32_t s_node_serial = 1;           /**< Next ERNode::serial, never 0; er_reset keeps it. */
 static uint16_t s_root_tag = ER_INVALID_TAG;
+static int16_t s_bounds_w = 0; /**< er_set_screen_bounds(): the largest the root may be; 0 = no limit. */
+static int16_t s_bounds_h = 0;
 static uint64_t s_now_ms = 0;
 static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
 static uint8_t s_last_cursor_phase = 2U; /**< Last cursor blink phase (0/1) seen by er_commit; 2 = unknown. */
@@ -4135,8 +4137,8 @@ static bool vec_diff_dirty_rect(const float* o,
     while (i < on)
     {
         if (o[i] != nw[i])
-            return false; /* opcode / shape structure differs */
-        const int code = (int)o[i];
+            return false;                                       /* opcode / shape structure differs */
+        const int code = fabsf(o[i]) < 256.0f ? (int)o[i] : -1; /* a package's VSET can write any float here */
         if (code == (int)ER_VOP_SHAPE)
         {
             i++;
@@ -4959,6 +4961,15 @@ void er_tree_set_root(ERNode* root)
     er_force_full_repaint();       /* whole new scene: repaint everything */
 }
 
+void er_set_screen_bounds(int width, int height)
+{
+    /* A size past int16 is the largest limit there is. 0 would mean no limit at all. */
+    s_bounds_w = width <= 0 ? 0 : width > INT16_MAX ? INT16_MAX : (int16_t)width;
+    s_bounds_h = height <= 0 ? 0 : height > INT16_MAX ? INT16_MAX : (int16_t)height;
+    mark_layout_dirty();
+    er_force_full_repaint();
+}
+
 void er_reset(void)
 {
     fade_cache_invalidate();
@@ -5179,8 +5190,12 @@ void er_commit(void)
     if (layout_ran)
     {
         ER_PERF_BEGIN(ER_PERF_PHASE_LAYOUT);
-        const int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
-        const int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
+        int16_t rw = (root->layout.width != ER_LAYOUT_AUTO) ? root->layout.width : 0;
+        int16_t rh = (root->layout.height != ER_LAYOUT_AUTO) ? root->layout.height : 0;
+        if (s_bounds_w > 0 && rw > s_bounds_w)
+            rw = s_bounds_w;
+        if (s_bounds_h > 0 && rh > s_bounds_h)
+            rh = s_bounds_h;
 
         er_layout_compute(s_root_tag, rw, rh);
         anchor_arc_children(root);
@@ -5779,8 +5794,17 @@ void er_commit(void)
             }
             else
             {
+                /* With bounds set, nothing is drawn past them: a painter that works per pixel otherwise
+                 * only stops at its node's box, however far off screen that is. An axis with no limit
+                 * gets the largest extent a node can reach. */
+                const bool bounded = s_bounds_w > 0 || s_bounds_h > 0;
+                if (bounded)
+                    er_push_clip_rect(
+                        0, 0, s_bounds_w > 0 ? s_bounds_w : INT16_MAX, s_bounds_h > 0 ? s_bounds_h : INT16_MAX);
                 render_tree(root, full_recomposite, false, 0, s_kbd_avoid_y);
                 er_keyboard_draw((int)root->computed.w, (int)root->computed.h);
+                if (bounded)
+                    er_pop_clip_rect();
             }
         }
         else

@@ -1048,6 +1048,23 @@ static void test_extreme_geometry(void)
     const float nan_r[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, NAN, 0.0f, 6.283185307179586f, 0.0f};
     render_svg_arc(nan_r, (int)(sizeof(nan_r) / sizeof(nan_r[0])), &disc);
     CHECK(near_color(px(120, 120), 0x000000U, 0), "a NaN radius draws nothing");
+
+    /* NaN props settle before they reach the knob's int casts. */
+    reset_scene();
+    ERProps nan_props = arc_props();
+    nan_props.arc_start_angle = NAN;
+    nan_props.arc_sweep_angle = NAN;
+    nan_props.arc_min = NAN;
+    nan_props.arc_value = NAN;
+    ERNode* nan_arc = er_node_create(ER_NODE_ARC);
+    er_node_set_props(nan_arc, &nan_props);
+    ERArcGeom geom;
+    er_arc_geom(nan_arc, 0, 0, 200, 200, &geom);
+    CHECK(geom.a0 == 135.0f && geom.sweep == 270.0f, "a NaN start and sweep take the default dial");
+    CHECK(er_arc_value_frac(&geom, NAN) == 0.0f, "a NaN range or value is the start of the sweep");
+    float knob_x, knob_y;
+    er_arc_knob_center(&geom, NAN, &knob_x, &knob_y);
+    CHECK(knob_x == knob_x && knob_y == knob_y, "a NaN value still places the knob");
 }
 
 /** @brief RANGE mode: the band spans [valueStart, value], each end has a knob, and each drags on its own. */

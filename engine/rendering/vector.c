@@ -552,11 +552,10 @@ static void emit_row(uint32_t color, const ERVectorGradient* grad, int iy, int c
              * The LUT entry is premultiplied, so scaling all four channels by coverage finishes the pixel —
              * no per-pixel stop interpolation or premultiply. */
             const float t = vgrad_t(grad, (float)(clipx0 + lo + xx) + 0.5f, (float)iy + 0.5f);
-            int idx = (int)(t * (float)ERUI_VECTOR_GRAD_LUT);
-            if (idx < 0)
-                idx = 0;
-            else if (idx >= ERUI_VECTOR_GRAD_LUT)
-                idx = ERUI_VECTOR_GRAD_LUT - 1;
+            const float scaled = t * (float)ERUI_VECTOR_GRAD_LUT;
+            const int idx = !(scaled > 0.0f)                        ? 0
+                            : scaled >= (float)ERUI_VECTOR_GRAD_LUT ? ERUI_VECTOR_GRAD_LUT - 1
+                                                                    : (int)scaled;
             s_row[xx] = vgrad_scale(s_vgrad_lut[idx], (uint32_t)(c * 255.0f + 0.5f));
         }
         flush_row(lo, n, iy, clipx0);
@@ -1689,7 +1688,8 @@ static void render_tape(const float* ops,
             continue;
         }
         i++; /* consume SHAPE opcode */
-        const int pidx = (i < n_ops) ? (int)ops[i++] : 0;
+        const float paint_op = (i < n_ops) ? ops[i++] : 0.0f;
+        const int pidx = (paint_op >= 0.0f && paint_op < (float)n_paints) ? (int)paint_op : -1; /* NaN too */
         const ERVectorPaint* shape_paint = (pidx >= 0 && pidx < n_paints) ? &paints[pidx] : 0;
 
         /* Clip reject: bound the shape off the tape and drop it whole when its ink cannot reach the

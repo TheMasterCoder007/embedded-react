@@ -29,6 +29,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   the source line and the amounts involved. An uncaught JS exception in Flow A now shows it too.
 - A native fault or watchdog reset can be recorded in no-init RAM and shown after the reset
   (`er_fault_record`, `er_fault_show_recorded`). The RP2040 and ESP32-S3 examples do this.
+- CI fuzzes the Flow B loader, verifier and VM with mutated packages, under ASan and UBSan.
+- `er_set_screen_bounds` limits the scene to the panel. Flow B sets it from the panel it loads.
 
 ### Changed
 
@@ -44,6 +46,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Flow B applies the stale-handle rule to a row built before a destroyed node, which used to go last, and
   to an animation of a destroyed node, which didn't stop a debug package.
+- A node sized far past the panel no longer stalls a Flow B frame painting off screen.
+- NaN and out-of-range floats in percentages, dials, animated colors and vectors no longer reach a
+  float-to-int conversion.
 
 ## [0.19.0] - 2026-10-27
 ### Changed

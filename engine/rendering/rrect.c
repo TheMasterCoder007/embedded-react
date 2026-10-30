@@ -115,7 +115,9 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
          */
         float r05 = (float)r - 0.5f;
         float cy0 = (float)dy - 0.5f;
-        float dx_f = sqrtf(r05 * r05 - cy0 * cy0);
+        /* At the last row the two squares are equal, and a fused multiply-subtract can leave a tiny negative. */
+        const float chord_sq = r05 * r05 - cy0 * cy0;
+        float dx_f = chord_sq > 0.0f ? sqrtf(chord_sq) : 0.0f;
         int dx = (int)(dx_f + 0.5f); /* round to nearest */
         int x0 = x + r - dx;
         int x1 = x + w - r + dx;

@@ -208,3 +208,8 @@ add_test(NAME rendering_text_padding COMMAND test_text_padding)
 add_executable(test_content_padding test_content_padding.c)
 target_link_libraries(test_content_padding PRIVATE embedded-react)
 add_test(NAME rendering_content_padding COMMAND test_content_padding)
+
+add_executable(test_screen_bounds test_screen_bounds.c)
+target_link_libraries(test_screen_bounds PRIVATE embedded-react)
+target_include_directories(test_screen_bounds PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
+add_test(NAME rendering_screen_bounds COMMAND test_screen_bounds)
