@@ -158,7 +158,7 @@ Carried over from the C output:
 
 > **Done:** `embedded-react build` now produces the device artifact from a consumer project —
 > `app.erpkg` (Flow A, bytecode compiled through the prebuilt `.wasm`, no native toolchain) and
-> `--aot` → `app.gen.c` (Flow B).
+> `--aot` → a Flow B `app.erpkg`, or `app.gen.c` with `--c`.
 
 ---
 

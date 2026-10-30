@@ -9,11 +9,11 @@ the people building the loader, the VM, and the compiler's package output.
 
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
-`erb_format.h`). `embedded-react build --aot --package` writes a package, with a layout for each panel
-size `--screen` lists (`--screen 240x320,320x240`), and its debug table. It takes state, handlers, timers,
-effects, lists, animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen
-size. `--release` and `--bake` build the package too. Once packages pass the same tests as the C output, the C
-backend is retired.
+`erb_format.h`). `embedded-react build --aot` writes a package, with a layout for each panel size `--screen`
+lists (`--screen 240x320,320x240`), and its debug table. It takes state, handlers, timers, effects, lists,
+animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen size. `--release`
+and `--bake` build the package too, and `embedded-react flash` writes it to a [slot](#package-slots). Once
+packages pass the same tests as the C output (`--c`), the C backend is retired.
 :::
 
 ## In one picture
@@ -355,9 +355,10 @@ live in the arena.
 
 On the slowest board the [spike](#performance) settled two placement rules:
 
-- **The VM's dispatch loop runs from SRAM** (about 2.1 KB). In flash, it and the engine evict each other
-  from the 16 KB XIP cache, which costs about 6 points. The runtime marks the loop with `ERB_VM_HOT`,
-  which the RP2040 port defines to its RAM section and other ports leave empty until measured.
+- **The VM's dispatch loop runs from SRAM when it fits.** In flash, it and the engine evict each other from the
+  16 KB XIP cache, which cost the spike's 2.1 KB loop about 6 points. The runtime marks the loop with
+  `ERB_VM_HOT`, for a port to define to its RAM section. The whole instruction set makes it about 12 KB, more
+  than the watch-face board has beside its framebuffer, so that example leaves it empty and the loop in flash.
 - **Bytecode stays in mapped flash.** It is small and read once per instruction.
 
 The interpreter doesn't recurse in C: a call pushes a frame on the register stack in the arena. So the
@@ -772,10 +773,46 @@ options. The runtime reads them at load time, so each is set once; its image nam
 `ERUI_IMAGE_REGISTRY_MAX`.
 
 `erb_input_find("steps")` looks an input up once, and `erb_input_set_int()` (or `_bool`, `_float`,
-`_string`) sets it after that. `erb_set_wall_clock()` replaces `er_app_set_wall_clock()`. A board with
-package slots (active and staging) loads the active one at boot; on-device hot reload receives into the
-staging slot, verifies it, tears down, and loads, and a package that fails verification leaves the
-running app untouched.
+`_string`) sets it after that. `erb_set_wall_clock()` replaces `er_app_set_wall_clock()`.
+
+### Package slots
+
+A board keeps two packages in flash, each in a slot the firmware memory-maps. A slot is a 256-byte header, then
+the package, read in place:
+
+| Offset | Type  | Field           | Meaning                          |
+| ------ | ----- | --------------- | -------------------------------- |
+| 0      | `u32` | `magic`         | `ERBS`                           |
+| 4      | `u32` | `sequence`      | One more than the newest slot's  |
+| 8      | `u32` | `package_bytes` | The package's length             |
+| 12     | `u32` | `crc`           | CRC-32 of the 12 bytes before it |
+| 16     |       |                 | `0xFF` up to byte 256            |
+
+There is no separate record of which slot is which. The valid slot with the newest sequence is **active**, and
+the other is **staging**. A new package goes in staging with the next sequence, so writing one never touches the
+package that is running, and a power cut part way through leaves a package that fails its CRC.
+
+`erb_package_slots_boot()` runs at boot, in place of `erb_load()`:
+
+- The newest package loads: it is running.
+- It fails, for any reason `erb_load()` gives, and the other loads: the other is running, and the failed slot's
+  header is programmed to zeros, which takes no erase. The last good package is the newest again, so the next
+  package is written over the failed one. The firmware shows the reason on the error screen for a few seconds
+  first, saying the last good package is running.
+- Neither loads: the error screen shows the newest one's reason. Both are kept, since a later firmware may run
+  them.
+- Neither slot has a valid header: the error screen says no package is installed, and how to install one.
+
+The firmware gives it the mapped slots and a function that clears a header. `runtime/port/erb_package_slots_esp32.c`
+does this on ESP-IDF, and the RP2040 example does it in `main.c`.
+
+`embedded-react flash` reads both headers from the board and writes staging, through `esptool` or `picotool`. On an
+ESP32 it finds the slots in the board's partition table, as the partitions labelled `erb_a` and `erb_b`.
+`embedded-react pack` writes a slot's image to a file instead, as a UF2 on the RP2040, for a factory line or a
+board that isn't attached. On-device hot reload will receive into staging the same way.
+
+A package can still fail after it has loaded. That shows the error screen, and it stays the active package: it
+passed verification, and rolling back would hide the fault.
 
 ## Left for later
 

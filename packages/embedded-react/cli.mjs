@@ -41,6 +41,7 @@ import {
 } from './hotreload/pack-split.mjs';
 import {runDeviceDevServer} from './hotreload/dev-device.mjs';
 import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mjs';
+import {boardByName, flashSlot, packSlot} from './flash.mjs';
 
 const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -61,21 +62,26 @@ Usage:
   embedded-react build [entry] [--out <dir>]   Build the device artifact:
                                                  default → app.erpkg (Flow A: QuickJS bytecode + assets,
                                                            upload to the device's config region)
-                                                 --aot   → app.gen.c/.h + assets.generated.c (Flow B:
-                                                           no QuickJS, compiled into firmware)
-                                                 --aot --screen <WxH>  bake the target panel size so a
-                                                           responsive app folds to that board's layout
-                                                           (e.g. --screen 240x320)
-                                                 --aot --package  → app.erpkg (Flow B package for the
-                                                           Flow B runtime; state, handlers, timers,
-                                                           effects, lists, animations, PanResponder,
-                                                           <Svg>, and the keyboard config)
-                                                 --aot --package --screen <WxH>,<WxH>  one package
-                                                           with a layout for each panel size
+                                                 --aot   → app.erpkg (Flow B package, for the Flow B
+                                                           runtime: write it to a slot with flash)
+                                                 --aot --screen <WxH>,<WxH>  a layout for each panel
+                                                           size (e.g. --screen 240x320,320x240)
                                                  --aot --release  → a package without its debug
                                                            table, written beside it as app.erdbg
                                                  --aot --bake  → app.erpkg.c (the package as a const
                                                            array, for a board with no spare partition)
+                                                 --aot --c  → app.gen.c/.h + assets.generated.c (no
+                                                           QuickJS, compiled into firmware)
+  embedded-react flash [package] --board <name> [--port <p>]
+                                               Write a package to the board's staging slot. The firmware
+                                                 runs it at the next boot if it passes verification, and
+                                                 keeps the last good package until then.
+  embedded-react pack [package] --board <name> [--slot a|b] [--sequence <n>] [--out <dir>]
+                                               Write a slot's image to a file, for a factory line or a
+                                                 drag-and-drop UF2, without a board attached.
+
+  board   esp32-2432s028r, esp32-s3 or rp2040-touch-lcd-1.69
+  package defaults to dist/app.erpkg
 
   entry   dev/export/build use ./index.jsx, ./src/index.jsx, or package.json "main";
           build --aot uses ./App.jsx or ./src/App.jsx. Pass one to override.
@@ -390,9 +396,9 @@ function resolveAppComponent(cwd, explicit) {
 }
 
 /**
- * Flow B (--aot): compile the App component to C (app.gen.{c,h}) + bake assets, to compile into firmware. With
- * --package, to a Flow B package (app.erpkg) with its assets inside, for the Flow B runtime to load: for release
- * without its debug table (app.erdbg beside it), and baked as C (app.erpkg.c) to link into the firmware.
+ * Flow B (--aot): compile the App component to a Flow B package (app.erpkg) with its assets inside, for the Flow B
+ * runtime to load: for release without its debug table (app.erdbg beside it), and baked as C (app.erpkg.c) to link
+ * into the firmware. With --c, to C (app.gen.{c,h}) + bake assets, to compile into firmware.
  */
 async function buildAot(
   cwd,
@@ -553,21 +559,29 @@ async function buildContainer(cwd, explicit, outDir) {
 }
 
 /**
- * `embedded-react build [--aot [--package] [--release] [--bake]] [entry] [--out dir] [--screen WxH[,WxH…]]` —
- * produce the device artifact. --release and --bake build the package.
+ * `embedded-react build [--aot [--release] [--bake] [--c]] [entry] [--out dir] [--screen WxH[,WxH…]]` — produce the
+ * device artifact.
  */
 async function build(args) {
   const cwd = process.cwd();
   const aot = args.includes('--aot');
   const release = args.includes('--release');
   const bake = args.includes('--bake');
-  const asPackage = args.includes('--package') || release || bake;
-  for (const flag of ['--package', '--release', '--bake']) {
+  const asC = args.includes('--c');
+  const asPackage = !asC;
+  for (const flag of ['--release', '--bake', '--c']) {
     if (args.includes(flag) && !aot) {
       console.error(`${flag} only applies to --aot.\n`);
       usage();
       process.exit(1);
     }
+  }
+  if (asC && (release || bake)) {
+    console.error(
+      '--release and --bake build the package, not the C output.\n',
+    );
+    usage();
+    process.exit(1);
   }
   const outIdx = args.indexOf('--out');
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
@@ -598,7 +612,7 @@ async function build(args) {
     }
     if (sizes.length > 1 && !asPackage) {
       console.error(
-        '--screen takes one size for the C output; build with --package for several.\n',
+        '--screen takes one size for the C output; build without --c for several.\n',
       );
       usage();
       process.exit(1);
@@ -621,6 +635,88 @@ async function build(args) {
   else await buildContainer(cwd, explicit, outDir);
 }
 
+/** Reads the package a `pack` or `flash` names, or dist/app.erpkg; exits saying how to build one when it's missing. */
+function readPackageOrExit(cwd, explicit) {
+  const path = resolve(cwd, explicit ?? 'dist/app.erpkg');
+  if (!existsSync(path)) {
+    console.error(
+      `No package at ${path}. Build one with: embedded-react build --aot --screen <WxH>`,
+    );
+    process.exit(1);
+  }
+  return readFileSync(path);
+}
+
+/** The bare arguments, once the values of the listed flags are set aside. */
+function bareArgs(args, flagsWithValues) {
+  const consumed = new Set();
+  for (const flag of flagsWithValues) {
+    const idx = args.indexOf(flag);
+    if (idx >= 0) consumed.add(idx + 1);
+  }
+  return args.filter((a, i) => !a.startsWith('--') && !consumed.has(i));
+}
+
+/** `embedded-react pack [package] --board <name> [--slot a|b] [--sequence n] [--out dir]` */
+function pack(args) {
+  const cwd = process.cwd();
+  const boardName = optValue(args, '--board')?.value;
+  const outDir = resolve(cwd, optValue(args, '--out')?.value ?? 'dist');
+  const sequence = Number(optValue(args, '--sequence')?.value ?? 1);
+  try {
+    const board = boardByName(boardName);
+    if (!Number.isInteger(sequence) || sequence < 1) {
+      throw new Error('--sequence takes a whole number from 1.');
+    }
+    const [explicit] = bareArgs(args, [
+      '--board',
+      '--slot',
+      '--sequence',
+      '--out',
+    ]);
+    mkdirSync(outDir, {recursive: true});
+    const packed = packSlot({
+      packageBytes: readPackageOrExit(cwd, explicit),
+      board,
+      boardName,
+      slotName: optValue(args, '--slot')?.value,
+      sequence,
+      outDir,
+    });
+    console.log(
+      `✓ Slot ${packed.slot}, sequence ${packed.sequence} → ${relative(cwd, packed.file)}, for flash address 0x${packed.address.toString(16)}`,
+    );
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+}
+
+/** `embedded-react flash [package] --board <name> [--port p]` */
+function flash(args) {
+  const cwd = process.cwd();
+  const boardName = optValue(args, '--board')?.value;
+  try {
+    const board = boardByName(boardName);
+    const [explicit] = bareArgs(args, ['--board', '--port']);
+    const written = flashSlot({
+      packageBytes: readPackageOrExit(cwd, explicit),
+      board,
+      port: optValue(args, '--port')?.value,
+      log: line => console.log(line),
+    });
+    console.log(
+      `✓ Package written to slot ${written.slot}, sequence ${written.sequence}. The board runs it at its next boot if it passes verification` +
+        (written.lastGood
+          ? `, and slot ${written.lastGood} stays as the last good package.`
+          : '.'),
+    );
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === 'dev') {
   await dev(rest);
@@ -628,6 +724,10 @@ if (cmd === 'dev') {
   await exportApp(rest);
 } else if (cmd === 'build') {
   await build(rest);
+} else if (cmd === 'pack') {
+  pack(rest);
+} else if (cmd === 'flash') {
+  flash(rest);
 } else if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
   usage();
 } else {

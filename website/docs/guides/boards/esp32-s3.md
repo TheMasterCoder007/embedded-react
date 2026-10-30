@@ -1,6 +1,6 @@
 ---
 title: 'ESP32-S3'
-description: 'Flow A on the Waveshare ESP32-S3-Touch-LCD-7: build the firmware once, then flash your app as a config container.'
+description: 'Flow A on the Waveshare ESP32-S3-Touch-LCD-7: build the firmware once, then flash your app as a config container. A Flow B build loads a compiled package instead.'
 ---
 
 The ESP32-S3 example is the reference Flow A board: a real React reconciler on QuickJS, with the
@@ -153,6 +153,37 @@ pixels through an `esp_lcd` panel handle.
 - **The QuickJS pin.** The tag the top-level `CMakeLists.txt` fetches must match the one the bridge
   builds against and the version stamped into the `.erpkg`; a mismatch is rejected with a panel. Bump
   them together.
+
+## The Flow B build
+
+The same board can run Flow B: no QuickJS, a fixed arena, and a compiled package in a flash slot. It has its own
+sdkconfig layer, and builds `main/main_flow_b.c` in place of `main.c`:
+
+```bash
+cd examples/esp32/esp32-s3
+idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b \
+    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" set-target esp32s3
+idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b \
+    -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" build flash monitor
+```
+
+With no package installed, the first boot shows the error screen, saying so. Then, from your project:
+
+```bash
+npx embedded-react build --aot --screen 800x480    # → dist/app.erpkg
+npx embedded-react flash --board esp32-s3 --port PORT
+```
+
+`partitions.csv` has two [package slots](../../internals/flow-b-packages.md#package-slots) after the `config`
+partition, `erb_a` and `erb_b`, 2 MB each, so the Flow A build's layout doesn't move. `embedded-react flash` writes
+the one that isn't running, and the last good package stays until a new one passes verification.
+
+The layer also makes a hang reset the board (`CONFIG_ESP_TASK_WDT_PANIC`). To check the error screen, add
+`-DER_BOARD_CRASH_TEST=1` to the build for a panic 5 seconds after boot, or `=2` for a hang. Each shows the error
+screen after the reset, naming the fault, then the app comes back and it happens again.
+
+The thermostat demo doesn't compile at 800×480 yet, on either Flow B output: its wide layout uses a dynamic color the
+compiler doesn't take. The watch-face demo and the starter do.
 
 ## WiFi
 

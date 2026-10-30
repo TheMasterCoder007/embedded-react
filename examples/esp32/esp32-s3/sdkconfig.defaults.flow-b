@@ -1,0 +1,7 @@
+# The Flow B build: layered over sdkconfig.defaults, it loads a package from a slot and has no QuickJS. See
+# ../README.md.
+CONFIG_ER_FLOW_B=y
+
+# A hang resets the board, and the next boot shows it on the error screen. Flow A leaves this off, since a long
+# QuickJS boot can hold the idle task off for longer than the task watchdog's timeout.
+CONFIG_ESP_TASK_WDT_PANIC=y

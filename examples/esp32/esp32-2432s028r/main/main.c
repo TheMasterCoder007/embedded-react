@@ -15,22 +15,22 @@
  */
 
 /*
- * embedded-react — ESP32-2432S028R "Cheap Yellow Display" host (Flow B / AOT).
+ * embedded-react — ESP32-2432S028R "Cheap Yellow Display" host (Flow B).
  *
- * The no-PSRAM peer of the ESP32-S3 example: this runs the AOT-compiled C app (dist/app.gen.c, from
- * `npm run aot`) with NO QuickJS and no JS at runtime — exactly what fits a plain ESP32-WROOM-32's
- * internal RAM. It brings up the CYD's ST7789 SPI panel + XPT2046 touch (board.c), registers the lean
- * SPI render backend, calls er_app_build() once, and runs the frame loop: poll touch, pump animations,
- * commit, present, tick. The compiled app IS the firmware — there is no uploaded config (that model
- * was for the QuickJS path).
+ * The no-PSRAM peer of the ESP32-S3 example: NO QuickJS and no JS at runtime — exactly what fits a plain
+ * ESP32-WROOM-32's internal RAM. It brings up the CYD's ST7789 SPI panel + XPT2046 touch (board.c), registers
+ * the lean SPI render backend, loads the active package from its flash slot, and runs the frame loop: poll
+ * touch, pump animations, commit, present, tick. The package is written separately from the firmware
+ * (`embedded-react flash`), so changing the UI needs no firmware rebuild.
  *
  * See ../README.md.
  */
 
-#include "app.gen.h"
-#include "assets.generated.h" /* er_register_assets() — baked <Image> assets (a no-op when none) */
 #include "board.h"
+#include "er_error_screen.h"
 #include "er_scene.h"
+#include "erb_package_slots_esp32.h"
+#include "erb_runtime.h"
 #include "esp32_spi_lcd_backend.h"
 #include "native_renderer.h"
 
@@ -40,21 +40,22 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <stdio.h>
+
 static const char* TAG = "embedded-react";
 
-/* The generated app is shared: packages/embedded-react/dist/app.gen.c is one file that every board example
- * links. Values that depend only on the panel size are worked out at boot, but the layout a responsive demo
- * picks is compiled for the panel it was generated at, so er_app_build() refuses a panel that picks another
- * one (see er_app_fits()). Generate it for this board with:
- *     cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat */
-
-/* app.gen.h also records WHICH demo it came from. A different demo's app.gen.c can still match this
- * panel size and link, leaving a board that boots someone else's UI (or fails on host setters it never
- * generated). Name the real cause instead. */
-#ifndef ER_AOT_DEMO_thermostat
-#error "dist/app.gen.c came from a different demo than this board expects (app.gen.h records which in "\
-       "ER_AOT_DEMO). Regenerate it with the ER_AOT_SCREEN_W/H command above, ending: npm run aot -- thermostat"
+/** @brief The app's mutable state. A package states what it needs, and the thermostat takes under 1 KB. */
+#ifndef ERB_ARENA_BYTES
+#define ERB_ARENA_BYTES (2 * 1024)
 #endif
+
+static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
+
+/** @brief Longest a rejected package's reason stays on screen before the last good one runs; a tap ends it sooner. */
+#define REJECTED_HOLD_MS 10000U
+
+/** @brief Room for one line of erb_error_message(). */
+#define ERROR_MESSAGE_BYTES 160
 
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
@@ -66,7 +67,66 @@ static uint32_t now_ms(void)
     return (uint32_t)(esp_timer_get_time() / 1000);
 }
 
-/** @brief Boots the panel + engine, builds the AOT app, then drives the frame loop. */
+/**
+ * @brief Keeps the error screen up until the panel is tapped or REJECTED_HOLD_MS passes, then takes it down.
+ *
+ * @param[in] touch  Whether touch came up, so a tap can end it.
+ */
+static void hold_error_screen(bool touch)
+{
+    for (uint32_t waited = 0; waited < REJECTED_HOLD_MS; waited += ER_TARGET_FRAME_MS)
+    {
+        er_commit();
+        er_esp32_spi_lcd_present();
+        int touch_x = 0;
+        int touch_y = 0;
+        bool pressed = false;
+        if (touch && board_touch_read(&touch_x, &touch_y, &pressed) && pressed)
+        {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(ER_TARGET_FRAME_MS));
+    }
+    er_error_screen_hide();
+}
+
+/**
+ * @brief Loads the active package at the panel's size. With none that loads, the error screen stays up and the
+ *        frame loop keeps running under it.
+ *
+ * @param[in] touch  Whether touch came up.
+ */
+static void load_package(bool touch)
+{
+    ErbPackageSlots slots;
+    erb_package_slots_esp32_open(&slots);
+
+    const ErbConfig config = {
+        .arena = s_arena,
+        .arena_bytes = sizeof(s_arena),
+        .screen_w = BOARD_LCD_WIDTH,
+        .screen_h = BOARD_LCD_HEIGHT,
+    };
+    ErbPackageSlotBoot boot;
+    const bool running = erb_package_slots_boot(&slots, &config, &boot);
+    if (boot.error.status != ERB_OK)
+    {
+        char message[ERROR_MESSAGE_BYTES];
+        erb_error_message(&boot.error, message, sizeof(message));
+        ESP_LOGE(TAG, "package not loaded: %s", message);
+        erb_package_slots_show_error(&boot);
+    }
+    if (running)
+    {
+        ESP_LOGI(TAG, "package running from slot %c; slot %c is staging", 'a' + boot.active, 'a' + boot.staging);
+        if (boot.error.status != ERB_OK)
+        {
+            hold_error_screen(touch);
+        }
+    }
+}
+
+/** @brief Boots the panel + engine, loads the package, then drives the frame loop. */
 static void run_app(void)
 {
     esp_lcd_panel_handle_t panel = NULL;
@@ -87,30 +147,11 @@ static void run_app(void)
         ESP_LOGW(TAG, "touch init failed — UI renders but input is disabled");
     }
 
-    /* Register baked <Image> assets (er_image_load) BEFORE building the tree so Image nodes resolve their
-       source by name. Generated by `npm run aot`; a no-op when the demo imports no images. */
-    er_register_assets();
+    load_package(touch);
 
-    /* Build the compiled app's scene graph (no JS — straight er_scene.h calls baked at build time). */
-    if (!er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT))
-    {
-        /* The app was compiled for a panel that picks another layout; say so until someone reads the log. */
-        for (;;)
-        {
-            ESP_LOGE(TAG,
-                     "dist/app.gen.c was generated at %dx%d, which picks another layout than this %dx%d "
-                     "panel. Regenerate it with the command at the top of main.c.",
-                     ER_AOT_SCREEN_W,
-                     ER_AOT_SCREEN_H,
-                     BOARD_LCD_WIDTH,
-                     BOARD_LCD_HEIGHT);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-        }
-    }
     /* The software keyboard is compiled in via ERUI_ONSCREEN_KEYBOARD=1 (components/engine/CMakeLists.txt)
      * and auto-shows whenever a TextInput is focused — no runtime call needed. Customise its layout/colours
      * with er_keyboard_set_config(&cfg) here if desired. */
-    ESP_LOGI(TAG, "AOT app built at %dx%d (no QuickJS)", BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
     ESP_LOGI(TAG, "free internal RAM after boot: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     /* Frame loop. The press state machine turns XPT2046 polls into down/move/up for the engine. */
@@ -148,7 +189,7 @@ static void run_app(void)
         const uint32_t now = now_ms();
         const uint32_t dt = now - prev;
         embedded_renderer_tick(dt);
-        er_app_tick((int)dt); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
+        erb_tick(dt); /* advance the app's timers (setInterval/setTimeout); no-op if the app has none */
         prev = now;
 
         /* Adaptive pacing: sleep the remainder up to the target; always yield >=1 tick for the idle task. */
@@ -166,7 +207,7 @@ static void run_app(void)
 /** @brief IDF entry point. */
 void app_main(void)
 {
-    ESP_LOGI(TAG, "embedded-react ESP32-2432S028R (CYD) host — Flow B (AOT, no QuickJS)");
+    ESP_LOGI(TAG, "embedded-react ESP32-2432S028R (CYD) host — Flow B (no QuickJS)");
     ESP_LOGI(TAG, "free internal RAM: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     run_app();
 }

@@ -1588,7 +1588,7 @@ export class Codegen {
 export function notYet(what: string): never {
   throw aotError(
     `AOT: the package output doesn't support ${what} yet`,
-    'build without --package to get the C output, which supports it.',
+    'build with --c to get the C output, which supports it.',
   );
 }
 

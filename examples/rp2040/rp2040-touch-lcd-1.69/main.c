@@ -15,45 +15,45 @@
  */
 
 /*
- * embedded-react — Waveshare RP2040-Touch-LCD-1.69 host (Flow B / AOT).
+ * embedded-react — Waveshare RP2040-Touch-LCD-1.69 host (Flow B).
  *
  * The smallest board in the examples family: an RP2040 (264 KB SRAM, no FPU, no PSRAM) driving a
- * 1.69" 240x280 ST7789V2 panel with CST816S capacitive touch. Like the CYD example, this runs
- * the AOT-compiled C app (dist/app.gen.c, from `npm run aot`) with NO QuickJS and no JS at runtime.
- * It brings up the panel + touch (board.c), registers the pico-spi-lcd render backend, calls
- * er_app_build() once, and runs the frame loop: poll touch, commit, present, tick.
+ * 1.69" 240x280 ST7789V2 panel with CST816S capacitive touch. Like the CYD example, this has NO QuickJS
+ * and no JS at runtime. It brings up the panel + touch (board.c), registers the pico-spi-lcd render
+ * backend, loads the active package from its flash slot, and runs the frame loop: poll touch, commit,
+ * present, tick. The package is written separately from the firmware (`embedded-react flash`), so changing
+ * the UI needs no firmware rebuild.
  *
  * See ./README.md.
  */
 
-#include "app.gen.h"
-#include "assets.generated.h" /* er_register_assets() — baked <Image> assets (a no-op when none) */
 #include "board.h"
 #include "er_error_screen.h"
 #include "er_scene.h"
+#include "erb_package_slots.h"
+#include "erb_runtime.h"
 #include "native_renderer.h"
 #include "pedometer.h"
 #include "pico_spi_lcd_backend.h"
 
+#include "hardware/flash.h"
 #include "hardware/structs/mpu.h"
+#include "hardware/sync.h"
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
 #include <stdio.h>
+#include <string.h>
 
-/* The generated app is shared: packages/embedded-react/dist/app.gen.c is one file that every board example
- * links. Values that depend only on the panel size are worked out at boot, but the layout a responsive demo
- * picks is compiled for the panel it was generated at, so er_app_build() refuses a panel that picks another
- * one (see er_app_fits()). Generate it for this board with:
- *     cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face */
-
-/* app.gen.h also records WHICH demo it came from. This board's main.c calls that demo's useHostValue
- * setters, so an app.gen.c built from another demo fails as a pile of implicit-declaration errors for
- * functions that were simply never generated. Name the real cause instead. */
-#ifndef ER_AOT_DEMO_watch_2d_face
-#error "dist/app.gen.c came from a different demo than this board expects (app.gen.h records which in "\
-       "ER_AOT_DEMO). Regenerate it with the ER_AOT_SCREEN_W/H command above, ending: npm run aot -- watch-face"
+/** @brief The app's mutable state. A package states what it needs, and the watch face takes about 0.5 KB. */
+#ifndef ERB_ARENA_BYTES
+#define ERB_ARENA_BYTES (4 * 1024)
 #endif
+
+static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
+
+/** @brief Room for one line of erb_error_message(). */
+#define ERROR_MESSAGE_BYTES 160
 
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
@@ -73,6 +73,34 @@ static uint32_t now_ms(void)
 
 /** @brief Watchdog timeout. A frame takes tens of ms, so only a hang (or a stack-guard lockup) reaches it. */
 #define ER_WATCHDOG_MS 1000U
+
+/** @brief Watchdog timeout while booting: checking a full slot's CRC from flash, twice on a rollback, takes longer
+ *  than a frame. */
+#define ER_WATCHDOG_BOOT_MS 8000U
+
+/* A forced failure, to check the error screen on hardware: `-DER_BOARD_CRASH_TEST=1` hard faults 5 s after boot, and
+ * =2 hangs. Each shows the error screen after the reset, naming it, then the app comes back and it happens again. */
+#ifdef ER_BOARD_CRASH_TEST
+#define CRASH_TEST_AFTER_MS 5000U
+#define CRASH_TEST_HARD_FAULT 1
+#define CRASH_TEST_HANG 2
+
+/** @brief Fails the way ER_BOARD_CRASH_TEST asks, once the time has come. */
+static void crash_test(uint32_t since_boot_ms)
+{
+    if (since_boot_ms < CRASH_TEST_AFTER_MS)
+    {
+        return;
+    }
+#if ER_BOARD_CRASH_TEST == CRASH_TEST_HARD_FAULT
+    __asm volatile("udf #0");
+#elif ER_BOARD_CRASH_TEST == CRASH_TEST_HANG
+    for (;;)
+    {
+    }
+#endif
+}
+#endif
 
 /** @brief Longest a fault from before the reset stays on screen at boot; a tap ends it sooner. */
 #define FAULT_HOLD_MS 10000U
@@ -164,7 +192,32 @@ void __attribute__((naked)) isr_hardfault(void)
 }
 
 /**
- * @brief Shows a fault from before the reset, if there was one, until the panel is tapped or FAULT_HOLD_MS passes.
+ * @brief Keeps the error screen up until the panel is tapped or FAULT_HOLD_MS passes, then takes it down.
+ *
+ * @param[in] touch  Whether touch came up, so a tap can end it.
+ */
+static void hold_error_screen(bool touch)
+{
+    board_backlight(90);
+    for (uint32_t waited = 0; waited < FAULT_HOLD_MS; waited += ER_TARGET_FRAME_MS)
+    {
+        watchdog_update();
+        er_commit();
+        er_pico_spi_lcd_present();
+        int touch_x = 0;
+        int touch_y = 0;
+        bool pressed = false;
+        if (touch && board_touch_read(&touch_x, &touch_y, &pressed) && pressed)
+        {
+            break;
+        }
+        sleep_ms(ER_TARGET_FRAME_MS);
+    }
+    er_error_screen_hide();
+}
+
+/**
+ * @brief Shows a fault from before the reset, if there was one, for as long as hold_error_screen() does.
  *
  * @param[in] touch  Whether touch came up, so a tap can end it.
  */
@@ -180,21 +233,65 @@ static void show_recorded_fault(bool touch)
     }
     printf("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.pc);
     er_fault_show_recorded(&s_fault, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
-    board_backlight(90);
-    for (uint32_t waited = 0; waited < FAULT_HOLD_MS; waited += ER_TARGET_FRAME_MS)
+    hold_error_screen(touch);
+}
+
+/**
+ * @brief Programs a slot's header page to zeros, which takes no erase, so it no longer reads as valid.
+ *
+ * @param[in] slot     The slot.
+ * @param[in] context  Unused.
+ */
+static void invalidate_slot(unsigned slot, void* context)
+{
+    (void)context;
+    uint8_t zeros[FLASH_PAGE_SIZE]; /* in RAM: flash can't be read while it is programmed */
+    memset(zeros, 0, sizeof(zeros));
+    const uint32_t offset = slot == 0u ? ER_PACKAGE_SLOT_A_OFFSET : ER_PACKAGE_SLOT_B_OFFSET;
+    const uint32_t interrupts = save_and_disable_interrupts();
+    flash_range_program(offset, zeros, sizeof(zeros));
+    restore_interrupts(interrupts);
+}
+
+/**
+ * @brief Loads the active package at the panel's size. With none that loads, the error screen stays up and the
+ *        frame loop keeps running under it.
+ *
+ * @param[in] touch  Whether touch came up.
+ */
+static void load_package(bool touch)
+{
+    const ErbPackageSlots slots = {
+        .slots =
+            {
+                {(const void*)(XIP_BASE + ER_PACKAGE_SLOT_A_OFFSET), ER_PACKAGE_SLOT_BYTES},
+                {(const void*)(XIP_BASE + ER_PACKAGE_SLOT_B_OFFSET), ER_PACKAGE_SLOT_BYTES},
+            },
+        .invalidate = invalidate_slot,
+    };
+    const ErbConfig config = {
+        .arena = s_arena,
+        .arena_bytes = sizeof(s_arena),
+        .screen_w = BOARD_LCD_WIDTH,
+        .screen_h = BOARD_LCD_HEIGHT,
+    };
+    ErbPackageSlotBoot boot;
+    const bool running = erb_package_slots_boot(&slots, &config, &boot);
+    if (boot.error.status != ERB_OK)
     {
-        er_commit();
-        er_pico_spi_lcd_present();
-        int touch_x = 0;
-        int touch_y = 0;
-        bool pressed = false;
-        if (touch && board_touch_read(&touch_x, &touch_y, &pressed) && pressed)
-        {
-            break;
-        }
-        sleep_ms(ER_TARGET_FRAME_MS);
+        char message[ERROR_MESSAGE_BYTES];
+        erb_error_message(&boot.error, message, sizeof(message));
+        printf("package not loaded: %s\n", message);
+        erb_package_slots_show_error(&boot);
     }
-    er_error_screen_hide();
+    if (running)
+    {
+        printf("package running from slot %c; slot %c is staging\n", 'a' + boot.active, 'a' + boot.staging);
+        if (boot.error.status != ERB_OK)
+        {
+            hold_error_screen(touch);
+        }
+    }
 }
 
 #if ER_BOARD_DEBUG
@@ -244,7 +341,7 @@ int main(void)
         sleep_ms(100);
     }
 #endif
-    printf("embedded-react RP2040-Touch-LCD-1.69 host — Flow B (AOT, no QuickJS)\n");
+    printf("embedded-react RP2040-Touch-LCD-1.69 host — Flow B (no QuickJS)\n");
 
     if (!display_ok)
     {
@@ -277,30 +374,14 @@ int main(void)
     show_recorded_fault(touch);
 
     /* Arm the watchdog before the app runs: the first full repaint below is where the stack is deepest. */
-    watchdog_enable(ER_WATCHDOG_MS, true);
+    watchdog_enable(ER_WATCHDOG_BOOT_MS, true);
 
-    /* Register baked <Image> assets BEFORE building the tree so Image nodes resolve their source by
-       name (a no-op for the watch face — it imports no images). */
-    er_register_assets();
+    load_package(touch);
 
-    /* Build the compiled app's scene graph (no JS — straight er_scene.h calls baked at build time). */
-    if (!er_app_build(BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT))
-    {
-        /* The app was compiled for a panel that picks another layout. Repeat the reason, since USB serial
-         * may connect late, and keep the watchdog fed so it does not turn this into a boot loop. */
-        for (;;)
-        {
-            printf("dist/app.gen.c was generated at %dx%d, which picks another layout than this %dx%d panel. "
-                   "Regenerate it with the command at the top of main.c.\n",
-                   ER_AOT_SCREEN_W,
-                   ER_AOT_SCREEN_H,
-                   BOARD_LCD_WIDTH,
-                   BOARD_LCD_HEIGHT);
-            watchdog_update();
-            sleep_ms(1000);
-        }
-    }
-    printf("AOT app built at %dx%d (no QuickJS)\n", BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    /* The sensors reach the app through useHostValue. A package without one of these just ignores it. */
+    const int input_steps = erb_input_find("steps");
+    const int input_dotx = erb_input_find("dotx");
+    const int input_doty = erb_input_find("doty");
 
     /* Present the first frame while the backlight is still off, THEN light it — so the panel goes
      * straight from black to the watch face, with no flash of noise or blank. (The backlight was held
@@ -310,9 +391,13 @@ int main(void)
 #if ER_BOARD_DEBUG < 2
     board_backlight(90); /* debug builds already lit it for the test pattern above */
 #endif
+    watchdog_enable(ER_WATCHDOG_MS, true);
 
     /* Frame loop. The press state machine turns CST816S polls into down/move/up for the engine. */
     uint32_t prev = now_ms();
+#ifdef ER_BOARD_CRASH_TEST
+    const uint32_t boot_ms = prev;
+#endif
     bool touch_down = false;
     int last_x = 0, last_y = 0;
     while (true)
@@ -342,8 +427,8 @@ int main(void)
         }
 
         /* Real step counting: poll the accelerometer, run the pedometer, and push the total into the app
-         * (er_app_set_steps → the useHostValue('steps') field) only when it changes — app_update() re-
-         * applies dependent nodes, so there's no point re-running it every frame. */
+         * (the useHostValue steps input) only when it changes — setting it runs the app's update, which
+         * re-applies dependent nodes, so there's no point re-running it every frame. */
         if (imu)
         {
             int16_t ax = 0, ay = 0, az = 0;
@@ -354,7 +439,7 @@ int main(void)
                 if (steps != s_last_steps)
                 {
                     s_last_steps = steps;
-                    er_app_set_steps((int)steps);
+                    erb_input_set_int(input_steps, (int32_t)steps);
                 }
             }
 
@@ -380,12 +465,12 @@ int main(void)
                 if (ndx != ldx)
                 {
                     ldx = ndx;
-                    er_app_set_dotx(ndx);
+                    erb_input_set_int(input_dotx, ndx);
                 }
                 if (ndy != ldy)
                 {
                     ldy = ndy;
-                    er_app_set_doty(ndy);
+                    erb_input_set_int(input_doty, ndy);
                 }
             }
         }
@@ -416,8 +501,12 @@ int main(void)
         const uint32_t now = now_ms();
         const uint32_t dt = now - prev;
         embedded_renderer_tick(dt);
-        er_app_tick((int)dt); /* advance app timers — the watch face's 1 Hz movement lives here */
+        erb_tick(dt); /* advance app timers — the watch face's 1 Hz movement lives here */
         prev = now;
+
+#ifdef ER_BOARD_CRASH_TEST
+        crash_test(now - boot_ms);
+#endif
 
         /* Adaptive pacing: sleep the remainder up to the target frame period. */
         const uint32_t used = now_ms() - frame_start;

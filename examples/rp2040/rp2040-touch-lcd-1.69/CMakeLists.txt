@@ -2,10 +2,9 @@
 # (RP2040, 1.69" rounded-rectangle 240x280 ST7789V2 SPI panel, CST816S capacitive touch).
 #   mkdir build && cd build && cmake .. && make          # → embedded-react-watch.uf2
 #
-# Flow B needs NO QuickJS (the app is compiled C): this pulls in the embedded-react engine + the
-# pico-spi-lcd backend — from the LOCAL monorepo checkout when building in-tree, else fetched from
-# GitHub. The AOT app itself (packages/embedded-react/dist/app.gen.c) is generated separately by
-# `npm run aot` (see below).
+# Flow B needs NO QuickJS: this pulls in the embedded-react engine, runtime + the pico-spi-lcd backend —
+# from the LOCAL monorepo checkout when building in-tree, else fetched from GitHub. The app is a package
+# written to a slot, separately from the firmware (embedded-react flash).
 #
 # The pico-sdk is located via the standard shim: set PICO_SDK_PATH, or PICO_SDK_FETCH_FROM_GIT=1 to
 # have CMake download it.
@@ -38,16 +37,12 @@ set(CMAKE_C_STANDARD 11)
 
 pico_sdk_init()
 
-# --- AOT app (generated, NOT committed) ------------------------------------------------------------
-# Generate it first, sized for this board's 240x280 panel:
-#   (in packages/embedded-react)  ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face
-set(APP_GEN "${EMBEDDED_REACT_SRC_DIR}/packages/embedded-react/dist/app.gen.c")
-set(APP_GEN_DIR "${EMBEDDED_REACT_SRC_DIR}/packages/embedded-react/dist")
-if(NOT EXISTS "${APP_GEN}")
-    message(FATAL_ERROR
-        "No AOT app at ${APP_GEN} — generate it first (sized for this board):\n"
-        "    cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 npm run aot -- watch-face")
-endif()
+# --- Package slots --------------------------------------------------------------------------------
+# Two 512 KB slots above the firmware, in the 2 MB the Pico SDK assumes of this board's flash. Keep these in
+# step with packages/embedded-react/flash.mjs. stack_guard.ld fails the link if the firmware reaches them.
+set(ER_PACKAGE_SLOT_A_OFFSET 0x100000)
+set(ER_PACKAGE_SLOT_B_OFFSET 0x180000)
+set(ER_PACKAGE_SLOT_BYTES 0x80000)
 
 # --- embedded-react engine, RAM-tuned for the RP2040 (264 KB SRAM, no FPU) -------------------------
 # The 240x280 RGB565 framebuffer is 131.3 KB, so every static pool must fit in what's left. Same
@@ -90,7 +85,7 @@ target_include_directories(er_engine PUBLIC "${E}/include")
 target_include_directories(er_engine PRIVATE
     "${E}/core" "${E}/scene" "${E}/layout" "${E}/rendering" "${E}/text" "${E}/animation" "${E}/font")
 
-# PUBLIC so dependents (app.gen.c, main) agree on struct layout (er_scene.h).
+# PUBLIC so dependents (the runtime, main) agree on struct layout (er_scene.h).
 target_compile_definitions(er_engine PUBLIC
     ERUI_SHADOWS=0
     ERUI_BORDER_AA=1
@@ -113,6 +108,9 @@ target_compile_definitions(er_engine PUBLIC
                                # 240x280 framebuffer, so it takes the smaller budget.
     ERUI_IMAGE_REGISTRY_MAX=8  # the watch face registers none; the engine default (128) is sized for
                                # icon-heavy apps and would cost ~10 KB of .bss this board cannot spare
+    ERUI_MAX_ANIMATIONS=16     # the watch face runs none; the defaults (64 animations, 32 values, 8 groups)
+    ERUI_MAX_ANIM_VALUES=8     # cost ~16 KB of .bss, and the Flow B runtime needs that room. A package that
+    ERUI_MAX_ANIM_GROUPS=4     # needs more is rejected at load, saying which
 )
 # Vector rasterizer pools (internal to vector.c → PRIVATE). The current digital watch face uses NO <Svg>,
 # so these are sized to the floor — just enough that the pools exist. Bump them if a demo brings back
@@ -136,26 +134,50 @@ target_compile_definitions(er_engine PUBLIC
     ERUI_VECTOR_GRADS_MAX=1
 )
 
+# --- Flow B runtime --------------------------------------------------------------------------------
+# It checks a package and runs it, with no QuickJS and no heap.
+set(R "${EMBEDDED_REACT_SRC_DIR}/runtime")
+add_library(er_runtime STATIC
+    "${R}/er_container.c"
+    "${R}/er_assets.c"
+    "${R}/erb_props.c"
+    "${R}/erb_verify.c"
+    "${R}/erb_vm.c"
+    "${R}/erb_runtime.c"
+    "${R}/erb_package_slots.c"
+)
+target_include_directories(er_runtime PUBLIC "${R}")
+target_link_libraries(er_runtime PUBLIC er_engine)
+# How large an app this firmware accepts: most of these size the verifier's fixed scratch, beside the framebuffer.
+# PUBLIC, since erb_internal.h sizes structs by them.
+target_compile_definitions(er_runtime PUBLIC
+    ERB_MAX_FUNCTIONS=64
+    ERB_MAX_FUNCTION_WORDS=4096
+    ERB_MAX_LOOPS=16
+    ERB_REPORT_PLACES=16
+)
+# The VM's dispatch loop stays in flash: at about 12 KB it doesn't fit in SRAM beside the framebuffer.
+
 # --- firmware --------------------------------------------------------------------------------------
 add_executable(embedded-react-watch
     main.c
     board.c
     pedometer.c
     "${EMBEDDED_REACT_SRC_DIR}/backends/pico-spi-lcd/renderer_backend.c"
-    "${APP_GEN}"
-    "${APP_GEN_DIR}/assets.generated.c"
 )
 target_include_directories(embedded-react-watch PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
     "${EMBEDDED_REACT_SRC_DIR}/backends/pico-spi-lcd"
-    "${APP_GEN_DIR}"
 )
 target_link_libraries(embedded-react-watch
     er_engine
+    er_runtime
     pico_stdlib
+    hardware_flash
     hardware_spi
     hardware_i2c
     hardware_pwm
+    hardware_sync
     hardware_watchdog
 )
 
@@ -164,12 +186,18 @@ target_link_libraries(embedded-react-watch
 # MPU guard between the stack and the heap, so an overflow faults instead of corrupting the framebuffer;
 # stack_guard.ld fails the link if .data/.bss ever grow into that guard.
 set(ER_STACK_GUARD_BYTES 2048)
+math(EXPR ER_FRAMEBUFFER_BYTES "240 * 280 * 2") # malloc'd at boot, so the link checks it fits: see stack_guard.ld
 target_compile_definitions(embedded-react-watch PRIVATE
     PICO_STACK_SIZE=0x1000
     STACK_GUARD_BYTES=${ER_STACK_GUARD_BYTES}U
+    ER_PACKAGE_SLOT_A_OFFSET=${ER_PACKAGE_SLOT_A_OFFSET}U
+    ER_PACKAGE_SLOT_B_OFFSET=${ER_PACKAGE_SLOT_B_OFFSET}U
+    ER_PACKAGE_SLOT_BYTES=${ER_PACKAGE_SLOT_BYTES}U
 )
 target_link_options(embedded-react-watch PRIVATE
     "LINKER:--defsym=__stack_guard_bytes=${ER_STACK_GUARD_BYTES}"
+    "LINKER:--defsym=__framebuffer_bytes=${ER_FRAMEBUFFER_BYTES}"
+    "LINKER:--defsym=__package_slots_offset=${ER_PACKAGE_SLOT_A_OFFSET}"
     "${CMAKE_CURRENT_LIST_DIR}/stack_guard.ld"
 )
 
@@ -177,6 +205,11 @@ target_link_options(embedded-react-watch PRIVATE
 # a color-bar test pattern at boot.
 if(DEFINED ER_BOARD_DEBUG)
     target_compile_definitions(embedded-react-watch PRIVATE ER_BOARD_DEBUG=${ER_BOARD_DEBUG})
+endif()
+
+# A forced failure, to check the error screen on hardware (see main.c): 1 = a hard fault, 2 = a hang.
+if(DEFINED ER_BOARD_CRASH_TEST)
+    target_compile_definitions(embedded-react-watch PRIVATE ER_BOARD_CRASH_TEST=${ER_BOARD_CRASH_TEST})
 endif()
 
 # Log over USB CDC (the board's only exposed port); UART pins aren't broken out usefully here.
