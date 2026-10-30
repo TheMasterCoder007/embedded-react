@@ -261,6 +261,8 @@ static void test_node_ref_outlives_node(void)
     assert(zero_tag != NULL);
     const ERNodeRef zeroed = {0U, 0U};
     assert(er_node_deref(zeroed) == NULL && "a zeroed reference must not resolve");
+    assert(er_node_next_serial(1U) == 2U);
+    assert(er_node_next_serial(UINT32_MAX) == 1U && "a wrapping serial must skip 0");
 
     const ERNodeRef before_reset = er_node_ref(zero_tag);
     er_reset();
