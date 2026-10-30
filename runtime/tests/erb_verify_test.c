@@ -1213,7 +1213,13 @@ static void test_messages(void)
     error.available = 24576;
     char text[128];
     erb_error_message(&error, text, sizeof(text));
-    CHECK(strcmp(text, "needs 30000 arena bytes, firmware reserves 24576") == 0, "the arena message has the amounts");
+    CHECK(strcmp(text, "arena: needs 30,000 B, firmware reserves 24,576 B") == 0, "the arena message has the amounts");
+
+    error.resource = ERB_RESOURCE_NODES;
+    error.needed = 1234567;
+    error.available = 512;
+    erb_error_message(&error, text, sizeof(text));
+    CHECK(strcmp(text, "nodes: needs 1,234,567, firmware reserves 512") == 0, "a count has no unit");
 
     error.status = ERB_ERR_ENGINE_ABI;
     error.needed = 9;

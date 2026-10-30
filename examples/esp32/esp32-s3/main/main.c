@@ -35,6 +35,7 @@
  */
 
 #include "board.h"
+#include "er_error_screen.h"
 #include "er_perf.h" /* per-frame timing split + resource counters (feeds the overlay) */
 #include "er_runtime.h"
 #include "er_scene.h"
@@ -51,6 +52,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -118,7 +120,7 @@ static void remap_touch(int* x, int* y)
 #define ER_JS_MAX_STACK (CONFIG_ESP_MAIN_TASK_STACK_SIZE / 4 * 3)
 
 /* Hard cap on the JS heap (all of it lives in PSRAM via er_js_mf). A runaway app fails with a JS
-   out-of-memory error — caught and shown by the error overlay — instead of exhausting the PSRAM the
+   out-of-memory error — caught and shown on the error screen — instead of exhausting the PSRAM the
    framebuffers and engine pools share. */
 #define ER_JS_MEMORY_LIMIT (4u * 1024u * 1024u)
 
@@ -472,6 +474,58 @@ static void install_render_workers(void)
 }
 #endif /* ERUI_RENDER_WORKERS > 1 */
 
+/** @brief Longest the fault the last reset came from stays on screen at boot; a tap ends it sooner. */
+#define FAULT_HOLD_MS 10000U
+
+/** @brief The fault the last reset came from, or NULL when it wasn't one. */
+static const char* reset_fault_reason(void)
+{
+    switch (esp_reset_reason())
+    {
+        case ESP_RST_PANIC:
+            return "panic: a firmware or engine crash";
+        case ESP_RST_INT_WDT:
+        case ESP_RST_TASK_WDT:
+        case ESP_RST_WDT:
+            return "watchdog reset: a hang";
+        default:
+            return NULL;
+    }
+}
+
+/**
+ * @brief Shows the fault the last reset came from, if there was one, until the panel is tapped or FAULT_HOLD_MS
+ *        passes. The chip keeps the reset reason itself, so the record needs no no-init RAM here.
+ *
+ * @param[in] touch  Whether touch came up, so a tap can end it.
+ */
+static void show_reset_fault(bool touch)
+{
+    const char* reason = reset_fault_reason();
+    if (!reason)
+    {
+        return;
+    }
+    ESP_LOGE(TAG, "restarted after a fault: %s", reason);
+    ERFaultRecord record;
+    er_fault_record(&record, reason, 0u, 0u);
+    er_fault_show_recorded(&record, SCREEN_W, SCREEN_H);
+    for (uint32_t waited = 0; waited < FAULT_HOLD_MS; waited += ER_TARGET_FRAME_MS)
+    {
+        er_commit();
+        er_esp32_lcd_present();
+        int touch_x = 0;
+        int touch_y = 0;
+        bool pressed = false;
+        if (touch && board_touch_read(&touch_x, &touch_y, &pressed) && pressed)
+        {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(ER_TARGET_FRAME_MS));
+    }
+    er_error_screen_hide();
+}
+
 /**
  * @brief Boots the engine + er_runtime, loads the config from flash, then drives the frame loop.
  */
@@ -549,6 +603,10 @@ static void run_app(void)
     if (display && !touch)
     {
         ESP_LOGW(TAG, "touch init failed — display works but input is disabled");
+    }
+    if (display)
+    {
+        show_reset_fault(touch);
     }
 
     /* Boot the portable QuickJS host core with the JS heap in PSRAM and the stack guard set. */

@@ -25,6 +25,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   package as a C array (`app.erpkg.c`) for boards with no spare partition.
 - `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it. Both demos
   match at each of their boards' sizes.
+- One red error screen for both flows, drawn by the engine without the app's scene. It shows the reason,
+  the source line and the amounts involved. An uncaught JS exception in Flow A now shows it too.
+- A native fault or watchdog reset can be recorded in no-init RAM and shown after the reset
+  (`er_fault_record`, `er_fault_show_recorded`). The RP2040 and ESP32-S3 examples do this.
 
 ### Changed
 

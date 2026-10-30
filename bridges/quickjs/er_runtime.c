@@ -18,18 +18,18 @@
  * er_runtime — portable QuickJS host core for Flow A (see er_runtime.h).
  *
  * Owns the JSRuntime/JSContext lifecycle and the host globals (console, screen, optional __erPersist),
- * and wraps load/pump/reset/error-overlay. No platform deps: the caller provides the backend, the app
+ * and wraps load/pump/reset/error screen. No platform deps: the caller provides the backend, the app
  * bytes, and the frame loop. Shared by the desktop demo + simulator (examples/linux/host.c) and usable
  * directly from MCU firmware.
  */
 
 #include "er_runtime.h"
 
-#include "er_assets.h"                   /* er_assets_load_pack (ERPK asset section of the container) */
-#include "er_js_alloc.h"                 /* default JS-heap allocator with working GC size accounting */
-#include "er_scene.h"                    /* er_reset */
-#include "native_ui_bridge.h"            /* er_bridge_install / _pump / _run_bytecode / _now_ms */
-#include "overlay/message_overlay.qbc.h" /* precompiled error-overlay app (works on parser-less builds) */
+#include "er_assets.h"        /* er_assets_load_pack (ERPK asset section of the container) */
+#include "er_error_screen.h"  /* the error screen JS errors and load failures show */
+#include "er_js_alloc.h"      /* default JS-heap allocator with working GC size accounting */
+#include "er_scene.h"         /* er_reset */
+#include "native_ui_bridge.h" /* er_bridge_install / _pump / _run_bytecode / _now_ms */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -66,8 +66,12 @@ static size_t s_gc_threshold_default = 0;
  *         er_runtime_set_wall_clock. Kept across er_runtime_reset, so the time survives a reload. */
 static int64_t s_wall_offset_ms = 0;
 
-/* The message-overlay app (RN redbox) ships as precompiled bytecode — see overlay/message_overlay.js
- * for the source, what it renders, and how to regenerate message_overlay.qbc.c. */
+/** @brief The error screen's title and hint for a JS error. */
+#define JS_ERROR_TITLE "JS error"
+#define JS_ERROR_HINT "fix the source and reload"
+
+/** @brief Separates the message from the stack in s_last_error. */
+#define STACK_SEPARATOR "\n\n"
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Console / logging
@@ -412,6 +416,47 @@ static void install_globals(void)
     }
 }
 
+/**
+ * @brief Logs a JS exception (its message, then its stack) through the log sink and keeps it as the last error.
+ *
+ * @param[in] ctx        The context it was thrown in.
+ * @param[in] exception  The thrown value; borrowed.
+ * @param[in] where      What threw, such as "timer callback".
+ */
+static void record_exception(JSContext* ctx, JSValueConst exception, const char* where)
+{
+    const char* msg = JS_ToCString(ctx, exception);
+    JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
+    const char* st = JS_IsUndefined(stack) ? NULL : JS_ToCString(ctx, stack);
+
+    char head[600];
+    snprintf(head, sizeof(head), "JS %s%sexception: %s", where, *where ? " " : "", msg ? msg : "(unknown)");
+    emit_line(head);
+    if (st)
+    {
+        emit_line(st);
+    }
+    snprintf(
+        s_last_error, sizeof(s_last_error), "%s%s%s", msg ? msg : "(unknown)", st ? STACK_SEPARATOR : "", st ? st : "");
+
+    if (msg)
+    {
+        JS_FreeCString(ctx, msg);
+    }
+    if (st)
+    {
+        JS_FreeCString(ctx, st);
+    }
+    JS_FreeValue(ctx, stack);
+}
+
+/** @brief A JS exception nothing caught, from the bridge: logged, kept, and shown on the error screen. */
+static void rt_uncaught(JSContext* ctx, JSValueConst exception, const char* where)
+{
+    record_exception(ctx, exception, where);
+    er_runtime_show_error();
+}
+
 /** @brief Reports an uncaught exception to the log sink + captures it; frees the eval result. */
 static bool rt_report(JSValue result)
 {
@@ -419,28 +464,7 @@ static bool rt_report(JSValue result)
     if (JS_IsException(result))
     {
         JSValue exc = JS_GetException(s_ctx);
-        const char* msg = JS_ToCString(s_ctx, exc);
-        JSValue stack = JS_GetPropertyStr(s_ctx, exc, "stack");
-        const char* st = JS_IsUndefined(stack) ? NULL : JS_ToCString(s_ctx, stack);
-
-        char head[600];
-        snprintf(head, sizeof(head), "JS exception: %s", msg ? msg : "(unknown)");
-        emit_line(head);
-        if (st)
-        {
-            emit_line(st);
-        }
-        snprintf(s_last_error, sizeof(s_last_error), "%s%s%s", msg ? msg : "(unknown)", st ? "\n\n" : "", st ? st : "");
-
-        if (msg)
-        {
-            JS_FreeCString(s_ctx, msg);
-        }
-        if (st)
-        {
-            JS_FreeCString(s_ctx, st);
-        }
-        JS_FreeValue(s_ctx, stack);
+        record_exception(s_ctx, exc, "");
         JS_FreeValue(s_ctx, exc);
         ok = false;
     }
@@ -556,6 +580,7 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     check_gc_threshold();
     apply_gc_floor();
     install_globals();
+    er_bridge_set_uncaught_handler(rt_uncaught);
     return s_ctx != NULL;
 }
 
@@ -569,6 +594,7 @@ bool er_runtime_load_bytecode(const void* buf, size_t len)
     const bool ok = rt_report(er_bridge_run_bytecode(s_ctx, (const uint8_t*)buf, len));
     if (ok)
     {
+        er_error_screen_hide();
         er_bridge_pump(s_ctx);
     }
     return ok;
@@ -804,6 +830,7 @@ bool er_runtime_load_source(const char* src, size_t len, const char* name)
     const bool ok = rt_report(JS_Eval(s_ctx, src, len, name ? name : "<app>", JS_EVAL_TYPE_GLOBAL));
     if (ok)
     {
+        er_error_screen_hide();
         er_bridge_pump(s_ctx);
     }
     return ok;
@@ -825,6 +852,7 @@ bool er_runtime_reset(void)
         JS_FreeContext(s_ctx);
         s_ctx = NULL;
     }
+    er_error_screen_hide();
     er_reset();
     install_globals();
     return s_ctx != NULL;
@@ -866,52 +894,33 @@ const char* er_runtime_last_error(void)
 
 void er_runtime_show_message(const char* title, const char* body, const char* hint)
 {
-    if (!s_ctx)
-    {
-        return;
-    }
-    /* Clear the (possibly half-built) scene, publish the strings, and run the overlay app (precompiled
-     * bytecode, so this works on parser-less builds) in the current context. The caller's next commit
-     * paints it. */
-    er_reset();
-    JSValue global = JS_GetGlobalObject(s_ctx);
-    JS_SetPropertyStr(s_ctx, global, "__title", JS_NewString(s_ctx, title ? title : "Error"));
-    JS_SetPropertyStr(s_ctx, global, "__error", JS_NewString(s_ctx, body ? body : ""));
-    JS_SetPropertyStr(s_ctx, global, "__hint", JS_NewString(s_ctx, hint ? hint : ""));
-    JS_FreeValue(s_ctx, global);
-    JSValue r = er_bridge_run_bytecode(s_ctx, er_overlay_qbc, er_overlay_qbc_len);
-    if (JS_IsException(r))
-    {
-        /* The overlay itself failed (e.g. a bytecode/engine version mismatch) — keep the frame loop
-         * running, but log the overlay exception to aid diagnosis. */
-        JSValue exc = JS_GetException(s_ctx);
-        const char* msg = JS_ToCString(s_ctx, exc);
-        emit_line("er_runtime_show_message: overlay bytecode failed to run");
-        if (msg)
-        {
-            emit_line(msg);
-            JS_FreeCString(s_ctx, msg);
-        }
-        JSValue stack = JS_GetPropertyStr(s_ctx, exc, "stack");
-        if (!JS_IsUndefined(stack))
-        {
-            const char* st = JS_ToCString(s_ctx, stack);
-            if (st)
-            {
-                emit_line(st);
-                JS_FreeCString(s_ctx, st);
-            }
-        }
-        JS_FreeValue(s_ctx, stack);
-        JS_FreeValue(s_ctx, exc);
-    }
-    JS_FreeValue(s_ctx, r);
-    er_bridge_pump(s_ctx);
+    const ERErrorScreen screen = {
+        .title = title,
+        .reason = body,
+        .hint = hint,
+    };
+    er_error_screen_show(s_cfg.screen_width, s_cfg.screen_height, &screen);
 }
 
 void er_runtime_show_error(void)
 {
-    er_runtime_show_message("JS error", s_last_error, "fix the source and reload");
+    /* The message on its own line, the stack as the detail. */
+    char message[ERUI_ERROR_SCREEN_LINE_BYTES];
+    const char* stack = strstr(s_last_error, STACK_SEPARATOR);
+    size_t message_length = stack ? (size_t)(stack - s_last_error) : strlen(s_last_error);
+    if (message_length >= sizeof(message))
+    {
+        message_length = sizeof(message) - 1u;
+    }
+    memcpy(message, s_last_error, message_length);
+    message[message_length] = '\0';
+    const ERErrorScreen screen = {
+        .title = JS_ERROR_TITLE,
+        .reason = message,
+        .hint = JS_ERROR_HINT,
+        .detail = stack ? stack + strlen(STACK_SEPARATOR) : NULL,
+    };
+    er_error_screen_show(s_cfg.screen_width, s_cfg.screen_height, &screen);
 }
 
 void er_runtime_clear_persist(void)
@@ -928,6 +937,7 @@ void er_runtime_clear_persist(void)
 
 void er_runtime_shutdown(void)
 {
+    er_bridge_set_uncaught_handler(NULL);
     if (s_ctx)
     {
         JS_FreeContext(s_ctx);

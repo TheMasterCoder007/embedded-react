@@ -29,6 +29,7 @@
 #include "app.gen.h"
 #include "assets.generated.h" /* er_register_assets() — baked <Image> assets (a no-op when none) */
 #include "board.h"
+#include "er_error_screen.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 #include "pedometer.h"
@@ -73,6 +74,20 @@ static uint32_t now_ms(void)
 /** @brief Watchdog timeout. A frame takes tens of ms, so only a hang (or a stack-guard lockup) reaches it. */
 #define ER_WATCHDOG_MS 1000U
 
+/** @brief Longest a fault from before the reset stays on screen at boot; a tap ends it sooner. */
+#define FAULT_HOLD_MS 10000U
+
+/** @brief The stacked exception frame's pc, in words. */
+#define EXCEPTION_FRAME_PC 6
+
+/** @brief A native fault, kept in RAM the boot leaves alone so it survives the reset it causes. */
+static ERFaultRecord __uninitialized_ram(s_fault);
+
+/** @brief The hard fault handler's own stack, so recording a fault never needs the stack that may have overflowed. */
+#define FAULT_STACK_BYTES 256U
+static uint8_t __attribute__((aligned(8))) s_fault_stack[FAULT_STACK_BYTES];
+static uint8_t* const __attribute__((used)) s_fault_stack_top = s_fault_stack + FAULT_STACK_BYTES;
+
 /* Core 0's stack is 8 KB: SCRATCH_Y (PICO_STACK_SIZE, see CMakeLists.txt) plus this lower half in
  * SCRATCH_X. The watch face peaks at ~3.1 KB; the rest is headroom for deeper apps. This
  * claims SCRATCH_X the same way the SDK claims it for core 1's stack, so starting core 1 (or placing
@@ -110,6 +125,76 @@ void* _sbrk(int incr)
     char* const prev = heap_end;
     heap_end += incr;
     return prev;
+}
+
+/**
+ * @brief Records a hard fault with the pc it happened at, then resets through the watchdog.
+ *
+ * @param[in] exception_frame  The registers the core stacked on the fault.
+ */
+void __attribute__((used, noreturn)) hard_fault_record(const uint32_t* exception_frame)
+{
+    er_fault_record(&s_fault, "hard fault", exception_frame[EXCEPTION_FRAME_PC], 0u);
+    watchdog_reboot(0u, 0u, 0u);
+    for (;;)
+    {
+    }
+}
+
+/**
+ * @brief The hard fault vector: finds the stacked frame on the stack in use, moves to s_fault_stack, and hands
+ *        the frame on. A stack overflow that faults while the core stacks the frame locks up instead; the
+ *        watchdog resets it and the boot records that.
+ */
+void __attribute__((naked)) isr_hardfault(void)
+{
+    __asm volatile("movs r0, #4\n"
+                   "mov r1, lr\n"
+                   "tst r0, r1\n"
+                   "beq 1f\n"
+                   "mrs r0, psp\n"
+                   "b 2f\n"
+                   "1: mrs r0, msp\n"
+                   "2: ldr r1, =s_fault_stack_top\n"
+                   "ldr r1, [r1]\n"
+                   "msr msp, r1\n"
+                   "ldr r1, =hard_fault_record\n"
+                   "bx r1\n"
+                   ".ltorg\n");
+}
+
+/**
+ * @brief Shows a fault from before the reset, if there was one, until the panel is tapped or FAULT_HOLD_MS passes.
+ *
+ * @param[in] touch  Whether touch came up, so a tap can end it.
+ */
+static void show_recorded_fault(bool touch)
+{
+    if (!er_fault_recorded(&s_fault) && watchdog_enable_caused_reboot())
+    {
+        er_fault_record(&s_fault, "watchdog reset: a hang, or a stack overflow", 0u, 0u);
+    }
+    if (!er_fault_recorded(&s_fault))
+    {
+        return;
+    }
+    printf("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.pc);
+    er_fault_show_recorded(&s_fault, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
+    board_backlight(90);
+    for (uint32_t waited = 0; waited < FAULT_HOLD_MS; waited += ER_TARGET_FRAME_MS)
+    {
+        er_commit();
+        er_pico_spi_lcd_present();
+        int touch_x = 0;
+        int touch_y = 0;
+        bool pressed = false;
+        if (touch && board_touch_read(&touch_x, &touch_y, &pressed) && pressed)
+        {
+            break;
+        }
+        sleep_ms(ER_TARGET_FRAME_MS);
+    }
+    er_error_screen_hide();
 }
 
 #if ER_BOARD_DEBUG
@@ -160,10 +245,6 @@ int main(void)
     }
 #endif
     printf("embedded-react RP2040-Touch-LCD-1.69 host — Flow B (AOT, no QuickJS)\n");
-    if (watchdog_enable_caused_reboot())
-    {
-        printf("rebooted by the watchdog: a hang, or a stack overflow into the guard\n");
-    }
 
     if (!display_ok)
     {
@@ -192,6 +273,8 @@ int main(void)
     const bool imu = board_imu_init();
     Pedometer pedo;
     pedometer_reset(&pedo);
+
+    show_recorded_fault(touch);
 
     /* Arm the watchdog before the app runs: the first full repaint below is where the stack is deepest. */
     watchdog_enable(ER_WATCHDOG_MS, true);

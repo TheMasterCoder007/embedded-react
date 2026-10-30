@@ -84,7 +84,7 @@ object into a QuickJS context and forwards each method to the engine, interning 
 hashing prop bags so an unchanged `setProps` is cheap. `er_runtime.c` is the portable host core:
 runtime and context lifecycle, the lite JavaScript profile, the host globals (`console`, `screen`,
 timers, the persist store), container loading with the QuickJS version check, the frame pump, the
-error overlay. `er_js_alloc.c` is the allocator that reports real block sizes so QuickJS's collector
+error screen for JavaScript errors. `er_js_alloc.c` is the allocator that reports real block sizes so QuickJS's collector
 works on bare metal. [NativeUI bridge](../api/native-ui-bridge.md) documents the surface.
 
 **The runtime** (`runtime/`) is C that links only the engine. `er_container.c` reads an ERCF

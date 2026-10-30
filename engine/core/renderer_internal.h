@@ -264,6 +264,17 @@ bool er_get_clip_rect(int* x, int* y, int* w, int* h);
  */
 void er_force_full_repaint(void);
 
+/** @brief Draws the error screen over the whole screen. er_commit() calls it while the screen is up. */
+void er_error_screen_draw(void);
+
+/**
+ * @brief The panel size the error screen was shown at.
+ *
+ * @param[out] screen_w  Receives the width in pixels.
+ * @param[out] screen_h  Receives the height in pixels.
+ */
+void er_error_screen_size(int* screen_w, int* screen_h);
+
 /**
  * @brief Fills a rectangle with a solid ARGB color via the active backend.
  *

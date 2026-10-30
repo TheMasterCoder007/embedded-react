@@ -97,7 +97,7 @@ bool er_host_load_config(ErHost* host);
  *        ad-hoc CLI overrides.
  *
  * On failure it renders the matching on-screen panel itself (a "Couldn't load config" panel for a bad
- * container, the JS-error redbox for a source/bytecode error), so the caller need not — the file
+ * container, the JS error screen for a source/bytecode error), so the caller need not — the file
  * couldn't be read is the only silent failure.
  *
  * @param[in] host           Started host.
@@ -122,7 +122,7 @@ bool er_host_load_app(ErHost* host, const char* explicit_path);
 bool er_host_reload(ErHost* host, const char* explicit_path);
 
 /**
- * @brief Renders an on-screen error overlay (RN-redbox style) from the last uncaught JS error.
+ * @brief Shows the error screen for the last uncaught JS error.
  *
  * Call after er_host_load_app / er_host_reload returns false so the failure shows in the window
  * instead of leaving a blank or stale screen. The next successful reload replaces it.

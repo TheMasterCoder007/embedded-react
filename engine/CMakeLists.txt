@@ -19,6 +19,7 @@ set(EMBEDDED_REACT_SOURCES
         # rendering: primitives (rounded rects, shadows, transforms, image, gradient, canvas)
         rendering/arc.c
         rendering/canvas_bindings.c
+        rendering/error_screen.c
         rendering/gradient.c
         rendering/image_registry.c
         rendering/image_scaler.c

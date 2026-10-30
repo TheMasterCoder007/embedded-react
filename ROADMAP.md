@@ -75,8 +75,6 @@ Five examples run end-to-end (see the [board guides](https://embedded-react.dev/
   exists for this future case; the JS-facing API does not.
 - **SDL keyboard → input.** Mouse is forwarded as touch; hardware keyboard feed into the
   engine is still TODO (needed for `TextInput` on the desktop host).
-- **Red error screen.** An uncaught JS exception shows the same error screen as a Flow B
-  fault, with the message and stack, instead of failing silently.
 
 ### Flow B — compiled, loadable packages
 
