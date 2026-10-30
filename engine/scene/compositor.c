@@ -4137,7 +4137,7 @@ static bool vec_diff_dirty_rect(const float* o,
     while (i < on)
     {
         if (o[i] != nw[i])
-            return false; /* opcode / shape structure differs */
+            return false;                                       /* opcode / shape structure differs */
         const int code = fabsf(o[i]) < 256.0f ? (int)o[i] : -1; /* a package's VSET can write any float here */
         if (code == (int)ER_VOP_SHAPE)
         {
@@ -4963,8 +4963,9 @@ void er_tree_set_root(ERNode* root)
 
 void er_set_screen_bounds(int width, int height)
 {
-    s_bounds_w = (width > 0 && width <= INT16_MAX) ? (int16_t)width : 0;
-    s_bounds_h = (height > 0 && height <= INT16_MAX) ? (int16_t)height : 0;
+    /* A size past int16 is the largest limit there is. 0 would mean no limit at all. */
+    s_bounds_w = width <= 0 ? 0 : width > INT16_MAX ? INT16_MAX : (int16_t)width;
+    s_bounds_h = height <= 0 ? 0 : height > INT16_MAX ? INT16_MAX : (int16_t)height;
     mark_layout_dirty();
     er_force_full_repaint();
 }

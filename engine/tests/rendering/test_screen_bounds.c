@@ -31,6 +31,7 @@
 #define BOUNDS_W 100
 #define BOUNDS_H 80
 #define HUGE_SIDE 30000
+#define FAR_BOUND 40000 /* a panel size a uint16_t can hold and an int16_t can't */
 
 static int s_failures = 0;
 static int s_right = 0;  /**< The furthest right anything painted. */
@@ -142,6 +143,34 @@ int main(void)
     root = commit_scene(40);
     CHECK(s_bottom > 0 && s_bottom <= BOUNDS_H, "a height alone still stops the bottom edge");
     CHECK(s_right > BOUNDS_W, "a height alone leaves the width free");
+
+    /* Past int16 is still a limit, the largest there is, and not "no limit". */
+    er_set_screen_bounds(FAR_BOUND, FAR_BOUND);
+    er_reset();
+    s_right = 0;
+    s_bottom = 0;
+    ERNode* far_root = er_node_create(ER_NODE_VIEW);
+    ERProps far_root_props;
+    er_props_default(&far_root_props);
+    far_root_props.width = BOUNDS_W;
+    far_root_props.height = BOUNDS_H;
+    er_node_set_props(far_root, &far_root_props);
+    ERNode* far_child = er_node_create(ER_NODE_VIEW);
+    ERProps far_child_props;
+    er_props_default(&far_child_props);
+    far_child_props.position = ER_POS_ABSOLUTE;
+    far_child_props.left = HUGE_SIDE;
+    far_child_props.top = 0;
+    far_child_props.width = HUGE_SIDE;
+    far_child_props.height = BOUNDS_H;
+    far_child_props.background_color = 0xFF404040U;
+    far_child_props.transform_translate_x =
+        (float)HUGE_SIDE; /* layout stops at int16, but a transform can paint past it */
+    er_node_set_props(far_child, &far_child_props);
+    er_tree_append_child(far_root, far_child);
+    er_tree_set_root(far_root);
+    er_commit();
+    CHECK(s_right <= INT16_MAX, "bounds past int16 still clip");
 
     er_set_screen_bounds(0, 0);
     er_reset();
