@@ -126,6 +126,8 @@ extern "C"
      *
      * A tag alone is a pool slot, and a destroyed node's slot is handed to the next node created — possibly by
      * the very handler that destroyed it. Held across app code, a tag can name a node that was never involved.
+     * An ERNode* has the same problem. Hold one of these instead, and resolve it with er_node_deref() each time.
+     * A zeroed reference resolves to nothing.
      *
      * Serials are 32 bits and wrap after 2^32 creations, so a reference is for holding across callbacks, not
      * for keeping: only a reference that outlived that many creations could match a later node.
@@ -997,7 +999,8 @@ extern "C"
     /**
      * @brief Destroys a node and returns its slot to the pool.
      *
-     * The node must have been removed from its parent tree before this call.
+     * The node must have been removed from its parent tree before this call. Pointers to it are not usable
+     * afterwards, and the next node created may take its slot; an ERNodeRef tells the two apart.
      *
      * @param[in] node  Node to destroy.
      */

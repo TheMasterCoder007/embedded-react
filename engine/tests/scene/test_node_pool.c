@@ -232,6 +232,47 @@ static void test_double_free_is_noop(void)
 }
 
 /**
+ * @brief Verifies that a reference resolves only while its own node lives.
+ *
+ * Destroys a node and creates another in the same slot: the old reference must not reach the new node.
+ */
+static void test_node_ref_outlives_node(void)
+{
+    ERNode* first = er_node_create(ER_NODE_VIEW);
+    assert(first != NULL);
+    const ERNodeRef first_ref = er_node_ref(first);
+    assert(er_node_deref(first_ref) == first);
+
+    er_node_destroy(first);
+    assert(er_node_deref(first_ref) == NULL && "a destroyed node's reference must not resolve");
+
+    ERNode* second = er_node_create(ER_NODE_VIEW);
+    assert(second == first && "the free list hands the slot straight back");
+    const ERNodeRef second_ref = er_node_ref(second);
+    assert(er_node_deref(first_ref) == NULL && "nor must it resolve to the slot's next node");
+    assert(er_node_deref(second_ref) == second);
+    er_node_destroy(second);
+
+    assert(er_node_deref(er_node_ref(NULL)) == NULL && "a reference to no node must not resolve");
+
+    /* A zeroed reference names tag 0 with no node's serial, even with a node in that slot. */
+    er_reset();
+    ERNode* zero_tag = er_node_create(ER_NODE_VIEW);
+    assert(zero_tag != NULL);
+    const ERNodeRef zeroed = {0U, 0U};
+    assert(er_node_deref(zeroed) == NULL && "a zeroed reference must not resolve");
+
+    const ERNodeRef before_reset = er_node_ref(zero_tag);
+    er_reset();
+    ERNode* after_reset = er_node_create(ER_NODE_VIEW);
+    assert(after_reset != NULL);
+    assert(er_node_deref(before_reset) == NULL && "a reference must not survive er_reset");
+    er_node_destroy(after_reset);
+
+    printf("test_node_ref_outlives_node PASSED\n");
+}
+
+/**
  * @brief Verifies that the pool returns NULL when exhausted and recovers after frees.
  *
  * Fills all remaining pool slots, checks that the next create returns NULL,
@@ -498,6 +539,7 @@ int main(void)
     test_freelist_lifo_reuse();
     test_freelist_multi_reuse();
     test_double_free_is_noop();
+    test_node_ref_outlives_node();
     test_dirty_rect_noop_commit();
     test_dirty_rect_union_coverage();
     /* Run last: exhausts the pool, then verifies recovery. */

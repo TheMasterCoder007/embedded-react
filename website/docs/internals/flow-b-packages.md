@@ -525,11 +525,11 @@ negative zero.
 
 The VM never holds an `ERNode*`. A node is reached through the engine's `ERNodeRef`: the 16-bit pool tag
 and the 32-bit serial the node got when it was created, so a slot reused by a newer node no longer
-matches. The engine's touch state already holds nodes this way; `er_node_ref` and `er_node_deref` are
-internal today and move to `er_scene.h` for the runtime. A handle takes two register cells, or 8 bytes
-in a slot.
+matches. The engine's touch state holds nodes the same way, through `er_node_ref` and `er_node_deref` in
+`er_scene.h`. A handle takes two register cells, or 8 bytes in a slot.
 
-Every instruction that touches a node resolves its handle first. A template's nodes get their handles
+Every instruction that touches a node resolves its handle first, and so does an animation leaf when it
+starts. An empty handle, on a node not built yet, only stops the leaf. A template's nodes get their handles
 as they are built; a node that code reaches later (a ref, an updated prop, a row) keeps its handle in a
 slot.
 
