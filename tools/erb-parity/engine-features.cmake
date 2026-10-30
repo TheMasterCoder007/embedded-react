@@ -1,0 +1,17 @@
+# The desktop AOT host's engine features, so a build draws everything the demos use. Include it before adding
+# the engine. tools/erb-parity and tools/erb-fuzz both use it.
+set(ERUI_SHADOWS         ON     CACHE BOOL   "" FORCE)
+set(ERUI_BORDER_AA       ON     CACHE BOOL   "" FORCE)
+set(ERUI_3D_TRANSFORMS   ON     CACHE BOOL   "" FORCE)
+set(ERUI_BILINEAR_SCALE  ON     CACHE BOOL   "" FORCE)
+set(ERUI_GRADIENT        ON     CACHE BOOL   "" FORCE)
+set(ERUI_GRADIENT_RADIAL ON     CACHE BOOL   "" FORCE)
+set(ERUI_GRADIENT_CONIC  ON     CACHE BOOL   "" FORCE)
+set(ERUI_ONSCREEN_KEYBOARD ON   CACHE BOOL   "" FORCE)
+set(ERUI_TRANSFORMS      "FULL" CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_W       "512"  CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_H       "512"  CACHE STRING "" FORCE)
+set(ERUI_VECTOR_TAPE_MAX   "8192" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_PAINTS_MAX "1024" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_PTS    "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_EDGES  "4096" CACHE STRING "" FORCE)

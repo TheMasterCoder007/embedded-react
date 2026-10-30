@@ -152,7 +152,9 @@ void er_arc_geom(const ERNode* n, int px, int py, int w, int h, ERArcGeom* g)
 
     float sweep = p->sweep_angle;
     float a0 = p->start_angle;
-    if (sweep <= 0.0f)
+    if (!(fabsf(a0) < INFINITY)) /* app maths can reach these, and a NaN would reach the knob's int casts */
+        a0 = 0.0f;
+    if (!(sweep > 0.0f))
     {
         sweep = 270.0f;
         if (a0 == 0.0f)
@@ -182,9 +184,10 @@ void er_arc_geom(const ERNode* n, int px, int py, int w, int h, ERArcGeom* g)
 float er_arc_value_frac(const ERArcGeom* g, float value)
 {
     const float span = g->max - g->min;
-    if (span <= 0.0f)
+    if (!(span > 0.0f))
         return 0.0f;
-    return clampf((value - g->min) / span, 0.0f, 1.0f);
+    const float frac = clampf((value - g->min) / span, 0.0f, 1.0f);
+    return frac == frac ? frac : 0.0f;
 }
 
 float er_arc_value_angle(const ERArcGeom* g, float value)

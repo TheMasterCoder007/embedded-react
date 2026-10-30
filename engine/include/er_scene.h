@@ -1173,6 +1173,17 @@ extern "C"
     void er_reset(void);
 
     /**
+     * @brief Sets the largest the scene may be, for a host running a scene it doesn't trust to fit the panel.
+     *
+     * The root's size is clamped to these bounds, and a full repaint draws nothing past them, so a node's size
+     * can't make a frame paint a far larger area than the panel. er_reset() keeps them.
+     *
+     * @param[in] width   Panel width in pixels; 0 removes the limit.
+     * @param[in] height  Panel height in pixels; 0 removes the limit.
+     */
+    void er_set_screen_bounds(int width, int height);
+
+    /**
      * @brief Declares how many display buffers the host rotates (page-flip / multi-buffer), so er_commit()
      *        repaints enough each frame to keep every buffer correct.
      *

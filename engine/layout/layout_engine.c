@@ -635,7 +635,7 @@ static int16_t offered_width(const ERLayoutSpec* L, const ERLayoutSpec* cl, cons
     if (inner_w == ER_LAYOUT_AUTO)
         return ER_LAYOUT_AUTO;
     if (cl->width_pct > 0.0f)
-        return (int16_t)((float)inner_w * cl->width_pct / 100.0f + 0.5f);
+        return round_px((float)inner_w * cl->width_pct / 100.0f);
     if (cl->width != ER_LAYOUT_AUTO || (is_row_dir(L->flex_direction) && L->overflow == ER_OVERFLOW_SCROLL))
         return ER_LAYOUT_AUTO;
     const int16_t margin_x = (int16_t)(edge_or(cl->margin_left, cl->margin) + edge_or(cl->margin_right, cl->margin));
@@ -1307,7 +1307,7 @@ static void compute_layout(const uint16_t tag, const int16_t w, const int16_t h,
             int16_t hypo_cross;
             int16_t measured_w = ER_LAYOUT_AUTO;
             if (cross_pct > 0.0f)
-                hypo_cross = (int16_t)((float)cross_avail * cross_pct / 100.0f + 0.5f);
+                hypo_cross = round_px((float)cross_avail * cross_pct / 100.0f);
             else if (crosssz != ER_LAYOUT_AUTO)
                 hypo_cross = crosssz;
             else if (cross_via_aspect)

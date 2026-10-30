@@ -48,6 +48,7 @@ builds the tree from JavaScript.
 | `er_node_first_child`, `er_node_next_sibling`, `er_node_get_type`                           | Traversal                                                                                                                                                                                        |
 | `er_node_in_use_count()`                                                                    | Live nodes, for watching the pool                                                                                                                                                                |
 | `er_reset()`                                                                                | Free every node and clear the root: a fresh scene                                                                                                                                                |
+| `er_set_screen_bounds(w, h)`                                                                | Limit the scene to the panel, for a scene you don't trust to fit it. Flow B sets it from the panel it loads                                                                                      |
 
 ## Props
 

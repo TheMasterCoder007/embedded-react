@@ -32,6 +32,8 @@ cmake --build runtime/build
 ctest --test-dir runtime/build --output-on-failure
 ```
 
+CI also fuzzes the Flow B loader and VM; see [`tools/erb-fuzz`](../tools/erb-fuzz/README.md).
+
 **Docs:** [Architecture](https://embedded-react.dev/internals/architecture),
 [Flow B packages](https://embedded-react.dev/internals/flow-b-packages) and
 [Hot reload](https://embedded-react.dev/guides/hot-reload).

@@ -54,6 +54,11 @@ static inline uint32_t* grow(void)
  */
 static uint32_t lerp_argb(uint32_t c0, uint32_t c1, float t)
 {
+    /* Infinite stop positions, which a package can give, make t a NaN or send it past the ends. */
+    if (!(t > 0.0f))
+        t = 0.0f;
+    else if (t > 1.0f)
+        t = 1.0f;
     const int a0 = (int)((c0 >> 24) & 0xFFu), a1 = (int)((c1 >> 24) & 0xFFu);
     const int r0 = (int)((c0 >> 16) & 0xFFu), r1 = (int)((c1 >> 16) & 0xFFu);
     const int g0 = (int)((c0 >> 8) & 0xFFu), g1 = (int)((c1 >> 8) & 0xFFu);

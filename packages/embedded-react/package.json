@@ -68,6 +68,7 @@
     "aot:baseline": "node test/aot-same/aot-same.mjs baseline",
     "aot:same": "node test/aot-same/aot-same.mjs check",
     "erb:parity": "node test/erb-parity/erb-parity.mjs",
+    "erb:corpus": "node test/erb-fuzz/make-corpus.mjs",
     "parity": "node parity.mjs",
     "version:sync": "node ../../tools/sync-version.mjs",
     "version:check": "node ../../tools/sync-version.mjs --check",

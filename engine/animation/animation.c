@@ -552,7 +552,7 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
 static uint8_t lerp_channel(uint8_t from, uint8_t to, float t)
 {
     const float value = (float)from + ((float)to - (float)from) * t;
-    if (value <= 0.0f)
+    if (!(value > 0.0f)) /* NaN too: a package's or an app's maths can reach t */
         return 0U;
     if (value >= 255.0f)
         return 255U;

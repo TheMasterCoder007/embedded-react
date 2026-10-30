@@ -1659,6 +1659,7 @@ static void teardown(void)
     {
         g_erb.loaded = false;
         er_reset(); /* nodes, animations, animated values, vectors and input */
+        er_set_screen_bounds(0, 0);
         if (g_erb.program.keyboard)
         {
             er_keyboard_set_config(NULL);
@@ -1757,6 +1758,7 @@ static ErbStatus start(const ErbConfig* config)
      * check-only pass, so this can't fail part way. */
     er_error_screen_hide();
     er_reset();
+    er_set_screen_bounds(config->screen_w, config->screen_h);
     er_image_clear();
     er_font_clear();
     const ErbProgram* program = &g_erb.program;

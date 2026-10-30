@@ -1,5 +1,5 @@
 # CI — runs on every PR + push to master. Fast, display-free checks (parity.mjs opens real SDL
-# windows, so it stays a dev-machine check, not CI). Six independent jobs:
+# windows, so it stays a dev-machine check, not CI). Seven independent jobs:
 #   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
 #   bridge  — the QuickJS bridge: build against the pinned QuickJS + the JS heap-accounting/GC test,
@@ -9,6 +9,7 @@
 #             (verifies the output compiles + the embedded-react version-pin _Static_assert holds).
 #   erb-parity — compile each parity scenario to C and to a Flow B package, run both through the same taps
 #             in headless hosts, and require the same pixels.
+#   erb-fuzz — mutate real Flow B packages, load them and run what passes, under ASan and UBSan.
 #   consumer — npm pack the package, install it into a scratch project, and build from there.
 name: CI
 
@@ -227,6 +228,37 @@ jobs:
       - run: npm ci
       # Builds tools/erb-parity's two headless hosts (CMake + gcc) and compares their frames per scenario.
       - run: npm run erb:parity
+
+  erb-fuzz:
+    name: Fuzz the package loader and VM
+    # Pinned, as the apt package names carry the clang version. See tools/erb-fuzz/README.md.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang and libFuzzer
+        run: sudo apt-get update && sudo apt-get install -y clang-18 libclang-rt-18-dev
+      - name: Configure
+        run: cmake -S tools/erb-fuzz -B tools/erb-fuzz/build -DCMAKE_C_COMPILER=clang-18 -DERB_FUZZ_LIBFUZZER=ON
+      - name: Build
+        run: cmake --build tools/erb-fuzz/build -j
+      # Each seed must load, and everything else in the corpus must run clean.
+      - name: Replay the corpus
+        run: ctest --test-dir tools/erb-fuzz/build --output-on-failure
+      # -timeout makes a hang fail the job. New inputs go to a scratch folder, not the repo.
+      - name: Fuzz
+        run: |
+          mkdir -p "$RUNNER_TEMP/erb-fuzz-work" erb-fuzz-artifacts
+          tools/erb-fuzz/build/erb-fuzz "$RUNNER_TEMP/erb-fuzz-work" \
+            tools/erb-fuzz/corpus/seeds tools/erb-fuzz/corpus/found tools/erb-fuzz/corpus/regressions \
+            -max_total_time=300 -timeout=30 -rss_limit_mb=2048 -use_value_profile=1 -print_final_stats=1 \
+            -artifact_prefix=erb-fuzz-artifacts/
+      - name: Upload what the fuzzer found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: erb-fuzz-artifacts
+          path: erb-fuzz-artifacts/
+          if-no-files-found: ignore
 
   consumer:
     name: Consumer smoke (pack + install + build)
