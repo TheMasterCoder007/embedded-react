@@ -37,6 +37,7 @@ add_library(erb-runtime STATIC
         erb_verify.c
         erb_vm.c
         erb_runtime.c
+        erb_package_slots.c
 )
 
 # Flow B limits: how large an app this firmware accepts. Most size the verifier's fixed scratch, and a package
@@ -108,4 +109,8 @@ if (ER_RUNTIME_TESTS)
     target_link_libraries(erb-vm-test PRIVATE erb-runtime)
     target_include_directories(erb-vm-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../engine/scene)
     add_test(NAME runtime-erb-vm COMMAND erb-vm-test)
+
+    add_executable(erb-package-slots-test tests/erb_package_slots_test.c)
+    target_link_libraries(erb-package-slots-test PRIVATE erb-runtime)
+    add_test(NAME runtime-erb-package-slots COMMAND erb-package-slots-test)
 endif ()

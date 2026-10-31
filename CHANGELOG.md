@@ -14,8 +14,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
   QuickJS and no heap.
-- `embedded-react build --aot --package` writes a Flow B package and prints the RAM, nodes, and flash
-  it needs. It takes state, handlers, timers, effects, lists, animations, PanResponder, `<Svg>`,
+- `embedded-react build --aot` writes a Flow B package and prints the RAM, nodes, and flash it needs.
+  `--c` writes the C output instead. It takes state, handlers, timers, effects, lists, animations, PanResponder, `<Svg>`,
   `setKeyboardConfig`, and values worked out from the screen size, so the thermostat demo builds as a
   package.
 - A package can hold a layout for several panel sizes (`--screen 240x320,320x240`), and the firmware's
@@ -26,11 +26,19 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it. Both demos
   match at each of their boards' sizes.
 - One red error screen for both flows, drawn by the engine without the app's scene. It shows the reason,
-  the source line and the amounts involved. An uncaught JS exception in Flow A now shows it too.
+  the source line, and the amounts involved. An uncaught JS exception in Flow A now shows it too.
 - A native fault or watchdog reset can be recorded in no-init RAM and shown after the reset
   (`er_fault_record`, `er_fault_show_recorded`). The RP2040 and ESP32-S3 examples do this.
-- CI fuzzes the Flow B loader, verifier and VM with mutated packages, under ASan and UBSan.
+- CI fuzzes the Flow B loader, verifier, and VM with mutated packages, under ASan and UBSan.
 - `er_set_screen_bounds` limits the scene to the panel. Flow B sets it from the panel it loads.
+- Flow B boards keep two package slots in flash, active and staging. The last good package stays until a new one
+  passes verification, and a package that fails falls back to it. With none installed, the first boot shows the
+  error screen.
+- `embedded-react flash` writes a package to the board's staging slot, and `embedded-react pack` writes a slot's
+  image to a file.
+- The CYD and RP2040 examples load their UI from a slot, so changing it needs no firmware rebuild. The ESP32-S3
+  example has a Flow B build beside its Flow A one, and `-DER_BOARD_CRASH_TEST` forces a fault or a hang on the
+  RP2040 and that build.
 
 ### Changed
 
@@ -46,8 +54,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Flow B applies the stale-handle rule to a row built before a destroyed node, which used to go last, and
   to an animation of a destroyed node, which didn't stop a debug package.
-- A node sized far past the panel no longer stalls a Flow B frame painting off screen.
-- NaN and out-of-range floats in percentages, dials, animated colors and vectors no longer reach a
+- A node sized far past the panel no longer stalls a Flow B frame painting off-screen.
+- NaN and out-of-range floats in percentages, dials, animated colors, and vectors no longer reach a
   float-to-int conversion.
 
 ## [0.19.0] - 2026-10-27

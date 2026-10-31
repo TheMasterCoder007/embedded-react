@@ -16,5 +16,5 @@ npm install
 npm run dev          # the browser simulator with hot reload; set the size to 240×280
 npm run dev:device   # hot reload on a board over USB
 npm run build        # Flow A → dist/app.erpkg
-npm run build:aot    # Flow B → app.gen.c, baked at 240×280, for the RP2040 example
+npm run build:aot    # Flow B → dist/app.erpkg, with a layout for 240×280, for the RP2040 example
 ```

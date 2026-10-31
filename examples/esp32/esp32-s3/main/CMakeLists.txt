@@ -20,7 +20,7 @@ option(ER_HOTRELOAD "Enable on-device hot reload over USB (dev only)" OFF)
 # The receiver source (hotreload_usb.c) compiles ONLY when hot reload is enabled — a default/release
 # firmware carries none of the receiver code. It gates on the normal CMake pass, which sees this option.
 
-set(host_srcs "main.c" "board.c")
+set(host_srcs "main.c" "board.c" "host_common.c")
 if(ER_HOTRELOAD)
     list(APPEND host_srcs "hotreload_usb.c")
 endif()
@@ -32,10 +32,16 @@ if(CONFIG_ER_WIFI)
     list(APPEND host_srcs "network.c" "network_js.c")
 endif()
 
+# The Flow B build (sdkconfig.defaults.flow-b): loads a compiled package from a slot, in place of the QuickJS host
+# above. The REQUIRES below can't depend on this, so the QuickJS components compile nothing in that build.
+if(CONFIG_ER_FLOW_B)
+    set(host_srcs "main_flow_b.c" "board.c" "host_common.c")
+endif()
+
 idf_component_register(
     SRCS ${host_srcs}
     INCLUDE_DIRS "."
-    REQUIRES engine er-bridge-quickjs quickjs esp32-lcd-backend
+    REQUIRES engine er-bridge-quickjs quickjs erb-runtime esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
              esp_partition spi_flash esp_driver_usb_serial_jtag
              esp_wifi esp_netif esp_event nvs_flash
@@ -62,3 +68,8 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOT
 # 0 (the default) is the fast path (a plain framebuffer copy at present). 90/270 give a portrait UI on
 # the landscape panel; the thermostat demo stacks its layout for the narrower width.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_DISPLAY_ROTATION=0)
+
+# A forced failure, to check the error screen on hardware (see main_flow_b.c): 1 = a panic, 2 = a hang.
+if(DEFINED ER_BOARD_CRASH_TEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_BOARD_CRASH_TEST=${ER_BOARD_CRASH_TEST})
+endif()

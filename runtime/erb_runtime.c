@@ -2002,6 +2002,11 @@ void erb_set_wall_clock(int64_t epoch_ms)
 
 void erb_show_error(const ErbError* error)
 {
+    erb_show_error_hint(error, NULL);
+}
+
+void erb_show_error_hint(const ErbError* error, const char* hint)
+{
     char reason[ERROR_LINE_SIZE];
     char amounts[ERROR_LINE_SIZE];
     char location[ERROR_LINE_SIZE];
@@ -2013,6 +2018,7 @@ void erb_show_error(const ErbError* error)
         .reason = reason,
         .amounts = amounts,
         .location = location,
+        .hint = hint,
         .detail = error->detail,
     };
     er_error_screen_show(s_screen_w, s_screen_h, &screen);

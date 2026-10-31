@@ -34,8 +34,8 @@ npm run build        # → dist/app.erpkg  (QuickJS bytecode + baked assets)
 
 Upload `dist/app.erpkg` to your device's config region — your firmware loads it with
 `er_runtime_load_container()` (Flow A; needs a PSRAM-class chip). For no-PSRAM boards, compile the app
-ahead-of-time to C instead: `npx embedded-react build --aot` emits `app.gen.c` (+ `assets.generated.c`)
-to compile into your firmware — note the AOT path supports a subset of the API. See
+ahead-of-time instead: `npx embedded-react build --aot` emits a package for your firmware's Flow B runtime,
+and `npx embedded-react flash` writes it to the board — note the AOT path supports a subset of the API. See
 [Your first board](https://embedded-react.dev/getting-started/first-board) for the flows and the
 board guides.
 

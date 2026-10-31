@@ -38,10 +38,12 @@ The package is the React Native analog: hooks come from `react`, everything else
 | `npx embedded-react dev` | Runs your app in the browser simulator with hot reload; the engine `.wasm` ships prebuilt, so there is no native toolchain |
 | `npx embedded-react dev --device` | The same, streamed to a connected board over USB (a firmware built with hot reload) |
 | `npx embedded-react build` | The Flow A device artifact, `dist/app.erpkg` (bytecode + baked assets + CRC) |
-| `npx embedded-react build --aot --screen WxH` | The Flow B artifact, `app.gen.c` + `assets.generated.c`, to compile into firmware |
-| `npx embedded-react build --aot --package --screen WxH` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. State, handlers, timers, effects, lists, animations, PanResponder, `<Svg>` and the keyboard config. List several sizes (`--screen 240x320,320x240`) for a layout per panel |
+| `npx embedded-react build --aot --screen WxH` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. State, handlers, timers, effects, lists, animations, PanResponder, `<Svg>` and the keyboard config. List several sizes (`--screen 240x320,320x240`) for a layout per panel |
 | `npx embedded-react build --aot --release --screen WxH` | A Flow B package for release, without its debug table, which goes beside it as `dist/app.erdbg` |
 | `npx embedded-react build --aot --bake --screen WxH` | A Flow B package as a C array, `dist/app.erpkg.c`, to link into firmware with no spare partition |
+| `npx embedded-react build --aot --c --screen WxH` | The Flow B C output, `app.gen.c` + `assets.generated.c`, to compile into firmware |
+| `npx embedded-react flash --board NAME` | Writes `dist/app.erpkg` to the board's staging slot, through `esptool` or `picotool`. The last good package stays until the new one passes verification |
+| `npx embedded-react pack --board NAME` | Writes a slot's image to a file, as a UF2 on the RP2040, for a factory line or a board that isn't attached |
 | `npx embedded-react export` | A self-contained static copy of the simulator with your app, for any static host |
 
 ## Where to read more

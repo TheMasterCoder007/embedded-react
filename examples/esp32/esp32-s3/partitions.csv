@@ -3,8 +3,13 @@
 # loaded at boot (memory-mapped) by main.c. Flash a config separately from the firmware:
 #   parttool.py write_partition --partition-name=config --input <path>/app.erpkg
 #
+# erb_a and erb_b are the Flow B build's package slots (CONFIG_ER_FLOW_B). Write a package with:
+#   npx embedded-react flash --board esp32-s3
+#
 # Name,     Type, SubType, Offset,   Size
 nvs,        data, nvs,     0x9000,   0x6000
 phy_init,   data, phy,     0xf000,   0x1000
 factory,    app,  factory, 0x10000,  0x300000
 config,     data, 0x40,    ,         0x200000
+erb_a,      data, 0x41,    0x510000, 0x200000
+erb_b,      data, 0x41,    0x710000, 0x200000

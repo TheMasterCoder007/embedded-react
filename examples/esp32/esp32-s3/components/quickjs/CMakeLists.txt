@@ -3,6 +3,13 @@
 # CMakeLists). _GNU_SOURCE matches the upstream build flags. QuickJS is third-party C that trips a
 # number of warnings the IDF build may escalate; keep them non-fatal so it compiles cleanly on the
 # xtensa toolchain. The JS heap is routed to PSRAM by the host's JS_NewRuntime2 allocator (main.c).
+# The Flow B build (main/CMakeLists.txt) has no QuickJS, so nothing compiles here. This can't be left to main's
+# REQUIRES, which ESP-IDF expands before it reads the configuration.
+if(CONFIG_ER_FLOW_B)
+    idf_component_register()
+    return()
+endif()
+
 idf_component_register(
     SRCS
         "${QUICKJS_SRC_DIR}/quickjs.c"
