@@ -32,6 +32,7 @@ import {
   packSlot,
   pickSlot,
   readSlotSequence,
+  slotHeader,
   slotImage,
   slotsFromPartitionTable,
   uf2,
@@ -53,6 +54,12 @@ const GOLDEN_HEADER = Buffer.from([
   0x45, 0x52, 0x42, 0x53, 0x07, 0x00, 0x00, 0x00, 0x34, 0x12, 0x00, 0x00, 0xb5,
   0xd9, 0x79, 0x48,
 ]);
+
+/** The flash a whole package leaves at a slot: its header page and its package. */
+const installed = (address, sequence) => ({
+  [address]: slotHeader(packageBytes().length, sequence),
+  [address + SLOT_HEADER_BYTES]: packageBytes(),
+});
 
 /** The bytes `pack` writes for slot a of the RP2040 example. */
 function packSlotToTemp() {
@@ -301,8 +308,8 @@ describe('flashing', () => {
   it('leaves the last good package alone', () => {
     const board = fakeBoard({
       0x8000: partitionTable(espSlots),
-      0x180000: slotImage(Buffer.alloc(16), 9).subarray(0, 256),
-      0x2c0000: slotImage(Buffer.alloc(16), 8).subarray(0, 256),
+      ...installed(0x180000, 9),
+      ...installed(0x2c0000, 8),
     });
     const written = flashSlot({
       packageBytes: packageBytes(),
@@ -315,6 +322,46 @@ describe('flashing', () => {
       slot: 'b',
       lastGood: 'a',
     });
+  });
+
+  it('writes over a newest slot left with part of a package', () => {
+    const cut = packageBytes().subarray(0, 40);
+    const logged = [];
+    const board = fakeBoard({
+      0x8000: partitionTable(espSlots),
+      ...installed(0x180000, 8),
+      0x2c0000: slotHeader(packageBytes().length, 9),
+      [0x2c0000 + SLOT_HEADER_BYTES]: cut,
+    });
+    const written = flashSlot({
+      packageBytes: packageBytes(),
+      board: BOARDS['esp32-2432s028r'],
+      run: board.run,
+      log: line => logged.push(line),
+    });
+    expect(written).toEqual({
+      address: 0x2c0000,
+      sequence: 10,
+      slot: 'b',
+      lastGood: 'a',
+    });
+    expect(board.writes.map(write => write.address)).not.toContain(0x180000);
+    expect(logged[0]).toMatch(/Slot b holds a partial package/);
+  });
+
+  it('writes over it with no last good package to name, when the other slot is empty', () => {
+    const board = fakeBoard({
+      0x8000: partitionTable(espSlots),
+      0x180000: slotHeader(packageBytes().length, 4),
+      [0x180000 + SLOT_HEADER_BYTES]: Buffer.alloc(64, 0xff),
+    });
+    expect(
+      flashSlot({
+        packageBytes: packageBytes(),
+        board: BOARDS['esp32-2432s028r'],
+        run: board.run,
+      }),
+    ).toEqual({address: 0x180000, sequence: 5, slot: 'a', lastGood: null});
   });
 
   it("uses the board's own partition table over the example's", () => {
@@ -363,7 +410,7 @@ describe('flashing', () => {
 
   it('flashes an RP2040 through picotool, and reboots it', () => {
     const board = fakeBoard({
-      0x10100000: slotImage(Buffer.alloc(16), 3).subarray(0, 256),
+      ...installed(0x10100000, 3),
     });
     const written = flashSlot({
       packageBytes: packageBytes(),

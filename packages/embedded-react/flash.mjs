@@ -19,8 +19,9 @@
 // A slot holds a header in an erase sector of its own, then the package. The firmware
 // (runtime/erb_package_slots.c) runs the valid slot with the newest sequence and falls back to the other, so a
 // new package always goes in the slot that isn't the newest, with the next sequence. `flash` reads the board's
-// headers and writes the package, then the header, so a write cut short never leaves the newest sequence on a
-// partial package. `pack` writes the image to a file instead, for a factory line or a drag-and-drop UF2.
+// headers and writes the package, then the header, so its own write cut short never leaves the newest sequence on
+// a partial package. `pack` writes the image to a file instead, for a factory line or a drag-and-drop UF2, which
+// can't promise that order, so `flash` also checks the newest slot's package before it writes over the other.
 
 import {spawnSync} from 'node:child_process';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
@@ -126,6 +127,16 @@ export function checkPackage(bytes) {
   }
 }
 
+/** Whether the bytes are a whole Flow B package. */
+function isWholePackage(bytes) {
+  try {
+    checkPackage(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** A slot's header page. */
 export function slotHeader(packageLength, sequence) {
   const header = Buffer.alloc(SLOT_HEADER_PAGE_BYTES, 0xff);
@@ -146,8 +157,8 @@ export function slotImage(packageBytes, sequence) {
   return Buffer.concat([headerSector, packageBytes]);
 }
 
-/** A slot's sequence from the first bytes of its flash, or null when it has no valid header. */
-export function readSlotSequence(bytes, slotBytes) {
+/** What a slot's first bytes say: its sequence and package length, or null when it has no valid header. */
+export function readSlotHeader(bytes, slotBytes) {
   if (
     bytes.length < SLOT_HEADER_CHECKED_BYTES + 4 ||
     bytes.readUInt32LE(0) !== SLOT_MAGIC ||
@@ -160,7 +171,12 @@ export function readSlotSequence(bytes, slotBytes) {
   if (packageBytes === 0 || packageBytes > slotBytes - SLOT_HEADER_BYTES) {
     return null;
   }
-  return bytes.readUInt32LE(4);
+  return {sequence: bytes.readUInt32LE(4), packageBytes};
+}
+
+/** A slot's sequence from its first bytes, or null when it has no valid header. */
+export function readSlotSequence(bytes, slotBytes) {
+  return readSlotHeader(bytes, slotBytes)?.sequence ?? null;
 }
 
 /**
@@ -406,12 +422,32 @@ export function flashSlot({
   const dir = mkdtempSync(join(tmpdir(), 'er-flash-'));
   try {
     const slots = access.slots(dir);
-    const sequences = slots.map((slot, index) => {
+    const headers = slots.map((slot, index) => {
       const file = join(dir, `header-${index}.bin`);
       access.read(slot.address, SLOT_HEADER_PAGE_BYTES, file);
-      return readSlotSequence(readFileSync(file), slot.bytes);
+      return readSlotHeader(readFileSync(file), slot.bytes);
     });
-    const {slot, sequence, lastGood} = pickSlot(sequences);
+    let {slot, sequence, lastGood} = pickSlot(
+      headers.map(header => header?.sequence ?? null),
+    );
+    // The newest slot is what this write leaves as the fallback, so it has to be whole. A write cut short can leave
+    // a header over part of a package, and no boot may have cleared it yet.
+    if (lastGood !== null) {
+      const file = join(dir, 'newest.bin');
+      access.read(
+        slots[lastGood].address + SLOT_HEADER_BYTES,
+        headers[lastGood].packageBytes,
+        file,
+      );
+      if (!isWholePackage(readFileSync(file))) {
+        log(
+          `Slot ${SLOT_NAMES[lastGood]} holds a partial package, so it goes first`,
+        );
+        const other = 1 - lastGood;
+        slot = lastGood;
+        lastGood = headers[other] ? other : null;
+      }
+    }
     const {address, bytes} = slots[slot];
     const slotBytesUsed = SLOT_HEADER_BYTES + packageBytes.length;
     if (slotBytesUsed > bytes) {

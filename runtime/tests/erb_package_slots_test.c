@@ -274,6 +274,39 @@ static void test_rollback(void)
     CHECK(!er_error_screen_active() && erb_running(), "and taken down again");
 }
 
+/** @brief A board whose flash won't take the clear. */
+static void invalidate_fails(unsigned slot, void* context)
+{
+    (void)context;
+    s_invalidated = slot;
+}
+
+static void test_clear_fails(void)
+{
+    reset();
+    install(0, 5u, GOOD);
+    install(1, 6u, BAD_CRC);
+    CHECK(erb_package_slots_boot(&s_slots, &s_config, &s_boot) && s_boot.active == 0, "the last good package runs");
+    CHECK(!s_boot.clear_failed, "and a cleared header is no failure");
+
+    reset();
+    install(0, 5u, GOOD);
+    install(1, 6u, BAD_CRC);
+    s_slots.invalidate = invalidate_fails;
+    CHECK(erb_package_slots_boot(&s_slots, &s_config, &s_boot) && s_boot.active == 0,
+          "it runs when the clear fails too");
+    CHECK(s_invalidated == 1u && s_boot.clear_failed, "and the boot says the header is still there");
+    erb_package_slots_show_error(&s_boot);
+    CHECK(er_error_screen_active(), "with the error screen up");
+    er_error_screen_hide();
+
+    reset();
+    install(0, 5u, GOOD);
+    install(1, 6u, BAD_CRC);
+    s_slots.invalidate = NULL;
+    CHECK(erb_package_slots_boot(&s_slots, &s_config, &s_boot) && s_boot.clear_failed, "as when nothing can clear it");
+}
+
 static void test_nothing_loads(void)
 {
     reset();
@@ -306,6 +339,7 @@ int main(void)
     test_no_package();
     test_newest_wins();
     test_rollback();
+    test_clear_fails();
     test_nothing_loads();
 
     if (s_failed)

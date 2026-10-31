@@ -287,6 +287,10 @@ static void load_package(bool touch)
     if (running)
     {
         printf("package running from slot %c; slot %c is staging\n", 'a' + boot.active, 'a' + boot.staging);
+        if (boot.clear_failed)
+        {
+            printf("couldn't clear the rejected package's header: the next flash may replace the last good one\n");
+        }
         if (boot.error.status != ERB_OK)
         {
             hold_error_screen(touch);

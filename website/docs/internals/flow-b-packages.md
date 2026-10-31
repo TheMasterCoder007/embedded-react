@@ -808,7 +808,9 @@ The firmware gives it the mapped slots and a function that clears a header. `run
 does this on ESP-IDF, and the RP2040 example does it in `main.c`.
 
 `embedded-react flash` reads both headers from the board and writes staging, through `esptool` or `picotool`, then
-resets it. That boot clears a package that fails, so the next `flash` doesn't take it for the last good one. On an
+resets it. That boot clears a package that fails, so the next `flash` doesn't take it for the last good one. If the
+header won't clear, the error screen says so. `flash` also checks the newest slot's package before it writes the
+other, and a partial one, as a `pack` image cut short can leave, is written over first. On an
 ESP32 it finds the slots in the board's partition table, as the partitions labelled `erb_a` and `erb_b`.
 `embedded-react pack` writes a slot's image to a file instead, as a UF2 on the RP2040, for a factory line or a
 board that isn't attached. On-device hot reload will receive into staging the same way.

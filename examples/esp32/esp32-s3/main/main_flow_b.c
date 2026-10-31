@@ -121,11 +121,12 @@ static void load_package(bool touch)
     {
         snprintf(s_boot_report,
                  sizeof(s_boot_report),
-                 "package running from slot %c; slot %c is staging%s%s",
+                 "package running from slot %c; slot %c is staging%s%s%s",
                  'a' + boot.active,
                  'a' + boot.staging,
                  message[0] ? "; rejected the newest: " : "",
-                 message);
+                 message,
+                 boot.clear_failed ? "; couldn't clear its header" : "");
         if (boot.error.status != ERB_OK)
         {
             hold_error_screen(touch);

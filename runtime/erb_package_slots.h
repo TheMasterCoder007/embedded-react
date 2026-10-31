@@ -22,9 +22,9 @@
  *
  * A slot holds a header in an erase sector of its own, then a package:
  *   magic "ERBS" | sequence u32 | package_bytes u32 | crc32 u32 (over the first 12 bytes) | 0xFF padding
- * The header is written after the package, so a valid header means the whole package was written. The valid slot with the newest sequence is the active one, and the other is staging, where the next
- * package goes. A package that fails to load is given up on and the other slot runs, so the last good
- * package stays until a new one passes verification.
+ * The header is written after the package, so a valid header means the whole package was written. The valid slot with
+ * the newest sequence is the active one, and the other is staging, where the next package goes. A package that fails to
+ * load is given up on and the other slot runs, so the last good package stays until a new one passes verification.
  *
  * The writer is packages/embedded-react/flash.mjs. The board maps the slots and clears a header.
  */
@@ -70,10 +70,12 @@ typedef struct
 /** @brief What erb_package_slots_boot() did. */
 typedef struct
 {
-    int active;     /**< The slot running, or ERB_PACKAGE_SLOT_NONE. */
-    int staging;    /**< The slot the next package goes into. */
-    int rejected;   /**< The newest slot, when it failed to load; else ERB_PACKAGE_SLOT_NONE. */
-    ErbError error; /**< Why it failed, or ERB_ERR_NO_PACKAGE. Status ERB_OK when neither happened. */
+    int active;        /**< The slot running, or ERB_PACKAGE_SLOT_NONE. */
+    int staging;       /**< The slot the next package goes into. */
+    int rejected;      /**< The newest slot, when it failed to load; else ERB_PACKAGE_SLOT_NONE. */
+    ErbError error;    /**< Why it failed, or ERB_ERR_NO_PACKAGE. Status ERB_OK when neither happened. */
+    bool clear_failed; /**< The rejected slot's header still reads as valid, so the next package could replace the
+                            last good one. */
 } ErbPackageSlotBoot;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -99,8 +101,9 @@ bool erb_package_slot_read(const ErbPackageSlot* slot,
  * @brief Loads the newest package that passes, at boot, and gives up on a newer one that didn't.
  *
  * When the newest package fails and the other runs, the failed slot's header is cleared, so the last good
- * package is the newest again and the next one is written over the failed one. When neither loads, both are
- * kept, and each boot shows the same reason.
+ * package is the newest again and the next one is written over the failed one. If the header still reads as
+ * valid afterwards, boot says so in clear_failed. When neither loads, both are kept, and each boot shows the same
+ * reason.
  *
  * @param[in]  slots   The board's slots.
  * @param[in]  config  As for erb_load().

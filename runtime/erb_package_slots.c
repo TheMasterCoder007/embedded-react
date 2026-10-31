@@ -27,6 +27,7 @@
 
 #define HINT_NO_PACKAGE "Install one with: embedded-react flash"
 #define HINT_LAST_GOOD "Running the last good package."
+#define HINT_CLEAR_FAILED "Running the last good package, but couldn't clear this one: the next flash may replace it."
 
 /** @brief The header bytes its CRC covers. */
 #define HEADER_CHECKED_BYTES offsetof(SlotHeader, crc)
@@ -127,6 +128,8 @@ bool erb_package_slots_boot(const ErbPackageSlots* slots, const ErbConfig* confi
     {
         slots->invalidate((unsigned)newest, slots->context);
     }
+    /* Read it back, as the next boot and the host will. */
+    boot->clear_failed = erb_package_slot_read(&slots->slots[newest], NULL, NULL, NULL);
     return true;
 }
 
@@ -139,7 +142,7 @@ void erb_package_slots_show_error(const ErbPackageSlotBoot* boot)
     const char* hint = NULL;
     if (boot->active != ERB_PACKAGE_SLOT_NONE)
     {
-        hint = HINT_LAST_GOOD;
+        hint = boot->clear_failed ? HINT_CLEAR_FAILED : HINT_LAST_GOOD;
     }
     else if (boot->error.status == ERB_ERR_NO_PACKAGE)
     {

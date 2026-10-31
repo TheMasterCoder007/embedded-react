@@ -119,6 +119,10 @@ static void load_package(bool touch)
     if (running)
     {
         ESP_LOGI(TAG, "package running from slot %c; slot %c is staging", 'a' + boot.active, 'a' + boot.staging);
+        if (boot.clear_failed)
+        {
+            ESP_LOGE(TAG, "couldn't clear the rejected package's header: the next flash may replace the last good one");
+        }
         if (boot.error.status != ERB_OK)
         {
             hold_error_screen(touch);
