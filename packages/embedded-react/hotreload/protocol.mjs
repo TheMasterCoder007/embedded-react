@@ -45,6 +45,8 @@ export const ERHR_HEADER_SIZE = 16;
 
 /** Frame message types (room to grow: ping/ack/reset later without a version bump). */
 export const MSG_LOAD_CONTAINER = 1;
+export const MSG_PACKAGE_BEGIN = 2; // Flow B: see package-transfer.mjs
+export const MSG_PACKAGE_CHUNK = 3;
 
 /**
  * Encodes an .erpkg into an ERHR transport frame ready to write to the device's byte stream.

@@ -174,6 +174,7 @@ const char* erb_status_str(ErbStatus status)
         [ERB_ERR_INPUT] = "bad input",
         [ERB_ERR_DEBUG] = "debug table does not match",
         [ERB_ERR_ASSETS] = "asset pack failed to load",
+        [ERB_ERR_SLOT] = "couldn't write the package slot",
         [ERB_ERR_BUDGET] = "instruction budget exceeded",
         [ERB_ERR_UPDATE_LOOP] = "update loop",
         [ERB_ERR_QUEUE_FULL] = "event queue full",
@@ -194,6 +195,8 @@ static const char* resource_name(uint16_t resource)
             return "arena";
         case ERB_RESOURCE_NODES:
             return "nodes";
+        case ERB_RESOURCE_SLOT:
+            return "package slot";
         case ERB_RES_VECTOR_NODES:
             return "vector nodes";
         case ERB_RES_ANIM_VALUES:
@@ -271,8 +274,10 @@ static size_t error_amounts(const ErbError* error, char* buffer, size_t capacity
     switch (error->status)
     {
         case ERB_ERR_TOO_BIG:
-            format_amount(error->needed, error->resource == ERB_RESOURCE_ARENA, needed);
-            format_amount(error->available, error->resource == ERB_RESOURCE_ARENA, available);
+        {
+            const bool bytes = error->resource == ERB_RESOURCE_ARENA || error->resource == ERB_RESOURCE_SLOT;
+            format_amount(error->needed, bytes, needed);
+            format_amount(error->available, bytes, available);
             written = snprintf(buffer,
                                capacity,
                                "%s: needs %s, firmware reserves %s",
@@ -280,6 +285,7 @@ static size_t error_amounts(const ErbError* error, char* buffer, size_t capacity
                                needed,
                                available);
             break;
+        }
         case ERB_ERR_ENGINE_ABI:
             written = snprintf(buffer,
                                capacity,

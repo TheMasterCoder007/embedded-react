@@ -11,6 +11,8 @@ idf_component_register(
         "${R}/erb_vm.c"
         "${R}/erb_runtime.c"
         "${R}/erb_package_slots.c"
+        "${R}/erb_package_reload.c"
+        "${R}/er_hotreload.c"
         "${R}/port/erb_package_slots_esp32.c"
     INCLUDE_DIRS "${R}" "${R}/port"
     REQUIRES engine esp_partition spi_flash

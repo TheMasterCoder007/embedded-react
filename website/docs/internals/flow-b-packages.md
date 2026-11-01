@@ -851,10 +851,52 @@ header won't clear, the error screen says so. `flash` also checks the newest slo
 other, and a partial one, as a `pack` image cut short can leave, is written over first. On an
 ESP32 it finds the slots in the board's partition table, as the partitions labelled `erb_a` and `erb_b`.
 `embedded-react pack` writes a slot's image to a file instead, as a UF2 on the RP2040, for a factory line or a
-board that isn't attached. On-device hot reload will receive into staging the same way.
+board that isn't attached.
 
 A package can still fail after it has loaded. That shows the error screen, and it stays the active package: it
 passed verification, and rolling back would hide the fault.
+
+## Hot reload
+
+`embedded-react dev --device --aot` sends a package to a running board, using the Flow A reload transport's ERHR
+frames. The firmware feeds `erb_package_reload_feed()` what its serial channel receives, between frames.
+
+Two message types carry a package, one frame at a time:
+
+| `msg_type` | Name            | Payload                                 |
+| ---------- | --------------- | --------------------------------------- |
+| 2          | `PACKAGE_BEGIN` | `package_bytes` (`u32`)                 |
+| 3          | `PACKAGE_CHUNK` | `offset` (`u32`), then the package data |
+
+The host waits for a reply to each frame, one line in the board's log, before it sends the next. Writing flash stalls
+the chip, and this way nothing arrives while it does, so a UART with no flow control loses nothing, and no board needs
+the RAM for a whole package. The chunk size is the board's, stated in its first reply:
+
+| Reply                             | Meaning                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| `erb reload: ready <chunk_bytes>` | Send chunks of this size. All but the last are whole pages.    |
+| `erb reload: got <bytes>`         | Send from this offset, which a repeated or lost frame can move |
+| `dropped frame: <reason>`         | Send that frame again                                          |
+| `hot reload: ok (...)`            | The new app is running                                         |
+| `hot reload: <reason>`            | It isn't, and why                                              |
+
+`PACKAGE_BEGIN` erases the staging slot's header, and each chunk erases the sectors it lands on. Then the whole package
+goes through `erb_load()`, in place:
+
+- Verification fails: the running app is untouched, and the error screen shows the reason over it until a tap or the
+  next good load. The slots stay as they were.
+- It starts: the slot gets its header, with the next sequence, and becomes the active one. The other slot's package is
+  the one to fall back on.
+- It faults while starting: the old app is gone by then, so the error screen stays up. The slot gets no header, as a
+  boot would have given up on it, so a reset runs the last package that started.
+
+A slot's header is written only after its package has loaded, so a transfer cut short, or a reset at any point, leaves
+the board with the last package that did. The receiver keeps which slot is staging from the boot's result rather than
+reading the headers again, since a rejected package whose header wouldn't clear can read as the newest.
+
+The firmware gives `ErbPackageSlots` the `erase` and `program` functions, which only hot reload uses, and a buffer for
+one chunk. After a reload, anything it looked up in the old app, such as `erb_input_find()`, needs looking up again.
+The receiver is compiled in with `ER_HOTRELOAD`, and is off in a release firmware.
 
 ## Left for later
 

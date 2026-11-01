@@ -145,6 +145,8 @@ add_library(er_runtime STATIC
     "${R}/erb_vm.c"
     "${R}/erb_runtime.c"
     "${R}/erb_package_slots.c"
+    "${R}/erb_package_reload.c"
+    "${R}/er_hotreload.c"
 )
 target_include_directories(er_runtime PUBLIC "${R}")
 target_link_libraries(er_runtime PUBLIC er_engine)
@@ -206,6 +208,11 @@ target_link_options(embedded-react-watch PRIVATE
 if(DEFINED ER_BOARD_DEBUG)
     target_compile_definitions(embedded-react-watch PRIVATE ER_BOARD_DEBUG=${ER_BOARD_DEBUG})
 endif()
+
+# On-device hot reload over the USB serial port (dev only): `embedded-react dev --device <port> --aot`. A release
+# firmware shouldn't carry the receiver, so it is off unless you build with -DER_HOTRELOAD=1.
+option(ER_HOTRELOAD "Enable on-device hot reload over USB (dev only)" OFF)
+target_compile_definitions(embedded-react-watch PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOTRELOAD}>)
 
 # A forced failure, to check the error screen on hardware (see main.c): 1 = a hard fault, 2 = a hang.
 if(DEFINED ER_BOARD_CRASH_TEST)

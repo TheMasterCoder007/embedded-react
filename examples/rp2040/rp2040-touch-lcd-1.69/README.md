@@ -34,6 +34,9 @@ npx embedded-react flash --board rp2040-touch-lcd-1.69
 npx embedded-react pack --board rp2040-touch-lcd-1.69
 ```
 
+To send a package on every save instead, build the firmware with `-DER_HOTRELOAD=1` and run
+`npx embedded-react dev --device PORT --aot`.
+
 `main.c` runs the frame loop and feeds the pedometer and tilt into the app; `board.c` owns the panel,
 touch, and IMU; `pedometer.c` turns accelerometer peaks into steps. `-DER_BOARD_DEBUG=1` prints a 1 Hz
 heartbeat, `=2` also holds a color-bar test pattern at boot. `-DER_BOARD_CRASH_TEST=1` forces a hard fault 5 s after

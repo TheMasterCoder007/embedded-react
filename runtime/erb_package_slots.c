@@ -80,6 +80,23 @@ bool erb_package_slot_read(const ErbPackageSlot* slot,
     return true;
 }
 
+bool erb_package_slot_commit(const ErbPackageSlots* slots, unsigned slot, uint32_t package_bytes, uint32_t sequence)
+{
+    SlotHeader header = {ERB_PACKAGE_SLOT_MAGIC, sequence, package_bytes, 0u};
+    header.crc = er_crc32((const uint8_t*)&header, HEADER_CHECKED_BYTES);
+    uint8_t page[ERB_PACKAGE_SLOT_PAGE_BYTES]; /* in RAM: flash can't be read while it is programmed */
+    memset(page, 0xFF, sizeof(page));
+    memcpy(page, &header, sizeof(header));
+    if (!slots->program(slot, 0u, page, sizeof(page), slots->context))
+    {
+        return false;
+    }
+    uint32_t read_bytes = 0u;
+    uint32_t read_sequence = 0u;
+    return erb_package_slot_read(&slots->slots[slot], NULL, &read_bytes, &read_sequence) && read_bytes == package_bytes
+           && read_sequence == sequence;
+}
+
 bool erb_package_slots_boot(const ErbPackageSlots* slots, const ErbConfig* config, ErbPackageSlotBoot* boot)
 {
     memset(boot, 0, sizeof(*boot));

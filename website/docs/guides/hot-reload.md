@@ -3,9 +3,9 @@ title: 'Hot reload'
 description: 'The three edit-and-see loops: the browser simulator, the SDL simulator, and a board over USB. What survives a reload and why.'
 ---
 
-Save a file, see the change. Embedded React has three loops that do this, at three distances from
-the hardware. All three re-run your app rather than patching it, and all three keep your component
-state across the reload, so a counter you had pressed five times still reads five.
+Save a file, see the change. Embedded React has three Flow A loops that do this, at three distances
+from the hardware. All three re-run your app rather than patching it, and all three keep your
+component state across the reload, so a counter you had pressed five times still reads five.
 
 | Loop              | Runs on                                      | Command                           | Needs                                    |
 | ----------------- | -------------------------------------------- | --------------------------------- | ---------------------------------------- |
@@ -13,8 +13,8 @@ state across the reload, so a counter you had pressed five times still reads fiv
 | SDL simulator     | The engine and QuickJS natively, in a window | `npm run sim` (in the repository) | CMake, SDL2, a C compiler                |
 | On the device     | Your board, over its native USB port         | `npx embedded-react dev --device` | A firmware built with `-DER_HOTRELOAD=1` |
 
-All three are Flow A. Flow B has no hot reload, because the app is part of the firmware image; the
-loop there is rebuild and reflash, and the simulator is still where the UI work happens.
+Flow B has its own loop on the device, which [compiles a package and sends it](#on-the-device-with-flow-b). It starts
+the app over on each save, and the simulator is still where most of the UI work happens.
 
 ## In the browser
 
@@ -83,9 +83,49 @@ disturbs the running app.
 Release firmware should be built without `ER_HOTRELOAD`; ship by packing once and writing the
 config partition, as the [ESP32-S3 guide](./boards/esp32-s3.md) describes.
 
+## On the device with Flow B
+
+The ESP32-S3's Flow B build, the CYD and the RP2040 take a new package over their serial port on every save, with no
+reflash and no reboot. It is opt-in in the same way, so build the firmware with `ER_HOTRELOAD`:
+
+| Board  | Build with                               | Port                  |
+| ------ | ---------------------------------------- | --------------------- |
+| S3     | `idf.py -DER_HOTRELOAD=1` (Flow B build) | Native USB            |
+| CYD    | `idf.py -DER_HOTRELOAD=1`                | USB-C, the UART port  |
+| RP2040 | `cmake -DER_HOTRELOAD=1`                 | USB-C, the USB serial |
+
+Then, from your project:
+
+```bash
+npm i serialport                       # once: the optional native dependency for device upload
+npx embedded-react dev --device PORT --aot
+```
+
+A board with no package yet is fine: the first save installs one. The CYD's UART moves to 460800 baud once it has
+booted, so its logs read at that rate.
+
+Each save compiles a debug package, so a fault names its source line, and sends it to the staging slot a piece at a
+time. The running app stays on screen and keeps running while it arrives. Then the board checks the whole package:
+
+- **It passes:** the board tears the old app down, resets the arena, and starts the new one. That slot then becomes the
+  active one, so a reset keeps running it, and the old package stays as the fallback.
+- **It fails the check:** the app keeps running with its state, under the error screen with the reason. Tap to go back
+  to it. The reason also comes back to your terminal. The slots stay as they were.
+- **It faults while starting:** the old app is already gone, so the error screen stays up until the next save. A reset
+  runs the last package that started.
+
+A build error stays on your computer, and the board isn't touched.
+
+Component state starts over on each reload, since a package's state doesn't carry across yet. Writing flash pauses the
+whole chip for a moment, so the app stutters while a package arrives. The S3's RGB panel can't keep scanning through a
+write, so its backlight goes off until the app has drawn again. Release firmware should be built without
+`ER_HOTRELOAD`, and ship with [`embedded-react flash`](../internals/flow-b-packages.md).
+
 ## What survives
 
-State survives because of a build-time transform, not runtime magic. In every hot-reload loop, the
+The rest of this page is about Flow A, whose state survives a reload.
+
+State survives because of a build-time transform, not runtime magic. In every Flow A hot-reload loop, the
 bundler rewrites each `useState(init)` in _your_ files (never the library's) to
 `usePersistentState("file::Component#n", init)`, keyed by the component's name and the hook's
 order within it. The store behind that hook lives on the C side of the runtime, outside the

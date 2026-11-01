@@ -121,6 +121,11 @@ static void er_hotreload_rx_task(void* arg)
                 ESP_LOGW(TAG, "dropped frame: %s", er_hotreload_status_str(st));
                 continue;
             }
+            if (hr.msg_type != ER_HR_MSG_LOAD_CONTAINER)
+            {
+                ESP_LOGW(TAG, "hot reload: this firmware runs Flow A: use dev --device without --aot");
+                continue;
+            }
             /* Complete frame: apply it on the frame-loop task (which resets + loads, copying the assets so
              * s_buf is free to reuse the moment it returns). Block until done, then keep draining. */
             ESP_LOGI(TAG, "frame received (%u bytes) — applying", (unsigned)out_len);

@@ -5,3 +5,7 @@ CONFIG_ER_FLOW_B=y
 # A hang resets the board, and the next boot shows it on the error screen. Flow A leaves this off, since a long
 # QuickJS boot can hold the idle task off for longer than the task watchdog's timeout.
 CONFIG_ESP_TASK_WDT_PANIC=y
+
+# A hot reload's flash writes stop the panel's interrupts. With this on, the driver never recounts its bounce buffers,
+# so it can stay one out of step and tear until a reset. Off, it recounts each frame and restarts when it falls behind.
+# CONFIG_LCD_RGB_RESTART_IN_VSYNC is not set

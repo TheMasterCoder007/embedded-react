@@ -14,6 +14,7 @@ no platform headers. The QuickJS bridge links `er-runtime`; Flow B firmware link
 | `erb_verify.c`        | Flow B: checks a whole package before anything is built (the spec's verifier rules).                                                                                  |
 | `erb_vm.c`            | Flow B: the register VM, with the C output's arithmetic rules.                                                                                                        |
 | `erb_package_slots.c` | Flow B: the two flash slots a board keeps packages in, and the fall back to the last good one. `port/` maps them on ESP-IDF, the one file here with platform headers. |
+| `erb_package_reload.c`| Flow B: on-device hot reload. Takes a package over ERHR frames into the staging slot, and loads it.                                                                    |
 | `erb_format.h`        | Flow B: the package format and the opcode list the compiler and the runtime share.                                                                                    |
 | `erb_props.c`         | Flow B: the engine ABI's prop ids, mapped to `ERProps` fields.                                                                                                        |
 | `tests/`              | CTests: the container reader, one test per Flow B verifier rule, the VM, and the package slots.                                                                       |

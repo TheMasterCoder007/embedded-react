@@ -20,8 +20,12 @@
 // boots from), streams it over the serial/USB port as an ERHR frame, and prints the device's logs that
 // come back. The firmware swaps the new config in live — no reflash, no reboot. State written with
 // usePersistentState (or plain useState in this dev mode) survives the reload, like the simulator.
+//
+// With a compilePackage function it is the Flow B loop (`--device --aot`): each save compiles a package and sends it
+// as a PackageTransfer, and the app starts over, since a package's state doesn't carry across yet.
 
 import {relative} from 'node:path';
+import {PackageTransfer} from './package-transfer.mjs';
 import {packApp, emitAppFrame} from './pack-split.mjs';
 import {SerialUploader, listSerialPorts} from './uploader.mjs';
 import {watchTree} from './watch-tree.mjs';
@@ -46,6 +50,7 @@ function debounce(fn, ms) {
  * @param {object}   o
  * @param {string}   o.entry, o.projectRoot, o.libSrc, o.simDir, o.label, o.device
  * @param {string[]} o.nodePaths
+ * @param {() => Promise<Buffer>} [o.compilePackage]  Flow B: builds the package to send. Throws to report a build error.
  */
 export async function runDeviceDevServer({
   entry,
@@ -55,6 +60,7 @@ export async function runDeviceDevServer({
   simDir,
   device,
   label,
+  compilePackage,
 }) {
   // Each push ends with exactly one terminal line in the device's log stream:
   //   "hot reload: ok (...)"     → loaded and running
@@ -69,12 +75,17 @@ export async function runDeviceDevServer({
   let sawAnyLog = false;
   let sawReceiverAck = false;
   let closing = false; // set on Ctrl-C so we don't surface errors from a write canceled by the shutdown
+  let transfer = null;
   const onDeviceLog = line => {
     if (closing) return;
     sawAnyLog = true;
-    console.log(`  ▸ ${line}`);
-    if (/dropped frame/i.test(line) || /hot reload:/i.test(line))
+    if (/dropped frame/i.test(line) || /(hot|erb) reload:/i.test(line))
       sawReceiverAck = true;
+    if (transfer) {
+      if (!transfer.onLine(line)) console.log(`  ▸ ${line}`);
+      return;
+    }
+    console.log(`  ▸ ${line}`);
     if (!settleOutcome) return;
     if (/dropped frame/i.test(line)) settleOutcome('dropped');
     else if (/hot reload:\s*ok\b/i.test(line)) settleOutcome('ok');
@@ -82,6 +93,9 @@ export async function runDeviceDevServer({
   };
 
   const uploader = new SerialUploader({device, onLog: onDeviceLog});
+  if (compilePackage) {
+    transfer = new PackageTransfer({write: frame => uploader.writeFrame(frame)});
+  }
 
   try {
     await uploader.open();
@@ -103,7 +117,9 @@ export async function runDeviceDevServer({
     `watching ${relative(projectRoot, entry) || label} — edit & save to push. Ctrl-C to quit.`,
   );
   console.log(
-    '  sending app-only frames; the device must be running a split build (embedded-react build) so the vendor is resident.',
+    compilePackage
+      ? '  sending Flow B packages; the device must be running a Flow B firmware built with ER_HOTRELOAD=1.'
+      : '  sending app-only frames; the device must be running a split build (embedded-react build) so the vendor is resident.',
   );
 
   const APPLY_TIMEOUT_MS = 15000; // a normal reload settles in ~3-4 s; this only catches a stuck device
@@ -157,6 +173,34 @@ export async function runDeviceDevServer({
     }
   };
 
+  let triedToSend = false; // a first save that doesn't build says nothing about the board
+
+  /** One Flow B cycle: compile a package, send it and report how it went. */
+  const reloadPackage = async ({probe}) => {
+    const started = Date.now();
+    let packageData;
+    try {
+      packageData = await compilePackage();
+    } catch (e) {
+      console.error(`✗ build failed: ${e.message}`);
+      return;
+    }
+    triedToSend = true;
+    const result = await transfer
+      .send(packageData, probe ? {beginTimeoutMs: PROBE_TIMEOUT_MS} : {})
+      .catch(err => {
+        if (!closing) console.error(`✗ send failed: ${err.message}`);
+        return 'senderr';
+      });
+    if (result === 'ok') {
+      console.log(
+        `↻ reloaded package ${kb(packageData.length)} in ${Date.now() - started} ms`,
+      );
+    } else if (result !== 'rejected' && result !== 'senderr') {
+      console.error(`✗ reload ${result} — save again to retry`);
+    }
+  };
+
   // Single-flight: one build→send→apply cycle at a time. A save that lands mid-cycle just re-arms it, so
   // we rebuild and resend the latest source once the current reload settles — pushes never overlap.
   let inFlight = false;
@@ -171,6 +215,11 @@ export async function runDeviceDevServer({
       let firstSend = probe; // the probe timeout applies to the initial push only
       do {
         queued = false;
+        if (compilePackage) {
+          await reloadPackage({probe: firstSend});
+          firstSend = false;
+          continue;
+        }
         const started = Date.now();
         let container, bytecodeLen, assetsLen;
         try {
@@ -192,6 +241,7 @@ export async function runDeviceDevServer({
           console.error(`✗ build failed: ${e.message}`);
           continue;
         }
+        triedToSend = true;
         const result = await sendAndConfirm(
           container,
           firstSend ? {timeoutMs: PROBE_TIMEOUT_MS, probe: true} : {},
@@ -217,7 +267,7 @@ export async function runDeviceDevServer({
     await new Promise(r => setTimeout(r, 100));
 
   await reloadCycle({probe: true});
-  if (!sawReceiverAck) {
+  if (triedToSend && !sawReceiverAck) {
     console.warn('');
     console.warn('⚠ the board never acknowledged the hot-reload frame.');
     if (sawAnyLog) {
