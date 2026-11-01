@@ -423,18 +423,100 @@ describe('flashing', () => {
       slot: 'b',
       lastGood: 'a',
     });
-    expect(board.calls[0].slice(0, 4)).toEqual([
+    // Into BOOTSEL once, then every command without -f, and out once.
+    expect(board.calls[0]).toEqual(['picotool', 'reboot', '-u', '-f']);
+    expect(board.calls[1]).toEqual(['picotool', 'info']);
+    expect(board.calls[2].slice(0, 4)).toEqual([
       'picotool',
       'save',
       '-r',
       '0x10100000',
     ]);
+    expect(board.calls.slice(1).some(call => call.includes('-f'))).toBe(false);
     // Memory addresses, as picotool's load -o takes them: the package, then the header.
     expect(board.writes.map(write => write.address)).toEqual([
       0x10180000 + SLOT_HEADER_BYTES,
       0x10180000,
     ]);
-    expect(board.calls.at(-1)).toEqual(['picotool', 'reboot', '-f']);
+    expect(board.calls.at(-1)).toEqual(['picotool', 'reboot']);
+  });
+
+  it('waits for an RP2040 to come back in BOOTSEL', () => {
+    const board = fakeBoard({});
+    let notReady = 2;
+    const run = (command, args, inherit) => {
+      if (args[0] === 'info' && notReady-- > 0) {
+        return {status: 249, stderr: 'No accessible devices', stdout: ''};
+      }
+      return board.run(command, args, inherit);
+    };
+    const written = flashSlot({
+      packageBytes: packageBytes(),
+      board: BOARDS['rp2040-touch-lcd-1.69'],
+      run,
+      sleep: () => {},
+    });
+    expect(written.slot).toBe('a');
+    expect(notReady).toBe(-1);
+  });
+
+  it('carries on when picotool hangs after a reboot that worked', () => {
+    const board = fakeBoard({});
+    const timeouts = [];
+    const run = (command, args, inherit, timeoutMs) => {
+      if (args[0] === 'reboot') {
+        timeouts.push(timeoutMs);
+        board.calls.push([command, ...args]);
+        return {status: null, error: {code: 'ETIMEDOUT'}};
+      }
+      return board.run(command, args, inherit);
+    };
+    const written = flashSlot({
+      packageBytes: packageBytes(),
+      board: BOARDS['rp2040-touch-lcd-1.69'],
+      run,
+    });
+    expect(written.slot).toBe('a');
+    expect(board.writes).toHaveLength(2);
+    expect(timeouts).toEqual([10000, 10000]);
+  });
+
+  it('reports a board that never comes back in BOOTSEL', () => {
+    const run = (command, args) =>
+      args[0] === 'info'
+        ? {status: 249, stderr: 'No accessible devices', stdout: ''}
+        : {status: 0, stderr: '', stdout: ''};
+    expect(() =>
+      flashSlot({
+        packageBytes: packageBytes(),
+        board: BOARDS['rp2040-touch-lcd-1.69'],
+        run,
+        sleep: () => {},
+      }),
+    ).toThrow(/No accessible devices/);
+  });
+
+  it('brings an RP2040 back out of BOOTSEL when a step fails', () => {
+    const board = fakeBoard({});
+    let reboots = 0;
+    const run = (command, args, inherit) => {
+      if (args[0] === 'load') {
+        return {status: 1, stderr: 'the cable came out', stdout: ''};
+      }
+      if (args.join(' ') === 'reboot') {
+        reboots++;
+        return {status: 1, stderr: 'no device', stdout: ''};
+      }
+      return board.run(command, args, inherit);
+    };
+    expect(() =>
+      flashSlot({
+        packageBytes: packageBytes(),
+        board: BOARDS['rp2040-touch-lcd-1.69'],
+        run,
+      }),
+    ).toThrow(/the cable came out/);
+    expect(reboots).toBe(1);
   });
 
   it('says how to get a tool that is missing, and shows a failing one', () => {

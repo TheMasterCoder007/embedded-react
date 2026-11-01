@@ -49,6 +49,10 @@ const ESP_PARTITION_LABEL_AT = 12;
 const ESP_PARTITION_LABEL_BYTES = 16;
 const ESP_SLOT_LABELS = ['erb_a', 'erb_b'];
 
+const PICO_REBOOT_TIMEOUT_MS = 10000;
+const PICO_READY_TRIES = 40;
+const PICO_READY_WAIT_MS = 250;
+
 const UF2_BLOCK_BYTES = 512;
 const UF2_PAYLOAD_BYTES = 256;
 const UF2_MAGIC_START_0 = 0x0a324655;
@@ -264,9 +268,9 @@ export function slotsFromPartitionTable(table) {
 }
 
 /** Runs the first of a tool's names that exists; throws with its output when it fails. */
-function runTool(names, args, {run, install, inherit = false}) {
+function runTool(names, args, {run, install, inherit = false, timeoutMs}) {
   for (const name of names) {
-    const result = run(name, args, inherit);
+    const result = run(name, args, inherit, timeoutMs);
     if (result.error?.code === 'ENOENT') continue;
     if (result.error) throw result.error;
     if (result.status !== 0) {
@@ -279,10 +283,14 @@ function runTool(names, args, {run, install, inherit = false}) {
   throw new Error(`${names[0]} wasn't found. ${install}`);
 }
 
-const defaultRun = (command, args, inherit) =>
+const sleepMs = ms =>
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+const defaultRun = (command, args, inherit, timeoutMs) =>
   spawnSync(command, args, {
     encoding: 'utf8',
     stdio: inherit ? 'inherit' : 'pipe',
+    timeout: timeoutMs,
   });
 
 const espAccess = ({chip, port, run}) => {
@@ -319,42 +327,59 @@ const espAccess = ({chip, port, run}) => {
         ...options,
         inherit: true,
       }),
+    begin: () => {},
     finish: () => {}, // esptool resets the board itself after each command
   };
 };
 
-const picoAccess = ({board, run}) => {
+const picoAccess = ({board, run, sleep}) => {
   const names = process.env.PICOTOOL ? [process.env.PICOTOOL] : ['picotool'];
   const options = {
     run,
     install:
-      'Install it (a build of the Pico SDK fetches one, without USB unless libusb is found), or set PICOTOOL.',
+      "Install one with USB support, such as Homebrew's, or set PICOTOOL. The copy a Pico SDK build fetches has none.",
+  };
+  // libusb on macOS can deadlock as the board detaches, leaving picotool stuck after the reboot worked. What comes
+  // next shows whether it did, so a reboot that outlives the timeout isn't a failure.
+  const reboot = args => {
+    try {
+      runTool(names, args, {...options, timeoutMs: PICO_REBOOT_TIMEOUT_MS});
+    } catch (error) {
+      if (error.code !== 'ETIMEDOUT') throw error;
+    }
   };
   return {
-    // -f takes a running board into BOOTSEL through its USB serial, and back afterwards. Addresses are memory
-    // addresses for both commands: load's -o defaults to 0x10000000, the start of flash.
+    // The board stays in BOOTSEL for the whole write: a command straight after a -f one finds it still rebooting.
+    // -f takes a running board there through its USB serial, and a board already there stays.
+    begin: () => {
+      reboot(['reboot', '-u', '-f']);
+      for (let tries = 1; ; tries++) {
+        try {
+          runTool(names, ['info'], {
+            ...options,
+            timeoutMs: PICO_REBOOT_TIMEOUT_MS,
+          });
+          return;
+        } catch (error) {
+          if (tries === PICO_READY_TRIES) throw error;
+          sleep(PICO_READY_WAIT_MS);
+        }
+      }
+    },
+    // Addresses are memory addresses for both commands: load's -o defaults to 0x10000000, the start of flash.
     read: (address, bytes, file) =>
       runTool(
         names,
-        [
-          'save',
-          '-r',
-          hex(address),
-          hex(address + bytes),
-          file,
-          '-t',
-          'bin',
-          '-f',
-        ],
+        ['save', '-r', hex(address), hex(address + bytes), file, '-t', 'bin'],
         options,
       ),
     slots: () => board.slots,
     write: (address, file) =>
-      runTool(names, ['load', file, '-t', 'bin', '-o', hex(address), '-f'], {
+      runTool(names, ['load', file, '-t', 'bin', '-o', hex(address)], {
         ...options,
         inherit: true,
       }),
-    finish: () => runTool(names, ['reboot', '-f'], options),
+    finish: () => reboot(['reboot']),
   };
 };
 
@@ -413,14 +438,18 @@ export function flashSlot({
   port,
   run = defaultRun,
   log = () => {},
+  sleep = sleepMs,
 }) {
   checkPackage(packageBytes);
   const access =
     board.tool === 'picotool'
-      ? picoAccess({board, run})
+      ? picoAccess({board, run, sleep})
       : espAccess({chip: board.chip, port, run});
   const dir = mkdtempSync(join(tmpdir(), 'er-flash-'));
+  let begun = false;
   try {
+    access.begin();
+    begun = true;
     const slots = access.slots(dir);
     const headers = slots.map((slot, index) => {
       const file = join(dir, `header-${index}.bin`);
@@ -466,6 +495,7 @@ export function flashSlot({
     // over if this is cut short, and the other slot stays the newest.
     access.write(address + SLOT_HEADER_BYTES, packageFile);
     access.write(address, headerFile);
+    begun = false;
     access.finish();
     return {
       address,
@@ -473,6 +503,14 @@ export function flashSlot({
       slot: SLOT_NAMES[slot],
       lastGood: lastGood === null ? null : SLOT_NAMES[lastGood],
     };
+  } catch (error) {
+    // Out of BOOTSEL if it can, without hiding what went wrong.
+    if (begun) {
+      try {
+        access.finish();
+      } catch {}
+    }
+    throw error;
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }

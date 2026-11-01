@@ -42,6 +42,7 @@
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -54,6 +55,27 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 
 /** @brief Room for one line of erb_error_message(). */
 #define ERROR_MESSAGE_BYTES 160
+
+/* USB serial connects after the boot is over, so what happened is kept and said once a host is listening. */
+#define BOOT_REPORT_BYTES 320
+static char s_boot_report[BOOT_REPORT_BYTES];
+
+/** @brief Frames to wait once a host connects: a serial monitor flushes what arrives as it opens the port. */
+#define BOOT_REPORT_CONNECTED_FRAMES 30U
+
+/**
+ * @brief Adds a line to the boot report.
+ *
+ * @param[in] format  As for printf; its arguments follow.
+ */
+static void __attribute__((format(printf, 1, 2))) boot_report(const char* format, ...)
+{
+    const size_t used = strlen(s_boot_report);
+    va_list args;
+    va_start(args, format);
+    vsnprintf(s_boot_report + used, sizeof(s_boot_report) - used, format, args);
+    va_end(args);
+}
 
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
@@ -231,7 +253,7 @@ static void show_recorded_fault(bool touch)
     {
         return;
     }
-    printf("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.pc);
+    boot_report("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.pc);
     er_fault_show_recorded(&s_fault, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
     hold_error_screen(touch);
 }
@@ -281,15 +303,15 @@ static void load_package(bool touch)
     {
         char message[ERROR_MESSAGE_BYTES];
         erb_error_message(&boot.error, message, sizeof(message));
-        printf("package not loaded: %s\n", message);
+        boot_report("package not loaded: %s\n", message);
         erb_package_slots_show_error(&boot);
     }
     if (running)
     {
-        printf("package running from slot %c; slot %c is staging\n", 'a' + boot.active, 'a' + boot.staging);
+        boot_report("package running from slot %c; slot %c is staging\n", 'a' + boot.active, 'a' + boot.staging);
         if (boot.clear_failed)
         {
-            printf("couldn't clear the rejected package's header: the next flash may replace the last good one\n");
+            boot_report("couldn't clear the rejected package's header: the next flash may replace the last good one\n");
         }
         if (boot.error.status != ERB_OK)
         {
@@ -408,6 +430,14 @@ int main(void)
     {
         const uint32_t frame_start = now_ms();
         watchdog_update();
+
+        static uint32_t s_connected_frames = 0;
+        s_connected_frames = stdio_usb_connected() ? s_connected_frames + 1U : 0U;
+        if (s_boot_report[0] && s_connected_frames >= BOOT_REPORT_CONNECTED_FRAMES)
+        {
+            printf("%s", s_boot_report);
+            s_boot_report[0] = '\0';
+        }
 
         if (touch)
         {
