@@ -88,11 +88,11 @@ config partition, as the [ESP32-S3 guide](./boards/esp32-s3.md) describes.
 The ESP32-S3's Flow B build, the CYD and the RP2040 take a new package over their serial port on every save, with no
 reflash and no reboot. It is opt-in in the same way, so build the firmware with `ER_HOTRELOAD`:
 
-| Board   | Build with                               | Port                  |
-| ------- | ---------------------------------------- | --------------------- |
-| S3      | `idf.py -DER_HOTRELOAD=1` (Flow B build) | Native USB            |
-| CYD     | `idf.py -DER_HOTRELOAD=1`                | USB-C, the UART port  |
-| RP2040  | `cmake -DER_HOTRELOAD=1`                 | USB-C, the USB serial |
+| Board  | Build with                               | Port                  |
+| ------ | ---------------------------------------- | --------------------- |
+| S3     | `idf.py -DER_HOTRELOAD=1` (Flow B build) | Native USB            |
+| CYD    | `idf.py -DER_HOTRELOAD=1`                | USB-C, the UART port  |
+| RP2040 | `cmake -DER_HOTRELOAD=1`                 | USB-C, the USB serial |
 
 Then, from your project:
 
@@ -104,7 +104,7 @@ npx embedded-react dev --device PORT --aot
 A board with no package yet is fine: the first save installs one. The CYD's UART moves to 460800 baud once it has
 booted, so its logs read at that rate.
 
-Each save compiles a debug package, so a fault names its source line and sends it to the staging slot a piece at a
+Each save compiles a debug package, so a fault names its source line, and sends it to the staging slot a piece at a
 time. The running app stays on screen and keeps running while it arrives. Then the board checks the whole package:
 
 - **It passes:** the board tears the old app down, resets the arena, and starts the new one. That slot then becomes the
@@ -116,7 +116,7 @@ time. The running app stays on screen and keeps running while it arrives. Then t
 
 A build error stays on your computer, and the board isn't touched.
 
-A component state starts over on each reload, since a package's state doesn't carry across yet. Writing flash pauses the
+Component state starts over on each reload, since a package's state doesn't carry across yet. Writing flash pauses the
 whole chip for a moment, so the app stutters while a package arrives. Release firmware should be built without
 `ER_HOTRELOAD`, and ship with [`embedded-react flash`](../internals/flow-b-packages.md).
 
