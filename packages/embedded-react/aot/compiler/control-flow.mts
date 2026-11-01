@@ -34,6 +34,7 @@ import {
   collectEffects,
   usesState,
   bindConst,
+  settleBootInitials,
 } from './collect.mts';
 import {collectAnims, collectRefs} from './animations.mts';
 import {attrExpr} from './style-text.mts';
@@ -438,6 +439,7 @@ export function emitComponent(
       prefix,
       env.wide,
     );
+    settleBootInitials(childState.byName.values());
     out.childStateRecords.push(...childState.byName.values());
     for (const name of childState.byName.keys()) {
       delete childScope[name];

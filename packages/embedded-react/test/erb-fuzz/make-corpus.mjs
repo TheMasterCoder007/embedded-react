@@ -36,8 +36,6 @@ const ROOT = resolve(HERE, '../../../..');
 const FIXTURES = join(HERE, '../erb-parity/fixtures');
 const OUT_DIR = join(ROOT, 'tools/erb-fuzz/corpus/seeds');
 
-const SMALL_PANEL = [[240, 320]];
-
 // As erb-parity.mjs compiles it to fit the engine's default vector nodes.
 const LIST_CAPS = {'svg-rows': 4};
 
@@ -47,7 +45,6 @@ const fixtures = readdirSync(FIXTURES)
   .map(name => ({
     name,
     file: join(FIXTURES, `${name}.jsx`),
-    panels: SMALL_PANEL,
     listCap: LIST_CAPS[name],
   }));
 
@@ -57,21 +54,15 @@ const SEEDS = [
   {
     name: 'counter-release',
     file: join(FIXTURES, 'counter.jsx'),
-    panels: SMALL_PANEL,
     release: true,
   },
   {
     name: 'watch-face',
     file: join(ROOT, 'demos/watch-face/App.jsx'),
-    panels: [[240, 280]],
   },
   {
     name: 'thermostat',
     file: join(ROOT, 'demos/thermostat/App.jsx'),
-    panels: [
-      [240, 320],
-      [320, 240],
-    ],
   },
 ];
 
@@ -79,13 +70,10 @@ const SEEDS = [
 async function compileSeed(seed) {
   const src = readFileSync(seed.file, 'utf8');
   const sourceDir = dirname(seed.file);
-  const size = ([width, height]) => ({width, height});
   const packaged = compilePackage(src, seed.name, {
     filename: seed.file,
-    screen: size(seed.panels[0]),
     listCap: seed.listCap,
     svgArtifacts: await bakeSvgArtifacts(src, sourceDir),
-    screens: seed.panels.map(size),
     release: seed.release,
   });
   const images = packaged.images.map(image => ({

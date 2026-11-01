@@ -170,7 +170,7 @@ idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b \
 With no package installed, the first boot shows the error screen, saying so. Then, from your project:
 
 ```bash
-npx embedded-react build --aot --screen 800x480    # → dist/app.erpkg
+npx embedded-react build --aot    # → dist/app.erpkg
 npx embedded-react flash --board esp32-s3 --port PORT
 ```
 

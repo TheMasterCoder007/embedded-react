@@ -15,11 +15,10 @@ npm create embedded-react@latest my-watch -- --template watch-face
 
 A scaffolded copy has `npm run dev` (the browser simulator), `npm run dev:device` (hot reload on a
 board), `npm run build` (Flow A, `dist/app.erpkg`) and `npm run build:aot` (Flow B, `dist/app.erpkg` for
-the panel size the demo targets). Inside the repository, `npm run sim -- thermostat` and
+every panel size). Inside the repository, `npm run sim -- thermostat` and
 `npm run pack -- …` from `packages/embedded-react` build a demo against the in-repo library with no
-install. `npm run aot` does too, but reads the panel size from the environment and otherwise assumes
-800×480, where the thermostat does not compile:
-`ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat`.
+install. `npm run aot -- thermostat --package` does too. Without `--package` it writes the C output for one
+panel, by default 800×480: `npm run aot -- thermostat --screen 240x320`.
 
 ## Thermostat
 
@@ -39,8 +38,10 @@ from a 1280×800 tablet down to the 240×320 panel on a no-PSRAM ESP32:
 
 **How it is put together:**
 
-- `App.jsx` picks the layout and owns the model. COOL and HEAT each keep their own setpoint; AUTO's
-  pair is held 4 °F apart by pushing the far end along.
+- `App.jsx` picks the layout and owns the model, and is the whole app in Flow B. COOL and HEAT each keep their
+  own setpoint; AUTO's pair is held 4 °F apart by pushing the far end along.
+- `RichApp.jsx` (Flow A only) is the `split` and `stack` layouts with the imperative drag dial, the 14-day
+  weather panel and the theme switch. `index.jsx` picks it on those panels.
 - `components/dial.jsx` is one `<Dial>` node. The engine tracks the finger, quantises to `step`,
   latches the nearer setpoint in AUTO, and repaints only what moved. The centre number is updated
   imperatively with `updateText`, so a move costs no React work; state is committed on release.
@@ -49,8 +50,8 @@ from a 1280×800 tablet down to the 240×320 panel on a no-PSRAM ESP32:
   TIME ZONE pages. The latter drive the `__erWifi` and `__erClock` objects the
   [ESP32-S3 WiFi build](./boards/esp32-s3.md#wifi) installs, and appear only where those exist.
 
-**Where the two flows differ.** `split` and `stack` run under Flow A. `solo` also compiles ahead of
-time, which keeps that branch simpler:
+**Where the two flows differ.** One Flow B package holds all three layouts, and the panel picks at boot. Its
+`split` and `stack` show the same dial beside a simple weather card, and it keeps every layout simpler:
 
 - The settings sheet offers units only. A live theme switch would require every colour in the tree to
   be a ternary of literals, so the theme is baked at build time.

@@ -9,8 +9,8 @@ import {
 } from 'embedded-react';
 import logo from './assets/icons/embedded-react.png';
 
-// The panel size. The host injects `screen` at runtime (Flow A) and the ahead-of-time build bakes it
-// in (Flow B). Everything below derives from it with arithmetic and ternaries, so this one file fits
+// The panel size. The host injects `screen` at runtime (Flow A) and the ahead-of-time build works out
+// what derives from it at boot (Flow B). Everything below derives from it with arithmetic and ternaries, so this one file fits
 // a 240×240 watch face and an 800×480 panel alike.
 const SW = screen.width;
 const SH = screen.height;

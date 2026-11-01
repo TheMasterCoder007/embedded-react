@@ -98,7 +98,7 @@ typedef struct
     uint16_t engine_abi;
     uint32_t build_id;
 
-    /* The panel that matched the screen. */
+    /* The panel whose check passed for the screen. */
     uint16_t panel;
     uint32_t arena_bytes;
     uint16_t node_count;
@@ -324,6 +324,12 @@ typedef enum
  */
 bool erb_verify(
     const void* package, size_t package_bytes, const ErbConfig* config, ErbProgram* program, ErbError* error);
+
+/** @brief The VM's arithmetic, for a layout check: an ERB_MATH_ function, its int conversion and its whole-number
+ * division (an ERB_CK_IDIV_ mode). */
+double erb_vm_dmath(uint32_t function, double left, double right);
+double erb_vm_to_int(double value);
+double erb_vm_idiv(uint32_t mode, double dividend, double divisor);
 
 /**
  * @brief Finds the source line for a function and offset in the debug table, if there is one.

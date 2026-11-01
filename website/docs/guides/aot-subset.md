@@ -21,7 +21,7 @@ stand today, then the habits that keep an app inside them.
 
 :::tip[Test early]
 The browser simulator runs Flow A and accepts everything. If a board without external RAM is the
-target, run `npx embedded-react build --aot --screen WxH` from the first day, so each rule turns up
+target, run `npx embedded-react build --aot` from the first day, so each rule turns up
 while the code that breaks it is still one line.
 :::
 
@@ -161,14 +161,45 @@ Values derived from `screen.width` and `screen.height` (with `+ - * /`, comparis
 panel. A branch on `screen` whose two sides differ only in values (styles, props, `{text}`) is one
 tree whose values are picked at boot.
 
-A branch that changes the tree is compiled for one panel: the `--screen WxH` you build with
-(without it the compiler warns and assumes 800×480). Only that side is compiled, so an import used
-solely in the other side is fine, and a top-level `if (COMPACT) return ...` keeps a board's whole
-layout in one place. The same goes for a value the compiler has to know, such as a state's initial
-value or Svg geometry. `er_app_build()` checks these at boot: on a panel that picks another layout,
-it builds nothing and returns `false`, and `er_app_fits(w, h)` asks the same without building. A
-package takes several sizes (`--screen 240x320,320x240`), compiles each the same way, and
-the runtime picks the one that matches the panel.
+A branch that changes the tree adds a layout. A package declares no sizes: the compiler finds the
+layouts from the app's breakpoints, proves every panel size up to 32767×32767 has one, and stores each
+with a check. The firmware passes its resolution and the loader picks the first layout whose check
+passes, so one package runs on every panel. Anything identical between layouts is stored once, and
+only the chosen layout uses RAM.
+
+```jsx
+const WIDE = screen.width >= 480;
+
+export function App() {
+  return WIDE ? <TwoColumns /> : <OneColumn />;
+}
+```
+
+A top-level `if (COMPACT) return ...` or a returned ternary keeps a whole layout in one place.
+
+- **A state's initial value** derived from `screen` is worked out at boot, as long as it is a number
+  or a boolean. A string adds a layout for each value.
+- **`width={screen.width}` on an `<Svg viewBox>`** is worked out at boot, and the drawing scales with
+  no layout per size. Shapes calculated from `screen` fail the build, naming the expression: draw in
+  the viewBox's units instead.
+- **Every layout has to compile.** One that doesn't fails the build, and the error names a size that
+  picks it. A package holds at most 16 layouts; past that the build fails, naming the expression that
+  changes the most.
+- **`--screen 240x320,800x480` only drops layouts.** It keeps the ones those sizes pick, which saves
+  the flash of the rest. A panel that picks a dropped layout shows the error screen.
+
+Limits worth knowing:
+
+- Fonts are baked at fixed sizes. Breakpoint sizes work, but `fontSize: screen.width / 10` snaps to the
+  nearest baked size, with a warning.
+- Every board gets every layout, including the images and fonts only one layout uses, unless
+  `--screen` drops them.
+- The build proves each layout compiles, not that it looks right. A very small screen gets the
+  smallest layout and may overflow, as on the web.
+
+The C output (`--c`) is for one panel: the `--screen WxH` you build with, or 800×480. `er_app_build()`
+checks its assumptions at boot: on a panel that picks another layout, it builds nothing and returns
+`false`, and `er_app_fits(w, h)` asks the same without building.
 
 ## Fixed limits
 

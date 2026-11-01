@@ -216,13 +216,16 @@ export function formatAotError(
   const hint = error.aotHint ? `\n\nhint: ${error.aotHint}` : '';
   const size = `${opts.screen.width}×${opts.screen.height}`;
   const screen =
-    opts.screenFrom === 'option'
-      ? `\n\nscreen: ${size}.`
-      : opts.screenFrom === 'env'
-        ? `\n\nscreen: ${size} (from ER_AOT_SCREEN_W/H).`
-        : `\n\nscreen: ${size} — ER_AOT_SCREEN_W/H did not supply both dimensions, so the ` +
-          `default filled in. A responsive app picks its layout from \`screen\`, so this may be compiling a ` +
-          `branch meant for another board.`;
+    opts.screenFrom === 'search'
+      ? `\n\nscreen: this is the layout a ${size} panel picks. Every layout has to compile; name the panels with ` +
+        `--screen to drop the others.`
+      : opts.screenFrom === 'option'
+        ? `\n\nscreen: ${size}.`
+        : opts.screenFrom === 'env'
+          ? `\n\nscreen: ${size} (from ER_AOT_SCREEN_W/H).`
+          : `\n\nscreen: ${size} — ER_AOT_SCREEN_W/H did not supply both dimensions, so the ` +
+            `default filled in. A responsive app picks its layout from \`screen\`, so this may be compiling a ` +
+            `branch meant for another board.`;
 
   // Build the located error, keeping the location and hint for any caller that inspects them.
   const located: AotError = new Error(

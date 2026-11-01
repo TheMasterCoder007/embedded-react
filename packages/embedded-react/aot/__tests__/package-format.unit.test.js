@@ -96,6 +96,15 @@ describe('package format copy', () => {
       defineValue(formatHeader, 'ERB_FORMAT_MINOR'),
     );
     expect(format.FLAG_DEBUG).toBe(defineValue(formatHeader, 'ERB_FLAG_DEBUG'));
+    expect(format.CHECK_STACK).toBe(
+      defineValue(formatHeader, 'ERB_CHECK_STACK'),
+    );
+    expect(format.CHECK_LOCALS).toBe(
+      defineValue(formatHeader, 'ERB_CHECK_LOCALS'),
+    );
+    expect(format.CHECK_BUDGET).toBe(
+      defineValue(formatHeader, 'ERB_CHECK_BUDGET'),
+    );
     expect(format.NONE).toBe(defineValue(formatHeader, 'ERB_NONE'));
     expect(format.FRAME_CELLS).toBe(
       defineValue(formatHeader, 'ERB_FRAME_CELLS'),
@@ -169,6 +178,8 @@ describe('package format copy', () => {
       [format.FunctionKind, 'ERB_FN_'],
       [format.EventField, 'ERB_EVT_'],
       [format.MathFn, 'ERB_MATH_'],
+      [format.CheckOp, 'ERB_CK_'],
+      [format.CheckDivide, 'ERB_CK_IDIV_'],
       [format.PaintField, 'ERB_VPAINT_'],
       [format.GradientField, 'ERB_VGRAD_'],
     ];

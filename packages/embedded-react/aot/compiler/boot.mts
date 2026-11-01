@@ -50,6 +50,8 @@ interface BootContext {
   lowering: Set<t.Node>;
   /** The boot value each expression read as a whole stands for, by the scope it was read in. */
   wholes: Map<t.Node, Map<Scope, BootValue>>;
+  /** The source text, for naming an expression. */
+  src: string;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -235,9 +237,12 @@ export const screenBinding = (screen: {
 
 /**
  * Starts recording a compile's boot values.
+ *
+ * @param src  The source text.
  */
-export function beginBoot(): void {
+export function beginBoot(src = ''): void {
   context = {
+    src,
     env: null,
     lower: null,
     slots: [],
@@ -272,29 +277,59 @@ export function endBoot(): IrBoot {
   // Look each assumed value's slot up while the context still lowers, so the guard can read it.
   const assumptions: IrBootAssumption[] = [];
   const guarded = new Set<IrBootSlot>();
-  let assumesPanel = false;
+  let panelSource: string | null = null;
   const assume = (value: BootValue): void => {
     const slot = bootSlotOf(value);
     const buildValue = buildValueOf(value);
     if (slot && isGuardable(buildValue)) {
       if (!guarded.has(slot)) {
         guarded.add(slot);
-        assumptions.push({kind: 'value', slot, value: buildValue});
+        assumptions.push({
+          kind: 'value',
+          slot,
+          value: buildValue,
+          source: sourceOfValue(value),
+        });
       }
     } else if (value.basis.length) {
       value.basis.forEach(assume);
     } else {
-      assumesPanel = true;
+      panelSource ??= sourceOfValue(value) ?? '';
     }
   };
   ending.assumed.forEach(assume);
-  if (assumesPanel) {
-    assumptions.push({kind: 'panel'});
+  if (panelSource !== null) {
+    assumptions.push({kind: 'panel', source: panelSource || null});
   }
 
   context = null;
   return {slots: ending.slots, assumptions};
 }
+
+/**
+ * An expression's source text, on one line, as an error names it.
+ *
+ * @param node  The expression.
+ *
+ * @returns The text, or null outside a compile.
+ */
+export function bootSourceText(node: t.Node): string | null {
+  if (!context?.src || node.start == null || node.end == null) return null;
+  const text = context.src.slice(node.start, node.end).replace(/\s+/g, ' ');
+  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+
+/**
+ * What a boot value is called in an error: its source, or the panel dimension it is.
+ *
+ * @param value  The value.
+ *
+ * @returns The text, or null when it has none.
+ */
+const sourceOfValue = (value: BootValue): string | null =>
+  value.dimension
+    ? `screen.${value.dimension}`
+    : value.node && bootSourceText(value.node);
 
 /**
  * Drops a compile's boot values after it failed.

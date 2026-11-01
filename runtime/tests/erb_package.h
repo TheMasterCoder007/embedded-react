@@ -42,6 +42,9 @@ typedef struct
     uint16_t node_count, root_template, boot_function, update_function;
 } TPanel;
 
+/** @brief The check a panel gets unless TPkg::check_words is set: the panel's exact size. */
+#define TPKG_SIZE_CHECK_WORDS 8u
+
 typedef struct
 {
     uint16_t resource;
@@ -205,7 +208,12 @@ typedef struct
     TPanel panels[4];
     uint16_t panel_count;
     TNeed needs[8];
+    uint16_t need_panels[8]; /**< Since minor 6: the panel each need is for. tpkg_base sets them to ERB_NONE. */
     uint16_t need_count;
+
+    const uint32_t* check_words; /**< The checks table in place of a size check per panel (NULL: those). */
+    uint32_t check_word_count;
+    uint32_t panel_checks[4]; /**< With check_words: each panel's first word, or ERB_CHECK_ALWAYS. */
 
     const char* strings[32];
     uint32_t string_count;
@@ -366,6 +374,27 @@ static bool tpkg_table(const TPkg* pkg, uint32_t id, TBuf* buf)
     const uint32_t start = buf->length;
     switch (id)
     {
+        case ERB_TABLE_CHECKS:
+            if (pkg->minor < ERB_FORMAT_MINOR_CHECKS)
+                return false;
+            if (pkg->check_words)
+            {
+                for (uint32_t index = 0; index < pkg->check_word_count; index++)
+                    tb_u32(buf, pkg->check_words[index]);
+                break;
+            }
+            for (uint32_t index = 0; index < pkg->panel_count; index++)
+            {
+                tb_u32(buf, ERB_CK_WIDTH);
+                tb_u32(buf, ERB_CK_PUSHI | ((uint32_t)pkg->panels[index].width << 8));
+                tb_u32(buf, ERB_CK_EQ);
+                tb_u32(buf, ERB_CK_HEIGHT);
+                tb_u32(buf, ERB_CK_PUSHI | ((uint32_t)pkg->panels[index].height << 8));
+                tb_u32(buf, ERB_CK_EQ);
+                tb_u32(buf, ERB_CK_AND);
+                tb_u32(buf, ERB_CK_END);
+            }
+            break;
         case ERB_TABLE_STRINGS:
             if (!pkg->string_count)
                 return false;
@@ -673,7 +702,9 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
         table_count += present[id];
     }
     const uint32_t listings = pkg->per_panel ? pkg->panel_count : 1u;
-    table_count = table_count * listings + (pkg->extra_table_id ? 1u : 0u);
+    /* The checks table is listed once, whatever the panels' tables do. */
+    const uint32_t shared_checks = present[ERB_TABLE_CHECKS] ? 1u : 0u;
+    table_count = (table_count - shared_checks) * listings + shared_checks + (pkg->extra_table_id ? 1u : 0u);
 
     const uint32_t start = buf->length;
     tb_u16(buf, pkg->major);
@@ -696,8 +727,15 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
     for (uint32_t index = 0; index < pkg->panel_count; index++)
     {
         const TPanel* panel = &pkg->panels[index];
-        tb_u16(buf, panel->width);
-        tb_u16(buf, panel->height);
+        if (pkg->minor >= ERB_FORMAT_MINOR_CHECKS)
+        {
+            tb_u32(buf, pkg->check_words ? pkg->panel_checks[index] : index * TPKG_SIZE_CHECK_WORDS);
+        }
+        else
+        {
+            tb_u16(buf, panel->width);
+            tb_u16(buf, panel->height);
+        }
         tb_u32(buf, panel->arena_bytes);
         tb_u16(buf, panel->node_count);
         tb_u16(buf, panel->root_template);
@@ -707,7 +745,7 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
     for (uint32_t index = 0; index < pkg->need_count; index++)
     {
         tb_u16(buf, pkg->needs[index].resource);
-        tb_u16(buf, 0u);
+        tb_u16(buf, pkg->minor >= ERB_FORMAT_MINOR_CHECKS ? pkg->need_panels[index] : 0u);
         tb_u32(buf, pkg->needs[index].amount);
     }
     const uint32_t directory = buf->length;
@@ -733,7 +771,7 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
         const uint16_t panel = pkg->per_panel ? (uint16_t)listing : pkg->panel_field_zero ? 0u : ERB_NONE;
         for (uint32_t id = 1; id < ERB_TABLE_COUNT_; id++)
         {
-            if (!present[id])
+            if (!present[id] || (id == ERB_TABLE_CHECKS && listing > 0u))
             {
                 continue;
             }
@@ -742,8 +780,8 @@ static void tpkg_program(const TPkg* pkg, TBuf* buf)
                 (pkg->overlap_tables && id == ERB_TABLE_CODE) ? offsets[ERB_TABLE_TYPES] : offsets[id];
             at[0] = (uint8_t)id;
             at[1] = 0u;
-            at[2] = (uint8_t)panel;
-            at[3] = (uint8_t)(panel >> 8);
+            at[2] = (uint8_t)(id == ERB_TABLE_CHECKS ? ERB_NONE : panel);
+            at[3] = (uint8_t)((id == ERB_TABLE_CHECKS ? ERB_NONE : panel) >> 8);
             tb_put32(at + 4, offset);
             tb_put32(at + 8, lengths[id]);
             entry++;
@@ -778,8 +816,7 @@ static void tpkg_debug_table(const TPkg* pkg, uint16_t panel, TBuf* buf)
         tb_u16(buf, panel);
     }
     const uint32_t strings = (old ? ERB_DEBUG_OLD_HEADER_SIZE : ERB_DEBUG_HEADER_SIZE)
-                             + pkg->debug_entry_count * ERB_DEBUG_ENTRY_SIZE
-                             + ((pkg->function_count * 2u + 3u) & ~3u);
+                             + pkg->debug_entry_count * ERB_DEBUG_ENTRY_SIZE + ((pkg->function_count * 2u + 3u) & ~3u);
     tb_u32(buf, strings);
     const uint32_t length_at = buf->length;
     if (!old)
@@ -1006,6 +1043,10 @@ static void tpkg_base(TPkg* pkg)
     pkg->needs[0] = (TNeed){ERB_RES_ANIM_VALUES, 1u};
     pkg->needs[1] = (TNeed){ERB_RES_IMAGES, 1u};
     pkg->need_count = 2;
+    for (uint32_t index = 0; index < 8u; index++)
+    {
+        pkg->need_panels[index] = ERB_NONE;
+    }
 
     static const char* const strings[] = {"hello", "img", "on", "off", "sensors.read", "i:i", "steps", "boom"};
     memcpy(pkg->strings, strings, sizeof(strings));

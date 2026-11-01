@@ -28,12 +28,27 @@ import {
   PAINT_PROPS,
   PAINT_STRIDE,
   scaleVectorArtifact,
+  VOP_ARC,
+  VOP_CUBIC,
+  VOP_LINE,
+  VOP_MOVE,
+  VOP_QUAD,
+  VOP_SHAPE,
 } from '../../src/embedded-react/svg-ops.js';
 import {aotError, currentLoc} from './diagnostics.mts';
+import {
+  bootSlotOf,
+  bootSourceText,
+  buildValueOf,
+  containsBoot,
+  foldBoot,
+  isBoot,
+} from './boot.mts';
 import {evalStatic, withUndefined} from './static-eval.mts';
 import {lowerExpr} from './expressions.mts';
 import {
   lowerColorValue,
+  bootStyleAssign,
   collectStyleAssigns,
   styleWrites,
 } from './style-text.mts';
@@ -51,6 +66,8 @@ import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {IrNode} from './ir/nodes.mts';
 import type {IrExpr} from './ir/expressions.mts';
+import {FLOAT} from './ir/types.mts';
+import type {DynAssign} from './types.mts';
 import type {
   IrDrawingGradient,
   IrDrawingPaint,
@@ -222,6 +239,35 @@ function* svgShapeChildren(
   }
 }
 
+/** A drawing's value worked out from `screen`, which a tape can't hold: a compile error, not a state-driven value. */
+class SvgScreenError extends Error {
+  aotLoc?: {line: number; column: number};
+  aotHint?: string;
+}
+
+/**
+ * Folds a value of a drawing. A drawing is baked once, so what it draws can't change with the panel: it fails the
+ * build, naming the expression, instead of adding a layout for every size.
+ *
+ * @param node  The expression.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The value.
+ */
+function evalDrawing(node: t.Node, scope: Scope): unknown {
+  const value = evalStatic(node, scope, 'boot');
+  if (!containsBoot(value)) return value;
+
+  const error = new SvgScreenError(
+    `AOT: an <Svg> shape can't be calculated from \`screen\`: ${bootSourceText(node) ?? 'this value'}`,
+  );
+  error.aotHint =
+    'draw in a viewBox\'s units and size the <Svg> instead: <Svg viewBox="0 0 100 100" width={screen.width} …> ' +
+    'scales on every panel.';
+  if (node.loc) error.aotLoc = node.loc.start;
+  throw error;
+}
+
 /**
  * Converts an SVG JSX element (Svg/Circle/Path/Rect/Line/Arc/G/…) to flattenSvg's `{type, props}` shape,
  * statically evaluating every attribute; it serves the static path, so an unfoldable attribute throws.
@@ -255,7 +301,10 @@ function jsxToSvgElement(
     } else if (attr.value.type === 'StringLiteral') {
       props[name] = attr.value.value;
     } else if (attr.value.type === 'JSXExpressionContainer') {
-      props[name] = evalStatic(attr.value.expression, scope);
+      props[name] =
+        type === 'Svg' && (name === 'width' || name === 'height')
+          ? evalStatic(attr.value.expression, scope, 'boot')
+          : evalDrawing(attr.value.expression, scope);
     } else {
       throw new Error(
         `AOT: unsupported <${type}> attribute value for "${name}"`,
@@ -391,6 +440,7 @@ function svgAttrs(
   env: Env,
 ): SvgAttrs {
   const attrs: SvgAttrs = {};
+  const tagName = (openingElement.name as t.JSXIdentifier).name;
   for (const attr of openingElement.attributes) {
     if (attr.type !== 'JSXAttribute') {
       throw new Error(
@@ -420,8 +470,12 @@ function svgAttrs(
       attrs[name] = valueNode.value;
     } else if (valueNode.type === 'JSXExpressionContainer') {
       try {
-        attrs[name] = evalStatic(valueNode.expression, withUndefined(scope));
-      } catch {
+        attrs[name] =
+          tagName === 'Svg' && (name === 'width' || name === 'height')
+            ? evalStatic(valueNode.expression, withUndefined(scope), 'boot')
+            : evalDrawing(valueNode.expression, withUndefined(scope));
+      } catch (error) {
+        if (error instanceof SvgScreenError) throw error;
         // Defer a state-driven `d` so pathEntries raises the error naming the fix, not the expression's own error.
         if (name === 'd') {
           attrs[name] = {value: null, node: valueNode.expression};
@@ -488,8 +542,9 @@ function lowerGradient(
     if (valueNode == null) return tapeNumber(fallback);
     let value: unknown;
     try {
-      value = evalStatic(valueNode, scope);
-    } catch {
+      value = evalDrawing(valueNode, scope);
+    } catch (error) {
+      if (error instanceof SvgScreenError) throw error;
       return {kind: 'float', value: lowerExpr(valueNode, env)};
     }
 
@@ -544,9 +599,10 @@ function lowerGradient(
     try {
       color = {
         kind: 'static',
-        argb: parseColor(evalStatic(stopProps.color, scope)) >>> 0,
+        argb: parseColor(evalDrawing(stopProps.color, scope)) >>> 0,
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof SvgScreenError) throw error;
       color = {kind: 'state', value: lowerColorValue(stopProps.color, env)};
     }
 
@@ -1124,7 +1180,7 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
         attr.value?.type === 'JSXExpressionContainer'
       ) {
         try {
-          evalStatic(attr.value.expression, scope);
+          evalStatic(attr.value.expression, scope, 'boot');
         } catch {
           hasDynamic = true;
         }
@@ -1184,7 +1240,8 @@ function svgBoxSize(
   value: unknown,
   scaled: boolean,
 ): StaticAssign[] {
-  if (value == null) return [];
+  if (value == null || svgBootSize(field, value)) return [];
+  if (isBoot(value)) return svgBoxSize(field, foldBoot(value), scaled);
   if (isDynamicAttr(value)) {
     throw aotError(
       `AOT: a state-driven <Svg ${field}> is not supported`,
@@ -1205,6 +1262,36 @@ function svgBoxSize(
 }
 
 /**
+ * An <Svg> width or height worked out at boot, as its runtime write. A drawing with a viewBox then scales on every
+ * panel with no layout of its own. A value boot can't work out is taken at the build's panel.
+ *
+ * @param field  Which one.
+ * @param value  Its value.
+ *
+ * @returns The write, or null when it is not one.
+ */
+function svgBootSize(
+  field: 'width' | 'height',
+  value: unknown,
+): DynAssign | null {
+  return isBoot(value) ? bootStyleAssign(field, value) : null;
+}
+
+/**
+ * An <Svg>'s width and height, as the writes of those worked out at boot.
+ *
+ * @param width  Its width.
+ * @param height  Its height.
+ *
+ * @returns The writes.
+ */
+function svgBootSizes(width: unknown, height: unknown): DynAssign[] {
+  return [svgBootSize('width', width), svgBootSize('height', height)].filter(
+    (size): size is DynAssign => size !== null,
+  );
+}
+
+/**
  * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, its animated
  * transform and its refs. No state drives the box: it is not a node app_update() rewrites.
  *
@@ -1215,6 +1302,7 @@ function svgBoxSize(
  * @param openingElement  The <Svg>'s opening tag, for its style and ref.
  * @param scope  Compile-time constants in reach.
  * @param env  The expression environment.
+ * @param bootSizes  Its width and height writes worked out at boot.
  *
  * @returns The node, with its refs wired.
  */
@@ -1226,6 +1314,7 @@ function lowerSvgBox(
   openingElement: t.JSXOpeningElement,
   scope: Scope,
   env: Env,
+  bootSizes: DynAssign[] = [],
 ): IrNode {
   const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
     openingElement,
@@ -1233,7 +1322,11 @@ function lowerSvgBox(
     env,
     elementSpec('Svg')!,
   );
-  if (dynAssigns.length) {
+  // A value worked out at boot is set once, so only one state drives is refused.
+  const readsOnlyBoot = (assign: DynAssign): boolean =>
+    (assign.value.kind === 'dimension' || assign.value.kind === 'opacity') &&
+    assign.value.value.kind === 'boot';
+  if (!dynAssigns.every(readsOnlyBoot)) {
     throw aotError(
       'AOT: a state-driven style on an <Svg> is not supported',
       'put the changing style on a wrapping <View>: <View style={…}><Svg …/></View>.',
@@ -1250,7 +1343,17 @@ function lowerSvgBox(
     loc: currentLoc(),
     type,
     constantProps: [...size, ...staticAssigns],
-    stateProps: [],
+    stateProps: [
+      ...bootSizes.filter(
+        assign =>
+          !styleWrites(
+            staticAssigns,
+            dynAssigns,
+            assign.field.replace(/_pct$/, ''),
+          ),
+      ),
+      ...dynAssigns,
+    ],
     placeholder: null,
     text: null,
     image: null,
@@ -1311,6 +1414,165 @@ export function emitSvg(
 }
 
 /**
+ * How much a drawing scales along one side: the box over the viewBox.
+ *
+ * @param size  The box's side: a number, or a boot value.
+ * @param view  The viewBox's side.
+ *
+ * @returns The scale, or null when the side has no value boot can work out.
+ */
+function viewBoxScale(size: unknown, view: number): IrTapeValue | null {
+  if (!isBoot(size)) return tapeNumber(svgNum(size, view) / view);
+  const slot = bootSlotOf(size);
+  if (!slot || (slot.type.kind !== 'int' && slot.type.kind !== 'float')) {
+    return null;
+  }
+
+  return {
+    kind: 'float',
+    value: {
+      kind: 'floatDivide',
+      left: {kind: 'boot', slot, type: slot.type},
+      right: {kind: 'number', value: view, type: FLOAT},
+      type: FLOAT,
+    },
+  };
+}
+
+/**
+ * A viewBox drawing sized at boot: drawn in the viewBox's units and scaled once, from the real size, as a drawing
+ * state drives is rebuilt. So it takes one layout on every panel, where baking it would take one layout per size.
+ *
+ * @param element  The <Svg>.
+ * @param svgElement  The <Svg>, folded.
+ * @param scope  Compile-time constants in reach.
+ * @param out  Everything emitted so far.
+ * @param env  The expression environment.
+ *
+ * @returns The node, or null when no viewBox drawing is sized at boot.
+ */
+function emitSvgScaled(
+  element: t.JSXElement,
+  svgElement: SvgElement,
+  scope: Scope,
+  out: Out,
+  env: Env,
+): IrNode | null {
+  const {width, height, viewBox} = svgElement.props;
+  if (!viewBox || !width || !height || (!isBoot(width) && !isBoot(height))) {
+    return null;
+  }
+
+  const view = String(viewBox)
+    .trim()
+    .split(/[\s,]+/)
+    .map(parseFloat);
+  if (view.length !== 4 || !(view[2] > 0) || !(view[3] > 0)) return null;
+  const scaleX = viewBoxScale(width, view[2]);
+  const scaleY = viewBoxScale(height, view[3]);
+  if (!scaleX || !scaleY) return null;
+
+  const {ops, paints, gradients} = flattenSvg({
+    ...svgElement.props,
+    width: view[2],
+    height: view[3],
+  });
+  const sideX: IrTapeValue = {kind: 'local', name: 'scale_x'};
+  const sideY: IrTapeValue = {kind: 'local', name: 'scale_y'};
+  const along = (value: number, side: IrTapeValue): IrTapeValue =>
+    tapeChain(tapeNumber(value), ['*', side]);
+  const opNames: Record<number, string> = {
+    [VOP_MOVE]: 'ER_VOP_MOVE',
+    [VOP_LINE]: 'ER_VOP_LINE',
+    [VOP_QUAD]: 'ER_VOP_QUAD',
+    [VOP_CUBIC]: 'ER_VOP_CUBIC',
+    [VOP_ARC]: 'ER_VOP_ARC',
+  };
+  const tape: IrTapeValue[] = [];
+  for (let index = 0; index < ops.length; ) {
+    const op = ops[index++];
+    if (op === VOP_SHAPE) {
+      tape.push(tapeOp('ER_VOP_SHAPE'), tapeNumber(ops[index++]));
+    } else if (op === VOP_ARC) {
+      tape.push(
+        tapeOp(opNames[op]),
+        along(ops[index++], sideX),
+        along(ops[index++], sideY),
+        along(ops[index++], sideX),
+        tapeNumber(ops[index++]),
+        tapeNumber(ops[index++]),
+      );
+    } else if (op === VOP_MOVE || op === VOP_LINE) {
+      tape.push(
+        tapeOp(opNames[op]),
+        along(ops[index++], sideX),
+        along(ops[index++], sideY),
+      );
+    } else if (op === VOP_QUAD || op === VOP_CUBIC) {
+      tape.push(tapeOp(opNames[op]));
+      for (let point = 0; point < (op === VOP_QUAD ? 2 : 3); point++) {
+        tape.push(along(ops[index++], sideX), along(ops[index++], sideY));
+      }
+    } else {
+      tape.push(tapeOp('ER_VOP_CLOSE'));
+    }
+  }
+
+  // A stroke scales by the two sides' mean, as flattenSvg's does.
+  const sideStroke = tapeChain(tapeChain(sideX, ['+', sideY]), [
+    '*',
+    tapeNumber(0.5),
+  ]);
+  const nodeId = `n${out.allocateNodeId()}`;
+  const vector: IrStateDrivenVector = {
+    id: out.svgN++,
+    locals: [
+      {name: 'scale_x', value: scaleX},
+      {name: 'scale_y', value: scaleY},
+    ],
+    tape,
+    paints: paintsOf(paints).map(paint => ({
+      fill: {kind: 'static', argb: paint.fill},
+      stroke: {kind: 'static', argb: paint.stroke},
+      strokeWidth: tapeChain(tapeNumber(paint.strokeWidth), ['*', sideStroke]),
+      miter: paint.miter,
+      cap: paint.cap,
+      join: paint.join,
+      fillRule: paint.fillRule,
+      fillGradient: {index: paint.fillGradient, when: null},
+      strokeGradient: {index: paint.strokeGradient, when: null},
+    })),
+    gradients: (gradients as IrVectorTables['gradients']).map(gradient => ({
+      type: gradient.type,
+      stops: (gradient.stops || []).map(stop => ({
+        color: {kind: 'static' as const, argb: stop.color >>> 0},
+        offset: tapeNumber(stop.offset),
+      })),
+      ax: tapeNumber(gradient.ax || 0),
+      ay: tapeNumber(gradient.ay || 0),
+      bx: tapeNumber(gradient.bx || 0),
+      by: tapeNumber(gradient.by || 0),
+      r: tapeNumber(gradient.r || 0),
+    })),
+  };
+  out.vectors.push({kind: 'drawing', vector});
+  out.needsMath = true;
+
+  const node = lowerSvgBox(
+    nodeId,
+    'ER_NODE_VECTOR',
+    svgBoxSize('width', width, true),
+    svgBoxSize('height', height, true),
+    element.openingElement,
+    scope,
+    env,
+    svgBootSizes(width, height),
+  );
+  node.wiring.push({kind: 'stateDrivenVector', vector});
+  return node;
+}
+
+/**
  * Static <Svg>: reuse flattenSvg (full feature set: viewBox, <G>, Path) and bake const arrays.
  *
  * @param element  The <Svg>.
@@ -1328,7 +1590,13 @@ function emitSvgStatic(
 ): IrNode {
   // Flatten the subtree and bake its ops and paints into const tables.
   const svgElement = jsxToSvgElement(element, scope)!;
-  const {ops, paints, gradients} = flattenSvg(svgElement.props);
+  const scaled = emitSvgScaled(element, svgElement, scope, out, env);
+  if (scaled) return scaled;
+  const {ops, paints, gradients} = flattenSvg({
+    ...svgElement.props,
+    width: buildValueOf(svgElement.props.width),
+    height: buildValueOf(svgElement.props.height),
+  });
   const nodeId = `n${out.allocateNodeId()}`;
   const tables: IrVectorTables = {
     id: out.svgN++,
@@ -1356,6 +1624,7 @@ function emitSvgStatic(
     element.openingElement,
     scope,
     env,
+    svgBootSizes(svgElement.props.width, svgElement.props.height),
   );
   node.wiring.push({kind: 'vectorTables', tables});
   return node;
@@ -1602,6 +1871,7 @@ function emitSvgDynamic(
     element.openingElement,
     scope,
     env,
+    svgBootSizes(rootAttrs.width, rootAttrs.height),
   );
   node.wiring.push({kind: 'stateDrivenVector', vector});
 

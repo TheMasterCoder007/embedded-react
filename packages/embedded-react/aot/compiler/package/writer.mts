@@ -24,6 +24,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {crc32} from '../../../assets/emit-container.mjs';
+import {checksTable} from './checks.mts';
 import {
   DEBUG_ENTRY_SIZE,
   DEBUG_HEADER_SIZE,
@@ -41,14 +42,17 @@ import {
   TAPE_HEADER_SIZE,
   TAPE_SIZE,
 } from './format.mts';
+import type {LayoutCheck} from './checks.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export interface ProgramPanel {
+  /** The size the layout was compiled at; any size its check takes runs it. */
   width: number;
   height: number;
+  check: LayoutCheck;
   arenaBytes: number;
   nodeCount: number;
   rootTemplate: number;
@@ -753,27 +757,34 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
 }
 
 /**
- * Each panel's needs together: the most any panel needs of each resource.
+ * Each panel's needs: one for every panel where they agree, else one for each panel that has it, since only the
+ * chosen layout's have to fit.
  *
  * @param programs  Each panel's program.
  *
- * @returns The needs.
+ * @returns The needs, with the panel each is for.
  */
-function mergedNeeds(programs: Program[]): ProgramNeed[] {
-  const amounts = new Map<number, number>();
-  for (const need of programs.flatMap(program => program.needs)) {
-    amounts.set(
-      need.resource,
-      Math.max(amounts.get(need.resource) ?? 0, need.amount),
+function panelNeeds(programs: Program[]): (ProgramNeed & {panel: number})[] {
+  const resources = [
+    ...new Set(
+      programs.flatMap(program => program.needs.map(need => need.resource)),
+    ),
+  ].sort((left, right) => left - right);
+  return resources.flatMap(resource => {
+    const amounts = programs.map(
+      program =>
+        program.needs.find(need => need.resource === resource)?.amount ?? 0,
     );
-  }
-  return [...amounts]
-    .sort(([left], [right]) => left - right)
-    .map(([resource, amount]) => ({resource, amount}));
+    return amounts.every(amount => amount === amounts[0])
+      ? [{resource, amount: amounts[0], panel: NONE}]
+      : amounts.flatMap((amount, panel) =>
+          amount ? [{resource, amount, panel}] : [],
+        );
+  });
 }
 
 /**
- * Writes a program section, its build_id worked out over the finished bytes. Each program is one panel's. A
+ * Writes a program section, its build_id worked out over the finished bytes. Each program is one layout's. A
  * table that is the same for every panel is listed once for all of them; any other is listed for each panel
  * that has it, and panels whose copies are the same share its bytes. A function body the same in several
  * panels is stored once.
@@ -786,6 +797,7 @@ export function writeProgram(programs: Program[]): WrittenProgram {
   // Every panel's functions point into one code table and one types table.
   const bodies = new Bodies();
   const panelTables = programs.map(program => tablesOf(program, bodies));
+  const checks = checksTable(programs.map(program => program.panels[0].check));
   const types = new ByteWriter();
   bodies.types.forEach(type => types.u8(type));
   types.pad4();
@@ -794,6 +806,11 @@ export function writeProgram(programs: Program[]): WrittenProgram {
   for (const tables of panelTables) {
     tables.set(Table.types, types.done());
     tables.set(Table.code, code.done());
+    if (checks.words.length) {
+      const words = new ByteWriter();
+      checks.words.forEach(word => words.u32(word));
+      tables.set(Table.checks, words.done());
+    }
   }
   const ids = [...new Set(panelTables.flatMap(tables => [...tables.keys()]))];
   ids.sort((left, right) => left - right);
@@ -826,7 +843,7 @@ export function writeProgram(programs: Program[]): WrittenProgram {
   }
 
   const panels = programs.map(program => program.panels[0]);
-  const needs = mergedNeeds(programs);
+  const needs = panelNeeds(programs);
   const out = new ByteWriter();
   out.u16(FORMAT_MAJOR);
   out.u16(FORMAT_MINOR);
@@ -839,18 +856,17 @@ export function writeProgram(programs: Program[]): WrittenProgram {
   out.u16(panels.length);
   out.u16(needs.length);
   out.u16(entries.length);
-  for (const panel of panels) {
-    out.u16(panel.width);
-    out.u16(panel.height);
+  panels.forEach((panel, index) => {
+    out.u32(checks.starts[index]);
     out.u32(panel.arenaBytes);
     out.u16(panel.nodeCount);
     out.u16(panel.rootTemplate);
     out.u16(panel.bootFunction);
     out.u16(panel.updateFunction);
-  }
+  });
   for (const need of needs) {
     out.u16(need.resource);
-    out.u16(0);
+    out.u16(need.panel);
     out.u32(need.amount);
   }
 

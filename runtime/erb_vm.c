@@ -351,6 +351,35 @@ static double dmath(uint32_t function, double left, double right)
     }
 }
 
+double erb_vm_dmath(uint32_t function, double left, double right)
+{
+    return dmath(function, left, right);
+}
+
+double erb_vm_to_int(double value)
+{
+    return double_to_int32(value);
+}
+
+double erb_vm_idiv(uint32_t mode, double dividend, double divisor)
+{
+    const int32_t left = double_to_int32(dividend);
+    const int32_t right = double_to_int32(divisor);
+    switch (mode)
+    {
+        case ERB_CK_IDIV_FLOOR:
+            return floordiv32(left, right);
+        case ERB_CK_IDIV_CEIL:
+            return ceildiv32(left, right);
+        case ERB_CK_IDIV_ROUND:
+            return rounddiv32(left, right);
+        case ERB_CK_IDIV_MOD:
+            return mod32(left, right);
+        default:
+            return div32(left, right);
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Register cells
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -593,6 +622,9 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 break;
             case ERB_OP_LOADI:
                 registers[operand_a] = ERB_SBX(word);
+                break;
+            case ERB_OP_SCREEN:
+                registers[operand_a] = operand_bx ? g_erb.config.screen_h : g_erb.config.screen_w;
                 break;
             case ERB_OP_LOADK:
                 registers[operand_a] = (int32_t)program->const32[operand_bx];

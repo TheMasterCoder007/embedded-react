@@ -9,8 +9,8 @@ the people building the loader, the VM, and the compiler's package output.
 
 :::info[Runtime built, compiler output in progress]
 The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
-`erb_format.h`). `embedded-react build --aot` writes a package, with a layout for each panel size `--screen`
-lists (`--screen 240x320,320x240`), and its debug table. It takes state, handlers, timers, effects, lists,
+`erb_format.h`). `embedded-react build --aot` writes a package, with a layout for every panel size, and its
+debug table. It takes state, handlers, timers, effects, lists,
 animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen size. `--release`
 and `--bake` build the package too, and `embedded-react flash` writes it to a [slot](#package-slots). Once
 packages pass the same tests as the C output (`--c`), the C backend is retired.
@@ -93,14 +93,17 @@ section.
 
 Then, in order:
 
-- **Panels**, 16 bytes each: `width u16`, `height u16`, `arena_bytes u32`, `node_count u16`,
-  `root_template u16`, `boot_function u16`, `update_function u16` (`0xFFFF` for none). One entry per
-  declared panel size, each compiled as the C output is for that size. Tables that are the same for
-  every panel are stored once and shared; one that differs, such as a panel's templates, is stored
-  per panel. Every panel's functions point into one `code` and one `types` table, so a function body
-  that is the same in several panels is stored once.
-- **Needs**, 8 bytes each: `resource u16`, `reserved u16`, `amount u32`. The engine pools the package
-  uses besides nodes: vector nodes (1), animation values (2), concurrent animations (3), animation
+- **Panels**, 16 bytes each: `check u32`, `arena_bytes u32`, `node_count u16`, `root_template u16`,
+  `boot_function u16`, `update_function u16` (`0xFFFF` for none). One entry per layout, the first whose
+  [check](#layout-checks) passes being the one the panel runs. `check` is that check's first word in the
+  `checks` table, or `0xFFFFFFFF` for a layout that takes any screen. Before minor 6 it was `width u16`,
+  `height u16`, and a panel ran on that exact size. Tables that are the same for every panel are stored
+  once and shared; one that differs, such as a panel's templates, is stored per panel. Every panel's
+  functions point into one `code` and one `types` table, so a function body that is the same in several
+  panels is stored once.
+- **Needs**, 8 bytes each: `resource u16`, `panel u16`, `amount u32`. `panel` (since minor 6) is the panel
+  the need is for, or `0xFFFF` for every panel, since only the chosen layout's needs have to fit. Before
+  minor 6 it was reserved. The engine pools the package uses besides nodes: vector nodes (1), animation values (2), concurrent animations (3), animation
   groups (4), registered images (5), fonts (6), glyphs (7) and extra glyphs (8), each at most once.
   A firmware that doesn't know a resource id rejects the package, so a later pool can be added
   without a format change.
@@ -119,6 +122,38 @@ every id the package uses against the firmware's own tables.
 The package never encodes a struct layout from `er_scene.h`. Props are named by ABI id, and the
 runtime maps each id to its `ERProps` field with a table built from `offsetof`. So a firmware built
 with a different `ER_TEXT_MAX` or a reordered `ERProps` runs the same package.
+
+### Layout checks
+
+A check says whether a layout takes a screen. It is what the compile folded at the size it compiled the layout
+at: a breakpoint's outcome, say. The compiler finds the layouts by compiling one, finding a size its check rejects,
+and compiling again until every size from 1 to 32767 on each side has a layout. It runs the check over ranges of
+sizes, so that is a proof rather than a sample. A breakpoint that only changes values stays one layout.
+
+The loader runs checks before it reads anything else in the package, so a check can't use the VM: it is its own
+small program in table 20, `checks`, for every panel. Words are `op` in the low byte and a signed 24-bit argument above
+it. It is a stack machine over doubles with no jumps, 16 values of stack and 48 locals, and it ends at `END`, which
+passes when the value on top is true. Every word is bounds-checked as it runs, and all the panels' checks share a
+budget of 65536 words, so a hostile check can do no more than fail the load. Every check runs, even after one passes,
+so a malformed one fails the load on every screen.
+
+| Op                                 | What it does                                                                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------ |
+| `WIDTH`, `HEIGHT`                  | Push the screen's size                                                               |
+| `PUSHI`, `PUSHK`                   | Push the argument, or the double in the next two words                               |
+| `LOAD`, `STORE`                    | Read or write local `arg`, which starts at 0                                         |
+| `ADD`, `SUB`, `MUL`, `DIV`, `NEG`  | Arithmetic on doubles                                                                |
+| `MATH`                             | An `ERB_MATH_` function by `arg`, as `DMATH` works it out                            |
+| `TOINT`                            | To a whole number, as `DTOI` converts one                                            |
+| `IDIV`                             | Whole-number division by `arg` (trunc, floor, ceil, round, mod), with the VM's rules |
+| `LT`, `GT`, `LE`, `GE`, `EQ`, `NE` | Compare, giving 0 or 1                                                               |
+| `NOT`, `AND`, `OR`                 | On truth: 0 and NaN are false                                                        |
+| `SELECT`                           | Pop the alternate, the consequent and the test, and push the one the test picks      |
+| `END`                              | Pass when the value on top is true                                                   |
+
+A string a boot value can hold is one of the app's literals, so a check compares them as numbers the compiler
+interned. A value boot can't work out makes the check take only the exact size the layout was compiled at, and so does
+a check past 4096 steps, the budget's share for each of a package's 16 layouts at most.
 
 ### Tables
 
@@ -417,6 +452,7 @@ extension word is never an instruction, and a branch into one is rejected. The f
 | Timers        | `TSTART` (function, ms, repeat; gives an id), `TCLEAR`                                                                                                                                           |
 | Animation     | `ASTART` (a descriptor, with `toValue`s from registers), `ASTOP`, `AVSET`, `AVGET`                                                                                                               |
 | Vectors       | `VTAPE` (a tape and its paints into the scratch), `VSET` (a float of it), `VCOMMIT` (to a node, with the tape's paints), `VDIRTY`; since minor 3, `VPAINT`, `VGRAD`, `VCOMMITP`                  |
+| The panel     | `SCREEN` (the real width or height, since minor 6)                                                                                                                                               |
 | Event data    | `EVT` (`x`, `y`, `dx`, `dy`, `vx`, `vy`, the fingers down since minor 2, a layout field), `NOW`, `DATENOW`                                                                                       |
 | Faults        | `TRAP`, with a reason: what a lowered `throw` or an unreachable branch becomes                                                                                                                   |
 | Effects       | `EFFECT` (queue an effect to run after this update pass)                                                                                                                                         |
@@ -543,16 +579,18 @@ to 6 only read the new package, so a reload that fails there leaves the running 
 2. Check the tag, and that there is exactly one program section and at most one asset pack and debug
    section.
 3. Check the header: format, ABI level, flags.
-4. Pick the panel that matches the size the firmware passes. A size the package doesn't declare fails
-   here.
+4. Pick the first panel whose [check](#layout-checks) passes for the size the firmware passes. A size no
+   check takes fails here.
 5. Compare `arena_bytes`, `node_count` and every need with what the firmware reserved.
 6. Verify every table and every function (the [rules](#verifier-rules) below), check the asset pack
    without registering anything, and resolve every import and input.
 7. On a reload, tear down the running app (below). Then register the asset pack in place; it was
    checked whole in step 6, so registering it can't fail part way.
 8. Zero the arena and write each slot's initial value.
-9. Run the panel's boot function: the values worked out from the real screen size.
-10. Build the root template: create the nodes, apply each constant prop set, wire the bindings.
+9. Run the panel's boot function: the values worked out from the real screen size (`SCREEN` reads it), and the
+   states that start at one.
+10. Build the root template: create the nodes, apply each constant prop set, wire the bindings. The root node
+    takes the real screen size.
 11. Run the update with every dirty bit set, so every state-driven prop gets its first value.
 12. Run the mount effects, then set the root.
 
@@ -580,39 +618,39 @@ reads them in place as words.
 Every rule here is checked once, at load. Each has a reason the error screen shows; the runtime's tests
 build a package that breaks one rule and check it is rejected with that reason.
 
-| Area      | Rule                                                                                                                                                                                                                                                                                  | Reason shown                       |
-| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| Container | `ERCF` magic, version 1, every section in bounds, the CRC matches                                                                                                                                                                                                                     | not a package / corrupt            |
-| Container | The tag is `erb`; one program section; at most one asset pack and one debug section; each 4-aligned                                                                                                                                                                                   | not a Flow B package               |
-| Header    | `format_major` equal, `format_minor` not newer, flag bits known                                                                                                                                                                                                                       | built for a newer runtime          |
-| Header    | `engine_abi` within the firmware's range                                                                                                                                                                                                                                              | built for engine ABI _n_           |
-| Header    | A panel matches the real size                                                                                                                                                                                                                                                         | no layout for _w_ × _h_            |
-| Header    | The panel's arena bytes, nodes and each need fit what the firmware reserves; every resource id is known and named once                                                                                                                                                                | needs _n_ B, firmware reserves _m_ |
-| Tables    | Every table in the section's bounds, 4-aligned, for a declared panel or every panel; none of the panel's tables overlapping another or listed twice; a length that is a whole number of records                                                                                       | malformed table                    |
-| Tables    | The required tables are present (`arena`, `slots`, `templates`, `functions`, `types`, `code`); no unknown table id                                                                                                                                                                    | malformed table                    |
-| Strings   | Every offset in bounds and in order; every string NUL-terminated inside the table and valid UTF-8                                                                                                                                                                                     | malformed string                   |
-| Arena     | Regions inside `arena_bytes`, aligned, not overlapping; their sum is what the panel declares                                                                                                                                                                                          | bad arena layout                   |
-| Slots     | A known type; inside its region, aligned to its type; not overlapping; a dirty bit in range for tracked slots; a valid `init` for the type; an enum set or row layout that exists; no more animated values than the needs declare                                                     | bad state layout                   |
-| Lists     | Row fields inside the row size, a known type, a cap for each string field; the pool holds `cap` rows                                                                                                                                                                                  | bad state layout                   |
-| Props     | Every prop id is in the firmware's ABI table; the value's kind matches the prop's; an enum value in range; a string index valid and, for a text prop, not past the firmware's cap; an image name in the asset pack or built in                                                        | bad prop                           |
-| Templates | Known node types; child counts consistent, so the pre-order list is one tree; a node count within the panel's; handle slots of type `node`; an element's children allowed for its type                                                                                                | bad template                       |
-| Bindings  | Each event bound to a function of the matching kind; each animated binding to an animated-value slot and an animatable prop that isn't a color; each interpolated one to an interpolation onto colors exactly when its prop is a color; each tape index valid                         | bad binding                        |
-| Interps   | An animated-value slot; 2 to `ER_INTERPOLATE_MAX_POINTS` points; known flags and extrapolation modes                                                                                                                                                                                  | bad animation                      |
-| Anims     | A known kind and easing; a group's children are later records and no child has two parents; at most `ERUI_MAX_GROUP_ENTRIES` children; the target a `node` or `anim` slot; the prop animatable                                                                                        | bad animation                      |
-| Tapes     | Each tape's floats parse as ops with their argument counts and fit `ERUI_VECTOR_TAPE_MAX`; paint and gradient counts within the firmware's caps; every paint, gradient and stop index in range; 2 to `ER_VGRAD_MAX_STOPS` stops                                                       | bad vector tape                    |
-| Functions | Code in bounds; register count and types valid; parameters and result typed; ends in `RET` or `TRAP`, so it can't run off its end                                                                                                                                                     | bad function                       |
-| Code      | Every opcode known to this format; every register operand below the frame size and of the type the opcode takes; `int64`, `double` and `node` registers on an even cell                                                                                                               | bad bytecode                       |
-| Code      | Every slot, constant, string, enum, prop, template, animation, tape and import index in range, and of the kind the opcode takes; `SET` only to writable slots; an enum write from the slot's own set                                                                                  | bad bytecode                       |
-| Code      | Branch targets inside the function, on an instruction; only `LOOP` branches backward, on a counter set by `LOOPSET` with a constant bound and written by nothing else                                                                                                                 | bad control flow                   |
-| Code      | `EVT` only in a function the runtime enters with an event of that kind                                                                                                                                                                                                                | bad bytecode                       |
-| Calls     | `CALL` targets a helper later in the table, with matching parameter and result types, so the call graph has no cycle                                                                                                                                                                  | recursive call                     |
-| Calls     | The deepest frame sum from any entry point fits the register stack region                                                                                                                                                                                                             | stack too deep                     |
-| Imports   | Every import resolves to a native function the firmware registered with the same name, version and signature                                                                                                                                                                          | missing native module _name_       |
-| Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                       | bad input                          |
-| Keyboard  | Whole records; each layer and row names the runs after the ones before it, with 1 to 255 rows or keys; every key a known type with valid strings, and one that types something has its text                                                                                           | malformed table                    |
-| Keyboard  | No more layers, rows and keys than `ERB_MAX_KEYBOARD_LAYERS`, `ERB_MAX_KEYBOARD_ROWS` and `ERB_MAX_KEYBOARD_KEYS`                                                                                                                                                                     | needs more than firmware reserves  |
-| Debug     | Each table for a declared panel or all; one at most for this panel. Its `build_id` matches; parts in order, not overlapping; `function_count` is the program's; entries sorted, each on an instruction; each `file` and name an index into its strings, checked like `strings`        | debug table does not match         |
-| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit the firmware's font storage and the font registry                                                                                                                 | asset pack failed to load          |
+| Area      | Rule                                                                                                                                                                                                                                                                           | Reason shown                       |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| Container | `ERCF` magic, version 1, every section in bounds, the CRC matches                                                                                                                                                                                                              | not a package / corrupt            |
+| Container | The tag is `erb`; one program section; at most one asset pack and one debug section; each 4-aligned                                                                                                                                                                            | not a Flow B package               |
+| Header    | `format_major` equal, `format_minor` not newer, flag bits known                                                                                                                                                                                                                | built for a newer runtime          |
+| Header    | `engine_abi` within the firmware's range                                                                                                                                                                                                                                       | built for engine ABI _n_           |
+| Header    | A check passes for the real size, and every check run is well formed                                                                                                                                                                                                           | no layout for _w_ × _h_            |
+| Header    | The panel's arena bytes, nodes and each need fit what the firmware reserves; every resource id is known and named once                                                                                                                                                         | needs _n_ B, firmware reserves _m_ |
+| Tables    | Every table in the section's bounds, 4-aligned, for a declared panel or every panel; none of the panel's tables overlapping another or listed twice; a length that is a whole number of records                                                                                | malformed table                    |
+| Tables    | The required tables are present (`arena`, `slots`, `templates`, `functions`, `types`, `code`); no unknown table id                                                                                                                                                             | malformed table                    |
+| Strings   | Every offset in bounds and in order; every string NUL-terminated inside the table and valid UTF-8                                                                                                                                                                              | malformed string                   |
+| Arena     | Regions inside `arena_bytes`, aligned, not overlapping; their sum is what the panel declares                                                                                                                                                                                   | bad arena layout                   |
+| Slots     | A known type; inside its region, aligned to its type; not overlapping; a dirty bit in range for tracked slots; a valid `init` for the type; an enum set or row layout that exists; no more animated values than the needs declare                                              | bad state layout                   |
+| Lists     | Row fields inside the row size, a known type, a cap for each string field; the pool holds `cap` rows                                                                                                                                                                           | bad state layout                   |
+| Props     | Every prop id is in the firmware's ABI table; the value's kind matches the prop's; an enum value in range; a string index valid and, for a text prop, not past the firmware's cap; an image name in the asset pack or built in                                                 | bad prop                           |
+| Templates | Known node types; child counts consistent, so the pre-order list is one tree; a node count within the panel's; handle slots of type `node`; an element's children allowed for its type                                                                                         | bad template                       |
+| Bindings  | Each event bound to a function of the matching kind; each animated binding to an animated-value slot and an animatable prop that isn't a color; each interpolated one to an interpolation onto colors exactly when its prop is a color; each tape index valid                  | bad binding                        |
+| Interps   | An animated-value slot; 2 to `ER_INTERPOLATE_MAX_POINTS` points; known flags and extrapolation modes                                                                                                                                                                           | bad animation                      |
+| Anims     | A known kind and easing; a group's children are later records and no child has two parents; at most `ERUI_MAX_GROUP_ENTRIES` children; the target a `node` or `anim` slot; the prop animatable                                                                                 | bad animation                      |
+| Tapes     | Each tape's floats parse as ops with their argument counts and fit `ERUI_VECTOR_TAPE_MAX`; paint and gradient counts within the firmware's caps; every paint, gradient and stop index in range; 2 to `ER_VGRAD_MAX_STOPS` stops                                                | bad vector tape                    |
+| Functions | Code in bounds; register count and types valid; parameters and result typed; ends in `RET` or `TRAP`, so it can't run off its end                                                                                                                                              | bad function                       |
+| Code      | Every opcode known to this format; every register operand below the frame size and of the type the opcode takes; `int64`, `double` and `node` registers on an even cell                                                                                                        | bad bytecode                       |
+| Code      | Every slot, constant, string, enum, prop, template, animation, tape and import index in range, and of the kind the opcode takes; `SET` only to writable slots; an enum write from the slot's own set                                                                           | bad bytecode                       |
+| Code      | Branch targets inside the function, on an instruction; only `LOOP` branches backward, on a counter set by `LOOPSET` with a constant bound and written by nothing else                                                                                                          | bad control flow                   |
+| Code      | `EVT` only in a function the runtime enters with an event of that kind                                                                                                                                                                                                         | bad bytecode                       |
+| Calls     | `CALL` targets a helper later in the table, with matching parameter and result types, so the call graph has no cycle                                                                                                                                                           | recursive call                     |
+| Calls     | The deepest frame sum from any entry point fits the register stack region                                                                                                                                                                                                      | stack too deep                     |
+| Imports   | Every import resolves to a native function the firmware registered with the same name, version and signature                                                                                                                                                                   | missing native module _name_       |
+| Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                | bad input                          |
+| Keyboard  | Whole records; each layer and row names the runs after the ones before it, with 1 to 255 rows or keys; every key a known type with valid strings, and one that types something has its text                                                                                    | malformed table                    |
+| Keyboard  | No more layers, rows and keys than `ERB_MAX_KEYBOARD_LAYERS`, `ERB_MAX_KEYBOARD_ROWS` and `ERB_MAX_KEYBOARD_KEYS`                                                                                                                                                              | needs more than firmware reserves  |
+| Debug     | Each table for a declared panel or all; one at most for this panel. Its `build_id` matches; parts in order, not overlapping; `function_count` is the program's; entries sorted, each on an instruction; each `file` and name an index into its strings, checked like `strings` | debug table does not match         |
+| Assets    | The pack passes the check-only pass (images have a size and word-aligned pixels, fonts are drawable); its fonts fit the firmware's font storage and the font registry                                                                                                          | asset pack failed to load          |
 
 ### Run-time checks
 
@@ -705,7 +743,7 @@ What each part of today's `app.gen.c` becomes:
 | `s_timers`, `er_timer_add`, `er_app_tick()`       | The arena's timer table, ticked by `erb_tick()`                      |
 | `APP_LIMIT`                                       | The runtime's report, once per place                                 |
 | `er_app_set_<name>()`                             | Inputs, set by index through `erb_input_set_int()` and its kin       |
-| `er_app_fits()`, `ER_AOT_SCREEN_W/H`              | The panel table                                                      |
+| `er_app_fits()`, `ER_AOT_SCREEN_W/H`              | Each panel's layout check                                            |
 | `_Static_assert(ERUI_MAX_NODES >= n)`             | The node count, checked at load                                      |
 | `assets.generated.c`                              | The asset pack, section 2                                            |
 | `ERNode*` statics                                 | Node handles in slots                                                |

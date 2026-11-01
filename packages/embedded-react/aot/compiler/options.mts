@@ -40,7 +40,7 @@ export interface CompileOptions {
   ts?: boolean;
   /** The target panel's size. The fallbacks for this and the caps below are listed on resolveOptions. */
   screen?: Screen | null;
-  /** The package output's panels, each compiled for its own size into one package. Overrides screen. */
+  /** The sizes a package keeps layouts for. Overrides screen. With neither, a package has every layout. */
   screens?: Screen[];
   /** Rows a list state holds. */
   listCap?: number;
@@ -57,8 +57,8 @@ export interface CompileOptions {
 /** compileSource's options with the screen and the caps filled in. */
 export interface ResolvedOptions extends CompileOptions {
   screen: Screen;
-  /** Where the screen size came from, for the error footer. */
-  screenFrom: 'option' | 'env' | 'default';
+  /** Where the screen size came from, for the error footer. `search` is a size that picks a layout being found. */
+  screenFrom: 'option' | 'env' | 'default' | 'search';
   caps: Caps;
 }
 
@@ -117,8 +117,8 @@ function wholeInRange(
  * leaves out falls back to its environment variable, then to a default. The environment is read on every
  * call, not at import, so one process can compile for several boards.
  *
- *   screen        ER_AOT_SCREEN_W / _H    800×480  Baked so a responsive app's `screen.width` branching
- *                                                  folds to the layout for THIS build.
+ *   screen        ER_AOT_SCREEN_W / _H    800×480  The C output's panel, whose layout a `screen` branch folds
+ *                                                  to. A package finds its layouts unless told a size.
  *   listCap       ER_AOT_LIST_CAP         16       Rows a list state holds. Each pooled row costs engine
  *                                                  nodes, so lower it on a tight-RAM MCU.
  *   listStrCap    ER_AOT_LIST_STR_CAP     48       Characters per string buffer (list field, string state).

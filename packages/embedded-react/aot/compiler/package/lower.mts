@@ -99,6 +99,7 @@ import type {CType, InputText, ProgramSlots} from './codegen.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
 import type {IrKeyboard} from '../ir/keyboard.mts';
+import {lowerCheck} from './checks.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr} from '../ir/expressions.mts';
 import type {IrCompletion} from '../ir/animations.mts';
@@ -542,24 +543,26 @@ function planSlots(
       continue;
     }
     const interned = slots.enums.get(state);
+    // One the boot function sets starts at 0, so nothing of the build's panel is left in the package.
+    const initial = state.bootInitial ? 0 : state.initial;
     const slot = interned
       ? Object.assign(arena.slot(ValueType.enum, 0), {aux: interned.set})
       : state.cType === 'string'
         ? arena.slot(
             ValueType.string,
-            tables.string(String(state.initial)),
+            tables.string(String(initial)),
             listStrCap - 1,
           )
         : state.cType === 'i64'
           ? arena.slot(
               ValueType.int64,
-              tables.constant64(BigInt(Math.trunc(Number(state.initial)))),
+              tables.constant64(BigInt(Math.trunc(Number(initial)))),
             )
           : state.cType === 'float'
-            ? arena.slot(ValueType.float, floatBits(Number(state.initial)))
+            ? arena.slot(ValueType.float, floatBits(Number(initial)))
             : arena.slot(
                 state.isBool ? ValueType.bool : ValueType.int,
-                Math.trunc(Number(state.initial)) | 0,
+                Math.trunc(Number(initial)) | 0,
               );
     // A host value an effect's deps may read runs app_update() when it is set, as its C setter does.
     if (state.isWatched || (state.host && out.depEffects.length)) {
@@ -1873,19 +1876,18 @@ function appendInitialItems(
  *
  * @param bootSlots  The values.
  * @param lowering  The program being lowered.
- * @param screen  The panel.
  *
  * @returns The function, or null when the app has none.
  */
 function bootFunction(
   bootSlots: IrBootSlot[],
   lowering: Lowering,
-  screen: {width: number; height: number},
 ): ProgramFunction | null {
   const lists = lowering.app.state.filter(
     (state): state is ListState =>
       state.kind === 'list' && state.items.length > 0,
   );
+  // A slot read only by a state's start is among bootSlots.
   if (!bootSlots.length && !lists.length) {
     return null;
   }
@@ -1897,12 +1899,29 @@ function bootFunction(
   for (const bootSlot of bootSlots) {
     const slot = lowering.slots.boot.get(bootSlot)!;
     const {init} = bootSlot;
+    codegen.scoped(() => {
+      if (init.kind === 'screen') {
+        const size = fn.register('int');
+        fn.abx('SCREEN', size.index, init.dimension === 'width' ? 0 : 1);
+        codegen.set(slot, size);
+      } else {
+        codegen.set(slot, codegen.value(init.expr));
+      }
+    });
+  }
+
+  // A state that starts at a value worked out at boot, after every value it can read.
+  for (const state of lowering.app.state) {
+    if (state.kind !== 'scalar' || !state.bootInitial) continue;
+    const {bootInitial} = state;
     codegen.scoped(() =>
       codegen.set(
-        slot,
-        init.kind === 'screen'
-          ? codegen.load('int', screen[init.dimension])
-          : codegen.value(init.expr),
+        lowering.slots.states.get(state)!,
+        codegen.value({
+          kind: 'boot',
+          slot: bootInitial,
+          type: bootInitial.type,
+        }),
       ),
     );
   }
@@ -1982,15 +2001,12 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     lowering.slots.timerFunctions.set(timer.name, index),
   );
 
-  // A panel-sized root the app's tree fills, as er_app_build() makes one.
+  // A root the app's tree fills. The runtime sizes it to the real panel, as er_app_build() does.
   const nodes: ProgramTemplateNode[] = [
     {
       type: ENGINE_VALUES.get('ER_NODE_VIEW')!,
       children: 1,
-      props: tables.propSet([
-        constantPropEntry('width', String(screen.width)),
-        constantPropEntry('height', String(screen.height)),
-      ]),
+      props: tables.propSet([]),
       handle: NONE,
       bindings: 0,
       bindingCount: 0,
@@ -2044,7 +2060,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
       completionBody(completion, lowering),
     ),
   ];
-  const boot = bootFunction(app.boot.slots, lowering, screen);
+  const boot = bootFunction(app.boot.slots, lowering);
   const update = updateFunction(lowering);
   const bootIndex = boot ? functions.push(boot) - 1 : NONE;
   const updateIndex = update ? functions.push(update) - 1 : NONE;
@@ -2079,6 +2095,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
       {
         width: screen.width,
         height: screen.height,
+        check: lowerCheck(app.boot.assumptions, screen),
         arenaBytes: bytes,
         nodeCount,
         rootTemplate: 0,

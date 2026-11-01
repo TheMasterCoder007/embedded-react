@@ -39,11 +39,11 @@ With no package installed, the first boot shows the error screen, saying so.
 An `sdkconfig` from before the package slots keeps the old partition table. Delete it, and run `idf.py fullclean`.
 :::
 
-**2. Compile the app.** The panel size tells a responsive app which layout to fold to; the thermostat demo uses its
-compact, dial-only layout at 240×320:
+**2. Compile the app.** The board's resolution picks the layout at boot; the thermostat demo uses its compact,
+dial-only layout at 240×320:
 
 ```bash
-npx embedded-react build --aot --screen 240x320      # → dist/app.erpkg
+npx embedded-react build --aot      # → dist/app.erpkg
 ```
 
 **3. Write it to the board.**
@@ -74,8 +74,7 @@ that instead of `-p`. If flashing wedges after many resets, unplug and replug th
 
 **Orientation.** The example ships in the panel's native portrait, 240×320. `BOARD_ROTATE_90` in
 `main/board.h` gives landscape 320×240, swapping the panel and touch axes together. The thermostat
-lays landscape out differently, so build with `--screen 320x240` too; a package with no layout for the
-panel is rejected at boot, with the reason on the error screen. If the
+lays landscape out differently, and the same package picks that layout at boot. If the
 image is upside down, flip `BOARD_ROTATE_CW` in `main/board.c`.
 
 ## Package slots

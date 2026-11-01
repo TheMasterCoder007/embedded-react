@@ -192,7 +192,7 @@ typedef struct
 {
     void* arena;          /**< 4-byte aligned, for the app's mutable state. */
     uint32_t arena_bytes; /**< Its size. */
-    uint16_t screen_w;    /**< The panel size; the package must declare a layout for it. */
+    uint16_t screen_w;    /**< The panel size, which picks the package's layout. */
     uint16_t screen_h;
     uint16_t node_count;      /**< Nodes the app may use; 0 means ERUI_MAX_NODES. */
     const ErbNative* natives; /**< Native functions packages may import. */

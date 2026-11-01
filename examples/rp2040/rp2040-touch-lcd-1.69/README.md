@@ -25,8 +25,8 @@ cmake --build build                                               # → build/em
 # 2. flash it: hold BOOT while plugging in and copy the .uf2 onto the RPI-RP2 drive, or
 picotool load -f -x build/embedded-react-watch.uf2
 
-# 3. compile the app at the panel size (from your app project, or demos/watch-face)
-npx embedded-react build --aot --screen 240x280
+# 3. compile the app (from your app project, or demos/watch-face)
+npx embedded-react build --aot
 
 # 4. write it to the board's staging slot (needs a picotool built with USB support)
 npx embedded-react flash --board rp2040-touch-lcd-1.69

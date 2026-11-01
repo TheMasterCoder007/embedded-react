@@ -461,7 +461,10 @@ function bootAliasOf(
  *
  * @returns The write, or null.
  */
-function bootStyleAssign(key: string, value: BootValue): DynAssign | null {
+export function bootStyleAssign(
+  key: string,
+  value: BootValue,
+): DynAssign | null {
   const dynamicField = Object.hasOwn(DYN_FIELDS, key)
     ? DYN_FIELDS[key]
     : undefined;

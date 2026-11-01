@@ -366,6 +366,266 @@ static bool check_container(const void* package, size_t package_bytes, ErbProgra
     return true;
 }
 
+/** @brief A check's stack effect: what each op pops and pushes. ERB_CK_MATH pops two for a two-operand function. */
+static const struct
+{
+    uint8_t pops;
+    uint8_t pushes;
+} s_check_ops[ERB_CK_COUNT_] = {
+    [ERB_CK_END] = {1, 0},    [ERB_CK_WIDTH] = {0, 1}, [ERB_CK_HEIGHT] = {0, 1}, [ERB_CK_PUSHI] = {0, 1},
+    [ERB_CK_PUSHK] = {0, 1},  [ERB_CK_LOAD] = {0, 1},  [ERB_CK_STORE] = {1, 0},  [ERB_CK_ADD] = {2, 1},
+    [ERB_CK_SUB] = {2, 1},    [ERB_CK_MUL] = {2, 1},   [ERB_CK_DIV] = {2, 1},    [ERB_CK_NEG] = {1, 1},
+    [ERB_CK_MATH] = {1, 1},   [ERB_CK_TOINT] = {1, 1}, [ERB_CK_IDIV] = {2, 1},   [ERB_CK_LT] = {2, 1},
+    [ERB_CK_GT] = {2, 1},     [ERB_CK_LE] = {2, 1},    [ERB_CK_GE] = {2, 1},     [ERB_CK_EQ] = {2, 1},
+    [ERB_CK_NE] = {2, 1},     [ERB_CK_NOT] = {1, 1},   [ERB_CK_AND] = {2, 1},    [ERB_CK_OR] = {2, 1},
+    [ERB_CK_SELECT] = {3, 1},
+};
+
+static bool check_truth(double value)
+{
+    return value == value && value != 0.0;
+}
+
+/**
+ * @brief Runs one panel's layout check. It has no jumps and every word is bounds-checked, so a hostile check can do no
+ * more than fail, and the budget shared by all the panels' checks limits the time it takes.
+ *
+ * @param[in,out] budget  Words the load may still run.
+ * @param[out] passes  Whether the panel's layout fits the screen.
+ *
+ * @return false when the check is malformed.
+ */
+static bool run_check(
+    const uint8_t* table, uint32_t length, uint32_t start, const ErbConfig* config, uint32_t* budget, bool* passes)
+{
+    double stack[ERB_CHECK_STACK];
+    double locals[ERB_CHECK_LOCALS];
+    memset(locals, 0, sizeof(locals));
+    uint32_t depth = 0u;
+    const uint32_t words = length / sizeof(uint32_t);
+    for (uint32_t pc = start; pc < words; pc++)
+    {
+        if (*budget == 0u)
+        {
+            return false;
+        }
+        (*budget)--;
+        const uint32_t word = erb_u32(table + pc * sizeof(uint32_t));
+        const uint8_t op = ERB_CHECK_OP(word);
+        const int32_t arg = ERB_CHECK_ARG(word);
+        if (op == 0u || op >= ERB_CK_COUNT_)
+        {
+            return false;
+        }
+        const bool binary_math = op == ERB_CK_MATH && arg >= ERB_MATH_MIN;
+        const uint32_t pops = binary_math ? 2u : s_check_ops[op].pops;
+        if (depth < pops || depth - pops + s_check_ops[op].pushes > ERB_CHECK_STACK)
+        {
+            return false;
+        }
+        depth -= pops;
+        const double left = pops ? stack[depth] : 0.0;
+        const double right = pops > 1u ? stack[depth + 1u] : 0.0;
+        double result = 0.0;
+        switch (op)
+        {
+            case ERB_CK_END:
+                *passes = check_truth(left);
+                return true;
+            case ERB_CK_WIDTH:
+                result = config->screen_w;
+                break;
+            case ERB_CK_HEIGHT:
+                result = config->screen_h;
+                break;
+            case ERB_CK_PUSHI:
+                result = arg;
+                break;
+            case ERB_CK_PUSHK:
+            {
+                if (words - pc < 3u)
+                {
+                    return false;
+                }
+                const uint64_t bits = (uint64_t)erb_u32(table + (pc + 1u) * sizeof(uint32_t))
+                                      | ((uint64_t)erb_u32(table + (pc + 2u) * sizeof(uint32_t)) << 32);
+                memcpy(&result, &bits, sizeof(result));
+                pc += 2u;
+                break;
+            }
+            case ERB_CK_LOAD:
+                if (arg < 0 || (uint32_t)arg >= ERB_CHECK_LOCALS)
+                {
+                    return false;
+                }
+                result = locals[arg];
+                break;
+            case ERB_CK_STORE:
+                if (arg < 0 || (uint32_t)arg >= ERB_CHECK_LOCALS)
+                {
+                    return false;
+                }
+                locals[arg] = left;
+                continue;
+            case ERB_CK_ADD:
+                result = left + right;
+                break;
+            case ERB_CK_SUB:
+                result = left - right;
+                break;
+            case ERB_CK_MUL:
+                result = left * right;
+                break;
+            case ERB_CK_DIV:
+                result = left / right;
+                break;
+            case ERB_CK_NEG:
+                result = -left;
+                break;
+            case ERB_CK_MATH:
+                if (arg < 0 || arg >= ERB_MATH_COUNT_)
+                {
+                    return false;
+                }
+                result = erb_vm_dmath((uint32_t)arg, left, right);
+                break;
+            case ERB_CK_TOINT:
+                result = erb_vm_to_int(left);
+                break;
+            case ERB_CK_IDIV:
+                if (arg < 0 || arg >= ERB_CK_IDIV_COUNT_)
+                {
+                    return false;
+                }
+                result = erb_vm_idiv((uint32_t)arg, left, right);
+                break;
+            case ERB_CK_LT:
+                result = left < right;
+                break;
+            case ERB_CK_GT:
+                result = left > right;
+                break;
+            case ERB_CK_LE:
+                result = left <= right;
+                break;
+            case ERB_CK_GE:
+                result = left >= right;
+                break;
+            case ERB_CK_EQ:
+                result = left == right;
+                break;
+            case ERB_CK_NE:
+                result = left != right;
+                break;
+            case ERB_CK_NOT:
+                result = !check_truth(left);
+                break;
+            case ERB_CK_AND:
+                result = check_truth(left) && check_truth(right);
+                break;
+            case ERB_CK_OR:
+                result = check_truth(left) || check_truth(right);
+                break;
+            default:
+                result = check_truth(left) ? right : stack[depth + 2u];
+                break;
+        }
+        stack[depth++] = result;
+    }
+    return false;
+}
+
+/**
+ * @brief Finds the table of layout checks. It comes before the rest of the directory is checked, since it picks
+ * the panel the directory is read for.
+ *
+ * @return false when it is malformed; a package with none leaves @p table NULL.
+ */
+static bool find_checks(
+    const uint8_t* directory, uint16_t table_count, const ErbProgram* program, const uint8_t** table, uint32_t* length)
+{
+    *table = NULL;
+    *length = 0u;
+    for (uint16_t index = 0; index < table_count; index++)
+    {
+        const uint8_t* entry = directory + index * ERB_DIRECTORY_SIZE;
+        if (erb_u16(entry + ERB_DIRECTORY_ID_AT) != ERB_TABLE_CHECKS)
+        {
+            continue;
+        }
+        const uint32_t offset = erb_u32(entry + ERB_DIRECTORY_OFFSET_AT);
+        const uint32_t bytes = erb_u32(entry + ERB_DIRECTORY_LENGTH_AT);
+        if (*table || erb_u16(entry + ERB_DIRECTORY_PANEL_AT) != ERB_NONE || !erb_aligned4(offset)
+            || !erb_aligned4(bytes) || !in_bounds(offset, bytes, program->section_length))
+        {
+            return false;
+        }
+        *table = program->section + offset;
+        *length = bytes;
+    }
+    return true;
+}
+
+/**
+ * @brief Step 4: the first panel that takes this screen, by its check. Before minor 6, by its exact size.
+ *
+ * @return false, having filled @p error, when a check is malformed or no panel takes the screen.
+ */
+static bool pick_panel(const ErbConfig* config,
+                       ErbProgram* program,
+                       uint16_t panel_count,
+                       uint32_t need_count,
+                       uint16_t table_count,
+                       bool has_checks,
+                       ErbError* error)
+{
+    const uint8_t* section = program->section;
+    const uint8_t* checks = NULL;
+    uint32_t checks_length = 0u;
+    if (has_checks
+        && !find_checks(section + ERB_HEADER_SIZE + panel_count * ERB_PANEL_SIZE + need_count * ERB_NEED_SIZE,
+                        table_count,
+                        program,
+                        &checks,
+                        &checks_length))
+    {
+        return fail(error, ERB_ERR_TABLE, "layout checks table");
+    }
+    uint32_t budget = ERB_CHECK_BUDGET;
+    bool picked = false;
+    /* Every check runs, even after one passes, so a malformed one fails the load on every screen. */
+    for (uint16_t index = 0; index < panel_count; index++)
+    {
+        const uint8_t* candidate = section + ERB_HEADER_SIZE + index * ERB_PANEL_SIZE;
+        bool passes = false;
+        if (!has_checks)
+        {
+            passes = erb_u16(candidate + ERB_PANEL_WIDTH_AT) == config->screen_w
+                     && erb_u16(candidate + ERB_PANEL_HEIGHT_AT) == config->screen_h;
+        }
+        else if (erb_u32(candidate + ERB_PANEL_CHECK_AT) == ERB_CHECK_ALWAYS)
+        {
+            passes = true;
+        }
+        else if (!run_check(checks, checks_length, erb_u32(candidate + ERB_PANEL_CHECK_AT), config, &budget, &passes))
+        {
+            return fail(error, ERB_ERR_TABLE, "malformed layout check");
+        }
+        if (passes && !picked)
+        {
+            program->panel = index;
+            picked = true;
+        }
+    }
+    if (picked)
+    {
+        return true;
+    }
+    error->needed = config->screen_w;
+    error->available = config->screen_h;
+    return fail(error, ERB_ERR_NO_PANEL, "no layout takes the screen size");
+}
+
 static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError* error)
 {
     const uint8_t* section = program->section;
@@ -402,24 +662,12 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
     }
 
     /* Step 4: the panel for this screen. */
-    const uint8_t* panel = NULL;
-    for (uint16_t index = 0; index < panel_count; index++)
+    const bool has_checks = minor >= ERB_FORMAT_MINOR_CHECKS;
+    if (!pick_panel(config, program, panel_count, need_count, table_count, has_checks, error))
     {
-        const uint8_t* candidate = section + ERB_HEADER_SIZE + index * ERB_PANEL_SIZE;
-        if (erb_u16(candidate + ERB_PANEL_WIDTH_AT) == config->screen_w
-            && erb_u16(candidate + ERB_PANEL_HEIGHT_AT) == config->screen_h)
-        {
-            panel = candidate;
-            program->panel = index;
-            break;
-        }
+        return false;
     }
-    if (!panel)
-    {
-        error->needed = config->screen_w;
-        error->available = config->screen_h;
-        return fail(error, ERB_ERR_NO_PANEL, "no panel declared for the screen size");
-    }
+    const uint8_t* panel = section + ERB_HEADER_SIZE + program->panel * ERB_PANEL_SIZE;
     program->arena_bytes = erb_u32(panel + ERB_PANEL_ARENA_BYTES_AT);
     program->node_count = erb_u16(panel + ERB_PANEL_NODE_COUNT_AT);
     program->root_template = erb_u16(panel + ERB_PANEL_ROOT_TEMPLATE_AT);
@@ -448,6 +696,16 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
         const uint8_t* need = section + ERB_HEADER_SIZE + panel_count * ERB_PANEL_SIZE + index * ERB_NEED_SIZE;
         const uint16_t resource = erb_u16(need + ERB_NEED_RESOURCE_AT);
         const uint32_t amount = erb_u32(need + ERB_NEED_AMOUNT_AT);
+        /* Only the chosen layout's needs have to fit. */
+        const uint16_t need_panel = has_checks ? erb_u16(need + ERB_NEED_PANEL_AT) : ERB_NONE;
+        if (need_panel != ERB_NONE && need_panel >= panel_count)
+        {
+            return fail(error, ERB_ERR_TABLE, "a need for a panel the package doesn't declare");
+        }
+        if (need_panel != ERB_NONE && need_panel != program->panel)
+        {
+            continue;
+        }
         uint32_t available;
         switch (resource)
         {
@@ -542,7 +800,7 @@ static bool check_directory(ErbProgram* program, ErbError* error)
         program->table[id] = section + offset;
         program->table_length[id] = length;
     }
-    /* No two of this panel's tables overlap. At most one of each id, so this is at most 17 x 17. */
+    /* No two of this panel's tables overlap. At most one of each id, so this is at most 20 x 20. */
     for (uint32_t first = 1; first < ERB_TABLE_COUNT_; first++)
     {
         for (uint32_t second = first + 1u; second < ERB_TABLE_COUNT_; second++)
@@ -1756,6 +2014,10 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
                   || (context->types[operand_a] == ERB_T_BOOL && operand_bx <= 1u)))
                 BAD("LOADI register or value");
             break;
+        case ERB_OP_SCREEN:
+            if (operand_bx > 1u)
+                BAD("SCREEN dimension");
+            break;
         case ERB_OP_LOADK:
             if ((context->types[operand_a] != ERB_T_INT && context->types[operand_a] != ERB_T_FLOAT)
                 || operand_bx >= program->const32_count)
@@ -2300,8 +2562,12 @@ static void mark_starts(const ErbProgram* program, uint32_t index)
 }
 
 /** @brief Checks one debug table, whose header is @p header_size bytes and holds @p function_count. */
-static bool check_debug_table(ErbProgram* program, const uint8_t* table, uint32_t length, uint32_t header_size,
-                              uint32_t function_count, ErbError* error)
+static bool check_debug_table(ErbProgram* program,
+                              const uint8_t* table,
+                              uint32_t length,
+                              uint32_t header_size,
+                              uint32_t function_count,
+                              ErbError* error)
 {
     if (erb_u32(table + ERB_DEBUG_BUILD_ID_AT) != program->build_id || function_count != program->function_count)
     {
@@ -2373,8 +2639,8 @@ static bool check_debug(ErbProgram* program, ErbError* error)
         {
             return fail(error, ERB_ERR_DEBUG, "build id or function count");
         }
-        return check_debug_table(program, debug, length, ERB_DEBUG_OLD_HEADER_SIZE,
-                                 erb_u32(debug + ERB_DEBUG_FUNCTION_COUNT_AT), error);
+        return check_debug_table(
+            program, debug, length, ERB_DEBUG_OLD_HEADER_SIZE, erb_u32(debug + ERB_DEBUG_FUNCTION_COUNT_AT), error);
     }
 
     /* A table for every panel (ERB_NONE) or one panel's; only this panel's is checked and used. */
@@ -2415,8 +2681,8 @@ static bool check_debug(ErbProgram* program, ErbError* error)
         at += table_length;
     }
     return !mine
-           || check_debug_table(program, mine, mine_length, ERB_DEBUG_HEADER_SIZE,
-                                erb_u16(mine + ERB_DEBUG_FUNCTION_COUNT_AT), error);
+           || check_debug_table(
+               program, mine, mine_length, ERB_DEBUG_HEADER_SIZE, erb_u16(mine + ERB_DEBUG_FUNCTION_COUNT_AT), error);
 }
 
 void erb_debug_lookup(const ErbProgram* program, uint16_t function, uint32_t offset, const char** file, uint32_t* line)

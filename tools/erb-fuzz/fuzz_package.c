@@ -41,16 +41,16 @@
 #define CRC_AT 8u
 #define CRC_COVERS_FROM 12u
 
-/** @brief The largest panel and arena a run gets. A package that asks for more is refused as too big. */
-#define MAX_PANEL_SIDE 480u
+/** @brief The largest arena a run gets. A package that asks for more is refused as too big. */
 #define MAX_ARENA_BYTES (256u * 1024u)
 
-/** @brief The size used when a package has no panel this harness will make. */
-#define FALLBACK_W 240u
-#define FALLBACK_H 320u
+/** @brief The panels a run loads a package on: its layout checks pick from the size. */
+static const uint16_t s_panels[][2] = {
+    {240u, 320u}, {320u, 240u}, {800u, 480u}, {240u, 280u}, {128u, 160u}, {480u, 800u}};
+#define PANEL_COUNT (sizeof(s_panels) / sizeof(s_panels[0]))
 
-/** @brief Panels of one package a run with no script loads. */
-#define MAX_PANELS_RUN 3u
+/** @brief Panels a run with no script loads, which reach each layout of the demos. */
+#define PANELS_RUN 3u
 
 /** @brief Script steps one input may take: each is an operation and two arguments. */
 #define STEP_BYTES 3u
@@ -220,29 +220,19 @@ static void step(Run* run, uint8_t op, uint8_t a, uint8_t b)
 }
 
 /**
- * @brief Finds a panel a package declares, for its size and its arena. Bounds-checked: the package isn't verified.
+ * @brief The arena a package says it needs at most. Bounds-checked: the package isn't verified.
  *
- * @return How many panels it declares, or 0 when the header can't be read.
+ * @return The bytes, or 0 when the header can't be read.
  */
-static uint32_t read_panels(const ErContainer* container, uint32_t index, uint16_t* w, uint16_t* h, uint32_t* arena)
+static uint32_t read_arena(const ErContainer* container)
 {
     for (uint32_t section_index = 0; section_index < container->section_count; section_index++)
     {
         const ErContainerSection* section = &container->sections[section_index];
-        if (section->type != ERB_SECTION_PROGRAM || section->length < ERB_HEADER_SIZE)
+        if (section->type == ERB_SECTION_PROGRAM && section->length >= ERB_HEADER_SIZE)
         {
-            continue;
+            return erb_u32(section->data + ERB_HEADER_ARENA_BYTES_AT);
         }
-        const uint32_t count = erb_u16(section->data + ERB_HEADER_PANEL_COUNT_AT);
-        if (count == 0u || section->length - ERB_HEADER_SIZE < count * ERB_PANEL_SIZE)
-        {
-            return 0u;
-        }
-        const uint8_t* panel = section->data + ERB_HEADER_SIZE + (index % count) * ERB_PANEL_SIZE;
-        *w = erb_u16(panel + ERB_PANEL_WIDTH_AT);
-        *h = erb_u16(panel + ERB_PANEL_HEIGHT_AT);
-        *arena = erb_u32(panel + ERB_PANEL_ARENA_BYTES_AT);
-        return count;
     }
     return 0u;
 }
@@ -256,18 +246,9 @@ static void run_panel(const uint8_t* package,
                       const uint8_t* script,
                       size_t script_bytes)
 {
-    uint16_t w = FALLBACK_W;
-    uint16_t h = FALLBACK_H;
-    uint32_t arena_bytes = 0u;
-    if (scanned)
-    {
-        read_panels(container, panel, &w, &h, &arena_bytes);
-    }
-    if (w == 0u || h == 0u || w > MAX_PANEL_SIDE || h > MAX_PANEL_SIDE)
-    {
-        w = FALLBACK_W;
-        h = FALLBACK_H;
-    }
+    const uint16_t w = s_panels[panel % PANEL_COUNT][0];
+    const uint16_t h = s_panels[panel % PANEL_COUNT][1];
+    uint32_t arena_bytes = scanned ? read_arena(container) : 0u;
     if (arena_bytes > MAX_ARENA_BYTES)
     {
         arena_bytes = MAX_ARENA_BYTES;
@@ -367,12 +348,7 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     }
     else
     {
-        uint16_t w;
-        uint16_t h;
-        uint32_t arena;
-        const uint32_t declared = scanned ? read_panels(&container, 0u, &w, &h, &arena) : 0u;
-        const uint32_t panels = declared > MAX_PANELS_RUN ? MAX_PANELS_RUN : declared;
-        for (uint32_t panel = 0; panel < (panels ? panels : 1u); panel++)
+        for (uint32_t panel = 0; panel < PANELS_RUN; panel++)
         {
             run_panel(package, package_bytes, &container, scanned, panel, s_default_script, sizeof(s_default_script));
         }

@@ -18,6 +18,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import type {BootValue} from './boot.mts';
+import type {IrBootSlot} from './ir/boot.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrPropValue, IrShow} from './ir/nodes.mts';
@@ -104,6 +106,10 @@ export interface ScalarState extends StateSlot {
   host: boolean;
   /** What it holds once widened to 64 bits (see compileWidened). */
   widened?: WideSlot;
+  /** An initial value derived from `screen`, until settleBootInitials settles it. */
+  bootValue?: BootValue;
+  /** The boot value it starts at; `initial` is then what that is on the build's panel. */
+  bootInitial?: IrBootSlot;
 }
 
 /** A list state: a fixed-capacity struct array and a count. */
