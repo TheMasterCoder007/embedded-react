@@ -129,6 +129,15 @@ static void begin(ErbPackageReload* reload, uint32_t package_bytes)
         report_failure(reload, &error);
         return;
     }
+    /* The running package's header didn't write, so the staging slot holds the only package a reset can run. The
+     * running package can't be written over either, since the app runs from it. */
+    if (reload->active != ERB_PACKAGE_SLOT_NONE
+        && !erb_package_slot_read(&reload->slots.slots[reload->active], NULL, NULL, NULL)
+        && erb_package_slot_read(&reload->slots.slots[reload->staging], NULL, NULL, NULL))
+    {
+        report_status(reload, ERB_ERR_SLOT, "the running package has no header: reset the board before saving again");
+        return;
+    }
     if (!reload->slots.erase((unsigned)reload->staging, 0u, ERB_PACKAGE_SLOT_HEADER_BYTES, reload->slots.context))
     {
         report_status(reload, ERB_ERR_SLOT, "erasing the staging slot's header failed");

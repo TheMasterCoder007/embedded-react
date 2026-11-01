@@ -71,6 +71,7 @@ static unsigned s_dropped_lines;
 static unsigned s_ready_lines;
 static uint32_t s_last_got;
 static bool s_flash_fails;
+static bool s_header_fails;
 static unsigned s_erases;
 
 #define CHECK(condition, message)                                                                                      \
@@ -124,7 +125,7 @@ static bool flash_program(unsigned slot, uint32_t offset, const void* data, uint
     CHECK(offset % ERB_PACKAGE_SLOT_PAGE_BYTES == 0u && bytes % ERB_PACKAGE_SLOT_PAGE_BYTES == 0u,
           "programs are whole pages");
     CHECK(offset + bytes <= SLOT_BYTES, "and inside the slot");
-    if (s_flash_fails)
+    if (s_flash_fails || (s_header_fails && offset == 0u))
     {
         return false;
     }
@@ -189,6 +190,7 @@ static void reset(void)
     s_dropped_lines = 0u;
     s_ready_lines = 0u;
     s_flash_fails = false;
+    s_header_fails = false;
     s_erases = 0u;
 }
 
@@ -592,6 +594,37 @@ static void test_flash_fails(void)
     CHECK(strstr(s_outcome, "package slot") != NULL, "so is flash that won't program");
 }
 
+static void test_header_write_fails(void)
+{
+    reset();
+    install(0, 5u, GOOD);
+    boot();
+    const uint32_t length = build(GOOD);
+    s_header_fails = true;
+    CHECK(send_package(length), "the new app starts");
+    CHECK(strstr(s_outcome, "couldn't write its header") != NULL, "and the host hears a reset won't run it");
+    CHECK(!slot_valid(1u) && slot_valid(0u), "so only the last good package has a header");
+
+    s_header_fails = false;
+    s_outcome[0] = '\0';
+    send_begin(length);
+    CHECK(s_ready_lines == 1u, "the next package is refused");
+    CHECK(strstr(s_outcome, "package slot") != NULL, "and the host hears why");
+    CHECK(slot_valid(0u), "so a reset still has the last good package");
+    CHECK(erb_running(), "and the new app runs on");
+    ErbPackageSlotBoot after;
+    CHECK(erb_package_slots_boot(&s_slots, &s_config, &after) && after.active == 0, "a reset runs it");
+
+    /* The first package has nothing behind it to protect. */
+    reset();
+    boot();
+    s_header_fails = true;
+    CHECK(send_package(length), "a first package starts without a header");
+    s_header_fails = false;
+    CHECK(send_package(length), "and the next one still goes in");
+    CHECK(s_reload.active == 1 && slot_valid(1u), "and gets a header");
+}
+
 static void test_clear_failed(void)
 {
     /* The rejected newest slot still reads as valid, so the running app isn't in the newest slot. */
@@ -628,6 +661,7 @@ int main(void)
     test_flaky_link();
     test_bad_chunks();
     test_flash_fails();
+    test_header_write_fails();
     test_clear_failed();
 
     if (s_failed)
