@@ -36,7 +36,7 @@
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {basename, dirname, resolve, relative} from 'node:path';
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, readFileSync, statSync} from 'node:fs';
 
 const require = createRequire(import.meta.url);
 
@@ -212,7 +212,9 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
   let cfg = {};
   const cp = resolve(projectRoot, 'assets.config.js');
   if (existsSync(cp))
-    cfg = (await import(pathToFileURL(cp).href)).default || {};
+    cfg =
+      (await import(`${pathToFileURL(cp).href}?t=${statSync(cp).mtimeMs}`))
+        .default || {};
   const fontConfig = cfg.fonts || {};
   const imageConfig = cfg.images || {};
 

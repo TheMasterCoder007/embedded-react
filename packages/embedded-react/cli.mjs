@@ -28,6 +28,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -457,7 +458,9 @@ async function compileAppPackage(
   let cfg = {};
   const cp = resolve(cwd, 'assets.config.js');
   if (existsSync(cp))
-    cfg = (await import(pathToFileURL(cp).href)).default || {};
+    cfg =
+      (await import(`${pathToFileURL(cp).href}?t=${statSync(cp).mtimeMs}`))
+        .default || {};
   const imageConfig = cfg.images || {};
 
   const imageJobs = result.images.map(im => ({

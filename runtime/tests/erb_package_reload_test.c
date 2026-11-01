@@ -430,6 +430,47 @@ static void test_too_big_for_slot(void)
     CHECK(s_ready_lines == 0u && s_outcome[0] != '\0', "nor does an empty one get anywhere");
 }
 
+static void test_fills_the_slot(void)
+{
+    /* A short last chunk is padded to a page, which still has to land inside the slot. */
+    const uint32_t slot_room = SLOT_BYTES - ERB_PACKAGE_SLOT_HEADER_BYTES;
+    const uint32_t lengths[] = {slot_room, slot_room - 1u};
+    for (unsigned index = 0; index < sizeof(lengths) / sizeof(lengths[0]); index++)
+    {
+        reset();
+        install(0, 5u, GOOD);
+        boot();
+        memset(s_package, 0x5A, lengths[index]);
+        send_package(lengths[index]);
+        CHECK(s_last_got == lengths[index], "every chunk is written");
+        CHECK(strstr(s_outcome, "package slot") == NULL, "with flash taking all of it");
+        CHECK(erb_running() && slot_valid(0u), "and the app runs on past the bad package");
+    }
+}
+
+static void test_missing_slot(void)
+{
+    /* A board that can't open a slot leaves it with no bytes, and has no flash to erase behind it. */
+    reset();
+    install(0, 5u, GOOD);
+    s_slots.slots[1].base = NULL;
+    s_slots.slots[1].bytes = 0u;
+    boot();
+    send_begin(build(GOOD));
+    CHECK(s_ready_lines == 0u && s_erases == 0u, "a missing staging slot touches no flash");
+    CHECK(strstr(s_outcome, "package slot") != NULL, "the host hears why");
+    CHECK(erb_running(), "and the app runs on");
+
+    reset();
+    s_slots.slots[0].base = NULL;
+    s_slots.slots[0].bytes = 0u;
+    s_slots.slots[1].base = NULL;
+    s_slots.slots[1].bytes = 0u;
+    boot();
+    send_begin(build(GOOD));
+    CHECK(s_ready_lines == 0u && s_erases == 0u, "nor does a board with no slots at all");
+}
+
 static void test_interrupted(void)
 {
     reset();
@@ -581,6 +622,8 @@ int main(void)
     test_rejected_keeps_running();
     test_boot_fault();
     test_too_big_for_slot();
+    test_fills_the_slot();
+    test_missing_slot();
     test_interrupted();
     test_flaky_link();
     test_bad_chunks();
