@@ -1148,6 +1148,19 @@ function typeMath(
   math64: boolean,
 ): IrExpr {
   const {fn} = source;
+
+  // Math.min and Math.max take any number of values, the IR's two: the rest go pairwise, left to right.
+  if ((fn === 'min' || fn === 'max') && source.args.length > 2) {
+    const [first, second, ...rest] = source.args;
+    return typeMath(
+      rest.reduce<typeof source>(
+        (pairs, arg) => ({...source, args: [pairs, arg]}),
+        {...source, args: [first, second]},
+      ),
+      math64,
+    );
+  }
+
   if (source.exactDivision) {
     const division = source.args[0] as Extract<IrSource, {kind: 'binary'}>;
     const timeDiv = typeTimeRoundDiv(fn, division, math64);

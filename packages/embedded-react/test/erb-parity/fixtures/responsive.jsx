@@ -2,7 +2,7 @@
 import {useState} from 'react';
 import {View, Text, Pressable, Svg, Circle, Path, G} from 'embedded-react';
 
-const WIDE = screen.width >= 480;
+const WIDE = Math.max(screen.width, 100, 200) >= 480;
 const LANDSCAPE = screen.width > screen.height;
 const PAD = LANDSCAPE ? 4 : 8;
 

@@ -592,6 +592,8 @@ static bool pick_panel(const ErbConfig* config,
         return fail(error, ERB_ERR_TABLE, "layout checks table");
     }
     uint32_t budget = ERB_CHECK_BUDGET;
+    bool picked = false;
+    /* Every check runs, even after one passes, so a malformed one fails the load on every screen. */
     for (uint16_t index = 0; index < panel_count; index++)
     {
         const uint8_t* candidate = section + ERB_HEADER_SIZE + index * ERB_PANEL_SIZE;
@@ -609,11 +611,15 @@ static bool pick_panel(const ErbConfig* config,
         {
             return fail(error, ERB_ERR_TABLE, "malformed layout check");
         }
-        if (passes)
+        if (passes && !picked)
         {
             program->panel = index;
-            return true;
+            picked = true;
         }
+    }
+    if (picked)
+    {
+        return true;
     }
     error->needed = config->screen_w;
     error->available = config->screen_h;

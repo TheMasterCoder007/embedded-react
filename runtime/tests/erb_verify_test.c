@@ -413,6 +413,22 @@ static void test_layout_checks(void)
     checked(end_only, 2u)->omit[ERB_TABLE_CHECKS] = true;
     EXPECT(ERB_ERR_TABLE, "a panel's check with no table");
 
+    /* A later check counts too, whichever panel the screen picks. */
+    static const uint32_t wide_then_malformed[] = {WIDE_CHECK(400), 0u};
+    two_panels();
+    s_pkg.check_words = wide_then_malformed;
+    s_pkg.check_word_count = 5u;
+    s_pkg.panel_checks[0] = 0u;
+    s_pkg.panel_checks[1] = 4u;
+    s_config.screen_w = 500;
+    EXPECT(ERB_ERR_TABLE, "a malformed check after the one that passes");
+    two_panels();
+    s_pkg.check_words = wide_then_malformed;
+    s_pkg.check_word_count = 5u;
+    s_pkg.panel_checks[0] = ERB_CHECK_ALWAYS;
+    s_pkg.panel_checks[1] = 4u;
+    EXPECT(ERB_ERR_TABLE, "a malformed check after a layout that takes any screen");
+
     /* Only the chosen panel's needs have to fit. */
     static const uint32_t narrow_then_any[] = {ERB_CK_WIDTH, ERB_CK_PUSHI | (400u << 8), ERB_CK_LT, ERB_CK_END};
     checked(narrow_then_any, 4u);

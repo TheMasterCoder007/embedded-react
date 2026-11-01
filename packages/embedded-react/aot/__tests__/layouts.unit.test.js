@@ -104,6 +104,23 @@ export function App() {
     expect(new SizeSearch().next(checks)).toBeNull();
   });
 
+  it('takes Math.min and Math.max of more than two values', () => {
+    const result = compilePackage(
+      branching('Math.min(screen.width, screen.height, 400) > 300'),
+    );
+    const checks = checksOf(result);
+    expect(checks).toHaveLength(2);
+    expect(checks.every(check => !check.exactBecause)).toBe(true);
+
+    const random = randomSource();
+    for (let index = 0; index < 2000; index++) {
+      const width = 1 + random(1000);
+      const height = 1 + random(1000);
+      const picked = checks.findIndex(check => runCheck(check, width, height));
+      expect(picked).toBe(Math.min(width, height, 400) > 300 ? 1 : 0);
+    }
+  });
+
   it('proves a breakpoint at the exact pixel, across a diagonal too', () => {
     const result = compilePackage(
       branching('screen.width > screen.height && screen.width % 2 === 0'),
@@ -237,6 +254,8 @@ describe('a layout check over a range of sizes', () => {
     'screen.width + screen.height < 1000 && screen.width !== 320',
     'Math.min(screen.width, screen.height) >= 240',
     'Math.max(screen.width - 100, screen.height) <= 500',
+    'Math.min(screen.width, screen.height, 400) > 300',
+    'Math.max(screen.width / 2, screen.height / 3, 150.5, 20) > 200',
     'Math.floor(screen.width / 3) === 80',
     'Math.round(screen.width / 7) > 40 || !(screen.height < 100)',
     'Math.ceil(screen.height / 9) % 2 === 0',

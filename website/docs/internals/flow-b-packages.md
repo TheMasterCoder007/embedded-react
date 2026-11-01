@@ -134,7 +134,8 @@ The loader runs checks before it reads anything else in the package, so a check 
 small program in table 20, `checks`, for every panel. Words are `op` in the low byte and a signed 24-bit argument above
 it. It is a stack machine over doubles with no jumps, 16 values of stack and 48 locals, and it ends at `END`, which
 passes when the value on top is true. Every word is bounds-checked as it runs, and all the panels' checks share a
-budget of 65536 words, so a hostile check can do no more than fail the load.
+budget of 65536 words, so a hostile check can do no more than fail the load. Every check runs, even after one passes,
+so a malformed one fails the load on every screen.
 
 | Op                                 | What it does                                                                         |
 | ---------------------------------- | ------------------------------------------------------------------------------------ |
