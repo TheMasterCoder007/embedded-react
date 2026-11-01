@@ -152,7 +152,8 @@ so a malformed one fails the load on every screen.
 | `END`                              | Pass when the value on top is true                                                   |
 
 A string a boot value can hold is one of the app's literals, so a check compares them as numbers the compiler
-interned. A value boot can't work out makes the check take only the exact size the layout was compiled at.
+interned. A value boot can't work out makes the check take only the exact size the layout was compiled at, and so does
+a check past 4096 steps, the budget's share for each of a package's 16 layouts at most.
 
 ### Tables
 

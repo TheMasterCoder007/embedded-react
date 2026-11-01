@@ -102,6 +102,9 @@ describe('package format copy', () => {
     expect(format.CHECK_LOCALS).toBe(
       defineValue(formatHeader, 'ERB_CHECK_LOCALS'),
     );
+    expect(format.CHECK_BUDGET).toBe(
+      defineValue(formatHeader, 'ERB_CHECK_BUDGET'),
+    );
     expect(format.NONE).toBe(defineValue(formatHeader, 'ERB_NONE'));
     expect(format.FRAME_CELLS).toBe(
       defineValue(formatHeader, 'ERB_FRAME_CELLS'),

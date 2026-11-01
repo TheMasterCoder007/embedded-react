@@ -311,6 +311,9 @@ export const CHECK_ALWAYS = 0xffffffff;
 export const CHECK_STACK = 16;
 export const CHECK_LOCALS = 48;
 
+/** Words one load may run across all the panels' checks. */
+export const CHECK_BUDGET = 65536;
+
 /** The ops of a layout check (erb_format.h's ERB_CK_ values). */
 export const CheckOp = {
   end: 1,

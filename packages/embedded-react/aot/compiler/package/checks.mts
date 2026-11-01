@@ -28,6 +28,7 @@
 
 import {
   CHECK_ALWAYS,
+  CHECK_BUDGET,
   CHECK_LOCALS,
   CHECK_STACK,
   CheckDivide,
@@ -73,6 +74,12 @@ export type Verdict = 'pass' | 'fail' | 'unsure';
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The most layouts a package may hold. An app that changes at more sizes fails the build instead of growing. */
+export const MAX_LAYOUTS = 16;
+
+/** The most steps a check may take, so a full package's checks always fit the loader's budget. */
+const MAX_CHECK_STEPS = CHECK_BUDGET / MAX_LAYOUTS;
 
 /** How far a fraction may stray from the build's: as c/boot.mts's guard allows, for a libm function's last digit. */
 const FLOAT_TOLERANCE = 1e-9;
@@ -122,7 +129,8 @@ class CheckLowering {
    */
   private step(op: number, arg: number, pops: number, pushes: number): void {
     this.depth += pushes - pops;
-    if (this.depth > CHECK_STACK) {
+    // One step stays free for the end.
+    if (this.depth > CHECK_STACK || this.steps.length >= MAX_CHECK_STEPS - 1) {
       throw new NotCheckable();
     }
     this.steps.push({op, arg});
@@ -382,7 +390,7 @@ class CheckLowering {
 
   /** Ends the check. */
   end(): void {
-    this.step(CheckOp.end, 0, 1, 0);
+    this.steps.push({op: CheckOp.end, arg: 0});
   }
 }
 

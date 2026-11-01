@@ -19,8 +19,13 @@ import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, expect, it, vi} from 'vitest';
 import {bakeSvgArtifacts, compilePackage} from '../compile.mts';
-import {checkOverSizes, runCheck} from '../compiler/package/checks.mts';
-import {CheckOp, MathFn} from '../compiler/package/format.mts';
+import {
+  MAX_LAYOUTS,
+  checkOverSizes,
+  lowerCheck,
+  runCheck,
+} from '../compiler/package/checks.mts';
+import {CHECK_BUDGET, CheckOp, MathFn} from '../compiler/package/format.mts';
 import {SizeSearch} from '../compiler/package/layouts.mts';
 
 const demosDir = resolve(
@@ -179,6 +184,66 @@ export function App() {
   return <Text>{label}</Text>;
 }`),
     ).toThrow(/more than 16 layouts, because `'w' \+ screen\.width`/);
+  });
+
+  it('holds named panels to the same cap', () => {
+    const src = `${IMPORTS}
+export function App() {
+  const [label] = useState('w' + screen.width);
+  return <Text>{label}</Text>;
+}`;
+    const panelsWide = count =>
+      Array.from({length: count}, (_, index) => ({
+        width: 200 + index,
+        height: 320,
+      }));
+    expect(
+      compilePackage(src, 'app', {screens: panelsWide(16)}).panels,
+    ).toHaveLength(16);
+    expect(() => compilePackage(src, 'app', {screens: panelsWide(17)})).toThrow(
+      /more than 16 layouts[^]*name fewer panels/i,
+    );
+  });
+
+  it('takes the exact size for a check too long for the loader', () => {
+    const screenWidth = {
+      kind: 'boot',
+      slot: {
+        field: 'width',
+        type: {kind: 'int'},
+        init: {kind: 'screen', dimension: 'width'},
+      },
+    };
+    const checkOfTerms = terms => {
+      let expr = screenWidth;
+      for (let term = 0; term < terms; term++) {
+        expr = {
+          kind: 'arithmetic',
+          op: '+',
+          left: expr,
+          right: {kind: 'number', value: 1},
+        };
+      }
+      const slot = {
+        field: 'sum',
+        type: {kind: 'int'},
+        init: {kind: 'expr', expr},
+      };
+      return lowerCheck(
+        [{kind: 'value', slot, value: 240 + terms, source: 'the sum'}],
+        {width: 240, height: 320},
+      );
+    };
+
+    const longest = checkOfTerms(2045);
+    expect(longest.exactBecause).toBeNull();
+    expect(longest.steps).toHaveLength(CHECK_BUDGET / MAX_LAYOUTS);
+    expect(runCheck(longest, 240, 1)).toBe(true);
+    expect(runCheck(longest, 241, 1)).toBe(false);
+
+    const tooLong = checkOfTerms(2046);
+    expect(tooLong.exactBecause).toBe('the sum');
+    expect(tooLong.steps.length).toBeLessThan(10);
   });
 
   it('names a size that picks a layout that does not compile', () => {

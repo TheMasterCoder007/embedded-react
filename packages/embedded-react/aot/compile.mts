@@ -100,7 +100,7 @@ import {
   packPackage,
   resourceReport,
 } from './compiler/package/assemble.mts';
-import {runCheck} from './compiler/package/checks.mts';
+import {MAX_LAYOUTS, runCheck} from './compiler/package/checks.mts';
 import {SizeSearch} from './compiler/package/layouts.mts';
 import type {
   CompileOptions,
@@ -124,9 +124,6 @@ const aotDir = dirname(fileURLToPath(import.meta.url)); // packages/embedded-rea
 const repoRoot = resolve(aotDir, '../../..');
 const demosDir = resolve(repoRoot, 'demos');
 const distDir = resolve(aotDir, '..', 'dist');
-
-/** The most layouts a package may hold. An app that changes at more sizes fails the build instead of growing. */
-const MAX_LAYOUTS = 16;
 
 /** Where the search for an app's layouts starts. */
 const FIRST_SIZE: Screen = {width: 240, height: 320};
@@ -258,10 +255,11 @@ function requestedScreens(opts: CompileOptions): Screen[] | null {
  * The error for an app with too many layouts, naming the value that took the most different values across them.
  *
  * @param panels  The layouts so far.
+ * @param named  The build names its panels already.
  *
  * @returns The error.
  */
-function tooManyLayouts(panels: PanelProgram[]): Error {
+function tooManyLayouts(panels: PanelProgram[], named: boolean): Error {
   const values = new Map<string, Set<unknown>>();
   for (const {assumptions} of panels) {
     for (const assumption of assumptions) {
@@ -277,7 +275,10 @@ function tooManyLayouts(panels: PanelProgram[]): Error {
   return new Error(
     `AOT: this app needs more than ${MAX_LAYOUTS} layouts, because \`${worst}\` changes what is compiled at ` +
       'too many sizes.\n\nA breakpoint picks between a few layouts; a value worked out from `screen` belongs in ' +
-      'a style, which boot works out. To build for fixed panels, name them: --screen 240x320,800x480.',
+      'a style, which boot works out. ' +
+      (named
+        ? 'Or name fewer panels.'
+        : 'To build for fixed panels, name them: --screen 240x320,800x480.'),
   );
 }
 
@@ -325,6 +326,7 @@ export function compilePackage(
       }
       seen.add(size);
       if (!checks().some(check => runCheck(check, width, height))) {
+        if (panels.length === MAX_LAYOUTS) throw tooManyLayouts(panels, true);
         compileAt({width, height}, false);
       }
     }
@@ -332,7 +334,7 @@ export function compilePackage(
     const search = new SizeSearch();
     let next: ReturnType<SizeSearch['next']> = FIRST_SIZE;
     while (next && next !== 'gave-up') {
-      if (panels.length === MAX_LAYOUTS) throw tooManyLayouts(panels);
+      if (panels.length === MAX_LAYOUTS) throw tooManyLayouts(panels, false);
       compileAt(next, true);
       if (!runCheck(checks().at(-1)!, next.width, next.height)) {
         throw new Error(
