@@ -3,5 +3,10 @@
 idf_component_register(
     SRCS "main.c" "board.c"
     INCLUDE_DIRS "."
-    REQUIRES engine erb-runtime esp32-spi-lcd-backend esp_lcd driver esp_timer
+    REQUIRES engine erb-runtime esp32-spi-lcd-backend esp_lcd driver esp_driver_uart esp_timer
 )
+
+# On-device hot reload over the UART port (dev only): `embedded-react dev --device <port> --aot`. A release firmware
+# shouldn't carry the receiver, so it is off unless you build with `idf.py -DER_HOTRELOAD=1`.
+option(ER_HOTRELOAD "Enable on-device hot reload over the UART (dev only)" OFF)
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_HOTRELOAD=$<BOOL:${ER_HOTRELOAD}>)

@@ -34,6 +34,11 @@
 #include "esp32_spi_lcd_backend.h"
 #include "native_renderer.h"
 
+#if ER_HOTRELOAD
+#include "driver/uart.h"
+#include "erb_package_reload.h"
+#endif
+
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -60,6 +65,41 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 /** @brief Target frame period for the adaptive pacer (~60 fps); heavy frames just run as fast as work allows.
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
 #define ER_TARGET_FRAME_MS 16U
+
+#if ER_HOTRELOAD
+/* The UART moves to the host's speed once the board is up, so the console reads at this rate from then on. Its RX ring
+ * only has to hold a frame: the host waits for each reply, so nothing arrives while flash is being written. */
+#define RELOAD_UART UART_NUM_0
+#define RELOAD_UART_BAUD 460800
+#define RELOAD_CHUNK_BYTES 1024U
+#define RELOAD_UART_RX_BYTES 2048
+#define RELOAD_READ_BYTES 128
+
+static ErbPackageReload s_reload;
+static uint32_t s_reload_buffer[ERB_PACKAGE_RELOAD_BUFFER_BYTES(RELOAD_CHUNK_BYTES) / sizeof(uint32_t)];
+
+/** @brief Prints one line to the host. */
+static void reload_log(const char* line, void* context)
+{
+    (void)context;
+    ESP_LOGI(TAG, "%s", line);
+}
+
+/** @brief Hands the receiver everything the UART has. */
+static void reload_poll(void)
+{
+    uint8_t bytes[RELOAD_READ_BYTES];
+    for (;;)
+    {
+        const int count = uart_read_bytes(RELOAD_UART, bytes, sizeof(bytes), 0);
+        if (count <= 0)
+        {
+            return;
+        }
+        erb_package_reload_feed(&s_reload, bytes, (size_t)count);
+    }
+}
+#endif
 
 /** @brief Returns milliseconds since boot (engine-clock delta source). */
 static uint32_t now_ms(void)
@@ -128,6 +168,19 @@ static void load_package(bool touch)
             hold_error_screen(touch);
         }
     }
+#if ER_HOTRELOAD
+    erb_package_reload_init(
+        &s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+    if (uart_driver_install(RELOAD_UART, RELOAD_UART_RX_BYTES, 0, 0, NULL, 0) == ESP_OK
+        && uart_set_baudrate(RELOAD_UART, RELOAD_UART_BAUD) == ESP_OK)
+    {
+        ESP_LOGI(TAG, "on-device hot reload ready, at %d baud", RELOAD_UART_BAUD);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "hot reload disabled: the UART driver didn't start");
+    }
+#endif
 }
 
 /** @brief Boots the panel + engine, loads the package, then drives the frame loop. */
@@ -183,6 +236,9 @@ static void run_app(void)
                 {
                     embedded_renderer_touch(0, ER_TOUCH_UP, last_x, last_y);
                     touch_down = false;
+#if ER_HOTRELOAD
+                    erb_package_reload_tap(&s_reload);
+#endif
                 }
             }
         }
@@ -195,6 +251,10 @@ static void run_app(void)
         embedded_renderer_tick(dt);
         erb_tick(dt); /* advance the app's timers (setInterval/setTimeout); no-op if the app has none */
         prev = now;
+
+#if ER_HOTRELOAD
+        reload_poll();
+#endif
 
         /* Adaptive pacing: sleep the remainder up to the target; always yield >=1 tick for the idle task. */
         const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / 1000);

@@ -38,6 +38,7 @@ add_library(erb-runtime STATIC
         erb_vm.c
         erb_runtime.c
         erb_package_slots.c
+        erb_package_reload.c
 )
 
 # Flow B limits: how large an app this firmware accepts. Most size the verifier's fixed scratch, and a package
@@ -113,4 +114,8 @@ if (ER_RUNTIME_TESTS)
     add_executable(erb-package-slots-test tests/erb_package_slots_test.c)
     target_link_libraries(erb-package-slots-test PRIVATE erb-runtime)
     add_test(NAME runtime-erb-package-slots COMMAND erb-package-slots-test)
+
+    add_executable(erb-package-reload-test tests/erb_package_reload_test.c)
+    target_link_libraries(erb-package-reload-test PRIVATE erb-runtime)
+    add_test(NAME runtime-erb-package-reload COMMAND erb-package-reload-test)
 endif ()

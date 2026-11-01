@@ -41,10 +41,24 @@ static void invalidate(unsigned slot, void* context)
     }
 }
 
+static bool erase(unsigned slot, uint32_t offset, uint32_t bytes, void* context)
+{
+    (void)context;
+    return esp_partition_erase_range(s_partitions[slot], offset, bytes) == ESP_OK;
+}
+
+static bool program(unsigned slot, uint32_t offset, const void* data, uint32_t bytes, void* context)
+{
+    (void)context;
+    return esp_partition_write(s_partitions[slot], offset, data, bytes) == ESP_OK;
+}
+
 bool erb_package_slots_esp32_open(ErbPackageSlots* slots)
 {
     memset(slots, 0, sizeof(*slots));
     slots->invalidate = invalidate;
+    slots->erase = erase;
+    slots->program = program;
     bool opened = true;
     for (unsigned slot = 0; slot < ERB_PACKAGE_SLOT_COUNT; slot++)
     {

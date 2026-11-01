@@ -26,7 +26,8 @@
  * the newest sequence is the active one, and the other is staging, where the next package goes. A package that fails to
  * load is given up on and the other slot runs, so the last good package stays until a new one passes verification.
  *
- * The writer is packages/embedded-react/flash.mjs. The board maps the slots and clears a header.
+ * The writers are packages/embedded-react/flash.mjs and, on the board, erb_package_reload.h. The board maps the slots
+ * and gives the functions that change them.
  */
 
 #include "erb_runtime.h"
@@ -42,6 +43,10 @@
 
 /** @brief Bytes before a slot's package: one erase sector, so the header can be written, or cleared, on its own. */
 #define ERB_PACKAGE_SLOT_HEADER_BYTES 4096u
+
+/** @brief Flash's erase and program sizes, which the two writers keep to. */
+#define ERB_PACKAGE_SLOT_SECTOR_BYTES 4096u
+#define ERB_PACKAGE_SLOT_PAGE_BYTES 256u
 
 #define ERB_PACKAGE_SLOT_MAGIC 0x53425245u
 
@@ -64,7 +69,11 @@ typedef struct
 {
     ErbPackageSlot slots[ERB_PACKAGE_SLOT_COUNT];
     void (*invalidate)(unsigned slot, void* context); /**< Clears a slot's header in flash. */
-    void* context;                                    /**< Passed to invalidate. */
+    /** Erases whole sectors of a slot. Only hot reload needs it. */
+    bool (*erase)(unsigned slot, uint32_t offset, uint32_t bytes, void* context);
+    /** Programs whole pages of a slot, from RAM. Only hot reload needs it. */
+    bool (*program)(unsigned slot, uint32_t offset, const void* data, uint32_t bytes, void* context);
+    void* context; /**< Passed to the functions above. */
 } ErbPackageSlots;
 
 /** @brief What erb_package_slots_boot() did. */
@@ -96,6 +105,18 @@ bool erb_package_slot_read(const ErbPackageSlot* slot,
                            const uint8_t** package,
                            uint32_t* package_bytes,
                            uint32_t* sequence);
+
+/**
+ * @brief Programs a slot's header, once its package is whole. Its header sector must be erased.
+ *
+ * @param[in] slots          The board's slots.
+ * @param[in] slot           The slot.
+ * @param[in] package_bytes  The package's length.
+ * @param[in] sequence       Its sequence.
+ *
+ * @return true when the header reads back as valid.
+ */
+bool erb_package_slot_commit(const ErbPackageSlots* slots, unsigned slot, uint32_t package_bytes, uint32_t sequence);
 
 /**
  * @brief Loads the newest package that passes, at boot, and gives up on a newer one that didn't.

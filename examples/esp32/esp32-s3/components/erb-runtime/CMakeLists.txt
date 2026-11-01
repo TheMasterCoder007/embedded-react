@@ -14,6 +14,8 @@ if(CONFIG_ER_FLOW_B)
         "${R}/erb_vm.c"
         "${R}/erb_runtime.c"
         "${R}/erb_package_slots.c"
+        "${R}/erb_package_reload.c"
+        "${R}/er_hotreload.c"
         "${R}/port/erb_package_slots_esp32.c")
 endif()
 

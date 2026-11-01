@@ -131,6 +131,7 @@ typedef enum
     ERB_ERR_INPUT,        /**< Bad input. */
     ERB_ERR_DEBUG,        /**< Debug table does not match. */
     ERB_ERR_ASSETS,       /**< Asset pack failed to load. */
+    ERB_ERR_SLOT,         /**< Flash wouldn't take a hot reload's package. */
     /* Run */
     ERB_ERR_BUDGET,       /**< Instruction budget exceeded. */
     ERB_ERR_UPDATE_LOOP,  /**< More than ERB_MAX_UPDATE_PASSES update passes. */
@@ -146,6 +147,7 @@ typedef enum
 /** @brief ErbError::resource for ERB_ERR_TOO_BIG, besides the ERB_RES_ resource ids. */
 #define ERB_RESOURCE_ARENA 0u
 #define ERB_RESOURCE_NODES 0x100u
+#define ERB_RESOURCE_SLOT 0x101u
 
 /** @brief A failure, with what is known about it. */
 typedef struct
@@ -154,7 +156,7 @@ typedef struct
     const char* detail; /**< Which check failed, for a developer; static text. */
     uint32_t needed;    /**< TOO_BIG: amount needed. ENGINE_ABI: the package's level. NO_PANEL: width. */
     uint32_t available; /**< TOO_BIG: amount reserved. NO_PANEL: height. */
-    uint16_t resource;  /**< TOO_BIG: ERB_RESOURCE_ARENA, ERB_RESOURCE_NODES or an ERB_RES_ id. */
+    uint16_t resource;  /**< TOO_BIG: an ERB_RESOURCE_ value or an ERB_RES_ id. */
     uint16_t function;  /**< The function running, or 0xFFFF. */
     uint32_t offset;    /**< Its word offset when it failed. */
     const char* name;   /**< IMPORT and NATIVE: the module. TRAP: its message. Else NULL. */

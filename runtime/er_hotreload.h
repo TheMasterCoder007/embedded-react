@@ -54,6 +54,8 @@
 #define ER_HR_HEADER_SIZE 16u
 #define ER_HR_PROTO_VERSION 1u
 #define ER_HR_MSG_LOAD_CONTAINER 1u
+#define ER_HR_MSG_PACKAGE_BEGIN 2u /* Flow B: see erb_package_reload.h */
+#define ER_HR_MSG_PACKAGE_CHUNK 3u
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types

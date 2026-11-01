@@ -115,7 +115,8 @@ here: layout, rendering, touch, scrolling, and animation are engine features, no
   the app's breakpoints, and the panel's resolution picks one. See
   [the AOT subset](../guides/aot-subset.md#assets-and-screen-size).
 - **Every UI change is a rebuild and a reflash**, because the app is part of the firmware image.
-- No hot reload and no on-device state preservation.
+- [Hot reload on the device](../guides/hot-reload.md#on-the-device-with-flow-b) starts the app over, since state
+  doesn't carry across a reload yet.
 
 ## Choosing
 
@@ -127,7 +128,7 @@ Your board usually decides.
 | Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as compiled C                    |
 | Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Rebuilding and reflashing the firmware    |
 | API               | Everything                                      | [The AOT subset](../guides/aot-subset.md) |
-| Development loop  | Simulator, then hot reload on the device        | Simulator, then rebuild and flash         |
+| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device  |
 | Runtime errors    | The error screen                                | Most are compile errors instead           |
 | Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, Linux     |
 

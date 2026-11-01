@@ -32,6 +32,11 @@
 #include "host_common.h"
 #include "native_renderer.h"
 
+#if ER_HOTRELOAD
+#include "driver/usb_serial_jtag.h"
+#include "erb_package_reload.h"
+#endif
+
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -86,6 +91,39 @@ static void crash_test(uint32_t since_boot_ms)
 }
 #endif
 
+#if ER_HOTRELOAD
+/* The native USB port carries the logs out and the reload in, as it does in the Flow A host (hotreload_usb.c). */
+#define RELOAD_CHUNK_BYTES 4096U
+#define RELOAD_USB_RX_BYTES 8192U
+#define RELOAD_USB_TX_BYTES 4096U
+#define RELOAD_READ_BYTES 512
+
+static ErbPackageReload s_reload;
+static uint32_t s_reload_buffer[ERB_PACKAGE_RELOAD_BUFFER_BYTES(RELOAD_CHUNK_BYTES) / sizeof(uint32_t)];
+
+/** @brief Prints one line to the host. */
+static void reload_log(const char* line, void* context)
+{
+    (void)context;
+    ESP_LOGI(TAG, "%s", line);
+}
+
+/** @brief Hands the receiver everything the USB port has. */
+static void reload_poll(void)
+{
+    uint8_t bytes[RELOAD_READ_BYTES];
+    for (;;)
+    {
+        const int count = usb_serial_jtag_read_bytes(bytes, sizeof(bytes), 0);
+        if (count <= 0)
+        {
+            return;
+        }
+        erb_package_reload_feed(&s_reload, bytes, (size_t)count);
+    }
+}
+#endif
+
 /** @brief Returns milliseconds since boot (engine-clock delta source). */
 static uint32_t now_ms(void)
 {
@@ -136,6 +174,20 @@ static void load_package(bool touch)
     {
         snprintf(s_boot_report, sizeof(s_boot_report), "package not loaded: %s", message);
     }
+#if ER_HOTRELOAD
+    erb_package_reload_init(
+        &s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+    usb_serial_jtag_driver_config_t usb_config = {
+        .rx_buffer_size = RELOAD_USB_RX_BYTES,
+        .tx_buffer_size = RELOAD_USB_TX_BYTES,
+    };
+    /* The console may have installed the driver already, which is just as good. */
+    const esp_err_t err = usb_serial_jtag_driver_install(&usb_config);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    {
+        ESP_LOGE(TAG, "hot reload disabled: %s", esp_err_to_name(err));
+    }
+#endif
 }
 
 /** @brief Boots the panel + engine, loads the package, then drives the frame loop. */
@@ -195,6 +247,9 @@ static void run_app(void)
                 {
                     embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
                     touch_down = false;
+#if ER_HOTRELOAD
+                    erb_package_reload_tap(&s_reload);
+#endif
                 }
             }
         }
@@ -207,6 +262,10 @@ static void run_app(void)
         embedded_renderer_tick(dt);
         erb_tick(dt);
         prev = now;
+
+#if ER_HOTRELOAD
+        reload_poll();
+#endif
 
         if (s_boot_report[0] && now - boot_ms >= BOOT_REPORT_AFTER_MS)
         {

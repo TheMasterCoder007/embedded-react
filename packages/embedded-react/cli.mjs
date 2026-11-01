@@ -58,6 +58,7 @@ Usage:
   embedded-react dev [entry] --device [port]   Hot-reload on a real board over USB (Flow A): re-pack
                                                  the app and stream it on every save. Omit <port> (or
                                                  pass 'auto') to auto-detect the ESP32 USB-Serial-JTAG.
+                                                 --aot  → Flow B: compile a package and send it instead.
   embedded-react export [entry] [--out <dir>]  Build a self-contained static playground (no server)
   embedded-react build [entry] [--out <dir>]   Build the device artifact:
                                                  default → app.erpkg (Flow A: QuickJS bytecode + assets,
@@ -257,6 +258,14 @@ async function resolveDevicePortOrExit(explicit) {
 async function dev(args) {
   const cwd = process.cwd();
   const deviceOpt = optFlagMaybeValue(args, '--device');
+  const aot = args.includes('--aot');
+  if (aot && !deviceOpt) {
+    console.error(
+      '--aot only applies to --device: the simulator runs the app as Flow A.\n',
+    );
+    usage();
+    process.exit(1);
+  }
 
   // --device [port] → stream the app to a real board over USB on every save (on-device hot reload).
   // With no port (or `auto`), the ESP32 USB-Serial-JTAG is auto-detected. Otherwise → the WASM simulator.
@@ -282,6 +291,20 @@ async function dev(args) {
           i !== deviceOpt.idx &&
           i !== deviceOpt.valueIdx,
       );
+
+    if (aot) {
+      const appPath = resolveAppComponent(cwd, explicit);
+      const device = await resolveDevicePortOrExit(deviceValue);
+      await runDeviceDevServer({
+        entry: appPath,
+        projectRoot: cwd,
+        device,
+        label: appPath,
+        compilePackage: async () =>
+          Buffer.from((await compileAppPackage(cwd, appPath)).file.bytes),
+      });
+      return;
+    }
 
     const simDir = simDirOrExit();
     const entry = resolveEntry(cwd, explicit);
@@ -398,57 +421,36 @@ function resolveAppComponent(cwd, explicit) {
 }
 
 /**
- * Flow B (--aot): compile the App component to a Flow B package (app.erpkg) with its assets inside, for the Flow B
- * runtime to load: for release without its debug table (app.erdbg beside it), and baked as C (app.erpkg.c) to link
- * into the firmware. With --c, to C (app.gen.{c,h}) + bake assets, to compile into firmware.
+ * Compiles the App component with what goes into the build: its package file when asPackage, and its image jobs.
+ * Throws with the reason, so a watch loop can carry on past a bad save.
  */
-async function buildAot(
+async function compileAppPackage(
   cwd,
-  explicit,
-  outDir,
-  screens,
-  asPackage,
-  {release = false, bake = false} = {},
+  appPath,
+  {screens = null, asPackage = true, release = false} = {},
 ) {
-  const {
-    bakePackage,
-    compilePackage,
-    compileSource,
-    bakeSvgArtifacts,
-    packPackage,
-    resourceReport,
-  } = await import('./aot/compile.mts');
-  const {bakeAssetPackBytes, bakeAssets} = await import('./assets/index.mjs');
+  const {compilePackage, compileSource, bakeSvgArtifacts, packPackage} =
+    await import('./aot/compile.mts');
+  const {bakeAssetPackBytes} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
   const {analyzeFontSizes, warnFontSizes} =
     await import('./assets/font-sizes.mjs');
-  const appPath = resolveAppComponent(cwd, explicit);
   const appDir = dirname(appPath);
   const src = readFileSync(appPath, 'utf8');
-  let result;
-  try {
-    // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
-    const svgArtifacts = await bakeSvgArtifacts(src, appDir);
-    // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
-    // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
-    // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the
-    // sizes pick. The C output is for one panel: --screen, then ER_AOT_SCREEN_W/H, then 800x480.
-    const compile = asPackage ? compilePackage : compileSource;
-    result = compile(src, projectIdentity(appPath), {
-      filename: appPath,
-      svgArtifacts,
-      screen: screens?.[0] ?? null, // null without --screen
-      screens: asPackage ? screens : undefined,
-      release,
-    });
-  } catch (e) {
-    console.error(e && e.aotLoc ? e.message : e?.message || String(e));
-    process.exit(1);
-  }
-  if (!asPackage) {
-    writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
-    writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
-  }
+  // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
+  const svgArtifacts = await bakeSvgArtifacts(src, appDir);
+  // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
+  // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
+  // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the
+  // sizes pick. The C output is for one panel: --screen, then ER_AOT_SCREEN_W/H, then 800x480.
+  const compile = asPackage ? compilePackage : compileSource;
+  const result = compile(src, projectIdentity(appPath), {
+    filename: appPath,
+    svgArtifacts,
+    screen: screens?.[0] ?? null, // null without --screen
+    screens: asPackage ? screens : undefined,
+    release,
+  });
 
   // Optional per-image overrides (same file the JS flows read): assets.config.js
   //   export default { images: { 'bg': { format: 'rgb565' } } }
@@ -465,19 +467,55 @@ async function buildAot(
   }));
   for (const j of imageJobs) {
     if (!existsSync(j.path)) {
-      console.error(`<Image> asset "${j.name}" not found at ${j.path}`);
-      process.exit(1);
+      throw new Error(`<Image> asset "${j.name}" not found at ${j.path}`);
     }
   }
   // Flow B renders everything in the engine's built-in font (no font imports) — check the app's text
   // and its font sizes against what that font actually covers.
   warnMissingGlyphs({source: src, jsx: true});
   warnFontSizes({used: analyzeFontSizes(src)});
+  const file = asPackage
+    ? packPackage(
+        result,
+        imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
+      )
+    : null;
+  return {result, file, imageJobs};
+}
+
+/**
+ * Flow B (--aot): compile the App component to a Flow B package (app.erpkg) with its assets inside, for the Flow B
+ * runtime to load: for release without its debug table (app.erdbg beside it), and baked as C (app.erpkg.c) to link
+ * into the firmware. With --c, to C (app.gen.{c,h}) + bake assets, to compile into firmware.
+ */
+async function buildAot(
+  cwd,
+  explicit,
+  outDir,
+  screens,
+  asPackage,
+  {release = false, bake = false} = {},
+) {
+  const {bakePackage, resourceReport} = await import('./aot/compile.mts');
+  const {bakeAssets} = await import('./assets/index.mjs');
+  const appPath = resolveAppComponent(cwd, explicit);
+  let compiled;
+  try {
+    compiled = await compileAppPackage(cwd, appPath, {
+      screens,
+      asPackage,
+      release,
+    });
+  } catch (e) {
+    console.error(e && e.aotLoc ? e.message : e?.message || String(e));
+    process.exit(1);
+  }
+  const {result, file, imageJobs} = compiled;
+  if (!asPackage) {
+    writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
+    writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
+  }
   if (asPackage) {
-    const file = packPackage(
-      result,
-      imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
-    );
     const out = relative(cwd, outDir) || '.';
     const name = bake ? 'app.erpkg.c' : 'app.erpkg';
     writeFileSync(

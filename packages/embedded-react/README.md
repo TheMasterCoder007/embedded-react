@@ -36,7 +36,7 @@ The package is the React Native analog: hooks come from `react`, everything else
 | Command | What it does |
 |---|---|
 | `npx embedded-react dev` | Runs your app in the browser simulator with hot reload; the engine `.wasm` ships prebuilt, so there is no native toolchain |
-| `npx embedded-react dev --device` | The same, streamed to a connected board over USB (a firmware built with hot reload) |
+| `npx embedded-react dev --device` | The same, streamed to a connected board over USB (a firmware built with hot reload). `--aot` sends Flow B packages |
 | `npx embedded-react build` | The Flow A device artifact, `dist/app.erpkg` (bytecode + baked assets + CRC) |
 | `npx embedded-react build --aot` | A Flow B package, `dist/app.erpkg`, for the Flow B runtime to load. State, handlers, timers, effects, lists, animations, PanResponder, `<Svg>` and the keyboard config. It holds every layout the app's breakpoints call for, and `--screen 240x320,320x240` keeps only the ones those sizes pick |
 | `npx embedded-react build --aot --release` | A Flow B package for release, without its debug table, which goes beside it as `dist/app.erdbg` |

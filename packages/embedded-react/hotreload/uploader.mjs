@@ -127,6 +127,13 @@ export class SerialUploader {
     return frame.length;
   }
 
+  /** Writes a frame that is already encoded, for a transfer that waits for a reply to each. */
+  async writeFrame(frame) {
+    if (!this._port) throw new Error('SerialUploader: call open() first');
+    await this._write(frame);
+    await this._drain();
+  }
+
   /** Closes the port. */
   async close() {
     if (!this._port) return;

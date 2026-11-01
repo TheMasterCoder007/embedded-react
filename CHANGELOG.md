@@ -43,6 +43,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The CYD and RP2040 examples load their UI from a slot, so changing it needs no firmware rebuild. The ESP32-S3
   example has a Flow B build beside its Flow A one, and `-DER_BOARD_CRASH_TEST` forces a fault or a hang on the
   RP2040 and that build.
+- On-device hot reload for Flow B: `embedded-react dev --device --aot` sends a package to the staging slot on every
+  save. One that fails verification leaves the running app as it was and shows the reason. The ESP32-S3, CYD, and
+  RP2040 examples take it when built with `ER_HOTRELOAD`.
 
 ### Changed
 

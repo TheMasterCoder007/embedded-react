@@ -36,6 +36,10 @@
 #include "pedometer.h"
 #include "pico_spi_lcd_backend.h"
 
+#if ER_HOTRELOAD
+#include "erb_package_reload.h"
+#endif
+
 #include "hardware/flash.h"
 #include "hardware/structs/mpu.h"
 #include "hardware/sync.h"
@@ -275,6 +279,80 @@ static void invalidate_slot(unsigned slot, void* context)
     restore_interrupts(interrupts);
 }
 
+#if ER_HOTRELOAD
+/** @brief Chunk size: the USB serial port is quick, so a small chunk is fine and costs little RAM beside the
+ *  framebuffer. */
+#define RELOAD_CHUNK_BYTES 1024U
+
+/** @brief Bytes read from the USB port per poll, before the watchdog is seen to again. */
+#define RELOAD_READ_BYTES 64U
+
+/** @brief How long the frame pacer waits between polls while it has time to spare. */
+#define RELOAD_POLL_US 200U
+
+static ErbPackageReload s_reload;
+static uint32_t s_reload_buffer[ERB_PACKAGE_RELOAD_BUFFER_BYTES(RELOAD_CHUNK_BYTES) / sizeof(uint32_t)];
+
+static uint32_t slot_offset(unsigned slot)
+{
+    return slot == 0u ? ER_PACKAGE_SLOT_A_OFFSET : ER_PACKAGE_SLOT_B_OFFSET;
+}
+
+static bool erase_slot(unsigned slot, uint32_t offset, uint32_t bytes, void* context)
+{
+    (void)context;
+    const uint32_t interrupts = save_and_disable_interrupts();
+    flash_range_erase(slot_offset(slot) + offset, bytes);
+    restore_interrupts(interrupts);
+    return true;
+}
+
+static bool program_slot(unsigned slot, uint32_t offset, const void* data, uint32_t bytes, void* context)
+{
+    (void)context;
+    const uint32_t interrupts = save_and_disable_interrupts();
+    flash_range_program(slot_offset(slot) + offset, data, bytes);
+    restore_interrupts(interrupts);
+    return true;
+}
+
+/** @brief Prints one line to the host. */
+static void reload_log(const char* line, void* context)
+{
+    (void)context;
+    printf("%s\n", line);
+}
+
+/**
+ * @brief Hands the receiver what the USB port has. Checking a whole package from flash takes longer than a frame, so
+ *        the boot's longer watchdog timeout covers it.
+ *
+ * @return true when a new app started.
+ */
+static bool reload_poll(void)
+{
+    uint8_t bytes[RELOAD_READ_BYTES];
+    size_t count = 0u;
+    while (count < sizeof(bytes))
+    {
+        const int received = getchar_timeout_us(0);
+        if (received == PICO_ERROR_TIMEOUT)
+        {
+            break;
+        }
+        bytes[count++] = (uint8_t)received;
+    }
+    if (count == 0u)
+    {
+        return false;
+    }
+    watchdog_enable(ER_WATCHDOG_BOOT_MS, true);
+    const bool started = erb_package_reload_feed(&s_reload, bytes, count);
+    watchdog_enable(ER_WATCHDOG_MS, true);
+    return started;
+}
+#endif
+
 /**
  * @brief Loads the active package at the panel's size. With none that loads, the error screen stays up and the
  *        frame loop keeps running under it.
@@ -290,6 +368,10 @@ static void load_package(bool touch)
                 {(const void*)(XIP_BASE + ER_PACKAGE_SLOT_B_OFFSET), ER_PACKAGE_SLOT_BYTES},
             },
         .invalidate = invalidate_slot,
+#if ER_HOTRELOAD
+        .erase = erase_slot,
+        .program = program_slot,
+#endif
     };
     const ErbConfig config = {
         .arena = s_arena,
@@ -318,6 +400,10 @@ static void load_package(bool touch)
             hold_error_screen(touch);
         }
     }
+#if ER_HOTRELOAD
+    erb_package_reload_init(
+        &s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+#endif
 }
 
 #if ER_BOARD_DEBUG
@@ -405,9 +491,13 @@ int main(void)
     load_package(touch);
 
     /* The sensors reach the app through useHostValue. A package without one of these just ignores it. */
-    const int input_steps = erb_input_find("steps");
-    const int input_dotx = erb_input_find("dotx");
-    const int input_doty = erb_input_find("doty");
+    int input_steps = erb_input_find("steps");
+    int input_dotx = erb_input_find("dotx");
+    int input_doty = erb_input_find("doty");
+    /* What was last pushed into the app, so a new one from a hot reload can be given it again. */
+    uint32_t last_steps = 0;
+    int last_dot_x = 1000;
+    int last_dot_y = 1000;
 
     /* Present the first frame while the backlight is still off, THEN light it — so the panel goes
      * straight from black to the watch face, with no flash of noise or blank. (The backlight was held
@@ -456,6 +546,9 @@ int main(void)
                 {
                     embedded_renderer_touch(0, ER_TOUCH_UP, last_x, last_y);
                     touch_down = false;
+#if ER_HOTRELOAD
+                    erb_package_reload_tap(&s_reload);
+#endif
                 }
             }
         }
@@ -469,10 +562,9 @@ int main(void)
             if (board_imu_read_accel(&ax, &ay, &az))
             {
                 const uint32_t steps = pedometer_update(&pedo, ax, ay, az, frame_start);
-                static uint32_t s_last_steps = 0;
-                if (steps != s_last_steps)
+                if (steps != last_steps)
                 {
-                    s_last_steps = steps;
+                    last_steps = steps;
                     erb_input_set_int(input_steps, (int32_t)steps);
                 }
             }
@@ -495,15 +587,14 @@ int main(void)
                 int ndy = (int)(fax * LEVEL_R / 4096.0f);
                 ndx = ndx < -LEVEL_R ? -LEVEL_R : (ndx > LEVEL_R ? LEVEL_R : ndx);
                 ndy = ndy < -LEVEL_R ? -LEVEL_R : (ndy > LEVEL_R ? LEVEL_R : ndy);
-                static int ldx = 1000, ldy = 1000;
-                if (ndx != ldx)
+                if (ndx != last_dot_x)
                 {
-                    ldx = ndx;
+                    last_dot_x = ndx;
                     erb_input_set_int(input_dotx, ndx);
                 }
-                if (ndy != ldy)
+                if (ndy != last_dot_y)
                 {
-                    ldy = ndy;
+                    last_dot_y = ndy;
                     erb_input_set_int(input_doty, ndy);
                 }
             }
@@ -544,9 +635,30 @@ int main(void)
 
         /* Adaptive pacing: sleep the remainder up to the target frame period. */
         const uint32_t used = now_ms() - frame_start;
+#if ER_HOTRELOAD
+        /* The USB port's buffer is small, so the spare time goes to emptying it. */
+        const absolute_time_t frame_end =
+            make_timeout_time_ms(used < ER_TARGET_FRAME_MS ? ER_TARGET_FRAME_MS - used : 0U);
+        bool started = reload_poll();
+        while (!time_reached(frame_end))
+        {
+            sleep_us(RELOAD_POLL_US);
+            started = reload_poll() || started;
+        }
+        if (started)
+        {
+            input_steps = erb_input_find("steps");
+            input_dotx = erb_input_find("dotx");
+            input_doty = erb_input_find("doty");
+            last_steps = 0;
+            last_dot_x = 1000;
+            last_dot_y = 1000;
+        }
+#else
         if (used < ER_TARGET_FRAME_MS)
         {
             sleep_ms(ER_TARGET_FRAME_MS - used);
         }
+#endif
     }
 }

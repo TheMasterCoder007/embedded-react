@@ -67,4 +67,6 @@ npx embedded-react build --aot                                            # → 
 npx embedded-react flash --board esp32-s3 --port PORT
 ```
 
-`-DER_BOARD_CRASH_TEST=1` forces a panic 5 s after boot and `=2` a hang, to check the error screen after the reset.
+Add `-DER_HOTRELOAD=1` to the build to send a package over the native USB port on every save, with
+`npx embedded-react dev --device --aot`. `-DER_BOARD_CRASH_TEST=1` forces a panic 5 s after boot and `=2` a hang, to
+check the error screen after the reset.
