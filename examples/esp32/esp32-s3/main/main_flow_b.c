@@ -91,6 +91,12 @@ static void crash_test(uint32_t since_boot_ms)
 }
 #endif
 
+/** @brief Returns milliseconds since boot (engine-clock delta source). */
+static uint32_t now_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
 #if ER_HOTRELOAD
 /* The native USB port carries the logs out and the reload in, as it does in the Flow A host (hotreload_usb.c). */
 #define RELOAD_CHUNK_BYTES 4096U
@@ -98,8 +104,41 @@ static void crash_test(uint32_t since_boot_ms)
 #define RELOAD_USB_TX_BYTES 4096U
 #define RELOAD_READ_BYTES 512
 
+/* The RGB panel can't keep scanning through a flash write and glitches, so the backlight stays off from the first write
+ * until this long after the last, by when the app has drawn. */
+#define RELOAD_DARK_AFTER_WRITE_MS 250U
+
 static ErbPackageReload s_reload;
 static uint32_t s_reload_buffer[ERB_PACKAGE_RELOAD_BUFFER_BYTES(RELOAD_CHUNK_BYTES) / sizeof(uint32_t)];
+static ErbPackageSlots s_flash_slots;
+static bool s_panel_dark;
+static uint32_t s_last_write_ms;
+
+/** @brief Turns the backlight off ahead of a flash write. */
+static void panel_go_dark(void)
+{
+    if (!s_panel_dark)
+    {
+        board_display_set_backlight(false);
+        s_panel_dark = true;
+    }
+}
+
+static bool dark_erase(unsigned slot, uint32_t offset, uint32_t bytes, void* context)
+{
+    panel_go_dark();
+    const bool erased = s_flash_slots.erase(slot, offset, bytes, context);
+    s_last_write_ms = now_ms();
+    return erased;
+}
+
+static bool dark_program(unsigned slot, uint32_t offset, const void* data, uint32_t bytes, void* context)
+{
+    panel_go_dark();
+    const bool programmed = s_flash_slots.program(slot, offset, data, bytes, context);
+    s_last_write_ms = now_ms();
+    return programmed;
+}
 
 /** @brief Prints one line to the host. */
 static void reload_log(const char* line, void* context)
@@ -117,18 +156,17 @@ static void reload_poll(void)
         const int count = usb_serial_jtag_read_bytes(bytes, sizeof(bytes), 0);
         if (count <= 0)
         {
-            return;
+            break;
         }
         erb_package_reload_feed(&s_reload, bytes, (size_t)count);
     }
+    if (s_panel_dark && now_ms() - s_last_write_ms >= RELOAD_DARK_AFTER_WRITE_MS)
+    {
+        board_display_set_backlight(true);
+        s_panel_dark = false;
+    }
 }
 #endif
-
-/** @brief Returns milliseconds since boot (engine-clock delta source). */
-static uint32_t now_ms(void)
-{
-    return (uint32_t)(esp_timer_get_time() / 1000);
-}
 
 /**
  * @brief Loads the active package at the panel's size. With none that loads, the error screen stays up and the
@@ -175,8 +213,12 @@ static void load_package(bool touch)
         snprintf(s_boot_report, sizeof(s_boot_report), "package not loaded: %s", message);
     }
 #if ER_HOTRELOAD
+    s_flash_slots = slots;
+    ErbPackageSlots reload_slots = slots;
+    reload_slots.erase = dark_erase;
+    reload_slots.program = dark_program;
     erb_package_reload_init(
-        &s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+        &s_reload, &reload_slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
     usb_serial_jtag_driver_config_t usb_config = {
         .rx_buffer_size = RELOAD_USB_RX_BYTES,
         .tx_buffer_size = RELOAD_USB_TX_BYTES,

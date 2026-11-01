@@ -63,6 +63,13 @@ extern "C"
     const char* board_display_last_note(void);
 
     /**
+     * @brief Turns the backlight on or off. Call it after board_display_init().
+     *
+     * @param[in] on  Whether it's on.
+     */
+    void board_display_set_backlight(bool on);
+
+    /**
      * @brief Brings up the GT911 capacitive touch controller on the shared I2C bus.
      *
      * Must be called after board_display_init() (which creates the I2C bus + CH422G). Runs the GT911

@@ -134,6 +134,15 @@ static esp_err_t board_io_init(void)
     return ESP_OK;
 }
 
+void board_display_set_backlight(bool on)
+{
+    const esp_err_t err = ch422g_set(EXIO_DISP_BL_BIT, on);
+    if (err != ESP_OK)
+    {
+        ESP_LOGW(TAG, "backlight: %s", esp_err_to_name(err));
+    }
+}
+
 /** @brief Latched reason for the last board_display_init() failure (see board_display_last_error). */
 static char s_display_err[160] = "";
 

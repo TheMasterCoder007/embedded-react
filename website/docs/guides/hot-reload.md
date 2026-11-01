@@ -117,7 +117,8 @@ time. The running app stays on screen and keeps running while it arrives. Then t
 A build error stays on your computer, and the board isn't touched.
 
 Component state starts over on each reload, since a package's state doesn't carry across yet. Writing flash pauses the
-whole chip for a moment, so the app stutters while a package arrives. Release firmware should be built without
+whole chip for a moment, so the app stutters while a package arrives. The S3's RGB panel can't keep scanning through a
+write, so its backlight goes off until the app has drawn again. Release firmware should be built without
 `ER_HOTRELOAD`, and ship with [`embedded-react flash`](../internals/flow-b-packages.md).
 
 ## What survives
