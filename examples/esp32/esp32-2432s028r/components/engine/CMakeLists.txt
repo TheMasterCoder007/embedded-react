@@ -78,7 +78,10 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
                                 # ~10 KB of .bss does not fit beside the 150 KB framebuffer here
     ER_DAMAGE_RECTS_MAX=4       # the engine default (16) buys tight clips on screens full of scattered
                                 # updaters; this one is a single dial, so it would spend ~1.2 KB of .bss
-                                # (6 rect sets) on rects it can never fill. DRAM here is 94% full.
+                                # (6 rect sets) on rects it can never fill. DRAM here is 93% full.
+    ERUI_MAX_ANIMATIONS=16      # the thermostat runs none; the defaults (64 animations, 32 values, 8 groups)
+    ERUI_MAX_ANIM_VALUES=8      # cost ~18 KB of .bss, and the Flow B runtime needs that room. A package that
+    ERUI_MAX_ANIM_GROUPS=4      # needs more is rejected at load, saying which
 )
 
 # The SVG/vector rasterizer's static pools

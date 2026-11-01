@@ -254,6 +254,9 @@ void erb_set_wall_clock(int64_t epoch_ms);
 /** @brief Replaces the scene with the error screen for @p error. Draws with no app state and no allocation. */
 void erb_show_error(const ErbError* error);
 
+/** @brief erb_show_error(), and what to do about it. @p hint may be NULL. */
+void erb_show_error_hint(const ErbError* error, const char* hint);
+
 /** @brief The short reason for a status. */
 const char* erb_status_str(ErbStatus status);
 

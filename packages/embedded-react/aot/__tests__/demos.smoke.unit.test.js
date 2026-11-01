@@ -94,13 +94,8 @@ describe('create-embedded-react starters build clean', () => {
   });
 });
 
-// Each board example pins the demo its app.gen.c must come from, in two places that have to agree: the
-// `#ifndef ER_AOT_DEMO_<demo>` guard and the regenerate command in its own error text. Point the guard at
-// a scratch demo while testing on hardware, and the example stops building for everyone — with an error
-// telling them to run the command that does not satisfy it.
 // The two AOT entry points must agree on the demo marker: `npm run aot -- <demo>` (aot/compile.mts) and
-// `embedded-react build --aot` (cli.mjs), which each demo's own `build:aot` script runs. A hardcoded name
-// in either one emits a marker no board example can match.
+// `embedded-react build --aot --c` (cli.mjs). A hardcoded name in either one emits a marker nothing can match.
 describe('AOT entry points agree on the demo marker', () => {
   it.each([
     ['thermostat', '240x320'],
@@ -112,7 +107,7 @@ describe('AOT entry points agree on the demo marker', () => {
       const cli = resolve(demosDir, '../packages/embedded-react/cli.mjs');
       const r = spawnSync(
         process.execPath,
-        [cli, 'build', '--aot', '--screen', screen, '--out', out],
+        [cli, 'build', '--aot', '--c', '--screen', screen, '--out', out],
         {cwd, encoding: 'utf8'},
       );
       expect(r.status).toBe(0);
@@ -122,22 +117,5 @@ describe('AOT entry points agree on the demo marker', () => {
     } finally {
       rmSync(out, {recursive: true, force: true});
     }
-  });
-});
-
-describe('board example demo guards', () => {
-  const exampleSrc = rel =>
-    readFileSync(resolve(demosDir, '..', 'examples', rel), 'utf8');
-
-  it.each([
-    ['esp32/esp32-2432s028r/main/main.c', 'thermostat'],
-    ['rp2040/rp2040-touch-lcd-1.69/main.c', 'watch-face'],
-  ])('%s guards on the %s marker', (rel, demo) => {
-    const src = exampleSrc(rel);
-    const marker = src.match(/#ifndef (ER_AOT_DEMO_\w+)/)?.[1];
-    const command = src.match(/npm run aot -- ([\w-]+)/)?.[1];
-    expect(command).toBe(demo);
-    // The marker encodes the demo name one-to-one (see demoMarker / app.gen.h).
-    expect(marker).toBe(demoMarker(demo));
   });
 });

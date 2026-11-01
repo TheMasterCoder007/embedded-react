@@ -12,6 +12,13 @@
 #   er_hotreload.c     — the portable ERHR transport-frame parser for on-device hot reload (the RX task
 #                        in hotreload_usb.c feeds received USB/serial bytes into it)
 # They need er_scene.h (engine) and quickjs.h (quickjs).
+# The Flow B build (main/CMakeLists.txt) has no QuickJS, so nothing compiles here. This can't be left to main's
+# REQUIRES, which ESP-IDF expands before it reads the configuration.
+if(CONFIG_ER_FLOW_B)
+    idf_component_register()
+    return()
+endif()
+
 set(BRIDGE_DIR "${EMBEDDED_REACT_SRC_DIR}/bridges/quickjs")
 set(RUNTIME_DIR "${EMBEDDED_REACT_SRC_DIR}/runtime")
 

@@ -15,3 +15,14 @@ menu "embedded-react: WiFi"
         default "pool.ntp.org"
 
 endmenu
+
+menu "embedded-react: Flow B"
+
+    config ER_FLOW_B
+        bool "Flow B: load a compiled package from a slot, with no QuickJS"
+        default n
+        help
+            Builds main_flow_b.c in place of the Flow A host: the firmware reserves an arena and loads the
+            active package from the erb_a and erb_b partitions (see sdkconfig.defaults.flow-b).
+
+endmenu

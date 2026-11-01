@@ -24,6 +24,6 @@ cd demos/thermostat && npm install && npm run dev
 cd packages/embedded-react
 npm run sim   -- thermostat     # the SDL simulator
 npm run pack  -- thermostat     # → dist/app.erpkg (Flow A)
-ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # → dist/app.gen.c (Flow B), at 240×320
+ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat   # → dist/app.gen.c (Flow B's C output), at 240×320
 npm run create -- my-app        # scaffold a new in-repo demo at demos/my-app
 ```

@@ -14,7 +14,7 @@ npm create embedded-react@latest my-watch -- --template watch-face
 ```
 
 A scaffolded copy has `npm run dev` (the browser simulator), `npm run dev:device` (hot reload on a
-board), `npm run build` (Flow A, `dist/app.erpkg`) and `npm run build:aot` (Flow B, `app.gen.c` at
+board), `npm run build` (Flow A, `dist/app.erpkg`) and `npm run build:aot` (Flow B, `dist/app.erpkg` for
 the panel size the demo targets). Inside the repository, `npm run sim -- thermostat` and
 `npm run pack -- …` from `packages/embedded-react` build a demo against the in-repo library with no
 install. `npm run aot` does too, but reads the panel size from the environment and otherwise assumes

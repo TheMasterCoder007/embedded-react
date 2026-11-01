@@ -87,6 +87,8 @@ are 22 KB, which sit in PSRAM at no measurable cost. Flow B has none of this.
 | Framebuffer        | 800×480 in PSRAM                   | Two 40-row RGB565 bands, ~37 KB                       | 240×280 RGB565 in SRAM, 131 KB      |
 | JS heap            | In PSRAM                           | none                                                  | none                                |
 | Node pool          | default                            | lowered                                               | sized to the watch face             |
+| Flow B arena       | 32 KB in its Flow B build          | 2 KB                                                  | 4 KB                                |
+| Animation pools    | default                            | 16 animations, 8 values, 4 groups                     | 16 animations, 8 values, 4 groups   |
 | Image registry     | default                            | 16                                                    | 8                                   |
 | Damage rectangles  | 16                                 | 4                                                     | 4                                   |
 | Stack              | 64 KB main task (36 KB with Wi-Fi) | 20 KB main task                                       | 8 KB, both scratch banks, guarded   |

@@ -46,12 +46,12 @@ ESP32, STM32, or RP2040 instead of a phone.
 
 The same app reaches the device through one of two flows, both driving the same engine:
 
-| | Flow A — runtime | Flow B — ahead of time |
-|---|---|---|
-| How it runs | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip | JSX compiled to C and linked into the firmware |
-| Needs | External RAM for the JS heap: PSRAM on an ESP32-S3, SDRAM on an STM32H7 | Internal RAM only; no JS engine on the device |
-| Update the UI by | Replacing `app.erpkg`, no firmware rebuild | Rebuilding and reflashing |
-| Trade-off | RAM and per-frame dispatch | A [subset of the API](https://embedded-react.dev/guides/aot-subset) |
+|                  | Flow A — runtime                                                                | Flow B — ahead of time                                                      |
+|------------------|---------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| How it runs      | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip | JSX compiled to a package, which a fixed runtime checks and runs from flash |
+| Needs            | External RAM for the JS heap: PSRAM on an ESP32-S3, SDRAM on an STM32H7         | Internal RAM only; no JS engine on the device                               |
+| Update the UI by | Replacing `app.erpkg`, no firmware rebuild                                      | Replacing `app.erpkg`, no firmware rebuild                                  |
+| Trade-off        | RAM and per-frame dispatch                                                      | A [subset of the API](https://embedded-react.dev/guides/aot-subset)         |
 
 Choosing is a build flag, not a rewrite. [The two flows](https://embedded-react.dev/concepts/two-flows) goes deeper.
 

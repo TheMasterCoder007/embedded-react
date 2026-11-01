@@ -35,11 +35,11 @@
  */
 
 #include "board.h"
-#include "er_error_screen.h"
 #include "er_perf.h" /* per-frame timing split + resource counters (feeds the overlay) */
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"
+#include "host_common.h"
 #include "native_renderer.h"
 #include "perf_overlay.h"
 #include "quickjs.h" /* JSMallocFunctions (PSRAM JS heap) */
@@ -61,7 +61,6 @@
 #include "network.h"    /* WiFi station + SNTP: the real time for Date.now() */
 #include "network_js.h" /* the app's __erWifi / __erClock */
 #endif
-#include "freertos/idf_additions.h" /* xTaskCreatePinnedToCoreWithCaps */
 
 #include <stdint.h>
 #include <stdio.h>
@@ -72,45 +71,6 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static const char* TAG = "embedded-react";
-
-/* Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. The panel is physically BOARD_LCD_WIDTH ×
-   BOARD_LCD_HEIGHT (800×480); for 90/270 the LOGICAL screen the app renders into is the swap (480×800,
-   a portrait UI). The backend maps logical→physical at present; touch is remapped by the inverse. */
-#ifndef ER_DISPLAY_ROTATION
-#define ER_DISPLAY_ROTATION 0
-#endif
-
-/* Logical screen the app sizes its root from (`screen` global) — panel size, swapped for 90/270. */
-#if (ER_DISPLAY_ROTATION == 90) || (ER_DISPLAY_ROTATION == 270)
-#define SCREEN_W BOARD_LCD_HEIGHT
-#define SCREEN_H BOARD_LCD_WIDTH
-#else
-#define SCREEN_W BOARD_LCD_WIDTH
-#define SCREEN_H BOARD_LCD_HEIGHT
-#endif
-
-/** @brief Remaps a physical (panel) touch point to logical (app) coords by the inverse rotation. */
-static void remap_touch(int* x, int* y)
-{
-    const int px = *x, py = *y;
-    switch (ER_DISPLAY_ROTATION)
-    {
-        case 90:
-            *x = py;
-            *y = BOARD_LCD_WIDTH - 1 - px;
-            break;
-        case 180:
-            *x = BOARD_LCD_WIDTH - 1 - px;
-            *y = BOARD_LCD_HEIGHT - 1 - py;
-            break;
-        case 270:
-            *x = BOARD_LCD_HEIGHT - 1 - py;
-            *y = px;
-            break;
-        default:
-            break;
-    }
-}
 
 /* QuickJS stack-overflow guard: three quarters of the main task stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE),
    so deep React/QuickJS recursion is caught before it corrupts the FreeRTOS task stack. The last quarter
@@ -354,11 +314,6 @@ uint32_t er_prof_now_us(void)
     return (uint32_t)esp_timer_get_time();
 }
 
-/* Target frame period for the adaptive pacer (~50 fps, just above the RGB panel's ~51 Hz refresh).
- * Light frames sleep the remainder up to this; heavy frames yield the minimum and run as fast as the
- * work allows. The real win needs fine ticks — see CONFIG_FREERTOS_HZ=1000 in sdkconfig.defaults. */
-#define ER_TARGET_FRAME_MS 20U
-
 /**
  * @brief Memory-maps the 'config' partition and loads the container it holds via er_runtime.
  *
@@ -391,139 +346,6 @@ static bool load_config_partition(ErContainerStatus* out_status)
     ESP_LOGI(TAG, "config partition mapped (%u bytes) — loading container", (unsigned)part->size);
     *out_status = er_runtime_load_container(mapped, part->size); /* mapping kept for the process */
     return true;
-}
-
-#if ERUI_RENDER_WORKERS > 1
-/*----------------------------------------------------------------------------------------------------------------------
- - Multi-core rendering: worker 1 on CPU core 1
- ---------------------------------------------------------------------------------------------------------------------*/
-
-/* The engine never creates threads — this example provides render worker 1 as a FreeRTOS task
- * pinned to core 1 (the main/render task is pinned to core 0 by ESP-IDF's default main-task
- * affinity, so xPortGetCoreID doubles as the worker id). The engine forks each commit's render
- * into horizontal slices across both cores; see EmbeddedRenderWorkers in native_renderer.h. */
-static TaskHandle_t s_render_worker;
-static SemaphoreHandle_t s_render_worker_done;
-
-/* Where the worker's stack lives. A WiFi build puts it in PSRAM, which frees the 24 KB of internal RAM WiFi
-   is otherwise short of; the worker never touches flash, so a PSRAM stack is safe for it. */
-#if CONFIG_ER_WIFI
-#define ER_WORKER_STACK_CAPS MALLOC_CAP_SPIRAM
-#else
-#define ER_WORKER_STACK_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
-#endif
-
-static void render_worker_main(void* arg)
-{
-    (void)arg;
-    for (;;)
-    {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        er_render_worker_exec(1);
-        xSemaphoreGive(s_render_worker_done);
-    }
-}
-
-static void render_worker_dispatch(int worker, void* ctx)
-{
-    (void)worker; /* only worker 1 exists */
-    (void)ctx;
-    xTaskNotifyGive(s_render_worker);
-}
-
-static void render_worker_sync(void* ctx)
-{
-    (void)ctx;
-    xSemaphoreTake(s_render_worker_done, portMAX_DELAY);
-}
-
-static int render_worker_id(void)
-{
-    return xPortGetCoreID(); /* workers are core-pinned: core id == worker id */
-}
-
-/** @brief Spawns the core-1 render worker and hands it to the engine. */
-static void install_render_workers(void)
-{
-    static const EmbeddedRenderWorkers workers = {
-        .count = 2,
-        .dispatch = render_worker_dispatch,
-        .sync = render_worker_sync,
-        .worker_id = render_worker_id,
-        .ctx = NULL,
-    };
-    /* 24 KB: the worker runs the full render recursion (nested composites + transform emits with
-     * their on-stack column arrays) but never QuickJS, so it needs render-depth headroom only —
-     * 12 KB measurably overflowed on the banded-fade pages. */
-    s_render_worker_done = xSemaphoreCreateBinary();
-    if (!s_render_worker_done
-        || xTaskCreatePinnedToCoreWithCaps(
-               render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1, ER_WORKER_STACK_CAPS)
-               != pdPASS)
-    {
-        if (s_render_worker_done)
-        {
-            vSemaphoreDelete(s_render_worker_done);
-            s_render_worker_done = NULL;
-        }
-        ESP_LOGW(TAG, "render worker creation failed — rendering stays single-core");
-        return;
-    }
-    embedded_renderer_set_workers(&workers);
-    ESP_LOGI(TAG, "multi-core rendering: worker 1 pinned to core 1");
-}
-#endif /* ERUI_RENDER_WORKERS > 1 */
-
-/** @brief Longest the fault the last reset came from stays on screen at boot; a tap ends it sooner. */
-#define FAULT_HOLD_MS 10000U
-
-/** @brief The fault the last reset came from, or NULL when it wasn't one. */
-static const char* reset_fault_reason(void)
-{
-    switch (esp_reset_reason())
-    {
-        case ESP_RST_PANIC:
-            return "panic: a firmware or engine crash";
-        case ESP_RST_INT_WDT:
-        case ESP_RST_TASK_WDT:
-        case ESP_RST_WDT:
-            return "watchdog reset: a hang";
-        default:
-            return NULL;
-    }
-}
-
-/**
- * @brief Shows the fault the last reset came from, if there was one, until the panel is tapped or FAULT_HOLD_MS
- *        passes. The chip keeps the reset reason itself, so the record needs no no-init RAM here.
- *
- * @param[in] touch  Whether touch came up, so a tap can end it.
- */
-static void show_reset_fault(bool touch)
-{
-    const char* reason = reset_fault_reason();
-    if (!reason)
-    {
-        return;
-    }
-    ESP_LOGE(TAG, "restarted after a fault: %s", reason);
-    ERFaultRecord record;
-    er_fault_record(&record, reason, 0u, 0u);
-    er_fault_show_recorded(&record, SCREEN_W, SCREEN_H);
-    for (uint32_t waited = 0; waited < FAULT_HOLD_MS; waited += ER_TARGET_FRAME_MS)
-    {
-        er_commit();
-        er_esp32_lcd_present();
-        int touch_x = 0;
-        int touch_y = 0;
-        bool pressed = false;
-        if (touch && board_touch_read(&touch_x, &touch_y, &pressed) && pressed)
-        {
-            break;
-        }
-        vTaskDelay(pdMS_TO_TICKS(ER_TARGET_FRAME_MS));
-    }
-    er_error_screen_hide();
 }
 
 /**

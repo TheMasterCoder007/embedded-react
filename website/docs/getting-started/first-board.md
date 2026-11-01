@@ -19,9 +19,9 @@ Your board decides this for you more often than not.
 | ------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Choose it when      | Your board has external RAM for the JavaScript heap: PSRAM on an ESP32-S3, or SDRAM on an STM32H7 | Your chip has only its internal RAM (classic ESP32, RP2040, most STM32 boards) |
 | Build command       | `npx embedded-react build`                                                                        | `npx embedded-react build --aot`                                               |
-| Produces            | `dist/app.erpkg`: bytecode, assets and a checksum in one file                                     | `dist/app.gen.c`, `app.gen.h` and `assets.generated.c`                         |
-| Firmware uses it by | Loading it at runtime from flash                                                                  | Compiling it into the firmware image                                           |
-| To update the UI    | Replace `app.erpkg`. **No firmware rebuild**                                                      | Recompile and reflash                                                          |
+| Produces            | `dist/app.erpkg`: bytecode, assets and a checksum in one file                                     | `dist/app.erpkg`: a compiled program, assets and a checksum in one file        |
+| Firmware uses it by | Loading it at runtime from flash                                                                  | Verifying it and running it from a flash slot                                  |
+| To update the UI    | Replace `app.erpkg`. **No firmware rebuild**                                                      | `npx embedded-react flash`. **No firmware rebuild**                            |
 | API                 | Everything                                                                                        | [A subset](../guides/aot-subset.md)                                            |
 
 [The two flows](../concepts/two-flows.md) explains what happens on the device in each case.
@@ -74,26 +74,38 @@ re-packs and streams your app on every save. It is a development-only option, of
 
 ## Flow B: ahead of time
 
-Here the app becomes C source compiled into the firmware, so every UI change is a rebuild
-and a reflash.
+Here the app is compiled to a package on your computer, and a small fixed runtime in the firmware checks it and
+runs it. The firmware is built once.
 
-**1. Compile your app to C.** Pass the panel size, so a responsive app resolves to the right layout:
+**1. Build and flash the firmware.** For the Cheap Yellow Display:
+
+```bash
+cd examples/esp32/esp32-2432s028r
+idf.py set-target esp32
+idf.py -p PORT flash
+```
+
+With no package installed yet, the board shows an error screen saying so.
+
+**2. Compile your app.** Pass the panel size, so a responsive app resolves to the right layout:
 
 ```bash
 npx embedded-react build --aot --screen 240x320
 ```
 
-This writes `dist/app.gen.c`, `dist/app.gen.h` and `dist/assets.generated.c`. The `thermostat` and
-`watch-face` templates wrap this as `npm run build:aot`.
+This writes `dist/app.erpkg` and prints the RAM and flash it needs. The `thermostat` and `watch-face` templates
+wrap this as `npm run build:aot`.
 
-**2. Build and flash the firmware** with those files compiled in. For the Cheap Yellow Display:
+**3. Write it to the board.**
 
 ```bash
-idf.py set-target esp32
-idf.py -p PORT flash monitor
+npx embedded-react flash --board esp32-2432s028r --port PORT
 ```
 
-The board guides cover where the generated files go and the wiring for each example.
+The board restarts into your app. After an edit, repeat steps 2 and 3. A package that fails verification doesn't
+replace the one before it: the board shows the reason, then runs the last good package.
+
+The board guides cover each example's wiring and flash layout.
 
 The ahead-of-time compiler accepts a subset of the API and tells you at build time, with the file
 and line, when an app steps outside it. [The AOT subset](../guides/aot-subset.md) lists what is and is not

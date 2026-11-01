@@ -17,7 +17,7 @@ npm install
 npm run dev          # the browser simulator with hot reload → http://localhost:3333
 npm run dev:device   # hot reload on a board over USB
 npm run build        # Flow A → dist/app.erpkg
-npm run build:aot    # Flow B → app.gen.c, baked at 240×320
+npm run build:aot    # Flow B → dist/app.erpkg, with a layout for 240×320
 ```
 
 Run `npm run dev` from this folder, not the repository root. `assets/` holds the weather icons and the

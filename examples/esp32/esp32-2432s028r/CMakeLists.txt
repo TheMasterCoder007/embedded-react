@@ -2,10 +2,9 @@
 # Display" (plain ESP32-WROOM-32, NO PSRAM).
 #   idf.py set-target esp32 && idf.py build flash monitor
 #
-# Flow B needs NO QuickJS (the app is compiled C), so unlike the esp32-s3 example this only pulls in the
-# embedded-react engine + backend — from the LOCAL monorepo checkout when building in-tree, else fetched
-# from GitHub. The AOT app itself (packages/embedded-react/dist/app.gen.c) is generated separately by
-# `npm run aot` and compiled by main/ (see main/CMakeLists.txt).
+# Flow B needs NO QuickJS, so unlike the esp32-s3 example this only pulls in the embedded-react engine,
+# runtime + backend — from the LOCAL monorepo checkout when building in-tree, else fetched from GitHub. The
+# app is a package written to a slot, separately from the firmware (embedded-react flash).
 cmake_minimum_required(VERSION 3.16)
 
 # A globally-set CMAKE_TOOLCHAIN_FILE (e.g. a user-wide vcpkg env var) is wrong for ESP-IDF, which

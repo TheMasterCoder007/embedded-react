@@ -106,8 +106,8 @@ if (hasWasm) {
   );
 }
 
-// 4. Flow B (AOT) → app.gen.c. Pure JS (no wasm). Builds the scaffolded starter itself, at a no-PSRAM
-//    board's size, so a starter the AOT compiler rejects fails here rather than on a user's first build.
+// 4. Flow B (AOT) → app.erpkg, and app.gen.c with --c. Pure JS (no wasm). Builds the scaffolded starter itself, at a
+//    no-PSRAM board's size, so a starter the AOT compiler rejects fails here rather than on a user's first build.
 run(
   'npx',
   [
@@ -122,8 +122,44 @@ run(
   proj,
 );
 ok(
+  existsSync(resolve(proj, 'dist-aot/app.erpkg')),
+  'embedded-react build --aot (the starter) → dist-aot/app.erpkg',
+);
+run(
+  'npx',
+  [
+    'embedded-react',
+    'build',
+    '--aot',
+    '--c',
+    '--screen',
+    '240x320',
+    '--out',
+    'dist-aot',
+  ],
+  proj,
+);
+ok(
   existsSync(resolve(proj, 'dist-aot/app.gen.c')),
-  'embedded-react build --aot (the starter) → dist-aot/app.gen.c',
+  'embedded-react build --aot --c (the starter) → dist-aot/app.gen.c',
+);
+// `pack` works offline, so the published flash.mjs and its imports are checked here too.
+run(
+  'npx',
+  [
+    'embedded-react',
+    'pack',
+    'dist-aot/app.erpkg',
+    '--board',
+    'esp32-2432s028r',
+    '--out',
+    'dist-aot',
+  ],
+  proj,
+);
+ok(
+  existsSync(resolve(proj, 'dist-aot/app.slot-a.bin')),
+  'embedded-react pack → dist-aot/app.slot-a.bin',
 );
 
 // 4b. Flow B from a TypeScript entry (App.tsx). The compiler strips the types and must emit C — proving the
@@ -148,12 +184,20 @@ const s = StyleSheet.create({ r: { flex: 1 } as ViewStyle, t: { color: '#fff', f
 );
 run(
   'npx',
-  ['embedded-react', 'build', '--aot', 'aot-app.tsx', '--out', 'dist-aot-ts'],
+  [
+    'embedded-react',
+    'build',
+    '--aot',
+    '--c',
+    'aot-app.tsx',
+    '--out',
+    'dist-aot-ts',
+  ],
   proj,
 );
 ok(
   existsSync(resolve(proj, 'dist-aot-ts/app.gen.c')),
-  'embedded-react build --aot (TypeScript entry) → dist-aot-ts/app.gen.c',
+  'embedded-react build --aot --c (TypeScript entry) → dist-aot-ts/app.gen.c',
 );
 
 // 5. The TypeScript scaffolder (`create-embedded-react <name> --ts`), exercised the way a user runs it —
@@ -250,8 +294,8 @@ run('npm', ['install', '--no-audit', '--no-fund'], demoProj);
 // (the responsive thermostat folds to its compact branch). Pure JS, so it runs without the wasm.
 run('npm', ['run', 'build:aot'], demoProj);
 ok(
-  existsSync(resolve(demoProj, 'dist/app.gen.c')),
-  'npm run build:aot (thermostat demo) → dist/app.gen.c',
+  existsSync(resolve(demoProj, 'dist/app.erpkg')),
+  'npm run build:aot (thermostat demo) → dist/app.erpkg',
 );
 if (hasWasm) {
   run('npm', ['run', 'build'], demoProj);

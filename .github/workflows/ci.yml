@@ -264,7 +264,7 @@ jobs:
     name: Consumer smoke (pack + install + build)
     # Exercises the PACKAGED + INSTALLED flow that unit tests can't reach: npm pack → install into a
     # throwaway app → `embedded-react build` (Flow A app.erpkg, via the wasm bytecode compiler) and
-    # `--aot` (Flow B app.gen.c). Catches files-whitelist gaps, ESM/CJS resolution, and the bytecode
+    # `--aot` (Flow B app.erpkg, and app.gen.c with `--c`). Catches files-whitelist gaps, ESM/CJS resolution, and the bytecode
     # path. Builds the wasm (emsdk) so the Flow A leg runs — the only way to cover it on a PR.
     runs-on: ubuntu-latest
     steps:

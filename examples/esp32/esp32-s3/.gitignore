@@ -1,11 +1,14 @@
-# ESP-IDF build output + generated config (the WiFi build has its own, see README "WiFi")
+# ESP-IDF build output + generated config (the WiFi and Flow B builds have their own, see the README)
 /build/
 /build-wifi/
+/build-flow-b/
 sdkconfig
 sdkconfig.old
 sdkconfig.ci
 sdkconfig.wifi
 sdkconfig.wifi.old
+sdkconfig.flow-b
+sdkconfig.flow-b.old
 
 # Build/flash logs (from idf.py wrapper runs)
 *.log

@@ -82,15 +82,17 @@ no reconciler. The component tree, the `useState` state machine, event handlers,
 all resolved at compile time.
 
 ```text
-JSX  →  AOT compiler (packages/embedded-react/aot)  →  app.gen.c/.h + assets.generated.c/.h
+JSX  →  AOT compiler (packages/embedded-react/aot)  →  app.erpkg, or app.gen.c/.h with --c
                                                                    ↓
-                                                    compiled into the firmware
+                                                    a flash slot, or the firmware image
                                                                    ↓
                                                     calls er_scene.h directly   (engine/)
 ```
 
-`npx embedded-react build --aot --screen 240x320` writes the generated C. Your firmware compiles it
-in and calls `er_app_build()` at boot. Everything the engine does at runtime in Flow A it still does
+`npx embedded-react build --aot --screen 240x320` writes a package, and `npx embedded-react flash` writes it
+to a flash slot, where the firmware's Flow B runtime verifies and runs it, so changing the UI needs no firmware
+rebuild. `--c` writes generated C instead, which your firmware compiles in and calls `er_app_build()` at boot;
+it stays until packages replace it. Everything the engine does at runtime in Flow A it still does
 here: layout, rendering, touch, scrolling, and animation are engine features, not JavaScript ones.
 
 **What you get**

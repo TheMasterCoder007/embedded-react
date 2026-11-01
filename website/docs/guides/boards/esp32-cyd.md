@@ -1,12 +1,12 @@
 ---
 title: 'ESP32 Cheap Yellow Display'
 sidebar_label: 'ESP32 CYD'
-description: 'Flow B on the ESP32-2432S028R: a classic ESP32 with no PSRAM, driving a 240×320 SPI panel from compiled C.'
+description: 'Flow B on the ESP32-2432S028R: a classic ESP32 with no PSRAM, driving a 240×320 SPI panel from a compiled package.'
 ---
 
 The "Cheap Yellow Display" is a widely available ESP32 board with a 2.4" touchscreen and **no PSRAM**.
-There is no room for a JavaScript engine, so this example uses Flow B: your JSX is compiled to C on
-your computer and linked into the firmware. Nothing on the board interprets anything. The example
+There is no room for a JavaScript engine, so this example uses Flow B: your JSX is compiled to a package
+on your computer, and a small fixed runtime in the firmware checks it and runs it from flash. The example
 project is at
 [`examples/esp32/esp32-2432s028r`](https://github.com/TheMasterCoder007/embedded-react/tree/master/examples/esp32/esp32-2432s028r).
 
@@ -15,25 +15,17 @@ project is at
 board with a single micro-USB port has an ILI9341 panel instead; see [Tuning](#tuning-for-your-board).
 
 ```text
-App.jsx  →  build --aot  →  app.gen.c  →  C engine  →  SPI backend  →  ST7789
-                                                          ↑
-                                                   XPT2046 touch
+App.jsx  →  build --aot  →  app.erpkg  →  flash slot  →  Flow B runtime  →  C engine  →  SPI backend  →  ST7789
+                                                                                            ↑
+                                                                                     XPT2046 touch
 ```
 
 ## Build and flash
 
 You need **ESP-IDF v5.3 or newer** active in your shell (tested on v6.1).
 
-**1. Compile the app to C.** The panel size tells a responsive app which layout to fold to; the
-thermostat demo uses its compact, dial-only layout at 240×320:
-
-```bash
-npx embedded-react build --aot --screen 240x320      # → dist/app.gen.c, app.gen.h, assets.generated.c
-```
-
-Inside the repository the equivalent is `cd packages/embedded-react && ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=320 npm run aot -- thermostat`.
-
-**2. Build and flash.** Plug in the **USB-C** port (it appears as a CH340 serial device), then:
+**1. Build and flash the firmware.** You do this once. Plug in the **USB-C** port (it appears as a CH340 serial
+device), then:
 
 ```bash
 cd examples/esp32/esp32-2432s028r
@@ -41,18 +33,37 @@ idf.py set-target esp32            # first time only
 idf.py -p PORT flash monitor       # e.g. /dev/ttyUSB0 or COM5; Ctrl-] leaves the monitor
 ```
 
+With no package installed, the first boot shows the error screen, saying so.
+
+:::note[Coming from the C output]
+An `sdkconfig` from before the package slots keeps the old partition table. Delete it, and run `idf.py fullclean`.
+:::
+
+**2. Compile the app.** The panel size tells a responsive app which layout to fold to; the thermostat demo uses its
+compact, dial-only layout at 240×320:
+
+```bash
+npx embedded-react build --aot --screen 240x320      # → dist/app.erpkg
+```
+
+**3. Write it to the board.**
+
+```bash
+npx embedded-react flash --board esp32-2432s028r --port PORT
+```
+
 The thermostat appears: drag the dial or tap − and +, tap the cog for °F/°C, and switch modes with
-COOL / HEAT / AUTO / OFF. Each time you edit the JSX, repeat step 1 and flash again.
+COOL / HEAT / AUTO / OFF. Each time you edit the JSX, repeat steps 2 and 3. The firmware doesn't change.
 
 The log at boot:
 
 ```text
-I (xxx) embedded-react: embedded-react ESP32-2432S028R (CYD) host — Flow B (AOT, no QuickJS)
+I (xxx) embedded-react: embedded-react ESP32-2432S028R (CYD) host — Flow B (no QuickJS)
 I (xxx) embedded-react: free internal RAM: ~223000 bytes
 I (xxx) board: ST7789 panel up: 240x320 (invert=0, bgr=0)
 I (xxx) er-spi-lcd: SPI LCD backend ready: 240x320, RGB565 BANDED (2 x 40-row ping-pong buffers, 37 KB DMA RAM)
 I (xxx) board: XPT2046 touch ready
-I (xxx) embedded-react: AOT app built at 240x320 (no QuickJS)
+I (xxx) embedded-react: package running from slot a; slot b is staging
 I (xxx) embedded-react: free internal RAM after boot: ~181000 bytes
 ```
 
@@ -63,13 +74,24 @@ that instead of `-p`. If flashing wedges after many resets, unplug and replug th
 
 **Orientation.** The example ships in the panel's native portrait, 240×320. `BOARD_ROTATE_90` in
 `main/board.h` gives landscape 320×240, swapping the panel and touch axes together. The thermostat
-lays landscape out differently, so build with `--screen 320x240` too; a portrait build refuses the
-rotated panel at boot and logs the command to regenerate it. If the
+lays landscape out differently, so build with `--screen 320x240` too; a package with no layout for the
+panel is rejected at boot, with the reason on the error screen. If the
 image is upside down, flip `BOARD_ROTATE_CW` in `main/board.c`.
+
+## Package slots
+
+`partitions.csv` gives the firmware 1.4 MB and each of two [package slots](../../internals/flow-b-packages.md#package-slots),
+`erb_a` and `erb_b`, 1.25 MB. `embedded-react flash` writes the one that isn't running, so the last good package
+stays in flash. If the new one fails verification, the board shows the reason for a few seconds, then runs the
+last good one.
+
+The arena is 2 KB (`ERB_ARENA_BYTES` in `main/main.c`), and the thermostat needs under 1 KB. The build prints what
+a package needs. One that needs more than the firmware reserves is rejected at boot, with both amounts on the error
+screen.
 
 ## How it fits without PSRAM
 
-A full 240×320 framebuffer in 16-bit colour is 150 KB, more than this ESP32's largest free block. The
+A full 240×320 framebuffer in 16-bit color is 150 KB, more than this ESP32's largest free block. The
 backend instead draws the screen in **horizontal strips of about 40 rows** and lets the panel's own
 memory hold the rest of the picture. Two strip buffers of about 19 KB each ping-pong: while the panel
 receives one over SPI, the CPU draws the next. The result is full 16-bit colour with anti-aliased

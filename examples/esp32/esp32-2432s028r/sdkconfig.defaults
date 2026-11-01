@@ -6,13 +6,13 @@ CONFIG_IDF_TARGET="esp32"
 # No PSRAM on this board — the framebuffer + engine pools all live in internal DRAM (the whole point of
 # Flow B: no QuickJS heap). If the framebuffer alloc fails at boot, or it boot-loops on
 # `assert failed: vApplicationGetIdleTaskMemory`, free RAM by lowering ERUI_MAX_NODES
-# (components/engine/CMakeLists.txt) and/or rebuilding the AOT app with a smaller ER_AOT_LIST_CAP.
+# (components/engine/CMakeLists.txt) or ERB_ARENA_BYTES (main/main.c).
 
-# 4 MB flash. Default partition table (single factory app) — the compiled app is IN the firmware image
-# (Flow B), so there's no separate config partition.
+# 4 MB flash, and a custom partition table with the two package slots.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Main-task stack: the engine's layout/render recurses with tree depth. Plenty for the demo.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=20480
