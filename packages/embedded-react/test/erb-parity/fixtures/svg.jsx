@@ -56,16 +56,9 @@ export function App() {
             }}
           />
         </Svg>
-        <Svg width={HALF} height={60}>
-          <Rect
-            x={2}
-            y={10}
-            width={HALF - 4}
-            height={40}
-            rx={HALF / 8}
-            fill="#203048"
-          />
-          <Ellipse cx={HALF / 2} cy={30} rx={HALF / 4} ry={12} fill="#60e080" />
+        <Svg width={HALF} height={60} viewBox="0 0 120 60">
+          <Rect x={2} y={10} width={116} height={40} rx={15} fill="#203048" />
+          <Ellipse cx={60} cy={30} rx={30} ry={12} fill="#60e080" />
         </Svg>
       </View>
       <Pressable style={styles.row} onPress={() => setLevel(level + 25)}>

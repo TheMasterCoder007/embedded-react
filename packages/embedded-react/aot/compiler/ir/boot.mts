@@ -47,8 +47,14 @@ export interface IrBootSlot {
  * for a value boot cannot work out, the panel size itself.
  */
 export type IrBootAssumption =
-  | {kind: 'value'; slot: IrBootSlot; value: number | string | boolean}
-  | {kind: 'panel'};
+  | {
+      kind: 'value';
+      slot: IrBootSlot;
+      value: number | string | boolean;
+      /** The expression, as an error names it. */
+      source: string | null;
+    }
+  | {kind: 'panel'; source: string | null};
 
 /** The values an app works out at boot, in the order they are set, and what its build assumed of them. */
 export interface IrBoot {

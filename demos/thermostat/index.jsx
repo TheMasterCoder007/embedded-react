@@ -17,7 +17,11 @@
 // Bundle entry point — the React Native idiom. The C host injects `screen` and `NativeUI` before running
 // this; AppRegistry mounts the app into a screen-sized root.
 import {AppRegistry} from 'embedded-react';
-import {App} from './App.jsx';
+import {App, LAYOUT} from './App.jsx';
+import {RichApp} from './RichApp.jsx';
 
-AppRegistry.registerComponent('demo', () => App);
+// The dial alone on a small panel. On a larger one, Flow A has the room and the engine for the rich app.
+AppRegistry.registerComponent('demo', () =>
+  LAYOUT === 'solo' ? App : RichApp,
+);
 console.log('React mounted at', screen.width + 'x' + screen.height);

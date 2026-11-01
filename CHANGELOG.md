@@ -12,14 +12,18 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ## [Unreleased]
 ### Added
 
+- One Flow B package for every panel size. The compiler finds the layouts from the app's breakpoints, proves every
+  size has one, and the panel's resolution picks one at boot. A project names no sizes, and `--screen` is now
+  optional: it only drops layouts a product doesn't need.
+- Flow B: a state's initial value derived from `screen` is worked out at boot, and so is `width={screen.width}` on an
+  `<Svg viewBox>`, which then scales. A component can return a ternary on `screen`.
+- `npm run aot` takes `--screen`.
 - The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
   QuickJS and no heap.
 - `embedded-react build --aot` writes a Flow B package and prints the RAM, nodes, and flash it needs.
   `--c` writes the C output instead. It takes state, handlers, timers, effects, lists, animations, PanResponder, `<Svg>`,
   `setKeyboardConfig`, and values worked out from the screen size, so the thermostat demo builds as a
   package.
-- A package can hold a layout for several panel sizes (`--screen 240x320,320x240`), and the firmware's
-  panel picks one.
 - A package carries a debug table, so the error screen names the source line (`App.jsx:41`).
   `--release` leaves it out, writing it beside the package as `app.erdbg`, and `--bake` writes the
   package as a C array (`app.erpkg.c`) for boards with no spare partition.

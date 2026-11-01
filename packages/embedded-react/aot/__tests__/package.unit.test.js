@@ -37,6 +37,7 @@ import {
   FORMAT_MAJOR,
   FORMAT_MINOR,
   BindingKind,
+  CHECK_ALWAYS,
   FunctionKind,
   GradientField,
   InterpFlag,
@@ -108,8 +109,7 @@ function readProgram(bytes) {
       panelCount,
     },
     panel: {
-      width: u16(24),
-      height: u16(26),
+      check: u32(24),
       arenaBytes: u32(28),
       nodeCount: u16(32),
       rootTemplate: u16(34),
@@ -194,8 +194,7 @@ describe('package output', () => {
 
     // The screen-sized root, then the app's three nodes.
     expect(panel).toEqual({
-      width: 240,
-      height: 320,
+      check: CHECK_ALWAYS,
       arenaBytes: header.arenaBytes,
       nodeCount: 4,
       rootTemplate: 0,
@@ -247,19 +246,8 @@ describe('package output', () => {
     ]);
     expect(node(2).type).toBe(1); // ER_NODE_TEXT
 
-    // The root's prop set is the panel's size.
-    const props = tables.get(Table.props);
-    const entries = props.offset + 4 + u32(props.offset) * 4;
-    const first = u16(props.offset + 4 + node(0).props * 4);
-    const entry = at => ({
-      prop: u16(entries + at * 8),
-      kind: result.program[entries + at * 8 + 2],
-      value: u32(entries + at * 8 + 4),
-    });
-    expect([entry(first), entry(first + 1)]).toEqual([
-      {prop: ABI_PROPS.get('width').id, kind: PropKind.i16, value: 240},
-      {prop: ABI_PROPS.get('height').id, kind: PropKind.i16, value: 320},
-    ]);
+    // The runtime sizes the root to the real panel.
+    expect(node(0).props).toBe(NONE);
   });
 
   it('shares identical prop sets', () => {
@@ -494,7 +482,7 @@ export function App() {
     const result = compilePackage(STATIC_APP, 'app', SCREEN);
     const file = packPackage(result);
     const report = resourceReport(result, file);
-    expect(report[0]).toMatch(/^ {2}panel 240x320: arena \d+ B, 4 nodes$/);
+    expect(report[0]).toMatch(/^ {2}layout 240x320: arena \d+ B, 4 nodes$/);
     expect(report[1]).toBe(
       `  flash: ${file.bytes.length} B (program ${result.program.length} B, debug ${result.debug.length} B)`,
     );
@@ -549,8 +537,7 @@ export function App() {
     return Array.from({length: header.panelCount}, (_, index) => {
       const at = 24 + index * 16;
       return {
-        width: u16(at),
-        height: u16(at + 2),
+        check: u32(at),
         arenaBytes: u32(at + 4),
         nodeCount: u16(at + 8),
       };
@@ -564,13 +551,14 @@ export function App() {
     );
   });
 
-  it('has a panel for each size, the header naming the most any needs', () => {
-    const result = compilePackage(RESPONSIVE_APP, 'app', PANELS);
+  it('has a layout for each breakpoint, the header naming the most any needs', () => {
+    const result = compilePackage(RESPONSIVE_APP, 'app', {});
     const panels = panelsOf(result.program);
-    expect(panels.map(panel => [panel.width, panel.height])).toEqual([
+    expect(result.panels.map(panel => [panel.width, panel.height])).toEqual([
       [240, 320],
       [320, 240],
     ]);
+    expect(panels.every(panel => panel.check !== CHECK_ALWAYS)).toBe(true);
     expect(panels[1].nodeCount).toBeGreaterThan(panels[0].nodeCount);
     const {header} = readProgram(result.program);
     expect(header.nodeCount).toBe(panels[1].nodeCount);
@@ -579,31 +567,19 @@ export function App() {
     );
   });
 
-  it('stores a table the panels share once, and one that differs per panel', () => {
+  it('stores a table the layouts share once, and one that differs per layout', () => {
     const {program} = compilePackage(RESPONSIVE_APP, 'app', PANELS);
     const entries = directoryOf(program);
     const of = id => entries.filter(entry => entry.id === Table[id]);
     expect(of('templates').map(entry => entry.panel)).toEqual([0, 1]);
     expect(of('templates')[0].offset).not.toBe(of('templates')[1].offset);
     expect(of('arena').map(entry => entry.panel)).toEqual([NONE]);
-    // Every panel's function bodies are in one code table.
+    // Every layout's function bodies are in one code table, and the checks table is for all of them.
     expect(of('code').map(entry => entry.panel)).toEqual([NONE]);
+    expect(of('checks').map(entry => entry.panel)).toEqual([NONE]);
   });
 
-  it("shares a copy two panels' tables have in common", () => {
-    const {program} = compilePackage(RESPONSIVE_APP, 'app', {
-      screens: [...PANELS.screens, {width: 400, height: 240}],
-    });
-    const templates = directoryOf(program).filter(
-      entry => entry.id === Table.templates,
-    );
-    expect(templates.map(entry => entry.panel)).toEqual([0, 1, 2]);
-    expect(templates[2].offset).toBe(templates[1].offset);
-    expect(templates[0].offset).not.toBe(templates[1].offset);
-  });
-
-  it('stores a function body the panels share once', () => {
-    // Both panels pick the narrow layout; only the boot function, which loads the panel's size, differs.
+  it('has one layout for every size that picks it', () => {
     const one = compilePackage(RESPONSIVE_APP, 'app', SCREEN);
     const two = compilePackage(RESPONSIVE_APP, 'app', {
       screens: [
@@ -611,13 +587,36 @@ export function App() {
         {width: 200, height: 300},
       ],
     });
-    const code = result =>
-      directoryOf(result.program).find(entry => entry.id === Table.code);
-    const boot = functionsOf(one.program).find(
-      fn => fn.kind === FunctionKind.boot,
+    expect(two.panels).toHaveLength(1);
+    expect(two.program).toEqual(one.program);
+  });
+
+  it('gives the same bytes at any size that picks the layout', () => {
+    const at = (width, height) =>
+      compilePackage(RESPONSIVE_APP, 'app', {screen: {width, height}}).program;
+    expect(at(320, 240)).toEqual(at(1000, 7));
+  });
+
+  it("keeps each layout's needs to itself", () => {
+    const app = `
+import {View, Svg, Circle} from 'embedded-react';
+const WIDE = screen.width > screen.height;
+export function App() {
+  return WIDE ? <Svg width={9} height={9}><Circle cx={1} cy={1} r={1} fill="#fff" /></Svg> : <View />;
+}`;
+    const {u16, u32, header} = readProgram(
+      compilePackage(app, 'app', {}).program,
     );
-    const bootWords = boot.ops.reduce((sum, op) => sum + OP[op.name].words, 0);
-    expect(code(two).length).toBe(code(one).length + bootWords * 4);
+    const needs = Array.from({length: u16(20)}, (_, index) => {
+      const at = 24 + header.panelCount * 16 + index * 8;
+      return {resource: u16(at), panel: u16(at + 2), amount: u32(at + 4)};
+    });
+    expect(needs).toContainEqual({
+      resource: Resource.vectorNodes,
+      panel: 1,
+      amount: expect.any(Number),
+    });
+    expect(needs.some(need => need.panel === 0)).toBe(false);
   });
 
   it('refuses a panel listed twice', () => {
@@ -628,11 +627,11 @@ export function App() {
     ).toThrow(/the panel 240x320 is listed twice/);
   });
 
-  it('reports each panel, and each copy of a table stored per panel', () => {
+  it('reports each layout, and each copy of a table stored per layout', () => {
     const result = compilePackage(RESPONSIVE_APP, 'app', PANELS);
     const report = resourceReport(result, packPackage(result));
-    expect(report[0]).toMatch(/^ {2}panel 240x320: arena \d+ B, \d+ nodes$/);
-    expect(report[1]).toMatch(/^ {2}panel 320x240: arena \d+ B, \d+ nodes$/);
+    expect(report[0]).toMatch(/^ {2}layout 240x320: arena \d+ B, \d+ nodes$/);
+    expect(report[1]).toMatch(/^ {2}layout 320x240: arena \d+ B, \d+ nodes$/);
     expect(report[3]).toMatch(/templates \d+\+\d+/);
   });
 });

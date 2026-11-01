@@ -1005,10 +1005,18 @@ static ERNode* app_node_create(ERNodeType type)
     'bool er_app_fits(int screen_w, int screen_h)\n{\n' +
     fitsBody.join('\n') +
     '\n}';
+  const bootInitials = scalarRecords
+    .filter(scalarRecord => scalarRecord.bootInitial)
+    .map(
+      scalarRecord =>
+        `    s_state.${scalarRecord.cField} = s_boot.${scalarRecord.bootInitial!.field};\n`,
+    )
+    .join('');
   const bootCall = hasBoot(app.boot)
     ? '\n    /* The values that depend on the panel size; a panel the app was not compiled for builds ' +
       'nothing. */\n' +
-      '    if (!app_boot(screen_w, screen_h))\n    {\n        return false;\n    }\n'
+      '    if (!app_boot(screen_w, screen_h))\n    {\n        return false;\n    }\n' +
+      bootInitials
     : '';
 
   // app.gen.c: includes and version pin, then file-scope state, declarations and functions, then er_app_build().

@@ -166,11 +166,24 @@ export function App() {
 
   it('folds a value that must be constant at the build panel, and checks it at boot', () => {
     const c = compile(`${IMPORTS}export function App() {
-  const [w, setW] = useState(screen.width);
-  return (<Text>{w}</Text>);
+  const held = useRef(screen.width);
+  return (<Text onPress={() => { held.current = held.current + 1; }}>a</Text>);
 }`);
-    expect(c).toContain('.w = 240');
     expect(bootOf(c)).toContain('return (s_boot.screen_width == 240);');
+  });
+
+  it("works a state's initial value out at boot, typed by its expression", () => {
+    const c = compile(`${IMPORTS}export function App() {
+  const [half] = useState(screen.width / 2);
+  const [wide] = useState(screen.width > 400);
+  const [left] = useState(Math.floor(screen.width / 3));
+  return (<Text>{half}{wide ? 'y' : 'n'}{left}</Text>);
+}`);
+    expect(c).toContain('float half;');
+    expect(c).toMatch(/s_state\.half = s_boot\.\w+;/);
+    expect(c).toMatch(/s_state\.wide = s_boot\.\w+;/);
+    expect(c).toMatch(/int left;/);
+    expect(bootOf(c)).toContain('return true;');
   });
 
   it('assumes the branch that picked a value boot cannot work out', () => {
@@ -272,8 +285,8 @@ export function App() {
 
   it('guards a folded fraction to within rounding, not a nearby panel', () => {
     const c = compile(`${IMPORTS}export function App() {
-  const [scale, setScale] = useState(screen.width / 10000);
-  return (<Text>{scale}</Text>);
+  const held = useRef(screen.width / 10000);
+  return (<Text onPress={() => { held.current = held.current + 1; }}>a</Text>);
 }`);
     const margin = Number(bootOf(c).match(/<= ([\d.e-]+) &&/)[1]);
     expect(margin).toBeLessThan(0.0241 - 0.024);

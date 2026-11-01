@@ -201,6 +201,32 @@ static uint16_t binop(uint8_t op, uint8_t type)
     return helper(types, 2, 2, type, code, 2);
 }
 
+/** @brief The boot function reads the real panel, whatever size the package names, and the root fills it. */
+static void test_screen(void)
+{
+    base();
+    const uint8_t types[] = {ERB_T_INT};
+    const uint32_t boot[] = {
+        OP_ABX(SCREEN, 0, 1),
+        OP_ABX(SET32, 0, S_COUNT),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    tpkg_set_code(&s_pkg, F_BOOT, types, 1, boot, 3);
+    static const uint32_t any_size[] = {ERB_CK_WIDTH, ERB_CK_END};
+    s_pkg.check_words = any_size;
+    s_pkg.check_word_count = 2u;
+    s_pkg.panel_checks[0] = 0u;
+    s_config.screen_w = 321;
+    s_config.screen_h = 123;
+    CHECK(load(), "a package loads on a size it never names");
+    CHECK(slot_int(S_COUNT) == 123, "SCREEN reads the panel's height");
+    ERNode* root = slot_node(S_ROOT, 0);
+    CHECK(root && root->layout.width == 321 && root->layout.height == 123, "the root fills the panel");
+    erb_unload();
+    s_config.screen_w = TPKG_SCREEN;
+    s_config.screen_h = TPKG_SCREEN;
+}
+
 static void test_int_arithmetic(void)
 {
     base();
@@ -1070,6 +1096,7 @@ int main(void)
     backend.fill_rect = null_fill;
     embedded_renderer_set_backend(&backend);
 
+    test_screen();
     test_int_arithmetic();
     test_int64_arithmetic();
     test_float_rules();

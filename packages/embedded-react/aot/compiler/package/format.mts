@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 5;
+export const FORMAT_MINOR = 6;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -108,6 +108,7 @@ export const Table = {
   inputs: 17,
   interps: 18,
   keyboard: 19,
+  checks: 20,
 } as const;
 
 /** Arena region kinds, written in this order. */
@@ -303,6 +304,51 @@ export type PropKindName = keyof typeof PropKind;
 /** One instruction: its name, its form, and its length in words. */
 export type OpcodeInfo = [name: string, form: 'abc' | 'abx', words: 1 | 2];
 
+/** A panel whose layout fits every screen names this instead of a check. */
+export const CHECK_ALWAYS = 0xffffffff;
+
+/** Values a layout check may hold on its stack, and in its locals. */
+export const CHECK_STACK = 16;
+export const CHECK_LOCALS = 48;
+
+/** The ops of a layout check (erb_format.h's ERB_CK_ values). */
+export const CheckOp = {
+  end: 1,
+  width: 2,
+  height: 3,
+  pushi: 4,
+  pushk: 5,
+  load: 6,
+  store: 7,
+  add: 8,
+  sub: 9,
+  mul: 10,
+  div: 11,
+  neg: 12,
+  math: 13,
+  toint: 14,
+  idiv: 15,
+  lt: 16,
+  gt: 17,
+  le: 18,
+  ge: 19,
+  eq: 20,
+  ne: 21,
+  not: 22,
+  and: 23,
+  or: 24,
+  select: 25,
+} as const;
+
+/** The whole-number divisions of a check's idiv op (erb_format.h's ERB_CK_IDIV_ values). */
+export const CheckDivide = {
+  trunc: 0,
+  floor: 1,
+  ceil: 2,
+  round: 3,
+  mod: 4,
+} as const;
+
 /** ERB_OPCODES, in order: an opcode is its index here plus one (0 is never an instruction). */
 export const OPCODES: readonly OpcodeInfo[] = [
   ['MOVE', 'abc', 1],
@@ -441,6 +487,7 @@ export const OPCODES: readonly OpcodeInfo[] = [
   ['VPAINT', 'abc', 1],
   ['VGRAD', 'abc', 1],
   ['VCOMMITP', 'abx', 1],
+  ['SCREEN', 'abx', 1],
 ];
 
 /*----------------------------------------------------------------------------------------------------------------------

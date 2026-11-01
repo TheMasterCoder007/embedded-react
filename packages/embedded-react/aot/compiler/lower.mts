@@ -32,6 +32,7 @@ import {
   declaredNames,
   moduleScope,
   collectState,
+  settleBootInitials,
   findReturnJSX,
   collectComponents,
   collectHelpers,
@@ -198,7 +199,7 @@ export function lowerApp(
   wide: SlotWidths,
   stores: IrSlotStore[],
 ): IrApp {
-  beginBoot();
+  beginBoot(src);
   try {
     const {result, checks} = lowerWithChecks(() =>
       lowerProgram(src, opts, wide, stores),
@@ -329,6 +330,7 @@ function lowerProgram(
 
   // A value worked out at boot lowers its slot against the app's environment.
   setBootLowering(env, lowerExpr);
+  settleBootInitials(state.byName.values());
 
   // Before emit, fold each memo or inline its C expression at each use (no cache needed: dep tracking re-applies).
   for (const [name, expr] of memos) {

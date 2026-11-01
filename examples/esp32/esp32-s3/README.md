@@ -63,7 +63,7 @@ No QuickJS: the firmware reserves an arena and loads a compiled package from one
 ```bash
 idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" set-target esp32s3
 idf.py -B build-flow-b -D SDKCONFIG=sdkconfig.flow-b -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.flow-b" build flash
-npx embedded-react build --aot --screen 800x480                           # → dist/app.erpkg
+npx embedded-react build --aot                                            # → dist/app.erpkg
 npx embedded-react flash --board esp32-s3 --port PORT
 ```
 

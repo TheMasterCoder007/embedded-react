@@ -291,6 +291,152 @@ static void test_panel_tables(void)
     EXPECT(ERB_ERR_TABLE, "panel 0's tables only, on the second panel");
 }
 
+/** @brief A check that passes on a panel at least arg wide: WIDTH, PUSHI, GE, END. */
+#define WIDE_CHECK(width) ERB_CK_WIDTH, ERB_CK_PUSHI | ((uint32_t)(width) << 8), ERB_CK_GE, ERB_CK_END
+
+/** @brief The base package with @p words as its only check. */
+static TPkg* checked(const uint32_t* words, uint32_t count)
+{
+    base();
+    s_pkg.check_words = words;
+    s_pkg.check_word_count = count;
+    s_pkg.panel_checks[0] = 0u;
+    return &s_pkg;
+}
+
+static void test_layout_checks(void)
+{
+    /* The first panel whose check passes, on sizes no panel names. */
+    static const uint32_t wide_then_any[] = {WIDE_CHECK(400)};
+    two_panels();
+    s_pkg.check_words = wide_then_any;
+    s_pkg.check_word_count = 4u;
+    s_pkg.panel_checks[0] = 0u;
+    s_pkg.panel_checks[1] = ERB_CHECK_ALWAYS;
+    s_config.screen_w = 500;
+    EXPECT(ERB_OK, "the first layout whose check passes");
+    CHECK(s_program.panel == 0u, "it is the first panel");
+    two_panels();
+    s_pkg.check_words = wide_then_any;
+    s_pkg.check_word_count = 4u;
+    s_pkg.panel_checks[0] = 0u;
+    s_pkg.panel_checks[1] = ERB_CHECK_ALWAYS;
+    s_pkg.panels[0].node_count = ERUI_MAX_NODES + 1u;
+    s_config.screen_w = 399;
+    EXPECT(ERB_OK, "a layout too big for the firmware, on a screen that doesn't pick it");
+    CHECK(s_program.panel == 1u, "it falls to the second panel");
+
+    base();
+    s_pkg.panels[0].node_count = ERUI_MAX_NODES + 1u;
+    s_pkg.check_words = wide_then_any;
+    s_pkg.check_word_count = 4u;
+    s_pkg.panel_checks[0] = ERB_CHECK_ALWAYS;
+    EXPECT(ERB_ERR_TOO_BIG, "a layout too big for the firmware, on a screen that picks it");
+
+    checked(wide_then_any, 4u);
+    s_config.screen_w = 399;
+    EXPECT(ERB_ERR_NO_PANEL, "a screen no check passes");
+
+    /* What the VM's arithmetic gives, through each kind of op. */
+    static const uint32_t math[] = {
+        ERB_CK_WIDTH,
+        ERB_CK_PUSHI | (3u << 8),
+        ERB_CK_DIV,
+        ERB_CK_STORE | (5u << 8),
+        ERB_CK_LOAD | (5u << 8),
+        ERB_CK_MATH | ((uint32_t)ERB_MATH_FLOOR << 8),
+        ERB_CK_PUSHI | (2u << 8),
+        ERB_CK_MATH | ((uint32_t)ERB_MATH_MAX << 8),
+        ERB_CK_HEIGHT,
+        ERB_CK_PUSHI | (7u << 8),
+        ERB_CK_IDIV | ((uint32_t)ERB_CK_IDIV_MOD << 8),
+        ERB_CK_ADD,
+        ERB_CK_PUSHK,
+        0x00000000u,
+        0x40590000u, /* 100.0 */
+        ERB_CK_EQ,
+        ERB_CK_NOT,
+        ERB_CK_NOT,
+        ERB_CK_PUSHI | (1u << 8),
+        ERB_CK_PUSHI,
+        ERB_CK_SELECT,
+        ERB_CK_END,
+    };
+    checked(math, sizeof(math) / sizeof(math[0]));
+    s_config.screen_w = 297; /* 297 / 3 = 99 */
+    s_config.screen_h = 8;   /* 8 % 7 = 1 */
+    EXPECT(ERB_OK, "a check that works the size out");
+    checked(math, sizeof(math) / sizeof(math[0]));
+    s_config.screen_w = 300;
+    s_config.screen_h = 8;
+    EXPECT(ERB_ERR_NO_PANEL, "the same check on a size it rejects");
+
+    /* A malformed check fails the load, and never reads past its table. */
+    static const uint32_t no_op[] = {0u};
+    checked(no_op, 1u);
+    EXPECT(ERB_ERR_TABLE, "a check op of 0");
+    static const uint32_t unknown[] = {ERB_CK_COUNT_};
+    checked(unknown, 1u);
+    EXPECT(ERB_ERR_TABLE, "an unknown check op");
+    static const uint32_t underflow[] = {ERB_CK_ADD};
+    checked(underflow, 1u);
+    EXPECT(ERB_ERR_TABLE, "a check that pops an empty stack");
+    static const uint32_t no_end[] = {ERB_CK_WIDTH};
+    checked(no_end, 1u);
+    EXPECT(ERB_ERR_TABLE, "a check that runs off its table");
+    static const uint32_t cut_constant[] = {ERB_CK_PUSHK, 0u};
+    checked(cut_constant, 2u);
+    EXPECT(ERB_ERR_TABLE, "a constant cut off by the table's end");
+    static const uint32_t far_local[] = {ERB_CK_LOAD | (ERB_CHECK_LOCALS << 8), ERB_CK_END};
+    checked(far_local, 2u);
+    EXPECT(ERB_ERR_TABLE, "a local past the check's locals");
+    static const uint32_t negative_local[] = {ERB_CK_LOAD | 0xFFFFFF00u, ERB_CK_END};
+    checked(negative_local, 2u);
+    EXPECT(ERB_ERR_TABLE, "a negative local");
+    static const uint32_t bad_math[] = {ERB_CK_WIDTH, ERB_CK_MATH | ((uint32_t)ERB_MATH_COUNT_ << 8), ERB_CK_END};
+    checked(bad_math, 3u);
+    EXPECT(ERB_ERR_TABLE, "an unknown math function");
+    static const uint32_t bad_division[] = {
+        ERB_CK_WIDTH, ERB_CK_WIDTH, ERB_CK_IDIV | ((uint32_t)ERB_CK_IDIV_COUNT_ << 8), ERB_CK_END};
+    checked(bad_division, 4u);
+    EXPECT(ERB_ERR_TABLE, "an unknown division");
+    static uint32_t deep[ERB_CHECK_STACK + 1u];
+    for (uint32_t index = 0; index < ERB_CHECK_STACK + 1u; index++)
+    {
+        deep[index] = ERB_CK_WIDTH;
+    }
+    checked(deep, ERB_CHECK_STACK + 1u);
+    EXPECT(ERB_ERR_TABLE, "a check that overflows its stack");
+    static const uint32_t end_only[] = {ERB_CK_WIDTH, ERB_CK_END};
+    checked(end_only, 2u)->panel_checks[0] = 2u;
+    EXPECT(ERB_ERR_TABLE, "a panel's check past the table");
+    checked(end_only, 2u)->omit[ERB_TABLE_CHECKS] = true;
+    EXPECT(ERB_ERR_TABLE, "a panel's check with no table");
+
+    /* Only the chosen panel's needs have to fit. */
+    static const uint32_t narrow_then_any[] = {ERB_CK_WIDTH, ERB_CK_PUSHI | (400u << 8), ERB_CK_LT, ERB_CK_END};
+    checked(narrow_then_any, 4u);
+    s_pkg.panels[1] = s_pkg.panels[0];
+    s_pkg.panel_count = 2;
+    s_pkg.panel_checks[1] = ERB_CHECK_ALWAYS;
+    s_pkg.needs[2] = (TNeed){ERB_RES_VECTOR_NODES, 100000u};
+    s_pkg.need_panels[2] = 1u;
+    s_pkg.need_count = 3;
+    EXPECT(ERB_OK, "another layout's need that doesn't fit");
+    s_config.screen_w = 400;
+    s_pkg.need_panels[2] = 1u;
+    EXPECT(ERB_ERR_TOO_BIG, "the chosen layout's need that doesn't fit");
+    base()->need_panels[0] = 1u;
+    EXPECT(ERB_ERR_TABLE, "a need for a panel the package doesn't declare");
+
+    /* A package before minor 6 still matches its exact sizes. */
+    base()->minor = ERB_FORMAT_MINOR_CHECKS - 1u;
+    EXPECT(ERB_OK, "an older package on its size");
+    base()->minor = ERB_FORMAT_MINOR_CHECKS - 1u;
+    s_config.screen_w = TPKG_SCREEN + 1u;
+    EXPECT(ERB_ERR_NO_PANEL, "an older package on another size");
+}
+
 static void test_strings(void)
 {
     base()->strings[STR_BOOM] = "\xC3\x28";
@@ -1262,6 +1408,7 @@ int main(void)
     test_panel_and_needs();
     test_directory();
     test_panel_tables();
+    test_layout_checks();
     test_strings();
     test_arena();
     test_slots();

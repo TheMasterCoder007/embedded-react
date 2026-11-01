@@ -84,10 +84,9 @@ in the firmware checks and runs it. There is no JS engine and no heap, and chang
 UI needs no firmware rebuild. Tracked under the
 [`flow-b`](https://github.com/TheMasterCoder007/embedded-react/labels/flow-b) label.
 
-- **One firmware for every panel.** A package holds every screen size the project
-  declares. The firmware passes the panel size at boot and the package picks its layout.
-  The build compiles every declared size, so a layout that fails on one panel fails the
-  build.
+- **One firmware for every panel.** A package holds a layout for each of the app's
+  breakpoints, and declares no sizes. The firmware passes the panel size at boot and the
+  package picks its layout. A layout that doesn't compile fails the build.
 - **Fixed memory.** The firmware reserves one block of RAM, and the package states exactly
   how much it needs. The program, text, vector data, and assets are read in place from
   flash. A package that does not fit shows the error screen instead of loading.

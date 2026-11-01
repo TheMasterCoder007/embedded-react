@@ -89,7 +89,7 @@ JSX  →  AOT compiler (packages/embedded-react/aot)  →  app.erpkg, or app.gen
                                                     calls er_scene.h directly   (engine/)
 ```
 
-`npx embedded-react build --aot --screen 240x320` writes a package, and `npx embedded-react flash` writes it
+`npx embedded-react build --aot` writes a package, and `npx embedded-react flash` writes it
 to a flash slot, where the firmware's Flow B runtime verifies and runs it, so changing the UI needs no firmware
 rebuild. `--c` writes generated C instead, which your firmware compiles in and calls `er_app_build()` at boot;
 it stays until packages replace it. Everything the engine does at runtime in Flow A it still does
@@ -111,8 +111,9 @@ here: layout, rendering, touch, scrolling, and animation are engine features, no
   conditionals, `.map` lists, dynamic styles, the `Animated` API, `PanResponder`, `<Svg>` and
   `<Dial>`. It rejects what it cannot lower to C, and says so at build time with the file and line.
   [The AOT subset](../guides/aot-subset.md) lists the rules.
-- **A fixed panel size.** The size you pass to `--screen` is baked in, so a responsive app resolves
-  to exactly one layout. Build once per board.
+- **Layouts are picked at boot, not rearranged while running.** A package holds a layout for each of
+  the app's breakpoints, and the panel's resolution picks one. See
+  [the AOT subset](../guides/aot-subset.md#assets-and-screen-size).
 - **Every UI change is a rebuild and a reflash**, because the app is part of the firmware image.
 - No hot reload and no on-device state preservation.
 

@@ -26,11 +26,14 @@ import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {
   bootCheckpoint,
+  bootSlotOf,
+  buildValueOf,
   foldBoot,
   isBoot,
   nameBootValues,
   screenBinding,
 } from './boot.mts';
+import type {BootValue} from './boot.mts';
 import {
   evalStaticOrThrow,
   evalStatic,
@@ -332,6 +335,56 @@ function checkInitialFits(
 }
 
 /**
+ * A state's initial value, when it is a number or a boolean derived from `screen`. A string stays folded: a closed
+ * set of strings is an interned enum, and there are only as many layouts as strings.
+ *
+ * @param initArg  The initial value.
+ * @param scope  Compile-time constants it folds against.
+ *
+ * @returns The boot value, or null.
+ */
+function bootNumberOf(initArg: t.Node, scope: Scope): BootValue | null {
+  let value: unknown;
+  try {
+    value = evalStatic(initArg, scope, 'boot');
+  } catch {
+    return null;
+  }
+
+  if (!isBoot(value) || !value.lowerable) return null;
+  const built = buildValueOf(value);
+  return typeof built === 'number' || typeof built === 'boolean' ? value : null;
+}
+
+/**
+ * Settles each initial value derived from `screen`, once slots can be lowered: boot works it out, typed by its
+ * expression so that every panel gets the same slot (`screen.width / 2` is a fraction on every panel, even where it
+ * comes out whole). One boot can't work out is taken at the build's panel.
+ *
+ * @param states  The states.
+ */
+export function settleBootInitials(states: Iterable<StateRecord>): void {
+  for (const state of states) {
+    if (state.kind !== 'scalar' || !state.bootValue) continue;
+    const slot = bootSlotOf(state.bootValue);
+    if (slot?.type.kind === 'float') {
+      state.cType = 'float';
+      state.isBool = false;
+    } else if (slot?.type.kind === 'int' || slot?.type.kind === 'bool') {
+      state.cType = state.widened ? 'i64' : 'int';
+      state.isBool = slot.type.kind === 'bool';
+    }
+
+    if (slot) {
+      state.bootInitial = slot;
+    } else {
+      foldBoot(state.bootValue);
+    }
+    delete state.bootValue;
+  }
+}
+
+/**
  * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
  * name (writes). `prefix` namespaces the C STORAGE so each inlined child instance gets its own slots: the
  * lookup keys stay the bare JS names (`count`), but the C field / array / count derive from `cField`
@@ -442,16 +495,21 @@ export function collectState(
           countMember: `s_${cField}_count`,
         };
       } else {
-        // Scalar state → one s_state field. Fold the initial value; no argument starts it at 0.
-        const initValue = initArg
-          ? evalStaticOrThrow(
-              initArg,
-              scope,
-              `AOT: the initial value of state "${name}" must be a compile-time constant`,
-              'useState(x) initial must be a literal or a constant expression (number, string, ' +
-                'bool, or arithmetic over consts) — not a runtime value or function call.',
-            )
-          : 0;
+        // Scalar state → one s_state field. Fold the initial value; no argument starts it at 0. A number derived
+        // from `screen` is worked out at boot (see settleBootInitials), so it doesn't take a layout per value.
+        const bootValue =
+          !isHost && initArg ? bootNumberOf(initArg, scope) : null;
+        const initValue = bootValue
+          ? buildValueOf(bootValue)
+          : initArg
+            ? evalStaticOrThrow(
+                initArg,
+                scope,
+                `AOT: the initial value of state "${name}" must be a compile-time constant`,
+                'useState(x) initial must be a literal or a constant expression (number, string, ' +
+                  'bool, or arithmetic over consts) — not a runtime value or function call.',
+              )
+            : 0;
 
         // A host value must be a finite number; check it directly, since cTypeOfValue maps non-numbers to int.
         if (isHost && !Number.isFinite(initValue)) {
@@ -536,6 +594,7 @@ export function collectState(
           initial,
           host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
           ...(widened ? {widened} : {}),
+          ...(bootValue ? {bootValue} : {}),
         };
       }
 
@@ -601,14 +660,49 @@ export function findReturnJSX(
 
       // A `return` with a value ends the scan and must return a single JSX element.
       if (stmt.type === 'ReturnStatement' && stmt.argument) {
-        if (stmt.argument.type === 'JSXElement') return stmt.argument;
-        throw new Error(
-          `AOT: the component must return a single JSX element (got ${stmt.argument.type})`,
-        );
+        return returned(stmt.argument);
       }
     }
 
     return null;
+  };
+
+  // The element a `return` gives: a ternary on the panel is decided as a top-level `if` is.
+  const returned = (argument: t.Expression): t.JSXElement => {
+    if (argument.type === 'JSXElement') return argument;
+    if (argument.type !== 'ConditionalExpression') {
+      throw new Error(
+        `AOT: the component must return a single JSX element (got ${argument.type})`,
+      );
+    }
+
+    let testValue;
+    try {
+      testValue = evalStatic(argument.test, scope, 'boot');
+    } catch {
+      throw new Error(
+        'AOT: a ternary the component returns must have a compile-time-constant test (e.g. on the `screen` ' +
+          'global) — runtime layout branching is not supported',
+      );
+    }
+
+    if (isBoot(testValue)) {
+      const restore = bootCheckpoint();
+      try {
+        const merged = mergeBranchElements(
+          argument.test,
+          returned(argument.consequent),
+          returned(argument.alternate),
+        );
+        if (merged) return merged;
+      } catch {
+        /* an outcome that does not compile here is left to the fold, which reports it if it is taken */
+      }
+      restore();
+      testValue = foldBoot(testValue);
+    }
+
+    return returned(testValue ? argument.consequent : argument.alternate);
   };
 
   // What each outcome of an `if` returns (a branch that does not return falls through), merged when it can be.

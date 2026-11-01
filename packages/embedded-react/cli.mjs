@@ -64,8 +64,10 @@ Usage:
                                                            upload to the device's config region)
                                                  --aot   → app.erpkg (Flow B package, for the Flow B
                                                            runtime: write it to a slot with flash)
-                                                 --aot --screen <WxH>,<WxH>  a layout for each panel
-                                                           size (e.g. --screen 240x320,320x240)
+                                                           It has a layout for every panel size:
+                                                           the screen picks one at boot.
+                                                 --aot --screen <WxH>,<WxH>  keep only the layouts
+                                                           those panels pick, to save flash
                                                  --aot --release  → a package without its debug
                                                            table, written beside it as app.erdbg
                                                  --aot --bake  → app.erpkg.c (the package as a const
@@ -429,9 +431,8 @@ async function buildAot(
     const svgArtifacts = await bakeSvgArtifacts(src, appDir);
     // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
     // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
-    // The target panel size (--screen <WxH>) folds a responsive app's `screen.width` branch to the one
-    // that the board renders. Without it, the compiler falls back to ER_AOT_SCREEN_W/H, then 800x480. A
-    // package takes several, and has a layout for each.
+    // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the
+    // sizes pick. The C output is for one panel: --screen, then ER_AOT_SCREEN_W/H, then 800x480.
     const compile = asPackage ? compilePackage : compileSource;
     result = compile(src, projectIdentity(appPath), {
       filename: appPath,
@@ -586,9 +587,8 @@ async function build(args) {
   const outIdx = args.indexOf('--out');
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
 
-  // --screen <WxH> (AOT only): the target panel size, baked so a responsive app folds to the branch that
-  // board renders (e.g., 240x320 → the compact layout). Flow A reads the screen from the host at runtime. A
-  // package takes a comma-separated list, one layout for each.
+  // --screen <WxH> (AOT only): the panels to keep layouts for, comma-separated. Optional: a package has every
+  // layout without it. The C output takes one, its panel. Flow A reads the screen from the host at runtime.
   const screenIdx = args.indexOf('--screen');
   let screens = null;
   if (screenIdx >= 0) {
@@ -640,7 +640,7 @@ function readPackageOrExit(cwd, explicit) {
   const path = resolve(cwd, explicit ?? 'dist/app.erpkg');
   if (!existsSync(path)) {
     console.error(
-      `No package at ${path}. Build one with: embedded-react build --aot --screen <WxH>`,
+      `No package at ${path}. Build one with: embedded-react build --aot`,
     );
     process.exit(1);
   }

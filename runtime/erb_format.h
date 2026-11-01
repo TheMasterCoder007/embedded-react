@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 5u
+#define ERB_FORMAT_MINOR 6u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -45,6 +45,12 @@
  * the section is one table for all panels, with a 16-byte header and a u32 function count.
  */
 #define ERB_FORMAT_MINOR_DEBUG_PANELS 5u
+
+/**
+ * @brief The minor whose panels name a layout check instead of a width and height, and whose needs name their panel.
+ * Before it, a panel is for one exact size and every need is every panel's.
+ */
+#define ERB_FORMAT_MINOR_CHECKS 6u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -91,7 +97,8 @@ enum
 #define ERB_HEADER_TABLE_COUNT_AT 22u
 
 /** @brief Panel. */
-#define ERB_PANEL_WIDTH_AT 0u
+#define ERB_PANEL_CHECK_AT 0u /**< Since minor 6: the check's first word in the checks table. */
+#define ERB_PANEL_WIDTH_AT 0u /**< Before minor 6. */
 #define ERB_PANEL_HEIGHT_AT 2u
 #define ERB_PANEL_ARENA_BYTES_AT 4u
 #define ERB_PANEL_NODE_COUNT_AT 8u
@@ -101,6 +108,7 @@ enum
 
 /** @brief Need. */
 #define ERB_NEED_RESOURCE_AT 0u
+#define ERB_NEED_PANEL_AT 2u /**< Since minor 6: the panel it is for, or ERB_NONE for every panel. */
 #define ERB_NEED_AMOUNT_AT 4u
 
 /** @brief Table directory entry. */
@@ -145,7 +153,8 @@ enum
     ERB_TABLE_INPUTS = 17,
     ERB_TABLE_INTERPS = 18,  /**< Since minor 1. */
     ERB_TABLE_KEYBOARD = 19, /**< Since minor 3. */
-    ERB_TABLE_COUNT_ = 20,
+    ERB_TABLE_CHECKS = 20,   /**< Since minor 6. */
+    ERB_TABLE_COUNT_ = 21,
 };
 
 /** @brief Record sizes, in bytes. */
@@ -418,10 +427,10 @@ enum
 /** @brief Binding kinds. */
 enum
 {
-    ERB_BIND_EVENT = 1,    /**< event: EREventType; target: a handler for it. */
-    ERB_BIND_QUERY = 2,    /**< event: ERResponderQuery; target: a query function for it. */
-    ERB_BIND_ANIMATED = 3, /**< event: prop id; target: an animated-value slot. */
-    ERB_BIND_TAPE = 4,     /**< target: a tape, committed when the node is built. */
+    ERB_BIND_EVENT = 1,        /**< event: EREventType; target: a handler for it. */
+    ERB_BIND_QUERY = 2,        /**< event: ERResponderQuery; target: a query function for it. */
+    ERB_BIND_ANIMATED = 3,     /**< event: prop id; target: an animated-value slot. */
+    ERB_BIND_TAPE = 4,         /**< target: a tape, committed when the node is built. */
     ERB_BIND_INTERPOLATED = 5, /**< event: prop id; target: an interpolation. Since minor 1. */
 };
 
@@ -494,6 +503,69 @@ enum
     ERB_EVT_FINISHED = 14, /**< bool: an animation ran to its end (in an ERB_FN_ANIM_DONE function). */
     ERB_EVT_TOUCHES = 15,  /**< int: fingers down when the touch arrived. Since minor 2. */
     ERB_EVT_COUNT_ = 16,
+};
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Layout checks
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief A panel whose layout fits every screen names this instead of a check. */
+#define ERB_CHECK_ALWAYS 0xFFFFFFFFu
+
+/** @brief Values a check may hold on its stack, and in its locals. */
+#define ERB_CHECK_STACK 16u
+#define ERB_CHECK_LOCALS 48u
+
+/** @brief Words one load may run across all the panels' checks. */
+#define ERB_CHECK_BUDGET 65536u
+
+/** @brief A check's word: the op in the low byte, its signed argument above it. */
+#define ERB_CHECK_OP(word) ((uint8_t)(word))
+#define ERB_CHECK_ARG(word) ((int32_t)(word) >> 8)
+
+/**
+ * @brief A check's ops: a stack machine over doubles with no jumps, run before anything else in the package is
+ * checked. It ends at END, which passes when the value on top is true. 0 is never an op.
+ */
+enum
+{
+    ERB_CK_END = 1,
+    ERB_CK_WIDTH,  /**< Push the screen's width. */
+    ERB_CK_HEIGHT, /**< Push the screen's height. */
+    ERB_CK_PUSHI,  /**< Push the argument. */
+    ERB_CK_PUSHK,  /**< Push the double in the next two words, low word first. */
+    ERB_CK_LOAD,   /**< Push local arg. */
+    ERB_CK_STORE,  /**< Pop into local arg. */
+    ERB_CK_ADD,
+    ERB_CK_SUB,
+    ERB_CK_MUL,
+    ERB_CK_DIV,
+    ERB_CK_NEG,
+    ERB_CK_MATH,  /**< An ERB_MATH_ function, by the argument. */
+    ERB_CK_TOINT, /**< To a whole number toward zero: NaN as 0, saturating at the int range. */
+    ERB_CK_IDIV,  /**< Whole-number division with the VM's rules, by an ERB_CK_IDIV_ argument. */
+    ERB_CK_LT,
+    ERB_CK_GT,
+    ERB_CK_LE,
+    ERB_CK_GE,
+    ERB_CK_EQ,
+    ERB_CK_NE,
+    ERB_CK_NOT,
+    ERB_CK_AND,
+    ERB_CK_OR,
+    ERB_CK_SELECT, /**< Pop the alternate, the consequent and the test; push the one the test picks. */
+    ERB_CK_COUNT_,
+};
+
+/** @brief ERB_CK_IDIV's arguments. */
+enum
+{
+    ERB_CK_IDIV_TRUNC = 0,
+    ERB_CK_IDIV_FLOOR = 1,
+    ERB_CK_IDIV_CEIL = 2,
+    ERB_CK_IDIV_ROUND = 3,
+    ERB_CK_IDIV_MOD = 4,
+    ERB_CK_IDIV_COUNT_ = 5,
 };
 
 /** @brief FMATH and DMATH functions. Those from ERB_MATH_MIN on take two operands. */
@@ -725,7 +797,9 @@ enum
     /* Vectors, since minor 3 */                                                                                       \
     X(VPAINT,   ERB_F_ABC, 1, 0, ERBO_R, ERBO_K, ERBO_K)  /* field C of the scratch's paint B = A */                   \
     X(VGRAD,    ERB_F_ABC, 1, 0, ERBO_R, ERBO_K, ERBO_K)  /* field C of the scratch's gradient B = A */                \
-    X(VCOMMITP, ERB_F_ABX, 1, 0, ERBO_N, ERBO_K, ERBO_X)  /* the scratch, with its own paints, onto node A */
+    X(VCOMMITP, ERB_F_ABX, 1, 0, ERBO_N, ERBO_K, ERBO_X)  /* the scratch, with its own paints, onto node A */       \
+    /* The panel, since minor 6 */                                                                                     \
+    X(SCREEN,   ERB_F_ABX, 1, 1, ERBO_I, ERBO_K, ERBO_X)  /* A = the panel's width (Bx 0) or height (Bx 1) */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */

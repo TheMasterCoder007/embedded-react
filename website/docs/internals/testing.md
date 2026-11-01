@@ -111,7 +111,8 @@ reworded error, say), check that `aot:same` shows only that change, then record 
 package. Both render through the software backend with no window, run the scenario's taps, and must
 end on the same pixels. A frame that differs is written as PNGs (C, VM, and a diff) under
 `tools/erb-parity/build/out`. Each package's resource report is printed as it is built. A demo's
-package has a layout for each of its boards' panels, and its scenarios run at each of them. Packages are
+package has a layout for each of its boards' panels, and its scenarios run at each of them. Others build the
+package with no size named, then run that one package at each board's size and at sizes nothing else names. Packages are
 debug builds, so the runtime checks each one's debug table as it loads it; a few scenarios build for
 release instead.
 

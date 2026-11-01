@@ -34,6 +34,7 @@ import {FLAG_DEBUG, Resource, Table} from './format.mts';
 import {lowerPackage} from './lower.mts';
 import {writeDebug, writeProgram} from './writer.mts';
 import type {ResolvedOptions} from '../options.mts';
+import type {IrBootAssumption} from '../ir/boot.mts';
 import type {IrSlotStore} from '../ir/source.mts';
 import type {SlotWidths} from '../ir/types.mts';
 import type {AssetImport} from '../types.mts';
@@ -47,6 +48,8 @@ import type {Program, ProgramPanel, TableSize} from './writer.mts';
 export interface PanelProgram {
   program: Program;
   images: AssetImport[];
+  /** What the compile assumed of its panel, which is the layout's check. */
+  assumptions: IrBootAssumption[];
 }
 
 /** What one package compile produces before the assets are baked. */
@@ -108,7 +111,11 @@ export function compilePanel(
   stores: IrSlotStore[],
 ): PanelProgram {
   const app = lowerApp(src, opts, wide, stores);
-  return {program: lowerPackage(app, opts), images: app.images};
+  return {
+    program: lowerPackage(app, opts),
+    images: app.images,
+    assumptions: app.boot.assumptions,
+  };
 }
 
 /**
@@ -179,7 +186,8 @@ export function packPackage(
 }
 
 /**
- * The resource report: what each panel needs of the firmware's RAM and nodes, and the flash each section takes.
+ * The resource report: what each layout needs of the firmware's RAM and nodes, named by a size that picks it, and
+ * the flash each section takes.
  *
  * @param result  The compiled program.
  * @param file  The finished package.
@@ -192,7 +200,7 @@ export function resourceReport(
 ): string[] {
   const panels = result.panels.map(
     panel =>
-      `  panel ${panel.width}x${panel.height}: arena ${panel.arenaBytes} B, ${panel.nodeCount} nodes`,
+      `  layout ${panel.width}x${panel.height}: arena ${panel.arenaBytes} B, ${panel.nodeCount} nodes`,
   );
   const sections = file.sections.map(
     section =>

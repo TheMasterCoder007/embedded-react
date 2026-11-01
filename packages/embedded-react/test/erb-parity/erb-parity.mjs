@@ -69,10 +69,40 @@ const THERMOSTAT_PANELS = [
 ];
 const WATCH_PANELS = [[240, 280]];
 
+// `everySize` builds the package with no sizes named, as `embedded-react build --aot` does. One package for the
+// S3's 800x480, the CYD's 240x320 and the RP2040's 240x280, then sizes nothing else here names.
+const everySize = (name, file, sizes) =>
+  sizes.map(screen => ({
+    name: `${name}-${screen.join('x')}`,
+    file,
+    screen,
+    everySize: true,
+  }));
+
 // `taps` is "x,y x,y ...", the same for both hosts; "x,y>x2,y2" is a drag. `settle` is how many ms the hosts run after the last tap
 // before they take the frame (500 when it is left out), so a scenario can sample an animation as it runs. `release`
 // builds the package for release, without its debug table.
 const SCENARIOS = [
+  ...everySize('thermostat-every-size', demo('thermostat'), [
+    [800, 480],
+    [240, 320],
+    [240, 280],
+    [320, 240],
+    [480, 800],
+    [277, 391],
+    [1013, 577],
+  ]),
+  ...everySize('watch-every-size', demo('watch-face'), [
+    [240, 280],
+    [233, 251],
+  ]),
+  ...everySize('responsive', fixture('responsive'), [
+    [240, 320],
+    [320, 240],
+    [500, 300],
+    [333, 333],
+    [641, 211],
+  ]),
   {name: 'layout', file: fixture('layout'), screen: [240, 320]},
   {name: 'text', file: fixture('text'), screen: [240, 320]},
   // Focusing the TextInput brings up the engine's keyboard, with no app code involved.
@@ -614,7 +644,10 @@ async function compileScenario(scenario) {
   // The package first: one that can't be lowered yet skips the scenario before anything is built.
   const packaged = compilePackage(src, scenario.name, {
     ...options,
-    screens: (scenario.panels ?? [scenario.screen]).map(size),
+    screens: scenario.everySize
+      ? undefined
+      : (scenario.panels ?? [scenario.screen]).map(size),
+    screen: scenario.everySize ? undefined : options.screen,
     release: scenario.release,
   });
   const packageImages = images(packaged);

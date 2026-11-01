@@ -35,6 +35,7 @@
  *   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
  *   npm run aot -- watch-face        # a specific demo by folder name
  *   npm run aot -- <demo> --package  # a Flow B package (dist/app.erpkg) instead of C
+ *   npm run aot -- <demo> --screen 240x320  # the panel the C output is for, or the panels a package keeps
  *
  * This file is the entry: compileSource(src) compiles a source string (pure, so it can be unit-tested on
  * inline JSX), and the CLI at the bottom reads a demo's App.jsx and writes dist/app.gen.{c,h}. The
@@ -99,9 +100,19 @@ import {
   packPackage,
   resourceReport,
 } from './compiler/package/assemble.mts';
-import type {CompileOptions, ResolvedOptions} from './compiler/options.mts';
+import {runCheck} from './compiler/package/checks.mts';
+import {SizeSearch} from './compiler/package/layouts.mts';
+import type {
+  CompileOptions,
+  ResolvedOptions,
+  Screen,
+} from './compiler/options.mts';
 import type {CompileResult} from './compiler/assemble.mts';
-import type {PackageResult} from './compiler/package/assemble.mts';
+import type {
+  PackageResult,
+  PanelProgram,
+} from './compiler/package/assemble.mts';
+import type {LayoutCheck} from './compiler/package/checks.mts';
 import type {IrSlotStore} from './compiler/ir/source.mts';
 import type {SlotWidths} from './compiler/ir/types.mts';
 
@@ -113,6 +124,12 @@ const aotDir = dirname(fileURLToPath(import.meta.url)); // packages/embedded-rea
 const repoRoot = resolve(aotDir, '../../..');
 const demosDir = resolve(repoRoot, 'demos');
 const distDir = resolve(aotDir, '..', 'dist');
+
+/** The most layouts a package may hold. An app that changes at more sizes fails the build instead of growing. */
+const MAX_LAYOUTS = 16;
+
+/** Where the search for an app's layouts starts. */
+const FIRST_SIZE: Screen = {width: 240, height: 320};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -221,9 +238,55 @@ export function compileSource(
 }
 
 /**
- * Public entry for the package output: compile JSX source to a Flow B program section, with a layout for each
- * panel in opts.screens (or the one screen), and its debug section. Each panel is compiled as compileSource
- * compiles for it. Errors are annotated as compileSource's are.
+ * The sizes a package build was told to keep layouts for: opts.screens, opts.screen or ER_AOT_SCREEN_W/H.
+ *
+ * @param opts  The build's options.
+ *
+ * @returns The sizes, or null to find every layout.
+ */
+function requestedScreens(opts: CompileOptions): Screen[] | null {
+  if (opts.screens?.length) return opts.screens;
+  if (opts.screen) return [opts.screen];
+  const fromEnv = (name: string): boolean =>
+    (process.env[name] ?? '').trim() !== '';
+  return fromEnv('ER_AOT_SCREEN_W') || fromEnv('ER_AOT_SCREEN_H')
+    ? [resolveOptions(opts).screen]
+    : null;
+}
+
+/**
+ * The error for an app with too many layouts, naming the value that took the most different values across them.
+ *
+ * @param panels  The layouts so far.
+ *
+ * @returns The error.
+ */
+function tooManyLayouts(panels: PanelProgram[]): Error {
+  const values = new Map<string, Set<unknown>>();
+  for (const {assumptions} of panels) {
+    for (const assumption of assumptions) {
+      const source = assumption.source ?? 'a value derived from `screen`';
+      const seen = values.get(source) ?? new Set<unknown>();
+      seen.add(assumption.kind === 'value' ? assumption.value : seen.size);
+      values.set(source, seen);
+    }
+  }
+  const [worst] = [...values].sort(
+    ([, left], [, right]) => right.size - left.size,
+  )[0] ?? ['the app'];
+  return new Error(
+    `AOT: this app needs more than ${MAX_LAYOUTS} layouts, because \`${worst}\` changes what is compiled at ` +
+      'too many sizes.\n\nA breakpoint picks between a few layouts; a value worked out from `screen` belongs in ' +
+      'a style, which boot works out. To build for fixed panels, name them: --screen 240x320,800x480.',
+  );
+}
+
+/**
+ * Public entry for the package output: compile JSX source to a Flow B program section, and its debug section.
+ *
+ * With no sizes named, it finds the app's layouts: it compiles one, finds a size that layout's check rejects, and
+ * compiles again until every size has a layout. Named sizes keep only the layouts they pick. Each layout is compiled
+ * as compileSource compiles for its size, and errors are annotated as compileSource's are.
  *
  * @param src  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file an error names when opts has none.
@@ -236,19 +299,56 @@ export function compilePackage(
   demo = 'app',
   opts: CompileOptions = {},
 ): PackageResult {
-  const screens = opts.screens?.length ? opts.screens : [opts.screen];
-  const seen = new Set<string>();
-  const panels = screens.map(screen => {
-    const resolved = resolveOptions({...opts, screen});
-    const size = `${resolved.screen.width}x${resolved.screen.height}`;
-    if (seen.has(size)) {
-      throw new Error(`AOT: the panel ${size} is listed twice`);
-    }
-    seen.add(size);
-    return compileLocated(src, demo, opts, resolved, (wide, stores) =>
-      compilePanel(src, resolved, wide, stores),
+  const panels: PanelProgram[] = [];
+  const checks = (): LayoutCheck[] =>
+    panels.map(panel => panel.program.panels[0].check);
+  const compileAt = (screen: Screen, searched: boolean): void => {
+    const options = resolveOptions({...opts, screen});
+    const resolved: ResolvedOptions = searched
+      ? {...options, screenFrom: 'search'}
+      : options;
+    panels.push(
+      compileLocated(src, demo, opts, resolved, (wide, stores) =>
+        compilePanel(src, resolved, wide, stores),
+      ),
     );
-  });
+  };
+
+  const requested = requestedScreens(opts);
+  if (requested) {
+    const seen = new Set<string>();
+    for (const screen of requested) {
+      const {width, height} = resolveOptions({...opts, screen}).screen;
+      const size = `${width}x${height}`;
+      if (seen.has(size)) {
+        throw new Error(`AOT: the panel ${size} is listed twice`);
+      }
+      seen.add(size);
+      if (!checks().some(check => runCheck(check, width, height))) {
+        compileAt({width, height}, false);
+      }
+    }
+  } else {
+    const search = new SizeSearch();
+    let next: ReturnType<SizeSearch['next']> = FIRST_SIZE;
+    while (next && next !== 'gave-up') {
+      if (panels.length === MAX_LAYOUTS) throw tooManyLayouts(panels);
+      compileAt(next, true);
+      if (!runCheck(checks().at(-1)!, next.width, next.height)) {
+        throw new Error(
+          `AOT: the layout for ${next.width}x${next.height} doesn't take that size. This is a compiler bug.`,
+        );
+      }
+      next = search.next(checks());
+    }
+    if (next === 'gave-up') {
+      throw new Error(
+        "AOT: can't tell which layouts this app needs: its checks are too intricate to work out for every size. " +
+          'Name the panels it runs on: --screen 240x320,800x480.',
+      );
+    }
+  }
+
   return assemblePackage(
     panels,
     basename(opts.filename || 'App.jsx'),
@@ -265,8 +365,31 @@ if (
   // instead of C.
   const args = process.argv.slice(2);
   const asPackage = args.includes('--package');
+  const screenAt = args.indexOf('--screen');
+  const screens =
+    screenAt < 0
+      ? undefined
+      : (args[screenAt + 1] ?? '').split(',').map(size => {
+          const match = /^([1-9]\d*)x([1-9]\d*)$/i.exec(size);
+          if (!match) {
+            console.error(
+              `AOT: --screen expects <width>x<height> (e.g. --screen 240x320), got: ${args[screenAt + 1] ?? '(nothing)'}`,
+            );
+            process.exit(1);
+          }
+          return {width: Number(match[1]), height: Number(match[2])};
+        });
+  if (screens && screens.length > 1 && !asPackage) {
+    console.error('AOT: the C output takes one --screen size.');
+    process.exit(1);
+  }
   const demo =
-    args.find(arg => !arg.startsWith('--')) || process.env.DEMO || 'thermostat';
+    args.find(
+      (arg, index) =>
+        !arg.startsWith('--') && (screenAt < 0 || index !== screenAt + 1),
+    ) ||
+    process.env.DEMO ||
+    'thermostat';
   const appPath = resolve(demosDir, demo, 'App.jsx');
   const availableDemos = existsSync(demosDir)
     ? readdirSync(demosDir, {withFileTypes: true})
@@ -287,6 +410,8 @@ if (
     const options: CompileOptions = {
       filename: resolve(demosDir, demo, 'App.jsx'),
       svgArtifacts: await bakeSvgArtifacts(src, resolve(demosDir, demo)),
+      screen: screens?.[0],
+      screens,
     };
     result = asPackage
       ? compilePackage(src, demo, options)

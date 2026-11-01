@@ -9,7 +9,7 @@
     "dev:device": "embedded-react dev --device",
     "export": "embedded-react export --out sim-export",
     "build": "embedded-react build",
-    "build:aot": "embedded-react build --aot --screen 240x280"
+    "build:aot": "embedded-react build --aot"
   },
   "dependencies": {
     "embedded-react": "^0.19.0",

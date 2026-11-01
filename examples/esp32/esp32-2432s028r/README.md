@@ -22,8 +22,8 @@ cd examples/esp32/esp32-2432s028r
 idf.py set-target esp32              # first time only
 idf.py -p PORT flash monitor         # Ctrl-] leaves the monitor
 
-# 2. compile the app at the panel size (from your app project, or demos/thermostat)
-npx embedded-react build --aot --screen 240x320
+# 2. compile the app (from your app project, or demos/thermostat)
+npx embedded-react build --aot
 
 # 3. write it to the board's staging slot
 npx embedded-react flash --board esp32-2432s028r --port PORT

@@ -73,8 +73,8 @@ const COMPACT = SW < 300;
 
 The host injects `screen` with the panel's `width` and `height` in pixels before the app runs. In
 Flow A it is the real panel (or the simulator's current size). In Flow B, values derived from it are
-worked out at boot from the real panel, while a branch that changes the tree is compiled for the
-`--screen` size, so one build runs on every panel that picks the same layout; see
+worked out at boot from the real panel, and a branch that changes the tree adds a layout the panel
+picks at boot, so one build runs on every panel; see
 [the AOT subset](../guides/aot-subset.md#assets-and-screen-size).
 [Layout](../concepts/layout.md#designing-for-small-panels) shows the pattern.
 

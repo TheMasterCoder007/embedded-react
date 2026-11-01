@@ -70,7 +70,7 @@ enum
     ANIM_DELAY = 2,   /**< A delay leaf counting down `value` ms. */
     ANIM_WAIT = 3,    /**< A staggered child waiting `value` ms to start. */
     ANIM_DONE = 4,
-    ANIM_STOPPED = 5, /**< Its tree is being stopped; engine callbacks for it are ignored. */
+    ANIM_STOPPED = 5,   /**< Its tree is being stopped; engine callbacks for it are ignored. */
     ANIM_DELAY_DUE = 6, /**< A delay leaf whose time ran out this tick. */
     ANIM_WAIT_DUE = 7,  /**< A staggered child whose wait ran out this tick. */
 };
@@ -1040,6 +1040,12 @@ ErbStatus erb_rt_build(uint16_t template_index, ERNode* parent, ERNode* before, 
             return erb_rt_fault(ERB_ERR_OUT_OF_NODES, "the engine's node pool is empty", NULL, ERB_NONE, 0u);
         }
         erb_rt_props(erb_u16(record + ERB_NODE_PROPS_AT));
+        /* The root fills the real panel, which the layout was not compiled for. */
+        if (index == 0u && template_index == program->root_template)
+        {
+            g_erb_props.width = (int16_t)g_erb.config.screen_w;
+            g_erb_props.height = (int16_t)g_erb.config.screen_h;
+        }
         er_node_set_props(node, &g_erb_props);
 
         const uint16_t handle = erb_u16(record + ERB_NODE_HANDLE_AT);

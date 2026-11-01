@@ -87,10 +87,10 @@ idf.py -p PORT flash
 
 With no package installed yet, the board shows an error screen saying so.
 
-**2. Compile your app.** Pass the panel size, so a responsive app resolves to the right layout:
+**2. Compile your app.** The package holds a layout for every panel size, and the board's resolution picks one:
 
 ```bash
-npx embedded-react build --aot --screen 240x320
+npx embedded-react build --aot
 ```
 
 This writes `dist/app.erpkg` and prints the RAM and flash it needs. The `thermostat` and `watch-face` templates
