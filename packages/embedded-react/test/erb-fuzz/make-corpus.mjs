@@ -36,15 +36,15 @@ const ROOT = resolve(HERE, '../../../..');
 const FIXTURES = join(HERE, '../erb-frames/fixtures');
 const OUT_DIR = join(ROOT, 'tools/erb-fuzz/corpus/seeds');
 
-// As erb-frames.mjs compiles it to fit the engine's default vector nodes.
+// As erb-frames.mts compiles it to fit the engine's default vector nodes.
 const LIST_CAPS = {'svg-rows': 4};
 
 const fixtures = readdirSync(FIXTURES)
-  .filter(file => file.endsWith('.jsx'))
-  .map(file => basename(file, '.jsx'))
+  .filter(file => file.endsWith('.tsx') && !file.endsWith('.d.ts'))
+  .map(file => basename(file, '.tsx'))
   .map(name => ({
     name,
-    file: join(FIXTURES, `${name}.jsx`),
+    file: join(FIXTURES, `${name}.tsx`),
     listCap: LIST_CAPS[name],
   }));
 
@@ -53,7 +53,7 @@ const SEEDS = [
   // A package with no debug table takes another path through the loader and the error screen.
   {
     name: 'counter-release',
-    file: join(FIXTURES, 'counter.jsx'),
+    file: join(FIXTURES, 'counter.tsx'),
     release: true,
   },
   {

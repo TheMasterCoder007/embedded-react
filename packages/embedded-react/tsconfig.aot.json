@@ -20,6 +20,8 @@
   "include": [
     "aot/**/*.mts",
     "aot/**/*.mjs",
+    "test/erb-frames/*.mts",
+    "test/erb-frames/*.d.ts",
     "assets/**/*.mjs",
     "src/embedded-react/named-colors.js",
     "src/embedded-react/svg-ops.js",

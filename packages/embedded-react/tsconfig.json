@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     {"path": "./tsconfig.types.json"},
-    {"path": "./tsconfig.aot.json"}
+    {"path": "./tsconfig.aot.json"},
+    {"path": "./tsconfig.frames.json"}
   ]
 }
