@@ -140,6 +140,6 @@ There is no official datasheet for these boards; the map comes from the communit
 ## Outside the repository
 
 Copy the example folder out on its own and `idf.py build` fetches the engine, the Flow B runtime and the SPI
-backend from GitHub. Flow B needs nothing else, no QuickJS. The engine alone is also on the ESP-IDF Component
-Registry ([Installation](../../getting-started/installation.mdx) has the command), but the runtime and the SPI
-backend are not, so the example uses `FetchContent`, which covers all three.
+backend from GitHub. Flow B needs nothing else, no QuickJS. The engine and the runtime are also on the ESP-IDF
+Component Registry ([Installation](../../getting-started/installation.mdx) has the command), but the SPI backend is
+not, so the example uses `FetchContent`, which covers all three.

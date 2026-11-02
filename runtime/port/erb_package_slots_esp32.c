@@ -16,6 +16,9 @@
 
 #include "erb_package_slots_esp32.h"
 
+/* PlatformIO builds every source for every board, so this compiles to nothing off ESP-IDF. */
+#ifdef ESP_PLATFORM
+
 #include "esp_log.h"
 #include "esp_partition.h"
 
@@ -85,3 +88,5 @@ bool erb_package_slots_esp32_open(ErbPackageSlots* slots)
     }
     return opened;
 }
+
+#endif

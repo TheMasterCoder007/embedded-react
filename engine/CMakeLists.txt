@@ -52,7 +52,7 @@ set(EMBEDDED_REACT_SOURCES
 # The engine compiles with its built-in #ifndef defaults (desktop-sized: 512 nodes / 240x240 scratch), so a
 # RAM-constrained consumer MUST shrink the ERUI_* flags from their own project build, e.g. in the app's
 # CMakeLists.txt:
-#     idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=64;ERUI_SCRATCH_W=8;ERUI_SCRATCH_H=8" APPEND)
+#     idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_W=8;ERUI_SCRATCH_H=8;ERUI_VECTOR_EDGE_CACHE=0" APPEND)
 # (A Kconfig / menuconfig front-end for these knobs is a planned follow-up.) libm is part of the IDF toolchain,
 # so no extra link is needed here.
 # ---------------------------------------------------------------------------

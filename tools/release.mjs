@@ -31,7 +31,7 @@ import {execFileSync} from 'node:child_process';
 import {readFileSync, writeFileSync, existsSync} from 'node:fs';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve} from 'node:path';
-import {versionedFiles} from './sync-version.mjs';
+import {missingTargets, versionedFiles} from './sync-version.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -141,6 +141,13 @@ async function main() {
   if (gitOut('diff', '--cached', '--name-only')) {
     console.error(
       'you have staged changes — commit or unstage them before releasing',
+    );
+    process.exit(1);
+  }
+  const missing = missingTargets();
+  if (missing.length) {
+    console.error(
+      `listed in tools/sync-version.mjs but not found: ${missing.join(', ')}`,
     );
     process.exit(1);
   }

@@ -3,8 +3,8 @@ title: 'Releasing'
 description: 'One lockstep version, release.mjs, the tag-gated publish workflow, and how the docs site follows a release.'
 ---
 
-Every artifact ships at one version: the npm package and the scaffolder, the engine source bundle
-on GitHub, the ESP-IDF component, the PlatformIO library, and the version pins in the READMEs and
+Every artifact ships at one version: the npm package and the scaffolder, the source bundle on
+GitHub, the two ESP-IDF components, the PlatformIO library, and the version pins in the READMEs and
 this site. The single source of truth is the repo-root `VERSION` file, and `tools/sync-version.mjs`
 propagates it everywhere it needs to appear.
 
@@ -18,7 +18,7 @@ git push --follow-tags
 ```
 
 `release.mjs` does five things, in order: sets `VERSION`; runs `sync-version.mjs --set`, which
-writes the version into every manifest and pin (twenty-one files at the time of writing); stamps the
+writes the version into every manifest and pin (twenty-four files at the time of writing); stamps the
 changelog, promoting `## [Unreleased]` to `## [0.15.0] - <date>` with a compare link; commits
 exactly those files as `release: v0.15.0`, never sweeping in unrelated changes; and tags `v0.15.0`.
 `--dry-run` prints the plan and changes nothing. It refuses to run off `master` unless told
@@ -32,15 +32,17 @@ What `sync-version` keeps in step:
 | `create-embedded-react/package.json`                         | The scaffolder                                                                                                     |
 | `demos/*/package.json`                                       | Each demo's `embedded-react` dependency (the scaffolder's templates carry a placeholder it fills at scaffold time) |
 | `library.json`                                               | PlatformIO                                                                                                         |
-| `engine/idf_component.yml`                                   | The ESP-IDF component                                                                                              |
+| `engine/idf_component.yml`                                   | The engine's ESP-IDF component                                                                                     |
+| `runtime/idf_component.yml`                                  | The runtime's ESP-IDF component, and the engine version it depends on                                              |
 | `engine/include/er_version.h`                                | The engine's own version                                                                                           |
 | `README.md`, `website/docs/getting-started/installation.mdx` | The CMake, ESP-IDF and PlatformIO install pins                                                                     |
 | `website/package.json`                                       | The engine the playground runs                                                                                     |
 | `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                |
 
 `node tools/sync-version.mjs --check` fails if any of them drifts, and CI runs it on every push,
-so a hand-edited version cannot land. A missing file is skipped, so a renamed manifest silently
-drops out of the sync: check the list when you move one.
+so a hand-edited version cannot land. A listed file or package folder that's missing, or a version or
+install pin that's no longer in the expected form, fails every mode before anything is written. When
+you move a file or reword an install line, update `sync-version.mjs` to match.
 
 ## The publish workflow
 
@@ -53,9 +55,11 @@ by channel:
    step skips, so a re-run after a transient failure never dies on "cannot publish over existing
    version". The simulator wasm is built with Emscripten in the same job and staged into the package
    before publishing.
-2. **ESP-IDF Component Registry**, from `engine/`, when `IDF_COMPONENT_API_TOKEN` is set.
-3. **PlatformIO**, from the root `library.json`, when `PLATFORMIO_AUTH_TOKEN` is set.
-4. **GitHub Release**, with generated notes and an engine source tarball (`engine`, `backends`,
+2. **ESP-IDF Component Registry**, when `IDF_COMPONENT_API_TOKEN` is set: `embedded-react` from
+   `engine/`, then `embedded-react-runtime` from `runtime/`, which depends on that engine version.
+3. **PlatformIO**, from the root `library.json`, when `PLATFORMIO_AUTH_TOKEN` is set. One library
+   holds the engine and the runtime.
+4. **GitHub Release**, with generated notes and a source tarball (`engine`, `runtime`, `backends`,
    `LICENSE`, `NOTICE`, `README.md`) for the CMake `FetchContent` channel.
 
 Each channel is gated on its own variable or secret, so they can be enabled one at a time. First-time

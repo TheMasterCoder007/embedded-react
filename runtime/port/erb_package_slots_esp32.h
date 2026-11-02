@@ -19,7 +19,7 @@
 
 /*
  * The package slots on ESP-IDF: the partitions labelled erb_a and erb_b, memory-mapped for good, since a running
- * package is read in place. Only an ESP-IDF project compiles this file; the rest of runtime/ has no platform headers.
+ * package is read in place. Only an ESP-IDF build gets this code; the rest of runtime/ has no platform headers.
  */
 
 #include "erb_package_slots.h"

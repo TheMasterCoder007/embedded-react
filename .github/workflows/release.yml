@@ -136,14 +136,13 @@ jobs:
             npm publish --provenance --access public
           fi
 
-      # --- Channel 2: ESP-IDF Component Registry (the engine/ component) ---
+      # --- Channel 2: ESP-IDF Component Registry (the engine, then the Flow B runtime that depends on it) ---
       - name: Publish to the ESP Component Registry
         if: ${{ env.IDF_COMPONENT_API_TOKEN != '' }}
-        uses: espressif/upload-components-ci-action@v1
+        uses: espressif/upload-components-ci-action@v2
         with:
-          name: embedded-react
           namespace: ${{ env.IDF_COMPONENT_NAMESPACE }}
-          directories: engine
+          components: embedded-react:engine;embedded-react-runtime:runtime
           api_token: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
 
       # --- Channel 3: PlatformIO registry (reads root library.json) ---
@@ -153,11 +152,11 @@ jobs:
           python -m pip install --upgrade platformio
           pio pkg publish --no-interactive
 
-      # --- Channel 4: GitHub Release + engine source bundle (the CMake / FetchContent channel) ---
-      - name: Build engine source bundle
-        run: tar -czf embedded-react-${GITHUB_REF_NAME}-engine-src.tar.gz engine backends LICENSE NOTICE README.md
+      # --- Channel 4: GitHub Release + source bundle (the CMake / FetchContent channel) ---
+      - name: Build source bundle
+        run: tar -czf embedded-react-${GITHUB_REF_NAME}-src.tar.gz engine runtime backends LICENSE NOTICE README.md
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: embedded-react-*-engine-src.tar.gz
+          files: embedded-react-*-src.tar.gz

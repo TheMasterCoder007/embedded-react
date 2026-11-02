@@ -36,7 +36,7 @@ bytecode is specific to the QuickJS version, and the loader rejects a container 
 :::info[Why FetchContent and not the component registry]
 Flow A needs QuickJS, which is a plain CMake project rather than an ESP-IDF component, so
 `idf.py add-dependency` cannot manage it. `FetchContent` pulls the engine, the bridge, and QuickJS
-together. The registry holds only the engine; see
+together. The registry holds the engine and the Flow B runtime, but not the bridge or the display backend; see
 [Installation](../../getting-started/installation.mdx).
 :::
 

@@ -18,10 +18,14 @@
   ],
   "frameworks": "*",
   "platforms": "*",
-  "headers": "er_scene.h",
+  "headers": [
+    "er_scene.h",
+    "erb_runtime.h"
+  ],
   "export": {
     "include": [
       "engine/**",
+      "runtime/**",
       "LICENSE",
       "NOTICE",
       "library.json"
@@ -30,12 +34,17 @@
       "engine/tests/**",
       "engine/build/**",
       "engine/cmake-build-*/**",
-      "engine/CMakeLists.txt"
+      "engine/CMakeLists.txt",
+      "runtime/tests/**",
+      "runtime/build/**",
+      "runtime/cmake-build-*/**",
+      "runtime/CMakeLists.txt",
+      "runtime/idf_component.yml"
     ]
   },
   "build": {
-    "srcDir": "engine",
-    "srcFilter": "+<**/*.c> -<tests/> -<build/> -<cmake-build-*/>",
+    "srcDir": ".",
+    "srcFilter": "-<*> +<engine/**/*.c> -<engine/tests/> -<engine/build/> -<engine/cmake-build-*/> +<runtime/*.c> +<runtime/port/*.c>",
     "flags": [
       "-Iengine/include",
       "-Iengine/core",
@@ -44,7 +53,10 @@
       "-Iengine/rendering",
       "-Iengine/text",
       "-Iengine/animation",
-      "-Iengine/font"
+      "-Iengine/font",
+      "-Iruntime",
+      "-Iruntime/port",
+      "-Wno-error"
     ],
     "libArchive": true
   }

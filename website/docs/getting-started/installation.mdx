@@ -146,13 +146,28 @@ target_link_libraries(my_firmware PRIVATE erb-runtime)
   <TabItem value="idf" label="ESP-IDF">
 
 The [CYD](../guides/boards/esp32-cyd.md) and [ESP32-S3](../guides/boards/esp32-s3.md) examples are templates you can
-copy out. They use CMake `FetchContent`, which also brings in what each flow needs beyond the engine: the Flow B
-runtime, or the bridge and QuickJS.
+copy out. They use CMake `FetchContent`, which also brings in the Flow B runtime, the display backend and, for Flow A,
+the bridge and QuickJS.
 
-The engine alone is on the ESP-IDF Component Registry:
+The runtime is also on the ESP-IDF Component Registry, and brings the engine with it:
+
+```bash
+idf.py add-dependency "TheMasterCoder007/embedded-react-runtime^0.19.0"
+```
+
+The engine on its own is a separate component:
 
 ```bash
 idf.py add-dependency "TheMasterCoder007/embedded-react^0.19.0"
+```
+
+Neither includes a display backend, so you supply your own. The engine's default pools are sized for a desktop and won't
+fit in an ESP32's RAM, so set smaller ones in your project's `CMakeLists.txt`, after the `include` of `project.cmake` and
+before `project()`. This example leaves the runtime's `ERB_*` limits at their defaults; set those the same way to change
+them:
+
+```cmake
+idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_W=8;ERUI_SCRATCH_H=8;ERUI_VECTOR_EDGE_CACHE=0" APPEND)
 ```
 
   </TabItem>
@@ -162,8 +177,14 @@ idf.py add-dependency "TheMasterCoder007/embedded-react^0.19.0"
 lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.19.0
 ```
 
-This installs the engine alone. The Flow B runtime and the QuickJS bridge aren't in the library yet, so the
-ESP-IDF examples are the supported route.
+This installs the engine and the Flow B runtime as one library, so `erb_load` is ready to link. The QuickJS bridge isn't
+in the library yet, so Flow A goes through the ESP-IDF examples.
+
+The engine's default pools are sized for a desktop, so on an ESP32 set smaller ones in `platformio.ini`:
+
+```ini
+build_flags = -DERUI_MAX_NODES=48 -DERUI_SCRATCH_W=8 -DERUI_SCRATCH_H=8 -DERUI_VECTOR_EDGE_CACHE=0
+```
 
   </TabItem>
 </Tabs>

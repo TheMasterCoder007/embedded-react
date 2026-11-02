@@ -46,6 +46,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - On-device hot reload for Flow B: `embedded-react dev --device --aot` sends a package to the staging slot on every
   save. One that fails verification leaves the running app as it was and shows the reason. The ESP32-S3, CYD, and
   RP2040 examples take it when built with `ER_HOTRELOAD`.
+- The Flow B runtime is on every firmware install channel: `embedded-react-runtime` on the ESP-IDF Component Registry,
+  the PlatformIO library, and the GitHub Release tarball, now named `embedded-react-vX.Y.Z-src.tar.gz`.
 
 ### Changed
 
@@ -65,6 +67,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Fixed
 
+- The engine's ESP-IDF component publishes as `embedded-react`, the name the install command uses. It was going out as
+  `engine`.
+- The engine compiles on ESP-IDF and PlatformIO without setting `ERUI_MAX_VECTOR_NODES`.
 - The on-screen keyboard's done key now calls `onSubmitEditing`. It only took the focus away, so a touch-only board
   could never submit.
 - Flow B applies the stale-handle rule to a row built before a destroyed node, which used to go last, and

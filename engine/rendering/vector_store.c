@@ -35,10 +35,8 @@
  - Tunables (the storage pool's caps; the rasterizer's caps live in vector.c)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#ifndef ERUI_MAX_VECTOR_NODES
-#define ERUI_MAX_VECTOR_NODES 8 /**< Concurrent vector nodes that can hold geometry. */
-#endif
-/* ERUI_VECTOR_TAPE_MAX / _PAINTS_MAX / _GRADS_MAX are declared in er_scene.h (via vector.h): callers
+/* ERUI_MAX_VECTOR_NODES is in vector.h, since the edge cache sizes by it too.
+ * ERUI_VECTOR_TAPE_MAX / _PAINTS_MAX / _GRADS_MAX are declared in er_scene.h (via vector.h): callers
  * marshal into them, so they are published rather than private to this pool. */
 
 /*----------------------------------------------------------------------------------------------------------------------
