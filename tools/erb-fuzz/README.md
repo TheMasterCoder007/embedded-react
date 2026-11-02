@@ -13,7 +13,7 @@ that taps across the panel, drags, types and sets its inputs.
 
 | Folder                | What it is                                                                                      | Rule                |
 | --------------------- | ----------------------------------------------------------------------------------------------- | ------------------- |
-| `corpus/seeds/`       | Both demos and each parity fixture as a package. `npm run erb:corpus` rewrites them             | Each must load      |
+| `corpus/seeds/`       | Both demos and each frame-test fixture as a package. `npm run erb:corpus` rewrites them             | Each must load      |
 | `corpus/found/`       | Inputs that reached code the seeds don't                                                        | Each must run clean |
 | `corpus/regressions/` | Inputs that once crashed, hung or tripped a sanitizer. Add one with each fix, and never drop it | Each must run clean |
 

@@ -35,7 +35,7 @@ export interface IrDeclareLocal {
   /** The slot's name, which later reads of the local use. */
   name: string;
   init: IrExpr;
-  /** Declared at file scope (a dep-driven effect's local its cleanup reads), so only assigned here. */
+  /** Kept in a slot (a dep-driven effect's local its cleanup reads), so only assigned here. */
   isHoisted: boolean;
   /** The buffer size a string local is copied into. */
   stringCap: number;
@@ -79,8 +79,7 @@ export interface IrSetStateText {
 
 /** One field of an appended list item: a number, or text. */
 export type IrItemValue =
-  | {field: ItemField; value: IrExpr}
-  | {field: ItemField; text: IrText};
+  {field: ItemField; value: IrExpr} | {field: ItemField; text: IrText};
 
 /** `setItems([])`. */
 export interface IrClearList {
@@ -161,13 +160,13 @@ export interface IrArmCleanup {
 
 /**
  * `updateVector(ref, shapes, dirtyRect?)`: rewrites a vector node's op-tape in place and hands it over, the
- * imperative fast path (a drag) that bypasses app_update. Its tape and paint tables are declared at file scope.
+ * imperative fast path (a drag) that bypasses the update. Its tape and paint tables are declared with it.
  */
 export interface IrUpdateVector {
   kind: 'updateVector';
-  /** Numbers the call's tables (`s_uv<id>_…`) and its locals. */
+  /** Numbers the call's tables and its locals. */
   id: number;
-  /** The node ref's C slot. */
+  /** The node ref's slot. */
   node: string;
   locals: {name: string; value: IrTapeValue}[];
   tape: IrTapeValue[];

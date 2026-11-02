@@ -15,74 +15,17 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {compileSource} from '../compile.mts';
+import {compilePackage} from '../compile.mts';
 
 // Flow B TypeScript support: an App.tsx is parsed with the `typescript` plugin and scrubbed of all
-// type-only syntax before the JSX→C walker runs. The contract is that the generated C is IDENTICAL to the
+// type-only syntax before the compiler walks the JSX. The contract is that the package is IDENTICAL to the
 // same component written untyped (App.jsx) — types are erased, nothing else changes.
 
 const PRE = `import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'embedded-react';`;
 
-const jsGen = src => compileSource(src, 'test').c;
-const tsGen = src => compileSource(src, 'test', {filename: 'App.tsx'}).c;
-
-describe('AOT TypeScript: type erasure produces identical C', () => {
-  it('a TS-annotated app compiles to the same C as its untyped twin', () => {
-    const js = `${PRE}
-      export function App() {
-        const [count, setCount] = useState(0);
-        return (
-          <View style={s.root}>
-            <Text style={s.label}>count is {count}</Text>
-            <Pressable onPress={() => setCount(c => c + 1)}>
-              <Text style={s.label}>tap</Text>
-            </Pressable>
-          </View>
-        );
-      }
-      const s = StyleSheet.create({ root: { flex: 1, padding: 10 }, label: { color: '#fff', fontSize: 18 } });`;
-
-    // Same app, fully annotated: type imports, an interface + type alias, a typed param + return type, a
-    // generic on useState, a typed arrow param, and an `as` assertion on a style. All must erase to nothing.
-    const ts = `${PRE}
-      import type { ViewStyle } from 'embedded-react';
-      interface Props { title?: string }
-      type Inc = (n: number) => number;
-      export function App({ title }: Props): JSX.Element {
-        const [count, setCount] = useState<number>(0);
-        return (
-          <View style={s.root}>
-            <Text style={s.label}>count is {count}</Text>
-            <Pressable onPress={() => setCount((c: number) => c + 1)}>
-              <Text style={s.label}>tap</Text>
-            </Pressable>
-          </View>
-        );
-      }
-      const s = StyleSheet.create({ root: { flex: 1, padding: 10 }, label: { color: '#fff', fontSize: 18 } as ViewStyle });`;
-
-    expect(tsGen(ts)).toBe(jsGen(js));
-  });
-
-  it('erases `as`, `satisfies`, and non-null `!` in expressions', () => {
-    // Twins are aligned: each TS wrapper (`(0 as number)!`, `n satisfies number`) must strip to exactly
-    // the untyped expression on the JS side.
-    const js = `${PRE}
-      export function App() {
-        const [n, setN] = useState(0);
-        const x = 7;
-        return <Text>v {n} {x}</Text>;
-      }`;
-    const ts = `${PRE}
-      export function App() {
-        const [n, setN] = useState((0 as number)!);
-        const x = (7 satisfies number);
-        return <Text>v {n} {x}</Text>;
-      }`;
-    expect(tsGen(ts)).toBe(jsGen(js));
-  });
-});
+const jsGen = src => compilePackage(src, 'test');
+const tsGen = src => compilePackage(src, 'test', {filename: 'App.tsx'});
 
 describe('AOT TypeScript: error locations survive type stripping', () => {
   it('points the code frame at the real .tsx line after stripped type decls above it', () => {

@@ -61,8 +61,8 @@ is not a stylistic preference; it is what makes the two flows possible.
                     backends/<display>/
 ```
 
-Flow A drives the engine from a JavaScript reconciler through the bridge; Flow B drives it from
-generated C; both share one renderer, so a layout or rendering fix lands once. The same boundary
+Flow A drives the engine from a JavaScript reconciler through the bridge; Flow B drives it from a
+verified package; both share one renderer, so a layout or rendering fix lands once. The same boundary
 leaves room for frontends that do not exist yet (a Lua UI, a JSON tree loader, a visual editor's
 output) without forking the engine. None of those is on the roadmap; the door is simply kept open.
 
@@ -94,13 +94,12 @@ links it, and the Flow B runtime will reuse it; [Flow B packages](./flow-b-packa
 runtime's design.
 
 **The AOT compiler** (`packages/embedded-react/aot/`) parses the app's JSX with Babel, folds
-module-level constants (including the `screen` size), and emits `app.gen.c`: node construction, a
-`useState` state machine, handlers as C functions, animations as engine calls, `PanResponder` configs
-as responder registrations. It rejects anything it cannot lower, by message, at build time.
+module-level constants (including the `screen` size), and emits a package: a tree of node templates, a
+`useState` state machine in slots, handlers as bytecode functions, animations as engine calls, `PanResponder`
+configs as responder bindings. It rejects anything it cannot lower, by message, at build time.
 `compile.mts` is the entry point and CLI; each stage is a TypeScript module under `compiler/`, with
-one file per typed element in `compiler/elements/`. The stages are moving to a typed intermediate
-representation (`compiler/ir/`) that a backend prints (`compiler/c/` for C); expressions, text, and handler
-statements lower to it so far. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds the AOT desktop host, and
+one file per typed element in `compiler/elements/`. The stages lower to a typed intermediate
+representation (`compiler/ir/`), which `compiler/package/` writes as a package. `screenshot-smoke.mjs` (`npm run aot:smoke`) builds the AOT desktop host, compiles each demo to a package, and
 checks that one rendered frame has content.
 
 **The engine** (`engine/`) is organized by what it does: `scene/` (node pool, tree, props, dirty

@@ -74,8 +74,6 @@ Usage:
                                                            table, written beside it as app.erdbg
                                                  --aot --bake  → app.erpkg.c (the package as a const
                                                            array, for a board with no spare partition)
-                                                 --aot --c  → app.gen.c/.h + assets.generated.c (no
-                                                           QuickJS, compiled into firmware)
   embedded-react flash [package] --board <name> [--port <p>]
                                                Write a package to the board's staging slot. The firmware
                                                  runs it at the next boot if it passes verification, and
@@ -381,27 +379,6 @@ async function exportApp(args) {
 }
 
 /** Resolve the root component file for the AOT compiler (App.jsx), distinct from the registry entry. */
-/**
- * The project identity stamped into app.gen.h as ER_AOT_DEMO / ER_AOT_DEMO_<name>, which a board example
- * guards on (see the header's own comment). It is the directory of the nearest package.json at or above
- * the App component, so `demos/watch-face/App.jsx` is `watch-face` whether the build runs from that
- * directory or names the entry from somewhere else — and a scaffolded `src/App.jsx` reports its project
- * folder rather than `src`. Deriving it from the cwd instead would stamp whatever directory you ran from.
- */
-function projectIdentity(appPath) {
-  let dir = dirname(appPath);
-  for (let i = 0; i < 64; i++) {
-    // A package.json at a filesystem root has no directory name to report — basename('/') is '' — so
-    // treat it as absent rather than stamp an empty identity (`ER_AOT_DEMO_` with nothing after it).
-    if (existsSync(resolve(dir, 'package.json')) && basename(dir))
-      return basename(dir);
-    const up = dirname(dir);
-    if (up === dir) break; // filesystem root
-    dir = up;
-  }
-  return basename(dirname(appPath)) || 'app';
-}
-
 function resolveAppComponent(cwd, explicit) {
   if (explicit) {
     const p = resolve(cwd, explicit);
@@ -422,15 +399,15 @@ function resolveAppComponent(cwd, explicit) {
 }
 
 /**
- * Compiles the App component with what goes into the build: its package file when asPackage, and its image jobs.
+ * Compiles the App component with what goes into the build: its package file and its image jobs.
  * Throws with the reason, so a watch loop can carry on past a bad save.
  */
 async function compileAppPackage(
   cwd,
   appPath,
-  {screens = null, asPackage = true, release = false} = {},
+  {screens = null, release = false} = {},
 ) {
-  const {compilePackage, compileSource, bakeSvgArtifacts, packPackage} =
+  const {compilePackage, bakeSvgArtifacts, packPackage} =
     await import('./aot/compile.mts');
   const {bakeAssetPackBytes} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
@@ -440,16 +417,13 @@ async function compileAppPackage(
   const src = readFileSync(appPath, 'utf8');
   // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
   const svgArtifacts = await bakeSvgArtifacts(src, appDir);
-  // app.gen.h records WHICH app it came from and a board example guards on that marker, so it must name
-  // the source project — the same ER_AOT_DEMO_watch_2d_face that `npm run aot -- watch-face` produces.
   // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the
-  // sizes pick. The C output is for one panel: --screen, then ER_AOT_SCREEN_W/H, then 800x480.
-  const compile = asPackage ? compilePackage : compileSource;
-  const result = compile(src, projectIdentity(appPath), {
+  // sizes pick.
+  const result = compilePackage(src, basename(dirname(appPath)), {
     filename: appPath,
     svgArtifacts,
     screen: screens?.[0] ?? null, // null without --screen
-    screens: asPackage ? screens : undefined,
+    screens,
     release,
   });
 
@@ -477,73 +451,51 @@ async function compileAppPackage(
   // and its font sizes against what that font actually covers.
   warnMissingGlyphs({source: src, jsx: true});
   warnFontSizes({used: analyzeFontSizes(src)});
-  const file = asPackage
-    ? packPackage(
-        result,
-        imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
-      )
-    : null;
+  const file = packPackage(
+    result,
+    imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
+  );
   return {result, file, imageJobs};
 }
 
 /**
  * Flow B (--aot): compile the App component to a Flow B package (app.erpkg) with its assets inside, for the Flow B
- * runtime to load: for release without its debug table (app.erdbg beside it), and baked as C (app.erpkg.c) to link
- * into the firmware. With --c, to C (app.gen.{c,h}) + bake assets, to compile into firmware.
+ * runtime to load: for release without its debug table (app.erdbg beside it), and baked as a const array
+ * (app.erpkg.c) to link into the firmware.
  */
 async function buildAot(
   cwd,
   explicit,
   outDir,
   screens,
-  asPackage,
   {release = false, bake = false} = {},
 ) {
   const {bakePackage, resourceReport} = await import('./aot/compile.mts');
-  const {bakeAssets} = await import('./assets/index.mjs');
   const appPath = resolveAppComponent(cwd, explicit);
   let compiled;
   try {
-    compiled = await compileAppPackage(cwd, appPath, {
-      screens,
-      asPackage,
-      release,
-    });
+    compiled = await compileAppPackage(cwd, appPath, {screens, release});
   } catch (e) {
     console.error(e && e.aotLoc ? e.message : e?.message || String(e));
     process.exit(1);
   }
   const {result, file, imageJobs} = compiled;
-  if (!asPackage) {
-    writeFileSync(resolve(outDir, 'app.gen.c'), result.c);
-    writeFileSync(resolve(outDir, 'app.gen.h'), result.h);
-  }
-  if (asPackage) {
-    const out = relative(cwd, outDir) || '.';
-    const name = bake ? 'app.erpkg.c' : 'app.erpkg';
-    writeFileSync(
-      resolve(outDir, name),
-      bake ? bakePackage(file.bytes) : file.bytes,
-    );
+  const out = relative(cwd, outDir) || '.';
+  const name = bake ? 'app.erpkg.c' : 'app.erpkg';
+  writeFileSync(
+    resolve(outDir, name),
+    bake ? bakePackage(file.bytes) : file.bytes,
+  );
+  console.log(
+    `✓ Flow B package → ${out}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s))`,
+  );
+  if (release) {
+    writeFileSync(resolve(outDir, 'app.erdbg'), result.debug);
     console.log(
-      `✓ Flow B package → ${out}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s))`,
+      `  Debug table → ${out}/app.erdbg (${result.debug.length} B), to map a fault back to the source`,
     );
-    if (release) {
-      writeFileSync(resolve(outDir, 'app.erdbg'), result.debug);
-      console.log(
-        `  Debug table → ${out}/app.erdbg (${result.debug.length} B), to map a fault back to the source`,
-      );
-    }
-    console.log(resourceReport(result, file).join('\n'));
-    return;
   }
-  const baked = bakeAssets({images: imageJobs, fonts: [], outDir});
-  console.log(
-    `✓ Flow B (AOT) → ${relative(cwd, outDir) || '.'}/app.gen.c (+ app.gen.h, assets.generated.c — ${baked.images} image(s))`,
-  );
-  console.log(
-    '  No QuickJS on the device: compile these into your firmware against the engine (er_scene.h).',
-  );
+  console.log(resourceReport(result, file).join('\n'));
 }
 
 /**
@@ -601,7 +553,7 @@ async function buildContainer(cwd, explicit, outDir) {
 }
 
 /**
- * `embedded-react build [--aot [--release] [--bake] [--c]] [entry] [--out dir] [--screen WxH[,WxH…]]` — produce the
+ * `embedded-react build [--aot [--release] [--bake]] [entry] [--out dir] [--screen WxH[,WxH…]]` — produce the
  * device artifact.
  */
 async function build(args) {
@@ -609,27 +561,18 @@ async function build(args) {
   const aot = args.includes('--aot');
   const release = args.includes('--release');
   const bake = args.includes('--bake');
-  const asC = args.includes('--c');
-  const asPackage = !asC;
-  for (const flag of ['--release', '--bake', '--c']) {
+  for (const flag of ['--release', '--bake']) {
     if (args.includes(flag) && !aot) {
       console.error(`${flag} only applies to --aot.\n`);
       usage();
       process.exit(1);
     }
   }
-  if (asC && (release || bake)) {
-    console.error(
-      '--release and --bake build the package, not the C output.\n',
-    );
-    usage();
-    process.exit(1);
-  }
   const outIdx = args.indexOf('--out');
   const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
 
   // --screen <WxH> (AOT only): the panels to keep layouts for, comma-separated. Optional: a package has every
-  // layout without it. The C output takes one, its panel. Flow A reads the screen from the host at runtime.
+  // layout without it. Flow A reads the screen from the host at runtime.
   const screenIdx = args.indexOf('--screen');
   let screens = null;
   if (screenIdx >= 0) {
@@ -651,13 +594,6 @@ async function build(args) {
       usage();
       process.exit(1);
     }
-    if (sizes.length > 1 && !asPackage) {
-      console.error(
-        '--screen takes one size for the C output; build without --c for several.\n',
-      );
-      usage();
-      process.exit(1);
-    }
     screens = sizes.map(size => ({
       width: Number(size[1]),
       height: Number(size[2]),
@@ -671,8 +607,7 @@ async function build(args) {
   const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
 
   mkdirSync(outDir, {recursive: true});
-  if (aot)
-    await buildAot(cwd, explicit, outDir, screens, asPackage, {release, bake});
+  if (aot) await buildAot(cwd, explicit, outDir, screens, {release, bake});
   else await buildContainer(cwd, explicit, outDir);
 }
 

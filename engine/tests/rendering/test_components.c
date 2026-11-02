@@ -730,6 +730,62 @@ static void test_flatlist_scrolls(void)
     printf("PASS: test_flatlist_scrolls\n");
 }
 
+#if ERUI_ONSCREEN_KEYBOARD
+/** @brief What on_keyboard_submit saw. */
+static int s_submit_count;
+static bool s_focused_at_submit;
+
+/** @brief ER_EVENT_SUBMIT_EDITING callback for test_keyboard_done_submits. */
+static void on_keyboard_submit(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)user_data;
+    s_submit_count++;
+    s_focused_at_submit = node->is_focused;
+    assert(strcmp(data->changed_text, "Hi") == 0 && "Submit must carry the input's text");
+}
+
+/** @brief The on-screen keyboard's done key submits the input, then takes the focus away. */
+static void test_keyboard_done_submits(void)
+{
+    init_backend();
+    s_submit_count = 0;
+    s_focused_at_submit = false;
+
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_auto();
+    p.width = 320;
+    p.height = 240;
+    er_node_set_props(root, &p);
+
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.editable = 1;
+    er_node_set_props(ti, &p);
+    er_event_set(ti, ER_EVENT_SUBMIT_EDITING, on_keyboard_submit, NULL);
+    er_tree_append_child(root, ti);
+    er_tree_set_root(root);
+    er_text_input_set_text(ti, "Hi");
+    er_commit();
+
+    er_text_input_focus(ti);
+    er_commit();
+
+    /* The default layout's done key is in the bottom right corner. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 310, 235);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 310, 235);
+
+    assert(s_submit_count == 1 && "The done key must submit once");
+    assert(s_focused_at_submit && "The input must still be focused when it submits");
+    assert(!ti->is_focused && "The done key must take the focus away");
+
+    printf("PASS: test_keyboard_done_submits\n");
+}
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -747,6 +803,9 @@ int main(void)
     test_text_input_secure();
     test_text_input_read_only();
     test_text_input_destroyed_while_focused();
+#if ERUI_ONSCREEN_KEYBOARD
+    test_keyboard_done_submits();
+#endif
     test_modal_visible();
     test_flatlist_scrolls();
 

@@ -15,8 +15,7 @@
  */
 
 /*
- * The package output's bytes. Whether the runtime loads and draws them the way the C output does is
- * test/erb-parity's job; this checks the layout the spec gives.
+ * A package's bytes. Whether the runtime loads and draws them right is test/erb-frames' job; this checks the layout the spec gives.
  */
 
 import {describe, it, expect} from 'vitest';
@@ -52,7 +51,7 @@ import {
   TemplateKind,
   ValueType,
 } from '../compiler/package/format.mts';
-import {floatBits, readConstant} from '../compiler/package/props.mts';
+import {constantNumber, floatBits} from '../compiler/package/props.mts';
 import {Arena} from '../compiler/package/arena.mts';
 import {FunctionBuilder, OP} from '../compiler/package/bytecode.mts';
 import {Codegen} from '../compiler/package/codegen.mts';
@@ -121,20 +120,12 @@ function readProgram(bytes) {
 }
 
 describe('constant props', () => {
-  it('reads the C output spelling of a constant', () => {
-    expect(readConstant('12')).toBe(12);
-    expect(readConstant('-5')).toBe(-5);
-    expect(readConstant('0xFF0D0D0Fu')).toBe(0xff0d0d0f);
-    expect(readConstant('0u')).toBe(0);
-    expect(readConstant('255u')).toBe(255);
-    expect(readConstant('0.5f')).toBe(0.5);
-    expect(readConstant('1e3f')).toBe(1000);
-    expect(readConstant('ER_ALIGN_CENTER')).toBe(3);
-    expect(readConstant('ER_LAYOUT_AUTO')).toBe(-32768);
-    expect(readConstant('(int16_t)7')).toBe(7);
-    expect(readConstant('(uint8_t)(3)')).toBe(3);
-    expect(readConstant('app_round_dim(s_boot.value)')).toBeNull();
-    expect(readConstant('ER_NOT_A_NAME')).toBeNull();
+  it('reads a constant, by number or by its er_scene.h name', () => {
+    expect(constantNumber(12)).toBe(12);
+    expect(constantNumber(0xff0d0d0f)).toBe(0xff0d0d0f);
+    expect(constantNumber('ER_ALIGN_CENTER')).toBe(3);
+    expect(constantNumber('ER_LAYOUT_AUTO')).toBe(-32768);
+    expect(constantNumber('ER_NOT_A_NAME')).toBeNull();
   });
 
   it('stores a float prop as its f32 bits', () => {
@@ -154,7 +145,7 @@ function functionsOf(bytes) {
     const at = functions.offset + index * 16;
     const start = u32(at);
     const ops = [];
-    for (let pc = start; pc < start + u32(at + 4); ) {
+    for (let pc = start; pc < start + u32(at + 4);) {
       const first = word(pc);
       const name = OP_NAMES[first & 0xff];
       ops.push({
@@ -180,7 +171,7 @@ function regionsOf(bytes) {
   });
 }
 
-describe('package output', () => {
+describe('package', () => {
   it('writes the header, the panel and the required tables', () => {
     const result = compilePackage(STATIC_APP, 'app', SCREEN);
     const {header, panel, tables} = readProgram(result.program);
@@ -282,7 +273,7 @@ export function App() {
   );
 }`;
     expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
-      /the package output doesn't support updateVector on a node in a list row yet[\s\S]*App\.jsx:11:11/,
+      /a package doesn't support updateVector on a node in a list row yet[\s\S]*App\.jsx:11:11/,
     );
   });
 
@@ -321,7 +312,7 @@ export function App() {
     expect(slot(1)).toEqual({type: ValueType.bool, flags: SlotFlag.tracked});
   });
 
-  it('works out values from the screen size in a boot function, in doubles as C does', () => {
+  it('works out values from the screen size in a boot function, in doubles', () => {
     const src = `
 import {View} from 'embedded-react';
 const HALF = screen.width / 2;
@@ -708,7 +699,7 @@ export function App() {
     ).toBe(false);
   });
 
-  it('converts a fractional delay as app_delay_msf does, and a whole one as it is', () => {
+  it('converts a fractional delay to whole milliseconds, and a whole one as it is', () => {
     const delayed = delay => `
 import {useState} from 'react';
 import {Pressable, Text} from 'embedded-react';
@@ -746,7 +737,7 @@ export function App() {
       fn.ops.filter(op => op.name === 'EFFECT').map(op => op.bx);
     // Every pass queues the dep check; the first one, the first mount effect too.
     expect(effects(update)).toEqual([2, 3]);
-    // The dep-driven mount effect sets no app_update(), so it queues the next one itself.
+    // The dep-driven mount effect asks for no update, so it queues the next one itself.
     expect(effects(firstMount)).toEqual([4]);
     expect(effects(secondMount)).toEqual([]);
     expect(names(secondMount)).toContain('NOT');
@@ -781,7 +772,7 @@ export function App() {
     );
   });
 
-  it('refuses an effect without deps, as the C output does', () => {
+  it('refuses an effect without deps', () => {
     const src = `
 import {useEffect, useRef} from 'react';
 import {View} from 'embedded-react';
@@ -1782,7 +1773,7 @@ export function App() {
     expect(() =>
       compilePackage(src, 'app', {...SCREEN, svgArtifacts: {badge: artifact}}),
     ).toThrow(
-      /an <Svg> gradient has 1 stop, but the package output needs at least two[\s\S]*App\.jsx:7:7/,
+      /an <Svg> gradient has 1 stop, but a gradient needs at least two[\s\S]*App\.jsx:7:7/,
     );
   });
 

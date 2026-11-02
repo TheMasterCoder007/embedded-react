@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import type {CExpr, CType, RefRecord, ScalarState} from '../types.mts';
+import type {SlotKind, RefRecord, ScalarState, SlotValue} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -39,7 +39,7 @@ export type Int64Source =
 /** What an int slot widened to 64 bits holds: a time, or only 64-bit numbers that are not times. */
 export type WideSlot = 'time' | 'number';
 
-/** The slots widened to 64 bits, by C name. */
+/** The slots widened to 64 bits, by name. */
 export type SlotWidths = Map<string, WideSlot>;
 
 /** The type of a value in the IR: what JS holds, whatever slot a backend stores it in. */
@@ -80,7 +80,7 @@ export const NODE: IrType = {kind: 'node'};
  *
  * @returns The slot's kind, or undefined for a list row's item.
  */
-export function slotOf(type: IrType): CType | undefined {
+export function slotOf(type: IrType): SlotKind | undefined {
   switch (type.kind) {
     case 'bool':
       return 'int';
@@ -89,7 +89,7 @@ export function slotOf(type: IrType): CType | undefined {
     case 'struct':
       return undefined;
     case 'node':
-      return 'ERNode*' as CType; // a handle, which no number or text slot holds
+      return 'node' as SlotKind; // a handle, which no number or text slot holds
     default:
       return type.kind;
   }
@@ -113,7 +113,7 @@ export const int64Of = (source: Int64Source): IrType =>
  *
  * @returns The type.
  */
-export function typeOfSlot(slot: CType | undefined, isBool = false): IrType {
+export function typeOfSlot(slot: SlotKind | undefined, isBool = false): IrType {
   if (isBool) {
     if (slot !== 'int') {
       throw new Error(`AOT internal: a boolean in a "${slot}" slot`);
@@ -139,15 +139,15 @@ export function typeOfSlot(slot: CType | undefined, isBool = false): IrType {
 }
 
 /**
- * The type of a value lowered to C: its slot, and what the C form records about it.
+ * The type of a value from its slot, and what the slot records about it.
  *
  * @param value  The lowered value.
  *
  * @returns The type.
  */
-export function typeOfCExpr(value: Omit<CExpr, 'code'>): IrType {
+export function typeOfSlotValue(value: SlotValue): IrType {
   if (value.lit || value.wide) {
-    if (value.cType !== 'i64' || (value.lit && value.wide)) {
+    if (value.slotKind !== 'i64' || (value.lit && value.wide)) {
       throw new Error(
         'AOT internal: a 64-bit source on a value that is not one 64-bit number',
       );
@@ -155,7 +155,7 @@ export function typeOfCExpr(value: Omit<CExpr, 'code'>): IrType {
     return value.lit ? INT64_NUMBER : INT64_MATH;
   }
 
-  return typeOfSlot(value.cType, value.isBool);
+  return typeOfSlot(value.slotKind, value.isBool);
 }
 
 /**
@@ -234,9 +234,9 @@ const wideSlotType = (widened: WideSlot | undefined): IrType =>
  * @returns Its type.
  */
 export const stateType = (state: ScalarState): IrType =>
-  state.cType === 'i64'
+  state.slotKind === 'i64'
     ? wideSlotType(state.widened)
-    : typeOfSlot(state.cType, state.isBool);
+    : typeOfSlot(state.slotKind, state.isBool);
 
 /**
  * The type of a ref's current value.
@@ -248,6 +248,6 @@ export const stateType = (state: ScalarState): IrType =>
 export const refType = (ref: RefRecord): IrType =>
   ref.kind === 'node'
     ? NODE
-    : ref.cType === 'i64'
+    : ref.slotKind === 'i64'
       ? wideSlotType(ref.widened)
-      : typeOfSlot(ref.cType);
+      : typeOfSlot(ref.slotKind);

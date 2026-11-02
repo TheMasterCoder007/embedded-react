@@ -119,7 +119,7 @@ export function lowerGestureField(
     return {
       kind: 'gesture',
       field: field as GestureField,
-      statePrefix: pan!.cPrefix,
+      statePrefix: pan!.statePrefix,
       stateID: pan!.stateID,
       type: field === 'vx' || field === 'vy' ? FLOAT : INT,
     };
@@ -136,7 +136,7 @@ export function lowerGestureField(
  *
  * @param name  The JS name the responder is bound to.
  * @param createCall  The `PanResponder.create(…)` call.
- * @param prefix  The C name prefix: none for the App, `c<n>_` for an inlined instance.
+ * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  *
  * @returns The responder.
  */
@@ -197,7 +197,7 @@ function buildPanDescriptor(
     if (prop.type !== 'ObjectMethod' && !isFn(callback)) {
       throw aotError(
         `AOT: PanResponder "${key}" must be a function`,
-        'pass an inline arrow — `(e, g) => …` — so it can be compiled into the generated C.',
+        'pass an inline arrow — `(e, g) => …` — so it can be compiled.',
       );
     }
 
@@ -210,8 +210,8 @@ function buildPanDescriptor(
 
   return {
     name,
-    cPrefix: `s_pan_${prefix}${name}`,
-    fnPrefix: `er_pan_${prefix}${name}`,
+    statePrefix: `pan_state_${prefix}${name}`,
+    fnPrefix: `pan_${prefix}${name}`,
     stateID: 0, // assigned when the responder is first wired to a node
     queries,
     events,
@@ -225,7 +225,7 @@ function buildPanDescriptor(
  * because it would re-create the recognizer every render in Flow A and the two flows must agree.
  *
  * @param fnBody  The component's body.
- * @param prefix  The C name prefix: none for the App, `c<n>_` for an inlined instance.
+ * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  *
  * @returns The responders, by name.
  */
@@ -339,15 +339,15 @@ function lowerPanQuery(
 
 /**
  * Lowers a PanResponder onto the engine's responder system, not a transpiled copy of it: the engine already runs
- * RN's state machine in C. Capture/bubble negotiation (er_responder_query_set) picks an owner, then GRANT / MOVE /
+ * RN's state machine in the engine. Capture/bubble negotiation (er_responder_query_set) picks an owner, then GRANT / MOVE /
  * RELEASE / TERMINATE fire on the owner alone, carrying cumulative travel and velocity. So the should-set
  * predicates become QUERIES and the callbacks become responder EVENT handlers: no gesture math is duplicated into
- * the generated C, and a granted pan owns the gesture, so a ScrollView ancestor cannot auto-scroll out from under
+ * the package, and a granted pan owns the gesture, so a ScrollView ancestor cannot auto-scroll out from under
  * it.
  *
  * The one thing with no engine counterpart is RN's anchor: `g.dx` is measured from the grant, while the engine's
  * `data->dx` runs from touch-down, so a claim that needed 10 px of slop would otherwise open with a 10 px jump.
- * That anchor, plus `x0`/`y0`, is a handful of file-scope ints per responder, kept by the grant, release and
+ * That anchor, plus `x0`/`y0`, is a handful of ints per responder, kept by the grant, release and
  * terminate handlers. Those three are ALWAYS lowered, even with no app callback; move and reject only with one.
  *
  * @param pan  The responder; its gesture id must be assigned.
@@ -386,7 +386,7 @@ export function lowerPanResponder(
 
   return {
     name: pan.name,
-    statePrefix: pan.cPrefix,
+    statePrefix: pan.statePrefix,
     fnPrefix: pan.fnPrefix,
     stateID: pan.stateID,
     events,

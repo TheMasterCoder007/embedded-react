@@ -18,11 +18,10 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {colorLiteral} from '../../style-map.mts';
+import {parseColorValue} from '../../style-map.mts';
 import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
-import {asCond, lowerExpr} from '../expressions.mts';
-import {toCExpr} from '../c/expressions.mts';
+import {lowerExpr} from '../expressions.mts';
 import {BOOL} from '../ir/types.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, styleWrites, collectStyleAssigns} from '../style-text.mts';
@@ -71,10 +70,10 @@ export function emitSwitch(
   );
   const hasField = (f: string) => styleWrites(staticAssigns, dynAssigns, f);
   if (!hasField('width')) {
-    staticAssigns.push({field: 'width', expr: '51'});
+    staticAssigns.push({field: 'width', value: 51});
   }
   if (!hasField('height')) {
-    staticAssigns.push({field: 'height', expr: '31'});
+    staticAssigns.push({field: 'height', value: 31});
   }
 
   // process element attributes
@@ -100,7 +99,7 @@ export function emitSwitch(
     } else if (name === 'thumbColor') {
       staticAssigns.push({
         field: 'thumb_color',
-        expr: colorLiteral(String(evalStatic(node, scope))),
+        value: parseColorValue(String(evalStatic(node, scope))),
       });
     } else if (name === 'trackColor') {
       const trackColor = evalStatic(node, scope) as {
@@ -124,13 +123,13 @@ export function emitSwitch(
       if (trackColor.false != null) {
         staticAssigns.push({
           field: 'track_color_false',
-          expr: colorLiteral(String(trackColor.false)),
+          value: parseColorValue(String(trackColor.false)),
         });
       }
       if (trackColor.true != null) {
         staticAssigns.push({
           field: 'track_color_true',
-          expr: colorLiteral(String(trackColor.true)),
+          value: parseColorValue(String(trackColor.true)),
         });
       }
     } else if (name === 'disabled') {
@@ -160,12 +159,12 @@ export function emitSwitch(
     }
   }
 
-  // value → switch_value (static or, when state-driven, recomputed in app_update).
+  // value → switch_value (static or, when state-driven, recomputed in the update).
   if (valueNode) {
     try {
       staticAssigns.push({
         field: 'switch_value',
-        expr: evalStatic(valueNode, scope) ? '1' : '0',
+        value: evalStatic(valueNode, scope) ? 1 : 0,
       });
     } catch {
       dynAssigns.push({
@@ -212,22 +211,19 @@ export function emitSwitch(
     }
 
     // Compile onValueChange into an ER_EVENT_PRESS handler, passing the next switch value.
-    const handlerName = `er_handler_${out.handlers.length}`;
+    const handlerName = `handler_${out.handlers.length}`;
     const value = lowerExpr(valueNode, env);
-    const toggled = `(!(${asCond(toCExpr(value))}))`; // the engine toggles on press → param is !value
     out.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerValueHandler(
         onChangeFn,
-        toggled,
         env,
         state,
         out,
         'int',
-        null,
         true,
-        {kind: 'unary', op: '!', operand: value, type: BOOL},
+        {kind: 'unary', op: '!', operand: value, type: BOOL}, // the engine toggles on press → param is !value
       ),
     });
     node.wiring.push({

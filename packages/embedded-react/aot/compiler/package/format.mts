@@ -695,7 +695,7 @@ export const ABI_PROPS: ReadonlyMap<string, AbiProp> = new Map([
 /** er_scene.h's ER_LAYOUT_AUTO (INT16_MIN). */
 export const LAYOUT_AUTO = -32768;
 
-/** The er_scene.h names the compiler spells constant props and node types with, and their values. */
+/** The er_scene.h names constant props and node types use and their values. */
 export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_LAYOUT_AUTO', LAYOUT_AUTO],
   ['ER_NODE_VIEW', 0],

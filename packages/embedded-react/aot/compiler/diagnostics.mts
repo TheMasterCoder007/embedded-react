@@ -89,7 +89,7 @@ export const constantText = (text: IrText): string | null =>
     : null;
 
 /**
- * Refuses a constant string too long for the engine buffer it is copied into, which C would cut short.
+ * Refuses a constant string too long for the engine buffer it is copied into, which would cut it short.
  *
  * @param text  The string, or null for one built at run time (checked when it is written).
  * @param limit  The er_scene.h define that sizes the buffer.
@@ -156,7 +156,7 @@ export function locateError(
 /**
  * Wraps an emit function so a thrown AOT error (without a location yet) is tagged with the current node's
  * loc. Wrapped emitters nest, so the deepest node that failed is the one reported. The expression, node, and
- * handler emitters are all wrapped, and compileSource formats the result with formatAotError. While it runs,
+ * handler emitters are all wrapped, and compilePackage formats the result with formatAotError. While it runs,
  * currentLoc() reports the same location, for a check recorded now and run later.
  *
  * @param fn  The emit function; its first parameter is the node it lowers.
@@ -185,9 +185,9 @@ export function withLoc<
 
 /**
  * Rebuilds an AOT error with `file:line:col`, a code-frame, any hint, and the screen size this build folded
- * its layout at (from the resolved `opts`), all folded into the message, for compileSource to throw.
+ * its layout at (from the resolved `opts`), all folded into the message, for compilePackage to throw.
  *
- * @param error  The error compileSource caught.
+ * @param error  The error compilePackage caught.
  * @param src  The app's source, for the code-frame.
  * @param filename  The source's path, as the message should show it.
  * @param opts  The compile's resolved options, for the screen footer.
@@ -219,13 +219,7 @@ export function formatAotError(
     opts.screenFrom === 'search'
       ? `\n\nscreen: this is the layout a ${size} panel picks. Every layout has to compile; name the panels with ` +
         `--screen to drop the others.`
-      : opts.screenFrom === 'option'
-        ? `\n\nscreen: ${size}.`
-        : opts.screenFrom === 'env'
-          ? `\n\nscreen: ${size} (from ER_AOT_SCREEN_W/H).`
-          : `\n\nscreen: ${size} — ER_AOT_SCREEN_W/H did not supply both dimensions, so the ` +
-            `default filled in. A responsive app picks its layout from \`screen\`, so this may be compiling a ` +
-            `branch meant for another board.`;
+      : `\n\nscreen: ${size}.`;
 
   // Build the located error, keeping the location and hint for any caller that inspects them.
   const located: AotError = new Error(

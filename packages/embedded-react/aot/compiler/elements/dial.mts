@@ -19,10 +19,9 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {check, checkNumber, DIAL_MAX_GRADIENT_STOPS} from '../check.mts';
-import {colorLiteral} from '../../style-map.mts';
+import {floatConstant, parseColorValue} from '../../style-map.mts';
 import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStaticOrThrow, evalStatic} from '../static-eval.mts';
-import {floatLit} from '../c-syntax.mts';
 import {lowerExpr} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {
@@ -40,7 +39,7 @@ import {imageNameFromSource} from './image.mts';
 import {FLOAT} from '../ir/types.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
-import type {Env, Scope, StateTable} from '../types.mts';
+import type {EngineName, Env, Scope, StateTable} from '../types.mts';
 import type {IrExpr} from '../ir/expressions.mts';
 import type {IrNode} from '../ir/nodes.mts';
 
@@ -76,7 +75,7 @@ const DIAL_COLOR_PROPS: Record<string, string> = {
 };
 const DIAL_ENUM_PROPS: Record<
   string,
-  {field: string; table: Record<string, string>}
+  {field: string; table: Record<string, EngineName>}
 > = {
   cap: {
     field: 'arc_cap',
@@ -102,8 +101,8 @@ const DIAL_ENUM_PROPS: Record<
  *       indicatorGradient bandColor cap segments gapAngle knob knobSize knobColor knobBorderColor
  *       knobBorderWidth knobImage adjustable onChange={(v) => setV(v)} style=… />
  * → ER_NODE_ARC, the engine's native arc widget. Numbers and colors are static literals or state-driven
- * (recomputed in app_update); `value` may also be a useAnimatedValue handle, which binds ER_PROP_ARC_VALUE
- * natively so a ramp costs no app_update at all. onChange lowers to ER_EVENT_VALUE_CHANGE with its param
+ * (recomputed in the update); `value` may also be a useAnimatedValue handle, which binds ER_PROP_ARC_VALUE
+ * natively so a ramp costs no update at all. onChange lowers to ER_EVENT_VALUE_CHANGE with its param
  * bound to data->value (the quantized value the built-in drag produced). Default 120x120 box.
  *
  * @param element  The <Dial>.
@@ -134,13 +133,13 @@ export function emitDial(
   const hasField = (field: string) =>
     styleWrites(staticAssigns, dynAssigns, field);
   if (!hasField('width')) {
-    staticAssigns.push({field: 'width', expr: '120'});
+    staticAssigns.push({field: 'width', value: 120});
   }
   if (!hasField('height')) {
-    staticAssigns.push({field: 'height', expr: '120'});
+    staticAssigns.push({field: 'height', value: 120});
   }
 
-  // Fold numeric props when possible; otherwise emit runtime assignments for app_update().
+  // Fold numeric props when possible; otherwise emit runtime assignments for the update.
   const numeric = (
     field: string,
     node: t.Node,
@@ -168,18 +167,18 @@ export function emitDial(
       );
     }
 
-    // floatLit checks a float field itself; an int field needs the same check before it is rounded.
+    // floatConstant checks a float field itself; an int field needs the same check before it is rounded.
     if (!isFloat) {
       checkNumber(number);
     }
 
     staticAssigns.push({
       field,
-      expr: isFloat ? floatLit(number) : String(Math.round(number)),
+      value: isFloat ? floatConstant(number) : Math.round(number),
     });
   };
 
-  // Fold static colors now; emit dynamic color expressions for app_update().
+  // Fold static colors now; emit dynamic color expressions for the update.
   const colour = (field: string, node: t.Node, attr: t.JSXAttribute): void => {
     let color: unknown;
     try {
@@ -198,7 +197,7 @@ export function emitDial(
       );
     }
 
-    staticAssigns.push({field, expr: colorLiteral(color)});
+    staticAssigns.push({field, value: parseColorValue(color)});
   };
 
   // Process <Dial> props, splitting them into static props, dynamic updates, binds, assets, and handlers.
@@ -223,7 +222,7 @@ export function emitDial(
       env.animations?.has(node.name)
     ) {
       binds.push({
-        cVar: env.animations.get(node.name)!.cVar,
+        slotName: env.animations.get(node.name)!.slotName,
         prop:
           name === 'value' ? 'ER_PROP_ARC_VALUE' : 'ER_PROP_ARC_VALUE_START',
       });
@@ -249,7 +248,7 @@ export function emitDial(
             `${name} must be one of: ${Object.keys(table).join(' / ')}.`,
           );
         }
-        staticAssigns.push({field, expr: table[token]});
+        staticAssigns.push({field, value: table[token]});
       } else {
         dynAssigns.push({
           field,
@@ -261,7 +260,7 @@ export function emitDial(
       try {
         staticAssigns.push({
           field,
-          expr: evalStatic(node, scope, 'strict') ? '1' : '0',
+          value: evalStatic(node, scope, 'strict') ? 1 : 0,
         });
       } catch {
         dynAssigns.push({
@@ -320,7 +319,7 @@ export function emitDial(
       const stops = allStops.slice(0, DIAL_MAX_GRADIENT_STOPS);
       staticAssigns.push({
         field: 'gradient_type',
-        expr:
+        value:
           gradient!.type === 'radial'
             ? 'ER_GRADIENT_RADIAL'
             : 'ER_GRADIENT_CONIC',
@@ -341,7 +340,7 @@ export function emitDial(
       } else {
         staticAssigns.push({
           field: 'gradient_stop_count',
-          expr: String(stops.length),
+          value: stops.length,
         });
       }
 
@@ -351,11 +350,11 @@ export function emitDial(
           typeof st.offset === 'number' ? st.offset : i / (stops.length - 1);
         staticAssigns.push({
           field: `gradient_stops[${i}].color`,
-          expr: colorLiteral(String(st.color)),
+          value: parseColorValue(String(st.color)),
         });
         staticAssigns.push({
           field: `gradient_stops[${i}].position`,
-          expr: floatLit(off),
+          value: floatConstant(off),
         });
       });
     } else if (name === 'onChange') {
@@ -399,18 +398,16 @@ export function emitDial(
       );
     }
 
-    const handlerName = `er_handler_${out.handlers.length}`;
+    const handlerName = `handler_${out.handlers.length}`;
     out.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerValueHandler(
         onChangeFn,
-        'data->value',
         env,
         state,
         out,
         'float',
-        'data->value_start',
         false,
         {kind: 'event', field: 'value', type: FLOAT},
         {kind: 'event', field: 'value_start', type: FLOAT},

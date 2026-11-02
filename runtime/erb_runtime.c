@@ -1569,8 +1569,7 @@ void erb_rt_anim_stop(uint32_t handle)
 
 static void tick_anims(uint32_t elapsed_ms)
 {
-    /* Every wait counts down before any that ran out moves on, so a wait one of them starts waits its full time,
-       as the C output's completion waits do. */
+    /* Every wait counts down before any that ran out moves on, so a wait one of them starts waits its full time. */
     const uint32_t count = g_erb.program.regions[ERB_REGION_ANIMS].count;
     ErbAnimEntry* entries = anim_entries();
     for (uint32_t index = 0; index < count; index++)
@@ -1876,7 +1875,7 @@ void erb_tick(uint32_t elapsed_ms)
 {
     if (g_erb.loaded && !g_erb.faulted)
     {
-        /* Animation waits first, as the C output counts its completion waits down before its timers. */
+        /* Animation waits first, then timers. */
         tick_anims(elapsed_ms);
         tick_timers(elapsed_ms);
     }

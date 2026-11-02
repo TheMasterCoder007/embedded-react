@@ -65,6 +65,7 @@ import type {IrPressFade} from './ir/functions.mts';
 import type {
   DynAssign,
   EmitOptions,
+  EngineName,
   Env,
   PanResponderRecord,
   Scope,
@@ -101,7 +102,7 @@ const PRESS_EVENTS = new Set([
 ]);
 
 /** The `ellipsizeMode`s the engine draws as asked. */
-const ELLIPSIZE_MODES: Record<string, string> = {
+const ELLIPSIZE_MODES: Record<string, EngineName> = {
   tail: 'ER_TEXT_ELLIPSIZE_TAIL',
   clip: 'ER_TEXT_ELLIPSIZE_CLIP',
 };
@@ -137,7 +138,7 @@ function resolveTag(openingElement: t.JSXOpeningElement): string {
  * @param openingElement  The element's opening tag.
  * @param env  The expression environment.
  *
- * @returns The refs' C slots.
+ * @returns The refs' slots.
  */
 export function lowerRefBinds(
   openingElement: t.JSXOpeningElement,
@@ -162,7 +163,7 @@ export function lowerRefBinds(
     ) {
       const nodeRef = env.refs.get(refExpr.name)!;
       nodeRef.used = true;
-      refs.push(nodeRef.cVar);
+      refs.push(nodeRef.slotName);
     } else {
       throw new Error(
         'AOT: ref={…} must reference a node ref declared with useRef()',
@@ -257,7 +258,7 @@ function lowerTextTruncation(
       );
     }
 
-    assigns.push({field: 'number_of_lines', expr: String(lines)});
+    assigns.push({field: 'number_of_lines', value: lines});
   }
 
   const modeAttr = namedAttr(openingElement, 'ellipsizeMode');
@@ -279,7 +280,7 @@ function lowerTextTruncation(
 
     assigns.push({
       field: 'ellipsize_mode',
-      expr: ELLIPSIZE_MODES[mode as string],
+      value: ELLIPSIZE_MODES[mode as string],
     });
   }
 
@@ -309,9 +310,9 @@ function foldAttr(
 
 /**
  * A folded `activeOpacity` as a number in 0..1. Everything else is an error HERE, where the source line
- * is still in reach: it would otherwise reach floatLit and land in the generated C as a literal that
- * either does not compile (`NaNf`) or quietly means something the app never asked for — a bare
- * `activeOpacity` is `true`, so `1.0f`, which is not dim at all; `{false}` is an invisible one.
+ * is still in reach: it would otherwise reach floatConstant and land in the package as a value that
+ * is not a number, or quietly means something the app never asked for — a bare
+ * `activeOpacity` is `true`, so 1, which is not dim at all; `{false}` is an invisible one.
  *
  * @param value  The folded value.
  * @param attr  The attribute, for the error's location.
@@ -387,11 +388,11 @@ function touchablePressFades(
     );
   }
 
-  // lowerStyle scaled static opacity to 0–255 (the resting value); leave a NaN one for the C compiler to reject.
+  // lowerStyle scaled static opacity to 0–255 (the resting value); a NaN one is refused later.
   const opacityAssign = staticAssigns.find(
     assign => assign.field === 'opacity',
   );
-  const restingRaw = opacityAssign ? Number(opacityAssign.expr) / 255 : 1;
+  const restingRaw = opacityAssign ? Number(opacityAssign.value) / 255 : 1;
   const restingOpacity = Number.isFinite(restingRaw) ? restingRaw : 1;
 
   // The dim target: a folded activeOpacity, or RN's default.
@@ -402,24 +403,24 @@ function touchablePressFades(
           attrExpr(activeAttr),
           scope,
           'AOT: <TouchableOpacity activeOpacity> must be a compile-time constant',
-          'the dim target is baked into the generated handler, so it cannot come from state.',
+          'the dim target is baked into the handler, so it cannot come from state.',
         ),
         activeAttr,
       )
     : TOUCHABLE_ACTIVE_OPACITY;
 
   // Bind a fresh animated value, starting at rest, to the node's opacity.
-  const cVar = `s_av_press_${nodeId}`;
+  const slotName = `anim_press_${nodeId}`;
   checkNumber(restingOpacity);
-  out.childAnimations.push({cVar, initial: restingOpacity});
+  out.childAnimations.push({slotName, initial: restingOpacity});
 
   // Each fade is one timing animation of that value.
   return {
-    bind: {cVar, prop: 'ER_PROP_OPACITY'},
+    bind: {slotName, prop: 'ER_PROP_OPACITY'},
     fades: {
-      onPressIn: {value: cVar, opacity: activeOpacity, durationMs: 0},
+      onPressIn: {value: slotName, opacity: activeOpacity, durationMs: 0},
       onPressOut: {
-        value: cVar,
+        value: slotName,
         opacity: restingOpacity,
         durationMs: TOUCHABLE_RESTORE_MS,
       },
@@ -451,7 +452,7 @@ function applyShow(node: IrNode, show: IrShow): void {
       value: {
         kind: 'whileShown',
         show,
-        value: {kind: 'constant', code: visible.expr},
+        value: {kind: 'constant', value: visible.value},
       },
     });
     return;
@@ -485,12 +486,12 @@ export function lowerEventHandler(
   if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
     // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
     // Its onLayout use gets a handler of its own, since only that event carries the layout rect. The key's
-    // `layout:` and the name's `er_cbl_` can't come from an identifier, so they never meet another callback.
+    // `layout:` and the name's `layout_callback_` can't come from an identifier, so they never meet another callback.
     const callbackKey = `${env.cbPrefix ?? ''}${fn.name}`;
     const emittedKey = layout ? `layout:${callbackKey}` : callbackKey;
     let handlerName = out.cbEmitted.get(emittedKey);
     if (!handlerName) {
-      handlerName = `${layout ? 'er_cbl_' : 'er_cb_'}${callbackKey}`;
+      handlerName = `${layout ? 'layout_callback_' : 'callback_'}${callbackKey}`;
       out.cbEmitted.set(emittedKey, handlerName);
       out.handlers.push({
         kind: 'callback',
@@ -507,7 +508,7 @@ export function lowerEventHandler(
     return handlerName;
   }
 
-  const handlerName = `er_handler_${out.handlers.length}`;
+  const handlerName = `handler_${out.handlers.length}`;
   if (fn.type === 'Identifier' && env.fnProps?.has(fn.name)) {
     // Inline a callback prop's function, compiled in the caller's env/state so its setters and locals resolve.
     const callbackProp = env.fnProps.get(fn.name)!;
@@ -697,10 +698,10 @@ function emitNodeImpl(
     `image name "${image?.imageName}"`,
   );
   if (image?.resizeMode) {
-    staticAssigns.push({field: 'resize_mode', expr: image.resizeMode});
+    staticAssigns.push({field: 'resize_mode', value: image.resizeMode});
   }
   if (image?.tintColor) {
-    staticAssigns.push({field: 'tint_color', expr: image.tintColor});
+    staticAssigns.push({field: 'tint_color', value: image.tintColor});
   }
 
   // `visible` is `display` as in Flow A (style `display` wins); not in collectStyleAssigns, which <Modal> shares.
@@ -715,12 +716,14 @@ function emitNodeImpl(
   ) {
     const expr = visibleAttr.value == null ? null : attrExpr(visibleAttr); // bare `visible` === true
     if (expr == null) {
-      staticAssigns.push({field: 'display', expr: 'ER_DISPLAY_FLEX'});
+      staticAssigns.push({field: 'display', value: 'ER_DISPLAY_FLEX'});
     } else {
       try {
         staticAssigns.push({
           field: 'display',
-          expr: evalStatic(expr, scope) ? 'ER_DISPLAY_FLEX' : 'ER_DISPLAY_NONE',
+          value: evalStatic(expr, scope)
+            ? 'ER_DISPLAY_FLEX'
+            : 'ER_DISPLAY_NONE',
         });
       } catch {
         dynAssigns.push({
@@ -755,11 +758,11 @@ function emitNodeImpl(
 
     staticAssigns.push({
       field: 'long_press_ms',
-      expr: String(Math.min(65535, Math.max(1, Math.round(delayMs)))),
+      value: Math.min(65535, Math.max(1, Math.round(delayMs))),
     });
   }
 
-  // A state-driven conditional flips `display` in app_update; pushed last to beat the element's visible/display.
+  // A state-driven conditional flips `display` in the update; pushed last to beat the element's visible/display.
   if (opts.show) {
     dynAssigns.push({
       field: 'display',
@@ -833,7 +836,7 @@ function emitNodeImpl(
     // Wrap the app's press-in/out with the fade; prepending would dim every other element sharing a useCallback.
     const pressFade = press?.fades[(attr.name as t.JSXIdentifier).name];
     if (pressFade) {
-      const wrapperName = `er_handler_${out.handlers.length}`;
+      const wrapperName = `handler_${out.handlers.length}`;
       out.handlers.push({
         kind: 'pressFade',
         name: wrapperName,
@@ -851,7 +854,7 @@ function emitNodeImpl(
   if (press) {
     for (const eventName of ['onPressIn', 'onPressOut']) {
       if (fadesWired.has(eventName)) continue;
-      const fadeHandlerName = `er_handler_${out.handlers.length}`;
+      const fadeHandlerName = `handler_${out.handlers.length}`;
       out.handlers.push({
         kind: 'pressFade',
         name: fadeHandlerName,
@@ -936,7 +939,7 @@ function omitUndefinedAttrs(
 }
 
 /**
- * Refuses an interpolation table holding a number C cannot write, at the element that binds it rather than when
+ * Refuses an interpolation table holding a number that isn't finite, at the element that binds it rather than when
  * its build lines are written.
  *
  * @param node  The node.

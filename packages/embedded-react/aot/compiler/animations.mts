@@ -68,8 +68,8 @@ type ConfigGetter = (key: string) => t.Node | undefined;
 
 /** One atomic animation (timing / spring / decay) on one value, with its absolute start delay. */
 interface AnimEntry {
-  /** The animated value's C handle. */
-  cVar: string;
+  /** The animated value's handle. */
+  slotName: string;
   kind: string;
   get: ConfigGetter;
   delayMs: number;
@@ -147,12 +147,12 @@ const ANIM_KINDS = new Set([
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Collects `const x = useAnimatedValue(initial)` → Map (name → {cVar, initial}). `prefix` namespaces the
- * C var (`s_av_<prefix><name>`) so each inlined child instance gets its own engine value handle.
+ * Collects `const x = useAnimatedValue(initial)` → Map (name → {slotName, initial}). `prefix` namespaces the
+ * handle (`anim_<prefix><name>`) so each inlined child instance gets its own engine value handle.
  *
  * @param fnBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
- * @param prefix  The C name prefix: none for the App, `c<n>_` for an inlined instance.
+ * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  *
  * @returns The animated values, by name.
  */
@@ -188,7 +188,7 @@ export function collectAnims(
               'give it a finite starting number: useAnimatedValue(0).',
             )
           : 0;
-        // An animated value is a float slot; null or a non-finite number would reach C as `NaNf`.
+        // An animated value is a float slot, which null or a non-finite number doesn't fit.
         // Refuse here, at the declaration, with its location.
         if (typeof initVal !== 'number' || !Number.isFinite(initVal)) {
           const e = aotError(
@@ -202,7 +202,7 @@ export function collectAnims(
         }
         checkNumber(initVal);
         anims.set(decl.id.name, {
-          cVar: `s_av_${prefix}${decl.id.name}`,
+          slotName: `anim_${prefix}${decl.id.name}`,
           initial: initVal,
         });
       }
@@ -213,15 +213,15 @@ export function collectAnims(
 }
 
 /**
- * Collects `const r = useRef(initial)` refs → Map (name → {cVar, cType, initial, kind}). Two kinds:
- *  - VALUE ref (numeric initial): a mutable C slot (escape-hatch state that does NOT re-render;
+ * Collects `const r = useRef(initial)` refs → Map (name → {slotName, slotKind, initial, kind}). Two kinds:
+ *  - VALUE ref (numeric initial): a mutable slot (escape-hatch state that does NOT re-render;
  *    `.current` reads/writes).
- *  - NODE ref (`useRef()` / `useRef(null)`): holds an `ERNode*`, captured by `ref={r}` on an element and
+ *  - NODE ref (`useRef()` / `useRef(null)`): holds an node handle, captured by `ref={r}` on an element and
  *    used as the target of imperative calls like updateVector(r, …). kind === 'node'.
  *
  * @param fnBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
- * @param prefix  The C name prefix: none for the App, `c<n>_` for an inlined instance.
+ * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  * @param wide  Slots to declare 64-bit (see compileWidened).
  *
  * @returns The refs, by name.
@@ -256,11 +256,11 @@ export function collectRefs(
         if (isPanCreate(arg)) continue;
 
         // Empty or null useRef values are node refs, initialized to no bound ERNode.
-        const cVar = `s_ref_${prefix}${decl.id.name}`;
+        const slotName = `ref_${prefix}${decl.id.name}`;
         if (!arg || arg.type === 'NullLiteral') {
           refs.set(decl.id.name, {
-            cVar,
-            cType: 'ERNode*',
+            slotName,
+            slotKind: 'node',
             kind: 'node',
             used: false,
           });
@@ -289,21 +289,21 @@ export function collectRefs(
         const initialWidth = wideInitial(value);
         const widened =
           Number.isInteger(value) && initialWidth !== 'float'
-            ? (wide.get(cVar) ??
+            ? (wide.get(slotName) ??
               (initialWidth === 'number' ? 'number' : undefined))
             : undefined;
-        const cType =
+        const slotKind =
           !Number.isInteger(value) || initialWidth === 'float'
             ? 'float'
             : widened
               ? 'i64'
               : 'int';
-        if (cType === 'float') {
+        if (slotKind === 'float') {
           checkNumber(value);
         }
         refs.set(decl.id.name, {
-          cVar,
-          cType,
+          slotName,
+          slotKind,
           initial: value,
           kind: 'value',
           used: false,
@@ -414,7 +414,7 @@ export function parseInterp(
   cfgNode: t.Node | null | undefined,
   env: Env,
 ): Interpolation {
-  // Interpolation ranges must be known at compile time so the generated C can bake the breakpoints directly.
+  // Interpolation ranges must be known at compile time so the package can bake the breakpoints directly.
   if (cfgNode?.type !== 'ObjectExpression') {
     throw aotError(
       'AOT: .interpolate() needs a config object literal { inputRange, outputRange }',
@@ -500,8 +500,7 @@ function animConfigGetter(cfgObj: t.Node | null | undefined): ConfigGetter {
   return key =>
     (
       (cfgObj as t.ObjectExpression | undefined)?.properties as
-        | t.ObjectProperty[]
-        | undefined
+        t.ObjectProperty[] | undefined
     )?.find(
       property =>
         ((property.key as t.Identifier).name ??
@@ -510,7 +509,7 @@ function animConfigGetter(cfgObj: t.Node | null | undefined): ConfigGetter {
 }
 
 /**
- * A folded config number that will be printed as a float, checked now so a value with no C form is reported
+ * A folded config number that will be printed as a float, checked now so a value a float can't hold is reported
  * where the animation is lowered.
  *
  * @param rawValue  The folded value.
@@ -523,7 +522,7 @@ function configFloat(rawValue: unknown): number {
 }
 
 /**
- * A folded config time in whole milliseconds, checked so a time C cannot hold is reported at the field.
+ * A folded config time in whole milliseconds, checked so a time too long to hold is reported at the field.
  *
  * @param node  The field's value, if the app wrote one.
  * @param env  The expression environment.
@@ -588,7 +587,7 @@ function totalMs(value: number): number {
  * @returns The animation.
  */
 function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
-  const {cVar, kind, get, delayMs, loop} = entry;
+  const {slotName, kind, get, delayMs, loop} = entry;
 
   // Fold the curve's fields, using RN-like defaults when the app leaves one out.
   let curve: IrAnimCurve;
@@ -623,7 +622,7 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
   }
 
   return {
-    handle: cVar,
+    handle: slotName,
     curve,
     to: toNode ? lowerExpr(toNode, env) : null,
     delayMs: totalMs(delayMs),
@@ -669,13 +668,13 @@ function flattenAnim(
         `AOT: Animated.${kind}() first argument must be a useAnimatedValue`,
       );
     }
-    const cVar = env.animations.get(valRef.name)!.cVar;
+    const slotName = env.animations.get(valRef.name)!.slotName;
     const get = animConfigGetter(args[1]);
     const ownDelay = ownDelayMs(kind, get, env);
     const duration =
       kind === 'timing' ? ownDelay + timingDuration(get, env) : null;
     return {
-      entries: [{cVar, kind, get, delayMs: baseDelay + ownDelay, loop}],
+      entries: [{slotName, kind, get, delayMs: baseDelay + ownDelay, loop}],
       duration,
     };
   }
@@ -731,12 +730,12 @@ function flattenAnim(
     // top-level Animated.sequence is handled separately via on_complete chaining, which does support this.)
     const seen = new Set<string>();
     for (const entry of entries) {
-      if (seen.has(entry.cVar)) {
+      if (seen.has(entry.slotName)) {
         throw aotError(
           'AOT: the same animated value is driven more than once in this composition — concurrent/flat same-value steps cancel each other. Use a top-level Animated.sequence(...) for multi-step animation of one value.',
         );
       }
-      seen.add(entry.cVar);
+      seen.add(entry.slotName);
     }
     return {
       entries,
@@ -814,7 +813,7 @@ function animStep(node: AnimatedCall, env: Env, extraDelay: number): AnimEntry {
   const get = animConfigGetter(node.arguments[1]);
   const ownDelay = ownDelayMs(kind, get, env);
   return {
-    cVar: env.animations.get(valRef.name)!.cVar,
+    slotName: env.animations.get(valRef.name)!.slotName,
     kind,
     get,
     delayMs: extraDelay + ownDelay,
@@ -823,7 +822,7 @@ function animStep(node: AnimatedCall, env: Env, extraDelay: number): AnimEntry {
 }
 
 /**
- * The C handle of every value an animation drives.
+ * The handle of every value an animation drives.
  *
  * @param node  The animation.
  * @param env  The expression environment.
@@ -849,7 +848,7 @@ export function animValues(
   const kind = node.callee.property.name;
   const args = node.arguments;
   if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
-    accumulator.add(animStep(node, env, 0).cVar);
+    accumulator.add(animStep(node, env, 0).slotName);
   } else if (kind === 'loop') {
     animValues(args[0], env, accumulator);
   } else if (kind !== 'delay') {
@@ -953,7 +952,7 @@ function lowerChain(
   loop: LoopSpec | null = null,
   trailing: {key: string; delayMs: number} | null = null,
 ): IrStartChain {
-  // GLOBAL: callback names are file-scope, so must be unique across handlers
+  // GLOBAL: callback names must be unique across handlers
   const id = ctx.out.seqN++;
 
   // Lowered from the tail, the order the callbacks are emitted in.
@@ -991,7 +990,7 @@ function lowerChain(
             ctx,
             trailing.key,
             trailing.delayMs,
-            `er_seqcb_${id}_${steps.length}`,
+            `chain_${id}_${steps.length}`,
           )
         : null,
   };
@@ -1016,7 +1015,6 @@ const emptyStart = (
 ): IrStartAnimations => ({
   kind: 'startAnimations',
   animations: [],
-  firstConfig: ctx.animIdx,
   completion,
   completionWait: null,
   completionJoin: null,
@@ -1230,7 +1228,7 @@ function lowerLoopStart(
     if (kind === 'timing' && iterations < 0 && reset) return null;
     steps = [animStep(inner as AnimatedCall, env, 0)];
     if (reset) {
-      resetTo = steps[0].cVar;
+      resetTo = steps[0].slotName;
     }
   } else {
     throw aotError(
@@ -1272,9 +1270,9 @@ function lowerLoopStart(
 }
 
 /**
- * Lowers a `.start(onComplete)` completion callback to a file-scope C fn (ERAnimCompleteFn) set as the
+ * Lowers a `.start(onComplete)` completion callback to a function (ERAnimCompleteFn) set as the
  * animation's on_complete, and adds it to the output; its body runs setters/refs/etc. and re-applies state via
- * app_update if needed.
+ * the update if needed.
  *
  * @param fnNode  The callback.
  * @param env  The expression environment.
@@ -1289,9 +1287,9 @@ function lowerCompletion(
   state: StateTable,
   ctx: StatementContext,
 ): IrCompletion {
-  // Generate a file-scope completion callback and expose start(({finished}) => ...) as a local C int.
+  // Generate a completion callback and expose start(({finished}) => ...) as a local int.
   const id = ctx.out.seqN++;
-  const name = `er_donecb_${id}`;
+  const name = `done_${id}`;
   const locals = new Map<string, Local>(env.locals);
   const param = fnNode.params[0];
   if (param?.type === 'ObjectPattern') {
@@ -1301,8 +1299,8 @@ function lowerCompletion(
           (property.key as t.StringLiteral)?.value) === 'finished'
       ) {
         locals.set((property.value as t.Identifier)?.name ?? 'finished', {
-          code: 'finished',
-          cType: 'int',
+          name: 'finished',
+          slotKind: 'int',
         });
       }
     }
@@ -1316,7 +1314,6 @@ function lowerCompletion(
       : [{type: 'ExpressionStatement', expression: fnBody}];
   const cctx: StatementContext = {
     stateChanged: false,
-    animIdx: 0,
     out: ctx.out,
   };
   const body = lowerStmts(list, {...env, locals}, state, cctx);
@@ -1388,7 +1385,6 @@ export function lowerAnimateStart(
   const start = emptyStart(ctx, completion);
   for (const animEntry of entries) {
     start.animations.push(lowerAnimation(animEntry, env));
-    ctx.animIdx++;
   }
 
   // A spring or decay has no fixed end, so a delay beside it that runs past its start is joined at run time.
@@ -1414,7 +1410,7 @@ export function lowerAnimateStart(
         ctx,
         key,
         duration - end,
-        `er_waitcb_${ctx.out.seqN++}`,
+        `wait_${ctx.out.seqN++}`,
       );
       ctx.out.animCbs.push({
         kind: 'completionWait',

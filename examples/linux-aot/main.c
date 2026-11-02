@@ -18,30 +18,63 @@
  * embedded-react-desktop-aot — the desktop host for Flow B (the AOT path).
  *
  * The Flow B peer of examples/linux: it renders a JSX app in an SDL2 window with NO QuickJS and NO JS
- * at runtime. The app's scene graph is compiled straight to C (dist/app.gen.c, from `npm run aot`),
- * which calls er_scene.h directly; this host just brings up SDL + the engine's SDL backend, calls
- * er_app_build() once, and runs the frame loop (input → touch, commit, present, tick). Same engine,
- * same backend as Flow A — only the front end (compiled C vs. interpreted React) differs.
+ * at runtime. The app is a Flow B package (dist/app.erpkg, from `npm run aot`), which the Flow B runtime
+ * verifies and runs in a fixed arena; this host just brings up SDL + the engine's SDL backend, calls
+ * erb_load() once, and runs the frame loop (input → touch, commit, present, tick). Same engine, same
+ * backend as Flow A — only the front end (a package vs. interpreted React) differs.
  *
  * This is the desktop proxy for a no-PSRAM MCU: no JS heap, no interpreter, a fixed static footprint.
+ *
+ *   embedded-react-desktop-aot [package.erpkg]    defaults to packages/embedded-react/dist/app.erpkg
  */
 
 #define SDL_MAIN_HANDLED
 
-#include "app.gen.h"
-#include "assets.generated.h" /* er_register_assets() — baked <Image> assets (a no-op when none) */
 #include "er_scene.h"
+#include "erb_runtime.h"
 #include "native_renderer.h"
 #include "sdl_backend.h"
 
 #include <SDL2/SDL.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
-/* Window size defaults to the size the app was GENERATED for — app.gen.h records it, and a responsive
- * demo's layout is already folded to it, so a differently-sized window shows the wrong branch letterboxed.
- * Taking the default from the generated header means the size is stated once, at generate time. */
-#define SCREEN_W_DEFAULT ER_AOT_SCREEN_W
-#define SCREEN_H_DEFAULT ER_AOT_SCREEN_H
+/* Window size, unless ER_AOT_SCREEN_W/H say otherwise. The window's size picks the package's layout. */
+#define SCREEN_W_DEFAULT 800
+#define SCREEN_H_DEFAULT 480
+
+/** @brief The firmware's arena. */
+static uint32_t s_arena[(64u * 1024u) / sizeof(uint32_t)];
+
+/** @brief Reads a file into a 4-aligned buffer, as a board places a package. NULL when it can't be read. */
+static uint32_t* read_package(const char* path, size_t* bytes)
+{
+    FILE* file = fopen(path, "rb");
+    if (!file)
+    {
+        return NULL;
+    }
+    fseek(file, 0, SEEK_END);
+    const long length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    uint32_t* words = length > 0 ? malloc(((size_t)length + 3u) & ~(size_t)3u) : NULL;
+    if (words && fread(words, 1, (size_t)length, file) != (size_t)length)
+    {
+        free(words);
+        words = NULL;
+    }
+    fclose(file);
+    *bytes = (size_t)length;
+    return words;
+}
+
+/** @brief The runtime's reports, one line each. */
+static void log_line(const char* line, void* context)
+{
+    (void)context;
+    SDL_Log("ERB: %s", line);
+}
 
 /** @brief Reads an integer env var, returning @p fallback when unset/empty/non-positive. */
 static int env_int(const char* name, int fallback)
@@ -69,12 +102,27 @@ static int to_px(int logical, float scale)
 }
 
 /**
- * @brief Entry point: bring up SDL + the engine, build the AOT app once, run the frame loop.
+ * @brief Entry point: bring up SDL + the engine, load the package once, run the frame loop.
+ *
+ * @param[in] argc  The argument count.
+ * @param[in] argv  The package's path, as the first argument, or ER_DEFAULT_PACKAGE without one.
  *
  * @return 0 on clean exit; non-zero on a setup failure.
  */
-int main(void)
+int main(int argc, char** argv)
 {
+    const char* package_path = argc > 1 ? argv[1] : ER_DEFAULT_PACKAGE;
+    size_t package_bytes = 0;
+    uint32_t* package = read_package(package_path, &package_bytes);
+    if (!package)
+    {
+        fprintf(stderr,
+                "Can't read the package %s. Build one first:\n"
+                "    cd packages/embedded-react && npm run aot -- <demo>   (e.g. watch-face)\n",
+                package_path);
+        return 1;
+    }
+
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
     {
@@ -82,9 +130,8 @@ int main(void)
         return 1;
     }
 
-    /* Framebuffer size. Defaults to whatever the app was compiled for (see above); the parity harness
-       overrides it via ER_AOT_SCREEN_W/H — the same vars that seed screen.width/height in the AOT compiler,
-       so setting them for the generate step alone already gives a matching window. */
+    /* Framebuffer size. The parity harness sets it through ER_AOT_SCREEN_W/H, the same vars that name the
+       panel a package keeps its layout for in the AOT compiler. */
     const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
     const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);
 
@@ -130,33 +177,35 @@ int main(void)
         return 1;
     }
 
-    /* Register baked <Image> assets (er_image_load) BEFORE building the tree, so Image nodes resolve their
-       source by name. Generated by `npm run aot`; a no-op when the demo imports no images. */
-    er_register_assets();
-
-    /* Anchor Date.now() to the real time before the build, so a mount effect already reads it. A board with
+    /* Anchor Date.now() to the real time before the load, so a mount effect already reads it. A board with
        no RTC would call this once it learns the time (SNTP, GPS). */
-    er_app_set_wall_clock((int64_t)time(NULL) * 1000);
+    erb_set_wall_clock((int64_t)time(NULL) * 1000);
 
-    /* Build the compiled app's scene graph (no JS — just er_scene.h calls baked at build time). */
-    if (!er_app_build(phys_w, phys_h))
+    /* Verify the package and build its scene graph at this window's size. One that fails shows the error
+       screen, as a board does, and a headless run fails. */
+    const ErbConfig config = {
+        .arena = s_arena,
+        .arena_bytes = sizeof(s_arena),
+        .screen_w = (uint16_t)phys_w,
+        .screen_h = (uint16_t)phys_h,
+        .log = log_line,
+    };
+    ErbError load_error;
+    const bool loaded = erb_load(package, package_bytes, &config, &load_error);
+    if (loaded)
     {
-        SDL_Log("dist/app.gen.c was generated at %dx%d, which picks another layout than this %dx%d window. "
-                "Regenerate it with ER_AOT_SCREEN_W/H set to this size.",
-                ER_AOT_SCREEN_W,
-                ER_AOT_SCREEN_H,
-                phys_w,
-                phys_h);
-        er_sdl_backend_destroy();
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+        SDL_Log("package %s running at %dx%d (no QuickJS)", package_path, phys_w, phys_h);
     }
-    SDL_Log("AOT app built at %dx%d (no QuickJS)", phys_w, phys_h);
+    else
+    {
+        char message[256];
+        erb_error_message(&load_error, message, sizeof(message));
+        SDL_Log("the package didn't load: %s", message);
+        erb_show_error(&load_error);
+    }
     /* The on-screen keyboard is compiled into this host (ERUI_ONSCREEN_KEYBOARD=ON in CMakeLists.txt) and
      * auto-shows whenever a TextInput is focused. The host stays neutral — the app drives its layout/colours
-     * via setKeyboardConfig({...}) in App.jsx (lowered to er_keyboard_set_config), else the built-in QWERTY. */
+     * via setKeyboardConfig({...}) in App.jsx, else the built-in QWERTY. */
 
     /* Optional one-shot screenshot for verification: ER_AOT_SHOT=<path.bmp> renders one frame, saves
        it, and exits. Lets a headless run confirm the pixels without a visible window. */
@@ -169,6 +218,14 @@ int main(void)
         {
             SDL_strlcpy(shot, s, sizeof(shot));
         }
+    }
+    if (shot[0] && !loaded)
+    {
+        er_sdl_backend_destroy();
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
     }
     if (shot[0])
     {
@@ -214,7 +271,7 @@ int main(void)
             {
                 er_commit();
                 embedded_renderer_tick(16);
-                er_app_tick(16);
+                erb_tick(16);
             }
         }
 
@@ -271,7 +328,7 @@ int main(void)
                     embedded_renderer_key(0, ch);
                     er_commit();
                     embedded_renderer_tick(16);
-                    er_app_tick(16);
+                    erb_tick(16);
                 }
                 SDL_Log("typed \"%s\"", type_str);
             }
@@ -295,7 +352,7 @@ int main(void)
             {
                 er_commit();
                 embedded_renderer_tick(16);
-                er_app_tick(16); /* let app timers (setInterval/setTimeout) fire during the hold */
+                erb_tick(16); /* let app timers (setInterval/setTimeout) fire during the hold */
             }
             SDL_Log("held press at %d,%d for %d ms", px, py, hold_ms);
         }
@@ -354,7 +411,7 @@ int main(void)
         const uint32_t now = SDL_GetTicks();
         const uint32_t dt = now - prev;
         embedded_renderer_tick(dt);
-        er_app_tick((int)dt); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
+        erb_tick(dt); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
         prev = now;
     }
 

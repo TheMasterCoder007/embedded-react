@@ -22,7 +22,7 @@ import {aotError} from './diagnostics.mts';
 import {foldBoot, isBoot} from './boot.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
-import {emitSourcedWide, lowerExpr} from './expressions.mts';
+import {lowerExpr, lowerSourcedWide} from './expressions.mts';
 import {
   isFn,
   declaredNames,
@@ -64,7 +64,7 @@ import type {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * A prop as a component instance receives it: a folded constant, a runtime C expression (a list row's
+ * A prop as a component instance receives it: a folded constant, a runtime expression (a list row's
  * `item.field`, say), or a callback compiled where the component uses it as an event handler.
  */
 type PropDescriptor =
@@ -84,7 +84,7 @@ type PropDescriptor =
 
 /**
  * Reads a component's props as descriptors: `{static:true,value}` (folded),
- * `{static:false,code, cType, struct}` (a runtime C expression — e.g., a list row's `item.field`), or
+ * `{static:false, slotKind, struct}` (a runtime expression — e.g., a list row's `item.field`), or
  * `{fn:true,node}` (a callback).
  *
  * @param openingElement  The component instance's opening tag.
@@ -166,7 +166,7 @@ function extractProps(
       continue;
     }
 
-    // Any other prop folds to a constant when it can, else becomes a runtime C expression.
+    // Any other prop folds to a constant when it can, else becomes a runtime expression.
     try {
       const propName = (attr.name as t.JSXIdentifier).name;
       props[propName] = {
@@ -176,7 +176,7 @@ function extractProps(
     } catch {
       props[(attr.name as t.JSXIdentifier).name] = {
         static: false,
-        ...emitSourcedWide(node, env),
+        ...lowerSourcedWide(node, env),
       };
     }
   }
@@ -367,8 +367,8 @@ export function emitComponent(
       setBinding(childScope, name, descriptor.value);
     } else {
       childLocals.set(name, {
-        code: descriptor.code,
-        cType: descriptor.cType,
+        name: descriptor.name,
+        slotKind: descriptor.slotKind,
         struct: descriptor.struct,
         isBool: descriptor.isBool, // keep boolean-ness across the prop boundary (extractProps supplies it)
         lit: descriptor.lit,
@@ -469,7 +469,7 @@ export function emitComponent(
     cbPrefix: prefix,
   };
 
-  // Resolve memos in order (fold, else a local C expr), then compile its effects, all in the child's env/state.
+  // Resolve memos in order (fold, else a local expression), then compile its effects, all in the child's env/state.
   for (const [name, expr] of childMemos) {
     try {
       setBinding(
@@ -478,15 +478,14 @@ export function emitComponent(
         bindConst(name, evalStatic(expr, childScope, 'boot')),
       );
     } catch {
-      const cExpr = emitSourcedWide(expr, childEnv);
+      const memo = lowerSourcedWide(expr, childEnv);
       childLocals.set(name, {
-        code: `(${cExpr.code})`,
-        cType: cExpr.cType,
-        isBool: cExpr.isBool,
-        lit: cExpr.lit,
-        wide: cExpr.wide,
-        source: cExpr.source,
-        expr: cExpr.expr,
+        slotKind: memo.slotKind,
+        isBool: memo.isBool,
+        lit: memo.lit,
+        wide: memo.wide,
+        source: memo.source,
+        expr: memo.expr,
       });
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }
@@ -651,7 +650,7 @@ function rowEnv(
 /**
  * `{listState.map((item, i) => <Row/>)}` over a STATE array of variable length. Pre-allocates a fixed
  * pool of `cap` rows (no runtime malloc); the row at index `row` binds `item` to `s_<name>[row]` (a struct
- * local) and is shown only while `row < count` (display toggle). app_update then drives every row's content
+ * local) and is shown only while `row < count` (display toggle). the update then drives every row's content
  * and show.
  *
  * @param call  The `.map(…)` call.
@@ -698,10 +697,10 @@ function emitDynamicMap(
       rowLocals.delete(indexName); // the index is a per-row literal in rowScope
     }
 
-    // A row's item has no C type of its own: only its fields are read, through `struct`.
+    // A row's item has no slot of its own: only its fields are read, through `struct`.
     if (itemName) {
       rowLocals.set(itemName, {
-        code: `${listState.arrayName}[${rowIndex}]`,
+        name: itemName,
         struct: listState.struct,
         list: listState,
         row: rowIndex,

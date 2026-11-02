@@ -107,11 +107,10 @@ UI needs no firmware rebuild. Tracked under the
 
 Order: restructure the compiler (split `aot/compile.mjs`, then add a typed intermediate
 representation), then build the runtime and the package output, then multi-panel packages
-and hot reload, then parity. The current C output keeps working until the package path
-passes the same tests, and is then retired. Boards with no spare flash partition link the
-package into the firmware instead.
+and hot reload, then parity. Boards with no spare flash partition link the package into the
+firmware instead.
 
-Carried over from the C output:
+Still to do:
 
 - Resolve the live-vs-snapshot `toValue` gap (see Known issues).
 - Imperative refs / `Animated` sequence / parallel / loop / interpolate hardening on the
@@ -157,7 +156,7 @@ Carried over from the C output:
 
 > **Done:** `embedded-react build` now produces the device artifact from a consumer project —
 > `app.erpkg` (Flow A, bytecode compiled through the prebuilt `.wasm`, no native toolchain) and
-> `--aot` → a Flow B `app.erpkg`, or `app.gen.c` with `--c`.
+> `--aot` → a Flow B `app.erpkg`.
 
 ---
 

@@ -15,8 +15,7 @@
  */
 
 /*
- * Constant props as package records. Lowering spells a constant prop the way the C output writes it
- * (`0xFF0D0D0Fu`, `ER_ALIGN_CENTER`, `0.5f`), so this reads that spelling back into the prop's value.
+ * Constant props as package records.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -25,15 +24,13 @@
 
 import {aotError} from '../diagnostics.mts';
 import {ABI_PROPS, ENGINE_VALUES, PropKind} from './format.mts';
+import type {PropConstant} from '../types.mts';
 import type {AbiProp, PropKindName} from './format.mts';
 import type {ProgramPropEntry} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
-
-// A cast the C output puts in front of a constant, which doesn't change its value here.
-const CAST = /^\((?:u?int(?:8|16|32)_t|float|double)\)\s*/;
 
 // The values each whole-number kind holds, as the runtime checks them at load. A float holds any, and an
 // enum's largest value is its prop's own.
@@ -60,16 +57,14 @@ const RANGES: Partial<Record<PropKindName, [min: number, max: number]>> = {
 export function abiProp(field: string): AbiProp {
   const prop = ABI_PROPS.get(field);
   if (!prop) {
-    throw aotError(
-      `AOT: the package output has no engine prop for \`${field}\` yet`,
-    );
+    throw aotError(`AOT: a package has no engine prop for \`${field}\` yet`);
   }
 
   return prop;
 }
 
 /**
- * A float's 32 bits, as C's `float` holds it.
+ * A float's 32 bits.
  *
  * @param value  The number.
  *
@@ -82,55 +77,35 @@ export function floatBits(value: number): number {
 }
 
 /**
- * Reads a constant as the C output spells it.
+ * A constant's number.
  *
- * @param code  The C: a number, a hex color, an er_scene.h name, or one of those negated or cast.
+ * @param constant  A number, or an er_scene.h name.
  *
- * @returns The number, or null when it is none of those.
+ * @returns The number, or null for a name the format doesn't have.
  */
-export function readConstant(code: string): number | null {
-  let text = code.trim();
-  while (CAST.test(text) || /^\(.*\)$/.test(text)) {
-    text = CAST.test(text) ? text.replace(CAST, '') : text.slice(1, -1).trim();
-  }
-
-  if (text.startsWith('-')) {
-    const negated = readConstant(text.slice(1));
-    return negated === null ? null : -negated;
-  }
-
-  if (/^0x[0-9a-f]+u?$/i.test(text)) {
-    return Number.parseInt(text.replace(/u$/i, ''), 16);
-  }
-
-  if (/^\d+u$/i.test(text)) {
-    return Number(text.slice(0, -1));
-  }
-
-  if (/^\d+(\.\d*)?(e[+-]?\d+)?f?$/i.test(text)) {
-    return Number(text.replace(/f$/i, ''));
-  }
-
-  return ENGINE_VALUES.get(text) ?? null;
+export function constantNumber(constant: PropConstant): number | null {
+  return typeof constant === 'number'
+    ? constant
+    : (ENGINE_VALUES.get(constant) ?? null);
 }
 
 /**
  * A constant prop as a prop set entry.
  *
  * @param field  The ERProps field.
- * @param code  Its value, as C.
+ * @param constant  Its value.
  *
  * @returns The entry.
  */
 export function constantPropEntry(
   field: string,
-  code: string,
+  constant: PropConstant,
 ): ProgramPropEntry {
   const prop = abiProp(field);
-  const value = readConstant(code);
-  if (value === null) {
+  const value = constantNumber(constant);
+  if (value === null || !Number.isFinite(value)) {
     throw aotError(
-      `AOT: the package output can't read the constant \`${code}\` for \`${field}\` yet`,
+      `AOT: a package can't hold the constant \`${constant}\` for \`${field}\` yet`,
     );
   }
 
@@ -138,7 +113,7 @@ export function constantPropEntry(
     return {prop: prop.id, kind: PropKind.float, value: floatBits(value)};
   }
 
-  // The C output would wrap a value its field can't hold; the runtime refuses the package instead.
+  // The runtime refuses a package with a value its field can't hold.
   const whole = Math.trunc(value);
   const [min, max] = prop.kind === 'enum' ? [0, prop.max!] : RANGES[prop.kind]!;
   if (whole < min || whole > max) {

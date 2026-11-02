@@ -31,10 +31,8 @@ for (;;) {
 }
 ```
 
-A Flow B firmware replaces the node building with the generated `er_app_build(w, h)` and adds
-`er_app_tick(dt)` for the app's timers. `er_app_build()` returns `false`, having built nothing, when
-the panel picks another layout than the one the app was compiled for; `er_app_fits(w, h)` asks the
-same without building. A Flow A firmware replaces it with `er_runtime`, which
+A Flow B firmware replaces the node building with `erb_load()`, which verifies a package and builds its
+tree, and adds `erb_tick(dt)` for the app's timers. A Flow A firmware replaces it with `er_runtime`, which
 builds the tree from JavaScript.
 
 ## Nodes and the tree
@@ -125,8 +123,7 @@ easing and spring constants): `er_layout_anim_configure_next(&cfg)` arms it for 
 under a name; `er_font_register(family, font)` registers one baked size of a font (a `BitmapFont`,
 which carries its pixel size). These reference the bytes in place, so flash-resident assets cost no
 RAM; `er_font_load(name, buf, len)` instead copies a font blob into the `ERUI_FONT_POOL_BYTES` pool.
-The generated `er_register_assets()` from a Flow B build calls these for you; a Flow A container
-registers its pack on load.
+A Flow B package and a Flow A container register their packs on load.
 
 ## Time
 

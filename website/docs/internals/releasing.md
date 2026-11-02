@@ -82,8 +82,8 @@ Three things must agree, and each is checked rather than trusted:
 - **The container and the runtime.** An `app.erpkg` is stamped with the QuickJS version it was
   compiled for; the loader rejects a mismatch with an on-screen panel rather than running garbage.
   The tag is pinned in the examples' `CMakeLists.txt` and in the bridge; bump them together.
-- **Generated C and the engine.** The AOT compiler writes its version into `app.gen.c` and
-  `_Static_assert`s it against `er_version.h`, so a stale `app.gen.c` fails to compile.
+- **A Flow B package and the runtime.** A package carries the format version and the engine ABI it was built for;
+  the runtime refuses one it can't run, and says why.
 - **Bytecode and the QuickJS build.** Bytecode is specific to the QuickJS version, which is why the
   package ships its own compiler through the prebuilt wasm and the firmware fetches a pinned tag.
 

@@ -4758,8 +4758,16 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
                     er_text_input_key(ER_KEY_BACKSPACE, NULL);
                     break;
                 case ER_KBD_KEY_DONE:
-                    er_text_input_key(ER_KEY_ESCAPE, NULL);
+                {
+                    /* Submit, then blur, unless the app's handler moved the focus itself. */
+                    const uint16_t submitted_tag = s_focused_input_tag;
+                    er_text_input_key(ER_KEY_RETURN, NULL);
+                    if (s_focused_input_tag == submitted_tag)
+                    {
+                        er_text_input_key(ER_KEY_ESCAPE, NULL);
+                    }
                     break;
+                }
                 case ER_KBD_KEY_CHAR:
                 default:
                     er_text_input_key(0, h.key->text ? h.key->text : "");

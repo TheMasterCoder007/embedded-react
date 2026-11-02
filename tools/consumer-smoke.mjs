@@ -25,7 +25,7 @@
  *   node tools/consumer-smoke.mjs
  *
  * Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
- * tools/web-sim/build.mjs); the AOT path (app.gen.c) and the TypeScript-template typecheck always run.
+ * tools/web-sim/build.mjs); the AOT path (a Flow B app.erpkg) and the TypeScript-template typecheck always run.
  * Packs the staged package (tools/stage-npm-package.mjs), so it needs `npm ci` in packages/embedded-react.
  * Exits non-zero on any failure.
  */
@@ -106,7 +106,7 @@ if (hasWasm) {
   );
 }
 
-// 4. Flow B (AOT) → app.erpkg, and app.gen.c with --c. Pure JS (no wasm). Builds the scaffolded starter itself, at a
+// 4. Flow B (AOT) → app.erpkg. Pure JS (no wasm). Builds the scaffolded starter itself, at a
 //    no-PSRAM board's size, so a starter the AOT compiler rejects fails here rather than on a user's first build.
 run(
   'npx',
@@ -124,24 +124,6 @@ run(
 ok(
   existsSync(resolve(proj, 'dist-aot/app.erpkg')),
   'embedded-react build --aot (the starter) → dist-aot/app.erpkg',
-);
-run(
-  'npx',
-  [
-    'embedded-react',
-    'build',
-    '--aot',
-    '--c',
-    '--screen',
-    '240x320',
-    '--out',
-    'dist-aot',
-  ],
-  proj,
-);
-ok(
-  existsSync(resolve(proj, 'dist-aot/app.gen.c')),
-  'embedded-react build --aot --c (the starter) → dist-aot/app.gen.c',
 );
 // `pack` works offline, so the published flash.mjs and its imports are checked here too.
 run(
@@ -162,7 +144,7 @@ ok(
   'embedded-react pack → dist-aot/app.slot-a.bin',
 );
 
-// 4b. Flow B from a TypeScript entry (App.tsx). The compiler strips the types and must emit C — proving the
+// 4b. Flow B from a TypeScript entry (App.tsx). The compiler strips the types and must emit a package — proving the
 //     published AOT path handles .tsx, not just .jsx.
 writeFileSync(
   resolve(proj, 'aot-app.tsx'),
@@ -184,20 +166,12 @@ const s = StyleSheet.create({ r: { flex: 1 } as ViewStyle, t: { color: '#fff', f
 );
 run(
   'npx',
-  [
-    'embedded-react',
-    'build',
-    '--aot',
-    '--c',
-    'aot-app.tsx',
-    '--out',
-    'dist-aot-ts',
-  ],
+  ['embedded-react', 'build', '--aot', 'aot-app.tsx', '--out', 'dist-aot-ts'],
   proj,
 );
 ok(
-  existsSync(resolve(proj, 'dist-aot-ts/app.gen.c')),
-  'embedded-react build --aot --c (TypeScript entry) → dist-aot-ts/app.gen.c',
+  existsSync(resolve(proj, 'dist-aot-ts/app.erpkg')),
+  'embedded-react build --aot (TypeScript entry) → dist-aot-ts/app.erpkg',
 );
 
 // 5. The TypeScript scaffolder (`create-embedded-react <name> --ts`), exercised the way a user runs it —

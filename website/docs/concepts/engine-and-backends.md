@@ -123,5 +123,4 @@ maximum corner, and a backend that mixes the two leaves a one-pixel column of st
 The engine does not run a loop of its own. The **host**, which is your firmware or one of the
 example projects, owns the frame loop: it polls touch, advances the engine's clock, lets the
 frontend commit, and presents. In Flow A that is a few lines around `er_runtime`, the portable
-QuickJS host core; in Flow B it is `er_register_assets()` and the generated `er_app_build(w, h)` at
-boot, then `er_app_tick(dt)` and `er_commit()` each frame. The board examples are the reference for each.
+QuickJS host core; in Flow B it is `erb_load()` at boot, then `erb_tick(dt)` and `er_commit()` each frame. The board examples are the reference for each.

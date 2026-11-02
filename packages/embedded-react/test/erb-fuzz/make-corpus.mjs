@@ -33,10 +33,10 @@ import {bakeAssetPackBytes} from '../../assets/index.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '../../../..');
-const FIXTURES = join(HERE, '../erb-parity/fixtures');
+const FIXTURES = join(HERE, '../erb-frames/fixtures');
 const OUT_DIR = join(ROOT, 'tools/erb-fuzz/corpus/seeds');
 
-// As erb-parity.mjs compiles it to fit the engine's default vector nodes.
+// As erb-frames.mjs compiles it to fit the engine's default vector nodes.
 const LIST_CAPS = {'svg-rows': 4};
 
 const fixtures = readdirSync(FIXTURES)

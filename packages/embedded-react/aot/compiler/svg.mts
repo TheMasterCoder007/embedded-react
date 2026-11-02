@@ -60,7 +60,7 @@ import {
   elementSpec,
   svgShapeSpec,
 } from './elements/props.mts';
-import {MAX_GRADIENT_STOPS, printTapeValue} from './c/vectors.mts';
+import {MAX_GRADIENT_STOPS} from './ir/vectors.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
@@ -136,9 +136,6 @@ export const CAP_MAP: Record<string, number> = {butt: 0, round: 1, square: 2};
 /** strokeLinejoin → ERVectorPaint join. */
 export const JOIN_MAP: Record<string, number> = {miter: 0, round: 1, bevel: 2};
 
-/** A C number (sign, decimals, exponent) as a regex source for reading folded literals back. */
-const C_NUMBER = '-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?';
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -206,7 +203,7 @@ function checkStaticGradient(name: string, value: unknown): void {
  * Yields an <Svg> subtree's shape children in source order, inlining any `<>…</>` in place: a fragment
  * carries no paint and no transform, so it is transparent to the tape (the Flow A walk in flattenSvg
  * treats it the same way). Whitespace between elements and JSX comments are skipped; anything else
- * that has no shape to contribute throws, rather than vanishing from the generated C.
+ * that has no shape to contribute throws, rather than vanishing from the package.
  *
  * @param children  An <Svg>'s (or fragment's) children.
  *
@@ -352,7 +349,7 @@ export const vectorPaintOf = (record: number[]): IrVectorPaint => ({
 });
 
 /**
- * Refuses a paint whose widths C cannot write, where the paint is lowered rather than when its table is.
+ * Refuses a paint whose widths aren't finite, where the paint is lowered rather than when its table is.
  *
  * @param paints  The paints, in table order.
  */
@@ -364,7 +361,7 @@ export function checkVectorPaints(paints: IrVectorPaint[]): void {
 }
 
 /**
- * Refuses baked tables holding a number C cannot write, in the order the tables are written: the ops, the
+ * Refuses baked tables holding a number that isn't finite, in the order the tables are written: the ops, the
  * paints, then each gradient's kept stops, and geometry. An empty tape has no tables to check.
  *
  * @param tables  The drawing.
@@ -416,7 +413,7 @@ export const svgNum = (value: unknown, fallback = 0): number => {
 };
 
 /**
- * True if an attribute value is a state-driven C expression (vs. a static number/string).
+ * True if an attribute value is a state-driven expression (vs. a static number/string).
  *
  * @param value  An attribute value from svgAttrs.
  *
@@ -758,7 +755,7 @@ const tapeNumber = (value: number): IrTapeValue => ({kind: 'number', value});
 const TAPE_ZERO = tapeNumber(0);
 
 /**
- * A number from the app as a tape slot, checked now that C can write it, where the shape is lowered.
+ * A number from the app as a tape slot, checked now, where the shape is lowered.
  *
  * @param value  The number.
  *
@@ -796,15 +793,18 @@ const tapeChain = (
 });
 
 /**
- * The value of a slot that reads as a C float literal, or null when state drives it. This reads the slot's C
- * text, the way the geometry folded before it was IR, so the generated C stays the same.
+ * The value of a slot that holds a known number, or null when state drives it.
  *
  * @param value  The slot, if there is one.
  *
  * @returns Its value, or null.
  */
-const tapeLiteral = (value: IrTapeValue | null): number | null =>
-  value == null ? null : cLiteralValue(printTapeValue(value));
+function tapeLiteral(value: IrTapeValue | null): number | null {
+  if (value?.kind === 'number') return value.value;
+  return value?.kind === 'float' && value.value.kind === 'number'
+    ? value.value.value
+    : null;
+}
 
 /**
  * An arc's tape slots. The engine measures angles in radians clockwise from 3 o'clock, so each angle is
@@ -862,23 +862,6 @@ export const circleTape = (
 ];
 
 /**
- * The numeric value of a C float literal (as produced by floatLit, or the `(float)(N)` cast the imperative
- * updateVector path emits), or null for a state-driven expr.
- *
- * @param floatExpr  C for a float.
- *
- * @returns Its value, or null when it is not a literal.
- */
-const cLiteralValue = (floatExpr: unknown): number | null => {
-  const trimmed = String(floatExpr).trim();
-  const cast = new RegExp(`^\\(float\\)\\((${C_NUMBER})\\)$`).exec(trimmed);
-  if (cast) return parseFloat(cast[1]);
-  return new RegExp(`^${C_NUMBER}f$`).test(trimmed)
-    ? parseFloat(trimmed)
-    : null;
-};
-
-/**
  * A corner radius clamped to half its side, mirroring svg-ops rectRadii. Folded to a number when both the
  * radius and the side are known — the usual case, since only x/y/width tend to be state-driven.
  *
@@ -933,7 +916,7 @@ const sharpRectTape = (
 /**
  * A rectangle's tape slots. rx/ry are null when the rect has no corner radius at all. Corners are cubics, not
  * ER_VOP_ARC, for the same reason svg-ops uses them: a corner must start at EXACTLY the preceding line's
- * endpoint. `tag` names the locals and must be unique within the caller's C block.
+ * endpoint. `tag` names the locals and must be unique within the caller's block.
  *
  * @param x  The left edge.
  * @param y  The top edge.
@@ -1256,7 +1239,7 @@ function svgBoxSize(
   return [
     {
       field,
-      expr: `(int16_t)${Math.round(svgPixels(field, value, scaled))}`,
+      value: Math.round(svgPixels(field, value, scaled)),
     },
   ];
 }
@@ -1293,7 +1276,7 @@ function svgBootSizes(width: unknown, height: unknown): DynAssign[] {
 
 /**
  * Lowers the box an <Svg> draws in: a node of `type` with its size, then its static style, its animated
- * transform and its refs. No state drives the box: it is not a node app_update() rewrites.
+ * transform and its refs. No state drives the box: it is not a node the update rewrites.
  *
  * @param nodeId  The node's variable.
  * @param type  The engine node type: a vector node, or an image for a rasterized .svg.
@@ -1373,8 +1356,8 @@ function lowerSvgBox(
 
 /**
  * <Svg> → ER_NODE_VECTOR. Static subtree → is a baked const op-tape, converted by flattenSvg (the same
- * converter Flow A uses); any state-driven attr → a symbolic op-tape rebuilt by a generated build_svgN() at
- * build time and on every app_update. <Svg source> draws a .svg baked ahead of time (bakeSvgArtifacts).
+ * converter Flow A uses); any state-driven attr → a symbolic op-tape rebuilt at
+ * build time and on every update. <Svg source> draws a .svg baked ahead of time (bakeSvgArtifacts).
  *
  * @param element  The <Svg>.
  * @param scope  Compile-time constants in reach.
@@ -1489,7 +1472,7 @@ function emitSvgScaled(
     [VOP_ARC]: 'ER_VOP_ARC',
   };
   const tape: IrTapeValue[] = [];
-  for (let index = 0; index < ops.length; ) {
+  for (let index = 0; index < ops.length;) {
     const op = ops[index++];
     if (op === VOP_SHAPE) {
       tape.push(tapeOp('ER_VOP_SHAPE'), tapeNumber(ops[index++]));
@@ -1556,7 +1539,6 @@ function emitSvgScaled(
     })),
   };
   out.vectors.push({kind: 'drawing', vector});
-  out.needsMath = true;
 
   const node = lowerSvgBox(
     nodeId,
@@ -1632,7 +1614,7 @@ function emitSvgStatic(
 
 /**
  * Baked <Svg source={importedSvg}>: the CLI pre-bakes the .svg to a vector artifact (ops/paints/GRADIENTS) *
- * (bakeSvgArtifacts → opts.svgArtifacts) since compileSource is I/O-free. Scaled to the static
+ * (bakeSvgArtifacts → opts.svgArtifacts) since compilePackage is I/O-free. Scaled to the static
  * width/height at compile time, then emitted as const tables. This is the path that carries gradients into
  * Flow B.
  *
@@ -1727,7 +1709,7 @@ function emitSvgSource(
     }
 
     const styled = style.find(assign => assign.field === field);
-    return styled ? Number(styled.expr) : numericAttr(field, fallback);
+    return styled ? Number(styled.value) : numericAttr(field, fallback);
   };
 
   // Raster fallback: a .svg with unsupported features was baked to a PNG; register it and emit an Image node.
@@ -1779,7 +1761,7 @@ function emitSvgSource(
 
 /**
  * State-driven <Svg> (flat Arc/Circle/Rect/Line/static-Path; no viewBox/<G>): emit a mutable op-tape
- * + build_svgN() that recomputes it from state, called at build and re-called on each app_update.
+ * that is recomputed from state, at build and on each update.
  *
  * @param element  The <Svg>.
  * @param scope  Compile-time constants in reach.
@@ -1818,7 +1800,7 @@ function emitSvgDynamic(
     }
 
     const attrs = svgAttrs(child.openingElement, scope, env);
-    // build_svgN() is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
+    // The builder is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
     const shape = lowerShape(attrs, `s${shapePaints.length}`);
     if (!shape.entries.length) continue;
     locals.push(...shape.locals);
@@ -1836,7 +1818,6 @@ function emitSvgDynamic(
   // Allocate the node and this <Svg>'s table names.
   const nodeId = `n${out.allocateNodeId()}`;
   const svgId = out.svgN++;
-  out.needsMath = true; // build_svg uses cosf/sinf/M_PI for arcs
 
   // Gather the gradients into one 1-based table per <Svg>, fill then stroke, shape by shape.
   const gradients: IrDrawingGradient[] = [];
@@ -1859,10 +1840,10 @@ function emitSvgDynamic(
     gradients,
   };
 
-  // Declare the tables and build_svgN(), which rewrites the tape (and anything in the paints state drives).
+  // Declare the tables and the builder, which rewrites the tape (and anything in the paints state drives).
   out.vectors.push({kind: 'drawing', vector});
 
-  // Create the vector node, build its tape once, and register it for app_update() to rebuild.
+  // Create the vector node, build its tape once, and register it for the update to rebuild.
   const node = lowerSvgBox(
     nodeId,
     'ER_NODE_VECTOR',

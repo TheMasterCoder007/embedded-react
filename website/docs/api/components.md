@@ -248,7 +248,7 @@ it takes no children.
 | `onSubmitEditing`, `onFocus`, `onBlur`         | `(e) => void`    |                           |
 
 Focus brings up the engine's on-screen keyboard, in builds that include it (`ERUI_ONSCREEN_KEYBOARD`).
-Its layout and colours are configurable with `setKeyboardConfig`, below. The style may set
+Its done key calls `onSubmitEditing`, then takes the focus away. Its layout and colours are configurable with `setKeyboardConfig`, below. The style may set
 `cursorColor`.
 
 ## Switch

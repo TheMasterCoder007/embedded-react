@@ -37,9 +37,9 @@ exactly `useState`. [Hot reload](../guides/hot-reload.md) explains the keying.
 const steps = useHostValue(0);
 ```
 
-**Flow B.** Declares a number the host feeds into the app. The compiler lowers it to a state field
-plus a generated C setter named after the variable, `er_app_set_steps(int)` here, which the firmware
-calls whenever the value changes; the app re-renders as if `setState` had been called. This is how
+**Flow B.** Declares a number the host feeds into the app. The compiler lowers it to a state slot, and
+the package names it as an input. The firmware finds it with `erb_input_find("steps")` and calls
+`erb_input_set_int()` whenever the value changes; the app re-renders as if `setState` had been called. This is how
 sensor readings, clocks and any other host data reach a compiled app with no JavaScript on the
 device. In the simulator, where there is no host to write it, it returns its initial value.
 The [RP2040 guide](../guides/boards/rp2040.md) shows it driving a pedometer.

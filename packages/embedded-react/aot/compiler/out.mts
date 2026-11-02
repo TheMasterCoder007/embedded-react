@@ -43,8 +43,7 @@ import type {
 
 /**
  * Everything the passes lower for one app besides its element tree: the functions, drawings, responders and
- * effects, and the counters that name them. Each pass appends to it as the JSX tree is walked; writeApp then
- * writes it out as app.gen.c.
+ * effects, and the counters that name them. Each pass appends to it as the JSX tree is walked.
  *
  * @class Out
  */
@@ -53,17 +52,14 @@ export class Out {
   private nodes = 0;
   /** Event handlers, one function each. */
   readonly handlers: IrHandler[] = [];
-  /** A useCallback's C handler, by component prefix and name, so each is emitted once. */
+  /** A useCallback's handler, by component prefix and name, so each is emitted once. */
   readonly cbEmitted = new Map<string, string>();
   /** File-scope vector op-tapes and paint tables, and the builders of state-driven drawings. */
   readonly vectors: IrVectorData[] = [];
-  /** Numbers the next <Svg> (its tapes are `s_svg<id>_…`). */
+  /** Numbers the next <Svg> (which names its tapes). */
   svgN = 0;
-  /** Whether the generated C calls into <math.h>. */
-  needsMath = false;
   readonly timerFns: IrTimerFunction[] = [];
-  usesTimers = false;
-  /** What er_app_build() runs last: mount-once effects, and the first run of each dep-driven one. */
+  /** What the build runs last: mount-once effects, and the first run of each dep-driven one. */
   readonly mountEffects: IrMountEffect[] = [];
   /** Animations' on_complete callbacks: completions, completion waits, and chains. */
   readonly animCbs: IrAnimationCallback[] = [];
@@ -86,7 +82,7 @@ export class Out {
   readonly effectFns: IrEffectFunction[] = [];
   /** File-scope variables the effects and animation loops need. */
   readonly effectDecls: IrStaticDecl[] = [];
-  /** Dep-driven effects, which app_update() re-runs when one of their deps changed. */
+  /** Dep-driven effects, which the update re-runs when one of their deps changed. */
   readonly depEffects: IrDepEffect[] = [];
   /** Numbers the next PanResponder. */
   panN = 0;
@@ -114,7 +110,7 @@ export class Out {
   /**
    * Reserves the next engine node.
    *
-   * @returns Its number: the node is the C variable `n<number>`.
+   * @returns Its number: the node is known as `n<number>`.
    */
   allocateNodeId(): number {
     return this.nodes++;

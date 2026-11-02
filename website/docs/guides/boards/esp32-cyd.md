@@ -35,7 +35,7 @@ idf.py -p PORT flash monitor       # e.g. /dev/ttyUSB0 or COM5; Ctrl-] leaves th
 
 With no package installed, the first boot shows the error screen, saying so.
 
-:::note[Coming from the C output]
+:::note[Coming from an older sdkconfig]
 An `sdkconfig` from before the package slots keeps the old partition table. Delete it, and run `idf.py fullclean`.
 :::
 

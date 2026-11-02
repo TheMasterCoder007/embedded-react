@@ -15,13 +15,13 @@
  */
 
 /*
- * Animations in the package output, lowered the way the C output starts them, so they run frame for frame alike.
+ * Animations in a package.
  *
  * An animated value is a slot. Each animation the IR starts is a leaf descriptor, started by ASTART with its
- * toValue in a register; its delay is the engine's own delay_ms, as in C. Each C on_complete callback is an
+ * toValue in a register; its delay is the engine's own delay_ms. Each on_complete callback is an
  * animation-done function: a chain's steps start one another from them, and a completion wait is a delay leaf
  * started from one. A completion is a helper that takes `finished`, entered through a done function of its own
- * when an animation ends with it, or called when C calls it directly. A run joined at run time (a spring beside a
+ * when an animation ends with it, or called directly. A run joined at run time (a spring beside a
  * longer delay) is a parallel group of a delay leaf and the animation. A composition with waits keeps the handle
  * of its last wait in a slot, so a stop can end it.
  */
@@ -74,7 +74,7 @@ interface LoopSlots {
   from: Slot | null;
 }
 
-/** An animation-done function, by the C callback it stands for. */
+/** An animation-done function, by the callback it stands for. */
 type DoneFunction =
   | {kind: 'completion'; completion: IrCompletion}
   | {kind: 'wait'; completion: IrCompletion; delayMs: number; owner: number}
@@ -90,7 +90,7 @@ type AnimationStmt = IrStmt & {
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** Waits that run at once, as the C output's ER_AOT_MAX_WAITS. */
+/** Waits that run at once. */
 const MAX_WAITS = 8;
 
 /** Running-animation entries a wait takes: its delay leaf, and a joined run's group. */
@@ -99,7 +99,7 @@ const WAIT_ENTRIES = 2;
 /** A register operand that names no register (ASTART with no toValue in one). */
 const NO_REGISTER = 0xff;
 
-/** A <TouchableOpacity> fade's easing, as the C output's. */
+/** A <TouchableOpacity> fade's easing. */
 const PRESS_FADE_EASING = 'ER_EASE_QUAD_IN_OUT';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -114,16 +114,16 @@ const PRESS_FADE_EASING = 'ER_EASE_QUAD_IN_OUT';
  * @class AnimationPlan
  */
 export class AnimationPlan {
-  /** Each animated value's slot, by its C handle. */
+  /** Each animated value's slot, by its handle. */
   readonly values = new Map<string, Slot>();
   /** The slot each started composition with waits keeps its last wait's handle in, by owner. */
   readonly owners = new Map<number, Slot>();
   readonly loops = new Map<number, LoopSlots>();
   readonly anims: ProgramAnim[] = [];
   readonly interps: ProgramInterp[] = [];
-  /** The done functions, in function order, by C name. */
+  /** The done functions, in function order, by name. */
   readonly doneFunctions = new Map<string, DoneFunction>();
-  /** The completions, in function order (callers first), by C name. */
+  /** The completions, in function order (callers first), by name. */
   readonly completions = new Map<string, IrCompletion>();
   private readonly descriptors = new Map<object, number>();
   private readonly waits = new Map<number, number>();
@@ -143,7 +143,7 @@ export class AnimationPlan {
     const {out} = app;
     for (const value of app.animations) {
       this.values.set(
-        value.cVar,
+        value.slotName,
         arena.slot(ValueType.avalue, floatBits(value.initial)),
       );
     }
@@ -153,7 +153,7 @@ export class AnimationPlan {
       }
     }
 
-    // Each C callback, in the order the app declares them; a completion's own, first, is called from the rest.
+    // Each callback, in the order the app declares them; a completion's own, first, is called from the rest.
     const completions: IrCompletion[] = [];
     for (const callback of out.animCbs) {
       if (callback.kind === 'completion') {
@@ -226,9 +226,9 @@ export class AnimationPlan {
   }
 
   /**
-   * The done function a C callback is.
+   * The done function a callback is.
    *
-   * @param name  The callback's C name.
+   * @param name  The callback's name.
    *
    * @returns Its index.
    */
@@ -256,7 +256,7 @@ export class AnimationPlan {
   /**
    * An animated value's slot.
    *
-   * @param handle  Its C handle.
+   * @param handle  Its handle.
    *
    * @returns The slot.
    */
@@ -364,7 +364,7 @@ export class AnimationPlan {
       throw new Error(`AOT internal: no ABI prop for ${bind.prop}`);
     }
     const prop = abiProp(field).id;
-    const slot = this.value(bind.cVar);
+    const slot = this.value(bind.slotName);
     const {interp} = bind;
     if (!interp) {
       return {kind: BindingKind.animated, event: prop, target: slot.index};
@@ -477,15 +477,15 @@ const leafDefaults = (): ProgramAnim => ({
 });
 
 /**
- * The name of a chain's callback that starts step `index` (step 0's starts a repeat), as the C output names it.
+ * The name of a chain's callback that starts step `index` (step 0's starts a repeat).
  *
  * @param chain  The chain.
  * @param index  The step.
  *
- * @returns The C name.
+ * @returns The name.
  */
 const chainCallback = (chain: IrStartChain, index: number): string =>
-  `er_seqcb_${chain.id}_${index}`;
+  `chain_${chain.id}_${index}`;
 
 /**
  * The done function the step after `index` is started from, or what runs after the last step: the repeat for a
@@ -513,7 +513,7 @@ function afterStep(
 }
 
 /**
- * Starts a descriptor, as er_anim_value_animate starts the C output's animation.
+ * Starts a descriptor, as er_anim_value_animate starts an animation.
  *
  * @param codegen  The function's codegen.
  * @param descriptor  The descriptor.
@@ -539,7 +539,7 @@ function start(
 }
 
 /**
- * An animation's toValue in a float register, as C converts it, or null when its descriptor holds it. A decay with
+ * An animation's toValue in a float register, or null when its descriptor holds it. A decay with
  * none is given the value it holds now.
  *
  * @param codegen  The function's codegen.
@@ -616,7 +616,7 @@ function startWait(
 }
 
 /**
- * Calls a completion, as C calls it directly.
+ * Calls a completion directly.
  *
  * @param codegen  The function's codegen.
  * @param completion  The completion.
@@ -657,7 +657,7 @@ function callCompletionWith(
 }
 
 /**
- * Lowers an animation statement where the C output starts or stops one.
+ * Lowers an animation statement that starts or stops one.
  *
  * @param codegen  The function's codegen.
  * @param stmt  The statement.
@@ -768,7 +768,7 @@ export function startPressFade(
 
 /**
  * The done functions, in order: each one ends the chain or composition when the animation before it was
- * interrupted, calling the completion as not finished, as C's callbacks do.
+ * interrupted, calling the completion as not finished.
  *
  * @param plan  The program's animations.
  * @param codegenFor  Makes a function's codegen.

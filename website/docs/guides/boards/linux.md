@@ -54,21 +54,22 @@ in one file.
 
 ## Flow B: `examples/linux-aot`
 
-The same window, with the app compiled ahead of time and no QuickJS in the binary. Generate the C
-first, then build:
+The same window, with the app compiled ahead of time and no QuickJS in the binary. Build a package,
+then build the host and run it:
 
 ```bash
-cd packages/embedded-react && npm run aot -- thermostat     # → dist/app.gen.c + assets.generated.c
+cd packages/embedded-react && npm run aot -- thermostat     # → dist/app.erpkg
 cd ../..
 cmake -S examples/linux-aot -B examples/linux-aot/build
 cmake --build examples/linux-aot/build --target embedded-react-desktop-aot
-examples/linux-aot/build/embedded-react-desktop-aot
+examples/linux-aot/build/embedded-react-desktop-aot         # or pass a package's path
 ```
 
-The build refuses to configure without a generated `app.gen.c` and says how to make one. `main.c` is
-the reference Flow B host: register the backend, call `er_app_build()` once, then loop over input,
-`er_commit()`, present and tick. The [CYD](./esp32-cyd.md) and [RP2040](./rp2040.md) firmware follow
-the same shape.
+The window is 800×480 unless `ER_AOT_SCREEN_W` and `ER_AOT_SCREEN_H` say otherwise, and its size picks
+the package's layout. The host reads the package when it starts, so changing the app needs no rebuild.
+`main.c` is the reference Flow B host: register the backend, call `erb_load()` once, then loop over
+input, `er_commit()`, present and tick. The [CYD](./esp32-cyd.md) and [RP2040](./rp2040.md) firmware
+follow the same shape.
 
 ## Why keep a desktop host
 

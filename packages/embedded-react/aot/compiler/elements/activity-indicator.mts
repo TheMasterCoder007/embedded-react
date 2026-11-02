@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {colorLiteral} from '../../style-map.mts';
+import {parseColorValue} from '../../style-map.mts';
 import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
@@ -112,7 +112,7 @@ export function emitActivityIndicator(
       try {
         staticAssigns.push({
           field: 'indicator_color',
-          expr: colorLiteral(String(evalStatic(node, scope))),
+          value: parseColorValue(String(evalStatic(node, scope))),
         });
       } catch {
         dynAssigns.push({
@@ -144,7 +144,7 @@ export function emitActivityIndicator(
       try {
         staticAssigns.push({
           field: 'animating',
-          expr: evalStatic(node, scope) ? '1' : '0',
+          value: evalStatic(node, scope) ? 1 : 0,
         });
       } catch {
         dynAssigns.push({
@@ -168,10 +168,10 @@ export function emitActivityIndicator(
 
   // default size: large unless style sets width/height
   if (!hasField('width')) {
-    staticAssigns.push({field: 'width', expr: String(size)});
+    staticAssigns.push({field: 'width', value: size});
   }
   if (!hasField('height')) {
-    staticAssigns.push({field: 'height', expr: String(size)});
+    staticAssigns.push({field: 'height', value: size});
   }
 
   const node: IrNode = {

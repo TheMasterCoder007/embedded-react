@@ -42,7 +42,7 @@ export interface IrSourceDivisor {
  * A value stored into an int slot, kept so the typing pass can tell whether the slot has to hold 64 bits.
  */
 export interface IrSlotStore {
-  /** The slot's C name: a state's field, or a ref's variable. */
+  /** The slot's name: a state's field, or a ref's variable. */
   slot: string;
   value: IrSource;
   /** The value was typed with whole-number math in 64 bits. */

@@ -4,14 +4,14 @@ project(embedded-react-desktop-aot C)
 # ---------------------------------------------------------------------------
 # embedded-react-desktop-aot — Flow B (AOT) desktop demo.
 #
-# Renders an AOT-compiled JSX app (dist/app.gen.c from `npm run aot`) in an SDL2 window with NO QuickJS
-# and no JS at runtime — the desktop proxy for a no-PSRAM MCU. Links only the engine + SDL backend +
-# the generated C; the QuickJS bridge is deliberately absent.
+# Runs a Flow B package (dist/app.erpkg from `npm run aot`) in an SDL2 window with NO QuickJS and no JS
+# at runtime — the desktop proxy for a no-PSRAM MCU. Links only the engine + SDL backend + the Flow B
+# runtime; the QuickJS bridge is deliberately absent.
 #
-# Generate the app first, then build:
-#   (in packages/embedded-react)  npm run aot -- watch-face   # → dist/app.gen.{c,h}
 #   cmake -S examples/linux-aot -B examples/linux-aot/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/...vcpkg.cmake]
 #   cmake --build examples/linux-aot/build
+#   (in packages/embedded-react)  npm run aot -- watch-face   # → dist/app.erpkg
+#   examples/linux-aot/build/embedded-react-desktop-aot [package.erpkg]
 # ---------------------------------------------------------------------------
 
 find_package(SDL2 REQUIRED)
@@ -38,22 +38,14 @@ set(ERUI_VECTOR_MAX_EDGES  "4096" CACHE STRING "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../engine       ${CMAKE_CURRENT_BINARY_DIR}/engine)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../backends/sdl ${CMAKE_CURRENT_BINARY_DIR}/backends/sdl)
 
-# The AOT-generated app translation unit — produced out-of-band by `npm run aot` into
-# packages/embedded-react/dist. Like Flow A's bundle it's a generated artifact (not committed); fail with a
-# clear message if it hasn't been generated yet.
-set(ER_APP_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../packages/embedded-react/dist")
-if (NOT EXISTS "${ER_APP_GEN_DIR}/app.gen.c")
-    message(FATAL_ERROR
-            "No AOT app at ${ER_APP_GEN_DIR}/app.gen.c — generate it first:\n"
-            "    cd packages/embedded-react && npm run aot -- <demo>   (e.g. watch-face)")
-endif ()
+set(ER_RUNTIME_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../runtime ${CMAKE_CURRENT_BINARY_DIR}/runtime)
 
-# app.gen.c + assets.generated.c are produced together by `npm run aot`: the app tree and the baked-image
-# table (er_register_assets, called by main.c before er_app_build). assets.generated.c is always written —
-# a no-op register fn when the demo imports no images — so it is always safe to link + call.
-add_executable(embedded-react-desktop-aot main.c "${ER_APP_GEN_DIR}/app.gen.c" "${ER_APP_GEN_DIR}/assets.generated.c")
-target_include_directories(embedded-react-desktop-aot PRIVATE "${ER_APP_GEN_DIR}")
-target_link_libraries(embedded-react-desktop-aot PRIVATE er-backend-sdl embedded-react)
+# The package is read at run time, so changing the app needs no rebuild.
+add_executable(embedded-react-desktop-aot main.c)
+target_compile_definitions(embedded-react-desktop-aot PRIVATE
+        ER_DEFAULT_PACKAGE="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/embedded-react/dist/app.erpkg")
+target_link_libraries(embedded-react-desktop-aot PRIVATE er-backend-sdl erb-runtime)
 
 # On Windows, copy SDL2.dll next to the exe so it runs from the build dir.
 if (WIN32)

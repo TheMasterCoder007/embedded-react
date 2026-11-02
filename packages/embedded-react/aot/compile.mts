@@ -15,43 +15,40 @@
  */
 
 /*
- * `npm run aot [demo]` — the Flow B ahead-of-time compiler (vertical slice).
+ * `npm run aot [demo]` — the Flow B ahead-of-time compiler.
  *
- * Compiles a demo's JSX straight to C against er_scene.h: no QuickJS, no JS at runtime. The generated
- * app.gen.c builds the engine node tree directly and wires state + events, so it fits an MCU with only
+ * Compiles a demo's JSX to a package (dist/app.erpkg) that the Flow B runtime verifies and runs: no QuickJS, no JS
+ * at runtime. The program builds the engine node tree and wires state + events, so it fits an MCU with only
  * internal RAM.
  *
  * Supported subset (grows demo by demo; unsupported syntax throws "AOT: ..."):
  *   - View / Text / Pressable / TouchableOpacity / Image / ScrollView elements
  *   - StyleSheet + inline styles → ERProps (static values)
  *   - text with literal + {interpolation} segments (interpolations may reference state)
- *   - useState(initial) → C state; on* handlers (onPress/onPressIn/onPressOut/onLongPress) → C functions
- *   - setState(value) and setState(prev => expr); a small C expression subset (literals, identifiers,
+ *   - useState(initial) → state slots; on* handlers (onPress/onPressIn/onPressOut/onLongPress) → functions
+ *   - setState(value) and setState(prev => expr); a small expression subset (literals, identifiers,
  *     + - * / %, comparisons, ?:)
  *
  * The compiler tracks which nodes depend on which state, so a state change re-sets ONLY the dependent
- * nodes (er_node_set_props) — no diffing, no reconciler. See the root README (Flow B).
+ * nodes — no diffing, no reconciler. See the root README (Flow B).
  *
  *   npm run aot                      # default demo (thermostat) — but use a minimal demo for the slice
  *   npm run aot -- watch-face        # a specific demo by folder name
- *   npm run aot -- <demo> --package  # a Flow B package (dist/app.erpkg) instead of C
- *   npm run aot -- <demo> --screen 240x320  # the panel the C output is for, or the panels a package keeps
+ *   npm run aot -- <demo> --screen 240x320  # the panels the package keeps layouts for
  *
- * This file is the entry: compileSource(src) compiles a source string (pure, so it can be unit-tested on
- * inline JSX), and the CLI at the bottom reads a demo's App.jsx and writes dist/app.gen.{c,h}. The
+ * This file is the entry: compilePackage(src) compiles a source string (pure, so it can be unit-tested on
+ * inline JSX), and the CLI at the bottom reads a demo's App.jsx and writes dist/app.erpkg. The
  * compiler itself lives in compiler/, one module per stage. The pipeline: parse the App.jsx → collect
  * the module's component, state, hooks & refs → lower each piece (expressions, styles/text, handlers,
- * nodes) → write the lowered app as app.gen.c.
+ * nodes) → write the lowered app as a package.
  *
  *   compiler/options.mts         resolveOptions — screen size + buffer caps, from opts, then ER_AOT_*
  *   compiler/types.mts           the types the stages share (Env, StatementContext, state/ref records)
  *   compiler/out.mts             Out — the handlers, effects and drawings lowering collects
  *   compiler/diagnostics.mts     aotError / withLoc / formatAotError — locate + hint unsupported syntax
  *   compiler/static-eval.mts     evalStatic — fold the compile-time-constant subset (styles, initials)
- *   compiler/c-syntax.mts        cstr / floatLit / i64Lit — JS values spelled as C
  *   compiler/expressions.mts     lowerExprWide — lower a JS expression (state/props/refs) to the IR
  *   compiler/ir/*.mts            the IR the stages lower to (ir/app.mts: the whole lowered app)
- *   compiler/c/*.mts             the C backend: prints the IR as C (emitExpr returns it as a CExpr)
  *   compiler/parse.mts           parseApp — JSX/TSX source → AST (types stripped, `undefined` normalized)
  *   compiler/collect.mts         moduleScope + collect{State, Components, Callbacks, Memos, Effects}
  *   compiler/animations.mts      collect{Anims,Refs}, Easing, interpolate, Animated.start() chains
@@ -65,7 +62,6 @@
  *   compiler/keyboard.mts        setKeyboardConfig({...}) → the keyboard config
  *   compiler/lower.mts           lowerApp — run the stages above over the parsed app
  *   compiler/check.mts           the check pass — the values lowering recorded, checked in order
- *   compiler/assemble.mts        writeApp — write the lowered app as app.gen.{c,h}
  *   compiler/package/*.mts       the package backend: the IR as a Flow B program, its container and report
  *
  * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mjs
@@ -85,13 +81,12 @@ import {
 } from 'node:fs';
 import {basename, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {bakeAssetPackBytes, bakeAssets} from '../assets/index.mjs';
+import {bakeAssetPackBytes} from '../assets/index.mjs';
 import {warnMissingGlyphs} from '../assets/glyph-coverage.mjs';
 import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mjs';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
-import {demoMarker, compileSourceImpl} from './compiler/assemble.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
   assemblePackage,
@@ -107,7 +102,6 @@ import type {
   ResolvedOptions,
   Screen,
 } from './compiler/options.mts';
-import type {CompileResult} from './compiler/assemble.mts';
 import type {
   PackageResult,
   PanelProgram,
@@ -132,7 +126,7 @@ const FIRST_SIZE: Screen = {width: 240, height: 320};
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
-export {bakePackage, bakeSvgArtifacts, demoMarker, packPackage, resourceReport};
+export {bakePackage, bakeSvgArtifacts, packPackage, resourceReport};
 
 /**
  * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
@@ -214,27 +208,6 @@ function compileLocated<Result>(
 }
 
 /**
- * Public entry: compile JSX source → { c, h, ... }. On an AOT error, annotate it with file:line:col + a
- * source code-frame (+ hint) so the failure points at the exact unsupported construct.
- *
- * @param src  The App.jsx/App.tsx source text.
- * @param demo  Demo name (only used in the generated-by header comment).
- * @param opts  filename, svgArtifacts, ts, and the screen and caps resolveOptions documents.
- *
- * @returns The generated app.gen.c and app.gen.h, and what they contain.
- */
-export function compileSource(
-  src: string,
-  demo = 'app',
-  opts: CompileOptions = {},
-): CompileResult {
-  const resolved = resolveOptions(opts);
-  return compileLocated(src, demo, opts, resolved, (wide, stores) =>
-    compileSourceImpl(src, demo, resolved, wide, stores),
-  );
-}
-
-/**
  * The sizes a package build was told to keep layouts for: opts.screens, opts.screen or ER_AOT_SCREEN_W/H.
  *
  * @param opts  The build's options.
@@ -286,12 +259,12 @@ function tooManyLayouts(panels: PanelProgram[], named: boolean): Error {
  * Public entry for the package output: compile JSX source to a Flow B program section, and its debug section.
  *
  * With no sizes named, it finds the app's layouts: it compiles one, finds a size that layout's check rejects, and
- * compiles again until every size has a layout. Named sizes keep only the layouts they pick. Each layout is compiled
- * as compileSource compiles for its size, and errors are annotated as compileSource's are.
+ * compiles again until every size has a layout. Named sizes keep only the layouts they pick. An AOT error is annotated
+ * with file:line:col + a source code-frame (+ hint), so the failure points at the exact unsupported construct.
  *
  * @param src  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file an error names when opts has none.
- * @param opts  As compileSource takes them, plus screens and release.
+ * @param opts  filename, svgArtifacts, ts, screens, release, and the screen and caps resolveOptions documents.
  *
  * @returns The program and debug sections, and what the package holds.
  */
@@ -358,15 +331,13 @@ export function compilePackage(
   );
 }
 
-// CLI entry (`node aot/compile.mts [demo]`), only when run directly: compile a demo into dist/app.gen.{c,h}.
+// CLI entry (`node aot/compile.mts [demo]`), only when run directly: compile a demo into dist/app.erpkg.
 if (
   process.argv[1] &&
   resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
 ) {
-  // Find the demo's App.jsx, listing the available demos when it is missing. --package writes a Flow B package
-  // instead of C.
+  // Find the demo's App.jsx, listing the available demos when it is missing.
   const args = process.argv.slice(2);
-  const asPackage = args.includes('--package');
   const screenAt = args.indexOf('--screen');
   const screens =
     screenAt < 0
@@ -381,10 +352,6 @@ if (
           }
           return {width: Number(match[1]), height: Number(match[2])};
         });
-  if (screens && screens.length > 1 && !asPackage) {
-    console.error('AOT: the C output takes one --screen size.');
-    process.exit(1);
-  }
   const demo =
     args.find(
       (arg, index) =>
@@ -407,30 +374,20 @@ if (
 
   // Compile the app, baking <Svg source> .svg imports first so the compile itself stays pure (no I/O).
   const src = readFileSync(appPath, 'utf8');
-  let result: CompileResult | PackageResult;
+  let result: PackageResult;
   try {
-    const options: CompileOptions = {
+    result = compilePackage(src, demo, {
       filename: resolve(demosDir, demo, 'App.jsx'),
       svgArtifacts: await bakeSvgArtifacts(src, resolve(demosDir, demo)),
       screen: screens?.[0],
       screens,
-    };
-    result = asPackage
-      ? compilePackage(src, demo, options)
-      : compileSource(src, demo, options);
+    });
   } catch (error: any) {
     // Print just the message, no JS stack: a located AOT error already carries its location, code frame and hint.
     console.error(
       error && error.aotLoc ? error.message : error?.message || String(error),
     );
     process.exit(1);
-  }
-
-  // Write the generated C.
-  mkdirSync(distDir, {recursive: true});
-  if (!('program' in result)) {
-    writeFileSync(resolve(distDir, 'app.gen.c'), result.c);
-    writeFileSync(resolve(distDir, 'app.gen.h'), result.h);
   }
 
   // Locate the images the app imports; each importPath is source-relative to the demo's App.jsx.
@@ -453,21 +410,13 @@ if (
   warnMissingGlyphs({source: src, jsx: true});
   warnFontSizes({used: analyzeFontSizes(src)});
 
-  if ('program' in result) {
-    // The package carries its images as an asset pack.
-    const file = packPackage(
-      result,
-      imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
-    );
-    writeFileSync(resolve(distDir, 'app.erpkg'), file.bytes);
-    console.log(`AOT: compiled demo "${demo}" -> dist/app.erpkg`);
-    console.log(resourceReport(result, file).join('\n'));
-  } else {
-    // Bake images with Flow A's baker, even with none (a no-op), so the AOT host can always build and call it.
-    const baked = bakeAssets({images: imageJobs, fonts: [], outDir: distDir});
-    console.log(
-      `AOT: compiled demo "${demo}" -> dist/app.gen.c (${result.nodes} nodes, ${result.state} state, ` +
-        `${result.handlers} handler(s), ${result.updates} dynamic) + ${baked.images} image(s) -> dist/assets.generated.c`,
-    );
-  }
+  // The package carries its images as an asset pack.
+  const file = packPackage(
+    result,
+    imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
+  );
+  mkdirSync(distDir, {recursive: true});
+  writeFileSync(resolve(distDir, 'app.erpkg'), file.bytes);
+  console.log(`AOT: compiled demo "${demo}" -> dist/app.erpkg`);
+  console.log(resourceReport(result, file).join('\n'));
 }

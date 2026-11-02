@@ -19,12 +19,11 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
-import {aotError} from './diagnostics.mts';
 import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
 import {abandonBoot, beginBoot, endBoot, setBootLowering} from './boot.mts';
 import {
   findShadowedClockCalls,
-  emitSourcedWide,
+  lowerSourcedWide,
   lowerExpr,
 } from './expressions.mts';
 import {
@@ -66,11 +65,11 @@ import type {Env, Scope, StateRecord} from './types.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Settles what only the whole app decides. With nothing for app_update() to re-apply there is no app_update(),
- * so no body ends by calling it. A composition that no start waits on has no waits for a stop to end.
+ * Settles what only the whole app decides. With nothing for an update to re-apply there is no update,
+ * so no body ends by asking for one. A composition that no start waits on has no waits for a stop to end.
  *
  * @param out  The lowered app's functions.
- * @param hasUpdate  The app has an app_update().
+ * @param hasUpdate  The app has an update.
  */
 function settleFunctions(out: Out, hasUpdate: boolean): void {
   const idleOwners = new Set(
@@ -132,7 +131,7 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
 }
 
 /**
- * Flags each state a node or drawing reads, so a write to it marks it changed and app_update() sets them again.
+ * Flags each state a node or drawing reads, so a write to it marks it changed and the update sets them again.
  * A node that also reads something untracked is set on every update, so its reads need no flag.
  *
  * @param nodes  The app's nodes.
@@ -149,7 +148,7 @@ function watchState(nodes: IrNode[]): void {
 }
 
 /**
- * Refuses state C cannot hold: a number in a list item that has no C form, and a host value that would take
+ * Refuses state a package cannot hold: a number in a list item that isn't finite, and a host value that would take
  * the name of the setter every app exports for the wall clock. A field an item leaves out starts at 0.
  *
  * @param stateRecords  The app's state, then each inlined instance's.
@@ -168,26 +167,14 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
       }
     }
   }
-
-  if (
-    stateRecords.some(
-      record =>
-        record.kind === 'scalar' && record.host && record.name === 'wall_clock',
-    )
-  ) {
-    throw aotError(
-      'AOT: useHostValue("wall_clock") would collide with er_app_set_wall_clock()',
-      'rename the host value — every app exports er_app_set_wall_clock() for Date.now().',
-    );
-  }
 }
 
 /**
  * Lowers a Flow B app's JSX (or TSX) source, then runs the check pass over what lowering recorded. Pure (no
- * I/O); writeApp (assemble.mts) writes the result as C.
+ * I/O); the package backend (package/) writes the result.
  *
  * @param src  The App.jsx/App.tsx source text.
- * @param opts  compileSource's options, resolved (see resolveOptions).
+ * @param opts  compilePackage's options, resolved (see resolveOptions).
  * @param wide  State/ref slots to declare 64-bit (see compileWidened).
  * @param stores  Collects every value stored into an int slot.
  *
@@ -217,7 +204,7 @@ export function lowerApp(
  * effects, recording the values the check pass checks.
  *
  * @param src  The App.jsx/App.tsx source text.
- * @param opts  compileSource's options, resolved (see resolveOptions).
+ * @param opts  compilePackage's options, resolved (see resolveOptions).
  * @param wide  State/ref slots to declare 64-bit (see compileWidened).
  * @param stores  Collects every value stored into an int slot.
  *
@@ -332,26 +319,25 @@ function lowerProgram(
   setBootLowering(env, lowerExpr);
   settleBootInitials(state.byName.values());
 
-  // Before emit, fold each memo or inline its C expression at each use (no cache needed: dep tracking re-applies).
+  // Before emit, fold each memo or inline its expression at each use (no cache needed: dep tracking re-applies).
   for (const [name, expr] of memos) {
     try {
       setBinding(scope, name, bindConst(name, evalStatic(expr, scope, 'boot')));
     } catch {
-      const cExpr = emitSourcedWide(expr, env);
+      const memo = lowerSourcedWide(expr, env);
       env.locals.set(name, {
-        code: `(${cExpr.code})`,
-        cType: cExpr.cType,
-        isBool: cExpr.isBool,
-        lit: cExpr.lit,
-        wide: cExpr.wide,
-        source: cExpr.source,
-        expr: cExpr.expr,
+        slotKind: memo.slotKind,
+        isBool: memo.isBool,
+        lit: memo.lit,
+        wide: memo.wide,
+        source: memo.source,
+        expr: memo.expr,
       });
       delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
 
-  // Emit the scene graph from the root JSX; `out` collects every generated fragment.
+  // Emit the scene graph from the root JSX; `out` collects everything else it lowers.
   const out = new Out(components, ast.program);
   const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
   const root = emitNode(rootJSX, scope, out, env, state);
@@ -363,12 +349,12 @@ function lowerProgram(
     }
   }
 
-  // Lower effects (mount-once or dep-driven) after emit, so out.timerFns/usesTimers include handler timers too.
+  // Lower effects (mount-once or dep-driven) after emit, so out.timerFns includes handler timers too.
   for (const effect of collectEffects(component.body)) {
     lowerEffect(effect, env, state, out);
   }
 
-  // app_update() exists only when something has to be re-applied after a state change.
+  // An update exists only when something has to be re-applied after a state change.
   const hasUpdate =
     nodesOf(root).some(
       node => isStateDriven(node) || updatedVectorOf(node) !== null,
@@ -387,7 +373,6 @@ function lowerProgram(
     animations: [...anims.values(), ...out.childAnimations],
     keyboard,
     root,
-    hasUpdate,
     images: [...out.images.entries()].map(([name, importPath]) => ({
       name,
       importPath,

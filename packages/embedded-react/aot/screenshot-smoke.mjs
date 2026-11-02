@@ -17,11 +17,11 @@
 /*
  * `npm run aot:smoke` — automated compile-and-screenshot smoke test for the Flow B (AOT) demos.
  *
- * For each demo it: (1) compiles App.jsx → dist/app.gen.{c,h} (`node aot/compile.mts`), (2) rebuilds the
- * linux-aot SDL host (which links the generated C), (3) runs it headless via ER_AOT_SHOT to render ONE
- * frame to a BMP, and (4) checks the image actually has content (distinct colors above a floor) — i.e., it
- * compiled, linked, and rendered something rather than crashing or drawing a blank screen. Exits non-zero
- * if any demo fails, so it can gate CI.
+ * It builds the linux-aot SDL host (which loads a package), then for each demo: (1) compiles App.jsx →
+ * dist/app.erpkg (`node aot/compile.mts`), (2) runs the host headless via ER_AOT_SHOT to render ONE frame to
+ * a BMP, and (3) checks the image actually has content (distinct colors above a floor) — i.e., it compiled,
+ * loaded, and rendered something rather than crashing or drawing a blank screen. Exits non-zero if any demo
+ * fails, so it can gate CI.
  *
  * Prereq: the linux-aot CMake build must be configurable (SDL2 found). It reuses examples/linux-aot/build;
  * if that isn't configured yet, set CMAKE_TOOLCHAIN_FILE (e.g. a vcpkg toolchain) and it will configure it.
@@ -46,8 +46,8 @@ const exe = resolve(
 const tmpDir = resolve(jsDir, 'dist', '.smoke');
 
 /**
- * The demos to smoke-test. `screen` sets ER_AOT_SCREEN_W/H so the responsive thermostat folds to its `solo`
- * (AOT-compilable) branch; `minColors` is the floor of distinct sampled colors that counts as "rendered".
+ * The demos to smoke-test. `screen` sets ER_AOT_SCREEN_W/H, the panel the package is for and the window's size;
+ * `minColors` is the floor of distinct sampled colors that counts as "rendered".
  */
 const DEMOS = [
   {name: 'watch-face', screen: {w: 240, h: 280}, minColors: 40},
@@ -106,8 +106,8 @@ function ensureConfigured() {
 }
 
 /**
- * Compiles one demo, relinks the host, renders one frame and checks the frame has content. A step that cannot
- * run (the compiler, the build or the host) throws.
+ * Compiles one demo, renders one frame and checks the frame has content. A step that cannot run (the compiler or
+ * the host) throws.
  *
  * @param demo  The demo, from DEMOS.
  *
@@ -117,18 +117,20 @@ function smokeTest(demo) {
   const shot = resolve(tmpDir, `${demo.name}.bmp`);
   rmSync(shot, {force: true});
 
-  // Compile with the demo's screen size, relink the host, then render one frame to the BMP.
-  const compileEnv = {...process.env};
+  // Compile at the demo's screen size, then render one frame to the BMP in a window of that size.
+  const screenEnv = {...process.env};
   if (demo.screen) {
-    compileEnv.ER_AOT_SCREEN_W = String(demo.screen.w);
-    compileEnv.ER_AOT_SCREEN_H = String(demo.screen.h);
+    screenEnv.ER_AOT_SCREEN_W = String(demo.screen.w);
+    screenEnv.ER_AOT_SCREEN_H = String(demo.screen.h);
   }
   run('node', [resolve(here, 'compile.mts'), demo.name], {
     cwd: jsDir,
-    env: compileEnv,
+    env: screenEnv,
   });
-  run('cmake', ['--build', buildDir]);
-  run(exe, [], {cwd: buildDir, env: {...process.env, ER_AOT_SHOT: shot}});
+  run(exe, [resolve(jsDir, 'dist/app.erpkg')], {
+    cwd: buildDir,
+    env: {...screenEnv, ER_NO_HIDPI: '1', ER_AOT_SHOT: shot},
+  });
 
   // The frame must exist and show more than a blank screen.
   if (!existsSync(shot)) {
@@ -145,6 +147,7 @@ function smokeTest(demo) {
 let failures = 0;
 mkdirSync(tmpDir, {recursive: true});
 ensureConfigured();
+run('cmake', ['--build', buildDir]);
 
 for (const demo of DEMOS) {
   let failure;

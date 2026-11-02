@@ -30,10 +30,10 @@ import {
   stateType,
   refType,
   slotOf,
-  typeOfCExpr,
+  typeOfSlotValue,
   typeOfSlot,
 } from '../compiler/ir/types.mts';
-import {compileSource} from '../compile.mts';
+
 import {inferWideSlots} from '../compiler/expressions.mts';
 import {lowerApp} from '../compiler/lower.mts';
 import {resolveOptions} from '../compiler/options.mts';
@@ -50,14 +50,14 @@ describe('IR types', () => {
     expect(isIntSlot(FLOAT)).toBe(false);
   });
 
-  it('types a value lowered to C from its slot and what it records', () => {
-    expect(typeOfCExpr({cType: 'int', isBool: true})).toBe(BOOL);
-    expect(typeOfCExpr({cType: 'int', isBool: false})).toBe(INT);
-    expect(typeOfCExpr({cType: 'i64'})).toBe(TIME);
-    expect(typeOfCExpr({cType: 'i64', lit: true})).toBe(INT64_NUMBER);
-    expect(typeOfCExpr({cType: 'i64', wide: true})).toBe(INT64_MATH);
+  it('types a value from its slot and what it records', () => {
+    expect(typeOfSlotValue({slotKind: 'int', isBool: true})).toBe(BOOL);
+    expect(typeOfSlotValue({slotKind: 'int', isBool: false})).toBe(INT);
+    expect(typeOfSlotValue({slotKind: 'i64'})).toBe(TIME);
+    expect(typeOfSlotValue({slotKind: 'i64', lit: true})).toBe(INT64_NUMBER);
+    expect(typeOfSlotValue({slotKind: 'i64', wide: true})).toBe(INT64_MATH);
     expect(typeOfSlot(undefined)).toBe(STRUCT);
-    expect(() => typeOfCExpr({cType: 'int', lit: true})).toThrow(
+    expect(() => typeOfSlotValue({slotKind: 'int', lit: true})).toThrow(
       /64-bit source/,
     );
     expect(() => typeOfSlot('float', true)).toThrow(
@@ -66,8 +66,8 @@ describe('IR types', () => {
   });
 
   it('types a ref by its slot, and a node ref as a handle', () => {
-    expect(refType({kind: 'value', cType: 'float'})).toBe(FLOAT);
-    expect(refType({kind: 'node', cType: 'ERNode*'})).toBe(NODE);
+    expect(refType({kind: 'value', slotKind: 'float'})).toBe(FLOAT);
+    expect(refType({kind: 'node', slotKind: 'node'})).toBe(NODE);
   });
 
   it('joins 64-bit values into a time only when one of them is', () => {
@@ -80,30 +80,15 @@ describe('IR types', () => {
   it('reads a widened slot as a time only when it holds one', () => {
     const state = widened => ({
       kind: 'scalar',
-      cType: 'i64',
+      slotKind: 'i64',
       isBool: false,
       widened,
     });
     expect(stateType(state('time'))).toBe(TIME);
     expect(stateType(state('number'))).toBe(INT64_NUMBER);
-    expect(refType({kind: 'value', cType: 'i64', widened: 'number'})).toBe(
+    expect(refType({kind: 'value', slotKind: 'i64', widened: 'number'})).toBe(
       INT64_NUMBER,
     );
-  });
-});
-
-describe('IR types: updaters', () => {
-  it("types an updater's parameter as a read of the state, boolean included", () => {
-    const {c} = compileSource(
-      "import React, {useState} from 'react';\n" +
-        "import {View} from 'embedded-react';\n" +
-        'export function App() {\n' +
-        '  const [on, setOn] = useState(false);\n' +
-        '  return <View onTouchStart={() => setOn(on === 1)} onTouchEnd={() => setOn(prev => prev === 1)} />;\n' +
-        '}',
-    );
-    expect(c.match(/s_state\.on = 0;/g)).toHaveLength(2);
-    expect(c).not.toContain('s_state.on == 1');
   });
 });
 
@@ -131,7 +116,7 @@ describe('IR types: slot widths', () => {
       'a',
       'b',
       'c',
-      's_ref_r',
+      'ref_r',
       'n',
     ]);
     expect(stores[0].value).toMatchObject({
@@ -149,112 +134,8 @@ describe('IR types: slot widths', () => {
         ['a', 'time'],
         ['b', 'time'],
         ['c', 'time'],
-        ['s_ref_r', 'time'],
+        ['ref_r', 'time'],
       ]),
-    );
-  });
-
-  it('compiles the widened slots as 64-bit', () => {
-    const {c} = compileSource(app);
-    for (const field of ['a', 'b', 'c']) {
-      expect(c).toContain(`    int64_t ${field};`);
-    }
-    expect(c).toContain('    int n;');
-    expect(c).toContain('static int64_t s_ref_r = 0;');
-  });
-});
-
-describe('IR types: 64-bit numbers that are not times', () => {
-  /** The C of an app with an int `n`, a float `f`, a boolean `on`, an int `big` and an int ref `r`. */
-  const compile = handler =>
-    compileSource(
-      "import React, {useState, useRef} from 'react';\n" +
-        "import {View, Text} from 'embedded-react';\n" +
-        'export function App() {\n' +
-        '  const [n, setN] = useState(0);\n' +
-        '  const [f, setF] = useState(1.5);\n' +
-        '  const [on, setOn] = useState(false);\n' +
-        '  const [big, setBig] = useState(0);\n' +
-        '  const r = useRef(0);\n' +
-        `  return <View onTouchStart={() => { ${handler} }}><Text>{n + big + r.current}</Text></View>;\n` +
-        '}',
-    ).c;
-
-  it('keeps `+` on a 64-bit number a number, which a float slot takes', () => {
-    expect(compile('setF(+2147483648);')).toContain(
-      's_state.f = (+(2147483648));',
-    );
-  });
-
-  it('picks a number, not a time, from a ternary or `||` of numbers', () => {
-    expect(compile('setN((on ? 2147483648 + 1 : 0) % n);')).toContain(
-      's_state.n = app_mod64((s_state.on ? 2147483649 : 0), s_state.n);',
-    );
-    expect(compile('setN((n || 2147483648) % n);')).toContain('app_mod64(');
-  });
-
-  it('reads back a slot widened by numbers as a number, and one that holds a time as a time', () => {
-    const c = compile('setBig(3000000000); setF(big * 0.5);');
-    expect(c).toContain('    int64_t big;');
-    expect(c).toContain('s_state.f = (((float)s_state.big) * 0.5f);');
-    expect(() =>
-      compile('setBig(3000000000); setBig(Date.now()); setF(big * 0.5);'),
-    ).toThrow(/a 64-bit time value cannot be mixed with a float/);
-  });
-
-  it('divides a 64-bit ref that holds no time by any whole number', () => {
-    const c = compile(
-      'r.current = 3000000000; r.current %= n; r.current /= n; r.current++;',
-    );
-    expect(c).toContain('s_ref_r = app_mod64(s_ref_r, s_state.n);');
-    expect(c).toContain('s_ref_r = app_div64(s_ref_r, s_state.n);');
-    expect(() => compile('r.current = Date.now(); r.current %= n;')).toThrow(
-      /can only be divided by a constant/,
-    );
-  });
-
-  it('starts a state or ref with a whole number past the int range 64-bit', () => {
-    const c = compileSource(
-      "import React, {useState, useRef} from 'react';\n" +
-        "import {Text} from 'embedded-react';\n" +
-        'export function App() {\n' +
-        '  const [big, setBig] = useState(3000000000);\n' +
-        '  const r = useRef(-3000000000);\n' +
-        '  return <Text onTouchStart={() => { r.current = r.current + 1; }}>{big + r.current}</Text>;\n' +
-        '}',
-    ).c;
-    expect(c).toContain('    int64_t big;');
-    expect(c).toContain('.big = 3000000000');
-    expect(c).toContain('static int64_t s_ref_r = -3000000000;');
-  });
-
-  it('keeps a local holding a 64-bit number a number', () => {
-    const c = compile(
-      'const total = n + 3000000000; setF(total); setN(total % n);',
-    );
-    expect(c).toContain('int64_t l_total = app_add64(s_state.n, 3000000000);');
-    expect(c).toContain('s_state.f = l_total;');
-    expect(c).toContain('s_state.n = app_mod64(l_total, s_state.n);');
-    expect(() => compile('const t = Date.now(); setF(t);')).toThrow(
-      /a 64-bit time value cannot be stored in state "f"/,
-    );
-  });
-
-  it('works a float Math function on a 64-bit number, and keeps whole-number Math exact', () => {
-    const c = compile(
-      'setBig(3000000000); setF(Math.sqrt(big) + Math.pow(big, 2)); setBig(Math.abs(big));',
-    );
-    expect(c).toContain('sqrtf((float)(((float)s_state.big)))');
-    expect(c).toContain('powf((float)(((float)s_state.big)), (float)(2))');
-    expect(c).toContain('s_state.big = app_abs64(s_state.big);');
-    expect(() => compile('setF(Math.sqrt(Date.now()));')).toThrow(
-      /Math\.sqrt\(\.\.\.\) on a 64-bit time value is not supported/,
-    );
-  });
-
-  it("types an updater's parameter as the number its state holds", () => {
-    expect(compile('setBig(3000000000); setBig(prev => prev % n);')).toContain(
-      's_state.big = app_mod64(s_state.big, s_state.n);',
     );
   });
 });

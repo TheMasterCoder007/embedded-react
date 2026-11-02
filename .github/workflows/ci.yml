@@ -1,14 +1,12 @@
 # CI — runs on every PR + push to master. Fast, display-free checks (parity.mjs opens real SDL
-# windows, so it stays a dev-machine check, not CI). Seven independent jobs:
+# windows, so it stays a dev-machine check, not CI). Six independent jobs:
 #   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
 #   bridge  — the QuickJS bridge: build against the pinned QuickJS + the JS heap-accounting/GC test,
 #             in both the native and the bare-metal allocator configurations, each followed by the runtime
 #             tests (test/runtime/*.runtime.test.jsx) in the headless harness, from source and as bytecode.
-#   aot     — compile a demo to C with the Flow B AOT, then gcc the generated C against the engine headers
-#             (verifies the output compiles + the embedded-react version-pin _Static_assert holds).
-#   erb-parity — compile each parity scenario to C and to a Flow B package, run both through the same taps
-#             in headless hosts, and require the same pixels.
+#   erb-frames — compile each scenario to a Flow B package, run its taps in a headless host, and require the
+#             scenario's golden image.
 #   erb-fuzz — mutate real Flow B packages, load them and run what passes, under ASan and UBSan.
 #   consumer — npm pack the package, install it into a scratch project, and build from there.
 name: CI
@@ -185,8 +183,8 @@ jobs:
           ER_BRIDGE_BUILD_DIR: ${{ github.workspace }}/bridges/quickjs/build-ci-shim
         run: npm run test:bytecode
 
-  aot:
-    name: AOT compile smoke
+  erb-frames:
+    name: Flow B golden images
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -199,35 +197,15 @@ jobs:
           cache: npm
           cache-dependency-path: packages/embedded-react/package-lock.json
       - run: npm ci
-      # gcc the generated C against the public engine headers — no SDL, no display. -fsyntax-only still
-      # evaluates the version-pin _Static_assert, so an ABI/version mismatch fails here.
-      - name: watch-face → C → gcc
-        run: |
-          ER_AOT_SCREEN_W=240 ER_AOT_SCREEN_H=280 node aot/compile.mts watch-face
-          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/app.gen.c
-          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/assets.generated.c
-      - name: thermostat (solo) → C → gcc
-        run: |
-          ER_AOT_SCREEN_W=320 ER_AOT_SCREEN_H=480 node aot/compile.mts thermostat
-          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/app.gen.c
-          gcc -std=c99 -fsyntax-only -I ../../engine/include -I dist dist/assets.generated.c
-
-  erb-parity:
-    name: Flow B package vs C output
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/embedded-react
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Builds tools/erb-frames' headless host (CMake + gcc) and compares its frame with each scenario's golden image.
+      - run: npm run erb:frames
+      - name: Upload the frames that differ
+        if: failure()
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: packages/embedded-react/package-lock.json
-      - run: npm ci
-      # Builds tools/erb-parity's two headless hosts (CMake + gcc) and compares their frames per scenario.
-      - run: npm run erb:parity
+          name: erb-frames
+          path: tools/erb-frames/build/out/*.png
+          if-no-files-found: ignore
 
   erb-fuzz:
     name: Fuzz the package loader and VM
@@ -264,7 +242,7 @@ jobs:
     name: Consumer smoke (pack + install + build)
     # Exercises the PACKAGED + INSTALLED flow that unit tests can't reach: npm pack → install into a
     # throwaway app → `embedded-react build` (Flow A app.erpkg, via the wasm bytecode compiler) and
-    # `--aot` (Flow B app.erpkg, and app.gen.c with `--c`). Catches files-whitelist gaps, ESM/CJS resolution, and the bytecode
+    # `--aot` (Flow B app.erpkg). Catches files-whitelist gaps, ESM/CJS resolution, and the bytecode
     # path. Builds the wasm (emsdk) so the Flow A leg runs — the only way to cover it on a PR.
     runs-on: ubuntu-latest
     steps:

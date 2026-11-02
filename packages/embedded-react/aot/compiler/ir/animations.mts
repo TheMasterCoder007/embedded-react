@@ -105,8 +105,6 @@ export interface IrCompletionJoin {
 export interface IrStartAnimations {
   kind: 'startAnimations';
   animations: IrAnimation[];
-  /** Numbers the first animation's config; the rest follow on. */
-  firstConfig: number;
   completion: IrCompletion | null;
   completionWait: IrCompletionWait | null;
   /** Set instead of completionWait when the wait cannot be known at build time. */
@@ -155,6 +153,4 @@ export interface IrCompleteAfter {
 
 /** `<animation>.start()`. */
 export type IrAnimationStart =
-  | IrStartAnimations
-  | IrStartChain
-  | IrCompleteAfter;
+  IrStartAnimations | IrStartChain | IrCompleteAfter;

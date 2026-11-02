@@ -173,8 +173,8 @@ function LevelPage({dotx, doty}) {
 export function App() {
   const [t, setT] = useState(START_TIME); // seconds since midnight
   const [hr, setHr] = useState(66); // heart rate — a gentle random walk-in [61, 68]
-  const steps = useHostValue(0); // real step count (IMU pedometer, via er_app_set_steps)
-  const dotx = useHostValue(0); // level dot offset in px, from the accel tilt (via er_app_set_dotx/doty)
+  const steps = useHostValue(0); // real step count (IMU pedometer, via erb_input_set_int)
+  const dotx = useHostValue(0); // level dot offset in px, from the accel tilt (via erb_input_set_int)
   const doty = useHostValue(0);
 
   const [page, setPage] = useState(0); // settled page (0 = watch, 1 = level)

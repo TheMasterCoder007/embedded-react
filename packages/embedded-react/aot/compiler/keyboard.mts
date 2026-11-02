@@ -117,9 +117,7 @@ const lowerConfig = withLoc((configArg: t.Node): IrKeyboard => {
   let config;
   try {
     config = evalStatic(configArg, {}) as
-      | Record<string, unknown>
-      | null
-      | undefined;
+      Record<string, unknown> | null | undefined;
   } catch {
     throw aotError(
       'AOT: setKeyboardConfig(...) needs a statically-foldable config object',
@@ -131,7 +129,7 @@ const lowerConfig = withLoc((configArg: t.Node): IrKeyboard => {
     throw aotError('AOT: setKeyboardConfig(...) needs a config object');
   }
 
-  // Lower the layout when the app gives one, layer by layer and row by row; C has no empty table.
+  // Lower the layout when the app gives one, layer by layer and row by row; an empty table holds nothing.
   let layers: IrKeyboardKey[][][] | null = null;
   if (Array.isArray(config.layers)) {
     if (!config.layers.length) {

@@ -35,7 +35,7 @@ import type {
 
 /**
  * The state a node's props or a drawing read, or null when they also read something a state write does not
- * flag (a ref, the clock), so app_update() sets them again every time it runs, as a React re-render would.
+ * flag (a ref, the clock), so the update sets them again every time it runs, as a React re-render would.
  */
 export type StateReads = Set<StateRecord> | null;
 
@@ -297,7 +297,7 @@ const readsOf = (found: ReadsFound): StateReads =>
   found.untracked ? null : found.states;
 
 /**
- * The state a node's props, text and image read. app_update() sets them all again together, so this is
+ * The state a node's props, text and image read. the update sets them all again together, so this is
  * everything any of them reads.
  *
  * @param node  The node.
@@ -307,7 +307,7 @@ const readsOf = (found: ReadsFound): StateReads =>
 export const nodeReads = (node: IrNode): StateReads => readsOf(nodeFound(node));
 
 /**
- * Whether a node's runtime props read only values worked out at boot, so er_app_build() sets them once.
+ * Whether a node's runtime props read only values worked out at boot, so the build sets them once.
  *
  * @param node  The node.
  *
@@ -317,7 +317,7 @@ export const isBootOnlyNode = (node: IrNode): boolean =>
   isBootOnly(nodeFound(node));
 
 /**
- * Whether a drawing reads only values worked out at boot, so er_app_build() builds it once.
+ * Whether a drawing reads only values worked out at boot, so the build builds it once.
  *
  * @param vector  The drawing.
  *

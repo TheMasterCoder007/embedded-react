@@ -15,7 +15,7 @@
  */
 
 /*
- * The Flow B VM and runtime, on the engine with a null backend: arithmetic with the C output's rules, loops,
+ * The Flow B VM and runtime, on the engine with a null backend: saturating arithmetic, loops,
  * calls, text, lists, props, templates, events, timers, effects, animations, inputs, reloads and faults.
  */
 

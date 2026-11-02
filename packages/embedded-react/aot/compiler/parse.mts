@@ -80,7 +80,7 @@ const TS_SKIP_KEYS = new Set([
 /**
  * Is this app a TypeScript entry? Driven by the filename extension, or an explicit opts.ts (for tests).
  *
- * @param opts  compileSource's options.
+ * @param opts  compilePackage's options.
  *
  * @returns Whether to parse the source as TypeScript.
  */
@@ -318,10 +318,10 @@ export function normalizeUndefined(ast: t.File): void {
 
 /**
  * Parses an app entry to a JS+JSX AST, transparently stripping TypeScript when the entry is .tsx (JSX is not
- * allowed in a .ts file). The strip is faithful: an App.tsx compiles to the same C as its untyped App.jsx twin.
+ * allowed in a .ts file). The strip is faithful: an App.tsx compiles to the same package as its untyped App.jsx twin.
  *
  * @param src  The entry's source.
- * @param opts  compileSource's options: its filename (or `ts`) decides whether it is TypeScript.
+ * @param opts  compilePackage's options: its filename (or `ts`) decides whether it is TypeScript.
  *
  * @returns The parsed file.
  */

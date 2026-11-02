@@ -31,7 +31,7 @@ import {
   isStyleKey,
   STYLE_KEYS,
   DYN_FIELDS,
-  colorLiteral,
+  parseColorValue,
 } from '../style-map.mts';
 import {parseColor} from '../../src/embedded-react/svg-ops.js';
 import {aotError, checkEngineString} from './diagnostics.mts';
@@ -44,9 +44,7 @@ import {
   TEXT_SPAN,
 } from './elements/props.mts';
 import {evalStatic, foldScope, withUndefined} from './static-eval.mts';
-import {cstr} from './c-syntax.mts';
 import {jsxChildText, lowerExpr, lowerText} from './expressions.mts';
-import {printPropValue} from './c/nodes.mts';
 import {
   ANIM_COLOR_KEYS,
   ANIM_STYLE_PROPS,
@@ -60,7 +58,14 @@ import type {AotError} from './diagnostics.mts';
 import type {IrPropValue} from './ir/nodes.mts';
 import type {IrText, IrTextPart} from './ir/text.mts';
 import type {ElementSpec} from './elements/props.mts';
-import type {DynAssign, Env, Scope, StaticAssign} from './types.mts';
+import type {
+  DynAssign,
+  EngineName,
+  Env,
+  PropConstant,
+  Scope,
+  StaticAssign,
+} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -68,8 +73,8 @@ import type {DynAssign, Env, Scope, StaticAssign} from './types.mts';
 
 /** An animated value bound to a node property on the engine's native driver, optionally through a mapping. */
 export interface AnimBind {
-  /** The animated value's C handle. */
-  cVar: string;
+  /** The animated value's handle. */
+  slotName: string;
   /** The ER_PROP_* it drives. */
   prop: string;
   interp?: Interpolation;
@@ -82,15 +87,15 @@ export interface StyleAssigns {
   binds: AnimBind[];
 }
 
-/** One inline segment of a multi-span <Text>: C expressions for each ERTextSpan field. */
+/** One inline segment of a multi-span <Text>: its text, and the constant for each ERTextSpan field. */
 export interface TextSpan {
   text: string;
-  color: string;
-  font_size: string;
-  font_weight: string;
-  font_style: string;
-  text_decoration: string;
-  letter_spacing: string;
+  color: PropConstant;
+  font_size: PropConstant;
+  font_weight: PropConstant;
+  font_style: PropConstant;
+  text_decoration: PropConstant;
+  letter_spacing: PropConstant;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -130,22 +135,14 @@ export function attrExpr(
 }
 
 /**
- * A static ARGB8888 C literal (`0xAARRGGBBu`) from a CSS color string or number.
+ * A static ARGB8888 value from a CSS color string or number.
  *
  * @param value  The color.
  *
- * @returns Its C literal.
+ * @returns Its value.
  */
-export function argbLiteral(value: unknown): string {
-  return (
-    '0x' +
-    (parseColor(String(value)) >>> 0)
-      .toString(16)
-      .padStart(8, '0')
-      .toUpperCase() +
-    'u'
-  );
-}
+export const argbValue = (value: unknown): number =>
+  parseColor(String(value)) >>> 0;
 
 /**
  * Refuses an animated binding whose values do not fit the key: a color key takes only an interpolation onto
@@ -190,7 +187,7 @@ function checkAnimatedColor(
  */
 export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
   if (node.type === 'StringLiteral') {
-    return {kind: 'constant', code: colorLiteral(node.value)};
+    return {kind: 'constant', value: parseColorValue(node.value)};
   }
 
   if (node.type === 'ConditionalExpression') {
@@ -215,7 +212,7 @@ export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
   try {
     const color = evalStatic(node, foldScope(env, env.consts ?? {}));
     if (typeof color === 'string') {
-      return {kind: 'constant', code: colorLiteral(color)};
+      return {kind: 'constant', value: parseColorValue(color)};
     }
   } catch {
     /* not static — fall through to the error below */
@@ -225,17 +222,6 @@ export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
     'AOT: a dynamic color must be a color string literal or a ternary of them',
   );
 }
-
-/**
- * A dynamic color expression as C for its ARGB value (see lowerColorValue).
- *
- * @param node  The color expression.
- * @param env  The expression environment.
- *
- * @returns The C.
- */
-export const emitColorExpr = (node: t.Node, env: Env): string =>
-  printPropValue(lowerColorValue(node, env));
 
 /**
  * Lowers a dynamic enum-style expression (e.g. `flexDirection: row ? 'row' : 'column'`) to its ER_* constant
@@ -249,7 +235,7 @@ export const emitColorExpr = (node: t.Node, env: Env): string =>
  */
 export function lowerEnumValue(
   node: t.Node,
-  table: Record<string, string>,
+  table: Record<string, EngineName>,
   env: Env,
 ): IrPropValue {
   if (node.type === 'StringLiteral') {
@@ -263,7 +249,7 @@ export function lowerEnumValue(
       );
     }
 
-    return {kind: 'constant', code: enumConstant};
+    return {kind: 'constant', value: enumConstant};
   }
   if (node.type === 'ConditionalExpression') {
     return {
@@ -286,7 +272,7 @@ export function lowerEnumValue(
   try {
     const enumValue = evalStatic(node, foldScope(env, env.consts ?? {}));
     if (typeof enumValue === 'string' && Object.hasOwn(table, enumValue)) {
-      return {kind: 'constant', code: table[enumValue]};
+      return {kind: 'constant', value: table[enumValue]};
     }
   } catch {
     /* not static — fall through */
@@ -297,21 +283,6 @@ export function lowerEnumValue(
     "e.g. flexDirection: wide ? 'row' : 'column'",
   );
 }
-
-/**
- * A dynamic enum-style expression as C for its ER_* value (see lowerEnumValue).
- *
- * @param node  The enum expression.
- * @param table  The RN value → ER_* constant table.
- * @param env  The expression environment.
- *
- * @returns The C.
- */
-export const emitEnumExpr = (
-  node: t.Node,
-  table: Record<string, string>,
-  env: Env,
-): string => printPropValue(lowerEnumValue(node, table, env));
 
 /**
  * The diagnostic for a style key the AOT has no lowering for, static or dynamic.
@@ -387,7 +358,7 @@ function lowerDynamicStyleValue(
     );
   }
 
-  // Colors and enums lower to a constant or a C ternary of constants.
+  // Colors and enums lower to a constant or a choice of constants.
   if (dynamicField.kind === 'color') {
     return [
       {field: dynamicField.field, value: lowerColorValue(valueNode, env)},
@@ -403,12 +374,12 @@ function lowerDynamicStyleValue(
     ];
   }
 
-  // Opacity and every size are numbers; C would take a char[] here as its address or refuse it.
+  // Opacity and every size are numbers.
   const valueExpr = lowerExpr(valueNode, env);
   if (valueExpr.type.kind === 'string') {
     const error = aotError(
       `AOT: style "${key}" needs a number, but the value is a string`,
-      "JS would coerce the string; C cannot. Keep the state numeric — useState(10), not useState('10').",
+      "JS would coerce the string; the AOT doesn't. Keep the state numeric — useState(10), not useState('10').",
     );
     if (valueNode.loc) {
       error.aotLoc = valueNode.loc.start;
@@ -591,14 +562,17 @@ export function collectStyleAssigns(
   spec: ElementSpec,
   bootValues: 'boot' | 'fold' = 'boot',
 ): StyleAssigns {
-  // ERProps field → its last write: a constant's C, or a state-driven value.
-  const fields = new Map<string, {code: string} | {value: IrPropValue}>();
+  // ERProps field → its last write: a constant, or a state-driven value.
+  const fields = new Map<
+    string,
+    {constant: PropConstant} | {value: IrPropValue}
+  >();
   const binds: AnimBind[] = []; // animated values bound to node properties (native driver)
 
   // A size in pixels and its percentage twin are one style key, so a later write of either replaces both.
   const setField = (
     field: string,
-    write: {code: string} | {value: IrPropValue},
+    write: {constant: PropConstant} | {value: IrPropValue},
   ): void => {
     fields.delete(
       field.endsWith('_pct') ? field.slice(0, -'_pct'.length) : `${field}_pct`,
@@ -606,15 +580,15 @@ export function collectStyleAssigns(
     fields.set(field, write);
   };
 
-  // The C handle of an animated value used directly as a style value, or null.
+  // The handle of an animated value used directly as a style value, or null.
   const animRef = (node: t.Node | null | undefined): string | null =>
     node?.type === 'Identifier' && env.animations?.has(node.name)
-      ? env.animations.get(node.name)!.cVar
+      ? env.animations.get(node.name)!.slotName
       : null;
-  // `<animValue>.interpolate({ inputRange, outputRange, extrapolate })` → { cVar, interp } for a mapped bind.
+  // `<animValue>.interpolate({ inputRange, outputRange, extrapolate })` → { slotName, interp } for a mapped bind.
   const animInterpRef = (
     node: t.Node | null | undefined,
-  ): {cVar: string; interp: Interpolation} | null => {
+  ): {slotName: string; interp: Interpolation} | null => {
     if (
       node?.type === 'CallExpression' &&
       node.callee.type === 'MemberExpression' &&
@@ -624,7 +598,7 @@ export function collectStyleAssigns(
       env.animations?.has(node.callee.object.name)
     ) {
       return {
-        cVar: env.animations.get(node.callee.object.name)!.cVar,
+        slotName: env.animations.get(node.callee.object.name)!.slotName,
         interp: parseInterp(node.arguments[0], env),
       };
     }
@@ -674,8 +648,12 @@ export function collectStyleAssigns(
         for (const animProp of ANIM_TRANSFORM_PROPS[transformKey]) {
           transformBinds.push(
             mapped
-              ? {cVar: mapped.cVar, prop: animProp, interp: mapped.interp}
-              : {cVar: direct!, prop: animProp},
+              ? {
+                  slotName: mapped.slotName,
+                  prop: animProp,
+                  interp: mapped.interp,
+                }
+              : {slotName: direct!, prop: animProp},
           );
         }
       }
@@ -712,7 +690,7 @@ export function collectStyleAssigns(
       return;
     }
 
-    // Inline object: bind animated values natively; fold other keys statically or re-apply them in app_update.
+    // Inline object: bind animated values natively; fold other keys statically or re-apply them in the update.
     if (expr.type === 'ObjectExpression') {
       for (const prop of expr.properties) {
         if (prop.type !== 'ObjectProperty') {
@@ -742,7 +720,7 @@ export function collectStyleAssigns(
           checkAnimatedStyleKey(spec, key, prop);
           checkAnimatedColor(key, undefined, prop);
           for (const animProp of ANIM_STYLE_PROPS[key]) {
-            binds.push({cVar: animVar, prop: animProp});
+            binds.push({slotName: animVar, prop: animProp});
           }
           continue;
         }
@@ -753,7 +731,7 @@ export function collectStyleAssigns(
           checkAnimatedColor(key, animInterp.interp, prop);
           for (const animProp of ANIM_STYLE_PROPS[key]) {
             binds.push({
-              cVar: animInterp.cVar,
+              slotName: animInterp.slotName,
               prop: animProp,
               interp: animInterp.interp,
             });
@@ -810,7 +788,7 @@ export function collectStyleAssigns(
           }
 
           for (const assign of lowerStyleChecked(key, staticValue.v)) {
-            setField(assign.field, {code: assign.expr});
+            setField(assign.field, {constant: assign.value});
           }
         } else {
           checkStyleKey(spec, key, prop);
@@ -850,7 +828,7 @@ export function collectStyleAssigns(
 
       checkStyleKey(spec, styleKey, expr);
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
-        setField(assign.field, {code: assign.expr});
+        setField(assign.field, {constant: assign.value});
       }
     }
   };
@@ -874,7 +852,7 @@ export function collectStyleAssigns(
     if ('value' in fieldWrite) {
       dynAssigns.push({field, value: fieldWrite.value});
     } else {
-      staticAssigns.push({field, expr: fieldWrite.code});
+      staticAssigns.push({field, value: fieldWrite.constant});
     }
   }
 
@@ -1006,7 +984,7 @@ function staticTextContent(
 
 /**
  * If a <Text>'s children include a nested <Text>, returns inline SPANS [{text, color, font_size,
- * font_weight, font_style, text_decoration, letter_spacing}] (C-expr fields; inherit sentinels for unset).
+ * font_weight, font_style, text_decoration, letter_spacing}] (constants; inherit sentinels for unset).
  * Returns null when there's no nested <Text> (caller uses the single-string buildText path). Static only —
  * a dynamic {…} segment or a state-driven span style throws.
  *
@@ -1036,18 +1014,18 @@ export function collectTextSpans(
   // Inherit sentinels (see ERTextSpan doc): color 0, font_size 0, weight/style/decoration 0xFF, spacing AUTO.
   const inheritSpan = (text: string): TextSpan => ({
     text,
-    color: '0u',
-    font_size: '0',
-    font_weight: '0xFF',
-    font_style: '0xFF',
-    text_decoration: '0xFF',
+    color: 0,
+    font_size: 0,
+    font_weight: 0xff,
+    font_style: 0xff,
+    text_decoration: 0xff,
     letter_spacing: 'ER_LAYOUT_AUTO',
   });
 
-  // A span's text is a C literal in a fixed engine buffer.
+  // A span's text goes in a fixed engine buffer.
   const spanText = (text: string): string => {
     checkEngineString(text, 'ER_SPAN_TEXT_MAX', 'a <Text> span');
-    return cstr(text);
+    return text;
   };
 
   // One span per child: text and static {…} values inherit the parent's style; a nested <Text> carries its own.
@@ -1096,16 +1074,19 @@ export function collectTextSpans(
       }
 
       // Each span field is the nested <Text>'s own static style value, or the inherit sentinel.
-      const spanStyle = (fieldName: string, fallback: string): string =>
-        staticAssigns.find(assign => assign.field === fieldName)?.expr ??
+      const spanStyle = (
+        fieldName: string,
+        fallback: PropConstant,
+      ): PropConstant =>
+        staticAssigns.find(assign => assign.field === fieldName)?.value ??
         fallback;
       spans.push({
         text: spanText(staticTextContent(child.children, scope)),
-        color: spanStyle('color', '0u'),
-        font_size: spanStyle('font_size', '0'),
-        font_weight: spanStyle('font_weight', '0xFF'),
-        font_style: spanStyle('font_style', '0xFF'),
-        text_decoration: spanStyle('text_decoration', '0xFF'),
+        color: spanStyle('color', 0),
+        font_size: spanStyle('font_size', 0),
+        font_weight: spanStyle('font_weight', 0xff),
+        font_style: spanStyle('font_style', 0xff),
+        text_decoration: spanStyle('text_decoration', 0xff),
         letter_spacing: spanStyle('letter_spacing', 'ER_LAYOUT_AUTO'),
       });
     } else {

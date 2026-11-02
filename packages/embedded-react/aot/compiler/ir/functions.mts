@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import type {CType} from '../types.mts';
+import type {SlotKind} from '../types.mts';
 import type {
   IrCompletion,
   IrCompletionWait,
@@ -27,6 +27,20 @@ import type {
 import type {IrExpr} from './expressions.mts';
 import type {IrPanEvent, IrPanResponder} from './pan-responder.mts';
 import type {IrCallback, IrStmt} from './statements.mts';
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Implementation
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * The name of the slot that says an effect's cleanup is due.
+ *
+ * @param effectId  The effect's number.
+ *
+ * @returns The slot's name.
+ */
+export const armedFlag = (effectId: number): string =>
+  `effect${effectId}_armed`;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -62,7 +76,7 @@ export type IrAnimationCallback =
   | {kind: 'chain'; chain: IrStartChain};
 
 /**
- * A dep-driven useEffect, `er_effect_<id>()`: it runs at mount, then again from app_update() whenever a dep
+ * A dep-driven useEffect, `effect_<id>()`: it runs at mount, then again from the update whenever a dep
  * changed against the copy kept from the last run.
  */
 export interface IrDepEffect {
@@ -71,7 +85,7 @@ export interface IrDepEffect {
   body: IrStmt[];
   /** It ends in a `return () => …`, so each run first runs the last run's cleanup, if that run reached it. */
   hasCleanup: boolean;
-  /** The cleanup, `er_effect_<id>_cleanup()`, once lowered. */
+  /** The cleanup, `effect_<id>_cleanup()`, once lowered. */
   cleanup: IrStmt[] | null;
 }
 
@@ -82,17 +96,17 @@ export type IrEffectFunction =
   /** A mount-once effect with an early `return`, which needs a function of its own. */
   | {kind: 'mount'; name: string; body: IrStmt[]};
 
-/** What er_app_build() runs, once, after the first app_update(). */
+/** What the build runs, once, after the first update. */
 export type IrMountEffect =
   | {kind: 'inline'; callback: IrCallback}
   | {kind: 'call'; name: string; updatesState: boolean}
   /** Runs a dep-driven effect and keeps a copy of each dep. */
   | {kind: 'depEffect'; effect: IrDepEffect};
 
-/** A file-scope variable that effects and animation chains keep between calls. */
+/** A variable that effects and animation chains keep between calls. */
 export type IrStaticDecl =
   /** An effect local its cleanup reads after the run. */
-  | {kind: 'local'; name: string; cType: CType}
+  | {kind: 'local'; name: string; slotKind: SlotKind}
   /** Whether an effect's last run reached its cleanup. */
   | {kind: 'armed'; effect: IrDepEffect}
   /** The copy of each dep an effect keeps from its last run. */

@@ -15,7 +15,7 @@ whole design pushes towards **one commit per frame** however many changes arrive
 
 In Flow A, the bridge runs a whole frame's JavaScript inside one React batch, so three animations
 ticking and a timer firing on the same frame produce one render and one commit rather than four.
-In Flow B the generated C writes props directly and the host commits once per frame. Either way
+In Flow B the VM writes props directly and the host commits once per frame. Either way
 the engine sees the frame's changes together.
 
 ## Inside a commit
