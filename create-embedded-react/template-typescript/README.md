@@ -55,6 +55,6 @@ is typed out of the box.
 ## On real hardware
 
 The same `App.tsx` runs on a device through the C engine — interpreted on QuickJS (Flow A) or compiled
-ahead-of-time to C (Flow B). See the [embedded-react repo](https://github.com/TheMasterCoder007/embedded-react)
+ahead of time to a package (Flow B). See the [embedded-react repo](https://github.com/TheMasterCoder007/embedded-react)
 for the engine, the hardware backends (ESP32, STM32, …), and the on-device examples, and
 [embedded-react.dev](https://embedded-react.dev) for the documentation.

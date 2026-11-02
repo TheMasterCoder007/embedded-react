@@ -61,7 +61,7 @@ style, which become inline spans on one engine node (up to 4 spans). Text draws 
 font unless a baked `fontFamily` is set; see [Assets](../concepts/assets.md) for sizes and glyphs.
 
 **Flow B:** one level of nested spans; a span cannot carry a state-driven style; a `<Text>` compiles
-to a single `snprintf`, so a ternary in text cannot mix a string branch with a numeric one.
+to a single formatted string, so a ternary in text cannot mix a string branch with a numeric one.
 `numberOfLines` and `ellipsizeMode` must be constants, and `ellipsizeMode` is `tail` or `clip`.
 
 ## Image
@@ -363,7 +363,7 @@ import gauge from './gauge.svg';
 | ----------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`          | imported `.svg`   | Baked at build time to a vector tape (or a raster, if the file uses text, masks or filters). Scaled to the render box; shape children are ignored                               |
 | `width`, `height` | number or `'N%'`  | The render box, react-native-svg style; a `style` width/height wins. A plain numeric string is ignored; **Flow B** refuses it, and takes `'N%'` only without `viewBox`/`source` |
-| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then                                                                                          |
+| `viewBox`         | `'minX minY w h'` | Coordinates are baked into the tape against `width`/`height`, so give those as numbers. **Flow B** works `width={screen.width}` out at boot and scales the drawing then         |
 | paint props       |                   | Apply to every shape, like a `<G>` around them all; a `<G>` or shape sets its own over them. Ignored with `source`                                                              |
 
 **Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`

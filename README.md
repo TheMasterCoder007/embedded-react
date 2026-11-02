@@ -3,7 +3,7 @@
 </h1>
 
 **React Native for embedded MCUs.**
-Write a React app, compile it, flash it onto a microcontroller. The UI runs *on the device*, with no browser, no phone, and no OS required.
+Write a React app, compile it, flash it onto a microcontroller. The UI runs _on the device_, with no browser, no phone, and no OS required.
 
 ```jsx
 // App.jsx — the same component you'd write for iOS or Android…
@@ -11,21 +11,28 @@ import {useState, useEffect} from 'react';
 import {Text, Animated, Pressable, useAnimatedValue} from 'embedded-react';
 
 export function App() {
-    const opacity = useAnimatedValue(0);
-    const [taps, setTaps] = useState(0);
+  const opacity = useAnimatedValue(0);
+  const [taps, setTaps] = useState(0);
 
-    useEffect(() => {
-        Animated.timing(opacity, {toValue: 1, duration: 400, useNativeDriver: true}).start();
-    }, []);
+  useEffect(() => {
+    Animated.timing(opacity, {
+      toValue: 1,
+      duration: 400,
+      useNativeDriver: true,
+    }).start();
+  }, []);
 
-    return (
-        <Animated.View style={{opacity, flex: 1, padding: 20, backgroundColor: '#1a1a2e'}}>
-            <Text style={{color: '#fff', fontSize: 24}}>Hello from an ESP32.</Text>
-            <Pressable onPress={() => setTaps(taps + 1)}>
-                <Text style={{color: '#e94560', marginTop: 12}}>Tapped {taps} times</Text>
-            </Pressable>
-        </Animated.View>
-    );
+  return (
+    <Animated.View
+      style={{opacity, flex: 1, padding: 20, backgroundColor: '#1a1a2e'}}>
+      <Text style={{color: '#fff', fontSize: 24}}>Hello from an ESP32.</Text>
+      <Pressable onPress={() => setTaps(taps + 1)}>
+        <Text style={{color: '#e94560', marginTop: 12}}>
+          Tapped {taps} times
+        </Text>
+      </Pressable>
+    </Animated.View>
+  );
 }
 ```
 
@@ -47,7 +54,7 @@ ESP32, STM32, or RP2040 instead of a phone.
 The same app reaches the device through one of two flows, both driving the same engine:
 
 |                  | Flow A — runtime                                                                | Flow B — ahead of time                                                      |
-|------------------|---------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| ---------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | How it runs      | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip | JSX compiled to a package, which a fixed runtime checks and runs from flash |
 | Needs            | External RAM for the JS heap: PSRAM on an ESP32-S3, SDRAM on an STM32H7         | Internal RAM only; no JS engine on the device                               |
 | Update the UI by | Replacing `app.erpkg`, no firmware rebuild                                      | Replacing `app.erpkg`, no firmware rebuild                                  |
@@ -70,14 +77,14 @@ Or try it with nothing installed in the [playground](https://embedded-react.dev/
 Beta. The engine, both flows, the hardware backends and the simulators are built and verified; from
 here the work is fixes and features, tracked in [`ROADMAP.md`](ROADMAP.md).
 
-| Board | Flow | Status | Guide |
-|---|---|---|---|
-| Waveshare ESP32-S3-Touch-LCD-7 (800×480 RGB) | A | Verified on hardware | [ESP32-S3](https://embedded-react.dev/guides/boards/esp32-s3) |
-| ESP32-2432S028R "Cheap Yellow Display" (no PSRAM, SPI) | B | Verified on hardware | [ESP32 CYD](https://embedded-react.dev/guides/boards/esp32-cyd) |
-| Waveshare RP2040-Touch-LCD-1.69 (240×280 SPI) | B | Verified on hardware | [RP2040](https://embedded-react.dev/guides/boards/rp2040) |
-| Linux / macOS / Windows desktop (SDL) | A and B | Working | [Linux](https://embedded-react.dev/guides/boards/linux) |
-| Browser (WebAssembly simulator) | A | Working | [Simulator](https://embedded-react.dev/getting-started/simulator) |
-| STM32H7 with SDRAM (Chrom-ART backend) | A | Running on hardware; public example planned | [STM32H7](https://embedded-react.dev/guides/boards/stm32h7) |
+| Board                                                  | Flow    | Status                                      | Guide                                                             |
+| ------------------------------------------------------ | ------- | ------------------------------------------- | ----------------------------------------------------------------- |
+| Waveshare ESP32-S3-Touch-LCD-7 (800×480 RGB)           | A       | Verified on hardware                        | [ESP32-S3](https://embedded-react.dev/guides/boards/esp32-s3)     |
+| ESP32-2432S028R "Cheap Yellow Display" (no PSRAM, SPI) | B       | Verified on hardware                        | [ESP32 CYD](https://embedded-react.dev/guides/boards/esp32-cyd)   |
+| Waveshare RP2040-Touch-LCD-1.69 (240×280 SPI)          | B       | Verified on hardware                        | [RP2040](https://embedded-react.dev/guides/boards/rp2040)         |
+| Linux / macOS / Windows desktop (SDL)                  | A and B | Working                                     | [Linux](https://embedded-react.dev/guides/boards/linux)           |
+| Browser (WebAssembly simulator)                        | A       | Working                                     | [Simulator](https://embedded-react.dev/getting-started/simulator) |
+| STM32H7 with SDRAM (Chrom-ART backend)                 | A       | Running on hardware; public example planned | [STM32H7](https://embedded-react.dev/guides/boards/stm32h7)       |
 
 ## Documentation
 
@@ -110,14 +117,21 @@ FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
 ```
 
-**ESP-IDF** — Flow B needs only the engine, which is on the component registry; Flow A uses
-`FetchContent` (it also needs QuickJS, which is not an IDF component):
+For Flow B, add the runtime from the same checkout:
+
+```cmake
+add_subdirectory(${embedded-react_SOURCE_DIR}/runtime ${embedded-react_BINARY_DIR}/runtime)
+target_link_libraries(my_firmware PRIVATE erb-runtime)
+```
+
+**ESP-IDF** — the [board examples](examples/esp32) use `FetchContent`, which also brings in the Flow B runtime or
+QuickJS. The engine alone is on the component registry:
 
 ```
 idf.py add-dependency "TheMasterCoder007/embedded-react^0.19.0"
 ```
 
-**PlatformIO** — the engine (Flow B) as a library:
+**PlatformIO** — the engine alone, as a library. It doesn't include the Flow B runtime or the QuickJS bridge yet:
 
 ```ini
 lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.19.0

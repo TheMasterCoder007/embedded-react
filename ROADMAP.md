@@ -104,7 +104,7 @@ UI needs no firmware rebuild. Tracked under the
   TypeScript interface is implemented in C by the firmware, and the same interface works
   in Flow A.
 
-Order: restructure the compiler (split `aot/compile.mjs`, then add a typed intermediate
+Order: restructure the compiler (split `aot/compile.mts`, then add a typed intermediate
 representation), then build the runtime and the package output, then multi-panel packages
 and hot reload, then parity. Boards with no spare flash partition link the package into the
 firmware instead.

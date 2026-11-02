@@ -120,15 +120,15 @@ here: layout, rendering, touch, scrolling, and animation are engine features, no
 
 Your board usually decides.
 
-|                   | Flow A                                          | Flow B                                     |
-| ----------------- | ----------------------------------------------- | ------------------------------------------ |
-| RAM               | External RAM for the JS heap (PSRAM or SDRAM)   | Internal RAM is enough                     |
-| Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as a package, plus its assets     |
-| Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Writing a new package; no firmware rebuild |
-| API               | Everything                                      | [The AOT subset](../guides/aot-subset.md)  |
-| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device   |
-| Runtime errors    | The error screen                                | Most are compile errors instead            |
-| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, Linux      |
+|                   | Flow A                                          | Flow B                                          |
+| ----------------- | ----------------------------------------------- | ----------------------------------------------- |
+| RAM               | External RAM for the JS heap (PSRAM or SDRAM)   | Internal RAM is enough                          |
+| Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as a package, plus its assets          |
+| Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Writing a new package; no firmware rebuild      |
+| API               | Everything                                      | [The AOT subset](../guides/aot-subset.md)       |
+| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device        |
+| Runtime errors    | The error screen                                | Most are compile errors instead                 |
+| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, ESP32-S3, Linux |
 
 Two things make the choice cheaper than it looks:
 

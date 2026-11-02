@@ -195,8 +195,8 @@ export function App() {
   //   - the settings sheet offers UNITS only. A live theme switch would need every color in the tree to
   //     be a ternary of literals, so the palette is baked at build time, and this file is dark-only.
   //   - the AUTO pair renders as ONE Text ("59°-76°"). The AOT lowers a Text's children to a single
-  //     snprintf, so that costs one node where two tappable numbers would cost four, and the CYD has
-  //     little node headroom (40 of 44).
+  //     formatted string, so that costs one node where two tappable numbers would cost four, and the CYD has
+  //     little node headroom (41 of 42).
   //   - which AUTO end the steppers move is set by the last drag rather than by tapping a number.
   //   - the center readout is state-driven, not imperative: a move re-renders that Text rather than
   //     calling updateText. The DRAG itself is native here too — the engine owns it in both flows.
@@ -370,9 +370,9 @@ export function App() {
                     : INSIDE_F}
                   °
                 </Text>
-                {/* Two nodes rather than one ternary: the AOT lowers a Text child to a single snprintf, and
-                mixing the "––" string with the numeric branches emits a pointer-vs-int conditional that
-                a C compiler rejects. */}
+                {/* Two nodes rather than one ternary: the AOT lowers a Text child to a single formatted
+                string, and it refuses a ternary that mixes the "––" string with the numeric
+                branches. */}
                 {mode !== 'off' && mode !== 'auto' && (
                   <Text
                     style={{
@@ -399,7 +399,7 @@ export function App() {
                   </Text>
                 )}
                 {/* AUTO's pair. ONE Text, not three: the AOT lowers a Text's children to a single
-                  snprintf, so "%d° / %d°" costs one node where a colored low/high row would cost
+                  formatted string, so "%d° / %d°" costs one node where a colored low/high row would cost
                   four — and this branch has very little node headroom. */}
                 {mode === 'auto' && (
                   <Text

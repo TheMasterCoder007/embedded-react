@@ -1753,7 +1753,7 @@ extern "C"
      *
      * This is RN's `gestureState.numberActiveTouches` — what a gesture recogniser reads to tell a
      * one-finger pan from a two-finger one. The engine owns the per-finger touch slots, so neither an
-     * AOT-generated app nor a JS module can count them for itself without shadowing every touch event.
+     * compiled app nor a JS module can count them for itself without shadowing every touch event.
      *
      * Counts fingers whose touch-down landed on a node: a touch that hit nothing starts no sequence
      * and so is not tracked.

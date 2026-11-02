@@ -32,7 +32,7 @@ Each of these has an example firmware project in the repository and a guide here
 
 | Board                                  | Display                       | Flow   | Toolchain     | Guide                                      |
 | -------------------------------------- | ----------------------------- | ------ | ------------- | ------------------------------------------ |
-| Waveshare ESP32-S3-Touch-LCD-7         | 800×480 RGB, capacitive touch | A      | ESP-IDF v6    | [ESP32-S3](../guides/boards/esp32-s3.md)   |
+| Waveshare ESP32-S3-Touch-LCD-7         | 800×480 RGB, capacitive touch | A or B | ESP-IDF v6    | [ESP32-S3](../guides/boards/esp32-s3.md)   |
 | ESP32-2432S028R "Cheap Yellow Display" | 240×320 SPI, resistive touch  | B      | ESP-IDF v5.3+ | [ESP32 CYD](../guides/boards/esp32-cyd.md) |
 | Waveshare RP2040-Touch-LCD-1.69        | 240×280 SPI, capacitive touch | B      | Pico SDK      | [RP2040](../guides/boards/rp2040.md)       |
 | Linux, macOS or Windows desktop        | SDL window                    | A or B | CMake, SDL2   | [Linux](../guides/boards/linux.md)         |

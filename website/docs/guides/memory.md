@@ -82,7 +82,7 @@ are 22 KB, which sit in PSRAM at no measurable cost. Flow B has none of this.
 
 |                    | ESP32-S3                           | ESP32 CYD                                             | RP2040                              |
 | ------------------ | ---------------------------------- | ----------------------------------------------------- | ----------------------------------- |
-| RAM                | 512 KB internal + 8 MB PSRAM       | ~223 KB free at boot, largest block ~110 KB; no PSRAM | 264 KB SRAM                         |
+| RAM                | 512 KB internal + 8 MB PSRAM       | ~208 KB free at boot, largest block ~110 KB; no PSRAM | 264 KB SRAM                         |
 | Flow               | A                                  | B                                                     | B                                   |
 | Framebuffer        | 800×480 in PSRAM                   | Two 40-row RGB565 bands, ~37 KB                       | 240×280 RGB565 in SRAM, 131 KB      |
 | JS heap            | In PSRAM                           | none                                                  | none                                |
@@ -93,7 +93,7 @@ are 22 KB, which sit in PSRAM at no measurable cost. Flow B has none of this.
 | Damage rectangles  | 16                                 | 4                                                     | 4                                   |
 | Stack              | 64 KB main task (36 KB with Wi-Fi) | 20 KB main task                                       | 8 KB, both scratch banks, guarded   |
 | Shadows, gradients | shadows off                        | shadows off                                           | shadows, gradients and keyboard off |
-| Free after boot    | logged at boot                     | ~181 KB internal                                      | fits with the framebuffer           |
+| Free after boot    | logged at boot                     | ~165 KB internal                                      | fits with the framebuffer           |
 
 The CYD logs free RAM at boot and again after start-up, the ESP32-S3 once after boot and in every
 `alive:` line; watch the later number as you add features. The three `CMakeLists.txt` files are the worked examples of the flags above.

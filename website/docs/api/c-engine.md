@@ -3,8 +3,8 @@ title: 'C engine'
 description: "er_scene.h: the engine's public API for nodes, props, commit, events, animation and assets, plus the backend struct."
 ---
 
-`er_scene.h` is the API both flows end at. Flow A reaches it through the bridge; Flow B's generated
-C calls it directly; a firmware author calls a handful of it from the host loop. This page is a map
+`er_scene.h` is the API both flows end at. Flow A reaches it through the bridge; Flow B's runtime
+calls it directly; a firmware author calls a handful of it from the host loop. This page is a map
 of the header, not a replacement for it: the header's doc comments are the reference for each
 function's exact contract.
 

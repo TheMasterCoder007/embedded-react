@@ -104,7 +104,7 @@ expression is refused, so express a calculation as a chain of `const`s and terna
 
 ## Text
 
-A `<Text>` compiles to one `snprintf`. Interpolation (`count is {count}`) and one level of nested
+A `<Text>` compiles to one formatted string. Interpolation (`count is {count}`) and one level of nested
 `<Text>` spans work; a span inside a span, a dynamic `{...}` segment inside a multi-span text, and a
 state-driven style on a span do not. A ternary in text cannot mix a string branch with a numeric
 one, or a boolean branch with a non-boolean one; split those into two `{cond && <Text/>}` nodes.

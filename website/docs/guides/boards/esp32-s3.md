@@ -36,8 +36,8 @@ bytecode is specific to the QuickJS version, and the loader rejects a container 
 :::info[Why FetchContent and not the component registry]
 Flow A needs QuickJS, which is a plain CMake project rather than an ESP-IDF component, so
 `idf.py add-dependency` cannot manage it. `FetchContent` pulls the engine, the bridge, and QuickJS
-together. The registry route works for Flow B, which needs only the engine; see the
-[CYD guide](./esp32-cyd.md).
+together. The registry holds only the engine; see
+[Installation](../../getting-started/installation.mdx).
 :::
 
 ## Build and flash the firmware
@@ -182,8 +182,7 @@ The layer also makes a hang reset the board (`CONFIG_ESP_TASK_WDT_PANIC`). To ch
 `-DER_BOARD_CRASH_TEST=1` to the build for a panic 5 seconds after boot, or `=2` for a hang. Each shows the error
 screen after the reset, naming the fault, then the app comes back and it happens again.
 
-The thermostat demo doesn't compile at 800×480 yet, on either Flow B output: its wide layout uses a dynamic color the
-compiler doesn't take. The watch-face demo and the starter do.
+The thermostat demo picks its wide layout at 800×480.
 
 ## WiFi
 

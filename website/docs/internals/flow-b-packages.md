@@ -215,7 +215,7 @@ The codes these records hold, as `runtime/erb_format.h` defines them:
 static vector tapes, and the strings are data, applied by the runtime in tight C loops. Only what
 depends on state is bytecode: handlers, effects, updates, boot-time values and the props and tape
 points they compute. The [performance spike](#performance) is why: constant props as a table are a
-large part of the gap between a naive VM and one within a few percent of C.
+large part of what keeps the VM fast.
 
 **Interned enums.** A string state whose every write is one of a closed set of literals (`page`,
 `mode`) is an int slot holding an index into an `enums` set. Comparing two of them is an int compare,
@@ -592,7 +592,7 @@ app back.
 
 **Teardown**, for a reload or a failed load: cancel the timers, stop the animations, destroy the
 animated values and the nodes (`er_reset`), clear the image and font registries, and clear the arena.
-Two pieces are missing from the engine and asset loader today:
+Two pieces this needed from the engine and asset loader:
 
 - **Clearing the image registry.** `er_reset` keeps registered images, and registering a pack only
   replaces images by name. So images the old pack had and the new one doesn't would still point at the
