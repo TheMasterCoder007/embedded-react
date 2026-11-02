@@ -150,6 +150,6 @@ themselves with a relative `add_subdirectory`; nothing is installed.
 | This site             | `cd website && npm install && npm start`                                                   | `npm run build` for the static site; the changelog and roadmap pages are generated from the repo-root files on every start and build                         |
 
 The bytecode precompiler is not the Flow B compiler: it turns a Flow A bundle into QuickJS bytecode
-that the VM still runs, while the Flow B compiler in `packages/embedded-react/aot/` emits C and drops
-QuickJS entirely. The WebAssembly module is built by CI and shipped inside the npm package, so only
+that the VM still runs, while the Flow B compiler in `packages/embedded-react/aot/` emits a package and
+drops QuickJS entirely. The WebAssembly module is built by CI and shipped inside the npm package, so only
 someone changing the engine or the bridge needs Emscripten.

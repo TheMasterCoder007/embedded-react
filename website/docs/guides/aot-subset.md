@@ -3,7 +3,7 @@ title: 'The AOT subset'
 description: 'What the ahead-of-time compiler accepts, what it refuses and how it tells you. For apps headed to a board with no external RAM.'
 ---
 
-The Flow B compiler turns JSX into C. It can only do that for code it can fully resolve at build
+The Flow B compiler turns JSX into a package. It can only do that for code it can fully resolve at build
 time, so it accepts a subset of what runs under Flow A and refuses the rest, at build time, with the
 file and line:
 
@@ -208,15 +208,15 @@ can know the answer, and the app reports the rest at run time:
 | Bytes in a string state, a list's string field or a local               | 47 (a 48-byte buffer) | `ER_AOT_LIST_STR_CAP`                              | A constant string that is too long, as an initial value or a write, fails the build. A string built at run time is cut short and reported.                                                             |
 | Bytes in a node's text, a `<Text>` span, a placeholder or an image name | 255, 63, 63, 63       | Fixed in `er_scene.h` (`ER_TEXT_MAX` and the like) | A constant string that is too long fails the build. A string built at run time is cut short and reported.                                                                                              |
 | Engine nodes                                                            | 512                   | `ERUI_MAX_NODES`                                   | The app's node count is fixed when it compiles, and the runtime checks it against `ERUI_MAX_NODES` when it loads the package, refusing one a pool can't hold. A node the pool cannot give is reported. |
-| Live timers                                                             | 8                     | `ER_AOT_MAX_TIMERS` (a C define)                   | A `setTimeout` or `setInterval` past it never fires, and is reported.                                                                                                                                  |
-| Animation completion waits                                              | 8                     | `ER_AOT_MAX_WAITS` (a C define)                    | The run ends at once, as not finished, and is reported.                                                                                                                                                |
+| Live timers                                                             | 8                     | `ER_AOT_MAX_TIMERS`                                | A `setTimeout` or `setInterval` past it never fires, and is reported.                                                                                                                                  |
+| Animation completion waits                                              | 8                     | Fixed in the compiler                              | The run ends at once, as not finished, and is reported.                                                                                                                                                |
 
-`ER_AOT_LIST_CAP` and `ER_AOT_LIST_STR_CAP` are read by the compiler (`npm run aot`); the others are
-defined when the C is built. A report is one line on stderr, once for each place in the app that can
-hit it, and names the limit to raise:
+`ER_AOT_LIST_CAP`, `ER_AOT_LIST_STR_CAP` and `ER_AOT_MAX_TIMERS` are read by the compiler (`npm run aot`, or
+`embedded-react build --aot`). They size what the package holds, so raising one needs no firmware rebuild. A report is
+one line through the runtime's log hook, once for each place in the app that can hit it, and names the limit to raise:
 
 ```text
-AOT: list 'items' full, raise ER_AOT_LIST_CAP
+ERB: list full; the row was dropped (raise ER_AOT_LIST_CAP) (App.jsx:41)
 ```
 
 ## Where the subset is going

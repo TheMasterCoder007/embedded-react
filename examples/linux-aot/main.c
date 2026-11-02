@@ -317,7 +317,7 @@ int main(int argc, char** argv)
         }
 
         /* ER_AOT_TYPE=<text>: type each character into the focused TextInput (the click above focuses it),
-           committing between keys so onChangeText → state → app_update runs. ASCII only (one byte/char). */
+           committing between keys so onChangeText → state → update runs. ASCII only (one byte/char). */
         {
             const char* type_str = SDL_getenv("ER_AOT_TYPE");
             if (type_str && type_str[0])

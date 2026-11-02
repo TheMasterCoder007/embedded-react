@@ -78,9 +78,8 @@ Five examples run end-to-end (see the [board guides](https://embedded-react.dev/
 
 ### Flow B — compiled, loadable packages
 
-Flow B will stop generating C that is compiled into the firmware. The compiler will
-produce a package in the same `.erpkg` container Flow A uses, and a fixed Flow B runtime
-in the firmware checks and runs it. There is no JS engine and no heap, and changing the
+The compiler produces a package in the same `.erpkg` container Flow A uses, and a fixed
+Flow B runtime in the firmware checks and runs it. There is no JS engine and no heap, and changing the
 UI needs no firmware rebuild. Tracked under the
 [`flow-b`](https://github.com/TheMasterCoder007/embedded-react/labels/flow-b) label.
 

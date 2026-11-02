@@ -14,7 +14,7 @@ easier to place.
    and the code that pushes a finished frame to the panel.
 
 Between your app and the engine sits the question this section spends the most time on: does the
-app run as JavaScript on the chip, or is it compiled to C before it gets there?
+app run as JavaScript on the chip, or is it compiled to a package before it gets there?
 
 - [Two flows](./two-flows.md): React at runtime on QuickJS, or JSX compiled ahead of time to a package.
   Same engine, same app, different trade-offs.

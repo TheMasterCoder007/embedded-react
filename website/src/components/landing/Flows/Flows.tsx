@@ -17,9 +17,9 @@ const flows = [
   },
   {
     tag: 'Flow B · ahead of time',
-    title: 'JSX compiled to C',
-    steps: ['JSX', 'AOT compiler', 'Generated C', 'Linked into firmware', 'C engine'],
-    body: 'State, handlers and animations are baked into C at build time. Smaller, deterministic, and at home on MCUs with only internal RAM.',
+    title: 'JSX compiled to a package',
+    steps: ['JSX', 'AOT compiler', 'Verified package', 'Flow B runtime on the chip', 'C engine'],
+    body: 'State, handlers and animations are resolved at build time into a package a small runtime verifies and runs. Smaller, deterministic, and at home on MCUs with only internal RAM.',
   },
 ];
 

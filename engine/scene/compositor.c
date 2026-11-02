@@ -4759,10 +4759,12 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
                     break;
                 case ER_KBD_KEY_DONE:
                 {
-                    /* Submit, then blur, unless the app's handler moved the focus itself. */
-                    const uint16_t submitted_tag = s_focused_input_tag;
+                    /* Submit, then blur, unless the app's handler moved the focus itself. A ref, since a node
+                       made in the handler can reuse a destroyed input's tag. */
+                    const ERNodeRef submitted = er_node_ref(er_get_node(s_focused_input_tag));
                     er_text_input_key(ER_KEY_RETURN, NULL);
-                    if (s_focused_input_tag == submitted_tag)
+                    const ERNode* still_there = er_node_deref(submitted);
+                    if (still_there && still_there->tag == s_focused_input_tag)
                     {
                         er_text_input_key(ER_KEY_ESCAPE, NULL);
                     }

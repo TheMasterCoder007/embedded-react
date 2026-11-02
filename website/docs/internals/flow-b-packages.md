@@ -362,9 +362,8 @@ package format, not by the firmware's structs, so `arena_bytes` is exact on ever
 | Tape scratch      | One buffer the size of the largest state-driven vector tape                                  |
 | Event queue       | Events that arrive while the VM is running (see [Running an event](#running-an-event))       |
 
-Limits that were C defines in the generated code (`ER_AOT_MAX_TIMERS`, `ER_AOT_MAX_WAITS`) become
-compiler options like `ER_AOT_LIST_CAP`: they size arena regions, so raising one needs no firmware
-rebuild, only a package whose `arena_bytes` still fits.
+Limits like `ER_AOT_MAX_TIMERS` and `ER_AOT_LIST_CAP` are compiler options: they size arena regions, so
+raising one needs no firmware rebuild, only a package whose `arena_bytes` still fits.
 
 **What is not in the arena.** The engine's pools (nodes, vector nodes, animations, the image registry,
 fonts) stay where they are, sized by the firmware's `ERUI_*` flags; the package's needs are checked
