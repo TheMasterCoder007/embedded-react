@@ -17,6 +17,7 @@ if (ESP_PLATFORM)
             erb_package_reload.c
             port/erb_package_slots_esp32.c
             INCLUDE_DIRS "." "port"
+            REQUIRES embedded-react
             PRIV_REQUIRES esp_partition spi_flash
     )
     # IDF builds with -Werror; keep the toolchain's stricter warnings as warnings.
