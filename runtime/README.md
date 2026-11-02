@@ -25,8 +25,9 @@ there loads a received frame. A Flow B package (tag `erb`) goes to `erb_load` in
 
 Flow B's limits (how large an app the firmware accepts) are CMake options: `ERB_EVENT_BUDGET`,
 `ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`,
-`ERB_MAX_KEYBOARD_KEYS`, `ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. Engine pool sizes stay the engine's `ERUI_*` options;
-the runtime reads them at load time.
+`ERB_MAX_KEYBOARD_KEYS`, `ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. In an ESP-IDF or PlatformIO install they are
+compile definitions you set from your project. Engine pool sizes stay the engine's `ERUI_*` options; the runtime reads
+them at load time.
 
 ```bash
 cmake -S runtime -B runtime/build

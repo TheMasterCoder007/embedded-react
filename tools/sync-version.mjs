@@ -68,6 +68,16 @@ const yamlRead = text => YAML_VER.exec(text)?.[1]?.trim();
 const yamlWrite = (text, version) =>
   text.replace(YAML_VER, `version: "${version}"`);
 
+// The runtime's idf_component.yml also pins the engine component, which ships at the same version.
+const YAML_ENGINE_PIN = /(embedded-react:\s*\n\s*version:\s*")(\d+\.\d+\.\d+)/;
+const runtimeYamlRead = text => {
+  const own = yamlRead(text);
+  const engine = YAML_ENGINE_PIN.exec(text)?.[2];
+  return engine === own ? own : `${own} (engine pin is ${engine})`;
+};
+const runtimeYamlWrite = (text, version) =>
+  yamlWrite(text, version).replace(YAML_ENGINE_PIN, `$1${version}`);
+
 // er_version.h — the C single-source-of-truth header; regenerate the macro block.
 const H_VER = /#define ER_VERSION_STRING "([^"]+)"/;
 const headerRead = text => H_VER.exec(text)?.[1];
@@ -98,6 +108,7 @@ const headerWrite = (text, version) => {
 const README_PINS = [
   /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/, // CMake FetchContent
   /(embedded-react\^)(\d+\.\d+\.\d+)/, // ESP-IDF add-dependency
+  /(embedded-react-runtime\^)(\d+\.\d+\.\d+)/, // ESP-IDF add-dependency, Flow B
   /(embedded-react\.git#v)(\d+\.\d+\.\d+)/, // PlatformIO lib_deps
 ];
 const readmeRead = text => {
@@ -164,6 +175,11 @@ const MANIFESTS = [
     write: depPinWrite('embedded-react'),
   },
   {path: 'engine/idf_component.yml', read: yamlRead, write: yamlWrite},
+  {
+    path: 'runtime/idf_component.yml',
+    read: runtimeYamlRead,
+    write: runtimeYamlWrite,
+  },
   {path: 'engine/include/er_version.h', read: headerRead, write: headerWrite},
   {path: 'README.md', read: readmeRead, write: readmeWrite},
   // The docs site repeats the README's installation snippets, in the same three formats.
@@ -210,6 +226,7 @@ const PACKAGE_DIRS = [
   'packages/embedded-react',
   'create-embedded-react',
   'engine',
+  'runtime',
 ];
 const legalMirrors = () =>
   PACKAGE_DIRS.flatMap(dir => LEGAL_FILES.map(f => `${dir}/${f}`));

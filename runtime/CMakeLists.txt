@@ -1,3 +1,29 @@
+# ---------------------------------------------------------------------------
+# ESP-IDF component mode: the Flow B runtime, registered with the engine it depends on (idf_component.yml).
+# Flow B's limits below keep their defaults in erb_runtime.h. To change them, set them from the project, e.g.
+#     idf_build_set_property(COMPILE_DEFINITIONS "ERB_MAX_FUNCTIONS=64" APPEND)
+# ---------------------------------------------------------------------------
+if (ESP_PLATFORM)
+    idf_component_register(
+            SRCS
+            er_container.c
+            er_assets.c
+            er_hotreload.c
+            erb_props.c
+            erb_verify.c
+            erb_vm.c
+            erb_runtime.c
+            erb_package_slots.c
+            erb_package_reload.c
+            port/erb_package_slots_esp32.c
+            INCLUDE_DIRS "." "port"
+            PRIV_REQUIRES esp_partition spi_flash
+    )
+    # IDF builds with -Werror; keep the toolchain's stricter warnings as warnings.
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error)
+    return()
+endif ()
+
 cmake_minimum_required(VERSION 3.16)
 project(embedded-react-runtime C)
 

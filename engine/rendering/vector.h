@@ -23,6 +23,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifndef ERUI_MAX_VECTOR_NODES
+#define ERUI_MAX_VECTOR_NODES 8 /**< Concurrent vector nodes that can hold geometry. */
+#endif
+
 /*
  * Vector rasterizer + the engine-owned op-tape/paint storage pool for ER_NODE_VECTOR nodes.
  * The op-tape/paint encoding is the public contract in er_scene.h; this header is internal to the
