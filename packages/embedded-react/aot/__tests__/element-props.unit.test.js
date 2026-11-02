@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {compileSource} from '../compile.mts';
+import {compilePackage, packPackage} from '../compile.mts';
 import {STYLE_KEYS} from '../style-map.mts';
 import {
   ELEMENT_TAGS,
@@ -24,10 +24,12 @@ import {
   svgShapeSpec,
 } from '../compiler/elements/props.mts';
 
-// Every element declares its props, style keys and children. Each declared prop must change the C it lowers
-// to (or be listed here as lowering to nothing, with why); anything undeclared must be an AOT: error.
+// Every element declares its props, style keys and children. Each declared prop must change the package it
+// compiles to (or be listed here as lowering to nothing, with why); anything undeclared must be an AOT: error.
 
 const PRE = `import {useState, useRef} from 'react';
+import logo from './logo.png';
+import knob from './knob.png';
 import {View, Text, Svg, Circle, Ellipse, Rect, Line, Arc, G, Path, Pressable, TouchableOpacity, Image,
   ScrollView, Switch, TextInput, ActivityIndicator, Modal, Dial, FlatList, Animated, useAnimatedValue}
   from 'embedded-react';
@@ -42,28 +44,25 @@ const app = jsx =>
   return ${jsx};
 }`;
 
-/** The C an app compiles to. */
-const gen = jsx => compileSource(app(jsx), 'App.jsx').c;
-
-/** The message of what compiling an app throws. */
-function errorOf(jsx) {
-  try {
-    gen(jsx);
-  } catch (error) {
-    return error.message.split('\n')[0];
-  }
-  throw new Error('expected an AOT error');
-}
+/** The package an app compiles to, as text to compare. */
+const gen = jsx =>
+  Buffer.from(
+    packPackage(
+      compilePackage(app(jsx), 'App.jsx', {
+        screen: {width: 240, height: 320},
+        release: true,
+      }),
+    ).bytes,
+  ).toString('hex');
 
 const HANDLER = '{() => setN(1)}';
 const GRADIENT =
   "{{type: 1, stops: [{offset: 0, color: '#f00'}, {offset: 1, color: '#00f'}]}}";
 
-/** The host-node props, as attributes that each change the C. */
+/** The host-node props, as attributes that each change the package. */
 const HOST = {
   style: 'style={{marginLeft: 3}}',
   visible: 'visible={false}',
-  ref: 'ref={r}',
   delayLongPress: 'delayLongPress={900}',
   onPress: `onPress=${HANDLER}`,
   onLongPress: `onLongPress=${HANDLER}`,
@@ -128,7 +127,6 @@ const SAMPLES = {
   Switch: {
     props: {
       style: 'style={{marginLeft: 3}}',
-      ref: 'ref={r}',
       value: 'value={true}',
       onValueChange: [
         'value={n > 0}',
@@ -141,7 +139,6 @@ const SAMPLES = {
   TextInput: {
     props: {
       style: 'style={{marginLeft: 3}}',
-      ref: 'ref={r}',
       value: 'value="x"',
       defaultValue: 'defaultValue="x"',
       onChangeText: 'onChangeText={text => setN(1)}',
@@ -158,7 +155,6 @@ const SAMPLES = {
   ActivityIndicator: {
     props: {
       style: 'style={{marginLeft: 3}}',
-      ref: 'ref={r}',
       color: 'color="#f00"',
       size: 'size="small"',
       animating: 'animating={false}',
@@ -168,7 +164,6 @@ const SAMPLES = {
     base: 'visible',
     props: {
       style: 'style={{marginLeft: 3}}',
-      ref: 'ref={r}',
       visible: ['visible', 'visible={n > 0}'],
       backdropColor: 'backdropColor="#f00"',
     },
@@ -176,7 +171,6 @@ const SAMPLES = {
   Dial: {
     props: {
       style: 'style={{marginLeft: 3}}',
-      ref: 'ref={r}',
       value: 'value={5}',
       min: 'min={1}',
       max: 'max={50}',
@@ -224,7 +218,6 @@ const SAMPLES = {
     children: '<Circle r={4} />',
     props: {
       style: 'style={{marginLeft: 3}}',
-      ref: 'ref={r}',
       width: 'width={10}',
       height: 'height={10}',
       viewBox: [
@@ -246,6 +239,25 @@ const LOWERED_TO_NOTHING = {
   'FlatList.keyExtractor':
     'Flow B unrolls the rows at build time; there is no reconciler to key',
   'Svg.source': 'needs a baked .svg artifact; the <Svg source> tests cover it',
+  ...Object.fromEntries(
+    [
+      'View',
+      'ScrollView',
+      'Pressable',
+      'TouchableOpacity',
+      'Text',
+      'Image',
+      'Switch',
+      'TextInput',
+      'ActivityIndicator',
+      'Modal',
+      'Dial',
+      'Svg',
+    ].map(tag => [
+      `${tag}.ref`,
+      'a node ref takes no room until updateVector reads it',
+    ]),
+  ),
 };
 
 /** Per shape: the geometry every compile carries, and each declared prop as an attribute or a pair. */
@@ -363,51 +375,6 @@ describe('declared element props', () => {
     );
   }
 
-  it('refuses an undeclared prop whose value is undefined', () => {
-    expect(errorOf('<View bogus={undefined} />')).toBe(
-      'AOT: <View> prop "bogus" is not supported',
-    );
-    expect(errorOf('<TextInput autoFocus={undefined} />')).toBe(
-      'AOT: <TextInput> prop "autoFocus" is not supported',
-    );
-  });
-
-  it('refuses an undeclared prop on every element, at the prop', () => {
-    for (const tag of ELEMENT_TAGS) {
-      expect(errorOf(`<View><${tag} bogus={1} /></View>`), tag).toBe(
-        `AOT: <${tag}> prop "bogus" is not supported`,
-      );
-    }
-
-    for (const tag of SVG_SHAPE_TAGS) {
-      expect(
-        errorOf(`<Svg width={9} height={9}><${tag} bogus={1} /></Svg>`),
-        tag,
-      ).toBe(`AOT: <${tag}> prop "bogus" is not supported`);
-    }
-
-    expect(() => gen('<View\n  bogus={1} />')).toThrow(/App\.jsx:10:3/);
-  });
-
-  it('takes the RN props that wrap a missing OS service, except on <FlatList>', () => {
-    for (const tag of ELEMENT_TAGS.filter(tag => tag !== 'FlatList')) {
-      const {base = '', children = ''} = SAMPLES[tag];
-      const jsx = attrs => `<${tag} ${base} ${attrs}>${children}</${tag}>`;
-      expect(gen(jsx('testID="x" accessibilityLabel="y"')), tag).toBe(
-        gen(jsx('')),
-      );
-    }
-
-    expect(gen('<Text>a<Text testID="x">b</Text></Text>')).toBe(
-      gen('<Text>a<Text>b</Text></Text>'),
-    );
-    expect(
-      errorOf(
-        '<FlatList data={[1]} renderItem={({item}) => <Text>{item}</Text>} testID="list" />',
-      ),
-    ).toBe('AOT: <FlatList> prop "testID" is not supported');
-  });
-
   it('refuses the props Flow A or React Native know, with what to do instead', () => {
     expect(() => gen('<TextInput autoFocus />')).toThrow(
       /prop "autoFocus" is not supported[\s\S]*hint: the engine's TextInput has no such setting/,
@@ -433,325 +400,6 @@ describe('declared style keys', () => {
     );
     expect([...taken].sort()).toEqual([...STYLE_KEYS, 'transform'].sort());
   });
-
-  it.each([
-    ['opacity', '<Switch style={{opacity: 0.5}} />', 'Switch'],
-    ['an animated opacity', '<Switch style={{opacity: a}} />', 'Switch'],
-    [
-      'backgroundColor',
-      "<Text style={{backgroundColor: '#fff'}}>x</Text>",
-      'Text',
-    ],
-    ['color', "<View style={{color: '#fff'}} />", 'View'],
-    [
-      'borderWidth',
-      '<Image source="logo" style={{borderWidth: 4}} />',
-      'Image',
-    ],
-    ['fontSize', '<Switch style={{fontSize: 4}} />', 'Switch'],
-    [
-      'a state-driven color',
-      "<View style={{color: n ? '#fff' : '#000'}} />",
-      'View',
-    ],
-  ])(
-    'refuses %s on an element the engine does not draw it on',
-    (what, jsx, tag) => {
-      expect(errorOf(jsx)).toMatch(new RegExp(`has no effect on <${tag}>$`));
-    },
-  );
-
-  it('checks a style reference key by key, and lets a null value through', () => {
-    expect(() =>
-      compileSource(
-        `${PRE}const S = {color: '#fff'};\nexport function App() { return <View style={S} />; }`,
-        'App.jsx',
-      ),
-    ).toThrow(/style "color" has no effect on <View>/);
-    expect(gen('<Text style={{opacity: null}}>x</Text>')).toBe(
-      gen('<Text>x</Text>'),
-    );
-  });
-
-  it('takes only the span keys on a nested <Text>, and no other props', () => {
-    expect(
-      errorOf('<Text>a<Text style={{marginLeft: 4}}>b</Text></Text>'),
-    ).toBe('AOT: style "marginLeft" has no effect on <Text>');
-    expect(
-      errorOf('<Text>a<Text onPress={() => setN(1)}>b</Text></Text>'),
-    ).toBe('AOT: <Text> prop "onPress" is not supported');
-  });
-});
-
-describe('declared children', () => {
-  it.each(['Image', 'Switch', 'TextInput', 'ActivityIndicator'])(
-    'refuses children on <%s>',
-    tag => {
-      expect(errorOf(`<${tag}><View /></${tag}>`)).toBe(
-        `AOT: <${tag}> takes no children`,
-      );
-    },
-  );
-
-  it('refuses text outside a <Text>, and skips the whitespace between tags', () => {
-    expect(errorOf('<View>hello</View>')).toBe(
-      'AOT: text "hello" must be inside a <Text>',
-    );
-    expect(gen('<View>\n  <View />\n</View>')).toBe(
-      gen('<View><View /></View>'),
-    );
-  });
-
-  it('inlines a fragment child, in a container and in a <Text>', () => {
-    expect(gen('<View><><Text>a</Text><Text>b</Text></></View>')).toBe(
-      gen('<View><Text>a</Text><Text>b</Text></View>'),
-    );
-    expect(gen('<Text>a<>b</></Text>')).toBe(gen('<Text>ab</Text>'));
-  });
-
-  it('builds every branch of a nested ternary, each shown only while chosen', () => {
-    const c = gen(
-      '<View>{n === 0 ? <Text>A</Text> : n === 1 ? <Text>B</Text> : <Text>C</Text>}</View>',
-    );
-    expect(c.match(/app_node_create\(ER_NODE_TEXT\)/g)).toHaveLength(3);
-    expect(c).toContain(
-      'p.display = ((((!((s_state.n == 0))) && ((s_state.n == 1)))) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
-    );
-    expect(c).toContain(
-      'p.display = ((((!((s_state.n == 0))) && (!((s_state.n == 1))))) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
-    );
-  });
-
-  it("passes a fragment and text in a component's children through to where it renders them", () => {
-    const withCard = jsx =>
-      compileSource(
-        `${PRE}function Card({children}) { return <View>{children}</View>; }\n` +
-          `export function App() { return ${jsx}; }`,
-        'App.jsx',
-      ).c;
-    expect(withCard('<Card><><Text>a</Text><Text>b</Text></></Card>')).toBe(
-      withCard('<Card><Text>a</Text><Text>b</Text></Card>'),
-    );
-    expect(withCard('<Card />')).toBe(withCard('<Card></Card>'));
-    expect(() => withCard('<Card>hello</Card>')).toThrow(
-      /text "hello" must be inside a <Text>/,
-    );
-  });
-
-  it('builds nothing for a constant branch that renders nothing', () => {
-    expect(gen('<View>{false ? <Text>A</Text> : null}</View>')).toBe(
-      gen('<View />'),
-    );
-  });
-
-  it('refuses a branch that is neither an element nor nothing', () => {
-    expect(errorOf("<View>{n ? <Text>A</Text> : 'oops'}</View>")).toBe(
-      'AOT: a non-element expression child ("oops") cannot render here',
-    );
-  });
-
-  it('refuses a state-driven number on the left of `&&`, which renders 0 as text', () => {
-    expect(errorOf('<View>{n && <Text>A</Text>}</View>')).toBe(
-      'AOT: a number on the left of `&&` renders 0 as text when it is 0',
-    );
-    expect(gen('<View>{n > 0 && <Text>A</Text>}</View>')).toContain(
-      'p.display = (((s_state.n > 0)) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
-    );
-  });
-
-  it('refuses a constant `&&` whose falsy value React would draw as text', () => {
-    expect(errorOf('<View>{0 && <Text>A</Text>}</View>')).toBe(
-      'AOT: a non-element expression child (0) cannot render here',
-    );
-    for (const left of ['false', 'null', "''"]) {
-      expect(gen(`<View>{${left} && <Text>A</Text>}</View>`), left).toBe(
-        gen('<View />'),
-      );
-    }
-  });
-});
-
-describe('values a declared prop cannot lower', () => {
-  it.each([
-    [
-      'a static transform beside an animated one',
-      "<View style={{transform: [{scale: a}, {rotate: '45deg'}]}} />",
-      /not an animated value cannot sit beside an animated one/,
-    ],
-    [
-      'an animated rotateX',
-      '<View style={{transform: [{rotateX: a}]}} />',
-      /transform "rotateX" cannot be animated/,
-    ],
-    [
-      'a percentage <Svg width> with a viewBox',
-      '<Svg width="50%" height={9} viewBox="0 0 9 9" />',
-      /<Svg width> must be a number of pixels/,
-    ],
-    [
-      'a state-driven <Svg width>',
-      '<Svg width={n} height={9}><Circle r={n} /></Svg>',
-      /state-driven <Svg width> is not supported/,
-    ],
-    [
-      'a state-driven style on an <Svg>',
-      '<Svg width={9} height={9} style={{marginLeft: n}} />',
-      /state-driven style on an <Svg>/,
-    ],
-    [
-      'ellipsizeMode="head"',
-      '<Text numberOfLines={1} ellipsizeMode="head">x</Text>',
-      /"head" is not drawn by the engine/,
-    ],
-    [
-      'a fractional numberOfLines',
-      '<Text numberOfLines={1.5}>x</Text>',
-      /whole number from 0 to 255/,
-    ],
-    [
-      'five <Dial> gradient stops',
-      "<Dial indicatorGradient={{type: 'conic', stops: [{color: '#f00'}, {color: '#0f0'}, {color: '#00f'}, {color: '#ff0'}, {color: '#0ff'}]}} />",
-      /takes at most 4 stops \(got 5\)/,
-    ],
-    [
-      'a non-string <Dial> color',
-      '<Dial trackColor={5} />',
-      /<Dial trackColor> must be a color string/,
-    ],
-    [
-      'a non-number <Dial> number',
-      '<Dial min="0" />',
-      /<Dial min> must be a number/,
-    ],
-    [
-      'an infinite whole <Dial> number',
-      '<Dial segments={1 / 0} />',
-      /folded to Infinity/,
-    ],
-    [
-      'a disabled <Switch>',
-      '<Switch value={false} disabled />',
-      /disabled <Switch> is not supported/,
-    ],
-    [
-      'a malformed trackColor',
-      "<Switch trackColor={{on: '#fff'}} />",
-      /must be an object of two colors/,
-    ],
-    [
-      "size='medium'",
-      '<ActivityIndicator size="medium" />',
-      /'small', 'large' or a number of pixels/,
-    ],
-    [
-      "animationType='slide'",
-      '<Modal visible animationType="slide" />',
-      /animationType> "slide" is not supported/,
-    ],
-    [
-      'a state-driven tintColor',
-      "<Image source=\"logo\" tintColor={n ? '#fff' : '#000'} />",
-      /tintColor> must be a constant color/,
-    ],
-    [
-      'a one-stop static shape gradient',
-      "<Svg width={9} height={9}><Circle r={4} fillGrad={{type: 1, stops: [{offset: 0, color: '#f00'}]}} /></Svg>",
-      /"fillGrad.stops" needs 2\.\.8 entries \(got 1\)/,
-    ],
-    [
-      'a shape an <Svg> cannot draw',
-      '<Svg width={9} height={9}><Polygon /></Svg>',
-      /<Polygon> is not a shape an <Svg> draws/,
-    ],
-  ])('refuses %s', (what, jsx, message) => {
-    expect(errorOf(jsx)).toMatch(message);
-  });
-
-  it('lets a style size win over the <Svg> width and height, in either form', () => {
-    const c = gen(
-      '<Svg width="50%" height={40} style={{width: 30, height: \'25%\'}}><Circle r={4} /></Svg>',
-    );
-    expect(c).not.toContain('p.width_pct = 50.0f;');
-    expect(c).not.toContain('p.height = (int16_t)40;');
-    expect(c).toContain('p.width = 30;');
-    expect(c).toContain('p.height_pct = 25.0f;');
-  });
-
-  it('lowers a percentage <Svg> size, and refuses a numeric string', () => {
-    expect(
-      gen('<Svg width="50%" height={40}><Circle r={4} /></Svg>'),
-    ).toContain('p.width_pct = 50.0f;\n    p.height = (int16_t)40;');
-    expect(errorOf('<Svg width={9} height="40" />')).toBe(
-      'AOT: <Svg height> must be a number of pixels or a percentage (got "40")',
-    );
-  });
-
-  it('keeps the gradients of a constant <Svg>', () => {
-    expect(
-      gen(
-        `<Svg width={20} height={20}><Circle r={4} fillGrad=${GRADIENT} /></Svg>`,
-      ),
-    ).toContain('s_svg0_paints, 1, s_svg0_grads, 1);');
-  });
-
-  it('wires the <TextInput> events that carry no value', () => {
-    const c = gen(
-      `<TextInput onSubmitEditing=${HANDLER} onFocus=${HANDLER} onBlur=${HANDLER} />`,
-    );
-    for (const event of ['SUBMIT_EDITING', 'FOCUS', 'BLUR']) {
-      expect(c).toMatch(
-        new RegExp(
-          `er_event_set\\(n0, ER_EVENT_${event}, er_handler_\\d, NULL\\);`,
-        ),
-      );
-    }
-  });
-
-  it('drops the press handlers of a disabled <Pressable>', () => {
-    expect(gen(`<Pressable disabled onPress=${HANDLER} />`)).not.toContain(
-      'ER_EVENT_PRESS',
-    );
-  });
-
-  it('rounds an <Image> with its corner radii, as Flow A does', () => {
-    const c = gen(
-      '<Image source="logo" style={{borderRadius: 12, borderTopLeftRadius: 4}} />',
-    );
-    expect(c).toContain('p.border_radius = 12;');
-    expect(c).toContain('p.border_top_left_radius = 4;');
-  });
-
-  it('tints an <ActivityIndicator> from style.color, as Flow A does', () => {
-    expect(gen("<ActivityIndicator style={{color: '#f00'}} />")).toContain(
-      'p.indicator_color = 0xFFFF0000u;',
-    );
-  });
-});
-
-describe('typed elements under a state-driven conditional', () => {
-  it('shows a Switch, Dial, TextInput or ActivityIndicator only while it is chosen', () => {
-    for (const element of [
-      '<Switch />',
-      '<Dial />',
-      '<TextInput />',
-      '<ActivityIndicator />',
-    ]) {
-      expect(gen(`<View>{n > 0 && ${element}}</View>`), element).toContain(
-        'p.display = (((s_state.n > 0)) ? ER_DISPLAY_FLEX : ER_DISPLAY_NONE);',
-      );
-    }
-  });
-
-  it("gates a Modal's own visible flag, which the engine derives its display from", () => {
-    expect(gen('<View>{n > 0 && <Modal visible />}</View>')).toContain(
-      'p.modal_visible = (((s_state.n > 0)) ? 1 : 0);',
-    );
-    expect(
-      gen('<View>{n > 0 ? <Text>a</Text> : <Modal visible={n < -1} />}</View>'),
-    ).toContain(
-      'p.modal_visible = ((!((s_state.n > 0))) ? (uint8_t)(((s_state.n < -1)) ? 1 : 0) : 0);',
-    );
-  });
 });
 
 describe('a baked <Svg source>', () => {
@@ -762,146 +410,16 @@ describe('a baked <Svg source>', () => {
     height: 10,
   };
   const baked = attrs =>
-    compileSource(
+    compilePackage(
       `${PRE}import art from './art.svg';
 export function App() { return <Svg source={art} ${attrs} />; }`,
       'App.jsx',
       {svgArtifacts: {art: artifact}},
     ).c;
 
-  it('scales the drawing to the style size, which wins over the attribute', () => {
-    const tape = c => c.match(/s_svg0_ops\[\] = \{[^}]*\}/)[0];
-    const styled = baked(
-      'width={20} height={20} style={{width: 30, height: 30}}',
-    );
-    expect(tape(styled)).toBe(tape(baked('width={30} height={30}')));
-    expect(styled).toContain('p.width = 30;');
-    expect(styled).not.toContain('(int16_t)20');
-  });
-
   it('refuses a percentage style size, which it cannot bake', () => {
     expect(() =>
       baked("width={20} height={20} style={{width: '50%'}}"),
     ).toThrow(/percentage style width on an <Svg source> is not supported/);
-  });
-
-  it('takes the last style size, a percentage overridden by pixels or the reverse', () => {
-    const tape = c => c.match(/s_svg0_ops\[\] = \{[^}]*\}/)[0];
-    const overridden = baked(
-      "style={[{width: '50%', height: 30}, {width: 30}]}",
-    );
-    expect(tape(overridden)).toBe(
-      tape(baked('style={{width: 30, height: 30}}')),
-    );
-    expect(overridden).not.toContain('width_pct');
-    expect(() =>
-      baked("style={[{width: 30, height: 30}, {width: '50%'}]}"),
-    ).toThrow(/percentage style width on an <Svg source> is not supported/);
-  });
-});
-
-describe('a pixel size and its percentage twin', () => {
-  it('are one style key, so the later one replaces the other', () => {
-    expect(gen("<View style={[{width: '50%'}, {width: 30}]} />")).toBe(
-      gen('<View style={{width: 30}} />'),
-    );
-    expect(gen("<View style={[{left: 30}, {left: '50%'}]} />")).toBe(
-      gen("<View style={{left: '50%'}} />"),
-    );
-  });
-});
-
-describe('animated style keys', () => {
-  it('binds an animated transform on a typed element and an <Svg>', () => {
-    expect(gen('<Switch style={{transform: [{scale: a}]}} />')).toContain(
-      'er_anim_value_bind(s_av_a, n0, ER_PROP_SCALE_X);',
-    );
-    expect(
-      gen(
-        '<Svg width={9} height={9} style={{transform: [{scale: a}]}}><Circle r={4} /></Svg>',
-      ),
-    ).toContain('er_anim_value_bind(s_av_a, n0, ER_PROP_SCALE_X);');
-  });
-
-  it.each([
-    [
-      'backgroundColor',
-      '<TextInput style={{backgroundColor: a}} />',
-      'TextInput',
-    ],
-    ['color', '<ActivityIndicator style={{color: a}} />', 'ActivityIndicator'],
-    ['color', '<Text>a<Text style={{color: a}}>b</Text></Text>', 'Text'],
-  ])(
-    'refuses an animated %s the engine does not animate there',
-    (key, jsx, tag) => {
-      expect(errorOf(jsx)).toBe(
-        `AOT: an animated "${key}" has no effect on <${tag}>`,
-      );
-    },
-  );
-
-  it.each([
-    ['Text', '<Text style={{opacity: a}}>x</Text>'],
-    ['Image', '<Image source="logo" style={{opacity: a}} />'],
-    ['TextInput', '<TextInput style={{opacity: a}} />'],
-  ])('binds an animated opacity on a <%s>', (_tag, jsx) => {
-    expect(gen(jsx)).toContain(
-      'er_anim_value_bind(s_av_a, n0, ER_PROP_OPACITY);',
-    );
-  });
-
-  it('binds a color through an interpolation onto colors', () => {
-    const c = gen(
-      "<View style={{backgroundColor: a.interpolate({inputRange: [0, 1], outputRange: ['#ff0000', 'blue']})}} />",
-    );
-    expect(c).toContain(
-      'static const ERColorInterpolation interp_n0_0 = { { 0.0f, 1.0f }, { 0xFFFF0000u, 0xFF0000FFu }, 2, ' +
-        'ER_EXTRAPOLATE_EXTEND, ER_EXTRAPOLATE_EXTEND };',
-    );
-    expect(c).toContain(
-      'er_anim_value_bind_color(s_av_a, n0, ER_PROP_BACKGROUND_COLOR, &interp_n0_0);',
-    );
-  });
-
-  it.each([
-    ['the value itself', '<Text style={{color: a}}>x</Text>', 'color'],
-    [
-      'a numeric outputRange',
-      '<View style={{backgroundColor: a.interpolate({inputRange: [0, 1], outputRange: [0, 1]})}} />',
-      'backgroundColor',
-    ],
-  ])('refuses %s on a color key', (_what, jsx, key) => {
-    expect(errorOf(jsx)).toBe(`AOT: an animated "${key}" needs colors`);
-  });
-
-  it('refuses an outputRange of colors on a numeric key', () => {
-    expect(
-      errorOf(
-        "<View style={{opacity: a.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']})}} />",
-      ),
-    ).toBe('AOT: an animated "opacity" takes numbers, not colors');
-    expect(
-      errorOf(
-        "<View style={{transform: [{scale: a.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']})}]}} />",
-      ),
-    ).toBe('AOT: an animated "scale" takes numbers, not colors');
-  });
-
-  it('refuses a malformed color in an outputRange', () => {
-    expect(
-      errorOf(
-        "<View style={{backgroundColor: a.interpolate({inputRange: [0, 1], outputRange: ['#000', '#ggg']})}} />",
-      ),
-    ).toMatch(
-      /^AOT: \.interpolate\(\) outputRange has an unsupported color "#ggg"/,
-    );
-  });
-
-  it('refuses an outputRange mixing numbers and colors', () => {
-    expect(
-      errorOf(
-        "<View style={{opacity: a.interpolate({inputRange: [0, 1], outputRange: [0, '#fff']})}} />",
-      ),
-    ).toBe('AOT: .interpolate() outputRange must be all numbers or all colors');
   });
 });

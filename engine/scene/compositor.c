@@ -4368,7 +4368,7 @@ void er_node_set_vector_ops(ERNode* node,
             old_ng == n_grads
             && (n_grads <= 0
                 || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0));
-        /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
+        /* Identical re-upload (e.g. a held finger below the drag deadband re-running a handler with the same
          * state) → nothing changed, so skip the repaint entirely. */
         if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0
             && (n_paints <= 0
@@ -4758,8 +4758,18 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
                     er_text_input_key(ER_KEY_BACKSPACE, NULL);
                     break;
                 case ER_KBD_KEY_DONE:
-                    er_text_input_key(ER_KEY_ESCAPE, NULL);
+                {
+                    /* Submit, then blur, unless the app's handler moved the focus itself. A ref, since a node
+                       made in the handler can reuse a destroyed input's tag. */
+                    const ERNodeRef submitted = er_node_ref(er_get_node(s_focused_input_tag));
+                    er_text_input_key(ER_KEY_RETURN, NULL);
+                    const ERNode* still_there = er_node_deref(submitted);
+                    if (still_there && still_there->tag == s_focused_input_tag)
+                    {
+                        er_text_input_key(ER_KEY_ESCAPE, NULL);
+                    }
                     break;
+                }
                 case ER_KBD_KEY_CHAR:
                 default:
                     er_text_input_key(0, h.key->text ? h.key->text : "");

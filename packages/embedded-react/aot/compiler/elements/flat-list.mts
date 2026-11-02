@@ -125,7 +125,7 @@ export function emitFlatList(
     }
   }
 
-  // Ensure renderItem binds the required item value; index is optional for the generated map callback.
+  // Ensure renderItem binds the required item value; index is optional for the map callback.
   if (!itemName) {
     throw aotError(
       'AOT: FlatList renderItem must destructure item',

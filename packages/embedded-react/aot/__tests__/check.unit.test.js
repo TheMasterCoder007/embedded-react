@@ -55,10 +55,10 @@ describe('check pass: numbers', () => {
   it('refuses NaN, Infinity and a number past the float range', () => {
     expect(numberProblem(1.5)).toBeNull();
     expect(numberProblem(0 / 0).message).toBe(
-      'AOT: a numeric constant folded to NaN, which has no C form',
+      'AOT: a numeric constant folded to NaN, which a number slot cannot hold',
     );
     expect(numberProblem(undefined).message).toBe(
-      'AOT: a numeric constant folded to undefined, which has no C form',
+      'AOT: a numeric constant folded to undefined, which a number slot cannot hold',
     );
     expect(numberProblem(1e40).message).toBe(
       'AOT: the numeric constant 1e+40 is past the float range',
@@ -103,7 +103,7 @@ describe('check pass: numbers', () => {
       ),
     );
     expect(error.message).toBe(
-      'AOT: a numeric constant folded to Infinity, which has no C form',
+      'AOT: a numeric constant folded to Infinity, which a number slot cannot hold',
     );
     expect(error.aotLoc).toMatchObject({line: 5, column: 15});
   });
@@ -139,7 +139,7 @@ describe('check pass: state-driven drawings', () => {
     ]) {
       const error = thrown(() => lower(gradientApp(ax)));
       expect(error.message).toBe(
-        `AOT: a numeric constant folded to ${folded}, which has no C form`,
+        `AOT: a numeric constant folded to ${folded}, which a number slot cannot hold`,
       );
       expect(error.aotLoc).toMatchObject({line: 5, column: 9});
     }

@@ -35,20 +35,17 @@ import type {SlotWidths, WideSlot} from './ir/types.mts';
 
 /** A function the compiler can inline or compile: a declaration, a function expression, or an arrow. */
 export type FunctionNode =
-  | t.FunctionDeclaration
-  | t.FunctionExpression
-  | t.ArrowFunctionExpression;
+  t.FunctionDeclaration | t.FunctionExpression | t.ArrowFunctionExpression;
 
 /** Compile-time bindings a constant fold can read: module consts, folded component consts, static props. */
 export type Scope = Record<string, unknown>;
 
-/** The C kind of a value: a 32-bit int (booleans included), a float, a 64-bit int, or a char buffer. */
-export type CType = 'int' | 'float' | 'i64' | 'string';
+/** The kind of slot that holds a value: a 32-bit int (booleans included), a float, a 64-bit int, or a string. */
+export type SlotKind = 'int' | 'float' | 'i64' | 'string';
 
-/** A JS expression lowered to C. */
-export interface CExpr {
-  code: string;
-  cType: CType;
+/** What a slot's kind records about the value in it. */
+export interface SlotValue {
+  slotKind: SlotKind;
   /** The value is a JS boolean, which renders as nothing on its own and as "true"/"false" when concatenated. */
   isBool?: boolean;
   /** A 64-bit constant, which converts like any number, as opposed to a runtime timestamp. */
@@ -63,13 +60,15 @@ export interface ItemField {
   kind: 'string' | 'int' | 'float';
 }
 
-/** The C struct used to store each item in a list state, inferred from the list's first initial item. */
+/** The fields of each item in a list state, inferred from the list's first initial item. */
 export interface ItemStruct {
   fields: ItemField[];
 }
 
 /** A name bound at runtime: a handler local, a dynamic prop, or a list row's item (which has a `struct`). */
-export interface Local extends CExpr {
+export interface Local extends SlotValue {
+  /** What a local with no `expr` is known by in the function that holds it. */
+  name?: string;
   struct?: ItemStruct;
   /** A list row's item: the list it is a row of. */
   list?: ListState;
@@ -85,24 +84,22 @@ export interface Local extends CExpr {
 interface StateSlot {
   /** The JS name, which reads resolve. */
   name: string;
-  /** The C storage name: the JS name, prefixed for an inlined component instance. */
-  cField: string;
+  /** The storage name: the JS name, prefixed for an inlined component instance. */
+  slotName: string;
   /** The setter's JS name; none for a host value. */
   setter: string | undefined;
-  /** A node or drawing reads it, so a write flags it for app_update() to set them again. */
+  /** A node or drawing reads it, so a write flags it for the update to set them again. */
   isWatched?: boolean;
 }
 
 /** A scalar state: one field of the ErAppState struct. */
 export interface ScalarState extends StateSlot {
   kind: 'scalar';
-  cType: CType;
+  slotKind: SlotKind;
   isBool: boolean;
-  /** How C reads it: `s_state.<cField>`. */
-  cMember: string;
   /** Its initial value: a string for a string slot, a number otherwise. */
   initial: number | string;
-  /** Fed by the host through a generated er_app_set_<name>() (useHostValue). */
+  /** Fed by the host through an input (useHostValue). */
   host: boolean;
   /** What it holds once widened to 64 bits (see compileWidened). */
   widened?: WideSlot;
@@ -118,9 +115,6 @@ export interface ListState extends StateSlot {
   struct: ItemStruct;
   items: Record<string, unknown>[];
   cap: number;
-  cTypeName: string;
-  arrayName: string;
-  countMember: string;
 }
 
 export type StateRecord = ScalarState | ListState;
@@ -131,23 +125,23 @@ export interface StateTable {
   bySetter: Map<string, StateRecord>;
 }
 
-/** A `useRef(number)`: a mutable C slot that does not re-render. */
+/** A `useRef(number)`: a mutable slot that does not re-render. */
 export interface ValueRef {
   kind: 'value';
-  cVar: string;
-  cType: 'int' | 'float' | 'i64';
+  slotName: string;
+  slotKind: 'int' | 'float' | 'i64';
   initial: number;
   /** What it holds once widened to 64 bits (see compileWidened). */
   widened?: WideSlot;
-  /** Whether the generated C reads or writes it; an unused ref declares nothing. */
+  /** Whether the app reads or writes it; an unused ref declares nothing. */
   used: boolean;
 }
 
-/** A `useRef()` / `useRef(null)`: holds an `ERNode*`, captured by `ref={r}` on an element. */
+/** A `useRef()` / `useRef(null)`: holds an node handle, captured by `ref={r}` on an element. */
 export interface NodeRef {
   kind: 'node';
-  cVar: string;
-  cType: 'ERNode*';
+  slotName: string;
+  slotKind: 'node';
   used: boolean;
 }
 
@@ -155,7 +149,7 @@ export type RefRecord = ValueRef | NodeRef;
 
 /** A useAnimatedValue: an engine-side ERAnimValueHandle. */
 export interface AnimRecord {
-  cVar: string;
+  slotName: string;
   initial: number;
 }
 
@@ -169,28 +163,28 @@ export interface Caps {
 
 /**
  * How the element being emitted is placed. `show` is set under a state-driven conditional: the element exists
- * either way, and app_update() shows it only while the condition holds.
+ * either way, and the update shows it only while the condition holds.
  */
 export interface EmitOptions {
   show?: IrShow;
 }
 
+/** The name of a constant in er_scene.h. */
+export type EngineName = `ER_${string}`;
+
+/** A constant prop value: a number, or a constant er_scene.h names. */
+export type PropConstant = number | EngineName;
+
 /** An ERProps field set from a compile-time constant. */
 export interface StaticAssign {
   field: string;
-  expr: string;
+  value: PropConstant;
 }
 
-/** An ERProps field set from a runtime value, re-applied in app_update(). */
+/** An ERProps field set from a runtime value, re-applied in the update. */
 export interface DynAssign {
   field: string;
   value: IrPropValue;
-}
-
-/** An expression lowered to one printf format and its arguments; `format` has `%` escaped as `%%`. */
-export interface FormatResult {
-  format: string;
-  args: string[];
 }
 
 /** A gradient as svg-ops flattens it, its geometry in the op-tape's coordinates. */
@@ -249,9 +243,9 @@ export type PanCallback = FunctionNode | t.ObjectMethod;
 export interface PanResponderRecord {
   /** The JS name it is bound to. */
   name: string;
-  /** Prefix of its file-scope gesture state (`<cPrefix>_granted`, …). */
-  cPrefix: string;
-  /** Prefix of its generated C functions. */
+  /** Prefix of its gesture state (`<statePrefix>_granted`, …). */
+  statePrefix: string;
+  /** Prefix of its functions. */
   fnPrefix: string;
   /** The gesture's id, assigned when the responder is first wired to a node. */
   stateID: number;
@@ -287,7 +281,7 @@ export interface FunctionProp {
 }
 
 /**
- * The expression environment: everything a JS expression can refer to while it is lowered to C. The App's
+ * The expression environment: everything a JS expression can refer to while it is lowered. The App's
  * env is built once per compile; an inlined component, a list row, a handler, and an effect each extend it
  * with their own bindings.
  */
@@ -323,7 +317,7 @@ export interface Env {
   children?: ChildrenSlot | null;
   /** Callback props of the component being inlined. */
   fnProps?: Map<string, FunctionProp>;
-  /** Namespaces the C handlers an inlined component instance emits. */
+  /** Namespaces the handlers an inlined component instance emits. */
   cbPrefix?: string;
   /** The handler's event parameter, whose touch fields read EREventData. */
   event?: string | null;
@@ -340,23 +334,21 @@ export interface Env {
 
 /**
  * What the statement compiler carries through one body — a handler, an effect, a timer, or animation callback —
- * and reports back to the caller that wraps it in a C function.
+ * and reports back to the caller that wraps it in a function.
  */
 export interface StatementContext {
-  /** A statement set state, so the body ends with app_update(). */
+  /** A statement set state, so the body ends with the update. */
   stateChanged: boolean;
-  /** Numbers the ERAnimConfig locals an Animated.start() declares, unique within the body. */
-  animIdx: number;
   out: Out;
   /** A `return` may exit this body: it is an effect body. */
   allowReturn?: boolean;
   /** The body's own top-level statements, which a tail `return` and hoisted locals are measured against. */
   bodyList?: t.Statement[];
-  /** An early `return` was lowered, so the body needs a C function of its own. */
+  /** An early `return` was lowered, so the body needs a function of its own. */
   usedReturn?: boolean;
   /** The body is a dep-driven effect. */
   depDriven?: boolean;
-  /** The body's locals become file-scope slots named `<prefix><name>`, declared into `decls`: its cleanup
+  /** The body's locals become slots named `<prefix><name>`, declared into `decls`: its cleanup
    *  closure outlives the call. */
   hoist?: {prefix: string; decls: IrStaticDecl[]};
   /** Compiles a dep-driven effect's `return () => …` into its companion cleanup function; `armed` is the flag

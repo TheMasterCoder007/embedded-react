@@ -113,6 +113,6 @@ round goes stale the moment the code moves; the git log has the history.
 ## The pull request
 
 `master` is protected: every change lands through a squash-merged pull request with a review and
-the CI checks green (engine, bridge, JS tests and version drift, AOT compile smoke, consumer smoke).
+the CI checks green (engine, bridge, JS tests and version drift, Flow B golden images, fuzzing, consumer smoke).
 Keep a pull request to one concern. Describe what changed and why in a few sentences; the diff
 shows the how.

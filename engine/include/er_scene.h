@@ -1753,7 +1753,7 @@ extern "C"
      *
      * This is RN's `gestureState.numberActiveTouches` — what a gesture recogniser reads to tell a
      * one-finger pan from a two-finger one. The engine owns the per-finger touch slots, so neither an
-     * AOT-generated app nor a JS module can count them for itself without shadowing every touch event.
+     * compiled app nor a JS module can count them for itself without shadowing every touch event.
      *
      * Counts fingers whose touch-down landed on a node: a touch that hit nothing starts no sequence
      * and so is not tracked.
@@ -1771,7 +1771,7 @@ extern "C"
     {
         ER_KBD_KEY_CHAR = 0,  /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
         ER_KBD_KEY_BACKSPACE, /**< deletes the character before the cursor */
-        ER_KBD_KEY_DONE,      /**< dismisses the keyboard (blurs the input) */
+        ER_KBD_KEY_DONE,      /**< submits the input, then dismisses the keyboard (blurs the input) */
         ER_KBD_KEY_LAYER      /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
     } ERKeyboardKeyType;
 

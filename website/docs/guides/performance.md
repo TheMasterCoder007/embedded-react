@@ -78,9 +78,9 @@ a dashboard wants it at the default.
 
 ## Flow B specifics
 
-There is no JS phase: a state change is a C assignment and a prop write. What remains is the
+There is no JS phase: a state change is a slot write and a prop write. What remains is the
 engine, so layout, raster and present are the whole frame, and the habits above about repaint area
-and animation are the entire story. Timers are advanced by `er_app_tick()`, which the host calls
+and animation are the entire story. Timers are advanced by `erb_tick()`, which the host calls
 once per frame.
 
 A state change re-sets only the nodes and drawings that read that state. A node that reads a ref or

@@ -3,18 +3,14 @@ title: 'Flow B packages'
 description: 'The package the Flow B compiler emits and the runtime that verifies and runs it: container, program tables, memory, VM, verifier rules and fault policy.'
 ---
 
-This page is the spec for Flow B's package: the file the compiler will emit in place of
-`app.gen.c`, and the fixed runtime in the firmware that checks it and runs it. It is written for
-the people building the loader, the VM, and the compiler's package output.
+This page is the spec for Flow B's package: the file the compiler emits, and the fixed runtime in the firmware that
+checks it and runs it. It is written for the people working on the loader, the VM, and the compiler's package backend.
 
-:::info[Runtime built, compiler output in progress]
-The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in
-`erb_format.h`). `embedded-react build --aot` writes a package, with a layout for every panel size, and its
-debug table. It takes state, handlers, timers, effects, lists,
-animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the screen size. `--release`
-and `--bake` build the package too, and `embedded-react flash` writes it to a [slot](#package-slots). Once
-packages pass the same tests as the C output (`--c`), the C backend is retired.
-:::
+The loader, verifier, and VM are in `runtime/` (`erb_*.c`; the wire format and opcode list are in `erb_format.h`).
+`embedded-react build --aot` writes a package, with a layout for every panel size, and its debug table. It takes state,
+handlers, timers, effects, lists, animations, PanResponder, `<Svg>`, `setKeyboardConfig` and values worked out from the
+screen size. `--release` and `--bake` build the package too, and `embedded-react flash` writes it to a
+[slot](#package-slots).
 
 ## In one picture
 
@@ -40,9 +36,8 @@ The goals that shape every choice below:
   left for run time is a short, fixed list (see [Run-time checks](#run-time-checks)).
 - **Nothing in a package can crash the device.** A failure shows the error screen with the reason,
   never a hard fault, a freeze, or a silent drop.
-- **One set of semantics.** The VM keeps the C output's rules exactly (saturating arithmetic, the
-  fixed limits and how they are reported), so the C backend can be retired without changing what any
-  app does.
+- **One set of semantics.** Every board runs the same rules: saturating arithmetic, the fixed limits, and how
+  they are reported.
 
 ## The container
 
@@ -220,7 +215,7 @@ The codes these records hold, as `runtime/erb_format.h` defines them:
 static vector tapes, and the strings are data, applied by the runtime in tight C loops. Only what
 depends on state is bytecode: handlers, effects, updates, boot-time values and the props and tape
 points they compute. The [performance spike](#performance) is why: constant props as a table are a
-large part of the gap between a naive VM and one within a few percent of C.
+large part of what keeps the VM fast.
 
 **Interned enums.** A string state whose every write is one of a closed set of literals (`page`,
 `mode`) is an int slot holding an index into an `enums` set. Comparing two of them is an int compare,
@@ -247,10 +242,9 @@ An animation descriptor is `kind u8`, `easing u8`, `flags u8`, `reserved u8`, `t
 - `param0`–`param3` are stiffness, damping, mass and velocity for spring, velocity and deceleration for decay,
   and the four control points for a bezier easing.
 - A parallel or stagger group is done when every child is, and done as not finished as soon as one child
-  stops; the others run on. This is how the C output ends a run joined at run time.
+  stops; the others run on. This is how a run joined at run time ends.
 - Delay leaves and staggered waits count down in `erb_tick()` before the timers, and every one counts down
-  before any that ran out moves on, so a wait a completion starts there waits its full time. The C output
-  counts its completion waits the same way.
+  before any that ran out moves on, so a wait a completion starts there waits its full time.
 
 An interpolation is `slot u16` (the animated value), `point_count u8` (2 to `ER_INTERPOLATE_MAX_POINTS`),
 `flags u8` (bit 0: the outputs are ARGB colors), `extrapolate_left u8` and `extrapolate_right u8` (the
@@ -291,7 +285,7 @@ layers keeps its built-in layout. Then `layer_count` layers and `row_count` rows
 `layer u8`, `span u8` and `highlight u8` (`0xFF` for never).
 
 The runtime copies the layout into the engine's structs, the strings left in place, and hands it to
-`er_keyboard_set_config()` once the root is built, as the C output's `er_app_build()` does. It hands the
+`er_keyboard_set_config()` once the root is built. It hands the
 engine back its own keyboard when the app is torn down.
 
 ### The debug section
@@ -338,8 +332,7 @@ over the copy, which is what runs.
 **Baked mode.** A board with no spare partition links the package into the firmware as a const array:
 `embedded-react build --aot --bake` writes `app.erpkg.c` with the bytes as `const uint32_t app_erpkg[]`,
 so they are 4-aligned with any compiler, and their length as `app_erpkg_bytes`. It goes through
-the same loader and the same verifier. This is what replaces the C backend on such boards, so there
-is one set of semantics, not two.
+the same loader and the same verifier, so there is one set of semantics, not two.
 
 ### The arena
 
@@ -368,9 +361,8 @@ package format, not by the firmware's structs, so `arena_bytes` is exact on ever
 | Tape scratch      | One buffer the size of the largest state-driven vector tape                                  |
 | Event queue       | Events that arrive while the VM is running (see [Running an event](#running-an-event))       |
 
-Limits that were C defines in the generated code (`ER_AOT_MAX_TIMERS`, `ER_AOT_MAX_WAITS`) become
-compiler options like `ER_AOT_LIST_CAP`: they size arena regions, so raising one needs no firmware
-rebuild, only a package whose `arena_bytes` still fits.
+Limits like `ER_AOT_MAX_TIMERS` and `ER_AOT_LIST_CAP` are compiler options: they size arena regions, so
+raising one needs no firmware rebuild, only a package whose `arena_bytes` still fits.
 
 **What is not in the arena.** The engine's pools (nodes, vector nodes, animations, the image registry,
 fonts) stay where they are, sized by the firmware's `ERUI_*` flags; the package's needs are checked
@@ -412,9 +404,9 @@ the `types` table, and a register keeps that type for the whole function. Regist
 | -------- | ------------------------------------------------------------------------------------------------- |
 | `int`    | A 32-bit signed integer                                                                           |
 | `bool`   | 0 or 1                                                                                            |
-| `float`  | An IEEE single, as the C output uses                                                              |
+| `float`  | An IEEE single                                                                                    |
 | `int64`  | A 64-bit integer: times from `Date.now()` and `performance.now()`, and numbers past the int range |
-| `double` | An IEEE double, only for values worked out at boot, where the C output also uses `double`         |
+| `double` | An IEEE double, only for values worked out at boot                                                |
 | `string` | A string reference: a constant's index, or a string buffer in the arena. Never a pointer          |
 | `enum`   | An index into an interned set                                                                     |
 | `node`   | A node handle: the engine's `ERNodeRef`, a pool tag and a creation serial                         |
@@ -460,12 +452,11 @@ extension word is never an instruction, and a branch into one is rejected. The f
 The set covers what the compiler lowers today and what the parity work adds. A new instruction is a
 minor version bump; an old runtime rejects a package that uses one at its version check.
 
-`PSET` converts as the C output does: a float dimension through `app_round_dim`'s rule, an opacity to the
-engine's byte through `app_opacity`'s, a color as ARGB. The engine's own range checks still apply on top.
+`PSET` converts: a float dimension to a whole pixel, an opacity to the engine's byte, a color as ARGB. The engine's own range checks still apply on top.
 
 ### Arithmetic
 
-The rules are the C output's, which are JavaScript's wherever an int can hold the answer:
+The rules are JavaScript's wherever an int can hold the answer:
 
 | Operation                                | Rule                                                                                                                                            |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -552,7 +543,7 @@ A string register is 0 (the empty string), a constant's index plus 1, or the top
 in the arena; only the VM makes one, so it never points anywhere else. A string is a constant or a buffer.
 Building one (a template literal, `toFixed`, a text node's content)
 goes through `FMT` into a string buffer, a node's text, or a span, and each target has a cap. Past the cap
-the string is cut short and reported, as the C output does today. A constant string is never copied:
+the string is cut short and reported. A constant string is never copied:
 the engine gets a pointer to it in flash.
 
 Floats print as JavaScript prints them where it matters: `Infinity`, `-Infinity`, `NaN`, and `0` for
@@ -601,7 +592,7 @@ app back.
 
 **Teardown**, for a reload or a failed load: cancel the timers, stop the animations, destroy the
 animated values and the nodes (`er_reset`), clear the image and font registries, and clear the arena.
-Two pieces are missing from the engine and asset loader today:
+Two pieces this needed from the engine and asset loader:
 
 - **Clearing the image registry.** `er_reset` keeps registered images, and registering a pack only
   replaces images by name. So images the old pack had and the new one doesn't would still point at the
@@ -683,14 +674,14 @@ one of three ways: the error screen, a reported skip that the app runs on past, 
 | `TRAP`                                                                         | Run      | Error screen with the trap's reason                                                                 |
 | A native import reports failure                                                | Run      | Error screen, naming the module                                                                     |
 | A stale node handle                                                            | Run      | Debug package: error screen. Release package: the instruction does nothing, and it is reported once |
-| A full list, a string cut short, a full timer table, too many completion waits | Run      | Skipped or cut short and reported once per place, exactly as the C output does today                |
+| A full list, a string cut short, a full timer table, too many completion waits | Run      | Skipped or cut short and reported once per place                                                    |
 | A node the engine can't give (a branch or row being built)                     | Run      | Error screen. The load-time node check makes this a firmware bug, not an app one                    |
 | An image name that isn't registered                                            | Run      | The image doesn't draw, and it is reported once                                                     |
 | Arithmetic of any kind                                                         | Never    | Always has a defined answer                                                                         |
 | A fault in native code: an engine or firmware bug, a watchdog reset            | Hardware | Recorded in no-init RAM, shown on the error screen after the reset                                  |
 
 "Reported" means one line through the runtime's log hook, once for each place in the app that can hit
-it, naming the limit to raise, as the C output's `AOT:` lines do today.
+it, naming the limit to raise.
 
 A fault inside an engine callback (a touch handler, an animation finishing) is recorded at once, and the
 next `erb_tick()` tears the app down and shows the error screen, so the engine is never reset from inside
@@ -701,60 +692,27 @@ the same firmware runs a strict development package and a forgiving release one.
 
 ## Performance
 
-The spike hand-translated the thermostat's `app_update` and all 11 of its handlers to register bytecode
-and ran them on the RP2040 at 125 MHz, against the generated C on the same board. The VM's output was
-checked against the C: all 665 `set_props` calls were byte-identical, and the state matched after every
-step. Each case is timed over 200 iterations, with a per-instruction budget check on throughout.
+Measured on hardware on 2026-11-01, with scripted taps. Frame work is the app's share of a frame in a tap phase: input,
+commit, present and tick.
 
-| Dial drag, per step                | C        | VM, naive      | VM, designed         |
-| ---------------------------------- | -------- | -------------- | -------------------- |
-| Handler + update, VM loop in flash | 1.76 ms  | 2.20 ms (+25%) | 1.97 ms (+11%)       |
-| Handler + update, VM loop in SRAM  | 1.76 ms  | 2.09 ms (+18%) | **1.85 ms (+5%)**    |
-| Whole frame, with render, SRAM     | 28.57 ms | 28.71 ms       | **28.66 ms (+0.3%)** |
+| Board and app           | Frame work    | Worst frame | Load at boot | Flash, with the package | RAM left                       |
+| ----------------------- | ------------- | ----------- | ------------ | ----------------------- | ------------------------------ |
+| CYD (ESP32), thermostat | 1.5 to 5.7 ms | 134.4 ms    | 34.7 ms      | 570 KB                  | 12.6 KB static DRAM            |
+| RP2040, watch face      |               | 57.0 ms     | 12.0 ms      | 480 KB                  | 5.0 KB heap beside framebuffer |
+| RP2040, thermostat      |               | 301.8 ms    | 45.1 ms      | 533 KB                  | 5.0 KB heap beside framebuffer |
 
-The step, mode-switch and no-change cases come out the same: the designed VM in SRAM costs 4 to 7%.
+A handler peaks at 126 instructions in the watch face and 613 in the thermostat, of the budget's 100,000. The runtime
+doesn't use the heap, and a board's link fails if its framebuffer stops fitting. Nearly all of a slow frame is software
+rendering in `er_commit`, not the VM.
 
-What the design takes from it:
+What the design takes from an early spike that hand-translated the thermostat's update and handlers to bytecode:
 
 - **Constant props are a table, not code,** and **string state with a closed set of literals is an
-  interned int slot.** Together they are the difference between the naive and the designed column.
+  interned int slot.**
 - **The dispatch loop goes in SRAM on the RP2040,** and bytecode stays in mapped flash.
-- **The program is smaller than the C.** The designed program is about 3.0 KB (2.0 KB of bytecode and
-  0.8 KB of prop tables). The C handlers and update are 4.2 KB, and the interpreter is 2.1 KB once per
-  firmware.
-- **The engine dominates either way.** `set_props` is about 1.2 of the 1.76 ms, mostly hashing a
-  1,120-byte `ERProps` for 19 nodes that rarely change. Cutting that engine work helps both backends
-  more than any VM tuning could.
-- The spike's budget check ran on every instruction. The design charges it only where a worst case can
-  exceed the budget, so the numbers above are an upper bound.
-
-## From the C output to a package
-
-What each part of today's `app.gen.c` becomes:
-
-| In `app.gen.c`                                    | In a package                                                         |
-| ------------------------------------------------- | -------------------------------------------------------------------- |
-| `s_state`, `s_ref_*`, `s_eff*`, `s_pan_*`         | Slots in the arena                                                   |
-| `s_changed` and `app_update()`                    | Dirty bits, and the update function with `JDIRTY`                    |
-| `er_app_build()`'s node construction              | The root template and its constant prop sets, applied by the runtime |
-| Handlers, timer callbacks, effects, cleanups      | Functions, bound to events in the `bindings` table                   |
-| `app_add`, `app_floordiv`, `app_f2i` and the rest | Instructions with the same rules                                     |
-| `snprintf` into `p.text`                          | `FMT` into the props scratch's text                                  |
-| `s_timers`, `er_timer_add`, `er_app_tick()`       | The arena's timer table, ticked by `erb_tick()`                      |
-| `APP_LIMIT`                                       | The runtime's report, once per place                                 |
-| `er_app_set_<name>()`                             | Inputs, set by index through `erb_input_set_int()` and its kin       |
-| `er_app_fits()`, `ER_AOT_SCREEN_W/H`              | Each panel's layout check                                            |
-| `_Static_assert(ERUI_MAX_NODES >= n)`             | The node count, checked at load                                      |
-| `assets.generated.c`                              | The asset pack, section 2                                            |
-| `ERNode*` statics                                 | Node handles in slots                                                |
-| `s_av_*` and `er_anim_value_bind*()`              | Animated-value slots, and animated or interpolated bindings          |
-| `er_anim_value_animate()` and its `ERAnimConfig`  | A leaf descriptor, started by `ASTART`                               |
-| `er_seqcb_*`, `er_waitcb_*`, `er_donecb_*`        | Animation-done functions; each completion a helper they `CALL`       |
-| `s_waits` and `app_wait_*()`                      | Delay leaves, and a parallel group for a joined run                  |
-| `er_pan_*` and `er_responder_query_set()`         | Responder handlers and query functions, in `bindings`                |
-| `s_svg*_ops`, `s_svg*_paints`, `s_svg*_grads`     | Tapes; a baked one committed by its node's binding                   |
-| `build_svg*()`, `updateVector`'s `s_uv*`          | `VTAPE`, `VSET`, `VPAINT` and a commit                               |
-| `kbd_cfg`, `er_keyboard_set_config()`             | The keyboard table, handed over at load                              |
+- **The engine dominates.** `set_props` takes most of a dial drag's step, mostly hashing a
+  1,120-byte `ERProps` for 19 nodes that rarely change. Cutting that engine work helps more than any VM tuning could.
+- The budget check is charged only where a worst case can exceed the budget.
 
 ## The firmware's side
 
@@ -811,7 +769,7 @@ options. The runtime reads them at load time, so each is set once; its image nam
 `ERUI_IMAGE_REGISTRY_MAX`.
 
 `erb_input_find("steps")` looks an input up once, and `erb_input_set_int()` (or `_bool`, `_float`,
-`_string`) sets it after that. `erb_set_wall_clock()` replaces `er_app_set_wall_clock()`.
+`_string`) sets it after that. `erb_set_wall_clock()` sets the time `Date.now()` starts from.
 
 ### Package slots
 

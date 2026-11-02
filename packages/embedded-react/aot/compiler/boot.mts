@@ -219,7 +219,7 @@ export function nameBootValues(value: unknown, name: string): void {
 }
 
 /**
- * The `screen` global: its width and height are boot values, set from er_app_build()'s arguments.
+ * The `screen` global: its width and height are boot values, set from the panel the app boots on.
  *
  * @param screen  The panel the build is compiled for.
  * @param screen.width  Its width.
@@ -351,7 +351,7 @@ const isGuardable = (value: unknown): value is number | string | boolean =>
   (typeof value === 'number' && Number.isFinite(value));
 
 /**
- * A C identifier for a slot named after `name`, unique among the compile's slots.
+ * An identifier for a slot named after `name`, unique among the compile's slots.
  *
  * @param name  The name.
  *

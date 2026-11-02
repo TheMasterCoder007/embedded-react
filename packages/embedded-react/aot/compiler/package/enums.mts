@@ -56,7 +56,7 @@ const SKIPPED_KEYS = new Set(['source', 'loc']);
 export function internedStates(app: IrApp): Map<ScalarState, string[]> {
   const values = new Map<ScalarState, string[]>();
   for (const state of app.state) {
-    if (state.kind === 'scalar' && state.cType === 'string' && !state.host) {
+    if (state.kind === 'scalar' && state.slotKind === 'string' && !state.host) {
       values.set(state, [String(state.initial)]);
     }
   }

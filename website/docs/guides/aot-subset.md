@@ -3,7 +3,7 @@ title: 'The AOT subset'
 description: 'What the ahead-of-time compiler accepts, what it refuses and how it tells you. For apps headed to a board with no external RAM.'
 ---
 
-The Flow B compiler turns JSX into C. It can only do that for code it can fully resolve at build
+The Flow B compiler turns JSX into a package. It can only do that for code it can fully resolve at build
 time, so it accepts a subset of what runs under Flow A and refuses the rest, at build time, with the
 file and line:
 
@@ -61,8 +61,8 @@ while the code that breaks it is still one line.
   list and an optional cleanup as its last statement, `useRef`, `useCallback`, `useMemo`, and
   `useAnimatedValue` with a constant initial value (every `Animated` call drives one).
 - `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the
-  compiler emits a C setter for it. The [RP2040 guide](./boards/rp2040.md) shows it driving a step
-  counter.
+  compiler lists it as a package input, and the host sets it with `erb_input_set_int`. The
+  [RP2040 guide](./boards/rp2040.md) shows it driving a step counter.
 - `.map` over a list compiles when the list is a compile-time-constant array, or state that the app
   appends object literals to; the row pool is sized by `ER_AOT_LIST_CAP` (16 by default, lower it
   on a tight board). A list computed at runtime from anything else does not compile.
@@ -104,7 +104,7 @@ expression is refused, so express a calculation as a chain of `const`s and terna
 
 ## Text
 
-A `<Text>` compiles to one `snprintf`. Interpolation (`count is {count}`) and one level of nested
+A `<Text>` compiles to one formatted string. Interpolation (`count is {count}`) and one level of nested
 `<Text>` spans work; a span inside a span, a dynamic `{...}` segment inside a multi-span text, and a
 state-driven style on a span do not. A ternary in text cannot mix a string branch with a numeric
 one, or a boolean branch with a non-boolean one; split those into two `{cond && <Text/>}` nodes.
@@ -197,30 +197,26 @@ Limits worth knowing:
 - The build proves each layout compiles, not that it looks right. A very small screen gets the
   smallest layout and may overflow, as on the web.
 
-The C output (`--c`) is for one panel: the `--screen WxH` you build with, or 800×480. `er_app_build()`
-checks its assumptions at boot: on a panel that picks another layout, it builds nothing and returns
-`false`, and `er_app_fits(w, h)` asks the same without building.
-
 ## Fixed limits
 
 A compiled app keeps its state in buffers sized at build time. The compiler checks each limit where it
 can know the answer, and the app reports the rest at run time:
 
-| Limit                                                                   | Default               | Raise it with                                      | When it is past                                                                                                                                                                    |
-| ----------------------------------------------------------------------- | --------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rows in a list state                                                    | 16                    | `ER_AOT_LIST_CAP`                                  | An initial list with more rows fails the build. An append to a full list is skipped and reported.                                                                                  |
-| Bytes in a string state, a list's string field or a local               | 47 (a 48-byte buffer) | `ER_AOT_LIST_STR_CAP`                              | A constant string that is too long, as an initial value or a write, fails the build. A string built at run time is cut short and reported.                                         |
-| Bytes in a node's text, a `<Text>` span, a placeholder or an image name | 255, 63, 63, 63       | Fixed in `er_scene.h` (`ER_TEXT_MAX` and the like) | A constant string that is too long fails the build. A string built at run time is cut short and reported.                                                                          |
-| Engine nodes                                                            | 512                   | `ERUI_MAX_NODES`                                   | The app's node count is fixed when it compiles, so `app.gen.c` checks it against `ERUI_MAX_NODES` and a pool too small fails the C build. A node the pool cannot give is reported. |
-| Live timers                                                             | 8                     | `ER_AOT_MAX_TIMERS` (a C define)                   | A `setTimeout` or `setInterval` past it never fires, and is reported.                                                                                                              |
-| Animation completion waits                                              | 8                     | `ER_AOT_MAX_WAITS` (a C define)                    | The run ends at once, as not finished, and is reported.                                                                                                                            |
+| Limit                                                                   | Default               | Raise it with                                      | When it is past                                                                                                                                                                                        |
+| ----------------------------------------------------------------------- | --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Rows in a list state                                                    | 16                    | `ER_AOT_LIST_CAP`                                  | An initial list with more rows fails the build. An append to a full list is skipped and reported.                                                                                                      |
+| Bytes in a string state, a list's string field or a local               | 47 (a 48-byte buffer) | `ER_AOT_LIST_STR_CAP`                              | A constant string that is too long, as an initial value or a write, fails the build. A string built at run time is cut short and reported.                                                             |
+| Bytes in a node's text, a `<Text>` span, a placeholder or an image name | 255, 63, 63, 63       | Fixed in `er_scene.h` (`ER_TEXT_MAX` and the like) | A constant string that is too long fails the build. A string built at run time is cut short and reported.                                                                                              |
+| Engine nodes                                                            | 512                   | `ERUI_MAX_NODES`                                   | The app's node count is fixed when it compiles, and the runtime checks it against `ERUI_MAX_NODES` when it loads the package, refusing one a pool can't hold. A node the pool cannot give is reported. |
+| Live timers                                                             | 8                     | `ER_AOT_MAX_TIMERS`                                | A `setTimeout` or `setInterval` past it never fires, and is reported.                                                                                                                                  |
+| Animation completion waits                                              | 8                     | Fixed in the compiler                              | The run ends at once, as not finished, and is reported.                                                                                                                                                |
 
-`ER_AOT_LIST_CAP` and `ER_AOT_LIST_STR_CAP` are read by the compiler (`npm run aot`); the others are
-defined when the C is built. A report is one line on stderr, once for each place in the app that can
-hit it, and names the limit to raise:
+`ER_AOT_LIST_CAP`, `ER_AOT_LIST_STR_CAP` and `ER_AOT_MAX_TIMERS` are read by the compiler (`npm run aot`, or
+`embedded-react build --aot`). They size what the package holds, so raising one needs no firmware rebuild. A report is
+one line through the runtime's log hook, once for each place in the app that can hit it, and names the limit to raise:
 
 ```text
-AOT: list 'items' full, raise ER_AOT_LIST_CAP
+ERB: list full; the row was dropped (raise ER_AOT_LIST_CAP) (App.jsx:41)
 ```
 
 ## Where the subset is going

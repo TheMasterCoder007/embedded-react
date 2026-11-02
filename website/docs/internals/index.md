@@ -11,7 +11,7 @@ rules that keep the engine portable.
   ABI between everything and the engine), and how each piece is built.
 - [Engine internals](./engine-internals.md): the layout solver, scratch buffers, damage tracking,
   hidden subtrees, the arc widget, frame instrumentation, and every compile-time flag.
-- [Flow B packages](./flow-b-packages.md): the design of the package the Flow B compiler will emit
+- [Flow B packages](./flow-b-packages.md): the design of the package the Flow B compiler emits
   and the runtime that verifies and runs it.
 - [Writing a backend](./writing-a-backend.md): the five callbacks, the optional extensions, and the
   conventions learned from the four backends that run on hardware.

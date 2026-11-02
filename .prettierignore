@@ -13,7 +13,7 @@ cmake-build-*/
 out/
 Testing/
 
-# Generated app output — Flow A .erpkg, Flow B generated C, app bundles
+# Generated app output — .erpkg packages, app bundles
 dist/
 # Third-party sources pulled in by CMake FetchContent (e.g. quickjs)
 _deps/

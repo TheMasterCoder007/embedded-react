@@ -27,8 +27,9 @@ import {
   staticInt,
   isTime64,
   constDivisor,
-  emitSourcedWide,
+  lowerSourcedWide,
   lowerSource,
+  slotValueOf,
   lowerExpr,
   lowerExprWide,
   lowerText,
@@ -53,8 +54,7 @@ import {
   checkVectorPaints,
   vectorPaintOf,
 } from './svg.mts';
-import {armedFlag} from './c/functions.mts';
-import {toCExpr} from './c/expressions.mts';
+import {armedFlag} from './ir/functions.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrExpr} from './ir/expressions.mts';
@@ -81,7 +81,7 @@ import type {
 import type {IrText} from './ir/text.mts';
 import type {IrGeometry, IrTapeValue, IrVectorPaint} from './ir/vectors.mts';
 import type {
-  CType,
+  SlotKind,
   EffectRecord,
   Env,
   FunctionNode,
@@ -215,7 +215,7 @@ function lowerListOp(
     if (start && staticInt(start, env) !== 0) {
       throw aotError(
         `AOT: only ${listState.name}.slice(0, end) is supported on a list`,
-        `a list is a fixed C array and a count, so a slice can only drop items from the end — ` +
+        `a list is a fixed pool and a count, so a slice can only drop items from the end — ` +
           `e.g. ${listState.name}.slice(0, -1) drops the last one.`,
       );
     }
@@ -241,7 +241,7 @@ function lowerListOp(
       ];
     }
 
-    // A runtime end goes through app_slice_len, which applies the same JS rules.
+    // A runtime end applies the same JS rules when it runs.
     return [
       {kind: 'sliceItems', list: listState, end: asInt(lowerExpr(end, env))},
     ];
@@ -265,33 +265,33 @@ function blockList(node: t.Statement): t.Statement[] {
 }
 
 /**
- * Checks a value written to a numeric state or ref slot, whose C type came from its initial value. Every value
+ * Checks a value written to a numeric state or ref slot, whose kind came from its initial value. Every value
  * written to an int slot is recorded in env.stores, from which the typing pass infers the slots that hold a
- * 64-bit timestamp, and compileWidened compiles again with those slots widened to int64_t. A timestamp cannot
+ * 64-bit timestamp, and compileWidened compiles again with those slots widened to 64 bits. A timestamp cannot
  * go into a float or boolean slot (a 64-bit constant can go into a float one), and a widened slot takes no
  * floats.
  *
  * @param lowered  The value: its source, and its type.
- * @param slotType  The slot's C kind.
+ * @param slotType  The slot's kind.
  * @param isBool  The slot holds a boolean.
  * @param widened  What the slot holds, if it was widened to 64 bits.
- * @param slotCName  The slot's C name, for env.stores.
+ * @param slotName  The slot's name, for env.stores.
  * @param slotDescription  The slot, for the message.
  * @param env  The expression environment.
  */
 function storeCheck(
   lowered: {source: IrSource; expr: IrExpr},
-  slotType: CType,
+  slotType: SlotKind,
   isBool: boolean,
   widened: WideSlot | undefined,
-  slotCName: string,
+  slotName: string,
   slotDescription: string,
   env: Env,
 ): void {
   const value = lowered.expr;
   if ((slotType === 'int' && !isBool) || widened === 'number') {
     env.stores.push({
-      slot: slotCName,
+      slot: slotName,
       value: lowered.source,
       math64: Boolean(env.math64),
     });
@@ -314,7 +314,7 @@ function storeCheck(
 }
 
 /**
- * `value` for an int destination. A float goes through app_f2i: C's own conversion is undefined behavior for
+ * `value` for an int destination. A float goes through a checked conversion: a plain one is undefined for
  * NaN or a value past the int range.
  *
  * @param value  The lowered value.
@@ -330,11 +330,11 @@ const asInt = (value: IrExpr): IrExpr =>
  * `value` for a slot of `slotType`: an int slot takes a float the way asInt does.
  *
  * @param value  The lowered value.
- * @param slotType  The slot's C kind.
+ * @param slotType  The slot's kind.
  *
  * @returns The value the slot stores.
  */
-const storeValue = (value: IrExpr, slotType: CType): IrExpr =>
+const storeValue = (value: IrExpr, slotType: SlotKind): IrExpr =>
   slotType === 'int' ? asInt(value) : value;
 
 /**
@@ -351,7 +351,7 @@ const refRead = (ref: RefRecord): IrExpr => ({
 });
 
 /**
- * Refuses a constant string too long for the buffer it is written into, which C would cut short. A string
+ * Refuses a constant string too long for the buffer it is written into, which would cut it short. A string
  * built at run time is checked when it is written instead.
  *
  * @param text  The text written.
@@ -388,19 +388,19 @@ function lowerScalarSet(
   valueNode: t.Node,
   env: Env,
 ): IrStmt {
-  if (scalarState.cType !== 'string') {
+  if (scalarState.slotKind !== 'string') {
     // A 64-bit slot takes int `+ - *` worked out in 64 bits.
     const lowered = lowerSource(
       valueNode,
-      scalarState.cType === 'i64' ? {...env, math64: true} : env,
+      scalarState.slotKind === 'i64' ? {...env, math64: true} : env,
     );
     const value = lowered.expr;
     storeCheck(
       lowered,
-      scalarState.cType,
+      scalarState.slotKind,
       scalarState.isBool,
       scalarState.widened,
-      scalarState.cField,
+      scalarState.slotName,
       `state "${scalarState.name}"`,
       env,
     );
@@ -408,7 +408,7 @@ function lowerScalarSet(
     return {
       kind: 'setState',
       state: scalarState,
-      value: storeValue(value, scalarState.cType),
+      value: storeValue(value, scalarState.slotKind),
     };
   }
 
@@ -567,8 +567,8 @@ function imperativeShape(
 
 /**
  * Lowers `updateVector(nodeRef, shapes, [x,y,w,h]?)`: fill a mutable op-tape, push it to the node, and
- * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses app_update. The call's
- * tables are declared at file scope here.
+ * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses the update. The call's
+ * tables are declared here.
  *
  * @param expr  The updateVector call.
  * @param env  The expression environment.
@@ -603,7 +603,7 @@ function lowerUpdateVector(
   const update: IrUpdateVector = {
     kind: 'updateVector',
     id: vectorId,
-    node: ref.cVar,
+    node: ref.slotName,
     locals: [],
     tape: [],
     paints: [],
@@ -624,9 +624,8 @@ function lowerUpdateVector(
     update.paints.push(shape.paint);
   }
 
-  // Declare the op-tape and its paint table at file scope.
+  // Declare the op-tape and its paint table.
   checkVectorPaints(update.paints);
-  out.needsMath = true;
   out.vectors.push({kind: 'updateVector', update});
 
   // Hint the dirty sub-rect when the call gives one.
@@ -683,8 +682,7 @@ function lowerTimer(
 
   // Reserve the timer's slot before compiling its body, which may add timers of its own.
   const slot = ctx.out.timerFns.length;
-  const timerFnName = `er_timer_fn_${slot}`;
-  ctx.out.usesTimers = true;
+  const timerFnName = `timer_${slot}`;
   ctx.out.timerFns.push({name: timerFnName, callback: null});
   ctx.out.timerFns[slot].callback = lowerHandler(cb, env, state, ctx.out);
   return {delay, isRepeating, fn: timerFnName};
@@ -716,13 +714,13 @@ function inlineHelperCall(
   if (ctx.inlining.has(helperName)) {
     throw aotError(
       `AOT: helper "${helperName}" is recursive — can't be inlined into a handler`,
-      'handlers are flattened to straight-line C, so a helper that calls itself (directly ' +
+      'handlers are flattened to straight-line code, so a helper that calls itself (directly ' +
         'or via another helper) has no base case to unroll. Move recursive logic out of the ' +
         'handler, or precompute the value.',
     );
   }
 
-  // Bind each passed argument to its parameter as a local holding the argument's C expression.
+  // Bind each passed argument to its parameter as a local holding the argument's expression.
   const locals = new Map<string, Local>(env.locals);
   helper.params.forEach((param, paramIndex) => {
     if (param.type !== 'Identifier') {
@@ -734,10 +732,9 @@ function inlineHelperCall(
     }
 
     if (args[paramIndex]) {
-      const argExpr = emitSourcedWide(args[paramIndex], env);
+      const argExpr = lowerSourcedWide(args[paramIndex], env);
       locals.set(param.name, {
-        code: argExpr.code,
-        cType: argExpr.cType,
+        slotKind: argExpr.slotKind,
         isBool: argExpr.isBool,
         lit: argExpr.lit,
         wide: argExpr.wide,
@@ -783,7 +780,7 @@ function lowerHandlerExprImpl(
   state: StateTable,
   ctx: StatementContext,
 ): IrStmt[] {
-  // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no app_update).
+  // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
   if (
     expr.type === 'CallExpression' &&
     expr.callee.type === 'Identifier' &&
@@ -827,7 +824,7 @@ function lowerHandlerExprImpl(
     }
 
     // Lower the right side in the ref's width and check it fits; a 64-bit `%=` keeps its constant divisor.
-    const refEnv = ref.cType === 'i64' ? {...env, math64: true} : env;
+    const refEnv = ref.slotKind === 'i64' ? {...env, math64: true} : env;
     const loweredValue = lowerSource(expr.right, refEnv);
     const valueExpr = loweredValue.expr;
     const refHoldsTime = isTime(refType(ref));
@@ -844,22 +841,22 @@ function lowerHandlerExprImpl(
         : null;
     storeCheck(
       loweredValue,
-      ref.cType as CType,
+      ref.slotKind as SlotKind,
       false,
       ref.kind === 'value' ? ref.widened : undefined,
-      ref.cVar,
+      ref.slotName,
       `ref "${((expr.left as t.MemberExpression).object as t.Identifier).name}"`,
       env,
     );
 
     // Lower whole-ref `+= -= *=`, float `/=` and float `%=` as the binary op to share its checked and float math.
-    const isWholeRef = ref.cType === 'int' || ref.cType === 'i64';
+    const isWholeRef = ref.slotKind === 'int' || ref.slotKind === 'i64';
     const binaryOp = (
       {'+=': '+', '-=': '-', '*=': '*'} as Record<string, string>
     )[expr.operator];
     const isFloatMod =
       expr.operator === '%=' &&
-      (ref.cType === 'float' || valueExpr.type.kind === 'float');
+      (ref.slotKind === 'float' || valueExpr.type.kind === 'float');
     if (
       (isWholeRef &&
         (binaryOp ||
@@ -882,20 +879,20 @@ function lowerHandlerExprImpl(
           kind: 'writeRef',
           ref,
           op: '=',
-          value: storeValue(resultExpr, ref.cType as CType),
+          value: storeValue(resultExpr, ref.slotKind as SlotKind),
         },
       ];
     }
 
-    // Whole-number `/=` and `%=` use app_div/app_mod for JS's answer, in 64 bits on a 64-bit ref that holds no
+    // Whole-number `/=` and `%=` use the checked helpers for JS's answer, in 64 bits on a 64-bit ref that holds no
     // time; a constant divisor other than 0 or -1 needs no check.
     const isWholeValue =
       isIntSlot(valueExpr.type) ||
       (valueExpr.type.kind === 'int64' && !isTime64(valueExpr));
-    const refBits = ref.cType === 'i64' ? 64 : 32;
+    const refBits = ref.slotKind === 'i64' ? 64 : 32;
     if (
-      ((ref.cType === 'int' && isIntSlot(valueExpr.type)) ||
-        (ref.cType === 'i64' && !refHoldsTime && isWholeValue)) &&
+      ((ref.slotKind === 'int' && isIntSlot(valueExpr.type)) ||
+        (ref.slotKind === 'i64' && !refHoldsTime && isWholeValue)) &&
       (expr.operator === '/=' || expr.operator === '%=')
     ) {
       const staticDivisor = staticInt(expr.right, env);
@@ -944,7 +941,7 @@ function lowerHandlerExprImpl(
       }
     }
 
-    // A 64-bit `%=` by 0 or ±1 stores 0: no remainder, JS's NaN as 0, and no C overflow on INT64_MIN % -1.
+    // A 64-bit `%=` by 0 or ±1 stores 0: no remainder, JS's NaN as 0, and no overflow on INT64_MIN % -1.
     if (wideModDivisor === 0 || wideModDivisor === 1 || wideModDivisor === -1) {
       return [{kind: 'writeRef', ref, op: '=', value: ZERO}];
     }
@@ -957,7 +954,7 @@ function lowerHandlerExprImpl(
         op: expr.operator,
         value:
           expr.operator === '='
-            ? storeValue(valueExpr, ref.cType as CType)
+            ? storeValue(valueExpr, ref.slotKind as SlotKind)
             : valueExpr,
       },
     ];
@@ -972,7 +969,7 @@ function lowerHandlerExprImpl(
       );
     }
 
-    if (ref.cType === 'int' || ref.cType === 'i64') {
+    if (ref.slotKind === 'int' || ref.slotKind === 'i64') {
       return [
         {
           kind: 'writeRef',
@@ -981,7 +978,7 @@ function lowerHandlerExprImpl(
           value: {
             kind: 'helper',
             helper: expr.operator === '++' ? 'add' : 'sub',
-            bits: ref.cType === 'i64' ? 64 : 32,
+            bits: ref.slotKind === 'i64' ? 64 : 32,
             args: [refRead(ref), {kind: 'number', value: 1, type: INT}],
             type: refType(ref),
           },
@@ -1008,7 +1005,7 @@ function lowerHandlerExprImpl(
     ];
   }
 
-  // Animated.*(…).start(), atomic or composed, is native-driven, so it sets no state and needs no app_update.
+  // Animated.*(…).start(), atomic or composed, is native-driven, so it sets no state and needs no update.
   if (
     expr.type === 'CallExpression' &&
     expr.callee.type === 'MemberExpression' &&
@@ -1048,7 +1045,7 @@ function lowerHandlerExprImpl(
       `AOT: "${expr.callee.name}" is not a known state setter`,
       `a handler can only call a setter from this component's own useState (e.g. setCount), ` +
         `a ref write, updateVector(…), or Animated…start(). "${expr.callee.name}" isn't one ` +
-        `of those — arbitrary functions (fetch, console.*, helpers) can't be lowered to C.`,
+        `of those — arbitrary functions (fetch, console.*, helpers) can't be lowered.`,
     );
   }
 
@@ -1069,8 +1066,7 @@ function lowerHandlerExprImpl(
     const locals = new Map<string, Local>(env.locals);
     if (prevParam) {
       locals.set(prevParam, {
-        code: targetState.cMember,
-        cType: targetState.cType,
+        slotKind: targetState.slotKind,
         isBool: targetState.isBool,
         ...(targetState.widened === 'number' ? {lit: true} : {}),
         source: {kind: 'state', state: targetState, loc: undefined},
@@ -1097,8 +1093,8 @@ const lowerHandlerExpr = withLoc(lowerHandlerExprImpl);
  * Lowers a list of handler statements to the IR. This one-statement lowering runs event handlers, effect bodies
  * (useEffect), timer callbacks, and inlined helper calls. Supports: `const x = expr` (a local, visible to later
  * statements), `if (cond) {...} else {...}`, state setters (list setters included), ref writes, timers,
- * updateVector() and Animated.*(...).start(). `ctx` accumulates `stateChanged` (→ trailing app_update),
- * `animIdx` (unique ERAnimConfig locals) and `usedReturn` (an early `return` was lowered, so the body needs a C
+ * updateVector() and Animated.*(...).start(). `ctx` accumulates `stateChanged` (→ a trailing update)
+ * and `usedReturn` (an early `return` was lowered, so the body needs a
  * function of its own). `ctx.allowReturn` and `ctx.bodyList` mark which body a `return` may exit and which
  * statement of it is the tail.
  *
@@ -1142,7 +1138,7 @@ export function lowerStmts(
           throw new Error('AOT: a handler local must have an initializer');
         }
 
-        // `const anim = Animated.…` holds no C value; `anim.start()`/`anim.stop()` compile the animation it names.
+        // `const anim = Animated.…` holds no value; `anim.start()`/`anim.stop()` compile the animation it names.
         if (isAnimatedCall(decl.init)) {
           const locals = new Map(env.locals);
           locals.delete(decl.id.name);
@@ -1154,11 +1150,11 @@ export function lowerStmts(
           continue;
         }
 
-        // A dep-driven effect's cleanup outlives the call, so the body's locals become file-scope slots.
+        // A dep-driven effect's cleanup outlives the call, so the body's locals become slots.
         const isHoisted = Boolean(ctx.hoist && statements === ctx.bodyList);
-        const cName = isHoisted
+        const localName = isHoisted
           ? `${ctx.hoist!.prefix}${decl.id.name}`
-          : `l_${decl.id.name}`;
+          : `local_${decl.id.name}`;
 
         // `const id = setInterval/setTimeout(…)` is an int timer-id local, so a later clearInterval(id) resolves.
         if (
@@ -1169,18 +1165,22 @@ export function lowerStmts(
         ) {
           // The id is only needed for a later clear*(); a mount effect drops its cleanup, so mark it used.
           if (isHoisted) {
-            ctx.hoist!.decls.push({kind: 'local', name: cName, cType: 'int'});
+            ctx.hoist!.decls.push({
+              kind: 'local',
+              name: localName,
+              slotKind: 'int',
+            });
           }
           lowered.push({
             kind: 'startTimer',
             timer: lowerTimer(decl.init, env, state, ctx),
-            idLocal: {name: cName, isHoisted},
+            idLocal: {name: localName, isHoisted},
           });
           env = {
             ...env,
             locals: new Map(env.locals).set(decl.id.name, {
-              code: cName,
-              cType: 'int',
+              name: localName,
+              slotKind: 'int',
             }),
           };
 
@@ -1205,8 +1205,8 @@ export function lowerStmts(
           if (isHoisted) {
             ctx.hoist!.decls.push({
               kind: 'local',
-              name: cName,
-              cType: 'string',
+              name: localName,
+              slotKind: 'string',
             });
           }
         } else {
@@ -1221,26 +1221,26 @@ export function lowerStmts(
           if (isHoisted) {
             ctx.hoist!.decls.push({
               kind: 'local',
-              name: cName,
-              cType: slot,
+              name: localName,
+              slotKind: slot,
             });
           }
         }
 
         lowered.push({
           kind: 'declareLocal',
-          name: cName,
+          name: localName,
           init: initExpr,
           isHoisted,
           stringCap: env.caps.listStrCap,
         });
 
-        // Later statements read the name as the C local.
+        // Later statements read the name as the local.
         env = {
           ...env,
           locals: new Map(env.locals).set(decl.id.name, {
-            ...toCExpr(initExpr),
-            code: cName,
+            ...slotValueOf(initExpr),
+            name: localName,
             source: initSource,
           }),
         };
@@ -1363,12 +1363,12 @@ function markLoc(
 
 /**
  * Lowers a useEffect (App or child). Two shapes:
- *  - `useEffect(fn, [])` — MOUNT-ONCE: body runs after the initial app_update (in er_app_build).
- *  - `useEffect(fn, [dep…])` — DEP-DRIVEN: body becomes a file-scope `er_effect_N()`; runs once at mount,
- *    then again from app_update whenever a SCALAR dep changes (compared against a stored prev). The body is
- *    compiled WITHOUT a trailing app_update — it runs INSIDE app_update / at mount, so re-applying state it
- *    sets happens on the next app_update (one-frame), and it can never re-enter app_update (no infinite loop).
- *    A dep-driven `return () => …` becomes `er_effect_N_cleanup()`, run at the top of the next re-run.
+ *  - `useEffect(fn, [])` — MOUNT-ONCE: body runs after the initial the update (in the build).
+ *  - `useEffect(fn, [dep…])` — DEP-DRIVEN: body becomes a function of its own; runs once at mount,
+ *    then again from the update whenever a SCALAR dep changes (compared against a stored prev). The body is
+ *    compiled WITHOUT a trailing update — it runs INSIDE an update / at mount, so re-applying state it
+ *    sets happens on the next update (one-frame), and it can never re-enter an update (no infinite loop).
+ *    A dep-driven `return () => …` becomes `effect_N_cleanup()`, run at the top of the next re-run.
  *
  * @param effect  The effect.
  * @param env  The expression environment.
@@ -1388,13 +1388,12 @@ export function lowerEffect(
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
 
-  // A mount-once effect (`[]`) runs once, from er_app_build.
+  // A mount-once effect (`[]`) runs once, from the build.
   const isMount =
     effect.deps.type === 'ArrayExpression' && effect.deps.elements.length === 0;
   if (isMount) {
     const ctx: StatementContext = {
       stateChanged: false,
-      animIdx: 0,
       out,
       allowReturn: true,
       bodyList: statements,
@@ -1410,7 +1409,7 @@ export function lowerEffect(
     }
 
     // With an early `return` the body gets its own function, so it cannot skip later mount effects.
-    const name = `er_effect_${out.effN++}`;
+    const name = `effect_${out.effN++}`;
     out.effectFns.push({kind: 'mount', name, body: lowered});
     out.mountEffects.push({
       kind: 'call',
@@ -1421,7 +1420,7 @@ export function lowerEffect(
     return;
   }
 
-  // A dep-driven effect gets its own C function; each dep must be scalar, so a change shows against a stored copy.
+  // A dep-driven effect gets its own function; each dep must be scalar, so a change shows against a stored copy.
   if (effect.deps.type !== 'ArrayExpression') {
     throw aotError(
       'AOT: a useEffect dependency list must be an array literal',
@@ -1435,7 +1434,9 @@ export function lowerEffect(
     }
 
     const depExpr = lowerExprWide(depNode, env);
-    if (!['int', 'float', 'i64', 'string'].includes(toCExpr(depExpr).cType)) {
+    if (
+      !['int', 'float', 'i64', 'string'].includes(slotValueOf(depExpr).slotKind)
+    ) {
       throw aotError(
         'AOT: useEffect dependencies must be scalar (number / bool / string)',
         'depend on scalar state values; object/array dependencies are not yet supported.',
@@ -1458,7 +1459,6 @@ export function lowerEffect(
   };
   const ctx: StatementContext = {
     stateChanged: false,
-    animIdx: 0,
     out,
     allowReturn: true,
     bodyList: statements,
@@ -1467,7 +1467,7 @@ export function lowerEffect(
 
   // With a cleanup, hoist the body's locals and lower the tail `return () => …` into `<effect>_cleanup()`.
   if (hasCleanup) {
-    ctx.hoist = {prefix: `s_eff${effectId}_l_`, decls: out.effectDecls};
+    ctx.hoist = {prefix: `effect${effectId}_local_`, decls: out.effectDecls};
     ctx.cleanup = {
       armed: armedFlag(effectId),
       emit: (cleanupFn, cleanupEnv) => {
@@ -1478,7 +1478,6 @@ export function lowerEffect(
             : [{type: 'ExpressionStatement', expression: cleanupBody}];
         const cleanupCtx: StatementContext = {
           stateChanged: false,
-          animIdx: 0,
           out,
         };
         depEffect.cleanup = lowerStmts(
@@ -1498,7 +1497,7 @@ export function lowerEffect(
   depEffect.body = lowerStmts(statements, env, state, ctx);
   out.effectFns.push({kind: 'effect', effect: depEffect});
 
-  // A copy of each dep, taken at mount; app_update() re-runs the effect when one no longer matches its copy.
+  // A copy of each dep, taken at mount; the update re-runs the effect when one no longer matches its copy.
   out.effectDecls.push({kind: 'deps', effect: depEffect});
   out.mountEffects.push({kind: 'depEffect', effect: depEffect});
   out.depEffects.push(depEffect);
@@ -1547,7 +1546,7 @@ export function lowerHandler(
   }
 
   // The body re-applies state-dependent props once at its end if it set state.
-  const ctx: StatementContext = {stateChanged: false, animIdx: 0, out};
+  const ctx: StatementContext = {stateChanged: false, out};
   return {
     body: lowerStmts(statements, handlerEnv, state, ctx),
     updatesState: ctx.stateChanged,
@@ -1558,12 +1557,10 @@ export function lowerHandler(
  * Lowers a value-callback (e.g., Switch onValueChange) — binds its first param to `valueCode`, not an event.
  *
  * @param fnNode  The callback.
- * @param valueCode  C for the value its first parameter receives.
  * @param env  The expression environment.
  * @param state  The component's state table.
  * @param out  Everything emitted so far.
- * @param cType  The value's C kind.
- * @param secondValueCode  C for a second parameter's value (a range <Dial>'s low end), if any.
+ * @param slotKind  The value's kind.
  * @param isBool  The value is a boolean, so text prints it as true/false.
  * @param valueExpr  The value as a typed expression.
  * @param secondValueExpr  The second parameter's value as a typed expression, if any.
@@ -1572,14 +1569,12 @@ export function lowerHandler(
  */
 export function lowerValueHandler(
   fnNode: FunctionNode,
-  valueCode: string,
   env: Env,
   state: StateTable,
   out: Out,
-  cType: CType = 'int',
-  secondValueCode: string | null = null,
-  isBool = false,
-  valueExpr?: IrExpr,
+  slotKind: SlotKind,
+  isBool: boolean,
+  valueExpr: IrExpr,
   secondValueExpr?: IrExpr,
 ): IrCallback {
   // A <Switch> hands its callback a boolean; carry that so `'on=' + v` prints true/false, not 1/0.
@@ -1587,22 +1582,18 @@ export function lowerValueHandler(
     fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
   const locals = new Map<string, Local>(env.locals);
   if (valueParam) {
-    locals.set(valueParam, {code: valueCode, cType, isBool, expr: valueExpr});
+    locals.set(valueParam, {slotKind, isBool, expr: valueExpr});
   }
 
-  // A RANGE <Dial>'s second parameter binds the same way, lowering to data->value_start with no object on device.
+  // A RANGE <Dial>'s second parameter binds the same way, lowering to the event's value_start with no object on device.
   const secondParam =
     fnNode.params[1]?.type === 'Identifier' ? fnNode.params[1].name : null;
-  if (secondParam && secondValueCode) {
-    locals.set(secondParam, {
-      code: secondValueCode,
-      cType,
-      expr: secondValueExpr,
-    });
+  if (secondParam && secondValueExpr) {
+    locals.set(secondParam, {slotKind, expr: secondValueExpr});
   }
 
   // Lower the body (an expression body is a single statement); it re-applies state once if it set any.
-  const ctx: StatementContext = {stateChanged: false, animIdx: 0, out};
+  const ctx: StatementContext = {stateChanged: false, out};
   const body = fnNode.body;
   const statements: t.Statement[] =
     body.type === 'BlockStatement'

@@ -37,7 +37,7 @@ export interface IrTyped {
   type: IrType;
 }
 
-/** A whole-number helper that saturates where C's own arithmetic would overflow. */
+/** A whole-number helper that saturates where plain arithmetic would overflow. */
 export type WholeHelper =
   | 'add'
   | 'sub'

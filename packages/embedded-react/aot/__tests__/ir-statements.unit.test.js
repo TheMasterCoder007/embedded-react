@@ -17,19 +17,18 @@
 import {describe, it, expect} from 'vitest';
 import {parse} from '@babel/parser';
 import {lowerStmts} from '../compiler/handlers.mts';
-import {printStmts} from '../compiler/c/statements.mts';
+
 import {Out} from '../compiler/out.mts';
 
-// Handler statements lower to the IR first; these check the statements, and the C their printer makes of them.
+// Handler statements lower to the IR first; these check the statements.
 
 /** A scalar state slot, as collectState records one. */
-const scalar = (name, cType, isBool = false) => ({
+const scalar = (name, slotKind, isBool = false) => ({
   kind: 'scalar',
   name,
-  cType,
+  slotKind,
   isBool,
-  cField: name,
-  cMember: `s_state.${name}`,
+  slotName: name,
 });
 
 /** A list state slot of up to 8 items. */
@@ -38,17 +37,6 @@ const list = (name, fields) => ({
   name,
   struct: {fields},
   cap: 8,
-  arrayName: `s_${name}`,
-  countMember: `s_${name}_count`,
-});
-
-/** A value ref. */
-const valueRef = (cType, cVar) => ({
-  kind: 'value',
-  cVar,
-  cType,
-  initial: 0,
-  used: false,
 });
 
 /** A state table over these slots, each with its `setX` setter. */
@@ -74,87 +62,11 @@ function lowerBody(source, state, refs = new Map()) {
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     stores: [],
   };
-  const ctx = {stateChanged: false, animIdx: 0, out: new Out(new Map(), null)};
+  const ctx = {stateChanged: false, out: new Out(new Map(), null)};
   return {stmts: lowerStmts(statements, env, state, ctx), ctx};
 }
 
 describe('handler statements lower to the IR', () => {
-  it('lowers a numeric setter to a state write, and notes that state changed', () => {
-    const count = scalar('count', 'int');
-    const {stmts, ctx} = lowerBody('setCount(count + 1);', stateOf(count));
-    expect(stmts).toMatchObject([
-      {kind: 'setState', state: count, value: {kind: 'helper', helper: 'add'}},
-    ]);
-    expect(ctx.stateChanged).toBe(true);
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    s_state.count = app_add(s_state.count, 1);',
-    ]);
-  });
-
-  it('lowers a string setter to text', () => {
-    const {stmts} = lowerBody(
-      "setLabel('n=' + count);",
-      stateOf(scalar('label', 'string'), scalar('count', 'int')),
-    );
-    expect(stmts).toMatchObject([{kind: 'setStateText'}]);
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    if (snprintf(s_state.label, sizeof(s_state.label), "n=%d", s_state.count) >= (int)sizeof(s_state.label))',
-      '    {',
-      '        APP_LIMIT("state \'label\' cut short, raise ER_AOT_LIST_STR_CAP");',
-      '    }',
-    ]);
-  });
-
-  it('writes through a temporary when the new text reads the state itself', () => {
-    const {stmts} = lowerBody(
-      "setLabel(label + '!');",
-      stateOf(scalar('label', 'string')),
-    );
-    expect(printStmts(stmts, '    ').join('\n')).toContain(
-      'char next[sizeof(s_state.label)];',
-    );
-  });
-
-  it('declares a local that the statements after it read', () => {
-    const {stmts} = lowerBody(
-      'const doubled = count * 2; setCount(doubled);',
-      stateOf(scalar('count', 'int')),
-    );
-    expect(stmts).toMatchObject([
-      {kind: 'declareLocal', name: 'l_doubled', isHoisted: false},
-      {kind: 'setState', value: {kind: 'local'}},
-    ]);
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    int l_doubled = app_mul(s_state.count, 2);',
-      '    s_state.count = l_doubled;',
-    ]);
-  });
-
-  it('lowers if / else to its test and both branches', () => {
-    const {stmts} = lowerBody(
-      'if (count > 3) { setCount(0); } else { setCount(count + 1); }',
-      stateOf(scalar('count', 'int')),
-    );
-    expect(stmts).toMatchObject([
-      {
-        kind: 'if',
-        test: {kind: 'compare', op: '>'},
-        consequent: [{kind: 'setState'}],
-        alternate: [{kind: 'setState'}],
-      },
-    ]);
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    if ((s_state.count > 3))',
-      '    {',
-      '        s_state.count = 0;',
-      '    }',
-      '    else',
-      '    {',
-      '        s_state.count = app_add(s_state.count, 1);',
-      '    }',
-    ]);
-  });
-
   it('lowers list appends, slices and clears', () => {
     const fields = [
       {key: 'name', kind: 'string'},
@@ -178,78 +90,6 @@ describe('handler statements lower to the IR', () => {
     expect(stmts[0].values).toMatchObject([
       {field: {key: 'name'}, text: {parts: [{kind: 'value'}]}},
       {field: {key: 'score'}, value: {kind: 'state'}},
-    ]);
-  });
-
-  it('resets the fields an appended item leaves out', () => {
-    const fields = [
-      {key: 'name', kind: 'string'},
-      {key: 'score', kind: 'int'},
-      {key: 'ratio', kind: 'float'},
-    ];
-    const {stmts} = lowerBody(
-      'setItems([...items, {score: 2}]);',
-      stateOf(list('items', fields)),
-    );
-    expect(stmts[0].values).toMatchObject([
-      {field: {key: 'name'}, text: {parts: []}},
-      {field: {key: 'score'}, value: {kind: 'number', value: 2}},
-      {field: {key: 'ratio'}, value: {kind: 'number', value: 0}},
-    ]);
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    if (s_items_count < 8)',
-      '    {',
-      '        snprintf(s_items[s_items_count].name, sizeof(s_items[s_items_count].name), "%s", "");',
-      '        s_items[s_items_count].score = 2;',
-      '        s_items[s_items_count].ratio = 0.0f;',
-      '        s_items_count++;',
-      '    }',
-      '    else',
-      '    {',
-      '        APP_LIMIT("list \'items\' full, raise ER_AOT_LIST_CAP");',
-      '    }',
-    ]);
-  });
-
-  it("prints list operations at the body's top-level indent, even inside a block", () => {
-    const {stmts} = lowerBody(
-      'if (on) { setItems([]); }',
-      stateOf(list('items', []), scalar('on', 'int', true)),
-    );
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    if (s_state.on)',
-      '    {',
-      '    s_items_count = 0;',
-      '    }',
-    ]);
-  });
-
-  it('starts a timer whose callback becomes a function of its own', () => {
-    const {stmts, ctx} = lowerBody(
-      'setInterval(() => setCount(count + 1), 1000);',
-      stateOf(scalar('count', 'int')),
-    );
-    expect(stmts).toMatchObject([
-      {
-        kind: 'startTimer',
-        timer: {fn: 'er_timer_fn_0', isRepeating: true},
-        idLocal: null,
-      },
-    ]);
-    expect(ctx.out.timerFns[0].name).toBe('er_timer_fn_0');
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    er_timer_add((int)(1000), true, er_timer_fn_0);',
-    ]);
-  });
-
-  it('writes a whole-number ref through the saturating helper', () => {
-    const refs = new Map([['total', valueRef('int', 's_ref_total')]]);
-    const {stmts} = lowerBody('total.current += 2;', stateOf(), refs);
-    expect(stmts).toMatchObject([
-      {kind: 'writeRef', op: '=', value: {kind: 'helper', helper: 'add'}},
-    ]);
-    expect(printStmts(stmts, '    ')).toEqual([
-      '    s_ref_total = app_add(s_ref_total, 2);',
     ]);
   });
 

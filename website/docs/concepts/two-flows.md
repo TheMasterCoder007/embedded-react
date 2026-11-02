@@ -1,7 +1,7 @@
 ---
 title: 'Two flows: runtime and ahead of time'
 sidebar_label: 'Two flows'
-description: 'Flow A runs React on QuickJS on the chip. Flow B compiles the same JSX to C ahead of time. Same engine, same app; the difference is when the dynamism is resolved.'
+description: 'Flow A runs React on QuickJS on the chip. Flow B compiles the same JSX to a package ahead of time. Same engine, same app; the difference is when the dynamism is resolved.'
 ---
 
 The same JSX reaches the device through one of two flows. Both drive the **same C engine** and
@@ -20,8 +20,8 @@ export default function App() {
 ```
 
 In Flow A, that `useState` is React's, running on a JavaScript engine on the chip. In Flow B, the
-compiler turns it into a C variable, the handler into a C function, and the JSX into direct calls
-that build the engine's node tree. Either way the button counts.
+compiler turns it into a slot in a package, the handler into bytecode, and the JSX into a tree the
+runtime builds through the engine. Either way the button counts.
 
 ## Flow A: React at runtime
 
@@ -74,42 +74,40 @@ the engine's clock. There are no `Date` objects, no `Proxy`, no typed arrays unl
 opts in. The same profile runs on the device, the desktop, and the simulator, so nothing works in
 one place and not another.
 
-## Flow B: JSX compiled to C
+## Flow B: JSX compiled to a package
 
-The thing React Native cannot do. An ahead-of-time compiler consumes the same JSX and **emits C**
-that calls the engine directly. There is no JavaScript engine on the device, no garbage collector,
+The thing React Native cannot do. An ahead-of-time compiler consumes the same JSX and **emits a package**
+that a small verified runtime runs against the engine. There is no JavaScript engine on the device, no garbage collector,
 no reconciler. The component tree, the `useState` state machine, event handlers, and animations are
 all resolved at compile time.
 
 ```text
-JSX  →  AOT compiler (packages/embedded-react/aot)  →  app.erpkg, or app.gen.c/.h with --c
+JSX  →  AOT compiler (packages/embedded-react/aot)  →  app.erpkg
                                                                    ↓
                                                     a flash slot, or the firmware image
                                                                    ↓
-                                                    calls er_scene.h directly   (engine/)
+                                                    the Flow B runtime (runtime/) calls er_scene.h   (engine/)
 ```
 
 `npx embedded-react build --aot` writes a package, and `npx embedded-react flash` writes it
 to a flash slot, where the firmware's Flow B runtime verifies and runs it, so changing the UI needs no firmware
-rebuild. `--c` writes generated C instead, which your firmware compiles in and calls `er_app_build()` at boot;
-it stays until packages replace it. Everything the engine does at runtime in Flow A it still does
+rebuild. Everything the engine does at runtime in Flow A it still does
 here: layout, rendering, touch, scrolling, and animation are engine features, not JavaScript ones.
 
 **What you get**
 
-- **Fits chips with only internal RAM.** The watch face demo compiles to about 25 KB of C and runs
+- **Fits chips with only internal RAM.** The watch face demo runs
   on an RP2040 with 264 KB of SRAM; the thermostat runs on a classic ESP32 with no PSRAM.
-- **Deterministic.** No garbage collector pauses, no interpreter. Integer arithmetic is defined at
-  the edges (overflow saturates, division by zero has an answer), because C would otherwise leave
-  those undefined.
-- A smaller, simpler firmware: the engine and your app, nothing else.
+- **Deterministic.** No garbage collector pauses, and no heap. Integer arithmetic is defined at
+  the edges (overflow saturates, division by zero has an answer).
+- A smaller, simpler firmware: the engine and the Flow B runtime, and the UI is data in a flash slot.
 
 **What it costs**
 
 - **A subset of the API.** The compiler handles what it can resolve statically: components, props,
   `useState` and `setState` (including the updater form), `useEffect`, refs, `useCallback`/`useMemo`,
   conditionals, `.map` lists, dynamic styles, the `Animated` API, `PanResponder`, `<Svg>` and
-  `<Dial>`. It rejects what it cannot lower to C, and says so at build time with the file and line.
+  `<Dial>`. It rejects what it cannot compile, and says so at build time with the file and line.
   [The AOT subset](../guides/aot-subset.md) lists the rules.
 - **Layouts are picked at boot, not rearranged while running.** A package holds a layout for each of
   the app's breakpoints, and the panel's resolution picks one. See
@@ -122,15 +120,15 @@ here: layout, rendering, touch, scrolling, and animation are engine features, no
 
 Your board usually decides.
 
-|                   | Flow A                                          | Flow B                                    |
-| ----------------- | ----------------------------------------------- | ----------------------------------------- |
-| RAM               | External RAM for the JS heap (PSRAM or SDRAM)   | Internal RAM is enough                    |
-| Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as compiled C                    |
-| Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Rebuilding and reflashing the firmware    |
-| API               | Everything                                      | [The AOT subset](../guides/aot-subset.md) |
-| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device  |
-| Runtime errors    | The error screen                                | Most are compile errors instead           |
-| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, Linux     |
+|                   | Flow A                                          | Flow B                                          |
+| ----------------- | ----------------------------------------------- | ----------------------------------------------- |
+| RAM               | External RAM for the JS heap (PSRAM or SDRAM)   | Internal RAM is enough                          |
+| Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as a package, plus its assets          |
+| Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Writing a new package; no firmware rebuild      |
+| API               | Everything                                      | [The AOT subset](../guides/aot-subset.md)       |
+| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device        |
+| Runtime errors    | The error screen                                | Most are compile errors instead                 |
+| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, ESP32-S3, Linux |
 
 Two things make the choice cheaper than it looks:
 

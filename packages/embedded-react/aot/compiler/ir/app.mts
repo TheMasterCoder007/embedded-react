@@ -34,7 +34,7 @@ import type {IrElement} from './nodes.mts';
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** A Flow B app, lowered: what the C backend writes app.gen.c and app.gen.h from. */
+/** A Flow B app, lowered: what the package backend writes a package from. */
 export interface IrApp {
   /** The app's state, then each inlined component instance's. */
   state: StateRecord[];
@@ -44,13 +44,11 @@ export interface IrApp {
   animations: AnimRecord[];
   /** The on-screen keyboard's config, or null to keep the engine's own. */
   keyboard: IrKeyboard | null;
-  /** The root element, which er_app_build() appends to the screen-sized root. */
+  /** The root element, which the build appends to the screen-sized root. */
   root: IrElement;
-  /** Something has to be re-applied after a state change, so the app has an app_update(). */
-  hasUpdate: boolean;
   /** The image imports the app reaches, which the CLI bakes. */
   images: AssetImport[];
-  /** The values er_app_build() works out from the panel size, and what the build assumed of the panel. */
+  /** The values the build works out from the panel size, and what the build assumed of the panel. */
   boot: IrBoot;
   /** The values lowering recorded for the check pass, in order. */
   checks: IrCheck[];

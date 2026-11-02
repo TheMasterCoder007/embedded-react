@@ -16,7 +16,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(ERB_FUZZ_LIBFUZZER "Link libFuzzer. Needs clang with its runtime; Apple's clang has none" OFF)
 
-include(${CMAKE_CURRENT_SOURCE_DIR}/../erb-parity/engine-features.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../erb-frames/engine-features.cmake)
 set(ER_RUNTIME_TESTS OFF CACHE BOOL "" FORCE)
 
 # Before the subdirectories, so the engine and the runtime are instrumented too.

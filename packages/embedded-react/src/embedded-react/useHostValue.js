@@ -16,9 +16,9 @@
 
 // useHostValue — a numeric value fed by the C HOST at runtime, not by the app.
 //
-// Flow B (AOT): the compiler recognizes `const steps = useHostValue(0)` and lowers it to an ordinary
-// `s_state` field PLUS a generated public setter `er_app_set_steps(int)`. The host (e.g. a pedometer
-// reading an IMU in main.c) calls that setter each frame; the app renders the value like any state.
+// Flow B (AOT): the compiler recognizes `const steps = useHostValue(0)` and lowers it to an ordinary state
+// slot, which the package names as an input. The host (e.g. a pedometer reading an IMU in main.c) finds it
+// with erb_input_find("steps") and sets it with erb_input_set_int(); the app renders the value like any state.
 // There is no JS setter — the host is the only writer.
 //
 // Flow A / simulator: there is no host, so this simply returns the initial value (the simulator has no

@@ -51,7 +51,7 @@ difference is _when_ the dynamism is resolved.
 
 |             | Flow A: runtime                                                                         | Flow B: ahead of time                                                          |
 | ----------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| How it runs | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip         | JSX compiled to C and linked into the firmware                                 |
+| How it runs | A real React reconciler on [QuickJS](https://bellard.org/quickjs/), on the chip         | JSX compiled to a package that a small runtime runs                            |
 | You get     | Full runtime dynamism, hot reload on the device, UI updates without reflashing firmware | No JavaScript engine, no garbage collector, a smaller and deterministic binary |
 | Needs       | External RAM for the JavaScript heap: PSRAM on an ESP32-S3, SDRAM on an STM32H7         | Nothing extra: runs in internal RAM on MCUs with no external memory            |
 | Trade-off   | RAM and per-frame dispatch cost                                                         | A [subset of the API](./guides/aot-subset.md)                                  |

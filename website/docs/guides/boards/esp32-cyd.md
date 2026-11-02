@@ -35,7 +35,7 @@ idf.py -p PORT flash monitor       # e.g. /dev/ttyUSB0 or COM5; Ctrl-] leaves th
 
 With no package installed, the first boot shows the error screen, saying so.
 
-:::note[Coming from the C output]
+:::note[Coming from an older sdkconfig]
 An `sdkconfig` from before the package slots keeps the old partition table. Delete it, and run `idf.py fullclean`.
 :::
 
@@ -59,12 +59,12 @@ The log at boot:
 
 ```text
 I (xxx) embedded-react: embedded-react ESP32-2432S028R (CYD) host — Flow B (no QuickJS)
-I (xxx) embedded-react: free internal RAM: ~223000 bytes
+I (xxx) embedded-react: free internal RAM: ~208000 bytes
 I (xxx) board: ST7789 panel up: 240x320 (invert=0, bgr=0)
 I (xxx) er-spi-lcd: SPI LCD backend ready: 240x320, RGB565 BANDED (2 x 40-row ping-pong buffers, 37 KB DMA RAM)
 I (xxx) board: XPT2046 touch ready
 I (xxx) embedded-react: package running from slot a; slot b is staging
-I (xxx) embedded-react: free internal RAM after boot: ~181000 bytes
+I (xxx) embedded-react: free internal RAM after boot: ~165000 bytes
 ```
 
 :::tip[Port already defined]
@@ -139,8 +139,7 @@ There is no official datasheet for these boards; the map comes from the communit
 
 ## Outside the repository
 
-Copy the example folder out on its own and `idf.py build` fetches the engine and the SPI backend
-from GitHub. Flow B needs nothing else, no QuickJS. The engine is also on the ESP-IDF Component
-Registry ([Installation](../../getting-started/installation.mdx) has the command), but the SPI backend is
-not, so with the registry route you vendor or fetch the backend yourself; that is why the example
-defaults to `FetchContent`, which covers both.
+Copy the example folder out on its own and `idf.py build` fetches the engine, the Flow B runtime and the SPI
+backend from GitHub. Flow B needs nothing else, no QuickJS. The engine alone is also on the ESP-IDF Component
+Registry ([Installation](../../getting-started/installation.mdx) has the command), but the runtime and the SPI
+backend are not, so the example uses `FetchContent`, which covers all three.

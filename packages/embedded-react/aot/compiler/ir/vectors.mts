@@ -24,6 +24,13 @@ import type {IrPropValue} from './nodes.mts';
 import type {IrUpdateVector} from './statements.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The most stops the engine's gradient holds (ER_VGRAD_MAX_STOPS). */
+export const MAX_GRADIENT_STOPS = 8;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -48,7 +55,7 @@ export interface IrVectorPaint {
  * per shape, and the gradients the paints refer to. An empty tape draws nothing and has no tables.
  */
 export interface IrVectorTables {
-  /** Numbers the drawing's tables (`s_svg<id>_…`). */
+  /** Numbers the drawing's tables. */
   id: number;
   ops: number[];
   paints: IrVectorPaint[];
@@ -88,8 +95,7 @@ export interface IrGeometry {
 
 /** A paint color: a constant ARGB, or one state chooses (a color, or a ternary of them). */
 export type IrPaintColor =
-  | {kind: 'static'; argb: number}
-  | {kind: 'state'; value: IrPropValue};
+  {kind: 'static'; argb: number} | {kind: 'state'; value: IrPropValue};
 
 /** A gradient of a state-driven drawing: any stop color or geometry field may follow state. */
 export interface IrDrawingGradient {
@@ -123,11 +129,11 @@ export interface IrDrawingPaint {
 }
 
 /**
- * A drawing state drives: its op-tape is rebuilt by build_svg<id>() at boot and on every update, and so are its
+ * A drawing state drives: its op-tape is rebuilt at boot and on every update, and so are its
  * paints and gradients when anything in them follows state. Otherwise they stay const tables.
  */
 export interface IrStateDrivenVector {
-  /** Numbers the drawing's tables and builder (`s_svg<id>_…`, `build_svg<id>`). */
+  /** Numbers the drawing's tables and builder. */
   id: number;
   locals: {name: string; value: IrTapeValue}[];
   tape: IrTapeValue[];
@@ -136,7 +142,7 @@ export interface IrStateDrivenVector {
 }
 
 /**
- * A drawing's file-scope tables, in the order the app declares them: baked tables, a state-driven drawing
+ * A drawing's tables, in the order the app declares them: baked tables, a state-driven drawing
  * (whose builder is declared with them), or an updateVector call's tape and paints.
  */
 export type IrVectorData =

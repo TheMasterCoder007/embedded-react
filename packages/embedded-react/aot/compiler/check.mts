@@ -80,7 +80,7 @@ export function numberProblem(rawValue: unknown): AotError | null {
   if (!Number.isFinite(value)) {
     return aotError(
       `AOT: a numeric constant folded to ` +
-        `${rawValue === undefined ? 'undefined' : String(rawValue)}, which has no C form`,
+        `${rawValue === undefined ? 'undefined' : String(rawValue)}, which a number slot cannot hold`,
       'the value must be a finite number.',
     );
   }
@@ -96,13 +96,13 @@ export function numberProblem(rawValue: unknown): AotError | null {
 }
 
 /**
- * What is wrong with an animation time, if anything: it is rounded to whole milliseconds, and C holds those
+ * What is wrong with an animation time, if anything: it is rounded to whole milliseconds, and an int holds those
  * from 0 to INT_MAX.
  *
  * @param field  What the time is, for the error.
  * @param rawValue  The value; anything `Number()` converts.
  *
- * @returns The error to report, or null for a time C holds.
+ * @returns The error to report, or null for a time an int holds.
  */
 export function millisecondsProblem(
   field: string,

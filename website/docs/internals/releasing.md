@@ -33,7 +33,7 @@ What `sync-version` keeps in step:
 | `demos/*/package.json`                                       | Each demo's `embedded-react` dependency (the scaffolder's templates carry a placeholder it fills at scaffold time) |
 | `library.json`                                               | PlatformIO                                                                                                         |
 | `engine/idf_component.yml`                                   | The ESP-IDF component                                                                                              |
-| `engine/include/er_version.h`                                | The engine's own version, which the AOT compiler `_Static_assert`s against                                         |
+| `engine/include/er_version.h`                                | The engine's own version                                                                                           |
 | `README.md`, `website/docs/getting-started/installation.mdx` | The CMake, ESP-IDF and PlatformIO install pins                                                                     |
 | `website/package.json`                                       | The engine the playground runs                                                                                     |
 | `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                |
@@ -82,8 +82,8 @@ Three things must agree, and each is checked rather than trusted:
 - **The container and the runtime.** An `app.erpkg` is stamped with the QuickJS version it was
   compiled for; the loader rejects a mismatch with an on-screen panel rather than running garbage.
   The tag is pinned in the examples' `CMakeLists.txt` and in the bridge; bump them together.
-- **Generated C and the engine.** The AOT compiler writes its version into `app.gen.c` and
-  `_Static_assert`s it against `er_version.h`, so a stale `app.gen.c` fails to compile.
+- **A Flow B package and the runtime.** A package carries the format version and the engine ABI it was built for;
+  the runtime refuses one it can't run, and says why.
 - **Bytecode and the QuickJS build.** Bytecode is specific to the QuickJS version, which is why the
   package ships its own compiler through the prebuilt wasm and the firmware fetches a pinned tag.
 

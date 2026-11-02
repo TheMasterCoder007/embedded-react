@@ -30,7 +30,7 @@ export interface Screen {
   height: number;
 }
 
-/** compileSource's options, as a caller passes them. */
+/** compilePackage's options, as a caller passes them. */
 export interface CompileOptions {
   /** The source's path, as errors show it. Defaults to `demos/<demo>/App.jsx`. */
   filename?: string;
@@ -38,7 +38,7 @@ export interface CompileOptions {
   svgArtifacts?: Record<string, SvgArtifact>;
   /** Parse the source as TypeScript. By default, the filename's extension decides. */
   ts?: boolean;
-  /** The target panel's size. The fallbacks for this and the caps below are listed on resolveOptions. */
+  /** A panel to keep a layout for. The fallbacks for this and the caps below are listed on resolveOptions. */
   screen?: Screen | null;
   /** The sizes a package keeps layouts for. Overrides screen. With neither, a package has every layout. */
   screens?: Screen[];
@@ -48,17 +48,17 @@ export interface CompileOptions {
   listStrCap?: number;
   /** Inline segments in a nested <Text>. */
   maxTextSpans?: number;
-  /** Timers that run at once, in the package output. */
+  /** Timers that run at once. */
   maxTimers?: number;
   /** Build the package for release: the debug flag clear, and the debug table left out of it. */
   release?: boolean;
 }
 
-/** compileSource's options with the screen and the caps filled in. */
+/** compilePackage's options with the screen and the caps filled in. */
 export interface ResolvedOptions extends CompileOptions {
   screen: Screen;
   /** Where the screen size came from, for the error footer. `search` is a size that picks a layout being found. */
-  screenFrom: 'option' | 'env' | 'default' | 'search';
+  screenFrom: 'option' | 'search';
   caps: Caps;
 }
 
@@ -67,9 +67,8 @@ export interface ResolvedOptions extends CompileOptions {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * The largest value each size or cap takes; the smallest is 1. Screen dimensions end up in int16_t props, a
- * list's row count and a string buffer's size in a C `int`, and a nested <Text>'s segment count in the
- * engine's uint8_t `span_count`.
+ * The largest value each size or cap takes; the smallest is 1. Screen dimensions end up in int16_t props, and a
+ * nested <Text>'s segment count in the engine's uint8_t `span_count`.
  */
 const MAX_SCREEN = 32767;
 const MAX_LIST_CAP = 32767;
@@ -82,8 +81,7 @@ const MAX_TIMERS = 4096;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Checks that a size or cap is a whole number from 1 to `max`, since it is written into the generated C as a
- * `#define` or an array size.
+ * Checks that a size or cap is a whole number from 1 to `max`, since it sizes what the package holds.
  *
  * @param value  The value, as the option or the parsed variable gave it.
  * @param name  The option or variable, as the error names it.
@@ -113,19 +111,19 @@ function wholeInRange(
 }
 
 /**
- * compileSource's options with the target screen and the fixed-buffer caps filled in. Each one the caller
+ * compilePackage's options with the screen and the fixed-buffer caps filled in. Each one the caller
  * leaves out falls back to its environment variable, then to a default. The environment is read on every
  * call, not at import, so one process can compile for several boards.
  *
- *   screen        ER_AOT_SCREEN_W / _H    800×480  The C output's panel, whose layout a `screen` branch folds
- *                                                  to. A package finds its layouts unless told a size.
+ *   screen        ER_AOT_SCREEN_W / _H    800×480  A panel to keep a layout for. A package finds its layouts
+ *                                                  unless told a size, with both variables or the option.
  *   listCap       ER_AOT_LIST_CAP         16       Rows a list state holds. Each pooled row costs engine
  *                                                  nodes, so lower it on a tight-RAM MCU.
  *   listStrCap    ER_AOT_LIST_STR_CAP     48       Characters per string buffer (list field, string state).
  *   maxTextSpans  ER_AOT_MAX_TEXT_SPANS   4        Inline segments in a nested <Text>. Must match the
  *                                                  engine's ER_TEXT_MAX_SPANS.
  *   maxTimers     ER_AOT_MAX_TIMERS       8        Timers that run at once. Sizes the package's timer
- *                                                  table; the C output takes it as a C define instead.
+ *                                                  table.
  *
  * Each value must be a whole number from 1 up: to 32767 for the screen and the list caps, to 255 for
  * maxTextSpans, to 4096 for maxTimers. One that isn't, from the options or a variable, is an `AOT:` error
@@ -166,12 +164,7 @@ export function resolveOptions(opts: CompileOptions): ResolvedOptions {
           width: fromEnv('ER_AOT_SCREEN_W', 800, MAX_SCREEN),
           height: fromEnv('ER_AOT_SCREEN_H', 480, MAX_SCREEN),
         },
-    // Where the size came from, for the error footer: 'option', 'env' (both dimensions) or 'default'.
-    screenFrom: opts.screen
-      ? 'option'
-      : isSet('ER_AOT_SCREEN_W') && isSet('ER_AOT_SCREEN_H')
-        ? 'env'
-        : 'default',
+    screenFrom: 'option',
     caps: {
       listCap: fromOption(
         opts.listCap,

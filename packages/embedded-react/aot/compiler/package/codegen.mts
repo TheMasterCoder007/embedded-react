@@ -17,9 +17,9 @@
 /*
  * Lowers IR expressions, text, statements and state-driven prop values to bytecode.
  *
- * The C output leans on C's conversions: an int beside a float is a float, a value worked out at boot is a
- * double, and an assignment converts to the field it writes. The VM converts nothing by itself, so each value
- * here is worked out in the type C works it out in (its "C type"), and converted where C would convert it.
+ * The VM converts nothing by itself, so each value here is worked out in a type of its own, and converted where the
+ * language needs it: an int beside a float is a float, a value worked out at boot is a double, and an assignment
+ * converts to the field it writes.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -29,7 +29,7 @@
 import {aotError, constantText} from '../diagnostics.mts';
 import {animationStatement} from './animations.mts';
 import {EventField, MathFn} from './format.mts';
-import {abiProp, floatBits, readConstant} from './props.mts';
+import {abiProp, constantNumber, floatBits} from './props.mts';
 import {updateVector} from './vectors.mts';
 import type {AnimationPlan} from './animations.mts';
 import type {Arena, Slot} from './arena.mts';
@@ -51,21 +51,21 @@ import type {
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
 import type {IrTextPart} from '../ir/text.mts';
-import type {ListState, Local, RefRecord, ScalarState} from '../types.mts';
+import type {
+  ListState,
+  Local,
+  PropConstant,
+  RefRecord,
+  ScalarState,
+} from '../types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** The type C works a value out in. A boolean is C's int holding 0 or 1; an enum is an interned string. */
-export type CType =
-  | 'int'
-  | 'bool'
-  | 'float'
-  | 'double'
-  | 'int64'
-  | 'string'
-  | 'enum';
+/** The type a value is worked out in. A boolean is an int holding 0 or 1; an enum is an interned string. */
+export type ExprType =
+  'int' | 'bool' | 'float' | 'double' | 'int64' | 'string' | 'enum';
 
 /** An interned string state's set: its index in the enums table, and its values. */
 export interface EnumSet {
@@ -79,7 +79,7 @@ export interface ListPool {
   buffers: Map<string, Slot>;
 }
 
-/** A PanResponder's gesture state, as C keeps it: whether it is granted, the travel at the grant, and x0/y0. */
+/** A PanResponder's gesture state: whether it is granted, the travel at the grant, and x0/y0. */
 export interface GestureSlots {
   granted: Slot;
   baseDx: Slot;
@@ -96,18 +96,18 @@ export interface ProgramSlots {
   lists: Map<ListState, ListPool>;
   refs: Map<RefRecord, Slot>;
   boot: Map<IrBootSlot, Slot>;
-  /** The buffer each string local is copied into, by its C name. */
+  /** The buffer each string local is copied into, by its name. */
   stringLocals: Map<string, Slot>;
   /** The string states held as interned enums. */
   enums: Map<ScalarState, EnumSet>;
-  /** The slot each effect local its cleanup reads is kept in, by its C name. */
+  /** The slot each effect local its cleanup reads is kept in, by its name. */
   hoisted: Map<string, Slot>;
-  /** Each effect's flag that its last run reached its cleanup, by the flag's C name. */
+  /** Each effect's flag that its last run reached its cleanup, by the flag's name. */
   armed: Map<string, Slot>;
-  /** Each timer callback's function, by its C name. */
+  /** Each timer callback's function, by its name. */
   timerFunctions: Map<string, number>;
   animations: AnimationPlan;
-  /** Each PanResponder's gesture state, by its C prefix. */
+  /** Each PanResponder's gesture state, by its prefix. */
   gestures: Map<string, GestureSlots>;
   vectors: VectorPlan;
 }
@@ -121,10 +121,10 @@ export interface InputText {
 /** A local's value: a register, or, for a string, its buffer. */
 type LocalBinding = {register: Register} | {slot: Slot};
 
-/** A state-driven prop value worked out, and the conversion C applies to it on its way into the field. */
+/** A state-driven prop value worked out, and the conversion applied to it on its way into the field. */
 interface PropResult {
   register: Register;
-  type: CType;
+  type: ExprType;
   conversion: 'opacity' | 'dimension' | null;
 }
 
@@ -148,7 +148,7 @@ const HELPER_OPS: Record<WholeHelper, string> = {
   div: 'DIV',
 };
 
-/** The arithmetic opcodes for each C type. */
+/** The arithmetic opcodes for each type. */
 const ARITHMETIC_OPS: Record<string, Record<string, string>> = {
   int: {'+': 'ADD', '-': 'SUB', '*': 'MUL', '/': 'DIV', '%': 'MOD'},
   int64: {'+': 'ADDL', '-': 'SUBL', '*': 'MULL', '/': 'DIVL', '%': 'MODL'},
@@ -156,7 +156,7 @@ const ARITHMETIC_OPS: Record<string, Record<string, string>> = {
   double: {'+': 'DADD', '-': 'DSUB', '*': 'DMUL', '/': 'DDIV'},
 };
 
-/** The comparison opcodes for each C type: equal, less than, at most. */
+/** The comparison opcodes for each type: equal, less than, at most. */
 const COMPARE_OPS: Record<string, [string, string, string]> = {
   int: ['EQ', 'LT', 'LE'],
   int64: ['LEQ', 'LLT', 'LLE'],
@@ -164,7 +164,7 @@ const COMPARE_OPS: Record<string, [string, string, string]> = {
   double: ['DEQ', 'DLT', 'DLE'],
 };
 
-/** The conversion opcodes, by source and destination C type. */
+/** The conversion opcodes, by source and destination type. */
 const CONVERSIONS: Record<string, string> = {
   'int>float': 'ITOF',
   'int>double': 'ITOD',
@@ -208,7 +208,7 @@ const DISPLAY_NONE = 1;
 const TWO_TO_32 = 2 ** 32;
 const INT32_MAX = 0x7fffffff;
 
-/** C's int range, for an immediate that fits LOADI. */
+/** The int range, for an immediate that fits LOADI. */
 const IMMEDIATE_MIN = -32768;
 const IMMEDIATE_MAX = 32767;
 
@@ -235,7 +235,7 @@ export class Codegen {
   /**
    * @param fn  The function being built.
    * @param program  The program's slots and tables.
-   * @param options  inDoubles: fractions are worked out in double precision, as C works out a value at boot.
+   * @param options  inDoubles: fractions are worked out in double precision, for a value worked out at boot.
    *                 input: the <TextInput> a CHANGE_TEXT handler reads.
    *                 onReturn: where an effect's early `return` goes.
    *                 row: the row a list row's handler was built for, which its item reads.
@@ -268,14 +268,14 @@ export class Codegen {
    -------------------------------------------------------------------------------------------------------------------*/
 
   /**
-   * The type C works an expression out in.
+   * The type an expression is worked out in.
    *
    * @param expr  The expression.
    *
-   * @returns Its C type.
+   * @returns Its type.
    */
-  typeOf(expr: IrExpr): CType {
-    const fraction: CType = this.inDoubles ? 'double' : 'float';
+  typeOf(expr: IrExpr): ExprType {
+    const fraction: ExprType = this.inDoubles ? 'double' : 'float';
     switch (expr.kind) {
       case 'number':
         return expr.type.kind === 'float'
@@ -290,7 +290,7 @@ export class Codegen {
       case 'boolean':
         return 'bool';
       case 'state':
-        // An interned state is still a string to C.
+        // An interned state still reads as a string.
         return this.program.enums.has(expr.state)
           ? 'string'
           : slotType(this.stateSlot(expr.state));
@@ -302,11 +302,11 @@ export class Codegen {
         if (expr.local.expr) {
           return this.typeOf(expr.local.expr);
         }
-        const binding = this.binding(expr.local.code);
+        const binding = this.binding(expr.local.name!);
         return !binding
           ? 'string'
           : 'register' in binding
-            ? (binding.register.type as CType)
+            ? (binding.register.type as ExprType)
             : slotType(binding.slot);
       }
       case 'event':
@@ -343,7 +343,7 @@ export class Codegen {
       case 'conditional':
         return usual(this.typeOf(expr.consequent), this.typeOf(expr.alternate));
       default:
-        // layout, narrowRemainder, trunc, toInt, and what the package output refuses
+        // layout, narrowRemainder, trunc, toInt, and what a package refuses
         return 'int';
     }
   }
@@ -353,7 +353,7 @@ export class Codegen {
    -------------------------------------------------------------------------------------------------------------------*/
 
   /**
-   * Works an expression out into a register of its C type.
+   * Works an expression out into a register of its type.
    *
    * @param expr  The expression.
    *
@@ -413,7 +413,7 @@ export class Codegen {
       case 'unary':
         return this.unary(expr.op, expr.operand, type);
       case 'helper': {
-        const argType: CType = expr.bits === 64 ? 'int64' : 'int';
+        const argType: ExprType = expr.bits === 64 ? 'int64' : 'int';
         const args = expr.args.map(arg => this.valueAs(arg, argType));
         const register = fn.register(argType);
         fn.abc(
@@ -452,7 +452,7 @@ export class Codegen {
       }
       case 'trunc':
       case 'toInt':
-        // app_f2i takes a float, and app_d2i a double.
+        // Worked out as a float, or a double at boot.
         return this.convert(
           this.valueAs(expr.operand, this.inDoubles ? 'double' : 'float'),
           'int',
@@ -558,19 +558,19 @@ export class Codegen {
   }
 
   /**
-   * Works an expression out and converts it as C converts a value assigned to a type.
+   * Works an expression out and converts it as an assignment to a type does.
    *
    * @param expr  The expression.
    * @param type  The type it goes into.
    *
    * @returns A register of that type.
    */
-  valueAs(expr: IrExpr, type: CType): Register {
+  valueAs(expr: IrExpr, type: ExprType): Register {
     return this.convert(this.value(expr), type);
   }
 
   /**
-   * An expression as a condition: true exactly when JS (and the C output) find it truthy. A string is truthy
+   * An expression as a condition: true exactly when JS finds it truthy. A string is truthy
    * when it isn't empty.
    *
    * @param expr  The expression.
@@ -582,7 +582,7 @@ export class Codegen {
   }
 
   /**
-   * Converts a register as C converts a value assigned to another type. A number to a boolean is a test against
+   * Converts a register to another type, as an assignment does. A number to a boolean is a test against
    * zero; a boolean to a number is 0 or 1.
    *
    * @param register  The register.
@@ -590,8 +590,8 @@ export class Codegen {
    *
    * @returns A register of that type: this one when it already is.
    */
-  convert(register: Register, type: CType): Register {
-    const from = register.type as CType;
+  convert(register: Register, type: ExprType): Register {
+    const from = register.type as ExprType;
     if (from === type) {
       return register;
     }
@@ -631,7 +631,7 @@ export class Codegen {
     if (register.type === 'string') {
       this.fn.abc('SEQ', test.index, register.index, this.zero('string').index);
     } else {
-      const zero = this.load(register.type as CType, 0);
+      const zero = this.load(register.type as ExprType, 0);
       this.fn.abc(
         COMPARE_OPS[register.type][0],
         test.index,
@@ -651,7 +651,7 @@ export class Codegen {
    *
    * @returns The register.
    */
-  load(type: CType, value: number): Register {
+  load(type: ExprType, value: number): Register {
     const {fn} = this;
     const {tables} = this.program;
     const register = fn.register(type as RegisterType);
@@ -686,7 +686,7 @@ export class Codegen {
   }
 
   /**
-   * Whether two registers of one type hold the same value, as C's `==`, or strcmp() for strings, finds it.
+   * Whether two registers of one type hold the same value.
    *
    * @param left  One.
    * @param right  The other.
@@ -744,14 +744,14 @@ export class Codegen {
     this.fn.abx(op, register.index, slot.index);
   }
 
-  private event(type: CType, field: number): Register {
+  private event(type: ExprType, field: number): Register {
     const register = this.fn.register(type as RegisterType);
     this.fn.abc('EVT', register.index, field);
     return register;
   }
 
   /**
-   * A gestureState field, as C reads it: travel from the grant, x0/y0 from the responder's state, the rest
+   * A gestureState field: travel from the grant, x0/y0 from the responder's state, the rest
    * off the event.
    *
    * @param expr  The field.
@@ -807,16 +807,16 @@ export class Codegen {
    *
    * @param item  The row's item.
    * @param key  The field.
-   * @param type  Its C type.
+   * @param type  Its type.
    *
    * @returns The register.
    */
-  private itemField(item: Local, key: string, type: CType): Register {
+  private itemField(item: Local, key: string, type: ExprType): Register {
     const {fn} = this;
-    const list = required(item.list, `the list of "${item.code}"`);
+    const list = required(item.list, `the list of "${item.name}"`);
     const field = list.struct.fields.findIndex(entry => entry.key === key);
     const pool = this.listPool(list).slot;
-    const row = this.row ?? this.load('int', required(item.row, item.code));
+    const row = this.row ?? this.load('int', required(item.row, item.name!));
     const count = fn.register('int');
     const inUse = fn.register('bool');
     fn.abx('LEN', count.index, pool.index);
@@ -840,7 +840,7 @@ export class Codegen {
   }
 
   /** Zero, or the empty string, in a register of a type. */
-  private zero(type: CType): Register {
+  private zero(type: ExprType): Register {
     if (type !== 'string') {
       return this.load(type, 0);
     }
@@ -849,24 +849,28 @@ export class Codegen {
   }
 
   private local(expr: IrExpr & {kind: 'local'}): Register {
-    // A memo, a component's prop or a helper's argument stands for its expression, as C inlines it.
+    // A memo, a component's prop or a helper's argument stands for its expression.
     if (expr.local.expr) {
       return this.value(expr.local.expr);
     }
-    const binding = this.binding(expr.local.code);
+    const binding = this.binding(expr.local.name!);
     if (!binding) {
       return notYet('the value an element passes its callback');
     }
     return 'register' in binding ? binding.register : this.get(binding.slot);
   }
 
-  /** A local's value, by its C name: this function's own, or an effect local kept in a slot. */
-  private binding(code: string): LocalBinding | undefined {
-    const hoisted = this.program.hoisted.get(code);
-    return this.locals.get(code) ?? (hoisted && {slot: hoisted});
+  /** A local's value, by name: this function's own, or an effect local kept in a slot. */
+  private binding(name: string): LocalBinding | undefined {
+    const hoisted = this.program.hoisted.get(name);
+    return this.locals.get(name) ?? (hoisted && {slot: hoisted});
   }
 
-  private unary(op: '-' | '+' | '!', operand: IrExpr, type: CType): Register {
+  private unary(
+    op: '-' | '+' | '!',
+    operand: IrExpr,
+    type: ExprType,
+  ): Register {
     if (op === '!') {
       const register = this.fn.register('bool');
       this.fn.abc('NOT', register.index, this.condition(operand).index);
@@ -888,12 +892,12 @@ export class Codegen {
     op: string,
     left: IrExpr,
     right: IrExpr,
-    type: CType,
+    type: ExprType,
   ): Register {
     const a = this.valueAs(left, type);
     const b = this.valueAs(right, type);
     const register = this.fn.register(type as RegisterType);
-    // C has no float %, so the IR's float remainder is fmod.
+    // The IR's float remainder is fmod.
     if (op === '%' && (type === 'float' || type === 'double')) {
       this.fn.abc(
         type === 'double' ? 'DMATH' : 'FMATH',
@@ -931,14 +935,14 @@ export class Codegen {
     return register;
   }
 
-  /** `a || b` as C's `(a ? a : b)`, and `a && b` as `(a ? b : a)`. */
+  /** `a || b` as `(a ? a : b)`, and `a && b` as `(a ? b : a)`. */
   private pick(
     op: '&&' | '||',
     left: IrExpr,
     right: IrExpr,
-    type: CType,
+    type: ExprType,
   ): Register {
-    // C tests a string's pointer, which is never null.
+    // A string slot always reads as set here.
     if (type === 'string') {
       return this.valueAs(op === '||' ? left : right, type);
     }
@@ -965,7 +969,7 @@ export class Codegen {
     test: Register,
     whenTrue: () => Register,
     whenFalse: () => Register,
-    type: CType,
+    type: ExprType,
   ): Register {
     const {fn} = this;
     const register = fn.register(type as RegisterType);
@@ -985,8 +989,8 @@ export class Codegen {
    -------------------------------------------------------------------------------------------------------------------*/
 
   /**
-   * Builds a text in the format buffer, each part as the C output's printf prints it. The caller puts it
-   * somewhere (FMTTEXT, FMTSET or FMTSPAN), which empties the buffer.
+   * Builds a text in the format buffer, each part printed in turn. The caller puts it
+   * somewhere (FMTTEXT, FMTSET, or FMTSPAN), which empties the buffer.
    *
    * @param parts  The text's parts.
    */
@@ -1010,7 +1014,7 @@ export class Codegen {
       } else {
         // The spec is by the value's IR type: a float is printed from a float, so a boot double is narrowed first.
         const type = part.value.type.kind;
-        const [op, as]: [string, CType] =
+        const [op, as]: [string, ExprType] =
           type === 'string'
             ? ['FMTS', 'string']
             : type === 'float'
@@ -1152,7 +1156,7 @@ export class Codegen {
         );
         return;
       case 'sliceItems':
-        // app_slice_len is slice(0, end), as SLICE counts it.
+        // slice(0, end), as SLICE counts it.
         this.scoped(() =>
           fn.abc(
             'SLICE',
@@ -1189,7 +1193,7 @@ export class Codegen {
   }
 
   /**
-   * Appends an item, its fields worked out in order into consecutive registers. A full list drops it, as C does.
+   * Appends an item, its fields worked out in order into consecutive registers. A full list drops it.
    * A text field is built in its own buffer first.
    *
    * @param stmt  The append.
@@ -1228,7 +1232,7 @@ export class Codegen {
    * Starts a timer, keeping its id in a local when the app names it.
    *
    * @param timer  The timer.
-   * @param idLocal  The local's C name, or null.
+   * @param idLocal  The local's name, or null.
    */
   private startTimer(timer: IrTimer, idLocal: string | null): void {
     const {fn} = this;
@@ -1264,8 +1268,8 @@ export class Codegen {
   }
 
   /**
-   * A timer's delay in ms, as the C output converts it: a 64-bit or fractional delay through ToInt32, with a
-   * negative one as 0. (The runtime, like er_timer_add, waits at least 1 ms.)
+   * A timer's delay in ms: a 64-bit or fractional delay through ToInt32, with a
+   * negative one as 0. (The runtime waits at least 1 ms.)
    *
    * @param delay  The delay, or null for none.
    *
@@ -1280,7 +1284,7 @@ export class Codegen {
       return this.valueAs(delay, 'int');
     }
 
-    // app_delay_msf takes a float, and makes it a 64-bit int as app_delay_ms64 takes; the VM's saturates.
+    // A float delay becomes a 64-bit int; the VM's conversion saturates.
     const {fn} = this;
     const whole =
       kind === 'float'
@@ -1307,7 +1311,7 @@ export class Codegen {
       this.set(slot, this.value(value));
       return;
     }
-    // `ref op= value` is `ref = ref op value`, worked out in the type C promotes the two to.
+    // `ref op= value` is `ref = ref op value`, worked out in the wider of the two types.
     const type = usual(slotType(slot), this.typeOf(value));
     const register = this.fn.register(type as RegisterType);
     this.fn.abc(
@@ -1335,7 +1339,7 @@ export class Codegen {
    -------------------------------------------------------------------------------------------------------------------*/
 
   /**
-   * Sets a state-driven prop in the props scratch, converting its value as C assigns it to the ERProps field.
+   * Sets a state-driven prop in the props scratch, converting its value to the ERProps field's type.
    *
    * @param field  The ERProps field.
    * @param value  Its value.
@@ -1346,7 +1350,7 @@ export class Codegen {
       const result = this.propValue(value);
       const {fn} = this;
       if (result.conversion === 'opacity' || prop.kind === 'float') {
-        // The runtime's PSETF on an opacity is app_opacity's rule.
+        // The runtime's PSETF scales an opacity to the engine's byte.
         fn.abx('PSETF', this.convert(result.register, 'float').index, prop.id);
         return;
       }
@@ -1354,13 +1358,13 @@ export class Codegen {
         this.setDimension(prop.id, result.register);
         return;
       }
-      // Any other field is a whole number: a fraction goes in truncated, as C converts it.
+      // Any other field is a whole number: a fraction goes in truncated.
       fn.abx('PSETI', this.convert(result.register, 'int').index, prop.id);
     });
   }
 
   /**
-   * A state-driven prop value, such as a paint's color, in the type C works it out in.
+   * A state-driven prop value, such as a paint's color, in the type it is worked out in.
    *
    * @param value  The value.
    *
@@ -1375,7 +1379,7 @@ export class Codegen {
   }
 
   /**
-   * A dimension, as app_round_dim rounds it: halves up, clamped to int16, NaN as 0.
+   * A dimension, rounded: halves up, clamped to int16, NaN as 0.
    *
    * @param prop  The prop's id.
    * @param value  The value.
@@ -1387,11 +1391,11 @@ export class Codegen {
       return;
     }
     if (value.type === 'float') {
-      // The runtime rounds a float the way app_round_dim does.
+      // The runtime rounds a float.
       fn.abx('PSETF', value.index, prop);
       return;
     }
-    // A double (or a 64-bit int, which C makes a double) is rounded here, since a float can't hold it exactly.
+    // A double (or a 64-bit int, which becomes a double) is rounded here, since a float can't hold it exactly.
     const rounded = fn.register('double');
     fn.abc(
       'DADD',
@@ -1404,22 +1408,22 @@ export class Codegen {
   }
 
   /**
-   * A state-driven prop value, with the conversion C applies on top of it lifted out. A conversion that maps 0 to
-   * 0 (app_opacity, app_round_dim) gives the same answer applied after a choice as inside it.
+   * A state-driven prop value, with the conversion on top of it lifted out. A conversion that maps 0 to
+   * 0 (an opacity, a dimension) gives the same answer applied after a choice as inside it.
    *
    * @param value  The value.
    *
-   * @returns Its register, C type and conversion.
+   * @returns Its register, type and conversion.
    */
   private propValue(value: IrPropValue): PropResult {
     const plain = (register: Register): PropResult => ({
       register,
-      type: register.type as CType,
+      type: register.type as ExprType,
       conversion: null,
     });
     switch (value.kind) {
       case 'constant':
-        return plain(this.constantValue(value.code));
+        return plain(this.constantValue(value.value));
       case 'opacity':
       case 'dimension':
         return {
@@ -1431,7 +1435,7 @@ export class Codegen {
       case 'byte':
         return this.propValue(value.value);
       case 'visible':
-        // C tests the value itself, and a string's pointer is never null.
+        // This tests the value itself, and a string slot always reads as set.
         return plain(
           this.display(
             value.value.type.kind === 'string'
@@ -1492,19 +1496,18 @@ export class Codegen {
   }
 
   /**
-   * A constant prop value as the C output spells it, in a register of the type C gives it.
+   * A constant prop value in a register.
    *
-   * @param code  The C.
+   * @param constant  The constant.
    *
    * @returns The register.
    */
-  private constantValue(code: string): Register {
-    const value = readConstant(code);
+  private constantValue(constant: PropConstant): Register {
+    const value = constantNumber(constant);
     if (value === null) {
-      return notYet(`the constant \`${code}\``);
+      return notYet(`the constant \`${constant}\``);
     }
-    const isFraction = !/0x/i.test(code) && /[.e]|f\b|f$/i.test(code);
-    return this.load(isFraction ? 'float' : 'int', value);
+    return this.load('int', value);
   }
 
   /** ER_DISPLAY_FLEX while a test holds, else ER_DISPLAY_NONE. */
@@ -1568,7 +1571,7 @@ export class Codegen {
   refSlot(ref: RefRecord): Slot {
     return ref.kind === 'node'
       ? notYet('reading a node ref')
-      : required(this.program.refs.get(ref), `ref "${ref.cVar}"`);
+      : required(this.program.refs.get(ref), `ref "${ref.slotName}"`);
   }
 
   bootSlot(slot: IrBootSlot): Slot {
@@ -1581,15 +1584,12 @@ export class Codegen {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Refuses what the package output can't lower yet.
+ * Refuses what a package can't lower yet.
  *
  * @param what  What the app uses.
  */
 export function notYet(what: string): never {
-  throw aotError(
-    `AOT: the package output doesn't support ${what} yet`,
-    'build with --c to get the C output, which supports it.',
-  );
+  throw aotError(`AOT: a package doesn't support ${what} yet`);
 }
 
 /**
@@ -1608,13 +1608,13 @@ function required<T>(planned: T | undefined, what: string): T {
 }
 
 /**
- * The C type a slot holds.
+ * The type a slot holds.
  *
  * @param slot  The slot.
  *
- * @returns Its C type.
+ * @returns Its type.
  */
-export function slotType(slot: Slot): CType {
+export function slotType(slot: Slot): ExprType {
   return (
     {
       1: 'int',
@@ -1624,20 +1624,20 @@ export function slotType(slot: Slot): CType {
       5: 'double',
       6: 'string',
       7: 'enum',
-    } as Record<number, CType>
+    } as Record<number, ExprType>
   )[slot.type];
 }
 
 /**
- * The type C works out an operation on two values in: the wider of the two, a double over a float over a 64-bit
- * int over an int. Two booleans stay a boolean (C's int holding 0 or 1).
+ * The type an operation on two values is worked out in: the wider of the two, a double over a float over a 64-bit
+ * int over an int. Two booleans stay a boolean (an int holding 0 or 1).
  *
- * @param left  One operand's C type.
+ * @param left  One operand's type.
  * @param right  The other's.
  *
  * @returns The type.
  */
-function usual(left: CType, right: CType): CType {
+function usual(left: ExprType, right: ExprType): ExprType {
   if (left === 'string' || right === 'string') {
     return 'string';
   }
@@ -1652,17 +1652,17 @@ function usual(left: CType, right: CType): CType {
   return 'int';
 }
 
-/** A boolean worked on as a number is C's int. */
-const promoted = (type: CType): CType => (type === 'bool' ? 'int' : type);
+/** A boolean worked on as a number is an int. */
+const promoted = (type: ExprType): ExprType => (type === 'bool' ? 'int' : type);
 
 /**
- * The type a handler local holds: what its IR type says, as C declares it.
+ * The type a handler local holds: what its IR type says.
  *
  * @param init  The local's initial value.
  *
  * @returns Its type.
  */
-function declaredType(init: IrExpr): CType {
+function declaredType(init: IrExpr): ExprType {
   switch (init.type.kind) {
     case 'bool':
       return 'bool';

@@ -15,12 +15,11 @@
  */
 
 /*
- * <Svg> drawings in the package output, drawn as the C output draws them.
+ * <Svg> drawings in a package.
  *
  * A drawing baked at build time is a tape, committed when its node is built. A drawing state drives is a tape
  * too, its constant floats and paints in place: the update copies it into the scratch, works out each float,
- * paint field and gradient field state drives, in the type C works it out in, and commits it, as build_svg<id>()
- * and er_node_set_vector_ops() do. An updateVector call does the same from the code that calls it, then sets the
+ * paint field and gradient field state drives, and commits it with er_node_set_vector_ops(). An updateVector call does the same from the code that calls it, then sets the
  * damage hint.
  */
 
@@ -29,7 +28,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from '../diagnostics.mts';
-import {MAX_GRADIENT_STOPS} from '../c/vectors.mts';
+import {MAX_GRADIENT_STOPS} from '../ir/vectors.mts';
 import {GradientField, MathFn, PaintField} from './format.mts';
 import type {Arena, Slot} from './arena.mts';
 import type {Register} from './bytecode.mts';
@@ -65,10 +64,10 @@ const VECTOR_OPS: Record<string, number> = {
 
 const CHAIN_OPS = {'+': 'FADD', '-': 'FSUB', '*': 'FMUL'} as const;
 
-/** C's (float)M_PI. */
+/** Pi, as a float. */
 const FLOAT_PI = Math.fround(Math.PI);
 
-/** The bound app_vector_dirty keeps a damage hint's edges within. */
+/** The bound a damage hint's edges are kept within. */
 const DIRTY_BOUND = 1e9;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -84,7 +83,7 @@ export class VectorPlan {
   readonly tapes: ProgramTape[] = [];
   private readonly arena: Arena;
   private readonly made = new Map<object, number>();
-  /** Each node ref's node handle, by its C slot, for the updateVector calls. */
+  /** Each node ref's node handle, by its slot, for the updateVector calls. */
   readonly refNodes = new Map<string, Slot>();
 
   constructor(arena: Arena) {
@@ -192,7 +191,7 @@ function bakedGradient(gradient: VectorGradient): ProgramGradient {
   const stops = (gradient.stops || []).slice(0, MAX_GRADIENT_STOPS);
   if (stops.length < 2) {
     throw aotError(
-      `AOT: an <Svg> gradient has ${stops.length} stop${stops.length === 1 ? '' : 's'}, but the package output needs at least two`,
+      `AOT: an <Svg> gradient has ${stops.length} stop${stops.length === 1 ? '' : 's'}, but a gradient needs at least two`,
       'give the gradient in the SVG file two stops, or paint a solid color.',
     );
   }
@@ -290,7 +289,7 @@ const drawingGradient = (gradient: IrDrawingGradient): ProgramGradient => ({
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * A tape slot worked out as C works out its float.
+ * A tape slot worked out as a float.
  *
  * @param codegen  The function's codegen.
  * @param value  The slot.
@@ -320,7 +319,7 @@ function tapeValue(
       return local;
     }
     case 'chain': {
-      // Left to right, as C reads the chain.
+      // Left to right.
       let sum = tapeValue(codegen, value.first, locals);
       for (const term of value.rest) {
         const next = result();
@@ -335,7 +334,7 @@ function tapeValue(
       return sum;
     }
     case 'radians': {
-      // ((degrees - 90.0f) * (float)M_PI / 180.0f)
+      // (degrees - 90) * pi / 180
       const radians = result();
       fn.abc(
         'FSUB',
@@ -358,7 +357,7 @@ function tapeValue(
       return radians;
     }
     case 'clampRadius': {
-      // fminf(fmaxf(radius, 0.0f), side * 0.5f): fmaxf and fminf pass over a NaN, where FMATH would keep it.
+      // min(max(radius, 0), side / 2), passing over a NaN, where FMATH would keep it.
       const radius = tapeValue(codegen, value.radius, locals);
       const zero = codegen.load('float', 0);
       const above = fn.register('bool');
@@ -429,7 +428,7 @@ function setTape(
 }
 
 /**
- * Sets each paint and gradient field state drives in the scratch, as build_svg<id>() writes them.
+ * Sets each paint and gradient field state drives in the scratch.
  *
  * @param codegen  The function's codegen.
  * @param vector  The drawing.
@@ -514,8 +513,8 @@ function setPaints(
 }
 
 /**
- * Builds a state-driven drawing from state and commits it to its node, as build_svg<id>() and
- * er_node_set_vector_ops() do.
+ * Builds a state-driven drawing from state and commits it to its node, with
+ * er_node_set_vector_ops().
  *
  * @param codegen  The update function's codegen.
  * @param vector  The drawing.
@@ -540,7 +539,7 @@ export function commitDrawing(
 }
 
 /**
- * An updateVector call: its tape worked out and handed to the node, then the damage hint, as the C output runs it.
+ * An updateVector call: its tape worked out and handed to the node, then the damage hint.
  *
  * @param codegen  The function's codegen.
  * @param update  The call.
@@ -552,7 +551,7 @@ export function updateVector(
   plan: VectorPlan,
 ): void {
   const {fn} = codegen;
-  // A ref no node holds draws nothing, as the C output's NULL node does.
+  // A ref no node holds draws nothing.
   const handle = plan.refNodes.get(update.node);
   if (!handle) {
     return;
@@ -584,7 +583,7 @@ export function updateVector(
 }
 
 /**
- * A damage hint worked out in floats, as app_vector_dirty() does: none when an edge isn't finite, else rounded
+ * A damage hint worked out in floats: none when an edge isn't finite, else rounded
  * out to whole pixels, each edge bounded.
  *
  * @param codegen  The function's codegen.

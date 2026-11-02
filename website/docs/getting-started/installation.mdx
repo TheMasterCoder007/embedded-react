@@ -118,8 +118,8 @@ instead. Pass a path to use a different entry: `npx embedded-react dev path/to/e
 
 ## The engine, for firmware
 
-The npm package is the app side. The firmware side needs the C engine, which ships at the same
-version number through the channels below. You only need this once you are
+The npm package is the app side. The firmware side needs the C engine, plus the Flow B runtime for Flow B. They ship at
+the same version number through the channels below. You only need this once you are
 [wiring up a board](./first-board.md); the example projects already do it for you.
 
 <Tabs>
@@ -135,18 +135,25 @@ FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
 ```
 
+For Flow B, add the runtime from the same checkout:
+
+```cmake
+add_subdirectory(${embedded-react_SOURCE_DIR}/runtime ${embedded-react_BINARY_DIR}/runtime)
+target_link_libraries(my_firmware PRIVATE erb-runtime)
+```
+
   </TabItem>
   <TabItem value="idf" label="ESP-IDF">
 
-Flow B needs only the engine, which is on the ESP-IDF Component Registry:
+The [CYD](../guides/boards/esp32-cyd.md) and [ESP32-S3](../guides/boards/esp32-s3.md) examples are templates you can
+copy out. They use CMake `FetchContent`, which also brings in what each flow needs beyond the engine: the Flow B
+runtime, or the bridge and QuickJS.
+
+The engine alone is on the ESP-IDF Component Registry:
 
 ```bash
 idf.py add-dependency "TheMasterCoder007/embedded-react^0.19.0"
 ```
-
-Flow A uses CMake `FetchContent` instead. It also needs QuickJS, which is a plain CMake project and
-not an ESP-IDF component, so the registry cannot pull it. The
-[ESP32-S3 example](../guides/boards/esp32-s3.md) is a template you can copy out.
 
   </TabItem>
   <TabItem value="pio" label="PlatformIO">
@@ -155,8 +162,8 @@ not an ESP-IDF component, so the registry cannot pull it. The
 lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.19.0
 ```
 
-This installs the engine, which covers Flow B. Flow A on PlatformIO is best-effort; the ESP-IDF
-route is the supported one.
+This installs the engine alone. The Flow B runtime and the QuickJS bridge aren't in the library yet, so the
+ESP-IDF examples are the supported route.
 
   </TabItem>
 </Tabs>

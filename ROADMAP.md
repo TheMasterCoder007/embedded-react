@@ -78,9 +78,8 @@ Five examples run end-to-end (see the [board guides](https://embedded-react.dev/
 
 ### Flow B — compiled, loadable packages
 
-Flow B will stop generating C that is compiled into the firmware. The compiler will
-produce a package in the same `.erpkg` container Flow A uses, and a fixed Flow B runtime
-in the firmware checks and runs it. There is no JS engine and no heap, and changing the
+The compiler produces a package in the same `.erpkg` container Flow A uses, and a fixed
+Flow B runtime in the firmware checks and runs it. There is no JS engine and no heap, and changing the
 UI needs no firmware rebuild. Tracked under the
 [`flow-b`](https://github.com/TheMasterCoder007/embedded-react/labels/flow-b) label.
 
@@ -105,13 +104,12 @@ UI needs no firmware rebuild. Tracked under the
   TypeScript interface is implemented in C by the firmware, and the same interface works
   in Flow A.
 
-Order: restructure the compiler (split `aot/compile.mjs`, then add a typed intermediate
+Order: restructure the compiler (split `aot/compile.mts`, then add a typed intermediate
 representation), then build the runtime and the package output, then multi-panel packages
-and hot reload, then parity. The current C output keeps working until the package path
-passes the same tests, and is then retired. Boards with no spare flash partition link the
-package into the firmware instead.
+and hot reload, then parity. Boards with no spare flash partition link the package into the
+firmware instead.
 
-Carried over from the C output:
+Still to do:
 
 - Resolve the live-vs-snapshot `toValue` gap (see Known issues).
 - Imperative refs / `Animated` sequence / parallel / loop / interpolate hardening on the
@@ -157,7 +155,7 @@ Carried over from the C output:
 
 > **Done:** `embedded-react build` now produces the device artifact from a consumer project —
 > `app.erpkg` (Flow A, bytecode compiled through the prebuilt `.wasm`, no native toolchain) and
-> `--aot` → a Flow B `app.erpkg`, or `app.gen.c` with `--c`.
+> `--aot` → a Flow B `app.erpkg`.
 
 ---
 

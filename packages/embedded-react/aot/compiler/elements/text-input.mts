@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {colorLiteral} from '../../style-map.mts';
+import {parseColorValue} from '../../style-map.mts';
 import {
   aotError,
   currentLoc,
@@ -62,7 +62,7 @@ const INPUT_EVENTS: Record<string, string> = {
  * → ER_NODE_TEXT_INPUT. The engine autofocuses on tap (hit_test) and edits its own buffer, firing
  * ER_EVENT_CHANGE_TEXT with the new text — bound to the handler's param via `data->changed_text` (a string).
  * `value` drives the text buffer (er_node_set_props → er_text_input_set_text; state → dynamic, re-synced in
- * app_update; set_text is a no-op when unchanged, so a controlled input is safe). Desktop types via the
+ * the update; set_text is a no-op when unchanged, so a controlled input is safe). Desktop types via the
  * keyboard; the touch-only CYD needs an on-screen keyboard to enter text (deferred follow-on).
  *
  * @param element  The <TextInput>.
@@ -123,19 +123,19 @@ export function emitTextInput(
     } else if (name === 'placeholderTextColor') {
       staticAssigns.push({
         field: 'placeholder_color',
-        expr: colorLiteral(String(evalStatic(node, scope))),
+        value: parseColorValue(String(evalStatic(node, scope))),
       });
     } else if (name === 'cursorColor') {
       staticAssigns.push({
         field: 'cursor_color',
-        expr: colorLiteral(String(evalStatic(node, scope))),
+        value: parseColorValue(String(evalStatic(node, scope))),
       });
     } else if (name === 'editable' || name === 'secureTextEntry') {
       const field = name === 'editable' ? 'editable' : 'secure_text_entry';
       try {
         staticAssigns.push({
           field,
-          expr: evalStatic(node, scope) ? '1' : '0',
+          value: evalStatic(node, scope) ? 1 : 0,
         });
       } catch {
         dynAssigns.push({
@@ -162,7 +162,7 @@ export function emitTextInput(
   }
 
   // value → the input's text buffer (er_node_set_props → er_text_input_set_text): static literal, or a
-  // state-driven value re-synced each app_update.
+  // state-driven value re-synced each update.
   const node: IrNode = {
     id: nodeId,
     loc: currentLoc(),
@@ -185,18 +185,16 @@ export function emitTextInput(
         'onChangeText={(t) => setText(t)}',
       );
     }
-    const handlerName = `er_handler_${out.handlers.length}`;
+    const handlerName = `handler_${out.handlers.length}`;
     out.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerValueHandler(
         onChangeFn,
-        'data->changed_text',
         env,
         state,
         out,
         'string',
-        null,
         false,
         {kind: 'event', field: 'changed_text', type: STRING},
       ),

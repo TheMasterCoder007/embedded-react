@@ -21,7 +21,7 @@
 import {isBootOnlyNode, isBootOnlyVector} from './reads.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {AnimBind, TextSpan} from '../style-text.mts';
-import type {ListState, StaticAssign} from '../types.mts';
+import type {ListState, PropConstant, StaticAssign} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrPanResponder} from './pan-responder.mts';
 import type {IrText} from './text.mts';
@@ -41,10 +41,10 @@ export type IrShow =
   /** A row of a list's fixed pool, shown while the list holds that many items. */
   | {kind: 'rowInUse'; row: number; list: ListState};
 
-/** A state-driven value written to an ERProps field on every app_update. */
+/** A state-driven value written to an ERProps field on every update. */
 export type IrPropValue =
-  /** A constant already in its C form, as the style lowering and element defaults write it. */
-  | {kind: 'constant'; code: string}
+  /** A constant, as the style lowering and element defaults write it. */
+  | {kind: 'constant'; value: PropConstant}
   /** One of two values by a condition: a color or enum ternary. */
   | {
       kind: 'select';
@@ -64,7 +64,7 @@ export type IrPropValue =
   | {kind: 'whileShown'; show: IrShow; value: IrPropValue}
   /**
    * A byte that is `whenTrue` while the test holds, else 0: a 0/1 flag, or a gradient's stop count. `truthiness`
-   * is how C reads the test: as a JS condition (a string is truthy when non-empty), or as the value itself.
+   * is how the test reads: as a JS condition (a string is truthy when non-empty), or as the value itself.
    */
   | {
       kind: 'flag';
@@ -73,7 +73,7 @@ export type IrPropValue =
       negate: boolean;
       whenTrue: number;
     }
-  /** A value narrowed to a byte (an enum field stored as uint8_t). */
+  /** A value narrowed to a byte (an enum field stored in a byte). */
   | {kind: 'byte'; value: IrPropValue}
   /** A number stored in a float field. */
   | {kind: 'float'; value: IrExpr};
@@ -83,8 +83,7 @@ export type IrPropValue =
  * sets its props again on every update, the name included.
  */
 export type IrImageName =
-  | {kind: 'static'; name: string}
-  | {kind: 'value'; value: IrExpr};
+  {kind: 'static'; name: string} | {kind: 'value'; value: IrExpr};
 
 /** Something wired onto a node once it exists, in the order the element wires it. */
 export type IrWire =
@@ -98,16 +97,16 @@ export type IrWire =
   | {kind: 'responder'; pan: IrPanResponder}
   /** An <Svg>'s drawing, baked into const tables. */
   | {kind: 'vectorTables'; tables: IrVectorTables}
-  /** An <Svg>'s drawing that state drives: built once at boot and kept as a handle for app_update. */
+  /** An <Svg>'s drawing that state drives: built once at boot and kept as a handle for the update. */
   | {kind: 'stateDrivenVector'; vector: IrStateDrivenVector};
 
 /**
  * An element as an engine node: a host element (View, Text, Pressable, TouchableOpacity, Image, ScrollView), a
  * typed one (Switch, Dial, TextInput, ActivityIndicator, Modal), or an <Svg>'s box. A node with any state-driven
- * content keeps a file-scope handle, and app_update sets all of its props again.
+ * content keeps a handle, and the update sets all of its props again.
  */
 export interface IrNode {
-  /** The node's variable (`n<id>`); its handle is `s_n<id>`. */
+  /** The node's name (`n<id>`). */
   id: string;
   /** Where its element is in the source, for errors raised after lowering. */
   loc: SourcePosition | undefined;
@@ -115,7 +114,7 @@ export interface IrNode {
   type: string;
   /** Props folded at build time. */
   constantProps: StaticAssign[];
-  /** Props state drives, set again on every app_update after the constant ones. */
+  /** Props state drives, set again on every update after the constant ones. */
   stateProps: {field: string; value: IrPropValue}[];
   /** A <TextInput>'s placeholder. */
   placeholder: string | null;
@@ -183,8 +182,8 @@ export const hasRuntimeProps = (node: IrNode): boolean =>
   node.image?.kind === 'value';
 
 /**
- * Whether state drives any of a node's props, text or image, so it keeps a handle and app_update() sets its
- * props again. Props that read-only values worked out at boot are set once, by er_app_build().
+ * Whether state drives any of a node's props, text or image, so it keeps a handle and the update sets its
+ * props again. Props that read-only values worked out at boot are set once, by the build.
  *
  * @param node  The node.
  *
@@ -195,7 +194,7 @@ export const isStateDriven = (node: IrNode): boolean =>
 
 /**
  * The drawing state drives on a node if it has one: a drawing that reads only values worked out at boot is
- * built once, by er_app_build().
+ * built once, by the build.
  *
  * @param node  The node.
  *
@@ -224,7 +223,7 @@ export function stateDrivenVectorOf(node: IrNode): IrStateDrivenVector | null {
 }
 
 /**
- * Every node under an element, each before its children, in the order er_app_build() creates them.
+ * Every node under an element, each before its children, in the order the build creates them.
  *
  * @param element  The element.
  *

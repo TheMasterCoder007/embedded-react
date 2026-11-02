@@ -21,14 +21,14 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - The Flow B runtime in `runtime/`: it verifies a package, then runs it in a fixed arena, with no
   QuickJS and no heap.
 - `embedded-react build --aot` writes a Flow B package and prints the RAM, nodes, and flash it needs.
-  `--c` writes the C output instead. It takes state, handlers, timers, effects, lists, animations, PanResponder, `<Svg>`,
+  It takes state, handlers, timers, effects, lists, animations, PanResponder, `<Svg>`,
   `setKeyboardConfig`, and values worked out from the screen size, so the thermostat demo builds as a
   package.
 - A package carries a debug table, so the error screen names the source line (`App.jsx:41`).
   `--release` leaves it out, writing it beside the package as `app.erdbg`, and `--bake` writes the
   package as a C array (`app.erpkg.c`) for boards with no spare partition.
-- `npm run erb:parity` checks packages against the C output pixel for pixel, and CI runs it. Both demos
-  match at each of their boards' sizes.
+- `npm run erb:frames` checks packages against a golden image of each scenario, and CI runs it.
+  `npm run erb:frames:record` records the images.
 - One red error screen for both flows, drawn by the engine without the app's scene. It shows the reason,
   the source line, and the amounts involved. An uncaught JS exception in Flow A now shows it too.
 - A native fault or watchdog reset can be recorded in no-init RAM and shown after the reset
@@ -56,9 +56,17 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `er_assets_load_pack` and friends now check the whole pack first and register nothing when it fails.
 - Flow A node handles carry a generation, so one kept after its node is destroyed does nothing instead
   of reaching the next node to use its slot. Handles are no longer small integers.
+- `npm run aot` and the `examples/linux-aot` desktop host now use a package, and `--package` is gone.
+
+### Removed
+
+- **Breaking (Flow B):** the generated C output: `embedded-react build --aot --c`, `app.gen.c`, `compileSource` and
+  `npm run aot:same`. Use a package, in a flash slot or linked with `--bake`.
 
 ### Fixed
 
+- The on-screen keyboard's done key now calls `onSubmitEditing`. It only took the focus away, so a touch-only board
+  could never submit.
 - Flow B applies the stale-handle rule to a row built before a destroyed node, which used to go last, and
   to an animation of a destroyed node, which didn't stop a debug package.
 - A node sized far past the panel no longer stalls a Flow B frame painting off-screen.

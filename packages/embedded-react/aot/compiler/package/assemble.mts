@@ -15,7 +15,7 @@
  */
 
 /*
- * The package output's file assembly: the program section from the IR, the container around it, and the
+ * A package's file assembly: the program section from the IR, the container around it, and the
  * resource report the build prints.
  */
 
@@ -94,7 +94,7 @@ const TABLE_NAMES = Object.fromEntries(
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Compiles a Flow B app's source to one panel's program. Pure, like compileSourceImpl; compilePackage
+ * Compiles a Flow B app's source to one panel's program. Pure; compilePackage
  * (compile.mts) is the public entry around it.
  *
  * @param src  The App.jsx/App.tsx source text.
@@ -218,7 +218,7 @@ export function resourceReport(
 }
 
 /**
- * A package as C, for a board with no spare partition to link into its firmware: a const array of words, so it
+ * A package as a C array, for a board with no spare partition to link into its firmware: a const array of words, so it
  * is 4-aligned with any compiler, and its length in bytes.
  *
  * @param bytes  The package.

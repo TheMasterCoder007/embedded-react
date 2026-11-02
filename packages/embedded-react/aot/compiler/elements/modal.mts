@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {colorLiteral} from '../../style-map.mts';
+import {parseColorValue} from '../../style-map.mts';
 import {aotError, currentLoc} from '../diagnostics.mts';
 import {evalStatic} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
@@ -28,7 +28,7 @@ import {checkInterpolations, lowerRefBinds} from '../nodes.mts';
 import {at, elementSpec} from './props.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
-import type {Env, Scope, StateTable} from '../types.mts';
+import type {Env, Scope, StateTable, StaticAssign} from '../types.mts';
 import type {IrNode} from '../ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -37,14 +37,14 @@ import type {IrNode} from '../ir/nodes.mts';
 
 // Overlay defaults: absolute, fill the parent via four 0 insets (the robust "stretch" for an absolute
 // node), center the content. The user's style overrides any of these.
-const DEFAULTS = [
-  ['position', 'ER_POS_ABSOLUTE'],
-  ['left', '0'],
-  ['top', '0'],
-  ['right', '0'],
-  ['bottom', '0'],
-  ['align_items', 'ER_ALIGN_CENTER'],
-  ['justify_content', 'ER_JUSTIFY_CENTER'],
+const DEFAULTS: StaticAssign[] = [
+  {field: 'position', value: 'ER_POS_ABSOLUTE'},
+  {field: 'left', value: 0},
+  {field: 'top', value: 0},
+  {field: 'right', value: 0},
+  {field: 'bottom', value: 0},
+  {field: 'align_items', value: 'ER_ALIGN_CENTER'},
+  {field: 'justify_content', value: 'ER_JUSTIFY_CENTER'},
 ];
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -86,9 +86,9 @@ export function emitModal(
   const hasField = (f: string) => styleWrites(staticAssigns, dynAssigns, f);
 
   // Apply modal overlay defaults only for fields the user's style has not already set.
-  for (const [field, expr] of DEFAULTS) {
-    if (!hasField(field)) {
-      staticAssigns.push({field: field, expr});
+  for (const assign of DEFAULTS) {
+    if (!hasField(assign.field)) {
+      staticAssigns.push({...assign});
     }
   }
 
@@ -112,7 +112,7 @@ export function emitModal(
     } else if (name === 'backdropColor') {
       staticAssigns.push({
         field: 'backdrop_color',
-        expr: colorLiteral(String(evalStatic(node, scope))),
+        value: parseColorValue(String(evalStatic(node, scope))),
       });
     } else if (name === 'animationType') {
       // The engine shows and hides a Modal at once, which is RN's 'none'.
@@ -149,7 +149,7 @@ export function emitModal(
   try {
     staticAssigns.push({
       field: 'modal_visible',
-      expr: evalStatic(visibleNode, scope) ? '1' : '0',
+      value: evalStatic(visibleNode, scope) ? 1 : 0,
     });
   } catch {
     dynAssigns.push({

@@ -91,8 +91,7 @@ sections:   vendor bytecode | alignment pad (optional) | ERPK asset pack | app b
 
 **Flow B carries them in its package too.** `npx embedded-react build --aot` puts an asset pack in
 `app.erpkg`, and the runtime registers every image straight from flash when it loads the package: zero
-RAM, since the engine reads the bytes in place. With `--c`, it writes `assets.generated.c` and `.h`
-instead, which expose `er_register_assets()` for the firmware to call once at boot. Flow B draws all text
+RAM, since the engine reads the bytes in place. Flow B draws all text
 in the built-in font; the compiler rejects `fontFamily`.
 
 Either way the engine holds each image in a registry slot (`ERUI_IMAGE_REGISTRY_MAX`, 128 by

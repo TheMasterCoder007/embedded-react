@@ -199,7 +199,7 @@ export class FunctionBuilder {
     }
     if (this.cellTypes.length > MAX_REGISTERS) {
       throw aotError(
-        `AOT: ${this.what} needs more than ${MAX_REGISTERS} registers in the package output`,
+        `AOT: ${this.what} needs more than ${MAX_REGISTERS} registers in a package`,
         'split it into smaller pieces.',
       );
     }
@@ -288,7 +288,7 @@ export class FunctionBuilder {
       const offset = label.at - (at + wordsOf(this.code[at]));
       if (offset > 0x7fff) {
         throw aotError(
-          `AOT: ${this.what} has a branch too long for the package output`,
+          `AOT: ${this.what} has a branch too long for a package`,
           'split it into smaller pieces.',
         );
       }

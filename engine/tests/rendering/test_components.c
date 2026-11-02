@@ -730,6 +730,123 @@ static void test_flatlist_scrolls(void)
     printf("PASS: test_flatlist_scrolls\n");
 }
 
+#if ERUI_ONSCREEN_KEYBOARD
+/** @brief What on_keyboard_submit saw. */
+static int s_submit_count;
+static bool s_focused_at_submit;
+
+/** @brief ER_EVENT_SUBMIT_EDITING callback for test_keyboard_done_submits. */
+static void on_keyboard_submit(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)user_data;
+    s_submit_count++;
+    s_focused_at_submit = node->is_focused;
+    assert(strcmp(data->changed_text, "Hi") == 0 && "Submit must carry the input's text");
+}
+
+/** @brief The on-screen keyboard's done key submits the input, then takes the focus away. */
+static void test_keyboard_done_submits(void)
+{
+    init_backend();
+    s_submit_count = 0;
+    s_focused_at_submit = false;
+
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_auto();
+    p.width = 320;
+    p.height = 240;
+    er_node_set_props(root, &p);
+
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.editable = 1;
+    er_node_set_props(ti, &p);
+    er_event_set(ti, ER_EVENT_SUBMIT_EDITING, on_keyboard_submit, NULL);
+    er_tree_append_child(root, ti);
+    er_tree_set_root(root);
+    er_text_input_set_text(ti, "Hi");
+    er_commit();
+
+    er_text_input_focus(ti);
+    er_commit();
+
+    /* The default layout's done key is in the bottom right corner. */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 310, 235);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 310, 235);
+
+    assert(s_submit_count == 1 && "The done key must submit once");
+    assert(s_focused_at_submit && "The input must still be focused when it submits");
+    assert(!ti->is_focused && "The done key must take the focus away");
+
+    printf("PASS: test_keyboard_done_submits\n");
+}
+
+/** @brief The input a submit made in on_submit_replaces, and the tag of the one it destroyed. */
+static ERNode* s_replacement;
+static uint16_t s_replaced_tag;
+
+/** @brief ER_EVENT_SUBMIT_EDITING callback that swaps the input for a new one, which takes the focus. */
+static void on_submit_replaces(ERNode* node, const EREventData* data, void* user_data)
+{
+    (void)data;
+    ERNode* root = user_data;
+    s_replaced_tag = node->tag;
+    er_tree_remove_child(root, node);
+    er_node_destroy(node);
+    s_replacement = er_node_create(ER_NODE_TEXT_INPUT);
+    ERProps p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.editable = 1;
+    er_node_set_props(s_replacement, &p);
+    er_tree_append_child(root, s_replacement);
+    er_text_input_focus(s_replacement);
+}
+
+/** @brief The done key leaves alone an input that took the focus while submitting, even one on the old input's tag. */
+static void test_keyboard_done_keeps_a_new_focus(void)
+{
+    init_backend();
+    s_replacement = NULL;
+
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps p = props_auto();
+    p.width = 320;
+    p.height = 240;
+    er_node_set_props(root, &p);
+
+    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
+    p = props_auto();
+    p.width = 200;
+    p.height = 36;
+    p.editable = 1;
+    er_node_set_props(ti, &p);
+    er_event_set(ti, ER_EVENT_SUBMIT_EDITING, on_submit_replaces, root);
+    er_tree_append_child(root, ti);
+    er_tree_set_root(root);
+    er_commit();
+
+    er_text_input_focus(ti);
+    er_commit();
+
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, 310, 235);
+    embedded_renderer_touch(0, ER_TOUCH_UP, 310, 235);
+
+    assert(s_replacement && "The done key must submit");
+    assert(s_replacement->tag == s_replaced_tag && "The new input must reuse the old one's tag");
+    assert(s_replacement->is_focused && "The new input must keep the focus");
+
+    er_text_input_blur();
+    printf("PASS: test_keyboard_done_keeps_a_new_focus\n");
+}
+#endif
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -747,6 +864,10 @@ int main(void)
     test_text_input_secure();
     test_text_input_read_only();
     test_text_input_destroyed_while_focused();
+#if ERUI_ONSCREEN_KEYBOARD
+    test_keyboard_done_submits();
+    test_keyboard_done_keeps_a_new_focus();
+#endif
     test_modal_visible();
     test_flatlist_scrolls();
 

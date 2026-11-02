@@ -17,8 +17,8 @@ A scaffolded copy has `npm run dev` (the browser simulator), `npm run dev:device
 board), `npm run build` (Flow A, `dist/app.erpkg`) and `npm run build:aot` (Flow B, `dist/app.erpkg` for
 every panel size). Inside the repository, `npm run sim -- thermostat` and
 `npm run pack -- …` from `packages/embedded-react` build a demo against the in-repo library with no
-install. `npm run aot -- thermostat --package` does too. Without `--package` it writes the C output for one
-panel, by default 800×480: `npm run aot -- thermostat --screen 240x320`.
+install. `npm run aot -- thermostat` does too, writing a Flow B package, and `--screen 240x320` keeps only the
+layouts that size picks.
 
 ## Thermostat
 
@@ -41,7 +41,7 @@ from a 1280×800 tablet down to the 240×320 panel on a no-PSRAM ESP32:
 - `App.jsx` picks the layout and owns the model, and is the whole app in Flow B. COOL and HEAT each keep their
   own setpoint; AUTO's pair is held 4 °F apart by pushing the far end along.
 - `RichApp.jsx` (Flow A only) is the `split` and `stack` layouts with the imperative drag dial, the 14-day
-  weather panel and the theme switch. `index.jsx` picks it on those panels.
+  weather panel, and the theme switch. `index.jsx` picks it on those panels.
 - `components/dial.jsx` is one `<Dial>` node. The engine tracks the finger, quantises to `step`,
   latches the nearer setpoint in AUTO, and repaints only what moved. The centre number is updated
   imperatively with `updateText`, so a move costs no React work; state is committed on release.
@@ -56,8 +56,8 @@ from a 1280×800 tablet down to the 240×320 panel on a no-PSRAM ESP32:
 - The settings sheet offers units only. A live theme switch would require every colour in the tree to
   be a ternary of literals, so the theme is baked at build time.
 - AUTO's pair renders as one `<Text>` (`59°-76°`) rather than two tappable numbers: a `<Text>` lowers
-  to a single `snprintf`, so that is one node against four, and the CYD has little node headroom (40
-  of 44).
+  to a single formatted string, so that is one node against four, and the CYD has little node headroom (41
+  of 42).
 - The centre readout is state-driven rather than imperative. The drag itself is native in both
   flows.
 
@@ -71,8 +71,7 @@ A two-page swipe pager for a small portrait display, built for the
 battery, and HEART and STEPS cards; and a bubble level whose dot rolls with the board's tilt. Swipe
 right-to-left, or flick, to change page. With no RTC on the board, the clock starts at 12:00 AM and
 counts from a 1 Hz `setInterval`. **Steps and the level are real** on the RP2040: they read
-`useHostValue(0)`, which the board's IMU writes through the generated `er_app_set_steps`,
-`er_app_set_dotx` and `er_app_set_doty` setters. In the simulator they stay at their initial values.
+`useHostValue(0)`, which the board's IMU writes through `erb_input_set_int()`. In the simulator they stay at their initial values.
 
 **The swipe** is a `PanResponder` on a transparent overlay, driving a dynamic `marginLeft` on a
 480-wide track, with a ~30 fps interval easing to the settled page on release. It works in both

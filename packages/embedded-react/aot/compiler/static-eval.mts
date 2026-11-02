@@ -98,7 +98,7 @@ export function evalStaticOrThrow(
 /**
  * Folds an expression to the value JS would give it when every name it reads is a compile-time constant.
  * Styles and state initial values fold through here. A caller that can also handle a runtime value catches
- * the error thrown on anything dynamic (a state reference, say) and emits C instead.
+ * the error thrown on anything dynamic (a state reference, say) and lowers it instead.
  *
  * A value derived from the panel size (see BootValue) folds by `mode`: `fold` takes what it is on the build's
  * panel and records that as an assumption the panel at boot must meet; `boot` keeps it as a boot value, which
@@ -505,7 +505,7 @@ function binary(operator: string, left: any, right: any): unknown {
 
 /**
  * `scope` minus every name `env` binds at RUNTIME — locals, state, refs, animated values, and the event /
- * gesture params of the handler being compiled. emitExpr resolves those before env.consts, so a fold
+ * gesture params of the handler being compiled. lowerExpr resolves those before env.consts, so a fold
  * that consulted the raw scope would silently swap a module const in for the value the code actually
  * uses. Every env-driven constant fold goes through this; the JSX-side folds keep the same rule by
  * deleting a name from their scope copy when they bind it (see emitComponent / emitDynamicMap).

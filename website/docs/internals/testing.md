@@ -79,45 +79,28 @@ not call `compileToBytecode`: the simulator wasm is not built in CI's unit job.
 
 ## The AOT compiler
 
-`aot/__tests__/` runs under `npm test`: `compile` covers lowering case by case, `date-now` the
-64-bit time rules, `text-lowering` the `snprintf` diffing, `typescript` the TS entry path,
-`demos.smoke` compiles the thermostat and the watch face at their board sizes and the two starter
-templates at 240×320, and `cc-compile.smoke` hands the generated C to the system compiler with
-`-fsyntax-only -Wall`, which catches the class of error a C compiler rejects but the generator does
-not, such as a pointer-versus-int ternary from a mixed text expression. A separate CI job compiles
-the watch face and the thermostat's `solo` layout and syntax-checks the output with `gcc`, which also
-evaluates the engine version `_Static_assert`.
+`aot/__tests__/` runs under `npm test`: `compile` covers what the compiler refuses case by case, `date-now` the
+64-bit time rules, `typescript` the TS entry path, `package` the package it writes, `layouts` how it finds an app's
+layouts, and `demos.smoke` compiles the thermostat and the watch face and the two starter templates.
 
 The starters are a guardrail: a newcomer's first build must compile ahead of time and use only baked
 font sizes, so the smoke test asserts both. Changing the template means keeping those green.
 
-A refactor of the compiler must leave its output exactly as it was, and the unit tests only assert
-fragments of it. Record a baseline before the change and compare after each step:
+## Flow B packages against golden images
 
-```bash
-cd packages/embedded-react
-npm run aot:baseline -- --ref HEAD   # without --ref: the working tree as it is now
-npm run aot:same                     # compiles the same inputs again; prints the first difference
-```
-
-The baseline is every `compileSource` call the AOT tests make plus both demos at each board size,
-with the C each one produced or the error it threw. When a change to the output is intended (a
-reworded error, say), check that `aot:same` shows only that change, then record a new baseline.
-
-## Flow B packages against the C output
-
-`npm run erb:parity` compiles each scenario twice, to `app.gen.c` and to a Flow B package, and
-`tools/erb-parity` builds a headless host around each: the C app, and the Flow B runtime loading the
-package. Both render through the software backend with no window, run the scenario's taps, and must
-end on the same pixels. A frame that differs is written as PNGs (C, VM, and a diff) under
-`tools/erb-parity/build/out`. Each package's resource report is printed as it is built. A demo's
-package has a layout for each of its boards' panels, and its scenarios run at each of them. Others build the
-package with no size named, then run that one package at each board's size and at sizes nothing else names. Packages are
+`npm run erb:frames` compiles small test apps in `test/erb-frames/fixtures` to Flow B packages, and `tools/erb-frames` builds a headless host around
+the Flow B runtime. It renders through the software backend with no window, runs the scenario's taps, and must end on
+the scenario's image in `test/erb-frames/golden`, with each channel allowed to be off by one, since float rounding
+differs between machines. A frame that differs is written as PNGs (frame, golden, and a diff) under
+`tools/erb-frames/build/out`, which CI uploads when the job fails. When a change to the frames is intended, check them,
+then run `npm run erb:frames:record [filter]`. Each package's resource report is printed as it is built. Some scenarios build the
+package with no size named, or with named panels, then run that one package at each size. Packages are
 debug builds, so the runtime checks each one's debug table as it loads it; a few scenarios build for
-release instead.
+release instead. It needs CMake and a C compiler, and CI runs it.
 
-A scenario the package output can't lower yet is skipped with the reason, so the list shows how far
-the package output has come. It needs CMake and a C compiler, and CI runs it.
+Each app exercises one feature and never changes, so a frame that differs means the compiler, runtime or engine
+changed. The demos stay out of it, since they change. A new feature, or one no app covers, gets a new app and new
+scenarios; check its images by eye before committing them.
 
 The compiler's copy of the package format is held to `runtime/erb_format.h`, `runtime/erb_props.c`
 and `er_scene.h` by `aot/__tests__/package-format.unit.test.js`.
@@ -128,7 +111,7 @@ and `er_scene.h` by `aot/__tests__/package-format.unit.test.js`.
 on the engine and the software backend, with tapping, typing, and reloads, under ASan and UBSan. CI runs
 it for five minutes on every push and pull request, and any crash, hang, or sanitizer report fails the job.
 
-The corpus is in the repo. Its seeds are both demos and each parity fixture; `npm run erb:corpus` rewrites
+The corpus is in the repo. Its seeds are both demos and each frame-test app; `npm run erb:corpus` rewrites
 them after a format change, and the job fails when one stops loading. A failure's input goes in
 `corpus/regressions/` with its fix. The tool's
 [README](https://github.com/TheMasterCoder007/embedded-react/blob/master/tools/erb-fuzz/README.md) covers
@@ -138,7 +121,7 @@ running it and replaying a failure, which works on a Mac too.
 
 `npm run parity` renders the same demo through both flows and asserts the framebuffers match
 within a small per-pixel tolerance. It opens real SDL windows, so it needs a display and does not run
-in CI. Flow A packs the demo into a container and renders it through the desktop host; Flow B compiles it to C, rebuilds the AOT desktop host, and renders that. Optional taps
+in CI. Flow A packs the demo into a container and renders it through the desktop host; Flow B compiles it to a package, which the AOT desktop host loads and renders. Optional taps
 drive both through the same interaction, so the dynamic state is compared too. Because the engine, fonts,
 and backend are shared, a correct demo renders byte-identically, and any difference is a real Flow A
 to Flow B divergence; the harness is how an animated-transform binding bug was once caught. Each
@@ -170,9 +153,8 @@ on the board), so a claim about speed is a claim about a board.
 
 ## What CI runs
 
-Every push and pull request runs seven jobs, all required to merge: **JS tests + version drift**
+Every push and pull request runs six jobs, all required to merge: **JS tests + version drift**
 (`npm test`, `npm run typecheck` and `sync-version --check`), **Engine build + ctests** (the six flag passes), **QuickJS
 bridge build + heap-accounting test** (two allocator builds, each with the runtime and bytecode
-tiers), **AOT compile smoke** (generated C through `gcc`), **Flow B package vs C output** (`npm run
-erb:parity`), **Fuzz the package loader and VM**, and **Consumer smoke**. The docs site has
+tiers), **Flow B golden images** (`npm run erb:frames`), **Fuzz the package loader and VM**, and **Consumer smoke**. The docs site has
 its own workflow that builds on a pull request and deploys on `master`.

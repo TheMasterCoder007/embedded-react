@@ -28,7 +28,7 @@ import {
 //   • page 1: a bubble level (a dot that rolls with the board's tilt, from the QMI8658 accelerometer)
 // Swipe right-to-left to drag the level page over; release, and it eases to settle as the active page.
 //
-// Built for Flow B (AOT) — compiles to C, no JS on the device. The pager rides only AOT-supported
+// Built for Flow B (AOT) — compiles to a package, no JS on the device. The pager rides only AOT-supported
 // primitives: a dynamic `marginLeft` on a 480-wide track follows the finger during the drag and is
 // eased toward the settled page by a ~30 fps interval; a transparent full-screen overlay captures the
 // swipe with a `PanResponder`, which the AOT lowers onto the engine's own C gesture-responder system
@@ -173,8 +173,8 @@ function LevelPage({dotx, doty}) {
 export function App() {
   const [t, setT] = useState(START_TIME); // seconds since midnight
   const [hr, setHr] = useState(66); // heart rate — a gentle random walk-in [61, 68]
-  const steps = useHostValue(0); // real step count (IMU pedometer, via er_app_set_steps)
-  const dotx = useHostValue(0); // level dot offset in px, from the accel tilt (via er_app_set_dotx/doty)
+  const steps = useHostValue(0); // real step count (IMU pedometer, via erb_input_set_int)
+  const dotx = useHostValue(0); // level dot offset in px, from the accel tilt (via erb_input_set_int)
   const doty = useHostValue(0);
 
   const [page, setPage] = useState(0); // settled page (0 = watch, 1 = level)

@@ -21,14 +21,14 @@
 //   Flow A (interpreted): pack-container.mjs bundles demos/<demo>/index.jsx, precompiles it to QuickJS
 //                         bytecode and bakes its images/fonts into dist/app.erpkg → the QuickJS desktop
 //                         host (examples/linux) renders that headlessly (ER_SHOT) to a BMP.
-//   Flow B (AOT):         aot/compile.mts compiles demos/<demo>/App.jsx → C, the AOT host
-//                         (examples/linux-aot) is rebuilt and renders headlessly (ER_AOT_SHOT) to a BMP.
+//   Flow B (AOT):         aot/compile.mts compiles demos/<demo>/App.jsx → dist/app.erpkg, and the AOT host
+//                         (examples/linux-aot) loads it and renders headlessly (ER_AOT_SHOT) to a BMP.
 //
 // Flow A renders from a CONTAINER, not from the bare dist/app.bundle.js, because the desktop host only
 // registers baked assets when it loads one (examples/linux ships no assets of its own — it mirrors the
 // device's uploaded-config model). Handed a plain .js path it loads source and nothing else, so every
-// <Image> in the demo would simply be absent from Flow A's frame while Flow B — which links the assets
-// aot/compile.mts bakes into assets.generated.c — painted it. That also puts Flow A on the bytecode the
+// <Image> in the demo would simply be absent from Flow A's frame while Flow B — whose package carries the
+// assets aot/compile.mts bakes — painted it. That also puts Flow A on the bytecode the
 // MCU actually runs, which is the path this harness means to model.
 //
 // Then the two BMPs are pixel-diffed. Because the engine, fonts, and backend are shared, a correct demo
@@ -41,9 +41,8 @@
 // window) so they render the same branch at the same dimensions.
 //
 // Both hosts are run with ER_NO_HIDPI=1 so a Retina display can't scale that size out from under them.
-// The flows read "the screen" at different times — Flow A at runtime (it would see the 2x framebuffer and
-// lay out to fill it), Flow B at compile time (its layout is folded from ER_AOT_SCREEN_W/H, so it would
-// draw a 320x480 app in the corner of a 640x960 root) — so a 2x window compares two different layouts.
+// Both flows read "the screen" at runtime, and a 2x framebuffer would have each lay out to fill it, not to
+// the scenario's size — and Flow B's package, compiled for that size alone, would refuse it.
 // The rendered frames are size-checked below to keep them from silently regressing.
 //
 // This is a DEV-MACHINE harness: it opens real SDL windows (the desktop backend has no headless renderer),
@@ -70,6 +69,7 @@ const FLOW_B_EXE = join(
   `examples/linux-aot/build/embedded-react-desktop-aot${EXE}`,
 );
 const FLOW_B_BUILD = join(ROOT, 'examples/linux-aot/build');
+// Flow A's pack and Flow B's compile both write here, each read before the other runs.
 const CONTAINER = join(JS_DIR, 'dist/app.erpkg');
 const PACK_MJS = join(JS_DIR, 'pack-container.mjs');
 const AOT_COMPILER = join(JS_DIR, 'aot/compile.mts');
@@ -191,10 +191,9 @@ function runScenario(s) {
     ...(s.taps ? {ER_TAPS: s.taps} : {}),
   });
 
-  // --- Flow B: compile (AOT) → rebuild the baked host → render ---
+  // --- Flow B: compile (AOT) → load the package in the host → render ---
   run(process.execPath, [AOT_COMPILER, s.demo], screenEnv);
-  run('cmake', ['--build', FLOW_B_BUILD], screenEnv);
-  run(FLOW_B_EXE, [], {
+  run(FLOW_B_EXE, [CONTAINER], {
     ER_AOT_SHOT: outB,
     ...screenEnv,
     ER_NO_HIDPI: '1',
@@ -248,6 +247,7 @@ function main() {
     process.exit(2);
   }
   mkdirSync(OUT_DIR, {recursive: true});
+  run('cmake', ['--build', FLOW_B_BUILD]);
 
   console.log(
     `${ANSI.bold}Flow A ↔ Flow B parity${ANSI.reset}  (${scenarios.length} scenario(s))\n`,

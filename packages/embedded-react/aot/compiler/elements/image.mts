@@ -22,10 +22,10 @@ import {aotError} from '../diagnostics.mts';
 import {at} from './props.mts';
 import {evalStatic, evalStaticOr} from '../static-eval.mts';
 import {lowerExpr} from '../expressions.mts';
-import {attrExpr, argbLiteral} from '../style-text.mts';
+import {attrExpr, argbValue} from '../style-text.mts';
 import type * as t from '@babel/types';
 import type {Out} from '../out.mts';
-import type {Env} from '../types.mts';
+import type {EngineName, Env} from '../types.mts';
 import type {IrExpr} from '../ir/expressions.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -39,16 +39,16 @@ interface ImageAttrs {
   /** The asset's name when the source is state-driven. */
   imageNameDyn: IrExpr | null;
   /** The ER_RESIZE_* constant. */
-  resizeMode: string | null;
+  resizeMode: EngineName | null;
   /** The tint's ARGB literal. */
-  tintColor: string | null;
+  tintColor: number | null;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-const RESIZE_MODES: Record<string, string> = {
+const RESIZE_MODES: Record<string, EngineName> = {
   cover: 'ER_RESIZE_COVER',
   contain: 'ER_RESIZE_CONTAIN',
   stretch: 'ER_RESIZE_STRETCH',
@@ -132,7 +132,7 @@ export function resolveImageAttrs(
       ? attrExpr(srcAttr)
       : null;
   let imageName: string | null = null; // static asset name (a literal), OR …
-  let imageNameDyn: IrExpr | null = null; // … a runtime string (a list-item field / state) set in app_update.
+  let imageNameDyn: IrExpr | null = null; // … a runtime string (a list-item field / state) set in the update.
 
   // Resolve static sources immediately and mark imported assets for baking.
   if (srcExpr) {
@@ -170,7 +170,7 @@ export function resolveImageAttrs(
   }
 
   // Resolve the optional resize mode and validate it against the supported engine modes.
-  let resizeMode: string | null = null;
+  let resizeMode: EngineName | null = null;
   const rmAttr = find('resizeMode');
   if (rmAttr) {
     const rm = evalStaticOr(attrExpr(rmAttr), env, null);
@@ -188,7 +188,7 @@ export function resolveImageAttrs(
   }
 
   // Resolve the optional tint color into the ARGB literal expected by the engine.
-  let tintColor: string | null = null;
+  let tintColor: number | null = null;
   const tcAttr = find('tintColor');
   if (tcAttr) {
     const tc = evalStaticOr(attrExpr(tcAttr), env, null);
@@ -202,7 +202,7 @@ export function resolveImageAttrs(
       );
     }
 
-    tintColor = argbLiteral(tc);
+    tintColor = argbValue(tc);
   }
 
   return {imageName, imageNameDyn, resizeMode, tintColor};

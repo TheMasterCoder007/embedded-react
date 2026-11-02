@@ -19,21 +19,26 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {NAMED_COLORS} from '../src/embedded-react/named-colors.js';
-import type {StaticAssign} from './compiler/types.mts';
+import {numberProblem} from './compiler/check.mts';
+import type {
+  EngineName,
+  PropConstant,
+  StaticAssign,
+} from './compiler/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** A table from an RN enum value (e.g. `'flex-start'`) to its ER_* C constant. */
-type EnumTable = Record<string, string>;
+/** A table from an RN enum value (e.g. `'flex-start'`) to its ER_* constant. */
+type EnumTable = Record<string, EngineName>;
 
 /** Lowers one style value to the ERProps writes it stands for. */
 type StyleLowering = (value: unknown) => StaticAssign[];
 
 /**
- * A style key whose value can be state-driven, and how app_update() lowers its runtime value: `num` assigns a
- * C number, `opacity` scales 0–1 to 0–255, `color` takes a (ternary of) color literal(s), and `enum` maps a
+ * A style key whose value can be state-driven, and how an update lowers its runtime value: `num` assigns a
+ * number, `opacity` scales 0–1 to 0–255, `color` takes a (ternary of) color literal(s), and `enum` maps a
  * (ternary of) string literal(s) through `table`.
  */
 export type DynamicStyleField =
@@ -123,7 +128,7 @@ const NUM_FIELDS: Record<string, string> = {
 
 /**
  * Enum style keys that can be state-driven: the value (a string literal or a ternary of them) lowers to the
- * matching ER_* constant via its table. Changing one in app_update re-runs layout (props_hash covers it).
+ * matching ER_* constant via its table. Changing one in an update re-runs layout (props_hash covers it).
  */
 const ENUM_FIELDS: Record<string, {field: string; table: EnumTable}> = {
   flexDirection: {field: 'flex_direction', table: FLEX_DIRECTION},
@@ -135,7 +140,7 @@ const ENUM_FIELDS: Record<string, {field: string; table: EnumTable}> = {
 };
 
 /**
- * Every style key whose value can be state-driven, with its ERProps field and how app_update() lowers it (see
+ * Every style key whose value can be state-driven, with its ERProps field and how an update lowers it (see
  * DynamicStyleField). Keys absent here (such as the `flex` shorthand, `flexBasis`, the four insets and
  * `fontWeight`) can only be static.
  */
@@ -215,14 +220,20 @@ export function parseColorValue(color: unknown): number {
 }
 
 /**
- * Formats an ARGB int as a C unsigned hex literal, e.g. 0xFF0F172Au.
+ * A number for a float field, checked.
  *
- * @param color  A color string (see parseColorValue).
+ * @param rawValue  The value; anything `Number()` converts to a finite float.
  *
- * @returns Its C literal.
+ * @returns The number.
  */
-export function colorLiteral(color: unknown): string {
-  return `0x${parseColorValue(color).toString(16).toUpperCase().padStart(8, '0')}u`;
+export function floatConstant(rawValue: unknown): number {
+  // The check pass refuses what a float cannot hold; a value that reaches here unchecked fails the same way.
+  const problem = numberProblem(rawValue);
+  if (problem) {
+    throw problem;
+  }
+
+  return Number(rawValue);
 }
 
 /**
@@ -235,7 +246,7 @@ export function colorLiteral(color: unknown): string {
  */
 const enumKey =
   (table: EnumTable, name: string) =>
-  (value: unknown): string => {
+  (value: unknown): EngineName => {
     const constant = Object.hasOwn(table, value as string)
       ? table[value as string]
       : undefined;
@@ -249,20 +260,21 @@ const enumKey =
   };
 
 /**
- * A pixel dimension as C.
+ * A pixel dimension as a constant.
  *
  * @param value  The style value; must be a finite number.
  *
  * @returns It rounded to a whole pixel.
  */
-const dimension = (value: unknown): string => {
+const dimension = (value: unknown): PropConstant => {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new Error(
       `expected a numeric dimension, got ${JSON.stringify(value)}`,
     );
   }
 
-  return String(Math.round(value));
+  // Adding 0 turns -0 into 0, whose bits a float field keeps.
+  return Math.round(value) + 0;
 };
 
 /**
@@ -287,85 +299,82 @@ const pctOrPx =
       }
 
       // The engine reads a 0.0 percentage as "not set", so lower 0% to the pixel field, where 0 means the same.
-      if (percent === 0) return [{field: pxField, expr: '0'}];
+      if (percent === 0) return [{field: pxField, value: 0}];
 
-      // A valid C float literal needs a decimal point — `50f` is a syntax error, `50.0f` is not.
-      const floatLiteral = Number.isInteger(percent)
-        ? `${percent}.0f`
-        : `${percent}f`;
-
-      return [{field: pctField, expr: floatLiteral}];
+      return [{field: pctField, value: percent}];
     }
 
-    return [{field: pxField, expr: dimension(value)}];
+    return [{field: pxField, value: dimension(value)}];
   };
 
 /**
- * Per-style-key lowering. Each entry maps a style value to one or more { field, expr } ERProps writes
- * (field = ERProps C member, expr = C source for the value). `flex` expands to several fields.
+ * Per-style-key lowering. Each entry maps a style value to one or more { field, value } ERProps writes
+ * (field = ERProps member, value = the constant). `flex` expands to several fields.
  */
 const KEYS: Record<string, StyleLowering> = {
   // Layout
   width: pctOrPx('width', 'width_pct'),
   height: pctOrPx('height', 'height_pct'),
   flexBasis: pctOrPx('flex_basis', 'flex_basis_pct'),
-  minWidth: width => [{field: 'min_width', expr: dimension(width)}],
-  maxWidth: width => [{field: 'max_width', expr: dimension(width)}],
-  minHeight: height => [{field: 'min_height', expr: dimension(height)}],
-  maxHeight: height => [{field: 'max_height', expr: dimension(height)}],
-  padding: padding => [{field: 'padding', expr: dimension(padding)}],
+  minWidth: width => [{field: 'min_width', value: dimension(width)}],
+  maxWidth: width => [{field: 'max_width', value: dimension(width)}],
+  minHeight: height => [{field: 'min_height', value: dimension(height)}],
+  maxHeight: height => [{field: 'max_height', value: dimension(height)}],
+  padding: padding => [{field: 'padding', value: dimension(padding)}],
   paddingHorizontal: padding => [
-    {field: 'padding_horizontal', expr: dimension(padding)},
+    {field: 'padding_horizontal', value: dimension(padding)},
   ],
   paddingVertical: padding => [
-    {field: 'padding_vertical', expr: dimension(padding)},
+    {field: 'padding_vertical', value: dimension(padding)},
   ],
-  paddingLeft: padding => [{field: 'padding_left', expr: dimension(padding)}],
-  paddingTop: padding => [{field: 'padding_top', expr: dimension(padding)}],
-  paddingRight: padding => [{field: 'padding_right', expr: dimension(padding)}],
+  paddingLeft: padding => [{field: 'padding_left', value: dimension(padding)}],
+  paddingTop: padding => [{field: 'padding_top', value: dimension(padding)}],
+  paddingRight: padding => [
+    {field: 'padding_right', value: dimension(padding)},
+  ],
   paddingBottom: padding => [
-    {field: 'padding_bottom', expr: dimension(padding)},
+    {field: 'padding_bottom', value: dimension(padding)},
   ],
-  margin: margin => [{field: 'margin', expr: dimension(margin)}],
+  margin: margin => [{field: 'margin', value: dimension(margin)}],
   marginHorizontal: margin => [
-    {field: 'margin_horizontal', expr: dimension(margin)},
+    {field: 'margin_horizontal', value: dimension(margin)},
   ],
   marginVertical: margin => [
-    {field: 'margin_vertical', expr: dimension(margin)},
+    {field: 'margin_vertical', value: dimension(margin)},
   ],
-  marginLeft: margin => [{field: 'margin_left', expr: dimension(margin)}],
-  marginTop: margin => [{field: 'margin_top', expr: dimension(margin)}],
-  marginRight: margin => [{field: 'margin_right', expr: dimension(margin)}],
-  marginBottom: margin => [{field: 'margin_bottom', expr: dimension(margin)}],
-  gap: gap => [{field: 'gap', expr: dimension(gap)}],
-  rowGap: gap => [{field: 'row_gap', expr: dimension(gap)}],
-  columnGap: gap => [{field: 'column_gap', expr: dimension(gap)}],
-  flexGrow: grow => [{field: 'flex_grow', expr: dimension(grow)}],
-  flexShrink: shrink => [{field: 'flex_shrink', expr: dimension(shrink)}],
+  marginLeft: margin => [{field: 'margin_left', value: dimension(margin)}],
+  marginTop: margin => [{field: 'margin_top', value: dimension(margin)}],
+  marginRight: margin => [{field: 'margin_right', value: dimension(margin)}],
+  marginBottom: margin => [{field: 'margin_bottom', value: dimension(margin)}],
+  gap: gap => [{field: 'gap', value: dimension(gap)}],
+  rowGap: gap => [{field: 'row_gap', value: dimension(gap)}],
+  columnGap: gap => [{field: 'column_gap', value: dimension(gap)}],
+  flexGrow: grow => [{field: 'flex_grow', value: dimension(grow)}],
+  flexShrink: shrink => [{field: 'flex_shrink', value: dimension(shrink)}],
   flexDirection: direction => [
     {
       field: 'flex_direction',
-      expr: enumKey(FLEX_DIRECTION, 'flexDirection')(direction),
+      value: enumKey(FLEX_DIRECTION, 'flexDirection')(direction),
     },
   ],
   alignItems: alignment => [
-    {field: 'align_items', expr: enumKey(ALIGN, 'alignItems')(alignment)},
+    {field: 'align_items', value: enumKey(ALIGN, 'alignItems')(alignment)},
   ],
   alignSelf: alignment => [
-    {field: 'align_self', expr: enumKey(ALIGN, 'alignSelf')(alignment)},
+    {field: 'align_self', value: enumKey(ALIGN, 'alignSelf')(alignment)},
   ],
   justifyContent: justification => [
     {
       field: 'justify_content',
-      expr: enumKey(JUSTIFY, 'justifyContent')(justification),
+      value: enumKey(JUSTIFY, 'justifyContent')(justification),
     },
   ],
   // Positioning: `position: 'absolute'` takes a node out of flow; left/top/right/bottom are its anchors.
   position: position => [
-    {field: 'position', expr: enumKey(POSITION, 'position')(position)},
+    {field: 'position', value: enumKey(POSITION, 'position')(position)},
   ],
   display: display => [
-    {field: 'display', expr: enumKey(DISPLAY, 'display')(display)},
+    {field: 'display', value: enumKey(DISPLAY, 'display')(display)},
   ],
   left: pctOrPx('left', 'left_pct'),
   top: pctOrPx('top', 'top_pct'),
@@ -376,65 +385,67 @@ const KEYS: Record<string, StyleLowering> = {
     const factor = Number(flexValue);
     if (factor > 0) {
       return [
-        {field: 'flex_grow', expr: dimension(factor)},
-        {field: 'flex_shrink', expr: '1'},
-        {field: 'flex_basis', expr: '0'},
+        {field: 'flex_grow', value: dimension(factor)},
+        {field: 'flex_shrink', value: 1},
+        {field: 'flex_basis', value: 0},
       ];
     }
     if (factor === 0) {
       return [
-        {field: 'flex_grow', expr: '0'},
-        {field: 'flex_shrink', expr: '0'},
+        {field: 'flex_grow', value: 0},
+        {field: 'flex_shrink', value: 0},
       ];
     }
     return [
-      {field: 'flex_grow', expr: '0'},
-      {field: 'flex_shrink', expr: '1'},
+      {field: 'flex_grow', value: 0},
+      {field: 'flex_shrink', value: 1},
     ];
   },
 
   // View visual
   backgroundColor: color => [
-    {field: 'background_color', expr: colorLiteral(color)},
+    {field: 'background_color', value: parseColorValue(color)},
   ],
-  borderRadius: radius => [{field: 'border_radius', expr: dimension(radius)}],
+  borderRadius: radius => [{field: 'border_radius', value: dimension(radius)}],
   // Per-corner radii; the engine reads 0 in one of these as "use borderRadius" (same as Flow A).
   borderTopLeftRadius: radius => [
-    {field: 'border_top_left_radius', expr: dimension(radius)},
+    {field: 'border_top_left_radius', value: dimension(radius)},
   ],
   borderTopRightRadius: radius => [
-    {field: 'border_top_right_radius', expr: dimension(radius)},
+    {field: 'border_top_right_radius', value: dimension(radius)},
   ],
   borderBottomRightRadius: radius => [
-    {field: 'border_bottom_right_radius', expr: dimension(radius)},
+    {field: 'border_bottom_right_radius', value: dimension(radius)},
   ],
   borderBottomLeftRadius: radius => [
-    {field: 'border_bottom_left_radius', expr: dimension(radius)},
+    {field: 'border_bottom_left_radius', value: dimension(radius)},
   ],
-  borderWidth: width => [{field: 'border_width', expr: dimension(width)}],
-  borderColor: color => [{field: 'border_color', expr: colorLiteral(color)}],
+  borderWidth: width => [{field: 'border_width', value: dimension(width)}],
+  borderColor: color => [
+    {field: 'border_color', value: parseColorValue(color)},
+  ],
   opacity: opacity => [
     {
       field: 'opacity',
-      expr: String(Math.round(Math.max(0, Math.min(1, Number(opacity))) * 255)),
+      value: Math.round(Math.max(0, Math.min(1, Number(opacity))) * 255),
     },
   ],
-  zIndex: zIndex => [{field: 'z_index', expr: dimension(zIndex)}],
+  zIndex: zIndex => [{field: 'z_index', value: dimension(zIndex)}],
 
   // Text
-  color: color => [{field: 'color', expr: colorLiteral(color)}],
-  fontSize: size => [{field: 'font_size', expr: dimension(size)}],
+  color: color => [{field: 'color', value: parseColorValue(color)}],
+  fontSize: size => [{field: 'font_size', value: dimension(size)}],
   fontWeight: weight => [
     {
       field: 'font_weight',
-      expr: weight === 'bold' || Number(weight) >= 600 ? '1' : '0',
+      value: weight === 'bold' || Number(weight) >= 600 ? 1 : 0,
     },
   ],
   lineHeight: lineHeight => [
-    {field: 'line_height', expr: dimension(lineHeight)},
+    {field: 'line_height', value: dimension(lineHeight)},
   ],
   letterSpacing: spacing => [
-    {field: 'letter_spacing', expr: dimension(spacing)},
+    {field: 'letter_spacing', value: dimension(spacing)},
   ],
 };
 
@@ -452,9 +463,8 @@ export const STYLE_KEYS = Object.keys(KEYS);
 
 /**
  * Lowers one flattened style object to a list of ERProps field assignments. This is the build-time mirror
- * of what native_ui_bridge.c does at runtime in Flow A: the generated C (e.g.
- * `p.background_color = 0xFF0F172Au;`) builds the same prop bags as Flow A, from the same defaults
- * (er_props_default), so both render the same pixels. An unsupported key throws, so the compiler fails
+ * of what native_ui_bridge.c does at runtime in Flow A: the package builds the same prop bags as Flow A,
+ * from the same defaults (er_props_default), so both render the same pixels. An unsupported key throws, so the compiler fails
  * loudly instead of silently dropping a style.
  *
  * @param style  Flattened style (plain key→value; values already statically resolved).

@@ -19,28 +19,28 @@
  *
  * The tree becomes the root template and its constant prop sets. State, refs and values worked out at boot are
  * slots in the arena. Handlers, timer callbacks, effects, the boot function and the update function are
- * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, as app_update() does, sets
+ * bytecode (codegen.mts). The update re-sets a node when a state it reads changed, sets
  * the props of a node that reads only boot values once, in its first pass, and queues the effects.
  *
  * An <Svg> drawing is a tape (vectors.mts): a baked one is committed when its node is built, and the update
- * rebuilds one state drives, after the nodes, as app_update() does. setKeyboardConfig is the keyboard table, which
+ * rebuilds one state drives, after the nodes. setKeyboardConfig is the keyboard table, which
  * the runtime hands the engine at load.
  *
- * Animations run as the C output runs them (animations.mts): each animation a leaf descriptor, each C callback an
+ * Animations (animations.mts): each animation is a leaf descriptor, each on_complete callback an
  * animation-done function, each completion a helper.
  *
  * A list is a pool of rows in the arena. Its `.map` is a row template, built once per row in the update's first
- * pass, as er_app_build() builds every row; a row shows while the list holds it. Rows whose nodes and handlers
+ * pass; a row shows while the list holds it. Rows whose nodes and handlers
  * are the same share a template, and a row handler reads its item through the row it was built for.
  *
  * A PanResponder is a handler for each responder event and a query function for each should-set predicate,
  * bound on each node that spreads it. Its gesture state is slots, kept by its grant, release and terminate
- * handlers as C keeps its statics, and a callback reads the gesture through them and EVT.
+ * handlers, and a callback reads the gesture through them and EVT.
  *
- * Effects run as the C output runs them. An effect runs inside app_update(), so the state it sets shows at
- * the next app_update(), not at once. The VM runs a pass whenever state changed, so a pass that only an
+ * An effect runs inside an update pass, so the state it sets shows at the next pass that isn't its own, not at
+ * once. The VM runs a pass whenever state changed, so a pass that only an
  * effect's write started keeps what changed in a pending flag, and the next pass a handler, a timer or the
- * load started sets it. A dep-driven effect checks its deps itself, when it runs, as app_update() checks
+ * load started sets it. A dep-driven effect checks its deps itself, when it runs,
  * each in turn. The mount effects run one after another, after the first pass; one that set state has the
  * pass after it queue the next.
  */
@@ -64,8 +64,7 @@ import {
   updatedVectorOf,
 } from '../ir/nodes.mts';
 import {nodeReads, vectorReads} from '../ir/reads.mts';
-import {armedFlag} from '../c/functions.mts';
-import {KEY_TYPES, NEVER_HIGHLIGHTED} from '../c/keyboard.mts';
+import {armedFlag} from '../ir/functions.mts';
 import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
 import {Arena} from './arena.mts';
 import {FunctionBuilder, OP} from './bytecode.mts';
@@ -95,10 +94,10 @@ import {ProgramTables} from './tables.mts';
 import {commitDrawing, VectorPlan} from './vectors.mts';
 import type {Slot} from './arena.mts';
 import type {Label, Register} from './bytecode.mts';
-import type {CType, InputText, ProgramSlots} from './codegen.mts';
+import type {ExprType, InputText, ProgramSlots} from './codegen.mts';
 import type {SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
-import type {IrKeyboard} from '../ir/keyboard.mts';
+import type {IrKeyboard, IrKeyKind} from '../ir/keyboard.mts';
 import {lowerCheck} from './checks.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
 import type {IrExpr} from '../ir/expressions.mts';
@@ -165,19 +164,19 @@ interface Pool {
   templates: number[];
 }
 
-/** A dep-driven effect's copy of one dep, and the type C keeps it in. */
+/** A dep-driven effect's copy of one dep, and the type it is kept in. */
 interface DepCopy {
   slot: Slot;
-  type: CType;
+  type: ExprType;
 }
 
 /** What the effects keep between runs, and the passes that run them. */
 interface EffectSlots {
   /** Each dep-driven effect's copy of each dep. */
   copies: Map<IrDepEffect, DepCopy[]>;
-  /** Each state an effect sets, by its slot: set while a change no app_update() has set yet waits. */
+  /** Each state an effect sets, by its slot: set while a change no update has set yet waits. */
   pending: Map<Slot, Slot>;
-  /** The bits that start an app_update(): a handler's or timer's request, the load, and the host. */
+  /** The bits that start an update: a handler's or timer's request, the load, and the host. */
   realBits: Slot[];
   /** The next mount effect the update queues, plus one; 0 for none. */
   mountNext: Slot | null;
@@ -201,7 +200,7 @@ interface Lowering {
   /** Handlers by name and event, in function order. */
   handlers: Map<string, HandlerFunction>;
   bindings: ProgramBinding[];
-  /** Toggled by a handler that set state, so the update runs as app_update() would. */
+  /** Toggled by a handler that set state, so the update runs. */
   requested: Slot | null;
   /** Set only at load: it guards the props the update sets once, and runs the update's first pass. */
   once: Slot | null;
@@ -220,7 +219,18 @@ const MAX_U16 = 0xffff;
 /** The most fields a row has: ROWGET names one in a byte. */
 const MAX_ROW_FIELDS = 255;
 
-/** The span fields a TextSpan spells, in its ABI ids' order. */
+/** Key kind → its ERKeyboardKey type. */
+const KEY_TYPES: Record<IrKeyKind, string> = {
+  char: 'ER_KBD_KEY_CHAR',
+  layer: 'ER_KBD_KEY_LAYER',
+  backspace: 'ER_KBD_KEY_BACKSPACE',
+  done: 'ER_KBD_KEY_DONE',
+};
+
+/** The highlight layer that means "never highlighted". */
+const NEVER_HIGHLIGHTED = 255;
+
+/** A TextSpan's constant fields, in their ABI ids' order. */
 const SPAN_FIELDS = [
   'color',
   'font_size',
@@ -235,7 +245,7 @@ const SPAN_FIELDS = [
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Refuses what the package output can't lower yet, pointing at where it is.
+ * Refuses what a package can't lower yet, pointing at where it is.
  *
  * @param what  What the app uses.
  * @param loc  Where in the source, when it is known.
@@ -338,13 +348,13 @@ function statesSet(stmts: IrStmt[], found: Set<StateRecord>): void {
 }
 
 /**
- * The type C keeps a dep's copy in.
+ * The type a dep's copy is kept in.
  *
  * @param dep  The dep.
  *
- * @returns Its C type.
+ * @returns Its type.
  */
-function depType(dep: IrExpr): CType {
+function depType(dep: IrExpr): ExprType {
   switch (dep.type.kind) {
     case 'bool':
     case 'float':
@@ -357,7 +367,7 @@ function depType(dep: IrExpr): CType {
 }
 
 /**
- * Whether a mount effect sets state, so app_update() runs after it.
+ * Whether a mount effect sets state, so an update runs after it.
  *
  * @param mountEffect  The mount effect.
  *
@@ -488,7 +498,7 @@ function poolsOf(element: IrElement, found: Pool[]): void {
  *
  * @param app  The app.
  * @param tables  The program's tables.
- * @param caps  The C output's buffer sizes, and the timers that run at once.
+ * @param caps  The buffer sizes, and the timers that run at once.
  *
  * @returns The slots, the node handles, and the bookkeeping bits.
  */
@@ -547,24 +557,24 @@ function planSlots(
     const initial = state.bootInitial ? 0 : state.initial;
     const slot = interned
       ? Object.assign(arena.slot(ValueType.enum, 0), {aux: interned.set})
-      : state.cType === 'string'
+      : state.slotKind === 'string'
         ? arena.slot(
             ValueType.string,
             tables.string(String(initial)),
             listStrCap - 1,
           )
-        : state.cType === 'i64'
+        : state.slotKind === 'i64'
           ? arena.slot(
               ValueType.int64,
               tables.constant64(BigInt(Math.trunc(Number(initial)))),
             )
-          : state.cType === 'float'
+          : state.slotKind === 'float'
             ? arena.slot(ValueType.float, floatBits(Number(initial)))
             : arena.slot(
                 state.isBool ? ValueType.bool : ValueType.int,
                 Math.trunc(Number(initial)) | 0,
               );
-    // A host value an effect's deps may read runs app_update() when it is set, as its C setter does.
+    // A host value an effect's deps may read runs an update when it is set.
     if (state.isWatched || (state.host && out.depEffects.length)) {
       arena.track(slot);
     }
@@ -572,7 +582,7 @@ function planSlots(
   }
 
   // A list is a pool of rows, empty at load; the boot function appends its first items. Each row field is
-  // 4-aligned, and a string field holds what C's char array does.
+  // 4-aligned, and a string field holds its cap and a terminator.
   const rows: ProgramRow[] = [];
   for (const state of app.state) {
     if (state.kind !== 'list') {
@@ -630,18 +640,18 @@ function planSlots(
     }
     slots.refs.set(
       ref,
-      ref.cType === 'i64'
+      ref.slotKind === 'i64'
         ? arena.slot(
             ValueType.int64,
             tables.constant64(BigInt(Math.trunc(ref.initial))),
           )
-        : ref.cType === 'float'
+        : ref.slotKind === 'float'
           ? arena.slot(ValueType.float, floatBits(ref.initial))
           : arena.slot(ValueType.int, Math.trunc(ref.initial) | 0),
     );
   }
 
-  // Boot values: C keeps a fraction as a double.
+  // Boot values: a fraction is kept as a double.
   for (const bootSlot of app.boot.slots) {
     const slot =
       bootSlot.type.kind === 'float'
@@ -661,17 +671,17 @@ function planSlots(
     slots.boot.set(bootSlot, slot);
   }
 
-  // The effect locals a cleanup reads, and each effect's armed flag and copy of each dep, kept as C keeps them.
+  // The effect locals a cleanup reads, and each effect's armed flag and copy of each dep.
   for (const decl of out.effectDecls) {
     if (decl.kind === 'local') {
       slots.hoisted.set(
         decl.name,
-        decl.cType === 'string'
+        decl.slotKind === 'string'
           ? arena.slot(ValueType.string, undefined, listStrCap - 1)
           : arena.slot(
-              decl.cType === 'i64'
+              decl.slotKind === 'i64'
                 ? ValueType.int64
-                : decl.cType === 'float'
+                : decl.slotKind === 'float'
                   ? ValueType.float
                   : ValueType.int,
             ),
@@ -717,7 +727,7 @@ function planSlots(
     node.wiring.some(
       wire => wire.kind === 'event' && wire.event === 'ER_EVENT_CHANGE_TEXT',
     );
-  // An updateVector call draws on the node its ref holds: the last one built with it, as C keeps it.
+  // An updateVector call draws on the node its ref holds: the last one built with it.
   const calls: IrUpdateVector[] = [];
   for (const body of bodies(app)) {
     updateVectors(body, calls);
@@ -815,7 +825,7 @@ function planSlots(
       ? arena.track(arena.slot(ValueType.bool))
       : null;
 
-  // A state an effect sets that a node reads waits for the next app_update() in a pending flag.
+  // A state an effect sets that a node reads waits for the next update in a pending flag.
   const effectWrites = new Set<StateRecord>();
   for (const effect of out.depEffects) {
     statesSet(effect.body, effectWrites);
@@ -866,8 +876,8 @@ function planSlots(
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * A node's constant props as a prop set, in the order the C output sets them: its style, then a placeholder,
- * text and image known at compile time.
+ * A node's constant props as a prop set: its style, then a placeholder,
+ * text, and image known at compile time.
  *
  * @param node  The node.
  * @param lowering  The program being lowered.
@@ -877,7 +887,7 @@ function planSlots(
 function constantProps(node: IrNode, lowering: Lowering): ProgramPropEntry[] {
   const {tables} = lowering.slots;
   const entries = node.constantProps.map(prop =>
-    constantPropEntry(prop.field, prop.expr),
+    constantPropEntry(prop.field, prop.value),
   );
   if (node.placeholder != null) {
     entries.push(
@@ -907,7 +917,7 @@ function constantProps(node: IrNode, lowering: Lowering): ProgramPropEntry[] {
 /**
  * The handler function an event on a node runs, made the first time. A handler bound to two events is one
  * function per event, since a function's kind is the event it is entered with, and an onChangeText one per
- * input, since it reads its own. Each row has its own handler, as C has; rows whose handlers have the same
+ * input, since it reads its own. Each row has its own handler; rows whose handlers have the same
  * code share one function, so they can share a template.
  *
  * @param name  The handler.
@@ -970,8 +980,8 @@ function handlerFunction(
 }
 
 /**
- * A PanResponder's bindings: a handler for each of its events, then a query function for each predicate, as
- * the C output wires them. Each function is made once, however many nodes spread the responder.
+ * A PanResponder's bindings: a handler for each of its events, then a query function for each predicate.
+ * Each function is made once, however many nodes spread the responder.
  *
  * @param pan  The responder.
  * @param lowering  The program being lowered.
@@ -1027,7 +1037,7 @@ function responderBindings(
 /**
  * An element and everything under it as template nodes, each before its children. A conditional's branches
  * are all built, and the update shows the chosen one. A list's rows are row templates of their own. What a node
- * needs that the package output can't lower yet is refused at the node's element.
+ * needs that a package can't lower yet is refused at the node's element.
  *
  * @param element  The element.
  * @param lowering  The program being lowered.
@@ -1083,7 +1093,7 @@ function templateNodes(
           : [],
     );
 
-    // A node the update sets starts with no props, as er_app_build() leaves it.
+    // A node the update sets starts with no props.
     const handle = inRow
       ? lowering.rowHandles.get(node)?.array
       : lowering.handles.get(node);
@@ -1146,23 +1156,6 @@ function rowTemplates(lowering: Lowering): void {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * A C string literal's text, as the C output spells a span's.
- *
- * @param code  The literal.
- *
- * @returns The text.
- */
-function readCString(code: string): string {
-  const match = /^"((?:[^"\\]|\\.)*)"$/s.exec(code.trim());
-  if (!match) {
-    return notYet(`the span text \`${code}\``);
-  }
-  return match[1].replace(/\\(.)/g, (_, escaped: string) =>
-    escaped === 'n' ? '\n' : escaped === 't' ? '\t' : escaped,
-  );
-}
-
-/**
  * Sets a node's props again: its constant set, what state drives, its image and its text, then spans when it
  * has them and the update sets it once.
  *
@@ -1178,7 +1171,7 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
     notYet(`more than ${MAX_SPANS} nested <Text> spans`);
   }
 
-  // Span styles are props too; each value is as the C output spells it.
+  // Span styles are props too.
   const entries = constantProps(node, lowering);
   spans?.forEach((span, index) =>
     SPAN_FIELDS.forEach(field =>
@@ -1213,7 +1206,7 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
     });
   }
   spans?.forEach((span, index) => {
-    fn.abx('FMTK', 0, tables.string(readCString(span.text)));
+    fn.abx('FMTK', 0, tables.string(span.text));
     fn.abc('FMTSPAN', index);
   });
   if (spans) {
@@ -1257,7 +1250,7 @@ function nodeHandle(
 }
 
 /**
- * Builds every list row, in order, under its parent and before the node after it, as er_app_build() builds them.
+ * Builds every list row, in order, under its parent and before the node after it.
  *
  * @param codegen  The update function's codegen.
  * @param lowering  The program being lowered.
@@ -1355,7 +1348,7 @@ function setConstant(codegen: Codegen, slot: Slot, value: number): void {
 }
 
 /**
- * The update function: what app_update() sets again, each node when a state it reads changed, and the nodes set
+ * The update function: what a state change sets again, each node when a state it reads changed, and the nodes set
  * once in the first pass; then the effects it runs, queued.
  *
  * @param lowering  The program being lowered.
@@ -1417,7 +1410,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     }
   };
 
-  // A pass only an effect's writes started is no app_update(): it keeps what they changed for the next one.
+  // A pass only an effect's writes started keeps what they changed for the next one.
   const end = fn.label();
   if (pending.size) {
     const real = fn.label();
@@ -1431,7 +1424,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     fn.place(real);
   }
 
-  // The rows, the props that read only boot values, and the drawings that do, built once, as er_app_build() does.
+  // The rows, the props that read only boot values, and the drawings that do, built once.
   const builtOnce = drawings.filter(({node}) => !updatedVectorOf(node));
   if (setOnce.length || lowering.pools.length || builtOnce.length) {
     whenDirty(fn, [lowering.once!], () => {
@@ -1443,7 +1436,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     });
   }
 
-  // The nodes, then the drawings, as app_update() sets them.
+  // The nodes, then the drawings.
   for (const node of updated) {
     located(node, () =>
       whenRead(nodeReads(node), () => setNode(codegen, node, lowering)),
@@ -1458,7 +1451,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     setConstant(codegen, flag, 0);
   }
 
-  // Each dep-driven effect checks its deps when it runs, as app_update() checks each in turn.
+  // Each dep-driven effect checks its deps when it runs, each in turn.
   for (const check of lowering.effectFunctions.checks) {
     fn.abx('EFFECT', 0, check);
   }
@@ -1493,8 +1486,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
 }
 
 /**
- * Toggles the request bit, so the update runs after a function that set state, even when no value changed, as
- * the C output calls app_update().
+ * Toggles the request bit, so the update runs after a function that set state, even when no value changed.
  *
  * @param codegen  The function's codegen.
  * @param lowering  The program being lowered.
@@ -1551,7 +1543,7 @@ function handlerBody(
 }
 
 /**
- * What a PanResponder event's handler keeps of the gesture around the app's callback, as C does: the grant
+ * What a PanResponder event's handler keeps of the gesture around the app's callback: the grant
  * anchors it, unless it is already granted; release and terminate clear it after the callback; those and move
  * do nothing unless it is granted.
  *
@@ -1602,7 +1594,7 @@ function keepGesture(
 /**
  * A setTimeout or setInterval callback's function.
  *
- * @param name  The callback's C name.
+ * @param name  The callback's name.
  * @param callback  The callback.
  * @param lowering  The program being lowered.
  *
@@ -1726,8 +1718,8 @@ function runEffect(
 }
 
 /**
- * The function a dep-driven effect runs in after an update pass: it copies each dep that changed, as
- * app_update() does, and runs the effect if one did.
+ * The function a dep-driven effect runs in after an update pass: it copies each dep that changed,
+ * and runs the effect if one did.
  *
  * @param effect  The effect.
  * @param lowering  The program being lowered.
@@ -1762,7 +1754,7 @@ function checkedEffect(
 }
 
 /**
- * The function a mount effect runs in, as er_app_build() runs it after the first app_update(). One that set
+ * The function a mount effect runs in, after the first update. One that set
  * state has the next pass queue the mount effect after it; any other queues it itself.
  *
  * @param index  The mount effect's place in the order.
@@ -1820,7 +1812,7 @@ function mountEffect(index: number, lowering: Lowering): ProgramFunction {
 }
 
 /**
- * Appends a list's first items, as C's initializer fills its array: a missing field is 0 or "", and a whole
+ * Appends a list's first items: a missing field is 0 or "", and a whole
  * number field is the value rounded.
  *
  * @param list  The list.
@@ -1871,7 +1863,7 @@ function appendInitialItems(
 }
 
 /**
- * The boot function: the values worked out from the panel size, in double precision as C works them out, and
+ * The boot function: the values worked out from the panel size, in double precision, and
  * each list's first items.
  *
  * @param bootSlots  The values.
@@ -1930,7 +1922,7 @@ function bootFunction(
 
 /**
  * The keyboard table: setKeyboardConfig's look and layout, each size and key field cut to the bytes the engine's
- * ERKeyboardConfig keeps it in, as C's initializer cuts it.
+ * ERKeyboardConfig keeps it in.
  *
  * @param keyboard  The keyboard.
  * @param tables  The program's tables.
@@ -2001,7 +1993,7 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     lowering.slots.timerFunctions.set(timer.name, index),
   );
 
-  // A root the app's tree fills. The runtime sizes it to the real panel, as er_app_build() does.
+  // A root the app's tree fills. The runtime sizes it to the real panel.
   const nodes: ProgramTemplateNode[] = [
     {
       type: ENGINE_VALUES.get('ER_NODE_VIEW')!,

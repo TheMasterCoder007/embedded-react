@@ -57,9 +57,9 @@ export interface IrPanQuery {
 export interface IrPanResponder {
   /** The JS name it is bound to. */
   name: string;
-  /** Prefix of its file-scope gesture state (`<statePrefix>_granted`, …). */
+  /** Prefix of its gesture state (`<statePrefix>_granted`, …). */
   statePrefix: string;
-  /** Prefix of its generated C functions. */
+  /** Prefix of its functions. */
   fnPrefix: string;
   /** The gesture's id. */
   stateID: number;

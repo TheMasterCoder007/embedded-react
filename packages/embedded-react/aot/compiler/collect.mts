@@ -40,7 +40,6 @@ import {
   setBinding,
   withUndefined,
 } from './static-eval.mts';
-import {cConstant, cTypeOfValue} from './c-syntax.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
 import type {AotError} from './diagnostics.mts';
@@ -48,7 +47,7 @@ import type {Screen} from './options.mts';
 import type {
   AssetImport,
   Caps,
-  CType,
+  SlotKind,
   EffectRecord,
   FunctionNode,
   ItemField,
@@ -63,6 +62,20 @@ import type {
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * The kind of slot a constant is stored in: string, float (a fractional number), or int (anything else).
+ *
+ * @param value  A compile-time value.
+ *
+ * @returns Its slot kind.
+ */
+const slotKindOfValue = (value: unknown): 'string' | 'float' | 'int' =>
+  typeof value === 'string'
+    ? 'string'
+    : typeof value === 'number' && !Number.isInteger(value)
+      ? 'float'
+      : 'int';
 
 /** No state or ref slot widened to 64 bits — the collectors' default. */
 export const NO_WIDE: SlotWidths = new Map();
@@ -244,7 +257,7 @@ export function moduleScope(
 }
 
 /**
- * Infers a C struct shape from a list-state's initial elements (objects of strings/numbers).
+ * Infers a row's fields from a list-state's initial elements (objects of strings/numbers).
  *
  * @param items  The folded initial value.
  * @param name  The state's name, for errors.
@@ -290,7 +303,7 @@ function inferItemStruct(items: unknown, name: string): ItemStruct {
 }
 
 /**
- * Refuses an initial value too big for its fixed buffer: C would cut it short at boot without a word.
+ * Refuses an initial value too big for its fixed buffer: it would be cut short at boot without a word.
  *
  * @param stateName  The state's JS name.
  * @param items  The list's initial rows, or null for a scalar.
@@ -368,10 +381,10 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
     if (state.kind !== 'scalar' || !state.bootValue) continue;
     const slot = bootSlotOf(state.bootValue);
     if (slot?.type.kind === 'float') {
-      state.cType = 'float';
+      state.slotKind = 'float';
       state.isBool = false;
     } else if (slot?.type.kind === 'int' || slot?.type.kind === 'bool') {
-      state.cType = state.widened ? 'i64' : 'int';
+      state.slotKind = state.widened ? 'i64' : 'int';
       state.isBool = slot.type.kind === 'bool';
     }
 
@@ -386,15 +399,15 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
 
 /**
  * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
- * name (writes). `prefix` namespaces the C STORAGE so each inlined child instance gets its own slots: the
- * lookup keys stay the bare JS names (`count`), but the C field / array / count derive from `cField`
+ * name (writes). `prefix` namespaces the STORAGE so each inlined child instance gets its own slots: the
+ * lookup keys stay the bare JS names (`count`), but the field / array / count derive from `slotName`
  * (`<prefix>count`). prefix='' (the App) keeps the storage names exactly the JS names.
  * `caps` are the compiler's resolved caps (see resolveOptions); a list state takes its capacity from it.
  *
  * @param fnBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
  * @param caps  The compile's caps.
- * @param prefix  The C storage prefix: none for the App, `c<n>_` for an inlined instance.
+ * @param prefix  The storage prefix: none for the App, `c<n>_` for an inlined instance.
  * @param wide  Slots to declare 64-bit (see compileWidened).
  *
  * @returns The component's state table.
@@ -420,7 +433,7 @@ export function collectState(
       const init = decl.init;
       if (init?.type !== 'CallExpression') continue;
 
-      // useHostValue is a host-fed scalar: an s_state field like useState, written only via er_app_set_<name>().
+      // useHostValue is a host-fed scalar: a state slot like useState, written only by the host through its input.
       const isHost = (init.callee as t.Identifier).name === 'useHostValue';
       if ((init.callee as t.Identifier).name !== 'useState' && !isHost) {
         continue;
@@ -445,11 +458,11 @@ export function collectState(
       if (!name) continue;
 
       // Build either a list-state record from an array initializer or a scalar record from the folded initial value.
-      const cField = prefix + name; // C storage name (== name for the App; instance-unique for a child)
+      const slotName = prefix + name; // storage name (== name for the App; instance-unique for a child)
       const initArg = init.arguments[0];
       let record: StateRecord;
       if (!isHost && initArg?.type === 'ArrayExpression') {
-        // List state → a fixed-capacity C struct array + a count (s_<name>[CAP], s_<name>_count).
+        // List state → a fixed-capacity pool of rows + a count.
         const items = evalStaticOrThrow(
           initArg,
           scope,
@@ -484,18 +497,15 @@ export function collectState(
         );
         record = {
           name,
-          cField,
+          slotName,
           setter,
           kind: 'list',
           struct,
           items,
           cap: caps.listCap,
-          cTypeName: `ErItem_${cField}`,
-          arrayName: `s_${cField}`,
-          countMember: `s_${cField}_count`,
         };
       } else {
-        // Scalar state → one s_state field. Fold the initial value; no argument starts it at 0. A number derived
+        // Scalar state → one slot. Fold the initial value; no argument starts it at 0. A number derived
         // from `screen` is worked out at boot (see settleBootInitials), so it doesn't take a layout per value.
         const bootValue =
           !isHost && initArg ? bootNumberOf(initArg, scope) : null;
@@ -511,7 +521,7 @@ export function collectState(
               )
             : 0;
 
-        // A host value must be a finite number; check it directly, since cTypeOfValue maps non-numbers to int.
+        // A host value must be a finite number; check it directly, since slotKindOfValue maps non-numbers to int.
         if (isHost && !Number.isFinite(initValue)) {
           throw aotError(
             `AOT: useHostValue("${name}") must be a number — its initial value evaluated to ` +
@@ -521,7 +531,7 @@ export function collectState(
           );
         }
 
-        // Refuse undefined, null and non-finite initials here; they would fold into invalid C with no location.
+        // Refuse undefined, null and non-finite initials here; they would fold into nonsense with no location.
         if (
           initValue === undefined ||
           initValue === null ||
@@ -537,44 +547,44 @@ export function collectState(
           throw error;
         }
 
-        // Pick the slot's C type from the initial value.
-        let cType: CType = cTypeOfValue(initValue);
-        // Flag booleans: cTypeOfValue makes them int, but text lowering must render false differently from 0.
+        // Pick the slot's kind from the initial value.
+        let slotKind: SlotKind = slotKindOfValue(initValue);
+        // Flag booleans: slotKindOfValue makes them int, but text lowering must render false differently from 0.
         const isBool = typeof initValue === 'boolean';
         // A literal written like 70.0 forces a float slot so the state can hold fractions (a smooth drag).
         if (
-          cType === 'int' &&
+          slotKind === 'int' &&
           initArg?.type === 'NumericLiteral' &&
           typeof initArg.extra?.raw === 'string' &&
           /[.eE]/.test(initArg.extra!.raw as string)
         ) {
-          cType = 'float';
+          slotKind = 'float';
         }
 
         // A whole number past the int range starts it 64-bit (past 64 bits, a float), as does a setter that
         // stores a timestamp or such a number in it (see compileWidened).
-        const initialWidth = cType === 'int' ? wideInitial(initValue) : null;
+        const initialWidth = slotKind === 'int' ? wideInitial(initValue) : null;
         if (initialWidth === 'float') {
-          cType = 'float';
+          slotKind = 'float';
         }
 
         const widened =
-          cType === 'int' && !isBool
-            ? (wide.get(cField) ??
+          slotKind === 'int' && !isBool
+            ? (wide.get(slotName) ??
               (initialWidth === 'number' ? 'number' : undefined))
             : undefined;
         if (widened) {
-          cType = 'i64';
+          slotKind = 'i64';
         }
 
-        // String scalar → a fixed char buffer in ErAppState; setters snprintf into it (see scalarAssign).
+        // String scalar → a fixed buffer; setters format into it (see scalarAssign).
         const initial =
-          cType === 'string' ? String(initValue) : Number(initValue);
-        if (cType === 'float') {
+          slotKind === 'string' ? String(initValue) : Number(initValue);
+        if (slotKind === 'float') {
           checkNumber(initial);
-        } else if (cType === 'i64') {
-          cConstant(initial, cType); // BigInt refuses a value that is not a whole number
-        } else if (cType === 'string') {
+        } else if (slotKind === 'i64') {
+          BigInt(initial as number); // refuses a value that is not a whole number
+        } else if (slotKind === 'string') {
           checkInitialFits(
             name,
             null,
@@ -585,14 +595,13 @@ export function collectState(
         }
         record = {
           name,
-          cField,
+          slotName,
           setter,
           kind: 'scalar',
-          cType,
+          slotKind,
           isBool,
-          cMember: `s_state.${cField}`,
           initial,
-          host: isHost, // host-fed → also emit a public er_app_set_<name>() setter
+          host: isHost, // host-fed → also an input the host sets
           ...(widened ? {widened} : {}),
           ...(bootValue ? {bootValue} : {}),
         };
@@ -986,7 +995,7 @@ export function collectSvgImports(
 
 /**
  * Bakes a Flow B app's <Svg source> imports → { assetName: artifact } via the SAME baker Flow A's esbuild
- * .svg loader uses (svgToVector). This is the I/O half (reads .svg files) kept OUT of the pure compileSource;
+ * .svg loader uses (svgToVector). This is the I/O half (reads .svg files) kept OUT of the pure compilePackage;
  * both CLI entries (aot/compile.mts and the consumer cli.mjs) call it and hand the result to opts.svgArtifacts.
  *
  * @param src  App.jsx source text.
@@ -1026,7 +1035,7 @@ export async function bakeSvgArtifacts(
     if (artifact.dropped && artifact.dropped.length) {
       console.warn(
         `embedded-react: ${svgImport.name}.svg uses unsupported SVG feature(s) [${artifact.dropped.join(', ')}] — ` +
-          `rasterizing it as a fallback image (Flow B bakes the PNG into assets.generated.c). Simplify the SVG ` +
+          `rasterising it as a fallback image (Flow B bakes the PNG into the package). Simplify the SVG ` +
           `to keep it a live vector.`,
       );
       const {width, height, png} = await svgToRaster(svgText);
@@ -1047,7 +1056,7 @@ export async function bakeSvgArtifacts(
 
 /**
  * Collects `const fn = useCallback((...) => {...}, deps)` → Map (name → arrow fn node). Deps are ignored:
- * the AOT re-renders via its own dependency tracking, so useCallback only names a shared C handler.
+ * the AOT re-renders via its own dependency tracking, so useCallback only names a shared handler.
  *
  * @param fnBody  The component's body.
  *

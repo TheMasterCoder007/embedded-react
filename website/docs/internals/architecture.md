@@ -47,7 +47,7 @@ The engine never imports React, never sees JSX, never includes a platform header
 is not a stylistic preference; it is what makes the two flows possible.
 
 ```text
-        React on QuickJS                    JSX compiled to C
+        React on QuickJS                    JSX compiled to a package
         (bridges/quickjs)                   (packages/embedded-react/aot)
                │                                    │
                └──────────────┬─────────────────────┘
@@ -61,8 +61,8 @@ is not a stylistic preference; it is what makes the two flows possible.
                     backends/<display>/
 ```
 
-Flow A drives the engine from a JavaScript reconciler through the bridge; Flow B drives it from
-generated C; both share one renderer, so a layout or rendering fix lands once. The same boundary
+Flow A drives the engine from a JavaScript reconciler through the bridge; Flow B drives it from a
+verified package; both share one renderer, so a layout or rendering fix lands once. The same boundary
 leaves room for frontends that do not exist yet (a Lua UI, a JSON tree loader, a visual editor's
 output) without forking the engine. None of those is on the roadmap; the door is simply kept open.
 
@@ -94,13 +94,12 @@ links it, and the Flow B runtime will reuse it; [Flow B packages](./flow-b-packa
 runtime's design.
 
 **The AOT compiler** (`packages/embedded-react/aot/`) parses the app's JSX with Babel, folds
-module-level constants (including the `screen` size), and emits `app.gen.c`: node construction, a
-`useState` state machine, handlers as C functions, animations as engine calls, `PanResponder` configs
-as responder registrations. It rejects anything it cannot lower, by message, at build time.
+module-level constants (including the `screen` size), and emits a package: a tree of node templates, a
+`useState` state machine in slots, handlers as bytecode functions, animations as engine calls, `PanResponder`
+configs as responder bindings. It rejects anything it cannot lower, by message, at build time.
 `compile.mts` is the entry point and CLI; each stage is a TypeScript module under `compiler/`, with
-one file per typed element in `compiler/elements/`. The stages are moving to a typed intermediate
-representation (`compiler/ir/`) that a backend prints (`compiler/c/` for C); expressions, text, and handler
-statements lower to it so far. `screenshot-smoke.mjs` (`npm run aot:smoke`) compiles each demo, builds the AOT desktop host, and
+one file per typed element in `compiler/elements/`. The stages lower to a typed intermediate
+representation (`compiler/ir/`), which `compiler/package/` writes as a package. `screenshot-smoke.mjs` (`npm run aot:smoke`) builds the AOT desktop host, compiles each demo to a package, and
 checks that one rendered frame has content.
 
 **The engine** (`engine/`) is organized by what it does: `scene/` (node pool, tree, props, dirty
@@ -130,7 +129,7 @@ host presents the dirty region and advances the clock with `embedded_renderer_ti
 steps every native animation. [Rendering pipeline](../concepts/rendering-pipeline.md) follows the
 commit in detail; the [Performance](../guides/performance.md) guide shows how to measure each phase.
 
-For a Flow B frame, the JavaScript half does not exist: an event handler is a C function that writes
+For a Flow B frame, the JavaScript half does not exist: an event handler is package bytecode that writes
 state and props, and the host's `er_commit()` does the rest.
 
 ## Building the pieces
@@ -151,6 +150,6 @@ themselves with a relative `add_subdirectory`; nothing is installed.
 | This site             | `cd website && npm install && npm start`                                                   | `npm run build` for the static site; the changelog and roadmap pages are generated from the repo-root files on every start and build                         |
 
 The bytecode precompiler is not the Flow B compiler: it turns a Flow A bundle into QuickJS bytecode
-that the VM still runs, while the Flow B compiler in `packages/embedded-react/aot/` emits C and drops
-QuickJS entirely. The WebAssembly module is built by CI and shipped inside the npm package, so only
+that the VM still runs, while the Flow B compiler in `packages/embedded-react/aot/` emits a package and
+drops QuickJS entirely. The WebAssembly module is built by CI and shipped inside the npm package, so only
 someone changing the engine or the bridge needs Emscripten.
