@@ -73,7 +73,7 @@ const YAML_ENGINE_PIN = /(embedded-react:\s*\n\s*version:\s*")(\d+\.\d+\.\d+)/;
 const runtimeYamlRead = text => {
   const own = yamlRead(text);
   const engine = YAML_ENGINE_PIN.exec(text)?.[2];
-  if (!engine) return undefined;
+  if (!own || !engine) return undefined;
   return engine === own ? own : `${own} (engine pin is ${engine})`;
 };
 const runtimeYamlWrite = (text, version) =>
@@ -250,13 +250,16 @@ export function versionedFiles() {
 }
 
 /**
- * @brief Lists what this file expects and can't find: a manifest or package folder that isn't on disk, or
- *        a manifest whose version or install pin isn't in the form its reader looks for.
+ * @brief Lists what this file expects and can't find: a root source file, manifest or package folder that
+ *        isn't on disk, or a manifest whose version or install pin isn't in the form its reader looks for.
+ *        The LICENSE and NOTICE copies aren't listed, since a sync recreates them.
  *
  * @return Array of descriptions, each starting with a repo-root-relative path; empty when everything is there.
  */
 export function missingTargets() {
-  const missing = PACKAGE_DIRS.filter(dir => !existsSync(resolve(ROOT, dir)));
+  const missing = ['VERSION', ...LEGAL_FILES, ...PACKAGE_DIRS].filter(
+    path => !existsSync(resolve(ROOT, path)),
+  );
   for (const t of MANIFESTS) {
     const path = resolve(ROOT, t.path);
     if (!existsSync(path)) missing.push(t.path);

@@ -124,8 +124,8 @@ add_subdirectory(${embedded-react_SOURCE_DIR}/runtime ${embedded-react_BINARY_DI
 target_link_libraries(my_firmware PRIVATE erb-runtime)
 ```
 
-**ESP-IDF** — the [board examples](examples/esp32) use `FetchContent`, which also brings in the display backend and,
-for Flow A, QuickJS. For Flow B, the runtime is on the component registry and brings the engine with it:
+**ESP-IDF** — the [board examples](examples/esp32) use `FetchContent`, which also brings in the Flow B runtime, the
+display backend and, for Flow A, QuickJS. The runtime is also on the component registry, and brings the engine with it:
 
 ```
 idf.py add-dependency "TheMasterCoder007/embedded-react-runtime^0.19.0"
