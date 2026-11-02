@@ -28,7 +28,7 @@ import {
 //   • page 1: a bubble level (a dot that rolls with the board's tilt, from the QMI8658 accelerometer)
 // Swipe right-to-left to drag the level page over; release, and it eases to settle as the active page.
 //
-// Built for Flow B (AOT) — compiles to C, no JS on the device. The pager rides only AOT-supported
+// Built for Flow B (AOT) — compiles to a package, no JS on the device. The pager rides only AOT-supported
 // primitives: a dynamic `marginLeft` on a 480-wide track follows the finger during the drag and is
 // eased toward the settled page by a ~30 fps interval; a transparent full-screen overlay captures the
 // swipe with a `PanResponder`, which the AOT lowers onto the engine's own C gesture-responder system

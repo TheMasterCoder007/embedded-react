@@ -1771,7 +1771,7 @@ extern "C"
     {
         ER_KBD_KEY_CHAR = 0,  /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
         ER_KBD_KEY_BACKSPACE, /**< deletes the character before the cursor */
-        ER_KBD_KEY_DONE,      /**< dismisses the keyboard (blurs the input) */
+        ER_KBD_KEY_DONE,      /**< submits the input, then dismisses the keyboard (blurs the input) */
         ER_KBD_KEY_LAYER      /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
     } ERKeyboardKeyType;
 

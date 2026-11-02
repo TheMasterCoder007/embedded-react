@@ -20,8 +20,8 @@ export default function App() {
 ```
 
 In Flow A, that `useState` is React's, running on a JavaScript engine on the chip. In Flow B, the
-compiler turns it into a C variable, the handler into a C function, and the JSX into direct calls
-that build the engine's node tree. Either way the button counts.
+compiler turns it into a slot in a package, the handler into bytecode, and the JSX into a tree the
+runtime builds through the engine. Either way the button counts.
 
 ## Flow A: React at runtime
 
@@ -107,7 +107,7 @@ here: layout, rendering, touch, scrolling, and animation are engine features, no
 - **A subset of the API.** The compiler handles what it can resolve statically: components, props,
   `useState` and `setState` (including the updater form), `useEffect`, refs, `useCallback`/`useMemo`,
   conditionals, `.map` lists, dynamic styles, the `Animated` API, `PanResponder`, `<Svg>` and
-  `<Dial>`. It rejects what it cannot lower to C, and says so at build time with the file and line.
+  `<Dial>`. It rejects what it cannot compile, and says so at build time with the file and line.
   [The AOT subset](../guides/aot-subset.md) lists the rules.
 - **Layouts are picked at boot, not rearranged while running.** A package holds a layout for each of
   the app's breakpoints, and the panel's resolution picks one. See
@@ -120,15 +120,15 @@ here: layout, rendering, touch, scrolling, and animation are engine features, no
 
 Your board usually decides.
 
-|                   | Flow A                                          | Flow B                                    |
-| ----------------- | ----------------------------------------------- | ----------------------------------------- |
-| RAM               | External RAM for the JS heap (PSRAM or SDRAM)   | Internal RAM is enough                    |
-| Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as compiled C                    |
-| Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Rebuilding and reflashing the firmware    |
-| API               | Everything                                      | [The AOT subset](../guides/aot-subset.md) |
-| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device  |
-| Runtime errors    | The error screen                                | Most are compile errors instead           |
-| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, Linux     |
+|                   | Flow A                                          | Flow B                                     |
+| ----------------- | ----------------------------------------------- | ------------------------------------------ |
+| RAM               | External RAM for the JS heap (PSRAM or SDRAM)   | Internal RAM is enough                     |
+| Flash for the app | ~140 KB of runtime bytecode + your app + assets | Your app as a package, plus its assets     |
+| Update the UI by  | Replacing `app.erpkg`; no firmware rebuild      | Writing a new package; no firmware rebuild |
+| API               | Everything                                      | [The AOT subset](../guides/aot-subset.md)  |
+| Development loop  | Simulator, then hot reload on the device        | Simulator, then hot reload on the device   |
+| Runtime errors    | The error screen                                | Most are compile errors instead            |
+| Runs on           | ESP32-S3 (PSRAM), STM32H7 (SDRAM), Linux        | ESP32 "CYD" (no PSRAM), RP2040, Linux      |
 
 Two things make the choice cheaper than it looks:
 

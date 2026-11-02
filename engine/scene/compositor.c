@@ -4368,7 +4368,7 @@ void er_node_set_vector_ops(ERNode* node,
             old_ng == n_grads
             && (n_grads <= 0
                 || (old_grads && grads && memcmp(old_grads, grads, (size_t)n_grads * sizeof(ERVectorGradient)) == 0));
-        /* Identical re-upload (e.g. a held finger below the drag deadband re-running app_update with the same
+        /* Identical re-upload (e.g. a held finger below the drag deadband re-running a handler with the same
          * state) → nothing changed, so skip the repaint entirely. */
         if (old_ops && old_n == n_ops && old_np == n_paints && memcmp(old_ops, ops, (size_t)n_ops * sizeof(float)) == 0
             && (n_paints <= 0

@@ -332,8 +332,7 @@ over the copy, which is what runs.
 **Baked mode.** A board with no spare partition links the package into the firmware as a const array:
 `embedded-react build --aot --bake` writes `app.erpkg.c` with the bytes as `const uint32_t app_erpkg[]`,
 so they are 4-aligned with any compiler, and their length as `app_erpkg_bytes`. It goes through
-the same loader and the same verifier. This is what replaces the C backend on such boards, so there
-is one set of semantics, not two.
+the same loader and the same verifier, so there is one set of semantics, not two.
 
 ### The arena
 

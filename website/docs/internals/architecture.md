@@ -47,7 +47,7 @@ The engine never imports React, never sees JSX, never includes a platform header
 is not a stylistic preference; it is what makes the two flows possible.
 
 ```text
-        React on QuickJS                    JSX compiled to C
+        React on QuickJS                    JSX compiled to a package
         (bridges/quickjs)                   (packages/embedded-react/aot)
                │                                    │
                └──────────────┬─────────────────────┘
@@ -129,7 +129,7 @@ host presents the dirty region and advances the clock with `embedded_renderer_ti
 steps every native animation. [Rendering pipeline](../concepts/rendering-pipeline.md) follows the
 commit in detail; the [Performance](../guides/performance.md) guide shows how to measure each phase.
 
-For a Flow B frame, the JavaScript half does not exist: an event handler is a C function that writes
+For a Flow B frame, the JavaScript half does not exist: an event handler is package bytecode that writes
 state and props, and the host's `er_commit()` does the rest.
 
 ## Building the pieces

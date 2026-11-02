@@ -61,8 +61,8 @@ while the code that breaks it is still one line.
   list and an optional cleanup as its last statement, `useRef`, `useCallback`, `useMemo`, and
   `useAnimatedValue` with a constant initial value (every `Animated` call drives one).
 - `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the
-  compiler emits a C setter for it. The [RP2040 guide](./boards/rp2040.md) shows it driving a step
-  counter.
+  compiler lists it as a package input, and the host sets it with `erb_input_set_int`. The
+  [RP2040 guide](./boards/rp2040.md) shows it driving a step counter.
 - `.map` over a list compiles when the list is a compile-time-constant array, or state that the app
   appends object literals to; the row pool is sized by `ER_AOT_LIST_CAP` (16 by default, lower it
   on a tight board). A list computed at runtime from anything else does not compile.
@@ -203,7 +203,7 @@ A compiled app keeps its state in buffers sized at build time. The compiler chec
 can know the answer, and the app reports the rest at run time:
 
 | Limit                                                                   | Default               | Raise it with                                      | When it is past                                                                                                                                                                                        |
-|-------------------------------------------------------------------------|-----------------------|----------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ----------------------------------------------------------------------- | --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Rows in a list state                                                    | 16                    | `ER_AOT_LIST_CAP`                                  | An initial list with more rows fails the build. An append to a full list is skipped and reported.                                                                                                      |
 | Bytes in a string state, a list's string field or a local               | 47 (a 48-byte buffer) | `ER_AOT_LIST_STR_CAP`                              | A constant string that is too long, as an initial value or a write, fails the build. A string built at run time is cut short and reported.                                                             |
 | Bytes in a node's text, a `<Text>` span, a placeholder or an image name | 255, 63, 63, 63       | Fixed in `er_scene.h` (`ER_TEXT_MAX` and the like) | A constant string that is too long fails the build. A string built at run time is cut short and reported.                                                                                              |

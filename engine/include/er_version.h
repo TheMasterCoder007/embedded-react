@@ -22,8 +22,7 @@
  * repo-root `VERSION` file; this header is regenerated from it by `tools/sync-version.mjs`
  * (`npm run version:sync`). DO NOT EDIT BY HAND — bump VERSION and re-sync instead.
  *
- * The Flow B AOT compiler stamps the version it targeted into the generated app and `_Static_assert`s it
- * against these macros, so an app built against a different engine fails at COMPILE time, not on-device.
+ * A Flow B package carries its own format version, which the runtime checks when it loads the package.
  */
 
 #ifndef ER_VERSION_H

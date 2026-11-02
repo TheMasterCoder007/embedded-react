@@ -144,5 +144,5 @@ whichever buffer is the target ends up fully correct.
 ## Which flow
 
 Flow A is the natural fit for an H7 with SDRAM, and it is what runs today. An STM32 without external
-RAM (most F4 parts, for example) is a Flow B target: compile the app to C and link it in, as the
+RAM (most F4 parts, for example) is a Flow B target: compile the app to a package and run it on the Flow B runtime, as the
 [CYD](./esp32-cyd.md) and [RP2040](./rp2040.md) examples do, with the `dma2d` backend underneath.

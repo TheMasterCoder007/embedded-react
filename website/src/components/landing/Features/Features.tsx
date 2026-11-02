@@ -22,7 +22,7 @@ const features: {icon: IconName; title: string; body: string}[] = [
   {
     icon: 'split',
     title: 'One app, two flows',
-    body: 'Run a real React reconciler on QuickJS, or compile the same JSX ahead of time to C. It is a build flag, not a rewrite.',
+    body: 'Run a real React reconciler on QuickJS, or compile the same JSX ahead of time to a package. It is a build flag, not a rewrite.',
   },
   {
     icon: 'feather',
