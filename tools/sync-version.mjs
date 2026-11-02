@@ -73,6 +73,7 @@ const YAML_ENGINE_PIN = /(embedded-react:\s*\n\s*version:\s*")(\d+\.\d+\.\d+)/;
 const runtimeYamlRead = text => {
   const own = yamlRead(text);
   const engine = YAML_ENGINE_PIN.exec(text)?.[2];
+  if (!engine) return undefined;
   return engine === own ? own : `${own} (engine pin is ${engine})`;
 };
 const runtimeYamlWrite = (text, version) =>
@@ -105,18 +106,24 @@ const headerWrite = (text, version) => {
 // README.md — the install snippets pin the version (so copy-paste installs match the release):
 // CMake FetchContent GIT_TAG, ESP-IDF `^x`, PlatformIO `#vx`. Each regex captures the prefix (group 1)
 // and the MAJOR.MINOR.PATCH (group 2). Drift here ships a README that tells users to pin the wrong tag.
+// The global ones cover every copy of the line. GIT_TAG is first-match only, since a later one could be QuickJS's.
 const README_PINS = [
   /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/, // CMake FetchContent
-  /(embedded-react\^)(\d+\.\d+\.\d+)/, // ESP-IDF add-dependency
-  /(embedded-react-runtime\^)(\d+\.\d+\.\d+)/, // ESP-IDF add-dependency, Flow B
-  /(embedded-react\.git#v)(\d+\.\d+\.\d+)/, // PlatformIO lib_deps
+  /(embedded-react\^)(\d+\.\d+\.\d+)/g, // ESP-IDF add-dependency
+  /(embedded-react-runtime\^)(\d+\.\d+\.\d+)/g, // ESP-IDF add-dependency, Flow B
+  /(embedded-react\.git#v)(\d+\.\d+\.\d+)/g, // PlatformIO lib_deps
 ];
 const readmeRead = text => {
-  const found = README_PINS.map(re => re.exec(text)?.[2]).filter(Boolean);
-  if (!found.length) return undefined;
-  return found.every(v => v === found[0])
-    ? found[0]
-    : `${found[0]} (install pins disagree)`;
+  const found = README_PINS.map(re =>
+    re.global
+      ? [...text.matchAll(re)].map(match => match[2])
+      : (re.exec(text)?.slice(2) ?? []),
+  );
+  if (found.some(versions => !versions.length)) return undefined; // every pin has to be there
+  const versions = found.flat();
+  return versions.every(version => version === versions[0])
+    ? versions[0]
+    : `${versions[0]} (install pins disagree)`;
 };
 const readmeWrite = (text, version) =>
   README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
@@ -242,6 +249,23 @@ export function versionedFiles() {
   return ['VERSION', ...MANIFESTS.map(t => t.path), ...legalMirrors()];
 }
 
+/**
+ * @brief Lists what this file expects and can't find: a manifest or package folder that isn't on disk, or
+ *        a manifest whose version or install pin isn't in the form its reader looks for.
+ *
+ * @return Array of descriptions, each starting with a repo-root-relative path; empty when everything is there.
+ */
+export function missingTargets() {
+  const missing = PACKAGE_DIRS.filter(dir => !existsSync(resolve(ROOT, dir)));
+  for (const t of MANIFESTS) {
+    const path = resolve(ROOT, t.path);
+    if (!existsSync(path)) missing.push(t.path);
+    else if (t.read(readFileSync(path, 'utf8')) === undefined)
+      missing.push(`${t.path} (its version or an install pin)`);
+  }
+  return missing;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Main: run only when invoked directly (a no-op side-effect-free import otherwise)
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -249,7 +273,7 @@ export function versionedFiles() {
 /**
  * @brief Syncs (or, with --check, verifies) every versioned artifact against the repo-root VERSION.
  *
- * @return Does not return; exits the process with a status code (0 ok, 1 drift, 2 bad args).
+ * @return Does not return; exits the process with a status code (0 ok, 1 drift or a missing target, 2 bad args).
  */
 function main() {
   // Modes:
@@ -269,6 +293,15 @@ function main() {
     );
     process.exit(2);
   }
+  // Checked before anything is written, so a failed --set leaves the tree as it was.
+  const missing = missingTargets();
+  if (missing.length) {
+    console.error('Listed in tools/sync-version.mjs but not found:');
+    for (const path of missing) console.error(`  ${path}`);
+    console.error('If one moved or was reworded, update that file to match.');
+    process.exit(1);
+  }
+
   // In --set mode, the new version IS the source of truth — write it into VERSION up front.
   if (setVersion && !check) writeFileSync(VERSION_FILE, setVersion + '\n');
 
@@ -295,7 +328,6 @@ function main() {
   // Version-bearing manifests.
   for (const t of MANIFESTS) {
     const path = resolve(ROOT, t.path);
-    if (!existsSync(path)) continue; // optional target (e.g. library.json before Phase 2)
     const text = readFileSync(path, 'utf8');
     if (check) {
       const found = t.read(text);

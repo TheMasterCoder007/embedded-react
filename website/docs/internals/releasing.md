@@ -40,8 +40,9 @@ What `sync-version` keeps in step:
 | `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                |
 
 `node tools/sync-version.mjs --check` fails if any of them drifts, and CI runs it on every push,
-so a hand-edited version cannot land. A missing file is skipped, so a renamed manifest silently
-drops out of the sync: check the list when you move one.
+so a hand-edited version cannot land. A listed file or package folder that's missing, or a version or
+install pin that's no longer in the expected form, fails every mode before anything is written. When
+you move a file or reword an install line, update `sync-version.mjs` to match.
 
 ## The publish workflow
 
