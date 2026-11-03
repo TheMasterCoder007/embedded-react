@@ -56,14 +56,15 @@ typedef struct
 /** @brief Internal state for the DMA2D render backend. */
 typedef struct
 {
-    ErDma2dBackendConfig cfg;
+    ErDma2dBackendConfig config;
     ErDma2dRegs* regs;
-    uint8_t* fb;
-    int bpp;            /**< Bytes per framebuffer pixel. */
-    int stride_px;      /**< Row pitch in pixels. */
-    bool pending;       /**< A DMA2D transfer was started and not yet waited on. */
-    int dx0, dy0;       /**< Dirty box, inclusive min corner. */
-    int dx_end, dy_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dx_end <= dx0 means empty. */
+    uint8_t* framebuffer;
+    int bytes_per_pixel;    /**< Bytes per framebuffer pixel. */
+    int stride_pixels;      /**< Row pitch in pixels. */
+    bool pending;           /**< A DMA2D transfer was started and not yet waited on. */
+    int dirty_x0, dirty_y0; /**< Dirty box, inclusive min corner. */
+    int dirty_x_end,
+        dirty_y_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dirty_x_end <= dirty_x0 means empty. */
 } Dma2dCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -80,10 +81,29 @@ typedef struct
 #define DMA2D_ISR_DONE (DMA2D_ISR_TCIF | DMA2D_ISR_TEIF | DMA2D_ISR_CEIF)
 #define DMA2D_IFCR_ALL 0x0000003FU
 #define DMA2D_AMTCR_EN 0x00000001U
+#define DMA2D_AMTCR_DT_SHIFT 8 /* dead time, AMTCR[15:8] */
+#define DMA2D_NLR_PL_SHIFT 16  /* pixels per line, NLR[29:16] */
 
 #define DMA2D_CM_ARGB8888 0x00000000U
 #define DMA2D_CM_RGB888 0x00000001U
 #define DMA2D_CM_RGB565 0x00000002U
+
+/** @brief Bytes per pixel of each pixel format. */
+#define RGB565_BYTES 2
+#define RGB888_BYTES 3
+#define ARGB8888_BYTES 4
+
+/** @brief Full scale of an 8-bit color channel. */
+#define CHANNEL_MAX 255U
+
+/** @brief An alpha of this value is fully opaque. */
+#define ALPHA_OPAQUE 255U
+
+/** @brief The alpha byte of an opaque ARGB8888 pixel. */
+#define ARGB_OPAQUE_ALPHA 0xFF000000U
+
+/** @brief Added before the divide in div255() so it rounds to nearest. */
+#define DIV255_ROUND 0x80U
 
 /** @brief Default floor below which an op is cheaper on the CPU than programming the peripheral. */
 #define DMA2D_MIN_DMA_PIXELS_DEFAULT 64
@@ -100,55 +120,56 @@ static EmbeddedRenderBackend s_backend;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Rounds (x / 255) to nearest for x in [0, 65025], without a divide. */
-static inline uint32_t div255(uint32_t x)
+static inline uint32_t div255(uint32_t value)
 {
-    x += 0x80U;
-    return (x + (x >> 8)) >> 8;
+    value += DIV255_ROUND;
+    return (value + (value >> 8)) >> 8;
 }
 
 /** @brief Loads one framebuffer pixel as opaque ARGB8888, whatever the framebuffer format. */
-static inline uint32_t fb_load(const uint8_t* p, int bpp)
+static inline uint32_t fb_load(const uint8_t* pixel, int bytes_per_pixel)
 {
-    switch (bpp)
+    switch (bytes_per_pixel)
     {
-        case 2:
+        case RGB565_BYTES:
         {
-            const uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8);
-            const uint32_t r = (v >> 11) & 0x1FU;
-            const uint32_t g = (v >> 5) & 0x3FU;
-            const uint32_t b = v & 0x1FU;
+            const uint32_t rgb565 = (uint32_t)pixel[0] | ((uint32_t)pixel[1] << 8);
+            const uint32_t red5 = (rgb565 >> 11) & 0x1FU;
+            const uint32_t green6 = (rgb565 >> 5) & 0x3FU;
+            const uint32_t blue5 = rgb565 & 0x1FU;
             /* expand with bit replication so round-trips are exact */
-            return 0xFF000000U | (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+            return ARGB_OPAQUE_ALPHA | (((red5 << 3) | (red5 >> 2)) << 16) | (((green6 << 2) | (green6 >> 4)) << 8)
+                   | ((blue5 << 3) | (blue5 >> 2));
         }
-        case 3:
-            return 0xFF000000U | ((uint32_t)p[2] << 16) | ((uint32_t)p[1] << 8) | (uint32_t)p[0];
+        case RGB888_BYTES:
+            return ARGB_OPAQUE_ALPHA | ((uint32_t)pixel[2] << 16) | ((uint32_t)pixel[1] << 8) | (uint32_t)pixel[0];
         default:
-            return ((const uint32_t*)(const void*)p)[0] | 0xFF000000U;
+            return ((const uint32_t*)(const void*)pixel)[0] | ARGB_OPAQUE_ALPHA;
     }
 }
 
 /** @brief Stores an ARGB8888 value into one framebuffer pixel, whatever the framebuffer format. */
-static inline void fb_store(uint8_t* p, int bpp, uint32_t argb)
+static inline void fb_store(uint8_t* pixel, int bytes_per_pixel, uint32_t argb)
 {
-    switch (bpp)
+    switch (bytes_per_pixel)
     {
-        case 2:
+        case RGB565_BYTES:
         {
-            const uint32_t r = (argb >> 16) & 0xFFU;
-            const uint32_t g = (argb >> 8) & 0xFFU;
-            const uint32_t b = argb & 0xFFU;
-            const uint32_t v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
-            p[0] = (uint8_t)v;
-            p[1] = (uint8_t)(v >> 8);
+            const uint32_t red = (argb >> 16) & 0xFFU;
+            const uint32_t green = (argb >> 8) & 0xFFU;
+            const uint32_t blue = argb & 0xFFU;
+            const uint32_t rgb565 = ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3);
+            pixel[0] = (uint8_t)rgb565;
+            pixel[1] = (uint8_t)(rgb565 >> 8);
             break;
         }
-        case 3:
-            p[0] = (uint8_t)argb;         /* B */
-            p[1] = (uint8_t)(argb >> 8);  /* G */
-            p[2] = (uint8_t)(argb >> 16); /* R */
+        case RGB888_BYTES:
+            pixel[0] = (uint8_t)argb;         /* B */
+            pixel[1] = (uint8_t)(argb >> 8);  /* G */
+            pixel[2] = (uint8_t)(argb >> 16); /* R */
             break;
         default:
-            ((uint32_t*)(void*)p)[0] = 0xFF000000U | (argb & 0x00FFFFFFU);
+            ((uint32_t*)(void*)pixel)[0] = ARGB_OPAQUE_ALPHA | (argb & 0x00FFFFFFU);
             break;
     }
 }
@@ -157,16 +178,17 @@ static inline void fb_store(uint8_t* p, int bpp, uint32_t argb)
  * @brief Composites one premultiplied-ARGB source pixel over an opaque destination pixel (Porter-Duff
  *        source-over). The framebuffer is opaque, so only color channels blend.
  */
-static inline uint32_t over_premul(uint32_t dst, uint32_t sa, uint32_t sr, uint32_t sg, uint32_t sb)
+static inline uint32_t over_premul(
+    uint32_t destination, uint32_t source_alpha, uint32_t source_red, uint32_t source_green, uint32_t source_blue)
 {
-    const uint32_t inv = 255U - sa;
-    const uint32_t dr = (dst >> 16) & 0xFFU;
-    const uint32_t dg = (dst >> 8) & 0xFFU;
-    const uint32_t db = dst & 0xFFU;
-    const uint32_t r = sr + div255(dr * inv);
-    const uint32_t g = sg + div255(dg * inv);
-    const uint32_t b = sb + div255(db * inv);
-    return 0xFF000000U | (r << 16) | (g << 8) | b;
+    const uint32_t inverse_alpha = CHANNEL_MAX - source_alpha;
+    const uint32_t destination_red = (destination >> 16) & 0xFFU;
+    const uint32_t destination_green = (destination >> 8) & 0xFFU;
+    const uint32_t destination_blue = destination & 0xFFU;
+    const uint32_t red = source_red + div255(destination_red * inverse_alpha);
+    const uint32_t green = source_green + div255(destination_green * inverse_alpha);
+    const uint32_t blue = source_blue + div255(destination_blue * inverse_alpha);
+    return ARGB_OPAQUE_ALPHA | (red << 16) | (green << 8) | blue;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -174,60 +196,60 @@ static inline uint32_t over_premul(uint32_t dst, uint32_t sa, uint32_t sr, uint3
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Grows the dirty bounding box to include a written rectangle. */
-static void mark_dirty(int x, int y, int w, int h)
+static void mark_dirty(int x, int y, int width, int height)
 {
-    if (s_ctx.dx_end <= s_ctx.dx0)
+    if (s_ctx.dirty_x_end <= s_ctx.dirty_x0)
     {
-        s_ctx.dx0 = x;
-        s_ctx.dy0 = y;
-        s_ctx.dx_end = x + w;
-        s_ctx.dy_end = y + h;
+        s_ctx.dirty_x0 = x;
+        s_ctx.dirty_y0 = y;
+        s_ctx.dirty_x_end = x + width;
+        s_ctx.dirty_y_end = y + height;
         return;
     }
-    if (x < s_ctx.dx0)
-        s_ctx.dx0 = x;
-    if (y < s_ctx.dy0)
-        s_ctx.dy0 = y;
-    if (x + w > s_ctx.dx_end)
-        s_ctx.dx_end = x + w;
-    if (y + h > s_ctx.dy_end)
-        s_ctx.dy_end = y + h;
+    if (x < s_ctx.dirty_x0)
+        s_ctx.dirty_x0 = x;
+    if (y < s_ctx.dirty_y0)
+        s_ctx.dirty_y0 = y;
+    if (x + width > s_ctx.dirty_x_end)
+        s_ctx.dirty_x_end = x + width;
+    if (y + height > s_ctx.dirty_y_end)
+        s_ctx.dirty_y_end = y + height;
 }
 
 /** @brief Clips a rectangle to the framebuffer, advancing the source origin to match. */
-static bool clip_rect(int* x, int* y, int* w, int* h, int* sx, int* sy)
+static bool clip_rect(int* x, int* y, int* width, int* height, int* source_x, int* source_y)
 {
-    int cx = *x, cy = *y, cw = *w, ch = *h, ox = 0, oy = 0;
+    int clipped_x = *x, clipped_y = *y, clipped_width = *width, clipped_height = *height, offset_x = 0, offset_y = 0;
 
-    if (cw <= 0 || ch <= 0)
+    if (clipped_width <= 0 || clipped_height <= 0)
         return false;
-    if (cx < 0)
+    if (clipped_x < 0)
     {
-        ox = -cx;
-        cw += cx;
-        cx = 0;
+        offset_x = -clipped_x;
+        clipped_width += clipped_x;
+        clipped_x = 0;
     }
-    if (cy < 0)
+    if (clipped_y < 0)
     {
-        oy = -cy;
-        ch += cy;
-        cy = 0;
+        offset_y = -clipped_y;
+        clipped_height += clipped_y;
+        clipped_y = 0;
     }
-    if (cx + cw > s_ctx.cfg.width)
-        cw = s_ctx.cfg.width - cx;
-    if (cy + ch > s_ctx.cfg.height)
-        ch = s_ctx.cfg.height - cy;
-    if (cw <= 0 || ch <= 0)
+    if (clipped_x + clipped_width > s_ctx.config.width)
+        clipped_width = s_ctx.config.width - clipped_x;
+    if (clipped_y + clipped_height > s_ctx.config.height)
+        clipped_height = s_ctx.config.height - clipped_y;
+    if (clipped_width <= 0 || clipped_height <= 0)
         return false;
 
-    *x = cx;
-    *y = cy;
-    *w = cw;
-    *h = ch;
-    if (sx)
-        *sx = ox;
-    if (sy)
-        *sy = oy;
+    *x = clipped_x;
+    *y = clipped_y;
+    *width = clipped_width;
+    *height = clipped_height;
+    if (source_x)
+        *source_x = offset_x;
+    if (source_y)
+        *source_y = offset_y;
     return true;
 }
 
@@ -237,9 +259,9 @@ static void wait_pending(void)
     if (!s_ctx.pending)
         return;
 
-    if (s_ctx.cfg.wait_complete)
+    if (s_ctx.config.wait_complete)
     {
-        s_ctx.cfg.wait_complete(s_ctx.cfg.user);
+        s_ctx.config.wait_complete(s_ctx.config.user);
     }
     else
     {
@@ -255,24 +277,24 @@ static void wait_pending(void)
 /** @brief Address of framebuffer pixel (x, y). */
 static inline uint8_t* fb_at(int x, int y)
 {
-    return s_ctx.fb + ((size_t)y * (size_t)s_ctx.stride_px + (size_t)x) * (size_t)s_ctx.bpp;
+    return s_ctx.framebuffer + ((size_t)y * (size_t)s_ctx.stride_pixels + (size_t)x) * (size_t)s_ctx.bytes_per_pixel;
 }
 
 /** @brief Cleans CPU-written lines the DMA2D is about to read (rows [addr, addr + span)). */
-static void cache_clean_rows(const void* addr, size_t bytes)
+static void cache_clean_rows(const void* address, size_t bytes)
 {
-    if (s_ctx.cfg.cache_clean)
-        s_ctx.cfg.cache_clean(addr, bytes);
+    if (s_ctx.config.cache_clean)
+        s_ctx.config.cache_clean(address, bytes);
 }
 
 /** @brief Cleans+invalidates framebuffer rows the DMA2D is about to overwrite. */
-static void cache_prepare_dst(int x, int y, int w, int h)
+static void cache_prepare_dst(int x, int y, int width, int height)
 {
-    if (!s_ctx.cfg.cache_clean_invalidate)
+    if (!s_ctx.config.cache_clean_invalidate)
         return;
     uint8_t* first = fb_at(x, y);
-    uint8_t* last = fb_at(x + w, y + h - 1);
-    s_ctx.cfg.cache_clean_invalidate(first, (size_t)(last - first));
+    uint8_t* last = fb_at(x + width, y + height - 1);
+    s_ctx.config.cache_clean_invalidate(first, (size_t)(last - first));
 }
 
 /**
@@ -282,9 +304,9 @@ static void cache_prepare_dst(int x, int y, int w, int h)
  */
 static void launch(uint32_t mode)
 {
-    if (s_ctx.cfg.start)
+    if (s_ctx.config.start)
     {
-        s_ctx.cfg.start(s_ctx.cfg.user); /* owner sets START (typically with TC/TE interrupts) */
+        s_ctx.config.start(s_ctx.config.user); /* owner sets START (typically with TC/TE interrupts) */
     }
     else
     {
@@ -294,35 +316,37 @@ static void launch(uint32_t mode)
     s_ctx.pending = true;
 }
 
-/** @brief Packs a straight-alpha ARGB color into the R2M output-color register for the fb format. */
+/** @brief Packs a straight-alpha ARGB color into the R2M output-color register for the framebuffer format. */
 static uint32_t pack_ocolr(uint32_t argb)
 {
-    switch (s_ctx.cfg.format)
+    switch (s_ctx.config.format)
     {
         case ER_DMA2D_FB_RGB565:
         {
-            const uint32_t r = (argb >> 16) & 0xFFU;
-            const uint32_t g = (argb >> 8) & 0xFFU;
-            const uint32_t b = argb & 0xFFU;
-            return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+            const uint32_t red = (argb >> 16) & 0xFFU;
+            const uint32_t green = (argb >> 8) & 0xFFU;
+            const uint32_t blue = argb & 0xFFU;
+            return ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3);
         }
         case ER_DMA2D_FB_RGB888:
             return argb & 0x00FFFFFFU;
         default:
-            return 0xFF000000U | (argb & 0x00FFFFFFU);
+            return ARGB_OPAQUE_ALPHA | (argb & 0x00FFFFFFU);
     }
 }
 
 /** @brief True when every pixel of a premultiplied-ARGB region has alpha 0xFF. */
-static bool region_is_opaque(const uint8_t* base, int stride_bytes, int sx, int sy, int w, int h)
+static bool
+region_is_opaque(const uint8_t* source_bytes, int stride_bytes, int source_x, int source_y, int width, int height)
 {
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)(const void*)(base + (size_t)(sy + row) * (size_t)stride_bytes) + sx;
-        uint32_t acc = 0xFF000000U;
-        for (int col = 0; col < w; col++)
-            acc &= s[col];
-        if ((acc & 0xFF000000U) != 0xFF000000U)
+        const uint32_t* source_row =
+            (const uint32_t*)(const void*)(source_bytes + (size_t)(source_y + row) * (size_t)stride_bytes) + source_x;
+        uint32_t combined = ARGB_OPAQUE_ALPHA;
+        for (int column = 0; column < width; column++)
+            combined &= source_row[column];
+        if ((combined & ARGB_OPAQUE_ALPHA) != ARGB_OPAQUE_ALPHA)
             return false;
     }
     return true;
@@ -333,58 +357,77 @@ static bool region_is_opaque(const uint8_t* base, int stride_bytes, int sx, int 
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief CPU opaque fill. */
-static void cpu_fill_opaque(uint32_t argb, int x, int y, int w, int h)
+static void cpu_fill_opaque(uint32_t argb, int x, int y, int width, int height)
 {
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        uint8_t* d = fb_at(x, y + row);
-        for (int col = 0; col < w; col++, d += s_ctx.bpp)
-            fb_store(d, s_ctx.bpp, argb);
+        uint8_t* destination = fb_at(x, y + row);
+        for (int column = 0; column < width; column++, destination += s_ctx.bytes_per_pixel)
+            fb_store(destination, s_ctx.bytes_per_pixel, argb);
     }
 }
 
 /** @brief CPU translucent fill (straight alpha, premultiplied once then source-over). */
-static void cpu_fill_blend(uint32_t argb, uint32_t a, int x, int y, int w, int h)
+static void cpu_fill_blend(uint32_t argb, uint32_t alpha, int x, int y, int width, int height)
 {
-    const uint32_t sr = div255(((argb >> 16) & 0xFFU) * a);
-    const uint32_t sg = div255(((argb >> 8) & 0xFFU) * a);
-    const uint32_t sb = div255((argb & 0xFFU) * a);
-    for (int row = 0; row < h; row++)
+    const uint32_t source_red = div255(((argb >> 16) & 0xFFU) * alpha);
+    const uint32_t source_green = div255(((argb >> 8) & 0xFFU) * alpha);
+    const uint32_t source_blue = div255((argb & 0xFFU) * alpha);
+    for (int row = 0; row < height; row++)
     {
-        uint8_t* d = fb_at(x, y + row);
-        for (int col = 0; col < w; col++, d += s_ctx.bpp)
-            fb_store(d, s_ctx.bpp, over_premul(fb_load(d, s_ctx.bpp), a, sr, sg, sb));
+        uint8_t* destination = fb_at(x, y + row);
+        for (int column = 0; column < width; column++, destination += s_ctx.bytes_per_pixel)
+            fb_store(
+                destination,
+                s_ctx.bytes_per_pixel,
+                over_premul(fb_load(destination, s_ctx.bytes_per_pixel), alpha, source_red, source_green, source_blue));
     }
 }
 
 /** @brief CPU copy/blend of a premultiplied ARGB8888 source at a global alpha (255 = plain copy). */
-static void
-cpu_copy_blend(const uint8_t* base, int stride_bytes, uint32_t ga, int sx, int sy, int x, int y, int w, int h)
+static void cpu_copy_blend(const uint8_t* source_bytes,
+                           int stride_bytes,
+                           uint32_t global_alpha,
+                           int source_x,
+                           int source_y,
+                           int x,
+                           int y,
+                           int width,
+                           int height)
 {
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)(const void*)(base + (size_t)(sy + row) * (size_t)stride_bytes) + sx;
-        uint8_t* d = fb_at(x, y + row);
-        for (int col = 0; col < w; col++, d += s_ctx.bpp)
+        const uint32_t* source_row =
+            (const uint32_t*)(const void*)(source_bytes + (size_t)(source_y + row) * (size_t)stride_bytes) + source_x;
+        uint8_t* destination = fb_at(x, y + row);
+        for (int column = 0; column < width; column++, destination += s_ctx.bytes_per_pixel)
         {
-            const uint32_t sp = s[col];
-            uint32_t sa = (sp >> 24) & 0xFFU;
-            uint32_t sr = (sp >> 16) & 0xFFU;
-            uint32_t sg = (sp >> 8) & 0xFFU;
-            uint32_t sb = sp & 0xFFU;
-            if (ga != 255U)
+            const uint32_t source_pixel = source_row[column];
+            uint32_t source_alpha = (source_pixel >> 24) & 0xFFU;
+            uint32_t source_red = (source_pixel >> 16) & 0xFFU;
+            uint32_t source_green = (source_pixel >> 8) & 0xFFU;
+            uint32_t source_blue = source_pixel & 0xFFU;
+            if (global_alpha != ALPHA_OPAQUE)
             {
-                sa = div255(sa * ga);
-                sr = div255(sr * ga);
-                sg = div255(sg * ga);
-                sb = div255(sb * ga);
+                source_alpha = div255(source_alpha * global_alpha);
+                source_red = div255(source_red * global_alpha);
+                source_green = div255(source_green * global_alpha);
+                source_blue = div255(source_blue * global_alpha);
             }
-            if (sa == 0U)
+            if (source_alpha == 0U)
                 continue;
-            if (sa == 0xFFU)
-                fb_store(d, s_ctx.bpp, 0xFF000000U | (sr << 16) | (sg << 8) | sb);
+            if (source_alpha == ALPHA_OPAQUE)
+                fb_store(destination,
+                         s_ctx.bytes_per_pixel,
+                         ARGB_OPAQUE_ALPHA | (source_red << 16) | (source_green << 8) | source_blue);
             else
-                fb_store(d, s_ctx.bpp, over_premul(fb_load(d, s_ctx.bpp), sa, sr, sg, sb));
+                fb_store(destination,
+                         s_ctx.bytes_per_pixel,
+                         over_premul(fb_load(destination, s_ctx.bytes_per_pixel),
+                                     source_alpha,
+                                     source_red,
+                                     source_green,
+                                     source_blue));
         }
     }
 }
@@ -393,74 +436,76 @@ cpu_copy_blend(const uint8_t* base, int stride_bytes, uint32_t ga, int sx, int s
  - Functions: Private (backend callbacks)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_rect_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || !clip_rect(&x, &y, &w, &h, NULL, NULL))
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || !clip_rect(&x, &y, &width, &height, NULL, NULL))
         return;
 
-    mark_dirty(x, y, w, h);
+    mark_dirty(x, y, width, height);
     wait_pending(); /* single transfer context; also fences before any CPU access below */
 
-    if (a == 0xFFU && (w * h) >= s_ctx.cfg.min_dma_pixels)
+    if (alpha == ALPHA_OPAQUE && (width * height) >= s_ctx.config.min_dma_pixels)
     {
-        cache_prepare_dst(x, y, w, h);
+        cache_prepare_dst(x, y, width, height);
         s_ctx.regs->CR = DMA2D_CR_MODE_R2M;
-        s_ctx.regs->OPFCCR = (uint32_t)s_ctx.cfg.format;
+        s_ctx.regs->OPFCCR = (uint32_t)s_ctx.config.format;
         s_ctx.regs->OCOLR = pack_ocolr(argb);
         s_ctx.regs->OMAR = (uint32_t)(uintptr_t)fb_at(x, y);
-        s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_px - w);
-        s_ctx.regs->NLR = ((uint32_t)w << 16) | (uint32_t)h;
+        s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_pixels - width);
+        s_ctx.regs->NLR = ((uint32_t)width << DMA2D_NLR_PL_SHIFT) | (uint32_t)height;
         launch(DMA2D_CR_MODE_R2M);
         return;
     }
 
-    if (a == 0xFFU)
-        cpu_fill_opaque(argb, x, y, w, h);
+    if (alpha == ALPHA_OPAQUE)
+        cpu_fill_opaque(argb, x, y, width, height);
     else
-        cpu_fill_blend(argb, a, x, y, w, h);
+        cpu_fill_blend(argb, alpha, x, y, width, height);
 }
 
-static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx)
+static void copy_rect_cb(const void* source, int source_stride_bytes, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    int sx = 0, sy = 0;
-    if (!src || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+    int source_x = 0, source_y = 0;
+    if (!source || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    mark_dirty(x, y, w, h);
+    mark_dirty(x, y, width, height);
     wait_pending();
 
-    const uint8_t* base = (const uint8_t*)src;
-    const uint8_t* dma_first = base + (size_t)sy * (size_t)src_stride_bytes + (size_t)sx * 4U;
+    const uint8_t* source_bytes = (const uint8_t*)source;
+    const uint8_t* dma_first =
+        source_bytes + (size_t)source_y * (size_t)source_stride_bytes + (size_t)source_x * ARGB8888_BYTES;
 
     /* An opaque source is a pure PFC copy the peripheral can do outright; scanning the alpha
        channel first is one read pass, far cheaper than the read-modify-write blend it avoids.
        The alignment gate matches copy_rect_fmt_cb's: a word-misaligned ARGB8888 FGMAR raises a
        DMA2D configuration error (transfer refused, image silently absent), so such a source must
        take the CPU path below instead. */
-    if ((w * h) >= s_ctx.cfg.min_dma_pixels && (((uintptr_t)dma_first & 3U) == 0U) && ((src_stride_bytes % 4) == 0)
-        && region_is_opaque(base, src_stride_bytes, sx, sy, w, h))
+    if ((width * height) >= s_ctx.config.min_dma_pixels && (((uintptr_t)dma_first & (ARGB8888_BYTES - 1U)) == 0U)
+        && ((source_stride_bytes % ARGB8888_BYTES) == 0)
+        && region_is_opaque(source_bytes, source_stride_bytes, source_x, source_y, width, height))
     {
         const uint8_t* first = dma_first;
-        cache_clean_rows(first, (size_t)(h - 1) * (size_t)src_stride_bytes + (size_t)w * 4U);
-        cache_prepare_dst(x, y, w, h);
+        cache_clean_rows(first, (size_t)(height - 1) * (size_t)source_stride_bytes + (size_t)width * ARGB8888_BYTES);
+        cache_prepare_dst(x, y, width, height);
         s_ctx.regs->CR = DMA2D_CR_MODE_M2M_PFC;
         s_ctx.regs->FGMAR = (uint32_t)(uintptr_t)first;
-        s_ctx.regs->FGOR = (uint32_t)(src_stride_bytes / 4 - w);
+        s_ctx.regs->FGOR = (uint32_t)(source_stride_bytes / ARGB8888_BYTES - width);
         s_ctx.regs->FGPFCCR = DMA2D_CM_ARGB8888;
-        s_ctx.regs->OPFCCR = (uint32_t)s_ctx.cfg.format;
+        s_ctx.regs->OPFCCR = (uint32_t)s_ctx.config.format;
         s_ctx.regs->OMAR = (uint32_t)(uintptr_t)fb_at(x, y);
-        s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_px - w);
-        s_ctx.regs->NLR = ((uint32_t)w << 16) | (uint32_t)h;
+        s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_pixels - width);
+        s_ctx.regs->NLR = ((uint32_t)width << DMA2D_NLR_PL_SHIFT) | (uint32_t)height;
         launch(DMA2D_CR_MODE_M2M_PFC);
         return;
     }
 
     /* Mixed-alpha source: DMA2D's blender expects straight-alpha foregrounds, but the engine
        hands premultiplied pixels — hardware blending would double-multiply. Composite on CPU. */
-    cpu_copy_blend(base, src_stride_bytes, 255U, sx, sy, x, y, w, h);
+    cpu_copy_blend(source_bytes, source_stride_bytes, ALPHA_OPAQUE, source_x, source_y, x, y, width, height);
 }
 
 /**
@@ -477,19 +522,20 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
  *    whole rect. Without this hook the engine expands 16-bit rows on the CPU and emits one blit per
  *    scanline — one conversion per pixel and one transfer per panel row.
  */
-static void
-copy_rect_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+static void copy_rect_fmt_cb(
+    const void* source, int source_stride_bytes, ERImageFormat format, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    int sx = 0, sy = 0;
-    if (!src || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+    int source_x = 0, source_y = 0;
+    if (!source || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    mark_dirty(x, y, w, h);
+    mark_dirty(x, y, width, height);
     wait_pending();
 
-    const int src_bpp = (fmt == ER_IMG_RGB565) ? 2 : 4;
-    const uint8_t* first = (const uint8_t*)src + (size_t)sy * (size_t)src_stride_bytes + (size_t)sx * (size_t)src_bpp;
+    const int source_bytes_per_pixel = (format == ER_IMG_RGB565) ? RGB565_BYTES : ARGB8888_BYTES;
+    const uint8_t* first = (const uint8_t*)source + (size_t)source_y * (size_t)source_stride_bytes
+                           + (size_t)source_x * (size_t)source_bytes_per_pixel;
 
     /* The DMA2D REQUIRES the source address aligned to the color mode's pixel size: an FGMAR of
        4n+2 with CM=ARGB8888 raises a CONFIGURATION ERROR - the transfer never starts, ISR.CEIF
@@ -497,68 +543,72 @@ copy_rect_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x
        misaligned source takes the CPU replace below, which is correct at any alignment. The asset
        packer 4-aligns every image's pixels, so this rarely trips, but the backend must stay
        correct against any caller. */
-    const bool aligned = ((((uintptr_t)first) & (uintptr_t)(src_bpp - 1)) == 0U) && ((src_stride_bytes % src_bpp) == 0);
+    const bool aligned = ((((uintptr_t)first) & (uintptr_t)(source_bytes_per_pixel - 1)) == 0U)
+                         && ((source_stride_bytes % source_bytes_per_pixel) == 0);
 
-    if (aligned && (w * h) >= s_ctx.cfg.min_dma_pixels)
+    if (aligned && (width * height) >= s_ctx.config.min_dma_pixels)
     {
-        cache_clean_rows(first, (size_t)(h - 1) * (size_t)src_stride_bytes + (size_t)w * (size_t)src_bpp);
-        cache_prepare_dst(x, y, w, h);
+        cache_clean_rows(
+            first, (size_t)(height - 1) * (size_t)source_stride_bytes + (size_t)width * (size_t)source_bytes_per_pixel);
+        cache_prepare_dst(x, y, width, height);
         s_ctx.regs->CR = DMA2D_CR_MODE_M2M_PFC;
         s_ctx.regs->FGMAR = (uint32_t)(uintptr_t)first;
         /* FGOR is the gap in PIXELS of the SOURCE format, not the destination's. */
-        s_ctx.regs->FGOR = (uint32_t)(src_stride_bytes / src_bpp - w);
-        s_ctx.regs->FGPFCCR = (fmt == ER_IMG_RGB565) ? DMA2D_CM_RGB565 : DMA2D_CM_ARGB8888;
-        s_ctx.regs->OPFCCR = (uint32_t)s_ctx.cfg.format;
+        s_ctx.regs->FGOR = (uint32_t)(source_stride_bytes / source_bytes_per_pixel - width);
+        s_ctx.regs->FGPFCCR = (format == ER_IMG_RGB565) ? DMA2D_CM_RGB565 : DMA2D_CM_ARGB8888;
+        s_ctx.regs->OPFCCR = (uint32_t)s_ctx.config.format;
         s_ctx.regs->OMAR = (uint32_t)(uintptr_t)fb_at(x, y);
-        s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_px - w);
-        s_ctx.regs->NLR = ((uint32_t)w << 16) | (uint32_t)h;
+        s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_pixels - width);
+        s_ctx.regs->NLR = ((uint32_t)width << DMA2D_NLR_PL_SHIFT) | (uint32_t)height;
         launch(DMA2D_CR_MODE_M2M_PFC);
         return;
     }
 
     /* Below the floor where programming the peripheral pays for itself. Still a plain replace -
        the opacity guarantee means no destination read and no blend either way. */
-    if (fmt == ER_IMG_RGB565)
+    if (format == ER_IMG_RGB565)
     {
-        for (int row = 0; row < h; row++)
+        for (int row = 0; row < height; row++)
         {
-            const uint8_t* s = first + (size_t)row * (size_t)src_stride_bytes;
-            uint8_t* d = fb_at(x, y + row);
-            for (int col = 0; col < w; col++, d += s_ctx.bpp)
+            const uint8_t* source_row = first + (size_t)row * (size_t)source_stride_bytes;
+            uint8_t* destination = fb_at(x, y + row);
+            for (int column = 0; column < width; column++, destination += s_ctx.bytes_per_pixel)
             {
-                const uint32_t v = (uint32_t)s[col * 2] | ((uint32_t)s[col * 2 + 1] << 8);
-                const uint32_t r = (v >> 11) & 0x1FU;
-                const uint32_t g = (v >> 5) & 0x3FU;
-                const uint32_t b = v & 0x1FU;
+                const uint32_t rgb565 = (uint32_t)source_row[column * RGB565_BYTES]
+                                        | ((uint32_t)source_row[column * RGB565_BYTES + 1] << 8);
+                const uint32_t red5 = (rgb565 >> 11) & 0x1FU;
+                const uint32_t green6 = (rgb565 >> 5) & 0x3FU;
+                const uint32_t blue5 = rgb565 & 0x1FU;
                 /* Bit replication, matching the engine's own expansion exactly. */
-                fb_store(d,
-                         s_ctx.bpp,
-                         0xFF000000U | (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8)
-                             | ((b << 3) | (b >> 2)));
+                fb_store(destination,
+                         s_ctx.bytes_per_pixel,
+                         ARGB_OPAQUE_ALPHA | (((red5 << 3) | (red5 >> 2)) << 16)
+                             | (((green6 << 2) | (green6 >> 4)) << 8) | ((blue5 << 3) | (blue5 >> 2)));
             }
         }
         return;
     }
 
-    cpu_copy_blend((const uint8_t*)src, src_stride_bytes, 255U, sx, sy, x, y, w, h);
+    cpu_copy_blend((const uint8_t*)source, source_stride_bytes, ALPHA_OPAQUE, source_x, source_y, x, y, width, height);
 }
 
-static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_rect_cb(
+    const void* source, int source_stride_bytes, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    if (alpha == 255U)
+    if (alpha == ALPHA_OPAQUE)
     {
-        copy_rect_cb(src, src_stride_bytes, x, y, w, h, ctx);
+        copy_rect_cb(source, source_stride_bytes, x, y, width, height, ctx);
         return;
     }
 
-    int sx = 0, sy = 0;
-    if (!src || alpha == 0U || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+    int source_x = 0, source_y = 0;
+    if (!source || alpha == 0U || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    mark_dirty(x, y, w, h);
+    mark_dirty(x, y, width, height);
     wait_pending();
-    cpu_copy_blend((const uint8_t*)src, src_stride_bytes, alpha, sx, sy, x, y, w, h);
+    cpu_copy_blend((const uint8_t*)source, source_stride_bytes, alpha, source_x, source_y, x, y, width, height);
 }
 
 static void wait_cb(void* ctx)
@@ -579,15 +629,17 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
         return false;
 
     memset(&s_ctx, 0, sizeof(s_ctx));
-    s_ctx.cfg = *config;
+    s_ctx.config = *config;
     s_ctx.regs = (ErDma2dRegs*)config->dma2d;
-    s_ctx.fb = (uint8_t*)config->framebuffer;
-    s_ctx.stride_px = config->stride_pixels > 0 ? config->stride_pixels : config->width;
-    s_ctx.bpp = (config->format == ER_DMA2D_FB_RGB565) ? 2 : (config->format == ER_DMA2D_FB_RGB888) ? 3 : 4;
-    if (s_ctx.cfg.min_dma_pixels <= 0)
-        s_ctx.cfg.min_dma_pixels = DMA2D_MIN_DMA_PIXELS_DEFAULT;
+    s_ctx.framebuffer = (uint8_t*)config->framebuffer;
+    s_ctx.stride_pixels = config->stride_pixels > 0 ? config->stride_pixels : config->width;
+    s_ctx.bytes_per_pixel = (config->format == ER_DMA2D_FB_RGB565)   ? RGB565_BYTES
+                            : (config->format == ER_DMA2D_FB_RGB888) ? RGB888_BYTES
+                                                                     : ARGB8888_BYTES;
+    if (s_ctx.config.min_dma_pixels <= 0)
+        s_ctx.config.min_dma_pixels = DMA2D_MIN_DMA_PIXELS_DEFAULT;
 
-    s_ctx.regs->AMTCR = config->dead_time > 0 ? ((config->dead_time << 8) | DMA2D_AMTCR_EN) : 0U;
+    s_ctx.regs->AMTCR = config->dead_time > 0 ? ((config->dead_time << DMA2D_AMTCR_DT_SHIFT) | DMA2D_AMTCR_EN) : 0U;
 
     memset(&s_backend, 0, sizeof(s_backend));
     s_backend.fill_rect = fill_rect_cb;
@@ -606,12 +658,12 @@ void er_dma2d_backend_set_framebuffer(void* framebuffer)
     if (!framebuffer)
         return;
     wait_pending();
-    s_ctx.fb = (uint8_t*)framebuffer;
+    s_ctx.framebuffer = (uint8_t*)framebuffer;
 }
 
 void* er_dma2d_backend_framebuffer(void)
 {
-    return s_ctx.fb;
+    return s_ctx.framebuffer;
 }
 
 void er_dma2d_backend_wait(void)
@@ -619,19 +671,19 @@ void er_dma2d_backend_wait(void)
     wait_pending();
 }
 
-bool er_dma2d_backend_take_dirty(int* x, int* y, int* w, int* h)
+bool er_dma2d_backend_take_dirty(int* x, int* y, int* width, int* height)
 {
-    if (s_ctx.dx_end <= s_ctx.dx0)
+    if (s_ctx.dirty_x_end <= s_ctx.dirty_x0)
         return false;
     if (x)
-        *x = s_ctx.dx0;
+        *x = s_ctx.dirty_x0;
     if (y)
-        *y = s_ctx.dy0;
-    if (w)
-        *w = s_ctx.dx_end - s_ctx.dx0;
-    if (h)
-        *h = s_ctx.dy_end - s_ctx.dy0;
-    s_ctx.dx0 = s_ctx.dy0 = s_ctx.dx_end = s_ctx.dy_end = 0;
+        *y = s_ctx.dirty_y0;
+    if (width)
+        *width = s_ctx.dirty_x_end - s_ctx.dirty_x0;
+    if (height)
+        *height = s_ctx.dirty_y_end - s_ctx.dirty_y0;
+    s_ctx.dirty_x0 = s_ctx.dirty_y0 = s_ctx.dirty_x_end = s_ctx.dirty_y_end = 0;
     return true;
 }
 

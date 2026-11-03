@@ -21,6 +21,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/** @brief Full scale of an 8-bit color channel. */
+#define CHANNEL_MAX 255U
+
+/** @brief An alpha of this value is fully opaque. */
+#define ALPHA_OPAQUE 255U
+
+/** @brief Added before the divide in div255() so it rounds to nearest. */
+#define DIV255_ROUND 0x80U
+
+/** @brief Opaque black, the color a freshly-cleared framebuffer holds. */
+#define OPAQUE_BLACK 0xFF000000U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -30,9 +42,10 @@
  */
 typedef struct
 {
-    uint32_t* fb; /**< ARGB8888 framebuffer (0xAARRGGBB), fb_w * fb_h pixels, row-major. */
-    int fb_w;     /**< Framebuffer width in pixels. */
-    int fb_h;     /**< Framebuffer height in pixels. */
+    uint32_t* framebuffer;  /**< ARGB8888 framebuffer (0xAARRGGBB), framebuffer_width * framebuffer_height pixels,
+                               row-major. */
+    int framebuffer_width;  /**< Framebuffer width in pixels. */
+    int framebuffer_height; /**< Framebuffer height in pixels. */
 } SoftCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -47,10 +60,10 @@ static EmbeddedRenderBackend s_backend;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Rounds (x / 255) to nearest for x in [0, 65025], without a divide. */
-static inline uint32_t div255(uint32_t x)
+static inline uint32_t div255(uint32_t value)
 {
-    x += 0x80U;
-    return (x + (x >> 8)) >> 8;
+    value += DIV255_ROUND;
+    return (value + (value >> 8)) >> 8;
 }
 
 /**
@@ -59,24 +72,25 @@ static inline uint32_t div255(uint32_t x)
  *
  * The framebuffer is kept opaque, so only the color channels are blended and the result alpha stays 0xFF.
  *
- * @param[in] dst  Destination pixel (opaque ARGB8888).
- * @param[in] sa   Source alpha (premultiply coverage).
- * @param[in] sr   Premultiplied source red.
- * @param[in] sg   Premultiplied source green.
- * @param[in] sb   Premultiplied source blue.
+ * @param[in] destination  Destination pixel (opaque ARGB8888).
+ * @param[in] source_alpha   Source alpha (premultiply coverage).
+ * @param[in] source_red   Premultiplied source red.
+ * @param[in] source_green   Premultiplied source green.
+ * @param[in] source_blue   Premultiplied source blue.
  *
  * @return The blended opaque ARGB8888 pixel.
  */
-static inline uint32_t over_premul(uint32_t dst, uint32_t sa, uint32_t sr, uint32_t sg, uint32_t sb)
+static inline uint32_t over_premul(
+    uint32_t destination, uint32_t source_alpha, uint32_t source_red, uint32_t source_green, uint32_t source_blue)
 {
-    const uint32_t inv = 255U - sa;
-    const uint32_t dr = (dst >> 16) & 0xFFU;
-    const uint32_t dg = (dst >> 8) & 0xFFU;
-    const uint32_t db = dst & 0xFFU;
-    const uint32_t r = sr + div255(dr * inv);
-    const uint32_t g = sg + div255(dg * inv);
-    const uint32_t b = sb + div255(db * inv);
-    return 0xFF000000U | (r << 16) | (g << 8) | b;
+    const uint32_t inverse_alpha = CHANNEL_MAX - source_alpha;
+    const uint32_t destination_red = (destination >> 16) & 0xFFU;
+    const uint32_t destination_green = (destination >> 8) & 0xFFU;
+    const uint32_t destination_blue = destination & 0xFFU;
+    const uint32_t red = source_red + div255(destination_red * inverse_alpha);
+    const uint32_t green = source_green + div255(destination_green * inverse_alpha);
+    const uint32_t blue = source_blue + div255(destination_blue * inverse_alpha);
+    return 0xFF000000U | (red << 16) | (green << 8) | blue;
 }
 
 /**
@@ -84,46 +98,46 @@ static inline uint32_t over_premul(uint32_t dst, uint32_t sa, uint32_t sr, uint3
  *
  * @param[in,out] x   Left edge (screen space); clamped on return.
  * @param[in,out] y   Top edge (screen space); clamped on return.
- * @param[in,out] w   Width; reduced on return.
- * @param[in,out] h   Height; reduced on return.
- * @param[out]    sx  Source column offset introduced by left/top clipping (NULL to ignore).
- * @param[out]    sy  Source row offset introduced by left/top clipping (NULL to ignore).
+ * @param[in,out] width   Width; reduced on return.
+ * @param[in,out] height   Height; reduced on return.
+ * @param[out]    source_x  Source column offset introduced by left/top clipping (NULL to ignore).
+ * @param[out]    source_y  Source row offset introduced by left/top clipping (NULL to ignore).
  *
  * @return true if any pixels remain after clipping; false if fully off-screen.
  */
-static bool clip_rect(int* x, int* y, int* w, int* h, int* sx, int* sy)
+static bool clip_rect(int* x, int* y, int* width, int* height, int* source_x, int* source_y)
 {
-    int cx = *x, cy = *y, cw = *w, ch = *h, ox = 0, oy = 0;
+    int clipped_x = *x, clipped_y = *y, clipped_width = *width, clipped_height = *height, offset_x = 0, offset_y = 0;
 
-    if (cw <= 0 || ch <= 0)
+    if (clipped_width <= 0 || clipped_height <= 0)
         return false;
-    if (cx < 0)
+    if (clipped_x < 0)
     {
-        ox = -cx;
-        cw += cx;
-        cx = 0;
+        offset_x = -clipped_x;
+        clipped_width += clipped_x;
+        clipped_x = 0;
     }
-    if (cy < 0)
+    if (clipped_y < 0)
     {
-        oy = -cy;
-        ch += cy;
-        cy = 0;
+        offset_y = -clipped_y;
+        clipped_height += clipped_y;
+        clipped_y = 0;
     }
-    if (cx + cw > s_ctx.fb_w)
-        cw = s_ctx.fb_w - cx;
-    if (cy + ch > s_ctx.fb_h)
-        ch = s_ctx.fb_h - cy;
-    if (cw <= 0 || ch <= 0)
+    if (clipped_x + clipped_width > s_ctx.framebuffer_width)
+        clipped_width = s_ctx.framebuffer_width - clipped_x;
+    if (clipped_y + clipped_height > s_ctx.framebuffer_height)
+        clipped_height = s_ctx.framebuffer_height - clipped_y;
+    if (clipped_width <= 0 || clipped_height <= 0)
         return false;
 
-    *x = cx;
-    *y = cy;
-    *w = cw;
-    *h = ch;
-    if (sx)
-        *sx = ox;
-    if (sy)
-        *sy = oy;
+    *x = clipped_x;
+    *y = clipped_y;
+    *width = clipped_width;
+    *height = clipped_height;
+    if (source_x)
+        *source_x = offset_x;
+    if (source_y)
+        *source_y = offset_y;
     return true;
 }
 
@@ -135,72 +149,78 @@ static bool clip_rect(int* x, int* y, int* w, int* h, int* sx, int* sy)
  * @param[in] argb  Straight-alpha ARGB8888 color.
  * @param[in] x     Left edge.
  * @param[in] y     Top edge.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
+ * @param[in] width     Width in pixels.
+ * @param[in] height     Height in pixels.
  * @param[in] ctx   Pointer to the SoftCtx.
  */
-static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_rect_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    SoftCtx* c = ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || !clip_rect(&x, &y, &w, &h, NULL, NULL))
+    SoftCtx* context = ctx;
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || !clip_rect(&x, &y, &width, &height, NULL, NULL))
         return;
 
-    if (a == 0xFFU)
+    if (alpha == ALPHA_OPAQUE)
     {
-        const uint32_t px = 0xFF000000U | (argb & 0x00FFFFFFU);
-        for (int row = 0; row < h; row++)
+        const uint32_t pixel = 0xFF000000U | (argb & 0x00FFFFFFU);
+        for (int row = 0; row < height; row++)
         {
-            uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
-            for (int col = 0; col < w; col++)
-                d[col] = px;
+            uint32_t* destination_row = context->framebuffer + (size_t)(y + row) * context->framebuffer_width + x;
+            for (int column = 0; column < width; column++)
+                destination_row[column] = pixel;
         }
         return;
     }
 
     /* Translucent: premultiply the straight-alpha source once, then source-over each pixel. */
-    const uint32_t sr = div255(((argb >> 16) & 0xFFU) * a);
-    const uint32_t sg = div255(((argb >> 8) & 0xFFU) * a);
-    const uint32_t sb = div255((argb & 0xFFU) * a);
-    for (int row = 0; row < h; row++)
+    const uint32_t source_red = div255(((argb >> 16) & 0xFFU) * alpha);
+    const uint32_t source_green = div255(((argb >> 8) & 0xFFU) * alpha);
+    const uint32_t source_blue = div255((argb & 0xFFU) * alpha);
+    for (int row = 0; row < height; row++)
     {
-        uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
-        for (int col = 0; col < w; col++)
-            d[col] = over_premul(d[col], a, sr, sg, sb);
+        uint32_t* destination_row = context->framebuffer + (size_t)(y + row) * context->framebuffer_width + x;
+        for (int column = 0; column < width; column++)
+            destination_row[column] =
+                over_premul(destination_row[column], alpha, source_red, source_green, source_blue);
     }
 }
 
 /**
  * @brief Copies a premultiplied ARGB8888 buffer into the framebuffer (source-over).
  *
- * @param[in] src              Source pixel buffer (premultiplied ARGB8888).
- * @param[in] src_stride_bytes Row stride of src in bytes.
+ * @param[in] source              Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source_stride_bytes Row stride of source in bytes.
  * @param[in] x                Destination X coordinate.
  * @param[in] y                Destination Y coordinate.
- * @param[in] w                Width of the region in pixels.
- * @param[in] h                Height of the region in pixels.
+ * @param[in] width                Width of the region in pixels.
+ * @param[in] height                Height of the region in pixels.
  * @param[in] ctx              Pointer to the SoftCtx.
  */
-static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx)
+static void copy_rect_cb(const void* source, int source_stride_bytes, int x, int y, int width, int height, void* ctx)
 {
-    SoftCtx* c = ctx;
-    int sx = 0, sy = 0;
-    if (!src || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+    SoftCtx* context = ctx;
+    int source_x = 0, source_y = 0;
+    if (!source || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    const uint8_t* base = (const uint8_t*)src;
-    for (int row = 0; row < h; row++)
+    const uint8_t* source_bytes = (const uint8_t*)source;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)(base + (size_t)(sy + row) * src_stride_bytes) + sx;
-        uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row =
+            (const uint32_t*)(source_bytes + (size_t)(source_y + row) * source_stride_bytes) + source_x;
+        uint32_t* destination_row = context->framebuffer + (size_t)(y + row) * context->framebuffer_width + x;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t sp = s[col];
-            const uint32_t sa = (sp >> 24) & 0xFFU;
-            if (sa == 0xFFU)
-                d[col] = sp; /* opaque source replaces the destination */
-            else if (sa != 0U)
-                d[col] = over_premul(d[col], sa, (sp >> 16) & 0xFFU, (sp >> 8) & 0xFFU, sp & 0xFFU);
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = (source_pixel >> 24) & 0xFFU;
+            if (source_alpha == ALPHA_OPAQUE)
+                destination_row[column] = source_pixel; /* opaque source replaces the destination */
+            else if (source_alpha != 0U)
+                destination_row[column] = over_premul(destination_row[column],
+                                                      source_alpha,
+                                                      (source_pixel >> 16) & 0xFFU,
+                                                      (source_pixel >> 8) & 0xFFU,
+                                                      source_pixel & 0xFFU);
         }
     }
 }
@@ -211,49 +231,52 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
  * Each source channel (including alpha) is scaled by alpha/255, preserving the premultiplied invariant, then
  * source-over composited — matching the engine's blend formula used by the other backends.
  *
- * @param[in] src              Source pixel buffer (premultiplied ARGB8888).
- * @param[in] src_stride_bytes Row stride of src in bytes.
+ * @param[in] source              Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source_stride_bytes Row stride of source in bytes.
  * @param[in] alpha            Global opacity (0 = transparent, 255 = opaque).
  * @param[in] x                Destination X coordinate.
  * @param[in] y                Destination Y coordinate.
- * @param[in] w                Width of the region in pixels.
- * @param[in] h                Height of the region in pixels.
+ * @param[in] width                Width of the region in pixels.
+ * @param[in] height                Height of the region in pixels.
  * @param[in] ctx              Pointer to the SoftCtx.
  */
-static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_rect_cb(
+    const void* source, int source_stride_bytes, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    if (alpha == 255U)
+    if (alpha == ALPHA_OPAQUE)
     {
         /* Nothing to scale — by 255/255 is the identity — and copy_rect_cb is the same source-over
          * with an opaque-pixel shortcut on top. Worth the redirect because the engine's own row
          * emitters (the vector AA rows, gradients, shadows, transforms) all blend at 255: without it
          * every one of their pixels pays four multiply-and-divides that cannot change its value.
          * Runs BEFORE the clip so copy_rect_cb still gets the unclipped rect to offset its source by. */
-        copy_rect_cb(src, src_stride_bytes, x, y, w, h, ctx);
+        copy_rect_cb(source, source_stride_bytes, x, y, width, height, ctx);
         return;
     }
 
-    SoftCtx* c = ctx;
-    int sx = 0, sy = 0;
-    const uint32_t ga = alpha;
-    if (!src || ga == 0U || !clip_rect(&x, &y, &w, &h, &sx, &sy))
+    SoftCtx* context = ctx;
+    int source_x = 0, source_y = 0;
+    const uint32_t global_alpha = alpha;
+    if (!source || global_alpha == 0U || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    const uint8_t* base = (const uint8_t*)src;
-    for (int row = 0; row < h; row++)
+    const uint8_t* source_bytes = (const uint8_t*)source;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)(base + (size_t)(sy + row) * src_stride_bytes) + sx;
-        uint32_t* d = c->fb + (size_t)(y + row) * c->fb_w + x;
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row =
+            (const uint32_t*)(source_bytes + (size_t)(source_y + row) * source_stride_bytes) + source_x;
+        uint32_t* destination_row = context->framebuffer + (size_t)(y + row) * context->framebuffer_width + x;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t sp = s[col];
-            const uint32_t sa = div255(((sp >> 24) & 0xFFU) * ga);
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = div255(((source_pixel >> 24) & 0xFFU) * global_alpha);
+            if (source_alpha == 0U)
                 continue;
-            const uint32_t sr = div255(((sp >> 16) & 0xFFU) * ga);
-            const uint32_t sg = div255(((sp >> 8) & 0xFFU) * ga);
-            const uint32_t sb = div255((sp & 0xFFU) * ga);
-            d[col] = over_premul(d[col], sa, sr, sg, sb);
+            const uint32_t source_red = div255(((source_pixel >> 16) & 0xFFU) * global_alpha);
+            const uint32_t source_green = div255(((source_pixel >> 8) & 0xFFU) * global_alpha);
+            const uint32_t source_blue = div255((source_pixel & 0xFFU) * global_alpha);
+            destination_row[column] =
+                over_premul(destination_row[column], source_alpha, source_red, source_green, source_blue);
         }
     }
 }
@@ -262,18 +285,18 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, 
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-bool er_software_backend_init(int fb_w, int fb_h)
+bool er_software_backend_init(int framebuffer_width, int framebuffer_height)
 {
-    if (fb_w <= 0 || fb_h <= 0)
+    if (framebuffer_width <= 0 || framebuffer_height <= 0)
         return false;
 
-    s_ctx.fb = malloc((size_t)fb_w * (size_t)fb_h * sizeof(uint32_t));
-    if (!s_ctx.fb)
+    s_ctx.framebuffer = malloc((size_t)framebuffer_width * (size_t)framebuffer_height * sizeof(uint32_t));
+    if (!s_ctx.framebuffer)
         return false;
 
-    s_ctx.fb_w = fb_w;
-    s_ctx.fb_h = fb_h;
-    er_software_clear(0xFF000000U); /* opaque black, like a freshly-cleared panel */
+    s_ctx.framebuffer_width = framebuffer_width;
+    s_ctx.framebuffer_height = framebuffer_height;
+    er_software_clear(OPAQUE_BLACK); /* opaque black, like a freshly-cleared panel */
 
     s_backend.fill_rect = fill_rect_cb;
     s_backend.copy_rect = copy_rect_cb;
@@ -291,48 +314,49 @@ bool er_software_backend_init(int fb_w, int fb_h)
 
 void er_software_backend_destroy(void)
 {
-    free(s_ctx.fb);
-    s_ctx.fb = NULL;
-    s_ctx.fb_w = 0;
-    s_ctx.fb_h = 0;
+    free(s_ctx.framebuffer);
+    s_ctx.framebuffer = NULL;
+    s_ctx.framebuffer_width = 0;
+    s_ctx.framebuffer_height = 0;
 }
 
-bool er_software_backend_resize(int fb_w, int fb_h)
+bool er_software_backend_resize(int framebuffer_width, int framebuffer_height)
 {
-    if (fb_w <= 0 || fb_h <= 0)
+    if (framebuffer_width <= 0 || framebuffer_height <= 0)
         return false;
 
-    uint32_t* nf = realloc(s_ctx.fb, (size_t)fb_w * (size_t)fb_h * sizeof(uint32_t));
-    if (!nf)
+    uint32_t* resized =
+        realloc(s_ctx.framebuffer, (size_t)framebuffer_width * (size_t)framebuffer_height * sizeof(uint32_t));
+    if (!resized)
         return false; /* old framebuffer is left intact on failure */
 
-    s_ctx.fb = nf;
-    s_ctx.fb_w = fb_w;
-    s_ctx.fb_h = fb_h;
-    er_software_clear(0xFF000000U);
+    s_ctx.framebuffer = resized;
+    s_ctx.framebuffer_width = framebuffer_width;
+    s_ctx.framebuffer_height = framebuffer_height;
+    er_software_clear(OPAQUE_BLACK);
     return true;
 }
 
 void er_software_clear(uint32_t argb)
 {
-    if (!s_ctx.fb)
+    if (!s_ctx.framebuffer)
         return;
-    const size_t n = (size_t)s_ctx.fb_w * (size_t)s_ctx.fb_h;
-    for (size_t i = 0; i < n; i++)
-        s_ctx.fb[i] = argb;
+    const size_t pixel_count = (size_t)s_ctx.framebuffer_width * (size_t)s_ctx.framebuffer_height;
+    for (size_t index = 0; index < pixel_count; index++)
+        s_ctx.framebuffer[index] = argb;
 }
 
 uint32_t* er_software_framebuffer(void)
 {
-    return s_ctx.fb;
+    return s_ctx.framebuffer;
 }
 
 int er_software_fb_width(void)
 {
-    return s_ctx.fb_w;
+    return s_ctx.framebuffer_width;
 }
 
 int er_software_fb_height(void)
 {
-    return s_ctx.fb_h;
+    return s_ctx.framebuffer_height;
 }

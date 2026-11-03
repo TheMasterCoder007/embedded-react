@@ -64,6 +64,8 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 #define BOOT_REPORT_BYTES (ERROR_MESSAGE_BYTES + 64)
 #define DISPLAY_FAILED_REPEAT_MS 2000U
 
+#define US_PER_MS 1000
+
 static char s_boot_report[BOOT_REPORT_BYTES];
 
 /* A forced failure, to check the error screen on hardware: `idf.py -DER_BOARD_CRASH_TEST=1` panics 5 s after boot,
@@ -94,7 +96,7 @@ static void crash_test(uint32_t since_boot_ms)
 /** @brief Returns milliseconds since boot (engine-clock delta source). */
 static uint32_t now_ms(void)
 {
-    return (uint32_t)(esp_timer_get_time() / 1000);
+    return (uint32_t)(esp_timer_get_time() / US_PER_MS);
 }
 
 #if ER_HOTRELOAD
@@ -182,8 +184,8 @@ static void load_package(bool touch)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = SCREEN_W,
-        .screen_h = SCREEN_H,
+        .screen_w = SCREEN_WIDTH,
+        .screen_h = SCREEN_HEIGHT,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -224,10 +226,10 @@ static void load_package(bool touch)
         .tx_buffer_size = RELOAD_USB_TX_BYTES,
     };
     /* The console may have installed the driver already, which is just as good. */
-    const esp_err_t err = usb_serial_jtag_driver_install(&usb_config);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    const esp_err_t error = usb_serial_jtag_driver_install(&usb_config);
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE)
     {
-        ESP_LOGE(TAG, "hot reload disabled: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "hot reload disabled: %s", esp_err_to_name(error));
     }
 #endif
 }
@@ -237,7 +239,7 @@ static void run_app(void)
 {
     esp_lcd_panel_handle_t panel = NULL;
     const bool panel_up = board_display_init(&panel);
-    if (!panel_up || !er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION))
+    if (!panel_up || !er_esp32_lcd_backend_init(panel, SCREEN_WIDTH, SCREEN_HEIGHT, ER_DISPLAY_ROTATION))
     {
         /* Say so until someone reads the log: the console may not be back yet. */
         for (;;)
@@ -262,32 +264,32 @@ static void run_app(void)
 
     /* Frame loop. The press state machine turns GT911 snapshots into down/move/up for the engine. */
     const uint32_t boot_ms = now_ms();
-    uint32_t prev = boot_ms;
+    uint32_t previous_ms = boot_ms;
     bool touch_down = false;
-    int touch_x = 0;
-    int touch_y = 0;
+    int last_touch_x = 0;
+    int last_touch_y = 0;
     while (true)
     {
         const int64_t frame_start_us = esp_timer_get_time();
 
         if (touch)
         {
-            int tx = 0;
-            int ty = 0;
+            int touch_x = 0;
+            int touch_y = 0;
             bool pressed = false;
-            if (board_touch_read(&tx, &ty, &pressed))
+            if (board_touch_read(&touch_x, &touch_y, &pressed))
             {
-                remap_touch(&tx, &ty);
+                remap_touch(&touch_x, &touch_y);
                 if (pressed)
                 {
-                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);
+                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, touch_x, touch_y);
                     touch_down = true;
-                    touch_x = tx;
-                    touch_y = ty;
+                    last_touch_x = touch_x;
+                    last_touch_y = touch_y;
                 }
                 else if (touch_down)
                 {
-                    embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
+                    embedded_renderer_touch(0, ER_TOUCH_UP, last_touch_x, last_touch_y);
                     touch_down = false;
 #if ER_HOTRELOAD
                     erb_package_reload_tap(&s_reload);
@@ -300,10 +302,10 @@ static void run_app(void)
         er_esp32_lcd_present();
 
         const uint32_t now = now_ms();
-        const uint32_t dt = now - prev;
-        embedded_renderer_tick(dt);
-        erb_tick(dt);
-        prev = now;
+        const uint32_t delta_ms = now - previous_ms;
+        embedded_renderer_tick(delta_ms);
+        erb_tick(delta_ms);
+        previous_ms = now;
 
 #if ER_HOTRELOAD
         reload_poll();
@@ -320,7 +322,7 @@ static void run_app(void)
 #endif
 
         /* Adaptive pacing: sleep the remainder up to the target; always yield >=1 tick so the idle task is fed. */
-        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / 1000);
+        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / US_PER_MS);
         const uint32_t sleep_ms = (used_ms >= ER_TARGET_FRAME_MS) ? 0U : (ER_TARGET_FRAME_MS - used_ms);
         TickType_t ticks = pdMS_TO_TICKS(sleep_ms);
         if (ticks == 0U)

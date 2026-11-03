@@ -44,12 +44,12 @@ extern "C"
      * Calls embedded_renderer_set_backend() internally (which also brings up the font subsystem), so it must
      * be called once before any rendering. The framebuffer is cleared to opaque black.
      *
-     * @param[in] fb_w  Framebuffer width in pixels (> 0).
-     * @param[in] fb_h  Framebuffer height in pixels (> 0).
+     * @param[in] framebuffer_width  Framebuffer width in pixels (> 0).
+     * @param[in] framebuffer_height  Framebuffer height in pixels (> 0).
      *
      * @return true on success; false on invalid size or allocation failure.
      */
-    bool er_software_backend_init(int fb_w, int fb_h);
+    bool er_software_backend_init(int framebuffer_width, int framebuffer_height);
 
     /**
      * @brief Frees the framebuffer and tears down the backend.
@@ -61,17 +61,17 @@ extern "C"
     /**
      * @brief Resizes the framebuffer in place (for a runtime board-size change).
      *
-     * Reallocates the framebuffer to @p fb_w x @p fb_h and clears it to opaque black. The backend stays
+     * Reallocates the framebuffer to @p framebuffer_width x @p framebuffer_height and clears it to opaque black. The backend stays
      * registered (the context pointer is unchanged), so the engine keeps rendering through it. Call
      * er_reset() afterwards before rebuilding the scene at the new size. Must be called after a successful
      * er_software_backend_init().
      *
-     * @param[in] fb_w  New framebuffer width in pixels (> 0).
-     * @param[in] fb_h  New framebuffer height in pixels (> 0).
+     * @param[in] framebuffer_width  New framebuffer width in pixels (> 0).
+     * @param[in] framebuffer_height  New framebuffer height in pixels (> 0).
      *
      * @return true on success; false on invalid size or allocation failure (the old framebuffer is kept).
      */
-    bool er_software_backend_resize(int fb_w, int fb_h);
+    bool er_software_backend_resize(int framebuffer_width, int framebuffer_height);
 
     /**
      * @brief Clears the entire framebuffer to a solid straight-alpha ARGB8888 color.
@@ -83,7 +83,7 @@ extern "C"
     /**
      * @brief Returns the ARGB8888 framebuffer (row-major, no padding; 0xAARRGGBB per pixel).
      *
-     * @return Pointer to fb_w * fb_h uint32_t pixels, or NULL before init / after destroy.
+     * @return Pointer to framebuffer_width * framebuffer_height uint32_t pixels, or NULL before init / after destroy.
      */
     uint32_t* er_software_framebuffer(void);
 

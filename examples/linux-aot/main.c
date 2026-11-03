@@ -41,11 +41,34 @@
 #include <time.h>
 
 /* Window size, unless ER_AOT_SCREEN_W/H say otherwise. The window's size picks the package's layout. */
-#define SCREEN_W_DEFAULT 800
-#define SCREEN_H_DEFAULT 480
+#define SCREEN_WIDTH_DEFAULT 800
+#define SCREEN_HEIGHT_DEFAULT 480
+
+/** @brief Bytes of the firmware's arena. */
+#define ARENA_BYTES (64u * 1024u)
+
+/** @brief A package is read into memory aligned to this many bytes. */
+#define PACKAGE_ALIGNMENT 4u
+
+#define MS_PER_SECOND 1000
+
+/** @brief A simulated frame, for the headless runs. */
+#define FRAME_MS 16
+
+/** @brief How long a headless run lets tap-triggered animations settle before its screenshot. */
+#define TAP_SETTLE_MS 300
+
+/** @brief Where ER_AOT_CLICKS taps by default: mid-width, this far down the screen. */
+#define CLICK_Y_FRACTION 0.57f
+
+/** @brief Buffer sizes for an error message and a copied env value. */
+#define MESSAGE_BYTES 256
+#define PATH_BYTES 512
+
+#define SCREENSHOT_BITS_PER_PIXEL 32
 
 /** @brief The firmware's arena. */
-static uint32_t s_arena[(64u * 1024u) / sizeof(uint32_t)];
+static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 
 /** @brief Reads a file into a 4-aligned buffer, as a board places a package. NULL when it can't be read. */
 static uint32_t* read_package(const char* path, size_t* bytes)
@@ -58,7 +81,8 @@ static uint32_t* read_package(const char* path, size_t* bytes)
     fseek(file, 0, SEEK_END);
     const long length = ftell(file);
     fseek(file, 0, SEEK_SET);
-    uint32_t* words = length > 0 ? malloc(((size_t)length + 3u) & ~(size_t)3u) : NULL;
+    uint32_t* words =
+        length > 0 ? malloc(((size_t)length + (PACKAGE_ALIGNMENT - 1u)) & ~(size_t)(PACKAGE_ALIGNMENT - 1u)) : NULL;
     if (words && fread(words, 1, (size_t)length, file) != (size_t)length)
     {
         free(words);
@@ -79,20 +103,20 @@ static void log_line(const char* line, void* context)
 /** @brief Reads an integer env var, returning @p fallback when unset/empty/non-positive. */
 static int env_int(const char* name, int fallback)
 {
-    const char* v = SDL_getenv(name);
-    if (!v || !v[0])
+    const char* value = SDL_getenv(name);
+    if (!value || !value[0])
     {
         return fallback;
     }
-    const int n = SDL_atoi(v);
-    return n > 0 ? n : fallback;
+    const int number = SDL_atoi(value);
+    return number > 0 ? number : fallback;
 }
 
 /** @brief Reads a boolean env var: true when set to anything but empty or "0". */
 static bool env_flag(const char* name)
 {
-    const char* v = SDL_getenv(name);
-    return v && v[0] && SDL_strcmp(v, "0") != 0;
+    const char* value = SDL_getenv(name);
+    return value && value[0] && SDL_strcmp(value, "0") != 0;
 }
 
 /** @brief Scales a logical SDL coordinate to physical framebuffer pixels. */
@@ -132,8 +156,8 @@ int main(int argc, char** argv)
 
     /* Framebuffer size. The parity harness sets it through ER_AOT_SCREEN_W/H, the same vars that name the
        panel a package keeps its layout for in the AOT compiler. */
-    const int SCREEN_W = env_int("ER_AOT_SCREEN_W", SCREEN_W_DEFAULT);
-    const int SCREEN_H = env_int("ER_AOT_SCREEN_H", SCREEN_H_DEFAULT);
+    const int screen_width = env_int("ER_AOT_SCREEN_W", SCREEN_WIDTH_DEFAULT);
+    const int screen_height = env_int("ER_AOT_SCREEN_H", SCREEN_HEIGHT_DEFAULT);
 
     Uint32 window_flags = SDL_WINDOW_SHOWN;
     if (env_flag("ER_HIDPI") && !env_flag("ER_NO_HIDPI"))
@@ -144,8 +168,8 @@ int main(int argc, char** argv)
     SDL_Window* window = SDL_CreateWindow("embedded-react — desktop (Flow B / AOT)",
                                           SDL_WINDOWPOS_CENTERED,
                                           SDL_WINDOWPOS_CENTERED,
-                                          SCREEN_W,
-                                          SCREEN_H,
+                                          screen_width,
+                                          screen_height,
                                           window_flags);
     if (!window)
     {
@@ -163,12 +187,12 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    int phys_w = SCREEN_W;
-    int phys_h = SCREEN_H;
-    SDL_GetRendererOutputSize(renderer, &phys_w, &phys_h);
-    const float scale = (float)phys_w / (float)SCREEN_W;
+    int physical_width = screen_width;
+    int physical_height = screen_height;
+    SDL_GetRendererOutputSize(renderer, &physical_width, &physical_height);
+    const float scale = (float)physical_width / (float)screen_width;
 
-    if (!er_sdl_backend_init(renderer, phys_w, phys_h))
+    if (!er_sdl_backend_init(renderer, physical_width, physical_height))
     {
         SDL_Log("er_sdl_backend_init failed");
         SDL_DestroyRenderer(renderer);
@@ -179,26 +203,26 @@ int main(int argc, char** argv)
 
     /* Anchor Date.now() to the real time before the load, so a mount effect already reads it. A board with
        no RTC would call this once it learns the time (SNTP, GPS). */
-    erb_set_wall_clock((int64_t)time(NULL) * 1000);
+    erb_set_wall_clock((int64_t)time(NULL) * MS_PER_SECOND);
 
     /* Verify the package and build its scene graph at this window's size. One that fails shows the error
        screen, as a board does, and a headless run fails. */
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = (uint16_t)phys_w,
-        .screen_h = (uint16_t)phys_h,
+        .screen_w = (uint16_t)physical_width,
+        .screen_h = (uint16_t)physical_height,
         .log = log_line,
     };
     ErbError load_error;
     const bool loaded = erb_load(package, package_bytes, &config, &load_error);
     if (loaded)
     {
-        SDL_Log("package %s running at %dx%d (no QuickJS)", package_path, phys_w, phys_h);
+        SDL_Log("package %s running at %dx%d (no QuickJS)", package_path, physical_width, physical_height);
     }
     else
     {
-        char message[256];
+        char message[MESSAGE_BYTES];
         erb_error_message(&load_error, message, sizeof(message));
         SDL_Log("the package didn't load: %s", message);
         erb_show_error(&load_error);
@@ -211,12 +235,12 @@ int main(int argc, char** argv)
        it, and exits. Lets a headless run confirm the pixels without a visible window. */
     /* SDL_getenv returns a pointer into a SHARED static buffer on Windows — a later SDL_getenv clobbers
        an earlier result. So copy/convert each value immediately before the next call. */
-    char shot[512] = {0};
+    char shot[PATH_BYTES] = {0};
     {
-        const char* s = SDL_getenv("ER_AOT_SHOT");
-        if (s)
+        const char* value = SDL_getenv("ER_AOT_SHOT");
+        if (value)
         {
-            SDL_strlcpy(shot, s, sizeof(shot));
+            SDL_strlcpy(shot, value, sizeof(shot));
         }
     }
     if (shot[0] && !loaded)
@@ -230,86 +254,86 @@ int main(int argc, char** argv)
     if (shot[0])
     {
         int clicks = 0;
-        int px = phys_w / 2;
-        int py = (int)(phys_h * 0.57f);
+        int click_x = physical_width / 2;
+        int click_y = (int)(physical_height * CLICK_Y_FRACTION);
         {
-            const char* s = SDL_getenv("ER_AOT_CLICKS");
-            if (s)
+            const char* value = SDL_getenv("ER_AOT_CLICKS");
+            if (value)
             {
-                clicks = SDL_atoi(s);
+                clicks = SDL_atoi(value);
             }
         }
         {
-            const char* s = SDL_getenv("ER_AOT_CLICK_X");
-            if (s)
+            const char* value = SDL_getenv("ER_AOT_CLICK_X");
+            if (value)
             {
-                px = SDL_atoi(s);
+                click_x = SDL_atoi(value);
             }
         }
         {
-            const char* s = SDL_getenv("ER_AOT_CLICK_Y");
-            if (s)
+            const char* value = SDL_getenv("ER_AOT_CLICK_Y");
+            if (value)
             {
-                py = SDL_atoi(s);
+                click_y = SDL_atoi(value);
             }
         }
         er_commit(); /* compute layout + hit areas before injecting taps so the first one lands */
-        for (int i = 0; i < clicks; i++)
+        for (int click = 0; click < clicks; click++)
         {
-            embedded_renderer_touch(0, ER_TOUCH_DOWN, px, py);
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, click_x, click_y);
             er_commit();
-            embedded_renderer_tick(16);
-            embedded_renderer_touch(0, ER_TOUCH_UP, px, py);
+            embedded_renderer_tick(FRAME_MS);
+            embedded_renderer_touch(0, ER_TOUCH_UP, click_x, click_y);
             er_commit();
-            embedded_renderer_tick(16);
+            embedded_renderer_tick(FRAME_MS);
         }
         if (clicks > 0)
         {
-            SDL_Log("injected %d tap(s) at %d,%d", clicks, px, py);
+            SDL_Log("injected %d tap(s) at %d,%d", clicks, click_x, click_y);
             /* Let any tap-triggered animation settle (e.g. a Switch thumb's 200 ms slide) before the shot. */
-            for (int elapsed = 0; elapsed < 300; elapsed += 16)
+            for (int elapsed = 0; elapsed < TAP_SETTLE_MS; elapsed += FRAME_MS)
             {
                 er_commit();
-                embedded_renderer_tick(16);
-                erb_tick(16);
+                embedded_renderer_tick(FRAME_MS);
+                erb_tick(FRAME_MS);
             }
         }
 
         /* ER_AOT_TAPS="x,y x,y …": tap each point in order (down+up), committing + settling between — for
            multi-target flows like focusing a TextInput then tapping on-screen keyboard keys. */
         {
-            char taps[512] = {0};
-            const char* s = SDL_getenv("ER_AOT_TAPS");
-            if (s)
+            char taps[PATH_BYTES] = {0};
+            const char* value = SDL_getenv("ER_AOT_TAPS");
+            if (value)
             {
-                SDL_strlcpy(taps, s, sizeof(taps));
+                SDL_strlcpy(taps, value, sizeof(taps));
             }
             if (taps[0])
             {
                 er_commit(); /* layout + hit areas before the first tap */
-                char* p = taps;
-                while (*p)
+                char* cursor = taps;
+                while (*cursor)
                 {
-                    while (*p == ' ')
+                    while (*cursor == ' ')
                     {
-                        p++;
+                        cursor++;
                     }
-                    if (!*p)
+                    if (!*cursor)
                     {
                         break;
                     }
-                    const int tx = SDL_atoi(p);
-                    char* comma = SDL_strchr(p, ',');
-                    const int ty = comma ? SDL_atoi(comma + 1) : 0;
-                    embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
+                    const int tap_x = SDL_atoi(cursor);
+                    char* comma = SDL_strchr(cursor, ',');
+                    const int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+                    embedded_renderer_touch(0, ER_TOUCH_DOWN, tap_x, tap_y);
                     er_commit();
-                    embedded_renderer_tick(16);
-                    embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+                    embedded_renderer_tick(FRAME_MS);
+                    embedded_renderer_touch(0, ER_TOUCH_UP, tap_x, tap_y);
                     er_commit();
-                    embedded_renderer_tick(16);
-                    while (*p && *p != ' ')
+                    embedded_renderer_tick(FRAME_MS);
+                    while (*cursor && *cursor != ' ')
                     {
-                        p++;
+                        cursor++;
                     }
                 }
                 SDL_Log("tapped sequence \"%s\"", taps);
@@ -319,18 +343,18 @@ int main(int argc, char** argv)
         /* ER_AOT_TYPE=<text>: type each character into the focused TextInput (the click above focuses it),
            committing between keys so onChangeText → state → update runs. ASCII only (one byte/char). */
         {
-            const char* type_str = SDL_getenv("ER_AOT_TYPE");
-            if (type_str && type_str[0])
+            const char* typed_text = SDL_getenv("ER_AOT_TYPE");
+            if (typed_text && typed_text[0])
             {
-                for (const char* tp = type_str; *tp; tp++)
+                for (const char* character = typed_text; *character; character++)
                 {
-                    char ch[2] = {*tp, '\0'};
-                    embedded_renderer_key(0, ch);
+                    char key_text[2] = {*character, '\0'};
+                    embedded_renderer_key(0, key_text);
                     er_commit();
-                    embedded_renderer_tick(16);
-                    erb_tick(16);
+                    embedded_renderer_tick(FRAME_MS);
+                    erb_tick(FRAME_MS);
                 }
-                SDL_Log("typed \"%s\"", type_str);
+                SDL_Log("typed \"%s\"", typed_text);
             }
         }
 
@@ -339,39 +363,41 @@ int main(int argc, char** argv)
            capture an in-progress animation — e.g. a button scaled down by an onPressIn spring. */
         int hold_ms = 0;
         {
-            const char* s = SDL_getenv("ER_AOT_HOLD");
-            if (s)
+            const char* value = SDL_getenv("ER_AOT_HOLD");
+            if (value)
             {
-                hold_ms = SDL_atoi(s);
+                hold_ms = SDL_atoi(value);
             }
         }
         if (hold_ms > 0)
         {
-            embedded_renderer_touch(0, ER_TOUCH_DOWN, px, py);
-            for (int elapsed = 0; elapsed < hold_ms; elapsed += 16)
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, click_x, click_y);
+            for (int elapsed = 0; elapsed < hold_ms; elapsed += FRAME_MS)
             {
                 er_commit();
-                embedded_renderer_tick(16);
-                erb_tick(16); /* let app timers (setInterval/setTimeout) fire during the hold */
+                embedded_renderer_tick(FRAME_MS);
+                erb_tick(FRAME_MS); /* let app timers (setInterval/setTimeout) fire during the hold */
             }
-            SDL_Log("held press at %d,%d for %d ms", px, py, hold_ms);
+            SDL_Log("held press at %d,%d for %d ms", click_x, click_y, hold_ms);
         }
 
         er_commit();
         er_sdl_present();
-        SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, phys_w, phys_h, 32, SDL_PIXELFORMAT_ARGB8888);
-        if (surf && SDL_RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch) == 0)
+        SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
+            0, physical_width, physical_height, SCREENSHOT_BITS_PER_PIXEL, SDL_PIXELFORMAT_ARGB8888);
+        if (surface
+            && SDL_RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surface->pixels, surface->pitch) == 0)
         {
-            SDL_SaveBMP(surf, shot);
+            SDL_SaveBMP(surface, shot);
             SDL_Log("wrote screenshot %s", shot);
         }
         else
         {
             SDL_Log("screenshot failed: %s", SDL_GetError());
         }
-        if (surf)
+        if (surface)
         {
-            SDL_FreeSurface(surf);
+            SDL_FreeSurface(surface);
         }
         er_sdl_backend_destroy();
         SDL_DestroyRenderer(renderer);
@@ -381,27 +407,27 @@ int main(int argc, char** argv)
     }
 
     bool running = true;
-    uint32_t prev = SDL_GetTicks();
+    uint32_t previous_ticks = SDL_GetTicks();
     while (running)
     {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev))
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
         {
-            if (ev.type == SDL_QUIT || (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE))
+            if (event.type == SDL_QUIT || (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE))
             {
                 running = false;
             }
-            else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
+            else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                embedded_renderer_touch(0, ER_TOUCH_DOWN, to_px(ev.button.x, scale), to_px(ev.button.y, scale));
+                embedded_renderer_touch(0, ER_TOUCH_DOWN, to_px(event.button.x, scale), to_px(event.button.y, scale));
             }
-            else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
+            else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT)
             {
-                embedded_renderer_touch(0, ER_TOUCH_UP, to_px(ev.button.x, scale), to_px(ev.button.y, scale));
+                embedded_renderer_touch(0, ER_TOUCH_UP, to_px(event.button.x, scale), to_px(event.button.y, scale));
             }
-            else if (ev.type == SDL_MOUSEMOTION && (ev.motion.state & SDL_BUTTON_LMASK))
+            else if (event.type == SDL_MOUSEMOTION && (event.motion.state & SDL_BUTTON_LMASK))
             {
-                embedded_renderer_touch(0, ER_TOUCH_MOVE, to_px(ev.motion.x, scale), to_px(ev.motion.y, scale));
+                embedded_renderer_touch(0, ER_TOUCH_MOVE, to_px(event.motion.x, scale), to_px(event.motion.y, scale));
             }
         }
 
@@ -409,10 +435,10 @@ int main(int argc, char** argv)
         er_sdl_present();
 
         const uint32_t now = SDL_GetTicks();
-        const uint32_t dt = now - prev;
-        embedded_renderer_tick(dt);
-        erb_tick(dt); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
-        prev = now;
+        const uint32_t delta_ms = now - previous_ticks;
+        embedded_renderer_tick(delta_ms);
+        erb_tick(delta_ms); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
+        previous_ticks = now;
     }
 
     er_sdl_backend_destroy();

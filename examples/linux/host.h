@@ -53,12 +53,12 @@ typedef struct
 {
     struct SDL_Window* window;     /**< SDL window. */
     struct SDL_Renderer* renderer; /**< SDL renderer backing the engine's SDL backend. */
-    int phys_w;                    /**< Framebuffer width in physical pixels. */
-    int phys_h;                    /**< Framebuffer height in physical pixels. */
+    int physical_width;            /**< Framebuffer width in physical pixels. */
+    int physical_height;           /**< Framebuffer height in physical pixels. */
     float dpi_scale;               /**< Physical/logical pixel ratio (HiDPI input scaling). */
     bool running;                  /**< Cleared when quit (window close / ESC) is requested. */
     bool reload_requested;         /**< Set when the reload key (R) is pressed; the simulator acts on it. */
-    uint32_t prev_ticks;           /**< SDL_GetTicks() at the previous frame, for the tick delta. */
+    uint32_t previous_ticks;       /**< SDL_GetTicks() at the previous frame, for the tick delta. */
 } ErHost;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -70,12 +70,12 @@ typedef struct
  *        installed. No assets are registered here — they ride inside the config container (demo) or a
  *        runtime pack (simulator). Fills @p host on success.
  *
- * @param[in]  cfg   Window configuration.
+ * @param[in]  config   Window configuration.
  * @param[out] host  Host state to initialize.
  *
  * @return true on success; false (with an SDL_Log) if any stage failed (partial state is torn down).
  */
-bool er_host_start(const ErHostConfig* cfg, ErHost* host);
+bool er_host_start(const ErHostConfig* config, ErHost* host);
 
 /**
  * @brief Loads the config container from the fixed "config slot" (app.erpkg next to the executable)

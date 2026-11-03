@@ -28,7 +28,7 @@
  *
  * When ER_LCD_BANDED is set the backend advertises a band height to the engine, which then renders each
  * commit's damage region in horizontal strips through a small band texture — exactly as a RAM-constrained
- * LCD backend does — instead of compositing into a full persistent framebuffer. The persistent `fb`
+ * LCD backend does — instead of compositing into a full persistent framebuffer. The persistent `framebuffer`
  * texture stands in for the panel's own GRAM: it retains the pixels outside the strips. This lets the
  * engine's banded driver be validated on desktop with screenshots. 0 = classic full-framebuffer path.
  */
@@ -41,6 +41,17 @@
 #define ER_LCD_BANDED_ROWS 40
 #endif
 
+/** @brief Full scale of an 8-bit color channel; as a color or alpha mod it leaves a texture unchanged. */
+#define CHANNEL_MAX 255
+
+/** @brief An alpha of this value is fully opaque. */
+#define ALPHA_OPAQUE 255
+
+/** @brief The dirty-rect overlay's outline color (yellow). */
+#define DIRTY_OVERLAY_RED 255
+#define DIRTY_OVERLAY_GREEN 220
+#define DIRTY_OVERLAY_BLUE 0
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -50,15 +61,15 @@
  */
 typedef struct
 {
-    SDL_Renderer* renderer;      /**< SDL2 renderer owned by the caller. */
-    SDL_Texture* fb;             /**< Render-target texture used as a persistent framebuffer. */
-    SDL_Texture* scratch;        /**< Streaming ARGB8888 texture for copy/blend ops. */
-    SDL_Texture* scratch565;     /**< Streaming RGB565 texture for opaque native-format blits. */
-    int scratch_w;               /**< Width of the scratch texture in pixels. */
-    int scratch_h;               /**< Height of the scratch texture in pixels. */
-    SDL_BlendMode premult_blend; /**< Custom blend mode for premultiplied ARGB sources. */
+    SDL_Renderer* renderer;            /**< SDL2 renderer owned by the caller. */
+    SDL_Texture* framebuffer;          /**< Render-target texture used as a persistent framebuffer. */
+    SDL_Texture* scratch;              /**< Streaming ARGB8888 texture for copy/blend ops. */
+    SDL_Texture* scratch565;           /**< Streaming RGB565 texture for opaque native-format blits. */
+    int scratch_width;                 /**< Width of the scratch texture in pixels. */
+    int scratch_height;                /**< Height of the scratch texture in pixels. */
+    SDL_BlendMode premultiplied_blend; /**< Custom blend mode for premultiplied ARGB sources. */
 #if ER_LCD_BANDED
-    SDL_Texture* band; /**< Small render-target strip buffer (fb_w × ER_LCD_BANDED_ROWS). */
+    SDL_Texture* band; /**< Small render-target strip buffer (framebuffer_width × ER_LCD_BANDED_ROWS). */
     SDL_Rect strip;    /**< Screen-space rect of the strip currently being rendered. */
 #endif
 } SDLCtx;
@@ -85,48 +96,48 @@ static float s_dirty_scale = 1.0f;
  * @param[in] argb  Straight-alpha ARGB8888 color.
  * @param[in] x     Left edge of the rectangle.
  * @param[in] y     Top edge of the rectangle.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
+ * @param[in] width     Width in pixels.
+ * @param[in] height     Height in pixels.
  * @param[in] ctx   Pointer to the SDLCtx.
  */
-static void fill_rect_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_rect_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    SDLCtx* c = ctx;
-    uint8_t a = (uint8_t)(argb >> 24);
-    uint8_t r = (uint8_t)(argb >> 16);
-    uint8_t g = (uint8_t)(argb >> 8);
-    uint8_t b = (uint8_t)(argb);
-    SDL_Rect rect = {x, y, w, h};
+    SDLCtx* context = ctx;
+    uint8_t alpha = (uint8_t)(argb >> 24);
+    uint8_t red = (uint8_t)(argb >> 16);
+    uint8_t green = (uint8_t)(argb >> 8);
+    uint8_t blue = (uint8_t)(argb);
+    SDL_Rect rect = {x, y, width, height};
 
-    SDL_SetRenderDrawBlendMode(c->renderer, a == 0xFFU ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(c->renderer, r, g, b, a);
-    SDL_RenderFillRect(c->renderer, &rect);
+    SDL_SetRenderDrawBlendMode(context->renderer, alpha == ALPHA_OPAQUE ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(context->renderer, red, green, blue, alpha);
+    SDL_RenderFillRect(context->renderer, &rect);
 }
 
 /**
  * @brief Copies a premultiplied ARGB8888 buffer to the framebuffer.
  *
- * Uploads src into the scratch texture then renders it at (x, y) using the
+ * Uploads source into the scratch texture then renders it at (x, y) using the
  * premultiplied-alpha blend mode so the engine's composite model is preserved.
  *
- * @param[in] src              Source pixel buffer (premultiplied ARGB8888).
- * @param[in] src_stride_bytes Row stride of src in bytes.
+ * @param[in] source              Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source_stride_bytes Row stride of source in bytes.
  * @param[in] x                Destination X coordinate.
  * @param[in] y                Destination Y coordinate.
- * @param[in] w                Width of the region in pixels.
- * @param[in] h                Height of the region in pixels.
+ * @param[in] width                Width of the region in pixels.
+ * @param[in] height                Height of the region in pixels.
  * @param[in] ctx              Pointer to the SDLCtx.
  */
-static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx)
+static void copy_rect_cb(const void* source, int source_stride_bytes, int x, int y, int width, int height, void* ctx)
 {
-    SDLCtx* c = ctx;
-    SDL_Rect src_rect = {0, 0, w, h};
-    SDL_Rect dst_rect = {x, y, w, h};
+    SDLCtx* context = ctx;
+    SDL_Rect source_rect = {0, 0, width, height};
+    SDL_Rect destination_rect = {x, y, width, height};
 
-    SDL_UpdateTexture(c->scratch, &src_rect, src, src_stride_bytes);
-    SDL_SetTextureColorMod(c->scratch, 255, 255, 255);
-    SDL_SetTextureAlphaMod(c->scratch, 255);
-    SDL_RenderCopy(c->renderer, c->scratch, &src_rect, &dst_rect);
+    SDL_UpdateTexture(context->scratch, &source_rect, source, source_stride_bytes);
+    SDL_SetTextureColorMod(context->scratch, CHANNEL_MAX, CHANNEL_MAX, CHANNEL_MAX);
+    SDL_SetTextureAlphaMod(context->scratch, ALPHA_OPAQUE);
+    SDL_RenderCopy(context->renderer, context->scratch, &source_rect, &destination_rect);
 }
 
 /**
@@ -136,26 +147,27 @@ static void copy_rect_cb(const void* src, int src_stride_bytes, int x, int y, in
  * alpha modulation before rendering with the premultiplied blend mode. This preserves
  * the engine's blend formula: out.C = src.C*(a/255) + dst.C*(1 - src.A*(a/255)).
  *
- * @param[in] src              Source pixel buffer (premultiplied ARGB8888).
- * @param[in] src_stride_bytes Row stride of src in bytes.
+ * @param[in] source              Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source_stride_bytes Row stride of source in bytes.
  * @param[in] alpha            Global opacity (0 = transparent, 255 = opaque).
  * @param[in] x                Destination X coordinate.
  * @param[in] y                Destination Y coordinate.
- * @param[in] w                Width of the region in pixels.
- * @param[in] h                Height of the region in pixels.
+ * @param[in] width                Width of the region in pixels.
+ * @param[in] height                Height of the region in pixels.
  * @param[in] ctx              Pointer to the SDLCtx.
  */
-static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_rect_cb(
+    const void* source, int source_stride_bytes, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    SDLCtx* c = ctx;
-    SDL_Rect src_rect = {0, 0, w, h};
-    SDL_Rect dst_rect = {x, y, w, h};
+    SDLCtx* context = ctx;
+    SDL_Rect source_rect = {0, 0, width, height};
+    SDL_Rect destination_rect = {x, y, width, height};
 
-    SDL_UpdateTexture(c->scratch, &src_rect, src, src_stride_bytes);
+    SDL_UpdateTexture(context->scratch, &source_rect, source, source_stride_bytes);
     /* Scaling both color and alpha channels by the same factor preserves premultiplied invariant. */
-    SDL_SetTextureColorMod(c->scratch, alpha, alpha, alpha);
-    SDL_SetTextureAlphaMod(c->scratch, alpha);
-    SDL_RenderCopy(c->renderer, c->scratch, &src_rect, &dst_rect);
+    SDL_SetTextureColorMod(context->scratch, alpha, alpha, alpha);
+    SDL_SetTextureAlphaMod(context->scratch, alpha);
+    SDL_RenderCopy(context->renderer, context->scratch, &source_rect, &destination_rect);
 }
 
 /**
@@ -166,34 +178,34 @@ static void blend_rect_cb(const void* src, int src_stride_bytes, uint8_t alpha, 
  * upload to a dedicated RGB565 streaming texture and the GPU does the format conversion; ARGB sources
  * reuse the regular scratch texture with its premultiplied blend mode temporarily bypassed.
  *
- * @param[in] src              Source pixel buffer (fully opaque, in fmt's layout).
- * @param[in] src_stride_bytes Row stride of src in bytes.
- * @param[in] fmt              Pixel format of src (ER_IMG_ARGB8888 or ER_IMG_RGB565).
+ * @param[in] source              Source pixel buffer (fully opaque, in format's layout).
+ * @param[in] source_stride_bytes Row stride of source in bytes.
+ * @param[in] format              Pixel format of source (ER_IMG_ARGB8888 or ER_IMG_RGB565).
  * @param[in] x                Destination X coordinate.
  * @param[in] y                Destination Y coordinate.
- * @param[in] w                Width of the region in pixels.
- * @param[in] h                Height of the region in pixels.
+ * @param[in] width                Width of the region in pixels.
+ * @param[in] height                Height of the region in pixels.
  * @param[in] ctx              Pointer to the SDLCtx.
  */
-static void
-copy_rect_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+static void copy_rect_fmt_cb(
+    const void* source, int source_stride_bytes, ERImageFormat format, int x, int y, int width, int height, void* ctx)
 {
-    SDLCtx* c = ctx;
-    SDL_Rect src_rect = {0, 0, w, h};
-    SDL_Rect dst_rect = {x, y, w, h};
+    SDLCtx* context = ctx;
+    SDL_Rect source_rect = {0, 0, width, height};
+    SDL_Rect destination_rect = {x, y, width, height};
 
-    if (fmt == ER_IMG_RGB565)
+    if (format == ER_IMG_RGB565)
     {
-        SDL_UpdateTexture(c->scratch565, &src_rect, src, src_stride_bytes);
-        SDL_RenderCopy(c->renderer, c->scratch565, &src_rect, &dst_rect);
+        SDL_UpdateTexture(context->scratch565, &source_rect, source, source_stride_bytes);
+        SDL_RenderCopy(context->renderer, context->scratch565, &source_rect, &destination_rect);
         return;
     }
-    SDL_UpdateTexture(c->scratch, &src_rect, src, src_stride_bytes);
-    SDL_SetTextureColorMod(c->scratch, 255, 255, 255);
-    SDL_SetTextureAlphaMod(c->scratch, 255);
-    SDL_SetTextureBlendMode(c->scratch, SDL_BLENDMODE_NONE); /* opaque contract: replace, no blend */
-    SDL_RenderCopy(c->renderer, c->scratch, &src_rect, &dst_rect);
-    SDL_SetTextureBlendMode(c->scratch, c->premult_blend);
+    SDL_UpdateTexture(context->scratch, &source_rect, source, source_stride_bytes);
+    SDL_SetTextureColorMod(context->scratch, CHANNEL_MAX, CHANNEL_MAX, CHANNEL_MAX);
+    SDL_SetTextureAlphaMod(context->scratch, ALPHA_OPAQUE);
+    SDL_SetTextureBlendMode(context->scratch, SDL_BLENDMODE_NONE); /* opaque contract: replace, no blend */
+    SDL_RenderCopy(context->renderer, context->scratch, &source_rect, &destination_rect);
+    SDL_SetTextureBlendMode(context->scratch, context->premultiplied_blend);
 }
 
 #if ER_LCD_BANDED
@@ -201,44 +213,45 @@ copy_rect_fmt_cb(const void* src, int src_stride_bytes, ERImageFormat fmt, int x
  * @brief Begins a strip: targets the band texture and clears its used region to opaque black.
  *
  * The engine emits the strip's fill/copy/blend ops with band-local Y (the strip top is subtracted
- * upstream), so they land in the band texture; band_flush_cb then copies the strip into `fb`.
+ * upstream), so they land in the band texture; band_flush_cb then copies the strip into `framebuffer`.
  *
  * @param[in] x    Strip left edge in screen space.
  * @param[in] y    Strip top edge in screen space.
- * @param[in] w    Strip width in pixels.
- * @param[in] h    Strip height in pixels.
+ * @param[in] width    Strip width in pixels.
+ * @param[in] height    Strip height in pixels.
  * @param[in] ctx  Pointer to the SDLCtx.
  */
-static void band_begin_cb(int x, int y, int w, int h, void* ctx)
+static void band_begin_cb(int x, int y, int width, int height, void* ctx)
 {
-    SDLCtx* c = ctx;
-    c->strip.x = x;
-    c->strip.y = y;
-    c->strip.w = w;
-    c->strip.h = h;
-    /* X stays absolute (band texture is full screen width); only Y is band-local, so clear [x,0,w,h]. */
-    const SDL_Rect local = {x, 0, w, h};
-    SDL_SetRenderTarget(c->renderer, c->band);
-    SDL_SetRenderDrawBlendMode(c->renderer, SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(c->renderer, 0, 0, 0, 255); /* matches a RAM backend's zeroed (opaque black) fb */
-    SDL_RenderFillRect(c->renderer, &local);
+    SDLCtx* context = ctx;
+    context->strip.x = x;
+    context->strip.y = y;
+    context->strip.w = width;
+    context->strip.h = height;
+    /* X stays absolute (band texture is full screen width); only Y is band-local, so clear [x, 0, width, height]. */
+    const SDL_Rect local = {x, 0, width, height};
+    SDL_SetRenderTarget(context->renderer, context->band);
+    SDL_SetRenderDrawBlendMode(context->renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(
+        context->renderer, 0, 0, 0, ALPHA_OPAQUE); /* matches a RAM backend's zeroed (opaque black) framebuffer */
+    SDL_RenderFillRect(context->renderer, &local);
 }
 
 /**
  * @brief Flushes the current strip from the band texture into the persistent framebuffer.
  *
- * Mirrors a hardware backend's per-band DMA: the band buffer is pushed to the panel (here, the `fb`
+ * Mirrors a hardware backend's per-band DMA: the band buffer is pushed to the panel (here, the `framebuffer`
  * texture that stands in for panel GRAM) at the strip's screen position.
  *
  * @param[in] ctx  Pointer to the SDLCtx.
  */
 static void band_flush_cb(void* ctx)
 {
-    SDLCtx* c = ctx;
-    const SDL_Rect src = {c->strip.x, 0, c->strip.w, c->strip.h};
-    SDL_SetRenderTarget(c->renderer, c->fb);
-    SDL_SetTextureBlendMode(c->band, SDL_BLENDMODE_NONE);
-    SDL_RenderCopy(c->renderer, c->band, &src, &c->strip);
+    SDLCtx* context = ctx;
+    const SDL_Rect source_rect = {context->strip.x, 0, context->strip.w, context->strip.h};
+    SDL_SetRenderTarget(context->renderer, context->framebuffer);
+    SDL_SetTextureBlendMode(context->band, SDL_BLENDMODE_NONE);
+    SDL_RenderCopy(context->renderer, context->band, &source_rect, &context->strip);
 }
 #endif /* ER_LCD_BANDED */
 
@@ -246,14 +259,14 @@ static void band_flush_cb(void* ctx)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
+bool er_sdl_backend_init(SDL_Renderer* renderer, int framebuffer_width, int framebuffer_height)
 {
-    if (!renderer || fb_w <= 0 || fb_h <= 0)
+    if (!renderer || framebuffer_width <= 0 || framebuffer_height <= 0)
         return false;
 
     s_ctx.renderer = renderer;
-    s_ctx.scratch_w = fb_w;
-    s_ctx.scratch_h = fb_h;
+    s_ctx.scratch_width = framebuffer_width;
+    s_ctx.scratch_height = framebuffer_height;
 
     /*
      * Custom blend mode for premultiplied ARGB sources:
@@ -261,32 +274,34 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
      * Standard SDL_BLENDMODE_BLEND would expect un-premultiplied src and would
      * double-multiply the alpha channel.
      */
-    s_ctx.premult_blend = SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE,
-                                                     SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                                                     SDL_BLENDOPERATION_ADD,
-                                                     SDL_BLENDFACTOR_ONE,
-                                                     SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
-                                                     SDL_BLENDOPERATION_ADD);
+    s_ctx.premultiplied_blend = SDL_ComposeCustomBlendMode(SDL_BLENDFACTOR_ONE,
+                                                           SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                                                           SDL_BLENDOPERATION_ADD,
+                                                           SDL_BLENDFACTOR_ONE,
+                                                           SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+                                                           SDL_BLENDOPERATION_ADD);
 
-    s_ctx.scratch = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, fb_w, fb_h);
+    s_ctx.scratch = SDL_CreateTexture(
+        renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, framebuffer_width, framebuffer_height);
     if (!s_ctx.scratch)
         return false;
 
-    SDL_SetTextureBlendMode(s_ctx.scratch, s_ctx.premult_blend);
+    SDL_SetTextureBlendMode(s_ctx.scratch, s_ctx.premultiplied_blend);
 
     /* Persistent framebuffer: all engine draw calls target this texture, so the
      * last rendered frame survives across frames where er_commit() is a no-op. */
-    s_ctx.fb = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, fb_w, fb_h);
-    if (!s_ctx.fb)
+    s_ctx.framebuffer = SDL_CreateTexture(
+        renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, framebuffer_width, framebuffer_height);
+    if (!s_ctx.framebuffer)
     {
         SDL_DestroyTexture(s_ctx.scratch);
         s_ctx.scratch = NULL;
         return false;
     }
 
-    SDL_SetTextureBlendMode(s_ctx.fb, SDL_BLENDMODE_NONE);
-    SDL_SetRenderTarget(renderer, s_ctx.fb);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_SetTextureBlendMode(s_ctx.framebuffer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderTarget(renderer, s_ctx.framebuffer);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, ALPHA_OPAQUE);
     SDL_RenderClear(renderer);
 
     s_backend.fill_rect = fill_rect_cb;
@@ -299,7 +314,8 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
     /* Opaque native-format blit path. Optional: if the RGB565 texture can't be created the hook stays
      * NULL and the engine falls back to CPU expansion through copy_rect — behaviour is unchanged. */
     s_backend.copy_rect_fmt = NULL;
-    s_ctx.scratch565 = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, fb_w, fb_h);
+    s_ctx.scratch565 = SDL_CreateTexture(
+        renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, framebuffer_width, framebuffer_height);
     if (s_ctx.scratch565)
     {
         SDL_SetTextureBlendMode(s_ctx.scratch565, SDL_BLENDMODE_NONE);
@@ -308,12 +324,12 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h)
 
 #if ER_LCD_BANDED
     /* Band buffer: a strip of the screen the engine recomposites and flushes one row-range at a time. */
-    s_ctx.band =
-        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, fb_w, ER_LCD_BANDED_ROWS);
+    s_ctx.band = SDL_CreateTexture(
+        renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, framebuffer_width, ER_LCD_BANDED_ROWS);
     if (!s_ctx.band)
     {
-        SDL_DestroyTexture(s_ctx.fb);
-        s_ctx.fb = NULL;
+        SDL_DestroyTexture(s_ctx.framebuffer);
+        s_ctx.framebuffer = NULL;
         SDL_DestroyTexture(s_ctx.scratch);
         s_ctx.scratch = NULL;
         return false;
@@ -342,32 +358,33 @@ void er_sdl_present(void)
 
     /* Composite the persistent framebuffer onto the screen, then flip. */
     SDL_SetRenderTarget(s_ctx.renderer, NULL);
-    SDL_SetRenderDrawColor(s_ctx.renderer, 0, 0, 0, 255);
+    SDL_SetRenderDrawColor(s_ctx.renderer, 0, 0, 0, ALPHA_OPAQUE);
     SDL_RenderClear(s_ctx.renderer);
-    SDL_RenderCopy(s_ctx.renderer, s_ctx.fb, NULL, NULL);
+    SDL_RenderCopy(s_ctx.renderer, s_ctx.framebuffer, NULL, NULL);
 
     /* Optional dirty-rect diagnostic overlay: yellow outline of repainted region. */
     if (s_show_dirty_overlay)
     {
-        ERRect dr;
-        if (er_get_dirty_rect(&dr))
+        ERRect dirty_rect;
+        if (er_get_dirty_rect(&dirty_rect))
         {
-            SDL_Rect sdl_r = {
-                (int)((float)dr.x / s_dirty_scale),
-                (int)((float)dr.y / s_dirty_scale),
-                (int)((float)dr.w / s_dirty_scale),
-                (int)((float)dr.h / s_dirty_scale),
+            SDL_Rect overlay_rect = {
+                (int)((float)dirty_rect.x / s_dirty_scale),
+                (int)((float)dirty_rect.y / s_dirty_scale),
+                (int)((float)dirty_rect.w / s_dirty_scale),
+                (int)((float)dirty_rect.h / s_dirty_scale),
             };
             SDL_SetRenderDrawBlendMode(s_ctx.renderer, SDL_BLENDMODE_NONE);
-            SDL_SetRenderDrawColor(s_ctx.renderer, 255, 220, 0, 255);
-            SDL_RenderDrawRect(s_ctx.renderer, &sdl_r);
+            SDL_SetRenderDrawColor(
+                s_ctx.renderer, DIRTY_OVERLAY_RED, DIRTY_OVERLAY_GREEN, DIRTY_OVERLAY_BLUE, ALPHA_OPAQUE);
+            SDL_RenderDrawRect(s_ctx.renderer, &overlay_rect);
         }
     }
 
     SDL_RenderPresent(s_ctx.renderer);
 
     /* Restore the render target so the next er_commit() draws back into the framebuffer. */
-    SDL_SetRenderTarget(s_ctx.renderer, s_ctx.fb);
+    SDL_SetRenderTarget(s_ctx.renderer, s_ctx.framebuffer);
 }
 
 void er_sdl_backend_destroy(void)
@@ -379,10 +396,10 @@ void er_sdl_backend_destroy(void)
         s_ctx.band = NULL;
     }
 #endif
-    if (s_ctx.fb)
+    if (s_ctx.framebuffer)
     {
-        SDL_DestroyTexture(s_ctx.fb);
-        s_ctx.fb = NULL;
+        SDL_DestroyTexture(s_ctx.framebuffer);
+        s_ctx.framebuffer = NULL;
     }
     if (s_ctx.scratch)
     {

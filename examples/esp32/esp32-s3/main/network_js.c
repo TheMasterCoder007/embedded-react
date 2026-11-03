@@ -24,6 +24,8 @@
 
 #include <stdbool.h>
 
+#define MS_PER_SECOND 1000
+
 static const char* const k_states[] = {"idle", "connecting", "connected", "failed"};
 static const char* const k_fails[] = {NULL, "auth", "notFound", "other"};
 
@@ -42,20 +44,20 @@ static JSValue js_networks(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     (void)this_val;
     (void)argc;
     (void)argv;
-    NetworkAp aps[NETWORK_SCAN_MAX];
-    const int n = network_scan_results(aps, NETWORK_SCAN_MAX);
-    if (n < 0)
+    NetworkAp networks[NETWORK_SCAN_MAX];
+    const int count = network_scan_results(networks, NETWORK_SCAN_MAX);
+    if (count < 0)
     {
         return JS_NULL;
     }
     JSValue list = JS_NewArray(ctx);
-    for (int i = 0; i < n; i++)
+    for (int index = 0; index < count; index++)
     {
-        JSValue ap = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, ap, "ssid", JS_NewString(ctx, aps[i].ssid));
-        JS_SetPropertyStr(ctx, ap, "rssi", JS_NewInt32(ctx, aps[i].rssi));
-        JS_SetPropertyStr(ctx, ap, "secure", JS_NewBool(ctx, aps[i].secure));
-        JS_SetPropertyUint32(ctx, list, (uint32_t)i, ap);
+        JSValue network = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, network, "ssid", JS_NewString(ctx, networks[index].ssid));
+        JS_SetPropertyStr(ctx, network, "rssi", JS_NewInt32(ctx, networks[index].rssi));
+        JS_SetPropertyStr(ctx, network, "secure", JS_NewBool(ctx, networks[index].secure));
+        JS_SetPropertyUint32(ctx, list, (uint32_t)index, network);
     }
     return list;
 }
@@ -104,12 +106,12 @@ static JSValue js_status(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     (void)this_val;
     (void)argc;
     (void)argv;
-    NetworkStatus st;
-    network_status(&st);
+    NetworkStatus status;
+    network_status(&status);
     JSValue out = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, out, "state", JS_NewString(ctx, k_states[st.state]));
-    JS_SetPropertyStr(ctx, out, "ssid", JS_NewString(ctx, st.ssid));
-    JS_SetPropertyStr(ctx, out, "reason", k_fails[st.fail] ? JS_NewString(ctx, k_fails[st.fail]) : JS_NULL);
+    JS_SetPropertyStr(ctx, out, "state", JS_NewString(ctx, k_states[status.state]));
+    JS_SetPropertyStr(ctx, out, "ssid", JS_NewString(ctx, status.ssid));
+    JS_SetPropertyStr(ctx, out, "reason", k_fails[status.fail] ? JS_NewString(ctx, k_fails[status.fail]) : JS_NULL);
     return out;
 }
 
@@ -119,7 +121,7 @@ static JSValue js_utc_offset_ms(JSContext* ctx, JSValueConst this_val, int argc,
     (void)this_val;
     (void)argc;
     (void)argv;
-    return network_time_known() ? JS_NewInt32(ctx, network_utc_offset_s() * 1000) : JS_NULL;
+    return network_time_known() ? JS_NewInt32(ctx, network_utc_offset_s() * MS_PER_SECOND) : JS_NULL;
 }
 
 /** @brief `__erClock.timeZone()`. */
@@ -128,9 +130,9 @@ static JSValue js_time_zone(JSContext* ctx, JSValueConst this_val, int argc, JSV
     (void)this_val;
     (void)argc;
     (void)argv;
-    char tz[64];
-    network_time_zone(tz, sizeof(tz));
-    return JS_NewString(ctx, tz);
+    char time_zone[NETWORK_TIME_ZONE_BYTES];
+    network_time_zone(time_zone, sizeof(time_zone));
+    return JS_NewString(ctx, time_zone);
 }
 
 /** @brief `__erClock.setTimeZone(tz)`. */
@@ -141,20 +143,20 @@ static JSValue js_set_time_zone(JSContext* ctx, JSValueConst this_val, int argc,
     {
         return JS_FALSE;
     }
-    const char* tz = JS_ToCString(ctx, argv[0]);
-    if (!tz)
+    const char* time_zone = JS_ToCString(ctx, argv[0]);
+    if (!time_zone)
     {
         return JS_EXCEPTION;
     }
-    const bool ok = network_set_time_zone(tz);
-    JS_FreeCString(ctx, tz);
+    const bool ok = network_set_time_zone(time_zone);
+    JS_FreeCString(ctx, time_zone);
     return JS_NewBool(ctx, ok);
 }
 
-/** @brief Adds a native method to @p obj. */
-static void add_fn(JSContext* ctx, JSValue obj, const char* name, JSCFunction* fn, int length)
+/** @brief Adds a native method to @p object. */
+static void add_fn(JSContext* ctx, JSValue object, const char* name, JSCFunction* function, int length)
 {
-    JS_SetPropertyStr(ctx, obj, name, JS_NewCFunction(ctx, fn, name, length));
+    JS_SetPropertyStr(ctx, object, name, JS_NewCFunction(ctx, function, name, length));
 }
 
 void network_js_install(JSContext* ctx)

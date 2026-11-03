@@ -97,13 +97,13 @@ extern "C"
     /**
      * @brief Reads the latest raw accelerometer sample (little-endian int16 per axis, ±4g full-scale).
      *
-     * @param[out] ax  Receives X acceleration (LSB; 1 g ≈ 8192).
-     * @param[out] ay  Receives Y acceleration.
-     * @param[out] az  Receives Z acceleration.
+     * @param[out] accel_x  Receives X acceleration (LSB; 1 g ≈ 8192).
+     * @param[out] accel_y  Receives Y acceleration.
+     * @param[out] accel_z  Receives Z acceleration.
      *
      * @return true on a successful read; false if the IMU is absent or the I2C read failed.
      */
-    bool board_imu_read_accel(int16_t* ax, int16_t* ay, int16_t* az);
+    bool board_imu_read_accel(int16_t* accel_x, int16_t* accel_y, int16_t* accel_z);
 
 #ifdef __cplusplus
 }

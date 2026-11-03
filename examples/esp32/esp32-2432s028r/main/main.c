@@ -66,6 +66,8 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
  *  Also sets the touch sample rate (one poll per frame), so a smaller value = finer drag tracking. */
 #define ER_TARGET_FRAME_MS 16U
 
+#define US_PER_MS 1000
+
 #if ER_HOTRELOAD
 /* The UART moves to the host's speed once the board is up, so the console reads at this rate from then on. Its RX ring
  * only has to hold a frame: the host waits for each reply, so nothing arrives while flash is being written. */
@@ -104,7 +106,7 @@ static void reload_poll(void)
 /** @brief Returns milliseconds since boot (engine-clock delta source). */
 static uint32_t now_ms(void)
 {
-    return (uint32_t)(esp_timer_get_time() / 1000);
+    return (uint32_t)(esp_timer_get_time() / US_PER_MS);
 }
 
 /**
@@ -208,33 +210,33 @@ static void run_app(void)
 
     /* The software keyboard is compiled in via ERUI_ONSCREEN_KEYBOARD=1 (components/engine/CMakeLists.txt)
      * and auto-shows whenever a TextInput is focused — no runtime call needed. Customise its layout/colours
-     * with er_keyboard_set_config(&cfg) here if desired. */
+     * with er_keyboard_set_config(&config) here if desired. */
     ESP_LOGI(TAG, "free internal RAM after boot: %u bytes", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     /* Frame loop. The press state machine turns XPT2046 polls into down/move/up for the engine. */
-    uint32_t prev = now_ms();
+    uint32_t previous_ms = now_ms();
     bool touch_down = false;
-    int last_x = 0, last_y = 0;
+    int last_touch_x = 0, last_touch_y = 0;
     while (true)
     {
         const int64_t frame_start_us = esp_timer_get_time();
 
         if (touch)
         {
-            int tx = 0, ty = 0;
+            int touch_x = 0, touch_y = 0;
             bool pressed = false;
-            if (board_touch_read(&tx, &ty, &pressed))
+            if (board_touch_read(&touch_x, &touch_y, &pressed))
             {
                 if (pressed)
                 {
-                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);
+                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, touch_x, touch_y);
                     touch_down = true;
-                    last_x = tx;
-                    last_y = ty;
+                    last_touch_x = touch_x;
+                    last_touch_y = touch_y;
                 }
                 else if (touch_down)
                 {
-                    embedded_renderer_touch(0, ER_TOUCH_UP, last_x, last_y);
+                    embedded_renderer_touch(0, ER_TOUCH_UP, last_touch_x, last_touch_y);
                     touch_down = false;
 #if ER_HOTRELOAD
                     erb_package_reload_tap(&s_reload);
@@ -247,17 +249,17 @@ static void run_app(void)
         er_esp32_spi_lcd_present();
 
         const uint32_t now = now_ms();
-        const uint32_t dt = now - prev;
-        embedded_renderer_tick(dt);
-        erb_tick(dt); /* advance the app's timers (setInterval/setTimeout); no-op if the app has none */
-        prev = now;
+        const uint32_t delta_ms = now - previous_ms;
+        embedded_renderer_tick(delta_ms);
+        erb_tick(delta_ms); /* advance the app's timers (setInterval/setTimeout); no-op if the app has none */
+        previous_ms = now;
 
 #if ER_HOTRELOAD
         reload_poll();
 #endif
 
         /* Adaptive pacing: sleep the remainder up to the target; always yield >=1 tick for the idle task. */
-        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / 1000);
+        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / US_PER_MS);
         const uint32_t sleep_ms = (used_ms >= ER_TARGET_FRAME_MS) ? 0U : (ER_TARGET_FRAME_MS - used_ms);
         TickType_t ticks = pdMS_TO_TICKS(sleep_ms);
         if (ticks == 0U)

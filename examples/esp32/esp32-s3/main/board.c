@@ -49,26 +49,43 @@ static const char* TAG = "board";
 #define BOARD_I2C_PORT I2C_NUM_0
 #define BOARD_I2C_SDA 8
 #define BOARD_I2C_SCL 9
+#define I2C_TIMEOUT_MS 100
+#define I2C_GLITCH_IGNORE_COUNT 7
 
 /* --- CH422G (7-bit I2C addresses of its command registers) --- */
-#define CH422G_ADDR_WR_SET 0x24 /* system setting: IO mode */
-#define CH422G_ADDR_WR_IO 0x38  /* latch for output bits IO0..IO7 (= EXIO0..EXIO7) */
-#define CH422G_MODE_OUTPUT 0x01 /* enable push-pull output on the IO pins */
+#define CH422G_ADDRESS_WR_SET 0x24 /* system setting: IO mode */
+#define CH422G_ADDRESS_WR_IO 0x38  /* latch for output bits IO0..IO7 (= EXIO0..EXIO7) */
+#define CH422G_MODE_OUTPUT 0x01    /* enable push-pull output on the IO pins */
+#define CH422G_SCL_HZ 100000
 
 /* CH422G output-bit assignments (Waveshare ESP32-S3-Touch-LCD-7). */
-#define EXIO_TP_RST_BIT (1U << 1)  /* touch reset (GT911) */
-#define EXIO_DISP_BL_BIT (1U << 2) /* DISP / backlight enable */
-#define EXIO_LCD_RST_BIT (1U << 3) /* LCD reset (active low) */
-#define EXIO_USB_SEL_BIT (1U << 5) /* USB_SEL: LOW = native USB (GPIO19/20 → main USB-C); HIGH = CAN */
+#define EXIO_TOUCH_RST_BIT (1U << 1)      /* touch reset (GT911) */
+#define EXIO_DISP_BACKLIGHT_BIT (1U << 2) /* DISP / backlight enable */
+#define EXIO_LCD_RST_BIT (1U << 3)        /* LCD reset (active low) */
+#define EXIO_USB_SEL_BIT (1U << 5)        /* USB_SEL: LOW = native USB (GPIO19/20 → main USB-C); HIGH = CAN */
 
 /* --- GT911 capacitive touch (shares the I2C bus; INT=GPIO4, RST=CH422G EXIO1) --- */
 #define BOARD_TOUCH_INT_GPIO 4 /* TP_IRQ — driven during reset to latch the I2C address, then input */
-#define GT911_ADDR 0x5D        /* default address when INT is held low across the reset rising edge */
+#define GT911_ADDRESS 0x5D     /* default address when INT is held low across the reset rising edge */
 #define GT911_REG_PRODUCT_ID 0x8140
 #define GT911_REG_STATUS 0x814E /* bit7 = buffer ready, bits0..3 = number of touch points */
 #define GT911_REG_POINT1 0x8150 /* first point coords: [xL, xH, yL, yH] (track id is the prior reg, 0x814F) */
 #define GT911_STATUS_READY 0x80
 #define GT911_POINT_COUNT_MASK 0x0F
+#define GT911_PRODUCT_ID_BYTES 4
+#define GT911_POINT_BYTES 4 /* x, y: 16 bits each, little-endian */
+#define GT911_SCL_HZ 400000
+#define GT911_RESET_MS 10
+#define GT911_ADDRESS_SETUP_MS 1
+#define GT911_BOOT_MS 50
+
+/* LCD reset pulse, and the panel's recovery time after it. */
+#define LCD_RESET_MS 20
+#define LCD_RESET_RECOVERY_MS 120
+
+/* Bring-up messages kept for after the console comes back. */
+#define DISPLAY_ERROR_BYTES 160
+#define DISPLAY_NOTE_BYTES 64
 
 static i2c_master_bus_handle_t s_i2c_bus;    /* shared bus (CH422G + GT911 touch) */
 static i2c_master_dev_handle_t s_ch422g_io;  /* device at WR_IO  (0x38) */
@@ -78,7 +95,7 @@ static uint8_t s_ch422g_latch = 0xFF;        /* tracked output state; default al
 /** @brief Writes the tracked CH422G output latch to the chip. */
 static esp_err_t ch422g_flush(void)
 {
-    return i2c_master_transmit(s_ch422g_io, &s_ch422g_latch, 1, 100);
+    return i2c_master_transmit(s_ch422g_io, &s_ch422g_latch, 1, I2C_TIMEOUT_MS);
 }
 
 /** @brief Sets/clears CH422G output bit(s) (by mask) and latches. */
@@ -98,34 +115,34 @@ static esp_err_t ch422g_set(uint8_t mask, bool high)
  */
 static esp_err_t board_io_init(void)
 {
-    i2c_master_bus_config_t bus_cfg = {
+    i2c_master_bus_config_t bus_config = {
         .i2c_port = BOARD_I2C_PORT,
         .sda_io_num = BOARD_I2C_SDA,
         .scl_io_num = BOARD_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
+        .glitch_ignore_cnt = I2C_GLITCH_IGNORE_COUNT,
         .flags.enable_internal_pullup = true,
     };
-    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_cfg, &s_i2c_bus), TAG, "i2c bus");
+    ESP_RETURN_ON_ERROR(i2c_new_master_bus(&bus_config, &s_i2c_bus), TAG, "i2c bus");
 
-    const i2c_device_config_t set_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = CH422G_ADDR_WR_SET, .scl_speed_hz = 100000};
-    const i2c_device_config_t io_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = CH422G_ADDR_WR_IO, .scl_speed_hz = 100000};
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_bus, &set_cfg, &s_ch422g_set), TAG, "ch422g set");
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_bus, &io_cfg, &s_ch422g_io), TAG, "ch422g io");
+    const i2c_device_config_t set_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = CH422G_ADDRESS_WR_SET, .scl_speed_hz = CH422G_SCL_HZ};
+    const i2c_device_config_t io_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = CH422G_ADDRESS_WR_IO, .scl_speed_hz = CH422G_SCL_HZ};
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_bus, &set_config, &s_ch422g_set), TAG, "ch422g set");
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(s_i2c_bus, &io_config, &s_ch422g_io), TAG, "ch422g io");
 
     /* Put the IO pins in push-pull output mode, then drive the default latch (all high). */
     const uint8_t mode = CH422G_MODE_OUTPUT;
-    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_ch422g_set, &mode, 1, 100), TAG, "ch422g mode");
+    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_ch422g_set, &mode, 1, I2C_TIMEOUT_MS), TAG, "ch422g mode");
     ESP_RETURN_ON_ERROR(ch422g_flush(), TAG, "ch422g latch");
 
     /* Pulse the LCD reset low->high (active low), keep touch out of reset, enable DISP/backlight. */
     ESP_RETURN_ON_ERROR(ch422g_set(EXIO_LCD_RST_BIT, false), TAG, "lcd rst low");
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(LCD_RESET_MS));
     ESP_RETURN_ON_ERROR(ch422g_set(EXIO_LCD_RST_BIT, true), TAG, "lcd rst high");
-    vTaskDelay(pdMS_TO_TICKS(120));
-    ESP_RETURN_ON_ERROR(ch422g_set(EXIO_DISP_BL_BIT | EXIO_TP_RST_BIT, true), TAG, "backlight");
+    vTaskDelay(pdMS_TO_TICKS(LCD_RESET_RECOVERY_MS));
+    ESP_RETURN_ON_ERROR(ch422g_set(EXIO_DISP_BACKLIGHT_BIT | EXIO_TOUCH_RST_BIT, true), TAG, "backlight");
 
     /* Route GPIO19/20 to the chip's native USB on the main USB-C port (the latch defaults all-high, which
        selects CAN via the on-board FSUSB42UMX mux and leaves the native USB disconnected). Driving
@@ -136,22 +153,22 @@ static esp_err_t board_io_init(void)
 
 void board_display_set_backlight(bool on)
 {
-    const esp_err_t err = ch422g_set(EXIO_DISP_BL_BIT, on);
-    if (err != ESP_OK)
+    const esp_err_t error = ch422g_set(EXIO_DISP_BACKLIGHT_BIT, on);
+    if (error != ESP_OK)
     {
-        ESP_LOGW(TAG, "backlight: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "backlight: %s", esp_err_to_name(error));
     }
 }
 
 /** @brief Latched reason for the last board_display_init() failure (see board_display_last_error). */
-static char s_display_err[160] = "";
+static char s_display_error[DISPLAY_ERROR_BYTES] = "";
 
 /** @brief Latched detail for a SUCCESSFUL bring-up (see board_display_last_note). */
-static char s_display_note[64] = "";
+static char s_display_note[DISPLAY_NOTE_BYTES] = "";
 
 const char* board_display_last_error(void)
 {
-    return s_display_err;
+    return s_display_error;
 }
 
 const char* board_display_last_note(void)
@@ -160,10 +177,10 @@ const char* board_display_last_note(void)
 }
 
 /** @brief Logs a bring-up failure AND latches it, since the console is down while this runs. */
-static void display_fail(const char* step, esp_err_t err)
+static void display_fail(const char* step, esp_err_t error)
 {
-    snprintf(s_display_err, sizeof(s_display_err), "%s: %s", step, esp_err_to_name(err));
-    ESP_LOGE(TAG, "%s", s_display_err);
+    snprintf(s_display_error, sizeof(s_display_error), "%s: %s", step, esp_err_to_name(error));
+    ESP_LOGE(TAG, "%s", s_display_error);
 }
 
 bool board_display_init(esp_lcd_panel_handle_t* out_panel)
@@ -175,7 +192,7 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
     }
 
     *out_panel = NULL;
-    s_display_err[0] = '\0';
+    s_display_error[0] = '\0';
     s_display_note[0] = '\0';
     const esp_err_t io_err = board_io_init();
     if (io_err != ESP_OK)
@@ -240,34 +257,34 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
     const size_t k_bounce_count = sizeof(k_bounce_lines) / sizeof(k_bounce_lines[0]);
 
     esp_lcd_panel_handle_t panel = NULL;
-    esp_err_t err = ESP_ERR_NO_MEM;
-    for (size_t i = 0; i < k_bounce_count; i++)
+    esp_err_t error = ESP_ERR_NO_MEM;
+    for (size_t attempt = 0; attempt < k_bounce_count; attempt++)
     {
-        panel_config.bounce_buffer_size_px = (size_t)k_bounce_lines[i] * BOARD_LCD_WIDTH;
-        err = esp_lcd_new_rgb_panel(&panel_config, &panel);
-        if (err == ESP_OK)
+        panel_config.bounce_buffer_size_px = (size_t)k_bounce_lines[attempt] * BOARD_LCD_WIDTH;
+        error = esp_lcd_new_rgb_panel(&panel_config, &panel);
+        if (error == ESP_OK)
         {
             /* Latched, not just logged: a downgrade here is invisible on the console (see
                board_display_last_error) and a silently flickery panel is a bad thing to hide. */
             snprintf(s_display_note,
                      sizeof(s_display_note),
                      "bounce %d lines%s",
-                     k_bounce_lines[i],
-                     (i > 0) ? " (reduced to fit internal DMA RAM)" : "");
+                     k_bounce_lines[attempt],
+                     (attempt > 0) ? " (reduced to fit internal DMA RAM)" : "");
             break;
         }
-        if (err != ESP_ERR_NO_MEM)
+        if (error != ESP_ERR_NO_MEM)
         {
             break; /* not a sizing problem — a smaller buffer will not help */
         }
     }
-    if (err != ESP_OK)
+    if (error != ESP_OK)
     {
-        display_fail("esp_lcd_new_rgb_panel failed", err);
-        if (err == ESP_ERR_NO_MEM)
+        display_fail("esp_lcd_new_rgb_panel failed", error);
+        if (error == ESP_ERR_NO_MEM)
         {
-            snprintf(s_display_err + strlen(s_display_err),
-                     sizeof(s_display_err) - strlen(s_display_err),
+            snprintf(s_display_error + strlen(s_display_error),
+                     sizeof(s_display_error) - strlen(s_display_error),
                      " (even %d bounce lines; DMA free %u, largest %u)",
                      k_bounce_lines[k_bounce_count - 1],
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
@@ -275,12 +292,12 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
         }
         return false;
     }
-    err = esp_lcd_panel_reset(panel);
-    if (err == ESP_OK)
+    error = esp_lcd_panel_reset(panel);
+    if (error == ESP_OK)
     {
-        err = esp_lcd_panel_init(panel);
+        error = esp_lcd_panel_init(panel);
     }
-    if (err != ESP_OK)
+    if (error != ESP_OK)
     {
         /* The panel object was created, so it owns the bounce buffers and DMA descriptors the
            sizing ladder just fought for — release them rather than leaving them held by a handle
@@ -288,7 +305,7 @@ bool board_display_init(esp_lcd_panel_handle_t* out_panel)
            not happened, so it goes too. */
         esp_lcd_panel_del(panel);
         s_display_note[0] = '\0';
-        display_fail("panel reset/init failed", err);
+        display_fail("panel reset/init failed", error);
         return false;
     }
 
@@ -307,34 +324,34 @@ static i2c_master_dev_handle_t s_gt911; /* GT911 device on the shared bus */
 /**
  * @brief Reads a block of GT911 registers (16-bit big-endian register address).
  *
- * @param[in]  reg  Starting register address.
- * @param[out] buf  Destination buffer.
- * @param[in]  n    Number of bytes to read.
+ * @param[in]  register_address  Starting register address.
+ * @param[out] buffer  Destination buffer.
+ * @param[in]  length    Number of bytes to read.
  *
  * @return ESP_OK on success.
  */
-static esp_err_t gt911_read(uint16_t reg, uint8_t* buf, size_t n)
+static esp_err_t gt911_read(uint16_t register_address, uint8_t* buffer, size_t length)
 {
-    const uint8_t addr[2] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFFU)};
-    return i2c_master_transmit_receive(s_gt911, addr, sizeof(addr), buf, n, 100);
+    const uint8_t address_bytes[2] = {(uint8_t)(register_address >> 8), (uint8_t)(register_address & 0xFFU)};
+    return i2c_master_transmit_receive(s_gt911, address_bytes, sizeof(address_bytes), buffer, length, I2C_TIMEOUT_MS);
 }
 
 /**
  * @brief Writes a single GT911 register (16-bit big-endian register address).
  *
- * @param[in] reg  Register address.
- * @param[in] val  Byte to write.
+ * @param[in] register_address  Register address.
+ * @param[in] value  Byte to write.
  *
  * @return ESP_OK on success.
  */
-static esp_err_t gt911_write_u8(uint16_t reg, uint8_t val)
+static esp_err_t gt911_write_u8(uint16_t register_address, uint8_t value)
 {
-    const uint8_t buf[3] = {(uint8_t)(reg >> 8), (uint8_t)(reg & 0xFFU), val};
-    return i2c_master_transmit(s_gt911, buf, sizeof(buf), 100);
+    const uint8_t buffer[3] = {(uint8_t)(register_address >> 8), (uint8_t)(register_address & 0xFFU), value};
+    return i2c_master_transmit(s_gt911, buffer, sizeof(buffer), I2C_TIMEOUT_MS);
 }
 
 /**
- * @brief Runs the GT911 reset sequence so it latches the I2C address GT911_ADDR.
+ * @brief Runs the GT911 reset sequence so it latches the I2C address GT911_ADDRESS.
  *
  * The GT911 samples its INT pin on the rising edge of RST to choose its address (INT low -> 0x5D).
  * RST is the CH422G EXIO1 line, INT is GPIO4. After the sequence INT is reconfigured as an input.
@@ -342,34 +359,34 @@ static esp_err_t gt911_write_u8(uint16_t reg, uint8_t val)
 static void gt911_reset_sequence(void)
 {
     /* Drive INT (GPIO4) low. */
-    gpio_config_t int_out = {
+    gpio_config_t int_output_config = {
         .pin_bit_mask = 1ULL << BOARD_TOUCH_INT_GPIO,
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&int_out);
+    gpio_config(&int_output_config);
     gpio_set_level(BOARD_TOUCH_INT_GPIO, 0);
 
     /* Hold RST low, keep INT low to select address 0x5D, then release RST (latches the address). */
-    ch422g_set(EXIO_TP_RST_BIT, false);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    ch422g_set(EXIO_TOUCH_RST_BIT, false);
+    vTaskDelay(pdMS_TO_TICKS(GT911_RESET_MS));
     gpio_set_level(BOARD_TOUCH_INT_GPIO, 0);
-    vTaskDelay(pdMS_TO_TICKS(1));
-    ch422g_set(EXIO_TP_RST_BIT, true);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(GT911_ADDRESS_SETUP_MS));
+    ch422g_set(EXIO_TOUCH_RST_BIT, true);
+    vTaskDelay(pdMS_TO_TICKS(GT911_BOOT_MS));
 
     /* Release INT so the controller can use it as its data-ready interrupt line. */
-    gpio_config_t int_in = {
+    gpio_config_t int_input_config = {
         .pin_bit_mask = 1ULL << BOARD_TOUCH_INT_GPIO,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    gpio_config(&int_in);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_config(&int_input_config);
+    vTaskDelay(pdMS_TO_TICKS(GT911_BOOT_MS));
 }
 
 bool board_touch_init(void)
@@ -382,21 +399,21 @@ bool board_touch_init(void)
 
     gt911_reset_sequence();
 
-    const i2c_device_config_t gt_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = GT911_ADDR, .scl_speed_hz = 400000};
-    if (i2c_master_bus_add_device(s_i2c_bus, &gt_cfg, &s_gt911) != ESP_OK)
+    const i2c_device_config_t gt911_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = GT911_ADDRESS, .scl_speed_hz = GT911_SCL_HZ};
+    if (i2c_master_bus_add_device(s_i2c_bus, &gt911_config, &s_gt911) != ESP_OK)
     {
         ESP_LOGE(TAG, "GT911 add-device failed");
         return false;
     }
 
-    uint8_t id[4] = {0};
-    if (gt911_read(GT911_REG_PRODUCT_ID, id, sizeof(id)) != ESP_OK)
+    uint8_t product_id[GT911_PRODUCT_ID_BYTES] = {0};
+    if (gt911_read(GT911_REG_PRODUCT_ID, product_id, sizeof(product_id)) != ESP_OK)
     {
-        ESP_LOGE(TAG, "GT911 not responding at 0x%02X", GT911_ADDR);
+        ESP_LOGE(TAG, "GT911 not responding at 0x%02X", GT911_ADDRESS);
         return false;
     }
-    ESP_LOGI(TAG, "GT911 up: product id '%c%c%c%c'", id[0], id[1], id[2], id[3]);
+    ESP_LOGI(TAG, "GT911 up: product id '%c%c%c%c'", product_id[0], product_id[1], product_id[2], product_id[3]);
     return true;
 }
 
@@ -416,11 +433,11 @@ bool board_touch_read(int* x, int* y, bool* pressed)
     const int points = status & GT911_POINT_COUNT_MASK;
     if (points > 0)
     {
-        uint8_t p[4];
-        if (gt911_read(GT911_REG_POINT1, p, sizeof(p)) == ESP_OK)
+        uint8_t point[GT911_POINT_BYTES];
+        if (gt911_read(GT911_REG_POINT1, point, sizeof(point)) == ESP_OK)
         {
-            *x = (int)(p[0] | (p[1] << 8));
-            *y = (int)(p[2] | (p[3] << 8));
+            *x = (int)(point[0] | (point[1] << 8));
+            *y = (int)(point[2] | (point[3] << 8));
             *pressed = true;
             ok = true;
         }

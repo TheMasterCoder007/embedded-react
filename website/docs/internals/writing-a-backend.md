@@ -58,8 +58,8 @@ last commit that actually painted, so a Flow A host, where the reconciler alread
 the pump, still reads the frame's real damage.
 
 **The dirty-rectangle convention.** Track an accumulated box as **inclusive minimum corner,
-exclusive maximum corner**, the same as `ERRect`, and name the fields `dx0/dy0` and `dx_end/dy_end`
-so the convention is visible at every use; empty is `dx_end <= dx0`. Backends are exactly where code
+exclusive maximum corner**, the same as `ERRect`, and name the fields `dirty_x0/dirty_y0` and
+`dirty_x_end/dirty_y_end` so the convention is visible at every use; empty is `dirty_x_end <= dirty_x0`. Backends are exactly where code
 gets copied from one board to the next, and an inclusive box lifted into an exclusive flush loop (or
 the reverse) leaves a one-pixel column of stale panel that survives every review, because both
 versions look right in isolation. Convert at the panel call instead: `esp_lcd_panel_draw_bitmap`

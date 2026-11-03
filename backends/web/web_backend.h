@@ -38,12 +38,12 @@ extern "C"
     /**
      * @brief Brings up the software backend and allocates the RGBA present buffer.
      *
-     * @param[in] screen_w  Board width in pixels (> 0).
-     * @param[in] screen_h  Board height in pixels (> 0).
+     * @param[in] screen_width  Board width in pixels (> 0).
+     * @param[in] screen_height  Board height in pixels (> 0).
      *
      * @return 1 on success, 0 on failure.
      */
-    int er_web_init(int screen_w, int screen_h);
+    int er_web_init(int screen_width, int screen_height);
 
     /**
      * @brief Builds a static demo scene (W1 fallback when no app bundle has been loaded).
@@ -59,10 +59,10 @@ extern "C"
      * A private copy is kept so er_web_reset() (hot reload) and er_web_resize() can re-run it. On a JS error
      * an on-screen redbox is shown. The bytes are UTF-8 source text, not bytecode.
      *
-     * @param[in] js   App bundle source (UTF-8; not required to be NUL-terminated).
-     * @param[in] len  Byte length of @p js.
+     * @param[in] source  App bundle source (UTF-8; not required to be NUL-terminated).
+     * @param[in] length  Byte length of @p source.
      */
-    void er_web_load_source(const char* js, int len);
+    void er_web_load_source(const char* source, int length);
 
     /**
      * @brief Registers a baked ERPK asset pack (images + fonts) so the app's <Image>/custom-font nodes
@@ -72,29 +72,29 @@ extern "C"
      * during a hot reload. A private copy of the pack is kept alive because the engine references its pixels +
      * glyph bitmaps by pointer.
      *
-     * @param[in] buf  ERPK pack bytes (as produced by the JS asset baker).
-     * @param[in] len  Byte length of @p buf.
+     * @param[in] buffer  ERPK pack bytes (as produced by the JS asset baker).
+     * @param[in] length  Byte length of @p buffer.
      *
      * @return 1 on success, 0 on a malformed pack or allocation failure.
      */
-    int er_web_load_pack(const uint8_t* buf, int len);
+    int er_web_load_pack(const uint8_t* buffer, int length);
 
     /**
      * @brief Build-time `qjsc`: compiles a JS app bundle to a QuickJS bytecode blob using the QuickJS already
      *        embedded in this module — so the consumer `embedded-react build` needs no native toolchain.
      *
-     * Uses a throwaway runtime (independent of any running app). The caller reads @p *out_len bytes from the
+     * Uses a throwaway runtime (independent of any running app). The caller reads @p *out_length bytes from the
      * returned pointer and frees it with `Module._free`.
      *
-     * @param[in]  src      App bundle source (UTF-8).
-     * @param[in]  len      Byte length of @p src.
-     * @param[out] out_len  Receives the bytecode byte length (0 on a compile error → returns NULL).
+     * @param[in]  source      App bundle source (UTF-8).
+     * @param[in]  length      Byte length of @p source.
+     * @param[out] out_length  Receives the bytecode byte length (0 on a compile error → returns NULL).
      * @param[in]  strip    Non-zero drops the embedded source text + debug tables (release/device:
      *                      ~8x smaller blob); 0 keeps them so dev stack traces have line numbers.
      *
      * @return Pointer to the bytecode in wasm memory (caller frees), or NULL on error.
      */
-    const uint8_t* er_web_compile_bytecode(const char* src, int len, int* out_len, int strip);
+    const uint8_t* er_web_compile_bytecode(const char* source, int length, int* out_length, int strip);
 
     /**
      * @brief Changes the board size at runtime and rebuilds the scene to fit (responsive preview).
@@ -104,21 +104,21 @@ extern "C"
      * new screen size (the on-device "responsive layout" path). The host must resize its canvas to match
      * (er_web_fb_width/height).
      *
-     * @param[in] screen_w  New board width in pixels (> 0).
-     * @param[in] screen_h  New board height in pixels (> 0).
+     * @param[in] screen_width  New board width in pixels (> 0).
+     * @param[in] screen_height  New board height in pixels (> 0).
      *
      * @return 1 on success, 0 on failure (the previous size is kept).
      */
-    int er_web_resize(int screen_w, int screen_h);
+    int er_web_resize(int screen_width, int screen_height);
 
     /**
      * @brief Advances the engine one frame and refreshes the RGBA present buffer.
      *
      * Runs a commit + tick, then converts the software framebuffer (ARGB8888) to RGBA over the frame.
      *
-     * @param[in] dt_ms  Milliseconds elapsed since the previous pump.
+     * @param[in] delta_ms  Milliseconds elapsed since the previous pump.
      */
-    void er_web_pump(int dt_ms);
+    void er_web_pump(int delta_ms);
 
     /**
      * @brief Delivers a pointer event to the engine in framebuffer pixels.
@@ -146,7 +146,7 @@ extern "C"
     void er_web_clear_persist(void);
 
     /**
-     * @brief Returns the RGBA present buffer (screen_w * screen_h * 4 bytes, R,G,B,A order).
+     * @brief Returns the RGBA present buffer (screen_width * screen_height * 4 bytes, R,G,B,A order).
      *
      * The host wraps this as an ImageData and putImageData()s it to the canvas. Valid after er_web_init().
      *
