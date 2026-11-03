@@ -133,7 +133,7 @@ int main(int argc, char** argv)
     printf("after boot:         build=%s n=%d\n", build, persisted);
     if (strcmp(build, "boot") != 0 || persisted != ST_PERSISTED_VALUE)
     {
-        printf("FAIL: expected build=boot n=41 after boot\n");
+        printf("FAIL: expected build=boot n=%d after boot\n", ST_PERSISTED_VALUE);
         failed = 1;
     }
 
@@ -160,7 +160,7 @@ int main(int argc, char** argv)
     }
     if (persisted != ST_PERSISTED_VALUE)
     {
-        printf("FAIL: persisted state lost across soft reload (n=%d, expected 41)\n", persisted);
+        printf("FAIL: persisted state lost across soft reload (n=%d, expected %d)\n", persisted, ST_PERSISTED_VALUE);
         failed = 1;
     }
 
