@@ -168,13 +168,13 @@ typedef struct
 /**
  * @brief A native function a package may import.
  *
- * @param[in]  args     Arguments as 32-bit cells, as the signature lists them.
- * @param[out] result   The result cell (unused when the signature returns nothing).
- * @param[in]  context  ErbConfig::context.
+ * @param[in]  arguments  Arguments as 32-bit cells, as the signature lists them.
+ * @param[out] result     The result cell (unused when the signature returns nothing).
+ * @param[in]  context    ErbConfig::context.
  *
  * @return false to stop the app with ERB_ERR_NATIVE, naming the module.
  */
-typedef bool (*ErbNativeFn)(const int32_t* args, int32_t* result, void* context);
+typedef bool (*ErbNativeFn)(const int32_t* arguments, int32_t* result, void* context);
 
 /**
  * @brief One native function the firmware offers. The signature is the result, ':', then the parameters,

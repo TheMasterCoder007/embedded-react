@@ -37,10 +37,10 @@ static void invalidate(unsigned slot, void* context)
 {
     (void)context;
     static const uint8_t zeros[HEADER_VALID_BYTES] = {0};
-    const esp_err_t err = esp_partition_write(s_partitions[slot], 0u, zeros, sizeof(zeros));
-    if (err != ESP_OK)
+    const esp_err_t result = esp_partition_write(s_partitions[slot], 0u, zeros, sizeof(zeros));
+    if (result != ESP_OK)
     {
-        ESP_LOGE(TAG, "couldn't clear slot %s: %s", k_labels[slot], esp_err_to_name(err));
+        ESP_LOGE(TAG, "couldn't clear slot %s: %s", k_labels[slot], esp_err_to_name(result));
     }
 }
 
@@ -75,11 +75,11 @@ bool erb_package_slots_esp32_open(ErbPackageSlots* slots)
         }
         const void* mapped = NULL;
         esp_partition_mmap_handle_t handle;
-        const esp_err_t err = esp_partition_mmap(
+        const esp_err_t result = esp_partition_mmap(
             s_partitions[slot], 0u, s_partitions[slot]->size, ESP_PARTITION_MMAP_DATA, &mapped, &handle);
-        if (err != ESP_OK)
+        if (result != ESP_OK)
         {
-            ESP_LOGE(TAG, "mapping '%s' failed: %s", k_labels[slot], esp_err_to_name(err));
+            ESP_LOGE(TAG, "mapping '%s' failed: %s", k_labels[slot], esp_err_to_name(result));
             opened = false;
             continue;
         }

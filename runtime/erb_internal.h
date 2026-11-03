@@ -242,7 +242,7 @@ static inline uint32_t erb_type_cells(uint8_t type)
 }
 
 /** @brief Instruction length in words, or 0 for an opcode this format doesn't have. */
-uint32_t erb_op_words(uint8_t op);
+uint32_t erb_op_words(uint8_t opcode);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Values
@@ -295,8 +295,8 @@ typedef struct
     uint16_t touches;  /**< Fingers down when a touch arrived. */
     int16_t x;         /**< Touch x, or layout x. */
     int16_t y;         /**< Touch y, or layout y. */
-    int16_t dx;        /**< Touch dx, or layout width. */
-    int16_t dy;        /**< Touch dy, or layout height. */
+    int16_t delta_x;   /**< Touch dx, or layout width. */
+    int16_t delta_y;   /**< Touch dy, or layout height. */
     float motion_x;    /**< vx, or scroll x. */
     float motion_y;    /**< vy, or scroll y. */
     float value;       /**< value. */
@@ -364,13 +364,13 @@ extern ErbRuntime g_erb;
 /**
  * @brief Runs one function to its end.
  *
- * @param[in]  function  Function index.
- * @param[in]  args      Its parameter cells (params of them).
- * @param[out] result    Receives its result cells, when it has one; may be NULL.
+ * @param[in]  function   Function index.
+ * @param[in]  arguments  Its parameter cells (params of them).
+ * @param[out] result     Receives its result cells, when it has one; may be NULL.
  *
  * @return ERB_OK, or the fault that stopped it (g_erb.error is filled).
  */
-ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t* result);
+ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int32_t* result);
 
 /** @brief The props scratch: PROPS starts it, PSET fills it, COMMIT hands it to a node. BUILD reuses it. */
 extern ERProps g_erb_props;
@@ -396,7 +396,7 @@ void erb_rt_set_gradient(uint8_t gradient, uint8_t field, const int32_t* cell);
 void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats, bool own_paints);
 ErbStatus erb_rt_queue_effect(uint16_t function);
 int32_t erb_rt_timer_start(uint16_t function, int32_t interval_ms, bool repeat);
-void erb_rt_timer_clear(int32_t id);
+void erb_rt_timer_clear(int32_t timer_id);
 uint32_t erb_rt_anim_start(uint16_t descriptor, uint16_t done_function, const int32_t* to_cells);
 void erb_rt_anim_stop(uint32_t handle);
 

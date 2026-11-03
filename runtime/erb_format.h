@@ -806,7 +806,7 @@ enum
 enum
 {
     ERB_OP_INVALID_ = 0,
-#define ERB_OP_ENUM_(name, form, words, writes, a, b, c) ERB_OP_##name,
+#define ERB_OP_ENUM_(name, form, words, writes, operand_a_kind, operand_b_kind, operand_c_kind) ERB_OP_##name,
     ERB_OPCODES(ERB_OP_ENUM_)
 #undef ERB_OP_ENUM_
     ERB_OP_COUNT_,
@@ -839,11 +839,13 @@ enum
 #define ERB_PACK16(low, high) ((uint32_t)(uint16_t)(low) | ((uint32_t)(uint16_t)(high) << 16))
 
 /** @brief An extension word's operand byte (bits 16-23) and top byte (bits 24-31, 0 when unused). */
-#define ERB_EXT_OPERAND(ext) ((uint8_t)(((ext) >> 16) & 0xFFu))
-#define ERB_EXT_TOP(ext) ((uint8_t)((ext) >> 24))
+#define ERB_EXT_OPERAND(extension) ((uint8_t)(((extension) >> 16) & 0xFFu))
+#define ERB_EXT_TOP(extension) ((uint8_t)((extension) >> 24))
 
 /** @brief Builds an instruction word. */
-#define ERB_ABC(op, a, b, c) ((uint32_t)(op) | ((uint32_t)(a) << 8) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 24))
-#define ERB_ABX(op, a, bx) ((uint32_t)(op) | ((uint32_t)(a) << 8) | ((uint32_t)(uint16_t)(bx) << 16))
+#define ERB_ABC(opcode, operand_a, operand_b, operand_c)                                                               \
+    ((uint32_t)(opcode) | ((uint32_t)(operand_a) << 8) | ((uint32_t)(operand_b) << 16) | ((uint32_t)(operand_c) << 24))
+#define ERB_ABX(opcode, operand_a, operand_bx)                                                                         \
+    ((uint32_t)(opcode) | ((uint32_t)(operand_a) << 8) | ((uint32_t)(uint16_t)(operand_bx) << 16))
 
 #endif

@@ -52,6 +52,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ER_HR_HEADER_SIZE 16u
+#define ER_HR_MAGIC_SIZE 4u
 #define ER_HR_PROTO_VERSION 1u
 #define ER_HR_MSG_LOAD_CONTAINER 1u
 #define ER_HR_MSG_PACKAGE_BEGIN 2u /* Flow B: see erb_package_reload.h */
@@ -65,7 +66,7 @@
 typedef enum
 {
     ER_HR_NEED_MORE = 0, /**< All input consumed; no frame completed yet — feed more. */
-    ER_HR_FRAME_READY,   /**< A complete, CRC-valid frame is in the staging buffer (see out_len). */
+    ER_HR_FRAME_READY,   /**< A complete, CRC-valid frame is in the staging buffer (see out_length). */
     ER_HR_BAD_CRC,       /**< A framed payload failed its CRC; parser resynced — keep feeding. */
     ER_HR_OVERFLOW,      /**< payload_len exceeded the staging buffer; frame dropped — keep feeding. */
     ER_HR_BAD_VERSION,   /**< Unsupported proto version (or empty payload); frame dropped — keep feeding. */
@@ -77,15 +78,15 @@ typedef struct
     uint8_t* buf; /**< Caller-owned payload staging buffer (e.g. a PSRAM block). */
     size_t cap;   /**< Capacity of @ref buf in bytes (the largest container it can hold). */
 
-    uint8_t phase;                  /**< 0 = scan magic, 1 = header, 2 = payload. */
-    uint8_t win[4];                 /**< Rolling 4-byte window used to find the magic at any offset. */
-    uint8_t win_len;                /**< Bytes currently in @ref win. */
-    uint8_t hdr[ER_HR_HEADER_SIZE]; /**< Header bytes accumulated (magic + fields). */
-    uint8_t hdr_got;                /**< Header bytes collected so far. */
-    uint8_t msg_type;               /**< msg_type of the frame in progress / last completed. */
-    uint32_t payload_len;           /**< Declared payload length of the frame in progress. */
-    uint32_t payload_crc;           /**< Declared payload CRC of the frame in progress. */
-    uint32_t payload_got;           /**< Payload bytes collected so far. */
+    uint8_t phase;                          /**< 0 = scan magic, 1 = header, 2 = payload. */
+    uint8_t magic_window[ER_HR_MAGIC_SIZE]; /**< Rolling 4-byte window used to find the magic at any offset. */
+    uint8_t magic_window_length;            /**< Bytes currently in @ref magic_window. */
+    uint8_t header[ER_HR_HEADER_SIZE];      /**< Header bytes accumulated (magic + fields). */
+    uint8_t header_received;                /**< Header bytes collected so far. */
+    uint8_t msg_type;                       /**< msg_type of the frame in progress / last completed. */
+    uint32_t payload_length;                /**< Declared payload length of the frame in progress. */
+    uint32_t payload_crc;                   /**< Declared payload CRC of the frame in progress. */
+    uint32_t payload_received;              /**< Payload bytes collected so far. */
 } ErHotReload;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -95,39 +96,41 @@ typedef struct
 /**
  * @brief Initializes a parser around a caller-owned staging buffer.
  *
- * @param[in] hr   Parser to initialize.
- * @param[in] buf  Staging buffer that received payloads are assembled into; must outlive @p hr and,
- *                 once a frame is applied, must stay live for as long as the loaded app references it
- *                 (the container's image pixels / font bitmaps point into it — see er_runtime_load_container).
- * @param[in] cap  Size of @p buf. Sets the largest container this device can receive in one frame.
+ * @param[in] parser    Parser to initialize.
+ * @param[in] buffer    Staging buffer that received payloads are assembled into; must outlive @p parser and,
+ *                      once a frame is applied, must stay live for as long as the loaded app references it
+ *                      (the container's image pixels / font bitmaps point into it — see er_runtime_load_container).
+ * @param[in] capacity  Size of @p buffer. Sets the largest container this device can receive in one frame.
  */
-void er_hotreload_init(ErHotReload* hr, uint8_t* buf, size_t cap);
+void er_hotreload_init(ErHotReload* parser, uint8_t* buffer, size_t capacity);
 
 /**
  * @brief Feeds received bytes to the parser, stopping at the first completed (or rejected) frame.
  *
  * Typical drain loop over a chunk read from the channel:
  * @code
- *   size_t off = 0;
- *   while (off < n) {
- *       size_t consumed = 0, out_len = 0;
- *       ErHotReloadStatus st = er_hotreload_feed(&hr, data + off, n - off, &consumed, &out_len);
- *       off += consumed;
- *       if (st == ER_HR_FRAME_READY)      { handoff(hr.buf, out_len); }
- *       else if (st == ER_HR_NEED_MORE)   { break; }                  // all consumed; wait for more
- *       else                              { log_reject(st); }         // resynced; loop continues
+ *   size_t offset = 0;
+ *   while (offset < data_length) {
+ *       size_t consumed = 0, payload_length = 0;
+ *       ErHotReloadStatus status =
+ *           er_hotreload_feed(&parser, data + offset, data_length - offset, &consumed, &payload_length);
+ *       offset += consumed;
+ *       if (status == ER_HR_FRAME_READY)      { handoff(parser.buf, payload_length); }
+ *       else if (status == ER_HR_NEED_MORE)   { break; }                  // all consumed; wait for more
+ *       else                                  { log_reject(status); }     // resynced; loop continues
  *   }
  * @endcode
  *
- * @param[in]  hr        Parser.
- * @param[in]  data      Received bytes.
- * @param[in]  n         Number of bytes in @p data.
- * @param[out] consumed  Receives how many bytes of @p data were processed (so the caller re-feeds the rest).
- * @param[out] out_len   On ER_HR_FRAME_READY, receives the payload length now in @c hr->buf. May be NULL.
+ * @param[in]  parser       Parser.
+ * @param[in]  data         Received bytes.
+ * @param[in]  data_length  Number of bytes in @p data.
+ * @param[out] consumed     Receives how many bytes of @p data were processed (so the caller re-feeds the rest).
+ * @param[out] out_length   On ER_HR_FRAME_READY, receives the payload length now in @c parser->buf. May be NULL.
  *
  * @return ER_HR_NEED_MORE when @p data is exhausted with no frame done; otherwise the frame outcome.
  */
-ErHotReloadStatus er_hotreload_feed(ErHotReload* hr, const uint8_t* data, size_t n, size_t* consumed, size_t* out_len);
+ErHotReloadStatus
+er_hotreload_feed(ErHotReload* parser, const uint8_t* data, size_t data_length, size_t* consumed, size_t* out_length);
 
 /** @brief A short human-readable string for an ErHotReloadStatus (for logging). */
 const char* er_hotreload_status_str(ErHotReloadStatus status);

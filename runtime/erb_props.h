@@ -63,6 +63,6 @@ typedef struct
  *
  * @return Its entry, or NULL when this firmware has no such prop.
  */
-const ErbPropInfo* erb_prop_info(uint16_t id);
+const ErbPropInfo* erb_prop_info(uint16_t prop_id);
 
 #endif

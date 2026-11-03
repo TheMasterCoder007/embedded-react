@@ -54,10 +54,10 @@
 static void __attribute__((format(printf, 2, 3))) say(const ErbPackageReload* reload, const char* format, ...)
 {
     char line[LINE_BYTES];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(line, sizeof(line), format, args);
-    va_end(args);
+    va_list arguments;
+    va_start(arguments, format);
+    vsnprintf(line, sizeof(line), format, arguments);
+    va_end(arguments);
     reload->log(line, reload->log_context);
 }
 
@@ -221,8 +221,8 @@ static bool chunk(ErbPackageReload* reload, size_t frame_bytes)
     memset(data + length, 0xFF, padded - length);
 
     const unsigned slot = (unsigned)reload->staging;
-    const uint32_t at = ERB_PACKAGE_SLOT_HEADER_BYTES + offset;
-    while (reload->erased_to < at + padded)
+    const uint32_t flash_offset = ERB_PACKAGE_SLOT_HEADER_BYTES + offset;
+    while (reload->erased_to < flash_offset + padded)
     {
         if (!reload->slots.erase(slot, reload->erased_to, ERB_PACKAGE_SLOT_SECTOR_BYTES, reload->slots.context))
         {
@@ -231,7 +231,7 @@ static bool chunk(ErbPackageReload* reload, size_t frame_bytes)
         }
         reload->erased_to += ERB_PACKAGE_SLOT_SECTOR_BYTES;
     }
-    if (!reload->slots.program(slot, at, data, padded, reload->slots.context))
+    if (!reload->slots.program(slot, flash_offset, data, padded, reload->slots.context))
     {
         report_status(reload, ERB_ERR_SLOT, "programming the staging slot failed");
         return false;

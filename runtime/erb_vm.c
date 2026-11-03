@@ -492,16 +492,16 @@ static bool copy_capped(char* destination, uint32_t capacity, const char* text)
 
 /** @brief Where the running instruction is, for faults and reports. */
 static uint16_t s_function;
-static uint32_t s_pc;
+static uint32_t s_program_counter;
 
 static ErbStatus fault(ErbStatus status, const char* detail, const char* name)
 {
-    return erb_rt_fault(status, detail, name, s_function, s_pc);
+    return erb_rt_fault(status, detail, name, s_function, s_program_counter);
 }
 
 static void report(const char* what)
 {
-    erb_rt_report(what, s_function, s_pc);
+    erb_rt_report(what, s_function, s_program_counter);
 }
 
 /** @brief A node handle that doesn't resolve: a fault in a debug package, a reported skip in a release one. */
@@ -563,7 +563,7 @@ static uint8_t* row_field(uint32_t extension, int32_t row, const uint8_t** slot_
            + erb_u32(field + ERB_FIELD_OFFSET_AT);
 }
 
-ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t* result)
+ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int32_t* result)
 {
     const ErbProgram* program = &g_erb.program;
     uint8_t* arena = g_erb.arena;
@@ -582,7 +582,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
     memset(registers, 0, record[ERB_FUNCTION_REGISTERS_AT] * sizeof(int32_t));
     if (record[ERB_FUNCTION_PARAMS_AT])
     {
-        memcpy(registers, args, record[ERB_FUNCTION_PARAMS_AT] * sizeof(int32_t));
+        memcpy(registers, arguments, record[ERB_FUNCTION_PARAMS_AT] * sizeof(int32_t));
     }
     stack[FRAME_CALLER] = FRAME_NO_CALLER;
     s_function = function;
@@ -590,16 +590,16 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
     s_format[0] = '\0';
     s_format_cut = false;
 
-    uint32_t pc = 0;
+    uint32_t program_counter = 0;
     ErbStatus status = ERB_OK;
     for (;;)
     {
-        const uint32_t word = code[pc];
+        const uint32_t word = code[program_counter];
         const uint8_t operand_a = ERB_A(word);
         const uint8_t operand_b = ERB_B(word);
         const uint8_t operand_c = ERB_C(word);
         const uint16_t operand_bx = ERB_BX(word);
-        s_pc = pc;
+        s_program_counter = program_counter;
         if (counting)
         {
             if (budget_left == 0u)
@@ -608,7 +608,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             }
             budget_left--;
         }
-        uint32_t next = pc + 1u;
+        uint32_t next = program_counter + 1u;
 
         switch (ERB_OP(word))
         {
@@ -637,7 +637,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 break;
             case ERB_OP_LOADE:
                 registers[operand_a] = operand_bx;
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
 
             /* Slots */
@@ -673,13 +673,13 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             }
             case ERB_OP_GETNI:
             {
-                const uint8_t* slot = erb_slot(program, ERB_LOW16(code[pc + 1u]));
+                const uint8_t* slot = erb_slot(program, ERB_LOW16(code[program_counter + 1u]));
                 if (registers[operand_b] < 0 || (uint32_t)registers[operand_b] >= erb_u16(slot + ERB_SLOT_CAP_AT))
                 {
                     return fault(ERB_ERR_LIST_INDEX, "handle index past its array", NULL);
                 }
                 memcpy(&registers[operand_a], slot_data(slot) + (uint32_t)registers[operand_b] * 8u, 8u);
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
             }
 
@@ -692,7 +692,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             {
                 const uint8_t* slot;
                 const uint8_t* field;
-                uint8_t* data = row_field(code[pc + 1u], registers[operand_b], &slot, &field);
+                uint8_t* data = row_field(code[program_counter + 1u], registers[operand_b], &slot, &field);
                 if (!data)
                 {
                     return fault(ERB_ERR_LIST_INDEX, "list row past the list's end", NULL);
@@ -718,7 +718,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                     memcpy(data, &registers[operand_a], erb_type_cells(type) * sizeof(int32_t));
                     mark(slot);
                 }
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
             }
             case ERB_OP_APPEND:
@@ -786,7 +786,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             }
             case ERB_OP_SLICE:
             {
-                const uint8_t* slot = erb_slot(program, ERB_LOW16(code[pc + 1u]));
+                const uint8_t* slot = erb_slot(program, ERB_LOW16(code[program_counter + 1u]));
                 const uint32_t row_size = erb_u16(erb_row(program, erb_u16(slot + ERB_SLOT_AUX_AT)) + ERB_ROW_SIZE_AT);
                 uint8_t* pool = slot_data(slot);
                 uint32_t count;
@@ -805,7 +805,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                     memcpy(pool, &kept, sizeof(kept));
                     mark(slot);
                 }
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
             }
 
@@ -921,8 +921,10 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 break;
             case ERB_OP_FMATH:
                 set_float(&registers[operand_a],
-                          fmath(code[pc + 1u], get_float(&registers[operand_b]), get_float(&registers[operand_c])));
-                next = pc + 2u;
+                          fmath(code[program_counter + 1u],
+                                get_float(&registers[operand_b]),
+                                get_float(&registers[operand_c])));
+                next = program_counter + 2u;
                 break;
             case ERB_OP_DADD:
                 set_double(&registers[operand_a],
@@ -945,8 +947,10 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 break;
             case ERB_OP_DMATH:
                 set_double(&registers[operand_a],
-                           dmath(code[pc + 1u], get_double(&registers[operand_b]), get_double(&registers[operand_c])));
-                next = pc + 2u;
+                           dmath(code[program_counter + 1u],
+                                 get_double(&registers[operand_b]),
+                                 get_double(&registers[operand_c])));
+                next = program_counter + 2u;
                 break;
 
             /* Conversions */
@@ -1048,8 +1052,8 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 }
                 break;
             case ERB_OP_JDIRTY:
-                next = pc + 2u;
-                if (dirty[program->dirty_words + operand_a] & code[pc + 1u])
+                next = program_counter + 2u;
+                if (dirty[program->dirty_words + operand_a] & code[program_counter + 1u])
                 {
                     next = (uint32_t)((int32_t)next + ERB_SBX(word));
                 }
@@ -1077,7 +1081,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 }
                 /* Back to the caller: the result goes to the CALL's A. */
                 const uint16_t caller = (uint16_t)stack[base + FRAME_CALLER];
-                const uint32_t return_pc = (uint32_t)stack[base + FRAME_RETURN_PC];
+                const uint32_t return_program_counter = (uint32_t)stack[base + FRAME_RETURN_PC];
                 const uint32_t caller_base = (uint32_t)stack[base + FRAME_CALLER_BASE];
                 int32_t* callee_registers = registers;
                 record = erb_function(program, caller);
@@ -1086,11 +1090,12 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 registers = stack + base + ERB_FRAME_CELLS;
                 if (cells)
                 {
-                    memcpy(
-                        &registers[ERB_A(code[return_pc - 1u])], &callee_registers[operand_a], cells * sizeof(int32_t));
+                    memcpy(&registers[ERB_A(code[return_program_counter - 1u])],
+                           &callee_registers[operand_a],
+                           cells * sizeof(int32_t));
                 }
                 s_function = caller;
-                next = return_pc;
+                next = return_program_counter;
                 break;
             }
 
@@ -1250,11 +1255,11 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 break;
             case ERB_OP_PSETE:
             {
-                const uint32_t extension = code[pc + 1u];
+                const uint32_t extension = code[program_counter + 1u];
                 const uint32_t count = erb_enum_count(program, ERB_HIGH16(extension));
                 const uint32_t value = (uint32_t)registers[operand_a] < count ? (uint32_t)registers[operand_a] : 0u;
                 erb_rt_pset_int(operand_bx, (int32_t)program->const32[ERB_LOW16(extension) + value]);
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
             }
             case ERB_OP_SPANS:
@@ -1275,11 +1280,11 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             /* Nodes */
             case ERB_OP_BUILD:
             {
-                const uint32_t extension = code[pc + 1u];
+                const uint32_t extension = code[program_counter + 1u];
                 const uint8_t index = ERB_EXT_OPERAND(extension);
                 ERNode* parent = erb_rt_node(&registers[operand_b]);
                 ERNode* before = operand_c == operand_b ? NULL : erb_rt_node(&registers[operand_c]);
-                next = pc + 2u;
+                next = program_counter + 2u;
                 if (!parent || (operand_c != operand_b && !before))
                 {
                     erb_rt_set_node(&registers[operand_a], NULL);
@@ -1363,12 +1368,12 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             /* Timers */
             case ERB_OP_TSTART:
                 registers[operand_a] =
-                    erb_rt_timer_start((uint16_t)code[pc + 1u], registers[operand_b], operand_c != 0u);
+                    erb_rt_timer_start((uint16_t)code[program_counter + 1u], registers[operand_b], operand_c != 0u);
                 if (registers[operand_a] < 0)
                 {
                     report("timer table full; the timer didn't start (raise ER_AOT_MAX_TIMERS)");
                 }
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
             case ERB_OP_TCLEAR:
                 erb_rt_timer_clear(registers[operand_a]);
@@ -1377,7 +1382,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
             /* Animation */
             case ERB_OP_ASTART:
             {
-                const uint32_t extension = code[pc + 1u];
+                const uint32_t extension = code[program_counter + 1u];
                 const uint8_t to_first = ERB_EXT_OPERAND(extension);
                 registers[operand_a] = (int32_t)erb_rt_anim_start(
                     operand_bx, ERB_LOW16(extension), to_first == ERB_NO_REGISTER ? NULL : &registers[to_first]);
@@ -1389,7 +1394,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                 {
                     report("too many running animations; one didn't start (raise the anims region)");
                 }
-                next = pc + 2u;
+                next = program_counter + 2u;
                 break;
             }
             case ERB_OP_ASTOP:
@@ -1447,11 +1452,11 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
                         break;
                     case ERB_EVT_DX:
                     case ERB_EVT_LAYOUT_W:
-                        registers[operand_a] = event->dx;
+                        registers[operand_a] = event->delta_x;
                         break;
                     case ERB_EVT_DY:
                     case ERB_EVT_LAYOUT_H:
-                        registers[operand_a] = event->dy;
+                        registers[operand_a] = event->delta_y;
                         break;
                     case ERB_EVT_VX:
                     case ERB_EVT_SCROLL_X:
@@ -1500,6 +1505,6 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* args, int32_t*
         {
             return status;
         }
-        pc = next;
+        program_counter = next;
     }
 }
