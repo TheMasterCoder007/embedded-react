@@ -80,33 +80,33 @@ static void* er_js_native_malloc(void* opaque, size_t size)
     return malloc(size);
 }
 
-/** @brief Frees a JS-heap allocation. @param opaque Unused. @param ptr Block (may be NULL). */
-static void er_js_native_free(void* opaque, void* ptr)
+/** @brief Frees a JS-heap allocation. @param opaque Unused. @param block Block (may be NULL). */
+static void er_js_native_free(void* opaque, void* block)
 {
     (void)opaque;
-    free(ptr);
+    free(block);
 }
 
-/** @brief Resizes a JS-heap allocation. @param opaque Unused. @param ptr Block. @param size New byte count. */
-static void* er_js_native_realloc(void* opaque, void* ptr, size_t size)
+/** @brief Resizes a JS-heap allocation. @param opaque Unused. @param block Block. @param size New byte count. */
+static void* er_js_native_realloc(void* opaque, void* block, size_t size)
 {
     (void)opaque;
-    return realloc(ptr, size);
+    return realloc(block, size);
 }
 
-/** @brief Reports the usable size of a JS-heap allocation. @param ptr Block. */
-static size_t er_js_native_usable_size(const void* ptr)
+/** @brief Reports the usable size of a JS-heap allocation. @param block Block. */
+static size_t er_js_native_usable_size(const void* block)
 {
 #if defined(__APPLE__)
-    return malloc_size(ptr);
+    return malloc_size(block);
 #elif defined(_WIN32)
-    return _msize((void*)ptr);
+    return _msize((void*)block);
 #else
-    return malloc_usable_size((void*)ptr);
+    return malloc_usable_size((void*)block);
 #endif
 }
 
-static const JSMallocFunctions s_er_js_mf = {
+static const JSMallocFunctions s_er_js_malloc_functions = {
     er_js_native_calloc,
     er_js_native_malloc,
     er_js_native_free,
@@ -128,40 +128,40 @@ static const JSMallocFunctions s_er_js_mf = {
 typedef union
 {
     size_t size;
-    void* p;
-    double d;
-    long long ll;
+    void* pointer_alignment;
+    double double_alignment;
+    long long long_long_alignment;
 } ErJsBlockHeader;
 
-#define ER_JS_HDR sizeof(ErJsBlockHeader)
+#define ER_JS_HEADER_SIZE sizeof(ErJsBlockHeader)
 
-/** @brief Payload pointer for a header. @param h Header. */
-static void* er_js_payload(ErJsBlockHeader* h)
+/** @brief Payload pointer for a header. @param header Header. */
+static void* er_js_payload(ErJsBlockHeader* header)
 {
-    return (void*)((uint8_t*)h + ER_JS_HDR);
+    return (void*)((uint8_t*)header + ER_JS_HEADER_SIZE);
 }
 
-/** @brief Header for a payload pointer. @param ptr Payload (must be non-NULL and ours). */
-static ErJsBlockHeader* er_js_header(const void* ptr)
+/** @brief Header for a payload pointer. @param payload Payload (must be non-NULL and ours). */
+static ErJsBlockHeader* er_js_header(const void* payload)
 {
-    return (ErJsBlockHeader*)(void*)((uint8_t*)(uintptr_t)ptr - ER_JS_HDR);
+    return (ErJsBlockHeader*)(void*)((uint8_t*)(uintptr_t)payload - ER_JS_HEADER_SIZE);
 }
 
 /** @brief JS-heap allocation with a size prefix. @param opaque Unused. @param size Byte count. */
 static void* er_js_shim_malloc(void* opaque, size_t size)
 {
     (void)opaque;
-    if (size == 0 || size > (size_t)-1 - ER_JS_HDR)
+    if (size == 0 || size > (size_t)-1 - ER_JS_HEADER_SIZE)
     {
         return NULL;
     }
-    ErJsBlockHeader* h = (ErJsBlockHeader*)malloc(size + ER_JS_HDR);
-    if (!h)
+    ErJsBlockHeader* header = (ErJsBlockHeader*)malloc(size + ER_JS_HEADER_SIZE);
+    if (!header)
     {
         return NULL;
     }
-    h->size = size;
-    return er_js_payload(h);
+    header->size = size;
+    return er_js_payload(header);
 }
 
 /** @brief Zeroed shim allocation. @param opaque Unused. @param count Element count. @param size Element size. */
@@ -173,47 +173,47 @@ static void* er_js_shim_calloc(void* opaque, size_t count, size_t size)
         return NULL;
     }
     const size_t total = count * size;
-    void* p = er_js_shim_malloc(opaque, total);
-    if (p)
+    void* payload = er_js_shim_malloc(opaque, total);
+    if (payload)
     {
-        memset(p, 0, total);
+        memset(payload, 0, total);
     }
-    return p;
+    return payload;
 }
 
-/** @brief Frees a shim allocation. @param opaque Unused. @param ptr Payload (may be NULL). */
-static void er_js_shim_free(void* opaque, void* ptr)
+/** @brief Frees a shim allocation. @param opaque Unused. @param payload Payload (may be NULL). */
+static void er_js_shim_free(void* opaque, void* payload)
 {
     (void)opaque;
-    if (ptr)
+    if (payload)
     {
-        free(er_js_header(ptr));
+        free(er_js_header(payload));
     }
 }
 
-/** @brief Resizes a shim allocation. @param opaque Unused. @param ptr Payload. @param size New byte count. */
-static void* er_js_shim_realloc(void* opaque, void* ptr, size_t size)
+/** @brief Resizes a shim allocation. @param opaque Unused. @param payload Payload. @param size New byte count. */
+static void* er_js_shim_realloc(void* opaque, void* payload, size_t size)
 {
-    if (!ptr)
+    if (!payload)
     {
         return er_js_shim_malloc(opaque, size);
     }
     if (size == 0)
     {
-        er_js_shim_free(opaque, ptr);
+        er_js_shim_free(opaque, payload);
         return NULL;
     }
-    if (size > (size_t)-1 - ER_JS_HDR)
+    if (size > (size_t)-1 - ER_JS_HEADER_SIZE)
     {
         return NULL;
     }
-    ErJsBlockHeader* h = (ErJsBlockHeader*)realloc(er_js_header(ptr), size + ER_JS_HDR);
-    if (!h)
+    ErJsBlockHeader* header = (ErJsBlockHeader*)realloc(er_js_header(payload), size + ER_JS_HEADER_SIZE);
+    if (!header)
     {
         return NULL;
     }
-    h->size = size;
-    return er_js_payload(h);
+    header->size = size;
+    return er_js_payload(header);
 }
 
 /**
@@ -222,16 +222,16 @@ static void* er_js_shim_realloc(void* opaque, void* ptr, size_t size)
  * Slightly under-reports versus the heap's true block size (the allocator's own rounding is invisible to
  * us), which is the safe direction: the GC fires marginally early rather than never.
  *
- * @param[in] ptr  Payload pointer.
+ * @param[in] payload  Payload pointer.
  *
  * @return Recorded byte count, or 0 for NULL.
  */
-static size_t er_js_shim_usable_size(const void* ptr)
+static size_t er_js_shim_usable_size(const void* payload)
 {
-    return ptr ? er_js_header(ptr)->size : 0u;
+    return payload ? er_js_header(payload)->size : 0u;
 }
 
-static const JSMallocFunctions s_er_js_mf = {
+static const JSMallocFunctions s_er_js_malloc_functions = {
     er_js_shim_calloc,
     er_js_shim_malloc,
     er_js_shim_free,
@@ -247,7 +247,7 @@ static const JSMallocFunctions s_er_js_mf = {
 
 const JSMallocFunctions* er_js_default_malloc_functions(void)
 {
-    return &s_er_js_mf;
+    return &s_er_js_malloc_functions;
 }
 
 const char* er_js_usable_size_mode(void)

@@ -90,8 +90,13 @@ foreach (qjs_aux qjs_exe qjsc run-test262 api-test lre-test function_source unic
 endforeach ()
 
 # A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+# CI makes it an error with ER_BRIDGE_WERROR_SHADOW. CFLAGS can't, as it would reach QuickJS's own shadows.
+option(ER_BRIDGE_WERROR_SHADOW "Make a shadow in the bridge an error" OFF)
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wshadow)
+    if (ER_BRIDGE_WERROR_SHADOW)
+        add_compile_options(-Werror=shadow)
+    endif ()
 endif ()
 
 # ---------------------------------------------------------------------------

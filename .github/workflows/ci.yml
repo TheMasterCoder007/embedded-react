@@ -130,11 +130,12 @@ jobs:
       # Builds the bridge against the pinned QuickJS (FetchContent) and runs the smoke + heap-accounting
       # tests. The heap test guards the GC trigger itself: QuickJS collects only when
       # js_malloc_usable_size() says enough bytes are live, and an allocator that answers 0 (QuickJS's own
-      # default off Apple/Win32/glibc — i.e. bare metal and Emscripten) silently disables the collector
+      # default off Apple/Win32/glibc — i.e., bare metal and Emscripten) silently disables the collector
       # AND memory_limit. The runner is glibc, so the platform-specific bug can't reproduce here directly;
-      # the test injects a zero-returning allocator to reproduce the mechanism instead.
+      # the test injects a zero-returning allocator to reproduce the mechanism instead. A shadow in the bridge
+      # is an error, through a CMake option rather than CFLAGS, which would reach QuickJS's own shadows.
       - name: Configure
-        run: cmake -S bridges/quickjs -B bridges/quickjs/build-ci -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S bridges/quickjs -B bridges/quickjs/build-ci -DCMAKE_BUILD_TYPE=Release -DER_BRIDGE_WERROR_SHADOW=ON
       - name: Build
         run: cmake --build bridges/quickjs/build-ci -j
       - name: Test
@@ -168,7 +169,7 @@ jobs:
       - name: Configure (bare-metal size-prefix allocator)
         run: >
           cmake -S bridges/quickjs -B bridges/quickjs/build-ci-shim
-          -DCMAKE_BUILD_TYPE=Release -DER_BRIDGE_JS_USABLE_SIZE=shim
+          -DCMAKE_BUILD_TYPE=Release -DER_BRIDGE_JS_USABLE_SIZE=shim -DER_BRIDGE_WERROR_SHADOW=ON
       - name: Build (bare-metal size-prefix allocator)
         run: cmake --build bridges/quickjs/build-ci-shim -j
       - name: Test (bare-metal size-prefix allocator)

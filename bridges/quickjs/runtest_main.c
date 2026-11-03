@@ -41,8 +41,19 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define RT_SCREEN_W 480
-#define RT_SCREEN_H 320
+#define RT_SCREEN_WIDTH 480
+#define RT_SCREEN_HEIGHT 320
+
+/** @brief Largest channel value, and the half of it that rounds a division by it. */
+#define RT_CHANNEL_MAX 255U
+#define RT_CHANNEL_ROUND 127U
+
+/** @brief Alpha bits of an opaque framebuffer pixel. */
+#define RT_OPAQUE_ALPHA_BITS 0xFF000000U
+
+/** @brief Ending of a compiled bytecode path. */
+#define RT_BYTECODE_SUFFIX ".qbc"
+#define RT_BYTECODE_SUFFIX_LENGTH 4
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — framebuffer backend + shims
@@ -51,98 +62,100 @@
 /* The backend paints into a plain host framebuffer rather than dropping the output, so a test can
  * read a pixel back through __pixel() and assert what actually got drawn. A stubbed blend_rect would
  * discard every anti-aliased span, which is most of what the vector and text paths emit. */
-static uint32_t s_fb[RT_SCREEN_W * RT_SCREEN_H];
+static uint32_t s_framebuffer[RT_SCREEN_WIDTH * RT_SCREEN_HEIGHT];
 
-/** @brief Rounds (v / 255) the way the engine's own blend does. */
-static uint32_t rt_div255(uint32_t v)
+/** @brief Rounds (value / 255) the way the engine's own blend does. */
+static uint32_t rt_div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + RT_CHANNEL_ROUND) / RT_CHANNEL_MAX;
 }
 
 /** @brief Source-over of one premultiplied pixel onto the opaque framebuffer. */
-static void rt_over(uint32_t* d, uint32_t pa, uint32_t pr, uint32_t pg, uint32_t pb)
+static void rt_over(uint32_t* destination, uint32_t alpha, uint32_t red, uint32_t green, uint32_t blue)
 {
-    if (pa == 0U)
+    if (alpha == 0U)
     {
         return;
     }
-    if (pa >= 255U)
+    if (alpha >= RT_CHANNEL_MAX)
     {
-        *d = 0xFF000000U | (pr << 16) | (pg << 8) | pb;
+        *destination = RT_OPAQUE_ALPHA_BITS | (red << 16) | (green << 8) | blue;
         return;
     }
-    const uint32_t inv = 255U - pa;
-    const uint32_t r = pr + rt_div255(((*d >> 16) & 0xFFU) * inv);
-    const uint32_t g = pg + rt_div255(((*d >> 8) & 0xFFU) * inv);
-    const uint32_t b = pb + rt_div255((*d & 0xFFU) * inv);
-    *d = 0xFF000000U | (r << 16) | (g << 8) | b;
+    const uint32_t inverse_alpha = RT_CHANNEL_MAX - alpha;
+    const uint32_t blended_red = red + rt_div255(((*destination >> 16) & 0xFFU) * inverse_alpha);
+    const uint32_t blended_green = green + rt_div255(((*destination >> 8) & 0xFFU) * inverse_alpha);
+    const uint32_t blended_blue = blue + rt_div255((*destination & 0xFFU) * inverse_alpha);
+    *destination = RT_OPAQUE_ALPHA_BITS | (blended_red << 16) | (blended_green << 8) | blended_blue;
 }
 
-/** @brief fill_rect. @param argb color. @param x x. @param y y. @param w w. @param h h. @param ctx unused. */
-static void rt_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+/** @brief fill_rect. @param argb Color. @param x Left. @param y Top. @param width Width. @param height Height.
+ * @param ctx  Unused. */
+static void rt_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U)
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U)
     {
         return;
     }
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (row < 0 || row >= RT_SCREEN_H || col < 0 || col >= RT_SCREEN_W)
+            if (row < 0 || row >= RT_SCREEN_HEIGHT || column < 0 || column >= RT_SCREEN_WIDTH)
             {
                 continue;
             }
-            rt_over(&s_fb[row * RT_SCREEN_W + col],
-                    a,
-                    rt_div255(((argb >> 16) & 0xFFU) * a),
-                    rt_div255(((argb >> 8) & 0xFFU) * a),
-                    rt_div255((argb & 0xFFU) * a));
+            rt_over(&s_framebuffer[row * RT_SCREEN_WIDTH + column],
+                    alpha,
+                    rt_div255(((argb >> 16) & 0xFFU) * alpha),
+                    rt_div255(((argb >> 8) & 0xFFU) * alpha),
+                    rt_div255((argb & 0xFFU) * alpha));
         }
     }
 }
 
-/** @brief blend_rect. @param src rows. @param st stride. @param alpha global alpha. @param x x. @param y y.
- * @param w w. @param h h. @param ctx unused. */
-static void rt_blend(const void* src, int st, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+/** @brief blend_rect. @param source Rows. @param stride Row stride. @param alpha Global alpha. @param x Left.
+ * @param y  Top. @param width Width. @param height Height. @param ctx Unused. */
+static void rt_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* sp = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)st);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int fx = x + col, fy = y + row;
-            if (fx < 0 || fx >= RT_SCREEN_W || fy < 0 || fy >= RT_SCREEN_H)
+            const int frame_x = x + column, frame_y = y + row;
+            if (frame_x < 0 || frame_x >= RT_SCREEN_WIDTH || frame_y < 0 || frame_y >= RT_SCREEN_HEIGHT)
             {
                 continue;
             }
-            const uint32_t p = sp[col];
-            uint32_t pa = (p >> 24) & 0xFFU;
-            if (pa == 0U)
+            const uint32_t pixel = source_row[column];
+            uint32_t pixel_alpha = (pixel >> 24) & 0xFFU;
+            if (pixel_alpha == 0U)
             {
                 continue;
             }
-            uint32_t pr = (p >> 16) & 0xFFU, pg = (p >> 8) & 0xFFU, pb = p & 0xFFU;
-            if (alpha < 255U)
+            uint32_t pixel_red = (pixel >> 16) & 0xFFU, pixel_green = (pixel >> 8) & 0xFFU, pixel_blue = pixel & 0xFFU;
+            if (alpha < RT_CHANNEL_MAX)
             {
-                pa = rt_div255(pa * alpha);
-                pr = rt_div255(pr * alpha);
-                pg = rt_div255(pg * alpha);
-                pb = rt_div255(pb * alpha);
+                pixel_alpha = rt_div255(pixel_alpha * alpha);
+                pixel_red = rt_div255(pixel_red * alpha);
+                pixel_green = rt_div255(pixel_green * alpha);
+                pixel_blue = rt_div255(pixel_blue * alpha);
             }
-            rt_over(&s_fb[fy * RT_SCREEN_W + fx], pa, pr, pg, pb);
+            rt_over(
+                &s_framebuffer[frame_y * RT_SCREEN_WIDTH + frame_x], pixel_alpha, pixel_red, pixel_green, pixel_blue);
         }
     }
 }
 
-/** @brief copy_rect — an opaque blend. @param s src. @param st stride. @param x x. @param y y. @param w w.
- * @param h h. @param c ctx. */
-static void rt_copy(const void* s, int st, int x, int y, int w, int h, void* c)
+/** @brief copy_rect — an opaque blend. @param source Rows. @param stride Row stride. @param x Left. @param y Top.
+ * @param width  Width. @param height Height. @param ctx Unused. */
+static void rt_copy(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    rt_blend(s, st, 255U, x, y, w, h, c);
+    rt_blend(source, stride, RT_CHANNEL_MAX, x, y, width, height, ctx);
 }
 
 /**
@@ -158,15 +171,15 @@ static void rt_copy(const void* s, int st, int x, int y, int w, int h, void* c)
 static JSValue rt_console_log(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    for (int i = 0; i < argc; i++)
+    for (int argument_index = 0; argument_index < argc; argument_index++)
     {
-        const char* str = JS_ToCString(ctx, argv[i]);
-        if (!str)
+        const char* text = JS_ToCString(ctx, argv[argument_index]);
+        if (!text)
         {
             return JS_EXCEPTION;
         }
-        printf("%s%s", i ? " " : "", str);
-        JS_FreeCString(ctx, str);
+        printf("%s%s", argument_index ? " " : "", text);
+        JS_FreeCString(ctx, text);
     }
     printf("\n");
     return JS_UNDEFINED;
@@ -229,14 +242,14 @@ static JSValue rt_dirty_rect(JSContext* ctx, JSValueConst this_val, int argc, JS
     (void)this_val;
     (void)argc;
     (void)argv;
-    ERRect r = {0, 0, 0, 0};
-    er_get_dirty_rect(&r);
-    JSValue out = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, out, 0, JS_NewInt32(ctx, r.x));
-    JS_SetPropertyUint32(ctx, out, 1, JS_NewInt32(ctx, r.y));
-    JS_SetPropertyUint32(ctx, out, 2, JS_NewInt32(ctx, r.w));
-    JS_SetPropertyUint32(ctx, out, 3, JS_NewInt32(ctx, r.h));
-    return out;
+    ERRect rect = {0, 0, 0, 0};
+    er_get_dirty_rect(&rect);
+    JSValue result = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, result, 0, JS_NewInt32(ctx, rect.x));
+    JS_SetPropertyUint32(ctx, result, 1, JS_NewInt32(ctx, rect.y));
+    JS_SetPropertyUint32(ctx, result, 2, JS_NewInt32(ctx, rect.w));
+    JS_SetPropertyUint32(ctx, result, 3, JS_NewInt32(ctx, rect.h));
+    return result;
 }
 
 /**
@@ -253,11 +266,11 @@ static JSValue rt_pixel(JSContext* ctx, JSValueConst this_val, int argc, JSValue
         JS_ToInt32(ctx, &x, argv[0]);
         JS_ToInt32(ctx, &y, argv[1]);
     }
-    if (x < 0 || x >= RT_SCREEN_W || y < 0 || y >= RT_SCREEN_H)
+    if (x < 0 || x >= RT_SCREEN_WIDTH || y < 0 || y >= RT_SCREEN_HEIGHT)
     {
         return JS_NewUint32(ctx, 0);
     }
-    return JS_NewUint32(ctx, s_fb[y * RT_SCREEN_W + x]);
+    return JS_NewUint32(ctx, s_framebuffer[y * RT_SCREEN_WIDTH + x]);
 }
 
 /**
@@ -267,12 +280,12 @@ static JSValue rt_pixel(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 static JSValue rt_set_wall_clock(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    int64_t ms = 0;
-    if (argc >= 1 && JS_ToInt64(ctx, &ms, argv[0]) < 0)
+    int64_t epoch_ms = 0;
+    if (argc >= 1 && JS_ToInt64(ctx, &epoch_ms, argv[0]) < 0)
     {
         return JS_EXCEPTION; /* e.g. a Symbol: let the throw reach the test instead of setting 0 */
     }
-    er_runtime_set_wall_clock(ms);
+    er_runtime_set_wall_clock(epoch_ms);
     return JS_UNDEFINED;
 }
 
@@ -293,8 +306,8 @@ static void rt_install_globals(JSContext* ctx)
     JS_SetPropertyStr(ctx, global, "console", console);
 
     JSValue screen = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, RT_SCREEN_W));
-    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, RT_SCREEN_H));
+    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, RT_SCREEN_WIDTH));
+    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, RT_SCREEN_HEIGHT));
     JS_SetPropertyStr(ctx, screen, "scale", JS_NewFloat64(ctx, 1.0));
     JS_SetPropertyStr(ctx, global, "screen", screen);
 
@@ -310,8 +323,9 @@ static void rt_install_globals(JSContext* ctx)
  */
 static bool is_bytecode_path(const char* path)
 {
-    const size_t n = strlen(path);
-    return n >= 4 && strcmp(path + n - 4, ".qbc") == 0;
+    const size_t length = strlen(path);
+    return length >= RT_BYTECODE_SUFFIX_LENGTH
+           && strcmp(path + length - RT_BYTECODE_SUFFIX_LENGTH, RT_BYTECODE_SUFFIX) == 0;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -330,15 +344,15 @@ int main(int argc, char** argv)
 {
     const char* path = NULL;
     uint32_t intrinsics = 0;
-    for (int i = 1; i < argc; i++)
+    for (int argument_index = 1; argument_index < argc; argument_index++)
     {
-        if (strcmp(argv[i], "--typed-arrays") == 0)
+        if (strcmp(argv[argument_index], "--typed-arrays") == 0)
         {
             intrinsics |= ER_JS_INTRINSIC_TYPED_ARRAYS;
         }
         else if (!path)
         {
-            path = argv[i];
+            path = argv[argument_index];
         }
     }
     if (!path)
@@ -347,9 +361,9 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    size_t src_len = 0;
-    char* src = er_host_read_file(path, &src_len);
-    if (!src)
+    size_t source_length = 0;
+    char* source = er_host_read_file(path, &source_length);
+    if (!source)
     {
         fprintf(stderr, "could not read '%s'\n", path);
         return 2;
@@ -369,29 +383,29 @@ int main(int argc, char** argv)
     er_bridge_install(ctx);
 
     int status = 0;
-    JSValue result = bytecode ? er_bridge_run_bytecode(ctx, (const uint8_t*)src, src_len)
-                              : JS_Eval(ctx, src, strlen(src), path, JS_EVAL_TYPE_GLOBAL);
+    JSValue result = bytecode ? er_bridge_run_bytecode(ctx, (const uint8_t*)source, source_length)
+                              : JS_Eval(ctx, source, strlen(source), path, JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result))
     {
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        fprintf(stderr, "JS exception: %s\n", msg ? msg : "(unknown)");
-        if (msg)
+        JSValue exception = JS_GetException(ctx);
+        const char* message = JS_ToCString(ctx, exception);
+        fprintf(stderr, "JS exception: %s\n", message ? message : "(unknown)");
+        if (message)
         {
-            JS_FreeCString(ctx, msg);
+            JS_FreeCString(ctx, message);
         }
-        JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+        JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
         if (!JS_IsUndefined(stack))
         {
-            const char* st = JS_ToCString(ctx, stack);
-            if (st)
+            const char* stack_text = JS_ToCString(ctx, stack);
+            if (stack_text)
             {
-                fprintf(stderr, "%s\n", st);
-                JS_FreeCString(ctx, st);
+                fprintf(stderr, "%s\n", stack_text);
+                JS_FreeCString(ctx, stack_text);
             }
         }
         JS_FreeValue(ctx, stack);
-        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, exception);
         status = 1;
     }
     JS_FreeValue(ctx, result);
@@ -409,11 +423,11 @@ int main(int argc, char** argv)
     {
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue failed = JS_GetPropertyStr(ctx, global, "__runtime_failed");
-        int32_t n = 0;
-        JS_ToInt32(ctx, &n, failed);
+        int32_t failures = 0;
+        JS_ToInt32(ctx, &failures, failed);
         JS_FreeValue(ctx, failed);
         JS_FreeValue(ctx, global);
-        if (n > 0)
+        if (failures > 0)
         {
             status = 1;
         }
@@ -421,6 +435,6 @@ int main(int argc, char** argv)
 
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    free(src);
+    free(source);
     return status;
 }

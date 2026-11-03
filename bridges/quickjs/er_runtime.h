@@ -28,9 +28,9 @@
  *
  * This is what lets embedded-react drop into any firmware with a few lines of glue:
  *
- *     ErRuntimeConfig cfg = { .screen_width = W, .screen_height = H, .log = my_log };
- *     // (optional) cfg.install_host_globals = my_bindings;   // custom device-API globals
- *     er_runtime_init(&cfg);
+ *     ErRuntimeConfig config = { .screen_width = W, .screen_height = H, .log = my_log };
+ *     // (optional) config.install_host_globals = my_bindings;   // custom device-API globals
+ *     er_runtime_init(&config);
  *     er_register_assets();                 // baked images/fonts (or load a pack)
  *     er_runtime_load_bytecode(qbc, len);   // your app — a pointer into flash/RAM
  *     for (;;) { er_runtime_pump(); er_commit(); my_present(); embedded_renderer_tick(dt); }
@@ -159,11 +159,11 @@ typedef struct
  *
  * Call once after the render backend is set. Does not load an app — call er_runtime_load_* next.
  *
- * @param[in] cfg  Runtime configuration (copied; re-applied on reset).
+ * @param[in] config  Runtime configuration (copied; re-applied on reset).
  *
  * @return true on success; false if the runtime/context could not be created.
  */
-bool er_runtime_init(const ErRuntimeConfig* cfg);
+bool er_runtime_init(const ErRuntimeConfig* config);
 
 /**
  * @brief Creates a context with the lite intrinsic profile (JS_NewContextRaw + base objects, RegExp,
@@ -220,35 +220,35 @@ void er_runtime_set_wall_clock(int64_t epoch_ms);
  * of memory for a pack also returns ER_CONTAINER_BAD_ASSETS, but packs before it stay registered, as they do
  * when the app throws.
  *
- * @p len may be an UPPER BOUND, not the exact byte count: the loader walks the container's
- * self-describing sections (bounds-checked against @p len) to find its true end, then verifies the CRC
+ * @p length may be an UPPER BOUND, not the exact byte count: the loader walks the container's
+ * self-describing sections (bounds-checked against @p length) to find its true end, then verifies the CRC
  * over exactly that payload. So you can pass the full size of a memory-mapped flash/config partition
  * without knowing the stored container's length.
  *
- * @param[in] buf  Container bytes (ERCF; caller-owned, must stay live — e.g. a partition mmap).
- * @param[in] len  Buffer length, or an upper bound (e.g. the config partition size).
+ * @param[in] buffer  Container bytes (ERCF; caller-owned, must stay live — e.g. a partition mmap).
+ * @param[in] length  Buffer length, or an upper bound (e.g. the config partition size).
  *
  * @return ER_CONTAINER_OK, or a specific failure the caller can log/show.
  */
-ErContainerStatus er_runtime_load_container(const void* buf, size_t len);
+ErContainerStatus er_runtime_load_container(const void* buffer, size_t length);
 
 /**
- * @brief Like er_runtime_load_container, but optionally copies the asset pack so @p buf need not stay live.
+ * @brief Like er_runtime_load_container, but optionally copies the asset pack so @p buffer need not stay live.
  *
  * Same as er_runtime_load_container when @p copy_assets is false (the bytes are referenced in place — use
  * that for a config mmap'd from flash or a kept file buffer; it costs no RAM for the asset pixels). Pass
- * true when @p buf is VOLATILE — a hot-reload staging buffer you want to reuse for the next upload: the
- * asset pack is copied into a persistent (reused) block and the engine is pointed at the copy, so @p buf
+ * true when @p buffer is VOLATILE — a hot-reload staging buffer you want to reuse for the next upload: the
+ * asset pack is copied into a persistent (reused) block and the engine is pointed at the copy, so @p buffer
  * is free the moment this returns. The bytecode is always consumed in place during the call, so it never
  * needs to outlive it either way.
  *
- * @param[in] buf          Container bytes (ERCF).
- * @param[in] len          Buffer length, or an upper bound.
+ * @param[in] buffer       Container bytes (ERCF).
+ * @param[in] length       Buffer length, or an upper bound.
  * @param[in] copy_assets  true → own the asset bytes (volatile source); false → reference in place.
  *
  * @return ER_CONTAINER_OK, or a specific failure the caller can log/show.
  */
-ErContainerStatus er_runtime_load_container_ex(const void* buf, size_t len, bool copy_assets);
+ErContainerStatus er_runtime_load_container_ex(const void* buffer, size_t length, bool copy_assets);
 
 /**
  * @brief Reports whether a container carries a vendor bytecode section (the framework half of the
@@ -259,12 +259,12 @@ ErContainerStatus er_runtime_load_container_ex(const void* buf, size_t len, bool
  * reloads incrementally against the resident vendor (load with no reset — see er_hotreload_apply). Safe on
  * malformed input (returns false); the real validation happens in er_runtime_load_container.
  *
- * @param[in] buf  Container bytes (ERCF).
- * @param[in] len  Buffer length, or an upper bound.
+ * @param[in] buffer  Container bytes (ERCF).
+ * @param[in] length  Buffer length, or an upper bound.
  *
  * @return true if a vendor section is present, false otherwise (including not-a-container).
  */
-bool er_runtime_container_has_vendor(const void* buf, size_t len);
+bool er_runtime_container_has_vendor(const void* buffer, size_t length);
 
 /** @brief Returns a short human-readable string for an ErContainerStatus (for logging). */
 const char* er_runtime_container_status_str(ErContainerStatus status);
@@ -291,12 +291,12 @@ ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length);
 /**
  * @brief Evaluates an app from a compiled QuickJS bytecode blob (JS_ReadObject), then pumps once.
  *
- * @param[in] buf  Bytecode bytes (caller-owned; may point into flash).
- * @param[in] len  Byte length.
+ * @param[in] buffer  Bytecode bytes (caller-owned; may point into flash).
+ * @param[in] length  Byte length.
  *
  * @return true on clean evaluation; false if a JS exception propagated (see er_runtime_last_error).
  */
-bool er_runtime_load_bytecode(const void* buf, size_t len);
+bool er_runtime_load_bytecode(const void* buffer, size_t length);
 
 /**
  * @brief Compiles JS source to a QuickJS bytecode blob (the build-time `qjsc` step, without the native
@@ -307,31 +307,31 @@ bool er_runtime_load_bytecode(const void* buf, size_t len);
  * Unavailable (always returns NULL) when QuickJS is built with QJS_DISABLE_PARSER — precompile on
  * the host instead.
  *
- * @param[in]  src      Source text (UTF-8; need not be NUL-terminated).
- * @param[in]  len      Byte length of @p src.
- * @param[out] out_len  Receives the bytecode byte length (0 on failure).
+ * @param[in]  source      Source text (UTF-8; need not be NUL-terminated).
+ * @param[in]  length      Byte length of @p source.
+ * @param[out] out_length  Receives the bytecode byte length (0 on failure).
  *
  * @return malloc'd bytecode buffer the caller must release with er_runtime_free(), or NULL on a compile
  *         error (see er_runtime_last_error).
  */
-uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_len);
+uint8_t* er_runtime_compile_bytecode(const char* source, size_t length, size_t* out_length);
 
 /**
  * @brief Like er_runtime_compile_bytecode, with control over debug info.
  *
- * @param[in]  src      Source text (UTF-8; need not be NUL-terminated).
- * @param[in]  len      Byte length of @p src.
- * @param[out] out_len  Receives the bytecode byte length (0 on failure).
- * @param[in]  strip    true → omit the embedded source text + debug tables (device/release: ~8x
- *                      smaller blob, but stack traces lose line numbers). false → keep them (dev
- *                      hot-reload, where the error screen's stack wants line numbers).
+ * @param[in]  source      Source text (UTF-8; need not be NUL-terminated).
+ * @param[in]  length      Byte length of @p source.
+ * @param[out] out_length  Receives the bytecode byte length (0 on failure).
+ * @param[in]  strip       true → omit the embedded source text + debug tables (device/release: ~8x
+ *                         smaller blob, but stack traces lose line numbers). false → keep them (dev
+ *                         hot-reload, where the error screen's stack wants line numbers).
  *
  * @return malloc'd bytecode buffer (er_runtime_free), or NULL on a compile error.
  */
-uint8_t* er_runtime_compile_bytecode_ex(const char* src, size_t len, size_t* out_len, bool strip);
+uint8_t* er_runtime_compile_bytecode_ex(const char* source, size_t length, size_t* out_length, bool strip);
 
 /** @brief Frees a buffer returned by er_runtime_compile_bytecode (plain free; safe on NULL). */
-void er_runtime_free(void* p);
+void er_runtime_free(void* buffer);
 
 /**
  * @brief Evaluates an app from JS source text, then pumps once.
@@ -339,13 +339,13 @@ void er_runtime_free(void* p);
  * Unavailable (always returns false) when QuickJS is built with QJS_DISABLE_PARSER — load bytecode
  * or a container instead.
  *
- * @param[in] src   Source text.
- * @param[in] len   Byte length.
- * @param[in] name  Display name for stack traces (NULL → "<app>").
+ * @param[in] source  Source text.
+ * @param[in] length  Byte length.
+ * @param[in] name    Display name for stack traces (NULL → "<app>").
  *
  * @return true on clean evaluation; false if a JS exception propagated.
  */
-bool er_runtime_load_source(const char* src, size_t len, const char* name);
+bool er_runtime_load_source(const char* source, size_t length, const char* name);
 
 /**
  * @brief Dispatches pending touch-moves, drains the QuickJS job queue (Promises/microtasks), and fires due timers.

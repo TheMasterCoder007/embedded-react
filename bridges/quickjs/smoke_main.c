@@ -40,8 +40,11 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define SMOKE_SCREEN_W 240
-#define SMOKE_SCREEN_H 240
+#define SMOKE_SCREEN_WIDTH 240
+#define SMOKE_SCREEN_HEIGHT 240
+
+/** @brief Centre of the scene's Pressable, which is laid out at 8,8 and 50x50. */
+#define SMOKE_PRESSABLE_CENTRE 33
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — no-op backend
@@ -65,15 +68,15 @@ static JSValue smoke_console_log(JSContext* ctx, JSValueConst this_val, int argc
 {
     (void)this_val;
 
-    for (int i = 0; i < argc; i++)
+    for (int argument_index = 0; argument_index < argc; argument_index++)
     {
-        const char* str = JS_ToCString(ctx, argv[i]);
-        if (!str)
+        const char* text = JS_ToCString(ctx, argv[argument_index]);
+        if (!text)
         {
             return JS_EXCEPTION;
         }
-        printf("%s%s", i ? " " : "", str);
-        JS_FreeCString(ctx, str);
+        printf("%s%s", argument_index ? " " : "", text);
+        JS_FreeCString(ctx, text);
     }
     printf("\n");
     return JS_UNDEFINED;
@@ -116,7 +119,7 @@ int main(void)
     smoke_install_console(ctx);
     er_bridge_install(ctx);
 
-    static const char* src =
+    static const char* source =
         "console.log('hello from QuickJS', 1 + 2);\n"
         "console.log('typeof NativeUI =', typeof NativeUI);\n"
         "const root = NativeUI.createNode('View');\n"
@@ -152,19 +155,19 @@ int main(void)
         "NativeUI.commit();\n"
         "console.log('handles:', root, box, label, 'now =', NativeUI.now());\n";
 
-    JSValue result = JS_Eval(ctx, src, strlen(src), "<smoke>", JS_EVAL_TYPE_GLOBAL);
+    JSValue result = JS_Eval(ctx, source, strlen(source), "<smoke>", JS_EVAL_TYPE_GLOBAL);
 
     int status = 0;
     if (JS_IsException(result))
     {
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        fprintf(stderr, "JS exception: %s\n", msg ? msg : "(unknown)");
-        if (msg)
+        JSValue exception = JS_GetException(ctx);
+        const char* message = JS_ToCString(ctx, exception);
+        fprintf(stderr, "JS exception: %s\n", message ? message : "(unknown)");
+        if (message)
         {
-            JS_FreeCString(ctx, msg);
+            JS_FreeCString(ctx, message);
         }
-        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, exception);
         status = 1;
     }
     JS_FreeValue(ctx, result);
@@ -190,38 +193,38 @@ int main(void)
             fprintf(stderr, "FAIL: commit repainted nothing\n");
             status = 1;
         }
-        else if (dirty.w > SMOKE_SCREEN_W || dirty.h > SMOKE_SCREEN_H)
+        else if (dirty.w > SMOKE_SCREEN_WIDTH || dirty.h > SMOKE_SCREEN_HEIGHT)
         {
             fprintf(stderr, "FAIL: dirty rect exceeds screen bounds\n");
             status = 1;
         }
     }
 
-    /* Event round-trip: tap the Pressable (laid out at 8,8 50x50 -> centre 33,33) and confirm
+    /* Event round-trip: tap the centre of the Pressable and confirm
        the JS onPress handler ran by reading the global counter it increments. */
     if (status == 0)
     {
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, 33, 33);
-        embedded_renderer_touch(0, ER_TOUCH_UP, 33, 33);
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, SMOKE_PRESSABLE_CENTRE, SMOKE_PRESSABLE_CENTRE);
+        embedded_renderer_touch(0, ER_TOUCH_UP, SMOKE_PRESSABLE_CENTRE, SMOKE_PRESSABLE_CENTRE);
 
-        JSValue g = JS_GetGlobalObject(ctx);
-        JSValue pc = JS_GetPropertyStr(ctx, g, "pressCount");
+        JSValue press_global = JS_GetGlobalObject(ctx);
+        JSValue press_count_value = JS_GetPropertyStr(ctx, press_global, "pressCount");
         int32_t press_count = 0;
-        JS_ToInt32(ctx, &press_count, pc);
-        JS_FreeValue(ctx, pc);
-        JS_FreeValue(ctx, g);
+        JS_ToInt32(ctx, &press_count, press_count_value);
+        JS_FreeValue(ctx, press_count_value);
+        JS_FreeValue(ctx, press_global);
 
-        JSValue g2 = JS_GetGlobalObject(ctx);
-        JSValue tagv = JS_GetPropertyStr(ctx, g2, "capturedTag");
-        const char* tag = JS_ToCString(ctx, tagv);
+        JSValue tag_global = JS_GetGlobalObject(ctx);
+        JSValue tag_value = JS_GetPropertyStr(ctx, tag_global, "capturedTag");
+        const char* tag = JS_ToCString(ctx, tag_value);
         printf("pressCount after tap: %d, capturedTag = %s\n", press_count, tag ? tag : "(unset)");
         const bool captured_ok = tag && strcmp(tag, "CPU") == 0;
         if (tag)
         {
             JS_FreeCString(ctx, tag);
         }
-        JS_FreeValue(ctx, tagv);
-        JS_FreeValue(ctx, g2);
+        JS_FreeValue(ctx, tag_value);
+        JS_FreeValue(ctx, tag_global);
 
         if (press_count < 1)
         {

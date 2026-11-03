@@ -49,10 +49,17 @@
 
 static JSRuntime* s_rt = NULL;
 static JSContext* s_ctx = NULL;
-static ErRuntimeConfig s_cfg;
+static ErRuntimeConfig s_config;
+
+/** @brief Bytes kept of the last uncaught JS error, and of its log line. */
+#define LAST_ERROR_BYTES 512
+#define EXCEPTION_LINE_BYTES 600
+
+/** @brief Bytes in one line of a heap-accounting warning. */
+#define WARNING_LINE_BYTES 160
 
 /** @brief Last uncaught JS error (message + stack), for er_runtime_show_error / _last_error. */
-static char s_last_error[512] = "";
+static char s_last_error[LAST_ERROR_BYTES] = "";
 
 /** @brief Result of the boot-time heap-accounting probe (see er_runtime_gc_accounting_ok). */
 static bool s_gc_accounting_ok = true;
@@ -80,9 +87,9 @@ static int64_t s_wall_offset_ms = 0;
 /** @brief Emits one log line to the configured sink (or stdout). */
 static void emit_line(const char* line)
 {
-    if (s_cfg.log)
+    if (s_config.log)
     {
-        s_cfg.log(line);
+        s_config.log(line);
     }
     else
     {
@@ -95,40 +102,40 @@ static void emit_line(const char* line)
 static JSValue rt_console_log(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    const int n = argc > 0 ? argc : 0;
-    const char** parts = (const char**)calloc((size_t)(n > 0 ? n : 1), sizeof(char*));
+    const int part_count = argc > 0 ? argc : 0;
+    const char** parts = (const char**)calloc((size_t)(part_count > 0 ? part_count : 1), sizeof(char*));
     size_t total = 1; /* null terminator */
-    for (int i = 0; i < n; i++)
+    for (int part_index = 0; part_index < part_count; part_index++)
     {
-        parts[i] = JS_ToCString(ctx, argv[i]);
-        total += (parts[i] ? strlen(parts[i]) : 0) + (i ? 1u : 0u);
+        parts[part_index] = JS_ToCString(ctx, argv[part_index]);
+        total += (parts[part_index] ? strlen(parts[part_index]) : 0) + (part_index ? 1u : 0u);
     }
     char* line = (char*)malloc(total);
     if (line)
     {
-        char* p = line;
-        for (int i = 0; i < n; i++)
+        char* cursor = line;
+        for (int part_index = 0; part_index < part_count; part_index++)
         {
-            if (i)
+            if (part_index)
             {
-                *p++ = ' ';
+                *cursor++ = ' ';
             }
-            if (parts[i])
+            if (parts[part_index])
             {
-                const size_t l = strlen(parts[i]);
-                memcpy(p, parts[i], l);
-                p += l;
+                const size_t part_length = strlen(parts[part_index]);
+                memcpy(cursor, parts[part_index], part_length);
+                cursor += part_length;
             }
         }
-        *p = '\0';
+        *cursor = '\0';
         emit_line(line);
         free(line);
     }
-    for (int i = 0; i < n; i++)
+    for (int part_index = 0; part_index < part_count; part_index++)
     {
-        if (parts[i])
+        if (parts[part_index])
         {
-            JS_FreeCString(ctx, parts[i]);
+            JS_FreeCString(ctx, parts[part_index]);
         }
     }
     free(parts);
@@ -155,15 +162,15 @@ static void install_screen(JSContext* ctx)
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue screen = JS_NewObject(ctx);
 
-    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, s_cfg.screen_width));
-    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, s_cfg.screen_height));
-    JS_SetPropertyStr(ctx, screen, "scale", JS_NewFloat64(ctx, (double)s_cfg.screen_scale));
+    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, s_config.screen_width));
+    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, s_config.screen_height));
+    JS_SetPropertyStr(ctx, screen, "scale", JS_NewFloat64(ctx, (double)s_config.screen_scale));
     JS_SetPropertyStr(ctx, global, "screen", screen);
     JS_FreeValue(ctx, global);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
- - Persisted state (usePersistentState across reloads; opt-in via cfg.install_persist)
+ - Persisted state (usePersistentState across reloads; opt-in via ErRuntimeConfig.install_persist)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Maximum number of distinct usePersistentState keys retained across reloads. */
@@ -173,20 +180,20 @@ static void install_screen(JSContext* ctx)
 static struct
 {
     char* key;
-    char* val;
+    char* value;
 } s_persist[ER_PERSIST_MAX];
 static int s_persist_count = 0;
 
 /** @brief Heap-duplicates a C string; NULL on allocation failure. */
-static char* persist_dup(const char* s)
+static char* persist_dup(const char* text)
 {
-    const size_t n = strlen(s) + 1;
-    char* d = (char*)malloc(n);
-    if (d)
+    const size_t size = strlen(text) + 1;
+    char* copy = (char*)malloc(size);
+    if (copy)
     {
-        memcpy(d, s, n);
+        memcpy(copy, text, size);
     }
-    return d;
+    return copy;
 }
 
 /** @brief __erPersist.get(key) → stored JSON string, or undefined. */
@@ -202,17 +209,17 @@ static JSValue js_persist_get(JSContext* ctx, JSValueConst this_val, int argc, J
     {
         return JS_UNDEFINED;
     }
-    JSValue r = JS_UNDEFINED;
-    for (int i = 0; i < s_persist_count; i++)
+    JSValue result = JS_UNDEFINED;
+    for (int entry_index = 0; entry_index < s_persist_count; entry_index++)
     {
-        if (s_persist[i].val && strcmp(s_persist[i].key, key) == 0)
+        if (s_persist[entry_index].value && strcmp(s_persist[entry_index].key, key) == 0)
         {
-            r = JS_NewString(ctx, s_persist[i].val);
+            result = JS_NewString(ctx, s_persist[entry_index].value);
             break;
         }
     }
     JS_FreeCString(ctx, key);
-    return r;
+    return result;
 }
 
 /** @brief __erPersist.set(key, jsonString) → stores it, replacing any prior value. */
@@ -224,37 +231,37 @@ static JSValue js_persist_set(JSContext* ctx, JSValueConst this_val, int argc, J
         return JS_UNDEFINED;
     }
     const char* key = JS_ToCString(ctx, argv[0]);
-    const char* val = JS_ToCString(ctx, argv[1]);
-    if (key && val)
+    const char* value = JS_ToCString(ctx, argv[1]);
+    if (key && value)
     {
-        int idx = -1;
-        for (int i = 0; i < s_persist_count; i++)
+        int entry_index = -1;
+        for (int candidate = 0; candidate < s_persist_count; candidate++)
         {
-            if (strcmp(s_persist[i].key, key) == 0)
+            if (strcmp(s_persist[candidate].key, key) == 0)
             {
-                idx = i;
+                entry_index = candidate;
                 break;
             }
         }
-        if (idx < 0 && s_persist_count < ER_PERSIST_MAX)
+        if (entry_index < 0 && s_persist_count < ER_PERSIST_MAX)
         {
-            idx = s_persist_count++;
-            s_persist[idx].key = persist_dup(key);
-            s_persist[idx].val = NULL;
+            entry_index = s_persist_count++;
+            s_persist[entry_index].key = persist_dup(key);
+            s_persist[entry_index].value = NULL;
         }
-        if (idx >= 0 && s_persist[idx].key)
+        if (entry_index >= 0 && s_persist[entry_index].key)
         {
-            free(s_persist[idx].val);
-            s_persist[idx].val = persist_dup(val);
+            free(s_persist[entry_index].value);
+            s_persist[entry_index].value = persist_dup(value);
         }
     }
     if (key)
     {
         JS_FreeCString(ctx, key);
     }
-    if (val)
+    if (value)
     {
-        JS_FreeCString(ctx, val);
+        JS_FreeCString(ctx, value);
     }
     return JS_UNDEFINED;
 }
@@ -292,9 +299,9 @@ static JSValue rt_perf_now(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 static void install_performance(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue perf = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, perf, "now", JS_NewCFunction(ctx, rt_perf_now, "now", 0));
-    JS_SetPropertyStr(ctx, global, "performance", perf);
+    JSValue performance = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, performance, "now", JS_NewCFunction(ctx, rt_perf_now, "now", 0));
+    JS_SetPropertyStr(ctx, global, "performance", performance);
     JS_FreeValue(ctx, global);
 }
 
@@ -306,6 +313,9 @@ static JSValue rt_date_now(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     (void)argv;
     return JS_NewInt64(ctx, s_wall_offset_ms + (int64_t)er_bridge_now_ms());
 }
+
+/** @brief `Date.length`, the argument count the constructor declares. */
+#define DATE_CONSTRUCTOR_LENGTH 7
 
 /** @brief `Date()` / `new Date()` without the Date intrinsic: throws, naming the flag that provides them. */
 static JSValue rt_date_ctor(JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv)
@@ -325,7 +335,8 @@ static JSValue rt_date_ctor(JSContext* ctx, JSValueConst new_target, int argc, J
 static void install_date_now(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue date = JS_NewCFunction2(ctx, rt_date_ctor, "Date", 7, JS_CFUNC_constructor_or_func, 0);
+    JSValue date =
+        JS_NewCFunction2(ctx, rt_date_ctor, "Date", DATE_CONSTRUCTOR_LENGTH, JS_CFUNC_constructor_or_func, 0);
     JSValue proto = JS_NewObject(ctx);
     JS_SetConstructor(ctx, date, proto);
     JS_FreeValue(ctx, proto);
@@ -395,7 +406,7 @@ static void install_globals(void)
      * er_runtime_load_source (desktop demo, web sim) only works once the Eval intrinsic has installed
      * the context's eval hook. On a QJS_DISABLE_PARSER device build the hook doesn't exist and both
      * JS-level eval() and er_runtime_load_source fail gracefully — bytecode is the only load path. */
-    s_ctx = er_js_new_context(s_rt, s_cfg.extra_intrinsics | ER_JS_INTRINSIC_EVAL);
+    s_ctx = er_js_new_context(s_rt, s_config.extra_intrinsics | ER_JS_INTRINSIC_EVAL);
     if (!s_ctx)
     {
         return;
@@ -406,13 +417,13 @@ static void install_globals(void)
     install_console(s_ctx);
     install_screen(s_ctx);
     er_bridge_install(s_ctx);
-    if (s_cfg.install_persist)
+    if (s_config.install_persist)
     {
         install_persist(s_ctx);
     }
-    if (s_cfg.install_host_globals)
+    if (s_config.install_host_globals)
     {
-        s_cfg.install_host_globals(s_ctx);
+        s_config.install_host_globals(s_ctx);
     }
 }
 
@@ -425,27 +436,32 @@ static void install_globals(void)
  */
 static void record_exception(JSContext* ctx, JSValueConst exception, const char* where)
 {
-    const char* msg = JS_ToCString(ctx, exception);
+    const char* message = JS_ToCString(ctx, exception);
     JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
-    const char* st = JS_IsUndefined(stack) ? NULL : JS_ToCString(ctx, stack);
+    const char* stack_text = JS_IsUndefined(stack) ? NULL : JS_ToCString(ctx, stack);
 
-    char head[600];
-    snprintf(head, sizeof(head), "JS %s%sexception: %s", where, *where ? " " : "", msg ? msg : "(unknown)");
-    emit_line(head);
-    if (st)
-    {
-        emit_line(st);
-    }
+    char headline[EXCEPTION_LINE_BYTES];
     snprintf(
-        s_last_error, sizeof(s_last_error), "%s%s%s", msg ? msg : "(unknown)", st ? STACK_SEPARATOR : "", st ? st : "");
-
-    if (msg)
+        headline, sizeof(headline), "JS %s%sexception: %s", where, *where ? " " : "", message ? message : "(unknown)");
+    emit_line(headline);
+    if (stack_text)
     {
-        JS_FreeCString(ctx, msg);
+        emit_line(stack_text);
     }
-    if (st)
+    snprintf(s_last_error,
+             sizeof(s_last_error),
+             "%s%s%s",
+             message ? message : "(unknown)",
+             stack_text ? STACK_SEPARATOR : "",
+             stack_text ? stack_text : "");
+
+    if (message)
     {
-        JS_FreeCString(ctx, st);
+        JS_FreeCString(ctx, message);
+    }
+    if (stack_text)
+    {
+        JS_FreeCString(ctx, stack_text);
     }
     JS_FreeValue(ctx, stack);
 }
@@ -463,9 +479,9 @@ static bool rt_report(JSValue result)
     bool ok = true;
     if (JS_IsException(result))
     {
-        JSValue exc = JS_GetException(s_ctx);
-        record_exception(s_ctx, exc, "");
-        JS_FreeValue(s_ctx, exc);
+        JSValue exception = JS_GetException(s_ctx);
+        record_exception(s_ctx, exception, "");
+        JS_FreeValue(s_ctx, exception);
         ok = false;
     }
     JS_FreeValue(s_ctx, result);
@@ -492,7 +508,7 @@ static void check_gc_accounting(void)
         return;
     }
 
-    char line[160];
+    char line[WARNING_LINE_BYTES];
     emit_line("embedded-react: WARNING - the JS heap has no byte accounting.");
     snprintf(line, sizeof(line), "  js_malloc_usable_size() reported %zu bytes for a 1000-byte allocation.", reported);
     emit_line(line);
@@ -513,9 +529,9 @@ static void check_gc_accounting(void)
  */
 static void apply_gc_floor(void)
 {
-    if (s_rt && s_cfg.gc_threshold && JS_GetGCThreshold(s_rt) < s_cfg.gc_threshold)
+    if (s_rt && s_config.gc_threshold && JS_GetGCThreshold(s_rt) < s_config.gc_threshold)
     {
-        JS_SetGCThreshold(s_rt, s_cfg.gc_threshold);
+        JS_SetGCThreshold(s_rt, s_config.gc_threshold);
     }
 }
 
@@ -527,17 +543,17 @@ static void apply_gc_floor(void)
  */
 static void check_gc_threshold(void)
 {
-    if (!s_cfg.gc_threshold || !s_cfg.memory_limit || s_cfg.gc_threshold < s_cfg.memory_limit)
+    if (!s_config.gc_threshold || !s_config.memory_limit || s_config.gc_threshold < s_config.memory_limit)
     {
         return;
     }
-    char line[160];
+    char line[WARNING_LINE_BYTES];
     emit_line("embedded-react: WARNING - gc_threshold is not below memory_limit.");
     snprintf(line,
              sizeof(line),
              "  gc_threshold = %zu bytes, memory_limit = %zu bytes.",
-             s_cfg.gc_threshold,
-             s_cfg.memory_limit);
+             s_config.gc_threshold,
+             s_config.memory_limit);
     emit_line(line);
     emit_line("  The heap reaches the limit before the AUTOMATIC collector is allowed to run, so a growing");
     emit_line("  app fails with a JS out-of-memory error unless er_runtime_run_gc() is called before the heap");
@@ -549,12 +565,12 @@ static void check_gc_threshold(void)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-bool er_runtime_init(const ErRuntimeConfig* cfg)
+bool er_runtime_init(const ErRuntimeConfig* config)
 {
-    s_cfg = *cfg;
-    if (s_cfg.screen_scale <= 0.0f)
+    s_config = *config;
+    if (s_config.screen_scale <= 0.0f)
     {
-        s_cfg.screen_scale = 1.0f;
+        s_config.screen_scale = 1.0f;
     }
     /* Back to the optimistic default before anything can fail: this outlives the runtime it describes,
        and a verdict from a PREVIOUS runtime must not survive into an init that never got to probe. */
@@ -562,19 +578,20 @@ bool er_runtime_init(const ErRuntimeConfig* cfg)
     /* Never JS_NewRuntime(): its default allocator answers js_malloc_usable_size with 0 on any platform
        outside Apple/Win32/glibc (bare-metal newlib, Emscripten), which silently disables the GC and the
        memory limit. er_js_default_malloc_functions() always accounts for bytes — see er_js_alloc.h. */
-    s_rt = JS_NewRuntime2(s_cfg.malloc_functions ? s_cfg.malloc_functions : er_js_default_malloc_functions(), NULL);
+    s_rt =
+        JS_NewRuntime2(s_config.malloc_functions ? s_config.malloc_functions : er_js_default_malloc_functions(), NULL);
     if (!s_rt)
     {
         return false;
     }
     check_gc_accounting();
-    if (s_cfg.max_stack_size)
+    if (s_config.max_stack_size)
     {
-        JS_SetMaxStackSize(s_rt, s_cfg.max_stack_size);
+        JS_SetMaxStackSize(s_rt, s_config.max_stack_size);
     }
-    if (s_cfg.memory_limit)
+    if (s_config.memory_limit)
     {
-        JS_SetMemoryLimit(s_rt, s_cfg.memory_limit);
+        JS_SetMemoryLimit(s_rt, s_config.memory_limit);
     }
     s_gc_threshold_default = JS_GetGCThreshold(s_rt); /* before the floor, so it is QuickJS's own value */
     check_gc_threshold();
@@ -589,9 +606,9 @@ JSContext* er_runtime_context(void)
     return s_ctx;
 }
 
-bool er_runtime_load_bytecode(const void* buf, size_t len)
+bool er_runtime_load_bytecode(const void* buffer, size_t length)
 {
-    const bool ok = rt_report(er_bridge_run_bytecode(s_ctx, (const uint8_t*)buf, len));
+    const bool ok = rt_report(er_bridge_run_bytecode(s_ctx, (const uint8_t*)buffer, length));
     if (ok)
     {
         er_error_screen_hide();
@@ -600,18 +617,18 @@ bool er_runtime_load_bytecode(const void* buf, size_t len)
     return ok;
 }
 
-uint8_t* er_runtime_compile_bytecode(const char* src, size_t len, size_t* out_len)
+uint8_t* er_runtime_compile_bytecode(const char* source, size_t length, size_t* out_length)
 {
     /* Debug info kept: this entry point serves the dev loop (hot reload / sim), where stack-trace
      * line numbers matter more than blob size. Release packaging passes strip = true. */
-    return er_runtime_compile_bytecode_ex(src, len, out_len, false);
+    return er_runtime_compile_bytecode_ex(source, length, out_length, false);
 }
 
-uint8_t* er_runtime_compile_bytecode_ex(const char* src, size_t len, size_t* out_len, bool strip)
+uint8_t* er_runtime_compile_bytecode_ex(const char* source, size_t length, size_t* out_length, bool strip)
 {
-    if (out_len)
+    if (out_length)
     {
-        *out_len = 0;
+        *out_length = 0;
     }
     /* A throwaway runtime — compiling must not touch the app runtime (or require it to exist). Same
        allocator as the app runtime: on-device compilation churns a lot of garbage, so it needs a live GC. */
@@ -629,49 +646,49 @@ uint8_t* er_runtime_compile_bytecode_ex(const char* src, size_t len, size_t* out
 
     /* COMPILE_ONLY returns the program's function bytecode without running it, so the bundle's
        references to NativeUI/screen/console are left unresolved (resolved at load time). */
-    JSValue obj = JS_Eval(ctx, src, len, "<app>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-    uint8_t* out = NULL;
-    if (JS_IsException(obj))
+    JSValue compiled = JS_Eval(ctx, source, length, "<app>", JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
+    uint8_t* bytecode_copy = NULL;
+    if (JS_IsException(compiled))
     {
         /* Print the compile error (message + stack) to stderr → the host's console. */
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        fprintf(stderr, "er_runtime_compile_bytecode: %s\n", msg ? msg : "(unknown)");
-        if (msg)
+        JSValue exception = JS_GetException(ctx);
+        const char* message = JS_ToCString(ctx, exception);
+        fprintf(stderr, "er_runtime_compile_bytecode: %s\n", message ? message : "(unknown)");
+        if (message)
         {
-            JS_FreeCString(ctx, msg);
+            JS_FreeCString(ctx, message);
         }
-        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, exception);
     }
     else
     {
-        size_t bc_len = 0;
-        const int wr_flags =
+        size_t bytecode_length = 0;
+        const int write_flags =
             JS_WRITE_OBJ_BYTECODE | (strip ? (JS_WRITE_OBJ_STRIP_SOURCE | JS_WRITE_OBJ_STRIP_DEBUG) : 0);
-        uint8_t* bc = JS_WriteObject(ctx, &bc_len, obj, wr_flags);
-        if (bc)
+        uint8_t* bytecode = JS_WriteObject(ctx, &bytecode_length, compiled, write_flags);
+        if (bytecode)
         {
-            out = (uint8_t*)malloc(bc_len);
-            if (out)
+            bytecode_copy = (uint8_t*)malloc(bytecode_length);
+            if (bytecode_copy)
             {
-                memcpy(out, bc, bc_len);
-                if (out_len)
+                memcpy(bytecode_copy, bytecode, bytecode_length);
+                if (out_length)
                 {
-                    *out_len = bc_len;
+                    *out_length = bytecode_length;
                 }
             }
-            js_free(ctx, bc);
+            js_free(ctx, bytecode);
         }
     }
-    JS_FreeValue(ctx, obj);
+    JS_FreeValue(ctx, compiled);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
-    return out;
+    return bytecode_copy;
 }
 
-void er_runtime_free(void* p)
+void er_runtime_free(void* buffer)
 {
-    free(p);
+    free(buffer);
 }
 
 /* --- ERCF config container ------------------------------------------------------------------------
@@ -683,13 +700,13 @@ const char* er_runtime_container_status_str(ErContainerStatus status)
     return er_container_status_str(status);
 }
 
-bool er_runtime_container_has_vendor(const void* buf, size_t len)
+bool er_runtime_container_has_vendor(const void* buffer, size_t length)
 {
     /* A structural-only scan (no CRC) for a vendor section: present → the container is a full boot/reload
      * that carries the framework; absent → an app-only frame for an incremental soft reload. A malformed
      * blob returns false; the loader rejects it for real afterward. */
     ErContainer container;
-    if (er_container_scan(buf, len, &container) != ER_CONTAINER_OK)
+    if (er_container_scan(buffer, length, &container) != ER_CONTAINER_OK)
     {
         return false;
     }
@@ -735,10 +752,10 @@ static const ErContainerSection* find_section(const ErContainer* container, uint
 }
 
 /** @brief Every check a container load makes before it touches the engine. */
-static ErContainerStatus check_container(const void* buf, size_t len, bool copy_assets, ErContainer* container)
+static ErContainerStatus check_container(const void* buffer, size_t length, bool copy_assets, ErContainer* container)
 {
     /* Integrity, then version compatibility, then the asset packs, together. */
-    const ErContainerStatus status = er_container_read(buf, len, container);
+    const ErContainerStatus status = er_container_read(buffer, length, container);
     if (status != ER_CONTAINER_OK)
     {
         return status;
@@ -755,9 +772,9 @@ static ErContainerStatus check_container(const void* buf, size_t len, bool copy_
     return find_section(container, ER_SECTION_BYTECODE) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
 }
 
-ErContainerStatus er_runtime_load_container(const void* vbuf, size_t len)
+ErContainerStatus er_runtime_load_container(const void* buffer, size_t length)
 {
-    return er_runtime_load_container_ex(vbuf, len, false);
+    return er_runtime_load_container_ex(buffer, length, false);
 }
 
 /** @brief Loads a container check_container passed: registers its asset packs, then runs its bytecode. */
@@ -786,12 +803,12 @@ static ErContainerStatus load_checked_container(const ErContainer* container, bo
     return er_runtime_load_bytecode(bytecode->data, bytecode->length) ? ER_CONTAINER_OK : ER_CONTAINER_LOAD_FAILED;
 }
 
-ErContainerStatus er_runtime_load_container_ex(const void* vbuf, size_t len, bool copy_assets)
+ErContainerStatus er_runtime_load_container_ex(const void* buffer, size_t length, bool copy_assets)
 {
     /* Every check runs before anything is registered, so a container that fails one leaves the engine as it
      * was. */
     ErContainer container;
-    const ErContainerStatus status = check_container(vbuf, len, copy_assets, &container);
+    const ErContainerStatus status = check_container(buffer, length, copy_assets, &container);
     return status == ER_CONTAINER_OK ? load_checked_container(&container, copy_assets) : status;
 }
 
@@ -825,9 +842,9 @@ ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
     return status;
 }
 
-bool er_runtime_load_source(const char* src, size_t len, const char* name)
+bool er_runtime_load_source(const char* source, size_t length, const char* name)
 {
-    const bool ok = rt_report(JS_Eval(s_ctx, src, len, name ? name : "<app>", JS_EVAL_TYPE_GLOBAL));
+    const bool ok = rt_report(JS_Eval(s_ctx, source, length, name ? name : "<app>", JS_EVAL_TYPE_GLOBAL));
     if (ok)
     {
         er_error_screen_hide();
@@ -870,7 +887,7 @@ size_t er_runtime_gc_threshold(void)
 
 void er_runtime_set_gc_threshold(size_t bytes)
 {
-    s_cfg.gc_threshold = bytes;
+    s_config.gc_threshold = bytes;
     check_gc_threshold();
     if (s_rt)
     {
@@ -899,7 +916,7 @@ void er_runtime_show_message(const char* title, const char* body, const char* hi
         .reason = body,
         .hint = hint,
     };
-    er_error_screen_show(s_cfg.screen_width, s_cfg.screen_height, &screen);
+    er_error_screen_show(s_config.screen_width, s_config.screen_height, &screen);
 }
 
 void er_runtime_show_error(void)
@@ -920,17 +937,17 @@ void er_runtime_show_error(void)
         .hint = JS_ERROR_HINT,
         .detail = stack ? stack + strlen(STACK_SEPARATOR) : NULL,
     };
-    er_error_screen_show(s_cfg.screen_width, s_cfg.screen_height, &screen);
+    er_error_screen_show(s_config.screen_width, s_config.screen_height, &screen);
 }
 
 void er_runtime_clear_persist(void)
 {
-    for (int i = 0; i < s_persist_count; i++)
+    for (int entry_index = 0; entry_index < s_persist_count; entry_index++)
     {
-        free(s_persist[i].key);
-        free(s_persist[i].val);
-        s_persist[i].key = NULL;
-        s_persist[i].val = NULL;
+        free(s_persist[entry_index].key);
+        free(s_persist[entry_index].value);
+        s_persist[entry_index].key = NULL;
+        s_persist[entry_index].value = NULL;
     }
     s_persist_count = 0;
 }

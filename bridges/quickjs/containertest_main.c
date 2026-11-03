@@ -30,6 +30,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/** @brief Screen the test runtime is configured for. */
+#define TEST_SCREEN_WIDTH 320
+#define TEST_SCREEN_HEIGHT 240
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Test helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -49,8 +53,22 @@ static int s_failed = 0;
 /** @brief The QuickJS tag er_runtime accepts. */
 static const char QJS_TAG[] = "v0.15.0";
 
+/** @brief ERCF layout: magic, version, CRC, then the tag; the CRC covers everything after the header. */
+#define CONTAINER_VERSION_OFFSET 4
+#define CONTAINER_CRC_OFFSET 8
+#define CONTAINER_HEADER_BYTES 12u
+#define CONTAINER_MAGIC_BYTES 4
+#define CONTAINER_COUNT_BYTES 4u
+
+/** @brief A section's header: its type, then its length. */
+#define SECTION_LENGTH_OFFSET 4u
+#define SECTION_HEADER_BYTES 8u
+
+/** @brief Words in the container buffer. */
+#define CONTAINER_WORDS 2048
+
 /* Word-aligned, so where a section lands depends only on its offset. */
-static uint32_t s_container_words[2048];
+static uint32_t s_container_words[CONTAINER_WORDS];
 static uint8_t* const s_container = (uint8_t*)s_container_words;
 static size_t s_container_length;
 static size_t s_pack_offset; /* where build_with_pack put the pack */
@@ -66,29 +84,30 @@ static void put_u32(uint8_t* destination, uint32_t value)
 static void container_begin(uint32_t section_count)
 {
     const uint16_t tag_length = (uint16_t)(sizeof(QJS_TAG) - 1u);
-    memcpy(s_container, "ERCF", 4);
-    put_u32(s_container + 4, ER_CONTAINER_FORMAT_VERSION);
-    s_container_length = 12u;
+    memcpy(s_container, "ERCF", CONTAINER_MAGIC_BYTES);
+    put_u32(s_container + CONTAINER_VERSION_OFFSET, ER_CONTAINER_FORMAT_VERSION);
+    s_container_length = CONTAINER_HEADER_BYTES;
     s_container[s_container_length++] = (uint8_t)(tag_length & 0xFFu);
     s_container[s_container_length++] = (uint8_t)(tag_length >> 8);
     memcpy(s_container + s_container_length, QJS_TAG, tag_length);
     s_container_length += tag_length;
     put_u32(s_container + s_container_length, section_count);
-    s_container_length += 4u;
+    s_container_length += CONTAINER_COUNT_BYTES;
 }
 
 static void container_section(uint32_t type, const void* data, size_t length)
 {
     put_u32(s_container + s_container_length, type);
-    put_u32(s_container + s_container_length + 4u, (uint32_t)length);
-    s_container_length += 8u;
+    put_u32(s_container + s_container_length + SECTION_LENGTH_OFFSET, (uint32_t)length);
+    s_container_length += SECTION_HEADER_BYTES;
     memcpy(s_container + s_container_length, data, length);
     s_container_length += length;
 }
 
 static void container_seal(void)
 {
-    put_u32(s_container + 8, er_crc32(s_container + 12, s_container_length - 12u));
+    put_u32(s_container + CONTAINER_CRC_OFFSET,
+            er_crc32(s_container + CONTAINER_HEADER_BYTES, s_container_length - CONTAINER_HEADER_BYTES));
 }
 
 static const uint8_t s_bytecode[] = {0u};
@@ -97,7 +116,7 @@ static const uint8_t s_bytecode[] = {0u};
 static void build_with_pack(const TestPack* pack)
 {
     container_begin(2u);
-    s_pack_offset = s_container_length + 8u;
+    s_pack_offset = s_container_length + SECTION_HEADER_BYTES;
     container_section(ER_SECTION_ASSET_PACK, pack->bytes, pack->length);
     container_section(ER_SECTION_BYTECODE, s_bytecode, sizeof(s_bytecode));
     container_seal();
@@ -272,8 +291,8 @@ int main(void)
     static const EmbeddedRenderBackend backend = ER_HOST_NOOP_BACKEND;
     embedded_renderer_set_backend(&backend);
     ErRuntimeConfig config = {0};
-    config.screen_width = 320;
-    config.screen_height = 240;
+    config.screen_width = TEST_SCREEN_WIDTH;
+    config.screen_height = TEST_SCREEN_HEIGHT;
     config.screen_scale = 1.0f;
     if (!er_runtime_init(&config))
     {
