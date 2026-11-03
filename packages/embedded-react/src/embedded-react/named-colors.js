@@ -15,7 +15,7 @@
  */
 
 // The named colors every path accepts, as ARGB8888 with their CSS values. Keys are lowercase; callers
-// lowercase the name first. The bridge's k_named table (native_ui_bridge.c) must list the same entries.
+// lowercase the name first. The bridge's k_named_colors table (native_ui_bridge.c) must list the same entries.
 // No prototype, so `name in NAMED_COLORS` never finds `toString` and friends.
 
 /** @type {Readonly<Record<string, number>>} */

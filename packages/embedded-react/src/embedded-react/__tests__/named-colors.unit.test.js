@@ -30,11 +30,12 @@ const BRIDGE_C = resolve(
   '../../../../../bridges/quickjs/native_ui_bridge.c',
 );
 
-/** The bridge's k_named table, as {name: argb}. */
+/** The bridge's k_named_colors table, as {name: argb}. */
 function bridgeNamedColors() {
   const c = readFileSync(BRIDGE_C, 'utf8');
-  const table = c.match(/k_named\[\]\s*=\s*\{([\s\S]*?)\};/);
-  if (!table) throw new Error('native_ui_bridge.c: could not find k_named');
+  const table = c.match(/k_named_colors\[\]\s*=\s*\{([\s\S]*?)\};/);
+  if (!table)
+    throw new Error('native_ui_bridge.c: could not find k_named_colors');
   return Object.fromEntries(
     [...table[1].matchAll(/\{"([a-z]+)",\s*0x([0-9A-Fa-f]{8})U\}/g)].map(m => [
       m[1],
