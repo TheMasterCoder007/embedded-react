@@ -48,7 +48,7 @@ extern "C"
          * @brief Streams @p count RGB565 pixels (already in PANEL BYTE ORDER — the backend stores the
          * framebuffer big-endian, so the buffer bytes go straight onto the wire) into the open window.
          */
-        void (*write_pixels)(const uint16_t* px, size_t count);
+        void (*write_pixels)(const uint16_t* pixels, size_t count);
     } ErPicoLcdPanelOps;
 
     /**

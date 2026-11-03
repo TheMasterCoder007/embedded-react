@@ -79,7 +79,7 @@ static const char* TAG = "embedded-react";
    "stack overflow" from JS. */
 #define ER_JS_MAX_STACK (CONFIG_ESP_MAIN_TASK_STACK_SIZE / 4 * 3)
 
-/* Hard cap on the JS heap (all of it lives in PSRAM via er_js_mf). A runaway app fails with a JS
+/* Hard cap on the JS heap (all of it lives in PSRAM via k_js_malloc_functions). A runaway app fails with a JS
    out-of-memory error — caught and shown on the error screen — instead of exhausting the PSRAM the
    framebuffers and engine pools share. */
 #define ER_JS_MEMORY_LIMIT (4u * 1024u * 1024u)
@@ -94,6 +94,17 @@ static const char* TAG = "embedded-react";
 
 /* Label of the data partition the config container (app.erpkg) is flashed into (see partitions.csv). */
 #define ER_CONFIG_PARTITION_LABEL "config"
+
+#define US_PER_MS 1000U
+#define US_PER_SECOND 1000000ULL
+#define BYTES_PER_KB 1024U
+#define PERCENT 100U
+
+/* The alive line, and the JS split under ER_PERF_DETAIL, are logged and averaged over this many frames. */
+#define LOG_WINDOW_FRAMES 30U
+
+/* The display verdict, kept to be logged once the console is back. */
+#define DISPLAY_REPORT_BYTES 192
 
 /* On-device hot reload over USB-Serial-JTAG. DEV-ONLY and OFF by default — the standard dev workflow is
  * the web simulator (`npx embedded-react dev`); a project opts a board in by building with ER_HOTRELOAD=1
@@ -127,26 +138,26 @@ static void* er_js_malloc(void* opaque, size_t size)
 }
 
 /** @brief Frees a JS-heap allocation. */
-static void er_js_free(void* opaque, void* ptr)
+static void er_js_free(void* opaque, void* pointer)
 {
     (void)opaque;
-    heap_caps_free(ptr);
+    heap_caps_free(pointer);
 }
 
 /** @brief PSRAM-backed realloc for the JS heap. */
-static void* er_js_realloc(void* opaque, void* ptr, size_t size)
+static void* er_js_realloc(void* opaque, void* pointer, size_t size)
 {
     (void)opaque;
-    return heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM);
+    return heap_caps_realloc(pointer, size, MALLOC_CAP_SPIRAM);
 }
 
 /** @brief Reports the usable size of a JS-heap allocation. */
-static size_t er_js_usable_size(const void* ptr)
+static size_t er_js_usable_size(const void* pointer)
 {
-    return heap_caps_get_allocated_size((void*)ptr);
+    return heap_caps_get_allocated_size((void*)pointer);
 }
 
-static const JSMallocFunctions er_js_mf = {
+static const JSMallocFunctions k_js_malloc_functions = {
     .js_calloc = er_js_calloc,
     .js_malloc = er_js_malloc,
     .js_free = er_js_free,
@@ -168,34 +179,34 @@ static void uart_log(const char* line)
  - No-op render backend (display fallback)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void noop_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
-static void noop_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void noop_copy(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
-static void noop_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void noop_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -219,7 +230,7 @@ static const EmbeddedRenderBackend k_noop_backend = {
 /** @brief Returns milliseconds since boot (engine-clock delta source). */
 static uint32_t now_ms(void)
 {
-    return (uint32_t)(esp_timer_get_time() / 1000);
+    return (uint32_t)(esp_timer_get_time() / US_PER_MS);
 }
 
 #if ER_PERF_OVERLAY
@@ -239,11 +250,15 @@ static uint32_t now_ms(void)
 /** @brief Lines this host formats itself (FPS / CPU / PSRAM / IRAM); ER_PERF_DETAIL appends the engine's. */
 #define PERF_HOST_LINES 4
 
-static char s_perf_buf[PERF_HOST_LINES][24];
+/** @brief Bytes of one host line, and how often the lines refresh. */
+#define PERF_LINE_BYTES 24
+#define PERF_REFRESH_US 500000
+
+static char s_perf_text[PERF_HOST_LINES][PERF_LINE_BYTES];
 /* Host lines first, then the engine's frame-instrumentation lines (timing split + resource counters,
  * er_perf_overlay_lines) — those point into engine-owned static storage, so they are not copied. */
 static const char* s_perf_lines[PERF_HOST_LINES + ER_PERF_OVERLAY_LINES];
-static int s_perf_nlines = 0;
+static int s_perf_line_count = 0;
 static uint32_t s_perf_busy_us = 0; /* the previous frame's full work time (pump+commit+present) */
 
 /**
@@ -271,34 +286,34 @@ static bool perf_overlay_refresh(int64_t frame_start_us)
     busy_sum += s_perf_busy_us;
 
     const int64_t elapsed = frame_start_us - window_start;
-    if (elapsed < 500000)
+    if (elapsed < PERF_REFRESH_US)
     {
         return false;
     }
 
-    const uint32_t fps = (uint32_t)((uint64_t)frames * 1000000ULL / (uint64_t)elapsed);
-    uint32_t cpu = (uint32_t)(busy_sum * 100ULL / (uint64_t)elapsed);
-    if (cpu > 100U)
+    const uint32_t fps = (uint32_t)((uint64_t)frames * US_PER_SECOND / (uint64_t)elapsed);
+    uint32_t cpu_percent = (uint32_t)(busy_sum * PERCENT / (uint64_t)elapsed);
+    if (cpu_percent > PERCENT)
     {
-        cpu = 100U;
+        cpu_percent = PERCENT;
     }
-    const uint32_t spiram_k = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024U);
-    const uint32_t iram_k = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024U);
-    snprintf(s_perf_buf[0], sizeof(s_perf_buf[0]), "FPS %u", (unsigned)fps);
-    snprintf(s_perf_buf[1], sizeof(s_perf_buf[1]), "CPU %u%%", (unsigned)cpu);
-    snprintf(s_perf_buf[2], sizeof(s_perf_buf[2]), "PSRAM %uK", (unsigned)spiram_k);
-    snprintf(s_perf_buf[3], sizeof(s_perf_buf[3]), "IRAM %uK", (unsigned)iram_k);
-    for (int i = 0; i < PERF_HOST_LINES; i++)
+    const uint32_t psram_free_kb = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / BYTES_PER_KB);
+    const uint32_t internal_free_kb = (uint32_t)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / BYTES_PER_KB);
+    snprintf(s_perf_text[0], sizeof(s_perf_text[0]), "FPS %u", (unsigned)fps);
+    snprintf(s_perf_text[1], sizeof(s_perf_text[1]), "CPU %u%%", (unsigned)cpu_percent);
+    snprintf(s_perf_text[2], sizeof(s_perf_text[2]), "PSRAM %uK", (unsigned)psram_free_kb);
+    snprintf(s_perf_text[3], sizeof(s_perf_text[3]), "IRAM %uK", (unsigned)internal_free_kb);
+    for (int line = 0; line < PERF_HOST_LINES; line++)
     {
-        s_perf_lines[i] = s_perf_buf[i];
+        s_perf_lines[line] = s_perf_text[line];
     }
 #if ER_PERF_DETAIL
     /* Append the engine's split + counters. This runs before this frame's er_perf_frame_end(), so the
      * numbers are the previous frame's — irrelevant at a 500 ms refresh, and the retained peak (the
      * "PK" lines, which is what a spike hunt actually reads) is unaffected either way. */
-    s_perf_nlines = PERF_HOST_LINES + er_perf_overlay_lines(&s_perf_lines[PERF_HOST_LINES], ER_PERF_OVERLAY_LINES);
+    s_perf_line_count = PERF_HOST_LINES + er_perf_overlay_lines(&s_perf_lines[PERF_HOST_LINES], ER_PERF_OVERLAY_LINES);
 #else
-    s_perf_nlines = PERF_HOST_LINES;
+    s_perf_line_count = PERF_HOST_LINES;
 #endif
 
     frames = 0;
@@ -328,23 +343,24 @@ uint32_t er_prof_now_us(void)
  */
 static bool load_config_partition(ErContainerStatus* out_status)
 {
-    const esp_partition_t* part =
+    const esp_partition_t* partition =
         esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, ER_CONFIG_PARTITION_LABEL);
-    if (!part)
+    if (!partition)
     {
         ESP_LOGE(TAG, "no '%s' partition — add it to partitions.csv", ER_CONFIG_PARTITION_LABEL);
         return false;
     }
     const void* mapped = NULL;
     esp_partition_mmap_handle_t handle;
-    const esp_err_t err = esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA, &mapped, &handle);
-    if (err != ESP_OK)
+    const esp_err_t error =
+        esp_partition_mmap(partition, 0, partition->size, ESP_PARTITION_MMAP_DATA, &mapped, &handle);
+    if (error != ESP_OK)
     {
-        ESP_LOGE(TAG, "mmap '%s' failed: %s", ER_CONFIG_PARTITION_LABEL, esp_err_to_name(err));
+        ESP_LOGE(TAG, "mmap '%s' failed: %s", ER_CONFIG_PARTITION_LABEL, esp_err_to_name(error));
         return false;
     }
-    ESP_LOGI(TAG, "config partition mapped (%u bytes) — loading container", (unsigned)part->size);
-    *out_status = er_runtime_load_container(mapped, part->size); /* mapping kept for the process */
+    ESP_LOGI(TAG, "config partition mapped (%u bytes) — loading container", (unsigned)partition->size);
+    *out_status = er_runtime_load_container(mapped, partition->size); /* mapping kept for the process */
     return true;
 }
 
@@ -353,7 +369,7 @@ static bool load_config_partition(ErContainerStatus* out_status)
  */
 /** @brief Display verdict, re-logged from the frame loop once the USB console is back. */
 static const char* s_display_report = NULL;
-static char s_display_report_buf[192];
+static char s_display_report_text[DISPLAY_REPORT_BYTES];
 
 static void run_app(void)
 {
@@ -363,7 +379,7 @@ static void run_app(void)
        stack still runs (and logs why) over UART. */
     esp_lcd_panel_handle_t panel = NULL;
     const bool panel_up = board_display_init(&panel);
-    const bool display = panel_up && er_esp32_lcd_backend_init(panel, SCREEN_W, SCREEN_H, ER_DISPLAY_ROTATION);
+    const bool display = panel_up && er_esp32_lcd_backend_init(panel, SCREEN_WIDTH, SCREEN_HEIGHT, ER_DISPLAY_ROTATION);
     if (display)
     {
         ESP_LOGI(TAG, "display backend active");
@@ -386,8 +402,8 @@ static void run_app(void)
        where the console is back. */
     if (display)
     {
-        snprintf(s_display_report_buf,
-                 sizeof(s_display_report_buf),
+        snprintf(s_display_report_text,
+                 sizeof(s_display_report_text),
                  "backend active%s%s",
                  board_display_last_note()[0] ? ", " : "",
                  board_display_last_note());
@@ -398,19 +414,19 @@ static void run_app(void)
            report and asking it for one would say "no reason latched" about the wrong subsystem.
            Past tense on purpose: this line prints from the frame loop, seconds after the handle was
            deleted above, so saying the panel "is up" would send a reader looking for a live one. */
-        snprintf(s_display_report_buf,
-                 sizeof(s_display_report_buf),
+        snprintf(s_display_report_text,
+                 sizeof(s_display_report_text),
                  "panel init succeeded (%s) but the renderer backend failed to attach; panel released",
                  board_display_last_note()[0] ? board_display_last_note() : "no note");
     }
     else
     {
-        snprintf(s_display_report_buf,
-                 sizeof(s_display_report_buf),
+        snprintf(s_display_report_text,
+                 sizeof(s_display_report_text),
                  "%s",
                  board_display_last_error()[0] ? board_display_last_error() : "init failed (no reason latched)");
     }
-    s_display_report = s_display_report_buf;
+    s_display_report = s_display_report_text;
 
 #if ERUI_RENDER_WORKERS > 1
     /* Fork render passes across both CPU cores (after display init so its heap needs come first). */
@@ -432,15 +448,15 @@ static void run_app(void)
     }
 
     /* Boot the portable QuickJS host core with the JS heap in PSRAM and the stack guard set. */
-    const ErRuntimeConfig rt_cfg = {
-        .screen_width = SCREEN_W,
-        .screen_height = SCREEN_H,
+    const ErRuntimeConfig runtime_config = {
+        .screen_width = SCREEN_WIDTH,
+        .screen_height = SCREEN_HEIGHT,
         .screen_scale = 1.0f,
         /* With hot reload wired (Phase 4), install the persist store so usePersistentState survives a
            live reload — the same behavior as the desktop simulator. Off when hot reload is compiled out. */
         .install_persist = (ER_HOTRELOAD != 0),
         .log = uart_log,
-        .malloc_functions = &er_js_mf, /* JS heap → PSRAM */
+        .malloc_functions = &k_js_malloc_functions, /* JS heap → PSRAM */
         .max_stack_size = ER_JS_MAX_STACK,
         .memory_limit = ER_JS_MEMORY_LIMIT,
         .gc_threshold = ER_JS_GC_THRESHOLD,
@@ -448,7 +464,7 @@ static void run_app(void)
         .install_host_globals = network_js_install, /* __erWifi / __erClock, on every context */
 #endif
     };
-    if (!er_runtime_init(&rt_cfg))
+    if (!er_runtime_init(&runtime_config))
     {
         ESP_LOGE(TAG, "er_runtime_init failed (PSRAM exhausted?)");
         return;
@@ -468,16 +484,16 @@ static void run_app(void)
     /* Load the UI + logic from the config partition. On any failure, paint the on-screen panel and
        keep going — the loop below presents it and feeds the watchdog (firmware doesn't halt because a
        config is missing/bad, mirroring the desktop demo). */
-    ErContainerStatus cfg_status = ER_CONTAINER_LOAD_FAILED;
-    if (!load_config_partition(&cfg_status))
+    ErContainerStatus config_status = ER_CONTAINER_LOAD_FAILED;
+    if (!load_config_partition(&config_status))
     {
         er_runtime_show_message("No config loaded",
                                 "No config partition was found or it could not be mapped.",
                                 "Flash an app.erpkg to the 'config' partition, then reboot.");
     }
-    else if (cfg_status != ER_CONTAINER_OK)
+    else if (config_status != ER_CONTAINER_OK)
     {
-        const char* reason = er_runtime_container_status_str(cfg_status);
+        const char* reason = er_runtime_container_status_str(config_status);
         ESP_LOGE(TAG, "config rejected: %s", reason);
         er_runtime_show_message("Couldn't load config", reason, "Re-pack with `npm run pack` and re-flash the config.");
     }
@@ -502,44 +518,44 @@ static void run_app(void)
 
 #if CONFIG_ER_WIFI
     /* Last, so the panel and the app have had their internal RAM: Wi-Fi runs on what is left. */
-    const size_t int_before_wifi = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t internal_before_wifi = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     if (network_start())
     {
         ESP_LOGI(TAG,
                  "wifi up: free internal %u -> %u, free PSRAM %u",
-                 (unsigned)int_before_wifi,
+                 (unsigned)internal_before_wifi,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     }
 #endif
 
     /* Frame loop: poll touch, pump JS (promises + timers), commit, present, advance animations. */
-    uint32_t prev = now_ms();
+    uint32_t previous_ms = now_ms();
     uint32_t frame = 0;
     bool touch_down = false; /* press state machine: turns GT911 snapshots into down/move/up */
-    int touch_x = 0;
-    int touch_y = 0;
+    int last_touch_x = 0;
+    int last_touch_y = 0;
     while (true)
     {
         /* Forward touch to the engine before pumping so a press lands in the same frame's render. */
         if (touch)
         {
-            int tx = 0;
-            int ty = 0;
+            int touch_x = 0;
+            int touch_y = 0;
             bool pressed = false;
-            if (board_touch_read(&tx, &ty, &pressed))
+            if (board_touch_read(&touch_x, &touch_y, &pressed))
             {
-                remap_touch(&tx, &ty); /* physical panel coords -> logical (rotated) app coords */
+                remap_touch(&touch_x, &touch_y); /* physical panel coords -> logical (rotated) app coords */
                 if (pressed)
                 {
-                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);
+                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, touch_x, touch_y);
                     touch_down = true;
-                    touch_x = tx;
-                    touch_y = ty;
+                    last_touch_x = touch_x;
+                    last_touch_y = touch_y;
                 }
                 else if (touch_down)
                 {
-                    embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
+                    embedded_renderer_touch(0, ER_TOUCH_UP, last_touch_x, last_touch_y);
                     touch_down = false;
                 }
             }
@@ -567,9 +583,9 @@ static void run_app(void)
         er_perf_phase_begin(ER_PERF_PHASE_JS);
         er_runtime_pump(); /* drain JS promises + fire due timers */
         er_perf_phase_end(ER_PERF_PHASE_JS);
-        const int64_t t_pump_us = esp_timer_get_time();
+        const int64_t pump_end_us = esp_timer_get_time();
         er_commit(); /* lay out (if needed) + paint the changed region into the backend; times itself */
-        const int64_t t_commit_us = esp_timer_get_time();
+        const int64_t commit_end_us = esp_timer_get_time();
 #if ER_PERF_OVERLAY
         /* Render the overlay text only when the metrics change (~twice a second; glyph rendering is the
            expensive part) and snapshot that region. The backend then re-composites the snapshot on top
@@ -578,10 +594,17 @@ static void run_app(void)
            never enlarges the app's per-frame dirty box. */
         if (display && perf_overlay_refresh(frame_start_us))
         {
-            int ox = 0, oy = 0, ow = 0, oh = 0;
+            int overlay_x = 0, overlay_y = 0, overlay_width = 0, overlay_height = 0;
             er_esp32_lcd_overlay_begin(); /* save the app dirty box; capture restores it */
-            er_perf_overlay_draw(SCREEN_W, SCREEN_H, s_perf_lines, s_perf_nlines, &ox, &oy, &ow, &oh);
-            er_esp32_lcd_overlay_capture(ox, oy, ow, oh);
+            er_perf_overlay_draw(SCREEN_WIDTH,
+                                 SCREEN_HEIGHT,
+                                 s_perf_lines,
+                                 s_perf_line_count,
+                                 &overlay_x,
+                                 &overlay_y,
+                                 &overlay_width,
+                                 &overlay_height);
+            er_esp32_lcd_overlay_capture(overlay_x, overlay_y, overlay_width, overlay_height);
         }
 #endif
         if (display)
@@ -590,41 +613,42 @@ static void run_app(void)
             er_esp32_lcd_present(); /* flush the app region + re-composite the overlay */
             er_perf_phase_end(ER_PERF_PHASE_PRESENT);
         }
-        const int64_t t_present_us = esp_timer_get_time();
+        const int64_t present_end_us = esp_timer_get_time();
 
         const uint32_t now = now_ms();
-        embedded_renderer_tick(now - prev);
-        prev = now;
+        embedded_renderer_tick(now - previous_ms);
+        previous_ms = now;
 
         /* Close the frame BEFORE the pacing sleep, so frame_us is work time — the same basis as the
          * CPU-load metric, and the number a frame budget is actually measured against. */
         er_perf_frame_end();
 
         /* Frame-phase trace: where the frame time goes, averaged over the log window. */
-        static uint32_t s_tr_pump = 0, s_tr_commit = 0, s_tr_present = 0, s_tr_n = 0;
-        s_tr_pump += (uint32_t)(t_pump_us - frame_start_us);
-        s_tr_commit += (uint32_t)(t_commit_us - t_pump_us);
-        s_tr_present += (uint32_t)(t_present_us - t_commit_us);
-        s_tr_n++;
+        static uint32_t s_trace_pump_us = 0, s_trace_commit_us = 0, s_trace_present_us = 0, s_trace_frames = 0;
+        s_trace_pump_us += (uint32_t)(pump_end_us - frame_start_us);
+        s_trace_commit_us += (uint32_t)(commit_end_us - pump_end_us);
+        s_trace_present_us += (uint32_t)(present_end_us - commit_end_us);
+        s_trace_frames++;
 
 #if ER_PERF_DETAIL
         /* The JS split over the wire, so a drag can be read without a camera on the panel. Averaged
            over the frames React actually re-rendered on — every frame runs the pump, so folding the
            idle ones in would divide an interaction's cost by however long the window was quiet. */
         static uint32_t s_js_sum[ER_PERF_JS_COUNT] = {0};
-        static uint32_t s_js_n = 0;
-        ERPerfFrame pf;
-        if (er_perf_get_last(&pf) && (pf.js_us[ER_PERF_JS_RECONCILE] + pf.js_us[ER_PERF_JS_MARSHAL]) > 0U)
+        static uint32_t s_js_frames = 0;
+        ERPerfFrame perf_frame;
+        if (er_perf_get_last(&perf_frame)
+            && (perf_frame.js_us[ER_PERF_JS_RECONCILE] + perf_frame.js_us[ER_PERF_JS_MARSHAL]) > 0U)
         {
-            for (int i = 0; i < (int)ER_PERF_JS_COUNT; i++)
+            for (int phase = 0; phase < (int)ER_PERF_JS_COUNT; phase++)
             {
-                s_js_sum[i] += pf.js_us[i];
+                s_js_sum[phase] += perf_frame.js_us[phase];
             }
-            s_js_n++;
+            s_js_frames++;
         }
 #endif
 
-        if ((++frame % 30U) == 0U)
+        if ((++frame % LOG_WINDOW_FRAMES) == 0U)
         {
             if (s_display_report)
             {
@@ -649,32 +673,32 @@ static void run_app(void)
                      "pie=%d int_free=%u",
                      (unsigned)frame,
                      (unsigned)now,
-                     (unsigned)(s_tr_pump / s_tr_n),
-                     (unsigned)(s_tr_commit / s_tr_n),
-                     (unsigned)(s_tr_present / s_tr_n),
+                     (unsigned)(s_trace_pump_us / s_trace_frames),
+                     (unsigned)(s_trace_commit_us / s_trace_frames),
+                     (unsigned)(s_trace_present_us / s_trace_frames),
                      (int)display,
                      (int)er_esp32_lcd_pie_enabled(),
                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-            s_tr_pump = s_tr_commit = s_tr_present = s_tr_n = 0;
+            s_trace_pump_us = s_trace_commit_us = s_trace_present_us = s_trace_frames = 0;
 #if ER_PERF_DETAIL
-            if (s_js_n)
+            if (s_js_frames)
             {
-                ERPerfFrame pk;
-                er_perf_get_worst(&pk);
+                ERPerfFrame peak;
+                er_perf_get_worst(&peak);
                 ESP_LOGI(
                     TAG,
                     "JSS avg over %u render frames (of 30): D=%u R=%u M=%u C=%u us | peak frame: D=%u R=%u M=%u C=%u",
-                    (unsigned)s_js_n,
-                    (unsigned)(s_js_sum[ER_PERF_JS_DISPATCH] / s_js_n),
-                    (unsigned)(s_js_sum[ER_PERF_JS_RECONCILE] / s_js_n),
-                    (unsigned)(s_js_sum[ER_PERF_JS_MARSHAL] / s_js_n),
-                    (unsigned)(s_js_sum[ER_PERF_JS_COMMIT] / s_js_n),
-                    (unsigned)pk.js_us[ER_PERF_JS_DISPATCH],
-                    (unsigned)pk.js_us[ER_PERF_JS_RECONCILE],
-                    (unsigned)pk.js_us[ER_PERF_JS_MARSHAL],
-                    (unsigned)pk.js_us[ER_PERF_JS_COMMIT]);
+                    (unsigned)s_js_frames,
+                    (unsigned)(s_js_sum[ER_PERF_JS_DISPATCH] / s_js_frames),
+                    (unsigned)(s_js_sum[ER_PERF_JS_RECONCILE] / s_js_frames),
+                    (unsigned)(s_js_sum[ER_PERF_JS_MARSHAL] / s_js_frames),
+                    (unsigned)(s_js_sum[ER_PERF_JS_COMMIT] / s_js_frames),
+                    (unsigned)peak.js_us[ER_PERF_JS_DISPATCH],
+                    (unsigned)peak.js_us[ER_PERF_JS_RECONCILE],
+                    (unsigned)peak.js_us[ER_PERF_JS_MARSHAL],
+                    (unsigned)peak.js_us[ER_PERF_JS_COMMIT]);
                 memset(s_js_sum, 0, sizeof(s_js_sum));
-                s_js_n = 0;
+                s_js_frames = 0;
             }
 #endif
         }
@@ -683,9 +707,9 @@ static void run_app(void)
            taxed by a fixed delay (the old fixed 16 ms was ~10 ms at 100 Hz ticks — pure overhead on a
            30 ms frame). Always block at least one tick so the idle task runs (watchdog); that floor is
            10 ms at 100 Hz but 1 ms at 1000 Hz, which is why sdkconfig.defaults sets CONFIG_FREERTOS_HZ. */
-        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / 1000);
+        const uint32_t used_ms = (uint32_t)((esp_timer_get_time() - frame_start_us) / US_PER_MS);
 #if ER_PERF_OVERLAY
-        s_perf_busy_us = used_ms * 1000U; /* work time (excl. sleep) for the CPU-load metric */
+        s_perf_busy_us = used_ms * US_PER_MS; /* work time (excl. sleep) for the CPU-load metric */
 #endif
         const uint32_t sleep_ms = (used_ms >= ER_TARGET_FRAME_MS) ? 0U : (ER_TARGET_FRAME_MS - used_ms);
         TickType_t sleep_ticks = pdMS_TO_TICKS(sleep_ms);

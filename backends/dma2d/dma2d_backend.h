@@ -96,9 +96,9 @@ extern "C"
            the framebuffer region is non-cacheable or write-through (common MPU setups). See README.
          ------------------------------------------------------------------------------------------------*/
 
-        void (*cache_clean)(const void* addr, size_t bytes);      /**< Clean (flush) CPU-written lines the
+        void (*cache_clean)(const void* address, size_t bytes);      /**< Clean (flush) CPU-written lines the
                                                                        DMA2D is about to read. */
-        void (*cache_clean_invalidate)(void* addr, size_t bytes); /**< Clean+invalidate lines the DMA2D is
+        void (*cache_clean_invalidate)(void* address, size_t bytes); /**< Clean+invalidate lines the DMA2D is
                                                                        about to overwrite. */
 
         void* user; /**< Forwarded to start/wait_complete. */
@@ -149,11 +149,11 @@ extern "C"
      * The box covers every pixel this backend wrote (DMA2D or CPU). Useful for partial LTDC
      * updates or diagnostics; er_get_dirty_rect() reports the same information engine-side.
      *
-     * @param[out] x,y,w,h  The dirty rectangle (untouched when the function returns false).
+     * @param[out] x,y,width,height  The dirty rectangle (untouched when the function returns false).
      *
      * @return true if anything was drawn since the last call.
      */
-    bool er_dma2d_backend_take_dirty(int* x, int* y, int* w, int* h);
+    bool er_dma2d_backend_take_dirty(int* x, int* y, int* width, int* height);
 
     /** @brief Unregisters nothing (the engine keeps its backend pointer) but clears internal state. */
     void er_dma2d_backend_destroy(void);

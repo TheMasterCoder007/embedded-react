@@ -43,8 +43,11 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define SCREEN_W 800
-#define SCREEN_H 600
+#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 600
+
+/** @brief Bytes for the ER_SHOT path. */
+#define SHOT_PATH_BYTES 512
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
@@ -65,22 +68,22 @@ int main(int argc, char** argv)
        the AOT host was built for — letting both render paths be compared at the same board dimensions.
        NOTE: SDL_getenv returns a pointer into a SHARED static buffer on Windows, so each value must be
        fully consumed (SDL_atoi) before the next SDL_getenv call clobbers it. */
-    int screen_w = SCREEN_W;
-    int screen_h = SCREEN_H;
-    const char* env = SDL_getenv("ER_W");
-    if (env && env[0] && SDL_atoi(env) > 0)
+    int screen_width = SCREEN_WIDTH;
+    int screen_height = SCREEN_HEIGHT;
+    const char* value = SDL_getenv("ER_W");
+    if (value && value[0] && SDL_atoi(value) > 0)
     {
-        screen_w = SDL_atoi(env);
+        screen_width = SDL_atoi(value);
     }
-    env = SDL_getenv("ER_H");
-    if (env && env[0] && SDL_atoi(env) > 0)
+    value = SDL_getenv("ER_H");
+    if (value && value[0] && SDL_atoi(value) > 0)
     {
-        screen_h = SDL_atoi(env);
+        screen_height = SDL_atoi(value);
     }
 
-    const ErHostConfig cfg = {"embedded-react — desktop demo", screen_w, screen_h};
+    const ErHostConfig config = {"embedded-react — desktop demo", screen_width, screen_height};
     ErHost host;
-    if (!er_host_start(&cfg, &host))
+    if (!er_host_start(&config, &host))
     {
         return 1;
     }
@@ -100,15 +103,15 @@ int main(int argc, char** argv)
     /* ER_SHOT=<path.bmp>: headless one-frame render for the Flow A↔B parity harness (vs. the interactive
        loop). Copy the value out of SDL_getenv's SHARED static buffer first — er_host_screenshot reads
        ER_TAPS internally, which would otherwise clobber this pointer (Windows). */
-    char shot[512] = {0};
+    char shot_path[SHOT_PATH_BYTES] = {0};
     const char* shot_env = SDL_getenv("ER_SHOT");
     if (shot_env)
     {
-        SDL_strlcpy(shot, shot_env, sizeof shot);
+        SDL_strlcpy(shot_path, shot_env, sizeof shot_path);
     }
-    if (shot[0])
+    if (shot_path[0])
     {
-        er_host_screenshot(&host, shot);
+        er_host_screenshot(&host, shot_path);
     }
     else
     {

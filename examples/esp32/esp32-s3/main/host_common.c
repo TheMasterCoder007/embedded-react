@@ -36,20 +36,20 @@ static const char* TAG = "embedded-react";
 
 void remap_touch(int* x, int* y)
 {
-    const int px = *x, py = *y;
+    const int physical_x = *x, physical_y = *y;
     switch (ER_DISPLAY_ROTATION)
     {
         case 90:
-            *x = py;
-            *y = BOARD_LCD_WIDTH - 1 - px;
+            *x = physical_y;
+            *y = BOARD_LCD_WIDTH - 1 - physical_x;
             break;
         case 180:
-            *x = BOARD_LCD_WIDTH - 1 - px;
-            *y = BOARD_LCD_HEIGHT - 1 - py;
+            *x = BOARD_LCD_WIDTH - 1 - physical_x;
+            *y = BOARD_LCD_HEIGHT - 1 - physical_y;
             break;
         case 270:
-            *x = BOARD_LCD_HEIGHT - 1 - py;
-            *y = px;
+            *x = BOARD_LCD_HEIGHT - 1 - physical_y;
+            *y = physical_x;
             break;
         default:
             break;
@@ -99,7 +99,7 @@ void show_reset_fault(bool touch)
     }
     ERFaultRecord record;
     er_fault_record(&record, reason, 0u, 0u);
-    er_fault_show_recorded(&record, SCREEN_W, SCREEN_H);
+    er_fault_show_recorded(&record, SCREEN_WIDTH, SCREEN_HEIGHT);
     hold_error_screen(touch);
     ESP_LOGE(TAG, "restarted after a fault: %s", reason); /* after the hold: the console is back by now */
 }
@@ -116,6 +116,12 @@ void show_reset_fault(bool touch)
 static TaskHandle_t s_render_worker;
 static SemaphoreHandle_t s_render_worker_done;
 
+/* Worker 1 runs on core 1; the stack size is explained in install_render_workers(). */
+#define RENDER_WORKER_ID 1
+#define RENDER_WORKER_COUNT 2
+#define RENDER_WORKER_STACK_BYTES 24576
+#define RENDER_WORKER_PRIORITY 5
+
 /* Where the worker's stack lives. A WiFi build puts it in PSRAM, which frees the 24 KB of internal RAM WiFi
    is otherwise short of; the worker never touches flash, so a PSRAM stack is safe for it. */
 #if CONFIG_ER_WIFI
@@ -124,13 +130,13 @@ static SemaphoreHandle_t s_render_worker_done;
 #define ER_WORKER_STACK_CAPS (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #endif
 
-static void render_worker_main(void* arg)
+static void render_worker_main(void* parameter)
 {
-    (void)arg;
+    (void)parameter;
     for (;;)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        er_render_worker_exec(1);
+        er_render_worker_exec(RENDER_WORKER_ID);
         xSemaphoreGive(s_render_worker_done);
     }
 }
@@ -156,7 +162,7 @@ static int render_worker_id(void)
 void install_render_workers(void)
 {
     static const EmbeddedRenderWorkers workers = {
-        .count = 2,
+        .count = RENDER_WORKER_COUNT,
         .dispatch = render_worker_dispatch,
         .sync = render_worker_sync,
         .worker_id = render_worker_id,
@@ -167,8 +173,14 @@ void install_render_workers(void)
      * 12 KB measurably overflowed on the banded-fade pages. */
     s_render_worker_done = xSemaphoreCreateBinary();
     if (!s_render_worker_done
-        || xTaskCreatePinnedToCoreWithCaps(
-               render_worker_main, "er_worker", 24576, NULL, 5, &s_render_worker, 1, ER_WORKER_STACK_CAPS)
+        || xTaskCreatePinnedToCoreWithCaps(render_worker_main,
+                                           "er_worker",
+                                           RENDER_WORKER_STACK_BYTES,
+                                           NULL,
+                                           RENDER_WORKER_PRIORITY,
+                                           &s_render_worker,
+                                           RENDER_WORKER_ID,
+                                           ER_WORKER_STACK_CAPS)
                != pdPASS)
     {
         if (s_render_worker_done)

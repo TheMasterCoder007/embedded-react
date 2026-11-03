@@ -32,7 +32,7 @@ extern "C"
     /**
      * @brief Initialises the SDL2 render backend and registers it with the engine.
      *
-     * Creates two internal textures sized to fb_w × fb_h:
+     * Creates two internal textures sized to framebuffer_width × framebuffer_height:
      *   - A render-target (ARGB8888) that acts as a persistent framebuffer; all engine
      *     draw calls write into it, and er_sdl_present() blits it to the screen each frame
      *     regardless of whether er_commit() did any work.
@@ -43,12 +43,12 @@ extern "C"
      * (SDL_ComposeCustomBlendMode).
      *
      * @param[in] renderer  SDL2 renderer to draw into. Must outlive the backend.
-     * @param[in] fb_w      Framebuffer width in pixels (must be > 0).
-     * @param[in] fb_h      Framebuffer height in pixels (must be > 0).
+     * @param[in] framebuffer_width      Framebuffer width in pixels (must be > 0).
+     * @param[in] framebuffer_height      Framebuffer height in pixels (must be > 0).
      *
      * @return true on success, false if either texture could not be created.
      */
-    bool er_sdl_backend_init(SDL_Renderer* renderer, int fb_w, int fb_h);
+    bool er_sdl_backend_init(SDL_Renderer* renderer, int framebuffer_width, int framebuffer_height);
 
     /**
      * @brief Composites the persistent framebuffer onto the screen and presents it.

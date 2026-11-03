@@ -45,6 +45,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+/** @brief App file suffixes, and their lengths without the terminator. */
+#define BYTECODE_SUFFIX ".qbc"
+#define BYTECODE_SUFFIX_LENGTH (sizeof(BYTECODE_SUFFIX) - 1)
+#define CONTAINER_SUFFIX ".erpkg"
+#define CONTAINER_SUFFIX_LENGTH (sizeof(CONTAINER_SUFFIX) - 1)
+
+#define US_PER_SECOND 1000000ULL
+
+/** @brief Bytes for the config slot's path. */
+#define SLOT_PATH_BYTES 1024
+
+/** @brief A simulated frame, and how many a screenshot settles for: at start, and after each tap. */
+#define FRAME_MS 16
+#define SCREENSHOT_SETTLE_FRAMES 16
+#define TAP_SETTLE_FRAMES 8
+
+#define SCREENSHOT_BITS_PER_PIXEL 32
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — file helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -53,36 +71,36 @@
  * @brief Reads an entire file into a newly allocated, null-terminated buffer.
  *
  * @param[in]  path     Filesystem path to read.
- * @param[out] out_len  Receives the byte length (excluding the appended terminator).
+ * @param[out] out_length  Receives the byte length (excluding the appended terminator).
  *
  * @return Heap buffer the caller must free(), or NULL if the file could not be read.
  */
-static char* read_file(const char* path, size_t* out_len)
+static char* read_file(const char* path, size_t* out_length)
 {
-    FILE* f = fopen(path, "rb");
-    if (!f)
+    FILE* file = fopen(path, "rb");
+    if (!file)
     {
         return NULL;
     }
-    fseek(f, 0, SEEK_END);
-    const long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0)
+    fseek(file, 0, SEEK_END);
+    const long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    if (size < 0)
     {
-        fclose(f);
+        fclose(file);
         return NULL;
     }
-    char* buf = (char*)malloc((size_t)n + 1);
-    if (!buf)
+    char* buffer = (char*)malloc((size_t)size + 1);
+    if (!buffer)
     {
-        fclose(f);
+        fclose(file);
         return NULL;
     }
-    const size_t rd = fread(buf, 1, (size_t)n, f);
-    fclose(f);
-    buf[rd] = '\0';
-    *out_len = rd;
-    return buf;
+    const size_t bytes_read = fread(buffer, 1, (size_t)size, file);
+    fclose(file);
+    buffer[bytes_read] = '\0';
+    *out_length = bytes_read;
+    return buffer;
 }
 
 /**
@@ -94,8 +112,8 @@ static char* read_file(const char* path, size_t* out_len)
  */
 static bool is_bytecode_path(const char* path)
 {
-    const size_t n = strlen(path);
-    return n >= 4 && strcmp(path + n - 4, ".qbc") == 0;
+    const size_t length = strlen(path);
+    return length >= BYTECODE_SUFFIX_LENGTH && strcmp(path + length - BYTECODE_SUFFIX_LENGTH, BYTECODE_SUFFIX) == 0;
 }
 
 /**
@@ -107,8 +125,8 @@ static bool is_bytecode_path(const char* path)
  */
 static bool is_container_path(const char* path)
 {
-    const size_t n = strlen(path);
-    return n >= 6 && strcmp(path + n - 6, ".erpkg") == 0;
+    const size_t length = strlen(path);
+    return length >= CONTAINER_SUFFIX_LENGTH && strcmp(path + length - CONTAINER_SUFFIX_LENGTH, CONTAINER_SUFFIX) == 0;
 }
 
 /**
@@ -120,8 +138,8 @@ static bool is_container_path(const char* path)
  */
 static bool env_flag(const char* name)
 {
-    const char* v = SDL_getenv(name);
-    return v && v[0] && strcmp(v, "0") != 0;
+    const char* value = SDL_getenv(name);
+    return value && value[0] && strcmp(value, "0") != 0;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -137,14 +155,14 @@ static bool env_flag(const char* name)
  */
 static uint32_t host_now_us(void)
 {
-    static Uint64 freq = 0;
-    if (!freq)
-        freq = SDL_GetPerformanceFrequency();
+    static Uint64 frequency = 0;
+    if (!frequency)
+        frequency = SDL_GetPerformanceFrequency();
     const Uint64 now = SDL_GetPerformanceCounter();
-    return (uint32_t)((now / freq) * 1000000ULL + (now % freq) * 1000000ULL / freq);
+    return (uint32_t)((now / frequency) * US_PER_SECOND + (now % frequency) * US_PER_SECOND / frequency);
 }
 
-bool er_host_start(const ErHostConfig* cfg, ErHost* host)
+bool er_host_start(const ErHostConfig* config, ErHost* host)
 {
     memset(host, 0, sizeof(*host));
 
@@ -162,11 +180,11 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
         window_flags &= ~(Uint32)SDL_WINDOW_ALLOW_HIGHDPI;
     }
 
-    host->window = SDL_CreateWindow(cfg->title ? cfg->title : "embedded-react",
+    host->window = SDL_CreateWindow(config->title ? config->title : "embedded-react",
                                     SDL_WINDOWPOS_CENTERED,
                                     SDL_WINDOWPOS_CENTERED,
-                                    cfg->width,
-                                    cfg->height,
+                                    config->width,
+                                    config->height,
                                     window_flags);
     if (!host->window)
     {
@@ -184,12 +202,12 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
         return false;
     }
 
-    host->phys_w = cfg->width;
-    host->phys_h = cfg->height;
-    SDL_GetRendererOutputSize(host->renderer, &host->phys_w, &host->phys_h);
-    host->dpi_scale = (float)host->phys_w / (float)cfg->width;
+    host->physical_width = config->width;
+    host->physical_height = config->height;
+    SDL_GetRendererOutputSize(host->renderer, &host->physical_width, &host->physical_height);
+    host->dpi_scale = (float)host->physical_width / (float)config->width;
 
-    if (!er_sdl_backend_init(host->renderer, host->phys_w, host->phys_h))
+    if (!er_sdl_backend_init(host->renderer, host->physical_width, host->physical_height))
     {
         SDL_Log("er_sdl_backend_init failed");
         SDL_DestroyRenderer(host->renderer);
@@ -199,14 +217,14 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
     }
 
     /* Boot the portable QuickJS host core: bridge + console (→ stdout) + screen [+ __erPersist]. */
-    const ErRuntimeConfig rt = {
-        .screen_width = host->phys_w,
-        .screen_height = host->phys_h,
+    const ErRuntimeConfig runtime_config = {
+        .screen_width = host->physical_width,
+        .screen_height = host->physical_height,
         .screen_scale = host->dpi_scale,
-        .install_persist = cfg->persist,
+        .install_persist = config->persist,
         .log = NULL, /* stdout */
     };
-    if (!er_runtime_init(&rt))
+    if (!er_runtime_init(&runtime_config))
     {
         SDL_Log("er_runtime_init failed");
         er_sdl_backend_destroy();
@@ -217,7 +235,7 @@ bool er_host_start(const ErHostConfig* cfg, ErHost* host)
     }
 
     host->running = true;
-    host->prev_ticks = SDL_GetTicks();
+    host->previous_ticks = SDL_GetTicks();
     return true;
 }
 
@@ -231,8 +249,8 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
     {
         return false;
     }
-    size_t len = 0;
-    char* loaded = read_file(explicit_path, &len);
+    size_t length = 0;
+    char* loaded = read_file(explicit_path, &length);
     if (!loaded)
     {
         SDL_Log("could not read '%s'", explicit_path);
@@ -251,18 +269,18 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
         /* The container buffer is referenced (asset pixels/font bitmaps point into it), so it must
            outlive the app — keep `loaded` alive deliberately (one app per process; a reload re-reads
            the file). On failure the buffer is also kept: asset sections may already point into it. */
-        const ErContainerStatus st = er_runtime_load_container(loaded, len);
-        if (st != ER_CONTAINER_OK)
+        const ErContainerStatus status = er_runtime_load_container(loaded, length);
+        if (status != ER_CONTAINER_OK)
         {
-            const char* reason = er_runtime_container_status_str(st);
+            const char* reason = er_runtime_container_status_str(status);
             SDL_Log("config rejected: %s", reason);
             er_runtime_show_message("Couldn't load config", reason, "Re-pack with `npm run pack`.");
         }
-        return st == ER_CONTAINER_OK;
+        return status == ER_CONTAINER_OK;
     }
 
-    const bool ok = is_bytecode_path(explicit_path) ? er_runtime_load_bytecode(loaded, len)
-                                                    : er_runtime_load_source(loaded, len, explicit_path);
+    const bool ok = is_bytecode_path(explicit_path) ? er_runtime_load_bytecode(loaded, length)
+                                                    : er_runtime_load_source(loaded, length, explicit_path);
     free(loaded);
     if (!ok)
     {
@@ -278,7 +296,7 @@ bool er_host_load_config(ErHost* host)
        the executable, the desktop analog of a flash/config region — and run it. No config, or a
        corrupt/incompatible one, paints an on-screen panel and returns false (no built-in fallback).
        The caller keeps the window up so the panel is visible (just as firmware would). */
-    char slot[1024];
+    char slot[SLOT_PATH_BYTES];
     char* base = SDL_GetBasePath();
     snprintf(slot, sizeof(slot), "%sapp.erpkg", base ? base : "");
     if (base)
@@ -286,8 +304,8 @@ bool er_host_load_config(ErHost* host)
         SDL_free(base);
     }
 
-    size_t len = 0;
-    char* loaded = read_file(slot, &len); /* kept alive on success (container references it) */
+    size_t length = 0;
+    char* loaded = read_file(slot, &length); /* kept alive on success (container references it) */
     if (!loaded)
     {
         SDL_Log("no config in slot (%s)", slot);
@@ -297,10 +315,10 @@ bool er_host_load_config(ErHost* host)
         return false;
     }
 
-    const ErContainerStatus st = er_runtime_load_container(loaded, len);
-    if (st != ER_CONTAINER_OK)
+    const ErContainerStatus status = er_runtime_load_container(loaded, length);
+    if (status != ER_CONTAINER_OK)
     {
-        const char* reason = er_runtime_container_status_str(st);
+        const char* reason = er_runtime_container_status_str(status);
         SDL_Log("config rejected: %s", reason);
         er_runtime_show_message("Couldn't load config", reason, "Re-pack with `npm run pack`, then restart.");
         return false; /* `loaded` kept: asset sections may already reference it */
@@ -338,35 +356,35 @@ bool er_host_step(ErHost* host)
 {
     er_perf_frame_begin(); /* frame instrumentation: JS/layout/raster/present split (er_perf.h) */
 
-    SDL_Event ev;
-    while (SDL_PollEvent(&ev))
+    SDL_Event event;
+    while (SDL_PollEvent(&event))
     {
-        if (ev.type == SDL_QUIT)
+        if (event.type == SDL_QUIT)
         {
             host->running = false;
         }
-        else if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE)
+        else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE)
         {
             host->running = false;
         }
-        else if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_r)
+        else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r)
         {
             host->reload_requested = true; /* the simulator acts on this; the demo ignores it */
         }
-        else if (ev.type == SDL_MOUSEBUTTONDOWN && ev.button.button == SDL_BUTTON_LEFT)
+        else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
         {
             embedded_renderer_touch(
-                0, ER_TOUCH_DOWN, er_host_event_px(host, ev.button.x), er_host_event_px(host, ev.button.y));
+                0, ER_TOUCH_DOWN, er_host_event_px(host, event.button.x), er_host_event_px(host, event.button.y));
         }
-        else if (ev.type == SDL_MOUSEBUTTONUP && ev.button.button == SDL_BUTTON_LEFT)
+        else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT)
         {
             embedded_renderer_touch(
-                0, ER_TOUCH_UP, er_host_event_px(host, ev.button.x), er_host_event_px(host, ev.button.y));
+                0, ER_TOUCH_UP, er_host_event_px(host, event.button.x), er_host_event_px(host, event.button.y));
         }
-        else if (ev.type == SDL_MOUSEMOTION && (ev.motion.state & SDL_BUTTON_LMASK))
+        else if (event.type == SDL_MOUSEMOTION && (event.motion.state & SDL_BUTTON_LMASK))
         {
             embedded_renderer_touch(
-                0, ER_TOUCH_MOVE, er_host_event_px(host, ev.motion.x), er_host_event_px(host, ev.motion.y));
+                0, ER_TOUCH_MOVE, er_host_event_px(host, event.motion.x), er_host_event_px(host, event.motion.y));
         }
     }
 
@@ -384,8 +402,8 @@ bool er_host_step(ErHost* host)
     er_perf_phase_end(ER_PERF_PHASE_PRESENT);
 
     const uint32_t now = SDL_GetTicks();
-    embedded_renderer_tick(now - host->prev_ticks);
-    host->prev_ticks = now;
+    embedded_renderer_tick(now - host->previous_ticks);
+    host->previous_ticks = now;
 
     er_perf_frame_end();
 
@@ -394,7 +412,7 @@ bool er_host_step(ErHost* host)
 
 void er_host_run(ErHost* host)
 {
-    host->prev_ticks = SDL_GetTicks();
+    host->previous_ticks = SDL_GetTicks();
     while (er_host_step(host))
     {
         /* step until quit */
@@ -403,52 +421,54 @@ void er_host_run(ErHost* host)
 /** Renders a fixed number of frames (pump → commit → present → tick), the headless settle used below. */
 static void er_host_settle(int frames)
 {
-    for (int i = 0; i < frames; i++)
+    for (int frame = 0; frame < frames; frame++)
     {
         er_runtime_pump();
         er_commit();
         er_sdl_present();
-        embedded_renderer_tick(16);
+        embedded_renderer_tick(FRAME_MS);
     }
 }
 
 void er_host_screenshot(ErHost* host, const char* path)
 {
-    er_host_settle(16); /* let React mount + the scene render + any intro animation settle */
+    er_host_settle(SCREENSHOT_SETTLE_FRAMES); /* let React mount + the scene render + any intro animation settle */
 
     /* Optional taps (physical pixels, parity with linux-aot's ER_AOT_TAPS): tap each + re-settle. */
-    const char* p = SDL_getenv("ER_TAPS");
-    while (p && *p)
+    const char* cursor = SDL_getenv("ER_TAPS");
+    while (cursor && *cursor)
     {
-        while (*p == ' ')
-            p++;
-        if (!*p)
+        while (*cursor == ' ')
+            cursor++;
+        if (!*cursor)
             break;
-        const int tx = SDL_atoi(p);
-        const char* c = SDL_strchr(p, ',');
-        const int ty = c ? SDL_atoi(c + 1) : 0;
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
-        embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
-        er_host_settle(8);
-        while (*p && *p != ' ')
-            p++;
+        const int tap_x = SDL_atoi(cursor);
+        const char* comma = SDL_strchr(cursor, ',');
+        const int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, tap_x, tap_y);
+        embedded_renderer_touch(0, ER_TOUCH_UP, tap_x, tap_y);
+        er_host_settle(TAP_SETTLE_FRAMES);
+        while (*cursor && *cursor != ' ')
+            cursor++;
     }
 
     er_commit();
     er_sdl_present();
-    SDL_Surface* surf = SDL_CreateRGBSurfaceWithFormat(0, host->phys_w, host->phys_h, 32, SDL_PIXELFORMAT_ARGB8888);
-    if (surf && SDL_RenderReadPixels(host->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surf->pixels, surf->pitch) == 0)
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(
+        0, host->physical_width, host->physical_height, SCREENSHOT_BITS_PER_PIXEL, SDL_PIXELFORMAT_ARGB8888);
+    if (surface
+        && SDL_RenderReadPixels(host->renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surface->pixels, surface->pitch) == 0)
     {
-        SDL_SaveBMP(surf, path);
+        SDL_SaveBMP(surface, path);
         SDL_Log("wrote screenshot %s", path);
     }
     else
     {
         SDL_Log("screenshot failed: %s", SDL_GetError());
     }
-    if (surf)
+    if (surface)
     {
-        SDL_FreeSurface(surf);
+        SDL_FreeSurface(surface);
     }
 }
 

@@ -80,10 +80,10 @@ extern "C"
      *
      * @param[in] x  Left edge of the overlay rect in framebuffer pixels.
      * @param[in] y  Top edge of the overlay rect.
-     * @param[in] w  Width in pixels (<=0 disables the overlay).
-     * @param[in] h  Height in pixels (<=0 disables the overlay).
+     * @param[in] width  Width in pixels (<=0 disables the overlay).
+     * @param[in] height  Height in pixels (<=0 disables the overlay).
      */
-    void er_esp32_lcd_overlay_capture(int x, int y, int w, int h);
+    void er_esp32_lcd_overlay_capture(int x, int y, int width, int height);
 
     /**
      * @brief Saves the dirty box before the host draws the overlay into the framebuffer.

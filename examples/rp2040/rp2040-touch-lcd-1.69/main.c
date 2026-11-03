@@ -104,6 +104,26 @@ static uint32_t now_ms(void)
  *  than a frame. */
 #define ER_WATCHDOG_BOOT_MS 8000U
 
+/** @brief Backlight once the first frame is up, in percent. */
+#define BACKLIGHT_PERCENT 90
+
+#define MS_PER_SECOND 1000U
+
+/** @brief Debug builds wait this long for a USB host, in steps, and hold the test pattern this long. */
+#define USB_WAIT_ATTEMPTS 30
+#define USB_WAIT_STEP_MS 100
+#define TEST_PATTERN_HOLD_MS 3000
+
+/** @brief Bubble level: dot travel in px, the tilt that reaches it (~0.5 g in accel LSB), the low-pass weight, and
+ *  the update period. */
+#define LEVEL_RADIUS 74
+#define LEVEL_FULL_TILT 4096.0f
+#define LEVEL_SMOOTHING 0.15f
+#define LEVEL_PERIOD_MS 33u
+
+/** @brief Out of the dot's range, so the first reading is always pushed. */
+#define DOT_UNSET 1000
+
 /* A forced failure, to check the error screen on hardware: `-DER_BOARD_CRASH_TEST=1` hard faults 5 s after boot, and
  * =2 hangs. Each shows the error screen after the reset, naming it, then the app comes back and it happens again. */
 #ifdef ER_BOARD_CRASH_TEST
@@ -167,18 +187,18 @@ static void stack_guard_install(void)
 
 /** @brief malloc's heap: grows from the end of .bss up to the stack guard, and fails there instead of
  *  faulting in it. Replaces the SDK's weak _sbrk, which stops at the stack itself. */
-void* _sbrk(int incr)
+void* _sbrk(int increment)
 {
     extern char end;
     static char* heap_end = &end;
     char* const limit = (char*)s_stack_low - STACK_GUARD_BYTES;
-    if (incr > limit - heap_end)
+    if (increment > limit - heap_end)
     {
         return (void*)-1;
     }
-    char* const prev = heap_end;
-    heap_end += incr;
-    return prev;
+    char* const previous_end = heap_end;
+    heap_end += increment;
+    return previous_end;
 }
 
 /**
@@ -224,7 +244,7 @@ void __attribute__((naked)) isr_hardfault(void)
  */
 static void hold_error_screen(bool touch)
 {
-    board_backlight(90);
+    board_backlight(BACKLIGHT_PERCENT);
     for (uint32_t waited = 0; waited < FAULT_HOLD_MS; waited += ER_TARGET_FRAME_MS)
     {
         watchdog_update();
@@ -409,26 +429,29 @@ static void load_package(bool touch)
 #if ER_BOARD_DEBUG
 #define STACK_PAINT 0xA5A5A5A5u
 
+/** @brief Left unpainted just below the stack pointer, for stack_paint()'s own frame. */
+#define STACK_PAINT_MARGIN_BYTES 64u
+
 /** @brief Fills the unused stack below the caller with a known pattern, for stack_high_water(). */
 static void __attribute__((noinline)) stack_paint(void)
 {
-    uint32_t sp;
-    __asm volatile("mov %0, sp" : "=r"(sp));
-    for (volatile uint32_t* p = s_stack_low; (uint32_t)p < sp - 64u; p++)
+    uint32_t stack_pointer;
+    __asm volatile("mov %0, sp" : "=r"(stack_pointer));
+    for (volatile uint32_t* word = s_stack_low; (uint32_t)word < stack_pointer - STACK_PAINT_MARGIN_BYTES; word++)
     {
-        *p = STACK_PAINT;
+        *word = STACK_PAINT;
     }
 }
 
 /** @brief Returns the deepest the stack has reached since stack_paint(), in bytes from its top. */
 static uint32_t stack_high_water(void)
 {
-    const uint32_t* p = s_stack_low;
-    while (p < __StackTop && *p == STACK_PAINT)
+    const uint32_t* word = s_stack_low;
+    while (word < __StackTop && *word == STACK_PAINT)
     {
-        p++;
+        word++;
     }
-    return (uint32_t)(__StackTop - p) * sizeof(uint32_t);
+    return (uint32_t)(__StackTop - word) * sizeof(uint32_t);
 }
 #endif
 
@@ -448,9 +471,9 @@ int main(void)
     stdio_init_all();
 #if ER_BOARD_DEBUG
     /* Give the USB host a moment to attach so the boot log is actually seen. */
-    for (int i = 0; i < 30 && !stdio_usb_connected(); i++)
+    for (int attempt = 0; attempt < USB_WAIT_ATTEMPTS && !stdio_usb_connected(); attempt++)
     {
-        sleep_ms(100);
+        sleep_ms(USB_WAIT_STEP_MS);
     }
 #endif
     printf("embedded-react RP2040-Touch-LCD-1.69 host — Flow B (no QuickJS)\n");
@@ -466,10 +489,10 @@ int main(void)
         return 1;
     }
 #if ER_BOARD_DEBUG >= 2
-    board_backlight(90); /* light the panel so the bring-up test pattern is actually visible */
+    board_backlight(BACKLIGHT_PERCENT); /* light the panel so the bring-up test pattern is actually visible */
     board_lcd_test_pattern();
     printf("test pattern up (R/G/B/W bands) — holding 3 s\n");
-    sleep_ms(3000);
+    sleep_ms(TEST_PATTERN_HOLD_MS);
 #endif
 
     const bool touch = board_touch_init();
@@ -480,8 +503,8 @@ int main(void)
 
     /* IMU for real step counting (shares I2C1 with touch). If absent, steps just stay at 0. */
     const bool imu = board_imu_init();
-    Pedometer pedo;
-    pedometer_reset(&pedo);
+    Pedometer pedometer;
+    pedometer_reset(&pedometer);
 
     show_recorded_fault(touch);
 
@@ -492,12 +515,12 @@ int main(void)
 
     /* The sensors reach the app through useHostValue. A package without one of these just ignores it. */
     int input_steps = erb_input_find("steps");
-    int input_dotx = erb_input_find("dotx");
-    int input_doty = erb_input_find("doty");
+    int input_dot_x = erb_input_find("dotx");
+    int input_dot_y = erb_input_find("doty");
     /* What was last pushed into the app, so a new one from a hot reload can be given it again. */
     uint32_t last_steps = 0;
-    int last_dot_x = 1000;
-    int last_dot_y = 1000;
+    int last_dot_x = DOT_UNSET;
+    int last_dot_y = DOT_UNSET;
 
     /* Present the first frame while the backlight is still off, THEN light it — so the panel goes
      * straight from black to the watch face, with no flash of noise or blank. (The backlight was held
@@ -505,17 +528,17 @@ int main(void)
     er_commit();
     er_pico_spi_lcd_present();
 #if ER_BOARD_DEBUG < 2
-    board_backlight(90); /* debug builds already lit it for the test pattern above */
+    board_backlight(BACKLIGHT_PERCENT); /* debug builds already lit it for the test pattern above */
 #endif
     watchdog_enable(ER_WATCHDOG_MS, true);
 
     /* Frame loop. The press state machine turns CST816S polls into down/move/up for the engine. */
-    uint32_t prev = now_ms();
+    uint32_t previous_ms = now_ms();
 #ifdef ER_BOARD_CRASH_TEST
-    const uint32_t boot_ms = prev;
+    const uint32_t boot_ms = previous_ms;
 #endif
     bool touch_down = false;
-    int last_x = 0, last_y = 0;
+    int last_touch_x = 0, last_touch_y = 0;
     while (true)
     {
         const uint32_t frame_start = now_ms();
@@ -531,20 +554,20 @@ int main(void)
 
         if (touch)
         {
-            int tx = 0, ty = 0;
+            int touch_x = 0, touch_y = 0;
             bool pressed = false;
-            if (board_touch_read(&tx, &ty, &pressed))
+            if (board_touch_read(&touch_x, &touch_y, &pressed))
             {
                 if (pressed)
                 {
-                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, tx, ty);
+                    embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, touch_x, touch_y);
                     touch_down = true;
-                    last_x = tx;
-                    last_y = ty;
+                    last_touch_x = touch_x;
+                    last_touch_y = touch_y;
                 }
                 else if (touch_down)
                 {
-                    embedded_renderer_touch(0, ER_TOUCH_UP, last_x, last_y);
+                    embedded_renderer_touch(0, ER_TOUCH_UP, last_touch_x, last_touch_y);
                     touch_down = false;
 #if ER_HOTRELOAD
                     erb_package_reload_tap(&s_reload);
@@ -558,10 +581,10 @@ int main(void)
          * re-applies dependent nodes, so there's no point re-running it every frame. */
         if (imu)
         {
-            int16_t ax = 0, ay = 0, az = 0;
-            if (board_imu_read_accel(&ax, &ay, &az))
+            int16_t accel_x = 0, accel_y = 0, accel_z = 0;
+            if (board_imu_read_accel(&accel_x, &accel_y, &accel_z))
             {
-                const uint32_t steps = pedometer_update(&pedo, ax, ay, az, frame_start);
+                const uint32_t steps = pedometer_update(&pedometer, accel_x, accel_y, accel_z, frame_start);
                 if (steps != last_steps)
                 {
                     last_steps = steps;
@@ -570,32 +593,32 @@ int main(void)
             }
 
             /* Bubble level → the showcase page. Reuse the accel sample just read: low-pass each axis to a
-             * steady gravity vector, then map its X/Y to a dot offset in px (±LEVEL_R, full deflection at
+             * steady gravity vector, then map its X/Y to a dot offset in px (±LEVEL_RADIUS, full deflection at
              * ~0.5 g ≈ 30° tilt). Pushed ~30 Hz, and only when it actually moves, so a resting board is
              * quiet. Flip a sign below if the dot rolls the wrong way on your unit. */
-            static float fax = 0.0f, fay = 0.0f;
-            fax += ((float)ax - fax) * 0.15f;
-            fay += ((float)ay - fay) * 0.15f;
+            static float filtered_x = 0.0f, filtered_y = 0.0f;
+            filtered_x += ((float)accel_x - filtered_x) * LEVEL_SMOOTHING;
+            filtered_y += ((float)accel_y - filtered_y) * LEVEL_SMOOTHING;
             static uint32_t s_last_level_ms = 0;
-            if (frame_start - s_last_level_ms >= 33u)
+            if (frame_start - s_last_level_ms >= LEVEL_PERIOD_MS)
             {
                 s_last_level_ms = frame_start;
-                const int LEVEL_R = 74;
+                const int level_radius = LEVEL_RADIUS;
                 /* The IMU is mounted rotated 90° vs the screen: accel Y drives the horizontal dot, accel X
                  * the vertical, with these signs so the dot rolls toward the low (down-tilted) side. */
-                int ndx = (int)(-fay * LEVEL_R / 4096.0f);
-                int ndy = (int)(fax * LEVEL_R / 4096.0f);
-                ndx = ndx < -LEVEL_R ? -LEVEL_R : (ndx > LEVEL_R ? LEVEL_R : ndx);
-                ndy = ndy < -LEVEL_R ? -LEVEL_R : (ndy > LEVEL_R ? LEVEL_R : ndy);
-                if (ndx != last_dot_x)
+                int dot_x = (int)(-filtered_y * level_radius / LEVEL_FULL_TILT);
+                int dot_y = (int)(filtered_x * level_radius / LEVEL_FULL_TILT);
+                dot_x = dot_x < -level_radius ? -level_radius : (dot_x > level_radius ? level_radius : dot_x);
+                dot_y = dot_y < -level_radius ? -level_radius : (dot_y > level_radius ? level_radius : dot_y);
+                if (dot_x != last_dot_x)
                 {
-                    last_dot_x = ndx;
-                    erb_input_set_int(input_dotx, ndx);
+                    last_dot_x = dot_x;
+                    erb_input_set_int(input_dot_x, dot_x);
                 }
-                if (ndy != last_dot_y)
+                if (dot_y != last_dot_y)
                 {
-                    last_dot_y = ndy;
-                    erb_input_set_int(input_doty, ndy);
+                    last_dot_y = dot_y;
+                    erb_input_set_int(input_dot_y, dot_y);
                 }
             }
         }
@@ -607,27 +630,27 @@ int main(void)
         /* 1 Hz heartbeat: frame rate over the last second, plus the running step count. FPS is the whole
          * loop (idle it's paced to ~60; during a swipe the full-screen repaint drops it — that's the
          * metric to watch for choppiness). */
-        static uint32_t s_last_beat = 0;
+        static uint32_t s_last_beat_ms = 0;
         static uint32_t s_frames = 0;
         s_frames++;
-        if (now_ms() - s_last_beat >= 1000U)
+        if (now_ms() - s_last_beat_ms >= MS_PER_SECOND)
         {
             printf("beat t=%lus fps=%lu steps=%lu stack=%lu/%lu\n",
-                   (unsigned long)(now_ms() / 1000U),
+                   (unsigned long)(now_ms() / MS_PER_SECOND),
                    (unsigned long)s_frames,
-                   (unsigned long)pedo.steps,
+                   (unsigned long)pedometer.steps,
                    (unsigned long)stack_high_water(),
                    (unsigned long)((__StackTop - s_stack_low) * sizeof(uint32_t)));
             s_frames = 0;
-            s_last_beat = now_ms();
+            s_last_beat_ms = now_ms();
         }
 #endif
 
         const uint32_t now = now_ms();
-        const uint32_t dt = now - prev;
-        embedded_renderer_tick(dt);
-        erb_tick(dt); /* advance app timers — the watch face's 1 Hz movement lives here */
-        prev = now;
+        const uint32_t delta_ms = now - previous_ms;
+        embedded_renderer_tick(delta_ms);
+        erb_tick(delta_ms); /* advance app timers — the watch face's 1 Hz movement lives here */
+        previous_ms = now;
 
 #ifdef ER_BOARD_CRASH_TEST
         crash_test(now - boot_ms);
@@ -648,11 +671,11 @@ int main(void)
         if (started)
         {
             input_steps = erb_input_find("steps");
-            input_dotx = erb_input_find("dotx");
-            input_doty = erb_input_find("doty");
+            input_dot_x = erb_input_find("dotx");
+            input_dot_y = erb_input_find("doty");
             last_steps = 0;
-            last_dot_x = 1000;
-            last_dot_y = 1000;
+            last_dot_x = DOT_UNSET;
+            last_dot_y = DOT_UNSET;
         }
 #else
         if (used < ER_TARGET_FRAME_MS)

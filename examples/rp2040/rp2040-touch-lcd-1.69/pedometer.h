@@ -41,18 +41,18 @@ extern "C"
     } Pedometer;
 
     /** @brief Resets a pedometer to zero steps and a cold baseline. */
-    void pedometer_reset(Pedometer* p);
+    void pedometer_reset(Pedometer* pedometer);
 
     /**
      * @brief Feeds one accelerometer sample and returns the running step total.
      *
-     * @param[in] p        The pedometer state.
-     * @param[in] ax,ay,az Raw accelerometer axes (any consistent unit; ±4g → 1 g ≈ 8192 LSB).
+     * @param[in] pedometer        The pedometer state.
+     * @param[in] accel_x,ay,az Raw accelerometer axes (any consistent unit; ±4g → 1 g ≈ 8192 LSB).
      * @param[in] now_ms   Monotonic millisecond timestamp of this sample.
      *
      * @return The total step count after processing this sample.
      */
-    uint32_t pedometer_update(Pedometer* p, int16_t ax, int16_t ay, int16_t az, uint32_t now_ms);
+    uint32_t pedometer_update(Pedometer* pedometer, int16_t accel_x, int16_t accel_y, int16_t accel_z, uint32_t now_ms);
 
 #ifdef __cplusplus
 }

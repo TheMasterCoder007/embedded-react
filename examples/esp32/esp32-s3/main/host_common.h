@@ -33,11 +33,11 @@
 
 /* Logical screen the app sizes its root from (`screen` global) — panel size, swapped for 90/270. */
 #if (ER_DISPLAY_ROTATION == 90) || (ER_DISPLAY_ROTATION == 270)
-#define SCREEN_W BOARD_LCD_HEIGHT
-#define SCREEN_H BOARD_LCD_WIDTH
+#define SCREEN_WIDTH BOARD_LCD_HEIGHT
+#define SCREEN_HEIGHT BOARD_LCD_WIDTH
 #else
-#define SCREEN_W BOARD_LCD_WIDTH
-#define SCREEN_H BOARD_LCD_HEIGHT
+#define SCREEN_WIDTH BOARD_LCD_WIDTH
+#define SCREEN_HEIGHT BOARD_LCD_HEIGHT
 #endif
 
 /* Target frame period for the adaptive pacer (~50 fps, just above the RGB panel's ~51 Hz refresh).

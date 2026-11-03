@@ -33,6 +33,16 @@
 /** @brief Most networks a scan reports: the strongest, one entry per name. */
 #define NETWORK_SCAN_MAX 20
 
+/** @brief Longest SSID and password WiFi allows; a password at the maximum is the raw key, in hex. */
+#define NETWORK_SSID_MAX_LENGTH 32
+#define NETWORK_PASSWORD_MIN_LENGTH 8
+#define NETWORK_PASSWORD_MAX_LENGTH 64
+
+/** @brief Buffers for an SSID, a password and a time zone, with their terminators. */
+#define NETWORK_SSID_BYTES (NETWORK_SSID_MAX_LENGTH + 1)
+#define NETWORK_PASSWORD_BYTES (NETWORK_PASSWORD_MAX_LENGTH + 1)
+#define NETWORK_TIME_ZONE_BYTES 64
+
 /** @brief Where the station is. */
 typedef enum
 {
@@ -54,7 +64,7 @@ typedef enum
 /** @brief One network a scan found. */
 typedef struct
 {
-    char ssid[33];
+    char ssid[NETWORK_SSID_BYTES];
     int8_t rssi; /**< dBm */
     bool secure; /**< needs a password */
 } NetworkAp;
@@ -64,7 +74,7 @@ typedef struct
 {
     NetworkState state;
     NetworkFail fail;
-    char ssid[33]; /**< "" when idle */
+    char ssid[NETWORK_SSID_BYTES]; /**< "" when idle */
 } NetworkStatus;
 
 /**
@@ -140,9 +150,9 @@ int32_t network_utc_offset_s(void);
  * @brief The saved time zone, as a POSIX TZ string ("UTC0" until one is set).
  *
  * @param[out] out  Receives the string.
- * @param[in]  cap  Capacity of @p out.
+ * @param[in]  capacity  Capacity of @p out.
  */
-void network_time_zone(char* out, size_t cap);
+void network_time_zone(char* out, size_t capacity);
 
 /**
  * @brief Applies a POSIX TZ string (e.g. "PST8PDT,M3.2.0,M11.1.0") and saves it.
@@ -150,6 +160,6 @@ void network_time_zone(char* out, size_t cap);
  * @return false if it is empty or too long (nothing changes), or if saving it failed (it still applies
  *         until the next boot).
  */
-bool network_set_time_zone(const char* tz);
+bool network_set_time_zone(const char* time_zone);
 
 #endif

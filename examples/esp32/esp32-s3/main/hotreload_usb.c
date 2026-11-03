@@ -39,9 +39,17 @@ static const char* TAG = "er-hotreload";
  * flow control (the device NAKs when its RX buffer is full, so the host never overruns it — no dropped
  * bytes, no host-side pacing). The ERHR frame's magic + CRC still let the parser pick uploads out of the
  * byte stream and ignore log echoes. Flashing stays on the separate CH343/UART0 port. */
-#define ER_HR_USB_RX_RING (16 * 1024)
-#define ER_HR_USB_TX_RING (4 * 1024)
-#define ER_HR_READ_CHUNK (4 * 1024)
+#define USB_RX_RING_BYTES (16 * 1024)
+#define USB_TX_RING_BYTES (4 * 1024)
+#define READ_CHUNK_BYTES (4 * 1024)
+#define READ_TIMEOUT_MS 50
+#define RX_TASK_STACK_BYTES 4096
+#define RX_TASK_PRIORITY (tskIDLE_PRIORITY + 5)
+
+/** @brief An upload logs its progress every this many bytes. */
+#define PROGRESS_LOG_BYTES (256 * 1024)
+
+#define BYTES_PER_KB 1024
 
 /*----------------------------------------------------------------------------------------------------------------------
  - State
@@ -50,19 +58,19 @@ static const char* TAG = "er-hotreload";
 /* Single PSRAM staging buffer. The RX task parses an upload into it; the frame loop loads from it. The
  * running app does NOT reference this buffer — er_hotreload_apply loads with copy_assets=true, so a
  * loaded app's assets live in their own block and its bytecode in the JS heap. That means the RX task
- * can refill s_buf with the next upload while the old app keeps running (and stays on screen), with no
+ * can refill s_buffer with the next upload while the old app keeps running (and stays on screen), with no
  * teardown until the moment a complete frame is applied. */
-static uint8_t* s_buf = NULL;
-static size_t s_cap = 0;
+static uint8_t* s_buffer = NULL;
+static size_t s_capacity = 0;
 
-static QueueHandle_t s_ready_q = NULL;      /* RX task → frame loop: payload length of a complete frame */
-static SemaphoreHandle_t s_done_sem = NULL; /* frame loop → RX: the frame has been applied */
+static QueueHandle_t s_ready_queue = NULL;        /* RX task → frame loop: payload length of a complete frame */
+static SemaphoreHandle_t s_done_semaphore = NULL; /* frame loop → RX: the frame has been applied */
 
 /** @brief Hands a completed frame's length to the frame loop and blocks until it has been applied. */
-static void rx_submit_apply(size_t len)
+static void rx_submit_apply(size_t length)
 {
-    xQueueSend(s_ready_q, &len, portMAX_DELAY);
-    xSemaphoreTake(s_done_sem, portMAX_DELAY);
+    xQueueSend(s_ready_queue, &length, portMAX_DELAY);
+    xSemaphoreTake(s_done_semaphore, portMAX_DELAY);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -71,23 +79,23 @@ static void rx_submit_apply(size_t len)
 
 /**
  * @brief Reads USB-Serial-JTAG bytes and parses uploads; hands each complete frame to the frame loop to
- *        apply. No teardown while receiving — the running app doesn't reference s_buf (see above), so the
+ *        apply. No teardown while receiving — the running app doesn't reference s_buffer (see above), so the
  *        old UI stays live until the new app is loaded.
  */
-static void er_hotreload_rx_task(void* arg)
+static void er_hotreload_rx_task(void* parameter)
 {
-    (void)arg;
-    static uint8_t chunk[ER_HR_READ_CHUNK];
-    ErHotReload hr;
-    er_hotreload_init(&hr, s_buf, s_cap);
-    size_t rx_total = 0;
-    size_t rx_logged = 0;
+    (void)parameter;
+    static uint8_t chunk[READ_CHUNK_BYTES];
+    ErHotReload reload;
+    er_hotreload_init(&reload, s_buffer, s_capacity);
+    size_t received_total = 0;
+    size_t received_logged = 0;
     bool receiving = false; /* tracks the "upload starting" / progress logging across reads */
 
     for (;;)
     {
-        const int n = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(50));
-        if (n <= 0)
+        const int received = usb_serial_jtag_read_bytes(chunk, sizeof(chunk), pdMS_TO_TICKS(READ_TIMEOUT_MS));
+        if (received <= 0)
         {
             continue;
         }
@@ -95,41 +103,42 @@ static void er_hotreload_rx_task(void* arg)
         {
             ESP_LOGI(TAG, "upload starting — receiving over USB");
             receiving = true;
-            rx_total = 0;
-            rx_logged = 0;
+            received_total = 0;
+            received_logged = 0;
         }
-        rx_total += (size_t)n;
-        if (rx_total - rx_logged >= 256 * 1024)
+        received_total += (size_t)received;
+        if (received_total - received_logged >= PROGRESS_LOG_BYTES)
         {
-            rx_logged = rx_total;
-            ESP_LOGI(TAG, "rx %u KB", (unsigned)(rx_total / 1024));
+            received_logged = received_total;
+            ESP_LOGI(TAG, "rx %u KB", (unsigned)(received_total / BYTES_PER_KB));
         }
 
-        size_t off = 0;
-        while (off < (size_t)n)
+        size_t offset = 0;
+        while (offset < (size_t)received)
         {
             size_t consumed = 0;
-            size_t out_len = 0;
-            const ErHotReloadStatus st = er_hotreload_feed(&hr, chunk + off, (size_t)n - off, &consumed, &out_len);
-            off += consumed;
-            if (st == ER_HR_NEED_MORE)
+            size_t out_length = 0;
+            const ErHotReloadStatus status =
+                er_hotreload_feed(&reload, chunk + offset, (size_t)received - offset, &consumed, &out_length);
+            offset += consumed;
+            if (status == ER_HR_NEED_MORE)
             {
                 break;
             }
-            if (st != ER_HR_FRAME_READY)
+            if (status != ER_HR_FRAME_READY)
             {
-                ESP_LOGW(TAG, "dropped frame: %s", er_hotreload_status_str(st));
+                ESP_LOGW(TAG, "dropped frame: %s", er_hotreload_status_str(status));
                 continue;
             }
-            if (hr.msg_type != ER_HR_MSG_LOAD_CONTAINER)
+            if (reload.msg_type != ER_HR_MSG_LOAD_CONTAINER)
             {
                 ESP_LOGW(TAG, "hot reload: this firmware runs Flow A: use dev --device without --aot");
                 continue;
             }
             /* Complete frame: apply it on the frame-loop task (which resets + loads, copying the assets so
-             * s_buf is free to reuse the moment it returns). Block until done, then keep draining. */
-            ESP_LOGI(TAG, "frame received (%u bytes) — applying", (unsigned)out_len);
-            rx_submit_apply(out_len);
+             * s_buffer is free to reuse the moment it returns). Block until done, then keep draining. */
+            ESP_LOGI(TAG, "frame received (%u bytes) — applying", (unsigned)out_length);
+            rx_submit_apply(out_length);
             receiving = false; /* next inbound byte begins a fresh upload */
         }
     }
@@ -145,95 +154,95 @@ bool er_hotreload_usb_start(size_t max_container_bytes)
     {
         return false;
     }
-    s_cap = max_container_bytes;
-    s_buf = (uint8_t*)heap_caps_malloc(s_cap, MALLOC_CAP_SPIRAM);
-    if (!s_buf)
+    s_capacity = max_container_bytes;
+    s_buffer = (uint8_t*)heap_caps_malloc(s_capacity, MALLOC_CAP_SPIRAM);
+    if (!s_buffer)
     {
-        ESP_LOGE(TAG, "PSRAM alloc failed (%u bytes) — hot reload disabled", (unsigned)s_cap);
+        ESP_LOGE(TAG, "PSRAM alloc failed (%u bytes) — hot reload disabled", (unsigned)s_capacity);
         return false;
     }
 
-    s_ready_q = xQueueCreate(1, sizeof(size_t));
-    s_done_sem = xSemaphoreCreateBinary();
-    if (!s_ready_q || !s_done_sem)
+    s_ready_queue = xQueueCreate(1, sizeof(size_t));
+    s_done_semaphore = xSemaphoreCreateBinary();
+    if (!s_ready_queue || !s_done_semaphore)
     {
         ESP_LOGE(TAG, "queue/sem alloc failed — hot reload disabled");
-        if (s_ready_q)
-            vQueueDelete(s_ready_q);
-        if (s_done_sem)
-            vSemaphoreDelete(s_done_sem);
-        s_ready_q = NULL;
-        s_done_sem = NULL;
-        heap_caps_free(s_buf);
-        s_buf = NULL;
-        s_cap = 0;
+        if (s_ready_queue)
+            vQueueDelete(s_ready_queue);
+        if (s_done_semaphore)
+            vSemaphoreDelete(s_done_semaphore);
+        s_ready_queue = NULL;
+        s_done_semaphore = NULL;
+        heap_caps_free(s_buffer);
+        s_buffer = NULL;
+        s_capacity = 0;
         return false;
     }
 
     /* Attach the USB-Serial-JTAG driver so we can read raw upload bytes. With the console bound to USJ,
      * ESP-IDF may have installed it already (INVALID_STATE) — that's fine, we read the same driver; logs
      * keep flowing out over it. ESP_LOG output reaches the host because USJ IS the console. */
-    usb_serial_jtag_driver_config_t usb_cfg = {
+    usb_serial_jtag_driver_config_t usb_config = {
         /* non-const: the install API takes a mutable pointer */
-        .rx_buffer_size = ER_HR_USB_RX_RING,
-        .tx_buffer_size = ER_HR_USB_TX_RING,
+        .rx_buffer_size = USB_RX_RING_BYTES,
+        .tx_buffer_size = USB_TX_RING_BYTES,
     };
-    const esp_err_t err = usb_serial_jtag_driver_install(&usb_cfg);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    const esp_err_t error = usb_serial_jtag_driver_install(&usb_config);
+    if (error != ESP_OK && error != ESP_ERR_INVALID_STATE)
     {
-        ESP_LOGE(TAG, "usb_serial_jtag install failed: %s — hot reload disabled", esp_err_to_name(err));
-        vQueueDelete(s_ready_q);
-        vSemaphoreDelete(s_done_sem);
-        s_ready_q = NULL;
-        s_done_sem = NULL;
-        heap_caps_free(s_buf);
-        s_buf = NULL;
-        s_cap = 0;
+        ESP_LOGE(TAG, "usb_serial_jtag install failed: %s — hot reload disabled", esp_err_to_name(error));
+        vQueueDelete(s_ready_queue);
+        vSemaphoreDelete(s_done_semaphore);
+        s_ready_queue = NULL;
+        s_done_semaphore = NULL;
+        heap_caps_free(s_buffer);
+        s_buffer = NULL;
+        s_capacity = 0;
         return false;
     }
 
-    if (xTaskCreate(er_hotreload_rx_task, "er_hr_rx", 4096, NULL, tskIDLE_PRIORITY + 5, NULL) != pdPASS)
+    if (xTaskCreate(er_hotreload_rx_task, "er_hr_rx", RX_TASK_STACK_BYTES, NULL, RX_TASK_PRIORITY, NULL) != pdPASS)
     {
         ESP_LOGE(TAG, "RX task create failed — hot reload disabled");
-        if (err == ESP_OK)
+        if (error == ESP_OK)
             usb_serial_jtag_driver_uninstall();
-        vQueueDelete(s_ready_q);
-        vSemaphoreDelete(s_done_sem);
-        s_ready_q = NULL;
-        s_done_sem = NULL;
-        heap_caps_free(s_buf);
-        s_buf = NULL;
-        s_cap = 0;
+        vQueueDelete(s_ready_queue);
+        vSemaphoreDelete(s_done_semaphore);
+        s_ready_queue = NULL;
+        s_done_semaphore = NULL;
+        heap_caps_free(s_buffer);
+        s_buffer = NULL;
+        s_capacity = 0;
         return false;
     }
 
     ESP_LOGI(TAG,
              "on-device hot reload ready (native USB-Serial-JTAG, %u KB PSRAM staging; %u KB PSRAM free)",
-             (unsigned)(s_cap / 1024),
-             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+             (unsigned)(s_capacity / BYTES_PER_KB),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / BYTES_PER_KB));
     return true;
 }
 
 void er_hotreload_usb_pump(void)
 {
-    if (!s_ready_q)
+    if (!s_ready_queue)
     {
         return;
     }
-    size_t len = 0;
-    if (xQueueReceive(s_ready_q, &len, 0) != pdTRUE)
+    size_t length = 0;
+    if (xQueueReceive(s_ready_queue, &length, 0) != pdTRUE)
     {
         return;
     }
-    /* Apply the completed upload: reset + load (copying the assets out of s_buf). The old app was on
+    /* Apply the completed upload: reset + load (copying the assets out of s_buffer). The old app was on
      * screen until now; its last frame stays up through the load, then the new app's first commit
      * replaces it — no "Reloading…" panel. */
-    const ErContainerStatus st = er_hotreload_apply(s_buf, len);
+    const ErContainerStatus status = er_hotreload_apply(s_buffer, length);
     ESP_LOGI(TAG,
              "hot reload: %s (%u bytes; %u KB PSRAM free; %d nodes)",
-             er_runtime_container_status_str(st),
-             (unsigned)len,
-             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024),
+             er_runtime_container_status_str(status),
+             (unsigned)length,
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / BYTES_PER_KB),
              er_node_in_use_count());
-    xSemaphoreGive(s_done_sem);
+    xSemaphoreGive(s_done_semaphore);
 }

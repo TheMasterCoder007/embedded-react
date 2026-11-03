@@ -9,7 +9,7 @@ texture colour and alpha mods.
 **Docs:** [Linux and desktop](https://embedded-react.dev/guides/boards/linux).
 
 ```c
-er_sdl_backend_init(renderer, fb_w, fb_h);   // registers the backend with the engine
-er_sdl_present();                            // SDL_RenderPresent; call after er_commit() each frame
-er_sdl_backend_destroy();                    // frees the scratch texture
+er_sdl_backend_init(renderer, framebuffer_width, framebuffer_height); // registers the backend with the engine
+er_sdl_present();                                                     // SDL_RenderPresent; call after er_commit() each frame
+er_sdl_backend_destroy();                                             // frees the scratch texture
 ```
