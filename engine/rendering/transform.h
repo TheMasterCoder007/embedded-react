@@ -31,70 +31,79 @@
  * A translate-only transform does not require off-screen scratch compositing; the node and its
  * children are rendered with a simple pixel offset.
  *
- * @param[in] n  Node to inspect.
+ * @param[in] node  Node to inspect.
  *
  * @return true when scale and rotation components are identity.
  */
-bool er_transform_is_translate_only(const ERNode* n);
+bool er_transform_is_translate_only(const ERNode* node);
 
 /**
  * @brief Computes the 2D affine matrix for a node's transform props applied at a given position.
  *
  * The forward transform maps layout-space coordinates to screen-space coordinates:
- *   screen_x = a * layout_x + c * layout_y + tx
- *   screen_y = b * layout_x + d * layout_y + ty
+ *   screen_x = matrix_a * layout_x + matrix_c * layout_y + matrix_translate_x
+ *   screen_y = matrix_b * layout_x + matrix_d * layout_y + matrix_translate_y
  *
- * @param[in]  n          Node whose tp_* fields supply the transform parameters.
- * @param[in]  ref_x      Layout-space X origin of the node (computed.x or render px).
- * @param[in]  ref_y      Layout-space Y origin of the node (computed.y or render py).
- * @param[in]  w          Node width in pixels (used to resolve the pivot origin).
- * @param[in]  h          Node height in pixels.
- * @param[out] a          2×2 matrix element [0,0].
- * @param[out] b          2×2 matrix element [1,0].
- * @param[out] c          2×2 matrix element [0,1].
- * @param[out] d          2×2 matrix element [1,1].
- * @param[out] tx         Affine translation X.
- * @param[out] ty         Affine translation Y.
+ * @param[in]  node                Node whose transform_* fields supply the transform parameters.
+ * @param[in]  ref_x               Layout-space X origin of the node (computed.x or render px).
+ * @param[in]  ref_y               Layout-space Y origin of the node (computed.y or render py).
+ * @param[in]  width               Node width in pixels (used to resolve the pivot origin).
+ * @param[in]  height              Node height in pixels.
+ * @param[out] matrix_a            2×2 matrix element [0,0].
+ * @param[out] matrix_b            2×2 matrix element [1,0].
+ * @param[out] matrix_c            2×2 matrix element [0,1].
+ * @param[out] matrix_d            2×2 matrix element [1,1].
+ * @param[out] matrix_translate_x  Affine translation X.
+ * @param[out] matrix_translate_y  Affine translation Y.
  */
-void er_transform_compute_matrix(
-    const ERNode* n, int ref_x, int ref_y, int w, int h, float* a, float* b, float* c, float* d, float* tx, float* ty);
+void er_transform_compute_matrix(const ERNode* node,
+                                 int ref_x,
+                                 int ref_y,
+                                 int width,
+                                 int height,
+                                 float* matrix_a,
+                                 float* matrix_b,
+                                 float* matrix_c,
+                                 float* matrix_d,
+                                 float* matrix_translate_x,
+                                 float* matrix_translate_y);
 
 /**
  * @brief Inverts a 2D affine matrix.
  *
  * The inverse maps screen-space coordinates back to layout-space:
- *   layout_x = ia * screen_x + ic * screen_y + itx
- *   layout_y = ib * screen_x + id * screen_y + ity
+ *   layout_x = inverse_a * screen_x + inverse_c * screen_y + inverse_translate_x
+ *   layout_y = inverse_b * screen_x + inverse_d * screen_y + inverse_translate_y
  *
- * @param[in]  a    Forward matrix element [0,0].
- * @param[in]  b    Forward matrix element [1,0].
- * @param[in]  c    Forward matrix element [0,1].
- * @param[in]  d    Forward matrix element [1,1].
- * @param[in]  tx   Forward translation X.
- * @param[in]  ty   Forward translation Y.
- * @param[out] ia   Inverse matrix element [0,0].
- * @param[out] ib   Inverse matrix element [1,0].
- * @param[out] ic   Inverse matrix element [0,1].
- * @param[out] id   Inverse matrix element [1,1].
- * @param[out] itx  Inverse translation X.
- * @param[out] ity  Inverse translation Y.
+ * @param[in]  matrix_a             Forward matrix element [0,0].
+ * @param[in]  matrix_b             Forward matrix element [1,0].
+ * @param[in]  matrix_c             Forward matrix element [0,1].
+ * @param[in]  matrix_d             Forward matrix element [1,1].
+ * @param[in]  matrix_translate_x   Forward translation X.
+ * @param[in]  matrix_translate_y   Forward translation Y.
+ * @param[out] inverse_a            Inverse matrix element [0,0].
+ * @param[out] inverse_b            Inverse matrix element [1,0].
+ * @param[out] inverse_c            Inverse matrix element [0,1].
+ * @param[out] inverse_d            Inverse matrix element [1,1].
+ * @param[out] inverse_translate_x  Inverse translation X.
+ * @param[out] inverse_translate_y  Inverse translation Y.
  *
  * @return true on success; false when the matrix is singular (e.g. scale = 0), or its determinant or any
  *         inverse coefficient is NaN or overflows (an infinite, huge or lopsided scale), which leaves no usable
  *         inverse.
  */
-bool er_transform_invert(float a,
-                         float b,
-                         float c,
-                         float d,
-                         float tx,
-                         float ty,
-                         float* ia,
-                         float* ib,
-                         float* ic,
-                         float* id,
-                         float* itx,
-                         float* ity);
+bool er_transform_invert(float matrix_a,
+                         float matrix_b,
+                         float matrix_c,
+                         float matrix_d,
+                         float matrix_translate_x,
+                         float matrix_translate_y,
+                         float* inverse_a,
+                         float* inverse_b,
+                         float* inverse_c,
+                         float* inverse_d,
+                         float* inverse_translate_x,
+                         float* inverse_translate_y);
 
 /**
  * @brief Computes the screen-space axis-aligned bounding box of a transformed rectangle.
@@ -102,58 +111,58 @@ bool er_transform_invert(float a,
  * A corner that comes out NaN is skipped (the box is (0,0,0,0) when none is left), and the box is clipped
  * to ±16383, so its int fields are defined for any matrix and its width and height fit an int16.
  *
- * @param[in]  ref_x   Layout-space X origin.
- * @param[in]  ref_y   Layout-space Y origin.
- * @param[in]  w       Rectangle width.
- * @param[in]  h       Rectangle height.
- * @param[in]  a       Forward matrix [0,0].
- * @param[in]  b       Forward matrix [1,0].
- * @param[in]  c       Forward matrix [0,1].
- * @param[in]  d       Forward matrix [1,1].
- * @param[in]  tx      Forward translation X.
- * @param[in]  ty      Forward translation Y.
- * @param[out] out_x   AABB left edge.
- * @param[out] out_y   AABB top edge.
- * @param[out] out_w   AABB width (always ≥ 0).
- * @param[out] out_h   AABB height (always ≥ 0).
+ * @param[in]  ref_x               Layout-space X origin.
+ * @param[in]  ref_y               Layout-space Y origin.
+ * @param[in]  width               Rectangle width.
+ * @param[in]  height              Rectangle height.
+ * @param[in]  matrix_a            Forward matrix [0,0].
+ * @param[in]  matrix_b            Forward matrix [1,0].
+ * @param[in]  matrix_c            Forward matrix [0,1].
+ * @param[in]  matrix_d            Forward matrix [1,1].
+ * @param[in]  matrix_translate_x  Forward translation X.
+ * @param[in]  matrix_translate_y  Forward translation Y.
+ * @param[out] out_x               AABB left edge.
+ * @param[out] out_y               AABB top edge.
+ * @param[out] out_width           AABB width (always ≥ 0).
+ * @param[out] out_height          AABB height (always ≥ 0).
  */
 void er_transform_aabb(int ref_x,
                        int ref_y,
-                       int w,
-                       int h,
-                       float a,
-                       float b,
-                       float c,
-                       float d,
-                       float tx,
-                       float ty,
+                       int width,
+                       int height,
+                       float matrix_a,
+                       float matrix_b,
+                       float matrix_c,
+                       float matrix_d,
+                       float matrix_translate_x,
+                       float matrix_translate_y,
                        int* out_x,
                        int* out_y,
-                       int* out_w,
-                       int* out_h);
+                       int* out_width,
+                       int* out_height);
 
 /**
  * @brief Maps a single screen-space point to layout space via the inverse affine matrix.
  *
- * @param[in]  ia       Inverse matrix [0,0].
- * @param[in]  ib       Inverse matrix [1,0].
- * @param[in]  ic       Inverse matrix [0,1].
- * @param[in]  id       Inverse matrix [1,1].
- * @param[in]  itx      Inverse translation X.
- * @param[in]  ity      Inverse translation Y.
- * @param[in]  screen_x Screen-space X.
- * @param[in]  screen_y Screen-space Y.
- * @param[out] layout_x Resulting layout-space X, clamped to ±32767.
- * @param[out] layout_y Resulting layout-space Y, clamped to ±32767.
+ * @param[in]  inverse_a            Inverse matrix [0,0].
+ * @param[in]  inverse_b            Inverse matrix [1,0].
+ * @param[in]  inverse_c            Inverse matrix [0,1].
+ * @param[in]  inverse_d            Inverse matrix [1,1].
+ * @param[in]  inverse_translate_x  Inverse translation X.
+ * @param[in]  inverse_translate_y  Inverse translation Y.
+ * @param[in]  screen_x             Screen-space X.
+ * @param[in]  screen_y             Screen-space Y.
+ * @param[out] layout_x             Resulting layout-space X, clamped to ±32767.
+ * @param[out] layout_y             Resulting layout-space Y, clamped to ±32767.
  *
  * @return false when the point maps to NaN, which has no layout position (outputs untouched).
  */
-bool er_transform_map_point(float ia,
-                            float ib,
-                            float ic,
-                            float id,
-                            float itx,
-                            float ity,
+bool er_transform_map_point(float inverse_a,
+                            float inverse_b,
+                            float inverse_c,
+                            float inverse_d,
+                            float inverse_translate_x,
+                            float inverse_translate_y,
                             int screen_x,
                             int screen_y,
                             int* layout_x,
@@ -168,77 +177,86 @@ bool er_transform_map_point(float ia,
  * perspective-homography path. A node may have both 2D and 3D props; when
  * any 3D prop is set, the 3D path handles the entire transform.
  *
- * @param[in] n  Node to inspect.
+ * @param[in] node  Node to inspect.
  *
- * @return true when tp_rotate_x, tp_rotate_y, or tp_perspective is non-zero.
+ * @return true when transform_rotate_x, transform_rotate_y, or transform_perspective is non-zero.
  */
-bool er_transform_is_3d(const ERNode* n);
+bool er_transform_is_3d(const ERNode* node);
 
 /**
  * @brief Computes a 3×3 homography mapping layout-space source pixels to screen space.
  *
- * The source plane is z=0 in local space. The homography H maps homogeneous
+ * The source plane is z=0 in local space. The homography maps homogeneous
  * source coordinates (u, v, 1) to homogeneous screen coordinates (X, Y, W)
  * such that screen_x = X/W, screen_y = Y/W.
  *
  * The full transform sequence (applied innermost first) is:
  *   Translate to pivot → ScaleXY → RotZ → RotX → RotY →
- *   Translate back + user translate → Perspective(tp_perspective).
+ *   Translate back + user translate → Perspective(transform_perspective).
  *
- * @param[in]  n      Node whose tp_* fields supply the parameters.
- * @param[in]  ref_x  Layout-space X origin (computed.x after scroll offset).
- * @param[in]  ref_y  Layout-space Y origin.
- * @param[in]  w      Node width in pixels.
- * @param[in]  h      Node height in pixels.
- * @param[out] H      9-element row-major homography: [H00 H01 H02 H10 H11 H12 H20 H21 H22].
+ * @param[in]  node        Node whose transform_* fields supply the parameters.
+ * @param[in]  ref_x       Layout-space X origin (computed.x after scroll offset).
+ * @param[in]  ref_y       Layout-space Y origin.
+ * @param[in]  width       Node width in pixels.
+ * @param[in]  height      Node height in pixels.
+ * @param[out] homography  9-element row-major homography: [H00 H01 H02 H10 H11 H12 H20 H21 H22].
  */
-void er_transform_compute_homography_3d(const ERNode* n, int ref_x, int ref_y, int w, int h, float H[9]);
+void er_transform_compute_homography_3d(
+    const ERNode* node, int ref_x, int ref_y, int width, int height, float homography[9]);
 
 /**
  * @brief Inverts a 3×3 homography.
  *
- * @param[in]  H    Input 9-element row-major homography.
- * @param[out] inv  Inverted 9-element row-major homography.
+ * @param[in]  homography  Input 9-element row-major homography.
+ * @param[out] inverse     Inverted 9-element row-major homography.
  *
- * @return true on success; false when H is singular (determinant near zero, NaN, or overflowed), or when a
+ * @return true on success; false when the homography is singular (determinant near zero, NaN, or overflowed), or when a
  *         coefficient of its inverse is NaN or overflowed.
  */
-bool er_transform_homography_invert(const float H[9], float inv[9]);
+bool er_transform_homography_invert(const float homography[9], float inverse[9]);
 
 /**
  * @brief Computes the screen-space AABB of a source rectangle projected through a homography.
  *
- * Projects the four corners (ref_x,ref_y), (ref_x+w,ref_y), (ref_x+w,ref_y+h),
- * (ref_x,ref_y+h) and returns their bounding box.  Corners that project behind the
+ * Projects the four corners (ref_x,ref_y), (ref_x+width,ref_y), (ref_x+width,ref_y+height),
+ * (ref_x,ref_y+height) and returns their bounding box.  Corners that project behind the
  * viewer (W ≤ 0), or to NaN, are skipped; the AABB is (0,0,0,0) when none is left. A corner near the
  * camera plane projects arbitrarily far out, so the box is clipped to ±16383, which holds every screen and
  * keeps its width and height inside an int16.
  *
- * @param[in]  ref_x   Source rectangle left edge.
- * @param[in]  ref_y   Source rectangle top edge.
- * @param[in]  w       Source rectangle width.
- * @param[in]  h       Source rectangle height.
- * @param[in]  H       9-element row-major forward homography.
- * @param[out] out_x   AABB left edge.
- * @param[out] out_y   AABB top edge.
- * @param[out] out_w   AABB width (always ≥ 0).
- * @param[out] out_h   AABB height (always ≥ 0).
+ * @param[in]  ref_x       Source rectangle left edge.
+ * @param[in]  ref_y       Source rectangle top edge.
+ * @param[in]  width       Source rectangle width.
+ * @param[in]  height      Source rectangle height.
+ * @param[in]  homography  9-element row-major forward homography.
+ * @param[out] out_x       AABB left edge.
+ * @param[out] out_y       AABB top edge.
+ * @param[out] out_width   AABB width (always ≥ 0).
+ * @param[out] out_height  AABB height (always ≥ 0).
  */
-void er_transform_aabb_3d(
-    int ref_x, int ref_y, int w, int h, const float H[9], int* out_x, int* out_y, int* out_w, int* out_h);
+void er_transform_aabb_3d(int ref_x,
+                          int ref_y,
+                          int width,
+                          int height,
+                          const float homography[9],
+                          int* out_x,
+                          int* out_y,
+                          int* out_width,
+                          int* out_height);
 
 /**
  * @brief Back-projects a single screen-space point to layout space through an inverse homography.
  *
- * @param[in]  inv_H     9-element row-major inverse homography (from er_transform_homography_invert).
- * @param[in]  screen_x  Screen-space X.
- * @param[in]  screen_y  Screen-space Y.
- * @param[out] layout_x  Resulting layout-space X, clamped to ±32767.
- * @param[out] layout_y  Resulting layout-space Y, clamped to ±32767.
+ * @param[in]  inverse_homography  9-element row-major inverse homography (from er_transform_homography_invert).
+ * @param[in]  screen_x            Screen-space X.
+ * @param[in]  screen_y            Screen-space Y.
+ * @param[out] layout_x            Resulting layout-space X, clamped to ±32767.
+ * @param[out] layout_y            Resulting layout-space Y, clamped to ±32767.
  *
  * @return false when the point lies behind the viewer or maps to NaN (outputs untouched).
  */
-bool er_transform_map_point_3d(const float inv_H[9], int screen_x, int screen_y, int* layout_x, int* layout_y);
+bool er_transform_map_point_3d(
+    const float inverse_homography[9], int screen_x, int screen_y, int* layout_x, int* layout_y);
 
 /**
  * @brief Ends the 3D transform source capture and blits the result through the homography.
@@ -247,26 +265,40 @@ bool er_transform_map_point_3d(const float inv_H[9], int screen_x, int screen_y,
  * to find the source UV, then samples the source scratch with bilinear filtering.
  * The resulting image is blended into the current render target.
  *
- * @param[in] src_x   World-space X origin of the source buffer (matches er_transform_source_begin).
- * @param[in] src_y   World-space Y origin.
- * @param[in] src_w   Logical source width.
- * @param[in] src_h   Logical source height.
- * @param[in] inv_H   9-element row-major inverse homography (from er_transform_homography_invert).
- * @param[in] dst_x   Screen-space AABB left edge.
- * @param[in] dst_y   Screen-space AABB top edge.
- * @param[in] dst_w   Screen-space AABB width (any size — output is streamed per row segment).
- * @param[in] dst_h   Screen-space AABB height (any size).
+ * @param[in] source_x            World-space X origin of the source buffer (matches er_transform_source_begin).
+ * @param[in] source_y            World-space Y origin.
+ * @param[in] source_width        Logical source width.
+ * @param[in] source_height       Logical source height.
+ * @param[in] inverse_homography  9-element row-major inverse homography (from er_transform_homography_invert).
+ * @param[in] destination_x       Screen-space AABB left edge.
+ * @param[in] destination_y       Screen-space AABB top edge.
+ * @param[in] destination_width   Screen-space AABB width (any size — output is streamed per row segment).
+ * @param[in] destination_height  Screen-space AABB height (any size).
  */
-void er_transform_source_end_blit_3d(
-    int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h);
+void er_transform_source_end_blit_3d(int source_x,
+                                     int source_y,
+                                     int source_width,
+                                     int source_height,
+                                     const float inverse_homography[9],
+                                     int destination_x,
+                                     int destination_y,
+                                     int destination_width,
+                                     int destination_height);
 
 /**
  * @brief Re-emits the cached transform source through the homography (no capture).
  *
  * 3D counterpart of er_transform_source_replay_blit().
  */
-void er_transform_source_replay_blit_3d(
-    int src_x, int src_y, int src_w, int src_h, const float inv_H[9], int dst_x, int dst_y, int dst_w, int dst_h);
+void er_transform_source_replay_blit_3d(int source_x,
+                                        int source_y,
+                                        int source_width,
+                                        int source_height,
+                                        const float inverse_homography[9],
+                                        int destination_x,
+                                        int destination_y,
+                                        int destination_width,
+                                        int destination_height);
 
 #endif /* ERUI_3D_TRANSFORMS */
 
@@ -280,17 +312,17 @@ void er_transform_source_replay_blit_3d(
  * Only one transform capture may be active at a time.  Returns false and leaves routing
  * unchanged when another capture is already active or the node size exceeds the scratch limits.
  *
- * @param[in] src_x  World-space X origin of the content being captured (= render px).
- * @param[in] src_y  World-space Y origin of the content being captured (= render py).
- * @param[in] w      Content width in pixels (must be ≤ ERUI_XFORM_W).
- * @param[in] h      Content height in pixels (must be ≤ ERUI_XFORM_H).
+ * @param[in] source_x  World-space X origin of the content being captured (= render px).
+ * @param[in] source_y  World-space Y origin of the content being captured (= render py).
+ * @param[in] width     Content width in pixels (must be ≤ ERUI_XFORM_W).
+ * @param[in] height    Content height in pixels (must be ≤ ERUI_XFORM_H).
  *
  * @return true when capture was started successfully.
  */
-bool er_transform_source_begin(int src_x, int src_y, int w, int h);
+bool er_transform_source_begin(int source_x, int source_y, int width, int height);
 
 /**
- * @brief Whether a w×h capture fits the transform source buffer.
+ * @brief Whether a width × height capture fits the transform source buffer.
  *
  * The size half of er_transform_source_begin()'s admission test, exposed so the damage pre-pass can
  * predict the raw-box fallback render_tree degrades to when a capture cannot be started. Keeping the
@@ -301,12 +333,12 @@ bool er_transform_source_begin(int src_x, int src_y, int w, int h);
  * Says nothing about the OTHER reason a capture fails — one already being active for an ancestor —
  * which is not a property of the size.
  *
- * @param[in] w  Content width in pixels.
- * @param[in] h  Content height in pixels.
+ * @param[in] width   Content width in pixels.
+ * @param[in] height  Content height in pixels.
  *
  * @return true when a capture of this size is admissible (always false without ERUI_TRANSFORMS=FULL).
  */
-bool er_transform_source_fits(int w, int h);
+bool er_transform_source_fits(int width, int height);
 
 /**
  * @brief Whether a node's transform can be inverted — the other half of the capture admission test.
@@ -318,13 +350,13 @@ bool er_transform_source_fits(int w, int h);
  * inside it. The damage pre-pass has to know which ancestor actually captures before it can escalate
  * a descendant's damage to that ancestor's transformed AABB.
  *
- * @param[in] n            Node to test.
- * @param[in] ref_x,ref_y  Layout-space origin (render px/py) — the 3D homography's pivot depends on it.
- * @param[in] w,h          Node size in pixels.
+ * @param[in] node          Node to test.
+ * @param[in] ref_x,ref_y   Layout-space origin (render px/py) — the 3D homography's pivot depends on it.
+ * @param[in] width,height  Node size in pixels.
  *
  * @return true when the transform inverts (always false without ERUI_TRANSFORMS=FULL).
  */
-bool er_transform_is_invertible(const ERNode* n, int ref_x, int ref_y, int w, int h);
+bool er_transform_is_invertible(const ERNode* node, int ref_x, int ref_y, int width, int height);
 
 /**
  * @brief Records which node's subtree the transform source buffer currently holds.
@@ -332,16 +364,16 @@ bool er_transform_is_invertible(const ERNode* n, int ref_x, int ref_y, int w, in
  * Called by the compositor after a successful er_transform_source_begin() during a banded
  * composite pass, so later tiles of the same pass can replay the blit without re-capturing.
  *
- * @param[in] tag  Node tag whose subtree is captured (0xFFFF = invalid).
- * @param[in] gen  Banded composite pass generation the capture belongs to.
+ * @param[in] tag         Node tag whose subtree is captured (0xFFFF = invalid).
+ * @param[in] generation  Banded composite pass generation the capture belongs to.
  */
-void er_transform_source_note(uint16_t tag, uint32_t gen);
+void er_transform_source_note(uint16_t tag, uint32_t generation);
 
 /**
  * @brief Returns true when the source buffer still holds the given node's subtree for the
  *        given banded composite pass generation (and no capture is currently active).
  */
-bool er_transform_source_is_cached(uint16_t tag, uint32_t gen);
+bool er_transform_source_is_cached(uint16_t tag, uint32_t generation);
 
 /**
  * @brief Re-emits the cached transform source through the affine transform (no capture).
@@ -350,20 +382,20 @@ bool er_transform_source_is_cached(uint16_t tag, uint32_t gen);
  * the active scissor, so during a banded composite pass only the current tile's rows are
  * back-projected.
  */
-void er_transform_source_replay_blit(int src_x,
-                                     int src_y,
-                                     int src_w,
-                                     int src_h,
-                                     float ia,
-                                     float ib,
-                                     float ic,
-                                     float id,
-                                     float itx,
-                                     float ity,
-                                     int dst_x,
-                                     int dst_y,
-                                     int dst_w,
-                                     int dst_h);
+void er_transform_source_replay_blit(int source_x,
+                                     int source_y,
+                                     int source_width,
+                                     int source_height,
+                                     float inverse_a,
+                                     float inverse_b,
+                                     float inverse_c,
+                                     float inverse_d,
+                                     float inverse_translate_x,
+                                     float inverse_translate_y,
+                                     int destination_x,
+                                     int destination_y,
+                                     int destination_width,
+                                     int destination_height);
 
 /**
  * @brief Ends the transform source capture and blits the result through the affine transform.
@@ -372,35 +404,35 @@ void er_transform_source_replay_blit(int src_x,
  * then blended into the current render target (framebuffer or active outer scratch) via
  * er_blit_blend.
  *
- * @param[in] src_x  World-space X origin of the source buffer (must match er_transform_source_begin).
- * @param[in] src_y  World-space Y origin.
- * @param[in] src_w  Logical source width.
- * @param[in] src_h  Logical source height.
- * @param[in] ia     Inverse matrix [0,0].
- * @param[in] ib     Inverse matrix [1,0].
- * @param[in] ic     Inverse matrix [0,1].
- * @param[in] id     Inverse matrix [1,1].
- * @param[in] itx    Inverse translation X.
- * @param[in] ity    Inverse translation Y.
- * @param[in] dst_x  Screen-space AABB left edge.
- * @param[in] dst_y  Screen-space AABB top edge.
- * @param[in] dst_w  Screen-space AABB width (any size — output is streamed per row segment).
- * @param[in] dst_h  Screen-space AABB height (any size).
+ * @param[in] source_x             World-space X origin of the source buffer (must match er_transform_source_begin).
+ * @param[in] source_y             World-space Y origin.
+ * @param[in] source_width         Logical source width.
+ * @param[in] source_height        Logical source height.
+ * @param[in] inverse_a            Inverse matrix [0,0].
+ * @param[in] inverse_b            Inverse matrix [1,0].
+ * @param[in] inverse_c            Inverse matrix [0,1].
+ * @param[in] inverse_d            Inverse matrix [1,1].
+ * @param[in] inverse_translate_x  Inverse translation X.
+ * @param[in] inverse_translate_y  Inverse translation Y.
+ * @param[in] destination_x        Screen-space AABB left edge.
+ * @param[in] destination_y        Screen-space AABB top edge.
+ * @param[in] destination_width    Screen-space AABB width (any size — output is streamed per row segment).
+ * @param[in] destination_height   Screen-space AABB height (any size).
  */
-void er_transform_source_end_blit(int src_x,
-                                  int src_y,
-                                  int src_w,
-                                  int src_h,
-                                  float ia,
-                                  float ib,
-                                  float ic,
-                                  float id,
-                                  float itx,
-                                  float ity,
-                                  int dst_x,
-                                  int dst_y,
-                                  int dst_w,
-                                  int dst_h);
+void er_transform_source_end_blit(int source_x,
+                                  int source_y,
+                                  int source_width,
+                                  int source_height,
+                                  float inverse_a,
+                                  float inverse_b,
+                                  float inverse_c,
+                                  float inverse_d,
+                                  float inverse_translate_x,
+                                  float inverse_translate_y,
+                                  int destination_x,
+                                  int destination_y,
+                                  int destination_width,
+                                  int destination_height);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - The capture-eligibility rule, in one place
@@ -419,33 +451,33 @@ void er_transform_source_end_blit(int src_x,
  * painted by capturing the subtree into the transform source and mapping it back out. A pure translate is
  * false: it is a pixel offset, no capture involved.
  *
- * The ActivityIndicator is excluded whatever its props say. Its tp_rotate_z is the internal spin angle that
+ * The ActivityIndicator is excluded whatever its props say. Its transform_rotate_z is the internal spin angle that
  * render_activity_indicator() bakes into the ring of dots, not an affine render, so it is non-zero on every
  * commit of a spinning indicator — and capturing it would rasterize the whole node into a scratch buffer
  * and distort the spin.
  *
- * @param[in] n  Node to inspect.
+ * @param[in] node  Node to inspect.
  *
  * @return true when the node's transform needs the capture path.
  */
-static inline bool er_node_has_complex_transform(const ERNode* n)
+static inline bool er_node_has_complex_transform(const ERNode* node)
 {
-    return n->has_transform && n->type != ER_NODE_ACTIVITY_INDICATOR && !er_transform_is_translate_only(n);
+    return node->has_transform && node->type != ER_NODE_ACTIVITY_INDICATOR && !er_transform_is_translate_only(node);
 }
 
 /**
  * @brief Whether a node's translate is a plain pixel offset that moves its whole subtree.
  *
- * @param[in] n  Node to inspect.
+ * @param[in] node  Node to inspect.
  *
- * @return true when the node offsets itself and its descendants by tp_translate_x/y.
+ * @return true when the node offsets itself and its descendants by transform_translate_x/y.
  */
-static inline bool er_node_has_offset_translate(const ERNode* n)
+static inline bool er_node_has_offset_translate(const ERNode* node)
 {
 #if ERUI_TRANSFORMS_FULL
-    return n->has_transform && !er_node_has_complex_transform(n);
+    return node->has_transform && !er_node_has_complex_transform(node);
 #else
-    return n->has_transform;
+    return node->has_transform;
 #endif
 }
 
@@ -457,14 +489,14 @@ static inline bool er_node_has_offset_translate(const ERNode* n)
  * — a singular matrix (er_transform_is_invertible) and a capture already active for a transformed ancestor —
  * so a caller that needs the exact answer asks those separately.
  *
- * @param[in] n  Node to inspect.
+ * @param[in] node  Node to inspect.
  *
  * @return true when nothing about this node's own geometry rules out a capture.
  */
-static inline bool er_node_can_capture_transform(const ERNode* n)
+static inline bool er_node_can_capture_transform(const ERNode* node)
 {
-    return er_node_has_complex_transform(n)
-           && er_transform_source_fits((int)n->animated.width, (int)n->animated.height);
+    return er_node_has_complex_transform(node)
+           && er_transform_source_fits((int)node->animated.width, (int)node->animated.height);
 }
 
 #endif /* EMBEDDED_REACT_TRANSFORM_H */

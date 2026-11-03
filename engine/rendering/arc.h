@@ -40,7 +40,8 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief One annular sector to rasterize analytically: a ring [r_inner, r_outer] cut to the sweep [a0, a1].
+ * @brief One annular sector to rasterize analytically: a ring [inner_radius, outer_radius] cut to the sweep
+ *        [start_deg, end_deg].
  *
  * Angles are degrees, clockwise from +X in screen space (y down). Coordinates are framebuffer pixels with
  * the pixel (i, j) sampled at its centre (i + 0.5, j + 0.5) — the same convention the rounded-rect
@@ -50,30 +51,30 @@
  */
 typedef struct
 {
-    float cx;      /**< Centre X in framebuffer pixels. */
-    float cy;      /**< Centre Y in framebuffer pixels. */
-    float r_outer; /**< Outer radius in pixels. */
-    float r_inner; /**< Inner radius in pixels; <= 0 draws a full sector (pie slice). */
-    float a0;      /**< Sweep start angle in degrees. */
-    float a1;      /**< Sweep end angle in degrees; a1 - a0 in [0, 360]. */
-    uint8_t cap;   /**< ERArcCap: round caps add a disc of radius (r_outer - r_inner) / 2 at each end. */
+    float center_x;     /**< Centre X in framebuffer pixels. */
+    float center_y;     /**< Centre Y in framebuffer pixels. */
+    float outer_radius; /**< Outer radius in pixels. */
+    float inner_radius; /**< Inner radius in pixels; <= 0 draws a full sector (pie slice). */
+    float start_deg;    /**< Sweep start angle in degrees. */
+    float end_deg;      /**< Sweep end angle in degrees; end_deg - start_deg in [0, 360]. */
+    uint8_t cap;        /**< ERArcCap: round caps add a disc of radius (outer_radius - inner_radius) / 2 at each end. */
 
-    uint32_t color; /**< Straight-alpha ARGB8888 fill (used when grad_type is not conic / radial). */
+    uint32_t color; /**< Straight-alpha ARGB8888 fill (used when gradient_type is not conic / radial). */
 
-    /* Optional gradient paint. ER_GRADIENT_CONIC maps the angle range [grad_a0, grad_a1] onto the stops;
-     * ER_GRADIENT_RADIAL maps the thickness [r_inner, r_outer]. Any other type paints @p color. */
-    uint8_t grad_type;       /**< ERGradientType. */
-    uint8_t grad_stop_count; /**< Stops in @p grad_stops (>= 2 to take effect). */
-    const ERGradientStop* grad_stops;
-    float grad_a0; /**< Conic: angle where the first stop lands (degrees). */
-    float grad_a1; /**< Conic: angle where the last stop lands (degrees). */
+    /* Optional gradient paint. ER_GRADIENT_CONIC maps the angle range [gradient_start_deg, gradient_end_deg] onto the
+     * stops; ER_GRADIENT_RADIAL maps the thickness [inner_radius, outer_radius]. Any other type paints @p color. */
+    uint8_t gradient_type;       /**< ERGradientType. */
+    uint8_t gradient_stop_count; /**< Stops in @p gradient_stops (>= 2 to take effect). */
+    const ERGradientStop* gradient_stops;
+    float gradient_start_deg; /**< Conic: angle where the first stop lands (degrees). */
+    float gradient_end_deg;   /**< Conic: angle where the last stop lands (degrees). */
 
-    /* Optional segment mask: the span [seg_a0, seg_a1] is split into @p segments equal pieces separated by
-     * @p gap_deg; pixels inside a gap are masked out. Applied to whatever sweep this sector draws, so a
+    /* Optional segment mask: the span [segment_start_deg, segment_end_deg] is split into @p segments equal pieces
+     * separated by @p gap_deg; pixels inside a gap are masked out. Applied to whatever sweep this sector draws, so a
      * track and the indicator drawn over it share one mask. segments <= 1 disables it. */
     uint8_t segments;
-    float seg_a0;
-    float seg_a1;
+    float segment_start_deg;
+    float segment_end_deg;
     float gap_deg;
 
     /* Rasterize only rows / columns inside [clip_x0, clip_x1) x [clip_y0, clip_y1). */
@@ -95,20 +96,20 @@ typedef struct
  * radius needs a per-pixel distance; the interior is span-filled. The boundary rays and any caps / gaps
  * are two cross products per pixel. Output is premultiplied ARGB blended in chunks with er_blit_blend.
  *
- * @param[in] s  Sector description (see ERArcSector). NULL or a zero sweep draws nothing.
+ * @param[in] sector  Sector description (see ERArcSector). NULL or a zero sweep draws nothing.
  */
-void er_arc_fill_sector(const ERArcSector* s);
+void er_arc_fill_sector(const ERArcSector* sector);
 
 /**
- * @brief Half-chord of a circle of radius @p r on the row whose centre lies @p dy pixels from the circle
+ * @brief Half-chord of a circle of radius @p radius on the row whose centre lies @p row_offset pixels from the circle
  *        centre, served from the shared per-radius row-span cache when it fits.
  *
- * @param[in] r   Circle radius in pixels (> 0).
- * @param[in] dy  Signed row offset from the centre in pixels.
+ * @param[in] radius      Circle radius in pixels (> 0).
+ * @param[in] row_offset  Signed row offset from the centre in pixels.
  *
- * @return sqrt(r² - dy²), or a negative value when the row misses the circle.
+ * @return sqrt(radius² - row_offset²), or a negative value when the row misses the circle.
  */
-float er_arc_half_chord(float r, float dy);
+float er_arc_half_chord(float radius, float row_offset);
 
 /**
  * @brief Drops every cached row span (er_reset / tests).
@@ -121,27 +122,27 @@ void er_arc_span_cache_reset(void);
 uint32_t er_arc_span_cache_misses(void);
 
 /**
- * @brief Grows an axis-aligned bbox with the extent of an annular sector: the sweep [a0, a1] between the
- *        radii, padded by @p pad pixels on every side.
+ * @brief Grows an axis-aligned bbox with the extent of an annular sector: the sweep [start_deg, end_deg] between the
+ *        radii, padded by @p padding pixels on every side.
  *
  * Used to bound the damage of a value change to the swept sub-arc. Degrees, clockwise from +X, same
  * convention as ERArcSector. The bbox is in the same pixel space as the centre.
  *
- * @param[in]     cx,cy    Centre.
- * @param[in]     r_in     Inner radius (>= 0).
- * @param[in]     r_out    Outer radius.
- * @param[in]     a0,a1    Sweep (either order).
- * @param[in]     pad      Extra pixels on every side (AA fringe, caps, knob).
- * @param[in,out] x0,y0    Bbox min (floats; pass a large value to start empty).
- * @param[in,out] x1,y1    Bbox max.
+ * @param[in]     center_x,center_y  Centre.
+ * @param[in]     inner_radius       Inner radius (>= 0).
+ * @param[in]     outer_radius       Outer radius.
+ * @param[in]     start_deg,end_deg  Sweep (either order).
+ * @param[in]     padding            Extra pixels on every side (AA fringe, caps, knob).
+ * @param[in,out] x0,y0              Bbox min (floats; pass a large value to start empty).
+ * @param[in,out] x1,y1              Bbox max.
  */
-void er_arc_sector_bbox(float cx,
-                        float cy,
-                        float r_in,
-                        float r_out,
-                        float a0,
-                        float a1,
-                        float pad,
+void er_arc_sector_bbox(float center_x,
+                        float center_y,
+                        float inner_radius,
+                        float outer_radius,
+                        float start_deg,
+                        float end_deg,
+                        float padding,
                         float* x0,
                         float* y0,
                         float* x1,

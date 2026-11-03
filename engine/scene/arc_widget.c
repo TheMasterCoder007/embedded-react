@@ -275,8 +275,8 @@ void er_arc_render(ERNode* node, int box_x, int box_y, int width, int height)
 
     ERArcSector sector;
     memset(&sector, 0, sizeof(sector));
-    sector.cx = geometry.center_x;
-    sector.cy = geometry.center_y;
+    sector.center_x = geometry.center_x;
+    sector.center_y = geometry.center_y;
     sector.cap = props->cap;
     sector.clip_x0 = clip_left;
     sector.clip_y0 = clip_top;
@@ -285,30 +285,30 @@ void er_arc_render(ERNode* node, int box_x, int box_y, int width, int height)
     if (props->segments > 1U)
     {
         sector.segments = props->segments;
-        sector.seg_a0 = geometry.start_angle;
-        sector.seg_a1 = geometry.start_angle + geometry.sweep;
+        sector.segment_start_deg = geometry.start_angle;
+        sector.segment_end_deg = geometry.start_angle + geometry.sweep;
         sector.gap_deg = (props->gap_angle > 0.0f) ? props->gap_angle : ARC_DEFAULT_GAP_ANGLE;
     }
 
     /* 1. Backing band (wider than the track, centred on the same mid-line). */
     if (geometry.band > 0.0f)
     {
-        sector.r_outer = geometry.mid_radius + geometry.band * 0.5f;
-        sector.r_inner = geometry.mid_radius - geometry.band * 0.5f;
-        sector.a0 = geometry.start_angle;
-        sector.a1 = geometry.start_angle + geometry.sweep;
+        sector.outer_radius = geometry.mid_radius + geometry.band * 0.5f;
+        sector.inner_radius = geometry.mid_radius - geometry.band * 0.5f;
+        sector.start_deg = geometry.start_angle;
+        sector.end_deg = geometry.start_angle + geometry.sweep;
         sector.color = col_or(props->band_color, ARC_DEFAULT_BAND_COLOR);
-        sector.grad_type = ER_GRADIENT_NONE;
+        sector.gradient_type = ER_GRADIENT_NONE;
         er_arc_fill_sector(&sector);
     }
 
     /* 2. Track over the whole sweep. */
-    sector.r_outer = geometry.mid_radius + geometry.width * 0.5f;
-    sector.r_inner = geometry.mid_radius - geometry.width * 0.5f;
-    sector.a0 = geometry.start_angle;
-    sector.a1 = geometry.start_angle + geometry.sweep;
+    sector.outer_radius = geometry.mid_radius + geometry.width * 0.5f;
+    sector.inner_radius = geometry.mid_radius - geometry.width * 0.5f;
+    sector.start_deg = geometry.start_angle;
+    sector.end_deg = geometry.start_angle + geometry.sweep;
     sector.color = col_or(props->track_color, ARC_DEFAULT_TRACK_COLOR);
-    sector.grad_type = ER_GRADIENT_NONE;
+    sector.gradient_type = ER_GRADIENT_NONE;
     er_arc_fill_sector(&sector);
 
     /* 3. Indicator. Single-ended it runs from the sweep start to the value; in RANGE mode it is the band
@@ -317,21 +317,21 @@ void er_arc_render(ERNode* node, int box_x, int box_y, int width, int height)
     const float start_fraction = props->range ? er_arc_value_frac(&geometry, node->arc_value_start) : 0.0f;
     if (fraction > start_fraction)
     {
-        sector.a0 = geometry.start_angle + geometry.sweep * start_fraction;
-        sector.a1 = geometry.start_angle + geometry.sweep * fraction;
+        sector.start_deg = geometry.start_angle + geometry.sweep * start_fraction;
+        sector.end_deg = geometry.start_angle + geometry.sweep * fraction;
         sector.color = col_or(props->indicator_color, ARC_DEFAULT_INDICATOR_COLOR);
         if ((props->gradient_type == ER_GRADIENT_CONIC || props->gradient_type == ER_GRADIENT_RADIAL)
             && props->gradient_stop_count >= 2U)
         {
-            sector.grad_type = props->gradient_type;
-            sector.grad_stops = props->gradient_stops;
-            sector.grad_stop_count = props->gradient_stop_count;
+            sector.gradient_type = props->gradient_type;
+            sector.gradient_stops = props->gradient_stops;
+            sector.gradient_stop_count = props->gradient_stop_count;
             /* Where the ramp is anchored — see arc_grad_band_anchored(). BAND spans the lit indicator
              * (a thermostat's AUTO warm→cool, always covering exactly what is drawn); SWEEP spans the
              * whole dial (a progress ring's 0-100 scale, colours fixed to positions). */
             const bool band_gradient = arc_grad_band_anchored(props);
-            sector.grad_a0 = band_gradient ? sector.a0 : geometry.start_angle;
-            sector.grad_a1 = band_gradient ? sector.a1 : (geometry.start_angle + geometry.sweep);
+            sector.gradient_start_deg = band_gradient ? sector.start_deg : geometry.start_angle;
+            sector.gradient_end_deg = band_gradient ? sector.end_deg : (geometry.start_angle + geometry.sweep);
         }
         er_arc_fill_sector(&sector);
     }

@@ -21,6 +21,28 @@
 /* ERUI_BORDER_AA is defaulted in rrect.h, so every rasterizer that masks to a rounded edge agrees. */
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief ERRRectBorder::style values. */
+#define BORDER_STYLE_SOLID 0
+#define BORDER_STYLE_DASHED 1
+
+/** @brief Nominal dash and dot patterns in pixels, before they are stretched to fit the perimeter. */
+#define BORDER_DASH_LENGTH 8.0f
+#define BORDER_DASH_GAP 6.0f
+#define BORDER_DOT_LENGTH 3.0f
+#define BORDER_DOT_GAP 3.0f
+
+/** @brief Full scale of mix_argb()'s blend position. */
+#define MIX_POSITION_SCALE 256
+
+/** @brief atan_ratio()'s polynomial: pi/4 and its two correction terms. */
+#define ATAN_RATIO_QUARTER_PI 0.7853981634f
+#define ATAN_RATIO_POLY_A 0.2447f
+#define ATAN_RATIO_POLY_B 0.0663f
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -38,120 +60,120 @@
  */
 static uint32_t scale_straight_alpha(uint32_t argb, uint8_t coverage)
 {
-    uint32_t a = ((argb >> 24) * (uint32_t)coverage + 127U) / 255U;
-    return (argb & 0x00FFFFFFU) | (a << 24);
+    uint32_t alpha = ((argb >> 24) * (uint32_t)coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    return (argb & 0x00FFFFFFU) | (alpha << 24);
 }
 
 /**
- * @brief Fills one horizontal span [x0, x1) at scanline py.
+ * @brief Fills one horizontal span [x0, x1) at scanline row_y.
  *
- * @param[in] argb  Straight-alpha ARGB8888 color.
- * @param[in] py    Y coordinate of the scanline.
- * @param[in] x0    Leftmost pixel, inclusive.
- * @param[in] x1    Rightmost pixel, exclusive.
+ * @param[in] argb   Straight-alpha ARGB8888 color.
+ * @param[in] row_y  Y coordinate of the scanline.
+ * @param[in] x0     Leftmost pixel, inclusive.
+ * @param[in] x1     Rightmost pixel, exclusive.
  */
-static void fill_span(uint32_t argb, int py, int x0, int x1)
+static void fill_span(uint32_t argb, int row_y, int x0, int x1)
 {
     if (x1 > x0)
-        er_blit_fill(argb, x0, py, x1 - x0, 1);
+        er_blit_fill(argb, x0, row_y, x1 - x0, 1);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
+void er_rrect_fill(uint32_t argb, int x, int y, int width, int height, int radius)
 {
-    if (w <= 0 || h <= 0 || (argb >> 24) == 0)
+    if (width <= 0 || height <= 0 || (argb >> 24) == 0)
         return;
 
     if (radius <= 0)
     {
-        er_blit_fill(argb, x, y, w, h);
+        er_blit_fill(argb, x, y, width, height);
         return;
     }
 
     /* Clamp so corner arc centers never cross; produces a pill / capsule shape. */
-    int r = radius;
-    if (2 * r >= w)
-        r = (w - 1) / 2;
-    if (2 * r >= h)
-        r = (h - 1) / 2;
+    int corner_radius = radius;
+    if (2 * corner_radius >= width)
+        corner_radius = (width - 1) / 2;
+    if (2 * corner_radius >= height)
+        corner_radius = (height - 1) / 2;
 
-    if (r <= 0)
+    if (corner_radius <= 0)
     {
-        er_blit_fill(argb, x, y, w, h);
+        er_blit_fill(argb, x, y, width, height);
         return;
     }
 
     /* Middle strip — full width, no corner rounding. */
-    int mid_h = h - 2 * r;
-    if (mid_h > 0)
-        er_blit_fill(argb, x, y + r, w, mid_h);
+    int middle_height = height - 2 * corner_radius;
+    if (middle_height > 0)
+        er_blit_fill(argb, x, y + corner_radius, width, middle_height);
 
     /*
-     * Corner rows: iterate dy from 1 (one step into the corner region, just inside
-     * the straight middle band) up to r (the outermost corner row).
+     * Corner rows: iterate corner_row from 1 (one step into the corner region, just inside
+     * the straight middle band) up to corner_radius (the outermost corner row).
      *
-     * Arc center (left): (x + r, y + r) for the top corners.
-     * Arc center (right): (x + w - 1 - r, y + r).
+     * Arc center (left): (x + corner_radius, y + corner_radius) for the top corners.
+     * Arc center (right): (x + width - 1 - corner_radius, y + corner_radius).
      *
-     * For a scanline at distance dy above the horizontal center line:
-     *   dx_f = sqrt(r² − dy²)                   — arc half-width (float)
-     *   dx   = floor(dx_f)                       — last fully-inside column offset
+     * For a scanline corner_row rows above the horizontal center line:
+     *   exact_half_width = sqrt(corner_radius² − corner_row²)  — arc half-width (float)
+     *   half_width       = floor(exact_half_width)             — last fully-inside column offset
      *
-     * Interior span: [x + r − dx,  x + w − r + dx)
+     * Interior span: [x + corner_radius − half_width,  x + width − corner_radius + half_width)
      * AA edge pixels (when ERUI_BORDER_AA): columns are stepped outward from the
-     *   interior edge (k = 0, 1, 2, ...) until SDF coverage drops to zero.
-     *   Pixel centre at step k has offset (dx + k + 0.5, dy - 0.5) from the arc
-     *   centre; coverage = r + 0.5 - dist.  Typically 1-3 iterations; up to
-     *   O(sqrt(r)) at the arc apex.
+     *   interior edge (step = 0, 1, 2, ...) until SDF coverage drops to zero.
+     *   Pixel centre at a step has offset (half_width + step + 0.5, corner_row - 0.5) from the arc
+     *   centre; coverage = corner_radius + 0.5 - distance.  Typically 1-3 iterations; up to
+     *   O(sqrt(corner_radius)) at the arc apex.
      */
-    for (int dy = 1; dy <= r; dy++)
+    for (int corner_row = 1; corner_row <= corner_radius; corner_row++)
     {
         /*
          * Compute the solid-span half-width using pixel-centre SDF sampling,
          * consistent with the AA fringe loop below.
          */
-        float r05 = (float)r - 0.5f;
-        float cy0 = (float)dy - 0.5f;
+        float sample_radius = (float)corner_radius - 0.5f;
+        float sample_y = (float)corner_row - 0.5f;
         /* At the last row the two squares are equal, and a fused multiply-subtract can leave a tiny negative. */
-        const float chord_sq = r05 * r05 - cy0 * cy0;
-        float dx_f = chord_sq > 0.0f ? sqrtf(chord_sq) : 0.0f;
-        int dx = (int)(dx_f + 0.5f); /* round to nearest */
-        int x0 = x + r - dx;
-        int x1 = x + w - r + dx;
+        const float chord_squared = sample_radius * sample_radius - sample_y * sample_y;
+        float exact_half_width = chord_squared > 0.0f ? sqrtf(chord_squared) : 0.0f;
+        int half_width = (int)(exact_half_width + 0.5f); /* round to nearest */
+        int x0 = x + corner_radius - half_width;
+        int x1 = x + width - corner_radius + half_width;
 
-        int top_py = y + r - dy;
-        int bot_py = y + h - r - 1 + dy;
+        int top_row_y = y + corner_radius - corner_row;
+        int bottom_row_y = y + height - corner_radius - 1 + corner_row;
 
-        fill_span(argb, top_py, x0, x1);
-        if (bot_py != top_py)
-            fill_span(argb, bot_py, x0, x1);
+        fill_span(argb, top_row_y, x0, x1);
+        if (bottom_row_y != top_row_y)
+            fill_span(argb, bottom_row_y, x0, x1);
 
 #if ERUI_BORDER_AA
-        for (int k = 0, kmax = er_rrect_fringe_max(r); k < kmax; k++)
+        for (int step = 0, step_count = er_rrect_fringe_max(corner_radius); step < step_count; step++)
         {
-            const float cov = er_rrect_fringe_cov(r, dx, dy, k);
-            if (cov <= 0.0f)
+            const float coverage = er_rrect_fringe_cov(corner_radius, half_width, corner_row, step);
+            if (coverage <= 0.0f)
                 break;
-            if (cov < 1.0f)
+            if (coverage < 1.0f)
             {
-                uint32_t aa = scale_straight_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f));
-                int ax_l = x0 - 1 - k;
-                int ax_r = x1 + k;
+                uint32_t fringe_color = scale_straight_alpha(argb, (uint8_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f));
+                int fringe_left_x = x0 - 1 - step;
+                int fringe_right_x = x1 + step;
 
-                if (ax_l >= x)
+                if (fringe_left_x >= x)
                 {
-                    er_blit_fill(aa, ax_l, top_py, 1, 1);
-                    if (bot_py != top_py)
-                        er_blit_fill(aa, ax_l, bot_py, 1, 1);
+                    er_blit_fill(fringe_color, fringe_left_x, top_row_y, 1, 1);
+                    if (bottom_row_y != top_row_y)
+                        er_blit_fill(fringe_color, fringe_left_x, bottom_row_y, 1, 1);
                 }
-                if (ax_r < x + w)
+                if (fringe_right_x < x + width)
                 {
-                    er_blit_fill(aa, ax_r, top_py, 1, 1);
-                    if (bot_py != top_py)
-                        er_blit_fill(aa, ax_r, bot_py, 1, 1);
+                    er_blit_fill(fringe_color, fringe_right_x, top_row_y, 1, 1);
+                    if (bottom_row_y != top_row_y)
+                        er_blit_fill(fringe_color, fringe_right_x, bottom_row_y, 1, 1);
                 }
             }
         }
@@ -160,34 +182,39 @@ void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius)
 }
 
 /**
- * @brief Computes the solid arc half-width at distance dy from a corner arc centre.
+ * @brief Computes the solid arc half-width at distance row_distance from a corner arc centre.
  *
  * Uses the same pixel-centre SDF sampling as er_rrect_fill so that
  * er_rrect_fill_corners and er_rrect_fill produce identical edges when all four
  * radii are equal.
  *
- * @param[in] r   Corner radius in pixels.
- * @param[in] dy  Distance from arc centre row (1 = outermost corner row).
+ * @param[in] radius        Corner radius in pixels.
+ * @param[in] row_distance  Distance from arc centre row (1 = outermost corner row).
  *
  * @return Number of solid pixels inward from the arc centre column.
  */
-static int corner_dx(int r, int dy)
+static int corner_dx(int radius, int row_distance)
 {
-    float r05 = (float)r - 0.5f;
-    float cy = (float)dy - 0.5f;
-    float val = r05 * r05 - cy * cy;
-    if (val < 0.0f)
+    float sample_radius = (float)radius - 0.5f;
+    float sample_y = (float)row_distance - 0.5f;
+    float chord_squared = sample_radius * sample_radius - sample_y * sample_y;
+    if (chord_squared < 0.0f)
         return 0;
-    return (int)(sqrtf(val) + 0.5f);
+    return (int)(sqrtf(chord_squared) + 0.5f);
 }
 
-void er_rrect_clamp_radii(int w, int h, int* r_tl, int* r_tr, int* r_br, int* r_bl)
+void er_rrect_clamp_radii(int width,
+                          int height,
+                          int* radius_top_left,
+                          int* radius_top_right,
+                          int* radius_bottom_right,
+                          int* radius_bottom_left)
 {
     /* Degenerate box: no area, so no corners to round. Handled first so the clamps below can divide
-     * and scale by w and h freely. */
-    if (w <= 0 || h <= 0)
+     * and scale by width and height freely. */
+    if (width <= 0 || height <= 0)
     {
-        *r_tl = *r_tr = *r_br = *r_bl = 0;
+        *radius_top_left = *radius_top_right = *radius_bottom_right = *radius_bottom_left = 0;
         return;
     }
 
@@ -196,162 +223,189 @@ void er_rrect_clamp_radii(int w, int h, int* r_tl, int* r_tr, int* r_br, int* r_
      * an otherwise-uniform set into the mixed path), and the proportional scaling there multiplies by
      * the radius, so a negative would survive it and come back out negative. Reachable from an app:
      * borderTopLeftRadius 10 with borderRadius -5 resolves to (10, -5, -5, -5). */
-    if (*r_tl < 0)
-        *r_tl = 0;
-    if (*r_tr < 0)
-        *r_tr = 0;
-    if (*r_br < 0)
-        *r_br = 0;
-    if (*r_bl < 0)
-        *r_bl = 0;
+    if (*radius_top_left < 0)
+        *radius_top_left = 0;
+    if (*radius_top_right < 0)
+        *radius_top_right = 0;
+    if (*radius_bottom_right < 0)
+        *radius_bottom_right = 0;
+    if (*radius_bottom_left < 0)
+        *radius_bottom_left = 0;
 
-    if (*r_tl == *r_tr && *r_tr == *r_br && *r_br == *r_bl)
+    if (*radius_top_left == *radius_top_right && *radius_top_right == *radius_bottom_right
+        && *radius_bottom_right == *radius_bottom_left)
     {
         /* Uniform: keep opposite arcs tangent, the same clamp er_rrect_fill applies, so a uniform
          * radius produces one shape no matter which of the two fills paints it. Cannot go negative:
-         * the input is >= 0 and w, h are >= 1, so (w - 1) / 2 is >= 0 too. */
-        int r = *r_tl;
-        if (2 * r >= w)
-            r = (w - 1) / 2;
-        if (2 * r >= h)
-            r = (h - 1) / 2;
-        *r_tl = *r_tr = *r_br = *r_bl = r;
+         * the input is >= 0 and width, height are >= 1, so (width - 1) / 2 is >= 0 too. */
+        int radius = *radius_top_left;
+        if (2 * radius >= width)
+            radius = (width - 1) / 2;
+        if (2 * radius >= height)
+            radius = (height - 1) / 2;
+        *radius_top_left = *radius_top_right = *radius_bottom_right = *radius_bottom_left = radius;
         return;
     }
 
     /* Mixed: scale each opposing pair down proportionally so neighbouring arcs do not overlap. */
-    if (*r_tl + *r_tr > w)
+    if (*radius_top_left + *radius_top_right > width)
     {
-        int s = *r_tl + *r_tr;
-        *r_tl = *r_tl * w / s;
-        *r_tr = *r_tr * w / s;
+        int pair_sum = *radius_top_left + *radius_top_right;
+        *radius_top_left = *radius_top_left * width / pair_sum;
+        *radius_top_right = *radius_top_right * width / pair_sum;
     }
-    if (*r_bl + *r_br > w)
+    if (*radius_bottom_left + *radius_bottom_right > width)
     {
-        int s = *r_bl + *r_br;
-        *r_bl = *r_bl * w / s;
-        *r_br = *r_br * w / s;
+        int pair_sum = *radius_bottom_left + *radius_bottom_right;
+        *radius_bottom_left = *radius_bottom_left * width / pair_sum;
+        *radius_bottom_right = *radius_bottom_right * width / pair_sum;
     }
-    if (*r_tl + *r_bl > h)
+    if (*radius_top_left + *radius_bottom_left > height)
     {
-        int s = *r_tl + *r_bl;
-        *r_tl = *r_tl * h / s;
-        *r_bl = *r_bl * h / s;
+        int pair_sum = *radius_top_left + *radius_bottom_left;
+        *radius_top_left = *radius_top_left * height / pair_sum;
+        *radius_bottom_left = *radius_bottom_left * height / pair_sum;
     }
-    if (*r_tr + *r_br > h)
+    if (*radius_top_right + *radius_bottom_right > height)
     {
-        int s = *r_tr + *r_br;
-        *r_tr = *r_tr * h / s;
-        *r_br = *r_br * h / s;
+        int pair_sum = *radius_top_right + *radius_bottom_right;
+        *radius_top_right = *radius_top_right * height / pair_sum;
+        *radius_bottom_right = *radius_bottom_right * height / pair_sum;
     }
 }
 
-void er_rrect_row(int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int row, ERRRectRow* out)
+void er_rrect_row(int width,
+                  int height,
+                  int radius_top_left,
+                  int radius_top_right,
+                  int radius_bottom_right,
+                  int radius_bottom_left,
+                  int row,
+                  ERRRectRow* out)
 {
     out->x0 = 0;
-    out->x1 = w;
-    out->l_r = out->l_dx = out->l_dy = 0;
-    out->r_r = out->r_dx = out->r_dy = 0;
+    out->x1 = width;
+    out->left_radius = out->left_half_width = out->left_row_distance = 0;
+    out->right_radius = out->right_half_width = out->right_row_distance = 0;
 
     /* Left edge: which corner arc (if any) cuts into this row. */
-    if (row < r_tl)
+    if (row < radius_top_left)
     {
-        out->l_r = r_tl;
-        out->l_dy = r_tl - row;
+        out->left_radius = radius_top_left;
+        out->left_row_distance = radius_top_left - row;
     }
-    else if (r_bl > 0 && row >= h - r_bl)
+    else if (radius_bottom_left > 0 && row >= height - radius_bottom_left)
     {
-        out->l_r = r_bl;
-        out->l_dy = row - (h - r_bl) + 1;
+        out->left_radius = radius_bottom_left;
+        out->left_row_distance = row - (height - radius_bottom_left) + 1;
     }
-    if (out->l_r > 0)
+    if (out->left_radius > 0)
     {
-        out->l_dx = corner_dx(out->l_r, out->l_dy);
-        out->x0 = out->l_r - out->l_dx;
+        out->left_half_width = corner_dx(out->left_radius, out->left_row_distance);
+        out->x0 = out->left_radius - out->left_half_width;
     }
 
     /* Right edge. */
-    if (row < r_tr)
+    if (row < radius_top_right)
     {
-        out->r_r = r_tr;
-        out->r_dy = r_tr - row;
+        out->right_radius = radius_top_right;
+        out->right_row_distance = radius_top_right - row;
     }
-    else if (r_br > 0 && row >= h - r_br)
+    else if (radius_bottom_right > 0 && row >= height - radius_bottom_right)
     {
-        out->r_r = r_br;
-        out->r_dy = row - (h - r_br) + 1;
+        out->right_radius = radius_bottom_right;
+        out->right_row_distance = row - (height - radius_bottom_right) + 1;
     }
-    if (out->r_r > 0)
+    if (out->right_radius > 0)
     {
-        out->r_dx = corner_dx(out->r_r, out->r_dy);
-        out->x1 = w - out->r_r + out->r_dx;
+        out->right_half_width = corner_dx(out->right_radius, out->right_row_distance);
+        out->x1 = width - out->right_radius + out->right_half_width;
     }
 }
 
-float er_rrect_fringe_cov(int r, int dx, int dy, int k)
+float er_rrect_fringe_cov(int radius, int half_width, int row_distance, int step)
 {
-    const float cy = (float)dy - 0.5f;
-    const float cx = (float)dx + (float)k + 0.5f;
-    return (float)r + 0.5f - sqrtf(cx * cx + cy * cy);
+    const float sample_y = (float)row_distance - 0.5f;
+    const float sample_x = (float)half_width + (float)step + 0.5f;
+    return (float)radius + 0.5f - sqrtf(sample_x * sample_x + sample_y * sample_y);
 }
 
-int er_rrect_fringe_len(int r, int dx, int dy)
+int er_rrect_fringe_len(int radius, int half_width, int row_distance)
 {
 #if ERUI_BORDER_AA
-    if (r <= 0)
+    if (radius <= 0)
         return 0;
-    int k = 0;
-    while (k < er_rrect_fringe_max(r) && er_rrect_fringe_cov(r, dx, dy, k) > 0.0f)
-        k++;
-    return k;
+    int step = 0;
+    while (step < er_rrect_fringe_max(radius) && er_rrect_fringe_cov(radius, half_width, row_distance, step) > 0.0f)
+        step++;
+    return step;
 #else
-    (void)r;
-    (void)dx;
-    (void)dy;
+    (void)radius;
+    (void)half_width;
+    (void)row_distance;
     return 0;
 #endif
 }
 
-void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl)
+void er_rrect_fill_corners(uint32_t argb,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           int radius_top_left,
+                           int radius_top_right,
+                           int radius_bottom_right,
+                           int radius_bottom_left)
 {
-    if (w <= 0 || h <= 0 || (argb >> 24) == 0)
+    if (width <= 0 || height <= 0 || (argb >> 24) == 0)
         return;
 
-    er_rrect_clamp_radii(w, h, &r_tl, &r_tr, &r_br, &r_bl);
+    er_rrect_clamp_radii(width, height, &radius_top_left, &radius_top_right, &radius_bottom_right, &radius_bottom_left);
 
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        ERRRectRow rr;
-        er_rrect_row(w, h, r_tl, r_tr, r_br, r_bl, row, &rr);
+        ERRRectRow span;
+        er_rrect_row(
+            width, height, radius_top_left, radius_top_right, radius_bottom_right, radius_bottom_left, row, &span);
 
-        fill_span(argb, y + row, x + rr.x0, x + rr.x1);
+        fill_span(argb, y + row, x + span.x0, x + span.x1);
 
 #if ERUI_BORDER_AA
         /* AA fringe on the left corner edge. */
-        for (int k = 0, kmax = er_rrect_fringe_max(rr.l_r); k < kmax; k++)
+        for (int step = 0, step_count = er_rrect_fringe_max(span.left_radius); step < step_count; step++)
         {
-            const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
-            if (cov <= 0.0f)
+            const float coverage =
+                er_rrect_fringe_cov(span.left_radius, span.left_half_width, span.left_row_distance, step);
+            if (coverage <= 0.0f)
                 break;
-            if (cov < 1.0f)
+            if (coverage < 1.0f)
             {
-                const int ax = x + rr.x0 - 1 - k;
-                if (ax >= x)
-                    er_blit_fill(scale_straight_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
+                const int fringe_x = x + span.x0 - 1 - step;
+                if (fringe_x >= x)
+                    er_blit_fill(scale_straight_alpha(argb, (uint8_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f)),
+                                 fringe_x,
+                                 y + row,
+                                 1,
+                                 1);
             }
         }
 
         /* AA fringe on the right corner edge. */
-        for (int k = 0, kmax = er_rrect_fringe_max(rr.r_r); k < kmax; k++)
+        for (int step = 0, step_count = er_rrect_fringe_max(span.right_radius); step < step_count; step++)
         {
-            const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
-            if (cov <= 0.0f)
+            const float coverage =
+                er_rrect_fringe_cov(span.right_radius, span.right_half_width, span.right_row_distance, step);
+            if (coverage <= 0.0f)
                 break;
-            if (cov < 1.0f)
+            if (coverage < 1.0f)
             {
-                const int ax = x + rr.x1 + k;
-                if (ax < x + w)
-                    er_blit_fill(scale_straight_alpha(argb, (uint8_t)(cov * 255.0f + 0.5f)), ax, y + row, 1, 1);
+                const int fringe_x = x + span.x1 + step;
+                if (fringe_x < x + width)
+                    er_blit_fill(scale_straight_alpha(argb, (uint8_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f)),
+                                 fringe_x,
+                                 y + row,
+                                 1,
+                                 1);
             }
         }
 #endif
@@ -359,10 +413,11 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
 }
 
 /** @brief Subtracts an inset from a corner radius without going negative. */
-static int inset_radius(int r, int a, int b)
+static int inset_radius(int radius, int first_edge, int second_edge)
 {
-    const int d = (a > b) ? a : b; /* the thicker of the two edges meeting at this corner */
-    return (r > d) ? r - d : 0;
+    const int thicker_edge =
+        (first_edge > second_edge) ? first_edge : second_edge; /* the thicker of the two edges meeting at this corner */
+    return (radius > thicker_edge) ? radius - thicker_edge : 0;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -383,36 +438,37 @@ static int inset_radius(int r, int a, int b)
  */
 typedef struct
 {
-    uint8_t style;                /**< 0 = solid (the perimeter walk is skipped entirely). */
-    bool uniform;                 /**< One colour, no dashes: whole runs emit in a single fill. */
-    bool one_color;               /**< All four edges the same colour: no mitre to resolve. */
-    int w, h;                     /**< Outer box size. */
-    int r_tl, r_tr, r_br, r_bl;   /**< Clamped outer radii. */
-    int bl, bt, br, bb;           /**< Per-edge band widths, clamped to >= 0. */
-    uint32_t cl, ct, cr, cb;      /**< Per-edge colours. */
-    float n_tl, n_tr, n_br, n_bl; /**< 1 / |(width, width)| per corner: scales a mitre cross product to pixels. */
-    float seg[8];                 /**< Arc-length at the start of each segment, clockwise from (r_tl, 0). */
-    float period;                 /**< One dash + gap. */
-    float on_len;                 /**< Painted share of a period. */
+    uint8_t style;     /**< 0 = solid (the perimeter walk is skipped entirely). */
+    bool uniform;      /**< One colour, no dashes: whole runs emit in a single fill. */
+    bool one_color;    /**< All four edges the same colour: no mitre to resolve. */
+    int width, height; /**< Outer box size. */
+    int radius_top_left, radius_top_right, radius_bottom_right, radius_bottom_left; /**< Clamped outer radii. */
+    int band_left, band_top, band_right, band_bottom;          /**< Per-edge band widths, clamped to >= 0. */
+    uint32_t left_color, top_color, right_color, bottom_color; /**< Per-edge colours. */
+    float mitre_scale_top_left, mitre_scale_top_right, mitre_scale_bottom_right,
+        mitre_scale_bottom_left; /**< 1 / |(width, width)| per corner: scales a mitre cross product to pixels. */
+    float segment_start[8];      /**< Arc-length at the start of each segment, clockwise from (radius_top_left, 0). */
+    float period;                /**< One dash + gap. */
+    float on_length;             /**< Painted share of a period. */
 } BandCtx;
 
 /**
  * @brief Mixes two straight-alpha ARGB8888 colours channel by channel.
  *
- * @param[in] a     Colour at t = 0.
- * @param[in] b     Colour at t = 256.
- * @param[in] t256  Blend position in [0, 256].
+ * @param[in] from      Colour at position 0.
+ * @param[in] to        Colour at position 256.
+ * @param[in] position  Blend position in [0, 256].
  *
  * @return The blended colour.
  */
-static uint32_t mix_argb(uint32_t a, uint32_t b, int t256)
+static uint32_t mix_argb(uint32_t from, uint32_t to, int position)
 {
     uint32_t out = 0;
-    for (int s = 0; s < 32; s += 8)
+    for (int shift = 0; shift < 32; shift += 8)
     {
-        const int ca = (int)((a >> s) & 0xFFu);
-        const int cb = (int)((b >> s) & 0xFFu);
-        out |= (uint32_t)(ca + (cb - ca) * t256 / 256) << s;
+        const int from_channel = (int)((from >> shift) & 0xFFu);
+        const int to_channel = (int)((to >> shift) & 0xFFu);
+        out |= (uint32_t)(from_channel + (to_channel - from_channel) * position / MIX_POSITION_SCALE) << shift;
     }
     return out;
 }
@@ -424,54 +480,56 @@ static uint32_t mix_argb(uint32_t a, uint32_t b, int t256)
  * anti-aliased — and at 45 degrees a hard diagonal staircases badly, reading as the two colours
  * interlocking rather than meeting on a line.
  *
- * @param[in] neg  Colour on the negative side of the seam.
- * @param[in] pos  Colour on the positive side.
- * @param[in] d    Signed distance from the pixel centre to the seam, in pixels, positive toward @p pos.
+ * @param[in] negative_color  Colour on the negative side of the seam.
+ * @param[in] positive_color  Colour on the positive side.
+ * @param[in] distance        Signed distance from the pixel centre to the seam, in pixels, positive toward
+ *                            @p positive_color.
  *
  * @return The colour for this pixel.
  */
-static uint32_t mitre_mix(uint32_t neg, uint32_t pos, float d)
+static uint32_t mitre_mix(uint32_t negative_color, uint32_t positive_color, float distance)
 {
-    if (neg == pos)
-        return pos;
+    if (negative_color == positive_color)
+        return positive_color;
 #if ERUI_BORDER_AA
-    const float cov = d + 0.5f;
-    if (cov <= 0.0f)
-        return neg;
-    if (cov >= 1.0f)
-        return pos;
-    return mix_argb(neg, pos, (int)(cov * 256.0f + 0.5f));
+    const float coverage = distance + 0.5f;
+    if (coverage <= 0.0f)
+        return negative_color;
+    if (coverage >= 1.0f)
+        return positive_color;
+    return mix_argb(negative_color, positive_color, (int)(coverage * (float)MIX_POSITION_SCALE + 0.5f));
 #else
-    return (d > 0.0f) ? pos : neg;
+    return (distance > 0.0f) ? positive_color : negative_color;
 #endif
 }
 
-/** @brief 1 / |(a, b)|, or 0 when the corner has no band at all. */
-static float mitre_norm(int a, int b)
+/** @brief 1 / |(first_width, second_width)|, or 0 when the corner has no band at all. */
+static float mitre_norm(int first_width, int second_width)
 {
-    const float n = sqrtf((float)(a * a + b * b));
-    return (n > 0.0f) ? (1.0f / n) : 0.0f;
+    const float length = sqrtf((float)(first_width * first_width + second_width * second_width));
+    return (length > 0.0f) ? (1.0f / length) : 0.0f;
 }
 
 /**
- * @brief atan(a/b) for non-negative arguments, to about 0.0015 rad.
+ * @brief atan(numerator/denominator) for non-negative arguments, to about 0.0015 rad.
  *
  * Accurate to a fraction of a pixel at any radius a border is drawn at, and a handful of multiplies
  * rather than a libm call — this runs per band pixel inside the corner arcs, on parts without an FPU.
  *
- * @param[in] a  Numerator, >= 0.
- * @param[in] b  Denominator, >= 0.
+ * @param[in] numerator    Numerator, >= 0.
+ * @param[in] denominator  Denominator, >= 0.
  *
  * @return The angle in radians, within [0, pi/2].
  */
-static float atan_ratio(float a, float b)
+static float atan_ratio(float numerator, float denominator)
 {
-    if (b <= 0.0f)
-        return (a > 0.0f) ? ER_HALF_PI : 0.0f;
-    const bool steep = (a > b);
-    const float z = steep ? (b / a) : (a / b);
-    const float t = z * (0.7853981634f - (z - 1.0f) * (0.2447f + 0.0663f * z));
-    return steep ? (ER_HALF_PI - t) : t;
+    if (denominator <= 0.0f)
+        return (numerator > 0.0f) ? ER_HALF_PI : 0.0f;
+    const bool steep = (numerator > denominator);
+    const float ratio = steep ? (denominator / numerator) : (numerator / denominator);
+    const float angle =
+        ratio * (ATAN_RATIO_QUARTER_PI - (ratio - 1.0f) * (ATAN_RATIO_POLY_A + ATAN_RATIO_POLY_B * ratio));
+    return steep ? (ER_HALF_PI - angle) : angle;
 }
 
 /**
@@ -480,67 +538,86 @@ static float atan_ratio(float a, float b)
  * The nominal pattern (8-on/6-off dashed, 3-on/3-off dotted) is stretched slightly so a whole number
  * of periods spans the perimeter — otherwise the walk closes on a stub dash at the top-left corner.
  *
- * @param[out] c      Receives the shading context.
- * @param[in]  b       Per-edge widths, colours and style.
- * @param[in]  w      Outer width in pixels.
- * @param[in]  h      Outer height in pixels.
- * @param[in]  r_tl   Clamped top-left radius.
- * @param[in]  r_tr   Clamped top-right radius.
- * @param[in]  r_br   Clamped bottom-right radius.
- * @param[in]  r_bl   Clamped bottom-left radius.
+ * @param[out] band                 Receives the shading context.
+ * @param[in]  border               Per-edge widths, colours and style.
+ * @param[in]  width                Outer width in pixels.
+ * @param[in]  height               Outer height in pixels.
+ * @param[in]  radius_top_left      Clamped top-left radius.
+ * @param[in]  radius_top_right     Clamped top-right radius.
+ * @param[in]  radius_bottom_right  Clamped bottom-right radius.
+ * @param[in]  radius_bottom_left   Clamped bottom-left radius.
  */
-static void band_init(BandCtx* c, const ERRRectBorder* b, int w, int h, int r_tl, int r_tr, int r_br, int r_bl)
+static void band_init(BandCtx* band,
+                      const ERRRectBorder* border,
+                      int width,
+                      int height,
+                      int radius_top_left,
+                      int radius_top_right,
+                      int radius_bottom_right,
+                      int radius_bottom_left)
 {
-    const uint8_t style = b->style;
-    c->style = style;
-    c->w = w;
-    c->h = h;
-    c->r_tl = r_tl;
-    c->r_tr = r_tr;
-    c->r_br = r_br;
-    c->r_bl = r_bl;
-    c->bl = (b->l > 0) ? b->l : 0;
-    c->bt = (b->t > 0) ? b->t : 0;
-    c->br = (b->r > 0) ? b->r : 0;
-    c->bb = (b->bo > 0) ? b->bo : 0;
-    c->cl = b->cl;
-    c->ct = b->ct;
-    c->cr = b->cr;
-    c->cb = b->cb;
-    c->one_color = (b->cl == b->ct) && (b->ct == b->cr) && (b->cr == b->cb);
-    c->uniform = (style == 0) && c->one_color;
-    c->n_tl = mitre_norm(c->bl, c->bt);
-    c->n_tr = mitre_norm(c->br, c->bt);
-    c->n_br = mitre_norm(c->br, c->bb);
-    c->n_bl = mitre_norm(c->bl, c->bb);
-    if (style == 0)
+    const uint8_t style = border->style;
+    band->style = style;
+    band->width = width;
+    band->height = height;
+    band->radius_top_left = radius_top_left;
+    band->radius_top_right = radius_top_right;
+    band->radius_bottom_right = radius_bottom_right;
+    band->radius_bottom_left = radius_bottom_left;
+    band->band_left = (border->left > 0) ? border->left : 0;
+    band->band_top = (border->top > 0) ? border->top : 0;
+    band->band_right = (border->right > 0) ? border->right : 0;
+    band->band_bottom = (border->bottom > 0) ? border->bottom : 0;
+    band->left_color = border->left_color;
+    band->top_color = border->top_color;
+    band->right_color = border->right_color;
+    band->bottom_color = border->bottom_color;
+    band->one_color = (border->left_color == border->top_color) && (border->top_color == border->right_color)
+                      && (border->right_color == border->bottom_color);
+    band->uniform = (style == BORDER_STYLE_SOLID) && band->one_color;
+    band->mitre_scale_top_left = mitre_norm(band->band_left, band->band_top);
+    band->mitre_scale_top_right = mitre_norm(band->band_right, band->band_top);
+    band->mitre_scale_bottom_right = mitre_norm(band->band_right, band->band_bottom);
+    band->mitre_scale_bottom_left = mitre_norm(band->band_left, band->band_bottom);
+    if (style == BORDER_STYLE_SOLID)
         return;
 
-    const float top = (float)(w - r_tl - r_tr) > 0.0f ? (float)(w - r_tl - r_tr) : 0.0f;
-    const float right = (float)(h - r_tr - r_br) > 0.0f ? (float)(h - r_tr - r_br) : 0.0f;
-    const float bottom = (float)(w - r_br - r_bl) > 0.0f ? (float)(w - r_br - r_bl) : 0.0f;
-    const float left = (float)(h - r_bl - r_tl) > 0.0f ? (float)(h - r_bl - r_tl) : 0.0f;
+    const float top = (float)(width - radius_top_left - radius_top_right) > 0.0f
+                          ? (float)(width - radius_top_left - radius_top_right)
+                          : 0.0f;
+    const float right = (float)(height - radius_top_right - radius_bottom_right) > 0.0f
+                            ? (float)(height - radius_top_right - radius_bottom_right)
+                            : 0.0f;
+    const float bottom = (float)(width - radius_bottom_right - radius_bottom_left) > 0.0f
+                             ? (float)(width - radius_bottom_right - radius_bottom_left)
+                             : 0.0f;
+    const float left = (float)(height - radius_bottom_left - radius_top_left) > 0.0f
+                           ? (float)(height - radius_bottom_left - radius_top_left)
+                           : 0.0f;
 
     /* Clockwise from the top edge's left end. */
-    c->seg[0] = 0.0f;                                 /* top edge, left -> right */
-    c->seg[1] = c->seg[0] + top;                      /* top-right arc */
-    c->seg[2] = c->seg[1] + ER_HALF_PI * (float)r_tr; /* right edge, top -> bottom */
-    c->seg[3] = c->seg[2] + right;                    /* bottom-right arc */
-    c->seg[4] = c->seg[3] + ER_HALF_PI * (float)r_br; /* bottom edge, right -> left */
-    c->seg[5] = c->seg[4] + bottom;                   /* bottom-left arc */
-    c->seg[6] = c->seg[5] + ER_HALF_PI * (float)r_bl; /* left edge, bottom -> top */
-    c->seg[7] = c->seg[6] + left;                     /* top-left arc */
-    const float perim = c->seg[7] + ER_HALF_PI * (float)r_tl;
+    band->segment_start[0] = 0.0f;                         /* top edge, left -> right */
+    band->segment_start[1] = band->segment_start[0] + top; /* top-right arc */
+    band->segment_start[2] =
+        band->segment_start[1] + ER_HALF_PI * (float)radius_top_right; /* right edge, top -> bottom */
+    band->segment_start[3] = band->segment_start[2] + right;           /* bottom-right arc */
+    band->segment_start[4] =
+        band->segment_start[3] + ER_HALF_PI * (float)radius_bottom_right; /* bottom edge, right -> left */
+    band->segment_start[5] = band->segment_start[4] + bottom;             /* bottom-left arc */
+    band->segment_start[6] =
+        band->segment_start[5] + ER_HALF_PI * (float)radius_bottom_left; /* left edge, bottom -> top */
+    band->segment_start[7] = band->segment_start[6] + left;              /* top-left arc */
+    const float perimeter = band->segment_start[7] + ER_HALF_PI * (float)radius_top_left;
 
-    const float on = (style == 1) ? 8.0f : 3.0f;
-    const float off = (style == 1) ? 6.0f : 3.0f;
-    const float nominal = on + off;
-    float periods = (perim > 0.0f) ? (perim / nominal) : 1.0f;
+    const float dash_length = (style == BORDER_STYLE_DASHED) ? BORDER_DASH_LENGTH : BORDER_DOT_LENGTH;
+    const float gap_length = (style == BORDER_STYLE_DASHED) ? BORDER_DASH_GAP : BORDER_DOT_GAP;
+    const float nominal_period = dash_length + gap_length;
+    float periods = (perimeter > 0.0f) ? (perimeter / nominal_period) : 1.0f;
     periods = (float)(int)(periods + 0.5f); /* round to a whole number so the pattern closes */
     if (periods < 1.0f)
         periods = 1.0f;
-    c->period = (perim > 0.0f) ? (perim / periods) : nominal;
-    c->on_len = c->period * (on / nominal);
+    band->period = (perimeter > 0.0f) ? (perimeter / periods) : nominal_period;
+    band->on_length = band->period * (dash_length / nominal_period);
 }
 
 /**
@@ -552,135 +629,164 @@ static void band_init(BandCtx* c, const ERRRectBorder* b, int w, int h, int r_tl
  * to the square case, because those pixels sit up-and-left of the centre rather than down-and-right
  * of a corner point.
  *
- * @param[in] c   Shading context.
- * @param[in] px  Pixel column, relative to the box's left edge.
- * @param[in] py  Pixel row, relative to the box's top edge.
+ * @param[in] band     Shading context.
+ * @param[in] pixel_x  Pixel column, relative to the box's left edge.
+ * @param[in] pixel_y  Pixel row, relative to the box's top edge.
  *
  * @return The owning edge's colour.
  */
-static uint32_t band_color(const BandCtx* c, int px, int py)
+static uint32_t band_color(const BandCtx* band, int pixel_x, int pixel_y)
 {
-    if (c->one_color)
-        return c->ct;
+    if (band->one_color)
+        return band->top_color;
 
     /* Pixel centre: the seam is a real line, so it has to be measured from the centre of the pixel
      * to fade correctly rather than snapping to the grid. */
-    const float fx = (float)px + 0.5f;
-    const float fy = (float)py + 0.5f;
+    const float center_x = (float)pixel_x + 0.5f;
+    const float center_y = (float)pixel_y + 0.5f;
 
     /* Top-left. The rounded case measures from the arc centre, which is why its terms read inverted
      * next to the square one: those pixels sit up-and-left of the centre, not down-and-right of a
      * corner point. Positive distance is the top edge's side. */
-    if (c->r_tl > 0)
+    if (band->radius_top_left > 0)
     {
-        if (px < c->r_tl && py < c->r_tl)
-            return mitre_mix(
-                c->cl, c->ct, ((float)c->bt * ((float)c->r_tl - fy) - (float)c->bl * ((float)c->r_tl - fx)) * c->n_tl);
+        if (pixel_x < band->radius_top_left && pixel_y < band->radius_top_left)
+            return mitre_mix(band->left_color,
+                             band->top_color,
+                             ((float)band->band_top * ((float)band->radius_top_left - center_y)
+                              - (float)band->band_left * ((float)band->radius_top_left - center_x))
+                                 * band->mitre_scale_top_left);
     }
-    else if (px < c->bl && py < c->bt)
+    else if (pixel_x < band->band_left && pixel_y < band->band_top)
     {
-        return mitre_mix(c->cl, c->ct, ((float)c->bt * fx - (float)c->bl * fy) * c->n_tl);
+        return mitre_mix(band->left_color,
+                         band->top_color,
+                         ((float)band->band_top * center_x - (float)band->band_left * center_y)
+                             * band->mitre_scale_top_left);
     }
 
     /* Top-right. */
-    if (c->r_tr > 0)
+    if (band->radius_top_right > 0)
     {
-        if (px >= c->w - c->r_tr && py < c->r_tr)
-            return mitre_mix(c->cr,
-                             c->ct,
-                             ((float)c->bt * ((float)c->r_tr - fy) - (float)c->br * (fx - (float)(c->w - c->r_tr)))
-                                 * c->n_tr);
+        if (pixel_x >= band->width - band->radius_top_right && pixel_y < band->radius_top_right)
+            return mitre_mix(band->right_color,
+                             band->top_color,
+                             ((float)band->band_top * ((float)band->radius_top_right - center_y)
+                              - (float)band->band_right * (center_x - (float)(band->width - band->radius_top_right)))
+                                 * band->mitre_scale_top_right);
     }
-    else if (px >= c->w - c->br && py < c->bt)
+    else if (pixel_x >= band->width - band->band_right && pixel_y < band->band_top)
     {
-        return mitre_mix(c->cr, c->ct, ((float)c->bt * ((float)c->w - fx) - (float)c->br * fy) * c->n_tr);
+        return mitre_mix(band->right_color,
+                         band->top_color,
+                         ((float)band->band_top * ((float)band->width - center_x) - (float)band->band_right * center_y)
+                             * band->mitre_scale_top_right);
     }
 
     /* Bottom-right. */
-    if (c->r_br > 0)
+    if (band->radius_bottom_right > 0)
     {
-        if (px >= c->w - c->r_br && py >= c->h - c->r_br)
-            return mitre_mix(
-                c->cr,
-                c->cb,
-                ((float)c->bb * (fy - (float)(c->h - c->r_br)) - (float)c->br * (fx - (float)(c->w - c->r_br)))
-                    * c->n_br);
+        if (pixel_x >= band->width - band->radius_bottom_right && pixel_y >= band->height - band->radius_bottom_right)
+            return mitre_mix(band->right_color,
+                             band->bottom_color,
+                             ((float)band->band_bottom * (center_y - (float)(band->height - band->radius_bottom_right))
+                              - (float)band->band_right * (center_x - (float)(band->width - band->radius_bottom_right)))
+                                 * band->mitre_scale_bottom_right);
     }
-    else if (px >= c->w - c->br && py >= c->h - c->bb)
+    else if (pixel_x >= band->width - band->band_right && pixel_y >= band->height - band->band_bottom)
     {
-        return mitre_mix(
-            c->cr, c->cb, ((float)c->bb * ((float)c->w - fx) - (float)c->br * ((float)c->h - fy)) * c->n_br);
+        return mitre_mix(band->right_color,
+                         band->bottom_color,
+                         ((float)band->band_bottom * ((float)band->width - center_x)
+                          - (float)band->band_right * ((float)band->height - center_y))
+                             * band->mitre_scale_bottom_right);
     }
 
     /* Bottom-left. */
-    if (c->r_bl > 0)
+    if (band->radius_bottom_left > 0)
     {
-        if (px < c->r_bl && py >= c->h - c->r_bl)
-            return mitre_mix(c->cl,
-                             c->cb,
-                             ((float)c->bb * (fy - (float)(c->h - c->r_bl)) - (float)c->bl * ((float)c->r_bl - fx))
-                                 * c->n_bl);
+        if (pixel_x < band->radius_bottom_left && pixel_y >= band->height - band->radius_bottom_left)
+            return mitre_mix(band->left_color,
+                             band->bottom_color,
+                             ((float)band->band_bottom * (center_y - (float)(band->height - band->radius_bottom_left))
+                              - (float)band->band_left * ((float)band->radius_bottom_left - center_x))
+                                 * band->mitre_scale_bottom_left);
     }
-    else if (px < c->bl && py >= c->h - c->bb)
+    else if (pixel_x < band->band_left && pixel_y >= band->height - band->band_bottom)
     {
-        return mitre_mix(c->cl, c->cb, ((float)c->bb * fx - (float)c->bl * ((float)c->h - fy)) * c->n_bl);
+        return mitre_mix(
+            band->left_color,
+            band->bottom_color,
+            ((float)band->band_bottom * center_x - (float)band->band_left * ((float)band->height - center_y))
+                * band->mitre_scale_bottom_left);
     }
 
     /* Clear of every corner: the pixel hugs exactly one straight edge. */
-    const int dt = py;
-    const int db = c->h - 1 - py;
-    const int dl = px;
-    const int dr = c->w - 1 - px;
-    if (dt <= db && dt <= dl && dt <= dr)
-        return c->ct;
-    if (dr <= db && dr <= dl)
-        return c->cr;
-    if (db <= dl)
-        return c->cb;
-    return c->cl;
+    const int distance_top = pixel_y;
+    const int distance_bottom = band->height - 1 - pixel_y;
+    const int distance_left = pixel_x;
+    const int distance_right = band->width - 1 - pixel_x;
+    if (distance_top <= distance_bottom && distance_top <= distance_left && distance_top <= distance_right)
+        return band->top_color;
+    if (distance_right <= distance_bottom && distance_right <= distance_left)
+        return band->right_color;
+    if (distance_bottom <= distance_left)
+        return band->bottom_color;
+    return band->left_color;
 }
 
 /**
  * @brief Maps a band pixel to its distance along the rounded perimeter.
  *
- * @param[in] d   Shading context.
- * @param[in] px  Pixel column, relative to the box's left edge.
- * @param[in] py  Pixel row, relative to the box's top edge.
+ * @param[in] band     Shading context.
+ * @param[in] pixel_x  Pixel column, relative to the box's left edge.
+ * @param[in] pixel_y  Pixel row, relative to the box's top edge.
  *
  * @return Arc length from the start of the top edge, clockwise.
  */
-static float perimeter_s(const BandCtx* d, int px, int py)
+static float perimeter_s(const BandCtx* band, int pixel_x, int pixel_y)
 {
     /* Corner arcs, each measured from where the preceding straight edge ends. */
-    if (px < d->r_tl && py < d->r_tl)
-        return d->seg[7] + (float)d->r_tl * atan_ratio((float)(d->r_tl - py), (float)(d->r_tl - px));
-    if (px >= d->w - d->r_tr && py < d->r_tr)
-        return d->seg[1] + (float)d->r_tr * atan_ratio((float)(px - (d->w - d->r_tr)), (float)(d->r_tr - py));
-    if (px >= d->w - d->r_br && py >= d->h - d->r_br)
-        return d->seg[3] + (float)d->r_br * atan_ratio((float)(py - (d->h - d->r_br)), (float)(px - (d->w - d->r_br)));
-    if (px < d->r_bl && py >= d->h - d->r_bl)
-        return d->seg[5] + (float)d->r_bl * atan_ratio((float)(d->r_bl - px), (float)(py - (d->h - d->r_bl)));
+    if (pixel_x < band->radius_top_left && pixel_y < band->radius_top_left)
+        return band->segment_start[7]
+               + (float)band->radius_top_left
+                     * atan_ratio((float)(band->radius_top_left - pixel_y), (float)(band->radius_top_left - pixel_x));
+    if (pixel_x >= band->width - band->radius_top_right && pixel_y < band->radius_top_right)
+        return band->segment_start[1]
+               + (float)band->radius_top_right
+                     * atan_ratio((float)(pixel_x - (band->width - band->radius_top_right)),
+                                  (float)(band->radius_top_right - pixel_y));
+    if (pixel_x >= band->width - band->radius_bottom_right && pixel_y >= band->height - band->radius_bottom_right)
+        return band->segment_start[3]
+               + (float)band->radius_bottom_right
+                     * atan_ratio((float)(pixel_y - (band->height - band->radius_bottom_right)),
+                                  (float)(pixel_x - (band->width - band->radius_bottom_right)));
+    if (pixel_x < band->radius_bottom_left && pixel_y >= band->height - band->radius_bottom_left)
+        return band->segment_start[5]
+               + (float)band->radius_bottom_left
+                     * atan_ratio((float)(band->radius_bottom_left - pixel_x),
+                                  (float)(pixel_y - (band->height - band->radius_bottom_left)));
 
     /* Straight runs: a band pixel clear of the arcs belongs to whichever edge it hugs. */
-    const int dt = py;
-    const int db = d->h - 1 - py;
-    const int dl = px;
-    const int dr = d->w - 1 - px;
-    if (dt <= db && dt <= dl && dt <= dr)
-        return d->seg[0] + (float)(px - d->r_tl);
-    if (dr <= db && dr <= dl)
-        return d->seg[2] + (float)(py - d->r_tr);
-    if (db <= dl)
-        return d->seg[4] + (float)((d->w - d->r_br) - px);
-    return d->seg[6] + (float)((d->h - d->r_bl) - py);
+    const int distance_top = pixel_y;
+    const int distance_bottom = band->height - 1 - pixel_y;
+    const int distance_left = pixel_x;
+    const int distance_right = band->width - 1 - pixel_x;
+    if (distance_top <= distance_bottom && distance_top <= distance_left && distance_top <= distance_right)
+        return band->segment_start[0] + (float)(pixel_x - band->radius_top_left);
+    if (distance_right <= distance_bottom && distance_right <= distance_left)
+        return band->segment_start[2] + (float)(pixel_y - band->radius_top_right);
+    if (distance_bottom <= distance_left)
+        return band->segment_start[4] + (float)((band->width - band->radius_bottom_right) - pixel_x);
+    return band->segment_start[6] + (float)((band->height - band->radius_bottom_left) - pixel_y);
 }
 
 /** @brief True when the dash pattern paints the band at this pixel (always true for a solid border). */
-static bool dash_on(const BandCtx* d, int px, int py)
+static bool dash_on(const BandCtx* band, int pixel_x, int pixel_y)
 {
-    if (d->style == 0)
+    if (band->style == BORDER_STYLE_SOLID)
         return true;
-    return fmodf(perimeter_s(d, px, py), d->period) < d->on_len;
+    return fmodf(perimeter_s(band, pixel_x, pixel_y), band->period) < band->on_length;
 }
 
 /**
@@ -690,131 +796,164 @@ static bool dash_on(const BandCtx* d, int px, int py)
  * pixel and equal neighbours are coalesced, so a corner that changes colour mid-run still costs only
  * the two fills it needs.
  *
- * @param[in] c      Shading context.
- * @param[in] x      Box left edge in framebuffer pixels.
- * @param[in] y_abs  Scanline in framebuffer pixels.
- * @param[in] row    Scanline relative to the box's top edge.
- * @param[in] x0     Run start, relative to the box's left edge.
- * @param[in] x1     Run end (exclusive), relative to the box's left edge.
+ * @param[in] band        Shading context.
+ * @param[in] x           Box left edge in framebuffer pixels.
+ * @param[in] absolute_y  Scanline in framebuffer pixels.
+ * @param[in] row         Scanline relative to the box's top edge.
+ * @param[in] x0          Run start, relative to the box's left edge.
+ * @param[in] x1          Run end (exclusive), relative to the box's left edge.
  */
-static void band_run(const BandCtx* c, int x, int y_abs, int row, int x0, int x1)
+static void band_run(const BandCtx* band, int x, int absolute_y, int row, int x0, int x1)
 {
     if (x1 <= x0)
         return;
-    if (c->uniform)
+    if (band->uniform)
     {
-        if (c->cl >> 24)
-            fill_span(c->cl, y_abs, x + x0, x + x1);
+        if (band->left_color >> 24)
+            fill_span(band->left_color, absolute_y, x + x0, x + x1);
         return;
     }
-    int run = -1;
-    uint32_t run_col = 0;
-    for (int i = x0; i <= x1; i++)
+    int run_start = -1;
+    uint32_t run_color = 0;
+    for (int column = x0; column <= x1; column++)
     {
-        uint32_t col = 0;
-        bool on = false;
-        if (i < x1)
+        uint32_t color = 0;
+        bool painted = false;
+        if (column < x1)
         {
-            col = band_color(c, i, row);
-            on = ((col >> 24) != 0) && dash_on(c, i, row);
+            color = band_color(band, column, row);
+            painted = ((color >> 24) != 0) && dash_on(band, column, row);
         }
-        if (run >= 0 && (!on || col != run_col))
+        if (run_start >= 0 && (!painted || color != run_color))
         {
-            fill_span(run_col, y_abs, x + run, x + i);
-            run = -1;
+            fill_span(run_color, absolute_y, x + run_start, x + column);
+            run_start = -1;
         }
-        if (on && run < 0)
+        if (painted && run_start < 0)
         {
-            run = i;
-            run_col = col;
+            run_start = column;
+            run_color = color;
         }
     }
 }
 
-void er_rrect_fill_ring_edges(
-    int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, const ERRRectBorder* b)
+void er_rrect_fill_ring_edges(int x,
+                              int y,
+                              int width,
+                              int height,
+                              int radius_top_left,
+                              int radius_top_right,
+                              int radius_bottom_right,
+                              int radius_bottom_left,
+                              const ERRRectBorder* border)
 {
-    if (w <= 0 || h <= 0 || !b)
+    if (width <= 0 || height <= 0 || !border)
         return;
-    if (b->l <= 0 && b->t <= 0 && b->r <= 0 && b->bo <= 0)
+    if (border->left <= 0 && border->top <= 0 && border->right <= 0 && border->bottom <= 0)
         return;
-    if ((b->cl >> 24) == 0 && (b->ct >> 24) == 0 && (b->cr >> 24) == 0 && (b->cb >> 24) == 0)
+    if ((border->left_color >> 24) == 0 && (border->top_color >> 24) == 0 && (border->right_color >> 24) == 0
+        && (border->bottom_color >> 24) == 0)
         return;
 
-    er_rrect_clamp_radii(w, h, &r_tl, &r_tr, &r_br, &r_bl);
+    er_rrect_clamp_radii(width, height, &radius_top_left, &radius_top_right, &radius_bottom_right, &radius_bottom_left);
 
     /* The inset shape the band is hollowed out by. Corners stay concentric by shrinking each radius
      * by the thicker of the two edges meeting there; a band thick enough to consume the interior
      * leaves no hole at all. */
-    const int bl = (b->l > 0) ? b->l : 0;
-    const int bt = (b->t > 0) ? b->t : 0;
-    const int br = (b->r > 0) ? b->r : 0;
-    const int bb = (b->bo > 0) ? b->bo : 0;
-    const int iw = w - bl - br;
-    const int ih = h - bt - bb;
-    const bool has_inner = (iw > 0 && ih > 0);
-    int ir_tl = inset_radius(r_tl, bl, bt);
-    int ir_tr = inset_radius(r_tr, br, bt);
-    int ir_br = inset_radius(r_br, br, bb);
-    int ir_bl = inset_radius(r_bl, bl, bb);
+    const int band_left = (border->left > 0) ? border->left : 0;
+    const int band_top = (border->top > 0) ? border->top : 0;
+    const int band_right = (border->right > 0) ? border->right : 0;
+    const int band_bottom = (border->bottom > 0) ? border->bottom : 0;
+    const int inner_width = width - band_left - band_right;
+    const int inner_height = height - band_top - band_bottom;
+    const bool has_inner = (inner_width > 0 && inner_height > 0);
+    int inner_radius_top_left = inset_radius(radius_top_left, band_left, band_top);
+    int inner_radius_top_right = inset_radius(radius_top_right, band_right, band_top);
+    int inner_radius_bottom_right = inset_radius(radius_bottom_right, band_right, band_bottom);
+    int inner_radius_bottom_left = inset_radius(radius_bottom_left, band_left, band_bottom);
     if (has_inner)
-        er_rrect_clamp_radii(iw, ih, &ir_tl, &ir_tr, &ir_br, &ir_bl);
+        er_rrect_clamp_radii(inner_width,
+                             inner_height,
+                             &inner_radius_top_left,
+                             &inner_radius_top_right,
+                             &inner_radius_bottom_right,
+                             &inner_radius_bottom_left);
 
     BandCtx band;
-    band_init(&band, b, w, h, r_tl, r_tr, r_br, r_bl);
+    band_init(&band, border, width, height, radius_top_left, radius_top_right, radius_bottom_right, radius_bottom_left);
 
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        ERRRectRow o;
-        er_rrect_row(w, h, r_tl, r_tr, r_br, r_bl, row, &o);
+        ERRRectRow outer;
+        er_rrect_row(
+            width, height, radius_top_left, radius_top_right, radius_bottom_right, radius_bottom_left, row, &outer);
 
-        const int irow = row - bt;
-        const bool inner_here = has_inner && irow >= 0 && irow < ih;
+        const int inner_row = row - band_top;
+        const bool inner_here = has_inner && inner_row >= 0 && inner_row < inner_height;
 
         if (!inner_here)
         {
             /* A row above or below the interior: band all the way across. */
-            band_run(&band, x, y + row, row, o.x0, o.x1);
+            band_run(&band, x, y + row, row, outer.x0, outer.x1);
         }
         else
         {
-            ERRRectRow in;
-            er_rrect_row(iw, ih, ir_tl, ir_tr, ir_br, ir_bl, irow, &in);
-            in.x0 += bl; /* inset-relative -> outer-relative; the arc fields stay radius-relative */
-            in.x1 += bl;
+            ERRRectRow inner;
+            er_rrect_row(inner_width,
+                         inner_height,
+                         inner_radius_top_left,
+                         inner_radius_top_right,
+                         inner_radius_bottom_right,
+                         inner_radius_bottom_left,
+                         inner_row,
+                         &inner);
+            inner.x0 += band_left; /* inset-relative -> outer-relative; the arc fields stay radius-relative */
+            inner.x1 += band_left;
 
             /* Left band: outer edge inward, stopping short of the interior's own fringe. */
-            const int nl = er_rrect_fringe_len(in.l_r, in.l_dx, in.l_dy);
-            band_run(&band, x, y + row, row, o.x0, in.x0 - nl);
+            const int inner_fringe_left =
+                er_rrect_fringe_len(inner.left_radius, inner.left_half_width, inner.left_row_distance);
+            band_run(&band, x, y + row, row, outer.x0, inner.x0 - inner_fringe_left);
 
             /* Right band: mirror. */
-            const int nr = er_rrect_fringe_len(in.r_r, in.r_dx, in.r_dy);
-            band_run(&band, x, y + row, row, in.x1 + nr, o.x1);
+            const int inner_fringe_right =
+                er_rrect_fringe_len(inner.right_radius, inner.right_half_width, inner.right_row_distance);
+            band_run(&band, x, y + row, row, inner.x1 + inner_fringe_right, outer.x1);
 
 #if ERUI_BORDER_AA
             /* Inner edge: these pixels are partly inside the interior, so the band keeps only the
              * share the interior does NOT cover. */
-            for (int k = 0; k < nl; k++)
+            for (int step = 0; step < inner_fringe_left; step++)
             {
-                const float cov = er_rrect_fringe_cov(in.l_r, in.l_dx, in.l_dy, k);
-                const int ax = in.x0 - 1 - k;
-                if (cov >= 1.0f || ax < o.x0 || ax >= o.x1 || !dash_on(&band, ax, row))
+                const float coverage =
+                    er_rrect_fringe_cov(inner.left_radius, inner.left_half_width, inner.left_row_distance, step);
+                const int fringe_x = inner.x0 - 1 - step;
+                if (coverage >= 1.0f || fringe_x < outer.x0 || fringe_x >= outer.x1 || !dash_on(&band, fringe_x, row))
                     continue;
-                const uint32_t fc = band_color(&band, ax, row);
-                if (fc >> 24)
+                const uint32_t fringe_color = band_color(&band, fringe_x, row);
+                if (fringe_color >> 24)
                     er_blit_fill(
-                        scale_straight_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
+                        scale_straight_alpha(fringe_color, (uint8_t)((1.0f - coverage) * ER_CHANNEL_MAX_FLOAT + 0.5f)),
+                        x + fringe_x,
+                        y + row,
+                        1,
+                        1);
             }
-            for (int k = 0; k < nr; k++)
+            for (int step = 0; step < inner_fringe_right; step++)
             {
-                const float cov = er_rrect_fringe_cov(in.r_r, in.r_dx, in.r_dy, k);
-                const int ax = in.x1 + k;
-                if (cov >= 1.0f || ax < o.x0 || ax >= o.x1 || !dash_on(&band, ax, row))
+                const float coverage =
+                    er_rrect_fringe_cov(inner.right_radius, inner.right_half_width, inner.right_row_distance, step);
+                const int fringe_x = inner.x1 + step;
+                if (coverage >= 1.0f || fringe_x < outer.x0 || fringe_x >= outer.x1 || !dash_on(&band, fringe_x, row))
                     continue;
-                const uint32_t fc = band_color(&band, ax, row);
-                if (fc >> 24)
+                const uint32_t fringe_color = band_color(&band, fringe_x, row);
+                if (fringe_color >> 24)
                     er_blit_fill(
-                        scale_straight_alpha(fc, (uint8_t)((1.0f - cov) * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
+                        scale_straight_alpha(fringe_color, (uint8_t)((1.0f - coverage) * ER_CHANNEL_MAX_FLOAT + 0.5f)),
+                        x + fringe_x,
+                        y + row,
+                        1,
+                        1);
             }
 #endif
         }
@@ -822,69 +961,89 @@ void er_rrect_fill_ring_edges(
 #if ERUI_BORDER_AA
         /* Outer edge: the same fringe a filled rounded rect lays down, so the ring's silhouette
          * matches a solid fill's exactly. */
-        for (int k = 0, kmax = er_rrect_fringe_max(o.l_r); k < kmax; k++)
+        for (int step = 0, step_count = er_rrect_fringe_max(outer.left_radius); step < step_count; step++)
         {
-            const float cov = er_rrect_fringe_cov(o.l_r, o.l_dx, o.l_dy, k);
-            if (cov <= 0.0f)
+            const float coverage =
+                er_rrect_fringe_cov(outer.left_radius, outer.left_half_width, outer.left_row_distance, step);
+            if (coverage <= 0.0f)
                 break;
-            const int ax = o.x0 - 1 - k;
-            if (cov >= 1.0f || ax < 0 || !dash_on(&band, ax, row))
+            const int fringe_x = outer.x0 - 1 - step;
+            if (coverage >= 1.0f || fringe_x < 0 || !dash_on(&band, fringe_x, row))
                 continue;
-            const uint32_t fc = band_color(&band, ax, row);
-            if (fc >> 24)
-                er_blit_fill(scale_straight_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
+            const uint32_t fringe_color = band_color(&band, fringe_x, row);
+            if (fringe_color >> 24)
+                er_blit_fill(scale_straight_alpha(fringe_color, (uint8_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f)),
+                             x + fringe_x,
+                             y + row,
+                             1,
+                             1);
         }
-        for (int k = 0, kmax = er_rrect_fringe_max(o.r_r); k < kmax; k++)
+        for (int step = 0, step_count = er_rrect_fringe_max(outer.right_radius); step < step_count; step++)
         {
-            const float cov = er_rrect_fringe_cov(o.r_r, o.r_dx, o.r_dy, k);
-            if (cov <= 0.0f)
+            const float coverage =
+                er_rrect_fringe_cov(outer.right_radius, outer.right_half_width, outer.right_row_distance, step);
+            if (coverage <= 0.0f)
                 break;
-            const int ax = o.x1 + k;
-            if (cov >= 1.0f || ax >= w || !dash_on(&band, ax, row))
+            const int fringe_x = outer.x1 + step;
+            if (coverage >= 1.0f || fringe_x >= width || !dash_on(&band, fringe_x, row))
                 continue;
-            const uint32_t fc = band_color(&band, ax, row);
-            if (fc >> 24)
-                er_blit_fill(scale_straight_alpha(fc, (uint8_t)(cov * 255.0f + 0.5f)), x + ax, y + row, 1, 1);
+            const uint32_t fringe_color = band_color(&band, fringe_x, row);
+            if (fringe_color >> 24)
+                er_blit_fill(scale_straight_alpha(fringe_color, (uint8_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f)),
+                             x + fringe_x,
+                             y + row,
+                             1,
+                             1);
         }
 #endif
     }
 }
 
-void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int bw)
+void er_rrect_fill_ring(uint32_t argb,
+                        int x,
+                        int y,
+                        int width,
+                        int height,
+                        int radius_top_left,
+                        int radius_top_right,
+                        int radius_bottom_right,
+                        int radius_bottom_left,
+                        int band_width)
 {
-    const ERRRectBorder b = {bw, bw, bw, bw, argb, argb, argb, argb, 0};
-    er_rrect_fill_ring_edges(x, y, w, h, r_tl, r_tr, r_br, r_bl, &b);
+    const ERRRectBorder border = {band_width, band_width, band_width, band_width, argb, argb, argb, argb, 0};
+    er_rrect_fill_ring_edges(
+        x, y, width, height, radius_top_left, radius_top_right, radius_bottom_right, radius_bottom_left, &border);
 }
 
 void er_rrect_fill_bordered(
-    uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius)
+    uint32_t background_argb, uint32_t border_argb, int border_width, int x, int y, int width, int height, int radius)
 {
-    if (border_w <= 0 || (border_argb >> 24) == 0)
+    if (border_width <= 0 || (border_argb >> 24) == 0)
     {
-        er_rrect_fill(bg_argb, x, y, w, h, radius);
+        er_rrect_fill(background_argb, x, y, width, height, radius);
         return;
     }
 
-    const int ix = x + border_w;
-    const int iy = y + border_w;
-    const int iw = w - 2 * border_w;
-    const int ih = h - 2 * border_w;
-    const int ir = radius > border_w ? radius - border_w : 0;
+    const int inner_x = x + border_width;
+    const int inner_y = y + border_width;
+    const int inner_width = width - 2 * border_width;
+    const int inner_height = height - 2 * border_width;
+    const int inner_radius = radius > border_width ? radius - border_width : 0;
 
-    if ((bg_argb >> 24) == 0xFFu)
+    if ((background_argb >> 24) == ER_ALPHA_OPAQUE)
     {
         /* Opaque background: fill the whole shape in the border colour and paint the background back
          * over the inset. Cheaper than stroking a ring, and the background hides every border pixel
          * it needs to. */
-        er_rrect_fill(border_argb, x, y, w, h, radius);
-        if (iw > 0 && ih > 0)
-            er_rrect_fill(bg_argb, ix, iy, iw, ih, ir);
+        er_rrect_fill(border_argb, x, y, width, height, radius);
+        if (inner_width > 0 && inner_height > 0)
+            er_rrect_fill(background_argb, inner_x, inner_y, inner_width, inner_height, inner_radius);
         return;
     }
 
     /* Anything less than opaque — a translucent background, the transparent default, or a gradient
      * already painted into this box — cannot cover a filled border shape, so stroke the band only. */
-    er_rrect_fill_ring(border_argb, x, y, w, h, radius, radius, radius, radius, border_w);
-    if ((bg_argb >> 24) != 0 && iw > 0 && ih > 0)
-        er_rrect_fill(bg_argb, ix, iy, iw, ih, ir);
+    er_rrect_fill_ring(border_argb, x, y, width, height, radius, radius, radius, radius, border_width);
+    if ((background_argb >> 24) != 0 && inner_width > 0 && inner_height > 0)
+        er_rrect_fill(background_argb, inner_x, inner_y, inner_width, inner_height, inner_radius);
 }

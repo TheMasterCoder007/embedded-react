@@ -61,14 +61,14 @@ extern "C"
      * er_scratch_pop_blend() is required.  Regions larger than one strip are composited by the
      * compositor in multiple band passes, one push per band.
      *
-     * @param[in] x  World-space left edge of the region being composited.
-     * @param[in] y  World-space top edge of the region being composited.
-     * @param[in] w  Region width in pixels.
-     * @param[in] h  Region height in pixels.
+     * @param[in] x       World-space left edge of the region being composited.
+     * @param[in] y       World-space top edge of the region being composited.
+     * @param[in] width   Region width in pixels.
+     * @param[in] height  Region height in pixels.
      *
      * @return true if a slot was allocated and blit redirection is now active.
      */
-    bool er_scratch_push(int x, int y, int w, int h);
+    bool er_scratch_push(int x, int y, int width, int height);
 
     /**
      * @brief Pushes a "base" scratch target that blit calls fall back to when the opacity stack is empty.
@@ -79,13 +79,13 @@ extern "C"
      * er_scratch_pop_base().  Two levels may nest (a transform source capture inside a fade-cache
      * capture).
      *
-     * @param[in] buf  Premultiplied ARGB8888 buffer, w × h pixels, row-major.
-     * @param[in] w    Buffer width in pixels.
-     * @param[in] h    Buffer height in pixels.
-     * @param[in] ox   World-space X coordinate that maps to buf column 0.
-     * @param[in] oy   World-space Y coordinate that maps to buf row 0.
+     * @param[in] pixels    Premultiplied ARGB8888 buffer, width × height pixels, row-major.
+     * @param[in] width     Buffer width in pixels.
+     * @param[in] height    Buffer height in pixels.
+     * @param[in] origin_x  World-space X coordinate that maps to pixels column 0.
+     * @param[in] origin_y  World-space Y coordinate that maps to pixels row 0.
      */
-    void er_scratch_push_base(uint32_t* buf, int w, int h, int ox, int oy);
+    void er_scratch_push_base(uint32_t* pixels, int width, int height, int origin_x, int origin_y);
 
     /**
      * @brief Returns true when no scratch routing is active (no opacity slots, no base captures).
@@ -108,13 +108,13 @@ extern "C"
      * call (the real framebuffer, or the next outer scratch slot for nested opacity), then
      * alpha-blends the accumulated scratch content over that destination at the given opacity.
      *
-     * @param[in] alpha  Global opacity 0–255 (255 = fully opaque).
-     * @param[in] x     World-space left edge (must match the er_scratch_push() call).
-     * @param[in] y     World-space top edge (must match the er_scratch_push() call).
-     * @param[in] w     Width in pixels (must match the er_scratch_push() call).
-     * @param[in] h     Height in pixels (must match the er_scratch_push() call).
+     * @param[in] alpha   Global opacity 0–255 (255 = fully opaque).
+     * @param[in] x       World-space left edge (must match the er_scratch_push() call).
+     * @param[in] y       World-space top edge (must match the er_scratch_push() call).
+     * @param[in] width   Width in pixels (must match the er_scratch_push() call).
+     * @param[in] height  Height in pixels (must match the er_scratch_push() call).
      */
-    void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h);
+    void er_scratch_pop_blend(uint8_t alpha, int x, int y, int width, int height);
 
 #ifdef __cplusplus
 }

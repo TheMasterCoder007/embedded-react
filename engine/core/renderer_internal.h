@@ -62,6 +62,9 @@ struct ERNode;
 /** @brief Added before dividing by ER_CHANNEL_MAX so the result rounds to nearest. */
 #define ER_CHANNEL_ROUND 127U
 
+/** @brief ER_CHANNEL_MAX as a float, for turning a 0-1 coverage into a channel value. */
+#define ER_CHANNEL_MAX_FLOAT 255.0f
+
 /** @brief An alpha or coverage of this value draws at full strength. */
 #define ER_ALPHA_OPAQUE 255U
 
@@ -286,10 +289,10 @@ void er_error_screen_draw(void);
 /**
  * @brief The panel size the error screen was shown at.
  *
- * @param[out] screen_w  Receives the width in pixels.
- * @param[out] screen_h  Receives the height in pixels.
+ * @param[out] screen_width   Receives the width in pixels.
+ * @param[out] screen_height  Receives the height in pixels.
  */
-void er_error_screen_size(int* screen_w, int* screen_h);
+void er_error_screen_size(int* screen_width, int* screen_height);
 
 /**
  * @brief Fills a rectangle with a solid ARGB color via the active backend.

@@ -51,17 +51,37 @@
 #define ARC_ROW_CHUNK 256
 
 /** @brief Colour-ramp entries for a gradient-painted sector (built once per sector call). */
-#define ARC_GRAD_LUT 128
+#define ARC_GRADIENT_RAMP_SIZE 128
 
 /** @brief Hard cap on segment count (each gap costs two cross products per pixel). */
 #define ARC_MAX_SEGMENTS 32
+
+/** @brief A full turn, half a turn and a quarter turn, in degrees. */
+#define ARC_FULL_TURN_DEG 360.0f
+#define ARC_HALF_TURN_DEG 180.0f
+#define ARC_QUADRANT_DEG 90.0f
+
+/** @brief Past this many degrees the bbox counts every quadrant, since a float stops resolving them. */
+#define ARC_BBOX_ANGLE_LIMIT 1e6f
+
+/** @brief 1.0 in the span cache's 8.8 fixed-point half-chords. */
+#define ARC_SPAN_FIXED_ONE 256.0f
+
+/** @brief Row fractions closer than this share a span-cache entry. */
+#define ARC_SPAN_FRACTION_TOLERANCE (1.0f / 512.0f)
+
+/** @brief A gradient paint needs at least this many stops. */
+#define ARC_GRADIENT_MIN_STOPS 2U
+
+/** @brief Radii with a half-chord per row: outer and inner, each plus and minus half a pixel. */
+#define ARC_FRINGE_RADII 4
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief One cached circle: the half-chord of every row, 8.8 fixed point, indexed by floor(|dy|).
+ * @brief One cached circle: the half-chord of every row, 8.8 fixed point, indexed by floor(|row offset|).
  *
  * Rows of one sector all share the same fractional offset from the centre (the centre of a layout box is
  * an integer or a half), so the key is (radius, that fraction). A circle drawn at a different row phase
@@ -69,11 +89,11 @@
  */
 typedef struct
 {
-    float r;        /**< Radius this entry was built for; 0 = empty. */
-    float frac;     /**< Fractional part of |dy| for every row served. */
-    uint32_t stamp; /**< Last-use tick for LRU replacement. */
-    uint16_t n;     /**< Valid entries in hc[] (rows 0..n-1 intersect the circle). */
-    uint16_t hc[ERUI_ARC_MAX_RADIUS + 2];
+    float radius;       /**< Radius this entry was built for; 0 = empty. */
+    float fraction;     /**< Fractional part of |row offset| for every row served. */
+    uint32_t stamp;     /**< Last-use tick for LRU replacement. */
+    uint16_t row_count; /**< Valid entries in half_chords[] (rows 0..row_count-1 intersect the circle). */
+    uint16_t half_chords[ERUI_ARC_MAX_RADIUS + 2];
 } ArcSpanEntry;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -88,83 +108,84 @@ static uint32_t s_span_misses = 0U;
 static uint32_t s_row[ERUI_RENDER_WORKERS][ARC_ROW_CHUNK];
 
 /** @brief Gradient colour ramp, one per render worker, rebuilt per gradient-painted sector. */
-static uint32_t s_lut[ERUI_RENDER_WORKERS][ARC_GRAD_LUT];
+static uint32_t s_ramp[ERUI_RENDER_WORKERS][ARC_GRADIENT_RAMP_SIZE];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Clamps a coverage to [0, 1]. */
-static inline float clamp01(float v)
+static inline float clamp01(float value)
 {
-    return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    return value < 0.0f ? 0.0f : (value > 1.0f ? 1.0f : value);
 }
 
 /** @brief Exact half-chord (no cache). */
-static inline float half_chord_exact(float r, float dy)
+static inline float half_chord_exact(float radius, float row_offset)
 {
-    const float v = r * r - dy * dy;
-    return (v <= 0.0f) ? -1.0f : sqrtf(v);
+    const float chord_squared = radius * radius - row_offset * row_offset;
+    return (chord_squared <= 0.0f) ? -1.0f : sqrtf(chord_squared);
 }
 
-/** @brief Finds or builds the span-cache entry for (r, frac); NULL when the radius is too large to cache. */
-static ArcSpanEntry* span_entry(float r, float frac)
+/** @brief Finds or builds the span-cache entry for (radius, fraction); NULL when the radius is too large to cache. */
+static ArcSpanEntry* span_entry(float radius, float fraction)
 {
-    if (r <= 0.0f || r >= (float)ERUI_ARC_MAX_RADIUS)
+    if (radius <= 0.0f || radius >= (float)ERUI_ARC_MAX_RADIUS)
         return NULL;
     s_span_tick++;
     ArcSpanEntry* victim = &s_span_cache[0];
-    for (int i = 0; i < ERUI_ARC_SPAN_CACHE; i++)
+    for (int entry_index = 0; entry_index < ERUI_ARC_SPAN_CACHE; entry_index++)
     {
-        ArcSpanEntry* e = &s_span_cache[i];
-        if (e->r == r && fabsf(e->frac - frac) < (1.0f / 512.0f))
+        ArcSpanEntry* entry = &s_span_cache[entry_index];
+        if (entry->radius == radius && fabsf(entry->fraction - fraction) < ARC_SPAN_FRACTION_TOLERANCE)
         {
-            e->stamp = s_span_tick;
-            return e;
+            entry->stamp = s_span_tick;
+            return entry;
         }
-        if (e->r == 0.0f || e->stamp < victim->stamp)
-            victim = e;
+        if (entry->radius == 0.0f || entry->stamp < victim->stamp)
+            victim = entry;
     }
-    /* Miss: (re)build the least recently used entry. Rows k = 0.. while k + frac < r. */
+    /* Miss: (re)build the least recently used entry. Rows 0.. while row + fraction < radius. */
     s_span_misses++;
-    victim->r = r;
-    victim->frac = frac;
+    victim->radius = radius;
+    victim->fraction = fraction;
     victim->stamp = s_span_tick;
-    uint16_t n = 0U;
-    while (n < (uint16_t)(ERUI_ARC_MAX_RADIUS + 2))
+    uint16_t row_count = 0U;
+    while (row_count < (uint16_t)(ERUI_ARC_MAX_RADIUS + 2))
     {
-        const float dy = (float)n + frac;
-        const float hc = half_chord_exact(r, dy);
-        if (hc < 0.0f)
+        const float row_offset = (float)row_count + fraction;
+        const float chord = half_chord_exact(radius, row_offset);
+        if (chord < 0.0f)
             break;
-        victim->hc[n] = (uint16_t)(hc * 256.0f + 0.5f);
-        n++;
+        victim->half_chords[row_count] = (uint16_t)(chord * ARC_SPAN_FIXED_ONE + 0.5f);
+        row_count++;
     }
-    victim->n = n;
+    victim->row_count = row_count;
     return victim;
 }
 
-/** @brief Half-chord of radius @p r at row offset @p dy via a prepared cache entry (or exact when NULL). */
-static inline float half_chord(const ArcSpanEntry* e, float r, float dy)
+/** @brief Half-chord of radius @p radius at row offset @p row_offset via a prepared cache entry (or exact when NULL).
+ */
+static inline float half_chord(const ArcSpanEntry* entry, float radius, float row_offset)
 {
-    if (!e)
-        return half_chord_exact(r, dy);
-    const float ady = fabsf(dy);
-    const int k = (int)ady;
-    if (k >= (int)e->n)
+    if (!entry)
+        return half_chord_exact(radius, row_offset);
+    const float abs_row_offset = fabsf(row_offset);
+    const int row = (int)abs_row_offset;
+    if (row >= (int)entry->row_count)
         return -1.0f;
-    return (float)e->hc[k] * (1.0f / 256.0f);
+    return (float)entry->half_chords[row] * (1.0f / ARC_SPAN_FIXED_ONE);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-float er_arc_half_chord(float r, float dy)
+float er_arc_half_chord(float radius, float row_offset)
 {
-    const float ady = fabsf(dy);
-    const float frac = ady - floorf(ady);
-    return half_chord(span_entry(r, frac), r, dy);
+    const float abs_row_offset = fabsf(row_offset);
+    const float fraction = abs_row_offset - floorf(abs_row_offset);
+    return half_chord(span_entry(radius, fraction), radius, row_offset);
 }
 
 void er_arc_span_cache_reset(void)
@@ -179,155 +200,168 @@ uint32_t er_arc_span_cache_misses(void)
     return s_span_misses;
 }
 
-void er_arc_sector_bbox(float cx,
-                        float cy,
-                        float r_in,
-                        float r_out,
-                        float a0,
-                        float a1,
-                        float pad,
+void er_arc_sector_bbox(float center_x,
+                        float center_y,
+                        float inner_radius,
+                        float outer_radius,
+                        float start_deg,
+                        float end_deg,
+                        float padding,
                         float* x0,
                         float* y0,
                         float* x1,
                         float* y1)
 {
-    if (a1 < a0)
+    if (end_deg < start_deg)
     {
-        const float t = a0;
-        a0 = a1;
-        a1 = t;
+        const float swap = start_deg;
+        start_deg = end_deg;
+        end_deg = swap;
     }
-    if (r_in < 0.0f)
-        r_in = 0.0f;
-#define ADD(X, Y)                                                                                                      \
+    if (inner_radius < 0.0f)
+        inner_radius = 0.0f;
+#define ADD(new_x, new_y)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        const float _x = (X), _y = (Y);                                                                                \
-        if (_x < *x0)                                                                                                  \
-            *x0 = _x;                                                                                                  \
-        if (_y < *y0)                                                                                                  \
-            *y0 = _y;                                                                                                  \
-        if (_x > *x1)                                                                                                  \
-            *x1 = _x;                                                                                                  \
-        if (_y > *y1)                                                                                                  \
-            *y1 = _y;                                                                                                  \
+        const float point_x = (new_x), point_y = (new_y);                                                              \
+        if (point_x < *x0)                                                                                             \
+            *x0 = point_x;                                                                                             \
+        if (point_y < *y0)                                                                                             \
+            *y0 = point_y;                                                                                             \
+        if (point_x > *x1)                                                                                             \
+            *x1 = point_x;                                                                                             \
+        if (point_y > *y1)                                                                                             \
+            *y1 = point_y;                                                                                             \
     } while (0)
-    const float c0 = cosf(a0 * ER_DEG2RAD), s0 = sinf(a0 * ER_DEG2RAD);
-    const float c1 = cosf(a1 * ER_DEG2RAD), s1 = sinf(a1 * ER_DEG2RAD);
-    ADD(cx + r_in * c0, cy + r_in * s0);
-    ADD(cx + r_out * c0, cy + r_out * s0);
-    ADD(cx + r_in * c1, cy + r_in * s1);
-    ADD(cx + r_out * c1, cy + r_out * s1);
+    const float start_cos = cosf(start_deg * ER_DEG2RAD), start_sin = sinf(start_deg * ER_DEG2RAD);
+    const float end_cos = cosf(end_deg * ER_DEG2RAD), end_sin = sinf(end_deg * ER_DEG2RAD);
+    ADD(center_x + inner_radius * start_cos, center_y + inner_radius * start_sin);
+    ADD(center_x + outer_radius * start_cos, center_y + outer_radius * start_sin);
+    ADD(center_x + inner_radius * end_cos, center_y + inner_radius * end_sin);
+    ADD(center_x + outer_radius * end_cos, center_y + outer_radius * end_sin);
     /* Axis extremes inside the sweep: the outer circle reaches its bbox edge there. The quadrants are counted in
      * a float, which stops changing past 2^24, so an angle that far out (a <Dial> prop is app math), a NaN or
      * infinite one, or a sweep past a turn takes all four. */
-    if (a1 - a0 <= 360.0f && fabsf(a0) < 1e6f)
+    if (end_deg - start_deg <= ARC_FULL_TURN_DEG && fabsf(start_deg) < ARC_BBOX_ANGLE_LIMIT)
     {
-        const float k0 = ceilf(a0 / 90.0f);
-        for (float k = k0; k * 90.0f <= a1; k += 1.0f)
+        const float first_quadrant = ceilf(start_deg / ARC_QUADRANT_DEG);
+        for (float quadrant = first_quadrant; quadrant * ARC_QUADRANT_DEG <= end_deg; quadrant += 1.0f)
         {
-            const float a = k * 90.0f * ER_DEG2RAD;
-            ADD(cx + r_out * cosf(a), cy + r_out * sinf(a));
+            const float angle = quadrant * ARC_QUADRANT_DEG * ER_DEG2RAD;
+            ADD(center_x + outer_radius * cosf(angle), center_y + outer_radius * sinf(angle));
         }
     }
     else
     {
-        ADD(cx + r_out, cy);
-        ADD(cx - r_out, cy);
-        ADD(cx, cy + r_out);
-        ADD(cx, cy - r_out);
+        ADD(center_x + outer_radius, center_y);
+        ADD(center_x - outer_radius, center_y);
+        ADD(center_x, center_y + outer_radius);
+        ADD(center_x, center_y - outer_radius);
     }
 #undef ADD
-    *x0 -= pad;
-    *y0 -= pad;
-    *x1 += pad;
-    *y1 += pad;
+    *x0 -= padding;
+    *y0 -= padding;
+    *x1 += padding;
+    *y1 += padding;
 }
 
-void er_arc_fill_sector(const ERArcSector* s)
+void er_arc_fill_sector(const ERArcSector* sector)
 {
-    if (!s)
+    if (!sector)
         return;
-    const float ro = s->r_outer;
-    float ri = s->r_inner;
-    if (ri < 0.0f)
-        ri = 0.0f;
+    const float outer_radius = sector->outer_radius;
+    float inner_radius = sector->inner_radius;
+    if (inner_radius < 0.0f)
+        inner_radius = 0.0f;
     /* NaN or infinite geometry (app math behind an <Svg> arc or a <Dial> prop) has nothing to draw, and would
      * reach the int casts below as NaN. */
-    if (!(fabsf(s->cx) < INFINITY && fabsf(s->cy) < INFINITY && ro < INFINITY && ri == ri && fabsf(s->a0) < INFINITY
-          && fabsf(s->a1) < INFINITY))
+    if (!(fabsf(sector->center_x) < INFINITY && fabsf(sector->center_y) < INFINITY && outer_radius < INFINITY
+          && inner_radius == inner_radius && fabsf(sector->start_deg) < INFINITY && fabsf(sector->end_deg) < INFINITY))
         return;
-    if (ro <= 0.0f || ri >= ro)
+    if (outer_radius <= 0.0f || inner_radius >= outer_radius)
         return;
-    float sweep = s->a1 - s->a0;
+    float sweep = sector->end_deg - sector->start_deg;
     if (sweep <= 0.0f)
         return;
-    if (sweep > 360.0f)
-        sweep = 360.0f;
-    const bool full = (sweep >= 360.0f);
+    if (sweep > ARC_FULL_TURN_DEG)
+        sweep = ARC_FULL_TURN_DEG;
+    const bool full_circle = (sweep >= ARC_FULL_TURN_DEG);
 
-    const int wid = er_render_worker_id();
-    uint32_t* row = s_row[wid];
-    uint32_t* lut = s_lut[wid];
+    const int worker = er_render_worker_id();
+    uint32_t* row = s_row[worker];
+    uint32_t* ramp = s_ramp[worker];
 
     /* Paint. */
-    const bool conic = (s->grad_type == ER_GRADIENT_CONIC && s->grad_stops && s->grad_stop_count >= 2U);
-    const bool radial = (s->grad_type == ER_GRADIENT_RADIAL && s->grad_stops && s->grad_stop_count >= 2U);
-    const uint32_t solid = er_gradient_premul(s->color);
-    if (!conic && !radial && (s->color >> 24) == 0U)
+    const bool conic = (sector->gradient_type == ER_GRADIENT_CONIC && sector->gradient_stops
+                        && sector->gradient_stop_count >= ARC_GRADIENT_MIN_STOPS);
+    const bool radial = (sector->gradient_type == ER_GRADIENT_RADIAL && sector->gradient_stops
+                         && sector->gradient_stop_count >= ARC_GRADIENT_MIN_STOPS);
+    const uint32_t solid = er_gradient_premul(sector->color);
+    if (!conic && !radial && (sector->color >> 24) == 0U)
         return;
     if (conic || radial)
-        for (int i = 0; i < ARC_GRAD_LUT; i++)
-            lut[i] = er_gradient_premul(er_gradient_eval_stops(
-                s->grad_stops, (int)s->grad_stop_count, ((float)i + 0.5f) / (float)ARC_GRAD_LUT));
-    const float grad_span = (s->grad_a1 != s->grad_a0) ? (s->grad_a1 - s->grad_a0) : 360.0f;
-    const float grad_a0 = s->grad_a0;
-    const float thick = ro - ri;
+        for (int ramp_index = 0; ramp_index < ARC_GRADIENT_RAMP_SIZE; ramp_index++)
+            ramp[ramp_index] =
+                er_gradient_premul(er_gradient_eval_stops(sector->gradient_stops,
+                                                          (int)sector->gradient_stop_count,
+                                                          ((float)ramp_index + 0.5f) / (float)ARC_GRADIENT_RAMP_SIZE));
+    const float gradient_span = (sector->gradient_end_deg != sector->gradient_start_deg)
+                                    ? (sector->gradient_end_deg - sector->gradient_start_deg)
+                                    : ARC_FULL_TURN_DEG;
+    const float gradient_start = sector->gradient_start_deg;
+    const float thickness = outer_radius - inner_radius;
 
     /* Boundary rays. */
-    const float a0r = s->a0 * ER_DEG2RAD, a1r = s->a1 * ER_DEG2RAD;
-    const float c0 = cosf(a0r), sn0 = sinf(a0r), c1 = cosf(a1r), sn1 = sinf(a1r);
-    const bool wedge_and = (sweep <= 180.0f);
+    const float start_rad = sector->start_deg * ER_DEG2RAD, end_rad = sector->end_deg * ER_DEG2RAD;
+    const float start_cos = cosf(start_rad), start_sin = sinf(start_rad), end_cos = cosf(end_rad),
+                end_sin = sinf(end_rad);
+    const bool wedge_intersects = (sweep <= ARC_HALF_TURN_DEG);
 
-    /* Round caps: discs of radius hw centred on the mid-radius at each boundary ray. */
-    const bool caps = (!full && s->cap == ER_ARC_CAP_ROUND && thick > 0.0f);
-    const float hw = thick * 0.5f;
-    const float rm = (ro + ri) * 0.5f;
-    const float e0x = s->cx + rm * c0, e0y = s->cy + rm * sn0;
-    const float e1x = s->cx + rm * c1, e1y = s->cy + rm * sn1;
-    const float cap_reach = hw + 1.0f;
+    /* Round caps: discs of radius cap_radius centred on the mid-radius at each boundary ray. */
+    const bool has_caps = (!full_circle && sector->cap == ER_ARC_CAP_ROUND && thickness > 0.0f);
+    const float cap_radius = thickness * 0.5f;
+    const float mid_radius = (outer_radius + inner_radius) * 0.5f;
+    const float start_cap_x = sector->center_x + mid_radius * start_cos,
+                start_cap_y = sector->center_y + mid_radius * start_sin;
+    const float end_cap_x = sector->center_x + mid_radius * end_cos,
+                end_cap_y = sector->center_y + mid_radius * end_sin;
+    const float cap_reach = cap_radius + 1.0f;
 
     /* Segment gaps: precompute the two rays of every gap. */
-    int ngaps = 0;
-    float gc0[ARC_MAX_SEGMENTS], gs0[ARC_MAX_SEGMENTS], gc1[ARC_MAX_SEGMENTS], gs1[ARC_MAX_SEGMENTS];
-    if (s->segments > 1U && s->gap_deg > 0.0f)
+    int gap_count = 0;
+    float gap_start_cos[ARC_MAX_SEGMENTS], gap_start_sin[ARC_MAX_SEGMENTS], gap_end_cos[ARC_MAX_SEGMENTS],
+        gap_end_sin[ARC_MAX_SEGMENTS];
+    if (sector->segments > 1U && sector->gap_deg > 0.0f)
     {
-        int nseg = (int)s->segments;
-        if (nseg > ARC_MAX_SEGMENTS)
-            nseg = ARC_MAX_SEGMENTS;
-        const float span = s->seg_a1 - s->seg_a0;
-        const float seg_len = (span - (float)(nseg - 1) * s->gap_deg) / (float)nseg;
-        if (seg_len > 0.0f)
+        int segment_count = (int)sector->segments;
+        if (segment_count > ARC_MAX_SEGMENTS)
+            segment_count = ARC_MAX_SEGMENTS;
+        const float span = sector->segment_end_deg - sector->segment_start_deg;
+        const float segment_length = (span - (float)(segment_count - 1) * sector->gap_deg) / (float)segment_count;
+        if (segment_length > 0.0f)
         {
-            for (int k = 1; k < nseg; k++)
+            for (int segment_index = 1; segment_index < segment_count; segment_index++)
             {
-                const float g0 = s->seg_a0 + (float)k * (seg_len + s->gap_deg) - s->gap_deg;
-                const float g1 = g0 + s->gap_deg;
-                gc0[ngaps] = cosf(g0 * ER_DEG2RAD);
-                gs0[ngaps] = sinf(g0 * ER_DEG2RAD);
-                gc1[ngaps] = cosf(g1 * ER_DEG2RAD);
-                gs1[ngaps] = sinf(g1 * ER_DEG2RAD);
-                ngaps++;
+                const float gap_start = sector->segment_start_deg
+                                        + (float)segment_index * (segment_length + sector->gap_deg) - sector->gap_deg;
+                const float gap_end = gap_start + sector->gap_deg;
+                gap_start_cos[gap_count] = cosf(gap_start * ER_DEG2RAD);
+                gap_start_sin[gap_count] = sinf(gap_start * ER_DEG2RAD);
+                gap_end_cos[gap_count] = cosf(gap_end * ER_DEG2RAD);
+                gap_end_sin[gap_count] = sinf(gap_end * ER_DEG2RAD);
+                gap_count++;
             }
         }
     }
 
     /* Row range, clamped to the clip in float first: a huge radius or centre would run past the int range. */
-    const float fy0 = s->cy - ro - 1.0f, fy1 = s->cy + ro + 1.0f;
-    const int y_start =
-        fy0 > (float)s->clip_y0 ? (fy0 < (float)s->clip_y1 ? (int)floorf(fy0) : s->clip_y1) : s->clip_y0;
+    const float top_y = sector->center_y - outer_radius - 1.0f, bottom_y = sector->center_y + outer_radius + 1.0f;
+    const int y_start = top_y > (float)sector->clip_y0
+                            ? (top_y < (float)sector->clip_y1 ? (int)floorf(top_y) : sector->clip_y1)
+                            : sector->clip_y0;
     const int y_end = /* exclusive */
-        fy1 < (float)s->clip_y1 ? (fy1 > (float)s->clip_y0 ? (int)ceilf(fy1) : s->clip_y0) : s->clip_y1;
+        bottom_y < (float)sector->clip_y1 ? (bottom_y > (float)sector->clip_y0 ? (int)ceilf(bottom_y) : sector->clip_y0)
+                                          : sector->clip_y1;
     if (y_start >= y_end)
         return;
 
@@ -335,172 +369,194 @@ void er_arc_fill_sector(const ERArcSector* s)
      * may sit at different fractional offsets from it (they coincide when the centre is on a pixel edge or
      * centre, the layout-box case), so each radius is looked up once per side — never per row, which with a
      * small cache could thrash a rebuild into every scanline. */
-    const float fp0 = 0.5f - s->cy, fn0 = s->cy - 0.5f;
-    const float frac_pos = fp0 - floorf(fp0);
-    const float frac_neg = fn0 - floorf(fn0);
-    const float r_oo = ro + 0.5f, r_oi = ro - 0.5f, r_io = ri + 0.5f, r_ii = ri - 0.5f;
-    const ArcSpanEntry* ep[4];
-    const ArcSpanEntry* en[4];
-    const float rr[4] = {r_oo, r_oi, r_io, r_ii};
-    const bool ruse[4] = {true, r_oi > 0.0f, ri > 0.0f, r_ii > 0.0f};
-    for (int i = 0; i < 4; i++)
+    const float offset_below = 0.5f - sector->center_y, offset_above = sector->center_y - 0.5f;
+    const float fraction_below = offset_below - floorf(offset_below);
+    const float fraction_above = offset_above - floorf(offset_above);
+    const float outer_plus_half = outer_radius + 0.5f, outer_minus_half = outer_radius - 0.5f,
+                inner_plus_half = inner_radius + 0.5f, inner_minus_half = inner_radius - 0.5f;
+    const ArcSpanEntry* entries_below[ARC_FRINGE_RADII];
+    const ArcSpanEntry* entries_above[ARC_FRINGE_RADII];
+    const float radii[ARC_FRINGE_RADII] = {outer_plus_half, outer_minus_half, inner_plus_half, inner_minus_half};
+    const bool radius_used[ARC_FRINGE_RADII] = {
+        true, outer_minus_half > 0.0f, inner_radius > 0.0f, inner_minus_half > 0.0f};
+    for (int radius_index = 0; radius_index < ARC_FRINGE_RADII; radius_index++)
     {
-        ep[i] = ruse[i] ? span_entry(rr[i], frac_pos) : NULL;
-        en[i] = ruse[i] ? ((frac_neg == frac_pos) ? ep[i] : span_entry(rr[i], frac_neg)) : NULL;
+        entries_below[radius_index] =
+            radius_used[radius_index] ? span_entry(radii[radius_index], fraction_below) : NULL;
+        entries_above[radius_index] =
+            radius_used[radius_index]
+                ? ((fraction_above == fraction_below) ? entries_below[radius_index]
+                                                      : span_entry(radii[radius_index], fraction_above))
+                : NULL;
     }
 
     for (int y = y_start; y < y_end; y++)
     {
-        const float dy = (float)y + 0.5f - s->cy;
-        const ArcSpanEntry* const* e = (dy < 0.0f) ? en : ep;
-        const float h_oo = half_chord(e[0], r_oo, dy);
-        if (h_oo < 0.0f)
+        const float row_offset = (float)y + 0.5f - sector->center_y;
+        const ArcSpanEntry* const* entries = (row_offset < 0.0f) ? entries_above : entries_below;
+        const float chord_outer_plus = half_chord(entries[0], outer_plus_half, row_offset);
+        if (chord_outer_plus < 0.0f)
             continue; /* row misses the circle */
-        const float h_oi = ruse[1] ? half_chord(e[1], r_oi, dy) : -1.0f;
-        const float h_io = ruse[2] ? half_chord(e[2], r_io, dy) : -1.0f;
-        const float h_ii = ruse[3] ? half_chord(e[3], r_ii, dy) : -1.0f;
+        const float chord_outer_minus = radius_used[1] ? half_chord(entries[1], outer_minus_half, row_offset) : -1.0f;
+        const float chord_inner_plus = radius_used[2] ? half_chord(entries[2], inner_plus_half, row_offset) : -1.0f;
+        const float chord_inner_minus = radius_used[3] ? half_chord(entries[3], inner_minus_half, row_offset) : -1.0f;
 
         /* Column intervals (pixel-centre x): the whole chord, or the two sides of the hole. */
-        float ia0, ib0, ia1, ib1;
-        int nint;
-        if (h_ii > 0.0f)
+        float interval_start0, interval_end0, interval_start1, interval_end1;
+        int interval_count;
+        if (chord_inner_minus > 0.0f)
         {
-            ia0 = s->cx - h_oo;
-            ib0 = s->cx - h_ii;
-            ia1 = s->cx + h_ii;
-            ib1 = s->cx + h_oo;
-            nint = 2;
+            interval_start0 = sector->center_x - chord_outer_plus;
+            interval_end0 = sector->center_x - chord_inner_minus;
+            interval_start1 = sector->center_x + chord_inner_minus;
+            interval_end1 = sector->center_x + chord_outer_plus;
+            interval_count = 2;
         }
         else
         {
-            ia0 = s->cx - h_oo;
-            ib0 = s->cx + h_oo;
-            ia1 = ib1 = 0.0f;
-            nint = 1;
+            interval_start0 = sector->center_x - chord_outer_plus;
+            interval_end0 = sector->center_x + chord_outer_plus;
+            interval_start1 = interval_end1 = 0.0f;
+            interval_count = 1;
         }
 
-        for (int it = 0; it < nint; it++)
+        for (int interval_index = 0; interval_index < interval_count; interval_index++)
         {
-            const float xa = (it == 0) ? ia0 : ia1;
-            const float xb = (it == 0) ? ib0 : ib1;
+            const float interval_start = (interval_index == 0) ? interval_start0 : interval_start1;
+            const float interval_end = (interval_index == 0) ? interval_end0 : interval_end1;
             /* Clamped to the clip in float first, as the rows are. */
-            const float fxs = xa - 0.5f, fxe = xb - 0.5f;
-            const int xs =
-                fxs > (float)s->clip_x0 ? (fxs < (float)s->clip_x1 ? (int)floorf(fxs) : s->clip_x1) : s->clip_x0;
-            const int xe = /* exclusive */
-                fxe < (float)(s->clip_x1 - 1) ? (fxe > (float)(s->clip_x0 - 1) ? (int)ceilf(fxe) + 1 : s->clip_x0)
-                                              : s->clip_x1;
-            for (int cx0 = xs; cx0 < xe; cx0 += ARC_ROW_CHUNK)
+            const float first_center = interval_start - 0.5f, last_center = interval_end - 0.5f;
+            const int column_start =
+                first_center > (float)sector->clip_x0
+                    ? (first_center < (float)sector->clip_x1 ? (int)floorf(first_center) : sector->clip_x1)
+                    : sector->clip_x0;
+            const int column_end = /* exclusive */
+                last_center < (float)(sector->clip_x1 - 1)
+                    ? (last_center > (float)(sector->clip_x0 - 1) ? (int)ceilf(last_center) + 1 : sector->clip_x0)
+                    : sector->clip_x1;
+            for (int chunk_start = column_start; chunk_start < column_end; chunk_start += ARC_ROW_CHUNK)
             {
-                int cx1 = cx0 + ARC_ROW_CHUNK;
-                if (cx1 > xe)
-                    cx1 = xe;
-                bool any = false;
-                for (int x = cx0; x < cx1; x++)
+                int chunk_end = chunk_start + ARC_ROW_CHUNK;
+                if (chunk_end > column_end)
+                    chunk_end = column_end;
+                bool painted_any = false;
+                for (int x = chunk_start; x < chunk_end; x++)
                 {
-                    const float dx = (float)x + 0.5f - s->cx;
-                    const float adx = fabsf(dx);
-                    uint32_t* out = &row[x - cx0];
+                    const float column_offset = (float)x + 0.5f - sector->center_x;
+                    const float abs_column_offset = fabsf(column_offset);
+                    uint32_t* out = &row[x - chunk_start];
                     *out = 0U;
-                    if (adx > h_oo || adx < h_ii)
+                    if (abs_column_offset > chord_outer_plus || abs_column_offset < chord_inner_minus)
                         continue;
 
                     /* Ring coverage: exact distance only on the two fringes. */
-                    float d = -1.0f;
-                    float cov = 1.0f;
-                    if (adx >= h_oi)
+                    float distance = -1.0f;
+                    float coverage = 1.0f;
+                    if (abs_column_offset >= chord_outer_minus)
                     {
-                        d = sqrtf(dx * dx + dy * dy);
-                        cov = clamp01(ro + 0.5f - d);
+                        distance = sqrtf(column_offset * column_offset + row_offset * row_offset);
+                        coverage = clamp01(outer_radius + 0.5f - distance);
                     }
-                    if (ri > 0.0f && adx <= h_io)
+                    if (inner_radius > 0.0f && abs_column_offset <= chord_inner_plus)
                     {
-                        if (d < 0.0f)
-                            d = sqrtf(dx * dx + dy * dy);
-                        cov *= clamp01(d - ri + 0.5f);
+                        if (distance < 0.0f)
+                            distance = sqrtf(column_offset * column_offset + row_offset * row_offset);
+                        coverage *= clamp01(distance - inner_radius + 0.5f);
                     }
-                    if (cov <= 0.0f)
+                    if (coverage <= 0.0f)
                         continue;
 
                     /* Sweep: two half-planes through the centre; the cross products are signed distances. */
-                    if (!full)
+                    if (!full_circle)
                     {
-                        const float q0 = clamp01(0.5f + (c0 * dy - sn0 * dx));
-                        const float q1 = clamp01(0.5f + (sn1 * dx - c1 * dy));
-                        const float wc = wedge_and ? (q0 < q1 ? q0 : q1) : (q0 > q1 ? q0 : q1);
-                        float c = cov * wc;
-                        if (caps)
+                        const float start_side = clamp01(0.5f + (start_cos * row_offset - start_sin * column_offset));
+                        const float end_side = clamp01(0.5f + (end_sin * column_offset - end_cos * row_offset));
+                        const float wedge_coverage = wedge_intersects ? (start_side < end_side ? start_side : end_side)
+                                                                      : (start_side > end_side ? start_side : end_side);
+                        float sweep_coverage = coverage * wedge_coverage;
+                        if (has_caps)
                         {
-                            const float px = (float)x + 0.5f, py = (float)y + 0.5f;
-                            if (fabsf(px - e0x) <= cap_reach && fabsf(py - e0y) <= cap_reach)
+                            const float pixel_x = (float)x + 0.5f, pixel_y = (float)y + 0.5f;
+                            if (fabsf(pixel_x - start_cap_x) <= cap_reach && fabsf(pixel_y - start_cap_y) <= cap_reach)
                             {
-                                const float dd = sqrtf((px - e0x) * (px - e0x) + (py - e0y) * (py - e0y));
-                                const float cc = clamp01(hw + 0.5f - dd);
-                                if (cc > c)
-                                    c = cc;
+                                const float cap_distance = sqrtf((pixel_x - start_cap_x) * (pixel_x - start_cap_x)
+                                                                 + (pixel_y - start_cap_y) * (pixel_y - start_cap_y));
+                                const float cap_coverage = clamp01(cap_radius + 0.5f - cap_distance);
+                                if (cap_coverage > sweep_coverage)
+                                    sweep_coverage = cap_coverage;
                             }
-                            if (fabsf(px - e1x) <= cap_reach && fabsf(py - e1y) <= cap_reach)
+                            if (fabsf(pixel_x - end_cap_x) <= cap_reach && fabsf(pixel_y - end_cap_y) <= cap_reach)
                             {
-                                const float dd = sqrtf((px - e1x) * (px - e1x) + (py - e1y) * (py - e1y));
-                                const float cc = clamp01(hw + 0.5f - dd);
-                                if (cc > c)
-                                    c = cc;
+                                const float cap_distance = sqrtf((pixel_x - end_cap_x) * (pixel_x - end_cap_x)
+                                                                 + (pixel_y - end_cap_y) * (pixel_y - end_cap_y));
+                                const float cap_coverage = clamp01(cap_radius + 0.5f - cap_distance);
+                                if (cap_coverage > sweep_coverage)
+                                    sweep_coverage = cap_coverage;
                             }
                         }
-                        cov = c;
-                        if (cov <= 0.0f)
+                        coverage = sweep_coverage;
+                        if (coverage <= 0.0f)
                             continue;
                     }
 
                     /* Segment gaps (each a thin wedge, always < 180°: intersection of its two half-planes). */
-                    for (int g = 0; g < ngaps; g++)
+                    for (int gap_index = 0; gap_index < gap_count; gap_index++)
                     {
-                        const float q0 = clamp01(0.5f + (gc0[g] * dy - gs0[g] * dx));
-                        const float q1 = clamp01(0.5f + (gs1[g] * dx - gc1[g] * dy));
-                        const float gq = q0 < q1 ? q0 : q1;
-                        if (gq > 0.0f)
-                            cov *= (1.0f - gq);
+                        const float start_side = clamp01(
+                            0.5f + (gap_start_cos[gap_index] * row_offset - gap_start_sin[gap_index] * column_offset));
+                        const float end_side = clamp01(
+                            0.5f + (gap_end_sin[gap_index] * column_offset - gap_end_cos[gap_index] * row_offset));
+                        const float gap_coverage = start_side < end_side ? start_side : end_side;
+                        if (gap_coverage > 0.0f)
+                            coverage *= (1.0f - gap_coverage);
                     }
-                    if (cov <= 0.0f)
+                    if (coverage <= 0.0f)
                         continue;
 
                     /* Paint. */
-                    uint32_t pm;
+                    uint32_t premultiplied;
                     if (conic)
                     {
-                        float ang = er_fast_atan2(dy, dx) * ER_RAD2DEG - grad_a0;
-                        ang -= 360.0f * floorf(ang / 360.0f); /* [0, 360) past the ramp's start */
+                        float angle = er_fast_atan2(row_offset, column_offset) * ER_RAD2DEG - gradient_start;
+                        angle -=
+                            ARC_FULL_TURN_DEG * floorf(angle / ARC_FULL_TURN_DEG); /* [0, 360) past the ramp's start */
                         /* Outside the ramp (a round cap, the AA fringe of a boundary ray): pin to the nearer
                          * end instead of wrapping the last stop's colour onto the first cap. */
-                        if (ang > grad_span)
-                            ang = ((ang - grad_span) < (360.0f - ang)) ? grad_span : 0.0f;
-                        int idx = (int)((ang / grad_span) * (float)ARC_GRAD_LUT);
-                        if (idx < 0)
-                            idx = 0;
-                        else if (idx >= ARC_GRAD_LUT)
-                            idx = ARC_GRAD_LUT - 1;
-                        pm = lut[idx];
+                        if (angle > gradient_span)
+                            angle = ((angle - gradient_span) < (ARC_FULL_TURN_DEG - angle)) ? gradient_span : 0.0f;
+                        int ramp_index = (int)((angle / gradient_span) * (float)ARC_GRADIENT_RAMP_SIZE);
+                        if (ramp_index < 0)
+                            ramp_index = 0;
+                        else if (ramp_index >= ARC_GRADIENT_RAMP_SIZE)
+                            ramp_index = ARC_GRADIENT_RAMP_SIZE - 1;
+                        premultiplied = ramp[ramp_index];
                     }
                     else if (radial)
                     {
-                        if (d < 0.0f)
-                            d = sqrtf(dx * dx + dy * dy);
-                        int idx = (int)(((d - ri) / thick) * (float)ARC_GRAD_LUT);
-                        if (idx < 0)
-                            idx = 0;
-                        else if (idx >= ARC_GRAD_LUT)
-                            idx = ARC_GRAD_LUT - 1;
-                        pm = lut[idx];
+                        if (distance < 0.0f)
+                            distance = sqrtf(column_offset * column_offset + row_offset * row_offset);
+                        int ramp_index = (int)(((distance - inner_radius) / thickness) * (float)ARC_GRADIENT_RAMP_SIZE);
+                        if (ramp_index < 0)
+                            ramp_index = 0;
+                        else if (ramp_index >= ARC_GRADIENT_RAMP_SIZE)
+                            ramp_index = ARC_GRADIENT_RAMP_SIZE - 1;
+                        premultiplied = ramp[ramp_index];
                     }
                     else
                     {
-                        pm = solid;
+                        premultiplied = solid;
                     }
-                    *out = er_px_scale_premul(pm, (uint32_t)(cov * 255.0f + 0.5f));
-                    any = true;
+                    *out = er_px_scale_premul(premultiplied, (uint32_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f));
+                    painted_any = true;
                 }
-                if (any)
-                    er_blit_blend(row, (int)(sizeof(uint32_t) * (size_t)(cx1 - cx0)), 255U, cx0, y, cx1 - cx0, 1);
+                if (painted_any)
+                    er_blit_blend(row,
+                                  (int)(sizeof(uint32_t) * (size_t)(chunk_end - chunk_start)),
+                                  ER_ALPHA_OPAQUE,
+                                  chunk_start,
+                                  y,
+                                  chunk_end - chunk_start,
+                                  1);
             }
         }
     }

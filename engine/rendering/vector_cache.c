@@ -33,7 +33,7 @@
  *
  * Invalidation is eager and lives with the store's mutators: er_vector_store()/er_vector_free() call
  * er_vector_cache_invalidate_slot(), er_vector_reset() calls er_vector_cache_reset(). An entry is
- * additionally keyed on the node origin (px, py) — edges bake the screen position in — so a node that
+ * additionally keyed on the node origin (origin_x, origin_y) — edges bake the screen position in — so a node that
  * moved simply misses and rebuilds.
  */
 
@@ -54,9 +54,9 @@ static ERVecCache s_entries[ERUI_VECTOR_CACHE_NODES];
  */
 typedef struct
 {
-    bool armed;   /**< A previous render already missed on (px, py) and no store has intervened since. */
+    bool armed;   /**< A previous render already missed on (origin_x, origin_y) and no store has intervened since. */
     bool blocked; /**< Geometry overflowed the entry; do not record again for this tape. */
-    int px, py;
+    int origin_x, origin_y;
 } VecCachePending;
 
 static VecCachePending s_pending[ERUI_MAX_VECTOR_NODES > 0 ? ERUI_MAX_VECTOR_NODES : 1];
@@ -72,98 +72,98 @@ static void ensure_init(void)
     if (done)
         return;
     done = true;
-    for (int i = 0; i < ERUI_VECTOR_CACHE_NODES; i++)
-        s_entries[i].slot = -1;
+    for (int entry_index = 0; entry_index < ERUI_VECTOR_CACHE_NODES; entry_index++)
+        s_entries[entry_index].slot = -1;
 }
 
 /** @brief The entry currently caching @p slot, valid or not (NULL when none). */
 static ERVecCache* entry_for_slot(int slot)
 {
-    for (int i = 0; i < ERUI_VECTOR_CACHE_NODES; i++)
-        if (s_entries[i].slot == slot)
-            return &s_entries[i];
+    for (int entry_index = 0; entry_index < ERUI_VECTOR_CACHE_NODES; entry_index++)
+        if (s_entries[entry_index].slot == slot)
+            return &s_entries[entry_index];
     return 0;
 }
 
-const ERVecCache* er_vector_cache_lookup(int slot, int px, int py)
+const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y)
 {
     if (slot < 0)
         return 0;
     ensure_init();
-    ERVecCache* e = entry_for_slot(slot);
-    if (e && e->valid && e->px == px && e->py == py)
+    ERVecCache* entry = entry_for_slot(slot);
+    if (entry && entry->valid && entry->origin_x == origin_x && entry->origin_y == origin_y)
     {
-        e->stamp = ++s_tick;
+        entry->stamp = ++s_tick;
         s_hits++;
-        return e;
+        return entry;
     }
     return 0;
 }
 
-ERVecCache* er_vector_cache_begin(int slot, int px, int py)
+ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
 {
     if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || s_recording)
         return 0;
     ensure_init();
-    VecCachePending* p = &s_pending[slot];
-    if (p->blocked)
+    VecCachePending* pending = &s_pending[slot];
+    if (pending->blocked)
         return 0;
-    if (!p->armed || p->px != px || p->py != py)
+    if (!pending->armed || pending->origin_x != origin_x || pending->origin_y != origin_y)
     {
         /* First touch of this key: arm it and decline. Recording is only granted on the NEXT render —
          * if the tape changes in between, the store's invalidate disarms, so an animated node (whose
          * tape updates every frame) never reaches a recording. This is the two-touch promotion. */
-        p->armed = true;
-        p->px = px;
-        p->py = py;
+        pending->armed = true;
+        pending->origin_x = origin_x;
+        pending->origin_y = origin_y;
         return 0;
     }
 
     /* Prefer the entry already tied to this slot (it is stale), then an empty one, then evict LRU. */
-    ERVecCache* e = entry_for_slot(slot);
-    if (!e)
-        e = entry_for_slot(-1);
-    if (!e)
+    ERVecCache* entry = entry_for_slot(slot);
+    if (!entry)
+        entry = entry_for_slot(-1);
+    if (!entry)
     {
-        e = &s_entries[0];
-        for (int i = 1; i < ERUI_VECTOR_CACHE_NODES; i++)
-            if (s_entries[i].stamp < e->stamp)
-                e = &s_entries[i];
+        entry = &s_entries[0];
+        for (int entry_index = 1; entry_index < ERUI_VECTOR_CACHE_NODES; entry_index++)
+            if (s_entries[entry_index].stamp < entry->stamp)
+                entry = &s_entries[entry_index];
     }
-    e->slot = slot;
-    e->valid = false;
-    e->px = px;
-    e->py = py;
-    e->stamp = ++s_tick;
-    e->n_passes = 0;
-    e->n_edges = 0;
-    s_recording = e;
-    return e;
+    entry->slot = slot;
+    entry->valid = false;
+    entry->origin_x = origin_x;
+    entry->origin_y = origin_y;
+    entry->stamp = ++s_tick;
+    entry->pass_count = 0;
+    entry->edge_count = 0;
+    s_recording = entry;
+    return entry;
 }
 
-void er_vector_cache_finish(ERVecCache* e, bool ok)
+void er_vector_cache_finish(ERVecCache* entry, bool success)
 {
-    if (!e)
+    if (!entry)
         return;
-    if (e == s_recording)
+    if (entry == s_recording)
         s_recording = 0;
-    if (ok)
+    if (success)
     {
-        e->valid = true;
+        entry->valid = true;
         s_builds++;
         return;
     }
     /* The geometry did not fit (or the build truncated): free the entry and stop re-trying this tape —
      * a recording that always fails would otherwise add its full-geometry build to every frame. A
      * re-store of the slot clears the block (the new tape may fit). */
-    if (e->slot >= 0 && e->slot < ERUI_MAX_VECTOR_NODES)
+    if (entry->slot >= 0 && entry->slot < ERUI_MAX_VECTOR_NODES)
     {
-        s_pending[e->slot].armed = false;
-        s_pending[e->slot].blocked = true;
+        s_pending[entry->slot].armed = false;
+        s_pending[entry->slot].blocked = true;
     }
-    e->slot = -1;
-    e->valid = false;
-    e->stamp = 0; /* evict first */
+    entry->slot = -1;
+    entry->valid = false;
+    entry->stamp = 0; /* evict first */
 }
 
 void er_vector_cache_invalidate_slot(int slot)
@@ -171,13 +171,13 @@ void er_vector_cache_invalidate_slot(int slot)
     if (slot < 0)
         return;
     ensure_init();
-    ERVecCache* e = entry_for_slot(slot);
-    if (e)
+    ERVecCache* entry = entry_for_slot(slot);
+    if (entry)
     {
-        e->slot = -1;
-        e->valid = false;
-        e->stamp = 0;
-        if (e == s_recording)
+        entry->slot = -1;
+        entry->valid = false;
+        entry->stamp = 0;
+        if (entry == s_recording)
             s_recording = 0;
     }
     if (slot < ERUI_MAX_VECTOR_NODES)
@@ -190,16 +190,16 @@ void er_vector_cache_invalidate_slot(int slot)
 void er_vector_cache_reset(void)
 {
     ensure_init();
-    for (int i = 0; i < ERUI_VECTOR_CACHE_NODES; i++)
+    for (int entry_index = 0; entry_index < ERUI_VECTOR_CACHE_NODES; entry_index++)
     {
-        s_entries[i].slot = -1;
-        s_entries[i].valid = false;
-        s_entries[i].stamp = 0;
+        s_entries[entry_index].slot = -1;
+        s_entries[entry_index].valid = false;
+        s_entries[entry_index].stamp = 0;
     }
-    for (int i = 0; i < ERUI_MAX_VECTOR_NODES; i++)
+    for (int entry_index = 0; entry_index < ERUI_MAX_VECTOR_NODES; entry_index++)
     {
-        s_pending[i].armed = false;
-        s_pending[i].blocked = false;
+        s_pending[entry_index].armed = false;
+        s_pending[entry_index].blocked = false;
     }
     s_recording = 0;
     /* Stats are per process (like the warn-once latches), not per scene: not cleared here. */
@@ -223,26 +223,26 @@ void er_vector_cache_stats_reset(void)
 
 #else /* !ERUI_VECTOR_EDGE_CACHE — no pool, no state; every call is a cheap no-op */
 
-const ERVecCache* er_vector_cache_lookup(int slot, int px, int py)
+const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y)
 {
     (void)slot;
-    (void)px;
-    (void)py;
+    (void)origin_x;
+    (void)origin_y;
     return 0;
 }
 
-ERVecCache* er_vector_cache_begin(int slot, int px, int py)
+ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y)
 {
     (void)slot;
-    (void)px;
-    (void)py;
+    (void)origin_x;
+    (void)origin_y;
     return 0;
 }
 
-void er_vector_cache_finish(ERVecCache* e, bool ok)
+void er_vector_cache_finish(ERVecCache* entry, bool success)
 {
-    (void)e;
-    (void)ok;
+    (void)entry;
+    (void)success;
 }
 
 void er_vector_cache_invalidate_slot(int slot)

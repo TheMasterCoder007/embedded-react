@@ -26,10 +26,10 @@
 /**
  * @brief Renders a gradient background into a rectangular region of the framebuffer.
  *
- * Dispatches to the linear or radial rasterizer based on vp->gradient_type.  Each rasterizer
+ * Dispatches to the linear or radial rasterizer based on view_props->gradient_type.  Each rasterizer
  * writes one row of premultiplied ARGB8888 pixels at a time and flushes it via er_blit_blend.
  *
- * The fill is clipped to the node's rounded-rect silhouette, resolved from vp's border_radius and
+ * The fill is clipped to the node's rounded-rect silhouette, resolved from view_props's border_radius and
  * per-corner overrides through the same er_rrect_clamp_radii / er_rrect_row geometry the background
  * and border fills use — so a gradient stops exactly where a solid background_color would, and the
  * rounded border stroked on top of it by the caller describes the same shape.  Rows clear of the
@@ -38,34 +38,34 @@
  * When ERUI_GRADIENT is 0 this function compiles to a no-op.
  * When ERUI_GRADIENT_RADIAL is 0 the radial path is excluded but the linear path remains.
  *
- * @param[in] vp  View props carrying gradient_type, gradient_angle, gradient_stop_count,
+ * @param[in] view_props  View props carrying gradient_type, gradient_angle, gradient_stop_count,
  *                gradient_stops, and the corner radii the fill is clipped to.  Nothing is drawn
- *                when vp is NULL or gradient_type == ER_GRADIENT_NONE.
- * @param[in] x   Destination left edge in framebuffer pixels.
- * @param[in] y   Destination top edge in framebuffer pixels.
- * @param[in] w   Destination width in pixels.
- * @param[in] h   Destination height in pixels.
+ *                when view_props is NULL or gradient_type == ER_GRADIENT_NONE.
+ * @param[in] x       Destination left edge in framebuffer pixels.
+ * @param[in] y       Destination top edge in framebuffer pixels.
+ * @param[in] width   Destination width in pixels.
+ * @param[in] height  Destination height in pixels.
  */
-void er_gradient_render(const ERViewProps* vp, int x, int y, int w, int h);
+void er_gradient_render(const ERViewProps* view_props, int x, int y, int width, int height);
 
 /**
- * @brief Evaluates a gradient's color at parameter t. Stops are ascending by position; t is clamped to the
+ * @brief Evaluates a gradient's color at a position. Stops are ascending by position; position is clamped to the
  *        endpoint colors outside [stops[0], stops[count-1]]. Always available (independent of ERUI_GRADIENT)
  *        so the vector rasterizer can reuse it.
  *
- * @param[in] stops  Stop array sorted by ascending position.
- * @param[in] count  Number of stops.
- * @param[in] t      Gradient parameter.
- * @return Straight-alpha ARGB8888 color at t.
+ * @param[in] stops     Stop array sorted by ascending position.
+ * @param[in] count     Number of stops.
+ * @param[in] position  Gradient parameter.
+ * @return Straight-alpha ARGB8888 color at position.
  */
-uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t);
+uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float position);
 
 /**
  * @brief Converts a straight-alpha ARGB8888 color to premultiplied ARGB8888 (for er_blit_blend buffers).
  *
- * @param[in] sa  Straight-alpha ARGB8888 color.
+ * @param[in] straight_argb  Straight-alpha ARGB8888 color.
  * @return Premultiplied ARGB8888 equivalent.
  */
-uint32_t er_gradient_premul(uint32_t sa);
+uint32_t er_gradient_premul(uint32_t straight_argb);
 
 #endif /* EMBEDDED_REACT_GRADIENT_H */

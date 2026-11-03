@@ -44,8 +44,9 @@
 /* When a static pool is exhausted the vector code silently drops geometry — correct and memory-safe, but a
  * truncated shape is easy to mistake for a bug. The first overflow of each pool prints a one-line warning
  * naming the macro to raise. One wording, one latch, one knob (ERUI_DIAGNOSTICS — see er_diagnostics.h). */
-#define ERUI_VEC_WARN_ONCE(macro_name, cap)                                                                            \
-    ERUI_WARN_ONCE("embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name, (int)(cap))
+#define ERUI_VEC_WARN_ONCE(macro_name, capacity)                                                                       \
+    ERUI_WARN_ONCE(                                                                                                    \
+        "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name, (int)(capacity))
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Edge cache (per-node cached rasterizer geometry; pool lives in vector_cache.c)
@@ -65,14 +66,14 @@
 typedef struct ERVecCache ERVecCache;
 
 /**
- * @brief Returns the valid cache entry for (slot, px, py), or NULL on a miss.
+ * @brief Returns the valid cache entry for (slot, origin_x, origin_y), or NULL on a miss.
  *
  * A hit refreshes the entry's LRU stamp and counts toward er_vector_cache_hits().
  */
-const ERVecCache* er_vector_cache_lookup(int slot, int px, int py);
+const ERVecCache* er_vector_cache_lookup(int slot, int origin_x, int origin_y);
 
 /**
- * @brief Claims an entry to record (slot, px, py) into, or returns NULL when this render should not
+ * @brief Claims an entry to record (slot, origin_x, origin_y) into, or returns NULL when this render should not
  *        record: the cache is compiled out, the slot's geometry overflowed the entry before (blocked
  *        until the slot is re-stored), or this is the FIRST render of the key — the first call arms
  *        the key and declines; only a later call with the key still intact is granted an entry.
@@ -80,12 +81,12 @@ const ERVecCache* er_vector_cache_lookup(int slot, int px, int py);
  * That last rule is the two-touch promotion: recording costs a full (unclipped) geometry build plus a
  * copy, which must never be added to an animated node's per-frame tape update — a key only proves it
  * is static by surviving from one render to the next (any er_vector_store() disarms it). The claimed
- * entry is invalid until er_vector_cache_finish(e, true).
+ * entry is invalid until er_vector_cache_finish(entry, true).
  */
-ERVecCache* er_vector_cache_begin(int slot, int px, int py);
+ERVecCache* er_vector_cache_begin(int slot, int origin_x, int origin_y);
 
-/** @brief Ends a recording: ok=true publishes the entry, ok=false discards it and blocks the slot. */
-void er_vector_cache_finish(ERVecCache* e, bool ok);
+/** @brief Ends a recording: success=true publishes the entry, success=false discards it and blocks the slot. */
+void er_vector_cache_finish(ERVecCache* entry, bool success);
 
 /** @brief Drops any cache entry (and pending promotion / block) for a storage slot. */
 void er_vector_cache_invalidate_slot(int slot);
@@ -112,33 +113,33 @@ void er_vector_cache_stats_reset(void);
  * Each shape is filled (if its paint has a non-transparent fill) then stroked (if it has a
  * non-transparent stroke and positive width), in tape order. Anti-aliased coverage is composited via
  * the engine blit layer, so it blends correctly into the framebuffer and through opacity/transform
- * scratch. Painting is clipped to the node box [px, px+w) x [py, py+h).
+ * scratch. Painting is clipped to [clip_x0, clip_x1) x [clip_y0, clip_y1).
  *
- * @param[in] ops       Flat op-tape (see the ER_VOP_* contract in er_scene.h).
- * @param[in] n_ops     Number of floats in @p ops.
- * @param[in] paints    Paint table (one ERVectorPaint per entry).
- * @param[in] n_paints  Number of paint entries.
- * @param[in] grads     Gradient table; a paint's 1-based fill_grad indexes it (NULL/0 when none). ERUI_GRADIENT.
- * @param[in] n_grads   Number of gradient entries.
- * @param[in] px        Geometry origin X in framebuffer pixels (node box left).
- * @param[in] py        Geometry origin Y in framebuffer pixels (node box top).
- * @param[in] clipx0    Clip box left edge (rasterize + paint are limited to this rect).
- * @param[in] clipy0    Clip box top edge.
- * @param[in] clipx1    Clip box right edge (exclusive).
- * @param[in] clipy1    Clip box bottom edge (exclusive).
+ * @param[in] ops             Flat op-tape (see the ER_VOP_* contract in er_scene.h).
+ * @param[in] op_count        Number of floats in @p ops.
+ * @param[in] paints          Paint table (one ERVectorPaint per entry).
+ * @param[in] paint_count     Number of paint entries.
+ * @param[in] gradients       Gradient table; a paint's 1-based fill_grad indexes it (NULL/0 when none). ERUI_GRADIENT.
+ * @param[in] gradient_count  Number of gradient entries.
+ * @param[in] origin_x        Geometry origin X in framebuffer pixels (node box left).
+ * @param[in] origin_y        Geometry origin Y in framebuffer pixels (node box top).
+ * @param[in] clip_x0         Clip box left edge (rasterize + paint are limited to this rect).
+ * @param[in] clip_y0         Clip box top edge.
+ * @param[in] clip_x1         Clip box right edge (exclusive).
+ * @param[in] clip_y1         Clip box bottom edge (exclusive).
  */
 void er_vector_render(const float* ops,
-                      int n_ops,
+                      int op_count,
                       const ERVectorPaint* paints,
-                      int n_paints,
-                      const ERVectorGradient* grads,
-                      int n_grads,
-                      int px,
-                      int py,
-                      int clipx0,
-                      int clipy0,
-                      int clipx1,
-                      int clipy1);
+                      int paint_count,
+                      const ERVectorGradient* gradients,
+                      int gradient_count,
+                      int origin_x,
+                      int origin_y,
+                      int clip_x0,
+                      int clip_y0,
+                      int clip_x1,
+                      int clip_y1);
 
 /**
  * @brief Renders a storage slot's geometry at a node's box, through the edge cache when possible.
@@ -150,14 +151,14 @@ void er_vector_render(const float* ops,
  * compiled out (or on a miss) this renders exactly like er_vector_render().
  *
  * @param[in] slot      Storage slot holding the node's tape (er_vector_store); no-op when empty.
- * @param[in] px        Geometry origin X in framebuffer pixels (node box left).
- * @param[in] py        Geometry origin Y in framebuffer pixels (node box top).
- * @param[in] clipx0    Clip box left edge — the caller passes node box ∩ damage clip.
- * @param[in] clipy0    Clip box top edge.
- * @param[in] clipx1    Clip box right edge (exclusive).
- * @param[in] clipy1    Clip box bottom edge (exclusive).
+ * @param[in] origin_x  Geometry origin X in framebuffer pixels (node box left).
+ * @param[in] origin_y  Geometry origin Y in framebuffer pixels (node box top).
+ * @param[in] clip_x0   Clip box left edge — the caller passes node box ∩ damage clip.
+ * @param[in] clip_y0   Clip box top edge.
+ * @param[in] clip_x1   Clip box right edge (exclusive).
+ * @param[in] clip_y1   Clip box bottom edge (exclusive).
  */
-void er_vector_render_slot(int slot, int px, int py, int clipx0, int clipy0, int clipx1, int clipy1);
+void er_vector_render_slot(int slot, int origin_x, int origin_y, int clip_x0, int clip_y0, int clip_x1, int clip_y1);
 
 /**
  * @brief Number of shapes er_vector_render() has routed to the shared analytic arc core since the last
@@ -183,21 +184,21 @@ void er_vector_analytic_arc_count_reset(void);
 /**
  * @brief Copies an op-tape + paint table into a storage slot, allocating one if needed.
  *
- * @param[in] slot      Existing slot index to overwrite, or < 0 to allocate a free one.
- * @param[in] ops       Op-tape to copy (clamped to the slot capacity).
- * @param[in] n_ops     Float count in @p ops.
- * @param[in] paints    Paint table to copy (clamped to capacity).
- * @param[in] n_paints  Paint count.
+ * @param[in] slot         Existing slot index to overwrite, or < 0 to allocate a free one.
+ * @param[in] ops          Op-tape to copy (clamped to the slot capacity).
+ * @param[in] op_count     Float count in @p ops.
+ * @param[in] paints       Paint table to copy (clamped to capacity).
+ * @param[in] paint_count  Paint count.
  *
  * @return The slot index now holding the data, or -1 if no slot was available.
  */
 int er_vector_store(int slot,
                     const float* ops,
-                    int n_ops,
+                    int op_count,
                     const ERVectorPaint* paints,
-                    int n_paints,
-                    const ERVectorGradient* grads,
-                    int n_grads);
+                    int paint_count,
+                    const ERVectorGradient* gradients,
+                    int gradient_count);
 
 /** @brief Releases a storage slot back to the pool (no-op for an invalid slot). */
 void er_vector_free(int slot);
@@ -208,14 +209,17 @@ void er_vector_reset(void);
 /** @brief The number of storage slots: vector nodes that can hold geometry at once. */
 int er_vector_capacity(void);
 
-/** @brief Returns a slot's op-tape and writes its float count to @p n_ops (NULL/0 for an empty slot). */
-const float* er_vector_slot_ops(int slot, int* n_ops);
+/** @brief Returns a slot's op-tape and writes its float count to @p op_count (NULL/0 for an empty slot). */
+const float* er_vector_slot_ops(int slot, int* op_count);
 
-/** @brief Returns a slot's paint table and writes its count to @p n_paints (NULL/0 for an empty slot). */
-const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints);
+/** @brief Returns a slot's paint table and writes its count to @p paint_count (NULL/0 for an empty slot). */
+const ERVectorPaint* er_vector_slot_paints(int slot, int* paint_count);
 
-/** @brief Returns a slot's gradient table and writes its count to @p n_grads (NULL/0 when none / no ERUI_GRADIENT). */
-const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads);
+/**
+ * @brief Returns a slot's gradient table and writes its count to @p gradient_count (NULL/0 when none / no
+ *        ERUI_GRADIENT).
+ */
+const ERVectorGradient* er_vector_slot_grads(int slot, int* gradient_count);
 
 /** @brief Storage slots currently holding geometry — the perf overlay's "vector slots in use" counter. */
 int er_vector_slots_in_use(void);
