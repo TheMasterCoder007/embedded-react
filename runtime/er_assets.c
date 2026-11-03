@@ -41,91 +41,91 @@
 /** @brief A read cursor over the pack buffer; `ok` clears on any over-read. */
 typedef struct
 {
-    const uint8_t* p;
+    const uint8_t* next;
     const uint8_t* end;
     bool ok;
 } Cur;
 
-static uint8_t rd_u8(Cur* c)
+static uint8_t rd_u8(Cur* cursor)
 {
-    if (!c->ok || c->p + 1 > c->end)
+    if (!cursor->ok || cursor->next + 1 > cursor->end)
     {
-        c->ok = false;
+        cursor->ok = false;
         return 0;
     }
-    return *c->p++;
+    return *cursor->next++;
 }
 
-static uint16_t rd_u16(Cur* c)
+static uint16_t rd_u16(Cur* cursor)
 {
-    if (!c->ok || c->p + 2 > c->end)
+    if (!cursor->ok || cursor->next + 2 > cursor->end)
     {
-        c->ok = false;
+        cursor->ok = false;
         return 0;
     }
-    const uint16_t v = (uint16_t)(c->p[0] | (c->p[1] << 8));
-    c->p += 2;
-    return v;
+    const uint16_t value = (uint16_t)(cursor->next[0] | (cursor->next[1] << 8));
+    cursor->next += 2;
+    return value;
 }
 
-static uint32_t rd_u32(Cur* c)
+static uint32_t rd_u32(Cur* cursor)
 {
-    if (!c->ok || c->p + 4 > c->end)
+    if (!cursor->ok || cursor->next + 4 > cursor->end)
     {
-        c->ok = false;
+        cursor->ok = false;
         return 0;
     }
-    const uint32_t v =
-        (uint32_t)c->p[0] | ((uint32_t)c->p[1] << 8) | ((uint32_t)c->p[2] << 16) | ((uint32_t)c->p[3] << 24);
-    c->p += 4;
-    return v;
+    const uint32_t value = (uint32_t)cursor->next[0] | ((uint32_t)cursor->next[1] << 8)
+                           | ((uint32_t)cursor->next[2] << 16) | ((uint32_t)cursor->next[3] << 24);
+    cursor->next += 4;
+    return value;
 }
 
-static int8_t rd_i8(Cur* c)
+static int8_t rd_i8(Cur* cursor)
 {
-    return (int8_t)rd_u8(c);
+    return (int8_t)rd_u8(cursor);
 }
 
-/** @brief Returns a pointer to the next @p n bytes and advances, or NULL on over-read. */
-static const uint8_t* rd_bytes(Cur* c, size_t n)
+/** @brief Returns a pointer to the next @p byte_count bytes and advances, or NULL on over-read. */
+static const uint8_t* rd_bytes(Cur* cursor, size_t byte_count)
 {
-    if (!c->ok || c->p + n > c->end)
+    if (!cursor->ok || cursor->next + byte_count > cursor->end)
     {
-        c->ok = false;
+        cursor->ok = false;
         return NULL;
     }
-    const uint8_t* r = c->p;
-    c->p += n;
-    return r;
+    const uint8_t* bytes = cursor->next;
+    cursor->next += byte_count;
+    return bytes;
 }
 
-/** @brief Reads a u16-length-prefixed name into @p out (null-terminated, truncated to cap). */
-static void rd_name(Cur* c, char* out, size_t cap)
+/** @brief Reads a u16-length-prefixed name into @p out (null-terminated, truncated to capacity). */
+static void rd_name(Cur* cursor, char* out, size_t capacity)
 {
-    const uint16_t len = rd_u16(c);
-    const uint8_t* s = rd_bytes(c, len);
-    size_t n = (len < cap - 1) ? len : cap - 1;
-    if (s && c->ok)
+    const uint16_t stored_length = rd_u16(cursor);
+    const uint8_t* stored_name = rd_bytes(cursor, stored_length);
+    size_t kept_length = (stored_length < capacity - 1) ? stored_length : capacity - 1;
+    if (stored_name && cursor->ok)
     {
-        memcpy(out, s, n);
+        memcpy(out, stored_name, kept_length);
     }
     else
     {
-        n = 0;
+        kept_length = 0;
     }
-    out[n] = '\0';
+    out[kept_length] = '\0';
 }
 
 /** @brief Fills a GlyphInfo from the 9-byte serialized form. */
-static void rd_glyph(Cur* c, GlyphInfo* g)
+static void rd_glyph(Cur* cursor, GlyphInfo* glyph)
 {
-    memset(g, 0, sizeof(*g));
-    g->bitmap_offset = rd_u32(c);
-    g->width = rd_u8(c);
-    g->height = rd_u8(c);
-    g->x_offset = rd_i8(c);
-    g->y_offset = rd_i8(c);
-    g->advance = rd_u8(c);
+    memset(glyph, 0, sizeof(*glyph));
+    glyph->bitmap_offset = rd_u32(cursor);
+    glyph->width = rd_u8(cursor);
+    glyph->height = rd_u8(cursor);
+    glyph->x_offset = rd_i8(cursor);
+    glyph->y_offset = rd_i8(cursor);
+    glyph->advance = rd_u8(cursor);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -134,6 +134,20 @@ static void rd_glyph(Cur* c, GlyphInfo* g)
 
 /** @brief Longest name rd_name keeps, in bytes. */
 #define IMAGE_NAME_READ_MAX 127u
+
+/** @brief "ERPK" | version u32 | image_count u32 | font_count u32. */
+#define PACK_HEADER_SIZE 16u
+#define PACK_MAGIC_SIZE 4
+
+/** @brief Version 1 has only ARGB8888 images; version 2 gives each image a pixel format. */
+#define PACK_VERSION_ARGB8888 1u
+#define PACK_VERSION_PIXEL_FORMATS 2u
+
+/** @brief An image's pixel format, and its bytes per pixel. */
+#define PIXEL_FORMAT_ARGB8888 0u
+#define PIXEL_FORMAT_RGB565 1u
+#define ARGB8888_BYTES 4u
+#define RGB565_BYTES 2u
 
 /** @brief Bytes one row of a glyph's bitmap takes in a font of @p format, or 0 for a format the engine can't draw. */
 static uint32_t glyph_row_bytes(uint8_t format, uint32_t width)
@@ -213,21 +227,21 @@ static void count_family(ErAssetsWalk* walk, const uint8_t* name, uint16_t lengt
 
 bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
 {
-    if (!source || length < 16)
+    if (!source || length < PACK_HEADER_SIZE)
     {
         return false;
     }
     Cur cursor = {source, source + length, true};
 
-    const uint8_t* magic = rd_bytes(&cursor, 4);
-    if (!magic || memcmp(magic, "ERPK", 4) != 0)
+    const uint8_t* magic = rd_bytes(&cursor, PACK_MAGIC_SIZE);
+    if (!magic || memcmp(magic, "ERPK", PACK_MAGIC_SIZE) != 0)
     {
         return false; /* not our pack (or truncated header) */
     }
     /* Version 2 adds a per-image format byte (0=ARGB8888, 1=RGB565) plus a pad that 4-byte
      * aligns the pixels; a pack with no RGB565 images is still emitted as version 1. */
     const uint32_t version = rd_u32(&cursor);
-    if (version != 1u && version != 2u)
+    if (version != PACK_VERSION_ARGB8888 && version != PACK_VERSION_PIXEL_FORMATS)
     {
         return false;
     }
@@ -238,22 +252,22 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
 
     for (uint32_t image_index = 0; image_index < image_count && cursor.ok; image_index++)
     {
-        const uint32_t name_record = (uint32_t)(cursor.p - source);
+        const uint32_t name_record = (uint32_t)(cursor.next - source);
         rd_name(&cursor, name, sizeof(name));
         const uint32_t width = rd_u32(&cursor);
         const uint32_t height = rd_u32(&cursor);
-        uint8_t format = 0u; /* v1 packs are always ARGB8888 */
-        if (version >= 2u)
+        uint8_t format = PIXEL_FORMAT_ARGB8888; /* v1 packs are always ARGB8888 */
+        if (version >= PACK_VERSION_PIXEL_FORMATS)
         {
             format = rd_u8(&cursor);
-            if (format > 1u)
+            if (format > PIXEL_FORMAT_RGB565)
             {
                 return false; /* unknown pixel format: the record length is unknowable, abort */
             }
-            rd_bytes(&cursor, (size_t)((4u - ((uintptr_t)(cursor.p - source) & 3u)) & 3u)); /* skip alignment pad */
+            rd_bytes(&cursor, (size_t)((4u - ((uintptr_t)(cursor.next - source) & 3u)) & 3u)); /* skip alignment pad */
         }
         /* Checked before multiplying, so a hostile size can't wrap the byte count. */
-        const size_t bytes_per_pixel = format == 1u ? 2u : 4u;
+        const size_t bytes_per_pixel = format == PIXEL_FORMAT_RGB565 ? RGB565_BYTES : ARGB8888_BYTES;
         if (height != 0u && width > length / bytes_per_pixel / height)
         {
             return false;
@@ -265,13 +279,13 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
             walk->info.misaligned += ((uintptr_t)pixels & (bytes_per_pixel - 1u)) ? 1u : 0u;
             walk->info.empty_images += (width == 0u || height == 0u) ? 1u : 0u;
             walk->info.odd_rgb565 +=
-                (format == 1u && width != 0u && height != 0u && ((uintptr_t)pixels & 1u)) ? 1u : 0u;
+                (format == PIXEL_FORMAT_RGB565 && width != 0u && height != 0u && ((uintptr_t)pixels & 1u)) ? 1u : 0u;
             if (walk->image_names && walk->info.images <= walk->image_capacity)
             {
                 walk->image_names[walk->info.images - 1u] = name_record;
             }
             /* Both reference the pixels in the pack (the caller keeps it live). */
-            if (walk->registering && format == 1u)
+            if (walk->registering && format == PIXEL_FORMAT_RGB565)
                 er_image_load_rgb565(name, pixels, (int)width, (int)height);
             else if (walk->registering)
                 er_image_load(name, pixels, (int)width, (int)height);
@@ -280,7 +294,7 @@ bool er_assets_walk(const uint8_t* source, size_t length, ErAssetsWalk* walk)
 
     for (uint32_t font_index = 0; font_index < font_count && cursor.ok; font_index++)
     {
-        const uint8_t* name_record = cursor.p;
+        const uint8_t* name_record = cursor.next;
         rd_name(&cursor, name, sizeof(name));
         BitmapFont header;
         memset(&header, 0, sizeof(header));
@@ -392,11 +406,11 @@ static bool storage_tables(ErAssetsWalk* walk,
     return *font && (glyph_count == 0u || *glyphs) && (extras_count == 0u || *extras);
 }
 
-bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info)
+bool er_assets_check_pack(const void* buffer, size_t length, ErAssetsInfo* info)
 {
     ErAssetsWalk walk;
     memset(&walk, 0, sizeof(walk));
-    const bool ok = er_assets_walk((const uint8_t*)buf, len, &walk);
+    const bool ok = er_assets_walk((const uint8_t*)buffer, length, &walk);
     if (info)
     {
         *info = walk.info;
@@ -505,16 +519,17 @@ static void sort_image_names(const uint8_t* pack, uint32_t* names, uint32_t coun
     }
 }
 
-bool er_assets_check_pack_images(const void* buf, size_t len, ErAssetsInfo* info, uint32_t* names, uint32_t capacity)
+bool er_assets_check_pack_images(
+    const void* buffer, size_t length, ErAssetsInfo* info, uint32_t* names, uint32_t capacity)
 {
     ErAssetsWalk walk;
     memset(&walk, 0, sizeof(walk));
     walk.image_names = names;
     walk.image_capacity = names ? capacity : 0u;
-    const bool ok = er_assets_walk((const uint8_t*)buf, len, &walk);
+    const bool ok = er_assets_walk((const uint8_t*)buffer, length, &walk);
     if (ok && names)
     {
-        sort_image_names((const uint8_t*)buf, names, walk.info.images < capacity ? walk.info.images : capacity);
+        sort_image_names((const uint8_t*)buffer, names, walk.info.images < capacity ? walk.info.images : capacity);
     }
     if (info)
     {
@@ -523,9 +538,9 @@ bool er_assets_check_pack_images(const void* buf, size_t len, ErAssetsInfo* info
     return ok;
 }
 
-bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count, const char* name)
+bool er_assets_find_image(const void* buffer, const uint32_t* names, uint32_t count, const char* name)
 {
-    if (!buf || !names || !name)
+    if (!buffer || !names || !name)
     {
         return false;
     }
@@ -537,7 +552,7 @@ bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count
         const uint32_t middle = low + (high - low) / 2u;
         const uint8_t* candidate;
         uint32_t candidate_length;
-        image_name((const uint8_t*)buf, names[middle], &candidate, &candidate_length);
+        image_name((const uint8_t*)buffer, names[middle], &candidate, &candidate_length);
         const int order = compare_names(candidate, candidate_length, (const uint8_t*)name, name_length);
         if (order == 0)
         {
@@ -561,7 +576,7 @@ static bool storage_fits(const void* base, uint32_t capacity, uint32_t needed)
     return needed == 0u || (base && needed <= capacity);
 }
 
-bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage)
+bool er_assets_load_pack_into(const void* buffer, size_t length, ErAssetsStorage* storage)
 {
     if (!storage)
     {
@@ -572,7 +587,7 @@ bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* stor
     storage->extras_used = 0u;
     /* Checked first, so a pack that fails registers nothing. */
     ErAssetsInfo info;
-    if (!er_assets_check_pack(buf, len, &info) || !storage_fits(storage->fonts, storage->font_count, info.fonts)
+    if (!er_assets_check_pack(buffer, length, &info) || !storage_fits(storage->fonts, storage->font_count, info.fonts)
         || !storage_fits(storage->glyphs, storage->glyph_count, info.glyphs)
         || !storage_fits(storage->extras, storage->extra_count, info.extra_glyphs))
     {
@@ -583,5 +598,5 @@ bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* stor
     walk.registering = true;
     walk.tables = storage_tables;
     walk.storage = storage;
-    return er_assets_walk((const uint8_t*)buf, len, &walk);
+    return er_assets_walk((const uint8_t*)buffer, length, &walk);
 }

@@ -50,20 +50,21 @@ typedef struct
     uint8_t form;
     uint8_t words;
     uint8_t writes;
-    uint8_t kind_a;
-    uint8_t kind_b;
-    uint8_t kind_c;
+    uint8_t operand_a_kind;
+    uint8_t operand_b_kind;
+    uint8_t operand_c_kind;
 } OpInfo;
 
-static const OpInfo s_ops[ERB_OP_COUNT_] = {[ERB_OP_INVALID_] = {0u, 0u, 0u, 0u, 0u, 0u},
-#define OP_INFO_(name, form, words, writes, a, b, c) [ERB_OP_##name] = {form, words, writes, a, b, c},
-                                            ERB_OPCODES(OP_INFO_)
+static const OpInfo s_opcodes[ERB_OP_COUNT_] = {[ERB_OP_INVALID_] = {0u, 0u, 0u, 0u, 0u, 0u},
+#define OP_INFO_(name, form, words, writes, operand_a_kind, operand_b_kind, operand_c_kind)                            \
+    [ERB_OP_##name] = {form, words, writes, operand_a_kind, operand_b_kind, operand_c_kind},
+                                                ERB_OPCODES(OP_INFO_)
 #undef OP_INFO_
 };
 
-uint32_t erb_op_words(uint8_t op)
+uint32_t erb_op_words(uint8_t opcode)
 {
-    return op < ERB_OP_COUNT_ ? s_ops[op].words : 0u;
+    return opcode < ERB_OP_COUNT_ ? s_opcodes[opcode].words : 0u;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -141,9 +142,9 @@ static bool in_bounds(uint32_t offset, uint32_t length, uint32_t limit)
     return offset <= limit && length <= limit - offset;
 }
 
-static bool is_start(uint32_t pc)
+static bool is_start(uint32_t program_counter)
 {
-    return erb_bit_get(s_starts, pc);
+    return erb_bit_get(s_starts, program_counter);
 }
 
 /** @brief Checks one string of UTF-8: no overlong forms, surrogates or code points past U+10FFFF. */
@@ -371,7 +372,7 @@ static const struct
 {
     uint8_t pops;
     uint8_t pushes;
-} s_check_ops[ERB_CK_COUNT_] = {
+} s_check_opcodes[ERB_CK_COUNT_] = {
     [ERB_CK_END] = {1, 0},    [ERB_CK_WIDTH] = {0, 1}, [ERB_CK_HEIGHT] = {0, 1}, [ERB_CK_PUSHI] = {0, 1},
     [ERB_CK_PUSHK] = {0, 1},  [ERB_CK_LOAD] = {0, 1},  [ERB_CK_STORE] = {1, 0},  [ERB_CK_ADD] = {2, 1},
     [ERB_CK_SUB] = {2, 1},    [ERB_CK_MUL] = {2, 1},   [ERB_CK_DIV] = {2, 1},    [ERB_CK_NEG] = {1, 1},
@@ -403,23 +404,23 @@ static bool run_check(
     memset(locals, 0, sizeof(locals));
     uint32_t depth = 0u;
     const uint32_t words = length / sizeof(uint32_t);
-    for (uint32_t pc = start; pc < words; pc++)
+    for (uint32_t program_counter = start; program_counter < words; program_counter++)
     {
         if (*budget == 0u)
         {
             return false;
         }
         (*budget)--;
-        const uint32_t word = erb_u32(table + pc * sizeof(uint32_t));
-        const uint8_t op = ERB_CHECK_OP(word);
-        const int32_t arg = ERB_CHECK_ARG(word);
-        if (op == 0u || op >= ERB_CK_COUNT_)
+        const uint32_t word = erb_u32(table + program_counter * sizeof(uint32_t));
+        const uint8_t opcode = ERB_CHECK_OP(word);
+        const int32_t argument = ERB_CHECK_ARG(word);
+        if (opcode == 0u || opcode >= ERB_CK_COUNT_)
         {
             return false;
         }
-        const bool binary_math = op == ERB_CK_MATH && arg >= ERB_MATH_MIN;
-        const uint32_t pops = binary_math ? 2u : s_check_ops[op].pops;
-        if (depth < pops || depth - pops + s_check_ops[op].pushes > ERB_CHECK_STACK)
+        const bool binary_math = opcode == ERB_CK_MATH && argument >= ERB_MATH_MIN;
+        const uint32_t pops = binary_math ? 2u : s_check_opcodes[opcode].pops;
+        if (depth < pops || depth - pops + s_check_opcodes[opcode].pushes > ERB_CHECK_STACK)
         {
             return false;
         }
@@ -427,7 +428,7 @@ static bool run_check(
         const double left = pops ? stack[depth] : 0.0;
         const double right = pops > 1u ? stack[depth + 1u] : 0.0;
         double result = 0.0;
-        switch (op)
+        switch (opcode)
         {
             case ERB_CK_END:
                 *passes = check_truth(left);
@@ -439,33 +440,33 @@ static bool run_check(
                 result = config->screen_h;
                 break;
             case ERB_CK_PUSHI:
-                result = arg;
+                result = argument;
                 break;
             case ERB_CK_PUSHK:
             {
-                if (words - pc < 3u)
+                if (words - program_counter < 3u)
                 {
                     return false;
                 }
-                const uint64_t bits = (uint64_t)erb_u32(table + (pc + 1u) * sizeof(uint32_t))
-                                      | ((uint64_t)erb_u32(table + (pc + 2u) * sizeof(uint32_t)) << 32);
+                const uint64_t bits = (uint64_t)erb_u32(table + (program_counter + 1u) * sizeof(uint32_t))
+                                      | ((uint64_t)erb_u32(table + (program_counter + 2u) * sizeof(uint32_t)) << 32);
                 memcpy(&result, &bits, sizeof(result));
-                pc += 2u;
+                program_counter += 2u;
                 break;
             }
             case ERB_CK_LOAD:
-                if (arg < 0 || (uint32_t)arg >= ERB_CHECK_LOCALS)
+                if (argument < 0 || (uint32_t)argument >= ERB_CHECK_LOCALS)
                 {
                     return false;
                 }
-                result = locals[arg];
+                result = locals[argument];
                 break;
             case ERB_CK_STORE:
-                if (arg < 0 || (uint32_t)arg >= ERB_CHECK_LOCALS)
+                if (argument < 0 || (uint32_t)argument >= ERB_CHECK_LOCALS)
                 {
                     return false;
                 }
-                locals[arg] = left;
+                locals[argument] = left;
                 continue;
             case ERB_CK_ADD:
                 result = left + right;
@@ -483,21 +484,21 @@ static bool run_check(
                 result = -left;
                 break;
             case ERB_CK_MATH:
-                if (arg < 0 || arg >= ERB_MATH_COUNT_)
+                if (argument < 0 || argument >= ERB_MATH_COUNT_)
                 {
                     return false;
                 }
-                result = erb_vm_dmath((uint32_t)arg, left, right);
+                result = erb_vm_dmath((uint32_t)argument, left, right);
                 break;
             case ERB_CK_TOINT:
                 result = erb_vm_to_int(left);
                 break;
             case ERB_CK_IDIV:
-                if (arg < 0 || arg >= ERB_CK_IDIV_COUNT_)
+                if (argument < 0 || argument >= ERB_CK_IDIV_COUNT_)
                 {
                     return false;
                 }
-                result = erb_vm_idiv((uint32_t)arg, left, right);
+                result = erb_vm_idiv((uint32_t)argument, left, right);
                 break;
             case ERB_CK_LT:
                 result = left < right;
@@ -771,11 +772,11 @@ static bool check_directory(ErbProgram* program, ErbError* error)
     for (uint16_t index = 0; index < table_count; index++)
     {
         const uint8_t* entry = directory + index * ERB_DIRECTORY_SIZE;
-        const uint16_t id = erb_u16(entry + ERB_DIRECTORY_ID_AT);
+        const uint16_t table_id = erb_u16(entry + ERB_DIRECTORY_ID_AT);
         const uint16_t panel = has_panels ? erb_u16(entry + ERB_DIRECTORY_PANEL_AT) : ERB_NONE;
         const uint32_t offset = erb_u32(entry + ERB_DIRECTORY_OFFSET_AT);
         const uint32_t length = erb_u32(entry + ERB_DIRECTORY_LENGTH_AT);
-        if (id == 0u || id >= ERB_TABLE_COUNT_)
+        if (table_id == 0u || table_id >= ERB_TABLE_COUNT_)
         {
             return fail(error, ERB_ERR_TABLE, "unknown table id");
         }
@@ -793,12 +794,12 @@ static bool check_directory(ErbProgram* program, ErbError* error)
         {
             continue;
         }
-        if (program->table[id])
+        if (program->table[table_id])
         {
             return fail(error, ERB_ERR_TABLE, "table listed twice");
         }
-        program->table[id] = section + offset;
-        program->table_length[id] = length;
+        program->table[table_id] = section + offset;
+        program->table_length[table_id] = length;
     }
     /* No two of this panel's tables overlap. At most one of each id, so this is at most 20 x 20. */
     for (uint32_t first = 1; first < ERB_TABLE_COUNT_; first++)
@@ -843,7 +844,7 @@ static bool check_directory(ErbProgram* program, ErbError* error)
  * @return false when the headers don't fit or the rest isn't a whole number of records.
  */
 static bool split_table(const ErbProgram* program,
-                        uint8_t id,
+                        uint8_t table_id,
                         uint32_t header_size,
                         uint32_t record_size,
                         const uint8_t** headers,
@@ -851,8 +852,8 @@ static bool split_table(const ErbProgram* program,
                         const uint8_t** records,
                         uint32_t* record_count)
 {
-    const uint8_t* table = program->table[id];
-    const uint32_t length = program->table_length[id];
+    const uint8_t* table = program->table[table_id];
+    const uint32_t length = program->table_length[table_id];
     *header_count = 0u;
     *record_count = 0u;
     if (!table)
@@ -1081,8 +1082,8 @@ static bool check_slots(ErbProgram* program, ErbError* error)
         {
             return fail(error, ERB_ERR_STATE, "enum set or row layout missing");
         }
-        const bool has_cap = type == ERB_T_STRING || type == ERB_T_LIST || type == ERB_T_NODE;
-        if ((!has_cap && capacity) || ((type == ERB_T_STRING || type == ERB_T_LIST) && capacity == 0u))
+        const bool has_capacity = type == ERB_T_STRING || type == ERB_T_LIST || type == ERB_T_NODE;
+        if ((!has_capacity && capacity) || ((type == ERB_T_STRING || type == ERB_T_LIST) && capacity == 0u))
         {
             return fail(error, ERB_ERR_STATE, "slot cap");
         }
@@ -1593,26 +1594,27 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
             return fail(error, ERB_ERR_TAPE, "tape floats, paints or gradients out of range");
         }
         /* The ops parse with their argument counts. */
-        static const uint8_t args[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u};
-        uint32_t at = 0;
-        while (at < float_count)
+        static const uint8_t operand_counts[] = {1u, 2u, 2u, 4u, 6u, 6u, 0u};
+        uint32_t float_index = 0;
+        while (float_index < float_count)
         {
-            const float op = erb_f32(table + floats + at * sizeof(float));
-            if (!(op >= ER_VOP_SHAPE && op <= ER_VOP_CLOSE) || (float)(int)op != op
-                || at + 1u + args[(int)op] > float_count)
+            const float opcode_value = erb_f32(table + floats + float_index * sizeof(float));
+            if (!(opcode_value >= ER_VOP_SHAPE && opcode_value <= ER_VOP_CLOSE)
+                || (float)(int)opcode_value != opcode_value
+                || float_index + 1u + operand_counts[(int)opcode_value] > float_count)
             {
                 return fail(error, ERB_ERR_TAPE, "op-tape doesn't parse");
             }
-            const int code = (int)op;
-            if (code == 0)
+            const int opcode = (int)opcode_value;
+            if (opcode == 0)
             {
-                const float paint = erb_f32(table + floats + (at + 1u) * sizeof(float));
+                const float paint = erb_f32(table + floats + (float_index + 1u) * sizeof(float));
                 if (!(paint >= 0.0f && paint < (float)paint_count) || (float)(int)paint != paint)
                 {
                     return fail(error, ERB_ERR_TAPE, "shape names no paint");
                 }
             }
-            at += 1u + args[code];
+            float_index += 1u + operand_counts[opcode];
         }
         for (uint32_t paint_index = 0; paint_index < paint_count; paint_index++)
         {
@@ -1900,14 +1902,14 @@ static uint8_t event_field_type(uint8_t kind, uint8_t field)
 }
 
 /** @brief Checks a prop a PSET writes, against the value kinds that opcode can convert. */
-static bool pset_ok(uint8_t op, uint16_t id)
+static bool pset_ok(uint8_t opcode, uint16_t prop_id)
 {
-    const ErbPropInfo* info = erb_prop_info(id);
+    const ErbPropInfo* info = erb_prop_info(prop_id);
     if (!info)
     {
         return false;
     }
-    switch (op)
+    switch (opcode)
     {
         case ERB_OP_PSETI:
         case ERB_OP_PSETE:
@@ -1990,20 +1992,20 @@ static bool walk_anim_tree(const ErbProgram* program, uint16_t root, uint32_t* s
 }
 
 /** @brief Checks the operands one instruction names beyond their register types. */
-static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t word, ErbError* error)
+static bool check_operands(const FunctionContext* context, uint32_t program_counter, uint32_t word, ErbError* error)
 {
     const ErbProgram* program = context->program;
-    const uint8_t op = ERB_OP(word);
+    const uint8_t opcode = ERB_OP(word);
     const uint8_t operand_a = ERB_A(word);
     const uint8_t operand_b = ERB_B(word);
     const uint8_t operand_c = ERB_C(word);
     const uint16_t operand_bx = ERB_BX(word);
-    const uint32_t extension = s_ops[op].words == 2u ? context->code[pc + 1u] : 0u;
+    const uint32_t extension = s_opcodes[opcode].words == 2u ? context->code[program_counter + 1u] : 0u;
     const uint16_t extension_index = ERB_LOW16(extension);
     const uint8_t* slot;
 
 #define BAD(text) return fail(error, ERB_ERR_BYTECODE, text)
-    switch (op)
+    switch (opcode)
     {
         case ERB_OP_MOVE:
             if (context->types[operand_a] != context->types[operand_b])
@@ -2045,7 +2047,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
             const uint8_t type = slot ? slot[ERB_SLOT_TYPE_AT] : 0u;
             const bool narrow = type == ERB_T_INT || type == ERB_T_BOOL || type == ERB_T_FLOAT || type == ERB_T_ENUM
                                 || type == ERB_T_ANIM;
-            if (!narrow || context->types[operand_a] != type || (op == ERB_OP_SET32 && !writable(context, slot)))
+            if (!narrow || context->types[operand_a] != type || (opcode == ERB_OP_SET32 && !writable(context, slot)))
                 BAD("32-bit slot type or write");
             break;
         }
@@ -2055,7 +2057,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
             slot = operand_bx < program->slot_count ? erb_slot(program, operand_bx) : NULL;
             const uint8_t type = slot ? slot[ERB_SLOT_TYPE_AT] : 0u;
             if (!is_wide(type) || erb_u16(slot + ERB_SLOT_CAP_AT) != 0u || context->types[operand_a] != type
-                || (op == ERB_OP_SET64 && !writable(context, slot)))
+                || (opcode == ERB_OP_SET64 && !writable(context, slot)))
                 BAD("64-bit slot type or write");
             break;
         }
@@ -2064,7 +2066,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
         case ERB_OP_FMTSET:
         case ERB_OP_INPUT:
             slot = slot_of(context, operand_bx, ERB_T_STRING);
-            if (!slot || (op != ERB_OP_GETS && !writable(context, slot)))
+            if (!slot || (opcode != ERB_OP_GETS && !writable(context, slot)))
                 BAD("string slot");
             break;
         case ERB_OP_GETNI:
@@ -2077,7 +2079,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
         case ERB_OP_POP:
         case ERB_OP_KEEP:
             if (!slot_of(context, operand_bx, ERB_T_LIST)
-                || (op != ERB_OP_LEN && !writable(context, slot_of(context, operand_bx, ERB_T_LIST))))
+                || (opcode != ERB_OP_LEN && !writable(context, slot_of(context, operand_bx, ERB_T_LIST))))
                 BAD("list slot");
             break;
         case ERB_OP_SLICE:
@@ -2089,7 +2091,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
         {
             slot = slot_of(context, extension_index, ERB_T_LIST);
             const uint8_t field = ERB_EXT_OPERAND(extension);
-            if (!slot || ERB_EXT_TOP(extension) || (op == ERB_OP_ROWSET && !writable(context, slot)))
+            if (!slot || ERB_EXT_TOP(extension) || (opcode == ERB_OP_ROWSET && !writable(context, slot)))
                 BAD("row field");
             const uint8_t* layout = erb_row(program, erb_u16(slot + ERB_SLOT_AUX_AT));
             if (field >= erb_u16(layout + ERB_ROW_FIELD_COUNT_AT)
@@ -2177,7 +2179,7 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
             break;
         case ERB_OP_FMTSPAN:
         case ERB_OP_SPANS:
-            if (operand_a > ER_TEXT_MAX_SPANS || (op == ERB_OP_FMTSPAN && operand_a == ER_TEXT_MAX_SPANS))
+            if (operand_a > ER_TEXT_MAX_SPANS || (opcode == ERB_OP_FMTSPAN && operand_a == ER_TEXT_MAX_SPANS))
                 BAD("span index");
             break;
         case ERB_OP_PROPS:
@@ -2188,13 +2190,13 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
         case ERB_OP_PSETF:
         case ERB_OP_PSETB:
         case ERB_OP_PSETS:
-            if (!pset_ok(op, operand_bx))
+            if (!pset_ok(opcode, operand_bx))
                 return fail(error, ERB_ERR_PROP, "PSET prop unknown or of another kind");
             break;
         case ERB_OP_PSETE:
         {
             const uint16_t set = ERB_HIGH16(extension);
-            if (!pset_ok(op, operand_bx))
+            if (!pset_ok(opcode, operand_bx))
                 return fail(error, ERB_ERR_PROP, "PSETE prop unknown or of another kind");
             if (set >= program->enum_set_count
                 || (uint32_t)extension_index + erb_enum_count(program, set) > program->const32_count)
@@ -2306,9 +2308,11 @@ static bool check_operands(const FunctionContext* context, uint32_t pc, uint32_t
 /** @brief Checks the register operands the opcode table types. */
 static bool check_register_kinds(const FunctionContext* context, uint32_t word)
 {
-    const OpInfo* info = &s_ops[ERB_OP(word)];
+    const OpInfo* info = &s_opcodes[ERB_OP(word)];
     const uint8_t fields[3] = {ERB_A(word), ERB_B(word), ERB_C(word)};
-    const uint8_t kinds[3] = {info->kind_a, info->kind_b, info->form == ERB_F_ABC ? info->kind_c : (uint8_t)ERB_K_NONE};
+    const uint8_t kinds[3] = {info->operand_a_kind,
+                              info->operand_b_kind,
+                              info->form == ERB_F_ABC ? info->operand_c_kind : (uint8_t)ERB_K_NONE};
     for (uint32_t index = 0; index < 3u; index++)
     {
         const uint8_t kind = kinds[index];
@@ -2317,8 +2321,9 @@ static bool check_register_kinds(const FunctionContext* context, uint32_t word)
             return false;
         }
         /* RET, CALL, CALLN and APPEND check their own, since whether A is used depends on the callee or row. */
-        const uint8_t op = ERB_OP(word);
-        const bool own = op == ERB_OP_RET || op == ERB_OP_CALL || op == ERB_OP_CALLN || op == ERB_OP_APPEND;
+        const uint8_t opcode = ERB_OP(word);
+        const bool own =
+            opcode == ERB_OP_RET || opcode == ERB_OP_CALL || opcode == ERB_OP_CALLN || opcode == ERB_OP_APPEND;
         if (kind == ERB_K_REG && !own && !reg_any(context, fields[index]))
         {
             return false;
@@ -2328,7 +2333,7 @@ static bool check_register_kinds(const FunctionContext* context, uint32_t word)
 }
 
 /** @brief A branch's target, or UINT32_MAX for an instruction that doesn't branch. */
-static uint32_t branch_target(uint32_t pc, uint32_t word)
+static uint32_t branch_target(uint32_t program_counter, uint32_t word)
 {
     switch (ERB_OP(word))
     {
@@ -2337,7 +2342,7 @@ static uint32_t branch_target(uint32_t pc, uint32_t word)
         case ERB_OP_JF:
         case ERB_OP_JDIRTY:
         case ERB_OP_LOOP:
-            return (uint32_t)((int32_t)(pc + erb_op_words(ERB_OP(word))) + ERB_SBX(word));
+            return (uint32_t)((int32_t)(program_counter + erb_op_words(ERB_OP(word))) + ERB_SBX(word));
         default:
             return UINT32_MAX;
     }
@@ -2364,42 +2369,43 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
     s_loop_count = 0;
     uint32_t counters[ERB_BIT_WORDS(ERB_MAX_REGISTERS)] = {0u};
     uint32_t last = 0;
-    for (uint32_t pc = 0; pc < context.words;)
+    for (uint32_t program_counter = 0; program_counter < context.words;)
     {
-        const uint32_t word = context.code[pc];
-        const uint8_t op = ERB_OP(word);
-        const uint32_t length = erb_op_words(op);
-        error->offset = pc;
-        if (length == 0u || pc + length > context.words)
+        const uint32_t word = context.code[program_counter];
+        const uint8_t opcode = ERB_OP(word);
+        const uint32_t length = erb_op_words(opcode);
+        error->offset = program_counter;
+        if (length == 0u || program_counter + length > context.words)
         {
             return fail(error, ERB_ERR_BYTECODE, "unknown opcode or a truncated instruction");
         }
-        erb_bit_set(s_starts, pc);
-        if (op == ERB_OP_LOOPSET)
+        erb_bit_set(s_starts, program_counter);
+        if (opcode == ERB_OP_LOOPSET)
         {
             erb_bit_set(counters, ERB_A(word));
         }
-        last = pc;
-        pc += length;
+        last = program_counter;
+        program_counter += length;
     }
-    const uint8_t last_op = ERB_OP(context.code[last]);
-    if (last_op != ERB_OP_RET && last_op != ERB_OP_TRAP)
+    const uint8_t last_opcode = ERB_OP(context.code[last]);
+    if (last_opcode != ERB_OP_RET && last_opcode != ERB_OP_TRAP)
     {
         error->offset = last;
         return fail(error, ERB_ERR_FUNCTION, "doesn't end in RET or TRAP");
     }
-    for (uint32_t pc = 0; pc < context.words; pc += erb_op_words(ERB_OP(context.code[pc])))
+    for (uint32_t program_counter = 0; program_counter < context.words;
+         program_counter += erb_op_words(ERB_OP(context.code[program_counter])))
     {
-        const uint32_t word = context.code[pc];
+        const uint32_t word = context.code[program_counter];
         if (ERB_OP(word) != ERB_OP_LOOP)
         {
             continue;
         }
-        error->offset = pc;
-        const uint32_t target = branch_target(pc, word);
+        error->offset = program_counter;
+        const uint32_t target = branch_target(program_counter, word);
         const uint32_t loopset = target - 1u;
-        if (target > pc || target == 0u || !is_start(loopset) || ERB_OP(context.code[loopset]) != ERB_OP_LOOPSET
-            || ERB_A(context.code[loopset]) != ERB_A(word))
+        if (target > program_counter || target == 0u || !is_start(loopset)
+            || ERB_OP(context.code[loopset]) != ERB_OP_LOOPSET || ERB_A(context.code[loopset]) != ERB_A(word))
         {
             return fail(error, ERB_ERR_CONTROL_FLOW, "LOOP doesn't branch to just after its LOOPSET");
         }
@@ -2409,7 +2415,7 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
         }
         const uint32_t bound = ERB_BX(context.code[loopset]);
         s_loops[s_loop_count].start = target;
-        s_loops[s_loop_count].end = pc;
+        s_loops[s_loop_count].end = program_counter;
         s_loops[s_loop_count].bound = bound ? bound : 1u;
         s_loops[s_loop_count].counter = ERB_A(word);
         s_loop_count++;
@@ -2419,11 +2425,11 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
     {
         for (uint32_t second = first + 1u; second < s_loop_count; second++)
         {
-            const Loop* x = &s_loops[first];
-            const Loop* y = &s_loops[second];
-            const bool apart = x->end < y->start || y->end < x->start;
-            const bool nested =
-                (x->start <= y->start && y->end <= x->end) || (y->start <= x->start && x->end <= y->end);
+            const Loop* first_loop = &s_loops[first];
+            const Loop* second_loop = &s_loops[second];
+            const bool apart = first_loop->end < second_loop->start || second_loop->end < first_loop->start;
+            const bool nested = (first_loop->start <= second_loop->start && second_loop->end <= first_loop->end)
+                                || (second_loop->start <= first_loop->start && first_loop->end <= second_loop->end);
             if (!apart && !nested)
             {
                 return fail(error, ERB_ERR_CONTROL_FLOW, "loops overlap");
@@ -2434,39 +2440,39 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
     /* Pass 2: operands, branches and cost. */
     uint32_t cost = 0;
     uint32_t depth = 0;
-    for (uint32_t pc = 0; pc < context.words;)
+    for (uint32_t program_counter = 0; program_counter < context.words;)
     {
-        const uint32_t word = context.code[pc];
-        const uint8_t op = ERB_OP(word);
-        const OpInfo* info = &s_ops[op];
-        error->offset = pc;
+        const uint32_t word = context.code[program_counter];
+        const uint8_t opcode = ERB_OP(word);
+        const OpInfo* info = &s_opcodes[opcode];
+        error->offset = program_counter;
         if (!check_register_kinds(&context, word))
         {
             return fail(error, ERB_ERR_BYTECODE, "register operand out of the frame or of the wrong type");
         }
-        if (!check_operands(&context, pc, word, error))
+        if (!check_operands(&context, program_counter, word, error))
         {
             return false;
         }
         /* A loop counter is written by its LOOPSET and LOOP only. */
-        const bool writes_a =
-            info->writes || (op == ERB_OP_CALL && erb_function(program, ERB_BX(word))[ERB_FUNCTION_RESULT_AT])
-            || (op == ERB_OP_CALLN
+        const bool writes_operand_a =
+            info->writes || (opcode == ERB_OP_CALL && erb_function(program, ERB_BX(word))[ERB_FUNCTION_RESULT_AT])
+            || (opcode == ERB_OP_CALLN
                 && erb_string(program,
                               erb_u16(program->imports + ERB_BX(word) * ERB_IMPORT_SIZE + ERB_IMPORT_SIGNATURE_AT))[0]
                        != 'v');
-        if (writes_a && op != ERB_OP_LOOPSET && op != ERB_OP_LOOP && erb_bit_get(counters, ERB_A(word)))
+        if (writes_operand_a && opcode != ERB_OP_LOOPSET && opcode != ERB_OP_LOOP && erb_bit_get(counters, ERB_A(word)))
         {
             return fail(error, ERB_ERR_CONTROL_FLOW, "a loop counter is written outside its LOOPSET and LOOP");
         }
-        if (op == ERB_OP_LOOP && !erb_bit_get(counters, ERB_A(word)))
+        if (opcode == ERB_OP_LOOP && !erb_bit_get(counters, ERB_A(word)))
         {
             return fail(error, ERB_ERR_CONTROL_FLOW, "LOOP counter has no LOOPSET");
         }
-        const uint32_t target = branch_target(pc, word);
+        const uint32_t target = branch_target(program_counter, word);
         if (target != UINT32_MAX)
         {
-            if (target >= context.words || !is_start(target) || (op != ERB_OP_LOOP && target <= pc))
+            if (target >= context.words || !is_start(target) || (opcode != ERB_OP_LOOP && target <= program_counter))
             {
                 return fail(error, ERB_ERR_CONTROL_FLOW, "branch backward, past the end or into an instruction");
             }
@@ -2474,7 +2480,8 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
             for (uint32_t loop = 0; loop < s_loop_count; loop++)
             {
                 const Loop* body = &s_loops[loop];
-                if (target >= body->start && target <= body->end && (pc < body->start || pc > body->end))
+                if (target >= body->start && target <= body->end
+                    && (program_counter < body->start || program_counter > body->end))
                 {
                     return fail(error, ERB_ERR_CONTROL_FLOW, "branch into a loop");
                 }
@@ -2485,13 +2492,13 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
         uint32_t times = 1;
         for (uint32_t loop = 0; loop < s_loop_count; loop++)
         {
-            if (pc >= s_loops[loop].start && pc <= s_loops[loop].end)
+            if (program_counter >= s_loops[loop].start && program_counter <= s_loops[loop].end)
             {
                 times = sat_mul(times, s_loops[loop].bound);
             }
         }
         uint32_t step = 1;
-        if (op == ERB_OP_CALL)
+        if (opcode == ERB_OP_CALL)
         {
             step = sat_add(step, s_costs[ERB_BX(word)].worst);
             if (s_costs[ERB_BX(word)].depth > depth)
@@ -2499,13 +2506,14 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
                 depth = s_costs[ERB_BX(word)].depth;
             }
         }
-        else if (op == ERB_OP_BUILD)
+        else if (opcode == ERB_OP_BUILD)
         {
-            step = sat_add(
-                step, erb_u16(erb_template(program, ERB_LOW16(context.code[pc + 1u])) + ERB_TEMPLATE_NODE_COUNT_AT));
+            step = sat_add(step,
+                           erb_u16(erb_template(program, ERB_LOW16(context.code[program_counter + 1u]))
+                                   + ERB_TEMPLATE_NODE_COUNT_AT));
         }
         cost = sat_add(cost, sat_mul(step, times));
-        pc += info->words;
+        program_counter += info->words;
     }
     s_costs[index].worst = cost;
     s_costs[index].depth = ERB_FRAME_CELLS + context.registers + depth;
@@ -2555,9 +2563,10 @@ static void mark_starts(const ErbProgram* program, uint32_t index)
     const uint32_t words = erb_u32(record + ERB_FUNCTION_WORDS_AT);
     const uint32_t* code = program->code + erb_u32(record + ERB_FUNCTION_CODE_AT);
     memset(s_starts, 0, ERB_BIT_WORDS(words) * sizeof(uint32_t));
-    for (uint32_t pc = 0; pc < words; pc += erb_op_words(ERB_OP(code[pc])))
+    for (uint32_t program_counter = 0; program_counter < words;
+         program_counter += erb_op_words(ERB_OP(code[program_counter])))
     {
-        erb_bit_set(s_starts, pc);
+        erb_bit_set(s_starts, program_counter);
     }
 }
 
@@ -2651,15 +2660,15 @@ static bool check_debug(ErbProgram* program, ErbError* error)
     const uint16_t panel_count = erb_u16(program->section + ERB_HEADER_PANEL_COUNT_AT);
     const uint8_t* mine = NULL;
     uint32_t mine_length = 0;
-    for (uint32_t at = 0; at < length;)
+    for (uint32_t table_offset = 0; table_offset < length;)
     {
-        const uint8_t* table = debug + at;
-        if (length - at < ERB_DEBUG_HEADER_SIZE)
+        const uint8_t* table = debug + table_offset;
+        if (length - table_offset < ERB_DEBUG_HEADER_SIZE)
         {
             return fail(error, ERB_ERR_DEBUG, "a table past the section");
         }
         const uint32_t table_length = erb_u32(table + ERB_DEBUG_LENGTH_AT);
-        if (table_length < ERB_DEBUG_HEADER_SIZE || table_length > length - at || !erb_aligned4(table_length))
+        if (table_length < ERB_DEBUG_HEADER_SIZE || table_length > length - table_offset || !erb_aligned4(table_length))
         {
             return fail(error, ERB_ERR_DEBUG, "a table past the section");
         }
@@ -2678,7 +2687,7 @@ static bool check_debug(ErbProgram* program, ErbError* error)
             mine = table;
             mine_length = table_length;
         }
-        at += table_length;
+        table_offset += table_length;
     }
     return !mine
            || check_debug_table(

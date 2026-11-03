@@ -208,11 +208,11 @@ static const ErbPropInfo s_props[] = {
  - Functions
  ---------------------------------------------------------------------------------------------------------------------*/
 
-const ErbPropInfo* erb_prop_info(uint16_t id)
+const ErbPropInfo* erb_prop_info(uint16_t prop_id)
 {
-    if (id >= sizeof(s_props) / sizeof(s_props[0]) || s_props[id].kind == 0u)
+    if (prop_id >= sizeof(s_props) / sizeof(s_props[0]) || s_props[prop_id].kind == 0u)
     {
         return NULL;
     }
-    return &s_props[id];
+    return &s_props[prop_id];
 }

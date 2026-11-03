@@ -33,9 +33,9 @@
  * registries as they were. That includes an image pixel format this firmware doesn't know.
  *
  * For a VOLATILE source — a hot-reload staging buffer that gets reused for the next upload — use
- * er_assets_load_pack_ex(buf, len, copy=true): it takes its own (reused) copy of the pack and points the
+ * er_assets_load_pack_ex(buffer, length, copy=true): it takes its own (reused) copy of the pack and points the
  * engine at that, so the caller's buffer is free the moment the load returns. The plain
- * er_assets_load_pack() is the zero-copy path (copy=false): assets are referenced in @p buf in place, so
+ * er_assets_load_pack() is the zero-copy path (copy=false): assets are referenced in @p buffer in place, so
  * a config mmap'd from flash costs no RAM for its pixels — keep it for production boot + desktop.
  */
 
@@ -76,44 +76,44 @@ typedef struct
 
 /**
  * @brief Parses an ERPK asset pack from memory and registers its images and fonts with the engine
- *        (zero-copy: references @p buf in place — see header note). Equivalent to er_assets_load_pack_ex
+ *        (zero-copy: references @p buffer in place — see header note). Equivalent to er_assets_load_pack_ex
  *        with copy=false; preserved as the original, unchanged entry point.
  *
- * @param[in] buf  Pack bytes (caller-owned; must outlive use).
- * @param[in] len  Byte length.
+ * @param[in] buffer  Pack bytes (caller-owned; must outlive use).
+ * @param[in] length  Byte length.
  *
  * @return true if parsed and registered; false on a malformed pack or an allocation failure, with nothing
  *         registered.
  */
-bool er_assets_load_pack(const void* buf, size_t len);
+bool er_assets_load_pack(const void* buffer, size_t length);
 
 /**
  * @brief Like er_assets_load_pack, but optionally takes its own copy of the pack first.
  *
- * @param[in] buf   Pack bytes.
- * @param[in] len   Byte length.
- * @param[in] copy  true → copy the pack into a persistent (reused) block and register the engine against
- *                  the copy, so @p buf may be reused/freed immediately (hot reload from a staging buffer).
- *                  false → reference @p buf in place (identical to er_assets_load_pack).
+ * @param[in] buffer  Pack bytes.
+ * @param[in] length  Byte length.
+ * @param[in] copy    true → copy the pack into a persistent (reused) block and register the engine against
+ *                    the copy, so @p buffer may be reused/freed immediately (hot reload from a staging buffer).
+ *                    false → reference @p buffer in place (identical to er_assets_load_pack).
  *
  * @return true if parsed and registered; false on a malformed pack or an allocation failure, with nothing
  *         registered and the previous copy left intact.
  */
-bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy);
+bool er_assets_load_pack_ex(const void* buffer, size_t length, bool copy);
 
 /**
  * @brief Checks a pack without registering anything, and counts what it holds.
  *
- * @param[in]  buf   Pack bytes.
- * @param[in]  len   Byte length.
- * @param[out] info  Receives the counts (may be NULL).
+ * @param[in]  buffer  Pack bytes.
+ * @param[in]  length  Byte length.
+ * @param[out] info    Receives the counts (may be NULL).
  *
  * Every font must be drawable: a known format, a dense glyph array that covers [first, last], every glyph's
  * bitmap inside the font's, and extra glyphs in ascending codepoint order.
  *
  * @return true when the whole pack reads cleanly, so loading it can't fail part way for its own sake.
  */
-bool er_assets_check_pack(const void* buf, size_t len, ErAssetsInfo* info);
+bool er_assets_check_pack(const void* buffer, size_t length, ErAssetsInfo* info);
 
 /**
  * @brief Checks every asset pack in a container as one, without registering anything.
@@ -129,38 +129,39 @@ bool er_assets_check_container(const ErContainer* container, ErAssetsInfo* info)
 /**
  * @brief Like er_assets_check_pack, and also lists the pack's images sorted by name, for er_assets_find_image.
  *
- * @param[in]  buf       Pack bytes.
- * @param[in]  len       Byte length.
+ * @param[in]  buffer    Pack bytes.
+ * @param[in]  length    Byte length.
  * @param[out] info      Receives the counts (may be NULL).
  * @param[out] names     Receives each image's name record, as an offset into the pack, sorted by name.
  * @param[in]  capacity  Length of names. Images past it are counted in info but not listed.
  *
  * @return true when the whole pack reads cleanly.
  */
-bool er_assets_check_pack_images(const void* buf, size_t len, ErAssetsInfo* info, uint32_t* names, uint32_t capacity);
+bool er_assets_check_pack_images(
+    const void* buffer, size_t length, ErAssetsInfo* info, uint32_t* names, uint32_t capacity);
 
 /**
  * @brief Looks an image up by name in a list er_assets_check_pack_images made, by binary search.
  *
- * @param[in] buf    The same pack bytes.
- * @param[in] names  The sorted list.
- * @param[in] count  Entries in it.
- * @param[in] name   Null-terminated image name.
+ * @param[in] buffer  The same pack bytes.
+ * @param[in] names   The sorted list.
+ * @param[in] count   Entries in it.
+ * @param[in] name    Null-terminated image name.
  *
  * @return true when the pack has the image.
  */
-bool er_assets_find_image(const void* buf, const uint32_t* names, uint32_t count, const char* name);
+bool er_assets_find_image(const void* buffer, const uint32_t* names, uint32_t count, const char* name);
 
 /**
  * @brief Like er_assets_load_pack (in place), with font tables taken from @p storage instead of the heap.
  *
- * @param[in]     buf      Pack bytes (caller-owned; must outlive use).
- * @param[in]     len      Byte length.
+ * @param[in]     buffer   Pack bytes (caller-owned; must outlive use).
+ * @param[in]     length   Byte length.
  * @param[in,out] storage  Font table storage; its *_used fields report what was taken.
  *
  * @return true if parsed and registered; false on a malformed pack or font tables that don't fit, with nothing
  *         registered.
  */
-bool er_assets_load_pack_into(const void* buf, size_t len, ErAssetsStorage* storage);
+bool er_assets_load_pack_into(const void* buffer, size_t length, ErAssetsStorage* storage);
 
 #endif

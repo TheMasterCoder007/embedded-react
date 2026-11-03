@@ -34,23 +34,23 @@
  * needed) across loads, so repeated hot reloads don't leak a block each time. NULL/unused in the default
  * zero-copy path, so production (mmap'd flash) and the desktop sim spend nothing on it. */
 static uint8_t* s_pack_copy = NULL;
-static size_t s_pack_copy_cap = 0;
+static size_t s_pack_copy_capacity = 0;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-bool er_assets_load_pack(const void* buf, size_t len)
+bool er_assets_load_pack(const void* buffer, size_t length)
 {
-    return er_assets_load_pack_ex(buf, len, false);
+    return er_assets_load_pack_ex(buffer, length, false);
 }
 
-bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
+bool er_assets_load_pack_ex(const void* buffer, size_t length, bool copy)
 {
     /* Check the whole pack, then take everything it needs, before registering anything: a pack that fails
      * leaves the registries (and the previous copy) as they were. */
     ErAssetsInfo info;
-    if (!er_assets_check_pack(buf, len, &info))
+    if (!er_assets_check_pack(buffer, length, &info))
     {
         return false;
     }
@@ -69,30 +69,30 @@ bool er_assets_load_pack_ex(const void* buf, size_t len, bool copy)
 
     /* When the source is volatile (a hot-reload staging buffer about to be reused for the next upload),
      * take our own copy and register the engine against it, so the caller's buffer is free after load.
-     * The default (copy=false) references @p buf in place — zero RAM cost from mmap'd flash — and the
+     * The default (copy=false) references @p buffer in place — zero RAM cost from mmap'd flash — and the
      * caller keeps it live (production boot, desktop sim). */
-    const uint8_t* src = (const uint8_t*)buf;
+    const uint8_t* source = (const uint8_t*)buffer;
     if (ok && copy)
     {
-        if (s_pack_copy_cap < len)
+        if (s_pack_copy_capacity < length)
         {
-            uint8_t* grown = (uint8_t*)realloc(s_pack_copy, len);
+            uint8_t* grown = (uint8_t*)realloc(s_pack_copy, length);
             ok = grown != NULL; /* OOM: prior copy left intact */
             if (grown)
             {
                 s_pack_copy = grown;
-                s_pack_copy_cap = len;
+                s_pack_copy_capacity = length;
             }
         }
         if (ok)
         {
-            memcpy(s_pack_copy, buf, len);
-            src = s_pack_copy;
+            memcpy(s_pack_copy, buffer, length);
+            source = s_pack_copy;
         }
     }
 
     /* er_assets_load_pack_into registers nothing when it fails, so the tables are free to give back. */
-    if (ok && er_assets_load_pack_into(src, len, &storage))
+    if (ok && er_assets_load_pack_into(source, length, &storage))
     {
         return true;
     }

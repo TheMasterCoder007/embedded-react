@@ -27,8 +27,20 @@
 #define FORMAT_VERSION_OFFSET 4u
 #define CRC_OFFSET 8u
 
+#define MAGIC_SIZE 4u
+
+/** @brief After the header: tag_length u16 | tag | section_count u32. */
+#define TAG_LENGTH_SIZE 2u
+#define SECTION_COUNT_SIZE 4u
+
 /** @brief Each section starts with type u32 | length u32. */
 #define SECTION_HEADER_SIZE 8u
+#define SECTION_LENGTH_OFFSET 4u
+
+/** @brief CRC-32/IEEE, the zlib polynomial, reflected. */
+#define CRC32_INITIAL 0xFFFFFFFFu
+#define CRC32_POLYNOMIAL 0xEDB88320u
+#define BITS_PER_BYTE 8
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Helpers
@@ -50,13 +62,13 @@ static uint32_t read_le32(const uint8_t* bytes)
 
 uint32_t er_crc32(const uint8_t* bytes, size_t byte_count)
 {
-    uint32_t crc = 0xFFFFFFFFu;
+    uint32_t crc = CRC32_INITIAL;
     for (size_t byte_index = 0; byte_index < byte_count; byte_index++)
     {
         crc ^= bytes[byte_index];
-        for (int bit_index = 0; bit_index < 8; bit_index++)
+        for (int bit_index = 0; bit_index < BITS_PER_BYTE; bit_index++)
         {
-            crc = (crc >> 1) ^ (0xEDB88320u & (uint32_t)(-(int32_t)(crc & 1u)));
+            crc = (crc >> 1) ^ (CRC32_POLYNOMIAL & (uint32_t)(-(int32_t)(crc & 1u)));
         }
     }
     return ~crc;
@@ -88,7 +100,7 @@ const char* er_container_status_str(ErContainerStatus status)
 ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, ErContainer* container)
 {
     const uint8_t* bytes = (const uint8_t*)buffer;
-    if (!bytes || buffer_length < HEADER_SIZE || memcmp(bytes, "ERCF", 4) != 0)
+    if (!bytes || buffer_length < HEADER_SIZE || memcmp(bytes, "ERCF", MAGIC_SIZE) != 0)
     {
         return ER_CONTAINER_BAD_MAGIC;
     }
@@ -102,20 +114,20 @@ ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, Er
      * each check compares with the bytes left instead of adding to offset, which could wrap a 32-bit size_t
      * when buffer_length is a loose upper bound. */
     size_t offset = HEADER_SIZE;
-    if (buffer_length - offset < 2u)
+    if (buffer_length - offset < TAG_LENGTH_SIZE)
     {
         return ER_CONTAINER_BAD_VERSION;
     }
     container->tag_length = read_le16(bytes + offset);
-    offset += 2u;
-    if (buffer_length - offset < (size_t)container->tag_length + 4u)
+    offset += TAG_LENGTH_SIZE;
+    if (buffer_length - offset < (size_t)container->tag_length + SECTION_COUNT_SIZE)
     {
         return ER_CONTAINER_BAD_VERSION;
     }
     container->tag = bytes + offset;
     offset += container->tag_length;
     container->section_count = read_le32(bytes + offset);
-    offset += 4u;
+    offset += SECTION_COUNT_SIZE;
     if (container->section_count > ER_CONTAINER_MAX_SECTIONS)
     {
         return ER_CONTAINER_BAD_VERSION;
@@ -128,7 +140,7 @@ ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, Er
             return ER_CONTAINER_BAD_VERSION;
         }
         ErContainerSection* section = &container->sections[section_index];
-        const uint32_t section_length = read_le32(bytes + offset + 4u);
+        const uint32_t section_length = read_le32(bytes + offset + SECTION_LENGTH_OFFSET);
         section->type = read_le32(bytes + offset);
         offset += SECTION_HEADER_SIZE;
         if (buffer_length - offset < section_length)

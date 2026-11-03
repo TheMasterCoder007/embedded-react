@@ -91,8 +91,8 @@ static uint32_t s_queue_head;
 static uint32_t s_queue_count;
 static uint32_t s_queue_effects; /**< Effects at the front of the queue, run before any other event. */
 static bool s_fault_pending;
-static uint16_t s_screen_w; /**< The panel size from the last erb_load(), for the error screen. */
-static uint16_t s_screen_h;
+static uint16_t s_screen_width; /**< The panel size from the last erb_load(), for the error screen. */
+static uint16_t s_screen_height;
 static uint16_t s_anim_generation;
 static uint16_t s_tree[ERB_MAX_ANIM_TREE];
 static uint8_t s_tree_parent[ERB_MAX_ANIM_TREE];
@@ -794,15 +794,15 @@ static void on_event(ERNode* node, const EREventData* data, void* user_data)
     {
         event.x = (int16_t)data->layout_rect.x;
         event.y = (int16_t)data->layout_rect.y;
-        event.dx = (int16_t)data->layout_rect.w;
-        event.dy = (int16_t)data->layout_rect.h;
+        event.delta_x = (int16_t)data->layout_rect.w;
+        event.delta_y = (int16_t)data->layout_rect.h;
     }
     else
     {
         event.x = (int16_t)data->x;
         event.y = (int16_t)data->y;
-        event.dx = (int16_t)data->dx;
-        event.dy = (int16_t)data->dy;
+        event.delta_x = (int16_t)data->dx;
+        event.delta_y = (int16_t)data->dy;
     }
     event.motion_x = kind == ER_EVENT_SCROLL ? data->scroll_x : data->vx;
     event.motion_y = kind == ER_EVENT_SCROLL ? data->scroll_y : data->vy;
@@ -826,8 +826,8 @@ static bool on_query(ERNode* node, const EREventData* data, void* user_data)
     g_erb.event.instance = ERB_HIGH16(packed);
     g_erb.event.x = (int16_t)data->x;
     g_erb.event.y = (int16_t)data->y;
-    g_erb.event.dx = (int16_t)data->dx;
-    g_erb.event.dy = (int16_t)data->dy;
+    g_erb.event.delta_x = (int16_t)data->dx;
+    g_erb.event.delta_y = (int16_t)data->dy;
     g_erb.event.motion_x = data->vx;
     g_erb.event.motion_y = data->vy;
     g_erb.event.touches = (uint16_t)er_touch_active_count();
@@ -1155,15 +1155,15 @@ int32_t erb_rt_timer_start(uint16_t function, int32_t interval_ms, bool repeat)
     return -1;
 }
 
-void erb_rt_timer_clear(int32_t id)
+void erb_rt_timer_clear(int32_t timer_id)
 {
     const uint32_t count = g_erb.program.regions[ERB_REGION_TIMERS].count;
-    if (id < 0 || count == 0u)
+    if (timer_id < 0 || count == 0u)
     {
         return;
     }
-    ErbTimer* timer = &timers()[(uint32_t)id % count];
-    if (timer->active && timer->generation == (uint32_t)id / count)
+    ErbTimer* timer = &timers()[(uint32_t)timer_id % count];
+    if (timer->active && timer->generation == (uint32_t)timer_id / count)
     {
         timer->active = 0u;
     }
@@ -1830,8 +1830,8 @@ bool erb_load(const void* package, size_t package_bytes, const ErbConfig* config
     ErbError* out = error ? error : &local;
     if (config)
     {
-        s_screen_w = config->screen_w;
-        s_screen_h = config->screen_h;
+        s_screen_width = config->screen_w;
+        s_screen_height = config->screen_h;
     }
     if (!config || !erb_verify(package, package_bytes, config ? config : &g_erb.config, &s_candidate, out))
     {
@@ -2032,5 +2032,5 @@ void erb_show_error_hint(const ErbError* error, const char* hint)
         .hint = hint,
         .detail = error->detail,
     };
-    er_error_screen_show(s_screen_w, s_screen_h, &screen);
+    er_error_screen_show(s_screen_width, s_screen_height, &screen);
 }
