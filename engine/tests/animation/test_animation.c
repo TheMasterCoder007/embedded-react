@@ -444,7 +444,7 @@ int main(void)
 
         embedded_renderer_tick(100U); /* end of cycle 1 (reaches 360, then restarts at 0) */
         embedded_renderer_tick(25U);  /* into cycle 2: continuous → ~90, reversed would be ~270 */
-        if (spin->tp_rotate_z > 180.0f)
+        if (spin->transform_rotate_z > 180.0f)
             return fail("loop: default loop ping-ponged instead of restarting continuously");
         er_node_destroy(spin);
 
@@ -459,7 +459,7 @@ int main(void)
 
         embedded_renderer_tick(100U); /* peak ~360 */
         embedded_renderer_tick(25U);  /* reversing → ~270 (heading back down), not ~90 */
-        if (yo->tp_rotate_z < 180.0f)
+        if (yo->transform_rotate_z < 180.0f)
             return fail("loop_reverse: did not ping-pong back down");
         er_node_destroy(yo);
     }
@@ -765,9 +765,9 @@ int main(void)
 
         /* Immediate snap to 50. */
         er_anim_value_set(vh, 50.0f);
-        if (va->tp_translate_x < 49.9f || va->tp_translate_x > 50.1f)
+        if (va->transform_translate_x < 49.9f || va->transform_translate_x > 50.1f)
             return fail("anim_value: er_anim_value_set did not propagate to first binding");
-        if (vb->tp_translate_x < 49.9f || vb->tp_translate_x > 50.1f)
+        if (vb->transform_translate_x < 49.9f || vb->transform_translate_x > 50.1f)
             return fail("anim_value: er_anim_value_set did not propagate to second binding");
         if (er_anim_value_get(vh) < 49.9f || er_anim_value_get(vh) > 50.1f)
             return fail("anim_value: er_anim_value_get did not return snapped value");
@@ -781,22 +781,22 @@ int main(void)
 
         embedded_renderer_tick(50U);
         /* At the midpoint both nodes should be near 25. */
-        if (va->tp_translate_x > 30.0f || va->tp_translate_x < 20.0f)
+        if (va->transform_translate_x > 30.0f || va->transform_translate_x < 20.0f)
             return fail("anim_value: first binding not at midpoint during animation");
-        if (vb->tp_translate_x > 30.0f || vb->tp_translate_x < 20.0f)
+        if (vb->transform_translate_x > 30.0f || vb->transform_translate_x < 20.0f)
             return fail("anim_value: second binding not at midpoint during animation");
 
         embedded_renderer_tick(50U);
         /* Animation complete; both should be at the target. */
-        if (va->tp_translate_x > 1.0f)
+        if (va->transform_translate_x > 1.0f)
             return fail("anim_value: first binding did not reach target at end");
-        if (vb->tp_translate_x > 1.0f)
+        if (vb->transform_translate_x > 1.0f)
             return fail("anim_value: second binding did not reach target at end");
 
         /* Duplicate bind is silently ignored — binding_count must not grow past 2. */
         er_anim_value_bind(vh, va, ER_PROP_TRANSLATE_X);
         er_anim_value_set(vh, 10.0f);
-        if (va->tp_translate_x < 9.9f || va->tp_translate_x > 10.1f)
+        if (va->transform_translate_x < 9.9f || va->transform_translate_x > 10.1f)
             return fail("anim_value: duplicate bind guard broke propagation");
 
         er_anim_value_destroy(vh);
@@ -917,18 +917,18 @@ int main(void)
         er_anim_value_set(th, NAN);
         er_anim_value_set(sh, NAN);
         er_anim_value_set(oh, NAN);
-        if (na->tp_translate_x != 0.0f)
+        if (na->transform_translate_x != 0.0f)
             return fail("nan values: a NaN translate should be 0");
-        if (na->tp_scale_x != 0.0f)
+        if (na->transform_scale_x != 0.0f)
             return fail("nan values: a NaN scale should be 0 (unset)");
         if (na->props.view.opacity != 0U)
             return fail("nan values: a NaN opacity should be fully transparent");
 
         er_anim_value_set(th, 1e10f);
-        if (na->tp_translate_x != 32767.0f)
+        if (na->transform_translate_x != 32767.0f)
             return fail("nan values: a translate past the int range should clamp to 32767");
         er_anim_value_set(th, -1e10f);
-        if (na->tp_translate_x != -32767.0f)
+        if (na->transform_translate_x != -32767.0f)
             return fail("nan values: a translate below the int range should clamp to -32767");
 
         er_anim_value_destroy(th);
@@ -971,7 +971,7 @@ int main(void)
 
         /* Drive the value. A surviving binding would push 99 onto `fresh`. */
         er_anim_value_set(bh, 99.0f);
-        if (fresh->tp_translate_x > 0.1f || fresh->tp_translate_x < -0.1f)
+        if (fresh->transform_translate_x > 0.1f || fresh->transform_translate_x < -0.1f)
             return fail("stale_bind: binding to a destroyed node drove the node that reused its tag");
 
         er_anim_value_destroy(bh);
@@ -1015,7 +1015,7 @@ int main(void)
         er_node_set_props(heir, &hp);
 
         embedded_renderer_tick(200U);
-        if (heir->tp_translate_x > 0.1f || heir->tp_translate_x < -0.1f)
+        if (heir->transform_translate_x > 0.1f || heir->transform_translate_x < -0.1f)
             return fail("stale_anim: an animation on a destroyed node drove the node that reused its tag");
 
         er_node_destroy(heir);
@@ -1044,7 +1044,7 @@ int main(void)
         const uint16_t spin_tag = spinner->tag;
 
         embedded_renderer_tick(100U);
-        if (spinner->tp_rotate_z <= 0.0f)
+        if (spinner->transform_rotate_z <= 0.0f)
             return fail("stale_spin: precondition — the indicator is not actually spinning");
 
         er_node_destroy(spinner);
@@ -1058,7 +1058,7 @@ int main(void)
         er_node_set_props(heir, &hp);
 
         embedded_renderer_tick(100U);
-        if (heir->tp_rotate_z != 0.0f)
+        if (heir->transform_rotate_z != 0.0f)
             return fail("stale_spin: a destroyed indicator's spin drove the node that reused its tag");
         if (heir->has_transform)
             return fail("stale_spin: the inherited spin gave a plain view a transform");
@@ -1111,12 +1111,12 @@ int main(void)
             return fail("stale_group: precondition — freed tag was not recycled");
         er_node_set_props(heir, &gp2);
 
-        const float first_x = first->tp_translate_x;
+        const float first_x = first->transform_translate_x;
         embedded_renderer_tick(200U); /* long enough for entry 0 to have ended and entry 1 to start */
 
-        if (heir->tp_translate_y > 0.1f || heir->tp_translate_y < -0.1f)
+        if (heir->transform_translate_y > 0.1f || heir->transform_translate_y < -0.1f)
             return fail("stale_group: a pending sequence entry ran against the node that reused its tag");
-        if (first->tp_translate_x != first_x)
+        if (first->transform_translate_x != first_x)
             return fail("stale_group: the group kept animating after one of its nodes was destroyed");
         if (s_complete_count != 0)
             return fail("stale_group: tearing the group down fired its completion callback");
@@ -1148,7 +1148,7 @@ int main(void)
 
         er_anim_value_bind(ch, clobber, ER_PROP_TRANSLATE_X);
         er_anim_value_set(ch, 80.0f);
-        if (clobber->tp_translate_x < 79.9f || clobber->tp_translate_x > 80.1f)
+        if (clobber->transform_translate_x < 79.9f || clobber->transform_translate_x > 80.1f)
             return fail("clobber: bound value did not apply before re-render");
 
         /* Simulate a React re-render: the static props carry no transform (0). */
@@ -1158,7 +1158,7 @@ int main(void)
         er_node_set_props(clobber, &cp2);
 
         /* Without the re-apply guard this would now be 0 (the jump-to-middle). */
-        if (clobber->tp_translate_x < 79.9f || clobber->tp_translate_x > 80.1f)
+        if (clobber->transform_translate_x < 79.9f || clobber->transform_translate_x > 80.1f)
             return fail("clobber: er_node_set_props reset the animated translateX");
 
         er_anim_value_destroy(ch);
@@ -1201,12 +1201,12 @@ int main(void)
         /* Nothing drives owned->translateX now, from either value... */
         er_anim_value_set(uh, 70.0f);
         er_anim_value_set(uh2, 40.0f);
-        if (owned->tp_translate_x > 0.1f || owned->tp_translate_x < -0.1f)
+        if (owned->transform_translate_x > 0.1f || owned->transform_translate_x < -0.1f)
             return fail("unbind_prop: a released property still followed its animated value");
         /* ...while the same node's other property and the same value's other node keep running. */
-        if (owned->tp_translate_y < 69.9f || owned->tp_translate_y > 70.1f)
+        if (owned->transform_translate_y < 69.9f || owned->transform_translate_y > 70.1f)
             return fail("unbind_prop: releasing one property dropped the node's other binding");
-        if (other->tp_translate_x < 69.9f || other->tp_translate_x > 70.1f)
+        if (other->transform_translate_x < 69.9f || other->transform_translate_x > 70.1f)
             return fail("unbind_prop: releasing one node dropped the value's binding to another node");
 
         /* And the static value a declarative update writes now sticks: er_node_set_props re-applies
@@ -1217,7 +1217,7 @@ int main(void)
         up2.transform_translate_x = 25.0f;
         er_node_set_props(owned, &up2);
         er_anim_value_set(uh, 90.0f);
-        if (owned->tp_translate_x < 24.9f || owned->tp_translate_x > 25.1f)
+        if (owned->transform_translate_x < 24.9f || owned->transform_translate_x > 25.1f)
             return fail("unbind_prop: the static value did not survive after the release");
 
         /* A freed binding slot is reusable, and must not carry the previous tenant's interpolation. */
@@ -1231,13 +1231,13 @@ int main(void)
         interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
         er_anim_value_bind_interpolated(uh, owned, ER_PROP_TRANSLATE_X, &interp);
         er_anim_value_set(uh, 0.5f);
-        if (owned->tp_translate_x < 49.9f || owned->tp_translate_x > 50.1f)
+        if (owned->transform_translate_x < 49.9f || owned->transform_translate_x > 50.1f)
             return fail("unbind_prop: re-binding a released property did not take effect");
 
         er_anim_unbind_prop(owned, ER_PROP_TRANSLATE_X);
         er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_X);
         er_anim_value_set(uh, 0.25f);
-        if (owned->tp_translate_x < 0.24f || owned->tp_translate_x > 0.26f)
+        if (owned->transform_translate_x < 0.24f || owned->transform_translate_x > 0.26f)
             return fail("unbind_prop: a reused binding slot inherited the previous interpolation");
 
         er_anim_value_destroy(uh);

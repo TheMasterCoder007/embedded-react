@@ -54,13 +54,13 @@ static bool check_disjoint(const ERDamageSet* s)
 {
     for (uint8_t i = 0; i < s->count; i++)
     {
-        if (s->r[i].w <= 0 || s->r[i].h <= 0)
+        if (s->rects[i].w <= 0 || s->rects[i].h <= 0)
         {
             return false; /* an empty rect must never be stored */
         }
         for (uint8_t j = (uint8_t)(i + 1U); j < s->count; j++)
         {
-            if (rects_touch(&s->r[i], &s->r[j]))
+            if (rects_touch(&s->rects[i], &s->rects[j]))
             {
                 return false;
             }
@@ -74,7 +74,8 @@ static bool covers_point(const ERDamageSet* s, int px, int py)
 {
     for (uint8_t i = 0; i < s->count; i++)
     {
-        if (px >= s->r[i].x && px < s->r[i].x + s->r[i].w && py >= s->r[i].y && py < s->r[i].y + s->r[i].h)
+        if (px >= s->rects[i].x && px < s->rects[i].x + s->rects[i].w && py >= s->rects[i].y
+            && py < s->rects[i].y + s->rects[i].h)
         {
             return true;
         }
@@ -212,7 +213,7 @@ static int check_cascade(void)
         return fail("invariant: bridge rect");
     if (s.count != 1U)
         return fail("bridge did not cascade-merge both sides");
-    if (s.r[0].x != 0 || s.r[0].w != 140)
+    if (s.rects[0].x != 0 || s.rects[0].w != 140)
         return fail("cascaded union has the wrong extent");
 
     printf("PASS: cascade — a bridge rect collapses everything it connects\n");
@@ -256,7 +257,7 @@ static int check_saturation(void)
     bool found = false;
     for (uint8_t i = 0; i < s.count; i++)
     {
-        if (s.r[i].x == 0 && s.r[i].x + s.r[i].w == 42)
+        if (s.rects[i].x == 0 && s.rects[i].x + s.rects[i].w == 42)
             found = true;
     }
     if (!found)
@@ -326,7 +327,7 @@ static int check_limit(void)
     er_damage_set_limit(&s, 1U);
     if (s.count != 1U)
         return fail("limit to 1 did not collapse to a single rect");
-    if (s.r[0].x != bounds.x || s.r[0].y != bounds.y || s.r[0].w != bounds.w || s.r[0].h != bounds.h)
+    if (s.rects[0].x != bounds.x || s.rects[0].y != bounds.y || s.rects[0].w != bounds.w || s.rects[0].h != bounds.h)
         return fail("the collapsed rect is not the covering bounding box");
 
     /* Zero empties it; a limit on an empty set is a no-op. */
@@ -348,9 +349,9 @@ static int check_limit(void)
     bool fused = false, far_kept = false;
     for (uint8_t i = 0; i < s.count; i++)
     {
-        if (s.r[i].x == 0 && s.r[i].w == 42)
+        if (s.rects[i].x == 0 && s.rects[i].w == 42)
             fused = true;
-        if (s.r[i].x == 500 && s.r[i].w == 20)
+        if (s.rects[i].x == 500 && s.rects[i].w == 20)
             far_kept = true;
     }
     if (!fused || !far_kept)

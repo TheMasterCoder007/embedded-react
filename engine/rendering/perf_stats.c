@@ -121,33 +121,33 @@ void er_perf_phase_end(ERPerfPhase phase)
     s_phase_open[phase] = false;
 }
 
-void er_perf_raster_begin(ERPerfRasterSub sub)
+void er_perf_raster_begin(ERPerfRasterSub subphase)
 {
-    if (!s_frame_open || (int)sub < 0 || (int)sub >= (int)ER_PERF_RASTER_COUNT)
+    if (!s_frame_open || (int)subphase < 0 || (int)subphase >= (int)ER_PERF_RASTER_COUNT)
     {
         return;
     }
-    s_sub_start[sub] = perf_now();
-    s_sub_open[sub] = true;
+    s_sub_start[subphase] = perf_now();
+    s_sub_open[subphase] = true;
 }
 
-void er_perf_raster_end(ERPerfRasterSub sub)
+void er_perf_raster_end(ERPerfRasterSub subphase)
 {
-    if (!s_frame_open || (int)sub < 0 || (int)sub >= (int)ER_PERF_RASTER_COUNT)
+    if (!s_frame_open || (int)subphase < 0 || (int)subphase >= (int)ER_PERF_RASTER_COUNT)
     {
         return;
     }
-    if (!s_sub_open[sub])
+    if (!s_sub_open[subphase])
     {
         return;
     }
-    s_cur.raster_us[sub] += perf_now() - s_sub_start[sub];
-    s_sub_open[sub] = false;
+    s_cur.raster_us[subphase] += perf_now() - s_sub_start[subphase];
+    s_sub_open[subphase] = false;
 }
 
-void er_perf_js_begin(ERPerfJsSub sub)
+void er_perf_js_begin(ERPerfJsSub subphase)
 {
-    if (!s_frame_open || (int)sub < 0 || (int)sub >= (int)ER_PERF_JS_COUNT)
+    if (!s_frame_open || (int)subphase < 0 || (int)subphase >= (int)ER_PERF_JS_COUNT)
     {
         return;
     }
@@ -162,10 +162,10 @@ void er_perf_js_begin(ERPerfJsSub sub)
         s_cur.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
     }
     s_js_mark = now;
-    s_js_stack[s_js_depth++] = (uint8_t)sub;
+    s_js_stack[s_js_depth++] = (uint8_t)subphase;
 }
 
-void er_perf_js_end(ERPerfJsSub sub)
+void er_perf_js_end(ERPerfJsSub subphase)
 {
     if (!s_frame_open)
     {
@@ -176,24 +176,24 @@ void er_perf_js_end(ERPerfJsSub sub)
         s_js_over--;
         return;
     }
-    if (s_js_depth == 0 || s_js_stack[s_js_depth - 1] != (uint8_t)sub)
+    if (s_js_depth == 0 || s_js_stack[s_js_depth - 1] != (uint8_t)subphase)
     {
         return; /* never begun, or crossed with another span: contribute nothing rather than misattribute */
     }
     const uint32_t now = perf_now();
-    s_cur.js_us[sub] += now - s_js_mark;
+    s_cur.js_us[subphase] += now - s_js_mark;
     s_js_mark = now;
     s_js_depth--;
 }
 
-void er_perf_note_blit(uint32_t us, uint32_t px)
+void er_perf_note_blit(uint32_t elapsed_us, uint32_t pixels)
 {
     if (!s_frame_open)
     {
         return;
     }
-    s_cur.raster_us[ER_PERF_RASTER_BLIT] += us;
-    s_cur.blit_px += px;
+    s_cur.raster_us[ER_PERF_RASTER_BLIT] += elapsed_us;
+    s_cur.blit_px += pixels;
 }
 
 uint32_t er_perf_now_us(void)
@@ -201,9 +201,9 @@ uint32_t er_perf_now_us(void)
     return perf_now();
 }
 
-void er_perf_note_repaint(int x, int y, int w, int h)
+void er_perf_note_repaint(int x, int y, int width, int height)
 {
-    if (!s_frame_open || w <= 0 || h <= 0)
+    if (!s_frame_open || width <= 0 || height <= 0)
     {
         return; /* frame_begin zeroed the counters, so a frame that never notes stays at 0 */
     }
@@ -214,13 +214,13 @@ void er_perf_note_repaint(int x, int y, int w, int h)
     {
         s_cur.dirty_x = (int32_t)x;
         s_cur.dirty_y = (int32_t)y;
-        s_cur.dirty_w = (int32_t)w;
-        s_cur.dirty_h = (int32_t)h;
+        s_cur.dirty_w = (int32_t)width;
+        s_cur.dirty_h = (int32_t)height;
     }
     else
     {
-        const int32_t x1 = (s_cur.dirty_x + s_cur.dirty_w > x + w) ? s_cur.dirty_x + s_cur.dirty_w : x + w;
-        const int32_t y1 = (s_cur.dirty_y + s_cur.dirty_h > y + h) ? s_cur.dirty_y + s_cur.dirty_h : y + h;
+        const int32_t x1 = (s_cur.dirty_x + s_cur.dirty_w > x + width) ? s_cur.dirty_x + s_cur.dirty_w : x + width;
+        const int32_t y1 = (s_cur.dirty_y + s_cur.dirty_h > y + height) ? s_cur.dirty_y + s_cur.dirty_h : y + height;
         if ((int32_t)x < s_cur.dirty_x)
             s_cur.dirty_x = (int32_t)x;
         if ((int32_t)y < s_cur.dirty_y)
@@ -228,7 +228,7 @@ void er_perf_note_repaint(int x, int y, int w, int h)
         s_cur.dirty_w = x1 - s_cur.dirty_x;
         s_cur.dirty_h = y1 - s_cur.dirty_y;
     }
-    s_cur.dirty_px += (uint32_t)w * (uint32_t)h;
+    s_cur.dirty_px += (uint32_t)width * (uint32_t)height;
 }
 
 void er_perf_frame_end(void)
@@ -511,30 +511,30 @@ void er_perf_phase_end(ERPerfPhase phase)
     (void)phase;
 }
 
-void er_perf_raster_begin(ERPerfRasterSub sub)
+void er_perf_raster_begin(ERPerfRasterSub subphase)
 {
-    (void)sub;
+    (void)subphase;
 }
 
-void er_perf_raster_end(ERPerfRasterSub sub)
+void er_perf_raster_end(ERPerfRasterSub subphase)
 {
-    (void)sub;
+    (void)subphase;
 }
 
-void er_perf_js_begin(ERPerfJsSub sub)
+void er_perf_js_begin(ERPerfJsSub subphase)
 {
-    (void)sub;
+    (void)subphase;
 }
 
-void er_perf_js_end(ERPerfJsSub sub)
+void er_perf_js_end(ERPerfJsSub subphase)
 {
-    (void)sub;
+    (void)subphase;
 }
 
-void er_perf_note_blit(uint32_t us, uint32_t px)
+void er_perf_note_blit(uint32_t elapsed_us, uint32_t pixels)
 {
-    (void)us;
-    (void)px;
+    (void)elapsed_us;
+    (void)pixels;
 }
 
 uint32_t er_perf_now_us(void)
@@ -542,12 +542,12 @@ uint32_t er_perf_now_us(void)
     return 0U;
 }
 
-void er_perf_note_repaint(int x, int y, int w, int h)
+void er_perf_note_repaint(int x, int y, int width, int height)
 {
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
 }
 
 void er_perf_frame_end(void)

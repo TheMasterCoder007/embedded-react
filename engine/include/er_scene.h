@@ -1196,7 +1196,7 @@ extern "C"
      * frame's damage leaves everything else stale (moved elements ghost; a change disjoint from other damage
      * lands in one buffer but not the other and never appears).
      *
-     * With @p n > 1 the engine gives each rotating buffer a damage "debt": every commit's damage is unioned
+     * With @p count > 1 the engine gives each rotating buffer a damage "debt": every commit's damage is unioned
      * into all buffers, and the buffer being rendered is repainted over its accumulated debt (bringing it
      * fully current) and cleared. Because commits are driven by React (a burst at mount, none when idle) and
      * NOT by the display's present loop, the host must mark each page-flip with er_display_present() so the
@@ -1209,10 +1209,10 @@ extern "C"
      * copy are needed. The engine needs no knowledge of the framebuffer addresses or vblank — only the buffer
      * count and a present tick per flip.
      *
-     * @param[in] n  Number of rotating display buffers (>= 1). Clamped to [1, ER_DISPLAY_BUFFERS_MAX];
+     * @param[in] count  Number of rotating display buffers (>= 1). Clamped to [1, ER_DISPLAY_BUFFERS_MAX];
      *               1 restores the default single-buffer (pure incremental) behaviour.
      */
-    void er_set_display_buffer_count(int n);
+    void er_set_display_buffer_count(int count);
 
     /**
      * @brief Returns the current display buffer count set by er_set_display_buffer_count() (default 1).
@@ -1226,7 +1226,7 @@ extern "C"
      *        rotating buffer.
      *
      * Call once per hardware buffer flip, AFTER the er_commit() that painted the buffer being presented.
-     * Required only when er_set_display_buffer_count(n) has n > 1; a no-op for the default single buffer.
+     * Required only when er_set_display_buffer_count(count) has count > 1; a no-op for the default single buffer.
      * Decoupling this from er_commit() is what lets the engine track presents independently of React-driven
      * commits (which can fire several times, or not at all, between two presents).
      */
@@ -1313,12 +1313,12 @@ extern "C"
      * replaces its buffer/dimensions in place (no engine-side memory is leaked); each
      * distinct name occupies one of ERUI_IMAGE_REGISTRY_MAX slots.
      *
-     * @param[in] name      Null-terminated image asset name.
-     * @param[in] argb_buf  Pointer to the premultiplied ARGB8888 pixel data (row-major).
-     * @param[in] w         Image width in pixels.
-     * @param[in] h         Image height in pixels.
+     * @param[in] name         Null-terminated image asset name.
+     * @param[in] argb_pixels  Pointer to the premultiplied ARGB8888 pixel data (row-major).
+     * @param[in] width        Image width in pixels.
+     * @param[in] height       Image height in pixels.
      */
-    void er_image_load(const char* name, const void* argb_buf, int w, int h);
+    void er_image_load(const char* name, const void* argb_pixels, int width, int height);
 
     /**
      * @brief Registers a 16-bit RGB565 image under a name for use by Image nodes.
@@ -1331,12 +1331,12 @@ extern "C"
      * backgrounds and other opaque art; use er_image_load() for anything with
      * transparency.
      *
-     * @param[in] name        Null-terminated image asset name.
-     * @param[in] rgb565_buf  Pointer to the RGB565 pixel data (row-major).
-     * @param[in] w           Image width in pixels.
-     * @param[in] h           Image height in pixels.
+     * @param[in] name           Null-terminated image asset name.
+     * @param[in] rgb565_pixels  Pointer to the RGB565 pixel data (row-major).
+     * @param[in] width          Image width in pixels.
+     * @param[in] height         Image height in pixels.
      */
-    void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h);
+    void er_image_load_rgb565(const char* name, const void* rgb565_pixels, int width, int height);
 
     /**
      * @brief Reports whether an image is registered under a name.
@@ -1729,10 +1729,10 @@ extern "C"
      *
      * @param[in] node       Target node.
      * @param[in] event      Event type to listen for.
-     * @param[in] fn         Callback to invoke when the event fires, or NULL to remove.
+     * @param[in] callback   Callback to invoke when the event fires, or NULL to remove.
      * @param[in] user_data  Opaque pointer forwarded to the callback.
      */
-    void er_event_set(ERNode* node, EREventType event, EREventFn fn, void* user_data);
+    void er_event_set(ERNode* node, EREventType event, EREventFn callback, void* user_data);
 
     /**
      * @brief Registers a gesture responder query callback on a node.
@@ -1743,10 +1743,10 @@ extern "C"
      *
      * @param[in] node       Target node.
      * @param[in] query      Query type (see ERResponderQuery).
-     * @param[in] fn         Callback to invoke during negotiation, or NULL to remove.
+     * @param[in] callback   Callback to invoke during negotiation, or NULL to remove.
      * @param[in] user_data  Opaque pointer forwarded to the callback.
      */
-    void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn fn, void* user_data);
+    void er_responder_query_set(ERNode* node, ERResponderQuery query, ERResponderQueryFn callback, void* user_data);
 
     /**
      * @brief Returns how many fingers are currently down (touch sequences in flight).
@@ -1893,22 +1893,24 @@ extern "C"
      * @brief Sets the vector op-tape and paint table on an ER_NODE_VECTOR (Svg) node.
      *
      * The node re-rasterizes its shapes into its layout box on the next paint. The op-tape and paints
-     * are copied into engine-owned storage (bounded; excess is dropped). Passing n_ops == 0 clears the
+     * are copied into engine-owned storage (bounded; excess is dropped). Passing op_count == 0 clears the
      * node's geometry. The node takes its size from its layout/style (width/height), not the tape.
      *
-     * @param[in] node      Vector node to configure (no-op for other node types).
-     * @param[in] ops       Flat op-tape (see the ER_VOP_* contract above).
-     * @param[in] n_ops     Number of floats in @p ops.
-     * @param[in] paints    Paint table (one ERVectorPaint per shape).
-     * @param[in] n_paints  Number of paint entries.
+     * @param[in] node            Vector node to configure (no-op for other node types).
+     * @param[in] ops             Flat op-tape (see the ER_VOP_* contract above).
+     * @param[in] op_count        Number of floats in @p ops.
+     * @param[in] paints          Paint table (one ERVectorPaint per shape).
+     * @param[in] paint_count     Number of paint entries.
+     * @param[in] gradients       Gradient table the paints index into (ERUI_GRADIENT).
+     * @param[in] gradient_count  Number of gradient entries.
      */
     void er_node_set_vector_ops(ERNode* node,
                                 const float* ops,
-                                int n_ops,
+                                int op_count,
                                 const ERVectorPaint* paints,
-                                int n_paints,
-                                const ERVectorGradient* grads,
-                                int n_grads);
+                                int paint_count,
+                                const ERVectorGradient* gradients,
+                                int gradient_count);
 
     /**
      * @brief Restricts the next commit's damage for a vector node to a sub-region of its box.
@@ -1920,13 +1922,13 @@ extern "C"
      * resets it to a full-box repaint. The rect is intersected with the node box; its corners are clipped to
      * ±16383 first, which holds any box, so a huge rect still covers what it says.
      *
-     * @param[in] node  Vector node (no-op for other types).
-     * @param[in] x     Sub-rect left, in node-local pixels.
-     * @param[in] y     Sub-rect top, in node-local pixels.
-     * @param[in] w     Sub-rect width.
-     * @param[in] h     Sub-rect height.
+     * @param[in] node    Vector node (no-op for other types).
+     * @param[in] x       Sub-rect left, in node-local pixels.
+     * @param[in] y       Sub-rect top, in node-local pixels.
+     * @param[in] width   Sub-rect width.
+     * @param[in] height  Sub-rect height.
      */
-    void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int w, int h);
+    void er_node_set_vector_dirty_rect(ERNode* node, int x, int y, int width, int height);
 
     /*----------------------------------------------------------------------------------------------------------------------
      - Layout animation

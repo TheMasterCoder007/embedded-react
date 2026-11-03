@@ -93,11 +93,11 @@ extern "C"
      *
      * The next er_commit() paints it over the whole screen. The scene, if any, is kept but not drawn.
      *
-     * @param[in] screen_w  The panel width in pixels.
-     * @param[in] screen_h  The panel height in pixels.
-     * @param[in] screen    What to show.
+     * @param[in] screen_width   The panel width in pixels.
+     * @param[in] screen_height  The panel height in pixels.
+     * @param[in] screen         What to show.
      */
-    void er_error_screen_show(int screen_w, int screen_h, const ERErrorScreen* screen);
+    void er_error_screen_show(int screen_width, int screen_height, const ERErrorScreen* screen);
 
     /** @brief Takes the error screen down; the next er_commit() repaints the whole scene. */
     void er_error_screen_hide(void);
@@ -108,12 +108,12 @@ extern "C"
     /**
      * @brief Records a native fault. Safe from a fault handler: no allocation, no library calls.
      *
-     * @param[out] record   The no-init record.
-     * @param[in]  reason   What happened, such as "hard fault" or "watchdog reset"; cut to fit.
-     * @param[in]  pc       Where it happened, or 0.
-     * @param[in]  address  The address it touched, or 0.
+     * @param[out] record           The no-init record.
+     * @param[in]  reason           What happened, such as "hard fault" or "watchdog reset"; cut to fit.
+     * @param[in]  program_counter  Where it happened, or 0.
+     * @param[in]  address          The address it touched, or 0.
      */
-    void er_fault_record(ERFaultRecord* record, const char* reason, uint32_t pc, uint32_t address);
+    void er_fault_record(ERFaultRecord* record, const char* reason, uint32_t program_counter, uint32_t address);
 
     /** @brief True when @p record holds a fault recorded before the last reset. */
     bool er_fault_recorded(const ERFaultRecord* record);
@@ -121,13 +121,13 @@ extern "C"
     /**
      * @brief Shows a recorded fault on the error screen and clears the record. Call once at boot.
      *
-     * @param[in,out] record    The no-init record.
-     * @param[in]     screen_w  The panel width in pixels.
-     * @param[in]     screen_h  The panel height in pixels.
+     * @param[in,out] record         The no-init record.
+     * @param[in]     screen_width   The panel width in pixels.
+     * @param[in]     screen_height  The panel height in pixels.
      *
      * @return true when there was a fault to show.
      */
-    bool er_fault_show_recorded(ERFaultRecord* record, int screen_w, int screen_h);
+    bool er_fault_show_recorded(ERFaultRecord* record, int screen_width, int screen_height);
 
 #ifdef __cplusplus
 }

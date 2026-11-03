@@ -175,8 +175,8 @@ static void test_activity_indicator_renders(void)
     er_tree_set_root(root);
 
     /* Initial spin angle must be 0 before any tick. */
-    assert(act->tp_rotate_z == 0.0f && "Initial spin angle must be 0");
-    assert(act->props.act.animating == 1 && "ActivityIndicator must be animating");
+    assert(act->transform_rotate_z == 0.0f && "Initial spin angle must be 0");
+    assert(act->props.activity_indicator.animating == 1 && "ActivityIndicator must be animating");
 
     /* First commit renders without crash. */
     er_commit();
@@ -185,7 +185,8 @@ static void test_activity_indicator_renders(void)
     embedded_renderer_tick(500);
     er_commit();
 
-    assert(act->tp_rotate_z > 100.0f && act->tp_rotate_z < 260.0f && "Spin angle must advance after 500 ms tick");
+    assert(act->transform_rotate_z > 100.0f && act->transform_rotate_z < 260.0f
+           && "Spin angle must advance after 500 ms tick");
 
     /* Stopping the animation via props clears rotation advancement. */
     p = props_auto();
@@ -195,10 +196,10 @@ static void test_activity_indicator_renders(void)
     p.indicator_color = 0xFFFFFFFFU;
     p.animating = 0;
     er_node_set_props(act, &p);
-    const float stopped_angle = act->tp_rotate_z;
+    const float stopped_angle = act->transform_rotate_z;
     embedded_renderer_tick(200);
     er_commit();
-    assert(act->tp_rotate_z == stopped_angle && "Spin angle must not change when animating=0");
+    assert(act->transform_rotate_z == stopped_angle && "Spin angle must not change when animating=0");
 
     printf("PASS: test_activity_indicator_renders\n");
 }
@@ -245,7 +246,7 @@ static void test_switch_renders(void)
     er_commit();
 
     /* switch_thumb_t should start at 0.0 (off). */
-    assert(sw->switch_thumb_t < 0.1f && "Switch thumb must start in off position");
+    assert(sw->switch_thumb_progress < 0.1f && "Switch thumb must start in off position");
 
     /* Toggle the switch on. */
     p.switch_value = 1;
@@ -255,8 +256,8 @@ static void test_switch_renders(void)
     embedded_renderer_tick(300);
     er_commit();
 
-    assert(sw->switch_thumb_t > 0.9f && "Switch thumb must reach on position after animation");
-    assert(sw->props.sw.value == 1 && "Switch value must be 1 after set");
+    assert(sw->switch_thumb_progress > 0.9f && "Switch thumb must reach on position after animation");
+    assert(sw->props.switch_props.value == 1 && "Switch value must be 1 after set");
 
     printf("PASS: test_switch_renders\n");
 }
@@ -443,8 +444,8 @@ static void test_text_input_secure(void)
     /* The content box: the field's default 4 px / 3 px padding, no border. */
     const int cx = ti->computed.x + 4;
     const int cy = ti->computed.y + 3;
-    const int cw = ti->computed.w - 8;
-    const int ch = ti->computed.h - 6;
+    const int cw = ti->computed.width - 8;
+    const int ch = ti->computed.height - 6;
     assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) == 3 && "One dot per character, not per byte");
 
     /* At 16 px the dots are 6 px wide and 4 px apart, the first 2 px in; the cursor goes after the last. */
@@ -721,7 +722,7 @@ static void test_flatlist_scrolls(void)
     er_commit();
 
     /* Content size (5×40=200) must exceed viewport (120). */
-    assert(fl->scroll_content_h > fl->computed.h && "FlatList content must exceed viewport height");
+    assert(fl->scroll_content_height > fl->computed.height && "FlatList content must exceed viewport height");
 
     /* Programmatic scroll. */
     er_scroll_view_set_offset(fl, 0.0f, 60.0f);

@@ -601,7 +601,7 @@ bool er_keyboard_active(void);
 
 /** @brief Draws the on-screen keyboard strip over the bottom of the screen (no-op when inactive). Honours
  *         the active clip / band, so it composites on top of the scene within the current repaint region. */
-void er_keyboard_draw(int screen_w, int screen_h);
+void er_keyboard_draw(int screen_width, int screen_height);
 
 /** @brief Routes a touch to the on-screen keyboard. Returns true (consumed) when the keyboard is active and
  *         the point is inside its strip — a key DOWN types into the focused input; otherwise false. */

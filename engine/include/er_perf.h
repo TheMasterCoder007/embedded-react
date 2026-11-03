@@ -93,11 +93,11 @@
  * unconditionally; these two get macros.
  */
 #if ER_PERF_STATS
-#define ER_PERF_JS_BEGIN(sub) er_perf_js_begin(sub)
-#define ER_PERF_JS_END(sub) er_perf_js_end(sub)
+#define ER_PERF_JS_BEGIN(subphase) er_perf_js_begin(subphase)
+#define ER_PERF_JS_END(subphase) er_perf_js_end(subphase)
 #else
-#define ER_PERF_JS_BEGIN(sub) ((void)0)
-#define ER_PERF_JS_END(sub) ((void)0)
+#define ER_PERF_JS_BEGIN(subphase) ((void)0)
+#define ER_PERF_JS_END(subphase) ((void)0)
 #endif
 
 /**
@@ -294,26 +294,26 @@ extern "C"
     void er_perf_frame_end(void);
 
     /**
-     * @brief Starts timing raster sub-step @p sub within the open frame (called by the engine).
+     * @brief Starts timing raster sub-step @p subphase within the open frame (called by the engine).
      *
      * Same accumulate-on-re-entry semantics as er_perf_phase_begin(); meaningful only inside the
      * RASTER phase, which is where the engine marks them.
      *
-     * @param[in] sub  Raster sub-step to start.
+     * @param[in] subphase  Raster sub-step to start.
      */
-    void er_perf_raster_begin(ERPerfRasterSub sub);
+    void er_perf_raster_begin(ERPerfRasterSub subphase);
 
     /**
-     * @brief Stops timing raster sub-step @p sub (called by the engine).
+     * @brief Stops timing raster sub-step @p subphase (called by the engine).
      *
      * Ignored when the sub-step was never begun, like er_perf_phase_end().
      *
-     * @param[in] sub  Raster sub-step to stop.
+     * @param[in] subphase  Raster sub-step to stop.
      */
-    void er_perf_raster_end(ERPerfRasterSub sub);
+    void er_perf_raster_end(ERPerfRasterSub subphase);
 
     /**
-     * @brief Starts timing JS sub-step @p sub within the open frame (called by the bridge).
+     * @brief Starts timing JS sub-step @p subphase within the open frame (called by the bridge).
      *
      * Unlike the phase and raster marks these NEST, and the innermost open bucket is the one being
      * charged: opening a bucket first closes out the time its parent has run so far. So a MARSHAL span
@@ -322,19 +322,19 @@ extern "C"
      * Call through ER_PERF_JS_BEGIN() rather than directly, so the call disappears with the
      * instrumentation on a build that compiled it out — these sit on the bridge's hottest paths.
      *
-     * @param[in] sub  JS sub-step to start.
+     * @param[in] subphase  JS sub-step to start.
      */
-    void er_perf_js_begin(ERPerfJsSub sub);
+    void er_perf_js_begin(ERPerfJsSub subphase);
 
     /**
-     * @brief Stops timing JS sub-step @p sub and charges the elapsed time to it (called by the bridge).
+     * @brief Stops timing JS sub-step @p subphase and charges the elapsed time to it (called by the bridge).
      *
-     * Ignored unless @p sub is the innermost open bucket, so a stray or crossed end cannot shuffle
+     * Ignored unless @p subphase is the innermost open bucket, so a stray or crossed end cannot shuffle
      * time into the wrong one — the mismatched span simply contributes nothing.
      *
-     * @param[in] sub  JS sub-step to stop.
+     * @param[in] subphase  JS sub-step to stop.
      */
-    void er_perf_js_end(ERPerfJsSub sub);
+    void er_perf_js_end(ERPerfJsSub subphase);
 
     /**
      * @brief Adds already-measured backend-blit time and pixels to this frame (called by the engine).
@@ -343,10 +343,10 @@ extern "C"
      * shared frame state must not be touched); the compositor collects the per-worker sums on the
      * commit thread when the composite passes finish and reports them here in one call.
      *
-     * @param[in] us  Microseconds spent inside backend blit callbacks (summed across workers).
-     * @param[in] px  Pixels pushed through those callbacks (sum of each call's w*h, post-clip).
+     * @param[in] elapsed_us  Microseconds spent inside backend blit callbacks (summed across workers).
+     * @param[in] pixels      Pixels pushed through those callbacks (sum of each call's w*h, post-clip).
      */
-    void er_perf_note_blit(uint32_t us, uint32_t px);
+    void er_perf_note_blit(uint32_t elapsed_us, uint32_t pixels);
 
     /**
      * @brief Samples the clock installed with er_perf_set_clock().
@@ -368,12 +368,12 @@ extern "C"
      * span between far-apart changes. Empty rects and calls outside an open frame are ignored; a
      * frame with no notes reports all-zero.
      *
-     * @param[in] x  Rect left edge in screen pixels.
-     * @param[in] y  Rect top edge in screen pixels.
-     * @param[in] w  Rect width in pixels.
-     * @param[in] h  Rect height in pixels.
+     * @param[in] x       Rect left edge in screen pixels.
+     * @param[in] y       Rect top edge in screen pixels.
+     * @param[in] width   Rect width in pixels.
+     * @param[in] height  Rect height in pixels.
      */
-    void er_perf_note_repaint(int x, int y, int w, int h);
+    void er_perf_note_repaint(int x, int y, int width, int height);
 
     /**
      * @brief Retrieves the most recently completed frame.

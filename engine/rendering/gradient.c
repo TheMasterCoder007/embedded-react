@@ -156,10 +156,10 @@ typedef struct
 static void mask_init(GradMask* m, const ERViewProps* vp, int w, int h)
 {
     /* Per-corner radius, falling back to the uniform one — the same resolution render_view_bg uses. */
-    m->r_tl = vp->border_tl_radius > 0 ? (int)vp->border_tl_radius : (int)vp->border_radius;
-    m->r_tr = vp->border_tr_radius > 0 ? (int)vp->border_tr_radius : (int)vp->border_radius;
-    m->r_br = vp->border_br_radius > 0 ? (int)vp->border_br_radius : (int)vp->border_radius;
-    m->r_bl = vp->border_bl_radius > 0 ? (int)vp->border_bl_radius : (int)vp->border_radius;
+    m->r_tl = vp->border_top_left_radius > 0 ? (int)vp->border_top_left_radius : (int)vp->border_radius;
+    m->r_tr = vp->border_top_right_radius > 0 ? (int)vp->border_top_right_radius : (int)vp->border_radius;
+    m->r_br = vp->border_bottom_right_radius > 0 ? (int)vp->border_bottom_right_radius : (int)vp->border_radius;
+    m->r_bl = vp->border_bottom_left_radius > 0 ? (int)vp->border_bottom_left_radius : (int)vp->border_radius;
     er_rrect_clamp_radii(w, h, &m->r_tl, &m->r_tr, &m->r_br, &m->r_bl);
     m->w = w;
     m->h = h;

@@ -56,8 +56,8 @@
  */
 typedef struct
 {
-    ERRect r[ER_DAMAGE_RECTS_MAX]; /**< The rects; only the first `count` entries are valid. */
-    uint8_t count;                 /**< Number of valid rects; 0 = empty. */
+    ERRect rects[ER_DAMAGE_RECTS_MAX]; /**< The rects; only the first `count` entries are valid. */
+    uint8_t count;                     /**< Number of valid rects; 0 = empty. */
 } ERDamageSet;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -65,23 +65,23 @@ typedef struct
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Empties the set. */
-void er_damage_set_clear(ERDamageSet* s);
+void er_damage_set_clear(ERDamageSet* set);
 
 /**
  * @brief Adds a rect to the set, preserving the disjointness invariant.
  *
- * An empty rect (w or h <= 0) is ignored. The input is merged (bounding-box union) with every stored
+ * An empty rect (width or height <= 0) is ignored. The input is merged (bounding-box union) with every stored
  * rect it overlaps or abuts, cascading until stable; when the set is already full, it is merged with
  * the stored rect that minimises wasted area instead of being dropped. Coverage is therefore always
  * conservative: every pixel of every added rect is covered by exactly one stored rect.
  *
- * @param[in] s  Set to add to.
- * @param[in] x  Rect left edge.
- * @param[in] y  Rect top edge.
- * @param[in] w  Rect width in pixels.
- * @param[in] h  Rect height in pixels.
+ * @param[in] set     Set to add to.
+ * @param[in] x       Rect left edge.
+ * @param[in] y       Rect top edge.
+ * @param[in] width   Rect width in pixels.
+ * @param[in] height  Rect height in pixels.
  */
-void er_damage_set_add(ERDamageSet* s, int x, int y, int w, int h);
+void er_damage_set_add(ERDamageSet* set, int x, int y, int width, int height);
 
 /**
  * @brief Merges the set down to at most @p max_rects rects, preserving coverage and disjointness.
@@ -91,28 +91,28 @@ void er_damage_set_add(ERDamageSet* s, int x, int y, int w, int h);
  * does; @p max_rects of 0 empties it; 1 collapses to the covering bounding box. Used to trade rect
  * count for render passes when a pass is expensive — see the compositor's unprunable-walk case.
  *
- * @param[in,out] s          Set to trim.
+ * @param[in,out] set        Set to trim.
  * @param[in]     max_rects  Maximum rects to keep.
  */
-void er_damage_set_limit(ERDamageSet* s, uint8_t max_rects);
+void er_damage_set_limit(ERDamageSet* set, uint8_t max_rects);
 
 /**
  * @brief Computes the bounding box of the whole set.
  *
- * @param[in]  s    Set to measure.
+ * @param[in]  set  Set to measure.
  * @param[out] out  Receives the union bbox; set to {0,0,0,0} when empty. May be NULL.
  *
  * @return true when the set is non-empty.
  */
-bool er_damage_set_bounds(const ERDamageSet* s, ERRect* out);
+bool er_damage_set_bounds(const ERDamageSet* set, ERRect* out);
 
 /**
  * @brief Sums the areas of the stored rects (exact, since they are disjoint).
  *
- * @param[in] s  Set to measure.
+ * @param[in] set  Set to measure.
  *
  * @return Total covered area in pixels; 0 when empty.
  */
-uint32_t er_damage_set_area(const ERDamageSet* s);
+uint32_t er_damage_set_area(const ERDamageSet* set);
 
 #endif

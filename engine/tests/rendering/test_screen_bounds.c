@@ -125,12 +125,12 @@ int main(void)
 
     er_set_screen_bounds(BOUNDS_W, BOUNDS_H);
     ERNode* root = commit_scene(HUGE_SIDE);
-    CHECK(root->computed.w == BOUNDS_W && root->computed.h == BOUNDS_H, "the root is clamped to the bounds");
+    CHECK(root->computed.width == BOUNDS_W && root->computed.height == BOUNDS_H, "the root is clamped to the bounds");
     CHECK(s_right > 0 && s_right <= BOUNDS_W, "nothing paints past the right bound");
     CHECK(s_bottom > 0 && s_bottom <= BOUNDS_H, "nothing paints past the bottom bound");
 
     root = commit_scene(40);
-    CHECK(root->computed.w == 40 && root->computed.h == 40, "a root inside the bounds keeps its size");
+    CHECK(root->computed.width == 40 && root->computed.height == 40, "a root inside the bounds keeps its size");
     CHECK(s_right <= BOUNDS_W && s_bottom <= BOUNDS_H, "a node past a small root stops at the bounds");
 
     /* One limit: that axis stops at it, and the other keeps the root's size. */
@@ -183,7 +183,8 @@ int main(void)
     er_node_set_props(free_root, &free_props);
     er_tree_set_root(free_root);
     er_commit();
-    CHECK(free_root->computed.w == BOUNDS_W * 2 && free_root->computed.h == BOUNDS_H * 2, "0 removes the limit");
+    CHECK(free_root->computed.width == BOUNDS_W * 2 && free_root->computed.height == BOUNDS_H * 2,
+          "0 removes the limit");
 
     if (s_failures)
     {

@@ -42,25 +42,25 @@
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_perf_overlay_draw(int screen_w,
-                          int screen_h,
+void er_perf_overlay_draw(int screen_width,
+                          int screen_height,
                           const char* const* lines,
                           int line_count,
                           int* out_x,
                           int* out_y,
-                          int* out_w,
-                          int* out_h)
+                          int* out_width,
+                          int* out_height)
 {
     if (out_x)
         *out_x = 0;
     if (out_y)
         *out_y = 0;
-    if (out_w)
-        *out_w = 0;
-    if (out_h)
-        *out_h = 0;
+    if (out_width)
+        *out_width = 0;
+    if (out_height)
+        *out_height = 0;
 
-    if (!lines || line_count <= 0 || screen_w <= 0 || screen_h <= 0)
+    if (!lines || line_count <= 0 || screen_width <= 0 || screen_height <= 0)
     {
         return;
     }
@@ -107,8 +107,8 @@ void er_perf_overlay_draw(int screen_w,
 
     const int panel_w = s_sticky_w + ER_PERF_PAD * 2;
     const int panel_h = line_h * line_count + ER_PERF_PAD * 2;
-    const int panel_x = screen_w - panel_w - ER_PERF_MARGIN;
-    const int panel_y = screen_h - panel_h - ER_PERF_MARGIN;
+    const int panel_x = screen_width - panel_w - ER_PERF_MARGIN;
+    const int panel_y = screen_height - panel_h - ER_PERF_MARGIN;
 
     /* Report the drawn rect so the host can snapshot exactly this region (e.g. to re-composite the
      * overlay every frame without re-rendering the text). */
@@ -116,10 +116,10 @@ void er_perf_overlay_draw(int screen_w,
         *out_x = panel_x;
     if (out_y)
         *out_y = panel_y;
-    if (out_w)
-        *out_w = panel_w;
-    if (out_h)
-        *out_h = panel_h;
+    if (out_width)
+        *out_width = panel_w;
+    if (out_height)
+        *out_height = panel_h;
 
     /* Opaque background, composited over whatever the app drew. */
     er_blit_fill(ER_PERF_BG, panel_x, panel_y, panel_w, panel_h);
@@ -147,27 +147,27 @@ void er_perf_overlay_draw(int screen_w,
 
 #else /* ER_PERF_OVERLAY == 0 : compiled out */
 
-void er_perf_overlay_draw(int screen_w,
-                          int screen_h,
+void er_perf_overlay_draw(int screen_width,
+                          int screen_height,
                           const char* const* lines,
                           int line_count,
                           int* out_x,
                           int* out_y,
-                          int* out_w,
-                          int* out_h)
+                          int* out_width,
+                          int* out_height)
 {
-    (void)screen_w;
-    (void)screen_h;
+    (void)screen_width;
+    (void)screen_height;
     (void)lines;
     (void)line_count;
     if (out_x)
         *out_x = 0;
     if (out_y)
         *out_y = 0;
-    if (out_w)
-        *out_w = 0;
-    if (out_h)
-        *out_h = 0;
+    if (out_width)
+        *out_width = 0;
+    if (out_height)
+        *out_height = 0;
 }
 
 #endif
