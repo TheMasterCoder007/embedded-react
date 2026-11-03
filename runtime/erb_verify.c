@@ -2332,8 +2332,12 @@ static bool check_register_kinds(const FunctionContext* context, uint32_t word)
     return true;
 }
 
-/** @brief A branch's target, or UINT32_MAX for an instruction that doesn't branch. */
-static uint32_t branch_target(uint32_t program_counter, uint32_t word)
+/**
+ * @brief Whether an instruction branches, and its target if it does.
+ *
+ * A branch to -1 wraps to UINT32_MAX, so the target can't double as a "doesn't branch" sentinel.
+ */
+static bool branch_target(uint32_t program_counter, uint32_t word, uint32_t* target)
 {
     switch (ERB_OP(word))
     {
@@ -2342,9 +2346,10 @@ static uint32_t branch_target(uint32_t program_counter, uint32_t word)
         case ERB_OP_JF:
         case ERB_OP_JDIRTY:
         case ERB_OP_LOOP:
-            return (uint32_t)((int32_t)(program_counter + erb_op_words(ERB_OP(word))) + ERB_SBX(word));
+            *target = (uint32_t)((int32_t)(program_counter + erb_op_words(ERB_OP(word))) + ERB_SBX(word));
+            return true;
         default:
-            return UINT32_MAX;
+            return false;
     }
 }
 
@@ -2402,7 +2407,8 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
             continue;
         }
         error->offset = program_counter;
-        const uint32_t target = branch_target(program_counter, word);
+        uint32_t target = 0;
+        branch_target(program_counter, word, &target);
         const uint32_t loopset = target - 1u;
         if (target > program_counter || target == 0u || !is_start(loopset)
             || ERB_OP(context.code[loopset]) != ERB_OP_LOOPSET || ERB_A(context.code[loopset]) != ERB_A(word))
@@ -2469,8 +2475,8 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
         {
             return fail(error, ERB_ERR_CONTROL_FLOW, "LOOP counter has no LOOPSET");
         }
-        const uint32_t target = branch_target(program_counter, word);
-        if (target != UINT32_MAX)
+        uint32_t target = 0;
+        if (branch_target(program_counter, word, &target))
         {
             if (target >= context.words || !is_start(target) || (opcode != ERB_OP_LOOP && target <= program_counter))
             {

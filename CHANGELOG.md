@@ -77,6 +77,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - A node sized far past the panel no longer stalls a Flow B frame painting off-screen.
 - NaN and out-of-range floats in percentages, dials, animated colors, and vectors no longer reach a
   float-to-int conversion.
+- The Flow B verifier rejects a branch to just before the start of a function. It passed, and the VM read outside the
+  code.
 
 ## [0.19.0] - 2026-10-27
 ### Changed

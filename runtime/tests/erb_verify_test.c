@@ -913,6 +913,13 @@ static void test_control_flow(void)
         EXPECT(ERB_ERR_CONTROL_FLOW, "a backward JMP");
     }
     {
+        /* -1 wraps to UINT32_MAX. */
+        const uint32_t code[] = {OP_ABX(JMP, 0, -2), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code(F_TIMER, code, 2);
+        EXPECT(ERB_ERR_CONTROL_FLOW, "a branch to -1");
+    }
+    {
         const uint32_t code[] = {OP_ABX(JMP, 0, 1), OP_ABX(JDIRTY, 0, 0), 1u, OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(F_UPDATE, code, 4);
