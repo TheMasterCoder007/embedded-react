@@ -24,6 +24,9 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** @brief A span or radius at or below this has no direction to spread the stops along. */
+#define GRADIENT_EPSILON 1e-6f
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -31,12 +34,12 @@
 /** @brief Single-row premultiplied ARGB8888 scratch buffer used during gradient rasterization. */
 /* One assembled row per render worker: cheap enough to duplicate, and it keeps gradient
  * backgrounds parallel-safe (see the multi-core render fork in compositor.c). */
-static uint32_t s_grad_row_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
+static uint32_t s_gradient_row_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
 
 /** @brief The calling worker's gradient row buffer. */
 static inline uint32_t* grow(void)
 {
-    return s_grad_row_pool[er_render_worker_id()];
+    return s_gradient_row_pool[er_render_worker_id()];
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -46,57 +49,57 @@ static inline uint32_t* grow(void)
 /**
  * @brief Linearly interpolates between two straight-alpha ARGB8888 colors.
  *
- * @param[in] c0  Color at t = 0.0.
- * @param[in] c1  Color at t = 1.0.
- * @param[in] t   Blend factor [0.0–1.0].
+ * @param[in] from      Color at fraction 0.0.
+ * @param[in] to        Color at fraction 1.0.
+ * @param[in] fraction  Blend factor [0.0–1.0].
  *
  * @return Interpolated straight-alpha ARGB8888 color.
  */
-static uint32_t lerp_argb(uint32_t c0, uint32_t c1, float t)
+static uint32_t lerp_argb(uint32_t from, uint32_t to, float fraction)
 {
-    /* Infinite stop positions, which a package can give, make t a NaN or send it past the ends. */
-    if (!(t > 0.0f))
-        t = 0.0f;
-    else if (t > 1.0f)
-        t = 1.0f;
-    const int a0 = (int)((c0 >> 24) & 0xFFu), a1 = (int)((c1 >> 24) & 0xFFu);
-    const int r0 = (int)((c0 >> 16) & 0xFFu), r1 = (int)((c1 >> 16) & 0xFFu);
-    const int g0 = (int)((c0 >> 8) & 0xFFu), g1 = (int)((c1 >> 8) & 0xFFu);
-    const int b0 = (int)(c0 & 0xFFu), b1 = (int)(c1 & 0xFFu);
-    const uint32_t a = (uint32_t)(a0 + (int)((float)(a1 - a0) * t));
-    const uint32_t r = (uint32_t)(r0 + (int)((float)(r1 - r0) * t));
-    const uint32_t g = (uint32_t)(g0 + (int)((float)(g1 - g0) * t));
-    const uint32_t b = (uint32_t)(b0 + (int)((float)(b1 - b0) * t));
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    /* Infinite stop positions, which a package can give, make fraction a NaN or send it past the ends. */
+    if (!(fraction > 0.0f))
+        fraction = 0.0f;
+    else if (fraction > 1.0f)
+        fraction = 1.0f;
+    const int from_alpha = (int)((from >> 24) & 0xFFu), to_alpha = (int)((to >> 24) & 0xFFu);
+    const int from_red = (int)((from >> 16) & 0xFFu), to_red = (int)((to >> 16) & 0xFFu);
+    const int from_green = (int)((from >> 8) & 0xFFu), to_green = (int)((to >> 8) & 0xFFu);
+    const int from_blue = (int)(from & 0xFFu), to_blue = (int)(to & 0xFFu);
+    const uint32_t alpha = (uint32_t)(from_alpha + (int)((float)(to_alpha - from_alpha) * fraction));
+    const uint32_t red = (uint32_t)(from_red + (int)((float)(to_red - from_red) * fraction));
+    const uint32_t green = (uint32_t)(from_green + (int)((float)(to_green - from_green) * fraction));
+    const uint32_t blue = (uint32_t)(from_blue + (int)((float)(to_blue - from_blue) * fraction));
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
 }
 
 /**
- * @brief Evaluates the gradient color at a scalar parameter t.
+ * @brief Evaluates the gradient color at a scalar position.
  *
- * Finds the pair of stops that brackets t and lerps between them. Returns the first stop
- * color for t below stops[0].position and the last stop color for t above the final position.
+ * Finds the pair of stops that brackets position and lerps between them. Returns the first stop
+ * color for a position below stops[0].position and the last stop color for one above the final position.
  *
- * @param[in] stops  Color stop array sorted by ascending position.
- * @param[in] count  Number of entries in stops.
- * @param[in] t      Gradient parameter [0.0–1.0].
+ * @param[in] stops     Color stop array sorted by ascending position.
+ * @param[in] count     Number of entries in stops.
+ * @param[in] position  Gradient parameter [0.0–1.0].
  *
- * @return Straight-alpha ARGB8888 color at position t.
+ * @return Straight-alpha ARGB8888 color at position.
  */
-uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t)
+uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float position)
 {
     if (count <= 0)
         return 0u;
-    if (t <= stops[0].position || count == 1)
+    if (position <= stops[0].position || count == 1)
         return stops[0].color;
-    if (t >= stops[count - 1].position)
+    if (position >= stops[count - 1].position)
         return stops[count - 1].color;
-    for (int i = 0; i < count - 1; i++)
+    for (int stop_index = 0; stop_index < count - 1; stop_index++)
     {
-        if (t <= stops[i + 1].position)
+        if (position <= stops[stop_index + 1].position)
         {
-            const float span = stops[i + 1].position - stops[i].position;
-            const float lt = (span > 0.0f) ? (t - stops[i].position) / span : 0.0f;
-            return lerp_argb(stops[i].color, stops[i + 1].color, lt);
+            const float span = stops[stop_index + 1].position - stops[stop_index].position;
+            const float stop_fraction = (span > 0.0f) ? (position - stops[stop_index].position) / span : 0.0f;
+            return lerp_argb(stops[stop_index].color, stops[stop_index + 1].color, stop_fraction);
         }
     }
     return stops[count - 1].color;
@@ -107,17 +110,17 @@ uint32_t er_gradient_eval_stops(const ERGradientStop* stops, int count, float t)
  *
  * Required before writing pixels into buffers consumed by er_blit_blend().
  *
- * @param[in] sa  Straight-alpha ARGB8888 color.
+ * @param[in] straight_argb  Straight-alpha ARGB8888 color.
  *
  * @return Premultiplied ARGB8888 equivalent.
  */
-uint32_t er_gradient_premul(uint32_t sa)
+uint32_t er_gradient_premul(uint32_t straight_argb)
 {
-    const uint32_t a = (sa >> 24) & 0xFFu;
-    const uint32_t r = (((sa >> 16) & 0xFFu) * a) / 255u;
-    const uint32_t g = (((sa >> 8) & 0xFFu) * a) / 255u;
-    const uint32_t b = ((sa & 0xFFu) * a) / 255u;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    const uint32_t alpha = (straight_argb >> 24) & 0xFFu;
+    const uint32_t red = (((straight_argb >> 16) & 0xFFu) * alpha) / ER_CHANNEL_MAX;
+    const uint32_t green = (((straight_argb >> 8) & 0xFFu) * alpha) / ER_CHANNEL_MAX;
+    const uint32_t blue = ((straight_argb & 0xFFu) * alpha) / ER_CHANNEL_MAX;
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
 }
 
 #if ERUI_GRADIENT
@@ -136,34 +139,44 @@ uint32_t er_gradient_premul(uint32_t sa)
  */
 typedef struct
 {
-    int w;        /**< Box width — the coordinate space of the row spans. */
-    int h;        /**< Box height. */
-    int r_tl;     /**< Clamped corner radii. */
-    int r_tr;     /**< @see r_tl */
-    int r_br;     /**< @see r_tl */
-    int r_bl;     /**< @see r_tl */
-    bool rounded; /**< False when every radius is 0: rows blit whole, at no extra cost. */
+    int width;               /**< Box width — the coordinate space of the row spans. */
+    int height;              /**< Box height. */
+    int radius_top_left;     /**< Clamped corner radii. */
+    int radius_top_right;    /**< @see radius_top_left */
+    int radius_bottom_right; /**< @see radius_top_left */
+    int radius_bottom_left;  /**< @see radius_top_left */
+    bool rounded;            /**< False when every radius is 0: rows blit whole, at no extra cost. */
 } GradMask;
 
 /**
  * @brief Resolves a node's corner radii into the mask its gradient rows are clipped to.
  *
- * @param[out] m   Receives the silhouette.
- * @param[in]  vp  View props carrying border_radius and the per-corner overrides.
- * @param[in]  w   Box width in pixels.
- * @param[in]  h   Box height in pixels.
+ * @param[out] mask        Receives the silhouette.
+ * @param[in]  view_props  View props carrying border_radius and the per-corner overrides.
+ * @param[in]  width       Box width in pixels.
+ * @param[in]  height      Box height in pixels.
  */
-static void mask_init(GradMask* m, const ERViewProps* vp, int w, int h)
+static void mask_init(GradMask* mask, const ERViewProps* view_props, int width, int height)
 {
     /* Per-corner radius, falling back to the uniform one — the same resolution render_view_bg uses. */
-    m->r_tl = vp->border_top_left_radius > 0 ? (int)vp->border_top_left_radius : (int)vp->border_radius;
-    m->r_tr = vp->border_top_right_radius > 0 ? (int)vp->border_top_right_radius : (int)vp->border_radius;
-    m->r_br = vp->border_bottom_right_radius > 0 ? (int)vp->border_bottom_right_radius : (int)vp->border_radius;
-    m->r_bl = vp->border_bottom_left_radius > 0 ? (int)vp->border_bottom_left_radius : (int)vp->border_radius;
-    er_rrect_clamp_radii(w, h, &m->r_tl, &m->r_tr, &m->r_br, &m->r_bl);
-    m->w = w;
-    m->h = h;
-    m->rounded = (m->r_tl > 0 || m->r_tr > 0 || m->r_br > 0 || m->r_bl > 0);
+    mask->radius_top_left = view_props->border_top_left_radius > 0 ? (int)view_props->border_top_left_radius
+                                                                   : (int)view_props->border_radius;
+    mask->radius_top_right = view_props->border_top_right_radius > 0 ? (int)view_props->border_top_right_radius
+                                                                     : (int)view_props->border_radius;
+    mask->radius_bottom_right = view_props->border_bottom_right_radius > 0 ? (int)view_props->border_bottom_right_radius
+                                                                           : (int)view_props->border_radius;
+    mask->radius_bottom_left = view_props->border_bottom_left_radius > 0 ? (int)view_props->border_bottom_left_radius
+                                                                         : (int)view_props->border_radius;
+    er_rrect_clamp_radii(width,
+                         height,
+                         &mask->radius_top_left,
+                         &mask->radius_top_right,
+                         &mask->radius_bottom_right,
+                         &mask->radius_bottom_left);
+    mask->width = width;
+    mask->height = height;
+    mask->rounded = (mask->radius_top_left > 0 || mask->radius_top_right > 0 || mask->radius_bottom_right > 0
+                     || mask->radius_bottom_left > 0);
 }
 
 /**
@@ -173,52 +186,64 @@ static void mask_init(GradMask* m, const ERViewProps* vp, int w, int h)
  * fade the anti-aliased fringe pixels beside it (matching er_rrect_fill_corners' fringe walk, so the
  * gradient's corner is the same shape a solid background would have painted).
  *
- * @param[in] m         Silhouette to clip to.
- * @param[in] row       Assembled premultiplied ARGB8888 row, @p capped_w pixels wide.
- * @param[in] x         Destination left edge in framebuffer pixels.
- * @param[in] y         Destination row in framebuffer pixels.
- * @param[in] row_idx   Row index within the box, 0 = top.
- * @param[in] capped_w  Assembled width (may be less than m->w on very wide boxes).
+ * @param[in] mask          Silhouette to clip to.
+ * @param[in] row           Assembled premultiplied ARGB8888 row, @p capped_width pixels wide.
+ * @param[in] x             Destination left edge in framebuffer pixels.
+ * @param[in] y             Destination row in framebuffer pixels.
+ * @param[in] row_index     Row index within the box, 0 = top.
+ * @param[in] capped_width  Assembled width (may be less than mask->width on very wide boxes).
  */
-static void mask_blit_row(const GradMask* m, const uint32_t* row, int x, int y, int row_idx, int capped_w)
+static void mask_blit_row(const GradMask* mask, const uint32_t* row, int x, int y, int row_index, int capped_width)
 {
-    if (!m->rounded)
+    if (!mask->rounded)
     {
-        er_blit_blend(row, capped_w * (int)sizeof(uint32_t), 255, x, y, capped_w, 1);
+        er_blit_blend(row, capped_width * (int)sizeof(uint32_t), ER_ALPHA_OPAQUE, x, y, capped_width, 1);
         return;
     }
 
-    ERRRectRow rr;
-    er_rrect_row(m->w, m->h, m->r_tl, m->r_tr, m->r_br, m->r_bl, row_idx, &rr);
+    ERRRectRow span;
+    er_rrect_row(mask->width,
+                 mask->height,
+                 mask->radius_top_left,
+                 mask->radius_top_right,
+                 mask->radius_bottom_right,
+                 mask->radius_bottom_left,
+                 row_index,
+                 &span);
 
-    const int x1 = (rr.x1 < capped_w) ? rr.x1 : capped_w;
-    if (x1 > rr.x0)
-        er_blit_blend(&row[rr.x0], (x1 - rr.x0) * (int)sizeof(uint32_t), 255, x + rr.x0, y, x1 - rr.x0, 1);
+    const int x1 = (span.x1 < capped_width) ? span.x1 : capped_width;
+    if (x1 > span.x0)
+        er_blit_blend(
+            &row[span.x0], (x1 - span.x0) * (int)sizeof(uint32_t), ER_ALPHA_OPAQUE, x + span.x0, y, x1 - span.x0, 1);
 
 #if ERUI_BORDER_AA
     /* Fringe pixels take the gradient colour at their own column, faded by the arc's coverage. */
-    for (int k = 0, kmax = er_rrect_fringe_max(rr.l_r); k < kmax; k++)
+    for (int step = 0, step_count = er_rrect_fringe_max(span.left_radius); step < step_count; step++)
     {
-        const float cov = er_rrect_fringe_cov(rr.l_r, rr.l_dx, rr.l_dy, k);
-        if (cov <= 0.0f)
+        const float coverage =
+            er_rrect_fringe_cov(span.left_radius, span.left_half_width, span.left_row_distance, step);
+        if (coverage <= 0.0f)
             break;
-        const int ax = rr.x0 - 1 - k;
-        if (cov < 1.0f && ax >= 0 && ax < capped_w)
+        const int fringe_x = span.x0 - 1 - step;
+        if (coverage < 1.0f && fringe_x >= 0 && fringe_x < capped_width)
         {
-            const uint32_t p = er_px_scale_premul(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
-            er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
+            const uint32_t pixel =
+                er_px_scale_premul(row[fringe_x], (uint32_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f));
+            er_blit_blend(&pixel, (int)sizeof(uint32_t), ER_ALPHA_OPAQUE, x + fringe_x, y, 1, 1);
         }
     }
-    for (int k = 0, kmax = er_rrect_fringe_max(rr.r_r); k < kmax; k++)
+    for (int step = 0, step_count = er_rrect_fringe_max(span.right_radius); step < step_count; step++)
     {
-        const float cov = er_rrect_fringe_cov(rr.r_r, rr.r_dx, rr.r_dy, k);
-        if (cov <= 0.0f)
+        const float coverage =
+            er_rrect_fringe_cov(span.right_radius, span.right_half_width, span.right_row_distance, step);
+        if (coverage <= 0.0f)
             break;
-        const int ax = rr.x1 + k;
-        if (cov < 1.0f && ax >= 0 && ax < capped_w && ax < m->w)
+        const int fringe_x = span.x1 + step;
+        if (coverage < 1.0f && fringe_x >= 0 && fringe_x < capped_width && fringe_x < mask->width)
         {
-            const uint32_t p = er_px_scale_premul(row[ax], (uint32_t)(cov * 255.0f + 0.5f));
-            er_blit_blend(&p, (int)sizeof(uint32_t), 255, x + ax, y, 1, 1);
+            const uint32_t pixel =
+                er_px_scale_premul(row[fringe_x], (uint32_t)(coverage * ER_CHANNEL_MAX_FLOAT + 0.5f));
+            er_blit_blend(&pixel, (int)sizeof(uint32_t), ER_ALPHA_OPAQUE, x + fringe_x, y, 1, 1);
         }
     }
 #endif
@@ -229,67 +254,67 @@ static void mask_blit_row(const GradMask* m, const uint32_t* row, int x, int y, 
  *
  * The gradient angle is measured in degrees clockwise from the top: 0° runs top→bottom,
  * 90° runs left→right.  The four corner projections onto the gradient direction vector are
- * used to normalise the per-pixel parameter t to [0.0–1.0] regardless of angle.
+ * used to normalise the per-pixel position to [0.0–1.0] regardless of angle.
  *
  * Each row is computed into grow() and flushed via er_blit_blend (premultiplied).
  *
- * @param[in] vp  View props (gradient_angle, gradient_stop_count, gradient_stops).
- * @param[in] x   Destination left edge in framebuffer pixels.
- * @param[in] y   Destination top edge in framebuffer pixels.
- * @param[in] w   Destination width in pixels.
- * @param[in] h   Destination height in pixels.
+ * @param[in] view_props  View props (gradient_angle, gradient_stop_count, gradient_stops).
+ * @param[in] x           Destination left edge in framebuffer pixels.
+ * @param[in] y           Destination top edge in framebuffer pixels.
+ * @param[in] width       Destination width in pixels.
+ * @param[in] height      Destination height in pixels.
  */
-static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
+static void render_linear(const ERViewProps* view_props, int x, int y, int width, int height)
 {
-    if (vp->gradient_stop_count < 2 || w <= 0 || h <= 0)
+    if (view_props->gradient_stop_count < 2 || width <= 0 || height <= 0)
         return;
 
     GradMask mask;
-    mask_init(&mask, vp, w, h);
+    mask_init(&mask, view_props, width, height);
 
-    const float angle_rad = vp->gradient_angle * ER_DEG2RAD;
-    const float ddx = sinf(angle_rad);
-    const float ddy = cosf(angle_rad);
+    const float angle_rad = view_props->gradient_angle * ER_DEG2RAD;
+    const float direction_x = sinf(angle_rad);
+    const float direction_y = cosf(angle_rad);
 
     /* Project all four corners onto the direction vector to find the full extent. */
-    const float wf = (float)(w - 1);
-    const float hf = (float)(h - 1);
-    const float p00 = 0.0f;
-    const float p10 = wf * ddx;
-    const float p01 = hf * ddy;
-    const float p11 = wf * ddx + hf * ddy;
-    float min_p = p00, max_p = p00;
-    if (p10 < min_p)
-        min_p = p10;
-    if (p10 > max_p)
-        max_p = p10;
-    if (p01 < min_p)
-        min_p = p01;
-    if (p01 > max_p)
-        max_p = p01;
-    if (p11 < min_p)
-        min_p = p11;
-    if (p11 > max_p)
-        max_p = p11;
+    const float last_x = (float)(width - 1);
+    const float last_y = (float)(height - 1);
+    const float projection00 = 0.0f;
+    const float projection10 = last_x * direction_x;
+    const float projection01 = last_y * direction_y;
+    const float projection11 = last_x * direction_x + last_y * direction_y;
+    float min_projection = projection00, max_projection = projection00;
+    if (projection10 < min_projection)
+        min_projection = projection10;
+    if (projection10 > max_projection)
+        max_projection = projection10;
+    if (projection01 < min_projection)
+        min_projection = projection01;
+    if (projection01 > max_projection)
+        max_projection = projection01;
+    if (projection11 < min_projection)
+        min_projection = projection11;
+    if (projection11 > max_projection)
+        max_projection = projection11;
 
-    const float span = max_p - min_p;
-    const float inv_span = (span > 1e-6f) ? 1.0f / span : 0.0f;
-    const int capped_w = (w <= ERUI_MAX_IMG_ROW_PIXELS) ? w : ERUI_MAX_IMG_ROW_PIXELS;
+    const float span = max_projection - min_projection;
+    const float inverse_span = (span > GRADIENT_EPSILON) ? 1.0f / span : 0.0f;
+    const int capped_width = (width <= ERUI_MAX_IMG_ROW_PIXELS) ? width : ERUI_MAX_IMG_ROW_PIXELS;
 
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const float row_base = (float)row * ddy;
-        for (int col = 0; col < capped_w; col++)
+        const float row_base = (float)row * direction_y;
+        for (int column = 0; column < capped_width; column++)
         {
-            float t = ((float)col * ddx + row_base - min_p) * inv_span;
-            if (t < 0.0f)
-                t = 0.0f;
-            if (t > 1.0f)
-                t = 1.0f;
-            grow()[col] =
-                er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
+            float position = ((float)column * direction_x + row_base - min_projection) * inverse_span;
+            if (position < 0.0f)
+                position = 0.0f;
+            if (position > 1.0f)
+                position = 1.0f;
+            grow()[column] = er_gradient_premul(
+                er_gradient_eval_stops(view_props->gradient_stops, (int)view_props->gradient_stop_count, position));
         }
-        mask_blit_row(&mask, grow(), x, y + row, row, capped_w);
+        mask_blit_row(&mask, grow(), x, y + row, row, capped_width);
     }
 }
 
@@ -299,44 +324,44 @@ static void render_linear(const ERViewProps* vp, int x, int y, int w, int h)
  * @brief Renders a radial gradient into a rectangular framebuffer region.
  *
  * The gradient origin is the rectangle centre.  The radius is the Euclidean distance from
- * the centre to the farthest corner, so t = 1.0 is reached at exactly the corner pixels and
+ * the centre to the farthest corner, so position 1.0 is reached at exactly the corner pixels and
  * the full stop range is always visible inside the rect.
  *
  * Each row is computed into grow() and flushed via er_blit_blend (premultiplied).
  *
- * @param[in] vp  View props (gradient_stop_count, gradient_stops).
- * @param[in] x   Destination left edge in framebuffer pixels.
- * @param[in] y   Destination top edge in framebuffer pixels.
- * @param[in] w   Destination width in pixels.
- * @param[in] h   Destination height in pixels.
+ * @param[in] view_props  View props (gradient_stop_count, gradient_stops).
+ * @param[in] x           Destination left edge in framebuffer pixels.
+ * @param[in] y           Destination top edge in framebuffer pixels.
+ * @param[in] width       Destination width in pixels.
+ * @param[in] height      Destination height in pixels.
  */
-static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
+static void render_radial(const ERViewProps* view_props, int x, int y, int width, int height)
 {
-    if (vp->gradient_stop_count < 2 || w <= 0 || h <= 0)
+    if (view_props->gradient_stop_count < 2 || width <= 0 || height <= 0)
         return;
 
     GradMask mask;
-    mask_init(&mask, vp, w, h);
+    mask_init(&mask, view_props, width, height);
 
-    const float cx = (float)(w - 1) * 0.5f;
-    const float cy = (float)(h - 1) * 0.5f;
-    const float r = sqrtf(cx * cx + cy * cy);
-    const float inv_r = (r > 1e-6f) ? 1.0f / r : 0.0f;
-    const int capped_w = (w <= ERUI_MAX_IMG_ROW_PIXELS) ? w : ERUI_MAX_IMG_ROW_PIXELS;
+    const float center_x = (float)(width - 1) * 0.5f;
+    const float center_y = (float)(height - 1) * 0.5f;
+    const float radius = sqrtf(center_x * center_x + center_y * center_y);
+    const float inverse_radius = (radius > GRADIENT_EPSILON) ? 1.0f / radius : 0.0f;
+    const int capped_width = (width <= ERUI_MAX_IMG_ROW_PIXELS) ? width : ERUI_MAX_IMG_ROW_PIXELS;
 
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const float dy2 = ((float)row - cy) * ((float)row - cy);
-        for (int col = 0; col < capped_w; col++)
+        const float distance_y_squared = ((float)row - center_y) * ((float)row - center_y);
+        for (int column = 0; column < capped_width; column++)
         {
-            const float dx2 = ((float)col - cx) * ((float)col - cx);
-            float t = sqrtf(dx2 + dy2) * inv_r;
-            if (t > 1.0f)
-                t = 1.0f;
-            grow()[col] =
-                er_gradient_premul(er_gradient_eval_stops(vp->gradient_stops, (int)vp->gradient_stop_count, t));
+            const float distance_x_squared = ((float)column - center_x) * ((float)column - center_x);
+            float position = sqrtf(distance_x_squared + distance_y_squared) * inverse_radius;
+            if (position > 1.0f)
+                position = 1.0f;
+            grow()[column] = er_gradient_premul(
+                er_gradient_eval_stops(view_props->gradient_stops, (int)view_props->gradient_stop_count, position));
         }
-        mask_blit_row(&mask, grow(), x, y + row, row, capped_w);
+        mask_blit_row(&mask, grow(), x, y + row, row, capped_width);
     }
 }
 
@@ -348,25 +373,25 @@ static void render_radial(const ERViewProps* vp, int x, int y, int w, int h)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_gradient_render(const ERViewProps* vp, int x, int y, int w, int h)
+void er_gradient_render(const ERViewProps* view_props, int x, int y, int width, int height)
 {
 #if ERUI_GRADIENT
-    if (!vp || vp->gradient_type == ER_GRADIENT_NONE)
+    if (!view_props || view_props->gradient_type == ER_GRADIENT_NONE)
         return;
-    if (vp->gradient_type == ER_GRADIENT_LINEAR)
+    if (view_props->gradient_type == ER_GRADIENT_LINEAR)
     {
-        render_linear(vp, x, y, w, h);
+        render_linear(view_props, x, y, width, height);
         return;
     }
 #if ERUI_GRADIENT_RADIAL
-    if (vp->gradient_type == ER_GRADIENT_RADIAL)
-        render_radial(vp, x, y, w, h);
+    if (view_props->gradient_type == ER_GRADIENT_RADIAL)
+        render_radial(view_props, x, y, width, height);
 #endif
 #else
-    (void)vp;
+    (void)view_props;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
 #endif
 }

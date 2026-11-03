@@ -41,14 +41,14 @@
  */
 typedef struct
 {
-    int x0;   /**< First fully-covered column; 0 on rows clear of the left corner arcs. */
-    int x1;   /**< One past the last fully-covered column; w on rows clear of the right arcs. */
-    int l_r;  /**< Left corner arc radius in play on this row; 0 = straight edge, no fringe. */
-    int l_dx; /**< Solid half-width from the left arc centre — the fringe walk starts here. */
-    int l_dy; /**< This row's distance from the left arc centre. */
-    int r_r;  /**< Right corner arc radius in play; 0 = straight edge. */
-    int r_dx; /**< @see l_dx */
-    int r_dy; /**< @see l_dy */
+    int x0;              /**< First fully-covered column; 0 on rows clear of the left corner arcs. */
+    int x1;              /**< One past the last fully-covered column; the box width on rows clear of the right arcs. */
+    int left_radius;     /**< Left corner arc radius in play on this row; 0 = straight edge, no fringe. */
+    int left_half_width; /**< Solid half-width from the left arc centre — the fringe walk starts here. */
+    int left_row_distance;  /**< This row's distance from the left arc centre. */
+    int right_radius;       /**< Right corner arc radius in play; 0 = straight edge. */
+    int right_half_width;   /**< @see left_half_width */
+    int right_row_distance; /**< @see left_row_distance */
 } ERRRectRow;
 
 /**
@@ -59,15 +59,15 @@ typedef struct
  */
 typedef struct
 {
-    int l;         /**< Left edge thickness in pixels. */
-    int t;         /**< Top edge thickness. */
-    int r;         /**< Right edge thickness. */
-    int bo;        /**< Bottom edge thickness (`bo`, since `b` names the struct at most call sites). */
-    uint32_t cl;   /**< Left edge colour, straight-alpha ARGB8888. */
-    uint32_t ct;   /**< Top edge colour. */
-    uint32_t cr;   /**< Right edge colour. */
-    uint32_t cb;   /**< Bottom edge colour. */
-    uint8_t style; /**< 0 = solid, 1 = dashed (8 on / 6 off), 2 = dotted (3 on / 3 off). */
+    int left;              /**< Left edge thickness in pixels. */
+    int top;               /**< Top edge thickness. */
+    int right;             /**< Right edge thickness. */
+    int bottom;            /**< Bottom edge thickness. */
+    uint32_t left_color;   /**< Left edge colour, straight-alpha ARGB8888. */
+    uint32_t top_color;    /**< Top edge colour. */
+    uint32_t right_color;  /**< Right edge colour. */
+    uint32_t bottom_color; /**< Bottom edge colour. */
+    uint8_t style;         /**< 0 = solid, 1 = dashed (8 on / 6 off), 2 = dotted (3 on / 3 off). */
 } ERRRectBorder;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -80,72 +80,84 @@ typedef struct
  * Uniform radii keep opposite arcs tangent (the pill / capsule clamp); mixed radii scale each
  * opposing pair down proportionally so neighbouring arcs meet at most tangentially.
  *
- * Total: every radius comes back in [0, max(w, h)] for any input. Negative radii are squared off
- * before either clamp runs, and a box with no area (@p w or @p h <= 0) zeroes all four.
+ * Total: every radius comes back in [0, max(width, height)] for any input. Negative radii are squared off
+ * before either clamp runs, and a box with no area (@p width or @p height <= 0) zeroes all four.
  *
  * Anything that MASKS to a filled rounded rect — the gradient background — must clamp through this
  * same function, or its edge disagrees with the fill's by a pixel at radii large enough to clamp.
  *
- * @param[in]     w      Box width in pixels.
- * @param[in]     h      Box height in pixels.
- * @param[in,out] r_tl   Top-left radius.
- * @param[in,out] r_tr   Top-right radius.
- * @param[in,out] r_br   Bottom-right radius.
- * @param[in,out] r_bl   Bottom-left radius.
+ * @param[in]     width                Box width in pixels.
+ * @param[in]     height               Box height in pixels.
+ * @param[in,out] radius_top_left      Top-left radius.
+ * @param[in,out] radius_top_right     Top-right radius.
+ * @param[in,out] radius_bottom_right  Bottom-right radius.
+ * @param[in,out] radius_bottom_left   Bottom-left radius.
  */
-void er_rrect_clamp_radii(int w, int h, int* r_tl, int* r_tr, int* r_br, int* r_bl);
+void er_rrect_clamp_radii(int width,
+                          int height,
+                          int* radius_top_left,
+                          int* radius_top_right,
+                          int* radius_bottom_right,
+                          int* radius_bottom_left);
 
 /**
  * @brief Resolves one scanline's covered span inside a rounded rectangle.
  *
- * @param[in]  w     Box width in pixels.
- * @param[in]  h     Box height in pixels.
- * @param[in]  r_tl  Top-left radius, already clamped by er_rrect_clamp_radii().
- * @param[in]  r_tr  Top-right radius (clamped).
- * @param[in]  r_br  Bottom-right radius (clamped).
- * @param[in]  r_bl  Bottom-left radius (clamped).
- * @param[in]  row   Scanline index, 0 = the box's top row.
- * @param[out] out   Receives the row's span and the corner arcs in play.
+ * @param[in]  width                Box width in pixels.
+ * @param[in]  height               Box height in pixels.
+ * @param[in]  radius_top_left      Top-left radius, already clamped by er_rrect_clamp_radii().
+ * @param[in]  radius_top_right     Top-right radius (clamped).
+ * @param[in]  radius_bottom_right  Bottom-right radius (clamped).
+ * @param[in]  radius_bottom_left   Bottom-left radius (clamped).
+ * @param[in]  row                  Scanline index, 0 = the box's top row.
+ * @param[out] out                  Receives the row's span and the corner arcs in play.
  */
-void er_rrect_row(int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int row, ERRRectRow* out);
+void er_rrect_row(int width,
+                  int height,
+                  int radius_top_left,
+                  int radius_top_right,
+                  int radius_bottom_right,
+                  int radius_bottom_left,
+                  int row,
+                  ERRRectRow* out);
 
 /**
- * @brief Anti-aliasing coverage of the k-th fringe pixel stepping outward from a corner's solid edge.
+ * @brief Anti-aliasing coverage of the step-th fringe pixel stepping outward from a corner's solid edge.
  *
  * Signed-distance coverage sampled at the pixel centre, matching the arc er_rrect_row() reports.
- * Walk k upward from 0, stop at the first non-positive result, and bound the loop with
+ * Walk step upward from 0, stop at the first non-positive result, and bound the loop with
  * er_rrect_fringe_max() — several places walk a fringe, and none of them should be one monotonicity
  * bug away from spinning forever.
  *
- * @param[in] r   Corner arc radius (ERRRectRow::l_r / r_r).
- * @param[in] dx  Solid half-width at this row (ERRRectRow::l_dx / r_dx).
- * @param[in] dy  Row distance from the arc centre (ERRRectRow::l_dy / r_dy).
- * @param[in] k   Steps outward from the solid edge, starting at 0.
+ * @param[in] radius        Corner arc radius (ERRRectRow::left_radius / right_radius).
+ * @param[in] half_width    Solid half-width at this row (ERRRectRow::left_half_width / right_half_width).
+ * @param[in] row_distance  Row distance from the arc centre (ERRRectRow::left_row_distance / right_row_distance).
+ * @param[in] step          Steps outward from the solid edge, starting at 0.
  *
  * @return Coverage: <= 0 past the arc (stop the walk), >= 1 fully inside (already solid — skip the
  *         pixel), otherwise the fraction to scale the source alpha by.
  */
-float er_rrect_fringe_cov(int r, int dx, int dy, int k);
+float er_rrect_fringe_cov(int radius, int half_width, int row_distance, int step);
 
 /**
  * @brief Hard upper bound on a fringe walk, so no walk is open-ended.
  *
- * The fringe starts at the solid edge — already at least @p r's half-width from the arc centre — and
- * dies once the sample passes the radius, so it can never reach r + 1 steps. Every walk carries this
+ * The fringe starts at the solid edge — already at least @p radius's half-width from the arc centre — and
+ * dies once the sample passes the radius, so it can never reach radius + 1 steps. Every walk carries this
  * as its loop bound and still breaks on the first non-positive coverage, which is the real stop.
  *
- * A straight edge (r == 0) has no fringe at all and bounds to zero, so the walk does not run. That
+ * A straight edge (radius == 0) has no fringe at all and bounds to zero, so the walk does not run. That
  * case is the common one, not an edge case: on any rounded rect every row between the corners is a
  * straight edge on both sides, and on a square one every row is — entering the loop even once there
  * would spend a sqrtf per row per side to learn what the radius already says.
  *
- * @param[in] r  Corner arc radius (ERRRectRow::l_r / r_r).
+ * @param[in] radius  Corner arc radius (ERRRectRow::left_radius / right_radius).
  *
  * @return Maximum steps the walk may take.
  */
-static inline int er_rrect_fringe_max(int r)
+static inline int er_rrect_fringe_max(int radius)
 {
-    return r > 0 ? r + 1 : 0;
+    return radius > 0 ? radius + 1 : 0;
 }
 
 /**
@@ -154,13 +166,14 @@ static inline int er_rrect_fringe_max(int r)
  * The ring needs the count UP FRONT — its solid band has to stop where the inset shape's fringe
  * begins — which the fill paths never do, so they walk and break instead of paying for this pass.
  *
- * @param[in] r   Corner arc radius (ERRRectRow::l_r / r_r); 0 — a straight edge — has no fringe.
- * @param[in] dx  Solid half-width at this row (ERRRectRow::l_dx / r_dx).
- * @param[in] dy  Row distance from the arc centre (ERRRectRow::l_dy / r_dy).
+ * @param[in] radius        Corner arc radius (ERRRectRow::left_radius / right_radius); 0 — a straight edge — has
+ *                          no fringe.
+ * @param[in] half_width    Solid half-width at this row (ERRRectRow::left_half_width / right_half_width).
+ * @param[in] row_distance  Row distance from the arc centre (ERRRectRow::left_row_distance / right_row_distance).
  *
  * @return Fringe pixel count; 0 when ERUI_BORDER_AA is off.
  */
-int er_rrect_fringe_len(int r, int dx, int dy);
+int er_rrect_fringe_len(int radius, int half_width, int row_distance);
 
 /**
  * @brief Fills a rounded rectangle with a solid color.
@@ -176,31 +189,31 @@ int er_rrect_fringe_len(int r, int dx, int dy);
  * @param[in] argb    Fill color as straight-alpha ARGB8888.
  * @param[in] x       Left edge of the bounding box in framebuffer pixels.
  * @param[in] y       Top edge of the bounding box in framebuffer pixels.
- * @param[in] w       Width of the bounding box in pixels.
- * @param[in] h       Height of the bounding box in pixels.
+ * @param[in] width   Width of the bounding box in pixels.
+ * @param[in] height  Height of the bounding box in pixels.
  * @param[in] radius  Corner radius in pixels (0 = plain rectangle).
  */
-void er_rrect_fill(uint32_t argb, int x, int y, int w, int h, int radius);
+void er_rrect_fill(uint32_t argb, int x, int y, int width, int height, int radius);
 
 /**
  * @brief Fills a rounded rectangle with a background color and an optional border ring.
  *
  * Draws the border by painting the outer bounds in border_argb first, then
- * overpainting the inset region in bg_argb. When border_w is 0 or border_argb
+ * overpainting the inset region in background_argb. When border_width is 0 or border_argb
  * is fully transparent, only the background fill is drawn. The inner corner radius
- * is reduced by border_w to keep the inner and outer arcs concentric.
+ * is reduced by border_width to keep the inner and outer arcs concentric.
  *
- * @param[in] bg_argb     Background fill color (straight-alpha ARGB8888).
- * @param[in] border_argb Border ring color (straight-alpha ARGB8888).
- * @param[in] border_w    Border thickness in pixels (0 = no border).
- * @param[in] x           Left edge of the outer bounding box in framebuffer pixels.
- * @param[in] y           Top edge of the outer bounding box in framebuffer pixels.
- * @param[in] w           Width of the outer bounding box in pixels.
- * @param[in] h           Height of the outer bounding box in pixels.
- * @param[in] radius      Outer corner radius in pixels (0 = plain rectangle).
+ * @param[in] background_argb  Background fill color (straight-alpha ARGB8888).
+ * @param[in] border_argb      Border ring color (straight-alpha ARGB8888).
+ * @param[in] border_width     Border thickness in pixels (0 = no border).
+ * @param[in] x                Left edge of the outer bounding box in framebuffer pixels.
+ * @param[in] y                Top edge of the outer bounding box in framebuffer pixels.
+ * @param[in] width            Width of the outer bounding box in pixels.
+ * @param[in] height           Height of the outer bounding box in pixels.
+ * @param[in] radius           Outer corner radius in pixels (0 = plain rectangle).
  */
 void er_rrect_fill_bordered(
-    uint32_t bg_argb, uint32_t border_argb, int border_w, int x, int y, int w, int h, int radius);
+    uint32_t background_argb, uint32_t border_argb, int border_width, int x, int y, int width, int height, int radius);
 
 /**
  * @brief Fills a rounded rectangle with independent per-corner radii.
@@ -209,17 +222,25 @@ void er_rrect_fill_bordered(
  * A radius of 0 on a corner produces a right-angle corner for that corner only.
  * Anti-aliased edges are blended when ERUI_BORDER_AA is non-zero.
  *
- * @param[in] argb  Fill color (straight-alpha ARGB8888).
- * @param[in] x     Left edge in framebuffer pixels.
- * @param[in] y     Top edge in framebuffer pixels.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
- * @param[in] r_tl  Top-left corner radius in pixels.
- * @param[in] r_tr  Top-right corner radius in pixels.
- * @param[in] r_br  Bottom-right corner radius in pixels.
- * @param[in] r_bl  Bottom-left corner radius in pixels.
+ * @param[in] argb                 Fill color (straight-alpha ARGB8888).
+ * @param[in] x                    Left edge in framebuffer pixels.
+ * @param[in] y                    Top edge in framebuffer pixels.
+ * @param[in] width                Width in pixels.
+ * @param[in] height               Height in pixels.
+ * @param[in] radius_top_left      Top-left corner radius in pixels.
+ * @param[in] radius_top_right     Top-right corner radius in pixels.
+ * @param[in] radius_bottom_right  Bottom-right corner radius in pixels.
+ * @param[in] radius_bottom_left   Bottom-left corner radius in pixels.
  */
-void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl);
+void er_rrect_fill_corners(uint32_t argb,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           int radius_top_left,
+                           int radius_top_right,
+                           int radius_bottom_right,
+                           int radius_bottom_left);
 
 /**
  * @brief Strokes a rounded-rect border as a hollow ring, leaving the interior untouched.
@@ -234,19 +255,28 @@ void er_rrect_fill_corners(uint32_t argb, int x, int y, int w, int h, int r_tl, 
  * Both edges of the band are anti-aliased when ERUI_BORDER_AA is set: the outer edge fades out of
  * the border colour, the inner edge fades by the coverage the inset shape takes back.
  *
- * @param[in] argb  Border colour as straight-alpha ARGB8888.
- * @param[in] x     Left edge of the outer bounding box in framebuffer pixels.
- * @param[in] y     Top edge of the outer bounding box in framebuffer pixels.
- * @param[in] w     Outer width in pixels.
- * @param[in] h     Outer height in pixels.
- * @param[in] r_tl  Outer top-left corner radius in pixels.
- * @param[in] r_tr  Outer top-right corner radius.
- * @param[in] r_br  Outer bottom-right corner radius.
- * @param[in] r_bl  Outer bottom-left corner radius.
- * @param[in] bw    Band thickness in pixels; <= 0 draws nothing. A band thick enough to swallow the
+ * @param[in] argb                 Border colour as straight-alpha ARGB8888.
+ * @param[in] x                    Left edge of the outer bounding box in framebuffer pixels.
+ * @param[in] y                    Top edge of the outer bounding box in framebuffer pixels.
+ * @param[in] width                Outer width in pixels.
+ * @param[in] height               Outer height in pixels.
+ * @param[in] radius_top_left      Outer top-left corner radius in pixels.
+ * @param[in] radius_top_right     Outer top-right corner radius.
+ * @param[in] radius_bottom_right  Outer bottom-right corner radius.
+ * @param[in] radius_bottom_left   Outer bottom-left corner radius.
+ * @param[in] band_width           Band thickness in pixels; <= 0 draws nothing. A band thick enough to swallow the
  *                  interior fills the whole shape, matching a plain rounded-rect fill.
  */
-void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, int bw);
+void er_rrect_fill_ring(uint32_t argb,
+                        int x,
+                        int y,
+                        int width,
+                        int height,
+                        int radius_top_left,
+                        int radius_top_right,
+                        int radius_bottom_right,
+                        int radius_bottom_left,
+                        int band_width);
 
 /**
  * @brief Strokes a rounded-rect border whose edges carry independent thicknesses and colours.
@@ -263,17 +293,24 @@ void er_rrect_fill_ring(uint32_t argb, int x, int y, int w, int h, int r_tl, int
  * A dashed or dotted style is stepped by ARC LENGTH around the perimeter, so the pattern flows
  * through the corner arcs as one continuous run and closes cleanly where it started.
  *
- * @param[in] x     Left edge of the outer bounding box in framebuffer pixels.
- * @param[in] y     Top edge of the outer bounding box in framebuffer pixels.
- * @param[in] w     Outer width in pixels.
- * @param[in] h     Outer height in pixels.
- * @param[in] r_tl  Outer top-left corner radius in pixels.
- * @param[in] r_tr  Outer top-right corner radius.
- * @param[in] r_br  Outer bottom-right corner radius.
- * @param[in] r_bl  Outer bottom-left corner radius.
- * @param[in] b     Per-edge thicknesses and colours; NULL or all-empty draws nothing.
+ * @param[in] x                    Left edge of the outer bounding box in framebuffer pixels.
+ * @param[in] y                    Top edge of the outer bounding box in framebuffer pixels.
+ * @param[in] width                Outer width in pixels.
+ * @param[in] height               Outer height in pixels.
+ * @param[in] radius_top_left      Outer top-left corner radius in pixels.
+ * @param[in] radius_top_right     Outer top-right corner radius.
+ * @param[in] radius_bottom_right  Outer bottom-right corner radius.
+ * @param[in] radius_bottom_left   Outer bottom-left corner radius.
+ * @param[in] border               Per-edge thicknesses and colours; NULL or all-empty draws nothing.
  */
-void er_rrect_fill_ring_edges(
-    int x, int y, int w, int h, int r_tl, int r_tr, int r_br, int r_bl, const ERRRectBorder* b);
+void er_rrect_fill_ring_edges(int x,
+                              int y,
+                              int width,
+                              int height,
+                              int radius_top_left,
+                              int radius_top_right,
+                              int radius_bottom_right,
+                              int radius_bottom_left,
+                              const ERRRectBorder* border);
 
 #endif

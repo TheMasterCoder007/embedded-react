@@ -29,8 +29,8 @@
  */
 typedef struct
 {
-    int ox;              /**< World-space X of scratch[0]. */
-    int oy;              /**< World-space Y of scratch[0]. */
+    int origin_x;        /**< World-space X of scratch[0]. */
+    int origin_y;        /**< World-space Y of scratch[0]. */
     uint8_t saved_alpha; /**< Inherited draw alpha to re-apply when the slot is blended out. */
 } ScratchMeta;
 
@@ -44,11 +44,11 @@ typedef struct
  * source capture can occur inside a fade-cache capture. */
 typedef struct
 {
-    uint32_t* buf;
-    int w;
-    int h;
-    int ox;
-    int oy;
+    uint32_t* pixels;
+    int width;
+    int height;
+    int origin_x;
+    int origin_y;
 } BaseEntry;
 
 /* Each slot is one strip of ERUI_SCRATCH_W × ERUI_SCRATCH_BAND_H premultiplied ARGB8888 pixels.
@@ -56,6 +56,9 @@ typedef struct
  * into ERUI_RENDER_WORKERS equal windows of ER_SLOTS_PER_WORKER slots each, so concurrent
  * composites never share a slot. With the default single worker the window IS the whole pool. */
 static uint32_t s_pool[ERUI_MAX_OPACITY_DEPTH][ERUI_SCRATCH_BAND_H * ERUI_SCRATCH_W];
+
+/** @brief Base captures that can nest: a transform source capture inside a fade-cache capture. */
+#define SCRATCH_BASE_DEPTH 2
 
 #define ER_SLOTS_PER_WORKER (ERUI_MAX_OPACITY_DEPTH / ERUI_RENDER_WORKERS)
 #if ERUI_RENDER_WORKERS > ERUI_MAX_OPACITY_DEPTH
@@ -72,16 +75,16 @@ typedef struct
 {
     ScratchMeta meta[ER_SLOTS_PER_WORKER]; /**< Origin + saved alpha per active slot. */
     int depth;                             /**< Active opacity captures, within this worker's window. */
-    BaseEntry base[2];                     /**< Base-redirect stack (transform source / fade cache). */
+    BaseEntry base[SCRATCH_BASE_DEPTH];    /**< Base-redirect stack (transform source / fade cache). */
     int base_count;
 } PoolCtx;
 
-static PoolCtx s_ctx[ERUI_RENDER_WORKERS];
+static PoolCtx s_worker_contexts[ERUI_RENDER_WORKERS];
 
-/** @brief The calling worker's pool context (constant &s_ctx[0] in single-worker builds). */
+/** @brief The calling worker's pool context (constant &s_worker_contexts[0] in single-worker builds). */
 static inline PoolCtx* pc(void)
 {
-    return &s_ctx[er_render_worker_id()];
+    return &s_worker_contexts[er_render_worker_id()];
 }
 
 /** @brief Pixel storage for the calling worker's slot at the given in-window depth. */
@@ -94,17 +97,17 @@ static inline uint32_t* slot_px(int depth)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_scratch_push_base(uint32_t* buf, int w, int h, int ox, int oy)
+void er_scratch_push_base(uint32_t* pixels, int width, int height, int origin_x, int origin_y)
 {
     if (pc()->base_count >= (int)(sizeof(pc()->base) / sizeof(pc()->base[0])))
         return; /* callers guard nesting; defensive */
-    pc()->base[pc()->base_count].buf = buf;
-    pc()->base[pc()->base_count].w = w;
-    pc()->base[pc()->base_count].h = h;
-    pc()->base[pc()->base_count].ox = ox;
-    pc()->base[pc()->base_count].oy = oy;
+    pc()->base[pc()->base_count].pixels = pixels;
+    pc()->base[pc()->base_count].width = width;
+    pc()->base[pc()->base_count].height = height;
+    pc()->base[pc()->base_count].origin_x = origin_x;
+    pc()->base[pc()->base_count].origin_y = origin_y;
     pc()->base_count++;
-    er_scratch_begin(buf, w, h, ox, oy);
+    er_scratch_begin(pixels, width, height, origin_x, origin_y);
 }
 
 void er_scratch_pop_base(void)
@@ -116,14 +119,14 @@ void er_scratch_pop_base(void)
         er_scratch_begin(slot_px(pc()->depth - 1),
                          ERUI_SCRATCH_W,
                          ERUI_SCRATCH_BAND_H,
-                         pc()->meta[pc()->depth - 1].ox,
-                         pc()->meta[pc()->depth - 1].oy);
+                         pc()->meta[pc()->depth - 1].origin_x,
+                         pc()->meta[pc()->depth - 1].origin_y);
     else if (pc()->base_count > 0)
-        er_scratch_begin(pc()->base[pc()->base_count - 1].buf,
-                         pc()->base[pc()->base_count - 1].w,
-                         pc()->base[pc()->base_count - 1].h,
-                         pc()->base[pc()->base_count - 1].ox,
-                         pc()->base[pc()->base_count - 1].oy);
+        er_scratch_begin(pc()->base[pc()->base_count - 1].pixels,
+                         pc()->base[pc()->base_count - 1].width,
+                         pc()->base[pc()->base_count - 1].height,
+                         pc()->base[pc()->base_count - 1].origin_x,
+                         pc()->base[pc()->base_count - 1].origin_y);
     else
         er_scratch_end();
 }
@@ -148,31 +151,31 @@ bool er_scratch_avail(void)
     return pc()->depth < ER_SLOTS_PER_WORKER;
 }
 
-bool er_scratch_push(int x, int y, int w, int h)
+bool er_scratch_push(int x, int y, int width, int height)
 {
     if (pc()->depth >= ER_SLOTS_PER_WORKER)
         return false;
-    if (w <= 0 || h <= 0 || w > ERUI_SCRATCH_W || h > ERUI_SCRATCH_BAND_H)
+    if (width <= 0 || height <= 0 || width > ERUI_SCRATCH_W || height > ERUI_SCRATCH_BAND_H)
         return false;
 
     uint32_t* slot = slot_px(pc()->depth);
-    /* Clear only the node's w×h footprint, not the whole slot. The slot is begun with origin (x,y),
-     * so the node renders into scratch-local [0,0,w,h], and er_scratch_pop_blend reads back exactly
+    /* Clear only the node's width × height footprint, not the whole slot. The slot is begun with origin (x,y),
+     * so the node renders into scratch-local [0,0,width,height], and er_scratch_pop_blend reads back exactly
      * that region (er_blit_blend only advances into the slot by the clip delta, never past
-     * [0,0,w,h]); anything a child overflows beyond it is never blended back. */
-    for (int row = 0; row < h; row++)
-        memset(slot + (size_t)row * (size_t)ERUI_SCRATCH_W, 0, (size_t)w * sizeof(uint32_t));
-    pc()->meta[pc()->depth].ox = x;
-    pc()->meta[pc()->depth].oy = y;
+     * [0,0,width,height]); anything a child overflows beyond it is never blended back. */
+    for (int row = 0; row < height; row++)
+        memset(slot + (size_t)row * (size_t)ERUI_SCRATCH_W, 0, (size_t)width * sizeof(uint32_t));
+    pc()->meta[pc()->depth].origin_x = x;
+    pc()->meta[pc()->depth].origin_y = y;
     pc()->meta[pc()->depth].saved_alpha = er_get_draw_alpha();
-    er_set_draw_alpha(255U);
+    er_set_draw_alpha(ER_ALPHA_OPAQUE);
     pc()->depth++;
 
     er_scratch_begin(slot, ERUI_SCRATCH_W, ERUI_SCRATCH_BAND_H, x, y);
     return true;
 }
 
-void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h)
+void er_scratch_pop_blend(uint8_t alpha, int x, int y, int width, int height)
 {
     if (pc()->depth <= 0)
         return;
@@ -186,16 +189,16 @@ void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h)
         er_scratch_begin(slot_px(pc()->depth - 1),
                          ERUI_SCRATCH_W,
                          ERUI_SCRATCH_BAND_H,
-                         pc()->meta[pc()->depth - 1].ox,
-                         pc()->meta[pc()->depth - 1].oy);
+                         pc()->meta[pc()->depth - 1].origin_x,
+                         pc()->meta[pc()->depth - 1].origin_y);
     }
     else if (pc()->base_count > 0)
     {
-        er_scratch_begin(pc()->base[pc()->base_count - 1].buf,
-                         pc()->base[pc()->base_count - 1].w,
-                         pc()->base[pc()->base_count - 1].h,
-                         pc()->base[pc()->base_count - 1].ox,
-                         pc()->base[pc()->base_count - 1].oy);
+        er_scratch_begin(pc()->base[pc()->base_count - 1].pixels,
+                         pc()->base[pc()->base_count - 1].width,
+                         pc()->base[pc()->base_count - 1].height,
+                         pc()->base[pc()->base_count - 1].origin_x,
+                         pc()->base[pc()->base_count - 1].origin_y);
     }
 
     /* Re-apply the inherited draw alpha before blending the captured strip out, so a group
@@ -204,5 +207,5 @@ void er_scratch_pop_blend(uint8_t alpha, int x, int y, int w, int h)
 
     const uint32_t* slot = slot_px(pc()->depth);
     const int stride = (int)(ERUI_SCRATCH_W * sizeof(uint32_t));
-    er_blit_blend(slot, stride, alpha, x, y, w, h);
+    er_blit_blend(slot, stride, alpha, x, y, width, height);
 }

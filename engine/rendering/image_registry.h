@@ -59,9 +59,9 @@
 typedef struct
 {
     char name[IMAGE_NAME_MAX + 1]; /**< Null-terminated asset name. */
-    const void* buf;               /**< Pixel data in `format` layout (caller-owned). */
-    int w;                         /**< Image width in pixels. */
-    int h;                         /**< Image height in pixels. */
+    const void* pixels;            /**< Pixel data in `format` layout (caller-owned). */
+    int width;                     /**< Image width in pixels. */
+    int height;                    /**< Image height in pixels. */
     uint8_t format;                /**< Pixel layout of buf (ERImageFormat). */
     bool opaque;                   /**< Every pixel is fully opaque (scanned at registration). */
     bool in_use;                   /**< True when this slot holds a valid entry. */
@@ -86,16 +86,16 @@ void image_registry_init(void);
  * channel and is always opaque.
  *
  * @param[in] name    Null-terminated asset name (max IMAGE_NAME_MAX characters).
- * @param[in] buf     Pixel data in the given format; caller must keep it live. RGB565 buffers
+ * @param[in] pixels  Pixel data in the given format; caller must keep it live. RGB565 buffers
  *                    must be 2-byte aligned (they are read as uint16_t).
- * @param[in] w       Image width in pixels.
- * @param[in] h       Image height in pixels.
- * @param[in] format  Pixel layout of buf; values outside ERImageFormat are rejected.
+ * @param[in] width   Image width in pixels.
+ * @param[in] height  Image height in pixels.
+ * @param[in] format  Pixel layout of pixels; values outside ERImageFormat are rejected.
  *
  * @return true on success, false if the registry is full or the arguments are invalid
- *         (unknown format, misaligned RGB565 buffer, non-positive dimensions, NULL name/buf).
+ *         (unknown format, misaligned RGB565 buffer, non-positive dimensions, NULL name/pixels).
  */
-bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format);
+bool image_registry_store(const char* name, const void* pixels, int width, int height, ERImageFormat format);
 
 /**
  * @brief Retrieves a registered image entry by name.

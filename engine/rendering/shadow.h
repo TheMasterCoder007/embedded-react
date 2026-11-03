@@ -40,14 +40,14 @@ extern "C"
      *
      * When ERUI_SHADOWS is 0 this function compiles to a no-op and adds zero code size.
      *
-     * @param[in] vp  View props carrying shadow_color, shadow_offset_x, shadow_offset_y,
+     * @param[in] view_props  View props carrying shadow_color, shadow_offset_x, shadow_offset_y,
      *                shadow_opacity, shadow_radius, and elevation.
-     * @param[in] x   Node left edge in framebuffer pixels (after any translate transform).
-     * @param[in] y   Node top edge in framebuffer pixels (after any translate transform).
-     * @param[in] w   Node width in pixels.
-     * @param[in] h   Node height in pixels.
+     * @param[in] x       Node left edge in framebuffer pixels (after any translate transform).
+     * @param[in] y       Node top edge in framebuffer pixels (after any translate transform).
+     * @param[in] width   Node width in pixels.
+     * @param[in] height  Node height in pixels.
      */
-    void er_shadow_render(const ERViewProps* vp, int x, int y, int w, int h);
+    void er_shadow_render(const ERViewProps* view_props, int x, int y, int width, int height);
 
 #ifdef __cplusplus
 }

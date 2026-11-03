@@ -18,7 +18,15 @@
  * registry full, misaligned RGB565 pixels — present identically as "the image just isn't there". */
 #include "image_registry.h"
 #include "er_diagnostics.h"
+#include "renderer_internal.h"
 #include <string.h>
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Low address bits that must be clear for an RGB565 buffer read as uint16_t. */
+#define RGB565_ALIGN_MASK ((uintptr_t)1U)
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -42,23 +50,23 @@ void image_registry_init(void)
  * read-modify-write blend path, so the one-time scan pays for itself on the first frame. Early-out
  * on the first non-opaque pixel keeps transparent art cheap.
  */
-static bool scan_opaque(const void* buf, int w, int h, ERImageFormat format)
+static bool scan_opaque(const void* pixels, int width, int height, ERImageFormat format)
 {
     if (format == ER_IMG_RGB565)
         return true; /* no alpha channel */
-    const uint32_t* px = (const uint32_t*)buf;
-    const size_t n = (size_t)w * (size_t)h;
-    for (size_t i = 0; i < n; i++)
-        if ((px[i] >> 24) != 0xFFu)
+    const uint32_t* argb_pixels = (const uint32_t*)pixels;
+    const size_t pixel_count = (size_t)width * (size_t)height;
+    for (size_t pixel_index = 0; pixel_index < pixel_count; pixel_index++)
+        if ((argb_pixels[pixel_index] >> 24) != ER_ALPHA_OPAQUE)
             return false;
     return true;
 }
 
-bool image_registry_store(const char* name, const void* buf, int w, int h, ERImageFormat format)
+bool image_registry_store(const char* name, const void* pixels, int width, int height, ERImageFormat format)
 {
-    if (!name || !buf || w <= 0 || h <= 0)
+    if (!name || !pixels || width <= 0 || height <= 0)
         return false;
-    /* Validate the format before it decides buf's element size: an out-of-range value would make
+    /* Validate the format before it decides the buffer's element size: an out-of-range value would make
      * scan_opaque() and the renderer read the buffer with the wrong stride (out-of-bounds reads). */
     if (format != ER_IMG_ARGB8888 && format != ER_IMG_RGB565)
         return false;
@@ -66,29 +74,29 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
      * fault mid-frame on strict-alignment targets. ARGB8888 is deliberately not word-checked:
      * version-1 asset packs have always handed out pixel pointers at offset 2 (mod 4) and every
      * shipping target tolerates those reads — rejecting them here would break existing packs. */
-    if (format == ER_IMG_RGB565 && ((uintptr_t)buf & 1u) != 0u)
+    if (format == ER_IMG_RGB565 && ((uintptr_t)pixels & RGB565_ALIGN_MASK) != 0u)
     {
         ERUI_WARN_ONCE("embedded-react image: \"%s\" RGB565 pixels at odd address %p - rejected, will not draw "
                        "(is the asset pack/container placed word-aligned?).\n",
                        name,
-                       buf);
+                       pixels);
         return false;
     }
 
     int free_slot = -1;
-    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
+    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
     {
-        if (s_entries[i].in_use && strncmp(s_entries[i].name, name, IMAGE_NAME_MAX) == 0)
+        if (s_entries[entry_index].in_use && strncmp(s_entries[entry_index].name, name, IMAGE_NAME_MAX) == 0)
         {
-            s_entries[i].buf = buf;
-            s_entries[i].w = w;
-            s_entries[i].h = h;
-            s_entries[i].format = (uint8_t)format;
-            s_entries[i].opaque = scan_opaque(buf, w, h, format);
+            s_entries[entry_index].pixels = pixels;
+            s_entries[entry_index].width = width;
+            s_entries[entry_index].height = height;
+            s_entries[entry_index].format = (uint8_t)format;
+            s_entries[entry_index].opaque = scan_opaque(pixels, width, height, format);
             return true;
         }
-        if (!s_entries[i].in_use && free_slot < 0)
-            free_slot = i;
+        if (!s_entries[entry_index].in_use && free_slot < 0)
+            free_slot = entry_index;
     }
 
     if (free_slot < 0)
@@ -100,35 +108,35 @@ bool image_registry_store(const char* name, const void* buf, int w, int h, ERIma
         return false;
     }
 
-    ImageEntry* e = &s_entries[free_slot];
-    strncpy(e->name, name, IMAGE_NAME_MAX);
-    e->name[IMAGE_NAME_MAX] = '\0';
-    e->buf = buf;
-    e->w = w;
-    e->h = h;
-    e->format = (uint8_t)format;
-    e->opaque = scan_opaque(buf, w, h, format);
-    e->in_use = true;
+    ImageEntry* entry = &s_entries[free_slot];
+    strncpy(entry->name, name, IMAGE_NAME_MAX);
+    entry->name[IMAGE_NAME_MAX] = '\0';
+    entry->pixels = pixels;
+    entry->width = width;
+    entry->height = height;
+    entry->format = (uint8_t)format;
+    entry->opaque = scan_opaque(pixels, width, height, format);
+    entry->in_use = true;
     return true;
 }
 
 unsigned image_registry_in_use(void)
 {
-    unsigned n = 0U;
-    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
-        if (s_entries[i].in_use)
-            n++;
-    return n;
+    unsigned in_use_count = 0U;
+    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
+        if (s_entries[entry_index].in_use)
+            in_use_count++;
+    return in_use_count;
 }
 
 const ImageEntry* image_registry_get(const char* name)
 {
     if (!name || name[0] == '\0')
         return NULL;
-    for (int i = 0; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++)
+    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
     {
-        if (s_entries[i].in_use && strncmp(s_entries[i].name, name, IMAGE_NAME_MAX) == 0)
-            return &s_entries[i];
+        if (s_entries[entry_index].in_use && strncmp(s_entries[entry_index].name, name, IMAGE_NAME_MAX) == 0)
+            return &s_entries[entry_index];
     }
     return NULL;
 }

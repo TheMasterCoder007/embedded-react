@@ -54,7 +54,7 @@
 typedef struct
 {
     float x0, y0, x1, y1;
-    int dir; /**< +1 if the edge originally went downward (y increasing), else -1. */
+    int direction; /**< +1 if the edge originally went downward (y increasing), else -1. */
 } ERVecEdge;
 
 /** @brief What one cached pass replays as. */
@@ -72,29 +72,30 @@ enum
  */
 typedef struct
 {
-    uint8_t kind;             /**< ER_VEC_PASS_*. */
-    uint16_t paint;           /**< Index into the node's paint table (colors/gradients resolve at replay). */
-    int32_t start;            /**< First edge in the entry's pool (FILL/STROKE). */
-    int32_t count;            /**< Edge count (FILL/STROKE). */
-    float bx0, by0, bx1, by1; /**< Ink bounds — replay skips the pass when a clip cannot see it. */
-    float arc_cx, arc_cy, arc_r, arc_a0_deg, arc_sweep_deg; /**< ARC only. */
-    bool arc_full;                                          /**< ARC only: sweep covers the whole circle. */
+    uint8_t kind;   /**< ER_VEC_PASS_*. */
+    uint16_t paint; /**< Index into the node's paint table (colors/gradients resolve at replay). */
+    int32_t start;  /**< First edge in the entry's pool (FILL/STROKE). */
+    int32_t count;  /**< Edge count (FILL/STROKE). */
+    float bounds_x0, bounds_y0, bounds_x1,
+        bounds_y1; /**< Ink bounds — replay skips the pass when a clip cannot see it. */
+    float arc_center_x, arc_center_y, arc_radius, arc_start_deg, arc_sweep_deg; /**< ARC only. */
+    bool arc_full; /**< ARC only: sweep covers the whole circle. */
 } ERVecPass;
 
 /**
  * @brief One cached node: the pass list plus the edge pool the passes index into.
  *
- * Valid while (slot, px, py) still describe the node: any er_vector_store()/er_vector_free() on the
+ * Valid while (slot, origin_x, origin_y) still describe the node: any er_vector_store()/er_vector_free() on the
  * slot invalidates it eagerly, and a node that moved rebuilds (edges bake the screen origin in).
  */
 struct ERVecCache
 {
-    int slot;   /**< Storage slot this entry mirrors; -1 = empty. */
-    bool valid; /**< False while recording (and after a failed recording). */
-    int px, py; /**< Node origin the edges were built at. */
+    int slot;               /**< Storage slot this entry mirrors; -1 = empty. */
+    bool valid;             /**< False while recording (and after a failed recording). */
+    int origin_x, origin_y; /**< Node origin the edges were built at. */
     uint32_t stamp;
-    int n_passes;
-    int n_edges;
+    int pass_count;
+    int edge_count;
     ERVecPass passes[ERUI_VECTOR_CACHE_PASSES];
     ERVecEdge edges[ERUI_VECTOR_CACHE_EDGES];
 };

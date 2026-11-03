@@ -132,12 +132,12 @@ static int test_image_replace(void)
 
     er_image_load("logo", buf_a, 2, 2);
     const ImageEntry* e = image_registry_get("logo");
-    CHECK(e != NULL && e->w == 2 && e->h == 2 && e->buf == buf_a, "image: initial registration");
+    CHECK(e != NULL && e->width == 2 && e->height == 2 && e->pixels == buf_a, "image: initial registration");
 
     /* Re-register the same name with a different buffer and dimensions. */
     er_image_load("logo", buf_b, 1, 1);
     e = image_registry_get("logo");
-    CHECK(e != NULL && e->w == 1 && e->h == 1 && e->buf == buf_b, "image: replace in place");
+    CHECK(e != NULL && e->width == 1 && e->height == 1 && e->pixels == buf_b, "image: replace in place");
 
     /* Fill the registry to capacity, then re-register an existing name: must still succeed
      * (replace does not consume a free slot). */

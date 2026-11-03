@@ -34,24 +34,31 @@ static bool s_frame_open = false;
 static uint32_t s_frame_start = 0U;
 static uint32_t s_phase_start[ER_PERF_PHASE_COUNT];
 static bool s_phase_open[ER_PERF_PHASE_COUNT];
-static uint32_t s_sub_start[ER_PERF_RASTER_COUNT];
-static bool s_sub_open[ER_PERF_RASTER_COUNT];
+static uint32_t s_subphase_start[ER_PERF_RASTER_COUNT];
+static bool s_subphase_open[ER_PERF_RASTER_COUNT];
 
 /* The JS sub-split is a nesting stack rather than a set of independent spans: the bridge's marks sit
  * inside one another (marshalling inside the mutation pass inside the batched render), and each
  * begin/end charges the time since the last mark to whichever bucket is innermost. That yields
  * exclusive times directly, with no subtraction pass to get wrong. 8 is far above the three levels
- * the bridge actually nests; s_js_over keeps a begin dropped at the ceiling from unbalancing the
+ * the bridge actually nests; s_js_overflow keeps a begin dropped at the ceiling from unbalancing the
  * stack when its end arrives. */
 #define ER_PERF_JS_STACK_MAX 8
+
+/* Overlay number formatting: microseconds print as milliseconds, and pixel counts from this size up as thousands. */
+#define ER_PERF_US_PER_MS 1000U
+#define ER_PERF_US_PER_TENTH_MS 100U
+#define ER_PERF_KILO 1000U
+#define ER_PERF_KILO_THRESHOLD 10000U
+#define ER_PERF_FIELD_BYTES 12 /* one pre-formatted pixel count */
 static uint8_t s_js_stack[ER_PERF_JS_STACK_MAX];
 static int s_js_depth = 0;
-static int s_js_over = 0;
+static int s_js_overflow = 0;
 static uint32_t s_js_mark = 0U; /* clock at the last bucket switch */
 
-static ERPerfFrame s_cur;   /* accumulating: the frame currently open */
-static ERPerfFrame s_last;  /* the most recently completed frame */
-static ERPerfFrame s_worst; /* the longest frame since the last reset — the spike we are hunting */
+static ERPerfFrame s_current; /* accumulating: the frame currently open */
+static ERPerfFrame s_last;    /* the most recently completed frame */
+static ERPerfFrame s_worst;   /* the longest frame since the last reset — the spike we are hunting */
 static bool s_have_last = false;
 static bool s_have_worst = false;
 static uint32_t s_next_index = 0U;
@@ -69,10 +76,12 @@ static uint32_t perf_now(void)
 }
 
 /** @brief Expands a microsecond duration into the two args of a "%u.%u" millisecond field. */
-#define ER_PERF_MS_ARGS(us) (unsigned)((us) / 1000U), (unsigned)(((us) % 1000U) / 100U)
+#define ER_PERF_MS_ARGS(microseconds)                                                                                  \
+    (unsigned)((microseconds) / ER_PERF_US_PER_MS),                                                                    \
+        (unsigned)(((microseconds) % ER_PERF_US_PER_MS) / ER_PERF_US_PER_TENTH_MS)
 
 /** @brief Whole milliseconds, for the peak line where a tenth of a millisecond is noise. */
-#define ER_PERF_MS(us) (unsigned)((us) / 1000U)
+#define ER_PERF_MS(microseconds) (unsigned)((microseconds) / ER_PERF_US_PER_MS)
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
@@ -85,12 +94,12 @@ void er_perf_set_clock(uint32_t (*now_us)(void))
 
 void er_perf_frame_begin(void)
 {
-    memset(&s_cur, 0, sizeof(s_cur));
+    memset(&s_current, 0, sizeof(s_current));
     memset(s_phase_open, 0, sizeof(s_phase_open));
-    memset(s_sub_open, 0, sizeof(s_sub_open));
+    memset(s_subphase_open, 0, sizeof(s_subphase_open));
     s_js_depth = 0;
-    s_js_over = 0;
-    s_cur.index = s_next_index++;
+    s_js_overflow = 0;
+    s_current.index = s_next_index++;
     s_frame_start = perf_now();
     s_frame_open = true;
 }
@@ -117,7 +126,7 @@ void er_perf_phase_end(ERPerfPhase phase)
     }
     /* Unsigned subtraction, so a 32-bit microsecond wrap between begin and end still yields the true
      * elapsed time — only a single phase longer than ~71 minutes would alias. */
-    s_cur.phase_us[phase] += perf_now() - s_phase_start[phase];
+    s_current.phase_us[phase] += perf_now() - s_phase_start[phase];
     s_phase_open[phase] = false;
 }
 
@@ -127,8 +136,8 @@ void er_perf_raster_begin(ERPerfRasterSub subphase)
     {
         return;
     }
-    s_sub_start[subphase] = perf_now();
-    s_sub_open[subphase] = true;
+    s_subphase_start[subphase] = perf_now();
+    s_subphase_open[subphase] = true;
 }
 
 void er_perf_raster_end(ERPerfRasterSub subphase)
@@ -137,12 +146,12 @@ void er_perf_raster_end(ERPerfRasterSub subphase)
     {
         return;
     }
-    if (!s_sub_open[subphase])
+    if (!s_subphase_open[subphase])
     {
         return;
     }
-    s_cur.raster_us[subphase] += perf_now() - s_sub_start[subphase];
-    s_sub_open[subphase] = false;
+    s_current.raster_us[subphase] += perf_now() - s_subphase_start[subphase];
+    s_subphase_open[subphase] = false;
 }
 
 void er_perf_js_begin(ERPerfJsSub subphase)
@@ -153,13 +162,13 @@ void er_perf_js_begin(ERPerfJsSub subphase)
     }
     if (s_js_depth >= ER_PERF_JS_STACK_MAX)
     {
-        s_js_over++; /* remembered so the matching end() pops nothing rather than someone else's frame */
+        s_js_overflow++; /* remembered so the matching end() pops nothing rather than someone else's frame */
         return;
     }
     const uint32_t now = perf_now();
     if (s_js_depth > 0)
     {
-        s_cur.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
+        s_current.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
     }
     s_js_mark = now;
     s_js_stack[s_js_depth++] = (uint8_t)subphase;
@@ -171,9 +180,9 @@ void er_perf_js_end(ERPerfJsSub subphase)
     {
         return;
     }
-    if (s_js_over > 0)
+    if (s_js_overflow > 0)
     {
-        s_js_over--;
+        s_js_overflow--;
         return;
     }
     if (s_js_depth == 0 || s_js_stack[s_js_depth - 1] != (uint8_t)subphase)
@@ -181,7 +190,7 @@ void er_perf_js_end(ERPerfJsSub subphase)
         return; /* never begun, or crossed with another span: contribute nothing rather than misattribute */
     }
     const uint32_t now = perf_now();
-    s_cur.js_us[subphase] += now - s_js_mark;
+    s_current.js_us[subphase] += now - s_js_mark;
     s_js_mark = now;
     s_js_depth--;
 }
@@ -192,8 +201,8 @@ void er_perf_note_blit(uint32_t elapsed_us, uint32_t pixels)
     {
         return;
     }
-    s_cur.raster_us[ER_PERF_RASTER_BLIT] += elapsed_us;
-    s_cur.blit_px += pixels;
+    s_current.raster_us[ER_PERF_RASTER_BLIT] += elapsed_us;
+    s_current.blit_px += pixels;
 }
 
 uint32_t er_perf_now_us(void)
@@ -210,25 +219,27 @@ void er_perf_note_repaint(int x, int y, int width, int height)
     /* Accumulate: the engine notes each disjoint repaint rect separately. dirty_x/y/w/h grow to the
      * union bounding box; dirty_px sums the areas — exact, since the rects are disjoint, and the
      * honest cost number (two small corners sum small even when their bbox spans the screen). */
-    if (s_cur.dirty_px == 0U)
+    if (s_current.dirty_px == 0U)
     {
-        s_cur.dirty_x = (int32_t)x;
-        s_cur.dirty_y = (int32_t)y;
-        s_cur.dirty_w = (int32_t)width;
-        s_cur.dirty_h = (int32_t)height;
+        s_current.dirty_x = (int32_t)x;
+        s_current.dirty_y = (int32_t)y;
+        s_current.dirty_w = (int32_t)width;
+        s_current.dirty_h = (int32_t)height;
     }
     else
     {
-        const int32_t x1 = (s_cur.dirty_x + s_cur.dirty_w > x + width) ? s_cur.dirty_x + s_cur.dirty_w : x + width;
-        const int32_t y1 = (s_cur.dirty_y + s_cur.dirty_h > y + height) ? s_cur.dirty_y + s_cur.dirty_h : y + height;
-        if ((int32_t)x < s_cur.dirty_x)
-            s_cur.dirty_x = (int32_t)x;
-        if ((int32_t)y < s_cur.dirty_y)
-            s_cur.dirty_y = (int32_t)y;
-        s_cur.dirty_w = x1 - s_cur.dirty_x;
-        s_cur.dirty_h = y1 - s_cur.dirty_y;
+        const int32_t x1 =
+            (s_current.dirty_x + s_current.dirty_w > x + width) ? s_current.dirty_x + s_current.dirty_w : x + width;
+        const int32_t y1 =
+            (s_current.dirty_y + s_current.dirty_h > y + height) ? s_current.dirty_y + s_current.dirty_h : y + height;
+        if ((int32_t)x < s_current.dirty_x)
+            s_current.dirty_x = (int32_t)x;
+        if ((int32_t)y < s_current.dirty_y)
+            s_current.dirty_y = (int32_t)y;
+        s_current.dirty_w = x1 - s_current.dirty_x;
+        s_current.dirty_h = y1 - s_current.dirty_y;
     }
-    s_cur.dirty_px += (uint32_t)width * (uint32_t)height;
+    s_current.dirty_px += (uint32_t)width * (uint32_t)height;
 }
 
 void er_perf_frame_end(void)
@@ -239,20 +250,20 @@ void er_perf_frame_end(void)
     }
 
     /* Close anything still running so an unbalanced begin costs its own phase, not the whole frame. */
-    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
+    for (int phase_index = 0; phase_index < (int)ER_PERF_PHASE_COUNT; phase_index++)
     {
-        if (s_phase_open[i])
+        if (s_phase_open[phase_index])
         {
-            s_cur.phase_us[i] += perf_now() - s_phase_start[i];
-            s_phase_open[i] = false;
+            s_current.phase_us[phase_index] += perf_now() - s_phase_start[phase_index];
+            s_phase_open[phase_index] = false;
         }
     }
-    for (int i = 0; i < (int)ER_PERF_RASTER_COUNT; i++)
+    for (int subphase_index = 0; subphase_index < (int)ER_PERF_RASTER_COUNT; subphase_index++)
     {
-        if (s_sub_open[i])
+        if (s_subphase_open[subphase_index])
         {
-            s_cur.raster_us[i] += perf_now() - s_sub_start[i];
-            s_sub_open[i] = false;
+            s_current.raster_us[subphase_index] += perf_now() - s_subphase_start[subphase_index];
+            s_subphase_open[subphase_index] = false;
         }
     }
 
@@ -265,62 +276,62 @@ void er_perf_frame_end(void)
     if (s_js_depth > 0)
     {
         const uint32_t now = perf_now();
-        s_cur.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
+        s_current.js_us[s_js_stack[s_js_depth - 1]] += now - s_js_mark;
         s_js_mark = now;
         s_js_depth = 0;
     }
-    s_js_over = 0;
+    s_js_overflow = 0;
 
     /* The reconciler commits from inside the pump, so that er_commit() ran inside the host's JS span
      * AND reported itself as LAYOUT + RASTER. Counted in both, the phases sum past the frame and
      * other_us collapses to 0. Take it out of JS — LAYOUT + RASTER is where commit time belongs, and
      * js_us[COMMIT] still says the pump was what asked for it. */
-    if (s_cur.phase_us[ER_PERF_PHASE_JS] > s_cur.js_us[ER_PERF_JS_COMMIT])
+    if (s_current.phase_us[ER_PERF_PHASE_JS] > s_current.js_us[ER_PERF_JS_COMMIT])
     {
-        s_cur.phase_us[ER_PERF_PHASE_JS] -= s_cur.js_us[ER_PERF_JS_COMMIT];
+        s_current.phase_us[ER_PERF_PHASE_JS] -= s_current.js_us[ER_PERF_JS_COMMIT];
     }
     else
     {
-        s_cur.phase_us[ER_PERF_PHASE_JS] = 0U;
+        s_current.phase_us[ER_PERF_PHASE_JS] = 0U;
     }
 
     /* The composite passes were timed as one span WITH the backend blits they emitted inside it;
      * subtract the blit total so the two buckets are disjoint and the split sums to the raster
      * phase. Clamped at zero: with parallel workers the blit total is CPU time summed across
      * workers and can legitimately exceed the composite wall span (see ERPerfRasterSub). */
-    if (s_cur.raster_us[ER_PERF_RASTER_RENDER] > s_cur.raster_us[ER_PERF_RASTER_BLIT])
+    if (s_current.raster_us[ER_PERF_RASTER_RENDER] > s_current.raster_us[ER_PERF_RASTER_BLIT])
     {
-        s_cur.raster_us[ER_PERF_RASTER_RENDER] -= s_cur.raster_us[ER_PERF_RASTER_BLIT];
+        s_current.raster_us[ER_PERF_RASTER_RENDER] -= s_current.raster_us[ER_PERF_RASTER_BLIT];
     }
     else
     {
-        s_cur.raster_us[ER_PERF_RASTER_RENDER] = 0U;
+        s_current.raster_us[ER_PERF_RASTER_RENDER] = 0U;
     }
 
-    s_cur.frame_us = perf_now() - s_frame_start;
+    s_current.frame_us = perf_now() - s_frame_start;
 
     /* Whatever the four phases did not cover: input polling, the animation tick, host-side work. Kept
      * as an explicit field so the split always adds up to the frame and nothing hides in the gap. */
     uint32_t phases = 0U;
-    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
+    for (int phase_index = 0; phase_index < (int)ER_PERF_PHASE_COUNT; phase_index++)
     {
-        phases += s_cur.phase_us[i];
+        phases += s_current.phase_us[phase_index];
     }
-    s_cur.other_us = (s_cur.frame_us > phases) ? (s_cur.frame_us - phases) : 0U;
+    s_current.other_us = (s_current.frame_us > phases) ? (s_current.frame_us - phases) : 0U;
 
     /* Resource counters are sampled at the frame boundary — they are levels, not per-frame deltas, so
      * the value that matters is the one that held while the frame ran. */
-    s_cur.vector_slots_used = (uint16_t)er_vector_slots_in_use();
-    s_cur.vector_slots_total = (uint16_t)er_vector_slots_total();
-    s_cur.image_slots_used = (uint16_t)image_registry_in_use();
-    s_cur.image_slots_total = (uint16_t)ERUI_IMAGE_REGISTRY_MAX;
-    s_cur.vector_slots_overflow = er_vector_slots_overflowed();
+    s_current.vector_slots_used = (uint16_t)er_vector_slots_in_use();
+    s_current.vector_slots_total = (uint16_t)er_vector_slots_total();
+    s_current.image_slots_used = (uint16_t)image_registry_in_use();
+    s_current.image_slots_total = (uint16_t)ERUI_IMAGE_REGISTRY_MAX;
+    s_current.vector_slots_overflow = er_vector_slots_overflowed();
 
-    s_last = s_cur;
+    s_last = s_current;
     s_have_last = true;
-    if (!s_have_worst || s_cur.frame_us > s_worst.frame_us)
+    if (!s_have_worst || s_current.frame_us > s_worst.frame_us)
     {
-        s_worst = s_cur;
+        s_worst = s_current;
         s_have_worst = true;
     }
     s_frame_open = false;
@@ -374,93 +385,93 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
         return 0;
     }
 
-    const ERPerfFrame* l = &s_last;
-    const ERPerfFrame* w = &s_worst;
+    const ERPerfFrame* last = &s_last;
+    const ERPerfFrame* worst = &s_worst;
 
     /* Integer formatting throughout (%u.%u rather than %.1f): newlib-nano, the default on the MCU
      * targets, links a printf with no floating-point support. */
     snprintf(s_lines[0],
              sizeof(s_lines[0]),
              "FRM %u.%u PK %u.%u",
-             ER_PERF_MS_ARGS(l->frame_us),
-             ER_PERF_MS_ARGS(w->frame_us));
+             ER_PERF_MS_ARGS(last->frame_us),
+             ER_PERF_MS_ARGS(worst->frame_us));
     snprintf(s_lines[1],
              sizeof(s_lines[1]),
              "J%u.%u L%u.%u R%u.%u P%u.%u",
-             ER_PERF_MS_ARGS(l->phase_us[ER_PERF_PHASE_JS]),
-             ER_PERF_MS_ARGS(l->phase_us[ER_PERF_PHASE_LAYOUT]),
-             ER_PERF_MS_ARGS(l->phase_us[ER_PERF_PHASE_RASTER]),
-             ER_PERF_MS_ARGS(l->phase_us[ER_PERF_PHASE_PRESENT]));
+             ER_PERF_MS_ARGS(last->phase_us[ER_PERF_PHASE_JS]),
+             ER_PERF_MS_ARGS(last->phase_us[ER_PERF_PHASE_LAYOUT]),
+             ER_PERF_MS_ARGS(last->phase_us[ER_PERF_PHASE_RASTER]),
+             ER_PERF_MS_ARGS(last->phase_us[ER_PERF_PHASE_PRESENT]));
     snprintf(s_lines[2],
              sizeof(s_lines[2]),
              "PK J%u L%u R%u P%u",
-             ER_PERF_MS(w->phase_us[ER_PERF_PHASE_JS]),
-             ER_PERF_MS(w->phase_us[ER_PERF_PHASE_LAYOUT]),
-             ER_PERF_MS(w->phase_us[ER_PERF_PHASE_RASTER]),
-             ER_PERF_MS(w->phase_us[ER_PERF_PHASE_PRESENT]));
+             ER_PERF_MS(worst->phase_us[ER_PERF_PHASE_JS]),
+             ER_PERF_MS(worst->phase_us[ER_PERF_PHASE_LAYOUT]),
+             ER_PERF_MS(worst->phase_us[ER_PERF_PHASE_RASTER]),
+             ER_PERF_MS(worst->phase_us[ER_PERF_PHASE_PRESENT]));
 
-    if (w->dirty_px >= 10000U)
+    if (worst->dirty_px >= ER_PERF_KILO_THRESHOLD)
     {
         snprintf(s_lines[3],
                  sizeof(s_lines[3]),
                  "PKDRT %dx%d %uk",
-                 (int)w->dirty_w,
-                 (int)w->dirty_h,
-                 (unsigned)(w->dirty_px / 1000U));
+                 (int)worst->dirty_w,
+                 (int)worst->dirty_h,
+                 (unsigned)(worst->dirty_px / ER_PERF_KILO));
     }
     else
     {
         snprintf(s_lines[3],
                  sizeof(s_lines[3]),
                  "PKDRT %dx%d %upx",
-                 (int)w->dirty_w,
-                 (int)w->dirty_h,
-                 (unsigned)w->dirty_px);
+                 (int)worst->dirty_w,
+                 (int)worst->dirty_h,
+                 (unsigned)worst->dirty_px);
     }
     /* "!FULL" only when the pool actually turned a node away: "VEC 8/8" alone is legitimate (a screen
      * that exactly fills the pool renders fine), so the counter cannot carry this on its own. */
     snprintf(s_lines[4],
              sizeof(s_lines[4]),
              "VEC %u/%u%s IMG %u/%u",
-             (unsigned)l->vector_slots_used,
-             (unsigned)l->vector_slots_total,
-             l->vector_slots_overflow ? "!FULL" : "",
-             (unsigned)l->image_slots_used,
-             (unsigned)l->image_slots_total);
+             (unsigned)last->vector_slots_used,
+             (unsigned)last->vector_slots_total,
+             last->vector_slots_overflow ? "!FULL" : "",
+             (unsigned)last->image_slots_used,
+             (unsigned)last->image_slots_total);
 
     /* The raster split, LAST frame: unlike the PK lines this stays live during a steady-state drag —
      * the case where every frame is equally slow and the peak lines are stuck on the mount frame. W is
      * the pixels handed to the backend; read it against PKDRT/dirty_px for the write amplification.
      * The W field is pre-formatted so each line keeps one literal format string (same k/px switch as
      * the PKDRT line). */
-    char blit_last[12];
-    char blit_worst[12];
-    if (l->blit_px >= 10000U)
-        snprintf(blit_last, sizeof(blit_last), "%uk", (unsigned)(l->blit_px / 1000U));
+    char blit_last[ER_PERF_FIELD_BYTES];
+    char blit_worst[ER_PERF_FIELD_BYTES];
+    if (last->blit_px >= ER_PERF_KILO_THRESHOLD)
+        snprintf(blit_last, sizeof(blit_last), "%uk", (unsigned)(last->blit_px / ER_PERF_KILO));
     else
-        snprintf(blit_last, sizeof(blit_last), "%upx", (unsigned)l->blit_px);
-    if (w->blit_px >= 10000U)
-        snprintf(blit_worst, sizeof(blit_worst), "%uk", (unsigned)(w->blit_px / 1000U));
+        snprintf(blit_last, sizeof(blit_last), "%upx", (unsigned)last->blit_px);
+    if (worst->blit_px >= ER_PERF_KILO_THRESHOLD)
+        snprintf(blit_worst, sizeof(blit_worst), "%uk", (unsigned)(worst->blit_px / ER_PERF_KILO));
     else
-        snprintf(blit_worst, sizeof(blit_worst), "%upx", (unsigned)w->blit_px);
+        snprintf(blit_worst, sizeof(blit_worst), "%upx", (unsigned)worst->blit_px);
 
     snprintf(s_lines[5],
              sizeof(s_lines[5]),
              "RST P%u.%u C%u.%u B%u.%u S%u.%u W%s",
-             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_PREPASS]),
-             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_RENDER]),
-             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_BLIT]),
-             ER_PERF_MS_ARGS(l->raster_us[ER_PERF_RASTER_SWEEP]),
+             ER_PERF_MS_ARGS(last->raster_us[ER_PERF_RASTER_PREPASS]),
+             ER_PERF_MS_ARGS(last->raster_us[ER_PERF_RASTER_RENDER]),
+             ER_PERF_MS_ARGS(last->raster_us[ER_PERF_RASTER_BLIT]),
+             ER_PERF_MS_ARGS(last->raster_us[ER_PERF_RASTER_SWEEP]),
              blit_last);
 
     /* The WORST frame's raster split (pairs with the PK lines above), whole milliseconds. */
     snprintf(s_lines[6],
              sizeof(s_lines[6]),
              "PKR P%u C%u B%u S%u W%s",
-             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_PREPASS]),
-             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_RENDER]),
-             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_BLIT]),
-             ER_PERF_MS(w->raster_us[ER_PERF_RASTER_SWEEP]),
+             ER_PERF_MS(worst->raster_us[ER_PERF_RASTER_PREPASS]),
+             ER_PERF_MS(worst->raster_us[ER_PERF_RASTER_RENDER]),
+             ER_PERF_MS(worst->raster_us[ER_PERF_RASTER_BLIT]),
+             ER_PERF_MS(worst->raster_us[ER_PERF_RASTER_SWEEP]),
              blit_worst);
 
     /* The JS split, last frame then peak. D/R/M are slices of the JS phase; C is the commit the pump
@@ -468,24 +479,24 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
     snprintf(s_lines[7],
              sizeof(s_lines[7]),
              "JSS D%u.%u R%u.%u M%u.%u C%u.%u",
-             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_DISPATCH]),
-             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_RECONCILE]),
-             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_MARSHAL]),
-             ER_PERF_MS_ARGS(l->js_us[ER_PERF_JS_COMMIT]));
+             ER_PERF_MS_ARGS(last->js_us[ER_PERF_JS_DISPATCH]),
+             ER_PERF_MS_ARGS(last->js_us[ER_PERF_JS_RECONCILE]),
+             ER_PERF_MS_ARGS(last->js_us[ER_PERF_JS_MARSHAL]),
+             ER_PERF_MS_ARGS(last->js_us[ER_PERF_JS_COMMIT]));
     snprintf(s_lines[8],
              sizeof(s_lines[8]),
              "PKJ D%u R%u M%u C%u",
-             ER_PERF_MS(w->js_us[ER_PERF_JS_DISPATCH]),
-             ER_PERF_MS(w->js_us[ER_PERF_JS_RECONCILE]),
-             ER_PERF_MS(w->js_us[ER_PERF_JS_MARSHAL]),
-             ER_PERF_MS(w->js_us[ER_PERF_JS_COMMIT]));
+             ER_PERF_MS(worst->js_us[ER_PERF_JS_DISPATCH]),
+             ER_PERF_MS(worst->js_us[ER_PERF_JS_RECONCILE]),
+             ER_PERF_MS(worst->js_us[ER_PERF_JS_MARSHAL]),
+             ER_PERF_MS(worst->js_us[ER_PERF_JS_COMMIT]));
 
-    const int n = (max_lines < ER_PERF_OVERLAY_LINES) ? max_lines : ER_PERF_OVERLAY_LINES;
-    for (int i = 0; i < n; i++)
+    const int line_count = (max_lines < ER_PERF_OVERLAY_LINES) ? max_lines : ER_PERF_OVERLAY_LINES;
+    for (int line_index = 0; line_index < line_count; line_index++)
     {
-        lines[i] = s_lines[i];
+        lines[line_index] = s_lines[line_index];
     }
-    return n;
+    return line_count;
 }
 
 #else /* ER_PERF_STATS == 0 : compiled out */

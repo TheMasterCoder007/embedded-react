@@ -47,12 +47,12 @@ typedef struct
 {
     bool used;
     float ops[ERUI_VECTOR_TAPE_MAX];
-    int n_ops;
+    int op_count;
     ERVectorPaint paints[ERUI_VECTOR_PAINTS_MAX];
-    int n_paints;
+    int paint_count;
 #if ERUI_GRADIENT
-    ERVectorGradient grads[ERUI_VECTOR_GRADS_MAX]; /**< Gradient table; a paint's fill_grad indexes it (1-based). */
-    int n_grads;
+    ERVectorGradient gradients[ERUI_VECTOR_GRADS_MAX]; /**< Gradient table; a paint's fill_grad indexes it (1-based). */
+    int gradient_count;
 #endif
 } VecSlot;
 
@@ -78,19 +78,19 @@ static void note_pool_overflow(void)
 
 int er_vector_store(int slot,
                     const float* ops,
-                    int n_ops,
+                    int op_count,
                     const ERVectorPaint* paints,
-                    int n_paints,
-                    const ERVectorGradient* grads,
-                    int n_grads)
+                    int paint_count,
+                    const ERVectorGradient* gradients,
+                    int gradient_count)
 {
     if (slot < 0)
     {
-        for (int i = 0; i < ERUI_MAX_VECTOR_NODES; i++)
+        for (int slot_index = 0; slot_index < ERUI_MAX_VECTOR_NODES; slot_index++)
         {
-            if (!s_slots[i].used)
+            if (!s_slots[slot_index].used)
             {
-                slot = i;
+                slot = slot_index;
                 break;
             }
         }
@@ -107,30 +107,32 @@ int er_vector_store(int slot,
      * (Also clears the cache's per-slot promotion state, so an animated tape never records.) */
     er_vector_cache_invalidate_slot(slot);
 
-    VecSlot* s = &s_slots[slot];
-    s->used = true;
-    if (n_ops > ERUI_VECTOR_TAPE_MAX)
+    VecSlot* stored = &s_slots[slot];
+    stored->used = true;
+    if (op_count > ERUI_VECTOR_TAPE_MAX)
         ERUI_VEC_WARN_ONCE("ERUI_VECTOR_TAPE_MAX", ERUI_VECTOR_TAPE_MAX);
-    int no = (n_ops < 0) ? 0 : (n_ops > ERUI_VECTOR_TAPE_MAX ? ERUI_VECTOR_TAPE_MAX : n_ops);
-    if (ops && no > 0)
-        memcpy(s->ops, ops, (size_t)no * sizeof(float));
-    s->n_ops = no;
-    if (n_paints > ERUI_VECTOR_PAINTS_MAX)
+    int stored_op_count = (op_count < 0) ? 0 : (op_count > ERUI_VECTOR_TAPE_MAX ? ERUI_VECTOR_TAPE_MAX : op_count);
+    if (ops && stored_op_count > 0)
+        memcpy(stored->ops, ops, (size_t)stored_op_count * sizeof(float));
+    stored->op_count = stored_op_count;
+    if (paint_count > ERUI_VECTOR_PAINTS_MAX)
         ERUI_VEC_WARN_ONCE("ERUI_VECTOR_PAINTS_MAX", ERUI_VECTOR_PAINTS_MAX);
-    int np = (n_paints < 0) ? 0 : (n_paints > ERUI_VECTOR_PAINTS_MAX ? ERUI_VECTOR_PAINTS_MAX : n_paints);
-    if (paints && np > 0)
-        memcpy(s->paints, paints, (size_t)np * sizeof(ERVectorPaint));
-    s->n_paints = np;
+    int stored_paint_count =
+        (paint_count < 0) ? 0 : (paint_count > ERUI_VECTOR_PAINTS_MAX ? ERUI_VECTOR_PAINTS_MAX : paint_count);
+    if (paints && stored_paint_count > 0)
+        memcpy(stored->paints, paints, (size_t)stored_paint_count * sizeof(ERVectorPaint));
+    stored->paint_count = stored_paint_count;
 #if ERUI_GRADIENT
-    if (n_grads > ERUI_VECTOR_GRADS_MAX)
+    if (gradient_count > ERUI_VECTOR_GRADS_MAX)
         ERUI_VEC_WARN_ONCE("ERUI_VECTOR_GRADS_MAX", ERUI_VECTOR_GRADS_MAX);
-    int ng = (n_grads < 0) ? 0 : (n_grads > ERUI_VECTOR_GRADS_MAX ? ERUI_VECTOR_GRADS_MAX : n_grads);
-    if (grads && ng > 0)
-        memcpy(s->grads, grads, (size_t)ng * sizeof(ERVectorGradient));
-    s->n_grads = ng;
+    int stored_gradient_count =
+        (gradient_count < 0) ? 0 : (gradient_count > ERUI_VECTOR_GRADS_MAX ? ERUI_VECTOR_GRADS_MAX : gradient_count);
+    if (gradients && stored_gradient_count > 0)
+        memcpy(stored->gradients, gradients, (size_t)stored_gradient_count * sizeof(ERVectorGradient));
+    stored->gradient_count = stored_gradient_count;
 #else
-    (void)grads;
-    (void)n_grads;
+    (void)gradients;
+    (void)gradient_count;
 #endif
     return slot;
 }
@@ -160,59 +162,59 @@ void er_vector_reset(void)
     s_pool_overflowed = false;
 }
 
-const float* er_vector_slot_ops(int slot, int* n_ops)
+const float* er_vector_slot_ops(int slot, int* op_count)
 {
     if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
     {
-        if (n_ops)
-            *n_ops = 0;
+        if (op_count)
+            *op_count = 0;
         return 0;
     }
-    if (n_ops)
-        *n_ops = s_slots[slot].n_ops;
+    if (op_count)
+        *op_count = s_slots[slot].op_count;
     return s_slots[slot].ops;
 }
 
-const ERVectorPaint* er_vector_slot_paints(int slot, int* n_paints)
+const ERVectorPaint* er_vector_slot_paints(int slot, int* paint_count)
 {
     if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
     {
-        if (n_paints)
-            *n_paints = 0;
+        if (paint_count)
+            *paint_count = 0;
         return 0;
     }
-    if (n_paints)
-        *n_paints = s_slots[slot].n_paints;
+    if (paint_count)
+        *paint_count = s_slots[slot].paint_count;
     return s_slots[slot].paints;
 }
 
-const ERVectorGradient* er_vector_slot_grads(int slot, int* n_grads)
+const ERVectorGradient* er_vector_slot_grads(int slot, int* gradient_count)
 {
 #if ERUI_GRADIENT
     if (slot < 0 || slot >= ERUI_MAX_VECTOR_NODES || !s_slots[slot].used)
     {
-        if (n_grads)
-            *n_grads = 0;
+        if (gradient_count)
+            *gradient_count = 0;
         return 0;
     }
-    if (n_grads)
-        *n_grads = s_slots[slot].n_grads;
-    return s_slots[slot].grads;
+    if (gradient_count)
+        *gradient_count = s_slots[slot].gradient_count;
+    return s_slots[slot].gradients;
 #else
     (void)slot;
-    if (n_grads)
-        *n_grads = 0;
+    if (gradient_count)
+        *gradient_count = 0;
     return 0;
 #endif
 }
 
 int er_vector_slots_in_use(void)
 {
-    int n = 0;
-    for (int i = 0; i < ERUI_MAX_VECTOR_NODES; i++)
-        if (s_slots[i].used)
-            n++;
-    return n;
+    int in_use_count = 0;
+    for (int slot_index = 0; slot_index < ERUI_MAX_VECTOR_NODES; slot_index++)
+        if (s_slots[slot_index].used)
+            in_use_count++;
+    return in_use_count;
 }
 
 int er_vector_slots_total(void)

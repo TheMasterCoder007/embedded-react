@@ -53,6 +53,10 @@
 #define FAULT_HINT "A firmware or engine fault, not the app's."
 #define FAULT_HEX_BYTES 32u
 
+/* A UTF-8 continuation byte, which a cut must not land before. */
+#define UTF8_CONTINUATION_MASK 0xC0u
+#define UTF8_CONTINUATION_BITS 0x80u
+
 /** @brief The screen's lines, in the order they are drawn. */
 enum
 {
@@ -87,8 +91,8 @@ static const LineStyle s_line_styles[LINE_COUNT] = {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static bool s_active;
-static int s_screen_w;
-static int s_screen_h;
+static int s_screen_width;
+static int s_screen_height;
 static char s_short_lines[LINE_DETAIL][ERUI_ERROR_SCREEN_LINE_BYTES];
 static char s_detail[ERUI_ERROR_SCREEN_DETAIL_BYTES];
 
@@ -109,7 +113,7 @@ static void copy_text(char* destination, size_t capacity, const char* source)
     if (length >= capacity)
     {
         length = capacity - 1u;
-        while (length > 0u && ((unsigned char)source[length] & 0xC0u) == 0x80u)
+        while (length > 0u && ((unsigned char)source[length] & UTF8_CONTINUATION_MASK) == UTF8_CONTINUATION_BITS)
         {
             length--;
         }
@@ -145,10 +149,10 @@ static int line_height(int line, int width)
     int widest = 0;
     int wrapped_lines = 0;
     er_text_measure_lines(&params, width, &widest, &wrapped_lines);
-    int text_w = 0;
-    int text_h = 0;
-    er_text_measure("", params.font_size, NULL, 0, params.font_weight, &text_w, &text_h);
-    return wrapped_lines * text_h;
+    int text_width = 0;
+    int text_height = 0;
+    er_text_measure("", params.font_size, NULL, 0, params.font_weight, &text_width, &text_height);
+    return wrapped_lines * text_height;
 }
 
 /** @brief The check word for a fault record's contents. */
@@ -166,29 +170,29 @@ static uint32_t fault_check(const ERFaultRecord* record)
  - Functions: Internal
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_error_screen_size(int* screen_w, int* screen_h)
+void er_error_screen_size(int* screen_width, int* screen_height)
 {
-    *screen_w = s_screen_w;
-    *screen_h = s_screen_h;
+    *screen_width = s_screen_width;
+    *screen_height = s_screen_height;
 }
 
 void er_error_screen_draw(void)
 {
-    const int text_w = s_screen_w - 2 * ERROR_SCREEN_PADDING;
-    er_push_clip_rect(0, 0, s_screen_w, s_screen_h);
-    er_blit_fill(ERROR_SCREEN_BACKGROUND, 0, 0, s_screen_w, s_screen_h);
+    const int text_width = s_screen_width - 2 * ERROR_SCREEN_PADDING;
+    er_push_clip_rect(0, 0, s_screen_width, s_screen_height);
+    er_blit_fill(ERROR_SCREEN_BACKGROUND, 0, 0, s_screen_width, s_screen_height);
 
     /* Centred when it all fits, else from the top, with the detail cut at the bottom edge. */
     int heights[LINE_COUNT];
-    int total_h = 0;
+    int total_height = 0;
     for (int line = 0; line < LINE_COUNT; line++)
     {
-        heights[line] = line_text(line)[0] ? line_height(line, text_w) : 0;
-        total_h += heights[line] ? heights[line] + (total_h ? ERROR_SCREEN_GAP : 0) : 0;
+        heights[line] = line_text(line)[0] ? line_height(line, text_width) : 0;
+        total_height += heights[line] ? heights[line] + (total_height ? ERROR_SCREEN_GAP : 0) : 0;
     }
-    const int room_h = s_screen_h - 2 * ERROR_SCREEN_PADDING;
-    int top = ERROR_SCREEN_PADDING + (total_h < room_h ? (room_h - total_h) / 2 : 0);
-    const int bottom = s_screen_h - ERROR_SCREEN_PADDING;
+    const int room_height = s_screen_height - 2 * ERROR_SCREEN_PADDING;
+    int top = ERROR_SCREEN_PADDING + (total_height < room_height ? (room_height - total_height) / 2 : 0);
+    const int bottom = s_screen_height - ERROR_SCREEN_PADDING;
 
     for (int line = 0; line < LINE_COUNT && top < bottom; line++)
     {
@@ -200,7 +204,7 @@ void er_error_screen_draw(void)
         line_params(line, &params);
         params.clip.x = ERROR_SCREEN_PADDING;
         params.clip.y = top;
-        params.clip.w = text_w;
+        params.clip.w = text_width;
         params.clip.h = top + heights[line] < bottom ? heights[line] : bottom - top;
         er_text_render(&params);
         top += heights[line] + ERROR_SCREEN_GAP;
@@ -227,8 +231,8 @@ void er_error_screen_show(int screen_width, int screen_height, const ERErrorScre
     copy_text(s_short_lines[LINE_LOCATION], sizeof(s_short_lines[LINE_LOCATION]), screen->location);
     copy_text(s_short_lines[LINE_HINT], sizeof(s_short_lines[LINE_HINT]), screen->hint);
     copy_text(s_detail, sizeof(s_detail), screen->detail);
-    s_screen_w = screen_width > 0 ? screen_width : 0;
-    s_screen_h = screen_height > 0 ? screen_height : 0;
+    s_screen_width = screen_width > 0 ? screen_width : 0;
+    s_screen_height = screen_height > 0 ? screen_height : 0;
     s_active = true;
     /* A gesture in progress, and any move parked for it, ends here, so none reaches an app after it. */
     er_input_reset();

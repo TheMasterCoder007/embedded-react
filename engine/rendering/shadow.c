@@ -25,10 +25,13 @@
  * the platform's own elevation shadow, so there is no exact formula to copy — these are the slopes that
  * make an elevation ladder (1, 2, 4, 8, ...) look like Material's, with the blur radius taken as the
  * elevation itself. The opacity cap stops a large elevation turning the shadow into a black box. */
-#define SHADOW_ELEV_OFFSET_PER_DP 0.33f /**< Downward offset in px per unit of elevation. */
-#define SHADOW_ELEV_OPACITY_BASE 0.2f   /**< Opacity at the lowest elevation. */
-#define SHADOW_ELEV_OPACITY_SLOPE 0.01f /**< Extra opacity per unit of elevation. */
-#define SHADOW_ELEV_OPACITY_MAX 0.5f    /**< Ceiling on the synthesised opacity. */
+#define SHADOW_ELEVATION_OFFSET_PER_DP 0.33f /**< Downward offset in px per unit of elevation. */
+#define SHADOW_ELEVATION_OPACITY_BASE 0.2f   /**< Opacity at the lowest elevation. */
+#define SHADOW_ELEVATION_OPACITY_SLOPE 0.01f /**< Extra opacity per unit of elevation. */
+#define SHADOW_ELEVATION_OPACITY_MAX 0.5f    /**< Ceiling on the synthesised opacity. */
+
+/** @brief Opaque black, the colour of an elevation shadow and of one with no shadowColor. */
+#define SHADOW_DEFAULT_COLOR 0xFF000000U
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -38,57 +41,57 @@
 static uint8_t s_alpha[ERUI_SCRATCH_H][ERUI_SCRATCH_W];
 
 /* Running-sum accumulator shared by hblur() and vblur(). Sized for the longer dimension. */
-static uint16_t s_blur_tmp[ERUI_SCRATCH_W >= ERUI_SCRATCH_H ? ERUI_SCRATCH_W : ERUI_SCRATCH_H];
+static uint16_t s_blur_sums[ERUI_SCRATCH_W >= ERUI_SCRATCH_H ? ERUI_SCRATCH_W : ERUI_SCRATCH_H];
 
 /* One row of premultiplied ARGB8888 pixels assembled before each er_blit_blend() call. */
-static uint32_t s_row_buf[ERUI_SCRATCH_W];
+static uint32_t s_row_buffer[ERUI_SCRATCH_W];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Fills the node silhouette into the shadow alpha buffer at offset (r, r).
+ * @brief Fills the node silhouette into the shadow alpha buffer at offset (blur_radius, blur_radius).
  *
- * Pixels inside the rounded rectangle are written as 255; corner pixels that fall
+ * Pixels inside the rounded rectangle are written as opaque; corner pixels that fall
  * outside the arc are written as 0.  All other cells in the active region must be
  * cleared to 0 by the caller before this is called.
  *
- * @param[in] r       Blur radius; the shape is placed at column/row offset r in s_alpha.
- * @param[in] nw      Node width in pixels.
- * @param[in] nh      Node height in pixels.
- * @param[in] corner  Corner radius of the rounded rectangle in pixels.
+ * @param[in] blur_radius  Blur radius; the shape is placed at column/row offset blur_radius in s_alpha.
+ * @param[in] node_width   Node width in pixels.
+ * @param[in] node_height  Node height in pixels.
+ * @param[in] corner       Corner radius of the rounded rectangle in pixels.
  */
-static void fill_shape(int r, int nw, int nh, int corner)
+static void fill_shape(int blur_radius, int node_width, int node_height, int corner)
 {
     if (corner < 0)
         corner = 0;
-    const int max_corner = (nw < nh ? nw : nh) / 2;
+    const int max_corner = (node_width < node_height ? node_width : node_height) / 2;
     if (corner > max_corner)
         corner = max_corner;
 
-    for (int row = 0; row < nh; row++)
+    for (int row = 0; row < node_height; row++)
     {
-        for (int col = 0; col < nw; col++)
+        for (int column = 0; column < node_width; column++)
         {
             int inside = 1;
             if (corner > 0)
             {
-                const int in_left = col < corner;
-                const int in_right = col >= nw - corner;
+                const int in_left = column < corner;
+                const int in_right = column >= node_width - corner;
                 const int in_top = row < corner;
-                const int in_bottom = row >= nh - corner;
+                const int in_bottom = row >= node_height - corner;
 
                 if ((in_left || in_right) && (in_top || in_bottom))
                 {
-                    const int cx = in_left ? corner : nw - 1 - corner;
-                    const int cy = in_top ? corner : nh - 1 - corner;
-                    const int dx = col - cx;
-                    const int dy = row - cy;
-                    inside = (dx * dx + dy * dy) <= corner * corner;
+                    const int center_x = in_left ? corner : node_width - 1 - corner;
+                    const int center_y = in_top ? corner : node_height - 1 - corner;
+                    const int distance_x = column - center_x;
+                    const int distance_y = row - center_y;
+                    inside = (distance_x * distance_x + distance_y * distance_y) <= corner * corner;
                 }
             }
-            s_alpha[r + row][r + col] = inside ? 255U : 0U;
+            s_alpha[blur_radius + row][blur_radius + column] = inside ? ER_ALPHA_OPAQUE : 0U;
         }
     }
 }
@@ -96,69 +99,69 @@ static void fill_shape(int r, int nw, int nh, int corner)
 /**
  * @brief Applies one horizontal box-blur pass to the active region of s_alpha.
  *
- * Pixels outside [0, sw) are treated as 0 (zero-padded boundary).  Results are
- * written back in-place via the s_blur_tmp accumulator so the pass is a true single
+ * Pixels outside [0, active_width) are treated as 0 (zero-padded boundary).  Results are
+ * written back in-place via the s_blur_sums accumulator so the pass is a true single
  * scan without read-after-write aliasing.
  *
- * @param[in] sw  Width of the active region in s_alpha (columns 0..sw-1).
- * @param[in] sh  Height of the active region in s_alpha (rows 0..sh-1).
- * @param[in] r   Box half-radius; the blur window width is 2r + 1.
+ * @param[in] active_width   Width of the active region in s_alpha (columns 0..active_width-1).
+ * @param[in] active_height  Height of the active region in s_alpha (rows 0..active_height-1).
+ * @param[in] blur_radius    Box half-radius; the blur window width is 2 * blur_radius + 1.
  */
-static void hblur(int sw, int sh, int r)
+static void hblur(int active_width, int active_height, int blur_radius)
 {
-    const int win = 2 * r + 1;
-    for (int row = 0; row < sh; row++)
+    const int window = 2 * blur_radius + 1;
+    for (int row = 0; row < active_height; row++)
     {
-        uint8_t* const p = s_alpha[row];
+        uint8_t* const row_alpha = s_alpha[row];
         uint16_t sum = 0;
 
         /* Pre-load elements that are already inside the window at col = 0.
          * With zero-padding, elements at indices < 0 contribute 0 and are skipped. */
-        for (int i = 0; i < r && i < sw; i++)
-            sum += p[i];
+        for (int preload_column = 0; preload_column < blur_radius && preload_column < active_width; preload_column++)
+            sum += row_alpha[preload_column];
 
-        for (int col = 0; col < sw; col++)
+        for (int column = 0; column < active_width; column++)
         {
-            const int right = col + r;
-            sum += (right < sw) ? p[right] : 0U;
-            s_blur_tmp[col] = sum;
-            const int left = col - r;
-            sum -= (left >= 0) ? p[left] : 0U;
+            const int right = column + blur_radius;
+            sum += (right < active_width) ? row_alpha[right] : 0U;
+            s_blur_sums[column] = sum;
+            const int left = column - blur_radius;
+            sum -= (left >= 0) ? row_alpha[left] : 0U;
         }
-        for (int col = 0; col < sw; col++)
-            p[col] = (uint8_t)(s_blur_tmp[col] / (uint16_t)win);
+        for (int column = 0; column < active_width; column++)
+            row_alpha[column] = (uint8_t)(s_blur_sums[column] / (uint16_t)window);
     }
 }
 
 /**
  * @brief Applies one vertical box-blur pass to the active region of s_alpha.
  *
- * Pixels outside [0, sh) are treated as 0 (zero-padded boundary).
+ * Pixels outside [0, active_height) are treated as 0 (zero-padded boundary).
  *
- * @param[in] sw  Width of the active region in s_alpha.
- * @param[in] sh  Height of the active region in s_alpha (rows 0..sh-1).
- * @param[in] r   Box half-radius; the blur window height is 2r + 1.
+ * @param[in] active_width   Width of the active region in s_alpha.
+ * @param[in] active_height  Height of the active region in s_alpha (rows 0..active_height-1).
+ * @param[in] blur_radius    Box half-radius; the blur window height is 2 * blur_radius + 1.
  */
-static void vblur(int sw, int sh, int r)
+static void vblur(int active_width, int active_height, int blur_radius)
 {
-    const int win = 2 * r + 1;
-    for (int col = 0; col < sw; col++)
+    const int window = 2 * blur_radius + 1;
+    for (int column = 0; column < active_width; column++)
     {
         uint16_t sum = 0;
 
-        for (int i = 0; i < r && i < sh; i++)
-            sum += s_alpha[i][col];
+        for (int preload_row = 0; preload_row < blur_radius && preload_row < active_height; preload_row++)
+            sum += s_alpha[preload_row][column];
 
-        for (int row = 0; row < sh; row++)
+        for (int row = 0; row < active_height; row++)
         {
-            const int below = row + r;
-            sum += (below < sh) ? s_alpha[below][col] : 0U;
-            s_blur_tmp[row] = sum;
-            const int above = row - r;
-            sum -= (above >= 0) ? s_alpha[above][col] : 0U;
+            const int below = row + blur_radius;
+            sum += (below < active_height) ? s_alpha[below][column] : 0U;
+            s_blur_sums[row] = sum;
+            const int above = row - blur_radius;
+            sum -= (above >= 0) ? s_alpha[above][column] : 0U;
         }
-        for (int row = 0; row < sh; row++)
-            s_alpha[row][col] = (uint8_t)(s_blur_tmp[row] / (uint16_t)win);
+        for (int row = 0; row < active_height; row++)
+            s_alpha[row][column] = (uint8_t)(s_blur_sums[row] / (uint16_t)window);
     }
 }
 
@@ -168,104 +171,105 @@ static void vblur(int sw, int sh, int r)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_shadow_render(const ERViewProps* vp, int x, int y, int w, int h)
+void er_shadow_render(const ERViewProps* view_props, int x, int y, int width, int height)
 {
 #if ERUI_SHADOWS
     /* Resolve shadow parameters from explicit props or from elevation. */
     uint32_t color;
-    float offset_x, offset_y, opacity_f;
+    float offset_x, offset_y, opacity;
     int radius;
 
-    if (vp->shadow_opacity > 0.0f)
+    if (view_props->shadow_opacity > 0.0f)
     {
-        color = vp->shadow_color ? vp->shadow_color : 0xFF000000U;
-        offset_x = vp->shadow_offset_x;
-        offset_y = vp->shadow_offset_y;
-        opacity_f = vp->shadow_opacity > 1.0f ? 1.0f : vp->shadow_opacity;
-        radius = (int)vp->shadow_radius;
+        color = view_props->shadow_color ? view_props->shadow_color : SHADOW_DEFAULT_COLOR;
+        offset_x = view_props->shadow_offset_x;
+        offset_y = view_props->shadow_offset_y;
+        opacity = view_props->shadow_opacity > 1.0f ? 1.0f : view_props->shadow_opacity;
+        radius = (int)view_props->shadow_radius;
     }
-    else if (vp->elevation > 0)
+    else if (view_props->elevation > 0)
     {
         /* Android-style elevation: synthesise a downward black shadow. */
-        color = 0xFF000000U;
+        color = SHADOW_DEFAULT_COLOR;
         offset_x = 0.0f;
-        offset_y = (float)vp->elevation * SHADOW_ELEV_OFFSET_PER_DP;
-        opacity_f = SHADOW_ELEV_OPACITY_BASE + (float)vp->elevation * SHADOW_ELEV_OPACITY_SLOPE;
-        if (opacity_f > SHADOW_ELEV_OPACITY_MAX)
-            opacity_f = SHADOW_ELEV_OPACITY_MAX;
-        radius = (int)vp->elevation;
+        offset_y = (float)view_props->elevation * SHADOW_ELEVATION_OFFSET_PER_DP;
+        opacity = SHADOW_ELEVATION_OPACITY_BASE + (float)view_props->elevation * SHADOW_ELEVATION_OPACITY_SLOPE;
+        if (opacity > SHADOW_ELEVATION_OPACITY_MAX)
+            opacity = SHADOW_ELEVATION_OPACITY_MAX;
+        radius = (int)view_props->elevation;
     }
     else
     {
         return; /* No shadow requested. */
     }
 
-    if (w <= 0 || h <= 0)
+    if (width <= 0 || height <= 0)
         return;
 
     /* Skip gracefully when the node alone already exceeds the scratch buffer. */
-    if (w > ERUI_SCRATCH_W || h > ERUI_SCRATCH_H)
+    if (width > ERUI_SCRATCH_W || height > ERUI_SCRATCH_H)
         return;
 
     /* Clamp blur radius so the padded shadow fits inside the scratch buffer. */
-    int max_rx = (ERUI_SCRATCH_W - w) / 2;
-    int max_ry = (ERUI_SCRATCH_H - h) / 2;
-    if (radius > max_rx)
-        radius = max_rx;
-    if (radius > max_ry)
-        radius = max_ry;
+    int max_radius_x = (ERUI_SCRATCH_W - width) / 2;
+    int max_radius_y = (ERUI_SCRATCH_H - height) / 2;
+    if (radius > max_radius_x)
+        radius = max_radius_x;
+    if (radius > max_radius_y)
+        radius = max_radius_y;
     if (radius < 0)
         radius = 0;
 
-    const int sw = w + 2 * radius; /* active shadow buffer width  */
-    const int sh = h + 2 * radius; /* active shadow buffer height */
+    const int active_width = width + 2 * radius;   /* active shadow buffer width  */
+    const int active_height = height + 2 * radius; /* active shadow buffer height */
 
     /* World-space top-left of the shadow (includes blur spread and offset). */
-    const int sx = x + (int)offset_x - radius;
-    const int sy = y + (int)offset_y - radius;
+    const int shadow_x = x + (int)offset_x - radius;
+    const int shadow_y = y + (int)offset_y - radius;
 
     /* Clear the active region. */
-    for (int row = 0; row < sh; row++)
-        memset(s_alpha[row], 0, (size_t)sw);
+    for (int row = 0; row < active_height; row++)
+        memset(s_alpha[row], 0, (size_t)active_width);
 
     /* Rasterise the node silhouette at position (radius, radius) in the buffer. */
-    fill_shape(radius, w, h, (int)vp->border_radius);
+    fill_shape(radius, width, height, (int)view_props->border_radius);
 
     /* Two-pass separable box blur approximates a Gaussian soft shadow. */
     if (radius > 0)
     {
-        hblur(sw, sh, radius);
-        vblur(sw, sh, radius);
+        hblur(active_width, active_height, radius);
+        vblur(active_width, active_height, radius);
     }
 
     /* Build premultiplied ARGB pixels and blit one row at a time to avoid a
      * second large static buffer.  The shadow_color alpha multiplies with
      * shadow_opacity to produce the effective base alpha. */
-    const uint8_t color_a = (uint8_t)((color >> 24) & 0xFFU);
-    const uint8_t sc_r = (uint8_t)((color >> 16) & 0xFFU);
-    const uint8_t sc_g = (uint8_t)((color >> 8) & 0xFFU);
-    const uint8_t sc_b = (uint8_t)(color & 0xFFU);
-    const uint32_t shad_a = (uint32_t)(opacity_f * 255.0f + 0.5f);
-    const uint32_t base_a = shad_a * (uint32_t)color_a / 255U;
+    const uint8_t color_alpha = (uint8_t)((color >> 24) & 0xFFU);
+    const uint8_t color_red = (uint8_t)((color >> 16) & 0xFFU);
+    const uint8_t color_green = (uint8_t)((color >> 8) & 0xFFU);
+    const uint8_t color_blue = (uint8_t)(color & 0xFFU);
+    const uint32_t shadow_alpha = (uint32_t)(opacity * ER_CHANNEL_MAX_FLOAT + 0.5f);
+    const uint32_t base_alpha = shadow_alpha * (uint32_t)color_alpha / ER_CHANNEL_MAX;
 
-    const int stride = (int)((size_t)sw * sizeof(uint32_t));
-    for (int row = 0; row < sh; row++)
+    const int stride = (int)((size_t)active_width * sizeof(uint32_t));
+    for (int row = 0; row < active_height; row++)
     {
-        for (int col = 0; col < sw; col++)
+        for (int column = 0; column < active_width; column++)
         {
-            const uint32_t ea = (uint32_t)s_alpha[row][col] * base_a / 255U;
-            const uint32_t pr = (uint32_t)sc_r * ea / 255U;
-            const uint32_t pg = (uint32_t)sc_g * ea / 255U;
-            const uint32_t pb = (uint32_t)sc_b * ea / 255U;
-            s_row_buf[col] = (ea << 24U) | (pr << 16U) | (pg << 8U) | pb;
+            const uint32_t pixel_alpha = (uint32_t)s_alpha[row][column] * base_alpha / ER_CHANNEL_MAX;
+            const uint32_t premultiplied_red = (uint32_t)color_red * pixel_alpha / ER_CHANNEL_MAX;
+            const uint32_t premultiplied_green = (uint32_t)color_green * pixel_alpha / ER_CHANNEL_MAX;
+            const uint32_t premultiplied_blue = (uint32_t)color_blue * pixel_alpha / ER_CHANNEL_MAX;
+            s_row_buffer[column] =
+                (pixel_alpha << 24U) | (premultiplied_red << 16U) | (premultiplied_green << 8U) | premultiplied_blue;
         }
-        er_blit_blend(s_row_buf, stride, 255U, sx, sy + row, sw, 1);
+        er_blit_blend(s_row_buffer, stride, ER_ALPHA_OPAQUE, shadow_x, shadow_y + row, active_width, 1);
     }
 #else
-    (void)vp;
+    (void)view_props;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
 #endif
 }
