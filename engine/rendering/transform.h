@@ -463,7 +463,8 @@ static inline bool er_node_has_offset_translate(const ERNode* n)
  */
 static inline bool er_node_can_capture_transform(const ERNode* n)
 {
-    return er_node_has_complex_transform(n) && er_transform_source_fits((int)n->animated.w, (int)n->animated.h);
+    return er_node_has_complex_transform(n)
+           && er_transform_source_fits((int)n->animated.width, (int)n->animated.height);
 }
 
 #endif /* EMBEDDED_REACT_TRANSFORM_H */

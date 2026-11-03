@@ -187,7 +187,7 @@ static void fire(ERNode* node, EREventType event)
     EREventData data;
     memset(&data, 0, sizeof(data));
     data.x = 12;
-    node->events[event].fn(node, &data, node->events[event].user_data);
+    node->events[event].callback(node, &data, node->events[event].user_data);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -462,7 +462,7 @@ static void test_props(void)
     const uint16_t rotate = helper(types, 4, 0, 0, code, 6);
     CHECK(load(), "loads");
     call(rotate, 0, 0);
-    CHECK(slot_node(S_ROOT, 0)->tp_rotate_z == 45.0f, "PSETF and COMMIT reach the node");
+    CHECK(slot_node(S_ROOT, 0)->transform_rotate_z == 45.0f, "PSETF and COMMIT reach the node");
 
     erb_rt_props(ERB_NONE);
     erb_rt_pset_float(PROP_WIDTH, 10.5f);
@@ -769,7 +769,8 @@ static void test_queries(void)
     EREventData data;
     memset(&data, 0, sizeof(data));
     const ERResponderQueryHandler* handler = &root->queries[ER_QUERY_START_SHOULD_SET];
-    CHECK(handler->fn && handler->fn(root, &data, handler->user_data), "a responder query answers from its function");
+    CHECK(handler->callback && handler->callback(root, &data, handler->user_data),
+          "a responder query answers from its function");
 }
 
 static void test_timers_and_effects(void)
@@ -959,9 +960,9 @@ static void test_animations(void)
     CHECK(load(), "an interpolated binding loads");
     memcpy(&fade, slot(S_FADE), sizeof(fade));
     er_anim_value_set((ERAnimValueHandle)fade, 0.5f);
-    CHECK(slot_node(S_ROOT, 0)->tp_rotate_z == 45.0f, "and drives its prop through the interpolation");
+    CHECK(slot_node(S_ROOT, 0)->transform_rotate_z == 45.0f, "and drives its prop through the interpolation");
     er_anim_value_set((ERAnimValueHandle)fade, 3.0f);
-    CHECK(slot_node(S_ROOT, 0)->tp_rotate_z == 90.0f, "clamped past its range");
+    CHECK(slot_node(S_ROOT, 0)->transform_rotate_z == 90.0f, "clamped past its range");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1067,7 +1068,7 @@ static void test_mutations(void)
         ERNode* root = slot_node(S_ROOT, 0);
         for (int event = 0; root && event < ER_EVENT_TYPE_COUNT_; event++)
         {
-            if (root->events[event].fn)
+            if (root->events[event].callback)
             {
                 fire(root, (EREventType)event);
             }

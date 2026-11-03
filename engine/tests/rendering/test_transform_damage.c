@@ -439,7 +439,7 @@ static int check_spinner_bounded(int screen, float sx, float sy, const char* lab
            pw,
            ph,
            100.0 * (double)paint_area / (double)screen_area,
-           (double)spinner->tp_rotate_z);
+           (double)spinner->transform_rotate_z);
 
     /* Torn down deliberately, and in this order. er_node_destroy() frees ONE node — the caller unlinks
      * and destroys the subtree (see er_scene.h) — and the damage pre-pass sweeps every tag in the pool,

@@ -238,10 +238,10 @@ static void mask_init(ImgMask* m, const ERImageProps* props, const ERRect* box)
     m->y = box->y;
     m->w = box->w;
     m->h = box->h;
-    m->r_tl = props->border_tl_radius;
-    m->r_tr = props->border_tr_radius;
-    m->r_br = props->border_br_radius;
-    m->r_bl = props->border_bl_radius;
+    m->r_tl = props->border_top_left_radius;
+    m->r_tr = props->border_top_right_radius;
+    m->r_br = props->border_bottom_right_radius;
+    m->r_bl = props->border_bottom_left_radius;
     er_rrect_clamp_radii(m->w, m->h, &m->r_tl, &m->r_tr, &m->r_br, &m->r_bl);
     m->rounded = (m->r_tl > 0 || m->r_tr > 0 || m->r_br > 0 || m->r_bl > 0);
 }
@@ -543,14 +543,14 @@ static void render_region(const ImageEntry* img,
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_image_load(const char* name, const void* argb_buf, int w, int h)
+void er_image_load(const char* name, const void* argb_pixels, int width, int height)
 {
-    image_registry_store(name, argb_buf, w, h, ER_IMG_ARGB8888);
+    image_registry_store(name, argb_pixels, width, height, ER_IMG_ARGB8888);
 }
 
-void er_image_load_rgb565(const char* name, const void* rgb565_buf, int w, int h)
+void er_image_load_rgb565(const char* name, const void* rgb565_pixels, int width, int height)
 {
-    image_registry_store(name, rgb565_buf, w, h, ER_IMG_RGB565);
+    image_registry_store(name, rgb565_pixels, width, height, ER_IMG_RGB565);
 }
 
 bool er_image_exists(const char* name)

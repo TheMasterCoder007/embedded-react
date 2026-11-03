@@ -364,11 +364,11 @@ static void test_value_damage(void)
                 miny,
                 maxx,
                 maxy,
-                arc->vec_has_dirty,
-                arc->vec_dirty_x,
-                arc->vec_dirty_y,
-                arc->vec_dirty_w,
-                arc->vec_dirty_h);
+                arc->vector_has_dirty,
+                arc->vector_dirty_x,
+                arc->vector_dirty_y,
+                arc->vector_dirty_width,
+                arc->vector_dirty_height);
     }
     CHECK(dr.w < 120 && dr.h < 120, "value-change damage is a sliver, not the 200x200 box");
     /* Value end moved 202.5° → 216°; those pixels (and the knob spots) are inside the rect. */
@@ -690,14 +690,14 @@ static void test_child_knob(void)
                 "child computed %d,%d %dx%d animated %d,%d last_paint %d,%d %dx%d px(120,28)=%06x\n",
                 knob->computed.x,
                 knob->computed.y,
-                knob->computed.w,
-                knob->computed.h,
+                knob->computed.width,
+                knob->computed.height,
                 knob->animated.x,
                 knob->animated.y,
                 knob->last_paint_rect.x,
                 knob->last_paint_rect.y,
-                knob->last_paint_rect.w,
-                knob->last_paint_rect.h,
+                knob->last_paint_rect.width,
+                knob->last_paint_rect.height,
                 px(120, 28));
     CHECK(near_color(px(120, 28), 0x404040U, 2), "old knob spot erased (the track shows through)");
 
@@ -1060,7 +1060,7 @@ static void test_extreme_geometry(void)
     er_node_set_props(nan_arc, &nan_props);
     ERArcGeom geom;
     er_arc_geom(nan_arc, 0, 0, 200, 200, &geom);
-    CHECK(geom.a0 == 135.0f && geom.sweep == 270.0f, "a NaN start and sweep take the default dial");
+    CHECK(geom.start_angle == 135.0f && geom.sweep == 270.0f, "a NaN start and sweep take the default dial");
     CHECK(er_arc_value_frac(&geom, NAN) == 0.0f, "a NaN range or value is the start of the sweep");
     float knob_x, knob_y;
     er_arc_knob_center(&geom, NAN, &knob_x, &knob_y);

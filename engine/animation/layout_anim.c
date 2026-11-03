@@ -432,17 +432,17 @@ static void la_apply_pos(const ERLayoutAnim* layout_anim, float position, ERNode
 {
     const float from_x = (float)layout_anim->from.x;
     const float from_y = (float)layout_anim->from.y;
-    const float from_width = (float)layout_anim->from.w;
-    const float from_height = (float)layout_anim->from.h;
+    const float from_width = (float)layout_anim->from.width;
+    const float from_height = (float)layout_anim->from.height;
     const float to_x = (float)layout_anim->to.x;
     const float to_y = (float)layout_anim->to.y;
-    const float to_width = (float)layout_anim->to.w;
-    const float to_height = (float)layout_anim->to.h;
+    const float to_width = (float)layout_anim->to.width;
+    const float to_height = (float)layout_anim->to.height;
 
     node->animated.x = (int16_t)(from_x + (to_x - from_x) * position);
     node->animated.y = (int16_t)(from_y + (to_y - from_y) * position);
-    node->animated.w = (int16_t)(from_width + (to_width - from_width) * position);
-    node->animated.h = (int16_t)(from_height + (to_height - from_height) * position);
+    node->animated.width = (int16_t)(from_width + (to_width - from_width) * position);
+    node->animated.height = (int16_t)(from_height + (to_height - from_height) * position);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -462,22 +462,22 @@ static void la_post_layout_node(ERNode* node, bool has_pending, const ERLayoutAn
         return;
 
     const ERLayoutRect current = node->computed;
-    const ERLayoutRect previous = node->prev_layout;
+    const ERLayoutRect previous = node->previous_layout;
 
     /* A node whose last committed computed rect was zero-size is being created, not
      * updated.  Skip animation for new nodes — snap to computed immediately. */
-    const bool is_new = (previous.w == 0 && previous.h == 0);
+    const bool is_new = (previous.width == 0 && previous.height == 0);
 
     const bool changed = (current.x != node->animated.x || current.y != node->animated.y
-                          || current.w != node->animated.w || current.h != node->animated.h);
+                          || current.width != node->animated.width || current.height != node->animated.height);
 
     ERLayoutAnim* layout_anim = la_find_slot(node->tag);
 
     if (layout_anim)
     {
         /* Retarget an in-progress animation: restart from current display position. */
-        if (layout_anim->to.x != current.x || layout_anim->to.y != current.y || layout_anim->to.w != current.w
-            || layout_anim->to.h != current.h)
+        if (layout_anim->to.x != current.x || layout_anim->to.y != current.y || layout_anim->to.width != current.width
+            || layout_anim->to.height != current.height)
         {
             layout_anim->from = node->animated;
             layout_anim->to = current;

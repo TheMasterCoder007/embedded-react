@@ -333,38 +333,38 @@ static inline void xform_box_axis(float lo, float hi, int pad, int* pos, int* le
 bool er_transform_is_translate_only(const ERNode* n)
 {
 #if ERUI_3D_TRANSFORMS
-    if (n->tp_rotate_x != 0.0f || n->tp_rotate_y != 0.0f || n->tp_perspective != 0.0f)
+    if (n->transform_rotate_x != 0.0f || n->transform_rotate_y != 0.0f || n->transform_perspective != 0.0f)
         return false;
 #endif
-    return n->tp_scale_x == 0.0f && n->tp_scale_y == 0.0f && n->tp_rotate_z == 0.0f;
+    return n->transform_scale_x == 0.0f && n->transform_scale_y == 0.0f && n->transform_rotate_z == 0.0f;
 }
 
 #if ERUI_3D_TRANSFORMS
 bool er_transform_is_3d(const ERNode* n)
 {
-    return n->tp_rotate_x != 0.0f || n->tp_rotate_y != 0.0f || n->tp_perspective != 0.0f;
+    return n->transform_rotate_x != 0.0f || n->transform_rotate_y != 0.0f || n->transform_perspective != 0.0f;
 }
 
 void er_transform_compute_homography_3d(const ERNode* n, int ref_x, int ref_y, int w, int h, float H[9])
 {
-    const float sx = (n->tp_scale_x == 0.0f) ? 1.0f : n->tp_scale_x;
-    const float sy = (n->tp_scale_y == 0.0f) ? 1.0f : n->tp_scale_y;
-    const float rz = n->tp_rotate_z * ER_DEG2RAD;
-    const float rx = n->tp_rotate_x * ER_DEG2RAD;
-    const float ry = n->tp_rotate_y * ER_DEG2RAD;
+    const float sx = (n->transform_scale_x == 0.0f) ? 1.0f : n->transform_scale_x;
+    const float sy = (n->transform_scale_y == 0.0f) ? 1.0f : n->transform_scale_y;
+    const float rz = n->transform_rotate_z * ER_DEG2RAD;
+    const float rx = n->transform_rotate_x * ER_DEG2RAD;
+    const float ry = n->transform_rotate_y * ER_DEG2RAD;
 
     const float cx_t = cosf(rx), sx_t = sinf(rx);
     const float cy_t = cosf(ry), sy_t = sinf(ry);
     const float cz_t = cosf(rz), sz_t = sinf(rz);
 
     /* Pivot origin in layout space. */
-    const float ofx = (n->tp_origin_x < 0.0f) ? 0.5f : n->tp_origin_x;
-    const float ofy = (n->tp_origin_y < 0.0f) ? 0.5f : n->tp_origin_y;
+    const float ofx = (n->transform_origin_x < 0.0f) ? 0.5f : n->transform_origin_x;
+    const float ofy = (n->transform_origin_y < 0.0f) ? 0.5f : n->transform_origin_y;
     const float ox = (float)ref_x + ofx * (float)w;
     const float oy = (float)ref_y + ofy * (float)h;
-    const float tx = n->tp_translate_x;
-    const float ty = n->tp_translate_y;
-    const float d = n->tp_perspective;
+    const float tx = n->transform_translate_x;
+    const float ty = n->transform_translate_y;
+    const float d = n->transform_perspective;
 
     /* Upper-left 3×3 of M = RotY * RotX * RotZ (columns scaled by sx, sy).
      * Only columns 0 and 1 matter since z = 0 for all source points. */
@@ -620,9 +620,9 @@ void er_transform_source_replay_blit_3d(
 void er_transform_compute_matrix(
     const ERNode* n, int ref_x, int ref_y, int w, int h, float* a, float* b, float* c, float* d, float* tx, float* ty)
 {
-    const float sx = (n->tp_scale_x == 0.0f) ? 1.0f : n->tp_scale_x;
-    const float sy = (n->tp_scale_y == 0.0f) ? 1.0f : n->tp_scale_y;
-    const float theta = n->tp_rotate_z * ER_DEG2RAD;
+    const float sx = (n->transform_scale_x == 0.0f) ? 1.0f : n->transform_scale_x;
+    const float sy = (n->transform_scale_y == 0.0f) ? 1.0f : n->transform_scale_y;
+    const float theta = n->transform_rotate_z * ER_DEG2RAD;
     const float cos_t = cosf(theta);
     const float sin_t = sinf(theta);
 
@@ -635,14 +635,14 @@ void er_transform_compute_matrix(
     *d = sy * cos_t;
 
     /* Transform origin in layout/render space. */
-    const float ofx = (n->tp_origin_x < 0.0f) ? 0.5f : n->tp_origin_x;
-    const float ofy = (n->tp_origin_y < 0.0f) ? 0.5f : n->tp_origin_y;
+    const float ofx = (n->transform_origin_x < 0.0f) ? 0.5f : n->transform_origin_x;
+    const float ofy = (n->transform_origin_y < 0.0f) ? 0.5f : n->transform_origin_y;
     const float ox = (float)ref_x + ofx * (float)w;
     const float oy = (float)ref_y + ofy * (float)h;
 
     /* Total translation: pivot back + explicit translate − M * pivot. */
-    *tx = ox + n->tp_translate_x - (*a * ox + *c * oy);
-    *ty = oy + n->tp_translate_y - (*b * ox + *d * oy);
+    *tx = ox + n->transform_translate_x - (*a * ox + *c * oy);
+    *ty = oy + n->transform_translate_y - (*b * ox + *d * oy);
 }
 
 bool er_transform_invert(float a,

@@ -366,30 +366,30 @@ static bool read_numeric_value(ERNode* node, ERAnimProp prop, float* value)
             return true;
         }
         case ER_PROP_TRANSLATE_X:
-            *value = node->tp_translate_x;
+            *value = node->transform_translate_x;
             return true;
         case ER_PROP_TRANSLATE_Y:
-            *value = node->tp_translate_y;
+            *value = node->transform_translate_y;
             return true;
         case ER_PROP_SCALE_X:
-            *value = node->tp_scale_x;
+            *value = node->transform_scale_x;
             return true;
         case ER_PROP_SCALE_Y:
-            *value = node->tp_scale_y;
+            *value = node->transform_scale_y;
             return true;
         case ER_PROP_ROTATE_Z:
-            *value = node->tp_rotate_z;
+            *value = node->transform_rotate_z;
             return true;
         case ER_PROP_ROTATE_X:
-            *value = node->tp_rotate_x;
+            *value = node->transform_rotate_x;
             return true;
         case ER_PROP_ROTATE_Y:
-            *value = node->tp_rotate_y;
+            *value = node->transform_rotate_y;
             return true;
         case ER_PROP_SWITCH_THUMB:
             if (node->type != ER_NODE_SWITCH)
                 return false;
-            *value = node->switch_thumb_t;
+            *value = node->switch_thumb_progress;
             return true;
         case ER_PROP_ARC_VALUE:
             if (node->type != ER_NODE_ARC)
@@ -445,9 +445,10 @@ static bool read_color_value(const ERNode* node, ERAnimProp prop, uint32_t* colo
 static void update_has_transform(ERNode* node)
 {
     const bool had_transform = node->has_transform;
-    node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
-                           || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
-                           || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
+    node->has_transform =
+        (node->transform_translate_x != 0.0f || node->transform_translate_y != 0.0f || node->transform_scale_x != 0.0f
+         || node->transform_scale_y != 0.0f || node->transform_rotate_z != 0.0f || node->transform_rotate_x != 0.0f
+         || node->transform_rotate_y != 0.0f || node->transform_perspective != 0.0f);
     /* The compositor caches prune and cull flags derived from this one, normally refreshed by a layout pass
      * an animation-only frame skips. Nothing moved, so ask for the bounds refresh alone: when a transform
      * appears or goes, and when one turns complex (a rotate or scale joining a translate) while the cached
@@ -455,7 +456,7 @@ static void update_has_transform(ERNode* node)
      * costs a cull, never a pixel, until the next layout pass clears it. */
     bool refresh = node->has_transform != had_transform;
 #if ERUI_TRANSFORMS_FULL
-    if (er_node_has_complex_transform(node) && !node->subtree_complex_xf)
+    if (er_node_has_complex_transform(node) && !node->subtree_complex_transform)
         refresh = true;
 #endif
     if (refresh)
@@ -503,49 +504,49 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
         }
         case ER_PROP_TRANSLATE_X:
             value = er_px_offset(value);
-            if (node->tp_translate_x == value)
+            if (node->transform_translate_x == value)
                 return false;
-            node->tp_translate_x = value;
+            node->transform_translate_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_TRANSLATE_Y:
             value = er_px_offset(value);
-            if (node->tp_translate_y == value)
+            if (node->transform_translate_y == value)
                 return false;
-            node->tp_translate_y = value;
+            node->transform_translate_y = value;
             update_has_transform(node);
             return true;
         case ER_PROP_SCALE_X:
-            if (node->tp_scale_x == value)
+            if (node->transform_scale_x == value)
                 return false;
-            node->tp_scale_x = value;
+            node->transform_scale_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_SCALE_Y:
-            if (node->tp_scale_y == value)
+            if (node->transform_scale_y == value)
                 return false;
-            node->tp_scale_y = value;
+            node->transform_scale_y = value;
             update_has_transform(node);
             return true;
         case ER_PROP_ROTATE_Z:
-            if (node->tp_rotate_z == value)
+            if (node->transform_rotate_z == value)
                 return false;
-            node->tp_rotate_z = value;
+            node->transform_rotate_z = value;
             /* ActivityIndicator uses rotate_z as its internal spin angle; skip has_transform
              * so the affine-transform render path does not try to rasterize it into scratch. */
             if (node->type != ER_NODE_ACTIVITY_INDICATOR)
                 update_has_transform(node);
             return true;
         case ER_PROP_ROTATE_X:
-            if (node->tp_rotate_x == value)
+            if (node->transform_rotate_x == value)
                 return false;
-            node->tp_rotate_x = value;
+            node->transform_rotate_x = value;
             update_has_transform(node);
             return true;
         case ER_PROP_ROTATE_Y:
-            if (node->tp_rotate_y == value)
+            if (node->transform_rotate_y == value)
                 return false;
-            node->tp_rotate_y = value;
+            node->transform_rotate_y = value;
             update_has_transform(node);
             return true;
         case ER_PROP_SWITCH_THUMB:
@@ -556,9 +557,9 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
                 value = 0.0f;
             if (value > 1.0f)
                 value = 1.0f;
-            if (node->switch_thumb_t == value)
+            if (node->switch_thumb_progress == value)
                 return false;
-            node->switch_thumb_t = value;
+            node->switch_thumb_progress = value;
             return true;
         }
         case ER_PROP_ARC_VALUE:

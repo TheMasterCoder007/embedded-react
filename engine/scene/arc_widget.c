@@ -42,19 +42,44 @@
 /** @brief Minimum touch slop either side of the ring (px) — fingers are wider than a 4 px track. */
 #define ARC_HIT_SLOP_MIN 8
 
+/** @brief Extra touch radius around a drawn knob (px). */
+#define ARC_KNOB_HIT_SLOP 4.0f
+
+/** @brief Default colours, mirrored from the ERProps docs. */
+#define ARC_DEFAULT_BAND_COLOR 0x33000000U
+#define ARC_DEFAULT_TRACK_COLOR 0xFF3A3A3CU
+#define ARC_DEFAULT_INDICATOR_COLOR 0xFF0A84FFU
+#define ARC_DEFAULT_KNOB_COLOR 0xFFFFFFFFU
+
+/** @brief Default geometry, mirrored from the ERProps docs. */
+#define ARC_DEFAULT_SWEEP 270.0f       /**< Degrees. */
+#define ARC_DEFAULT_START_ANGLE 135.0f /**< Degrees, used with the default sweep. */
+#define ARC_DEFAULT_RANGE 100.0f       /**< max - min when max is not above min. */
+#define ARC_DEFAULT_WIDTH_DIVISOR 10   /**< Default track width is the box's shorter side over this. */
+#define ARC_MIN_WIDTH 2.0f             /**< Thinnest default track (px). */
+#define ARC_DEFAULT_KNOB_GROWTH 8      /**< Default knob diameter past the track width (px). */
+#define ARC_DEFAULT_GAP_ANGLE 2.0f     /**< Degrees between segments. */
+#define ARC_DEFAULT_STEP 1.0f
+
+/** @brief Antialiasing fringe past a knob's edge (px), for the overhang. */
+#define ARC_AA_FRINGE 1.0f
+
+/** @brief Padding on value-change damage (px): the antialiasing fringe plus rounding. */
+#define ARC_DAMAGE_PAD 1.5f
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static inline float clampf(float v, float lo, float hi)
+static inline float clampf(float value, float low, float high)
 {
-    return v < lo ? lo : (v > hi ? hi : v);
+    return value < low ? low : (value > high ? high : value);
 }
 
-/** @brief Default colours, mirrored from the ERProps docs. */
-static inline uint32_t col_or(uint32_t c, uint32_t dflt)
+/** @brief The colour, or its default when it is 0. */
+static inline uint32_t col_or(uint32_t color, uint32_t fallback)
 {
-    return c ? c : dflt;
+    return color ? color : fallback;
 }
 
 /**
@@ -69,276 +94,285 @@ static inline uint32_t col_or(uint32_t c, uint32_t dflt)
  * every pixel between the indicator's ends whenever either end moves, so if the two ever disagreed a
  * value change would leave stale colours behind — keep them reading the same predicate.
  */
-static bool arc_grad_band_anchored(const ERArcProps* p)
+static bool arc_grad_band_anchored(const ERArcProps* props)
 {
-    if (p->gradient_type != ER_GRADIENT_CONIC || p->gradient_stop_count < 2U)
+    if (props->gradient_type != ER_GRADIENT_CONIC || props->gradient_stop_count < 2U)
         return false;
-    return p->range != 0U;
+    return props->range != 0U;
 }
 
 /** @brief The first child a knob-child arc anchors (display:none children are skipped). */
-static ERNode* knob_child(const ERNode* n)
+static ERNode* knob_child(const ERNode* node)
 {
-    uint16_t t = n->first_child_tag;
-    while (t != ER_INVALID_TAG)
+    uint16_t tag = node->first_child_tag;
+    while (tag != ER_INVALID_TAG)
     {
-        ERNode* c = er_get_node(t);
-        if (!c)
+        ERNode* child = er_get_node(tag);
+        if (!child)
             return NULL;
-        if (c->layout.display != ER_DISPLAY_NONE)
-            return c;
-        t = c->next_sibling_tag;
+        if (child->layout.display != ER_DISPLAY_NONE)
+            return child;
+        tag = child->next_sibling_tag;
     }
     return NULL;
 }
 
-/** @brief Unions a node-local rect into the node's pending vec_dirty rect (or starts one). */
-static void union_local_dirty(ERNode* n, int x0, int y0, int x1, int y1)
+/** @brief Unions a node-local rect into the node's pending vector_dirty rect (or starts one). */
+static void union_local_dirty(ERNode* node, int left, int top, int right, int bottom)
 {
-    if (n->vec_has_dirty)
+    if (node->vector_has_dirty)
     {
-        const int ox0 = n->vec_dirty_x, oy0 = n->vec_dirty_y;
-        const int ox1 = ox0 + n->vec_dirty_w, oy1 = oy0 + n->vec_dirty_h;
-        if (ox0 < x0)
-            x0 = ox0;
-        if (oy0 < y0)
-            y0 = oy0;
-        if (ox1 > x1)
-            x1 = ox1;
-        if (oy1 > y1)
-            y1 = oy1;
+        const int old_left = node->vector_dirty_x, old_top = node->vector_dirty_y;
+        const int old_right = old_left + node->vector_dirty_width, old_bottom = old_top + node->vector_dirty_height;
+        if (old_left < left)
+            left = old_left;
+        if (old_top < top)
+            top = old_top;
+        if (old_right > right)
+            right = old_right;
+        if (old_bottom > bottom)
+            bottom = old_bottom;
     }
-    n->vec_dirty_x = (int16_t)x0;
-    n->vec_dirty_y = (int16_t)y0;
-    n->vec_dirty_w = (int16_t)(x1 - x0);
-    n->vec_dirty_h = (int16_t)(y1 - y0);
-    n->vec_has_dirty = (x1 > x0 && y1 > y0);
+    node->vector_dirty_x = (int16_t)left;
+    node->vector_dirty_y = (int16_t)top;
+    node->vector_dirty_width = (int16_t)(right - left);
+    node->vector_dirty_height = (int16_t)(bottom - top);
+    node->vector_has_dirty = (right > left && bottom > top);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_arc_geom(const ERNode* n, int px, int py, int w, int h, ERArcGeom* g)
+void er_arc_geom(const ERNode* node, int box_x, int box_y, int box_width, int box_height, ERArcGeom* geometry)
 {
-    const ERArcProps* p = &n->props.arc;
+    const ERArcProps* props = &node->props.arc;
 
-    er_layout_content_box(&n->layout, &px, &py, &w, &h);
+    er_layout_content_box(&node->layout, &box_x, &box_y, &box_width, &box_height);
 
-    const int side = (w < h) ? w : h;
-    const float R = (float)side * 0.5f;
+    const int side = (box_width < box_height) ? box_width : box_height;
+    const float outer_radius = (float)side * 0.5f;
 
-    float width = (float)p->width;
+    float width = (float)props->width;
     if (width <= 0.0f)
     {
-        width = (float)(side / 10);
-        if (width < 2.0f)
-            width = 2.0f;
+        width = (float)(side / ARC_DEFAULT_WIDTH_DIVISOR);
+        if (width < ARC_MIN_WIDTH)
+            width = ARC_MIN_WIDTH;
     }
-    if (width > R)
-        width = R;
-    float band = (float)(p->band_width > 0 ? p->band_width : 0);
-    if (band > 2.0f * R)
-        band = 2.0f * R;
+    if (width > outer_radius)
+        width = outer_radius;
+    float band = (float)(props->band_width > 0 ? props->band_width : 0);
+    if (band > 2.0f * outer_radius)
+        band = 2.0f * outer_radius;
 
-    g->cx = (float)px + (float)w * 0.5f;
-    g->cy = (float)py + (float)h * 0.5f;
-    g->width = width;
-    g->band = band;
-    g->half_ext = ((band > width) ? band : width) * 0.5f;
-    g->r_mid = R - g->half_ext;
-    if (g->r_mid < 0.0f)
-        g->r_mid = 0.0f;
+    geometry->center_x = (float)box_x + (float)box_width * 0.5f;
+    geometry->center_y = (float)box_y + (float)box_height * 0.5f;
+    geometry->width = width;
+    geometry->band = band;
+    geometry->half_extent = ((band > width) ? band : width) * 0.5f;
+    geometry->mid_radius = outer_radius - geometry->half_extent;
+    if (geometry->mid_radius < 0.0f)
+        geometry->mid_radius = 0.0f;
 
-    float sweep = p->sweep_angle;
-    float a0 = p->start_angle;
-    if (!(fabsf(a0) < INFINITY)) /* app maths can reach these, and a NaN would reach the knob's int casts */
-        a0 = 0.0f;
+    float sweep = props->sweep_angle;
+    float start_angle = props->start_angle;
+    if (!(fabsf(start_angle) < INFINITY)) /* app maths can reach these, and a NaN would reach the knob's int casts */
+        start_angle = 0.0f;
     if (!(sweep > 0.0f))
     {
-        sweep = 270.0f;
-        if (a0 == 0.0f)
-            a0 = 135.0f;
+        sweep = ARC_DEFAULT_SWEEP;
+        if (start_angle == 0.0f)
+            start_angle = ARC_DEFAULT_START_ANGLE;
     }
     if (sweep > 360.0f)
         sweep = 360.0f;
-    g->a0 = a0;
-    g->sweep = sweep;
+    geometry->start_angle = start_angle;
+    geometry->sweep = sweep;
 
-    g->min = p->min;
-    g->max = (p->max > p->min) ? p->max : (p->min + 100.0f);
+    geometry->min = props->min;
+    geometry->max = (props->max > props->min) ? props->max : (props->min + ARC_DEFAULT_RANGE);
 
-    if (p->knob == ER_ARC_KNOB_CIRCLE || p->knob == ER_ARC_KNOB_IMAGE)
+    if (props->knob == ER_ARC_KNOB_CIRCLE || props->knob == ER_ARC_KNOB_IMAGE)
     {
-        int ks = p->knob_size;
-        if (ks <= 0)
-            ks = (int)width + 8;
-        g->knob_size = ks;
+        int knob_size = props->knob_size;
+        if (knob_size <= 0)
+            knob_size = (int)width + ARC_DEFAULT_KNOB_GROWTH;
+        geometry->knob_size = knob_size;
     }
     else
     {
-        g->knob_size = 0;
+        geometry->knob_size = 0;
     }
 }
 
-float er_arc_value_frac(const ERArcGeom* g, float value)
+float er_arc_value_frac(const ERArcGeom* geometry, float value)
 {
-    const float span = g->max - g->min;
+    const float span = geometry->max - geometry->min;
     if (!(span > 0.0f))
         return 0.0f;
-    const float frac = clampf((value - g->min) / span, 0.0f, 1.0f);
-    return frac == frac ? frac : 0.0f;
+    const float fraction = clampf((value - geometry->min) / span, 0.0f, 1.0f);
+    return fraction == fraction ? fraction : 0.0f;
 }
 
-float er_arc_value_angle(const ERArcGeom* g, float value)
+float er_arc_value_angle(const ERArcGeom* geometry, float value)
 {
-    return g->a0 + g->sweep * er_arc_value_frac(g, value);
+    return geometry->start_angle + geometry->sweep * er_arc_value_frac(geometry, value);
 }
 
-void er_arc_knob_center(const ERArcGeom* g, float value, float* kx, float* ky)
+void er_arc_knob_center(const ERArcGeom* geometry, float value, float* knob_x, float* knob_y)
 {
-    const float a = er_arc_value_angle(g, value) * ER_DEG2RAD;
-    *kx = g->cx + g->r_mid * cosf(a);
-    *ky = g->cy + g->r_mid * sinf(a);
+    const float angle = er_arc_value_angle(geometry, value) * ER_DEG2RAD;
+    *knob_x = geometry->center_x + geometry->mid_radius * cosf(angle);
+    *knob_y = geometry->center_y + geometry->mid_radius * sinf(angle);
 }
 
-int er_arc_refresh_overhang(ERNode* n)
+int er_arc_refresh_overhang(ERNode* node)
 {
-    ERArcGeom g;
-    er_arc_geom(n, 0, 0, (int)n->computed.w, (int)n->computed.h, &g);
-    int over = 0;
-    if (g.knob_size > 0)
+    ERArcGeom geometry;
+    er_arc_geom(node, 0, 0, (int)node->computed.width, (int)node->computed.height, &geometry);
+    int overhang = 0;
+    if (geometry.knob_size > 0)
     {
-        const float reach = (float)g.knob_size * 0.5f + 1.0f; /* + AA fringe */
-        const float o = reach - g.half_ext;
-        if (o > 0.0f)
-            over = (int)ceilf(o);
+        const float reach = (float)geometry.knob_size * 0.5f + ARC_AA_FRINGE;
+        const float excess = reach - geometry.half_extent;
+        if (excess > 0.0f)
+            overhang = (int)ceilf(excess);
     }
-    n->arc_overhang = (int16_t)over;
-    return over;
+    node->arc_overhang = (int16_t)overhang;
+    return overhang;
 }
 
-void er_arc_render(ERNode* n, int px, int py, int w, int h)
+void er_arc_render(ERNode* node, int box_x, int box_y, int width, int height)
 {
-    const ERArcProps* p = &n->props.arc;
-    ERArcGeom g;
-    er_arc_geom(n, px, py, w, h, &g);
-    er_arc_refresh_overhang(n);
+    const ERArcProps* props = &node->props.arc;
+    ERArcGeom geometry;
+    er_arc_geom(node, box_x, box_y, width, height, &geometry);
+    er_arc_refresh_overhang(node);
 
     /* Rasterize only where this commit is repainting: the node box (plus the knob overhang) intersected
      * with the active damage scissor — the whole point of the tight value-change damage. */
-    const int over = (int)n->arc_overhang;
-    int clx0 = px - over, cly0 = py - over, clx1 = px + w + over, cly1 = py + h + over;
-    int gx, gy, gw, gh;
-    if (er_get_clip_rect(&gx, &gy, &gw, &gh))
+    const int overhang = (int)node->arc_overhang;
+    int clip_left = box_x - overhang, clip_top = box_y - overhang, clip_right = box_x + width + overhang,
+        clip_bottom = box_y + height + overhang;
+    int scissor_x, scissor_y, scissor_width, scissor_height;
+    if (er_get_clip_rect(&scissor_x, &scissor_y, &scissor_width, &scissor_height))
     {
-        if (gx > clx0)
-            clx0 = gx;
-        if (gy > cly0)
-            cly0 = gy;
-        if (gx + gw < clx1)
-            clx1 = gx + gw;
-        if (gy + gh < cly1)
-            cly1 = gy + gh;
+        if (scissor_x > clip_left)
+            clip_left = scissor_x;
+        if (scissor_y > clip_top)
+            clip_top = scissor_y;
+        if (scissor_x + scissor_width < clip_right)
+            clip_right = scissor_x + scissor_width;
+        if (scissor_y + scissor_height < clip_bottom)
+            clip_bottom = scissor_y + scissor_height;
     }
-    if (clx1 <= clx0 || cly1 <= cly0)
+    if (clip_right <= clip_left || clip_bottom <= clip_top)
     {
-        n->arc_painted_value = n->arc_value;
+        node->arc_painted_value = node->arc_value;
         return;
     }
 
-    ERArcSector s;
-    memset(&s, 0, sizeof(s));
-    s.cx = g.cx;
-    s.cy = g.cy;
-    s.cap = p->cap;
-    s.clip_x0 = clx0;
-    s.clip_y0 = cly0;
-    s.clip_x1 = clx1;
-    s.clip_y1 = cly1;
-    if (p->segments > 1U)
+    ERArcSector sector;
+    memset(&sector, 0, sizeof(sector));
+    sector.cx = geometry.center_x;
+    sector.cy = geometry.center_y;
+    sector.cap = props->cap;
+    sector.clip_x0 = clip_left;
+    sector.clip_y0 = clip_top;
+    sector.clip_x1 = clip_right;
+    sector.clip_y1 = clip_bottom;
+    if (props->segments > 1U)
     {
-        s.segments = p->segments;
-        s.seg_a0 = g.a0;
-        s.seg_a1 = g.a0 + g.sweep;
-        s.gap_deg = (p->gap_angle > 0.0f) ? p->gap_angle : 2.0f;
+        sector.segments = props->segments;
+        sector.seg_a0 = geometry.start_angle;
+        sector.seg_a1 = geometry.start_angle + geometry.sweep;
+        sector.gap_deg = (props->gap_angle > 0.0f) ? props->gap_angle : ARC_DEFAULT_GAP_ANGLE;
     }
 
     /* 1. Backing band (wider than the track, centred on the same mid-line). */
-    if (g.band > 0.0f)
+    if (geometry.band > 0.0f)
     {
-        s.r_outer = g.r_mid + g.band * 0.5f;
-        s.r_inner = g.r_mid - g.band * 0.5f;
-        s.a0 = g.a0;
-        s.a1 = g.a0 + g.sweep;
-        s.color = col_or(p->band_color, 0x33000000U);
-        s.grad_type = ER_GRADIENT_NONE;
-        er_arc_fill_sector(&s);
+        sector.r_outer = geometry.mid_radius + geometry.band * 0.5f;
+        sector.r_inner = geometry.mid_radius - geometry.band * 0.5f;
+        sector.a0 = geometry.start_angle;
+        sector.a1 = geometry.start_angle + geometry.sweep;
+        sector.color = col_or(props->band_color, ARC_DEFAULT_BAND_COLOR);
+        sector.grad_type = ER_GRADIENT_NONE;
+        er_arc_fill_sector(&sector);
     }
 
     /* 2. Track over the whole sweep. */
-    s.r_outer = g.r_mid + g.width * 0.5f;
-    s.r_inner = g.r_mid - g.width * 0.5f;
-    s.a0 = g.a0;
-    s.a1 = g.a0 + g.sweep;
-    s.color = col_or(p->track_color, 0xFF3A3A3CU);
-    s.grad_type = ER_GRADIENT_NONE;
-    er_arc_fill_sector(&s);
+    sector.r_outer = geometry.mid_radius + geometry.width * 0.5f;
+    sector.r_inner = geometry.mid_radius - geometry.width * 0.5f;
+    sector.a0 = geometry.start_angle;
+    sector.a1 = geometry.start_angle + geometry.sweep;
+    sector.color = col_or(props->track_color, ARC_DEFAULT_TRACK_COLOR);
+    sector.grad_type = ER_GRADIENT_NONE;
+    er_arc_fill_sector(&sector);
 
     /* 3. Indicator. Single-ended it runs from the sweep start to the value; in RANGE mode it is the band
      *    BETWEEN the two values, so a dual-setpoint dial (a thermostat's AUTO lo..hi) is one node. */
-    const float frac = er_arc_value_frac(&g, n->arc_value);
-    const float frac0 = p->range ? er_arc_value_frac(&g, n->arc_value_start) : 0.0f;
-    if (frac > frac0)
+    const float fraction = er_arc_value_frac(&geometry, node->arc_value);
+    const float start_fraction = props->range ? er_arc_value_frac(&geometry, node->arc_value_start) : 0.0f;
+    if (fraction > start_fraction)
     {
-        s.a0 = g.a0 + g.sweep * frac0;
-        s.a1 = g.a0 + g.sweep * frac;
-        s.color = col_or(p->indicator_color, 0xFF0A84FFU);
-        if ((p->gradient_type == ER_GRADIENT_CONIC || p->gradient_type == ER_GRADIENT_RADIAL)
-            && p->gradient_stop_count >= 2U)
+        sector.a0 = geometry.start_angle + geometry.sweep * start_fraction;
+        sector.a1 = geometry.start_angle + geometry.sweep * fraction;
+        sector.color = col_or(props->indicator_color, ARC_DEFAULT_INDICATOR_COLOR);
+        if ((props->gradient_type == ER_GRADIENT_CONIC || props->gradient_type == ER_GRADIENT_RADIAL)
+            && props->gradient_stop_count >= 2U)
         {
-            s.grad_type = p->gradient_type;
-            s.grad_stops = p->gradient_stops;
-            s.grad_stop_count = p->gradient_stop_count;
+            sector.grad_type = props->gradient_type;
+            sector.grad_stops = props->gradient_stops;
+            sector.grad_stop_count = props->gradient_stop_count;
             /* Where the ramp is anchored — see arc_grad_band_anchored(). BAND spans the lit indicator
              * (a thermostat's AUTO warm→cool, always covering exactly what is drawn); SWEEP spans the
              * whole dial (a progress ring's 0-100 scale, colours fixed to positions). */
-            const bool band_grad = arc_grad_band_anchored(p);
-            s.grad_a0 = band_grad ? s.a0 : g.a0;
-            s.grad_a1 = band_grad ? s.a1 : (g.a0 + g.sweep);
+            const bool band_gradient = arc_grad_band_anchored(props);
+            sector.grad_a0 = band_gradient ? sector.a0 : geometry.start_angle;
+            sector.grad_a1 = band_gradient ? sector.a1 : (geometry.start_angle + geometry.sweep);
         }
-        er_arc_fill_sector(&s);
+        er_arc_fill_sector(&sector);
     }
 
     /* 4. Knob — one at the value end, plus one at the low end in RANGE mode. */
-    if (g.knob_size > 0)
+    if (geometry.knob_size > 0)
     {
-        const int ends = p->range ? 2 : 1;
-        for (int e = 0; e < ends; e++)
+        const int ends = props->range ? 2 : 1;
+        for (int end_index = 0; end_index < ends; end_index++)
         {
-            float kx, ky;
-            er_arc_knob_center(&g, (e == 0) ? n->arc_value : n->arc_value_start, &kx, &ky);
-            const int ks = g.knob_size;
-            const int kx0 = (int)floorf(kx - (float)ks * 0.5f + 0.5f);
-            const int ky0 = (int)floorf(ky - (float)ks * 0.5f + 0.5f);
-            if (p->knob == ER_ARC_KNOB_CIRCLE)
+            float knob_x, knob_y;
+            er_arc_knob_center(&geometry, (end_index == 0) ? node->arc_value : node->arc_value_start, &knob_x, &knob_y);
+            const int knob_size = geometry.knob_size;
+            const int knob_left = (int)floorf(knob_x - (float)knob_size * 0.5f + 0.5f);
+            const int knob_top = (int)floorf(knob_y - (float)knob_size * 0.5f + 0.5f);
+            if (props->knob == ER_ARC_KNOB_CIRCLE)
             {
-                const uint32_t fill = col_or(p->knob_color, 0xFFFFFFFFU);
-                const uint32_t bc = col_or(p->knob_border_color, col_or(p->indicator_color, 0xFF0A84FFU));
-                er_rrect_fill_bordered(fill, bc, (int)p->knob_border_width, kx0, ky0, ks, ks, ks / 2);
+                const uint32_t fill = col_or(props->knob_color, ARC_DEFAULT_KNOB_COLOR);
+                const uint32_t border_color =
+                    col_or(props->knob_border_color, col_or(props->indicator_color, ARC_DEFAULT_INDICATOR_COLOR));
+                er_rrect_fill_bordered(fill,
+                                       border_color,
+                                       (int)props->knob_border_width,
+                                       knob_left,
+                                       knob_top,
+                                       knob_size,
+                                       knob_size,
+                                       knob_size / 2);
             }
             else /* ER_ARC_KNOB_IMAGE */
             {
-                ERImageProps ip;
-                memset(&ip, 0, sizeof(ip));
-                memcpy(ip.image_name, p->image_name, sizeof(ip.image_name));
-                ip.resize_mode = ER_RESIZE_CONTAIN;
-                er_image_render(&ip, kx0, ky0, ks, ks, NULL);
+                ERImageProps image_props;
+                memset(&image_props, 0, sizeof(image_props));
+                memcpy(image_props.image_name, props->image_name, sizeof(image_props.image_name));
+                image_props.resize_mode = ER_RESIZE_CONTAIN;
+                er_image_render(&image_props, knob_left, knob_top, knob_size, knob_size, NULL);
             }
         }
     }
 
-    n->arc_painted_value = n->arc_value;
+    node->arc_painted_value = node->arc_value;
 }
 
 /**
@@ -350,34 +384,34 @@ void er_arc_render(ERNode* n, int px, int py, int w, int h)
  * assigned until the recursion unwound, each level re-read the stale endpoint and bounced back — a
  * min_span wide enough to move BOTH ends recursed until the stack ran out.
  *
- * @param[in,out] n    Arc node.
- * @param[in]     low  true for the RANGE band's low end (arc_value_start), false for the value end.
- * @param[in]     v    Final value for that end.
+ * @param[in,out] node   Arc node.
+ * @param[in]     low    true for the RANGE band's low end (arc_value_start), false for the value end.
+ * @param[in]     value  Final value for that end.
  *
  * @return true when the stored value actually changed.
  */
-static bool arc_set_end(ERNode* n, bool low, float v)
+static bool arc_set_end(ERNode* node, bool low, float value)
 {
-    float* const slot = low ? &n->arc_value_start : &n->arc_value;
-    const float old = *slot;
-    if (v == old)
+    float* const slot = low ? &node->arc_value_start : &node->arc_value;
+    const float old_value = *slot;
+    if (value == old_value)
         return false;
-    *slot = v;
+    *slot = value;
 
-    const int w = (int)n->computed.w, h = (int)n->computed.h;
-    if (w <= 0 || h <= 0)
+    const int width = (int)node->computed.width, height = (int)node->computed.height;
+    if (width <= 0 || height <= 0)
         return true; /* not laid out yet: the first paint covers everything */
-    ERArcGeom g;
-    er_arc_geom(n, 0, 0, w, h, &g);
+    ERArcGeom geometry;
+    er_arc_geom(node, 0, 0, width, height, &geometry);
 
     /* Damage: normally just the sub-arc this end swept (padded for the AA fringe and a round cap), plus
      * that end's knob in its old and new spots. Both radii of the WIDEST ring, so a band under the
      * indicator is repainted where the track/indicator fringe lands on it. The other end is damaged by
      * its own arc_set_end call when a push moves it too. */
-    float a_old = er_arc_value_angle(&g, old);
-    float a_new = er_arc_value_angle(&g, v);
-    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
-    const float pad = 1.5f + ((n->props.arc.cap == ER_ARC_CAP_ROUND) ? g.width * 0.5f : 0.0f);
+    float old_angle = er_arc_value_angle(&geometry, old_value);
+    float new_angle = er_arc_value_angle(&geometry, value);
+    float left = 1e9f, top = 1e9f, right = -1e9f, bottom = -1e9f;
+    const float fringe = ARC_DAMAGE_PAD + ((node->props.arc.cap == ER_ARC_CAP_ROUND) ? geometry.width * 0.5f : 0.0f);
 
     /* EXCEPTION: a BAND-anchored conic ramp moves with the indicator, so shifting either end re-maps the
      * colour of every pixel between them — the swept sliver is NOT all that changed. Widen to cover the
@@ -386,49 +420,61 @@ static bool arc_set_end(ERNode* n, bool low, float v)
      * previous frame's colours until something forces a full repaint, which on a panel reads as a
      * gradient that only catches up when the finger lifts. A solid, radial, or SWEEP-anchored paint
      * re-maps nothing, so those keep the tight sliver. */
-    if (arc_grad_band_anchored(&n->props.arc))
+    if (arc_grad_band_anchored(&node->props.arc))
     {
         /* The other end. On a single-ended arc the indicator starts at the sweep start, which never
          * moves. When a push moves BOTH ends, each call reads the other's already-final value, so the
          * two damage rects together still cover the old band and the new one. */
-        const float a_fix = n->props.arc.range ? er_arc_value_angle(&g, low ? n->arc_value : n->arc_value_start) : g.a0;
+        const float fixed_angle = node->props.arc.range
+                                      ? er_arc_value_angle(&geometry, low ? node->arc_value : node->arc_value_start)
+                                      : geometry.start_angle;
         /* Span the extremes of all three angles, so this is right whichever direction the end moved. */
-        float lo_a = a_old, hi_a = a_old;
-        if (a_new < lo_a)
-            lo_a = a_new;
-        if (a_new > hi_a)
-            hi_a = a_new;
-        if (a_fix < lo_a)
-            lo_a = a_fix;
-        if (a_fix > hi_a)
-            hi_a = a_fix;
-        a_old = lo_a;
-        a_new = hi_a;
+        float low_angle = old_angle, high_angle = old_angle;
+        if (new_angle < low_angle)
+            low_angle = new_angle;
+        if (new_angle > high_angle)
+            high_angle = new_angle;
+        if (fixed_angle < low_angle)
+            low_angle = fixed_angle;
+        if (fixed_angle > high_angle)
+            high_angle = fixed_angle;
+        old_angle = low_angle;
+        new_angle = high_angle;
     }
-    er_arc_sector_bbox(g.cx, g.cy, g.r_mid - g.half_ext, g.r_mid + g.half_ext, a_old, a_new, pad, &x0, &y0, &x1, &y1);
-    if (g.knob_size > 0)
+    er_arc_sector_bbox(geometry.center_x,
+                       geometry.center_y,
+                       geometry.mid_radius - geometry.half_extent,
+                       geometry.mid_radius + geometry.half_extent,
+                       old_angle,
+                       new_angle,
+                       fringe,
+                       &left,
+                       &top,
+                       &right,
+                       &bottom);
+    if (geometry.knob_size > 0)
     {
-        const float kr = (float)g.knob_size * 0.5f + 1.5f;
-        const float ends[2] = {old, v};
-        for (int e = 0; e < 2; e++)
+        const float knob_radius = (float)geometry.knob_size * 0.5f + ARC_DAMAGE_PAD;
+        const float end_values[2] = {old_value, value};
+        for (int end_index = 0; end_index < 2; end_index++)
         {
-            float kx, ky;
-            er_arc_knob_center(&g, ends[e], &kx, &ky);
-            if (kx - kr < x0)
-                x0 = kx - kr;
-            if (ky - kr < y0)
-                y0 = ky - kr;
-            if (kx + kr > x1)
-                x1 = kx + kr;
-            if (ky + kr > y1)
-                y1 = ky + kr;
+            float knob_x, knob_y;
+            er_arc_knob_center(&geometry, end_values[end_index], &knob_x, &knob_y);
+            if (knob_x - knob_radius < left)
+                left = knob_x - knob_radius;
+            if (knob_y - knob_radius < top)
+                top = knob_y - knob_radius;
+            if (knob_x + knob_radius > right)
+                right = knob_x + knob_radius;
+            if (knob_y + knob_radius > bottom)
+                bottom = knob_y + knob_radius;
         }
     }
-    union_local_dirty(n, (int)floorf(x0), (int)floorf(y0), (int)ceilf(x1), (int)ceilf(y1));
+    union_local_dirty(node, (int)floorf(left), (int)floorf(top), (int)ceilf(right), (int)ceilf(bottom));
 
     /* An anchored child is a real node at a new position: re-run layout so it is re-anchored and the
      * subtree prune bounds cover its new spot (its move then damages itself through the usual path). */
-    if (n->props.arc.knob == ER_ARC_KNOB_CHILD)
+    if (node->props.arc.knob == ER_ARC_KNOB_CHILD)
         er_request_layout_pass();
     return true;
 }
@@ -445,222 +491,247 @@ static bool arc_set_end(ERNode* n, bool low, float v)
  * Both final values are computed here and written by arc_set_end() below, so at most two writes happen
  * and neither can trigger another: no recursion, and nothing reads a half-updated endpoint.
  *
- * @param[in,out] n    Arc node.
- * @param[in]     low  true to move the band's low end (arc_value_start), false for the value end.
- * @param[in]     v    Requested value; clamped to the range and to what min_span leaves free.
+ * @param[in,out] node   Arc node.
+ * @param[in]     low    true to move the band's low end (arc_value_start), false for the value end.
+ * @param[in]     value  Requested value; clamped to the range and to what min_span leaves free.
  *
  * @return true when either end actually changed.
  */
-static bool arc_apply_end(ERNode* n, bool low, float v)
+static bool arc_apply_end(ERNode* node, bool low, float value)
 {
-    if (!n || n->type != ER_NODE_ARC)
+    if (!node || node->type != ER_NODE_ARC)
         return false;
-    ERArcGeom g;
-    er_arc_geom(n, 0, 0, (int)n->computed.w, (int)n->computed.h, &g);
-    v = clampf(v, g.min, g.max);
+    ERArcGeom geometry;
+    er_arc_geom(node, 0, 0, (int)node->computed.width, (int)node->computed.height, &geometry);
+    value = clampf(value, geometry.min, geometry.max);
 
     bool changed = false;
-    if (n->props.arc.range)
+    if (node->props.arc.range)
     {
         /* A min_span wider than the range itself cannot be honoured — clamping it here (rather than
          * letting the endpoint arithmetic below run with it) is what keeps both ends inside [min, max].
          * Left unclamped, a min_span of 200 on a 0..100 arc stored 200 in the high end and -100 in the
          * low one, which then reached onChange and the animation driver as out-of-range values. */
-        float ms = n->props.arc.min_span;
-        if (ms < 0.0f)
-            ms = 0.0f;
-        const float span = g.max - g.min;
-        if (ms > span)
-            ms = span;
+        float min_span = node->props.arc.min_span;
+        if (min_span < 0.0f)
+            min_span = 0.0f;
+        const float span = geometry.max - geometry.min;
+        if (min_span > span)
+            min_span = span;
 
-        if (ms > 0.0f)
+        if (min_span > 0.0f)
         {
             /* Neither end may sit closer than min_span to the far end of the RANGE, or there would be no
              * room left for its partner. Push the other end first, so this end's damage sees it settled. */
             if (low)
             {
-                if (v > g.max - ms)
-                    v = g.max - ms;
-                if (n->arc_value < v + ms)
-                    changed |= arc_set_end(n, false, v + ms);
+                if (value > geometry.max - min_span)
+                    value = geometry.max - min_span;
+                if (node->arc_value < value + min_span)
+                    changed |= arc_set_end(node, false, value + min_span);
             }
             else
             {
-                if (v < g.min + ms)
-                    v = g.min + ms;
-                if (n->arc_value_start > v - ms)
-                    changed |= arc_set_end(n, true, v - ms);
+                if (value < geometry.min + min_span)
+                    value = geometry.min + min_span;
+                if (node->arc_value_start > value - min_span)
+                    changed |= arc_set_end(node, true, value - min_span);
             }
         }
-        else if (low && v > n->arc_value)
+        else if (low && value > node->arc_value)
         {
-            v = n->arc_value;
+            value = node->arc_value;
         }
-        else if (!low && v < n->arc_value_start)
+        else if (!low && value < node->arc_value_start)
         {
-            v = n->arc_value_start;
+            value = node->arc_value_start;
         }
     }
 
-    changed |= arc_set_end(n, low, v);
+    changed |= arc_set_end(node, low, value);
     return changed;
 }
 
-bool er_arc_apply_value(ERNode* n, float value)
+bool er_arc_apply_value(ERNode* node, float value)
 {
-    return arc_apply_end(n, false, value);
+    return arc_apply_end(node, false, value);
 }
 
-bool er_arc_apply_value_start(ERNode* n, float value)
+bool er_arc_apply_value_start(ERNode* node, float value)
 {
-    return arc_apply_end(n, true, value);
+    return arc_apply_end(node, true, value);
 }
 
-bool er_arc_hit(const ERNode* n, int x, int y)
+bool er_arc_hit(const ERNode* node, int x, int y)
 {
-    ERArcGeom g;
-    er_arc_geom(n, (int)n->computed.x, (int)n->computed.y, (int)n->computed.w, (int)n->computed.h, &g);
-    const float px = (float)x + 0.5f, py = (float)y + 0.5f;
-    const float dx = px - g.cx, dy = py - g.cy;
-    const float d = sqrtf(dx * dx + dy * dy);
+    ERArcGeom geometry;
+    er_arc_geom(node,
+                (int)node->computed.x,
+                (int)node->computed.y,
+                (int)node->computed.width,
+                (int)node->computed.height,
+                &geometry);
+    const float sample_x = (float)x + 0.5f, sample_y = (float)y + 0.5f;
+    const float delta_x = sample_x - geometry.center_x, delta_y = sample_y - geometry.center_y;
+    const float distance = sqrtf(delta_x * delta_x + delta_y * delta_y);
 
     /* Knob first: a big knob is the natural grab point and may reach past the ring. RANGE mode has one
      * per end. */
-    if (g.knob_size > 0)
+    if (geometry.knob_size > 0)
     {
-        const int ends = n->props.arc.range ? 2 : 1;
-        const float kr = (float)g.knob_size * 0.5f + 4.0f;
-        for (int e = 0; e < ends; e++)
+        const int ends = node->props.arc.range ? 2 : 1;
+        const float knob_radius = (float)geometry.knob_size * 0.5f + ARC_KNOB_HIT_SLOP;
+        for (int end_index = 0; end_index < ends; end_index++)
         {
-            float kx, ky;
-            er_arc_knob_center(&g, (e == 0) ? n->arc_value : n->arc_value_start, &kx, &ky);
-            if ((px - kx) * (px - kx) + (py - ky) * (py - ky) <= kr * kr)
+            float knob_x, knob_y;
+            er_arc_knob_center(&geometry, (end_index == 0) ? node->arc_value : node->arc_value_start, &knob_x, &knob_y);
+            if ((sample_x - knob_x) * (sample_x - knob_x) + (sample_y - knob_y) * (sample_y - knob_y)
+                <= knob_radius * knob_radius)
                 return true;
         }
     }
 
-    float slop = g.half_ext;
-    if (g.knob_size > 0 && (float)g.knob_size * 0.5f > slop)
-        slop = (float)g.knob_size * 0.5f;
+    float slop = geometry.half_extent;
+    if (geometry.knob_size > 0 && (float)geometry.knob_size * 0.5f > slop)
+        slop = (float)geometry.knob_size * 0.5f;
     if (slop < (float)ARC_HIT_SLOP_MIN)
         slop = (float)ARC_HIT_SLOP_MIN;
-    if (d < g.r_mid - g.half_ext - slop || d > g.r_mid + g.half_ext + slop)
+    if (distance < geometry.mid_radius - geometry.half_extent - slop
+        || distance > geometry.mid_radius + geometry.half_extent + slop)
         return false;
-    if (g.sweep >= 360.0f)
+    if (geometry.sweep >= 360.0f)
         return true;
 
     /* Inside the sweep (plus the slop expressed as an angle at this radius)? */
-    float rel = atan2f(dy, dx) * ER_RAD2DEG - g.a0;
-    rel -= 360.0f * floorf(rel / 360.0f);
-    const float eps = (g.r_mid > 1.0f) ? (asinf(clampf(slop / g.r_mid, 0.0f, 1.0f)) * ER_RAD2DEG) : 180.0f;
-    return (rel <= g.sweep + eps) || (rel >= 360.0f - eps);
+    float relative_angle = atan2f(delta_y, delta_x) * ER_RAD2DEG - geometry.start_angle;
+    relative_angle -= 360.0f * floorf(relative_angle / 360.0f);
+    const float slop_angle =
+        (geometry.mid_radius > 1.0f) ? (asinf(clampf(slop / geometry.mid_radius, 0.0f, 1.0f)) * ER_RAD2DEG) : 180.0f;
+    return (relative_angle <= geometry.sweep + slop_angle) || (relative_angle >= 360.0f - slop_angle);
 }
 
-float er_arc_value_at(ERNode* n, int x, int y, bool anti_wrap)
+float er_arc_value_at(ERNode* node, int x, int y, bool anti_wrap)
 {
-    ERArcGeom g;
-    er_arc_geom(n, (int)n->computed.x, (int)n->computed.y, (int)n->computed.w, (int)n->computed.h, &g);
-    const float dx = (float)x + 0.5f - g.cx, dy = (float)y + 0.5f - g.cy;
-    float rel = atan2f(dy, dx) * ER_RAD2DEG - g.a0;
-    rel -= 360.0f * floorf(rel / 360.0f); /* [0, 360) past the start */
+    ERArcGeom geometry;
+    er_arc_geom(node,
+                (int)node->computed.x,
+                (int)node->computed.y,
+                (int)node->computed.width,
+                (int)node->computed.height,
+                &geometry);
+    const float delta_x = (float)x + 0.5f - geometry.center_x, delta_y = (float)y + 0.5f - geometry.center_y;
+    float relative_angle = atan2f(delta_y, delta_x) * ER_RAD2DEG - geometry.start_angle;
+    relative_angle -= 360.0f * floorf(relative_angle / 360.0f); /* [0, 360) past the start */
 
     /* A point ON the ring is unambiguous — use it, however far it is from the last sample (a fast finger,
      * or a move coalesced across several frames, legitimately jumps a long way in one dispatch).
      * Only a point in the UNSWEPT GAP is ambiguous, and there the answer is not the geometrically nearer
      * end but the end the finger came FROM: sliding off the max end and on round the gap must hold at max,
      * not snap to min once past the halfway point. A fresh touch has no history, so it takes the nearer. */
-    float frac;
-    if (rel <= g.sweep)
-        frac = rel / g.sweep;
+    float fraction;
+    if (relative_angle <= geometry.sweep)
+        fraction = relative_angle / geometry.sweep;
     else if (anti_wrap)
-        frac = (n->arc_drag_frac > 0.5f) ? 1.0f : 0.0f;
+        fraction = (node->arc_drag_fraction > 0.5f) ? 1.0f : 0.0f;
     else
-        frac = ((rel - g.sweep) < (360.0f - rel)) ? 1.0f : 0.0f;
-    n->arc_drag_frac = frac;
+        fraction = ((relative_angle - geometry.sweep) < (360.0f - relative_angle)) ? 1.0f : 0.0f;
+    node->arc_drag_fraction = fraction;
 
-    float v = g.min + frac * (g.max - g.min);
-    const float step = (n->props.arc.step > 0.0f) ? n->props.arc.step : 1.0f;
-    v = g.min + floorf((v - g.min) / step + 0.5f) * step;
-    return clampf(v, g.min, g.max);
+    float value = geometry.min + fraction * (geometry.max - geometry.min);
+    const float step = (node->props.arc.step > 0.0f) ? node->props.arc.step : ARC_DEFAULT_STEP;
+    value = geometry.min + floorf((value - geometry.min) / step + 0.5f) * step;
+    return clampf(value, geometry.min, geometry.max);
 }
 
-bool er_arc_grab_low(const ERNode* n, int x, int y)
+bool er_arc_grab_low(const ERNode* node, int x, int y)
 {
-    if (!n || n->type != ER_NODE_ARC || !n->props.arc.range)
+    if (!node || node->type != ER_NODE_ARC || !node->props.arc.range)
         return false;
-    ERArcGeom g;
-    er_arc_geom(n, (int)n->computed.x, (int)n->computed.y, (int)n->computed.w, (int)n->computed.h, &g);
+    ERArcGeom geometry;
+    er_arc_geom(node,
+                (int)node->computed.x,
+                (int)node->computed.y,
+                (int)node->computed.width,
+                (int)node->computed.height,
+                &geometry);
     /* Compare in SWEEP FRACTION rather than value units so the choice is the visually nearer knob
      * regardless of the range's scale. */
-    const float dx = (float)x + 0.5f - g.cx, dy = (float)y + 0.5f - g.cy;
-    float rel = atan2f(dy, dx) * ER_RAD2DEG - g.a0;
-    rel -= 360.0f * floorf(rel / 360.0f);
-    const float f = (rel <= g.sweep) ? (rel / g.sweep) : (((rel - g.sweep) < (360.0f - rel)) ? 1.0f : 0.0f);
-    const float f_hi = er_arc_value_frac(&g, n->arc_value);
-    const float f_lo = er_arc_value_frac(&g, n->arc_value_start);
-    return fabsf(f - f_lo) < fabsf(f - f_hi);
+    const float delta_x = (float)x + 0.5f - geometry.center_x, delta_y = (float)y + 0.5f - geometry.center_y;
+    float relative_angle = atan2f(delta_y, delta_x) * ER_RAD2DEG - geometry.start_angle;
+    relative_angle -= 360.0f * floorf(relative_angle / 360.0f);
+    const float fraction = (relative_angle <= geometry.sweep)
+                               ? (relative_angle / geometry.sweep)
+                               : (((relative_angle - geometry.sweep) < (360.0f - relative_angle)) ? 1.0f : 0.0f);
+    const float high_fraction = er_arc_value_frac(&geometry, node->arc_value);
+    const float low_fraction = er_arc_value_frac(&geometry, node->arc_value_start);
+    return fabsf(fraction - low_fraction) < fabsf(fraction - high_fraction);
 }
 
 /**
- * @brief Shifts a whole subtree by (ddx, ddy) — the knob child and everything laid out under it.
+ * @brief Shifts a whole subtree by (shift_x, shift_y) — the knob child and everything laid out under it.
  *
  * Walks pre-order through the parent/sibling links rather than an explicit stack, so it has no depth or
  * breadth cap. An earlier version pushed pending children onto a fixed 64-slot array and simply stopped
  * pushing once it filled: a knob subtree bigger than that was left half-moved, split between the value's
  * old and new positions.
  *
- * @param[in,out] root  Subtree root (moved along with its descendants).
- * @param[in]     ddx   X delta in pixels.
- * @param[in]     ddy   Y delta in pixels.
+ * @param[in,out] root     Subtree root (moved along with its descendants).
+ * @param[in]     shift_x  X delta in pixels.
+ * @param[in]     shift_y  Y delta in pixels.
  */
-static void arc_shift_subtree(ERNode* root, int16_t ddx, int16_t ddy)
+static void arc_shift_subtree(ERNode* root, int16_t shift_x, int16_t shift_y)
 {
-    ERNode* m = root;
-    while (m)
+    ERNode* current = root;
+    while (current)
     {
-        m->computed.x = (int16_t)(m->computed.x + ddx);
-        m->computed.y = (int16_t)(m->computed.y + ddy);
-        m->animated.x = (int16_t)(m->animated.x + ddx);
-        m->animated.y = (int16_t)(m->animated.y + ddy);
+        current->computed.x = (int16_t)(current->computed.x + shift_x);
+        current->computed.y = (int16_t)(current->computed.y + shift_y);
+        current->animated.x = (int16_t)(current->animated.x + shift_x);
+        current->animated.y = (int16_t)(current->animated.y + shift_y);
 
-        ERNode* next = er_get_node(m->first_child_tag);
+        ERNode* next = er_get_node(current->first_child_tag);
         if (next)
         {
-            m = next;
+            current = next;
             continue;
         }
         /* Leaf: move to the next sibling, climbing out of finished branches — but never past the root,
          * whose own siblings are not part of this subtree. */
-        while (m != root)
+        while (current != root)
         {
-            if (er_get_node(m->next_sibling_tag))
+            if (er_get_node(current->next_sibling_tag))
                 break;
-            m = er_get_node(m->parent_tag);
-            if (!m)
+            current = er_get_node(current->parent_tag);
+            if (!current)
                 return; /* broken parent link: stop rather than walk off the tree */
         }
-        if (m == root)
+        if (current == root)
             return;
-        m = er_get_node(m->next_sibling_tag);
+        current = er_get_node(current->next_sibling_tag);
     }
 }
 
-void er_arc_anchor_child(ERNode* n)
+void er_arc_anchor_child(ERNode* node)
 {
-    if (!n || n->type != ER_NODE_ARC || n->props.arc.knob != ER_ARC_KNOB_CHILD)
+    if (!node || node->type != ER_NODE_ARC || node->props.arc.knob != ER_ARC_KNOB_CHILD)
         return;
-    ERNode* c = knob_child(n);
-    if (!c)
+    ERNode* child = knob_child(node);
+    if (!child)
         return;
-    ERArcGeom g;
-    er_arc_geom(n, (int)n->computed.x, (int)n->computed.y, (int)n->computed.w, (int)n->computed.h, &g);
-    float kx, ky;
-    er_arc_knob_center(&g, n->arc_value, &kx, &ky);
-    const int16_t nx = (int16_t)floorf(kx - (float)c->computed.w * 0.5f + 0.5f);
-    const int16_t ny = (int16_t)floorf(ky - (float)c->computed.h * 0.5f + 0.5f);
-    const int16_t ddx = (int16_t)(nx - c->computed.x);
-    const int16_t ddy = (int16_t)(ny - c->computed.y);
-    if (ddx == 0 && ddy == 0)
+    ERArcGeom geometry;
+    er_arc_geom(node,
+                (int)node->computed.x,
+                (int)node->computed.y,
+                (int)node->computed.width,
+                (int)node->computed.height,
+                &geometry);
+    float knob_x, knob_y;
+    er_arc_knob_center(&geometry, node->arc_value, &knob_x, &knob_y);
+    const int16_t new_x = (int16_t)floorf(knob_x - (float)child->computed.width * 0.5f + 0.5f);
+    const int16_t new_y = (int16_t)floorf(knob_y - (float)child->computed.height * 0.5f + 0.5f);
+    const int16_t shift_x = (int16_t)(new_x - child->computed.x);
+    const int16_t shift_y = (int16_t)(new_y - child->computed.y);
+    if (shift_x == 0 && shift_y == 0)
         return;
-    arc_shift_subtree(c, ddx, ddy);
+    arc_shift_subtree(child, shift_x, shift_y);
 }

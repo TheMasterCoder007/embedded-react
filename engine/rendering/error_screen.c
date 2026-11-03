@@ -212,7 +212,7 @@ void er_error_screen_draw(void)
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_error_screen_show(int screen_w, int screen_h, const ERErrorScreen* screen)
+void er_error_screen_show(int screen_width, int screen_height, const ERErrorScreen* screen)
 {
     const ERErrorScreen none = {0};
     if (!screen)
@@ -227,8 +227,8 @@ void er_error_screen_show(int screen_w, int screen_h, const ERErrorScreen* scree
     copy_text(s_short_lines[LINE_LOCATION], sizeof(s_short_lines[LINE_LOCATION]), screen->location);
     copy_text(s_short_lines[LINE_HINT], sizeof(s_short_lines[LINE_HINT]), screen->hint);
     copy_text(s_detail, sizeof(s_detail), screen->detail);
-    s_screen_w = screen_w > 0 ? screen_w : 0;
-    s_screen_h = screen_h > 0 ? screen_h : 0;
+    s_screen_w = screen_width > 0 ? screen_width : 0;
+    s_screen_h = screen_height > 0 ? screen_height : 0;
     s_active = true;
     /* A gesture in progress, and any move parked for it, ends here, so none reaches an app after it. */
     er_input_reset();
@@ -249,10 +249,10 @@ bool er_error_screen_active(void)
     return s_active;
 }
 
-void er_fault_record(ERFaultRecord* record, const char* reason, uint32_t pc, uint32_t address)
+void er_fault_record(ERFaultRecord* record, const char* reason, uint32_t program_counter, uint32_t address)
 {
     record->magic = FAULT_MAGIC;
-    record->pc = pc;
+    record->pc = program_counter;
     record->address = address;
     size_t index = 0u;
     for (; reason && reason[index] && index + 1u < sizeof(record->reason); index++)
@@ -271,7 +271,7 @@ bool er_fault_recorded(const ERFaultRecord* record)
     return record->magic == FAULT_MAGIC && record->check == fault_check(record);
 }
 
-bool er_fault_show_recorded(ERFaultRecord* record, int screen_w, int screen_h)
+bool er_fault_show_recorded(ERFaultRecord* record, int screen_width, int screen_height)
 {
     if (!er_fault_recorded(record))
     {
@@ -294,7 +294,7 @@ bool er_fault_show_recorded(ERFaultRecord* record, int screen_w, int screen_h)
         .hint = FAULT_HINT,
         .detail = detail,
     };
-    er_error_screen_show(screen_w, screen_h, &screen);
+    er_error_screen_show(screen_width, screen_height, &screen);
     record->magic = 0u;
     return true;
 }

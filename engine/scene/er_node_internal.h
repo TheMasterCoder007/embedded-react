@@ -28,6 +28,9 @@
 /** @brief Sentinel tag value meaning "no node" / end of list. */
 #define ER_INVALID_TAG UINT16_MAX
 
+/** @brief Duration of a Switch thumb sliding to its new side, in milliseconds. */
+#define ER_SWITCH_THUMB_MS 200U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -77,34 +80,38 @@ typedef struct
     int16_t left, top, right, bottom;
 } ERPadding;
 
+/** @brief Largest pixel offset the compositor casts to int; past every screen, well inside int16_t. */
+#define ER_PX_OFFSET_LIMIT 32767.0f
+
 /**
  * @brief A pixel offset from the app (a translate, a shadow offset) that the compositor can cast to int.
  *
  * NaN (a 0/0 in app math) fails every comparison, and a C cast of it, or of a value past the int range, is
  * undefined. NaN is 0 and the rest is clamped to ±32767, which is off every screen.
  *
- * @param[in] v  Offset in pixels.
+ * @param[in] offset  Offset in pixels.
  *
- * @return v, clamped; 0 for NaN.
+ * @return offset, clamped; 0 for NaN.
  */
-static inline float er_px_offset(float v)
+static inline float er_px_offset(float offset)
 {
-    if (v != v)
+    if (offset != offset)
         return 0.0f;
-    return v < -32767.0f ? -32767.0f : (v > 32767.0f ? 32767.0f : v);
+    return offset < -ER_PX_OFFSET_LIMIT ? -ER_PX_OFFSET_LIMIT
+                                        : (offset > ER_PX_OFFSET_LIMIT ? ER_PX_OFFSET_LIMIT : offset);
 }
 
 /**
  * @brief A float prop from the app with NaN replaced, so it cannot reach a cast derived from it.
  *
- * @param[in] v     Incoming value.
- * @param[in] dflt  Value to use for NaN (for a transform component, the one that means unset).
+ * @param[in] value     Incoming value.
+ * @param[in] fallback  Value to use for NaN (for a transform component, the one that means unset).
  *
- * @return v, or dflt when v is NaN.
+ * @return value, or fallback when value is NaN.
  */
-static inline float er_nan_or(float v, float dflt)
+static inline float er_nan_or(float value, float fallback)
 {
-    return v != v ? dflt : v;
+    return value != value ? fallback : value;
 }
 
 /**
@@ -116,14 +123,14 @@ static inline float er_nan_or(float v, float dflt)
  *
  * @param[in] edge       Per-edge field (paddingLeft…), or ER_LAYOUT_AUTO when unset.
  * @param[in] shorthand  The `padding` shorthand, or ER_LAYOUT_AUTO when unset.
- * @param[in] dflt       Value to use when neither is set.
+ * @param[in] fallback   Value to use when neither is set.
  *
  * @return The resolved edge, clamped to >= 0.
  */
-static inline int16_t er_layout_pad_edge(int16_t edge, int16_t shorthand, int16_t dflt)
+static inline int16_t er_layout_pad_edge(int16_t edge, int16_t shorthand, int16_t fallback)
 {
-    const int16_t v = (edge != ER_LAYOUT_AUTO) ? edge : (shorthand != ER_LAYOUT_AUTO) ? shorthand : dflt;
-    return (v < 0) ? 0 : v;
+    const int16_t resolved = (edge != ER_LAYOUT_AUTO) ? edge : (shorthand != ER_LAYOUT_AUTO) ? shorthand : fallback;
+    return (resolved < 0) ? 0 : resolved;
 }
 
 /**
@@ -137,18 +144,18 @@ static inline int16_t er_layout_pad_edge(int16_t edge, int16_t shorthand, int16_
  * paddingHorizontal / paddingVertical are NOT read here — er_node_set_props() has already expanded
  * them into the per-edge fields (per-edge wins), so by the time a spec exists they are gone.
  *
- * @param[in] L  Layout spec to resolve. Must not be NULL.
+ * @param[in] spec  Layout spec to resolve. Must not be NULL.
  *
  * @return The four resolved edges, each >= 0.
  */
-static inline ERPadding er_layout_padding(const ERLayoutSpec* L)
+static inline ERPadding er_layout_padding(const ERLayoutSpec* spec)
 {
-    ERPadding p;
-    p.left = er_layout_pad_edge(L->padding_left, L->padding, 0);
-    p.top = er_layout_pad_edge(L->padding_top, L->padding, 0);
-    p.right = er_layout_pad_edge(L->padding_right, L->padding, 0);
-    p.bottom = er_layout_pad_edge(L->padding_bottom, L->padding, 0);
-    return p;
+    ERPadding padding;
+    padding.left = er_layout_pad_edge(spec->padding_left, spec->padding, 0);
+    padding.top = er_layout_pad_edge(spec->padding_top, spec->padding, 0);
+    padding.right = er_layout_pad_edge(spec->padding_right, spec->padding, 0);
+    padding.bottom = er_layout_pad_edge(spec->padding_bottom, spec->padding, 0);
+    return padding;
 }
 
 /**
@@ -162,20 +169,20 @@ static inline ERPadding er_layout_padding(const ERLayoutSpec* L)
  * Degenerate padding (wider than the box) collapses to a zero-sized content box rather than going
  * negative, which every renderer downstream already treats as "nothing to draw".
  *
- * @param[in]     L        Layout spec whose padding applies. Must not be NULL.
- * @param[in,out] x,y,w,h  Border box on entry, content box on return.
+ * @param[in]     spec              Layout spec whose padding applies. Must not be NULL.
+ * @param[in,out] x,y,width,height  Border box on entry, content box on return.
  */
-static inline void er_layout_content_box(const ERLayoutSpec* L, int* x, int* y, int* w, int* h)
+static inline void er_layout_content_box(const ERLayoutSpec* spec, int* x, int* y, int* width, int* height)
 {
-    const ERPadding p = er_layout_padding(L);
-    *x += p.left;
-    *y += p.top;
-    *w -= (int)p.left + (int)p.right;
-    *h -= (int)p.top + (int)p.bottom;
-    if (*w < 0)
-        *w = 0;
-    if (*h < 0)
-        *h = 0;
+    const ERPadding padding = er_layout_padding(spec);
+    *x += padding.left;
+    *y += padding.top;
+    *width -= (int)padding.left + (int)padding.right;
+    *height -= (int)padding.top + (int)padding.bottom;
+    if (*width < 0)
+        *width = 0;
+    if (*height < 0)
+        *height = 0;
 }
 
 /**
@@ -183,7 +190,7 @@ static inline void er_layout_content_box(const ERLayoutSpec* L, int* x, int* y, 
  */
 typedef struct
 {
-    int16_t x, y, w, h;
+    int16_t x, y, width, height;
 } ERLayoutRect;
 
 /**
@@ -196,10 +203,10 @@ typedef struct
     int16_t border_width;      /**< Uniform border width in pixels. */
     int16_t border_radius;     /**< Uniform corner radius in pixels. */
     /* Per-corner radii (0 = fall back to border_radius). */
-    int16_t border_tl_radius;
-    int16_t border_tr_radius;
-    int16_t border_br_radius;
-    int16_t border_bl_radius;
+    int16_t border_top_left_radius;
+    int16_t border_top_right_radius;
+    int16_t border_bottom_right_radius;
+    int16_t border_bottom_left_radius;
     /* Per-edge border widths (0 = fall back to border_width). */
     int16_t border_left_width;
     int16_t border_top_width;
@@ -259,10 +266,10 @@ typedef struct
     uint8_t resize_mode; /**< ERResizeMode */
     uint32_t tint_color; /**< Straight-alpha ARGB8888 tint; 0 = no tint. */
     /* Corner radii the bitmap is clipped to: the per-corner value, else border_radius; 0 = square. */
-    int16_t border_tl_radius;
-    int16_t border_tr_radius;
-    int16_t border_br_radius;
-    int16_t border_bl_radius;
+    int16_t border_top_left_radius;
+    int16_t border_top_right_radius;
+    int16_t border_bottom_right_radius;
+    int16_t border_bottom_left_radius;
     uint8_t opacity; /**< 0–255. */
 } ERImageProps;
 
@@ -345,7 +352,7 @@ typedef struct
  */
 typedef struct
 {
-    EREventFn fn;
+    EREventFn callback;
     void* user_data;
 } EREventHandler;
 
@@ -354,7 +361,7 @@ typedef struct
  */
 typedef struct
 {
-    ERResponderQueryFn fn;
+    ERResponderQueryFn callback;
     void* user_data;
 } ERResponderQueryHandler;
 
@@ -376,7 +383,7 @@ struct ERNode
     bool dirty;
     bool source_dirty;    /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
                              dirty-rect accumulation. */
-    uint32_t painted_seq; /**< er_commit sequence that last painted this node. Render workers record it during the
+    uint32_t painted_sequence; /**< er_commit sequence that last painted this node. Render workers record it during the
                              paint traversal (an idempotent same-value write, safe when a node straddles two
                              workers' regions); er_commit clears dirty/source_dirty for painted nodes in one
                              sequential post-pass, so the paint recursion itself never mutates shared flags. */
@@ -398,7 +405,7 @@ struct ERNode
     uint16_t long_press_ms;  /**< Hold time before a long press fires; 0 = the engine default. */
     ERLayoutSpec layout;
     ERLayoutRect computed;
-    ERLayoutRect prev_layout;     /**< Rect last reported to ER_EVENT_LAYOUT (x/y relative to the parent). */
+    ERLayoutRect previous_layout; /**< Rect last reported to ER_EVENT_LAYOUT (x/y relative to the parent). */
     ERLayoutRect animated;        /**< Current display rect; updated by layout animations; equals computed when idle. */
     ERLayoutRect last_paint_rect; /**< Screen FOOTPRINT this node last painted — its box grown by whatever
                                        it drew outside it, an Arc knob's reach or a shadow's bleed — used
@@ -419,26 +426,26 @@ struct ERNode
     bool has_props_hash;           /**< Whether the two hashes above hold a previous update yet. */
     float scroll_offset_x;         /**< Horizontal scroll position in pixels (ScrollView only). */
     float scroll_offset_y;         /**< Vertical scroll position in pixels (ScrollView only). */
-    float scroll_vel_x;            /**< Momentum velocity X in px/ms (positive = content moving right). */
-    float scroll_vel_y;            /**< Momentum velocity Y in px/ms (positive = content moving down). */
-    int16_t scroll_content_w;      /**< Bounding width of all children; computed after layout (ScrollView only). */
-    int16_t scroll_content_h;      /**< Bounding height of all children; computed after layout (ScrollView only). */
+    float scroll_velocity_x;       /**< Momentum velocity X in px/ms (positive = content moving right). */
+    float scroll_velocity_y;       /**< Momentum velocity Y in px/ms (positive = content moving down). */
+    int16_t scroll_content_width;  /**< Bounding width of all children; computed after layout (ScrollView only). */
+    int16_t scroll_content_height; /**< Bounding height of all children; computed after layout (ScrollView only). */
     /* Transform props: raw values copied from ERProps */
-    float tp_translate_x; /**< X translation in pixels. */
-    float tp_translate_y; /**< Y translation in pixels. */
-    float tp_scale_x;     /**< X scale factor; 0.0 = identity (1.0). */
-    float tp_scale_y;     /**< Y scale factor; 0.0 = identity (1.0). */
-    float tp_rotate_z;    /**< Clockwise rotation in degrees. */
-    float tp_origin_x;    /**< Fractional X pivot; negative = center (0.5). */
-    float tp_origin_y;    /**< Fractional Y pivot; negative = center (0.5). */
-    float tp_rotate_x;    /**< X-axis rotation in degrees (3D). */
-    float tp_rotate_y;    /**< Y-axis rotation in degrees (3D). */
-    float tp_perspective; /**< Perspective distance in pixels; 0 = orthographic (3D). */
+    float transform_translate_x; /**< X translation in pixels. */
+    float transform_translate_y; /**< Y translation in pixels. */
+    float transform_scale_x;     /**< X scale factor; 0.0 = identity (1.0). */
+    float transform_scale_y;     /**< Y scale factor; 0.0 = identity (1.0). */
+    float transform_rotate_z;    /**< Clockwise rotation in degrees. */
+    float transform_origin_x;    /**< Fractional X pivot; negative = center (0.5). */
+    float transform_origin_y;    /**< Fractional Y pivot; negative = center (0.5). */
+    float transform_rotate_x;    /**< X-axis rotation in degrees (3D). */
+    float transform_rotate_y;    /**< Y-axis rotation in degrees (3D). */
+    float transform_perspective; /**< Perspective distance in pixels; 0 = orthographic (3D). */
     bool has_transform;   /**< True when any transform prop is non-identity. */
     EREventHandler events[ER_EVENT_TYPE_COUNT_];
     ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
     /* Switch: animated thumb position 0.0 (off) → 1.0 (on). */
-    float switch_thumb_t;
+    float switch_thumb_progress;
     /* Arc: the live value (props or ER_PROP_ARC_VALUE animation), and the value the last paint used — the
      * pair bounds a value change's damage to the swept sub-arc + the knob's old and new spots. */
     float arc_value;
@@ -452,7 +459,7 @@ struct ERNode
     bool arc_drag_low;      /**< RANGE drag: the finger latched onto the LOW end (arc_value_start), not the high one.
                                Latched on touch-down at whichever end was nearer and held for the whole gesture, so a
                                drag never swaps ends when the two values cross. */
-    float arc_drag_frac;    /**< Sweep fraction at the last drag sample — the anti-wrap reference. */
+    float arc_drag_fraction; /**< Sweep fraction at the last drag sample — the anti-wrap reference. */
     /* Arc: pixels the drawn knob reaches past the layout box on each side (0 when it fits). Folded into
      * the paint bounds, the damage rects and the hit zone, so a knob larger than the ring is never clipped
      * or left unerased. */
@@ -470,21 +477,21 @@ struct ERNode
     uint32_t modal_backdrop_color;
     /* Vector (ER_NODE_VECTOR): index into the vector op-tape/paint storage pool, or -1 if none. */
     int16_t vector_slot;
-    /* Vector sub-region damage: when vec_has_dirty, only this node-local rect is damaged on the next
+    /* Vector sub-region damage: when vector_has_dirty, only this node-local rect is damaged on the next
      * commit (instead of the whole node box) — lets an interactive vector update just the changed area. */
-    bool vec_has_dirty;
-    int16_t vec_dirty_x, vec_dirty_y, vec_dirty_w, vec_dirty_h;
+    bool vector_has_dirty;
+    int16_t vector_dirty_x, vector_dirty_y, vector_dirty_width, vector_dirty_height;
     /* Subtree paint bounds (computed coords), refreshed at layout: the union of this node's box and all
      * descendants that can paint outside it. render_tree skips a subtree whose bounds miss the damage,
      * turning the per-commit walk from O(all nodes) into O(nodes near the change). subtree_prunable is
      * false when the bounds may be unreliable (a transform in the subtree), disabling the skip there. */
-    int16_t sub_x, sub_y, sub_w, sub_h;
+    int16_t subtree_x, subtree_y, subtree_width, subtree_height;
     bool subtree_prunable;
     /* Whether this node or any descendant has a transform that needs the capture path (rotate, scale, 3D),
      * refreshed with the bounds above. Unlike subtree_prunable it counts the children of a clipping node
      * too: the occlusion cull reads it, and an occluded walk cannot record a captured node's transformed
      * footprint wherever in the subtree that node sits. */
-    bool subtree_complex_xf;
+    bool subtree_complex_transform;
     /* Set for the one commit that follows an overflow clip/unclip on this node. What the toggle
      * changes is whether DESCENDANTS may paint outside this box, which the damage pre-pass — which
      * measures every node by its own rect — cannot otherwise see, so the pre-pass damages the
@@ -495,8 +502,8 @@ struct ERNode
         ERViewProps view;
         ERTextProps text;
         ERImageProps image;
-        ERActivityIndicatorProps act;
-        ERSwitchProps sw;
+        ERActivityIndicatorProps activity_indicator;
+        ERSwitchProps switch_props;
         ERArcProps arc;
         ERTextInputProps text_input;
     } props;
@@ -550,28 +557,28 @@ typedef struct
 {
     const ERNode* parent; /**< Node whose children are walked. */
     ERNode* node;         /**< Current child; NULL once the walk is done. */
-    int16_t z;            /**< zIndex being walked. */
+    int16_t z_index;      /**< zIndex being walked. */
     bool mixed_z;         /**< The children use more than one zIndex. */
 } ERChildCursor;
 
 /**
  * @brief Starts a paint-order walk over a parent's children.
  *
- * @param[out] cur     Cursor to initialize.
+ * @param[out] cursor  Cursor to initialize.
  * @param[in]  parent  Node whose children are walked.
  *
  * @return The first child in paint order, or NULL when there is none.
  */
-ERNode* er_child_first(ERChildCursor* cur, const ERNode* parent);
+ERNode* er_child_first(ERChildCursor* cursor, const ERNode* parent);
 
 /**
  * @brief Advances a paint-order walk.
  *
- * @param[in,out] cur  Cursor from er_child_first().
+ * @param[in,out] cursor  Cursor from er_child_first().
  *
  * @return The next child in paint order, or NULL when the walk is done.
  */
-ERNode* er_child_next(ERChildCursor* cur);
+ERNode* er_child_next(ERChildCursor* cursor);
 
 /**
  * @brief Marks a node and all ancestors dirty, recording a content change.

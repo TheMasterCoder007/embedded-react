@@ -26,131 +26,133 @@
  * Closed-interval test on [x, x+w] rather than [x, x+w): touching rects painted as separate clipped
  * passes would be pixel-correct, but merging them saves a pass, so "touching counts" is deliberate.
  */
-static bool touch_or_overlap(const ERRect* a, const ERRect* b)
+static bool touch_or_overlap(const ERRect* first, const ERRect* second)
 {
-    return !(a->x + a->w < b->x || b->x + b->w < a->x || a->y + a->h < b->y || b->y + b->h < a->y);
+    return !(first->x + first->w < second->x || second->x + second->w < first->x || first->y + first->h < second->y
+             || second->y + second->h < first->y);
 }
 
-/** @brief Grows @p a in place to the bounding box of a ∪ b. */
-static void bbox_union(ERRect* a, const ERRect* b)
+/** @brief Grows @p target in place to the bounding box of target ∪ other. */
+static void bbox_union(ERRect* target, const ERRect* other)
 {
-    const int x1 = (a->x + a->w > b->x + b->w) ? a->x + a->w : b->x + b->w;
-    const int y1 = (a->y + a->h > b->y + b->h) ? a->y + a->h : b->y + b->h;
-    if (b->x < a->x)
-        a->x = b->x;
-    if (b->y < a->y)
-        a->y = b->y;
-    a->w = x1 - a->x;
-    a->h = y1 - a->y;
+    const int right = (target->x + target->w > other->x + other->w) ? target->x + target->w : other->x + other->w;
+    const int bottom = (target->y + target->h > other->y + other->h) ? target->y + target->h : other->y + other->h;
+    if (other->x < target->x)
+        target->x = other->x;
+    if (other->y < target->y)
+        target->y = other->y;
+    target->w = right - target->x;
+    target->h = bottom - target->y;
 }
 
 /** @brief Rect area in pixels (fields are non-negative by construction). */
-static uint32_t rect_area(const ERRect* r)
+static uint32_t rect_area(const ERRect* rect)
 {
-    return (uint32_t)r->w * (uint32_t)r->h;
+    return (uint32_t)rect->w * (uint32_t)rect->h;
 }
 
 /**
- * @brief Absorbs into @p acc every stored rect that overlaps or abuts it, cascading until stable.
+ * @brief Absorbs into @p accumulated every stored rect that overlaps or abuts it, cascading until stable.
  *
- * Each absorbed rect is swap-removed and its box unioned into @p acc; because the union can grow
- * @p acc into contact with rects already checked, the scan restarts whenever anything was absorbed.
+ * Each absorbed rect is swap-removed and its box unioned into @p accumulated; because the union can grow
+ * @p accumulated into contact with rects already checked, the scan restarts whenever anything was absorbed.
  * Terminates: every restart is paid for by count strictly decreasing.
  */
-static void absorb_touching(ERDamageSet* s, ERRect* acc)
+static void absorb_touching(ERDamageSet* set, ERRect* accumulated)
 {
     bool removed_any = true;
     while (removed_any)
     {
         removed_any = false;
-        for (uint8_t i = 0; i < s->count;)
+        for (uint8_t rect_index = 0; rect_index < set->count;)
         {
-            if (touch_or_overlap(acc, &s->r[i]))
+            if (touch_or_overlap(accumulated, &set->rects[rect_index]))
             {
-                bbox_union(acc, &s->r[i]);
-                s->r[i] = s->r[--s->count]; /* swap-remove; re-test the swapped-in rect at i */
+                bbox_union(accumulated, &set->rects[rect_index]);
+                set->rects[rect_index] =
+                    set->rects[--set->count]; /* swap-remove; re-test the swapped-in rect at rect_index */
                 removed_any = true;
             }
             else
             {
-                i++;
+                rect_index++;
             }
         }
     }
 }
 
 /**
- * @brief Index of the stored rect whose bbox union with @p acc drags in the fewest clean pixels.
+ * @brief Index of the stored rect whose bbox union with @p accumulated drags in the fewest clean pixels.
  *
- * @p acc must be disjoint from every stored rect (run absorb_touching first), so
- * waste = area(union) − area(acc) − area(rect) is exactly the untouched area the merge would repaint.
- * The rect stays in the set; unioning it into @p acc and re-absorbing is what removes it. Requires a
+ * @p accumulated must be disjoint from every stored rect (run absorb_touching first), so
+ * waste = area(union) − area(accumulated) − area(rect) is exactly the untouched area the merge would repaint.
+ * The rect stays in the set; unioning it into @p accumulated and re-absorbing is what removes it. Requires a
  * non-empty set.
  */
-static uint8_t least_waste_partner(const ERDamageSet* s, const ERRect* acc)
+static uint8_t least_waste_partner(const ERDamageSet* set, const ERRect* accumulated)
 {
-    uint8_t best = 0U;
+    uint8_t best_index = 0U;
     uint32_t best_waste = UINT32_MAX;
-    for (uint8_t i = 0; i < s->count; i++)
+    for (uint8_t rect_index = 0; rect_index < set->count; rect_index++)
     {
-        ERRect u = *acc;
-        bbox_union(&u, &s->r[i]);
-        const uint32_t waste = rect_area(&u) - rect_area(acc) - rect_area(&s->r[i]);
+        ERRect merged = *accumulated;
+        bbox_union(&merged, &set->rects[rect_index]);
+        const uint32_t waste = rect_area(&merged) - rect_area(accumulated) - rect_area(&set->rects[rect_index]);
         if (waste < best_waste)
         {
             best_waste = waste;
-            best = i;
+            best_index = rect_index;
         }
     }
-    return best;
+    return best_index;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private (engine-internal)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_damage_set_clear(ERDamageSet* s)
+void er_damage_set_clear(ERDamageSet* set)
 {
-    s->count = 0U;
+    set->count = 0U;
 }
 
-void er_damage_set_add(ERDamageSet* s, int x, int y, int w, int h)
+void er_damage_set_add(ERDamageSet* set, int x, int y, int width, int height)
 {
-    if (w <= 0 || h <= 0)
+    if (width <= 0 || height <= 0)
     {
         return;
     }
 
-    ERRect acc;
-    acc.x = x;
-    acc.y = y;
-    acc.w = w;
-    acc.h = h;
+    ERRect accumulated;
+    accumulated.x = x;
+    accumulated.y = y;
+    accumulated.w = width;
+    accumulated.h = height;
 
     /* Merge with everything the input touches (disjointness invariant), cascading. */
-    absorb_touching(s, &acc);
+    absorb_touching(set, &accumulated);
 
-    if (s->count < (uint8_t)ER_DAMAGE_RECTS_MAX)
+    if (set->count < (uint8_t)ER_DAMAGE_RECTS_MAX)
     {
-        s->r[s->count++] = acc;
+        set->rects[set->count++] = accumulated;
         return;
     }
 
-    /* Saturated: merge with the stored rect that wastes the least area. `acc` is disjoint from every
-     * stored rect here (absorb_touching just ran), so waste = union − acc − rect is >= 0 and measures
+    /* Saturated: merge with the stored rect that wastes the least area. `accumulated` is disjoint from every
+     * stored rect here (absorb_touching just ran), so waste = union − accumulated − rect is >= 0 and measures
      * exactly the clean pixels the merge drags into the repaint. The second absorb then swallows that
-     * partner (acc now contains it) plus anything the grown box newly touches, so count drops by at
+     * partner (accumulated now contains it) plus anything the grown box newly touches, so count drops by at
      * least one and the final append always fits. */
-    bbox_union(&acc, &s->r[least_waste_partner(s, &acc)]);
-    absorb_touching(s, &acc);
-    s->r[s->count++] = acc;
+    bbox_union(&accumulated, &set->rects[least_waste_partner(set, &accumulated)]);
+    absorb_touching(set, &accumulated);
+    set->rects[set->count++] = accumulated;
 }
 
-void er_damage_set_limit(ERDamageSet* s, uint8_t max_rects)
+void er_damage_set_limit(ERDamageSet* set, uint8_t max_rects)
 {
     if (max_rects == 0U)
     {
-        s->count = 0U;
+        set->count = 0U;
         return;
     }
 
@@ -159,35 +161,36 @@ void er_damage_set_limit(ERDamageSet* s, uint8_t max_rects)
      * rect is more "incoming" than another and fusing an arbitrary one would happily pair two far
      * corners. The union swallows both members, so absorb_touching removes them (plus anything the
      * grown box newly touches) and the append nets at least one rect gone — hence this terminates. */
-    while (s->count > max_rects)
+    while (set->count > max_rects)
     {
-        uint8_t bi = 0U, bj = 1U;
+        uint8_t best_first = 0U, best_second = 1U;
         uint32_t best_waste = UINT32_MAX;
-        for (uint8_t i = 0U; i < s->count; i++)
+        for (uint8_t rect_index = 0U; rect_index < set->count; rect_index++)
         {
-            for (uint8_t j = (uint8_t)(i + 1U); j < s->count; j++)
+            for (uint8_t other_index = (uint8_t)(rect_index + 1U); other_index < set->count; other_index++)
             {
-                ERRect u = s->r[i];
-                bbox_union(&u, &s->r[j]);
-                const uint32_t waste = rect_area(&u) - rect_area(&s->r[i]) - rect_area(&s->r[j]);
+                ERRect merged = set->rects[rect_index];
+                bbox_union(&merged, &set->rects[other_index]);
+                const uint32_t waste =
+                    rect_area(&merged) - rect_area(&set->rects[rect_index]) - rect_area(&set->rects[other_index]);
                 if (waste < best_waste)
                 {
                     best_waste = waste;
-                    bi = i;
-                    bj = j;
+                    best_first = rect_index;
+                    best_second = other_index;
                 }
             }
         }
-        ERRect acc = s->r[bi];
-        bbox_union(&acc, &s->r[bj]);
-        absorb_touching(s, &acc);
-        s->r[s->count++] = acc;
+        ERRect accumulated = set->rects[best_first];
+        bbox_union(&accumulated, &set->rects[best_second]);
+        absorb_touching(set, &accumulated);
+        set->rects[set->count++] = accumulated;
     }
 }
 
-bool er_damage_set_bounds(const ERDamageSet* s, ERRect* out)
+bool er_damage_set_bounds(const ERDamageSet* set, ERRect* out)
 {
-    if (s->count == 0U)
+    if (set->count == 0U)
     {
         if (out)
         {
@@ -200,21 +203,21 @@ bool er_damage_set_bounds(const ERDamageSet* s, ERRect* out)
     }
     if (out)
     {
-        *out = s->r[0];
-        for (uint8_t i = 1U; i < s->count; i++)
+        *out = set->rects[0];
+        for (uint8_t rect_index = 1U; rect_index < set->count; rect_index++)
         {
-            bbox_union(out, &s->r[i]);
+            bbox_union(out, &set->rects[rect_index]);
         }
     }
     return true;
 }
 
-uint32_t er_damage_set_area(const ERDamageSet* s)
+uint32_t er_damage_set_area(const ERDamageSet* set)
 {
     uint32_t total = 0U;
-    for (uint8_t i = 0U; i < s->count; i++)
+    for (uint8_t rect_index = 0U; rect_index < set->count; rect_index++)
     {
-        total += rect_area(&s->r[i]);
+        total += rect_area(&set->rects[rect_index]);
     }
     return total;
 }

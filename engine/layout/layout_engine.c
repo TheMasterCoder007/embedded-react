@@ -1292,15 +1292,15 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
     {
         node->computed.x = 0;
         node->computed.y = 0;
-        node->computed.w = 0;
-        node->computed.h = 0;
+        node->computed.width = 0;
+        node->computed.height = 0;
         return;
     }
 
     node->computed.x = x;
     node->computed.y = y;
-    node->computed.w = width;
-    node->computed.h = height;
+    node->computed.width = width;
+    node->computed.height = height;
 
     if (node->first_child_tag == ER_INVALID_TAG)
         return;
@@ -1798,8 +1798,8 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
 
         child->computed.x = child_x;
         child->computed.y = child_y;
-        child->computed.w = child_width;
-        child->computed.h = child_height;
+        child->computed.width = child_width;
+        child->computed.height = child_height;
     }
 
     /* Pass 6b — recurse via sibling chain using pre-stored computed rects. A display:none child was
@@ -1816,7 +1816,8 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
         if (child->layout.display == ER_DISPLAY_NONE)
             compute_layout(child->tag, 0, 0, 0, 0);
         else if (child->layout.position != ER_POS_ABSOLUTE)
-            compute_layout(child->tag, child->computed.w, child->computed.h, child->computed.x, child->computed.y);
+            compute_layout(
+                child->tag, child->computed.width, child->computed.height, child->computed.x, child->computed.y);
         child_tag = child->next_sibling_tag;
     }
 
