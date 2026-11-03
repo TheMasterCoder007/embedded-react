@@ -21,7 +21,7 @@
  * The detector: (1) tracks gravity with a slow low-pass baseline and subtracts it to get the AC "bounce";
  * (2) smooths that with a faster low-pass to kill sensor noise; (3) counts a step on each RISING crossing
  * of an upper threshold, but only after the signal has dipped below a lower threshold since the last step
- * (hysteresis) AND at least PEDO_MIN_STEP_MS has passed (refractory) — so a single stride can't double
+ * (hysteresis) AND at least PEDOMETER_MIN_STEP_MS has passed (refractory) — so a single stride can't double
  * count and hand-jitter below the threshold is ignored. Thresholds are in ±4g LSB (1 g ≈ 8192).
  */
 

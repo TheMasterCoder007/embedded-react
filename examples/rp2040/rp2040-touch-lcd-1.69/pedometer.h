@@ -46,9 +46,11 @@ extern "C"
     /**
      * @brief Feeds one accelerometer sample and returns the running step total.
      *
-     * @param[in] pedometer        The pedometer state.
-     * @param[in] accel_x,ay,az Raw accelerometer axes (any consistent unit; ±4g → 1 g ≈ 8192 LSB).
-     * @param[in] now_ms   Monotonic millisecond timestamp of this sample.
+     * @param[in] pedometer  The pedometer state.
+     * @param[in] accel_x    Raw accelerometer X (any consistent unit; ±4g → 1 g ≈ 8192 LSB).
+     * @param[in] accel_y    Raw accelerometer Y, in the same unit.
+     * @param[in] accel_z    Raw accelerometer Z, in the same unit.
+     * @param[in] now_ms     Monotonic millisecond timestamp of this sample.
      *
      * @return The total step count after processing this sample.
      */

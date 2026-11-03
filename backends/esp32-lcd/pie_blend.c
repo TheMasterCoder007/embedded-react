@@ -70,7 +70,7 @@ static const uint16_t s_mask_7bit = 0x007FU;
  * @brief Per-lane bias tables for ordered dithering, loaded with LD.QR at fixed offsets.
  *
  * destination_bias (offset 0):  bias added to the dst*inv product before >>8.
- * bias_5bit        (offset 16): bias added to the ga-scaled source channel before >>3 (red/blue).
+ * bias_5bit        (offset 16): bias added to the global-alpha-scaled source channel before >>3 (red/blue).
  * bias_6bit        (offset 32): bias added before >>2 (green).
  *
  * Blocks 0/1 are the two phases of a 2x2 checkerboard keyed on (x+y) parity — the quantization

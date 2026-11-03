@@ -59,11 +59,12 @@ typedef struct
     ErDma2dBackendConfig config;
     ErDma2dRegs* regs;
     uint8_t* framebuffer;
-    int bytes_per_pixel;          /**< Bytes per framebuffer pixel. */
-    int stride_pixels;            /**< Row pitch in pixels. */
-    bool pending;                 /**< A DMA2D transfer was started and not yet waited on. */
-    int dirty_x0, dirty_y0;       /**< Dirty box, inclusive min corner. */
-    int dirty_x_end, dirty_y_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dx_end <= dx0 means empty. */
+    int bytes_per_pixel;    /**< Bytes per framebuffer pixel. */
+    int stride_pixels;      /**< Row pitch in pixels. */
+    bool pending;           /**< A DMA2D transfer was started and not yet waited on. */
+    int dirty_x0, dirty_y0; /**< Dirty box, inclusive min corner. */
+    int dirty_x_end,
+        dirty_y_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dirty_x_end <= dirty_x0 means empty. */
 } Dma2dCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------

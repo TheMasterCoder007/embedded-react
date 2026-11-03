@@ -59,10 +59,10 @@ extern "C"
      * A private copy is kept so er_web_reset() (hot reload) and er_web_resize() can re-run it. On a JS error
      * an on-screen redbox is shown. The bytes are UTF-8 source text, not bytecode.
      *
-     * @param[in] js   App bundle source (UTF-8; not required to be NUL-terminated).
-     * @param[in] length  Byte length of @p js.
+     * @param[in] source  App bundle source (UTF-8; not required to be NUL-terminated).
+     * @param[in] length  Byte length of @p source.
      */
-    void er_web_load_source(const char* js, int length);
+    void er_web_load_source(const char* source, int length);
 
     /**
      * @brief Registers a baked ERPK asset pack (images + fonts) so the app's <Image>/custom-font nodes

@@ -300,7 +300,7 @@ bool board_touch_read(int* x, int* y, bool* pressed)
     }
     const int raw_x = sum_x / samples;
     const int raw_y = sum_y / samples;
-    /* ESP_LOGI(TAG, "raw touch %d,%d", rawx, rawy); // re-enable to recalibrate a different unit */
+    /* ESP_LOGI(TAG, "raw touch %d,%d", raw_x, raw_y); // re-enable to recalibrate a different unit */
 
     /* Raw -> screen. The touch controller is bolted to the GLASS, so it keeps reporting in the panel's
        physical frame no matter how the display is rotated: when the image is rotated 90°, the raw axes

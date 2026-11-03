@@ -177,16 +177,16 @@ int er_web_init(int screen_width, int screen_height)
 }
 
 EMSCRIPTEN_KEEPALIVE
-void er_web_load_source(const char* js, int length)
+void er_web_load_source(const char* source, int length)
 {
-    if (!js || length <= 0)
+    if (!source || length <= 0)
         return;
 
     /* Keep a private copy so a hot reload (er_web_reset) or a resize can re-run the same app. */
     char* copy = malloc((size_t)length + 1U);
     if (!copy)
         return;
-    memcpy(copy, js, (size_t)length);
+    memcpy(copy, source, (size_t)length);
     copy[length] = '\0';
     free(s_source);
     s_source = copy;
