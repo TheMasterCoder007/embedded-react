@@ -66,6 +66,36 @@
 #define GROUP_TYPE_PARALLEL 1
 #define GROUP_TYPE_STAGGER 2
 
+/** @brief ERAnimation::group_slot of an animation that belongs to no group. */
+#define GROUP_SLOT_NONE 0xFFU
+
+/** @brief ERAnimation::node_tag of a value animation, and of a group entry with no node. */
+#define ANIM_NO_NODE_TAG 0xFFFFU
+
+/** @brief The opacity byte at full opacity, and the largest value of a colour channel. */
+#define OPACITY_BYTE_MAX 255.0f
+#define CHANNEL_MAX 255U
+
+/** @brief Stored for a Text colour animated to 0: the painter reads 0 as unset and draws white. */
+#define TEXT_COLOR_TRANSPARENT 0x00FFFFFFU
+
+/** @brief Newton's method on a bezier curve: iteration cap, and the error or slope too small to go on. */
+#define BEZIER_NEWTON_ITERATIONS 8
+#define BEZIER_NEWTON_EPSILON 0.00001f
+
+/* Control points (x1, y1, x2, y2) of the standard CSS easing curves. */
+#define CURVE_EASE 0.25f, 0.1f, 0.25f, 1.0f
+#define CURVE_EASE_IN 0.42f, 0.0f, 1.0f, 1.0f
+#define CURVE_EASE_OUT 0.0f, 0.0f, 0.58f, 1.0f
+#define CURVE_EASE_IN_OUT 0.42f, 0.0f, 0.58f, 1.0f
+
+/** @brief ER_EASE_ELASTIC_OUT: one full wave, in radians. */
+#define ELASTIC_TWO_PI 6.283185f
+
+/** @brief A spring's position is held to this range when applied, so a runaway cannot reach the node. */
+#define SPRING_POSITION_MIN (-2.0f)
+#define SPRING_POSITION_MAX 3.0f
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -101,11 +131,11 @@ typedef struct
     float spring_stiffness;
     float spring_damping;
     float spring_mass;
-    float spring_pos; /**< Current normalized position [0 = from, 1 = to, may overshoot]. */
-    float spring_vel; /**< Current normalized velocity (units of progress per second). */
+    float spring_position; /**< Current normalized position [0 = from, 1 = to, may overshoot]. */
+    float spring_velocity; /**< Current normalized velocity (units of progress per second). */
     /* Decay-specific state */
     float decay_velocity;     /**< Current velocity in (to_value - from_value)/ms units. */
-    float decay_pos;          /**< Accumulated decay offset (used to derive from_value). */
+    float decay_position;     /**< Accumulated decay offset (used to derive from_value). */
     float decay_deceleration; /**< Per-ms friction factor. */
     /* Completion */
     ERAnimCompleteFn on_complete;
@@ -125,7 +155,7 @@ typedef struct
     uint16_t node_tag;
     ERAnimProp prop;
     float value;
-    ERAnimConfig cfg;
+    ERAnimConfig config;
 } ERGroupEntry;
 
 /**
@@ -154,10 +184,10 @@ typedef struct
     ERAnimProp prop;
     bool active;
     bool interpolated; /**< When true, value is mapped through map before being applied. */
-    bool color;        /**< map holds a color mapping (map.color) rather than a numeric one (map.num). */
+    bool color;        /**< map holds a color mapping (map.color) rather than a numeric one (map.numeric). */
     union
     {
-        ERInterpolation num;
+        ERInterpolation numeric;
         ERColorInterpolation color;
     } map;
 } ERValueBinding;
@@ -220,10 +250,10 @@ void er_anim_reset(void)
  */
 static uint16_t alloc_handle(void)
 {
-    uint16_t h = s_next_handle++;
+    uint16_t handle = s_next_handle++;
     if (s_next_handle == 0)
         s_next_handle = 1;
-    return h;
+    return handle;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -329,10 +359,10 @@ static bool read_numeric_value(ERNode* node, ERAnimProp prop, float* value)
     {
         case ER_PROP_OPACITY:
         {
-            const uint8_t* o = opacity_field(node);
-            if (!o)
+            const uint8_t* opacity = opacity_field(node);
+            if (!opacity)
                 return false;
-            *value = (float)*o / 255.0f;
+            *value = (float)*opacity / OPACITY_BYTE_MAX;
             return true;
         }
         case ER_PROP_TRANSLATE_X:
@@ -414,7 +444,7 @@ static bool read_color_value(const ERNode* node, ERAnimProp prop, uint32_t* colo
  */
 static void update_has_transform(ERNode* node)
 {
-    const bool was = node->has_transform;
+    const bool had_transform = node->has_transform;
     node->has_transform = (node->tp_translate_x != 0.0f || node->tp_translate_y != 0.0f || node->tp_scale_x != 0.0f
                            || node->tp_scale_y != 0.0f || node->tp_rotate_z != 0.0f || node->tp_rotate_x != 0.0f
                            || node->tp_rotate_y != 0.0f || node->tp_perspective != 0.0f);
@@ -423,7 +453,7 @@ static void update_has_transform(ERNode* node)
      * appears or goes, and when one turns complex (a rotate or scale joining a translate) while the cached
      * subtree_complex_xf says it holds none. One that stops being complex only leaves that flag set, which
      * costs a cull, never a pixel, until the next layout pass clears it. */
-    bool refresh = node->has_transform != was;
+    bool refresh = node->has_transform != had_transform;
 #if ERUI_TRANSFORMS_FULL
     if (er_node_has_complex_transform(node) && !node->subtree_complex_xf)
         refresh = true;
@@ -465,10 +495,10 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
                 value = 0.0f;
             if (value > 1.0f)
                 value = 1.0f;
-            const uint8_t o = (uint8_t)(value * 255.0f + 0.5f);
-            if (*field == o)
+            const uint8_t opacity = (uint8_t)(value * OPACITY_BYTE_MAX + 0.5f);
+            if (*field == opacity)
                 return false;
-            *field = o;
+            *field = opacity;
             return true;
         }
         case ER_PROP_TRANSLATE_X:
@@ -543,39 +573,39 @@ static bool apply_numeric_value(ERNode* node, ERAnimProp prop, float value)
 /**
  * @brief Linearly interpolates a color channel.
  *
- * @param[in] from  Start channel value.
- * @param[in] to    Target channel value.
- * @param[in] t     Interpolation fraction; outside 0.0-1.0 extrapolates, clamped to the channel range.
+ * @param[in] from      Start channel value.
+ * @param[in] to        Target channel value.
+ * @param[in] fraction  Interpolation fraction; outside 0.0-1.0 extrapolates, clamped to the channel range.
  *
  * @return Interpolated channel value.
  */
-static uint8_t lerp_channel(uint8_t from, uint8_t to, float t)
+static uint8_t lerp_channel(uint8_t from, uint8_t to, float fraction)
 {
-    const float value = (float)from + ((float)to - (float)from) * t;
-    if (!(value > 0.0f)) /* NaN too: a package's or an app's maths can reach t */
+    const float value = (float)from + ((float)to - (float)from) * fraction;
+    if (!(value > 0.0f)) /* NaN too: a package's or an app's maths can reach fraction */
         return 0U;
-    if (value >= 255.0f)
-        return 255U;
+    if (value >= (float)CHANNEL_MAX)
+        return CHANNEL_MAX;
     return (uint8_t)(value + 0.5f);
 }
 
 /**
  * @brief Linearly interpolates an ARGB8888 color.
  *
- * @param[in] from  Start ARGB8888 color.
- * @param[in] to    Target ARGB8888 color.
- * @param[in] t     Interpolation fraction (see lerp_channel).
+ * @param[in] from      Start ARGB8888 color.
+ * @param[in] to        Target ARGB8888 color.
+ * @param[in] fraction  Interpolation fraction (see lerp_channel).
  *
  * @return Interpolated ARGB8888 color.
  */
-static uint32_t lerp_color(uint32_t from, uint32_t to, float t)
+static uint32_t lerp_color(uint32_t from, uint32_t to, float fraction)
 {
-    const uint8_t a = lerp_channel((uint8_t)(from >> 24), (uint8_t)(to >> 24), t);
-    const uint8_t r = lerp_channel((uint8_t)(from >> 16), (uint8_t)(to >> 16), t);
-    const uint8_t g = lerp_channel((uint8_t)(from >> 8), (uint8_t)(to >> 8), t);
-    const uint8_t b = lerp_channel((uint8_t)from, (uint8_t)to, t);
+    const uint8_t alpha = lerp_channel((uint8_t)(from >> 24), (uint8_t)(to >> 24), fraction);
+    const uint8_t red = lerp_channel((uint8_t)(from >> 16), (uint8_t)(to >> 16), fraction);
+    const uint8_t green = lerp_channel((uint8_t)(from >> 8), (uint8_t)(to >> 8), fraction);
+    const uint8_t blue = lerp_channel((uint8_t)from, (uint8_t)to, fraction);
 
-    return ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    return ((uint32_t)alpha << 24) | ((uint32_t)red << 16) | ((uint32_t)green << 8) | (uint32_t)blue;
 }
 
 /**
@@ -605,7 +635,7 @@ static bool apply_color_value(ERNode* node, ERAnimProp prop, uint32_t color)
                 return false;
             /* The text painter reads 0 as unset and draws white. Any color at alpha 0 draws nothing alike. */
             if (color == 0U)
-                color = 0x00FFFFFFU;
+                color = TEXT_COLOR_TRANSPARENT;
             field = &node->props.text.color;
             break;
         default:
@@ -621,23 +651,23 @@ static bool apply_color_value(ERNode* node, ERAnimProp prop, uint32_t color)
  * @brief Applies an animated value's current float to one binding's node property.
  *
  * @param[in,out] node     Bound node.
- * @param[in]     bind     Binding, with its mapping.
+ * @param[in]     binding  Binding, with its mapping.
  * @param[in]     current  The value's current float.
  *
  * @return true if the property changed.
  */
-static bool apply_binding(ERNode* node, const ERValueBinding* bind, float current)
+static bool apply_binding(ERNode* node, const ERValueBinding* binding, float current)
 {
-    if (bind->color)
-        return apply_color_value(node, bind->prop, er_interpolate_color(current, &bind->map.color));
-    if (bind->interpolated)
+    if (binding->color)
+        return apply_color_value(node, binding->prop, er_interpolate_color(current, &binding->map.color));
+    if (binding->interpolated)
         current = er_interpolate(current,
-                                 bind->map.num.input_range,
-                                 bind->map.num.output_range,
-                                 (int)bind->map.num.point_count,
-                                 bind->map.num.extrapolate_left,
-                                 bind->map.num.extrapolate_right);
-    return apply_numeric_value(node, bind->prop, current);
+                                 binding->map.numeric.input_range,
+                                 binding->map.numeric.output_range,
+                                 (int)binding->map.numeric.point_count,
+                                 binding->map.numeric.extrapolate_left,
+                                 binding->map.numeric.extrapolate_right);
+    return apply_numeric_value(node, binding->prop, current);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -645,197 +675,199 @@ static bool apply_binding(ERNode* node, const ERValueBinding* bind, float curren
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Evaluates the X component of a cubic bezier at parameter t.
+ * @brief Evaluates the X component of a cubic bezier at a curve parameter.
  *
- * @param[in] t   Curve parameter [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] x2  Second control-point X.
+ * @param[in] parameter  Curve parameter [0,1].
+ * @param[in] x1         First control-point X.
+ * @param[in] x2         Second control-point X.
  *
  * @return X coordinate on the curve.
  */
-static float bezier_x(float t, float x1, float x2)
+static float bezier_x(float parameter, float x1, float x2)
 {
-    const float c = 3.0f * x1;
-    const float b = 3.0f * (x2 - x1) - c;
-    const float a = 1.0f - c - b;
-    return ((a * t + b) * t + c) * t;
+    const float linear = 3.0f * x1;
+    const float quadratic = 3.0f * (x2 - x1) - linear;
+    const float cubic = 1.0f - linear - quadratic;
+    return ((cubic * parameter + quadratic) * parameter + linear) * parameter;
 }
 
 /**
- * @brief Evaluates the derivative dX/dt of a cubic bezier at parameter t.
+ * @brief Evaluates the derivative dX/dt of a cubic bezier at a curve parameter.
  *
- * @param[in] t   Curve parameter [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] x2  Second control-point X.
+ * @param[in] parameter  Curve parameter [0,1].
+ * @param[in] x1         First control-point X.
+ * @param[in] x2         Second control-point X.
  *
- * @return dX/dt at t.
+ * @return dX/dt at that parameter.
  */
-static float bezier_dx(float t, float x1, float x2)
+static float bezier_dx(float parameter, float x1, float x2)
 {
-    const float c = 3.0f * x1;
-    const float b = 3.0f * (x2 - x1) - c;
-    const float a = 1.0f - c - b;
-    return (3.0f * a * t + 2.0f * b) * t + c;
+    const float linear = 3.0f * x1;
+    const float quadratic = 3.0f * (x2 - x1) - linear;
+    const float cubic = 1.0f - linear - quadratic;
+    return (3.0f * cubic * parameter + 2.0f * quadratic) * parameter + linear;
 }
 
 /**
- * @brief Finds the bezier curve parameter t for a given normalised time x using Newton's method.
+ * @brief Finds the bezier curve parameter for a given normalised time using Newton's method.
  *
- * @param[in] x   Input normalised time [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] x2  Second control-point X.
+ * @param[in] time  Input normalised time [0,1].
+ * @param[in] x1    First control-point X.
+ * @param[in] x2    Second control-point X.
  *
- * @return Bezier parameter t such that bezier_x(t, x1, x2) ≈ x.
+ * @return The curve parameter such that bezier_x(parameter, x1, x2) ≈ time.
  */
-static float bezier_t_for_x(float x, float x1, float x2)
+static float bezier_t_for_x(float time, float x1, float x2)
 {
-    float t = x;
-    for (int i = 0; i < 8; i++)
+    float parameter = time;
+    for (int iteration = 0; iteration < BEZIER_NEWTON_ITERATIONS; iteration++)
     {
-        const float dx = bezier_x(t, x1, x2) - x;
-        if (dx > -0.00001f && dx < 0.00001f)
+        const float error = bezier_x(parameter, x1, x2) - time;
+        if (error > -BEZIER_NEWTON_EPSILON && error < BEZIER_NEWTON_EPSILON)
             break;
-        const float d = bezier_dx(t, x1, x2);
-        if (d < 0.00001f)
+        const float slope = bezier_dx(parameter, x1, x2);
+        if (slope < BEZIER_NEWTON_EPSILON)
             break;
-        t -= dx / d;
-        if (t < 0.0f)
-            t = 0.0f;
-        if (t > 1.0f)
-            t = 1.0f;
+        parameter -= error / slope;
+        if (parameter < 0.0f)
+            parameter = 0.0f;
+        if (parameter > 1.0f)
+            parameter = 1.0f;
     }
-    return t;
+    return parameter;
 }
 
 /**
  * @brief Evaluates a cubic bezier easing curve for a given time input.
  *
- * @param[in] x   Normalised time [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] y1  First control-point Y.
- * @param[in] x2  Second control-point X.
- * @param[in] y2  Second control-point Y.
+ * @param[in] time  Normalised time [0,1].
+ * @param[in] x1    First control-point X.
+ * @param[in] y1    First control-point Y.
+ * @param[in] x2    Second control-point X.
+ * @param[in] y2    Second control-point Y.
  *
  * @return Easing output Y for the given X.
  */
-static float cubic_bezier(float x, float x1, float y1, float x2, float y2)
+static float cubic_bezier(float time, float x1, float y1, float x2, float y2)
 {
-    if (x <= 0.0f)
+    if (time <= 0.0f)
         return 0.0f;
-    if (x >= 1.0f)
+    if (time >= 1.0f)
         return 1.0f;
-    const float t = bezier_t_for_x(x, x1, x2);
-    const float c = 3.0f * y1;
-    const float b = 3.0f * (y2 - y1) - c;
-    const float a = 1.0f - c - b;
-    return ((a * t + b) * t + c) * t;
+    const float parameter = bezier_t_for_x(time, x1, x2);
+    const float linear = 3.0f * y1;
+    const float quadratic = 3.0f * (y2 - y1) - linear;
+    const float cubic = 1.0f - linear - quadratic;
+    return ((cubic * parameter + quadratic) * parameter + linear) * parameter;
 }
 
 /**
  * @brief Applies an easing curve to a linear progress value.
  *
- * @param[in] t     Linear progress [0,1].
- * @param[in] ease  Easing function to apply.
- * @param[in] bx1   Bezier X1 (used only for ER_EASE_BEZIER).
- * @param[in] by1   Bezier Y1 (used only for ER_EASE_BEZIER).
- * @param[in] bx2   Bezier X2 (used only for ER_EASE_BEZIER).
- * @param[in] by2   Bezier Y2 (used only for ER_EASE_BEZIER).
+ * @param[in] progress   Linear progress [0,1].
+ * @param[in] easing     Easing function to apply.
+ * @param[in] bezier_x1  Bezier X1 (used only for ER_EASE_BEZIER).
+ * @param[in] bezier_y1  Bezier Y1 (used only for ER_EASE_BEZIER).
+ * @param[in] bezier_x2  Bezier X2 (used only for ER_EASE_BEZIER).
+ * @param[in] bezier_y2  Bezier Y2 (used only for ER_EASE_BEZIER).
  *
  * @return Eased progress value.
  */
-static float apply_easing(float t, ERAnimEasing ease, float bx1, float by1, float bx2, float by2)
+static float
+apply_easing(float progress, ERAnimEasing easing, float bezier_x1, float bezier_y1, float bezier_x2, float bezier_y2)
 {
-    switch (ease)
+    switch (easing)
     {
         case ER_EASE_LINEAR:
         default:
-            return t;
+            return progress;
 
         case ER_EASE_EASE:
-            return cubic_bezier(t, 0.25f, 0.1f, 0.25f, 1.0f);
+            return cubic_bezier(progress, CURVE_EASE);
 
         case ER_EASE_EASE_IN:
-            return cubic_bezier(t, 0.42f, 0.0f, 1.0f, 1.0f);
+            return cubic_bezier(progress, CURVE_EASE_IN);
 
         case ER_EASE_EASE_OUT:
-            return cubic_bezier(t, 0.0f, 0.0f, 0.58f, 1.0f);
+            return cubic_bezier(progress, CURVE_EASE_OUT);
 
         case ER_EASE_EASE_IN_OUT:
-            return cubic_bezier(t, 0.42f, 0.0f, 0.58f, 1.0f);
+            return cubic_bezier(progress, CURVE_EASE_IN_OUT);
 
         case ER_EASE_QUAD_IN:
-            return t * t;
+            return progress * progress;
 
         case ER_EASE_QUAD_OUT:
         {
-            const float u = 1.0f - t;
-            return 1.0f - u * u;
+            const float inverse = 1.0f - progress;
+            return 1.0f - inverse * inverse;
         }
 
         case ER_EASE_QUAD_IN_OUT:
-            if (t < 0.5f)
-                return 2.0f * t * t;
+            if (progress < 0.5f)
+                return 2.0f * progress * progress;
             else
             {
-                const float u = 1.0f - t;
-                return 1.0f - 2.0f * u * u;
+                const float inverse = 1.0f - progress;
+                return 1.0f - 2.0f * inverse * inverse;
             }
 
         case ER_EASE_CUBIC_IN:
-            return t * t * t;
+            return progress * progress * progress;
 
         case ER_EASE_CUBIC_OUT:
         {
-            const float u = 1.0f - t;
-            return 1.0f - u * u * u;
+            const float inverse = 1.0f - progress;
+            return 1.0f - inverse * inverse * inverse;
         }
 
         case ER_EASE_CUBIC_IN_OUT:
-            if (t < 0.5f)
-                return 4.0f * t * t * t;
+            if (progress < 0.5f)
+                return 4.0f * progress * progress * progress;
             else
             {
-                const float u = t - 1.0f;
-                return 1.0f + 4.0f * u * u * u;
+                const float inverse = progress - 1.0f;
+                return 1.0f + 4.0f * inverse * inverse * inverse;
             }
 
         case ER_EASE_BOUNCE_OUT:
         {
-            const float n = 7.5625f;
-            const float d = 2.75f;
-            float x = t;
-            if (x < 1.0f / d)
-                return n * x * x;
-            else if (x < 2.0f / d)
+            const float bounce_scale = 7.5625f;
+            const float bounce_divisor = 2.75f;
+            float bounce_x = progress;
+            if (bounce_x < 1.0f / bounce_divisor)
+                return bounce_scale * bounce_x * bounce_x;
+            else if (bounce_x < 2.0f / bounce_divisor)
             {
-                x -= 1.5f / d;
-                return n * x * x + 0.75f;
+                bounce_x -= 1.5f / bounce_divisor;
+                return bounce_scale * bounce_x * bounce_x + 0.75f;
             }
-            else if (x < 2.5f / d)
+            else if (bounce_x < 2.5f / bounce_divisor)
             {
-                x -= 2.25f / d;
-                return n * x * x + 0.9375f;
+                bounce_x -= 2.25f / bounce_divisor;
+                return bounce_scale * bounce_x * bounce_x + 0.9375f;
             }
             else
             {
-                x -= 2.625f / d;
-                return n * x * x + 0.984375f;
+                bounce_x -= 2.625f / bounce_divisor;
+                return bounce_scale * bounce_x * bounce_x + 0.984375f;
             }
         }
 
         case ER_EASE_ELASTIC_OUT:
         {
-            if (t <= 0.0f)
+            if (progress <= 0.0f)
                 return 0.0f;
-            if (t >= 1.0f)
+            if (progress >= 1.0f)
                 return 1.0f;
-            const float p = 0.3f;
-            const float s = p / 4.0f;
-            return (float)pow(2.0, -10.0 * t) * (float)sin((t - s) * 6.283185f / p) + 1.0f;
+            const float period = 0.3f;
+            const float phase_shift = period / 4.0f;
+            return (float)pow(2.0, -10.0 * progress) * (float)sin((progress - phase_shift) * ELASTIC_TWO_PI / period)
+                   + 1.0f;
         }
 
         case ER_EASE_BEZIER:
-            return cubic_bezier(t, bx1, by1, bx2, by2);
+            return cubic_bezier(progress, bezier_x1, bezier_y1, bezier_x2, bezier_y2);
     }
 }
 
@@ -851,14 +883,14 @@ static float apply_easing(float t, ERAnimEasing ease, float bx1, float by1, floa
  */
 static void cancel_by_tag(uint16_t node_tag, ERAnimProp prop)
 {
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        ERAnimation* a = &s_animations[i];
-        if (a->active && a->node_tag == node_tag && a->prop == prop)
+        ERAnimation* animation = &s_animations[slot_index];
+        if (animation->active && animation->node_tag == node_tag && animation->prop == prop)
         {
-            a->active = false;
-            if (a->on_complete)
-                a->on_complete(false, a->on_complete_user_data);
+            animation->active = false;
+            if (animation->on_complete)
+                animation->on_complete(false, animation->on_complete_user_data);
         }
     }
 }
@@ -870,10 +902,10 @@ static void cancel_by_tag(uint16_t node_tag, ERAnimProp prop)
  */
 static ERAnimation* alloc_slot(void)
 {
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        if (!s_animations[i].active)
-            return &s_animations[i];
+        if (!s_animations[slot_index].active)
+            return &s_animations[slot_index];
     }
     return NULL;
 }
@@ -885,10 +917,10 @@ static ERAnimation* alloc_slot(void)
  */
 static ERAnimGroup* alloc_group(void)
 {
-    for (int i = 0; i < ERUI_MAX_ANIM_GROUPS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIM_GROUPS; slot_index++)
     {
-        if (!s_groups[i].active)
-            return &s_groups[i];
+        if (!s_groups[slot_index].active)
+            return &s_groups[slot_index];
     }
     return NULL;
 }
@@ -908,10 +940,10 @@ static ERAnimValue* find_value_slot(uint16_t handle)
 {
     if (handle == 0U)
         return NULL;
-    for (int i = 0; i < ERUI_MAX_ANIM_VALUES; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIM_VALUES; slot_index++)
     {
-        if (s_anim_values[i].in_use && s_anim_values[i].handle == handle)
-            return &s_anim_values[i];
+        if (s_anim_values[slot_index].in_use && s_anim_values[slot_index].handle == handle)
+            return &s_anim_values[slot_index];
     }
     return NULL;
 }
@@ -923,14 +955,14 @@ static ERAnimValue* find_value_slot(uint16_t handle)
  */
 static void cancel_value_anim(uint16_t value_handle)
 {
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        ERAnimation* a = &s_animations[i];
-        if (a->active && a->value_handle == value_handle)
+        ERAnimation* animation = &s_animations[slot_index];
+        if (animation->active && animation->value_handle == value_handle)
         {
-            a->active = false;
-            if (a->on_complete)
-                a->on_complete(false, a->on_complete_user_data);
+            animation->active = false;
+            if (animation->on_complete)
+                animation->on_complete(false, animation->on_complete_user_data);
         }
     }
 }
@@ -943,20 +975,20 @@ static void cancel_value_anim(uint16_t value_handle)
  * only the boxes under the moving band are displaced; the resting boxes apply the same value and are
  * not repainted), so the per-frame damage stays localized instead of covering every bound node.
  *
- * @param[in] val  Value whose current float is pushed to every active binding.
+ * @param[in] anim_value  Value whose current float is pushed to every active binding.
  */
-static void push_to_value_bindings(ERAnimValue* val)
+static void push_to_value_bindings(ERAnimValue* anim_value)
 {
-    for (int b = 0; b < val->binding_count; b++)
+    for (int binding_index = 0; binding_index < anim_value->binding_count; binding_index++)
     {
-        ERValueBinding* bind = &val->bindings[b];
-        if (!bind->active)
+        ERValueBinding* binding = &anim_value->bindings[binding_index];
+        if (!binding->active)
             continue;
-        ERNode* n = er_get_node(bind->node_tag);
-        if (!n)
+        ERNode* node = er_get_node(binding->node_tag);
+        if (!node)
             continue;
-        if (apply_binding(n, bind, val->current))
-            mark_prop_dirty(n, bind->prop);
+        if (apply_binding(node, binding, anim_value->current))
+            mark_prop_dirty(node, binding->prop);
     }
 }
 
@@ -968,17 +1000,17 @@ void er_anim_reapply_bound(ERNode* node)
      * ERAnimValue. Called after er_node_set_props so a declarative prop update (React commitUpdate)
      * does not clobber a native-driver animation: setProps writes the static value, then this
      * restores the animated value — within the same commit, before the frame is painted. */
-    for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
+    for (int value_index = 0; value_index < ERUI_MAX_ANIM_VALUES; value_index++)
     {
-        ERAnimValue* val = &s_anim_values[s];
-        if (!val->in_use)
+        ERAnimValue* anim_value = &s_anim_values[value_index];
+        if (!anim_value->in_use)
             continue;
-        for (int b = 0; b < val->binding_count; b++)
+        for (int binding_index = 0; binding_index < anim_value->binding_count; binding_index++)
         {
-            ERValueBinding* bind = &val->bindings[b];
-            if (!bind->active || bind->node_tag != node->tag)
+            ERValueBinding* binding = &anim_value->bindings[binding_index];
+            if (!binding->active || binding->node_tag != node->tag)
                 continue;
-            (void)apply_binding(node, bind, val->current);
+            (void)apply_binding(node, binding, anim_value->current);
         }
     }
 }
@@ -992,15 +1024,15 @@ void er_anim_unbind_node(uint16_t node_tag)
      * native-driver animation writing to the wrong element. Mirrors er_anim_reapply_bound's walk; deactivating
      * a binding is just a flag, no callback.
      */
-    for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
+    for (int value_index = 0; value_index < ERUI_MAX_ANIM_VALUES; value_index++)
     {
-        ERAnimValue* val = &s_anim_values[s];
-        if (!val->in_use)
+        ERAnimValue* anim_value = &s_anim_values[value_index];
+        if (!anim_value->in_use)
             continue;
-        for (int b = 0; b < val->binding_count; b++)
+        for (int binding_index = 0; binding_index < anim_value->binding_count; binding_index++)
         {
-            if (val->bindings[b].active && val->bindings[b].node_tag == node_tag)
-                val->bindings[b].active = false;
+            if (anim_value->bindings[binding_index].active && anim_value->bindings[binding_index].node_tag == node_tag)
+                anim_value->bindings[binding_index].active = false;
         }
     }
 }
@@ -1018,16 +1050,17 @@ void er_anim_unbind_prop(ERNode* node, ERAnimProp prop)
     if (!node)
         return;
     bool released = false;
-    for (int s = 0; s < ERUI_MAX_ANIM_VALUES; s++)
+    for (int value_index = 0; value_index < ERUI_MAX_ANIM_VALUES; value_index++)
     {
-        ERAnimValue* val = &s_anim_values[s];
-        if (!val->in_use)
+        ERAnimValue* anim_value = &s_anim_values[value_index];
+        if (!anim_value->in_use)
             continue;
-        for (int b = 0; b < val->binding_count; b++)
+        for (int binding_index = 0; binding_index < anim_value->binding_count; binding_index++)
         {
-            if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+            if (anim_value->bindings[binding_index].active && anim_value->bindings[binding_index].node_tag == node->tag
+                && anim_value->bindings[binding_index].prop == prop)
             {
-                val->bindings[b].active = false;
+                anim_value->bindings[binding_index].active = false;
                 released = true;
             }
         }
@@ -1045,25 +1078,25 @@ void er_anim_unbind_prop(ERNode* node, ERAnimProp prop)
  * cancels on the caller's word and reports it, er_anim_cancel_node() cancels because the group's node
  * is being destroyed and must stay silent (see the reasoning there).
  *
- * @param[in,out] grp     Group to tear down; must be active.
+ * @param[in,out] group   Group to tear down; must be active.
  * @param[in]     notify  Fire each member's on_complete and then the group's, all with
  *                        `finished = false`. The group is marked inactive before its own callback
  *                        runs, so a handler that starts something new does not see a dead group.
  */
-static void deactivate_group(ERAnimGroup* grp, bool notify)
+static void deactivate_group(ERAnimGroup* group, bool notify)
 {
-    const uint8_t slot = (uint8_t)(grp - s_groups);
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    const uint8_t slot = (uint8_t)(group - s_groups);
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        if (!s_animations[i].active || s_animations[i].group_slot != slot)
+        if (!s_animations[slot_index].active || s_animations[slot_index].group_slot != slot)
             continue;
-        s_animations[i].active = false;
-        if (notify && s_animations[i].on_complete)
-            s_animations[i].on_complete(false, s_animations[i].on_complete_user_data);
+        s_animations[slot_index].active = false;
+        if (notify && s_animations[slot_index].on_complete)
+            s_animations[slot_index].on_complete(false, s_animations[slot_index].on_complete_user_data);
     }
-    grp->active = false;
-    if (notify && grp->on_complete)
-        grp->on_complete(false, grp->on_complete_user_data);
+    group->active = false;
+    if (notify && group->on_complete)
+        group->on_complete(false, group->on_complete_user_data);
 }
 
 void er_anim_cancel_node(uint16_t node_tag)
@@ -1094,29 +1127,29 @@ void er_anim_cancel_node(uint16_t node_tag)
      * a sequence would otherwise reach that entry later and start_anim_internal() would hand it to
      * whatever now owns the tag. Freeing the slot also beats today's outcome, where such a group stalls
      * at a step that never completes and is never reclaimed. */
-    for (int g = 0; g < ERUI_MAX_ANIM_GROUPS; g++)
+    for (int group_index = 0; group_index < ERUI_MAX_ANIM_GROUPS; group_index++)
     {
-        ERAnimGroup* grp = &s_groups[g];
-        if (!grp->active)
+        ERAnimGroup* group = &s_groups[group_index];
+        if (!group->active)
             continue;
-        for (uint16_t e = 0; e < grp->count; e++)
+        for (uint16_t entry_index = 0; entry_index < group->count; entry_index++)
         {
-            if (grp->entries[e].node_tag == node_tag)
+            if (group->entries[entry_index].node_tag == node_tag)
             {
-                deactivate_group(grp, false);
+                deactivate_group(group, false);
                 break;
             }
         }
     }
 
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        ERAnimation* a = &s_animations[i];
+        ERAnimation* animation = &s_animations[slot_index];
         /* value_handle guards the ERAnimValue animations, which do not target a node at all. They park
          * node_tag at 0xFFFF so no real tag can collide with them today; the test is here so that
          * sentinel is not the only thing standing between a destroyed tag 0 and every value animation. */
-        if (a->active && a->value_handle == 0U && a->node_tag == node_tag)
-            a->active = false;
+        if (animation->active && animation->value_handle == 0U && animation->node_tag == node_tag)
+            animation->active = false;
     }
 }
 
@@ -1127,8 +1160,8 @@ void er_anim_cancel_node(uint16_t node_tag)
 /**
  * @brief Integrates spring physics for delta_ms milliseconds (max ER_SPRING_MAX_STEPS steps).
  *
- * @param[in,out] anim       Animation slot to update.
- * @param[in]     delta_ms   Elapsed time in milliseconds.
+ * @param[in,out] anim      Animation slot to update.
+ * @param[in]     delta_ms  Elapsed time in milliseconds.
  *
  * @return true when the spring has settled.
  */
@@ -1138,16 +1171,16 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
     if (steps > ER_SPRING_MAX_STEPS)
         steps = ER_SPRING_MAX_STEPS;
 
-    const float k = anim->spring_stiffness > 0.0f ? anim->spring_stiffness : SPRING_DEFAULT_STIFFNESS;
-    const float c = anim->spring_damping > 0.0f ? anim->spring_damping : SPRING_DEFAULT_DAMPING;
-    const float m = anim->spring_mass > 0.0f ? anim->spring_mass : SPRING_DEFAULT_MASS;
+    const float stiffness = anim->spring_stiffness > 0.0f ? anim->spring_stiffness : SPRING_DEFAULT_STIFFNESS;
+    const float damping = anim->spring_damping > 0.0f ? anim->spring_damping : SPRING_DEFAULT_DAMPING;
+    const float mass = anim->spring_mass > 0.0f ? anim->spring_mass : SPRING_DEFAULT_MASS;
 
-    for (uint32_t i = 0; i < steps; i++)
-        er_spring_step(&anim->spring_pos, &anim->spring_vel, k, c, m);
+    for (uint32_t step = 0; step < steps; step++)
+        er_spring_step(&anim->spring_position, &anim->spring_velocity, stiffness, damping, mass);
 
-    const float disp = anim->spring_pos - 1.0f;
-    return (disp > -SPRING_SETTLE_DISP && disp < SPRING_SETTLE_DISP)
-           && (anim->spring_vel > -SPRING_SETTLE_VEL && anim->spring_vel < SPRING_SETTLE_VEL);
+    const float displacement = anim->spring_position - 1.0f;
+    return (displacement > -SPRING_SETTLE_DISP && displacement < SPRING_SETTLE_DISP)
+           && (anim->spring_velocity > -SPRING_SETTLE_VEL && anim->spring_velocity < SPRING_SETTLE_VEL);
 }
 
 /**
@@ -1156,8 +1189,8 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
  * Capping the step count keeps a long frame cheap. A decay caught by one coasts for a few more ticks
  * instead of jumping to where it would have landed, which is how the spring integrator already behaves.
  *
- * @param[in,out] anim       Animation slot to update.
- * @param[in]     delta_ms   Elapsed time in milliseconds.
+ * @param[in,out] anim      Animation slot to update.
+ * @param[in]     delta_ms  Elapsed time in milliseconds.
  *
  * @return true when the velocity has dropped below DECAY_VEL_STOP.
  */
@@ -1167,16 +1200,16 @@ static bool tick_decay(ERAnimation* anim, uint32_t delta_ms)
     if (steps > ER_SPRING_MAX_STEPS)
         steps = ER_SPRING_MAX_STEPS;
 
-    const float decel = anim->decay_deceleration > 0.0f ? anim->decay_deceleration : DECAY_DEFAULT_DECELERATION;
+    const float deceleration = anim->decay_deceleration > 0.0f ? anim->decay_deceleration : DECAY_DEFAULT_DECELERATION;
 
-    for (uint32_t i = 0; i < steps; i++)
+    for (uint32_t step = 0; step < steps; step++)
     {
-        anim->decay_pos += anim->decay_velocity;
-        anim->decay_velocity *= decel;
+        anim->decay_position += anim->decay_velocity;
+        anim->decay_velocity *= deceleration;
     }
 
-    const float v = anim->decay_velocity;
-    return (v > -DECAY_VEL_STOP && v < DECAY_VEL_STOP);
+    const float velocity = anim->decay_velocity;
+    return (velocity > -DECAY_VEL_STOP && velocity < DECAY_VEL_STOP);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1184,8 +1217,12 @@ static bool tick_decay(ERAnimation* anim, uint32_t delta_ms)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /* Forward declaration needed because start_group_entry calls er_anim_start indirectly. */
-static ERAnimHandle start_anim_internal(
-    uint16_t node_tag, ERAnimProp prop, float value, const ERAnimConfig* cfg, uint8_t group_slot, uint8_t group_entry);
+static ERAnimHandle start_anim_internal(uint16_t node_tag,
+                                        ERAnimProp prop,
+                                        float value,
+                                        const ERAnimConfig* config,
+                                        uint8_t group_slot,
+                                        uint8_t group_entry);
 
 /**
  * @brief Called when an animation belonging to a group completes naturally.
@@ -1197,34 +1234,35 @@ static void on_group_entry_complete(uint8_t group_slot, uint8_t entry_index)
 {
     if (group_slot >= ERUI_MAX_ANIM_GROUPS)
         return;
-    ERAnimGroup* grp = &s_groups[group_slot];
-    if (!grp->active)
+    ERAnimGroup* group = &s_groups[group_slot];
+    if (!group->active)
         return;
 
-    if (grp->type == GROUP_TYPE_SEQUENCE)
+    if (group->type == GROUP_TYPE_SEQUENCE)
     {
         (void)entry_index;
-        grp->current++;
-        if (grp->current < grp->count)
+        group->current++;
+        if (group->current < group->count)
         {
-            ERGroupEntry* e = &grp->entries[grp->current];
-            (void)start_anim_internal(e->node_tag, e->prop, e->value, &e->cfg, group_slot, (uint8_t)grp->current);
+            ERGroupEntry* entry = &group->entries[group->current];
+            (void)start_anim_internal(
+                entry->node_tag, entry->prop, entry->value, &entry->config, group_slot, (uint8_t)group->current);
         }
         else
         {
-            grp->active = false;
-            if (grp->on_complete)
-                grp->on_complete(true, grp->on_complete_user_data);
+            group->active = false;
+            if (group->on_complete)
+                group->on_complete(true, group->on_complete_user_data);
         }
     }
     else /* PARALLEL or STAGGER */
     {
-        grp->done++;
-        if (grp->done >= grp->count)
+        group->done++;
+        if (group->done >= group->count)
         {
-            grp->active = false;
-            if (grp->on_complete)
-                grp->on_complete(true, grp->on_complete_user_data);
+            group->active = false;
+            if (group->on_complete)
+                group->on_complete(true, group->on_complete_user_data);
         }
     }
 }
@@ -1236,33 +1274,37 @@ static void on_group_entry_complete(uint8_t group_slot, uint8_t entry_index)
 /**
  * @brief Internal animation start that allows group back-references.
  *
- * @param[in] node_tag    Tag of the node to animate.
- * @param[in] prop        Property to animate.
- * @param[in] value       Target value.
- * @param[in] cfg         Configuration (NULL = immediate snap).
- * @param[in] group_slot  Owner group slot; UINT8_MAX if standalone.
- * @param[in] group_entry Entry index within the group.
+ * @param[in] node_tag     Tag of the node to animate.
+ * @param[in] prop         Property to animate.
+ * @param[in] value        Target value.
+ * @param[in] config       Configuration (NULL = immediate snap).
+ * @param[in] group_slot   Owner group slot; UINT8_MAX if standalone.
+ * @param[in] group_entry  Entry index within the group.
  *
  * @return Handle, or ER_ANIM_HANDLE_INVALID on failure.
  */
-static ERAnimHandle start_anim_internal(
-    uint16_t node_tag, ERAnimProp prop, float value, const ERAnimConfig* cfg, uint8_t group_slot, uint8_t group_entry)
+static ERAnimHandle start_anim_internal(uint16_t node_tag,
+                                        ERAnimProp prop,
+                                        float value,
+                                        const ERAnimConfig* config,
+                                        uint8_t group_slot,
+                                        uint8_t group_entry)
 {
     ERNode* node = er_get_node(node_tag);
     if (!node || !node->in_use)
         return ER_ANIM_HANDLE_INVALID;
 
-    const ERAnimType type = cfg ? cfg->type : ER_ANIM_TIMING;
+    const ERAnimType type = config ? config->type : ER_ANIM_TIMING;
 
     cancel_by_tag(node_tag, prop);
 
     const bool color = is_color_prop(prop);
 
     /* Immediate-snap path: zero duration timing with no delay. */
-    const uint32_t dur = cfg ? cfg->duration_ms : 0U;
-    const uint32_t dly = cfg ? cfg->delay_ms : 0U;
+    const uint32_t duration_ms = config ? config->duration_ms : 0U;
+    const uint32_t delay_ms = config ? config->delay_ms : 0U;
 
-    if (type == ER_ANIM_TIMING && dur == 0U && dly == 0U)
+    if (type == ER_ANIM_TIMING && duration_ms == 0U && delay_ms == 0U)
     {
         if (color)
             (void)apply_color_value(node, prop, bits_from_float(value));
@@ -1270,9 +1312,9 @@ static ERAnimHandle start_anim_internal(
             (void)apply_numeric_value(node, prop, value);
         er_mark_dirty_upward(node);
 
-        if (cfg && cfg->on_complete)
-            cfg->on_complete(true, cfg->on_complete_user_data);
-        if (group_slot != 0xFFU)
+        if (config && config->on_complete)
+            config->on_complete(true, config->on_complete_user_data);
+        if (group_slot != GROUP_SLOT_NONE)
             on_group_entry_complete(group_slot, group_entry);
         return ER_ANIM_HANDLE_INVALID;
     }
@@ -1287,19 +1329,19 @@ static ERAnimHandle start_anim_internal(
     anim->handle = alloc_handle();
     anim->prop = prop;
     anim->type = type;
-    anim->easing = cfg ? cfg->easing : ER_EASE_LINEAR;
-    anim->bezier_x1 = cfg ? cfg->bezier_x1 : 0.0f;
-    anim->bezier_y1 = cfg ? cfg->bezier_y1 : 0.0f;
-    anim->bezier_x2 = cfg ? cfg->bezier_x2 : 1.0f;
-    anim->bezier_y2 = cfg ? cfg->bezier_y2 : 1.0f;
-    anim->delay_ms = dly;
-    anim->in_delay = dly > 0U;
-    anim->duration_ms = dur;
-    anim->loop = cfg ? cfg->loop : false;
-    anim->loop_reverse = cfg ? cfg->loop_reverse : false;
+    anim->easing = config ? config->easing : ER_EASE_LINEAR;
+    anim->bezier_x1 = config ? config->bezier_x1 : 0.0f;
+    anim->bezier_y1 = config ? config->bezier_y1 : 0.0f;
+    anim->bezier_x2 = config ? config->bezier_x2 : 1.0f;
+    anim->bezier_y2 = config ? config->bezier_y2 : 1.0f;
+    anim->delay_ms = delay_ms;
+    anim->in_delay = delay_ms > 0U;
+    anim->duration_ms = duration_ms;
+    anim->loop = config ? config->loop : false;
+    anim->loop_reverse = config ? config->loop_reverse : false;
     anim->color_value = color;
-    anim->on_complete = cfg ? cfg->on_complete : NULL;
-    anim->on_complete_user_data = cfg ? cfg->on_complete_user_data : NULL;
+    anim->on_complete = config ? config->on_complete : NULL;
+    anim->on_complete_user_data = config ? config->on_complete_user_data : NULL;
     anim->group_slot = group_slot;
     anim->group_entry = group_entry;
 
@@ -1324,20 +1366,21 @@ static ERAnimHandle start_anim_internal(
 
     if (type == ER_ANIM_SPRING)
     {
-        anim->spring_stiffness = cfg ? cfg->stiffness : 0.0f;
-        anim->spring_damping = cfg ? cfg->damping : 0.0f;
-        anim->spring_mass = cfg ? cfg->mass : 0.0f;
+        anim->spring_stiffness = config ? config->stiffness : 0.0f;
+        anim->spring_damping = config ? config->damping : 0.0f;
+        anim->spring_mass = config ? config->mass : 0.0f;
         /* Initial velocity is supplied as value/s; convert to normalised/s. */
         const float range = anim->to_value - anim->from_value;
-        anim->spring_pos = 0.0f;
-        anim->spring_vel = (range != 0.0f && cfg) ? cfg->velocity / range : 0.0f;
+        anim->spring_position = 0.0f;
+        anim->spring_velocity = (range != 0.0f && config) ? config->velocity / range : 0.0f;
     }
     else if (type == ER_ANIM_DECAY)
     {
         /* velocity is value/ms; convert to normalised/ms relative to the range. */
         const float range = anim->to_value - anim->from_value;
-        anim->decay_velocity = (range != 0.0f && cfg) ? cfg->velocity / range : 0.0f;
-        anim->decay_deceleration = (cfg && cfg->deceleration > 0.0f) ? cfg->deceleration : DECAY_DEFAULT_DECELERATION;
+        anim->decay_velocity = (range != 0.0f && config) ? config->velocity / range : 0.0f;
+        anim->decay_deceleration =
+            (config && config->deceleration > 0.0f) ? config->deceleration : DECAY_DEFAULT_DECELERATION;
     }
 
     return anim->handle;
@@ -1347,11 +1390,11 @@ static ERAnimHandle start_anim_internal(
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-ERAnimHandle er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* cfg)
+ERAnimHandle er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* config)
 {
     if (!node || !node->in_use)
         return ER_ANIM_HANDLE_INVALID;
-    return start_anim_internal(node->tag, prop, value, cfg, 0xFFU, 0U);
+    return start_anim_internal(node->tag, prop, value, config, GROUP_SLOT_NONE, 0U);
 }
 
 void er_anim_cancel(ERNode* node, ERAnimProp prop)
@@ -1366,24 +1409,24 @@ void er_anim_stop(ERAnimHandle handle)
     if (handle == ER_ANIM_HANDLE_INVALID)
         return;
 
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        ERAnimation* a = &s_animations[i];
-        if (a->active && a->handle == handle)
+        ERAnimation* animation = &s_animations[slot_index];
+        if (animation->active && animation->handle == handle)
         {
-            a->active = false;
-            if (a->on_complete)
-                a->on_complete(false, a->on_complete_user_data);
+            animation->active = false;
+            if (animation->on_complete)
+                animation->on_complete(false, animation->on_complete_user_data);
             return;
         }
     }
 
-    for (int i = 0; i < ERUI_MAX_ANIM_GROUPS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIM_GROUPS; slot_index++)
     {
-        ERAnimGroup* grp = &s_groups[i];
-        if (grp->active && grp->handle == handle)
+        ERAnimGroup* group = &s_groups[slot_index];
+        if (group->active && group->handle == handle)
         {
-            deactivate_group(grp, true); /* cancels every member and reports finished = false */
+            deactivate_group(group, true); /* cancels every member and reports finished = false */
             return;
         }
     }
@@ -1393,72 +1436,73 @@ ERAnimHandle er_anim_sequence(const ERAnimEntry* entries, uint16_t count, ERAnim
 {
     if (!entries || count == 0)
         return ER_ANIM_HANDLE_INVALID;
-    ERAnimGroup* grp = alloc_group();
-    if (!grp)
+    ERAnimGroup* group = alloc_group();
+    if (!group)
         return ER_ANIM_HANDLE_INVALID;
 
-    memset(grp, 0, sizeof(*grp));
-    grp->active = true;
-    grp->type = GROUP_TYPE_SEQUENCE;
-    grp->handle = alloc_handle();
-    grp->on_complete = on_complete;
-    grp->on_complete_user_data = user_data;
-    grp->count = count < ERUI_MAX_GROUP_ENTRIES ? count : ERUI_MAX_GROUP_ENTRIES;
+    memset(group, 0, sizeof(*group));
+    group->active = true;
+    group->type = GROUP_TYPE_SEQUENCE;
+    group->handle = alloc_handle();
+    group->on_complete = on_complete;
+    group->on_complete_user_data = user_data;
+    group->count = count < ERUI_MAX_GROUP_ENTRIES ? count : ERUI_MAX_GROUP_ENTRIES;
 
-    for (uint16_t i = 0; i < grp->count; i++)
+    for (uint16_t entry_index = 0; entry_index < group->count; entry_index++)
     {
-        const ERNode* node = entries[i].node;
-        grp->entries[i].node_tag = node ? node->tag : (uint16_t)0xFFFFU;
-        grp->entries[i].prop = entries[i].prop;
-        grp->entries[i].value = entries[i].value;
-        grp->entries[i].cfg = entries[i].cfg;
-        grp->entries[i].cfg.on_complete = NULL;
+        const ERNode* node = entries[entry_index].node;
+        group->entries[entry_index].node_tag = node ? node->tag : (uint16_t)ANIM_NO_NODE_TAG;
+        group->entries[entry_index].prop = entries[entry_index].prop;
+        group->entries[entry_index].value = entries[entry_index].value;
+        group->entries[entry_index].config = entries[entry_index].cfg;
+        group->entries[entry_index].config.on_complete = NULL;
     }
 
-    const uint8_t slot = (uint8_t)(grp - s_groups);
+    const uint8_t slot = (uint8_t)(group - s_groups);
 
     /* Start the first entry. */
-    ERGroupEntry* e = &grp->entries[0];
-    (void)start_anim_internal(e->node_tag, e->prop, e->value, &e->cfg, slot, 0U);
+    ERGroupEntry* entry = &group->entries[0];
+    (void)start_anim_internal(entry->node_tag, entry->prop, entry->value, &entry->config, slot, 0U);
 
-    return grp->handle;
+    return group->handle;
 }
 
 ERAnimHandle er_anim_parallel(const ERAnimEntry* entries, uint16_t count, ERAnimCompleteFn on_complete, void* user_data)
 {
     if (!entries || count == 0)
         return ER_ANIM_HANDLE_INVALID;
-    ERAnimGroup* grp = alloc_group();
-    if (!grp)
+    ERAnimGroup* group = alloc_group();
+    if (!group)
         return ER_ANIM_HANDLE_INVALID;
 
-    memset(grp, 0, sizeof(*grp));
-    grp->active = true;
-    grp->type = GROUP_TYPE_PARALLEL;
-    grp->handle = alloc_handle();
-    grp->on_complete = on_complete;
-    grp->on_complete_user_data = user_data;
-    grp->count = count < ERUI_MAX_GROUP_ENTRIES ? count : ERUI_MAX_GROUP_ENTRIES;
+    memset(group, 0, sizeof(*group));
+    group->active = true;
+    group->type = GROUP_TYPE_PARALLEL;
+    group->handle = alloc_handle();
+    group->on_complete = on_complete;
+    group->on_complete_user_data = user_data;
+    group->count = count < ERUI_MAX_GROUP_ENTRIES ? count : ERUI_MAX_GROUP_ENTRIES;
 
-    for (uint16_t i = 0; i < grp->count; i++)
+    for (uint16_t entry_index = 0; entry_index < group->count; entry_index++)
     {
-        const ERNode* node = entries[i].node;
-        grp->entries[i].node_tag = node ? node->tag : (uint16_t)0xFFFFU;
-        grp->entries[i].prop = entries[i].prop;
-        grp->entries[i].value = entries[i].value;
-        grp->entries[i].cfg = entries[i].cfg;
-        grp->entries[i].cfg.on_complete = NULL;
+        const ERNode* node = entries[entry_index].node;
+        group->entries[entry_index].node_tag = node ? node->tag : (uint16_t)ANIM_NO_NODE_TAG;
+        group->entries[entry_index].prop = entries[entry_index].prop;
+        group->entries[entry_index].value = entries[entry_index].value;
+        group->entries[entry_index].config = entries[entry_index].cfg;
+        group->entries[entry_index].config.on_complete = NULL;
     }
 
-    const uint8_t slot = (uint8_t)(grp - s_groups);
+    const uint8_t slot = (uint8_t)(group - s_groups);
 
-    for (uint16_t i = 0; i < grp->count; i++)
+    for (uint16_t entry_index = 0; entry_index < group->count; entry_index++)
     {
-        ERGroupEntry* e = &grp->entries[i];
-        (void)start_anim_internal(e->node_tag, e->prop, e->value, &e->cfg, slot, (uint8_t)i);
+        ERGroupEntry* entry = &group->entries[entry_index];
+        (void)start_anim_internal(
+            entry->node_tag, entry->prop, entry->value, &entry->config, slot, (uint8_t)entry_index);
     }
 
-    return grp->handle;
+    return group->handle;
 }
 
 ERAnimHandle er_anim_stagger(
@@ -1466,53 +1510,54 @@ ERAnimHandle er_anim_stagger(
 {
     if (!entries || count == 0)
         return ER_ANIM_HANDLE_INVALID;
-    ERAnimGroup* grp = alloc_group();
-    if (!grp)
+    ERAnimGroup* group = alloc_group();
+    if (!group)
         return ER_ANIM_HANDLE_INVALID;
 
-    memset(grp, 0, sizeof(*grp));
-    grp->active = true;
-    grp->type = GROUP_TYPE_STAGGER;
-    grp->handle = alloc_handle();
-    grp->stagger_ms = stagger_ms;
-    grp->on_complete = on_complete;
-    grp->on_complete_user_data = user_data;
-    grp->count = count < ERUI_MAX_GROUP_ENTRIES ? count : ERUI_MAX_GROUP_ENTRIES;
+    memset(group, 0, sizeof(*group));
+    group->active = true;
+    group->type = GROUP_TYPE_STAGGER;
+    group->handle = alloc_handle();
+    group->stagger_ms = stagger_ms;
+    group->on_complete = on_complete;
+    group->on_complete_user_data = user_data;
+    group->count = count < ERUI_MAX_GROUP_ENTRIES ? count : ERUI_MAX_GROUP_ENTRIES;
 
-    for (uint16_t i = 0; i < grp->count; i++)
+    for (uint16_t entry_index = 0; entry_index < group->count; entry_index++)
     {
-        const ERNode* node = entries[i].node;
-        grp->entries[i].node_tag = node ? node->tag : (uint16_t)0xFFFFU;
-        grp->entries[i].prop = entries[i].prop;
-        grp->entries[i].value = entries[i].value;
-        grp->entries[i].cfg = entries[i].cfg;
-        grp->entries[i].cfg.on_complete = NULL;
-        grp->entries[i].cfg.delay_ms += (uint32_t)i * stagger_ms;
+        const ERNode* node = entries[entry_index].node;
+        group->entries[entry_index].node_tag = node ? node->tag : (uint16_t)ANIM_NO_NODE_TAG;
+        group->entries[entry_index].prop = entries[entry_index].prop;
+        group->entries[entry_index].value = entries[entry_index].value;
+        group->entries[entry_index].config = entries[entry_index].cfg;
+        group->entries[entry_index].config.on_complete = NULL;
+        group->entries[entry_index].config.delay_ms += (uint32_t)entry_index * stagger_ms;
     }
 
-    const uint8_t slot = (uint8_t)(grp - s_groups);
+    const uint8_t slot = (uint8_t)(group - s_groups);
 
-    for (uint16_t i = 0; i < grp->count; i++)
+    for (uint16_t entry_index = 0; entry_index < group->count; entry_index++)
     {
-        ERGroupEntry* e = &grp->entries[i];
-        (void)start_anim_internal(e->node_tag, e->prop, e->value, &e->cfg, slot, (uint8_t)i);
+        ERGroupEntry* entry = &group->entries[entry_index];
+        (void)start_anim_internal(
+            entry->node_tag, entry->prop, entry->value, &entry->config, slot, (uint8_t)entry_index);
     }
 
-    return grp->handle;
+    return group->handle;
 }
 
 ERAnimValueHandle er_anim_value_create(float initial_value)
 {
-    for (int i = 0; i < ERUI_MAX_ANIM_VALUES; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIM_VALUES; slot_index++)
     {
-        ERAnimValue* v = &s_anim_values[i];
-        if (!v->in_use)
+        ERAnimValue* anim_value = &s_anim_values[slot_index];
+        if (!anim_value->in_use)
         {
-            memset(v, 0, sizeof(*v));
-            v->in_use = true;
-            v->handle = alloc_handle();
-            v->current = initial_value;
-            return v->handle;
+            memset(anim_value, 0, sizeof(*anim_value));
+            anim_value->in_use = true;
+            anim_value->handle = alloc_handle();
+            anim_value->current = initial_value;
+            return anim_value->handle;
         }
     }
     return ER_ANIM_VALUE_INVALID;
@@ -1524,20 +1569,20 @@ ERAnimValueHandle er_anim_value_create(float initial_value)
  * Its next setProps writes the static value back but skips the repaint when the props are unchanged, so
  * the release has to ask for it (as er_anim_unbind_prop does).
  *
- * @param[in,out] val  Value whose bindings to release.
+ * @param[in,out] anim_value  Value whose bindings to release.
  */
-static void release_bindings(ERAnimValue* val)
+static void release_bindings(ERAnimValue* anim_value)
 {
-    for (int b = 0; b < val->binding_count; b++)
+    for (int binding_index = 0; binding_index < anim_value->binding_count; binding_index++)
     {
-        if (!val->bindings[b].active)
+        if (!anim_value->bindings[binding_index].active)
             continue;
-        val->bindings[b].active = false;
-        ERNode* n = er_get_node(val->bindings[b].node_tag);
-        if (n)
-            er_mark_dirty_upward(n);
+        anim_value->bindings[binding_index].active = false;
+        ERNode* node = er_get_node(anim_value->bindings[binding_index].node_tag);
+        if (node)
+            er_mark_dirty_upward(node);
     }
-    val->binding_count = 0;
+    anim_value->binding_count = 0;
 }
 
 void er_anim_value_destroy(ERAnimValueHandle handle)
@@ -1545,46 +1590,47 @@ void er_anim_value_destroy(ERAnimValueHandle handle)
     if (handle == ER_ANIM_VALUE_INVALID)
         return;
     cancel_value_anim(handle);
-    ERAnimValue* val = find_value_slot(handle);
-    if (val)
+    ERAnimValue* anim_value = find_value_slot(handle);
+    if (anim_value)
     {
-        release_bindings(val);
-        val->in_use = false;
+        release_bindings(anim_value);
+        anim_value->in_use = false;
     }
 }
 
 /**
  * @brief Claims a free binding slot on a value for a node+prop pair.
  *
- * @param[in,out] val   Value to bind; NULL claims nothing.
- * @param[in]     node  Target node.
- * @param[in]     prop  Property to drive.
+ * @param[in,out] anim_value  Value to binding; NULL claims nothing.
+ * @param[in]     node        Target node.
+ * @param[in]     prop        Property to drive.
  *
  * @return The claimed binding, its mapping left for the caller to fill; NULL when there is no value,
  *         the pair is already bound (the reconciler may re-bind on every render, which would otherwise
  *         exhaust the pool), or every slot is taken.
  */
-static ERValueBinding* claim_binding(ERAnimValue* val, const ERNode* node, ERAnimProp prop)
+static ERValueBinding* claim_binding(ERAnimValue* anim_value, const ERNode* node, ERAnimProp prop)
 {
-    if (!val)
+    if (!anim_value)
         return NULL;
-    for (int b = 0; b < val->binding_count; b++)
+    for (int binding_index = 0; binding_index < anim_value->binding_count; binding_index++)
     {
-        if (val->bindings[b].active && val->bindings[b].node_tag == node->tag && val->bindings[b].prop == prop)
+        if (anim_value->bindings[binding_index].active && anim_value->bindings[binding_index].node_tag == node->tag
+            && anim_value->bindings[binding_index].prop == prop)
             return NULL;
     }
-    for (int b = 0; b < ERUI_MAX_VALUE_BINDINGS; b++)
+    for (int binding_index = 0; binding_index < ERUI_MAX_VALUE_BINDINGS; binding_index++)
     {
-        ERValueBinding* bind = &val->bindings[b];
-        if (bind->active)
+        ERValueBinding* binding = &anim_value->bindings[binding_index];
+        if (binding->active)
             continue;
-        memset(bind, 0, sizeof(*bind));
-        bind->node_tag = node->tag;
-        bind->prop = prop;
-        bind->active = true;
-        if ((uint8_t)(b + 1) > val->binding_count)
-            val->binding_count = (uint8_t)(b + 1);
-        return bind;
+        memset(binding, 0, sizeof(*binding));
+        binding->node_tag = node->tag;
+        binding->prop = prop;
+        binding->active = true;
+        if ((uint8_t)(binding_index + 1) > anim_value->binding_count)
+            anim_value->binding_count = (uint8_t)(binding_index + 1);
+        return binding;
     }
     return NULL;
 }
@@ -1594,12 +1640,12 @@ void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop)
     /* A plain float is not a color: a color prop is bound through er_anim_value_bind_color. */
     if (handle == ER_ANIM_VALUE_INVALID || !node || is_color_prop(prop))
         return;
-    ERAnimValue* val = find_value_slot(handle);
-    ERValueBinding* bind = claim_binding(val, node, prop);
-    if (!bind)
+    ERAnimValue* anim_value = find_value_slot(handle);
+    ERValueBinding* binding = claim_binding(anim_value, node, prop);
+    if (!binding)
         return;
     /* Apply at once so the node shows the current value, not its default until the value next changes. */
-    (void)apply_binding(node, bind, val->current);
+    (void)apply_binding(node, binding, anim_value->current);
     er_mark_dirty_upward(node);
 }
 
@@ -1646,15 +1692,16 @@ float er_interpolate(float input,
         }
     }
 
-    for (int i = 1; i <= last; ++i)
+    for (int point_index = 1; point_index <= last; ++point_index)
     {
-        if (input <= input_range[i])
+        if (input <= input_range[point_index])
         {
-            const float span = input_range[i] - input_range[i - 1];
+            const float span = input_range[point_index] - input_range[point_index - 1];
             if (span == 0.0f)
-                return output_range[i - 1];
-            return output_range[i - 1]
-                   + (output_range[i] - output_range[i - 1]) * ((input - input_range[i - 1]) / span);
+                return output_range[point_index - 1];
+            return output_range[point_index - 1]
+                   + (output_range[point_index] - output_range[point_index - 1])
+                         * ((input - input_range[point_index - 1]) / span);
         }
     }
     return output_range[last];
@@ -1663,105 +1710,107 @@ float er_interpolate(float input,
 void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
                                      ERNode* node,
                                      ERAnimProp prop,
-                                     const ERInterpolation* interp)
+                                     const ERInterpolation* interpolation)
 {
-    if (handle == ER_ANIM_VALUE_INVALID || !node || !interp || interp->point_count < 2u || is_color_prop(prop))
+    if (handle == ER_ANIM_VALUE_INVALID || !node || !interpolation || interpolation->point_count < 2u
+        || is_color_prop(prop))
         return;
-    ERAnimValue* val = find_value_slot(handle);
-    ERValueBinding* bind = claim_binding(val, node, prop);
-    if (!bind)
+    ERAnimValue* anim_value = find_value_slot(handle);
+    ERValueBinding* binding = claim_binding(anim_value, node, prop);
+    if (!binding)
         return;
-    bind->interpolated = true;
-    bind->map.num = *interp;
-    (void)apply_binding(node, bind, val->current);
+    binding->interpolated = true;
+    binding->map.numeric = *interpolation;
+    (void)apply_binding(node, binding, anim_value->current);
     er_mark_dirty_upward(node);
 }
 
-uint32_t er_interpolate_color(float input, const ERColorInterpolation* interp)
+uint32_t er_interpolate_color(float input, const ERColorInterpolation* interpolation)
 {
-    if (!interp || interp->point_count < 2U)
+    if (!interpolation || interpolation->point_count < 2U)
         return 0U;
 
-    const float* in = interp->input_range;
-    const uint32_t* out = interp->output_range;
-    const int last = (int)interp->point_count - 1;
+    const float* input_range = interpolation->input_range;
+    const uint32_t* output_range = interpolation->output_range;
+    const int last = (int)interpolation->point_count - 1;
 
     /* NaN maps to the last color, as er_interpolate maps it to the last output. */
     if (input != input)
-        return out[last];
+        return output_range[last];
 
-    /* The segment [seg - 1, seg] the input falls in, or extends past. Only EXTEND continues the slope
+    /* The segment [segment - 1, segment] the input falls in, or extends past. Only EXTEND continues the slope
      * outside the range; IDENTITY has no color reading, so it holds the endpoint like CLAMP. */
-    int seg;
-    if (input < in[0])
+    int segment;
+    if (input < input_range[0])
     {
-        if (interp->extrapolate_left != ER_EXTRAPOLATE_EXTEND)
-            return out[0];
-        seg = 1;
+        if (interpolation->extrapolate_left != ER_EXTRAPOLATE_EXTEND)
+            return output_range[0];
+        segment = 1;
     }
-    else if (input > in[last])
+    else if (input > input_range[last])
     {
-        if (interp->extrapolate_right != ER_EXTRAPOLATE_EXTEND)
-            return out[last];
-        seg = last;
+        if (interpolation->extrapolate_right != ER_EXTRAPOLATE_EXTEND)
+            return output_range[last];
+        segment = last;
     }
     else
     {
-        seg = 1;
-        while (seg < last && input > in[seg])
-            seg++;
+        segment = 1;
+        while (segment < last && input > input_range[segment])
+            segment++;
     }
 
-    const float span = in[seg] - in[seg - 1];
+    const float span = input_range[segment] - input_range[segment - 1];
     if (span == 0.0f)
-        return input > in[last] ? out[last] : out[seg - 1];
-    return lerp_color(out[seg - 1], out[seg], (input - in[seg - 1]) / span);
+        return input > input_range[last] ? output_range[last] : output_range[segment - 1];
+    return lerp_color(output_range[segment - 1], output_range[segment], (input - input_range[segment - 1]) / span);
 }
 
 void er_anim_value_bind_color(ERAnimValueHandle handle,
                               ERNode* node,
                               ERAnimProp prop,
-                              const ERColorInterpolation* interp)
+                              const ERColorInterpolation* interpolation)
 {
-    if (handle == ER_ANIM_VALUE_INVALID || !node || !interp || interp->point_count < 2u || !is_color_prop(prop))
+    if (handle == ER_ANIM_VALUE_INVALID || !node || !interpolation || interpolation->point_count < 2u
+        || !is_color_prop(prop))
         return;
-    ERAnimValue* val = find_value_slot(handle);
-    ERValueBinding* bind = claim_binding(val, node, prop);
-    if (!bind)
+    ERAnimValue* anim_value = find_value_slot(handle);
+    ERValueBinding* binding = claim_binding(anim_value, node, prop);
+    if (!binding)
         return;
-    bind->interpolated = true;
-    bind->color = true;
-    bind->map.color = *interp;
-    (void)apply_binding(node, bind, val->current);
+    binding->interpolated = true;
+    binding->color = true;
+    binding->map.color = *interpolation;
+    (void)apply_binding(node, binding, anim_value->current);
     er_mark_dirty_upward(node);
 }
 
 void er_anim_value_unbind_all(ERAnimValueHandle handle)
 {
-    ERAnimValue* val = find_value_slot(handle);
-    if (val)
-        release_bindings(val);
+    ERAnimValue* anim_value = find_value_slot(handle);
+    if (anim_value)
+        release_bindings(anim_value);
 }
 
-ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* cfg)
+ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* config)
 {
-    ERAnimValue* val = find_value_slot(handle);
-    if (!val)
+    ERAnimValue* anim_value = find_value_slot(handle);
+    if (!anim_value)
         return ER_ANIM_HANDLE_INVALID;
 
     cancel_value_anim(handle);
 
-    const ERAnimType type = cfg ? cfg->type : ER_ANIM_TIMING;
-    const uint32_t dur = cfg ? cfg->duration_ms : 0U;
-    const uint32_t dly = cfg ? cfg->delay_ms : 0U;
+    const ERAnimType type = config ? config->type : ER_ANIM_TIMING;
+    const uint32_t duration_ms = config ? config->duration_ms : 0U;
+    const uint32_t delay_ms = config ? config->delay_ms : 0U;
 
     /* Immediate-snap path: zero-duration timing with no delay. */
-    if (type == ER_ANIM_TIMING && dur == 0U && dly == 0U)
+    if (type == ER_ANIM_TIMING && duration_ms == 0U && delay_ms == 0U)
     {
-        val->current = to_value;
-        push_to_value_bindings(val);
-        if (cfg && cfg->on_complete)
-            cfg->on_complete(true, cfg->on_complete_user_data);
+        anim_value->current = to_value;
+        push_to_value_bindings(anim_value);
+        if (config && config->on_complete)
+            config->on_complete(true, config->on_complete_user_data);
         return ER_ANIM_HANDLE_INVALID;
     }
 
@@ -1772,42 +1821,43 @@ ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, con
     memset(anim, 0, sizeof(*anim));
     anim->active = true;
     anim->value_handle = handle;
-    anim->node_tag = 0xFFFFU; /* unused sentinel for value animations */
+    anim->node_tag = ANIM_NO_NODE_TAG; /* unused sentinel for value animations */
     anim->handle = alloc_handle();
     anim->prop = ER_PROP_OPACITY; /* unused placeholder */
     anim->type = type;
-    anim->easing = cfg ? cfg->easing : ER_EASE_LINEAR;
-    anim->bezier_x1 = cfg ? cfg->bezier_x1 : 0.0f;
-    anim->bezier_y1 = cfg ? cfg->bezier_y1 : 0.0f;
-    anim->bezier_x2 = cfg ? cfg->bezier_x2 : 1.0f;
-    anim->bezier_y2 = cfg ? cfg->bezier_y2 : 1.0f;
-    anim->delay_ms = dly;
-    anim->in_delay = dly > 0U;
-    anim->duration_ms = dur;
-    anim->loop = cfg ? cfg->loop : false;
-    anim->loop_reverse = cfg ? cfg->loop_reverse : false;
+    anim->easing = config ? config->easing : ER_EASE_LINEAR;
+    anim->bezier_x1 = config ? config->bezier_x1 : 0.0f;
+    anim->bezier_y1 = config ? config->bezier_y1 : 0.0f;
+    anim->bezier_x2 = config ? config->bezier_x2 : 1.0f;
+    anim->bezier_y2 = config ? config->bezier_y2 : 1.0f;
+    anim->delay_ms = delay_ms;
+    anim->in_delay = delay_ms > 0U;
+    anim->duration_ms = duration_ms;
+    anim->loop = config ? config->loop : false;
+    anim->loop_reverse = config ? config->loop_reverse : false;
     anim->color_value = false;
-    anim->from_value = val->current;
+    anim->from_value = anim_value->current;
     anim->to_value = to_value;
-    anim->on_complete = cfg ? cfg->on_complete : NULL;
-    anim->on_complete_user_data = cfg ? cfg->on_complete_user_data : NULL;
-    anim->group_slot = 0xFFU;
+    anim->on_complete = config ? config->on_complete : NULL;
+    anim->on_complete_user_data = config ? config->on_complete_user_data : NULL;
+    anim->group_slot = GROUP_SLOT_NONE;
     anim->group_entry = 0U;
 
     if (type == ER_ANIM_SPRING)
     {
-        anim->spring_stiffness = cfg ? cfg->stiffness : 0.0f;
-        anim->spring_damping = cfg ? cfg->damping : 0.0f;
-        anim->spring_mass = cfg ? cfg->mass : 0.0f;
-        const float range = to_value - val->current;
-        anim->spring_pos = 0.0f;
-        anim->spring_vel = (range != 0.0f && cfg) ? cfg->velocity / range : 0.0f;
+        anim->spring_stiffness = config ? config->stiffness : 0.0f;
+        anim->spring_damping = config ? config->damping : 0.0f;
+        anim->spring_mass = config ? config->mass : 0.0f;
+        const float range = to_value - anim_value->current;
+        anim->spring_position = 0.0f;
+        anim->spring_velocity = (range != 0.0f && config) ? config->velocity / range : 0.0f;
     }
     else if (type == ER_ANIM_DECAY)
     {
-        const float range = to_value - val->current;
-        anim->decay_velocity = (range != 0.0f && cfg) ? cfg->velocity / range : 0.0f;
-        anim->decay_deceleration = (cfg && cfg->deceleration > 0.0f) ? cfg->deceleration : DECAY_DEFAULT_DECELERATION;
+        const float range = to_value - anim_value->current;
+        anim->decay_velocity = (range != 0.0f && config) ? config->velocity / range : 0.0f;
+        anim->decay_deceleration =
+            (config && config->deceleration > 0.0f) ? config->deceleration : DECAY_DEFAULT_DECELERATION;
     }
 
     return anim->handle;
@@ -1815,120 +1865,120 @@ ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, con
 
 void er_anim_value_set(ERAnimValueHandle handle, float value)
 {
-    ERAnimValue* val = find_value_slot(handle);
-    if (!val)
+    ERAnimValue* anim_value = find_value_slot(handle);
+    if (!anim_value)
         return;
     cancel_value_anim(handle);
-    val->current = value;
-    push_to_value_bindings(val);
+    anim_value->current = value;
+    push_to_value_bindings(anim_value);
 }
 
 float er_anim_value_get(ERAnimValueHandle handle)
 {
-    const ERAnimValue* val = find_value_slot(handle);
-    return val ? val->current : 0.0f;
+    const ERAnimValue* anim_value = find_value_slot(handle);
+    return anim_value ? anim_value->current : 0.0f;
 }
 
 void er_anim_tick(uint32_t delta_ms)
 {
-    for (int i = 0; i < ERUI_MAX_ANIMATIONS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_ANIMATIONS; slot_index++)
     {
-        ERAnimation* anim = &s_animations[i];
+        ERAnimation* anim = &s_animations[slot_index];
         if (!anim->active)
             continue;
 
         /* ---- Value-target animation (ERAnimValue — no specific node) ---- */
         if (anim->value_handle != 0U)
         {
-            ERAnimValue* val = find_value_slot(anim->value_handle);
-            if (!val)
+            ERAnimValue* anim_value = find_value_slot(anim->value_handle);
+            if (!anim_value)
             {
                 anim->active = false;
                 continue;
             }
 
-            uint32_t eff = delta_ms;
+            uint32_t value_delta = delta_ms;
             if (anim->in_delay)
             {
                 anim->delay_elapsed_ms += delta_ms;
                 if (anim->delay_elapsed_ms < anim->delay_ms)
                     continue;
-                eff = anim->delay_elapsed_ms - anim->delay_ms;
+                value_delta = anim->delay_elapsed_ms - anim->delay_ms;
                 anim->in_delay = false;
-                anim->from_value = val->current;
+                anim->from_value = anim_value->current;
                 if (anim->type == ER_ANIM_SPRING)
-                    anim->spring_pos = 0.0f;
+                    anim->spring_position = 0.0f;
                 else if (anim->type == ER_ANIM_DECAY)
-                    anim->decay_pos = 0.0f;
+                    anim->decay_position = 0.0f;
             }
 
-            bool vfinished = false;
+            bool value_finished = false;
             float result = anim->from_value;
 
             if (anim->type == ER_ANIM_TIMING)
             {
-                anim->elapsed_ms += eff;
-                float t = 1.0f;
+                anim->elapsed_ms += value_delta;
+                float progress = 1.0f;
                 if (anim->duration_ms > 0U && anim->elapsed_ms < anim->duration_ms)
-                    t = (float)anim->elapsed_ms / (float)anim->duration_ms;
-                const float et =
-                    apply_easing(t, anim->easing, anim->bezier_x1, anim->bezier_y1, anim->bezier_x2, anim->bezier_y2);
-                result = anim->from_value + (anim->to_value - anim->from_value) * et;
-                if (t >= 1.0f)
+                    progress = (float)anim->elapsed_ms / (float)anim->duration_ms;
+                const float eased = apply_easing(
+                    progress, anim->easing, anim->bezier_x1, anim->bezier_y1, anim->bezier_x2, anim->bezier_y2);
+                result = anim->from_value + (anim->to_value - anim->from_value) * eased;
+                if (progress >= 1.0f)
                 {
                     if (anim->loop)
                     {
                         anim->elapsed_ms = 0U;
                         if (anim->loop_reverse) /* ping-pong; else restart from the start (continuous) */
                         {
-                            const float tmp = anim->from_value;
+                            const float swapped = anim->from_value;
                             anim->from_value = anim->to_value;
-                            anim->to_value = tmp;
+                            anim->to_value = swapped;
                         }
                     }
                     else
                     {
-                        vfinished = true;
+                        value_finished = true;
                     }
                 }
             }
             else if (anim->type == ER_ANIM_SPRING)
             {
-                const bool settled = tick_spring(anim, eff);
-                float pos = anim->spring_pos;
-                if (pos < -2.0f)
-                    pos = -2.0f;
-                if (pos > 3.0f)
-                    pos = 3.0f;
-                result = anim->from_value + (anim->to_value - anim->from_value) * pos;
+                const bool settled = tick_spring(anim, value_delta);
+                float position = anim->spring_position;
+                if (position < SPRING_POSITION_MIN)
+                    position = SPRING_POSITION_MIN;
+                if (position > SPRING_POSITION_MAX)
+                    position = SPRING_POSITION_MAX;
+                result = anim->from_value + (anim->to_value - anim->from_value) * position;
                 if (settled)
                 {
                     result = anim->to_value;
-                    vfinished = true;
+                    value_finished = true;
                 }
             }
             else if (anim->type == ER_ANIM_DECAY)
             {
-                const bool stopped = tick_decay(anim, eff);
-                result = anim->from_value + (anim->to_value - anim->from_value) * anim->decay_pos;
+                const bool stopped = tick_decay(anim, value_delta);
+                result = anim->from_value + (anim->to_value - anim->from_value) * anim->decay_position;
                 if (stopped)
-                    vfinished = true;
+                    value_finished = true;
             }
 
-            val->current = result;
-            push_to_value_bindings(val);
+            anim_value->current = result;
+            push_to_value_bindings(anim_value);
 
-            if (vfinished)
+            if (value_finished)
             {
-                const ERAnimCompleteFn cb = anim->on_complete;
-                void* ud = anim->on_complete_user_data;
-                const uint8_t gs = anim->group_slot;
-                const uint8_t ge = anim->group_entry;
+                const ERAnimCompleteFn on_complete = anim->on_complete;
+                void* user_data = anim->on_complete_user_data;
+                const uint8_t group_slot = anim->group_slot;
+                const uint8_t group_entry = anim->group_entry;
                 anim->active = false;
-                if (cb)
-                    cb(true, ud);
-                if (gs != 0xFFU)
-                    on_group_entry_complete(gs, ge);
+                if (on_complete)
+                    on_complete(true, user_data);
+                if (group_slot != GROUP_SLOT_NONE)
+                    on_group_entry_complete(group_slot, group_entry);
             }
             continue;
         }
@@ -1959,9 +2009,9 @@ void er_anim_tick(uint32_t delta_ms)
             {
                 (void)read_numeric_value(node, anim->prop, &anim->from_value);
                 if (anim->type == ER_ANIM_SPRING)
-                    anim->spring_pos = 0.0f;
+                    anim->spring_position = 0.0f;
                 else if (anim->type == ER_ANIM_DECAY)
-                    anim->decay_pos = 0.0f;
+                    anim->decay_position = 0.0f;
             }
         }
 
@@ -1970,20 +2020,20 @@ void er_anim_tick(uint32_t delta_ms)
         if (anim->type == ER_ANIM_TIMING)
         {
             anim->elapsed_ms += effective_delta;
-            float t = 1.0f;
+            float progress = 1.0f;
             if (anim->duration_ms > 0U && anim->elapsed_ms < anim->duration_ms)
-                t = (float)anim->elapsed_ms / (float)anim->duration_ms;
+                progress = (float)anim->elapsed_ms / (float)anim->duration_ms;
 
-            const float et =
-                apply_easing(t, anim->easing, anim->bezier_x1, anim->bezier_y1, anim->bezier_x2, anim->bezier_y2);
+            const float eased = apply_easing(
+                progress, anim->easing, anim->bezier_x1, anim->bezier_y1, anim->bezier_x2, anim->bezier_y2);
 
             if (anim->color_value)
-                (void)apply_color_value(node, anim->prop, lerp_color(anim->from_color, anim->to_color, et));
+                (void)apply_color_value(node, anim->prop, lerp_color(anim->from_color, anim->to_color, eased));
             else
                 (void)apply_numeric_value(
-                    node, anim->prop, anim->from_value + (anim->to_value - anim->from_value) * et);
+                    node, anim->prop, anim->from_value + (anim->to_value - anim->from_value) * eased);
 
-            if (t >= 1.0f)
+            if (progress >= 1.0f)
             {
                 if (anim->loop)
                 {
@@ -1992,15 +2042,15 @@ void er_anim_tick(uint32_t delta_ms)
                     {
                         if (anim->color_value)
                         {
-                            const uint32_t tmp = anim->from_color;
+                            const uint32_t swapped = anim->from_color;
                             anim->from_color = anim->to_color;
-                            anim->to_color = tmp;
+                            anim->to_color = swapped;
                         }
                         else
                         {
-                            const float tmp = anim->from_value;
+                            const float swapped = anim->from_value;
                             anim->from_value = anim->to_value;
-                            anim->to_value = tmp;
+                            anim->to_value = swapped;
                         }
                     }
                 }
@@ -2014,13 +2064,14 @@ void er_anim_tick(uint32_t delta_ms)
         {
             const bool settled = tick_spring(anim, effective_delta);
 
-            /* Clamp spring_pos to a reasonable range to prevent runaway. */
-            float pos = anim->spring_pos;
-            if (pos < -2.0f)
-                pos = -2.0f;
-            if (pos > 3.0f)
-                pos = 3.0f;
-            (void)apply_numeric_value(node, anim->prop, anim->from_value + (anim->to_value - anim->from_value) * pos);
+            /* Clamp spring_position to a reasonable range to prevent runaway. */
+            float position = anim->spring_position;
+            if (position < SPRING_POSITION_MIN)
+                position = SPRING_POSITION_MIN;
+            if (position > SPRING_POSITION_MAX)
+                position = SPRING_POSITION_MAX;
+            (void)apply_numeric_value(
+                node, anim->prop, anim->from_value + (anim->to_value - anim->from_value) * position);
 
             if (settled)
             {
@@ -2032,7 +2083,7 @@ void er_anim_tick(uint32_t delta_ms)
         {
             const bool stopped = tick_decay(anim, effective_delta);
             (void)apply_numeric_value(
-                node, anim->prop, anim->from_value + (anim->to_value - anim->from_value) * anim->decay_pos);
+                node, anim->prop, anim->from_value + (anim->to_value - anim->from_value) * anim->decay_position);
 
             if (stopped)
                 finished = true;
@@ -2042,17 +2093,17 @@ void er_anim_tick(uint32_t delta_ms)
 
         if (finished)
         {
-            const ERAnimCompleteFn cb = anim->on_complete;
-            void* ud = anim->on_complete_user_data;
-            const uint8_t gs = anim->group_slot;
-            const uint8_t ge = anim->group_entry;
+            const ERAnimCompleteFn on_complete = anim->on_complete;
+            void* user_data = anim->on_complete_user_data;
+            const uint8_t group_slot = anim->group_slot;
+            const uint8_t group_entry = anim->group_entry;
 
             anim->active = false;
 
-            if (cb)
-                cb(true, ud);
-            if (gs != 0xFFU)
-                on_group_entry_complete(gs, ge);
+            if (on_complete)
+                on_complete(true, user_data);
+            if (group_slot != GROUP_SLOT_NONE)
+                on_group_entry_complete(group_slot, group_entry);
         }
     }
 }

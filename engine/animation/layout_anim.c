@@ -45,6 +45,26 @@
 /** @brief Default spring mass m (matches React Native Animated.spring() default). */
 #define LA_SPRING_DEFAULT_MASS 1.0f
 
+/** @brief ERLayoutAnim::elapsed_ms holds at this instead of wrapping. */
+#define LA_ELAPSED_MAX 0xFFFFU
+
+/** @brief Newton's method on a bezier curve: iteration cap, and the error or slope too small to go on. */
+#define LA_BEZIER_NEWTON_ITERATIONS 8
+#define LA_BEZIER_NEWTON_EPSILON 0.00001f
+
+/* Control points (x1, y1, x2, y2) of the standard CSS easing curves. */
+#define LA_CURVE_EASE 0.25f, 0.1f, 0.25f, 1.0f
+#define LA_CURVE_EASE_IN 0.42f, 0.0f, 1.0f, 1.0f
+#define LA_CURVE_EASE_OUT 0.0f, 0.0f, 0.58f, 1.0f
+#define LA_CURVE_EASE_IN_OUT 0.42f, 0.0f, 0.58f, 1.0f
+
+/** @brief ER_EASE_ELASTIC_OUT: one full wave, in radians. */
+#define LA_ELASTIC_TWO_PI 6.283185f
+
+/** @brief A spring's position is held to this range when applied, so a runaway cannot reach the node. */
+#define LA_SPRING_POSITION_MIN (-2.0f)
+#define LA_SPRING_POSITION_MAX 3.0f
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -69,16 +89,16 @@ typedef struct
     float stiffness;      /**< Spring stiffness k. */
     float damping;        /**< Spring damping c. */
     float mass;           /**< Spring mass m. */
-    float spring_pos;     /**< Normalised spring position: 0.0 = from, 1.0 = to. */
-    float spring_vel;     /**< Spring velocity in normalised units per millisecond. */
+    float spring_position; /**< Normalised spring position: 0.0 = from, 1.0 = to. */
+    float spring_velocity; /**< Spring velocity in normalised units per millisecond. */
 } ERLayoutAnim;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static ERLayoutAnim s_la[ERUI_MAX_LAYOUT_ANIMS];
-static ERLayoutAnimConfig s_pending_cfg;
+static ERLayoutAnim s_layout_anims[ERUI_MAX_LAYOUT_ANIMS];
+static ERLayoutAnimConfig s_pending_config;
 static bool s_pending_active;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -87,8 +107,8 @@ static bool s_pending_active;
 
 void er_layout_anim_reset(void)
 {
-    memset(s_la, 0, sizeof(s_la));
-    memset(&s_pending_cfg, 0, sizeof(s_pending_cfg));
+    memset(s_layout_anims, 0, sizeof(s_layout_anims));
+    memset(&s_pending_config, 0, sizeof(s_pending_config));
     s_pending_active = false;
 }
 
@@ -98,10 +118,10 @@ void er_layout_anim_cancel_node(uint16_t node_tag)
      * tick below deactivates a slot whose node is gone, but only while the tag is still on the free
      * list. A node created before the next tick takes the tag and inherits the interpolation — the
      * destroyed node's position animation would drive it to coordinates it never asked for. */
-    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
     {
-        if (s_la[i].active && s_la[i].node_tag == node_tag)
-            s_la[i].active = false;
+        if (s_layout_anims[slot_index].active && s_layout_anims[slot_index].node_tag == node_tag)
+            s_layout_anims[slot_index].active = false;
     }
 }
 
@@ -133,184 +153,186 @@ const ERLayoutAnimConfig ER_LAYOUT_ANIM_SPRING = {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Evaluates the X component of a unit cubic bezier at parameter t.
+ * @brief Evaluates the X component of a unit cubic bezier at a curve parameter.
  *
- * @param[in] t   Curve parameter [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] x2  Second control-point X.
+ * @param[in] parameter  Curve parameter [0,1].
+ * @param[in] x1         First control-point X.
+ * @param[in] x2         Second control-point X.
  *
  * @return X on the curve.
  */
-static float la_bezier_x(float t, float x1, float x2)
+static float la_bezier_x(float parameter, float x1, float x2)
 {
-    const float c = 3.0f * x1;
-    const float b = 3.0f * (x2 - x1) - c;
-    const float a = 1.0f - c - b;
-    return ((a * t + b) * t + c) * t;
+    const float linear = 3.0f * x1;
+    const float quadratic = 3.0f * (x2 - x1) - linear;
+    const float cubic = 1.0f - linear - quadratic;
+    return ((cubic * parameter + quadratic) * parameter + linear) * parameter;
 }
 
 /**
- * @brief Evaluates the derivative dX/dt of a unit cubic bezier at parameter t.
+ * @brief Evaluates the derivative dX/dt of a unit cubic bezier at a curve parameter.
  *
- * @param[in] t   Curve parameter [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] x2  Second control-point X.
+ * @param[in] parameter  Curve parameter [0,1].
+ * @param[in] x1         First control-point X.
+ * @param[in] x2         Second control-point X.
  *
- * @return dX/dt at t.
+ * @return dX/dt at that parameter.
  */
-static float la_bezier_dx(float t, float x1, float x2)
+static float la_bezier_dx(float parameter, float x1, float x2)
 {
-    const float c = 3.0f * x1;
-    const float b = 3.0f * (x2 - x1) - c;
-    const float a = 1.0f - c - b;
-    return (3.0f * a * t + 2.0f * b) * t + c;
+    const float linear = 3.0f * x1;
+    const float quadratic = 3.0f * (x2 - x1) - linear;
+    const float cubic = 1.0f - linear - quadratic;
+    return (3.0f * cubic * parameter + 2.0f * quadratic) * parameter + linear;
 }
 
 /**
- * @brief Solves for the bezier parameter t given normalised time x via Newton's method.
+ * @brief Solves for the bezier parameter given normalised time via Newton's method.
  *
- * @param[in] x   Input normalised time [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] x2  Second control-point X.
+ * @param[in] time  Input normalised time [0,1].
+ * @param[in] x1    First control-point X.
+ * @param[in] x2    Second control-point X.
  *
- * @return Bezier parameter t such that la_bezier_x(t, x1, x2) ≈ x.
+ * @return The curve parameter such that la_bezier_x(parameter, x1, x2) ≈ time.
  */
-static float la_bezier_t_for_x(float x, float x1, float x2)
+static float la_bezier_t_for_x(float time, float x1, float x2)
 {
-    float t = x;
-    for (int i = 0; i < 8; i++)
+    float parameter = time;
+    for (int iteration = 0; iteration < LA_BEZIER_NEWTON_ITERATIONS; iteration++)
     {
-        const float dx = la_bezier_x(t, x1, x2) - x;
-        if (dx > -0.00001f && dx < 0.00001f)
+        const float error = la_bezier_x(parameter, x1, x2) - time;
+        if (error > -LA_BEZIER_NEWTON_EPSILON && error < LA_BEZIER_NEWTON_EPSILON)
             break;
-        const float d = la_bezier_dx(t, x1, x2);
-        if (d < 0.00001f)
+        const float slope = la_bezier_dx(parameter, x1, x2);
+        if (slope < LA_BEZIER_NEWTON_EPSILON)
             break;
-        t -= dx / d;
-        if (t < 0.0f)
-            t = 0.0f;
-        if (t > 1.0f)
-            t = 1.0f;
+        parameter -= error / slope;
+        if (parameter < 0.0f)
+            parameter = 0.0f;
+        if (parameter > 1.0f)
+            parameter = 1.0f;
     }
-    return t;
+    return parameter;
 }
 
 /**
  * @brief Evaluates a cubic bezier easing curve for a given normalised time.
  *
- * @param[in] x   Normalised time [0,1].
- * @param[in] x1  First control-point X.
- * @param[in] y1  First control-point Y.
- * @param[in] x2  Second control-point X.
- * @param[in] y2  Second control-point Y.
+ * @param[in] time  Normalised time [0,1].
+ * @param[in] x1    First control-point X.
+ * @param[in] y1    First control-point Y.
+ * @param[in] x2    Second control-point X.
+ * @param[in] y2    Second control-point Y.
  *
  * @return Easing output Y for the given X.
  */
-static float la_cubic_bezier(float x, float x1, float y1, float x2, float y2)
+static float la_cubic_bezier(float time, float x1, float y1, float x2, float y2)
 {
-    if (x <= 0.0f)
+    if (time <= 0.0f)
         return 0.0f;
-    if (x >= 1.0f)
+    if (time >= 1.0f)
         return 1.0f;
-    const float t = la_bezier_t_for_x(x, x1, x2);
-    const float cy = 3.0f * y1;
-    const float by = 3.0f * (y2 - y1) - cy;
-    const float ay = 1.0f - cy - by;
-    return ((ay * t + by) * t + cy) * t;
+    const float parameter = la_bezier_t_for_x(time, x1, x2);
+    const float linear = 3.0f * y1;
+    const float quadratic = 3.0f * (y2 - y1) - linear;
+    const float cubic = 1.0f - linear - quadratic;
+    return ((cubic * parameter + quadratic) * parameter + linear) * parameter;
 }
 
 /**
  * @brief Applies an easing curve to a linear normalised progress value.
  *
- * @param[in] t     Linear progress [0,1].
- * @param[in] ease  ERAnimEasing enum value.
- * @param[in] bx1   Bezier X1 (only for ER_EASE_BEZIER).
- * @param[in] by1   Bezier Y1 (only for ER_EASE_BEZIER).
- * @param[in] bx2   Bezier X2 (only for ER_EASE_BEZIER).
- * @param[in] by2   Bezier Y2 (only for ER_EASE_BEZIER).
+ * @param[in] progress   Linear progress [0,1].
+ * @param[in] easing     ERAnimEasing enum value.
+ * @param[in] bezier_x1  Bezier X1 (only for ER_EASE_BEZIER).
+ * @param[in] bezier_y1  Bezier Y1 (only for ER_EASE_BEZIER).
+ * @param[in] bezier_x2  Bezier X2 (only for ER_EASE_BEZIER).
+ * @param[in] bezier_y2  Bezier Y2 (only for ER_EASE_BEZIER).
  *
  * @return Eased progress value.
  */
-static float la_apply_easing(float t, ERAnimEasing ease, float bx1, float by1, float bx2, float by2)
+static float
+la_apply_easing(float progress, ERAnimEasing easing, float bezier_x1, float bezier_y1, float bezier_x2, float bezier_y2)
 {
-    switch (ease)
+    switch (easing)
     {
         case ER_EASE_LINEAR:
         default:
-            return t;
+            return progress;
         case ER_EASE_EASE:
-            return la_cubic_bezier(t, 0.25f, 0.1f, 0.25f, 1.0f);
+            return la_cubic_bezier(progress, LA_CURVE_EASE);
         case ER_EASE_EASE_IN:
-            return la_cubic_bezier(t, 0.42f, 0.0f, 1.0f, 1.0f);
+            return la_cubic_bezier(progress, LA_CURVE_EASE_IN);
         case ER_EASE_EASE_OUT:
-            return la_cubic_bezier(t, 0.0f, 0.0f, 0.58f, 1.0f);
+            return la_cubic_bezier(progress, LA_CURVE_EASE_OUT);
         case ER_EASE_EASE_IN_OUT:
-            return la_cubic_bezier(t, 0.42f, 0.0f, 0.58f, 1.0f);
+            return la_cubic_bezier(progress, LA_CURVE_EASE_IN_OUT);
         case ER_EASE_QUAD_IN:
-            return t * t;
+            return progress * progress;
         case ER_EASE_QUAD_OUT:
         {
-            const float u = 1.0f - t;
-            return 1.0f - u * u;
+            const float inverse = 1.0f - progress;
+            return 1.0f - inverse * inverse;
         }
         case ER_EASE_QUAD_IN_OUT:
-            if (t < 0.5f)
-                return 2.0f * t * t;
+            if (progress < 0.5f)
+                return 2.0f * progress * progress;
             else
             {
-                const float u = 1.0f - t;
-                return 1.0f - 2.0f * u * u;
+                const float inverse = 1.0f - progress;
+                return 1.0f - 2.0f * inverse * inverse;
             }
         case ER_EASE_CUBIC_IN:
-            return t * t * t;
+            return progress * progress * progress;
         case ER_EASE_CUBIC_OUT:
         {
-            const float u = 1.0f - t;
-            return 1.0f - u * u * u;
+            const float inverse = 1.0f - progress;
+            return 1.0f - inverse * inverse * inverse;
         }
         case ER_EASE_CUBIC_IN_OUT:
-            if (t < 0.5f)
-                return 4.0f * t * t * t;
+            if (progress < 0.5f)
+                return 4.0f * progress * progress * progress;
             else
             {
-                const float u = t - 1.0f;
-                return 1.0f + 4.0f * u * u * u;
+                const float inverse = progress - 1.0f;
+                return 1.0f + 4.0f * inverse * inverse * inverse;
             }
         case ER_EASE_BOUNCE_OUT:
         {
-            const float n = 7.5625f;
-            const float d = 2.75f;
-            float x = t;
-            if (x < 1.0f / d)
-                return n * x * x;
-            else if (x < 2.0f / d)
+            const float bounce_scale = 7.5625f;
+            const float bounce_divisor = 2.75f;
+            float bounce_x = progress;
+            if (bounce_x < 1.0f / bounce_divisor)
+                return bounce_scale * bounce_x * bounce_x;
+            else if (bounce_x < 2.0f / bounce_divisor)
             {
-                x -= 1.5f / d;
-                return n * x * x + 0.75f;
+                bounce_x -= 1.5f / bounce_divisor;
+                return bounce_scale * bounce_x * bounce_x + 0.75f;
             }
-            else if (x < 2.5f / d)
+            else if (bounce_x < 2.5f / bounce_divisor)
             {
-                x -= 2.25f / d;
-                return n * x * x + 0.9375f;
+                bounce_x -= 2.25f / bounce_divisor;
+                return bounce_scale * bounce_x * bounce_x + 0.9375f;
             }
             else
             {
-                x -= 2.625f / d;
-                return n * x * x + 0.984375f;
+                bounce_x -= 2.625f / bounce_divisor;
+                return bounce_scale * bounce_x * bounce_x + 0.984375f;
             }
         }
         case ER_EASE_ELASTIC_OUT:
         {
-            if (t <= 0.0f)
+            if (progress <= 0.0f)
                 return 0.0f;
-            if (t >= 1.0f)
+            if (progress >= 1.0f)
                 return 1.0f;
-            const float p = 0.3f;
-            const float s = p / 4.0f;
-            return (float)pow(2.0, -10.0 * t) * (float)sin((t - s) * 6.283185f / p) + 1.0f;
+            const float period = 0.3f;
+            const float phase_shift = period / 4.0f;
+            return (float)pow(2.0, -10.0 * progress) * (float)sin((progress - phase_shift) * LA_ELASTIC_TWO_PI / period)
+                   + 1.0f;
         }
         case ER_EASE_BEZIER:
-            return la_cubic_bezier(t, bx1, by1, bx2, by2);
+            return la_cubic_bezier(progress, bezier_x1, bezier_y1, bezier_x2, bezier_y2);
     }
 }
 
@@ -321,27 +343,28 @@ static float la_apply_easing(float t, ERAnimEasing ease, float bx1, float by1, f
 /**
  * @brief Integrates spring physics for delta_ms milliseconds and checks for settlement.
  *
- * @param[in,out] la        Layout animation slot whose spring state is updated.
- * @param[in]     delta_ms  Milliseconds to integrate.
+ * @param[in,out] layout_anim  Layout animation slot whose spring state is updated.
+ * @param[in]     delta_ms     Milliseconds to integrate.
  *
  * @return true when the spring has settled at the target.
  */
-static bool la_tick_spring(ERLayoutAnim* la, uint32_t delta_ms)
+static bool la_tick_spring(ERLayoutAnim* layout_anim, uint32_t delta_ms)
 {
     uint32_t steps = delta_ms;
     if (steps > ER_SPRING_MAX_STEPS)
         steps = ER_SPRING_MAX_STEPS;
 
-    const float k = la->stiffness > 0.0f ? la->stiffness : LA_SPRING_DEFAULT_STIFFNESS;
-    const float c = la->damping > 0.0f ? la->damping : LA_SPRING_DEFAULT_DAMPING;
-    const float m = la->mass > 0.0f ? la->mass : LA_SPRING_DEFAULT_MASS;
+    const float stiffness = layout_anim->stiffness > 0.0f ? layout_anim->stiffness : LA_SPRING_DEFAULT_STIFFNESS;
+    const float damping = layout_anim->damping > 0.0f ? layout_anim->damping : LA_SPRING_DEFAULT_DAMPING;
+    const float mass = layout_anim->mass > 0.0f ? layout_anim->mass : LA_SPRING_DEFAULT_MASS;
 
-    for (uint32_t i = 0; i < steps; i++)
-        er_spring_step(&la->spring_pos, &la->spring_vel, k, c, m);
+    for (uint32_t step = 0; step < steps; step++)
+        er_spring_step(&layout_anim->spring_position, &layout_anim->spring_velocity, stiffness, damping, mass);
 
-    const float disp = la->spring_pos - 1.0f;
-    return (disp > -LA_SPRING_SETTLE_DISP && disp < LA_SPRING_SETTLE_DISP)
-           && (la->spring_vel > -LA_SPRING_SETTLE_VEL && la->spring_vel < LA_SPRING_SETTLE_VEL);
+    const float displacement = layout_anim->spring_position - 1.0f;
+    return (displacement > -LA_SPRING_SETTLE_DISP && displacement < LA_SPRING_SETTLE_DISP)
+           && (layout_anim->spring_velocity > -LA_SPRING_SETTLE_VEL
+               && layout_anim->spring_velocity < LA_SPRING_SETTLE_VEL);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -357,10 +380,10 @@ static bool la_tick_spring(ERLayoutAnim* la, uint32_t delta_ms)
  */
 static ERLayoutAnim* la_find_slot(uint16_t tag)
 {
-    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
     {
-        if (s_la[i].active && s_la[i].node_tag == tag)
-            return &s_la[i];
+        if (s_layout_anims[slot_index].active && s_layout_anims[slot_index].node_tag == tag)
+            return &s_layout_anims[slot_index];
     }
     return NULL;
 }
@@ -382,13 +405,13 @@ static ERLayoutAnim* la_alloc_slot(uint16_t tag)
     if (existing)
         return existing;
 
-    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
     {
-        if (!s_la[i].active)
+        if (!s_layout_anims[slot_index].active)
         {
-            s_la[i].active = true;
-            s_la[i].node_tag = tag;
-            return &s_la[i];
+            s_layout_anims[slot_index].active = true;
+            s_layout_anims[slot_index].node_tag = tag;
+            return &s_layout_anims[slot_index];
         }
     }
     return NULL;
@@ -401,25 +424,25 @@ static ERLayoutAnim* la_alloc_slot(uint16_t tag)
 /**
  * @brief Writes the linearly interpolated layout rect into node->animated.
  *
- * @param[in]     la   Animation slot providing from/to rects.
- * @param[in]     pos  Normalised position [0 = from, 1 = to]; may slightly overshoot.
- * @param[in,out] n    Node whose animated rect is updated.
+ * @param[in]     layout_anim  Animation slot providing from/to rects.
+ * @param[in]     position     Normalised position [0 = from, 1 = to]; may slightly overshoot.
+ * @param[in,out] node         Node whose animated rect is updated.
  */
-static void la_apply_pos(const ERLayoutAnim* la, float pos, ERNode* n)
+static void la_apply_pos(const ERLayoutAnim* layout_anim, float position, ERNode* node)
 {
-    const float fx = (float)la->from.x;
-    const float fy = (float)la->from.y;
-    const float fw = (float)la->from.w;
-    const float fh = (float)la->from.h;
-    const float tx = (float)la->to.x;
-    const float ty = (float)la->to.y;
-    const float tw = (float)la->to.w;
-    const float th = (float)la->to.h;
+    const float from_x = (float)layout_anim->from.x;
+    const float from_y = (float)layout_anim->from.y;
+    const float from_width = (float)layout_anim->from.w;
+    const float from_height = (float)layout_anim->from.h;
+    const float to_x = (float)layout_anim->to.x;
+    const float to_y = (float)layout_anim->to.y;
+    const float to_width = (float)layout_anim->to.w;
+    const float to_height = (float)layout_anim->to.h;
 
-    n->animated.x = (int16_t)(fx + (tx - fx) * pos);
-    n->animated.y = (int16_t)(fy + (ty - fy) * pos);
-    n->animated.w = (int16_t)(fw + (tw - fw) * pos);
-    n->animated.h = (int16_t)(fh + (th - fh) * pos);
+    node->animated.x = (int16_t)(from_x + (to_x - from_x) * position);
+    node->animated.y = (int16_t)(from_y + (to_y - from_y) * position);
+    node->animated.w = (int16_t)(from_width + (to_width - from_width) * position);
+    node->animated.h = (int16_t)(from_height + (to_height - from_height) * position);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -429,80 +452,81 @@ static void la_apply_pos(const ERLayoutAnim* la, float pos, ERNode* n)
 /**
  * @brief Processes a single node and recurses into its children.
  *
- * @param[in,out] n           Node to process.
- * @param[in]     has_pending true when a pending layout animation config is active.
- * @param[in]     cfg         Pending config pointer (only dereferenced when has_pending is true).
+ * @param[in,out] node         Node to process.
+ * @param[in]     has_pending  true when a pending layout animation config is active.
+ * @param[in]     config       Pending config pointer (only dereferenced when has_pending is true).
  */
-static void la_post_layout_node(ERNode* n, bool has_pending, const ERLayoutAnimConfig* cfg)
+static void la_post_layout_node(ERNode* node, bool has_pending, const ERLayoutAnimConfig* config)
 {
-    if (!n || n->layout.display == ER_DISPLAY_NONE)
+    if (!node || node->layout.display == ER_DISPLAY_NONE)
         return;
 
-    const ERLayoutRect cur = n->computed;
-    const ERLayoutRect prev = n->prev_layout;
+    const ERLayoutRect current = node->computed;
+    const ERLayoutRect previous = node->prev_layout;
 
     /* A node whose last committed computed rect was zero-size is being created, not
      * updated.  Skip animation for new nodes — snap to computed immediately. */
-    const bool is_new = (prev.w == 0 && prev.h == 0);
+    const bool is_new = (previous.w == 0 && previous.h == 0);
 
-    const bool changed =
-        (cur.x != n->animated.x || cur.y != n->animated.y || cur.w != n->animated.w || cur.h != n->animated.h);
+    const bool changed = (current.x != node->animated.x || current.y != node->animated.y
+                          || current.w != node->animated.w || current.h != node->animated.h);
 
-    ERLayoutAnim* la = la_find_slot(n->tag);
+    ERLayoutAnim* layout_anim = la_find_slot(node->tag);
 
-    if (la)
+    if (layout_anim)
     {
         /* Retarget an in-progress animation: restart from current display position. */
-        if (la->to.x != cur.x || la->to.y != cur.y || la->to.w != cur.w || la->to.h != cur.h)
+        if (layout_anim->to.x != current.x || layout_anim->to.y != current.y || layout_anim->to.w != current.w
+            || layout_anim->to.h != current.h)
         {
-            la->from = n->animated;
-            la->to = cur;
-            la->elapsed_ms = 0;
-            la->spring_pos = 0.0f;
-            la->spring_vel = 0.0f;
+            layout_anim->from = node->animated;
+            layout_anim->to = current;
+            layout_anim->elapsed_ms = 0;
+            layout_anim->spring_position = 0.0f;
+            layout_anim->spring_velocity = 0.0f;
         }
     }
     else if (has_pending && changed && !is_new)
     {
         /* Start a new layout animation. */
-        la = la_alloc_slot(n->tag);
-        if (la)
+        layout_anim = la_alloc_slot(node->tag);
+        if (layout_anim)
         {
-            la->from = n->animated;
-            la->to = cur;
-            la->elapsed_ms = 0;
-            la->type = (uint8_t)cfg->type;
-            la->duration_ms = cfg->duration_ms;
-            la->easing = (uint8_t)cfg->easing;
-            la->bezier_x1 = cfg->bezier_x1;
-            la->bezier_y1 = cfg->bezier_y1;
-            la->bezier_x2 = cfg->bezier_x2;
-            la->bezier_y2 = cfg->bezier_y2;
-            la->stiffness = cfg->stiffness;
-            la->damping = cfg->damping;
-            la->mass = cfg->mass;
-            la->spring_pos = 0.0f;
-            la->spring_vel = 0.0f;
+            layout_anim->from = node->animated;
+            layout_anim->to = current;
+            layout_anim->elapsed_ms = 0;
+            layout_anim->type = (uint8_t)config->type;
+            layout_anim->duration_ms = config->duration_ms;
+            layout_anim->easing = (uint8_t)config->easing;
+            layout_anim->bezier_x1 = config->bezier_x1;
+            layout_anim->bezier_y1 = config->bezier_y1;
+            layout_anim->bezier_x2 = config->bezier_x2;
+            layout_anim->bezier_y2 = config->bezier_y2;
+            layout_anim->stiffness = config->stiffness;
+            layout_anim->damping = config->damping;
+            layout_anim->mass = config->mass;
+            layout_anim->spring_position = 0.0f;
+            layout_anim->spring_velocity = 0.0f;
         }
         else
         {
             /* Pool exhausted — snap immediately. */
-            n->animated = cur;
+            node->animated = current;
         }
     }
     else
     {
         /* No animation for this node — snap animated to computed. */
-        n->animated = cur;
+        node->animated = current;
     }
 
-    uint16_t child_tag = n->first_child_tag;
+    uint16_t child_tag = node->first_child_tag;
     while (child_tag != ER_INVALID_TAG)
     {
         ERNode* child = er_get_node(child_tag);
         if (!child)
             break;
-        la_post_layout_node(child, has_pending, cfg);
+        la_post_layout_node(child, has_pending, config);
         child_tag = child->next_sibling_tag;
     }
 }
@@ -511,18 +535,18 @@ static void la_post_layout_node(ERNode* n, bool has_pending, const ERLayoutAnimC
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_layout_anim_configure_next(const ERLayoutAnimConfig* cfg)
+void er_layout_anim_configure_next(const ERLayoutAnimConfig* config)
 {
-    if (!cfg)
+    if (!config)
         return;
-    s_pending_cfg = *cfg;
+    s_pending_config = *config;
     s_pending_active = true;
 }
 
 void er_layout_anim_post_layout(ERNode* root)
 {
     const bool has_pending = s_pending_active;
-    la_post_layout_node(root, has_pending, &s_pending_cfg);
+    la_post_layout_node(root, has_pending, &s_pending_config);
     s_pending_active = false;
 }
 
@@ -542,66 +566,70 @@ bool er_layout_anim_has_pending(void)
  */
 bool er_layout_anim_is_active(void)
 {
-    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
-        if (s_la[i].active)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
+        if (s_layout_anims[slot_index].active)
             return true;
     return false;
 }
 
 void er_layout_anim_tick(uint32_t delta_ms)
 {
-    for (int i = 0; i < ERUI_MAX_LAYOUT_ANIMS; i++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
     {
-        ERLayoutAnim* la = &s_la[i];
-        if (!la->active)
+        ERLayoutAnim* layout_anim = &s_layout_anims[slot_index];
+        if (!layout_anim->active)
             continue;
 
-        ERNode* n = er_get_node(la->node_tag);
-        if (!n)
+        ERNode* node = er_get_node(layout_anim->node_tag);
+        if (!node)
         {
-            la->active = false;
+            layout_anim->active = false;
             continue;
         }
 
         bool finished = false;
 
-        if (la->type == (uint8_t)ER_ANIM_TIMING)
+        if (layout_anim->type == (uint8_t)ER_ANIM_TIMING)
         {
-            const uint32_t elapsed_new = (uint32_t)la->elapsed_ms + delta_ms;
-            la->elapsed_ms = (elapsed_new > 0xFFFFU) ? 0xFFFFU : (uint16_t)elapsed_new;
+            const uint32_t elapsed_new = (uint32_t)layout_anim->elapsed_ms + delta_ms;
+            layout_anim->elapsed_ms = (elapsed_new > LA_ELAPSED_MAX) ? LA_ELAPSED_MAX : (uint16_t)elapsed_new;
 
-            float t = 1.0f;
-            if (la->duration_ms > 0U && la->elapsed_ms < la->duration_ms)
-                t = (float)la->elapsed_ms / (float)la->duration_ms;
+            float progress = 1.0f;
+            if (layout_anim->duration_ms > 0U && layout_anim->elapsed_ms < layout_anim->duration_ms)
+                progress = (float)layout_anim->elapsed_ms / (float)layout_anim->duration_ms;
 
-            const float et = la_apply_easing(
-                t, (ERAnimEasing)la->easing, la->bezier_x1, la->bezier_y1, la->bezier_x2, la->bezier_y2);
-            la_apply_pos(la, et, n);
+            const float eased = la_apply_easing(progress,
+                                                (ERAnimEasing)layout_anim->easing,
+                                                layout_anim->bezier_x1,
+                                                layout_anim->bezier_y1,
+                                                layout_anim->bezier_x2,
+                                                layout_anim->bezier_y2);
+            la_apply_pos(layout_anim, eased, node);
 
-            if (t >= 1.0f)
+            if (progress >= 1.0f)
                 finished = true;
         }
         else /* ER_ANIM_SPRING */
         {
-            const bool settled = la_tick_spring(la, delta_ms);
+            const bool settled = la_tick_spring(layout_anim, delta_ms);
 
-            float pos = la->spring_pos;
-            if (pos < -2.0f)
-                pos = -2.0f;
-            if (pos > 3.0f)
-                pos = 3.0f;
-            la_apply_pos(la, pos, n);
+            float position = layout_anim->spring_position;
+            if (position < LA_SPRING_POSITION_MIN)
+                position = LA_SPRING_POSITION_MIN;
+            if (position > LA_SPRING_POSITION_MAX)
+                position = LA_SPRING_POSITION_MAX;
+            la_apply_pos(layout_anim, position, node);
 
             if (settled)
                 finished = true;
         }
 
-        er_mark_dirty_upward(n);
+        er_mark_dirty_upward(node);
 
         if (finished)
         {
-            n->animated = la->to;
-            la->active = false;
+            node->animated = layout_anim->to;
+            layout_anim->active = false;
         }
     }
 }

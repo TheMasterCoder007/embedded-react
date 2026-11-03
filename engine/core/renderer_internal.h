@@ -51,6 +51,20 @@ struct ERNode;
 /** @brief Below this magnitude in BOTH arguments, atan2 has no defined direction and answers 0. */
 #define ER_ATAN2_DEGENERATE_EPS 1e-12f
 
+/** @brief Polynomial coefficients of er_fast_atan2(), highest power first. */
+#define ER_ATAN2_POLY_A 0.0464964749f
+#define ER_ATAN2_POLY_B 0.15931422f
+#define ER_ATAN2_POLY_C 0.327622764f
+
+/** @brief Full scale of an 8-bit colour channel. */
+#define ER_CHANNEL_MAX 255U
+
+/** @brief Added before dividing by ER_CHANNEL_MAX so the result rounds to nearest. */
+#define ER_CHANNEL_ROUND 127U
+
+/** @brief An alpha or coverage of this value draws at full strength. */
+#define ER_ALPHA_OPAQUE 255U
+
 /**
  * @brief Scales a PREMULTIPLIED ARGB8888 pixel by an 8-bit coverage.
  *
@@ -58,22 +72,22 @@ struct ERNode;
  * would brighten the fringe instead of fading it. For a STRAIGHT-alpha colour use the alpha-only variant in
  * rrect.c instead — applying this one to a straight-alpha pixel darkens it.
  *
- * @param[in] p    Premultiplied ARGB8888 pixel.
- * @param[in] cov  Coverage in [0, 255].
+ * @param[in] pixel     Premultiplied ARGB8888 pixel.
+ * @param[in] coverage  Coverage in [0, 255].
  *
- * @return The pixel scaled by cov/255, still premultiplied.
+ * @return The pixel scaled by coverage/255, still premultiplied.
  */
-static inline uint32_t er_px_scale_premul(uint32_t p, uint32_t cov)
+static inline uint32_t er_px_scale_premul(uint32_t pixel, uint32_t coverage)
 {
-    if (cov >= 255U)
+    if (coverage >= ER_ALPHA_OPAQUE)
     {
-        return p;
+        return pixel;
     }
-    const uint32_t a = (((p >> 24) & 0xFFU) * cov + 127U) / 255U;
-    const uint32_t r = (((p >> 16) & 0xFFU) * cov + 127U) / 255U;
-    const uint32_t g = (((p >> 8) & 0xFFU) * cov + 127U) / 255U;
-    const uint32_t b = ((p & 0xFFU) * cov + 127U) / 255U;
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    const uint32_t alpha = (((pixel >> 24) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    const uint32_t red = (((pixel >> 16) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    const uint32_t green = (((pixel >> 8) & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    const uint32_t blue = ((pixel & 0xFFU) * coverage + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
 }
 
 /**
@@ -91,27 +105,29 @@ static inline uint32_t er_px_scale_premul(uint32_t p, uint32_t cov)
  */
 static inline float er_fast_atan2(float y, float x)
 {
-    const float ax = fabsf(x), ay = fabsf(y);
-    if (ax < ER_ATAN2_DEGENERATE_EPS && ay < ER_ATAN2_DEGENERATE_EPS)
+    const float abs_x = fabsf(x), abs_y = fabsf(y);
+    if (abs_x < ER_ATAN2_DEGENERATE_EPS && abs_y < ER_ATAN2_DEGENERATE_EPS)
     {
         return 0.0f;
     }
-    const float a = (ax > ay) ? (ay / ax) : (ax / ay); /* ratio in [0,1] */
-    const float s = a * a;
-    float r = ((-0.0464964749f * s + 0.15931422f) * s - 0.327622764f) * s * a + a; /* atan(a) */
-    if (ay > ax)
+    const float ratio = (abs_x > abs_y) ? (abs_y / abs_x) : (abs_x / abs_y); /* ratio in [0,1] */
+    const float ratio_squared = ratio * ratio;
+    float angle =
+        ((-ER_ATAN2_POLY_A * ratio_squared + ER_ATAN2_POLY_B) * ratio_squared - ER_ATAN2_POLY_C) * ratio_squared * ratio
+        + ratio; /* atan(ratio) */
+    if (abs_y > abs_x)
     {
-        r = 1.57079637f - r; /* PI/2 - r */
+        angle = ER_HALF_PI - angle;
     }
     if (x < 0.0f)
     {
-        r = 3.14159274f - r;
+        angle = ER_PI - angle;
     }
     if (y < 0.0f)
     {
-        r = -r;
+        angle = -angle;
     }
-    return r;
+    return angle;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -153,20 +169,20 @@ int er_render_workers_active(void);
 /**
  * @brief One worker's share of a forked render job.
  *
- * @param[in] worker  This worker's id in [0, n) — also the index of its per-worker contexts.
- * @param[in] arg     The job argument passed to er_parallel_for.
+ * @param[in] worker        This worker's id in [0, worker count) — also the index of its per-worker contexts.
+ * @param[in] job_argument  The job argument passed to er_parallel_for.
  */
-typedef void (*ERParallelFn)(int worker, void* arg);
+typedef void (*ERParallelFn)(int worker, void* job_argument);
 
 /**
- * @brief Runs fn once per active render worker and returns when every call has finished.
+ * @brief Runs job once per active render worker and returns when every call has finished.
  *
  * Worker 0's share runs on the calling thread; remote workers are signalled FIRST (signalling
  * the calling core's share first would let it preempt the dispatch loop and serialize the whole
  * job — measured on hardware). With one active worker (the default build, no workers installed,
- * or a call from inside a worker) this is exactly fn(0, arg) — no locks, no signalling.
+ * or a call from inside a worker) this is exactly job(0, job_argument) — no locks, no signalling.
  */
-void er_parallel_for(ERParallelFn fn, void* arg);
+void er_parallel_for(ERParallelFn job, void* job_argument);
 
 /**
  * @brief Number of commits rendered via the sliced parallel fork since boot.
@@ -195,12 +211,12 @@ const EmbeddedRenderBackend* er_backend(void);
  * Once the stack is full a push is not applied, but it is still counted, so its matching pop
  * leaves every outer clip in place.
  *
- * @param[in] x  Left edge of the clip rectangle.
- * @param[in] y  Top edge of the clip rectangle.
- * @param[in] w  Width of the clip rectangle in pixels.
- * @param[in] h  Height of the clip rectangle in pixels.
+ * @param[in] x       Left edge of the clip rectangle.
+ * @param[in] y       Top edge of the clip rectangle.
+ * @param[in] width   Width of the clip rectangle in pixels.
+ * @param[in] height  Height of the clip rectangle in pixels.
  */
-void er_push_clip_rect(int x, int y, int w, int h);
+void er_push_clip_rect(int x, int y, int width, int height);
 
 /**
  * @brief Pops the most recently pushed clip rectangle.
@@ -220,39 +236,39 @@ void er_pop_clip_rect(void);
 void er_push_clip_reset(void);
 
 /**
- * @brief Sets the current band strip (banded rendering): screen rows [oy, oy + h).
+ * @brief Sets the current band strip (banded rendering): screen rows [origin_y, origin_y + height).
  *
  * Applied only at the backend-emit boundary — each backend blit is clamped to these rows and its Y
  * translated to the 0-origin band buffer. Deliberately NOT a clip-stack entry, so offscreen-scratch
  * (transform / opacity) source rendering stays complete across strip seams. Set before rendering a
  * strip; call er_set_band(0, 0) afterwards to disable (the full-framebuffer path).
  *
- * @param[in] oy  Screen-space top row of the strip (subtracted from blit destinations).
- * @param[in] h   Strip height in rows; 0 disables banding.
+ * @param[in] origin_y  Screen-space top row of the strip (subtracted from blit destinations).
+ * @param[in] height    Strip height in rows; 0 disables banding.
  */
-void er_set_band(int oy, int h);
+void er_set_band(int origin_y, int height);
 
 /**
  * @brief Reports the active band strip, if any (used by render_tree to cull subtrees off-strip).
  *
- * @param[out] oy  Strip top (may be NULL).
- * @param[out] h   Strip height (may be NULL).
+ * @param[out] origin_y  Strip top (may be NULL).
+ * @param[out] height    Strip height (may be NULL).
  *
- * @return true if a band strip is active (h > 0); false in full-framebuffer mode.
+ * @return true if a band strip is active (height > 0); false in full-framebuffer mode.
  */
-bool er_band_active(int* oy, int* h);
+bool er_band_active(int* origin_y, int* height);
 
 /**
  * @brief Reads the current (top-most) scissor clip rectangle.
  *
- * @param[out] x  Left edge (may be NULL).
- * @param[out] y  Top edge (may be NULL).
- * @param[out] w  Width (may be NULL).
- * @param[out] h  Height (may be NULL).
+ * @param[out] x       Left edge (may be NULL).
+ * @param[out] y       Top edge (may be NULL).
+ * @param[out] width   Width (may be NULL).
+ * @param[out] height  Height (may be NULL).
  *
  * @return true and fills the outputs when a clip is active; false when the stack is empty (no clip).
  */
-bool er_get_clip_rect(int* x, int* y, int* w, int* h);
+bool er_get_clip_rect(int* x, int* y, int* width, int* height);
 
 /**
  * @brief Forces a full-screen repaint (no damage clipping) instead of an incremental one.
@@ -278,25 +294,25 @@ void er_error_screen_size(int* screen_w, int* screen_h);
 /**
  * @brief Fills a rectangle with a solid ARGB color via the active backend.
  *
- * @param[in] argb  ARGB8888 color value (straight alpha).
- * @param[in] x     X coordinate of the rectangle's left edge.
- * @param[in] y     Y coordinate of the rectangle's top edge.
- * @param[in] w     Width of the rectangle in pixels.
- * @param[in] h     Height of the rectangle in pixels.
+ * @param[in] argb    ARGB8888 color value (straight alpha).
+ * @param[in] x       X coordinate of the rectangle's left edge.
+ * @param[in] y       Y coordinate of the rectangle's top edge.
+ * @param[in] width   Width of the rectangle in pixels.
+ * @param[in] height  Height of the rectangle in pixels.
  */
-void er_blit_fill(uint32_t argb, int x, int y, int w, int h);
+void er_blit_fill(uint32_t argb, int x, int y, int width, int height);
 
 /**
  * @brief Copies a region of pixels from a source buffer via the active backend.
  *
- * @param[in] src     Pointer to the source pixel buffer (ARGB8888, premultiplied).
+ * @param[in] source  Pointer to the source pixel buffer (ARGB8888, premultiplied).
  * @param[in] stride  Row stride of the source buffer in bytes.
  * @param[in] x       X coordinate of the destination rectangle.
  * @param[in] y       Y coordinate of the destination rectangle.
- * @param[in] w       Width of the region in pixels.
- * @param[in] h       Height of the region in pixels.
+ * @param[in] width   Width of the region in pixels.
+ * @param[in] height  Height of the region in pixels.
  */
-void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
+void er_blit_copy(const void* source, int stride, int x, int y, int width, int height);
 
 /**
  * @brief Copies a KNOWN-FULLY-OPAQUE source buffer in the given pixel format via the active backend.
@@ -307,33 +323,33 @@ void er_blit_copy(const void* src, int stride, int x, int y, int w, int h);
  * through in its source format as ONE backend call for the whole rect — on DMA2D-class hardware
  * a single M2M(_PFC) transfer.
  *
- * @param[in] src     Pointer to the source pixel buffer in @p fmt layout.
- * @param[in] stride  Row stride of the source buffer in bytes (of @p fmt).
- * @param[in] fmt     Pixel format of src.
+ * @param[in] source  Pointer to the source pixel buffer in @p format layout.
+ * @param[in] stride  Row stride of the source buffer in bytes (of @p format).
+ * @param[in] format  Pixel format of source.
  * @param[in] x       X coordinate of the destination rectangle.
  * @param[in] y       Y coordinate of the destination rectangle.
- * @param[in] w       Width of the region in pixels.
- * @param[in] h       Height of the region in pixels.
+ * @param[in] width   Width of the region in pixels.
+ * @param[in] height  Height of the region in pixels.
  *
  * @return true when the blit was fully handled (including "fully clipped, nothing to draw").
- *         false only when fmt != ER_IMG_ARGB8888 and the format-aware backend path is unavailable
+ *         false only when format != ER_IMG_ARGB8888 and the format-aware backend path is unavailable
  *         (no copy_rect_fmt backend, scratch capture, or inherited alpha) — the caller must then
  *         expand rows on the CPU and emit them through er_blit_copy/er_blit_blend.
  */
-bool er_blit_copy_fmt(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h);
+bool er_blit_copy_fmt(const void* source, int stride, ERImageFormat format, int x, int y, int width, int height);
 
 /**
  * @brief Blends a source buffer onto the framebuffer at a given global opacity via the active backend.
  *
- * @param[in] src     Pointer to the source pixel buffer (ARGB8888, premultiplied).
+ * @param[in] source  Pointer to the source pixel buffer (ARGB8888, premultiplied).
  * @param[in] stride  Row stride of the source buffer in bytes.
  * @param[in] alpha   Global opacity (0 = fully transparent, 255 = fully opaque).
  * @param[in] x       X coordinate of the destination rectangle.
  * @param[in] y       Y coordinate of the destination rectangle.
- * @param[in] w       Width of the region in pixels.
- * @param[in] h       Height of the region in pixels.
+ * @param[in] width   Width of the region in pixels.
+ * @param[in] height  Height of the region in pixels.
  */
-void er_blit_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h);
+void er_blit_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height);
 
 /**
  * @brief Clears every worker's backend-blit accounting accumulators (er_perf instrumentation).
@@ -351,15 +367,15 @@ void er_blit_perf_reset(void);
  * @brief Sums every worker's backend-blit accounting since the last er_blit_perf_reset().
  *
  * Reports the time spent inside backend blit callbacks (CPU time, summed across workers) and the
- * pixels handed to them (each call's final post-clip w*h). Both read 0 when ER_PERF_STATS is
+ * pixels handed to them (each call's final post-clip width * height). Both read 0 when ER_PERF_STATS is
  * compiled out, and the time alone reads 0 when no er_perf clock is installed.
  *
  * Call only from the commit thread after the render passes have joined.
  *
- * @param[out] us  Receives the summed callback time in microseconds. May be NULL.
- * @param[out] px  Receives the summed pixel count. May be NULL.
+ * @param[out] microseconds  Receives the summed callback time in microseconds. May be NULL.
+ * @param[out] pixels        Receives the summed pixel count. May be NULL.
  */
-void er_blit_perf_collect(uint32_t* us, uint32_t* px);
+void er_blit_perf_collect(uint32_t* microseconds, uint32_t* pixels);
 
 /**
  * @brief Sets the inherited draw alpha multiplied into every subsequent blit.
@@ -381,17 +397,17 @@ uint8_t er_get_draw_alpha(void);
 /**
  * @brief Redirects all subsequent blit calls into an off-screen ARGB8888 scratch buffer.
  *
- * After this call er_blit_fill / er_blit_copy / er_blit_blend write pixel data into buf
+ * After this call er_blit_fill / er_blit_copy / er_blit_blend write pixel data into buffer
  * rather than forwarding to the real backend.  Call er_scratch_end() to restore normal
- * routing.  buf must remain valid until er_scratch_end() is called.
+ * routing.  buffer must remain valid until er_scratch_end() is called.
  *
- * @param[in] buf  Scratch buffer; w × h premultiplied ARGB8888 pixels, row-major.
- * @param[in] w    Buffer width in pixels.
- * @param[in] h    Buffer height in pixels.
- * @param[in] ox   World-space X coordinate that maps to buf column 0.
- * @param[in] oy   World-space Y coordinate that maps to buf row 0.
+ * @param[in] buffer    Scratch buffer; width × height premultiplied ARGB8888 pixels, row-major.
+ * @param[in] width     Buffer width in pixels.
+ * @param[in] height    Buffer height in pixels.
+ * @param[in] origin_x  World-space X coordinate that maps to buffer column 0.
+ * @param[in] origin_y  World-space Y coordinate that maps to buffer row 0.
  */
-void er_scratch_begin(uint32_t* buf, int w, int h, int ox, int oy);
+void er_scratch_begin(uint32_t* buffer, int width, int height, int origin_x, int origin_y);
 
 /**
  * @brief Clears scratch redirection, restoring blit routing to the real framebuffer.

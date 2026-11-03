@@ -89,6 +89,11 @@ foreach (qjs_aux qjs_exe qjsc run-test262 api-test lre-test function_source unic
     endif ()
 endforeach ()
 
+# A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wshadow)
+endif ()
+
 # ---------------------------------------------------------------------------
 # Bridge library — thin adapter over er_scene.h (native_ui_bridge.c), plus the portable QuickJS host
 # core (er_runtime.c: context lifecycle, console/screen/persist globals, container load, pump/reset/error,

@@ -16,6 +16,9 @@
 
 #include "font_bitmap.h"
 
+/** @brief Drawn for a codepoint the font has no glyph for, when the font has this one. */
+#define FONT_FALLBACK_CODEPOINT ((uint32_t)'?')
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -27,22 +30,22 @@ const GlyphInfo* font_glyph(const BitmapFont* font, uint32_t codepoint)
 
     if (font->extras_count > 0U && font->extras)
     {
-        uint32_t lo = 0U;
-        uint32_t hi = font->extras_count;
-        while (lo < hi)
+        uint32_t low = 0U;
+        uint32_t high = font->extras_count;
+        while (low < high)
         {
-            const uint32_t mid = lo + ((hi - lo) >> 1);
-            const uint32_t mcp = font->extras[mid].codepoint;
-            if (mcp == codepoint)
-                return &font->extras[mid].info;
-            if (mcp < codepoint)
-                lo = mid + 1U;
+            const uint32_t middle = low + ((high - low) >> 1);
+            const uint32_t middle_codepoint = font->extras[middle].codepoint;
+            if (middle_codepoint == codepoint)
+                return &font->extras[middle].info;
+            if (middle_codepoint < codepoint)
+                low = middle + 1U;
             else
-                hi = mid;
+                high = middle;
         }
     }
 
-    if ((uint32_t)'?' >= font->first && (uint32_t)'?' <= font->last)
-        return &font->glyphs[(uint32_t)'?' - font->first];
+    if (FONT_FALLBACK_CODEPOINT >= font->first && FONT_FALLBACK_CODEPOINT <= font->last)
+        return &font->glyphs[FONT_FALLBACK_CODEPOINT - font->first];
     return &font->glyphs[0];
 }

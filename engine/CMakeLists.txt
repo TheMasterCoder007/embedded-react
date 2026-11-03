@@ -143,6 +143,11 @@ set(ERUI_VECTOR_CACHE_PASSES "48" CACHE STRING "Vector cache: rasterize passes p
 set(ERUI_ARC_SPAN_CACHE "8" CACHE STRING "Arc: per-radius row-span cache entries (~2 B per px of radius each)")
 set(ERUI_ARC_MAX_RADIUS "255" CACHE STRING "Arc: largest radius (px) the row-span cache serves; larger falls back to sqrt")
 
+# A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wshadow)
+endif ()
+
 add_library(embedded-react STATIC ${EMBEDDED_REACT_SOURCES})
 
 target_include_directories(embedded-react

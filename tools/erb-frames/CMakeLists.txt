@@ -24,6 +24,11 @@ endif ()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../engine  ${CMAKE_CURRENT_BINARY_DIR}/engine)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../runtime ${CMAKE_CURRENT_BINARY_DIR}/runtime)
 
+# A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wshadow)
+endif ()
+
 add_executable(erb-frames host.c ${CMAKE_CURRENT_SOURCE_DIR}/../../backends/software/renderer_backend.c)
 target_include_directories(erb-frames PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../backends/software)
 target_link_libraries(erb-frames PRIVATE erb-runtime embedded-react)

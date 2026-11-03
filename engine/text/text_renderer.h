@@ -36,11 +36,11 @@
 #define TEXT_FONT_SIZE_MAX 96U
 
 /** @brief Clamps a requested font size to [TEXT_FONT_SIZE_MIN, TEXT_FONT_SIZE_MAX]. */
-static inline uint8_t er_text_clamp_font_size(uint8_t sz)
+static inline uint8_t er_text_clamp_font_size(uint8_t font_size)
 {
-    if (sz < TEXT_FONT_SIZE_MIN)
+    if (font_size < TEXT_FONT_SIZE_MIN)
         return TEXT_FONT_SIZE_MIN;
-    return (sz > TEXT_FONT_SIZE_MAX) ? TEXT_FONT_SIZE_MAX : sz;
+    return (font_size > TEXT_FONT_SIZE_MAX) ? TEXT_FONT_SIZE_MAX : font_size;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

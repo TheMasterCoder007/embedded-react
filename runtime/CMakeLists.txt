@@ -51,6 +51,11 @@ if (NOT TARGET embedded-react)
     )
 endif ()
 
+# A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wshadow)
+endif ()
+
 add_library(er-runtime STATIC
         er_container.c
         er_assets.c

@@ -38,8 +38,8 @@
 
 #if ERUI_RENDER_WORKERS > 1
 static EmbeddedRenderWorkers s_workers; /* copied at install; count == 0 → none installed */
-static ERParallelFn s_job_fn = NULL;    /* pending forked job (valid between dispatch and sync) */
-static void* s_job_arg = NULL;
+static ERParallelFn s_job = NULL;       /* pending forked job (valid between dispatch and sync) */
+static void* s_job_argument = NULL;
 static bool s_forking = false; /* true while a fork-join is in flight (re-entrancy guard) */
 #endif
 
@@ -87,33 +87,33 @@ int er_render_workers_active(void)
 void er_render_worker_exec(int worker)
 {
 #if ERUI_RENDER_WORKERS > 1
-    if (s_job_fn && worker > 0 && worker < er_render_workers_active())
-        s_job_fn(worker, s_job_arg);
+    if (s_job && worker > 0 && worker < er_render_workers_active())
+        s_job(worker, s_job_argument);
 #else
     (void)worker;
 #endif
 }
 
-void er_parallel_for(ERParallelFn fn, void* arg)
+void er_parallel_for(ERParallelFn job, void* job_argument)
 {
 #if ERUI_RENDER_WORKERS > 1
-    const int n = er_render_workers_active();
-    if (n > 1 && !s_forking)
+    const int worker_count = er_render_workers_active();
+    if (worker_count > 1 && !s_forking)
     {
         s_forking = true;
-        s_job_fn = fn;
-        s_job_arg = arg;
+        s_job = job;
+        s_job_argument = job_argument;
         /* Remote workers FIRST, own share last: signalling a same-core worker before the rest
          * lets it preempt this dispatch loop and silently serialize the job (measured in the
          * Phase 0.5 spike — every workload came back exactly 1.00x). */
-        for (int k = n - 1; k >= 1; k--)
-            s_workers.dispatch(k, s_workers.ctx);
-        fn(0, arg);
+        for (int worker = worker_count - 1; worker >= 1; worker--)
+            s_workers.dispatch(worker, s_workers.ctx);
+        job(0, job_argument);
         s_workers.sync(s_workers.ctx);
-        s_job_fn = NULL;
+        s_job = NULL;
         s_forking = false;
         return;
     }
 #endif
-    fn(0, arg);
+    job(0, job_argument);
 }

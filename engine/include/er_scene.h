@@ -1281,11 +1281,11 @@ extern "C"
      * are reused in place when the new blob fits the prior footprint, otherwise fresh bytes
      * are consumed and the old ones are not reclaimed. Load each font once where possible.
      *
-     * @param[in] name  Null-terminated font family name (e.g. "Inter").
-     * @param[in] buf   Pointer to the font blob data (FONT wire format v1).
-     * @param[in] len   Size of the blob in bytes.
+     * @param[in] name    Null-terminated font family name (e.g. "Inter").
+     * @param[in] buffer  Pointer to the font blob data (FONT wire format v1).
+     * @param[in] length  Size of the blob in bytes.
      */
-    void er_font_load(const char* name, const void* buf, size_t len);
+    void er_font_load(const char* name, const void* buffer, size_t length);
 
     /**
      * @brief Registers a baked bitmap font (one pixel size) under a family name for Text nodes.
@@ -1367,15 +1367,15 @@ extern "C"
      * the new one starts.  If cfg is NULL a zero-duration linear timing animation
      * is used, snapping the property to value immediately.
      *
-     * @param[in] node   Node to animate.
-     * @param[in] prop   Property to animate.
-     * @param[in] value  Target value; for color props, pass the ARGB8888 word packed into
+     * @param[in] node    Node to animate.
+     * @param[in] prop    Property to animate.
+     * @param[in] value   Target value; for color props, pass the ARGB8888 word packed into
      *                   a float via memcpy (use the color_bits() pattern).
-     * @param[in] cfg    Animation configuration, or NULL for an immediate snap.
+     * @param[in] config  Animation configuration, or NULL for an immediate snap.
      *
      * @return Handle identifying this animation; ER_ANIM_HANDLE_INVALID on failure.
      */
-    ERAnimHandle er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* cfg);
+    ERAnimHandle er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* config);
 
     /**
      * @brief Cancels a running animation on a node property.
@@ -1521,11 +1521,11 @@ extern "C"
      *
      * @param[in] handle    Standalone value to animate.
      * @param[in] to_value  Target float value.
-     * @param[in] cfg       Animation configuration, or NULL for an immediate snap.
+     * @param[in] config    Animation configuration, or NULL for an immediate snap.
      *
      * @return Handle identifying this animation; ER_ANIM_HANDLE_INVALID on failure.
      */
-    ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* cfg);
+    ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* config);
 
     /**
      * @brief Immediately sets a standalone value and pushes it to all bound node properties.
@@ -1607,15 +1607,15 @@ extern "C"
      * through @p interp before being written to the property.  This is the engine-side equivalent
      * of `value.interpolate({ inputRange, outputRange })` in React Native's useNativeDriver path.
      *
-     * @param[in] handle  Animatable value to bind.
-     * @param[in] node    Target node.
-     * @param[in] prop    Property to drive.
-     * @param[in] interp  Interpolation mapping (copied; must have point_count >= 2).
+     * @param[in] handle         Animatable value to bind.
+     * @param[in] node           Target node.
+     * @param[in] prop           Property to drive.
+     * @param[in] interpolation  Interpolation mapping (copied; must have point_count >= 2).
      */
     void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
                                          ERNode* node,
                                          ERAnimProp prop,
-                                         const ERInterpolation* interp);
+                                         const ERInterpolation* interpolation);
 
     /**
      * @brief Piecewise-linear mapping from an input range to ARGB8888 colors.
@@ -1636,12 +1636,12 @@ extern "C"
     /**
      * @brief Maps a single float through a color interpolation.
      *
-     * @param[in] input   Value to map.
-     * @param[in] interp  Mapping; point_count < 2 returns 0 (transparent).
+     * @param[in] input          Value to map.
+     * @param[in] interpolation  Mapping; point_count < 2 returns 0 (transparent).
      *
      * @return The interpolated ARGB8888 color.
      */
-    uint32_t er_interpolate_color(float input, const ERColorInterpolation* interp);
+    uint32_t er_interpolate_color(float input, const ERColorInterpolation* interpolation);
 
     /**
      * @brief Binds a shared animatable value to a color property through a color interpolation.
@@ -1650,15 +1650,15 @@ extern "C"
      * `backgroundColor` or `color`. A color prop takes only this binding: er_anim_value_bind() and
      * er_anim_value_bind_interpolated() refuse one, since a plain float is not a color.
      *
-     * @param[in] handle  Animatable value to bind.
-     * @param[in] node    Target node.
-     * @param[in] prop    ER_PROP_BACKGROUND_COLOR or ER_PROP_COLOR.
-     * @param[in] interp  Color mapping (copied; must have point_count >= 2).
+     * @param[in] handle         Animatable value to bind.
+     * @param[in] node           Target node.
+     * @param[in] prop           ER_PROP_BACKGROUND_COLOR or ER_PROP_COLOR.
+     * @param[in] interpolation  Color mapping (copied; must have point_count >= 2).
      */
     void er_anim_value_bind_color(ERAnimValueHandle handle,
                                   ERNode* node,
                                   ERAnimProp prop,
-                                  const ERColorInterpolation* interp);
+                                  const ERColorInterpolation* interpolation);
 
     /**
      * @brief Returns the axis-aligned bounding rectangle of all pixels repainted by the last er_commit()
@@ -1828,7 +1828,7 @@ extern "C"
      * config flexes across screen sizes. There is no auto-scroll-into-view yet, so place inputs above the
      * keyboard's bottom strip.
      *
-     * @param[in] cfg  Keyboard description, or NULL for the built-in QWERTY.
+     * @param[in] config  Keyboard description, or NULL for the built-in QWERTY.
      */
     void er_keyboard_set_config(const ERKeyboardConfig* cfg);
 
@@ -1965,9 +1965,9 @@ extern "C"
      * snapped to their target immediately without animation; they are treated as creations
      * rather than updates.
      *
-     * @param[in] cfg  Layout animation config. NULL is a no-op.
+     * @param[in] config  Layout animation config. NULL is a no-op.
      */
-    void er_layout_anim_configure_next(const ERLayoutAnimConfig* cfg);
+    void er_layout_anim_configure_next(const ERLayoutAnimConfig* config);
 
     /**
      * @brief Reports whether a layout-animation config is armed for the next commit.
