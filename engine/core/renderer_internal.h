@@ -49,7 +49,7 @@ struct ERNode;
 #define ER_HALF_PI 1.57079632679489661923f
 
 /** @brief Below this magnitude in BOTH arguments, atan2 has no defined direction and answers 0. */
-#define ER_ATAN2_DEGENERATE_EPS 1e-12f
+#define ER_ATAN2_DEGENERATE_EPSILON 1e-12f
 
 /** @brief Polynomial coefficients of er_fast_atan2(), highest power first. */
 #define ER_ATAN2_POLY_A 0.0464964749f
@@ -106,7 +106,7 @@ static inline uint32_t er_px_scale_premul(uint32_t pixel, uint32_t coverage)
 static inline float er_fast_atan2(float y, float x)
 {
     const float abs_x = fabsf(x), abs_y = fabsf(y);
-    if (abs_x < ER_ATAN2_DEGENERATE_EPS && abs_y < ER_ATAN2_DEGENERATE_EPS)
+    if (abs_x < ER_ATAN2_DEGENERATE_EPSILON && abs_y < ER_ATAN2_DEGENERATE_EPSILON)
     {
         return 0.0f;
     }

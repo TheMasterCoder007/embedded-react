@@ -427,10 +427,10 @@ static void draw_glyph_aa(const GlyphInfo* glyph,
          * the bilinear blend below. */
         const float italic_shift = italic ? (float)(glyph->height - 1 - row) * ITALIC_SLOPE : 0.0f;
         const int shift_int = (int)italic_shift;
-        const float shift_frac = italic_shift - (float)shift_int;
+        const float shift_fraction = italic_shift - (float)shift_int;
         const int origin_x = base_origin_x + shift_int;
 
-        /* Bilinear subpixel blend for italic (skipped when shift_frac ≈ 0).
+        /* Bilinear subpixel blend for italic (skipped when shift_fraction ≈ 0).
          *
          * Destination column d receives:
          *   out_cov[d] = coverage[d] * (1 - frac) + coverage[d-1] * frac
@@ -438,7 +438,7 @@ static void draw_glyph_aa(const GlyphInfo* glyph,
          *
          * This distributes each source pixel between its two nearest destination
          * columns, producing anti-aliased shear edges instead of a staircase. */
-        const bool blend = italic && shift_frac >= ITALIC_BLEND_MIN_FRACTION;
+        const bool blend = italic && shift_fraction >= ITALIC_BLEND_MIN_FRACTION;
         const int out_width = blend ? width + 1 : width;
 
         const int column_start = (clip_left > origin_x) ? clip_left - origin_x : 0;
@@ -467,12 +467,12 @@ static void draw_glyph_aa(const GlyphInfo* glyph,
                 {
                     const float previous_coverage = (float)coverage[offset];
                     const float current_coverage = (float)coverage[offset + 1];
-                    row_pixels[offset] = premul_cov(
-                        color_alpha,
-                        color_red,
-                        color_green,
-                        color_blue,
-                        (uint8_t)(current_coverage * (1.0f - shift_frac) + previous_coverage * shift_frac + 0.5f));
+                    row_pixels[offset] = premul_cov(color_alpha,
+                                                    color_red,
+                                                    color_green,
+                                                    color_blue,
+                                                    (uint8_t)(current_coverage * (1.0f - shift_fraction)
+                                                              + previous_coverage * shift_fraction + 0.5f));
                 }
                 coverage[0] = coverage[chunk_columns];
             }
@@ -820,15 +820,15 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
                 const ERTextSpan* span = &params->spans[span_index];
 
                 /* Resolve per-span style; sentinels inherit from base params. */
-                const uint32_t seg_color = span->color ? span->color : params->color;
-                const bool seg_bold = (span->font_weight == TEXT_SPAN_INHERIT) ? bold : (span->font_weight != 0U);
-                const bool seg_italic = (span->font_style == TEXT_SPAN_INHERIT) ? italic : (span->font_style != 0U);
-                const int seg_letter_spacing =
+                const uint32_t segment_color = span->color ? span->color : params->color;
+                const bool segment_bold = (span->font_weight == TEXT_SPAN_INHERIT) ? bold : (span->font_weight != 0U);
+                const bool segment_italic = (span->font_style == TEXT_SPAN_INHERIT) ? italic : (span->font_style != 0U);
+                const int segment_letter_spacing =
                     (span->letter_spacing == ER_LAYOUT_AUTO) ? letter_spacing : (int)span->letter_spacing;
-                const uint8_t seg_decoration =
+                const uint8_t segment_decoration =
                     (span->text_decoration == TEXT_SPAN_INHERIT) ? params->text_decoration : span->text_decoration;
 
-                const int seg_start_x = pen_x;
+                const int segment_start_x = pen_x;
 
                 /* Render all characters of this span run within the line. */
                 while (cursor < render_end && *cursor)
@@ -836,26 +836,26 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
                     if ((size_t)(cursor - text) >= span_end[span_index])
                         break;
                     uint32_t codepoint = utf8_next(&cursor);
-                    draw_cp(font, codepoint, pen_x, cursor_y, &params->clip, seg_color, seg_italic);
-                    if (seg_bold)
-                        draw_cp(font, codepoint, pen_x + 1, cursor_y, &params->clip, seg_color, seg_italic);
-                    pen_x += glyph_adv(font, codepoint, seg_letter_spacing) + (seg_bold ? 1 : 0);
+                    draw_cp(font, codepoint, pen_x, cursor_y, &params->clip, segment_color, segment_italic);
+                    if (segment_bold)
+                        draw_cp(font, codepoint, pen_x + 1, cursor_y, &params->clip, segment_color, segment_italic);
+                    pen_x += glyph_adv(font, codepoint, segment_letter_spacing) + (segment_bold ? 1 : 0);
                 }
                 /* Text decoration for this span segment. */
-                if (seg_decoration != ER_TEXT_DECORATION_NONE)
+                if (segment_decoration != ER_TEXT_DECORATION_NONE)
                 {
-                    int decoration_width = pen_x - seg_start_x;
+                    int decoration_width = pen_x - segment_start_x;
                     const int right_edge = params->clip.x + params->clip.w;
-                    if (seg_start_x + decoration_width > right_edge)
-                        decoration_width = right_edge - seg_start_x;
+                    if (segment_start_x + decoration_width > right_edge)
+                        decoration_width = right_edge - segment_start_x;
                     if (decoration_width > 0)
                     {
                         const int decoration_y =
-                            (seg_decoration == ER_TEXT_DECORATION_UNDERLINE)
+                            (segment_decoration == ER_TEXT_DECORATION_UNDERLINE)
                                 ? cursor_y + (int)font->baseline + 1
                                 : cursor_y + (int)font->baseline * LINE_THROUGH_NUMERATOR / LINE_THROUGH_DENOMINATOR;
                         if (decoration_y >= params->clip.y && decoration_y < params->clip.y + params->clip.h)
-                            er_blit_fill(seg_color, seg_start_x, decoration_y, decoration_width, 1);
+                            er_blit_fill(segment_color, segment_start_x, decoration_y, decoration_width, 1);
                     }
                 }
             }
@@ -1131,10 +1131,10 @@ void er_text_measure_spans(const ERTextSpan* spans,
     {
         const ERTextSpan* span = &spans[span_index];
         /* Resolve per-span style from sentinels exactly as the renderer does. */
-        const bool seg_bold = (span->font_weight == TEXT_SPAN_INHERIT) ? base_bold : (span->font_weight != 0U);
-        const int seg_letter_spacing =
+        const bool segment_bold = (span->font_weight == TEXT_SPAN_INHERIT) ? base_bold : (span->font_weight != 0U);
+        const int segment_letter_spacing =
             (span->letter_spacing == ER_LAYOUT_AUTO) ? (int)base_letter_spacing : (int)span->letter_spacing;
-        const int bold_extra = seg_bold ? 1 : 0;
+        const int bold_extra = segment_bold ? 1 : 0;
 
         const char* cursor = span->text;
         while (*cursor)
@@ -1142,7 +1142,7 @@ void er_text_measure_spans(const ERTextSpan* spans,
             const uint32_t codepoint = utf8_next(&cursor);
             if (codepoint == (uint32_t)'\n')
                 continue;
-            width += glyph_adv(font, codepoint, seg_letter_spacing) + bold_extra;
+            width += glyph_adv(font, codepoint, segment_letter_spacing) + bold_extra;
         }
     }
     if (width > INT_MAX)

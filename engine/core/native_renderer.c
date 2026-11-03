@@ -82,7 +82,7 @@ typedef struct
      * under a dropped clip is clipped only by the deepest entry that fit. */
     int clip_overflow;
 
-    /* Banded rendering. The strip currently being rendered occupies screen rows [band_oy, band_origin_y +
+    /* Banded rendering. The strip currently being rendered occupies screen rows [band_origin_y, band_origin_y +
      * band_height). This is applied at the BACKEND-EMIT boundary only — NOT via the clip stack — so it
      * bounds what lands in the band buffer without truncating offscreen-scratch (transform /
      * opacity) source rendering, which must always be complete or a transformed node split across a

@@ -1364,7 +1364,7 @@ extern "C"
      * @brief Starts an animation on a node property.
      *
      * Any previously running animation on the same node+prop is cancelled before
-     * the new one starts.  If cfg is NULL a zero-duration linear timing animation
+     * the new one starts.  If config is NULL a zero-duration linear timing animation
      * is used, snapping the property to value immediately.
      *
      * @param[in] node    Node to animate.
@@ -1512,7 +1512,7 @@ extern "C"
      * @brief Starts an animation that drives a standalone value toward to_value.
      *
      * All bound node-property pairs are updated on each tick as the value interpolates.
-     * Any previously running animation on this value is cancelled first.  If cfg is NULL a
+     * Any previously running animation on this value is cancelled first.  If config is NULL a
      * zero-duration snap is applied immediately.
      *
      * Supports the same animation types (timing/spring/decay), easing, delay, loop, and
@@ -1604,7 +1604,7 @@ extern "C"
      * @brief Binds a shared animatable value to a node property through an interpolation mapping.
      *
      * @details Like er_anim_value_bind(), but on every value change the raw float is first mapped
-     * through @p interp before being written to the property.  This is the engine-side equivalent
+     * through @p interpolation before being written to the property.  This is the engine-side equivalent
      * of `value.interpolate({ inputRange, outputRange })` in React Native's useNativeDriver path.
      *
      * @param[in] handle         Animatable value to bind.
@@ -1830,7 +1830,7 @@ extern "C"
      *
      * @param[in] config  Keyboard description, or NULL for the built-in QWERTY.
      */
-    void er_keyboard_set_config(const ERKeyboardConfig* cfg);
+    void er_keyboard_set_config(const ERKeyboardConfig* config);
 
     /**
      * @brief Gives keyboard focus to a TextInput node.

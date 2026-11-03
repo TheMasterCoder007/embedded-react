@@ -62,6 +62,7 @@ if (ESP_PLATFORM)
             INCLUDE_DIRS "include"
             PRIV_INCLUDE_DIRS "core" "scene" "layout" "rendering" "text" "animation" "font" "platform"
     )
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wshadow)
     return()
 endif ()
 

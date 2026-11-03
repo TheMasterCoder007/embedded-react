@@ -21,7 +21,7 @@ if (ESP_PLATFORM)
             PRIV_REQUIRES esp_partition spi_flash
     )
     # IDF builds with -Werror; keep the toolchain's stricter warnings as warnings.
-    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error)
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wshadow -Wno-error)
     return()
 endif ()
 

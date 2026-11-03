@@ -43,8 +43,8 @@ typedef struct
     int16_t margin_main_end;
     int16_t margin_cross_start;
     int16_t margin_cross_end;
-    int16_t main_pos;  /**< Offset within parent content along the main axis. */
-    int16_t cross_pos; /**< Offset within parent content along the cross-axis. */
+    int16_t main_position;  /**< Offset within parent content along the main axis. */
+    int16_t cross_position; /**< Offset within parent content along the cross-axis. */
     int16_t flex_grow;
     int16_t flex_shrink;
     int16_t main_min;   /**< Main-axis min constraint (ER_LAYOUT_AUTO = none). */
@@ -568,7 +568,7 @@ static void resolve_flex_line(FlexChild* items,
          * frozen items in between are whole pixels and never move the fraction. */
         int32_t carry = 0;
         int64_t edge_remainder = 0;
-        int32_t prev_edge = 0;
+        int32_t previous_edge = 0;
         for (int item_index = 0; item_index < item_count; item_index++)
         {
             if (items[item_index].line != line_index || items[item_index].frozen)
@@ -590,8 +590,8 @@ static void resolve_flex_line(FlexChild* items,
                 carry++;
             }
             const int32_t edge = edge_round(carry, edge_remainder, denominator, reversed_main);
-            int32_t flexed_size = items[item_index].main + (edge - prev_edge);
-            prev_edge = edge;
+            int32_t flexed_size = items[item_index].main + (edge - previous_edge);
+            previous_edge = edge;
             if (flexed_size < 0)
                 flexed_size = 0;
             items[item_index].main =
@@ -1326,7 +1326,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
     const bool is_row = is_row_dir(spec->flex_direction);
     const bool reversed_main = is_reverse_dir(spec->flex_direction);
     const int16_t main_size = is_row ? content_width : content_height;
-    const int16_t cross_avail = is_row ? content_height : content_width;
+    const int16_t cross_available = is_row ? content_height : content_width;
     const int16_t main_gap = is_row ? edge_or(spec->column_gap, spec->gap) : edge_or(spec->row_gap, spec->gap);
     const int16_t cross_gap = is_row ? edge_or(spec->row_gap, spec->gap) : edge_or(spec->column_gap, spec->gap);
 
@@ -1360,7 +1360,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
                                                        child_spec,
                                                        is_row,
                                                        main_size,
-                                                       cross_avail,
+                                                       cross_available,
                                                        available_width,
                                                        &measured,
                                                        &intrinsic_width,
@@ -1378,7 +1378,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
             int16_t hypothetical_cross;
             int16_t measured_width = ER_LAYOUT_AUTO;
             if (cross_percent > 0.0f)
-                hypothetical_cross = round_px((float)cross_avail * cross_percent / PERCENT_SCALE);
+                hypothetical_cross = round_px((float)cross_available * cross_percent / PERCENT_SCALE);
             else if (cross_explicit != ER_LAYOUT_AUTO)
                 hypothetical_cross = cross_explicit;
             else if (cross_via_aspect)
@@ -1506,7 +1506,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
         s_line_cross[line_index] = line_cross;
     }
     if (spec->flex_wrap == ER_WRAP_NOWRAP && line_count == 1)
-        s_line_cross[0] = cross_avail;
+        s_line_cross[0] = cross_available;
 
     int16_t total_cross = 0;
     for (int line_index = 0; line_index < line_count; line_index++)
@@ -1533,7 +1533,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
     int32_t line_stretch = 0;            /**< STRETCH: cross space added to EVERY line, over line_offset_denominator. */
     if (spec->flex_wrap != ER_WRAP_NOWRAP && line_count > 1)
     {
-        int16_t free_cross = (int16_t)(cross_avail - total_cross);
+        int16_t free_cross = (int16_t)(cross_available - total_cross);
         if (free_cross < 0)
             free_cross = 0;
 
@@ -1659,7 +1659,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
                 position = main_size - cursor - s_scratch[item_index].margin_main_end - s_scratch[item_index].main;
                 numerator = -numerator;
             }
-            s_scratch[item_index].main_pos = (int16_t)(position + div_round(numerator, justify_denominator));
+            s_scratch[item_index].main_position = (int16_t)(position + div_round(numerator, justify_denominator));
 
             cursor += (int32_t)s_scratch[item_index].margin_main_start + s_scratch[item_index].main
                       + s_scratch[item_index].margin_main_end + main_gap;
@@ -1740,10 +1740,10 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
              * mirror to negative positions rather than clamping. Mirror before rounding, as above. */
             if (reversed_cross)
             {
-                position = cross_avail - position - s_scratch[item_index].cross;
+                position = cross_available - position - s_scratch[item_index].cross;
                 numerator = -numerator;
             }
-            s_scratch[item_index].cross_pos = (int16_t)(position + div_round(numerator, cross_denominator));
+            s_scratch[item_index].cross_position = (int16_t)(position + div_round(numerator, cross_denominator));
         }
 
         /* line_offset_step carries the stretch growth, so this advances by the line's unstretched extent. */
@@ -1770,15 +1770,15 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
         int16_t child_x, child_y, child_width, child_height;
         if (is_row)
         {
-            child_x = (int16_t)(content_x + s_scratch[item_index].main_pos);
-            child_y = (int16_t)(content_y + s_scratch[item_index].cross_pos);
+            child_x = (int16_t)(content_x + s_scratch[item_index].main_position);
+            child_y = (int16_t)(content_y + s_scratch[item_index].cross_position);
             child_width = s_scratch[item_index].main;
             child_height = s_scratch[item_index].cross;
         }
         else
         {
-            child_x = (int16_t)(content_x + s_scratch[item_index].cross_pos);
-            child_y = (int16_t)(content_y + s_scratch[item_index].main_pos);
+            child_x = (int16_t)(content_x + s_scratch[item_index].cross_position);
+            child_y = (int16_t)(content_y + s_scratch[item_index].main_position);
             child_width = s_scratch[item_index].cross;
             child_height = s_scratch[item_index].main;
         }
@@ -1942,12 +1942,12 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
                 is_reverse_dir(spec->flex_direction));
             const int16_t cross_static = solo_axis_pos(
                 is_row ? content_y : content_x,
-                cross_avail,
+                cross_available,
                 solo_cross_size,
                 cross_margin_lead,
                 cross_margin_trail,
-                solo_cross_offset2(self_align,
-                                   (int16_t)(cross_avail - solo_cross_size - cross_margin_lead - cross_margin_trail)),
+                solo_cross_offset2(
+                    self_align, (int16_t)(cross_available - solo_cross_size - cross_margin_lead - cross_margin_trail)),
                 spec->flex_wrap == ER_WRAP_WRAP_REVERSE);
 
             /* Insets measure from the padding box; an axis pinned by neither takes the static position. */

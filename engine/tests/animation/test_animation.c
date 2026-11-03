@@ -375,7 +375,7 @@ int main(void)
 
         ERAnimConfig bc = {0};
         bc.type = ER_ANIM_DECAY;
-        bc.velocity = 0.1f; /* ~3.4s at the default deceleration before it falls below DECAY_VEL_STOP */
+        bc.velocity = 0.1f; /* ~3.4s at the default deceleration before it falls below DECAY_VELOCITY_STOP */
         bc.on_complete = on_complete;
 
         er_anim_start(bn, ER_PROP_OPACITY, 1.0f, &bc);

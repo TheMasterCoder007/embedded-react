@@ -31,7 +31,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Integration timestep in SECONDS — one step per elapsed millisecond of the frame. */
-#define ER_SPRING_DT_SECONDS 0.001f
+#define ER_SPRING_STEP_SECONDS 0.001f
 
 /**
  * @brief Maximum integration steps per tick, bounding the cost of a long frame.
@@ -43,7 +43,7 @@
 #define ER_SPRING_MAX_STEPS 200u
 
 /**
- * @brief Integrates one ER_SPRING_DT_SECONDS step of spring physics toward the normalised target 1.0.
+ * @brief Integrates one ER_SPRING_STEP_SECONDS step of spring physics toward the normalised target 1.0.
  *
  * @param[in,out] position   Current normalised spring position.
  * @param[in,out] velocity   Current normalised velocity.
@@ -55,8 +55,8 @@ static inline void er_spring_step(float* position, float* velocity, float stiffn
 {
     const float displacement = *position - 1.0f;
     const float acceleration = (-stiffness * displacement - damping * (*velocity)) / mass;
-    *velocity += acceleration * ER_SPRING_DT_SECONDS;
-    *position += (*velocity) * ER_SPRING_DT_SECONDS;
+    *velocity += acceleration * ER_SPRING_STEP_SECONDS;
+    *position += (*velocity) * ER_SPRING_STEP_SECONDS;
 }
 
 #endif

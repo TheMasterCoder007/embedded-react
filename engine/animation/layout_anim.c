@@ -31,10 +31,10 @@
 #endif
 
 /** @brief Spring considered settled when |displacement from target| < this. */
-#define LA_SPRING_SETTLE_DISP 0.005f
+#define LA_SPRING_SETTLE_DISPLACEMENT 0.005f
 
 /** @brief Spring considered settled when |velocity| < this. */
-#define LA_SPRING_SETTLE_VEL 0.05f
+#define LA_SPRING_SETTLE_VELOCITY 0.05f
 
 /** @brief Default spring stiffness k (matches React Native Animated.spring() default). */
 #define LA_SPRING_DEFAULT_STIFFNESS 100.0f
@@ -362,9 +362,9 @@ static bool la_tick_spring(ERLayoutAnim* layout_anim, uint32_t delta_ms)
         er_spring_step(&layout_anim->spring_position, &layout_anim->spring_velocity, stiffness, damping, mass);
 
     const float displacement = layout_anim->spring_position - 1.0f;
-    return (displacement > -LA_SPRING_SETTLE_DISP && displacement < LA_SPRING_SETTLE_DISP)
-           && (layout_anim->spring_velocity > -LA_SPRING_SETTLE_VEL
-               && layout_anim->spring_velocity < LA_SPRING_SETTLE_VEL);
+    return (displacement > -LA_SPRING_SETTLE_DISPLACEMENT && displacement < LA_SPRING_SETTLE_DISPLACEMENT)
+           && (layout_anim->spring_velocity > -LA_SPRING_SETTLE_VELOCITY
+               && layout_anim->spring_velocity < LA_SPRING_SETTLE_VELOCITY);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

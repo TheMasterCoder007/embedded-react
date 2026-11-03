@@ -46,12 +46,12 @@
 #define ERUI_MAX_VALUE_BINDINGS 4
 #endif
 
-/** @brief Spring state considered settled when both |disp| and |vel| are below these thresholds. */
-#define SPRING_SETTLE_DISP 0.001f
-#define SPRING_SETTLE_VEL 0.01f
+/** @brief Spring state considered settled when both |displacement| and |velocity| are below these thresholds. */
+#define SPRING_SETTLE_DISPLACEMENT 0.001f
+#define SPRING_SETTLE_VELOCITY 0.01f
 
 /** @brief Decay stops when the velocity magnitude drops below this value (value/ms). */
-#define DECAY_VEL_STOP 0.0001f
+#define DECAY_VELOCITY_STOP 0.0001f
 
 /** @brief Default spring parameters matching React Native Animated.spring() defaults. */
 #define SPRING_DEFAULT_STIFFNESS 100.0f
@@ -1179,8 +1179,8 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
         er_spring_step(&anim->spring_position, &anim->spring_velocity, stiffness, damping, mass);
 
     const float displacement = anim->spring_position - 1.0f;
-    return (displacement > -SPRING_SETTLE_DISP && displacement < SPRING_SETTLE_DISP)
-           && (anim->spring_velocity > -SPRING_SETTLE_VEL && anim->spring_velocity < SPRING_SETTLE_VEL);
+    return (displacement > -SPRING_SETTLE_DISPLACEMENT && displacement < SPRING_SETTLE_DISPLACEMENT)
+           && (anim->spring_velocity > -SPRING_SETTLE_VELOCITY && anim->spring_velocity < SPRING_SETTLE_VELOCITY);
 }
 
 /**
@@ -1192,7 +1192,7 @@ static bool tick_spring(ERAnimation* anim, uint32_t delta_ms)
  * @param[in,out] anim      Animation slot to update.
  * @param[in]     delta_ms  Elapsed time in milliseconds.
  *
- * @return true when the velocity has dropped below DECAY_VEL_STOP.
+ * @return true when the velocity has dropped below DECAY_VELOCITY_STOP.
  */
 static bool tick_decay(ERAnimation* anim, uint32_t delta_ms)
 {
@@ -1209,7 +1209,7 @@ static bool tick_decay(ERAnimation* anim, uint32_t delta_ms)
     }
 
     const float velocity = anim->decay_velocity;
-    return (velocity > -DECAY_VEL_STOP && velocity < DECAY_VEL_STOP);
+    return (velocity > -DECAY_VELOCITY_STOP && velocity < DECAY_VELOCITY_STOP);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1601,7 +1601,7 @@ void er_anim_value_destroy(ERAnimValueHandle handle)
 /**
  * @brief Claims a free binding slot on a value for a node+prop pair.
  *
- * @param[in,out] anim_value  Value to binding; NULL claims nothing.
+ * @param[in,out] anim_value  Value to bind; NULL claims nothing.
  * @param[in]     node        Target node.
  * @param[in]     prop        Property to drive.
  *
