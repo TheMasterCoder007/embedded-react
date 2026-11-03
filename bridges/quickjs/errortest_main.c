@@ -27,6 +27,10 @@
 #include <stdio.h>
 #include <string.h>
 
+/** @brief Screen the test runtime is configured for. */
+#define TEST_SCREEN_WIDTH 320
+#define TEST_SCREEN_HEIGHT 240
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Test helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -105,8 +109,8 @@ int main(void)
     static const EmbeddedRenderBackend backend = ER_HOST_NOOP_BACKEND;
     embedded_renderer_set_backend(&backend);
     ErRuntimeConfig config = {0};
-    config.screen_width = 320;
-    config.screen_height = 240;
+    config.screen_width = TEST_SCREEN_WIDTH;
+    config.screen_height = TEST_SCREEN_HEIGHT;
     config.screen_scale = 1.0f;
     config.log = keep_line;
     if (!er_runtime_init(&config))

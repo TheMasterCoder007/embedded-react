@@ -51,7 +51,7 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Live bytes the growth script allocates (one-byte chars; keep in sync with SRC_GROW). */
+/** @brief Live bytes the growth script allocates (one-byte chars; keep in sync with SOURCE_GROW). */
 #define GROWTH_BYTES 262144
 
 /** @brief Byte-accounting is proven if malloc_size grows by at least this much for that string. */
@@ -60,21 +60,41 @@
 /** @brief With accounting dead, malloc_size only moves by MALLOC_OVERHEAD per live allocation. */
 #define GROWTH_MAX_UNTRACKED 4096
 
-/** @brief Headroom allowed above the pre-churn heap once SRC_CYCLES has run under the automatic GC. */
+/** @brief Headroom allowed above the pre-churn heap once SOURCE_CYCLES has run under the automatic GC. */
 #define AUTO_GC_MAX_RETAINED (2 * 1024 * 1024)
 
 /** @brief Screen the test runtimes are configured for (the siblings name theirs the same way). */
-#define GC_SCREEN_W 240
-#define GC_SCREEN_H 240
+#define GC_SCREEN_WIDTH 240
+#define GC_SCREEN_HEIGHT 240
 
 /** @brief GC floor the threshold scenarios ask for — well above what live x 1.5 would ever settle at. */
 #define GC_FLOOR_BYTES (4u * 1024u * 1024u)
 
-/** @brief Growth expected from SRC_CYCLES once automatic collection is switched off entirely. */
+/** @brief Growth expected from SOURCE_CYCLES once automatic collection is switched off entirely. */
 #define GC_OFF_MIN_GROWTH (2 * 1024 * 1024)
 
-/** @brief Live bytes SRC_CYCLES may leave behind once the collector is finally allowed to run. */
+/** @brief Live bytes SOURCE_CYCLES may leave behind once the collector is finally allowed to run. */
 #define CYCLES_MAX_RETAINED (1024 * 1024)
+
+/** @brief The bytes the probe allocates (ER_JS_PROBE_BYTES in er_js_alloc.c). */
+#define PROBE_BYTES 1000
+
+/** @brief What the implausible allocator answers for every block. */
+#define IMPLAUSIBLE_USABLE_SIZE 16
+
+/** @brief What `__hostProbe()` returns. */
+#define HOST_PROBE_VALUE 42
+
+/** @brief Bytes in a KB, for the messages. */
+#define BYTES_PER_KB 1024
+
+/** @brief Room for one check's message. */
+#define MESSAGE_BYTES 128
+
+/** @brief Memory limit of the warning scenario, and floors above and below it. */
+#define WARN_MEMORY_LIMIT (1024 * 1024)
+#define WARN_FLOOR_ABOVE_LIMIT (2 * 1024 * 1024)
+#define WARN_FLOOR_BELOW_LIMIT (256 * 1024)
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
@@ -89,8 +109,8 @@ static int s_failures = 0;
  * to itself shares both halves, so 256 KB of `length` costs ~1.7 KB of heap. That version measures
  * nothing.
  */
-static const char* const SRC_GROW = "globalThis.keep = 'x'.repeat(262144);\n"
-                                    "globalThis.keep.length;\n";
+static const char* const SOURCE_GROW = "globalThis.keep = 'x'.repeat(262144);\n"
+                                       "globalThis.keep.length;\n";
 
 /**
  * @brief Churns reference cycles — the only garbage the mark-sweep collector is actually needed for.
@@ -101,14 +121,14 @@ static const char* const SRC_GROW = "globalThis.keep = 'x'.repeat(262144);\n"
  * other never reaches refcount zero, so cycles are what accumulate when mark-sweep is not allowed to
  * run (~9 MB here) and what disappear when it is (~30 KB). Every GC claim below is made with these.
  */
-static const char* const SRC_CYCLES = "var n = 0;\n"
-                                      "for (var i = 0; i < 20000; i++) {\n"
-                                      "    var a = { pad: 'x'.repeat(200) };\n"
-                                      "    var b = { a: a };\n"
-                                      "    a.b = b;\n"
-                                      "    n++;\n"
-                                      "}\n"
-                                      "n;\n";
+static const char* const SOURCE_CYCLES = "var n = 0;\n"
+                                         "for (var i = 0; i < 20000; i++) {\n"
+                                         "    var a = { pad: 'x'.repeat(200) };\n"
+                                         "    var b = { a: a };\n"
+                                         "    a.b = b;\n"
+                                         "    n++;\n"
+                                         "}\n"
+                                         "n;\n";
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — broken allocators (what a host on an unsupported platform effectively gets)
@@ -128,38 +148,38 @@ static void* plain_malloc(void* opaque, size_t size)
     return malloc(size);
 }
 
-/** @brief Free. @param opaque Unused. @param ptr Block. */
-static void plain_free(void* opaque, void* ptr)
+/** @brief Free. @param opaque Unused. @param block Block. */
+static void plain_free(void* opaque, void* block)
 {
     (void)opaque;
-    free(ptr);
+    free(block);
 }
 
-/** @brief Resize. @param opaque Unused. @param ptr Block. @param size New byte count. */
-static void* plain_realloc(void* opaque, void* ptr, size_t size)
+/** @brief Resize. @param opaque Unused. @param block Block. @param size New byte count. */
+static void* plain_realloc(void* opaque, void* block, size_t size)
 {
     (void)opaque;
-    return realloc(ptr, size);
+    return realloc(block, size);
 }
 
-/** @brief What QuickJS's cutils.h fallback does off the supported platforms. @param ptr Block. */
-static size_t usable_size_zero(const void* ptr)
+/** @brief What QuickJS's cutils.h fallback does off the supported platforms. @param block Block. */
+static size_t usable_size_zero(const void* block)
 {
-    (void)ptr;
+    (void)block;
     return 0;
 }
 
 /** @brief A usable_size reading someone else's heap header: an answer, but not about this block. */
-static size_t usable_size_constant(const void* ptr)
+static size_t usable_size_constant(const void* block)
 {
-    (void)ptr;
-    return 16;
+    (void)block;
+    return IMPLAUSIBLE_USABLE_SIZE;
 }
 
-static const JSMallocFunctions MF_NO_ACCOUNTING = {
+static const JSMallocFunctions MALLOC_NO_ACCOUNTING = {
     plain_calloc, plain_malloc, plain_free, plain_realloc, usable_size_zero};
 
-static const JSMallocFunctions MF_IMPLAUSIBLE = {
+static const JSMallocFunctions MALLOC_IMPLAUSIBLE = {
     plain_calloc, plain_malloc, plain_free, plain_realloc, usable_size_constant};
 
 /** @brief Refuses everything. @param opaque Unused. @param count Element count. @param size Element size. */
@@ -180,7 +200,7 @@ static void* failing_malloc(void* opaque, size_t size)
 }
 
 /** @brief An out-of-memory host: JS_NewRuntime2 cannot even allocate the JSRuntime, so init fails early. */
-static const JSMallocFunctions MF_ALLOCATION_FAILS = {
+static const JSMallocFunctions MALLOC_ALLOCATION_FAILS = {
     failing_calloc, failing_malloc, plain_free, plain_realloc, usable_size_zero};
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -192,35 +212,35 @@ static const JSMallocFunctions MF_ALLOCATION_FAILS = {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Lines the gc_threshold sanity warning has emitted through the log sink (scenario 6). */
-static int s_gc_warns = 0;
+static int s_gc_warnings = 0;
 
 /** @brief Log sink that counts the gc_threshold-vs-memory_limit warning (and stays quiet otherwise). */
 static void counting_log(const char* line)
 {
     if (strstr(line, "gc_threshold is not below memory_limit"))
     {
-        s_gc_warns++;
+        s_gc_warnings++;
     }
 }
 
 static int s_host_installs = 0;
 
-/** @brief `__hostProbe()` → 42: the device-API global the host-globals scenario installs. */
+/** @brief `__hostProbe()` → HOST_PROBE_VALUE: the device-API global the host-globals scenario installs. */
 static JSValue host_probe(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_NewInt32(ctx, 42);
+    return JS_NewInt32(ctx, HOST_PROBE_VALUE);
 }
 
 /** @brief ErRuntimeConfig.install_host_globals for that scenario: counts its calls, installs __hostProbe. */
 static void install_host_probe(JSContext* ctx)
 {
     s_host_installs++;
-    JSValue g = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, g, "__hostProbe", JS_NewCFunction(ctx, host_probe, "__hostProbe", 0));
-    JS_FreeValue(ctx, g);
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__hostProbe", JS_NewCFunction(ctx, host_probe, "__hostProbe", 0));
+    JS_FreeValue(ctx, global);
 }
 
 /** @brief Records one assertion. @param ok Result. @param what Description printed either way. */
@@ -250,44 +270,44 @@ static int32_t read_int_global(JSContext* ctx, const char* name)
     {
         return -1;
     }
-    JSValue g = JS_GetGlobalObject(ctx);
-    JSValue v = JS_GetPropertyStr(ctx, g, name);
-    int32_t out = -1;
-    JS_ToInt32(ctx, &out, v);
-    JS_FreeValue(ctx, v);
-    JS_FreeValue(ctx, g);
-    return out;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue value = JS_GetPropertyStr(ctx, global, name);
+    int32_t number = -1;
+    JS_ToInt32(ctx, &number, value);
+    JS_FreeValue(ctx, value);
+    JS_FreeValue(ctx, global);
+    return number;
 }
 
-static bool run_js(JSContext* ctx, const char* src, const char* name)
+static bool run_js(JSContext* ctx, const char* source, const char* name)
 {
-    JSValue result = JS_Eval(ctx, src, strlen(src), name, JS_EVAL_TYPE_GLOBAL);
+    JSValue result = JS_Eval(ctx, source, strlen(source), name, JS_EVAL_TYPE_GLOBAL);
     const bool ok = !JS_IsException(result);
     if (!ok)
     {
-        JSValue exc = JS_GetException(ctx);
-        const char* msg = JS_ToCString(ctx, exc);
-        fprintf(stderr, "JS exception in %s: %s\n", name, msg ? msg : "(unknown)");
-        if (msg)
+        JSValue exception = JS_GetException(ctx);
+        const char* message = JS_ToCString(ctx, exception);
+        fprintf(stderr, "JS exception in %s: %s\n", name, message ? message : "(unknown)");
+        if (message)
         {
-            JS_FreeCString(ctx, msg);
+            JS_FreeCString(ctx, message);
         }
-        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, exception);
     }
     JS_FreeValue(ctx, result);
     return ok;
 }
 
 /**
- * @brief Runs SRC_GROW under @p mf and returns how many bytes the runtime's accounting noticed.
+ * @brief Runs SOURCE_GROW under @p malloc_functions and returns how many bytes the runtime's accounting noticed.
  *
- * @param[in] mf  Allocator to build the runtime with.
+ * @param[in] malloc_functions  Allocator to build the runtime with.
  *
  * @return malloc_size delta across the script, or -1 if the script did not run.
  */
-static int64_t measure_growth(const JSMallocFunctions* mf)
+static int64_t measure_growth(const JSMallocFunctions* malloc_functions)
 {
-    JSRuntime* rt = JS_NewRuntime2(mf, NULL);
+    JSRuntime* rt = JS_NewRuntime2(malloc_functions, NULL);
     if (!rt)
     {
         return -1;
@@ -304,7 +324,7 @@ static int64_t measure_growth(const JSMallocFunctions* mf)
        the script would reclaim — hiding the string's growth behind someone else's shrink. */
     JS_RunGC(rt);
     const int64_t before = tracked_bytes(rt);
-    const bool ok = run_js(ctx, SRC_GROW, "<grow>");
+    const bool ok = run_js(ctx, SOURCE_GROW, "<grow>");
     JS_RunGC(rt);
     const int64_t delta = tracked_bytes(rt) - before;
 
@@ -335,42 +355,42 @@ int main(void)
 
         JSRuntime* good = JS_NewRuntime2(er_js_default_malloc_functions(), NULL);
         check(er_js_probe_alloc_health(good, &reported) == ER_JS_ALLOC_OK, "probe: bridge default -> OK");
-        check(reported >= 1000, "probe: bridge default reports >= the requested bytes");
+        check(reported >= PROBE_BYTES, "probe: bridge default reports >= the requested bytes");
         JS_FreeRuntime(good);
 
-        JSRuntime* dead = JS_NewRuntime2(&MF_NO_ACCOUNTING, NULL);
+        JSRuntime* dead = JS_NewRuntime2(&MALLOC_NO_ACCOUNTING, NULL);
         check(er_js_probe_alloc_health(dead, &reported) == ER_JS_ALLOC_NO_ACCOUNTING,
               "probe: usable_size returning 0 -> NO_ACCOUNTING");
         JS_FreeRuntime(dead);
 
-        JSRuntime* wrong = JS_NewRuntime2(&MF_IMPLAUSIBLE, NULL);
+        JSRuntime* wrong = JS_NewRuntime2(&MALLOC_IMPLAUSIBLE, NULL);
         check(er_js_probe_alloc_health(wrong, &reported) == ER_JS_ALLOC_IMPLAUSIBLE,
               "probe: usable_size answering about another heap -> IMPLAUSIBLE");
         JS_FreeRuntime(wrong);
 
         /* A NULL usable_size is the same defect wearing a different hat: QuickJS silently substitutes a
            zero-returning stub, so the probe must see through the substitution. */
-        JSMallocFunctions mf_null = MF_NO_ACCOUNTING;
-        mf_null.js_malloc_usable_size = NULL;
-        JSRuntime* null_us = JS_NewRuntime2(&mf_null, NULL);
-        check(er_js_probe_alloc_health(null_us, &reported) == ER_JS_ALLOC_NO_ACCOUNTING,
+        JSMallocFunctions null_usable_size_functions = MALLOC_NO_ACCOUNTING;
+        null_usable_size_functions.js_malloc_usable_size = NULL;
+        JSRuntime* null_usable_size = JS_NewRuntime2(&null_usable_size_functions, NULL);
+        check(er_js_probe_alloc_health(null_usable_size, &reported) == ER_JS_ALLOC_NO_ACCOUNTING,
               "probe: NULL usable_size -> NO_ACCOUNTING (QuickJS's silent stub)");
-        JS_FreeRuntime(null_us);
+        JS_FreeRuntime(null_usable_size);
     }
 
     /* --- 2. The default allocator accounts in bytes; the broken one does not ----------------------- */
     {
         const int64_t tracked = measure_growth(er_js_default_malloc_functions());
-        char msg[128];
-        snprintf(msg,
-                 sizeof msg,
+        char message[MESSAGE_BYTES];
+        snprintf(message,
+                 sizeof message,
                  "accounting: %d KB live string tracked as %d KB (bridge default)",
-                 GROWTH_BYTES / 1024,
-                 (int)(tracked / 1024));
-        check(tracked >= GROWTH_MIN_TRACKED, msg);
+                 GROWTH_BYTES / BYTES_PER_KB,
+                 (int)(tracked / BYTES_PER_KB));
+        check(tracked >= GROWTH_MIN_TRACKED, message);
 
         /* The defect itself, pinned down: same script, same heap traffic, invisible to the GC. */
-        const int64_t untracked = measure_growth(&MF_NO_ACCOUNTING);
+        const int64_t untracked = measure_growth(&MALLOC_NO_ACCOUNTING);
         check(untracked >= 0 && untracked < GROWTH_MAX_UNTRACKED,
               "accounting: the same string is invisible when usable_size returns 0 (the reported bug)");
     }
@@ -382,13 +402,15 @@ int main(void)
 
         JS_RunGC(rt); /* baseline = the live set, so the growth measured below is the churn's alone */
         const int64_t before = tracked_bytes(rt);
-        const bool ok = run_js(ctx, SRC_CYCLES, "<cycles>");
+        const bool ok = run_js(ctx, SOURCE_CYCLES, "<cycles>");
         const int64_t after = tracked_bytes(rt); /* NOT collected first: the automatic GC must have run */
 
-        char msg[128];
-        snprintf(
-            msg, sizeof msg, "gc: cyclic garbage churned, heap grew %d KB (bounded)", (int)((after - before) / 1024));
-        check(ok && (after - before) < AUTO_GC_MAX_RETAINED, msg);
+        char message[MESSAGE_BYTES];
+        snprintf(message,
+                 sizeof message,
+                 "gc: cyclic garbage churned, heap grew %d KB (bounded)",
+                 (int)((after - before) / BYTES_PER_KB));
+        check(ok && (after - before) < AUTO_GC_MAX_RETAINED, message);
 
         JS_FreeContext(ctx);
         JS_FreeRuntime(rt);
@@ -396,28 +418,28 @@ int main(void)
 
     /* --- 4. End to end through er_runtime, which is what hosts actually call ----------------------- */
     {
-        ErRuntimeConfig cfg;
-        memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = GC_SCREEN_W;
-        cfg.screen_height = GC_SCREEN_H;
+        ErRuntimeConfig config;
+        memset(&config, 0, sizeof config);
+        config.screen_width = GC_SCREEN_WIDTH;
+        config.screen_height = GC_SCREEN_HEIGHT;
 
         /* malloc_functions = NULL is the path every host copies from the README. It must be safe on
            EVERY platform, which is why er_runtime never calls JS_NewRuntime(). */
-        check(er_runtime_init(&cfg), "er_runtime: init with malloc_functions = NULL");
+        check(er_runtime_init(&config), "er_runtime: init with malloc_functions = NULL");
         check(er_runtime_gc_accounting_ok(), "er_runtime: default allocator reports working accounting");
         er_runtime_shutdown();
 
         /* A host that supplies its own broken allocator still gets caught (and warned about) at boot. */
-        cfg.malloc_functions = &MF_NO_ACCOUNTING;
-        check(er_runtime_init(&cfg), "er_runtime: init with a host allocator that has no accounting");
+        config.malloc_functions = &MALLOC_NO_ACCOUNTING;
+        check(er_runtime_init(&config), "er_runtime: init with a host allocator that has no accounting");
         check(!er_runtime_gc_accounting_ok(), "er_runtime: broken host allocator is reported, not ignored");
         er_runtime_shutdown();
 
         /* The verdict outlives the runtime it describes, so a later init that fails BEFORE probing must
            not still be answering for the broken runtime above. This init dies inside JS_NewRuntime2 (its
            allocator refuses the JSRuntime itself), so nothing is probed. */
-        cfg.malloc_functions = &MF_ALLOCATION_FAILS;
-        check(!er_runtime_init(&cfg), "er_runtime: init fails when the JS heap cannot be allocated");
+        config.malloc_functions = &MALLOC_ALLOCATION_FAILS;
+        check(!er_runtime_init(&config), "er_runtime: init fails when the JS heap cannot be allocated");
         check(er_runtime_gc_accounting_ok(),
               "er_runtime: a failed init does not report the previous runtime's verdict");
     }
@@ -428,10 +450,10 @@ int main(void)
            prop, keyed on the JSRuntime pointer — and a fresh JSRuntime is routinely handed the address
            of the one just freed (this test's own section 4 does exactly that sequence). Nothing else
            installs the bridge on two runtimes, so this is the only place a stale cache would show up. */
-        ErRuntimeConfig cfg;
-        memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = GC_SCREEN_W;
-        cfg.screen_height = GC_SCREEN_H;
+        ErRuntimeConfig config;
+        memset(&config, 0, sizeof config);
+        config.screen_width = GC_SCREEN_WIDTH;
+        config.screen_height = GC_SCREEN_HEIGHT;
 
         /* Same scene both times, differing only in the token and color. 'relative' and 'absolute' are
            the same length on purpose, so the second runtime's token is a candidate to land exactly where
@@ -451,7 +473,7 @@ int main(void)
     "NativeUI.commit();"
 
         int32_t y = -1;
-        check(er_runtime_init(&cfg), "bridge lifecycle: first runtime up");
+        check(er_runtime_init(&config), "bridge lifecycle: first runtime up");
         check(er_runtime_load_source(
                   BRIDGE_SCENE("relative", "#ff0000"), strlen(BRIDGE_SCENE("relative", "#ff0000")), "<r1>"),
               "bridge lifecycle: first runtime's scene ran");
@@ -459,7 +481,7 @@ int main(void)
         check(y == 50, "bridge lifecycle: position 'relative' kept the sibling in flow");
         er_runtime_shutdown();
 
-        check(er_runtime_init(&cfg), "bridge lifecycle: second runtime up");
+        check(er_runtime_init(&config), "bridge lifecycle: second runtime up");
         check(er_runtime_load_source(
                   BRIDGE_SCENE("absolute", "#00ff00"), strlen(BRIDGE_SCENE("absolute", "#00ff00")), "<r2>"),
               "bridge lifecycle: second runtime's scene ran");
@@ -471,32 +493,33 @@ int main(void)
 
     /* --- 5. The GC floor survives QuickJS's recompute-after-every-collection ----------------------- */
     {
-        ErRuntimeConfig cfg;
-        memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = GC_SCREEN_W;
-        cfg.screen_height = GC_SCREEN_H;
+        ErRuntimeConfig config;
+        memset(&config, 0, sizeof config);
+        config.screen_width = GC_SCREEN_WIDTH;
+        config.screen_height = GC_SCREEN_HEIGHT;
 
         /* Control: with no floor, the threshold is whatever the last collection left behind — live x 1.5,
            which on a small live set is a fraction of the floor the next case asks for. */
-        check(er_runtime_init(&cfg), "gc floor: init without a threshold");
-        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"), "gc floor: control app ran");
+        check(er_runtime_init(&config), "gc floor: init without a threshold");
+        check(er_runtime_load_source(SOURCE_CYCLES, strlen(SOURCE_CYCLES), "<cycles>"), "gc floor: control app ran");
         er_runtime_pump();
         const size_t unfloored = er_runtime_gc_threshold();
         check(unfloored < GC_FLOOR_BYTES, "gc floor: unconfigured, the threshold settles near the live set");
         er_runtime_shutdown();
 
-        cfg.gc_threshold = GC_FLOOR_BYTES;
-        check(er_runtime_init(&cfg), "gc floor: init with a threshold");
+        config.gc_threshold = GC_FLOOR_BYTES;
+        check(er_runtime_init(&config), "gc floor: init with a threshold");
         check(er_runtime_gc_threshold() == GC_FLOOR_BYTES, "gc floor: the configured value is applied at init");
-        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"), "gc floor: app ran under the floor");
+        check(er_runtime_load_source(SOURCE_CYCLES, strlen(SOURCE_CYCLES), "<cycles>"),
+              "gc floor: app ran under the floor");
         er_runtime_pump(); /* what a host does every frame — and what re-asserts the floor */
-        char msg[128];
-        snprintf(msg,
-                 sizeof msg,
+        char message[MESSAGE_BYTES];
+        snprintf(message,
+                 sizeof message,
                  "gc floor: still %u KB after collections, not %u KB (the recompute is undone)",
-                 (unsigned)(er_runtime_gc_threshold() / 1024),
-                 (unsigned)(unfloored / 1024));
-        check(er_runtime_gc_threshold() >= GC_FLOOR_BYTES, msg);
+                 (unsigned)(er_runtime_gc_threshold() / BYTES_PER_KB),
+                 (unsigned)(unfloored / BYTES_PER_KB));
+        check(er_runtime_gc_threshold() >= GC_FLOOR_BYTES, message);
 
         /* Turning automatic collection off is the extreme of the same knob: the host then owns the pause
            and places it somewhere it does not show. Both halves have to work for that to be usable. */
@@ -504,7 +527,7 @@ int main(void)
         JSRuntime* rt = JS_GetRuntime(er_runtime_context());
         JS_RunGC(rt);
         const int64_t before = tracked_bytes(rt);
-        check(er_runtime_load_source(SRC_CYCLES, strlen(SRC_CYCLES), "<cycles>"),
+        check(er_runtime_load_source(SOURCE_CYCLES, strlen(SOURCE_CYCLES), "<cycles>"),
               "gc off: app ran with the GC disabled");
         er_runtime_pump();
         const int64_t peak = tracked_bytes(rt);
@@ -512,8 +535,11 @@ int main(void)
 
         er_runtime_run_gc();
         const int64_t collected = tracked_bytes(rt);
-        snprintf(msg, sizeof msg, "gc off: er_runtime_run_gc reclaimed %d KB of it", (int)((peak - collected) / 1024));
-        check(collected - before < CYCLES_MAX_RETAINED, msg);
+        snprintf(message,
+                 sizeof message,
+                 "gc off: er_runtime_run_gc reclaimed %d KB of it",
+                 (int)((peak - collected) / BYTES_PER_KB));
+        check(collected - before < CYCLES_MAX_RETAINED, message);
         check(er_runtime_gc_threshold() == (size_t)-1, "gc off: a manual collection does not re-arm the schedule");
 
         /* Coming back from a disabled collector has to write a real threshold: nothing would ever run to
@@ -526,45 +552,47 @@ int main(void)
 
     /* --- 6. The threshold-vs-limit sanity warning fires from the setter, not just from init --------- */
     {
-        ErRuntimeConfig cfg;
-        memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = GC_SCREEN_W;
-        cfg.screen_height = GC_SCREEN_H;
-        cfg.log = counting_log;
-        cfg.memory_limit = 1024 * 1024;
+        ErRuntimeConfig config;
+        memset(&config, 0, sizeof config);
+        config.screen_width = GC_SCREEN_WIDTH;
+        config.screen_height = GC_SCREEN_HEIGHT;
+        config.log = counting_log;
+        config.memory_limit = WARN_MEMORY_LIMIT;
 
-        s_gc_warns = 0;
-        check(er_runtime_init(&cfg), "gc warn: init with a memory limit and no floor");
-        check(s_gc_warns == 0, "gc warn: a floor of 0 does not warn");
+        s_gc_warnings = 0;
+        check(er_runtime_init(&config), "gc warn: init with a memory limit and no floor");
+        check(s_gc_warnings == 0, "gc warn: a floor of 0 does not warn");
 
         /* Raising the floor past the limit at RUNTIME disarms the automatic collector just as
            thoroughly as doing it in the config, so the setter must warn the same way init does. */
-        er_runtime_set_gc_threshold(2 * 1024 * 1024);
-        check(s_gc_warns == 1, "gc warn: the setter warns when the floor is not below memory_limit");
-        er_runtime_set_gc_threshold(256 * 1024);
-        check(s_gc_warns == 1, "gc warn: a floor back under the limit is quiet");
+        er_runtime_set_gc_threshold(WARN_FLOOR_ABOVE_LIMIT);
+        check(s_gc_warnings == 1, "gc warn: the setter warns when the floor is not below memory_limit");
+        er_runtime_set_gc_threshold(WARN_FLOOR_BELOW_LIMIT);
+        check(s_gc_warnings == 1, "gc warn: a floor back under the limit is quiet");
         er_runtime_shutdown();
     }
 
     /* --- 7. Host globals reach every context: the first, and each one a reset replaces it with ------- */
     {
-        ErRuntimeConfig cfg;
-        memset(&cfg, 0, sizeof cfg);
-        cfg.screen_width = GC_SCREEN_W;
-        cfg.screen_height = GC_SCREEN_H;
-        cfg.install_host_globals = install_host_probe;
-        static const char k_read[] = "globalThis.__seen = typeof __hostProbe === 'function' ? __hostProbe() : -1;";
+        ErRuntimeConfig config;
+        memset(&config, 0, sizeof config);
+        config.screen_width = GC_SCREEN_WIDTH;
+        config.screen_height = GC_SCREEN_HEIGHT;
+        config.install_host_globals = install_host_probe;
+        static const char k_probe_source[] =
+            "globalThis.__seen = typeof __hostProbe === 'function' ? __hostProbe() : -1;";
 
         s_host_installs = 0;
-        check(er_runtime_init(&cfg), "host globals: init");
+        check(er_runtime_init(&config), "host globals: init");
         check(s_host_installs == 1, "host globals: installed into the first context");
-        check(er_runtime_load_source(k_read, strlen(k_read), "<host1>"), "host globals: app ran");
-        check(read_int_global(er_runtime_context(), "__seen") == 42, "host globals: the app can call it");
+        check(er_runtime_load_source(k_probe_source, strlen(k_probe_source), "<host1>"), "host globals: app ran");
+        check(read_int_global(er_runtime_context(), "__seen") == HOST_PROBE_VALUE, "host globals: the app can call it");
 
         check(er_runtime_reset(), "host globals: reset");
         check(s_host_installs == 2, "host globals: installed again into the context the reset made");
-        check(er_runtime_load_source(k_read, strlen(k_read), "<host2>"), "host globals: app ran after the reset");
-        check(read_int_global(er_runtime_context(), "__seen") == 42, "host globals: and still finds it");
+        check(er_runtime_load_source(k_probe_source, strlen(k_probe_source), "<host2>"),
+              "host globals: app ran after the reset");
+        check(read_int_global(er_runtime_context(), "__seen") == HOST_PROBE_VALUE, "host globals: and still finds it");
         er_runtime_shutdown();
     }
 

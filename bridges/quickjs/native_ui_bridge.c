@@ -75,9 +75,9 @@
     static JSValue name(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)                           \
     {                                                                                                                  \
         er_perf_js_begin(ER_PERF_JS_MARSHAL);                                                                          \
-        JSValue ret = name##_body(ctx, this_val, argc, argv);                                                          \
+        JSValue result = name##_body(ctx, this_val, argc, argv);                                                       \
         er_perf_js_end(ER_PERF_JS_MARSHAL);                                                                            \
-        return ret;                                                                                                    \
+        return result;                                                                                                 \
     }                                                                                                                  \
     static JSValue name##_body(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 #else
@@ -143,7 +143,7 @@ typedef struct
     int32_t id;           /**< User-facing id returned to JS (monotonic, > 0). */
     uint32_t due_ms;      /**< er_now_ms() value at which the callback should next fire. */
     uint32_t interval_ms; /**< Repeat period in ms; 0 = one-shot (setTimeout). */
-    int nargs;            /**< Count of extra args forwarded to the callback. */
+    int extra_arg_count;  /**< Count of extra args forwarded to the callback. */
 } ERBridgeTimer;
 
 /** @brief Fixed timer pool. Slot index is the key into s_timer_handlers. */
@@ -320,19 +320,19 @@ static ERNode* handle_node(int32_t handle)
 /**
  * @brief Resolves a JS argument to its bound node.
  *
- * @param[in] ctx  QuickJS context.
- * @param[in] v    JS value holding an integer handle.
+ * @param[in] ctx           QuickJS context.
+ * @param[in] handle_value  JS value holding an integer handle.
  *
  * @return Bound node, or NULL if the value is not a valid handle.
  */
-static ERNode* node_arg(JSContext* ctx, JSValueConst v)
+static ERNode* node_arg(JSContext* ctx, JSValueConst handle_value)
 {
-    int32_t h = 0;
-    if (JS_ToInt32(ctx, &h, v) != 0)
+    int32_t handle = 0;
+    if (JS_ToInt32(ctx, &handle, handle_value) != 0)
     {
         return NULL;
     }
-    return handle_node(h);
+    return handle_node(handle);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -344,22 +344,22 @@ static ERNode* node_arg(JSContext* ctx, JSValueConst v)
  *
  * On success the caller owns *out and must JS_FreeValue() it.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  obj  Object to read from.
- * @param[in]  key  Property name.
- * @param[out] out  Receives the property value when present.
+ * @param[in]  ctx     QuickJS context.
+ * @param[in]  object  Object to read from.
+ * @param[in]  key     Property name.
+ * @param[out] out     Receives the property value when present.
  *
  * @return true when the property is present and meaningful; false otherwise.
  */
-static bool prop_get(JSContext* ctx, JSValueConst obj, const char* key, JSValue* out)
+static bool prop_get(JSContext* ctx, JSValueConst object, const char* key, JSValue* out)
 {
-    JSValue v = JS_GetPropertyStr(ctx, obj, key);
-    if (JS_IsUndefined(v) || JS_IsNull(v) || JS_IsException(v))
+    JSValue value = JS_GetPropertyStr(ctx, object, key);
+    if (JS_IsUndefined(value) || JS_IsNull(value) || JS_IsException(value))
     {
-        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, value);
         return false;
     }
-    *out = v;
+    *out = value;
     return true;
 }
 
@@ -375,74 +375,98 @@ static bool prop_get(JSContext* ctx, JSValueConst obj, const char* key, JSValue*
  * Out-of-range and NaN inputs are resolved HERE rather than at the cast: a float-to-int cast is undefined
  * when the value does not fit, and this runs on a spread of MCU toolchains that each pick their own answer.
  *
- * @param[in] d  Value to snap (any double, including NaN and out-of-range).
+ * @param[in] value  Value to snap (any double, including NaN and out-of-range).
  *
- * @return d rounded to the nearest whole number (halves up), clamped to int16; 0 for NaN. Note that the
+ * @return value rounded to the nearest whole number (halves up), clamped to int16; 0 for NaN. Note that the
  *         low clamp lands on ER_LAYOUT_AUTO, so a wildly negative dimension reads as "not specified".
  */
-static int16_t dim_from_double(double d)
+static int16_t dim_from_double(double value)
 {
     /* NaN compares false against everything, so it would slip past both clamps below and reach the cast.
        A NaN dimension is an app bug (a 0/0 in a computed layout); resolve it to 0 in both flows instead. */
-    if (d != d)
+    if (value != value)
     {
         return 0;
     }
-    if (d < INT16_MIN)
+    if (value < INT16_MIN)
     {
         return INT16_MIN;
     }
-    if (d > INT16_MAX)
+    if (value > INT16_MAX)
     {
         return INT16_MAX;
     }
-    return (int16_t)floor(d + 0.5);
+    return (int16_t)floor(value + 0.5);
 }
 
 /**
  * @brief Coerces a numeric JS value to a clamped, rounded int16 pixel dimension.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  v    JS value (expected numeric).
- * @param[out] out  Receives the clamped dimension.
+ * @param[in]  ctx    QuickJS context.
+ * @param[in]  value  JS value (expected numeric).
+ * @param[out] out    Receives the clamped dimension.
  *
  * @return true on a numeric value; false for strings (e.g. percentages) handled elsewhere.
  */
-static bool to_dim(JSContext* ctx, JSValueConst v, int16_t* out)
+static bool to_dim(JSContext* ctx, JSValueConst value, int16_t* out)
 {
-    if (!JS_IsNumber(v))
+    if (!JS_IsNumber(value))
     {
         return false;
     }
-    double d = 0.0;
-    if (JS_ToFloat64(ctx, &d, v) != 0)
+    double number = 0.0;
+    if (JS_ToFloat64(ctx, &number, value) != 0)
     {
         return false;
     }
-    *out = dim_from_double(d);
+    *out = dim_from_double(number);
     return true;
 }
+
+/** @brief Value of the hex digit 'a' (and 'A'). */
+#define ER_HEX_LETTER_BASE 10
+
+/** @brief Base of a hex number. */
+#define ER_HEX_RADIX 16
+
+/** @brief Scales a #rgb digit to its #rrggbb channel (0xF becomes 0xFF). */
+#define ER_HEX_SHORT_DIGIT_SCALE 17
+
+/** @brief Digits in the #rgb, #rrggbb and #rrggbbaa forms. */
+#define ER_HEX_SHORT_DIGITS 3
+#define ER_HEX_RGB_DIGITS 6
+#define ER_HEX_RGBA_DIGITS 8
+
+/** @brief Numbers in rgb() and rgba(). */
+#define ER_RGB_FUNCTION_MIN_COMPONENTS 3
+#define ER_RGB_FUNCTION_MAX_COMPONENTS 4
+
+/** @brief Alpha of a fully opaque color. */
+#define ER_BRIDGE_ALPHA_OPAQUE 255
+
+/** @brief Largest channel or opacity byte, for scaling a 0–1 fraction. */
+#define ER_BRIDGE_CHANNEL_MAX_FLOAT 255.0
 
 /**
  * @brief Maps a single hex character to its 0–15 value.
  *
- * @param[in] c  ASCII hex digit.
+ * @param[in] digit  ASCII hex digit.
  *
- * @return Nibble value, or -1 if c is not a hex digit.
+ * @return Nibble value, or -1 if digit is not a hex digit.
  */
-static int hex_nibble(char c)
+static int hex_nibble(char digit)
 {
-    if (c >= '0' && c <= '9')
+    if (digit >= '0' && digit <= '9')
     {
-        return c - '0';
+        return digit - '0';
     }
-    if (c >= 'a' && c <= 'f')
+    if (digit >= 'a' && digit <= 'f')
     {
-        return c - 'a' + 10;
+        return digit - 'a' + ER_HEX_LETTER_BASE;
     }
-    if (c >= 'A' && c <= 'F')
+    if (digit >= 'A' && digit <= 'F')
     {
-        return c - 'A' + 10;
+        return digit - 'A' + ER_HEX_LETTER_BASE;
     }
     return -1;
 }
@@ -450,21 +474,21 @@ static int hex_nibble(char c)
 /**
  * @brief Clamps an int to the 0–255 channel range.
  *
- * @param[in] v  Value to clamp.
+ * @param[in] value  Value to clamp.
  *
- * @return v clamped to [0, 255].
+ * @return value clamped to [0, 255].
  */
-static int clamp_u8(int v)
+static int clamp_u8(int value)
 {
-    if (v < 0)
+    if (value < 0)
     {
         return 0;
     }
-    if (v > 255)
+    if (value > UINT8_MAX)
     {
-        return 255;
+        return UINT8_MAX;
     }
-    return v;
+    return value;
 }
 
 /**
@@ -472,46 +496,46 @@ static int clamp_u8(int v)
  *
  * Accepts #rgb, #rrggbb, and #rrggbbaa forms. Three- and six-digit forms imply full alpha.
  *
- * @param[in]  s    Hex digits (without the leading '#').
- * @param[out] out  Receives the ARGB8888 color.
+ * @param[in]  hex_digits  Hex digits (without the leading '#').
+ * @param[out] out         Receives the ARGB8888 color.
  *
  * @return true on a valid hex color; false otherwise.
  */
-static bool parse_hex_color(const char* s, uint32_t* out)
+static bool parse_hex_color(const char* hex_digits, uint32_t* out)
 {
-    const size_t n = strlen(s);
-    int r, g, b, a = 255;
+    const size_t digit_count = strlen(hex_digits);
+    int red, green, blue, alpha = ER_BRIDGE_ALPHA_OPAQUE;
 
-    if (n == 3)
+    if (digit_count == ER_HEX_SHORT_DIGITS)
     {
-        const int r1 = hex_nibble(s[0]);
-        const int g1 = hex_nibble(s[1]);
-        const int b1 = hex_nibble(s[2]);
-        if (r1 < 0 || g1 < 0 || b1 < 0)
+        const int red_digit = hex_nibble(hex_digits[0]);
+        const int green_digit = hex_nibble(hex_digits[1]);
+        const int blue_digit = hex_nibble(hex_digits[2]);
+        if (red_digit < 0 || green_digit < 0 || blue_digit < 0)
         {
             return false;
         }
-        r = r1 * 17;
-        g = g1 * 17;
-        b = b1 * 17;
+        red = red_digit * ER_HEX_SHORT_DIGIT_SCALE;
+        green = green_digit * ER_HEX_SHORT_DIGIT_SCALE;
+        blue = blue_digit * ER_HEX_SHORT_DIGIT_SCALE;
     }
-    else if (n == 6 || n == 8)
+    else if (digit_count == ER_HEX_RGB_DIGITS || digit_count == ER_HEX_RGBA_DIGITS)
     {
-        int v[8];
-        for (size_t i = 0; i < n; i++)
+        int digits[ER_HEX_RGBA_DIGITS];
+        for (size_t digit_index = 0; digit_index < digit_count; digit_index++)
         {
-            v[i] = hex_nibble(s[i]);
-            if (v[i] < 0)
+            digits[digit_index] = hex_nibble(hex_digits[digit_index]);
+            if (digits[digit_index] < 0)
             {
                 return false;
             }
         }
-        r = v[0] * 16 + v[1];
-        g = v[2] * 16 + v[3];
-        b = v[4] * 16 + v[5];
-        if (n == 8)
+        red = digits[0] * ER_HEX_RADIX + digits[1];
+        green = digits[2] * ER_HEX_RADIX + digits[3];
+        blue = digits[4] * ER_HEX_RADIX + digits[5];
+        if (digit_count == ER_HEX_RGBA_DIGITS)
         {
-            a = v[6] * 16 + v[7];
+            alpha = digits[6] * ER_HEX_RADIX + digits[7];
         }
     }
     else
@@ -519,96 +543,98 @@ static bool parse_hex_color(const char* s, uint32_t* out)
         return false;
     }
 
-    *out = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    *out = ((uint32_t)alpha << 24) | ((uint32_t)red << 16) | ((uint32_t)green << 8) | (uint32_t)blue;
     return true;
 }
 
 /**
  * @brief Parses a CSS rgb()/rgba() function string into straight-alpha ARGB8888.
  *
- * @param[in]  s    String beginning with "rgb" or "rgba".
- * @param[out] out  Receives the ARGB8888 color.
+ * @param[in]  text  String beginning with "rgb" or "rgba".
+ * @param[out] out   Receives the ARGB8888 color.
  *
  * @return true on a valid functional color; false otherwise.
  */
-static bool parse_rgb_func(const char* s, uint32_t* out)
+static bool parse_rgb_func(const char* text, uint32_t* out)
 {
-    const char* p = strchr(s, '(');
-    if (!p)
+    const char* cursor = strchr(text, '(');
+    if (!cursor)
     {
         return false;
     }
-    p++;
+    cursor++;
 
-    double vals[4];
-    int count = 0;
-    while (count < 4)
+    double components[ER_RGB_FUNCTION_MAX_COMPONENTS];
+    int component_count = 0;
+    while (component_count < ER_RGB_FUNCTION_MAX_COMPONENTS)
     {
         char* end = NULL;
-        const double d = strtod(p, &end);
-        if (end == p)
+        const double component = strtod(cursor, &end);
+        if (end == cursor)
         {
             break;
         }
-        vals[count++] = d;
-        p = end;
-        while (*p == ' ' || *p == ',')
+        components[component_count++] = component;
+        cursor = end;
+        while (*cursor == ' ' || *cursor == ',')
         {
-            p++;
+            cursor++;
         }
-        if (*p == ')' || *p == '\0')
+        if (*cursor == ')' || *cursor == '\0')
         {
             break;
         }
     }
-    if (count < 3)
+    if (component_count < ER_RGB_FUNCTION_MIN_COMPONENTS)
     {
         return false;
     }
 
-    const int r = clamp_u8((int)(vals[0] + 0.5));
-    const int g = clamp_u8((int)(vals[1] + 0.5));
-    const int b = clamp_u8((int)(vals[2] + 0.5));
-    const int a = count >= 4 ? clamp_u8((int)(vals[3] * 255.0 + 0.5)) : 255;
-    *out = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    const int red = clamp_u8((int)(components[0] + 0.5));
+    const int green = clamp_u8((int)(components[1] + 0.5));
+    const int blue = clamp_u8((int)(components[2] + 0.5));
+    const int alpha = component_count >= ER_RGB_FUNCTION_MAX_COMPONENTS
+                          ? clamp_u8((int)(components[3] * ER_BRIDGE_CHANNEL_MAX_FLOAT + 0.5))
+                          : ER_BRIDGE_ALPHA_OPAQUE;
+    *out = ((uint32_t)alpha << 24) | ((uint32_t)red << 16) | ((uint32_t)green << 8) | (uint32_t)blue;
     return true;
 }
 
-/** @brief True when @p a equals the lowercase @p lower, ignoring ASCII case in @p a. */
-static bool ascii_ieq(const char* a, const char* lower)
+/** @brief True when @p text equals the lowercase @p lower, ignoring ASCII case in @p text. */
+static bool ascii_ieq(const char* text, const char* lower)
 {
-    for (; *lower; a++, lower++)
+    for (; *lower; text++, lower++)
     {
-        const char c = (*a >= 'A' && *a <= 'Z') ? (char)(*a - 'A' + 'a') : *a;
-        if (c != *lower)
+        const char folded = (*text >= 'A' && *text <= 'Z') ? (char)(*text - 'A' + 'a') : *text;
+        if (folded != *lower)
         {
             return false;
         }
     }
-    return *a == '\0';
+    return *text == '\0';
 }
 
 /**
  * @brief Parses a CSS color string (hex, rgb/rgba, or a named color, in any case).
  *
- * @param[in]  s    Color string.
- * @param[out] out  Receives straight-alpha ARGB8888.
+ * @param[in]  text  Color string.
+ * @param[out] out   Receives straight-alpha ARGB8888.
  *
  * @return true when the string was recognised; false otherwise.
  */
-static bool parse_css_color(const char* s, uint32_t* out)
+static bool parse_css_color(const char* text, uint32_t* out)
 {
-    while (*s == ' ')
+    while (*text == ' ')
     {
-        s++;
+        text++;
     }
-    if (*s == '#')
+    if (*text == '#')
     {
-        return parse_hex_color(s + 1, out);
+        return parse_hex_color(text + 1, out);
     }
-    if (strncmp(s, "rgb", 3) == 0)
+    if (strncmp(text, "rgb", 3) == 0)
     {
-        return parse_rgb_func(s, out);
+        return parse_rgb_func(text, out);
     }
 
     /* Must match NAMED_COLORS in packages/embedded-react/src/embedded-react/named-colors.js. */
@@ -616,7 +642,7 @@ static bool parse_css_color(const char* s, uint32_t* out)
     {
         const char* name;
         uint32_t argb;
-    } k_named[] = {
+    } k_named_colors[] = {
         {"transparent", 0x00000000U},
         {"black", 0xFF000000U},
         {"white", 0xFFFFFFFFU},
@@ -630,11 +656,11 @@ static bool parse_css_color(const char* s, uint32_t* out)
         {"magenta", 0xFFFF00FFU},
         {"orange", 0xFFFFA500U},
     };
-    for (size_t i = 0; i < sizeof(k_named) / sizeof(k_named[0]); i++)
+    for (size_t color_index = 0; color_index < sizeof(k_named_colors) / sizeof(k_named_colors[0]); color_index++)
     {
-        if (ascii_ieq(s, k_named[i].name))
+        if (ascii_ieq(text, k_named_colors[color_index].name))
         {
-            *out = k_named[i].argb;
+            *out = k_named_colors[color_index].argb;
             return true;
         }
     }
@@ -642,16 +668,16 @@ static bool parse_css_color(const char* s, uint32_t* out)
 }
 
 /** @brief True when two JS values are the same string object (identity, not content). */
-static inline bool same_js_string(JSValueConst a, JSValueConst b)
+static inline bool same_js_string(JSValueConst first, JSValueConst second)
 {
-    return JS_VALUE_GET_TAG(a) == JS_VALUE_GET_TAG(b) && JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
+    return JS_VALUE_GET_TAG(first) == JS_VALUE_GET_TAG(second) && JS_VALUE_GET_PTR(first) == JS_VALUE_GET_PTR(second);
 }
 
 /** @brief Entries in the parsed-color cache. Direct-mapped, so a power of two. */
-#define ER_COLOR_CACHE_N 16
+#define ER_COLOR_CACHE_ENTRIES 16
 
 /** @brief Low pointer bits the allocator keeps constant, dropped so the cache index uses bits that vary. */
-#define ER_COLOR_CACHE_PTR_SHIFT 4
+#define ER_COLOR_CACHE_POINTER_SHIFT 4
 
 /**
  * @brief Colors already parsed out of a CSS string, keyed by the string object itself.
@@ -665,53 +691,53 @@ static struct
 {
     JSValue key;
     uint32_t argb;
-} s_color_cache[ER_COLOR_CACHE_N];
+} s_color_cache[ER_COLOR_CACHE_ENTRIES];
 
 /**
  * @brief Coerces a JS color value (number or CSS string) to straight-alpha ARGB8888.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  v    JS value (number is taken as a raw 0xAARRGGBB word).
- * @param[out] out  Receives the ARGB8888 color.
+ * @param[in]  ctx    QuickJS context.
+ * @param[in]  value  JS value (number is taken as a raw 0xAARRGGBB word).
+ * @param[out] out    Receives the ARGB8888 color.
  *
  * @return true on success; false if the value could not be interpreted as a color.
  */
-static bool to_color(JSContext* ctx, JSValueConst v, uint32_t* out)
+static bool to_color(JSContext* ctx, JSValueConst value, uint32_t* out)
 {
-    if (JS_IsNumber(v))
+    if (JS_IsNumber(value))
     {
-        int64_t n = 0;
-        if (JS_ToInt64(ctx, &n, v) != 0)
+        int64_t number = 0;
+        if (JS_ToInt64(ctx, &number, value) != 0)
         {
             return false;
         }
-        *out = (uint32_t)n;
+        *out = (uint32_t)number;
         return true;
     }
-    if (!JS_IsString(v))
+    if (!JS_IsString(value))
     {
         return false;
     }
 
-    const unsigned slot =
-        ((unsigned)((uintptr_t)JS_VALUE_GET_PTR(v) >> ER_COLOR_CACHE_PTR_SHIFT)) & (ER_COLOR_CACHE_N - 1U);
-    if (same_js_string(v, s_color_cache[slot].key))
+    const unsigned slot = ((unsigned)((uintptr_t)JS_VALUE_GET_PTR(value) >> ER_COLOR_CACHE_POINTER_SHIFT))
+                          & (ER_COLOR_CACHE_ENTRIES - 1U);
+    if (same_js_string(value, s_color_cache[slot].key))
     {
         *out = s_color_cache[slot].argb;
         return true;
     }
 
-    const char* s = JS_ToCString(ctx, v);
-    if (!s)
+    const char* text = JS_ToCString(ctx, value);
+    if (!text)
     {
         return false;
     }
-    const bool ok = parse_css_color(s, out);
-    JS_FreeCString(ctx, s);
+    const bool ok = parse_css_color(text, out);
+    JS_FreeCString(ctx, text);
     if (ok)
     {
         JS_FreeValue(ctx, s_color_cache[slot].key);
-        s_color_cache[slot].key = JS_DupValue(ctx, v);
+        s_color_cache[slot].key = JS_DupValue(ctx, value);
         s_color_cache[slot].argb = *out;
     }
     return ok;
@@ -720,43 +746,43 @@ static bool to_color(JSContext* ctx, JSValueConst v, uint32_t* out)
 /**
  * @brief Coerces a JS angle value (number in degrees, or a "Ndeg"/"Nrad" string) to degrees.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  v    JS value to coerce.
- * @param[out] out  Receives the angle in degrees.
+ * @param[in]  ctx    QuickJS context.
+ * @param[in]  value  JS value to coerce.
+ * @param[out] out    Receives the angle in degrees.
  *
  * @return true on success; false if the value is not a recognisable angle.
  */
-static bool to_angle(JSContext* ctx, JSValueConst v, float* out)
+static bool to_angle(JSContext* ctx, JSValueConst value, float* out)
 {
-    if (JS_IsNumber(v))
+    if (JS_IsNumber(value))
     {
-        double d = 0.0;
-        if (JS_ToFloat64(ctx, &d, v) != 0)
+        double angle = 0.0;
+        if (JS_ToFloat64(ctx, &angle, value) != 0)
         {
             return false;
         }
-        *out = (float)d;
+        *out = (float)angle;
         return true;
     }
-    if (JS_IsString(v))
+    if (JS_IsString(value))
     {
-        const char* s = JS_ToCString(ctx, v);
-        if (!s)
+        const char* text = JS_ToCString(ctx, value);
+        if (!text)
         {
             return false;
         }
         char* end = NULL;
-        double d = strtod(s, &end);
-        bool ok = end != s;
+        double angle = strtod(text, &end);
+        bool ok = end != text;
         if (ok && strstr(end, "rad") != NULL)
         {
             /* er_scene.h's constant, so this is the exact inverse of the deg->rad the engine applies. */
-            d = d * (double)ER_RAD2DEG;
+            angle = angle * (double)ER_RAD2DEG;
         }
-        JS_FreeCString(ctx, s);
+        JS_FreeCString(ctx, text);
         if (ok)
         {
-            *out = (float)d;
+            *out = (float)angle;
         }
         return ok;
     }
@@ -767,316 +793,316 @@ static bool to_angle(JSContext* ctx, JSValueConst v, float* out)
  - Functions: Private — enum string maps
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Maps a flexDirection string to ERFlexDirection. @param[in] s String. @return Enum value. */
-static uint8_t map_flex_direction(const char* s)
+/** @brief Maps a flexDirection string to ERFlexDirection. @param[in] token String. @return Enum value. */
+static uint8_t map_flex_direction(const char* token)
 {
-    if (strcmp(s, "row") == 0)
+    if (strcmp(token, "row") == 0)
     {
         return ER_FLEX_ROW;
     }
-    if (strcmp(s, "row-reverse") == 0)
+    if (strcmp(token, "row-reverse") == 0)
     {
         return ER_FLEX_ROW_REVERSE;
     }
-    if (strcmp(s, "column-reverse") == 0)
+    if (strcmp(token, "column-reverse") == 0)
     {
         return ER_FLEX_COL_REVERSE;
     }
     return ER_FLEX_COL;
 }
 
-/** @brief Maps a justifyContent string to ERFlexJustify. @param[in] s String. @return Enum value. */
-static uint8_t map_justify(const char* s)
+/** @brief Maps a justifyContent string to ERFlexJustify. @param[in] token String. @return Enum value. */
+static uint8_t map_justify(const char* token)
 {
-    if (strcmp(s, "center") == 0)
+    if (strcmp(token, "center") == 0)
     {
         return ER_JUSTIFY_CENTER;
     }
-    if (strcmp(s, "flex-end") == 0)
+    if (strcmp(token, "flex-end") == 0)
     {
         return ER_JUSTIFY_FLEX_END;
     }
-    if (strcmp(s, "space-between") == 0)
+    if (strcmp(token, "space-between") == 0)
     {
         return ER_JUSTIFY_SPACE_BETWEEN;
     }
-    if (strcmp(s, "space-around") == 0)
+    if (strcmp(token, "space-around") == 0)
     {
         return ER_JUSTIFY_SPACE_AROUND;
     }
-    if (strcmp(s, "space-evenly") == 0)
+    if (strcmp(token, "space-evenly") == 0)
     {
         return ER_JUSTIFY_SPACE_EVENLY;
     }
     return ER_JUSTIFY_FLEX_START;
 }
 
-/** @brief Maps an align string to ERFlexAlign. @param[in] s String. @return Enum value. */
-static uint8_t map_align(const char* s)
+/** @brief Maps an align string to ERFlexAlign. @param[in] token String. @return Enum value. */
+static uint8_t map_align(const char* token)
 {
-    if (strcmp(s, "stretch") == 0)
+    if (strcmp(token, "stretch") == 0)
     {
         return ER_ALIGN_STRETCH;
     }
-    if (strcmp(s, "flex-start") == 0)
+    if (strcmp(token, "flex-start") == 0)
     {
         return ER_ALIGN_FLEX_START;
     }
-    if (strcmp(s, "center") == 0)
+    if (strcmp(token, "center") == 0)
     {
         return ER_ALIGN_CENTER;
     }
-    if (strcmp(s, "flex-end") == 0)
+    if (strcmp(token, "flex-end") == 0)
     {
         return ER_ALIGN_FLEX_END;
     }
     return ER_ALIGN_AUTO;
 }
 
-/** @brief Maps an alignContent string to ERAlignContent. @param[in] s String. @return Enum value. */
-static uint8_t map_align_content(const char* s)
+/** @brief Maps an alignContent string to ERAlignContent. @param[in] token String. @return Enum value. */
+static uint8_t map_align_content(const char* token)
 {
-    if (strcmp(s, "flex-end") == 0)
+    if (strcmp(token, "flex-end") == 0)
     {
         return ER_ALIGN_CONTENT_FLEX_END;
     }
-    if (strcmp(s, "center") == 0)
+    if (strcmp(token, "center") == 0)
     {
         return ER_ALIGN_CONTENT_CENTER;
     }
-    if (strcmp(s, "stretch") == 0)
+    if (strcmp(token, "stretch") == 0)
     {
         return ER_ALIGN_CONTENT_STRETCH;
     }
-    if (strcmp(s, "space-between") == 0)
+    if (strcmp(token, "space-between") == 0)
     {
         return ER_ALIGN_CONTENT_SPACE_BETWEEN;
     }
-    if (strcmp(s, "space-around") == 0)
+    if (strcmp(token, "space-around") == 0)
     {
         return ER_ALIGN_CONTENT_SPACE_AROUND;
     }
     return ER_ALIGN_CONTENT_FLEX_START;
 }
 
-/** @brief Maps a position string to ERPositionType. @param[in] s String. @return Enum value. */
-static uint8_t map_position(const char* s)
+/** @brief Maps a position string to ERPositionType. @param[in] token String. @return Enum value. */
+static uint8_t map_position(const char* token)
 {
-    return strcmp(s, "absolute") == 0 ? ER_POS_ABSOLUTE : ER_POS_RELATIVE;
+    return strcmp(token, "absolute") == 0 ? ER_POS_ABSOLUTE : ER_POS_RELATIVE;
 }
 
-/** @brief Maps a display string to ERDisplayMode. @param[in] s String. @return Enum value. */
-static uint8_t map_display(const char* s)
+/** @brief Maps a display string to ERDisplayMode. @param[in] token String. @return Enum value. */
+static uint8_t map_display(const char* token)
 {
-    return strcmp(s, "none") == 0 ? ER_DISPLAY_NONE : ER_DISPLAY_FLEX;
+    return strcmp(token, "none") == 0 ? ER_DISPLAY_NONE : ER_DISPLAY_FLEX;
 }
 
-/** @brief Maps an overflow string to EROverflow. @param[in] s String. @return Enum value. */
-static uint8_t map_overflow(const char* s)
+/** @brief Maps an overflow string to EROverflow. @param[in] token String. @return Enum value. */
+static uint8_t map_overflow(const char* token)
 {
-    if (strcmp(s, "hidden") == 0)
+    if (strcmp(token, "hidden") == 0)
     {
         return ER_OVERFLOW_HIDDEN;
     }
-    if (strcmp(s, "scroll") == 0)
+    if (strcmp(token, "scroll") == 0)
     {
         return ER_OVERFLOW_SCROLL;
     }
     return ER_OVERFLOW_VISIBLE;
 }
 
-/** @brief Maps a textAlign string to ERTextAlign. @param[in] s String. @return Enum value. */
-static uint8_t map_text_align(const char* s)
+/** @brief Maps a textAlign string to ERTextAlign. @param[in] token String. @return Enum value. */
+static uint8_t map_text_align(const char* token)
 {
-    if (strcmp(s, "center") == 0)
+    if (strcmp(token, "center") == 0)
     {
         return ER_TEXT_ALIGN_CENTER;
     }
-    if (strcmp(s, "right") == 0)
+    if (strcmp(token, "right") == 0)
     {
         return ER_TEXT_ALIGN_RIGHT;
     }
     return ER_TEXT_ALIGN_LEFT;
 }
 
-/** @brief Maps a resizeMode string to ERResizeMode. @param[in] s String. @return Enum value. */
-static uint8_t map_resize_mode(const char* s)
+/** @brief Maps a resizeMode string to ERResizeMode. @param[in] token String. @return Enum value. */
+static uint8_t map_resize_mode(const char* token)
 {
-    if (strcmp(s, "contain") == 0)
+    if (strcmp(token, "contain") == 0)
     {
         return ER_RESIZE_CONTAIN;
     }
-    if (strcmp(s, "stretch") == 0)
+    if (strcmp(token, "stretch") == 0)
     {
         return ER_RESIZE_STRETCH;
     }
-    if (strcmp(s, "repeat") == 0)
+    if (strcmp(token, "repeat") == 0)
     {
         return ER_RESIZE_REPEAT;
     }
-    if (strcmp(s, "center") == 0)
+    if (strcmp(token, "center") == 0)
     {
         return ER_RESIZE_CENTER;
     }
     return ER_RESIZE_COVER;
 }
 
-/** @brief Maps a flexWrap string to ERFlexWrap. @param[in] s String. @return Enum value. */
-static uint8_t map_flex_wrap(const char* s)
+/** @brief Maps a flexWrap string to ERFlexWrap. @param[in] token String. @return Enum value. */
+static uint8_t map_flex_wrap(const char* token)
 {
-    if (strcmp(s, "wrap") == 0)
+    if (strcmp(token, "wrap") == 0)
     {
         return ER_WRAP_WRAP;
     }
-    if (strcmp(s, "wrap-reverse") == 0)
+    if (strcmp(token, "wrap-reverse") == 0)
     {
         return ER_WRAP_WRAP_REVERSE;
     }
     return ER_WRAP_NOWRAP;
 }
 
-/** @brief Maps a fontStyle string to ERFontStyle. @param[in] s String. @return Enum value. */
-static uint8_t map_font_style(const char* s)
+/** @brief Maps a fontStyle string to ERFontStyle. @param[in] token String. @return Enum value. */
+static uint8_t map_font_style(const char* token)
 {
-    return strcmp(s, "italic") == 0 ? ER_FONT_STYLE_ITALIC : ER_FONT_STYLE_NORMAL;
+    return strcmp(token, "italic") == 0 ? ER_FONT_STYLE_ITALIC : ER_FONT_STYLE_NORMAL;
 }
 
-/** @brief Maps a borderStyle string to ERBorderStyle. @param[in] s String. @return Enum value. */
-static uint8_t map_border_style(const char* s)
+/** @brief Maps a borderStyle string to ERBorderStyle. @param[in] token String. @return Enum value. */
+static uint8_t map_border_style(const char* token)
 {
-    if (strcmp(s, "dashed") == 0)
+    if (strcmp(token, "dashed") == 0)
     {
         return ER_BORDER_DASHED;
     }
-    if (strcmp(s, "dotted") == 0)
+    if (strcmp(token, "dotted") == 0)
     {
         return ER_BORDER_DOTTED;
     }
     return ER_BORDER_SOLID;
 }
 
-/** @brief Maps an ellipsizeMode string to ERTextEllipsize. @param[in] s String. @return Enum value. */
-static uint8_t map_ellipsize(const char* s)
+/** @brief Maps an ellipsizeMode string to ERTextEllipsize. @param[in] token String. @return Enum value. */
+static uint8_t map_ellipsize(const char* token)
 {
-    if (strcmp(s, "head") == 0)
+    if (strcmp(token, "head") == 0)
     {
         return ER_TEXT_ELLIPSIZE_HEAD;
     }
-    if (strcmp(s, "middle") == 0)
+    if (strcmp(token, "middle") == 0)
     {
         return ER_TEXT_ELLIPSIZE_MIDDLE;
     }
-    if (strcmp(s, "clip") == 0)
+    if (strcmp(token, "clip") == 0)
     {
         return ER_TEXT_ELLIPSIZE_CLIP;
     }
     return ER_TEXT_ELLIPSIZE_TAIL;
 }
 
-/** @brief Maps a textDecorationLine string to ERTextDecoration. @param[in] s String. @return Enum value. */
-static uint8_t map_text_decoration(const char* s)
+/** @brief Maps a textDecorationLine string to ERTextDecoration. @param[in] token String. @return Enum value. */
+static uint8_t map_text_decoration(const char* token)
 {
-    if (strcmp(s, "underline") == 0)
+    if (strcmp(token, "underline") == 0)
     {
         return ER_TEXT_DECORATION_UNDERLINE;
     }
-    if (strcmp(s, "line-through") == 0)
+    if (strcmp(token, "line-through") == 0)
     {
         return ER_TEXT_DECORATION_LINE_THROUGH;
     }
     return ER_TEXT_DECORATION_NONE;
 }
 
-/** @brief Maps a pointerEvents string to ERPointerEvents. @param[in] s String. @return Enum value. */
-static uint8_t map_pointer_events(const char* s)
+/** @brief Maps a pointerEvents string to ERPointerEvents. @param[in] token String. @return Enum value. */
+static uint8_t map_pointer_events(const char* token)
 {
-    if (strcmp(s, "none") == 0)
+    if (strcmp(token, "none") == 0)
     {
         return ER_POINTER_EVENTS_NONE;
     }
-    if (strcmp(s, "box-only") == 0)
+    if (strcmp(token, "box-only") == 0)
     {
         return ER_POINTER_EVENTS_BOX_ONLY;
     }
-    if (strcmp(s, "box-none") == 0)
+    if (strcmp(token, "box-none") == 0)
     {
         return ER_POINTER_EVENTS_BOX_NONE;
     }
     return ER_POINTER_EVENTS_AUTO;
 }
 
-/** @brief Maps a node-type string to ERNodeType. @param[in] s String. @return Enum value (View on miss). */
-static ERNodeType map_node_type(const char* s)
+/** @brief Maps a node-type string to ERNodeType. @param[in] token String. @return Enum value (View on miss). */
+static ERNodeType map_node_type(const char* token)
 {
-    if (strcmp(s, "Text") == 0)
+    if (strcmp(token, "Text") == 0)
     {
         return ER_NODE_TEXT;
     }
-    if (strcmp(s, "Image") == 0)
+    if (strcmp(token, "Image") == 0)
     {
         return ER_NODE_IMAGE;
     }
-    if (strcmp(s, "ScrollView") == 0)
+    if (strcmp(token, "ScrollView") == 0)
     {
         return ER_NODE_SCROLL_VIEW;
     }
-    if (strcmp(s, "FlatList") == 0)
+    if (strcmp(token, "FlatList") == 0)
     {
         return ER_NODE_FLAT_LIST;
     }
-    if (strcmp(s, "Pressable") == 0)
+    if (strcmp(token, "Pressable") == 0)
     {
         return ER_NODE_PRESSABLE;
     }
-    if (strcmp(s, "TextInput") == 0)
+    if (strcmp(token, "TextInput") == 0)
     {
         return ER_NODE_TEXT_INPUT;
     }
-    if (strcmp(s, "ActivityIndicator") == 0)
+    if (strcmp(token, "ActivityIndicator") == 0)
     {
         return ER_NODE_ACTIVITY_INDICATOR;
     }
-    if (strcmp(s, "Switch") == 0)
+    if (strcmp(token, "Switch") == 0)
     {
         return ER_NODE_SWITCH;
     }
-    if (strcmp(s, "Modal") == 0)
+    if (strcmp(token, "Modal") == 0)
     {
         return ER_NODE_MODAL;
     }
-    if (strcmp(s, "Svg") == 0)
+    if (strcmp(token, "Svg") == 0)
     {
         return ER_NODE_VECTOR;
     }
-    if (strcmp(s, "Dial") == 0)
+    if (strcmp(token, "Dial") == 0)
     {
         return ER_NODE_ARC;
     }
     return ER_NODE_VIEW;
 }
 
-/** @brief Maps a Dial `cap` token to ERArcCap. @param[in] s String. @return Enum value (default butt). */
-static uint8_t map_arc_cap(const char* s)
+/** @brief Maps a Dial `cap` token to ERArcCap. @param[in] token String. @return Enum value (default butt). */
+static uint8_t map_arc_cap(const char* token)
 {
-    if (strcmp(s, "round") == 0)
+    if (strcmp(token, "round") == 0)
     {
         return ER_ARC_CAP_ROUND;
     }
     return ER_ARC_CAP_BUTT;
 }
 
-/** @brief Maps a Dial `knob` token to ERArcKnob. @param[in] s String. @return Enum value (default none). */
-static uint8_t map_arc_knob(const char* s)
+/** @brief Maps a Dial `knob` token to ERArcKnob. @param[in] token String. @return Enum value (default none). */
+static uint8_t map_arc_knob(const char* token)
 {
-    if (strcmp(s, "circle") == 0)
+    if (strcmp(token, "circle") == 0)
     {
         return ER_ARC_KNOB_CIRCLE;
     }
-    if (strcmp(s, "image") == 0)
+    if (strcmp(token, "image") == 0)
     {
         return ER_ARC_KNOB_IMAGE;
     }
-    if (strcmp(s, "child") == 0)
+    if (strcmp(token, "child") == 0)
     {
         return ER_ARC_KNOB_CHILD;
     }
@@ -1094,13 +1120,13 @@ static uint8_t map_arc_knob(const char* s)
  * opacity to 0 (fully transparent), so the layout-auto fields are reset to ER_LAYOUT_AUTO and
  * opacity to 255 to match a freshly created node.
  *
- * @param[out] p  Props to initialise.
+ * @param[out] props  Props to initialise.
  */
-static void props_init_defaults(ERProps* p)
+static void props_init_defaults(ERProps* props)
 {
     /* The default seeding lives in the engine (er_props_default) so the Flow B AOT codegen produces
        byte-identical prop bags. This wrapper stays for the call sites + the doc comment above. */
-    er_props_default(p);
+    er_props_default(props);
 }
 
 /**
@@ -1374,14 +1400,14 @@ static JSRuntime* s_prop_atoms_rt = NULL;
  * ladder. Like the color cache, the entry owns a reference to its key so identity stays meaningful.
  * Emptied by prop_atoms_init() when the runtime changes.
  */
-static JSValue s_enum_memo_str[PROP_COUNT_];
-static uint8_t s_enum_memo_val[PROP_COUNT_];
+static JSValue s_enum_memo_string[PROP_COUNT_];
+static uint8_t s_enum_memo_value[PROP_COUNT_];
 
-static int prop_atom_entry_cmp(const void* a, const void* b)
+static int prop_atom_entry_cmp(const void* first, const void* second)
 {
-    const JSAtom aa = ((const PropAtomEntry*)a)->atom;
-    const JSAtom ab = ((const PropAtomEntry*)b)->atom;
-    return (aa > ab) - (aa < ab);
+    const JSAtom first_atom = ((const PropAtomEntry*)first)->atom;
+    const JSAtom second_atom = ((const PropAtomEntry*)second)->atom;
+    return (first_atom > second_atom) - (first_atom < second_atom);
 }
 
 /**
@@ -1404,16 +1430,16 @@ static void prop_atoms_init(JSContext* ctx)
     {
         return;
     }
-    for (int i = 0; i < PROP_COUNT_; i++)
+    for (int entry_index = 0; entry_index < PROP_COUNT_; entry_index++)
     {
-        s_prop_atoms[i].atom = JS_NewAtom(ctx, k_prop_names[i]);
-        s_prop_atoms[i].id = (PropId)i;
+        s_prop_atoms[entry_index].atom = JS_NewAtom(ctx, k_prop_names[entry_index]);
+        s_prop_atoms[entry_index].id = (PropId)entry_index;
         /* Strings held against the old runtime died with it — drop the keys, don't unref them. */
-        s_enum_memo_str[i] = JS_UNDEFINED;
+        s_enum_memo_string[entry_index] = JS_UNDEFINED;
     }
-    for (int i = 0; i < ER_COLOR_CACHE_N; i++)
+    for (int entry_index = 0; entry_index < ER_COLOR_CACHE_ENTRIES; entry_index++)
     {
-        s_color_cache[i].key = JS_UNDEFINED;
+        s_color_cache[entry_index].key = JS_UNDEFINED;
     }
     qsort(s_prop_atoms, PROP_COUNT_, sizeof(s_prop_atoms[0]), prop_atom_entry_cmp);
     s_prop_atoms_rt = rt;
@@ -1459,53 +1485,53 @@ static JSValue s_prop_slots[PROP_COUNT_];
 /**
  * @brief Maps an enum-valued prop's JS string to its engine enum, memoised per prop id.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  v    The slot value (already known to be present).
- * @param[in]  id   Prop this value belongs to — the memo key.
- * @param[in]  fn   Mapper for this prop's token set.
- * @param[out] out  Receives the mapped enum.
+ * @param[in]  ctx     QuickJS context.
+ * @param[in]  value   The slot value (already known to be present).
+ * @param[in]  id      Prop this value belongs to — the memo key.
+ * @param[in]  mapper  Mapper for this prop's token set.
+ * @param[out] out     Receives the mapped enum.
  *
- * @return true when @p v produced a value; false leaves @p out alone.
+ * @return true when @p value produced a value; false leaves @p out alone.
  */
-static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*fn)(const char*), uint8_t* out)
+static bool enum_from_slot(JSContext* ctx, JSValueConst value, PropId id, uint8_t (*mapper)(const char*), uint8_t* out)
 {
-    const bool cacheable = JS_IsString(v);
-    if (cacheable && same_js_string(v, s_enum_memo_str[id]))
+    const bool cacheable = JS_IsString(value);
+    if (cacheable && same_js_string(value, s_enum_memo_string[id]))
     {
-        *out = s_enum_memo_val[id];
+        *out = s_enum_memo_value[id];
         return true;
     }
 
-    const char* s = JS_ToCString(ctx, v);
-    if (!s)
+    const char* token = JS_ToCString(ctx, value);
+    if (!token)
     {
         return false;
     }
-    *out = fn(s);
-    JS_FreeCString(ctx, s);
+    *out = mapper(token);
+    JS_FreeCString(ctx, token);
     if (cacheable)
     {
-        JS_FreeValue(ctx, s_enum_memo_str[id]);
-        s_enum_memo_str[id] = JS_DupValue(ctx, v);
-        s_enum_memo_val[id] = *out;
+        JS_FreeValue(ctx, s_enum_memo_string[id]);
+        s_enum_memo_string[id] = JS_DupValue(ctx, value);
+        s_enum_memo_value[id] = *out;
     }
     return true;
 }
 
 /* Marshalling convenience macros — each reads one slot (populated from the object's own keys by
-   apply_props()) into the ERProps `p`. They share the locals (ctx, p) of apply_props() and are
+   apply_props()) into the ERProps `props`. They share the locals (ctx, props) of apply_props() and are
    #undef'd at its end. */
 
 #define ER_DIM(id, field)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValueConst _v = s_prop_slots[id];                                                                            \
-        if (!JS_IsUndefined(_v))                                                                                       \
+        JSValueConst _value = s_prop_slots[id];                                                                        \
+        if (!JS_IsUndefined(_value))                                                                                   \
         {                                                                                                              \
-            int16_t _d;                                                                                                \
-            if (to_dim(ctx, _v, &_d))                                                                                  \
+            int16_t _dimension;                                                                                        \
+            if (to_dim(ctx, _value, &_dimension))                                                                      \
             {                                                                                                          \
-                p.field = _d;                                                                                          \
+                props.field = _dimension;                                                                              \
             }                                                                                                          \
         }                                                                                                              \
     } while (0)
@@ -1513,13 +1539,13 @@ static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*
 #define ER_COL(id, field)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValueConst _v = s_prop_slots[id];                                                                            \
-        if (!JS_IsUndefined(_v))                                                                                       \
+        JSValueConst _value = s_prop_slots[id];                                                                        \
+        if (!JS_IsUndefined(_value))                                                                                   \
         {                                                                                                              \
-            uint32_t _c;                                                                                               \
-            if (to_color(ctx, _v, &_c))                                                                                \
+            uint32_t _color;                                                                                           \
+            if (to_color(ctx, _value, &_color))                                                                        \
             {                                                                                                          \
-                p.field = _c;                                                                                          \
+                props.field = _color;                                                                                  \
             }                                                                                                          \
         }                                                                                                              \
     } while (0)
@@ -1527,23 +1553,23 @@ static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*
 #define ER_ENUM(id, field, fn)                                                                                         \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValueConst _v = s_prop_slots[id];                                                                            \
-        if (!JS_IsUndefined(_v))                                                                                       \
+        JSValueConst _value = s_prop_slots[id];                                                                        \
+        if (!JS_IsUndefined(_value))                                                                                   \
         {                                                                                                              \
-            enum_from_slot(ctx, _v, id, fn, &p.field);                                                                 \
+            enum_from_slot(ctx, _value, id, fn, &props.field);                                                         \
         }                                                                                                              \
     } while (0)
 
 #define ER_U8(id, field)                                                                                               \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValueConst _v = s_prop_slots[id];                                                                            \
-        if (!JS_IsUndefined(_v))                                                                                       \
+        JSValueConst _value = s_prop_slots[id];                                                                        \
+        if (!JS_IsUndefined(_value))                                                                                   \
         {                                                                                                              \
-            int32_t _n;                                                                                                \
-            if (JS_ToInt32(ctx, &_n, _v) == 0)                                                                         \
+            int32_t _number;                                                                                           \
+            if (JS_ToInt32(ctx, &_number, _value) == 0)                                                                \
             {                                                                                                          \
-                p.field = (uint8_t)clamp_u8(_n);                                                                       \
+                props.field = (uint8_t)clamp_u8(_number);                                                              \
             }                                                                                                          \
         }                                                                                                              \
     } while (0)
@@ -1551,13 +1577,13 @@ static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*
 #define ER_F32(id, field)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValueConst _v = s_prop_slots[id];                                                                            \
-        if (!JS_IsUndefined(_v))                                                                                       \
+        JSValueConst _value = s_prop_slots[id];                                                                        \
+        if (!JS_IsUndefined(_value))                                                                                   \
         {                                                                                                              \
-            double _d;                                                                                                 \
-            if (JS_ToFloat64(ctx, &_d, _v) == 0)                                                                       \
+            double _number;                                                                                            \
+            if (JS_ToFloat64(ctx, &_number, _value) == 0)                                                              \
             {                                                                                                          \
-                p.field = (float)_d;                                                                                   \
+                props.field = (float)_number;                                                                          \
             }                                                                                                          \
         }                                                                                                              \
     } while (0)
@@ -1565,15 +1591,15 @@ static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*
 #define ER_STR(id, field, maxlen)                                                                                      \
     do                                                                                                                 \
     {                                                                                                                  \
-        JSValueConst _v = s_prop_slots[id];                                                                            \
-        if (!JS_IsUndefined(_v))                                                                                       \
+        JSValueConst _value = s_prop_slots[id];                                                                        \
+        if (!JS_IsUndefined(_value))                                                                                   \
         {                                                                                                              \
-            const char* _s = JS_ToCString(ctx, _v);                                                                    \
-            if (_s)                                                                                                    \
+            const char* _text = JS_ToCString(ctx, _value);                                                             \
+            if (_text)                                                                                                 \
             {                                                                                                          \
-                strncpy(p.field, _s, (maxlen));                                                                        \
-                p.field[(maxlen)] = '\0';                                                                              \
-                JS_FreeCString(ctx, _s);                                                                               \
+                strncpy(props.field, _text, (maxlen));                                                                 \
+                props.field[(maxlen)] = '\0';                                                                          \
+                JS_FreeCString(ctx, _text);                                                                            \
             }                                                                                                          \
         }                                                                                                              \
     } while (0)
@@ -1581,34 +1607,34 @@ static bool enum_from_slot(JSContext* ctx, JSValueConst v, PropId id, uint8_t (*
 /**
  * @brief Reads the `flex` shorthand and expands it to grow/shrink/basis with RN semantics.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Source props object.
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `flex` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_flex_shorthand(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_flex_shorthand(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    double d = 0.0;
-    if (JS_ToFloat64(ctx, &d, v) == 0)
+    double flex = 0.0;
+    if (JS_ToFloat64(ctx, &flex, value) == 0)
     {
-        if (d > 0.0)
+        if (flex > 0.0)
         {
-            p->flex_grow = dim_from_double(d);
-            p->flex_shrink = 1;
-            p->flex_basis = 0;
+            props->flex_grow = dim_from_double(flex);
+            props->flex_shrink = 1;
+            props->flex_basis = 0;
         }
-        else if (d == 0.0)
+        else if (flex == 0.0)
         {
-            p->flex_grow = 0;
-            p->flex_shrink = 0;
+            props->flex_grow = 0;
+            props->flex_shrink = 0;
         }
         else
         {
-            p->flex_grow = 0;
-            p->flex_shrink = 1;
+            props->flex_grow = 0;
+            props->flex_shrink = 1;
         }
     }
 }
@@ -1616,45 +1642,45 @@ static void apply_flex_shorthand(JSContext* ctx, JSValueConst v, ERProps* p)
 /**
  * @brief Reads `flexBasis`, supporting both numeric pixels and percentage strings.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched `flexBasis` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `flexBasis` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_flex_basis(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    if (JS_IsNumber(v))
+    if (JS_IsNumber(value))
     {
-        int16_t d;
-        if (to_dim(ctx, v, &d))
+        int16_t pixels;
+        if (to_dim(ctx, value, &pixels))
         {
-            p->flex_basis = d;
+            props->flex_basis = pixels;
         }
     }
-    else if (JS_IsString(v))
+    else if (JS_IsString(value))
     {
-        const char* s = JS_ToCString(ctx, v);
-        if (s)
+        const char* text = JS_ToCString(ctx, value);
+        if (text)
         {
             char* end = NULL;
-            const double pct = strtod(s, &end);
-            if (end != s && *end == '%' && !isnan(pct))
+            const double percent = strtod(text, &end);
+            if (end != text && *end == '%' && !isnan(percent))
             {
                 /* `flexBasis: '0%'` is the CSS `flex: 1 1 0%` idiom, and 0.0 is the percentage field's
                  * "not set" sentinel — so it lowers to the pixel field, which means the same thing. */
-                if (pct == 0.0)
+                if (percent == 0.0)
                 {
-                    p->flex_basis = 0;
+                    props->flex_basis = 0;
                 }
                 else
                 {
-                    p->flex_basis_pct = (float)pct;
+                    props->flex_basis_pct = (float)percent;
                 }
             }
-            JS_FreeCString(ctx, s);
+            JS_FreeCString(ctx, text);
         }
     }
 }
@@ -1666,46 +1692,46 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst v, ERProps* p)
  * over the px field. The engine resolves the percentage against whichever box that prop measures
  * from — the parent's content size for a size, its containing block for an inset.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  v    Pre-fetched value (e.g. `width`), JS_UNDEFINED if absent.
- * @param[out] px   Receives the pixel value when the JS value is numeric.
- * @param[out] pct  Receives the percentage when the JS value is a `"N%"` string.
+ * @param[in]  ctx      QuickJS context.
+ * @param[in]  value    Pre-fetched value (e.g. `width`), JS_UNDEFINED if absent.
+ * @param[out] pixels   Receives the pixel value when the JS value is numeric.
+ * @param[out] percent  Receives the percentage when the JS value is a `"N%"` string.
  */
-static void apply_dim_pct(JSContext* ctx, JSValueConst v, int16_t* px, float* pct)
+static void apply_dim_pct(JSContext* ctx, JSValueConst value, int16_t* pixels, float* percent)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    if (JS_IsNumber(v))
+    if (JS_IsNumber(value))
     {
-        int16_t d;
-        if (to_dim(ctx, v, &d))
+        int16_t dimension;
+        if (to_dim(ctx, value, &dimension))
         {
-            *px = d;
+            *pixels = dimension;
         }
     }
-    else if (JS_IsString(v))
+    else if (JS_IsString(value))
     {
-        const char* s = JS_ToCString(ctx, v);
-        if (s)
+        const char* text = JS_ToCString(ctx, value);
+        if (text)
         {
             char* end = NULL;
-            const double p = strtod(s, &end);
-            if (end != s && *end == '%' && !isnan(p))
+            const double parsed_percent = strtod(text, &end);
+            if (end != text && *end == '%' && !isnan(parsed_percent))
             {
                 /* 0% of any box is 0 px, and 0.0 is the percentage field's "not set" sentinel — so an
                  * authored `'0%'` goes to the pixel field, where it still pins the edge. */
-                if (p == 0.0)
+                if (parsed_percent == 0.0)
                 {
-                    *px = 0;
+                    *pixels = 0;
                 }
                 else
                 {
-                    *pct = (float)p;
+                    *percent = (float)parsed_percent;
                 }
             }
-            JS_FreeCString(ctx, s);
+            JS_FreeCString(ctx, text);
         }
     }
 }
@@ -1720,76 +1746,76 @@ static void apply_dim_pct(JSContext* ctx, JSValueConst v, int16_t* px, float* pc
  * reach the same verdict as the Text node it lives in, or one line of a paragraph comes out bold and
  * the rest does not.
  *
- * @param[in] ctx  QuickJS context.
- * @param[in] v    A present (non-undefined) `fontWeight` value.
- * @param[in] dflt Value to keep when the JS value cannot be read at all.
+ * @param[in] ctx       QuickJS context.
+ * @param[in] value     A present (non-undefined) `fontWeight` value.
+ * @param[in] fallback  Value to keep when the JS value cannot be read at all.
  *
  * @return 1 for bold, 0 otherwise.
  */
-static uint8_t to_font_weight(JSContext* ctx, JSValueConst v, uint8_t dflt)
+static uint8_t to_font_weight(JSContext* ctx, JSValueConst value, uint8_t fallback)
 {
-    if (JS_IsNumber(v))
+    if (JS_IsNumber(value))
     {
-        int32_t n = 0;
-        if (JS_ToInt32(ctx, &n, v) != 0)
+        int32_t weight = 0;
+        if (JS_ToInt32(ctx, &weight, value) != 0)
         {
-            return dflt;
+            return fallback;
         }
-        return n >= ER_FONT_WEIGHT_BOLD_MIN ? 1U : 0U;
+        return weight >= ER_FONT_WEIGHT_BOLD_MIN ? 1U : 0U;
     }
-    const char* s = JS_ToCString(ctx, v);
-    if (!s)
+    const char* text = JS_ToCString(ctx, value);
+    if (!text)
     {
-        return dflt;
+        return fallback;
     }
-    const uint8_t bold = (strcmp(s, "bold") == 0 || atoi(s) >= ER_FONT_WEIGHT_BOLD_MIN) ? 1U : 0U;
-    JS_FreeCString(ctx, s);
+    const uint8_t bold = (strcmp(text, "bold") == 0 || atoi(text) >= ER_FONT_WEIGHT_BOLD_MIN) ? 1U : 0U;
+    JS_FreeCString(ctx, text);
     return bold;
 }
 
 /**
  * @brief Reads `fontWeight` (string keyword, numeric, or numeric string) into a 0/1 weight.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched `fontWeight` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `fontWeight` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_font_weight(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_font_weight(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    p->font_weight = to_font_weight(ctx, v, p->font_weight);
+    props->font_weight = to_font_weight(ctx, value, props->font_weight);
 }
 
 /**
  * @brief Reads `opacity` (RN 0.0–1.0 float) into the engine's 0–255 byte opacity.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched `opacity` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `opacity` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_opacity(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_opacity(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    double d = 1.0;
-    if (JS_ToFloat64(ctx, &d, v) == 0)
+    double opacity = 1.0;
+    if (JS_ToFloat64(ctx, &opacity, value) == 0)
     {
-        /* NaN fails every comparison, so `d < 0.0` would pass it on to the cast, where it is undefined. A NaN
+        /* NaN fails every comparison, so `opacity < 0.0` would pass it on to the cast, where it is undefined. A NaN
            opacity (a 0/0 in app math) is fully transparent, as Flow B's app_opacity makes it. */
-        if (!(d > 0.0))
+        if (!(opacity > 0.0))
         {
-            d = 0.0;
+            opacity = 0.0;
         }
-        if (d > 1.0)
+        if (opacity > 1.0)
         {
-            d = 1.0;
+            opacity = 1.0;
         }
-        p->opacity = (uint8_t)(d * 255.0 + 0.5);
+        props->opacity = (uint8_t)(opacity * ER_BRIDGE_CHANNEL_MAX_FLOAT + 0.5);
     }
 }
 
@@ -1805,18 +1831,18 @@ static void apply_opacity(JSContext* ctx, JSValueConst v, ERProps* p)
  */
 static bool item_f32(JSContext* ctx, JSValueConst item, const char* key, float* out)
 {
-    JSValue v;
-    if (!prop_get(ctx, item, key, &v))
+    JSValue value;
+    if (!prop_get(ctx, item, key, &value))
     {
         return false;
     }
-    double d = 0.0;
-    const bool ok = JS_ToFloat64(ctx, &d, v) == 0;
+    double number = 0.0;
+    const bool ok = JS_ToFloat64(ctx, &number, value) == 0;
     if (ok)
     {
-        *out = (float)d;
+        *out = (float)number;
     }
-    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, value);
     return ok;
 }
 
@@ -1832,82 +1858,82 @@ static bool item_f32(JSContext* ctx, JSValueConst item, const char* key, float* 
  */
 static bool item_angle(JSContext* ctx, JSValueConst item, const char* key, float* out)
 {
-    JSValue v;
-    if (!prop_get(ctx, item, key, &v))
+    JSValue value;
+    if (!prop_get(ctx, item, key, &value))
     {
         return false;
     }
-    const bool ok = to_angle(ctx, v, out);
-    JS_FreeValue(ctx, v);
+    const bool ok = to_angle(ctx, value, out);
+    JS_FreeValue(ctx, value);
     return ok;
 }
 
 /**
  * @brief Flattens the RN `transform` array (list of single-key objects) into transform_* fields.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     arr  Pre-fetched `transform` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx         QuickJS context.
+ * @param[in]     transforms  Pre-fetched `transform` value (JS_UNDEFINED if absent).
+ * @param[in,out] props       Props to update.
  */
-static void apply_transform(JSContext* ctx, JSValueConst arr, ERProps* p)
+static void apply_transform(JSContext* ctx, JSValueConst transforms, ERProps* props)
 {
-    if (JS_IsUndefined(arr))
+    if (JS_IsUndefined(transforms))
     {
         return;
     }
-    if (JS_IsArray(arr))
+    if (JS_IsArray(transforms))
     {
-        JSValue len_val = JS_GetPropertyStr(ctx, arr, "length");
-        int32_t len = 0;
-        JS_ToInt32(ctx, &len, len_val);
-        JS_FreeValue(ctx, len_val);
+        JSValue length_value = JS_GetPropertyStr(ctx, transforms, "length");
+        int32_t transform_count = 0;
+        JS_ToInt32(ctx, &transform_count, length_value);
+        JS_FreeValue(ctx, length_value);
 
-        for (int32_t i = 0; i < len; i++)
+        for (int32_t transform_index = 0; transform_index < transform_count; transform_index++)
         {
-            JSValue item = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+            JSValue item = JS_GetPropertyUint32(ctx, transforms, (uint32_t)transform_index);
             if (JS_IsObject(item))
             {
-                float f;
-                if (item_f32(ctx, item, "translateX", &f))
+                float amount;
+                if (item_f32(ctx, item, "translateX", &amount))
                 {
-                    p->transform_translate_x = f;
+                    props->transform_translate_x = amount;
                 }
-                if (item_f32(ctx, item, "translateY", &f))
+                if (item_f32(ctx, item, "translateY", &amount))
                 {
-                    p->transform_translate_y = f;
+                    props->transform_translate_y = amount;
                 }
-                if (item_f32(ctx, item, "scale", &f))
+                if (item_f32(ctx, item, "scale", &amount))
                 {
-                    p->transform_scale_x = f;
-                    p->transform_scale_y = f;
+                    props->transform_scale_x = amount;
+                    props->transform_scale_y = amount;
                 }
-                if (item_f32(ctx, item, "scaleX", &f))
+                if (item_f32(ctx, item, "scaleX", &amount))
                 {
-                    p->transform_scale_x = f;
+                    props->transform_scale_x = amount;
                 }
-                if (item_f32(ctx, item, "scaleY", &f))
+                if (item_f32(ctx, item, "scaleY", &amount))
                 {
-                    p->transform_scale_y = f;
+                    props->transform_scale_y = amount;
                 }
-                if (item_angle(ctx, item, "rotate", &f))
+                if (item_angle(ctx, item, "rotate", &amount))
                 {
-                    p->transform_rotate_z = f;
+                    props->transform_rotate_z = amount;
                 }
-                if (item_angle(ctx, item, "rotateZ", &f))
+                if (item_angle(ctx, item, "rotateZ", &amount))
                 {
-                    p->transform_rotate_z = f;
+                    props->transform_rotate_z = amount;
                 }
-                if (item_angle(ctx, item, "rotateX", &f))
+                if (item_angle(ctx, item, "rotateX", &amount))
                 {
-                    p->transform_rotate_x = f;
+                    props->transform_rotate_x = amount;
                 }
-                if (item_angle(ctx, item, "rotateY", &f))
+                if (item_angle(ctx, item, "rotateY", &amount))
                 {
-                    p->transform_rotate_y = f;
+                    props->transform_rotate_y = amount;
                 }
-                if (item_f32(ctx, item, "perspective", &f))
+                if (item_f32(ctx, item, "perspective", &amount))
                 {
-                    p->transform_perspective = f;
+                    props->transform_perspective = amount;
                 }
             }
             JS_FreeValue(ctx, item);
@@ -1918,105 +1944,105 @@ static void apply_transform(JSContext* ctx, JSValueConst arr, ERProps* p)
 /**
  * @brief Reads `transformOrigin` as a two-element [x, y] array of fractional pivots [0–1].
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched `transformOrigin` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `transformOrigin` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_transform_origin(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_transform_origin(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    if (JS_IsArray(v))
+    if (JS_IsArray(value))
     {
-        JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
-        JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
-        double ox = 0.0;
-        double oy = 0.0;
-        if (JS_ToFloat64(ctx, &ox, e0) == 0)
+        JSValue origin_x_value = JS_GetPropertyUint32(ctx, value, 0);
+        JSValue origin_y_value = JS_GetPropertyUint32(ctx, value, 1);
+        double origin_x = 0.0;
+        double origin_y = 0.0;
+        if (JS_ToFloat64(ctx, &origin_x, origin_x_value) == 0)
         {
-            p->transform_origin_x = (float)ox;
+            props->transform_origin_x = (float)origin_x;
         }
-        if (JS_ToFloat64(ctx, &oy, e1) == 0)
+        if (JS_ToFloat64(ctx, &origin_y, origin_y_value) == 0)
         {
-            p->transform_origin_y = (float)oy;
+            props->transform_origin_y = (float)origin_y;
         }
-        JS_FreeValue(ctx, e0);
-        JS_FreeValue(ctx, e1);
+        JS_FreeValue(ctx, origin_x_value);
+        JS_FreeValue(ctx, origin_y_value);
     }
 }
 
 /**
  * @brief Reads `shadowOffset` ({width, height}) into the shadow_offset_x/y fields.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched `shadowOffset` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `shadowOffset` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_shadow_offset(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_shadow_offset(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    if (JS_IsObject(v))
+    if (JS_IsObject(value))
     {
-        JSValue w = JS_GetPropertyStr(ctx, v, "width");
-        JSValue h = JS_GetPropertyStr(ctx, v, "height");
-        double dw = 0.0;
-        double dh = 0.0;
-        if (JS_ToFloat64(ctx, &dw, w) == 0)
+        JSValue width_value = JS_GetPropertyStr(ctx, value, "width");
+        JSValue height_value = JS_GetPropertyStr(ctx, value, "height");
+        double offset_x = 0.0;
+        double offset_y = 0.0;
+        if (JS_ToFloat64(ctx, &offset_x, width_value) == 0)
         {
-            p->shadow_offset_x = (float)dw;
+            props->shadow_offset_x = (float)offset_x;
         }
-        if (JS_ToFloat64(ctx, &dh, h) == 0)
+        if (JS_ToFloat64(ctx, &offset_y, height_value) == 0)
         {
-            p->shadow_offset_y = (float)dh;
+            props->shadow_offset_y = (float)offset_y;
         }
-        JS_FreeValue(ctx, w);
-        JS_FreeValue(ctx, h);
+        JS_FreeValue(ctx, width_value);
+        JS_FreeValue(ctx, height_value);
     }
 }
 
 /**
  * @brief Reads `trackColor` ({false, true}) into the Switch track_color_false/true fields.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched `trackColor` value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched `trackColor` value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_track_color(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_track_color(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v))
+    if (JS_IsUndefined(value))
     {
         return;
     }
-    if (!JS_IsObject(v))
+    if (!JS_IsObject(value))
     {
         /* A plain colour is the Dial's single-colour track (the Switch form is the {false, true} pair). */
-        uint32_t c;
-        if (to_color(ctx, v, &c))
+        uint32_t color;
+        if (to_color(ctx, value, &color))
         {
-            p->arc_track_color = c;
+            props->arc_track_color = color;
         }
         return;
     }
-    if (JS_IsObject(v))
+    if (JS_IsObject(value))
     {
-        JSValue f = JS_GetPropertyStr(ctx, v, "false");
-        JSValue t = JS_GetPropertyStr(ctx, v, "true");
-        uint32_t c;
-        if (to_color(ctx, f, &c))
+        JSValue false_value = JS_GetPropertyStr(ctx, value, "false");
+        JSValue true_value = JS_GetPropertyStr(ctx, value, "true");
+        uint32_t color;
+        if (to_color(ctx, false_value, &color))
         {
-            p->track_color_false = c;
+            props->track_color_false = color;
         }
-        if (to_color(ctx, t, &c))
+        if (to_color(ctx, true_value, &color))
         {
-            p->track_color_true = c;
+            props->track_color_true = color;
         }
-        JS_FreeValue(ctx, f);
-        JS_FreeValue(ctx, t);
+        JS_FreeValue(ctx, false_value);
+        JS_FreeValue(ctx, true_value);
     }
 }
 
@@ -2024,103 +2050,107 @@ static void apply_track_color(JSContext* ctx, JSValueConst v, ERProps* p)
  * @brief Reads a Dial `indicatorGradient` ({type: 'conic'|'radial', stops: [{color, offset}]}) into the
  *        View-gradient fields, which ER_NODE_ARC reads as its indicator paint.
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     v    Pre-fetched value (JS_UNDEFINED if absent).
- * @param[in,out] p    Props to update.
+ * @param[in]     ctx    QuickJS context.
+ * @param[in]     value  Pre-fetched value (JS_UNDEFINED if absent).
+ * @param[in,out] props  Props to update.
  */
-static void apply_indicator_gradient(JSContext* ctx, JSValueConst v, ERProps* p)
+static void apply_indicator_gradient(JSContext* ctx, JSValueConst value, ERProps* props)
 {
-    if (JS_IsUndefined(v) || JS_IsNull(v) || !JS_IsObject(v))
+    if (JS_IsUndefined(value) || JS_IsNull(value) || !JS_IsObject(value))
     {
         return;
     }
-    JSValue t = JS_GetPropertyStr(ctx, v, "type");
-    const char* ts = JS_ToCString(ctx, t);
-    if (ts)
+    JSValue type_value = JS_GetPropertyStr(ctx, value, "type");
+    const char* type_name = JS_ToCString(ctx, type_value);
+    if (type_name)
     {
-        p->gradient_type = (strcmp(ts, "radial") == 0) ? ER_GRADIENT_RADIAL : ER_GRADIENT_CONIC;
-        JS_FreeCString(ctx, ts);
+        props->gradient_type = (strcmp(type_name, "radial") == 0) ? ER_GRADIENT_RADIAL : ER_GRADIENT_CONIC;
+        JS_FreeCString(ctx, type_name);
     }
-    JS_FreeValue(ctx, t);
+    JS_FreeValue(ctx, type_value);
 
-    JSValue stops = JS_GetPropertyStr(ctx, v, "stops");
+    JSValue stops = JS_GetPropertyStr(ctx, value, "stops");
     if (JS_IsArray(stops))
     {
-        JSValue lenv = JS_GetPropertyStr(ctx, stops, "length");
-        int32_t len = 0;
-        JS_ToInt32(ctx, &len, lenv);
-        JS_FreeValue(ctx, lenv);
-        if (len > ER_GRADIENT_MAX_STOPS)
+        JSValue length_value = JS_GetPropertyStr(ctx, stops, "length");
+        int32_t stop_total = 0;
+        JS_ToInt32(ctx, &stop_total, length_value);
+        JS_FreeValue(ctx, length_value);
+        if (stop_total > ER_GRADIENT_MAX_STOPS)
         {
-            len = ER_GRADIENT_MAX_STOPS;
+            stop_total = ER_GRADIENT_MAX_STOPS;
         }
-        uint8_t n = 0;
-        for (int32_t i = 0; i < len; i++)
+        uint8_t stop_count = 0;
+        for (int32_t stop_index = 0; stop_index < stop_total; stop_index++)
         {
-            JSValue st = JS_GetPropertyUint32(ctx, stops, (uint32_t)i);
-            JSValue cv = JS_GetPropertyStr(ctx, st, "color");
-            JSValue ov = JS_GetPropertyStr(ctx, st, "offset");
-            uint32_t c;
-            double o = (len > 1) ? (double)i / (double)(len - 1) : 0.0;
-            if (!JS_IsUndefined(ov))
+            JSValue stop = JS_GetPropertyUint32(ctx, stops, (uint32_t)stop_index);
+            JSValue color_value = JS_GetPropertyStr(ctx, stop, "color");
+            JSValue offset_value = JS_GetPropertyStr(ctx, stop, "offset");
+            uint32_t color;
+            double offset = (stop_total > 1) ? (double)stop_index / (double)(stop_total - 1) : 0.0;
+            if (!JS_IsUndefined(offset_value))
             {
-                JS_ToFloat64(ctx, &o, ov);
+                JS_ToFloat64(ctx, &offset, offset_value);
             }
-            if (to_color(ctx, cv, &c))
+            if (to_color(ctx, color_value, &color))
             {
-                p->gradient_stops[n].color = c;
-                p->gradient_stops[n].position = (float)o;
-                n++;
+                props->gradient_stops[stop_count].color = color;
+                props->gradient_stops[stop_count].position = (float)offset;
+                stop_count++;
             }
-            JS_FreeValue(ctx, ov);
-            JS_FreeValue(ctx, cv);
-            JS_FreeValue(ctx, st);
+            JS_FreeValue(ctx, offset_value);
+            JS_FreeValue(ctx, color_value);
+            JS_FreeValue(ctx, stop);
         }
-        p->gradient_stop_count = n;
+        props->gradient_stop_count = stop_count;
     }
     JS_FreeValue(ctx, stops);
 }
 
 /**
- * @brief Reads obj's own enumerable string keys into s_prop_slots.
+ * @brief Reads object's own enumerable string keys into s_prop_slots.
  *
  * Keys apply_props() doesn't recognise, and keys whose value is undefined/null/exception (same
  * filter prop_get() used to apply), are skipped — s_prop_slots[id] stays JS_UNDEFINED for those,
  * matching "absent" for every ER_* macro and custom applier.
  *
- * @param[in] ctx  QuickJS context.
- * @param[in] obj  Flat props object passed to apply_props().
+ * @param[in] ctx     QuickJS context.
+ * @param[in] object  Flat props object passed to apply_props().
  */
-static void gather_prop_slots(JSContext* ctx, JSValueConst obj)
+static void gather_prop_slots(JSContext* ctx, JSValueConst object)
 {
-    for (int i = 0; i < PROP_COUNT_; i++)
+    for (int slot_index = 0; slot_index < PROP_COUNT_; slot_index++)
     {
-        s_prop_slots[i] = JS_UNDEFINED;
+        s_prop_slots[slot_index] = JS_UNDEFINED;
     }
 
-    JSPropertyEnum* tab = NULL;
-    uint32_t len = 0;
-    if (JS_GetOwnPropertyNames(ctx, &tab, &len, obj, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) != 0)
+    JSPropertyEnum* property_names = NULL;
+    uint32_t property_count = 0;
+    if (JS_GetOwnPropertyNames(ctx, &property_names, &property_count, object, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY)
+        != 0)
     {
         return;
     }
-    for (uint32_t i = 0; i < len; i++)
+    for (uint32_t name_index = 0; name_index < property_count; name_index++)
     {
-        const PropId id = prop_id_from_atom(tab[i].atom);
+        const PropId id = prop_id_from_atom(property_names[name_index].atom);
         if (id == PROP_COUNT_)
         {
             continue;
         }
-        JSValue v = JS_GetProperty(ctx, obj, tab[i].atom);
-        if (JS_IsUndefined(v) || JS_IsNull(v) || JS_IsException(v))
+        JSValue value = JS_GetProperty(ctx, object, property_names[name_index].atom);
+        if (JS_IsUndefined(value) || JS_IsNull(value) || JS_IsException(value))
         {
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
             continue;
         }
-        s_prop_slots[id] = v;
+        s_prop_slots[id] = value;
     }
-    JS_FreePropertyEnum(ctx, tab, len);
+    JS_FreePropertyEnum(ctx, property_names, property_count);
 }
+
+/** @brief Shortest long-press delay; 0 is the engine's "no preference". */
+#define ER_LONG_PRESS_MIN_MS 1
 
 /**
  * @brief Translates a flat JS props object into an ERProps and applies it to a node.
@@ -2128,35 +2158,35 @@ static void gather_prop_slots(JSContext* ctx, JSValueConst obj)
  * Reads a single flat object (the JS layer merges resolved style + props before calling).
  * Unrecognised keys are ignored; unspecified props fall back to engine defaults.
  *
- * Rather than probing all ~90 known prop names against `obj` (a JS_GetPropertyStr per name, every
- * call, regardless of how many keys `obj` actually has), this walks obj's own keys once via
+ * Rather than probing all ~90 known prop names against `object` (a JS_GetPropertyStr per name, every
+ * call, regardless of how many keys `object` actually has), this walks object's own keys once via
  * JS_GetOwnPropertyNames and dispatches each into s_prop_slots by atom — see gather_prop_slots().
  * The statement order below is unchanged from the probing version and still matters: the `flex`
  * shorthand must run before the explicit flexGrow/flexShrink/flexBasis overrides, and `color`
  * legitimately feeds both the text `color` field and ActivityIndicator's `indicator_color`.
  *
- * @param[in] ctx   QuickJS context.
- * @param[in] node  Target node.
- * @param[in] obj   Flat props object.
+ * @param[in] ctx     QuickJS context.
+ * @param[in] node    Target node.
+ * @param[in] object  Flat props object.
  */
-static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
+static void apply_props(JSContext* ctx, ERNode* node, JSValueConst object)
 {
-    ERProps p;
-    props_init_defaults(&p);
+    ERProps props;
+    props_init_defaults(&props);
 
-    gather_prop_slots(ctx, obj);
+    gather_prop_slots(ctx, object);
 
     /* Layout — dimensions and box model. */
-    apply_dim_pct(ctx, s_prop_slots[PROP_WIDTH], &p.width, &p.width_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_HEIGHT], &p.height, &p.height_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_WIDTH], &props.width, &props.width_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_HEIGHT], &props.height, &props.height_pct);
     ER_DIM(PROP_MIN_WIDTH, min_width);
     ER_DIM(PROP_MAX_WIDTH, max_width);
     ER_DIM(PROP_MIN_HEIGHT, min_height);
     ER_DIM(PROP_MAX_HEIGHT, max_height);
-    apply_dim_pct(ctx, s_prop_slots[PROP_TOP], &p.top, &p.top_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_LEFT], &p.left, &p.left_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_RIGHT], &p.right, &p.right_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_BOTTOM], &p.bottom, &p.bottom_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_TOP], &props.top, &props.top_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_LEFT], &props.left, &props.left_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_RIGHT], &props.right, &props.right_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_BOTTOM], &props.bottom, &props.bottom_pct);
     ER_DIM(PROP_MARGIN, margin);
     ER_DIM(PROP_MARGIN_TOP, margin_top);
     ER_DIM(PROP_MARGIN_RIGHT, margin_right);
@@ -2176,10 +2206,10 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_DIM(PROP_COLUMN_GAP, column_gap);
 
     /* Layout — flex. flex shorthand first; explicit grow/shrink/basis override it. */
-    apply_flex_shorthand(ctx, s_prop_slots[PROP_FLEX], &p);
+    apply_flex_shorthand(ctx, s_prop_slots[PROP_FLEX], &props);
     ER_DIM(PROP_FLEX_GROW, flex_grow);
     ER_DIM(PROP_FLEX_SHRINK, flex_shrink);
-    apply_flex_basis(ctx, s_prop_slots[PROP_FLEX_BASIS], &p);
+    apply_flex_basis(ctx, s_prop_slots[PROP_FLEX_BASIS], &props);
     ER_ENUM(PROP_FLEX_DIRECTION, flex_direction, map_flex_direction);
     ER_ENUM(PROP_FLEX_WRAP, flex_wrap, map_flex_wrap);
     ER_ENUM(PROP_JUSTIFY_CONTENT, justify_content, map_justify);
@@ -2194,32 +2224,34 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     /* delayLongPress: how long the finger has to rest before onLongPress fires. 0 is the engine's
        "no preference" sentinel, so an app asking for 0 (RN's "fire on the next tick") gets 1 ms. */
     {
-        JSValueConst v = s_prop_slots[PROP_DELAY_LONG_PRESS];
-        if (!JS_IsUndefined(v))
+        JSValueConst value = s_prop_slots[PROP_DELAY_LONG_PRESS];
+        if (!JS_IsUndefined(value))
         {
-            int32_t n = 0;
-            if (JS_ToInt32(ctx, &n, v) == 0)
+            int32_t delay_ms = 0;
+            if (JS_ToInt32(ctx, &delay_ms, value) == 0)
             {
-                p.long_press_ms = (uint16_t)(n < 1 ? 1 : (n > UINT16_MAX ? UINT16_MAX : n));
+                props.long_press_ms =
+                    (uint16_t)(delay_ms < ER_LONG_PRESS_MIN_MS ? ER_LONG_PRESS_MIN_MS
+                                                               : (delay_ms > UINT16_MAX ? UINT16_MAX : delay_ms));
             }
         }
     }
 
     {
-        JSValueConst v = s_prop_slots[PROP_ASPECT_RATIO];
-        if (!JS_IsUndefined(v))
+        JSValueConst value = s_prop_slots[PROP_ASPECT_RATIO];
+        if (!JS_IsUndefined(value))
         {
-            double d = 0.0;
-            if (JS_ToFloat64(ctx, &d, v) == 0)
+            double number = 0.0;
+            if (JS_ToFloat64(ctx, &number, value) == 0)
             {
-                p.aspect_ratio = (float)d;
+                props.aspect_ratio = (float)number;
             }
         }
     }
 
     /* View visual. */
     ER_COL(PROP_BACKGROUND_COLOR, background_color);
-    apply_opacity(ctx, s_prop_slots[PROP_OPACITY], &p);
+    apply_opacity(ctx, s_prop_slots[PROP_OPACITY], &props);
     ER_DIM(PROP_BORDER_RADIUS, border_radius);
     ER_DIM(PROP_BORDER_TOP_LEFT_RADIUS, border_top_left_radius);
     ER_DIM(PROP_BORDER_TOP_RIGHT_RADIUS, border_top_right_radius);
@@ -2243,7 +2275,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_STR(PROP_FONT_FAMILY, font_family, ER_FONT_FAMILY_MAX);
     ER_COL(PROP_COLOR, color);
     ER_U8(PROP_FONT_SIZE, font_size);
-    apply_font_weight(ctx, s_prop_slots[PROP_FONT_WEIGHT], &p);
+    apply_font_weight(ctx, s_prop_slots[PROP_FONT_WEIGHT], &props);
     ER_ENUM(PROP_FONT_STYLE, font_style, map_font_style);
     ER_ENUM(PROP_TEXT_ALIGN, text_align, map_text_align);
     ER_ENUM(PROP_TEXT_DECORATION_LINE, text_decoration, map_text_decoration);
@@ -2258,20 +2290,20 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_COL(PROP_TINT_COLOR, tint_color);
 
     /* Transforms. */
-    apply_transform(ctx, s_prop_slots[PROP_TRANSFORM], &p);
-    apply_transform_origin(ctx, s_prop_slots[PROP_TRANSFORM_ORIGIN], &p);
+    apply_transform(ctx, s_prop_slots[PROP_TRANSFORM], &props);
+    apply_transform_origin(ctx, s_prop_slots[PROP_TRANSFORM_ORIGIN], &props);
 
     /* Shadow (View-family; rendered only when ERUI_SHADOWS and shadow_opacity > 0). */
     ER_COL(PROP_SHADOW_COLOR, shadow_color);
-    apply_shadow_offset(ctx, s_prop_slots[PROP_SHADOW_OFFSET], &p);
+    apply_shadow_offset(ctx, s_prop_slots[PROP_SHADOW_OFFSET], &props);
     {
-        JSValueConst v = s_prop_slots[PROP_SHADOW_OPACITY];
-        if (!JS_IsUndefined(v))
+        JSValueConst value = s_prop_slots[PROP_SHADOW_OPACITY];
+        if (!JS_IsUndefined(value))
         {
-            double d = 0.0;
-            if (JS_ToFloat64(ctx, &d, v) == 0)
+            double number = 0.0;
+            if (JS_ToFloat64(ctx, &number, value) == 0)
             {
-                p.shadow_opacity = (float)d;
+                props.shadow_opacity = (float)number;
             }
         }
     }
@@ -2284,7 +2316,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
 
     /* Switch. */
     ER_U8(PROP_VALUE, switch_value);
-    apply_track_color(ctx, s_prop_slots[PROP_TRACK_COLOR], &p);
+    apply_track_color(ctx, s_prop_slots[PROP_TRACK_COLOR], &props);
     ER_COL(PROP_THUMB_COLOR, thumb_color);
 
     /* Dial (ER_NODE_ARC). `value` and `trackColor` are shared with Switch above; the engine reads the
@@ -2312,7 +2344,7 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_U8(PROP_RANGE, arc_range);
     ER_F32(PROP_VALUE_START, arc_value_start);
     ER_F32(PROP_MIN_SPAN, arc_min_span);
-    apply_indicator_gradient(ctx, s_prop_slots[PROP_INDICATOR_GRADIENT], &p);
+    apply_indicator_gradient(ctx, s_prop_slots[PROP_INDICATOR_GRADIENT], &props);
 
     /* TextInput. */
     ER_STR(PROP_PLACEHOLDER, placeholder, ER_PLACEHOLDER_MAX);
@@ -2325,12 +2357,12 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst obj)
     ER_U8(PROP_VISIBLE, modal_visible);
     ER_COL(PROP_BACKDROP_COLOR, backdrop_color);
 
-    er_node_set_props(node, &p);
+    er_node_set_props(node, &props);
 
-    for (int i = 0; i < PROP_COUNT_; i++)
+    for (int slot_index = 0; slot_index < PROP_COUNT_; slot_index++)
     {
-        JS_FreeValue(ctx, s_prop_slots[i]);
-        s_prop_slots[i] = JS_UNDEFINED;
+        JS_FreeValue(ctx, s_prop_slots[slot_index]);
+        s_prop_slots[slot_index] = JS_UNDEFINED;
     }
 }
 
@@ -2382,7 +2414,7 @@ static bool event_type_from_name(const char* name, EREventType* out)
     {
         const char* name;
         EREventType type;
-    } k_map[] = {
+    } k_handler_props[] = {
         {"onPress", ER_EVENT_PRESS},
         {"onLongPress", ER_EVENT_LONG_PRESS},
         {"onPressIn", ER_EVENT_PRESS_IN},
@@ -2405,11 +2437,11 @@ static bool event_type_from_name(const char* name, EREventType* out)
         {"onChange", ER_EVENT_VALUE_CHANGE},      /* Dial: the new value */
         {"onValueChange", ER_EVENT_VALUE_CHANGE}, /* Switch: the new boolean; Dial: the new value */
     };
-    for (size_t i = 0; i < sizeof(k_map) / sizeof(k_map[0]); i++)
+    for (size_t entry_index = 0; entry_index < sizeof(k_handler_props) / sizeof(k_handler_props[0]); entry_index++)
     {
-        if (strcmp(name, k_map[i].name) == 0)
+        if (strcmp(name, k_handler_props[entry_index].name) == 0)
         {
-            *out = k_map[i].type;
+            *out = k_handler_props[entry_index].type;
             return true;
         }
     }
@@ -2434,18 +2466,18 @@ static bool query_type_from_name(const char* name, ERResponderQuery* out)
     {
         const char* name;
         ERResponderQuery query;
-    } k_map[] = {
+    } k_query_props[] = {
         {"onStartShouldSetResponder", ER_QUERY_START_SHOULD_SET},
         {"onStartShouldSetResponderCapture", ER_QUERY_START_SHOULD_SET_CAPTURE},
         {"onMoveShouldSetResponder", ER_QUERY_MOVE_SHOULD_SET},
         {"onMoveShouldSetResponderCapture", ER_QUERY_MOVE_SHOULD_SET_CAPTURE},
         {"onResponderTerminationRequest", ER_QUERY_TERMINATION_REQUEST},
     };
-    for (size_t i = 0; i < sizeof(k_map) / sizeof(k_map[0]); i++)
+    for (size_t entry_index = 0; entry_index < sizeof(k_query_props) / sizeof(k_query_props[0]); entry_index++)
     {
-        if (strcmp(name, k_map[i].name) == 0)
+        if (strcmp(name, k_query_props[entry_index].name) == 0)
         {
-            *out = k_map[i].query;
+            *out = k_query_props[entry_index].query;
             return true;
         }
     }
@@ -2463,47 +2495,50 @@ static bool query_type_from_name(const char* name, ERResponderQuery* out)
  */
 static JSValue build_event_object(JSContext* ctx, EREventType type, const EREventData* data)
 {
-    JSValue ev = JS_NewObject(ctx);
+    JSValue event = JS_NewObject(ctx);
     if (type < ER_EVENT_TYPE_COUNT_)
     {
-        JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, k_event_names[type]));
+        JS_SetPropertyStr(ctx, event, "type", JS_NewString(ctx, k_event_names[type]));
     }
-    JS_SetPropertyStr(ctx, ev, "x", JS_NewInt32(ctx, data->x));
-    JS_SetPropertyStr(ctx, ev, "y", JS_NewInt32(ctx, data->y));
-    JS_SetPropertyStr(ctx, ev, "dx", JS_NewInt32(ctx, data->dx));
-    JS_SetPropertyStr(ctx, ev, "dy", JS_NewInt32(ctx, data->dy));
-    JS_SetPropertyStr(ctx, ev, "vx", JS_NewFloat64(ctx, (double)data->vx));
-    JS_SetPropertyStr(ctx, ev, "vy", JS_NewFloat64(ctx, (double)data->vy));
+    JS_SetPropertyStr(ctx, event, "x", JS_NewInt32(ctx, data->x));
+    JS_SetPropertyStr(ctx, event, "y", JS_NewInt32(ctx, data->y));
+    JS_SetPropertyStr(ctx, event, "dx", JS_NewInt32(ctx, data->dx));
+    JS_SetPropertyStr(ctx, event, "dy", JS_NewInt32(ctx, data->dy));
+    JS_SetPropertyStr(ctx, event, "vx", JS_NewFloat64(ctx, (double)data->vx));
+    JS_SetPropertyStr(ctx, event, "vy", JS_NewFloat64(ctx, (double)data->vy));
 
     if (type == ER_EVENT_SCROLL)
     {
-        JS_SetPropertyStr(ctx, ev, "scrollX", JS_NewFloat64(ctx, (double)data->scroll_x));
-        JS_SetPropertyStr(ctx, ev, "scrollY", JS_NewFloat64(ctx, (double)data->scroll_y));
+        JS_SetPropertyStr(ctx, event, "scrollX", JS_NewFloat64(ctx, (double)data->scroll_x));
+        JS_SetPropertyStr(ctx, event, "scrollY", JS_NewFloat64(ctx, (double)data->scroll_y));
     }
     else if (type == ER_EVENT_LAYOUT)
     {
-        JSValue r = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, r, "x", JS_NewInt32(ctx, data->layout_rect.x));
-        JS_SetPropertyStr(ctx, r, "y", JS_NewInt32(ctx, data->layout_rect.y));
-        JS_SetPropertyStr(ctx, r, "width", JS_NewInt32(ctx, data->layout_rect.w));
-        JS_SetPropertyStr(ctx, r, "height", JS_NewInt32(ctx, data->layout_rect.h));
+        JSValue layout = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, layout, "x", JS_NewInt32(ctx, data->layout_rect.x));
+        JS_SetPropertyStr(ctx, layout, "y", JS_NewInt32(ctx, data->layout_rect.y));
+        JS_SetPropertyStr(ctx, layout, "width", JS_NewInt32(ctx, data->layout_rect.w));
+        JS_SetPropertyStr(ctx, layout, "height", JS_NewInt32(ctx, data->layout_rect.h));
         // React Native reads it from e.nativeEvent.layout; e.layout is the same object.
-        JSValue native = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, native, "layout", JS_DupValue(ctx, r));
-        JS_SetPropertyStr(ctx, ev, "nativeEvent", native);
-        JS_SetPropertyStr(ctx, ev, "layout", r);
+        JSValue native_event = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, native_event, "layout", JS_DupValue(ctx, layout));
+        JS_SetPropertyStr(ctx, event, "nativeEvent", native_event);
+        JS_SetPropertyStr(ctx, event, "layout", layout);
     }
     else if (type == ER_EVENT_CHANGE_TEXT && data->changed_text)
     {
-        JS_SetPropertyStr(ctx, ev, "text", JS_NewString(ctx, data->changed_text));
+        JS_SetPropertyStr(ctx, event, "text", JS_NewString(ctx, data->changed_text));
     }
     else if (type == ER_EVENT_VALUE_CHANGE)
     {
-        JS_SetPropertyStr(ctx, ev, "value", JS_NewFloat64(ctx, (double)data->value));
-        JS_SetPropertyStr(ctx, ev, "valueStart", JS_NewFloat64(ctx, (double)data->value_start));
+        JS_SetPropertyStr(ctx, event, "value", JS_NewFloat64(ctx, (double)data->value));
+        JS_SetPropertyStr(ctx, event, "valueStart", JS_NewFloat64(ctx, (double)data->value_start));
     }
-    return ev;
+    return event;
 }
+
+/** @brief Most arguments a batched callback takes. */
+#define ER_BATCHED_MAX_ARGS 2
 
 /**
  * @brief Calls a JS callback inside the installed batcher, or directly when there is none.
@@ -2513,32 +2548,33 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
  * bridge dispatches this way carries one (an event object, a changed string, a finished flag) or
  * two (a Dial's value and the low end of its band).
  *
- * @param[in] ctx   QuickJS context.
- * @param[in] fn    Callback to invoke.
- * @param[in] argc  Argument count (0..2).
- * @param[in] argv  Arguments.
+ * @param[in] ctx       QuickJS context.
+ * @param[in] callback  Callback to invoke.
+ * @param[in] argc      Argument count (0..2).
+ * @param[in] argv      Arguments.
  *
  * @return The callback's return value, or an exception (caller frees either way).
  */
-static JSValue bridge_call_batched(JSContext* ctx, JSValueConst fn, int argc, JSValueConst* argv)
+static JSValue bridge_call_batched(JSContext* ctx, JSValueConst callback, int argc, JSValueConst* argv)
 {
     if (!JS_IsObject(s_batch_slots))
     {
-        return JS_Call(ctx, fn, JS_UNDEFINED, argc, argv); /* before er_bridge_install */
+        return JS_Call(ctx, callback, JS_UNDEFINED, argc, argv); /* before er_bridge_install */
     }
-    JSValue wrap = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_WRAP);
-    JSValue ret;
-    if (JS_IsFunction(ctx, wrap))
+    JSValue batcher = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_WRAP);
+    JSValue result;
+    if (JS_IsFunction(ctx, batcher))
     {
-        JSValueConst callv[3] = {fn, (argc > 0) ? argv[0] : JS_UNDEFINED, (argc > 1) ? argv[1] : JS_UNDEFINED};
-        ret = JS_Call(ctx, wrap, JS_UNDEFINED, argc + 1, callv);
+        JSValueConst batcher_arguments[ER_BATCHED_MAX_ARGS + 1] = {
+            callback, (argc > 0) ? argv[0] : JS_UNDEFINED, (argc > 1) ? argv[1] : JS_UNDEFINED};
+        result = JS_Call(ctx, batcher, JS_UNDEFINED, argc + 1, batcher_arguments);
     }
     else
     {
-        ret = JS_Call(ctx, fn, JS_UNDEFINED, argc, argv);
+        result = JS_Call(ctx, callback, JS_UNDEFINED, argc, argv);
     }
-    JS_FreeValue(ctx, wrap);
-    return ret;
+    JS_FreeValue(ctx, batcher);
+    return result;
 }
 
 /**
@@ -2550,31 +2586,31 @@ static JSValue bridge_call_batched(JSContext* ctx, JSValueConst fn, int argc, JS
  */
 static void bridge_report_exception(JSContext* ctx, const char* where)
 {
-    JSValue exc = JS_GetException(ctx);
+    JSValue exception = JS_GetException(ctx);
     if (s_uncaught_handler)
     {
-        s_uncaught_handler(ctx, exc, where);
-        JS_FreeValue(ctx, exc);
+        s_uncaught_handler(ctx, exception, where);
+        JS_FreeValue(ctx, exception);
         return;
     }
-    const char* msg = JS_ToCString(ctx, exc);
-    fprintf(stderr, "JS %s exception: %s\n", where, msg ? msg : "(unknown)");
-    if (msg)
+    const char* message = JS_ToCString(ctx, exception);
+    fprintf(stderr, "JS %s exception: %s\n", where, message ? message : "(unknown)");
+    if (message)
     {
-        JS_FreeCString(ctx, msg);
+        JS_FreeCString(ctx, message);
     }
-    JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+    JSValue stack = JS_GetPropertyStr(ctx, exception, "stack");
     if (!JS_IsUndefined(stack))
     {
-        const char* st = JS_ToCString(ctx, stack);
-        if (st)
+        const char* stack_text = JS_ToCString(ctx, stack);
+        if (stack_text)
         {
-            fprintf(stderr, "%s\n", st);
-            JS_FreeCString(ctx, st);
+            fprintf(stderr, "%s\n", stack_text);
+            JS_FreeCString(ctx, stack_text);
         }
     }
     JS_FreeValue(ctx, stack);
-    JS_FreeValue(ctx, exc);
+    JS_FreeValue(ctx, exception);
 }
 
 /**
@@ -2598,20 +2634,20 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
     const uint32_t key = (uint32_t)(uintptr_t)user_data;
     const EREventType type = (EREventType)(key % ER_EVENT_TYPE_COUNT_);
 
-    JSValue cb = JS_GetPropertyUint32(ctx, s_event_handlers, key);
-    if (JS_IsFunction(ctx, cb))
+    JSValue handler = JS_GetPropertyUint32(ctx, s_event_handlers, key);
+    if (JS_IsFunction(ctx, handler))
     {
         /* Native events arrive outside any React batch, so without this scope a handler that sets
            two pieces of state renders and paints twice. */
         batch_enter();
-        JSValue ev2 = JS_UNDEFINED;
-        int argc2 = 1;
+        JSValue second_argument = JS_UNDEFINED;
+        int argument_count = 1;
         /* onChangeText receives the new TEXT directly (RN convention, matching Flow B's AOT lowering);
          * every other event gets the event object. */
-        JSValue ev;
+        JSValue first_argument;
         if (type == ER_EVENT_CHANGE_TEXT)
         {
-            ev = JS_NewString(ctx, data->changed_text ? data->changed_text : "");
+            first_argument = JS_NewString(ctx, data->changed_text ? data->changed_text : "");
         }
         else if (type == ER_EVENT_VALUE_CHANGE)
         {
@@ -2619,27 +2655,27 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
              * onValueChange(boolean)), a number for Dial. A RANGE Dial passes the band's low end as a
              * SECOND argument — two plain numbers rather than an object, so the AOT can lower the same
              * handler shape to `data->value` / `data->value_start` with no allocation on device. */
-            ev = (er_node_get_type(node) == ER_NODE_SWITCH) ? JS_NewBool(ctx, data->value != 0.0f)
-                                                            : JS_NewFloat64(ctx, (double)data->value);
-            ev2 = JS_NewFloat64(ctx, (double)data->value_start);
-            argc2 = 2;
+            first_argument = (er_node_get_type(node) == ER_NODE_SWITCH) ? JS_NewBool(ctx, data->value != 0.0f)
+                                                                        : JS_NewFloat64(ctx, (double)data->value);
+            second_argument = JS_NewFloat64(ctx, (double)data->value_start);
+            argument_count = ER_BATCHED_MAX_ARGS;
         }
         else
         {
-            ev = build_event_object(ctx, type, data);
+            first_argument = build_event_object(ctx, type, data);
         }
-        JSValue argv2[2] = {ev, ev2};
-        JSValue ret = bridge_call_batched(ctx, cb, argc2, argv2);
-        if (JS_IsException(ret))
+        JSValue arguments[ER_BATCHED_MAX_ARGS] = {first_argument, second_argument};
+        JSValue result = bridge_call_batched(ctx, handler, argument_count, arguments);
+        if (JS_IsException(result))
         {
             bridge_report_exception(ctx, "event handler");
         }
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, ev);
-        JS_FreeValue(ctx, ev2);
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, first_argument);
+        JS_FreeValue(ctx, second_argument);
         batch_leave();
     }
-    JS_FreeValue(ctx, cb);
+    JS_FreeValue(ctx, handler);
 }
 
 /**
@@ -2667,23 +2703,23 @@ static bool bridge_query_trampoline(ERNode* node, const EREventData* data, void*
     const uint32_t key = (uint32_t)(uintptr_t)user_data;
 
     bool claim = false;
-    JSValue cb = JS_GetPropertyUint32(ctx, s_query_handlers, key);
-    if (JS_IsFunction(ctx, cb))
+    JSValue predicate = JS_GetPropertyUint32(ctx, s_query_handlers, key);
+    if (JS_IsFunction(ctx, predicate))
     {
-        JSValue ev = build_event_object(ctx, ER_EVENT_TYPE_COUNT_, data);
-        JSValue ret = JS_Call(ctx, cb, JS_UNDEFINED, 1, &ev);
-        if (JS_IsException(ret))
+        JSValue event = build_event_object(ctx, ER_EVENT_TYPE_COUNT_, data);
+        JSValue result = JS_Call(ctx, predicate, JS_UNDEFINED, 1, &event);
+        if (JS_IsException(result))
         {
             bridge_report_exception(ctx, "responder query");
         }
         else
         {
-            claim = JS_ToBool(ctx, ret) > 0;
+            claim = JS_ToBool(ctx, result) > 0;
         }
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, ev);
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, event);
     }
-    JS_FreeValue(ctx, cb);
+    JS_FreeValue(ctx, predicate);
     return claim;
 }
 
@@ -2702,6 +2738,12 @@ static void timer_clear_slot(JSContext* ctx, int slot)
     s_timers[slot].active = false;
     JS_SetPropertyUint32(ctx, s_timer_handlers, (uint32_t)slot, JS_UNDEFINED);
 }
+
+/** @brief setTimeout/setInterval's first argument after the callback and delay. */
+#define ER_TIMER_FIRST_EXTRA_ARG 2
+
+/** @brief Shortest setInterval period, so due_ms always advances. */
+#define ER_TIMER_MIN_INTERVAL_MS 1
 
 /**
  * @brief Shared implementation for setTimeout / setInterval.
@@ -2731,11 +2773,11 @@ static JSValue timer_register(JSContext* ctx, int argc, JSValueConst* argv, bool
     }
 
     int slot = -1;
-    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    for (int candidate = 0; candidate < ER_BRIDGE_MAX_TIMERS; candidate++)
     {
-        if (!s_timers[i].active)
+        if (!s_timers[candidate].active)
         {
-            slot = i;
+            slot = candidate;
             break;
         }
     }
@@ -2747,23 +2789,25 @@ static JSValue timer_register(JSContext* ctx, int argc, JSValueConst* argv, bool
 
     /* Stash [callback, ...extraArgs] in the JS-owned registry so it is GC-rooted and freed at
        teardown. The extra args (argv[2..]) are forwarded to the callback per the web spec. */
-    const int nargs = argc > 2 ? argc - 2 : 0;
+    const int extra_arg_count = argc > ER_TIMER_FIRST_EXTRA_ARG ? argc - ER_TIMER_FIRST_EXTRA_ARG : 0;
     JSValue bundle = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, bundle, 0, JS_DupValue(ctx, argv[0]));
-    for (int k = 0; k < nargs; k++)
+    for (int extra_index = 0; extra_index < extra_arg_count; extra_index++)
     {
-        JS_SetPropertyUint32(ctx, bundle, (uint32_t)(k + 1), JS_DupValue(ctx, argv[2 + k]));
+        JS_SetPropertyUint32(
+            ctx, bundle, (uint32_t)(extra_index + 1), JS_DupValue(ctx, argv[ER_TIMER_FIRST_EXTRA_ARG + extra_index]));
     }
     JS_SetPropertyUint32(ctx, s_timer_handlers, (uint32_t)slot, bundle);
 
-    ERBridgeTimer* t = &s_timers[slot];
-    t->active = true;
-    t->id = s_next_timer_id++;
-    t->nargs = nargs;
+    ERBridgeTimer* timer = &s_timers[slot];
+    timer->active = true;
+    timer->id = s_next_timer_id++;
+    timer->extra_arg_count = extra_arg_count;
     /* setInterval clamps to a 1ms floor so due_ms strictly advances (no per-pump busy-fire). */
-    t->interval_ms = is_interval ? (uint32_t)(delay < 1 ? 1 : delay) : 0U;
-    t->due_ms = er_now_ms() + (uint32_t)delay;
-    return JS_NewInt32(ctx, t->id);
+    timer->interval_ms =
+        is_interval ? (uint32_t)(delay < ER_TIMER_MIN_INTERVAL_MS ? ER_TIMER_MIN_INTERVAL_MS : delay) : 0U;
+    timer->due_ms = er_now_ms() + (uint32_t)delay;
+    return JS_NewInt32(ctx, timer->id);
 }
 
 /**
@@ -2805,11 +2849,11 @@ static JSValue js_clear_timer(JSContext* ctx, JSValueConst this_val, int argc, J
     {
         return JS_UNDEFINED;
     }
-    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    for (int slot = 0; slot < ER_BRIDGE_MAX_TIMERS; slot++)
     {
-        if (s_timers[i].active && s_timers[i].id == id)
+        if (s_timers[slot].active && s_timers[slot].id == id)
         {
-            timer_clear_slot(ctx, i);
+            timer_clear_slot(ctx, slot);
             break;
         }
     }
@@ -2827,12 +2871,12 @@ static void bridge_run_microtasks(JSContext* ctx)
     for (;;)
     {
         JSContext* job_ctx = NULL;
-        const int rc = JS_ExecutePendingJob(rt, &job_ctx);
-        if (rc == 0)
+        const int status = JS_ExecutePendingJob(rt, &job_ctx);
+        if (status == 0)
         {
             break; /* no more pending jobs */
         }
-        if (rc < 0 && job_ctx)
+        if (status < 0 && job_ctx)
         {
             bridge_report_exception(job_ctx, "promise job");
         }
@@ -2851,26 +2895,26 @@ static void bridge_run_microtasks(JSContext* ctx)
  */
 static void bridge_fire_due_timers(JSContext* ctx)
 {
-    const uint32_t now = er_now_ms();
+    const uint32_t now_ms = er_now_ms();
     for (int slot = 0; slot < ER_BRIDGE_MAX_TIMERS; slot++)
     {
-        ERBridgeTimer* t = &s_timers[slot];
-        if (!t->active)
+        ERBridgeTimer* timer = &s_timers[slot];
+        if (!timer->active)
         {
             continue;
         }
         /* Wrap-safe "due_ms <= now" comparison on the monotonic engine clock. */
-        if ((int32_t)(now - t->due_ms) < 0)
+        if ((int32_t)(now_ms - timer->due_ms) < 0)
         {
             continue;
         }
 
         JSValue bundle = JS_GetPropertyUint32(ctx, s_timer_handlers, (uint32_t)slot); /* owned */
-        const int nargs = t->nargs;
+        const int extra_arg_count = timer->extra_arg_count;
 
-        if (t->interval_ms > 0U)
+        if (timer->interval_ms > 0U)
         {
-            t->due_ms = now + t->interval_ms;
+            timer->due_ms = now_ms + timer->interval_ms;
         }
         else
         {
@@ -2879,28 +2923,28 @@ static void bridge_fire_due_timers(JSContext* ctx)
 
         if (JS_IsObject(bundle))
         {
-            JSValue fn = JS_GetPropertyUint32(ctx, bundle, 0);
-            JSValue* callv = NULL;
-            if (nargs > 0)
+            JSValue callback = JS_GetPropertyUint32(ctx, bundle, 0);
+            JSValue* extra_args = NULL;
+            if (extra_arg_count > 0)
             {
-                callv = (JSValue*)malloc(sizeof(JSValue) * (size_t)nargs);
-                for (int k = 0; k < nargs; k++)
+                extra_args = (JSValue*)malloc(sizeof(JSValue) * (size_t)extra_arg_count);
+                for (int extra_index = 0; extra_index < extra_arg_count; extra_index++)
                 {
-                    callv[k] = JS_GetPropertyUint32(ctx, bundle, (uint32_t)(k + 1));
+                    extra_args[extra_index] = JS_GetPropertyUint32(ctx, bundle, (uint32_t)(extra_index + 1));
                 }
             }
-            JSValue ret = JS_Call(ctx, fn, JS_UNDEFINED, nargs, callv);
-            if (JS_IsException(ret))
+            JSValue result = JS_Call(ctx, callback, JS_UNDEFINED, extra_arg_count, extra_args);
+            if (JS_IsException(result))
             {
                 bridge_report_exception(ctx, "timer callback");
             }
-            JS_FreeValue(ctx, ret);
-            JS_FreeValue(ctx, fn);
-            for (int k = 0; k < nargs; k++)
+            JS_FreeValue(ctx, result);
+            JS_FreeValue(ctx, callback);
+            for (int extra_index = 0; extra_index < extra_arg_count; extra_index++)
             {
-                JS_FreeValue(ctx, callv[k]);
+                JS_FreeValue(ctx, extra_args[extra_index]);
             }
-            free(callv);
+            free(extra_args);
         }
         JS_FreeValue(ctx, bundle);
     }
@@ -2954,11 +2998,11 @@ static bool bridge_pump_has_js_work(JSContext* ctx)
     {
         return true;
     }
-    const uint32_t now = er_now_ms();
-    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    const uint32_t now_ms = er_now_ms();
+    for (int slot = 0; slot < ER_BRIDGE_MAX_TIMERS; slot++)
     {
         /* Wrap-safe "due_ms <= now", as in bridge_fire_due_timers. */
-        if (s_timers[i].active && (int32_t)(now - s_timers[i].due_ms) >= 0)
+        if (s_timers[slot].active && (int32_t)(now_ms - s_timers[slot].due_ms) >= 0)
         {
             return true;
         }
@@ -3084,13 +3128,13 @@ ER_BRIDGE_MARSHAL_FN(js_create_node)
         return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
     }
 
-    const char* type_str = JS_ToCString(ctx, argv[0]);
-    if (!type_str)
+    const char* type_name = JS_ToCString(ctx, argv[0]);
+    if (!type_name)
     {
         return JS_NewInt32(ctx, ER_BRIDGE_HANDLE_INVALID);
     }
-    ERNode* node = er_node_create(map_node_type(type_str));
-    JS_FreeCString(ctx, type_str);
+    ERNode* node = er_node_create(map_node_type(type_name));
+    JS_FreeCString(ctx, type_name);
 
     if (!node)
     {
@@ -3147,13 +3191,15 @@ static void free_node_slot(JSContext* ctx, int32_t slot)
     }
     if (s_bridge_ctx)
     {
-        for (uint32_t t = 0; t < ER_EVENT_TYPE_COUNT_; t++)
+        for (uint32_t event_type = 0; event_type < ER_EVENT_TYPE_COUNT_; event_type++)
         {
-            JS_SetPropertyUint32(ctx, s_event_handlers, (uint32_t)slot * ER_EVENT_TYPE_COUNT_ + t, JS_UNDEFINED);
+            JS_SetPropertyUint32(
+                ctx, s_event_handlers, (uint32_t)slot * ER_EVENT_TYPE_COUNT_ + event_type, JS_UNDEFINED);
         }
-        for (uint32_t q = 0; q < ER_RESPONDER_QUERY_COUNT; q++)
+        for (uint32_t query = 0; query < ER_RESPONDER_QUERY_COUNT; query++)
         {
-            JS_SetPropertyUint32(ctx, s_query_handlers, (uint32_t)slot * ER_RESPONDER_QUERY_COUNT + q, JS_UNDEFINED);
+            JS_SetPropertyUint32(
+                ctx, s_query_handlers, (uint32_t)slot * ER_RESPONDER_QUERY_COUNT + query, JS_UNDEFINED);
         }
     }
     slot_free(slot);
@@ -3202,10 +3248,10 @@ ER_BRIDGE_MARSHAL_FN(js_destroy_node)
     {
         return JS_UNDEFINED;
     }
-    int32_t h = 0;
-    if (JS_ToInt32(ctx, &h, argv[0]) == 0)
+    int32_t handle = 0;
+    if (JS_ToInt32(ctx, &handle, argv[0]) == 0)
     {
-        ERNode* node = handle_node(h);
+        ERNode* node = handle_node(handle);
         if (node)
         {
             /* Destroy the WHOLE subtree (engine nodes + handles + handler refs). React hands us only the
@@ -3351,6 +3397,9 @@ ER_BRIDGE_MARSHAL_FN(js_set_props)
     return JS_UNDEFINED;
 }
 
+/** @brief A span style field that inherits from its Text node. */
+#define ER_SPAN_STYLE_INHERIT 0xFFU
+
 /**
  * @brief NativeUI.setTextSpans(handle, spans) — sets inline styled text spans on a Text node.
  *
@@ -3384,106 +3433,106 @@ ER_BRIDGE_MARSHAL_FN(js_set_text_spans)
         return JS_UNDEFINED;
     }
 
-    JSValue len_val = JS_GetPropertyStr(ctx, argv[1], "length");
-    int32_t len = 0;
-    JS_ToInt32(ctx, &len, len_val);
-    JS_FreeValue(ctx, len_val);
-    if (len <= 0)
+    JSValue length_value = JS_GetPropertyStr(ctx, argv[1], "length");
+    int32_t span_count = 0;
+    JS_ToInt32(ctx, &span_count, length_value);
+    JS_FreeValue(ctx, length_value);
+    if (span_count <= 0)
     {
         er_node_set_text_spans(node, NULL, 0);
         return JS_UNDEFINED;
     }
-    if (len > ER_TEXT_MAX_SPANS)
+    if (span_count > ER_TEXT_MAX_SPANS)
     {
-        len = ER_TEXT_MAX_SPANS;
+        span_count = ER_TEXT_MAX_SPANS;
     }
 
     ERTextSpan spans[ER_TEXT_MAX_SPANS];
-    for (int32_t i = 0; i < len; i++)
+    for (int32_t span_index = 0; span_index < span_count; span_index++)
     {
-        ERTextSpan* sp = &spans[i];
-        memset(sp, 0, sizeof(*sp));
+        ERTextSpan* span = &spans[span_index];
+        memset(span, 0, sizeof(*span));
         /* Sentinels: every style field inherits from the base node unless overridden below. */
-        sp->font_weight = 0xFFU;
-        sp->font_style = 0xFFU;
-        sp->text_decoration = 0xFFU;
-        sp->letter_spacing = ER_LAYOUT_AUTO;
+        span->font_weight = ER_SPAN_STYLE_INHERIT;
+        span->font_style = ER_SPAN_STYLE_INHERIT;
+        span->text_decoration = ER_SPAN_STYLE_INHERIT;
+        span->letter_spacing = ER_LAYOUT_AUTO;
 
-        JSValue seg = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
-        JSValue v;
+        JSValue segment = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)span_index);
+        JSValue value;
 
-        if (prop_get(ctx, seg, "text", &v))
+        if (prop_get(ctx, segment, "text", &value))
         {
-            const char* s = JS_ToCString(ctx, v);
-            if (s)
+            const char* text = JS_ToCString(ctx, value);
+            if (text)
             {
-                size_t n = strlen(s);
-                if (n > ER_SPAN_TEXT_MAX)
+                size_t text_length = strlen(text);
+                if (text_length > ER_SPAN_TEXT_MAX)
                 {
-                    n = ER_SPAN_TEXT_MAX;
+                    text_length = ER_SPAN_TEXT_MAX;
                 }
-                memcpy(sp->text, s, n);
-                sp->text[n] = '\0';
-                JS_FreeCString(ctx, s);
+                memcpy(span->text, text, text_length);
+                span->text[text_length] = '\0';
+                JS_FreeCString(ctx, text);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, seg, "color", &v))
+        if (prop_get(ctx, segment, "color", &value))
         {
-            uint32_t c = 0;
-            if (to_color(ctx, v, &c))
+            uint32_t color = 0;
+            if (to_color(ctx, value, &color))
             {
-                sp->color = c;
+                span->color = color;
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, seg, "fontSize", &v))
+        if (prop_get(ctx, segment, "fontSize", &value))
         {
-            int32_t fs = 0;
-            if (JS_ToInt32(ctx, &fs, v) == 0 && fs > 0)
+            int32_t font_size = 0;
+            if (JS_ToInt32(ctx, &font_size, value) == 0 && font_size > 0)
             {
-                sp->font_size = (uint8_t)(fs > 255 ? 255 : fs);
+                span->font_size = (uint8_t)(font_size > UINT8_MAX ? UINT8_MAX : font_size);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, seg, "fontWeight", &v))
+        if (prop_get(ctx, segment, "fontWeight", &value))
         {
-            sp->font_weight = to_font_weight(ctx, v, sp->font_weight);
-            JS_FreeValue(ctx, v);
+            span->font_weight = to_font_weight(ctx, value, span->font_weight);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, seg, "fontStyle", &v))
+        if (prop_get(ctx, segment, "fontStyle", &value))
         {
-            const char* s = JS_ToCString(ctx, v);
-            if (s)
+            const char* text = JS_ToCString(ctx, value);
+            if (text)
             {
-                sp->font_style = map_font_style(s);
-                JS_FreeCString(ctx, s);
+                span->font_style = map_font_style(text);
+                JS_FreeCString(ctx, text);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, seg, "textDecorationLine", &v))
+        if (prop_get(ctx, segment, "textDecorationLine", &value))
         {
-            const char* s = JS_ToCString(ctx, v);
-            if (s)
+            const char* text = JS_ToCString(ctx, value);
+            if (text)
             {
-                sp->text_decoration = map_text_decoration(s);
-                JS_FreeCString(ctx, s);
+                span->text_decoration = map_text_decoration(text);
+                JS_FreeCString(ctx, text);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, seg, "letterSpacing", &v))
+        if (prop_get(ctx, segment, "letterSpacing", &value))
         {
-            int32_t ls = 0;
-            if (JS_ToInt32(ctx, &ls, v) == 0)
+            int32_t letter_spacing = 0;
+            if (JS_ToInt32(ctx, &letter_spacing, value) == 0)
             {
-                sp->letter_spacing = (int16_t)ls;
+                span->letter_spacing = (int16_t)letter_spacing;
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        JS_FreeValue(ctx, seg);
+        JS_FreeValue(ctx, segment);
     }
 
-    er_node_set_text_spans(node, spans, (uint8_t)len);
+    er_node_set_text_spans(node, spans, (uint8_t)span_count);
     return JS_UNDEFINED;
 }
 
@@ -3495,70 +3544,71 @@ ER_BRIDGE_MARSHAL_FN(js_set_text_spans)
 #define KBD_MAX_KEYS 160
 #define KBD_MAX_ROWS 28
 #define KBD_MAX_LAYERS 6
-#define KBD_STR_POOL 1536
+#define KBD_STRING_POOL_BYTES 1536
+#define KBD_NO_HIGHLIGHT 0xFFU
 static ERKeyboardKey s_kbd_keys[KBD_MAX_KEYS];
 static ERKeyboardRow s_kbd_rows[KBD_MAX_ROWS];
 static ERKeyboardLayer s_kbd_layers[KBD_MAX_LAYERS];
-static ERKeyboardConfig s_kbd_cfg;
-static char s_kbd_strs[KBD_STR_POOL];
-static int s_kbd_str_used;
+static ERKeyboardConfig s_kbd_config;
+static char s_kbd_strings[KBD_STRING_POOL_BYTES];
+static int s_kbd_strings_used;
 
 /** Length of a JS array (0 when not an array). */
-static int arr_len(JSContext* ctx, JSValueConst arr)
+static int arr_len(JSContext* ctx, JSValueConst array)
 {
-    if (!JS_IsArray(arr))
+    if (!JS_IsArray(array))
         return 0;
-    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
-    int32_t n = 0;
-    JS_ToInt32(ctx, &n, lv);
-    JS_FreeValue(ctx, lv);
-    return n < 0 ? 0 : n;
+    JSValue length_value = JS_GetPropertyStr(ctx, array, "length");
+    int32_t length = 0;
+    JS_ToInt32(ctx, &length, length_value);
+    JS_FreeValue(ctx, length_value);
+    return length < 0 ? 0 : length;
 }
 
 /** Bump-copies a JS string into the persistent pool; returns a stable pointer or NULL (empty / pool full). */
-static const char* kbd_intern(JSContext* ctx, JSValueConst v)
+static const char* kbd_intern(JSContext* ctx, JSValueConst value)
 {
-    const char* s = JS_ToCString(ctx, v);
-    if (!s)
+    const char* text = JS_ToCString(ctx, value);
+    if (!text)
         return NULL;
-    const size_t n = strlen(s);
-    if (n == 0 || (size_t)s_kbd_str_used + n + 1U > KBD_STR_POOL)
+    const size_t length = strlen(text);
+    if (length == 0 || (size_t)s_kbd_strings_used + length + 1U > KBD_STRING_POOL_BYTES)
     {
-        JS_FreeCString(ctx, s);
+        JS_FreeCString(ctx, text);
         return NULL;
     }
-    char* dst = &s_kbd_strs[s_kbd_str_used];
-    memcpy(dst, s, n + 1);
-    s_kbd_str_used += (int)(n + 1);
-    JS_FreeCString(ctx, s);
-    return dst;
+    char* copy = &s_kbd_strings[s_kbd_strings_used];
+    memcpy(copy, text, length + 1);
+    s_kbd_strings_used += (int)(length + 1);
+    JS_FreeCString(ctx, text);
+    return copy;
 }
 
 /** Interns object[name] (a string) into the pool, or NULL when absent. */
-static const char* kbd_intern_prop(JSContext* ctx, JSValueConst obj, const char* name)
+static const char* kbd_intern_prop(JSContext* ctx, JSValueConst object, const char* name)
 {
-    JSValue v;
-    const char* r = NULL;
-    if (prop_get(ctx, obj, name, &v))
+    JSValue value;
+    const char* interned = NULL;
+    if (prop_get(ctx, object, name, &value))
     {
-        r = kbd_intern(ctx, v);
-        JS_FreeValue(ctx, v);
+        interned = kbd_intern(ctx, value);
+        JS_FreeValue(ctx, value);
     }
-    return r;
+    return interned;
 }
 
 /** Reads object[name] as an int, returning whether it was present. */
-static bool kbd_int(JSContext* ctx, JSValueConst obj, const char* name, int* out)
+static bool kbd_int(JSContext* ctx, JSValueConst object, const char* name, int* out)
 {
-    JSValue v;
-    if (prop_get(ctx, obj, name, &v))
+    JSValue value;
+    if (prop_get(ctx, object, name, &value))
     {
-        int32_t n = 0;
-        const bool ok = JS_ToInt32(ctx, &n, v) == 0;
-        JS_FreeValue(ctx, v);
+        int32_t number = 0;
+        const bool ok = JS_ToInt32(ctx, &number, value) == 0;
+        JS_FreeValue(ctx, value);
         if (ok)
         {
-            *out = n;
+            *out = number;
             return true;
         }
     }
@@ -3566,29 +3616,29 @@ static bool kbd_int(JSContext* ctx, JSValueConst obj, const char* name, int* out
 }
 
 /** True when object[name] is a present, truthy boolean. */
-static bool kbd_bool(JSContext* ctx, JSValueConst obj, const char* name)
+static bool kbd_bool(JSContext* ctx, JSValueConst object, const char* name)
 {
-    JSValue v;
-    bool r = false;
-    if (prop_get(ctx, obj, name, &v))
+    JSValue value;
+    bool truthy = false;
+    if (prop_get(ctx, object, name, &value))
     {
-        r = JS_ToBool(ctx, v) > 0;
-        JS_FreeValue(ctx, v);
+        truthy = JS_ToBool(ctx, value) > 0;
+        JS_FreeValue(ctx, value);
     }
-    return r;
+    return truthy;
 }
 
 /** Reads object[name] as a color into *out, returning whether present + valid. */
-static bool kbd_color(JSContext* ctx, JSValueConst obj, const char* name, uint32_t* out)
+static bool kbd_color(JSContext* ctx, JSValueConst object, const char* name, uint32_t* out)
 {
-    JSValue v;
-    bool r = false;
-    if (prop_get(ctx, obj, name, &v))
+    JSValue value;
+    bool valid = false;
+    if (prop_get(ctx, object, name, &value))
     {
-        r = to_color(ctx, v, out);
-        JS_FreeValue(ctx, v);
+        valid = to_color(ctx, value, out);
+        JS_FreeValue(ctx, value);
     }
-    return r;
+    return valid;
 }
 
 /** @brief JS `setKeyboardConfig(config)` — applies a custom on-screen-keyboard layout/appearance. */
@@ -3600,95 +3650,97 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
         er_keyboard_set_config(NULL); /* restore the built-in default */
         return JS_UNDEFINED;
     }
-    JSValueConst cfgv = argv[0];
-    ERKeyboardConfig* cfg = &s_kbd_cfg;
-    memset(cfg, 0, sizeof(*cfg));
-    s_kbd_str_used = 0;
-    int nkeys = 0, nrows = 0, nlayers = 0, tmp = 0;
+    JSValueConst config_object = argv[0];
+    ERKeyboardConfig* config = &s_kbd_config;
+    memset(config, 0, sizeof(*config));
+    s_kbd_strings_used = 0;
+    int key_count = 0, row_count = 0, layer_count = 0, number = 0;
 
-    kbd_color(ctx, cfgv, "panelColor", &cfg->panel_color);
-    kbd_color(ctx, cfgv, "keyColor", &cfg->key_color);
-    kbd_color(ctx, cfgv, "keyActiveColor", &cfg->key_active_color);
-    kbd_color(ctx, cfgv, "labelColor", &cfg->label_color);
-    if (kbd_int(ctx, cfgv, "fontSize", &tmp))
-        cfg->font_size_px = (uint8_t)tmp;
-    if (kbd_int(ctx, cfgv, "rowHeight", &tmp))
-        cfg->row_height_px = (uint16_t)tmp;
-    if (kbd_int(ctx, cfgv, "keyGap", &tmp))
-        cfg->key_gap_px = (uint8_t)tmp;
-    if (kbd_int(ctx, cfgv, "keyRadius", &tmp))
-        cfg->key_radius_px = (uint8_t)tmp;
-    if (kbd_int(ctx, cfgv, "gridCols", &tmp))
-        cfg->grid_cols = (uint8_t)tmp;
+    kbd_color(ctx, config_object, "panelColor", &config->panel_color);
+    kbd_color(ctx, config_object, "keyColor", &config->key_color);
+    kbd_color(ctx, config_object, "keyActiveColor", &config->key_active_color);
+    kbd_color(ctx, config_object, "labelColor", &config->label_color);
+    if (kbd_int(ctx, config_object, "fontSize", &number))
+        config->font_size_px = (uint8_t)number;
+    if (kbd_int(ctx, config_object, "rowHeight", &number))
+        config->row_height_px = (uint16_t)number;
+    if (kbd_int(ctx, config_object, "keyGap", &number))
+        config->key_gap_px = (uint8_t)number;
+    if (kbd_int(ctx, config_object, "keyRadius", &number))
+        config->key_radius_px = (uint8_t)number;
+    if (kbd_int(ctx, config_object, "gridCols", &number))
+        config->grid_cols = (uint8_t)number;
 
-    JSValue layers = JS_GetPropertyStr(ctx, cfgv, "layers");
+    JSValue layers = JS_GetPropertyStr(ctx, config_object, "layers");
     if (JS_IsArray(layers))
     {
-        const int nl = arr_len(ctx, layers);
-        for (int li = 0; li < nl && nlayers < KBD_MAX_LAYERS; li++)
+        const int layer_total = arr_len(ctx, layers);
+        for (int layer_index = 0; layer_index < layer_total && layer_count < KBD_MAX_LAYERS; layer_index++)
         {
-            JSValue layer = JS_GetPropertyUint32(ctx, layers, (uint32_t)li);
-            const int row_start = nrows;
-            const int nr = arr_len(ctx, layer);
-            for (int ri = 0; ri < nr && nrows < KBD_MAX_ROWS; ri++)
+            JSValue layer = JS_GetPropertyUint32(ctx, layers, (uint32_t)layer_index);
+            const int row_start = row_count;
+            const int row_total = arr_len(ctx, layer);
+            for (int row_index = 0; row_index < row_total && row_count < KBD_MAX_ROWS; row_index++)
             {
-                JSValue row = JS_GetPropertyUint32(ctx, layer, (uint32_t)ri);
-                const int key_start = nkeys;
-                const int nk = arr_len(ctx, row);
-                for (int ki = 0; ki < nk && nkeys < KBD_MAX_KEYS; ki++)
+                JSValue row = JS_GetPropertyUint32(ctx, layer, (uint32_t)row_index);
+                const int key_start = key_count;
+                const int key_total = arr_len(ctx, row);
+                for (int key_index = 0; key_index < key_total && key_count < KBD_MAX_KEYS; key_index++)
                 {
-                    JSValue key = JS_GetPropertyUint32(ctx, row, (uint32_t)ki);
-                    ERKeyboardKey* k = &s_kbd_keys[nkeys++];
-                    memset(k, 0, sizeof(*k));
-                    k->span = 1;
-                    k->highlight_layer = 0xFFU;
-                    const char* jlabel = kbd_intern_prop(ctx, key, "label");
+                    JSValue key = JS_GetPropertyUint32(ctx, row, (uint32_t)key_index);
+                    ERKeyboardKey* keyboard_key = &s_kbd_keys[key_count++];
+                    memset(keyboard_key, 0, sizeof(*keyboard_key));
+                    keyboard_key->span = 1;
+                    keyboard_key->highlight_layer = KBD_NO_HIGHLIGHT;
+                    const char* label = kbd_intern_prop(ctx, key, "label");
                     int layer_target = 0;
                     if (kbd_bool(ctx, key, "backspace"))
                     {
-                        k->type = ER_KBD_KEY_BACKSPACE;
-                        k->label = jlabel ? jlabel : "<";
+                        keyboard_key->type = ER_KBD_KEY_BACKSPACE;
+                        keyboard_key->label = label ? label : "<";
                     }
                     else if (kbd_bool(ctx, key, "done"))
                     {
-                        k->type = ER_KBD_KEY_DONE;
-                        k->label = jlabel ? jlabel : "OK";
+                        keyboard_key->type = ER_KBD_KEY_DONE;
+                        keyboard_key->label = label ? label : "OK";
                     }
                     else if (kbd_int(ctx, key, "layer", &layer_target))
                     {
-                        k->type = ER_KBD_KEY_LAYER;
-                        k->layer = (uint8_t)layer_target;
-                        k->label = jlabel;
+                        keyboard_key->type = ER_KBD_KEY_LAYER;
+                        keyboard_key->layer = (uint8_t)layer_target;
+                        keyboard_key->label = label;
                     }
                     else
                     {
-                        const char* ch = kbd_intern_prop(ctx, key, "char");
-                        k->type = ER_KBD_KEY_CHAR;
-                        k->text = ch;
-                        k->label = jlabel ? jlabel : ((ch && ch[0] == ' ') ? NULL : ch); /* blank space bar */
+                        const char* character = kbd_intern_prop(ctx, key, "char");
+                        keyboard_key->type = ER_KBD_KEY_CHAR;
+                        keyboard_key->text = character;
+                        keyboard_key->label =
+                            label ? label
+                                  : ((character && character[0] == ' ') ? NULL : character); /* blank space bar */
                     }
-                    if (kbd_int(ctx, key, "span", &tmp))
-                        k->span = (uint8_t)(tmp > 0 ? tmp : 1);
+                    if (kbd_int(ctx, key, "span", &number))
+                        keyboard_key->span = (uint8_t)(number > 0 ? number : 1);
                     if (kbd_bool(ctx, key, "highlight"))
-                        k->highlight_layer = (uint8_t)li;
+                        keyboard_key->highlight_layer = (uint8_t)layer_index;
                     JS_FreeValue(ctx, key);
                 }
-                ERKeyboardRow* r = &s_kbd_rows[nrows++];
-                r->keys = &s_kbd_keys[key_start];
-                r->count = (uint8_t)(nkeys - key_start);
+                ERKeyboardRow* keyboard_row = &s_kbd_rows[row_count++];
+                keyboard_row->keys = &s_kbd_keys[key_start];
+                keyboard_row->count = (uint8_t)(key_count - key_start);
                 JS_FreeValue(ctx, row);
             }
-            ERKeyboardLayer* L = &s_kbd_layers[nlayers++];
-            L->rows = &s_kbd_rows[row_start];
-            L->count = (uint8_t)(nrows - row_start);
+            ERKeyboardLayer* keyboard_layer = &s_kbd_layers[layer_count++];
+            keyboard_layer->rows = &s_kbd_rows[row_start];
+            keyboard_layer->count = (uint8_t)(row_count - row_start);
             JS_FreeValue(ctx, layer);
         }
-        cfg->layers = s_kbd_layers;
-        cfg->layer_count = (uint8_t)nlayers;
+        config->layers = s_kbd_layers;
+        config->layer_count = (uint8_t)layer_count;
     }
     JS_FreeValue(ctx, layers);
 
-    er_keyboard_set_config(cfg);
+    er_keyboard_set_config(config);
     return JS_UNDEFINED;
 }
 
@@ -3710,45 +3762,70 @@ _Static_assert(VEC_BRIDGE_MAX_OPS >= ERUI_VECTOR_TAPE_MAX, "VEC_BRIDGE_MAX_OPS m
 _Static_assert(VEC_BRIDGE_MAX_PAINTS >= ERUI_VECTOR_PAINTS_MAX,
                "VEC_BRIDGE_MAX_PAINTS must be >= ERUI_VECTOR_PAINTS_MAX");
 _Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADS_MAX, "VEC_BRIDGE_MAX_GRADS must be >= ERUI_VECTOR_GRADS_MAX");
-/* JS paint record width (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad + stroke_grad. */
+/* JS paint record (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad + stroke_grad. */
+#define VEC_PAINT_FILL 0
+#define VEC_PAINT_STROKE 1
+#define VEC_PAINT_STROKE_WIDTH 2
+#define VEC_PAINT_MITER_LIMIT 3
+#define VEC_PAINT_CAP 4
+#define VEC_PAINT_JOIN 5
+#define VEC_PAINT_FILL_RULE 6
+#define VEC_PAINT_FILL_GRADIENT 7
+#define VEC_PAINT_STROKE_GRADIENT 8
 #define VEC_PAINT_STRIDE 9
-/* JS gradient record width (kept in sync with svg-ops.js encodeVectorGradients):
+/* JS gradient record (kept in sync with svg-ops.js encodeVectorGradients):
  * [type, stop_count, (color, position) × ER_VGRAD_MAX_STOPS, ax, ay, bx, by, r]. */
-#define VEC_GRAD_STRIDE (2 + ER_VGRAD_MAX_STOPS * 2 + 5)
+#define VEC_GRADIENT_TYPE 0
+#define VEC_GRADIENT_STOP_COUNT 1
+#define VEC_GRADIENT_STOPS 2
+#define VEC_GRADIENT_STOP_COLOR 0
+#define VEC_GRADIENT_STOP_POSITION 1
+#define VEC_GRADIENT_STOP_FIELDS 2
+#define VEC_GRADIENT_GEOMETRY (VEC_GRADIENT_STOPS + ER_VGRAD_MAX_STOPS * VEC_GRADIENT_STOP_FIELDS)
+#define VEC_GRADIENT_AX 0
+#define VEC_GRADIENT_AY 1
+#define VEC_GRADIENT_BX 2
+#define VEC_GRADIENT_BY 3
+#define VEC_GRADIENT_RADIUS 4
+#define VEC_GRADIENT_GEOMETRY_FIELDS 5
+#define VEC_GRADIENT_STRIDE (VEC_GRADIENT_GEOMETRY + VEC_GRADIENT_GEOMETRY_FIELDS)
+/* The optional dirty rect: [x, y, w, h], with its edges bounded well inside the int range. */
+#define VEC_DIRTY_RECT_FIELDS 4
+#define VEC_DIRTY_RECT_BOUND 1e9
 
 /** @brief Reads an array-like's `length` as an int (0 when it has none). */
-static int vec_array_len(JSContext* ctx, JSValueConst v)
+static int vec_array_len(JSContext* ctx, JSValueConst array_like)
 {
-    int64_t n = 0;
-    if (JS_GetLength(ctx, v, &n) != 0 || n < 0)
+    int64_t length = 0;
+    if (JS_GetLength(ctx, array_like, &length) != 0 || length < 0)
     {
         return 0;
     }
-    return n > INT32_MAX ? INT32_MAX : (int)n;
+    return length > INT32_MAX ? INT32_MAX : (int)length;
 }
 
 /**
- * @brief Reads arr[idx] as a double.
+ * @brief Reads array[element_index] as a double.
  *
  * Decodes the two number tags inline: the general JS_ToFloat64 is an out-of-line call, and these
  * arrays are read element by element on every geometry upload.
  */
-static double vec_num_at(JSContext* ctx, JSValueConst arr, uint32_t idx)
+static double vec_num_at(JSContext* ctx, JSValueConst array, uint32_t element_index)
 {
-    JSValue e = JS_GetPropertyUint32(ctx, arr, idx);
-    const int tag = JS_VALUE_GET_TAG(e);
+    JSValue element = JS_GetPropertyUint32(ctx, array, element_index);
+    const int tag = JS_VALUE_GET_TAG(element);
     if (tag == JS_TAG_INT)
     {
-        return (double)JS_VALUE_GET_INT(e); /* No refcount on a number, so nothing to free. */
+        return (double)JS_VALUE_GET_INT(element); /* No refcount on a number, so nothing to free. */
     }
     if (JS_TAG_IS_FLOAT64(tag))
     {
-        return JS_VALUE_GET_FLOAT64(e);
+        return JS_VALUE_GET_FLOAT64(element);
     }
-    double d = 0.0;
-    JS_ToFloat64(ctx, &d, e);
-    JS_FreeValue(ctx, e);
-    return d;
+    double number = 0.0;
+    JS_ToFloat64(ctx, &number, element);
+    JS_FreeValue(ctx, element);
+    return number;
 }
 
 /**
@@ -3757,45 +3834,45 @@ static double vec_num_at(JSContext* ctx, JSValueConst arr, uint32_t idx)
  * A Float32Array arrives as one memcpy — the tape is already float on both sides, so nothing is lost.
  * Builds without the typed-array intrinsic pass a plain Array and it is read element by element.
  *
- * @return Floats written (clamped to @p max), or -1 when @p v is neither array kind.
+ * @return Floats written (clamped to @p capacity), or -1 when @p tape is neither array kind.
  */
-static int vec_read_tape(JSContext* ctx, JSValueConst v, float* out, int max)
+static int vec_read_tape(JSContext* ctx, JSValueConst tape, float* out, int capacity)
 {
-    if (JS_GetTypedArrayType(v) == JS_TYPED_ARRAY_FLOAT32)
+    if (JS_GetTypedArrayType(tape) == JS_TYPED_ARRAY_FLOAT32)
     {
-        size_t off = 0, bytes = 0, elem = 0;
-        JSValue bufv = JS_GetTypedArrayBuffer(ctx, v, &off, &bytes, &elem);
-        size_t bufsz = 0;
-        const uint8_t* base = JS_IsException(bufv) ? NULL : JS_GetArrayBuffer(ctx, &bufsz, bufv);
-        JS_FreeValue(ctx, bufv);
+        size_t byte_offset = 0, bytes = 0, element_size = 0;
+        JSValue buffer_value = JS_GetTypedArrayBuffer(ctx, tape, &byte_offset, &bytes, &element_size);
+        size_t buffer_size = 0;
+        const uint8_t* base = JS_IsException(buffer_value) ? NULL : JS_GetArrayBuffer(ctx, &buffer_size, buffer_value);
+        JS_FreeValue(ctx, buffer_value);
         if (!base)
         {
             return 0; /* Detached buffer — treat as an empty tape. */
         }
         /* Bound in size_t first: narrowing a huge element count to int could go negative, skip the
          * clamp, and turn the memcpy size back into an enormous size_t. */
-        size_t n = bytes / sizeof(float);
-        if (n > (size_t)max)
+        size_t float_count = bytes / sizeof(float);
+        if (float_count > (size_t)capacity)
         {
-            n = (size_t)max;
+            float_count = (size_t)capacity;
         }
-        memcpy(out, base + off, n * sizeof(float));
-        return (int)n;
+        memcpy(out, base + byte_offset, float_count * sizeof(float));
+        return (int)float_count;
     }
-    if (!JS_IsArray(v))
+    if (!JS_IsArray(tape))
     {
         return -1;
     }
-    int n = vec_array_len(ctx, v);
-    if (n > max)
+    int float_count = vec_array_len(ctx, tape);
+    if (float_count > capacity)
     {
-        n = max;
+        float_count = capacity;
     }
-    for (int i = 0; i < n; i++)
+    for (int float_index = 0; float_index < float_count; float_index++)
     {
-        out[i] = (float)vec_num_at(ctx, v, (uint32_t)i);
+        out[float_index] = (float)vec_num_at(ctx, tape, (uint32_t)float_index);
     }
-    return n;
+    return float_count;
 }
 
 /**
@@ -3805,7 +3882,7 @@ static int vec_read_tape(JSContext* ctx, JSValueConst v, float* out, int max)
  * of VEC_PAINT_STRIDE (9) fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule,
  * fillGrad, strokeGrad] where fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly) and fillGrad /
  * strokeGrad are 1-based indices into @p gradients (0 = solid). @p gradients is an optional flat array of
- * VEC_GRAD_STRIDE fields per gradient. A missing/empty ops array clears the node's geometry.
+ * VEC_GRADIENT_STRIDE fields per gradient. A missing/empty ops array clears the node's geometry.
  *
  * @return JS_UNDEFINED.
  */
@@ -3823,87 +3900,95 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
     }
     /* Op-tape. Static (the bridge is single-threaded) to keep it off the stack. */
     static float ops[VEC_BRIDGE_MAX_OPS];
-    const int olen = argc < 2 ? -1 : vec_read_tape(ctx, argv[1], ops, VEC_BRIDGE_MAX_OPS);
-    if (olen <= 0)
+    const int op_count = argc < 2 ? -1 : vec_read_tape(ctx, argv[1], ops, VEC_BRIDGE_MAX_OPS);
+    if (op_count <= 0)
     {
         er_node_set_vector_ops(node, NULL, 0, NULL, 0, NULL, 0);
         return JS_UNDEFINED;
     }
 
-    /* Paint table: 7 numbers per entry. */
+    /* Paint table: VEC_PAINT_STRIDE numbers per entry. */
     ERVectorPaint paints[VEC_BRIDGE_MAX_PAINTS];
-    int np = 0;
+    int paint_count = 0;
     if (argc >= 3 && JS_IsArray(argv[2]))
     {
-        np = vec_array_len(ctx, argv[2]) / VEC_PAINT_STRIDE;
-        if (np > VEC_BRIDGE_MAX_PAINTS)
+        paint_count = vec_array_len(ctx, argv[2]) / VEC_PAINT_STRIDE;
+        if (paint_count > VEC_BRIDGE_MAX_PAINTS)
         {
-            np = VEC_BRIDGE_MAX_PAINTS;
+            paint_count = VEC_BRIDGE_MAX_PAINTS;
         }
-        for (int i = 0; i < np; i++)
+        for (int entry_index = 0; entry_index < paint_count; entry_index++)
         {
-            double f[VEC_PAINT_STRIDE];
-            for (int j = 0; j < VEC_PAINT_STRIDE; j++)
+            double paint_fields[VEC_PAINT_STRIDE];
+            for (int field_index = 0; field_index < VEC_PAINT_STRIDE; field_index++)
             {
-                f[j] = vec_num_at(ctx, argv[2], (uint32_t)(i * VEC_PAINT_STRIDE + j));
+                paint_fields[field_index] =
+                    vec_num_at(ctx, argv[2], (uint32_t)(entry_index * VEC_PAINT_STRIDE + field_index));
             }
             /* Colors fit a double exactly, so (uint32_t)double is bit-accurate ARGB8888. */
-            paints[i].fill = (uint32_t)f[0];
-            paints[i].stroke = (uint32_t)f[1];
-            paints[i].stroke_w = (float)f[2];
-            paints[i].miter = (float)f[3];
-            paints[i].cap = (uint8_t)f[4];
-            paints[i].join = (uint8_t)f[5];
-            paints[i].fill_rule = (uint8_t)f[6];
-            paints[i].fill_grad = (int16_t)f[7];   /* 1-based fill gradient index (0 = solid) */
-            paints[i].stroke_grad = (int16_t)f[8]; /* 1-based stroke gradient index (0 = solid) */
+            paints[entry_index].fill = (uint32_t)paint_fields[VEC_PAINT_FILL];
+            paints[entry_index].stroke = (uint32_t)paint_fields[VEC_PAINT_STROKE];
+            paints[entry_index].stroke_w = (float)paint_fields[VEC_PAINT_STROKE_WIDTH];
+            paints[entry_index].miter = (float)paint_fields[VEC_PAINT_MITER_LIMIT];
+            paints[entry_index].cap = (uint8_t)paint_fields[VEC_PAINT_CAP];
+            paints[entry_index].join = (uint8_t)paint_fields[VEC_PAINT_JOIN];
+            paints[entry_index].fill_rule = (uint8_t)paint_fields[VEC_PAINT_FILL_RULE];
+            paints[entry_index].fill_grad =
+                (int16_t)paint_fields[VEC_PAINT_FILL_GRADIENT]; /* 1-based fill gradient index (0 = solid) */
+            paints[entry_index].stroke_grad =
+                (int16_t)paint_fields[VEC_PAINT_STROKE_GRADIENT]; /* 1-based stroke gradient index (0 = solid) */
         }
     }
 
-    /* Gradient table (optional 4th arg): VEC_GRAD_STRIDE numbers per gradient. */
-    ERVectorGradient grads[VEC_BRIDGE_MAX_GRADS];
-    int ngr = 0;
+    /* Gradient table (optional 4th arg): VEC_GRADIENT_STRIDE numbers per gradient. */
+    ERVectorGradient gradients[VEC_BRIDGE_MAX_GRADS];
+    int gradient_count = 0;
     if (argc >= 4 && JS_IsArray(argv[3]))
     {
-        ngr = vec_array_len(ctx, argv[3]) / VEC_GRAD_STRIDE;
-        if (ngr > VEC_BRIDGE_MAX_GRADS)
+        gradient_count = vec_array_len(ctx, argv[3]) / VEC_GRADIENT_STRIDE;
+        if (gradient_count > VEC_BRIDGE_MAX_GRADS)
         {
-            ngr = VEC_BRIDGE_MAX_GRADS;
+            gradient_count = VEC_BRIDGE_MAX_GRADS;
         }
-        for (int i = 0; i < ngr; i++)
+        for (int entry_index = 0; entry_index < gradient_count; entry_index++)
         {
-            double g[VEC_GRAD_STRIDE];
-            for (int j = 0; j < VEC_GRAD_STRIDE; j++)
+            double gradient_fields[VEC_GRADIENT_STRIDE];
+            for (int field_index = 0; field_index < VEC_GRADIENT_STRIDE; field_index++)
             {
-                g[j] = vec_num_at(ctx, argv[3], (uint32_t)(i * VEC_GRAD_STRIDE + j));
+                gradient_fields[field_index] =
+                    vec_num_at(ctx, argv[3], (uint32_t)(entry_index * VEC_GRADIENT_STRIDE + field_index));
             }
-            grads[i].type = (uint8_t)g[0];
-            grads[i].stop_count = (uint8_t)g[1];
-            for (int s = 0; s < ER_VGRAD_MAX_STOPS; s++)
+            gradients[entry_index].type = (uint8_t)gradient_fields[VEC_GRADIENT_TYPE];
+            gradients[entry_index].stop_count = (uint8_t)gradient_fields[VEC_GRADIENT_STOP_COUNT];
+            for (int stop_index = 0; stop_index < ER_VGRAD_MAX_STOPS; stop_index++)
             {
-                grads[i].stops[s].color = (uint32_t)g[2 + s * 2];
-                grads[i].stops[s].position = (float)g[3 + s * 2];
+                gradients[entry_index].stops[stop_index].color =
+                    (uint32_t)gradient_fields[VEC_GRADIENT_STOPS + VEC_GRADIENT_STOP_COLOR
+                                              + stop_index * VEC_GRADIENT_STOP_FIELDS];
+                gradients[entry_index].stops[stop_index].position =
+                    (float)gradient_fields[VEC_GRADIENT_STOPS + VEC_GRADIENT_STOP_POSITION
+                                           + stop_index * VEC_GRADIENT_STOP_FIELDS];
             }
-            const int geo = 2 + ER_VGRAD_MAX_STOPS * 2;
-            grads[i].ax = (float)g[geo + 0];
-            grads[i].ay = (float)g[geo + 1];
-            grads[i].bx = (float)g[geo + 2];
-            grads[i].by = (float)g[geo + 3];
-            grads[i].r = (float)g[geo + 4];
+            const int geometry_offset = VEC_GRADIENT_GEOMETRY;
+            gradients[entry_index].ax = (float)gradient_fields[geometry_offset + VEC_GRADIENT_AX];
+            gradients[entry_index].ay = (float)gradient_fields[geometry_offset + VEC_GRADIENT_AY];
+            gradients[entry_index].bx = (float)gradient_fields[geometry_offset + VEC_GRADIENT_BX];
+            gradients[entry_index].by = (float)gradient_fields[geometry_offset + VEC_GRADIENT_BY];
+            gradients[entry_index].r = (float)gradient_fields[geometry_offset + VEC_GRADIENT_RADIUS];
         }
     }
 
-    er_node_set_vector_ops(node, ops, olen, paints, np, grads, ngr);
+    er_node_set_vector_ops(node, ops, op_count, paints, paint_count, gradients, gradient_count);
 
     /* Optional 5th arg: a [x, y, w, h] node-local sub-rect to restrict this commit's damage to. */
-    if (argc >= 5 && JS_IsArray(argv[4]) && vec_array_len(ctx, argv[4]) >= 4)
+    if (argc >= 5 && JS_IsArray(argv[4]) && vec_array_len(ctx, argv[4]) >= VEC_DIRTY_RECT_FIELDS)
     {
-        double d[4];
+        double rect[VEC_DIRTY_RECT_FIELDS];
         bool finite = true;
-        for (int k = 0; k < 4; k++)
+        for (int edge_index = 0; edge_index < VEC_DIRTY_RECT_FIELDS; edge_index++)
         {
-            d[k] = vec_num_at(ctx, argv[4], (uint32_t)k);
-            finite = finite && isfinite(d[k]);
+            rect[edge_index] = vec_num_at(ctx, argv[4], (uint32_t)edge_index);
+            finite = finite && isfinite(rect[edge_index]);
         }
         /* The rect is app math, so it can be NaN (a 0/0) or past the int range, where a cast is undefined. A
            non-finite edge gives no hint, so the engine's own damage applies, as it would without one: what
@@ -3912,13 +3997,18 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
            the bound), and the engine clips the rect's corners from there. */
         if (finite)
         {
-            const double e[4] = {floor(d[0]), floor(d[1]), ceil(d[0] + d[2]), ceil(d[1] + d[3])};
-            int r[4];
-            for (int k = 0; k < 4; k++)
+            const double edges[VEC_DIRTY_RECT_FIELDS] = {
+                floor(rect[0]), floor(rect[1]), ceil(rect[0] + rect[2]), ceil(rect[1] + rect[3])};
+            int pixel_edges[VEC_DIRTY_RECT_FIELDS];
+            for (int edge_index = 0; edge_index < VEC_DIRTY_RECT_FIELDS; edge_index++)
             {
-                r[k] = (int)(e[k] < -1e9 ? -1e9 : (e[k] > 1e9 ? 1e9 : e[k]));
+                pixel_edges[edge_index] =
+                    (int)(edges[edge_index] < -VEC_DIRTY_RECT_BOUND
+                              ? -VEC_DIRTY_RECT_BOUND
+                              : (edges[edge_index] > VEC_DIRTY_RECT_BOUND ? VEC_DIRTY_RECT_BOUND : edges[edge_index]));
             }
-            er_node_set_vector_dirty_rect(node, r[0], r[1], r[2] - r[0], r[3] - r[1]);
+            er_node_set_vector_dirty_rect(
+                node, pixel_edges[0], pixel_edges[1], pixel_edges[2] - pixel_edges[0], pixel_edges[3] - pixel_edges[1]);
         }
     }
     return JS_UNDEFINED;
@@ -3980,8 +4070,9 @@ static JSValue js_commit(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 static JSValue js_set_batcher(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    const bool set = argc >= 1 && JS_IsFunction(ctx, argv[0]);
-    JS_SetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_WRAP, set ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
+    const bool has_batcher = argc >= 1 && JS_IsFunction(ctx, argv[0]);
+    JS_SetPropertyUint32(
+        ctx, s_batch_slots, ER_BATCH_SLOT_WRAP, has_batcher ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
@@ -4091,45 +4182,45 @@ ER_BRIDGE_MARSHAL_FN(js_set_event)
 /**
  * @brief Reads a numeric property from an object into a float.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  obj  Object to read from.
- * @param[in]  key  Property name.
- * @param[out] out  Receives the value when present and numeric.
+ * @param[in]  ctx     QuickJS context.
+ * @param[in]  object  Object to read from.
+ * @param[in]  key     Property name.
+ * @param[out] out     Receives the value when present and numeric.
  *
  * @return true when the property was present and read.
  */
-static bool obj_f32(JSContext* ctx, JSValueConst obj, const char* key, float* out)
+static bool obj_f32(JSContext* ctx, JSValueConst object, const char* key, float* out)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, key, &v))
+    JSValue value;
+    if (!prop_get(ctx, object, key, &value))
     {
         return false;
     }
-    double d = 0.0;
-    const bool ok = JS_ToFloat64(ctx, &d, v) == 0;
+    double number = 0.0;
+    const bool ok = JS_ToFloat64(ctx, &number, value) == 0;
     if (ok)
     {
-        *out = (float)d;
+        *out = (float)number;
     }
-    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, value);
     return ok;
 }
 
 /**
  * @brief Maps an animatable prop name (opacity, translateX, rotate, …) to an ERAnimProp.
  *
- * @param[in]  s    Prop name.
- * @param[out] out  Receives the ERAnimProp when recognised.
+ * @param[in]  name  Prop name.
+ * @param[out] out   Receives the ERAnimProp when recognised.
  *
  * @return true when the name maps to a supported animatable prop.
  */
-static bool anim_prop_from_name(const char* s, ERAnimProp* out)
+static bool anim_prop_from_name(const char* name, ERAnimProp* out)
 {
     static const struct
     {
         const char* name;
         ERAnimProp prop;
-    } k[] = {
+    } k_animatable_props[] = {
         {"opacity", ER_PROP_OPACITY},
         {"translateX", ER_PROP_TRANSLATE_X},
         {"translateY", ER_PROP_TRANSLATE_Y},
@@ -4144,65 +4235,66 @@ static bool anim_prop_from_name(const char* s, ERAnimProp* out)
         {"value", ER_PROP_ARC_VALUE},            /* Dial value (ER_NODE_ARC) */
         {"valueStart", ER_PROP_ARC_VALUE_START}, /* Dial RANGE low end */
     };
-    for (size_t i = 0; i < sizeof(k) / sizeof(k[0]); i++)
+    for (size_t entry_index = 0; entry_index < sizeof(k_animatable_props) / sizeof(k_animatable_props[0]);
+         entry_index++)
     {
-        if (strcmp(s, k[i].name) == 0)
+        if (strcmp(name, k_animatable_props[entry_index].name) == 0)
         {
-            *out = k[i].prop;
+            *out = k_animatable_props[entry_index].prop;
             return true;
         }
     }
     return false;
 }
 
-/** @brief Maps an easing token to ERAnimEasing. @param[in] s String. @return Enum value (default ease). */
-static ERAnimEasing easing_from_name(const char* s)
+/** @brief Maps an easing token to ERAnimEasing. @param[in] token String. @return Enum value (default ease). */
+static ERAnimEasing easing_from_name(const char* token)
 {
-    if (strcmp(s, "linear") == 0)
+    if (strcmp(token, "linear") == 0)
     {
         return ER_EASE_LINEAR;
     }
-    if (strcmp(s, "easeIn") == 0)
+    if (strcmp(token, "easeIn") == 0)
     {
         return ER_EASE_EASE_IN;
     }
-    if (strcmp(s, "easeOut") == 0)
+    if (strcmp(token, "easeOut") == 0)
     {
         return ER_EASE_EASE_OUT;
     }
-    if (strcmp(s, "easeInOut") == 0)
+    if (strcmp(token, "easeInOut") == 0)
     {
         return ER_EASE_EASE_IN_OUT;
     }
-    if (strcmp(s, "quadIn") == 0)
+    if (strcmp(token, "quadIn") == 0)
     {
         return ER_EASE_QUAD_IN;
     }
-    if (strcmp(s, "quadOut") == 0)
+    if (strcmp(token, "quadOut") == 0)
     {
         return ER_EASE_QUAD_OUT;
     }
-    if (strcmp(s, "quadInOut") == 0)
+    if (strcmp(token, "quadInOut") == 0)
     {
         return ER_EASE_QUAD_IN_OUT;
     }
-    if (strcmp(s, "cubicIn") == 0)
+    if (strcmp(token, "cubicIn") == 0)
     {
         return ER_EASE_CUBIC_IN;
     }
-    if (strcmp(s, "cubicOut") == 0)
+    if (strcmp(token, "cubicOut") == 0)
     {
         return ER_EASE_CUBIC_OUT;
     }
-    if (strcmp(s, "cubicInOut") == 0)
+    if (strcmp(token, "cubicInOut") == 0)
     {
         return ER_EASE_CUBIC_IN_OUT;
     }
-    if (strcmp(s, "bounceOut") == 0)
+    if (strcmp(token, "bounceOut") == 0)
     {
         return ER_EASE_BOUNCE_OUT;
     }
-    if (strcmp(s, "elasticOut") == 0)
+    if (strcmp(token, "elasticOut") == 0)
     {
         return ER_EASE_ELASTIC_OUT;
     }
@@ -4215,90 +4307,90 @@ static ERAnimEasing easing_from_name(const char* s)
  * Recognised keys: type ("timing"|"spring"|"decay"), duration, delay, loop, easing (string token or
  * a {x1,y1,x2,y2} bezier object), spring stiffness/damping/mass/velocity, decay deceleration/velocity.
  *
- * @param[in]  ctx  QuickJS context.
- * @param[in]  obj  Config object (may be undefined).
- * @param[out] cfg  Zero-initialised then populated.
+ * @param[in]  ctx     QuickJS context.
+ * @param[in]  object  Config object (may be undefined).
+ * @param[out] config  Zero-initialised then populated.
  */
-static void marshal_anim_config(JSContext* ctx, JSValueConst obj, ERAnimConfig* cfg)
+static void marshal_anim_config(JSContext* ctx, JSValueConst object, ERAnimConfig* config)
 {
-    memset(cfg, 0, sizeof(*cfg));
-    cfg->type = ER_ANIM_TIMING;
-    cfg->easing = ER_EASE_EASE;
-    cfg->duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
+    memset(config, 0, sizeof(*config));
+    config->type = ER_ANIM_TIMING;
+    config->easing = ER_EASE_EASE;
+    config->duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
 
-    if (!JS_IsObject(obj))
+    if (!JS_IsObject(object))
     {
         return;
     }
 
-    JSValue v;
-    if (prop_get(ctx, obj, "type", &v))
+    JSValue value;
+    if (prop_get(ctx, object, "type", &value))
     {
-        const char* s = JS_ToCString(ctx, v);
-        if (s)
+        const char* token = JS_ToCString(ctx, value);
+        if (token)
         {
-            if (strcmp(s, "spring") == 0)
+            if (strcmp(token, "spring") == 0)
             {
-                cfg->type = ER_ANIM_SPRING;
+                config->type = ER_ANIM_SPRING;
             }
-            else if (strcmp(s, "decay") == 0)
+            else if (strcmp(token, "decay") == 0)
             {
-                cfg->type = ER_ANIM_DECAY;
+                config->type = ER_ANIM_DECAY;
             }
-            JS_FreeCString(ctx, s);
+            JS_FreeCString(ctx, token);
         }
-        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, value);
     }
-    if (prop_get(ctx, obj, "duration", &v))
+    if (prop_get(ctx, object, "duration", &value))
     {
-        int32_t n = 0;
-        if (JS_ToInt32(ctx, &n, v) == 0 && n >= 0)
+        int32_t milliseconds = 0;
+        if (JS_ToInt32(ctx, &milliseconds, value) == 0 && milliseconds >= 0)
         {
-            cfg->duration_ms = (uint32_t)n;
+            config->duration_ms = (uint32_t)milliseconds;
         }
-        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, value);
     }
-    if (prop_get(ctx, obj, "delay", &v))
+    if (prop_get(ctx, object, "delay", &value))
     {
-        int32_t n = 0;
-        if (JS_ToInt32(ctx, &n, v) == 0 && n >= 0)
+        int32_t milliseconds = 0;
+        if (JS_ToInt32(ctx, &milliseconds, value) == 0 && milliseconds >= 0)
         {
-            cfg->delay_ms = (uint32_t)n;
+            config->delay_ms = (uint32_t)milliseconds;
         }
-        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, value);
     }
-    if (prop_get(ctx, obj, "easing", &v))
+    if (prop_get(ctx, object, "easing", &value))
     {
-        if (JS_IsString(v))
+        if (JS_IsString(value))
         {
-            const char* s = JS_ToCString(ctx, v);
-            if (s)
+            const char* token = JS_ToCString(ctx, value);
+            if (token)
             {
-                cfg->easing = easing_from_name(s);
-                JS_FreeCString(ctx, s);
+                config->easing = easing_from_name(token);
+                JS_FreeCString(ctx, token);
             }
         }
-        else if (JS_IsObject(v))
+        else if (JS_IsObject(value))
         {
-            cfg->easing = ER_EASE_BEZIER;
-            obj_f32(ctx, v, "x1", &cfg->bezier_x1);
-            obj_f32(ctx, v, "y1", &cfg->bezier_y1);
-            obj_f32(ctx, v, "x2", &cfg->bezier_x2);
-            obj_f32(ctx, v, "y2", &cfg->bezier_y2);
+            config->easing = ER_EASE_BEZIER;
+            obj_f32(ctx, value, "x1", &config->bezier_x1);
+            obj_f32(ctx, value, "y1", &config->bezier_y1);
+            obj_f32(ctx, value, "x2", &config->bezier_x2);
+            obj_f32(ctx, value, "y2", &config->bezier_y2);
         }
-        JS_FreeValue(ctx, v);
+        JS_FreeValue(ctx, value);
     }
 
-    obj_f32(ctx, obj, "stiffness", &cfg->stiffness);
-    obj_f32(ctx, obj, "damping", &cfg->damping);
-    obj_f32(ctx, obj, "mass", &cfg->mass);
-    obj_f32(ctx, obj, "velocity", &cfg->velocity);
-    obj_f32(ctx, obj, "deceleration", &cfg->deceleration);
+    obj_f32(ctx, object, "stiffness", &config->stiffness);
+    obj_f32(ctx, object, "damping", &config->damping);
+    obj_f32(ctx, object, "mass", &config->mass);
+    obj_f32(ctx, object, "velocity", &config->velocity);
+    obj_f32(ctx, object, "deceleration", &config->deceleration);
 
-    if (prop_get(ctx, obj, "loop", &v))
+    if (prop_get(ctx, object, "loop", &value))
     {
-        cfg->loop = JS_ToBool(ctx, v) != 0;
-        JS_FreeValue(ctx, v);
+        config->loop = JS_ToBool(ctx, value) != 0;
+        JS_FreeValue(ctx, value);
     }
 }
 
@@ -4321,65 +4413,65 @@ static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst t
 {
     (void)this_val;
 
-    ERLayoutAnimConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.type = ER_ANIM_TIMING;
-    cfg.easing = ER_EASE_EASE_IN_OUT;
-    cfg.duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
+    ERLayoutAnimConfig config;
+    memset(&config, 0, sizeof(config));
+    config.type = ER_ANIM_TIMING;
+    config.easing = ER_EASE_EASE_IN_OUT;
+    config.duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
 
-    JSValueConst obj = (argc > 0) ? argv[0] : JS_UNDEFINED;
-    if (JS_IsObject(obj))
+    JSValueConst object = (argc > 0) ? argv[0] : JS_UNDEFINED;
+    if (JS_IsObject(object))
     {
-        JSValue v;
-        if (prop_get(ctx, obj, "type", &v))
+        JSValue value;
+        if (prop_get(ctx, object, "type", &value))
         {
-            const char* s = JS_ToCString(ctx, v);
-            if (s)
+            const char* token = JS_ToCString(ctx, value);
+            if (token)
             {
-                if (strcmp(s, "spring") == 0)
+                if (strcmp(token, "spring") == 0)
                 {
-                    cfg.type = ER_ANIM_SPRING;
+                    config.type = ER_ANIM_SPRING;
                 }
-                JS_FreeCString(ctx, s);
+                JS_FreeCString(ctx, token);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, obj, "duration", &v))
+        if (prop_get(ctx, object, "duration", &value))
         {
-            int32_t n = 0;
-            if (JS_ToInt32(ctx, &n, v) == 0 && n > 0)
+            int32_t milliseconds = 0;
+            if (JS_ToInt32(ctx, &milliseconds, value) == 0 && milliseconds > 0)
             {
-                cfg.duration_ms = (uint16_t)(n > UINT16_MAX ? UINT16_MAX : n);
+                config.duration_ms = (uint16_t)(milliseconds > UINT16_MAX ? UINT16_MAX : milliseconds);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        if (prop_get(ctx, obj, "easing", &v))
+        if (prop_get(ctx, object, "easing", &value))
         {
-            if (JS_IsString(v))
+            if (JS_IsString(value))
             {
-                const char* s = JS_ToCString(ctx, v);
-                if (s)
+                const char* token = JS_ToCString(ctx, value);
+                if (token)
                 {
-                    cfg.easing = easing_from_name(s);
-                    JS_FreeCString(ctx, s);
+                    config.easing = easing_from_name(token);
+                    JS_FreeCString(ctx, token);
                 }
             }
-            else if (JS_IsObject(v))
+            else if (JS_IsObject(value))
             {
-                cfg.easing = ER_EASE_BEZIER;
-                obj_f32(ctx, v, "x1", &cfg.bezier_x1);
-                obj_f32(ctx, v, "y1", &cfg.bezier_y1);
-                obj_f32(ctx, v, "x2", &cfg.bezier_x2);
-                obj_f32(ctx, v, "y2", &cfg.bezier_y2);
+                config.easing = ER_EASE_BEZIER;
+                obj_f32(ctx, value, "x1", &config.bezier_x1);
+                obj_f32(ctx, value, "y1", &config.bezier_y1);
+                obj_f32(ctx, value, "x2", &config.bezier_x2);
+                obj_f32(ctx, value, "y2", &config.bezier_y2);
             }
-            JS_FreeValue(ctx, v);
+            JS_FreeValue(ctx, value);
         }
-        obj_f32(ctx, obj, "stiffness", &cfg.stiffness);
-        obj_f32(ctx, obj, "damping", &cfg.damping);
-        obj_f32(ctx, obj, "mass", &cfg.mass);
+        obj_f32(ctx, object, "stiffness", &config.stiffness);
+        obj_f32(ctx, object, "damping", &config.damping);
+        obj_f32(ctx, object, "mass", &config.mass);
     }
 
-    er_layout_anim_configure_next(&cfg);
+    er_layout_anim_configure_next(&config);
     return JS_UNDEFINED;
 }
 
@@ -4427,10 +4519,10 @@ static JSValue js_anim_value_destroy(JSContext* ctx, JSValueConst this_val, int 
     {
         return JS_UNDEFINED;
     }
-    int32_t h = 0;
-    if (JS_ToInt32(ctx, &h, argv[0]) == 0)
+    int32_t value_handle = 0;
+    if (JS_ToInt32(ctx, &value_handle, argv[0]) == 0)
     {
-        er_anim_value_destroy((ERAnimValueHandle)h);
+        er_anim_value_destroy((ERAnimValueHandle)value_handle);
     }
     return JS_UNDEFINED;
 }
@@ -4443,11 +4535,11 @@ static JSValue js_anim_value_set(JSContext* ctx, JSValueConst this_val, int argc
     {
         return JS_UNDEFINED;
     }
-    int32_t h = 0;
+    int32_t value_handle = 0;
     double value = 0.0;
-    if (JS_ToInt32(ctx, &h, argv[0]) == 0 && JS_ToFloat64(ctx, &value, argv[1]) == 0)
+    if (JS_ToInt32(ctx, &value_handle, argv[0]) == 0 && JS_ToFloat64(ctx, &value, argv[1]) == 0)
     {
-        er_anim_value_set((ERAnimValueHandle)h, (float)value);
+        er_anim_value_set((ERAnimValueHandle)value_handle, (float)value);
     }
     return JS_UNDEFINED;
 }
@@ -4460,12 +4552,12 @@ static JSValue js_anim_value_get(JSContext* ctx, JSValueConst this_val, int argc
     {
         return JS_NewFloat64(ctx, 0.0);
     }
-    int32_t h = 0;
-    if (JS_ToInt32(ctx, &h, argv[0]) != 0)
+    int32_t value_handle = 0;
+    if (JS_ToInt32(ctx, &value_handle, argv[0]) != 0)
     {
         return JS_NewFloat64(ctx, 0.0);
     }
-    return JS_NewFloat64(ctx, (double)er_anim_value_get((ERAnimValueHandle)h));
+    return JS_NewFloat64(ctx, (double)er_anim_value_get((ERAnimValueHandle)value_handle));
 }
 
 /**
@@ -4480,8 +4572,8 @@ static JSValue js_anim_value_bind(JSContext* ctx, JSValueConst this_val, int arg
     {
         return JS_UNDEFINED;
     }
-    int32_t vh = 0;
-    if (JS_ToInt32(ctx, &vh, argv[0]) != 0)
+    int32_t value_handle = 0;
+    if (JS_ToInt32(ctx, &value_handle, argv[0]) != 0)
     {
         return JS_UNDEFINED;
     }
@@ -4492,7 +4584,7 @@ static JSValue js_anim_value_bind(JSContext* ctx, JSValueConst this_val, int arg
         ERAnimProp prop;
         if (anim_prop_from_name(name, &prop))
         {
-            er_anim_value_bind((ERAnimValueHandle)vh, node, prop);
+            er_anim_value_bind((ERAnimValueHandle)value_handle, node, prop);
         }
     }
     if (name)
@@ -4534,14 +4626,14 @@ static JSValue js_anim_unbind(JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
-/** @brief Maps an extrapolate token to ERExtrapolate. @param[in] s String. @return Enum (default extend). */
-static ERExtrapolate extrapolate_from_name(const char* s)
+/** @brief Maps an extrapolate token to ERExtrapolate. @param[in] token String. @return Enum (default extend). */
+static ERExtrapolate extrapolate_from_name(const char* token)
 {
-    if (strcmp(s, "clamp") == 0)
+    if (strcmp(token, "clamp") == 0)
     {
         return ER_EXTRAPOLATE_CLAMP;
     }
-    if (strcmp(s, "identity") == 0)
+    if (strcmp(token, "identity") == 0)
     {
         return ER_EXTRAPOLATE_IDENTITY;
     }
@@ -4549,27 +4641,27 @@ static ERExtrapolate extrapolate_from_name(const char* s)
 }
 
 /**
- * @brief Reads an extrapolate token from obj[key] into *out (left unchanged if absent/invalid).
+ * @brief Reads an extrapolate token from object[key] into *out (left unchanged if absent/invalid).
  *
- * @param[in]     ctx  QuickJS context.
- * @param[in]     obj  Config object.
- * @param[in]     key  Property name (e.g. "extrapolate").
- * @param[in,out] out  Receives the mapped ERExtrapolate when the key is a string.
+ * @param[in]     ctx     QuickJS context.
+ * @param[in]     object  Config object.
+ * @param[in]     key     Property name (e.g. "extrapolate").
+ * @param[in,out] out     Receives the mapped ERExtrapolate when the key is a string.
  */
-static void read_extrapolate(JSContext* ctx, JSValueConst obj, const char* key, ERExtrapolate* out)
+static void read_extrapolate(JSContext* ctx, JSValueConst object, const char* key, ERExtrapolate* out)
 {
-    JSValue v;
-    if (!prop_get(ctx, obj, key, &v))
+    JSValue value;
+    if (!prop_get(ctx, object, key, &value))
     {
         return;
     }
-    const char* s = JS_ToCString(ctx, v);
-    if (s)
+    const char* token = JS_ToCString(ctx, value);
+    if (token)
     {
-        *out = extrapolate_from_name(s);
-        JS_FreeCString(ctx, s);
+        *out = extrapolate_from_name(token);
+        JS_FreeCString(ctx, token);
     }
-    JS_FreeValue(ctx, v);
+    JS_FreeValue(ctx, value);
 }
 
 /**
@@ -4590,8 +4682,8 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
     {
         return JS_UNDEFINED;
     }
-    int32_t vh = 0;
-    if (JS_ToInt32(ctx, &vh, argv[0]) != 0)
+    int32_t value_handle = 0;
+    if (JS_ToInt32(ctx, &value_handle, argv[0]) != 0)
     {
         return JS_UNDEFINED;
     }
@@ -4607,81 +4699,81 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
     }
 
     ERAnimProp prop;
-    const bool prop_ok = anim_prop_from_name(name, &prop);
+    const bool prop_known = anim_prop_from_name(name, &prop);
     JS_FreeCString(ctx, name);
-    if (!prop_ok)
+    if (!prop_known)
     {
         return JS_UNDEFINED;
     }
     const bool color = prop == ER_PROP_BACKGROUND_COLOR || prop == ER_PROP_COLOR;
 
-    ERInterpolation interp;
-    ERColorInterpolation color_interp;
-    memset(&interp, 0, sizeof(interp));
-    memset(&color_interp, 0, sizeof(color_interp));
-    interp.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
-    interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
+    ERInterpolation interpolation;
+    ERColorInterpolation color_interpolation;
+    memset(&interpolation, 0, sizeof(interpolation));
+    memset(&color_interpolation, 0, sizeof(color_interpolation));
+    interpolation.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
+    interpolation.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
 
     /* `extrapolate` applies to both ends; the per-end keys override it (RN semantics). */
-    read_extrapolate(ctx, argv[3], "extrapolate", &interp.extrapolate_left);
-    interp.extrapolate_right = interp.extrapolate_left;
-    read_extrapolate(ctx, argv[3], "extrapolateLeft", &interp.extrapolate_left);
-    read_extrapolate(ctx, argv[3], "extrapolateRight", &interp.extrapolate_right);
+    read_extrapolate(ctx, argv[3], "extrapolate", &interpolation.extrapolate_left);
+    interpolation.extrapolate_right = interpolation.extrapolate_left;
+    read_extrapolate(ctx, argv[3], "extrapolateLeft", &interpolation.extrapolate_left);
+    read_extrapolate(ctx, argv[3], "extrapolateRight", &interpolation.extrapolate_right);
 
     /* Read inputRange / outputRange arrays (clamped to ER_INTERPOLATE_MAX_POINTS). */
     bool outputs_ok = true;
-    JSValue in = JS_GetPropertyStr(ctx, argv[3], "inputRange");
-    JSValue out = JS_GetPropertyStr(ctx, argv[3], "outputRange");
-    if (JS_IsArray(in) && JS_IsArray(out))
+    JSValue inputs = JS_GetPropertyStr(ctx, argv[3], "inputRange");
+    JSValue outputs = JS_GetPropertyStr(ctx, argv[3], "outputRange");
+    if (JS_IsArray(inputs) && JS_IsArray(outputs))
     {
-        JSValue len_val = JS_GetPropertyStr(ctx, in, "length");
-        int32_t len = 0;
-        JS_ToInt32(ctx, &len, len_val);
-        JS_FreeValue(ctx, len_val);
-        if (len > ER_INTERPOLATE_MAX_POINTS)
+        JSValue length_value = JS_GetPropertyStr(ctx, inputs, "length");
+        int32_t point_count = 0;
+        JS_ToInt32(ctx, &point_count, length_value);
+        JS_FreeValue(ctx, length_value);
+        if (point_count > ER_INTERPOLATE_MAX_POINTS)
         {
-            len = ER_INTERPOLATE_MAX_POINTS;
+            point_count = ER_INTERPOLATE_MAX_POINTS;
         }
-        for (int32_t i = 0; i < len; i++)
+        for (int32_t point_index = 0; point_index < point_count; point_index++)
         {
-            JSValue iv = JS_GetPropertyUint32(ctx, in, (uint32_t)i);
-            JSValue ov = JS_GetPropertyUint32(ctx, out, (uint32_t)i);
-            double di = 0.0;
-            JS_ToFloat64(ctx, &di, iv);
-            interp.input_range[i] = (float)di;
+            JSValue input_value = JS_GetPropertyUint32(ctx, inputs, (uint32_t)point_index);
+            JSValue output_value = JS_GetPropertyUint32(ctx, outputs, (uint32_t)point_index);
+            double input = 0.0;
+            JS_ToFloat64(ctx, &input, input_value);
+            interpolation.input_range[point_index] = (float)input;
             if (color)
             {
-                outputs_ok = outputs_ok && to_color(ctx, ov, &color_interp.output_range[i]);
+                outputs_ok = outputs_ok && to_color(ctx, output_value, &color_interpolation.output_range[point_index]);
             }
             else
             {
-                double dovv = 0.0;
-                outputs_ok = outputs_ok && JS_IsNumber(ov) && JS_ToFloat64(ctx, &dovv, ov) == 0;
-                interp.output_range[i] = (float)dovv;
+                double output = 0.0;
+                outputs_ok = outputs_ok && JS_IsNumber(output_value) && JS_ToFloat64(ctx, &output, output_value) == 0;
+                interpolation.output_range[point_index] = (float)output;
             }
-            JS_FreeValue(ctx, iv);
-            JS_FreeValue(ctx, ov);
+            JS_FreeValue(ctx, input_value);
+            JS_FreeValue(ctx, output_value);
         }
-        interp.point_count = (uint8_t)len;
+        interpolation.point_count = (uint8_t)point_count;
     }
-    JS_FreeValue(ctx, in);
-    JS_FreeValue(ctx, out);
+    JS_FreeValue(ctx, inputs);
+    JS_FreeValue(ctx, outputs);
 
-    if (interp.point_count < 2 || !outputs_ok)
+    if (interpolation.point_count < 2 || !outputs_ok)
     {
         return JS_UNDEFINED;
     }
     if (color)
     {
-        memcpy(color_interp.input_range, interp.input_range, sizeof(color_interp.input_range));
-        color_interp.point_count = interp.point_count;
-        color_interp.extrapolate_left = interp.extrapolate_left;
-        color_interp.extrapolate_right = interp.extrapolate_right;
-        er_anim_value_bind_color((ERAnimValueHandle)vh, node, prop, &color_interp);
+        memcpy(color_interpolation.input_range, interpolation.input_range, sizeof(color_interpolation.input_range));
+        color_interpolation.point_count = interpolation.point_count;
+        color_interpolation.extrapolate_left = interpolation.extrapolate_left;
+        color_interpolation.extrapolate_right = interpolation.extrapolate_right;
+        er_anim_value_bind_color((ERAnimValueHandle)value_handle, node, prop, &color_interpolation);
     }
     else
     {
-        er_anim_value_bind_interpolated((ERAnimValueHandle)vh, node, prop, &interp);
+        er_anim_value_bind_interpolated((ERAnimValueHandle)value_handle, node, prop, &interpolation);
     }
     return JS_UNDEFINED;
 }
@@ -4710,24 +4802,24 @@ static void bridge_anim_complete_trampoline(bool finished, void* user_data)
         return;
     }
 
-    JSValue cb = JS_GetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot); /* owned */
+    JSValue callback = JS_GetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot); /* owned */
     s_anim_complete_active[slot] = false;
     JS_SetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot, JS_UNDEFINED);
 
-    if (JS_IsFunction(ctx, cb))
+    if (JS_IsFunction(ctx, callback))
     {
         batch_enter();
-        JSValue arg = JS_NewBool(ctx, finished);
-        JSValue ret = bridge_call_batched(ctx, cb, 1, &arg);
-        if (JS_IsException(ret))
+        JSValue finished_value = JS_NewBool(ctx, finished);
+        JSValue result = bridge_call_batched(ctx, callback, 1, &finished_value);
+        if (JS_IsException(result))
         {
             bridge_report_exception(ctx, "animation completion callback");
         }
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, arg);
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, finished_value);
         batch_leave();
     }
-    JS_FreeValue(ctx, cb);
+    JS_FreeValue(ctx, callback);
 }
 
 /**
@@ -4745,14 +4837,14 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
     {
         return JS_NewInt32(ctx, 0);
     }
-    int32_t vh = 0;
+    int32_t value_handle = 0;
     double to_value = 0.0;
-    if (JS_ToInt32(ctx, &vh, argv[0]) != 0 || JS_ToFloat64(ctx, &to_value, argv[1]) != 0)
+    if (JS_ToInt32(ctx, &value_handle, argv[0]) != 0 || JS_ToFloat64(ctx, &to_value, argv[1]) != 0)
     {
         return JS_NewInt32(ctx, 0);
     }
-    ERAnimConfig cfg;
-    marshal_anim_config(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &cfg);
+    ERAnimConfig config;
+    marshal_anim_config(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &config);
 
     /* Optional completion callback (argv[3]): grab a slot, root the callback, and route the
        engine's on_complete through the trampoline. Must be registered BEFORE er_anim_value_animate,
@@ -4760,11 +4852,11 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
     if (argc > 3 && JS_IsFunction(ctx, argv[3]))
     {
         int slot = -1;
-        for (int i = 0; i < ER_BRIDGE_MAX_ANIM_COMPLETIONS; i++)
+        for (int candidate = 0; candidate < ER_BRIDGE_MAX_ANIM_COMPLETIONS; candidate++)
         {
-            if (!s_anim_complete_active[i])
+            if (!s_anim_complete_active[candidate])
             {
-                slot = i;
+                slot = candidate;
                 break;
             }
         }
@@ -4772,8 +4864,8 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
         {
             s_anim_complete_active[slot] = true;
             JS_SetPropertyUint32(ctx, s_anim_complete_handlers, (uint32_t)slot, JS_DupValue(ctx, argv[3]));
-            cfg.on_complete = bridge_anim_complete_trampoline;
-            cfg.on_complete_user_data = (void*)(uintptr_t)slot;
+            config.on_complete = bridge_anim_complete_trampoline;
+            config.on_complete_user_data = (void*)(uintptr_t)slot;
         }
         else
         {
@@ -4781,8 +4873,9 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
         }
     }
 
-    const ERAnimHandle ah = er_anim_value_animate((ERAnimValueHandle)vh, (float)to_value, &cfg);
-    return JS_NewInt32(ctx, (int32_t)ah);
+    const ERAnimHandle animation_handle =
+        er_anim_value_animate((ERAnimValueHandle)value_handle, (float)to_value, &config);
+    return JS_NewInt32(ctx, (int32_t)animation_handle);
 }
 
 /** @brief NativeUI.animStop(animHandle) — stops a running animation. @return JS_UNDEFINED. */
@@ -4793,10 +4886,10 @@ static JSValue js_anim_stop(JSContext* ctx, JSValueConst this_val, int argc, JSV
     {
         return JS_UNDEFINED;
     }
-    int32_t ah = 0;
-    if (JS_ToInt32(ctx, &ah, argv[0]) == 0)
+    int32_t animation_handle = 0;
+    if (JS_ToInt32(ctx, &animation_handle, argv[0]) == 0)
     {
-        er_anim_stop((ERAnimHandle)ah);
+        er_anim_stop((ERAnimHandle)animation_handle);
     }
     return JS_UNDEFINED;
 }
@@ -4872,16 +4965,16 @@ void er_bridge_pump(JSContext* ctx)
     batch_enter();
     if (JS_IsObject(s_batch_slots) && bridge_pump_has_js_work(ctx))
     {
-        JSValue run = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_RUN);
-        JSValue ret = bridge_call_batched(ctx, run, 0, NULL);
-        if (JS_IsException(ret))
+        JSValue pump_body = JS_GetPropertyUint32(ctx, s_batch_slots, ER_BATCH_SLOT_RUN);
+        JSValue result = bridge_call_batched(ctx, pump_body, 0, NULL);
+        if (JS_IsException(result))
         {
             /* The frame's callbacks report their own throws; what reaches here is the batched
                render React runs as the batch closes. */
             bridge_report_exception(ctx, "batched render");
         }
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, run);
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, pump_body);
     }
     else
     {
@@ -4895,21 +4988,21 @@ void er_bridge_pump(JSContext* ctx)
 /**
  * @brief Loads and runs a precompiled QuickJS bytecode blob (see header).
  *
- * @param[in] ctx  QuickJS context.
- * @param[in] buf  Bytecode bytes.
- * @param[in] len  Byte count.
+ * @param[in] ctx       QuickJS context.
+ * @param[in] bytecode  Bytecode bytes.
+ * @param[in] length    Byte count.
  *
  * @return Evaluation result or a JS exception value (caller frees).
  */
-JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* buf, size_t len)
+JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* bytecode, size_t length)
 {
-    JSValue obj = JS_ReadObject(ctx, buf, len, JS_READ_OBJ_BYTECODE);
-    if (JS_IsException(obj))
+    JSValue function_object = JS_ReadObject(ctx, bytecode, length, JS_READ_OBJ_BYTECODE);
+    if (JS_IsException(function_object))
     {
-        return obj;
+        return function_object;
     }
-    /* JS_EvalFunction consumes obj and returns the program result (or an exception). */
-    return JS_EvalFunction(ctx, obj);
+    /* JS_EvalFunction consumes function_object and returns the program result (or an exception). */
+    return JS_EvalFunction(ctx, function_object);
 }
 
 /**
@@ -4935,14 +5028,14 @@ void er_bridge_install(JSContext* ctx)
     s_stale_handle_logged = false;
 
     /* Start every context with an empty timer pool (statics persist across re-install in tests). */
-    for (int i = 0; i < ER_BRIDGE_MAX_TIMERS; i++)
+    for (int slot = 0; slot < ER_BRIDGE_MAX_TIMERS; slot++)
     {
-        s_timers[i].active = false;
+        s_timers[slot].active = false;
     }
     s_next_timer_id = 1;
-    for (int i = 0; i < ER_BRIDGE_MAX_ANIM_COMPLETIONS; i++)
+    for (int slot = 0; slot < ER_BRIDGE_MAX_ANIM_COMPLETIONS; slot++)
     {
-        s_anim_complete_active[i] = false;
+        s_anim_complete_active[slot] = false;
     }
     /* No scope is open on a fresh context — an unbalanced enter from the old one must not
        swallow the new app's first commit. */

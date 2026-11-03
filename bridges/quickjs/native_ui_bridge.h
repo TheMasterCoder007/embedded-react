@@ -115,14 +115,14 @@ extern "C"
      * VM still interprets the bytecode (this is not the Flow B AOT compiler). The blob must come from
      * the SAME QuickJS build/version the host links. Only feed trusted input.
      *
-     * @param[in] ctx  QuickJS context (bridge + host globals installed beforehand).
-     * @param[in] buf  Bytecode bytes.
-     * @param[in] len  Byte count.
+     * @param[in] ctx       QuickJS context (bridge + host globals installed beforehand).
+     * @param[in] bytecode  Bytecode bytes.
+     * @param[in] length    Byte count.
      *
      * @return The evaluation result, or a JS exception value (check with JS_IsException). The caller
      *         owns the returned value and must JS_FreeValue it.
      */
-    JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* buf, size_t len);
+    JSValue er_bridge_run_bytecode(JSContext* ctx, const uint8_t* bytecode, size_t length);
 
 #ifdef __cplusplus
 }

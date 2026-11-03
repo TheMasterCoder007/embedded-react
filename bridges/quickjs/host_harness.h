@@ -34,75 +34,76 @@
 /**
  * @brief Reads a whole file into a newly allocated buffer, with a null terminator appended.
  *
- * The terminator is always there, and is not counted in @p out_len — so the same call serves a JS source
+ * The terminator is always there, and is not counted in @p out_length — so the same call serves a JS source
  * file read as a string and a binary container read as bytes.
  *
- * @param[in]  path     Filesystem path to read.
- * @param[out] out_len  Receives the byte length, excluding the appended terminator.
+ * @param[in]  path        Filesystem path to read.
+ * @param[out] out_length  Receives the byte length, excluding the appended terminator.
  *
  * @return Heap buffer the caller must free(), or NULL if the file could not be read.
  */
-static inline void* er_host_read_file(const char* path, size_t* out_len)
+static inline void* er_host_read_file(const char* path, size_t* out_length)
 {
-    FILE* f = fopen(path, "rb");
-    if (!f)
+    FILE* file = fopen(path, "rb");
+    if (!file)
     {
         return NULL;
     }
-    fseek(f, 0, SEEK_END);
-    const long n = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (n < 0)
+    fseek(file, 0, SEEK_END);
+    const long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    if (size < 0)
     {
-        fclose(f);
+        fclose(file);
         return NULL;
     }
-    char* buf = (char*)malloc((size_t)n + 1);
-    if (!buf)
+    char* buffer = (char*)malloc((size_t)size + 1);
+    if (!buffer)
     {
-        fclose(f);
+        fclose(file);
         return NULL;
     }
-    const size_t rd = fread(buf, 1, (size_t)n, f);
-    fclose(f);
-    buf[rd] = '\0';
-    *out_len = rd;
-    return buf;
+    const size_t bytes_read = fread(buffer, 1, (size_t)size, file);
+    fclose(file);
+    buffer[bytes_read] = '\0';
+    *out_length = bytes_read;
+    return buffer;
 }
 
 /** @brief No-op fill callback: a headless harness runs the engine with nothing to draw on. */
-static inline void er_host_noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static inline void er_host_noop_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /** @brief No-op copy callback. */
-static inline void er_host_noop_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static inline void er_host_noop_copy(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /** @brief No-op blend callback. */
-static inline void er_host_noop_blend(const void* src, int stride, uint8_t a, int x, int y, int w, int h, void* ctx)
+static inline void
+er_host_noop_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
-    (void)a;
+    (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 

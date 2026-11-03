@@ -39,8 +39,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define ST_SCREEN_W 480
-#define ST_SCREEN_H 320
+#define ST_SCREEN_WIDTH 480
+#define ST_SCREEN_HEIGHT 320
+
+/** @brief Room for the fixture's build name. */
+#define ST_BUILD_NAME_BYTES 32
+
+/** @brief The value the boot fixture persists as `n`. */
+#define ST_PERSISTED_VALUE 41
 
 /** @brief Runtime log sink → stdout (one line per call). */
 static void log_line(const char* line)
@@ -49,30 +55,30 @@ static void log_line(const char* line)
 }
 
 /** @brief Reads globalThis.__probe.{build,n}. @return 0 on success, -1 if __probe is missing. */
-static int read_probe(char* build_out, size_t build_cap, int32_t* n_out)
+static int read_probe(char* build_out, size_t build_capacity, int32_t* persisted_out)
 {
     JSContext* ctx = er_runtime_context();
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue probe = JS_GetPropertyStr(ctx, global, "__probe");
-    int rc = -1;
+    int status = -1;
     if (JS_IsObject(probe))
     {
         JSValue build = JS_GetPropertyStr(ctx, probe, "build");
-        const char* bs = JS_ToCString(ctx, build);
-        if (bs)
+        const char* build_text = JS_ToCString(ctx, build);
+        if (build_text)
         {
-            snprintf(build_out, build_cap, "%s", bs);
-            JS_FreeCString(ctx, bs);
-            JSValue nv = JS_GetPropertyStr(ctx, probe, "n");
-            JS_ToInt32(ctx, n_out, nv);
-            JS_FreeValue(ctx, nv);
-            rc = 0;
+            snprintf(build_out, build_capacity, "%s", build_text);
+            JS_FreeCString(ctx, build_text);
+            JSValue persisted_value = JS_GetPropertyStr(ctx, probe, "n");
+            JS_ToInt32(ctx, persisted_out, persisted_value);
+            JS_FreeValue(ctx, persisted_value);
+            status = 0;
         }
         JS_FreeValue(ctx, build);
     }
     JS_FreeValue(ctx, probe);
     JS_FreeValue(ctx, global);
-    return rc;
+    return status;
 }
 
 int main(int argc, char** argv)
@@ -83,9 +89,9 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    size_t boot_len = 0, frame_len = 0;
-    uint8_t* boot = er_host_read_file(argv[1], &boot_len);
-    uint8_t* frame = er_host_read_file(argv[2], &frame_len);
+    size_t boot_length = 0, frame_length = 0;
+    uint8_t* boot = er_host_read_file(argv[1], &boot_length);
+    uint8_t* frame = er_host_read_file(argv[2], &frame_length);
     if (!boot || !frame)
     {
         fprintf(stderr, "could not read container(s)\n");
@@ -95,37 +101,37 @@ int main(int argc, char** argv)
     static const EmbeddedRenderBackend backend = ER_HOST_NOOP_BACKEND;
     embedded_renderer_set_backend(&backend);
 
-    ErRuntimeConfig cfg = {0};
-    cfg.screen_width = ST_SCREEN_W;
-    cfg.screen_height = ST_SCREEN_H;
-    cfg.screen_scale = 1.0f;
-    cfg.install_persist = true; /* so usePersistentState has a store to survive in */
-    cfg.log = log_line;
-    if (!er_runtime_init(&cfg))
+    ErRuntimeConfig config = {0};
+    config.screen_width = ST_SCREEN_WIDTH;
+    config.screen_height = ST_SCREEN_HEIGHT;
+    config.screen_scale = 1.0f;
+    config.install_persist = true; /* so usePersistentState has a store to survive in */
+    config.log = log_line;
+    if (!er_runtime_init(&config))
     {
         fprintf(stderr, "er_runtime_init failed\n");
         return 1;
     }
 
     int failed = 0;
-    char build[32] = {0};
-    int32_t n = 0;
+    char build[ST_BUILD_NAME_BYTES] = {0};
+    int32_t persisted = 0;
 
     /* 1) Boot the SPLIT container: vendor runs first (installs require()), then the app mounts. */
-    ErContainerStatus s1 = er_runtime_load_container(boot, boot_len);
-    if (s1 != ER_CONTAINER_OK)
+    ErContainerStatus boot_status = er_runtime_load_container(boot, boot_length);
+    if (boot_status != ER_CONTAINER_OK)
     {
-        printf("FAIL: boot load -> %s\n", er_runtime_container_status_str(s1));
+        printf("FAIL: boot load -> %s\n", er_runtime_container_status_str(boot_status));
         return 1;
     }
     er_runtime_pump();
-    if (read_probe(build, sizeof build, &n) != 0)
+    if (read_probe(build, sizeof build, &persisted) != 0)
     {
         printf("FAIL: no __probe after boot (app did not mount)\n");
         return 1;
     }
-    printf("after boot:         build=%s n=%d\n", build, n);
-    if (strcmp(build, "boot") != 0 || n != 41)
+    printf("after boot:         build=%s n=%d\n", build, persisted);
+    if (strcmp(build, "boot") != 0 || persisted != ST_PERSISTED_VALUE)
     {
         printf("FAIL: expected build=boot n=41 after boot\n");
         failed = 1;
@@ -134,27 +140,27 @@ int main(int argc, char** argv)
     /* 2) Soft reload through the REAL firmware apply path: er_hotreload_apply sees no vendor section and
      *    takes the soft path (no reset). The resident vendor must be reused (require() still resolves) and
      *    the persisted 'n' must survive. */
-    ErContainerStatus s2 = er_hotreload_apply(frame, frame_len);
-    if (s2 != ER_CONTAINER_OK)
+    ErContainerStatus reload_status = er_hotreload_apply(frame, frame_length);
+    if (reload_status != ER_CONTAINER_OK)
     {
-        printf("FAIL: app-only soft reload -> %s\n", er_runtime_container_status_str(s2));
+        printf("FAIL: app-only soft reload -> %s\n", er_runtime_container_status_str(reload_status));
         return 1;
     }
     er_runtime_pump();
-    if (read_probe(build, sizeof build, &n) != 0)
+    if (read_probe(build, sizeof build, &persisted) != 0)
     {
         printf("FAIL: no __probe after soft reload\n");
         return 1;
     }
-    printf("after soft reload:  build=%s n=%d\n", build, n);
+    printf("after soft reload:  build=%s n=%d\n", build, persisted);
     if (strcmp(build, "reloaded") != 0)
     {
         printf("FAIL: app-only frame did not run the new code (vendor not resident?)\n");
         failed = 1;
     }
-    if (n != 41)
+    if (persisted != ST_PERSISTED_VALUE)
     {
-        printf("FAIL: persisted state lost across soft reload (n=%d, expected 41)\n", n);
+        printf("FAIL: persisted state lost across soft reload (n=%d, expected 41)\n", persisted);
         failed = 1;
     }
 
