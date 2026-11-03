@@ -31,7 +31,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Integration timestep in SECONDS — one step per elapsed millisecond of the frame. */
-#define ER_SPRING_DT_SECONDS 0.001f
+#define ER_SPRING_STEP_SECONDS 0.001f
 
 /**
  * @brief Maximum integration steps per tick, bounding the cost of a long frame.
@@ -43,20 +43,20 @@
 #define ER_SPRING_MAX_STEPS 200u
 
 /**
- * @brief Integrates one ER_SPRING_DT_SECONDS step of spring physics toward the normalised target 1.0.
+ * @brief Integrates one ER_SPRING_STEP_SECONDS step of spring physics toward the normalised target 1.0.
  *
- * @param[in,out] pos        Current normalised spring position.
- * @param[in,out] vel        Current normalised velocity.
+ * @param[in,out] position   Current normalised spring position.
+ * @param[in,out] velocity   Current normalised velocity.
  * @param[in]     stiffness  Spring constant k.
  * @param[in]     damping    Damping coefficient c.
  * @param[in]     mass       Spring mass m.
  */
-static inline void er_spring_step(float* pos, float* vel, float stiffness, float damping, float mass)
+static inline void er_spring_step(float* position, float* velocity, float stiffness, float damping, float mass)
 {
-    const float disp = *pos - 1.0f;
-    const float accel = (-stiffness * disp - damping * (*vel)) / mass;
-    *vel += accel * ER_SPRING_DT_SECONDS;
-    *pos += (*vel) * ER_SPRING_DT_SECONDS;
+    const float displacement = *position - 1.0f;
+    const float acceleration = (-stiffness * displacement - damping * (*velocity)) / mass;
+    *velocity += acceleration * ER_SPRING_STEP_SECONDS;
+    *position += (*velocity) * ER_SPRING_STEP_SECONDS;
 }
 
 #endif

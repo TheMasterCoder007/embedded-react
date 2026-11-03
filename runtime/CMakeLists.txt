@@ -21,7 +21,7 @@ if (ESP_PLATFORM)
             PRIV_REQUIRES esp_partition spi_flash
     )
     # IDF builds with -Werror; keep the toolchain's stricter warnings as warnings.
-    target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error)
+    target_compile_options(${COMPONENT_LIB} PRIVATE -Wshadow -Wno-error)
     return()
 endif ()
 
@@ -49,6 +49,11 @@ if (NOT TARGET embedded-react)
             ${CMAKE_CURRENT_SOURCE_DIR}/../engine
             ${CMAKE_CURRENT_BINARY_DIR}/engine
     )
+endif ()
+
+# A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wshadow)
 endif ()
 
 add_library(er-runtime STATIC

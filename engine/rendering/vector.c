@@ -808,11 +808,11 @@ static void rasterize(const ERVecEdge* edges,
                 s_cross_d[b + 1] = kd;
             }
             /* Walk crossings, accumulating winding; emit covered spans. */
-            int acc = 0;
+            int winding = 0;
             for (int k = 0; k < m - 1; k++)
             {
-                acc += s_cross_d[k];
-                if (rule_inside(acc, evenodd))
+                winding += s_cross_d[k];
+                if (rule_inside(winding, evenodd))
                     cover_span(s_cross_x[k], s_cross_x[k + 1], w, clipx0, width);
             }
         }

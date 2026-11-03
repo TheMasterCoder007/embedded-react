@@ -20,6 +20,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+/** @brief Pixel size a request of 0 asks for. */
+#define FONT_DEFAULT_PIXEL_SIZE 16U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -47,29 +50,29 @@ static bool s_initialised = false;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Picks the BitmapFont from a candidate list whose pixel_size is closest to target_px.
+ * @brief Picks the BitmapFont from a candidate list whose pixel_size is closest to target_pixels.
  *
  * When two candidates are equidistant, the larger size is preferred.
  *
- * @param[in] candidates  Array of pointers to candidate BitmapFonts.
- * @param[in] count       Number of entries in candidates.
- * @param[in] target_px   Desired pixel size.
+ * @param[in] candidates     Array of pointers to candidate BitmapFonts.
+ * @param[in] count          Number of entries in candidates.
+ * @param[in] target_pixels  Desired pixel size.
  *
  * @return Pointer to the best-matching BitmapFont.
  */
-static const BitmapFont* pick_closest(const BitmapFont* const* candidates, size_t count, uint8_t target_px)
+static const BitmapFont* pick_closest(const BitmapFont* const* candidates, size_t count, uint8_t target_pixels)
 {
     const BitmapFont* best = candidates[0];
-    int best_diff = abs((int)target_px - (int)best->pixel_size);
+    int best_distance = abs((int)target_pixels - (int)best->pixel_size);
 
-    for (size_t i = 1; i < count; i++)
+    for (size_t candidate_index = 1; candidate_index < count; candidate_index++)
     {
-        const BitmapFont* c = candidates[i];
-        const int diff = abs((int)target_px - (int)c->pixel_size);
-        if (diff < best_diff || (diff == best_diff && c->pixel_size > best->pixel_size))
+        const BitmapFont* candidate = candidates[candidate_index];
+        const int distance = abs((int)target_pixels - (int)candidate->pixel_size);
+        if (distance < best_distance || (distance == best_distance && candidate->pixel_size > best->pixel_size))
         {
-            best = c;
-            best_diff = diff;
+            best = candidate;
+            best_distance = distance;
         }
     }
     return best;
@@ -92,19 +95,19 @@ bool font_registry_add(const char* name, const BitmapFont* font)
 
     int family_slot = -1;
     int free_slot = -1;
-    for (int i = 0; i < (int)FONT_REGISTRY_MAX; i++)
+    for (int slot = 0; slot < (int)FONT_REGISTRY_MAX; slot++)
     {
-        if (s_entries[i].in_use)
+        if (s_entries[slot].in_use)
         {
-            if (strncmp(s_entries[i].name, name, FONT_NAME_MAX) == 0)
+            if (strncmp(s_entries[slot].name, name, FONT_NAME_MAX) == 0)
             {
-                family_slot = i;
+                family_slot = slot;
                 break;
             }
         }
         else if (free_slot < 0)
         {
-            free_slot = i;
+            free_slot = slot;
         }
     }
 
@@ -113,31 +116,31 @@ bool font_registry_add(const char* name, const BitmapFont* font)
         if (free_slot < 0)
             return false;
         family_slot = free_slot;
-        RegistryEntry* e = &s_entries[family_slot];
-        strncpy(e->name, name, FONT_NAME_MAX);
-        e->name[FONT_NAME_MAX] = '\0';
-        e->size_count = 0;
-        e->in_use = true;
+        RegistryEntry* entry = &s_entries[family_slot];
+        strncpy(entry->name, name, FONT_NAME_MAX);
+        entry->name[FONT_NAME_MAX] = '\0';
+        entry->size_count = 0;
+        entry->in_use = true;
     }
 
-    RegistryEntry* e = &s_entries[family_slot];
+    RegistryEntry* entry = &s_entries[family_slot];
 
     /* Replace in place when a size entry with the same pixel_size already exists, so that
      * re-registering the same (name, size) is idempotent rather than creating a duplicate
      * entry that would make pick_closest() ambiguous and waste a size slot. */
-    for (uint8_t i = 0; i < e->size_count; i++)
+    for (uint8_t slot = 0; slot < entry->size_count; slot++)
     {
-        if (e->sizes[i] != NULL && e->sizes[i]->pixel_size == font->pixel_size)
+        if (entry->sizes[slot] != NULL && entry->sizes[slot]->pixel_size == font->pixel_size)
         {
-            e->sizes[i] = font;
+            entry->sizes[slot] = font;
             return true;
         }
     }
 
-    if (e->size_count >= FONT_FAMILY_MAX_SIZES)
+    if (entry->size_count >= FONT_FAMILY_MAX_SIZES)
         return false;
 
-    e->sizes[e->size_count++] = font;
+    entry->sizes[entry->size_count++] = font;
     return true;
 }
 
@@ -146,14 +149,15 @@ const BitmapFont* font_registry_get_exact(const char* name, uint8_t pixel_size)
     if (!s_initialised || !name || name[0] == '\0')
         return NULL;
 
-    for (int i = 0; i < (int)FONT_REGISTRY_MAX; i++)
+    for (int family_index = 0; family_index < (int)FONT_REGISTRY_MAX; family_index++)
     {
-        if (s_entries[i].in_use && strncmp(s_entries[i].name, name, FONT_NAME_MAX) == 0)
+        if (s_entries[family_index].in_use && strncmp(s_entries[family_index].name, name, FONT_NAME_MAX) == 0)
         {
-            for (uint8_t j = 0; j < s_entries[i].size_count; j++)
+            for (uint8_t size_index = 0; size_index < s_entries[family_index].size_count; size_index++)
             {
-                if (s_entries[i].sizes[j] != NULL && s_entries[i].sizes[j]->pixel_size == pixel_size)
-                    return s_entries[i].sizes[j];
+                if (s_entries[family_index].sizes[size_index] != NULL
+                    && s_entries[family_index].sizes[size_index]->pixel_size == pixel_size)
+                    return s_entries[family_index].sizes[size_index];
             }
             return NULL;
         }
@@ -164,16 +168,16 @@ const BitmapFont* font_registry_get_exact(const char* name, uint8_t pixel_size)
 const BitmapFont* font_registry_get(const char* name, uint8_t pixel_size)
 {
     if (pixel_size == 0U)
-        pixel_size = 16U;
+        pixel_size = FONT_DEFAULT_PIXEL_SIZE;
 
     if (s_initialised && name && name[0] != '\0')
     {
-        for (int i = 0; i < (int)FONT_REGISTRY_MAX; i++)
+        for (int family_index = 0; family_index < (int)FONT_REGISTRY_MAX; family_index++)
         {
-            if (s_entries[i].in_use && s_entries[i].size_count > 0U
-                && strncmp(s_entries[i].name, name, FONT_NAME_MAX) == 0)
+            if (s_entries[family_index].in_use && s_entries[family_index].size_count > 0U
+                && strncmp(s_entries[family_index].name, name, FONT_NAME_MAX) == 0)
             {
-                return pick_closest(s_entries[i].sizes, s_entries[i].size_count, pixel_size);
+                return pick_closest(s_entries[family_index].sizes, s_entries[family_index].size_count, pixel_size);
             }
         }
     }
@@ -181,11 +185,11 @@ const BitmapFont* font_registry_get(const char* name, uint8_t pixel_size)
     return pick_closest(g_inter_sizes, g_inter_sizes_count, pixel_size);
 }
 
-void er_font_load(const char* name, const void* buf, size_t len)
+void er_font_load(const char* name, const void* buffer, size_t length)
 {
-    if (!name || !buf || len == 0)
+    if (!name || !buffer || length == 0)
         return;
-    (void)font_blob_register(name, buf, (uint32_t)len);
+    (void)font_blob_register(name, buffer, (uint32_t)length);
 }
 
 void er_font_clear(void)

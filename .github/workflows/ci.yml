@@ -42,6 +42,8 @@ jobs:
   engine:
     name: Engine build + ctests
     runs-on: ubuntu-latest
+    env:
+      CFLAGS: -Werror=shadow
     steps:
       - uses: actions/checkout@v4
       - name: Configure
@@ -186,6 +188,8 @@ jobs:
   erb-frames:
     name: Flow B golden images
     runs-on: ubuntu-latest
+    env:
+      CFLAGS: -Werror=shadow
     defaults:
       run:
         working-directory: packages/embedded-react
@@ -211,6 +215,8 @@ jobs:
     name: Fuzz the package loader and VM
     # Pinned, as the apt package names carry the clang version. See tools/erb-fuzz/README.md.
     runs-on: ubuntu-24.04
+    env:
+      CFLAGS: -Werror=shadow
     steps:
       - uses: actions/checkout@v4
       - name: Install clang and libFuzzer

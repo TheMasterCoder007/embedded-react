@@ -32,6 +32,25 @@
 #define FONT_BLOB_VERSION 2U      /**< Version of supported font blob. */
 #define FONT_BLOB_HEADER_SIZE 17U /**< Fixed header size in bytes. */
 
+/* Header fields, by byte offset. The magic takes the first four bytes. */
+#define FONT_BLOB_VERSION_AT 4U
+#define FONT_BLOB_FIRST_AT 5U
+#define FONT_BLOB_LAST_AT 6U
+#define FONT_BLOB_PIXEL_SIZE_AT 7U
+#define FONT_BLOB_LINE_HEIGHT_AT 8U
+#define FONT_BLOB_BASELINE_AT 9U
+#define FONT_BLOB_FORMAT_AT 10U
+#define FONT_BLOB_GLYPH_COUNT_AT 11U
+#define FONT_BLOB_BITMAP_SIZE_AT 13U
+
+/* One packed glyph record, by byte offset. bitmap_offset is the uint16_t at 0. */
+#define FONT_BLOB_GLYPH_BYTES 8U
+#define FONT_BLOB_GLYPH_WIDTH_AT 2U
+#define FONT_BLOB_GLYPH_HEIGHT_AT 3U
+#define FONT_BLOB_GLYPH_X_OFFSET_AT 4U
+#define FONT_BLOB_GLYPH_Y_OFFSET_AT 5U
+#define FONT_BLOB_GLYPH_ADVANCE_AT 6U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types
  ---------------------------------------------------------------------------------------------------------------------*/
