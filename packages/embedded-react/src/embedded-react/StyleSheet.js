@@ -24,9 +24,10 @@ export const StyleSheet = {
   flatten(style) {
     if (!style) return {};
     if (Array.isArray(style)) {
-      const out = {};
-      for (const s of style) Object.assign(out, StyleSheet.flatten(s));
-      return out;
+      const flattened = {};
+      for (const entry of style)
+        Object.assign(flattened, StyleSheet.flatten(entry));
+      return flattened;
     }
     return style;
   },

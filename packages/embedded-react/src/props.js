@@ -64,22 +64,22 @@ export const PASSTHROUGH = [
 ];
 
 /**
- * Flattens RN-style `style` (object or nested array) into the `out` object.
+ * Flattens RN-style `style` (object or nested array) into the `output` object.
  */
-export function flattenStyle(style, out) {
+export function flattenStyle(style, output) {
   if (!style) return;
   if (Array.isArray(style)) {
-    for (const s of style) flattenStyle(s, out);
+    for (const entry of style) flattenStyle(entry, output);
   } else {
-    Object.assign(out, style);
+    Object.assign(output, style);
   }
 }
 
 /** Flattens a style (object/array) into a fresh plain object. */
 export function flattenStyleObj(style) {
-  const out = {};
-  flattenStyle(style, out);
-  return out;
+  const flattened = {};
+  flattenStyle(style, flattened);
+  return flattened;
 }
 
 // Style fields the engine honors per inline text span (everything else inherits from the node).
@@ -127,7 +127,7 @@ export function flattenTextChildren(children, baseStyle) {
       return;
     }
     if (Array.isArray(node)) {
-      for (const c of node) walk(c, style);
+      for (const child of node) walk(child, style);
       return;
     }
     if (node && node.props !== undefined) {
@@ -152,11 +152,12 @@ export function buildTextSpans(props, flatStyle) {
   if (!isTextContent(props.children)) return [];
   const baseStyle = flatStyle || flattenStyleObj(props.style);
   const segments = flattenTextChildren(props.children, baseStyle);
-  if (!segments.some(s => s.style !== baseStyle)) return [];
-  return segments.map(s => {
-    const span = {text: s.text};
-    for (const k of SPAN_STYLE_KEYS) {
-      if (s.style && s.style[k] !== undefined) span[k] = s.style[k];
+  if (!segments.some(segment => segment.style !== baseStyle)) return [];
+  return segments.map(segment => {
+    const span = {text: segment.text};
+    for (const key of SPAN_STYLE_KEYS) {
+      if (segment.style && segment.style[key] !== undefined)
+        span[key] = segment.style[key];
     }
     return span;
   });
@@ -181,8 +182,8 @@ export function resolveImageSource(source) {
 export function buildProps(type, props, flatStyle) {
   const flat = flatStyle ? {...flatStyle} : {};
   if (!flatStyle) flattenStyle(props.style, flat);
-  for (const k of PASSTHROUGH) {
-    if (props[k] !== undefined) flat[k] = props[k];
+  for (const key of PASSTHROUGH) {
+    if (props[key] !== undefined) flat[key] = props[key];
   }
   // <Svg> takes width/height as DIRECT props (the react-native-svg convention) — the engine sizes the
   // vector node from them. Fold them into the resolved style (an explicit style width/height still wins)
@@ -221,9 +222,9 @@ export function buildProps(type, props, flatStyle) {
   // The engine renders this when no spans are set; with spans (buildTextSpans) it carries the same
   // text for the plain-text fallback. Non-flattenable children fall back to mounted child instances.
   if (type === 'Text' && isTextContent(props.children)) {
-    const base = flatStyle || flattenStyleObj(props.style);
-    flat.text = flattenTextChildren(props.children, base)
-      .map(s => s.text)
+    const baseStyle = flatStyle || flattenStyleObj(props.style);
+    flat.text = flattenTextChildren(props.children, baseStyle)
+      .map(segment => segment.text)
       .join('');
   }
   return flat;
@@ -242,43 +243,50 @@ const DEEP_EQUAL_MAX_DEPTH = 24;
  * Animated.Value) compare by IDENTITY only: a fresh instance must read as changed, so it gets bound
  * to the node, while the same instance is already bound and can be skipped.
  */
-export function deepEqualProps(a, b, depth = 0) {
-  if (Object.is(a, b)) return true;
+export function deepEqualProps(left, right, depth = 0) {
+  if (Object.is(left, right)) return true;
   if (depth >= DEEP_EQUAL_MAX_DEPTH) return false;
   if (
-    typeof a !== 'object' ||
-    typeof b !== 'object' ||
-    a === null ||
-    b === null
+    typeof left !== 'object' ||
+    typeof right !== 'object' ||
+    left === null ||
+    right === null
   )
     return false;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length)
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (
+      !Array.isArray(left) ||
+      !Array.isArray(right) ||
+      left.length !== right.length
+    )
       return false;
-    for (let i = 0; i < a.length; i++) {
-      if (!deepEqualProps(a[i], b[i], depth + 1)) return false;
+    for (let index = 0; index < left.length; index++) {
+      if (!deepEqualProps(left[index], right[index], depth + 1)) return false;
     }
     return true;
   }
   // React elements: equal when they render the same host output — same type, same props.
-  if (a.$$typeof !== b.$$typeof) return false;
-  if (a.$$typeof !== undefined) {
-    return a.type === b.type && deepEqualProps(a.props, b.props, depth + 1);
+  if (left.$$typeof !== right.$$typeof) return false;
+  if (left.$$typeof !== undefined) {
+    return (
+      left.type === right.type &&
+      deepEqualProps(left.props, right.props, depth + 1)
+    );
   }
   // Plain objects only; class instances fall through to "changed" (identity already ruled equal out).
-  const protoA = Object.getPrototypeOf(a);
-  const protoB = Object.getPrototypeOf(b);
+  const leftPrototype = Object.getPrototypeOf(left);
+  const rightPrototype = Object.getPrototypeOf(right);
   if (
-    (protoA !== null && protoA !== Object.prototype) ||
-    (protoB !== null && protoB !== Object.prototype)
+    (leftPrototype !== null && leftPrototype !== Object.prototype) ||
+    (rightPrototype !== null && rightPrototype !== Object.prototype)
   )
     return false;
-  const keysA = Object.keys(a);
-  const keysB = Object.keys(b);
-  if (keysA.length !== keysB.length) return false;
-  for (const k of keysA) {
-    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
-    if (!deepEqualProps(a[k], b[k], depth + 1)) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
+    if (!deepEqualProps(left[key], right[key], depth + 1)) return false;
   }
   return true;
 }

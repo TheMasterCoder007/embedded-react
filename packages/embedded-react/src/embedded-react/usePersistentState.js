@@ -47,23 +47,23 @@ export function usePersistentState(key, initial) {
     return typeof initial === 'function' ? initial() : initial;
   });
 
-  const set = useCallback(
+  const setPersistedValue = useCallback(
     next => {
-      setValue(prev => {
-        const v = typeof next === 'function' ? next(prev) : next;
+      setValue(previous => {
+        const resolved = typeof next === 'function' ? next(previous) : next;
         const store = globalThis.__erPersist;
         if (store) {
           try {
-            store.set(key, JSON.stringify(v));
+            store.set(key, JSON.stringify(resolved));
           } catch {
             /* unserializable value — skip persistence, keep the in-memory state */
           }
         }
-        return v;
+        return resolved;
       });
     },
     [key],
   );
 
-  return [value, set];
+  return [value, setPersistedValue];
 }

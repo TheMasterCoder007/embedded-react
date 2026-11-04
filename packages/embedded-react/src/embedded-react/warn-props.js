@@ -68,7 +68,7 @@ export function createPropWarner(component, supported, hint, quiet = []) {
   return props => {
     if (warned) return;
     const names = Object.keys(props).filter(
-      k => !supported.includes(k) && !quiet.includes(k),
+      name => !supported.includes(name) && !quiet.includes(name),
     );
     if (names.length === 0) return;
     warned = true;

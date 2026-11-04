@@ -55,9 +55,9 @@ export class AnimatedValue {
     this._destroyed = false;
   }
 
-  setValue(v) {
-    this._value = v;
-    NativeUI.animValueSet(this._handle, v);
+  setValue(value) {
+    this._value = value;
+    NativeUI.animValueSet(this._handle, value);
   }
 
   /**
@@ -103,14 +103,14 @@ export class AnimatedInterpolation {
   }
 
   __bind(node, prop) {
-    const out = this._config?.outputRange;
-    if (Array.isArray(out)) {
+    const outputRange = this._config?.outputRange;
+    if (Array.isArray(outputRange)) {
       if (COLOR_PROPS.has(prop)) {
-        if (out.some(c => typeof c !== 'string')) {
+        if (outputRange.some(output => typeof output !== 'string')) {
           warnColorBind(prop);
           return;
         }
-      } else if (out.some(n => typeof n !== 'number')) {
+      } else if (outputRange.some(output => typeof output !== 'number')) {
         warnNumberBind(prop);
         return;
       }
@@ -142,13 +142,13 @@ export class AnimatedInterpolation {
   }
 }
 
-/** Wraps fn so it runs at most once, regardless of how many times it is invoked. */
-function once(fn) {
+/** Wraps callback so it runs at most once, regardless of how many times it is invoked. */
+function once(callback) {
   let called = false;
-  return arg => {
+  return argument => {
     if (called) return;
     called = true;
-    if (fn) fn(arg);
+    if (callback) callback(argument);
   };
 }
 
@@ -166,11 +166,11 @@ function makeAnimation(value, toValue, config) {
     _value: value,
     start(onComplete) {
       // Always pass a wrapper so we can null out the (possibly recycled) handle on completion.
-      const cb = finished => {
+      const onEnd = finished => {
         handle = 0;
         if (onComplete) onComplete({finished: !!finished});
       };
-      handle = NativeUI.animValueAnimate(value._handle, toValue, config, cb);
+      handle = NativeUI.animValueAnimate(value._handle, toValue, config, onEnd);
     },
     stop() {
       if (handle) NativeUI.animStop(handle);
@@ -252,16 +252,16 @@ export function parallel(animations, config) {
           anyUnfinished = true;
           if (stopTogether && !stopped) {
             stopped = true;
-            for (const a of animations) a.stop();
+            for (const animation of animations) animation.stop();
           }
         }
         if (doneCount >= total) done({finished: !anyUnfinished});
       };
-      for (const a of animations) a.start(onChild);
+      for (const animation of animations) animation.start(onChild);
     },
     stop() {
       stopped = true;
-      for (const a of animations) a.stop();
+      for (const animation of animations) animation.stop();
     },
   };
 }
@@ -285,22 +285,22 @@ export function stagger(delay, animations) {
         if (!result || result.finished === false) anyUnfinished = true;
         if (doneCount >= total) done({finished: !anyUnfinished});
       };
-      animations.forEach((a, i) => {
-        if (i === 0) {
-          a.start(onChild);
+      animations.forEach((animation, index) => {
+        if (index === 0) {
+          animation.start(onChild);
         } else {
           timers.push(
             setTimeout(() => {
-              if (!stopped) a.start(onChild);
-            }, delay * i),
+              if (!stopped) animation.start(onChild);
+            }, delay * index),
           );
         }
       });
     },
     stop() {
       stopped = true;
-      for (const t of timers) clearTimeout(t);
-      for (const a of animations) a.stop();
+      for (const timer of timers) clearTimeout(timer);
+      for (const animation of animations) animation.stop();
     },
   };
 }

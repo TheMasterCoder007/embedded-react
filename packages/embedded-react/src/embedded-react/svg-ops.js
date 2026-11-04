@@ -56,69 +56,106 @@ export const GRAD_LINEAR = 1;
 export const GRAD_RADIAL = 2;
 export const GRAD_CONIC = 3;
 
+const ALPHA_OPAQUE = 255;
+const CHANNEL_MAX = 255;
+const OPAQUE_BLACK = 0xff000000;
+
+const HALF_TURN_DEGREES = 180;
+const QUARTER_TURN_RADIANS = Math.PI / 2;
+const FULL_TURN_RADIANS = 2 * Math.PI;
+// Arc convenience angles start at 12 o'clock; the engine's start at +X, a quarter turn earlier.
+const TWELVE_OCLOCK_DEGREES = 90;
+
+const DEFAULT_STROKE_WIDTH = 1;
+const DEFAULT_MITER_LIMIT = 4;
+const FILL_RULE_NONZERO = 0;
+const FILL_RULE_EVEN_ODD = 1;
+
+// A shape's tape starts with VOP_SHAPE and its paint index.
+const SHAPE_HEADER_LENGTH = 2;
+// Where strokeWidth sits in a paint record (see PAINT_STRIDE).
+const PAINT_STROKE_WIDTH_SLOT = 2;
+
 /** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
-function lerpArgb(c0, c1, t) {
-  const lp = sh => {
-    const a = (c0 >>> sh) & 0xff;
-    const b = (c1 >>> sh) & 0xff;
-    return Math.round(a + (b - a) * t) & 0xff;
+function lerpArgb(fromColor, toColor, fraction) {
+  const channel = shift => {
+    const fromChannel = (fromColor >>> shift) & 0xff;
+    const toChannel = (toColor >>> shift) & 0xff;
+    return (
+      Math.round(fromChannel + (toChannel - fromChannel) * fraction) & 0xff
+    );
   };
-  return ((lp(24) << 24) | (lp(16) << 16) | (lp(8) << 8) | lp(0)) >>> 0;
+  return (
+    ((channel(24) << 24) |
+      (channel(16) << 16) |
+      (channel(8) << 8) |
+      channel(0)) >>>
+    0
+  );
 }
 
-/** Gradient color at position t (stops ascending by offset; clamps to the endpoint colors). */
-function evalStopsAt(stops, t) {
+/** Gradient color at `position` (stops ascending by offset; clamps to the endpoint colors). */
+function evalStopsAt(stops, position) {
   if (!stops.length) return 0;
-  if (t <= stops[0].offset) return stops[0].color >>> 0;
+  if (position <= stops[0].offset) return stops[0].color >>> 0;
   const last = stops[stops.length - 1];
-  if (t >= last.offset) return last.color >>> 0;
-  for (let i = 0; i < stops.length - 1; i++) {
-    const a = stops[i];
-    const b = stops[i + 1];
-    if (t <= b.offset) {
-      const span = b.offset - a.offset;
+  if (position >= last.offset) return last.color >>> 0;
+  for (let index = 0; index < stops.length - 1; index++) {
+    const before = stops[index];
+    const after = stops[index + 1];
+    if (position <= after.offset) {
+      const span = after.offset - before.offset;
       return lerpArgb(
-        a.color >>> 0,
-        b.color >>> 0,
-        span > 0 ? (t - a.offset) / span : 0,
+        before.color >>> 0,
+        after.color >>> 0,
+        span > 0 ? (position - before.offset) / span : 0,
       );
     }
   }
   return last.color >>> 0;
 }
 
-/** Reduces a stop list to at most `max` entries, resampling evenly across the stop range when it's over. */
-function capStops(stops, max) {
-  if (stops.length <= max) return stops;
-  const lo = stops[0].offset;
-  const hi = stops[stops.length - 1].offset;
-  const out = [];
-  for (let i = 0; i < max; i++) {
-    const t = max === 1 ? lo : lo + (hi - lo) * (i / (max - 1));
-    out.push({color: evalStopsAt(stops, t), offset: t});
+/** Reduces a stop list to at most `maxStops` entries, resampling evenly across the stop range when it's over. */
+function capStops(stops, maxStops) {
+  if (stops.length <= maxStops) return stops;
+  const firstOffset = stops[0].offset;
+  const lastOffset = stops[stops.length - 1].offset;
+  const resampled = [];
+  for (let index = 0; index < maxStops; index++) {
+    const offset =
+      maxStops === 1
+        ? firstOffset
+        : firstOffset + (lastOffset - firstOffset) * (index / (maxStops - 1));
+    resampled.push({color: evalStopsAt(stops, offset), offset: offset});
   }
-  return out;
+  return resampled;
 }
 
 /** Encodes gradient descriptors into the flat float array NativeUI.setVectorOps takes (GRAD_STRIDE/gradient).
  *  A gradient with more than GRAD_MAX_STOPS stops is resampled down (not truncated) so it still ramps right. */
-export function encodeVectorGradients(grads) {
-  const out = [];
-  if (!grads) return out;
-  for (const g of grads) {
-    const stops = capStops(g.stops || [], GRAD_MAX_STOPS);
-    out.push(g.type, stops.length);
-    for (let s = 0; s < GRAD_MAX_STOPS; s++) {
-      const st = stops[s];
-      out.push(st ? st.color >>> 0 : 0, st ? st.offset : 0);
+export function encodeVectorGradients(gradients) {
+  const encoded = [];
+  if (!gradients) return encoded;
+  for (const gradient of gradients) {
+    const stops = capStops(gradient.stops || [], GRAD_MAX_STOPS);
+    encoded.push(gradient.type, stops.length);
+    for (let stopIndex = 0; stopIndex < GRAD_MAX_STOPS; stopIndex++) {
+      const stop = stops[stopIndex];
+      encoded.push(stop ? stop.color >>> 0 : 0, stop ? stop.offset : 0);
     }
-    out.push(g.ax || 0, g.ay || 0, g.bx || 0, g.by || 0, g.r || 0);
+    encoded.push(
+      gradient.ax || 0,
+      gradient.ay || 0,
+      gradient.bx || 0,
+      gradient.by || 0,
+      gradient.r || 0,
+    );
   }
-  return out;
+  return encoded;
 }
 
 // The shared named colors plus SVG's `none`; everything else goes through hex/rgb parsing.
-const NAMED = Object.freeze(
+const SVG_NAMED_COLORS = Object.freeze(
   Object.assign(Object.create(null), NAMED_COLORS, {none: 0}),
 );
 
@@ -131,52 +168,55 @@ const _colorCache = new Map();
  * null, so the engine treats it as "no fill"/"no stroke". Accepts #rgb, #rgba, #rrggbb, #rrggbbaa,
  * rgb()/rgba(), and the named colors above. String results are memoised (see _colorCache).
  */
-export function parseColor(c) {
-  if (c == null || c === false) return 0;
-  if (typeof c === 'number') return c >>> 0;
-  const cached = _colorCache.get(c);
+export function parseColor(color) {
+  if (color == null || color === false) return 0;
+  if (typeof color === 'number') return color >>> 0;
+  const cached = _colorCache.get(color);
   if (cached !== undefined) return cached;
-  const v = parseColorString(c);
-  _colorCache.set(c, v);
-  return v;
+  const parsed = parseColorString(color);
+  _colorCache.set(color, parsed);
+  return parsed;
 }
 
-function parseColorString(c) {
-  let s = String(c).trim().toLowerCase();
-  if (s in NAMED) return NAMED[s] >>> 0;
-  if (s[0] === '#') {
-    s = s.slice(1);
-    let r,
-      g,
-      b,
-      a = 255;
-    if (s.length === 3 || s.length === 4) {
-      r = parseInt(s[0] + s[0], 16);
-      g = parseInt(s[1] + s[1], 16);
-      b = parseInt(s[2] + s[2], 16);
-      if (s.length === 4) a = parseInt(s[3] + s[3], 16);
-    } else if (s.length === 6 || s.length === 8) {
-      r = parseInt(s.slice(0, 2), 16);
-      g = parseInt(s.slice(2, 4), 16);
-      b = parseInt(s.slice(4, 6), 16);
-      if (s.length === 8) a = parseInt(s.slice(6, 8), 16);
+function parseColorString(color) {
+  let text = String(color).trim().toLowerCase();
+  if (text in SVG_NAMED_COLORS) return SVG_NAMED_COLORS[text] >>> 0;
+  if (text[0] === '#') {
+    text = text.slice(1);
+    let red,
+      green,
+      blue,
+      alpha = ALPHA_OPAQUE;
+    if (text.length === 3 || text.length === 4) {
+      red = parseInt(text[0] + text[0], 16);
+      green = parseInt(text[1] + text[1], 16);
+      blue = parseInt(text[2] + text[2], 16);
+      if (text.length === 4) alpha = parseInt(text[3] + text[3], 16);
+    } else if (text.length === 6 || text.length === 8) {
+      red = parseInt(text.slice(0, 2), 16);
+      green = parseInt(text.slice(2, 4), 16);
+      blue = parseInt(text.slice(4, 6), 16);
+      if (text.length === 8) alpha = parseInt(text.slice(6, 8), 16);
     } else {
-      return 0xff000000;
+      return OPAQUE_BLACK;
     }
-    return ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+    return ((alpha << 24) | (red << 16) | (green << 8) | blue) >>> 0;
   }
-  if (s.startsWith('rgb')) {
-    const m = s.match(/rgba?\(([^)]+)\)/);
-    if (m) {
-      const p = m[1].split(',').map(x => x.trim());
-      const r = parseInt(p[0], 10) || 0;
-      const g = parseInt(p[1], 10) || 0;
-      const b = parseInt(p[2], 10) || 0;
-      const a = p[3] != null ? Math.round(parseFloat(p[3]) * 255) : 255;
-      return ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+  if (text.startsWith('rgb')) {
+    const match = text.match(/rgba?\(([^)]+)\)/);
+    if (match) {
+      const parts = match[1].split(',').map(part => part.trim());
+      const red = parseInt(parts[0], 10) || 0;
+      const green = parseInt(parts[1], 10) || 0;
+      const blue = parseInt(parts[2], 10) || 0;
+      const alpha =
+        parts[3] != null
+          ? Math.round(parseFloat(parts[3]) * CHANNEL_MAX)
+          : ALPHA_OPAQUE;
+      return ((alpha << 24) | (red << 16) | (green << 8) | blue) >>> 0;
     }
   }
-  return 0xff000000; // unknown -> opaque black (SVG-ish default)
+  return OPAQUE_BLACK; // unknown -> opaque black (SVG-ish default)
 }
 
 // --- SVG `d` path-data parser -------------------------------------------------------------------
@@ -184,110 +224,131 @@ function parseColorString(c) {
 // Hoisted so the pattern is compiled once at module load, not on every parsePath call. The /g lastIndex is reset below.
 const PATH_RE = /([MmLlHhVvCcSsQqTtAaZz])|(-?\d*\.?\d+(?:[eE][-+]?\d+)?)/g;
 
-/** Tokenizes a `d` string into {cmd, args[]} groups (one per command letter). */
+/** Tokenizes a `d` string into {command, values[]} groups (one per command letter). */
 function tokenizePath(d) {
-  const out = [];
-  const re = PATH_RE;
-  re.lastIndex = 0;
-  let m;
-  let cur = null;
-  while ((m = re.exec(d)) !== null) {
-    if (m[1]) {
-      cur = {cmd: m[1], args: []};
-      out.push(cur);
-    } else if (cur) {
-      cur.args.push(parseFloat(m[2]));
+  const commands = [];
+  const pattern = PATH_RE;
+  pattern.lastIndex = 0;
+  let match;
+  let current = null;
+  while ((match = pattern.exec(d)) !== null) {
+    if (match[1]) {
+      current = {command: match[1], values: []};
+      commands.push(current);
+    } else if (current) {
+      current.values.push(parseFloat(match[2]));
     }
   }
-  return out;
+  return commands;
 }
 
 /** Converts an SVG elliptical arc (endpoint form) to a list of cubic bezier segments. */
-function arcToCubics(x0, y0, rx, ry, phiDeg, largeArc, sweep, x, y) {
-  const out = [];
+function arcToCubics(x0, y0, rx, ry, rotationDegrees, largeArc, sweep, x, y) {
+  const cubics = [];
   if (rx === 0 || ry === 0) {
-    out.push([x0, y0, x, y, x, y]); // degenerate -> straight line as a cubic
-    return out;
+    cubics.push([x0, y0, x, y, x, y]); // degenerate -> straight line as a cubic
+    return cubics;
   }
   rx = Math.abs(rx);
   ry = Math.abs(ry);
-  const phi = (phiDeg * Math.PI) / 180;
-  const cosP = Math.cos(phi);
-  const sinP = Math.sin(phi);
-  const dx = (x0 - x) / 2;
-  const dy = (y0 - y) / 2;
-  const x1p = cosP * dx + sinP * dy;
-  const y1p = -sinP * dx + cosP * dy;
-  let rxs = rx * rx;
-  let rys = ry * ry;
-  const x1ps = x1p * x1p;
-  const y1ps = y1p * y1p;
+  const rotation = (rotationDegrees * Math.PI) / HALF_TURN_DEGREES;
+  const cosRotation = Math.cos(rotation);
+  const sinRotation = Math.sin(rotation);
+  const halfDeltaX = (x0 - x) / 2;
+  const halfDeltaY = (y0 - y) / 2;
+  const primeX = cosRotation * halfDeltaX + sinRotation * halfDeltaY;
+  const primeY = -sinRotation * halfDeltaX + cosRotation * halfDeltaY;
+  let rxSquared = rx * rx;
+  let rySquared = ry * ry;
+  const primeXSquared = primeX * primeX;
+  const primeYSquared = primeY * primeY;
   // Correct out-of-range radii.
-  const lam = x1ps / rxs + y1ps / rys;
-  if (lam > 1) {
-    const s = Math.sqrt(lam);
-    rx *= s;
-    ry *= s;
-    rxs = rx * rx;
-    rys = ry * ry;
+  const radiiScale = primeXSquared / rxSquared + primeYSquared / rySquared;
+  if (radiiScale > 1) {
+    const scale = Math.sqrt(radiiScale);
+    rx *= scale;
+    ry *= scale;
+    rxSquared = rx * rx;
+    rySquared = ry * ry;
   }
   let sign = largeArc !== sweep ? 1 : -1;
-  let num = rxs * rys - rxs * y1ps - rys * x1ps;
-  if (num < 0) num = 0;
-  const co = sign * Math.sqrt(num / (rxs * y1ps + rys * x1ps || 1));
-  const cxp = (co * rx * y1p) / ry;
-  const cyp = (-co * ry * x1p) / rx;
-  const cx = cosP * cxp - sinP * cyp + (x0 + x) / 2;
-  const cy = sinP * cxp + cosP * cyp + (y0 + y) / 2;
-  const ang = (ux, uy, vx, vy) => {
-    const dot = ux * vx + uy * vy;
-    const len = Math.sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy)) || 1;
-    let a = Math.acos(Math.max(-1, Math.min(1, dot / len)));
-    if (ux * vy - uy * vx < 0) a = -a;
-    return a;
+  let numerator =
+    rxSquared * rySquared -
+    rxSquared * primeYSquared -
+    rySquared * primeXSquared;
+  if (numerator < 0) numerator = 0;
+  const coefficient =
+    sign *
+    Math.sqrt(
+      numerator / (rxSquared * primeYSquared + rySquared * primeXSquared || 1),
+    );
+  const primeCenterX = (coefficient * rx * primeY) / ry;
+  const primeCenterY = (-coefficient * ry * primeX) / rx;
+  const cx =
+    cosRotation * primeCenterX - sinRotation * primeCenterY + (x0 + x) / 2;
+  const cy =
+    sinRotation * primeCenterX + cosRotation * primeCenterY + (y0 + y) / 2;
+  const angleBetween = (fromX, fromY, toX, toY) => {
+    const dot = fromX * toX + fromY * toY;
+    const lengthProduct =
+      Math.sqrt((fromX * fromX + fromY * fromY) * (toX * toX + toY * toY)) || 1;
+    let angle = Math.acos(Math.max(-1, Math.min(1, dot / lengthProduct)));
+    if (fromX * toY - fromY * toX < 0) angle = -angle;
+    return angle;
   };
-  const theta1 = ang(1, 0, (x1p - cxp) / rx, (y1p - cyp) / ry);
-  let dtheta = ang(
-    (x1p - cxp) / rx,
-    (y1p - cyp) / ry,
-    (-x1p - cxp) / rx,
-    (-y1p - cyp) / ry,
+  const startAngle = angleBetween(
+    1,
+    0,
+    (primeX - primeCenterX) / rx,
+    (primeY - primeCenterY) / ry,
   );
-  if (!sweep && dtheta > 0) dtheta -= 2 * Math.PI;
-  if (sweep && dtheta < 0) dtheta += 2 * Math.PI;
-  const segs = Math.ceil(Math.abs(dtheta) / (Math.PI / 2));
-  const delta = dtheta / segs;
-  const t = (4 / 3) * Math.tan(delta / 4);
-  let th = theta1;
-  let px = x0;
-  let py = y0;
-  for (let i = 0; i < segs; i++) {
-    const th2 = th + delta;
-    const cos1 = Math.cos(th);
-    const sin1 = Math.sin(th);
-    const cos2 = Math.cos(th2);
-    const sin2 = Math.sin(th2);
-    const e1x = cx + rx * cosP * cos1 - ry * sinP * sin1;
-    const e1y = cy + rx * sinP * cos1 + ry * cosP * sin1;
-    const e2x = cx + rx * cosP * cos2 - ry * sinP * sin2;
-    const e2y = cy + rx * sinP * cos2 + ry * cosP * sin2;
-    const d1x = -rx * cosP * sin1 - ry * sinP * cos1;
-    const d1y = -rx * sinP * sin1 + ry * cosP * cos1;
-    const d2x = -rx * cosP * sin2 - ry * sinP * cos2;
-    const d2y = -rx * sinP * sin2 + ry * cosP * cos2;
-    out.push([
-      px + t * d1x,
-      py + t * d1y,
-      e2x - t * d2x,
-      e2y - t * d2y,
-      e2x,
-      e2y,
+  let sweepAngle = angleBetween(
+    (primeX - primeCenterX) / rx,
+    (primeY - primeCenterY) / ry,
+    (-primeX - primeCenterX) / rx,
+    (-primeY - primeCenterY) / ry,
+  );
+  if (!sweep && sweepAngle > 0) sweepAngle -= FULL_TURN_RADIANS;
+  if (sweep && sweepAngle < 0) sweepAngle += FULL_TURN_RADIANS;
+  const segmentCount = Math.ceil(Math.abs(sweepAngle) / QUARTER_TURN_RADIANS);
+  const segmentAngle = sweepAngle / segmentCount;
+  const handleScale = (4 / 3) * Math.tan(segmentAngle / 4);
+  let segmentStart = startAngle;
+  let previousX = x0;
+  let previousY = y0;
+  for (let segment = 0; segment < segmentCount; segment++) {
+    const segmentEnd = segmentStart + segmentAngle;
+    const cosStart = Math.cos(segmentStart);
+    const sinStart = Math.sin(segmentStart);
+    const cosEnd = Math.cos(segmentEnd);
+    const sinEnd = Math.sin(segmentEnd);
+    const startPointX =
+      cx + rx * cosRotation * cosStart - ry * sinRotation * sinStart;
+    const startPointY =
+      cy + rx * sinRotation * cosStart + ry * cosRotation * sinStart;
+    const endPointX =
+      cx + rx * cosRotation * cosEnd - ry * sinRotation * sinEnd;
+    const endPointY =
+      cy + rx * sinRotation * cosEnd + ry * cosRotation * sinEnd;
+    const startTangentX =
+      -rx * cosRotation * sinStart - ry * sinRotation * cosStart;
+    const startTangentY =
+      -rx * sinRotation * sinStart + ry * cosRotation * cosStart;
+    const endTangentX = -rx * cosRotation * sinEnd - ry * sinRotation * cosEnd;
+    const endTangentY = -rx * sinRotation * sinEnd + ry * cosRotation * cosEnd;
+    cubics.push([
+      previousX + handleScale * startTangentX,
+      previousY + handleScale * startTangentY,
+      endPointX - handleScale * endTangentX,
+      endPointY - handleScale * endTangentY,
+      endPointX,
+      endPointY,
     ]);
-    px = e2x;
-    py = e2y;
-    th = th2;
+    previousX = endPointX;
+    previousY = endPointY;
+    segmentStart = segmentEnd;
   }
-  return out;
+  return cubics;
 }
 
 /**
@@ -305,14 +366,14 @@ export function parsePath(d) {
 // conversion over every static path beside it, only for the engine to memcmp the result and throw
 // the identical bytes away. Held to both an op budget and an entry count, and a path too big to fit
 // the budget on its own is never stored, so nothing can push it over; an entry also holds one
-// transformed copy (see xf), so the real footprint is ~2x the op budget. The bridge caps a single
+// transformed copy (see lastTransform), so the real footprint is ~2x the op budget. The bridge caps a single
 // <Svg> at 1024 ops and 16 shapes, so this holds several screens' worth.
 const PATH_CACHE = new Map();
 const PATH_CACHE_MAX_OPS = 4096;
 const PATH_CACHE_MAX_ENTRIES = 128;
 let _pathCacheOps = 0;
 
-/** Cache record for one `d` string: `ops` are the parsed path ops, `xf` the last transform applied
+/** Cache record for one `d` string: `ops` are the parsed path ops, `lastTransform` the last transform applied
  *  to them (see transformCached). Coerces its key, so a non-string `d` still hits the cache instead
  *  of keying a fresh entry off object identity every call. */
 function pathEntry(d) {
@@ -325,7 +386,7 @@ function pathEntry(d) {
     PATH_CACHE.set(key, hit);
     return hit;
   }
-  const entry = {ops: parsePathUncached(key), xf: null};
+  const entry = {ops: parsePathUncached(key), lastTransform: null};
   // A path that alone exceeds the whole budget is parsed but not stored: caching it would blow the
   // bound it is measured against, and at that size it is already past the bridge's per-<Svg> op cap.
   if (entry.ops.length > PATH_CACHE_MAX_OPS) return entry;
@@ -350,140 +411,178 @@ export function clearPathCache() {
 
 function parsePathUncached(d) {
   const ops = [];
-  const toks = tokenizePath(d);
-  let cx = 0;
-  let cy = 0;
-  let sx = 0;
-  let sy = 0; // subpath start
-  let prevCtrlX = 0;
-  let prevCtrlY = 0;
-  let prevCmd = '';
-  for (const tk of toks) {
-    const C = tk.cmd;
-    const rel = C >= 'a' && C <= 'z';
-    const a = tk.args;
-    const U = C.toUpperCase();
-    let i = 0;
-    const rx = v => (rel ? cx + v : v);
-    const ry = v => (rel ? cy + v : v);
-    if (U === 'M') {
+  const tokens = tokenizePath(d);
+  let currentX = 0;
+  let currentY = 0;
+  let subpathStartX = 0;
+  let subpathStartY = 0; // subpath start
+  let previousControlX = 0;
+  let previousControlY = 0;
+  let previousCommand = '';
+  for (const token of tokens) {
+    const command = token.command;
+    const relative = command >= 'a' && command <= 'z';
+    const values = token.values;
+    const absoluteCommand = command.toUpperCase();
+    let index = 0;
+    const resolveX = value => (relative ? currentX + value : value);
+    const resolveY = value => (relative ? currentY + value : value);
+    if (absoluteCommand === 'M') {
       // First pair is moveto; later pairs are implicit linetos.
-      cx = rx(a[i++]);
-      cy = ry(a[i++]);
-      sx = cx;
-      sy = cy;
-      ops.push(VOP_MOVE, cx, cy);
-      while (i + 1 < a.length) {
-        cx = rel ? cx + a[i++] : a[i++];
-        cy = rel ? cy + a[i++] : a[i++];
-        ops.push(VOP_LINE, cx, cy);
+      currentX = resolveX(values[index++]);
+      currentY = resolveY(values[index++]);
+      subpathStartX = currentX;
+      subpathStartY = currentY;
+      ops.push(VOP_MOVE, currentX, currentY);
+      while (index + 1 < values.length) {
+        currentX = relative ? currentX + values[index++] : values[index++];
+        currentY = relative ? currentY + values[index++] : values[index++];
+        ops.push(VOP_LINE, currentX, currentY);
       }
-    } else if (U === 'L') {
-      while (i + 1 < a.length) {
-        cx = rel ? cx + a[i++] : a[i++];
-        cy = rel ? cy + a[i++] : a[i++];
-        ops.push(VOP_LINE, cx, cy);
+    } else if (absoluteCommand === 'L') {
+      while (index + 1 < values.length) {
+        currentX = relative ? currentX + values[index++] : values[index++];
+        currentY = relative ? currentY + values[index++] : values[index++];
+        ops.push(VOP_LINE, currentX, currentY);
       }
-    } else if (U === 'H') {
-      while (i < a.length) {
-        cx = rel ? cx + a[i++] : a[i++];
-        ops.push(VOP_LINE, cx, cy);
+    } else if (absoluteCommand === 'H') {
+      while (index < values.length) {
+        currentX = relative ? currentX + values[index++] : values[index++];
+        ops.push(VOP_LINE, currentX, currentY);
       }
-    } else if (U === 'V') {
-      while (i < a.length) {
-        cy = rel ? cy + a[i++] : a[i++];
-        ops.push(VOP_LINE, cx, cy);
+    } else if (absoluteCommand === 'V') {
+      while (index < values.length) {
+        currentY = relative ? currentY + values[index++] : values[index++];
+        ops.push(VOP_LINE, currentX, currentY);
       }
-    } else if (U === 'C') {
-      while (i + 5 < a.length) {
-        const c1x = rx(a[i++]);
-        const c1y = ry(a[i++]);
-        const c2x = rx(a[i++]);
-        const c2y = ry(a[i++]);
-        const ex = rx(a[i++]);
-        const ey = ry(a[i++]);
-        ops.push(VOP_CUBIC, c1x, c1y, c2x, c2y, ex, ey);
-        prevCtrlX = c2x;
-        prevCtrlY = c2y;
-        cx = ex;
-        cy = ey;
+    } else if (absoluteCommand === 'C') {
+      while (index + 5 < values.length) {
+        const control1X = resolveX(values[index++]);
+        const control1Y = resolveY(values[index++]);
+        const control2X = resolveX(values[index++]);
+        const control2Y = resolveY(values[index++]);
+        const endX = resolveX(values[index++]);
+        const endY = resolveY(values[index++]);
+        ops.push(
+          VOP_CUBIC,
+          control1X,
+          control1Y,
+          control2X,
+          control2Y,
+          endX,
+          endY,
+        );
+        previousControlX = control2X;
+        previousControlY = control2Y;
+        currentX = endX;
+        currentY = endY;
       }
-    } else if (U === 'S') {
-      while (i + 3 < a.length) {
-        const refl = prevCmd === 'C' || prevCmd === 'S';
-        const c1x = refl ? 2 * cx - prevCtrlX : cx;
-        const c1y = refl ? 2 * cy - prevCtrlY : cy;
-        const c2x = rx(a[i++]);
-        const c2y = ry(a[i++]);
-        const ex = rx(a[i++]);
-        const ey = ry(a[i++]);
-        ops.push(VOP_CUBIC, c1x, c1y, c2x, c2y, ex, ey);
-        prevCtrlX = c2x;
-        prevCtrlY = c2y;
-        cx = ex;
-        cy = ey;
+    } else if (absoluteCommand === 'S') {
+      while (index + 3 < values.length) {
+        const reflected = previousCommand === 'C' || previousCommand === 'S';
+        const control1X = reflected
+          ? 2 * currentX - previousControlX
+          : currentX;
+        const control1Y = reflected
+          ? 2 * currentY - previousControlY
+          : currentY;
+        const control2X = resolveX(values[index++]);
+        const control2Y = resolveY(values[index++]);
+        const endX = resolveX(values[index++]);
+        const endY = resolveY(values[index++]);
+        ops.push(
+          VOP_CUBIC,
+          control1X,
+          control1Y,
+          control2X,
+          control2Y,
+          endX,
+          endY,
+        );
+        previousControlX = control2X;
+        previousControlY = control2Y;
+        currentX = endX;
+        currentY = endY;
       }
-    } else if (U === 'Q') {
-      while (i + 3 < a.length) {
-        const qx = rx(a[i++]);
-        const qy = ry(a[i++]);
-        const ex = rx(a[i++]);
-        const ey = ry(a[i++]);
-        ops.push(VOP_QUAD, qx, qy, ex, ey);
-        prevCtrlX = qx;
-        prevCtrlY = qy;
-        cx = ex;
-        cy = ey;
+    } else if (absoluteCommand === 'Q') {
+      while (index + 3 < values.length) {
+        const controlX = resolveX(values[index++]);
+        const controlY = resolveY(values[index++]);
+        const endX = resolveX(values[index++]);
+        const endY = resolveY(values[index++]);
+        ops.push(VOP_QUAD, controlX, controlY, endX, endY);
+        previousControlX = controlX;
+        previousControlY = controlY;
+        currentX = endX;
+        currentY = endY;
       }
-    } else if (U === 'T') {
-      while (i + 1 < a.length) {
-        const refl = prevCmd === 'Q' || prevCmd === 'T';
-        const qx = refl ? 2 * cx - prevCtrlX : cx;
-        const qy = refl ? 2 * cy - prevCtrlY : cy;
-        const ex = rx(a[i++]);
-        const ey = ry(a[i++]);
-        ops.push(VOP_QUAD, qx, qy, ex, ey);
-        prevCtrlX = qx;
-        prevCtrlY = qy;
-        cx = ex;
-        cy = ey;
+    } else if (absoluteCommand === 'T') {
+      while (index + 1 < values.length) {
+        const reflected = previousCommand === 'Q' || previousCommand === 'T';
+        const controlX = reflected ? 2 * currentX - previousControlX : currentX;
+        const controlY = reflected ? 2 * currentY - previousControlY : currentY;
+        const endX = resolveX(values[index++]);
+        const endY = resolveY(values[index++]);
+        ops.push(VOP_QUAD, controlX, controlY, endX, endY);
+        previousControlX = controlX;
+        previousControlY = controlY;
+        currentX = endX;
+        currentY = endY;
       }
-    } else if (U === 'A') {
-      while (i + 6 < a.length) {
-        const arx = a[i++];
-        const ary = a[i++];
-        const rot = a[i++];
-        const laf = a[i++];
-        const swf = a[i++];
-        const ex = rx(a[i++]);
-        const ey = ry(a[i++]);
-        const cubics = arcToCubics(cx, cy, arx, ary, rot, laf, swf, ex, ey);
-        for (const c of cubics)
-          ops.push(VOP_CUBIC, c[0], c[1], c[2], c[3], c[4], c[5]);
-        cx = ex;
-        cy = ey;
+    } else if (absoluteCommand === 'A') {
+      while (index + 6 < values.length) {
+        const radiusX = values[index++];
+        const radiusY = values[index++];
+        const rotation = values[index++];
+        const largeArcFlag = values[index++];
+        const sweepFlag = values[index++];
+        const endX = resolveX(values[index++]);
+        const endY = resolveY(values[index++]);
+        const cubics = arcToCubics(
+          currentX,
+          currentY,
+          radiusX,
+          radiusY,
+          rotation,
+          largeArcFlag,
+          sweepFlag,
+          endX,
+          endY,
+        );
+        for (const cubic of cubics)
+          ops.push(
+            VOP_CUBIC,
+            cubic[0],
+            cubic[1],
+            cubic[2],
+            cubic[3],
+            cubic[4],
+            cubic[5],
+          );
+        currentX = endX;
+        currentY = endY;
       }
-    } else if (U === 'Z') {
+    } else if (absoluteCommand === 'Z') {
       ops.push(VOP_CLOSE);
-      cx = sx;
-      cy = sy;
+      currentX = subpathStartX;
+      currentY = subpathStartY;
     }
-    prevCmd = U;
+    previousCommand = absoluteCommand;
   }
   return ops;
 }
 
 // --- Primitive shapes -> path ops ----------------------------------------------------------------
 
-function num(v, dflt) {
-  const n = typeof v === 'number' ? v : parseFloat(v);
-  return isNaN(n) ? dflt : n;
+function num(value, fallback) {
+  const parsed = typeof value === 'number' ? value : parseFloat(value);
+  return isNaN(parsed) ? fallback : parsed;
 }
 
-function circleOps(p) {
-  const cx = num(p.cx, 0);
-  const cy = num(p.cy, 0);
-  const r = num(p.r, 0);
+function circleOps(props) {
+  const cx = num(props.cx, 0);
+  const cy = num(props.cy, 0);
+  const r = num(props.r, 0);
   // Start at angle 0, full circular arc.
   return [
     VOP_MOVE,
@@ -494,7 +593,7 @@ function circleOps(p) {
     cy,
     r,
     0,
-    2 * Math.PI,
+    FULL_TURN_RADIANS,
     0,
     VOP_CLOSE,
   ];
@@ -502,11 +601,11 @@ function circleOps(p) {
 
 /** An ellipse as a `d` string: an arc-free path of four cubic Béziers (kappa) once parsePath lowers
  *  the two `A` commands. Returned as a string so it goes through the same parse cache as <Path d>. */
-function ellipsePathD(p) {
-  const cx = num(p.cx, 0);
-  const cy = num(p.cy, 0);
-  const rx = num(p.rx, 0);
-  const ry = num(p.ry, 0);
+function ellipsePathD(props) {
+  const cx = num(props.cx, 0);
+  const cy = num(props.cy, 0);
+  const rx = num(props.rx, 0);
+  const ry = num(props.ry, 0);
   return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
 }
 
@@ -517,13 +616,13 @@ function ellipsePathD(p) {
  * corners, and each radius is clamped to half its own side. Returns [rx, ry] — [0, 0] for a
  * square-cornered rect. Exported so the AOT and the SVG baker apply the same rules.
  */
-export function rectRadii(rxAttr, ryAttr, w, h) {
+export function rectRadii(rxAttr, ryAttr, width, height) {
   let rx = num(rxAttr, -1);
   let ry = num(ryAttr, -1);
   if (rx < 0) rx = ry; // rx omitted -> ry
   if (ry < 0) ry = rx; // ry omitted -> rx
-  rx = Math.min(rx, w / 2);
-  ry = Math.min(ry, h / 2);
+  rx = Math.min(rx, width / 2);
+  ry = Math.min(ry, height / 2);
   return rx > 0 && ry > 0 ? [rx, ry] : [0, 0];
 }
 
@@ -533,107 +632,109 @@ export function rectRadii(rxAttr, ryAttr, w, h) {
  * exactly the preceding line's endpoint — an arc recomputes that point from cos/sin and can miss the
  * engine's exact-equality join dedupe by a ULP, which spikes the miter join on a stroked rect.
  */
-function rectOpsXY(x, y, w, h, rx, ry) {
+function rectOpsXY(x, y, width, height, rx, ry) {
   if (rx <= 0 || ry <= 0)
     return [
       VOP_MOVE,
       x,
       y,
       VOP_LINE,
-      x + w,
+      x + width,
       y,
       VOP_LINE,
-      x + w,
-      y + h,
+      x + width,
+      y + height,
       VOP_LINE,
       x,
-      y + h,
+      y + height,
       VOP_CLOSE,
     ];
-  const kx = rx * KAPPA;
-  const ky = ry * KAPPA;
-  const x1 = x + rx; // where the top/bottom edges start, past the left corners
-  const x2 = x + w - rx; // ... and end, before the right corners
-  const y1 = y + ry;
-  const y2 = y + h - ry;
-  const r = x + w;
-  const b = y + h;
+  const controlOffsetX = rx * KAPPA;
+  const controlOffsetY = ry * KAPPA;
+  const innerLeft = x + rx; // where the top/bottom edges start, past the left corners
+  const innerRight = x + width - rx; // ... and end, before the right corners
+  const innerTop = y + ry;
+  const innerBottom = y + height - ry;
+  const right = x + width;
+  const bottom = y + height;
   return [
     VOP_MOVE,
-    x1,
+    innerLeft,
     y,
     VOP_LINE,
-    x2,
+    innerRight,
     y,
     VOP_CUBIC,
-    x2 + kx,
+    innerRight + controlOffsetX,
     y,
-    r,
-    y1 - ky,
-    r,
-    y1,
+    right,
+    innerTop - controlOffsetY,
+    right,
+    innerTop,
     VOP_LINE,
-    r,
-    y2,
+    right,
+    innerBottom,
     VOP_CUBIC,
-    r,
-    y2 + ky,
-    x2 + kx,
-    b,
-    x2,
-    b,
+    right,
+    innerBottom + controlOffsetY,
+    innerRight + controlOffsetX,
+    bottom,
+    innerRight,
+    bottom,
     VOP_LINE,
-    x1,
-    b,
+    innerLeft,
+    bottom,
     VOP_CUBIC,
-    x1 - kx,
-    b,
+    innerLeft - controlOffsetX,
+    bottom,
     x,
-    y2 + ky,
+    innerBottom + controlOffsetY,
     x,
-    y2,
+    innerBottom,
     VOP_LINE,
     x,
-    y1,
+    innerTop,
     VOP_CUBIC,
     x,
-    y1 - ky,
-    x1 - kx,
+    innerTop - controlOffsetY,
+    innerLeft - controlOffsetX,
     y,
-    x1,
+    innerLeft,
     y,
     VOP_CLOSE,
   ];
 }
 
-function rectOps(p) {
-  const x = num(p.x, 0);
-  const y = num(p.y, 0);
-  const w = num(p.width, 0);
-  const h = num(p.height, 0);
-  const [rx, ry] = rectRadii(p.rx, p.ry, w, h);
-  return rectOpsXY(x, y, w, h, rx, ry);
+function rectOps(props) {
+  const x = num(props.x, 0);
+  const y = num(props.y, 0);
+  const width = num(props.width, 0);
+  const height = num(props.height, 0);
+  const [rx, ry] = rectRadii(props.rx, props.ry, width, height);
+  return rectOpsXY(x, y, width, height, rx, ry);
 }
 
-function lineOps(p) {
+function lineOps(props) {
   return [
     VOP_MOVE,
-    num(p.x1, 0),
-    num(p.y1, 0),
+    num(props.x1, 0),
+    num(props.y1, 0),
     VOP_LINE,
-    num(p.x2, 0),
-    num(p.y2, 0),
+    num(props.x2, 0),
+    num(props.y2, 0),
   ];
 }
 
 // Arc convenience: angles in DEGREES, clockwise from 12 o'clock (the gauge/dial convention). Emits a
 // native VOP_ARC (no d-string regex / bezier conversion), so it is cheap enough to rebuild every drag
 // frame — the key to fast imperative updates.
-function arcOpsCW(cx, cy, r, a0deg, a1deg) {
+function arcOpsCW(cx, cy, r, startDegrees, endDegrees) {
   // The engine's arc angle runs from +X (cos/sin); top-clockwise => subtract 90°.
-  const a0 = ((a0deg - 90) * Math.PI) / 180;
-  const a1 = ((a1deg - 90) * Math.PI) / 180;
-  return [VOP_ARC, cx, cy, r, a0, a1, 0];
+  const startRadians =
+    ((startDegrees - TWELVE_OCLOCK_DEGREES) * Math.PI) / HALF_TURN_DEGREES;
+  const endRadians =
+    ((endDegrees - TWELVE_OCLOCK_DEGREES) * Math.PI) / HALF_TURN_DEGREES;
+  return [VOP_ARC, cx, cy, r, startRadians, endRadians, 0];
 }
 
 // --- Imperative shapes -> op-tape (the fast path; no JSX, no React) -------------------------------
@@ -644,7 +745,7 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
  *   { arc: [cx, cy, r, startDeg, endDeg], stroke: '#f4a261', strokeWidth: 14, cap: 'round' }
  *   { circle: [cx, cy, r], fill: '#16202f', stroke: '#f4a261', strokeWidth: 3 }
  *   { line: [x1, y1, x2, y2], stroke, strokeWidth }
- *   { rect: [x, y, w, h], fill }              // optional [x, y, w, h, rx, ry] for rounded corners
+ *   { rect: [x, y, width, height], fill }     // optional [x, y, width, height, rx, ry] for rounded corners
  *   { path: 'M..A..', stroke }   // d-string supported but slower (regex + bezier)
  * Arc angles are degrees, clockwise from 12 o'clock. This avoids the d-string parser entirely, so it's
  * cheap enough to call on every pointer move (the imperative drag path).
@@ -652,33 +753,35 @@ function arcOpsCW(cx, cy, r, a0deg, a1deg) {
 // Reused output buffers — shapesToVector is on the drag hot path and its result is consumed
 // synchronously by NativeUI.setVectorOps, so growing fresh arrays (plus per-shape arrays + spreads)
 // every move is pure GC. Push directly into these instead.
-const _vecOps = [];
-const _vecPaints = [];
-const _vecGrads = [];
+const _vectorOps = [];
+const _vectorPaints = [];
+const _vectorGradients = [];
 
 export function shapesToVector(shapes) {
-  const ops = _vecOps;
-  const paints = _vecPaints;
-  const gradients = _vecGrads;
+  const ops = _vectorOps;
+  const paints = _vectorPaints;
+  const gradients = _vectorGradients;
   ops.length = 0;
   paints.length = 0;
   gradients.length = 0;
-  for (let si = 0; si < shapes.length; si++) {
-    const s = shapes[si];
+  for (let shapeIndex = 0; shapeIndex < shapes.length; shapeIndex++) {
+    const shape = shapes[shapeIndex];
     const opStart = ops.length;
     const paintIndex = paints.length / PAINT_STRIDE;
     ops.push(VOP_SHAPE, paintIndex);
-    if (s.arc) {
-      const cx = s.arc[0];
-      const cy = s.arc[1];
-      const r = s.arc[2];
-      const a0 = ((s.arc[3] - 90) * Math.PI) / 180;
-      const a1 = ((s.arc[4] - 90) * Math.PI) / 180;
-      ops.push(VOP_ARC, cx, cy, r, a0, a1, 0);
-    } else if (s.circle) {
-      const cx = s.circle[0];
-      const cy = s.circle[1];
-      const r = s.circle[2];
+    if (shape.arc) {
+      const cx = shape.arc[0];
+      const cy = shape.arc[1];
+      const r = shape.arc[2];
+      const startRadians =
+        ((shape.arc[3] - TWELVE_OCLOCK_DEGREES) * Math.PI) / HALF_TURN_DEGREES;
+      const endRadians =
+        ((shape.arc[4] - TWELVE_OCLOCK_DEGREES) * Math.PI) / HALF_TURN_DEGREES;
+      ops.push(VOP_ARC, cx, cy, r, startRadians, endRadians, 0);
+    } else if (shape.circle) {
+      const cx = shape.circle[0];
+      const cy = shape.circle[1];
+      const r = shape.circle[2];
       ops.push(
         VOP_MOVE,
         cx + r,
@@ -688,45 +791,54 @@ export function shapesToVector(shapes) {
         cy,
         r,
         0,
-        2 * Math.PI,
+        FULL_TURN_RADIANS,
         0,
         VOP_CLOSE,
       );
-    } else if (s.rect) {
-      const x = s.rect[0];
-      const y = s.rect[1];
-      const w = s.rect[2];
-      const h = s.rect[3];
-      if (s.rect.length > 4) {
+    } else if (shape.rect) {
+      const x = shape.rect[0];
+      const y = shape.rect[1];
+      const width = shape.rect[2];
+      const height = shape.rect[3];
+      if (shape.rect.length > 4) {
         // Rounded — the optional trailing [rx, ry]. Off the allocation-free path below, but a rounded
         // rect is a chrome/backing shape, not something a drag rebuilds every move.
-        const [rx, ry] = rectRadii(s.rect[4], s.rect[5], w, h);
-        const ro = rectOpsXY(x, y, w, h, rx, ry);
-        for (let k = 0; k < ro.length; k++) ops.push(ro[k]);
+        const [rx, ry] = rectRadii(shape.rect[4], shape.rect[5], width, height);
+        const roundedOps = rectOpsXY(x, y, width, height, rx, ry);
+        for (let index = 0; index < roundedOps.length; index++)
+          ops.push(roundedOps[index]);
       } else {
         ops.push(
           VOP_MOVE,
           x,
           y,
           VOP_LINE,
-          x + w,
+          x + width,
           y,
           VOP_LINE,
-          x + w,
-          y + h,
+          x + width,
+          y + height,
           VOP_LINE,
           x,
-          y + h,
+          y + height,
           VOP_CLOSE,
         );
       }
-    } else if (s.line) {
-      ops.push(VOP_MOVE, s.line[0], s.line[1], VOP_LINE, s.line[2], s.line[3]);
-    } else if (s.path) {
-      const so = parsePath(s.path);
-      for (let k = 0; k < so.length; k++) ops.push(so[k]);
+    } else if (shape.line) {
+      ops.push(
+        VOP_MOVE,
+        shape.line[0],
+        shape.line[1],
+        VOP_LINE,
+        shape.line[2],
+        shape.line[3],
+      );
+    } else if (shape.path) {
+      const pathOps = parsePath(shape.path);
+      for (let index = 0; index < pathOps.length; index++)
+        ops.push(pathOps[index]);
     }
-    if (ops.length <= opStart + 2) {
+    if (ops.length <= opStart + SHAPE_HEADER_LENGTH) {
       ops.length = opStart; // nothing emitted — roll back the SHAPE header
       continue;
     }
@@ -734,32 +846,33 @@ export function shapesToVector(shapes) {
     // (0 = solid), which is what lets one shape carry a smooth ramp instead of being chopped into many
     // solid pieces. Stop colors may be strings here; the engine wants packed ARGB.
     paints.push(
-      parseColor(s.fill),
-      parseColor(s.stroke),
-      num(s.strokeWidth, 1),
-      num(s.miter, 4),
-      CAP[s.cap] ?? 0,
-      JOIN[s.join] ?? 0,
-      s.fillRule === 'evenodd' ? 1 : 0,
-      s.fillGrad ? pushGrad(gradients, s.fillGrad) : 0,
-      s.strokeGrad ? pushGrad(gradients, s.strokeGrad) : 0,
+      parseColor(shape.fill),
+      parseColor(shape.stroke),
+      num(shape.strokeWidth, DEFAULT_STROKE_WIDTH),
+      num(shape.miter, DEFAULT_MITER_LIMIT),
+      CAP[shape.cap] ?? CAP.butt,
+      JOIN[shape.join] ?? JOIN.miter,
+      shape.fillRule === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
+      shape.fillGrad ? pushGrad(gradients, shape.fillGrad) : 0,
+      shape.strokeGrad ? pushGrad(gradients, shape.strokeGrad) : 0,
     );
   }
   return {ops, paints, gradients};
 }
 
 /** Appends a gradient descriptor (normalizing string stop colours) and returns its 1-based index. */
-function pushGrad(gradients, g) {
+function pushGrad(gradients, gradient) {
   gradients.push({
-    type: g.type,
-    ax: g.ax,
-    ay: g.ay,
-    bx: g.bx,
-    by: g.by,
-    r: g.r,
-    stops: (g.stops || []).map(st => ({
-      color: typeof st.color === 'string' ? parseColor(st.color) : st.color,
-      offset: st.offset,
+    type: gradient.type,
+    ax: gradient.ax,
+    ay: gradient.ay,
+    bx: gradient.bx,
+    by: gradient.by,
+    r: gradient.r,
+    stops: (gradient.stops || []).map(stop => ({
+      color:
+        typeof stop.color === 'string' ? parseColor(stop.color) : stop.color,
+      offset: stop.offset,
     })),
   });
   return gradients.length;
@@ -770,10 +883,10 @@ function pushGrad(gradients, g) {
 const PAINT_DEFAULT = {
   fill: 'black',
   stroke: 'none',
-  strokeWidth: 1,
+  strokeWidth: DEFAULT_STROKE_WIDTH,
   strokeLinecap: 'butt',
   strokeLinejoin: 'miter',
-  strokeMiterlimit: 4,
+  strokeMiterlimit: DEFAULT_MITER_LIMIT,
   fillRule: 'nonzero',
   fillGrad: null,
   strokeGrad: null,
@@ -783,64 +896,72 @@ const PAINT_DEFAULT = {
 export const PAINT_PROPS = Object.keys(PAINT_DEFAULT);
 
 function mergePaint(base, props) {
-  const out = {...base};
-  for (const k of PAINT_PROPS) if (props[k] != null) out[k] = props[k];
-  return out;
+  const merged = {...base};
+  for (const key of PAINT_PROPS)
+    if (props[key] != null) merged[key] = props[key];
+  return merged;
 }
 
-/** Maps the resolved paint to the PAINT_STRIDE-number record [fill,stroke, w,miter,cap,join,rule,
+/** Maps the resolved paint to the PAINT_STRIDE-number record [fill, stroke, strokeWidth, miter, cap, join, rule,
  *  fillGrad, strokeGrad]. Any gradient descriptor is appended to `gradients` and referenced by its
  *  1-BASED index (0 = solid), the same encoding shapesToVector uses. */
 function paintRecord(paint, scale, gradients) {
   return [
     parseColor(paint.fill),
     parseColor(paint.stroke),
-    num(paint.strokeWidth, 1) * scale,
-    num(paint.strokeMiterlimit, 4),
-    CAP[paint.strokeLinecap] ?? 0,
-    JOIN[paint.strokeLinejoin] ?? 0,
-    paint.fillRule === 'evenodd' ? 1 : 0,
+    num(paint.strokeWidth, DEFAULT_STROKE_WIDTH) * scale,
+    num(paint.strokeMiterlimit, DEFAULT_MITER_LIMIT),
+    CAP[paint.strokeLinecap] ?? CAP.butt,
+    JOIN[paint.strokeLinejoin] ?? JOIN.miter,
+    paint.fillRule === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
     paint.fillGrad && gradients ? pushGrad(gradients, paint.fillGrad) : 0,
     paint.strokeGrad && gradients ? pushGrad(gradients, paint.strokeGrad) : 0,
   ];
 }
 
-/** Applies a {sx,sy,tx,ty} transform in place to a path-op array (no leading SHAPE op). */
-function transformOps(ops, T) {
-  const out = [];
-  let i = 0;
-  const ax = v => v * T.sx + T.tx;
-  const ay = v => v * T.sy + T.ty;
-  while (i < ops.length) {
-    const op = ops[i++];
-    out.push(op);
-    if (op === VOP_MOVE || op === VOP_LINE) {
-      out.push(ax(ops[i++]), ay(ops[i++]));
-    } else if (op === VOP_QUAD) {
-      out.push(ax(ops[i++]), ay(ops[i++]), ax(ops[i++]), ay(ops[i++]));
-    } else if (op === VOP_CUBIC) {
-      out.push(
-        ax(ops[i++]),
-        ay(ops[i++]),
-        ax(ops[i++]),
-        ay(ops[i++]),
-        ax(ops[i++]),
-        ay(ops[i++]),
+/** Applies a {scaleX, scaleY, translateX, translateY} transform to a path-op array (no leading SHAPE op). */
+function transformOps(ops, transform) {
+  const transformed = [];
+  let index = 0;
+  const mapX = coordinate =>
+    coordinate * transform.scaleX + transform.translateX;
+  const mapY = coordinate =>
+    coordinate * transform.scaleY + transform.translateY;
+  while (index < ops.length) {
+    const opcode = ops[index++];
+    transformed.push(opcode);
+    if (opcode === VOP_MOVE || opcode === VOP_LINE) {
+      transformed.push(mapX(ops[index++]), mapY(ops[index++]));
+    } else if (opcode === VOP_QUAD) {
+      transformed.push(
+        mapX(ops[index++]),
+        mapY(ops[index++]),
+        mapX(ops[index++]),
+        mapY(ops[index++]),
       );
-    } else if (op === VOP_ARC) {
+    } else if (opcode === VOP_CUBIC) {
+      transformed.push(
+        mapX(ops[index++]),
+        mapY(ops[index++]),
+        mapX(ops[index++]),
+        mapY(ops[index++]),
+        mapX(ops[index++]),
+        mapY(ops[index++]),
+      );
+    } else if (opcode === VOP_ARC) {
       // center + radius scale (uniform scale assumed for arcs)
-      out.push(
-        ax(ops[i++]),
-        ay(ops[i++]),
-        ops[i++] * T.sx,
-        ops[i++],
-        ops[i++],
-        ops[i++],
+      transformed.push(
+        mapX(ops[index++]),
+        mapY(ops[index++]),
+        ops[index++] * transform.scaleX,
+        ops[index++],
+        ops[index++],
+        ops[index++],
       );
     }
     // VOP_CLOSE has no args
   }
-  return out;
+  return transformed;
 }
 
 /**
@@ -849,23 +970,34 @@ function transformOps(ops, T) {
  * never moves between commits, so an untouched shape costs a compare instead of a rebuild. The same
  * `d` drawn under several different transforms just misses and pays the full transform.
  */
-function transformCached(entry, T) {
-  const xf = entry.xf;
+function transformCached(entry, transform) {
+  const lastTransform = entry.lastTransform;
   if (
-    xf &&
-    xf.sx === T.sx &&
-    xf.sy === T.sy &&
-    xf.tx === T.tx &&
-    xf.ty === T.ty
+    lastTransform &&
+    lastTransform.scaleX === transform.scaleX &&
+    lastTransform.scaleY === transform.scaleY &&
+    lastTransform.translateX === transform.translateX &&
+    lastTransform.translateY === transform.translateY
   )
-    return xf.out;
-  const out = transformOps(entry.ops, T);
-  entry.xf = {sx: T.sx, sy: T.sy, tx: T.tx, ty: T.ty, out};
-  return out;
+    return lastTransform.ops;
+  const transformedOps = transformOps(entry.ops, transform);
+  entry.lastTransform = {
+    scaleX: transform.scaleX,
+    scaleY: transform.scaleY,
+    translateX: transform.translateX,
+    translateY: transform.translateY,
+    ops: transformedOps,
+  };
+  return transformedOps;
 }
 
-function isElement(c) {
-  return c && typeof c === 'object' && c.type != null && c.props != null;
+function isElement(child) {
+  return (
+    child &&
+    typeof child === 'object' &&
+    child.type != null &&
+    child.props != null
+  );
 }
 
 // React's fragment tag. Read from the global symbol registry rather than importing React, which this
@@ -874,11 +1006,11 @@ const REACT_FRAGMENT = Symbol.for('react.fragment');
 
 /** Children JSX produces for "draw nothing": a bare `{cond && <Path/>}` that failed, a hole in a
  *  list, and the whitespace JSX leaves between elements. Skipped without a word. */
-function isEmptyChild(c) {
+function isEmptyChild(child) {
   return (
-    c == null ||
-    typeof c === 'boolean' ||
-    (typeof c === 'string' && c.trim() === '')
+    child == null ||
+    typeof child === 'boolean' ||
+    (typeof child === 'string' && child.trim() === '')
   );
 }
 
@@ -898,18 +1030,18 @@ let _warnedSvgChild = false;
  * or an array of them) straight into children, where the walk sees it. Having it return an array does
  * nothing for `<Needle/>`: that form is never invoked at all.
  */
-function warnSvgChild(c) {
+function warnSvgChild(child) {
   if (_warnedSvgChild) return;
   _warnedSvgChild = true;
-  const what = !isElement(c)
-    ? typeof c === 'string'
-      ? `the text ${JSON.stringify(c)}`
-      : `a ${typeof c} child`
-    : typeof c.type === 'function'
-      ? `<${c.type.displayName || c.type.name || 'Component'}>, a component`
-      : `<${String(c.type)}>`;
+  const description = !isElement(child)
+    ? typeof child === 'string'
+      ? `the text ${JSON.stringify(child)}`
+      : `a ${typeof child} child`
+    : typeof child.type === 'function'
+      ? `<${child.type.displayName || child.type.name || 'Component'}>, a component`
+      : `<${String(child.type)}>`;
   console.warn(
-    `embedded-react: <Svg> can't draw ${what}, and skipped it. Children must be ${SVG_TAGS.join('/')} ` +
+    `embedded-react: <Svg> can't draw ${description}, and skipped it. Children must be ${SVG_TAGS.join('/')} ` +
       `elements (arrays and fragments around them are unwrapped). <Svg> flattens its subtree instead of ` +
       `mounting it, so a component is never rendered — inline its shapes, or call it as a plain ` +
       `function: {needle()}.`,
@@ -930,76 +1062,86 @@ export function flattenSvg(props) {
   const gradients = [];
 
   // Root transform from viewBox vs width/height.
-  let root = {sx: 1, sy: 1, tx: 0, ty: 0};
+  let root = {scaleX: 1, scaleY: 1, translateX: 0, translateY: 0};
   if (props.viewBox && props.width && props.height) {
-    const vb = String(props.viewBox)
+    const viewBox = String(props.viewBox)
       .trim()
       .split(/[\s,]+/)
       .map(parseFloat);
-    if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
-      const sx = num(props.width, vb[2]) / vb[2];
-      const sy = num(props.height, vb[3]) / vb[3];
-      root = {sx, sy, tx: -vb[0] * sx, ty: -vb[1] * sy};
+    if (viewBox.length === 4 && viewBox[2] > 0 && viewBox[3] > 0) {
+      const scaleX = num(props.width, viewBox[2]) / viewBox[2];
+      const scaleY = num(props.height, viewBox[3]) / viewBox[3];
+      root = {
+        scaleX: scaleX,
+        scaleY: scaleY,
+        translateX: -viewBox[0] * scaleX,
+        translateY: -viewBox[1] * scaleY,
+      };
     }
   }
 
   // One child at a time, recursing through the wrappers, JSX inserts around shapes: an array (every
   // `{shapes.map(...)}`, and arrays of arrays when those nest) and a fragment, either of which can
   // sit anywhere a shape can. Both are transparent — they carry no paint and no transform.
-  const walk = (c, paint, T) => {
-    if (isEmptyChild(c)) return;
-    if (Array.isArray(c)) {
-      for (const item of c) walk(item, paint, T);
+  const walk = (child, paint, transform) => {
+    if (isEmptyChild(child)) return;
+    if (Array.isArray(child)) {
+      for (const item of child) walk(item, paint, transform);
       return;
     }
-    if (!isElement(c)) return warnSvgChild(c);
-    const p = c.props || {};
-    if (c.type === REACT_FRAGMENT) return walk(p.children, paint, T);
-    const merged = mergePaint(paint, p);
-    if (c.type === 'G') {
+    if (!isElement(child)) return warnSvgChild(child);
+    const childProps = child.props || {};
+    if (child.type === REACT_FRAGMENT)
+      return walk(childProps.children, paint, transform);
+    const merged = mergePaint(paint, childProps);
+    if (child.type === 'G') {
       // Compose a translate/scale for the group, then recurse.
-      const s = num(p.scale, 1);
-      const gx = num(p.x ?? p.translateX, 0);
-      const gy = num(p.y ?? p.translateY, 0);
-      const childT = {
-        sx: T.sx * s,
-        sy: T.sy * s,
-        tx: gx * T.sx + T.tx,
-        ty: gy * T.sy + T.ty,
+      const groupScale = num(childProps.scale, 1);
+      const groupX = num(childProps.x ?? childProps.translateX, 0);
+      const groupY = num(childProps.y ?? childProps.translateY, 0);
+      const childTransform = {
+        scaleX: transform.scaleX * groupScale,
+        scaleY: transform.scaleY * groupScale,
+        translateX: groupX * transform.scaleX + transform.translateX,
+        translateY: groupY * transform.scaleY + transform.translateY,
       };
-      return walk(p.children, merged, childT);
+      return walk(childProps.children, merged, childTransform);
     }
-    if (!SVG_TAGS.includes(c.type)) return warnSvgChild(c);
+    if (!SVG_TAGS.includes(child.type)) return warnSvgChild(child);
 
     // Path/Ellipse geometry comes from a `d` string and is cached (parse + transform) by that string;
     // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
     let entry = null;
     let shapeOps = null;
-    if (c.type === 'Path' && p.d)
-      entry = pathEntry(p.d); // pathEntry coerces the key
-    else if (c.type === 'Ellipse') entry = pathEntry(ellipsePathD(p));
-    else if (c.type === 'Circle') shapeOps = circleOps(p);
-    else if (c.type === 'Rect') shapeOps = rectOps(p);
-    else if (c.type === 'Line') shapeOps = lineOps(p);
-    else if (c.type === 'Arc')
+    if (child.type === 'Path' && childProps.d)
+      entry = pathEntry(childProps.d); // pathEntry coerces the key
+    else if (child.type === 'Ellipse')
+      entry = pathEntry(ellipsePathD(childProps));
+    else if (child.type === 'Circle') shapeOps = circleOps(childProps);
+    else if (child.type === 'Rect') shapeOps = rectOps(childProps);
+    else if (child.type === 'Line') shapeOps = lineOps(childProps);
+    else if (child.type === 'Arc')
       shapeOps = arcOpsCW(
-        num(p.cx, 0),
-        num(p.cy, 0),
-        num(p.r, 0),
-        num(p.startAngle, 0),
-        num(p.endAngle, 0),
+        num(childProps.cx, 0),
+        num(childProps.cy, 0),
+        num(childProps.r, 0),
+        num(childProps.startAngle, 0),
+        num(childProps.endAngle, 0),
       );
     const baseOps = entry ? entry.ops : shapeOps;
     if (!baseOps || baseOps.length === 0) return;
 
-    const seg = entry ? transformCached(entry, T) : transformOps(baseOps, T);
+    const shapeTape = entry
+      ? transformCached(entry, transform)
+      : transformOps(baseOps, transform);
     const paintIndex = paints.length / PAINT_STRIDE;
-    const scale = (T.sx + T.sy) / 2; // stroke-width scale (uniform assumed)
+    const scale = (transform.scaleX + transform.scaleY) / 2; // stroke-width scale (uniform assumed)
     paints.push(...paintRecord(merged, scale, gradients));
-    // Appended one at a time: `seg` can be a long cached tape, and spreading it into push() both
+    // Appended one at a time: `shapeTape` can be a long cached tape, and spreading it into push() both
     // copies it into an argument list and risks the call-argument limit.
     ops.push(VOP_SHAPE, paintIndex);
-    for (let k = 0; k < seg.length; k++) ops.push(seg[k]);
+    for (let index = 0; index < shapeTape.length; index++)
+      ops.push(shapeTape[index]);
   };
 
   // The <Svg>'s own paint cascades to every shape, like a <G> wrapping them all.
@@ -1009,40 +1151,45 @@ export function flattenSvg(props) {
 
 // --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------
 
-/** Scales a full op-tape (with SHAPE headers) by (sx, sy): coordinates only, paint indices untouched. */
-function scaleTape(ops, sx, sy) {
-  const out = [];
-  let i = 0;
-  while (i < ops.length) {
-    const op = ops[i++];
-    out.push(op);
-    if (op === VOP_SHAPE)
-      out.push(ops[i++]); // paint index — copy, do not scale
-    else if (op === VOP_MOVE || op === VOP_LINE)
-      out.push(ops[i++] * sx, ops[i++] * sy);
-    else if (op === VOP_QUAD)
-      out.push(ops[i++] * sx, ops[i++] * sy, ops[i++] * sx, ops[i++] * sy);
-    else if (op === VOP_CUBIC)
-      out.push(
-        ops[i++] * sx,
-        ops[i++] * sy,
-        ops[i++] * sx,
-        ops[i++] * sy,
-        ops[i++] * sx,
-        ops[i++] * sy,
+/** Scales a full op-tape (with SHAPE headers) by (scaleX, scaleY): coordinates only, paint indices untouched. */
+function scaleTape(ops, scaleX, scaleY) {
+  const scaled = [];
+  let index = 0;
+  while (index < ops.length) {
+    const opcode = ops[index++];
+    scaled.push(opcode);
+    if (opcode === VOP_SHAPE)
+      scaled.push(ops[index++]); // paint index — copy, do not scale
+    else if (opcode === VOP_MOVE || opcode === VOP_LINE)
+      scaled.push(ops[index++] * scaleX, ops[index++] * scaleY);
+    else if (opcode === VOP_QUAD)
+      scaled.push(
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
       );
-    else if (op === VOP_ARC)
-      out.push(
-        ops[i++] * sx,
-        ops[i++] * sy,
-        ops[i++] * sx,
-        ops[i++],
-        ops[i++],
-        ops[i++],
+    else if (opcode === VOP_CUBIC)
+      scaled.push(
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+      );
+    else if (opcode === VOP_ARC)
+      scaled.push(
+        ops[index++] * scaleX,
+        ops[index++] * scaleY,
+        ops[index++] * scaleX,
+        ops[index++],
+        ops[index++],
+        ops[index++],
       );
     // VOP_CLOSE has no args.
   }
-  return out;
+  return scaled;
 }
 
 /**
@@ -1050,33 +1197,45 @@ function scaleTape(ops, sx, sy) {
  * size to a target box, also scaling stroke widths. Returns the original arrays untouched when no scaling
  * is needed (the common <Svg source> case where the box equals the intrinsic size).
  */
-export function scaleVectorArtifact(art, targetW, targetH) {
-  const sx = art.width ? targetW / art.width : 1;
-  const sy = art.height ? targetH / art.height : 1;
-  const grads = art.gradients || [];
-  if (sx === 1 && sy === 1)
-    return {ops: art.ops, paints: art.paints, gradients: grads};
-  const sw = Math.sqrt(Math.abs(sx * sy)) || 1; // uniform stroke-width / radius scale
-  const paints = art.paints.slice();
-  for (let k = 2; k < paints.length; k += PAINT_STRIDE) paints[k] *= sw; // index 2 of each record = strokeWidth
+export function scaleVectorArtifact(artifact, targetWidth, targetHeight) {
+  const scaleX = artifact.width ? targetWidth / artifact.width : 1;
+  const scaleY = artifact.height ? targetHeight / artifact.height : 1;
+  const sourceGradients = artifact.gradients || [];
+  if (scaleX === 1 && scaleY === 1)
+    return {
+      ops: artifact.ops,
+      paints: artifact.paints,
+      gradients: sourceGradients,
+    };
+  const strokeScale = Math.sqrt(Math.abs(scaleX * scaleY)) || 1; // uniform stroke-width / radius scale
+  const paints = artifact.paints.slice();
+  for (
+    let index = PAINT_STROKE_WIDTH_SLOT;
+    index < paints.length;
+    index += PAINT_STRIDE
+  )
+    paints[index] *= strokeScale;
   // Gradient geometry lives in the same coordinate space as the path, so it scales with it (radius uniformly).
-  const gradients = grads.map(g => ({
-    ...g,
-    ax: (g.ax || 0) * sx,
-    ay: (g.ay || 0) * sy,
-    bx: (g.bx || 0) * sx,
-    by: (g.by || 0) * sy,
+  const gradients = sourceGradients.map(gradient => ({
+    ...gradient,
+    ax: (gradient.ax || 0) * scaleX,
+    ay: (gradient.ay || 0) * scaleY,
+    bx: (gradient.bx || 0) * scaleX,
+    by: (gradient.by || 0) * scaleY,
     // Radial r is a length (scales); conic r is a start angle (invariant under uniform scale) — don't scale it.
-    r: g.type === GRAD_CONIC ? g.r || 0 : (g.r || 0) * sw,
+    r:
+      gradient.type === GRAD_CONIC
+        ? gradient.r || 0
+        : (gradient.r || 0) * strokeScale,
   }));
-  return {ops: scaleTape(art.ops, sx, sy), paints, gradients};
+  return {ops: scaleTape(artifact.ops, scaleX, scaleY), paints, gradients};
 }
 
 // --- Bridge-cap diagnostics ----------------------------------------------------------------------
 
-let _warnedVecOps = false;
-let _warnedVecPaints = false;
-let _warnedVecGrads = false;
+let _warnedVectorOps = false;
+let _warnedVectorPaints = false;
+let _warnedVectorGradients = false;
 
 /**
  * Warns (once per kind) when an <Svg>'s compiled geometry exceeds the native bridge's caps and will be
@@ -1086,41 +1245,45 @@ let _warnedVecGrads = false;
  * the developer's console. Pass the live caps from NativeUI.maxVectorOps / maxVectorPaints / maxVectorGrads
  * (undefined on an older bridge => no-op).
  *
- * @param {number} opsLen     Op-tape length (flat float count).
- * @param {number} paintsLen  Paint-table length (PAINT_STRIDE numbers per shape).
- * @param {number} maxOps     Bridge op-tape cap (NativeUI.maxVectorOps).
- * @param {number} maxPaints  Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
- * @param {number} [gradsLen] Gradient count (number of gradients referenced by the shapes).
- * @param {number} [maxGrads] Bridge gradient cap (NativeUI.maxVectorGrads).
+ * @param {number} opsLength         Op-tape length (flat float count).
+ * @param {number} paintsLength      Paint-table length (PAINT_STRIDE numbers per shape).
+ * @param {number} maxOps            Bridge op-tape cap (NativeUI.maxVectorOps).
+ * @param {number} maxPaints         Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
+ * @param {number} [gradientsLength] Gradient count (number of gradients referenced by the shapes).
+ * @param {number} [maxGradients]    Bridge gradient cap (NativeUI.maxVectorGrads).
  */
 export function warnVectorCaps(
-  opsLen,
-  paintsLen,
+  opsLength,
+  paintsLength,
   maxOps,
   maxPaints,
-  gradsLen,
-  maxGrads,
+  gradientsLength,
+  maxGradients,
 ) {
-  if (!_warnedVecOps && maxOps > 0 && opsLen > maxOps) {
-    _warnedVecOps = true;
+  if (!_warnedVectorOps && maxOps > 0 && opsLength > maxOps) {
+    _warnedVectorOps = true;
     console.warn(
-      `embedded-react: an <Svg> op-tape is too long (${opsLen} > ${maxOps} floats) and will be truncated — ` +
+      `embedded-react: an <Svg> op-tape is too long (${opsLength} > ${maxOps} floats) and will be truncated — ` +
         `the shape gets cut off. Simplify the path (fewer/coarser curves) or split it across <Svg> nodes; ` +
         `raising the limit needs ERUI_VECTOR_TAPE_MAX.`,
     );
   }
-  const shapes = (paintsLen / PAINT_STRIDE) | 0;
-  if (!_warnedVecPaints && maxPaints > 0 && shapes > maxPaints) {
-    _warnedVecPaints = true;
+  const shapes = (paintsLength / PAINT_STRIDE) | 0;
+  if (!_warnedVectorPaints && maxPaints > 0 && shapes > maxPaints) {
+    _warnedVectorPaints = true;
     console.warn(
       `embedded-react: an <Svg> has ${shapes} shapes (> ${maxPaints}) — the extra shapes won't render. ` +
         `Split them across multiple <Svg> nodes; raising the limit needs ERUI_VECTOR_PAINTS_MAX.`,
     );
   }
-  if (!_warnedVecGrads && maxGrads > 0 && gradsLen > maxGrads) {
-    _warnedVecGrads = true;
+  if (
+    !_warnedVectorGradients &&
+    maxGradients > 0 &&
+    gradientsLength > maxGradients
+  ) {
+    _warnedVectorGradients = true;
     console.warn(
-      `embedded-react: an <Svg> references ${gradsLen} gradients (> ${maxGrads}) — the extra gradients are ` +
+      `embedded-react: an <Svg> references ${gradientsLength} gradients (> ${maxGradients}) — the extra gradients are ` +
         `dropped and shapes that use them fall back to solid fills/strokes. Reuse fewer distinct gradients across ` +
         `shapes; raising the limit needs ERUI_VECTOR_GRADS_MAX.`,
     );

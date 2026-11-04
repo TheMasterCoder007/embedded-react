@@ -91,12 +91,12 @@ export function SectionList(props = {}) {
 
   const children = [];
   if (Array.isArray(sections)) {
-    for (let s = 0; s < sections.length; s++) {
-      const section = sections[s];
+    for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+      const section = sections[sectionIndex];
       if (section === null || typeof section !== 'object') continue;
       const sectionKey =
         section.key === null || section.key === undefined
-          ? String(s)
+          ? String(sectionIndex)
           : String(section.key);
 
       if (typeof renderSectionHeader === 'function')
@@ -120,11 +120,11 @@ export function SectionList(props = {}) {
           const row = rowRenderer({item, index, section});
           // Built lazily, so keyExtractor never runs for a row that rendered nothing or for a raw
           // string — see pushKeyedChild.
-          pushKeyedChild(children, row, el => {
+          pushKeyedChild(children, row, element => {
             const key = rowKey
               ? String(rowKey(item, index))
-              : el.key !== null && el.key !== undefined
-                ? el.key
+              : element.key !== null && element.key !== undefined
+                ? element.key
                 : String(index);
             return `${sectionKey}:${key}`;
           });

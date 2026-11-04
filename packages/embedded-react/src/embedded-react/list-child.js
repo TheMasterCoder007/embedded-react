@@ -28,7 +28,7 @@ export const isElement = node =>
   node !== null && typeof node === 'object' && node.$$typeof !== undefined;
 
 /**
- * Appends one rendered row to `out`, keyed, or drops it if it rendered nothing.
+ * Appends one rendered row to `children`, keyed, or drops it if it rendered nothing.
  *
  * Callers own the key because they know what makes one unique (a SectionList's rows are siblings
  * across sections, a FlatList's are not). A row that is not an element goes in untouched: there is no
@@ -39,16 +39,16 @@ export const isElement = node =>
  * nothing, or for a raw string that cannot be cloned, is both wasted work on the commit path and a
  * side effect the app never asked for. Passing the key by value invites exactly that, and did.
  *
- * @param {Array} out The child list being built.
+ * @param {Array} children The child list being built.
  * @param {*} node Whatever the render callback returned.
  * @param {(element: object) => string} keyFor Builds the React key, given the keyable element.
  */
-export function pushKeyedChild(out, node, keyFor) {
+export function pushKeyedChild(children, node, keyFor) {
   if (rendersNothing(node)) return;
   if (!isElement(node)) {
-    out.push(node);
+    children.push(node);
     return;
   }
   const key = keyFor(node);
-  out.push(node.key === key ? node : cloneElement(node, {key}));
+  children.push(node.key === key ? node : cloneElement(node, {key}));
 }

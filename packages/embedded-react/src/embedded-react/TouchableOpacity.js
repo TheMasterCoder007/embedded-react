@@ -45,6 +45,7 @@ import {flattenStyleObj} from '../props.js';
 // RN's own numbers (Libraries/Components/Touchable/TouchableOpacity.js): the dim lands on touch-down
 // with no ramp at all and fades back over a quarter second once the finger lifts.
 const DEFAULT_ACTIVE_OPACITY = 0.2;
+const FULLY_OPAQUE = 1;
 const DIM_MS = 0;
 const RESTORE_MS = 250;
 
@@ -52,8 +53,8 @@ let warnedAnimatedOpacity = false;
 
 /** The opacity the touchable rests at — whatever its style asks for, fully opaque if it asks nothing. */
 function restingOpacity(style) {
-  const o = flattenStyleObj(style).opacity;
-  if (o && o.__animated) {
+  const opacity = flattenStyleObj(style).opacity;
+  if (opacity && opacity.__animated) {
     if (!warnedAnimatedOpacity) {
       warnedAnimatedOpacity = true;
       console.warn(
@@ -62,14 +63,18 @@ function restingOpacity(style) {
           'onPressIn/onPressOut driving an Animated.Value.',
       );
     }
-    return 1;
+    return FULLY_OPAQUE;
   }
-  return typeof o === 'number' ? o : 1;
+  return typeof opacity === 'number' ? opacity : FULLY_OPAQUE;
 }
 
-/** Runs `value` to `to` over `ms` on the native driver (a 0 ms ramp snaps, without taking a slot). */
-function fadeTo(value, to, ms) {
-  timing(value, {toValue: to, duration: ms, easing: Easing.quadInOut}).start();
+/** Runs `value` to `target` over `durationMs` on the native driver (a 0 ms ramp snaps, without taking a slot). */
+function fadeTo(value, target, durationMs) {
+  timing(value, {
+    toValue: target,
+    duration: durationMs,
+    easing: Easing.quadInOut,
+  }).start();
 }
 
 /**

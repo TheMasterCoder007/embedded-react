@@ -25,6 +25,7 @@ import {
   Presets,
   toEngineConfig,
   create,
+  DEFAULT_DURATION_MS,
 } from './layout-anim-config.js';
 
 /**
@@ -34,9 +35,11 @@ import {
 export function configureNext(config, onAnimationDidEnd) {
   NativeUI.configureNextLayoutAnimation(toEngineConfig(config));
   if (typeof onAnimationDidEnd === 'function') {
-    const ms =
-      config && typeof config.duration === 'number' ? config.duration : 300;
-    setTimeout(onAnimationDidEnd, ms);
+    const durationMs =
+      config && typeof config.duration === 'number'
+        ? config.duration
+        : DEFAULT_DURATION_MS;
+    setTimeout(onAnimationDidEnd, durationMs);
   }
 }
 

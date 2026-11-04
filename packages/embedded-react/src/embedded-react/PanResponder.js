@@ -23,8 +23,8 @@
 //
 //   const pan = useRef(PanResponder.create({
 //     onStartShouldSetPanResponder: () => true,
-//     onPanResponderMove: (e, g) => setX(g.dx),
-//     onPanResponderRelease: (e, g) => (g.vx > 0.5 ? next() : settle()),
+//     onPanResponderMove: (event, gesture) => setX(gesture.dx),
+//     onPanResponderRelease: (event, gesture) => (gesture.vx > 0.5 ? next() : settle()),
 //   })).current;
 //
 //   <View {...pan.panHandlers} />
@@ -86,7 +86,8 @@ const SUPPORTED = [
  * The engine's monotonic millisecond clock, used for velocity. `performance.now()` is installed by the
  * QuickJS runtime on every context (it is React's scheduler clock) and exists in the simulator and in
  * Node; `Date.now()` jumps whenever the host sets the wall clock, so it is never used here.
- * The clock only advances when the host ticks, so a dt of 0 is normal and leaves velocity untouched.
+ * The clock only advances when the host ticks, so an elapsed time of 0 is normal and leaves velocity
+ * untouched.
  */
 const now = () =>
   typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -108,10 +109,10 @@ function asConfig(config) {
 /** Warns ONCE PER KEY about config keys this module does not act on. */
 function warnUnsupportedConfig(config) {
   const names = Object.keys(config).filter(
-    k => !SUPPORTED.includes(k) && !s_warnedKeys.has(k),
+    key => !SUPPORTED.includes(key) && !s_warnedKeys.has(key),
   );
   if (names.length === 0) return;
-  for (const k of names) s_warnedKeys.add(k);
+  for (const key of names) s_warnedKeys.add(key);
   console.warn(
     `embedded-react: PanResponder ignores ${names.join(', ')} — ` +
       `supported: ${SUPPORTED.join(', ')}.`,
@@ -122,17 +123,17 @@ function warnUnsupportedConfig(config) {
  * Clears the travel/velocity fields between gestures. `numberActiveTouches` is deliberately left alone:
  * it counts fingers on the panel, which outlives the gesture when a second finger is still down.
  *
- * @param {object} g The gesture state to reset in place.
+ * @param {object} gestureState The gesture state to reset in place.
  */
-function resetGestureState(g) {
-  g.moveX = 0;
-  g.moveY = 0;
-  g.x0 = 0;
-  g.y0 = 0;
-  g.dx = 0;
-  g.dy = 0;
-  g.vx = 0;
-  g.vy = 0;
+function resetGestureState(gestureState) {
+  gestureState.moveX = 0;
+  gestureState.moveY = 0;
+  gestureState.x0 = 0;
+  gestureState.y0 = 0;
+  gestureState.dx = 0;
+  gestureState.dy = 0;
+  gestureState.vx = 0;
+  gestureState.vy = 0;
 }
 
 /**
@@ -170,62 +171,63 @@ export function create(userConfig = {}) {
 
   let granted = false;
   let lastMoveTime = 0;
-  // The engine measures e.dx/e.dy from TOUCH-DOWN; RN (and this module) measure g.dx/g.dy from the
-  // GRANT — a responder that needed 10px of slop to claim starts its own travel at zero, so the slop
-  // never shows up as a jump. The base is what e.dx read at the moment of the grant.
+  // The engine measures event.dx/event.dy from TOUCH-DOWN; RN (and this module) measure
+  // gestureState.dx/dy from the GRANT — a responder that needed 10px of slop to claim starts its own
+  // travel at zero, so the slop never shows up as a jump. The base is what event.dx read at the moment
+  // of the grant.
   let baseDx = 0;
   let baseDy = 0;
 
-  const fire = (name, e) => {
-    if (typeof config[name] === 'function') config[name](e, gestureState);
+  const fire = (name, event) => {
+    if (typeof config[name] === 'function') config[name](event, gestureState);
   };
 
-  /** Folds one engine payload (e.x/e.y absolute, e.dx/e.dy from touch-down) into the travel fields. */
-  const advance = e => {
-    gestureState.moveX = e.x;
-    gestureState.moveY = e.y;
-    gestureState.dx = e.dx - baseDx;
-    gestureState.dy = e.dy - baseDy;
+  /** Folds one engine payload (event.x/y absolute, event.dx/dy from touch-down) into the travel fields. */
+  const advance = event => {
+    gestureState.moveX = event.x;
+    gestureState.moveY = event.y;
+    gestureState.dx = event.dx - baseDx;
+    gestureState.dy = event.dy - baseDy;
   };
 
   /** A move: travel, plus a fresh velocity reading over the time since the last one. */
-  const track = e => {
-    const t = now();
-    const dt = t - lastMoveTime;
-    const prevDx = gestureState.dx;
-    const prevDy = gestureState.dy;
+  const track = event => {
+    const time = now();
+    const elapsed = time - lastMoveTime;
+    const previousDx = gestureState.dx;
+    const previousDy = gestureState.dy;
 
-    advance(e);
+    advance(event);
 
-    // dt is 0 whenever two touches land inside one host frame (the clock only moves on er_tick), and
-    // the division would be Infinity. Keeping the previous velocity is the honest answer: nothing new
-    // has been measured yet.
-    if (dt > 0) {
-      gestureState.vx = (gestureState.dx - prevDx) / dt;
-      gestureState.vy = (gestureState.dy - prevDy) / dt;
+    // The elapsed time is 0 whenever two touches land inside one host frame (the clock only moves on
+    // er_tick), and the division would be Infinity. Keeping the previous velocity is the honest
+    // answer: nothing new has been measured yet.
+    if (elapsed > 0) {
+      gestureState.vx = (gestureState.dx - previousDx) / elapsed;
+      gestureState.vy = (gestureState.dy - previousDy) / elapsed;
     }
-    lastMoveTime = t;
+    lastMoveTime = time;
   };
 
   /** Wraps a should-set predicate as an engine query: track the point, ask, absent means "no" (as in RN). */
   const query = name =>
     typeof config[name] === 'function'
-      ? e => {
-          if (!granted) advance(e);
-          return config[name](e, gestureState) === true;
+      ? event => {
+          if (!granted) advance(event);
+          return config[name](event, gestureState) === true;
         }
       : undefined;
 
   /** Ends the gesture: reports it if this responder owned it, then clears the state for the next one. */
-  const finish = (e, callback) => {
+  const finish = (event, callback) => {
     const wasGranted = granted;
     granted = false;
     // Fold the final point into the travel so `dx` is the gesture's true total even when the finger
     // lifted without a final move — but leave vx/vy at the last MOVE's reading. A fling ends with the
     // finger resting for a frame or two, and re-measuring across that would report zero and throw the
     // throw away.
-    advance(e);
-    if (wasGranted) fire(callback, e);
+    advance(event);
+    if (wasGranted) fire(callback, event);
     resetGestureState(gestureState);
     baseDx = 0;
     baseDy = 0;
@@ -233,7 +235,7 @@ export function create(userConfig = {}) {
 
   const panHandlers = {
     // --- Raw touch bookkeeping (bubbles per finger): finger count + Start/End for extra fingers ---
-    onTouchStart(e) {
+    onTouchStart(event) {
       gestureState.numberActiveTouches += 1;
       // A later finger joins the gesture in flight (the engine events carry no finger id, so
       // independent tracking is impossible). Its own touch slot re-negotiates and re-grants this
@@ -242,19 +244,19 @@ export function create(userConfig = {}) {
       resetGestureState(gestureState);
       baseDx = 0;
       baseDy = 0;
-      gestureState.x0 = e.x;
-      gestureState.y0 = e.y;
-      gestureState.moveX = e.x;
-      gestureState.moveY = e.y;
+      gestureState.x0 = event.x;
+      gestureState.y0 = event.y;
+      gestureState.moveX = event.x;
+      gestureState.moveY = event.y;
       lastMoveTime = now();
     },
-    onTouchEnd(e) {
+    onTouchEnd(event) {
       if (gestureState.numberActiveTouches > 0)
         gestureState.numberActiveTouches -= 1;
       // A finger lifted but the gesture continues; the RELEASE for the last one arrives as a
       // responder event below.
       if (granted && gestureState.numberActiveTouches > 0)
-        fire('onPanResponderEnd', e);
+        fire('onPanResponderEnd', event);
     },
     onTouchCancel() {
       gestureState.numberActiveTouches = 0;
@@ -271,53 +273,55 @@ export function create(userConfig = {}) {
     ),
     onResponderTerminationRequest:
       typeof config.onPanResponderTerminationRequest === 'function'
-        ? e => config.onPanResponderTerminationRequest(e, gestureState) === true
+        ? event =>
+            config.onPanResponderTerminationRequest(event, gestureState) ===
+            true
         : undefined, // absent → the engine's default: yield (RN's default too)
 
     // --- Responder lifecycle (native events; fire only on the node that owns the gesture) ---
-    onResponderGrant(e) {
+    onResponderGrant(event) {
       if (granted) {
         // A second finger's touch slot granted the same node: one gesture, not two. RN calls this a
         // responder "start" for the extra touch.
-        fire('onPanResponderStart', e);
+        fire('onPanResponderStart', event);
         return;
       }
       granted = true;
-      baseDx = e.dx;
-      baseDy = e.dy;
-      gestureState.x0 = e.x;
-      gestureState.y0 = e.y;
+      baseDx = event.dx;
+      baseDy = event.dy;
+      gestureState.x0 = event.x;
+      gestureState.y0 = event.y;
       gestureState.dx = 0;
       gestureState.dy = 0;
       lastMoveTime = now();
-      fire('onPanResponderGrant', e);
+      fire('onPanResponderGrant', event);
     },
-    onResponderMove(e) {
+    onResponderMove(event) {
       if (!granted) return;
-      track(e);
-      fire('onPanResponderMove', e);
+      track(event);
+      fire('onPanResponderMove', event);
     },
-    onResponderRelease(e) {
+    onResponderRelease(event) {
       if (!granted) return;
       // Another finger still down: its touch slot keeps the responder, so the gesture continues (the
       // raw onTouchEnd above already reported the End).
       if (gestureState.numberActiveTouches > 0) return;
-      finish(e, 'onPanResponderRelease');
+      finish(event, 'onPanResponderRelease');
     },
-    onResponderTerminate(e) {
+    onResponderTerminate(event) {
       if (!granted) return;
       gestureState.numberActiveTouches = 0;
-      finish(e, 'onPanResponderTerminate');
+      finish(event, 'onPanResponderTerminate');
     },
-    onResponderReject(e) {
-      fire('onPanResponderReject', e);
+    onResponderReject(event) {
+      fire('onPanResponderReject', event);
     },
   };
 
   // Absent queries must not appear as props at all (an undefined on* prop is skipped by the host
   // config anyway, but a clean bag is easier to reason about and to spread).
-  for (const k of Object.keys(panHandlers)) {
-    if (panHandlers[k] === undefined) delete panHandlers[k];
+  for (const key of Object.keys(panHandlers)) {
+    if (panHandlers[key] === undefined) delete panHandlers[key];
   }
 
   return {panHandlers};

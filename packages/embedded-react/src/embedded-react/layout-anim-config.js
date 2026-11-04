@@ -18,6 +18,9 @@
 // Node (see __tests__/layout-animation.unit.test.js). LayoutAnimation.js wires configureNext to the
 // bridge using these.
 
+/** Duration when a config gives none, as in RN. */
+export const DEFAULT_DURATION_MS = 300;
+
 /** RN-compatible animation type tokens. */
 export const Types = {
   spring: 'spring',
@@ -58,10 +61,13 @@ function easingForType(type) {
  * are accepted for parity but not separately animated.
  */
 export function toEngineConfig(config) {
-  const c = config || {};
-  const duration = typeof c.duration === 'number' ? c.duration : 300;
-  const update = c.update || {};
-  const type = update.type || c.type || Types.easeInEaseOut;
+  const options = config || {};
+  const duration =
+    typeof options.duration === 'number'
+      ? options.duration
+      : DEFAULT_DURATION_MS;
+  const update = options.update || {};
+  const type = update.type || options.type || Types.easeInEaseOut;
   if (type === Types.spring) {
     return {type: 'spring', duration};
   }
