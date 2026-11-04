@@ -202,9 +202,9 @@ static ERProps s_clip_props;
 
 static ERProps props_default(void)
 {
-    ERProps source_bytes;
-    er_props_default(&source_bytes);
-    return source_bytes;
+    ERProps props;
+    er_props_default(&props);
+    return props;
 }
 
 static int fail(const char* message)

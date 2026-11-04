@@ -66,13 +66,13 @@ static void put(int x, int y, uint32_t source_alpha, uint32_t source_red, uint32
 {
     if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT)
         return;
-    uint32_t* dirty = &s_framebuffer[y * SCREEN_WIDTH + x];
+    uint32_t* destination = &s_framebuffer[y * SCREEN_WIDTH + x];
     const uint32_t inverse_alpha = CHANNEL_MAX - source_alpha;
-    const uint32_t destination_red = (*dirty >> 16) & 0xFFu, destination_green = (*dirty >> 8) & 0xFFu,
-                   destination_blue = *dirty & 0xFFu;
-    *dirty = 0xFF000000u | ((source_red + div255(destination_red * inverse_alpha)) << 16)
-             | ((source_green + div255(destination_green * inverse_alpha)) << 8)
-             | (source_blue + div255(destination_blue * inverse_alpha));
+    const uint32_t destination_red = (*destination >> 16) & 0xFFu, destination_green = (*destination >> 8) & 0xFFu,
+                   destination_blue = *destination & 0xFFu;
+    *destination = 0xFF000000u | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                   | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                   | (source_blue + div255(destination_blue * inverse_alpha));
     s_touched[y * SCREEN_WIDTH + x] = 1u;
 }
 
@@ -149,9 +149,9 @@ static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y
 
 static ERProps props_default(void)
 {
-    ERProps source_bytes;
-    er_props_default(&source_bytes);
-    return source_bytes;
+    ERProps props;
+    er_props_default(&props);
+    return props;
 }
 
 static int fail(const char* message)
@@ -269,10 +269,10 @@ static void build_scene(void)
     for (int leaf_index = 0; leaf_index < LEAF_COUNT; leaf_index++)
     {
         s_leaves[leaf_index] = er_node_create(ER_NODE_VIEW);
-        ERProps s_leaves_props = s_leaf_props;
-        s_leaves_props.left = (int16_t)(4 + (leaf_index % 8) * 14);
-        s_leaves_props.top = (int16_t)(4 + (leaf_index / 8) * 14);
-        er_node_set_props(s_leaves[leaf_index], &s_leaves_props);
+        ERProps leaf_props = s_leaf_props;
+        leaf_props.left = (int16_t)(4 + (leaf_index % 8) * 14);
+        leaf_props.top = (int16_t)(4 + (leaf_index / 8) * 14);
+        er_node_set_props(s_leaves[leaf_index], &leaf_props);
         er_tree_append_child(content, s_leaves[leaf_index]);
     }
 
@@ -352,12 +352,12 @@ int main(void)
     {
         for (int leaf_index = 0; leaf_index < LEAF_COUNT; leaf_index++)
         {
-            ERProps s_leaves_props = s_leaf_props;
-            s_leaves_props.left = (int16_t)(4 + (leaf_index % 8) * 14);
-            s_leaves_props.top = (int16_t)(4 + (leaf_index / 8) * 14);
-            s_leaves_props.background_color =
+            ERProps leaf_props = s_leaf_props;
+            leaf_props.left = (int16_t)(4 + (leaf_index % 8) * 14);
+            leaf_props.top = (int16_t)(4 + (leaf_index / 8) * 14);
+            leaf_props.background_color =
                 (frame_index & 1) ? 0xFF2255AAu : 0xFFAA5522u; /* a real prop change each pass */
-            er_node_set_props(s_leaves[leaf_index], &s_leaves_props);
+            er_node_set_props(s_leaves[leaf_index], &leaf_props);
         }
         const long painted = frame_distinct();
         if (painted != 0)
@@ -373,11 +373,11 @@ int main(void)
      * must bring the CURRENT props, not the ones it went off screen with. */
     for (int leaf_index = 0; leaf_index < LEAF_COUNT; leaf_index++)
     {
-        ERProps s_leaves_props = s_leaf_props;
-        s_leaves_props.left = (int16_t)(4 + (leaf_index % 8) * 14);
-        s_leaves_props.top = (int16_t)(4 + (leaf_index / 8) * 14);
-        s_leaves_props.background_color = HIDDEN_LEAF_COLOR;
-        er_node_set_props(s_leaves[leaf_index], &s_leaves_props);
+        ERProps leaf_props = s_leaf_props;
+        leaf_props.left = (int16_t)(4 + (leaf_index % 8) * 14);
+        leaf_props.top = (int16_t)(4 + (leaf_index / 8) * 14);
+        leaf_props.background_color = HIDDEN_LEAF_COLOR;
+        er_node_set_props(s_leaves[leaf_index], &leaf_props);
     }
     if (frame_distinct() != 0)
         return fail("a prop set inside a hidden page repainted the screen");

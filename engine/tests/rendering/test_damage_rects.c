@@ -74,8 +74,8 @@ static uint32_t div255(uint32_t value)
 static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t box_a = (argb >> 24) & 0xFFU;
-    if (box_a == 0U || width <= 0 || height <= 0)
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || width <= 0 || height <= 0)
         return;
     mark_touched(x, y, width, height);
     for (int row = y; row < y + height; row++)
@@ -87,21 +87,21 @@ static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ct
             if (column < 0 || column >= SCREEN)
                 continue;
             uint32_t* destination = &s_framebuffer[row * SCREEN + column];
-            if (box_a == 0xFFU)
+            if (alpha == 0xFFU)
             {
                 *destination = 0xFF000000U | (argb & 0x00FFFFFFU);
             }
             else
             {
-                const uint32_t inverse_alpha = ER_CHANNEL_MAX - box_a;
+                const uint32_t inverse_alpha = ER_CHANNEL_MAX - alpha;
                 const uint32_t destination_red = (*destination >> 16) & 0xFFU,
                                destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
                 const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU,
                                source_blue = argb & 0xFFU;
-                const uint32_t red = div255(source_red * box_a) + div255(destination_red * inverse_alpha);
-                const uint32_t green = div255(source_green * box_a) + div255(destination_green * inverse_alpha);
-                const uint32_t box_b = div255(source_blue * box_a) + div255(destination_blue * inverse_alpha);
-                *destination = 0xFF000000U | (red << 16) | (green << 8) | box_b;
+                const uint32_t red = div255(source_red * alpha) + div255(destination_red * inverse_alpha);
+                const uint32_t green = div255(source_green * alpha) + div255(destination_green * inverse_alpha);
+                const uint32_t blue = div255(source_blue * alpha) + div255(destination_blue * inverse_alpha);
+                *destination = 0xFF000000U | (red << 16) | (green << 8) | blue;
             }
         }
     }

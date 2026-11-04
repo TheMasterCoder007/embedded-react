@@ -151,9 +151,9 @@ static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y
 
 static ERProps props_default(void)
 {
-    ERProps source_bytes;
-    er_props_default(&source_bytes);
-    return source_bytes;
+    ERProps props;
+    er_props_default(&props);
+    return props;
 }
 
 static int fail(const char* message)
