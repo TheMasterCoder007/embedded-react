@@ -40,8 +40,9 @@
  *
  * CONFIGURATION. The plain scenarios need only ERUI_SHADOWS. The transform-fallback ones additionally
  * need a node that fails its scratch capture while still casting a shadow, which exists only when
- * ERUI_TRANSFORM_WIDTH/HEIGHT is decoupled below ERUI_SCRATCH_WIDTH/HEIGHT — the same gap
- * test_transform_shadow_damage.c needs, and the same CI pass ("shadows, decoupled transform scratch") that provides it.
+ * ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT are decoupled below ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT — the
+ * same gap test_transform_shadow_damage.c needs, and the same CI pass ("shadows, decoupled transform scratch") that
+ * provides it.
  */
 
 #include "er_scene.h"
@@ -258,7 +259,8 @@ static ERProps props_default(void)
 #define SHADOW_RADIUS 10
 #define SHADOW_OFFSET 6
 
-/* Plain (untransformed) card: comfortably inside ERUI_SCRATCH_WIDTH/HEIGHT, so it really does cast a shadow. */
+/* Plain (untransformed) card: comfortably inside ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT, so it really does cast a
+ * shadow. */
 #define PLAIN_SIDE 200
 #define CARD_LEFT 60
 #define CARD_TOP 60
@@ -266,8 +268,8 @@ static ERProps props_default(void)
 #define MOVE_DISTANCE 40
 
 /* The transform-fallback band exists only when the transform source is smaller than the shadow's: a
- * node above ERUI_TRANSFORM_WIDTH/HEIGHT refuses the capture and paints its raw box, shadow and all. With the
- * default (equal) limits such a node is over the shadow limit too and casts nothing. */
+ * node above ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT refuses the capture and paints its raw box, shadow and all.
+ * With the default (equal) limits such a node is over the shadow limit too and casts nothing. */
 #if ERUI_TRANSFORMS_FULL && (ERUI_TRANSFORM_WIDTH < ERUI_SCRATCH_WIDTH) && (ERUI_TRANSFORM_HEIGHT < ERUI_SCRATCH_HEIGHT)
 #define XFORM_SHADOW_GAP 1
 #define FALLBACK_SIDE (ERUI_TRANSFORM_WIDTH + 1)
@@ -547,7 +549,8 @@ int main(void)
     bad += run_case(CARD_CAPTURED, true, ACT_REMOVE, "captured: removed (casts no shadow, control)");
     bad += run_case(CARD_CAPTURED, true, ACT_HIDE, "captured: display:none (control)");
 #else
-    printf("(transform-fallback scenarios need ERUI_TRANSFORM_WIDTH/HEIGHT < ERUI_SCRATCH_WIDTH/HEIGHT — skipped)\n");
+    printf("(transform-fallback scenarios need ERUI_TRANSFORM_WIDTH/ERUI_TRANSFORM_HEIGHT < "
+           "ERUI_SCRATCH_WIDTH/ERUI_SCRATCH_HEIGHT — skipped)\n");
 #endif
 
     if (bad)

@@ -34,9 +34,10 @@
  *
  * CONFIGURATION. Both halves have to be reachable at once — the capture must fail while the shadow
  * still renders — and the two have separate size limits: er_transform_source_begin() refuses a node
- * larger than ERUI_TRANSFORM_WIDTH/HEIGHT, er_shadow_render() bails on one larger than ERUI_SCRATCH_WIDTH/HEIGHT. With
- * the default ERUI_TRANSFORM_WIDTH = ERUI_SCRATCH_WIDTH any node over the transform limit is over the shadow limit too
- * and simply casts no shadow, so the defect needs the decoupled configuration these knobs exist for
+ * larger than ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT, er_shadow_render() bails on one larger than
+ * ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT. With the default ERUI_TRANSFORM_WIDTH = ERUI_SCRATCH_WIDTH any node over
+ * the transform limit is over the shadow limit too and simply casts no shadow, so the defect needs the decoupled
+ * configuration these knobs exist for
  * ("decouple from ERUI_SCRATCH_WIDTH when strips are screen-wide"). The scenarios below compile out unless
  * the build actually provides that gap; .github/workflows/ci.yml has a pass that does.
  */
@@ -462,8 +463,8 @@ int main(void)
 
     printf("PASS: a fallback-painted transformed node damages its shadow\n");
 #else
-    printf("SKIP: needs ERUI_SHADOWS, ERUI_TRANSFORMS=FULL, and ERUI_TRANSFORM_WIDTH/HEIGHT < "
-           "ERUI_SCRATCH_WIDTH/HEIGHT\n");
+    printf("SKIP: needs ERUI_SHADOWS, ERUI_TRANSFORMS=FULL, and ERUI_TRANSFORM_WIDTH/ERUI_TRANSFORM_HEIGHT < "
+           "ERUI_SCRATCH_WIDTH/ERUI_SCRATCH_HEIGHT\n");
 #endif
     return EXIT_SUCCESS;
 }

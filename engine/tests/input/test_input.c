@@ -30,7 +30,7 @@
 /* A node this size cannot fit the transform source buffer, so er_transform_source_begin() refuses it
  * and render_tree paints it UNTRANSFORMED at its raw layout box. Derived from the build's own limit
  * rather than hard-coded, so the fallback is reachable in every configuration — including the default
- * one, where ERUI_TRANSFORM_WIDTH/HEIGHT tracks the composite scratch. */
+ * one, where ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT track the composite scratch. */
 #define TRANSFORM_TOO_BIG_WIDTH (ERUI_TRANSFORM_WIDTH + 10)
 #define TRANSFORM_TOO_BIG_HEIGHT (ERUI_TRANSFORM_HEIGHT + 10)
 

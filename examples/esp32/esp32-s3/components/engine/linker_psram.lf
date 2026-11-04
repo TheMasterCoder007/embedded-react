@@ -7,7 +7,7 @@
 # Requires CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y (set in sdkconfig.defaults).
 #
 # Note: PSRAM is cache-fronted and slower than internal SRAM; if compositing perf needs it later,
-# shrink ERUI_SCRATCH_WIDTH/HEIGHT or keep hot buffers internal. For bring-up, correctness first.
+# shrink ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT or keep hot buffers internal. For bring-up, correctness first.
 #
 # EXCEPTION — vector.o stays INTERNAL: the path rasterizer's edge list / coverage row / crossing list
 # (vector.c) are touched hundreds of thousands of times per frame in tight scanline loops. In PSRAM that

@@ -658,7 +658,7 @@ int main(void)
      *
      * A translucent group re-rendered because its bound opacity VALUE changed
      * (a visual-only mark) may be served from the fade cache in builds with
-     * ERUI_FADE_CACHE_WIDTH/HEIGHT set; a content change (child recolored via props)
+     * ERUI_FADE_CACHE_WIDTH and ERUI_FADE_CACHE_HEIGHT set; a content change (child recolored via props)
      * must invalidate it. The pixel expectations are identical with the cache
      * compiled out, so this test runs in every configuration — with the cache
      * on, it verifies the cached blend is bit-exact and invalidation works.

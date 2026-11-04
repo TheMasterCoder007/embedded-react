@@ -51,9 +51,9 @@ idf_component_register(
 
 # Feature flags — PUBLIC so dependents (bridge, main) agree on struct layout.
 #
-# ERUI_SCRATCH_WIDTH/BAND_HEIGHT size the opacity-compositing strip pool (kept in internal DRAM, see
-# linker_psram.lf); ERUI_TRANSFORM_WIDTH/HEIGHT cap the largest node that can be rotated or scaled. See
-# engine/README.md "Scratch buffers" for what each controls.
+# ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_BAND_HEIGHT size the opacity-compositing strip pool (kept in
+# internal DRAM, see linker_psram.lf); ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT cap the largest
+# node that can be rotated or scaled. See engine/README.md "Scratch buffers" for what each controls.
 # ERUI_TRANSFORMS=FULL enables the 2D affine path (scale/rotate) the starter's
 # Animated.timing(scale) logo pulse needs; under TRANSLATE_ONLY that pulse silently does
 # nothing.

@@ -40,7 +40,7 @@ set(ERUI_MAX_VALUE_BINDINGS   "16"      CACHE STRING "" FORCE)
 set(ERUI_FONT_POOL_BYTES      "1048576" CACHE STRING "" FORCE)  # enable runtime er_font_load (0 disables it)
 set(ERUI_MAX_IMAGE_ROW_PIXELS "4096"    CACHE STRING "" FORCE)
 set(ERUI_SCRATCH_WIDTH        "1024"    CACHE STRING "" FORCE)  # opacity strip width / max transformed node width
-set(ERUI_SCRATCH_HEIGHT       "1024"    CACHE STRING "" FORCE)  # transform-source height (ERUI_TRANSFORM_WIDTH/HEIGHT default to these)
+set(ERUI_SCRATCH_HEIGHT       "1024"    CACHE STRING "" FORCE)  # transform-source height (the ERUI_TRANSFORM_* sizes default to these)
 set(ERUI_SCRATCH_BAND_HEIGHT  "32"      CACHE STRING "" FORCE)  # strip height: exercises the same banded compositing path
                                                               # boards use (banding is pixel-exact, so the preview stays faithful)
 set(ERUI_FADE_CACHE_WIDTH  "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations

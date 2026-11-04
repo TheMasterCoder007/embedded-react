@@ -108,11 +108,12 @@ jobs:
       #     and roughly half of tests/rendering/test_shadow.c sits behind #if ERUI_SHADOWS unbuilt — as
       #     does the whole of tests/rendering/test_shadow_retire_damage.c, which is the only cover for a
       #     shadow being erased when its node is removed, hidden or simply stops casting one.
-      #   - ERUI_TRANSFORM_WIDTH/HEIGHT exists to be decoupled from ERUI_SCRATCH_WIDTH/HEIGHT, and only the decoupled build has
-      #     a size band where a node is too big for a transform capture (so it paints untransformed) yet
-      #     small enough to still cast a shadow. tests/rendering/test_transform_shadow_damage.c compiles
-      #     to a SKIP without that band, so this pass is the one that gives it teeth (and the same band
-      #     unlocks test_shadow_retire_damage.c's transform-fallback half).
+      #   - ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT exist to be decoupled from ERUI_SCRATCH_WIDTH
+      #     and ERUI_SCRATCH_HEIGHT, and only the decoupled build has a size band where a node is too big
+      #     for a transform capture (so it paints untransformed) yet small enough to still cast a shadow.
+      #     tests/rendering/test_transform_shadow_damage.c compiles to a SKIP without that band, so this
+      #     pass is the one that gives it teeth (and the same band unlocks test_shadow_retire_damage.c's
+      #     transform-fallback half).
       - name: Configure (shadows, decoupled transform scratch)
         run: >
           cmake -S engine -B engine/build-ci-shadow

@@ -479,8 +479,8 @@ static int check_spinner_bounded(int screen, float scale_x, float scale_y, const
 
 #if ERUI_TRANSFORMS_FULL
 /* Scenario 5: a transformed node too large for the transform scratch must not become a permanent damage
- * source. er_transform_source_begin() refuses a node wider/taller than ERUI_TRANSFORM_WIDTH/HEIGHT, and render_tree
- * then degrades to painting it UNTRANSFORMED at its raw box — but the damage pre-pass used to measure
+ * source. er_transform_source_begin() refuses a node wider/taller than ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT,
+ * and render_tree then degrades to painting it UNTRANSFORMED at its raw box — but the damage pre-pass used to measure
  * every transformed node by its transformed AABB regardless. last_paint_rect held the box while the
  * pre-pass computed an AABB, the two could never agree, `moved` latched true, and the node damaged and
  * re-reported its own footprint on every commit for the rest of the run.

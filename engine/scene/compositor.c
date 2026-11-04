@@ -1849,7 +1849,8 @@ static void compute_subtree_bounds(ERNode* node)
  * changes — so after a first full capture, each frame is a single blend of this buffer at the
  * new alpha instead of a re-render + re-composite. Valid while the owning node, its size, and
  * the global content generation are unchanged; ANY content mutation anywhere invalidates it
- * (coarse but O(1) and always safe). Sized by ERUI_FADE_CACHE_WIDTH/HEIGHT; 0 disables the feature. */
+ * (coarse but O(1) and always safe). Sized by ERUI_FADE_CACHE_WIDTH and ERUI_FADE_CACHE_HEIGHT; 0 disables the
+ * feature. */
 #ifndef ERUI_FADE_CACHE_WIDTH
 #define ERUI_FADE_CACHE_WIDTH 0
 #endif

@@ -60,8 +60,9 @@
 #define ERUI_MAX_OPACITY_DEPTH 4
 #endif
 
-/* The transform source defaults to the scratch dims so a consumer that sizes only ERUI_SCRATCH_WIDTH/HEIGHT keeps its
- * old transform budget; set ERUI_TRANSFORM_WIDTH/HEIGHT to decouple them (useful when the strips are screen-wide). */
+/* The transform source defaults to the scratch dims so a consumer that sizes only ERUI_SCRATCH_WIDTH and
+ * ERUI_SCRATCH_HEIGHT keeps its old transform budget; set ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT to decouple
+ * them (useful when the strips are screen-wide). */
 #ifndef ERUI_TRANSFORM_WIDTH
 #define ERUI_TRANSFORM_WIDTH ERUI_SCRATCH_WIDTH
 #endif
