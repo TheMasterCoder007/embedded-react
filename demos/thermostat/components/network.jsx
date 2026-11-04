@@ -51,63 +51,69 @@ export const ZONES = [
   {name: 'Auckland', utc: '+12', tz: 'NZST-12NZDT,M9.5.0,M4.1.0/3'},
 ];
 
-const zoneName = tz => {
-  const z = ZONES.find(z => z.tz === tz);
-  return z ? z.name : tz;
+const zoneName = timeZone => {
+  const zone = ZONES.find(candidate => candidate.tz === timeZone);
+  return zone ? zone.name : timeZone;
 };
 
 // A page is a larger sheet in the settings sheet's place; the list fills what the header leaves.
-const PAGE_W = 600;
-const PAGE_H = 420;
-const PAGE_PAD = 22;
-const HEADER_H = 36;
+const PAGE_WIDTH = 600;
+const PAGE_HEIGHT = 420;
+const PAGE_PADDING = 22;
+const HEADER_HEIGHT = 36;
 const GAP = 14;
-const LIST_H = PAGE_H - 2 * PAGE_PAD - HEADER_H - GAP;
+
+const STATUS_POLL_MS = 1000;
+const SCAN_POLL_MS = 500;
+const MIN_PASSPHRASE_LENGTH = 8;
+const MAX_PASSPHRASE_LENGTH = 63;
+const HEX_KEY_LENGTH = 64;
+const LIST_HEIGHT = PAGE_HEIGHT - 2 * PAGE_PADDING - HEADER_HEIGHT - GAP;
 
 const pageStyle = (theme, height) => ({
-  width: PAGE_W,
+  width: PAGE_WIDTH,
   height,
   backgroundColor: theme.surface,
   borderWidth: 1,
   borderColor: theme.line,
   borderRadius: 16,
-  padding: PAGE_PAD,
+  padding: PAGE_PADDING,
   gap: GAP,
 });
 
 /** The station's status, re-read once a second; `refresh` re-reads it now. */
 function useWifiStatus() {
-  const [st, setSt] = useState(() => wifi.status());
-  const refresh = useCallback(() => setSt(wifi.status()), []);
+  const [status, setStatus] = useState(() => wifi.status());
+  const refresh = useCallback(() => setStatus(wifi.status()), []);
   useEffect(() => {
-    const id = setInterval(() => {
+    const intervalId = setInterval(() => {
       const next = wifi.status();
-      setSt(prev =>
-        prev.state === next.state &&
-        prev.ssid === next.ssid &&
-        prev.reason === next.reason
-          ? prev
+      setStatus(previous =>
+        previous.state === next.state &&
+        previous.ssid === next.ssid &&
+        previous.reason === next.reason
+          ? previous
           : next,
       );
-    }, 1000);
-    return () => clearInterval(id);
+    }, STATUS_POLL_MS);
+    return () => clearInterval(intervalId);
   }, []);
-  return [st, refresh];
+  return [status, refresh];
 }
 
-function statusText(st) {
-  if (st.state === 'idle') return 'NOT CONNECTED';
+function statusText(status) {
+  if (status.state === 'idle') return 'NOT CONNECTED';
   const what =
-    st.state === 'connected'
+    status.state === 'connected'
       ? 'CONNECTED'
-      : st.state === 'connecting'
+      : status.state === 'connecting'
         ? 'CONNECTING...'
-        : st.reason === 'auth'
+        : status.reason === 'auth'
           ? 'WRONG PASSWORD?'
-          : st.reason === 'notFound'
+          : status.reason === 'notFound'
             ? 'NOT FOUND'
             : 'NOT CONNECTED';
-  return st.ssid + ' • ' + what;
+  return status.ssid + ' • ' + what;
 }
 
 function Label({theme, children}) {
@@ -123,19 +129,19 @@ function Button({theme, label, strong, onPress}) {
     <Pressable
       onPress={onPress}
       style={{
-        height: HEADER_H,
+        height: HEADER_HEIGHT,
         paddingLeft: 16,
         paddingRight: 16,
         borderRadius: 9,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: strong ? theme.fg : theme.trackBg,
+        backgroundColor: strong ? theme.foreground : theme.trackBackground,
       }}>
       <Text
         style={{
           fontSize: 12,
           letterSpacing: 1,
-          color: strong ? theme.bg : theme.fg,
+          color: strong ? theme.background : theme.foreground,
         }}>
         {label}
       </Text>
@@ -147,7 +153,7 @@ function Header({theme, title, children}) {
   return (
     <View
       style={{
-        height: HEADER_H,
+        height: HEADER_HEIGHT,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
@@ -158,7 +164,7 @@ function Header({theme, title, children}) {
           fontSize: 12,
           fontWeight: '600',
           letterSpacing: 1,
-          color: theme.fg,
+          color: theme.foreground,
         }}>
         {title}
       </Text>
@@ -181,9 +187,11 @@ function SettingRow({theme, label, value, onPress}) {
           alignItems: 'center',
           paddingLeft: 14,
           paddingRight: 14,
-          backgroundColor: theme.trackBg,
+          backgroundColor: theme.trackBackground,
         }}>
-        <Text style={{flex: 1, fontSize: 12, color: theme.fg}}>{value}</Text>
+        <Text style={{flex: 1, fontSize: 12, color: theme.foreground}}>
+          {value}
+        </Text>
         <Text style={{fontSize: 16, color: theme.dim}}>{'>'}</Text>
       </Pressable>
     </View>
@@ -192,13 +200,13 @@ function SettingRow({theme, label, value, onPress}) {
 
 /** The settings sheet's network column. `onOpen('wifi' | 'zone')` swaps in that page. */
 export function NetworkRows({theme, onOpen}) {
-  const [st] = useWifiStatus();
+  const [status] = useWifiStatus();
   return (
     <View style={{gap: 20}}>
       <SettingRow
         theme={theme}
         label="WI-FI"
-        value={statusText(st)}
+        value={statusText(status)}
         onPress={() => onOpen('wifi')}
       />
       <SettingRow
@@ -211,11 +219,11 @@ export function NetworkRows({theme, onOpen}) {
   );
 }
 
-const BAR_H = [5, 8, 11, 14];
+const BAR_HEIGHTS = [5, 8, 11, 14];
 
 /** Signal strength as four bars. */
 function Bars({theme, rssi}) {
-  const n = rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1;
+  const litBars = rssi >= -55 ? 4 : rssi >= -65 ? 3 : rssi >= -75 ? 2 : 1;
   return (
     <View
       style={{
@@ -224,13 +232,13 @@ function Bars({theme, rssi}) {
         gap: 2,
         height: 14,
       }}>
-      {BAR_H.map((h, i) => (
+      {BAR_HEIGHTS.map((barHeight, barIndex) => (
         <View
-          key={i}
+          key={barIndex}
           style={{
             width: 4,
-            height: h,
-            backgroundColor: i < n ? theme.fg : theme.dim,
+            height: barHeight,
+            backgroundColor: barIndex < litBars ? theme.foreground : theme.dim,
           }}
         />
       ))}
@@ -238,7 +246,7 @@ function Bars({theme, rssi}) {
   );
 }
 
-function NetworkRow({theme, ap, tag, onPress}) {
+function NetworkRow({theme, accessPoint, tag, onPress}) {
   return (
     <Pressable
       onPress={onPress}
@@ -250,21 +258,23 @@ function NetworkRow({theme, ap, tag, onPress}) {
         gap: 12,
         paddingLeft: 14,
         paddingRight: 14,
-        backgroundColor: theme.trackBg,
+        backgroundColor: theme.trackBackground,
       }}>
-      <Text style={{flex: 1, fontSize: 16, color: theme.fg}}>{ap.ssid}</Text>
+      <Text style={{flex: 1, fontSize: 16, color: theme.foreground}}>
+        {accessPoint.ssid}
+      </Text>
       {tag ? (
         <Text
           style={{fontSize: 10, letterSpacing: 1, color: theme.accents.auto}}>
           {tag}
         </Text>
       ) : null}
-      {ap.secure ? (
+      {accessPoint.secure ? (
         <Text style={{fontSize: 10, letterSpacing: 1, color: theme.dim}}>
           SECURED
         </Text>
       ) : null}
-      <Bars theme={theme} rssi={ap.rssi} />
+      <Bars theme={theme} rssi={accessPoint.rssi} />
     </Pressable>
   );
 }
@@ -274,28 +284,28 @@ function NetworkRow({theme, ap, tag, onPress}) {
  * network needs one. The host saves the network once it connects.
  */
 export function WifiPage({theme, onDone}) {
-  const [st, refresh] = useWifiStatus();
-  const [nets, setNets] = useState(null); // null while scanning
+  const [status, refresh] = useWifiStatus();
+  const [networks, setNetworks] = useState(null); // null while scanning
   const [scanId, setScanId] = useState(0);
-  const [pick, setPick] = useState(null); // a secured network waiting for its password
-  const [err, setErr] = useState('');
+  const [pendingSsid, setPendingSsid] = useState(null); // a secured network waiting for its password
+  const [error, setError] = useState('');
 
   // The radio can be busy for a moment (a connect attempt), so keep asking until the scan starts.
   useEffect(() => {
-    setNets(null);
+    setNetworks(null);
     let started = wifi.scan();
-    const id = setInterval(() => {
+    const intervalId = setInterval(() => {
       if (!started) {
         started = wifi.scan();
         return;
       }
       const found = wifi.networks();
       if (found) {
-        setNets(found);
-        clearInterval(id);
+        setNetworks(found);
+        clearInterval(intervalId);
       }
-    }, 500);
-    return () => clearInterval(id);
+    }, SCAN_POLL_MS);
+    return () => clearInterval(intervalId);
   }, [scanId]);
 
   const join = (ssid, password) => {
@@ -304,7 +314,7 @@ export function WifiPage({theme, onDone}) {
     return ok;
   };
 
-  if (pick !== null) {
+  if (pendingSsid !== null) {
     return (
       <View
         style={{
@@ -318,11 +328,11 @@ export function WifiPage({theme, onDone}) {
         }}>
         <PasswordPage
           theme={theme}
-          ssid={pick}
-          onCancel={() => setPick(null)}
-          onJoin={pw => {
-            const ok = join(pick, pw);
-            if (ok) setPick(null);
+          ssid={pendingSsid}
+          onCancel={() => setPendingSsid(null)}
+          onJoin={password => {
+            const ok = join(pendingSsid, password);
+            if (ok) setPendingSsid(null);
             return ok;
           }}
         />
@@ -331,54 +341,57 @@ export function WifiPage({theme, onDone}) {
   }
 
   return (
-    <View style={pageStyle(theme, PAGE_H)}>
-      <Header theme={theme} title={'WI-FI  •  ' + statusText(st)}>
+    <View style={pageStyle(theme, PAGE_HEIGHT)}>
+      <Header theme={theme} title={'WI-FI  •  ' + statusText(status)}>
         <Button
           theme={theme}
           label="RESCAN"
-          onPress={() => setScanId(n => n + 1)}
+          onPress={() => setScanId(previous => previous + 1)}
         />
-        {st.state !== 'idle' ? (
+        {status.state !== 'idle' ? (
           <Button
             theme={theme}
             label="FORGET"
             onPress={() => {
-              setErr(wifi.forget() ? '' : "COULDN'T FORGET THE NETWORK");
+              setError(wifi.forget() ? '' : "COULDN'T FORGET THE NETWORK");
               refresh();
             }}
           />
         ) : null}
         <Button theme={theme} label="DONE" strong onPress={onDone} />
       </Header>
-      <ScrollView style={{height: LIST_H}}>
+      <ScrollView style={{height: LIST_HEIGHT}}>
         <View style={{gap: 6}}>
-          {err ? (
+          {error ? (
             <Text
               style={{
                 fontSize: 10,
                 letterSpacing: 1,
                 color: theme.accents.heat,
               }}>
-              {err}
+              {error}
             </Text>
           ) : null}
-          {nets === null ? (
+          {networks === null ? (
             <Label theme={theme}>SCANNING...</Label>
-          ) : nets.length === 0 ? (
+          ) : networks.length === 0 ? (
             <Label theme={theme}>NO NETWORKS FOUND</Label>
           ) : (
-            nets.map(ap => (
+            networks.map(accessPoint => (
               <NetworkRow
-                key={ap.ssid}
+                key={accessPoint.ssid}
                 theme={theme}
-                ap={ap}
+                accessPoint={accessPoint}
                 tag={
-                  ap.ssid === st.ssid && st.state === 'connected'
+                  accessPoint.ssid === status.ssid &&
+                  status.state === 'connected'
                     ? 'CONNECTED'
                     : null
                 }
                 onPress={() =>
-                  ap.secure ? setPick(ap.ssid) : join(ap.ssid, '')
+                  accessPoint.secure
+                    ? setPendingSsid(accessPoint.ssid)
+                    : join(accessPoint.ssid, '')
                 }
               />
             ))
@@ -390,11 +403,13 @@ export function WifiPage({theme, onDone}) {
 }
 
 /** Whether every character is a hex digit: a 64-character password is the raw WPA2 key, in hex. */
-function isHex(s) {
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
+function isHex(text) {
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
     const hex =
-      (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102);
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 70) ||
+      (code >= 97 && code <= 102);
     if (!hex) return false;
   }
   return true;
@@ -405,31 +420,37 @@ function isHex(s) {
  * on-screen keyboard. `onJoin(password)` returns false when the host would not start connecting.
  */
 function PasswordPage({theme, ssid, onCancel, onJoin}) {
-  const [pw, setPw] = useState('');
+  const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
-  const [err, setErr] = useState('');
+  const [error, setError] = useState('');
   const join = () => {
     const ok =
-      (pw.length >= 8 && pw.length <= 63) || (pw.length === 64 && isHex(pw));
+      (password.length >= MIN_PASSPHRASE_LENGTH &&
+        password.length <= MAX_PASSPHRASE_LENGTH) ||
+      (password.length === HEX_KEY_LENGTH && isHex(password));
     if (!ok) {
-      setErr('USE 8-63 CHARACTERS OR 64 HEX DIGITS');
+      setError('USE 8-63 CHARACTERS OR 64 HEX DIGITS');
       return;
     }
-    if (!onJoin(pw)) setErr("COULDN'T START CONNECTING");
+    if (!onJoin(password)) setError("COULDN'T START CONNECTING");
   };
   return (
-    <View style={pageStyle(theme, 2 * PAGE_PAD + HEADER_H + 44 + 12 + 2 * GAP)}>
+    <View
+      style={pageStyle(
+        theme,
+        2 * PAGE_PADDING + HEADER_HEIGHT + 44 + 12 + 2 * GAP,
+      )}>
       <Header theme={theme} title={'PASSWORD FOR ' + ssid}>
         <Button theme={theme} label="CANCEL" onPress={onCancel} />
         <Button theme={theme} label="JOIN" strong onPress={join} />
       </Header>
       <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
         <TextInput
-          value={pw}
+          value={password}
           secureTextEntry={!show}
-          onChangeText={t => {
-            setPw(t);
-            setErr('');
+          onChangeText={text => {
+            setPassword(text);
+            setError('');
           }}
           onSubmitEditing={join}
           placeholder="Tap to type the password"
@@ -441,8 +462,8 @@ function PasswordPage({theme, ssid, onCancel, onJoin}) {
             paddingLeft: 12,
             paddingRight: 12,
             fontSize: 16,
-            color: theme.fg,
-            backgroundColor: theme.trackBg,
+            color: theme.foreground,
+            backgroundColor: theme.trackBackground,
           }}
         />
         <Button
@@ -455,9 +476,9 @@ function PasswordPage({theme, ssid, onCancel, onJoin}) {
         style={{
           fontSize: 10,
           letterSpacing: 1,
-          color: err ? theme.accents.heat : theme.dim,
+          color: error ? theme.accents.heat : theme.dim,
         }}>
-        {err || 'SAVED ONCE IT CONNECTS'}
+        {error || 'SAVED ONCE IT CONNECTS'}
       </Text>
     </View>
   );
@@ -465,33 +486,33 @@ function PasswordPage({theme, ssid, onCancel, onJoin}) {
 
 /** Picks the time zone the clock shows. The host saves it, and the clock follows within a second. */
 export function ZonePage({theme, onDone}) {
-  const cur = clock.timeZone();
-  const [err, setErr] = useState('');
+  const currentZone = clock.timeZone();
+  const [error, setError] = useState('');
   return (
-    <View style={pageStyle(theme, PAGE_H)}>
+    <View style={pageStyle(theme, PAGE_HEIGHT)}>
       <Header theme={theme} title="TIME ZONE">
         <Button theme={theme} label="DONE" strong onPress={onDone} />
       </Header>
-      <ScrollView style={{height: LIST_H}}>
+      <ScrollView style={{height: LIST_HEIGHT}}>
         <View style={{gap: 6}}>
-          {err ? (
+          {error ? (
             <Text
               style={{
                 fontSize: 10,
                 letterSpacing: 1,
                 color: theme.accents.heat,
               }}>
-              {err}
+              {error}
             </Text>
           ) : null}
-          {ZONES.map(z => {
-            const on = z.tz === cur;
+          {ZONES.map(zone => {
+            const on = zone.tz === currentZone;
             return (
               <Pressable
-                key={z.tz}
+                key={zone.tz}
                 onPress={() => {
-                  if (clock.setTimeZone(z.tz)) onDone();
-                  else setErr('TIME ZONE SET, BUT NOT SAVED');
+                  if (clock.setTimeZone(zone.tz)) onDone();
+                  else setError('TIME ZONE SET, BUT NOT SAVED');
                 }}
                 style={{
                   height: 44,
@@ -500,18 +521,24 @@ export function ZonePage({theme, onDone}) {
                   alignItems: 'center',
                   paddingLeft: 14,
                   paddingRight: 14,
-                  backgroundColor: on ? theme.fg : theme.trackBg,
+                  backgroundColor: on
+                    ? theme.foreground
+                    : theme.trackBackground,
                 }}>
                 <Text
                   style={{
                     flex: 1,
                     fontSize: 16,
-                    color: on ? theme.bg : theme.fg,
+                    color: on ? theme.background : theme.foreground,
                   }}>
-                  {z.name}
+                  {zone.name}
                 </Text>
-                <Text style={{fontSize: 12, color: on ? theme.bg : theme.dim}}>
-                  {'UTC' + z.utc}
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: on ? theme.background : theme.dim,
+                  }}>
+                  {'UTC' + zone.utc}
                 </Text>
               </Pressable>
             );

@@ -25,10 +25,10 @@ export default function CodeWindow({title, code, language = 'jsx'}: Props): Reac
       <Highlight theme={themes.nightOwl} code={code} language={language}>
         {({tokens, getLineProps, getTokenProps}) => (
           <pre className={styles.code}>
-            {tokens.map((line, i) => (
-              <div key={i} {...getLineProps({line})}>
-                {line.map((token, k) => (
-                  <span key={k} {...getTokenProps({token})} />
+            {tokens.map((line, lineIndex) => (
+              <div key={lineIndex} {...getLineProps({line})}>
+                {line.map((token, tokenIndex) => (
+                  <span key={tokenIndex} {...getTokenProps({token})} />
                 ))}
               </div>
             ))}

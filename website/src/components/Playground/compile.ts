@@ -27,12 +27,12 @@ const EXTENSIONS = [
 ];
 
 /** Normalizes `./a/../b` against the importing file's directory. */
-function resolvePath(from: string, spec: string): string {
+function resolvePath(from: string, specifier: string): string {
   const parts = from.split('/').slice(0, -1);
-  for (const seg of spec.split('/')) {
-    if (seg === '.' || seg === '') continue;
-    if (seg === '..') parts.pop();
-    else parts.push(seg);
+  for (const segment of specifier.split('/')) {
+    if (segment === '.' || segment === '') continue;
+    if (segment === '..') parts.pop();
+    else parts.push(segment);
   }
   return parts.join('/');
 }
@@ -56,14 +56,14 @@ export function compile(
 ): string {
   const modules: string[] = [];
   for (const [path, code] of Object.entries(files)) {
-    let js: string;
+    let transformed: string;
     try {
       // State survives edits, as under the dev server. The rewrite only understands JavaScript;
       // TypeScript files run without it.
       const source = /\.tsx?$/.test(path)
         ? code
         : persistUseState(code, `${generation}:${path}`);
-      js = transform(source, {
+      transformed = transform(source, {
         transforms: [
           'jsx',
           'imports',
@@ -73,20 +73,20 @@ export function compile(
         production: true,
         filePath: path,
       }).code;
-    } catch (e) {
-      const err = e as Error & {loc?: {line: number; column: number}};
-      const m = /\((\d+):(\d+)\)\s*$/.exec(err.message);
+    } catch (caught) {
+      const error = caught as Error & {loc?: {line: number; column: number}};
+      const position = /\((\d+):(\d+)\)\s*$/.exec(error.message);
       throw new CompileError(
-        err.message
+        error.message
           .replace(/^Error transforming [^:]*: /, '')
           .replace(/\s*\(\d+:\d+\)\s*$/, ''),
         path,
-        err.loc?.line ?? (m ? Number(m[1]) : undefined),
-        err.loc?.column ?? (m ? Number(m[2]) : undefined),
+        error.loc?.line ?? (position ? Number(position[1]) : undefined),
+        error.loc?.column ?? (position ? Number(position[2]) : undefined),
       );
     }
     modules.push(
-      `${JSON.stringify(path)}: function (module, exports, require) {\n${js}\n}`,
+      `${JSON.stringify(path)}: function (module, exports, require) {\n${transformed}\n}`,
     );
   }
 
@@ -106,17 +106,17 @@ export function compile(
     return module.exports;
   }
   function makeRequire(from) {
-    return function require(spec) {
-      var vendor = globalThis.__erVendor[spec];
+    return function require(specifier) {
+      var vendor = globalThis.__erVendor[specifier];
       if (vendor) return vendor;
-      if (spec[0] !== '.') throw new Error('Cannot find module "' + spec + '" (the playground only has react and embedded-react)');
-      var base = resolvePath(from, spec);
+      if (specifier[0] !== '.') throw new Error('Cannot find module "' + specifier + '" (the playground only has react and embedded-react)');
+      var base = resolvePath(from, specifier);
       if (ASSET.test(base)) return base.split('/').pop().replace(/\\.[^.]+$/, '');
-      for (var i = 0; i < EXTENSIONS.length; i++) {
-        var p = base + EXTENSIONS[i];
-        if (files[p]) return load(p);
+      for (var index = 0; index < EXTENSIONS.length; index++) {
+        var candidate = base + EXTENSIONS[index];
+        if (files[candidate]) return load(candidate);
       }
-      throw new Error('Cannot find module "' + spec + '" from ' + from);
+      throw new Error('Cannot find module "' + specifier + '" from ' + from);
     };
   }
   load(${JSON.stringify(entry)});

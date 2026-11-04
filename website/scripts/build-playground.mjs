@@ -22,32 +22,41 @@ import {dirname, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import * as esbuild from 'esbuild';
 
-const site = dirname(dirname(fileURLToPath(import.meta.url)));
-const root = resolve(site, '..');
-const pkg = resolve(site, 'node_modules/embedded-react');
-const out = resolve(site, 'static/playground');
+const siteDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
+const repositoryRoot = resolve(siteDirectory, '..');
+const packageDirectory = resolve(siteDirectory, 'node_modules/embedded-react');
+const outputDirectory = resolve(siteDirectory, 'static/playground');
 
 // The playground runs the `create-embedded-react` starter, which is what `npm create embedded-react`
 // scaffolds: something simple to start from and change.
 const demos = [
-  {id: 'starter', dir: resolve(root, 'create-embedded-react/template')},
+  {
+    id: 'starter',
+    directory: resolve(repositoryRoot, 'create-embedded-react/template'),
+  },
 ];
 
-rmSync(out, {recursive: true, force: true});
-mkdirSync(join(out, 'engine'), {recursive: true});
+rmSync(outputDirectory, {recursive: true, force: true});
+mkdirSync(join(outputDirectory, 'engine'), {recursive: true});
 
 // 1. The engine.
-for (const f of ['embedded-react.js', 'embedded-react.wasm']) {
-  copyFileSync(join(pkg, 'sim', f), join(out, 'engine', f));
+for (const fileName of ['embedded-react.js', 'embedded-react.wasm']) {
+  copyFileSync(
+    join(packageDirectory, 'sim', fileName),
+    join(outputDirectory, 'engine', fileName),
+  );
 }
 
 // 2. The vendor bundle: what the simulator's own bundler links every app against, exposed on a
 // global for the browser-side module loader. React is pinned to the package's copy (the site itself
 // uses a newer React), the way the package's dev server pins it.
-const pin = Object.fromEntries(
+const pinnedPackages = Object.fromEntries(
   ['react', 'react-reconciler', 'scheduler']
-    .map(p => [p, join(pkg, 'node_modules', p)])
-    .filter(([, p]) => existsSync(p)),
+    .map(packageName => [
+      packageName,
+      join(packageDirectory, 'node_modules', packageName),
+    ])
+    .filter(([, packagePath]) => existsSync(packagePath)),
 );
 await esbuild.build({
   stdin: {
@@ -57,61 +66,76 @@ await esbuild.build({
       import * as ER from 'embedded-react';
       globalThis.__erVendor = {react: React, 'react/jsx-runtime': JSXRuntime, 'embedded-react': ER};
     `,
-    resolveDir: pkg,
+    resolveDir: packageDirectory,
     loader: 'js',
   },
   bundle: true,
   format: 'iife',
   platform: 'neutral',
   target: 'es2020',
-  alias: {'embedded-react': join(pkg, 'src/embedded-react/index.js'), ...pin},
+  alias: {
+    'embedded-react': join(packageDirectory, 'src/embedded-react/index.js'),
+    ...pinnedPackages,
+  },
   define: {'process.env.NODE_ENV': '"production"'},
   legalComments: 'none',
   minify: true,
-  outfile: join(out, 'vendor.js'),
+  outfile: join(outputDirectory, 'vendor.js'),
 });
 
 // 3. Each demo: its source files for the editor, and its asset pack. The pack comes from the CLI's
 // static export (the same bake the simulator does), of which only the pack is kept.
-const SOURCE = /\.(jsx?|tsx?)$/;
-const SKIP = new Set(['node_modules', 'dist', 'sim-export', 'assets']);
-const walk = (dir, base = dir, acc = {}) => {
-  for (const name of readdirSync(dir)) {
-    if (SKIP.has(name)) continue;
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, base, acc);
-    else if (SOURCE.test(name))
-      acc[relative(base, p).replace(/\\/g, '/')] = readFileSync(p, 'utf8');
+const SOURCE_FILE = /\.(jsx?|tsx?)$/;
+const SKIPPED_NAMES = new Set(['node_modules', 'dist', 'sim-export', 'assets']);
+const walk = (directory, baseDirectory = directory, collected = {}) => {
+  for (const name of readdirSync(directory)) {
+    if (SKIPPED_NAMES.has(name)) continue;
+    const entryPath = join(directory, name);
+    if (statSync(entryPath).isDirectory())
+      walk(entryPath, baseDirectory, collected);
+    else if (SOURCE_FILE.test(name))
+      collected[relative(baseDirectory, entryPath).replace(/\\/g, '/')] =
+        readFileSync(entryPath, 'utf8');
   }
-  return acc;
+  return collected;
 };
 
-for (const {id, dir} of demos) {
-  const entry = existsSync(join(dir, 'index.jsx'))
+for (const {id, directory} of demos) {
+  const entry = existsSync(join(directory, 'index.jsx'))
     ? 'index.jsx'
     : 'src/index.jsx';
-  if (!existsSync(join(dir, entry)))
-    throw new Error(`${id}: no entry file in ${dir}`);
-  const files = walk(dir);
+  if (!existsSync(join(directory, entry)))
+    throw new Error(`${id}: no entry file in ${directory}`);
+  const files = walk(directory);
   // The template registers the app under a placeholder the scaffolder fills in.
-  for (const k of Object.keys(files))
-    files[k] = files[k].replaceAll('__APP_NAME__', id);
-  mkdirSync(join(out, id), {recursive: true});
-  writeFileSync(join(out, id, 'files.json'), JSON.stringify({entry, files}));
+  for (const fileName of Object.keys(files))
+    files[fileName] = files[fileName].replaceAll('__APP_NAME__', id);
+  mkdirSync(join(outputDirectory, id), {recursive: true});
+  writeFileSync(
+    join(outputDirectory, id, 'files.json'),
+    JSON.stringify({entry, files}),
+  );
 
-  const tmp = mkdtempSync(join(tmpdir(), 'er-playground-'));
+  const temporaryDirectory = mkdtempSync(join(tmpdir(), 'er-playground-'));
   try {
     execFileSync(
       process.execPath,
-      [join(pkg, 'cli.mjs'), 'export', join(dir, entry), '--out', tmp],
+      [
+        join(packageDirectory, 'cli.mjs'),
+        'export',
+        join(directory, entry),
+        '--out',
+        temporaryDirectory,
+      ],
       {
         stdio: ['ignore', 'ignore', 'inherit'],
       },
     );
-    const pack = join(tmp, 'public/assets.pack');
-    if (existsSync(pack)) copyFileSync(pack, join(out, id, 'assets.pack'));
+    const packPath = join(temporaryDirectory, 'public/assets.pack');
+    if (existsSync(packPath))
+      copyFileSync(packPath, join(outputDirectory, id, 'assets.pack'));
   } finally {
-    rmSync(tmp, {recursive: true, force: true});
+    rmSync(temporaryDirectory, {recursive: true, force: true});
   }
   console.log(`playground: ${id} (${Object.keys(files).length} file(s))`);
 }

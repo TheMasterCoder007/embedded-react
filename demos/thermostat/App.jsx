@@ -40,109 +40,126 @@ import cogIcon from './assets/cog.png';
 // Responsive selection — driven by the `screen` global. The Flow A host injects it at runtime; a Flow B
 // package works the values below out at boot from the real panel, and holds a layout for each of the three.
 // ----------------------------------------------------------------------------------------------------
-export const SW = screen.width;
-export const SH = screen.height;
+export const SCREEN_WIDTH = screen.width;
+export const SCREEN_HEIGHT = screen.height;
 export const LAYOUT =
-  SW >= 760 && SW > SH ? 'split' : SH >= 600 && SW >= 330 ? 'stack' : 'solo';
+  SCREEN_WIDTH >= 760 && SCREEN_WIDTH > SCREEN_HEIGHT
+    ? 'split'
+    : SCREEN_HEIGHT >= 600 && SCREEN_WIDTH >= 330
+      ? 'stack'
+      : 'solo';
 const SOLO = LAYOUT === 'solo';
 
-export const PAD = SOLO ? 8 : 18; // root padding — solo trims it to fund the dial
-export const GAP = SOLO ? 0 : 16; // gap between the two cards
-export const CPAD = SOLO ? 10 : 20; // card padding
-export const CGAP = SOLO ? 8 : 12; // gap between rows inside the thermostat card
+export const ROOT_PADDING = SOLO ? 8 : 18; // root padding — solo trims it to fund the dial
+export const CARD_GAP = SOLO ? 0 : 16; // gap between the two cards
+export const CARD_PADDING = SOLO ? 10 : 20; // card padding
+export const ROW_GAP = SOLO ? 8 : 12; // gap between rows inside the thermostat card
 
-const ROOT_W = SW - 2 * PAD;
-const ROOT_H = SH - 2 * PAD;
+const ROOT_WIDTH = SCREEN_WIDTH - 2 * ROOT_PADDING;
+const ROOT_HEIGHT = SCREEN_HEIGHT - 2 * ROOT_PADDING;
 // split: the design gives the thermostat 1.05 of the row against the weather panel's 1.
-export const THERMO_OUT_W =
-  LAYOUT === 'split' ? ((ROOT_W - GAP) * 1.05) / 2.05 : ROOT_W;
-export const THERMO_OUT_H = LAYOUT === 'stack' ? (ROOT_H - GAP) * 0.52 : ROOT_H;
-export const WEATHER_OUT_W =
-  LAYOUT === 'split' ? ROOT_W - GAP - THERMO_OUT_W : ROOT_W;
-export const WEATHER_OUT_H =
-  LAYOUT === 'split' ? ROOT_H : ROOT_H - GAP - THERMO_OUT_H;
-const THERMO_W = THERMO_OUT_W - 2 * CPAD;
-const THERMO_H = THERMO_OUT_H - 2 * CPAD;
-export const WEATHER_W = WEATHER_OUT_W - 2 * CPAD;
+export const THERMOSTAT_OUTER_WIDTH =
+  LAYOUT === 'split' ? ((ROOT_WIDTH - CARD_GAP) * 1.05) / 2.05 : ROOT_WIDTH;
+export const THERMOSTAT_OUTER_HEIGHT =
+  LAYOUT === 'stack' ? (ROOT_HEIGHT - CARD_GAP) * 0.52 : ROOT_HEIGHT;
+export const WEATHER_OUTER_WIDTH =
+  LAYOUT === 'split'
+    ? ROOT_WIDTH - CARD_GAP - THERMOSTAT_OUTER_WIDTH
+    : ROOT_WIDTH;
+export const WEATHER_OUTER_HEIGHT =
+  LAYOUT === 'split'
+    ? ROOT_HEIGHT
+    : ROOT_HEIGHT - CARD_GAP - THERMOSTAT_OUTER_HEIGHT;
+const THERMOSTAT_WIDTH = THERMOSTAT_OUTER_WIDTH - 2 * CARD_PADDING;
+const THERMOSTAT_HEIGHT = THERMOSTAT_OUTER_HEIGHT - 2 * CARD_PADDING;
+export const WEATHER_WIDTH = WEATHER_OUTER_WIDTH - 2 * CARD_PADDING;
 
 // The dial box. The design crops its canvas to viewBox "0 34 320 232", which slices ~18 units off the top
 // of the r=134 guide ring (and more off the bottom) — on a real panel that just reads as "the dial is cut
 // off", so we use the FULL 320×300 canvas instead and let the ring close. The outermost thing drawn is the
 // handle at r=135, so 150±135 = 15..285 sits inside 0..300 with a little margin.
-export const HEAD_H = SOLO ? 28 : 40; // solo's header is one line (no status), so it needs less
-export const MODE_H = 44;
+const AUTHORING_WIDTH = 320; // the design's dial canvas, in authoring units
+const AUTHORING_HEIGHT = 300;
+export const HEADER_HEIGHT = SOLO ? 28 : 40; // solo's header is one line (no status), so it needs less
+export const MODE_ROW_HEIGHT = 44;
 // Solo used to give the caption + steppers a row of their own, which cost 44 px of height. Because the
 // dial box is locked to the 320:300 authoring aspect, that height was also what capped its WIDTH — the
 // card had 51 px of width going unused. Folding the steppers onto the dial's empty bottom (the 240° sweep
 // runs 8 o'clock → 4 o'clock, so the bottom of the box is clear) and the caption into the center readout
 // buys all of it back: the dial goes from 136 px wide to the full 204, about 50% larger.
-const CAPROW_H = 0;
+const CAPTION_ROW_HEIGHT = 0;
 
 // A LANDSCAPE small panel (a rotated 240x320, or a 480x320) is the opposite problem: height is what is
 // scarce and width is what is spare, so stacking the mode buttons UNDER the dial spends the wrong axis —
 // at 320x240 it left the dial at 124 px with 160 px of width unused. Landscape therefore puts the modes
 // in a COLUMN beside the dial. Because only flexDirection and these constants differ, one JSX tree
 // serves both, and a Flow B build picks between them at boot.
-const LAND = SOLO && SW > SH;
-const MODE_W = 56; // landscape: the mode column's width
-const ARC_H = LAND
-  ? THERMO_H - HEAD_H - CGAP
-  : THERMO_H - HEAD_H - MODE_H - CAPROW_H - CGAP * 2;
-const ARC_AVAIL_W = LAND ? THERMO_W - MODE_W - CGAP : THERMO_W;
-const ARC_MAX = LAYOUT === 'split' ? 400 : LAYOUT === 'stack' ? 360 : 300;
-const ARC_FIT_W = (ARC_H * 320) / 300; // widest box whose 320:300 height still fits the arc row
-export const BOX_W = Math.max(
+const LANDSCAPE = SOLO && SCREEN_WIDTH > SCREEN_HEIGHT;
+const MODE_COLUMN_WIDTH = 56; // landscape: the mode column's width
+const ARC_ROW_HEIGHT = LANDSCAPE
+  ? THERMOSTAT_HEIGHT - HEADER_HEIGHT - ROW_GAP
+  : THERMOSTAT_HEIGHT -
+    HEADER_HEIGHT -
+    MODE_ROW_HEIGHT -
+    CAPTION_ROW_HEIGHT -
+    ROW_GAP * 2;
+const ARC_AVAILABLE_WIDTH = LANDSCAPE
+  ? THERMOSTAT_WIDTH - MODE_COLUMN_WIDTH - ROW_GAP
+  : THERMOSTAT_WIDTH;
+const ARC_MAX_WIDTH = LAYOUT === 'split' ? 400 : LAYOUT === 'stack' ? 360 : 300;
+const ARC_FIT_WIDTH = (ARC_ROW_HEIGHT * AUTHORING_WIDTH) / AUTHORING_HEIGHT; // widest box whose 320:300 height still fits the arc row
+export const BOX_WIDTH = Math.max(
   120,
-  Math.min(Math.min(ARC_AVAIL_W, ARC_MAX), ARC_FIT_W),
+  Math.min(Math.min(ARC_AVAILABLE_WIDTH, ARC_MAX_WIDTH), ARC_FIT_WIDTH),
 );
-export const BOX_H = (BOX_W * 300) / 320;
-const S = BOX_W / 320; // authoring unit → screen px
+export const BOX_HEIGHT = (BOX_WIDTH * AUTHORING_HEIGHT) / AUTHORING_WIDTH;
+const SCALE = BOX_WIDTH / AUTHORING_WIDTH; // authoring unit → screen px
 
-const D_CX = 160 * S;
-const D_CY = 150 * S;
-const D_RRING = 116 * S;
-const D_RINGW = 20 * S;
-const D_RHAND_IN = 97 * S;
-const D_RHAND_OUT = 135 * S;
-const D_RCORE = 86 * S; // the solid center disc — 20 units of clearance to the blocks' 106 inner edge
-const D_DIAL = 2 * (116 + 10) * S;
+const DIAL_CENTER_X = 160 * SCALE;
+const DIAL_CENTER_Y = 150 * SCALE;
+const DIAL_RING_RADIUS = 116 * SCALE;
+const DIAL_RING_WIDTH = 20 * SCALE;
+const DIAL_HANDLE_INNER_RADIUS = 97 * SCALE;
+const DIAL_HANDLE_OUTER_RADIUS = 135 * SCALE;
+const DIAL_CORE_RADIUS = 86 * SCALE; // the solid center disc — 20 units of clearance to the blocks' 106 inner edge
+const DIAL_SIZE = 2 * (116 + 10) * SCALE;
 
-export const GEO = {
-  S,
-  boxW: BOX_W,
-  boxH: BOX_H,
-  cx: D_CX,
-  cy: D_CY,
-  rRing: D_RRING,
-  ringW: D_RINGW,
-  rCore: D_RCORE,
-  rHandIn: D_RHAND_IN,
-  rHandOut: D_RHAND_OUT,
+export const DIAL_GEOMETRY = {
+  scale: SCALE,
+  boxWidth: BOX_WIDTH,
+  boxHeight: BOX_HEIGHT,
+  centerX: DIAL_CENTER_X,
+  centerY: DIAL_CENTER_Y,
+  ringRadius: DIAL_RING_RADIUS,
+  ringWidth: DIAL_RING_WIDTH,
+  coreRadius: DIAL_CORE_RADIUS,
+  handleInnerRadius: DIAL_HANDLE_INNER_RADIUS,
+  handleOuterRadius: DIAL_HANDLE_OUTER_RADIUS,
 };
 
 // Font sizes snap to the engine's baked Inter set (10/12/16/20/24/32/48), so pick from that list.
-export const SZ = SOLO
+export const FONT_SIZES = SOLO
   ? {big: 32, dual: 20, small: 10, room: 10, mode: 10}
   : {big: 48, dual: 32, small: 12, room: 12, mode: 12};
 
 // ----------------------------------------------------------------------------------------------------
 // Model
 // ----------------------------------------------------------------------------------------------------
-export const MINF = 50; // the range the 240° sweep spans, °F
-export const MAXF = 90;
-export const RGAP = 4; // minimum separation between the AUTO low and high setpoints, °F
-export const INSIDE_F = 69; // the live room reading (static in this demo)
+export const MIN_FAHRENHEIT = 50; // the range the 240° sweep spans, °F
+export const MAX_FAHRENHEIT = 90;
+export const RANGE_GAP = 4; // minimum separation between the AUTO low and high setpoints, °F
+export const INSIDE_FAHRENHEIT = 69; // the live room reading (static in this demo)
 
 // Engine angles: 0° at 12 o'clock, growing clockwise. The design's SVG angles (0° at 3 o'clock) are +90.
-const A0 = 240;
-const SWEEP = 240;
-// <Dial> measures its own angles clockwise from 3 o'clock, so the design's A0 shifts by a quarter turn.
-const D_A0 = A0 - 90;
-const GRAD_CONIC = 3; // ERGradientType: center (ax,ay) + start angle r, sweeping clockwise from the top
+const START_ANGLE = 240;
+const SWEEP_ANGLE = 240;
+// <Dial> measures its own angles clockwise from 3 o'clock, so the design's START_ANGLE shifts by a quarter turn.
+const DIAL_START_ANGLE = START_ANGLE - 90;
+const GRADIENT_CONIC = 3; // ERGradientType: center (ax,ay) + start angle r, sweeping clockwise from the top
 
 export const MODES = [
   // `accent` / `tint` are the DARK palette's values — the solo branch is dark-only and reads them
-  // directly, because the AOT resolves `m.accent` on this literal but not a THEME[…][m.key] lookup.
+  // directly, because the AOT resolves `item.accent` on this literal but not a THEME[…][item.key] lookup.
   {key: 'cool', label: 'COOL', accent: '#4FA9F5', tint: '#1a2732'},
   {key: 'heat', label: 'HEAT', accent: '#F2A64B', tint: '#2e261d'},
   {key: 'auto', label: 'AUTO', accent: '#46C4A8', tint: '#192a28'},
@@ -154,8 +171,8 @@ export const OVERLAY = {
   position: 'absolute',
   left: 0,
   top: 0,
-  width: SW,
-  height: SH,
+  width: SCREEN_WIDTH,
+  height: SCREEN_HEIGHT,
   alignItems: 'center',
   justifyContent: 'center',
 };
@@ -175,10 +192,10 @@ export function App() {
   // COOL and HEAT each remember their own setpoint, so switching back restores what you last set.
   // (AUTO has its own pair below.) OFF mirrors whichever of the two was last active rather than
   // snapping to one of them.
-  const [coolSp, setCoolSp] = useState(72);
-  const [heatSp, setHeatSp] = useState(68);
-  const [lo, setLo] = useState(68); // AUTO range
-  const [hi, setHi] = useState(76);
+  const [coolSetpoint, setCoolSetpoint] = useState(72);
+  const [heatSetpoint, setHeatSetpoint] = useState(68);
+  const [low, setLow] = useState(68); // AUTO range
+  const [high, setHigh] = useState(76);
   const [active, setActive] = useState('hi'); // which AUTO handle the steppers move
 
   const [unit, setUnit] = useState('F');
@@ -186,9 +203,9 @@ export function App() {
   const [settings, setSettings] = useState(false);
 
   // The live single setpoint for the current mode. OFF mirrors COOL's ring position — its readout is
-  // "––" regardless — and AUTO ignores this entirely, using the lo/hi pair instead. A plain ternary so
+  // "––" regardless — and AUTO ignores this entirely, using the low/high pair instead. A plain ternary so
   // the AOT can lower it for the solo branch too.
-  const value = mode === 'heat' ? heatSp : coolSp;
+  const value = mode === 'heat' ? heatSetpoint : coolSetpoint;
 
   // ---- The tree ---------------------------------------------------------------------------------
   // What still differs from Flow A, and why:
@@ -207,11 +224,11 @@ export function App() {
   // reports through onChange. All that is left here is storing what it reports — the ~70 lines of angle
   // normalization, end-latching and per-mode clamping this replaced now live in the engine.
   const onDialChange = useCallback(
-    (v, vLo) => {
-      if (mode === 'auto') setLo(vLo);
-      if (mode === 'auto') setHi(v);
-      if (mode === 'heat') setHeatSp(v);
-      if (mode === 'cool') setCoolSp(v);
+    (dialValue, dialLow) => {
+      if (mode === 'auto') setLow(dialLow);
+      if (mode === 'auto') setHigh(dialValue);
+      if (mode === 'heat') setHeatSetpoint(dialValue);
+      if (mode === 'cool') setCoolSetpoint(dialValue);
     },
     [mode],
   );
@@ -219,33 +236,37 @@ export function App() {
   return (
     <View
       style={{
-        width: SW,
-        height: SH,
+        width: SCREEN_WIDTH,
+        height: SCREEN_HEIGHT,
         backgroundColor: '#0a0b0c',
-        padding: PAD,
+        padding: ROOT_PADDING,
         flexDirection: LAYOUT === 'split' ? 'row' : 'column',
-        gap: GAP,
+        gap: CARD_GAP,
       }}>
       <View
         style={{
-          width: THERMO_OUT_W,
-          height: THERMO_OUT_H,
+          width: THERMOSTAT_OUTER_WIDTH,
+          height: THERMOSTAT_OUTER_HEIGHT,
           backgroundColor: '#131517',
           borderWidth: 1,
           borderColor: '#ffffff1a',
           borderRadius: 14,
-          padding: CPAD,
-          gap: CGAP,
+          padding: CARD_PADDING,
+          gap: ROW_GAP,
         }}>
         <View
           style={{
-            height: HEAD_H,
+            height: HEADER_HEIGHT,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
           <Text
-            style={{fontSize: SZ.room, fontWeight: '600', color: '#f2f3f4'}}>
+            style={{
+              fontSize: FONT_SIZES.room,
+              fontWeight: '600',
+              color: '#f2f3f4',
+            }}>
             LIVING ROOM
           </Text>
           <Pressable onPress={() => setSettings(true)}>
@@ -258,11 +279,11 @@ export function App() {
         </View>
 
         {/* Dial + modes. Portrait stacks them; landscape sets them side by side so the dial can use
-            the height instead of surrendering it to a button row (see LAND above). */}
+            the height instead of surrendering it to a button row (see LANDSCAPE above). */}
         <View
           style={{
             flex: 1,
-            flexDirection: LAND ? 'row' : 'column',
+            flexDirection: LANDSCAPE ? 'row' : 'column',
             // NO alignItems: children stretch on the cross axis, which is what the mode strip wants
             // in both orientations — full width as a portrait row, full height as a landscape column.
             // The dial box centres itself with alignSelf instead, since it has a fixed size.
@@ -271,41 +292,42 @@ export function App() {
             // the same inset from it as the settings cog (both are bounded by the card padding).
             // Centring the pair instead left the column floating beside the dial with a gap to its
             // right, which read as misaligned against the header.
-            justifyContent: LAND ? 'space-between' : 'center',
-            gap: CGAP,
+            justifyContent: LANDSCAPE ? 'space-between' : 'center',
+            gap: ROW_GAP,
           }}>
           {/* Dial box. The drag surface is an absolutely-positioned CHILD rather than this wrapper
             itself, so the two steppers can sit on top of it as later siblings and take their own
             touches instead of registering as a drag on the ring — the same arrangement Flow A uses.
             onLayout records the box's centre on screen; a touch anywhere inside sets that angle. */}
-          <View style={{width: BOX_W, height: BOX_H, alignSelf: 'center'}}>
+          <View
+            style={{width: BOX_WIDTH, height: BOX_HEIGHT, alignSelf: 'center'}}>
             <Dial
               style={{
                 position: 'absolute',
-                left: D_CX - D_DIAL / 2,
-                top: D_CY - D_DIAL / 2,
-                width: D_DIAL,
-                height: D_DIAL,
+                left: DIAL_CENTER_X - DIAL_SIZE / 2,
+                top: DIAL_CENTER_Y - DIAL_SIZE / 2,
+                width: DIAL_SIZE,
+                height: DIAL_SIZE,
               }}
-              min={MINF}
-              max={MAXF}
+              min={MIN_FAHRENHEIT}
+              max={MAX_FAHRENHEIT}
               step={0.5}
-              startAngle={D_A0}
-              sweepAngle={SWEEP}
-              thickness={D_RINGW}
+              startAngle={DIAL_START_ANGLE}
+              sweepAngle={SWEEP_ANGLE}
+              thickness={DIAL_RING_WIDTH}
               trackColor="#26282a"
               cap="butt"
               range={mode === 'auto'}
-              valueStart={mode === 'auto' ? lo : MINF}
-              minSpan={RGAP}
+              valueStart={mode === 'auto' ? low : MIN_FAHRENHEIT}
+              minSpan={RANGE_GAP}
               value={
                 mode === 'off'
-                  ? MINF
+                  ? MIN_FAHRENHEIT
                   : mode === 'auto'
-                    ? hi
+                    ? high
                     : mode === 'heat'
-                      ? heatSp
-                      : coolSp
+                      ? heatSetpoint
+                      : coolSetpoint
               }
               indicatorColor={
                 mode === 'heat'
@@ -323,18 +345,18 @@ export function App() {
                   : null
               }
               knob={mode === 'off' ? 'none' : 'circle'}
-              knobSize={26 * S}
+              knobSize={26 * SCALE}
               knobColor="#f2f3f4"
               adjustable={mode !== 'off'}
               onChange={onDialChange}>
               <View
                 style={{
                   position: 'absolute',
-                  left: D_DIAL / 2 - D_RCORE,
-                  top: D_DIAL / 2 - D_RCORE,
-                  width: 2 * D_RCORE,
-                  height: 2 * D_RCORE,
-                  borderRadius: D_RCORE,
+                  left: DIAL_SIZE / 2 - DIAL_CORE_RADIUS,
+                  top: DIAL_SIZE / 2 - DIAL_CORE_RADIUS,
+                  width: 2 * DIAL_CORE_RADIUS,
+                  height: 2 * DIAL_CORE_RADIUS,
+                  borderRadius: DIAL_CORE_RADIUS,
                   backgroundColor:
                     mode === 'off'
                       ? '#242629'
@@ -354,10 +376,10 @@ export function App() {
               <View
                 style={{
                   position: 'absolute',
-                  left: D_DIAL / 2 - 83 * S,
-                  top: D_DIAL / 2 - 60 * S,
-                  width: 166 * S,
-                  height: 120 * S,
+                  left: DIAL_SIZE / 2 - 83 * SCALE,
+                  top: DIAL_SIZE / 2 - 60 * SCALE,
+                  width: 166 * SCALE,
+                  height: 120 * SCALE,
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 3,
@@ -366,8 +388,8 @@ export function App() {
                   style={{fontSize: 10, letterSpacing: 2, color: '#7d7e7f'}}>
                   INSIDE{' '}
                   {unit === 'C'
-                    ? Math.round(((INSIDE_F - 32) * 5) / 9)
-                    : INSIDE_F}
+                    ? Math.round(((INSIDE_FAHRENHEIT - 32) * 5) / 9)
+                    : INSIDE_FAHRENHEIT}
                   °
                 </Text>
                 {/* Two nodes rather than one ternary: the AOT lowers a Text child to a single formatted
@@ -376,22 +398,27 @@ export function App() {
                 {mode !== 'off' && mode !== 'auto' && (
                   <Text
                     style={{
-                      fontSize: SZ.big,
+                      fontSize: FONT_SIZES.big,
                       fontWeight: '500',
                       color: '#f2f3f4',
                     }}>
                     {unit === 'C'
                       ? Math.round(
-                          (((mode === 'heat' ? heatSp : coolSp) - 32) * 5) / 9,
+                          (((mode === 'heat' ? heatSetpoint : coolSetpoint) -
+                            32) *
+                            5) /
+                            9,
                         )
-                      : Math.round(mode === 'heat' ? heatSp : coolSp)}
+                      : Math.round(
+                          mode === 'heat' ? heatSetpoint : coolSetpoint,
+                        )}
                     °
                   </Text>
                 )}
                 {mode === 'off' && (
                   <Text
                     style={{
-                      fontSize: SZ.big,
+                      fontSize: FONT_SIZES.big,
                       fontWeight: '500',
                       color: '#f2f3f4',
                     }}>
@@ -404,17 +431,17 @@ export function App() {
                 {mode === 'auto' && (
                   <Text
                     style={{
-                      fontSize: SZ.dual,
+                      fontSize: FONT_SIZES.dual,
                       fontWeight: '500',
                       color: '#f2f3f4',
                     }}>
                     {unit === 'C'
-                      ? Math.round(((lo - 32) * 5) / 9)
-                      : Math.round(lo)}
+                      ? Math.round(((low - 32) * 5) / 9)
+                      : Math.round(low)}
                     °-
                     {unit === 'C'
-                      ? Math.round(((hi - 32) * 5) / 9)
-                      : Math.round(hi)}
+                      ? Math.round(((high - 32) * 5) / 9)
+                      : Math.round(high)}
                     °
                   </Text>
                 )}
@@ -425,31 +452,41 @@ export function App() {
               nothing is ever drawn below y=139 here and a 44 px target clears the arc's end by 6 px. */}
             <Pressable
               onPressIn={() => {
-                // AUTO steps whichever end the last drag grabbed, carrying the other along at RGAP
+                // AUTO steps whichever end the last drag grabbed, carrying the other along at RANGE_GAP
                 // rather than stopping dead — the same rule the drag uses.
-                const dLo =
-                  Math.round(lo) - 1 < MINF ? MINF : Math.round(lo) - 1;
-                const dHi =
-                  Math.round(hi) - 1 < MINF + RGAP
-                    ? MINF + RGAP
-                    : Math.round(hi) - 1;
-                if (mode === 'auto' && active === 'lo') setLo(dLo);
-                if (mode === 'auto' && active === 'hi') setHi(dHi);
-                if (mode === 'auto' && active === 'hi' && lo > dHi - RGAP)
-                  setLo(dHi - RGAP);
+                const lowerLow =
+                  Math.round(low) - 1 < MIN_FAHRENHEIT
+                    ? MIN_FAHRENHEIT
+                    : Math.round(low) - 1;
+                const lowerHigh =
+                  Math.round(high) - 1 < MIN_FAHRENHEIT + RANGE_GAP
+                    ? MIN_FAHRENHEIT + RANGE_GAP
+                    : Math.round(high) - 1;
+                if (mode === 'auto' && active === 'lo') setLow(lowerLow);
+                if (mode === 'auto' && active === 'hi') setHigh(lowerHigh);
+                if (
+                  mode === 'auto' &&
+                  active === 'hi' &&
+                  low > lowerHigh - RANGE_GAP
+                )
+                  setLow(lowerHigh - RANGE_GAP);
                 if (mode === 'heat')
-                  setHeatSp(v =>
-                    Math.round(v) - 1 < MINF ? MINF : Math.round(v) - 1,
+                  setHeatSetpoint(setpoint =>
+                    Math.round(setpoint) - 1 < MIN_FAHRENHEIT
+                      ? MIN_FAHRENHEIT
+                      : Math.round(setpoint) - 1,
                   );
                 if (mode === 'cool' || mode === 'off')
-                  setCoolSp(v =>
-                    Math.round(v) - 1 < MINF ? MINF : Math.round(v) - 1,
+                  setCoolSetpoint(setpoint =>
+                    Math.round(setpoint) - 1 < MIN_FAHRENHEIT
+                      ? MIN_FAHRENHEIT
+                      : Math.round(setpoint) - 1,
                   );
               }}
               style={{
                 position: 'absolute',
                 left: 0,
-                top: BOX_H - 46,
+                top: BOX_HEIGHT - 46,
                 width: 44,
                 height: 44,
                 borderRadius: 22,
@@ -465,29 +502,39 @@ export function App() {
               nothing is ever drawn below y=139 here and a 44 px target clears the arc's end by 6 px. */}
             <Pressable
               onPressIn={() => {
-                const uLo =
-                  Math.round(lo) + 1 > MAXF - RGAP
-                    ? MAXF - RGAP
-                    : Math.round(lo) + 1;
-                const uHi =
-                  Math.round(hi) + 1 > MAXF ? MAXF : Math.round(hi) + 1;
-                if (mode === 'auto' && active === 'lo') setLo(uLo);
-                if (mode === 'auto' && active === 'lo' && hi < uLo + RGAP)
-                  setHi(uLo + RGAP);
-                if (mode === 'auto' && active === 'hi') setHi(uHi);
+                const raisedLow =
+                  Math.round(low) + 1 > MAX_FAHRENHEIT - RANGE_GAP
+                    ? MAX_FAHRENHEIT - RANGE_GAP
+                    : Math.round(low) + 1;
+                const raisedHigh =
+                  Math.round(high) + 1 > MAX_FAHRENHEIT
+                    ? MAX_FAHRENHEIT
+                    : Math.round(high) + 1;
+                if (mode === 'auto' && active === 'lo') setLow(raisedLow);
+                if (
+                  mode === 'auto' &&
+                  active === 'lo' &&
+                  high < raisedLow + RANGE_GAP
+                )
+                  setHigh(raisedLow + RANGE_GAP);
+                if (mode === 'auto' && active === 'hi') setHigh(raisedHigh);
                 if (mode === 'heat')
-                  setHeatSp(v =>
-                    Math.round(v) + 1 > MAXF ? MAXF : Math.round(v) + 1,
+                  setHeatSetpoint(setpoint =>
+                    Math.round(setpoint) + 1 > MAX_FAHRENHEIT
+                      ? MAX_FAHRENHEIT
+                      : Math.round(setpoint) + 1,
                   );
                 if (mode === 'cool' || mode === 'off')
-                  setCoolSp(v =>
-                    Math.round(v) + 1 > MAXF ? MAXF : Math.round(v) + 1,
+                  setCoolSetpoint(setpoint =>
+                    Math.round(setpoint) + 1 > MAX_FAHRENHEIT
+                      ? MAX_FAHRENHEIT
+                      : Math.round(setpoint) + 1,
                   );
               }}
               style={{
                 position: 'absolute',
-                left: BOX_W - 44,
-                top: BOX_H - 46,
+                left: BOX_WIDTH - 44,
+                top: BOX_HEIGHT - 46,
                 width: 44,
                 height: 44,
                 borderRadius: 22,
@@ -502,21 +549,21 @@ export function App() {
 
           <View
             style={
-              LAND
+              LANDSCAPE
                 ? {
                     // An explicit height, not flex: the body centres its children, so a flex column
                     // would size to its content and the buttons inside it would collapse to nothing.
-                    width: MODE_W,
-                    height: ARC_H,
+                    width: MODE_COLUMN_WIDTH,
+                    height: ARC_ROW_HEIGHT,
                     flexDirection: 'column',
                     gap: 6,
                   }
-                : {height: MODE_H, flexDirection: 'row', gap: 6}
+                : {height: MODE_ROW_HEIGHT, flexDirection: 'row', gap: 6}
             }>
-            {MODES.map(m => (
+            {MODES.map(item => (
               <Pressable
-                key={m.key}
-                onPress={() => setMode(m.key)}
+                key={item.key}
+                onPress={() => setMode(item.key)}
                 /* No width/height: `flex: 1` sizes the main axis and the default cross-axis stretch
                    fills the other, so ONE style serves the portrait row and the landscape column. A
                    top-level `LAND ? {…} : {…}` would not compile here — the AOT folds a style object
@@ -525,17 +572,17 @@ export function App() {
                   flex: 1,
                   borderRadius: 10,
                   borderWidth: 1,
-                  borderColor: mode === m.key ? m.accent : '#ffffff1a',
-                  backgroundColor: mode === m.key ? m.tint : '#131517',
+                  borderColor: mode === item.key ? item.accent : '#ffffff1a',
+                  backgroundColor: mode === item.key ? item.tint : '#131517',
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}>
                 <Text
                   style={{
-                    fontSize: SZ.mode,
-                    color: mode === m.key ? m.accent : '#7d7e7f',
+                    fontSize: FONT_SIZES.mode,
+                    color: mode === item.key ? item.accent : '#7d7e7f',
                   }}>
-                  {m.label}
+                  {item.label}
                 </Text>
               </Pressable>
             ))}
@@ -546,13 +593,13 @@ export function App() {
       {SOLO ? null : (
         <View
           style={{
-            width: WEATHER_OUT_W,
-            height: WEATHER_OUT_H,
+            width: WEATHER_OUTER_WIDTH,
+            height: WEATHER_OUTER_HEIGHT,
             backgroundColor: '#131517',
             borderWidth: 1,
             borderColor: '#ffffff1a',
             borderRadius: 14,
-            padding: CPAD,
+            padding: CARD_PADDING,
             gap: 12,
           }}>
           <Text style={{fontSize: 12, letterSpacing: 1, color: '#7d7e7f'}}>
@@ -574,7 +621,7 @@ export function App() {
       <Modal visible={settings} backdropColor="#000000" style={OVERLAY}>
         <View
           style={{
-            width: Math.min(SW - 40, 340),
+            width: Math.min(SCREEN_WIDTH - 40, 340),
             backgroundColor: '#131517',
             borderWidth: 1,
             borderColor: '#ffffff1a',

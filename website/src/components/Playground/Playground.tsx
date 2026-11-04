@@ -33,6 +33,10 @@ type App = {
 };
 
 const DEBOUNCE_MS = 300;
+// How long fit mode waits for the pane to stop resizing.
+const FIT_DEBOUNCE_MS = 60;
+// How close to whole the device pixel ratio must be for the canvas to be drawn pixelated.
+const WHOLE_RATIO_TOLERANCE = 0.005;
 
 // The engine and its persisted-state store outlive this component, so every visit and every Reset
 // must start from fresh state: the store is cleared when the engine can, and the generation folded
@@ -53,47 +57,54 @@ export default function Playground(): ReactNode {
   // 1:1, scrolling when the panel is bigger than the pane.
   const [mode, setMode] = useState<SizeMode>({kind: 'fit'});
   const [framed, setFramed] = useState(false);
-  const [size, setSize] = useState({w: 480, h: 320});
+  const [size, setSize] = useState({width: 480, height: 320});
   const [vendor, setVendor] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [compileError, setCompileError] = useState<CompileError | null>(null);
 
   const canvas = useRef<HTMLCanvasElement>(null);
-  const {sim, error: simError} = useSimulator(canvas, base, size.w, size.h);
+  const {sim, error: simError} = useSimulator(
+    canvas,
+    base,
+    size.width,
+    size.height,
+  );
   const stage = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`${base}vendor.js`)
-      .then(r =>
-        r.ok ? r.text() : Promise.reject(new Error(`vendor.js: ${r.status}`)),
+      .then(response =>
+        response.ok
+          ? response.text()
+          : Promise.reject(new Error(`vendor.js: ${response.status}`)),
       )
-      .then(setVendor, (e: Error) => setLoadError(e.message));
+      .then(setVendor, (error: Error) => setLoadError(error.message));
   }, [base]);
 
   useEffect(() => {
     setLoadError(null);
     Promise.all([
-      fetch(`${base}${DEMO}/files.json`).then(r =>
-        r.ok
-          ? (r.json() as Promise<{entry: string; files: Files}>)
-          : Promise.reject(new Error(`${DEMO}: ${r.status}`)),
+      fetch(`${base}${DEMO}/files.json`).then(response =>
+        response.ok
+          ? (response.json() as Promise<{entry: string; files: Files}>)
+          : Promise.reject(new Error(`${DEMO}: ${response.status}`)),
       ),
-      fetch(`${base}${DEMO}/assets.pack`).then(r =>
-        r.ok ? r.arrayBuffer() : null,
+      fetch(`${base}${DEMO}/assets.pack`).then(response =>
+        response.ok ? response.arrayBuffer() : null,
       ),
     ]).then(
-      ([src, pack]) => {
+      ([demo, pack]) => {
         setApp({
-          entry: src.entry,
-          files: src.files,
-          original: src.files,
+          entry: demo.entry,
+          files: demo.files,
+          original: demo.files,
           pack: pack ? new Uint8Array(pack) : null,
           fresh: true,
           generation: nextGeneration++,
         });
-        setOpen(src.files[ENTRY_FILE] ? ENTRY_FILE : src.entry);
+        setOpen(demo.files[ENTRY_FILE] ? ENTRY_FILE : demo.entry);
       },
-      (e: Error) => setLoadError(e.message),
+      (error: Error) => setLoadError(error.message),
     );
   }, [base]);
 
@@ -107,9 +118,9 @@ export default function Playground(): ReactNode {
           app.fresh ? app.pack : null,
         );
         setCompileError(null);
-      } catch (e) {
-        if (e instanceof CompileError) setCompileError(e);
-        else throw e;
+      } catch (error) {
+        if (error instanceof CompileError) setCompileError(error);
+        else throw error;
       }
     };
     if (app.fresh) {
@@ -117,62 +128,71 @@ export default function Playground(): ReactNode {
       run();
       return undefined;
     }
-    const t = setTimeout(run, DEBOUNCE_MS);
-    return () => clearTimeout(t);
+    const timer = setTimeout(run, DEBOUNCE_MS);
+    return () => clearTimeout(timer);
   }, [app, sim, vendor]);
 
-  useEffect(() => sim?.resize(size.w, size.h), [sim, size]);
+  useEffect(() => sim?.resize(size.width, size.height), [sim, size]);
 
   const edit = useCallback((path: string, value: string) => {
-    setApp(a =>
-      a && a.files[path] !== value
-        ? {...a, files: {...a.files, [path]: value}, fresh: false}
-        : a,
+    setApp(current =>
+      current && current.files[path] !== value
+        ? {...current, files: {...current.files, [path]: value}, fresh: false}
+        : current,
     );
   }, []);
   const reset = () => {
     sim?.clearPersist?.();
-    setApp(a =>
-      a
-        ? {...a, files: a.original, fresh: false, generation: nextGeneration++}
-        : a,
+    setApp(current =>
+      current
+        ? {
+            ...current,
+            files: current.original,
+            fresh: false,
+            generation: nextGeneration++,
+          }
+        : current,
     );
   };
   const dirty = app
-    ? Object.keys(app.files).some(k => app.files[k] !== app.original[k])
+    ? Object.keys(app.files).some(
+        path => app.files[path] !== app.original[path],
+      )
     : false;
 
   // In fit mode the engine runs at the pane's size, re-measured (briefly debounced) as it changes.
   useEffect(() => {
-    const el = stage.current;
-    if (!el) return undefined;
+    const element = stage.current;
+    if (!element) return undefined;
     if (mode.kind === 'fixed') {
-      setSize({w: mode.w, h: mode.h});
+      setSize({width: mode.width, height: mode.height});
       return undefined;
     }
-    let t = 0;
+    let timer = 0;
     const fit = () => {
-      clearTimeout(t);
-      t = window.setTimeout(
+      clearTimeout(timer);
+      timer = window.setTimeout(
         () =>
           setSize({
-            w: clampSize(el.clientWidth),
-            h: clampSize(el.clientHeight),
+            width: clampSize(element.clientWidth),
+            height: clampSize(element.clientHeight),
           }),
-        60,
+        FIT_DEBOUNCE_MS,
       );
     };
     fit();
-    const ro = new ResizeObserver(fit);
-    ro.observe(el);
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
     return () => {
-      clearTimeout(t);
-      ro.disconnect();
+      clearTimeout(timer);
+      observer.disconnect();
     };
   }, [mode]);
   // Shown 1:1, so the engine's pixels line up with device pixels on an integer-ratio display.
-  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
-  const exact = Math.abs(dpr - Math.round(dpr)) < 0.005;
+  const pixelRatio =
+    typeof window === 'undefined' ? 1 : window.devicePixelRatio;
+  const exact =
+    Math.abs(pixelRatio - Math.round(pixelRatio)) < WHOLE_RATIO_TOLERANCE;
 
   const paths = useMemo(
     () => (app ? Object.keys(app.files).sort() : []),
@@ -185,15 +205,15 @@ export default function Playground(): ReactNode {
       <div className={styles.split}>
         <section className={styles.code} aria-label="Code">
           <div className={styles.tabs} role="tablist" aria-label="Files">
-            {paths.map(p => (
+            {paths.map(path => (
               <button
-                key={p}
+                key={path}
                 type="button"
                 role="tab"
-                aria-selected={p === open}
-                className={clsx(styles.tab, p === open && styles.activeTab)}
-                onClick={() => setOpen(p)}>
-                {p}
+                aria-selected={path === open}
+                className={clsx(styles.tab, path === open && styles.activeTab)}
+                onClick={() => setOpen(path)}>
+                {path}
               </button>
             ))}
             <button
@@ -242,7 +262,7 @@ export default function Playground(): ReactNode {
                 ref={canvas}
                 className={styles.canvas}
                 style={{imageRendering: exact ? 'pixelated' : 'auto'}}
-                aria-label={`The starter app running in the simulator at ${size.w} by ${size.h}`}
+                aria-label={`The starter app running in the simulator at ${size.width} by ${size.height}`}
               />
             </div>
             {status && <p className={styles.status}>{status}</p>}

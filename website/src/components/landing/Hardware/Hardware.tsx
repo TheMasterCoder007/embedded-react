@@ -20,10 +20,10 @@ export default function Hardware(): ReactNode {
   return (
     <Section eyebrow="Hardware" title="From a 7-inch RGB panel down to a watch-sized SPI display.">
       <div className={styles.boards}>
-        {boards.map((b) => (
-          <Link key={b.name} to={b.to} className={clsx(card.card, card.interactive, styles.board)}>
-            <strong>{b.name}</strong>
-            <span>{b.note}</span>
+        {boards.map((board) => (
+          <Link key={board.name} to={board.to} className={clsx(card.card, card.interactive, styles.board)}>
+            <strong>{board.name}</strong>
+            <span>{board.note}</span>
           </Link>
         ))}
       </div>

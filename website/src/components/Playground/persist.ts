@@ -7,18 +7,18 @@ type AnyNode = Node & Record<string, unknown>;
 
 /** Best-effort name of the function enclosing a call, for a stable, readable key. */
 function enclosingName(ancestors: AnyNode[]): string {
-  for (let i = ancestors.length - 1; i >= 0; i--) {
-    const n = ancestors[i];
+  for (let index = ancestors.length - 1; index >= 0; index--) {
+    const node = ancestors[index];
     if (
-      n.type !== 'FunctionDeclaration' &&
-      n.type !== 'FunctionExpression' &&
-      n.type !== 'ArrowFunctionExpression'
+      node.type !== 'FunctionDeclaration' &&
+      node.type !== 'FunctionExpression' &&
+      node.type !== 'ArrowFunctionExpression'
     ) {
       continue;
     }
-    const id = n.id as AnyNode | null | undefined;
+    const id = node.id as AnyNode | null | undefined;
     if (id?.name) return id.name as string;
-    const parent = ancestors[i - 1];
+    const parent = ancestors[index - 1];
     if (parent?.type === 'VariableDeclarator')
       return ((parent.id as AnyNode).name as string) ?? '_';
     if (parent?.type === 'Property' || parent?.type === 'MethodDefinition') {
@@ -52,38 +52,40 @@ export function persistUseState(source: string, moduleId: string): string {
   }
 
   const importsUseState = (ast.body as AnyNode[]).some(
-    n =>
-      n.type === 'ImportDeclaration' &&
+    node =>
+      node.type === 'ImportDeclaration' &&
       ['react', 'embedded-react'].includes(
-        (n.source as AnyNode).value as string,
+        (node.source as AnyNode).value as string,
       ) &&
-      (n.specifiers as AnyNode[]).some(
-        s =>
-          s.type === 'ImportSpecifier' &&
-          ((s.imported as AnyNode).name as string) === 'useState',
+      (node.specifiers as AnyNode[]).some(
+        specifier =>
+          specifier.type === 'ImportSpecifier' &&
+          ((specifier.imported as AnyNode).name as string) === 'useState',
       ),
   );
   if (!importsUseState) return source;
 
   // A function that declares its own `useState` (a parameter or a local) shadows the import inside it.
-  const declaresUseState = (fn: AnyNode): boolean => {
-    const named = (n: unknown) =>
-      (n as AnyNode | null)?.type === 'Identifier' &&
-      (n as AnyNode).name === 'useState';
-    if ((fn.params as AnyNode[]).some(named)) return true;
-    const body = fn.body as AnyNode;
+  const declaresUseState = (functionNode: AnyNode): boolean => {
+    const named = (candidate: unknown) =>
+      (candidate as AnyNode | null)?.type === 'Identifier' &&
+      (candidate as AnyNode).name === 'useState';
+    if ((functionNode.params as AnyNode[]).some(named)) return true;
+    const body = functionNode.body as AnyNode;
     if (body.type !== 'BlockStatement') return false;
     return (body.body as AnyNode[]).some(
-      st =>
-        (st.type === 'VariableDeclaration' &&
-          (st.declarations as AnyNode[]).some(d => named(d.id))) ||
-        (st.type === 'FunctionDeclaration' && named(st.id)),
+      statement =>
+        (statement.type === 'VariableDeclaration' &&
+          (statement.declarations as AnyNode[]).some(declarator =>
+            named(declarator.id),
+          )) ||
+        (statement.type === 'FunctionDeclaration' && named(statement.id)),
     );
   };
-  const isFunction = (n: AnyNode) =>
-    n.type === 'FunctionDeclaration' ||
-    n.type === 'FunctionExpression' ||
-    n.type === 'ArrowFunctionExpression';
+  const isFunction = (node: AnyNode) =>
+    node.type === 'FunctionDeclaration' ||
+    node.type === 'FunctionExpression' ||
+    node.type === 'ArrowFunctionExpression';
 
   const edits: {start: number; end: number; text: string}[] = [];
   const counters = new Map<string, number>();
@@ -93,30 +95,32 @@ export function persistUseState(source: string, moduleId: string): string {
       if (
         callee.type === 'Identifier' &&
         callee.name === 'useState' &&
-        !ancestors.some(a => isFunction(a) && declaresUseState(a))
+        !ancestors.some(
+          ancestor => isFunction(ancestor) && declaresUseState(ancestor),
+        )
       ) {
-        const fn = enclosingName(ancestors);
-        const idx = counters.get(fn) ?? 0;
-        counters.set(fn, idx + 1);
-        const key = `${moduleId}::${fn}#${idx}`;
-        const args = node.arguments as AnyNode[];
+        const enclosing = enclosingName(ancestors);
+        const index = counters.get(enclosing) ?? 0;
+        counters.set(enclosing, index + 1);
+        const key = `${moduleId}::${enclosing}#${index}`;
+        const callArguments = node.arguments as AnyNode[];
         edits.push({
           start: callee.start,
-          end: args.length ? args[0].start : node.end - 1,
-          text: `__erPersistState(${JSON.stringify(key)}${args.length ? ', ' : ''}`,
+          end: callArguments.length ? callArguments[0].start : node.end - 1,
+          text: `__erPersistState(${JSON.stringify(key)}${callArguments.length ? ', ' : ''}`,
         });
       }
     }
     ancestors.push(node);
     for (const key of Object.keys(node)) {
       if (key === 'type' || key === 'start' || key === 'end') continue;
-      const v = node[key];
-      if (Array.isArray(v)) {
-        for (const c of v)
-          if (c && typeof (c as AnyNode).type === 'string')
-            visit(c as AnyNode, ancestors);
-      } else if (v && typeof (v as AnyNode).type === 'string') {
-        visit(v as AnyNode, ancestors);
+      const value = node[key];
+      if (Array.isArray(value)) {
+        for (const child of value)
+          if (child && typeof (child as AnyNode).type === 'string')
+            visit(child as AnyNode, ancestors);
+      } else if (value && typeof (value as AnyNode).type === 'string') {
+        visit(value as AnyNode, ancestors);
       }
     }
     ancestors.pop();
@@ -124,9 +128,9 @@ export function persistUseState(source: string, moduleId: string): string {
   visit(ast, []);
   if (!edits.length) return source;
 
-  let out = source;
-  for (const e of edits.sort((a, b) => b.start - a.start)) {
-    out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  let output = source;
+  for (const edit of edits.sort((left, right) => right.start - left.start)) {
+    output = output.slice(0, edit.start) + edit.text + output.slice(edit.end);
   }
-  return `import {usePersistentState as __erPersistState} from 'embedded-react';\n${out}`;
+  return `import {usePersistentState as __erPersistState} from 'embedded-react';\n${output}`;
 }

@@ -27,30 +27,30 @@ import {
   ZonePage,
 } from './components/network.jsx';
 import {
-  BOX_H,
-  BOX_W,
-  CGAP,
-  CPAD,
-  GAP,
-  GEO,
-  HEAD_H,
-  INSIDE_F,
+  BOX_HEIGHT,
+  BOX_WIDTH,
+  ROW_GAP,
+  CARD_PADDING,
+  CARD_GAP,
+  DIAL_GEOMETRY,
+  HEADER_HEIGHT,
+  INSIDE_FAHRENHEIT,
   LAYOUT,
-  MAXF,
-  MINF,
+  MAX_FAHRENHEIT,
+  MIN_FAHRENHEIT,
   MODES,
-  MODE_H,
+  MODE_ROW_HEIGHT,
   OVERLAY,
-  PAD,
-  RGAP,
-  SH,
-  SW,
-  SZ,
-  THERMO_OUT_H,
-  THERMO_OUT_W,
-  WEATHER_OUT_H,
-  WEATHER_OUT_W,
-  WEATHER_W,
+  ROOT_PADDING,
+  RANGE_GAP,
+  SCREEN_HEIGHT,
+  SCREEN_WIDTH,
+  FONT_SIZES,
+  THERMOSTAT_OUTER_HEIGHT,
+  THERMOSTAT_OUTER_WIDTH,
+  WEATHER_OUTER_HEIGHT,
+  WEATHER_OUTER_WIDTH,
+  WEATHER_WIDTH,
 } from './App.jsx';
 
 // The thermostat's split and stack layouts in Flow A, on the real JS engine: the imperative drag dial, the
@@ -62,14 +62,14 @@ import {
 // vector paints, so `line` / `tick` (both strokes or borders) keep theirs.
 const THEMES = {
   dark: {
-    bg: '#0a0b0c',
+    background: '#0a0b0c',
     surface: '#131517',
-    fg: '#f2f3f4',
+    foreground: '#f2f3f4',
     dim: '#7d7e7f',
-    dim2: '#afafb0',
+    secondary: '#afafb0',
     line: '#ffffff1a',
     tick: '#26282a', // SOLID: see the stroke note in components/dial.jsx
-    trackBg: '#26282a',
+    trackBackground: '#26282a',
     barFill: '#969899',
     rainText: '#5B9BD5',
     scrim: '#000000',
@@ -82,14 +82,14 @@ const THEMES = {
     tints: {cool: '#1a2732', heat: '#2e261d', auto: '#192a28', off: '#212426'},
   },
   light: {
-    bg: '#eeeeec',
+    background: '#eeeeec',
     surface: '#ffffff',
-    fg: '#101112',
+    foreground: '#101112',
     dim: '#8a8a8a',
-    dim2: '#525252',
+    secondary: '#525252',
     line: '#0000001c',
     tick: '#ededed', // SOLID: see the stroke note in components/dial.jsx
-    trackBg: '#ededed',
+    trackBackground: '#ededed',
     barFill: '#737475',
     rainText: '#2C6698',
     scrim: '#141618',
@@ -105,27 +105,38 @@ const THEMES = {
 
 // Per-theme style objects, built ONCE at module scope. memo(WeatherPanel) only skips re-rendering while
 // its props are referentially stable, so the weather card's style cannot be rebuilt each render.
-const CARD = {};
+const CARD_STYLE = {};
 const WEATHER_STYLE = {};
-for (const t of ['dark', 'light']) {
-  CARD[t] = {
-    backgroundColor: THEMES[t].surface,
+for (const themeKey of ['dark', 'light']) {
+  CARD_STYLE[themeKey] = {
+    backgroundColor: THEMES[themeKey].surface,
     borderWidth: 1,
-    borderColor: THEMES[t].line,
+    borderColor: THEMES[themeKey].line,
     borderRadius: 18,
-    padding: CPAD,
+    padding: CARD_PADDING,
   };
-  WEATHER_STYLE[t] = {
-    ...CARD[t],
-    width: WEATHER_OUT_W,
-    height: WEATHER_OUT_H,
+  WEATHER_STYLE[themeKey] = {
+    ...CARD_STYLE[themeKey],
+    width: WEATHER_OUTER_WIDTH,
+    height: WEATHER_OUTER_HEIGHT,
     gap: 14,
   };
 }
 // The forecast row's flexible column: the card's inner width less the fixed columns and the five 12 px gaps.
-const BAR_W = Math.max(24, WEATHER_W - (46 + 24 + 36 + 30 + 30) - 12 * 5);
+const BAR_WIDTH = Math.max(
+  24,
+  WEATHER_WIDTH - (46 + 24 + 36 + 30 + 30) - 12 * 5,
+);
 
-const clampF = f => (f < MINF ? MINF : f > MAXF ? MAXF : f);
+// A stepper press in °C moves half a degree.
+const HALF_CELSIUS_IN_FAHRENHEIT = 0.9;
+
+const clampF = fahrenheit =>
+  fahrenheit < MIN_FAHRENHEIT
+    ? MIN_FAHRENHEIT
+    : fahrenheit > MAX_FAHRENHEIT
+      ? MAX_FAHRENHEIT
+      : fahrenheit;
 
 // ----------------------------------------------------------------------------------------------------
 // Memoised chrome
@@ -147,13 +158,13 @@ const CLOSE_HIT = {
 
 const STEP_LEFT = {};
 const STEP_RIGHT = {};
-const SEG = {};
-const SEG_TEXT = {};
+const SEGMENT = {};
+const SEGMENT_TEXT = {};
 const SHEET_STYLE = {};
 const SHEET_WIDE_STYLE = {}; // with the network column beside the rest
-for (const t of ['dark', 'light']) {
-  const th = THEMES[t];
-  STEP_LEFT[t] = {
+for (const themeKey of ['dark', 'light']) {
+  const theme = THEMES[themeKey];
+  STEP_LEFT[themeKey] = {
     position: 'absolute',
     left: 0,
     bottom: 0,
@@ -161,35 +172,35 @@ for (const t of ['dark', 'light']) {
     height: 52,
     borderRadius: 26,
     borderWidth: 1,
-    borderColor: th.line,
-    backgroundColor: th.surface,
+    borderColor: theme.line,
+    backgroundColor: theme.surface,
     alignItems: 'center',
     justifyContent: 'center',
   };
-  STEP_RIGHT[t] = {...STEP_LEFT[t], left: undefined, right: 0};
+  STEP_RIGHT[themeKey] = {...STEP_LEFT[themeKey], left: undefined, right: 0};
   const seg = on => ({
     flex: 1,
     height: 44,
     borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: on ? th.fg : th.trackBg,
+    backgroundColor: on ? theme.foreground : theme.trackBackground,
   });
-  SEG[t] = {on: seg(true), off: seg(false)};
-  SEG_TEXT[t] = {
-    on: {fontSize: 12, letterSpacing: 1, color: th.bg},
-    off: {fontSize: 12, letterSpacing: 1, color: th.dim},
+  SEGMENT[themeKey] = {on: seg(true), off: seg(false)};
+  SEGMENT_TEXT[themeKey] = {
+    on: {fontSize: 12, letterSpacing: 1, color: theme.background},
+    off: {fontSize: 12, letterSpacing: 1, color: theme.dim},
   };
-  SHEET_STYLE[t] = {
+  SHEET_STYLE[themeKey] = {
     width: 340,
-    backgroundColor: th.surface,
+    backgroundColor: theme.surface,
     borderWidth: 1,
-    borderColor: th.line,
+    borderColor: theme.line,
     borderRadius: 16,
     padding: 22,
     gap: 20,
   };
-  SHEET_WIDE_STYLE[t] = {...SHEET_STYLE[t], width: 664};
+  SHEET_WIDE_STYLE[themeKey] = {...SHEET_STYLE[themeKey], width: 664};
 }
 
 const CogButton = memo(function CogButton({onPress}) {
@@ -204,13 +215,13 @@ const CogButton = memo(function CogButton({onPress}) {
   );
 });
 
-const Stepper = memo(function Stepper({onPress, style, minus, fg}) {
+const Stepper = memo(function Stepper({onPress, style, minus, color}) {
   return (
     <Pressable onPress={onPress} style={style}>
       {minus ? (
-        <View style={{width: 16, height: 2, backgroundColor: fg}} />
+        <View style={{width: 16, height: 2, backgroundColor: color}} />
       ) : (
-        <Text style={{fontSize: 20, color: fg}}>+</Text>
+        <Text style={{fontSize: 20, color: color}}>+</Text>
       )}
     </Pressable>
   );
@@ -218,25 +229,25 @@ const Stepper = memo(function Stepper({onPress, style, minus, fg}) {
 
 // Only the two buttons whose `on` actually flips re-render on a mode change.
 const ModeButton = memo(function ModeButton({item, on, themeName, onSelect}) {
-  const th = THEMES[themeName];
+  const theme = THEMES[themeName];
   return (
     <Pressable
       onPress={() => onSelect(item.key)}
       style={{
         flex: 1,
-        height: MODE_H,
+        height: MODE_ROW_HEIGHT,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: on ? th.accents[item.key] : th.line,
-        backgroundColor: on ? th.tints[item.key] : th.surface,
+        borderColor: on ? theme.accents[item.key] : theme.line,
+        backgroundColor: on ? theme.tints[item.key] : theme.surface,
         alignItems: 'center',
         justifyContent: 'center',
       }}>
       <Text
         style={{
-          fontSize: SZ.mode,
+          fontSize: FONT_SIZES.mode,
           letterSpacing: 1,
-          color: on ? th.accents[item.key] : th.dim,
+          color: on ? theme.accents[item.key] : theme.dim,
         }}>
         {item.label}
       </Text>
@@ -266,25 +277,25 @@ const SettingsSheet = memo(function SettingsSheet({
   onTheme,
   onUnit,
 }) {
-  const th = THEMES[themeName];
-  const sg = SEG[themeName];
-  const st = SEG_TEXT[themeName];
+  const theme = THEMES[themeName];
+  const segment = SEGMENT[themeName];
+  const segmentText = SEGMENT_TEXT[themeName];
   // The Wi-Fi and time-zone pages take the sheet's place while one is open.
   const [page, setPage] = useState(null);
   const back = useCallback(() => setPage(null), []);
   if (page) {
     return (
-      <Modal visible={visible} backdropColor={th.scrim} style={OVERLAY}>
+      <Modal visible={visible} backdropColor={theme.scrim} style={OVERLAY}>
         {page === 'wifi' ? (
-          <WifiPage theme={th} onDone={back} />
+          <WifiPage theme={theme} onDone={back} />
         ) : (
-          <ZonePage theme={th} onDone={back} />
+          <ZonePage theme={theme} onDone={back} />
         )}
       </Modal>
     );
   }
   return (
-    <Modal visible={visible} backdropColor={th.scrim} style={OVERLAY}>
+    <Modal visible={visible} backdropColor={theme.scrim} style={OVERLAY}>
       <View
         style={
           HAS_NETWORK ? SHEET_WIDE_STYLE[themeName] : SHEET_STYLE[themeName]
@@ -300,32 +311,40 @@ const SettingsSheet = memo(function SettingsSheet({
               fontSize: 12,
               fontWeight: '600',
               letterSpacing: 1,
-              color: th.fg,
+              color: theme.foreground,
             }}>
             SETTINGS
           </Text>
           <Pressable onPress={onClose} style={CLOSE_HIT}>
-            <Text style={{fontSize: 24, color: th.dim}}>×</Text>
+            <Text style={{fontSize: 24, color: theme.dim}}>×</Text>
           </Pressable>
         </View>
 
         <Columns
           wide={HAS_NETWORK}
-          side={<NetworkRows theme={th} onOpen={setPage} />}>
+          side={<NetworkRows theme={theme} onOpen={setPage} />}>
           <View style={{gap: 9}}>
-            <Text style={{fontSize: 10, letterSpacing: 2, color: th.dim}}>
+            <Text style={{fontSize: 10, letterSpacing: 2, color: theme.dim}}>
               THEME
             </Text>
             <View style={{flexDirection: 'row', gap: 4}}>
               <Pressable
                 onPress={() => onTheme('dark')}
-                style={themeName === 'dark' ? sg.on : sg.off}>
-                <Text style={themeName === 'dark' ? st.on : st.off}>DARK</Text>
+                style={themeName === 'dark' ? segment.on : segment.off}>
+                <Text
+                  style={
+                    themeName === 'dark' ? segmentText.on : segmentText.off
+                  }>
+                  DARK
+                </Text>
               </Pressable>
               <Pressable
                 onPress={() => onTheme('light')}
-                style={themeName === 'light' ? sg.on : sg.off}>
-                <Text style={themeName === 'light' ? st.on : st.off}>
+                style={themeName === 'light' ? segment.on : segment.off}>
+                <Text
+                  style={
+                    themeName === 'light' ? segmentText.on : segmentText.off
+                  }>
                   LIGHT
                 </Text>
               </Pressable>
@@ -333,24 +352,28 @@ const SettingsSheet = memo(function SettingsSheet({
           </View>
 
           <View style={{gap: 9}}>
-            <Text style={{fontSize: 10, letterSpacing: 2, color: th.dim}}>
+            <Text style={{fontSize: 10, letterSpacing: 2, color: theme.dim}}>
               UNITS
             </Text>
             <View style={{flexDirection: 'row', gap: 4}}>
               <Pressable
                 onPress={() => onUnit('F')}
-                style={unit === 'F' ? sg.on : sg.off}>
-                <Text style={unit === 'F' ? st.on : st.off}>°F</Text>
+                style={unit === 'F' ? segment.on : segment.off}>
+                <Text style={unit === 'F' ? segmentText.on : segmentText.off}>
+                  °F
+                </Text>
               </Pressable>
               <Pressable
                 onPress={() => onUnit('C')}
-                style={unit === 'C' ? sg.on : sg.off}>
-                <Text style={unit === 'C' ? st.on : st.off}>°C</Text>
+                style={unit === 'C' ? segment.on : segment.off}>
+                <Text style={unit === 'C' ? segmentText.on : segmentText.off}>
+                  °C
+                </Text>
               </Pressable>
             </View>
           </View>
 
-          <ClockSetter theme={th} />
+          <ClockSetter theme={theme} />
         </Columns>
       </View>
     </Modal>
@@ -365,10 +388,10 @@ export function RichApp() {
   // COOL and HEAT each remember their own setpoint, so switching back restores what you last set.
   // (AUTO has its own pair below.) OFF mirrors whichever of the two was last active rather than
   // snapping to one of them.
-  const [coolSp, setCoolSp] = useState(72);
-  const [heatSp, setHeatSp] = useState(68);
-  const [lo, setLo] = useState(68); // AUTO range
-  const [hi, setHi] = useState(76);
+  const [coolSetpoint, setCoolSetpoint] = useState(72);
+  const [heatSetpoint, setHeatSetpoint] = useState(68);
+  const [low, setLow] = useState(68); // AUTO range
+  const [high, setHigh] = useState(76);
   const [active, setActive] = useState('hi'); // which AUTO handle the steppers move
 
   const [unit, setUnit] = useState('F');
@@ -376,67 +399,74 @@ export function RichApp() {
   const [settings, setSettings] = useState(false);
 
   // The live single setpoint for the current mode. OFF mirrors COOL's ring position — its readout is
-  // "––" regardless — and AUTO ignores this entirely, using the lo/hi pair instead. A plain ternary so
+  // "––" regardless — and AUTO ignores this entirely, using the low/high pair instead. A plain ternary so
   // the AOT can lower it for the solo branch too.
-  const value = mode === 'heat' ? heatSp : coolSp;
+  const value = mode === 'heat' ? heatSetpoint : coolSetpoint;
 
   const theme = THEMES[themeName];
   const accent = theme.accents[mode];
 
   // °F → display string. °C is quantized to half a degree, matching the design.
-  const fmt = f => {
+  const fmt = fahrenheit => {
     if (unit === 'C') {
-      const c = Math.round(((f - 32) * 5) / 9 / 0.5) * 0.5;
-      return (Number.isInteger(c) ? c.toFixed(0) : c.toFixed(1)) + '°';
+      const celsius = Math.round(((fahrenheit - 32) * 5) / 9 / 0.5) * 0.5;
+      return (
+        (Number.isInteger(celsius) ? celsius.toFixed(0) : celsius.toFixed(1)) +
+        '°'
+      );
     }
-    return Math.round(f) + '°';
+    return Math.round(fahrenheit) + '°';
   };
-  const fmtBare = f =>
+  const fmtBare = fahrenheit =>
     unit === 'C'
-      ? String(Math.round(((f - 32) * 5) / 9))
-      : String(Math.round(f));
+      ? String(Math.round(((fahrenheit - 32) * 5) / 9))
+      : String(Math.round(fahrenheit));
 
   // A stepper press moves whichever setpoint is live by 1 °F (or half a °C). In AUTO the pair stays
-  // RGAP apart by PUSHING the far handle along, matching the drag behavior.
-  const step = dir => {
-    const d = unit === 'C' ? 0.9 : 1;
+  // RANGE_GAP apart by PUSHING the far handle along, matching the drag behavior.
+  const step = direction => {
+    const increment = unit === 'C' ? HALF_CELSIUS_IN_FAHRENHEIT : 1;
     if (mode === 'off') return;
     if (mode === 'auto') {
       if (active === 'lo') {
-        const l = clampF(Math.min(lo + dir * d, MAXF - RGAP));
-        setLo(l);
-        if (hi < l + RGAP) setHi(l + RGAP);
+        const nextLow = clampF(
+          Math.min(low + direction * increment, MAX_FAHRENHEIT - RANGE_GAP),
+        );
+        setLow(nextLow);
+        if (high < nextLow + RANGE_GAP) setHigh(nextLow + RANGE_GAP);
       } else {
-        const h = clampF(Math.max(hi + dir * d, MINF + RGAP));
-        setHi(h);
-        if (lo > h - RGAP) setLo(h - RGAP);
+        const nextHigh = clampF(
+          Math.max(high + direction * increment, MIN_FAHRENHEIT + RANGE_GAP),
+        );
+        setHigh(nextHigh);
+        if (low > nextHigh - RANGE_GAP) setLow(nextHigh - RANGE_GAP);
       }
       return;
     }
-    const nv = clampF(Math.round(value) + dir * d);
-    if (mode === 'heat') setHeatSp(nv);
-    else setCoolSp(nv);
+    const nextSetpoint = clampF(Math.round(value) + direction * increment);
+    if (mode === 'heat') setHeatSetpoint(nextSetpoint);
+    else setCoolSetpoint(nextSetpoint);
   };
   // Ref-backed so these keep the same identity across renders — which is what lets the memoised
   // steppers, cog and mode buttons skip re-rendering.
   const stepRef = useRef(null);
   stepRef.current = step;
-  const dec = useCallback(() => stepRef.current(-1), []);
-  const inc = useCallback(() => stepRef.current(1), []);
+  const stepDown = useCallback(() => stepRef.current(-1), []);
+  const stepUp = useCallback(() => stepRef.current(1), []);
   const openSettings = useCallback(() => setSettings(true), []);
   const closeSettings = useCallback(() => setSettings(false), []);
 
   // AUTO commits BOTH ends: dragging one can have pushed the other to preserve the gap, and the dial
   // already enforced it live, so these arrive valid.
-  const commit = p => {
+  const commit = committed => {
     if (mode === 'auto') {
-      setLo(clampF(p.lo));
-      setHi(clampF(p.hi));
+      setLow(clampF(committed.low));
+      setHigh(clampF(committed.high));
       return;
     }
-    const v = clampF(p.v);
-    if (mode === 'heat') setHeatSp(v);
-    else setCoolSp(v);
+    const setpoint = clampF(committed.value);
+    if (mode === 'heat') setHeatSetpoint(setpoint);
+    else setCoolSetpoint(setpoint);
   };
 
   // What the equipment is actually doing, from the room reading against the target. It only RUNS while
@@ -445,22 +475,27 @@ export function RichApp() {
   // fan stays on AUTO throughout, which is what a real stat shows when it is satisfied.
   const running =
     mode === 'cool'
-      ? INSIDE_F > coolSp
+      ? INSIDE_FAHRENHEIT > coolSetpoint
       : mode === 'heat'
-        ? INSIDE_F < heatSp
+        ? INSIDE_FAHRENHEIT < heatSetpoint
         : mode === 'auto'
-          ? INSIDE_F > hi || INSIDE_F < lo
+          ? INSIDE_FAHRENHEIT > high || INSIDE_FAHRENHEIT < low
           : false;
   const statusLine = running ? 'RUNNING • FAN AUTO' : 'IDLE • FAN AUTO';
 
-  const card = CARD[themeName];
+  const card = CARD_STYLE[themeName];
 
   const thermostat = (
     <View
-      style={{...card, width: THERMO_OUT_W, height: THERMO_OUT_H, gap: CGAP}}>
+      style={{
+        ...card,
+        width: THERMOSTAT_OUTER_WIDTH,
+        height: THERMOSTAT_OUTER_HEIGHT,
+        gap: ROW_GAP,
+      }}>
       <View
         style={{
-          height: HEAD_H,
+          height: HEADER_HEIGHT,
           flexDirection: 'row',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -468,10 +503,10 @@ export function RichApp() {
         <View style={{gap: 3}}>
           <Text
             style={{
-              fontSize: SZ.room,
+              fontSize: FONT_SIZES.room,
               fontWeight: '600',
               letterSpacing: 1,
-              color: theme.fg,
+              color: theme.foreground,
             }}>
             LIVING ROOM
           </Text>
@@ -488,41 +523,45 @@ export function RichApp() {
       <View style={{flex: 1, alignItems: 'center', justifyContent: 'center'}}>
         {/* The dial fills this box; the two corner steppers render after it, so they sit on top and take
             their own touches instead of starting a drag. */}
-        <View style={{width: BOX_W, height: BOX_H}}>
+        <View style={{width: BOX_WIDTH, height: BOX_HEIGHT}}>
           <ThermoDial
-            geo={GEO}
+            geometry={DIAL_GEOMETRY}
             theme={theme}
             accent={accent}
             mode={mode}
             value={value}
-            lo={lo}
-            hi={hi}
+            low={low}
+            high={high}
             active={active}
-            minF={MINF}
-            maxF={MAXF}
-            gap={RGAP}
+            minimum={MIN_FAHRENHEIT}
+            maximum={MAX_FAHRENHEIT}
+            gap={RANGE_GAP}
             fmt={fmt}
-            labels={{ambient: 'INSIDE ' + fmt(INSIDE_F)}}
-            sz={SZ}
+            labels={{ambient: 'INSIDE ' + fmt(INSIDE_FAHRENHEIT)}}
+            fontSizes={FONT_SIZES}
             onCommit={commit}
             onPick={setActive}
           />
           <Stepper
-            onPress={dec}
+            onPress={stepDown}
             style={STEP_LEFT[themeName]}
             minus
-            fg={theme.fg}
+            color={theme.foreground}
           />
-          <Stepper onPress={inc} style={STEP_RIGHT[themeName]} fg={theme.fg} />
+          <Stepper
+            onPress={stepUp}
+            style={STEP_RIGHT[themeName]}
+            color={theme.foreground}
+          />
         </View>
       </View>
 
-      <View style={{height: MODE_H, flexDirection: 'row', gap: 6}}>
-        {MODES.map(m => (
+      <View style={{height: MODE_ROW_HEIGHT, flexDirection: 'row', gap: 6}}>
+        {MODES.map(item => (
           <ModeButton
-            key={m.key}
-            item={m}
-            on={mode === m.key}
+            key={item.key}
+            item={item}
+            on={mode === item.key}
             themeName={themeName}
             onSelect={setMode}
           />
@@ -537,7 +576,7 @@ export function RichApp() {
     <WeatherPanel
       theme={theme}
       unit={unit}
-      barW={BAR_W}
+      barWidth={BAR_WIDTH}
       style={WEATHER_STYLE[themeName]}
     />
   );
@@ -545,12 +584,12 @@ export function RichApp() {
   return (
     <View
       style={{
-        width: SW,
-        height: SH,
-        backgroundColor: theme.bg,
-        padding: PAD,
+        width: SCREEN_WIDTH,
+        height: SCREEN_HEIGHT,
+        backgroundColor: theme.background,
+        padding: ROOT_PADDING,
         flexDirection: LAYOUT === 'split' ? 'row' : 'column',
-        gap: GAP,
+        gap: CARD_GAP,
       }}>
       {thermostat}
       {weather}
