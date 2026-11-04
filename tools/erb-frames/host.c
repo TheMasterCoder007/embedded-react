@@ -48,8 +48,22 @@
 /** @brief Date.now() as the app sees it, so a run doesn't depend on the host's clock. */
 #define WALL_CLOCK_MS 1767225600000LL
 
+/** @brief The finger every tap and drag uses. */
+#define TOUCH_FINGER 0
+
+/** @brief Room for an error's message. */
+#define ERROR_MESSAGE_BYTES 256
+
+/** @brief A package's alignment in memory, as a board places it. */
+#define PACKAGE_ALIGNMENT 4u
+
+/** @brief Exit codes: the app failed, or the host couldn't run it. */
+#define EXIT_APP_FAILED 1
+#define EXIT_HOST_FAILED 2
+
 /** @brief The firmware's arena. */
-static uint32_t s_arena[(64u * 1024u) / 4u];
+#define ARENA_BYTES (64u * 1024u)
+static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 
 static void log_line(const char* line, void* context)
 {
@@ -58,7 +72,7 @@ static void log_line(const char* line, void* context)
 }
 
 /** @brief Reads a file into a 4-aligned buffer, as a board places a package. */
-static uint32_t* read_package(const char* path, size_t* bytes)
+static uint32_t* read_package(const char* path, size_t* package_bytes)
 {
     FILE* file = fopen(path, "rb");
     if (!file)
@@ -68,14 +82,14 @@ static uint32_t* read_package(const char* path, size_t* bytes)
     fseek(file, 0, SEEK_END);
     const long length = ftell(file);
     fseek(file, 0, SEEK_SET);
-    uint32_t* words = malloc(((size_t)length + 3u) & ~(size_t)3u);
+    uint32_t* words = malloc(((size_t)length + (PACKAGE_ALIGNMENT - 1u)) & ~(size_t)(PACKAGE_ALIGNMENT - 1u));
     if (words && fread(words, 1, (size_t)length, file) != (size_t)length)
     {
         free(words);
         words = NULL;
     }
     fclose(file);
-    *bytes = (size_t)length;
+    *package_bytes = (size_t)length;
     return words;
 }
 
@@ -95,28 +109,28 @@ static void run_taps(const char* taps)
     {
         int x;
         int y;
-        int used;
-        if (sscanf(cursor, " %d,%d%n", &x, &y, &used) != 2)
+        int characters_read;
+        if (sscanf(cursor, " %d,%d%n", &x, &y, &characters_read) != 2)
         {
             break;
         }
-        cursor += used;
+        cursor += characters_read;
         int end_x = x;
         int end_y = y;
-        const bool drag = sscanf(cursor, ">%d,%d%n", &end_x, &end_y, &used) == 2;
+        const bool drag = sscanf(cursor, ">%d,%d%n", &end_x, &end_y, &characters_read) == 2;
         if (drag)
         {
-            cursor += used;
+            cursor += characters_read;
         }
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, x, y);
+        embedded_renderer_touch(TOUCH_FINGER, ER_TOUCH_DOWN, x, y);
         frame();
         for (int step = 1; drag && step <= DRAG_STEPS; step++)
         {
             embedded_renderer_touch(
-                0, ER_TOUCH_MOVE, x + (end_x - x) * step / DRAG_STEPS, y + (end_y - y) * step / DRAG_STEPS);
+                TOUCH_FINGER, ER_TOUCH_MOVE, x + (end_x - x) * step / DRAG_STEPS, y + (end_y - y) * step / DRAG_STEPS);
             frame();
         }
-        embedded_renderer_touch(0, ER_TOUCH_UP, end_x, end_y);
+        embedded_renderer_touch(TOUCH_FINGER, ER_TOUCH_UP, end_x, end_y);
         frame();
     }
 }
@@ -126,9 +140,9 @@ int main(int argc, char** argv)
     if (argc < 5)
     {
         fprintf(stderr, "usage: %s <out.raw> <width> <height> <package> [taps [settle_ms]]\n", argv[0]);
-        return 2;
+        return EXIT_HOST_FAILED;
     }
-    const char* out_path = argv[1];
+    const char* frame_path = argv[1];
     const int width = atoi(argv[2]);
     const int height = atoi(argv[3]);
     const char* taps = argc > 5 ? argv[5] : "";
@@ -136,7 +150,7 @@ int main(int argc, char** argv)
     if (!er_software_backend_init(width, height))
     {
         fprintf(stderr, "can't make a %dx%d framebuffer\n", width, height);
-        return 2;
+        return EXIT_HOST_FAILED;
     }
 
     size_t package_bytes = 0;
@@ -144,7 +158,7 @@ int main(int argc, char** argv)
     if (!package)
     {
         fprintf(stderr, "can't read %s\n", argv[4]);
-        return 2;
+        return EXIT_HOST_FAILED;
     }
     erb_set_wall_clock(WALL_CLOCK_MS);
     const ErbConfig config = {
@@ -157,33 +171,33 @@ int main(int argc, char** argv)
     ErbError error;
     if (!erb_load(package, package_bytes, &config, &error))
     {
-        char message[256];
+        char message[ERROR_MESSAGE_BYTES];
         erb_error_message(&error, message, sizeof(message));
         fprintf(stderr, "the package didn't load: %s\n", message);
-        return 1;
+        return EXIT_APP_FAILED;
     }
 
     er_commit();
     run_taps(taps);
-    for (uint32_t elapsed = 0; elapsed < settle_ms; elapsed += FRAME_MS)
+    for (uint32_t elapsed_ms = 0; elapsed_ms < settle_ms; elapsed_ms += FRAME_MS)
     {
         frame();
     }
     if (!erb_running())
     {
-        char message[256];
+        char message[ERROR_MESSAGE_BYTES];
         erb_error_message(erb_last_error(), message, sizeof(message));
         fprintf(stderr, "the app stopped: %s\n", message);
-        return 1;
+        return EXIT_APP_FAILED;
     }
 
-    FILE* out = fopen(out_path, "wb");
-    if (!out)
+    FILE* frame_file = fopen(frame_path, "wb");
+    if (!frame_file)
     {
-        fprintf(stderr, "can't write %s\n", out_path);
-        return 2;
+        fprintf(stderr, "can't write %s\n", frame_path);
+        return EXIT_HOST_FAILED;
     }
-    fwrite(er_software_framebuffer(), sizeof(uint32_t), (size_t)width * (size_t)height, out);
-    fclose(out);
+    fwrite(er_software_framebuffer(), sizeof(uint32_t), (size_t)width * (size_t)height, frame_file);
+    fclose(frame_file);
     return 0;
 }

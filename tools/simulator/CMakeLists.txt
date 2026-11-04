@@ -78,6 +78,12 @@ target_compile_definitions(er-bridge-quickjs PRIVATE
         VEC_BRIDGE_MAX_OPS=8192               # >= ERUI_VECTOR_TAPE_MAX
         VEC_BRIDGE_MAX_PAINTS=1024            # >= ERUI_VECTOR_PAINTS_MAX
         VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
+
+# A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-Wshadow)
+endif ()
+
 # The shared desktop host core lives with the demo; the simulator reuses it (sim_main.c is just the
 # watch + reload loop over it). Unlike the demo/device, the simulator does NOT compile assets in: it
 # loads them at runtime from a binary pack (asset_pack.c) so images/fonts hot-reload (Phase 2b).

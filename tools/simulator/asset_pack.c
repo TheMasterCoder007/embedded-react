@@ -32,35 +32,35 @@
 
 bool er_asset_pack_load(const char* path)
 {
-    FILE* f = fopen(path, "rb");
-    if (!f)
+    FILE* file = fopen(path, "rb");
+    if (!file)
     {
         return false;
     }
-    fseek(f, 0, SEEK_END);
-    const long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    fseek(file, 0, SEEK_END);
+    const long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
     if (size <= 0)
     {
-        fclose(f);
+        fclose(file);
         return false;
     }
-    uint8_t* buf = (uint8_t*)malloc((size_t)size); /* kept alive: er_assets_load_pack references it */
-    if (!buf)
+    uint8_t* buffer = (uint8_t*)malloc((size_t)size); /* kept alive: er_assets_load_pack references it */
+    if (!buffer)
     {
-        fclose(f);
+        fclose(file);
         return false;
     }
-    const size_t rd = fread(buf, 1, (size_t)size, f);
-    fclose(f);
-    if (rd != (size_t)size)
+    const size_t bytes_read = fread(buffer, 1, (size_t)size, file);
+    fclose(file);
+    if (bytes_read != (size_t)size)
     {
-        free(buf);
+        free(buffer);
         return false;
     }
-    if (!er_assets_load_pack(buf, (size_t)size))
+    if (!er_assets_load_pack(buffer, (size_t)size))
     {
-        free(buf); /* malformed / partially written — keep whatever was registered before */
+        free(buffer); /* malformed / partially written — keep whatever was registered before */
         return false;
     }
     return true;

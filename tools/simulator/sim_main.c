@@ -39,6 +39,17 @@
 /** @brief How often (ms) the watched bundle is polled for changes. */
 #define SIM_WATCH_INTERVAL_MS 200
 
+/** @brief The window's logical size. */
+#define SIM_WINDOW_WIDTH 800
+#define SIM_WINDOW_HEIGHT 600
+
+/** @brief A prime that mixes the modification time into a file's signature. */
+#define SIM_SIGNATURE_PRIME 1000003u
+
+/** @brief Exit codes. */
+#define SIM_EXIT_HOST_FAILED 1
+#define SIM_EXIT_USAGE 2
+
 /**
  * @brief Computes a change signature (modification time + size) for a file.
  *
@@ -49,13 +60,13 @@
  */
 static uint64_t file_signature(const char* path)
 {
-    struct stat st;
-    if (!path || stat(path, &st) != 0)
+    struct stat file_status;
+    if (!path || stat(path, &file_status) != 0)
     {
         return 0;
     }
-    const uint64_t sig = (uint64_t)st.st_mtime * 1000003u ^ (uint64_t)st.st_size;
-    return sig ? sig : 1u; /* never return 0 for a valid file */
+    const uint64_t signature = (uint64_t)file_status.st_mtime * SIM_SIGNATURE_PRIME ^ (uint64_t)file_status.st_size;
+    return signature ? signature : 1u; /* never return 0 for a valid file */
 }
 
 /**
@@ -71,16 +82,17 @@ int main(int argc, char** argv)
     if (argc < 2)
     {
         fprintf(stderr, "usage: embedded-react-simulator <app.bundle.js> [assets.pack]\n");
-        return 2;
+        return SIM_EXIT_USAGE;
     }
     const char* app_path = argv[1];
     const char* pack_path = argc > 2 ? argv[2] : NULL;
 
-    const ErHostConfig cfg = {"embedded-react — simulator", 800, 600, /*persist=*/true};
+    const ErHostConfig host_config = {
+        "embedded-react — simulator", SIM_WINDOW_WIDTH, SIM_WINDOW_HEIGHT, /*persist=*/true};
     ErHost host;
-    if (!er_host_start(&cfg, &host))
+    if (!er_host_start(&host_config, &host))
     {
-        return 1;
+        return SIM_EXIT_HOST_FAILED;
     }
 
     /* Load baked assets from the pack BEFORE the app evaluates, so <Image>/<Text> resolve. The sim
@@ -97,9 +109,9 @@ int main(int argc, char** argv)
     }
     SDL_Log("simulator watching %s — edit & save to reload, or press R", app_path);
 
-    uint64_t last_bundle_sig = file_signature(app_path);
-    uint64_t last_pack_sig = pack_path ? file_signature(pack_path) : 0;
-    uint32_t last_check = SDL_GetTicks();
+    uint64_t last_bundle_signature = file_signature(app_path);
+    uint64_t last_pack_signature = pack_path ? file_signature(pack_path) : 0;
+    uint32_t last_check_ms = SDL_GetTicks();
 
     while (er_host_step(&host))
     {
@@ -116,23 +128,23 @@ int main(int argc, char** argv)
         }
 
         /* File-watch: poll the bundle and the asset pack periodically. */
-        const uint32_t now = SDL_GetTicks();
-        if (now - last_check >= SIM_WATCH_INTERVAL_MS)
+        const uint32_t now_ms = SDL_GetTicks();
+        if (now_ms - last_check_ms >= SIM_WATCH_INTERVAL_MS)
         {
-            last_check = now;
-            const uint64_t bsig = file_signature(app_path);
-            if (bsig != 0 && bsig != last_bundle_sig)
+            last_check_ms = now_ms;
+            const uint64_t bundle_signature = file_signature(app_path);
+            if (bundle_signature != 0 && bundle_signature != last_bundle_signature)
             {
-                last_bundle_sig = bsig;
+                last_bundle_signature = bundle_signature;
                 do_reload = true;
                 SDL_Log("change detected — reloading %s", app_path);
             }
             if (pack_path)
             {
-                const uint64_t psig = file_signature(pack_path);
-                if (psig != 0 && psig != last_pack_sig)
+                const uint64_t pack_signature = file_signature(pack_path);
+                if (pack_signature != 0 && pack_signature != last_pack_signature)
                 {
-                    last_pack_sig = psig;
+                    last_pack_signature = pack_signature;
                     if (er_asset_pack_load(pack_path))
                     {
                         do_reload = true; /* re-render with the new assets */
@@ -148,7 +160,7 @@ int main(int argc, char** argv)
             {
                 er_host_show_error(&host); /* on-screen error; stays up for the next save */
             }
-            last_check = SDL_GetTicks();
+            last_check_ms = SDL_GetTicks();
         }
     }
 
