@@ -28,8 +28,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#define BOUNDS_W 100
-#define BOUNDS_H 80
+#define BOUNDS_WIDTH 100
+#define BOUNDS_HEIGHT 80
 #define HUGE_SIDE 30000
 #define FAR_BOUND 40000 /* a panel size a uint16_t can hold and an int16_t can't */
 
@@ -37,46 +37,46 @@ static int s_failures = 0;
 static int s_right = 0;  /**< The furthest right anything painted. */
 static int s_bottom = 0; /**< The furthest down anything painted. */
 
-#define CHECK(cond, msg)                                                                                               \
+#define CHECK(condition, message)                                                                                      \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (!(cond))                                                                                                   \
+        if (!(condition))                                                                                              \
         {                                                                                                              \
-            printf("FAIL: %s\n", msg);                                                                                 \
+            printf("FAIL: %s\n", message);                                                                             \
             s_failures++;                                                                                              \
         }                                                                                                              \
     } while (0)
 
-static void note(int x, int y, int w, int h)
+static void note(int x, int y, int width, int height)
 {
-    if (x + w > s_right)
-        s_right = x + w;
-    if (y + h > s_bottom)
-        s_bottom = y + h;
+    if (x + width > s_right)
+        s_right = x + width;
+    if (y + height > s_bottom)
+        s_bottom = y + height;
 }
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)ctx;
-    note(x, y, w, h);
+    note(x, y, width, height);
 }
 
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)ctx;
-    note(x, y, w, h);
+    note(x, y, width, height);
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)ctx;
-    note(x, y, w, h);
+    note(x, y, width, height);
 }
 
 /** @brief A root of the given size holding an arc of the same size, committed once. */
@@ -123,26 +123,27 @@ int main(void)
     backend.blend_rect = blend_cb;
     embedded_renderer_set_backend(&backend);
 
-    er_set_screen_bounds(BOUNDS_W, BOUNDS_H);
+    er_set_screen_bounds(BOUNDS_WIDTH, BOUNDS_HEIGHT);
     ERNode* root = commit_scene(HUGE_SIDE);
-    CHECK(root->computed.width == BOUNDS_W && root->computed.height == BOUNDS_H, "the root is clamped to the bounds");
-    CHECK(s_right > 0 && s_right <= BOUNDS_W, "nothing paints past the right bound");
-    CHECK(s_bottom > 0 && s_bottom <= BOUNDS_H, "nothing paints past the bottom bound");
+    CHECK(root->computed.width == BOUNDS_WIDTH && root->computed.height == BOUNDS_HEIGHT,
+          "the root is clamped to the bounds");
+    CHECK(s_right > 0 && s_right <= BOUNDS_WIDTH, "nothing paints past the right bound");
+    CHECK(s_bottom > 0 && s_bottom <= BOUNDS_HEIGHT, "nothing paints past the bottom bound");
 
     root = commit_scene(40);
     CHECK(root->computed.width == 40 && root->computed.height == 40, "a root inside the bounds keeps its size");
-    CHECK(s_right <= BOUNDS_W && s_bottom <= BOUNDS_H, "a node past a small root stops at the bounds");
+    CHECK(s_right <= BOUNDS_WIDTH && s_bottom <= BOUNDS_HEIGHT, "a node past a small root stops at the bounds");
 
     /* One limit: that axis stops at it, and the other keeps the root's size. */
-    er_set_screen_bounds(BOUNDS_W, 0);
+    er_set_screen_bounds(BOUNDS_WIDTH, 0);
     root = commit_scene(40);
-    CHECK(s_right > 0 && s_right <= BOUNDS_W, "a width alone still stops the right edge");
-    CHECK(s_bottom > BOUNDS_H, "a width alone leaves the height free");
+    CHECK(s_right > 0 && s_right <= BOUNDS_WIDTH, "a width alone still stops the right edge");
+    CHECK(s_bottom > BOUNDS_HEIGHT, "a width alone leaves the height free");
 
-    er_set_screen_bounds(0, BOUNDS_H);
+    er_set_screen_bounds(0, BOUNDS_HEIGHT);
     root = commit_scene(40);
-    CHECK(s_bottom > 0 && s_bottom <= BOUNDS_H, "a height alone still stops the bottom edge");
-    CHECK(s_right > BOUNDS_W, "a height alone leaves the width free");
+    CHECK(s_bottom > 0 && s_bottom <= BOUNDS_HEIGHT, "a height alone still stops the bottom edge");
+    CHECK(s_right > BOUNDS_WIDTH, "a height alone leaves the width free");
 
     /* Past int16 is still a limit, the largest there is, and not "no limit". */
     er_set_screen_bounds(FAR_BOUND, FAR_BOUND);
@@ -152,8 +153,8 @@ int main(void)
     ERNode* far_root = er_node_create(ER_NODE_VIEW);
     ERProps far_root_props;
     er_props_default(&far_root_props);
-    far_root_props.width = BOUNDS_W;
-    far_root_props.height = BOUNDS_H;
+    far_root_props.width = BOUNDS_WIDTH;
+    far_root_props.height = BOUNDS_HEIGHT;
     er_node_set_props(far_root, &far_root_props);
     ERNode* far_child = er_node_create(ER_NODE_VIEW);
     ERProps far_child_props;
@@ -162,7 +163,7 @@ int main(void)
     far_child_props.left = HUGE_SIDE;
     far_child_props.top = 0;
     far_child_props.width = HUGE_SIDE;
-    far_child_props.height = BOUNDS_H;
+    far_child_props.height = BOUNDS_HEIGHT;
     far_child_props.background_color = 0xFF404040U;
     far_child_props.transform_translate_x =
         (float)HUGE_SIDE; /* layout stops at int16, but a transform can paint past it */
@@ -177,13 +178,13 @@ int main(void)
     ERNode* free_root = er_node_create(ER_NODE_VIEW);
     ERProps free_props;
     er_props_default(&free_props);
-    free_props.width = BOUNDS_W * 2;
-    free_props.height = BOUNDS_H * 2;
+    free_props.width = BOUNDS_WIDTH * 2;
+    free_props.height = BOUNDS_HEIGHT * 2;
     free_props.background_color = 0xFF000000U;
     er_node_set_props(free_root, &free_props);
     er_tree_set_root(free_root);
     er_commit();
-    CHECK(free_root->computed.width == BOUNDS_W * 2 && free_root->computed.height == BOUNDS_H * 2,
+    CHECK(free_root->computed.width == BOUNDS_WIDTH * 2 && free_root->computed.height == BOUNDS_HEIGHT * 2,
           "0 removes the limit");
 
     if (s_failures)

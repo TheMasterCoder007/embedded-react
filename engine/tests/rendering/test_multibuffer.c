@@ -34,62 +34,65 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define OPACITY_OPAQUE 255U
+#define EXTENT_FAR (1 << 29)
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend op-extent recorder (mirrors test_transform_damage)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct
 {
-    int x0, y0, x1, y1;
-    int ops;
+    int min_x, min_y, max_x, max_y;
+    int operation_count;
 } Extent;
 
-static Extent g_ext;
+static Extent g_extent;
 
 static void ext_reset(void)
 {
-    g_ext.x0 = g_ext.y0 = 1 << 29;
-    g_ext.x1 = g_ext.y1 = -(1 << 29);
-    g_ext.ops = 0;
+    g_extent.min_x = g_extent.min_y = EXTENT_FAR;
+    g_extent.max_x = g_extent.max_y = -EXTENT_FAR;
+    g_extent.operation_count = 0;
 }
 
-static void ext_add(int x, int y, int w, int h)
+static void ext_add(int x, int y, int width, int height)
 {
-    if (w <= 0 || h <= 0)
+    if (width <= 0 || height <= 0)
         return;
-    g_ext.ops++;
-    if (x < g_ext.x0)
-        g_ext.x0 = x;
-    if (y < g_ext.y0)
-        g_ext.y0 = y;
-    if (x + w > g_ext.x1)
-        g_ext.x1 = x + w;
-    if (y + h > g_ext.y1)
-        g_ext.y1 = y + h;
+    g_extent.operation_count++;
+    if (x < g_extent.min_x)
+        g_extent.min_x = x;
+    if (y < g_extent.min_y)
+        g_extent.min_y = y;
+    if (x + width > g_extent.max_x)
+        g_extent.max_x = x + width;
+    if (y + height > g_extent.max_y)
+        g_extent.max_y = y + height;
 }
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)ctx;
-    ext_add(x, y, w, h);
+    ext_add(x, y, width, height);
 }
 
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)ctx;
-    ext_add(x, y, w, h);
+    ext_add(x, y, width, height);
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)ctx;
-    ext_add(x, y, w, h);
+    ext_add(x, y, width, height);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -98,24 +101,24 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -132,7 +135,8 @@ static bool commit_is_full(int screen)
 {
     ext_reset();
     er_commit();
-    const bool full = g_ext.ops > 0 && (g_ext.x1 - g_ext.x0) >= screen && (g_ext.y1 - g_ext.y0) >= screen;
+    const bool full = g_extent.operation_count > 0 && (g_extent.max_x - g_extent.min_x) >= screen
+                      && (g_extent.max_y - g_extent.min_y) >= screen;
     er_display_present();
     return full;
 }
@@ -140,14 +144,14 @@ static bool commit_is_full(int screen)
 /* Frame repeatedly until a commit paints nothing (the scene has settled), or bail after `limit` frames. */
 static int commit_until_quiescent(int limit)
 {
-    for (int i = 0; i < limit; i++)
+    for (int frame_index = 0; frame_index < limit; frame_index++)
     {
         ext_reset();
         er_commit();
-        const int ops = g_ext.ops;
+        const int operation_count = g_extent.operation_count;
         er_display_present();
-        if (ops == 0)
-            return i; /* frames it took to settle */
+        if (operation_count == 0)
+            return frame_index; /* frames it took to settle */
     }
     return -1;
 }
@@ -160,20 +164,20 @@ static int commit_until_quiescent(int limit)
 static ERNode* build_scene(int screen, ERNode** out_root)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
+    er_node_set_props(root, &root_props);
 
     ERNode* box = er_node_create(ER_NODE_VIEW);
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 20;
-    bp.margin_top = 20;
-    bp.background_color = 0xFF3366FFU;
-    er_node_set_props(box, &bp);
+    ERProps box_props = props_default();
+    box_props.width = 30;
+    box_props.height = 30;
+    box_props.margin_left = 20;
+    box_props.margin_top = 20;
+    box_props.background_color = 0xFF3366FFU;
+    er_node_set_props(box, &box_props);
 
     er_tree_append_child(root, box);
     er_tree_set_root(root);
@@ -201,52 +205,52 @@ static int check_double_buffer_replays_one_frame(int screen)
         return fail("scene never settled to zero paint after the initial full frames");
 
     /* Recolour the box: exactly one bounded region changes this frame. */
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 20;
-    bp.margin_top = 20;
-    bp.background_color = 0xFFEE2222U;
-    er_node_set_props(box, &bp);
+    ERProps box_props = props_default();
+    box_props.width = 30;
+    box_props.height = 30;
+    box_props.margin_left = 20;
+    box_props.margin_top = 20;
+    box_props.background_color = 0xFFEE2222U;
+    er_node_set_props(box, &box_props);
 
     ext_reset();
     er_commit(); /* frame A: paints the box into the current buffer */
-    const int aops = g_ext.ops;
-    const int aw = g_ext.x1 - g_ext.x0;
-    const int ah = g_ext.y1 - g_ext.y0;
+    const int change_operations = g_extent.operation_count;
+    const int change_width = g_extent.max_x - g_extent.min_x;
+    const int change_height = g_extent.max_y - g_extent.min_y;
     er_display_present();
-    printf("n=2 change frame:  ops=%d %dx%d\n", aops, aw, ah);
-    if (aops == 0)
+    printf("n=2 change frame:  ops=%d %dx%d\n", change_operations, change_width, change_height);
+    if (change_operations == 0)
         return fail("n=2: the changing frame painted nothing");
-    if (aw >= screen && ah >= screen)
+    if (change_width >= screen && change_height >= screen)
         return fail("n=2: a single bounded recolour forced a full-screen repaint");
 
     /* frame B: NOTHING changes, but the second buffer is one present stale, so the change must REPLAY. */
     ext_reset();
     er_commit();
-    const int bops = g_ext.ops;
-    const int bw = g_ext.x1 - g_ext.x0;
-    const int bh = g_ext.y1 - g_ext.y0;
+    const int replay_operations = g_extent.operation_count;
+    const int replay_width = g_extent.max_x - g_extent.min_x;
+    const int replay_height = g_extent.max_y - g_extent.min_y;
     /* present is deferred until after er_get_dirty_rect() below, which reports THIS commit's region. */
-    printf("n=2 replay frame:  ops=%d %dx%d\n", bops, bw, bh);
-    if (bops == 0)
+    printf("n=2 replay frame:  ops=%d %dx%d\n", replay_operations, replay_width, replay_height);
+    if (replay_operations == 0)
         return fail("n=2: the frame after a change did NOT replay it into the second buffer");
-    if (bw >= screen && bh >= screen)
+    if (replay_width >= screen && replay_height >= screen)
         return fail("n=2: the replay frame ballooned to a full-screen repaint");
 
     /* er_get_dirty_rect() must report the actually-painted (replayed) region on the replay frame. */
-    ERRect dr;
-    if (!er_get_dirty_rect(&dr) || dr.w <= 0 || dr.h <= 0)
+    ERRect dirty;
+    if (!er_get_dirty_rect(&dirty) || dirty.w <= 0 || dirty.h <= 0)
         return fail("n=2: er_get_dirty_rect() reported nothing on the replay frame");
     er_display_present(); /* end of frame B */
 
     /* frame C: the (n-1)=1 replay window is exhausted — both buffers now hold the change, so idle. */
     ext_reset();
     er_commit();
-    const int cops = g_ext.ops;
+    const int settled_operations = g_extent.operation_count;
     er_display_present();
-    printf("n=2 settled frame: ops=%d\n", cops);
-    if (cops != 0)
+    printf("n=2 settled frame: ops=%d\n", settled_operations);
+    if (settled_operations != 0)
         return fail("n=2: replay did not drain after (n-1) frames — idle frame still painting");
 
     er_node_destroy(root);
@@ -267,24 +271,24 @@ static int check_single_buffer_no_replay(int screen)
     if (commit_until_quiescent(4) < 0)
         return fail("n=1: scene never settled after the first commit");
 
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 20;
-    bp.margin_top = 20;
-    bp.background_color = 0xFF22CC88U;
-    er_node_set_props(box, &bp);
+    ERProps box_props = props_default();
+    box_props.width = 30;
+    box_props.height = 30;
+    box_props.margin_left = 20;
+    box_props.margin_top = 20;
+    box_props.background_color = 0xFF22CC88U;
+    er_node_set_props(box, &box_props);
 
     ext_reset();
     er_commit(); /* paints the box */
-    const int changed = g_ext.ops;
+    const int changed = g_extent.operation_count;
     er_display_present();
     if (changed == 0)
         return fail("n=1: the changing frame painted nothing");
 
     ext_reset();
     er_commit(); /* n=1: nothing changed, nothing replays */
-    const int after = g_ext.ops;
+    const int after = g_extent.operation_count;
     er_display_present();
     printf("n=1 frame-after-change: ops=%d\n", after);
     if (after != 0)
@@ -308,40 +312,43 @@ static int check_triple_buffer_replays_two_frames(int screen)
     if (commit_until_quiescent(8) < 0)
         return fail("n=3: scene never settled after the initial full frames");
 
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 20;
-    bp.margin_top = 20;
-    bp.background_color = 0xFFDD8800U;
-    er_node_set_props(box, &bp);
+    ERProps box_props = props_default();
+    box_props.width = 30;
+    box_props.height = 30;
+    box_props.margin_left = 20;
+    box_props.margin_top = 20;
+    box_props.background_color = 0xFFDD8800U;
+    er_node_set_props(box, &box_props);
 
     ext_reset();
     er_commit(); /* change frame */
-    const int changed = g_ext.ops;
+    const int changed = g_extent.operation_count;
     er_display_present();
     if (changed == 0)
         return fail("n=3: the changing frame painted nothing");
 
     ext_reset();
     er_commit(); /* replay 1 of 2 */
-    const int r1 = g_ext.ops;
+    const int first_replay_operations = g_extent.operation_count;
     er_display_present();
     ext_reset();
     er_commit(); /* replay 2 of 2 */
-    const int r2 = g_ext.ops;
+    const int second_replay_operations = g_extent.operation_count;
     er_display_present();
     ext_reset();
     er_commit(); /* debt drained */
-    const int r3 = g_ext.ops;
+    const int drained_operations = g_extent.operation_count;
     er_display_present();
-    printf("n=3 replay ops after change: %d, %d, %d\n", r1, r2, r3);
+    printf("n=3 replay ops after change: %d, %d, %d\n",
+           first_replay_operations,
+           second_replay_operations,
+           drained_operations);
 
     er_node_destroy(root);
 
-    if (r1 == 0 || r2 == 0)
+    if (first_replay_operations == 0 || second_replay_operations == 0)
         return fail("n=3: a change must replay for (n-1)=2 extra frames");
-    if (r3 != 0)
+    if (drained_operations != 0)
         return fail("n=3: replay did not drain after (n-1)=2 frames");
 
     printf("PASS: n=3 replays a change for exactly two extra frames, then settles\n");
@@ -350,28 +357,28 @@ static int check_triple_buffer_replays_two_frames(int screen)
 
 int main(void)
 {
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {0};
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
     const int screen = 200;
 
     /* er_reset() between scenarios gives each a clean scene (and drains the damage ring). */
-    int rc = check_double_buffer_replays_one_frame(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    int result = check_double_buffer_replays_one_frame(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
 
-    rc = check_single_buffer_no_replay(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_single_buffer_no_replay(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
 
-    rc = check_triple_buffer_replays_two_frames(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_triple_buffer_replays_two_frames(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 
     return EXIT_SUCCESS;
 }

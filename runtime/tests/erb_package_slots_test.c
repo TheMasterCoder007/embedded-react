@@ -53,8 +53,8 @@ enum
 };
 
 static uint32_t s_flash[ERB_PACKAGE_SLOT_COUNT][SLOT_WORDS];
-static uint32_t s_arena[1024];
-static TPkg s_pkg;
+static uint32_t s_arena[TEST_ARENA_WORDS];
+static TPkg s_package_spec;
 static ErbConfig s_config;
 static ErbPackageSlots s_slots;
 static ErbPackageSlotBoot s_boot;
@@ -71,22 +71,22 @@ static unsigned s_invalidated;
         }                                                                                                              \
     } while (0)
 
-static bool sensors_read(const int32_t* args, int32_t* result, void* context)
+static bool sensors_read(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
-    *result = args[0] + 1;
+    *result = arguments[0] + 1;
     return true;
 }
 
 static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}};
 
-static void null_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void null_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -124,19 +124,19 @@ static void reset(void)
 /** @brief Writes a slot as `embedded-react flash` does. */
 static void install(unsigned slot, uint32_t sequence, int kind)
 {
-    tpkg_base(&s_pkg);
+    tpkg_base(&s_package_spec);
     if (kind == BOOT_TRAP)
     {
-        const uint32_t trap[] = {OP_ABX(TRAP, 0, STR_BOOM)};
-        const TFunction keep = s_pkg.functions[F_BOOT];
-        tpkg_set_code(&s_pkg, F_BOOT, s_pkg.types + keep.types, keep.registers, trap, 1);
+        const uint32_t trap[] = {OP_ABX(TRAP, 0, STRING_BOOM)};
+        const TFunction keep = s_package_spec.functions[FUNCTION_BOOT];
+        tpkg_set_code(&s_package_spec, FUNCTION_BOOT, s_package_spec.types + keep.types, keep.registers, trap, 1);
     }
     if (kind == TOO_BIG)
     {
-        s_pkg.panels[0].arena_bytes = sizeof(s_arena) * 2u;
+        s_package_spec.panels[0].arena_bytes = sizeof(s_arena) * 2u;
     }
     uint8_t* image = (uint8_t*)s_flash[slot];
-    const uint32_t length = tpkg_build(&s_pkg, image + ERB_PACKAGE_SLOT_HEADER_BYTES);
+    const uint32_t length = tpkg_build(&s_package_spec, image + ERB_PACKAGE_SLOT_HEADER_BYTES);
     if (kind == BAD_CRC)
     {
         image[ERB_PACKAGE_SLOT_HEADER_BYTES + length - 1u] ^= 0xFFu;

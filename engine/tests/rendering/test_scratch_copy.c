@@ -38,9 +38,9 @@
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -50,19 +50,23 @@ static int fail(const char* msg)
  * The reference the scratch copy path must match: out.C = src.C + dst.C * (255 - src.A) / 255,
  * with src already premultiplied (as the engine's row buffers always are).
  */
-static uint32_t over(uint32_t d, uint32_t sp)
+static uint32_t over(uint32_t destination, uint32_t source)
 {
-    const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
-    if (sa == 0U)
-        return d;
-    if (sa == 255U)
-        return sp;
-    const uint8_t inv = (uint8_t)(255U - sa);
-    const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv / 255U);
-    const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv / 255U);
-    const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv / 255U);
-    const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv / 255U);
-    return ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+    const uint8_t source_alpha = (uint8_t)((source >> 24) & 0xFFU);
+    if (source_alpha == 0U)
+        return destination;
+    if (source_alpha == ER_ALPHA_OPAQUE)
+        return source;
+    const uint8_t inverse_alpha = (uint8_t)(ER_CHANNEL_MAX - source_alpha);
+    const uint8_t out_alpha =
+        (uint8_t)(source_alpha + (uint32_t)((destination >> 24) & 0xFFU) * inverse_alpha / ER_CHANNEL_MAX);
+    const uint8_t out_red =
+        (uint8_t)(((source >> 16) & 0xFFU) + (uint32_t)((destination >> 16) & 0xFFU) * inverse_alpha / ER_CHANNEL_MAX);
+    const uint8_t out_green =
+        (uint8_t)(((source >> 8) & 0xFFU) + (uint32_t)((destination >> 8) & 0xFFU) * inverse_alpha / ER_CHANNEL_MAX);
+    const uint8_t out_blue =
+        (uint8_t)((source & 0xFFU) + (uint32_t)(destination & 0xFFU) * inverse_alpha / ER_CHANNEL_MAX);
+    return ((uint32_t)out_alpha << 24) | ((uint32_t)out_red << 16) | ((uint32_t)out_green << 8) | out_blue;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -82,29 +86,32 @@ int main(void)
 
     enum
     {
-        W = 4,
-        H = 4
+        SCRATCH_WIDTH = 4,
+        SCRATCH_HEIGHT = 4
     };
-    uint32_t scratch[W * H];
+    uint32_t scratch[SCRATCH_WIDTH * SCRATCH_HEIGHT];
 
     /* Opaque blue background (premultiplied; opaque so straight == premultiplied). */
-    const uint32_t bg = 0xFF0000FFU;
+    const uint32_t background = 0xFF0000FFU;
     /* A premultiplied anti-aliased white edge pixel at ~25% coverage: A=64, and each color
      * channel already scaled by 64/255 = 64. This is the shape draw_glyph_aa emits at a soft edge. */
     const uint32_t edge = 0x40404040U;
 
     /* ---- Partial-alpha copy must blend over the existing background. ---- */
-    for (int i = 0; i < W * H; i++)
-        scratch[i] = bg;
-    er_scratch_begin(scratch, W, H, 0, 0);
+    for (int pixel_index = 0; pixel_index < SCRATCH_WIDTH * SCRATCH_HEIGHT; pixel_index++)
+        scratch[pixel_index] = background;
+    er_scratch_begin(scratch, SCRATCH_WIDTH, SCRATCH_HEIGHT, 0, 0);
     er_blit_copy(&edge, (int)sizeof(uint32_t), 0, 0, 1, 1);
     er_scratch_end();
 
-    const uint32_t expect = over(bg, edge);
-    if (scratch[0] != expect)
+    const uint32_t expected = over(background, edge);
+    if (scratch[0] != expected)
     {
-        fprintf(
-            stderr, "got 0x%08X, expected blended 0x%08X (raw overwrite would be 0x%08X)\n", scratch[0], expect, edge);
+        fprintf(stderr,
+                "got 0x%08X, expected blended 0x%08X (raw overwrite would be 0x%08X)\n",
+                scratch[0],
+                expected,
+                edge);
         return fail("partial-alpha copy into scratch must source-over blend, not overwrite");
     }
     /* The blended result must still carry the blue it was laid over — the fringe bug zeroed it. */
@@ -112,23 +119,23 @@ int main(void)
         return fail("blended pixel lost the background blue underneath (the dark-fringe regression)");
 
     /* ---- Fully-opaque copy overwrites (unchanged fast-path behavior). ---- */
-    for (int i = 0; i < W * H; i++)
-        scratch[i] = bg;
+    for (int pixel_index = 0; pixel_index < SCRATCH_WIDTH * SCRATCH_HEIGHT; pixel_index++)
+        scratch[pixel_index] = background;
     const uint32_t opaque = 0xFFFF0000U; /* red */
-    er_scratch_begin(scratch, W, H, 0, 0);
-    er_blit_copy(&opaque, W * (int)sizeof(uint32_t), 1, 1, 1, 1);
+    er_scratch_begin(scratch, SCRATCH_WIDTH, SCRATCH_HEIGHT, 0, 0);
+    er_blit_copy(&opaque, SCRATCH_WIDTH * (int)sizeof(uint32_t), 1, 1, 1, 1);
     er_scratch_end();
-    if (scratch[1 * W + 1] != opaque)
+    if (scratch[1 * SCRATCH_WIDTH + 1] != opaque)
         return fail("fully-opaque copy into scratch must overwrite");
 
     /* ---- Fully-transparent copy leaves the destination untouched. ---- */
-    for (int i = 0; i < W * H; i++)
-        scratch[i] = bg;
+    for (int pixel_index = 0; pixel_index < SCRATCH_WIDTH * SCRATCH_HEIGHT; pixel_index++)
+        scratch[pixel_index] = background;
     const uint32_t clear = 0x00000000U;
-    er_scratch_begin(scratch, W, H, 0, 0);
-    er_blit_copy(&clear, W * (int)sizeof(uint32_t), 2, 2, 1, 1);
+    er_scratch_begin(scratch, SCRATCH_WIDTH, SCRATCH_HEIGHT, 0, 0);
+    er_blit_copy(&clear, SCRATCH_WIDTH * (int)sizeof(uint32_t), 2, 2, 1, 1);
     er_scratch_end();
-    if (scratch[2 * W + 2] != bg)
+    if (scratch[2 * SCRATCH_WIDTH + 2] != background)
         return fail("fully-transparent copy into scratch must leave the destination unchanged");
 
     printf("PASS: scratch copy blends partial alpha, overwrites opaque, skips transparent\n");

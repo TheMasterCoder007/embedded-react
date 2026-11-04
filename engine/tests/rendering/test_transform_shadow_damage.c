@@ -53,8 +53,9 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 400
-#define FB_H 400
+#define FRAMEBUFFER_WIDTH 400
+#define FRAMEBUFFER_HEIGHT 400
+#define OPACITY_OPAQUE 255U
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -63,9 +64,9 @@
 /** @brief Framebuffer the backend stubs rasterise into. */
 typedef struct
 {
-    uint32_t* fb; /**< Flat premultiplied ARGB8888 framebuffer. */
-    int fb_w;     /**< Width in pixels. */
-    int fb_h;     /**< Height in pixels. */
+    uint32_t* framebuffer;  /**< Flat premultiplied ARGB8888 framebuffer. */
+    int framebuffer_width;  /**< Width in pixels. */
+    int framebuffer_height; /**< Height in pixels. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -73,42 +74,44 @@ typedef struct
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Rounds a 0–65025 product back to 0–255 the way the engine's blenders do. */
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
 /**
  * @brief Backend fill_rect: source-over composites a straight-alpha colour into the framebuffer.
  *
- * @param[in] argb  Straight-alpha ARGB8888 fill colour.
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
- * @param[in] ctx   Pointer to TestCtx.
+ * @param[in] argb    Straight-alpha ARGB8888 fill colour.
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
+ * @param[in] ctx     Pointer to TestCtx.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || w <= 0 || h <= 0)
+    TestCtx* test_context = ctx;
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || width <= 0 || height <= 0)
         return;
-    const uint32_t inv = 255U - a;
-    const uint32_t sr = (argb >> 16) & 0xFFU, sg = (argb >> 8) & 0xFFU, sb = argb & 0xFFU;
+    const uint32_t inverse_alpha = ER_CHANNEL_MAX - alpha;
+    const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU, source_blue = argb & 0xFFU;
 
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
-        if (row < 0 || row >= t->fb_h)
+        if (row < 0 || row >= test_context->framebuffer_height)
             continue;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col < 0 || col >= t->fb_w)
+            if (column < 0 || column >= test_context->framebuffer_width)
                 continue;
-            uint32_t* d = &t->fb[row * t->fb_w + col];
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((div255(sr * a) + div255(dr * inv)) << 16) | ((div255(sg * a) + div255(dg * inv)) << 8)
-                 | (div255(sb * a) + div255(db * inv));
+            uint32_t* destination = &test_context->framebuffer[row * test_context->framebuffer_width + column];
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U | ((div255(source_red * alpha) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((div255(source_green * alpha) + div255(destination_green * inverse_alpha)) << 8)
+                           | (div255(source_blue * alpha) + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -120,39 +123,44 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
  * unconditionally would erase the background under the shadow's own antialiased edge and make the
  * comparison depend on repaint history rather than scene state, which is the whole thing under test.
  *
- * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source  Source pixel buffer (premultiplied ARGB8888).
  * @param[in] stride  Source row stride in bytes.
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    for (int row = 0; row < h; row++)
+    TestCtx* test_context = ctx;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int dx = x + col, dy = y + row;
-            if (dx < 0 || dx >= t->fb_w || dy < 0 || dy >= t->fb_h)
+            const int destination_x = x + column, destination_y = y + row;
+            if (destination_x < 0 || destination_x >= test_context->framebuffer_width || destination_y < 0
+                || destination_y >= test_context->framebuffer_height)
                 continue;
-            const uint32_t sp = s[col];
-            const uint32_t sa = (sp >> 24) & 0xFFU;
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = (source_pixel >> 24) & 0xFFU;
+            if (source_alpha == 0U)
                 continue;
-            uint32_t* d = &t->fb[dy * t->fb_w + dx];
-            if (sa == 0xFFU)
+            uint32_t* destination =
+                &test_context->framebuffer[destination_y * test_context->framebuffer_width + destination_x];
+            if (source_alpha == 0xFFU)
             {
-                *d = sp;
+                *destination = source_pixel;
                 continue;
             }
-            const uint32_t inv = 255U - sa;
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((((sp >> 16) & 0xFFU) + div255(dr * inv)) << 16)
-                 | ((((sp >> 8) & 0xFFU) + div255(dg * inv)) << 8) | ((sp & 0xFFU) + div255(db * inv));
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U
+                           | ((((source_pixel >> 16) & 0xFFU) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((((source_pixel >> 8) & 0xFFU) + div255(destination_green * inverse_alpha)) << 8)
+                           | ((source_pixel & 0xFFU) + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -163,38 +171,42 @@ static void copy_cb(const void* src, int stride, int x, int y, int w, int h, voi
  * This is the callback the shadow itself arrives through, so its fidelity is what makes a missing
  * shadow band show up as a pixel difference.
  *
- * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source  Source pixel buffer (premultiplied ARGB8888).
  * @param[in] stride  Source row stride in bytes.
  * @param[in] alpha   Global alpha scale 0–255.
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    for (int row = 0; row < h; row++)
+    TestCtx* test_context = ctx;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int dx = x + col, dy = y + row;
-            if (dx < 0 || dx >= t->fb_w || dy < 0 || dy >= t->fb_h)
+            const int destination_x = x + column, destination_y = y + row;
+            if (destination_x < 0 || destination_x >= test_context->framebuffer_width || destination_y < 0
+                || destination_y >= test_context->framebuffer_height)
                 continue;
-            const uint32_t sp = s[col];
-            const uint32_t sa = div255(((sp >> 24) & 0xFFU) * (uint32_t)alpha);
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = div255(((source_pixel >> 24) & 0xFFU) * (uint32_t)alpha);
+            if (source_alpha == 0U)
                 continue;
-            const uint32_t inv = 255U - sa;
-            const uint32_t sr = div255(((sp >> 16) & 0xFFU) * (uint32_t)alpha);
-            const uint32_t sg = div255(((sp >> 8) & 0xFFU) * (uint32_t)alpha);
-            const uint32_t sb = div255((sp & 0xFFU) * (uint32_t)alpha);
-            uint32_t* d = &t->fb[dy * t->fb_w + dx];
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8)
-                 | (sb + div255(db * inv));
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            const uint32_t source_red = div255(((source_pixel >> 16) & 0xFFU) * (uint32_t)alpha);
+            const uint32_t source_green = div255(((source_pixel >> 8) & 0xFFU) * (uint32_t)alpha);
+            const uint32_t source_blue = div255((source_pixel & 0xFFU) * (uint32_t)alpha);
+            uint32_t* destination =
+                &test_context->framebuffer[destination_y * test_context->framebuffer_width + destination_x];
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                           | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                           | (source_blue + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -206,33 +218,33 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 /**
  * @brief Prints a failure message.
  *
- * @param[in] msg  Message describing the failed assertion.
+ * @param[in] message  Message describing the failed assertion.
  *
  * @return EXIT_FAILURE, so callers can `return fail(...)`.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
 /** @brief ERProps with every layout field at AUTO — the documented starting point. */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    p.shadow_color = 0xFF000000U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    props.shadow_color = 0xFF000000U;
+    return props;
 }
 
 #if ERUI_SHADOWS && ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W < ERUI_SCRATCH_W) && (ERUI_XFORM_H < ERUI_SCRATCH_H)
@@ -244,16 +256,16 @@ static ERProps props_default(void)
 #define CAPTURED_SIDE (ERUI_XFORM_W / 2)
 
 /** @brief Gives a node a shadow big enough that a clipped band is unmistakable. */
-static void set_shadow(ERProps* p)
+static void set_shadow(ERProps* props)
 {
-    p->shadow_opacity = 0.8f;
-    p->shadow_radius = 10;
-    p->shadow_offset_x = 6;
-    p->shadow_offset_y = 6;
+    props->shadow_opacity = 0.8f;
+    props->shadow_radius = 10;
+    props->shadow_offset_x = 6;
+    props->shadow_offset_y = 6;
 }
 
-static uint32_t g_fb[FB_H * FB_W];
-static uint32_t g_snap[FB_H * FB_W];
+static uint32_t g_framebuffer[FRAMEBUFFER_HEIGHT * FRAMEBUFFER_WIDTH];
+static uint32_t g_snapshot[FRAMEBUFFER_HEIGHT * FRAMEBUFFER_WIDTH];
 
 /**
  * @brief Compares the saved damage-clipped frame against the framebuffer's current (full-repaint) state.
@@ -264,26 +276,26 @@ static uint32_t g_snap[FB_H * FB_W];
  */
 static int compare_to_full_repaint(const char* label)
 {
-    int bad = 0, x0 = FB_W, y0 = FB_H, x1 = -1, y1 = -1;
-    for (int r = 0; r < FB_H; r++)
+    int bad = 0, min_x = FRAMEBUFFER_WIDTH, min_y = FRAMEBUFFER_HEIGHT, max_x = -1, max_y = -1;
+    for (int row = 0; row < FRAMEBUFFER_HEIGHT; row++)
     {
-        for (int c = 0; c < FB_W; c++)
+        for (int column = 0; column < FRAMEBUFFER_WIDTH; column++)
         {
-            if (g_snap[r * FB_W + c] == g_fb[r * FB_W + c])
+            if (g_snapshot[row * FRAMEBUFFER_WIDTH + column] == g_framebuffer[row * FRAMEBUFFER_WIDTH + column])
                 continue;
             bad++;
-            if (c < x0)
-                x0 = c;
-            if (r < y0)
-                y0 = r;
-            if (c > x1)
-                x1 = c;
-            if (r > y1)
-                y1 = r;
+            if (column < min_x)
+                min_x = column;
+            if (row < min_y)
+                min_y = row;
+            if (column > max_x)
+                max_x = column;
+            if (row > max_y)
+                max_y = row;
         }
     }
     if (bad)
-        printf("  %-44s %d px differ, region %d,%d..%d,%d\n", label, bad, x0, y0, x1, y1);
+        printf("  %-44s %d px differ, region %d,%d..%d,%d\n", label, bad, min_x, min_y, max_x, max_y);
     else
         printf("  %-44s identical\n", label);
     return bad;
@@ -296,42 +308,42 @@ static int compare_to_full_repaint(const char* label)
  * shrinking the bar above it moves the card WITHOUT making it source_dirty, which is precisely the case
  * that has to reason about the vacated footprint — the old shadow — on its own.
  *
- * @param[in] side    Card size; > ERUI_XFORM_W makes its scratch capture fail.
- * @param[in] bar_h0  Bar height before the reflow.
- * @param[in] bar_h1  Bar height after it.
- * @param[in] label   Scenario name for the report.
+ * @param[in] side               Card size; > ERUI_XFORM_W makes its scratch capture fail.
+ * @param[in] bar_height_before  Bar height before the reflow.
+ * @param[in] bar_height_after   Bar height after it.
+ * @param[in] label              Scenario name for the report.
  *
  * @return Number of differing pixels.
  */
-static int reflow_case(int side, int bar_h0, int bar_h1, const char* label)
+static int reflow_case(int side, int bar_height_before, int bar_height_after, const char* label)
 {
     er_reset();
-    memset(g_fb, 0, sizeof g_fb);
+    memset(g_framebuffer, 0, sizeof g_framebuffer);
 
     ERNode* root = er_node_create(ER_NODE_VIEW); /* default flex column */
-    ERProps rp = props_default();
-    rp.width = FB_W;
-    rp.height = FB_H;
-    rp.background_color = 0xFFFFFFFFU; /* opaque, so a missed erase really shows */
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = FRAMEBUFFER_WIDTH;
+    root_props.height = FRAMEBUFFER_HEIGHT;
+    root_props.background_color = 0xFFFFFFFFU; /* opaque, so a missed erase really shows */
+    er_node_set_props(root, &root_props);
 
     ERNode* bar = er_node_create(ER_NODE_VIEW);
-    ERProps ap = props_default();
-    ap.width = FB_W;
-    ap.height = (int16_t)bar_h0;
-    ap.background_color = 0xFF333333U;
-    er_node_set_props(bar, &ap);
+    ERProps bar_props = props_default();
+    bar_props.width = FRAMEBUFFER_WIDTH;
+    bar_props.height = (int16_t)bar_height_before;
+    bar_props.background_color = 0xFF333333U;
+    er_node_set_props(bar, &bar_props);
 
     ERNode* card = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.width = (int16_t)side;
-    cp.height = (int16_t)side;
-    cp.margin_left = 60;
-    cp.background_color = 0xFF3366FFU;
-    cp.transform_scale_x = 0.9f; /* non-translate → the transformed damage branch */
-    cp.transform_scale_y = 0.9f;
-    set_shadow(&cp);
-    er_node_set_props(card, &cp);
+    ERProps card_props = props_default();
+    card_props.width = (int16_t)side;
+    card_props.height = (int16_t)side;
+    card_props.margin_left = 60;
+    card_props.background_color = 0xFF3366FFU;
+    card_props.transform_scale_x = 0.9f; /* non-translate → the transformed damage branch */
+    card_props.transform_scale_y = 0.9f;
+    set_shadow(&card_props);
+    er_node_set_props(card, &card_props);
 
     er_tree_append_child(root, bar);
     er_tree_append_child(root, card);
@@ -341,10 +353,10 @@ static int reflow_case(int side, int bar_h0, int bar_h1, const char* label)
     er_commit();
     er_commit(); /* settle: the card has a last-painted footprint now */
 
-    ap.height = (int16_t)bar_h1;
-    er_node_set_props(bar, &ap);
+    bar_props.height = (int16_t)bar_height_after;
+    er_node_set_props(bar, &bar_props);
     er_commit(); /* the frame under test: damage-clipped */
-    memcpy(g_snap, g_fb, sizeof g_fb);
+    memcpy(g_snapshot, g_framebuffer, sizeof g_framebuffer);
 
     er_force_full_repaint();
     er_commit(); /* the reference */
@@ -366,28 +378,28 @@ static int reflow_case(int side, int bar_h0, int bar_h1, const char* label)
 static int resize_case(int from, int to, const char* label)
 {
     er_reset();
-    memset(g_fb, 0, sizeof g_fb);
+    memset(g_framebuffer, 0, sizeof g_framebuffer);
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.position = ER_POS_RELATIVE;
-    rp.width = FB_W;
-    rp.height = FB_H;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.position = ER_POS_RELATIVE;
+    root_props.width = FRAMEBUFFER_WIDTH;
+    root_props.height = FRAMEBUFFER_HEIGHT;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     ERNode* card = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.position = ER_POS_ABSOLUTE;
-    cp.left = 60;
-    cp.top = 60;
-    cp.width = (int16_t)from;
-    cp.height = (int16_t)from;
-    cp.background_color = 0xFF3366FFU;
-    cp.transform_scale_x = 0.9f;
-    cp.transform_scale_y = 0.9f;
-    set_shadow(&cp);
-    er_node_set_props(card, &cp);
+    ERProps card_props = props_default();
+    card_props.position = ER_POS_ABSOLUTE;
+    card_props.left = 60;
+    card_props.top = 60;
+    card_props.width = (int16_t)from;
+    card_props.height = (int16_t)from;
+    card_props.background_color = 0xFF3366FFU;
+    card_props.transform_scale_x = 0.9f;
+    card_props.transform_scale_y = 0.9f;
+    set_shadow(&card_props);
+    er_node_set_props(card, &card_props);
 
     er_tree_append_child(root, card);
     er_tree_set_root(root);
@@ -396,11 +408,11 @@ static int resize_case(int from, int to, const char* label)
     er_commit();
     er_commit();
 
-    cp.width = (int16_t)to;
-    cp.height = (int16_t)to;
-    er_node_set_props(card, &cp);
+    card_props.width = (int16_t)to;
+    card_props.height = (int16_t)to;
+    er_node_set_props(card, &card_props);
     er_commit();
-    memcpy(g_snap, g_fb, sizeof g_fb);
+    memcpy(g_snapshot, g_framebuffer, sizeof g_framebuffer);
 
     er_force_full_repaint();
     er_commit();
@@ -418,13 +430,13 @@ static int resize_case(int from, int to, const char* label)
 int main(void)
 {
 #ifdef XFORM_SHADOW_GAP
-    TestCtx ctx = {g_fb, FB_W, FB_H};
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    be.ctx = &ctx;
-    embedded_renderer_set_backend(&be);
+    TestCtx ctx = {g_framebuffer, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    EmbeddedRenderBackend backend = {0};
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    backend.ctx = &ctx;
+    embedded_renderer_set_backend(&backend);
 
     printf("transform limit %dx%d, shadow limit %dx%d → fallback side %d, captured side %d\n",
            ERUI_XFORM_W,

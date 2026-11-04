@@ -26,19 +26,20 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 320
-#define FB_H 240
+#define FRAMEBUFFER_WIDTH 320
+#define FRAMEBUFFER_HEIGHT 240
+#define OPACITY_OPAQUE 255U
 
 /* Width the wrapping text nodes are constrained to; narrow enough to force wrapping. */
-#define TEXT_BOX_W 120
+#define TEXT_BOX_WIDTH 120
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /* Captured computed height for each text node, written by its ER_EVENT_LAYOUT handler. */
-static int s_one_line_h = -1;
-static int s_two_line_h = -1;
+static int s_one_line_height = -1;
+static int s_two_line_height = -1;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -47,66 +48,66 @@ static int s_two_line_h = -1;
 /**
  * @brief No-op fill_rect backend callback.
  *
- * @param[in] argb  Fill color (unused).
- * @param[in] x     Left edge (unused).
- * @param[in] y     Top edge (unused).
- * @param[in] w     Width (unused).
- * @param[in] h     Height (unused).
- * @param[in] ctx   Opaque context (unused).
+ * @param[in] argb    Fill color (unused).
+ * @param[in] x       Left edge (unused).
+ * @param[in] y       Top edge (unused).
+ * @param[in] width   Width (unused).
+ * @param[in] height  Height (unused).
+ * @param[in] ctx     Opaque context (unused).
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief No-op copy_rect backend callback.
  *
- * @param[in] src  Source buffer (unused).
- * @param[in] s    Stride (unused).
- * @param[in] x    X (unused).
- * @param[in] y    Y (unused).
- * @param[in] w    Width (unused).
- * @param[in] h    Height (unused).
- * @param[in] ctx  Opaque context (unused).
+ * @param[in] source  Source buffer (unused).
+ * @param[in] stride  Stride (unused).
+ * @param[in] x       X (unused).
+ * @param[in] y       Y (unused).
+ * @param[in] width   Width (unused).
+ * @param[in] height  Height (unused).
+ * @param[in] ctx     Opaque context (unused).
  */
-static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
+    (void)source;
+    (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief No-op blend_rect backend callback.
  *
- * @param[in] src  Source buffer (unused).
- * @param[in] s    Stride (unused).
- * @param[in] a    Global alpha (unused).
- * @param[in] x    X (unused).
- * @param[in] y    Y (unused).
- * @param[in] w    Width (unused).
- * @param[in] h    Height (unused).
- * @param[in] ctx  Opaque context (unused).
+ * @param[in] source  Source buffer (unused).
+ * @param[in] stride  Stride (unused).
+ * @param[in] first   Global alpha (unused).
+ * @param[in] x       X (unused).
+ * @param[in] y       Y (unused).
+ * @param[in] width   Width (unused).
+ * @param[in] height  Height (unused).
+ * @param[in] ctx     Opaque context (unused).
  */
-static void blend_cb(const void* src, int s, uint8_t a, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t first, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
-    (void)a;
+    (void)source;
+    (void)stride;
+    (void)first;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -126,13 +127,13 @@ static void on_layout(ERNode* node, const EREventData* data, void* user_data)
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable description of the failed assertion.
+ * @param[in] message  Human-readable description of the failed assertion.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -156,21 +157,21 @@ static void on_layout_rect(ERNode* node, const EREventData* data, void* user_dat
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.padding_horizontal = p.padding_vertical = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.margin_horizontal = p.margin_vertical = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.padding_horizontal = props.padding_vertical = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.margin_horizontal = props.margin_vertical = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
@@ -184,35 +185,35 @@ static ERProps props_default(void)
  */
 static int lines_at(const char* text, int width, int* out_width)
 {
-    ERTextRenderParams p;
-    memset(&p, 0, sizeof(p));
-    p.text = text;
-    p.font_size = 14;
-    int w = 0, n = 0;
-    er_text_measure_lines(&p, width, &w, &n);
+    ERTextRenderParams params;
+    memset(&params, 0, sizeof(params));
+    params.text = text;
+    params.font_size = 14;
+    int widest = 0, line_count = 0;
+    er_text_measure_lines(&params, width, &widest, &line_count);
     if (out_width)
-        *out_width = w;
-    return n;
+        *out_width = widest;
+    return line_count;
 }
 
 /**
  * @brief Creates a 14 px Text node that records its computed rect.
  *
- * @param[in]  p     Props to apply; the text and font size are set here.
- * @param[in]  text  String to show.
- * @param[out] cap   ERRect that receives the node's computed rect via ER_EVENT_LAYOUT.
+ * @param[in]  props     Props to apply; the text and font size are set here.
+ * @param[in]  text      String to show.
+ * @param[out] out_rect  ERRect that receives the node's computed rect via ER_EVENT_LAYOUT.
  *
  * @return The created node.
  */
-static ERNode* mk_text(ERProps p, const char* text, ERRect* cap)
+static ERNode* mk_text(ERProps props, const char* text, ERRect* out_rect)
 {
-    ERNode* n = er_node_create(ER_NODE_TEXT);
-    p.font_size = 14;
-    strncpy(p.text, text, ER_TEXT_MAX);
-    er_node_set_props(n, &p);
-    *cap = (ERRect){-1, -1, -1, -1};
-    er_event_set(n, ER_EVENT_LAYOUT, on_layout_rect, cap);
-    return n;
+    ERNode* node = er_node_create(ER_NODE_TEXT);
+    props.font_size = 14;
+    strncpy(props.text, text, ER_TEXT_MAX);
+    er_node_set_props(node, &props);
+    *out_rect = (ERRect){-1, -1, -1, -1};
+    er_event_set(node, ER_EVENT_LAYOUT, on_layout_rect, out_rect);
+    return node;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -234,42 +235,42 @@ int main(void)
     /* Smoke: er_commit with no root must not crash. */
     er_commit();
 
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
+    embedded_renderer_set_backend(&backend);
 
     static const char* k_long = "This is a long string that must wrap across multiple lines when constrained";
 
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = (int16_t)FB_W;
-    rp.height = (int16_t)FB_H;
-    rp.flex_direction = ER_FLEX_COL;
-    rp.align_items = ER_ALIGN_FLEX_START;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
+    root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
+    root_props.flex_direction = ER_FLEX_COL;
+    root_props.align_items = ER_ALIGN_FLEX_START;
+    er_node_set_props(root, &root_props);
 
     /* One-line text node, width-constrained. */
     ERNode* one = er_node_create(ER_NODE_TEXT);
-    ERProps op = props_default();
-    op.width = TEXT_BOX_W;
-    op.font_size = 14;
-    op.number_of_lines = 1;
-    op.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
-    strncpy(op.text, k_long, ER_TEXT_MAX);
-    er_node_set_props(one, &op);
-    er_event_set(one, ER_EVENT_LAYOUT, on_layout, &s_one_line_h);
+    ERProps one_props = props_default();
+    one_props.width = TEXT_BOX_WIDTH;
+    one_props.font_size = 14;
+    one_props.number_of_lines = 1;
+    one_props.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    strncpy(one_props.text, k_long, ER_TEXT_MAX);
+    er_node_set_props(one, &one_props);
+    er_event_set(one, ER_EVENT_LAYOUT, on_layout, &s_one_line_height);
 
     /* Two-line text node, identical text and width. */
     ERNode* two = er_node_create(ER_NODE_TEXT);
-    ERProps tp = props_default();
-    tp.width = TEXT_BOX_W;
-    tp.font_size = 14;
-    tp.number_of_lines = 2;
-    tp.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
-    strncpy(tp.text, k_long, ER_TEXT_MAX);
-    er_node_set_props(two, &tp);
-    er_event_set(two, ER_EVENT_LAYOUT, on_layout, &s_two_line_h);
+    ERProps two_props = props_default();
+    two_props.width = TEXT_BOX_WIDTH;
+    two_props.font_size = 14;
+    two_props.number_of_lines = 2;
+    two_props.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    strncpy(two_props.text, k_long, ER_TEXT_MAX);
+    er_node_set_props(two, &two_props);
+    er_event_set(two, ER_EVENT_LAYOUT, on_layout, &s_two_line_height);
 
     er_tree_append_child(root, one);
     er_tree_append_child(root, two);
@@ -277,14 +278,14 @@ int main(void)
 
     er_commit();
 
-    if (s_one_line_h <= 0)
+    if (s_one_line_height <= 0)
         return fail("one-line text node reported non-positive computed height");
-    if (s_two_line_h <= 0)
+    if (s_two_line_height <= 0)
         return fail("two-line text node reported non-positive computed height");
-    if (s_two_line_h <= s_one_line_h)
+    if (s_two_line_height <= s_one_line_height)
         return fail("number_of_lines=2 did not reserve more height than number_of_lines=1");
     /* Two lines should be roughly twice one line; allow generous tolerance. */
-    if (s_two_line_h < s_one_line_h + s_one_line_h / 2)
+    if (s_two_line_height < s_one_line_height + s_one_line_height / 2)
         return fail("two-line height is not close to twice the one-line height");
 
     /* -----------------------------------------------------------------------
@@ -294,34 +295,34 @@ int main(void)
     {
         er_reset();
 
-        ERNode* ar_root = er_node_create(ER_NODE_VIEW);
-        ERProps ap = props_default();
-        ap.width = 200;
-        ap.height = 200;
-        ap.flex_direction = ER_FLEX_ROW;
-        ap.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(ar_root, &ap);
+        ERNode* aspect_root = er_node_create(ER_NODE_VIEW);
+        ERProps aspect_root_props = props_default();
+        aspect_root_props.width = 200;
+        aspect_root_props.height = 200;
+        aspect_root_props.flex_direction = ER_FLEX_ROW;
+        aspect_root_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(aspect_root, &aspect_root_props);
 
-        ERNode* ar_child = er_node_create(ER_NODE_VIEW);
-        ERRect ar_rect = {-1, -1, -1, -1};
-        ap = props_default();
-        ap.width = 100;
-        ap.aspect_ratio = 2.0f; /* width/height = 2 → height = 50 */
-        er_node_set_props(ar_child, &ap);
-        er_event_set(ar_child, ER_EVENT_LAYOUT, on_layout_rect, &ar_rect);
+        ERNode* aspect_child = er_node_create(ER_NODE_VIEW);
+        ERRect aspect_rect = {-1, -1, -1, -1};
+        aspect_root_props = props_default();
+        aspect_root_props.width = 100;
+        aspect_root_props.aspect_ratio = 2.0f; /* width/height = 2 → height = 50 */
+        er_node_set_props(aspect_child, &aspect_root_props);
+        er_event_set(aspect_child, ER_EVENT_LAYOUT, on_layout_rect, &aspect_rect);
 
-        er_tree_append_child(ar_root, ar_child);
-        er_tree_set_root(ar_root);
+        er_tree_append_child(aspect_root, aspect_child);
+        er_tree_set_root(aspect_root);
         er_commit();
 
-        if (ar_rect.w != 100)
+        if (aspect_rect.w != 100)
             return fail("aspectRatio: child width should be 100");
-        if (ar_rect.h != 50)
+        if (aspect_rect.h != 50)
             return fail("aspectRatio: child height should be 50 (width/ratio=100/2)");
 
-        er_tree_remove_child(ar_root, ar_child);
-        er_node_destroy(ar_child);
-        er_node_destroy(ar_root);
+        er_tree_remove_child(aspect_root, aspect_child);
+        er_node_destroy(aspect_child);
+        er_node_destroy(aspect_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -331,31 +332,31 @@ int main(void)
     {
         er_reset();
 
-        ERNode* pct_root = er_node_create(ER_NODE_VIEW);
-        ERProps pp = props_default();
-        pp.width = 200;
-        pp.height = 80;
-        pp.flex_direction = ER_FLEX_ROW;
-        pp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(pct_root, &pp);
+        ERNode* percent_root = er_node_create(ER_NODE_VIEW);
+        ERProps percent_root_props = props_default();
+        percent_root_props.width = 200;
+        percent_root_props.height = 80;
+        percent_root_props.flex_direction = ER_FLEX_ROW;
+        percent_root_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(percent_root, &percent_root_props);
 
-        ERNode* pct_child = er_node_create(ER_NODE_VIEW);
-        ERRect pct_rect = {-1, -1, -1, -1};
-        pp = props_default();
-        pp.flex_basis_pct = 50.0f;
-        er_node_set_props(pct_child, &pp);
-        er_event_set(pct_child, ER_EVENT_LAYOUT, on_layout_rect, &pct_rect);
+        ERNode* percent_child = er_node_create(ER_NODE_VIEW);
+        ERRect percent_rect = {-1, -1, -1, -1};
+        percent_root_props = props_default();
+        percent_root_props.flex_basis_pct = 50.0f;
+        er_node_set_props(percent_child, &percent_root_props);
+        er_event_set(percent_child, ER_EVENT_LAYOUT, on_layout_rect, &percent_rect);
 
-        er_tree_append_child(pct_root, pct_child);
-        er_tree_set_root(pct_root);
+        er_tree_append_child(percent_root, percent_child);
+        er_tree_set_root(percent_root);
         er_commit();
 
-        if (pct_rect.w != 100)
+        if (percent_rect.w != 100)
             return fail("flex_basis_pct: 50% of 200px parent should yield width=100");
 
-        er_tree_remove_child(pct_root, pct_child);
-        er_node_destroy(pct_child);
-        er_node_destroy(pct_root);
+        er_tree_remove_child(percent_root, percent_child);
+        er_node_destroy(percent_child);
+        er_node_destroy(percent_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -365,34 +366,34 @@ int main(void)
     {
         er_reset();
 
-        ERNode* mh_root = er_node_create(ER_NODE_VIEW);
-        ERProps mp = props_default();
-        mp.width = 200;
-        mp.height = 200;
-        mp.flex_direction = ER_FLEX_COL;
-        mp.align_items = ER_ALIGN_STRETCH;
-        er_node_set_props(mh_root, &mp);
+        ERNode* margin_root = er_node_create(ER_NODE_VIEW);
+        ERProps margin_root_props = props_default();
+        margin_root_props.width = 200;
+        margin_root_props.height = 200;
+        margin_root_props.flex_direction = ER_FLEX_COL;
+        margin_root_props.align_items = ER_ALIGN_STRETCH;
+        er_node_set_props(margin_root, &margin_root_props);
 
-        ERNode* mh_child = er_node_create(ER_NODE_VIEW);
-        ERRect mh_rect = {-1, -1, -1, -1};
-        mp = props_default();
-        mp.height = 40;
-        mp.margin_horizontal = 20;
-        er_node_set_props(mh_child, &mp);
-        er_event_set(mh_child, ER_EVENT_LAYOUT, on_layout_rect, &mh_rect);
+        ERNode* margin_child = er_node_create(ER_NODE_VIEW);
+        ERRect margin_rect = {-1, -1, -1, -1};
+        margin_root_props = props_default();
+        margin_root_props.height = 40;
+        margin_root_props.margin_horizontal = 20;
+        er_node_set_props(margin_child, &margin_root_props);
+        er_event_set(margin_child, ER_EVENT_LAYOUT, on_layout_rect, &margin_rect);
 
-        er_tree_append_child(mh_root, mh_child);
-        er_tree_set_root(mh_root);
+        er_tree_append_child(margin_root, margin_child);
+        er_tree_set_root(margin_root);
         er_commit();
 
-        if (mh_rect.x != 20)
+        if (margin_rect.x != 20)
             return fail("marginHorizontal: child should be offset 20px from parent left");
-        if (mh_rect.w != 160)
+        if (margin_rect.w != 160)
             return fail("marginHorizontal: child width should be 160 (200 - 20*2)");
 
-        er_tree_remove_child(mh_root, mh_child);
-        er_node_destroy(mh_child);
-        er_node_destroy(mh_root);
+        er_tree_remove_child(margin_root, margin_child);
+        er_node_destroy(margin_child);
+        er_node_destroy(margin_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -402,34 +403,34 @@ int main(void)
     {
         er_reset();
 
-        ERNode* ph_root = er_node_create(ER_NODE_VIEW);
-        ERProps php = props_default();
-        php.width = 200;
-        php.height = 200;
-        php.flex_direction = ER_FLEX_COL;
-        php.align_items = ER_ALIGN_STRETCH;
-        php.padding_horizontal = 15;
-        er_node_set_props(ph_root, &php);
+        ERNode* padding_root = er_node_create(ER_NODE_VIEW);
+        ERProps padding_root_props = props_default();
+        padding_root_props.width = 200;
+        padding_root_props.height = 200;
+        padding_root_props.flex_direction = ER_FLEX_COL;
+        padding_root_props.align_items = ER_ALIGN_STRETCH;
+        padding_root_props.padding_horizontal = 15;
+        er_node_set_props(padding_root, &padding_root_props);
 
-        ERNode* ph_child = er_node_create(ER_NODE_VIEW);
-        ERRect ph_rect = {-1, -1, -1, -1};
-        php = props_default();
-        php.height = 40;
-        er_node_set_props(ph_child, &php);
-        er_event_set(ph_child, ER_EVENT_LAYOUT, on_layout_rect, &ph_rect);
+        ERNode* padding_child = er_node_create(ER_NODE_VIEW);
+        ERRect padding_rect = {-1, -1, -1, -1};
+        padding_root_props = props_default();
+        padding_root_props.height = 40;
+        er_node_set_props(padding_child, &padding_root_props);
+        er_event_set(padding_child, ER_EVENT_LAYOUT, on_layout_rect, &padding_rect);
 
-        er_tree_append_child(ph_root, ph_child);
-        er_tree_set_root(ph_root);
+        er_tree_append_child(padding_root, padding_child);
+        er_tree_set_root(padding_root);
         er_commit();
 
-        if (ph_rect.x != 15)
+        if (padding_rect.x != 15)
             return fail("paddingHorizontal: child should start at x=15");
-        if (ph_rect.w != 170)
+        if (padding_rect.w != 170)
             return fail("paddingHorizontal: child width should be 170 (200 - 15*2)");
 
-        er_tree_remove_child(ph_root, ph_child);
-        er_node_destroy(ph_child);
-        er_node_destroy(ph_root);
+        er_tree_remove_child(padding_root, padding_child);
+        er_node_destroy(padding_child);
+        er_node_destroy(padding_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -449,86 +450,86 @@ int main(void)
 
         er_reset();
 
-        ERNode* tp_root = er_node_create(ER_NODE_VIEW);
-        ERProps trp = props_default();
-        trp.width = (int16_t)FB_W;
-        trp.height = (int16_t)FB_H;
-        trp.flex_direction = ER_FLEX_COL;
-        trp.align_items = ER_ALIGN_FLEX_START; /* shrink-wrap each child onto its own content */
-        er_node_set_props(tp_root, &trp);
+        ERNode* text_padding_root = er_node_create(ER_NODE_VIEW);
+        ERProps text_padding_root_props = props_default();
+        text_padding_root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
+        text_padding_root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
+        text_padding_root_props.flex_direction = ER_FLEX_COL;
+        text_padding_root_props.align_items = ER_ALIGN_FLEX_START; /* shrink-wrap each child onto its own content */
+        er_node_set_props(text_padding_root, &text_padding_root_props);
 
         /* Baseline: no padding. */
-        ERNode* t_bare = er_node_create(ER_NODE_TEXT);
-        ERRect r_bare = {-1, -1, -1, -1};
-        ERProps bp = props_default();
-        bp.font_size = 14;
-        strncpy(bp.text, k_word, ER_TEXT_MAX);
-        er_node_set_props(t_bare, &bp);
-        er_event_set(t_bare, ER_EVENT_LAYOUT, on_layout_rect, &r_bare);
+        ERNode* bare_text = er_node_create(ER_NODE_TEXT);
+        ERRect bare_rect = {-1, -1, -1, -1};
+        ERProps bare_text_props = props_default();
+        bare_text_props.font_size = 14;
+        strncpy(bare_text_props.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(bare_text, &bare_text_props);
+        er_event_set(bare_text, ER_EVENT_LAYOUT, on_layout_rect, &bare_rect);
 
         /* Uniform shorthand: +8 on all four edges. */
-        ERNode* t_pad = er_node_create(ER_NODE_TEXT);
-        ERRect r_pad = {-1, -1, -1, -1};
-        ERProps pp2 = props_default();
-        pp2.font_size = 14;
-        pp2.padding = 8;
-        strncpy(pp2.text, k_word, ER_TEXT_MAX);
-        er_node_set_props(t_pad, &pp2);
-        er_event_set(t_pad, ER_EVENT_LAYOUT, on_layout_rect, &r_pad);
+        ERNode* padded_text = er_node_create(ER_NODE_TEXT);
+        ERRect padded_rect = {-1, -1, -1, -1};
+        ERProps padded_text_props = props_default();
+        padded_text_props.font_size = 14;
+        padded_text_props.padding = 8;
+        strncpy(padded_text_props.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(padded_text, &padded_text_props);
+        er_event_set(padded_text, ER_EVENT_LAYOUT, on_layout_rect, &padded_rect);
 
         /* Per-edge + paddingHorizontal, asymmetric so a swapped axis cannot pass. */
-        ERNode* t_edges = er_node_create(ER_NODE_TEXT);
-        ERRect r_edges = {-1, -1, -1, -1};
-        ERProps ep = props_default();
-        ep.font_size = 14;
-        ep.padding_horizontal = 10;
-        ep.padding_top = 3;
-        ep.padding_bottom = 7;
-        strncpy(ep.text, k_word, ER_TEXT_MAX);
-        er_node_set_props(t_edges, &ep);
-        er_event_set(t_edges, ER_EVENT_LAYOUT, on_layout_rect, &r_edges);
+        ERNode* edges_text = er_node_create(ER_NODE_TEXT);
+        ERRect edges_rect = {-1, -1, -1, -1};
+        ERProps edges_text_props = props_default();
+        edges_text_props.font_size = 14;
+        edges_text_props.padding_horizontal = 10;
+        edges_text_props.padding_top = 3;
+        edges_text_props.padding_bottom = 7;
+        strncpy(edges_text_props.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(edges_text, &edges_text_props);
+        er_event_set(edges_text, ER_EVENT_LAYOUT, on_layout_rect, &edges_rect);
 
         /* Explicit size: padding lives INSIDE it (border-box), as everywhere else here. */
-        ERNode* t_fixed = er_node_create(ER_NODE_TEXT);
-        ERRect r_fixed = {-1, -1, -1, -1};
-        ERProps fp = props_default();
-        fp.font_size = 14;
-        fp.width = 100;
-        fp.height = 40;
-        fp.padding = 8;
-        strncpy(fp.text, k_word, ER_TEXT_MAX);
-        er_node_set_props(t_fixed, &fp);
-        er_event_set(t_fixed, ER_EVENT_LAYOUT, on_layout_rect, &r_fixed);
+        ERNode* fixed_text = er_node_create(ER_NODE_TEXT);
+        ERRect fixed_rect = {-1, -1, -1, -1};
+        ERProps fixed_text_props = props_default();
+        fixed_text_props.font_size = 14;
+        fixed_text_props.width = 100;
+        fixed_text_props.height = 40;
+        fixed_text_props.padding = 8;
+        strncpy(fixed_text_props.text, k_word, ER_TEXT_MAX);
+        er_node_set_props(fixed_text, &fixed_text_props);
+        er_event_set(fixed_text, ER_EVENT_LAYOUT, on_layout_rect, &fixed_rect);
 
-        er_tree_append_child(tp_root, t_bare);
-        er_tree_append_child(tp_root, t_pad);
-        er_tree_append_child(tp_root, t_edges);
-        er_tree_append_child(tp_root, t_fixed);
-        er_tree_set_root(tp_root);
+        er_tree_append_child(text_padding_root, bare_text);
+        er_tree_append_child(text_padding_root, padded_text);
+        er_tree_append_child(text_padding_root, edges_text);
+        er_tree_append_child(text_padding_root, fixed_text);
+        er_tree_set_root(text_padding_root);
         er_commit();
 
-        if (r_bare.w <= 0 || r_bare.h <= 0)
+        if (bare_rect.w <= 0 || bare_rect.h <= 0)
             return fail("text padding: unpadded baseline measured non-positive");
-        if (r_pad.w != r_bare.w + 16)
+        if (padded_rect.w != bare_rect.w + 16)
             return fail("text padding: padding=8 did not widen the auto text node by 16");
-        if (r_pad.h != r_bare.h + 16)
+        if (padded_rect.h != bare_rect.h + 16)
             return fail("text padding: padding=8 did not heighten the auto text node by 16");
-        if (r_edges.w != r_bare.w + 20)
+        if (edges_rect.w != bare_rect.w + 20)
             return fail("text padding: paddingHorizontal=10 did not widen the text node by 20");
-        if (r_edges.h != r_bare.h + 10)
+        if (edges_rect.h != bare_rect.h + 10)
             return fail("text padding: paddingTop=3 + paddingBottom=7 did not add 10 to the height");
-        if (r_fixed.w != 100 || r_fixed.h != 40)
+        if (fixed_rect.w != 100 || fixed_rect.h != 40)
             return fail("text padding: an explicit width/height must already include its padding");
 
-        er_tree_remove_child(tp_root, t_bare);
-        er_tree_remove_child(tp_root, t_pad);
-        er_tree_remove_child(tp_root, t_edges);
-        er_tree_remove_child(tp_root, t_fixed);
-        er_node_destroy(t_bare);
-        er_node_destroy(t_pad);
-        er_node_destroy(t_edges);
-        er_node_destroy(t_fixed);
-        er_node_destroy(tp_root);
+        er_tree_remove_child(text_padding_root, bare_text);
+        er_tree_remove_child(text_padding_root, padded_text);
+        er_tree_remove_child(text_padding_root, edges_text);
+        er_tree_remove_child(text_padding_root, fixed_text);
+        er_node_destroy(bare_text);
+        er_node_destroy(padded_text);
+        er_node_destroy(edges_text);
+        er_node_destroy(fixed_text);
+        er_node_destroy(text_padding_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -543,36 +544,36 @@ int main(void)
     {
         er_reset();
 
-        ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
-        ERProps sp = props_default();
-        sp.width = 200;
-        sp.height = 100;
-        sp.flex_direction = ER_FLEX_COL;
-        sp.overflow = ER_OVERFLOW_SCROLL;
-        er_node_set_props(sv, &sp);
+        ERNode* scroll_view = er_node_create(ER_NODE_SCROLL_VIEW);
+        ERProps scroll_view_props = props_default();
+        scroll_view_props.width = 200;
+        scroll_view_props.height = 100;
+        scroll_view_props.flex_direction = ER_FLEX_COL;
+        scroll_view_props.overflow = ER_OVERFLOW_SCROLL;
+        er_node_set_props(scroll_view, &scroll_view_props);
 
         ERNode* kids[3];
         ERRect krect[3];
-        for (int i = 0; i < 3; i++)
+        for (int kid_index = 0; kid_index < 3; kid_index++)
         {
-            kids[i] = er_node_create(ER_NODE_VIEW);
-            ERProps kp = props_default();
-            kp.width = 200;
-            kp.height = 60;
-            kp.flex_shrink = 1; /* would shrink without the overflow:scroll fix */
-            er_node_set_props(kids[i], &kp);
-            krect[i] = (ERRect){-1, -1, -1, -1};
-            er_event_set(kids[i], ER_EVENT_LAYOUT, on_layout_rect, &krect[i]);
-            er_tree_append_child(sv, kids[i]);
+            kids[kid_index] = er_node_create(ER_NODE_VIEW);
+            ERProps kids_props = props_default();
+            kids_props.width = 200;
+            kids_props.height = 60;
+            kids_props.flex_shrink = 1; /* would shrink without the overflow:scroll fix */
+            er_node_set_props(kids[kid_index], &kids_props);
+            krect[kid_index] = (ERRect){-1, -1, -1, -1};
+            er_event_set(kids[kid_index], ER_EVENT_LAYOUT, on_layout_rect, &krect[kid_index]);
+            er_tree_append_child(scroll_view, kids[kid_index]);
         }
 
-        er_tree_set_root(sv);
+        er_tree_set_root(scroll_view);
         er_commit();
 
         /* Each child must keep its explicit 60 px height (no shrinking). */
-        for (int i = 0; i < 3; i++)
+        for (int kid_index = 0; kid_index < 3; kid_index++)
         {
-            if (krect[i].h != 60)
+            if (krect[kid_index].h != 60)
                 return fail("overflow:scroll: child was shrunk to fit the viewport (flex_shrink not suppressed)");
         }
         /* Children stack starting at y=0 (ScrollView is root, placed at origin). */
@@ -583,12 +584,12 @@ int main(void)
         if (krect[2].y != 120)
             return fail("overflow:scroll: third child y should be 120");
 
-        for (int i = 0; i < 3; i++)
+        for (int kid_index = 0; kid_index < 3; kid_index++)
         {
-            er_tree_remove_child(sv, kids[i]);
-            er_node_destroy(kids[i]);
+            er_tree_remove_child(scroll_view, kids[kid_index]);
+            er_node_destroy(kids[kid_index]);
         }
-        er_node_destroy(sv);
+        er_node_destroy(scroll_view);
     }
 
     /* -----------------------------------------------------------------------
@@ -599,95 +600,95 @@ int main(void)
     {
         er_reset();
 
-        ERNode* d_root = er_node_create(ER_NODE_VIEW);
-        ERProps dp = props_default();
-        dp.width = 200;
-        dp.height = 200;
-        dp.flex_direction = ER_FLEX_COL;
-        dp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(d_root, &dp);
+        ERNode* dirty_root = er_node_create(ER_NODE_VIEW);
+        ERProps dirty_root_props = props_default();
+        dirty_root_props.width = 200;
+        dirty_root_props.height = 200;
+        dirty_root_props.flex_direction = ER_FLEX_COL;
+        dirty_root_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(dirty_root, &dirty_root_props);
 
-        ERNode* d_child = er_node_create(ER_NODE_VIEW);
-        ERRect d_rect = {-1, -1, -1, -1};
-        dp = props_default();
-        dp.width = 80;
-        dp.height = 40;
-        er_node_set_props(d_child, &dp);
-        er_event_set(d_child, ER_EVENT_LAYOUT, on_layout_rect, &d_rect);
+        ERNode* dirty_child = er_node_create(ER_NODE_VIEW);
+        ERRect dirty_rect = {-1, -1, -1, -1};
+        dirty_root_props = props_default();
+        dirty_root_props.width = 80;
+        dirty_root_props.height = 40;
+        er_node_set_props(dirty_child, &dirty_root_props);
+        er_event_set(dirty_child, ER_EVENT_LAYOUT, on_layout_rect, &dirty_rect);
 
-        er_tree_append_child(d_root, d_child);
-        er_tree_set_root(d_root);
+        er_tree_append_child(dirty_root, dirty_child);
+        er_tree_set_root(dirty_root);
 
         /* First commit must run a layout pass (tree was just built). */
-        const uint32_t c0 = er_layout_pass_count();
+        const uint32_t first_passes = er_layout_pass_count();
         er_commit();
-        const uint32_t c1 = er_layout_pass_count();
-        if (c1 != c0 + 1)
+        const uint32_t second_passes = er_layout_pass_count();
+        if (second_passes != first_passes + 1)
             return fail("layout-dirty: first commit did not run exactly one layout pass");
-        if (d_rect.w != 80 || d_rect.h != 40)
+        if (dirty_rect.w != 80 || dirty_rect.h != 40)
             return fail("layout-dirty: child rect wrong after first commit");
 
         /* A commit with no mutations must take the fast path (no layout pass). */
         er_commit();
-        if (er_layout_pass_count() != c1)
+        if (er_layout_pass_count() != second_passes)
             return fail("layout-dirty: static commit re-ran layout instead of skipping");
 
         /* Several idle commits in a row stay on the fast path. */
         er_commit();
         er_commit();
-        if (er_layout_pass_count() != c1)
+        if (er_layout_pass_count() != second_passes)
             return fail("layout-dirty: repeated idle commits re-ran layout");
 
         /* Computed rect must survive the skipped commits unchanged. */
-        d_rect = (ERRect){-1, -1, -1, -1};
-        er_event_set(d_child, ER_EVENT_LAYOUT, on_layout_rect, &d_rect);
-        /* (No layout fired during skips, so d_rect stays at the sentinel — that itself
+        dirty_rect = (ERRect){-1, -1, -1, -1};
+        er_event_set(dirty_child, ER_EVENT_LAYOUT, on_layout_rect, &dirty_rect);
+        /* (No layout fired during skips, so dirty_rect stays at the sentinel — that itself
          * confirms ER_EVENT_LAYOUT did not fire when layout was skipped.) */
-        if (d_rect.w != -1)
+        if (dirty_rect.w != -1)
             return fail("layout-dirty: ER_EVENT_LAYOUT fired on a skipped commit");
 
         /* An animation mutates render-only props; it must NOT trigger a layout pass. */
-        ERAnimConfig acfg;
-        memset(&acfg, 0, sizeof(acfg));
-        acfg.type = ER_ANIM_TIMING;
-        acfg.duration_ms = 100U;
-        er_anim_start(d_child, ER_PROP_OPACITY, 0.0f, &acfg);
-        const uint32_t c_before_anim = er_layout_pass_count();
-        for (int f = 0; f < 5; f++)
+        ERAnimConfig animation_config;
+        memset(&animation_config, 0, sizeof(animation_config));
+        animation_config.type = ER_ANIM_TIMING;
+        animation_config.duration_ms = 100U;
+        er_anim_start(dirty_child, ER_PROP_OPACITY, 0.0f, &animation_config);
+        const uint32_t passes_before_animation = er_layout_pass_count();
+        for (int frame_index = 0; frame_index < 5; frame_index++)
         {
             embedded_renderer_tick(16U); /* advances the animation */
             er_commit();
         }
-        if (er_layout_pass_count() != c_before_anim)
+        if (er_layout_pass_count() != passes_before_animation)
             return fail("layout-dirty: an opacity animation forced a layout pass");
 
         /* Changing a layout-affecting prop must request a fresh layout pass. */
         ERProps grow = props_default();
         grow.width = 120;
         grow.height = 50;
-        er_node_set_props(d_child, &grow);
-        const uint32_t c_before_mut = er_layout_pass_count();
+        er_node_set_props(dirty_child, &grow);
+        const uint32_t passes_before_mutation = er_layout_pass_count();
         er_commit();
-        if (er_layout_pass_count() != c_before_mut + 1)
+        if (er_layout_pass_count() != passes_before_mutation + 1)
             return fail("layout-dirty: prop change did not trigger a layout pass");
-        if (d_rect.w != 120 || d_rect.h != 50)
+        if (dirty_rect.w != 120 || dirty_rect.h != 50)
             return fail("layout-dirty: child rect did not update after prop change");
 
         /* Back to idle — no further layout passes. */
         er_commit();
-        if (er_layout_pass_count() != c_before_mut + 1)
+        if (er_layout_pass_count() != passes_before_mutation + 1)
             return fail("layout-dirty: commit after prop-change relayout did not return to fast path");
 
         /* A pending LayoutAnimation must force a layout pass even with no prop change. */
-        const uint32_t c_before_la = er_layout_pass_count();
+        const uint32_t passes_before_layout_animation = er_layout_pass_count();
         er_layout_anim_configure_next(&ER_LAYOUT_ANIM_EASE_IN_EASE_OUT);
         er_commit();
-        if (er_layout_pass_count() != c_before_la + 1)
+        if (er_layout_pass_count() != passes_before_layout_animation + 1)
             return fail("layout-dirty: pending LayoutAnimation did not force a layout pass");
 
-        er_tree_remove_child(d_root, d_child);
-        er_node_destroy(d_child);
-        er_node_destroy(d_root);
+        er_tree_remove_child(dirty_root, dirty_child);
+        er_node_destroy(dirty_child);
+        er_node_destroy(dirty_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -703,68 +704,68 @@ int main(void)
     {
         er_reset();
 
-        ERNode* ts_root = er_node_create(ER_NODE_VIEW);
-        ERProps tsp = props_default();
-        tsp.width = 200;
-        tsp.height = 100;
-        er_node_set_props(ts_root, &tsp);
+        ERNode* spans_root = er_node_create(ER_NODE_VIEW);
+        ERProps spans_root_props = props_default();
+        spans_root_props.width = 200;
+        spans_root_props.height = 100;
+        er_node_set_props(spans_root, &spans_root_props);
 
-        ERNode* ts_auto = er_node_create(ER_NODE_TEXT); /* content-sized */
-        tsp = props_default();
-        tsp.font_size = 16;
-        er_node_set_props(ts_auto, &tsp);
+        ERNode* spans_auto = er_node_create(ER_NODE_TEXT); /* content-sized */
+        spans_root_props = props_default();
+        spans_root_props.font_size = 16;
+        er_node_set_props(spans_auto, &spans_root_props);
 
-        ERNode* ts_pinned = er_node_create(ER_NODE_TEXT); /* pinned width, single line */
-        tsp = props_default();
-        tsp.font_size = 16;
-        tsp.width = 120;
-        tsp.number_of_lines = 1;
-        er_node_set_props(ts_pinned, &tsp);
+        ERNode* spans_pinned = er_node_create(ER_NODE_TEXT); /* pinned width, single line */
+        spans_root_props = props_default();
+        spans_root_props.font_size = 16;
+        spans_root_props.width = 120;
+        spans_root_props.number_of_lines = 1;
+        er_node_set_props(spans_pinned, &spans_root_props);
 
-        ERNode* ts_multi = er_node_create(ER_NODE_TEXT); /* pinned width, wraps → height varies */
-        tsp = props_default();
-        tsp.font_size = 16;
-        tsp.width = 120;
-        tsp.number_of_lines = 0;
-        er_node_set_props(ts_multi, &tsp);
+        ERNode* spans_multi = er_node_create(ER_NODE_TEXT); /* pinned width, wraps → height varies */
+        spans_root_props = props_default();
+        spans_root_props.font_size = 16;
+        spans_root_props.width = 120;
+        spans_root_props.number_of_lines = 0;
+        er_node_set_props(spans_multi, &spans_root_props);
 
-        er_tree_append_child(ts_root, ts_auto);
-        er_tree_append_child(ts_root, ts_pinned);
-        er_tree_append_child(ts_root, ts_multi);
-        er_tree_set_root(ts_root);
+        er_tree_append_child(spans_root, spans_auto);
+        er_tree_append_child(spans_root, spans_pinned);
+        er_tree_append_child(spans_root, spans_multi);
+        er_tree_set_root(spans_root);
         er_commit(); /* settle */
 
         ERTextSpan span;
         memset(&span, 0, sizeof(span));
 
         strncpy(span.text, "72", ER_SPAN_TEXT_MAX);
-        er_node_set_text_spans(ts_auto, &span, 1);
-        uint32_t c = er_layout_pass_count();
+        er_node_set_text_spans(spans_auto, &span, 1);
+        uint32_t passes = er_layout_pass_count();
         er_commit();
-        if (er_layout_pass_count() != c + 1)
+        if (er_layout_pass_count() != passes + 1)
             return fail("text-spans: content-sized Text did not re-run layout");
 
         strncpy(span.text, "68", ER_SPAN_TEXT_MAX);
-        er_node_set_text_spans(ts_pinned, &span, 1);
-        c = er_layout_pass_count();
+        er_node_set_text_spans(spans_pinned, &span, 1);
+        passes = er_layout_pass_count();
         er_commit();
-        if (er_layout_pass_count() != c)
+        if (er_layout_pass_count() != passes)
             return fail("text-spans: pinned single-line Text forced a global layout pass");
 
         strncpy(span.text, "a much longer string that has to wrap", ER_SPAN_TEXT_MAX);
-        er_node_set_text_spans(ts_multi, &span, 1);
-        c = er_layout_pass_count();
+        er_node_set_text_spans(spans_multi, &span, 1);
+        passes = er_layout_pass_count();
         er_commit();
-        if (er_layout_pass_count() != c + 1)
+        if (er_layout_pass_count() != passes + 1)
             return fail("text-spans: pinned multi-line Text skipped a needed layout pass");
 
-        er_tree_remove_child(ts_root, ts_auto);
-        er_tree_remove_child(ts_root, ts_pinned);
-        er_tree_remove_child(ts_root, ts_multi);
-        er_node_destroy(ts_auto);
-        er_node_destroy(ts_pinned);
-        er_node_destroy(ts_multi);
-        er_node_destroy(ts_root);
+        er_tree_remove_child(spans_root, spans_auto);
+        er_tree_remove_child(spans_root, spans_pinned);
+        er_tree_remove_child(spans_root, spans_multi);
+        er_node_destroy(spans_auto);
+        er_node_destroy(spans_pinned);
+        er_node_destroy(spans_multi);
+        er_node_destroy(spans_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -781,61 +782,62 @@ int main(void)
     {
         er_reset();
 
-        ERNode* ac_root = er_node_create(ER_NODE_VIEW);
-        ERProps acp = props_default();
-        acp.width = 200;
-        acp.height = 200;
-        acp.flex_direction = ER_FLEX_COL;
-        acp.align_items = ER_ALIGN_STRETCH;
-        er_node_set_props(ac_root, &acp);
+        ERNode* cross_root = er_node_create(ER_NODE_VIEW);
+        ERProps cross_root_props = props_default();
+        cross_root_props.width = 200;
+        cross_root_props.height = 200;
+        cross_root_props.flex_direction = ER_FLEX_COL;
+        cross_root_props.align_items = ER_ALIGN_STRETCH;
+        er_node_set_props(cross_root, &cross_root_props);
 
-        ERNode* ac_row = er_node_create(ER_NODE_VIEW);
-        ERRect ac_row_rect = {-1, -1, -1, -1};
-        acp = props_default();
-        acp.flex_direction = ER_FLEX_ROW; /* no height — must be derived from children */
-        er_node_set_props(ac_row, &acp);
-        er_event_set(ac_row, ER_EVENT_LAYOUT, on_layout_rect, &ac_row_rect);
-        er_tree_append_child(ac_root, ac_row);
+        ERNode* cross_row = er_node_create(ER_NODE_VIEW);
+        ERRect cross_row_rect = {-1, -1, -1, -1};
+        cross_root_props = props_default();
+        cross_root_props.flex_direction = ER_FLEX_ROW; /* no height — must be derived from children */
+        er_node_set_props(cross_row, &cross_root_props);
+        er_event_set(cross_row, ER_EVENT_LAYOUT, on_layout_rect, &cross_row_rect);
+        er_tree_append_child(cross_root, cross_row);
 
-        ERNode* ac_kids[2];
-        ERRect ac_krect[2];
-        for (int i = 0; i < 2; i++)
+        ERNode* cross_kids[2];
+        ERRect cross_kid_rects[2];
+        for (int kid_index = 0; kid_index < 2; kid_index++)
         {
-            ac_kids[i] = er_node_create(ER_NODE_VIEW);
-            ERProps kp = props_default();
-            kp.flex_grow = 1;
-            kp.flex_shrink = 1;
-            kp.flex_basis = 0;
-            kp.height = 60;
-            er_node_set_props(ac_kids[i], &kp);
-            ac_krect[i] = (ERRect){-1, -1, -1, -1};
-            er_event_set(ac_kids[i], ER_EVENT_LAYOUT, on_layout_rect, &ac_krect[i]);
-            er_tree_append_child(ac_row, ac_kids[i]);
+            cross_kids[kid_index] = er_node_create(ER_NODE_VIEW);
+            ERProps kid_props = props_default();
+            kid_props.flex_grow = 1;
+            kid_props.flex_shrink = 1;
+            kid_props.flex_basis = 0;
+            kid_props.height = 60;
+            er_node_set_props(cross_kids[kid_index], &kid_props);
+            cross_kid_rects[kid_index] = (ERRect){-1, -1, -1, -1};
+            er_event_set(cross_kids[kid_index], ER_EVENT_LAYOUT, on_layout_rect, &cross_kid_rects[kid_index]);
+            er_tree_append_child(cross_row, cross_kids[kid_index]);
         }
 
-        er_tree_set_root(ac_root);
+        er_tree_set_root(cross_root);
         er_commit();
 
-        if (ac_row_rect.h != 60)
+        if (cross_row_rect.h != 60)
             return fail("auto cross-size: row should grow to its children's height (60), not collapse to 0");
-        if (ac_row_rect.w != 200)
+        if (cross_row_rect.w != 200)
             return fail("auto cross-size: row should stretch to the column's width (200)");
-        for (int i = 0; i < 2; i++)
+        for (int kid_index = 0; kid_index < 2; kid_index++)
         {
-            if (ac_krect[i].h != 60)
+            if (cross_kid_rects[kid_index].h != 60)
                 return fail("auto cross-size: child height should be 60");
-            if (ac_krect[i].y < ac_row_rect.y || ac_krect[i].y + ac_krect[i].h > ac_row_rect.y + ac_row_rect.h)
+            if (cross_kid_rects[kid_index].y < cross_row_rect.y
+                || cross_kid_rects[kid_index].y + cross_kid_rects[kid_index].h > cross_row_rect.y + cross_row_rect.h)
                 return fail("auto cross-size: child falls outside the row's bounds (not hit-testable)");
         }
 
-        for (int i = 0; i < 2; i++)
+        for (int kid_index = 0; kid_index < 2; kid_index++)
         {
-            er_tree_remove_child(ac_row, ac_kids[i]);
-            er_node_destroy(ac_kids[i]);
+            er_tree_remove_child(cross_row, cross_kids[kid_index]);
+            er_node_destroy(cross_kids[kid_index]);
         }
-        er_tree_remove_child(ac_root, ac_row);
-        er_node_destroy(ac_row);
-        er_node_destroy(ac_root);
+        er_tree_remove_child(cross_root, cross_row);
+        er_node_destroy(cross_row);
+        er_node_destroy(cross_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -846,61 +848,61 @@ int main(void)
     {
         er_reset();
 
-        ERNode* ib_root = er_node_create(ER_NODE_VIEW);
-        ERProps ibp = props_default();
-        ibp.width = 100;
-        ibp.height = 100;
-        ibp.flex_direction = ER_FLEX_COL;
-        ibp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(ib_root, &ibp);
+        ERNode* insert_root = er_node_create(ER_NODE_VIEW);
+        ERProps insert_root_props = props_default();
+        insert_root_props.width = 100;
+        insert_root_props.height = 100;
+        insert_root_props.flex_direction = ER_FLEX_COL;
+        insert_root_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(insert_root, &insert_root_props);
 
-        ERNode* a = er_node_create(ER_NODE_VIEW);
-        ERNode* b = er_node_create(ER_NODE_VIEW);
-        ERNode* c = er_node_create(ER_NODE_VIEW);
-        ERNode* d = er_node_create(ER_NODE_VIEW);
-        ERRect ra = {0}, rb = {0}, rc = {0}, rd = {0};
-        ibp = props_default();
-        ibp.width = 40;
-        ibp.height = 20;
-        er_node_set_props(a, &ibp);
-        er_node_set_props(b, &ibp);
-        er_node_set_props(c, &ibp);
-        er_node_set_props(d, &ibp);
-        er_event_set(a, ER_EVENT_LAYOUT, on_layout_rect, &ra);
-        er_event_set(b, ER_EVENT_LAYOUT, on_layout_rect, &rb);
-        er_event_set(c, ER_EVENT_LAYOUT, on_layout_rect, &rc);
-        er_event_set(d, ER_EVENT_LAYOUT, on_layout_rect, &rd);
+        ERNode* first = er_node_create(ER_NODE_VIEW);
+        ERNode* second = er_node_create(ER_NODE_VIEW);
+        ERNode* third = er_node_create(ER_NODE_VIEW);
+        ERNode* fourth = er_node_create(ER_NODE_VIEW);
+        ERRect first_rect = {0}, second_rect = {0}, third_rect = {0}, fourth_rect = {0};
+        insert_root_props = props_default();
+        insert_root_props.width = 40;
+        insert_root_props.height = 20;
+        er_node_set_props(first, &insert_root_props);
+        er_node_set_props(second, &insert_root_props);
+        er_node_set_props(third, &insert_root_props);
+        er_node_set_props(fourth, &insert_root_props);
+        er_event_set(first, ER_EVENT_LAYOUT, on_layout_rect, &first_rect);
+        er_event_set(second, ER_EVENT_LAYOUT, on_layout_rect, &second_rect);
+        er_event_set(third, ER_EVENT_LAYOUT, on_layout_rect, &third_rect);
+        er_event_set(fourth, ER_EVENT_LAYOUT, on_layout_rect, &fourth_rect);
 
         /* Insert c before b in [a, b] → order a, c, b. */
-        er_tree_append_child(ib_root, a);
-        er_tree_append_child(ib_root, b);
-        er_tree_insert_before(ib_root, c, b);
-        er_tree_set_root(ib_root);
+        er_tree_append_child(insert_root, first);
+        er_tree_append_child(insert_root, second);
+        er_tree_insert_before(insert_root, third, second);
+        er_tree_set_root(insert_root);
         er_commit();
-        if (ra.y != 0 || rc.y != 20 || rb.y != 40)
+        if (first_rect.y != 0 || third_rect.y != 20 || second_rect.y != 40)
             return fail("insert_before: ordered insert produced wrong order (expected a,c,b)");
 
         /* Move existing b before a → order b, a, c. */
-        er_tree_insert_before(ib_root, b, a);
+        er_tree_insert_before(insert_root, second, first);
         er_commit();
-        if (rb.y != 0 || ra.y != 20 || rc.y != 40)
+        if (second_rect.y != 0 || first_rect.y != 20 || third_rect.y != 40)
             return fail("insert_before: move of existing child produced wrong order (expected b,a,c)");
 
         /* before == NULL appends → order b, a, c, d. */
-        er_tree_insert_before(ib_root, d, NULL);
+        er_tree_insert_before(insert_root, fourth, NULL);
         er_commit();
-        if (rd.y != 60)
+        if (fourth_rect.y != 60)
             return fail("insert_before: NULL anchor should append at the end");
 
-        er_tree_remove_child(ib_root, a);
-        er_tree_remove_child(ib_root, b);
-        er_tree_remove_child(ib_root, c);
-        er_tree_remove_child(ib_root, d);
-        er_node_destroy(a);
-        er_node_destroy(b);
-        er_node_destroy(c);
-        er_node_destroy(d);
-        er_node_destroy(ib_root);
+        er_tree_remove_child(insert_root, first);
+        er_tree_remove_child(insert_root, second);
+        er_tree_remove_child(insert_root, third);
+        er_tree_remove_child(insert_root, fourth);
+        er_node_destroy(first);
+        er_node_destroy(second);
+        er_node_destroy(third);
+        er_node_destroy(fourth);
+        er_node_destroy(insert_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -912,55 +914,55 @@ int main(void)
     {
         er_reset();
 
-        ERNode* ne_root = er_node_create(ER_NODE_VIEW);
-        ERProps nep = props_default();
-        nep.width = 480;
-        nep.height = 320;
-        nep.flex_direction = ER_FLEX_COL;
-        er_node_set_props(ne_root, &nep);
+        ERNode* nested_root = er_node_create(ER_NODE_VIEW);
+        ERProps nested_root_props = props_default();
+        nested_root_props.width = 480;
+        nested_root_props.height = 320;
+        nested_root_props.flex_direction = ER_FLEX_COL;
+        er_node_set_props(nested_root, &nested_root_props);
 
-        ERNode* ne_a = er_node_create(ER_NODE_VIEW);
-        ERRect ne_a_rect = {0};
-        nep = props_default();
-        nep.width = 100;
-        nep.height = 200;
-        nep.flex_direction = ER_FLEX_COL;
-        er_node_set_props(ne_a, &nep);
-        er_event_set(ne_a, ER_EVENT_LAYOUT, on_layout_rect, &ne_a_rect);
-        er_tree_append_child(ne_root, ne_a);
+        ERNode* nested_child = er_node_create(ER_NODE_VIEW);
+        ERRect nested_child_rect = {0};
+        nested_root_props = props_default();
+        nested_root_props.width = 100;
+        nested_root_props.height = 200;
+        nested_root_props.flex_direction = ER_FLEX_COL;
+        er_node_set_props(nested_child, &nested_root_props);
+        er_event_set(nested_child, ER_EVENT_LAYOUT, on_layout_rect, &nested_child_rect);
+        er_tree_append_child(nested_root, nested_child);
 
-        ERNode* ne_b[3];
-        ERRect ne_brect[3];
-        for (int i = 0; i < 3; i++)
+        ERNode* nested_items[3];
+        ERRect nested_item_rects[3];
+        for (int item_index = 0; item_index < 3; item_index++)
         {
-            ne_b[i] = er_node_create(ER_NODE_VIEW);
-            ERProps bp = props_default();
-            bp.width = 40;
-            bp.height = 20;
-            er_node_set_props(ne_b[i], &bp);
-            ne_brect[i] = (ERRect){-1, -1, -1, -1};
-            er_event_set(ne_b[i], ER_EVENT_LAYOUT, on_layout_rect, &ne_brect[i]);
-            er_tree_append_child(ne_a, ne_b[i]);
+            nested_items[item_index] = er_node_create(ER_NODE_VIEW);
+            ERProps nested_items_props = props_default();
+            nested_items_props.width = 40;
+            nested_items_props.height = 20;
+            er_node_set_props(nested_items[item_index], &nested_items_props);
+            nested_item_rects[item_index] = (ERRect){-1, -1, -1, -1};
+            er_event_set(nested_items[item_index], ER_EVENT_LAYOUT, on_layout_rect, &nested_item_rects[item_index]);
+            er_tree_append_child(nested_child, nested_items[item_index]);
         }
 
-        er_tree_set_root(ne_root);
+        er_tree_set_root(nested_root);
         er_commit();
 
-        if (ne_a_rect.h != 200)
+        if (nested_child_rect.h != 200)
             return fail("nested explicit size: fixed-height child should stay 200, not fill the root");
-        if (ne_brect[0].y != 0 || ne_brect[1].y != 20 || ne_brect[2].y != 40)
+        if (nested_item_rects[0].y != 0 || nested_item_rects[1].y != 20 || nested_item_rects[2].y != 40)
             return fail("nested explicit size: grandchildren should stack at 0,20,40");
-        if (ne_brect[0].h != 20)
+        if (nested_item_rects[0].h != 20)
             return fail("nested explicit size: grandchild height should stay 20");
 
-        for (int i = 0; i < 3; i++)
+        for (int item_index = 0; item_index < 3; item_index++)
         {
-            er_tree_remove_child(ne_a, ne_b[i]);
-            er_node_destroy(ne_b[i]);
+            er_tree_remove_child(nested_child, nested_items[item_index]);
+            er_node_destroy(nested_items[item_index]);
         }
-        er_tree_remove_child(ne_root, ne_a);
-        er_node_destroy(ne_a);
-        er_node_destroy(ne_root);
+        er_tree_remove_child(nested_root, nested_child);
+        er_node_destroy(nested_child);
+        er_node_destroy(nested_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -972,7 +974,7 @@ int main(void)
      * level at a time (compute_layout re-enters Pass 1 at every level, and
      * nothing cached the result of the level above).
      *
-     * A chain of MC_DEPTH auto-sized Views under a fixed root, ending in one
+     * A chain of CACHE_DEPTH auto-sized Views under a fixed root, ending in one
      * auto-sized Text leaf, must produce exactly one er_text_measure*() call
      * per commit — and, since the memoisation cache is keyed by a per-pass
      * generation, a second commit after a real layout-affecting change must
@@ -980,59 +982,59 @@ int main(void)
      * counts from the first pass).
      * -----------------------------------------------------------------------*/
     {
-#define MC_DEPTH 8
+#define CACHE_DEPTH 8
         er_reset();
 
-        ERNode* mc_root = er_node_create(ER_NODE_VIEW);
-        ERProps mcp = props_default();
-        mcp.width = 200;
-        mcp.height = 200;
-        er_node_set_props(mc_root, &mcp);
-        er_tree_set_root(mc_root);
+        ERNode* cache_root = er_node_create(ER_NODE_VIEW);
+        ERProps cache_root_props = props_default();
+        cache_root_props.width = 200;
+        cache_root_props.height = 200;
+        er_node_set_props(cache_root, &cache_root_props);
+        er_tree_set_root(cache_root);
 
-        ERNode* mc_chain[MC_DEPTH];
-        ERNode* mc_parent = mc_root;
-        for (int i = 0; i < MC_DEPTH; i++)
+        ERNode* cache_chain[CACHE_DEPTH];
+        ERNode* cache_parent = cache_root;
+        for (int depth_index = 0; depth_index < CACHE_DEPTH; depth_index++)
         {
-            mc_chain[i] = er_node_create(ER_NODE_VIEW);
-            ERProps vp = props_default(); /* width/height stay AUTO */
-            er_node_set_props(mc_chain[i], &vp);
-            er_tree_append_child(mc_parent, mc_chain[i]);
-            mc_parent = mc_chain[i];
+            cache_chain[depth_index] = er_node_create(ER_NODE_VIEW);
+            ERProps cache_chain_props = props_default(); /* width/height stay AUTO */
+            er_node_set_props(cache_chain[depth_index], &cache_chain_props);
+            er_tree_append_child(cache_parent, cache_chain[depth_index]);
+            cache_parent = cache_chain[depth_index];
         }
 
-        ERNode* mc_text = er_node_create(ER_NODE_TEXT);
-        ERProps mctp = props_default(); /* width/height stay AUTO */
-        mctp.font_size = 16;
-        strncpy(mctp.text, "measure me", ER_TEXT_MAX);
-        er_node_set_props(mc_text, &mctp);
-        er_tree_append_child(mc_parent, mc_text);
+        ERNode* cache_text = er_node_create(ER_NODE_TEXT);
+        ERProps cache_text_props = props_default(); /* width/height stay AUTO */
+        cache_text_props.font_size = 16;
+        strncpy(cache_text_props.text, "measure me", ER_TEXT_MAX);
+        er_node_set_props(cache_text, &cache_text_props);
+        er_tree_append_child(cache_parent, cache_text);
 
-        const uint32_t tm0 = er_text_measure_count();
+        const uint32_t measures_initial = er_text_measure_count();
         er_commit();
-        const uint32_t tm1 = er_text_measure_count();
-        if (tm1 != tm0 + 1U)
+        const uint32_t measures_unchanged = er_text_measure_count();
+        if (measures_unchanged != measures_initial + 1U)
             return fail("measure-cache: deep chain remeasured the Text leaf more than once per pass");
 
         /* A real layout-affecting change must invalidate the per-pass cache and remeasure —
          * exactly once, proving the cache doesn't leak a stale hit into the next pass. */
-        mcp.width = 210;
-        er_node_set_props(mc_root, &mcp);
+        cache_root_props.width = 210;
+        er_node_set_props(cache_root, &cache_root_props);
         er_commit();
-        const uint32_t tm2 = er_text_measure_count();
-        if (tm2 != tm1 + 1U)
+        const uint32_t measures_changed = er_text_measure_count();
+        if (measures_changed != measures_unchanged + 1U)
             return fail("measure-cache: second layout pass did not remeasure the Text leaf exactly once");
 
-        er_tree_remove_child(mc_parent, mc_text);
-        er_node_destroy(mc_text);
-        for (int i = MC_DEPTH - 1; i >= 0; i--)
+        er_tree_remove_child(cache_parent, cache_text);
+        er_node_destroy(cache_text);
+        for (int depth_index = CACHE_DEPTH - 1; depth_index >= 0; depth_index--)
         {
-            ERNode* p = (i == 0) ? mc_root : mc_chain[i - 1];
-            er_tree_remove_child(p, mc_chain[i]);
-            er_node_destroy(mc_chain[i]);
+            ERNode* parent = (depth_index == 0) ? cache_root : cache_chain[depth_index - 1];
+            er_tree_remove_child(parent, cache_chain[depth_index]);
+            er_node_destroy(cache_chain[depth_index]);
         }
-        er_node_destroy(mc_root);
-#undef MC_DEPTH
+        er_node_destroy(cache_root);
+#undef CACHE_DEPTH
     }
 
     /* -----------------------------------------------------------------------
@@ -1045,47 +1047,47 @@ int main(void)
      * per Text sibling per commit.
      * -----------------------------------------------------------------------*/
     {
-#define MC_WIDE_COUNT 6
+#define CACHE_WIDE_COUNT 6
         er_reset();
 
-        ERNode* mw_root = er_node_create(ER_NODE_VIEW);
-        ERProps mwp = props_default();
-        mwp.width = 300;
-        mwp.height = 300;
-        er_node_set_props(mw_root, &mwp);
+        ERNode* wide_root = er_node_create(ER_NODE_VIEW);
+        ERProps wide_root_props = props_default();
+        wide_root_props.width = 300;
+        wide_root_props.height = 300;
+        er_node_set_props(wide_root, &wide_root_props);
 
-        ERNode* mw_container = er_node_create(ER_NODE_VIEW);
-        ERProps mwcp = props_default(); /* width/height stay AUTO */
-        er_node_set_props(mw_container, &mwcp);
-        er_tree_append_child(mw_root, mw_container);
+        ERNode* wide_container = er_node_create(ER_NODE_VIEW);
+        ERProps wide_container_props = props_default(); /* width/height stay AUTO */
+        er_node_set_props(wide_container, &wide_container_props);
+        er_tree_append_child(wide_root, wide_container);
 
-        ERNode* mw_texts[MC_WIDE_COUNT];
-        for (int i = 0; i < MC_WIDE_COUNT; i++)
+        ERNode* wide_texts[CACHE_WIDE_COUNT];
+        for (int text_index = 0; text_index < CACHE_WIDE_COUNT; text_index++)
         {
-            mw_texts[i] = er_node_create(ER_NODE_TEXT);
-            ERProps wtp = props_default(); /* width/height stay AUTO */
-            wtp.font_size = 16;
-            strncpy(wtp.text, "sib", ER_TEXT_MAX);
-            er_node_set_props(mw_texts[i], &wtp);
-            er_tree_append_child(mw_container, mw_texts[i]);
+            wide_texts[text_index] = er_node_create(ER_NODE_TEXT);
+            ERProps wide_texts_props = props_default(); /* width/height stay AUTO */
+            wide_texts_props.font_size = 16;
+            strncpy(wide_texts_props.text, "sib", ER_TEXT_MAX);
+            er_node_set_props(wide_texts[text_index], &wide_texts_props);
+            er_tree_append_child(wide_container, wide_texts[text_index]);
         }
-        er_tree_set_root(mw_root);
+        er_tree_set_root(wide_root);
 
-        const uint32_t tw0 = er_text_measure_count();
+        const uint32_t wide_measures_before = er_text_measure_count();
         er_commit();
-        const uint32_t tw1 = er_text_measure_count();
-        if (tw1 != tw0 + (uint32_t)MC_WIDE_COUNT)
+        const uint32_t wide_measures_after = er_text_measure_count();
+        if (wide_measures_after != wide_measures_before + (uint32_t)CACHE_WIDE_COUNT)
             return fail("measure-cache: wide tree measured a Text sibling more than once per commit");
 
-        for (int i = 0; i < MC_WIDE_COUNT; i++)
+        for (int text_index = 0; text_index < CACHE_WIDE_COUNT; text_index++)
         {
-            er_tree_remove_child(mw_container, mw_texts[i]);
-            er_node_destroy(mw_texts[i]);
+            er_tree_remove_child(wide_container, wide_texts[text_index]);
+            er_node_destroy(wide_texts[text_index]);
         }
-        er_tree_remove_child(mw_root, mw_container);
-        er_node_destroy(mw_container);
-        er_node_destroy(mw_root);
-#undef MC_WIDE_COUNT
+        er_tree_remove_child(wide_root, wide_container);
+        er_node_destroy(wide_container);
+        er_node_destroy(wide_root);
+#undef CACHE_WIDE_COUNT
     }
 
     /* -----------------------------------------------------------------------
@@ -1098,37 +1100,38 @@ int main(void)
     {
         er_reset();
 
-        ERNode* mf_root = er_node_create(ER_NODE_VIEW);
-        ERProps mfp = props_default();
-        mfp.width = 200;
-        mfp.height = 200;
-        er_node_set_props(mf_root, &mfp);
+        ERNode* short_circuit_root = er_node_create(ER_NODE_VIEW);
+        ERProps short_circuit_root_props = props_default();
+        short_circuit_root_props.width = 200;
+        short_circuit_root_props.height = 200;
+        er_node_set_props(short_circuit_root, &short_circuit_root_props);
 
-        ERNode* mf_mid = er_node_create(ER_NODE_VIEW);
-        ERProps mfmp = props_default(); /* auto — forces mf_root's Pass 1 to measure mf_mid */
-        er_node_set_props(mf_mid, &mfmp);
-        er_tree_append_child(mf_root, mf_mid);
+        ERNode* short_circuit_mid = er_node_create(ER_NODE_VIEW);
+        ERProps short_circuit_mid_props =
+            props_default(); /* auto — forces short_circuit_root's Pass 1 to measure short_circuit_mid */
+        er_node_set_props(short_circuit_mid, &short_circuit_mid_props);
+        er_tree_append_child(short_circuit_root, short_circuit_mid);
 
-        ERNode* mf_text = er_node_create(ER_NODE_TEXT);
-        ERProps mftp = props_default();
-        mftp.width = 60;
-        mftp.height = 20;
-        strncpy(mftp.text, "fixed size, never measured", ER_TEXT_MAX);
-        er_node_set_props(mf_text, &mftp);
-        er_tree_append_child(mf_mid, mf_text);
-        er_tree_set_root(mf_root);
+        ERNode* short_circuit_text = er_node_create(ER_NODE_TEXT);
+        ERProps short_circuit_text_props = props_default();
+        short_circuit_text_props.width = 60;
+        short_circuit_text_props.height = 20;
+        strncpy(short_circuit_text_props.text, "fixed size, never measured", ER_TEXT_MAX);
+        er_node_set_props(short_circuit_text, &short_circuit_text_props);
+        er_tree_append_child(short_circuit_mid, short_circuit_text);
+        er_tree_set_root(short_circuit_root);
 
-        const uint32_t tf0 = er_text_measure_count();
+        const uint32_t short_circuit_measures_before = er_text_measure_count();
         er_commit();
-        const uint32_t tf1 = er_text_measure_count();
-        if (tf1 != tf0)
+        const uint32_t short_circuit_measures_after = er_text_measure_count();
+        if (short_circuit_measures_after != short_circuit_measures_before)
             return fail("measure-cache: fully-explicit Text size still triggered a glyph-run measurement");
 
-        er_tree_remove_child(mf_mid, mf_text);
-        er_node_destroy(mf_text);
-        er_tree_remove_child(mf_root, mf_mid);
-        er_node_destroy(mf_mid);
-        er_node_destroy(mf_root);
+        er_tree_remove_child(short_circuit_mid, short_circuit_text);
+        er_node_destroy(short_circuit_text);
+        er_tree_remove_child(short_circuit_root, short_circuit_mid);
+        er_node_destroy(short_circuit_mid);
+        er_node_destroy(short_circuit_root);
     }
 
     /* -----------------------------------------------------------------------
@@ -1139,114 +1142,115 @@ int main(void)
      * they hold whatever font the build ships.
      * -----------------------------------------------------------------------*/
     {
-        static const char* k_desc = "A description long enough to wrap onto four or five lines at this width";
-        int dummy = 0, lh = 0;
-        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &lh);
-        int desc_w120 = 0;
-        const int desc_lines120 = lines_at(k_desc, 120, &desc_w120);
-        if (lh <= 0 || desc_lines120 < 3)
+        static const char* k_description = "A description long enough to wrap onto four or five lines at this width";
+        int dummy = 0, line_height = 0;
+        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &line_height);
+        int description_width_120 = 0;
+        const int description_lines_120 = lines_at(k_description, 120, &description_width_120);
+        if (line_height <= 0 || description_lines_120 < 3)
             return fail("text wrap: the long description should break onto at least three lines at 120 px");
 
         er_reset();
-        ERNode* wr_root = er_node_create(ER_NODE_VIEW);
-        ERProps wrp = props_default();
-        wrp.width = (int16_t)FB_W;
-        wrp.height = (int16_t)FB_H;
-        wrp.flex_direction = ER_FLEX_COL;
-        wrp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(wr_root, &wrp);
+        ERNode* wrap_root = er_node_create(ER_NODE_VIEW);
+        ERProps wrap_root_props = props_default();
+        wrap_root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
+        wrap_root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
+        wrap_root_props.flex_direction = ER_FLEX_COL;
+        wrap_root_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(wrap_root, &wrap_root_props);
 
         /* <View style={{width: 120}}> with three Texts, stretched to the column's width. */
-        ERNode* col = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.width = 120;
-        er_node_set_props(col, &cp);
-        ERRect r_save, r_desc, r_short, r_clip;
-        ERNode* t_save = mk_text(props_default(), "Save", &r_save);
-        ERNode* t_desc = mk_text(props_default(), k_desc, &r_desc);
-        ERProps sp = props_default();
-        sp.number_of_lines = 3;
-        ERNode* t_short = mk_text(sp, "Short", &r_short);
-        ERProps lp = props_default();
-        lp.number_of_lines = 2;
-        ERNode* t_clip = mk_text(lp, k_desc, &r_clip);
-        er_tree_append_child(col, t_save);
-        er_tree_append_child(col, t_desc);
-        er_tree_append_child(col, t_short);
-        er_tree_append_child(col, t_clip);
-        er_tree_append_child(wr_root, col);
+        ERNode* column = er_node_create(ER_NODE_VIEW);
+        ERProps column_props = props_default();
+        column_props.width = 120;
+        er_node_set_props(column, &column_props);
+        ERRect save_rect, description_rect, short_rect, clip_rect;
+        ERNode* save_text = mk_text(props_default(), "Save", &save_rect);
+        ERNode* description_text = mk_text(props_default(), k_description, &description_rect);
+        ERProps short_props = props_default();
+        short_props.number_of_lines = 3;
+        ERNode* short_text = mk_text(short_props, "Short", &short_rect);
+        ERProps clip_props = props_default();
+        clip_props.number_of_lines = 2;
+        ERNode* clip_text = mk_text(clip_props, k_description, &clip_rect);
+        er_tree_append_child(column, save_text);
+        er_tree_append_child(column, description_text);
+        er_tree_append_child(column, short_text);
+        er_tree_append_child(column, clip_text);
+        er_tree_append_child(wrap_root, column);
 
         /* A flex: 1 Text beside a 200 px box in a 300 px row gets 100 px and wraps there. */
-        int desc_w100 = 0;
-        const int desc_lines100 = lines_at(k_desc, 100, &desc_w100);
+        int description_width_100 = 0;
+        const int description_lines_100 = lines_at(k_description, 100, &description_width_100);
         ERNode* row = er_node_create(ER_NODE_VIEW);
-        ERRect r_row = {-1, -1, -1, -1};
-        ERProps rwp = props_default();
-        rwp.width = 300;
-        rwp.flex_direction = ER_FLEX_ROW;
-        rwp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(row, &rwp);
-        er_event_set(row, ER_EVENT_LAYOUT, on_layout_rect, &r_row);
-        ERProps bxp = props_default();
-        bxp.width = 200;
-        bxp.height = 10;
+        ERRect row_rect = {-1, -1, -1, -1};
+        ERProps row_props = props_default();
+        row_props.width = 300;
+        row_props.flex_direction = ER_FLEX_ROW;
+        row_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(row, &row_props);
+        er_event_set(row, ER_EVENT_LAYOUT, on_layout_rect, &row_rect);
+        ERProps box_props = props_default();
+        box_props.width = 200;
+        box_props.height = 10;
         ERNode* box = er_node_create(ER_NODE_VIEW);
-        er_node_set_props(box, &bxp);
-        ERProps fxp = props_default();
-        fxp.flex_grow = 1;
-        fxp.flex_shrink = 1;
-        fxp.flex_basis = 0;
-        ERRect r_flex;
-        ERNode* t_flex = mk_text(fxp, k_desc, &r_flex);
+        er_node_set_props(box, &box_props);
+        ERProps flex_props = props_default();
+        flex_props.flex_grow = 1;
+        flex_props.flex_shrink = 1;
+        flex_props.flex_basis = 0;
+        ERRect flex_rect;
+        ERNode* flex_text = mk_text(flex_props, k_description, &flex_rect);
         er_tree_append_child(row, box);
-        er_tree_append_child(row, t_flex);
-        er_tree_append_child(wr_root, row);
+        er_tree_append_child(row, flex_text);
+        er_tree_append_child(wrap_root, row);
 
         /* A shrink-wrapped Text in the flex-start column: as wide as its widest line, never wider than the column. */
         ERNode* narrow = er_node_create(ER_NODE_VIEW);
-        ERProps np = props_default();
-        np.width = 120;
-        np.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(narrow, &np);
-        ERRect r_wrap, r_one;
-        ERNode* t_wrap = mk_text(props_default(), k_desc, &r_wrap);
-        ERProps op1 = props_default();
-        op1.number_of_lines = 1;
-        op1.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
-        ERNode* t_one = mk_text(op1, k_desc, &r_one);
-        er_tree_append_child(narrow, t_wrap);
-        er_tree_append_child(narrow, t_one);
-        er_tree_append_child(wr_root, narrow);
+        ERProps narrow_props = props_default();
+        narrow_props.width = 120;
+        narrow_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(narrow, &narrow_props);
+        ERRect wrap_rect, one_line_rect;
+        ERNode* wrap_text = mk_text(props_default(), k_description, &wrap_rect);
+        ERProps one_line_props = props_default();
+        one_line_props.number_of_lines = 1;
+        one_line_props.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+        ERNode* one_line_text = mk_text(one_line_props, k_description, &one_line_rect);
+        er_tree_append_child(narrow, wrap_text);
+        er_tree_append_child(narrow, one_line_text);
+        er_tree_append_child(wrap_root, narrow);
 
-        er_tree_set_root(wr_root);
+        er_tree_set_root(wrap_root);
         er_commit();
 
-        if (r_save.w != 120 || r_save.h != lh)
+        if (save_rect.w != 120 || save_rect.h != line_height)
             return fail("text wrap: a label that fits keeps its one-line height");
-        if (r_desc.w != 120 || r_desc.h != desc_lines120 * lh)
+        if (description_rect.w != 120 || description_rect.h != description_lines_120 * line_height)
             return fail("text wrap: the long text in the 120 px column is not as tall as its wrapped lines");
-        if (r_short.y != r_desc.y + r_desc.h || r_short.h != lh)
+        if (short_rect.y != description_rect.y + description_rect.h || short_rect.h != line_height)
             return fail("text wrap: numberOfLines={3} on a one-line label must stay one line tall");
-        if (r_clip.h != 2 * lh)
+        if (clip_rect.h != 2 * line_height)
             return fail("text wrap: numberOfLines={2} must cap a long text at two lines");
-        if (r_flex.x != 200 || r_flex.w != 100 || r_flex.h != desc_lines100 * lh)
+        if (flex_rect.x != 200 || flex_rect.w != 100 || flex_rect.h != description_lines_100 * line_height)
             return fail("text wrap: the flex: 1 Text must wrap at the 100 px it flexes to");
-        if (r_row.h != r_flex.h)
+        if (row_rect.h != flex_rect.h)
             return fail("text wrap: the row must grow to hold its wrapped flex: 1 Text");
-        if (r_wrap.w != desc_w120 || r_wrap.h != desc_lines120 * lh)
+        if (wrap_rect.w != description_width_120 || wrap_rect.h != description_lines_120 * line_height)
             return fail("text wrap: a shrink-wrapped Text should take its widest line at the width it is offered");
-        if (r_one.w > 120 || r_one.h != lh)
+        if (one_line_rect.w > 120 || one_line_rect.h != line_height)
             return fail("text wrap: numberOfLines={1} must stay inside the column it would overflow");
 
         /* The same row without its own width takes the column's, and still grows to hold the Text. */
-        rwp.width = ER_LAYOUT_AUTO;
-        rwp.flex_direction = ER_FLEX_ROW;
-        er_node_set_props(row, &rwp);
-        wrp.align_items = ER_ALIGN_STRETCH;
-        wrp.width = 300;
-        er_node_set_props(wr_root, &wrp);
+        row_props.width = ER_LAYOUT_AUTO;
+        row_props.flex_direction = ER_FLEX_ROW;
+        er_node_set_props(row, &row_props);
+        wrap_root_props.align_items = ER_ALIGN_STRETCH;
+        wrap_root_props.width = 300;
+        er_node_set_props(wrap_root, &wrap_root_props);
         er_commit();
-        if (r_row.w != 300 || r_flex.w != 100 || r_flex.h != desc_lines100 * lh || r_row.h != r_flex.h)
+        if (row_rect.w != 300 || flex_rect.w != 100 || flex_rect.h != description_lines_100 * line_height
+            || row_rect.h != flex_rect.h)
             return fail("text wrap: an auto-width row must flex and wrap its Text at the width its parent offers");
 
         er_reset();
@@ -1259,62 +1263,62 @@ int main(void)
      * A row that scrolls offers no bound, and its Text stays on one line.
      * -----------------------------------------------------------------------*/
     {
-        static const char* k_desc = "A description long enough to wrap onto four or five lines at this width";
-        int dummy = 0, lh = 0, w120 = 0, w300 = 0;
-        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &lh);
-        const int lines120 = lines_at(k_desc, 120, &w120);
-        const int lines300 = lines_at(k_desc, 300, &w300);
+        static const char* k_description = "A description long enough to wrap onto four or five lines at this width";
+        int dummy = 0, line_height = 0, width_120 = 0, width_300 = 0;
+        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &line_height);
+        const int lines120 = lines_at(k_description, 120, &width_120);
+        const int lines300 = lines_at(k_description, 300, &width_300);
         if (lines120 < 3 || lines300 < 2)
             return fail("row text: the long description should wrap at both 120 px and 300 px");
 
         er_reset();
-        ERNode* rt_root = er_node_create(ER_NODE_VIEW);
-        ERProps rtp = props_default();
-        rtp.width = (int16_t)FB_W;
-        rtp.height = (int16_t)FB_H;
-        rtp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(rt_root, &rtp);
+        ERNode* bound_root = er_node_create(ER_NODE_VIEW);
+        ERProps bound_root_props = props_default();
+        bound_root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
+        bound_root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
+        bound_root_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(bound_root, &bound_root_props);
 
-        ERProps rowp = props_default();
-        rowp.flex_direction = ER_FLEX_ROW;
-        rowp.align_items = ER_ALIGN_FLEX_START;
+        ERProps narrow_row_props = props_default();
+        narrow_row_props.flex_direction = ER_FLEX_ROW;
+        narrow_row_props.align_items = ER_ALIGN_FLEX_START;
 
-        rowp.width = 120;
+        narrow_row_props.width = 120;
         ERNode* narrow_row = er_node_create(ER_NODE_VIEW);
-        er_node_set_props(narrow_row, &rowp);
-        ERRect r_narrow;
-        er_tree_append_child(narrow_row, mk_text(props_default(), k_desc, &r_narrow));
-        er_tree_append_child(rt_root, narrow_row);
+        er_node_set_props(narrow_row, &narrow_row_props);
+        ERRect narrow_rect;
+        er_tree_append_child(narrow_row, mk_text(props_default(), k_description, &narrow_rect));
+        er_tree_append_child(bound_root, narrow_row);
 
-        rowp.width = 300;
+        narrow_row_props.width = 300;
         ERNode* boxed_row = er_node_create(ER_NODE_VIEW);
-        er_node_set_props(boxed_row, &rowp);
-        ERNode* rt_box = er_node_create(ER_NODE_VIEW);
-        ERProps rbp = props_default();
-        rbp.width = 200;
-        rbp.height = 10;
-        er_node_set_props(rt_box, &rbp);
-        ERRect r_boxed;
-        er_tree_append_child(boxed_row, rt_box);
-        er_tree_append_child(boxed_row, mk_text(props_default(), k_desc, &r_boxed));
-        er_tree_append_child(rt_root, boxed_row);
+        er_node_set_props(boxed_row, &narrow_row_props);
+        ERNode* bound_box = er_node_create(ER_NODE_VIEW);
+        ERProps bound_box_props = props_default();
+        bound_box_props.width = 200;
+        bound_box_props.height = 10;
+        er_node_set_props(bound_box, &bound_box_props);
+        ERRect boxed_rect;
+        er_tree_append_child(boxed_row, bound_box);
+        er_tree_append_child(boxed_row, mk_text(props_default(), k_description, &boxed_rect));
+        er_tree_append_child(bound_root, boxed_row);
 
-        rowp.width = 120;
-        rowp.overflow = ER_OVERFLOW_SCROLL;
+        narrow_row_props.width = 120;
+        narrow_row_props.overflow = ER_OVERFLOW_SCROLL;
         ERNode* scroll_row = er_node_create(ER_NODE_VIEW);
-        er_node_set_props(scroll_row, &rowp);
-        ERRect r_scroll;
-        er_tree_append_child(scroll_row, mk_text(props_default(), k_desc, &r_scroll));
-        er_tree_append_child(rt_root, scroll_row);
+        er_node_set_props(scroll_row, &narrow_row_props);
+        ERRect scroll_rect;
+        er_tree_append_child(scroll_row, mk_text(props_default(), k_description, &scroll_rect));
+        er_tree_append_child(bound_root, scroll_row);
 
-        er_tree_set_root(rt_root);
+        er_tree_set_root(bound_root);
         er_commit();
 
-        if (r_narrow.w != w120 || r_narrow.h != lines120 * lh)
+        if (narrow_rect.w != width_120 || narrow_rect.h != lines120 * line_height)
             return fail("row text: a long Text in a 120 px row must wrap at the row's edge");
-        if (r_boxed.x != 200 || r_boxed.w != w300 || r_boxed.h != lines300 * lh)
+        if (boxed_rect.x != 200 || boxed_rect.w != width_300 || boxed_rect.h != lines300 * line_height)
             return fail("row text: beside a box, a non-shrinking Text keeps the width it wraps at in the row");
-        if (r_scroll.h != lh || r_scroll.w <= 120)
+        if (scroll_rect.h != line_height || scroll_rect.w <= 120)
             return fail("row text: a scrolling row must leave its Text on one line");
 
         er_reset();
@@ -1329,42 +1333,42 @@ int main(void)
      * -----------------------------------------------------------------------*/
     {
         er_reset();
-        ERNode* fr_root = er_node_create(ER_NODE_VIEW);
-        ERProps frp = props_default();
-        frp.width = 300;
-        frp.height = (int16_t)FB_H;
-        er_node_set_props(fr_root, &frp);
+        ERNode* flex_row_root = er_node_create(ER_NODE_VIEW);
+        ERProps flex_row_root_props = props_default();
+        flex_row_root_props.width = 300;
+        flex_row_root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
+        er_node_set_props(flex_row_root, &flex_row_root_props);
 
-        ERNode* fr_row = er_node_create(ER_NODE_VIEW);
-        ERProps frwp = props_default();
-        frwp.flex_direction = ER_FLEX_ROW;
-        frwp.align_items = ER_ALIGN_FLEX_START;
-        er_node_set_props(fr_row, &frwp);
-        ERNode* fr_box = er_node_create(ER_NODE_VIEW);
-        ERProps frbp = props_default();
-        frbp.width = 200;
-        frbp.height = 10;
-        er_node_set_props(fr_box, &frbp);
-        ERProps frtp = props_default();
-        frtp.flex_grow = 1;
-        frtp.flex_shrink = 1;
-        frtp.flex_basis = 0;
-        ERRect r_fr;
-        ERNode* fr_text = mk_text(frtp, "The same long description", &r_fr);
-        er_tree_append_child(fr_row, fr_box);
-        er_tree_append_child(fr_row, fr_text);
-        er_tree_append_child(fr_root, fr_row);
-        er_tree_set_root(fr_root);
+        ERNode* flex_row = er_node_create(ER_NODE_VIEW);
+        ERProps flex_row_props = props_default();
+        flex_row_props.flex_direction = ER_FLEX_ROW;
+        flex_row_props.align_items = ER_ALIGN_FLEX_START;
+        er_node_set_props(flex_row, &flex_row_props);
+        ERNode* flex_row_box = er_node_create(ER_NODE_VIEW);
+        ERProps flex_row_box_props = props_default();
+        flex_row_box_props.width = 200;
+        flex_row_box_props.height = 10;
+        er_node_set_props(flex_row_box, &flex_row_box_props);
+        ERProps flex_row_text_props = props_default();
+        flex_row_text_props.flex_grow = 1;
+        flex_row_text_props.flex_shrink = 1;
+        flex_row_text_props.flex_basis = 0;
+        ERRect flex_row_rect;
+        ERNode* flex_row_text = mk_text(flex_row_text_props, "The same long description", &flex_row_rect);
+        er_tree_append_child(flex_row, flex_row_box);
+        er_tree_append_child(flex_row, flex_row_text);
+        er_tree_append_child(flex_row_root, flex_row);
+        er_tree_set_root(flex_row_root);
 
-        int dummy = 0, lh = 0;
-        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &lh);
-        const int fr_lines = lines_at("The same long description", 100, NULL);
-        const uint32_t tr0 = er_text_measure_count();
+        int dummy = 0, line_height = 0;
+        er_text_measure("Save", 14, NULL, 0, 0, &dummy, &line_height);
+        const int flex_row_lines = lines_at("The same long description", 100, NULL);
+        const uint32_t flex_measures_before = er_text_measure_count();
         er_commit();
-        const uint32_t tr1 = er_text_measure_count();
-        if (fr_lines < 2 || r_fr.w != 100 || r_fr.h != fr_lines * lh)
+        const uint32_t flex_measures_after = er_text_measure_count();
+        if (flex_row_lines < 2 || flex_row_rect.w != 100 || flex_row_rect.h != flex_row_lines * line_height)
             return fail("text wrap: the flex: 1 Text must wrap at the 100 px it flexes to");
-        if (tr1 != tr0 + 3U)
+        if (flex_measures_after != flex_measures_before + 3U)
             return fail("measure-cache: a flexed row re-measured its Text more than once per width");
 
         er_reset();

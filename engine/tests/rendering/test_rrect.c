@@ -25,8 +25,8 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 128
-#define FB_H 128
+#define FRAMEBUFFER_WIDTH 128
+#define FRAMEBUFFER_HEIGHT 128
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -37,11 +37,11 @@
  */
 typedef struct
 {
-    uint32_t* fb;      /**< Flat ARGB8888 framebuffer; rows are fb_w pixels wide. */
-    int fb_w;          /**< Framebuffer width in pixels. */
-    int fb_h;          /**< Framebuffer height in pixels. */
-    int fills;         /**< Total fill_rect calls received. */
-    int out_of_bounds; /**< fill_rect calls that fell outside the framebuffer. */
+    uint32_t* framebuffer;  /**< Flat ARGB8888 framebuffer; rows are framebuffer_width pixels wide. */
+    int framebuffer_width;  /**< Framebuffer width in pixels. */
+    int framebuffer_height; /**< Framebuffer height in pixels. */
+    int fills;              /**< Total fill_rect calls received. */
+    int out_of_bounds;      /**< fill_rect calls that fell outside the framebuffer. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -51,110 +51,112 @@ typedef struct
 /**
  * @brief Backend fill_rect callback that writes pixels into a TestCtx framebuffer.
  *
- * @param[in] argb  ARGB8888 fill color.
- * @param[in] x     Left edge of the fill rectangle.
- * @param[in] y     Top edge of the fill rectangle.
- * @param[in] w     Width of the fill rectangle in pixels.
- * @param[in] h     Height of the fill rectangle in pixels.
- * @param[in] ctx   Pointer to the TestCtx to update.
+ * @param[in] argb    ARGB8888 fill color.
+ * @param[in] x       Left edge of the fill rectangle.
+ * @param[in] y       Top edge of the fill rectangle.
+ * @param[in] width   Width of the fill rectangle in pixels.
+ * @param[in] height  Height of the fill rectangle in pixels.
+ * @param[in] ctx     Pointer to the TestCtx to update.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    t->fills++;
-    if (x < 0 || y < 0 || x + w > t->fb_w || y + h > t->fb_h)
+    TestCtx* test_context = ctx;
+    test_context->fills++;
+    if (x < 0 || y < 0 || x + width > test_context->framebuffer_width || y + height > test_context->framebuffer_height)
     {
-        t->out_of_bounds++;
+        test_context->out_of_bounds++;
         return;
     }
-    for (int row = y; row < y + h; row++)
-        for (int col = x; col < x + w; col++)
-            t->fb[row * t->fb_w + col] = argb;
+    for (int row = y; row < y + height; row++)
+        for (int column = x; column < x + width; column++)
+            test_context->framebuffer[row * test_context->framebuffer_width + column] = argb;
 }
 
 /**
  * @brief Backend copy_rect callback — no-op stub.
  *
- * @param[in] src  Source pixel buffer (unused).
- * @param[in] s    Source stride in bytes (unused).
- * @param[in] x    Destination X coordinate (unused).
- * @param[in] y    Destination Y coordinate (unused).
- * @param[in] w    Width in pixels (unused).
- * @param[in] h    Height in pixels (unused).
- * @param[in] ctx  Opaque context (unused).
+ * @param[in] source  Source pixel buffer (unused).
+ * @param[in] stride  Source stride in bytes (unused).
+ * @param[in] x       Destination X coordinate (unused).
+ * @param[in] y       Destination Y coordinate (unused).
+ * @param[in] width   Width in pixels (unused).
+ * @param[in] height  Height in pixels (unused).
+ * @param[in] ctx     Opaque context (unused).
  */
-static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
+    (void)source;
+    (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief Backend blend_rect callback — no-op stub.
  *
- * @param[in] src  Source pixel buffer (unused).
- * @param[in] s    Source stride in bytes (unused).
- * @param[in] a    Global alpha (unused).
- * @param[in] x    Destination X coordinate (unused).
- * @param[in] y    Destination Y coordinate (unused).
- * @param[in] w    Width in pixels (unused).
- * @param[in] h    Height in pixels (unused).
- * @param[in] ctx  Opaque context (unused).
+ * @param[in] source  Source pixel buffer (unused).
+ * @param[in] stride  Source stride in bytes (unused).
+ * @param[in] alpha   Global alpha (unused).
+ * @param[in] x       Destination X coordinate (unused).
+ * @param[in] y       Destination Y coordinate (unused).
+ * @param[in] width   Width in pixels (unused).
+ * @param[in] height  Height in pixels (unused).
+ * @param[in] ctx     Opaque context (unused).
  */
-static void blend_cb(const void* src, int s, uint8_t a, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
-    (void)a;
+    (void)source;
+    (void)stride;
+    (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable description of the failed assertion.
+ * @param[in] message  Human-readable description of the failed assertion.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
 /**
  * @brief Reads a single ARGB8888 pixel from the test framebuffer.
  *
- * @param[in] t  TestCtx owning the framebuffer.
- * @param[in] x  X coordinate.
- * @param[in] y  Y coordinate.
+ * @param[in] test_context  TestCtx owning the framebuffer.
+ * @param[in] x             X coordinate.
+ * @param[in] y             Y coordinate.
  *
  * @return ARGB8888 pixel value at (x, y).
  */
-static uint32_t px(const TestCtx* t, int x, int y)
+static uint32_t px(const TestCtx* test_context, int x, int y)
 {
-    return t->fb[y * t->fb_w + x];
+    return test_context->framebuffer[y * test_context->framebuffer_width + x];
 }
 
 /**
  * @brief Zeros the framebuffer and resets call statistics.
  *
- * @param[in,out] t  TestCtx to reset.
+ * @param[in,out] test_context  TestCtx to reset.
  */
-static void reset(TestCtx* t)
+static void reset(TestCtx* test_context)
 {
-    memset(t->fb, 0, (size_t)t->fb_w * (size_t)t->fb_h * sizeof(uint32_t));
-    t->fills = 0;
-    t->out_of_bounds = 0;
+    memset(test_context->framebuffer,
+           0,
+           (size_t)test_context->framebuffer_width * (size_t)test_context->framebuffer_height * sizeof(uint32_t));
+    test_context->fills = 0;
+    test_context->out_of_bounds = 0;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -178,10 +180,10 @@ static void reset(TestCtx* t)
  */
 int main(void)
 {
-    static uint32_t fb[FB_W * FB_H];
-    TestCtx tc = {fb, FB_W, FB_H, 0, 0};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
-    embedded_renderer_set_backend(&be);
+    static uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    TestCtx test_context = {framebuffer, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT, 0, 0};
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &test_context};
+    embedded_renderer_set_backend(&backend);
 
     /* --- er_rrect_clamp_radii is total: no input produces a negative radius ---
      *
@@ -193,7 +195,7 @@ int main(void)
     {
         struct
         {
-            int w, h, tl, tr, br, bl;
+            int width, height, top_left, top_right, bottom_right, bottom_left;
         } cases[] = {
             {40, 40, -5, -5, -5, -5}, /* uniform negative */
             {40, 40, 10, -5, -5, -5}, /* the reachable mixed-with-negative case */
@@ -206,36 +208,44 @@ int main(void)
             {1, 1, 10, 10, 10, 10},   /* one-pixel box */
             {40, 40, 0, 0, 0, 0},     /* already square */
         };
-        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        for (unsigned case_index = 0; case_index < sizeof(cases) / sizeof(cases[0]); case_index++)
         {
-            int tl = cases[i].tl, tr = cases[i].tr, br = cases[i].br, bl = cases[i].bl;
-            er_rrect_clamp_radii(cases[i].w, cases[i].h, &tl, &tr, &br, &bl);
-            if (tl < 0 || tr < 0 || br < 0 || bl < 0)
+            int top_left = cases[case_index].top_left, top_right = cases[case_index].top_right,
+                bottom_right = cases[case_index].bottom_right, bottom_left = cases[case_index].bottom_left;
+            er_rrect_clamp_radii(
+                cases[case_index].width, cases[case_index].height, &top_left, &top_right, &bottom_right, &bottom_left);
+            if (top_left < 0 || top_right < 0 || bottom_right < 0 || bottom_left < 0)
             {
                 printf("  w=%d h=%d in(%d,%d,%d,%d) -> out(%d,%d,%d,%d)\n",
-                       cases[i].w,
-                       cases[i].h,
-                       cases[i].tl,
-                       cases[i].tr,
-                       cases[i].br,
-                       cases[i].bl,
-                       tl,
-                       tr,
-                       br,
-                       bl);
+                       cases[case_index].width,
+                       cases[case_index].height,
+                       cases[case_index].top_left,
+                       cases[case_index].top_right,
+                       cases[case_index].bottom_right,
+                       cases[case_index].bottom_left,
+                       top_left,
+                       top_right,
+                       bottom_right,
+                       bottom_left);
                 return fail("clamp_radii: returned a negative radius");
             }
             /* A radius may never exceed the box either, or a row's span inverts. */
-            const int cap = (cases[i].w > cases[i].h) ? cases[i].w : cases[i].h;
-            if (cases[i].w > 0 && cases[i].h > 0 && (tl > cap || tr > cap || br > cap || bl > cap))
+            const int longest_side = (cases[case_index].width > cases[case_index].height) ? cases[case_index].width
+                                                                                          : cases[case_index].height;
+            if (cases[case_index].width > 0 && cases[case_index].height > 0
+                && (top_left > longest_side || top_right > longest_side || bottom_right > longest_side
+                    || bottom_left > longest_side))
                 return fail("clamp_radii: returned a radius larger than the box");
             /* Opposing pairs must fit along their shared edge, which is the whole point. */
-            if (cases[i].w > 0 && cases[i].h > 0
-                && (tl + tr > cases[i].w || bl + br > cases[i].w || tl + bl > cases[i].h || tr + br > cases[i].h))
+            if (cases[case_index].width > 0 && cases[case_index].height > 0
+                && (top_left + top_right > cases[case_index].width
+                    || bottom_left + bottom_right > cases[case_index].width
+                    || top_left + bottom_left > cases[case_index].height
+                    || top_right + bottom_right > cases[case_index].height))
                 return fail("clamp_radii: an opposing pair still overlaps");
-            if (cases[i].w <= 0 || cases[i].h <= 0)
+            if (cases[case_index].width <= 0 || cases[case_index].height <= 0)
             {
-                if (tl != 0 || tr != 0 || br != 0 || bl != 0)
+                if (top_left != 0 || top_right != 0 || bottom_right != 0 || bottom_left != 0)
                     return fail("clamp_radii: a box with no area kept its corner radii");
             }
         }
@@ -243,51 +253,51 @@ int main(void)
 
     /* --- transparent color: no fill_rect calls emitted --- */
     er_rrect_fill(0x00FF0000, 0, 0, 20, 20, 4);
-    if (tc.fills != 0)
+    if (test_context.fills != 0)
         return fail("transparent fill emitted fill_rect calls");
 
     /* --- radius=0: fills the exact bounding box --- */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill(0xFF112233, 10, 10, 20, 20, 0);
-    if (px(&tc, 10, 10) != 0xFF112233)
+    if (px(&test_context, 10, 10) != 0xFF112233)
         return fail("plain rect: top-left corner not filled");
-    if (px(&tc, 29, 29) != 0xFF112233)
+    if (px(&test_context, 29, 29) != 0xFF112233)
         return fail("plain rect: bottom-right corner not filled");
-    if (px(&tc, 9, 10) != 0)
+    if (px(&test_context, 9, 10) != 0)
         return fail("plain rect: pixel left of rect incorrectly filled");
-    if (px(&tc, 10, 9) != 0)
+    if (px(&test_context, 10, 9) != 0)
         return fail("plain rect: pixel above rect incorrectly filled");
 
     /* --- rounded corners exclude bounding-box corners --- */
     /* 20x20 rect at (0,0) with r=4. Arc centres at (4,4), (15,4), (4,15), (15,15). */
     /* (0,0): distance from (4,4) = sqrt(32) > 4 → outside arc → not filled.        */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill(0xFF445566, 0, 0, 20, 20, 4);
-    if (px(&tc, 0, 0) != 0)
+    if (px(&test_context, 0, 0) != 0)
         return fail("rrect: top-left corner pixel should not be filled");
-    if (px(&tc, 19, 0) != 0)
+    if (px(&test_context, 19, 0) != 0)
         return fail("rrect: top-right corner pixel should not be filled");
-    if (px(&tc, 0, 19) != 0)
+    if (px(&test_context, 0, 19) != 0)
         return fail("rrect: bottom-left corner pixel should not be filled");
-    if (px(&tc, 19, 19) != 0)
+    if (px(&test_context, 19, 19) != 0)
         return fail("rrect: bottom-right corner pixel should not be filled");
 
     /* --- interior and span-boundary pixels are filled correctly --- */
     /* dy=4 (top row y=0): dx=0, span [4, 16). Pixel 4 filled solid.         */
     /* The middle strip starts at y=4 (r=4): x=0 filled for full-width rows.  */
-    if (px(&tc, 10, 10) != 0xFF445566)
+    if (px(&test_context, 10, 10) != 0xFF445566)
         return fail("rrect: center pixel not filled");
-    if (px(&tc, 4, 0) != 0xFF445566)
+    if (px(&test_context, 4, 0) != 0xFF445566)
         return fail("rrect: first pixel of top-row span not filled");
-    if (px(&tc, 15, 0) != 0xFF445566)
+    if (px(&test_context, 15, 0) != 0xFF445566)
         return fail("rrect: last pixel of top-row span not filled");
-    if (px(&tc, 0, 4) != 0xFF445566)
+    if (px(&test_context, 0, 4) != 0xFF445566)
         return fail("rrect: first middle-strip pixel at x=0 not filled");
 
     /* --- no out-of-bounds fills for a rect aligned to the FB edge --- */
-    reset(&tc);
-    er_rrect_fill(0xFF778899, FB_W - 20, FB_H - 20, 20, 20, 4);
-    if (tc.out_of_bounds != 0)
+    reset(&test_context);
+    er_rrect_fill(0xFF778899, FRAMEBUFFER_WIDTH - 20, FRAMEBUFFER_HEIGHT - 20, 20, 20, 4);
+    if (test_context.out_of_bounds != 0)
         return fail("rrect near FB edge produced out-of-bounds fills");
 
     /* --- border ring: correct colors in outer ring and inner background --- */
@@ -302,19 +312,19 @@ int main(void)
     /*                                                                         */
     /* Top row y=0: outer dy=6, dx=0, span [6,24). Inner doesn't reach y=0.  */
     /* px(15,0): in outer span → red. px(2,0): outside AA band → empty.       */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill_bordered(0xFF0000FF, 0xFFFF0000, 3, 0, 0, 30, 30, 6);
-    if (px(&tc, 0, 6) != 0xFFFF0000)
+    if (px(&test_context, 0, 6) != 0xFFFF0000)
         return fail("border ring: left edge pixel should be border color");
-    if (px(&tc, 29, 6) != 0xFFFF0000)
+    if (px(&test_context, 29, 6) != 0xFFFF0000)
         return fail("border ring: right edge pixel should be border color");
-    if (px(&tc, 15, 15) != 0xFF0000FF)
+    if (px(&test_context, 15, 15) != 0xFF0000FF)
         return fail("border ring: center pixel should be background color");
-    if (px(&tc, 3, 6) != 0xFF0000FF)
+    if (px(&test_context, 3, 6) != 0xFF0000FF)
         return fail("border ring: first inner pixel should be background color");
-    if (px(&tc, 15, 0) != 0xFFFF0000)
+    if (px(&test_context, 15, 0) != 0xFFFF0000)
         return fail("border ring: top-row center pixel should be border color");
-    if (px(&tc, 2, 0) != 0)
+    if (px(&test_context, 2, 0) != 0)
         return fail("border ring: pixel outside outer arc should be empty");
 
     /* The assertions above cover the OPAQUE background path, which still fills the whole shape in
@@ -329,24 +339,24 @@ int main(void)
      * on a zero-alpha colour, so a View with a border and no backgroundColor (React Native's
      * default) rendered as a solid block of border colour. fill_cb overwrites rather than
      * composites, so an untouched interior pixel reads as exactly 0 here. */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill_bordered(0x00000000, 0xFFFF0000, 4, 0, 0, 40, 40, 10);
-    if (px(&tc, 20, 20) != 0)
+    if (px(&test_context, 20, 20) != 0)
         return fail("transparent bg + border: the interior was painted (solid blob, not a ring)");
-    if (px(&tc, 0, 20) != 0xFFFF0000)
+    if (px(&test_context, 0, 20) != 0xFFFF0000)
         return fail("transparent bg + border: the left band is not border colour");
-    if (px(&tc, 39, 20) != 0xFFFF0000)
+    if (px(&test_context, 39, 20) != 0xFFFF0000)
         return fail("transparent bg + border: the right band is not border colour");
-    if (px(&tc, 20, 0) != 0xFFFF0000)
+    if (px(&test_context, 20, 0) != 0xFFFF0000)
         return fail("transparent bg + border: the top band is not border colour");
-    if (px(&tc, 4, 20) != 0)
+    if (px(&test_context, 4, 20) != 0)
         return fail("transparent bg + border: the band is thicker than borderWidth");
-    if (px(&tc, 0, 0) != 0)
+    if (px(&test_context, 0, 0) != 0)
         return fail("transparent bg + border: the rounded corner was filled");
     /* The whole interior, inset clear of the band's anti-aliased inner edge, must be untouched. */
-    for (int yy = 7; yy < 33; yy++)
-        for (int xx = 7; xx < 33; xx++)
-            if (px(&tc, xx, yy) != 0)
+    for (int pixel_y = 7; pixel_y < 33; pixel_y++)
+        for (int pixel_x = 7; pixel_x < 33; pixel_x++)
+            if (px(&test_context, pixel_x, pixel_y) != 0)
                 return fail("transparent bg + border: interior pixels were painted");
 
     /* --- the ring never paints outside the silhouette a solid fill would cover ---
@@ -354,45 +364,46 @@ int main(void)
      * Same box, once filled solid and once stroked: every pixel the fill leaves empty must stay
      * empty in the ring too, or the border overhangs its own rounded corner. */
     {
-        static uint8_t solid[FB_W * FB_H];
-        reset(&tc);
+        static uint8_t solid[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+        reset(&test_context);
         er_rrect_fill(0xFF000000, 8, 8, 44, 36, 12);
-        for (int i = 0; i < FB_W * FB_H; i++)
-            solid[i] = (uint8_t)(tc.fb[i] != 0);
+        for (int pixel_index = 0; pixel_index < FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT; pixel_index++)
+            solid[pixel_index] = (uint8_t)(test_context.framebuffer[pixel_index] != 0);
 
-        reset(&tc);
+        reset(&test_context);
         er_rrect_fill_ring(0xFF000000, 8, 8, 44, 36, 12, 12, 12, 12, 5);
-        if (tc.out_of_bounds != 0)
+        if (test_context.out_of_bounds != 0)
             return fail("ring: produced out-of-bounds fills");
-        for (int yy = 0; yy < FB_H; yy++)
-            for (int xx = 0; xx < FB_W; xx++)
-                if (tc.fb[yy * FB_W + xx] != 0 && !solid[yy * FB_W + xx])
+        for (int pixel_y = 0; pixel_y < FRAMEBUFFER_HEIGHT; pixel_y++)
+            for (int pixel_x = 0; pixel_x < FRAMEBUFFER_WIDTH; pixel_x++)
+                if (test_context.framebuffer[pixel_y * FRAMEBUFFER_WIDTH + pixel_x] != 0
+                    && !solid[pixel_y * FRAMEBUFFER_WIDTH + pixel_x])
                     return fail("ring: painted a pixel outside the solid fill's silhouette");
         /* ...and it really is hollow. */
-        if (px(&tc, 30, 26) != 0)
+        if (px(&test_context, 30, 26) != 0)
             return fail("ring: the interior was painted");
     }
 
     /* --- per-corner radii: only the rounded corners are cut --- */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill_ring(0xFF00FF00, 0, 0, 40, 40, 16, 0, 16, 0, 4);
-    if (px(&tc, 0, 0) != 0)
+    if (px(&test_context, 0, 0) != 0)
         return fail("per-corner ring: the rounded top-left corner was filled");
-    if (px(&tc, 39, 0) != 0xFF00FF00)
+    if (px(&test_context, 39, 0) != 0xFF00FF00)
         return fail("per-corner ring: the square top-right corner was cut");
-    if (px(&tc, 0, 39) != 0xFF00FF00)
+    if (px(&test_context, 0, 39) != 0xFF00FF00)
         return fail("per-corner ring: the square bottom-left corner was cut");
-    if (px(&tc, 39, 39) != 0)
+    if (px(&test_context, 39, 39) != 0)
         return fail("per-corner ring: the rounded bottom-right corner was filled");
-    if (px(&tc, 20, 20) != 0)
+    if (px(&test_context, 20, 20) != 0)
         return fail("per-corner ring: the interior was painted");
 
     /* --- a band thick enough to swallow the interior fills the whole shape --- */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill_ring(0xFF123456, 0, 0, 20, 20, 6, 6, 6, 6, 40);
-    if (px(&tc, 10, 10) != 0xFF123456)
+    if (px(&test_context, 10, 10) != 0xFF123456)
         return fail("over-thick ring: the shape was not filled solid");
-    if (px(&tc, 0, 0) != 0)
+    if (px(&test_context, 0, 0) != 0)
         return fail("over-thick ring: the rounded corner was filled");
 
     /* --- per-edge borders follow the corner radius ---
@@ -401,48 +412,49 @@ int main(void)
      * squared off every corner no matter what borderRadius said. The band is now stroked through the
      * same rounded geometry, and must stay inside the silhouette a solid fill would cover. */
     {
-        static uint8_t solid[FB_W * FB_H];
-        reset(&tc);
+        static uint8_t solid[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+        reset(&test_context);
         er_rrect_fill(0xFF000000, 0, 0, 48, 40, 14);
-        for (int i = 0; i < FB_W * FB_H; i++)
-            solid[i] = (uint8_t)(tc.fb[i] != 0);
+        for (int pixel_index = 0; pixel_index < FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT; pixel_index++)
+            solid[pixel_index] = (uint8_t)(test_context.framebuffer[pixel_index] != 0);
 
-        reset(&tc);
+        reset(&test_context);
         {
             /* Thin sides, thick top and bottom, one colour. */
-            const ERRRectBorder b = {2, 8, 2, 8, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
-            er_rrect_fill_ring_edges(0, 0, 48, 40, 14, 14, 14, 14, &b);
+            const ERRRectBorder border = {2, 8, 2, 8, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+            er_rrect_fill_ring_edges(0, 0, 48, 40, 14, 14, 14, 14, &border);
         }
-        if (tc.out_of_bounds != 0)
+        if (test_context.out_of_bounds != 0)
             return fail("per-edge ring: produced out-of-bounds fills");
-        for (int yy = 0; yy < FB_H; yy++)
-            for (int xx = 0; xx < FB_W; xx++)
-                if (tc.fb[yy * FB_W + xx] != 0 && !solid[yy * FB_W + xx])
+        for (int pixel_y = 0; pixel_y < FRAMEBUFFER_HEIGHT; pixel_y++)
+            for (int pixel_x = 0; pixel_x < FRAMEBUFFER_WIDTH; pixel_x++)
+                if (test_context.framebuffer[pixel_y * FRAMEBUFFER_WIDTH + pixel_x] != 0
+                    && !solid[pixel_y * FRAMEBUFFER_WIDTH + pixel_x])
                     return fail("per-edge ring: the border escaped the rounded silhouette");
         /* Each edge is as thick as it was asked to be, measured at the box's mid-lines. */
-        if (px(&tc, 0, 20) == 0 || px(&tc, 1, 20) == 0)
+        if (px(&test_context, 0, 20) == 0 || px(&test_context, 1, 20) == 0)
             return fail("per-edge ring: the 2px left edge is missing");
-        if (px(&tc, 2, 20) != 0)
+        if (px(&test_context, 2, 20) != 0)
             return fail("per-edge ring: the left edge is thicker than borderLeftWidth");
-        if (px(&tc, 24, 7) == 0)
+        if (px(&test_context, 24, 7) == 0)
             return fail("per-edge ring: the 8px top edge is missing");
-        if (px(&tc, 24, 8) != 0)
+        if (px(&test_context, 24, 8) != 0)
             return fail("per-edge ring: the top edge is thicker than borderTopWidth");
     }
 
     /* --- each edge keeps its own colour --- */
-    reset(&tc);
+    reset(&test_context);
     {
-        const ERRRectBorder b = {5, 5, 5, 5, 0xFFFFD54F, 0xFFE57373, 0xFF81C784, 0xFF64B5F6};
-        er_rrect_fill_ring_edges(0, 0, 48, 48, 12, 12, 12, 12, &b);
+        const ERRRectBorder border = {5, 5, 5, 5, 0xFFFFD54F, 0xFFE57373, 0xFF81C784, 0xFF64B5F6};
+        er_rrect_fill_ring_edges(0, 0, 48, 48, 12, 12, 12, 12, &border);
     }
-    if (px(&tc, 24, 0) != 0xFFE57373)
+    if (px(&test_context, 24, 0) != 0xFFE57373)
         return fail("per-edge colours: the top edge is not its own colour");
-    if (px(&tc, 24, 47) != 0xFF64B5F6)
+    if (px(&test_context, 24, 47) != 0xFF64B5F6)
         return fail("per-edge colours: the bottom edge is not its own colour");
-    if (px(&tc, 0, 24) != 0xFFFFD54F)
+    if (px(&test_context, 0, 24) != 0xFFFFD54F)
         return fail("per-edge colours: the left edge is not its own colour");
-    if (px(&tc, 47, 24) != 0xFF81C784)
+    if (px(&test_context, 47, 24) != 0xFF81C784)
         return fail("per-edge colours: the right edge is not its own colour");
 
     /* --- adjacent edge colours meet on a corner diagonal ---
@@ -452,49 +464,49 @@ int main(void)
      * the two band widths imply, which is 45 degrees when they are equal.
      */
     {
-        const uint32_t TOP = 0xFFE53935, RIGHT = 0xFF43A047, BOT = 0xFF1E88E5, LEFT = 0xFFFDD835;
+        const uint32_t TOP = 0xFFE53935, RIGHT = 0xFF43A047, BOTTOM = 0xFF1E88E5, LEFT = 0xFFFDD835;
 
         /* Square corners, equal widths: the mitre is the 45-degree diagonal. */
-        reset(&tc);
+        reset(&test_context);
         {
-            const ERRRectBorder b = {10, 10, 10, 10, LEFT, TOP, RIGHT, BOT, 0};
-            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &b);
+            const ERRRectBorder border = {10, 10, 10, 10, LEFT, TOP, RIGHT, BOTTOM, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &border);
         }
-        if (px(&tc, 8, 2) != TOP)
+        if (px(&test_context, 8, 2) != TOP)
             return fail("square mitre: above the diagonal is not the top colour");
-        if (px(&tc, 2, 8) != LEFT)
+        if (px(&test_context, 2, 8) != LEFT)
             return fail("square mitre: below the diagonal is not the left colour");
-        if (px(&tc, 51, 2) != TOP)
+        if (px(&test_context, 51, 2) != TOP)
             return fail("square mitre: top-right corner is not the top colour above the diagonal");
-        if (px(&tc, 57, 8) != RIGHT)
+        if (px(&test_context, 57, 8) != RIGHT)
             return fail("square mitre: top-right corner is not the right colour below the diagonal");
-        if (px(&tc, 2, 51) != LEFT)
+        if (px(&test_context, 2, 51) != LEFT)
             return fail("square mitre: bottom-left corner is not the left colour");
-        if (px(&tc, 8, 57) != BOT)
+        if (px(&test_context, 8, 57) != BOTTOM)
             return fail("square mitre: bottom-left corner is not the bottom colour");
 
         /* Rounded corners, equal widths: the mitre becomes a radial line through the arc. */
-        reset(&tc);
+        reset(&test_context);
         {
-            const ERRRectBorder b = {6, 6, 6, 6, LEFT, TOP, RIGHT, BOT, 0};
-            er_rrect_fill_ring_edges(0, 0, 60, 60, 20, 20, 20, 20, &b);
+            const ERRRectBorder border = {6, 6, 6, 6, LEFT, TOP, RIGHT, BOTTOM, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 20, 20, 20, 20, &border);
         }
-        if (px(&tc, 18, 1) != TOP)
+        if (px(&test_context, 18, 1) != TOP)
             return fail("rounded mitre: the top of the arc is not the top colour");
-        if (px(&tc, 1, 18) != LEFT)
+        if (px(&test_context, 1, 18) != LEFT)
             return fail("rounded mitre: the left of the arc is not the left colour");
 
         /* Unequal widths tilt the mitre toward the thinner edge, so a thick top owns more of the
          * corner. With top 16 and left 4 the dividing line runs (0,0) to (4,16): at row 6 it sits at
          * x = 1.5, so x = 3 is still the top's and x = 0 is the left's. */
-        reset(&tc);
+        reset(&test_context);
         {
-            const ERRRectBorder b = {4, 16, 4, 16, LEFT, TOP, RIGHT, BOT, 0};
-            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &b);
+            const ERRRectBorder border = {4, 16, 4, 16, LEFT, TOP, RIGHT, BOTTOM, 0};
+            er_rrect_fill_ring_edges(0, 0, 60, 60, 0, 0, 0, 0, &border);
         }
-        if (px(&tc, 3, 6) != TOP)
+        if (px(&test_context, 3, 6) != TOP)
             return fail("tilted mitre: a thick top did not claim its side of the diagonal");
-        if (px(&tc, 0, 6) != LEFT)
+        if (px(&test_context, 0, 6) != LEFT)
             return fail("tilted mitre: a thin left lost its side of the diagonal");
 
 #if ERUI_BORDER_AA
@@ -502,21 +514,21 @@ int main(void)
          * badly at 45 degrees and reads as the two colours interlocking. Pure red against pure blue
          * makes the ramp checkable: the pixel the diagonal passes through is a half-and-half mix,
          * and it steps exactly one column per row. */
-        reset(&tc);
+        reset(&test_context);
         {
             const uint32_t RED = 0xFFFF0000, BLUE = 0xFF0000FF;
-            const ERRRectBorder b = {12, 12, 12, 12, BLUE, RED, RED, BLUE, 0};
-            er_rrect_fill_ring_edges(0, 0, 48, 48, 0, 0, 0, 0, &b);
-            for (int d = 2; d <= 8; d++)
+            const ERRRectBorder border = {12, 12, 12, 12, BLUE, RED, RED, BLUE, 0};
+            er_rrect_fill_ring_edges(0, 0, 48, 48, 0, 0, 0, 0, &border);
+            for (int diagonal = 2; diagonal <= 8; diagonal++)
             {
-                const uint32_t seam = px(&tc, d, d);
-                const uint32_t r = (seam >> 16) & 0xFFu;
-                const uint32_t bch = seam & 0xFFu;
-                if (r < 100 || r > 155 || bch < 100 || bch > 155)
+                const uint32_t seam = px(&test_context, diagonal, diagonal);
+                const uint32_t red = (seam >> 16) & 0xFFu;
+                const uint32_t blue_channel = seam & 0xFFu;
+                if (red < 100 || red > 155 || blue_channel < 100 || blue_channel > 155)
                     return fail("mitre AA: the seam pixel is not a blend of the two edge colours");
-                if (px(&tc, d - 1, d) != BLUE)
+                if (px(&test_context, diagonal - 1, diagonal) != BLUE)
                     return fail("mitre AA: the pixel before the seam is not the left colour");
-                if (px(&tc, d + 1, d) != RED)
+                if (px(&test_context, diagonal + 1, diagonal) != RED)
                     return fail("mitre AA: the pixel after the seam is not the top colour");
             }
         }
@@ -524,25 +536,25 @@ int main(void)
     }
 
     /* --- a bottom-only rule follows the bottom corners and leaves the rest alone --- */
-    reset(&tc);
+    reset(&test_context);
     {
-        const ERRRectBorder b = {0, 0, 0, 6, 0, 0, 0, 0xFF4DD0E1};
-        er_rrect_fill_ring_edges(0, 0, 48, 40, 14, 14, 14, 14, &b);
+        const ERRRectBorder border = {0, 0, 0, 6, 0, 0, 0, 0xFF4DD0E1};
+        er_rrect_fill_ring_edges(0, 0, 48, 40, 14, 14, 14, 14, &border);
     }
-    if (px(&tc, 24, 0) != 0 || px(&tc, 0, 20) != 0)
+    if (px(&test_context, 24, 0) != 0 || px(&test_context, 0, 20) != 0)
         return fail("bottom-only rule: painted an edge that has no width");
-    if (px(&tc, 24, 39) != 0xFF4DD0E1)
+    if (px(&test_context, 24, 39) != 0xFF4DD0E1)
         return fail("bottom-only rule: the bottom edge is missing");
-    if (px(&tc, 0, 39) != 0)
+    if (px(&test_context, 0, 39) != 0)
         return fail("bottom-only rule: the underline squared off the bottom-left corner");
 
     /* --- transparent edge colours draw nothing (the borderWidth-as-spacing trick) --- */
-    reset(&tc);
+    reset(&test_context);
     {
-        const ERRRectBorder b = {8, 8, 8, 8, 0, 0, 0, 0};
-        er_rrect_fill_ring_edges(0, 0, 48, 48, 12, 12, 12, 12, &b);
+        const ERRRectBorder border = {8, 8, 8, 8, 0, 0, 0, 0};
+        er_rrect_fill_ring_edges(0, 0, 48, 48, 12, 12, 12, 12, &border);
     }
-    if (tc.fills != 0)
+    if (test_context.fills != 0)
         return fail("transparent edges: emitted fills");
 
     /* --- dashed / dotted borders run around the corners ---
@@ -551,37 +563,37 @@ int main(void)
      * ignored the radius and stopped dead at each corner. It now steps by arc length around the
      * rounded perimeter. */
     {
-        static uint8_t solid[FB_W * FB_H];
-        const int bx = 4, by = 4, bw_ = 56, bh = 48, rad = 16;
+        static uint8_t solid[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+        const int box_x = 4, box_y = 4, box_width = 56, box_height = 48, radius = 16;
 
-        reset(&tc);
-        er_rrect_fill(0xFF000000, bx, by, bw_, bh, rad);
-        for (int i = 0; i < FB_W * FB_H; i++)
-            solid[i] = (uint8_t)(tc.fb[i] != 0);
+        reset(&test_context);
+        er_rrect_fill(0xFF000000, box_x, box_y, box_width, box_height, radius);
+        for (int pixel_index = 0; pixel_index < FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT; pixel_index++)
+            solid[pixel_index] = (uint8_t)(test_context.framebuffer[pixel_index] != 0);
 
         for (uint8_t style = 1; style <= 2; style++)
         {
-            reset(&tc);
+            reset(&test_context);
             {
-                const ERRRectBorder b = {3, 3, 3, 3, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, style};
-                er_rrect_fill_ring_edges(bx, by, bw_, bh, rad, rad, rad, rad, &b);
+                const ERRRectBorder border = {3, 3, 3, 3, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, style};
+                er_rrect_fill_ring_edges(box_x, box_y, box_width, box_height, radius, radius, radius, radius, &border);
             }
-            if (tc.out_of_bounds != 0)
+            if (test_context.out_of_bounds != 0)
                 return fail("dashed border: produced out-of-bounds fills");
 
             int painted = 0;
             int corner_on = 0;
-            for (int yy = 0; yy < FB_H; yy++)
+            for (int pixel_y = 0; pixel_y < FRAMEBUFFER_HEIGHT; pixel_y++)
             {
-                for (int xx = 0; xx < FB_W; xx++)
+                for (int pixel_x = 0; pixel_x < FRAMEBUFFER_WIDTH; pixel_x++)
                 {
-                    if (tc.fb[yy * FB_W + xx] == 0)
+                    if (test_context.framebuffer[pixel_y * FRAMEBUFFER_WIDTH + pixel_x] == 0)
                         continue;
                     painted++;
                     /* THE regression check: a straight dash rect spills past the rounded corner. */
-                    if (!solid[yy * FB_W + xx])
+                    if (!solid[pixel_y * FRAMEBUFFER_WIDTH + pixel_x])
                         return fail("dashed border: a dash escaped the rounded silhouette");
-                    if (xx < bx + rad && yy < by + rad)
+                    if (pixel_x < box_x + radius && pixel_y < box_y + radius)
                         corner_on++;
                 }
             }
@@ -589,19 +601,19 @@ int main(void)
                 return fail("dashed border: nothing was painted");
 
             /* The solid ring of the same box, for the two ratios below. */
-            reset(&tc);
+            reset(&test_context);
             {
-                const ERRRectBorder b = {3, 3, 3, 3, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0};
-                er_rrect_fill_ring_edges(bx, by, bw_, bh, rad, rad, rad, rad, &b);
+                const ERRRectBorder border = {3, 3, 3, 3, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0};
+                er_rrect_fill_ring_edges(box_x, box_y, box_width, box_height, radius, radius, radius, radius, &border);
             }
             int solid_ring = 0;
             int solid_corner = 0;
-            for (int yy = 0; yy < FB_H; yy++)
-                for (int xx = 0; xx < FB_W; xx++)
-                    if (tc.fb[yy * FB_W + xx] != 0)
+            for (int pixel_y = 0; pixel_y < FRAMEBUFFER_HEIGHT; pixel_y++)
+                for (int pixel_x = 0; pixel_x < FRAMEBUFFER_WIDTH; pixel_x++)
+                    if (test_context.framebuffer[pixel_y * FRAMEBUFFER_WIDTH + pixel_x] != 0)
                     {
                         solid_ring++;
-                        if (xx < bx + rad && yy < by + rad)
+                        if (pixel_x < box_x + radius && pixel_y < box_y + radius)
                             solid_corner++;
                     }
             if (painted >= solid_ring)
@@ -616,16 +628,16 @@ int main(void)
     }
 
     /* --- a dash pattern with no radius still steps along the straight edges --- */
-    reset(&tc);
+    reset(&test_context);
     {
-        const ERRRectBorder b = {2, 2, 2, 2, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 1};
-        er_rrect_fill_ring_edges(0, 0, 60, 40, 0, 0, 0, 0, &b);
+        const ERRRectBorder border = {2, 2, 2, 2, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 1};
+        er_rrect_fill_ring_edges(0, 0, 60, 40, 0, 0, 0, 0, &border);
     }
     {
         int on_run = 0, gaps = 0;
-        for (int xx = 0; xx < 60; xx++)
+        for (int pixel_x = 0; pixel_x < 60; pixel_x++)
         {
-            if (px(&tc, xx, 0) != 0)
+            if (px(&test_context, pixel_x, 0) != 0)
             {
                 on_run++;
             }
@@ -640,19 +652,19 @@ int main(void)
     }
 
     /* --- degenerate inputs draw nothing rather than misbehaving --- */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill_ring(0x00FF0000, 0, 0, 30, 30, 8, 8, 8, 8, 3); /* transparent colour */
     er_rrect_fill_ring(0xFFFF0000, 0, 0, 30, 30, 8, 8, 8, 8, 0); /* zero-width band */
     er_rrect_fill_ring(0xFFFF0000, 0, 0, 0, 30, 8, 8, 8, 8, 3);  /* empty box */
-    if (tc.fills != 0)
+    if (test_context.fills != 0)
         return fail("degenerate ring: emitted fills");
 
     /* --- large radius clamps to pill shape without crashing --- */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill(0xFFAABBCC, 0, 0, 30, 20, 999);
-    if (px(&tc, 15, 10) != 0xFFAABBCC)
+    if (px(&test_context, 15, 10) != 0xFFAABBCC)
         return fail("large-radius pill: center pixel not filled");
-    if (tc.out_of_bounds != 0)
+    if (test_context.out_of_bounds != 0)
         return fail("large-radius pill: produced out-of-bounds fills");
 
 #if ERUI_BORDER_AA
@@ -663,14 +675,14 @@ int main(void)
     /* SDF: cx=3.5, cy=0.5, dist=sqrt(12.5)≈3.536, cov=4.5-3.536=0.964.     */
     /* alpha = (uint8_t)(0.964*255+0.5) = 246.                                */
     /* Accept [200, 254] to allow for minor floating-point platform variation. */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill(0xFF000000, 5, 5, 20, 20, 4);
     {
-        uint32_t aa_pixel = px(&tc, 5, 8);
-        uint8_t aa_alpha = (uint8_t)(aa_pixel >> 24);
-        if (aa_alpha == 0 || aa_alpha == 0xFF)
+        uint32_t antialiased_pixel = px(&test_context, 5, 8);
+        uint8_t antialiased_alpha = (uint8_t)(antialiased_pixel >> 24);
+        if (antialiased_alpha == 0 || antialiased_alpha == 0xFF)
             return fail("AA edge pixel should have partial alpha (not 0 or 255)");
-        if (aa_alpha < 200 || aa_alpha > 254)
+        if (antialiased_alpha < 200 || antialiased_alpha > 254)
             return fail("AA edge pixel alpha outside expected range [200, 254]");
     }
 
@@ -683,27 +695,27 @@ int main(void)
     /* The fringe runs six pixels outward on each side with strictly falling     */
     /* coverage (0.994 .. 0.239), and the seventh sample goes negative — so      */
     /* x=13 and x=46 must stay untouched.                                        */
-    reset(&tc);
+    reset(&test_context);
     er_rrect_fill(0xFF000000, 0, 0, 60, 60, 20);
     {
-        uint8_t prev = 255U;
-        for (int k = 0; k < 6; k++)
+        uint8_t previous_alpha = 255U;
+        for (int step = 0; step < 6; step++)
         {
-            const uint8_t la = (uint8_t)(px(&tc, 19 - k, 0) >> 24);
-            const uint8_t ra = (uint8_t)(px(&tc, 40 + k, 0) >> 24);
-            if (la == 0U)
+            const uint8_t left_alpha = (uint8_t)(px(&test_context, 19 - step, 0) >> 24);
+            const uint8_t right_alpha = (uint8_t)(px(&test_context, 40 + step, 0) >> 24);
+            if (left_alpha == 0U)
                 return fail("AA fringe: the ramp stopped short on the left of the arc");
-            if (ra == 0U)
+            if (right_alpha == 0U)
                 return fail("AA fringe: the ramp stopped short on the right of the arc");
-            if (la != ra)
+            if (left_alpha != right_alpha)
                 return fail("AA fringe: the two sides of the arc are not mirrored");
-            if (la >= prev)
+            if (left_alpha >= previous_alpha)
                 return fail("AA fringe: coverage did not fall as the walk stepped outward");
-            prev = la;
+            previous_alpha = left_alpha;
         }
-        if (px(&tc, 13, 0) != 0U || px(&tc, 46, 0) != 0U)
+        if (px(&test_context, 13, 0) != 0U || px(&test_context, 46, 0) != 0U)
             return fail("AA fringe: the walk painted past the end of the arc");
-        if (tc.out_of_bounds != 0)
+        if (test_context.out_of_bounds != 0)
             return fail("AA fringe: produced out-of-bounds fills");
     }
 #endif

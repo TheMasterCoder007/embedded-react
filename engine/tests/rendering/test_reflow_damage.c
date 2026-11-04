@@ -37,75 +37,79 @@
 #include <string.h>
 
 #define SCREEN 200
-#define BAR_H 60
-#define KID 20
+#define BAR_HEIGHT 60
+#define KID_SIZE 20
+#define OPACITY_OPAQUE 255U
 
-static uint32_t s_fb[SCREEN * SCREEN];
+static uint32_t s_framebuffer[SCREEN * SCREEN];
 static int s_fill_count;
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
-static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || w <= 0 || h <= 0)
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || width <= 0 || height <= 0)
         return;
     s_fill_count++;
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
         if (row < 0 || row >= SCREEN)
             continue;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col < 0 || col >= SCREEN)
+            if (column < 0 || column >= SCREEN)
                 continue;
-            uint32_t* d = &s_fb[row * SCREEN + col];
-            const uint32_t inv = 255U - a;
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            const uint32_t sr = (argb >> 16) & 0xFFU, sg = (argb >> 8) & 0xFFU, sb = argb & 0xFFU;
-            *d = 0xFF000000U | ((div255(sr * a) + div255(dr * inv)) << 16) | ((div255(sg * a) + div255(dg * inv)) << 8)
-                 | (div255(sb * a) + div255(db * inv));
+            uint32_t* destination = &s_framebuffer[row * SCREEN + column];
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - alpha;
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU,
+                           source_blue = argb & 0xFFU;
+            *destination = 0xFF000000U | ((div255(source_red * alpha) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((div255(source_green * alpha) + div255(destination_green * inverse_alpha)) << 8)
+                           | (div255(source_blue * alpha) + div255(destination_blue * inverse_alpha));
         }
     }
 }
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
 /** @brief The bar's props at a given left padding — the one thing the tests vary. */
-static ERProps bar_props(int16_t padding_left, uint32_t bg)
+static ERProps bar_props(int16_t padding_left, uint32_t background)
 {
-    ERProps p = props_default();
-    p.width = SCREEN;
-    p.height = BAR_H;
-    p.flex_direction = ER_FLEX_ROW;
-    p.padding_left = padding_left;
-    p.background_color = bg;
-    return p;
+    ERProps props = props_default();
+    props.width = SCREEN;
+    props.height = BAR_HEIGHT;
+    props.flex_direction = ER_FLEX_ROW;
+    props.padding_left = padding_left;
+    props.background_color = background;
+    return props;
 }
 
 /** @brief root(white, 200x200) → bar(grey, full-width strip) → kid(orange 20x20). */
@@ -114,22 +118,22 @@ static void build(ERNode** out_bar)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SCREEN;
-    rp.height = SCREEN;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     ERNode* bar = er_node_create(ER_NODE_VIEW);
-    ERProps bp = bar_props(0, 0xFF303030U);
-    er_node_set_props(bar, &bp);
+    ERProps bar_node_props = bar_props(0, 0xFF303030U);
+    er_node_set_props(bar, &bar_node_props);
 
     ERNode* kid = er_node_create(ER_NODE_VIEW);
-    ERProps kp = props_default();
-    kp.width = KID;
-    kp.height = KID;
-    kp.background_color = 0xFFFF8800U;
-    er_node_set_props(kid, &kp);
+    ERProps kid_props = props_default();
+    kid_props.width = KID_SIZE;
+    kid_props.height = KID_SIZE;
+    kid_props.background_color = 0xFFFF8800U;
+    er_node_set_props(kid, &kid_props);
 
     er_tree_append_child(bar, kid);
     er_tree_append_child(root, bar);
@@ -156,9 +160,9 @@ static int check_no_move_no_damage(void)
         return fail("the settled scene was not idle to begin with");
 
     /* max_width above the bar's actual width: a real prop change, zero geometric effect. */
-    ERProps bp = bar_props(0, 0xFF303030U);
-    bp.max_width = SCREEN + 100;
-    er_node_set_props(bar, &bp);
+    ERProps bar_node_props = bar_props(0, 0xFF303030U);
+    bar_node_props.max_width = SCREEN + 100;
+    er_node_set_props(bar, &bar_node_props);
 
     s_fill_count = 0;
     er_commit();
@@ -179,22 +183,22 @@ static int check_moved_child_only(void)
     build(&bar);
     settle();
 
-    ERProps bp = bar_props(40, 0xFF303030U);
-    er_node_set_props(bar, &bp);
+    ERProps bar_node_props = bar_props(40, 0xFF303030U);
+    er_node_set_props(bar, &bar_node_props);
     er_commit();
 
-    ERRect r;
-    if (!er_get_dirty_rect(&r))
+    ERRect dirty;
+    if (!er_get_dirty_rect(&dirty))
         return fail("moving a child reported no damage at all");
     /* Both footprints, or the contract is broken in the other direction: the reported rect has to
      * COVER what was repainted, and a move repaints the trail as well as the destination. Old spot
      * is x[0,20), new spot x[40,60). */
-    if (r.x > 0 || r.x + r.w < 40 + KID)
+    if (dirty.x > 0 || dirty.x + dirty.w < 40 + KID_SIZE)
         return fail("reported damage does not cover both the old and new position of a moved child");
     /* ...and no wider than that, or nothing was saved over damaging the whole 200px bar. */
-    if (r.w > 100)
+    if (dirty.w > 100)
         return fail("a moved child damaged the whole re-measured container");
-    if (r.h > BAR_H + 8)
+    if (dirty.h > BAR_HEIGHT + 8)
         return fail("damage spilled outside the bar's own strip");
     return EXIT_SUCCESS;
 }
@@ -206,16 +210,16 @@ static int check_visual_change_still_damages(void)
     build(&bar);
     settle();
 
-    ERProps bp = bar_props(0, 0xFF00AA00U);
-    er_node_set_props(bar, &bp);
+    ERProps bar_node_props = bar_props(0, 0xFF00AA00U);
+    er_node_set_props(bar, &bar_node_props);
     er_commit();
 
-    ERRect r;
-    if (!er_get_dirty_rect(&r))
+    ERRect dirty;
+    if (!er_get_dirty_rect(&dirty))
         return fail("a recolour reported no damage");
-    if (r.w < SCREEN || r.h < BAR_H)
+    if (dirty.w < SCREEN || dirty.h < BAR_HEIGHT)
         return fail("a recolour damaged less than the node's box");
-    if ((s_fb[10 * SCREEN + 150] & 0x00FFFFFFU) != 0x0000AA00U)
+    if ((s_framebuffer[10 * SCREEN + 150] & 0x00FFFFFFU) != 0x0000AA00U)
         return fail("the new colour did not reach the far end of the bar");
     return EXIT_SUCCESS;
 }
@@ -228,19 +232,19 @@ static int check_pixel_equivalence(void)
     build(&bar);
     settle();
 
-    ERProps bp = bar_props(40, 0xFF303030U);
-    er_node_set_props(bar, &bp);
+    ERProps bar_node_props = bar_props(40, 0xFF303030U);
+    er_node_set_props(bar, &bar_node_props);
     er_commit();
-    bp.max_width = SCREEN + 100; /* a second, movement-free reflow on top */
-    er_node_set_props(bar, &bp);
+    bar_node_props.max_width = SCREEN + 100; /* a second, movement-free reflow on top */
+    er_node_set_props(bar, &bar_node_props);
     er_commit();
-    memcpy(reference, s_fb, sizeof(reference));
+    memcpy(reference, s_framebuffer, sizeof(reference));
 
-    memset(s_fb, 0, sizeof(s_fb));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
 
-    if (memcmp(reference, s_fb, sizeof(reference)) != 0)
+    if (memcmp(reference, s_framebuffer, sizeof(reference)) != 0)
         return fail("incremental reflow frame differs from a full repaint");
     return EXIT_SUCCESS;
 }
@@ -257,13 +261,13 @@ int main(void)
         check_pixel_equivalence,
     };
 
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+    for (size_t case_index = 0; case_index < sizeof(cases) / sizeof(cases[0]); case_index++)
     {
-        memset(s_fb, 0, sizeof(s_fb));
+        memset(s_framebuffer, 0, sizeof(s_framebuffer));
         s_fill_count = 0;
-        const int rc = cases[i]();
-        if (rc != EXIT_SUCCESS)
-            return rc;
+        const int result = cases[case_index]();
+        if (result != EXIT_SUCCESS)
+            return result;
         er_reset();
     }
     return EXIT_SUCCESS;

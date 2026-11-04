@@ -47,88 +47,95 @@
 #include <string.h>
 
 #define SCREEN 240
+#define TWO_PI 6.283185307179586f
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend: straight-alpha fill + premultiplied blend, source-over into a real framebuffer
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_fb[SCREEN * SCREEN];
+static uint32_t s_framebuffer[SCREEN * SCREEN];
 static uint8_t s_touched[SCREEN * SCREEN];
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
-static void over_premul(uint32_t* d, uint32_t pa, uint32_t pr, uint32_t pg, uint32_t pb)
+static void over_premul(
+    uint32_t* destination, uint32_t source_alpha, uint32_t source_red, uint32_t source_green, uint32_t source_blue)
 {
-    if (pa == 0U)
+    if (source_alpha == 0U)
         return;
-    if (pa >= 255U)
+    if (source_alpha >= ER_ALPHA_OPAQUE)
     {
-        *d = 0xFF000000U | (pr << 16) | (pg << 8) | pb;
+        *destination = 0xFF000000U | (source_red << 16) | (source_green << 8) | source_blue;
         return;
     }
-    const uint32_t inv = 255U - pa;
-    const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-    const uint32_t r = pr + div255(dr * inv);
-    const uint32_t g = pg + div255(dg * inv);
-    const uint32_t b = pb + div255(db * inv);
-    *d = 0xFF000000U | (r << 16) | (g << 8) | b;
+    const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+    const uint32_t destination_red = (*destination >> 16) & 0xFFU, destination_green = (*destination >> 8) & 0xFFU,
+                   destination_blue = *destination & 0xFFU;
+    const uint32_t red = source_red + div255(destination_red * inverse_alpha);
+    const uint32_t green = source_green + div255(destination_green * inverse_alpha);
+    const uint32_t blue = source_blue + div255(destination_blue * inverse_alpha);
+    *destination = 0xFF000000U | (red << 16) | (green << 8) | blue;
 }
 
-static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U)
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U)
         return;
-    for (int row = y; row < y + h; row++)
-        for (int col = x; col < x + w; col++)
+    for (int row = y; row < y + height; row++)
+        for (int column = x; column < x + width; column++)
         {
-            if (row < 0 || row >= SCREEN || col < 0 || col >= SCREEN)
+            if (row < 0 || row >= SCREEN || column < 0 || column >= SCREEN)
                 continue;
-            s_touched[row * SCREEN + col] = 1U;
-            over_premul(&s_fb[row * SCREEN + col],
-                        a,
-                        div255(((argb >> 16) & 0xFFU) * a),
-                        div255(((argb >> 8) & 0xFFU) * a),
-                        div255((argb & 0xFFU) * a));
+            s_touched[row * SCREEN + column] = 1U;
+            over_premul(&s_framebuffer[row * SCREEN + column],
+                        alpha,
+                        div255(((argb >> 16) & 0xFFU) * alpha),
+                        div255(((argb >> 8) & 0xFFU) * alpha),
+                        div255((argb & 0xFFU) * alpha));
         }
 }
 
-static void fb_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void fb_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* sp = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int fx = x + col, fy = y + row;
-            if (fx < 0 || fx >= SCREEN || fy < 0 || fy >= SCREEN)
+            const int framebuffer_x = x + column, framebuffer_y = y + row;
+            if (framebuffer_x < 0 || framebuffer_x >= SCREEN || framebuffer_y < 0 || framebuffer_y >= SCREEN)
                 continue;
-            uint32_t p = sp[col];
-            uint32_t pa = (p >> 24) & 0xFFU;
-            if (pa == 0U)
+            uint32_t pixel = source_row[column];
+            uint32_t pixel_alpha = (pixel >> 24) & 0xFFU;
+            if (pixel_alpha == 0U)
                 continue;
-            uint32_t pr = (p >> 16) & 0xFFU, pg = (p >> 8) & 0xFFU, pb = p & 0xFFU;
-            if (alpha < 255U)
+            uint32_t pixel_red = (pixel >> 16) & 0xFFU, pixel_green = (pixel >> 8) & 0xFFU, pixel_blue = pixel & 0xFFU;
+            if (alpha < ER_ALPHA_OPAQUE)
             {
-                pa = div255(pa * alpha);
-                pr = div255(pr * alpha);
-                pg = div255(pg * alpha);
-                pb = div255(pb * alpha);
+                pixel_alpha = div255(pixel_alpha * alpha);
+                pixel_red = div255(pixel_red * alpha);
+                pixel_green = div255(pixel_green * alpha);
+                pixel_blue = div255(pixel_blue * alpha);
             }
-            s_touched[fy * SCREEN + fx] = 1U;
-            over_premul(&s_fb[fy * SCREEN + fx], pa, pr, pg, pb);
+            s_touched[framebuffer_y * SCREEN + framebuffer_x] = 1U;
+            over_premul(&s_framebuffer[framebuffer_y * SCREEN + framebuffer_x],
+                        pixel_alpha,
+                        pixel_red,
+                        pixel_green,
+                        pixel_blue);
         }
     }
 }
 
-static void fb_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void fb_copy(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    fb_blend(src, stride, 255U, x, y, w, h, ctx);
+    fb_blend(source, stride, 255U, x, y, width, height, ctx);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -137,52 +144,52 @@ static void fb_copy(const void* src, int stride, int x, int y, int w, int h, voi
 
 static int s_failures = 0;
 
-#define CHECK(cond, msg)                                                                                               \
+#define CHECK(condition, message)                                                                                      \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (!(cond))                                                                                                   \
+        if (!(condition))                                                                                              \
         {                                                                                                              \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, msg);                                              \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, message);                                          \
             s_failures++;                                                                                              \
         }                                                                                                              \
     } while (0)
 
 static uint32_t px(int x, int y)
 {
-    return s_fb[y * SCREEN + x] & 0x00FFFFFFU;
+    return s_framebuffer[y * SCREEN + x] & 0x00FFFFFFU;
 }
 
-/** @brief Pixel at polar (deg clockwise from +X, radius) around the centre. */
-static uint32_t polar_px(float cx, float cy, float r, float deg)
+/** @brief Pixel at polar (degrees clockwise from +X, radius) around the centre. */
+static uint32_t polar_px(float center_x, float center_y, float radius, float degrees)
 {
-    const float a = deg * 0.017453292519943295f;
-    return px((int)floorf(cx + r * cosf(a)), (int)floorf(cy + r * sinf(a)));
+    const float radians = degrees * ER_DEG2RAD;
+    return px((int)floorf(center_x + radius * cosf(radians)), (int)floorf(center_y + radius * sinf(radians)));
 }
 
-static int near_color(uint32_t got, uint32_t want, int tol)
+static int near_color(uint32_t got, uint32_t want, int tolerance)
 {
-    const int dr = (int)((got >> 16) & 0xFFU) - (int)((want >> 16) & 0xFFU);
-    const int dg = (int)((got >> 8) & 0xFFU) - (int)((want >> 8) & 0xFFU);
-    const int db = (int)(got & 0xFFU) - (int)(want & 0xFFU);
-    return abs(dr) <= tol && abs(dg) <= tol && abs(db) <= tol;
+    const int red_delta = (int)((got >> 16) & 0xFFU) - (int)((want >> 16) & 0xFFU);
+    const int green_delta = (int)((got >> 8) & 0xFFU) - (int)((want >> 8) & 0xFFU);
+    const int blue_delta = (int)(got & 0xFFU) - (int)(want & 0xFFU);
+    return abs(red_delta) <= tolerance && abs(green_delta) <= tolerance && abs(blue_delta) <= tolerance;
 }
 
 static void reset_scene(void)
 {
     er_reset();
-    memset(s_fb, 0, sizeof(s_fb));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     memset(s_touched, 0, sizeof(s_touched));
 }
 
-static ERNode* make_root(uint32_t bg)
+static ERNode* make_root(uint32_t background)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp;
-    er_props_default(&rp);
-    rp.width = SCREEN;
-    rp.height = SCREEN;
-    rp.background_color = bg;
-    er_node_set_props(root, &rp);
+    ERProps root_props;
+    er_props_default(&root_props);
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = background;
+    er_node_set_props(root, &root_props);
     er_tree_set_root(root);
     return root;
 }
@@ -190,32 +197,34 @@ static ERNode* make_root(uint32_t bg)
 /** @brief A 200x200 arc at (20,20): 270° sweep from 135°, 16 px track, value 25 of 0..100. */
 static ERProps arc_props(void)
 {
-    ERProps p;
-    er_props_default(&p);
-    p.width = 200;
-    p.height = 200;
-    p.margin_left = 20;
-    p.margin_top = 20;
-    p.arc_width = 16;
-    p.arc_value = 25.0f;
-    p.arc_max = 100.0f;
-    p.arc_track_color = 0xFF404040U;
-    p.arc_indicator_color = 0xFF00A0FFU;
-    return p;
+    ERProps props;
+    er_props_default(&props);
+    props.width = 200;
+    props.height = 200;
+    props.margin_left = 20;
+    props.margin_top = 20;
+    props.arc_width = 16;
+    props.arc_value = 25.0f;
+    props.arc_max = 100.0f;
+    props.arc_track_color = 0xFF404040U;
+    props.arc_indicator_color = 0xFF00A0FFU;
+    return props;
 }
 
 static void dump_ppm(const char* path)
 {
-    FILE* f = fopen(path, "wb");
-    if (!f)
+    FILE* file = fopen(path, "wb");
+    if (!file)
         return;
-    fprintf(f, "P6\n%d %d\n255\n", SCREEN, SCREEN);
-    for (int i = 0; i < SCREEN * SCREEN; i++)
+    fprintf(file, "P6\n%d %d\n255\n", SCREEN, SCREEN);
+    for (int pixel_index = 0; pixel_index < SCREEN * SCREEN; pixel_index++)
     {
-        const uint8_t rgb[3] = {(uint8_t)(s_fb[i] >> 16), (uint8_t)(s_fb[i] >> 8), (uint8_t)s_fb[i]};
-        fwrite(rgb, 1, 3, f);
+        const uint8_t rgb[3] = {(uint8_t)(s_framebuffer[pixel_index] >> 16),
+                                (uint8_t)(s_framebuffer[pixel_index] >> 8),
+                                (uint8_t)s_framebuffer[pixel_index]};
+        fwrite(rgb, 1, 3, file);
     }
-    fclose(f);
+    fclose(file);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -228,25 +237,31 @@ static void test_geometry(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 
     /* Box (20,20) 200x200 → centre (120,120), outer radius 100, track mid-radius 92. */
-    const float cx = 120.0f, cy = 120.0f, rm = 92.0f;
+    const float center_x = 120.0f, center_y = 120.0f, mid_radius = 92.0f;
     /* Sweep 135° → 405°: value 25% ends at 135 + 67.5 = 202.5°. */
-    CHECK(near_color(polar_px(cx, cy, rm, 150.0f), 0x00A0FFU, 2), "indicator colour inside the value sweep");
-    CHECK(near_color(polar_px(cx, cy, rm, 200.0f), 0x00A0FFU, 2), "indicator colour just before the value end");
-    CHECK(near_color(polar_px(cx, cy, rm, 206.0f), 0x404040U, 2), "track colour just past the value end");
-    CHECK(near_color(polar_px(cx, cy, rm, 300.0f), 0x404040U, 2), "track colour mid-sweep");
-    CHECK(near_color(polar_px(cx, cy, rm, 40.0f), 0x404040U, 2), "track colour near the sweep end (400°)");
-    CHECK(near_color(polar_px(cx, cy, rm, 90.0f), 0x000000U, 0), "unswept gap (bottom, 90°) untouched");
-    CHECK(near_color(polar_px(cx, cy, 40.0f, 200.0f), 0x000000U, 0), "hole untouched");
-    CHECK(near_color(polar_px(cx, cy, 99.5f, 200.0f), 0x00A0FFU, 40) == 0 || 1, "outer fringe tolerated");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 150.0f), 0x00A0FFU, 2),
+          "indicator colour inside the value sweep");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 200.0f), 0x00A0FFU, 2),
+          "indicator colour just before the value end");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 206.0f), 0x404040U, 2),
+          "track colour just past the value end");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 300.0f), 0x404040U, 2), "track colour mid-sweep");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 40.0f), 0x404040U, 2),
+          "track colour near the sweep end (400°)");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 90.0f), 0x000000U, 0),
+          "unswept gap (bottom, 90°) untouched");
+    CHECK(near_color(polar_px(center_x, center_y, 40.0f, 200.0f), 0x000000U, 0), "hole untouched");
+    CHECK(near_color(polar_px(center_x, center_y, 99.5f, 200.0f), 0x00A0FFU, 40) == 0 || 1, "outer fringe tolerated");
     CHECK(near_color(px(20, 20), 0x000000U, 0), "box corner untouched (outside the circle)");
     /* Butt cap: the start ray at 135° is a hard edge — 3° before it there is nothing. */
-    CHECK(near_color(polar_px(cx, cy, rm, 131.0f), 0x000000U, 0), "butt cap: nothing before the start ray");
+    CHECK(near_color(polar_px(center_x, center_y, mid_radius, 131.0f), 0x000000U, 0),
+          "butt cap: nothing before the start ray");
 }
 
 /** @brief The showcase frame: band + segments + round caps + conic gradient + circle knob. Dumped to PPM. */
@@ -255,25 +270,25 @@ static void test_showcase(void)
     reset_scene();
     ERNode* root = make_root(0xFF101418U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_value = 62.0f;
-    p.arc_band_width = 28;
-    p.arc_band_color = 0x40FFFFFFU;
-    p.arc_cap = ER_ARC_CAP_ROUND;
-    p.arc_knob = ER_ARC_KNOB_CIRCLE;
-    p.arc_knob_size = 30;
-    p.arc_knob_color = 0xFFFFFFFFU;
-    p.arc_knob_border_color = 0xFFFF8800U;
-    p.arc_knob_border_width = 3;
-    p.gradient_type = ER_GRADIENT_CONIC;
-    p.gradient_stop_count = 3;
-    p.gradient_stops[0].color = 0xFF2060FFU;
-    p.gradient_stops[0].position = 0.0f;
-    p.gradient_stops[1].color = 0xFF20E0A0U;
-    p.gradient_stops[1].position = 0.5f;
-    p.gradient_stops[2].color = 0xFFFF4040U;
-    p.gradient_stops[2].position = 1.0f;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_value = 62.0f;
+    props.arc_band_width = 28;
+    props.arc_band_color = 0x40FFFFFFU;
+    props.arc_cap = ER_ARC_CAP_ROUND;
+    props.arc_knob = ER_ARC_KNOB_CIRCLE;
+    props.arc_knob_size = 30;
+    props.arc_knob_color = 0xFFFFFFFFU;
+    props.arc_knob_border_color = 0xFFFF8800U;
+    props.arc_knob_border_width = 3;
+    props.gradient_type = ER_GRADIENT_CONIC;
+    props.gradient_stop_count = 3;
+    props.gradient_stops[0].color = 0xFF2060FFU;
+    props.gradient_stops[0].position = 0.0f;
+    props.gradient_stops[1].color = 0xFF20E0A0U;
+    props.gradient_stops[1].position = 0.5f;
+    props.gradient_stops[2].color = 0xFFFF4040U;
+    props.gradient_stops[2].position = 1.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 
@@ -281,20 +296,21 @@ static void test_showcase(void)
     if (out)
         dump_ppm(out);
 
-    const float cx = 120.0f, cy = 120.0f;
+    const float center_x = 120.0f, center_y = 120.0f;
     /* Band is 28 wide so half_ext = 14 → mid radius 86. Band colour shows beyond the 16 px track. */
-    const uint32_t band_px = polar_px(cx, cy, 86.0f + 12.0f, 300.0f);
-    CHECK(!near_color(band_px, 0x101418U, 2) && !near_color(band_px, 0x404040U, 2),
+    const uint32_t band_pixel = polar_px(center_x, center_y, 86.0f + 12.0f, 300.0f);
+    CHECK(!near_color(band_pixel, 0x101418U, 2) && !near_color(band_pixel, 0x404040U, 2),
           "backing band visible past the track");
     /* Knob at 135 + 270*0.62 = 302.4°: white centre. */
-    CHECK(near_color(polar_px(cx, cy, 86.0f, 302.4f), 0xFFFFFFU, 2), "knob fill at the value point");
+    CHECK(near_color(polar_px(center_x, center_y, 86.0f, 302.4f), 0xFFFFFFU, 2), "knob fill at the value point");
     /* Conic paint: the indicator colour varies with angle (start ≈ blue, mid ≈ green). */
-    const uint32_t c_start = polar_px(cx, cy, 86.0f, 140.0f);
-    const uint32_t c_mid = polar_px(cx, cy, 86.0f, 265.0f);
-    CHECK(((c_start >> 0) & 0xFFU) > ((c_start >> 16) & 0xFFU), "conic start is blue-dominant");
-    CHECK(((c_mid >> 8) & 0xFFU) > ((c_mid >> 16) & 0xFFU), "conic middle is green-dominant");
+    const uint32_t start_pixel = polar_px(center_x, center_y, 86.0f, 140.0f);
+    const uint32_t mid_pixel = polar_px(center_x, center_y, 86.0f, 265.0f);
+    CHECK(((start_pixel >> 0) & 0xFFU) > ((start_pixel >> 16) & 0xFFU), "conic start is blue-dominant");
+    CHECK(((mid_pixel >> 8) & 0xFFU) > ((mid_pixel >> 16) & 0xFFU), "conic middle is green-dominant");
     /* Round cap: 3° before the start ray the cap disc still paints (8 px reach ≈ 5.3° at r 86). */
-    CHECK(!near_color(polar_px(cx, cy, 86.0f, 131.0f), 0x101418U, 2), "round cap extends past the start ray");
+    CHECK(!near_color(polar_px(center_x, center_y, 86.0f, 131.0f), 0x101418U, 2),
+          "round cap extends past the start ray");
 }
 
 /** @brief Segment gaps cut both track and indicator. */
@@ -303,11 +319,11 @@ static void test_segments(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_value = 100.0f; /* indicator over the full sweep */
-    p.arc_segments = 3;
-    p.arc_gap_angle = 10.0f;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_value = 100.0f; /* indicator over the full sweep */
+    props.arc_segments = 3;
+    props.arc_gap_angle = 10.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
     /* 270° - 2*10° = 250° → 83.33° segments: gaps at [218.33, 228.33] and [311.67, 321.67]. */
@@ -323,92 +339,96 @@ static void test_value_damage(void)
     reset_scene();
     ERNode* root = make_root(0xFF202020U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_knob = ER_ARC_KNOB_CIRCLE;
-    p.arc_knob_size = 24;
-    p.arc_cap = ER_ARC_CAP_ROUND;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_knob = ER_ARC_KNOB_CIRCLE;
+    props.arc_knob_size = 24;
+    props.arc_cap = ER_ARC_CAP_ROUND;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 
     /* Incremental: 25 → 30. */
     memset(s_touched, 0, sizeof(s_touched));
-    p.arc_value = 30.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value = 30.0f;
+    er_node_set_props(arc, &props);
     er_commit();
-    ERRect dr;
-    CHECK(er_get_dirty_rect(&dr), "value change reports a dirty rect");
+    ERRect dirty;
+    CHECK(er_get_dirty_rect(&dirty), "value change reports a dirty rect");
     if (getenv("ER_ARC_DEBUG"))
     {
-        int minx = SCREEN, miny = SCREEN, maxx = -1, maxy = -1;
+        int min_x = SCREEN, min_y = SCREEN, max_x = -1, max_y = -1;
         for (int y = 0; y < SCREEN; y++)
             for (int x = 0; x < SCREEN; x++)
                 if (s_touched[y * SCREEN + x])
                 {
-                    if (x < minx)
-                        minx = x;
-                    if (y < miny)
-                        miny = y;
-                    if (x > maxx)
-                        maxx = x;
-                    if (y > maxy)
-                        maxy = y;
+                    if (x < min_x)
+                        min_x = x;
+                    if (y < min_y)
+                        min_y = y;
+                    if (x > max_x)
+                        max_x = x;
+                    if (y > max_y)
+                        max_y = y;
                 }
         fprintf(stderr,
                 "dirty %d,%d %dx%d touched [%d,%d]-[%d,%d] vec_has_dirty=%d local %d,%d %dx%d\n",
-                dr.x,
-                dr.y,
-                dr.w,
-                dr.h,
-                minx,
-                miny,
-                maxx,
-                maxy,
+                dirty.x,
+                dirty.y,
+                dirty.w,
+                dirty.h,
+                min_x,
+                min_y,
+                max_x,
+                max_y,
                 arc->vector_has_dirty,
                 arc->vector_dirty_x,
                 arc->vector_dirty_y,
                 arc->vector_dirty_width,
                 arc->vector_dirty_height);
     }
-    CHECK(dr.w < 120 && dr.h < 120, "value-change damage is a sliver, not the 200x200 box");
+    CHECK(dirty.w < 120 && dirty.h < 120, "value-change damage is a sliver, not the 200x200 box");
     /* Value end moved 202.5° → 216°; those pixels (and the knob spots) are inside the rect. */
     {
-        const float a = 205.0f * 0.017453292519943295f; /* inside the swept 202.5°→216°, clear of the knob */
-        const int tx = (int)floorf(120.0f + 92.0f * cosf(a)), ty = (int)floorf(120.0f + 92.0f * sinf(a));
-        CHECK(tx >= dr.x && tx < dr.x + dr.w && ty >= dr.y && ty < dr.y + dr.h, "dirty rect covers the swept sub-arc");
-        CHECK(near_color(px(tx, ty), 0x00A0FFU, 2), "swept sub-arc now shows the indicator");
+        const float angle = 205.0f * ER_DEG2RAD; /* inside the swept 202.5°→216°, clear of the knob */
+        const int touch_x = (int)floorf(120.0f + 92.0f * cosf(angle)),
+                  touch_y = (int)floorf(120.0f + 92.0f * sinf(angle));
+        CHECK(touch_x >= dirty.x && touch_x < dirty.x + dirty.w && touch_y >= dirty.y && touch_y < dirty.y + dirty.h,
+              "dirty rect covers the swept sub-arc");
+        CHECK(near_color(px(touch_x, touch_y), 0x00A0FFU, 2), "swept sub-arc now shows the indicator");
     }
     int touched_outside = 0;
     for (int y = 0; y < SCREEN; y++)
         for (int x = 0; x < SCREEN; x++)
             if (s_touched[y * SCREEN + x]
-                && !(x >= dr.x - 2 && x < dr.x + dr.w + 2 && y >= dr.y - 2 && y < dr.y + dr.h + 2))
+                && !(x >= dirty.x - 2 && x < dirty.x + dirty.w + 2 && y >= dirty.y - 2 && y < dirty.y + dirty.h + 2))
                 touched_outside++;
     CHECK(touched_outside == 0, "no pixel written outside the reported dirty rect");
 
     /* Pixel equivalence: a forced full repaint must produce the same image. */
-    uint32_t snap[SCREEN * SCREEN];
-    memcpy(snap, s_fb, sizeof(snap));
-    memset(s_fb, 0, sizeof(s_fb));
+    uint32_t snapshot[SCREEN * SCREEN];
+    memcpy(snapshot, s_framebuffer, sizeof(snapshot));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(snap, s_fb, sizeof(snap)) == 0, "incremental value update is byte-identical to a full repaint");
+    CHECK(memcmp(snapshot, s_framebuffer, sizeof(snapshot)) == 0,
+          "incremental value update is byte-identical to a full repaint");
 
     /* And back down: 30 → 5 (erases the indicator over the span, moves the knob back). */
-    p.arc_value = 5.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value = 5.0f;
+    er_node_set_props(arc, &props);
     er_commit();
-    memcpy(snap, s_fb, sizeof(snap));
-    memset(s_fb, 0, sizeof(s_fb));
+    memcpy(snapshot, s_framebuffer, sizeof(snapshot));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(snap, s_fb, sizeof(snap)) == 0, "decreasing value is byte-identical to a full repaint");
+    CHECK(memcmp(snapshot, s_framebuffer, sizeof(snapshot)) == 0,
+          "decreasing value is byte-identical to a full repaint");
 
     /* A non-value prop change falls back to the whole box. */
-    p.arc_track_color = 0xFF808080U;
-    er_node_set_props(arc, &p);
+    props.arc_track_color = 0xFF808080U;
+    er_node_set_props(arc, &props);
     er_commit();
-    CHECK(er_get_dirty_rect(&dr) && dr.w >= 200 && dr.h >= 200, "track recolour repaints the whole box");
+    CHECK(er_get_dirty_rect(&dirty) && dirty.w >= 200 && dirty.h >= 200, "track recolour repaints the whole box");
 }
 
 /** @brief ER_PROP_ARC_VALUE animates natively and each tick damages only the moved sliver. */
@@ -417,26 +437,26 @@ static void test_native_animation(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_value = 0.0f;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_value = 0.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 
-    ERAnimConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = 400U;
-    er_anim_start(arc, ER_PROP_ARC_VALUE, 80.0f, &cfg);
+    ERAnimConfig config;
+    memset(&config, 0, sizeof(config));
+    config.type = ER_ANIM_TIMING;
+    config.duration_ms = 400U;
+    er_anim_start(arc, ER_PROP_ARC_VALUE, 80.0f, &config);
 
     float last = 0.0f;
-    for (int i = 0; i < 10; i++)
+    for (int tick_index = 0; tick_index < 10; tick_index++)
     {
         embedded_renderer_tick(40U); /* advances the animation clock */
         er_commit();
-        ERRect dr;
-        if (er_get_dirty_rect(&dr))
-            CHECK(dr.w < 200 || dr.h < 200, "animation tick damage is narrower than the box");
+        ERRect dirty;
+        if (er_get_dirty_rect(&dirty))
+            CHECK(dirty.w < 200 || dirty.h < 200, "animation tick damage is narrower than the box");
         CHECK(arc->arc_value >= last, "value ramps monotonically");
         last = arc->arc_value;
     }
@@ -452,20 +472,20 @@ static void test_native_animation(void)
 
 static int s_change_count = 0;
 static float s_change_last = -1.0f;
-static void on_change(ERNode* n, const EREventData* d, void* ud)
+static void on_change(ERNode* node, const EREventData* data, void* user_data)
 {
-    (void)n;
-    (void)ud;
+    (void)node;
+    (void)user_data;
     s_change_count++;
-    s_change_last = d->value;
+    s_change_last = data->value;
 }
 
 static int s_press_count = 0;
-static void on_press(ERNode* n, const EREventData* d, void* ud)
+static void on_press(ERNode* node, const EREventData* data, void* user_data)
 {
-    (void)n;
-    (void)d;
-    (void)ud;
+    (void)node;
+    (void)data;
+    (void)user_data;
     s_press_count++;
 }
 
@@ -475,43 +495,44 @@ static void test_drag(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_adjustable = 1;
-    p.arc_step = 5.0f;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_adjustable = 1;
+    props.arc_step = 5.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     /* A Pressable in the hole, behind the ring's centre. */
-    ERNode* btn = er_node_create(ER_NODE_PRESSABLE);
-    ERProps bp;
-    er_props_default(&bp);
-    bp.position = ER_POS_ABSOLUTE;
-    bp.left = 60;
-    bp.top = 60;
-    bp.width = 80;
-    bp.height = 80;
-    er_node_set_props(btn, &bp);
-    er_tree_append_child(arc, btn);
+    ERNode* button = er_node_create(ER_NODE_PRESSABLE);
+    ERProps button_props;
+    er_props_default(&button_props);
+    button_props.position = ER_POS_ABSOLUTE;
+    button_props.left = 60;
+    button_props.top = 60;
+    button_props.width = 80;
+    button_props.height = 80;
+    er_node_set_props(button, &button_props);
+    er_tree_append_child(arc, button);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
-    er_event_set(btn, ER_EVENT_PRESS, on_press, NULL);
+    er_event_set(button, ER_EVENT_PRESS, on_press, NULL);
     er_commit();
     s_change_count = 0;
 
     /* Touch on the ring at 270° (top) → (270 - 135) / 270 = 50%. */
-    const int tx = 120, ty = 120 - 92;
-    embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
+    const int touch_x = 120, touch_y = 120 - 92;
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, touch_x, touch_y);
     CHECK(s_change_count == 1, "touch-down on the ring fires one value change");
     CHECK(s_change_last == 50.0f, "touch at the top of the dial = 50%%");
     CHECK(arc->arc_value == 50.0f, "node value updated natively");
 
     /* Move to 315° → 66.67% → quantized to 65. */
     {
-        const float a = 315.0f * 0.017453292519943295f;
-        embedded_renderer_touch(0, ER_TOUCH_MOVE, (int)(120.0f + 92.0f * cosf(a)), (int)(120.0f + 92.0f * sinf(a)));
+        const float angle = 315.0f * ER_DEG2RAD;
+        embedded_renderer_touch(
+            0, ER_TOUCH_MOVE, (int)(120.0f + 92.0f * cosf(angle)), (int)(120.0f + 92.0f * sinf(angle)));
         er_input_flush_moves();
         CHECK(s_change_last == 65.0f, "move quantizes to the 5-step grid");
     }
     /* A mid-drag React re-render with the stale value must not snap the knob back. */
-    er_node_set_props(arc, &p); /* p.arc_value is still 25 */
+    er_node_set_props(arc, &props); /* p.arc_value is still 25 */
     CHECK(arc->arc_value == 65.0f, "set_props mid-drag does not override the dragged value");
     er_commit();
     CHECK(near_color(polar_px(120, 120, 92.0f, 300.0f), 0x00A0FFU, 2), "indicator follows the finger");
@@ -527,29 +548,29 @@ static void test_drag(void)
     CHECK(arc->arc_drag_finger < 0, "drag released");
 
     /* After release, props own the value again. */
-    p.arc_value = 10.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value = 10.0f;
+    er_node_set_props(arc, &props);
     CHECK(arc->arc_value == 10.0f, "props apply once the drag ends");
 
     /* A readout CHILD parked in the hole must not block the drag when the ring itself is touched, and
      * must stay inert when it is touched — the layout every real dial has. */
     {
         ERNode* readout = er_node_create(ER_NODE_VIEW);
-        ERProps rp;
-        er_props_default(&rp);
-        rp.position = ER_POS_ABSOLUTE;
-        rp.left = 50;
-        rp.top = 50;
-        rp.width = 100;
-        rp.height = 100;
-        rp.background_color = 0xFF222222U;
-        er_node_set_props(readout, &rp);
+        ERProps root_props;
+        er_props_default(&root_props);
+        root_props.position = ER_POS_ABSOLUTE;
+        root_props.left = 50;
+        root_props.top = 50;
+        root_props.width = 100;
+        root_props.height = 100;
+        root_props.background_color = 0xFF222222U;
+        er_node_set_props(readout, &root_props);
         er_tree_append_child(arc, readout);
         er_commit();
         s_change_count = 0;
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty); /* on the ring, over nothing */
+        embedded_renderer_touch(0, ER_TOUCH_DOWN, touch_x, touch_y); /* on the ring, over nothing */
         CHECK(s_change_count == 1, "a dial with a centre readout still drags from the ring");
-        embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+        embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
         s_change_count = 0;
         embedded_renderer_touch(0, ER_TOUCH_DOWN, 120, 120); /* on the readout, in the hole */
         embedded_renderer_touch(0, ER_TOUCH_UP, 120, 120);
@@ -562,17 +583,17 @@ static void test_drag(void)
     /* Multi-touch: a dial has ONE value, so the first finger down owns it. A second finger must not
      * re-latch the end, and lifting it must not end the first finger's drag. */
     s_change_count = 0;
-    embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty); /* finger 0 grabs the ring */
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, touch_x, touch_y); /* finger 0 grabs the ring */
     CHECK(arc->arc_drag_finger == 0, "finger 0 owns the drag");
     {
-        const float a = 200.0f * 0.017453292519943295f; /* a different point on the ring */
-        const int bx = (int)(120.0f + 92.0f * cosf(a)), by = (int)(120.0f + 92.0f * sinf(a));
-        embedded_renderer_touch(1, ER_TOUCH_DOWN, bx, by); /* finger 1 lands on the same dial */
+        const float angle = 200.0f * ER_DEG2RAD; /* a different point on the ring */
+        const int pixel_x = (int)(120.0f + 92.0f * cosf(angle)), pixel_y = (int)(120.0f + 92.0f * sinf(angle));
+        embedded_renderer_touch(1, ER_TOUCH_DOWN, pixel_x, pixel_y); /* finger 1 lands on the same dial */
         CHECK(arc->arc_drag_finger == 0, "a second finger does not take over the drag");
-        embedded_renderer_touch(1, ER_TOUCH_UP, bx, by);
+        embedded_renderer_touch(1, ER_TOUCH_UP, pixel_x, pixel_y);
         CHECK(arc->arc_drag_finger == 0, "lifting the second finger does not end the first's drag");
     }
-    embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+    embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
     CHECK(arc->arc_drag_finger < 0, "the owning finger ends it");
 
     /* The hole is transparent: a tap at the centre reaches the Pressable behind the ring. */
@@ -589,11 +610,11 @@ static void test_drag(void)
     CHECK(s_change_count == 0, "tap in the unswept gap does not change the value");
 
     /* Not adjustable: touches on the ring do nothing. */
-    p.arc_adjustable = 0;
-    er_node_set_props(arc, &p);
+    props.arc_adjustable = 0;
+    er_node_set_props(arc, &props);
     er_commit();
-    embedded_renderer_touch(0, ER_TOUCH_DOWN, tx, ty);
-    embedded_renderer_touch(0, ER_TOUCH_UP, tx, ty);
+    embedded_renderer_touch(0, ER_TOUCH_DOWN, touch_x, touch_y);
+    embedded_renderer_touch(0, ER_TOUCH_UP, touch_x, touch_y);
     CHECK(s_change_count == 0, "non-adjustable arc ignores ring touches");
 }
 
@@ -606,10 +627,10 @@ static void test_drag_pointer_events_and_transform(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_adjustable = 1;
-    p.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_adjustable = 1;
+    props.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
     er_commit();
@@ -618,8 +639,8 @@ static void test_drag_pointer_events_and_transform(void)
     embedded_renderer_touch(0, ER_TOUCH_UP, 120, 120 - 92);
     CHECK(s_change_count == 0, "a box-none arc does not take the gesture");
 
-    p.pointer_events = ER_POINTER_EVENTS_AUTO;
-    er_node_set_props(arc, &p);
+    props.pointer_events = ER_POINTER_EVENTS_AUTO;
+    er_node_set_props(arc, &props);
     er_commit();
     s_change_count = 0;
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 120, 120 - 92);
@@ -631,13 +652,13 @@ static void test_drag_pointer_events_and_transform(void)
     reset_scene();
     root = make_root(0xFF000000U);
     arc = er_node_create(ER_NODE_ARC);
-    p = arc_props();
-    p.arc_adjustable = 1;
+    props = arc_props();
+    props.arc_adjustable = 1;
     /* Bigger than the ring's touch slop, so "where it would be" and "where it is" are unambiguously
      * different points — a small offset lands inside the slop and proves nothing. */
-    p.transform_translate_x = 70.0f;
-    p.transform_translate_y = 0.0f;
-    er_node_set_props(arc, &p);
+    props.transform_translate_x = 70.0f;
+    props.transform_translate_y = 0.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
     er_commit();
@@ -660,19 +681,19 @@ static void test_child_knob(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_value = 50.0f; /* top: angle 270° → knob centre (120, 28) */
-    p.arc_knob = ER_ARC_KNOB_CHILD;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_value = 50.0f; /* top: angle 270° → knob centre (120, 28) */
+    props.arc_knob = ER_ARC_KNOB_CHILD;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     ERNode* knob = er_node_create(ER_NODE_VIEW);
-    ERProps kp;
-    er_props_default(&kp);
-    kp.width = 20;
-    kp.height = 20;
-    kp.border_radius = 10;
-    kp.background_color = 0xFFFF0000U;
-    er_node_set_props(knob, &kp);
+    ERProps knob_props;
+    er_props_default(&knob_props);
+    knob_props.width = 20;
+    knob_props.height = 20;
+    knob_props.border_radius = 10;
+    knob_props.background_color = 0xFFFF0000U;
+    er_node_set_props(knob, &knob_props);
     er_tree_append_child(arc, knob);
     er_commit();
 
@@ -680,8 +701,8 @@ static void test_child_knob(void)
     CHECK(near_color(px(120, 28), 0xFF0000U, 2), "child knob painted at the value point");
 
     /* Value → 0: knob moves to the 135° point (120 - 65.05, 120 + 65.05) = (54.9, 185.1). */
-    p.arc_value = 0.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value = 0.0f;
+    er_node_set_props(arc, &props);
     er_commit();
     CHECK(abs((int)knob->computed.x + 10 - 55) <= 1 && abs((int)knob->computed.y + 10 - 185) <= 1,
           "child knob follows the value");
@@ -710,44 +731,45 @@ static void test_child_knob(void)
             FAN = 80
         };
         ERNode* kids[FAN];
-        ERProps gp;
-        er_props_default(&gp);
-        gp.width = 2;
-        gp.height = 2;
-        for (int i = 0; i < FAN; i++)
+        ERProps kids_props;
+        er_props_default(&kids_props);
+        kids_props.width = 2;
+        kids_props.height = 2;
+        for (int fan_index = 0; fan_index < FAN; fan_index++)
         {
-            kids[i] = er_node_create(ER_NODE_VIEW);
-            er_node_set_props(kids[i], &gp);
-            er_tree_append_child(knob, kids[i]);
+            kids[fan_index] = er_node_create(ER_NODE_VIEW);
+            er_node_set_props(kids[fan_index], &kids_props);
+            er_tree_append_child(knob, kids[fan_index]);
         }
-        p.arc_value = 50.0f;
-        er_node_set_props(arc, &p);
+        props.arc_value = 50.0f;
+        er_node_set_props(arc, &props);
         er_commit();
         int16_t before_x[FAN], before_y[FAN];
-        for (int i = 0; i < FAN; i++)
+        for (int fan_index = 0; fan_index < FAN; fan_index++)
         {
-            before_x[i] = kids[i]->computed.x;
-            before_y[i] = kids[i]->computed.y;
+            before_x[fan_index] = kids[fan_index]->computed.x;
+            before_y[fan_index] = kids[fan_index]->computed.y;
         }
-        const int16_t knob_x0 = knob->computed.x, knob_y0 = knob->computed.y;
+        const int16_t knob_start_x = knob->computed.x, knob_start_y = knob->computed.y;
 
-        p.arc_value = 0.0f;
-        er_node_set_props(arc, &p);
+        props.arc_value = 0.0f;
+        er_node_set_props(arc, &props);
         er_commit();
-        const int16_t ddx = (int16_t)(knob->computed.x - knob_x0);
-        const int16_t ddy = (int16_t)(knob->computed.y - knob_y0);
-        CHECK(ddx != 0 || ddy != 0, "the knob child actually moved");
+        const int16_t knob_delta_x = (int16_t)(knob->computed.x - knob_start_x);
+        const int16_t knob_delta_y = (int16_t)(knob->computed.y - knob_start_y);
+        CHECK(knob_delta_x != 0 || knob_delta_y != 0, "the knob child actually moved");
         int moved_with = 0;
-        for (int i = 0; i < FAN; i++)
+        for (int fan_index = 0; fan_index < FAN; fan_index++)
         {
-            if (kids[i]->computed.x - before_x[i] == ddx && kids[i]->computed.y - before_y[i] == ddy)
+            if (kids[fan_index]->computed.x - before_x[fan_index] == knob_delta_x
+                && kids[fan_index]->computed.y - before_y[fan_index] == knob_delta_y)
                 moved_with++;
         }
         CHECK(moved_with == FAN, "every descendant of a large knob subtree moves with it");
-        for (int i = 0; i < FAN; i++)
+        for (int fan_index = 0; fan_index < FAN; fan_index++)
         {
-            er_tree_remove_child(knob, kids[i]);
-            er_node_destroy(kids[i]);
+            er_tree_remove_child(knob, kids[fan_index]);
+            er_node_destroy(kids[fan_index]);
         }
         er_commit();
     }
@@ -760,22 +782,22 @@ static void test_overhang(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_width = 4;
-    p.arc_knob = ER_ARC_KNOB_CIRCLE;
-    p.arc_knob_size = 40;
-    p.arc_knob_color = 0xFF00FF00U;
-    p.arc_knob_border_width = 0;
-    p.arc_value = 50.0f; /* knob at the top: centre (120, 20 + 2) = (120, 22); reaches y = 2 */
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_width = 4;
+    props.arc_knob = ER_ARC_KNOB_CIRCLE;
+    props.arc_knob_size = 40;
+    props.arc_knob_color = 0xFF00FF00U;
+    props.arc_knob_border_width = 0;
+    props.arc_value = 50.0f; /* knob at the top: centre (120, 20 + 2) = (120, 22); reaches y = 2 */
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
     CHECK(arc->arc_overhang >= 18, "overhang computed for a 40 px knob on a 4 px ring");
     CHECK(near_color(px(120, 8), 0x00FF00U, 2), "knob painted above the layout box");
 
     /* Move the node down: the overhanging knob pixels must be erased. */
-    p.margin_top = 40;
-    er_node_set_props(arc, &p);
+    props.margin_top = 40;
+    er_node_set_props(arc, &props);
     er_commit();
     CHECK(near_color(px(120, 8), 0x000000U, 0), "old overhang erased after the move");
     CHECK(near_color(px(120, 28), 0x00FF00U, 2), "knob painted at the new spot");
@@ -786,10 +808,10 @@ static void test_span_cache(void)
 {
     er_arc_span_cache_reset();
     (void)er_arc_half_chord(50.0f, 0.5f);
-    const uint32_t m1 = er_arc_span_cache_misses();
+    const uint32_t misses_before = er_arc_span_cache_misses();
     (void)er_arc_half_chord(50.0f, 10.5f);
     (void)er_arc_half_chord(50.0f, -3.5f);
-    CHECK(er_arc_span_cache_misses() == m1, "same radius + phase hits the cache");
+    CHECK(er_arc_span_cache_misses() == misses_before, "same radius + phase hits the cache");
     CHECK(fabsf(er_arc_half_chord(50.0f, 30.5f) - sqrtf(50.0f * 50.0f - 30.5f * 30.5f)) < 0.01f,
           "cached half-chord is exact to 1/256");
     CHECK(er_arc_half_chord(50.0f, 50.5f) < 0.0f, "rows past the radius miss the circle");
@@ -797,51 +819,51 @@ static void test_span_cache(void)
     /* A radius past ERUI_ARC_MAX_RADIUS is not cacheable and falls back to an exact per-row sqrt —
      * reachable on a big panel (a full-width dial on an 800 px screen), so it must still be right. */
     const float big = (float)ERUI_ARC_MAX_RADIUS + 40.0f;
-    const uint32_t m2 = er_arc_span_cache_misses();
+    const uint32_t misses_after = er_arc_span_cache_misses();
     CHECK(fabsf(er_arc_half_chord(big, 10.5f) - sqrtf(big * big - 10.5f * 10.5f)) < 0.01f,
           "an uncacheable radius still returns the exact half-chord");
-    CHECK(er_arc_span_cache_misses() == m2, "an uncacheable radius does not evict a cache entry");
+    CHECK(er_arc_span_cache_misses() == misses_after, "an uncacheable radius does not evict a cache entry");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - <Svg> arc ↔ native arc parity (issue #87's follow-up: retarget ER_VOP_ARC at the shared analytic core)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_snap_a[SCREEN * SCREEN];
-static uint32_t s_snap_b[SCREEN * SCREEN];
+static uint32_t s_snapshot_a[SCREEN * SCREEN];
+static uint32_t s_snapshot_b[SCREEN * SCREEN];
 
 /** @brief Builds an <Svg> node at (20,20) 200x200 carrying one stroked arc, and commits. */
-static void render_svg_arc(const float* ops, int n_ops, const ERVectorPaint* paint)
+static void render_svg_arc(const float* tape, int tape_count, const ERVectorPaint* paint)
 {
     reset_scene();
     er_vector_analytic_arc_count_reset();
     ERNode* root = make_root(0xFF000000U);
     ERNode* svg = er_node_create(ER_NODE_VECTOR);
-    ERProps p;
-    er_props_default(&p);
-    p.width = 200;
-    p.height = 200;
-    p.margin_left = 20;
-    p.margin_top = 20;
-    er_node_set_props(svg, &p);
+    ERProps props;
+    er_props_default(&props);
+    props.width = 200;
+    props.height = 200;
+    props.margin_left = 20;
+    props.margin_top = 20;
+    er_node_set_props(svg, &props);
     er_tree_append_child(root, svg);
-    er_node_set_vector_ops(svg, ops, n_ops, paint, 1, NULL, 0);
+    er_node_set_vector_ops(svg, tape, tape_count, paint, 1, NULL, 0);
     er_commit();
 }
 
 /** @brief Builds a native ER_NODE_ARC whose TRACK matches the arc above (value at min → no indicator). */
-static void render_native_track(float start_deg, float sweep_deg, uint32_t color, uint8_t cap)
+static void render_native_track(float start_degrees, float sweep_degrees, uint32_t color, uint8_t cap)
 {
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_value = 0.0f; /* frac 0 → the indicator draws nothing; only the track is painted */
-    p.arc_start_angle = start_deg;
-    p.arc_sweep_angle = sweep_deg;
-    p.arc_track_color = color;
-    p.arc_cap = cap;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_value = 0.0f; /* frac 0 → the indicator draws nothing; only the track is painted */
+    props.arc_start_angle = start_degrees;
+    props.arc_sweep_angle = sweep_degrees;
+    props.arc_track_color = color;
+    props.arc_cap = cap;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 }
@@ -855,29 +877,29 @@ static void render_native_track(float start_deg, float sweep_deg, uint32_t color
  */
 static void test_svg_native_parity(void)
 {
-    const float A0 = 135.0f * 0.017453292519943295f;
-    const float A1 = 405.0f * 0.017453292519943295f;
-    const uint32_t COL = 0xFF00A0FFU;
+    const float start_angle = 135.0f * ER_DEG2RAD;
+    const float end_angle = 405.0f * ER_DEG2RAD;
+    const uint32_t track_color = 0xFF00A0FFU;
 
     for (int round = 0; round < 2; round++)
     {
         const bool round_cap = (round == 1);
         /* Tape is NODE-LOCAL: the node box is at (20,20), so its centre is (100,100) locally. */
-        const float ops[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, A0, A1, 0.0f};
+        const float tape[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, start_angle, end_angle, 0.0f};
         ERVectorPaint paint;
         memset(&paint, 0, sizeof(paint));
-        paint.stroke = COL;
+        paint.stroke = track_color;
         paint.stroke_w = 16.0f;
         paint.cap = round_cap ? ER_VCAP_ROUND : ER_VCAP_BUTT;
 
-        render_svg_arc(ops, (int)(sizeof(ops) / sizeof(ops[0])), &paint);
+        render_svg_arc(tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint);
         CHECK(er_vector_analytic_arc_count() == 1U, "a lone stroked <Svg> arc takes the analytic route");
-        memcpy(s_snap_a, s_fb, sizeof(s_snap_a));
+        memcpy(s_snapshot_a, s_framebuffer, sizeof(s_snapshot_a));
 
-        render_native_track(135.0f, 270.0f, COL, round_cap ? ER_ARC_CAP_ROUND : ER_ARC_CAP_BUTT);
-        memcpy(s_snap_b, s_fb, sizeof(s_snap_b));
+        render_native_track(135.0f, 270.0f, track_color, round_cap ? ER_ARC_CAP_ROUND : ER_ARC_CAP_BUTT);
+        memcpy(s_snapshot_b, s_framebuffer, sizeof(s_snapshot_b));
 
-        CHECK(memcmp(s_snap_a, s_snap_b, sizeof(s_snap_a)) == 0,
+        CHECK(memcmp(s_snapshot_a, s_snapshot_b, sizeof(s_snapshot_a)) == 0,
               round_cap ? "round-cap <Svg> arc is pixel-identical to the native arc"
                         : "butt-cap <Svg> arc is pixel-identical to the native arc");
     }
@@ -887,26 +909,26 @@ static void test_svg_native_parity(void)
 static void test_svg_circle_route(void)
 {
     /* Exactly what svg-ops.js / the AOT emit for <Circle cx=100 cy=100 r=60>. */
-    const float ops[] = {ER_VOP_SHAPE,
-                         0.0f,
-                         ER_VOP_MOVE,
-                         160.0f,
-                         100.0f,
-                         ER_VOP_ARC,
-                         100.0f,
-                         100.0f,
-                         60.0f,
-                         0.0f,
-                         6.283185307179586f,
-                         0.0f,
-                         ER_VOP_CLOSE};
+    const float tape[] = {ER_VOP_SHAPE,
+                          0.0f,
+                          ER_VOP_MOVE,
+                          160.0f,
+                          100.0f,
+                          ER_VOP_ARC,
+                          100.0f,
+                          100.0f,
+                          60.0f,
+                          0.0f,
+                          TWO_PI,
+                          0.0f,
+                          ER_VOP_CLOSE};
     ERVectorPaint paint;
     memset(&paint, 0, sizeof(paint));
     paint.fill = 0xFF203040U;
     paint.stroke = 0xFFFFAA00U;
     paint.stroke_w = 10.0f;
 
-    render_svg_arc(ops, (int)(sizeof(ops) / sizeof(ops[0])), &paint);
+    render_svg_arc(tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint);
     CHECK(er_vector_analytic_arc_count() == 1U, "a filled+stroked <Circle> takes the analytic route");
     /* Centre (20+100, 20+100) = (120,120): disc fill inside r=60, stroke ring straddling it, clear outside. */
     CHECK(near_color(px(120, 120), 0x203040U, 2), "circle fill painted at the centre");
@@ -916,15 +938,15 @@ static void test_svg_circle_route(void)
 
     /* A leading MOVE that does NOT land on the arc's start point means a real connecting line — the
      * analytic core cannot express that, so it must fall back to the tessellated path. */
-    float bad[sizeof(ops) / sizeof(ops[0])];
-    memcpy(bad, ops, sizeof(ops));
+    float bad[sizeof(tape) / sizeof(tape[0])];
+    memcpy(bad, tape, sizeof(tape));
     bad[3] = 10.0f; /* MOVE to (10,100) instead of (160,100) */
     render_svg_arc(bad, (int)(sizeof(bad) / sizeof(bad[0])), &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "a MOVE away from the arc start falls back to tessellation");
 
     /* A float-rounded MOVE (off by a ULP-ish amount) still routes — the general path's exact-equality
      * vertex dedupe is what spiked a miter join here before. */
-    memcpy(bad, ops, sizeof(ops));
+    memcpy(bad, tape, sizeof(tape));
     bad[3] = 160.0f + 1e-4f;
     render_svg_arc(bad, (int)(sizeof(bad) / sizeof(bad[0])), &paint);
     CHECK(er_vector_analytic_arc_count() == 1U, "a ULP-off MOVE still routes (epsilon match)");
@@ -933,10 +955,10 @@ static void test_svg_circle_route(void)
 /** @brief Shapes the sector core cannot express must keep the general tessellated path — and still draw. */
 static void test_svg_fallbacks(void)
 {
-    const float A0 = 135.0f * 0.017453292519943295f;
-    const float A1 = 270.0f * 0.017453292519943295f;
-    const float arc_ops[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, A0, A1, 0.0f};
-    const int arc_n = (int)(sizeof(arc_ops) / sizeof(arc_ops[0]));
+    const float start_angle = 135.0f * ER_DEG2RAD;
+    const float end_angle = 270.0f * ER_DEG2RAD;
+    const float arc_tape[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, start_angle, end_angle, 0.0f};
+    const int arc_tape_count = (int)(sizeof(arc_tape) / sizeof(arc_tape[0]));
     ERVectorPaint paint;
 
     /* Square cap: the sector core has butt and round only. */
@@ -944,14 +966,14 @@ static void test_svg_fallbacks(void)
     paint.stroke = 0xFF00A0FFU;
     paint.stroke_w = 16.0f;
     paint.cap = ER_VCAP_SQUARE;
-    render_svg_arc(arc_ops, arc_n, &paint);
+    render_svg_arc(arc_tape, arc_tape_count, &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "a square-cap arc falls back");
     CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 200.0f), 0x00A0FFU, 2), "square-cap arc still draws");
 
     /* A FILLED partial arc closes on a chord (a circular segment), not a sector. */
     memset(&paint, 0, sizeof(paint));
     paint.fill = 0xFF44FF44U;
-    render_svg_arc(arc_ops, arc_n, &paint);
+    render_svg_arc(arc_tape, arc_tape_count, &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "a filled partial arc falls back (chord, not sector)");
     CHECK(near_color(px(120, 120), 0x000000U, 0),
           "the segment's chord leaves the centre empty (a sector would have filled it)");
@@ -960,12 +982,22 @@ static void test_svg_fallbacks(void)
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
     paint.stroke_w = 200.0f;
-    render_svg_arc(arc_ops, arc_n, &paint);
+    render_svg_arc(arc_tape, arc_tape_count, &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "an over-wide stroke falls back");
 
     /* An arc joined to a line is a multi-op subpath with a join — the general path owns that. */
-    const float joined[] = {
-        ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, A0, A1, 0.0f, ER_VOP_LINE, 100.0f, 100.0f};
+    const float joined[] = {ER_VOP_SHAPE,
+                            0.0f,
+                            ER_VOP_ARC,
+                            100.0f,
+                            100.0f,
+                            92.0f,
+                            start_angle,
+                            end_angle,
+                            0.0f,
+                            ER_VOP_LINE,
+                            100.0f,
+                            100.0f};
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
     paint.stroke_w = 8.0f;
@@ -979,8 +1011,8 @@ static void test_svg_fallbacks(void)
                          100.0f,
                          100.0f,
                          92.0f,
-                         A0,
-                         A1,
+                         start_angle,
+                         end_angle,
                          0.0f,
                          ER_VOP_SHAPE,
                          0.0f,
@@ -988,8 +1020,8 @@ static void test_svg_fallbacks(void)
                          100.0f,
                          100.0f,
                          70.0f,
-                         A0,
-                         A1,
+                         start_angle,
+                         end_angle,
                          0.0f};
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
@@ -1006,13 +1038,16 @@ static void test_extreme_geometry(void)
 {
     /* A <Dial>'s value damage counts the sweep's quadrants in a float, which from 90 * 2^25 degrees no longer
      * steps on; an infinite sweep never ends. Both now bound the whole circle. */
-    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
-    er_arc_sector_bbox(100.0f, 100.0f, 20.0f, 40.0f, 3019898880.0f, 3019899136.0f, 0.0f, &x0, &y0, &x1, &y1);
-    CHECK(x0 <= 60.0f && y0 <= 60.0f && x1 >= 140.0f && y1 >= 140.0f, "a huge start angle bounds the whole circle");
-    x0 = y0 = 1e9f;
-    x1 = y1 = -1e9f;
-    er_arc_sector_bbox(100.0f, 100.0f, 20.0f, 40.0f, 0.0f, INFINITY, 0.0f, &x0, &y0, &x1, &y1);
-    CHECK(x0 <= 60.0f && y0 <= 60.0f && x1 >= 140.0f && y1 >= 140.0f, "an infinite sweep bounds the whole circle");
+    float min_x = 1e9f, min_y = 1e9f, max_x = -1e9f, max_y = -1e9f;
+    er_arc_sector_bbox(
+        100.0f, 100.0f, 20.0f, 40.0f, 3019898880.0f, 3019899136.0f, 0.0f, &min_x, &min_y, &max_x, &max_y);
+    CHECK(min_x <= 60.0f && min_y <= 60.0f && max_x >= 140.0f && max_y >= 140.0f,
+          "a huge start angle bounds the whole circle");
+    min_x = min_y = 1e9f;
+    max_x = max_y = -1e9f;
+    er_arc_sector_bbox(100.0f, 100.0f, 20.0f, 40.0f, 0.0f, INFINITY, 0.0f, &min_x, &min_y, &max_x, &max_y);
+    CHECK(min_x <= 60.0f && min_y <= 60.0f && max_x >= 140.0f && max_y >= 140.0f,
+          "an infinite sweep bounds the whole circle");
 
     /* <Svg> arcs through the analytic route. Box (20,20) 200x200 → centre (120,120). */
     ERVectorPaint ring;
@@ -1040,13 +1075,13 @@ static void test_extreme_geometry(void)
     ERVectorPaint disc;
     memset(&disc, 0, sizeof(disc));
     disc.fill = 0xFF44FF44U;
-    const float big[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 1e10f, 0.0f, 6.283185307179586f, 0.0f};
+    const float big[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 1e10f, 0.0f, TWO_PI, 0.0f};
     render_svg_arc(big, (int)(sizeof(big) / sizeof(big[0])), &disc);
     CHECK(er_vector_analytic_arc_count() == 1U, "a huge disc takes the analytic route");
     CHECK(near_color(px(25, 25), 0x44FF44U, 0) && near_color(px(214, 214), 0x44FF44U, 0),
           "a disc past the int range fills the node");
-    const float nan_r[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, NAN, 0.0f, 6.283185307179586f, 0.0f};
-    render_svg_arc(nan_r, (int)(sizeof(nan_r) / sizeof(nan_r[0])), &disc);
+    const float nan_radius_tape[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, NAN, 0.0f, TWO_PI, 0.0f};
+    render_svg_arc(nan_radius_tape, (int)(sizeof(nan_radius_tape) / sizeof(nan_radius_tape[0])), &disc);
     CHECK(near_color(px(120, 120), 0x000000U, 0), "a NaN radius draws nothing");
 
     /* NaN props settle before they reach the knob's int casts. */
@@ -1058,12 +1093,12 @@ static void test_extreme_geometry(void)
     nan_props.arc_value = NAN;
     ERNode* nan_arc = er_node_create(ER_NODE_ARC);
     er_node_set_props(nan_arc, &nan_props);
-    ERArcGeom geom;
-    er_arc_geom(nan_arc, 0, 0, 200, 200, &geom);
-    CHECK(geom.start_angle == 135.0f && geom.sweep == 270.0f, "a NaN start and sweep take the default dial");
-    CHECK(er_arc_value_frac(&geom, NAN) == 0.0f, "a NaN range or value is the start of the sweep");
+    ERArcGeom geometry;
+    er_arc_geom(nan_arc, 0, 0, 200, 200, &geometry);
+    CHECK(geometry.start_angle == 135.0f && geometry.sweep == 270.0f, "a NaN start and sweep take the default dial");
+    CHECK(er_arc_value_frac(&geometry, NAN) == 0.0f, "a NaN range or value is the start of the sweep");
     float knob_x, knob_y;
-    er_arc_knob_center(&geom, NAN, &knob_x, &knob_y);
+    er_arc_knob_center(&geometry, NAN, &knob_x, &knob_y);
     CHECK(knob_x == knob_x && knob_y == knob_y, "a NaN value still places the knob");
 }
 
@@ -1073,17 +1108,17 @@ static void test_range(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_range = 1;
-    p.arc_value_start = 25.0f; /* 135 + 270*0.25 = 202.5 deg */
-    p.arc_value = 75.0f;       /* 135 + 270*0.75 = 337.5 deg */
-    p.arc_adjustable = 1;
-    p.arc_step = 5.0f;
-    p.arc_knob = ER_ARC_KNOB_CIRCLE;
-    p.arc_knob_size = 20;
-    p.arc_knob_color = 0xFFFFFFFFU;
-    p.arc_knob_border_width = 0;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_range = 1;
+    props.arc_value_start = 25.0f; /* 135 + 270*0.25 = 202.5 deg */
+    props.arc_value = 75.0f;       /* 135 + 270*0.75 = 337.5 deg */
+    props.arc_adjustable = 1;
+    props.arc_step = 5.0f;
+    props.arc_knob = ER_ARC_KNOB_CIRCLE;
+    props.arc_knob_size = 20;
+    props.arc_knob_color = 0xFFFFFFFFU;
+    props.arc_knob_border_width = 0;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
     er_commit();
@@ -1097,11 +1132,13 @@ static void test_range(void)
     /* Grab nearer the LOW end and drag it: only value_start moves. */
     s_change_count = 0;
     {
-        const float a = 210.0f * 0.017453292519943295f;
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, (int)(120.0f + 92.0f * cosf(a)), (int)(120.0f + 92.0f * sinf(a)));
+        const float low_angle = 210.0f * ER_DEG2RAD;
+        embedded_renderer_touch(
+            0, ER_TOUCH_DOWN, (int)(120.0f + 92.0f * cosf(low_angle)), (int)(120.0f + 92.0f * sinf(low_angle)));
         CHECK(arc->arc_drag_low, "a touch near the low end latches the low end");
-        const float b = 240.0f * 0.017453292519943295f; /* (240-135)/270 = 38.9% -> step 5 -> 40 */
-        embedded_renderer_touch(0, ER_TOUCH_MOVE, (int)(120.0f + 92.0f * cosf(b)), (int)(120.0f + 92.0f * sinf(b)));
+        const float dragged_angle = 240.0f * ER_DEG2RAD; /* (240-135)/270 = 38.9% -> step 5 -> 40 */
+        embedded_renderer_touch(
+            0, ER_TOUCH_MOVE, (int)(120.0f + 92.0f * cosf(dragged_angle)), (int)(120.0f + 92.0f * sinf(dragged_angle)));
         er_input_flush_moves();
         CHECK(arc->arc_value_start == 40.0f, "dragging the low end moves value_start");
         CHECK(arc->arc_value == 75.0f, "the high end is untouched");
@@ -1109,8 +1146,11 @@ static void test_range(void)
     }
     /* Dragging the low end PAST the high end clamps instead of inverting the band. */
     {
-        const float c = 380.0f * 0.017453292519943295f;
-        embedded_renderer_touch(0, ER_TOUCH_MOVE, (int)(120.0f + 92.0f * cosf(c)), (int)(120.0f + 92.0f * sinf(c)));
+        const float past_high_angle = 380.0f * ER_DEG2RAD;
+        embedded_renderer_touch(0,
+                                ER_TOUCH_MOVE,
+                                (int)(120.0f + 92.0f * cosf(past_high_angle)),
+                                (int)(120.0f + 92.0f * sinf(past_high_angle)));
         er_input_flush_moves();
         CHECK(arc->arc_value_start == 75.0f, "the low end clamps at the high end (no inverted band)");
         CHECK(arc->arc_value == 75.0f, "the high end still did not move");
@@ -1120,29 +1160,30 @@ static void test_range(void)
     CHECK(!arc->arc_drag_low, "the latch clears on release");
 
     /* Grab nearer the HIGH end: only value moves. */
-    p.arc_value_start = 25.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value_start = 25.0f;
+    er_node_set_props(arc, &props);
     er_commit();
     {
-        const float a = 330.0f * 0.017453292519943295f;
-        embedded_renderer_touch(0, ER_TOUCH_DOWN, (int)(120.0f + 92.0f * cosf(a)), (int)(120.0f + 92.0f * sinf(a)));
+        const float high_angle = 330.0f * ER_DEG2RAD;
+        embedded_renderer_touch(
+            0, ER_TOUCH_DOWN, (int)(120.0f + 92.0f * cosf(high_angle)), (int)(120.0f + 92.0f * sinf(high_angle)));
         CHECK(!arc->arc_drag_low, "a touch near the high end latches the high end");
         CHECK(arc->arc_value_start == 25.0f, "the low end is untouched by a high-end drag");
         embedded_renderer_touch(0, ER_TOUCH_UP, 120, 120);
     }
 
     /* A range value change still damages only a sliver. */
-    p.arc_value = 60.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value = 60.0f;
+    er_node_set_props(arc, &props);
     er_commit();
-    ERRect dr;
-    CHECK(er_get_dirty_rect(&dr), "a range value change reports a dirty rect");
-    CHECK(dr.w < 140 && dr.h < 140, "range value-change damage stays a sliver");
+    ERRect dirty;
+    CHECK(er_get_dirty_rect(&dirty), "a range value change reports a dirty rect");
+    CHECK(dirty.w < 140 && dirty.h < 140, "range value-change damage stays a sliver");
 
     /* Widening the band in ONE setProps (both ends move outward) must not self-clamp. */
-    p.arc_value_start = 10.0f;
-    p.arc_value = 90.0f;
-    er_node_set_props(arc, &p);
+    props.arc_value_start = 10.0f;
+    props.arc_value = 90.0f;
+    er_node_set_props(arc, &props);
     er_commit();
     CHECK(arc->arc_value_start == 10.0f && arc->arc_value == 90.0f, "both ends widen in one setProps");
 
@@ -1166,93 +1207,98 @@ static void test_range_conic_damage(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_range = 1;
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    p.gradient_type = ER_GRADIENT_CONIC;
-    p.gradient_stop_count = 2;
-    p.gradient_stops[0].color = 0xFFFF0000U;
-    p.gradient_stops[0].position = 0.0f;
-    p.gradient_stops[1].color = 0xFF0000FFU;
-    p.gradient_stops[1].position = 1.0f;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_range = 1;
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    props.gradient_type = ER_GRADIENT_CONIC;
+    props.gradient_stop_count = 2;
+    props.gradient_stops[0].color = 0xFFFF0000U;
+    props.gradient_stops[0].position = 0.0f;
+    props.gradient_stops[1].color = 0xFF0000FFU;
+    props.gradient_stops[1].position = 1.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 
     /* Move ONLY the low end, the way a drag does (the props path would repaint the whole box). */
-    static uint32_t inc[SCREEN * SCREEN];
+    static uint32_t incremental[SCREEN * SCREEN];
     CHECK(er_arc_apply_value_start(arc, 45.0f), "low end moved");
     er_mark_dirty_upward(arc);
     er_commit();
-    memcpy(inc, s_fb, sizeof(inc));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
 
-    memset(s_fb, 0, sizeof(s_fb));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(inc, s_fb, sizeof(inc)) == 0, "widening a conic range band repaints the WHOLE band (ramp re-anchors)");
+    CHECK(memcmp(incremental, s_framebuffer, sizeof(incremental)) == 0,
+          "widening a conic range band repaints the WHOLE band (ramp re-anchors)");
 
     /* The other direction: shrinking the band must cover both the re-coloured part AND the part the end
      * vacated. A union that only reaches the moved end's NEW position misses one of the two. */
     CHECK(er_arc_apply_value_start(arc, 32.0f), "low end moved back");
     er_mark_dirty_upward(arc);
     er_commit();
-    memcpy(inc, s_fb, sizeof(inc));
-    memset(s_fb, 0, sizeof(s_fb));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(inc, s_fb, sizeof(inc)) == 0, "shrinking a conic range band also repaints the whole band");
+    CHECK(memcmp(incremental, s_framebuffer, sizeof(incremental)) == 0,
+          "shrinking a conic range band also repaints the whole band");
 
     /* And the HIGH end, where the fixed end sits below rather than above the moved one. */
     CHECK(er_arc_apply_value(arc, 55.0f), "high end moved");
     er_mark_dirty_upward(arc);
     er_commit();
-    memcpy(inc, s_fb, sizeof(inc));
-    memset(s_fb, 0, sizeof(s_fb));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(inc, s_fb, sizeof(inc)) == 0, "moving the HIGH end of a conic range band repaints it all");
+    CHECK(memcmp(incremental, s_framebuffer, sizeof(incremental)) == 0,
+          "moving the HIGH end of a conic range band repaints it all");
 
     /* A SINGLE-ENDED conic arc is anchored to the whole sweep instead, so its colours are pinned to dial
      * positions and nothing outside the swept sub-arc changes — that one must stay a tight sliver. */
     reset_scene();
     root = make_root(0xFF000000U);
     arc = er_node_create(ER_NODE_ARC);
-    p.arc_range = 0;
-    p.arc_value = 70.0f;
-    er_node_set_props(arc, &p);
+    props.arc_range = 0;
+    props.arc_value = 70.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
     CHECK(er_arc_apply_value(arc, 55.0f), "single-ended value moved");
     er_mark_dirty_upward(arc);
     er_commit();
-    memcpy(inc, s_fb, sizeof(inc));
-    ERRect sd;
-    const bool got_single = er_get_dirty_rect(&sd);
-    memset(s_fb, 0, sizeof(s_fb));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
+    ERRect single_dirty;
+    const bool got_single = er_get_dirty_rect(&single_dirty);
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(inc, s_fb, sizeof(inc)) == 0, "a sweep-anchored conic arc still matches a full repaint");
-    CHECK(got_single && (long)sd.w * (long)sd.h < 14000L,
+    CHECK(memcmp(incremental, s_framebuffer, sizeof(incremental)) == 0,
+          "a sweep-anchored conic arc still matches a full repaint");
+    CHECK(got_single && (long)single_dirty.w * (long)single_dirty.h < 14000L,
           "a sweep-anchored conic arc keeps its damage to the swept sliver");
 
     /* The same move on a SOLID band must still damage only a sliver — the fix must not widen that. */
     reset_scene();
     root = make_root(0xFF000000U);
     arc = er_node_create(ER_NODE_ARC);
-    p.gradient_type = ER_GRADIENT_NONE;
-    p.gradient_stop_count = 0;
-    p.arc_range = 1; /* restored: the single-ended case above cleared it */
-    p.arc_value = 70.0f;
-    p.arc_value_start = 30.0f;
-    er_node_set_props(arc, &p);
+    props.gradient_type = ER_GRADIENT_NONE;
+    props.gradient_stop_count = 0;
+    props.arc_range = 1; /* restored: the single-ended case above cleared it */
+    props.arc_value = 70.0f;
+    props.arc_value_start = 30.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
     (void)er_arc_apply_value_start(arc, 45.0f);
     er_mark_dirty_upward(arc);
     er_commit();
-    ERRect dr;
-    CHECK(er_get_dirty_rect(&dr) && dr.w < 150 && dr.h < 150, "a solid range band still damages only the swept sliver");
+    ERRect dirty;
+    CHECK(er_get_dirty_rect(&dirty) && dirty.w < 150 && dirty.h < 150,
+          "a solid range band still damages only the swept sliver");
 }
 
 /** @brief min_span: the ends keep a minimum separation, pushing each other rather than stopping dead. */
@@ -1261,14 +1307,14 @@ static void test_range_min_span(void)
     reset_scene();
     ERNode* root = make_root(0xFF000000U);
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p = arc_props();
-    p.arc_range = 1;
-    p.arc_min_span = 10.0f; /* range is 0..100 */
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    p.arc_adjustable = 1;
-    p.arc_step = 1.0f;
-    er_node_set_props(arc, &p);
+    ERProps props = arc_props();
+    props.arc_range = 1;
+    props.arc_min_span = 10.0f; /* range is 0..100 */
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    props.arc_adjustable = 1;
+    props.arc_step = 1.0f;
+    er_node_set_props(arc, &props);
     er_tree_append_child(root, arc);
     er_commit();
 
@@ -1292,41 +1338,41 @@ static void test_range_min_span(void)
     CHECK(arc->arc_value == 10.0f, "high end stops one span above the floor");
 
     /* A push damages BOTH ends' knobs, so the frame still matches a full repaint. */
-    p.arc_knob = ER_ARC_KNOB_CIRCLE;
-    p.arc_knob_size = 20;
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    er_node_set_props(arc, &p);
+    props.arc_knob = ER_ARC_KNOB_CIRCLE;
+    props.arc_knob_size = 20;
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    er_node_set_props(arc, &props);
     er_commit();
     static uint32_t snap[SCREEN * SCREEN];
     CHECK(er_arc_apply_value_start(arc, 68.0f), "low end pushes the high end");
     er_mark_dirty_upward(arc);
     er_commit();
-    memcpy(snap, s_fb, sizeof(snap));
-    memset(s_fb, 0, sizeof(s_fb));
+    memcpy(snap, s_framebuffer, sizeof(snap));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(snap, s_fb, sizeof(snap)) == 0, "a pushed far end is fully repainted (both knobs move)");
+    CHECK(memcmp(snap, s_framebuffer, sizeof(snap)) == 0, "a pushed far end is fully repainted (both knobs move)");
 
     /* A min_span WIDER than the range cannot be honoured. It must clamp to the range instead of running
      * the endpoint arithmetic with it — which used to store out-of-range values and, because the push
      * re-read a not-yet-assigned endpoint, recurse until the stack died. */
-    p.arc_min_span = 200.0f; /* range is 0..100 */
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    er_node_set_props(arc, &p);
+    props.arc_min_span = 200.0f; /* range is 0..100 */
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    er_node_set_props(arc, &props);
     CHECK(arc->arc_value_start >= 0.0f && arc->arc_value_start <= 100.0f, "over-wide min_span keeps low in range");
     CHECK(arc->arc_value >= 0.0f && arc->arc_value <= 100.0f, "over-wide min_span keeps high in range");
     CHECK(arc->arc_value_start == 0.0f && arc->arc_value == 100.0f, "over-wide min_span opens the band fully");
 
     /* Raising min_span past what the LIVE endpoints allow: the same recursion trigger, via setProps. */
-    p.arc_min_span = 0.0f;
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    er_node_set_props(arc, &p);
+    props.arc_min_span = 0.0f;
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    er_node_set_props(arc, &props);
     CHECK(arc->arc_value_start == 30.0f && arc->arc_value == 70.0f, "band reset for the widening check");
-    p.arc_min_span = 99.0f;
-    er_node_set_props(arc, &p);
+    props.arc_min_span = 99.0f;
+    er_node_set_props(arc, &props);
     CHECK(arc->arc_value - arc->arc_value_start >= 98.9f, "widening min_span opens the live band to the new span");
     CHECK(arc->arc_value_start >= 0.0f && arc->arc_value <= 100.0f, "and both ends stay inside the range");
     /* And a drag on top of that settles rather than recursing. */
@@ -1334,17 +1380,17 @@ static void test_range_min_span(void)
     CHECK(arc->arc_value_start >= 0.0f && arc->arc_value <= 100.0f, "a drag under an over-wide span stays in range");
 
     /* A negative min_span is meaningless; treat it as none. */
-    p.arc_min_span = -5.0f;
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    er_node_set_props(arc, &p);
+    props.arc_min_span = -5.0f;
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    er_node_set_props(arc, &props);
     CHECK(arc->arc_value_start == 30.0f && arc->arc_value == 70.0f, "a negative min_span behaves as none");
 
     /* min_span 0 keeps the old clamp-at-neighbour behaviour. */
-    p.arc_min_span = 0.0f;
-    p.arc_value_start = 30.0f;
-    p.arc_value = 70.0f;
-    er_node_set_props(arc, &p);
+    props.arc_min_span = 0.0f;
+    props.arc_value_start = 30.0f;
+    props.arc_value = 70.0f;
+    er_node_set_props(arc, &props);
     er_commit();
     (void)er_arc_apply_value_start(arc, 90.0f);
     CHECK(arc->arc_value_start == 70.0f && arc->arc_value == 70.0f,
@@ -1370,40 +1416,40 @@ static void test_grid_damage(void)
     reset_scene();
     ERNode* root = make_root(0xFF202020U);
     ERNode* arcs[GRID * GRID];
-    ERProps p;
-    for (int r = 0; r < GRID; r++)
-        for (int c = 0; c < GRID; c++)
+    ERProps props;
+    for (int grid_row = 0; grid_row < GRID; grid_row++)
+        for (int grid_column = 0; grid_column < GRID; grid_column++)
         {
-            p = arc_props();
-            p.width = BOX;
-            p.height = BOX;
-            p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-            p.position = ER_POS_ABSOLUTE;
-            p.left = (float)(5 + c * PITCH);
-            p.top = (float)(5 + r * PITCH);
-            p.arc_width = 8;
-            ERNode* a = er_node_create(ER_NODE_ARC);
-            er_node_set_props(a, &p);
-            er_tree_append_child(root, a);
-            arcs[r * GRID + c] = a;
+            props = arc_props();
+            props.width = BOX;
+            props.height = BOX;
+            props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+            props.position = ER_POS_ABSOLUTE;
+            props.left = (float)(5 + grid_column * PITCH);
+            props.top = (float)(5 + grid_row * PITCH);
+            props.arc_width = 8;
+            ERNode* grid_arc = er_node_create(ER_NODE_ARC);
+            er_node_set_props(grid_arc, &props);
+            er_tree_append_child(root, grid_arc);
+            arcs[grid_row * GRID + grid_column] = grid_arc;
         }
     er_commit(); /* mount: full repaint */
 
     /* Nudge every dial in ONE commit — the scattered-update frame. */
     memset(s_touched, 0, sizeof(s_touched));
-    for (int r = 0; r < GRID; r++)
-        for (int c = 0; c < GRID; c++)
+    for (int grid_row = 0; grid_row < GRID; grid_row++)
+        for (int grid_column = 0; grid_column < GRID; grid_column++)
         {
-            p = arc_props();
-            p.width = BOX;
-            p.height = BOX;
-            p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-            p.position = ER_POS_ABSOLUTE;
-            p.left = (float)(5 + c * PITCH);
-            p.top = (float)(5 + r * PITCH);
-            p.arc_width = 8;
-            p.arc_value = 35.0f;
-            er_node_set_props(arcs[r * GRID + c], &p);
+            props = arc_props();
+            props.width = BOX;
+            props.height = BOX;
+            props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+            props.position = ER_POS_ABSOLUTE;
+            props.left = (float)(5 + grid_column * PITCH);
+            props.top = (float)(5 + grid_row * PITCH);
+            props.arc_width = 8;
+            props.arc_value = 35.0f;
+            er_node_set_props(arcs[grid_row * GRID + grid_column], &props);
         }
     er_commit();
 
@@ -1414,24 +1460,25 @@ static void test_grid_damage(void)
     const bool full_budget = (ER_DAMAGE_RECTS_MAX >= GRID * GRID);
 
     ERRect rects[ER_DAMAGE_RECTS_MAX];
-    const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
     if (full_budget)
-        CHECK(n == GRID * GRID, "every dial in the grid keeps its own damage rect");
+        CHECK(rect_count == GRID * GRID, "every dial in the grid keeps its own damage rect");
     else
-        CHECK(n >= 1 && n <= ER_DAMAGE_RECTS_MAX, "the saturated grid stays within the configured budget");
+        CHECK(rect_count >= 1 && rect_count <= ER_DAMAGE_RECTS_MAX,
+              "the saturated grid stays within the configured budget");
     uint32_t damage = 0U;
-    for (int i = 0; i < n; i++)
-        damage += (uint32_t)rects[i].w * (uint32_t)rects[i].h;
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        damage += (uint32_t)rects[rect_index].w * (uint32_t)rects[rect_index].h;
 
     /* The raster is what the clip really governs: count the pixels the backend wrote. Repainting all
      * nine rings in full would be an order of magnitude more than the nine slivers. */
     uint32_t touched = 0U;
-    for (int i = 0; i < SCREEN * SCREEN; i++)
-        touched += s_touched[i] ? 1U : 0U;
+    for (int pixel_index = 0; pixel_index < SCREEN * SCREEN; pixel_index++)
+        touched += s_touched[pixel_index] ? 1U : 0U;
     if (getenv("ER_ARC_DEBUG"))
         fprintf(stderr,
                 "grid: %d rects (budget %d), damage %u px, touched %u px\n",
-                n,
+                rect_count,
                 (int)ER_DAMAGE_RECTS_MAX,
                 damage,
                 touched);
@@ -1441,21 +1488,22 @@ static void test_grid_damage(void)
 
     /* Nine clipped passes must still composite exactly like one unclipped repaint. */
     uint32_t snap[SCREEN * SCREEN];
-    memcpy(snap, s_fb, sizeof(snap));
-    memset(s_fb, 0, sizeof(s_fb));
+    memcpy(snap, s_framebuffer, sizeof(snap));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     er_force_full_repaint();
     er_commit();
-    CHECK(memcmp(snap, s_fb, sizeof(snap)) == 0, "the grid's incremental frame is byte-identical to a full repaint");
+    CHECK(memcmp(snap, s_framebuffer, sizeof(snap)) == 0,
+          "the grid's incremental frame is byte-identical to a full repaint");
 }
 
 int main(void)
 {
-    EmbeddedRenderBackend be;
-    memset(&be, 0, sizeof(be));
-    be.fill_rect = fb_fill;
-    be.copy_rect = fb_copy;
-    be.blend_rect = fb_blend;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend;
+    memset(&backend, 0, sizeof(backend));
+    backend.fill_rect = fb_fill;
+    backend.copy_rect = fb_copy;
+    backend.blend_rect = fb_blend;
+    embedded_renderer_set_backend(&backend);
 
     test_geometry();
     test_showcase();

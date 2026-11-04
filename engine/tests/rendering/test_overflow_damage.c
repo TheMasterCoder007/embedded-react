@@ -47,57 +47,60 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SW 200
-#define SH 200
-#define SCREEN_PX ((long)SW * (long)SH)
+#define SCREEN_WIDTH 200
+#define SCREEN_HEIGHT 200
+#define SCREEN_PIXELS ((long)SCREEN_WIDTH * (long)SCREEN_HEIGHT)
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend: composites for real, and records which pixels were written
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /* Two rotating framebuffers, so the page-flip section can model a real double-buffered panel: the
- * engine paints s_bufs[s_draw], and present() advances both it and the engine in step. The
- * single-buffer sections never flip, so they simply live in s_bufs[0] throughout. */
-static uint32_t s_bufs[2][SW * SH];
+ * engine paints s_buffers[s_draw], and present() advances both it and the engine in step. The
+ * single-buffer sections never flip, so they simply live in s_buffers[0] throughout. */
+static uint32_t s_buffers[2][SCREEN_WIDTH * SCREEN_HEIGHT];
 static int s_draw;
-static uint8_t s_touched[SW * SH];
+static uint8_t s_touched[SCREEN_WIDTH * SCREEN_HEIGHT];
 
-#define FB_BYTES ((size_t)SCREEN_PX * sizeof(uint32_t))
+#define FRAMEBUFFER_BYTES ((size_t)SCREEN_PIXELS * sizeof(uint32_t))
 
 /** @brief The rotating buffer the engine is painting into right now. */
 static uint32_t* fb(void)
 {
-    return s_bufs[s_draw];
+    return s_buffers[s_draw];
 }
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127u) / 255u;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
-static void put(int x, int y, uint32_t sa, uint32_t sr, uint32_t sg, uint32_t sb)
+static void put(int x, int y, uint32_t source_alpha, uint32_t source_red, uint32_t source_green, uint32_t source_blue)
 {
-    if (x < 0 || x >= SW || y < 0 || y >= SH)
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT)
         return;
-    uint32_t* d = &fb()[y * SW + x];
-    const uint32_t inv = 255u - sa;
-    const uint32_t dr = (*d >> 16) & 0xFFu, dg = (*d >> 8) & 0xFFu, db = *d & 0xFFu;
-    *d = 0xFF000000u | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8) | (sb + div255(db * inv));
-    s_touched[y * SW + x] = 1u;
+    uint32_t* destination = &fb()[y * SCREEN_WIDTH + x];
+    const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+    const uint32_t destination_red = (*destination >> 16) & 0xFFu, destination_green = (*destination >> 8) & 0xFFu,
+                   destination_blue = *destination & 0xFFu;
+    *destination = 0xFF000000u | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                   | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                   | (source_blue + div255(destination_blue * inverse_alpha));
+    s_touched[y * SCREEN_WIDTH + x] = 1u;
 }
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFu;
-    if (!a)
+    const uint32_t alpha = (argb >> 24) & 0xFFu;
+    if (!alpha)
         return;
-    const uint32_t sr = div255(((argb >> 16) & 0xFFu) * a);
-    const uint32_t sg = div255(((argb >> 8) & 0xFFu) * a);
-    const uint32_t sb = div255((argb & 0xFFu) * a);
-    for (int r = y; r < y + h; r++)
-        for (int q = x; q < x + w; q++)
-            put(q, r, a, sr, sg, sb);
+    const uint32_t source_red = div255(((argb >> 16) & 0xFFu) * alpha);
+    const uint32_t source_green = div255(((argb >> 8) & 0xFFu) * alpha);
+    const uint32_t source_blue = div255((argb & 0xFFu) * alpha);
+    for (int pixel_y = y; pixel_y < y + height; pixel_y++)
+        for (int pixel_x = x; pixel_x < x + width; pixel_x++)
+            put(pixel_x, pixel_y, alpha, source_red, source_green, source_blue);
 }
 
 /*
@@ -108,45 +111,51 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
  * measures. Today's scene is solid opaque Views, so neither this nor blend_cb is reached at all — the
  * handling is here so that stays true if anyone gives the scene an image, text or an opacity group.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint8_t* p = src;
-    for (int r = 0; r < h; r++, p += stride)
+    const uint8_t* source_bytes = source;
+    for (int row_index = 0; row_index < height; row_index++, source_bytes += stride)
     {
-        const uint32_t* row = (const uint32_t*)p;
-        for (int q = 0; q < w; q++)
+        const uint32_t* row = (const uint32_t*)source_bytes;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t v = row[q];
-            const uint32_t sa = (v >> 24) & 0xFFu;
-            if (sa == 0u)
+            const uint32_t source_pixel = row[column];
+            const uint32_t source_alpha = (source_pixel >> 24) & 0xFFu;
+            if (source_alpha == 0u)
                 continue;
-            put(x + q, y + r, sa, (v >> 16) & 0xFFu, (v >> 8) & 0xFFu, v & 0xFFu);
+            put(x + column,
+                y + row_index,
+                source_alpha,
+                (source_pixel >> 16) & 0xFFu,
+                (source_pixel >> 8) & 0xFFu,
+                source_pixel & 0xFFu);
         }
     }
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint8_t* p = src;
-    for (int r = 0; r < h; r++, p += stride)
+    const uint8_t* source_bytes = source;
+    for (int row_index = 0; row_index < height; row_index++, source_bytes += stride)
     {
-        const uint32_t* row = (const uint32_t*)p;
-        for (int q = 0; q < w; q++)
+        const uint32_t* row = (const uint32_t*)source_bytes;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t v = row[q];
-            uint32_t sa = (v >> 24) & 0xFFu, sr = (v >> 16) & 0xFFu, sg = (v >> 8) & 0xFFu, sb = v & 0xFFu;
-            if (alpha < 255)
+            const uint32_t source_pixel = row[column];
+            uint32_t source_alpha = (source_pixel >> 24) & 0xFFu, source_red = (source_pixel >> 16) & 0xFFu,
+                     source_green = (source_pixel >> 8) & 0xFFu, source_blue = source_pixel & 0xFFu;
+            if (alpha < ER_ALPHA_OPAQUE)
             {
-                sa = div255(sa * alpha);
-                sr = div255(sr * alpha);
-                sg = div255(sg * alpha);
-                sb = div255(sb * alpha);
+                source_alpha = div255(source_alpha * alpha);
+                source_red = div255(source_red * alpha);
+                source_green = div255(source_green * alpha);
+                source_blue = div255(source_blue * alpha);
             }
-            if (sa == 0u)
+            if (source_alpha == 0u)
                 continue; /* scaled away to nothing: not a write, so not a touched pixel either */
-            put(x + q, y + r, sa, sr, sg, sb);
+            put(x + column, y + row_index, source_alpha, source_red, source_green, source_blue);
         }
     }
 }
@@ -159,55 +168,55 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
  * the toggle is about. Everything outside CLIP but inside CHILD is the region in dispute. */
 #define CLIP_X 30
 #define CLIP_Y 30
-#define CLIP_W 80
-#define CLIP_H 80
+#define CLIP_WIDTH 80
+#define CLIP_HEIGHT 80
 #define CHILD_X 10 /* relative to the clipper */
 #define CHILD_Y 10
-#define CHILD_W 120
-#define CHILD_H 120
+#define CHILD_WIDTH 120
+#define CHILD_HEIGHT 120
 
-#define BG_COLOR 0xFF202020u
+#define BACKGROUND_COLOR 0xFF202020u
 #define CLIP_COLOR 0xFF224466u
 #define CHILD_COLOR 0xFFDD7722u
 
 /* A point on the overflowing part of the child: past the clipper's right edge, inside the child. */
-#define OVER_X (CLIP_X + CLIP_W + 10)
-#define OVER_Y (CLIP_Y + 20)
+#define OVERFLOW_X (CLIP_X + CLIP_WIDTH + 10)
+#define OVERFLOW_Y (CLIP_Y + 20)
 /* And one on the part of the child that is inside the clipper either way. */
 #define INSIDE_X (CLIP_X + CHILD_X + 4)
 #define INSIDE_Y (CLIP_Y + CHILD_Y + 4)
 
 /* A sibling in the far corner, untouched by any toggle: proves the damage stayed local. */
-#define SIB_X 175
-#define SIB_Y 175
-#define SIB_W 20
-#define SIB_H 20
-#define SIB_COLOR 0xFFFF8800u
+#define SIBLING_X 175
+#define SIBLING_Y 175
+#define SIBLING_WIDTH 20
+#define SIBLING_HEIGHT 20
+#define SIBLING_COLOR 0xFFFF8800u
 
 /* Locality bound: the clipper's box unioned with the child's, plus slack for the pre-pass's
  * anti-aliasing margin. A fix that falls back to a full-screen repaint blows straight past it. */
-#define TOGGLE_PX_MAX ((long)(CHILD_X + CHILD_W + 8) * (long)(CHILD_Y + CHILD_H + 8))
+#define TOGGLE_PIXELS_MAX ((long)(CHILD_X + CHILD_WIDTH + 8) * (long)(CHILD_Y + CHILD_HEIGHT + 8))
 
 static ERNode* s_clipper;
 static ERProps s_clip_props;
 
 static ERProps props_default(void)
 {
-    ERProps p;
-    er_props_default(&p);
-    return p;
+    ERProps source_bytes;
+    er_props_default(&source_bytes);
+    return source_bytes;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
-/** @brief Reads a pixel out of rotating buffer @p b. */
-static uint32_t at_in(int b, int x, int y)
+/** @brief Reads a pixel out of rotating buffer @p buffer_index. */
+static uint32_t at_in(int buffer_index, int x, int y)
 {
-    return s_bufs[b][y * SW + x] & 0xFFFFFFu;
+    return s_buffers[buffer_index][y * SCREEN_WIDTH + x] & 0xFFFFFFu;
 }
 
 /** @brief Reads a pixel out of the buffer the engine is currently painting. */
@@ -233,11 +242,11 @@ static long frame_distinct(void)
 {
     memset(s_touched, 0, sizeof(s_touched));
     er_commit();
-    long n = 0;
-    for (long i = 0; i < SCREEN_PX; i++)
-        if (s_touched[i])
-            n++;
-    return n;
+    long distinct_count = 0;
+    for (long pixel_index = 0; pixel_index < SCREEN_PIXELS; pixel_index++)
+        if (s_touched[pixel_index])
+            distinct_count++;
+    return distinct_count;
 }
 
 /**
@@ -248,24 +257,24 @@ static long frame_distinct(void)
  */
 static int matches_full_repaint(const char* label)
 {
-    static uint32_t incremental[SW * SH];
-    memcpy(incremental, fb(), FB_BYTES);
+    static uint32_t incremental[SCREEN_WIDTH * SCREEN_HEIGHT];
+    memcpy(incremental, fb(), FRAMEBUFFER_BYTES);
 
-    memset(fb(), 0, FB_BYTES);
+    memset(fb(), 0, FRAMEBUFFER_BYTES);
     er_force_full_repaint();
     er_commit();
 
-    for (long i = 0; i < SCREEN_PX; i++)
+    for (long pixel_index = 0; pixel_index < SCREEN_PIXELS; pixel_index++)
     {
-        if (incremental[i] != fb()[i])
+        if (incremental[pixel_index] != fb()[pixel_index])
         {
             fprintf(stderr,
                     "  %s: first mismatch at (%ld,%ld) incremental=%08x full=%08x\n",
                     label,
-                    i % SW,
-                    i / SW,
-                    incremental[i],
-                    fb()[i]);
+                    pixel_index % SCREEN_WIDTH,
+                    pixel_index / SCREEN_WIDTH,
+                    incremental[pixel_index],
+                    fb()[pixel_index]);
             return 0;
         }
     }
@@ -275,10 +284,11 @@ static int matches_full_repaint(const char* label)
 /** @brief True when the reported damage covers @p (x,y) — what a partial-update host would flush. */
 static int reported_covers(int x, int y)
 {
-    ERRect r[ER_DAMAGE_RECTS_MAX];
-    const int n = er_get_dirty_rects(r, ER_DAMAGE_RECTS_MAX);
-    for (int i = 0; i < n; i++)
-        if (x >= r[i].x && y >= r[i].y && x < r[i].x + r[i].w && y < r[i].y + r[i].h)
+    ERRect rects[ER_DAMAGE_RECTS_MAX];
+    const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        if (x >= rects[rect_index].x && y >= rects[rect_index].y && x < rects[rect_index].x + rects[rect_index].w
+            && y < rects[rect_index].y + rects[rect_index].h)
             return 1;
     return 0;
 }
@@ -288,11 +298,11 @@ static void build_scene(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SW;
-    rp.height = SH;
-    rp.background_color = BG_COLOR;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN_WIDTH;
+    root_props.height = SCREEN_HEIGHT;
+    root_props.background_color = BACKGROUND_COLOR;
+    er_node_set_props(root, &root_props);
     er_tree_set_root(root);
 
     s_clipper = er_node_create(ER_NODE_VIEW);
@@ -300,33 +310,33 @@ static void build_scene(void)
     s_clip_props.position = ER_POS_ABSOLUTE;
     s_clip_props.left = CLIP_X;
     s_clip_props.top = CLIP_Y;
-    s_clip_props.width = CLIP_W;
-    s_clip_props.height = CLIP_H;
+    s_clip_props.width = CLIP_WIDTH;
+    s_clip_props.height = CLIP_HEIGHT;
     s_clip_props.background_color = CLIP_COLOR;
     er_node_set_props(s_clipper, &s_clip_props);
     er_tree_append_child(root, s_clipper);
 
     ERNode* child = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.position = ER_POS_ABSOLUTE;
-    cp.left = CHILD_X;
-    cp.top = CHILD_Y;
-    cp.width = CHILD_W;
-    cp.height = CHILD_H;
-    cp.background_color = CHILD_COLOR;
-    er_node_set_props(child, &cp);
+    ERProps child_props = props_default();
+    child_props.position = ER_POS_ABSOLUTE;
+    child_props.left = CHILD_X;
+    child_props.top = CHILD_Y;
+    child_props.width = CHILD_WIDTH;
+    child_props.height = CHILD_HEIGHT;
+    child_props.background_color = CHILD_COLOR;
+    er_node_set_props(child, &child_props);
     er_tree_append_child(s_clipper, child);
 
-    ERNode* sib = er_node_create(ER_NODE_VIEW);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = SIB_X;
-    sp.top = SIB_Y;
-    sp.width = SIB_W;
-    sp.height = SIB_H;
-    sp.background_color = SIB_COLOR;
-    er_node_set_props(sib, &sp);
-    er_tree_append_child(root, sib);
+    ERNode* sibling = er_node_create(ER_NODE_VIEW);
+    ERProps sibling_props = props_default();
+    sibling_props.position = ER_POS_ABSOLUTE;
+    sibling_props.left = SIBLING_X;
+    sibling_props.top = SIBLING_Y;
+    sibling_props.width = SIBLING_WIDTH;
+    sibling_props.height = SIBLING_HEIGHT;
+    sibling_props.background_color = SIBLING_COLOR;
+    er_node_set_props(sibling, &sibling_props);
+    er_tree_append_child(root, sibling);
 }
 
 /** @brief Applies an overflow value to the clipper. */
@@ -348,34 +358,34 @@ static void set_overflow(uint8_t overflow)
  */
 static int matches_full_repaint_both(const char* label)
 {
-    static uint32_t snap[2][SW * SH];
-    memcpy(snap, s_bufs, sizeof(snap));
+    static uint32_t snapshot[2][SCREEN_WIDTH * SCREEN_HEIGHT];
+    memcpy(snapshot, s_buffers, sizeof(snapshot));
 
     /* Forced ONCE, not per iteration: a full-repaint commit marks every buffer's debt full and then
      * discharges only the one it renders, so a second force would re-indebt the buffer just filled and
      * leave the scene owing a repaint the caller's idle checks would trip over. */
-    memset(s_bufs, 0, sizeof(s_bufs));
+    memset(s_buffers, 0, sizeof(s_buffers));
     er_force_full_repaint();
-    for (int i = 0; i < 2; i++)
+    for (int flip_index = 0; flip_index < 2; flip_index++)
     {
         er_commit();
         present(); /* two flips of a two-buffer rotation land back on the buffer we started from */
     }
 
-    for (int b = 0; b < 2; b++)
+    for (int buffer_index = 0; buffer_index < 2; buffer_index++)
     {
-        for (long i = 0; i < SCREEN_PX; i++)
+        for (long pixel_index = 0; pixel_index < SCREEN_PIXELS; pixel_index++)
         {
-            if (snap[b][i] != s_bufs[b][i])
+            if (snapshot[buffer_index][pixel_index] != s_buffers[buffer_index][pixel_index])
             {
                 fprintf(stderr,
                         "  %s: buffer %d first mismatch at (%ld,%ld) incremental=%08x full=%08x\n",
                         label,
-                        b,
-                        i % SW,
-                        i / SW,
-                        snap[b][i],
-                        s_bufs[b][i]);
+                        buffer_index,
+                        pixel_index % SCREEN_WIDTH,
+                        pixel_index / SCREEN_WIDTH,
+                        snapshot[buffer_index][pixel_index],
+                        s_buffers[buffer_index][pixel_index]);
                 return 0;
             }
         }
@@ -386,14 +396,14 @@ static int matches_full_repaint_both(const char* label)
 /** @brief True when BOTH rotating buffers show @p want at the overflow point. */
 static int both_buffers_show(uint32_t want)
 {
-    for (int b = 0; b < 2; b++)
+    for (int buffer_index = 0; buffer_index < 2; buffer_index++)
     {
-        if (at_in(b, OVER_X, OVER_Y) != (want & 0xFFFFFFu))
+        if (at_in(buffer_index, OVERFLOW_X, OVERFLOW_Y) != (want & 0xFFFFFFu))
         {
             fprintf(stderr,
                     "  buffer %d has %06x at the overflow point, expected %06x\n",
-                    b,
-                    at_in(b, OVER_X, OVER_Y),
+                    buffer_index,
+                    at_in(buffer_index, OVERFLOW_X, OVERFLOW_Y),
                     want & 0xFFFFFFu);
             return 0;
         }
@@ -417,7 +427,7 @@ static int check_page_flip(void)
 
     /* Every buffer starts owing a full repaint; flip until the scene has settled into both. */
     set_overflow(ER_OVERFLOW_VISIBLE);
-    for (int i = 0; i < 4; i++)
+    for (int frame_index = 0; frame_index < 4; frame_index++)
     {
         frame_distinct();
         present();
@@ -429,18 +439,18 @@ static int check_page_flip(void)
     set_overflow(ER_OVERFLOW_HIDDEN);
     frame_distinct();
     present();
-    const long replay_px = frame_distinct();
+    const long replay_painted = frame_distinct();
     present();
 
-    if (replay_px == 0)
+    if (replay_painted == 0)
         return fail("clipping a node was not replayed into the second rotating buffer");
-    if (!both_buffers_show(BG_COLOR))
+    if (!both_buffers_show(BACKGROUND_COLOR))
         return fail("clipping a node left the overflow in a rotating buffer");
     if (!matches_full_repaint_both("page-flipped visible -> hidden"))
         return fail("a page-flipped clip did not land on the same frames as a full repaint");
 
     /* The replay window is exhausted: both buffers hold the change, so the panel goes idle again. */
-    for (int i = 0; i < 4; i++)
+    for (int frame_index = 0; frame_index < 4; frame_index++)
     {
         if (frame_distinct() != 0)
             return fail("a page-flipped clip kept repainting after both buffers were current");
@@ -460,7 +470,7 @@ static int check_page_flip(void)
     if (!matches_full_repaint_both("page-flipped hidden -> visible"))
         return fail("a page-flipped unclip did not land on the same frames as a full repaint");
 
-    for (int i = 0; i < 4; i++)
+    for (int frame_index = 0; frame_index < 4; frame_index++)
     {
         if (frame_distinct() != 0)
             return fail("a page-flipped unclip kept repainting after both buffers were current");
@@ -477,71 +487,71 @@ static int check_page_flip(void)
 
 int main(void)
 {
-    static EmbeddedRenderBackend be;
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    static EmbeddedRenderBackend backend;
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
     build_scene();
 
     /* Mount and settle. The first frame legitimately paints everything. */
-    if (frame_distinct() < SCREEN_PX / 2)
+    if (frame_distinct() < SCREEN_PIXELS / 2)
         return fail("mount frame did not paint the screen");
     frame_distinct();
 
-    if (at(OVER_X, OVER_Y) != (CHILD_COLOR & 0xFFFFFFu))
+    if (at(OVERFLOW_X, OVERFLOW_Y) != (CHILD_COLOR & 0xFFFFFFu))
         return fail("the child does not overflow the clipper's box (scene is not testing anything)");
 
     /* --- visible -> hidden: the overflowing part must be erased ------------------------------- */
     set_overflow(ER_OVERFLOW_HIDDEN);
-    const long hide_px = frame_distinct();
-    if (at(OVER_X, OVER_Y) != (BG_COLOR & 0xFFFFFFu))
+    const long hide_painted = frame_distinct();
+    if (at(OVERFLOW_X, OVERFLOW_Y) != (BACKGROUND_COLOR & 0xFFFFFFu))
         return fail("clipping a node left its child's overflow on screen");
     if (at(INSIDE_X, INSIDE_Y) != (CHILD_COLOR & 0xFFFFFFu))
         return fail("clipping a node erased the part of the child that is inside it");
-    if (!reported_covers(OVER_X, OVER_Y))
+    if (!reported_covers(OVERFLOW_X, OVERFLOW_Y))
         return fail("clipping a node erased the overflow without reporting it as damaged");
-    if (at(SIB_X + 1, SIB_Y + 1) != (SIB_COLOR & 0xFFFFFFu))
+    if (at(SIBLING_X + 1, SIBLING_Y + 1) != (SIBLING_COLOR & 0xFFFFFFu))
         return fail("clipping a node disturbed an unrelated sibling");
-    if (hide_px > TOGGLE_PX_MAX)
+    if (hide_painted > TOGGLE_PIXELS_MAX)
     {
-        fprintf(stderr, "  clip toggle painted %ld px (bound %ld)\n", hide_px, (long)TOGGLE_PX_MAX);
+        fprintf(stderr, "  clip toggle painted %ld px (bound %ld)\n", hide_painted, (long)TOGGLE_PIXELS_MAX);
         return fail("clipping a node repainted far more than the subtree it affects");
     }
     if (!matches_full_repaint("visible -> hidden"))
         return fail("clipping a node did not land on the same frame as a full repaint");
 
     /* One-shot: the toggle must not keep re-damaging the subtree on every later commit. */
-    for (int i = 0; i < 4; i++)
+    for (int frame_index = 0; frame_index < 4; frame_index++)
         if (frame_distinct() != 0)
             return fail("a clipped node kept repainting on idle frames");
 
     /* --- hidden -> visible: the overflowing part must come back ------------------------------- */
     set_overflow(ER_OVERFLOW_VISIBLE);
-    const long show_px = frame_distinct();
-    if (at(OVER_X, OVER_Y) != (CHILD_COLOR & 0xFFFFFFu))
+    const long show_painted = frame_distinct();
+    if (at(OVERFLOW_X, OVERFLOW_Y) != (CHILD_COLOR & 0xFFFFFFu))
         return fail("unclipping a node did not paint the child's overflow");
-    if (!reported_covers(OVER_X, OVER_Y))
+    if (!reported_covers(OVERFLOW_X, OVERFLOW_Y))
         return fail("unclipping a node painted the overflow without reporting it as damaged");
-    if (at(SIB_X + 1, SIB_Y + 1) != (SIB_COLOR & 0xFFFFFFu))
+    if (at(SIBLING_X + 1, SIBLING_Y + 1) != (SIBLING_COLOR & 0xFFFFFFu))
         return fail("unclipping a node disturbed an unrelated sibling");
-    if (show_px > TOGGLE_PX_MAX)
+    if (show_painted > TOGGLE_PIXELS_MAX)
     {
-        fprintf(stderr, "  unclip toggle painted %ld px (bound %ld)\n", show_px, (long)TOGGLE_PX_MAX);
+        fprintf(stderr, "  unclip toggle painted %ld px (bound %ld)\n", show_painted, (long)TOGGLE_PIXELS_MAX);
         return fail("unclipping a node repainted far more than the subtree it affects");
     }
     if (!matches_full_repaint("hidden -> visible"))
         return fail("unclipping a node did not land on the same frame as a full repaint");
 
-    for (int i = 0; i < 4; i++)
+    for (int frame_index = 0; frame_index < 4; frame_index++)
         if (frame_distinct() != 0)
             return fail("an unclipped node kept repainting on idle frames");
 
     /* --- overflow:scroll clips too, and a move between the two clipping values changes nothing -- */
     set_overflow(ER_OVERFLOW_SCROLL);
     frame_distinct();
-    if (at(OVER_X, OVER_Y) != (BG_COLOR & 0xFFFFFFu))
+    if (at(OVERFLOW_X, OVERFLOW_Y) != (BACKGROUND_COLOR & 0xFFFFFFu))
         return fail("overflow:scroll did not clip the child's overflow");
     if (!matches_full_repaint("visible -> scroll"))
         return fail("overflow:scroll did not land on the same frame as a full repaint");
@@ -551,21 +561,21 @@ int main(void)
      * moved and the extra damage must not be claimed. (The node's own box still repaints, as it does
      * for any visual prop set — that is not what this is measuring.) */
     set_overflow(ER_OVERFLOW_HIDDEN);
-    const long same_px = frame_distinct();
-    if (same_px > (long)(CLIP_W + 8) * (long)(CLIP_H + 8))
+    const long same_painted = frame_distinct();
+    if (same_painted > (long)(CLIP_WIDTH + 8) * (long)(CLIP_HEIGHT + 8))
     {
-        fprintf(stderr, "  scroll -> hidden painted %ld px\n", same_px);
+        fprintf(stderr, "  scroll -> hidden painted %ld px\n", same_painted);
         return fail("switching between two clipping overflow values damaged the subtree bounds");
     }
-    if (reported_covers(OVER_X, OVER_Y))
+    if (reported_covers(OVERFLOW_X, OVERFLOW_Y))
         return fail("switching between two clipping overflow values reported the overflow as damaged");
 
     /* --- repeat the cycle: no drift, no damage that accumulates ------------------------------- */
-    for (int i = 0; i < 3; i++)
+    for (int frame_index = 0; frame_index < 3; frame_index++)
     {
         set_overflow(ER_OVERFLOW_VISIBLE);
         frame_distinct();
-        if (at(OVER_X, OVER_Y) != (CHILD_COLOR & 0xFFFFFFu))
+        if (at(OVERFLOW_X, OVERFLOW_Y) != (CHILD_COLOR & 0xFFFFFFu))
             return fail("a repeated unclip did not restore the overflow");
         if (!matches_full_repaint("repeated unclip"))
             return fail("a repeated unclip drifted from a full repaint");
@@ -573,7 +583,7 @@ int main(void)
 
         set_overflow(ER_OVERFLOW_HIDDEN);
         frame_distinct();
-        if (at(OVER_X, OVER_Y) != (BG_COLOR & 0xFFFFFFu))
+        if (at(OVERFLOW_X, OVERFLOW_Y) != (BACKGROUND_COLOR & 0xFFFFFFu))
             return fail("a repeated clip did not erase the overflow");
         if (!matches_full_repaint("repeated clip"))
             return fail("a repeated clip drifted from a full repaint");

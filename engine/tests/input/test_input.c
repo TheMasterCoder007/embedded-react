@@ -25,13 +25,14 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define EVENT_LOG_MAX 64
+#define OPACITY_OPAQUE 255U
 
 /* A node this size cannot fit the transform source buffer, so er_transform_source_begin() refuses it
  * and render_tree paints it UNTRANSFORMED at its raw layout box. Derived from the build's own limit
  * rather than hard-coded, so the fallback is reachable in every configuration — including the default
  * one, where ERUI_XFORM_W/H tracks the composite scratch. */
-#define XF_TOO_BIG_W (ERUI_XFORM_W + 10)
-#define XF_TOO_BIG_H (ERUI_XFORM_H + 10)
+#define TRANSFORM_TOO_BIG_WIDTH (ERUI_XFORM_W + 10)
+#define TRANSFORM_TOO_BIG_HEIGHT (ERUI_XFORM_H + 10)
 
 /* Points on the ring of the dial mount_dial() builds: centre 70,70, mid-band radius 50 - 16/2 = 42. Both are
  * inside the default sweep, and set different values. */
@@ -61,7 +62,7 @@ typedef struct
     int last_x;
     int last_y;
     char log[EVENT_LOG_MAX];
-    int log_len;
+    int log_length;
 } EventCounts;
 
 /**
@@ -79,7 +80,7 @@ typedef struct
 typedef struct
 {
     bool should_claim;         /**< Value returned by the query callbacks. */
-    int min_abs_dx;            /**< Minimum |dx| required before claiming (0 = always). */
+    int min_abs_delta_x;       /**< Minimum |dx| required before claiming (0 = always). */
     bool yield_on_termination; /**< Value returned by ER_QUERY_TERMINATION_REQUEST. */
     int query_count;           /**< Should-set queries asked through query_should_claim. */
     int grant_count;
@@ -88,8 +89,8 @@ typedef struct
     int release_count;
     int terminate_count;
     int termination_request_count;
-    int last_dx;
-    int last_dy;
+    int last_delta_x;
+    int last_delta_y;
 } ResponderRecord;
 
 /**
@@ -100,10 +101,10 @@ typedef struct
     int move_count;
     int end_count;
     int cancel_count;
-    int dx; /**< From the most recent event of any phase below. */
-    int dy;
-    float vx;
-    float vy;
+    int delta_x; /**< From the most recent event of any phase below. */
+    int delta_y;
+    float velocity_x;
+    float velocity_y;
 } TouchGestureRecord;
 
 /**
@@ -136,76 +137,76 @@ static int s_orphan_scroll_events = 0;
  */
 static void append_log(EventCounts* counts, char marker)
 {
-    if (counts->log_len < EVENT_LOG_MAX - 1)
+    if (counts->log_length < EVENT_LOG_MAX - 1)
     {
-        counts->log[counts->log_len++] = marker;
-        counts->log[counts->log_len] = '\0';
+        counts->log[counts->log_length++] = marker;
+        counts->log[counts->log_length] = '\0';
     }
 }
 
 /**
  * @brief Backend fill callback used to verify render stacking order.
  *
- * @param[in] argb  Fill color.
- * @param[in] x     Destination X.
- * @param[in] y     Destination Y.
- * @param[in] w     Fill width.
- * @param[in] h     Fill height.
- * @param[in] ctx   Pointer to RenderCounts.
+ * @param[in] argb    Fill color.
+ * @param[in] x       Destination X.
+ * @param[in] y       Destination Y.
+ * @param[in] width   Fill width.
+ * @param[in] height  Fill height.
+ * @param[in] ctx     Pointer to RenderCounts.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     RenderCounts* counts = ctx;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     counts->last_fill_color = argb;
 }
 
 /**
  * @brief Backend copy callback unused by input tests.
  *
- * @param[in] src     Source buffer.
+ * @param[in] source  Source buffer.
  * @param[in] stride  Source stride.
  * @param[in] x       Destination X.
  * @param[in] y       Destination Y.
- * @param[in] w       Width.
- * @param[in] h       Height.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
  * @param[in] ctx     Opaque context.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief Backend blend callback unused by input tests.
  *
- * @param[in] src     Source buffer.
+ * @param[in] source  Source buffer.
  * @param[in] stride  Source stride.
  * @param[in] alpha   Global alpha.
  * @param[in] x       Destination X.
  * @param[in] y       Destination Y.
- * @param[in] w       Width.
- * @param[in] h       Height.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
  * @param[in] ctx     Opaque context.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -216,19 +217,19 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
@@ -355,13 +356,13 @@ static void on_touch_end(ERNode* node, const EREventData* data, void* user_data)
  */
 static void on_gesture_move(ERNode* node, const EREventData* data, void* user_data)
 {
-    TouchGestureRecord* rec = user_data;
+    TouchGestureRecord* record = user_data;
     (void)node;
-    rec->move_count++;
-    rec->dx = data->dx;
-    rec->dy = data->dy;
-    rec->vx = data->vx;
-    rec->vy = data->vy;
+    record->move_count++;
+    record->delta_x = data->dx;
+    record->delta_y = data->dy;
+    record->velocity_x = data->vx;
+    record->velocity_y = data->vy;
 }
 
 /**
@@ -373,13 +374,13 @@ static void on_gesture_move(ERNode* node, const EREventData* data, void* user_da
  */
 static void on_gesture_end(ERNode* node, const EREventData* data, void* user_data)
 {
-    TouchGestureRecord* rec = user_data;
+    TouchGestureRecord* record = user_data;
     (void)node;
-    rec->end_count++;
-    rec->dx = data->dx;
-    rec->dy = data->dy;
-    rec->vx = data->vx;
-    rec->vy = data->vy;
+    record->end_count++;
+    record->delta_x = data->dx;
+    record->delta_y = data->dy;
+    record->velocity_x = data->vx;
+    record->velocity_y = data->vy;
 }
 
 /**
@@ -391,13 +392,13 @@ static void on_gesture_end(ERNode* node, const EREventData* data, void* user_dat
  */
 static void on_gesture_cancel(ERNode* node, const EREventData* data, void* user_data)
 {
-    TouchGestureRecord* rec = user_data;
+    TouchGestureRecord* record = user_data;
     (void)node;
-    rec->cancel_count++;
-    rec->dx = data->dx;
-    rec->dy = data->dy;
-    rec->vx = data->vx;
-    rec->vy = data->vy;
+    record->cancel_count++;
+    record->delta_x = data->dx;
+    record->delta_y = data->dy;
+    record->velocity_x = data->vx;
+    record->velocity_y = data->vy;
 }
 
 /**
@@ -440,14 +441,14 @@ static void on_focus(ERNode* node, const EREventData* data, void* user_data)
  */
 static void on_layout(ERNode* node, const EREventData* data, void* user_data)
 {
-    LayoutRecord* rec = user_data;
+    LayoutRecord* record = user_data;
     (void)node;
-    rec->count++;
-    rec->rect = data->layout_rect;
+    record->count++;
+    record->rect = data->layout_rect;
 }
 
 /**
- * @brief Query callback: claims the responder when should_claim is true and |dx| >= min_abs_dx.
+ * @brief Query callback: claims the responder when should_claim is true and |dx| >= min_abs_delta_x.
  *
  * @param[in] node       Node being queried.
  * @param[in] data       Touch event payload.
@@ -457,12 +458,12 @@ static void on_layout(ERNode* node, const EREventData* data, void* user_data)
  */
 static bool query_should_claim(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
-    rec->query_count++;
-    if (rec->min_abs_dx > 0 && data->dx < rec->min_abs_dx && data->dx > -rec->min_abs_dx)
+    record->query_count++;
+    if (record->min_abs_delta_x > 0 && data->dx < record->min_abs_delta_x && data->dx > -record->min_abs_delta_x)
         return false;
-    return rec->should_claim;
+    return record->should_claim;
 }
 
 /**
@@ -476,11 +477,11 @@ static bool query_should_claim(ERNode* node, const EREventData* data, void* user
  */
 static bool query_termination_request(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
     (void)data;
-    rec->termination_request_count++;
-    return rec->yield_on_termination;
+    record->termination_request_count++;
+    return record->yield_on_termination;
 }
 
 /**
@@ -492,10 +493,10 @@ static bool query_termination_request(ERNode* node, const EREventData* data, voi
  */
 static void on_responder_grant(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
     (void)data;
-    rec->grant_count++;
+    record->grant_count++;
 }
 
 /**
@@ -507,10 +508,10 @@ static void on_responder_grant(ERNode* node, const EREventData* data, void* user
  */
 static void on_responder_reject(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
     (void)data;
-    rec->reject_count++;
+    record->reject_count++;
 }
 
 /**
@@ -522,11 +523,11 @@ static void on_responder_reject(ERNode* node, const EREventData* data, void* use
  */
 static void on_responder_move(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
-    rec->move_count++;
-    rec->last_dx = data->dx;
-    rec->last_dy = data->dy;
+    record->move_count++;
+    record->last_delta_x = data->dx;
+    record->last_delta_y = data->dy;
 }
 
 /**
@@ -538,11 +539,11 @@ static void on_responder_move(ERNode* node, const EREventData* data, void* user_
  */
 static void on_responder_release(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
-    rec->release_count++;
-    rec->last_dx = data->dx;
-    rec->last_dy = data->dy;
+    record->release_count++;
+    record->last_delta_x = data->dx;
+    record->last_delta_y = data->dy;
 }
 
 /**
@@ -554,37 +555,37 @@ static void on_responder_release(ERNode* node, const EREventData* data, void* us
  */
 static void on_responder_terminate(ERNode* node, const EREventData* data, void* user_data)
 {
-    ResponderRecord* rec = user_data;
+    ResponderRecord* record = user_data;
     (void)node;
     (void)data;
-    rec->terminate_count++;
+    record->terminate_count++;
 }
 
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable failure description.
+ * @param[in] message  Human-readable failure description.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
 /**
  * @brief Compares two velocities for equality within a pixel-per-second of slack.
  *
- * @param[in] a  Measured value.
- * @param[in] b  Expected value.
+ * @param[in] actual    Measured value.
+ * @param[in] expected  Expected value.
  *
  * @return true when they agree.
  */
-static bool near_vel(float a, float b)
+static bool near_vel(float actual, float expected)
 {
-    const float d = a - b;
-    return (d < 0.0f ? -d : d) < 0.001f;
+    const float difference = actual - expected;
+    return (difference < 0.0f ? -difference : difference) < 0.001f;
 }
 
 /**
@@ -625,21 +626,21 @@ static void tap(int x, int y)
  * stack frame that has already returned. Every scenario therefore starts here, before it creates any
  * node of its own.
  *
- * @param[in] w  Root width in pixels.
- * @param[in] h  Root height in pixels.
+ * @param[in] width   Root width in pixels.
+ * @param[in] height  Root height in pixels.
  *
  * @return New root node.
  */
-static ERNode* create_root_sized(int16_t w, int16_t h)
+static ERNode* create_root_sized(int16_t width, int16_t height)
 {
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.width = w;
-    p.height = h;
-    p.background_color = 0xFF000000U;
-    er_node_set_props(root, &p);
+    ERProps props = props_default();
+    props.width = width;
+    props.height = height;
+    props.background_color = 0xFF000000U;
+    er_node_set_props(root, &props);
     er_tree_set_root(root);
     return root;
 }
@@ -659,23 +660,23 @@ static ERNode* create_root(void)
  *
  * @param[in] x       Absolute X coordinate.
  * @param[in] y       Absolute Y coordinate.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] counts  Event counter context.
  *
  * @return New pressable node.
  */
-static ERNode* create_pressable(int16_t x, int16_t y, int16_t w, int16_t h, EventCounts* counts)
+static ERNode* create_pressable(int16_t x, int16_t y, int16_t width, int16_t height, EventCounts* counts)
 {
     ERNode* node = er_node_create(ER_NODE_PRESSABLE);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = x;
-    p.top = y;
-    p.width = w;
-    p.height = h;
-    p.background_color = 0xFF101010U;
-    er_node_set_props(node, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = x;
+    props.top = y;
+    props.width = width;
+    props.height = height;
+    props.background_color = 0xFF101010U;
+    er_node_set_props(node, &props);
     er_event_set(node, ER_EVENT_PRESS, on_press, counts);
     er_event_set(node, ER_EVENT_LONG_PRESS, on_long_press, counts);
     er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, counts);
@@ -690,29 +691,29 @@ static ERNode* create_pressable(int16_t x, int16_t y, int16_t w, int16_t h, Even
 /**
  * @brief Creates a pressable test node with a zIndex.
  *
- * @param[in] x       Absolute X coordinate.
- * @param[in] y       Absolute Y coordinate.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
- * @param[in] z_index Sibling stacking order.
- * @param[in] color   Background color.
- * @param[in] counts  Event counter context.
+ * @param[in] x        Absolute X coordinate.
+ * @param[in] y        Absolute Y coordinate.
+ * @param[in] width    Width in pixels.
+ * @param[in] height   Height in pixels.
+ * @param[in] z_index  Sibling stacking order.
+ * @param[in] color    Background color.
+ * @param[in] counts   Event counter context.
  *
  * @return New pressable node.
  */
-static ERNode*
-create_pressable_z(int16_t x, int16_t y, int16_t w, int16_t h, int16_t z_index, uint32_t color, EventCounts* counts)
+static ERNode* create_pressable_z(
+    int16_t x, int16_t y, int16_t width, int16_t height, int16_t z_index, uint32_t color, EventCounts* counts)
 {
-    ERNode* node = create_pressable(x, y, w, h, counts);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = x;
-    p.top = y;
-    p.width = w;
-    p.height = h;
-    p.background_color = color;
-    p.z_index = z_index;
-    er_node_set_props(node, &p);
+    ERNode* node = create_pressable(x, y, width, height, counts);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = x;
+    props.top = y;
+    props.width = width;
+    props.height = height;
+    props.background_color = color;
+    props.z_index = z_index;
+    er_node_set_props(node, &props);
     return node;
 }
 
@@ -728,12 +729,12 @@ static int test_press_order(void)
     ERNode* pressable = create_pressable(0, 0, 120, 80, &counts);
 
     ERNode* label = er_node_create(ER_NODE_TEXT);
-    ERProps p = props_default();
-    p.height = 24;
-    p.color = 0xFFFFFFFFU;
-    p.font_size = 16;
-    strncpy(p.text, "Tap", ER_TEXT_MAX);
-    er_node_set_props(label, &p);
+    ERProps props = props_default();
+    props.height = 24;
+    props.color = 0xFFFFFFFFU;
+    props.font_size = 16;
+    strncpy(props.text, "Tap", ER_TEXT_MAX);
+    er_node_set_props(label, &props);
 
     er_tree_append_child(pressable, label);
     er_tree_append_child(root, pressable);
@@ -1082,14 +1083,14 @@ static int test_long_press_delay(void)
     ERNode* root = create_root();
     EventCounts counts = {0};
     ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    p.long_press_ms = 150U;
-    er_node_set_props(pressable, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    props.long_press_ms = 150U;
+    er_node_set_props(pressable, &props);
     er_tree_append_child(root, pressable);
     er_commit();
 
@@ -1106,14 +1107,14 @@ static int test_long_press_delay(void)
     /* A longer threshold must equally hold the event back past the 500 ms default. */
     EventCounts slow = {0};
     ERNode* patient = create_pressable(0, 100, 80, 80, &slow);
-    ERProps q = props_default();
-    q.position = ER_POS_ABSOLUTE;
-    q.left = 0;
-    q.top = 100;
-    q.width = 80;
-    q.height = 80;
-    q.long_press_ms = 1200U;
-    er_node_set_props(patient, &q);
+    ERProps patient_props = props_default();
+    patient_props.position = ER_POS_ABSOLUTE;
+    patient_props.left = 0;
+    patient_props.top = 100;
+    patient_props.width = 80;
+    patient_props.height = 80;
+    patient_props.long_press_ms = 1200U;
+    er_node_set_props(patient, &patient_props);
     er_tree_append_child(root, patient);
     er_commit();
 
@@ -1168,13 +1169,13 @@ static int test_long_press_without_handler(void)
     ERNode* root = create_root();
     EventCounts counts = {0};
     ERNode* node = er_node_create(ER_NODE_PRESSABLE);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    er_node_set_props(node, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    er_node_set_props(node, &props);
     er_event_set(node, ER_EVENT_PRESS, on_press, &counts);
     er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, &counts);
     er_event_set(node, ER_EVENT_PRESS_OUT, on_press_out, &counts);
@@ -1310,8 +1311,8 @@ static int test_z_index_hit_order(void)
 static int test_z_index_render_order(void)
 {
     RenderCounts render_counts = {0};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &render_counts};
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &render_counts};
+    embedded_renderer_set_backend(&backend);
 
     ERNode* root = create_root();
     EventCounts high_counts = {0};
@@ -1333,16 +1334,16 @@ static int test_z_index_render_order(void)
 /**
  * @brief Registers all responder event handlers and query callbacks on a node.
  *
- * @param[in] node  Target node.
- * @param[in] rec   Pointer to the ResponderRecord that receives all callbacks.
+ * @param[in] node    Target node.
+ * @param[in] record  Pointer to the ResponderRecord that receives all callbacks.
  */
-static void wire_responder(ERNode* node, ResponderRecord* rec)
+static void wire_responder(ERNode* node, ResponderRecord* record)
 {
-    er_event_set(node, ER_EVENT_RESPONDER_GRANT, on_responder_grant, rec);
-    er_event_set(node, ER_EVENT_RESPONDER_REJECT, on_responder_reject, rec);
-    er_event_set(node, ER_EVENT_RESPONDER_MOVE, on_responder_move, rec);
-    er_event_set(node, ER_EVENT_RESPONDER_RELEASE, on_responder_release, rec);
-    er_event_set(node, ER_EVENT_RESPONDER_TERMINATE, on_responder_terminate, rec);
+    er_event_set(node, ER_EVENT_RESPONDER_GRANT, on_responder_grant, record);
+    er_event_set(node, ER_EVENT_RESPONDER_REJECT, on_responder_reject, record);
+    er_event_set(node, ER_EVENT_RESPONDER_MOVE, on_responder_move, record);
+    er_event_set(node, ER_EVENT_RESPONDER_RELEASE, on_responder_release, record);
+    er_event_set(node, ER_EVENT_RESPONDER_TERMINATE, on_responder_terminate, record);
 }
 
 /**
@@ -1354,40 +1355,40 @@ static void wire_responder(ERNode* node, ResponderRecord* rec)
 static int test_responder_start_should_set(void)
 {
     ERNode* root = create_root();
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
+    ResponderRecord record = {0};
+    record.should_claim = true;
 
     ERNode* view = er_node_create(ER_NODE_PRESSABLE);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    er_node_set_props(view, &p);
-    wire_responder(view, &rec);
-    er_responder_query_set(view, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    er_node_set_props(view, &props);
+    wire_responder(view, &record);
+    er_responder_query_set(view, ER_QUERY_START_SHOULD_SET, query_should_claim, &record);
 
     er_tree_append_child(root, view);
     er_commit();
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
 
-    if (rec.grant_count != 1)
+    if (record.grant_count != 1)
         return fail("responder not granted on start-should-set");
 
     touch_move(30, 10);
 
-    if (rec.move_count != 1)
+    if (record.move_count != 1)
         return fail("responder did not receive move event");
-    if (rec.last_dx != 20 || rec.last_dy != 0)
+    if (record.last_delta_x != 20 || record.last_delta_y != 0)
         return fail("responder move event had wrong dx/dy");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 30, 10);
 
-    if (rec.release_count != 1)
+    if (record.release_count != 1)
         return fail("responder did not receive release event");
-    if (rec.last_dx != 20)
+    if (record.last_delta_x != 20)
         return fail("responder release event had wrong dx");
 
     return EXIT_SUCCESS;
@@ -1402,52 +1403,52 @@ static int test_responder_start_should_set(void)
 static int test_responder_move_should_set(void)
 {
     ERNode* root = create_root();
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
-    rec.min_abs_dx = 20; /* claim only when |dx| >= 20 */
+    ResponderRecord record = {0};
+    record.should_claim = true;
+    record.min_abs_delta_x = 20; /* claim only when |dx| >= 20 */
 
     ERNode* view = er_node_create(ER_NODE_PRESSABLE);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    er_node_set_props(view, &p);
-    wire_responder(view, &rec);
-    er_responder_query_set(view, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &rec);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    er_node_set_props(view, &props);
+    wire_responder(view, &record);
+    er_responder_query_set(view, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &record);
 
     er_tree_append_child(root, view);
     er_commit();
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 10, 10);
 
-    if (rec.grant_count != 0)
+    if (record.grant_count != 0)
         return fail("responder granted at touch-down without start-should-set");
 
     /* Small move — below threshold, no grant */
     touch_move(20, 10);
 
-    if (rec.grant_count != 0)
+    if (record.grant_count != 0)
         return fail("responder granted before reaching displacement threshold");
 
     /* Large move — crosses threshold, grant fires */
     touch_move(35, 10);
 
-    if (rec.grant_count != 1)
+    if (record.grant_count != 1)
         return fail("responder not granted after reaching displacement threshold");
 
     /* Subsequent move fires responder-move */
     touch_move(50, 10);
 
-    if (rec.move_count != 1)
+    if (record.move_count != 1)
         return fail("responder did not receive move after being granted");
-    if (rec.last_dx != 40)
+    if (record.last_delta_x != 40)
         return fail("responder move had wrong dx");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 50, 10);
 
-    if (rec.release_count != 1)
+    if (record.release_count != 1)
         return fail("responder did not receive release");
 
     return EXIT_SUCCESS;
@@ -1471,31 +1472,31 @@ static void count_scroll(ERNode* node, const EREventData* data, void* user_data)
 static int test_responder_takeover_stops_scroll(void)
 {
     ERNode* root = create_root();
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
-    rec.min_abs_dx = 30; /* claim only once the drag is well past the scroller's slop */
+    ResponderRecord record = {0};
+    record.should_claim = true;
+    record.min_abs_delta_x = 30; /* claim only once the drag is well past the scroller's slop */
     int scroll_events = 0;
 
-    ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = 0;
-    sp.top = 0;
-    sp.width = 100;
-    sp.height = 100;
-    er_node_set_props(sv, &sp);
-    er_event_set(sv, ER_EVENT_SCROLL, count_scroll, &scroll_events);
+    ERNode* scroll_view = er_node_create(ER_NODE_SCROLL_VIEW);
+    ERProps scroll_view_props = props_default();
+    scroll_view_props.position = ER_POS_ABSOLUTE;
+    scroll_view_props.left = 0;
+    scroll_view_props.top = 0;
+    scroll_view_props.width = 100;
+    scroll_view_props.height = 100;
+    er_node_set_props(scroll_view, &scroll_view_props);
+    er_event_set(scroll_view, ER_EVENT_SCROLL, count_scroll, &scroll_events);
 
     ERNode* content = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.width = 400; /* wider than the viewport so horizontal scrolling has range */
-    cp.height = 100;
-    er_node_set_props(content, &cp);
-    wire_responder(content, &rec);
-    er_responder_query_set(content, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &rec);
+    ERProps content_props = props_default();
+    content_props.width = 400; /* wider than the viewport so horizontal scrolling has range */
+    content_props.height = 100;
+    er_node_set_props(content, &content_props);
+    wire_responder(content, &record);
+    er_responder_query_set(content, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &record);
 
-    er_tree_append_child(root, sv);
-    er_tree_append_child(sv, content);
+    er_tree_append_child(root, scroll_view);
+    er_tree_append_child(scroll_view, content);
     er_commit();
 
     /* Drag with ticks between moves so the scroller accrues real momentum velocity. */
@@ -1511,11 +1512,11 @@ static int test_responder_takeover_stops_scroll(void)
     embedded_renderer_tick(16U);
     touch_move(45, 50); /* |dx| 35: the claimant takes the gesture; the scroller must yield AND stop */
 
-    if (rec.grant_count != 1)
+    if (record.grant_count != 1)
         return fail("move-should-set claimant was not granted at takeover");
 
     const int at_takeover = scroll_events;
-    for (int i = 0; i < 30; i++)
+    for (int tick_index = 0; tick_index < 30; tick_index++)
         embedded_renderer_tick(16U);
 
     if (scroll_events != at_takeover)
@@ -1534,37 +1535,37 @@ static int test_responder_takeover_stops_scroll(void)
 static int test_responder_capture_wins_over_bubble(void)
 {
     ERNode* root = create_root();
-    ResponderRecord parent_rec = {0};
-    ResponderRecord child_rec = {0};
-    parent_rec.should_claim = true;
-    child_rec.should_claim = true;
+    ResponderRecord parent_record = {0};
+    ResponderRecord child_record = {0};
+    parent_record.should_claim = true;
+    child_record.should_claim = true;
 
     /* Parent at [0,0,80,80] claims via capture */
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        er_node_set_props(parent, &p);
-        wire_responder(parent, &parent_rec);
-        er_responder_query_set(parent, ER_QUERY_START_SHOULD_SET_CAPTURE, query_should_claim, &parent_rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 0;
+        props.top = 0;
+        props.width = 80;
+        props.height = 80;
+        er_node_set_props(parent, &props);
+        wire_responder(parent, &parent_record);
+        er_responder_query_set(parent, ER_QUERY_START_SHOULD_SET_CAPTURE, query_should_claim, &parent_record);
     }
 
     /* Child at [10,10,40,40] claims via bubble */
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(child, &p);
-        wire_responder(child, &child_rec);
-        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 10;
+        props.top = 10;
+        props.width = 40;
+        props.height = 40;
+        er_node_set_props(child, &props);
+        wire_responder(child, &child_record);
+        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_record);
     }
 
     er_tree_append_child(parent, child);
@@ -1574,14 +1575,14 @@ static int test_responder_capture_wins_over_bubble(void)
     /* Touch inside child — parent capture must win */
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
 
-    if (parent_rec.grant_count != 1)
+    if (parent_record.grant_count != 1)
         return fail("parent capture did not win responder negotiation");
-    if (child_rec.grant_count != 0)
+    if (child_record.grant_count != 0)
         return fail("child bubble incorrectly claimed responder over parent capture");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
 
-    if (parent_rec.release_count != 1)
+    if (parent_record.release_count != 1)
         return fail("parent responder did not receive release");
 
     return EXIT_SUCCESS;
@@ -1596,39 +1597,39 @@ static int test_responder_capture_wins_over_bubble(void)
 static int test_responder_termination_accepted(void)
 {
     ERNode* root = create_root();
-    ResponderRecord child_rec = {0};
-    ResponderRecord parent_rec = {0};
-    child_rec.should_claim = true; /* child claims on start */
-    child_rec.yield_on_termination = true;
-    parent_rec.should_claim = true; /* parent claims on move (capture) */
+    ResponderRecord child_record = {0};
+    ResponderRecord parent_record = {0};
+    child_record.should_claim = true; /* child claims on start */
+    child_record.yield_on_termination = true;
+    parent_record.should_claim = true; /* parent claims on move (capture) */
 
     /* Parent container — claims the responder via move capture */
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        er_node_set_props(parent, &p);
-        wire_responder(parent, &parent_rec);
-        er_responder_query_set(parent, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, query_should_claim, &parent_rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 0;
+        props.top = 0;
+        props.width = 80;
+        props.height = 80;
+        er_node_set_props(parent, &props);
+        wire_responder(parent, &parent_record);
+        er_responder_query_set(parent, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, query_should_claim, &parent_record);
     }
 
     /* Child node — claims the responder on touch-down */
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(child, &p);
-        wire_responder(child, &child_rec);
-        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_rec);
-        er_responder_query_set(child, ER_QUERY_TERMINATION_REQUEST, query_termination_request, &child_rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 10;
+        props.top = 10;
+        props.width = 40;
+        props.height = 40;
+        er_node_set_props(child, &props);
+        wire_responder(child, &child_record);
+        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_record);
+        er_responder_query_set(child, ER_QUERY_TERMINATION_REQUEST, query_termination_request, &child_record);
     }
 
     er_tree_append_child(parent, child);
@@ -1637,22 +1638,22 @@ static int test_responder_termination_accepted(void)
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
 
-    if (child_rec.grant_count != 1)
+    if (child_record.grant_count != 1)
         return fail("child did not become responder on touch-down");
 
     /* Move: parent capture fires → child asked to yield → child yields → transfer */
     touch_move(30, 20);
 
-    if (child_rec.termination_request_count != 1)
+    if (child_record.termination_request_count != 1)
         return fail("termination request was not sent to the current responder");
-    if (child_rec.terminate_count != 1)
+    if (child_record.terminate_count != 1)
         return fail("current responder did not receive terminate after yielding");
-    if (parent_rec.grant_count != 1)
+    if (parent_record.grant_count != 1)
         return fail("new claimant did not receive grant after termination was accepted");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 30, 20);
 
-    if (parent_rec.release_count != 1)
+    if (parent_record.release_count != 1)
         return fail("new responder did not receive release");
 
     return EXIT_SUCCESS;
@@ -1668,37 +1669,37 @@ static int test_responder_termination_accepted(void)
 static int test_responder_termination_rejected(void)
 {
     ERNode* root = create_root();
-    ResponderRecord child_rec = {0};
-    ResponderRecord parent_rec = {0};
-    child_rec.should_claim = true;
-    child_rec.yield_on_termination = false; /* child refuses to yield */
-    parent_rec.should_claim = true;
+    ResponderRecord child_record = {0};
+    ResponderRecord parent_record = {0};
+    child_record.should_claim = true;
+    child_record.yield_on_termination = false; /* child refuses to yield */
+    parent_record.should_claim = true;
 
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        er_node_set_props(parent, &p);
-        wire_responder(parent, &parent_rec);
-        er_responder_query_set(parent, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, query_should_claim, &parent_rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 0;
+        props.top = 0;
+        props.width = 80;
+        props.height = 80;
+        er_node_set_props(parent, &props);
+        wire_responder(parent, &parent_record);
+        er_responder_query_set(parent, ER_QUERY_MOVE_SHOULD_SET_CAPTURE, query_should_claim, &parent_record);
     }
 
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(child, &p);
-        wire_responder(child, &child_rec);
-        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_rec);
-        er_responder_query_set(child, ER_QUERY_TERMINATION_REQUEST, query_termination_request, &child_rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 10;
+        props.top = 10;
+        props.width = 40;
+        props.height = 40;
+        er_node_set_props(child, &props);
+        wire_responder(child, &child_record);
+        er_responder_query_set(child, ER_QUERY_START_SHOULD_SET, query_should_claim, &child_record);
+        er_responder_query_set(child, ER_QUERY_TERMINATION_REQUEST, query_termination_request, &child_record);
     }
 
     er_tree_append_child(parent, child);
@@ -1707,30 +1708,30 @@ static int test_responder_termination_rejected(void)
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
 
-    if (child_rec.grant_count != 1)
+    if (child_record.grant_count != 1)
         return fail("child did not become responder on touch-down");
 
     /* Move: parent capture fires → child refuses to yield → parent gets reject */
     touch_move(30, 20);
 
-    if (child_rec.termination_request_count != 1)
+    if (child_record.termination_request_count != 1)
         return fail("termination request was not sent to the current responder");
-    if (child_rec.terminate_count != 0)
+    if (child_record.terminate_count != 0)
         return fail("current responder received terminate despite refusing to yield");
-    if (parent_rec.reject_count != 1)
+    if (parent_record.reject_count != 1)
         return fail("rejected claimant did not receive reject event");
-    if (parent_rec.grant_count != 0)
+    if (parent_record.grant_count != 0)
         return fail("rejected claimant incorrectly received grant");
 
     /* Child must still receive the next move */
     touch_move(40, 20);
 
-    if (child_rec.move_count < 1)
+    if (child_record.move_count < 1)
         return fail("original responder stopped receiving moves after rejection");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 40, 20);
 
-    if (child_rec.release_count != 1)
+    if (child_record.release_count != 1)
         return fail("original responder did not receive release");
 
     return EXIT_SUCCESS;
@@ -1747,15 +1748,15 @@ static int test_pointer_events_none(void)
     EventCounts counts = {0};
     ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
 
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    p.background_color = 0xFF101010U;
-    p.pointer_events = ER_POINTER_EVENTS_NONE;
-    er_node_set_props(pressable, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    props.background_color = 0xFF101010U;
+    props.pointer_events = ER_POINTER_EVENTS_NONE;
+    er_node_set_props(pressable, &props);
     er_event_set(pressable, ER_EVENT_PRESS, on_press, &counts);
     er_event_set(pressable, ER_EVENT_TOUCH_START, on_touch_start, &counts);
 
@@ -1785,14 +1786,14 @@ static int test_pointer_events_box_none(void)
     /* Parent view with BOX_NONE — transparent to touches, but passes them through */
     ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        p.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
-        er_node_set_props(parent, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 0;
+        props.top = 0;
+        props.width = 80;
+        props.height = 80;
+        props.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
+        er_node_set_props(parent, &props);
         er_event_set(parent, ER_EVENT_PRESS, on_press, &parent_counts);
         er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
     }
@@ -1832,23 +1833,23 @@ static int test_pointer_events_box_none(void)
 static ERNode* create_box_none_overlay(ERNode* parent, ERNode** out_child)
 {
     ERNode* overlay = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 120;
-    p.height = 120;
-    p.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
-    er_node_set_props(overlay, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 120;
+    props.height = 120;
+    props.pointer_events = ER_POINTER_EVENTS_BOX_NONE;
+    er_node_set_props(overlay, &props);
 
     ERNode* child = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.position = ER_POS_ABSOLUTE;
-    cp.left = 40;
-    cp.top = 40;
-    cp.width = 40;
-    cp.height = 40;
-    er_node_set_props(child, &cp);
+    ERProps child_props = props_default();
+    child_props.position = ER_POS_ABSOLUTE;
+    child_props.left = 40;
+    child_props.top = 40;
+    child_props.width = 40;
+    child_props.height = 40;
+    er_node_set_props(child, &child_props);
 
     er_tree_append_child(overlay, child);
     er_tree_append_child(parent, overlay);
@@ -1893,18 +1894,18 @@ static int test_pointer_events_box_none_inert_child(void)
 static int test_pointer_events_box_none_responder(void)
 {
     ERNode* root = create_root();
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
+    ResponderRecord record = {0};
+    record.should_claim = true;
 
     ERNode* overlay = create_box_none_overlay(root, NULL);
-    wire_responder(overlay, &rec);
-    er_responder_query_set(overlay, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+    wire_responder(overlay, &record);
+    er_responder_query_set(overlay, ER_QUERY_START_SHOULD_SET, query_should_claim, &record);
     er_commit();
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 50, 50);
     embedded_renderer_touch(0, ER_TOUCH_UP, 50, 50);
 
-    if (rec.grant_count != 0)
+    if (record.grant_count != 0)
         return fail("pointer_events:box-none node claimed the responder");
 
     return EXIT_SUCCESS;
@@ -1966,25 +1967,25 @@ static int test_scroll_cancels_press(void)
     for (int fits = 0; fits <= 1; fits++)
     {
         ERNode* root = create_root();
-        ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
-        ERProps sp = props_default();
-        sp.width = 200;
-        sp.height = 100;
-        er_node_set_props(sv, &sp);
+        ERNode* scroll_view = er_node_create(ER_NODE_SCROLL_VIEW);
+        ERProps scroll_view_props = props_default();
+        scroll_view_props.width = 200;
+        scroll_view_props.height = 100;
+        er_node_set_props(scroll_view, &scroll_view_props);
 
         ERNode* row = er_node_create(ER_NODE_PRESSABLE);
-        ERProps rp = props_default();
-        rp.width = 200;
-        rp.height = fits ? 50 : 400; /* shorter than the viewport, or taller */
-        er_node_set_props(row, &rp);
+        ERProps root_props = props_default();
+        root_props.width = 200;
+        root_props.height = fits ? 50 : 400; /* shorter than the viewport, or taller */
+        er_node_set_props(row, &root_props);
         EventCounts counts;
         memset(&counts, 0, sizeof(counts));
         er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
         er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
         er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
 
-        er_tree_append_child(sv, row);
-        er_tree_append_child(root, sv);
+        er_tree_append_child(scroll_view, row);
+        er_tree_append_child(root, scroll_view);
         er_commit();
 
         /* Down on the row, then up 2 px a frame, as a finger moves: past the 5 px slop by the third move. */
@@ -2017,25 +2018,25 @@ static int test_self_claimed_drag_cancels_press(void)
     for (int claims = 0; claims <= 1; claims++)
     {
         ERNode* root = create_root();
-        ResponderRecord rec = {0};
-        rec.should_claim = true;
-        rec.min_abs_dx = 20; /* claim only when |dx| >= 20 */
+        ResponderRecord record = {0};
+        record.should_claim = true;
+        record.min_abs_delta_x = 20; /* claim only when |dx| >= 20 */
 
         ERNode* node = er_node_create(ER_NODE_PRESSABLE);
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        er_node_set_props(node, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 0;
+        props.top = 0;
+        props.width = 80;
+        props.height = 80;
+        er_node_set_props(node, &props);
         EventCounts counts;
         memset(&counts, 0, sizeof(counts));
         er_event_set(node, ER_EVENT_PRESS, on_press, &counts);
         er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, &counts);
         er_event_set(node, ER_EVENT_PRESS_OUT, on_press_out, &counts);
-        wire_responder(node, &rec);
-        er_responder_query_set(node, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &rec);
+        wire_responder(node, &record);
+        er_responder_query_set(node, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &record);
 
         er_tree_append_child(root, node);
         er_commit();
@@ -2045,7 +2046,7 @@ static int test_self_claimed_drag_cancels_press(void)
         touch_move(end_x, 10);
         embedded_renderer_touch(0, ER_TOUCH_UP, end_x, 10);
 
-        if (rec.grant_count != claims)
+        if (record.grant_count != claims)
             return fail("the node's own move-should-set claim did not happen as set up");
         if (counts.press_in_count != 1 || counts.press_out_count != 1)
             return fail("a pressed node did not get exactly one press-in and one press-out");
@@ -2070,36 +2071,36 @@ static int test_start_capture_suppresses_press(void)
     for (int capture = 0; capture <= 1; capture++)
     {
         ERNode* root = create_root();
-        ResponderRecord rec = {0};
-        rec.should_claim = true;
+        ResponderRecord record = {0};
+        record.should_claim = true;
 
         ERNode* container = er_node_create(ER_NODE_VIEW);
         {
-            ERProps p = props_default();
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 0;
-            p.top = 0;
-            p.width = 80;
-            p.height = 80;
-            er_node_set_props(container, &p);
-            wire_responder(container, &rec);
+            ERProps props = props_default();
+            props.position = ER_POS_ABSOLUTE;
+            props.left = 0;
+            props.top = 0;
+            props.width = 80;
+            props.height = 80;
+            er_node_set_props(container, &props);
+            wire_responder(container, &record);
             er_responder_query_set(container,
                                    capture ? ER_QUERY_START_SHOULD_SET_CAPTURE : ER_QUERY_START_SHOULD_SET,
                                    query_should_claim,
-                                   &rec);
+                                   &record);
         }
 
         ERNode* row = er_node_create(ER_NODE_PRESSABLE);
         EventCounts counts;
         memset(&counts, 0, sizeof(counts));
         {
-            ERProps p = props_default();
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 10;
-            p.top = 10;
-            p.width = 40;
-            p.height = 40;
-            er_node_set_props(row, &p);
+            ERProps props = props_default();
+            props.position = ER_POS_ABSOLUTE;
+            props.left = 10;
+            props.top = 10;
+            props.width = 40;
+            props.height = 40;
+            er_node_set_props(row, &props);
             er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
             er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
             er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
@@ -2119,7 +2120,7 @@ static int test_start_capture_suppresses_press(void)
         embedded_renderer_tick(600U);
         embedded_renderer_touch(0, ER_TOUCH_UP, 20, 20);
 
-        if (rec.grant_count != 2)
+        if (record.grant_count != 2)
             return fail("the container did not take the gesture at both touch-downs");
 
         /* Both touches press when the container only bubbles; the held one's release is consumed by
@@ -2144,7 +2145,7 @@ typedef struct
     ERNode* victim;
     bool detach_only;                            /**< Unlink the victim but keep it alive, rather than destroying it. */
     ERNode* (*mount)(ERNode* parent, void* ctx); /**< Mounts a new node after the unmount, or NULL. */
-    void* mount_ctx;
+    void* mount_context;
     ERNode* mounted; /**< What mount returned — the victim's pool slot, when it was destroyed. */
 } UnmountOnEvent;
 
@@ -2153,7 +2154,7 @@ typedef struct
  */
 typedef struct
 {
-    ResponderRecord rec;
+    ResponderRecord record;
     int value_changes;
 } DialRecord;
 
@@ -2187,7 +2188,7 @@ static void on_event_unmount(ERNode* node, const EREventData* data, void* user_d
         destroy_subtree(unmount->victim);
     unmount->victim = NULL;
     if (unmount->mount)
-        unmount->mounted = unmount->mount(unmount->parent, unmount->mount_ctx);
+        unmount->mounted = unmount->mount(unmount->parent, unmount->mount_context);
 }
 
 /** @brief ER_EVENT_VALUE_CHANGE callback: counts the changes into an int. */
@@ -2249,20 +2250,20 @@ static ERNode* mount_dial(ERNode* parent, void* ctx)
 {
     DialRecord* dial = ctx;
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps p;
-    er_props_default(&p);
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 20;
-    p.top = 20;
-    p.width = 100;
-    p.height = 100;
-    p.arc_width = 16;
-    p.arc_value = 25.0f;
-    p.arc_max = 100.0f;
-    p.arc_step = 5.0f;
-    p.arc_adjustable = 1;
-    er_node_set_props(arc, &p);
-    wire_responder(arc, &dial->rec);
+    ERProps props;
+    er_props_default(&props);
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 20;
+    props.top = 20;
+    props.width = 100;
+    props.height = 100;
+    props.arc_width = 16;
+    props.arc_value = 25.0f;
+    props.arc_max = 100.0f;
+    props.arc_step = 5.0f;
+    props.arc_adjustable = 1;
+    er_node_set_props(arc, &props);
+    wire_responder(arc, &dial->record);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_value_change_count, &dial->value_changes);
     er_tree_append_child(parent, arc);
     return arc;
@@ -2279,14 +2280,14 @@ static ERNode* mount_dial(ERNode* parent, void* ctx)
 static ERNode* mount_text_input(ERNode* parent, void* ctx)
 {
     ERNode* node = er_node_create(ER_NODE_TEXT_INPUT);
-    ERProps p;
-    er_props_default(&p);
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 10;
-    p.top = 10;
-    p.width = 40;
-    p.height = 40;
-    er_node_set_props(node, &p);
+    ERProps props;
+    er_props_default(&props);
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 10;
+    props.top = 10;
+    props.width = 40;
+    props.height = 40;
+    er_node_set_props(node, &props);
     er_event_set(node, ER_EVENT_FOCUS, on_focus, ctx);
     er_event_set(node, ER_EVENT_PRESS, on_press, ctx);
     er_event_set(node, ER_EVENT_PRESS_IN, on_press_in, ctx);
@@ -2309,13 +2310,13 @@ static ERNode* mount_text_input(ERNode* parent, void* ctx)
 static ERNode* mount_view(ERNode* parent, void* ctx)
 {
     ERNode* node = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 150;
-    p.top = 10;
-    p.width = 20;
-    p.height = 20;
-    er_node_set_props(node, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 150;
+    props.top = 10;
+    props.width = 20;
+    props.height = 20;
+    er_node_set_props(node, &props);
     wire_responder(node, ctx);
     er_tree_append_child(parent, node);
     return node;
@@ -2360,16 +2361,16 @@ static ERNode* mount_claiming_view(ERNode* parent, void* ctx)
  *
  * @return The View.
  */
-static ERNode* append_view(ERNode* parent, int16_t x, int16_t y, int16_t w, int16_t h)
+static ERNode* append_view(ERNode* parent, int16_t x, int16_t y, int16_t width, int16_t height)
 {
     ERNode* node = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = x;
-    p.top = y;
-    p.width = w;
-    p.height = h;
-    er_node_set_props(node, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = x;
+    props.top = y;
+    props.width = width;
+    props.height = height;
+    er_node_set_props(node, &props);
     er_tree_append_child(parent, node);
     return node;
 }
@@ -2388,34 +2389,34 @@ static int test_press_target_unmounted_during_grant(void)
     for (int replace = 0; replace <= 1; replace++)
     {
         ERNode* root = create_root();
-        ResponderRecord rec = {0};
-        rec.should_claim = true;
+        ResponderRecord record = {0};
+        record.should_claim = true;
 
         ERNode* container = er_node_create(ER_NODE_VIEW);
         {
-            ERProps p = props_default();
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 0;
-            p.top = 0;
-            p.width = 80;
-            p.height = 80;
-            er_node_set_props(container, &p);
+            ERProps props = props_default();
+            props.position = ER_POS_ABSOLUTE;
+            props.left = 0;
+            props.top = 0;
+            props.width = 80;
+            props.height = 80;
+            er_node_set_props(container, &props);
             /* Bubbling, not capturing: the path that leaves the press in place is the one that has to
              * survive the node underneath it going away. */
-            er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+            er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &record);
         }
 
         ERNode* row = er_node_create(ER_NODE_PRESSABLE);
         EventCounts counts;
         memset(&counts, 0, sizeof(counts));
         {
-            ERProps p = props_default();
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 10;
-            p.top = 10;
-            p.width = 40;
-            p.height = 40;
-            er_node_set_props(row, &p);
+            ERProps props = props_default();
+            props.position = ER_POS_ABSOLUTE;
+            props.left = 10;
+            props.top = 10;
+            props.width = 40;
+            props.height = 40;
+            er_node_set_props(row, &props);
             er_event_set(row, ER_EVENT_PRESS, on_press, &counts);
             er_event_set(row, ER_EVENT_PRESS_IN, on_press_in, &counts);
             er_event_set(row, ER_EVENT_PRESS_OUT, on_press_out, &counts);
@@ -2458,31 +2459,31 @@ static int test_touch_target_unmounted_by_touch_start(void)
     for (int in_handler = 0; in_handler <= 1; in_handler++)
     {
         ERNode* root = create_root();
-        ResponderRecord rec = {0};
-        rec.should_claim = true;
+        ResponderRecord record = {0};
+        record.should_claim = true;
 
         ERNode* container = er_node_create(ER_NODE_VIEW);
         {
-            ERProps p = props_default();
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 0;
-            p.top = 0;
-            p.width = 80;
-            p.height = 80;
-            er_node_set_props(container, &p);
-            wire_responder(container, &rec);
-            er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+            ERProps props = props_default();
+            props.position = ER_POS_ABSOLUTE;
+            props.left = 0;
+            props.top = 0;
+            props.width = 80;
+            props.height = 80;
+            er_node_set_props(container, &props);
+            wire_responder(container, &record);
+            er_responder_query_set(container, ER_QUERY_START_SHOULD_SET, query_should_claim, &record);
         }
 
         ERNode* target = er_node_create(ER_NODE_VIEW);
         {
-            ERProps p = props_default();
-            p.position = ER_POS_ABSOLUTE;
-            p.left = 10;
-            p.top = 10;
-            p.width = 40;
-            p.height = 40;
-            er_node_set_props(target, &p);
+            ERProps props = props_default();
+            props.position = ER_POS_ABSOLUTE;
+            props.left = 10;
+            props.top = 10;
+            props.width = 40;
+            props.height = 40;
+            er_node_set_props(target, &props);
         }
 
         er_tree_append_child(container, target);
@@ -2507,7 +2508,7 @@ static int test_touch_target_unmounted_by_touch_start(void)
         touch_move(30, 20);
         embedded_renderer_touch(0, ER_TOUCH_UP, 30, 20);
 
-        if (rec.grant_count != 0)
+        if (record.grant_count != 0)
             return fail("a responder was negotiated from a node unmounted by its own onTouchStart");
         if (successor.touch_move_count != 0 || successor.touch_end_count != 0 || successor.press_count != 0)
             return fail(in_handler ? "a node onTouchStart mounted into the touched node's slot was handed its touch"
@@ -2591,10 +2592,10 @@ static int test_arc_unmounted_by_touch_start_does_not_drag(void)
         er_event_set(arc, ER_EVENT_TOUCH_START, on_event_unmount, &unmount);
         embedded_renderer_touch(0, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
         embedded_renderer_touch(0, ER_TOUCH_UP, DIAL_TOP_X, DIAL_TOP_Y);
-        if (dial.rec.grant_count != 1 || dial.value_changes != 1)
+        if (dial.record.grant_count != 1 || dial.value_changes != 1)
             return fail("a touch on the ring did not drag the dial, so the scenario proves nothing");
 
-        dial.rec.grant_count = 0;
+        dial.record.grant_count = 0;
         dial.value_changes = 0;
 
         unmount.victim = arc;
@@ -2603,7 +2604,7 @@ static int test_arc_unmounted_by_touch_start_does_not_drag(void)
 
         if (unmount.victim != NULL)
             return fail("onTouchStart never unmounted the dial");
-        if (dial.rec.grant_count != 0 || dial.value_changes != 0)
+        if (dial.record.grant_count != 0 || dial.value_changes != 0)
             return fail(destroy ? "a dial destroyed by its own onTouchStart still started a drag"
                                 : "a dial detached by its own onTouchStart still started a drag");
     }
@@ -2644,7 +2645,7 @@ static int test_arc_unmounted_by_grant_does_not_drag(void)
         if (dial.value_changes != 0)
             return fail(mode == 2 ? "a dial detached by its own onResponderGrant was still dragged"
                                   : "a dial unmounted by its own onResponderGrant was still dragged");
-        if (successor.value_changes != 0 || successor.rec.move_count != 0 || successor.rec.release_count != 0)
+        if (successor.value_changes != 0 || successor.record.move_count != 0 || successor.record.release_count != 0)
             return fail("a dial the grant mounted into the old one's slot was dragged by its touch");
     }
     return EXIT_SUCCESS;
@@ -2662,26 +2663,26 @@ static int test_arc_unmounted_by_grant_does_not_drag(void)
  */
 static ERNode* create_scroll_view(ERNode* parent, ERPointerEvents pointer_events, int16_t width, int* scroll_events)
 {
-    ERNode* sv = er_node_create(ER_NODE_SCROLL_VIEW);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = 0;
-    sp.top = 0;
-    sp.width = width;
-    sp.height = 100;
-    sp.pointer_events = (uint8_t)pointer_events;
-    er_node_set_props(sv, &sp);
-    er_event_set(sv, ER_EVENT_SCROLL, count_scroll, scroll_events);
+    ERNode* scroll_view = er_node_create(ER_NODE_SCROLL_VIEW);
+    ERProps scroll_view_props = props_default();
+    scroll_view_props.position = ER_POS_ABSOLUTE;
+    scroll_view_props.left = 0;
+    scroll_view_props.top = 0;
+    scroll_view_props.width = width;
+    scroll_view_props.height = 100;
+    scroll_view_props.pointer_events = (uint8_t)pointer_events;
+    er_node_set_props(scroll_view, &scroll_view_props);
+    er_event_set(scroll_view, ER_EVENT_SCROLL, count_scroll, scroll_events);
 
     ERNode* content = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.width = (int16_t)(width * 4); /* wider than the viewport so horizontal scrolling has range */
-    cp.height = 100;
-    er_node_set_props(content, &cp);
+    ERProps content_props = props_default();
+    content_props.width = (int16_t)(width * 4); /* wider than the viewport so horizontal scrolling has range */
+    content_props.height = 100;
+    er_node_set_props(content, &content_props);
 
-    er_tree_append_child(sv, content);
-    er_tree_append_child(parent, sv);
-    return sv;
+    er_tree_append_child(scroll_view, content);
+    er_tree_append_child(parent, scroll_view);
+    return scroll_view;
 }
 
 /**
@@ -2719,7 +2720,7 @@ static int test_press_target_replaced_mid_touch(void)
         {ER_EVENT_TOUCH_CANCEL, "an input mounted into the pressed node's slot by onTouchCancel was pressed"},
     };
 
-    for (size_t i = 0; i < sizeof(k_swaps) / sizeof(k_swaps[0]); i++)
+    for (size_t swap_index = 0; swap_index < sizeof(k_swaps) / sizeof(k_swaps[0]); swap_index++)
     {
         ERNode* root = create_root();
         EventCounts counts;
@@ -2731,11 +2732,12 @@ static int test_press_target_replaced_mid_touch(void)
         EventCounts successor;
         memset(&successor, 0, sizeof(successor));
         UnmountOnEvent unmount = {root, row, false, mount_text_input, &successor, NULL};
-        er_event_set(row, k_swaps[i].event, on_event_unmount, &unmount);
+        er_event_set(row, k_swaps[swap_index].event, on_event_unmount, &unmount);
 
         embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
         touch_move(22, 20);
-        embedded_renderer_touch(0, k_swaps[i].event == ER_EVENT_TOUCH_CANCEL ? ER_TOUCH_CANCEL : ER_TOUCH_UP, 22, 20);
+        embedded_renderer_touch(
+            0, k_swaps[swap_index].event == ER_EVENT_TOUCH_CANCEL ? ER_TOUCH_CANCEL : ER_TOUCH_UP, 22, 20);
 
         if (unmount.victim != NULL)
             return fail("the handler never unmounted the pressed node");
@@ -2744,7 +2746,7 @@ static int test_press_target_replaced_mid_touch(void)
         if (successor.focus_count != 0 || successor.press_in_count != 0 || successor.press_out_count != 0
             || successor.press_count != 0 || successor.touch_move_count != 0 || successor.touch_end_count != 0
             || successor.touch_cancel_count != 0)
-            return fail(k_swaps[i].failure);
+            return fail(k_swaps[swap_index].failure);
     }
     return EXIT_SUCCESS;
 }
@@ -2760,13 +2762,13 @@ static int test_claimant_replaced_by_own_query(void)
     ERNode* root = create_root();
     ERNode* target = er_node_create(ER_NODE_VIEW);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(target, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 10;
+        props.top = 10;
+        props.width = 40;
+        props.height = 40;
+        er_node_set_props(target, &props);
     }
     er_tree_append_child(root, target);
     er_commit();
@@ -2797,24 +2799,24 @@ static int test_claimant_replaced_by_own_query(void)
 static int test_responder_replaced_during_move(void)
 {
     ERNode* root = create_root();
-    ResponderRecord root_rec = {0};
-    root_rec.should_claim = true;
-    wire_responder(root, &root_rec);
-    er_responder_query_set(root, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &root_rec);
+    ResponderRecord root_record = {0};
+    root_record.should_claim = true;
+    wire_responder(root, &root_record);
+    er_responder_query_set(root, ER_QUERY_MOVE_SHOULD_SET, query_should_claim, &root_record);
 
-    ResponderRecord rec = {0};
-    rec.should_claim = true;
+    ResponderRecord record = {0};
+    record.should_claim = true;
     ERNode* target = er_node_create(ER_NODE_VIEW);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 10;
-        p.top = 10;
-        p.width = 40;
-        p.height = 40;
-        er_node_set_props(target, &p);
-        wire_responder(target, &rec);
-        er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 10;
+        props.top = 10;
+        props.width = 40;
+        props.height = 40;
+        er_node_set_props(target, &props);
+        wire_responder(target, &record);
+        er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_should_claim, &record);
     }
     er_tree_append_child(root, target);
     er_commit();
@@ -2824,7 +2826,7 @@ static int test_responder_replaced_during_move(void)
     er_event_set(target, ER_EVENT_RESPONDER_MOVE, on_event_unmount, &unmount);
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
-    if (rec.grant_count != 1)
+    if (record.grant_count != 1)
         return fail("the touched node did not take the gesture, so the scenario proves nothing");
     touch_move(30, 20);
     embedded_renderer_touch(0, ER_TOUCH_UP, 30, 20);
@@ -2833,7 +2835,7 @@ static int test_responder_replaced_during_move(void)
         return fail("onResponderMove never unmounted the responder");
     if (unmount.mounted != target)
         return fail("the new node did not reuse the responder's slot, so the scenario proves nothing");
-    if (root_rec.grant_count != 0 || successor.grant_count != 0)
+    if (root_record.grant_count != 0 || successor.grant_count != 0)
         return fail("a move negotiated the gesture from the node mounted into the unmounted responder's slot");
 
     return EXIT_SUCCESS;
@@ -2862,12 +2864,12 @@ static int test_scroll_responder_replaced_on_release(void)
 {
     ERNode* root = create_root();
     int scroll_events = 0;
-    ERNode* sv = create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &scroll_events);
+    ERNode* scroll_view = create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &scroll_events);
     er_commit();
 
     int successor_scrolls = 0;
-    UnmountOnEvent unmount = {root, sv, false, mount_scroll_view, &successor_scrolls, NULL};
-    er_event_set(sv, ER_EVENT_RESPONDER_RELEASE, on_event_unmount, &unmount);
+    UnmountOnEvent unmount = {root, scroll_view, false, mount_scroll_view, &successor_scrolls, NULL};
+    er_event_set(scroll_view, ER_EVENT_RESPONDER_RELEASE, on_event_unmount, &unmount);
 
     /* Lift away from the last move, a frame later, so the release measures a real velocity. */
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 80, 50);
@@ -2880,11 +2882,11 @@ static int test_scroll_responder_replaced_on_release(void)
         return fail("the drag never scrolled, so the scenario proves nothing");
     if (unmount.victim != NULL)
         return fail("onResponderRelease never unmounted the ScrollView");
-    if (unmount.mounted != sv)
+    if (unmount.mounted != scroll_view)
         return fail("the new ScrollView did not reuse the old one's slot, so the scenario proves nothing");
 
     er_commit();
-    for (int i = 0; i < 10; i++)
+    for (int tick_index = 0; tick_index < 10; tick_index++)
         embedded_renderer_tick(16U);
 
     if (successor_scrolls != 0)
@@ -2908,14 +2910,14 @@ static int test_responder_destroyed_mid_drag(void)
         {
             ERNode* root = create_root();
             int scroll_events = 0;
-            ERNode* sv = create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &scroll_events);
-            ERNode* content = er_node_first_child(sv);
+            ERNode* scroll_view = create_scroll_view(root, ER_POINTER_EVENTS_AUTO, 100, &scroll_events);
+            ERNode* content = er_node_first_child(scroll_view);
 
-            ResponderRecord rec = {0};
-            rec.should_claim = true;
+            ResponderRecord record = {0};
+            record.should_claim = true;
             ERNode* target = append_view(content, 10, 10, 40, 40);
-            wire_responder(target, &rec);
-            er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_should_claim, &rec);
+            wire_responder(target, &record);
+            er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_should_claim, &record);
             er_commit();
 
             ResponderRecord successor = {0};
@@ -2924,7 +2926,7 @@ static int test_responder_destroyed_mid_drag(void)
                 er_event_set(target, ER_EVENT_RESPONDER_MOVE, on_event_unmount, &unmount);
 
             embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
-            if (rec.grant_count != 1)
+            if (record.grant_count != 1)
                 return fail("the touched node did not take the gesture, so the scenario proves nothing");
             touch_move(30, 20);
             if (!in_handler)
@@ -2936,12 +2938,12 @@ static int test_responder_destroyed_mid_drag(void)
             if (replace && unmount.mounted != target)
                 return fail("the new node did not reuse the responder's slot, so the scenario proves nothing");
 
-            const int moves_before = rec.move_count;
+            const int moves_before = record.move_count;
             touch_move(40, 20);
             touch_move(50, 20);
             embedded_renderer_touch(0, ER_TOUCH_UP, 50, 20);
 
-            if (rec.move_count != moves_before || rec.release_count != 0 || rec.terminate_count != 0)
+            if (record.move_count != moves_before || record.release_count != 0 || record.terminate_count != 0)
                 return fail("a responder destroyed mid-drag was handed the rest of the gesture");
             if (successor.grant_count != 0 || successor.move_count != 0 || successor.release_count != 0
                 || successor.terminate_count != 0)
@@ -2978,7 +2980,7 @@ static int test_arc_destroyed_mid_drag(void)
             er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_event_unmount, &unmount);
 
         embedded_renderer_touch(0, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
-        if (dial.rec.grant_count != 1)
+        if (dial.record.grant_count != 1)
             return fail("a touch on the ring did not start a drag, so the scenario proves nothing");
 
         unmount.victim = arc;
@@ -2993,16 +2995,16 @@ static int test_arc_destroyed_mid_drag(void)
             return fail("the new dial did not reuse the old one's slot, so the scenario proves nothing");
 
         touch_move(bottom_x, bottom_y);
-        if (successor.value_changes != 0 || successor.rec.grant_count != 0 || successor.rec.move_count != 0)
+        if (successor.value_changes != 0 || successor.record.grant_count != 0 || successor.record.move_count != 0)
             return fail("a dial mounted into a dragged dial's slot was dragged by that finger");
 
         embedded_renderer_touch(1, ER_TOUCH_DOWN, DIAL_TOP_X, DIAL_TOP_Y);
         embedded_renderer_touch(1, ER_TOUCH_UP, DIAL_TOP_X, DIAL_TOP_Y);
-        if (successor.rec.grant_count != 1 || successor.value_changes != 1)
+        if (successor.record.grant_count != 1 || successor.value_changes != 1)
             return fail("a dial mounted into a dragged dial's slot was still held by the old drag's finger");
 
         embedded_renderer_touch(0, ER_TOUCH_UP, bottom_x, bottom_y);
-        if (successor.rec.release_count != 1)
+        if (successor.record.release_count != 1)
             return fail("lifting the old drag's finger released the dial mounted into its slot");
     }
     return EXIT_SUCCESS;
@@ -3119,10 +3121,10 @@ static int test_scene_reset_during_touch(void)
 {
     {
         ERNode* root = create_root();
-        ResponderRecord rec = {0};
+        ResponderRecord record = {0};
         ERNode* target = append_view(root, 10, 10, 40, 40);
-        wire_responder(target, &rec);
-        er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_reset_and_claim, &rec);
+        wire_responder(target, &record);
+        er_responder_query_set(target, ER_QUERY_START_SHOULD_SET, query_reset_and_claim, &record);
         er_commit();
 
         embedded_renderer_touch(0, ER_TOUCH_DOWN, 20, 20);
@@ -3130,7 +3132,7 @@ static int test_scene_reset_during_touch(void)
 
         if (er_node_in_use_count() != 0)
             return fail("nodes from before a reset are still reported in use");
-        if (rec.grant_count != 0 || rec.release_count != 0)
+        if (record.grant_count != 0 || record.release_count != 0)
             return fail("a node whose own query reset the scene was granted the touch");
     }
     {
@@ -3214,13 +3216,13 @@ static int test_box_none_scroll_view_defers_to_outer(void)
     int inner_events = 0;
 
     ERNode* outer = er_node_create(ER_NODE_SCROLL_VIEW);
-    ERProps op = props_default();
-    op.position = ER_POS_ABSOLUTE;
-    op.left = 0;
-    op.top = 0;
-    op.width = 100;
-    op.height = 100;
-    er_node_set_props(outer, &op);
+    ERProps outer_props = props_default();
+    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.left = 0;
+    outer_props.top = 0;
+    outer_props.width = 100;
+    outer_props.height = 100;
+    er_node_set_props(outer, &outer_props);
     er_event_set(outer, ER_EVENT_SCROLL, count_scroll, &outer_events);
     er_tree_append_child(root, outer);
 
@@ -3271,7 +3273,7 @@ static int test_new_scene_stops_orphan_scroller(void)
     er_commit();
 
     const int before = s_orphan_scroll_events;
-    for (int i = 0; i < 30; i++)
+    for (int tick_index = 0; tick_index < 30; tick_index++)
         embedded_renderer_tick(16U);
 
     if (s_orphan_scroll_events != before)
@@ -3294,14 +3296,14 @@ static int test_pointer_events_box_only(void)
     /* Parent pressable with BOX_ONLY — absorbs all touches, children get nothing */
     ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 0;
-        p.top = 0;
-        p.width = 80;
-        p.height = 80;
-        p.pointer_events = ER_POINTER_EVENTS_BOX_ONLY;
-        er_node_set_props(parent, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 0;
+        props.top = 0;
+        props.width = 80;
+        props.height = 80;
+        props.pointer_events = ER_POINTER_EVENTS_BOX_ONLY;
+        er_node_set_props(parent, &props);
         er_event_set(parent, ER_EVENT_PRESS, on_press, &parent_counts);
         er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
     }
@@ -3336,14 +3338,14 @@ static int test_hit_slop(void)
     /* Pressable at [50,50,80,80] with 20px left slop — hittable from x=30 */
     ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 50;
-        p.top = 50;
-        p.width = 80;
-        p.height = 80;
-        p.hit_slop_left = 20;
-        er_node_set_props(pressable, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 50;
+        props.top = 50;
+        props.width = 80;
+        props.height = 80;
+        props.hit_slop_left = 20;
+        er_node_set_props(pressable, &props);
         er_event_set(pressable, ER_EVENT_PRESS, on_press, &counts);
         er_event_set(pressable, ER_EVENT_PRESS_IN, on_press_in, &counts);
         er_event_set(pressable, ER_EVENT_PRESS_OUT, on_press_out, &counts);
@@ -3387,15 +3389,15 @@ static int test_overflow_hidden_clips_hit(void)
      */
     ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 20;
-        p.top = 20;
-        p.width = 80;
-        p.height = 80;
-        p.overflow = ER_OVERFLOW_HIDDEN;
-        p.hit_slop_right = 30;
-        er_node_set_props(parent, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 20;
+        props.top = 20;
+        props.width = 80;
+        props.height = 80;
+        props.overflow = ER_OVERFLOW_HIDDEN;
+        props.hit_slop_right = 30;
+        er_node_set_props(parent, &props);
         er_event_set(parent, ER_EVENT_PRESS, on_press, &parent_counts);
         er_event_set(parent, ER_EVENT_TOUCH_START, on_touch_start, &parent_counts);
     }
@@ -3406,13 +3408,13 @@ static int test_overflow_hidden_clips_hit(void)
      */
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
-        ERProps p = props_default();
-        p.position = ER_POS_ABSOLUTE;
-        p.left = 70;
-        p.top = 0;
-        p.width = 60;
-        p.height = 60;
-        er_node_set_props(child, &p);
+        ERProps props = props_default();
+        props.position = ER_POS_ABSOLUTE;
+        props.left = 70;
+        props.top = 0;
+        props.width = 60;
+        props.height = 60;
+        er_node_set_props(child, &props);
         er_event_set(child, ER_EVENT_PRESS, on_press, &child_counts);
         er_event_set(child, ER_EVENT_TOUCH_START, on_touch_start, &child_counts);
     }
@@ -3446,44 +3448,44 @@ static int test_overflow_hidden_clips_hit(void)
 static int test_layout_event_dispatch(void)
 {
     ERNode* root = create_root();
-    LayoutRecord rec = {0};
+    LayoutRecord record = {0};
 
     ERNode* view = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 10;
-    p.top = 20;
-    p.width = 60;
-    p.height = 40;
-    er_node_set_props(view, &p);
-    er_event_set(view, ER_EVENT_LAYOUT, on_layout, &rec);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 10;
+    props.top = 20;
+    props.width = 60;
+    props.height = 40;
+    er_node_set_props(view, &props);
+    er_event_set(view, ER_EVENT_LAYOUT, on_layout, &record);
     er_tree_append_child(root, view);
 
     er_commit();
 
-    if (rec.count != 1)
+    if (record.count != 1)
         return fail("layout event did not fire on first commit");
-    if (rec.rect.x != 10 || rec.rect.y != 20 || rec.rect.w != 60 || rec.rect.h != 40)
+    if (record.rect.x != 10 || record.rect.y != 20 || record.rect.w != 60 || record.rect.h != 40)
         return fail("layout event payload was wrong");
 
     er_commit();
 
-    if (rec.count != 1)
+    if (record.count != 1)
         return fail("layout event fired again with no layout change");
 
     /* Move the node — layout event must fire again with the new rect */
-    ERProps p2 = props_default();
-    p2.position = ER_POS_ABSOLUTE;
-    p2.left = 30;
-    p2.top = 20;
-    p2.width = 60;
-    p2.height = 40;
-    er_node_set_props(view, &p2);
+    ERProps view_props = props_default();
+    view_props.position = ER_POS_ABSOLUTE;
+    view_props.left = 30;
+    view_props.top = 20;
+    view_props.width = 60;
+    view_props.height = 40;
+    er_node_set_props(view, &view_props);
     er_commit();
 
-    if (rec.count != 2)
+    if (record.count != 2)
         return fail("layout event did not fire after rect change");
-    if (rec.rect.x != 30)
+    if (record.rect.x != 30)
         return fail("layout event payload did not reflect moved position");
 
     return EXIT_SUCCESS;
@@ -3498,89 +3500,89 @@ static int test_layout_event_dispatch(void)
 static int test_layout_event_parent_relative(void)
 {
     ERNode* root = create_root();
-    LayoutRecord parent_rec = {0};
-    LayoutRecord child_rec = {0};
+    LayoutRecord parent_record = {0};
+    LayoutRecord child_record = {0};
 
     ERNode* parent = er_node_create(ER_NODE_VIEW);
-    ERProps pp = props_default();
-    pp.position = ER_POS_ABSOLUTE;
-    pp.left = 40;
-    pp.top = 30;
-    pp.width = 100;
-    pp.height = 80;
-    pp.padding = 5;
-    pp.padding_horizontal = pp.padding_vertical = ER_LAYOUT_AUTO;
-    er_node_set_props(parent, &pp);
-    er_event_set(parent, ER_EVENT_LAYOUT, on_layout, &parent_rec);
+    ERProps parent_props = props_default();
+    parent_props.position = ER_POS_ABSOLUTE;
+    parent_props.left = 40;
+    parent_props.top = 30;
+    parent_props.width = 100;
+    parent_props.height = 80;
+    parent_props.padding = 5;
+    parent_props.padding_horizontal = parent_props.padding_vertical = ER_LAYOUT_AUTO;
+    er_node_set_props(parent, &parent_props);
+    er_event_set(parent, ER_EVENT_LAYOUT, on_layout, &parent_record);
     er_tree_append_child(root, parent);
 
     ERNode* child = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.width = 20;
-    cp.height = 10;
-    cp.margin_left = 3;
-    cp.margin_horizontal = cp.margin_vertical = ER_LAYOUT_AUTO;
-    er_node_set_props(child, &cp);
-    er_event_set(child, ER_EVENT_LAYOUT, on_layout, &child_rec);
+    ERProps child_props = props_default();
+    child_props.width = 20;
+    child_props.height = 10;
+    child_props.margin_left = 3;
+    child_props.margin_horizontal = child_props.margin_vertical = ER_LAYOUT_AUTO;
+    er_node_set_props(child, &child_props);
+    er_event_set(child, ER_EVENT_LAYOUT, on_layout, &child_record);
     er_tree_append_child(parent, child);
 
     er_commit();
 
-    if (parent_rec.count != 1 || parent_rec.rect.x != 40 || parent_rec.rect.y != 30)
+    if (parent_record.count != 1 || parent_record.rect.x != 40 || parent_record.rect.y != 30)
         return fail("layout event: parent rect was wrong");
-    if (child_rec.count != 1 || child_rec.rect.x != 8 || child_rec.rect.y != 5 || child_rec.rect.w != 20
-        || child_rec.rect.h != 10)
+    if (child_record.count != 1 || child_record.rect.x != 8 || child_record.rect.y != 5 || child_record.rect.w != 20
+        || child_record.rect.h != 10)
         return fail("layout event: child rect was not relative to its parent");
 
     /* Move only the parent: the child keeps its place inside it, so it doesn't fire */
-    pp.left = 60;
-    er_node_set_props(parent, &pp);
+    parent_props.left = 60;
+    er_node_set_props(parent, &parent_props);
     er_commit();
 
-    if (parent_rec.count != 2 || parent_rec.rect.x != 60)
+    if (parent_record.count != 2 || parent_record.rect.x != 60)
         return fail("layout event: moved parent did not fire");
-    if (child_rec.count != 1)
+    if (child_record.count != 1)
         return fail("layout event: child fired when only its parent moved");
 
     /* Change the parent's padding: the child moves inside it, so it fires */
-    pp.padding = 9;
-    er_node_set_props(parent, &pp);
+    parent_props.padding = 9;
+    er_node_set_props(parent, &parent_props);
     er_commit();
 
-    if (child_rec.count != 2 || child_rec.rect.x != 12 || child_rec.rect.y != 9)
+    if (child_record.count != 2 || child_record.rect.x != 12 || child_record.rect.y != 9)
         return fail("layout event: child did not fire after moving inside its parent");
 
     /* Hide the child: it reports an empty box at 0,0, and moving the parent leaves it quiet */
-    cp.display = ER_DISPLAY_NONE;
-    er_node_set_props(child, &cp);
+    child_props.display = ER_DISPLAY_NONE;
+    er_node_set_props(child, &child_props);
     er_commit();
 
-    if (child_rec.count != 3 || child_rec.rect.x != 0 || child_rec.rect.y != 0 || child_rec.rect.w != 0
-        || child_rec.rect.h != 0)
+    if (child_record.count != 3 || child_record.rect.x != 0 || child_record.rect.y != 0 || child_record.rect.w != 0
+        || child_record.rect.h != 0)
         return fail("layout event: hidden child did not report an empty box at 0,0");
 
-    pp.left = 80;
-    er_node_set_props(parent, &pp);
+    parent_props.left = 80;
+    er_node_set_props(parent, &parent_props);
     er_commit();
 
-    if (child_rec.count != 3)
+    if (child_record.count != 3)
         return fail("layout event: hidden child fired when its parent moved");
 
     /* Show it again, then hide the parent: the parent reports empty and the child stays quiet */
-    cp.display = ER_DISPLAY_FLEX;
-    er_node_set_props(child, &cp);
+    child_props.display = ER_DISPLAY_FLEX;
+    er_node_set_props(child, &child_props);
     er_commit();
 
-    if (child_rec.count != 4 || child_rec.rect.x != 12 || child_rec.rect.y != 9 || child_rec.rect.w != 20)
+    if (child_record.count != 4 || child_record.rect.x != 12 || child_record.rect.y != 9 || child_record.rect.w != 20)
         return fail("layout event: shown child did not report its box again");
 
-    pp.display = ER_DISPLAY_NONE;
-    er_node_set_props(parent, &pp);
+    parent_props.display = ER_DISPLAY_NONE;
+    er_node_set_props(parent, &parent_props);
     er_commit();
 
-    if (parent_rec.rect.w != 0 || parent_rec.rect.x != 0)
+    if (parent_record.rect.w != 0 || parent_record.rect.x != 0)
         return fail("layout event: hidden parent did not report an empty box at 0,0");
-    if (child_rec.count != 4)
+    if (child_record.count != 4)
         return fail("layout event: child of a hidden parent fired");
 
     return EXIT_SUCCESS;
@@ -3601,15 +3603,15 @@ static int test_display_none_not_hittable(void)
     EventCounts counts = {0};
     ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
 
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    p.background_color = 0xFF101010U;
-    p.display = ER_DISPLAY_NONE;
-    er_node_set_props(pressable, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    props.background_color = 0xFF101010U;
+    props.display = ER_DISPLAY_NONE;
+    er_node_set_props(pressable, &props);
 
     er_tree_append_child(root, pressable);
     er_commit();
@@ -3634,15 +3636,15 @@ static int test_opacity_zero_not_hittable(void)
     EventCounts counts = {0};
     ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
 
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 80;
-    p.background_color = 0xFF101010U;
-    p.opacity = 0;
-    er_node_set_props(pressable, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 80;
+    props.background_color = 0xFF101010U;
+    props.opacity = 0;
+    er_node_set_props(pressable, &props);
 
     er_tree_append_child(root, pressable);
     er_commit();
@@ -3677,23 +3679,23 @@ static int test_auto_sized_absolute_is_hittable(void)
     er_tree_append_child(root, backdrop);
 
     /* Absolute container with no height, holding a pressable child. */
-    ERProps ap = props_default();
-    ap.position = ER_POS_ABSOLUTE;
-    ap.left = 20;
-    ap.top = 30;
-    ap.width = 100;
+    ERProps box_props = props_default();
+    box_props.position = ER_POS_ABSOLUTE;
+    box_props.left = 20;
+    box_props.top = 30;
+    box_props.width = 100;
     LayoutRecord box_rect = {0};
     ERNode* box = er_node_create(ER_NODE_VIEW);
-    er_node_set_props(box, &ap);
+    er_node_set_props(box, &box_props);
     er_event_set(box, ER_EVENT_LAYOUT, on_layout, &box_rect);
 
     EventCounts inner = {0};
-    ERProps cp = props_default();
-    cp.width = 80;
-    cp.height = 40;
-    cp.background_color = 0xFF202020U;
+    ERProps child_props = props_default();
+    child_props.width = 80;
+    child_props.height = 40;
+    child_props.background_color = 0xFF202020U;
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
-    er_node_set_props(child, &cp);
+    er_node_set_props(child, &child_props);
     er_event_set(child, ER_EVENT_PRESS, on_press, &inner);
 
     er_tree_append_child(box, child);
@@ -3728,39 +3730,39 @@ static int test_auto_sized_absolute_is_hittable(void)
  */
 static int test_uncaptured_transform_hits_painted_box(void)
 {
-    ERNode* root = create_root_sized(XF_TOO_BIG_W + 80, XF_TOO_BIG_H + 80);
+    ERNode* root = create_root_sized(TRANSFORM_TOO_BIG_WIDTH + 80, TRANSFORM_TOO_BIG_HEIGHT + 80);
     EventCounts counts = {0};
-    ERNode* box = create_pressable(40, 40, XF_TOO_BIG_W, XF_TOO_BIG_H, &counts);
+    ERNode* box = create_pressable(40, 40, TRANSFORM_TOO_BIG_WIDTH, TRANSFORM_TOO_BIG_HEIGHT, &counts);
 
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 40;
-    p.top = 40;
-    p.width = XF_TOO_BIG_W;
-    p.height = XF_TOO_BIG_H;
-    p.background_color = 0xFF101010U;
-    p.transform_scale_x = 0.5f;
-    p.transform_scale_y = 0.5f;
-    p.transform_origin_x = 0.0f; /* top-left pivot, so the phantom rect is the box's top-left quarter */
-    p.transform_origin_y = 0.0f;
-    er_node_set_props(box, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 40;
+    props.top = 40;
+    props.width = TRANSFORM_TOO_BIG_WIDTH;
+    props.height = TRANSFORM_TOO_BIG_HEIGHT;
+    props.background_color = 0xFF101010U;
+    props.transform_scale_x = 0.5f;
+    props.transform_scale_y = 0.5f;
+    props.transform_origin_x = 0.0f; /* top-left pivot, so the phantom rect is the box's top-left quarter */
+    props.transform_origin_y = 0.0f;
+    er_node_set_props(box, &props);
 
     er_tree_append_child(root, box);
     er_commit();
 
     /* Three quarters across the painted box — outside the halved rect, on pixels that are plainly the
      * node. This is the tap the issue reported falling through to the background. */
-    tap(40 + (XF_TOO_BIG_W * 3) / 4, 40 + (XF_TOO_BIG_H * 3) / 4);
+    tap(40 + (TRANSFORM_TOO_BIG_WIDTH * 3) / 4, 40 + (TRANSFORM_TOO_BIG_HEIGHT * 3) / 4);
     if (counts.press_count != 1)
         return fail("tap on the painted area of an uncaptured transformed node did not reach it");
 
     /* The near corner lies inside the paint AND the phantom rect, so it worked before the fix too. */
-    tap(40 + XF_TOO_BIG_W / 4, 40 + XF_TOO_BIG_H / 4);
+    tap(40 + TRANSFORM_TOO_BIG_WIDTH / 4, 40 + TRANSFORM_TOO_BIG_HEIGHT / 4);
     if (counts.press_count != 2)
         return fail("tap near the pivot of an uncaptured transformed node did not reach it");
 
     /* Past the raw box there is nothing painted: following the pixels must not widen the node either. */
-    tap(40 + XF_TOO_BIG_W + 20, 40 + XF_TOO_BIG_H + 20);
+    tap(40 + TRANSFORM_TOO_BIG_WIDTH + 20, 40 + TRANSFORM_TOO_BIG_HEIGHT + 20);
     if (counts.press_count != 2)
         return fail("tap beyond an uncaptured transformed node still reached it");
 
@@ -3778,26 +3780,26 @@ static int test_uncaptured_transform_hits_painted_box(void)
  */
 static int test_oversized_translate_only_keeps_offset(void)
 {
-    ERNode* root = create_root_sized(XF_TOO_BIG_W + 80, XF_TOO_BIG_H + 80);
+    ERNode* root = create_root_sized(TRANSFORM_TOO_BIG_WIDTH + 80, TRANSFORM_TOO_BIG_HEIGHT + 80);
     EventCounts counts = {0};
-    ERNode* box = create_pressable(40, 40, XF_TOO_BIG_W, XF_TOO_BIG_H, &counts);
+    ERNode* box = create_pressable(40, 40, TRANSFORM_TOO_BIG_WIDTH, TRANSFORM_TOO_BIG_HEIGHT, &counts);
 
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 40;
-    p.top = 40;
-    p.width = XF_TOO_BIG_W;
-    p.height = XF_TOO_BIG_H;
-    p.background_color = 0xFF101010U;
-    p.transform_translate_x = 30.0f;
-    p.transform_translate_y = 20.0f;
-    er_node_set_props(box, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 40;
+    props.top = 40;
+    props.width = TRANSFORM_TOO_BIG_WIDTH;
+    props.height = TRANSFORM_TOO_BIG_HEIGHT;
+    props.background_color = 0xFF101010U;
+    props.transform_translate_x = 30.0f;
+    props.transform_translate_y = 20.0f;
+    er_node_set_props(box, &props);
 
     er_tree_append_child(root, box);
     er_commit();
 
     /* Past the layout box's right edge, but inside the translated one the node is drawn at. */
-    tap(40 + XF_TOO_BIG_W + 10, 40 + XF_TOO_BIG_H / 2);
+    tap(40 + TRANSFORM_TOO_BIG_WIDTH + 10, 40 + TRANSFORM_TOO_BIG_HEIGHT / 2);
     if (counts.press_count != 1)
         return fail("an oversized translate-only node lost its offset");
 
@@ -3820,16 +3822,16 @@ static int test_press_inside_translated_parent(void)
     EventCounts counts = {0};
 
     ERNode* header = er_node_create(ER_NODE_VIEW);
-    ERProps hp = props_default();
-    hp.position = ER_POS_ABSOLUTE;
-    hp.left = 0;
-    hp.top = 0;
-    hp.width = 200;
-    hp.height = 40;
-    hp.background_color = 0xFF4DA3FFU;
-    hp.transform_translate_x = 20.0f;
-    hp.transform_translate_y = 100.0f;
-    er_node_set_props(header, &hp);
+    ERProps header_props = props_default();
+    header_props.position = ER_POS_ABSOLUTE;
+    header_props.left = 0;
+    header_props.top = 0;
+    header_props.width = 200;
+    header_props.height = 40;
+    header_props.background_color = 0xFF4DA3FFU;
+    header_props.transform_translate_x = 20.0f;
+    header_props.transform_translate_y = 100.0f;
+    er_node_set_props(header, &header_props);
 
     ERNode* item = create_pressable(0, 0, 80, 40, &counts);
     er_tree_append_child(header, item);
@@ -3870,32 +3872,32 @@ static int test_nested_uncaptured_transform_hits_painted_box(void)
 
     /* Outer: small enough to capture, so its transform genuinely reaches the screen. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 20;
-    p.top = 20;
-    p.width = 100;
-    p.height = 100;
-    p.background_color = 0xFF202020U;
-    p.transform_scale_x = 0.5f;
-    p.transform_scale_y = 0.5f;
-    p.transform_origin_x = 0.0f;
-    p.transform_origin_y = 0.0f;
-    er_node_set_props(outer, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 20;
+    props.top = 20;
+    props.width = 100;
+    props.height = 100;
+    props.background_color = 0xFF202020U;
+    props.transform_scale_x = 0.5f;
+    props.transform_scale_y = 0.5f;
+    props.transform_origin_x = 0.0f;
+    props.transform_origin_y = 0.0f;
+    er_node_set_props(outer, &props);
 
     ERNode* inner = create_pressable(20, 20, 40, 40, &counts);
-    p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 20;
-    p.top = 20;
-    p.width = 40;
-    p.height = 40;
-    p.background_color = 0xFF303030U;
-    p.transform_scale_x = 0.25f;
-    p.transform_scale_y = 0.25f;
-    p.transform_origin_x = 0.0f;
-    p.transform_origin_y = 0.0f;
-    er_node_set_props(inner, &p);
+    props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 20;
+    props.top = 20;
+    props.width = 40;
+    props.height = 40;
+    props.background_color = 0xFF303030U;
+    props.transform_scale_x = 0.25f;
+    props.transform_scale_y = 0.25f;
+    props.transform_origin_x = 0.0f;
+    props.transform_origin_y = 0.0f;
+    er_node_set_props(inner, &props);
 
     er_tree_append_child(outer, inner);
     er_tree_append_child(root, outer);
@@ -3923,19 +3925,19 @@ static int test_translated_activity_indicator_keeps_offset(void)
     EventCounts counts = {0};
 
     ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 20;
-    p.top = 20;
-    p.width = 40;
-    p.height = 40;
-    p.color = 0xFF3366FFU;
-    p.transform_translate_x = 60.0f;
-    p.transform_translate_y = 60.0f;
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 20;
+    props.top = 20;
+    props.width = 40;
+    props.height = 40;
+    props.color = 0xFF3366FFU;
+    props.transform_translate_x = 60.0f;
+    props.transform_translate_y = 60.0f;
     /* A spin angle alongside the offset: the node is not translate-only, so it takes the branch that
      * asks whether a capture happened — and must still come out at its offset, not its raw box. */
-    p.transform_rotate_z = 45.0f;
-    er_node_set_props(spinner, &p);
+    props.transform_rotate_z = 45.0f;
+    er_node_set_props(spinner, &props);
     er_event_set(spinner, ER_EVENT_PRESS, on_press, &counts);
 
     er_tree_append_child(root, spinner);
@@ -3975,16 +3977,16 @@ static int test_3d_transform_hit_follows_projection(void)
     EventCounts counts = {0};
     ERNode* box = create_pressable(50, 50, 100, 100, &counts);
 
-    ERProps p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 50;
-    p.top = 50;
-    p.width = 100;
-    p.height = 100;
-    p.background_color = 0xFF101010U;
-    p.transform_rotate_y = 60.0f;
-    p.transform_perspective = 300.0f;
-    er_node_set_props(box, &p);
+    ERProps props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 50;
+    props.top = 50;
+    props.width = 100;
+    props.height = 100;
+    props.background_color = 0xFF101010U;
+    props.transform_rotate_y = 60.0f;
+    props.transform_perspective = 300.0f;
+    er_node_set_props(box, &props);
 
     er_tree_append_child(root, box);
     er_commit();
@@ -4018,16 +4020,16 @@ static int test_3d_transform_hit_follows_projection(void)
  *
  * @param[in]  root    Scene root to attach to.
  * @param[in]  counts  Scratch counter block the pressable's press handlers need.
- * @param[out] rec     Record the gesture handlers write into.
+ * @param[out] record  Record the gesture handlers write into.
  *
  * @return The new node.
  */
-static ERNode* create_gesture_target(ERNode* root, EventCounts* counts, TouchGestureRecord* rec)
+static ERNode* create_gesture_target(ERNode* root, EventCounts* counts, TouchGestureRecord* record)
 {
     ERNode* node = create_pressable(0, 0, 240, 160, counts);
-    er_event_set(node, ER_EVENT_TOUCH_MOVE, on_gesture_move, rec);
-    er_event_set(node, ER_EVENT_TOUCH_END, on_gesture_end, rec);
-    er_event_set(node, ER_EVENT_TOUCH_CANCEL, on_gesture_cancel, rec);
+    er_event_set(node, ER_EVENT_TOUCH_MOVE, on_gesture_move, record);
+    er_event_set(node, ER_EVENT_TOUCH_END, on_gesture_end, record);
+    er_event_set(node, ER_EVENT_TOUCH_CANCEL, on_gesture_cancel, record);
     er_tree_append_child(root, node);
     er_commit();
     return node;
@@ -4045,26 +4047,26 @@ static int test_touch_move_carries_travel_and_velocity(void)
 {
     ERNode* root = create_root();
     EventCounts counts = {0};
-    TouchGestureRecord rec = {0};
-    create_gesture_target(root, &counts, &rec);
+    TouchGestureRecord record = {0};
+    create_gesture_target(root, &counts, &record);
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
     embedded_renderer_tick(16U);
     touch_move(140, 108); /* +40, +8 in 16 ms */
 
-    if (rec.move_count != 1)
+    if (record.move_count != 1)
         return fail("expected one raw touch-move");
-    if (rec.dx != 40 || rec.dy != 8)
+    if (record.delta_x != 40 || record.delta_y != 8)
         return fail("raw touch-move must carry displacement from touch-down");
-    if (!near_vel(rec.vx, 40.0f / 16.0f) || !near_vel(rec.vy, 8.0f / 16.0f))
+    if (!near_vel(record.velocity_x, 40.0f / 16.0f) || !near_vel(record.velocity_y, 8.0f / 16.0f))
         return fail("raw touch-move must carry px/ms velocity");
 
     embedded_renderer_tick(16U);
     touch_move(160, 108); /* +20 more in 16 ms: velocity is the LAST leg, travel is cumulative */
 
-    if (rec.dx != 60)
+    if (record.delta_x != 60)
         return fail("displacement must accumulate from touch-down, not from the previous move");
-    if (!near_vel(rec.vx, 20.0f / 16.0f) || !near_vel(rec.vy, 0.0f))
+    if (!near_vel(record.velocity_x, 20.0f / 16.0f) || !near_vel(record.velocity_y, 0.0f))
         return fail("velocity must be measured over the last move, not the whole gesture");
 
     embedded_renderer_touch(0, ER_TOUCH_UP, 160, 108);
@@ -4083,8 +4085,8 @@ static int test_touch_end_keeps_flick_velocity(void)
 {
     ERNode* root = create_root();
     EventCounts counts = {0};
-    TouchGestureRecord rec = {0};
-    create_gesture_target(root, &counts, &rec);
+    TouchGestureRecord record = {0};
+    create_gesture_target(root, &counts, &record);
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
     embedded_renderer_tick(16U);
@@ -4092,11 +4094,11 @@ static int test_touch_end_keeps_flick_velocity(void)
     embedded_renderer_tick(16U); /* …then a frame of rest before the finger lifts */
     embedded_renderer_touch(0, ER_TOUCH_UP, 132, 100);
 
-    if (rec.end_count != 1)
+    if (record.end_count != 1)
         return fail("expected one raw touch-end");
-    if (rec.dx != 32 || rec.dy != 0)
+    if (record.delta_x != 32 || record.delta_y != 0)
         return fail("raw touch-end must carry the gesture's total displacement");
-    if (!near_vel(rec.vx, 32.0f / 16.0f))
+    if (!near_vel(record.velocity_x, 32.0f / 16.0f))
         return fail("touch-end must keep the last move's velocity across a rest before the lift");
 
     return EXIT_SUCCESS;
@@ -4111,19 +4113,19 @@ static int test_touch_cancel_carries_gesture(void)
 {
     ERNode* root = create_root();
     EventCounts counts = {0};
-    TouchGestureRecord rec = {0};
-    create_gesture_target(root, &counts, &rec);
+    TouchGestureRecord record = {0};
+    create_gesture_target(root, &counts, &record);
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
     embedded_renderer_tick(16U);
     touch_move(100, 76); /* -24 in 16 ms */
     embedded_renderer_touch(0, ER_TOUCH_CANCEL, 100, 76);
 
-    if (rec.cancel_count != 1)
+    if (record.cancel_count != 1)
         return fail("expected one raw touch-cancel");
-    if (rec.dx != 0 || rec.dy != -24)
+    if (record.delta_x != 0 || record.delta_y != -24)
         return fail("raw touch-cancel must carry the gesture's displacement");
-    if (!near_vel(rec.vy, -24.0f / 16.0f))
+    if (!near_vel(record.velocity_y, -24.0f / 16.0f))
         return fail("raw touch-cancel must carry the last move's velocity");
 
     return EXIT_SUCCESS;

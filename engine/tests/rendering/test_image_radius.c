@@ -25,14 +25,17 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 64
-#define FB_H 64
+#define FRAMEBUFFER_WIDTH 64
+#define FRAMEBUFFER_HEIGHT 64
+#define CHANNEL_MAX 255u
+#define CHANNEL_ROUND 127u
+#define OPACITY_OPAQUE 255U
 
 /* The node every scene draws: placed off the origin so the box, not the framebuffer, sets the corners. */
 #define BOX_X 6
 #define BOX_Y 5
-#define BOX_W 40
-#define BOX_H 30
+#define BOX_WIDTH 40
+#define BOX_HEIGHT 30
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -43,8 +46,8 @@
  */
 typedef struct
 {
-    uint32_t fb[FB_W * FB_H]; /**< Premultiplied ARGB8888 pixel storage. */
-    int fmt_calls;            /**< copy_rect_fmt calls received. */
+    uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT]; /**< Premultiplied ARGB8888 pixel storage. */
+    int format_calls;                                             /**< copy_rect_fmt calls received. */
 } TestCtx;
 
 /**
@@ -52,22 +55,22 @@ typedef struct
  */
 typedef struct
 {
-    const char* what;  /**< Label for failure messages. */
-    const char* image; /**< Registered asset name. */
-    bool fmt_backend;  /**< Whether the backend offers copy_rect_fmt. */
-    uint8_t resize;    /**< ERResizeMode. */
-    int16_t padding;   /**< Node padding; the bitmap goes in the content box, the clip stays on the border box. */
+    const char* what;    /**< Label for failure messages. */
+    const char* image;   /**< Registered asset name. */
+    bool format_backend; /**< Whether the backend offers copy_rect_fmt. */
+    uint8_t resize;      /**< ERResizeMode. */
+    int16_t padding;     /**< Node padding; the bitmap goes in the content box, the clip stays on the border box. */
 } DrawCase;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static TestCtx s_tc;
+static TestCtx s_test_context;
 
 /* Opaque white sources: 1:1 for the box in both formats, and a small one the box scales up. */
-static uint32_t s_argb_box[BOX_W * BOX_H];
-static uint16_t s_rgb565_box[BOX_W * BOX_H];
+static uint32_t s_argb_box[BOX_WIDTH * BOX_HEIGHT];
+static uint16_t s_rgb565_box[BOX_WIDTH * BOX_HEIGHT];
 static uint32_t s_argb_small[8 * 8];
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -77,128 +80,131 @@ static uint32_t s_argb_small[8 * 8];
 /**
  * @brief Composites one premultiplied pixel source-over into the framebuffer.
  *
- * @param[in] x  Column.
- * @param[in] y  Row.
- * @param[in] s  Premultiplied ARGB8888 source pixel.
+ * @param[in] x       Column.
+ * @param[in] y       Row.
+ * @param[in] source  Premultiplied ARGB8888 source pixel.
  */
-static void over(int x, int y, uint32_t s)
+static void over(int x, int y, uint32_t source)
 {
-    if (x < 0 || x >= FB_W || y < 0 || y >= FB_H)
+    if (x < 0 || x >= FRAMEBUFFER_WIDTH || y < 0 || y >= FRAMEBUFFER_HEIGHT)
         return;
-    uint32_t* d = &s_tc.fb[y * FB_W + x];
-    const uint32_t inv = 255u - (s >> 24);
+    uint32_t* destination = &s_test_context.framebuffer[y * FRAMEBUFFER_WIDTH + x];
+    const uint32_t inverse_alpha = CHANNEL_MAX - (source >> 24);
     uint32_t out = 0;
-    for (int sh = 0; sh < 32; sh += 8)
+    for (int shift = 0; shift < 32; shift += 8)
     {
-        const uint32_t c = ((s >> sh) & 0xFFu) + (((*d >> sh) & 0xFFu) * inv + 127u) / 255u;
-        out |= (c > 255u ? 255u : c) << sh;
+        const uint32_t channel = ((source >> shift) & 0xFFu)
+                                 + (((*destination >> shift) & 0xFFu) * inverse_alpha + CHANNEL_ROUND) / CHANNEL_MAX;
+        out |= (channel > CHANNEL_MAX ? CHANNEL_MAX : channel) << shift;
     }
-    *d = out;
+    *destination = out;
 }
 
 /**
  * @brief fill_rect stub — premultiplies the straight-alpha colour and composites it.
  *
- * @param[in] argb  Fill color (straight-alpha ARGB8888).
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
- * @param[in] ctx   Unused.
+ * @param[in] argb    Fill color (straight-alpha ARGB8888).
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
+ * @param[in] ctx     Unused.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFu;
-    const uint32_t r = ((argb >> 16) & 0xFFu) * a / 255u;
-    const uint32_t g = ((argb >> 8) & 0xFFu) * a / 255u;
-    const uint32_t b = (argb & 0xFFu) * a / 255u;
-    const uint32_t pm = (a << 24) | (r << 16) | (g << 8) | b;
-    for (int py = y; py < y + h; py++)
-        for (int px = x; px < x + w; px++)
-            over(px, py, pm);
+    const uint32_t alpha = (argb >> 24) & 0xFFu;
+    const uint32_t red = ((argb >> 16) & 0xFFu) * alpha / CHANNEL_MAX;
+    const uint32_t green = ((argb >> 8) & 0xFFu) * alpha / CHANNEL_MAX;
+    const uint32_t blue = (argb & 0xFFu) * alpha / CHANNEL_MAX;
+    const uint32_t premultiplied = (alpha << 24) | (red << 16) | (green << 8) | blue;
+    for (int pixel_y = y; pixel_y < y + height; pixel_y++)
+        for (int pixel_x = x; pixel_x < x + width; pixel_x++)
+            over(pixel_x, pixel_y, premultiplied);
 }
 
 /**
  * @brief copy_rect stub — replaces the destination pixels.
  *
- * @param[in] src     Premultiplied ARGB8888 source.
+ * @param[in] source  Premultiplied ARGB8888 source.
  * @param[in] stride  Source row stride in bytes.
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Unused.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
-            if (x + col >= 0 && x + col < FB_W && y + row >= 0 && y + row < FB_H)
-                s_tc.fb[(y + row) * FB_W + x + col] = s[col];
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
+            if (x + column >= 0 && x + column < FRAMEBUFFER_WIDTH && y + row >= 0 && y + row < FRAMEBUFFER_HEIGHT)
+                s_test_context.framebuffer[(y + row) * FRAMEBUFFER_WIDTH + x + column] = source_row[column];
     }
 }
 
 /**
  * @brief blend_rect stub — composites premultiplied rows source-over.
  *
- * @param[in] src     Premultiplied ARGB8888 source.
+ * @param[in] source  Premultiplied ARGB8888 source.
  * @param[in] stride  Source row stride in bytes.
  * @param[in] alpha   Global opacity (always 255 here).
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Unused.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)alpha;
     (void)ctx;
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
-            over(x + col, y + row, s[col]);
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
+            over(x + column, y + row, source_row[column]);
     }
 }
 
 /**
  * @brief copy_rect_fmt stub — writes ARGB rows verbatim and expands RGB565 ones, as a DMA2D blitter would.
  *
- * @param[in] src     Source rows in @p fmt.
+ * @param[in] source  Source rows in @p format.
  * @param[in] stride  Source row stride in bytes.
- * @param[in] fmt     Source pixel format.
+ * @param[in] format  Source pixel format.
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Unused.
  */
-static void copy_fmt_cb(const void* src, int stride, ERImageFormat fmt, int x, int y, int w, int h, void* ctx)
+static void
+copy_fmt_cb(const void* source, int stride, ERImageFormat format, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    s_tc.fmt_calls++;
-    for (int row = 0; row < h; row++)
+    s_test_context.format_calls++;
+    for (int row = 0; row < height; row++)
     {
-        const uint8_t* s = (const uint8_t*)src + (size_t)row * (size_t)stride;
-        for (int col = 0; col < w; col++)
+        const uint8_t* source_row = (const uint8_t*)source + (size_t)row * (size_t)stride;
+        for (int column = 0; column < width; column++)
         {
-            uint32_t p;
-            if (fmt == ER_IMG_RGB565)
+            uint32_t pixel;
+            if (format == ER_IMG_RGB565)
             {
-                const uint16_t v = ((const uint16_t*)s)[col];
-                const uint32_t r5 = (v >> 11) & 0x1Fu, g6 = (v >> 5) & 0x3Fu, b5 = v & 0x1Fu;
-                p = 0xFF000000u | (((r5 << 3) | (r5 >> 2)) << 16) | (((g6 << 2) | (g6 >> 4)) << 8)
-                    | ((b5 << 3) | (b5 >> 2));
+                const uint16_t rgb565 = ((const uint16_t*)source_row)[column];
+                const uint32_t red_bits = (rgb565 >> 11) & 0x1Fu, green_bits = (rgb565 >> 5) & 0x3Fu,
+                               blue_bits = rgb565 & 0x1Fu;
+                pixel = 0xFF000000u | (((red_bits << 3) | (red_bits >> 2)) << 16)
+                        | (((green_bits << 2) | (green_bits >> 4)) << 8) | ((blue_bits << 3) | (blue_bits >> 2));
             }
             else
-                p = ((const uint32_t*)s)[col];
-            if (x + col >= 0 && x + col < FB_W && y + row >= 0 && y + row < FB_H)
-                s_tc.fb[(y + row) * FB_W + x + col] = p;
+                pixel = ((const uint32_t*)source_row)[column];
+            if (x + column >= 0 && x + column < FRAMEBUFFER_WIDTH && y + row >= 0 && y + row < FRAMEBUFFER_HEIGHT)
+                s_test_context.framebuffer[(y + row) * FRAMEBUFFER_WIDTH + x + column] = pixel;
         }
     }
 }
@@ -210,13 +216,13 @@ static void copy_fmt_cb(const void* src, int stride, ERImageFormat fmt, int x, i
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable description of the failed assertion.
+ * @param[in] message  Human-readable description of the failed assertion.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -225,20 +231,20 @@ static int fail(const char* msg)
  *
  * Installing a backend resets the image registry, so the images are registered after it.
  *
- * @param[in] with_fmt  Whether to offer copy_rect_fmt.
+ * @param[in] with_format  Whether to offer copy_rect_fmt.
  */
-static void set_backend(bool with_fmt)
+static void set_backend(bool with_format)
 {
-    static EmbeddedRenderBackend be;
-    memset(&be, 0, sizeof(be));
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    be.copy_rect_fmt = with_fmt ? copy_fmt_cb : NULL;
-    be.ctx = &s_tc;
-    embedded_renderer_set_backend(&be);
-    er_image_load("argb_box", s_argb_box, BOX_W, BOX_H);
-    er_image_load_rgb565("rgb565_box", s_rgb565_box, BOX_W, BOX_H);
+    static EmbeddedRenderBackend backend;
+    memset(&backend, 0, sizeof(backend));
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    backend.copy_rect_fmt = with_format ? copy_fmt_cb : NULL;
+    backend.ctx = &s_test_context;
+    embedded_renderer_set_backend(&backend);
+    er_image_load("argb_box", s_argb_box, BOX_WIDTH, BOX_HEIGHT);
+    er_image_load_rgb565("rgb565_box", s_rgb565_box, BOX_WIDTH, BOX_HEIGHT);
     er_image_load("argb_small", s_argb_small, 8, 8);
 }
 
@@ -249,89 +255,91 @@ static void set_backend(bool with_fmt)
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
  * @brief Renders one node at the test box over a transparent root and returns the framebuffer's coverage.
  *
- * @param[in]  type   ER_NODE_VIEW (the reference) or ER_NODE_IMAGE.
- * @param[in]  shape  Props carrying the radii (and, for an image, its source); position and size are set here.
- * @param[out] cov    Receives each pixel's premultiplied alpha.
+ * @param[in]  type      ER_NODE_VIEW (the reference) or ER_NODE_IMAGE.
+ * @param[in]  shape     Props carrying the radii (and, for an image, its source); position and size are set here.
+ * @param[out] coverage  Receives each pixel's premultiplied alpha.
  */
-static void render_coverage(ERNodeType type, const ERProps* shape, uint8_t cov[FB_W * FB_H])
+static void
+render_coverage(ERNodeType type, const ERProps* shape, uint8_t coverage[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT])
 {
     er_reset();
-    memset(s_tc.fb, 0, sizeof(s_tc.fb));
-    s_tc.fmt_calls = 0;
+    memset(s_test_context.framebuffer, 0, sizeof(s_test_context.framebuffer));
+    s_test_context.format_calls = 0;
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = FB_W;
-    rp.height = FB_H;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = FRAMEBUFFER_WIDTH;
+    root_props.height = FRAMEBUFFER_HEIGHT;
+    er_node_set_props(root, &root_props);
 
-    ERNode* n = er_node_create(type);
-    ERProps p = *shape;
-    p.position = ER_POS_ABSOLUTE;
-    p.left = BOX_X;
-    p.top = BOX_Y;
-    p.width = BOX_W;
-    p.height = BOX_H;
-    er_node_set_props(n, &p);
+    ERNode* node = er_node_create(type);
+    ERProps props = *shape;
+    props.position = ER_POS_ABSOLUTE;
+    props.left = BOX_X;
+    props.top = BOX_Y;
+    props.width = BOX_WIDTH;
+    props.height = BOX_HEIGHT;
+    er_node_set_props(node, &props);
 
-    er_tree_append_child(root, n);
+    er_tree_append_child(root, node);
     er_tree_set_root(root);
     er_commit();
 
-    for (int i = 0; i < FB_W * FB_H; i++)
-        cov[i] = (uint8_t)(s_tc.fb[i] >> 24);
+    for (int pixel_index = 0; pixel_index < FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT; pixel_index++)
+        coverage[pixel_index] = (uint8_t)(s_test_context.framebuffer[pixel_index] >> 24);
 
-    er_tree_remove_child(root, n);
-    er_node_destroy(n);
+    er_tree_remove_child(root, node);
+    er_node_destroy(node);
     er_node_destroy(root);
 }
 
 /**
  * @brief Compares two coverage masks over a rect, reporting the first difference.
  *
- * @param[in] want  Reference coverage.
- * @param[in] got   Coverage under test.
- * @param[in] x0    Left edge of the compared rect.
- * @param[in] y0    Top edge.
- * @param[in] x1    One past the right edge.
- * @param[in] y1    One past the bottom edge.
- * @param[in] what  Label for the failure message.
+ * @param[in] want   Reference coverage.
+ * @param[in] got    Coverage under test.
+ * @param[in] min_x  Left edge of the compared rect.
+ * @param[in] min_y  Top edge.
+ * @param[in] max_x  One past the right edge.
+ * @param[in] max_y  One past the bottom edge.
+ * @param[in] what   Label for the failure message.
  *
  * @return true when every pixel matches.
  */
-static bool same_coverage(const uint8_t* want, const uint8_t* got, int x0, int y0, int x1, int y1, const char* what)
+static bool
+same_coverage(const uint8_t* want, const uint8_t* got, int min_x, int min_y, int max_x, int max_y, const char* what)
 {
-    for (int y = y0; y < y1; y++)
+    for (int y = min_y; y < max_y; y++)
     {
-        for (int x = x0; x < x1; x++)
+        for (int x = min_x; x < max_x; x++)
         {
-            if (want[y * FB_W + x] != got[y * FB_W + x])
+            if (want[y * FRAMEBUFFER_WIDTH + x] != got[y * FRAMEBUFFER_WIDTH + x])
             {
                 fprintf(stderr,
                         "  %s at (%d,%d): background alpha %u, image alpha %u\n",
                         what,
                         x,
                         y,
-                        want[y * FB_W + x],
-                        got[y * FB_W + x]);
+                        want[y * FRAMEBUFFER_WIDTH + x],
+                        got[y * FRAMEBUFFER_WIDTH + x]);
                 return false;
             }
         }
@@ -356,16 +364,16 @@ static bool same_coverage(const uint8_t* want, const uint8_t* got, int x0, int y
  */
 int main(void)
 {
-    for (int i = 0; i < BOX_W * BOX_H; i++)
+    for (int pixel_index = 0; pixel_index < BOX_WIDTH * BOX_HEIGHT; pixel_index++)
     {
-        s_argb_box[i] = 0xFFFFFFFFu;
-        s_rgb565_box[i] = 0xFFFFu;
+        s_argb_box[pixel_index] = 0xFFFFFFFFu;
+        s_rgb565_box[pixel_index] = 0xFFFFu;
     }
-    for (int i = 0; i < 8 * 8; i++)
-        s_argb_small[i] = 0xFFFFFFFFu;
+    for (int pixel_index = 0; pixel_index < 8 * 8; pixel_index++)
+        s_argb_small[pixel_index] = 0xFFFFFFFFu;
 
-    static uint8_t want[FB_W * FB_H];
-    static uint8_t got[FB_W * FB_H];
+    static uint8_t want[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    static uint8_t got[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
 
     /* -----------------------------------------------------------------------
      * Uniform radius: every path of the scaler matches the background fill.
@@ -378,29 +386,30 @@ int main(void)
         {"scaled", "argb_small", true, ER_RESIZE_STRETCH, 0},
         {"cover", "argb_small", true, ER_RESIZE_COVER, 0},
     };
-    for (size_t k = 0; k < sizeof(k_cases) / sizeof(k_cases[0]); k++)
+    for (size_t case_index = 0; case_index < sizeof(k_cases) / sizeof(k_cases[0]); case_index++)
     {
-        set_backend(k_cases[k].fmt_backend);
+        set_backend(k_cases[case_index].format_backend);
 
         ERProps shape = props_default();
         shape.border_radius = 12;
         shape.background_color = 0xFFFFFFFFu;
         render_coverage(ER_NODE_VIEW, &shape, want);
 
-        if (want[BOX_Y * FB_W + BOX_X] != 0)
+        if (want[BOX_Y * FRAMEBUFFER_WIDTH + BOX_X] != 0)
             return fail("the background reference did not round its own corner");
 
         shape = props_default();
         shape.border_radius = 12;
-        strncpy(shape.image_name, k_cases[k].image, ER_IMAGE_NAME_MAX);
-        shape.resize_mode = k_cases[k].resize;
+        strncpy(shape.image_name, k_cases[case_index].image, ER_IMAGE_NAME_MAX);
+        shape.resize_mode = k_cases[case_index].resize;
         render_coverage(ER_NODE_IMAGE, &shape, got);
 
-        if (!same_coverage(want, got, 0, 0, FB_W, FB_H, k_cases[k].what))
+        if (!same_coverage(want, got, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT, k_cases[case_index].what))
             return fail("a rounded image's coverage differs from a rounded background's");
 
         /* At 1:1 the rows between the arcs still reach the backend as one whole-rect transfer. */
-        if (k_cases[k].fmt_backend && strcmp(k_cases[k].image, "argb_small") != 0 && s_tc.fmt_calls != 1)
+        if (k_cases[case_index].format_backend && strcmp(k_cases[case_index].image, "argb_small") != 0
+            && s_test_context.format_calls != 1)
             return fail("a rounded 1:1 image no longer sends its straight rows as one copy_rect_fmt call");
     }
 
@@ -421,11 +430,11 @@ int main(void)
         strncpy(shape.image_name, "argb_box", ER_IMAGE_NAME_MAX);
         render_coverage(ER_NODE_IMAGE, &shape, got);
 
-        if (got[BOX_Y * FB_W + BOX_X] != 0)
+        if (got[BOX_Y * FRAMEBUFFER_WIDTH + BOX_X] != 0)
             return fail("per-corner radius: the rounded top-left corner still painted");
-        if (got[BOX_Y * FB_W + BOX_X + BOX_W - 1] != 0xFF)
+        if (got[BOX_Y * FRAMEBUFFER_WIDTH + BOX_X + BOX_WIDTH - 1] != 0xFF)
             return fail("per-corner radius: the square top-right corner was clipped");
-        if (!same_coverage(want, got, 0, 0, FB_W, FB_H, "per-corner radii"))
+        if (!same_coverage(want, got, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT, "per-corner radii"))
             return fail("per-corner radius: the image's coverage differs from the background's");
     }
 
@@ -445,10 +454,10 @@ int main(void)
         strncpy(shape.image_name, "argb_small", ER_IMAGE_NAME_MAX);
         render_coverage(ER_NODE_IMAGE, &shape, got);
 
-        if (got[(BOX_Y + pad) * FB_W + BOX_X + pad] != 0)
+        if (got[(BOX_Y + pad) * FRAMEBUFFER_WIDTH + BOX_X + pad] != 0)
             return fail("padding: the content box's corner pixel is outside the border box's arc yet painted");
         if (!same_coverage(
-                want, got, BOX_X + pad, BOX_Y + pad, BOX_X + BOX_W - pad, BOX_Y + BOX_H - pad, "padded image"))
+                want, got, BOX_X + pad, BOX_Y + pad, BOX_X + BOX_WIDTH - pad, BOX_Y + BOX_HEIGHT - pad, "padded image"))
             return fail("padding: the image is not clipped to the border box's rounded silhouette");
     }
 
@@ -459,11 +468,11 @@ int main(void)
         ERProps shape = props_default();
         strncpy(shape.image_name, "argb_box", ER_IMAGE_NAME_MAX);
         render_coverage(ER_NODE_IMAGE, &shape, got);
-        for (int y = 0; y < FB_H; y++)
-            for (int x = 0; x < FB_W; x++)
+        for (int y = 0; y < FRAMEBUFFER_HEIGHT; y++)
+            for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
             {
-                const bool inside = x >= BOX_X && x < BOX_X + BOX_W && y >= BOX_Y && y < BOX_Y + BOX_H;
-                if (got[y * FB_W + x] != (inside ? 0xFF : 0x00))
+                const bool inside = x >= BOX_X && x < BOX_X + BOX_WIDTH && y >= BOX_Y && y < BOX_Y + BOX_HEIGHT;
+                if (got[y * FRAMEBUFFER_WIDTH + x] != (inside ? 0xFF : 0x00))
                     return fail("no radius: a square image does not cover exactly its box");
             }
     }

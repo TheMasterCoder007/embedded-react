@@ -26,11 +26,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#define OPACITY_OPAQUE 255U
+#define SCREEN_WIDTH 320
+#define SCREEN_HEIGHT 240
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_fb[320 * 240];
+static uint32_t s_framebuffer[SCREEN_WIDTH * SCREEN_HEIGHT];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — null backend
@@ -39,65 +43,66 @@ static uint32_t s_fb[320 * 240];
 /**
  * @brief Null fill_rect; writes a uniform solid color into the test framebuffer.
  *
- * @param[in] argb  Straight-alpha ARGB8888 fill color.
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width.
- * @param[in] h     Height.
- * @param[in] ctx   Unused.
+ * @param[in] argb    Straight-alpha ARGB8888 fill color.
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
+ * @param[in] ctx     Unused.
  */
-static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    for (int row = y; row < y + h; row++)
-        for (int col = x; col < x + w; col++)
-            if (row >= 0 && row < 240 && col >= 0 && col < 320)
-                s_fb[row * 320 + col] = argb;
+    for (int row = y; row < y + height; row++)
+        for (int column = x; column < x + width; column++)
+            if (row >= 0 && row < SCREEN_HEIGHT && column >= 0 && column < SCREEN_WIDTH)
+                s_framebuffer[row * SCREEN_WIDTH + column] = argb;
 }
 
 /**
  * @brief Null copy_rect — no-op for tests that only check structural behavior.
  *
- * @param[in] src            Source pixel buffer.
- * @param[in] src_stride_bytes  Row stride.
- * @param[in] x              Destination left edge.
- * @param[in] y              Destination top edge.
- * @param[in] w              Width.
- * @param[in] h              Height.
- * @param[in] ctx            Unused.
+ * @param[in] source               Source pixel buffer.
+ * @param[in] source_stride_bytes  Row stride.
+ * @param[in] x                    Destination left edge.
+ * @param[in] y                    Destination top edge.
+ * @param[in] width                Width.
+ * @param[in] height               Height.
+ * @param[in] ctx                  Unused.
  */
-static void fb_copy(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx)
+static void fb_copy(const void* source, int source_stride_bytes, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)src_stride_bytes;
+    (void)source;
+    (void)source_stride_bytes;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief Null blend_rect — no-op for structural tests.
  *
- * @param[in] src            Source pixel buffer.
- * @param[in] src_stride_bytes  Row stride.
- * @param[in] alpha          Global blend alpha.
- * @param[in] x              Destination left edge.
- * @param[in] y              Destination top edge.
- * @param[in] w              Width.
- * @param[in] h              Height.
- * @param[in] ctx            Unused.
+ * @param[in] source               Source pixel buffer.
+ * @param[in] source_stride_bytes  Row stride.
+ * @param[in] alpha                Global blend alpha.
+ * @param[in] x                    Destination left edge.
+ * @param[in] y                    Destination top edge.
+ * @param[in] width                Width.
+ * @param[in] height               Height.
+ * @param[in] ctx                  Unused.
  */
-static void fb_blend(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void
+fb_blend(const void* source, int source_stride_bytes, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)src_stride_bytes;
+    (void)source;
+    (void)source_stride_bytes;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -111,18 +116,19 @@ static void fb_blend(const void* src, int src_stride_bytes, uint8_t alpha, int x
  */
 static ERProps props_auto(void)
 {
-    ERProps p;
-    memset(&p, 0, sizeof(p));
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = p.height = -32768;
-    p.min_width = p.max_width = -32768;
-    p.min_height = p.max_height = -32768;
-    p.padding = p.padding_left = p.padding_top = p.padding_right = p.padding_bottom = -32768;
-    p.margin = p.margin_left = p.margin_top = p.margin_right = p.margin_bottom = -32768;
-    p.gap = p.row_gap = p.column_gap = -32768;
-    p.flex_basis = -32768;
-    p.opacity = 255U;
-    return p;
+    ERProps props;
+    memset(&props, 0, sizeof(props));
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = props.padding_right = props.padding_bottom =
+        ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
@@ -135,7 +141,7 @@ static void init_backend(void)
         .copy_rect = fb_copy,
         .blend_rect = fb_blend,
     };
-    memset(s_fb, 0, sizeof(s_fb));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     embedded_renderer_set_backend(&k_backend);
 }
 
@@ -156,27 +162,27 @@ static void test_activity_indicator_renders(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* act = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
-    p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 48;
-    p.height = 48;
-    p.indicator_color = 0xFFFFFFFFU;
-    p.animating = 1;
-    er_node_set_props(act, &p);
+    ERNode* activity_indicator = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
+    props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = 48;
+    props.height = 48;
+    props.indicator_color = 0xFFFFFFFFU;
+    props.animating = 1;
+    er_node_set_props(activity_indicator, &props);
 
-    er_tree_append_child(root, act);
+    er_tree_append_child(root, activity_indicator);
     er_tree_set_root(root);
 
     /* Initial spin angle must be 0 before any tick. */
-    assert(act->transform_rotate_z == 0.0f && "Initial spin angle must be 0");
-    assert(act->props.activity_indicator.animating == 1 && "ActivityIndicator must be animating");
+    assert(activity_indicator->transform_rotate_z == 0.0f && "Initial spin angle must be 0");
+    assert(activity_indicator->props.activity_indicator.animating == 1 && "ActivityIndicator must be animating");
 
     /* First commit renders without crash. */
     er_commit();
@@ -185,21 +191,21 @@ static void test_activity_indicator_renders(void)
     embedded_renderer_tick(500);
     er_commit();
 
-    assert(act->transform_rotate_z > 100.0f && act->transform_rotate_z < 260.0f
+    assert(activity_indicator->transform_rotate_z > 100.0f && activity_indicator->transform_rotate_z < 260.0f
            && "Spin angle must advance after 500 ms tick");
 
     /* Stopping the animation via props clears rotation advancement. */
-    p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 48;
-    p.height = 48;
-    p.indicator_color = 0xFFFFFFFFU;
-    p.animating = 0;
-    er_node_set_props(act, &p);
-    const float stopped_angle = act->transform_rotate_z;
+    props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = 48;
+    props.height = 48;
+    props.indicator_color = 0xFFFFFFFFU;
+    props.animating = 0;
+    er_node_set_props(activity_indicator, &props);
+    const float stopped_angle = activity_indicator->transform_rotate_z;
     embedded_renderer_tick(200);
     er_commit();
-    assert(act->transform_rotate_z == stopped_angle && "Spin angle must not change when animating=0");
+    assert(activity_indicator->transform_rotate_z == stopped_angle && "Spin angle must not change when animating=0");
 
     printf("PASS: test_activity_indicator_renders\n");
 }
@@ -221,43 +227,43 @@ static void test_switch_renders(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 320;
-    p.height = 240;
-    p.background_color = 0xFF111111U;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    props.background_color = 0xFF111111U;
+    er_node_set_props(root, &props);
 
-    ERNode* sw = er_node_create(ER_NODE_SWITCH);
-    p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 60;
-    p.height = 30;
-    p.top = 105;
-    p.left = 130;
-    p.switch_value = 0;
-    p.track_color_false = 0xFF767577U;
-    p.track_color_true = 0xFF2A9D8FU;
-    p.thumb_color = 0xFFFFFFFFU;
-    er_node_set_props(sw, &p);
+    ERNode* switch_node = er_node_create(ER_NODE_SWITCH);
+    props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = 60;
+    props.height = 30;
+    props.top = 105;
+    props.left = 130;
+    props.switch_value = 0;
+    props.track_color_false = 0xFF767577U;
+    props.track_color_true = 0xFF2A9D8FU;
+    props.thumb_color = 0xFFFFFFFFU;
+    er_node_set_props(switch_node, &props);
 
-    er_tree_append_child(root, sw);
+    er_tree_append_child(root, switch_node);
     er_tree_set_root(root);
     er_commit();
 
     /* switch_thumb_t should start at 0.0 (off). */
-    assert(sw->switch_thumb_progress < 0.1f && "Switch thumb must start in off position");
+    assert(switch_node->switch_thumb_progress < 0.1f && "Switch thumb must start in off position");
 
     /* Toggle the switch on. */
-    p.switch_value = 1;
-    er_node_set_props(sw, &p);
+    props.switch_value = 1;
+    er_node_set_props(switch_node, &props);
 
     /* After a 300 ms tick the animation should be complete (duration is 200 ms). */
     embedded_renderer_tick(300);
     er_commit();
 
-    assert(sw->switch_thumb_progress > 0.9f && "Switch thumb must reach on position after animation");
-    assert(sw->props.switch_props.value == 1 && "Switch value must be 1 after set");
+    assert(switch_node->switch_thumb_progress > 0.9f && "Switch thumb must reach on position after animation");
+    assert(switch_node->props.switch_props.value == 1 && "Switch value must be 1 after set");
 
     printf("PASS: test_switch_renders\n");
 }
@@ -299,61 +305,61 @@ static void test_text_input_keyboard(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
-    p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 200;
-    p.height = 36;
-    p.top = 102;
-    p.left = 60;
-    p.background_color = 0xFF1A2840U;
-    p.border_color = 0xFF2A9D8FU;
-    p.border_width = 2;
-    p.border_radius = 6;
-    p.color = 0xFFFFFFFFU;
-    p.font_size = 14;
-    p.editable = 1;
-    strncpy(p.placeholder, "Type here...", ER_PLACEHOLDER_MAX);
-    er_node_set_props(ti, &p);
+    ERNode* text_input = er_node_create(ER_NODE_TEXT_INPUT);
+    props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = 200;
+    props.height = 36;
+    props.top = 102;
+    props.left = 60;
+    props.background_color = 0xFF1A2840U;
+    props.border_color = 0xFF2A9D8FU;
+    props.border_width = 2;
+    props.border_radius = 6;
+    props.color = 0xFFFFFFFFU;
+    props.font_size = 14;
+    props.editable = 1;
+    strncpy(props.placeholder, "Type here...", ER_PLACEHOLDER_MAX);
+    er_node_set_props(text_input, &props);
 
-    er_event_set(ti, ER_EVENT_CHANGE_TEXT, on_change_text, NULL);
+    er_event_set(text_input, ER_EVENT_CHANGE_TEXT, on_change_text, NULL);
 
-    er_tree_append_child(root, ti);
+    er_tree_append_child(root, text_input);
     er_tree_set_root(root);
     er_commit();
 
     /* Focus the input. */
-    er_text_input_focus(ti);
-    assert(ti->is_focused && "TextInput must be focused after er_text_input_focus");
+    er_text_input_focus(text_input);
+    assert(text_input->is_focused && "TextInput must be focused after er_text_input_focus");
 
     /* Type 'H', 'i'. */
     embedded_renderer_key(0, "H");
     embedded_renderer_key(0, "i");
 
     assert(s_change_count == 2 && "Change event must fire for each key");
-    assert(strcmp(er_text_input_get_text(ti), "Hi") == 0 && "TextInput text must match typed keys");
+    assert(strcmp(er_text_input_get_text(text_input), "Hi") == 0 && "TextInput text must match typed keys");
 
     /* Backspace. */
     embedded_renderer_key(ER_KEY_BACKSPACE, NULL);
-    assert(strcmp(er_text_input_get_text(ti), "H") == 0 && "Backspace must remove last character");
+    assert(strcmp(er_text_input_get_text(text_input), "H") == 0 && "Backspace must remove last character");
 
     /* Programmatic set. */
-    er_text_input_set_text(ti, "Hello");
-    assert(strcmp(er_text_input_get_text(ti), "Hello") == 0 && "er_text_input_set_text must replace text");
+    er_text_input_set_text(text_input, "Hello");
+    assert(strcmp(er_text_input_get_text(text_input), "Hello") == 0 && "er_text_input_set_text must replace text");
 
     /* Blur. */
     er_text_input_blur();
-    assert(!ti->is_focused && "TextInput must not be focused after blur");
+    assert(!text_input->is_focused && "TextInput must not be focused after blur");
 
     /* Key events should be ignored when unfocused. */
     embedded_renderer_key(0, "X");
-    assert(strcmp(er_text_input_get_text(ti), "Hello") == 0 && "Unfocused input must not accept key events");
+    assert(strcmp(er_text_input_get_text(text_input), "Hello") == 0 && "Unfocused input must not accept key events");
 
     printf("PASS: test_text_input_keyboard\n");
 }
@@ -361,24 +367,24 @@ static void test_text_input_keyboard(void)
 /**
  * @brief Most runs of one color along any row of a box in the test framebuffer.
  *
- * @param[in] argb  Color to look for.
- * @param[in] x     Box left edge.
- * @param[in] y     Box top edge.
- * @param[in] w     Box width.
- * @param[in] h     Box height.
+ * @param[in] argb    Color to look for.
+ * @param[in] x       Box left edge.
+ * @param[in] y       Box top edge.
+ * @param[in] width   Box width.
+ * @param[in] height  Box height.
  *
  * @return The largest number of separate runs on one row.
  */
-static int max_runs_in_box(uint32_t argb, int x, int y, int w, int h)
+static int max_runs_in_box(uint32_t argb, int x, int y, int width, int height)
 {
     int best = 0;
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
         int runs = 0;
         bool in_run = false;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            const bool hit = s_fb[row * 320 + col] == argb;
+            const bool hit = s_framebuffer[row * SCREEN_WIDTH + column] == argb;
             if (hit && !in_run)
                 runs++;
             in_run = hit;
@@ -392,20 +398,20 @@ static int max_runs_in_box(uint32_t argb, int x, int y, int w, int h)
 /**
  * @brief Leftmost column of a box in the test framebuffer that holds a color.
  *
- * @param[in] argb  Color to look for.
- * @param[in] x     Box left edge.
- * @param[in] y     Box top edge.
- * @param[in] w     Box width.
- * @param[in] h     Box height.
+ * @param[in] argb    Color to look for.
+ * @param[in] x       Box left edge.
+ * @param[in] y       Box top edge.
+ * @param[in] width   Box width.
+ * @param[in] height  Box height.
  *
  * @return The column, or -1 when the color is not there.
  */
-static int first_col_in_box(uint32_t argb, int x, int y, int w, int h)
+static int first_col_in_box(uint32_t argb, int x, int y, int width, int height)
 {
-    for (int col = x; col < x + w; col++)
-        for (int row = y; row < y + h; row++)
-            if (s_fb[row * 320 + col] == argb)
-                return col;
+    for (int column = x; column < x + width; column++)
+        for (int row = y; row < y + height; row++)
+            if (s_framebuffer[row * SCREEN_WIDTH + column] == argb)
+                return column;
     return -1;
 }
 
@@ -419,57 +425,62 @@ static void test_text_input_secure(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
-    p = props_auto();
-    p.width = 200;
-    p.height = 36;
-    p.background_color = 0xFF1A2840U;
-    p.color = 0xFFFFFFFFU;
-    p.cursor_color = 0xFFFF0000U;
-    p.font_size = 16;
-    p.editable = 1;
-    p.secure_text_entry = 1;
-    p.padding_horizontal = p.padding_vertical = -32768; /* unset, so the field's own padding applies */
-    er_node_set_props(ti, &p);
-    er_tree_append_child(root, ti);
+    ERNode* text_input = er_node_create(ER_NODE_TEXT_INPUT);
+    props = props_auto();
+    props.width = 200;
+    props.height = 36;
+    props.background_color = 0xFF1A2840U;
+    props.color = 0xFFFFFFFFU;
+    props.cursor_color = 0xFFFF0000U;
+    props.font_size = 16;
+    props.editable = 1;
+    props.secure_text_entry = 1;
+    props.padding_horizontal = props.padding_vertical = ER_LAYOUT_AUTO; /* unset, so the field's own padding applies */
+    er_node_set_props(text_input, &props);
+    er_tree_append_child(root, text_input);
     er_tree_set_root(root);
-    er_text_input_set_text(ti, "a\303\251b"); /* three characters in four bytes */
+    er_text_input_set_text(text_input, "a\303\251b"); /* three characters in four bytes */
     er_commit();
 
     /* The content box: the field's default 4 px / 3 px padding, no border. */
-    const int cx = ti->computed.x + 4;
-    const int cy = ti->computed.y + 3;
-    const int cw = ti->computed.width - 8;
-    const int ch = ti->computed.height - 6;
-    assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) == 3 && "One dot per character, not per byte");
+    const int content_x = text_input->computed.x + 4;
+    const int content_y = text_input->computed.y + 3;
+    const int content_width = text_input->computed.width - 8;
+    const int content_height = text_input->computed.height - 6;
+    assert(max_runs_in_box(0xFFFFFFFFU, content_x, content_y, content_width, content_height) == 3
+           && "One dot per character, not per byte");
 
     /* At 16 px the dots are 6 px wide and 4 px apart, the first 2 px in; the cursor goes after the last. */
-    er_text_input_set_text(ti, "WWWWWW");
-    er_text_input_focus(ti);
+    er_text_input_set_text(text_input, "WWWWWW");
+    er_text_input_focus(text_input);
     const uint32_t phase = (uint32_t)(er_now_ms64() % 1000U); /* the cursor shows for the first half of 1 s */
     if (phase >= 500U)
         embedded_renderer_tick(1000U - phase);
     er_commit();
-    assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) == 6 && "A dot per character");
-    assert(first_col_in_box(0xFFFF0000U, cx, cy, cw, ch) == cx + 6 * 10 && "The cursor must follow the dots");
+    assert(max_runs_in_box(0xFFFFFFFFU, content_x, content_y, content_width, content_height) == 6
+           && "A dot per character");
+    assert(first_col_in_box(0xFFFF0000U, content_x, content_y, content_width, content_height) == content_x + 6 * 10
+           && "The cursor must follow the dots");
 
-    p.secure_text_entry = 0;
-    er_node_set_props(ti, &p);
+    props.secure_text_entry = 0;
+    er_node_set_props(text_input, &props);
     er_commit();
-    assert(max_runs_in_box(0xFFFFFFFFU, cx, cy, cw, ch) != 6 && "No dots once secureTextEntry is cleared");
+    assert(max_runs_in_box(0xFFFFFFFFU, content_x, content_y, content_width, content_height) != 6
+           && "No dots once secureTextEntry is cleared");
 
     /* A font size past the text renderer's range is clamped for the dots too: 2 dots at 96 px advance 60 each. */
-    p.secure_text_entry = 1;
-    p.font_size = 200;
-    er_node_set_props(ti, &p);
-    er_text_input_set_text(ti, "ab");
+    props.secure_text_entry = 1;
+    props.font_size = 200;
+    er_node_set_props(text_input, &props);
+    er_text_input_set_text(text_input, "ab");
     er_commit();
-    assert(first_col_in_box(0xFFFF0000U, cx, cy, cw, ch) == cx + 2 * 60 && "Dots past 96 px must size as at 96 px");
+    assert(first_col_in_box(0xFFFF0000U, content_x, content_y, content_width, content_height) == content_x + 2 * 60
+           && "Dots past 96 px must size as at 96 px");
 
     er_text_input_blur();
     printf("PASS: test_text_input_secure\n");
@@ -485,36 +496,36 @@ static void test_text_input_read_only(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
-    p = props_auto();
-    p.width = 200;
-    p.height = 36;
-    p.editable = 0;
-    er_node_set_props(ti, &p);
-    er_event_set(ti, ER_EVENT_CHANGE_TEXT, on_change_text, NULL);
-    er_tree_append_child(root, ti);
+    ERNode* text_input = er_node_create(ER_NODE_TEXT_INPUT);
+    props = props_auto();
+    props.width = 200;
+    props.height = 36;
+    props.editable = 0;
+    er_node_set_props(text_input, &props);
+    er_event_set(text_input, ER_EVENT_CHANGE_TEXT, on_change_text, NULL);
+    er_tree_append_child(root, text_input);
     er_tree_set_root(root);
-    er_text_input_set_text(ti, "Hi");
+    er_text_input_set_text(text_input, "Hi");
     er_commit();
 
-    er_text_input_focus(ti);
+    er_text_input_focus(text_input);
     embedded_renderer_key(0, "X");
-    assert(strcmp(er_text_input_get_text(ti), "Hi") == 0 && "A read-only input must ignore typing");
+    assert(strcmp(er_text_input_get_text(text_input), "Hi") == 0 && "A read-only input must ignore typing");
     embedded_renderer_key(ER_KEY_BACKSPACE, NULL);
-    assert(strcmp(er_text_input_get_text(ti), "Hi") == 0 && "A read-only input must ignore backspace");
+    assert(strcmp(er_text_input_get_text(text_input), "Hi") == 0 && "A read-only input must ignore backspace");
     assert(s_change_count == 0 && "A read-only input must not report a change");
 
-    er_props_default(&p);
-    p.width = 200;
-    p.height = 36;
-    er_node_set_props(ti, &p);
+    er_props_default(&props);
+    props.width = 200;
+    props.height = 36;
+    er_node_set_props(text_input, &props);
     embedded_renderer_key(0, "!");
-    assert(strcmp(er_text_input_get_text(ti), "Hi!") == 0 && "Default props must leave the input editable");
+    assert(strcmp(er_text_input_get_text(text_input), "Hi!") == 0 && "Default props must leave the input editable");
 
     er_text_input_blur();
     printf("PASS: test_text_input_read_only\n");
@@ -537,14 +548,14 @@ static void count_event(ERNode* node, const EREventData* data, void* user_data)
  */
 static ERNode* append_text_input(ERNode* parent)
 {
-    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
-    ERProps p = props_auto();
-    p.width = 200;
-    p.height = 36;
-    p.editable = 1;
-    er_node_set_props(ti, &p);
-    er_tree_append_child(parent, ti);
-    return ti;
+    ERNode* text_input = er_node_create(ER_NODE_TEXT_INPUT);
+    ERProps props = props_auto();
+    props.width = 200;
+    props.height = 36;
+    props.editable = 1;
+    er_node_set_props(text_input, &props);
+    er_tree_append_child(parent, text_input);
+    return text_input;
 }
 
 /**
@@ -562,24 +573,25 @@ static void test_text_input_destroyed_while_focused(void)
             er_reset();
 
             ERNode* root = er_node_create(ER_NODE_VIEW);
-            ERProps p = props_auto();
-            p.width = 320;
-            p.height = 240;
-            p.background_color = 0xFF000000U;
-            er_node_set_props(root, &p);
+            ERProps props = props_auto();
+            props.width = SCREEN_WIDTH;
+            props.height = SCREEN_HEIGHT;
+            props.background_color = 0xFF000000U;
+            er_node_set_props(root, &props);
             er_tree_set_root(root);
 
-            ERNode* ti = append_text_input(root);
-            er_text_input_focus(ti);
+            ERNode* text_input = append_text_input(root);
+            er_text_input_focus(text_input);
             er_commit();
             er_commit(); /* past the first frame's full repaint, so the next commit repaints only what changed */
 #if ERUI_ONSCREEN_KEYBOARD
-            assert(s_fb[239 * 320] != 0xFF000000U && "The keyboard must be on screen, or the scenario proves nothing");
+            assert(s_framebuffer[(SCREEN_HEIGHT - 1) * SCREEN_WIDTH] != 0xFF000000U
+                   && "The keyboard must be on screen, or the scenario proves nothing");
 #endif
 
-            const uint16_t slot = ti->tag;
-            er_tree_remove_child(root, ti);
-            er_node_destroy(ti);
+            const uint16_t slot = text_input->tag;
+            er_tree_remove_child(root, text_input);
+            er_node_destroy(text_input);
 
             ERNode* next = as_input ? append_text_input(root) : er_node_create(ER_NODE_VIEW);
             if (!as_input)
@@ -605,7 +617,7 @@ static void test_text_input_destroyed_while_focused(void)
 
                 er_commit();
 #if ERUI_ONSCREEN_KEYBOARD
-                assert(s_fb[239 * 320] == 0xFF000000U
+                assert(s_framebuffer[(SCREEN_HEIGHT - 1) * SCREEN_WIDTH] == 0xFF000000U
                        && "The keyboard must be erased with the input it was typing into");
 #endif
             }
@@ -631,26 +643,26 @@ static void test_modal_visible(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 320;
-    p.height = 240;
-    p.background_color = 0xFF223344U; /* distinct background color */
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    props.background_color = 0xFF223344U; /* distinct background color */
+    er_node_set_props(root, &props);
 
     ERNode* modal = er_node_create(ER_NODE_MODAL);
-    p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
+    props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
     /* Absolute position fills the root. */
-    p.position = 1; /* ER_POS_ABSOLUTE */
-    p.left = 0;
-    p.top = 0;
-    p.width = 320;
-    p.height = 240;
-    p.background_color = 0xFF172233U;
-    p.modal_visible = 0;
-    p.backdrop_color = 0x88000000U;
-    er_node_set_props(modal, &p);
+    props.position = 1; /* ER_POS_ABSOLUTE */
+    props.left = 0;
+    props.top = 0;
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    props.background_color = 0xFF172233U;
+    props.modal_visible = 0;
+    props.backdrop_color = 0x88000000U;
+    er_node_set_props(modal, &props);
 
     er_tree_append_child(root, modal);
     er_tree_set_root(root);
@@ -660,8 +672,8 @@ static void test_modal_visible(void)
     assert(modal->layout.display == 1 && "Hidden modal must have display:none"); /* ER_DISPLAY_NONE=1 */
 
     /* Show the modal. */
-    p.modal_visible = 1;
-    er_node_set_props(modal, &p);
+    props.modal_visible = 1;
+    er_node_set_props(modal, &props);
     er_commit();
 
     assert(modal->modal_visible == 1 && "Modal must be visible after setting modal_visible=1");
@@ -687,46 +699,47 @@ static void test_flatlist_scrolls(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* fl = er_node_create(ER_NODE_FLAT_LIST);
-    p = props_auto();
-    p.left = p.top = p.right = p.bottom = -32768;
-    p.flex_basis = -32768; /* ER_LAYOUT_AUTO */
-    p.width = 320;
-    p.height = 120;
-    p.overflow = 2;       /* ER_OVERFLOW_SCROLL */
-    p.flex_direction = 0; /* ER_FLEX_COL */
-    p.align_items = 1;    /* ER_ALIGN_STRETCH */
-    er_node_set_props(fl, &p);
+    ERNode* flat_list = er_node_create(ER_NODE_FLAT_LIST);
+    props = props_auto();
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.width = SCREEN_WIDTH;
+    props.height = 120;
+    props.overflow = 2;       /* ER_OVERFLOW_SCROLL */
+    props.flex_direction = 0; /* ER_FLEX_COL */
+    props.align_items = 1;    /* ER_ALIGN_STRETCH */
+    er_node_set_props(flat_list, &props);
 
     /* Add 5 tall rows to exceed the viewport. */
-    for (int i = 0; i < 5; i++)
+    for (int row_index = 0; row_index < 5; row_index++)
     {
         ERNode* row = er_node_create(ER_NODE_VIEW);
-        p = props_auto();
-        p.left = p.top = p.right = p.bottom = -32768;
-        p.flex_basis = -32768; /* ER_LAYOUT_AUTO */
-        p.height = 40;
-        p.flex_shrink = 0; /* do not shrink below explicit height */
-        er_node_set_props(row, &p);
-        er_tree_append_child(fl, row);
+        props = props_auto();
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.flex_basis = ER_LAYOUT_AUTO;
+        props.height = 40;
+        props.flex_shrink = 0; /* do not shrink below explicit height */
+        er_node_set_props(row, &props);
+        er_tree_append_child(flat_list, row);
     }
 
-    er_tree_append_child(root, fl);
+    er_tree_append_child(root, flat_list);
     er_tree_set_root(root);
     er_commit();
 
     /* Content size (5×40=200) must exceed viewport (120). */
-    assert(fl->scroll_content_height > fl->computed.height && "FlatList content must exceed viewport height");
+    assert(flat_list->scroll_content_height > flat_list->computed.height
+           && "FlatList content must exceed viewport height");
 
     /* Programmatic scroll. */
-    er_scroll_view_set_offset(fl, 0.0f, 60.0f);
-    assert(fl->scroll_offset_y == 60.0f && "FlatList scroll offset must update");
+    er_scroll_view_set_offset(flat_list, 0.0f, 60.0f);
+    assert(flat_list->scroll_offset_y == 60.0f && "FlatList scroll offset must update");
 
     printf("PASS: test_flatlist_scrolls\n");
 }
@@ -755,24 +768,24 @@ static void test_keyboard_done_submits(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
-    p = props_auto();
-    p.width = 200;
-    p.height = 36;
-    p.editable = 1;
-    er_node_set_props(ti, &p);
-    er_event_set(ti, ER_EVENT_SUBMIT_EDITING, on_keyboard_submit, NULL);
-    er_tree_append_child(root, ti);
+    ERNode* text_input = er_node_create(ER_NODE_TEXT_INPUT);
+    props = props_auto();
+    props.width = 200;
+    props.height = 36;
+    props.editable = 1;
+    er_node_set_props(text_input, &props);
+    er_event_set(text_input, ER_EVENT_SUBMIT_EDITING, on_keyboard_submit, NULL);
+    er_tree_append_child(root, text_input);
     er_tree_set_root(root);
-    er_text_input_set_text(ti, "Hi");
+    er_text_input_set_text(text_input, "Hi");
     er_commit();
 
-    er_text_input_focus(ti);
+    er_text_input_focus(text_input);
     er_commit();
 
     /* The default layout's done key is in the bottom right corner. */
@@ -781,7 +794,7 @@ static void test_keyboard_done_submits(void)
 
     assert(s_submit_count == 1 && "The done key must submit once");
     assert(s_focused_at_submit && "The input must still be focused when it submits");
-    assert(!ti->is_focused && "The done key must take the focus away");
+    assert(!text_input->is_focused && "The done key must take the focus away");
 
     printf("PASS: test_keyboard_done_submits\n");
 }
@@ -799,11 +812,11 @@ static void on_submit_replaces(ERNode* node, const EREventData* data, void* user
     er_tree_remove_child(root, node);
     er_node_destroy(node);
     s_replacement = er_node_create(ER_NODE_TEXT_INPUT);
-    ERProps p = props_auto();
-    p.width = 200;
-    p.height = 36;
-    p.editable = 1;
-    er_node_set_props(s_replacement, &p);
+    ERProps props = props_auto();
+    props.width = 200;
+    props.height = 36;
+    props.editable = 1;
+    er_node_set_props(s_replacement, &props);
     er_tree_append_child(root, s_replacement);
     er_text_input_focus(s_replacement);
 }
@@ -817,23 +830,23 @@ static void test_keyboard_done_keeps_a_new_focus(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_auto();
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = props_auto();
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
 
-    ERNode* ti = er_node_create(ER_NODE_TEXT_INPUT);
-    p = props_auto();
-    p.width = 200;
-    p.height = 36;
-    p.editable = 1;
-    er_node_set_props(ti, &p);
-    er_event_set(ti, ER_EVENT_SUBMIT_EDITING, on_submit_replaces, root);
-    er_tree_append_child(root, ti);
+    ERNode* text_input = er_node_create(ER_NODE_TEXT_INPUT);
+    props = props_auto();
+    props.width = 200;
+    props.height = 36;
+    props.editable = 1;
+    er_node_set_props(text_input, &props);
+    er_event_set(text_input, ER_EVENT_SUBMIT_EDITING, on_submit_replaces, root);
+    er_tree_append_child(root, text_input);
     er_tree_set_root(root);
     er_commit();
 
-    er_text_input_focus(ti);
+    er_text_input_focus(text_input);
     er_commit();
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 310, 235);

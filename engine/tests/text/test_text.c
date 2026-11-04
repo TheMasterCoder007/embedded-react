@@ -25,8 +25,8 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 320
-#define FB_H 240
+#define FRAMEBUFFER_WIDTH 320
+#define FRAMEBUFFER_HEIGHT 240
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -38,7 +38,7 @@
 typedef struct
 {
     int pixels_drawn;  /**< Total pixel area covered by in-bounds draw calls. */
-    int draw_ops;      /**< Total number of draw calls received. */
+    int draw_count;    /**< Total number of draw calls received. */
     int out_of_bounds; /**< Number of draw calls that fell outside the framebuffer. */
     int min_x;         /**< Leftmost x coordinate seen across all draw calls. */
     int max_x;         /**< Rightmost x+w coordinate seen across all draw calls. */
@@ -53,115 +53,115 @@ typedef struct
 /**
  * @brief Resets a TestCtx to its zero state with sentinel min/max values.
  *
- * @param[out] t  TestCtx to reset.
+ * @param[out] test_context  TestCtx to reset.
  */
-static void ctx_reset(TestCtx* t)
+static void ctx_reset(TestCtx* test_context)
 {
-    memset(t, 0, sizeof(*t));
-    t->min_x = FB_W;
-    t->max_x = 0;
-    t->min_y = FB_H;
-    t->max_y = 0;
+    memset(test_context, 0, sizeof(*test_context));
+    test_context->min_x = FRAMEBUFFER_WIDTH;
+    test_context->max_x = 0;
+    test_context->min_y = FRAMEBUFFER_HEIGHT;
+    test_context->max_y = 0;
 }
 
 /**
  * @brief Backend fill_rect callback that records pixel statistics into a TestCtx.
  *
- * @param[in] argb  ARGB8888 fill color (unused).
- * @param[in] x     Left edge of the fill rectangle.
- * @param[in] y     Top edge of the fill rectangle.
- * @param[in] w     Width of the fill rectangle in pixels.
- * @param[in] h     Height of the fill rectangle in pixels.
- * @param[in] ctx   Pointer to the TestCtx to update.
+ * @param[in] argb    ARGB8888 fill color (unused).
+ * @param[in] x       Left edge of the fill rectangle.
+ * @param[in] y       Top edge of the fill rectangle.
+ * @param[in] width   Width of the fill rectangle in pixels.
+ * @param[in] height  Height of the fill rectangle in pixels.
+ * @param[in] ctx     Pointer to the TestCtx to update.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
+    TestCtx* test_context = ctx;
     (void)argb;
-    t->draw_ops++;
-    if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
-        t->out_of_bounds++;
+    test_context->draw_count++;
+    if (x < 0 || y < 0 || x + width > FRAMEBUFFER_WIDTH || y + height > FRAMEBUFFER_HEIGHT)
+        test_context->out_of_bounds++;
     else
     {
-        t->pixels_drawn += w * h;
-        if (x < t->min_x)
-            t->min_x = x;
-        if (x + w > t->max_x)
-            t->max_x = x + w;
-        if (y < t->min_y)
-            t->min_y = y;
-        if (y + h > t->max_y)
-            t->max_y = y + h;
+        test_context->pixels_drawn += width * height;
+        if (x < test_context->min_x)
+            test_context->min_x = x;
+        if (x + width > test_context->max_x)
+            test_context->max_x = x + width;
+        if (y < test_context->min_y)
+            test_context->min_y = y;
+        if (y + height > test_context->max_y)
+            test_context->max_y = y + height;
     }
 }
 
 /**
  * @brief Backend copy_rect callback that records statistics into a TestCtx.
  *
- * @param[in] src  Source pixel buffer (unused).
- * @param[in] s    Source stride in bytes (unused).
- * @param[in] x    Destination X coordinate.
- * @param[in] y    Destination Y coordinate.
- * @param[in] w    Width in pixels.
- * @param[in] h    Height in pixels.
- * @param[in] ctx  Opaque context.
+ * @param[in] source  Source pixel buffer (unused).
+ * @param[in] stride  Source stride in bytes (unused).
+ * @param[in] x       Destination X coordinate.
+ * @param[in] y       Destination Y coordinate.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
+ * @param[in] ctx     Opaque context.
  */
-static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    (void)src;
-    (void)s;
-    t->draw_ops++;
-    if (x < 0 || y < 0 || x + w > FB_W || y + h > FB_H)
-        t->out_of_bounds++;
+    TestCtx* test_context = ctx;
+    (void)source;
+    (void)stride;
+    test_context->draw_count++;
+    if (x < 0 || y < 0 || x + width > FRAMEBUFFER_WIDTH || y + height > FRAMEBUFFER_HEIGHT)
+        test_context->out_of_bounds++;
     else
     {
-        t->pixels_drawn += w * h;
-        if (x < t->min_x)
-            t->min_x = x;
-        if (x + w > t->max_x)
-            t->max_x = x + w;
-        if (y < t->min_y)
-            t->min_y = y;
-        if (y + h > t->max_y)
-            t->max_y = y + h;
+        test_context->pixels_drawn += width * height;
+        if (x < test_context->min_x)
+            test_context->min_x = x;
+        if (x + width > test_context->max_x)
+            test_context->max_x = x + width;
+        if (y < test_context->min_y)
+            test_context->min_y = y;
+        if (y + height > test_context->max_y)
+            test_context->max_y = y + height;
     }
 }
 
 /**
  * @brief Backend blend_rect callback (no-op stub for testing).
  *
- * @param[in] src  Source pixel buffer (unused).
- * @param[in] s    Source stride in bytes (unused).
- * @param[in] a    Global alpha (unused).
- * @param[in] x    Destination X coordinate (unused).
- * @param[in] y    Destination Y coordinate (unused).
- * @param[in] w    Width in pixels (unused).
- * @param[in] h    Height in pixels (unused).
- * @param[in] ctx  Opaque context (unused).
+ * @param[in] source  Source pixel buffer (unused).
+ * @param[in] stride  Source stride in bytes (unused).
+ * @param[in] alpha   Global alpha (unused).
+ * @param[in] x       Destination X coordinate (unused).
+ * @param[in] y       Destination Y coordinate (unused).
+ * @param[in] width   Width in pixels (unused).
+ * @param[in] height  Height in pixels (unused).
+ * @param[in] ctx     Opaque context (unused).
  */
-static void blend_cb(const void* src, int s, uint8_t a, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
-    (void)a;
+    (void)source;
+    (void)stride;
+    (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable description of the failed assertion.
+ * @param[in] message  Human-readable description of the failed assertion.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -191,30 +191,30 @@ static int fail(const char* msg)
 int main(void)
 {
     /* ---- Measurement basics ---- */
-    int w = 0, h = 0;
-    er_text_measure("Hello", 14, NULL, 0, 0, &w, &h);
-    if (w <= 0 || h <= 0)
+    int width = 0, height = 0;
+    er_text_measure("Hello", 14, NULL, 0, 0, &width, &height);
+    if (width <= 0 || height <= 0)
         return fail("measure produced non-positive size");
 
-    int w2 = 0, h2 = 0;
-    er_text_measure("HelloHello", 14, NULL, 0, 0, &w2, &h2);
-    if (w2 <= w)
+    int double_width = 0, double_height = 0;
+    er_text_measure("HelloHello", 14, NULL, 0, 0, &double_width, &double_height);
+    if (double_width <= width)
         return fail("longer string did not measure wider");
-    if (h2 != h)
+    if (double_height != height)
         return fail("line height changed between measures");
 
     /* letter_spacing widens a non-empty string. */
-    int w_nols = 0, w_ls = 0, dummy = 0;
-    er_text_measure("Hello", 14, NULL, 0, 0, &w_nols, &dummy);
-    er_text_measure("Hello", 14, NULL, 2, 0, &w_ls, &dummy);
-    if (w_ls <= w_nols)
+    int unspaced_width = 0, spaced_width = 0, dummy = 0;
+    er_text_measure("Hello", 14, NULL, 0, 0, &unspaced_width, &dummy);
+    er_text_measure("Hello", 14, NULL, 2, 0, &spaced_width, &dummy);
+    if (spaced_width <= unspaced_width)
         return fail("letter_spacing=2 did not produce wider measure");
 
     /* Bold measures wider than normal: the synthetic faux-bold adds 1px per glyph, which the
        renderer applies to the cursor advance.  "Hello" (5 glyphs) must measure exactly +5. */
-    int w_bold = 0;
-    er_text_measure("Hello", 14, NULL, 0, 1, &w_bold, &dummy);
-    if (w_bold != w_nols + 5)
+    int bold_width = 0;
+    er_text_measure("Hello", 14, NULL, 0, 1, &bold_width, &dummy);
+    if (bold_width != unspaced_width + 5)
         return fail("bold measure did not add 1px per glyph");
 
     /* Span measurement matches: a single inherit-everything span equals the plain measure; a bold
@@ -225,242 +225,242 @@ int main(void)
     span_plain.text_decoration = 0xFFU;
     span_plain.letter_spacing = ER_LAYOUT_AUTO;
     memcpy(span_plain.text, "Hello", 6);
-    int w_span = 0;
-    er_text_measure_spans(&span_plain, 1, 14, NULL, 0, 0, &w_span, &dummy);
-    if (w_span != w_nols)
+    int span_width = 0;
+    er_text_measure_spans(&span_plain, 1, 14, NULL, 0, 0, &span_width, &dummy);
+    if (span_width != unspaced_width)
         return fail("inherit-everything span did not match the plain measure");
 
     ERTextSpan span_bold = span_plain;
     span_bold.font_weight = 1U;
-    int w_span_bold = 0;
-    er_text_measure_spans(&span_bold, 1, 14, NULL, 0, 0, &w_span_bold, &dummy);
-    if (w_span_bold != w_bold)
+    int bold_span_width = 0;
+    er_text_measure_spans(&span_bold, 1, 14, NULL, 0, 0, &bold_span_width, &dummy);
+    if (bold_span_width != bold_width)
         return fail("bold span did not match the bold plain measure");
 
     /* Two spans concatenate: "Hel" + "lo" must equal "Hello". */
     ERTextSpan two[2] = {span_plain, span_plain};
     memcpy(two[0].text, "Hel", 4);
     memcpy(two[1].text, "lo", 3);
-    int w_two = 0;
-    er_text_measure_spans(two, 2, 14, NULL, 0, 0, &w_two, &dummy);
-    if (w_two != w_nols)
+    int two_span_width = 0;
+    er_text_measure_spans(two, 2, 14, NULL, 0, 0, &two_span_width, &dummy);
+    if (two_span_width != unspaced_width)
         return fail("two spans did not measure the same as the joined string");
 
     /* Line measurement breaks the way the renderer does: on word boundaries at the width, at explicit
        newlines, at most number_of_lines lines, and reports the widest line without trailing spaces. */
     {
-        int w_hello = 0, w_world = 0;
-        er_text_measure("Hello", 14, NULL, 0, 0, &w_hello, &dummy);
-        er_text_measure("world", 14, NULL, 0, 0, &w_world, &dummy);
-        const int w_widest = (w_hello > w_world) ? w_hello : w_world;
-        ERTextRenderParams lp;
-        memset(&lp, 0, sizeof(lp));
-        lp.text = "Hello world";
-        lp.font_size = 14;
-        int lw = 0, ln = 0;
-        er_text_measure_lines(&lp, 0, &lw, &ln);
-        if (ln != 1)
+        int hello_width = 0, world_width = 0;
+        er_text_measure("Hello", 14, NULL, 0, 0, &hello_width, &dummy);
+        er_text_measure("world", 14, NULL, 0, 0, &world_width, &dummy);
+        const int widest_width = (hello_width > world_width) ? hello_width : world_width;
+        ERTextRenderParams line_params;
+        memset(&line_params, 0, sizeof(line_params));
+        line_params.text = "Hello world";
+        line_params.font_size = 14;
+        int line_width = 0, line_count = 0;
+        er_text_measure_lines(&line_params, 0, &line_width, &line_count);
+        if (line_count != 1)
             return fail("measure_lines: an unbounded single line did not measure as one line");
-        er_text_measure_lines(&lp, w_widest, &lw, &ln);
-        if (ln != 2 || lw != w_widest)
+        er_text_measure_lines(&line_params, widest_width, &line_width, &line_count);
+        if (line_count != 2 || line_width != widest_width)
             return fail("measure_lines: two words at the wider word's width did not break onto two lines");
-        lp.number_of_lines = 1;
-        er_text_measure_lines(&lp, w_widest, &lw, &ln);
-        if (ln != 1 || lw != w_hello)
+        line_params.number_of_lines = 1;
+        er_text_measure_lines(&line_params, widest_width, &line_width, &line_count);
+        if (line_count != 1 || line_width != hello_width)
             return fail("measure_lines: number_of_lines=1 did not stop after the first line");
-        lp.number_of_lines = 0;
-        lp.text = "Hello\nworld";
-        er_text_measure_lines(&lp, 0, &lw, &ln);
-        if (ln != 2 || lw != w_widest)
+        line_params.number_of_lines = 0;
+        line_params.text = "Hello\nworld";
+        er_text_measure_lines(&line_params, 0, &line_width, &line_count);
+        if (line_count != 2 || line_width != widest_width)
             return fail("measure_lines: an explicit newline did not start a second line");
-        lp.text = "";
-        er_text_measure_lines(&lp, 100, &lw, &ln);
-        if (ln != 0 || lw != 0)
+        line_params.text = "";
+        er_text_measure_lines(&line_params, 100, &line_width, &line_count);
+        if (line_count != 0 || line_width != 0)
             return fail("measure_lines: empty text should measure no lines");
 
         /* Spans break as one run: "Hello " + "world" breaks exactly like "Hello world". */
         ERTextSpan words[2] = {span_plain, span_plain};
         memcpy(words[0].text, "Hello ", 7);
         memcpy(words[1].text, "world", 6);
-        lp.text = NULL;
-        lp.spans = words;
-        lp.span_count = 2;
-        er_text_measure_lines(&lp, w_widest, &lw, &ln);
-        if (ln != 2 || lw != w_widest)
+        line_params.text = NULL;
+        line_params.spans = words;
+        line_params.span_count = 2;
+        er_text_measure_lines(&line_params, widest_width, &line_width, &line_count);
+        if (line_count != 2 || line_width != widest_width)
             return fail("measure_lines: spans did not break the way the joined string does");
     }
 
     /* UTF-8: 2-byte sequence measures wider than the plain ASCII baseline. */
-    int w_plain = 0, w_sym = 0;
-    er_text_measure("23C", 16, NULL, 0, 0, &w_plain, &dummy);
+    int plain_width = 0, symbol_width = 0;
+    er_text_measure("23C", 16, NULL, 0, 0, &plain_width, &dummy);
     er_text_measure("23\xC2\xB0"
                     "C",
                     16,
                     NULL,
                     0,
                     0,
-                    &w_sym,
+                    &symbol_width,
                     &dummy);
-    if (w_sym <= w_plain)
+    if (symbol_width <= plain_width)
         return fail("U+00B0 degree symbol did not measure wider than 2-char baseline");
 
     /* UTF-8: 3-byte sequence. */
-    int w_ascii = 0, w_arrow = 0;
-    er_text_measure("X", 16, NULL, 0, 0, &w_ascii, &dummy);
-    er_text_measure("\xE2\x86\x92", 16, NULL, 0, 0, &w_arrow, &dummy);
-    if (w_arrow <= 0)
+    int ascii_width = 0, arrow_width = 0;
+    er_text_measure("X", 16, NULL, 0, 0, &ascii_width, &dummy);
+    er_text_measure("\xE2\x86\x92", 16, NULL, 0, 0, &arrow_width, &dummy);
+    if (arrow_width <= 0)
         return fail("U+2192 right-arrow measured zero width");
 
     /* UTF-8: 4-byte sequence falls back to '?'. */
-    int w_q = 0, w_emoji = 0;
-    er_text_measure("?", 16, NULL, 0, 0, &w_q, &dummy);
-    er_text_measure("\xF0\x9F\x98\x80", 16, NULL, 0, 0, &w_emoji, &dummy);
-    if (w_emoji != w_q)
+    int question_width = 0, emoji_width = 0;
+    er_text_measure("?", 16, NULL, 0, 0, &question_width, &dummy);
+    er_text_measure("\xF0\x9F\x98\x80", 16, NULL, 0, 0, &emoji_width, &dummy);
+    if (emoji_width != question_width)
         return fail("4-byte UTF-8 (emoji) did not fall back to '?'");
 
     /* ---- Backend setup ---- */
-    TestCtx tc;
-    ctx_reset(&tc);
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
-    embedded_renderer_set_backend(&be);
+    TestCtx test_context;
+    ctx_reset(&test_context);
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &test_context};
+    embedded_renderer_set_backend(&backend);
 
     /* ---- Basic render produces in-bounds pixels ---- */
-    ERTextRenderParams par;
-    memset(&par, 0, sizeof(par));
-    par.text = "Hello";
-    par.clip = (ERRect){0, 0, FB_W, FB_H};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
+    ERTextRenderParams params;
+    memset(&params, 0, sizeof(params));
+    params.text = "Hello";
+    params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
 
-    er_text_render(&par);
-    if (tc.draw_ops == 0)
+    er_text_render(&params);
+    if (test_context.draw_count == 0)
         return fail("no draw calls emitted for basic render");
-    if (tc.pixels_drawn == 0)
+    if (test_context.pixels_drawn == 0)
         return fail("no pixels reported drawn for basic render");
-    if (tc.out_of_bounds != 0)
+    if (test_context.out_of_bounds != 0)
         return fail("fill_rect emitted outside framebuffer bounds for basic render");
 
     /* ---- Narrow clip: no out-of-bounds fills ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.clip = (ERRect){0, 0, 4, FB_H};
-    er_text_render(&par);
-    if (tc.out_of_bounds != 0)
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.clip = (ERRect){0, 0, 4, FRAMEBUFFER_HEIGHT};
+    er_text_render(&params);
+    if (test_context.out_of_bounds != 0)
         return fail("narrow clip emitted out-of-bounds fills");
 
     /* ---- textAlign LEFT vs CENTER: center must be shifted right ---- */
-    par.clip = (ERRect){0, 0, 200, 40};
+    params.clip = (ERRect){0, 0, 200, 40};
 
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.text_align = ER_TEXT_ALIGN_LEFT;
-    er_text_render(&par);
-    const int left_min_x = tc.min_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.text_align = ER_TEXT_ALIGN_LEFT;
+    er_text_render(&params);
+    const int left_min_x = test_context.min_x;
 
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.text_align = ER_TEXT_ALIGN_CENTER;
-    er_text_render(&par);
-    const int center_min_x = tc.min_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.text_align = ER_TEXT_ALIGN_CENTER;
+    er_text_render(&params);
+    const int center_min_x = test_context.min_x;
 
     if (center_min_x <= left_min_x)
         return fail("CENTER alignment did not shift text right compared to LEFT");
 
     /* ---- textAlign RIGHT must be further right than CENTER ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.text_align = ER_TEXT_ALIGN_RIGHT;
-    er_text_render(&par);
-    const int right_min_x = tc.min_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.text_align = ER_TEXT_ALIGN_RIGHT;
+    er_text_render(&params);
+    const int right_min_x = test_context.min_x;
 
     if (right_min_x <= center_min_x)
         return fail("RIGHT alignment did not shift text right compared to CENTER");
 
     /* ---- numberOfLines=1 + TAIL ellipsis: all pixels must stay within clip ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "This is a long string that should get truncated with an ellipsis";
-    par.clip = (ERRect){0, 0, 120, 40};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    par.text_align = ER_TEXT_ALIGN_LEFT;
-    par.number_of_lines = 1;
-    par.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
-    er_text_render(&par);
-    if (tc.out_of_bounds != 0)
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "This is a long string that should get truncated with an ellipsis";
+    params.clip = (ERRect){0, 0, 120, 40};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    params.text_align = ER_TEXT_ALIGN_LEFT;
+    params.number_of_lines = 1;
+    params.ellipsize_mode = ER_TEXT_ELLIPSIZE_TAIL;
+    er_text_render(&params);
+    if (test_context.out_of_bounds != 0)
         return fail("ellipsis render emitted out-of-bounds pixels");
-    if (tc.draw_ops == 0)
+    if (test_context.draw_count == 0)
         return fail("ellipsis render produced no draw calls");
 
     /* ---- Word-boundary wrapping: wide text in narrow clip spans more lines ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "Hello World How Are You Today";
-    par.clip = (ERRect){0, 0, 80, 200};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    er_text_render(&par);
-    const int wrap_max_y = tc.max_y;
-    const int wrap_ops = tc.draw_ops;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "Hello World How Are You Today";
+    params.clip = (ERRect){0, 0, 80, 200};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    er_text_render(&params);
+    const int wrap_max_y = test_context.max_y;
+    const int wrap_draw_count = test_context.draw_count;
 
     /* Single-line render of the same text (unlimited width) for comparison. */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.clip = (ERRect){0, 0, FB_W, 200};
-    er_text_render(&par);
-    const int single_max_y = tc.max_y;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, 200};
+    er_text_render(&params);
+    const int single_max_y = test_context.max_y;
 
     if (wrap_max_y <= single_max_y)
         return fail("word-wrapped text did not extend further down than single-line");
-    if (wrap_ops == 0)
+    if (wrap_draw_count == 0)
         return fail("wrapped render produced no draw calls");
-    if (tc.out_of_bounds != 0)
+    if (test_context.out_of_bounds != 0)
         return fail("wrapped render emitted out-of-bounds pixels");
 
     /* ---- letter_spacing during render stays in bounds ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "Spaced";
-    par.clip = (ERRect){10, 5, 200, 40};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    par.letter_spacing = 4;
-    er_text_render(&par);
-    if (tc.out_of_bounds != 0)
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "Spaced";
+    params.clip = (ERRect){10, 5, 200, 40};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    params.letter_spacing = 4;
+    er_text_render(&params);
+    if (test_context.out_of_bounds != 0)
         return fail("letter_spacing render emitted out-of-bounds pixels");
-    if (tc.draw_ops == 0)
+    if (test_context.draw_count == 0)
         return fail("letter_spacing render produced no draw calls");
 
     /* ---- textDecoration UNDERLINE produces extra pixels below baseline ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "Underline";
-    par.clip = (ERRect){0, 0, FB_W, FB_H};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    par.text_decoration = ER_TEXT_DECORATION_UNDERLINE;
-    er_text_render(&par);
-    const int under_max_y = tc.max_y;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "Underline";
+    params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    params.text_decoration = ER_TEXT_DECORATION_UNDERLINE;
+    er_text_render(&params);
+    const int under_max_y = test_context.max_y;
 
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.text_decoration = ER_TEXT_DECORATION_NONE;
-    er_text_render(&par);
-    const int plain_max_y = tc.max_y;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.text_decoration = ER_TEXT_DECORATION_NONE;
+    er_text_render(&params);
+    const int plain_max_y = test_context.max_y;
 
     if (under_max_y <= plain_max_y)
         return fail("UNDERLINE did not extend pixel extent below plain text");
@@ -469,340 +469,340 @@ int main(void)
      * Earlier the line-break logic treated "saw any whitespace on this line"
      * as if the line ended in whitespace. "Hello world" was committed as just
      * "Hello", so typing past a space in a TextInput appeared to do nothing. */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "Hello world";
-    par.clip = (ERRect){0, 0, FB_W, FB_H};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    par.number_of_lines = 1;
-    par.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
-    er_text_render(&par);
-    const int two_word_max_x = tc.max_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "Hello world";
+    params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    params.number_of_lines = 1;
+    params.ellipsize_mode = ER_TEXT_ELLIPSIZE_CLIP;
+    er_text_render(&params);
+    const int two_word_max_x = test_context.max_x;
 
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.text = "Hello";
-    er_text_render(&par);
-    const int one_word_max_x = tc.max_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.text = "Hello";
+    er_text_render(&params);
+    const int one_word_max_x = test_context.max_x;
 
     if (two_word_max_x <= one_word_max_x)
         return fail("\"Hello world\" must render wider than \"Hello\" (post-space text was trimmed)");
 
     /* ---- Regression: trailing whitespace should still be trimmed at EOF ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.text = "Hello   ";
-    er_text_render(&par);
-    const int trailing_ws_max_x = tc.max_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.text = "Hello   ";
+    er_text_render(&params);
+    const int trailing_space_max_x = test_context.max_x;
 
-    if (trailing_ws_max_x > one_word_max_x + 2)
+    if (trailing_space_max_x > one_word_max_x + 2)
         return fail("trailing whitespace was not trimmed at end-of-string");
 
     /* ---- fontWeight bold: bold text must render wider than normal ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "Bold";
-    par.clip = (ERRect){0, 0, FB_W, FB_H};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    par.font_weight = 1;
-    er_text_render(&par);
-    const int bold_max_x = tc.max_x;
-    if (tc.draw_ops == 0)
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "Bold";
+    params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    params.font_weight = 1;
+    er_text_render(&params);
+    const int bold_max_x = test_context.max_x;
+    if (test_context.draw_count == 0)
         return fail("bold render produced no draw calls");
-    if (tc.out_of_bounds != 0)
+    if (test_context.out_of_bounds != 0)
         return fail("bold render emitted out-of-bounds pixels");
 
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.font_weight = 0;
-    er_text_render(&par);
-    const int normal_max_x = tc.max_x;
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.font_weight = 0;
+    er_text_render(&params);
+    const int normal_max_x = test_context.max_x;
 
     if (bold_max_x <= normal_max_x)
         return fail("bold text did not render wider than normal text");
 
     /* ---- fontStyle italic: italic must render in-bounds ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    memset(&par, 0, sizeof(par));
-    par.text = "Italic";
-    par.clip = (ERRect){0, 0, FB_W, FB_H};
-    par.color = 0xFFFFFFFFU;
-    par.font_size = 14;
-    par.font_style = 1;
-    er_text_render(&par);
-    if (tc.draw_ops == 0)
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    memset(&params, 0, sizeof(params));
+    params.text = "Italic";
+    params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    params.color = 0xFFFFFFFFU;
+    params.font_size = 14;
+    params.font_style = 1;
+    er_text_render(&params);
+    if (test_context.draw_count == 0)
         return fail("italic render produced no draw calls");
-    if (tc.out_of_bounds != 0)
+    if (test_context.out_of_bounds != 0)
         return fail("italic render emitted out-of-bounds pixels");
 
     /* ---- bold-italic: combined must also render in-bounds ---- */
-    ctx_reset(&tc);
-    be.ctx = &tc;
-    embedded_renderer_set_backend(&be);
-    par.font_weight = 1;
-    par.font_style = 1;
-    er_text_render(&par);
-    if (tc.draw_ops == 0)
+    ctx_reset(&test_context);
+    backend.ctx = &test_context;
+    embedded_renderer_set_backend(&backend);
+    params.font_weight = 1;
+    params.font_style = 1;
+    er_text_render(&params);
+    if (test_context.draw_count == 0)
         return fail("bold-italic render produced no draw calls");
-    if (tc.out_of_bounds != 0)
+    if (test_context.out_of_bounds != 0)
         return fail("bold-italic render emitted out-of-bounds pixels");
 
     /* ---- Nested spans: two spans render the same total pixels as the merged plain string ---- */
     {
         /* Render the merged string in plain mode. */
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        memset(&par, 0, sizeof(par));
-        par.text = "HelloWorld";
-        par.clip = (ERRect){0, 0, FB_W, FB_H};
-        par.color = 0xFFFFFFFFU;
-        par.font_size = 14;
-        er_text_render(&par);
-        const int plain_pixels = tc.pixels_drawn;
-        const int plain_ops = tc.draw_ops;
-        if (plain_ops == 0)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        memset(&params, 0, sizeof(params));
+        params.text = "HelloWorld";
+        params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+        params.color = 0xFFFFFFFFU;
+        params.font_size = 14;
+        er_text_render(&params);
+        const int plain_pixels = test_context.pixels_drawn;
+        const int plain_draw_count = test_context.draw_count;
+        if (plain_draw_count == 0)
             return fail("span baseline: plain render produced no draw calls");
 
         /* Render the same content via two spans — no style overrides (all inherit). */
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
 
-        ERTextSpan sp[2];
-        memset(sp, 0, sizeof(sp));
+        ERTextSpan plain_spans[2];
+        memset(plain_spans, 0, sizeof(plain_spans));
         /* Both spans inherit all style fields from the base params. */
-        sp[0].font_weight = 0xFFU;
-        sp[0].font_style = 0xFFU;
-        sp[0].text_decoration = 0xFFU;
-        sp[0].letter_spacing = ER_LAYOUT_AUTO;
-        strncpy(sp[0].text, "Hello", ER_SPAN_TEXT_MAX);
+        plain_spans[0].font_weight = 0xFFU;
+        plain_spans[0].font_style = 0xFFU;
+        plain_spans[0].text_decoration = 0xFFU;
+        plain_spans[0].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(plain_spans[0].text, "Hello", ER_SPAN_TEXT_MAX);
 
-        sp[1].font_weight = 0xFFU;
-        sp[1].font_style = 0xFFU;
-        sp[1].text_decoration = 0xFFU;
-        sp[1].letter_spacing = ER_LAYOUT_AUTO;
-        strncpy(sp[1].text, "World", ER_SPAN_TEXT_MAX);
+        plain_spans[1].font_weight = 0xFFU;
+        plain_spans[1].font_style = 0xFFU;
+        plain_spans[1].text_decoration = 0xFFU;
+        plain_spans[1].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(plain_spans[1].text, "World", ER_SPAN_TEXT_MAX);
 
-        memset(&par, 0, sizeof(par));
-        par.clip = (ERRect){0, 0, FB_W, FB_H};
-        par.color = 0xFFFFFFFFU;
-        par.font_size = 14;
-        par.span_count = 2;
-        par.spans = sp;
-        er_text_render(&par);
+        memset(&params, 0, sizeof(params));
+        params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+        params.color = 0xFFFFFFFFU;
+        params.font_size = 14;
+        params.span_count = 2;
+        params.spans = plain_spans;
+        er_text_render(&params);
 
-        if (tc.draw_ops == 0)
+        if (test_context.draw_count == 0)
             return fail("span render produced no draw calls");
-        if (tc.out_of_bounds != 0)
+        if (test_context.out_of_bounds != 0)
             return fail("span render emitted out-of-bounds pixels");
-        if (tc.pixels_drawn != plain_pixels)
+        if (test_context.pixels_drawn != plain_pixels)
             return fail("two inherit-all spans did not match plain render pixel count");
     }
 
     /* ---- Span color override: second span must land at the same x as first-span end ---- */
     {
         /* Single-span in red produces some pixels. */
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
 
-        ERTextSpan sp2[2];
-        memset(sp2, 0, sizeof(sp2));
+        ERTextSpan color_spans[2];
+        memset(color_spans, 0, sizeof(color_spans));
 
-        sp2[0].font_weight = 0xFFU;
-        sp2[0].font_style = 0xFFU;
-        sp2[0].text_decoration = 0xFFU;
-        sp2[0].letter_spacing = ER_LAYOUT_AUTO;
-        sp2[0].color = 0xFFFF0000U; /* red */
-        strncpy(sp2[0].text, "AB", ER_SPAN_TEXT_MAX);
+        color_spans[0].font_weight = 0xFFU;
+        color_spans[0].font_style = 0xFFU;
+        color_spans[0].text_decoration = 0xFFU;
+        color_spans[0].letter_spacing = ER_LAYOUT_AUTO;
+        color_spans[0].color = 0xFFFF0000U; /* red */
+        strncpy(color_spans[0].text, "AB", ER_SPAN_TEXT_MAX);
 
-        sp2[1].font_weight = 0xFFU;
-        sp2[1].font_style = 0xFFU;
-        sp2[1].text_decoration = 0xFFU;
-        sp2[1].letter_spacing = ER_LAYOUT_AUTO;
-        sp2[1].color = 0xFF0000FFU; /* blue */
-        strncpy(sp2[1].text, "CD", ER_SPAN_TEXT_MAX);
+        color_spans[1].font_weight = 0xFFU;
+        color_spans[1].font_style = 0xFFU;
+        color_spans[1].text_decoration = 0xFFU;
+        color_spans[1].letter_spacing = ER_LAYOUT_AUTO;
+        color_spans[1].color = 0xFF0000FFU; /* blue */
+        strncpy(color_spans[1].text, "CD", ER_SPAN_TEXT_MAX);
 
         ERTextRenderParams par2;
         memset(&par2, 0, sizeof(par2));
-        par2.clip = (ERRect){0, 0, FB_W, FB_H};
+        par2.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
         par2.color = 0xFFFFFFFFU; /* base color — ignored because both spans override */
         par2.font_size = 14;
         par2.span_count = 2;
-        par2.spans = sp2;
+        par2.spans = color_spans;
         er_text_render(&par2);
 
-        if (tc.draw_ops == 0)
+        if (test_context.draw_count == 0)
             return fail("color-override span render produced no draw calls");
-        if (tc.out_of_bounds != 0)
+        if (test_context.out_of_bounds != 0)
             return fail("color-override span render emitted out-of-bounds pixels");
-        if (tc.max_x <= 0)
+        if (test_context.max_x <= 0)
             return fail("color-override span render produced no x extent");
     }
 
     /* ---- Bold span: mixed-weight spans render in-bounds ---- */
     {
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
 
-        ERTextSpan sp3[2];
-        memset(sp3, 0, sizeof(sp3));
+        ERTextSpan bold_spans[2];
+        memset(bold_spans, 0, sizeof(bold_spans));
 
-        sp3[0].font_weight = 0U; /* normal */
-        sp3[0].font_style = 0xFFU;
-        sp3[0].text_decoration = 0xFFU;
-        sp3[0].letter_spacing = ER_LAYOUT_AUTO;
-        strncpy(sp3[0].text, "Normal", ER_SPAN_TEXT_MAX);
+        bold_spans[0].font_weight = 0U; /* normal */
+        bold_spans[0].font_style = 0xFFU;
+        bold_spans[0].text_decoration = 0xFFU;
+        bold_spans[0].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(bold_spans[0].text, "Normal", ER_SPAN_TEXT_MAX);
 
-        sp3[1].font_weight = 1U; /* bold */
-        sp3[1].font_style = 0xFFU;
-        sp3[1].text_decoration = 0xFFU;
-        sp3[1].letter_spacing = ER_LAYOUT_AUTO;
-        strncpy(sp3[1].text, "Bold", ER_SPAN_TEXT_MAX);
+        bold_spans[1].font_weight = 1U; /* bold */
+        bold_spans[1].font_style = 0xFFU;
+        bold_spans[1].text_decoration = 0xFFU;
+        bold_spans[1].letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(bold_spans[1].text, "Bold", ER_SPAN_TEXT_MAX);
 
         ERTextRenderParams par3;
         memset(&par3, 0, sizeof(par3));
-        par3.clip = (ERRect){0, 0, FB_W, FB_H};
+        par3.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
         par3.color = 0xFFFFFFFFU;
         par3.font_size = 14;
         par3.span_count = 2;
-        par3.spans = sp3;
+        par3.spans = bold_spans;
         er_text_render(&par3);
 
-        if (tc.draw_ops == 0)
+        if (test_context.draw_count == 0)
             return fail("mixed-weight span render produced no draw calls");
-        if (tc.out_of_bounds != 0)
+        if (test_context.out_of_bounds != 0)
             return fail("mixed-weight span render emitted out-of-bounds pixels");
     }
 
     /* ---- Bold breaks at its drawn advance: a box exactly as wide as the regular text wraps bold ---- */
     {
-        int reg_w = 0, line_h = 0;
-        er_text_measure("Hello World", 14, NULL, 0, 0, &reg_w, &line_h);
+        int regular_width = 0, line_height = 0;
+        er_text_measure("Hello World", 14, NULL, 0, 0, &regular_width, &line_height);
 
-        memset(&par, 0, sizeof(par));
-        par.text = "Hello World";
-        par.clip = (ERRect){0, 0, reg_w, FB_H};
-        par.color = 0xFFFFFFFFU;
-        par.font_size = 14;
-        par.number_of_lines = 2;
+        memset(&params, 0, sizeof(params));
+        params.text = "Hello World";
+        params.clip = (ERRect){0, 0, regular_width, FRAMEBUFFER_HEIGHT};
+        params.color = 0xFFFFFFFFU;
+        params.font_size = 14;
+        params.number_of_lines = 2;
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        er_text_render(&par);
-        if (tc.max_y > line_h)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        er_text_render(&params);
+        if (test_context.max_y > line_height)
             return fail("regular text exactly as wide as its box did not fit on one line");
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        par.font_weight = 1;
-        er_text_render(&par);
-        if (tc.max_y <= line_h)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        params.font_weight = 1;
+        er_text_render(&params);
+        if (test_context.max_y <= line_height)
             return fail("bold text wider than its box was not wrapped onto a second line");
 
         /* A bold span in a regular parent breaks at the bold advance too. */
-        ERTextSpan sp4 = {0};
-        sp4.font_weight = 1U;
-        sp4.font_style = 0xFFU;
-        sp4.text_decoration = 0xFFU;
-        sp4.letter_spacing = ER_LAYOUT_AUTO;
-        strncpy(sp4.text, "Hello World", ER_SPAN_TEXT_MAX);
+        ERTextSpan bold_span = {0};
+        bold_span.font_weight = 1U;
+        bold_span.font_style = 0xFFU;
+        bold_span.text_decoration = 0xFFU;
+        bold_span.letter_spacing = ER_LAYOUT_AUTO;
+        strncpy(bold_span.text, "Hello World", ER_SPAN_TEXT_MAX);
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        par.font_weight = 0;
-        par.text = NULL;
-        par.span_count = 1;
-        par.spans = &sp4;
-        er_text_render(&par);
-        if (tc.max_y <= line_h)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        params.font_weight = 0;
+        params.text = NULL;
+        params.span_count = 1;
+        params.spans = &bold_span;
+        er_text_render(&params);
+        if (test_context.max_y <= line_height)
             return fail("bold span wider than its box was not wrapped onto a second line");
     }
 
     /* ---- A letter-spaced span breaks and aligns at its own spacing, not the parent's ---- */
     {
-        int reg_w = 0, line_h = 0;
-        er_text_measure("Hello World", 14, NULL, 0, 0, &reg_w, &line_h);
+        int regular_width = 0, line_height = 0;
+        er_text_measure("Hello World", 14, NULL, 0, 0, &regular_width, &line_height);
 
         /* "Hello " inherits the parent's (zero) spacing; "World" spaces its glyphs 2px apart. */
-        ERTextSpan sp5[2];
-        memset(sp5, 0, sizeof(sp5));
-        for (int i = 0; i < 2; i++)
+        ERTextSpan spaced_spans[2];
+        memset(spaced_spans, 0, sizeof(spaced_spans));
+        for (int span_index = 0; span_index < 2; span_index++)
         {
-            sp5[i].font_weight = 0xFFU;
-            sp5[i].font_style = 0xFFU;
-            sp5[i].text_decoration = 0xFFU;
-            sp5[i].letter_spacing = ER_LAYOUT_AUTO;
+            spaced_spans[span_index].font_weight = 0xFFU;
+            spaced_spans[span_index].font_style = 0xFFU;
+            spaced_spans[span_index].text_decoration = 0xFFU;
+            spaced_spans[span_index].letter_spacing = ER_LAYOUT_AUTO;
         }
-        strncpy(sp5[0].text, "Hello ", ER_SPAN_TEXT_MAX);
-        strncpy(sp5[1].text, "World", ER_SPAN_TEXT_MAX);
-        sp5[1].letter_spacing = 2;
+        strncpy(spaced_spans[0].text, "Hello ", ER_SPAN_TEXT_MAX);
+        strncpy(spaced_spans[1].text, "World", ER_SPAN_TEXT_MAX);
+        spaced_spans[1].letter_spacing = 2;
 
-        int spaced_w = 0, dummy_h = 0;
-        er_text_measure_spans(sp5, 2, 14, NULL, 0, 0, &spaced_w, &dummy_h);
-        if (spaced_w <= reg_w)
+        int spaced_spans_width = 0, unused_height = 0;
+        er_text_measure_spans(spaced_spans, 2, 14, NULL, 0, 0, &spaced_spans_width, &unused_height);
+        if (spaced_spans_width <= regular_width)
             return fail("letter-spaced span did not measure wider than the unspaced text");
 
         /* A box as wide as the unspaced text wraps the spaced span onto a second line. */
-        memset(&par, 0, sizeof(par));
-        par.clip = (ERRect){0, 0, reg_w, FB_H};
-        par.color = 0xFFFFFFFFU;
-        par.font_size = 14;
-        par.number_of_lines = 2;
-        par.span_count = 2;
-        par.spans = sp5;
+        memset(&params, 0, sizeof(params));
+        params.clip = (ERRect){0, 0, regular_width, FRAMEBUFFER_HEIGHT};
+        params.color = 0xFFFFFFFFU;
+        params.font_size = 14;
+        params.number_of_lines = 2;
+        params.span_count = 2;
+        params.spans = spaced_spans;
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        er_text_render(&par);
-        if (tc.out_of_bounds != 0)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        er_text_render(&params);
+        if (test_context.out_of_bounds != 0)
             return fail("letter-spaced span render emitted out-of-bounds pixels");
-        if (tc.max_y <= line_h)
+        if (test_context.max_y <= line_height)
             return fail("letter-spaced span wider than its box was not wrapped onto a second line");
 
         /* In a wide box, right alignment moves the line by exactly the box width minus its drawn width,
            and center alignment by half of that. */
-        par.clip = (ERRect){0, 0, 200, FB_H};
-        par.number_of_lines = 0;
+        params.clip = (ERRect){0, 0, 200, FRAMEBUFFER_HEIGHT};
+        params.number_of_lines = 0;
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        par.text_align = ER_TEXT_ALIGN_LEFT;
-        er_text_render(&par);
-        const int spaced_left_min_x = tc.min_x;
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        params.text_align = ER_TEXT_ALIGN_LEFT;
+        er_text_render(&params);
+        const int spaced_left_min_x = test_context.min_x;
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        par.text_align = ER_TEXT_ALIGN_RIGHT;
-        er_text_render(&par);
-        if (tc.min_x - spaced_left_min_x != 200 - spaced_w)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        params.text_align = ER_TEXT_ALIGN_RIGHT;
+        er_text_render(&params);
+        if (test_context.min_x - spaced_left_min_x != 200 - spaced_spans_width)
             return fail("right-aligned letter-spaced span was not placed at its drawn width");
 
-        ctx_reset(&tc);
-        be.ctx = &tc;
-        embedded_renderer_set_backend(&be);
-        par.text_align = ER_TEXT_ALIGN_CENTER;
-        er_text_render(&par);
-        if (tc.min_x - spaced_left_min_x != (200 - spaced_w) / 2)
+        ctx_reset(&test_context);
+        backend.ctx = &test_context;
+        embedded_renderer_set_backend(&backend);
+        params.text_align = ER_TEXT_ALIGN_CENTER;
+        er_text_render(&params);
+        if (test_context.min_x - spaced_left_min_x != (200 - spaced_spans_width) / 2)
             return fail("centered letter-spaced span was not placed at its drawn width");
     }
 

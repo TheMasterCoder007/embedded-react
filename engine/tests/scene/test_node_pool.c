@@ -26,6 +26,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#define OPACITY_OPAQUE 255U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — helpers
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -42,20 +44,20 @@
  */
 static ERProps test_props_default(void)
 {
-    ERProps p;
-    memset(&p, 0, sizeof(p));
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props;
+    memset(&props, 0, sizeof(props));
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -65,66 +67,67 @@ static ERProps test_props_default(void)
 /**
  * @brief No-op fill_rect for tests that only exercise pool/tree behavior.
  *
- * @param[in] argb  Ignored.
- * @param[in] x     Ignored.
- * @param[in] y     Ignored.
- * @param[in] w     Ignored.
- * @param[in] h     Ignored.
- * @param[in] ctx   Ignored.
+ * @param[in] argb    Ignored.
+ * @param[in] x       Ignored.
+ * @param[in] y       Ignored.
+ * @param[in] width   Ignored.
+ * @param[in] height  Ignored.
+ * @param[in] ctx     Ignored.
  */
-static void null_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void null_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief No-op copy_rect for tests that only exercise pool/tree behavior.
  *
- * @param[in] src              Ignored.
- * @param[in] src_stride_bytes Ignored.
- * @param[in] x                Ignored.
- * @param[in] y                Ignored.
- * @param[in] w                Ignored.
- * @param[in] h                Ignored.
- * @param[in] ctx              Ignored.
+ * @param[in] source               Ignored.
+ * @param[in] source_stride_bytes  Ignored.
+ * @param[in] x                    Ignored.
+ * @param[in] y                    Ignored.
+ * @param[in] width                Ignored.
+ * @param[in] height               Ignored.
+ * @param[in] ctx                  Ignored.
  */
-static void null_copy(const void* src, int src_stride_bytes, int x, int y, int w, int h, void* ctx)
+static void null_copy(const void* source, int source_stride_bytes, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)src_stride_bytes;
+    (void)source;
+    (void)source_stride_bytes;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief No-op blend_rect for tests that only exercise pool/tree behavior.
  *
- * @param[in] src              Ignored.
- * @param[in] src_stride_bytes Ignored.
- * @param[in] alpha            Ignored.
- * @param[in] x                Ignored.
- * @param[in] y                Ignored.
- * @param[in] w                Ignored.
- * @param[in] h                Ignored.
- * @param[in] ctx              Ignored.
+ * @param[in] source               Ignored.
+ * @param[in] source_stride_bytes  Ignored.
+ * @param[in] alpha                Ignored.
+ * @param[in] x                    Ignored.
+ * @param[in] y                    Ignored.
+ * @param[in] width                Ignored.
+ * @param[in] height               Ignored.
+ * @param[in] ctx                  Ignored.
  */
-static void null_blend(const void* src, int src_stride_bytes, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void
+null_blend(const void* source, int source_stride_bytes, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)src_stride_bytes;
+    (void)source;
+    (void)source_stride_bytes;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -141,25 +144,25 @@ static void null_blend(const void* src, int src_stride_bytes, uint8_t alpha, int
  */
 static void test_freelist_lifo_reuse(void)
 {
-    ERNode* a = er_node_create(ER_NODE_VIEW);
-    ERNode* b = er_node_create(ER_NODE_TEXT);
-    assert(a != NULL && "first create must succeed");
-    assert(b != NULL && "second create must succeed");
-    assert(a != b && "distinct nodes must not alias");
+    ERNode* view = er_node_create(ER_NODE_VIEW);
+    ERNode* text = er_node_create(ER_NODE_TEXT);
+    assert(view != NULL && "first create must succeed");
+    assert(text != NULL && "second create must succeed");
+    assert(view != text && "distinct nodes must not alias");
 
-    const uint16_t b_tag = b->tag;
-    er_node_destroy(b);
+    const uint16_t text_tag = text->tag;
+    er_node_destroy(text);
 
     /* After LIFO pop, the next create should return the same slot. */
-    ERNode* c = er_node_create(ER_NODE_PRESSABLE);
-    assert(c != NULL && "create after destroy must succeed");
-    assert(c->tag == b_tag && "LIFO free-list must return the most recently freed tag");
-    assert(c->type == ER_NODE_PRESSABLE && "recycled node must have the new type");
-    assert(c->in_use && "recycled node must be marked in-use");
-    assert(c->dirty && "recycled node must start dirty");
+    ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
+    assert(pressable != NULL && "create after destroy must succeed");
+    assert(pressable->tag == text_tag && "LIFO free-list must return the most recently freed tag");
+    assert(pressable->type == ER_NODE_PRESSABLE && "recycled node must have the new type");
+    assert(pressable->in_use && "recycled node must be marked in-use");
+    assert(pressable->dirty && "recycled node must start dirty");
 
-    er_node_destroy(a);
-    er_node_destroy(c);
+    er_node_destroy(view);
+    er_node_destroy(pressable);
 
     printf("test_freelist_lifo_reuse PASSED\n");
 }
@@ -172,39 +175,39 @@ static void test_freelist_lifo_reuse(void)
  */
 static void test_freelist_multi_reuse(void)
 {
-    const int N = 8;
+    const int node_count = 8;
     ERNode* nodes[8];
 
-    for (int i = 0; i < N; i++)
+    for (int node_index = 0; node_index < node_count; node_index++)
     {
-        nodes[i] = er_node_create(ER_NODE_VIEW);
-        assert(nodes[i] != NULL && "create must succeed during multi-reuse setup");
+        nodes[node_index] = er_node_create(ER_NODE_VIEW);
+        assert(nodes[node_index] != NULL && "create must succeed during multi-reuse setup");
     }
 
     /* Destroy every even-indexed node — their slots go into the free-list. */
     uint16_t freed_tags[4];
     int freed_count = 0;
-    for (int i = 0; i < N; i += 2)
+    for (int node_index = 0; node_index < node_count; node_index += 2)
     {
-        freed_tags[freed_count++] = nodes[i]->tag;
-        er_node_destroy(nodes[i]);
-        nodes[i] = NULL;
+        freed_tags[freed_count++] = nodes[node_index]->tag;
+        er_node_destroy(nodes[node_index]);
+        nodes[node_index] = NULL;
     }
 
     /* The next 4 creates must come from the free-list (non-NULL results). */
     ERNode* recycled[4];
-    for (int i = 0; i < freed_count; i++)
+    for (int recycled_index = 0; recycled_index < freed_count; recycled_index++)
     {
-        recycled[i] = er_node_create(ER_NODE_TEXT);
-        assert(recycled[i] != NULL && "create after destroy must succeed (free-list)");
+        recycled[recycled_index] = er_node_create(ER_NODE_TEXT);
+        assert(recycled[recycled_index] != NULL && "create after destroy must succeed (free-list)");
     }
 
     /* Cleanup. */
-    for (int i = 0; i < N; i++)
-        if (nodes[i])
-            er_node_destroy(nodes[i]);
-    for (int i = 0; i < freed_count; i++)
-        er_node_destroy(recycled[i]);
+    for (int node_index = 0; node_index < node_count; node_index++)
+        if (nodes[node_index])
+            er_node_destroy(nodes[node_index]);
+    for (int recycled_index = 0; recycled_index < freed_count; recycled_index++)
+        er_node_destroy(recycled[recycled_index]);
 
     printf("test_freelist_multi_reuse PASSED\n");
 }
@@ -217,16 +220,16 @@ static void test_freelist_multi_reuse(void)
  */
 static void test_double_free_is_noop(void)
 {
-    ERNode* n = er_node_create(ER_NODE_VIEW);
-    assert(n != NULL);
+    ERNode* node = er_node_create(ER_NODE_VIEW);
+    assert(node != NULL);
 
-    er_node_destroy(n); /* first destroy: valid */
-    er_node_destroy(n); /* second destroy: must be silently ignored */
+    er_node_destroy(node); /* first destroy: valid */
+    er_node_destroy(node); /* second destroy: must be silently ignored */
 
     /* Recreate to verify the free-list is not corrupt (slot still usable). */
-    ERNode* n2 = er_node_create(ER_NODE_VIEW);
-    assert(n2 != NULL && "pool must still yield a node after a double-free attempt");
-    er_node_destroy(n2);
+    ERNode* second_node = er_node_create(ER_NODE_VIEW);
+    assert(second_node != NULL && "pool must still yield a node after a double-free attempt");
+    er_node_destroy(second_node);
 
     printf("test_double_free_is_noop PASSED\n");
 }
@@ -285,9 +288,9 @@ static void test_pool_exhaustion_and_recovery(void)
     /* Fill whatever slots remain after the earlier tests. */
     ERNode* overflow_nodes[ERUI_MAX_NODES];
     int filled = 0;
-    ERNode* n;
-    while (filled < ERUI_MAX_NODES && (n = er_node_create(ER_NODE_VIEW)) != NULL)
-        overflow_nodes[filled++] = n;
+    ERNode* node;
+    while (filled < ERUI_MAX_NODES && (node = er_node_create(ER_NODE_VIEW)) != NULL)
+        overflow_nodes[filled++] = node;
 
     /* Pool must now be exhausted. */
     ERNode* extra = er_node_create(ER_NODE_VIEW);
@@ -300,24 +303,24 @@ static void test_pool_exhaustion_and_recovery(void)
     er_node_destroy(overflow_nodes[filled / 2]);
     er_node_destroy(overflow_nodes[filled - 1]);
 
-    ERNode* r0 = er_node_create(ER_NODE_TEXT);
-    ERNode* r1 = er_node_create(ER_NODE_IMAGE);
-    ERNode* r2 = er_node_create(ER_NODE_VIEW);
-    assert(r0 != NULL && "first recovery create must succeed");
-    assert(r1 != NULL && "second recovery create must succeed");
-    assert(r2 != NULL && "third recovery create must succeed");
+    ERNode* recovered_text = er_node_create(ER_NODE_TEXT);
+    ERNode* recovered_image = er_node_create(ER_NODE_IMAGE);
+    ERNode* recovered_view = er_node_create(ER_NODE_VIEW);
+    assert(recovered_text != NULL && "first recovery create must succeed");
+    assert(recovered_image != NULL && "second recovery create must succeed");
+    assert(recovered_view != NULL && "third recovery create must succeed");
 
     /* Pool must be exhausted again immediately after recovery. */
     assert(er_node_create(ER_NODE_VIEW) == NULL && "pool must be exhausted after consuming all freed slots");
 
     /* Cleanup everything for a clean exit. */
-    er_node_destroy(r0);
-    er_node_destroy(r1);
-    er_node_destroy(r2);
-    for (int i = 0; i < filled; i++)
+    er_node_destroy(recovered_text);
+    er_node_destroy(recovered_image);
+    er_node_destroy(recovered_view);
+    for (int node_index = 0; node_index < filled; node_index++)
     {
-        if (i != 0 && i != filled / 2 && i != filled - 1)
-            er_node_destroy(overflow_nodes[i]);
+        if (node_index != 0 && node_index != filled / 2 && node_index != filled - 1)
+            er_node_destroy(overflow_nodes[node_index]);
     }
 
     printf("test_pool_exhaustion_and_recovery PASSED\n");
@@ -337,24 +340,24 @@ static void test_dirty_rect_noop_commit(void)
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);
 
-    ERProps p = test_props_default();
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
+    ERProps props = test_props_default();
+    props.width = 320;
+    props.height = 240;
+    er_node_set_props(root, &props);
     er_tree_set_root(root);
 
     /* First commit: root is dirty, should produce a non-empty dirty rect. */
     er_commit();
-    ERRect dr;
-    assert(er_get_dirty_rect(&dr) && "first commit on a dirty scene must report a dirty rect");
-    assert(dr.w > 0 && dr.h > 0 && "dirty rect must be non-empty after first commit");
+    ERRect dirty;
+    assert(er_get_dirty_rect(&dirty) && "first commit on a dirty scene must report a dirty rect");
+    assert(dirty.w > 0 && dirty.h > 0 && "dirty rect must be non-empty after first commit");
 
     /* Second commit: nothing changed, so the first commit's rect must survive unchanged. */
     er_commit();
-    ERRect dr2;
-    assert(er_get_dirty_rect(&dr2) && "a commit with no changes must keep the last painted rect");
-    assert(dr2.x == dr.x && dr2.y == dr.y && dr2.w == dr.w && dr2.h == dr.h
-           && "a commit with no changes must not alter the reported rect");
+    ERRect second_dirty;
+    assert(er_get_dirty_rect(&second_dirty) && "a commit with no changes must keep the last painted rect");
+    assert(second_dirty.x == dirty.x && second_dirty.y == dirty.y && second_dirty.w == dirty.w
+           && second_dirty.h == dirty.h && "a commit with no changes must not alter the reported rect");
 
     er_tree_set_root(NULL);
     er_node_destroy(root);
@@ -374,29 +377,29 @@ static void test_dirty_rect_union_coverage(void)
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);
-    ERProps rp = test_props_default();
-    rp.width = 320;
-    rp.height = 240;
-    rp.flex_direction = ER_FLEX_ROW;
-    er_node_set_props(root, &rp);
+    ERProps root_props = test_props_default();
+    root_props.width = 320;
+    root_props.height = 240;
+    root_props.flex_direction = ER_FLEX_ROW;
+    er_node_set_props(root, &root_props);
 
     /* Left child: 80×240 placed first in the flex row. */
     ERNode* left_child = er_node_create(ER_NODE_VIEW);
     assert(left_child != NULL);
-    ERProps lp = test_props_default();
-    lp.width = 80;
-    lp.height = 240;
-    lp.background_color = 0xFF2A9D8F;
-    er_node_set_props(left_child, &lp);
+    ERProps left_child_props = test_props_default();
+    left_child_props.width = 80;
+    left_child_props.height = 240;
+    left_child_props.background_color = 0xFF2A9D8F;
+    er_node_set_props(left_child, &left_child_props);
 
     /* Right child: 80×240 placed second — starts at x=80. */
     ERNode* right_child = er_node_create(ER_NODE_VIEW);
     assert(right_child != NULL);
-    ERProps rcp = test_props_default();
-    rcp.width = 80;
-    rcp.height = 240;
-    rcp.background_color = 0xFFE94560;
-    er_node_set_props(right_child, &rcp);
+    ERProps right_child_props = test_props_default();
+    right_child_props.width = 80;
+    right_child_props.height = 240;
+    right_child_props.background_color = 0xFFE94560;
+    er_node_set_props(right_child, &right_child_props);
 
     er_tree_append_child(root, left_child);
     er_tree_append_child(root, right_child);
@@ -410,12 +413,12 @@ static void test_dirty_rect_union_coverage(void)
     er_mark_dirty_upward(right_child);
     er_commit();
 
-    ERRect dr;
-    assert(er_get_dirty_rect(&dr) && "dirty rect must be non-empty when children were re-rendered");
+    ERRect dirty;
+    assert(er_get_dirty_rect(&dirty) && "dirty rect must be non-empty when children were re-rendered");
     /* The union must span at least from the left child's x to beyond the right child's right edge. */
-    assert(dr.x <= 0 && "dirty rect left edge must start at or before the left child");
-    assert(dr.x + dr.w >= 160 && "dirty rect right edge must cover both children");
-    assert(dr.h >= 0 && "dirty rect height must be non-negative");
+    assert(dirty.x <= 0 && "dirty rect left edge must start at or before the left child");
+    assert(dirty.x + dirty.w >= 160 && "dirty rect right edge must cover both children");
+    assert(dirty.h >= 0 && "dirty rect height must be non-negative");
 
     er_tree_set_root(NULL);
     er_node_destroy(left_child);
@@ -432,10 +435,10 @@ static void test_dirty_rect_union_coverage(void)
  */
 static int drain_anim_values(void)
 {
-    int n = 0;
+    int count = 0;
     while (er_anim_value_create(0.0f) != ER_ANIM_VALUE_INVALID)
-        n++;
-    return n;
+        count++;
+    return count;
 }
 
 /**
@@ -451,15 +454,15 @@ static void test_reset(void)
     /* Build a non-trivial scene: a committed tree plus a live Animated.Value. */
     ERNode* root = er_node_create(ER_NODE_VIEW);
     assert(root != NULL);
-    ERProps p = test_props_default();
-    p.width = 320;
-    p.height = 240;
-    er_node_set_props(root, &p);
-    for (int i = 0; i < 16; i++)
+    ERProps props = test_props_default();
+    props.width = 320;
+    props.height = 240;
+    er_node_set_props(root, &props);
+    for (int child_index = 0; child_index < 16; child_index++)
     {
-        ERNode* c = er_node_create(ER_NODE_VIEW);
-        assert(c != NULL);
-        er_tree_append_child(root, c);
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        assert(child != NULL);
+        er_tree_append_child(root, child);
     }
     er_tree_set_root(root);
     er_commit();
@@ -486,14 +489,14 @@ static void test_reset(void)
     er_reset();
     ERNode* root2 = er_node_create(ER_NODE_VIEW);
     assert(root2 != NULL);
-    ERProps p2 = test_props_default();
-    p2.width = 100;
-    p2.height = 100;
-    er_node_set_props(root2, &p2);
+    ERProps root2_props = test_props_default();
+    root2_props.width = 100;
+    root2_props.height = 100;
+    er_node_set_props(root2, &root2_props);
     er_tree_set_root(root2);
     er_commit();
-    ERRect dr;
-    assert(er_get_dirty_rect(&dr) && dr.w > 0 && dr.h > 0 && "fresh scene after reset must paint");
+    ERRect dirty;
+    assert(er_get_dirty_rect(&dirty) && dirty.w > 0 && dirty.h > 0 && "fresh scene after reset must paint");
 
     er_reset(); /* leave an empty scene for the tests that follow */
     printf("test_reset PASSED\n");
@@ -504,13 +507,13 @@ static void test_reset(void)
  */
 static void test_clock_64bit(void)
 {
-    const uint64_t t0 = er_now_ms64();
+    const uint64_t start_ms = er_now_ms64();
 
     /* 5e9 ms is past 2^32 (~49.7 days); a tick is a 32-bit step, so it takes several. */
-    for (int i = 0; i < 5; i++)
+    for (int tick_index = 0; tick_index < 5; tick_index++)
         embedded_renderer_tick(1000000000U);
-    assert(er_now_ms64() - t0 == 5000000000ULL && "er_now_ms64 must not wrap");
-    assert(er_now_ms() == (uint32_t)(t0 + 5000000000ULL) && "er_now_ms wraps as it always has");
+    assert(er_now_ms64() - start_ms == 5000000000ULL && "er_now_ms64 must not wrap");
+    assert(er_now_ms() == (uint32_t)(start_ms + 5000000000ULL) && "er_now_ms wraps as it always has");
 
     const uint64_t before = er_now_ms64();
     er_reset();
@@ -529,12 +532,12 @@ static void test_clock_64bit(void)
  */
 int main(void)
 {
-    EmbeddedRenderBackend be;
-    memset(&be, 0, sizeof(be));
-    be.fill_rect = null_fill;
-    be.copy_rect = null_copy;
-    be.blend_rect = null_blend;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend;
+    memset(&backend, 0, sizeof(backend));
+    backend.fill_rect = null_fill;
+    backend.copy_rect = null_copy;
+    backend.blend_rect = null_blend;
+    embedded_renderer_set_backend(&backend);
 
     test_reset();
     test_clock_64bit();

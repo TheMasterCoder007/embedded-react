@@ -26,8 +26,10 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 64
-#define FB_H 64
+#define FRAMEBUFFER_WIDTH 64
+#define FRAMEBUFFER_HEIGHT 64
+#define CHANNEL_MAX 255u
+#define OPACITY_OPAQUE 255
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -38,9 +40,9 @@
  */
 typedef struct
 {
-    uint32_t fb[FB_W * FB_H]; /**< Premultiplied ARGB8888 pixel storage. */
-    int fill_calls;           /**< Number of fill_rect calls received. */
-    int blend_calls;          /**< Number of blend_rect calls received. */
+    uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT]; /**< Premultiplied ARGB8888 pixel storage. */
+    int fill_calls;                                               /**< Number of fill_rect calls received. */
+    int blend_calls;                                              /**< Number of blend_rect calls received. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -50,74 +52,74 @@ typedef struct
 /**
  * @brief fill_rect stub — accumulates solid-color fills into the test framebuffer.
  *
- * @param[in] argb  Fill color (straight-alpha ARGB8888).
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
- * @param[in] ctx   Pointer to TestCtx.
+ * @param[in] argb    Fill color (straight-alpha ARGB8888).
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
+ * @param[in] ctx     Pointer to TestCtx.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    t->fill_calls++;
-    const uint32_t a = (argb >> 24) & 0xFFu;
-    const uint32_t r = ((argb >> 16) & 0xFFu) * a / 255u;
-    const uint32_t g = ((argb >> 8) & 0xFFu) * a / 255u;
-    const uint32_t b = (argb & 0xFFu) * a / 255u;
-    const uint32_t pm = (a << 24) | (r << 16) | (g << 8) | b;
-    for (int py = y; py < y + h && py < FB_H; py++)
-        for (int px = x; px < x + w && px < FB_W; px++)
-            if (px >= 0 && py >= 0)
-                t->fb[py * FB_W + px] = pm;
+    TestCtx* test_context = ctx;
+    test_context->fill_calls++;
+    const uint32_t alpha = (argb >> 24) & 0xFFu;
+    const uint32_t red = ((argb >> 16) & 0xFFu) * alpha / CHANNEL_MAX;
+    const uint32_t green = ((argb >> 8) & 0xFFu) * alpha / CHANNEL_MAX;
+    const uint32_t blue = (argb & 0xFFu) * alpha / CHANNEL_MAX;
+    const uint32_t premultiplied = (alpha << 24) | (red << 16) | (green << 8) | blue;
+    for (int pixel_y = y; pixel_y < y + height && pixel_y < FRAMEBUFFER_HEIGHT; pixel_y++)
+        for (int pixel_x = x; pixel_x < x + width && pixel_x < FRAMEBUFFER_WIDTH; pixel_x++)
+            if (pixel_x >= 0 && pixel_y >= 0)
+                test_context->framebuffer[pixel_y * FRAMEBUFFER_WIDTH + pixel_x] = premultiplied;
 }
 
 /**
  * @brief copy_rect stub — no-op for gradient tests.
  *
- * @param[in] src     Source buffer (unused).
+ * @param[in] source  Source buffer (unused).
  * @param[in] stride  Stride (unused).
  * @param[in] x       X (unused).
  * @param[in] y       Y (unused).
- * @param[in] w       Width (unused).
- * @param[in] h       Height (unused).
+ * @param[in] width   Width (unused).
+ * @param[in] height  Height (unused).
  * @param[in] ctx     Context (unused).
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief blend_rect stub — composites premultiplied rows into the test framebuffer.
  *
- * @param[in] src     Premultiplied ARGB8888 source buffer.
- * @param[in] stride  Row stride of src in bytes.
+ * @param[in] source  Premultiplied ARGB8888 source buffer.
+ * @param[in] stride  Row stride of source in bytes.
  * @param[in] alpha   Global opacity (unused; tests use opaque blends).
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)alpha;
-    TestCtx* t = ctx;
-    t->blend_calls++;
-    const uint8_t* row_ptr = (const uint8_t*)src;
-    for (int py = y; py < y + h && py < FB_H; py++, row_ptr += stride)
+    TestCtx* test_context = ctx;
+    test_context->blend_calls++;
+    const uint8_t* source_row = (const uint8_t*)source;
+    for (int pixel_y = y; pixel_y < y + height && pixel_y < FRAMEBUFFER_HEIGHT; pixel_y++, source_row += stride)
     {
-        const uint32_t* row = (const uint32_t*)row_ptr;
-        for (int px = x; px < x + w && px < FB_W; px++)
-            if (px >= 0 && py >= 0)
-                t->fb[py * FB_W + px] = row[px - x];
+        const uint32_t* row = (const uint32_t*)source_row;
+        for (int pixel_x = x; pixel_x < x + width && pixel_x < FRAMEBUFFER_WIDTH; pixel_x++)
+            if (pixel_x >= 0 && pixel_y >= 0)
+                test_context->framebuffer[pixel_y * FRAMEBUFFER_WIDTH + pixel_x] = row[pixel_x - x];
     }
 }
 
@@ -128,59 +130,59 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 /**
  * @brief Initialises a TestCtx and registers it as the active backend.
  *
- * @param[in,out] tc  TestCtx to initialise (fb cleared to black, counters zeroed).
+ * @param[in,out] test_context  TestCtx to initialise (framebuffer cleared to black, counters zeroed).
  */
-static void setup_backend(TestCtx* tc)
+static void setup_backend(TestCtx* test_context)
 {
-    memset(tc, 0, sizeof(*tc));
-    static EmbeddedRenderBackend be;
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    be.wait = NULL;
-    be.frame_ready = NULL;
-    be.ctx = tc;
-    embedded_renderer_set_backend(&be);
+    memset(test_context, 0, sizeof(*test_context));
+    static EmbeddedRenderBackend backend;
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    backend.wait = NULL;
+    backend.frame_ready = NULL;
+    backend.ctx = test_context;
+    embedded_renderer_set_backend(&backend);
 }
 
 /**
  * @brief Returns a pixel from the test framebuffer.
  *
- * @param[in] tc  Test context.
- * @param[in] x   Column.
- * @param[in] y   Row.
+ * @param[in] test_context  Test context.
+ * @param[in] x             Column.
+ * @param[in] y             Row.
  *
  * @return Premultiplied ARGB8888 value stored at (x, y).
  */
-static uint32_t px(const TestCtx* tc, int x, int y)
+static uint32_t px(const TestCtx* test_context, int x, int y)
 {
-    return tc->fb[(y * FB_W) + x];
+    return test_context->framebuffer[(y * FRAMEBUFFER_WIDTH) + x];
 }
 
 /**
  * @brief Premultiplies a straight-alpha ARGB8888 color.
  *
- * @param[in] sa  Straight-alpha ARGB8888 color.
+ * @param[in] straight  Straight-alpha ARGB8888 color.
  *
  * @return Premultiplied ARGB8888 color.
  */
-static uint32_t pm(uint32_t sa)
+static uint32_t pm(uint32_t straight)
 {
-    const uint32_t a = (sa >> 24) & 0xFFu;
-    return (a << 24) | ((((sa >> 16) & 0xFFu) * a / 255u) << 16) | ((((sa >> 8) & 0xFFu) * a / 255u) << 8)
-           | (((sa & 0xFFu) * a / 255u));
+    const uint32_t alpha = (straight >> 24) & 0xFFu;
+    return (alpha << 24) | ((((straight >> 16) & 0xFFu) * alpha / CHANNEL_MAX) << 16)
+           | ((((straight >> 8) & 0xFFu) * alpha / CHANNEL_MAX) << 8) | (((straight & 0xFFu) * alpha / CHANNEL_MAX));
 }
 
 /**
  * @brief Prints a failure message and returns EXIT_FAILURE.
  *
- * @param[in] msg  Description of the failure.
+ * @param[in] message  Description of the failure.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    printf("FAIL: %s\n", msg);
+    printf("FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -204,8 +206,8 @@ static int fail(const char* msg)
  */
 int main(void)
 {
-    TestCtx tc;
-    setup_backend(&tc);
+    TestCtx test_context;
+    setup_backend(&test_context);
 
     /* -----------------------------------------------------------------------
      * Scene: a single full-framebuffer View with a two-stop gradient.
@@ -213,14 +215,14 @@ int main(void)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp;
-    memset(&rp, 0, sizeof(rp));
-    rp.left = rp.top = rp.right = rp.bottom = ER_LAYOUT_AUTO;
-    rp.width = FB_W;
-    rp.height = FB_H;
-    rp.opacity = 255;
-    rp.background_color = 0xFF112233; /* fallback when gradient disabled */
-    er_node_set_props(root, &rp);
+    ERProps root_props;
+    memset(&root_props, 0, sizeof(root_props));
+    root_props.left = root_props.top = root_props.right = root_props.bottom = ER_LAYOUT_AUTO;
+    root_props.width = FRAMEBUFFER_WIDTH;
+    root_props.height = FRAMEBUFFER_HEIGHT;
+    root_props.opacity = OPACITY_OPAQUE;
+    root_props.background_color = 0xFF112233; /* fallback when gradient disabled */
+    er_node_set_props(root, &root_props);
     er_tree_set_root(root);
 
 #if ERUI_GRADIENT
@@ -233,47 +235,47 @@ int main(void)
         const uint32_t teal = 0xFF2A9D8F;
         const uint32_t dark = 0xFF0A2030;
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 0.0f; /* top → bottom */
-        p.gradient_stop_count = 2;
-        p.gradient_stops[0].color = teal;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = dark;
-        p.gradient_stops[1].position = 1.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 0.0f; /* top → bottom */
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = teal;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = dark;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
-        tc.blend_calls = 0;
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
+        test_context.blend_calls = 0;
         er_commit();
 
         /* Top row should be approximately teal. */
-        const uint32_t top_pixel = px(&tc, FB_W / 2, 0);
-        const uint32_t teal_pm = pm(teal);
-        if ((top_pixel >> 16 & 0xFF) != ((teal_pm >> 16) & 0xFF))
+        const uint32_t top_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, 0);
+        const uint32_t teal_premultiplied = pm(teal);
+        if ((top_pixel >> 16 & 0xFF) != ((teal_premultiplied >> 16) & 0xFF))
             return fail("vertical linear: top row red channel mismatch");
 
         /* Bottom row should be approximately dark-blue. */
-        const uint32_t bot_pixel = px(&tc, FB_W / 2, FB_H - 1);
-        const uint32_t dark_pm = pm(dark);
-        if ((bot_pixel >> 16 & 0xFF) != ((dark_pm >> 16) & 0xFF))
+        const uint32_t bottom_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT - 1);
+        const uint32_t dark_premultiplied = pm(dark);
+        if ((bottom_pixel >> 16 & 0xFF) != ((dark_premultiplied >> 16) & 0xFF))
             return fail("vertical linear: bottom row red channel mismatch");
 
         /* Middle row should be somewhere between the two extremes. */
-        const uint32_t mid_pixel = px(&tc, FB_W / 2, FB_H / 2);
-        const uint8_t mid_r = (uint8_t)((mid_pixel >> 16) & 0xFF);
-        const uint8_t top_r = (uint8_t)((top_pixel >> 16) & 0xFF);
-        const uint8_t bot_r = (uint8_t)((bot_pixel >> 16) & 0xFF);
-        if (mid_r <= bot_r || mid_r >= top_r)
+        const uint32_t mid_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT / 2);
+        const uint8_t mid_red = (uint8_t)((mid_pixel >> 16) & 0xFF);
+        const uint8_t top_red = (uint8_t)((top_pixel >> 16) & 0xFF);
+        const uint8_t bottom_red = (uint8_t)((bottom_pixel >> 16) & 0xFF);
+        if (mid_red <= bottom_red || mid_red >= top_red)
             return fail("vertical linear: mid row must be between top and bottom");
 
         /* Engine should have produced one blend_rect call per row. */
-        if (tc.blend_calls < FB_H)
+        if (test_context.blend_calls < FRAMEBUFFER_HEIGHT)
             return fail("vertical linear: expected at least FB_H blend calls");
     }
 
@@ -285,42 +287,42 @@ int main(void)
         const uint32_t red = 0xFFE94560;
         const uint32_t blue = 0xFF3498DB;
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 90.0f; /* left → right */
-        p.gradient_stop_count = 2;
-        p.gradient_stops[0].color = red;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = blue;
-        p.gradient_stops[1].position = 1.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 90.0f; /* left → right */
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = red;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = blue;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
         /* Left column should be approximately red. */
-        const uint32_t left_pixel = px(&tc, 0, FB_H / 2);
-        const uint32_t red_pm = pm(red);
-        if (((left_pixel >> 16) & 0xFF) != ((red_pm >> 16) & 0xFF))
+        const uint32_t left_pixel = px(&test_context, 0, FRAMEBUFFER_HEIGHT / 2);
+        const uint32_t red_premultiplied = pm(red);
+        if (((left_pixel >> 16) & 0xFF) != ((red_premultiplied >> 16) & 0xFF))
             return fail("horizontal linear: leftmost column red channel mismatch");
 
-        const uint32_t right_pixel = px(&tc, FB_W - 1, FB_H / 2);
-        const uint32_t blue_pm = pm(blue);
-        const int rb = (int)(right_pixel & 0xFFu), bb = (int)(blue_pm & 0xFFu);
-        if (rb < bb - 8 || rb > bb + 8)
+        const uint32_t right_pixel = px(&test_context, FRAMEBUFFER_WIDTH - 1, FRAMEBUFFER_HEIGHT / 2);
+        const uint32_t blue_premultiplied = pm(blue);
+        const int right_blue = (int)(right_pixel & 0xFFu), expected_blue = (int)(blue_premultiplied & 0xFFu);
+        if (right_blue < expected_blue - 8 || right_blue > expected_blue + 8)
             return fail("horizontal linear: rightmost column not ~blue");
 
         /* Middle column between the two extremes. */
-        const uint32_t mid_pixel = px(&tc, FB_W / 2, FB_H / 2);
-        const uint8_t mid_r = (uint8_t)((mid_pixel >> 16) & 0xFF);
-        const uint8_t l_r = (uint8_t)((left_pixel >> 16) & 0xFF);
-        const uint8_t r_r = (uint8_t)((right_pixel >> 16) & 0xFF);
-        if (mid_r >= l_r || mid_r <= r_r)
+        const uint32_t mid_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT / 2);
+        const uint8_t mid_red = (uint8_t)((mid_pixel >> 16) & 0xFF);
+        const uint8_t left_red = (uint8_t)((left_pixel >> 16) & 0xFF);
+        const uint8_t right_red = (uint8_t)((right_pixel >> 16) & 0xFF);
+        if (mid_red >= left_red || mid_red <= right_red)
             return fail("horizontal linear: mid column red must be between left and right");
     }
 
@@ -328,29 +330,29 @@ int main(void)
      * Test 3: degenerate gradient — stop_count < 2 → no gradient, background_color used.
      * ----------------------------------------------------------------------- */
     {
-        const uint32_t bg = 0xFF334455;
+        const uint32_t background = 0xFF334455;
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.background_color = bg;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 0.0f;
-        p.gradient_stop_count = 1; /* < 2 → rasterizer does nothing */
-        p.gradient_stops[0].color = 0xFFFFFFFF;
-        p.gradient_stops[0].position = 0.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.background_color = background;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 0.0f;
+        props.gradient_stop_count = 1; /* < 2 → rasterizer does nothing */
+        props.gradient_stops[0].color = 0xFFFFFFFF;
+        props.gradient_stops[0].position = 0.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
         /* When stop_count < 2 the gradient is skipped; background_color fills the rect. */
-        const uint32_t top_pixel = px(&tc, FB_W / 2, 0);
-        const uint32_t bg_pm = pm(bg);
-        if (top_pixel != bg_pm)
+        const uint32_t top_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, 0);
+        const uint32_t background_premultiplied = pm(background);
+        if (top_pixel != background_premultiplied)
             return fail("degenerate gradient: background_color should fill when stop_count < 2");
     }
 
@@ -361,28 +363,28 @@ int main(void)
      *         Center (t=0) = white,  edge (t≈1 at corner) = dark-teal.
      * ----------------------------------------------------------------------- */
     {
-        const uint32_t center_col = 0xFFFFFFFF;
-        const uint32_t edge_col = 0xFF0A3040;
+        const uint32_t center_color = 0xFFFFFFFF;
+        const uint32_t edge_color = 0xFF0A3040;
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.gradient_type = ER_GRADIENT_RADIAL;
-        p.gradient_stop_count = 2;
-        p.gradient_stops[0].color = center_col;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = edge_col;
-        p.gradient_stops[1].position = 1.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_RADIAL;
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = center_color;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = edge_color;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
         /* Centre pixel should be very close to white (t≈0). */
-        const uint32_t centre_pixel = px(&tc, FB_W / 2, FB_H / 2);
+        const uint32_t centre_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT / 2);
         if (((centre_pixel >> 24) & 0xFF) < 240)
             return fail("radial: centre pixel alpha must be near 255");
         /* All channels at centre should be high (close to white). */
@@ -390,7 +392,7 @@ int main(void)
             return fail("radial: centre pixel red must be near 255");
 
         /* Corner pixel should be close to the edge color (t≈1). */
-        const uint32_t corner_pixel = px(&tc, 0, 0);
+        const uint32_t corner_pixel = px(&test_context, 0, 0);
         /* The corner red channel should be much lower than the centre. */
         if (((corner_pixel >> 16) & 0xFF) >= ((centre_pixel >> 16) & 0xFF))
             return fail("radial: corner red must be lower than centre red");
@@ -402,37 +404,37 @@ int main(void)
      * Test 5: three-stop gradient — mid-stop color appears in the middle third.
      * ----------------------------------------------------------------------- */
     {
-        const uint32_t c0 = 0xFF2A9D8F; /* teal  */
-        const uint32_t c1 = 0xFFF4A261; /* orange — mid-point */
-        const uint32_t c2 = 0xFF9B59B6; /* purple */
+        const uint32_t teal_stop = 0xFF2A9D8F;   /* teal  */
+        const uint32_t orange_stop = 0xFFF4A261; /* orange — mid-point */
+        const uint32_t purple_stop = 0xFF9B59B6; /* purple */
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 0.0f;
-        p.gradient_stop_count = 3;
-        p.gradient_stops[0].color = c0;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = c1;
-        p.gradient_stops[1].position = 0.5f;
-        p.gradient_stops[2].color = c2;
-        p.gradient_stops[2].position = 1.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 0.0f;
+        props.gradient_stop_count = 3;
+        props.gradient_stops[0].color = teal_stop;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = orange_stop;
+        props.gradient_stops[1].position = 0.5f;
+        props.gradient_stops[2].color = purple_stop;
+        props.gradient_stops[2].position = 1.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
         /* Mid row (pos ≈ 0.5) should match the orange mid-stop more than the endpoints. */
-        const uint32_t mid_pixel = px(&tc, FB_W / 2, FB_H / 2);
-        const uint8_t mid_g = (uint8_t)((mid_pixel >> 8) & 0xFF);
-        const uint32_t top_pixel = px(&tc, FB_W / 2, 0);
-        const uint32_t bot_pixel = px(&tc, FB_W / 2, FB_H - 1);
+        const uint32_t mid_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT / 2);
+        const uint8_t mid_green = (uint8_t)((mid_pixel >> 8) & 0xFF);
+        const uint32_t top_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, 0);
+        const uint32_t bottom_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT - 1);
         /* Orange has the highest green channel; verify mid > both endpoints. */
-        if (mid_g <= (uint8_t)((top_pixel >> 8) & 0xFF) && mid_g <= (uint8_t)((bot_pixel >> 8) & 0xFF))
+        if (mid_green <= (uint8_t)((top_pixel >> 8) & 0xFF) && mid_green <= (uint8_t)((bottom_pixel >> 8) & 0xFF))
             return fail("three-stop linear: mid-stop orange not visible at mid row");
     }
 
@@ -448,48 +450,48 @@ int main(void)
      * ----------------------------------------------------------------------- */
     {
         const int radius = 16; /* well past the ~4 px where the overhang hides */
-        static uint8_t solid_cov[FB_W * FB_H];
+        static uint8_t solid_coverage[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.border_radius = (int16_t)radius;
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.border_radius = (int16_t)radius;
 
         /* Reference: the same rounded box filled with an opaque solid colour. */
-        p.background_color = 0xFF2A9D8F;
-        er_node_set_props(root, &p);
-        memset(tc.fb, 0, sizeof(tc.fb));
+        props.background_color = 0xFF2A9D8F;
+        er_node_set_props(root, &props);
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
-        for (int i = 0; i < FB_W * FB_H; i++)
-            solid_cov[i] = (uint8_t)((tc.fb[i] >> 24) & 0xFFu);
+        for (int pixel_index = 0; pixel_index < FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT; pixel_index++)
+            solid_coverage[pixel_index] = (uint8_t)((test_context.framebuffer[pixel_index] >> 24) & 0xFFu);
 
         /* Same box, gradient background (two opaque stops → the same full coverage). */
-        p.background_color = 0;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 45.0f; /* diagonal: every corner sees a different colour */
-        p.gradient_stop_count = 2;
-        p.gradient_stops[0].color = 0xFF2A9D8F;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = 0xFF9B59B6;
-        p.gradient_stops[1].position = 1.0f;
-        er_node_set_props(root, &p);
-        memset(tc.fb, 0, sizeof(tc.fb));
+        props.background_color = 0;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 45.0f; /* diagonal: every corner sees a different colour */
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFF2A9D8F;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = 0xFF9B59B6;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
         /* The corners must actually be cut — otherwise the comparison below could pass on two
          * equally-square shapes if the solid fill ever regressed. */
-        if (solid_cov[0] != 0 || solid_cov[FB_W - 1] != 0)
+        if (solid_coverage[0] != 0 || solid_coverage[FRAMEBUFFER_WIDTH - 1] != 0)
             return fail("radius clip: the solid reference did not round its own corners");
 
-        for (int y = 0; y < FB_H; y++)
+        for (int y = 0; y < FRAMEBUFFER_HEIGHT; y++)
         {
-            for (int x = 0; x < FB_W; x++)
+            for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
             {
-                const uint8_t want = solid_cov[y * FB_W + x];
-                const uint8_t got = (uint8_t)((px(&tc, x, y) >> 24) & 0xFFu);
+                const uint8_t want = solid_coverage[y * FRAMEBUFFER_WIDTH + x];
+                const uint8_t got = (uint8_t)((px(&test_context, x, y) >> 24) & 0xFFu);
                 if (want != got)
                 {
                     printf("  at (%d,%d): solid alpha %u, gradient alpha %u\n", x, y, want, got);
@@ -506,32 +508,32 @@ int main(void)
      * the other three — the case a single uniform-radius mask would get wrong.
      * ----------------------------------------------------------------------- */
     {
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.border_top_left_radius = 20;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 90.0f;
-        p.gradient_stop_count = 2;
-        p.gradient_stops[0].color = 0xFF2A9D8F;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = 0xFF9B59B6;
-        p.gradient_stops[1].position = 1.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.border_top_left_radius = 20;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 90.0f;
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFF2A9D8F;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = 0xFF9B59B6;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
-        if (((px(&tc, 0, 0) >> 24) & 0xFFu) != 0)
+        if (((px(&test_context, 0, 0) >> 24) & 0xFFu) != 0)
             return fail("per-corner radius: the rounded top-left corner still painted");
-        if (((px(&tc, FB_W - 1, 0) >> 24) & 0xFFu) == 0)
+        if (((px(&test_context, FRAMEBUFFER_WIDTH - 1, 0) >> 24) & 0xFFu) == 0)
             return fail("per-corner radius: the square top-right corner was clipped");
-        if (((px(&tc, 0, FB_H - 1) >> 24) & 0xFFu) == 0)
+        if (((px(&test_context, 0, FRAMEBUFFER_HEIGHT - 1) >> 24) & 0xFFu) == 0)
             return fail("per-corner radius: the square bottom-left corner was clipped");
-        if (((px(&tc, FB_W - 1, FB_H - 1) >> 24) & 0xFFu) == 0)
+        if (((px(&test_context, FRAMEBUFFER_WIDTH - 1, FRAMEBUFFER_HEIGHT - 1) >> 24) & 0xFFu) == 0)
             return fail("per-corner radius: the square bottom-right corner was clipped");
     }
 
@@ -542,31 +544,31 @@ int main(void)
      * the node renders its background_color instead.
      * ----------------------------------------------------------------------- */
     {
-        const uint32_t bg = 0xFF2A9D8F;
+        const uint32_t background = 0xFF2A9D8F;
 
-        ERProps p;
-        memset(&p, 0, sizeof(p));
-        p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-        p.width = FB_W;
-        p.height = FB_H;
-        p.opacity = 255;
-        p.background_color = bg;
-        p.gradient_type = ER_GRADIENT_LINEAR;
-        p.gradient_angle = 0.0f;
-        p.gradient_stop_count = 2;
-        p.gradient_stops[0].color = 0xFFFF0000;
-        p.gradient_stops[0].position = 0.0f;
-        p.gradient_stops[1].color = 0xFF0000FF;
-        p.gradient_stops[1].position = 1.0f;
-        er_node_set_props(root, &p);
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.background_color = background;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 0.0f;
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFFFF0000;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = 0xFF0000FF;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
 
-        memset(tc.fb, 0, sizeof(tc.fb));
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
         er_commit();
 
         /* With gradients disabled the top row must have the background_color. */
-        const uint32_t top_pixel = px(&tc, FB_W / 2, 0);
-        const uint32_t bg_pm = pm(bg);
-        if (top_pixel != bg_pm)
+        const uint32_t top_pixel = px(&test_context, FRAMEBUFFER_WIDTH / 2, 0);
+        const uint32_t background_premultiplied = pm(background);
+        if (top_pixel != background_premultiplied)
             return fail("ERUI_GRADIENT=0: background_color must be used when gradients disabled");
     }
 

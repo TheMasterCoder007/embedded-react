@@ -39,12 +39,13 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 320
-#define FB_H 120
+#define FRAMEBUFFER_WIDTH 320
+#define FRAMEBUFFER_HEIGHT 120
+#define OPACITY_OPAQUE 255U
 
-#define ANIM_MS 480 /* animation duration */
-#define FRAME_MS 16 /* per-tick advance */
-#define FRAMES 40   /* ticks driven (runs past the end so the settled frames are checked too) */
+#define ANIMATION_MS 480 /* animation duration */
+#define FRAME_MS 16      /* per-tick advance */
+#define FRAMES 40        /* ticks driven (runs past the end so the settled frames are checked too) */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -55,9 +56,9 @@
  */
 typedef struct
 {
-    uint32_t* fb; /**< Flat ARGB8888 framebuffer. */
-    int fb_w;     /**< Width in pixels. */
-    int fb_h;     /**< Height in pixels. */
+    uint32_t* framebuffer;  /**< Flat ARGB8888 framebuffer. */
+    int framebuffer_width;  /**< Width in pixels. */
+    int framebuffer_height; /**< Height in pixels. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -65,42 +66,44 @@ typedef struct
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Rounds a 0–65025 product back to 0–255 the way the engine's blenders do. */
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
 /**
  * @brief Backend fill_rect: source-over composites a straight-alpha colour into the framebuffer.
  *
- * @param[in] argb  Straight-alpha ARGB8888 fill colour.
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width in pixels.
- * @param[in] h     Height in pixels.
- * @param[in] ctx   Pointer to TestCtx.
+ * @param[in] argb    Straight-alpha ARGB8888 fill colour.
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
+ * @param[in] ctx     Pointer to TestCtx.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || w <= 0 || h <= 0)
+    TestCtx* test_context = ctx;
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || width <= 0 || height <= 0)
         return;
-    const uint32_t inv = 255U - a;
-    const uint32_t sr = (argb >> 16) & 0xFFU, sg = (argb >> 8) & 0xFFU, sb = argb & 0xFFU;
+    const uint32_t inverse_alpha = ER_CHANNEL_MAX - alpha;
+    const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU, source_blue = argb & 0xFFU;
 
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
-        if (row < 0 || row >= t->fb_h)
+        if (row < 0 || row >= test_context->framebuffer_height)
             continue;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col < 0 || col >= t->fb_w)
+            if (column < 0 || column >= test_context->framebuffer_width)
                 continue;
-            uint32_t* d = &t->fb[row * t->fb_w + col];
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((div255(sr * a) + div255(dr * inv)) << 16) | ((div255(sg * a) + div255(dg * inv)) << 8)
-                 | (div255(sb * a) + div255(db * inv));
+            uint32_t* destination = &test_context->framebuffer[row * test_context->framebuffer_width + column];
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U | ((div255(source_red * alpha) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((div255(source_green * alpha) + div255(destination_green * inverse_alpha)) << 8)
+                           | (div255(source_blue * alpha) + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -112,39 +115,44 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
  * scratch copy — an unconditional overwrite would erase the background under antialiased edges and
  * make the comparison depend on repaint history rather than on scene state.
  *
- * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source  Source pixel buffer (premultiplied ARGB8888).
  * @param[in] stride  Source row stride in bytes.
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    for (int row = 0; row < h; row++)
+    TestCtx* test_context = ctx;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int dx = x + col, dy = y + row;
-            if (dx < 0 || dx >= t->fb_w || dy < 0 || dy >= t->fb_h)
+            const int destination_x = x + column, destination_y = y + row;
+            if (destination_x < 0 || destination_x >= test_context->framebuffer_width || destination_y < 0
+                || destination_y >= test_context->framebuffer_height)
                 continue;
-            const uint32_t sp = s[col];
-            const uint32_t sa = (sp >> 24) & 0xFFU;
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = (source_pixel >> 24) & 0xFFU;
+            if (source_alpha == 0U)
                 continue;
-            uint32_t* d = &t->fb[dy * t->fb_w + dx];
-            if (sa == 0xFFU)
+            uint32_t* destination =
+                &test_context->framebuffer[destination_y * test_context->framebuffer_width + destination_x];
+            if (source_alpha == 0xFFU)
             {
-                *d = sp;
+                *destination = source_pixel;
                 continue;
             }
-            const uint32_t inv = 255U - sa;
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((((sp >> 16) & 0xFFU) + div255(dr * inv)) << 16)
-                 | ((((sp >> 8) & 0xFFU) + div255(dg * inv)) << 8) | ((sp & 0xFFU) + div255(db * inv));
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U
+                           | ((((source_pixel >> 16) & 0xFFU) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((((source_pixel >> 8) & 0xFFU) + div255(destination_green * inverse_alpha)) << 8)
+                           | ((source_pixel & 0xFFU) + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -152,39 +160,43 @@ static void copy_cb(const void* src, int stride, int x, int y, int w, int h, voi
 /**
  * @brief Backend blend_rect: source-over composites premultiplied pixels scaled by a global alpha.
  *
- * @param[in] src     Source pixel buffer (premultiplied ARGB8888).
+ * @param[in] source  Source pixel buffer (premultiplied ARGB8888).
  * @param[in] stride  Source row stride in bytes.
  * @param[in] alpha   Global alpha scale 0–255.
  * @param[in] x       Destination left edge.
  * @param[in] y       Destination top edge.
- * @param[in] w       Width in pixels.
- * @param[in] h       Height in pixels.
+ * @param[in] width   Width in pixels.
+ * @param[in] height  Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    for (int row = 0; row < h; row++)
+    TestCtx* test_context = ctx;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int dx = x + col, dy = y + row;
-            if (dx < 0 || dx >= t->fb_w || dy < 0 || dy >= t->fb_h)
+            const int destination_x = x + column, destination_y = y + row;
+            if (destination_x < 0 || destination_x >= test_context->framebuffer_width || destination_y < 0
+                || destination_y >= test_context->framebuffer_height)
                 continue;
-            const uint32_t sp = s[col];
-            const uint32_t sa = div255(((sp >> 24) & 0xFFU) * (uint32_t)alpha);
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = div255(((source_pixel >> 24) & 0xFFU) * (uint32_t)alpha);
+            if (source_alpha == 0U)
                 continue;
-            const uint32_t inv = 255U - sa;
-            /* Source is premultiplied: scale its colour by the same global alpha, not by sa. */
-            const uint32_t sr = div255(((sp >> 16) & 0xFFU) * (uint32_t)alpha);
-            const uint32_t sg = div255(((sp >> 8) & 0xFFU) * (uint32_t)alpha);
-            const uint32_t sb = div255((sp & 0xFFU) * (uint32_t)alpha);
-            uint32_t* d = &t->fb[dy * t->fb_w + dx];
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8)
-                 | (sb + div255(db * inv));
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            /* Source is premultiplied: scale its colour by the same global alpha, not by source_alpha. */
+            const uint32_t source_red = div255(((source_pixel >> 16) & 0xFFU) * (uint32_t)alpha);
+            const uint32_t source_green = div255(((source_pixel >> 8) & 0xFFU) * (uint32_t)alpha);
+            const uint32_t source_blue = div255((source_pixel & 0xFFU) * (uint32_t)alpha);
+            uint32_t* destination =
+                &test_context->framebuffer[destination_y * test_context->framebuffer_width + destination_x];
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                           | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                           | (source_blue + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -196,13 +208,13 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 /**
  * @brief Prints a failure message.
  *
- * @param[in] msg  Message describing the failed assertion.
+ * @param[in] message  Message describing the failed assertion.
  *
  * @return EXIT_FAILURE, so callers can `return fail(...)`.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -213,19 +225,19 @@ static int fail(const char* msg)
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -238,45 +250,45 @@ static ERProps props_default(void)
  * The bar starts at translateX 0, so the last layout sees no transform on it, and animates 240 px
  * right — well clear of its 64 px-wide layout box.
  *
- * @param[in,out] t          TestCtx owning the framebuffer.
- * @param[in]     with_fade  Also fade a stacked sibling on the native driver, the shape this was
+ * @param[in,out] test_context  TestCtx owning the framebuffer.
+ * @param[in]     with_fade     Also fade a stacked sibling on the native driver, the shape this was
  *                           first reported as.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first diverging frame.
  */
-static int run_slide(TestCtx* t, bool with_fade)
+static int run_slide(TestCtx* test_context, bool with_fade)
 {
-    static uint32_t incremental[FB_W * FB_H];
+    static uint32_t incremental[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
 
     er_reset();
-    memset(t->fb, 0, sizeof(uint32_t) * FB_W * FB_H);
+    memset(test_context->framebuffer, 0, sizeof(uint32_t) * FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = FB_W;
-    rp.height = FB_H;
-    rp.background_color = 0xFF101010U;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = FRAMEBUFFER_WIDTH;
+    root_props.height = FRAMEBUFFER_HEIGHT;
+    root_props.background_color = 0xFF101010U;
+    er_node_set_props(root, &root_props);
 
     ERNode* bar = er_node_create(ER_NODE_VIEW);
-    ERProps bp = props_default();
-    bp.position = ER_POS_ABSOLUTE;
-    bp.left = 0;
-    bp.top = 0;
-    bp.width = 64;
-    bp.height = 20;
-    bp.background_color = 0xFF4DA3FFU;
-    er_node_set_props(bar, &bp);
+    ERProps bar_props = props_default();
+    bar_props.position = ER_POS_ABSOLUTE;
+    bar_props.left = 0;
+    bar_props.top = 0;
+    bar_props.width = 64;
+    bar_props.height = 20;
+    bar_props.background_color = 0xFF4DA3FFU;
+    er_node_set_props(bar, &bar_props);
 
     ERNode* fader = er_node_create(ER_NODE_VIEW);
-    ERProps fp = props_default();
-    fp.position = ER_POS_ABSOLUTE;
-    fp.left = 0;
-    fp.top = 34;
-    fp.width = 300;
-    fp.height = 20;
-    fp.background_color = 0xFF3DDC84U;
-    er_node_set_props(fader, &fp);
+    ERProps fader_props = props_default();
+    fader_props.position = ER_POS_ABSOLUTE;
+    fader_props.left = 0;
+    fader_props.top = 34;
+    fader_props.width = 300;
+    fader_props.height = 20;
+    fader_props.background_color = 0xFF3DDC84U;
+    er_node_set_props(fader, &fader_props);
 
     er_tree_append_child(root, bar);
     er_tree_append_child(root, fader);
@@ -285,44 +297,44 @@ static int run_slide(TestCtx* t, bool with_fade)
     er_commit();
 
     /* Bind AFTER the layout above, exactly as a press handler starting an animation does. */
-    ERAnimConfig cfg = {0};
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = ANIM_MS;
-    cfg.easing = ER_EASE_LINEAR;
+    ERAnimConfig config = {0};
+    config.type = ER_ANIM_TIMING;
+    config.duration_ms = ANIMATION_MS;
+    config.easing = ER_EASE_LINEAR;
 
     ERAnimValueHandle slide = er_anim_value_create(0.0f);
     er_anim_value_bind(slide, bar, ER_PROP_TRANSLATE_X);
-    er_anim_value_animate(slide, 240.0f, &cfg);
+    er_anim_value_animate(slide, 240.0f, &config);
 
     ERAnimValueHandle fade = er_anim_value_create(0.0f);
     if (with_fade)
     {
         er_anim_value_bind(fade, fader, ER_PROP_OPACITY);
-        er_anim_value_animate(fade, 1.0f, &cfg);
+        er_anim_value_animate(fade, 1.0f, &config);
     }
 
-    for (int f = 0; f < FRAMES; f++)
+    for (int frame_index = 0; frame_index < FRAMES; frame_index++)
     {
         embedded_renderer_tick(FRAME_MS);
         er_commit();
-        memcpy(incremental, t->fb, sizeof(incremental));
+        memcpy(incremental, test_context->framebuffer, sizeof(incremental));
 
-        memset(t->fb, 0, sizeof(uint32_t) * FB_W * FB_H);
+        memset(test_context->framebuffer, 0, sizeof(uint32_t) * FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
         er_force_full_repaint();
         er_commit();
 
-        if (memcmp(incremental, t->fb, sizeof(incremental)) != 0)
+        if (memcmp(incremental, test_context->framebuffer, sizeof(incremental)) != 0)
         {
-            char msg[160];
-            snprintf(msg,
-                     sizeof(msg),
+            char message[160];
+            snprintf(message,
+                     sizeof(message),
                      "%s: frame %d of the slide differs from a full repaint of the same state",
                      with_fade ? "translate + sibling fade" : "translate alone",
-                     f);
-            return fail(msg);
+                     frame_index);
+            return fail(message);
         }
         /* Continue the incremental history from the incremental frame, not the reference one. */
-        memcpy(t->fb, incremental, sizeof(incremental));
+        memcpy(test_context->framebuffer, incremental, sizeof(incremental));
     }
     return EXIT_SUCCESS;
 }
@@ -338,14 +350,14 @@ static int run_slide(TestCtx* t, bool with_fade)
  */
 int main(void)
 {
-    static uint32_t fb[FB_W * FB_H];
-    TestCtx tc = {fb, FB_W, FB_H};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
-    embedded_renderer_set_backend(&be);
+    static uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    TestCtx test_context = {framebuffer, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &test_context};
+    embedded_renderer_set_backend(&backend);
 
-    if (run_slide(&tc, false) != EXIT_SUCCESS)
+    if (run_slide(&test_context, false) != EXIT_SUCCESS)
         return EXIT_FAILURE;
-    if (run_slide(&tc, true) != EXIT_SUCCESS)
+    if (run_slide(&test_context, true) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     return EXIT_SUCCESS;

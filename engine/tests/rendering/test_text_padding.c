@@ -35,14 +35,15 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 320
-#define FB_H 240
+#define FRAMEBUFFER_WIDTH 320
+#define FRAMEBUFFER_HEIGHT 240
+#define OPACITY_OPAQUE 255U
 
 /* The text node's box. Wide enough that "Save" plus the largest padding still fits on one line. */
 #define BOX_X 40
 #define BOX_Y 30
-#define BOX_W 160
-#define BOX_H 60
+#define BOX_WIDTH 160
+#define BOX_HEIGHT 60
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -51,7 +52,7 @@
 /** @brief Bounding box of everything the backend was asked to draw in one commit. */
 typedef struct
 {
-    int ops;
+    int operation_count;
     int min_x, min_y, max_x, max_y;
 } DrawBox;
 
@@ -70,9 +71,9 @@ static DrawBox s_box;
  */
 static void box_reset(void)
 {
-    s_box.ops = 0;
-    s_box.min_x = FB_W;
-    s_box.min_y = FB_H;
+    s_box.operation_count = 0;
+    s_box.min_x = FRAMEBUFFER_WIDTH;
+    s_box.min_y = FRAMEBUFFER_HEIGHT;
     s_box.max_x = 0;
     s_box.max_y = 0;
 }
@@ -80,93 +81,93 @@ static void box_reset(void)
 /**
  * @brief Folds one drawn rectangle into the recorded bounding box.
  *
- * @param[in] x  Left edge.
- * @param[in] y  Top edge.
- * @param[in] w  Width.
- * @param[in] h  Height.
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
  */
-static void box_add(int x, int y, int w, int h)
+static void box_add(int x, int y, int width, int height)
 {
-    if (w <= 0 || h <= 0)
+    if (width <= 0 || height <= 0)
         return;
-    s_box.ops++;
+    s_box.operation_count++;
     if (x < s_box.min_x)
         s_box.min_x = x;
     if (y < s_box.min_y)
         s_box.min_y = y;
-    if (x + w > s_box.max_x)
-        s_box.max_x = x + w;
-    if (y + h > s_box.max_y)
-        s_box.max_y = y + h;
+    if (x + width > s_box.max_x)
+        s_box.max_x = x + width;
+    if (y + height > s_box.max_y)
+        s_box.max_y = y + height;
 }
 
 /**
  * @brief Backend fill_rect that records the drawn rectangle.
  *
- * @param[in] argb  Fill color (unused).
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width.
- * @param[in] h     Height.
- * @param[in] ctx   Unused.
+ * @param[in] argb    Fill color (unused).
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
+ * @param[in] ctx     Unused.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)ctx;
-    box_add(x, y, w, h);
+    box_add(x, y, width, height);
 }
 
 /**
  * @brief Backend copy_rect that records the drawn rectangle.
  *
- * @param[in] src  Source buffer (unused).
- * @param[in] s    Row stride (unused).
- * @param[in] x    Left edge.
- * @param[in] y    Top edge.
- * @param[in] w    Width.
- * @param[in] h    Height.
- * @param[in] ctx  Unused.
+ * @param[in] source  Source buffer (unused).
+ * @param[in] stride  Row stride (unused).
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
+ * @param[in] ctx     Unused.
  */
-static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
+    (void)source;
+    (void)stride;
     (void)ctx;
-    box_add(x, y, w, h);
+    box_add(x, y, width, height);
 }
 
 /**
  * @brief Backend blend_rect that records the drawn rectangle.
  *
- * @param[in] src  Source buffer (unused).
- * @param[in] s    Row stride (unused).
- * @param[in] a    Global alpha (unused).
- * @param[in] x    Left edge.
- * @param[in] y    Top edge.
- * @param[in] w    Width.
- * @param[in] h    Height.
- * @param[in] ctx  Unused.
+ * @param[in] source  Source buffer (unused).
+ * @param[in] stride  Row stride (unused).
+ * @param[in] alpha   Global alpha (unused).
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
+ * @param[in] ctx     Unused.
  */
-static void blend_cb(const void* src, int s, uint8_t a, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
-    (void)a;
+    (void)source;
+    (void)stride;
+    (void)alpha;
     (void)ctx;
-    box_add(x, y, w, h);
+    box_add(x, y, width, height);
 }
 
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable description of the failed assertion.
+ * @param[in] message  Human-readable description of the failed assertion.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -179,21 +180,21 @@ static int fail(const char* msg)
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.padding_horizontal = p.padding_vertical = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.margin_horizontal = p.margin_vertical = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.padding_horizontal = props.padding_vertical = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.margin_horizontal = props.margin_vertical = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
@@ -208,24 +209,24 @@ static void render_padded_text(int16_t pad_left, int16_t pad_top, DrawBox* out)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = (int16_t)FB_W;
-    rp.height = (int16_t)FB_H;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
+    root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
+    er_node_set_props(root, &root_props);
 
     ERNode* text = er_node_create(ER_NODE_TEXT);
-    ERProps tp = props_default();
-    tp.position = ER_POS_ABSOLUTE; /* pin the box so padding is the ONLY difference between cases */
-    tp.left = BOX_X;
-    tp.top = BOX_Y;
-    tp.width = BOX_W;
-    tp.height = BOX_H;
-    tp.font_size = 16;
-    tp.color = 0xFFFFFFFFU;
-    tp.padding_left = pad_left;
-    tp.padding_top = pad_top;
-    strncpy(tp.text, "Save", ER_TEXT_MAX);
-    er_node_set_props(text, &tp);
+    ERProps text_props = props_default();
+    text_props.position = ER_POS_ABSOLUTE; /* pin the box so padding is the ONLY difference between cases */
+    text_props.left = BOX_X;
+    text_props.top = BOX_Y;
+    text_props.width = BOX_WIDTH;
+    text_props.height = BOX_HEIGHT;
+    text_props.font_size = 16;
+    text_props.color = 0xFFFFFFFFU;
+    text_props.padding_left = pad_left;
+    text_props.padding_top = pad_top;
+    strncpy(text_props.text, "Save", ER_TEXT_MAX);
+    er_node_set_props(text, &text_props);
 
     er_tree_append_child(root, text);
     er_tree_set_root(root);
@@ -250,14 +251,14 @@ static void render_padded_text(int16_t pad_left, int16_t pad_top, DrawBox* out)
  */
 int main(void)
 {
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, NULL};
+    embedded_renderer_set_backend(&backend);
 
     DrawBox bare, padded;
     render_padded_text(ER_LAYOUT_AUTO, ER_LAYOUT_AUTO, &bare);
     render_padded_text(12, 9, &padded);
 
-    if (bare.ops == 0 || padded.ops == 0)
+    if (bare.operation_count == 0 || padded.operation_count == 0)
         return fail("no draw calls recorded — the text node painted nothing");
     if (bare.min_x < BOX_X || bare.min_y < BOX_Y)
         return fail("unpadded glyphs drew outside their own node box");
@@ -275,7 +276,7 @@ int main(void)
         return fail("padding changed the height of the drawn glyph run");
 
     /* And it still lives inside the node: the padded run must not spill past the padding box. */
-    if (padded.max_x > BOX_X + BOX_W || padded.max_y > BOX_Y + BOX_H)
+    if (padded.max_x > BOX_X + BOX_WIDTH || padded.max_y > BOX_Y + BOX_HEIGHT)
         return fail("padded glyphs drew outside the node box");
 
     return EXIT_SUCCESS;

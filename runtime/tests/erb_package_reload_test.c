@@ -56,10 +56,10 @@ enum
 };
 
 static uint32_t s_flash[ERB_PACKAGE_SLOT_COUNT][SLOT_WORDS];
-static uint32_t s_arena[1024];
+static uint32_t s_arena[TEST_ARENA_WORDS];
 static uint32_t s_buffer[ERB_PACKAGE_RELOAD_BUFFER_BYTES(CHUNK_BYTES) / sizeof(uint32_t)];
 static uint8_t s_package[PACKAGE_MAX_BYTES];
-static TPkg s_pkg;
+static TPkg s_package_spec;
 static ErbConfig s_config;
 static ErbPackageSlots s_slots;
 static ErbPackageSlotBoot s_boot;
@@ -85,22 +85,22 @@ static unsigned s_erases;
         }                                                                                                              \
     } while (0)
 
-static bool sensors_read(const int32_t* args, int32_t* result, void* context)
+static bool sensors_read(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
-    *result = args[0] + 1;
+    *result = arguments[0] + 1;
     return true;
 }
 
 static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}};
 
-static void null_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void null_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -205,18 +205,18 @@ static void boot(void)
 /** @brief Builds a package of the given kind into s_package. */
 static uint32_t build(int kind)
 {
-    tpkg_base(&s_pkg);
+    tpkg_base(&s_package_spec);
     if (kind == BOOT_TRAP)
     {
-        const uint32_t trap[] = {OP_ABX(TRAP, 0, STR_BOOM)};
-        const TFunction keep = s_pkg.functions[F_BOOT];
-        tpkg_set_code(&s_pkg, F_BOOT, s_pkg.types + keep.types, keep.registers, trap, 1);
+        const uint32_t trap[] = {OP_ABX(TRAP, 0, STRING_BOOM)};
+        const TFunction keep = s_package_spec.functions[FUNCTION_BOOT];
+        tpkg_set_code(&s_package_spec, FUNCTION_BOOT, s_package_spec.types + keep.types, keep.registers, trap, 1);
     }
     if (kind == TOO_BIG)
     {
-        s_pkg.panels[0].arena_bytes = sizeof(s_arena) * 2u;
+        s_package_spec.panels[0].arena_bytes = sizeof(s_arena) * 2u;
     }
-    const uint32_t length = tpkg_build(&s_pkg, s_package);
+    const uint32_t length = tpkg_build(&s_package_spec, s_package);
     if (kind == BAD_CRC)
     {
         s_package[length - 1u] ^= 0xFFu;
@@ -243,8 +243,8 @@ static size_t frame(uint8_t* out, uint8_t type, const void* payload, uint32_t by
     out[4] = ER_HR_PROTO_VERSION;
     out[5] = type;
     memcpy(out + 8, &bytes, sizeof(bytes));
-    const uint32_t crc = er_crc32((const uint8_t*)payload, bytes);
-    memcpy(out + 12, &crc, sizeof(crc));
+    const uint32_t checksum = er_crc32((const uint8_t*)payload, bytes);
+    memcpy(out + 12, &checksum, sizeof(checksum));
     memcpy(out + ER_HR_HEADER_SIZE, payload, bytes);
     return ER_HR_HEADER_SIZE + bytes;
 }
@@ -525,13 +525,13 @@ static void test_flaky_link(void)
 
     /* The rest arrives a byte at a time, as a slow link hands it over. */
     bool started = false;
-    for (uint32_t at = CHUNK_BYTES; at < length; at += CHUNK_BYTES)
+    for (uint32_t chunk_start = CHUNK_BYTES; chunk_start < length; chunk_start += CHUNK_BYTES)
     {
-        const uint32_t remaining = length - at;
+        const uint32_t remaining = length - chunk_start;
         const uint32_t take = remaining < CHUNK_BYTES ? remaining : CHUNK_BYTES;
-        memcpy(payload, &at, sizeof(at));
-        memcpy(payload + sizeof(at), s_package + at, take);
-        const size_t frame_bytes = frame(out, ER_HR_MSG_PACKAGE_CHUNK, payload, take + sizeof(at));
+        memcpy(payload, &chunk_start, sizeof(chunk_start));
+        memcpy(payload + sizeof(chunk_start), s_package + chunk_start, take);
+        const size_t frame_bytes = frame(out, ER_HR_MSG_PACKAGE_CHUNK, payload, take + sizeof(chunk_start));
         for (size_t index = 0; index < frame_bytes; index++)
         {
             started = erb_package_reload_feed(&s_reload, out + index, 1u) || started;

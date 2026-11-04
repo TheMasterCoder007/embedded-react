@@ -38,60 +38,63 @@
 #include <string.h>
 
 #define SCREEN 200
+#define OPACITY_OPAQUE 255U
 
-static uint32_t s_fb[SCREEN * SCREEN];
+static uint32_t s_framebuffer[SCREEN * SCREEN];
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
 /** @brief Straight-alpha source-over fill (mirrors backends/software). */
-static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || w <= 0 || h <= 0)
+    const uint32_t angle = (argb >> 24) & 0xFFU;
+    if (angle == 0U || width <= 0 || height <= 0)
         return;
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
         if (row < 0 || row >= SCREEN)
             continue;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col < 0 || col >= SCREEN)
+            if (column < 0 || column >= SCREEN)
                 continue;
-            uint32_t* d = &s_fb[row * SCREEN + col];
-            if (a == 0xFFU)
+            uint32_t* destination = &s_framebuffer[row * SCREEN + column];
+            if (angle == 0xFFU)
             {
-                *d = 0xFF000000U | (argb & 0x00FFFFFFU);
+                *destination = 0xFF000000U | (argb & 0x00FFFFFFU);
             }
             else
             {
-                const uint32_t inv = 255U - a;
-                const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-                const uint32_t sr = (argb >> 16) & 0xFFU, sg = (argb >> 8) & 0xFFU, sb = argb & 0xFFU;
-                const uint32_t r = div255(sr * a) + div255(dr * inv);
-                const uint32_t g = div255(sg * a) + div255(dg * inv);
-                const uint32_t b = div255(sb * a) + div255(db * inv);
-                *d = 0xFF000000U | (r << 16) | (g << 8) | b;
+                const uint32_t inverse_alpha = ER_CHANNEL_MAX - angle;
+                const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                               destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+                const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU,
+                               source_blue = argb & 0xFFU;
+                const uint32_t red = div255(source_red * angle) + div255(destination_red * inverse_alpha);
+                const uint32_t green = div255(source_green * angle) + div255(destination_green * inverse_alpha);
+                const uint32_t blue = div255(source_blue * angle) + div255(destination_blue * inverse_alpha);
+                *destination = 0xFF000000U | (red << 16) | (green << 8) | blue;
             }
         }
     }
 }
 
 /** @brief Copies a premultiplied ARGB8888 buffer in (opaque overwrite). */
-static void fb_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void fb_copy(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t* px_src = src;
-    const int pitch = (stride > 0) ? stride / (int)sizeof(uint32_t) : w;
-    for (int row = 0; row < h; row++)
-        for (int col = 0; col < w; col++)
+    const uint32_t* source_pixels = source;
+    const int pitch = (stride > 0) ? stride / (int)sizeof(uint32_t) : width;
+    for (int row = 0; row < height; row++)
+        for (int column = 0; column < width; column++)
         {
-            const int fy = y + row, fx = x + col;
-            if (fy >= 0 && fx >= 0 && fy < SCREEN && fx < SCREEN)
-                s_fb[fy * SCREEN + fx] = px_src[row * pitch + col];
+            const int framebuffer_y = y + row, framebuffer_x = x + column;
+            if (framebuffer_y >= 0 && framebuffer_x >= 0 && framebuffer_y < SCREEN && framebuffer_x < SCREEN)
+                s_framebuffer[framebuffer_y * SCREEN + framebuffer_x] = source_pixels[row * pitch + column];
         }
 }
 
@@ -101,50 +104,52 @@ static void fb_copy(const void* src, int stride, int x, int y, int w, int h, voi
  * This is where anti-aliased vector output lands — a backend without it silently draws nothing at
  * all, which is exactly how a damage test can pass while painting no ink.
  */
-static void fb_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void fb_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t* px_src = src;
-    const int pitch = (stride > 0) ? stride / (int)sizeof(uint32_t) : w;
-    for (int row = 0; row < h; row++)
-        for (int col = 0; col < w; col++)
+    const uint32_t* source_pixels = source;
+    const int pitch = (stride > 0) ? stride / (int)sizeof(uint32_t) : width;
+    for (int row = 0; row < height; row++)
+        for (int column = 0; column < width; column++)
         {
-            const int fy = y + row, fx = x + col;
-            if (fy < 0 || fx < 0 || fy >= SCREEN || fx >= SCREEN)
+            const int framebuffer_y = y + row, framebuffer_x = x + column;
+            if (framebuffer_y < 0 || framebuffer_x < 0 || framebuffer_y >= SCREEN || framebuffer_x >= SCREEN)
                 continue;
-            const uint32_t sp = px_src[row * pitch + col];
-            const uint32_t sa = div255(((sp >> 24) & 0xFFU) * alpha);
-            const uint32_t sr = div255(((sp >> 16) & 0xFFU) * alpha);
-            const uint32_t sg = div255(((sp >> 8) & 0xFFU) * alpha);
-            const uint32_t sb = div255((sp & 0xFFU) * alpha);
-            uint32_t* d = &s_fb[fy * SCREEN + fx];
-            const uint32_t inv = 255U - sa;
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8)
-                 | (sb + div255(db * inv));
+            const uint32_t svg_props = source_pixels[row * pitch + column];
+            const uint32_t source_alpha = div255(((svg_props >> 24) & 0xFFU) * alpha);
+            const uint32_t source_red = div255(((svg_props >> 16) & 0xFFU) * alpha);
+            const uint32_t source_green = div255(((svg_props >> 8) & 0xFFU) * alpha);
+            const uint32_t source_blue = div255((svg_props & 0xFFU) * alpha);
+            uint32_t* destination = &s_framebuffer[framebuffer_y * SCREEN + framebuffer_x];
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                           | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                           | (source_blue + div255(destination_blue * inverse_alpha));
         }
 }
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -170,20 +175,20 @@ static void paint_init(void)
 static void build_scene(ERNode** out_root, ERNode** out_svg)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SCREEN;
-    rp.height = SCREEN;
-    rp.background_color = 0xFF101820U;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = 0xFF101820U;
+    er_node_set_props(root, &root_props);
 
     ERNode* svg = er_node_create(ER_NODE_VECTOR);
-    ERProps sp = props_default();
-    sp.width = 160;
-    sp.height = 160;
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = 20;
-    sp.top = 20;
-    er_node_set_props(svg, &sp);
+    ERProps svg_props = props_default();
+    svg_props.width = 160;
+    svg_props.height = 160;
+    svg_props.position = ER_POS_ABSOLUTE;
+    svg_props.left = 20;
+    svg_props.top = 20;
+    er_node_set_props(svg, &svg_props);
 
     er_tree_append_child(root, svg);
     er_tree_set_root(root);
@@ -198,170 +203,170 @@ static void build_scene(ERNode** out_root, ERNode** out_svg)
  * `pivot` builders do the opposite, moving the anchor and holding the segment's coordinates. Both
  * sweep the shape, and both must be damaged in full.
  */
-typedef void (*TapeFn)(int step, float* ops, int* n_ops);
+typedef void (*TapeFn)(int step, float* tape, int* tape_count);
 
 /* Local coordinates inside the 160x160 <Svg> box. */
 #define HUB_X 80.0f
 #define HUB_Y 80.0f
-#define NEEDLE_R 60.0f
+#define NEEDLE_RADIUS 60.0f
 
-static void tape_needle_open(int step, float* ops, int* n_ops)
+static void tape_needle_open(int step, float* tape, int* tape_count)
 {
-    const float a = 0.12f * (float)step;
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = HUB_X;
-    ops[i++] = HUB_Y;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = HUB_X + NEEDLE_R * cosf(a);
-    ops[i++] = HUB_Y + NEEDLE_R * sinf(a);
-    *n_ops = i;
+    const float angle = 0.12f * (float)step;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = HUB_X;
+    tape[cursor++] = HUB_Y;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = HUB_X + NEEDLE_RADIUS * cosf(angle);
+    tape[cursor++] = HUB_Y + NEEDLE_RADIUS * sinf(angle);
+    *tape_count = cursor;
 }
 
-static void tape_needle_closed(int step, float* ops, int* n_ops)
+static void tape_needle_closed(int step, float* tape, int* tape_count)
 {
-    int i = 0;
-    tape_needle_open(step, ops, &i);
-    ops[i++] = (float)ER_VOP_CLOSE;
-    *n_ops = i;
+    int cursor = 0;
+    tape_needle_open(step, tape, &cursor);
+    tape[cursor++] = (float)ER_VOP_CLOSE;
+    *tape_count = cursor;
 }
 
-static void tape_curve(int step, float* ops, int* n_ops)
+static void tape_curve(int step, float* tape, int* tape_count)
 {
-    const float a = 0.12f * (float)step;
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = HUB_X;
-    ops[i++] = HUB_Y;
-    ops[i++] = (float)ER_VOP_CUBIC;
-    ops[i++] = HUB_X + 30.0f * cosf(a);
-    ops[i++] = HUB_Y + 30.0f * sinf(a);
-    ops[i++] = HUB_X + 50.0f * cosf(a);
-    ops[i++] = HUB_Y + 50.0f * sinf(a);
-    ops[i++] = HUB_X + NEEDLE_R * cosf(a);
-    ops[i++] = HUB_Y + NEEDLE_R * sinf(a);
-    *n_ops = i;
+    const float angle = 0.12f * (float)step;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = HUB_X;
+    tape[cursor++] = HUB_Y;
+    tape[cursor++] = (float)ER_VOP_CUBIC;
+    tape[cursor++] = HUB_X + 30.0f * cosf(angle);
+    tape[cursor++] = HUB_Y + 30.0f * sinf(angle);
+    tape[cursor++] = HUB_X + 50.0f * cosf(angle);
+    tape[cursor++] = HUB_Y + 50.0f * sinf(angle);
+    tape[cursor++] = HUB_X + NEEDLE_RADIUS * cosf(angle);
+    tape[cursor++] = HUB_Y + NEEDLE_RADIUS * sinf(angle);
+    *tape_count = cursor;
 }
 
 /** @brief A line from inside the node to far past it, moved down: its changed bounds run past the int16 rect. */
-static void tape_far_line(int step, float* ops, int* n_ops)
+static void tape_far_line(int step, float* tape, int* tape_count)
 {
     const float y = 20.0f + 20.0f * (float)step;
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = 20.0f;
-    ops[i++] = y;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = 40000.0f;
-    ops[i++] = y;
-    *n_ops = i;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = 20.0f;
+    tape[cursor++] = y;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = 40000.0f;
+    tape[cursor++] = y;
+    *tape_count = cursor;
 }
 
 /**
  * @brief An arc's end swept through huge and infinite angles and back. A turn or more draws the whole circle and
  *        an infinite sweep nothing; every change between them has to be damaged in full.
  */
-static void tape_arc_blowup(int step, float* ops, int* n_ops)
+static void tape_arc_blowup(int step, float* tape, int* tape_count)
 {
     static const float k_end[7] = {1.2f, 1e10f, -1e10f, INFINITY, 1.2f, -INFINITY, 2.0f};
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = HUB_X + 40.0f;
-    ops[i++] = HUB_Y;
-    ops[i++] = (float)ER_VOP_ARC;
-    ops[i++] = HUB_X;
-    ops[i++] = HUB_Y;
-    ops[i++] = 40.0f;
-    ops[i++] = 0.0f;
-    ops[i++] = k_end[step];
-    ops[i++] = 0.0f;
-    *n_ops = i;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = HUB_X + 40.0f;
+    tape[cursor++] = HUB_Y;
+    tape[cursor++] = (float)ER_VOP_ARC;
+    tape[cursor++] = HUB_X;
+    tape[cursor++] = HUB_Y;
+    tape[cursor++] = 40.0f;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = k_end[step];
+    tape[cursor++] = 0.0f;
+    *tape_count = cursor;
 }
 
 /** @brief The anchor slides down the left edge; the far endpoint never moves, so the line pivots. */
-static void tape_pivot_line(int step, float* ops, int* n_ops)
+static void tape_pivot_line(int step, float* tape, int* tape_count)
 {
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = 30.0f;
-    ops[i++] = 40.0f + 8.0f * (float)step;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = 140.0f;
-    ops[i++] = 80.0f;
-    *n_ops = i;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = 30.0f;
+    tape[cursor++] = 40.0f + 8.0f * (float)step;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = 140.0f;
+    tape[cursor++] = 80.0f;
+    *tape_count = cursor;
 }
 
 /** @brief Same pivot, with every cubic control point held fixed. */
-static void tape_pivot_cubic(int step, float* ops, int* n_ops)
+static void tape_pivot_cubic(int step, float* tape, int* tape_count)
 {
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = 30.0f;
-    ops[i++] = 40.0f + 8.0f * (float)step;
-    ops[i++] = (float)ER_VOP_CUBIC;
-    ops[i++] = 70.0f;
-    ops[i++] = 30.0f;
-    ops[i++] = 110.0f;
-    ops[i++] = 30.0f;
-    ops[i++] = 140.0f;
-    ops[i++] = 80.0f;
-    *n_ops = i;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = 30.0f;
+    tape[cursor++] = 40.0f + 8.0f * (float)step;
+    tape[cursor++] = (float)ER_VOP_CUBIC;
+    tape[cursor++] = 70.0f;
+    tape[cursor++] = 30.0f;
+    tape[cursor++] = 110.0f;
+    tape[cursor++] = 30.0f;
+    tape[cursor++] = 140.0f;
+    tape[cursor++] = 80.0f;
+    *tape_count = cursor;
 }
 
 /** @brief Same pivot into an arc: the segment from the pen to the arc's start point sweeps, while the
  *         arc's own parameters never change. */
-static void tape_pivot_arc(int step, float* ops, int* n_ops)
+static void tape_pivot_arc(int step, float* tape, int* tape_count)
 {
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = 30.0f;
-    ops[i++] = 40.0f + 8.0f * (float)step;
-    ops[i++] = (float)ER_VOP_ARC;
-    ops[i++] = HUB_X;
-    ops[i++] = HUB_Y;
-    ops[i++] = 40.0f;
-    ops[i++] = 0.0f;
-    ops[i++] = 1.2f;
-    ops[i++] = 0.0f;
-    *n_ops = i;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = 30.0f;
+    tape[cursor++] = 40.0f + 8.0f * (float)step;
+    tape[cursor++] = (float)ER_VOP_ARC;
+    tape[cursor++] = HUB_X;
+    tape[cursor++] = HUB_Y;
+    tape[cursor++] = 40.0f;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = 1.2f;
+    tape[cursor++] = 0.0f;
+    *tape_count = cursor;
 }
 
 /** @brief Compares the incremental result against a forced full repaint of the same scene. */
 static int check_matches_full_repaint(const char* what)
 {
     uint32_t incremental[SCREEN * SCREEN];
-    memcpy(incremental, s_fb, sizeof(incremental));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
     er_force_full_repaint();
     frame();
 
     /* A backend with no blend_rect draws no anti-aliased vector output at all, which would make every
      * assertion below pass against a blank screen. Prove the shape actually inked something first. */
     long ink = 0;
-    for (int i = 0; i < SCREEN * SCREEN; i++)
-        if (s_fb[i] != 0xFF101820U)
+    for (int pixel_index = 0; pixel_index < SCREEN * SCREEN; pixel_index++)
+        if (s_framebuffer[pixel_index] != 0xFF101820U)
             ink++;
     if (ink < 100)
         return fail("the reference frame drew (almost) nothing — the scene never painted");
 
-    if (memcmp(incremental, s_fb, sizeof(incremental)) != 0)
+    if (memcmp(incremental, s_framebuffer, sizeof(incremental)) != 0)
     {
         long bad = 0;
-        for (int i = 0; i < SCREEN * SCREEN; i++)
-            if (incremental[i] != s_fb[i])
+        for (int pixel_index = 0; pixel_index < SCREEN * SCREEN; pixel_index++)
+            if (incremental[pixel_index] != s_framebuffer[pixel_index])
                 bad++;
         fprintf(stderr, "  %ld stale pixels\n", bad);
         return fail(what);
@@ -369,31 +374,31 @@ static int check_matches_full_repaint(const char* what)
     return EXIT_SUCCESS;
 }
 
-/** @brief Animates @p fn for a few frames, then asserts the incremental result is pixel-exact. */
-static int check_sweep(const char* label, TapeFn fn)
+/** @brief Animates @p build_tape for a few frames, then asserts the incremental result is pixel-exact. */
+static int check_sweep(const char* label, TapeFn build_tape)
 {
     ERNode *root, *svg;
     build_scene(&root, &svg);
-    float ops[24];
-    int n = 0;
+    float tape[24];
+    int count = 0;
 
-    fn(0, ops, &n);
-    er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
+    build_tape(0, tape, &count);
+    er_node_set_vector_ops(svg, tape, count, &g_paint, 1, NULL, 0);
     frame();
     frame();
 
     for (int step = 1; step <= 6; step++)
     {
-        fn(step, ops, &n);
-        er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
+        build_tape(step, tape, &count);
+        er_node_set_vector_ops(svg, tape, count, &g_paint, 1, NULL, 0);
         frame();
     }
 
-    const int rc = check_matches_full_repaint(label);
+    const int result = check_matches_full_repaint(label);
     er_node_destroy(root);
-    if (rc == EXIT_SUCCESS)
+    if (result == EXIT_SUCCESS)
         printf("PASS: %s matches a full repaint\n", label);
-    return rc;
+    return result;
 }
 
 /**
@@ -406,24 +411,24 @@ static int check_huge_dirty_rect(void)
 {
     ERNode *root, *svg;
     build_scene(&root, &svg);
-    float ops[24];
-    int n = 0;
+    float tape[24];
+    int count = 0;
 
-    tape_needle_open(0, ops, &n);
-    er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
+    tape_needle_open(0, tape, &count);
+    er_node_set_vector_ops(svg, tape, count, &g_paint, 1, NULL, 0);
     frame();
     frame();
 
-    tape_needle_open(3, ops, &n);
-    er_node_set_vector_ops(svg, ops, n, &g_paint, 1, NULL, 0);
+    tape_needle_open(3, tape, &count);
+    er_node_set_vector_ops(svg, tape, count, &g_paint, 1, NULL, 0);
     er_node_set_vector_dirty_rect(svg, -40000, -40000, 80000, 80000);
     frame();
 
-    const int rc = check_matches_full_repaint("a dirty rect past the int16 range should still damage the node");
+    const int result = check_matches_full_repaint("a dirty rect past the int16 range should still damage the node");
     er_node_destroy(root);
-    if (rc == EXIT_SUCCESS)
+    if (result == EXIT_SUCCESS)
         printf("PASS: a dirty rect past the int16 range still damages the node\n");
-    return rc;
+    return result;
 }
 
 #if ERUI_GRADIENT
@@ -432,33 +437,33 @@ static int check_huge_dirty_rect(void)
  *
  * The rect sits left of the line, so the line's own damage never reaches it.
  */
-static int tape_grad_rect_and_line(float line_y, float* ops)
+static int tape_grad_rect_and_line(float line_y, float* tape)
 {
-    int i = 0;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 0.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = 10.0f;
-    ops[i++] = 10.0f;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = 60.0f;
-    ops[i++] = 10.0f;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = 60.0f;
-    ops[i++] = 150.0f;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = 10.0f;
-    ops[i++] = 150.0f;
-    ops[i++] = (float)ER_VOP_CLOSE;
-    ops[i++] = (float)ER_VOP_SHAPE;
-    ops[i++] = 1.0f;
-    ops[i++] = (float)ER_VOP_MOVE;
-    ops[i++] = 110.0f;
-    ops[i++] = line_y;
-    ops[i++] = (float)ER_VOP_LINE;
-    ops[i++] = 140.0f;
-    ops[i++] = line_y;
-    return i;
+    int cursor = 0;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 0.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = 10.0f;
+    tape[cursor++] = 10.0f;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = 60.0f;
+    tape[cursor++] = 10.0f;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = 60.0f;
+    tape[cursor++] = 150.0f;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = 10.0f;
+    tape[cursor++] = 150.0f;
+    tape[cursor++] = (float)ER_VOP_CLOSE;
+    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = 1.0f;
+    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = 110.0f;
+    tape[cursor++] = line_y;
+    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = 140.0f;
+    tape[cursor++] = line_y;
+    return cursor;
 }
 
 /**
@@ -491,24 +496,24 @@ static int check_gradient_change(void)
     grad.bx = 10.0f;
     grad.by = 150.0f; /* down the rect */
 
-    float ops[32];
-    int n = tape_grad_rect_and_line(20.0f, ops);
-    er_node_set_vector_ops(svg, ops, n, paints, 2, &grad, 1);
+    float tape[32];
+    int count = tape_grad_rect_and_line(20.0f, tape);
+    er_node_set_vector_ops(svg, tape, count, paints, 2, &grad, 1);
     frame();
     frame();
 
     /* One upload moves the line and recolours the rect's gradient. */
-    n = tape_grad_rect_and_line(60.0f, ops);
+    count = tape_grad_rect_and_line(60.0f, tape);
     grad.stops[0].color = 0xFF2A9D8FU;
     grad.stops[1].color = 0xFFE9C46AU;
-    er_node_set_vector_ops(svg, ops, n, paints, 2, &grad, 1);
+    er_node_set_vector_ops(svg, tape, count, paints, 2, &grad, 1);
     frame();
 
-    const int rc = check_matches_full_repaint("a gradient changed beside a moving shape should repaint the node");
+    const int result = check_matches_full_repaint("a gradient changed beside a moving shape should repaint the node");
     er_node_destroy(root);
-    if (rc == EXIT_SUCCESS)
+    if (result == EXIT_SUCCESS)
         printf("PASS: a gradient changed beside a moving shape repaints the node\n");
-    return rc;
+    return result;
 }
 #endif
 
@@ -519,14 +524,14 @@ int main(void)
         .copy_rect = fb_copy,
         .blend_rect = fb_blend,
     };
-    memset(s_fb, 0, sizeof(s_fb));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     embedded_renderer_set_backend(&k_backend);
     paint_init();
 
     static const struct
     {
         const char* label;
-        TapeFn fn;
+        TapeFn build_tape;
     } k_cases[] = {
         {"rotating needle", tape_needle_open},
         {"closed rotating needle", tape_needle_closed},
@@ -540,9 +545,9 @@ int main(void)
 
     /* Every case runs even after one fails: the set of failures says which shape kinds lost damage. */
     int failures = 0;
-    for (size_t k = 0; k < sizeof(k_cases) / sizeof(k_cases[0]); k++)
+    for (size_t case_index = 0; case_index < sizeof(k_cases) / sizeof(k_cases[0]); case_index++)
     {
-        if (check_sweep(k_cases[k].label, k_cases[k].fn) != EXIT_SUCCESS)
+        if (check_sweep(k_cases[case_index].label, k_cases[case_index].build_tape) != EXIT_SUCCESS)
             failures++;
         er_reset();
     }

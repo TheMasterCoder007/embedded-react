@@ -26,8 +26,11 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 32
-#define FB_H 32
+#define FRAMEBUFFER_WIDTH 32
+#define FRAMEBUFFER_HEIGHT 32
+#define ALPHA_OPAQUE 255U
+#define CHANNEL_MAX 255U
+#define OPACITY_OPAQUE 255U
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
@@ -38,11 +41,11 @@
  */
 typedef struct
 {
-    uint32_t* fb;    /**< Flat premultiplied ARGB8888 framebuffer; rows are fb_w pixels wide. */
-    int fb_w;        /**< Framebuffer width in pixels. */
-    int fb_h;        /**< Framebuffer height in pixels. */
-    int fill_calls;  /**< Number of fill_rect calls received. */
-    int blend_calls; /**< Number of blend_rect calls received. */
+    uint32_t* framebuffer;  /**< Flat premultiplied ARGB8888 framebuffer; rows are framebuffer_width pixels wide. */
+    int framebuffer_width;  /**< Framebuffer width in pixels. */
+    int framebuffer_height; /**< Framebuffer height in pixels. */
+    int fill_calls;         /**< Number of fill_rect calls received. */
+    int blend_calls;        /**< Number of blend_rect calls received. */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -59,25 +62,26 @@ typedef struct
  * @param[in] h     Height in pixels.
  * @param[in] ctx   Pointer to TestCtx.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    t->fill_calls++;
+    TestCtx* test_context = ctx;
+    test_context->fill_calls++;
 
-    const uint8_t a = (uint8_t)((argb >> 24) & 0xFFU);
-    if (a == 0U)
+    const uint8_t alpha = (uint8_t)((argb >> 24) & 0xFFU);
+    if (alpha == 0U)
         return;
-    const uint8_t r = (uint8_t)((uint32_t)((argb >> 16) & 0xFFU) * a / 255U);
-    const uint8_t g = (uint8_t)((uint32_t)((argb >> 8) & 0xFFU) * a / 255U);
-    const uint8_t b = (uint8_t)((uint32_t)(argb & 0xFFU) * a / 255U);
-    const uint32_t premul = ((uint32_t)a << 24) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+    const uint8_t red = (uint8_t)((uint32_t)((argb >> 16) & 0xFFU) * alpha / CHANNEL_MAX);
+    const uint8_t green = (uint8_t)((uint32_t)((argb >> 8) & 0xFFU) * alpha / CHANNEL_MAX);
+    const uint8_t blue = (uint8_t)((uint32_t)(argb & 0xFFU) * alpha / CHANNEL_MAX);
+    const uint32_t premultiplied = ((uint32_t)alpha << 24) | ((uint32_t)red << 16) | ((uint32_t)green << 8) | blue;
 
-    for (int row = y; row < y + h; row++)
+    for (int row = y; row < y + height; row++)
     {
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col >= 0 && col < t->fb_w && row >= 0 && row < t->fb_h)
-                t->fb[row * t->fb_w + col] = premul;
+            if (column >= 0 && column < test_context->framebuffer_width && row >= 0
+                && row < test_context->framebuffer_height)
+                test_context->framebuffer[row * test_context->framebuffer_width + column] = premultiplied;
         }
     }
 }
@@ -93,17 +97,18 @@ static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
  * @param[in] h       Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    for (int row = 0; row < h; row++)
+    TestCtx* test_context = ctx;
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + row * stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + row * stride);
+        for (int column = 0; column < width; column++)
         {
-            int px = x + col, py = y + row;
-            if (px >= 0 && px < t->fb_w && py >= 0 && py < t->fb_h)
-                t->fb[py * t->fb_w + px] = src_row[col];
+            int pixel_x = x + column, pixel_y = y + row;
+            if (pixel_x >= 0 && pixel_x < test_context->framebuffer_width && pixel_y >= 0
+                && pixel_y < test_context->framebuffer_height)
+                test_context->framebuffer[pixel_y * test_context->framebuffer_width + pixel_x] = source_row[column];
         }
     }
 }
@@ -123,47 +128,59 @@ static void copy_cb(const void* src, int stride, int x, int y, int w, int h, voi
  * @param[in] h       Height in pixels.
  * @param[in] ctx     Pointer to TestCtx.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    t->blend_calls++;
+    TestCtx* test_context = ctx;
+    test_context->blend_calls++;
 
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* src_row = (const uint32_t*)((const uint8_t*)src + row * stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + row * stride);
+        for (int column = 0; column < width; column++)
         {
-            int bx = x + col, by = y + row;
-            if (bx < 0 || bx >= t->fb_w || by < 0 || by >= t->fb_h)
+            int pixel_x = x + column, pixel_y = y + row;
+            if (pixel_x < 0 || pixel_x >= test_context->framebuffer_width || pixel_y < 0
+                || pixel_y >= test_context->framebuffer_height)
                 continue;
 
-            uint32_t sp = src_row[col];
+            uint32_t source_pixel = source_row[column];
 
             /* Scale premultiplied source by global alpha. */
-            if (alpha < 255U)
+            if (alpha < ALPHA_OPAQUE)
             {
-                sp = ((uint32_t)((sp >> 24) & 0xFFU) * alpha / 255U << 24)
-                     | ((uint32_t)((sp >> 16) & 0xFFU) * alpha / 255U << 16)
-                     | ((uint32_t)((sp >> 8) & 0xFFU) * alpha / 255U << 8) | (uint32_t)(sp & 0xFFU) * alpha / 255U;
+                source_pixel = ((uint32_t)((source_pixel >> 24) & 0xFFU) * alpha / CHANNEL_MAX << 24)
+                               | ((uint32_t)((source_pixel >> 16) & 0xFFU) * alpha / CHANNEL_MAX << 16)
+                               | ((uint32_t)((source_pixel >> 8) & 0xFFU) * alpha / CHANNEL_MAX << 8)
+                               | (uint32_t)(source_pixel & 0xFFU) * alpha / CHANNEL_MAX;
             }
 
-            const uint8_t sa = (uint8_t)((sp >> 24) & 0xFFU);
-            if (sa == 0U)
+            const uint8_t source_alpha = (uint8_t)((source_pixel >> 24) & 0xFFU);
+            if (source_alpha == 0U)
                 continue;
 
-            if (sa == 255U)
+            if (source_alpha == ALPHA_OPAQUE)
             {
-                t->fb[by * t->fb_w + bx] = sp;
+                test_context->framebuffer[pixel_y * test_context->framebuffer_width + pixel_x] = source_pixel;
             }
             else
             {
-                const uint32_t d = t->fb[by * t->fb_w + bx];
-                const uint8_t inv_sa = (uint8_t)(255U - sa);
-                const uint8_t oa = (uint8_t)(sa + (uint32_t)((d >> 24) & 0xFFU) * inv_sa / 255U);
-                const uint8_t or_ = (uint8_t)(((sp >> 16) & 0xFFU) + (uint32_t)((d >> 16) & 0xFFU) * inv_sa / 255U);
-                const uint8_t og = (uint8_t)(((sp >> 8) & 0xFFU) + (uint32_t)((d >> 8) & 0xFFU) * inv_sa / 255U);
-                const uint8_t ob = (uint8_t)((sp & 0xFFU) + (uint32_t)(d & 0xFFU) * inv_sa / 255U);
-                t->fb[by * t->fb_w + bx] = ((uint32_t)oa << 24) | ((uint32_t)or_ << 16) | ((uint32_t)og << 8) | ob;
+                const uint32_t destination_pixel =
+                    test_context->framebuffer[pixel_y * test_context->framebuffer_width + pixel_x];
+                const uint8_t inverse_alpha = (uint8_t)(CHANNEL_MAX - source_alpha);
+                const uint8_t out_alpha =
+                    (uint8_t)(source_alpha
+                              + (uint32_t)((destination_pixel >> 24) & 0xFFU) * inverse_alpha / CHANNEL_MAX);
+                const uint8_t out_red =
+                    (uint8_t)(((source_pixel >> 16) & 0xFFU)
+                              + (uint32_t)((destination_pixel >> 16) & 0xFFU) * inverse_alpha / CHANNEL_MAX);
+                const uint8_t out_green =
+                    (uint8_t)(((source_pixel >> 8) & 0xFFU)
+                              + (uint32_t)((destination_pixel >> 8) & 0xFFU) * inverse_alpha / CHANNEL_MAX);
+                const uint8_t out_blue =
+                    (uint8_t)((source_pixel & 0xFFU)
+                              + (uint32_t)(destination_pixel & 0xFFU) * inverse_alpha / CHANNEL_MAX);
+                test_context->framebuffer[pixel_y * test_context->framebuffer_width + pixel_x] =
+                    ((uint32_t)out_alpha << 24) | ((uint32_t)out_red << 16) | ((uint32_t)out_green << 8) | out_blue;
             }
         }
     }
@@ -176,9 +193,9 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -191,9 +208,9 @@ static int fail(const char* msg)
  *
  * @return Premultiplied ARGB8888 pixel value at (x, y).
  */
-static uint32_t px(const TestCtx* t, int x, int y)
+static uint32_t px(const TestCtx* test_context, int x, int y)
 {
-    return t->fb[y * t->fb_w + x];
+    return test_context->framebuffer[y * test_context->framebuffer_width + x];
 }
 
 /**
@@ -203,19 +220,19 @@ static uint32_t px(const TestCtx* t, int x, int y)
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
@@ -223,11 +240,13 @@ static ERProps props_default(void)
  *
  * @param[in,out] t  TestCtx to reset.
  */
-static void reset(TestCtx* t)
+static void reset(TestCtx* test_context)
 {
-    memset(t->fb, 0, (size_t)t->fb_w * (size_t)t->fb_h * sizeof(uint32_t));
-    t->fill_calls = 0;
-    t->blend_calls = 0;
+    memset(test_context->framebuffer,
+           0,
+           (size_t)test_context->framebuffer_width * (size_t)test_context->framebuffer_height * sizeof(uint32_t));
+    test_context->fill_calls = 0;
+    test_context->blend_calls = 0;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -248,32 +267,32 @@ static void reset(TestCtx* t)
  */
 int main(void)
 {
-    static uint32_t fb[FB_W * FB_H];
-    TestCtx tc = {fb, FB_W, FB_H, 0, 0};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
-    embedded_renderer_set_backend(&be);
+    static uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    TestCtx test_context = {framebuffer, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT, 0, 0};
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &test_context};
+    embedded_renderer_set_backend(&backend);
 
     /* -----------------------------------------------------------------------
      * opacity=255: no scratch path, background fills directly via fill_rect.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFF0000FFU; /* opaque blue */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFF0000FFU; /* opaque blue */
+        er_node_set_props(root, &root_props);
         er_tree_set_root(root);
         er_commit();
 
         /* The opaque fill must reach the backend directly — no blend call. */
-        if (tc.blend_calls != 0)
+        if (test_context.blend_calls != 0)
             return fail("opacity=255: blend_rect should not be called");
         /* Pixel should be premultiplied blue: A=255 R=0 G=0 B=255 → 0xFF0000FF. */
-        if (px(&tc, 0, 0) != 0xFF0000FFU)
+        if (px(&test_context, 0, 0) != 0xFF0000FFU)
             return fail("opacity=255: pixel should be blue");
 
         er_node_destroy(root);
@@ -282,31 +301,31 @@ int main(void)
     /* -----------------------------------------------------------------------
      * opacity=0: View renders nothing (scratch allocated but alpha=0 blend is a no-op).
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0x00000000U; /* transparent root */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0x00000000U; /* transparent root */
+        er_node_set_props(root, &root_props);
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.width = 8;
-        cp.height = 8;
-        cp.background_color = 0xFFFF0000U; /* red */
-        cp.opacity = 0U;
-        er_node_set_props(child, &cp);
+        ERProps child_props = props_default();
+        child_props.width = 8;
+        child_props.height = 8;
+        child_props.background_color = 0xFFFF0000U; /* red */
+        child_props.opacity = 0U;
+        er_node_set_props(child, &child_props);
 
         er_tree_append_child(root, child);
         er_tree_set_root(root);
         er_commit();
 
         /* alpha=0 blend produces no visible change; framebuffer stays at zero. */
-        if (px(&tc, 0, 0) != 0x00000000U)
+        if (px(&test_context, 0, 0) != 0x00000000U)
             return fail("opacity=0: pixel should remain transparent");
 
         er_tree_remove_child(root, child);
@@ -325,53 +344,53 @@ int main(void)
      *       Backend scales: A = 255*128/255 = 128, R = 255*128/255 = 128, G=0, B=0
      *       → scaled premul = 0x80800000.
      *       Source-over onto dst=0xFFFFFFFF:
-     *         inv_sa = 255 - 128 = 127
+     *         inverse_alpha = 255 - 128 = 127
      *         out.A = 128 + 255*127/255 = 255
      *         out.R = 128 + 255*127/255 = 255
      *         out.G =   0 + 255*127/255 = 127
      *         out.B =   0 + 255*127/255 = 127
      *       → 0xFFFF7F7F.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.width = 4;
-        cp.height = 4;
-        cp.background_color = 0xFFFF0000U; /* red */
-        cp.opacity = 128U;
-        er_node_set_props(child, &cp);
+        ERProps child_props = props_default();
+        child_props.width = 4;
+        child_props.height = 4;
+        child_props.background_color = 0xFFFF0000U; /* red */
+        child_props.opacity = 128U;
+        er_node_set_props(child, &child_props);
 
         er_tree_append_child(root, child);
         er_tree_set_root(root);
         er_commit();
 
         /* Inside the child region: pink (red composited over white at 50%). */
-        const uint32_t inside = px(&tc, 0, 0);
-        const uint8_t a = (uint8_t)((inside >> 24) & 0xFFU);
-        const uint8_t r = (uint8_t)((inside >> 16) & 0xFFU);
-        const uint8_t g = (uint8_t)((inside >> 8) & 0xFFU);
-        const uint8_t b = (uint8_t)(inside & 0xFFU);
-        if (a != 255U)
+        const uint32_t inside = px(&test_context, 0, 0);
+        const uint8_t alpha = (uint8_t)((inside >> 24) & 0xFFU);
+        const uint8_t red = (uint8_t)((inside >> 16) & 0xFFU);
+        const uint8_t green = (uint8_t)((inside >> 8) & 0xFFU);
+        const uint8_t blue = (uint8_t)(inside & 0xFFU);
+        if (alpha != ALPHA_OPAQUE)
             return fail("opacity=128: alpha channel should be 255");
-        if (r != 255U)
+        if (red != 255U)
             return fail("opacity=128: red channel should be 255");
-        if (g != 127U)
+        if (green != 127U)
             return fail("opacity=128: green channel should be 127");
-        if (b != 127U)
+        if (blue != 127U)
             return fail("opacity=128: blue channel should be 127");
 
         /* Outside the child region: still white. */
-        if (px(&tc, 8, 8) != 0xFFFFFFFFU)
+        if (px(&test_context, 8, 8) != 0xFFFFFFFFU)
             return fail("opacity=128: pixel outside child should remain white");
 
         er_tree_remove_child(root, child);
@@ -383,30 +402,30 @@ int main(void)
      * Leaf node opacity: a View with no children and opacity=128.
      * Same expected result as above: red at 128 over white → 0xFFFF7F7F.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* leaf = er_node_create(ER_NODE_VIEW);
-        ERProps lp = props_default();
-        lp.width = 4;
-        lp.height = 4;
-        lp.background_color = 0xFFFF0000U; /* red */
-        lp.opacity = 128U;
-        er_node_set_props(leaf, &lp);
+        ERProps leaf_props = props_default();
+        leaf_props.width = 4;
+        leaf_props.height = 4;
+        leaf_props.background_color = 0xFFFF0000U; /* red */
+        leaf_props.opacity = 128U;
+        er_node_set_props(leaf, &leaf_props);
 
         er_tree_append_child(root, leaf);
         er_tree_set_root(root);
         er_commit();
 
-        const uint32_t pixel = px(&tc, 0, 0);
+        const uint32_t pixel = px(&test_context, 0, 0);
         if ((uint8_t)((pixel >> 16) & 0xFFU) != 255U)
             return fail("leaf opacity=128: red channel should be 255");
         if ((uint8_t)((pixel >> 8) & 0xFFU) != 127U)
@@ -425,32 +444,32 @@ int main(void)
      * Inner node renders fully opaque into the outer scratch slot.
      * Outer scratch blends at 128 → same result as the single-node case: 0xFFFF7F7F.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* outer = er_node_create(ER_NODE_VIEW);
-        ERProps op = props_default();
-        op.width = 8;
-        op.height = 8;
-        op.background_color = 0x00000000U; /* transparent container */
-        op.opacity = 128U;
-        er_node_set_props(outer, &op);
+        ERProps outer_props = props_default();
+        outer_props.width = 8;
+        outer_props.height = 8;
+        outer_props.background_color = 0x00000000U; /* transparent container */
+        outer_props.opacity = 128U;
+        er_node_set_props(outer, &outer_props);
 
         ERNode* inner = er_node_create(ER_NODE_VIEW);
-        ERProps ip = props_default();
-        ip.width = 8;
-        ip.height = 8;
-        ip.background_color = 0xFFFF0000U; /* red, fully opaque */
-        ip.opacity = 255U;
-        er_node_set_props(inner, &ip);
+        ERProps inner_props = props_default();
+        inner_props.width = 8;
+        inner_props.height = 8;
+        inner_props.background_color = 0xFFFF0000U; /* red, fully opaque */
+        inner_props.opacity = OPACITY_OPAQUE;
+        er_node_set_props(inner, &inner_props);
 
         er_tree_append_child(outer, inner);
         er_tree_append_child(root, outer);
@@ -459,7 +478,7 @@ int main(void)
 
         /* Outer container is transparent; inner fills it red at full opacity.
          * The combined scratch (pure red) is blended at 128 over white → 0xFFFF7F7F. */
-        const uint32_t pixel = px(&tc, 0, 0);
+        const uint32_t pixel = px(&test_context, 0, 0);
         if ((uint8_t)((pixel >> 16) & 0xFFU) != 255U)
             return fail("nested opacity: red channel should be 255");
         if ((uint8_t)((pixel >> 8) & 0xFFU) != 127U)
@@ -488,44 +507,44 @@ int main(void)
      * With the default full-height strip this degenerates to the single-pass
      * path and must produce the identical result.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* group = er_node_create(ER_NODE_VIEW);
-        ERProps gp = props_default();
-        gp.width = 16;
-        gp.height = 24;
-        gp.background_color = 0x00000000U; /* transparent container */
-        gp.opacity = 128U;
-        er_node_set_props(group, &gp);
+        ERProps group_props = props_default();
+        group_props.width = 16;
+        group_props.height = 24;
+        group_props.background_color = 0x00000000U; /* transparent container */
+        group_props.opacity = 128U;
+        er_node_set_props(group, &group_props);
 
         ERNode* red = er_node_create(ER_NODE_VIEW);
-        ERProps rd = props_default();
-        rd.position = 1; /* ER_POS_ABSOLUTE */
-        rd.left = 0;
-        rd.top = 0;
-        rd.width = 16;
-        rd.height = 24;
-        rd.background_color = 0xFFFF0000U; /* red, fully opaque */
-        er_node_set_props(red, &rd);
+        ERProps red_props = props_default();
+        red_props.position = 1; /* ER_POS_ABSOLUTE */
+        red_props.left = 0;
+        red_props.top = 0;
+        red_props.width = 16;
+        red_props.height = 24;
+        red_props.background_color = 0xFFFF0000U; /* red, fully opaque */
+        er_node_set_props(red, &red_props);
 
         ERNode* blue = er_node_create(ER_NODE_VIEW);
-        ERProps bl = props_default();
-        bl.position = 1; /* ER_POS_ABSOLUTE */
-        bl.left = 0;
-        bl.top = 0;
-        bl.width = 16;
-        bl.height = 24;
-        bl.background_color = 0xFF0000FFU; /* blue, fully opaque, on top of red */
-        er_node_set_props(blue, &bl);
+        ERProps blue_props = props_default();
+        blue_props.position = 1; /* ER_POS_ABSOLUTE */
+        blue_props.left = 0;
+        blue_props.top = 0;
+        blue_props.width = 16;
+        blue_props.height = 24;
+        blue_props.background_color = 0xFF0000FFU; /* blue, fully opaque, on top of red */
+        er_node_set_props(blue, &blue_props);
 
         er_tree_append_child(group, red);
         er_tree_append_child(group, blue);
@@ -535,25 +554,25 @@ int main(void)
 
         /* Expected: blue premul at alpha 128 (0x80000080) over white →
          * r = 0 + 255*127/255 = 127, g = 127, b = 128 + 255*127/255 = 255. */
-        const uint32_t top_px = px(&tc, 2, 2);
-        if ((uint8_t)((top_px >> 16) & 0xFFU) != 127U)
+        const uint32_t top_pixel = px(&test_context, 2, 2);
+        if ((uint8_t)((top_pixel >> 16) & 0xFFU) != 127U)
             return fail("banded overlap: red channel should be 127 (group blend, not per-child)");
-        if ((uint8_t)((top_px >> 8) & 0xFFU) != 127U)
+        if ((uint8_t)((top_pixel >> 8) & 0xFFU) != 127U)
             return fail("banded overlap: green channel should be 127");
-        if ((uint8_t)(top_px & 0xFFU) != 255U)
+        if ((uint8_t)(top_pixel & 0xFFU) != 255U)
             return fail("banded overlap: blue channel should be 255");
 
         /* Every row of the group must be identical — any band-seam double blend,
          * gap, or missed row shows up as a differing pixel. */
         for (int row = 0; row < 24; row++)
         {
-            if (px(&tc, 2, row) != top_px)
+            if (px(&test_context, 2, row) != top_pixel)
                 return fail("banded overlap: rows must be identical across band seams");
         }
         /* Just outside the group: untouched white. */
-        if (px(&tc, 2, 24) != 0xFFFFFFFFU)
+        if (px(&test_context, 2, 24) != 0xFFFFFFFFU)
             return fail("banded overlap: pixel below the group should stay white");
-        if (px(&tc, 16, 2) != 0xFFFFFFFFU)
+        if (px(&test_context, 16, 2) != 0xFFFFFFFFU)
             return fail("banded overlap: pixel right of the group should stay white");
 
         er_tree_remove_child(group, red);
@@ -578,56 +597,56 @@ int main(void)
      * composite → effective alpha 16 → g=b=239, so this check also guards
      * against regressing to opacity-dropping.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* level[5];
-        for (int i = 0; i < 5; i++)
+        for (int level_index = 0; level_index < 5; level_index++)
         {
-            level[i] = er_node_create(ER_NODE_VIEW);
-            ERProps lp = props_default();
-            lp.width = 8;
-            lp.height = 8;
-            lp.background_color = 0x00000000U; /* transparent container */
-            lp.opacity = 128U;
-            er_node_set_props(level[i], &lp);
-            if (i > 0)
-                er_tree_append_child(level[i - 1], level[i]);
+            level[level_index] = er_node_create(ER_NODE_VIEW);
+            ERProps level_props = props_default();
+            level_props.width = 8;
+            level_props.height = 8;
+            level_props.background_color = 0x00000000U; /* transparent container */
+            level_props.opacity = 128U;
+            er_node_set_props(level[level_index], &level_props);
+            if (level_index > 0)
+                er_tree_append_child(level[level_index - 1], level[level_index]);
         }
 
         ERNode* leaf = er_node_create(ER_NODE_VIEW);
-        ERProps fp = props_default();
-        fp.width = 8;
-        fp.height = 8;
-        fp.background_color = 0xFFFF0000U; /* red, fully opaque */
-        er_node_set_props(leaf, &fp);
+        ERProps leaf_props = props_default();
+        leaf_props.width = 8;
+        leaf_props.height = 8;
+        leaf_props.background_color = 0xFFFF0000U; /* red, fully opaque */
+        er_node_set_props(leaf, &leaf_props);
         er_tree_append_child(level[4], leaf);
 
         er_tree_append_child(root, level[0]);
         er_tree_set_root(root);
         er_commit();
 
-        const uint32_t pixel = px(&tc, 2, 2);
-        const int g = (int)((pixel >> 8) & 0xFFU);
+        const uint32_t pixel = px(&test_context, 2, 2);
+        const int green = (int)((pixel >> 8) & 0xFFU);
         if ((uint8_t)((pixel >> 16) & 0xFFU) != 255U)
             return fail("depth fallback: red channel should be 255");
-        if (g < 245 || g > 249)
+        if (green < 245 || green > 249)
             return fail("depth fallback: 5th nesting level must still dim (multiplied-alpha fallback)");
 
         er_tree_remove_child(level[4], leaf);
         er_node_destroy(leaf);
-        for (int i = 4; i > 0; i--)
+        for (int level_index = 4; level_index > 0; level_index--)
         {
-            er_tree_remove_child(level[i - 1], level[i]);
-            er_node_destroy(level[i]);
+            er_tree_remove_child(level[level_index - 1], level[level_index]);
+            er_node_destroy(level[level_index]);
         }
         er_tree_remove_child(root, level[0]);
         er_node_destroy(level[0]);
@@ -644,61 +663,61 @@ int main(void)
      * compiled out, so this test runs in every configuration — with the cache
      * on, it verifies the cached blend is bit-exact and invalidation works.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* group = er_node_create(ER_NODE_VIEW);
-        ERProps gp = props_default();
-        gp.width = 16;
-        gp.height = 16;
-        gp.background_color = 0x00000000U; /* transparent container */
-        gp.opacity = 128U;
-        er_node_set_props(group, &gp);
+        ERProps group_props = props_default();
+        group_props.width = 16;
+        group_props.height = 16;
+        group_props.background_color = 0x00000000U; /* transparent container */
+        group_props.opacity = 128U;
+        er_node_set_props(group, &group_props);
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.width = 16;
-        cp.height = 16;
-        cp.background_color = 0xFFFF0000U; /* red, fully opaque */
-        er_node_set_props(child, &cp);
+        ERProps child_props = props_default();
+        child_props.width = 16;
+        child_props.height = 16;
+        child_props.background_color = 0xFFFF0000U; /* red, fully opaque */
+        er_node_set_props(child, &child_props);
 
         er_tree_append_child(group, child);
         er_tree_append_child(root, group);
         er_tree_set_root(root);
         er_commit(); /* first composite (capture in cache-enabled builds) */
 
-        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+        if (px(&test_context, 2, 2) != 0xFFFF7F7FU)
             return fail("fade cache: initial composite should be red at alpha 128");
 
         /* Drive opacity through an animated value: er_anim_value_set marks the group
          * visual-only, so cache-enabled builds serve the next commits from the cache. */
-        ERAnimValueHandle val = er_anim_value_create(0.25f);
-        er_anim_value_bind(val, group, ER_PROP_OPACITY); /* bind-time apply → opacity 64 */
+        ERAnimValueHandle value = er_anim_value_create(0.25f);
+        er_anim_value_bind(value, group, ER_PROP_OPACITY); /* bind-time apply → opacity 64 */
         er_commit();
-        if (px(&tc, 2, 2) != 0xFFFFBFBFU)
+        if (px(&test_context, 2, 2) != 0xFFFFBFBFU)
             return fail("fade cache: red at alpha 64 after value bind");
 
-        er_anim_value_set(val, 0.5f); /* alpha-only change → cache hit when enabled */
+        er_anim_value_set(value, 0.5f); /* alpha-only change → cache hit when enabled */
         er_commit();
-        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+        if (px(&test_context, 2, 2) != 0xFFFF7F7FU)
             return fail("fade cache: red at alpha 128 after alpha-only value change");
 
         /* Content change mid-fade: recolor the child. Must invalidate the cache. */
-        cp.background_color = 0xFF0000FFU; /* blue */
-        er_node_set_props(child, &cp);
+        child_props.background_color = 0xFF0000FFU; /* blue */
+        er_node_set_props(child, &child_props);
         er_commit();
-        if (px(&tc, 2, 2) != 0xFF7F7FFFU)
+        if (px(&test_context, 2, 2) != 0xFF7F7FFFU)
             return fail("fade cache: child recolor mid-fade must show blue (stale cache?)");
 
-        er_anim_value_destroy(val);
+        er_anim_value_destroy(value);
         er_tree_remove_child(group, child);
         er_tree_remove_child(root, group);
         er_node_destroy(child);
@@ -710,48 +729,48 @@ int main(void)
      * Fade cache: a child's animated opacity inside a cached group. The child's change is
      * visual-only to itself but new content to the group's cache, which must not be reused.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU;
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &root_props);
 
         ERNode* group = er_node_create(ER_NODE_VIEW);
-        ERProps gp = props_default();
-        gp.width = 16;
-        gp.height = 16;
-        gp.opacity = 128U;
-        er_node_set_props(group, &gp);
+        ERProps group_props = props_default();
+        group_props.width = 16;
+        group_props.height = 16;
+        group_props.opacity = 128U;
+        er_node_set_props(group, &group_props);
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.width = 16;
-        cp.height = 16;
-        cp.background_color = 0xFFFF0000U;
-        er_node_set_props(child, &cp);
+        ERProps child_props = props_default();
+        child_props.width = 16;
+        child_props.height = 16;
+        child_props.background_color = 0xFFFF0000U;
+        er_node_set_props(child, &child_props);
 
         er_tree_append_child(group, child);
         er_tree_append_child(root, group);
         er_tree_set_root(root);
 
-        ERAnimValueHandle val = er_anim_value_create(1.0f);
-        er_anim_value_bind(val, child, ER_PROP_OPACITY);
+        ERAnimValueHandle value = er_anim_value_create(1.0f);
+        er_anim_value_bind(value, child, ER_PROP_OPACITY);
         er_commit();
         er_commit(); /* capture, in cache-enabled builds */
-        if (px(&tc, 2, 2) != 0xFFFF7F7FU)
+        if (px(&test_context, 2, 2) != 0xFFFF7F7FU)
             return fail("nested fade: red at the group alpha");
 
-        er_anim_value_set(val, 0.0f);
+        er_anim_value_set(value, 0.0f);
         er_commit();
-        if (px(&tc, 2, 2) != 0xFFFFFFFFU)
+        if (px(&test_context, 2, 2) != 0xFFFFFFFFU)
             return fail("nested fade: a child faded out inside a cached group must disappear");
 
-        er_anim_value_destroy(val);
+        er_anim_value_destroy(value);
         er_tree_remove_child(group, child);
         er_tree_remove_child(root, group);
         er_node_destroy(child);
@@ -763,41 +782,41 @@ int main(void)
      * Releasing every binding of a value repaints its nodes at their static props, even when the
      * setProps that restores them sees nothing new.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU;
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &root_props);
 
         ERNode* box = er_node_create(ER_NODE_VIEW);
-        ERProps bp = props_default();
-        bp.width = 8;
-        bp.height = 8;
-        bp.background_color = 0xFFFF0000U;
-        er_node_set_props(box, &bp);
+        ERProps box_props = props_default();
+        box_props.width = 8;
+        box_props.height = 8;
+        box_props.background_color = 0xFFFF0000U;
+        er_node_set_props(box, &box_props);
         er_tree_append_child(root, box);
         er_tree_set_root(root);
 
-        ERAnimValueHandle val = er_anim_value_create(1.0f);
-        const ERColorInterpolation ci = {
+        ERAnimValueHandle value = er_anim_value_create(1.0f);
+        const ERColorInterpolation color_interpolation = {
             {0.0f, 1.0f}, {0xFF000000U, 0xFF0000FFU}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
-        er_anim_value_bind_color(val, box, ER_PROP_BACKGROUND_COLOR, &ci);
+        er_anim_value_bind_color(value, box, ER_PROP_BACKGROUND_COLOR, &color_interpolation);
         er_commit();
-        if (px(&tc, 2, 2) != 0xFF0000FFU)
+        if (px(&test_context, 2, 2) != 0xFF0000FFU)
             return fail("unbind all: the bound color should paint");
 
-        er_anim_value_unbind_all(val);
-        er_node_set_props(box, &bp);
+        er_anim_value_unbind_all(value);
+        er_node_set_props(box, &box_props);
         er_commit();
-        if (px(&tc, 2, 2) != 0xFFFF0000U)
+        if (px(&test_context, 2, 2) != 0xFFFF0000U)
             return fail("unbind all: the static color should repaint");
 
-        er_anim_value_destroy(val);
+        er_anim_value_destroy(value);
         er_tree_remove_child(root, box);
         er_node_destroy(box);
         er_node_destroy(root);
@@ -815,37 +834,37 @@ int main(void)
      * unrotated red child blended at the group alpha: ~0xFFFF7F7F on every row,
      * with no gaps at band seams.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU; /* white */
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU; /* white */
+        er_node_set_props(root, &root_props);
 
         ERNode* group = er_node_create(ER_NODE_VIEW);
-        ERProps gp = props_default();
-        gp.width = 16;
-        gp.height = 24;
-        gp.background_color = 0x00000000U; /* transparent container */
-        gp.opacity = 128U;
-        er_node_set_props(group, &gp);
+        ERProps group_props = props_default();
+        group_props.width = 16;
+        group_props.height = 24;
+        group_props.background_color = 0x00000000U; /* transparent container */
+        group_props.opacity = 128U;
+        er_node_set_props(group, &group_props);
 
         ERNode* card = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.position = 1; /* ER_POS_ABSOLUTE */
-        cp.left = 4;
-        cp.top = 8; /* spans band seams for any small ERUI_SCRATCH_BAND_H */
-        cp.width = 8;
-        cp.height = 8;
-        cp.background_color = 0xFFFF0000U; /* red, fully opaque */
-        cp.transform_rotate_z = 90.0f;
-        cp.transform_origin_x = -1.0f; /* centre pivot: square maps onto itself */
-        cp.transform_origin_y = -1.0f;
-        er_node_set_props(card, &cp);
+        ERProps card_props = props_default();
+        card_props.position = 1; /* ER_POS_ABSOLUTE */
+        card_props.left = 4;
+        card_props.top = 8; /* spans band seams for any small ERUI_SCRATCH_BAND_H */
+        card_props.width = 8;
+        card_props.height = 8;
+        card_props.background_color = 0xFFFF0000U; /* red, fully opaque */
+        card_props.transform_rotate_z = 90.0f;
+        card_props.transform_origin_x = -1.0f; /* centre pivot: square maps onto itself */
+        card_props.transform_origin_y = -1.0f;
+        er_node_set_props(card, &card_props);
 
         er_tree_append_child(group, card);
         er_tree_append_child(root, group);
@@ -856,17 +875,17 @@ int main(void)
          * over white ≈ (255,127,127). Allow ±2 for bilinear float jitter at 90°. */
         const int probe_x = 8;
         const int probe_rows[3] = {10, 12, 13};
-        for (int i = 0; i < 3; i++)
+        for (int probe_index = 0; probe_index < 3; probe_index++)
         {
-            const uint32_t p = px(&tc, probe_x, probe_rows[i]);
-            const int r = (int)((p >> 16) & 0xFFU);
-            const int g = (int)((p >> 8) & 0xFFU);
-            const int b = (int)(p & 0xFFU);
-            if (r < 253 || g < 125 || g > 129 || b < 125 || b > 129)
+            const uint32_t pixel = px(&test_context, probe_x, probe_rows[probe_index]);
+            const int red = (int)((pixel >> 16) & 0xFFU);
+            const int green = (int)((pixel >> 8) & 0xFFU);
+            const int blue = (int)(pixel & 0xFFU);
+            if (red < 253 || green < 125 || green > 129 || blue < 125 || blue > 129)
                 return fail("banded transform: interior of rotated child should be red at group alpha on all rows");
         }
         /* Outside the group: untouched white. */
-        if (px(&tc, 2, 25) != 0xFFFFFFFFU)
+        if (px(&test_context, 2, 25) != 0xFFFFFFFFU)
             return fail("banded transform: pixel below the group should stay white");
 
         er_tree_remove_child(group, card);
@@ -881,10 +900,10 @@ int main(void)
      * Image and Text opacity: each is one leaf draw, faded at a draw alpha. A red image at 128 over
      * white lands on the same pink as a View at 128; a Text at 0 paints nothing.
      * ---------------------------------------------------------------------- */
-    reset(&tc);
+    reset(&test_context);
     {
         er_reset();
-        static const uint32_t red4x4[16] = {
+        static const uint32_t red_4x4[16] = {
             0xFFFF0000U,
             0xFFFF0000U,
             0xFFFF0000U,
@@ -902,80 +921,80 @@ int main(void)
             0xFFFF0000U,
             0xFFFF0000U,
         };
-        er_image_load("red4x4", red4x4, 4, 4);
+        er_image_load("red4x4", red_4x4, 4, 4);
 
         ERNode* root = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = FB_W;
-        rp.height = FB_H;
-        rp.background_color = 0xFFFFFFFFU;
-        er_node_set_props(root, &rp);
+        ERProps root_props = props_default();
+        root_props.width = FRAMEBUFFER_WIDTH;
+        root_props.height = FRAMEBUFFER_HEIGHT;
+        root_props.background_color = 0xFFFFFFFFU;
+        er_node_set_props(root, &root_props);
 
-        ERNode* img = er_node_create(ER_NODE_IMAGE);
-        ERProps ip = props_default();
-        ip.width = 4;
-        ip.height = 4;
-        strncpy(ip.image_name, "red4x4", ER_IMAGE_NAME_MAX);
-        ip.resize_mode = ER_RESIZE_STRETCH;
-        ip.opacity = 128U;
-        er_node_set_props(img, &ip);
+        ERNode* image = er_node_create(ER_NODE_IMAGE);
+        ERProps image_props = props_default();
+        image_props.width = 4;
+        image_props.height = 4;
+        strncpy(image_props.image_name, "red4x4", ER_IMAGE_NAME_MAX);
+        image_props.resize_mode = ER_RESIZE_STRETCH;
+        image_props.opacity = 128U;
+        er_node_set_props(image, &image_props);
 
-        ERNode* txt = er_node_create(ER_NODE_TEXT);
-        ERProps tp = props_default();
-        tp.position = ER_POS_ABSOLUTE;
-        tp.left = 0;
-        tp.top = 8;
-        tp.width = FB_W;
-        tp.height = 20;
-        strncpy(tp.text, "MMMM", ER_TEXT_MAX);
-        tp.color = 0xFF000000U;
-        tp.font_size = 16;
-        tp.opacity = 0U;
-        er_node_set_props(txt, &tp);
+        ERNode* text_node = er_node_create(ER_NODE_TEXT);
+        ERProps text_props = props_default();
+        text_props.position = ER_POS_ABSOLUTE;
+        text_props.left = 0;
+        text_props.top = 8;
+        text_props.width = FRAMEBUFFER_WIDTH;
+        text_props.height = 20;
+        strncpy(text_props.text, "MMMM", ER_TEXT_MAX);
+        text_props.color = 0xFF000000U;
+        text_props.font_size = 16;
+        text_props.opacity = 0U;
+        er_node_set_props(text_node, &text_props);
 
-        er_tree_append_child(root, img);
-        er_tree_append_child(root, txt);
+        er_tree_append_child(root, image);
+        er_tree_append_child(root, text_node);
         er_tree_set_root(root);
         er_commit();
 
-        const uint32_t p = px(&tc, 1, 1);
-        if (((p >> 16) & 0xFFU) != 0xFFU || ((p >> 8) & 0xFFU) != 0x7FU || (p & 0xFFU) != 0x7FU)
+        const uint32_t pixel = px(&test_context, 1, 1);
+        if (((pixel >> 16) & 0xFFU) != 0xFFU || ((pixel >> 8) & 0xFFU) != 0x7FU || (pixel & 0xFFU) != 0x7FU)
             return fail("image opacity=128: red over white should be pink");
         for (int y = 8; y < 28; y++)
-            for (int x = 0; x < FB_W; x++)
-                if (px(&tc, x, y) != 0xFFFFFFFFU)
+            for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
+                if (px(&test_context, x, y) != 0xFFFFFFFFU)
                     return fail("text opacity=0: the text should paint nothing");
 
         /* The same text, opaque, does paint: the check above is not passing on an empty draw. */
-        tp.opacity = 255U;
-        er_node_set_props(txt, &tp);
+        text_props.opacity = OPACITY_OPAQUE;
+        er_node_set_props(text_node, &text_props);
         er_commit();
         bool inked = false;
         for (int y = 8; y < 28 && !inked; y++)
-            for (int x = 0; x < FB_W && !inked; x++)
-                inked = px(&tc, x, y) != 0xFFFFFFFFU;
+            for (int x = 0; x < FRAMEBUFFER_WIDTH && !inked; x++)
+                inked = px(&test_context, x, y) != 0xFFFFFFFFU;
         if (!inked)
             return fail("text opacity=255: the text should paint");
 
         /* An animated color that reaches transparent black draws nothing, not the unset-color white. A
          * blue backdrop tells the two apart. */
-        rp.background_color = 0xFF0000FFU;
-        er_node_set_props(root, &rp);
-        ERAnimValueHandle cv = er_anim_value_create(0.0f);
-        const ERColorInterpolation ci = {
+        root_props.background_color = 0xFF0000FFU;
+        er_node_set_props(root, &root_props);
+        ERAnimValueHandle color_value = er_anim_value_create(0.0f);
+        const ERColorInterpolation color_interpolation = {
             {0.0f, 1.0f}, {0x00000000U, 0xFF000000U}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
-        er_anim_value_bind_color(cv, txt, ER_PROP_COLOR, &ci);
+        er_anim_value_bind_color(color_value, text_node, ER_PROP_COLOR, &color_interpolation);
         er_commit();
         for (int y = 8; y < 28; y++)
-            for (int x = 0; x < FB_W; x++)
-                if (px(&tc, x, y) != 0xFF0000FFU)
+            for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
+                if (px(&test_context, x, y) != 0xFF0000FFU)
                     return fail("text color: an animated transparent color should paint nothing");
-        er_anim_value_destroy(cv);
+        er_anim_value_destroy(color_value);
 
-        er_tree_remove_child(root, txt);
-        er_tree_remove_child(root, img);
-        er_node_destroy(txt);
-        er_node_destroy(img);
+        er_tree_remove_child(root, text_node);
+        er_tree_remove_child(root, image);
+        er_node_destroy(text_node);
+        er_node_destroy(image);
         er_node_destroy(root);
     }
 

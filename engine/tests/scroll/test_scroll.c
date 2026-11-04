@@ -28,43 +28,45 @@
 
 #define PASS "\033[32mPASS\033[0m"
 #define FAIL "\033[31mFAIL\033[0m"
+#define OPACITY_OPAQUE 255U
 
-#define ASSERT(cond)                                                                                                   \
+#define ASSERT(condition)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (!(cond))                                                                                                   \
+        if (!(condition))                                                                                              \
         {                                                                                                              \
-            fprintf(stderr, "  " FAIL " %s:%d  %s\n", __FILE__, __LINE__, #cond);                                      \
+            fprintf(stderr, "  " FAIL " %s:%d  %s\n", __FILE__, __LINE__, #condition);                                 \
             g_failures++;                                                                                              \
         }                                                                                                              \
     } while (0)
 
-#define ASSERT_EQ(a, b)                                                                                                \
+#define ASSERT_EQ(actual, expected)                                                                                    \
     do                                                                                                                 \
     {                                                                                                                  \
-        if ((a) != (b))                                                                                                \
+        if ((actual) != (expected))                                                                                    \
         {                                                                                                              \
-            fprintf(stderr, "  " FAIL " %s:%d  expected %d got %d\n", __FILE__, __LINE__, (int)(b), (int)(a));         \
+            fprintf(                                                                                                   \
+                stderr, "  " FAIL " %s:%d  expected %d got %d\n", __FILE__, __LINE__, (int)(expected), (int)(actual)); \
             g_failures++;                                                                                              \
         }                                                                                                              \
     } while (0)
 
-#define ASSERT_FLOAT_NEAR(a, b, eps)                                                                                   \
+#define ASSERT_FLOAT_NEAR(actual, expected, epsilon)                                                                   \
     do                                                                                                                 \
     {                                                                                                                  \
-        float _a = (float)(a), _b = (float)(b), _e = (float)(eps);                                                     \
-        float _diff = _a - _b;                                                                                         \
+        float _actual = (float)(actual), _expected = (float)(expected), _epsilon = (float)(epsilon);                   \
+        float _diff = _actual - _expected;                                                                             \
         if (_diff < 0.0f)                                                                                              \
             _diff = -_diff;                                                                                            \
-        if (_diff > _e)                                                                                                \
+        if (_diff > _epsilon)                                                                                          \
         {                                                                                                              \
             fprintf(stderr,                                                                                            \
                     "  " FAIL " %s:%d  expected %.4f near %.4f (eps %.4f)\n",                                          \
                     __FILE__,                                                                                          \
                     __LINE__,                                                                                          \
-                    (double)_b,                                                                                        \
-                    (double)_a,                                                                                        \
-                    (double)_e);                                                                                       \
+                    (double)_expected,                                                                                 \
+                    (double)_actual,                                                                                   \
+                    (double)_epsilon);                                                                                 \
             g_failures++;                                                                                              \
         }                                                                                                              \
     } while (0)
@@ -83,8 +85,8 @@ typedef struct
 {
     int x;
     int y;
-    int w;
-    int h;
+    int width;
+    int height;
     uint32_t color;
 } FillRecord;
 
@@ -120,70 +122,70 @@ static int g_failures = 0;
 /**
  * @brief fill_rect backend that records each call.
  *
- * @param[in] argb  Fill color.
- * @param[in] x     Left edge.
- * @param[in] y     Top edge.
- * @param[in] w     Width.
- * @param[in] h     Height.
- * @param[in] ctx   Pointer to TestCtx.
+ * @param[in] argb    Fill color.
+ * @param[in] x       Left edge.
+ * @param[in] y       Top edge.
+ * @param[in] width   Width.
+ * @param[in] height  Height.
+ * @param[in] ctx     Pointer to TestCtx.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = (TestCtx*)ctx;
-    if (t->fill_count < MAX_FILL_RECORDS)
+    TestCtx* test_context = (TestCtx*)ctx;
+    if (test_context->fill_count < MAX_FILL_RECORDS)
     {
-        FillRecord* r = &t->fills[t->fill_count++];
-        r->x = x;
-        r->y = y;
-        r->w = w;
-        r->h = h;
-        r->color = argb;
+        FillRecord* fill = &test_context->fills[test_context->fill_count++];
+        fill->x = x;
+        fill->y = y;
+        fill->width = width;
+        fill->height = height;
+        fill->color = argb;
     }
 }
 
 /**
  * @brief copy_rect backend stub — no-op.
  *
- * @param[in] src     Unused.
+ * @param[in] source  Unused.
  * @param[in] stride  Unused.
  * @param[in] x       Unused.
  * @param[in] y       Unused.
- * @param[in] w       Unused.
- * @param[in] h       Unused.
+ * @param[in] width   Unused.
+ * @param[in] height  Unused.
  * @param[in] ctx     Unused.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 /**
  * @brief blend_rect backend stub — no-op.
  *
- * @param[in] src     Unused.
+ * @param[in] source  Unused.
  * @param[in] stride  Unused.
  * @param[in] alpha   Unused.
  * @param[in] x       Unused.
  * @param[in] y       Unused.
- * @param[in] w       Unused.
- * @param[in] h       Unused.
+ * @param[in] width   Unused.
+ * @param[in] height  Unused.
  * @param[in] ctx     Unused.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -194,18 +196,18 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 /**
  * @brief Initialises a test backend and resets the TestCtx.
  *
- * @param[in,out] tctx  Test context to zero.
- * @param[out]    be    Backend struct to fill.
+ * @param[in,out] test_context  Test context to zero.
+ * @param[out]    backend       Backend struct to fill.
  */
-static void setup_backend(TestCtx* tctx, EmbeddedRenderBackend* be)
+static void setup_backend(TestCtx* test_context, EmbeddedRenderBackend* backend)
 {
-    memset(tctx, 0, sizeof(*tctx));
-    memset(be, 0, sizeof(*be));
-    be->fill_rect = fill_cb;
-    be->copy_rect = copy_cb;
-    be->blend_rect = blend_cb;
-    be->ctx = tctx;
-    embedded_renderer_set_backend(be);
+    memset(test_context, 0, sizeof(*test_context));
+    memset(backend, 0, sizeof(*backend));
+    backend->fill_rect = fill_cb;
+    backend->copy_rect = copy_cb;
+    backend->blend_rect = blend_cb;
+    backend->ctx = test_context;
+    embedded_renderer_set_backend(backend);
 }
 
 /**
@@ -215,24 +217,24 @@ static void setup_backend(TestCtx* tctx, EmbeddedRenderBackend* be)
  */
 static ERProps make_props(void)
 {
-    ERProps p;
-    memset(&p, 0, sizeof(p));
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = ER_LAYOUT_AUTO;
-    p.padding_left = p.padding_top = p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = ER_LAYOUT_AUTO;
-    p.margin_left = p.margin_top = p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.flex_direction = ER_FLEX_COL;
-    p.align_items = ER_ALIGN_STRETCH;
-    p.align_self = ER_ALIGN_AUTO;
-    p.justify_content = ER_JUSTIFY_FLEX_START;
-    p.opacity = 255U; /* fully opaque so nodes are visible to hit-testing */
-    return p;
+    ERProps props;
+    memset(&props, 0, sizeof(props));
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = ER_LAYOUT_AUTO;
+    props.padding_left = props.padding_top = props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = ER_LAYOUT_AUTO;
+    props.margin_left = props.margin_top = props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.flex_direction = ER_FLEX_COL;
+    props.align_items = ER_ALIGN_STRETCH;
+    props.align_self = ER_ALIGN_AUTO;
+    props.justify_content = ER_JUSTIFY_FLEX_START;
+    props.opacity = OPACITY_OPAQUE; /* fully opaque so nodes are visible to hit-testing */
+    return props;
 }
 
 /**
@@ -245,30 +247,31 @@ static ERProps make_props(void)
 static void on_scroll(ERNode* node, const EREventData* data, void* user)
 {
     (void)node;
-    ScrollRecord* r = (ScrollRecord*)user;
-    r->count++;
-    r->last_x = data->scroll_x;
-    r->last_y = data->scroll_y;
+    ScrollRecord* record = (ScrollRecord*)user;
+    record->count++;
+    record->last_x = data->scroll_x;
+    record->last_y = data->scroll_y;
 }
 
 /**
- * @brief Returns 1 when any recorded fill intersects (px, py) with the given color.
+ * @brief Returns 1 when any recorded fill intersects (pixel_x, pixel_y) with the given color.
  *
- * @param[in] tctx   Test context holding fill records.
- * @param[in] px     X coordinate to test.
- * @param[in] py     Y coordinate to test.
- * @param[in] color  ARGB8888 color to match (0 = any).
+ * @param[in] test_context  Test context holding fill records.
+ * @param[in] pixel_x       X coordinate to test.
+ * @param[in] pixel_y       Y coordinate to test.
+ * @param[in] color         ARGB8888 color to match (0 = any).
  *
  * @return 1 if found, 0 otherwise.
  */
-static int fill_covers(const TestCtx* tctx, int px, int py, uint32_t color)
+static int fill_covers(const TestCtx* test_context, int pixel_x, int pixel_y, uint32_t color)
 {
-    for (int i = 0; i < tctx->fill_count; i++)
+    for (int fill_index = 0; fill_index < test_context->fill_count; fill_index++)
     {
-        const FillRecord* f = &tctx->fills[i];
-        if (color != 0U && f->color != color)
+        const FillRecord* fill = &test_context->fills[fill_index];
+        if (color != 0U && fill->color != color)
             continue;
-        if (px >= f->x && px < f->x + f->w && py >= f->y && py < f->y + f->h)
+        if (pixel_x >= fill->x && pixel_x < fill->x + fill->width && pixel_y >= fill->y
+            && pixel_y < fill->y + fill->height)
             return 1;
     }
     return 0;
@@ -290,45 +293,45 @@ static int fill_covers(const TestCtx* tctx, int px, int py, uint32_t color)
  */
 static void build_scene(ERNode** sv, ERNode** child0, ERNode** child1, ERNode** child2)
 {
-    ERProps p;
+    ERProps props;
 
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    p = make_props();
-    p.width = 200;
-    p.height = 400;
-    p.background_color = 0xFF101010U;
-    er_node_set_props(root, &p);
+    props = make_props();
+    props.width = 200;
+    props.height = 400;
+    props.background_color = 0xFF101010U;
+    er_node_set_props(root, &props);
 
     *sv = er_node_create(ER_NODE_SCROLL_VIEW);
-    p = make_props();
-    p.width = 200;
-    p.height = 200;
-    p.overflow = ER_OVERFLOW_SCROLL;
-    p.background_color = 0xFF202020U;
-    er_node_set_props(*sv, &p);
+    props = make_props();
+    props.width = 200;
+    props.height = 200;
+    props.overflow = ER_OVERFLOW_SCROLL;
+    props.background_color = 0xFF202020U;
+    er_node_set_props(*sv, &props);
 
     *child0 = er_node_create(ER_NODE_VIEW);
-    p = make_props();
-    p.width = 200;
-    p.height = 100;
-    p.background_color = 0xFFFF0000U;
-    er_node_set_props(*child0, &p);
+    props = make_props();
+    props.width = 200;
+    props.height = 100;
+    props.background_color = 0xFFFF0000U;
+    er_node_set_props(*child0, &props);
 
     *child1 = er_node_create(ER_NODE_VIEW);
-    p = make_props();
-    p.width = 200;
-    p.height = 100;
-    p.background_color = 0xFF00FF00U;
-    er_node_set_props(*child1, &p);
+    props = make_props();
+    props.width = 200;
+    props.height = 100;
+    props.background_color = 0xFF00FF00U;
+    er_node_set_props(*child1, &props);
 
     *child2 = er_node_create(ER_NODE_VIEW);
-    p = make_props();
-    p.width = 200;
-    p.height = 100;
-    p.background_color = 0xFF0000FFU;
-    er_node_set_props(*child2, &p);
+    props = make_props();
+    props.width = 200;
+    props.height = 100;
+    props.background_color = 0xFF0000FFU;
+    er_node_set_props(*child2, &props);
 
     er_tree_append_child(root, *sv);
     er_tree_append_child(*sv, *child0);
@@ -366,18 +369,18 @@ static void touch_move(int x, int y)
 static void test_offset_clamp_negative(void)
 {
     printf("test_offset_clamp_negative\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
     /* Offset starts at 0. Setting it to negative should leave it at 0. */
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
-    er_scroll_view_set_offset(sv, -10.0f, -10.0f);
-    ASSERT_EQ(rec.count, 0); /* no change → no event */
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
+    er_scroll_view_set_offset(scroll_view, -10.0f, -10.0f);
+    ASSERT_EQ(record.count, 0); /* no change → no event */
 }
 
 /**
@@ -386,19 +389,19 @@ static void test_offset_clamp_negative(void)
 static void test_offset_clamp_max(void)
 {
     printf("test_offset_clamp_max\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
     /* content_h = 300, viewport_h = 200  →  max_y = 100 */
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
-    er_scroll_view_set_offset(sv, 0.0f, 999.0f);
-    ASSERT_EQ(rec.count, 1);
-    ASSERT_FLOAT_NEAR(rec.last_y, 100.0f, 0.01f);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
+    er_scroll_view_set_offset(scroll_view, 0.0f, 999.0f);
+    ASSERT_EQ(record.count, 1);
+    ASSERT_FLOAT_NEAR(record.last_y, 100.0f, 0.01f);
 }
 
 /**
@@ -407,22 +410,22 @@ static void test_offset_clamp_max(void)
 static void test_scroll_event_dedup(void)
 {
     printf("test_scroll_event_dedup\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
 
-    er_scroll_view_set_offset(sv, 0.0f, 50.0f);
-    ASSERT_EQ(rec.count, 1);
-    ASSERT_FLOAT_NEAR(rec.last_y, 50.0f, 0.001f);
+    er_scroll_view_set_offset(scroll_view, 0.0f, 50.0f);
+    ASSERT_EQ(record.count, 1);
+    ASSERT_FLOAT_NEAR(record.last_y, 50.0f, 0.001f);
 
-    er_scroll_view_set_offset(sv, 0.0f, 50.0f); /* same value */
-    ASSERT_EQ(rec.count, 1);                    /* must not fire again */
+    er_scroll_view_set_offset(scroll_view, 0.0f, 50.0f); /* same value */
+    ASSERT_EQ(record.count, 1);                          /* must not fire again */
 }
 
 /**
@@ -434,36 +437,36 @@ static void test_scroll_event_dedup(void)
 static void test_subpixel_step_repaints_nothing(void)
 {
     printf("test_subpixel_step_repaints_nothing\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
     er_commit();
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
 
-    er_scroll_view_set_offset(sv, 0.0f, 10.0f);
+    er_scroll_view_set_offset(scroll_view, 0.0f, 10.0f);
     er_commit();
 
-    er_scroll_view_set_offset(sv, 0.0f, 10.4f);
-    tctx.fill_count = 0;
+    er_scroll_view_set_offset(scroll_view, 0.0f, 10.4f);
+    test_context.fill_count = 0;
     er_commit();
-    ASSERT_EQ(tctx.fill_count, 0);
-    ASSERT_EQ(rec.count, 2);
-    ASSERT_FLOAT_NEAR(rec.last_y, 10.4f, 0.001f);
+    ASSERT_EQ(test_context.fill_count, 0);
+    ASSERT_EQ(record.count, 2);
+    ASSERT_FLOAT_NEAR(record.last_y, 10.4f, 0.001f);
 
-    er_scroll_view_set_offset(sv, 0.0f, 10.9f);
-    tctx.fill_count = 0;
+    er_scroll_view_set_offset(scroll_view, 0.0f, 10.9f);
+    test_context.fill_count = 0;
     er_commit();
-    ASSERT_EQ(tctx.fill_count, 0);
+    ASSERT_EQ(test_context.fill_count, 0);
 
-    er_scroll_view_set_offset(sv, 0.0f, 11.2f);
-    tctx.fill_count = 0;
+    er_scroll_view_set_offset(scroll_view, 0.0f, 11.2f);
+    test_context.fill_count = 0;
     er_commit();
-    ASSERT(tctx.fill_count > 0);
+    ASSERT(test_context.fill_count > 0);
 }
 
 /**
@@ -472,24 +475,24 @@ static void test_subpixel_step_repaints_nothing(void)
 static void test_nan_offset_keeps_axis(void)
 {
     printf("test_nan_offset_keeps_axis\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
 
-    er_scroll_view_set_offset(sv, 0.0f, 40.0f);
-    er_scroll_view_set_offset(sv, 0.0f, NAN);
-    ASSERT_EQ(rec.count, 1); /* nothing changed: no second event */
+    er_scroll_view_set_offset(scroll_view, 0.0f, 40.0f);
+    er_scroll_view_set_offset(scroll_view, 0.0f, NAN);
+    ASSERT_EQ(record.count, 1); /* nothing changed: no second event */
 
-    er_scroll_view_set_offset(sv, NAN, 60.0f);
-    ASSERT_EQ(rec.count, 2);
-    ASSERT_FLOAT_NEAR(rec.last_x, 0.0f, 0.001f);
-    ASSERT_FLOAT_NEAR(rec.last_y, 60.0f, 0.001f);
+    er_scroll_view_set_offset(scroll_view, NAN, 60.0f);
+    ASSERT_EQ(record.count, 2);
+    ASSERT_FLOAT_NEAR(record.last_x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(record.last_y, 60.0f, 0.001f);
     er_commit();
 }
 
@@ -502,23 +505,23 @@ static void test_nan_offset_keeps_axis(void)
 static void test_clip_hides_scrolled_out(void)
 {
     printf("test_clip_hides_scrolled_out\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    er_scroll_view_set_offset(sv, 0.0f, 100.0f);
-    tctx.fill_count = 0;
+    er_scroll_view_set_offset(scroll_view, 0.0f, 100.0f);
+    test_context.fill_count = 0;
     er_commit();
 
     /* No red fill should appear anywhere within the viewport (y < 200). */
-    for (int py = 0; py < 200; py++)
+    for (int pixel_y = 0; pixel_y < 200; pixel_y++)
     {
-        for (int px = 0; px < 200; px++)
+        for (int pixel_x = 0; pixel_x < 200; pixel_x++)
         {
-            ASSERT(!fill_covers(&tctx, px, py, 0xFFFF0000U));
+            ASSERT(!fill_covers(&test_context, pixel_x, pixel_y, 0xFFFF0000U));
         }
     }
 }
@@ -532,21 +535,21 @@ static void test_clip_hides_scrolled_out(void)
 static void test_clip_shows_scrolled_in(void)
 {
     printf("test_clip_shows_scrolled_in\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    er_scroll_view_set_offset(sv, 0.0f, 100.0f);
-    tctx.fill_count = 0;
+    er_scroll_view_set_offset(scroll_view, 0.0f, 100.0f);
+    test_context.fill_count = 0;
     er_commit();
 
     int found = 0;
-    for (int py = 100; py < 200 && !found; py++)
-        for (int px = 0; px < 200 && !found; px++)
-            found = fill_covers(&tctx, px, py, 0xFF0000FFU);
+    for (int pixel_y = 100; pixel_y < 200 && !found; pixel_y++)
+        for (int pixel_x = 0; pixel_x < 200 && !found; pixel_x++)
+            found = fill_covers(&test_context, pixel_x, pixel_y, 0xFF0000FFU);
     ASSERT(found);
 }
 
@@ -557,15 +560,15 @@ static void test_clip_shows_scrolled_in(void)
 static void test_gesture_claims_scroll_view(void)
 {
     printf("test_gesture_claims_scroll_view\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
 
     /* Touch child0 area and drag upward 10 px (> 5 px slop). */
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 50);
@@ -573,8 +576,8 @@ static void test_gesture_claims_scroll_view(void)
     embedded_renderer_touch(0, ER_TOUCH_UP, 100, 44);
 
     /* Offset must have increased (upward swipe → scroll down). */
-    ASSERT(rec.count > 0);
-    ASSERT(rec.last_y > 0.0f);
+    ASSERT(record.count > 0);
+    ASSERT(record.last_y > 0.0f);
 }
 
 /**
@@ -583,15 +586,15 @@ static void test_gesture_claims_scroll_view(void)
 static void test_momentum_advances_offset(void)
 {
     printf("test_momentum_advances_offset\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
 
     /* Fast upward drag to build velocity. */
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
@@ -599,12 +602,12 @@ static void test_momentum_advances_offset(void)
     touch_move(100, 80); /* -20 px in 16 ms */
     embedded_renderer_touch(0, ER_TOUCH_UP, 100, 80);
 
-    const float offset_at_release = rec.last_y;
+    const float offset_at_release = record.last_y;
 
     /* One more tick should push offset further via momentum. */
     embedded_renderer_tick(16U);
 
-    ASSERT(rec.last_y > offset_at_release);
+    ASSERT(record.last_y > offset_at_release);
 }
 
 /**
@@ -613,15 +616,15 @@ static void test_momentum_advances_offset(void)
 static void test_momentum_decays(void)
 {
     printf("test_momentum_decays\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2);
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
 
-    ScrollRecord rec = {0};
-    er_event_set(sv, ER_EVENT_SCROLL, on_scroll, &rec);
+    ScrollRecord record = {0};
+    er_event_set(scroll_view, ER_EVENT_SCROLL, on_scroll, &record);
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, 100, 100);
     embedded_renderer_tick(16U);
@@ -629,14 +632,14 @@ static void test_momentum_decays(void)
     embedded_renderer_touch(0, ER_TOUCH_UP, 100, 70);
 
     /* Tick many frames; offset must eventually stop changing. */
-    float prev_y = rec.last_y;
+    float previous_y = record.last_y;
     int settled = 0;
-    for (int i = 0; i < 600 && !settled; i++)
+    for (int frame_index = 0; frame_index < 600 && !settled; frame_index++)
     {
         embedded_renderer_tick(16U);
-        if (rec.last_y == prev_y)
+        if (record.last_y == previous_y)
             settled = 1;
-        prev_y = rec.last_y;
+        previous_y = record.last_y;
     }
     ASSERT(settled);
 }
@@ -652,7 +655,7 @@ static void test_momentum_decays(void)
  * HONEST SCOPE: this does NOT reproduce the scrolled-out-footprint leak fixed in compositor.c's damage
  * pre-pass (a moved-but-invisible node re-damaging its old footprint on every commit forever). It was
  * written to guard that fix and does not: it passes with the fix reverted, because this scene is small
- * enough that the scroll commit still reaches c0 and refreshes its last_paint_rect, which clears `moved`
+ * enough that the scroll commit still reaches first_child and refreshes its last_paint_rect, which clears `moved`
  * before the loop can start.
  *
  * What this DOES guard is worth keeping: an idle scene must not paint, and retiring a footprint must not
@@ -661,38 +664,41 @@ static void test_momentum_decays(void)
 static void test_idle_scene_settles_after_scroll(void)
 {
     printf("test_idle_scene_settles_after_scroll\n");
-    TestCtx tctx;
-    EmbeddedRenderBackend be;
-    setup_backend(&tctx, &be);
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
 
-    ERNode *sv, *c0, *c1, *c2;
-    build_scene(&sv, &c0, &c1, &c2); /* commits once: c0/c1 painted inside the viewport */
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view,
+                &first_child,
+                &second_child,
+                &third_child); /* commits once: first_child/second_child painted inside the viewport */
 
-    /* Scroll a full row down: c0 (was y 0..100) moves to y -100..0 — entirely outside the clipper. */
-    er_scroll_view_set_offset(sv, 0.0f, 100.0f);
-    tctx.fill_count = 0;
-    er_commit(); /* c0 is `moved`; its old footprint is unioned once, to erase the trail */
+    /* Scroll a full row down: first_child (was y 0..100) moves to y -100..0 — entirely outside the clipper. */
+    er_scroll_view_set_offset(scroll_view, 0.0f, 100.0f);
+    test_context.fill_count = 0;
+    er_commit(); /* first_child is `moved`; its old footprint is unioned once, to erase the trail */
 
     /* Nothing changes now, so the scene must settle to zero painting. Assert on the BACKEND's fill ops,
      * not on er_get_dirty_rect(): that rect only unions source_dirty nodes the walk actually reached, so
      * a moved-only, pruned node is invisible to it — which is exactly what made this bug so hard to see.
      * An earlier version of this test asserted the rect and passed even with the bug present. */
-    tctx.fill_count = 0;
+    test_context.fill_count = 0;
     er_commit();
-    ASSERT_EQ(tctx.fill_count, 0);
+    ASSERT_EQ(test_context.fill_count, 0);
 
     /* ...and again, in case the footprint is merely alternating rather than retired. */
-    tctx.fill_count = 0;
+    test_context.fill_count = 0;
     er_commit();
-    ASSERT_EQ(tctx.fill_count, 0);
+    ASSERT_EQ(test_context.fill_count, 0);
 
     /* Scrolling it back into view must still repaint it: er_mark_dirty_upward marks the SCROLLER
      * source_dirty, so its viewport enters the damage and the walk reaches the child again. Retiring the
      * footprint must not cost the row its next paint. */
-    er_scroll_view_set_offset(sv, 0.0f, 0.0f);
-    tctx.fill_count = 0;
+    er_scroll_view_set_offset(scroll_view, 0.0f, 0.0f);
+    test_context.fill_count = 0;
     er_commit();
-    if (tctx.fill_count == 0)
+    if (test_context.fill_count == 0)
     {
         fprintf(stderr, "  " FAIL " %s:%d  row scrolled back into view was never repainted\n", __FILE__, __LINE__);
         g_failures++;
