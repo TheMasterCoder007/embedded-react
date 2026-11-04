@@ -109,12 +109,15 @@ export const int64Of = (source: Int64Source): IrType =>
  * The type of a value whose slot is known: a boolean when it holds one, a time when it is a 64-bit slot.
  *
  * @param slot  The slot's kind.
- * @param isBool  The value is a JS boolean.
+ * @param holdsBoolean  The value is a JS boolean.
  *
  * @returns The type.
  */
-export function typeOfSlot(slot: SlotKind | undefined, isBool = false): IrType {
-  if (isBool) {
+export function typeOfSlot(
+  slot: SlotKind | undefined,
+  holdsBoolean = false,
+): IrType {
+  if (holdsBoolean) {
     if (slot !== 'int') {
       throw new Error(`AOT internal: a boolean in a "${slot}" slot`);
     }
@@ -146,16 +149,16 @@ export function typeOfSlot(slot: SlotKind | undefined, isBool = false): IrType {
  * @returns The type.
  */
 export function typeOfSlotValue(value: SlotValue): IrType {
-  if (value.lit || value.wide) {
-    if (value.slotKind !== 'i64' || (value.lit && value.wide)) {
+  if (value.isLiteral || value.wide) {
+    if (value.slotKind !== 'i64' || (value.isLiteral && value.wide)) {
       throw new Error(
         'AOT internal: a 64-bit source on a value that is not one 64-bit number',
       );
     }
-    return value.lit ? INT64_NUMBER : INT64_MATH;
+    return value.isLiteral ? INT64_NUMBER : INT64_MATH;
   }
 
-  return typeOfSlot(value.slotKind, value.isBool);
+  return typeOfSlot(value.slotKind, value.isBoolean);
 }
 
 /**
@@ -236,7 +239,7 @@ const wideSlotType = (widened: WideSlot | undefined): IrType =>
 export const stateType = (state: ScalarState): IrType =>
   state.slotKind === 'i64'
     ? wideSlotType(state.widened)
-    : typeOfSlot(state.slotKind, state.isBool);
+    : typeOfSlot(state.slotKind, state.isBoolean);
 
 /**
  * The type of a ref's current value.

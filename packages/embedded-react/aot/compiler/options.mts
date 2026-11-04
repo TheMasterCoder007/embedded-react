@@ -71,10 +71,18 @@ export interface ResolvedOptions extends CompileOptions {
  * nested <Text>'s segment count in the engine's uint8_t `span_count`.
  */
 const MAX_SCREEN = 32767;
-const MAX_LIST_CAP = 32767;
-const MAX_LIST_STR_CAP = 32767;
+const MAX_LIST_CAPACITY = 32767;
+const MAX_LIST_STRING_CAPACITY = 32767;
 const MAX_TEXT_SPANS = 255;
 const MAX_TIMERS = 4096;
+
+// What each size or cap is when neither the options nor a variable set it.
+const DEFAULT_SCREEN_WIDTH = 800;
+const DEFAULT_SCREEN_HEIGHT = 480;
+const DEFAULT_LIST_CAPACITY = 16;
+const DEFAULT_LIST_STRING_CAPACITY = 48;
+const DEFAULT_TEXT_SPANS = 4;
+const DEFAULT_TIMERS = 8;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -129,11 +137,11 @@ function wholeInRange(
  * maxTextSpans, to 4096 for maxTimers. One that isn't, from the options or a variable, is an `AOT:` error
  * that names it.
  *
- * @param opts  The options the caller passed.
+ * @param options  The options the caller passed.
  *
  * @returns The same options with every value filled in.
  */
-export function resolveOptions(opts: CompileOptions): ResolvedOptions {
+export function resolveOptions(options: CompileOptions): ResolvedOptions {
   // An unset or blank variable falls back to the default; any other value must parse to one in range.
   const isSet = (name: string): boolean =>
     (process.env[name] ?? '').trim() !== '';
@@ -145,53 +153,57 @@ export function resolveOptions(opts: CompileOptions): ResolvedOptions {
   const fromOption = (
     value: number | undefined,
     name: string,
-    envName: string,
+    environmentName: string,
     fallback: number,
     max: number,
   ): number =>
     value != null
       ? wholeInRange(value, name, max)
-      : fromEnv(envName, fallback, max);
+      : fromEnv(environmentName, fallback, max);
 
   return {
-    ...opts,
-    screen: opts.screen
+    ...options,
+    screen: options.screen
       ? {
-          width: wholeInRange(opts.screen.width, 'screen.width', MAX_SCREEN),
-          height: wholeInRange(opts.screen.height, 'screen.height', MAX_SCREEN),
+          width: wholeInRange(options.screen.width, 'screen.width', MAX_SCREEN),
+          height: wholeInRange(
+            options.screen.height,
+            'screen.height',
+            MAX_SCREEN,
+          ),
         }
       : {
-          width: fromEnv('ER_AOT_SCREEN_W', 800, MAX_SCREEN),
-          height: fromEnv('ER_AOT_SCREEN_H', 480, MAX_SCREEN),
+          width: fromEnv('ER_AOT_SCREEN_W', DEFAULT_SCREEN_WIDTH, MAX_SCREEN),
+          height: fromEnv('ER_AOT_SCREEN_H', DEFAULT_SCREEN_HEIGHT, MAX_SCREEN),
         },
     screenFrom: 'option',
     caps: {
       listCap: fromOption(
-        opts.listCap,
+        options.listCap,
         'listCap',
         'ER_AOT_LIST_CAP',
-        16,
-        MAX_LIST_CAP,
+        DEFAULT_LIST_CAPACITY,
+        MAX_LIST_CAPACITY,
       ),
       listStrCap: fromOption(
-        opts.listStrCap,
+        options.listStrCap,
         'listStrCap',
         'ER_AOT_LIST_STR_CAP',
-        48,
-        MAX_LIST_STR_CAP,
+        DEFAULT_LIST_STRING_CAPACITY,
+        MAX_LIST_STRING_CAPACITY,
       ),
       maxTextSpans: fromOption(
-        opts.maxTextSpans,
+        options.maxTextSpans,
         'maxTextSpans',
         'ER_AOT_MAX_TEXT_SPANS',
-        4,
+        DEFAULT_TEXT_SPANS,
         MAX_TEXT_SPANS,
       ),
       maxTimers: fromOption(
-        opts.maxTimers,
+        options.maxTimers,
         'maxTimers',
         'ER_AOT_MAX_TIMERS',
-        8,
+        DEFAULT_TIMERS,
         MAX_TIMERS,
       ),
     },

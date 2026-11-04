@@ -33,7 +33,7 @@ describe('the lowered app: functions', () => {
     `export function App() {\n${body}\n  return ${jsx};\n}`;
 
   it('runs a mount effect inline, or calls it when it returns early', () => {
-    const {out} = lower(
+    const {output} = lower(
       app(
         '  const [n, setN] = useState(0);\n' +
           '  useEffect(() => { setN(1); }, []);\n' +
@@ -41,21 +41,23 @@ describe('the lowered app: functions', () => {
         '<Text>{n}</Text>',
       ),
     );
-    expect(out.mountEffects).toMatchObject([
+    expect(output.mountEffects).toMatchObject([
       {kind: 'inline', callback: {updatesState: true}},
       {kind: 'call', name: 'effect_0', updatesState: true},
     ]);
-    expect(out.effectFns).toMatchObject([{kind: 'mount', name: 'effect_0'}]);
+    expect(output.effectFunctions).toMatchObject([
+      {kind: 'mount', name: 'effect_0'},
+    ]);
   });
 
   it('drops the wait bookkeeping from a stop no start waits on', () => {
-    const {out} = lower(
+    const {output} = lower(
       app(
         '  const a = useAnimatedValue(0);',
         '<View onTouchStart={() => Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(50)]).stop()} />',
       ),
     );
-    expect(out.handlers[0].callback.body).toMatchObject([
+    expect(output.handlers[0].callback.body).toMatchObject([
       {kind: 'stopAnimations', handles: ['anim_a'], waitOwner: null},
     ]);
   });

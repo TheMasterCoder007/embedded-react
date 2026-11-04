@@ -51,13 +51,15 @@ describe('IR types', () => {
   });
 
   it('types a value from its slot and what it records', () => {
-    expect(typeOfSlotValue({slotKind: 'int', isBool: true})).toBe(BOOL);
-    expect(typeOfSlotValue({slotKind: 'int', isBool: false})).toBe(INT);
+    expect(typeOfSlotValue({slotKind: 'int', isBoolean: true})).toBe(BOOL);
+    expect(typeOfSlotValue({slotKind: 'int', isBoolean: false})).toBe(INT);
     expect(typeOfSlotValue({slotKind: 'i64'})).toBe(TIME);
-    expect(typeOfSlotValue({slotKind: 'i64', lit: true})).toBe(INT64_NUMBER);
+    expect(typeOfSlotValue({slotKind: 'i64', isLiteral: true})).toBe(
+      INT64_NUMBER,
+    );
     expect(typeOfSlotValue({slotKind: 'i64', wide: true})).toBe(INT64_MATH);
     expect(typeOfSlot(undefined)).toBe(STRUCT);
-    expect(() => typeOfSlotValue({slotKind: 'int', lit: true})).toThrow(
+    expect(() => typeOfSlotValue({slotKind: 'int', isLiteral: true})).toThrow(
       /64-bit source/,
     );
     expect(() => typeOfSlot('float', true)).toThrow(
@@ -81,7 +83,7 @@ describe('IR types', () => {
     const state = widened => ({
       kind: 'scalar',
       slotKind: 'i64',
-      isBool: false,
+      isBoolean: false,
       widened,
     });
     expect(stateType(state('time'))).toBe(TIME);
@@ -121,7 +123,7 @@ describe('IR types: slot widths', () => {
     ]);
     expect(stores[0].value).toMatchObject({
       kind: 'fixed',
-      expr: {kind: 'clock'},
+      expression: {kind: 'clock'},
     });
     expect(stores[2].value).toMatchObject({kind: 'local'});
   });

@@ -42,7 +42,7 @@ export type IrCheckSubject =
   | {kind: 'dialGradientStops'; count: number};
 
 /** A recorded check, and where its error is reported. */
-export type IrCheck = IrCheckSubject & {loc: SourcePosition | undefined};
+export type IrCheck = IrCheckSubject & {location: SourcePosition | undefined};
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -186,17 +186,20 @@ export function checkProblem(subject: IrCheckSubject): AotError | null {
  * reported; otherwise, or inside a fallback attempt, it is checked at once.
  *
  * @param subject  The subject.
- * @param loc  Where its error is reported, when that is more exact than the node being lowered.
+ * @param location  Where its error is reported, when that is more exact than the node being lowered.
  */
-export function check(subject: IrCheckSubject, loc?: SourcePosition): void {
+export function check(
+  subject: IrCheckSubject,
+  location?: SourcePosition,
+): void {
   if (recording && !attempts) {
-    recording.push({...subject, loc: loc ?? currentLoc()});
+    recording.push({...subject, location: location ?? currentLoc()});
     return;
   }
 
   const problem = checkProblem(subject);
   if (problem) {
-    locateError(problem, loc);
+    locateError(problem, location);
     throw problem;
   }
 }
@@ -234,8 +237,8 @@ export function runChecks(checks: IrCheck[]): void {
   for (const recorded of checks) {
     const problem = checkProblem(recorded);
     if (problem) {
-      if (recorded.loc) {
-        problem.aotLoc = recorded.loc;
+      if (recorded.location) {
+        problem.aotLoc = recorded.location;
       }
 
       throw problem;

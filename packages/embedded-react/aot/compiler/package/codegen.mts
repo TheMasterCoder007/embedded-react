@@ -28,7 +28,7 @@
 
 import {aotError, constantText} from '../diagnostics.mts';
 import {animationStatement} from './animations.mts';
-import {EventField, MathFn} from './format.mts';
+import {EventField, MathFn, ValueType} from './format.mts';
 import {abiProp, constantNumber, floatBits} from './props.mts';
 import {updateVector} from './vectors.mts';
 import type {AnimationPlan} from './animations.mts';
@@ -82,8 +82,8 @@ export interface ListPool {
 /** A PanResponder's gesture state: whether it is granted, the travel at the grant, and x0/y0. */
 export interface GestureSlots {
   granted: Slot;
-  baseDx: Slot;
-  baseDy: Slot;
+  baseDeltaX: Slot;
+  baseDeltaY: Slot;
   x0: Slot;
   y0: Slot;
 }
@@ -132,8 +132,11 @@ interface PropResult {
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
+/** What rounding a double adds before it floors: a half rounds up. */
+const ROUND_HALF_UP = 0.5;
+
 /** The whole-number helpers' opcodes; the 64-bit ones add L. */
-const HELPER_OPS: Record<WholeHelper, string> = {
+const HELPER_OPCODES: Record<WholeHelper, string> = {
   add: 'ADD',
   sub: 'SUB',
   mul: 'MUL',
@@ -149,7 +152,7 @@ const HELPER_OPS: Record<WholeHelper, string> = {
 };
 
 /** The arithmetic opcodes for each type. */
-const ARITHMETIC_OPS: Record<string, Record<string, string>> = {
+const ARITHMETIC_OPCODES: Record<string, Record<string, string>> = {
   int: {'+': 'ADD', '-': 'SUB', '*': 'MUL', '/': 'DIV', '%': 'MOD'},
   int64: {'+': 'ADDL', '-': 'SUBL', '*': 'MULL', '/': 'DIVL', '%': 'MODL'},
   float: {'+': 'FADD', '-': 'FSUB', '*': 'FMUL', '/': 'FDIV'},
@@ -157,7 +160,7 @@ const ARITHMETIC_OPS: Record<string, Record<string, string>> = {
 };
 
 /** The comparison opcodes for each type: equal, less than, at most. */
-const COMPARE_OPS: Record<string, [string, string, string]> = {
+const COMPARE_OPCODES: Record<string, [string, string, string]> = {
   int: ['EQ', 'LT', 'LE'],
   int64: ['LEQ', 'LLT', 'LLE'],
   float: ['FEQ', 'FLT', 'FLE'],
@@ -222,7 +225,7 @@ const IMMEDIATE_MAX = 32767;
  * @class Codegen
  */
 export class Codegen {
-  readonly fn: FunctionBuilder;
+  readonly builder: FunctionBuilder;
   private readonly program: ProgramSlots;
   private readonly inDoubles: boolean;
   private readonly input: InputText | null;
@@ -233,7 +236,7 @@ export class Codegen {
   private emptyString: Register | null = null;
 
   /**
-   * @param fn  The function being built.
+   * @param builder  The function being built.
    * @param program  The program's slots and tables.
    * @param options  inDoubles: fractions are worked out in double precision, for a value worked out at boot.
    *                 input: the <TextInput> a CHANGE_TEXT handler reads.
@@ -242,7 +245,7 @@ export class Codegen {
    *                 finished: what an animation completion was passed, which its `finished` reads.
    */
   constructor(
-    fn: FunctionBuilder,
+    builder: FunctionBuilder,
     program: ProgramSlots,
     options: {
       inDoubles?: boolean;
@@ -252,7 +255,7 @@ export class Codegen {
       finished?: Register;
     } = {},
   ) {
-    this.fn = fn;
+    this.builder = builder;
     this.program = program;
     this.inDoubles = options.inDoubles ?? false;
     this.input = options.input ?? null;
@@ -270,19 +273,19 @@ export class Codegen {
   /**
    * The type an expression is worked out in.
    *
-   * @param expr  The expression.
+   * @param expression  The expression.
    *
    * @returns Its type.
    */
-  typeOf(expr: IrExpr): ExprType {
+  typeOf(expression: IrExpr): ExprType {
     const fraction: ExprType = this.inDoubles ? 'double' : 'float';
-    switch (expr.kind) {
+    switch (expression.kind) {
       case 'number':
-        return expr.type.kind === 'float'
+        return expression.type.kind === 'float'
           ? fraction
-          : expr.type.kind === 'int64'
+          : expression.type.kind === 'int64'
             ? 'int64'
-            : expr.type.kind === 'bool'
+            : expression.type.kind === 'bool'
               ? 'bool'
               : 'int';
       case 'string':
@@ -291,18 +294,18 @@ export class Codegen {
         return 'bool';
       case 'state':
         // An interned state still reads as a string.
-        return this.program.enums.has(expr.state)
+        return this.program.enums.has(expression.state)
           ? 'string'
-          : slotType(this.stateSlot(expr.state));
+          : slotType(this.stateSlot(expression.state));
       case 'boot':
-        return slotType(this.bootSlot(expr.slot));
+        return slotType(this.bootSlot(expression.slot));
       case 'ref':
-        return slotType(this.refSlot(expr.ref));
+        return slotType(this.refSlot(expression.ref));
       case 'local': {
-        if (expr.local.expr) {
-          return this.typeOf(expr.local.expr);
+        if (expression.local.expression) {
+          return this.typeOf(expression.local.expression);
         }
-        const binding = this.binding(expr.local.name!);
+        const binding = this.binding(expression.local.name!);
         return !binding
           ? 'string'
           : 'register' in binding
@@ -310,38 +313,51 @@ export class Codegen {
             : slotType(binding.slot);
       }
       case 'event':
-        return expr.field === 'changed_text'
+        return expression.field === 'changed_text'
           ? 'string'
-          : ['vx', 'vy', 'value', 'value_start'].includes(expr.field)
+          : ['vx', 'vy', 'value', 'value_start'].includes(expression.field)
             ? 'float'
             : 'int';
       case 'gesture':
-        return expr.field === 'vx' || expr.field === 'vy' ? 'float' : 'int';
+        return expression.field === 'vx' || expression.field === 'vy'
+          ? 'float'
+          : 'int';
       case 'clock':
         return 'int64';
       case 'itemField':
-        return expr.field.kind;
+        return expression.field.kind;
       case 'pi':
       case 'toFloat':
       case 'floatDivide':
       case 'floatMath':
         return fraction;
       case 'unary':
-        return expr.op === '!' ? 'bool' : promoted(this.typeOf(expr.operand));
+        return expression.operator === '!'
+          ? 'bool'
+          : promoted(this.typeOf(expression.operand));
       case 'helper':
-        return expr.bits === 64 ? 'int64' : 'int';
+        return expression.bits === 64 ? 'int64' : 'int';
       case 'arithmetic':
-        return usual(this.typeOf(expr.left), this.typeOf(expr.right));
+        return usual(
+          this.typeOf(expression.left),
+          this.typeOf(expression.right),
+        );
       case 'wholeRound':
-        return this.typeOf(expr.operand);
+        return this.typeOf(expression.operand);
       case 'compare':
       case 'stringEquals':
       case 'logical':
         return 'bool';
       case 'pick':
-        return usual(this.typeOf(expr.left), this.typeOf(expr.right));
+        return usual(
+          this.typeOf(expression.left),
+          this.typeOf(expression.right),
+        );
       case 'conditional':
-        return usual(this.typeOf(expr.consequent), this.typeOf(expr.alternate));
+        return usual(
+          this.typeOf(expression.consequent),
+          this.typeOf(expression.alternate),
+        );
       default:
         // layout, narrowRemainder, trunc, toInt, and what a package refuses
         return 'int';
@@ -355,98 +371,119 @@ export class Codegen {
   /**
    * Works an expression out into a register of its type.
    *
-   * @param expr  The expression.
+   * @param expression  The expression.
    *
    * @returns The register. A local's may be its own: never write to what this returns.
    */
-  value(expr: IrExpr): Register {
-    const {fn} = this;
-    const type = this.typeOf(expr);
-    switch (expr.kind) {
+  value(expression: IrExpr): Register {
+    const {builder} = this;
+    const type = this.typeOf(expression);
+    switch (expression.kind) {
       case 'number':
-        return this.load(type, expr.value);
+        return this.load(type, expression.value);
       case 'string': {
-        const register = fn.register('string');
-        fn.abx('LOADS', register.index, this.program.tables.string(expr.value));
+        const register = builder.register('string');
+        builder.abx(
+          'LOADS',
+          register.index,
+          this.program.tables.string(expression.value),
+        );
         return register;
       }
       case 'boolean':
-        return this.load('bool', expr.value ? 1 : 0);
+        return this.load('bool', expression.value ? 1 : 0);
       case 'state':
-        if (this.program.enums.has(expr.state)) {
+        if (this.program.enums.has(expression.state)) {
           throw new Error(
-            `AOT internal: state "${expr.state.name}" is interned, but read as a string`,
+            `AOT internal: state "${expression.state.name}" is interned, but read as a string`,
           );
         }
-        return this.get(this.stateSlot(expr.state));
+        return this.get(this.stateSlot(expression.state));
       case 'boot':
-        return this.get(this.bootSlot(expr.slot));
+        return this.get(this.bootSlot(expression.slot));
       case 'ref':
-        return this.get(this.refSlot(expr.ref));
+        return this.get(this.refSlot(expression.ref));
       case 'local':
-        return this.local(expr);
+        return this.local(expression);
       case 'listLength': {
-        const register = fn.register('int');
-        fn.abx('LEN', register.index, this.listPool(expr.list).slot.index);
+        const register = builder.register('int');
+        builder.abx(
+          'LEN',
+          register.index,
+          this.listPool(expression.list).slot.index,
+        );
         return register;
       }
       case 'itemField':
-        return this.itemField(expr.item, expr.field.key, type);
+        return this.itemField(expression.item, expression.field.key, type);
       case 'gesture':
-        return this.gesture(expr);
+        return this.gesture(expression);
       case 'event':
-        return expr.field === 'changed_text'
+        return expression.field === 'changed_text'
           ? this.changedText()
-          : this.event(type, EVENT_FIELDS[expr.field]);
+          : this.event(type, EVENT_FIELDS[expression.field]);
       case 'layout':
-        return this.event('int', LAYOUT_FIELDS[expr.field]);
+        return this.event('int', LAYOUT_FIELDS[expression.field]);
       case 'clock': {
-        const register = fn.register('int64');
-        fn.abc(expr.clock === 'Date' ? 'DATENOW' : 'NOW', register.index);
+        const register = builder.register('int64');
+        builder.abc(
+          expression.clock === 'Date' ? 'DATENOW' : 'NOW',
+          register.index,
+        );
         return register;
       }
       case 'pi':
         return this.load(type, Math.PI);
       case 'toFloat':
       case 'wholeRound':
-        return this.convert(this.value(expr.operand), type);
+        return this.convert(this.value(expression.operand), type);
       case 'unary':
-        return this.unary(expr.op, expr.operand, type);
+        return this.unary(expression.operator, expression.operand, type);
       case 'helper': {
-        const argType: ExprType = expr.bits === 64 ? 'int64' : 'int';
-        const args = expr.args.map(arg => this.valueAs(arg, argType));
-        const register = fn.register(argType);
-        fn.abc(
-          HELPER_OPS[expr.helper] + (expr.bits === 64 ? 'L' : ''),
+        const argumentType: ExprType = expression.bits === 64 ? 'int64' : 'int';
+        const argumentRegisters = expression.callArguments.map(argument =>
+          this.valueAs(argument, argumentType),
+        );
+        const register = builder.register(argumentType);
+        builder.abc(
+          HELPER_OPCODES[expression.helper] +
+            (expression.bits === 64 ? 'L' : ''),
           register.index,
-          args[0].index,
-          (args[1] ?? args[0]).index,
+          argumentRegisters[0].index,
+          (argumentRegisters[1] ?? argumentRegisters[0]).index,
         );
         return register;
       }
       case 'arithmetic':
-        return this.arithmetic(expr.op, expr.left, expr.right, type);
+        return this.arithmetic(
+          expression.operator,
+          expression.left,
+          expression.right,
+          type,
+        );
       case 'floatDivide':
-        return this.arithmetic('/', expr.left, expr.right, type);
+        return this.arithmetic('/', expression.left, expression.right, type);
       case 'narrowRemainder': {
         const operandType = usual(
-          this.typeOf(expr.left),
-          this.typeOf(expr.right),
+          this.typeOf(expression.left),
+          this.typeOf(expression.right),
         );
         return this.convert(
-          this.arithmetic('%', expr.left, expr.right, operandType),
+          this.arithmetic('%', expression.left, expression.right, operandType),
           'int',
         );
       }
       case 'floatMath': {
-        const args = expr.args.map(arg => this.valueAs(arg, type));
-        const register = fn.register(type as RegisterType);
-        fn.abc(
+        const argumentRegisters = expression.callArguments.map(argument =>
+          this.valueAs(argument, type),
+        );
+        const register = builder.register(type as RegisterType);
+        builder.abc(
           type === 'double' ? 'DMATH' : 'FMATH',
           register.index,
-          args[0].index,
-          (args[1] ?? args[0]).index,
-          MathFn[expr.fn],
+          argumentRegisters[0].index,
+          (argumentRegisters[1] ?? argumentRegisters[0]).index,
+          MathFn[expression.mathFunction],
         );
         return register;
       }
@@ -454,43 +491,68 @@ export class Codegen {
       case 'toInt':
         // Worked out as a float, or a double at boot.
         return this.convert(
-          this.valueAs(expr.operand, this.inDoubles ? 'double' : 'float'),
+          this.valueAs(expression.operand, this.inDoubles ? 'double' : 'float'),
           'int',
         );
       case 'compare':
-        return this.compare(expr.op, expr.left, expr.right);
+        return this.compare(
+          expression.operator,
+          expression.left,
+          expression.right,
+        );
       case 'stringEquals': {
-        if (this.enumOf(expr.left) || this.enumOf(expr.right)) {
-          return this.enumEquals(expr.op, expr.left, expr.right);
+        if (this.enumOf(expression.left) || this.enumOf(expression.right)) {
+          return this.enumEquals(
+            expression.operator,
+            expression.left,
+            expression.right,
+          );
         }
-        const register = fn.register('bool');
-        fn.abc(
+        const register = builder.register('bool');
+        builder.abc(
           'SEQ',
           register.index,
-          this.valueAs(expr.left, 'string').index,
-          this.valueAs(expr.right, 'string').index,
+          this.valueAs(expression.left, 'string').index,
+          this.valueAs(expression.right, 'string').index,
         );
-        if (expr.op === '!=') {
-          fn.abc('NOT', register.index, register.index);
+        if (expression.operator === '!=') {
+          builder.abc('NOT', register.index, register.index);
         }
         return register;
       }
       case 'logical': {
-        const register = fn.register('bool');
-        const end = fn.label();
-        fn.abc('MOVE', register.index, this.condition(expr.left).index);
-        fn.branch(expr.op === '&&' ? 'JF' : 'JT', end, register);
-        fn.abc('MOVE', register.index, this.condition(expr.right).index);
-        fn.place(end);
+        const register = builder.register('bool');
+        const end = builder.label();
+        builder.abc(
+          'MOVE',
+          register.index,
+          this.condition(expression.left).index,
+        );
+        builder.branch(
+          expression.operator === '&&' ? 'JF' : 'JT',
+          end,
+          register,
+        );
+        builder.abc(
+          'MOVE',
+          register.index,
+          this.condition(expression.right).index,
+        );
+        builder.place(end);
         return register;
       }
       case 'pick':
-        return this.pick(expr.op, expr.left, expr.right, type);
+        return this.pick(
+          expression.operator,
+          expression.left,
+          expression.right,
+          type,
+        );
       case 'conditional':
         return this.choose(
-          this.condition(expr.test),
-          () => this.valueAs(expr.consequent, type),
-          () => this.valueAs(expr.alternate, type),
+          this.condition(expression.test),
+          () => this.valueAs(expression.consequent, type),
+          () => this.valueAs(expression.alternate, type),
           type,
         );
     }
@@ -499,13 +561,13 @@ export class Codegen {
   /**
    * The set of an interned state an expression reads, or null when it reads none.
    *
-   * @param expr  The expression.
+   * @param expression  The expression.
    *
    * @returns The set.
    */
-  private enumOf(expr: IrExpr): EnumSet | null {
-    return expr.kind === 'state'
-      ? (this.program.enums.get(expr.state) ?? null)
+  private enumOf(expression: IrExpr): EnumSet | null {
+    return expression.kind === 'state'
+      ? (this.program.enums.get(expression.state) ?? null)
       : null;
   }
 
@@ -513,32 +575,36 @@ export class Codegen {
    * A comparison of an interned state with a literal, or with itself, as an int compare. A literal it never
    * holds is never equal.
    *
-   * @param op  `==` or `!=`.
+   * @param operator  `==` or `!=`.
    * @param left  One side.
    * @param right  The other.
    *
    * @returns A bool register.
    */
-  private enumEquals(op: '==' | '!=', left: IrExpr, right: IrExpr): Register {
+  private enumEquals(
+    operator: '==' | '!=',
+    left: IrExpr,
+    right: IrExpr,
+  ): Register {
     const read = (this.enumOf(left) ? left : right) as IrExpr & {kind: 'state'};
     const other = read === left ? right : left;
     const {set, values} = this.enumOf(read)!;
     if (other.kind !== 'string') {
-      return this.load('bool', op === '==' ? 1 : 0);
+      return this.load('bool', operator === '==' ? 1 : 0);
     }
     const index = values.indexOf(other.value);
     if (index < 0) {
-      return this.load('bool', op === '==' ? 0 : 1);
+      return this.load('bool', operator === '==' ? 0 : 1);
     }
-    const register = this.fn.register('bool');
-    this.fn.abc(
+    const register = this.builder.register('bool');
+    this.builder.abc(
       'EQ',
       register.index,
       this.get(this.stateSlot(read.state)).index,
       this.enumValue(set, index).index,
     );
-    if (op === '!=') {
-      this.fn.abc('NOT', register.index, register.index);
+    if (operator === '!=') {
+      this.builder.abc('NOT', register.index, register.index);
     }
     return register;
   }
@@ -552,33 +618,33 @@ export class Codegen {
    * @returns The register.
    */
   private enumValue(set: number, index: number): Register {
-    const register = this.fn.register('enum');
-    this.fn.abx('LOADE', register.index, index, set);
+    const register = this.builder.register('enum');
+    this.builder.abx('LOADE', register.index, index, set);
     return register;
   }
 
   /**
    * Works an expression out and converts it as an assignment to a type does.
    *
-   * @param expr  The expression.
+   * @param expression  The expression.
    * @param type  The type it goes into.
    *
    * @returns A register of that type.
    */
-  valueAs(expr: IrExpr, type: ExprType): Register {
-    return this.convert(this.value(expr), type);
+  valueAs(expression: IrExpr, type: ExprType): Register {
+    return this.convert(this.value(expression), type);
   }
 
   /**
    * An expression as a condition: true exactly when JS finds it truthy. A string is truthy
    * when it isn't empty.
    *
-   * @param expr  The expression.
+   * @param expression  The expression.
    *
    * @returns A bool register.
    */
-  condition(expr: IrExpr): Register {
-    return this.truthy(this.value(expr));
+  condition(expression: IrExpr): Register {
+    return this.truthy(this.value(expression));
   }
 
   /**
@@ -599,20 +665,20 @@ export class Codegen {
       return this.truthy(register);
     }
     if (from === 'bool') {
-      const whole = this.fn.register('int');
-      const end = this.fn.label();
-      this.fn.abx('LOADI', whole.index, 0);
-      this.fn.branch('JF', end, register);
-      this.fn.abx('LOADI', whole.index, 1);
-      this.fn.place(end);
+      const whole = this.builder.register('int');
+      const end = this.builder.label();
+      this.builder.abx('LOADI', whole.index, 0);
+      this.builder.branch('JF', end, register);
+      this.builder.abx('LOADI', whole.index, 1);
+      this.builder.place(end);
       return this.convert(whole, type);
     }
-    const op = CONVERSIONS[`${from}>${type}`];
-    if (!op) {
+    const opcode = CONVERSIONS[`${from}>${type}`];
+    if (!opcode) {
       throw new Error(`AOT internal: no conversion from ${from} to ${type}`);
     }
-    const converted = this.fn.register(type as RegisterType);
-    this.fn.abc(op, converted.index, register.index);
+    const converted = this.builder.register(type as RegisterType);
+    this.builder.abc(opcode, converted.index, register.index);
     return converted;
   }
 
@@ -627,19 +693,24 @@ export class Codegen {
     if (register.type === 'bool') {
       return register;
     }
-    const test = this.fn.register('bool');
+    const test = this.builder.register('bool');
     if (register.type === 'string') {
-      this.fn.abc('SEQ', test.index, register.index, this.zero('string').index);
+      this.builder.abc(
+        'SEQ',
+        test.index,
+        register.index,
+        this.zero('string').index,
+      );
     } else {
       const zero = this.load(register.type as ExprType, 0);
-      this.fn.abc(
-        COMPARE_OPS[register.type][0],
+      this.builder.abc(
+        COMPARE_OPCODES[register.type][0],
         test.index,
         register.index,
         zero.index,
       );
     }
-    this.fn.abc('NOT', test.index, test.index);
+    this.builder.abc('NOT', test.index, test.index);
     return test;
   }
 
@@ -652,28 +723,36 @@ export class Codegen {
    * @returns The register.
    */
   load(type: ExprType, value: number): Register {
-    const {fn} = this;
+    const {builder} = this;
     const {tables} = this.program;
-    const register = fn.register(type as RegisterType);
+    const register = builder.register(type as RegisterType);
     switch (type) {
       case 'int':
       case 'bool': {
         const whole = Math.trunc(value) | 0;
         if (whole >= IMMEDIATE_MIN && whole <= IMMEDIATE_MAX) {
-          fn.abx('LOADI', register.index, whole);
+          builder.abx('LOADI', register.index, whole);
         } else {
-          fn.abx('LOADK', register.index, tables.constant32(whole));
+          builder.abx('LOADK', register.index, tables.constant32(whole));
         }
         break;
       }
       case 'float':
-        fn.abx('LOADK', register.index, tables.constant32(floatBits(value)));
+        builder.abx(
+          'LOADK',
+          register.index,
+          tables.constant32(floatBits(value)),
+        );
         break;
       case 'double':
-        fn.abx('LOADK64', register.index, tables.constant64(doubleBits(value)));
+        builder.abx(
+          'LOADK64',
+          register.index,
+          tables.constant64(doubleBits(value)),
+        );
         break;
       case 'int64':
-        fn.abx(
+        builder.abx(
           'LOADK64',
           register.index,
           tables.constant64(BigInt(Math.trunc(value))),
@@ -694,14 +773,14 @@ export class Codegen {
    * @returns A bool register.
    */
   same(left: Register, right: Register): Register {
-    const register = this.fn.register('bool');
-    const op =
+    const register = this.builder.register('bool');
+    const opcode =
       left.type === 'string'
         ? 'SEQ'
         : left.type === 'bool' || left.type === 'enum'
           ? 'EQ'
-          : COMPARE_OPS[left.type][0];
-    this.fn.abc(op, register.index, left.index, right.index);
+          : COMPARE_OPCODES[left.type][0];
+    this.builder.abc(opcode, register.index, left.index, right.index);
     return register;
   }
 
@@ -714,14 +793,14 @@ export class Codegen {
    */
   get(slot: Slot): Register {
     const type = slotType(slot);
-    const register = this.fn.register(type as RegisterType);
-    const op =
+    const register = this.builder.register(type as RegisterType);
+    const opcode =
       type === 'string'
         ? 'GETS'
         : type === 'int64' || type === 'double'
           ? 'GET64'
           : 'GET32';
-    this.fn.abx(op, register.index, slot.index);
+    this.builder.abx(opcode, register.index, slot.index);
     return register;
   }
 
@@ -735,18 +814,18 @@ export class Codegen {
   set(slot: Slot, value: Register): void {
     const type = slotType(slot);
     const register = this.convert(value, type);
-    const op =
+    const opcode =
       type === 'string'
         ? 'SETS'
         : type === 'int64' || type === 'double'
           ? 'SET64'
           : 'SET32';
-    this.fn.abx(op, register.index, slot.index);
+    this.builder.abx(opcode, register.index, slot.index);
   }
 
   private event(type: ExprType, field: number): Register {
-    const register = this.fn.register(type as RegisterType);
-    this.fn.abc('EVT', register.index, field);
+    const register = this.builder.register(type as RegisterType);
+    this.builder.abc('EVT', register.index, field);
     return register;
   }
 
@@ -754,21 +833,21 @@ export class Codegen {
    * A gestureState field: travel from the grant, x0/y0 from the responder's state, the rest
    * off the event.
    *
-   * @param expr  The field.
+   * @param expression  The field.
    *
    * @returns The register.
    */
-  private gesture(expr: IrGesture): Register {
-    const slots = this.program.gestures.get(expr.statePrefix)!;
-    switch (expr.field) {
+  private gesture(expression: IrGesture): Register {
+    const slots = this.program.gestures.get(expression.statePrefix)!;
+    switch (expression.field) {
       case 'dx':
       case 'dy': {
-        const travel = this.event('int', EVENT_FIELDS[expr.field]);
+        const travel = this.event('int', EVENT_FIELDS[expression.field]);
         const base = this.get(
-          expr.field === 'dx' ? slots.baseDx : slots.baseDy,
+          expression.field === 'dx' ? slots.baseDeltaX : slots.baseDeltaY,
         );
-        const register = this.fn.register('int');
-        this.fn.abc('SUB', register.index, travel.index, base.index);
+        const register = this.builder.register('int');
+        this.builder.abc('SUB', register.index, travel.index, base.index);
         return register;
       }
       case 'moveX':
@@ -781,11 +860,11 @@ export class Codegen {
         return this.get(slots.y0);
       case 'vx':
       case 'vy':
-        return this.event('float', EVENT_FIELDS[expr.field]);
+        return this.event('float', EVENT_FIELDS[expression.field]);
       case 'numberActiveTouches':
         return this.event('int', EventField.touches);
       case 'stateID':
-        return this.load('int', expr.stateID);
+        return this.load('int', expression.stateID);
     }
   }
 
@@ -796,9 +875,9 @@ export class Codegen {
         'AOT internal: changed text outside a CHANGE_TEXT handler',
       );
     }
-    const node = this.fn.register('node');
-    this.fn.abx('GET64', node.index, this.input.node.index);
-    this.fn.abx('INPUT', node.index, this.input.text.index);
+    const node = this.builder.register('node');
+    this.builder.abx('GET64', node.index, this.input.node.index);
+    this.builder.abx('INPUT', node.index, this.input.text.index);
     return this.get(this.input.text);
   }
 
@@ -812,20 +891,20 @@ export class Codegen {
    * @returns The register.
    */
   private itemField(item: Local, key: string, type: ExprType): Register {
-    const {fn} = this;
+    const {builder} = this;
     const list = required(item.list, `the list of "${item.name}"`);
     const field = list.struct.fields.findIndex(entry => entry.key === key);
     const pool = this.listPool(list).slot;
     const row = this.row ?? this.load('int', required(item.row, item.name!));
-    const count = fn.register('int');
-    const inUse = fn.register('bool');
-    fn.abx('LEN', count.index, pool.index);
-    fn.abc('LT', inUse.index, row.index, count.index);
+    const count = builder.register('int');
+    const inUse = builder.register('bool');
+    builder.abx('LEN', count.index, pool.index);
+    builder.abc('LT', inUse.index, row.index, count.index);
     return this.choose(
       inUse,
       () => {
-        const register = fn.register(type as RegisterType);
-        fn.abc(
+        const register = builder.register(type as RegisterType);
+        builder.abc(
           'ROWGET',
           register.index,
           row.index,
@@ -844,16 +923,16 @@ export class Codegen {
     if (type !== 'string') {
       return this.load(type, 0);
     }
-    this.emptyString ??= this.fn.reserved('string');
+    this.emptyString ??= this.builder.reserved('string');
     return this.emptyString;
   }
 
-  private local(expr: IrExpr & {kind: 'local'}): Register {
+  private local(expression: IrExpr & {kind: 'local'}): Register {
     // A memo, a component's prop or a helper's argument stands for its expression.
-    if (expr.local.expr) {
-      return this.value(expr.local.expr);
+    if (expression.local.expression) {
+      return this.value(expression.local.expression);
     }
-    const binding = this.binding(expr.local.name!);
+    const binding = this.binding(expression.local.name!);
     if (!binding) {
       return notYet('the value an element passes its callback');
     }
@@ -867,90 +946,100 @@ export class Codegen {
   }
 
   private unary(
-    op: '-' | '+' | '!',
+    operator: '-' | '+' | '!',
     operand: IrExpr,
     type: ExprType,
   ): Register {
-    if (op === '!') {
-      const register = this.fn.register('bool');
-      this.fn.abc('NOT', register.index, this.condition(operand).index);
+    if (operator === '!') {
+      const register = this.builder.register('bool');
+      this.builder.abc('NOT', register.index, this.condition(operand).index);
       return register;
     }
     const value = this.valueAs(operand, type);
-    if (op === '+') {
+    if (operator === '+') {
       return value;
     }
-    const register = this.fn.register(type as RegisterType);
-    const neg = {int: 'NEG', int64: 'NEGL', float: 'FNEG', double: 'DNEG'}[
-      type as string
-    ];
-    this.fn.abc(neg!, register.index, value.index);
+    const register = this.builder.register(type as RegisterType);
+    const negateOpcode = {
+      int: 'NEG',
+      int64: 'NEGL',
+      float: 'FNEG',
+      double: 'DNEG',
+    }[type as string];
+    this.builder.abc(negateOpcode!, register.index, value.index);
     return register;
   }
 
   private arithmetic(
-    op: string,
+    operator: string,
     left: IrExpr,
     right: IrExpr,
     type: ExprType,
   ): Register {
-    const a = this.valueAs(left, type);
-    const b = this.valueAs(right, type);
-    const register = this.fn.register(type as RegisterType);
+    const leftRegister = this.valueAs(left, type);
+    const rightRegister = this.valueAs(right, type);
+    const register = this.builder.register(type as RegisterType);
     // The IR's float remainder is fmod.
-    if (op === '%' && (type === 'float' || type === 'double')) {
-      this.fn.abc(
+    if (operator === '%' && (type === 'float' || type === 'double')) {
+      this.builder.abc(
         type === 'double' ? 'DMATH' : 'FMATH',
         register.index,
-        a.index,
-        b.index,
+        leftRegister.index,
+        rightRegister.index,
         MathFn.mod,
       );
       return register;
     }
-    this.fn.abc(ARITHMETIC_OPS[type][op], register.index, a.index, b.index);
+    this.builder.abc(
+      ARITHMETIC_OPCODES[type][operator],
+      register.index,
+      leftRegister.index,
+      rightRegister.index,
+    );
     return register;
   }
 
-  private compare(op: string, left: IrExpr, right: IrExpr): Register {
+  private compare(operator: string, left: IrExpr, right: IrExpr): Register {
     const type = promoted(usual(this.typeOf(left), this.typeOf(right)));
-    const a = this.valueAs(left, type);
-    const b = this.valueAs(right, type);
-    const [equal, less, atMost] = COMPARE_OPS[type];
-    const register = this.fn.register('bool');
+    const leftRegister = this.valueAs(left, type);
+    const rightRegister = this.valueAs(right, type);
+    const [equal, less, atMost] = COMPARE_OPCODES[type];
+    const register = this.builder.register('bool');
     const [opcode, first, second] =
-      op === '<'
-        ? [less, a, b]
-        : op === '>'
-          ? [less, b, a]
-          : op === '<='
-            ? [atMost, a, b]
-            : op === '>='
-              ? [atMost, b, a]
-              : [equal, a, b];
-    this.fn.abc(opcode, register.index, first.index, second.index);
-    if (op === '!=') {
-      this.fn.abc('NOT', register.index, register.index);
+      operator === '<'
+        ? [less, leftRegister, rightRegister]
+        : operator === '>'
+          ? [less, rightRegister, leftRegister]
+          : operator === '<='
+            ? [atMost, leftRegister, rightRegister]
+            : operator === '>='
+              ? [atMost, rightRegister, leftRegister]
+              : [equal, leftRegister, rightRegister];
+    this.builder.abc(opcode, register.index, first.index, second.index);
+    if (operator === '!=') {
+      this.builder.abc('NOT', register.index, register.index);
     }
     return register;
   }
 
   /** `a || b` as `(a ? a : b)`, and `a && b` as `(a ? b : a)`. */
   private pick(
-    op: '&&' | '||',
+    operator: '&&' | '||',
     left: IrExpr,
     right: IrExpr,
     type: ExprType,
   ): Register {
     // A string slot always reads as set here.
     if (type === 'string') {
-      return this.valueAs(op === '||' ? left : right, type);
+      return this.valueAs(operator === '||' ? left : right, type);
     }
     const leftValue = this.value(left);
     return this.choose(
       this.truthy(leftValue),
-      () => this.convert(op === '||' ? leftValue : this.value(right), type),
-      () => this.convert(op === '||' ? this.value(right) : leftValue, type),
+      () =>
+        this.convert(operator === '||' ? leftValue : this.value(right), type),
+      () =>
+        this.convert(operator === '||' ? this.value(right) : leftValue, type),
       type,
     );
   }
@@ -971,16 +1060,16 @@ export class Codegen {
     whenFalse: () => Register,
     type: ExprType,
   ): Register {
-    const {fn} = this;
-    const register = fn.register(type as RegisterType);
-    const otherwise = fn.label();
-    const end = fn.label();
-    fn.branch('JF', otherwise, test);
-    fn.abc('MOVE', register.index, whenTrue().index);
-    fn.branch('JMP', end);
-    fn.place(otherwise);
-    fn.abc('MOVE', register.index, whenFalse().index);
-    fn.place(end);
+    const {builder} = this;
+    const register = builder.register(type as RegisterType);
+    const otherwise = builder.label();
+    const end = builder.label();
+    builder.branch('JF', otherwise, test);
+    builder.abc('MOVE', register.index, whenTrue().index);
+    builder.branch('JMP', end);
+    builder.place(otherwise);
+    builder.abc('MOVE', register.index, whenFalse().index);
+    builder.place(end);
     return register;
   }
 
@@ -995,18 +1084,18 @@ export class Codegen {
    * @param parts  The text's parts.
    */
   text(parts: IrTextPart[]): void {
-    const {fn} = this;
+    const {builder} = this;
     for (const part of parts) {
-      const checkpoint = fn.checkpoint();
+      const checkpoint = builder.checkpoint();
       if (part.kind === 'literal') {
         if (part.text) {
-          fn.abx('FMTK', 0, this.program.tables.string(part.text));
+          builder.abx('FMTK', 0, this.program.tables.string(part.text));
         }
       } else if (part.kind === 'booleanWord') {
-        fn.abc('FMTB', this.condition(part.value).index);
+        builder.abc('FMTB', this.condition(part.value).index);
       } else if (this.enumOf(part.value)) {
         const value = part.value as IrExpr & {kind: 'state'};
-        fn.abx(
+        builder.abx(
           'FMTE',
           this.get(this.stateSlot(value.state)).index,
           this.enumOf(value)!.set,
@@ -1014,7 +1103,7 @@ export class Codegen {
       } else {
         // The spec is by the value's IR type: a float is printed from a float, so a boot double is narrowed first.
         const type = part.value.type.kind;
-        const [op, as]: [string, ExprType] =
+        const [opcode, formatType]: [string, ExprType] =
           type === 'string'
             ? ['FMTS', 'string']
             : type === 'float'
@@ -1022,9 +1111,9 @@ export class Codegen {
               : type === 'int64'
                 ? ['FMTL', 'int64']
                 : ['FMTI', 'int'];
-        fn.abc(op, this.valueAs(part.value, as).index);
+        builder.abc(opcode, this.valueAs(part.value, formatType).index);
       }
-      fn.release(checkpoint);
+      builder.release(checkpoint);
     }
   }
 
@@ -1035,78 +1124,92 @@ export class Codegen {
   /**
    * Lowers statements, in order.
    *
-   * @param stmts  The statements.
+   * @param statements  The statements.
    */
-  statements(stmts: IrStmt[]): void {
-    for (const stmt of stmts) {
-      this.statement(stmt);
+  statements(statements: IrStmt[]): void {
+    for (const statement of statements) {
+      this.statement(statement);
     }
   }
 
-  private statement(stmt: IrStmt): void {
-    const {fn} = this;
-    fn.at(stmt.loc);
-    switch (stmt.kind) {
+  private statement(statement: IrStmt): void {
+    const {builder} = this;
+    builder.at(statement.location);
+    switch (statement.kind) {
       case 'declareLocal': {
-        const hoisted = this.program.hoisted.get(stmt.name);
-        if (stmt.isHoisted && !hoisted) {
-          throw new Error(`AOT internal: no slot for local "${stmt.name}"`);
+        const hoisted = this.program.hoisted.get(statement.name);
+        if (statement.isHoisted && !hoisted) {
+          throw new Error(
+            `AOT internal: no slot for local "${statement.name}"`,
+          );
         }
         if (hoisted && slotType(hoisted) !== 'string') {
-          this.scoped(() => this.set(hoisted, this.value(stmt.init)));
-          this.locals.set(stmt.name, {slot: hoisted});
+          this.scoped(() =>
+            this.set(hoisted, this.value(statement.initializer)),
+          );
+          this.locals.set(statement.name, {slot: hoisted});
           return;
         }
-        if (this.typeOf(stmt.init) === 'string') {
+        if (this.typeOf(statement.initializer) === 'string') {
           // A string local is a copy of its own, so a later write to the state it was read from can't change it.
-          const slot = hoisted ?? this.program.stringLocals.get(stmt.name)!;
-          const checkpoint = fn.checkpoint();
-          this.text([{kind: 'value', value: stmt.init}]);
-          fn.abx('FMTSET', 0, slot.index);
-          fn.release(checkpoint);
-          this.locals.set(stmt.name, {slot});
+          const slot =
+            hoisted ?? this.program.stringLocals.get(statement.name)!;
+          const checkpoint = builder.checkpoint();
+          this.text([{kind: 'value', value: statement.initializer}]);
+          builder.abx('FMTSET', 0, slot.index);
+          builder.release(checkpoint);
+          this.locals.set(statement.name, {slot});
           return;
         }
-        const type = declaredType(stmt.init);
-        const register = fn.register(type as RegisterType);
-        const checkpoint = fn.checkpoint();
-        fn.abc('MOVE', register.index, this.valueAs(stmt.init, type).index);
-        fn.release(checkpoint);
-        this.locals.set(stmt.name, {register});
+        const type = declaredType(statement.initializer);
+        const register = builder.register(type as RegisterType);
+        const checkpoint = builder.checkpoint();
+        builder.abc(
+          'MOVE',
+          register.index,
+          this.valueAs(statement.initializer, type).index,
+        );
+        builder.release(checkpoint);
+        this.locals.set(statement.name, {register});
         return;
       }
       case 'setState':
         this.scoped(() =>
-          this.set(this.stateSlot(stmt.state), this.value(stmt.value)),
+          this.set(
+            this.stateSlot(statement.state),
+            this.value(statement.value),
+          ),
         );
         return;
       case 'setStateText':
         this.scoped(() => {
           // An interned state is set to the index of the constant it is given.
-          const set = this.program.enums.get(stmt.state);
+          const set = this.program.enums.get(statement.state);
           if (set) {
-            const index = set.values.indexOf(constantText(stmt.text)!);
-            fn.abx(
+            const index = set.values.indexOf(constantText(statement.text)!);
+            builder.abx(
               'SET32',
               this.enumValue(set.set, index).index,
-              this.stateSlot(stmt.state).index,
+              this.stateSlot(statement.state).index,
             );
             return;
           }
-          this.text(stmt.text.parts);
-          fn.abx('FMTSET', 0, this.stateSlot(stmt.state).index);
+          this.text(statement.text.parts);
+          builder.abx('FMTSET', 0, this.stateSlot(statement.state).index);
         });
         return;
       case 'writeRef':
-        this.scoped(() => this.writeRef(stmt.ref, stmt.op, stmt.value));
+        this.scoped(() =>
+          this.writeRef(statement.ref, statement.operator, statement.value),
+        );
         return;
       case 'stepRef':
         this.scoped(() => {
-          const slot = this.refSlot(stmt.ref);
+          const slot = this.refSlot(statement.ref);
           const type = slotType(slot);
-          const register = fn.register(type as RegisterType);
-          fn.abc(
-            ARITHMETIC_OPS[type][stmt.op === '++' ? '+' : '-'],
+          const register = builder.register(type as RegisterType);
+          builder.abc(
+            ARITHMETIC_OPCODES[type][statement.operator === '++' ? '+' : '-'],
             register.index,
             this.get(slot).index,
             this.load(type, 1).index,
@@ -1115,55 +1218,57 @@ export class Codegen {
         });
         return;
       case 'if': {
-        const otherwise = fn.label();
-        const checkpoint = fn.checkpoint();
-        fn.branch('JF', otherwise, this.condition(stmt.test));
-        fn.release(checkpoint);
-        this.statements(stmt.consequent);
-        if (stmt.alternate) {
-          const end = fn.label();
-          fn.branch('JMP', end);
-          fn.place(otherwise);
-          this.statements(stmt.alternate);
-          fn.place(end);
+        const otherwise = builder.label();
+        const checkpoint = builder.checkpoint();
+        builder.branch('JF', otherwise, this.condition(statement.test));
+        builder.release(checkpoint);
+        this.statements(statement.consequent);
+        if (statement.alternate) {
+          const end = builder.label();
+          builder.branch('JMP', end);
+          builder.place(otherwise);
+          this.statements(statement.alternate);
+          builder.place(end);
         } else {
-          fn.place(otherwise);
+          builder.place(otherwise);
         }
         return;
       }
       case 'startTimer':
-        this.startTimer(stmt.timer, stmt.idLocal?.name ?? null);
+        this.startTimer(statement.timer, statement.idLocal?.name ?? null);
         return;
       case 'clearTimer':
-        this.scoped(() => fn.abc('TCLEAR', this.valueAs(stmt.id, 'int').index));
+        this.scoped(() =>
+          builder.abc('TCLEAR', this.valueAs(statement.id, 'int').index),
+        );
         return;
       case 'clearList':
-        fn.abx('CLEAR', 0, this.listPool(stmt.list).slot.index);
+        builder.abx('CLEAR', 0, this.listPool(statement.list).slot.index);
         return;
       case 'appendItem':
-        this.scoped(() => this.appendItem(stmt));
+        this.scoped(() => this.appendItem(statement));
         return;
       case 'dropLastItem':
-        fn.abx('POP', 0, this.listPool(stmt.list).slot.index);
+        builder.abx('POP', 0, this.listPool(statement.list).slot.index);
         return;
       case 'keepFirstItems':
         this.scoped(() =>
-          fn.abx(
+          builder.abx(
             'KEEP',
-            this.load('int', stmt.count).index,
-            this.listPool(stmt.list).slot.index,
+            this.load('int', statement.count).index,
+            this.listPool(statement.list).slot.index,
           ),
         );
         return;
       case 'sliceItems':
         // slice(0, end), as SLICE counts it.
         this.scoped(() =>
-          fn.abc(
+          builder.abc(
             'SLICE',
             this.load('int', 0).index,
-            this.valueAs(stmt.end, 'int').index,
+            this.valueAs(statement.end, 'int').index,
             0,
-            this.listPool(stmt.list).slot.index,
+            this.listPool(statement.list).slot.index,
           ),
         );
         return;
@@ -1171,24 +1276,24 @@ export class Codegen {
       case 'startAnimations':
       case 'startChain':
       case 'completeAfter':
-        animationStatement(this, stmt, this.program.animations);
+        animationStatement(this, statement, this.program.animations);
         return;
       case 'return':
         if (!this.onReturn) {
           throw new Error('AOT internal: a `return` outside an effect');
         }
-        fn.branch('JMP', this.onReturn);
+        builder.branch('JMP', this.onReturn);
         return;
       case 'armCleanup':
         this.scoped(() =>
           this.set(
-            required(this.program.armed.get(stmt.flag), stmt.flag),
+            required(this.program.armed.get(statement.flag), statement.flag),
             this.load('bool', 1),
           ),
         );
         return;
       case 'updateVector':
-        updateVector(this, stmt, this.program.vectors);
+        updateVector(this, statement, this.program.vectors);
     }
   }
 
@@ -1196,17 +1301,17 @@ export class Codegen {
    * Appends an item, its fields worked out in order into consecutive registers. A full list drops it.
    * A text field is built in its own buffer first.
    *
-   * @param stmt  The append.
+   * @param statement  The append.
    */
-  private appendItem(stmt: IrAppendItem): void {
-    const {fn} = this;
-    const pool = this.listPool(stmt.list);
-    const row = fn.consecutive(
-      stmt.values.map(({field}) =>
+  private appendItem(statement: IrAppendItem): void {
+    const {builder} = this;
+    const pool = this.listPool(statement.list);
+    const row = builder.consecutive(
+      statement.values.map(({field}) =>
         field.kind === 'string' ? 'string' : field.kind,
       ),
     );
-    stmt.values.forEach((itemValue, index) =>
+    statement.values.forEach((itemValue, index) =>
       this.scoped(() => {
         if ('text' in itemValue) {
           const buffer = required(
@@ -1214,10 +1319,10 @@ export class Codegen {
             `field "${itemValue.field.key}"`,
           );
           this.text(itemValue.text.parts);
-          fn.abx('FMTSET', 0, buffer.index);
-          fn.abx('GETS', row[index].index, buffer.index);
+          builder.abx('FMTSET', 0, buffer.index);
+          builder.abx('GETS', row[index].index, buffer.index);
         } else {
-          fn.abc(
+          builder.abc(
             'MOVE',
             row[index].index,
             this.valueAs(itemValue.value, itemValue.field.kind).index,
@@ -1225,7 +1330,7 @@ export class Codegen {
         }
       }),
     );
-    fn.abx('APPEND', row[0].index, pool.slot.index);
+    builder.abx('APPEND', row[0].index, pool.slot.index);
   }
 
   /**
@@ -1235,19 +1340,19 @@ export class Codegen {
    * @param idLocal  The local's name, or null.
    */
   private startTimer(timer: IrTimer, idLocal: string | null): void {
-    const {fn} = this;
+    const {builder} = this;
     const hoisted =
       idLocal === null ? undefined : this.program.hoisted.get(idLocal);
     const start = (id: Register): void =>
       this.scoped(() => {
-        fn.abc(
+        builder.abc(
           'TSTART',
           id.index,
           this.timerDelay(timer.delay).index,
           timer.isRepeating ? 1 : 0,
           required(
-            this.program.timerFunctions.get(timer.fn),
-            `timer "${timer.fn}"`,
+            this.program.timerFunctions.get(timer.functionName),
+            `timer "${timer.functionName}"`,
           ),
         );
         if (hoisted) {
@@ -1255,14 +1360,14 @@ export class Codegen {
         }
       });
     if (idLocal === null || hoisted) {
-      this.scoped(() => start(fn.register('int')));
+      this.scoped(() => start(builder.register('int')));
       if (hoisted) {
         this.locals.set(idLocal!, {slot: hoisted});
       }
       return;
     }
     // The id outlives this statement, so its register is taken outside the scope.
-    const id = fn.register('int');
+    const id = builder.register('int');
     start(id);
     this.locals.set(idLocal, {register: id});
   }
@@ -1285,18 +1390,23 @@ export class Codegen {
     }
 
     // A float delay becomes a 64-bit int; the VM's conversion saturates.
-    const {fn} = this;
+    const {builder} = this;
     const whole =
       kind === 'float'
         ? this.convert(this.valueAs(delay, 'float'), 'int64')
         : this.valueAs(delay, 'int64');
     const modulus = this.load('int64', TWO_TO_32);
-    const low = fn.register('int64');
-    fn.abc('MODL', low.index, whole.index, modulus.index);
-    fn.abc('ADDL', low.index, low.index, modulus.index);
-    fn.abc('MODL', low.index, low.index, modulus.index);
-    const tooBig = fn.register('bool');
-    fn.abc('LLT', tooBig.index, this.load('int64', INT32_MAX).index, low.index);
+    const low = builder.register('int64');
+    builder.abc('MODL', low.index, whole.index, modulus.index);
+    builder.abc('ADDL', low.index, low.index, modulus.index);
+    builder.abc('MODL', low.index, low.index, modulus.index);
+    const tooBig = builder.register('bool');
+    builder.abc(
+      'LLT',
+      tooBig.index,
+      this.load('int64', INT32_MAX).index,
+      low.index,
+    );
     return this.choose(
       tooBig,
       () => this.load('int', 0),
@@ -1305,17 +1415,17 @@ export class Codegen {
     );
   }
 
-  private writeRef(ref: RefRecord, op: string, value: IrExpr): void {
+  private writeRef(ref: RefRecord, operator: string, value: IrExpr): void {
     const slot = this.refSlot(ref);
-    if (op === '=') {
+    if (operator === '=') {
       this.set(slot, this.value(value));
       return;
     }
     // `ref op= value` is `ref = ref op value`, worked out in the wider of the two types.
     const type = usual(slotType(slot), this.typeOf(value));
-    const register = this.fn.register(type as RegisterType);
-    this.fn.abc(
-      ARITHMETIC_OPS[type][op.slice(0, -1)],
+    const register = this.builder.register(type as RegisterType);
+    this.builder.abc(
+      ARITHMETIC_OPCODES[type][operator.slice(0, -1)],
       register.index,
       this.convert(this.get(slot), type).index,
       this.valueAs(value, type).index,
@@ -1329,9 +1439,9 @@ export class Codegen {
    * @param lower  The lowering.
    */
   scoped(lower: () => void): void {
-    const checkpoint = this.fn.checkpoint();
+    const checkpoint = this.builder.checkpoint();
     lower();
-    this.fn.release(checkpoint);
+    this.builder.release(checkpoint);
   }
 
   /*--------------------------------------------------------------------------------------------------------------------
@@ -1348,10 +1458,14 @@ export class Codegen {
     this.scoped(() => {
       const prop = abiProp(field);
       const result = this.propValue(value);
-      const {fn} = this;
+      const {builder} = this;
       if (result.conversion === 'opacity' || prop.kind === 'float') {
         // The runtime's PSETF scales an opacity to the engine's byte.
-        fn.abx('PSETF', this.convert(result.register, 'float').index, prop.id);
+        builder.abx(
+          'PSETF',
+          this.convert(result.register, 'float').index,
+          prop.id,
+        );
         return;
       }
       if (result.conversion === 'dimension') {
@@ -1359,7 +1473,7 @@ export class Codegen {
         return;
       }
       // Any other field is a whole number: a fraction goes in truncated.
-      fn.abx('PSETI', this.convert(result.register, 'int').index, prop.id);
+      builder.abx('PSETI', this.convert(result.register, 'int').index, prop.id);
     });
   }
 
@@ -1385,26 +1499,32 @@ export class Codegen {
    * @param value  The value.
    */
   private setDimension(prop: number, value: Register): void {
-    const {fn} = this;
+    const {builder} = this;
     if (value.type === 'int' || value.type === 'bool') {
-      fn.abx('PSETI', this.convert(value, 'int').index, prop);
+      builder.abx('PSETI', this.convert(value, 'int').index, prop);
       return;
     }
     if (value.type === 'float') {
       // The runtime rounds a float.
-      fn.abx('PSETF', value.index, prop);
+      builder.abx('PSETF', value.index, prop);
       return;
     }
     // A double (or a 64-bit int, which becomes a double) is rounded here, since a float can't hold it exactly.
-    const rounded = fn.register('double');
-    fn.abc(
+    const rounded = builder.register('double');
+    builder.abc(
       'DADD',
       rounded.index,
       this.convert(value, 'double').index,
-      this.load('double', 0.5).index,
+      this.load('double', ROUND_HALF_UP).index,
     );
-    fn.abc('DMATH', rounded.index, rounded.index, rounded.index, MathFn.floor);
-    fn.abx('PSETI', this.convert(rounded, 'int').index, prop);
+    builder.abc(
+      'DMATH',
+      rounded.index,
+      rounded.index,
+      rounded.index,
+      MathFn.floor,
+    );
+    builder.abx('PSETI', this.convert(rounded, 'int').index, prop);
   }
 
   /**
@@ -1450,12 +1570,12 @@ export class Codegen {
           value.truthiness === 'value' && value.test.type.kind === 'string'
             ? this.load('bool', 1)
             : this.condition(value.test);
-        const register = this.fn.register('int');
-        const end = this.fn.label();
-        this.fn.abx('LOADI', register.index, 0);
-        this.fn.branch(value.negate ? 'JT' : 'JF', end, test);
-        this.fn.abx('LOADI', register.index, value.whenTrue);
-        this.fn.place(end);
+        const register = this.builder.register('int');
+        const end = this.builder.label();
+        this.builder.abx('LOADI', register.index, 0);
+        this.builder.branch(value.negate ? 'JT' : 'JF', end, test);
+        this.builder.abx('LOADI', register.index, value.whenTrue);
+        this.builder.place(end);
         return plain(register);
       }
       case 'whileShown': {
@@ -1512,12 +1632,12 @@ export class Codegen {
 
   /** ER_DISPLAY_FLEX while a test holds, else ER_DISPLAY_NONE. */
   private display(test: Register): Register {
-    const register = this.fn.register('int');
-    const end = this.fn.label();
-    this.fn.abx('LOADI', register.index, DISPLAY_NONE);
-    this.fn.branch('JF', end, test);
-    this.fn.abx('LOADI', register.index, DISPLAY_FLEX);
-    this.fn.place(end);
+    const register = this.builder.register('int');
+    const end = this.builder.label();
+    this.builder.abx('LOADI', register.index, DISPLAY_NONE);
+    this.builder.branch('JF', end, test);
+    this.builder.abx('LOADI', register.index, DISPLAY_FLEX);
+    this.builder.place(end);
     return register;
   }
 
@@ -1531,10 +1651,10 @@ export class Codegen {
    */
   shown(show: IrShow): Register {
     if (show.kind === 'rowInUse') {
-      const count = this.fn.register('int');
-      const register = this.fn.register('bool');
-      this.fn.abx('LEN', count.index, this.listPool(show.list).slot.index);
-      this.fn.abc(
+      const count = this.builder.register('int');
+      const register = this.builder.register('bool');
+      this.builder.abx('LEN', count.index, this.listPool(show.list).slot.index);
+      this.builder.abc(
         'LT',
         register.index,
         this.load('int', show.row).index,
@@ -1542,16 +1662,16 @@ export class Codegen {
       );
       return register;
     }
-    const register = this.fn.register('bool');
-    this.fn.abc('MOVE', register.index, this.condition(show.test).index);
+    const register = this.builder.register('bool');
+    this.builder.abc('MOVE', register.index, this.condition(show.test).index);
     if (show.negate) {
-      this.fn.abc('NOT', register.index, register.index);
+      this.builder.abc('NOT', register.index, register.index);
     }
     if (show.within) {
-      const end = this.fn.label();
-      this.fn.branch('JF', end, register);
-      this.fn.abc('MOVE', register.index, this.shown(show.within).index);
-      this.fn.place(end);
+      const end = this.builder.label();
+      this.builder.branch('JF', end, register);
+      this.builder.abc('MOVE', register.index, this.shown(show.within).index);
+      this.builder.place(end);
     }
     return register;
   }
@@ -1617,13 +1737,13 @@ function required<T>(planned: T | undefined, what: string): T {
 export function slotType(slot: Slot): ExprType {
   return (
     {
-      1: 'int',
-      2: 'bool',
-      3: 'float',
-      4: 'int64',
-      5: 'double',
-      6: 'string',
-      7: 'enum',
+      [ValueType.int]: 'int',
+      [ValueType.bool]: 'bool',
+      [ValueType.float]: 'float',
+      [ValueType.int64]: 'int64',
+      [ValueType.double]: 'double',
+      [ValueType.string]: 'string',
+      [ValueType.enum]: 'enum',
     } as Record<number, ExprType>
   )[slot.type];
 }
@@ -1658,12 +1778,12 @@ const promoted = (type: ExprType): ExprType => (type === 'bool' ? 'int' : type);
 /**
  * The type a handler local holds: what its IR type says.
  *
- * @param init  The local's initial value.
+ * @param initializer  The local's initial value.
  *
  * @returns Its type.
  */
-function declaredType(init: IrExpr): ExprType {
-  switch (init.type.kind) {
+function declaredType(initializer: IrExpr): ExprType {
+  switch (initializer.type.kind) {
     case 'bool':
       return 'bool';
     case 'float':

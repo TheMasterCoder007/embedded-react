@@ -26,9 +26,12 @@
 
 import {
   ANIM_ENTRY_SIZE,
+  CELL_SIZE,
   EVENT_SIZE,
   FRAME_CELLS,
+  HANDLE_SIZE,
   LIST_HEADER_SIZE,
+  TAPE_FLOAT_SIZE,
   Region,
   SlotFlag,
   TIMER_SIZE,
@@ -62,7 +65,7 @@ export interface Slot {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The init of a 64-bit or string slot that starts at zero. */
-const NO_INIT = 0xffffffff;
+const NO_INITIAL = 0xffffffff;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
@@ -80,7 +83,7 @@ export class Arena {
   private readonly handles: Slot[] = [];
   private dirtyBits = 0;
   private timers = 0;
-  private anims = 0;
+  private animations = 0;
   private events = 0;
   private tapeFloats = 0;
   private laidOut: ProgramRegion[] | null = null;
@@ -89,12 +92,12 @@ export class Arena {
    * Plans a slot.
    *
    * @param type  Its ValueType.
-   * @param init  Its initial value: an immediate, or a constant or string index; none starts at zero.
-   * @param cap  A string's most bytes, or a handle array's handles.
+   * @param initialValue  Its initial value: an immediate, or a constant or string index; none starts at zero.
+   * @param capacity  A string's most bytes, or a handle array's handles.
    *
    * @returns The slot.
    */
-  slot(type: number, init?: number, cap = 0): Slot {
+  slot(type: number, initialValue?: number, capacity = 0): Slot {
     if (this.laidOut) {
       throw new Error(
         'AOT internal: a slot planned after the arena was laid out',
@@ -105,8 +108,9 @@ export class Arena {
       type,
       flags: 0,
       dirtyBit: 0,
-      init: init ?? (wide || type === ValueType.string ? NO_INIT : 0),
-      cap,
+      init:
+        initialValue ?? (wide || type === ValueType.string ? NO_INITIAL : 0),
+      cap: capacity,
       aux: 0,
       rowBytes: 0,
       index: -1,
@@ -124,16 +128,16 @@ export class Arena {
   }
 
   /**
-   * Plans a list's pool: its row count, then `cap` rows, empty at load.
+   * Plans a list's pool: its row count, then `capacity` rows, empty at load.
    *
    * @param layout  Its row layout.
    * @param rowBytes  A row's size.
-   * @param cap  Rows it holds.
+   * @param capacity  Rows it holds.
    *
    * @returns The slot.
    */
-  list(layout: number, rowBytes: number, cap: number): Slot {
-    return Object.assign(this.slot(ValueType.list, 0, cap), {
+  list(layout: number, rowBytes: number, capacity: number): Slot {
+    return Object.assign(this.slot(ValueType.list, 0, capacity), {
       aux: layout,
       rowBytes,
     });
@@ -172,7 +176,7 @@ export class Arena {
    * @param count  Entries it holds.
    */
   animTable(count: number): void {
-    this.anims = count;
+    this.animations = count;
   }
 
   /**
@@ -231,15 +235,19 @@ export class Arena {
       this.lists,
       slot => LIST_HEADER_SIZE + slot.cap * slot.rowBytes,
     );
-    region(Region.handles, this.handles, slot => 8 * Math.max(slot.cap, 1));
+    region(
+      Region.handles,
+      this.handles,
+      slot => HANDLE_SIZE * Math.max(slot.cap, 1),
+    );
     if (this.timers) {
       const bytes = this.timers * TIMER_SIZE;
       regions.push({kind: Region.timers, count: this.timers, offset, bytes});
       offset += bytes;
     }
-    if (this.anims) {
-      const bytes = this.anims * ANIM_ENTRY_SIZE;
-      regions.push({kind: Region.anims, count: this.anims, offset, bytes});
+    if (this.animations) {
+      const bytes = this.animations * ANIM_ENTRY_SIZE;
+      regions.push({kind: Region.anims, count: this.animations, offset, bytes});
       offset += bytes;
     }
 
@@ -292,17 +300,17 @@ export class Arena {
     const cells = Math.max(stackCells, FRAME_CELLS);
     const regions = [
       ...this.laidOut,
-      {kind: Region.stack, count: cells, offset: end, bytes: cells * 4},
+      {kind: Region.stack, count: cells, offset: end, bytes: cells * CELL_SIZE},
     ];
-    let bytes = end + cells * 4;
+    let bytes = end + cells * CELL_SIZE;
     if (this.tapeFloats) {
       regions.push({
         kind: Region.tape,
         count: this.tapeFloats,
         offset: bytes,
-        bytes: this.tapeFloats * 4,
+        bytes: this.tapeFloats * TAPE_FLOAT_SIZE,
       });
-      bytes += this.tapeFloats * 4;
+      bytes += this.tapeFloats * TAPE_FLOAT_SIZE;
     }
     if (this.events) {
       regions.push({

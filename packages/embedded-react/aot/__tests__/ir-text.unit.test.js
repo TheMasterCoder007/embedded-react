@@ -25,14 +25,14 @@ const scalar = (name, slotKind, isBool = false) => ({
   kind: 'scalar',
   name,
   slotKind,
-  isBool,
+  isBoolean: isBool,
 });
 
 /** An expression environment with these state slots and nothing else in reach. */
 const envWith = (...slots) => ({
   state: new Map(slots.map(slot => [slot.name, slot])),
   locals: new Map(),
-  consts: {},
+  constants: {},
   refs: new Map(),
   math64: false,
 });

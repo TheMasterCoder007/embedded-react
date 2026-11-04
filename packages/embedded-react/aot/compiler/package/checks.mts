@@ -45,9 +45,9 @@ import type {Screen} from '../options.mts';
 
 /** One step of a check. */
 export interface CheckStep {
-  op: number;
+  opcode: number;
   /** The argument of a word, or the constant of a pushk. */
-  arg: number;
+  operand: number;
 }
 
 /** A layout's check. */
@@ -77,6 +77,9 @@ export type Verdict = 'pass' | 'fail' | 'unsure';
 
 /** The most layouts a package may hold. An app that changes at more sizes fails the build instead of growing. */
 export const MAX_LAYOUTS = 16;
+
+/** What rounding adds before it floors: a half rounds up, as the VM's does. */
+const ROUND_HALF_UP = 0.5;
 
 /** The most steps a check may take, so a full package's checks always fit the loader's budget. */
 const MAX_CHECK_STEPS = CHECK_BUDGET / MAX_LAYOUTS;
@@ -122,18 +125,23 @@ class CheckLowering {
   /**
    * Adds a step, tracking the stack it uses.
    *
-   * @param op  The op.
-   * @param arg  Its argument.
+   * @param opcode  The op.
+   * @param operand  Its argument.
    * @param pops  What it pops.
    * @param pushes  What it pushes.
    */
-  private step(op: number, arg: number, pops: number, pushes: number): void {
+  private step(
+    opcode: number,
+    operand: number,
+    pops: number,
+    pushes: number,
+  ): void {
     this.depth += pushes - pops;
     // One step stays free for the end.
     if (this.depth > CHECK_STACK || this.steps.length >= MAX_CHECK_STEPS - 1) {
       throw new NotCheckable();
     }
-    this.steps.push({op, arg});
+    this.steps.push({opcode, operand});
   }
 
   /**
@@ -173,11 +181,11 @@ class CheckLowering {
    * @param slot  The slot.
    */
   slot(slot: IrBootSlot): void {
-    const {init} = slot;
-    if (init.kind === 'screen') {
-      this.reads[init.dimension] = true;
+    const {initializer} = slot;
+    if (initializer.kind === 'screen') {
+      this.reads[initializer.dimension] = true;
       this.step(
-        init.dimension === 'width' ? CheckOp.width : CheckOp.height,
+        initializer.dimension === 'width' ? CheckOp.width : CheckOp.height,
         0,
         0,
         1,
@@ -193,7 +201,7 @@ class CheckLowering {
       }
       // Taken first: the expression's own slots take locals too.
       this.locals.set(slot, local);
-      this.expr(init.expr);
+      this.expr(initializer.expression);
       this.step(CheckOp.store, local, 1, 0);
     }
     this.step(CheckOp.load, local, 0, 1);
@@ -202,68 +210,82 @@ class CheckLowering {
   /**
    * Adds a two-operand step over two expressions.
    *
-   * @param op  The op.
+   * @param opcode  The op.
    * @param left  The first operand.
    * @param right  The second.
-   * @param arg  Its argument.
+   * @param operand  Its argument.
    */
-  private binary(op: number, left: IrExpr, right: IrExpr, arg = 0): void {
+  private binary(
+    opcode: number,
+    left: IrExpr,
+    right: IrExpr,
+    operand = 0,
+  ): void {
     this.expr(left);
     this.expr(right);
-    this.step(op, arg, 2, 1);
+    this.step(opcode, operand, 2, 1);
   }
 
   /**
    * Pushes an expression's value. Anything but what boot can work out is refused.
    *
-   * @param expr  The expression.
+   * @param expression  The expression.
    */
-  expr(expr: IrExpr): void {
-    switch (expr.kind) {
+  expr(expression: IrExpr): void {
+    switch (expression.kind) {
       case 'number':
-        this.number(expr.value);
+        this.number(expression.value);
         return;
       case 'string':
-        this.string(expr.value);
+        this.string(expression.value);
         return;
       case 'boolean':
-        this.number(expr.value ? 1 : 0);
+        this.number(expression.value ? 1 : 0);
         return;
       case 'boot':
-        this.slot(expr.slot);
+        this.slot(expression.slot);
         return;
       case 'pi':
         this.number(Math.PI);
         return;
       case 'toFloat':
       case 'wholeRound':
-        this.expr(expr.operand);
+        this.expr(expression.operand);
         return;
       case 'unary':
-        this.expr(expr.operand);
-        if (expr.op === '-') this.step(CheckOp.neg, 0, 1, 1);
-        if (expr.op === '!') this.step(CheckOp.not, 0, 1, 1);
+        this.expr(expression.operand);
+        if (expression.operator === '-') this.step(CheckOp.neg, 0, 1, 1);
+        if (expression.operator === '!') this.step(CheckOp.not, 0, 1, 1);
         return;
       case 'helper':
-        this.helper(expr);
+        this.helper(expression);
         return;
       case 'arithmetic':
-        if (expr.op === '%') {
-          this.binary(CheckOp.math, expr.left, expr.right, MathFn.mod);
+        if (expression.operator === '%') {
+          this.binary(
+            CheckOp.math,
+            expression.left,
+            expression.right,
+            MathFn.mod,
+          );
         } else {
           const ops = {'+': CheckOp.add, '-': CheckOp.sub, '*': CheckOp.mul};
-          this.binary(ops[expr.op], expr.left, expr.right);
+          this.binary(
+            ops[expression.operator],
+            expression.left,
+            expression.right,
+          );
         }
         return;
       case 'floatDivide':
-        this.binary(CheckOp.div, expr.left, expr.right);
+        this.binary(CheckOp.div, expression.left, expression.right);
         return;
       case 'floatMath':
-        this.math(expr.fn, expr.args);
+        this.math(expression.mathFunction, expression.callArguments);
         return;
       case 'trunc':
       case 'toInt':
-        this.expr(expr.operand);
+        this.expr(expression.operand);
         this.step(CheckOp.toint, 0, 1, 1);
         return;
       case 'compare': {
@@ -275,27 +297,31 @@ class CheckLowering {
           '==': CheckOp.eq,
           '!=': CheckOp.ne,
         };
-        this.binary(ops[expr.op], expr.left, expr.right);
+        this.binary(
+          ops[expression.operator],
+          expression.left,
+          expression.right,
+        );
         return;
       }
       case 'stringEquals':
         this.binary(
-          expr.op === '==' ? CheckOp.eq : CheckOp.ne,
-          expr.left,
-          expr.right,
+          expression.operator === '==' ? CheckOp.eq : CheckOp.ne,
+          expression.left,
+          expression.right,
         );
         return;
       case 'logical':
         this.binary(
-          expr.op === '&&' ? CheckOp.and : CheckOp.or,
-          expr.left,
-          expr.right,
+          expression.operator === '&&' ? CheckOp.and : CheckOp.or,
+          expression.left,
+          expression.right,
         );
         return;
       case 'conditional':
-        this.expr(expr.test);
-        this.expr(expr.consequent);
-        this.expr(expr.alternate);
+        this.expr(expression.test);
+        this.expr(expression.consequent);
+        this.expr(expression.alternate);
         this.step(CheckOp.select, 0, 3, 1);
         return;
       default:
@@ -306,31 +332,34 @@ class CheckLowering {
   /**
    * Pushes a Math function's value.
    *
-   * @param fn  The function's name.
-   * @param args  Its operands.
+   * @param mathFunction  The function's name.
+   * @param callArguments  Its operands.
    */
-  private math(fn: keyof typeof MathFn, args: IrExpr[]): void {
-    args.forEach(arg => this.expr(arg));
-    this.step(CheckOp.math, MathFn[fn], args.length, 1);
+  private math(
+    mathFunction: keyof typeof MathFn,
+    callArguments: IrExpr[],
+  ): void {
+    callArguments.forEach(argument => this.expr(argument));
+    this.step(CheckOp.math, MathFn[mathFunction], callArguments.length, 1);
   }
 
   /**
    * Pushes a saturating whole-number helper's value: the sum in doubles, cut to the int range, is the same. A
    * 64-bit one is not something a check holds.
    *
-   * @param expr  The helper.
+   * @param expression  The helper.
    */
-  private helper(expr: Extract<IrExpr, {kind: 'helper'}>): void {
-    if (expr.bits !== 32) {
+  private helper(expression: Extract<IrExpr, {kind: 'helper'}>): void {
+    if (expression.bits !== 32) {
       throw new NotCheckable();
     }
 
-    const [left, right] = expr.args;
-    const {helper} = expr;
+    const [left, right] = expression.callArguments;
+    const {helper} = expression;
     switch (helper) {
       case 'min':
       case 'max':
-        this.math(helper, expr.args);
+        this.math(helper, expression.callArguments);
         return;
       case 'div':
       case 'floordiv':
@@ -340,7 +369,7 @@ class CheckLowering {
         this.binary(CheckOp.idiv, left, right, DIVISIONS[helper]);
         return;
       case 'abs':
-        this.math('abs', expr.args);
+        this.math('abs', expression.callArguments);
         break;
       case 'neg':
         this.expr(left);
@@ -390,7 +419,7 @@ class CheckLowering {
 
   /** Ends the check. */
   end(): void {
-    this.steps.push({op: CheckOp.end, arg: 0});
+    this.steps.push({opcode: CheckOp.end, operand: 0});
   }
 }
 
@@ -406,14 +435,14 @@ function exactCheck(screen: Screen, why: string): LayoutCheck {
   const {pushi, width, height, eq, and, end} = CheckOp;
   return {
     steps: [
-      {op: width, arg: 0},
-      {op: pushi, arg: screen.width},
-      {op: eq, arg: 0},
-      {op: height, arg: 0},
-      {op: pushi, arg: screen.height},
-      {op: eq, arg: 0},
-      {op: and, arg: 0},
-      {op: end, arg: 0},
+      {opcode: width, operand: 0},
+      {opcode: pushi, operand: screen.width},
+      {opcode: eq, operand: 0},
+      {opcode: height, operand: 0},
+      {opcode: pushi, operand: screen.height},
+      {opcode: eq, operand: 0},
+      {opcode: and, operand: 0},
+      {opcode: end, operand: 0},
     ],
     reads: {width: true, height: true},
     exactBecause: why,
@@ -470,12 +499,12 @@ export function lowerCheck(
 export function encodeCheck(steps: CheckStep[]): number[] {
   const words: number[] = [];
   const bits = new DataView(new ArrayBuffer(8));
-  for (const {op, arg} of steps) {
-    if (op === CheckOp.pushk) {
-      bits.setFloat64(0, arg, true);
-      words.push(op, bits.getUint32(0, true), bits.getUint32(4, true));
+  for (const {opcode, operand} of steps) {
+    if (opcode === CheckOp.pushk) {
+      bits.setFloat64(0, operand, true);
+      words.push(opcode, bits.getUint32(0, true), bits.getUint32(4, true));
     } else {
-      words.push((op | ((arg & 0xffffff) << 8)) >>> 0);
+      words.push((opcode | ((operand & 0xffffff) << 8)) >>> 0);
     }
   }
 
@@ -567,7 +596,7 @@ function divide(
       : mode === CheckDivide.ceil
         ? Math.ceil(quotient)
         : mode === CheckDivide.round
-          ? Math.floor(quotient + 0.5)
+          ? Math.floor(quotient + ROUND_HALF_UP)
           : Math.trunc(quotient);
   return Math.min(INT_MAX, Math.max(INT_MIN, rounded)) + 0;
 }
@@ -575,14 +604,14 @@ function divide(
 /**
  * A Math function, as the VM's dmath() works it out.
  *
- * @param fn  A MathFn value.
+ * @param mathFunction  A MathFn value.
  * @param left  The first operand.
  * @param right  The second, if it takes one.
  *
  * @returns The result.
  */
-function mathOf(fn: number, left: number, right: number): number {
-  switch (fn) {
+function mathOf(mathFunction: number, left: number, right: number): number {
+  switch (mathFunction) {
     case MathFn.sin:
       return Math.sin(left);
     case MathFn.cos:
@@ -595,7 +624,7 @@ function mathOf(fn: number, left: number, right: number): number {
       return Math.abs(left);
     case MathFn.round: {
       const floor = Math.floor(left);
-      return left - floor >= 0.5 ? floor + 1 : floor;
+      return left - floor >= ROUND_HALF_UP ? floor + 1 : floor;
     }
     case MathFn.floor:
       return Math.floor(left);
@@ -623,7 +652,8 @@ function mathOf(fn: number, left: number, right: number): number {
 }
 
 /** Whether a Math function takes two operands. */
-const isBinaryMath = (fn: number): boolean => fn >= MathFn.min;
+const isBinaryMath = (mathFunction: number): boolean =>
+  mathFunction >= MathFn.min;
 
 /**
  * Runs a check for one size, as the loader does.
@@ -642,8 +672,8 @@ export function runCheck(
   if (!check.steps) return true;
   const stack: number[] = [];
   const locals: number[] = [];
-  for (const {op, arg} of check.steps) {
-    switch (op) {
+  for (const {opcode, operand} of check.steps) {
+    switch (opcode) {
       case CheckOp.end:
         return truth(stack.pop()!);
       case CheckOp.width:
@@ -654,13 +684,13 @@ export function runCheck(
         break;
       case CheckOp.pushi:
       case CheckOp.pushk:
-        stack.push(arg);
+        stack.push(operand);
         break;
       case CheckOp.load:
-        stack.push(locals[arg] ?? 0);
+        stack.push(locals[operand] ?? 0);
         break;
       case CheckOp.store:
-        locals[arg] = stack.pop()!;
+        locals[operand] = stack.pop()!;
         break;
       case CheckOp.neg:
         stack.push(-stack.pop()!);
@@ -672,11 +702,11 @@ export function runCheck(
         stack.push(truth(stack.pop()!) ? 0 : 1);
         break;
       case CheckOp.math:
-        if (isBinaryMath(arg)) {
+        if (isBinaryMath(operand)) {
           const right = stack.pop()!;
-          stack.push(mathOf(arg, stack.pop()!, right));
+          stack.push(mathOf(operand, stack.pop()!, right));
         } else {
-          stack.push(mathOf(arg, stack.pop()!, 0));
+          stack.push(mathOf(operand, stack.pop()!, 0));
         }
         break;
       case CheckOp.select: {
@@ -687,7 +717,7 @@ export function runCheck(
       }
       default: {
         const right = stack.pop()!;
-        stack.push(binaryOf(op, arg, stack.pop()!, right));
+        stack.push(binaryOf(opcode, operand, stack.pop()!, right));
       }
     }
   }
@@ -698,20 +728,20 @@ export function runCheck(
 /**
  * A two-operand step's result.
  *
- * @param op  The op.
- * @param arg  Its argument.
+ * @param opcode  The op.
+ * @param operand  Its argument.
  * @param left  The first operand.
  * @param right  The second.
  *
  * @returns The result.
  */
 function binaryOf(
-  op: number,
-  arg: number,
+  opcode: number,
+  operand: number,
   left: number,
   right: number,
 ): number {
-  switch (op) {
+  switch (opcode) {
     case CheckOp.add:
       return left + right;
     case CheckOp.sub:
@@ -721,7 +751,7 @@ function binaryOf(
     case CheckOp.div:
       return left / right;
     case CheckOp.idiv:
-      return divide(arg, left, right);
+      return divide(operand, left, right);
     case CheckOp.lt:
       return left < right ? 1 : 0;
     case CheckOp.gt:
@@ -752,14 +782,14 @@ function binaryOf(
 interface Range {
   low: number;
   high: number;
-  nan: boolean;
+  includesNaN: boolean;
 }
 
 /** A range that says nothing. */
-const ANYTHING: Range = {low: -Infinity, high: Infinity, nan: true};
-const FALSE: Range = {low: 0, high: 0, nan: false};
-const TRUE: Range = {low: 1, high: 1, nan: false};
-const EITHER: Range = {low: 0, high: 1, nan: false};
+const ANYTHING: Range = {low: -Infinity, high: Infinity, includesNaN: true};
+const FALSE: Range = {low: 0, high: 0, includesNaN: false};
+const TRUE: Range = {low: 1, high: 1, includesNaN: false};
+const EITHER: Range = {low: 0, high: 1, includesNaN: false};
 
 /**
  * The range holding one value.
@@ -769,7 +799,7 @@ const EITHER: Range = {low: 0, high: 1, nan: false};
  * @returns The range.
  */
 const only = (value: number): Range =>
-  value !== value ? ANYTHING : {low: value, high: value, nan: false};
+  value !== value ? ANYTHING : {low: value, high: value, includesNaN: false};
 
 /**
  * Whether a range holds one number, so the exact op applies.
@@ -778,19 +808,20 @@ const only = (value: number): Range =>
  *
  * @returns True when it does.
  */
-const isOne = (range: Range): boolean => !range.nan && range.low === range.high;
+const isOne = (range: Range): boolean =>
+  !range.includesNaN && range.low === range.high;
 
 /**
  * The range between the smallest and largest of some values.
  *
  * @param values  The values; a NaN says nothing is known.
- * @param nan  Whether the operands may be NaN.
+ * @param includesNaN  Whether the operands may be NaN.
  *
  * @returns The range.
  */
-function between(values: number[], nan: boolean): Range {
+function between(values: number[], includesNaN: boolean): Range {
   if (values.some(value => value !== value)) return ANYTHING;
-  return {low: Math.min(...values), high: Math.max(...values), nan};
+  return {low: Math.min(...values), high: Math.max(...values), includesNaN};
 }
 
 /**
@@ -801,7 +832,7 @@ function between(values: number[], nan: boolean): Range {
  * @returns True or false when every value in it agrees, else null.
  */
 function truthOf(range: Range): boolean | null {
-  if (!range.nan && (range.low > 0 || range.high < 0)) return true;
+  if (!range.includesNaN && (range.low > 0 || range.high < 0)) return true;
   if (range.low === 0 && range.high === 0) return false;
   return null;
 }
@@ -809,17 +840,17 @@ function truthOf(range: Range): boolean | null {
 /**
  * A comparison over two ranges. NaN compares false, except for `!=`.
  *
- * @param op  The op.
+ * @param opcode  The op.
  * @param left  The first operand.
  * @param right  The second.
  *
  * @returns The range.
  */
-function compareRanges(op: number, left: Range, right: Range): Range {
-  const nan = left.nan || right.nan;
+function compareRanges(opcode: number, left: Range, right: Range): Range {
+  const includesNaN = left.includesNaN || right.includesNaN;
   let always: boolean;
   let never: boolean;
-  switch (op) {
+  switch (opcode) {
     case CheckOp.lt:
       always = left.high < right.low;
       never = left.low >= right.high;
@@ -848,62 +879,71 @@ function compareRanges(op: number, left: Range, right: Range): Range {
         : EITHER;
   }
 
-  if (always && !nan) return TRUE;
+  if (always && !includesNaN) return TRUE;
   return never ? FALSE : EITHER;
 }
 
 /**
  * A Math function over ranges.
  *
- * @param fn  A MathFn value.
+ * @param mathFunction  A MathFn value.
  * @param left  The first operand.
  * @param right  The second, if it takes one.
  *
  * @returns The range.
  */
-function mathOverRanges(fn: number, left: Range, right: Range): Range {
-  if (isOne(left) && (!isBinaryMath(fn) || isOne(right))) {
-    return only(mathOf(fn, left.low, right.low));
+function mathOverRanges(
+  mathFunction: number,
+  left: Range,
+  right: Range,
+): Range {
+  if (isOne(left) && (!isBinaryMath(mathFunction) || isOne(right))) {
+    return only(mathOf(mathFunction, left.low, right.low));
   }
 
-  const nan = left.nan || (isBinaryMath(fn) && right.nan);
-  switch (fn) {
+  const includesNaN =
+    left.includesNaN || (isBinaryMath(mathFunction) && right.includesNaN);
+  switch (mathFunction) {
     case MathFn.sin:
     case MathFn.cos:
-      return {low: -1, high: 1, nan: true};
+      return {low: -1, high: 1, includesNaN: true};
     case MathFn.sqrt:
       return left.high < 0
         ? ANYTHING
         : {
             low: Math.sqrt(Math.max(0, left.low)),
             high: Math.sqrt(left.high),
-            nan: nan || left.low < 0,
+            includesNaN: includesNaN || left.low < 0,
           };
     case MathFn.abs:
       return left.low >= 0
         ? left
         : left.high <= 0
-          ? {low: -left.high, high: -left.low, nan: left.nan}
-          : {low: 0, high: Math.max(-left.low, left.high), nan: left.nan};
+          ? {low: -left.high, high: -left.low, includesNaN: left.includesNaN}
+          : {
+              low: 0,
+              high: Math.max(-left.low, left.high),
+              includesNaN: left.includesNaN,
+            };
     case MathFn.round:
     case MathFn.floor:
     case MathFn.ceil:
       return {
-        low: mathOf(fn, left.low, 0),
-        high: mathOf(fn, left.high, 0),
-        nan,
+        low: mathOf(mathFunction, left.low, 0),
+        high: mathOf(mathFunction, left.high, 0),
+        includesNaN,
       };
     case MathFn.min:
       return {
         low: Math.min(left.low, right.low),
         high: Math.min(left.high, right.high),
-        nan,
+        includesNaN,
       };
     case MathFn.max:
       return {
         low: Math.max(left.low, right.low),
         high: Math.max(left.high, right.high),
-        nan,
+        includesNaN,
       };
     case MathFn.mod:
       return isOne(right) && right.low > 0 && left.low >= 0
@@ -926,8 +966,12 @@ function moduloRange(left: Range, divisor: number): Range {
   const samePeriod =
     Math.floor(left.low / divisor) === Math.floor(left.high / divisor);
   return samePeriod
-    ? {low: left.low % divisor, high: left.high % divisor, nan: left.nan}
-    : {low: 0, high: divisor, nan: left.nan};
+    ? {
+        low: left.low % divisor,
+        high: left.high % divisor,
+        includesNaN: left.includesNaN,
+      }
+    : {low: 0, high: divisor, includesNaN: left.includesNaN};
 }
 
 /**
@@ -944,19 +988,19 @@ function divideOverRanges(mode: number, left: Range, right: Range): Range {
     return only(divide(mode, left.low, right.low));
   }
   if (!isOne(right) || right.low <= 0) {
-    return {low: INT_MIN, high: INT_MAX, nan: false};
+    return {low: INT_MIN, high: INT_MAX, includesNaN: false};
   }
 
   const whole = rangeToInt(left);
   if (mode === CheckDivide.mod) {
     return whole.low >= 0
       ? moduloRange(whole, right.low)
-      : {low: -right.low, high: right.low, nan: false};
+      : {low: -right.low, high: right.low, includesNaN: false};
   }
   return {
     low: divide(mode, whole.low, right.low),
     high: divide(mode, whole.high, right.low),
-    nan: false,
+    includesNaN: false,
   };
 }
 
@@ -970,9 +1014,9 @@ function divideOverRanges(mode: number, left: Range, right: Range): Range {
 function rangeToInt(range: Range): Range {
   const low = toInt(range.low);
   const high = toInt(range.high);
-  return range.nan
-    ? {low: Math.min(low, 0), high: Math.max(high, 0), nan: false}
-    : {low, high, nan: false};
+  return range.includesNaN
+    ? {low: Math.min(low, 0), high: Math.max(high, 0), includesNaN: false}
+    : {low, high, includesNaN: false};
 }
 
 /**
@@ -991,7 +1035,7 @@ const timesRange = (left: Range, right: Range): Range =>
       left.high * right.low,
       left.high * right.high,
     ],
-    left.nan || right.nan,
+    left.includesNaN || right.includesNaN,
   );
 
 /**
@@ -1012,37 +1056,43 @@ const overRange = (left: Range, right: Range): Range =>
           left.high / right.low,
           left.high / right.high,
         ],
-        left.nan || right.nan,
+        left.includesNaN || right.includesNaN,
       );
 
 /**
  * A two-operand step over ranges.
  *
- * @param op  The op.
- * @param arg  Its argument.
+ * @param opcode  The op.
+ * @param operand  Its argument.
  * @param left  The first operand.
  * @param right  The second.
  *
  * @returns The range.
  */
 function binaryOverRanges(
-  op: number,
-  arg: number,
+  opcode: number,
+  operand: number,
   left: Range,
   right: Range,
 ): Range {
-  const nan = left.nan || right.nan;
-  switch (op) {
+  const includesNaN = left.includesNaN || right.includesNaN;
+  switch (opcode) {
     case CheckOp.add:
-      return between([left.low + right.low, left.high + right.high], nan);
+      return between(
+        [left.low + right.low, left.high + right.high],
+        includesNaN,
+      );
     case CheckOp.sub:
-      return between([left.low - right.high, left.high - right.low], nan);
+      return between(
+        [left.low - right.high, left.high - right.low],
+        includesNaN,
+      );
     case CheckOp.mul:
       return timesRange(left, right);
     case CheckOp.div:
       return overRange(left, right);
     case CheckOp.idiv:
-      return divideOverRanges(arg, left, right);
+      return divideOverRanges(operand, left, right);
     case CheckOp.and: {
       const [first, second] = [truthOf(left), truthOf(right)];
       if (first === false || second === false) return FALSE;
@@ -1054,7 +1104,7 @@ function binaryOverRanges(
       return first === false && second === false ? FALSE : EITHER;
     }
     default:
-      return compareRanges(op, left, right);
+      return compareRanges(opcode, left, right);
   }
 }
 
@@ -1079,31 +1129,39 @@ export function checkOverSizes(check: LayoutCheck, sizes: SizeRange): Verdict {
 
   const stack: Range[] = [];
   const locals: Range[] = [];
-  for (const {op, arg} of check.steps) {
-    switch (op) {
+  for (const {opcode, operand} of check.steps) {
+    switch (opcode) {
       case CheckOp.end: {
         const verdict = truthOf(stack.pop()!);
         return verdict === null ? 'unsure' : verdict ? 'pass' : 'fail';
       }
       case CheckOp.width:
-        stack.push({low: sizes.minWidth, high: sizes.maxWidth, nan: false});
+        stack.push({
+          low: sizes.minWidth,
+          high: sizes.maxWidth,
+          includesNaN: false,
+        });
         break;
       case CheckOp.height:
-        stack.push({low: sizes.minHeight, high: sizes.maxHeight, nan: false});
+        stack.push({
+          low: sizes.minHeight,
+          high: sizes.maxHeight,
+          includesNaN: false,
+        });
         break;
       case CheckOp.pushi:
       case CheckOp.pushk:
-        stack.push(only(arg));
+        stack.push(only(operand));
         break;
       case CheckOp.load:
-        stack.push(locals[arg] ?? FALSE);
+        stack.push(locals[operand] ?? FALSE);
         break;
       case CheckOp.store:
-        locals[arg] = stack.pop()!;
+        locals[operand] = stack.pop()!;
         break;
       case CheckOp.neg: {
-        const {low, high, nan} = stack.pop()!;
-        stack.push({low: -high, high: -low, nan});
+        const {low, high, includesNaN} = stack.pop()!;
+        stack.push({low: -high, high: -low, includesNaN});
         break;
       }
       case CheckOp.toint:
@@ -1115,11 +1173,11 @@ export function checkOverSizes(check: LayoutCheck, sizes: SizeRange): Verdict {
         break;
       }
       case CheckOp.math:
-        if (isBinaryMath(arg)) {
+        if (isBinaryMath(operand)) {
           const right = stack.pop()!;
-          stack.push(mathOverRanges(arg, stack.pop()!, right));
+          stack.push(mathOverRanges(operand, stack.pop()!, right));
         } else {
-          stack.push(mathOverRanges(arg, stack.pop()!, FALSE));
+          stack.push(mathOverRanges(operand, stack.pop()!, FALSE));
         }
         break;
       case CheckOp.select: {
@@ -1130,7 +1188,7 @@ export function checkOverSizes(check: LayoutCheck, sizes: SizeRange): Verdict {
           stack.push({
             low: Math.min(consequent.low, alternate.low),
             high: Math.max(consequent.high, alternate.high),
-            nan: consequent.nan || alternate.nan,
+            includesNaN: consequent.includesNaN || alternate.includesNaN,
           });
         } else {
           stack.push(test ? consequent : alternate);
@@ -1139,7 +1197,7 @@ export function checkOverSizes(check: LayoutCheck, sizes: SizeRange): Verdict {
       }
       default: {
         const right = stack.pop()!;
-        stack.push(binaryOverRanges(op, arg, stack.pop()!, right));
+        stack.push(binaryOverRanges(opcode, operand, stack.pop()!, right));
       }
     }
   }

@@ -32,12 +32,12 @@ import type {IrExpr} from '../ir/expressions.mts';
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** An <Image>'s resolved props. At most one of `imageName` / `imageNameDyn` is set. */
+/** An <Image>'s resolved props. At most one of `imageName` / `imageNameDynamic` is set. */
 interface ImageAttrs {
   /** The baked asset's name, when the source folds. */
   imageName: string | null;
   /** The asset's name when the source is state-driven. */
-  imageNameDyn: IrExpr | null;
+  imageNameDynamic: IrExpr | null;
   /** The ER_RESIZE_* constant. */
   resizeMode: EngineName | null;
   /** The tint's ARGB literal. */
@@ -66,29 +66,29 @@ const RESIZE_MODES: Record<string, EngineName> = {
  * the const scope as their asset-name string, so this folds `wxSun`, `item.icon` (unrolled map), and static
  * ternaries; `{ uri }` is the explicit remote-shape escape.
  *
- * @param expr  The source expression, if there is one.
- * @param env  The expression environment.
+ * @param expression  The source expression, if there is one.
+ * @param environment  The expression environment.
  *
  * @returns The asset's name, or null when the source does not fold.
  */
 export function imageNameFromSource(
-  expr: t.Node | null | undefined,
-  env: Env,
+  expression: t.Node | null | undefined,
+  environment: Env,
 ): string | null {
   // No source expression was provided.
-  if (!expr) return null;
+  if (!expression) return null;
 
   // Try to resolve the source as a compile-time constant.
   try {
-    const value = evalStatic(expr, env.consts ?? {});
+    const value = evalStatic(expression, environment.constants ?? {});
     if (typeof value === 'string') return value;
   } catch {
     /* not a compile-time constant — fall through to {uri}, else dynamic */
   }
 
   // Handle React Native-style object sources: source={{ uri: 'asset_name' }}.
-  if (expr.type === 'ObjectExpression') {
-    const uri = expr.properties.find(
+  if (expression.type === 'ObjectExpression') {
+    const uri = expression.properties.find(
       (property): property is t.ObjectProperty =>
         property.type === 'ObjectProperty' &&
         ((property.key as t.Identifier).name === 'uri' ||
@@ -102,108 +102,117 @@ export function imageNameFromSource(
 
 /**
  * Resolves an <Image>'s source/imageName/resizeMode/tintColor for the node props (static name, a dynamic
- * name expr, resize mode, tint). Records baking intent in `out`: a static name that matches an import is
- * marked used (out.images); a dynamic source flips out.bakeAllImages (its asset can't be enumerated). So
+ * name expr, resize mode, tint). Records baking intent in `output`: a static name that matches an import is
+ * marked used (output.images); a dynamic source flips output.bakeAllImages (its asset can't be enumerated). So
  * only REACHED images are baked — an import used solely in a folded-away branch costs no flash.
  *
  * @param element  The <Image>.
- * @param env  The expression environment.
- * @param out  Everything emitted so far.
+ * @param environment  The expression environment.
+ * @param output  Everything emitted so far.
  *
  * @returns The resolved props.
  */
 export function resolveImageAttrs(
   element: t.JSXElement,
-  env: Env,
-  out: Out,
+  environment: Env,
+  output: Out,
 ): ImageAttrs {
   // Find the image source prop, preferring imageName over source.
-  const attrs = element.openingElement.attributes;
-  const find = (attrName: string) =>
-    attrs.find(
-      (attr): attr is t.JSXAttribute =>
-        attr.type === 'JSXAttribute' && attr.name.name === attrName,
+  const attributes = element.openingElement.attributes;
+  const find = (attributeName: string) =>
+    attributes.find(
+      (attribute): attribute is t.JSXAttribute =>
+        attribute.type === 'JSXAttribute' &&
+        attribute.name.name === attributeName,
     );
-  const imAttr = find('imageName');
-  const srcAttr = find('source');
-  const srcExpr = imAttr
-    ? attrExpr(imAttr)
-    : srcAttr
-      ? attrExpr(srcAttr)
+  const imageAttribute = find('imageName');
+  const sourceAttribute = find('source');
+  const sourceExpression = imageAttribute
+    ? attrExpr(imageAttribute)
+    : sourceAttribute
+      ? attrExpr(sourceAttribute)
       : null;
   let imageName: string | null = null; // static asset name (a literal), OR …
-  let imageNameDyn: IrExpr | null = null; // … a runtime string (a list-item field / state) set in the update.
+  let imageNameDynamic: IrExpr | null = null; // … a runtime string (a list-item field / state) set in the update.
 
   // Resolve static sources immediately and mark imported assets for baking.
-  if (srcExpr) {
-    imageName = imageNameFromSource(srcExpr, env);
+  if (sourceExpression) {
+    imageName = imageNameFromSource(sourceExpression, environment);
     if (imageName != null) {
-      const path = env.imageNames?.get(imageName); // a baked import (vs. a bare {uri} name the app supplies)
+      const path = environment.imageNames?.get(imageName); // a baked import (vs. a bare {uri} name the app supplies)
       if (path) {
-        out.images.set(imageName, path);
+        output.images.set(imageName, path);
       }
     } else {
       // Fall back to a dynamic runtime image name when the source cannot be folded.
       // Emits it as a runtime string. The engine resolves it against the image registry by name each frame,
-      // so the candidate assets must be baked. They can't be enumerated, so bake them ALL (out.bakeAllImages).
+      // so the candidate assets must be baked. They can't be enumerated, so bake them ALL (output.bakeAllImages).
       // Only triggered when a dynamic source is actually REACHED.
-      out.bakeAllImages = true;
-      const nameExpr = lowerExpr(srcExpr, env);
-      if (nameExpr.type.kind !== 'string') {
-        const err = aotError(
+      output.bakeAllImages = true;
+      const nameExpression = lowerExpr(sourceExpression, environment);
+      if (nameExpression.type.kind !== 'string') {
+        const error = aotError(
           'AOT: an <Image source> must resolve to an asset NAME (a string)',
           "use an imported image (`import logo from './logo.png'` → source={logo}), " +
             "a string asset name, source={{ uri: 'name' }}, or a string-valued " +
             'state / list-item field for a dynamic source.',
         );
 
-        if (srcExpr.loc) {
-          err.aotLoc = srcExpr.loc.start;
+        if (sourceExpression.loc) {
+          error.aotLoc = sourceExpression.loc.start;
         }
         {
-          throw err;
+          throw error;
         }
       }
 
-      imageNameDyn = nameExpr;
+      imageNameDynamic = nameExpression;
     }
   }
 
   // Resolve the optional resize mode and validate it against the supported engine modes.
   let resizeMode: EngineName | null = null;
-  const rmAttr = find('resizeMode');
-  if (rmAttr) {
-    const rm = evalStaticOr(attrExpr(rmAttr), env, null);
-    resizeMode = RESIZE_MODES[rm as string];
+  const resizeModeAttribute = find('resizeMode');
+  if (resizeModeAttribute) {
+    const resizeModeValue = evalStaticOr(
+      attrExpr(resizeModeAttribute),
+      environment,
+      null,
+    );
+    resizeMode = RESIZE_MODES[resizeModeValue as string];
     if (!resizeMode) {
-      const e = aotError(
-        `AOT: unsupported <Image resizeMode> "${rm}"`,
+      const error = aotError(
+        `AOT: unsupported <Image resizeMode> "${resizeModeValue}"`,
         `resizeMode must be one of: ${Object.keys(RESIZE_MODES).join(' / ')}.`,
       );
-      if (rmAttr.loc) {
-        e.aotLoc = rmAttr.loc.start;
+      if (resizeModeAttribute.loc) {
+        error.aotLoc = resizeModeAttribute.loc.start;
       }
-      throw e;
+      throw error;
     }
   }
 
   // Resolve the optional tint color into the ARGB literal expected by the engine.
   let tintColor: number | null = null;
-  const tcAttr = find('tintColor');
-  if (tcAttr) {
-    const tc = evalStaticOr(attrExpr(tcAttr), env, null);
-    if (typeof tc !== 'string' && typeof tc !== 'number') {
+  const tintColorAttribute = find('tintColor');
+  if (tintColorAttribute) {
+    const tintValue = evalStaticOr(
+      attrExpr(tintColorAttribute),
+      environment,
+      null,
+    );
+    if (typeof tintValue !== 'string' && typeof tintValue !== 'number') {
       throw at(
         aotError(
           'AOT: <Image tintColor> must be a constant color',
           'the tint is baked into the node when it is built; a state-driven one is not lowered yet.',
         ),
-        tcAttr,
+        tintColorAttribute,
       );
     }
 
-    tintColor = argbValue(tc);
+    tintColor = argbValue(tintValue);
   }
 
-  return {imageName, imageNameDyn, resizeMode, tintColor};
+  return {imageName, imageNameDynamic, resizeMode, tintColor};
 }

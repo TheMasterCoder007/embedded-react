@@ -32,18 +32,25 @@ import {existsSync, mkdirSync, readFileSync, rmSync} from 'node:fs';
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
+// Where a BMP's header keeps what the check reads, and the 'BM' it starts with.
+const BMP_MAGIC = [0x42, 0x4d];
+const BMP_PIXEL_OFFSET_AT = 10;
+const BMP_WIDTH_AT = 18;
+const BMP_HEIGHT_AT = 22;
+const BMP_BITS_PER_PIXEL_AT = 28;
+
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react/aot
-const jsDir = resolve(here, '..'); // packages/embedded-react
-const repoRoot = resolve(here, '../../..');
-const exampleDir = resolve(repoRoot, 'examples/linux-aot');
-const buildDir = resolve(exampleDir, 'build');
-const exe = resolve(
-  buildDir,
+const packageDirectory = resolve(here, '..'); // packages/embedded-react
+const repositoryRoot = resolve(here, '../../..');
+const exampleDirectory = resolve(repositoryRoot, 'examples/linux-aot');
+const buildDirectory = resolve(exampleDirectory, 'build');
+const executable = resolve(
+  buildDirectory,
   process.platform === 'win32'
     ? 'embedded-react-desktop-aot.exe'
     : 'embedded-react-desktop-aot',
 );
-const tmpDir = resolve(jsDir, 'dist', '.smoke');
+const temporaryDirectory = resolve(packageDirectory, 'dist', '.smoke');
 
 /**
  * The demos to smoke-test. `screen` sets ER_AOT_SCREEN_W/H, the panel the package is for and the window's size;
@@ -64,14 +71,14 @@ const DEMOS = [
  * @returns The number of distinct colors sampled.
  */
 function bmpDistinctColors(path, step = 4) {
-  const bmp = readFileSync(path);
-  if (bmp[0] !== 0x42 || bmp[1] !== 0x4d) {
+  const bitmap = readFileSync(path);
+  if (bitmap[0] !== BMP_MAGIC[0] || bitmap[1] !== BMP_MAGIC[1]) {
     throw new Error(`not a BMP: ${path}`);
   }
-  const pixelOffset = bmp.readUInt32LE(10);
-  const width = bmp.readInt32LE(18);
-  const height = Math.abs(bmp.readInt32LE(22));
-  const bitsPerPixel = bmp.readUInt16LE(28);
+  const pixelOffset = bitmap.readUInt32LE(BMP_PIXEL_OFFSET_AT);
+  const width = bitmap.readInt32LE(BMP_WIDTH_AT);
+  const height = Math.abs(bitmap.readInt32LE(BMP_HEIGHT_AT));
+  const bitsPerPixel = bitmap.readUInt16LE(BMP_BITS_PER_PIXEL_AT);
   if (bitsPerPixel !== 24 && bitsPerPixel !== 32) {
     throw new Error(`unexpected BMP bpp ${bitsPerPixel}`);
   }
@@ -81,28 +88,32 @@ function bmpDistinctColors(path, step = 4) {
   for (let y = 0; y < height; y += step) {
     for (let x = 0; x < width; x += step) {
       const index = pixelOffset + y * rowSize + x * bytesPerPixel;
-      colors.add((bmp[index] << 16) | (bmp[index + 1] << 8) | bmp[index + 2]); // BGR triplet
+      colors.add(
+        (bitmap[index] << 16) | (bitmap[index + 1] << 8) | bitmap[index + 2],
+      ); // BGR triplet
     }
   }
   return colors.size;
 }
 
-function run(command, args, options = {}) {
-  execFileSync(command, args, {stdio: 'pipe', ...options});
+function run(command, commandArguments, options = {}) {
+  execFileSync(command, commandArguments, {stdio: 'pipe', ...options});
 }
 
 /** Configures the linux-aot CMake build on the first run. */
 function ensureConfigured() {
-  if (existsSync(resolve(buildDir, 'CMakeCache.txt'))) return;
+  if (existsSync(resolve(buildDirectory, 'CMakeCache.txt'))) return;
   console.log('• configuring linux-aot build (first run)…');
-  const args = ['-S', exampleDir, '-B', buildDir];
+  const cmakeArguments = ['-S', exampleDirectory, '-B', buildDirectory];
   if (process.env.CMAKE_TOOLCHAIN_FILE) {
-    args.push(`-DCMAKE_TOOLCHAIN_FILE=${process.env.CMAKE_TOOLCHAIN_FILE}`);
+    cmakeArguments.push(
+      `-DCMAKE_TOOLCHAIN_FILE=${process.env.CMAKE_TOOLCHAIN_FILE}`,
+    );
   }
   if (process.platform === 'win32') {
-    args.push('-G', 'MinGW Makefiles');
+    cmakeArguments.push('-G', 'MinGW Makefiles');
   }
-  run('cmake', args);
+  run('cmake', cmakeArguments);
 }
 
 /**
@@ -114,22 +125,22 @@ function ensureConfigured() {
  * @returns Why the demo failed, or null when it rendered.
  */
 function smokeTest(demo) {
-  const shot = resolve(tmpDir, `${demo.name}.bmp`);
+  const shot = resolve(temporaryDirectory, `${demo.name}.bmp`);
   rmSync(shot, {force: true});
 
   // Compile at the demo's screen size, then render one frame to the BMP in a window of that size.
-  const screenEnv = {...process.env};
+  const screenEnvironment = {...process.env};
   if (demo.screen) {
-    screenEnv.ER_AOT_SCREEN_W = String(demo.screen.w);
-    screenEnv.ER_AOT_SCREEN_H = String(demo.screen.h);
+    screenEnvironment.ER_AOT_SCREEN_W = String(demo.screen.w);
+    screenEnvironment.ER_AOT_SCREEN_H = String(demo.screen.h);
   }
   run('node', [resolve(here, 'compile.mts'), demo.name], {
-    cwd: jsDir,
-    env: screenEnv,
+    cwd: packageDirectory,
+    env: screenEnvironment,
   });
-  run(exe, [resolve(jsDir, 'dist/app.erpkg')], {
-    cwd: buildDir,
-    env: {...screenEnv, ER_NO_HIDPI: '1', ER_AOT_SHOT: shot},
+  run(executable, [resolve(packageDirectory, 'dist/app.erpkg')], {
+    cwd: buildDirectory,
+    env: {...screenEnvironment, ER_NO_HIDPI: '1', ER_AOT_SHOT: shot},
   });
 
   // The frame must exist and show more than a blank screen.
@@ -145,9 +156,9 @@ function smokeTest(demo) {
 }
 
 let failures = 0;
-mkdirSync(tmpDir, {recursive: true});
+mkdirSync(temporaryDirectory, {recursive: true});
 ensureConfigured();
-run('cmake', ['--build', buildDir]);
+run('cmake', ['--build', buildDirectory]);
 
 for (const demo of DEMOS) {
   let failure;

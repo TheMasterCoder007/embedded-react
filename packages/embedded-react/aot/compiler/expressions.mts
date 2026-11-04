@@ -94,7 +94,7 @@ interface TextParts {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The binary operators lowered as arithmetic, and those lowered as comparisons. */
-const ARITH = new Set(['+', '-', '*', '/', '%']);
+const ARITHMETIC = new Set(['+', '-', '*', '/', '%']);
 const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
 
 /** The saturating helper each whole-number operator lowers to in the IR. */
@@ -129,7 +129,7 @@ const WHOLE_MATH = new Set([
 ]);
 
 /** The helper that rounds `a / b` for two whole numbers the way each Math function does. */
-const INT_ROUND_DIV = new Map<string, WholeHelper>([
+const INT_ROUND_DIVISION = new Map<string, WholeHelper>([
   ['floor', 'floordiv'],
   ['ceil', 'ceildiv'],
   ['round', 'rounddiv'],
@@ -154,6 +154,9 @@ let assumedWide: SlotWidths | null = null;
 
 /** The fields of an onLayout rect. */
 const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
+
+/** The largest 32-bit int. */
+const INT32_MAX = 0x7fffffff;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -228,13 +231,17 @@ export function findShadowedClockCalls(ast: t.File): WeakSet<t.Node> {
  * `node` as an integer compile-time constant, or null.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The integer, or null when the expression is not one.
  */
-export function staticInt(node: t.Node, env: Env): number | null {
+export function staticInt(node: t.Node, environment: Env): number | null {
   try {
-    const value = evalStatic(node, foldScope(env, env.consts ?? {}), 'strict');
+    const value = evalStatic(
+      node,
+      foldScope(environment, environment.constants ?? {}),
+      'strict',
+    );
     return Number.isInteger(value) ? (value as number) : null;
   } catch {
     return null;
@@ -266,19 +273,19 @@ function numConst(value: number): IrNumber {
  * check pass, at the expression: a float holds no NaN or Infinity, a folded `0 / 0` say.
  *
  * @param value  The number.
- * @param loc  Where it is.
+ * @param location  Where it is.
  *
  * @returns Its source.
  */
 function numberSource(
   value: number,
-  loc: SourcePosition | undefined,
+  location: SourcePosition | undefined,
 ): IrSource {
   if (numConst(value).type.kind === 'float') {
     checkNumber(value);
   }
 
-  return {kind: 'number', value, loc};
+  return {kind: 'number', value, location};
 }
 
 /**
@@ -286,27 +293,31 @@ function numberSource(
  * the panel at boot must then give too.
  *
  * @param value  The value.
- * @param loc  Where it is read.
+ * @param location  Where it is read.
  *
  * @returns Its source.
  */
 function bootSource(
   value: BootValue,
-  loc: SourcePosition | undefined,
+  location: SourcePosition | undefined,
 ): IrSource {
   const slot = bootSlotOf(value);
   if (slot) {
-    return {kind: 'fixed', expr: {kind: 'boot', slot, type: slot.type}, loc};
+    return {
+      kind: 'fixed',
+      expression: {kind: 'boot', slot, type: slot.type},
+      location,
+    };
   }
 
   const buildValue = foldBoot(value);
-  if (typeof buildValue === 'number') return numberSource(buildValue, loc);
+  if (typeof buildValue === 'number') return numberSource(buildValue, location);
   if (typeof buildValue === 'string') {
-    return {kind: 'string', value: buildValue, loc};
+    return {kind: 'string', value: buildValue, location};
   }
 
   if (typeof buildValue === 'boolean') {
-    return {kind: 'boolean', value: buildValue, loc};
+    return {kind: 'boolean', value: buildValue, location};
   }
 
   throw new Error(
@@ -352,17 +363,17 @@ function readsBootName(node: unknown, scope: Scope): boolean {
  * in double precision. Null for one that also reads state, or that boot cannot work out.
  *
  * @param node  The expression.
- * @param env  The expression environment.
- * @param loc  Where it is.
+ * @param environment  The expression environment.
+ * @param location  Where it is.
  *
  * @returns Its source, or null.
  */
 function wholeBootSource(
   node: t.Node,
-  env: Env,
-  loc: SourcePosition | undefined,
+  environment: Env,
+  location: SourcePosition | undefined,
 ): IrSource | null {
-  const scope = foldScope(env, env.consts ?? {});
+  const scope = foldScope(environment, environment.constants ?? {});
   if (!readsBootName(node, scope)) return null;
   let value: unknown;
   try {
@@ -375,7 +386,11 @@ function wholeBootSource(
   const whole = wholeBootValue(node, scope, value);
   const slot = whole && bootSlotOf(whole);
   return slot
-    ? {kind: 'fixed', expr: {kind: 'boot', slot, type: slot.type}, loc}
+    ? {
+        kind: 'fixed',
+        expression: {kind: 'boot', slot, type: slot.type},
+        location,
+      }
     : null;
 }
 
@@ -446,19 +461,20 @@ const keepsMath64Node = (node: t.Node): boolean =>
  */
 const keepsMath64 = (source: IrSource): boolean =>
   (source.kind === 'binary' &&
-    (Boolean(CHECKED_HELPER[source.op]) || source.op === '%')) ||
-  (source.kind === 'unary' && source.op === '-') ||
+    (Boolean(CHECKED_HELPER[source.operator]) || source.operator === '%')) ||
+  (source.kind === 'unary' && source.operator === '-') ||
   (source.kind === 'math' && source.wholeMath);
 
 /**
  * A 64-bit value computed at runtime from a timestamp, as opposed to a 64-bit constant or whole-number math
  * widened to 64 bits beside one.
  *
- * @param expr  The lowered expression.
+ * @param expression  The lowered expression.
  *
  * @returns Whether it is a timestamp.
  */
-export const isTime64 = (expr: IrTyped): boolean => isTime(expr.type);
+export const isTime64 = (expression: IrTyped): boolean =>
+  isTime(expression.type);
 
 /**
  * Besides a float, a 64-bit number that is not a time converts, as in JS; only a timestamp refuses.
@@ -479,19 +495,21 @@ const litPeers = (...operands: IrExpr[]): IrExpr[] =>
 /**
  * The error for a divisor that is not a constant where a time's has to be one.
  *
- * @param loc  Where the divisor is.
+ * @param location  Where the divisor is.
  *
  * @returns The error, for the caller to throw.
  */
-function nonConstantDivisorError(loc: SourcePosition | undefined): AotError {
+function nonConstantDivisorError(
+  location: SourcePosition | undefined,
+): AotError {
   const error = aotError(
     'AOT: a 64-bit time value can only be divided by a constant',
     'the divisor must be known at compile time — e.g. `ms % 1000`, `Math.floor(ms / ' +
       '60000)`. For a divisor from state, reduce the timestamp first: `(ms % 86400000) / ' +
       'period`.',
   );
-  if (loc) {
-    error.aotLoc = loc;
+  if (location) {
+    error.aotLoc = location;
   }
 
   return error;
@@ -503,12 +521,12 @@ function nonConstantDivisorError(loc: SourcePosition | undefined): AotError {
  * converts it: a remainder of 0, or a quotient saturated by the dividend's sign.
  *
  * @param node  The divisor.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The divisor's value.
  */
-export function constDivisor(node: t.Node, env: Env): number {
-  const divisor = staticInt(node, env);
+export function constDivisor(node: t.Node, environment: Env): number {
+  const divisor = staticInt(node, environment);
   if (divisor !== null) return divisor;
 
   throw nonConstantDivisorError(node.loc?.start);
@@ -524,7 +542,7 @@ export function constDivisor(node: t.Node, env: Env): number {
 function sourceDivisor(divisor: IrSourceDivisor): number {
   if (divisor.constant !== null) return divisor.constant;
 
-  throw nonConstantDivisorError(divisor.loc);
+  throw nonConstantDivisorError(divisor.location);
 }
 
 /**
@@ -549,7 +567,7 @@ function typeArith64(
     throw mix64Error();
   }
 
-  if (source.op === '/') {
+  if (source.operator === '/') {
     throw aotError(
       'AOT: `/` on a 64-bit time value is not supported',
       'JS division gives a fraction, which a 64-bit integer cannot hold. Use Math.floor(a / ' +
@@ -561,7 +579,7 @@ function typeArith64(
   const isWide = !isTime64(left) && !isTime64(right);
 
   // `%`: zero/±1 divisors give 0, a timestamp needs a constant divisor, and the result narrows to int if it fits.
-  if (source.op === '%') {
+  if (source.operator === '%') {
     const staticDivisor = source.divisor.constant;
     // JS gives NaN for a zero divisor, which is 0 here, as the int `%` has it.
     if (staticDivisor === 0) return numConst(0);
@@ -571,7 +589,7 @@ function typeArith64(
         kind: 'helper',
         helper: 'mod',
         bits: 64,
-        args: [left, right],
+        callArguments: [left, right],
         type: INT64_MATH,
       };
     }
@@ -580,13 +598,13 @@ function typeArith64(
     // ±1 leaves no remainder, and INT64_MIN % -1 overflows.
     if (divisor === 1 || divisor === -1) return numConst(0);
 
-    if (Math.abs(divisor) <= 0x7fffffff || isIntSlot(left.type)) {
+    if (Math.abs(divisor) <= INT32_MAX || isIntSlot(left.type)) {
       return {kind: 'narrowRemainder', left, right, type: INT};
     }
 
     return {
       kind: 'arithmetic',
-      op: '%',
+      operator: '%',
       left,
       right,
       type: isWide ? INT64_MATH : TIME,
@@ -596,9 +614,9 @@ function typeArith64(
   // `+ - *`: the saturating 64-bit helper.
   return {
     kind: 'helper',
-    helper: CHECKED_HELPER[source.op],
+    helper: CHECKED_HELPER[source.operator],
     bits: 64,
-    args: [left, right],
+    callArguments: [left, right],
     type: isWide ? INT64_MATH : TIME,
   };
 }
@@ -608,14 +626,14 @@ function typeArith64(
  * division by a constant (see constDivisor); a zero one saturates by the dividend's sign, as JS's ±Infinity
  * converts. Null when neither side is a timestamp, which leaves it to the whole-number or float path.
  *
- * @param fn  The Math function's name.
+ * @param mathFunction  The Math function's name.
  * @param division  Its one argument, the division.
  * @param math64  Whole-number math is worked out in 64 bits here.
  *
  * @returns The typed call, or null when it is not this case.
  */
 function typeTimeRoundDiv(
-  fn: string,
+  mathFunction: string,
   division: Extract<IrSource, {kind: 'binary'}>,
   math64: boolean,
 ): IrExpr | null {
@@ -636,16 +654,16 @@ function typeTimeRoundDiv(
       kind: 'helper',
       helper: 'neg',
       bits: 64,
-      args: [dividend],
+      callArguments: [dividend],
       type: TIME,
     };
   }
 
   return {
     kind: 'helper',
-    helper: INT_ROUND_DIV.get(fn)!,
+    helper: INT_ROUND_DIVISION.get(mathFunction)!,
     bits: 64,
-    args: [dividend, divisor],
+    callArguments: [dividend, divisor],
     type: TIME,
   };
 }
@@ -658,14 +676,14 @@ function typeTimeRoundDiv(
  * constant past the int range, or math already widened), it divides in 64 bits, since JS would not cut the
  * operands to 32. Null for anything else, which leaves it to the float path.
  *
- * @param fn  The Math function's name.
+ * @param mathFunction  The Math function's name.
  * @param division  Its one argument, the division.
  * @param math64  Whole-number math is worked out in 64 bits here.
  *
  * @returns The typed call, or null when it is not this case.
  */
 function typeIntRoundDiv(
-  fn: string,
+  mathFunction: string,
   division: Extract<IrSource, {kind: 'binary'}>,
   math64: boolean,
 ): IrExpr | null {
@@ -683,9 +701,9 @@ function typeIntRoundDiv(
     if (!isWhole(dividend) || !isWhole(divisor)) return null;
     return {
       kind: 'helper',
-      helper: INT_ROUND_DIV.get(fn)!,
+      helper: INT_ROUND_DIVISION.get(mathFunction)!,
       bits: 64,
-      args: [dividend, divisor],
+      callArguments: [dividend, divisor],
       type: INT64_MATH,
     };
   }
@@ -694,9 +712,9 @@ function typeIntRoundDiv(
   if (!isIntSlot(dividend.type) || !isIntSlot(divisor.type)) return null;
   return {
     kind: 'helper',
-    helper: INT_ROUND_DIV.get(fn)!,
+    helper: INT_ROUND_DIVISION.get(mathFunction)!,
     bits: 32,
-    args: [dividend, divisor],
+    callArguments: [dividend, divisor],
     type: INT,
   };
 }
@@ -704,58 +722,73 @@ function typeIntRoundDiv(
 /**
  * Math.* over a 64-bit timestamp: only what stays exact in whole numbers.
  *
- * @param fn  The Math function's name.
- * @param argExprs  Its typed arguments, at least one of them 64-bit.
+ * @param mathFunction  The Math function's name.
+ * @param argumentExpressions  Its typed arguments, at least one of them 64-bit.
  *
  * @returns The typed call.
  */
-function typeMath64(fn: string, argExprs: IrExpr[]): IrExpr {
-  if (argExprs.some(argExpr => argExpr.type.kind === 'float')) {
+function typeMath64(
+  mathFunction: string,
+  argumentExpressions: IrExpr[],
+): IrExpr {
+  if (
+    argumentExpressions.some(
+      argumentExpression => argumentExpression.type.kind === 'float',
+    )
+  ) {
     throw mix64Error();
   }
 
   if (
-    argExprs.every(
-      argExpr => isIntSlot(argExpr.type) || argExpr.type.kind === 'int64',
+    argumentExpressions.every(
+      argumentExpression =>
+        isIntSlot(argumentExpression.type) ||
+        argumentExpression.type.kind === 'int64',
     )
   ) {
     // Whole-number math with no timestamp in it stays whole-number math.
-    const isWide = !argExprs.some(isTime64);
+    const isWide = !argumentExpressions.some(isTime64);
     // A timestamp is already whole, so rounding leaves it as it is.
     if (
-      (fn === 'floor' || fn === 'round' || fn === 'ceil' || fn === 'trunc') &&
-      argExprs.length === 1
+      (mathFunction === 'floor' ||
+        mathFunction === 'round' ||
+        mathFunction === 'ceil' ||
+        mathFunction === 'trunc') &&
+      argumentExpressions.length === 1
     ) {
       return {
         kind: 'wholeRound',
-        operand: argExprs[0],
+        operand: argumentExpressions[0],
         type: isWide ? INT64_MATH : TIME,
       };
     }
 
-    if (fn === 'abs' && argExprs.length === 1) {
+    if (mathFunction === 'abs' && argumentExpressions.length === 1) {
       return {
         kind: 'helper',
         helper: 'abs',
         bits: 64,
-        args: [argExprs[0]],
+        callArguments: [argumentExpressions[0]],
         type: isWide ? INT64_MATH : TIME,
       };
     }
 
-    if ((fn === 'min' || fn === 'max') && argExprs.length === 2) {
+    if (
+      (mathFunction === 'min' || mathFunction === 'max') &&
+      argumentExpressions.length === 2
+    ) {
       return {
         kind: 'helper',
-        helper: fn,
+        helper: mathFunction,
         bits: 64,
-        args: [argExprs[0], argExprs[1]],
+        callArguments: [argumentExpressions[0], argumentExpressions[1]],
         type: isWide ? INT64_MATH : TIME,
       };
     }
   }
 
   throw aotError(
-    `AOT: Math.${fn}(...) on a 64-bit time value is not supported`,
+    `AOT: Math.${mathFunction}(...) on a 64-bit time value is not supported`,
     'Math.floor / round / ceil / trunc / abs / min / max keep a timestamp exact; for ' +
       'anything else, reduce it to a small number first, e.g. `ms % 1000`.',
   );
@@ -775,18 +808,18 @@ function typeUnary(
 ): IrExpr {
   const operand = typeSource(source.operand, math64);
   if (
-    (source.op === '-' || source.op === '+') &&
+    (source.operator === '-' || source.operator === '+') &&
     operand.type.kind === 'string'
   ) {
     throw aotError(
-      `AOT: unary "${source.op}" on a string is not supported`,
+      `AOT: unary "${source.operator}" on a string is not supported`,
       "JS would coerce the string to a number; the AOT doesn't. Keep the operand numeric.",
     );
   }
 
   // Negating the minimum overflows, so a whole number saturates the way `+ - *` do.
   if (
-    source.op === '-' &&
+    source.operator === '-' &&
     (isIntSlot(operand.type) || operand.type.kind === 'int64')
   ) {
     const is64Bit = operand.type.kind === 'int64' || math64;
@@ -795,14 +828,14 @@ function typeUnary(
           kind: 'helper',
           helper: 'neg',
           bits: 64,
-          args: [operand],
+          callArguments: [operand],
           type: operand.type.kind === 'int64' ? operand.type : INT64_MATH,
         }
       : {
           kind: 'helper',
           helper: 'neg',
           bits: 32,
-          args: [operand],
+          callArguments: [operand],
           type: INT,
         };
   }
@@ -810,10 +843,14 @@ function typeUnary(
   // Only `!` yields a boolean; unary +/- coerce to a number, so `+flag` drops its boolean-ness.
   return {
     kind: 'unary',
-    op: source.op,
+    operator: source.operator,
     operand,
     type:
-      source.op === '!' ? BOOL : isBoolean(operand.type) ? INT : operand.type,
+      source.operator === '!'
+        ? BOOL
+        : isBoolean(operand.type)
+          ? INT
+          : operand.type,
   };
 }
 
@@ -845,10 +882,10 @@ function typeBinary(
   [left, right] = litPeers(left, right);
 
   // Arithmetic: refuse strings, hand 64-bit math to typeArith64, and saturate whole-number `+ - *`.
-  if (ARITH.has(source.op)) {
+  if (ARITHMETIC.has(source.operator)) {
     if (left.type.kind === 'string' || right.type.kind === 'string') {
       // String `+` has no single value; only a destination that holds text can lower it, via lowerText().
-      if (source.op === '+') {
+      if (source.operator === '+') {
         throw aotError(
           'AOT: string concatenation is not supported in this position',
           'a `+` chain over strings only works where the value lands in text: a <Text> body, a string ' +
@@ -857,7 +894,7 @@ function typeBinary(
       }
       // JS would coerce the string to a number; the AOT doesn't.
       throw aotError(
-        `AOT: "${source.op}" on a string is not supported`,
+        `AOT: "${source.operator}" on a string is not supported`,
         'keep both operands numeric — a string cannot be coerced to a number here.',
       );
     }
@@ -866,37 +903,37 @@ function typeBinary(
       isTime64(left) ||
       isTime64(right) ||
       ((left.type.kind === 'int64' || right.type.kind === 'int64') &&
-        (CHECKED_HELPER[source.op] || source.op === '%'))
+        (CHECKED_HELPER[source.operator] || source.operator === '%'))
     ) {
       return typeArith64(source, left, right);
     }
 
-    if (source.op === '/') {
+    if (source.operator === '/') {
       return {kind: 'floatDivide', left, right, type: FLOAT};
     }
 
     const isFloat = left.type.kind === 'float' || right.type.kind === 'float';
-    const checkedHelper = !isFloat && CHECKED_HELPER[source.op];
+    const checkedHelper = !isFloat && CHECKED_HELPER[source.operator];
     if (checkedHelper) {
       return math64
         ? {
             kind: 'helper',
             helper: checkedHelper,
             bits: 64,
-            args: [left, right],
+            callArguments: [left, right],
             type: INT64_MATH,
           }
         : {
             kind: 'helper',
             helper: checkedHelper,
             bits: 32,
-            args: [left, right],
+            callArguments: [left, right],
             type: INT,
           };
     }
 
     // A 0 divisor (NaN in JS) or -1 (INT_MIN % -1 overflows) gives 0; other constants need no check.
-    if (!isFloat && source.op === '%') {
+    if (!isFloat && source.operator === '%') {
       const staticDivisor = source.divisor.constant;
       if (staticDivisor === 0 || staticDivisor === -1) {
         return numConst(0);
@@ -906,25 +943,25 @@ function typeBinary(
           kind: 'helper',
           helper: 'mod',
           bits: 32,
-          args: [left, right],
+          callArguments: [left, right],
           type: INT,
         };
       }
     }
 
     // fmod matches JS's `%` exactly, zero and infinite divisors included.
-    if (isFloat && source.op === '%') {
+    if (isFloat && source.operator === '%') {
       return {
         kind: 'floatMath',
-        fn: 'mod',
-        args: [left, right],
+        mathFunction: 'mod',
+        callArguments: [left, right],
         type: FLOAT,
       };
     }
 
     return {
       kind: 'arithmetic',
-      op: source.op as IrArithmetic['op'],
+      operator: source.operator as IrArithmetic['operator'],
       left,
       right,
       type: isFloat ? FLOAT : INT,
@@ -932,26 +969,30 @@ function typeBinary(
   }
 
   // Comparisons: strings by their text, everything else as a plain comparison yielding a boolean.
-  if (COMPARE.has(source.op)) {
+  if (COMPARE.has(source.operator)) {
     const comparison =
-      source.op === '===' ? '==' : source.op === '!==' ? '!=' : source.op;
+      source.operator === '==='
+        ? '=='
+        : source.operator === '!=='
+          ? '!='
+          : source.operator;
     if (left.type.kind === 'string' || right.type.kind === 'string') {
       if (slotOf(left.type) !== slotOf(right.type)) {
         // A strict comparison never coerces, so a string against a number is decided statically.
-        if (source.op === '===' || source.op === '!==') {
-          return boolConst(source.op === '!==');
+        if (source.operator === '===' || source.operator === '!==') {
+          return boolConst(source.operator === '!==');
         }
 
         throw aotError(
           'AOT: a string cannot be compared with a number',
-          `\`${source.op}\` coerces the string to a number in JS, which the AOT doesn't reproduce. ` +
+          `\`${source.operator}\` coerces the string to a number in JS, which the AOT doesn't reproduce. ` +
             `Compare like with like, or use === / !== (which never coerce).`,
         );
       }
       // Equality is exact, but strcmp's UTF-8 order can differ from JS's UTF-16 order, so refuse ordering.
       if (comparison !== '==' && comparison !== '!=') {
         throw aotError(
-          `AOT: ordering strings with "${source.op}" is not supported`,
+          `AOT: ordering strings with "${source.operator}" is not supported`,
           'JS orders strings by UTF-16 code unit but the device holds UTF-8, so the order can ' +
             'differ. Use === / !==, or compare numbers.',
         );
@@ -959,7 +1000,7 @@ function typeBinary(
 
       return {
         kind: 'stringEquals',
-        op: comparison,
+        operator: comparison,
         left,
         right,
         type: BOOL,
@@ -980,23 +1021,23 @@ function typeBinary(
         operand.type.kind === 'int64' ||
         isWrittenAsNumber);
     if (
-      (source.op === '===' || source.op === '!==') &&
+      (source.operator === '===' || source.operator === '!==') &&
       ((isBoolean(left.type) && isSurelyNumber(source.rightIsNumber, right)) ||
         (isBoolean(right.type) && isSurelyNumber(source.leftIsNumber, left)))
     ) {
-      return boolConst(source.op === '!==');
+      return boolConst(source.operator === '!==');
     }
 
     return {
       kind: 'compare',
-      op: comparison as IrCompare['op'],
+      operator: comparison as IrCompare['operator'],
       left,
       right,
       type: BOOL,
     };
   }
 
-  throw new Error(`AOT: unsupported binary operator "${source.op}"`);
+  throw new Error(`AOT: unsupported binary operator "${source.operator}"`);
 }
 
 /**
@@ -1023,18 +1064,18 @@ function typeLogical(
 
     if (left.type.kind === 'string' || right.type.kind === 'string') {
       throw aotError(
-        `AOT: "${source.op}" cannot mix a 64-bit time value with a string`,
+        `AOT: "${source.operator}" cannot mix a 64-bit time value with a string`,
         'keep both sides numbers, or write the branch out: {ms ? ms : 0}.',
       );
     }
 
     if (isBoolean(left.type) || isBoolean(right.type)) {
-      throw bool64Error(`"${source.op}"`);
+      throw bool64Error(`"${source.operator}"`);
     }
 
     return {
       kind: 'pick',
-      op: source.op,
+      operator: source.operator,
       left,
       right,
       type: int64Join(left.type, right.type),
@@ -1044,7 +1085,7 @@ function typeLogical(
   // Otherwise the result is the truth of the expression, a boolean only when both operands are.
   return {
     kind: 'logical',
-    op: source.op,
+    operator: source.operator,
     left,
     right,
     type: isBoolean(left.type) && isBoolean(right.type) ? BOOL : INT,
@@ -1128,92 +1169,116 @@ function typeMath(
   source: Extract<IrSource, {kind: 'math'}>,
   math64: boolean,
 ): IrExpr {
-  const {fn} = source;
+  const {mathFunction} = source;
 
   // Math.min and Math.max take any number of values, the IR's two: the rest go pairwise, left to right.
-  if ((fn === 'min' || fn === 'max') && source.args.length > 2) {
-    const [first, second, ...rest] = source.args;
+  if (
+    (mathFunction === 'min' || mathFunction === 'max') &&
+    source.callArguments.length > 2
+  ) {
+    const [first, second, ...rest] = source.callArguments;
     return typeMath(
       rest.reduce<typeof source>(
-        (pairs, arg) => ({...source, args: [pairs, arg]}),
-        {...source, args: [first, second]},
+        (pairs, argument) => ({...source, callArguments: [pairs, argument]}),
+        {...source, callArguments: [first, second]},
       ),
       math64,
     );
   }
 
   if (source.exactDivision) {
-    const division = source.args[0] as Extract<IrSource, {kind: 'binary'}>;
-    const timeDiv = typeTimeRoundDiv(fn, division, math64);
-    if (timeDiv) return timeDiv;
+    const division = source.callArguments[0] as Extract<
+      IrSource,
+      {kind: 'binary'}
+    >;
+    const timeDivision = typeTimeRoundDiv(mathFunction, division, math64);
+    if (timeDivision) return timeDivision;
 
-    const intDiv = typeIntRoundDiv(fn, division, math64);
-    if (intDiv) return intDiv;
+    const intDivision = typeIntRoundDiv(mathFunction, division, math64);
+    if (intDivision) return intDivision;
   }
 
-  let argExprs = litPeers(...source.args.map(arg => typeSource(arg, math64)));
-  if (argExprs.some(argExpr => argExpr.type.kind === 'int64')) {
+  let argumentExpressions = litPeers(
+    ...source.callArguments.map(argument => typeSource(argument, math64)),
+  );
+  if (
+    argumentExpressions.some(
+      argumentExpression => argumentExpression.type.kind === 'int64',
+    )
+  ) {
     // Whole-number Math keeps a 64-bit value exact, and a time takes nothing else; the rest works on floats.
-    if (WHOLE_MATH.has(fn) || argExprs.some(isTime64)) {
-      return typeMath64(fn, argExprs);
+    if (WHOLE_MATH.has(mathFunction) || argumentExpressions.some(isTime64)) {
+      return typeMath64(mathFunction, argumentExpressions);
     }
 
-    argExprs = argExprs.map((argExpr): IrExpr =>
-      argExpr.type.kind === 'int64'
-        ? {kind: 'toFloat', operand: argExpr, type: FLOAT}
-        : argExpr,
+    argumentExpressions = argumentExpressions.map(
+      (argumentExpression): IrExpr =>
+        argumentExpression.type.kind === 'int64'
+          ? {kind: 'toFloat', operand: argumentExpression, type: FLOAT}
+          : argumentExpression,
     );
   }
 
   // Keep int abs/min/max whole (a float rounds past 2^24); with math64, abs widens to keep |INT_MIN|.
-  if (argExprs.length && argExprs.every(argExpr => isIntSlot(argExpr.type))) {
-    if (fn === 'abs' && argExprs.length === 1) {
+  if (
+    argumentExpressions.length &&
+    argumentExpressions.every(argumentExpression =>
+      isIntSlot(argumentExpression.type),
+    )
+  ) {
+    if (mathFunction === 'abs' && argumentExpressions.length === 1) {
       return math64
         ? {
             kind: 'helper',
             helper: 'abs',
             bits: 64,
-            args: [argExprs[0]],
+            callArguments: [argumentExpressions[0]],
             type: INT64_MATH,
           }
         : {
             kind: 'helper',
             helper: 'abs',
             bits: 32,
-            args: [argExprs[0]],
+            callArguments: [argumentExpressions[0]],
             type: INT,
           };
     }
 
-    if ((fn === 'min' || fn === 'max') && argExprs.length === 2) {
+    if (
+      (mathFunction === 'min' || mathFunction === 'max') &&
+      argumentExpressions.length === 2
+    ) {
       return {
         kind: 'helper',
-        helper: fn,
+        helper: mathFunction,
         bits: 32,
-        args: [argExprs[0], argExprs[1]],
+        callArguments: [argumentExpressions[0], argumentExpressions[1]],
         type: INT,
       };
     }
   }
 
   // Math.trunc stays an int: an int as is, a float truncated (toward zero, NaN as 0, saturating).
-  if (fn === 'trunc' && argExprs.length === 1) {
-    return isIntSlot(argExprs[0].type)
-      ? {kind: 'wholeRound', operand: argExprs[0], type: INT}
-      : {kind: 'trunc', operand: argExprs[0], type: INT};
+  if (mathFunction === 'trunc' && argumentExpressions.length === 1) {
+    return isIntSlot(argumentExpressions[0].type)
+      ? {kind: 'wholeRound', operand: argumentExpressions[0], type: INT}
+      : {kind: 'trunc', operand: argumentExpressions[0], type: INT};
   }
 
-  if (FLOAT_MATH_UNARY.has(fn) && argExprs.length === 1) {
+  if (FLOAT_MATH_UNARY.has(mathFunction) && argumentExpressions.length === 1) {
     // An int is already whole, so rounding leaves it as it is; a float round trip would lose digits.
-    const roundsToWhole = fn === 'round' || fn === 'floor' || fn === 'ceil';
-    if (roundsToWhole && isIntSlot(argExprs[0].type)) {
-      return {kind: 'wholeRound', operand: argExprs[0], type: INT};
+    const roundsToWhole =
+      mathFunction === 'round' ||
+      mathFunction === 'floor' ||
+      mathFunction === 'ceil';
+    if (roundsToWhole && isIntSlot(argumentExpressions[0].type)) {
+      return {kind: 'wholeRound', operand: argumentExpressions[0], type: INT};
     }
 
     const floatCall: IrExpr = {
       kind: 'floatMath',
-      fn: fn as FloatMath,
-      args: [argExprs[0]],
+      mathFunction: mathFunction as FloatMath,
+      callArguments: [argumentExpressions[0]],
       type: FLOAT,
     };
     // round/floor/ceil yield a whole number, kept as an int so %d / int assignments are correct.
@@ -1222,17 +1287,17 @@ function typeMath(
       : floatCall;
   }
 
-  if (FLOAT_MATH_BINARY.has(fn) && argExprs.length === 2) {
+  if (FLOAT_MATH_BINARY.has(mathFunction) && argumentExpressions.length === 2) {
     return {
       kind: 'floatMath',
-      fn: fn as FloatMath,
-      args: [argExprs[0], argExprs[1]],
+      mathFunction: mathFunction as FloatMath,
+      callArguments: [argumentExpressions[0], argumentExpressions[1]],
       type: FLOAT,
     };
   }
 
   throw new Error(
-    `AOT: unsupported Math.${fn}(...) (arity ${argExprs.length})`,
+    `AOT: unsupported Math.${mathFunction}(...) (arity ${argumentExpressions.length})`,
   );
 }
 
@@ -1261,7 +1326,7 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         const {state} = source;
         const assumed =
           (state.slotKind === 'int' || state.slotKind === 'i64') &&
-          !state.isBool
+          !state.isBoolean
             ? assumedWide?.get(state.slotName)
             : undefined;
         return {
@@ -1289,7 +1354,7 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         };
       }
       case 'fixed':
-        return source.expr;
+        return source.expression;
       case 'unary':
         return typeUnary(source, wide);
       case 'binary':
@@ -1302,7 +1367,7 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         return typeMath(source, wide);
     }
   } catch (error) {
-    locateError(error, source.loc);
+    locateError(error, source.location);
     throw error;
   }
 }
@@ -1351,30 +1416,32 @@ export function inferWideSlots(
 /**
  * Whether two sets of slot widths are the same.
  *
- * @param a  One set.
- * @param b  The other.
+ * @param left  One set.
+ * @param right  The other.
  *
  * @returns True when every slot holds the same in both.
  */
-export const sameSlotWidths = (a: SlotWidths, b: SlotWidths): boolean =>
-  a.size === b.size && [...a].every(([slot, holds]) => b.get(slot) === holds);
+export const sameSlotWidths = (left: SlotWidths, right: SlotWidths): boolean =>
+  left.size === right.size &&
+  [...left].every(([slot, holds]) => right.get(slot) === holds);
 
 /**
  * Whether an operand is written as a number, so a boolean on the other side of `===` never equals it: a
  * numeric literal, a negated one, or a non-boolean state read by name.
  *
  * @param node  The operand.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns True when it is surely a number.
  */
-const isWrittenAsNumber = (node: t.Node, env: Env): boolean =>
+const isWrittenAsNumber = (node: t.Node, environment: Env): boolean =>
   node.type === 'NumericLiteral' ||
   (node.type === 'UnaryExpression' &&
     node.argument.type === 'NumericLiteral') ||
   (node.type === 'Identifier' &&
-    !env.locals.has(node.name) &&
-    (env.state.get(node.name) as ScalarState | undefined)?.isBool === false);
+    !environment.locals.has(node.name) &&
+    (environment.state.get(node.name) as ScalarState | undefined)?.isBoolean ===
+      false);
 
 /**
  * A binary expression's source, from its operands' sources.
@@ -1382,7 +1449,7 @@ const isWrittenAsNumber = (node: t.Node, env: Env): boolean =>
  * @param node  The expression.
  * @param left  Its left operand's source.
  * @param right  Its right operand's source.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The source.
  */
@@ -1390,16 +1457,19 @@ const binarySource = (
   node: t.BinaryExpression,
   left: IrSource,
   right: IrSource,
-  env: Env,
+  environment: Env,
 ): IrSource => ({
   kind: 'binary',
-  op: node.operator,
+  operator: node.operator,
   left,
   right,
-  divisor: {constant: staticInt(node.right, env), loc: node.right.loc?.start},
-  leftIsNumber: isWrittenAsNumber(node.left, env),
-  rightIsNumber: isWrittenAsNumber(node.right, env),
-  loc: node.loc?.start,
+  divisor: {
+    constant: staticInt(node.right, environment),
+    location: node.right.loc?.start,
+  },
+  leftIsNumber: isWrittenAsNumber(node.left, environment),
+  rightIsNumber: isWrittenAsNumber(node.right, environment),
+  location: node.loc?.start,
 });
 
 /**
@@ -1427,56 +1497,60 @@ function isEventRoot(node: t.Node, event: string | null | undefined): boolean {
  * in turn, so an error in it is reported before anything after it.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The source.
  */
-function sourceOf(node: t.Node, env: Env): IrSource {
-  const loc = node.loc?.start;
+function sourceOf(node: t.Node, environment: Env): IrSource {
+  const location = node.loc?.start;
   // An expression that depends only on the panel is read from a slot worked out at boot, in doubles as JS.
   const whole = WHOLE_BOOT_TYPES.has(node.type)
-    ? wholeBootSource(node, env, loc)
+    ? wholeBootSource(node, environment, location)
     : null;
   if (whole) return whole;
 
   const operand = (operandNode: t.Node): IrSource =>
-    lowerSource(operandNode, env).source;
+    lowerSource(operandNode, environment).source;
   switch (node.type) {
     case 'NumericLiteral':
-      return numberSource(node.value, loc);
+      return numberSource(node.value, location);
     case 'StringLiteral':
-      return {kind: 'string', value: node.value, loc};
+      return {kind: 'string', value: node.value, location};
     case 'BooleanLiteral':
-      return {kind: 'boolean', value: node.value, loc};
+      return {kind: 'boolean', value: node.value, location};
     case 'Identifier': {
       // A name resolves to a local first, then to state, then to a compile-time constant.
-      if (env.locals.has(node.name)) {
-        return {kind: 'local', local: env.locals.get(node.name)!, loc};
+      if (environment.locals.has(node.name)) {
+        return {
+          kind: 'local',
+          local: environment.locals.get(node.name)!,
+          location,
+        };
       }
 
-      if (env.state.has(node.name)) {
-        const stateRecord = env.state.get(node.name)!;
+      if (environment.state.has(node.name)) {
+        const stateRecord = environment.state.get(node.name)!;
         if (stateRecord.kind === 'list') {
           throw new Error(
             `AOT: a list state ("${node.name}") can only be used via .length or .map`,
           );
         }
 
-        return {kind: 'state', state: stateRecord, loc};
+        return {kind: 'state', state: stateRecord, location};
       }
 
-      if (hasBinding(env.consts, node.name)) {
-        const constValue = env.consts[node.name];
-        if (isBoot(constValue)) return bootSource(constValue, loc);
-        if (typeof constValue === 'number')
-          return numberSource(constValue, loc);
+      if (hasBinding(environment.constants, node.name)) {
+        const constantValue = environment.constants[node.name];
+        if (isBoot(constantValue)) return bootSource(constantValue, location);
+        if (typeof constantValue === 'number')
+          return numberSource(constantValue, location);
 
-        if (typeof constValue === 'string') {
-          return {kind: 'string', value: constValue, loc};
+        if (typeof constantValue === 'string') {
+          return {kind: 'string', value: constantValue, location};
         }
 
-        if (typeof constValue === 'boolean') {
-          return {kind: 'boolean', value: constValue, loc};
+        if (typeof constantValue === 'boolean') {
+          return {kind: 'boolean', value: constantValue, location};
         }
       }
       throw new Error(
@@ -1486,8 +1560,8 @@ function sourceOf(node: t.Node, env: Env): IrSource {
     case 'UnaryExpression': {
       // A constant is negated here, so `-A` is its value, and -2147483648 is not an int overflow.
       const staticOperand =
-        node.operator === '-' ? staticInt(node.argument, env) : null;
-      if (staticOperand !== null) return numberSource(-staticOperand, loc);
+        node.operator === '-' ? staticInt(node.argument, environment) : null;
+      if (staticOperand !== null) return numberSource(-staticOperand, location);
 
       const operandSource = operand(node.argument);
       if (
@@ -1495,29 +1569,40 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         node.operator === '+' ||
         node.operator === '!'
       ) {
-        return {kind: 'unary', op: node.operator, operand: operandSource, loc};
+        return {
+          kind: 'unary',
+          operator: node.operator,
+          operand: operandSource,
+          location,
+        };
       }
 
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
       // Fold `+ - *` over two whole-number constants as JS would, so a product past int range stays exact.
-      const leftConst = CHECKED_HELPER[node.operator]
-        ? staticInt(node.left, env)
+      const leftConstant = CHECKED_HELPER[node.operator]
+        ? staticInt(node.left, environment)
         : null;
-      const rightConst = leftConst === null ? null : staticInt(node.right, env);
-      if (rightConst !== null) {
+      const rightConstant =
+        leftConstant === null ? null : staticInt(node.right, environment);
+      if (rightConstant !== null) {
         return numberSource(
           node.operator === '+'
-            ? leftConst! + rightConst
+            ? leftConstant! + rightConstant
             : node.operator === '-'
-              ? leftConst! - rightConst
-              : leftConst! * rightConst,
-          loc,
+              ? leftConstant! - rightConstant
+              : leftConstant! * rightConstant,
+          location,
         );
       }
 
-      return binarySource(node, operand(node.left), operand(node.right), env);
+      return binarySource(
+        node,
+        operand(node.left),
+        operand(node.right),
+        environment,
+      );
     }
     case 'LogicalExpression': {
       // Only `&&` and `||` are supported (not `??`).
@@ -1529,10 +1614,10 @@ function sourceOf(node: t.Node, env: Env): IrSource {
 
       return {
         kind: 'logical',
-        op: operator,
+        operator: operator,
         left: operand(node.left),
         right: operand(node.right),
-        loc,
+        location,
       };
     }
     case 'ConditionalExpression':
@@ -1541,28 +1626,28 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         test: operand(node.test),
         consequent: operand(node.consequent),
         alternate: operand(node.alternate),
-        loc,
+        location,
       };
     case 'MemberExpression': {
       // Static fold: member access that resolves to a compile-time constant (e.g., a .map item's `.key`).
       try {
-        const constValue = evalStatic(
+        const constantValue = evalStatic(
           node,
-          foldScope(env, env.consts ?? {}),
+          foldScope(environment, environment.constants ?? {}),
           'boot',
         );
-        if (isBoot(constValue)) return bootSource(constValue, loc);
+        if (isBoot(constantValue)) return bootSource(constantValue, location);
         // A number with no float form falls through too, so its check runs now, not in the check pass.
-        if (typeof constValue === 'number') {
-          return attemptLowering(() => numberSource(constValue, loc));
+        if (typeof constantValue === 'number') {
+          return attemptLowering(() => numberSource(constantValue, location));
         }
 
-        if (typeof constValue === 'string') {
-          return {kind: 'string', value: constValue, loc};
+        if (typeof constantValue === 'string') {
+          return {kind: 'string', value: constantValue, location};
         }
 
-        if (typeof constValue === 'boolean') {
-          return {kind: 'boolean', value: constValue, loc};
+        if (typeof constantValue === 'boolean') {
+          return {kind: 'boolean', value: constantValue, location};
         }
       } catch {
         /* not static — fall through to the dynamic member forms below */
@@ -1571,16 +1656,20 @@ function sourceOf(node: t.Node, env: Env): IrSource {
       // Otherwise the object must be one of the runtime forms below; `prop` is null for a computed member.
       const object = node.object;
       const prop = node.computed ? null : (node.property as t.Identifier).name;
-      const fixed = (expr: IrExpr): IrSource => ({kind: 'fixed', expr, loc});
+      const fixed = (expression: IrExpr): IrSource => ({
+        kind: 'fixed',
+        expression,
+        location,
+      });
       // `<list>.length` → the runtime count.
       if (
         object.type === 'Identifier' &&
-        env.state.get(object.name)?.kind === 'list' &&
+        environment.state.get(object.name)?.kind === 'list' &&
         prop === 'length'
       ) {
         return fixed({
           kind: 'listLength',
-          list: env.state.get(object.name) as ListState,
+          list: environment.state.get(object.name) as ListState,
           type: INT,
         });
       }
@@ -1588,10 +1677,10 @@ function sourceOf(node: t.Node, env: Env): IrSource {
       // `<item>.field` where item is a struct local (a list row's bound element).
       if (
         object.type === 'Identifier' &&
-        env.locals.get(object.name)?.struct &&
+        environment.locals.get(object.name)?.struct &&
         prop
       ) {
-        const item = env.locals.get(object.name)!;
+        const item = environment.locals.get(object.name)!;
         const field = item.struct!.fields.find(
           structField => structField.key === prop,
         );
@@ -1610,18 +1699,18 @@ function sourceOf(node: t.Node, env: Env): IrSource {
       // `<ref>.current` — a value ref's mutable slot.
       if (
         object.type === 'Identifier' &&
-        env.refs?.has(object.name) &&
+        environment.refs?.has(object.name) &&
         prop === 'current'
       ) {
-        const ref = env.refs.get(object.name)!;
+        const ref = environment.refs.get(object.name)!;
         ref.used = true;
-        return {kind: 'ref', ref, loc};
+        return {kind: 'ref', ref, location};
       }
 
       // `<event>.x / .y / .dx / .dy` — touch fields of the handler's EREventData.
       if (
         object.type === 'Identifier' &&
-        env.event === object.name &&
+        environment.event === object.name &&
         (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')
       ) {
         return fixed({kind: 'event', field: prop, type: INT});
@@ -1630,15 +1719,19 @@ function sourceOf(node: t.Node, env: Env): IrSource {
       // `<event>.vx / .vy` — finger velocity (px/ms) at the last move; the engine measures it, a handler cannot.
       if (
         object.type === 'Identifier' &&
-        env.event === object.name &&
+        environment.event === object.name &&
         (prop === 'vx' || prop === 'vy')
       ) {
         return fixed({kind: 'event', field: prop, type: FLOAT});
       }
 
       // `<gestureState>.…` — the second argument of a PanResponder callback (see emitPanResponder).
-      if (object.type === 'Identifier' && env.gesture === object.name && prop) {
-        return fixed(lowerGestureField(prop, env.pan));
+      if (
+        object.type === 'Identifier' &&
+        environment.gesture === object.name &&
+        prop
+      ) {
+        return fixed(lowerGestureField(prop, environment.pan));
       }
 
       // `<event>.layout.x / .y / .width / .height` — the onLayout rect, also read as
@@ -1647,9 +1740,9 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         object.type === 'MemberExpression' &&
         !object.computed &&
         (object.property as t.Identifier).name === 'layout' &&
-        isEventRoot(object.object, env.event)
+        isEventRoot(object.object, environment.event)
       ) {
-        if (!env.layout) {
+        if (!environment.layout) {
           throw aotError(
             'AOT: only an onLayout event carries a layout rect',
             'read e.layout (or e.nativeEvent.layout) inside an onLayout handler.',
@@ -1687,13 +1780,13 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         callee.object.type === 'Identifier' &&
         (callee.object.name === 'Date' ||
           callee.object.name === 'performance') &&
-        !env.shadowedClock?.has(node)
+        !environment.shadowedClock?.has(node)
       ) {
         if ((callee.property as t.Identifier).name === 'now') {
           return {
             kind: 'fixed',
-            expr: {kind: 'clock', clock: callee.object.name, type: TIME},
-            loc,
+            expression: {kind: 'clock', clock: callee.object.name, type: TIME},
+            location,
           };
         }
         if (callee.object.name === 'Date') {
@@ -1704,7 +1797,7 @@ function sourceOf(node: t.Node, env: Env): IrSource {
       if (
         callee.type === 'Identifier' &&
         callee.name === 'Date' &&
-        !env.shadowedClock?.has(node)
+        !environment.shadowedClock?.has(node)
       ) {
         throw dateObjectError();
       }
@@ -1714,29 +1807,29 @@ function sourceOf(node: t.Node, env: Env): IrSource {
         callee.type === 'MemberExpression' &&
         (callee.object as t.Identifier).name === 'Math'
       ) {
-        const fn = (callee.property as t.Identifier).name;
+        const mathFunction = (callee.property as t.Identifier).name;
         const division = node.arguments[0];
         const exactDivision =
-          INT_ROUND_DIV.has(fn) &&
+          INT_ROUND_DIVISION.has(mathFunction) &&
           node.arguments.length === 1 &&
           division.type === 'BinaryExpression' &&
           division.operator === '/';
         return {
           kind: 'math',
-          fn,
-          args: exactDivision
+          mathFunction,
+          callArguments: exactDivision
             ? [
                 binarySource(
                   division as t.BinaryExpression,
                   operand((division as t.BinaryExpression).left),
                   operand((division as t.BinaryExpression).right),
-                  env,
+                  environment,
                 ),
               ]
             : node.arguments.map(operand),
           exactDivision,
           wholeMath: keepsMath64Node(node),
-          loc,
+          location,
         };
       }
 
@@ -1749,7 +1842,7 @@ function sourceOf(node: t.Node, env: Env): IrSource {
       if (
         node.callee.type === 'Identifier' &&
         node.callee.name === 'Date' &&
-        !env.shadowedClock?.has(node)
+        !environment.shadowedClock?.has(node)
       ) {
         throw dateObjectError();
       }
@@ -1766,14 +1859,17 @@ function sourceOf(node: t.Node, env: Env): IrSource {
  * error either step throws.
  */
 export const lowerSource = withLoc(
-  (node: t.Node, env: Env): {source: IrSource; expr: IrExpr} => {
+  (node: t.Node, environment: Env): {source: IrSource; expression: IrExpr} => {
     // Below a node that is not whole-number math, its operands are typed as usual (see keepsMath64Node).
-    if (env.math64 && !keepsMath64Node(node)) {
-      env = {...env, math64: false};
+    if (environment.math64 && !keepsMath64Node(node)) {
+      environment = {...environment, math64: false};
     }
 
-    const source = sourceOf(node, env);
-    return {source, expr: typeSource(source, env.math64 ?? false)};
+    const source = sourceOf(node, environment);
+    return {
+      source,
+      expression: typeSource(source, environment.math64 ?? false),
+    };
   },
 );
 
@@ -1781,31 +1877,34 @@ export const lowerSource = withLoc(
  * Lowers one JS expression to the IR: its source, typed by the typing pass.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The typed expression.
  */
-export const lowerExprWide = (node: t.Node, env: Env): IrExpr =>
-  lowerSource(node, env).expr;
+export const lowerExprWide = (node: t.Node, environment: Env): IrExpr =>
+  lowerSource(node, environment).expression;
 
 /**
  * What a slot holding an expression's value records about it. A bare local is the Local itself, so a list row keeps
  * its struct (extractProps copies it into a prop).
  *
- * @param expr  The expression.
+ * @param expression  The expression.
  *
  * @returns The slot value.
  */
-export function slotValueOf(expr: IrExpr): SlotValue {
-  if (expr.kind === 'local') {
-    return expr.local;
+export function slotValueOf(expression: IrExpr): SlotValue {
+  if (expression.kind === 'local') {
+    return expression.local;
   }
 
-  const value: SlotValue = {slotKind: slotOf(expr.type)!};
-  if (expr.type.kind === 'bool') {
-    value.isBool = true;
-  } else if (expr.type.kind === 'int64' && expr.type.source !== 'time') {
-    value[expr.type.source === 'number' ? 'lit' : 'wide'] = true;
+  const value: SlotValue = {slotKind: slotOf(expression.type)!};
+  if (expression.type.kind === 'bool') {
+    value.isBoolean = true;
+  } else if (
+    expression.type.kind === 'int64' &&
+    expression.type.source !== 'time'
+  ) {
+    value[expression.type.source === 'number' ? 'isLiteral' : 'wide'] = true;
   }
 
   return value;
@@ -1816,19 +1915,19 @@ export function slotValueOf(expr: IrExpr): SlotValue {
  * reads when it infers slot widths.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The slot value, its source, and the typed expression.
  */
 export function lowerSourcedWide(
   node: t.Node,
-  env: Env,
-): SlotValue & {source: IrSource; expr: IrExpr} {
-  const lowered = lowerSource(node, env);
+  environment: Env,
+): SlotValue & {source: IrSource; expression: IrExpr} {
+  const lowered = lowerSource(node, environment);
   return {
-    ...slotValueOf(lowered.expr),
+    ...slotValueOf(lowered.expression),
     source: lowered.source,
-    expr: lowered.expr,
+    expression: lowered.expression,
   };
 }
 
@@ -1840,13 +1939,13 @@ export function lowerSourcedWide(
  * The result carries its type. A destination that holds text lowers through lowerText instead.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The lowered expression; never 64-bit.
  */
-export function lowerExpr(node: t.Node, env: Env): IrExpr {
-  const expr = lowerExprWide(node, env);
-  if (expr.type.kind !== 'int64') return expr;
+export function lowerExpr(node: t.Node, environment: Env): IrExpr {
+  const expression = lowerExprWide(node, environment);
+  if (expression.type.kind !== 'int64') return expression;
 
   const error = aotError(
     'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
@@ -1899,7 +1998,7 @@ export const jsxChildText = (value: unknown): string =>
  * appends. Each part is literal text, a runtime value, or a boolean printed as a word.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param scope  The constants a fold may read (already filtered by foldScope).
  * @param isOperand  The expression is an operand of `+`, where null / undefined / booleans print as words.
  *
@@ -1907,7 +2006,7 @@ export const jsxChildText = (value: unknown): string =>
  */
 function lowerTextParts(
   node: t.Node,
-  env: Env,
+  environment: Env,
   scope: Scope,
   isOperand = false,
 ): TextParts {
@@ -1921,13 +2020,13 @@ function lowerTextParts(
 
   // A compile-time constant becomes literal text; a value worked out at boot is a runtime value.
   try {
-    const constValue = evalStatic(node, scope, 'strict');
+    const constantValue = evalStatic(node, scope, 'strict');
     return {
-      isString: typeof constValue === 'string',
+      isString: typeof constantValue === 'string',
       parts: [
         {
           kind: 'literal',
-          text: isOperand ? String(constValue) : jsxChildText(constValue),
+          text: isOperand ? String(constantValue) : jsxChildText(constantValue),
         },
       ],
     };
@@ -1937,18 +2036,18 @@ function lowerTextParts(
 
   // A `+` with a string on either side is a concatenation: its parts are both sides' parts in order.
   if (node.type === 'BinaryExpression' && node.operator === '+') {
-    const leftParts = lowerTextParts(node.left, env, scope, true);
-    const rightParts = lowerTextParts(node.right, env, scope, true);
+    const leftParts = lowerTextParts(node.left, environment, scope, true);
+    const rightParts = lowerTextParts(node.right, environment, scope, true);
     if (leftParts.isString || rightParts.isString) {
       return {isString: true, parts: [...leftParts.parts, ...rightParts.parts]};
     }
   }
 
   // A branch or operand that concatenates needs its own format; refuse before lowerExpr's misleading error.
-  const concatenates = (subExpr: t.Node) =>
-    subExpr.type === 'BinaryExpression' &&
-    subExpr.operator === '+' &&
-    lowerTextParts(subExpr, env, scope, true).isString;
+  const concatenates = (subExpression: t.Node) =>
+    subExpression.type === 'BinaryExpression' &&
+    subExpression.operator === '+' &&
+    lowerTextParts(subExpression, environment, scope, true).isString;
   if (
     node.type === 'ConditionalExpression' &&
     (concatenates(node.test) ||
@@ -1977,7 +2076,7 @@ function lowerTextParts(
   }
 
   // Anything else is one runtime value.
-  const value = lowerExprWide(node, env);
+  const value = lowerExprWide(node, environment);
 
   // `&&`/`||` collapse to 0/1 and a ternary to one slot, so text matches JS only when operands agree in kind.
   if (node.type === 'LogicalExpression' && !isBoolean(value.type)) {
@@ -1991,8 +2090,8 @@ function lowerTextParts(
 
   if (
     node.type === 'ConditionalExpression' &&
-    isBoolean(lowerExprWide(node.consequent, env).type) !==
-      isBoolean(lowerExprWide(node.alternate, env).type)
+    isBoolean(lowerExprWide(node.consequent, environment).type) !==
+      isBoolean(lowerExprWide(node.alternate, environment).type)
   ) {
     throw textShapeError(
       node,
@@ -2020,15 +2119,18 @@ function lowerTextParts(
  * <TextInput value>). A string-building `+` chain becomes its parts in order; anything else is one value.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param scope  The constants a fold may read; by default the env's.
  *
  * @returns The text.
  */
 export function lowerText(
   node: t.Node,
-  env: Env,
-  scope: Scope = env.consts ?? {},
+  environment: Env,
+  scope: Scope = environment.constants ?? {},
 ): IrText {
-  return {parts: lowerTextParts(node, env, foldScope(env, scope)).parts};
+  return {
+    parts: lowerTextParts(node, environment, foldScope(environment, scope))
+      .parts,
+  };
 }

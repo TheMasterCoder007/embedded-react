@@ -119,15 +119,15 @@ export class AnimationPlan {
   /** The slot each started composition with waits keeps its last wait's handle in, by owner. */
   readonly owners = new Map<number, Slot>();
   readonly loops = new Map<number, LoopSlots>();
-  readonly anims: ProgramAnim[] = [];
-  readonly interps: ProgramInterp[] = [];
+  readonly animations: ProgramAnim[] = [];
+  readonly interpolations: ProgramInterp[] = [];
   /** The done functions, in function order, by name. */
   readonly doneFunctions = new Map<string, DoneFunction>();
   /** The completions, in function order (callers first), by name. */
   readonly completions = new Map<string, IrCompletion>();
   private readonly descriptors = new Map<object, number>();
   private readonly waits = new Map<number, number>();
-  private readonly interpIndex = new Map<string, number>();
+  private readonly interpolationIndex = new Map<string, number>();
   /** The running-animation table's entries. */
   readonly entries: number = 0;
   private doneBase = 0;
@@ -140,14 +140,14 @@ export class AnimationPlan {
    * @param arena  The arena being planned.
    */
   constructor(app: IrApp, arena: Arena) {
-    const {out} = app;
+    const {output} = app;
     for (const value of app.animations) {
       this.values.set(
         value.slotName,
         arena.slot(ValueType.avalue, floatBits(value.initial)),
       );
     }
-    for (const [, record] of out.animWaits) {
+    for (const [, record] of output.animationWaits) {
       if (record.isStarted) {
         this.owners.set(record.owner, arena.slot(ValueType.anim));
       }
@@ -155,7 +155,7 @@ export class AnimationPlan {
 
     // Each callback, in the order the app declares them; a completion's own, first, is called from the rest.
     const completions: IrCompletion[] = [];
-    for (const callback of out.animCbs) {
+    for (const callback of output.animationCallbacks) {
       if (callback.kind === 'completion') {
         completions.push(callback.completion);
         this.doneFunctions.set(callback.completion.name, {
@@ -278,7 +278,7 @@ export class AnimationPlan {
   leaf(animation: IrAnimation): number {
     let index = this.descriptors.get(animation);
     if (index === undefined) {
-      index = this.anims.push(this.leafRecord(animation)) - 1;
+      index = this.animations.push(this.leafRecord(animation)) - 1;
       this.descriptors.set(animation, index);
     }
     return index;
@@ -295,7 +295,7 @@ export class AnimationPlan {
     let index = this.descriptors.get(fade);
     if (index === undefined) {
       index =
-        this.anims.push({
+        this.animations.push({
           ...leafDefaults(),
           kind: AnimKind.timing,
           easing: ENGINE_VALUES.get(PRESS_FADE_EASING)!,
@@ -318,7 +318,7 @@ export class AnimationPlan {
   wait(delayMs: number): number {
     let index = this.waits.get(delayMs);
     if (index === undefined) {
-      index = this.anims.push({...leafDefaults(), amount: delayMs}) - 1;
+      index = this.animations.push({...leafDefaults(), amount: delayMs}) - 1;
       this.waits.set(delayMs, index);
     }
     return index;
@@ -335,8 +335,8 @@ export class AnimationPlan {
   join(start: IrStartAnimations): number {
     let index = this.descriptors.get(start);
     if (index === undefined) {
-      index = this.anims.length;
-      this.anims.push(
+      index = this.animations.length;
+      this.animations.push(
         {
           ...leafDefaults(),
           kind: AnimKind.parallel,
@@ -365,27 +365,27 @@ export class AnimationPlan {
     }
     const prop = abiProp(field).id;
     const slot = this.value(bind.slotName);
-    const {interp} = bind;
-    if (!interp) {
+    const {interpolation} = bind;
+    if (!interpolation) {
       return {kind: BindingKind.animated, event: prop, target: slot.index};
     }
 
     // Interpolations that are the same are stored once, so list rows that bind one can share a template.
     const record: ProgramInterp = {
       slot: slot.index,
-      flags: interp.colors ? InterpFlag.color : 0,
-      extrapolateLeft: ENGINE_VALUES.get(interp.exLeft)!,
-      extrapolateRight: ENGINE_VALUES.get(interp.exRight)!,
-      input: interp.input.map(floatBits),
-      output: interp.colors
-        ? interp.colors.map(color => color >>> 0)
-        : interp.output.map(floatBits),
+      flags: interpolation.colors ? InterpFlag.color : 0,
+      extrapolateLeft: ENGINE_VALUES.get(interpolation.extrapolateLeft)!,
+      extrapolateRight: ENGINE_VALUES.get(interpolation.extrapolateRight)!,
+      input: interpolation.input.map(floatBits),
+      output: interpolation.colors
+        ? interpolation.colors.map(color => color >>> 0)
+        : interpolation.output.map(floatBits),
     };
     const key = JSON.stringify(record);
-    let index = this.interpIndex.get(key);
+    let index = this.interpolationIndex.get(key);
     if (index === undefined) {
-      index = this.interps.push(record) - 1;
-      this.interpIndex.set(key, index);
+      index = this.interpolations.push(record) - 1;
+      this.interpolationIndex.set(key, index);
     }
     return {kind: BindingKind.interpolated, event: prop, target: index};
   }
@@ -421,7 +421,7 @@ export class AnimationPlan {
         return {
           ...record,
           kind: AnimKind.spring,
-          params: [
+          parameters: [
             floatBits(curve.stiffness),
             floatBits(curve.damping),
             floatBits(curve.mass),
@@ -432,7 +432,7 @@ export class AnimationPlan {
         return {
           ...record,
           kind: AnimKind.decay,
-          params: [
+          parameters: [
             floatBits(curve.velocity),
             floatBits(curve.deceleration),
             0,
@@ -445,8 +445,8 @@ export class AnimationPlan {
           kind: AnimKind.timing,
           easing: ENGINE_VALUES.get(curve.easing)!,
           amount: curve.durationMs,
-          params: curve.bezier
-            ? (curve.bezier.map(floatBits) as ProgramAnim['params'])
+          parameters: curve.bezier
+            ? (curve.bezier.map(floatBits) as ProgramAnim['parameters'])
             : [0, 0, 0, 0],
         };
     }
@@ -473,7 +473,7 @@ const leafDefaults = (): ProgramAnim => ({
   amount: 0,
   delayMs: 0,
   to: 0,
-  params: [0, 0, 0, 0],
+  parameters: [0, 0, 0, 0],
 });
 
 /**
@@ -528,8 +528,8 @@ function start(
   done: number,
   to: Register | null,
 ): Register {
-  const handle = codegen.fn.register('anim');
-  codegen.fn.abx(
+  const handle = codegen.builder.register('anim');
+  codegen.builder.abx(
     'ASTART',
     handle.index,
     descriptor,
@@ -559,8 +559,12 @@ function toValue(
   if (animation.to) {
     return codegen.valueAs(animation.to, 'float');
   }
-  const register = codegen.fn.register('float');
-  codegen.fn.abx('AVGET', register.index, plan.value(animation.handle).index);
+  const register = codegen.builder.register('float');
+  codegen.builder.abx(
+    'AVGET',
+    register.index,
+    plan.value(animation.handle).index,
+  );
   return register;
 }
 
@@ -611,7 +615,7 @@ function startWait(
       plan.done(completion.name),
       null,
     );
-    codegen.fn.abx('SET32', handle.index, plan.owner(owner).index);
+    codegen.builder.abx('SET32', handle.index, plan.owner(owner).index);
   });
 }
 
@@ -629,7 +633,7 @@ function callCompletion(
   finished: Register,
   plan: AnimationPlan,
 ): void {
-  codegen.fn.abx('CALL', finished.index, plan.helper(completion));
+  codegen.builder.abx('CALL', finished.index, plan.helper(completion));
 }
 
 /**
@@ -660,18 +664,18 @@ function callCompletionWith(
  * Lowers an animation statement that starts or stops one.
  *
  * @param codegen  The function's codegen.
- * @param stmt  The statement.
+ * @param statement  The statement.
  * @param plan  The program's animations.
  */
 export function animationStatement(
   codegen: Codegen,
-  stmt: AnimationStmt,
+  statement: AnimationStmt,
   plan: AnimationPlan,
 ): void {
-  const {fn} = codegen;
-  switch (stmt.kind) {
+  const {builder} = codegen;
+  switch (statement.kind) {
     case 'startAnimations': {
-      const {animations, completion, completionJoin} = stmt;
+      const {animations, completion, completionJoin} = statement;
       if (!animations.length) {
         return;
       }
@@ -681,17 +685,21 @@ export function animationStatement(
         codegen.scoped(() => {
           const handle = start(
             codegen,
-            plan.join(stmt),
+            plan.join(statement),
             plan.done(completion.name),
             toValue(codegen, animations[0], plan),
           );
-          fn.abx('SET32', handle.index, plan.owner(completionJoin.owner).index);
+          builder.abx(
+            'SET32',
+            handle.index,
+            plan.owner(completionJoin.owner).index,
+          );
         });
         return;
       }
 
       // The completion (or its wait) goes on the last animation, the only one when there is a completion.
-      const name = stmt.completionWait?.callback ?? completion?.name;
+      const name = statement.completionWait?.callback ?? completion?.name;
       animations.forEach((animation, index) =>
         startAnimation(
           codegen,
@@ -703,49 +711,71 @@ export function animationStatement(
       return;
     }
     case 'completeAfter':
-      if (stmt.owner !== null) {
-        startWait(codegen, stmt.completion, stmt.delayMs, stmt.owner, plan);
+      if (statement.owner !== null) {
+        startWait(
+          codegen,
+          statement.completion,
+          statement.delayMs,
+          statement.owner,
+          plan,
+        );
       } else {
-        callCompletionWith(codegen, stmt.completion, true, plan);
+        callCompletionWith(codegen, statement.completion, true, plan);
       }
       return;
     case 'startChain': {
       // A loop first records the pass and where the value starts, then step 0 starts here.
-      const loop = plan.loops.get(stmt.id);
+      const loop = plan.loops.get(statement.id);
       if (loop?.passes) {
         codegen.scoped(() =>
-          fn.abx('SET32', codegen.load('int', 1).index, loop.passes!.index),
+          builder.abx(
+            'SET32',
+            codegen.load('int', 1).index,
+            loop.passes!.index,
+          ),
         );
       }
       if (loop?.from) {
         codegen.scoped(() => {
-          const from = fn.register('float');
-          fn.abx(
+          const from = builder.register('float');
+          builder.abx(
             'AVGET',
             from.index,
-            plan.value(stmt.loop!.resetHandle!).index,
+            plan.value(statement.loop!.resetHandle!).index,
           );
-          fn.abx('SET32', from.index, loop.from!.index);
+          builder.abx('SET32', from.index, loop.from!.index);
         });
       }
-      startAnimation(codegen, stmt.steps[0], afterStep(stmt, 0, plan), plan);
+      startAnimation(
+        codegen,
+        statement.steps[0],
+        afterStep(statement, 0, plan),
+        plan,
+      );
       return;
     }
     case 'stopAnimations':
       // Each value freezes where it is, which ends its animation as not finished; then the composition's wait.
-      for (const handle of stmt.handles) {
+      for (const handle of statement.handles) {
         codegen.scoped(() => {
-          const value = fn.register('float');
+          const value = builder.register('float');
           const slot = plan.value(handle).index;
-          fn.abx('AVGET', value.index, slot);
-          fn.abx('AVSET', value.index, slot);
+          builder.abx('AVGET', value.index, slot);
+          builder.abx('AVSET', value.index, slot);
         });
       }
-      if (stmt.waitOwner !== null && plan.owners.has(stmt.waitOwner)) {
+      if (
+        statement.waitOwner !== null &&
+        plan.owners.has(statement.waitOwner)
+      ) {
         codegen.scoped(() => {
-          const handle = fn.register('anim');
-          fn.abx('GET32', handle.index, plan.owner(stmt.waitOwner!).index);
-          fn.abc('ASTOP', handle.index);
+          const handle = builder.register('anim');
+          builder.abx(
+            'GET32',
+            handle.index,
+            plan.owner(statement.waitOwner!).index,
+          );
+          builder.abc('ASTOP', handle.index);
         });
       }
   }
@@ -777,28 +807,31 @@ export function startPressFade(
  */
 export function doneFunctions(
   plan: AnimationPlan,
-  codegenFor: (fn: FunctionBuilder) => Codegen,
+  codegenFor: (builder: FunctionBuilder) => Codegen,
 ): ProgramFunction[] {
   return [...plan.doneFunctions].map(([name, done]) => {
-    const fn = new FunctionBuilder(FunctionKind.animDone, `animation ${name}`);
-    const codegen = codegenFor(fn);
-    const finished = fn.register('bool');
-    fn.abc('EVT', finished.index, EventField.finished);
+    const builder = new FunctionBuilder(
+      FunctionKind.animDone,
+      `animation ${name}`,
+    );
+    const codegen = codegenFor(builder);
+    const finished = builder.register('bool');
+    builder.abc('EVT', finished.index, EventField.finished);
     if (done.kind === 'completion') {
       callCompletion(codegen, done.completion, finished, plan);
-      return fn.finish();
+      return builder.finish();
     }
 
     const completion =
       done.kind === 'wait' ? done.completion : done.chain.completion;
-    const go = fn.label();
-    const end = fn.label();
-    fn.branch('JT', go, finished);
+    const afterCompletion = builder.label();
+    const end = builder.label();
+    builder.branch('JT', afterCompletion, finished);
     if (completion) {
       callCompletion(codegen, completion, finished, plan);
     }
-    fn.branch('JMP', end);
-    fn.place(go);
+    builder.branch('JMP', end);
+    builder.place(afterCompletion);
 
     if (done.kind === 'wait') {
       startWait(codegen, done.completion, done.delayMs, done.owner, plan);
@@ -812,8 +845,8 @@ export function doneFunctions(
     } else {
       repeat(codegen, done.chain, end, plan);
     }
-    fn.place(end);
-    return fn.finish();
+    builder.place(end);
+    return builder.finish();
   });
 }
 
@@ -831,23 +864,23 @@ function repeat(
   end: Label,
   plan: AnimationPlan,
 ): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   const loop = chain.loop!;
   const slots = plan.loops.get(chain.id)!;
   if (slots.passes) {
     const passes = slots.passes;
     codegen.scoped(() => {
-      const count = fn.register('int');
-      const more = fn.register('bool');
-      const next = fn.label();
-      fn.abx('GET32', count.index, passes.index);
-      fn.abc(
+      const count = builder.register('int');
+      const more = builder.register('bool');
+      const next = builder.label();
+      builder.abx('GET32', count.index, passes.index);
+      builder.abc(
         'LT',
         more.index,
         count.index,
         codegen.load('int', loop.iterations).index,
       );
-      fn.branch('JT', next, more);
+      builder.branch('JT', next, more);
       if (chain.completion) {
         if (loop.finalWait) {
           startWait(
@@ -861,18 +894,23 @@ function repeat(
           callCompletionWith(codegen, chain.completion, true, plan);
         }
       }
-      fn.branch('JMP', end);
-      fn.place(next);
-      fn.abc('ADD', count.index, count.index, codegen.load('int', 1).index);
-      fn.abx('SET32', count.index, passes.index);
+      builder.branch('JMP', end);
+      builder.place(next);
+      builder.abc(
+        'ADD',
+        count.index,
+        count.index,
+        codegen.load('int', 1).index,
+      );
+      builder.abx('SET32', count.index, passes.index);
     });
   }
   if (slots.from) {
     const from = slots.from;
     codegen.scoped(() => {
-      const value = fn.register('float');
-      fn.abx('GET32', value.index, from.index);
-      fn.abx('AVSET', value.index, plan.value(loop.resetHandle!).index);
+      const value = builder.register('float');
+      builder.abx('GET32', value.index, from.index);
+      builder.abx('AVSET', value.index, plan.value(loop.resetHandle!).index);
     });
   }
   startAnimation(codegen, loop.restart, afterStep(chain, 0, plan), plan);

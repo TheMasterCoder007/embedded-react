@@ -133,23 +133,23 @@ export function aotError(message: string, hint?: string): AotError {
 }
 
 /**
- * Pins an AOT error that has no location yet to `loc`, as a located emitter does.
+ * Pins an AOT error that has no location yet to `location`, as a located emitter does.
  *
  * @param error  The thrown value.
- * @param loc  Where the construct being lowered is, if it is anywhere.
+ * @param location  Where the construct being lowered is, if it is anywhere.
  */
 export function locateError(
   error: unknown,
-  loc: SourcePosition | undefined,
+  location: SourcePosition | undefined,
 ): void {
   if (
     error &&
     typeof (error as AotError).message === 'string' &&
     (error as AotError).message.startsWith('AOT:') &&
     !(error as AotError).aotLoc &&
-    loc
+    location
   ) {
-    (error as AotError).aotLoc = loc;
+    (error as AotError).aotLoc = location;
   }
 }
 
@@ -159,7 +159,7 @@ export function locateError(
  * handler emitters are all wrapped, and compilePackage formats the result with formatAotError. While it runs,
  * currentLoc() reports the same location, for a check recorded now and run later.
  *
- * @param fn  The emit function; its first parameter is the node it lowers.
+ * @param lower  The emit function; its first parameter is the node it lowers.
  *
  * @returns The same function, with its AOT errors located.
  */
@@ -168,12 +168,12 @@ export function withLoc<
   RestArgs extends unknown[],
   Result,
 >(
-  fn: (node: NodeArg, ...rest: RestArgs) => Result,
+  lower: (node: NodeArg, ...rest: RestArgs) => Result,
 ): (node: NodeArg, ...rest: RestArgs) => Result {
   return function (node, ...rest) {
     loweringAt.push(node?.loc?.start);
     try {
-      return fn(node, ...rest);
+      return lower(node, ...rest);
     } catch (error) {
       locateError(error, node?.loc?.start); // babel loc: { line (1-based), column (0-based) }
       throw error;
@@ -185,38 +185,38 @@ export function withLoc<
 
 /**
  * Rebuilds an AOT error with `file:line:col`, a code-frame, any hint, and the screen size this build folded
- * its layout at (from the resolved `opts`), all folded into the message, for compilePackage to throw.
+ * its layout at (from the resolved `options`), all folded into the message, for compilePackage to throw.
  *
  * @param error  The error compilePackage caught.
- * @param src  The app's source, for the code-frame.
+ * @param source  The app's source, for the code-frame.
  * @param filename  The source's path, as the message should show it.
- * @param opts  The compile's resolved options, for the screen footer.
+ * @param options  The compile's resolved options, for the screen footer.
  *
  * @returns The located error; `error` itself when it has no location.
  */
 export function formatAotError(
   error: AotError,
-  src: string,
+  source: string,
   filename: string,
-  opts: ResolvedOptions,
+  options: ResolvedOptions,
 ): AotError {
   if (!error || !error.aotLoc) return error; // nothing to locate — leave the bare message
 
   // Render the code-frame around the error's location, and the hint when there is one.
   const {line, column} = error.aotLoc;
-  const frameLoc = {start: {line, column: column + 1}}; // code-frame columns are 1-based
+  const frameLocation = {start: {line, column: column + 1}}; // code-frame columns are 1-based
   let codeFrame = '';
   try {
-    codeFrame = codeFrameColumns(src, frameLoc, {highlightCode: false});
+    codeFrame = codeFrameColumns(source, frameLocation, {highlightCode: false});
   } catch {
     /* code-frame is best-effort */
   }
 
   // Name the screen size the layout was folded at: it picks which branch of a responsive app the error came from.
   const hint = error.aotHint ? `\n\nhint: ${error.aotHint}` : '';
-  const size = `${opts.screen.width}×${opts.screen.height}`;
+  const size = `${options.screen.width}×${options.screen.height}`;
   const screen =
-    opts.screenFrom === 'search'
+    options.screenFrom === 'search'
       ? `\n\nscreen: this is the layout a ${size} panel picks. Every layout has to compile; name the panels with ` +
         `--screen to drop the others.`
       : `\n\nscreen: ${size}.`;

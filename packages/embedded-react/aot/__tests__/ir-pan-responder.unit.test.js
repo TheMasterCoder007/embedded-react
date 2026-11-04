@@ -30,7 +30,7 @@ const nState = {
   kind: 'scalar',
   name: 'n',
   slotKind: 'int',
-  isBool: false,
+  isBoolean: false,
   slotName: 'n',
 };
 const state = {
@@ -41,7 +41,7 @@ const state = {
 const env = {
   state: state.byName,
   locals: new Map(),
-  consts: {},
+  constants: {},
   refs: new Map(),
   math64: false,
   caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},

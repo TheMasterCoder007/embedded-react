@@ -29,14 +29,14 @@ const scalar = (name, slotKind, isBool = false) => ({
   kind: 'scalar',
   name,
   slotKind,
-  isBool,
+  isBoolean: isBool,
 });
 
 /** An expression environment with these state slots and nothing else in reach. */
 const envWith = (...slots) => ({
   state: new Map(slots.map(slot => [slot.name, slot])),
   locals: new Map(),
-  consts: {},
+  constants: {},
   refs: new Map(),
   math64: false,
 });
@@ -82,10 +82,13 @@ describe('expressions: the source and the typing pass', () => {
     lowerSource(parseExpression(source), env);
 
   it('records what JS asked for, and types it apart', () => {
-    const {source, expr} = both('count + 1', envWith(scalar('count', 'int')));
+    const {source, expression: expr} = both(
+      'count + 1',
+      envWith(scalar('count', 'int')),
+    );
     expect(source).toMatchObject({
       kind: 'binary',
-      op: '+',
+      operator: '+',
       left: {kind: 'state'},
       right: {kind: 'number', value: 1},
       divisor: {constant: 1},
@@ -110,15 +113,15 @@ describe('expressions: the source and the typing pass', () => {
 
   it('keeps a division under Math.floor apart, so whole numbers divide exactly', () => {
     const env = envWith(scalar('a', 'int'), scalar('ms', 'i64'));
-    const {source, expr} = both('Math.floor(a / 3)', env);
+    const {source, expression: expr} = both('Math.floor(a / 3)', env);
     expect(source).toMatchObject({
       kind: 'math',
-      fn: 'floor',
+      mathFunction: 'floor',
       exactDivision: true,
-      args: [{kind: 'binary', op: '/'}],
+      callArguments: [{kind: 'binary', operator: '/'}],
     });
     expect(expr).toMatchObject({kind: 'helper', helper: 'floordiv', bits: 32});
-    expect(both('Math.floor(ms / 1000)', env).expr).toMatchObject({
+    expect(both('Math.floor(ms / 1000)', env).expression).toMatchObject({
       helper: 'floordiv',
       bits: 64,
       type: {kind: 'int64', source: 'time'},

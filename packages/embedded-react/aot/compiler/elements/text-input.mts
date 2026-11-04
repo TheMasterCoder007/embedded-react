@@ -67,8 +67,8 @@ const INPUT_EVENTS: Record<string, string> = {
  *
  * @param element  The <TextInput>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The node's variable.
@@ -76,43 +76,43 @@ const INPUT_EVENTS: Record<string, string> = {
 export function emitTextInput(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrNode {
   // get node id
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     elementSpec('TextInput')!,
   );
 
   // process element attributes
   let valueNode: t.Node | null = null;
-  let onChangeFn: t.Node | null = null;
+  let onChangeFunction: t.Node | null = null;
   let placeholder: string | null = null;
   const events: t.JSXAttribute[] = [];
-  for (const attr of element.openingElement.attributes) {
+  for (const attribute of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute') {
+    if (attribute.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <TextInput> are not supported');
     }
 
     // skip non-props
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'style' || name === 'ref' || name === 'key') continue;
 
     // process props
-    const node = attrExpr(attr);
+    const node = attrExpr(attribute);
     if (name === 'value' || name === 'defaultValue') {
       valueNode = node;
     } else if (name === 'onChangeText') {
-      onChangeFn = node;
+      onChangeFunction = node;
     } else if (name === 'placeholder') {
       placeholder = String(evalStatic(node, scope));
       checkEngineString(
@@ -138,11 +138,11 @@ export function emitTextInput(
           value: evalStatic(node, scope) ? 1 : 0,
         });
       } catch {
-        dynAssigns.push({
+        dynamicAssigns.push({
           field,
           value: {
             kind: 'flag',
-            test: lowerExpr(node, env),
+            test: lowerExpr(node, environment),
             truthiness: 'value',
             negate: false,
             whenTrue: 1,
@@ -150,13 +150,13 @@ export function emitTextInput(
         });
       }
     } else if (Object.hasOwn(INPUT_EVENTS, name)) {
-      events.push(attr);
+      events.push(attribute);
     } else {
       throw aotError(`AOT: <TextInput> prop "${name}" is not supported`);
     }
   }
 
-  const text = valueNode ? lowerText(valueNode, env, scope) : null;
+  const text = valueNode ? lowerText(valueNode, environment, scope) : null;
   if (text) {
     checkEngineString(constantText(text), 'ER_TEXT_MAX', 'a <TextInput> value');
   }
@@ -165,10 +165,10 @@ export function emitTextInput(
   // state-driven value re-synced each update.
   const node: IrNode = {
     id: nodeId,
-    loc: currentLoc(),
+    location: currentLoc(),
     type: 'ER_NODE_TEXT_INPUT',
     constantProps: staticAssigns,
-    stateProps: dynAssigns,
+    stateProps: dynamicAssigns,
     placeholder,
     text,
     image: null,
@@ -178,22 +178,22 @@ export function emitTextInput(
   };
 
   // Compile onChangeText into an ER_EVENT_CHANGE_TEXT handler that receives the edited text.
-  if (onChangeFn) {
-    if (!isFn(onChangeFn)) {
+  if (onChangeFunction) {
+    if (!isFn(onChangeFunction)) {
       throw aotError(
         'AOT: onChangeText must be an inline function',
         'onChangeText={(t) => setText(t)}',
       );
     }
-    const handlerName = `handler_${out.handlers.length}`;
-    out.handlers.push({
+    const handlerName = `handler_${output.handlers.length}`;
+    output.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerValueHandler(
-        onChangeFn,
-        env,
+        onChangeFunction,
+        environment,
         state,
-        out,
+        output,
         'string',
         false,
         {kind: 'event', field: 'changed_text', type: STRING},
@@ -207,15 +207,15 @@ export function emitTextInput(
   }
 
   // Return, focus and blur take no value: plain handlers, wired in source order.
-  for (const attr of events) {
+  for (const attribute of events) {
     node.wiring.push({
       kind: 'event',
-      event: INPUT_EVENTS[attr.name.name as string],
-      handler: lowerEventHandler(attr, out, env, state),
+      event: INPUT_EVENTS[attribute.name.name as string],
+      handler: lowerEventHandler(attribute, output, environment, state),
     });
   }
 
-  for (const slot of lowerRefBinds(element.openingElement, env)) {
+  for (const slot of lowerRefBinds(element.openingElement, environment)) {
     node.wiring.push({kind: 'ref', slot});
   }
 

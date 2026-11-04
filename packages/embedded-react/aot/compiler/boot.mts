@@ -35,12 +35,12 @@ import type {Env, Scope} from './types.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** Lowers a JS expression to the IR (expressions.mts's lowerExpr, passed in to keep the imports one-way). */
-type LowerExpr = (node: t.Node, env: Env) => IrExpr;
+type LowerExpr = (node: t.Node, environment: Env) => IrExpr;
 
 /** What one compile has found out about its boot values. */
 interface BootContext {
   /** The app's environment, which a slot's expression lowers against, once the app has one. */
-  env: Env | null;
+  environment: Env | null;
   lower: LowerExpr | null;
   /** Every slot, each after the slots its expression reads. */
   slots: IrBootSlot[];
@@ -51,7 +51,7 @@ interface BootContext {
   /** The boot value each expression read as a whole stands for, by the scope it was read in. */
   wholes: Map<t.Node, Map<Scope, BootValue>>;
   /** The source text, for naming an expression. */
-  src: string;
+  source: string;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -63,6 +63,10 @@ const SLOT_KINDS = new Set(['bool', 'int', 'float', 'string']);
 
 /** The current compile's boot values, or null outside a compile. */
 let context: BootContext | null = null;
+
+/** The longest source text an error quotes, and what ends a longer one. */
+const MAX_QUOTED_LENGTH = 80;
+const ELLIPSIS = '...';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -238,12 +242,12 @@ export const screenBinding = (screen: {
 /**
  * Starts recording a compile's boot values.
  *
- * @param src  The source text.
+ * @param source  The source text.
  */
-export function beginBoot(src = ''): void {
+export function beginBoot(source = ''): void {
   context = {
-    src,
-    env: null,
+    source,
+    environment: null,
     lower: null,
     slots: [],
     assumed: new Set(),
@@ -255,12 +259,12 @@ export function beginBoot(src = ''): void {
 /**
  * Gives the compile's boot values the environment and lowering their slots are worked out with.
  *
- * @param env  The app's environment.
+ * @param environment  The app's environment.
  * @param lower  The expression lowering.
  */
-export function setBootLowering(env: Env, lower: LowerExpr): void {
+export function setBootLowering(environment: Env, lower: LowerExpr): void {
   if (context) {
-    context.env = env;
+    context.environment = environment;
     context.lower = lower;
   }
 }
@@ -314,9 +318,11 @@ export function endBoot(): IrBoot {
  * @returns The text, or null outside a compile.
  */
 export function bootSourceText(node: t.Node): string | null {
-  if (!context?.src || node.start == null || node.end == null) return null;
-  const text = context.src.slice(node.start, node.end).replace(/\s+/g, ' ');
-  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+  if (!context?.source || node.start == null || node.end == null) return null;
+  const text = context.source.slice(node.start, node.end).replace(/\s+/g, ' ');
+  return text.length > MAX_QUOTED_LENGTH
+    ? `${text.slice(0, MAX_QUOTED_LENGTH - ELLIPSIS.length)}${ELLIPSIS}`
+    : text;
 }
 
 /**
@@ -407,29 +413,29 @@ function sameExpr(first: unknown, second: unknown): boolean {
  * The environment a slot's expression lowers in: the app's, with no runtime names, and `scope` as its
  * constants.
  *
- * @param env  The app's environment.
+ * @param environment  The app's environment.
  * @param scope  The names the expression reads.
  *
  * @returns The environment.
  */
-const bootEnv = (env: Env, scope: Scope): Env => ({
-  ...env,
+const bootEnv = (environment: Env, scope: Scope): Env => ({
+  ...environment,
   state: new Map(),
   locals: new Map(),
-  consts: scope,
+  constants: scope,
   animations: new Map(),
   refs: new Map(),
   pans: new Map(),
   callbacks: new Map(),
   helpers: new Map(),
   children: null,
-  fnProps: undefined,
-  cbPrefix: undefined,
+  functionProps: undefined,
+  callbackPrefix: undefined,
   event: null,
   gesture: null,
   pan: null,
   math64: false,
-  animLocals: undefined,
+  animationLocals: undefined,
 });
 
 /**
@@ -441,8 +447,8 @@ const bootEnv = (env: Env, scope: Scope): Env => ({
  * @returns The environment, or null when boot cannot work the value out.
  */
 export function bootEnvOf(value: BootValue): Env | null {
-  if (!context?.env || !value.lowerable || !value.node) return null;
-  return bootEnv(context.env, value.scope);
+  if (!context?.environment || !value.lowerable || !value.node) return null;
+  return bootEnv(context.environment, value.scope);
 }
 
 /**
@@ -455,7 +461,7 @@ export function bootEnvOf(value: BootValue): Env | null {
  */
 export function bootSlotOf(value: BootValue): IrBootSlot | null {
   if (value.slot !== undefined) return value.slot;
-  if (!context?.env || !context.lower) return null;
+  if (!context?.environment || !context.lower) return null;
 
   // Null first, so an expression that reads itself has no slot.
   value.slot = null;
@@ -464,17 +470,17 @@ export function bootSlotOf(value: BootValue): IrBootSlot | null {
     slot = {
       field: slotField(`screen_${value.dimension}`),
       type: INT,
-      init: {kind: 'screen', dimension: value.dimension},
+      initializer: {kind: 'screen', dimension: value.dimension},
     };
   } else {
     if (!value.lowerable || !value.node) return null;
-    const {env, lower} = context;
-    let expr: IrExpr;
+    const {environment, lower} = context;
+    let expression: IrExpr;
     const {lowering} = context;
     lowering.add(value.node);
     try {
-      expr = attemptLowering(() =>
-        lower(value.node!, bootEnv(env, value.scope)),
+      expression = attemptLowering(() =>
+        lower(value.node!, bootEnv(environment, value.scope)),
       );
     } catch {
       return null;
@@ -482,15 +488,17 @@ export function bootSlotOf(value: BootValue): IrBootSlot | null {
       lowering.delete(value.node);
     }
 
-    if (!SLOT_KINDS.has(expr.type.kind)) return null;
+    if (!SLOT_KINDS.has(expression.type.kind)) return null;
     // A value that only reads another slot shares it, as does one worked out the same way as an earlier slot.
-    if (expr.kind === 'boot') {
-      value.slot = expr.slot;
-      return expr.slot;
+    if (expression.kind === 'boot') {
+      value.slot = expression.slot;
+      return expression.slot;
     }
 
     const sameSlot = context.slots.find(
-      slot => slot.init.kind === 'expr' && sameExpr(slot.init.expr, expr),
+      slot =>
+        slot.initializer.kind === 'expr' &&
+        sameExpr(slot.initializer.expression, expression),
     );
     if (sameSlot) {
       value.slot = sameSlot;
@@ -499,8 +507,8 @@ export function bootSlotOf(value: BootValue): IrBootSlot | null {
 
     slot = {
       field: slotField(value.name ?? 'value'),
-      type: expr.type,
-      init: {kind: 'expr', expr},
+      type: expression.type,
+      initializer: {kind: 'expr', expression},
     };
   }
 

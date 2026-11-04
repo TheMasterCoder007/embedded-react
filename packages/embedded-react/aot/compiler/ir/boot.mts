@@ -30,7 +30,8 @@ export type ScreenDimension = 'width' | 'height';
 
 /** What a boot slot is set from: a panel dimension, or an expression over earlier slots and constants. */
 export type IrBootInit =
-  {kind: 'screen'; dimension: ScreenDimension} | {kind: 'expr'; expr: IrExpr};
+  | {kind: 'screen'; dimension: ScreenDimension}
+  | {kind: 'expr'; expression: IrExpr};
 
 /** A value worked out once at boot, from the panel size. */
 export interface IrBootSlot {
@@ -38,7 +39,7 @@ export interface IrBootSlot {
   field: string;
   /** A bool, an int, a float, or a string. */
   type: IrType;
-  init: IrBootInit;
+  initializer: IrBootInit;
 }
 
 /**

@@ -112,11 +112,11 @@ function lowerKey(
  *
  * @returns The config.
  */
-const lowerConfig = withLoc((configArg: t.Node): IrKeyboard => {
+const lowerConfig = withLoc((configArgument: t.Node): IrKeyboard => {
   // Fold the config object at compile time.
   let config;
   try {
-    config = evalStatic(configArg, {}) as
+    config = evalStatic(configArgument, {}) as
       Record<string, unknown> | null | undefined;
   } catch {
     throw aotError(
@@ -207,7 +207,7 @@ const lowerConfig = withLoc((configArg: t.Node): IrKeyboard => {
  */
 export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
   // Find the first top-level setKeyboardConfig(...) call; without one, the built-in keyboard stays as is.
-  let configArg: t.Node | null = null;
+  let configArgument: t.Node | null = null;
   for (const statement of program.body) {
     if (
       statement.type === 'ExpressionStatement' &&
@@ -215,10 +215,10 @@ export function lowerKeyboardConfig(program: t.Program): IrKeyboard | null {
       statement.expression.callee.type === 'Identifier' &&
       statement.expression.callee.name === 'setKeyboardConfig'
     ) {
-      configArg = statement.expression.arguments[0];
+      configArgument = statement.expression.arguments[0];
       break;
     }
   }
 
-  return configArg ? lowerConfig(configArg) : null;
+  return configArgument ? lowerConfig(configArgument) : null;
 }

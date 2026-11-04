@@ -124,9 +124,11 @@ export const isFn = (node: t.Node | null | undefined): node is FunctionNode =>
  * @returns The App function.
  */
 export function findComponent(program: t.Program): FunctionNode {
-  for (const stmt of program.body) {
+  for (const statement of program.body) {
     const declaration =
-      stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+      statement.type === 'ExportNamedDeclaration'
+        ? statement.declaration
+        : statement;
 
     if (!declaration) continue;
 
@@ -138,9 +140,12 @@ export function findComponent(program: t.Program): FunctionNode {
     }
 
     if (declaration.type === 'VariableDeclaration') {
-      for (const decl of declaration.declarations) {
-        if ((decl.id as t.Identifier)?.name === 'App' && isFn(decl.init)) {
-          return decl.init;
+      for (const declarator of declaration.declarations) {
+        if (
+          (declarator.id as t.Identifier)?.name === 'App' &&
+          isFn(declarator.init)
+        ) {
+          return declarator.init;
         }
       }
     }
@@ -182,10 +187,10 @@ export function declaredNames(body: t.Statement[]): string[] {
   };
 
   // Collect identifiers from each top-level variable declaration, including destructured bindings.
-  for (const stmt of body) {
-    if (stmt.type === 'VariableDeclaration') {
-      for (const decl of stmt.declarations) {
-        walk(decl.id);
+  for (const statement of body) {
+    if (statement.type === 'VariableDeclaration') {
+      for (const declarator of statement.declarations) {
+        walk(declarator.id);
       }
     }
   }
@@ -225,26 +230,28 @@ export function moduleScope(
   const scope: Scope = {screen: screenBinding(screen), ...seed};
 
   // Fold module variables in order so later ones see earlier ones; skip functions, destructuring and non-folds.
-  for (const stmt of program.body) {
+  for (const statement of program.body) {
     const declaration =
-      stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+      statement.type === 'ExportNamedDeclaration'
+        ? statement.declaration
+        : statement;
     if (declaration?.type !== 'VariableDeclaration') continue;
-    for (const decl of declaration.declarations) {
+    for (const declarator of declaration.declarations) {
       if (
-        !decl.id ||
-        decl.id.type !== 'Identifier' ||
-        !decl.init ||
-        isFn(decl.init)
+        !declarator.id ||
+        declarator.id.type !== 'Identifier' ||
+        !declarator.init ||
+        isFn(declarator.init)
       ) {
         continue;
       }
       try {
         setBinding(
           scope,
-          decl.id.name,
+          declarator.id.name,
           bindConst(
-            decl.id.name,
-            evalStatic(decl.init, withUndefined(scope), 'boot'),
+            declarator.id.name,
+            evalStatic(declarator.init, withUndefined(scope), 'boot'),
           ),
         );
       } catch {
@@ -309,14 +316,14 @@ function inferItemStruct(items: unknown, name: string): ItemStruct {
  * @param items  The list's initial rows, or null for a scalar.
  * @param strings  The initial strings it starts with, as `[what, text]` pairs.
  * @param caps  The compile's caps.
- * @param initArg  The initial value, for the error's location.
+ * @param initialArgument  The initial value, for the error's location.
  */
 function checkInitialFits(
   stateName: string,
   items: unknown[] | null,
   strings: [string, string][],
   caps: Caps,
-  initArg: t.Node | undefined,
+  initialArgument: t.Node | undefined,
 ): void {
   let error: AotError | null = null;
   if (items && items.length > caps.listCap) {
@@ -340,8 +347,8 @@ function checkInitialFits(
   }
 
   if (error) {
-    if (initArg?.loc) {
-      error.aotLoc = initArg.loc.start;
+    if (initialArgument?.loc) {
+      error.aotLoc = initialArgument.loc.start;
     }
     throw error;
   }
@@ -351,15 +358,15 @@ function checkInitialFits(
  * A state's initial value, when it is a number or a boolean derived from `screen`. A string stays folded: a closed
  * set of strings is an interned enum, and there are only as many layouts as strings.
  *
- * @param initArg  The initial value.
+ * @param initialArgument  The initial value.
  * @param scope  Compile-time constants it folds against.
  *
  * @returns The boot value, or null.
  */
-function bootNumberOf(initArg: t.Node, scope: Scope): BootValue | null {
+function bootNumberOf(initialArgument: t.Node, scope: Scope): BootValue | null {
   let value: unknown;
   try {
-    value = evalStatic(initArg, scope, 'boot');
+    value = evalStatic(initialArgument, scope, 'boot');
   } catch {
     return null;
   }
@@ -382,10 +389,10 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
     const slot = bootSlotOf(state.bootValue);
     if (slot?.type.kind === 'float') {
       state.slotKind = 'float';
-      state.isBool = false;
+      state.isBoolean = false;
     } else if (slot?.type.kind === 'int' || slot?.type.kind === 'bool') {
       state.slotKind = state.widened ? 'i64' : 'int';
-      state.isBool = slot.type.kind === 'bool';
+      state.isBoolean = slot.type.kind === 'bool';
     }
 
     if (slot) {
@@ -404,7 +411,7 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
  * (`<prefix>count`). prefix='' (the App) keeps the storage names exactly the JS names.
  * `caps` are the compiler's resolved caps (see resolveOptions); a list state takes its capacity from it.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
  * @param caps  The compile's caps.
  * @param prefix  The storage prefix: none for the App, `c<n>_` for an inlined instance.
@@ -413,7 +420,7 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
  * @returns The component's state table.
  */
 export function collectState(
-  fnBody: t.BlockStatement,
+  functionBody: t.BlockStatement,
   scope: Scope,
   caps: Caps,
   prefix = '',
@@ -424,47 +431,50 @@ export function collectState(
   const bySetter = new Map<string, StateRecord>();
 
   // Scan the body's top-level declarations for useState and useHostValue calls.
-  for (const stmt of fnBody.body) {
-    if (stmt.type !== 'VariableDeclaration') continue;
+  for (const statement of functionBody.body) {
+    if (statement.type !== 'VariableDeclaration') continue;
 
     // Inspect each declaration in the statement so multiple hook bindings in one `const` are collected independently.
-    for (const decl of stmt.declarations) {
+    for (const declarator of statement.declarations) {
       // Only hook-style call declarations can define collected state; plain variables and other initializers are skipped.
-      const init = decl.init;
-      if (init?.type !== 'CallExpression') continue;
+      const initializer = declarator.init;
+      if (initializer?.type !== 'CallExpression') continue;
 
       // useHostValue is a host-fed scalar: a state slot like useState, written only by the host through its input.
-      const isHost = (init.callee as t.Identifier).name === 'useHostValue';
-      if ((init.callee as t.Identifier).name !== 'useState' && !isHost) {
+      const isHost =
+        (initializer.callee as t.Identifier).name === 'useHostValue';
+      if ((initializer.callee as t.Identifier).name !== 'useState' && !isHost) {
         continue;
       }
 
       // Accept useHostValue(name) as a direct scalar binding, while useState must keep the usual [value, setter] tuple pattern.
       if (
-        isHost ? decl.id.type !== 'Identifier' : decl.id.type !== 'ArrayPattern'
+        isHost
+          ? declarator.id.type !== 'Identifier'
+          : declarator.id.type !== 'ArrayPattern'
       ) {
         continue;
       }
 
       // Derive the read name and optional setter from the binding shape: host values bind directly, while useState binds [value, setter].
       const name = isHost
-        ? (decl.id as t.Identifier).name
-        : ((decl.id as t.ArrayPattern).elements[0] as t.Identifier | null)
+        ? (declarator.id as t.Identifier).name
+        : ((declarator.id as t.ArrayPattern).elements[0] as t.Identifier | null)
             ?.name;
       const setter = isHost
         ? undefined
-        : ((decl.id as t.ArrayPattern).elements[1] as t.Identifier | null)
+        : ((declarator.id as t.ArrayPattern).elements[1] as t.Identifier | null)
             ?.name;
       if (!name) continue;
 
       // Build either a list-state record from an array initializer or a scalar record from the folded initial value.
       const slotName = prefix + name; // storage name (== name for the App; instance-unique for a child)
-      const initArg = init.arguments[0];
+      const initialArgument = initializer.arguments[0];
       let record: StateRecord;
-      if (!isHost && initArg?.type === 'ArrayExpression') {
+      if (!isHost && initialArgument?.type === 'ArrayExpression') {
         // List state → a fixed-capacity pool of rows + a count.
         const items = evalStaticOrThrow(
-          initArg,
+          initialArgument,
           scope,
           `AOT: the initial value of list state "${name}" must be a compile-time constant array`,
           'useState([...]) initial must be a literal array of objects/numbers/strings — no ' +
@@ -476,8 +486,8 @@ export function collectState(
         try {
           struct = inferItemStruct(items, name);
         } catch (error) {
-          if (initArg.loc && !(error as AotError).aotLoc) {
-            (error as AotError).aotLoc = initArg.loc.start; // collectState isn't withLoc-wrapped
+          if (initialArgument.loc && !(error as AotError).aotLoc) {
+            (error as AotError).aotLoc = initialArgument.loc.start; // collectState isn't withLoc-wrapped
           }
           throw error;
         }
@@ -493,7 +503,7 @@ export function collectState(
               ]),
           ),
           caps,
-          initArg,
+          initialArgument,
         );
         record = {
           name,
@@ -502,18 +512,20 @@ export function collectState(
           kind: 'list',
           struct,
           items,
-          cap: caps.listCap,
+          capacity: caps.listCap,
         };
       } else {
         // Scalar state → one slot. Fold the initial value; no argument starts it at 0. A number derived
         // from `screen` is worked out at boot (see settleBootInitials), so it doesn't take a layout per value.
         const bootValue =
-          !isHost && initArg ? bootNumberOf(initArg, scope) : null;
-        const initValue = bootValue
+          !isHost && initialArgument
+            ? bootNumberOf(initialArgument, scope)
+            : null;
+        const initialValue = bootValue
           ? buildValueOf(bootValue)
-          : initArg
+          : initialArgument
             ? evalStaticOrThrow(
-                initArg,
+                initialArgument,
                 scope,
                 `AOT: the initial value of state "${name}" must be a compile-time constant`,
                 'useState(x) initial must be a literal or a constant expression (number, string, ' +
@@ -522,10 +534,10 @@ export function collectState(
             : 0;
 
         // A host value must be a finite number; check it directly, since slotKindOfValue maps non-numbers to int.
-        if (isHost && !Number.isFinite(initValue)) {
+        if (isHost && !Number.isFinite(initialValue)) {
           throw aotError(
             `AOT: useHostValue("${name}") must be a number — its initial value evaluated to ` +
-              `${JSON.stringify(initValue)}`,
+              `${JSON.stringify(initialValue)}`,
             'useHostValue(0) / useHostValue(0.0) — the host feeds an int or float; booleans, ' +
               'strings, and objects are not supported.',
           );
@@ -533,43 +545,44 @@ export function collectState(
 
         // Refuse undefined, null and non-finite initials here; they would fold into nonsense with no location.
         if (
-          initValue === undefined ||
-          initValue === null ||
-          (typeof initValue === 'number' && !Number.isFinite(initValue))
+          initialValue === undefined ||
+          initialValue === null ||
+          (typeof initialValue === 'number' && !Number.isFinite(initialValue))
         ) {
           const error = aotError(
-            `AOT: the initial value of state "${name}" is ${initValue === undefined ? 'undefined' : String(initValue)}`,
+            `AOT: the initial value of state "${name}" is ${initialValue === undefined ? 'undefined' : String(initialValue)}`,
             "give it a concrete starting value: useState(0), useState(''), useState(false).",
           );
-          if (initArg?.loc) {
-            error.aotLoc = initArg.loc.start;
+          if (initialArgument?.loc) {
+            error.aotLoc = initialArgument.loc.start;
           }
           throw error;
         }
 
         // Pick the slot's kind from the initial value.
-        let slotKind: SlotKind = slotKindOfValue(initValue);
+        let slotKind: SlotKind = slotKindOfValue(initialValue);
         // Flag booleans: slotKindOfValue makes them int, but text lowering must render false differently from 0.
-        const isBool = typeof initValue === 'boolean';
+        const isBoolean = typeof initialValue === 'boolean';
         // A literal written like 70.0 forces a float slot so the state can hold fractions (a smooth drag).
         if (
           slotKind === 'int' &&
-          initArg?.type === 'NumericLiteral' &&
-          typeof initArg.extra?.raw === 'string' &&
-          /[.eE]/.test(initArg.extra!.raw as string)
+          initialArgument?.type === 'NumericLiteral' &&
+          typeof initialArgument.extra?.raw === 'string' &&
+          /[.eE]/.test(initialArgument.extra!.raw as string)
         ) {
           slotKind = 'float';
         }
 
         // A whole number past the int range starts it 64-bit (past 64 bits, a float), as does a setter that
         // stores a timestamp or such a number in it (see compileWidened).
-        const initialWidth = slotKind === 'int' ? wideInitial(initValue) : null;
+        const initialWidth =
+          slotKind === 'int' ? wideInitial(initialValue) : null;
         if (initialWidth === 'float') {
           slotKind = 'float';
         }
 
         const widened =
-          slotKind === 'int' && !isBool
+          slotKind === 'int' && !isBoolean
             ? (wide.get(slotName) ??
               (initialWidth === 'number' ? 'number' : undefined))
             : undefined;
@@ -579,7 +592,7 @@ export function collectState(
 
         // String scalar → a fixed buffer; setters format into it (see scalarAssign).
         const initial =
-          slotKind === 'string' ? String(initValue) : Number(initValue);
+          slotKind === 'string' ? String(initialValue) : Number(initialValue);
         if (slotKind === 'float') {
           checkNumber(initial);
         } else if (slotKind === 'i64') {
@@ -590,7 +603,7 @@ export function collectState(
             null,
             [[`state "${name}"`, String(initial)]],
             caps,
-            initArg,
+            initialArgument,
           );
         }
         record = {
@@ -599,7 +612,7 @@ export function collectState(
           setter,
           kind: 'scalar',
           slotKind,
-          isBool,
+          isBoolean,
           initial,
           host: isHost, // host-fed → also an input the host sets
           ...(widened ? {widened} : {}),
@@ -623,13 +636,13 @@ export function collectState(
  * responsive layout returns the branch for this build's screen. When the test depends on the panel and both
  * outcomes return elements of one shape, they merge into one element whose values boot picks.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  * @param scope  Compile-time constants the `if` tests fold against.
  *
  * @returns The returned element.
  */
 export function findReturnJSX(
-  fnBody: t.BlockStatement,
+  functionBody: t.BlockStatement,
   scope: Scope = {},
 ): t.JSXElement {
   const statementsOf = (branch: t.Statement): t.Statement[] =>
@@ -637,12 +650,12 @@ export function findReturnJSX(
 
   // Fold top-level `if (staticCond) return …` at compile time — responsive layouts switch on `screen`.
   const scan = (statements: t.Statement[]): t.JSXElement | null => {
-    for (const [index, stmt] of statements.entries()) {
+    for (const [index, statement] of statements.entries()) {
       // A top-level `if` must fold; only the branch it takes is scanned.
-      if (stmt.type === 'IfStatement') {
+      if (statement.type === 'IfStatement') {
         let testValue;
         try {
-          testValue = evalStatic(stmt.test, scope, 'boot');
+          testValue = evalStatic(statement.test, scope, 'boot');
         } catch {
           throw new Error(
             'AOT: a top-level `if` in the component must have a compile-time-constant test (e.g. ' +
@@ -652,13 +665,13 @@ export function findReturnJSX(
 
         // A test that depends on the panel needs no variant when both outcomes have one shape.
         if (isBoot(testValue)) {
-          const merged = mergeOutcomes(stmt, statements.slice(index + 1));
+          const merged = mergeOutcomes(statement, statements.slice(index + 1));
           if (merged) return merged;
           testValue = foldBoot(testValue);
         }
 
         // Follow only the statically selected branch and keep scanning it until a JSX return is found.
-        const branch = testValue ? stmt.consequent : stmt.alternate;
+        const branch = testValue ? statement.consequent : statement.alternate;
         if (branch) {
           const branchJSX = scan(statementsOf(branch));
           if (branchJSX) return branchJSX;
@@ -668,8 +681,8 @@ export function findReturnJSX(
       }
 
       // A `return` with a value ends the scan and must return a single JSX element.
-      if (stmt.type === 'ReturnStatement' && stmt.argument) {
-        return returned(stmt.argument);
+      if (statement.type === 'ReturnStatement' && statement.argument) {
+        return returned(statement.argument);
       }
     }
 
@@ -716,17 +729,18 @@ export function findReturnJSX(
 
   // What each outcome of an `if` returns (a branch that does not return falls through), merged when it can be.
   const mergeOutcomes = (
-    stmt: t.IfStatement,
+    statement: t.IfStatement,
     rest: t.Statement[],
   ): t.JSXElement | null => {
     const restore = bootCheckpoint();
     try {
-      const whenTrue = scan(statementsOf(stmt.consequent)) ?? scan(rest);
+      const whenTrue = scan(statementsOf(statement.consequent)) ?? scan(rest);
       const whenFalse =
-        (stmt.alternate && scan(statementsOf(stmt.alternate))) ?? scan(rest);
+        (statement.alternate && scan(statementsOf(statement.alternate))) ??
+        scan(rest);
       const merged =
         whenTrue && whenFalse
-          ? mergeBranchElements(stmt.test, whenTrue, whenFalse)
+          ? mergeBranchElements(statement.test, whenTrue, whenFalse)
           : null;
       if (merged) return merged;
     } catch {
@@ -738,7 +752,7 @@ export function findReturnJSX(
   };
 
   // Scan the body; a component that never returns is an error.
-  const returnJSX = scan(fnBody.body);
+  const returnJSX = scan(functionBody.body);
   if (!returnJSX) {
     throw new Error('AOT: component has no return statement');
   }
@@ -749,31 +763,32 @@ export function findReturnJSX(
 /**
  * Returns the JSX a function component returns (arrow expression body or a block's return).
  *
- * @param fn  The component.
+ * @param functionNode  The component.
  * @param scope  Compile-time constants its top-level `if` tests fold against.
  *
  * @returns The returned element.
  */
 export function componentReturnJSX(
-  fn: FunctionNode,
+  functionNode: FunctionNode,
   scope: Scope = {},
 ): t.JSXElement {
-  if (fn.body.type === 'JSXElement') return fn.body;
-  if (fn.body.type === 'BlockStatement') return findReturnJSX(fn.body, scope);
+  if (functionNode.body.type === 'JSXElement') return functionNode.body;
+  if (functionNode.body.type === 'BlockStatement')
+    return findReturnJSX(functionNode.body, scope);
   throw new Error('AOT: component body must return a JSX element');
 }
 
 /**
  * Whether a function returns JSX (a component) rather than a value (a helper).
  *
- * @param fn  The function.
+ * @param functionNode  The function.
  *
  * @returns Whether its body is JSX or has a top-level `return <…/>`.
  */
-const fnReturnsJSX = (fn: FunctionNode): boolean =>
-  fn.body.type === 'JSXElement' ||
-  (fn.body.type === 'BlockStatement' &&
-    fn.body.body.some(
+const fnReturnsJSX = (functionNode: FunctionNode): boolean =>
+  functionNode.body.type === 'JSXElement' ||
+  (functionNode.body.type === 'BlockStatement' &&
+    functionNode.body.body.some(
       statement =>
         statement.type === 'ReturnStatement' &&
         statement.argument?.type === 'JSXElement',
@@ -814,9 +829,11 @@ export function collectComponents(
   program: t.Program,
 ): Map<string, FunctionNode> {
   const components = new Map<string, FunctionNode>();
-  for (const stmt of program.body) {
+  for (const statement of program.body) {
     const declaration =
-      stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+      statement.type === 'ExportNamedDeclaration'
+        ? statement.declaration
+        : statement;
     if (!declaration) continue;
 
     // `function Card() { return <…/>; }`
@@ -831,11 +848,15 @@ export function collectComponents(
 
     // `const Card = (…) => <…/>`, optionally wrapped in memo(…).
     if (declaration.type === 'VariableDeclaration') {
-      for (const decl of declaration.declarations) {
-        if (decl.id?.type !== 'Identifier' || decl.id.name === 'App') continue;
-        const fn = asComponentFn(decl.init); // unwrap memo(...)
-        if (fn && fnReturnsJSX(fn)) {
-          components.set(decl.id.name, fn);
+      for (const declarator of declaration.declarations) {
+        if (
+          declarator.id?.type !== 'Identifier' ||
+          declarator.id.name === 'App'
+        )
+          continue;
+        const functionNode = asComponentFn(declarator.init); // unwrap memo(...)
+        if (functionNode && fnReturnsJSX(functionNode)) {
+          components.set(declarator.id.name, functionNode);
         }
       }
     }
@@ -863,25 +884,32 @@ export function collectHelpers(
   const helpers = new Map<string, FunctionNode>();
   const addHelper = (
     name: string | undefined,
-    fn: t.Node | null | undefined,
+    functionNode: t.Node | null | undefined,
   ): void => {
-    if (name && name !== 'App' && isFn(fn) && !fnReturnsJSX(fn)) {
-      helpers.set(name, fn);
+    if (
+      name &&
+      name !== 'App' &&
+      isFn(functionNode) &&
+      !fnReturnsJSX(functionNode)
+    ) {
+      helpers.set(name, functionNode);
     }
   };
 
   // Module-level function declarations and function-valued variables.
-  for (const stmt of program.body) {
+  for (const statement of program.body) {
     const declaration =
-      stmt.type === 'ExportNamedDeclaration' ? stmt.declaration : stmt;
+      statement.type === 'ExportNamedDeclaration'
+        ? statement.declaration
+        : statement;
     if (!declaration) continue;
     if (declaration.type === 'FunctionDeclaration' && declaration.id) {
       addHelper(declaration.id.name, declaration);
     }
     if (declaration.type === 'VariableDeclaration') {
-      for (const decl of declaration.declarations) {
-        if (decl.id?.type === 'Identifier') {
-          addHelper(decl.id.name, decl.init);
+      for (const declarator of declaration.declarations) {
+        if (declarator.id?.type === 'Identifier') {
+          addHelper(declarator.id.name, declarator.init);
         }
       }
     }
@@ -889,11 +917,11 @@ export function collectHelpers(
 
   // The component's own top-level arrows and functions (a hook call is not a function, so it is skipped).
   if (componentBody.type === 'BlockStatement') {
-    for (const stmt of componentBody.body) {
-      if (stmt.type !== 'VariableDeclaration') continue;
-      for (const decl of stmt.declarations) {
-        if (decl.id?.type === 'Identifier') {
-          addHelper(decl.id.name, decl.init);
+    for (const statement of componentBody.body) {
+      if (statement.type !== 'VariableDeclaration') continue;
+      for (const declarator of statement.declarations) {
+        if (declarator.id?.type === 'Identifier') {
+          addHelper(declarator.id.name, declarator.init);
         }
       }
     }
@@ -921,15 +949,15 @@ export function collectImageImports(
   const pathOf = new Map<string, string>(); // name → the file it names
   const normalized = (path: string): string =>
     posix.normalize(path.replace(/\\/g, '/'));
-  for (const stmt of program.body) {
+  for (const statement of program.body) {
     if (
-      stmt.type !== 'ImportDeclaration' ||
-      typeof stmt.source.value !== 'string'
+      statement.type !== 'ImportDeclaration' ||
+      typeof statement.source.value !== 'string'
     ) {
       continue;
     }
 
-    const importPath = stmt.source.value;
+    const importPath = statement.source.value;
     if (!IMAGE_EXT_RE.test(importPath)) continue;
 
     const name = importPath.split(/[\\/]/).pop()!.replace(IMAGE_EXT_RE, '');
@@ -939,11 +967,11 @@ export function collectImageImports(
         `AOT: two images are named "${name}" (${first} and ${importPath})`,
         'an image is named by its file name, so rename one of the files.',
       );
-      locateError(error, stmt.loc?.start);
+      locateError(error, statement.loc?.start);
       throw error;
     }
     pathOf.set(name, importPath);
-    for (const specifier of stmt.specifiers) {
+    for (const specifier of statement.specifiers) {
       if (specifier.type === 'ImportDefaultSpecifier') {
         byLocal.set(specifier.local.name, {name, importPath});
       }
@@ -957,7 +985,7 @@ export function collectImageImports(
  * Collects `import x from './foo.svg'` → Map(localName → { name, importPath }). Unlike an image (whose
  * bytes the CLI bakes AFTER compile, so compile only needs its asset name), an <Svg source> needs the
  * GEOMETRY during compile — so the CLI bakes the .svg to a vector artifact up front (bakeSvgArtifacts) and
- * passes it in as opts.svgArtifacts, keyed by `name`. emitSvgSource resolves the local → name → artifact.
+ * passes it in as options.svgArtifacts, keyed by `name`. emitSvgSource resolves the local → name → artifact.
  *
  * @param program  The parsed module.
  *
@@ -968,22 +996,22 @@ export function collectSvgImports(
 ): Map<string, AssetImport> {
   // Map each default import of a .svg file to the file's basename.
   const byLocal = new Map<string, AssetImport>();
-  for (const stmt of program.body) {
+  for (const statement of program.body) {
     if (
-      stmt.type !== 'ImportDeclaration' ||
-      typeof stmt.source.value !== 'string'
+      statement.type !== 'ImportDeclaration' ||
+      typeof statement.source.value !== 'string'
     ) {
       continue;
     }
 
-    const importPath = stmt.source.value;
+    const importPath = statement.source.value;
     if (!/\.svg$/i.test(importPath)) continue;
 
     const name = importPath
       .split(/[\\/]/)
       .pop()!
       .replace(/\.svg$/i, '');
-    for (const specifier of stmt.specifiers) {
+    for (const specifier of statement.specifiers) {
       if (specifier.type === 'ImportDefaultSpecifier') {
         byLocal.set(specifier.local.name, {name, importPath});
       }
@@ -996,19 +1024,19 @@ export function collectSvgImports(
 /**
  * Bakes a Flow B app's <Svg source> imports → { assetName: artifact } via the SAME baker Flow A's esbuild
  * .svg loader uses (svgToVector). This is the I/O half (reads .svg files) kept OUT of the pure compilePackage;
- * both CLI entries (aot/compile.mts and the consumer cli.mjs) call it and hand the result to opts.svgArtifacts.
+ * both CLI entries (aot/compile.mts and the consumer cli.mjs) call it and hand the result to options.svgArtifacts.
  *
- * @param src  App.jsx source text.
- * @param baseDir  Directory the import paths are resolved against (the app's dir).
+ * @param source  App.jsx source text.
+ * @param baseDirectory  Directory the import paths are resolved against (the app's dir).
  *
  * @returns Each import's artifact, by asset name: its op-tape, or a PNG for one the vector baker cannot draw.
  */
 export async function bakeSvgArtifacts(
-  src: string,
-  baseDir: string,
+  source: string,
+  baseDirectory: string,
 ): Promise<Record<string, SvgArtifact>> {
   // Parse with the TS plugin too (harmless for plain JSX), so a .tsx app's <Svg source> imports are found.
-  const program = parse(src, {
+  const program = parse(source, {
     sourceType: 'module',
     plugins: ['jsx', 'typescript'],
   }).program;
@@ -1022,7 +1050,7 @@ export async function bakeSvgArtifacts(
   // Read each imported file and bake it to a vector op-tape.
   const artifacts: Record<string, SvgArtifact> = {};
   for (const [, svgImport] of imports) {
-    const svgPath = resolve(baseDir, svgImport.importPath);
+    const svgPath = resolve(baseDirectory, svgImport.importPath);
     if (!existsSync(svgPath)) {
       throw new Error(
         `AOT: <Svg source> asset "${svgImport.name}" not found at ${svgPath}`,
@@ -1058,28 +1086,28 @@ export async function bakeSvgArtifacts(
  * Collects `const fn = useCallback((...) => {...}, deps)` → Map (name → arrow fn node). Deps are ignored:
  * the AOT re-renders via its own dependency tracking, so useCallback only names a shared handler.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  *
  * @returns The callbacks, by name.
  */
 export function collectCallbacks(
-  fnBody: t.BlockStatement | t.Expression,
+  functionBody: t.BlockStatement | t.Expression,
 ): Map<string, FunctionNode> {
   const callbacks = new Map<string, FunctionNode>();
-  if (fnBody.type !== 'BlockStatement') return callbacks;
+  if (functionBody.type !== 'BlockStatement') return callbacks;
 
   // Collect top-level useCallback bindings whose first argument is an inline function, keyed by the variable name.
-  for (const stmt of fnBody.body) {
-    if (stmt.type !== 'VariableDeclaration') continue;
-    for (const decl of stmt.declarations) {
-      const init = decl.init;
+  for (const statement of functionBody.body) {
+    if (statement.type !== 'VariableDeclaration') continue;
+    for (const declarator of statement.declarations) {
+      const initializer = declarator.init;
       if (
-        init?.type === 'CallExpression' &&
-        (init.callee as t.Identifier).name === 'useCallback' &&
-        decl.id.type === 'Identifier' &&
-        isFn(init.arguments[0])
+        initializer?.type === 'CallExpression' &&
+        (initializer.callee as t.Identifier).name === 'useCallback' &&
+        declarator.id.type === 'Identifier' &&
+        isFn(initializer.arguments[0])
       ) {
-        callbacks.set(decl.id.name, init.arguments[0]);
+        callbacks.set(declarator.id.name, initializer.arguments[0]);
       }
     }
   }
@@ -1090,34 +1118,34 @@ export function collectCallbacks(
 /**
  * Collects `const m = useMemo(() => expr, deps)` → Map (name → the memo's expression node).
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  *
  * @returns Each memo's expression, by name.
  */
 export function collectMemos(
-  fnBody: t.BlockStatement | t.Expression,
+  functionBody: t.BlockStatement | t.Expression,
 ): Map<string, t.Expression> {
   const memos = new Map<string, t.Expression>();
-  if (fnBody.type !== 'BlockStatement') return memos;
+  if (functionBody.type !== 'BlockStatement') return memos;
 
   // Collect expression-bodied useMemo bindings; block-bodied memos are rejected until statement-bodied folding is supported.
-  for (const stmt of fnBody.body) {
-    if (stmt.type !== 'VariableDeclaration') continue;
-    for (const decl of stmt.declarations) {
-      const init = decl.init;
+  for (const statement of functionBody.body) {
+    if (statement.type !== 'VariableDeclaration') continue;
+    for (const declarator of statement.declarations) {
+      const initializer = declarator.init;
       if (
-        init?.type === 'CallExpression' &&
-        (init.callee as t.Identifier).name === 'useMemo' &&
-        decl.id.type === 'Identifier' &&
-        isFn(init.arguments[0])
+        initializer?.type === 'CallExpression' &&
+        (initializer.callee as t.Identifier).name === 'useMemo' &&
+        declarator.id.type === 'Identifier' &&
+        isFn(initializer.arguments[0])
       ) {
-        const body = init.arguments[0].body;
+        const body = initializer.arguments[0].body;
         if (body.type === 'BlockStatement') {
           throw new Error(
-            `AOT: useMemo for "${decl.id.name}" must be a single expression (for now)`,
+            `AOT: useMemo for "${declarator.id.name}" must be a single expression (for now)`,
           );
         }
-        memos.set(decl.id.name, body);
+        memos.set(declarator.id.name, body);
       }
     }
   }
@@ -1128,20 +1156,20 @@ export function collectMemos(
 /**
  * Collects `useEffect(() => {…}, deps)` calls → { fn, deps, node }. Dep validity is checked at compile time.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  *
  * @returns The effects, in source order.
  */
 export function collectEffects(
-  fnBody: t.BlockStatement | t.Expression,
+  functionBody: t.BlockStatement | t.Expression,
 ): EffectRecord[] {
   const effects: EffectRecord[] = [];
-  if (fnBody.type !== 'BlockStatement') return effects;
+  if (functionBody.type !== 'BlockStatement') return effects;
 
   // Collect top-level useEffect calls, requiring an inline function so the effect body can be lowered later with its deps.
-  for (const stmt of fnBody.body) {
-    if (stmt.type !== 'ExpressionStatement') continue;
-    const call = stmt.expression;
+  for (const statement of functionBody.body) {
+    if (statement.type !== 'ExpressionStatement') continue;
+    const call = statement.expression;
     if (
       call?.type === 'CallExpression' &&
       call.callee.type === 'Identifier' &&
@@ -1163,8 +1191,8 @@ export function collectEffects(
         throw error;
       }
       effects.push({
-        fn: call.arguments[0],
-        deps: call.arguments[1],
+        functionNode: call.arguments[0],
+        dependencies: call.arguments[1],
         node: call,
       });
     }
@@ -1176,20 +1204,20 @@ export function collectEffects(
 /**
  * True if a function component declares any useState (per-instance child state — not yet supported).
  *
- * @param fn  The component.
+ * @param functionNode  The component.
  *
  * @returns Whether its body calls useState.
  */
-export function usesState(fn: FunctionNode): boolean {
-  if (fn.body.type !== 'BlockStatement') return false;
+export function usesState(functionNode: FunctionNode): boolean {
+  if (functionNode.body.type !== 'BlockStatement') return false;
 
-  return fn.body.body.some(
+  return functionNode.body.body.some(
     statement =>
       statement.type === 'VariableDeclaration' &&
       statement.declarations.some(
-        decl =>
-          decl.init?.type === 'CallExpression' &&
-          (decl.init.callee as t.Identifier).name === 'useState',
+        declarator =>
+          declarator.init?.type === 'CallExpression' &&
+          (declarator.init.callee as t.Identifier).name === 'useState',
       ),
   );
 }

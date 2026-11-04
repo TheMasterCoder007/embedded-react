@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {checkNumber} from './check.mts';
-import {NODE_TYPES} from '../style-map.mts';
+import {NODE_TYPES, OPACITY_OPAQUE} from '../style-map.mts';
 import {
   aotError,
   checkEngineString,
@@ -107,6 +107,12 @@ const ELLIPSIZE_MODES: Record<string, EngineName> = {
   clip: 'ER_TEXT_ELLIPSIZE_CLIP',
 };
 
+/** The most lines a <Text> may keep: the engine counts them in a byte. */
+const MAX_NUMBER_OF_LINES = 255;
+
+/** The longest long press, in ms: the engine keeps it in 16 bits. */
+const MAX_LONG_PRESS_MS = 65535;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -136,32 +142,32 @@ function resolveTag(openingElement: t.JSXOpeningElement): string {
  * The node refs `ref={myRef}` stores the element's handle in (a node ref from useRef), marked used.
  *
  * @param openingElement  The element's opening tag.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The refs' slots.
  */
 export function lowerRefBinds(
   openingElement: t.JSXOpeningElement,
-  env: Env,
+  environment: Env,
 ): string[] {
   const refs: string[] = [];
-  for (const attr of openingElement.attributes) {
+  for (const attribute of openingElement.attributes) {
     if (
-      attr.type !== 'JSXAttribute' ||
-      (attr.name as t.JSXIdentifier).name !== 'ref'
+      attribute.type !== 'JSXAttribute' ||
+      (attribute.name as t.JSXIdentifier).name !== 'ref'
     ) {
       continue;
     }
 
-    const refExpr =
-      attr.value?.type === 'JSXExpressionContainer'
-        ? attr.value.expression
+    const refExpression =
+      attribute.value?.type === 'JSXExpressionContainer'
+        ? attribute.value.expression
         : null;
     if (
-      refExpr?.type === 'Identifier' &&
-      env.refs?.get(refExpr.name)?.kind === 'node'
+      refExpression?.type === 'Identifier' &&
+      environment.refs?.get(refExpression.name)?.kind === 'node'
     ) {
-      const nodeRef = env.refs.get(refExpr.name)!;
+      const nodeRef = environment.refs.get(refExpression.name)!;
       nodeRef.used = true;
       refs.push(nodeRef.slotName);
     } else {
@@ -187,8 +193,10 @@ function namedAttr(
   name: string,
 ): t.JSXAttribute | undefined {
   return openingElement.attributes.find(
-    (attr): attr is t.JSXAttribute =>
-      attr.type === 'JSXAttribute' && attr.name && attr.name.name === name,
+    (attribute): attribute is t.JSXAttribute =>
+      attribute.type === 'JSXAttribute' &&
+      attribute.name &&
+      attribute.name.name === name,
   );
 }
 
@@ -208,11 +216,11 @@ function pressableIsDisabled(
   tag: string,
   scope: Scope,
 ): boolean {
-  const attr = namedAttr(element.openingElement, 'disabled');
-  if (!attr) return false;
+  const attribute = namedAttr(element.openingElement, 'disabled');
+  if (!attribute) return false;
 
   return !!evalStaticOrThrow(
-    attrExpr(attr),
+    attrExpr(attribute),
     scope,
     `AOT: <${tag} disabled> must be a compile-time constant`,
     'a disabled one still renders — it lowers to a plain <Pressable>, children, layout ' +
@@ -236,10 +244,10 @@ function lowerTextTruncation(
   scope: Scope,
 ): StaticAssign[] {
   const assigns: StaticAssign[] = [];
-  const linesAttr = namedAttr(openingElement, 'numberOfLines');
-  if (linesAttr) {
+  const linesAttribute = namedAttr(openingElement, 'numberOfLines');
+  if (linesAttribute) {
     const lines = foldAttr(
-      linesAttr,
+      linesAttribute,
       scope,
       'AOT: <Text numberOfLines> must be a compile-time constant',
     );
@@ -247,24 +255,24 @@ function lowerTextTruncation(
       typeof lines !== 'number' ||
       !Number.isInteger(lines) ||
       lines < 0 ||
-      lines > 255
+      lines > MAX_NUMBER_OF_LINES
     ) {
       throw at(
         aotError(
-          `AOT: <Text numberOfLines> must be a whole number from 0 to 255 (got ${String(lines)})`,
+          `AOT: <Text numberOfLines> must be a whole number from 0 to ${MAX_NUMBER_OF_LINES} (got ${String(lines)})`,
           '0 does not truncate; any other value is the most lines the text wraps to.',
         ),
-        linesAttr,
+        linesAttribute,
       );
     }
 
     assigns.push({field: 'number_of_lines', value: lines});
   }
 
-  const modeAttr = namedAttr(openingElement, 'ellipsizeMode');
-  if (modeAttr) {
+  const modeAttribute = namedAttr(openingElement, 'ellipsizeMode');
+  if (modeAttribute) {
     const mode = foldAttr(
-      modeAttr,
+      modeAttribute,
       scope,
       'AOT: <Text ellipsizeMode> must be a compile-time constant',
     );
@@ -274,7 +282,7 @@ function lowerTextTruncation(
           `AOT: <Text ellipsizeMode> "${String(mode)}" is not drawn by the engine`,
           "use 'tail' or 'clip'; the engine draws 'head' and 'middle' as 'tail'.",
         ),
-        modeAttr,
+        modeAttribute,
       );
     }
 
@@ -290,21 +298,21 @@ function lowerTextTruncation(
 /**
  * An attribute's value, which must fold; the error is pinned to the attribute.
  *
- * @param attr  The attribute.
+ * @param attribute  The attribute.
  * @param scope  Compile-time constants in reach.
  * @param message  The error when it does not fold.
  *
  * @returns The folded value.
  */
 function foldAttr(
-  attr: t.JSXAttribute,
+  attribute: t.JSXAttribute,
   scope: Scope,
   message: string,
 ): unknown {
   try {
-    return evalStaticOrThrow(attrExpr(attr), scope, message);
+    return evalStaticOrThrow(attrExpr(attribute), scope, message);
   } catch (error) {
-    throw at(error as AotError, attr);
+    throw at(error as AotError, attribute);
   }
 }
 
@@ -315,11 +323,14 @@ function foldAttr(
  * `activeOpacity` is `true`, so 1, which is not dim at all; `{false}` is an invisible one.
  *
  * @param value  The folded value.
- * @param attr  The attribute, for the error's location.
+ * @param attribute  The attribute, for the error's location.
  *
  * @returns The opacity.
  */
-function opacityLiteralOrThrow(value: unknown, attr: t.JSXAttribute): number {
+function opacityLiteralOrThrow(
+  value: unknown,
+  attribute: t.JSXAttribute,
+): number {
   if (
     typeof value !== 'number' ||
     !Number.isFinite(value) ||
@@ -335,8 +346,8 @@ function opacityLiteralOrThrow(value: unknown, attr: t.JSXAttribute): number {
       `AOT: <TouchableOpacity activeOpacity> must be a number between 0 and 1 (got ${shown})`,
       'it is the opacity the node dims to while held — 0 is invisible, 1 is no dim at all. RN defaults it to 0.2.',
     );
-    if (attr.loc) {
-      error.aotLoc = attr.loc.start;
+    if (attribute.loc) {
+      error.aotLoc = attribute.loc.start;
     }
 
     throw error;
@@ -355,9 +366,9 @@ function opacityLiteralOrThrow(value: unknown, attr: t.JSXAttribute): number {
  * @param element  The <TouchableOpacity>.
  * @param nodeId  The node's variable.
  * @param staticAssigns  The style's constant writes.
- * @param dynAssigns  The style's state-driven writes.
+ * @param dynamicAssigns  The style's state-driven writes.
  * @param binds  The style's animated-value binds.
- * @param out  Everything emitted so far.
+ * @param output  Everything emitted so far.
  * @param scope  Compile-time constants in reach.
  *
  * @returns The opacity bind, and the fade to run on onPressIn and the one to run on onPressOut.
@@ -366,9 +377,9 @@ function touchablePressFades(
   element: t.JSXElement,
   nodeId: string,
   staticAssigns: StaticAssign[],
-  dynAssigns: DynAssign[],
+  dynamicAssigns: DynAssign[],
   binds: AnimBind[],
-  out: Out,
+  output: Out,
   scope: Scope,
 ): {bind: AnimBind; fades: Record<string, IrPressFade>} {
   // The press feedback owns the node's opacity, so the style may not animate it or drive it from state.
@@ -377,7 +388,7 @@ function touchablePressFades(
   );
   if (
     hasAnimatedOpacity ||
-    dynAssigns.some(assign => assign.field === 'opacity')
+    dynamicAssigns.some(assign => assign.field === 'opacity')
   ) {
     throw aotError(
       `AOT: <TouchableOpacity> cannot take ${hasAnimatedOpacity ? 'an Animated' : 'a state-driven'} opacity`,
@@ -392,27 +403,29 @@ function touchablePressFades(
   const opacityAssign = staticAssigns.find(
     assign => assign.field === 'opacity',
   );
-  const restingRaw = opacityAssign ? Number(opacityAssign.value) / 255 : 1;
+  const restingRaw = opacityAssign
+    ? Number(opacityAssign.value) / OPACITY_OPAQUE
+    : 1;
   const restingOpacity = Number.isFinite(restingRaw) ? restingRaw : 1;
 
   // The dim target: a folded activeOpacity, or RN's default.
-  const activeAttr = namedAttr(element.openingElement, 'activeOpacity');
-  const activeOpacity = activeAttr
+  const activeAttribute = namedAttr(element.openingElement, 'activeOpacity');
+  const activeOpacity = activeAttribute
     ? opacityLiteralOrThrow(
         evalStaticOrThrow(
-          attrExpr(activeAttr),
+          attrExpr(activeAttribute),
           scope,
           'AOT: <TouchableOpacity activeOpacity> must be a compile-time constant',
           'the dim target is baked into the handler, so it cannot come from state.',
         ),
-        activeAttr,
+        activeAttribute,
       )
     : TOUCHABLE_ACTIVE_OPACITY;
 
   // Bind a fresh animated value, starting at rest, to the node's opacity.
   const slotName = `anim_press_${nodeId}`;
   checkNumber(restingOpacity);
-  out.childAnimations.push({slotName, initial: restingOpacity});
+  output.childAnimations.push({slotName, initial: restingOpacity});
 
   // Each fade is one timing animation of that value.
   return {
@@ -468,39 +481,42 @@ function applyShow(node: IrNode, show: IrShow): void {
  * Lowers an event prop's function to a handler: a useCallback compiles once per instance and is shared, a
  * callback prop compiles in its caller's environment, and an inline function compiles where it is.
  *
- * @param attr  The event prop.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param attribute  The event prop.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The handler's name.
  */
 export function lowerEventHandler(
-  attr: t.JSXAttribute,
-  out: Out,
-  env: Env,
+  attribute: t.JSXAttribute,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): string {
-  const fn = attrExpr(attr);
-  const layout = (attr.name as t.JSXIdentifier).name === 'onLayout';
-  if (fn.type === 'Identifier' && env.callbacks?.has(fn.name)) {
+  const handlerExpression = attrExpr(attribute);
+  const layout = (attribute.name as t.JSXIdentifier).name === 'onLayout';
+  if (
+    handlerExpression.type === 'Identifier' &&
+    environment.callbacks?.has(handlerExpression.name)
+  ) {
     // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
     // Its onLayout use gets a handler of its own, since only that event carries the layout rect. The key's
     // `layout:` and the name's `layout_callback_` can't come from an identifier, so they never meet another callback.
-    const callbackKey = `${env.cbPrefix ?? ''}${fn.name}`;
+    const callbackKey = `${environment.callbackPrefix ?? ''}${handlerExpression.name}`;
     const emittedKey = layout ? `layout:${callbackKey}` : callbackKey;
-    let handlerName = out.cbEmitted.get(emittedKey);
+    let handlerName = output.emittedCallbacks.get(emittedKey);
     if (!handlerName) {
       handlerName = `${layout ? 'layout_callback_' : 'callback_'}${callbackKey}`;
-      out.cbEmitted.set(emittedKey, handlerName);
-      out.handlers.push({
+      output.emittedCallbacks.set(emittedKey, handlerName);
+      output.handlers.push({
         kind: 'callback',
         name: handlerName,
         callback: lowerHandler(
-          env.callbacks.get(fn.name)!,
-          {...env, layout},
+          environment.callbacks.get(handlerExpression.name)!,
+          {...environment, layout},
           state,
-          out,
+          output,
         ),
       });
     }
@@ -508,29 +524,37 @@ export function lowerEventHandler(
     return handlerName;
   }
 
-  const handlerName = `handler_${out.handlers.length}`;
-  if (fn.type === 'Identifier' && env.fnProps?.has(fn.name)) {
+  const handlerName = `handler_${output.handlers.length}`;
+  if (
+    handlerExpression.type === 'Identifier' &&
+    environment.functionProps?.has(handlerExpression.name)
+  ) {
     // Inline a callback prop's function, compiled in the caller's env/state so its setters and locals resolve.
-    const callbackProp = env.fnProps.get(fn.name)!;
-    out.handlers.push({
+    const callbackProp = environment.functionProps.get(handlerExpression.name)!;
+    output.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerHandler(
         callbackProp.node,
-        {...callbackProp.env, layout},
+        {...callbackProp.environment, layout},
         callbackProp.state,
-        out,
+        output,
       ),
     });
-  } else if (isFn(fn)) {
-    out.handlers.push({
+  } else if (isFn(handlerExpression)) {
+    output.handlers.push({
       kind: 'callback',
       name: handlerName,
-      callback: lowerHandler(fn, {...env, layout}, state, out),
+      callback: lowerHandler(
+        handlerExpression,
+        {...environment, layout},
+        state,
+        output,
+      ),
     });
   } else {
     throw aotError(
-      `AOT: ${(attr.name as t.JSXIdentifier).name} must be an inline function, a useCallback, or a callback prop`,
+      `AOT: ${(attribute.name as t.JSXIdentifier).name} must be an inline function, a useCallback, or a callback prop`,
       `pass an inline arrow (onPress={() => setX(…)}), a useCallback identifier, or a ` +
         `function prop received by this component.`,
     );
@@ -547,20 +571,20 @@ export function lowerEventHandler(
  *
  * @param element  The element.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param opts  How the element is placed.
+ * @param options  How the element is placed.
  *
  * @returns What the element lowered to.
  */
 function emitNodeImpl(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
-  opts: EmitOptions = {},
+  options: EmitOptions = {},
 ): IrElement {
   // Refuse any prop the element does not declare, whatever its value, then drop the no-ops and the props that
   // fold to undefined before dispatch.
@@ -575,40 +599,41 @@ function emitNodeImpl(
     element = withoutPlatformNoOps(spec, element);
   }
 
-  element = omitUndefinedAttrs(element, scope, env);
+  element = omitUndefinedAttrs(element, scope, environment);
 
   const typed = (node: IrNode): IrElement => {
-    if (opts.show) {
-      applyShow(node, opts.show);
+    if (options.show) {
+      applyShow(node, options.show);
     }
 
     return {kind: 'node', id: node.id, node};
   };
   if (tag === 'Svg') {
-    return typed(emitSvg(element, scope, out, env, state, opts));
+    return typed(emitSvg(element, scope, output, environment, state, options));
   }
   if (tag === 'Switch') {
-    return typed(emitSwitch(element, scope, out, env, state));
+    return typed(emitSwitch(element, scope, output, environment, state));
   }
-  if (tag === 'Dial') return typed(emitDial(element, scope, out, env, state));
+  if (tag === 'Dial')
+    return typed(emitDial(element, scope, output, environment, state));
   if (tag === 'TextInput') {
-    return typed(emitTextInput(element, scope, out, env, state));
+    return typed(emitTextInput(element, scope, output, environment, state));
   }
   if (tag === 'ActivityIndicator') {
-    return typed(emitActivityIndicator(element, scope, out, env));
+    return typed(emitActivityIndicator(element, scope, output, environment));
   }
   if (tag === 'Modal') {
-    return typed(emitModal(element, scope, out, env, state));
+    return typed(emitModal(element, scope, output, environment, state));
   }
   if (tag === 'FlatList') {
-    return emitFlatList(element, scope, out, env, state, opts);
+    return emitFlatList(element, scope, output, environment, state, options);
   }
 
   // Anything else must be a host node or a function component defined in this file.
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
-    if (out.components.has(tag)) {
-      return emitComponent(element, scope, out, env, state, opts);
+    if (output.components.has(tag)) {
+      return emitComponent(element, scope, output, environment, state, options);
     }
 
     // A package export with no lowering yet gets its own error; "unknown element" would read like a typo.
@@ -641,7 +666,7 @@ function emitNodeImpl(
 
     let panResponder;
     try {
-      panResponder = panSpreadTarget(spread.argument, env);
+      panResponder = panSpreadTarget(spread.argument, environment);
     } catch (error) {
       if (spread.loc && !(error as AotError).aotLoc) {
         (error as AotError).aotLoc = spread.loc.start;
@@ -669,11 +694,11 @@ function emitNodeImpl(
   }
 
   // Allocate the node and collect its style, text content, and image attributes.
-  const nodeId = `n${out.allocateNodeId()}`;
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const nodeId = `n${output.allocateNodeId()}`;
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     spec!,
   );
   if (tag === 'Text') {
@@ -682,16 +707,19 @@ function emitNodeImpl(
 
   // A <Text> with a nested <Text> becomes inline SPANS; otherwise a single (possibly dynamic) string.
   const spans =
-    tag === 'Text' ? collectTextSpans(element.children, scope, env) : null;
+    tag === 'Text'
+      ? collectTextSpans(element.children, scope, environment)
+      : null;
   const text =
     tag === 'Text' && !spans
-      ? lowerNodeText(element.children, scope, env)
+      ? lowerNodeText(element.children, scope, environment)
       : null;
   if (text) {
     checkEngineString(constantText(text), 'ER_TEXT_MAX', 'a <Text>');
   }
   // An <Image>'s resize/tint are static, so fold them into staticAssigns for both the static and dynamic paths.
-  const image = tag === 'Image' ? resolveImageAttrs(element, env, out) : null;
+  const image =
+    tag === 'Image' ? resolveImageAttrs(element, environment, output) : null;
   checkEngineString(
     image?.imageName ?? null,
     'ER_IMAGE_NAME_MAX',
@@ -705,49 +733,52 @@ function emitNodeImpl(
   }
 
   // `visible` is `display` as in Flow A (style `display` wins); not in collectStyleAssigns, which <Modal> shares.
-  const visibleAttr = element.openingElement.attributes.find(
-    (attr): attr is t.JSXAttribute =>
-      attr.type === 'JSXAttribute' && attr.name && attr.name.name === 'visible',
+  const visibleAttribute = element.openingElement.attributes.find(
+    (attribute): attribute is t.JSXAttribute =>
+      attribute.type === 'JSXAttribute' &&
+      attribute.name &&
+      attribute.name.name === 'visible',
   );
   if (
-    visibleAttr &&
+    visibleAttribute &&
     !staticAssigns.some(assign => assign.field === 'display') &&
-    !dynAssigns.some(assign => assign.field === 'display')
+    !dynamicAssigns.some(assign => assign.field === 'display')
   ) {
-    const expr = visibleAttr.value == null ? null : attrExpr(visibleAttr); // bare `visible` === true
-    if (expr == null) {
+    const expression =
+      visibleAttribute.value == null ? null : attrExpr(visibleAttribute); // bare `visible` === true
+    if (expression == null) {
       staticAssigns.push({field: 'display', value: 'ER_DISPLAY_FLEX'});
     } else {
       try {
         staticAssigns.push({
           field: 'display',
-          value: evalStatic(expr, scope)
+          value: evalStatic(expression, scope)
             ? 'ER_DISPLAY_FLEX'
             : 'ER_DISPLAY_NONE',
         });
       } catch {
-        dynAssigns.push({
+        dynamicAssigns.push({
           field: 'display',
-          value: {kind: 'visible', value: lowerExpr(expr, env)},
+          value: {kind: 'visible', value: lowerExpr(expression, environment)},
         });
       }
     }
   }
 
   // delayLongPress must fold since it is baked into props; 0 becomes 1 ms because 0 means "default" to the engine.
-  const delayAttr = namedAttr(element.openingElement, 'delayLongPress');
-  if (delayAttr) {
+  const delayAttribute = namedAttr(element.openingElement, 'delayLongPress');
+  if (delayAttribute) {
     const delayError = aotError(
       `AOT: <${tag} delayLongPress> must fold to a number`,
       'pass a literal or a module-level constant in milliseconds, e.g. delayLongPress={800}.',
     );
-    if (delayAttr.value == null) {
+    if (delayAttribute.value == null) {
       throw delayError;
     }
 
     let delayMs;
     try {
-      delayMs = Number(evalStatic(attrExpr(delayAttr), scope));
+      delayMs = Number(evalStatic(attrExpr(delayAttribute), scope));
     } catch {
       throw delayError;
     }
@@ -758,15 +789,15 @@ function emitNodeImpl(
 
     staticAssigns.push({
       field: 'long_press_ms',
-      value: Math.min(65535, Math.max(1, Math.round(delayMs))),
+      value: Math.min(MAX_LONG_PRESS_MS, Math.max(1, Math.round(delayMs))),
     });
   }
 
   // A state-driven conditional flips `display` in the update; pushed last to beat the element's visible/display.
-  if (opts.show) {
-    dynAssigns.push({
+  if (options.show) {
+    dynamicAssigns.push({
       field: 'display',
-      value: {kind: 'shown', show: opts.show},
+      value: {kind: 'shown', show: options.show},
     });
   }
 
@@ -777,9 +808,9 @@ function emitNodeImpl(
           element,
           nodeId,
           staticAssigns,
-          dynAssigns,
+          dynamicAssigns,
           binds,
-          out,
+          output,
           scope,
         )
       : null;
@@ -793,21 +824,21 @@ function emitNodeImpl(
   if (press) {
     wiring.push({kind: 'bind', bind: press.bind, index: binds.length});
   }
-  for (const slot of lowerRefBinds(element.openingElement, env)) {
+  for (const slot of lowerRefBinds(element.openingElement, environment)) {
     wiring.push({kind: 'ref', slot});
   }
 
   const node: IrNode = {
     id: nodeId,
-    loc: currentLoc(),
+    location: currentLoc(),
     type: nodeType,
     constantProps: staticAssigns,
-    stateProps: dynAssigns,
+    stateProps: dynamicAssigns,
     placeholder: null,
     text,
     image:
-      image?.imageNameDyn != null
-        ? {kind: 'value', value: image.imageNameDyn}
+      image?.imageNameDynamic != null
+        ? {kind: 'value', value: image.imageNameDynamic}
         : image?.imageName != null
           ? {kind: 'static', name: image.imageName}
           : null,
@@ -818,33 +849,33 @@ function emitNodeImpl(
 
   // Compile each event prop into a handler; a disabled one drops its press events.
   const fadesWired = new Set<string>();
-  for (const attr of element.openingElement.attributes) {
-    if (attr.type !== 'JSXAttribute') continue;
+  for (const attribute of element.openingElement.attributes) {
+    if (attribute.type !== 'JSXAttribute') continue;
 
-    const eventType = EVENT_TYPES[(attr.name as t.JSXIdentifier).name];
+    const eventType = EVENT_TYPES[(attribute.name as t.JSXIdentifier).name];
     if (!eventType) continue;
 
     if (
       isPressDisabled &&
-      PRESS_EVENTS.has((attr.name as t.JSXIdentifier).name)
+      PRESS_EVENTS.has((attribute.name as t.JSXIdentifier).name)
     ) {
       continue;
     }
 
-    let handlerName = lowerEventHandler(attr, out, env, state);
+    let handlerName = lowerEventHandler(attribute, output, environment, state);
 
     // Wrap the app's press-in/out with the fade; prepending would dim every other element sharing a useCallback.
-    const pressFade = press?.fades[(attr.name as t.JSXIdentifier).name];
+    const pressFade = press?.fades[(attribute.name as t.JSXIdentifier).name];
     if (pressFade) {
-      const wrapperName = `handler_${out.handlers.length}`;
-      out.handlers.push({
+      const wrapperName = `handler_${output.handlers.length}`;
+      output.handlers.push({
         kind: 'pressFade',
         name: wrapperName,
         fade: pressFade,
         then: handlerName,
       });
       handlerName = wrapperName;
-      fadesWired.add((attr.name as t.JSXIdentifier).name);
+      fadesWired.add((attribute.name as t.JSXIdentifier).name);
     }
 
     wiring.push({kind: 'event', event: eventType, handler: handlerName});
@@ -854,8 +885,8 @@ function emitNodeImpl(
   if (press) {
     for (const eventName of ['onPressIn', 'onPressOut']) {
       if (fadesWired.has(eventName)) continue;
-      const fadeHandlerName = `handler_${out.handlers.length}`;
-      out.handlers.push({
+      const fadeHandlerName = `handler_${output.handlers.length}`;
+      output.handlers.push({
         kind: 'pressFade',
         name: fadeHandlerName,
         fade: press.fades[eventName],
@@ -873,7 +904,7 @@ function emitNodeImpl(
   for (const panResponder of panSpreads) {
     wiring.push({
       kind: 'responder',
-      pan: emitPanResponder(panResponder, out, env, state),
+      pan: emitPanResponder(panResponder, output, environment, state),
     });
   }
 
@@ -881,7 +912,13 @@ function emitNodeImpl(
 
   // A <Text>'s children are its text, already consumed above.
   if (tag !== 'Text') {
-    node.children = emitChildren(element.children, scope, out, env, state);
+    node.children = emitChildren(
+      element.children,
+      scope,
+      output,
+      environment,
+      state,
+    );
   }
 
   return {kind: 'node', id: nodeId, node};
@@ -897,31 +934,38 @@ function emitNodeImpl(
  *
  * @param element  The element.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The element, or a copy of it without those attributes.
  */
 function omitUndefinedAttrs(
   element: t.JSXElement,
   scope: Scope,
-  env: Env,
+  environment: Env,
 ): t.JSXElement {
-  const attrs = element.openingElement.attributes;
+  const attributes = element.openingElement.attributes;
   // Built lazily: the runtime-aware scope plus the global `undefined`, so `SHOW ? true : undefined` folds too.
   let foldingScope: Scope | null = null;
-  const keptAttrs = attrs.filter(attr => {
+  const keptAttributes = attributes.filter(attribute => {
     if (
-      attr.type !== 'JSXAttribute' ||
-      attr.value?.type !== 'JSXExpressionContainer'
+      attribute.type !== 'JSXAttribute' ||
+      attribute.value?.type !== 'JSXExpressionContainer'
     ) {
       return true;
     }
 
-    foldingScope ??= Object.assign(Object.create(foldScope(env, scope)), {
-      undefined,
-    });
+    foldingScope ??= Object.assign(
+      Object.create(foldScope(environment, scope)),
+      {
+        undefined,
+      },
+    );
     try {
-      const value = evalStatic(attr.value.expression, foldingScope!, 'boot');
+      const value = evalStatic(
+        attribute.value.expression,
+        foldingScope!,
+        'boot',
+      );
       if (buildValueOf(value) !== undefined) return true;
       foldBoot(value); // undefined on this panel only: omitting it assumes the panel
       return false;
@@ -930,11 +974,11 @@ function omitUndefinedAttrs(
     }
   });
 
-  return keptAttrs.length === attrs.length
+  return keptAttributes.length === attributes.length
     ? element
     : {
         ...element,
-        openingElement: {...element.openingElement, attributes: keptAttrs},
+        openingElement: {...element.openingElement, attributes: keptAttributes},
       };
 }
 
@@ -946,10 +990,10 @@ function omitUndefinedAttrs(
  */
 export function checkInterpolations(node: IrNode): void {
   for (const wire of node.wiring) {
-    if (wire.kind !== 'bind' || !wire.bind.interp) continue;
+    if (wire.kind !== 'bind' || !wire.bind.interpolation) continue;
     for (const point of [
-      ...wire.bind.interp.input,
-      ...wire.bind.interp.output,
+      ...wire.bind.interpolation.input,
+      ...wire.bind.interpolation.output,
     ]) {
       checkNumber(point);
     }

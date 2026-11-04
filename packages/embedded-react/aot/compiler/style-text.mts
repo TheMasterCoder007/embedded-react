@@ -46,9 +46,9 @@ import {
 import {evalStatic, foldScope, withUndefined} from './static-eval.mts';
 import {jsxChildText, lowerExpr, lowerText} from './expressions.mts';
 import {
-  ANIM_COLOR_KEYS,
-  ANIM_STYLE_PROPS,
-  ANIM_TRANSFORM_PROPS,
+  ANIMATED_COLOR_KEYS,
+  ANIMATED_STYLE_PROPS,
+  ANIMATED_TRANSFORM_PROPS,
   parseInterp,
 } from './animations.mts';
 import type * as t from '@babel/types';
@@ -77,13 +77,13 @@ export interface AnimBind {
   slotName: string;
   /** The ER_PROP_* it drives. */
   prop: string;
-  interp?: Interpolation;
+  interpolation?: Interpolation;
 }
 
 /** An element's merged style: constant field writes, state-driven ones, and animated-value binds. */
 export interface StyleAssigns {
   staticAssigns: StaticAssign[];
-  dynAssigns: DynAssign[];
+  dynamicAssigns: DynAssign[];
   binds: AnimBind[];
 }
 
@@ -111,6 +111,9 @@ const BOOT_PIXEL_FIELDS: Record<string, string> = {
   flexBasis: 'flex_basis',
 };
 
+/** A span's weight, style or decoration that takes its parent's. */
+const SPAN_INHERIT = 0xff;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -119,19 +122,20 @@ const BOOT_PIXEL_FIELDS: Record<string, string> = {
  * A JSX attribute's value as an expression: a bare `name` is `true`, `name="x"` the string, `name={expr}` the
  * expression.
  *
- * @param attr  The attribute.
+ * @param attribute  The attribute.
  *
  * @returns Its value.
  */
 export function attrExpr(
-  attr: t.JSXAttribute,
+  attribute: t.JSXAttribute,
 ): t.Expression | t.JSXEmptyExpression {
-  const attrValue = attr.value;
-  if (!attrValue) return {type: 'BooleanLiteral', value: true};
-  if (attrValue.type === 'StringLiteral') return attrValue;
-  if (attrValue.type === 'JSXExpressionContainer') return attrValue.expression;
+  const attributeValue = attribute.value;
+  if (!attributeValue) return {type: 'BooleanLiteral', value: true};
+  if (attributeValue.type === 'StringLiteral') return attributeValue;
+  if (attributeValue.type === 'JSXExpressionContainer')
+    return attributeValue.expression;
 
-  return attrValue;
+  return attributeValue;
 }
 
 /**
@@ -149,15 +153,15 @@ export const argbValue = (value: unknown): number =>
  * colors, and every other key only numbers.
  *
  * @param key  The style or transform key.
- * @param interp  The binding's interpolation, or undefined for the value itself.
+ * @param interpolation  The binding's interpolation, or undefined for the value itself.
  * @param node  The node to pin an error to.
  */
 function checkAnimatedColor(
   key: string,
-  interp: Interpolation | undefined,
+  interpolation: Interpolation | undefined,
   node: t.Node,
 ): void {
-  if (ANIM_COLOR_KEYS.has(key) && !interp?.colors) {
+  if (ANIMATED_COLOR_KEYS.has(key) && !interpolation?.colors) {
     throw at(
       aotError(
         `AOT: an animated "${key}" needs colors`,
@@ -166,7 +170,7 @@ function checkAnimatedColor(
       node,
     );
   }
-  if (!ANIM_COLOR_KEYS.has(key) && interp?.colors) {
+  if (!ANIMATED_COLOR_KEYS.has(key) && interpolation?.colors) {
     throw at(
       aotError(
         `AOT: an animated "${key}" takes numbers, not colors`,
@@ -181,11 +185,11 @@ function checkAnimatedColor(
  * Lowers a dynamic (state-referencing) color expression to an ARGB value: a color, or a ternary of them.
  *
  * @param node  The color expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The value.
  */
-export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
+export function lowerColorValue(node: t.Node, environment: Env): IrPropValue {
   if (node.type === 'StringLiteral') {
     return {kind: 'constant', value: parseColorValue(node.value)};
   }
@@ -193,24 +197,27 @@ export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
   if (node.type === 'ConditionalExpression') {
     return {
       kind: 'select',
-      test: lowerExpr(node.test, env),
-      whenTrue: lowerColorValue(node.consequent, env),
-      whenFalse: lowerColorValue(node.alternate, env),
+      test: lowerExpr(node.test, environment),
+      whenTrue: lowerColorValue(node.consequent, environment),
+      whenFalse: lowerColorValue(node.alternate, environment),
     };
   }
 
   // A const worked out at boot picks its color at boot, from its own expression.
-  const bootAlias = bootAliasOf(node, env);
+  const bootAlias = bootAliasOf(node, environment);
   if (bootAlias) {
     const picked = tryLowering(() =>
-      lowerColorValue(bootAlias.node, bootAlias.env),
+      lowerColorValue(bootAlias.node, bootAlias.environment),
     );
     if (picked) return picked;
   }
 
   // A statically resolvable color (a const string, or a theme token like `theme.card`) folds to a literal.
   try {
-    const color = evalStatic(node, foldScope(env, env.consts ?? {}));
+    const color = evalStatic(
+      node,
+      foldScope(environment, environment.constants ?? {}),
+    );
     if (typeof color === 'string') {
       return {kind: 'constant', value: parseColorValue(color)};
     }
@@ -229,14 +236,14 @@ export function lowerColorValue(node: t.Node, env: Env): IrPropValue {
  *
  * @param node  The enum expression.
  * @param table  The RN value → ER_* constant table.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The value.
  */
 export function lowerEnumValue(
   node: t.Node,
   table: Record<string, EngineName>,
-  env: Env,
+  environment: Env,
 ): IrPropValue {
   if (node.type === 'StringLiteral') {
     const enumConstant = Object.hasOwn(table, node.value)
@@ -254,23 +261,26 @@ export function lowerEnumValue(
   if (node.type === 'ConditionalExpression') {
     return {
       kind: 'select',
-      test: lowerExpr(node.test, env),
-      whenTrue: lowerEnumValue(node.consequent, table, env),
-      whenFalse: lowerEnumValue(node.alternate, table, env),
+      test: lowerExpr(node.test, environment),
+      whenTrue: lowerEnumValue(node.consequent, table, environment),
+      whenFalse: lowerEnumValue(node.alternate, table, environment),
     };
   }
   // A const worked out at boot picks its value at boot, from its own expression.
-  const bootAlias = bootAliasOf(node, env);
+  const bootAlias = bootAliasOf(node, environment);
   if (bootAlias) {
     const picked = tryLowering(() =>
-      lowerEnumValue(bootAlias.node, table, bootAlias.env),
+      lowerEnumValue(bootAlias.node, table, bootAlias.environment),
     );
     if (picked) return picked;
   }
 
   // A statically resolvable enum (a const string) folds to its constant.
   try {
-    const enumValue = evalStatic(node, foldScope(env, env.consts ?? {}));
+    const enumValue = evalStatic(
+      node,
+      foldScope(environment, environment.constants ?? {}),
+    );
     if (typeof enumValue === 'string' && Object.hasOwn(table, enumValue)) {
       return {kind: 'constant', value: table[enumValue]};
     }
@@ -331,14 +341,14 @@ function lowerStyleChecked(key: string, value: unknown): StaticAssign[] {
  *
  * @param key  The style key.
  * @param valueNode  Its state-driven value.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The ERProps writes.
  */
 function lowerDynamicStyleValue(
   key: string,
   valueNode: t.Node,
-  env: Env,
+  environment: Env,
 ): DynAssign[] {
   // Own properties only, so a key like `toString` cannot resolve to Object.prototype and emit `p.undefined`.
   const dynamicField = Object.hasOwn(DYN_FIELDS, key)
@@ -361,7 +371,10 @@ function lowerDynamicStyleValue(
   // Colors and enums lower to a constant or a choice of constants.
   if (dynamicField.kind === 'color') {
     return [
-      {field: dynamicField.field, value: lowerColorValue(valueNode, env)},
+      {
+        field: dynamicField.field,
+        value: lowerColorValue(valueNode, environment),
+      },
     ];
   }
 
@@ -369,14 +382,14 @@ function lowerDynamicStyleValue(
     return [
       {
         field: dynamicField.field,
-        value: lowerEnumValue(valueNode, dynamicField.table, env),
+        value: lowerEnumValue(valueNode, dynamicField.table, environment),
       },
     ];
   }
 
   // Opacity and every size are numbers.
-  const valueExpr = lowerExpr(valueNode, env);
-  if (valueExpr.type.kind === 'string') {
+  const valueExpression = lowerExpr(valueNode, environment);
+  if (valueExpression.type.kind === 'string') {
     const error = aotError(
       `AOT: style "${key}" needs a number, but the value is a string`,
       "JS would coerce the string; the AOT doesn't. Keep the state numeric — useState(10), not useState('10').",
@@ -389,12 +402,18 @@ function lowerDynamicStyleValue(
   }
   if (dynamicField.kind === 'opacity') {
     return [
-      {field: dynamicField.field, value: {kind: 'opacity', value: valueExpr}},
+      {
+        field: dynamicField.field,
+        value: {kind: 'opacity', value: valueExpression},
+      },
     ];
   }
 
   return [
-    {field: dynamicField.field, value: {kind: 'dimension', value: valueExpr}},
+    {
+      field: dynamicField.field,
+      value: {kind: 'dimension', value: valueExpression},
+    },
   ];
 }
 
@@ -403,24 +422,28 @@ function lowerDynamicStyleValue(
  * entry of one), for a lowering that picks between literals.
  *
  * @param node  The expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The value's own expression and the environment it lowers in, or null.
  */
 function bootAliasOf(
   node: t.Node,
-  env: Env,
-): {node: t.Expression; env: Env} | null {
+  environment: Env,
+): {node: t.Expression; environment: Env} | null {
   let value: unknown;
   try {
-    value = evalStatic(node, foldScope(env, env.consts ?? {}), 'boot');
+    value = evalStatic(
+      node,
+      foldScope(environment, environment.constants ?? {}),
+      'boot',
+    );
   } catch {
     return null;
   }
 
   if (!isBoot(value) || !value.node || value.node === node) return null;
-  const bootEnv = bootEnvOf(value);
-  return bootEnv && {node: value.node, env: bootEnv};
+  const bootEnvironment = bootEnvOf(value);
+  return bootEnvironment && {node: value.node, environment: bootEnvironment};
 }
 
 /**
@@ -444,13 +467,13 @@ export function bootStyleAssign(
     : undefined;
   // A color or an enum lowers its own expression (a ternary of literals) against the names it reads.
   if (dynamicField?.kind === 'color' || dynamicField?.kind === 'enum') {
-    const env = bootEnvOf(value);
+    const environment = bootEnvOf(value);
     const valueNode = value.node;
-    if (!env || !valueNode) return null;
+    if (!environment || !valueNode) return null;
     const propValue = tryLowering(() =>
       dynamicField.kind === 'enum'
-        ? lowerEnumValue(valueNode, dynamicField.table, env)
-        : lowerColorValue(valueNode, env),
+        ? lowerEnumValue(valueNode, dynamicField.table, environment)
+        : lowerColorValue(valueNode, environment),
     );
     return propValue && {field: dynamicField.field, value: propValue};
   }
@@ -482,20 +505,20 @@ export function bootStyleAssign(
  *
  * @param key  The style key.
  * @param valueNode  The value expression.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The runtime writes.
  */
 function lowerBootStyleValue(
   key: string,
   valueNode: t.Node,
-  env: Env,
+  environment: Env,
 ): DynAssign[] {
   if (!Object.hasOwn(BOOT_PIXEL_FIELDS, key)) {
-    return lowerDynamicStyleValue(key, valueNode, env);
+    return lowerDynamicStyleValue(key, valueNode, environment);
   }
 
-  const value = lowerExpr(valueNode, env);
+  const value = lowerExpr(valueNode, environment);
   if (value.type.kind !== 'int' && value.type.kind !== 'float') {
     throw new Error(`AOT: style "${key}" needs a number`);
   }
@@ -525,20 +548,20 @@ function tryLowering<Result>(attempt: () => Result): Result | null {
  * ALONGSIDE the percentage, and the engine prefers the pixel value for a size.
  *
  * @param staticAssigns  Static field writes from collectStyleAssigns().
- * @param dynAssigns  State-driven field writes from collectStyleAssigns().
+ * @param dynamicAssigns  State-driven field writes from collectStyleAssigns().
  * @param field  ERProps field to look for.
  *
  * @returns Whether either list writes the field or its `_pct` twin.
  */
 export const styleWrites = (
   staticAssigns: {field: string}[],
-  dynAssigns: {field: string}[],
+  dynamicAssigns: {field: string}[],
   field: string,
 ): boolean =>
   [field, `${field}_pct`].some(
     fieldName =>
       staticAssigns.some(assign => assign.field === fieldName) ||
-      dynAssigns.some(assign => assign.field === fieldName),
+      dynamicAssigns.some(assign => assign.field === fieldName),
   );
 
 /**
@@ -549,7 +572,7 @@ export const styleWrites = (
  *
  * @param openingElement  The element's opening tag.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param spec  The element, for the style keys it takes.
  * @param bootValues  How a value worked out at boot is set: once at build, or taken at the build's panel.
  *
@@ -558,7 +581,7 @@ export const styleWrites = (
 export function collectStyleAssigns(
   openingElement: t.JSXOpeningElement,
   scope: Scope,
-  env: Env,
+  environment: Env,
   spec: ElementSpec,
   bootValues: 'boot' | 'fold' = 'boot',
 ): StyleAssigns {
@@ -582,24 +605,24 @@ export function collectStyleAssigns(
 
   // The handle of an animated value used directly as a style value, or null.
   const animRef = (node: t.Node | null | undefined): string | null =>
-    node?.type === 'Identifier' && env.animations?.has(node.name)
-      ? env.animations.get(node.name)!.slotName
+    node?.type === 'Identifier' && environment.animations?.has(node.name)
+      ? environment.animations.get(node.name)!.slotName
       : null;
   // `<animValue>.interpolate({ inputRange, outputRange, extrapolate })` → { slotName, interp } for a mapped bind.
   const animInterpRef = (
     node: t.Node | null | undefined,
-  ): {slotName: string; interp: Interpolation} | null => {
+  ): {slotName: string; interpolation: Interpolation} | null => {
     if (
       node?.type === 'CallExpression' &&
       node.callee.type === 'MemberExpression' &&
       !node.callee.computed &&
       (node.callee.property as t.Identifier).name === 'interpolate' &&
       node.callee.object.type === 'Identifier' &&
-      env.animations?.has(node.callee.object.name)
+      environment.animations?.has(node.callee.object.name)
     ) {
       return {
-        slotName: env.animations.get(node.callee.object.name)!.slotName,
-        interp: parseInterp(node.arguments[0], env),
+        slotName: environment.animations.get(node.callee.object.name)!.slotName,
+        interpolation: parseInterp(node.arguments[0], environment),
       };
     }
 
@@ -634,26 +657,26 @@ export function collectStyleAssigns(
         }
 
         // An animated entry the engine has no property for is refused, not skipped.
-        if (!Object.hasOwn(ANIM_TRANSFORM_PROPS, transformKey)) {
+        if (!Object.hasOwn(ANIMATED_TRANSFORM_PROPS, transformKey)) {
           throw at(
             aotError(
               `AOT: transform "${transformKey}" cannot be animated in Flow B`,
-              `animated transforms: ${Object.keys(ANIM_TRANSFORM_PROPS).join(', ')}.`,
+              `animated transforms: ${Object.keys(ANIMATED_TRANSFORM_PROPS).join(', ')}.`,
             ),
             transformProp,
           );
         }
-        checkAnimatedColor(transformKey, mapped?.interp, transformProp);
+        checkAnimatedColor(transformKey, mapped?.interpolation, transformProp);
 
-        for (const animProp of ANIM_TRANSFORM_PROPS[transformKey]) {
+        for (const animationProp of ANIMATED_TRANSFORM_PROPS[transformKey]) {
           transformBinds.push(
             mapped
               ? {
                   slotName: mapped.slotName,
-                  prop: animProp,
-                  interp: mapped.interp,
+                  prop: animationProp,
+                  interpolation: mapped.interpolation,
                 }
-              : {slotName: direct!, prop: animProp},
+              : {slotName: direct!, prop: animationProp},
           );
         }
       }
@@ -675,13 +698,14 @@ export function collectStyleAssigns(
   };
 
   // Lowers one style source (an array, an inline object, or a static reference) into `fields` and `binds`.
-  const applyStyle = (expr: t.Node): void => {
+  const applyStyle = (expression: t.Node): void => {
     // RN ignores an undefined style or style-array entry; so does Flow A's flattenStyle.
-    if (expr.type === 'Identifier' && expr.name === 'undefined') return;
+    if (expression.type === 'Identifier' && expression.name === 'undefined')
+      return;
 
     // A style array applies its entries in order, so later entries win.
-    if (expr.type === 'ArrayExpression') {
-      for (const styleEntry of expr.elements) {
+    if (expression.type === 'ArrayExpression') {
+      for (const styleEntry of expression.elements) {
         if (styleEntry) {
           applyStyle(styleEntry);
         }
@@ -691,8 +715,8 @@ export function collectStyleAssigns(
     }
 
     // Inline object: bind animated values natively; fold other keys statically or re-apply them in the update.
-    if (expr.type === 'ObjectExpression') {
-      for (const prop of expr.properties) {
+    if (expression.type === 'ObjectExpression') {
+      for (const prop of expression.properties) {
         if (prop.type !== 'ObjectProperty') {
           throw new Error(
             'AOT: spread/method in an inline style object not supported',
@@ -715,25 +739,25 @@ export function collectStyleAssigns(
         }
 
         // Bind an animated value to its prop (opacity / backgroundColor / color), directly or via .interpolate().
-        const animVar = animRef(prop.value);
-        if (animVar && ANIM_STYLE_PROPS[key]) {
+        const animationValue = animRef(prop.value);
+        if (animationValue && ANIMATED_STYLE_PROPS[key]) {
           checkAnimatedStyleKey(spec, key, prop);
           checkAnimatedColor(key, undefined, prop);
-          for (const animProp of ANIM_STYLE_PROPS[key]) {
-            binds.push({slotName: animVar, prop: animProp});
+          for (const animationProp of ANIMATED_STYLE_PROPS[key]) {
+            binds.push({slotName: animationValue, prop: animationProp});
           }
           continue;
         }
 
-        const animInterp = animInterpRef(prop.value);
-        if (animInterp && ANIM_STYLE_PROPS[key]) {
+        const animationInterpolation = animInterpRef(prop.value);
+        if (animationInterpolation && ANIMATED_STYLE_PROPS[key]) {
           checkAnimatedStyleKey(spec, key, prop);
-          checkAnimatedColor(key, animInterp.interp, prop);
-          for (const animProp of ANIM_STYLE_PROPS[key]) {
+          checkAnimatedColor(key, animationInterpolation.interpolation, prop);
+          for (const animationProp of ANIMATED_STYLE_PROPS[key]) {
             binds.push({
-              slotName: animInterp.slotName,
-              prop: animProp,
-              interp: animInterp.interp,
+              slotName: animationInterpolation.slotName,
+              prop: animationProp,
+              interpolation: animationInterpolation.interpolation,
             });
           }
 
@@ -751,11 +775,11 @@ export function collectStyleAssigns(
         }
 
         // Only a failed fold falls back to the dynamic path, so an unknown key is not misreported as state-driven.
-        let staticValue: {v: unknown} | null;
+        let staticValue: {value: unknown} | null;
         let readsBoot = false;
         try {
           staticValue = {
-            v: evalStatic(
+            value: evalStatic(
               prop.value,
               withUndefined(scope),
               bootValues === 'fold' ? 'fold' : 'strict',
@@ -769,7 +793,7 @@ export function collectStyleAssigns(
         // A value worked out at boot is set once at build; a key that takes no runtime value folds it instead.
         if (readsBoot) {
           const bootAssigns = tryLowering(() =>
-            lowerBootStyleValue(key, prop.value, env),
+            lowerBootStyleValue(key, prop.value, environment),
           );
           if (bootAssigns) {
             checkStyleKey(spec, key, prop);
@@ -779,20 +803,24 @@ export function collectStyleAssigns(
             continue;
           }
 
-          staticValue = {v: evalStatic(prop.value, withUndefined(scope))};
+          staticValue = {value: evalStatic(prop.value, withUndefined(scope))};
         }
 
         if (staticValue) {
-          if (staticValue.v != null) {
+          if (staticValue.value != null) {
             checkStyleKey(spec, key, prop);
           }
 
-          for (const assign of lowerStyleChecked(key, staticValue.v)) {
+          for (const assign of lowerStyleChecked(key, staticValue.value)) {
             setField(assign.field, {constant: assign.value});
           }
         } else {
           checkStyleKey(spec, key, prop);
-          for (const assign of lowerDynamicStyleValue(key, prop.value, env)) {
+          for (const assign of lowerDynamicStyleValue(
+            key,
+            prop.value,
+            environment,
+          )) {
             setField(assign.field, {value: assign.value});
           }
         }
@@ -802,7 +830,7 @@ export function collectStyleAssigns(
     }
 
     // A static style reference; null, undefined or false (`cond && s`) means no style, as in RN.
-    let resolved = evalStatic(expr, withUndefined(scope), 'boot');
+    let resolved = evalStatic(expression, withUndefined(scope), 'boot');
     if (isBoot(resolved)) {
       resolved = foldBoot(resolved);
     }
@@ -818,7 +846,7 @@ export function collectStyleAssigns(
           ? bootStyleAssign(styleKey, entry)
           : null;
       if (bootAssign) {
-        checkStyleKey(spec, styleKey, expr);
+        checkStyleKey(spec, styleKey, expression);
         setField(bootAssign.field, {value: bootAssign.value});
         continue;
       }
@@ -826,7 +854,7 @@ export function collectStyleAssigns(
       const styleValue = foldBoot(entry);
       if (styleValue === undefined || styleValue === null) continue;
 
-      checkStyleKey(spec, styleKey, expr);
+      checkStyleKey(spec, styleKey, expression);
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
         setField(assign.field, {constant: assign.value});
       }
@@ -834,29 +862,29 @@ export function collectStyleAssigns(
   };
 
   // Apply every style attribute in source order.
-  for (const attr of openingElement.attributes) {
+  for (const attribute of openingElement.attributes) {
     if (
-      attr.type !== 'JSXAttribute' ||
-      (attr.name as t.JSXIdentifier).name !== 'style'
+      attribute.type !== 'JSXAttribute' ||
+      (attribute.name as t.JSXIdentifier).name !== 'style'
     ) {
       continue;
     }
 
-    applyStyle(attrExpr(attr));
+    applyStyle(attrExpr(attribute));
   }
 
   // Split the merged fields into constant writes and state-driven writes.
   const staticAssigns: StaticAssign[] = [];
-  const dynAssigns: DynAssign[] = [];
+  const dynamicAssigns: DynAssign[] = [];
   for (const [field, fieldWrite] of fields) {
     if ('value' in fieldWrite) {
-      dynAssigns.push({field, value: fieldWrite.value});
+      dynamicAssigns.push({field, value: fieldWrite.value});
     } else {
       staticAssigns.push({field, value: fieldWrite.constant});
     }
   }
 
-  return {staticAssigns, dynAssigns, binds};
+  return {staticAssigns, dynamicAssigns, binds};
 }
 
 /**
@@ -865,14 +893,14 @@ export function collectStyleAssigns(
  *
  * @param children  The <Text>'s children.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The body.
  */
 export function lowerNodeText(
   children: t.JSXElement['children'],
   scope: Scope,
-  env: Env,
+  environment: Env,
 ): IrText {
   const parts: IrTextPart[] = [];
   for (const child of inlineFragments(children)) {
@@ -881,7 +909,7 @@ export function lowerNodeText(
     } else if (child.type === 'JSXExpressionContainer') {
       if (child.expression.type === 'JSXEmptyExpression') continue;
       // Constants fold into literal text; anything referencing state is a runtime value.
-      parts.push(...lowerText(child.expression, env, scope).parts);
+      parts.push(...lowerText(child.expression, environment, scope).parts);
     } else if (child.type === 'JSXElement') {
       throw new Error(
         'AOT: nested <Text> / element children inside <Text> not yet supported (spans)',
@@ -990,14 +1018,14 @@ function staticTextContent(
  *
  * @param children  The <Text>'s children.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The spans, or null when the <Text> has no nested <Text>.
  */
 export function collectTextSpans(
   children: t.JSXElement['children'],
   scope: Scope,
-  env: Env,
+  environment: Env,
 ): TextSpan[] | null {
   // Without a nested <Text>, the caller uses the single-string buildText path.
   children = inlineFragments(children);
@@ -1016,9 +1044,9 @@ export function collectTextSpans(
     text,
     color: 0,
     font_size: 0,
-    font_weight: 0xff,
-    font_style: 0xff,
-    text_decoration: 0xff,
+    font_weight: SPAN_INHERIT,
+    font_style: SPAN_INHERIT,
+    text_decoration: SPAN_INHERIT,
     letter_spacing: 'ER_LAYOUT_AUTO',
   });
 
@@ -1059,14 +1087,14 @@ export function collectTextSpans(
     ) {
       checkAttributes(TEXT_SPAN, child.openingElement);
       // A span is a static table, so a value worked out at boot is taken at the build's panel instead.
-      const {staticAssigns, dynAssigns} = collectStyleAssigns(
+      const {staticAssigns, dynamicAssigns} = collectStyleAssigns(
         child.openingElement,
         scope,
-        env,
+        environment,
         TEXT_SPAN,
         'fold',
       );
-      if (dynAssigns.length) {
+      if (dynamicAssigns.length) {
         throw aotError(
           'AOT: a state-driven style on a nested <Text> span is not supported',
           'give the span <Text> a static style.',
@@ -1084,9 +1112,9 @@ export function collectTextSpans(
         text: spanText(staticTextContent(child.children, scope)),
         color: spanStyle('color', 0),
         font_size: spanStyle('font_size', 0),
-        font_weight: spanStyle('font_weight', 0xff),
-        font_style: spanStyle('font_style', 0xff),
-        text_decoration: spanStyle('text_decoration', 0xff),
+        font_weight: spanStyle('font_weight', SPAN_INHERIT),
+        font_style: spanStyle('font_style', SPAN_INHERIT),
+        text_decoration: spanStyle('text_decoration', SPAN_INHERIT),
         letter_spacing: spanStyle('letter_spacing', 'ER_LAYOUT_AUTO'),
       });
     } else {
@@ -1101,7 +1129,7 @@ export function collectTextSpans(
   check({
     kind: 'textSpans',
     count: spans.length,
-    max: env.caps.maxTextSpans,
+    max: environment.caps.maxTextSpans,
   });
 
   return spans;

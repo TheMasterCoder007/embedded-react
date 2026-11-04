@@ -52,7 +52,7 @@ interface Fold {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The Math functions a fold works out, as JS does. */
-const STATIC_MATH: Record<string, (...args: any[]) => number> = {
+const STATIC_MATH: Record<string, (...values: any[]) => number> = {
   min: Math.min,
   max: Math.max,
   floor: Math.floor,
@@ -430,7 +430,7 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
       }
 
       // Math.min / max / floor / ceil / round / trunc / abs fold as JS works them out; others are dynamic.
-      const mathFn =
+      const mathFunction =
         callee.type === 'MemberExpression' &&
         !callee.computed &&
         callee.object.type === 'Identifier' &&
@@ -438,16 +438,20 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
         !hasBinding(scope, 'Math')
           ? (callee.property as t.Identifier).name
           : null;
-      if (mathFn && Object.hasOwn(STATIC_MATH, mathFn)) {
-        const args = node.arguments.map(arg => {
-          if (arg.type === 'SpreadElement') {
+      if (mathFunction && Object.hasOwn(STATIC_MATH, mathFunction)) {
+        const argumentValues = node.arguments.map(argument => {
+          if (argument.type === 'SpreadElement') {
             throw new Error('AOT: cannot statically evaluate a spread');
           }
 
-          return evaluate(arg, scope, fold);
+          return evaluate(argument, scope, fold);
         });
-        const result = STATIC_MATH[mathFn](...args.map(buildValueOf));
-        return args.some(isBoot) ? bootOf(node, result, fold) : result;
+        const result = STATIC_MATH[mathFunction](
+          ...argumentValues.map(buildValueOf),
+        );
+        return argumentValues.some(isBoot)
+          ? bootOf(node, result, fold)
+          : result;
       }
 
       throw new Error(`AOT: cannot statically evaluate call expression`);
@@ -504,30 +508,30 @@ function binary(operator: string, left: any, right: any): unknown {
 }
 
 /**
- * `scope` minus every name `env` binds at RUNTIME — locals, state, refs, animated values, and the event /
- * gesture params of the handler being compiled. lowerExpr resolves those before env.consts, so a fold
+ * `scope` minus every name `environment` binds at RUNTIME — locals, state, refs, animated values, and the event /
+ * gesture params of the handler being compiled. lowerExpr resolves those before environment.constants, so a fold
  * that consulted the raw scope would silently swap a module const in for the value the code actually
  * uses. Every env-driven constant fold goes through this; the JSX-side folds keep the same rule by
  * deleting a name from their scope copy when they bind it (see emitComponent / emitDynamicMap).
  *
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param scope  The constants a fold would otherwise see.
  *
  * @returns `scope` itself when nothing shadows it, else a copy without the shadowed names.
  */
-export function foldScope(env: Env, scope: Scope): Scope {
+export function foldScope(environment: Env, scope: Scope): Scope {
   const runtimeNames = new Set([
-    ...(env.locals?.keys() ?? []),
-    ...(env.state?.keys() ?? []),
-    ...(env.refs?.keys() ?? []),
-    ...(env.animations?.keys() ?? []),
+    ...(environment.locals?.keys() ?? []),
+    ...(environment.state?.keys() ?? []),
+    ...(environment.refs?.keys() ?? []),
+    ...(environment.animations?.keys() ?? []),
   ]);
-  if (env.event) {
-    runtimeNames.add(env.event);
+  if (environment.event) {
+    runtimeNames.add(environment.event);
   }
 
-  if (env.gesture) {
-    runtimeNames.add(env.gesture);
+  if (environment.gesture) {
+    runtimeNames.add(environment.gesture);
   }
 
   // Copy the scope only when a runtime name actually shadows one of its constants.
@@ -595,19 +599,22 @@ export const withUndefined = (scope: Scope): Scope =>
  * evalStatic with a fallback default when the node is absent or not foldable.
  *
  * @param node  The expression, if there is one.
- * @param env  The expression environment; its constants are what the fold sees.
+ * @param environment  The expression environment; its constants are what the fold sees.
  * @param defaultValue  The value to use when the node is absent or does not fold.
  *
  * @returns The folded value, or `defaultValue`.
  */
 export function evalStaticOr(
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
   defaultValue: unknown,
 ): unknown {
   if (!node) return defaultValue;
   try {
-    return evalStatic(node, foldScope(env, env.consts ?? {}));
+    return evalStatic(
+      node,
+      foldScope(environment, environment.constants ?? {}),
+    );
   } catch {
     return defaultValue;
   }

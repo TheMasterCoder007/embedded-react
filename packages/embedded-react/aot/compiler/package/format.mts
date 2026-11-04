@@ -136,6 +136,11 @@ export const EVENT_SIZE = 32;
 /** Bytes a list pool keeps before its rows: the row count. */
 export const LIST_HEADER_SIZE = 4;
 
+/** Bytes a stack cell, a tape float and a node handle take. */
+export const CELL_SIZE = 4;
+export const TAPE_FLOAT_SIZE = 4;
+export const HANDLE_SIZE = 8;
+
 /** Register and slot value types. A 64-bit type, or a node handle, takes two register cells, the first even. */
 export const ValueType = {
   pair: 0,

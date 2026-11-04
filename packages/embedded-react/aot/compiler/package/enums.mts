@@ -39,7 +39,7 @@ import type {ScalarState} from '../types.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 // What an IR walk skips: where a value came from (which repeats its reads, untyped) and source positions.
-const SKIPPED_KEYS = new Set(['source', 'loc']);
+const SKIPPED_KEYS = new Set(['source', 'location']);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -117,8 +117,8 @@ export function internedStates(app: IrApp): Map<ScalarState, string[]> {
         return;
       }
       case 'declareLocal':
-        if (!isRead(node.init)) {
-          walk(node.init);
+        if (!isRead(node.initializer)) {
+          walk(node.initializer);
         }
         return;
     }
@@ -138,17 +138,17 @@ export function internedStates(app: IrApp): Map<ScalarState, string[]> {
     }
   };
 
-  const {out} = app;
+  const {output} = app;
   walk([
     nodesOf(app.root),
-    out.handlers,
-    out.timerFns,
-    out.effectFns,
-    out.mountEffects,
-    out.depEffects,
-    out.animCbs,
-    out.panResponders,
-    out.vectors,
+    output.handlers,
+    output.timerFunctions,
+    output.effectFunctions,
+    output.mountEffects,
+    output.dependencyEffects,
+    output.animationCallbacks,
+    output.panResponders,
+    output.vectors,
     app.boot,
   ]);
 

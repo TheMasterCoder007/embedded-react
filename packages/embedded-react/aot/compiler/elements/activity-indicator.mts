@@ -60,32 +60,32 @@ const SIZE_LARGE = 36;
  *
  * @param element  The JSX element.
  * @param scope  The current scope.
- * @param out  The current output.
- * @param env  The current environment.
+ * @param output  The current output.
+ * @param environment  The current environment.
  *
  * @returns The name of the node variable (Node ID).
  */
 export function emitActivityIndicator(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
 ): IrNode {
   // get node id
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     elementSpec('ActivityIndicator')!,
   );
   const hasField = (field: string) =>
-    styleWrites(staticAssigns, dynAssigns, field);
+    styleWrites(staticAssigns, dynamicAssigns, field);
 
   // `style.color` tints the spinner, as in Flow A; a `color` prop written after it wins.
-  for (const assign of [...staticAssigns, ...dynAssigns]) {
+  for (const assign of [...staticAssigns, ...dynamicAssigns]) {
     if (assign.field === 'color') {
       assign.field = 'indicator_color';
     }
@@ -93,21 +93,21 @@ export function emitActivityIndicator(
 
   // process element attributes
   let size = SIZE_LARGE;
-  for (const attr of element.openingElement.attributes) {
+  for (const attribute of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute') {
+    if (attribute.type !== 'JSXAttribute') {
       throw aotError(
         'AOT: spread props on <ActivityIndicator> are not supported',
       );
     }
 
     // skip non-props
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'style' || name === 'ref' || name === 'key') continue;
 
     // process props
-    const node = attrExpr(attr);
+    const node = attrExpr(attribute);
     if (name === 'color') {
       try {
         staticAssigns.push({
@@ -115,9 +115,9 @@ export function emitActivityIndicator(
           value: parseColorValue(String(evalStatic(node, scope))),
         });
       } catch {
-        dynAssigns.push({
+        dynamicAssigns.push({
           field: 'indicator_color',
-          value: lowerColorValue(node, env),
+          value: lowerColorValue(node, environment),
         });
       }
     } else if (name === 'size') {
@@ -137,7 +137,7 @@ export function emitActivityIndicator(
           aotError(
             `AOT: <ActivityIndicator size> must be 'small', 'large' or a number of pixels (got ${JSON.stringify(sizeValue) ?? String(sizeValue)})`,
           ),
-          attr,
+          attribute,
         );
       }
     } else if (name === 'animating') {
@@ -147,11 +147,11 @@ export function emitActivityIndicator(
           value: evalStatic(node, scope) ? 1 : 0,
         });
       } catch {
-        dynAssigns.push({
+        dynamicAssigns.push({
           field: 'animating',
           value: {
             kind: 'flag',
-            test: lowerExpr(node, env),
+            test: lowerExpr(node, environment),
             truthiness: 'value',
             negate: false,
             whenTrue: 1,
@@ -176,10 +176,10 @@ export function emitActivityIndicator(
 
   const node: IrNode = {
     id: nodeId,
-    loc: currentLoc(),
+    location: currentLoc(),
     type: 'ER_NODE_ACTIVITY_INDICATOR',
     constantProps: staticAssigns,
-    stateProps: dynAssigns,
+    stateProps: dynamicAssigns,
     placeholder: null,
     text: null,
     image: null,
@@ -187,7 +187,7 @@ export function emitActivityIndicator(
     children: [],
     wiring: [
       ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),
-      ...lowerRefBinds(element.openingElement, env).map(slot => ({
+      ...lowerRefBinds(element.openingElement, environment).map(slot => ({
         kind: 'ref' as const,
         slot,
       })),

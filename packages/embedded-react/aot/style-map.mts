@@ -88,7 +88,7 @@ export const NODE_TYPES: Record<string, string> = {
 };
 
 /** Numeric style keys that can be state-driven and the ERProps field each one writes. */
-const NUM_FIELDS: Record<string, string> = {
+const NUMBER_FIELDS: Record<string, string> = {
   width: 'width',
   height: 'height',
   minWidth: 'min_width',
@@ -146,7 +146,7 @@ const ENUM_FIELDS: Record<string, {field: string; table: EnumTable}> = {
  */
 export const DYN_FIELDS: Record<string, DynamicStyleField> = {
   ...Object.fromEntries(
-    Object.entries(NUM_FIELDS).map(([styleKey, field]) => [
+    Object.entries(NUMBER_FIELDS).map(([styleKey, field]) => [
       styleKey,
       {field, kind: 'num' as const},
     ]),
@@ -162,6 +162,15 @@ export const DYN_FIELDS: Record<string, DynamicStyleField> = {
   borderColor: {field: 'border_color', kind: 'color'},
   opacity: {field: 'opacity', kind: 'opacity'},
 };
+
+/** The engine's opacity for fully opaque, which a 0–1 opacity scales to. */
+export const OPACITY_OPAQUE = 255;
+
+/** The alpha of a color written without one. */
+const ALPHA_OPAQUE = 0xff;
+
+/** The lightest numeric fontWeight drawn bold. */
+const BOLD_WEIGHT = 600;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -204,7 +213,7 @@ export function parseColorValue(color: unknown): number {
   // Split out the channels; a 6-digit color is opaque.
   let red: number, green: number, blue: number, alpha: number;
   if (hex.length === 6) {
-    alpha = 0xff;
+    alpha = ALPHA_OPAQUE;
     red = parseInt(hex.slice(0, 2), 16);
     green = parseInt(hex.slice(2, 4), 16);
     blue = parseInt(hex.slice(4, 6), 16);
@@ -282,13 +291,13 @@ const dimension = (value: unknown): PropConstant => {
  * a number → the pixel field. Used for width / height / flexBasis and the four insets, all of which the
  * engine resolves at layout.
  *
- * @param pxField  ERProps pixel field (e.g. 'width').
- * @param pctField  ERProps percentage field (e.g. 'width_pct').
+ * @param pixelField  ERProps pixel field (e.g. 'width').
+ * @param percentField  ERProps percentage field (e.g. 'width_pct').
  *
  * @returns The lowering for that key.
  */
 const pctOrPx =
-  (pxField: string, pctField: string): StyleLowering =>
+  (pixelField: string, percentField: string): StyleLowering =>
   value => {
     if (typeof value === 'string' && value.trim().endsWith('%')) {
       const percent = parseFloat(value);
@@ -299,12 +308,12 @@ const pctOrPx =
       }
 
       // The engine reads a 0.0 percentage as "not set", so lower 0% to the pixel field, where 0 means the same.
-      if (percent === 0) return [{field: pxField, value: 0}];
+      if (percent === 0) return [{field: pixelField, value: 0}];
 
-      return [{field: pctField, value: percent}];
+      return [{field: percentField, value: percent}];
     }
 
-    return [{field: pxField, value: dimension(value)}];
+    return [{field: pixelField, value: dimension(value)}];
   };
 
 /**
@@ -427,7 +436,9 @@ const KEYS: Record<string, StyleLowering> = {
   opacity: opacity => [
     {
       field: 'opacity',
-      value: Math.round(Math.max(0, Math.min(1, Number(opacity))) * 255),
+      value: Math.round(
+        Math.max(0, Math.min(1, Number(opacity))) * OPACITY_OPAQUE,
+      ),
     },
   ],
   zIndex: zIndex => [{field: 'z_index', value: dimension(zIndex)}],
@@ -438,7 +449,7 @@ const KEYS: Record<string, StyleLowering> = {
   fontWeight: weight => [
     {
       field: 'font_weight',
-      value: weight === 'bold' || Number(weight) >= 600 ? 1 : 0,
+      value: weight === 'bold' || Number(weight) >= BOLD_WEIGHT ? 1 : 0,
     },
   ],
   lineHeight: lineHeight => [

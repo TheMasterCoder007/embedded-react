@@ -30,7 +30,7 @@ import type {CompileOptions} from './options.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 // Type-only expression wrappers: `x as T`, `x satisfies T`, `x!`, `<T>x`, `f<T>` — unwrap to the inner expr.
-const TS_EXPR_WRAPPERS = new Set([
+const TS_EXPRESSION_WRAPPERS = new Set([
   'TSAsExpression',
   'TSSatisfiesExpression',
   'TSNonNullExpression',
@@ -39,7 +39,7 @@ const TS_EXPR_WRAPPERS = new Set([
 ]);
 
 // Type-only declarations (no runtime presence) — dropped from any statement/body list.
-const TS_TYPE_DECLS = new Set([
+const TS_TYPE_DECLARATIONS = new Set([
   'TSInterfaceDeclaration',
   'TSTypeAliasDeclaration',
   'TSDeclareFunction',
@@ -78,14 +78,14 @@ const TS_SKIP_KEYS = new Set([
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Is this app a TypeScript entry? Driven by the filename extension, or an explicit opts.ts (for tests).
+ * Is this app a TypeScript entry? Driven by the filename extension, or an explicit options.ts (for tests).
  *
- * @param opts  compilePackage's options.
+ * @param options  compilePackage's options.
  *
  * @returns Whether to parse the source as TypeScript.
  */
-const isTsEntry = (opts: Pick<CompileOptions, 'ts' | 'filename'>): boolean =>
-  opts.ts ?? /\.[cm]?tsx$/.test(opts.filename || '');
+const isTsEntry = (options: Pick<CompileOptions, 'ts' | 'filename'>): boolean =>
+  options.ts ?? /\.[cm]?tsx$/.test(options.filename || '');
 
 /**
  * The Babel parser plugins for an entry.
@@ -106,7 +106,7 @@ const parserPlugins = (isTypeScript: boolean): ParserPlugin[] =>
  */
 const isTypeOnly = (node: t.Node | null | undefined): boolean =>
   !!node &&
-  (TS_TYPE_DECLS.has(node.type) ||
+  (TS_TYPE_DECLARATIONS.has(node.type) ||
     // `import type ... ` / `export type ...`, and per-specifier `import { type X }`.
     ((node.type === 'ImportDeclaration' || node.type === 'ImportSpecifier') &&
       node.importKind === 'type') ||
@@ -122,7 +122,7 @@ const isTypeOnly = (node: t.Node | null | undefined): boolean =>
  * @returns The expression under every wrapper.
  */
 const unwrapTs = (node: any): any => {
-  while (node && TS_EXPR_WRAPPERS.has(node.type)) {
+  while (node && TS_EXPRESSION_WRAPPERS.has(node.type)) {
     node = node.expression;
   }
 
@@ -159,7 +159,7 @@ function stripTypeScript(root: t.File): t.File {
         const kept = [];
         for (let item of value) {
           if (isTypeOnly(item)) continue;
-          if (item && TS_EXPR_WRAPPERS.has(item.type)) {
+          if (item && TS_EXPRESSION_WRAPPERS.has(item.type)) {
             item = unwrapTs(item);
           }
           kept.push(item);
@@ -169,7 +169,7 @@ function stripTypeScript(root: t.File): t.File {
         node[key] = kept;
       } else if (value && typeof value.type === 'string') {
         // A single child node: replace a type-only wrapper with the expression under it.
-        if (TS_EXPR_WRAPPERS.has(value.type)) {
+        if (TS_EXPRESSION_WRAPPERS.has(value.type)) {
           value = unwrapTs(value);
           node[key] = value;
         }
@@ -240,11 +240,11 @@ export function normalizeUndefined(ast: t.File): void {
   };
 
   // A JSX attribute written as exactly `name={undefined}`.
-  const isUndefinedAttr = (attr: t.JSXAttribute | t.JSXSpreadAttribute) =>
-    attr.type === 'JSXAttribute' &&
-    attr.value?.type === 'JSXExpressionContainer' &&
-    attr.value.expression.type === 'Identifier' &&
-    attr.value.expression.name === 'undefined';
+  const isUndefinedAttr = (attribute: t.JSXAttribute | t.JSXSpreadAttribute) =>
+    attribute.type === 'JSXAttribute' &&
+    attribute.value?.type === 'JSXExpressionContainer' &&
+    attribute.value.expression.type === 'Identifier' &&
+    attribute.value.expression.name === 'undefined';
 
   // Keys that never hold child nodes.
   const SKIP = new Set([
@@ -293,9 +293,9 @@ export function normalizeUndefined(ast: t.File): void {
       case 'JSXOpeningElement':
         // An undeclared prop stays, so the element refuses it by name whatever its value.
         node.attributes = node.attributes.filter(
-          (attr: t.JSXAttribute | t.JSXSpreadAttribute) =>
-            !isUndefinedAttr(attr) ||
-            isUndeclaredAttribute(node, attr as t.JSXAttribute),
+          (attribute: t.JSXAttribute | t.JSXSpreadAttribute) =>
+            !isUndefinedAttr(attribute) ||
+            isUndeclaredAttribute(node, attribute as t.JSXAttribute),
         );
         break;
     }
@@ -320,17 +320,17 @@ export function normalizeUndefined(ast: t.File): void {
  * Parses an app entry to a JS+JSX AST, transparently stripping TypeScript when the entry is .tsx (JSX is not
  * allowed in a .ts file). The strip is faithful: an App.tsx compiles to the same package as its untyped App.jsx twin.
  *
- * @param src  The entry's source.
- * @param opts  compilePackage's options: its filename (or `ts`) decides whether it is TypeScript.
+ * @param source  The entry's source.
+ * @param options  compilePackage's options: its filename (or `ts`) decides whether it is TypeScript.
  *
  * @returns The parsed file.
  */
 export function parseApp(
-  src: string,
-  opts: Pick<CompileOptions, 'ts' | 'filename'> = {},
+  source: string,
+  options: Pick<CompileOptions, 'ts' | 'filename'> = {},
 ): t.File {
-  const isTypeScript = isTsEntry(opts);
-  const ast = parse(src, {
+  const isTypeScript = isTsEntry(options);
+  const ast = parse(source, {
     sourceType: 'module',
     plugins: parserPlugins(isTypeScript),
   });

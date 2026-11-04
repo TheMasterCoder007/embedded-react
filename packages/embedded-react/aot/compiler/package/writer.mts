@@ -140,7 +140,7 @@ export interface ProgramAnim {
   amount: number;
   delayMs: number;
   to: number;
-  params: [number, number, number, number];
+  parameters: [number, number, number, number];
 }
 
 /** An interpolation: the animated value, the breakpoints, and the outputs as floats' or colors' 32 bits. */
@@ -220,7 +220,7 @@ export interface ProgramLine {
 
 export interface ProgramFunction {
   kind: number;
-  params: number;
+  parameters: number;
   result: number;
   /** One type per register cell. */
   types: number[];
@@ -248,10 +248,10 @@ export interface Program {
   templates: ProgramTemplate[];
   bindings: ProgramBinding[];
   functions: ProgramFunction[];
-  anims: ProgramAnim[];
+  animations: ProgramAnim[];
   /** Host-fed values, sorted by name. */
   inputs: ProgramInput[];
-  interps: ProgramInterp[];
+  interpolations: ProgramInterp[];
   tapes: ProgramTape[];
   keyboard: ProgramKeyboard | null;
 }
@@ -275,6 +275,9 @@ export interface WrittenProgram {
 /** The breakpoints an interpolation record has room for (ER_INTERPOLATE_MAX_POINTS). */
 const MAX_POINTS = 8;
 
+/** Bytes a writer starts with; it doubles as it fills. */
+const INITIAL_BUFFER_SIZE = 256;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -285,7 +288,7 @@ const MAX_POINTS = 8;
  * @class ByteWriter
  */
 export class ByteWriter {
-  private buffer = new Uint8Array(256);
+  private buffer = new Uint8Array(INITIAL_BUFFER_SIZE);
   private view = new DataView(this.buffer.buffer);
   length = 0;
 
@@ -359,10 +362,10 @@ class Bodies {
   private typesAt = new Map<string, number>();
 
   /** Where a function's code and register types sit, storing each the first time it is seen. */
-  place(fn: ProgramFunction): {code: number; types: number} {
+  place(programFunction: ProgramFunction): {code: number; types: number} {
     return {
-      code: Bodies.store(this.codeAt, this.code, fn.code),
-      types: Bodies.store(this.typesAt, this.types, fn.types),
+      code: Bodies.store(this.codeAt, this.code, programFunction.code),
+      types: Bodies.store(this.typesAt, this.types, programFunction.types),
     };
   }
 
@@ -396,22 +399,22 @@ class Bodies {
  */
 function headedTable<Record>(
   groups: Record[][],
-  writeRecord: (out: ByteWriter, record: Record) => void,
+  writeRecord: (writer: ByteWriter, record: Record) => void,
 ): Uint8Array {
-  const out = new ByteWriter();
-  out.u32(groups.length);
+  const writer = new ByteWriter();
+  writer.u32(groups.length);
   let first = 0;
   for (const group of groups) {
-    out.u16(first);
-    out.u16(group.length);
+    writer.u16(first);
+    writer.u16(group.length);
     first += group.length;
   }
   for (const group of groups) {
     for (const record of group) {
-      writeRecord(out, record);
+      writeRecord(writer, record);
     }
   }
-  return out.done();
+  return writer.done();
 }
 
 /**
@@ -422,10 +425,10 @@ function headedTable<Record>(
  * @returns The padded bytes.
  */
 function padded(bytes: Uint8Array): Uint8Array {
-  const out = new ByteWriter();
-  out.bytes(bytes);
-  out.pad4();
-  return out.done();
+  const writer = new ByteWriter();
+  writer.bytes(bytes);
+  writer.pad4();
+  return writer.done();
 }
 
 /**
@@ -436,19 +439,19 @@ function padded(bytes: Uint8Array): Uint8Array {
  * @returns The table's bytes.
  */
 export function stringsTable(strings: string[]): Uint8Array {
-  const out = new ByteWriter();
-  out.u32(strings.length);
+  const writer = new ByteWriter();
+  writer.u32(strings.length);
   const encoded = strings.map(text => new TextEncoder().encode(`${text}\0`));
   let offset = 4 + strings.length * 4;
   for (const bytes of encoded) {
-    out.u32(offset);
+    writer.u32(offset);
     offset += bytes.length;
   }
   for (const bytes of encoded) {
-    out.bytes(bytes);
+    writer.bytes(bytes);
   }
-  out.pad4();
-  return out.done();
+  writer.pad4();
+  return writer.done();
 }
 
 /**
@@ -462,160 +465,164 @@ export function stringsTable(strings: string[]): Uint8Array {
  */
 function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
   const tables = new Map<number, Uint8Array>();
-  const table = (id: number, write: (out: ByteWriter) => void): void => {
-    const out = new ByteWriter();
-    write(out);
-    tables.set(id, out.done());
+  const table = (id: number, write: (writer: ByteWriter) => void): void => {
+    const writer = new ByteWriter();
+    write(writer);
+    tables.set(id, writer.done());
   };
 
   if (program.strings.length) {
     tables.set(Table.strings, stringsTable(program.strings));
   }
   if (program.const32.length) {
-    table(Table.const32, out => program.const32.forEach(bits => out.u32(bits)));
+    table(Table.const32, writer =>
+      program.const32.forEach(bits => writer.u32(bits)),
+    );
   }
   if (program.const64.length) {
-    table(Table.const64, out => {
+    table(Table.const64, writer => {
       for (const value of program.const64) {
         const bits = BigInt.asUintN(64, value);
-        out.u32(Number(bits & 0xffffffffn));
-        out.u32(Number(bits >> 32n));
+        writer.u32(Number(bits & 0xffffffffn));
+        writer.u32(Number(bits >> 32n));
       }
     });
   }
-  table(Table.arena, out => {
+  table(Table.arena, writer => {
     for (const region of program.regions) {
-      out.u16(region.kind);
-      out.u16(region.count);
-      out.u32(region.offset);
-      out.u32(region.bytes);
+      writer.u16(region.kind);
+      writer.u16(region.count);
+      writer.u32(region.offset);
+      writer.u32(region.bytes);
     }
   });
-  table(Table.slots, out => {
+  table(Table.slots, writer => {
     for (const slot of program.slots) {
-      out.u8(slot.type);
-      out.u8(slot.flags);
-      out.u16(slot.dirtyBit);
-      out.u32(slot.offset);
-      out.u32(slot.init);
-      out.u16(slot.cap);
-      out.u16(slot.aux);
+      writer.u8(slot.type);
+      writer.u8(slot.flags);
+      writer.u16(slot.dirtyBit);
+      writer.u32(slot.offset);
+      writer.u32(slot.init);
+      writer.u16(slot.cap);
+      writer.u16(slot.aux);
     }
   });
   if (program.enums.length) {
-    const enums = headedTable(program.enums, (out, value) => out.u16(value));
+    const enums = headedTable(program.enums, (writer, value) =>
+      writer.u16(value),
+    );
     tables.set(Table.enums, padded(enums));
   }
   if (program.rows.length) {
-    table(Table.rows, out => {
-      out.u32(program.rows.length);
+    table(Table.rows, writer => {
+      writer.u32(program.rows.length);
       let first = 0;
       for (const row of program.rows) {
-        out.u16(row.size);
-        out.u16(first);
-        out.u16(row.fields.length);
-        out.u16(0);
+        writer.u16(row.size);
+        writer.u16(first);
+        writer.u16(row.fields.length);
+        writer.u16(0);
         first += row.fields.length;
       }
       for (const field of program.rows.flatMap(row => row.fields)) {
-        out.u8(field.type);
-        out.u8(0);
-        out.u16(field.cap);
-        out.u32(field.offset);
+        writer.u8(field.type);
+        writer.u8(0);
+        writer.u16(field.cap);
+        writer.u32(field.offset);
       }
     });
   }
   if (program.propSets.length) {
     tables.set(
       Table.props,
-      headedTable(program.propSets, (out, entry) => {
-        out.u16(entry.prop);
-        out.u8(entry.kind);
-        out.u8(0);
-        out.u32(entry.value);
+      headedTable(program.propSets, (writer, entry) => {
+        writer.u16(entry.prop);
+        writer.u8(entry.kind);
+        writer.u8(0);
+        writer.u32(entry.value);
       }),
     );
   }
-  table(Table.templates, out => {
-    out.u32(program.templates.length);
+  table(Table.templates, writer => {
+    writer.u32(program.templates.length);
     let firstNode = 0;
     for (const template of program.templates) {
-      out.u16(firstNode);
-      out.u16(template.nodes.length);
-      out.u16(template.kind);
-      out.u16(0);
+      writer.u16(firstNode);
+      writer.u16(template.nodes.length);
+      writer.u16(template.kind);
+      writer.u16(0);
       firstNode += template.nodes.length;
     }
     for (const node of program.templates.flatMap(template => template.nodes)) {
-      out.u8(node.type);
-      out.u8(0);
-      out.u16(node.children);
-      out.u16(node.props);
-      out.u16(node.handle);
-      out.u16(node.bindings);
-      out.u8(node.bindingCount);
-      out.u8(0);
+      writer.u8(node.type);
+      writer.u8(0);
+      writer.u16(node.children);
+      writer.u16(node.props);
+      writer.u16(node.handle);
+      writer.u16(node.bindings);
+      writer.u8(node.bindingCount);
+      writer.u8(0);
     }
   });
   if (program.bindings.length) {
-    table(Table.bindings, out => {
+    table(Table.bindings, writer => {
       for (const binding of program.bindings) {
-        out.u8(binding.kind);
-        out.u8(binding.event);
-        out.u16(binding.target);
+        writer.u8(binding.kind);
+        writer.u8(binding.event);
+        writer.u16(binding.target);
       }
     });
   }
-  table(Table.functions, out => {
-    for (const fn of program.functions) {
-      const {code, types} = bodies.place(fn);
-      out.u32(code);
-      out.u32(fn.code.length);
-      out.u32(types);
-      out.u8(fn.types.length);
-      out.u8(fn.params);
-      out.u8(fn.result);
-      out.u8(fn.kind);
+  table(Table.functions, writer => {
+    for (const programFunction of program.functions) {
+      const {code, types} = bodies.place(programFunction);
+      writer.u32(code);
+      writer.u32(programFunction.code.length);
+      writer.u32(types);
+      writer.u8(programFunction.types.length);
+      writer.u8(programFunction.parameters);
+      writer.u8(programFunction.result);
+      writer.u8(programFunction.kind);
     }
   });
-  if (program.anims.length) {
-    table(Table.anims, out => {
-      for (const anim of program.anims) {
-        out.u8(anim.kind);
-        out.u8(anim.easing);
-        out.u8(anim.flags);
-        out.u8(0);
-        out.u16(anim.target);
-        out.u16(anim.prop);
-        out.u16(anim.first);
-        out.u16(anim.count);
-        out.u32(anim.amount);
-        out.u32(anim.delayMs);
-        out.u32(anim.to);
-        anim.params.forEach(bits => out.u32(bits));
+  if (program.animations.length) {
+    table(Table.anims, writer => {
+      for (const animation of program.animations) {
+        writer.u8(animation.kind);
+        writer.u8(animation.easing);
+        writer.u8(animation.flags);
+        writer.u8(0);
+        writer.u16(animation.target);
+        writer.u16(animation.prop);
+        writer.u16(animation.first);
+        writer.u16(animation.count);
+        writer.u32(animation.amount);
+        writer.u32(animation.delayMs);
+        writer.u32(animation.to);
+        animation.parameters.forEach(bits => writer.u32(bits));
       }
     });
   }
   if (program.inputs.length) {
-    table(Table.inputs, out => {
+    table(Table.inputs, writer => {
       for (const input of program.inputs) {
-        out.u16(input.name);
-        out.u16(input.slot);
+        writer.u16(input.name);
+        writer.u16(input.slot);
       }
     });
   }
-  if (program.interps.length) {
-    table(Table.interps, out => {
-      for (const interp of program.interps) {
-        out.u16(interp.slot);
-        out.u8(interp.input.length);
-        out.u8(interp.flags);
-        out.u8(interp.extrapolateLeft);
-        out.u8(interp.extrapolateRight);
-        out.u16(0);
-        for (const values of [interp.input, interp.output]) {
+  if (program.interpolations.length) {
+    table(Table.interps, writer => {
+      for (const interpolation of program.interpolations) {
+        writer.u16(interpolation.slot);
+        writer.u8(interpolation.input.length);
+        writer.u8(interpolation.flags);
+        writer.u8(interpolation.extrapolateLeft);
+        writer.u8(interpolation.extrapolateRight);
+        writer.u16(0);
+        for (const values of [interpolation.input, interpolation.output]) {
           for (let point = 0; point < MAX_POINTS; point++) {
-            out.u32(values[point] ?? 0);
+            writer.u32(values[point] ?? 0);
           }
         }
       }
@@ -648,44 +655,44 @@ function tapesTable(tapes: ProgramTape[]): Uint8Array {
   const floatsAt = TAPE_HEADER_SIZE + tapes.length * TAPE_SIZE;
   const paintsAt = floatsAt + floatCount * 4;
   const gradientsAt = paintsAt + paints.length * PAINT_SIZE;
-  const out = new ByteWriter();
-  out.u32(tapes.length);
-  out.u32(paintsAt);
-  out.u32(gradientsAt);
-  out.u32(gradientsAt + gradients.length * GRADIENT_SIZE);
+  const writer = new ByteWriter();
+  writer.u32(tapes.length);
+  writer.u32(paintsAt);
+  writer.u32(gradientsAt);
+  writer.u32(gradientsAt + gradients.length * GRADIENT_SIZE);
   let floatFirst = 0;
   let paintFirst = 0;
   let gradientFirst = 0;
   for (const tape of tapes) {
-    out.u32(floatsAt + floatFirst * 4);
-    out.u16(tape.floats.length);
-    out.u16(paintFirst);
-    out.u16(tape.paints.length);
-    out.u16(gradientFirst);
-    out.u16(tape.gradients.length);
-    out.u16(0);
+    writer.u32(floatsAt + floatFirst * 4);
+    writer.u16(tape.floats.length);
+    writer.u16(paintFirst);
+    writer.u16(tape.paints.length);
+    writer.u16(gradientFirst);
+    writer.u16(tape.gradients.length);
+    writer.u16(0);
     floatFirst += tape.floats.length;
     paintFirst += tape.paints.length;
     gradientFirst += tape.gradients.length;
   }
-  tapes.forEach(tape => tape.floats.forEach(value => out.f32(value)));
+  tapes.forEach(tape => tape.floats.forEach(value => writer.f32(value)));
   for (const paint of paints) {
-    out.u32(paint.fill);
-    out.u32(paint.stroke);
-    out.f32(paint.strokeWidth);
-    out.f32(paint.miter);
-    out.u8(paint.cap);
-    out.u8(paint.join);
-    out.u8(paint.fillRule);
-    out.u8(0);
-    out.u16(paint.fillGradient);
-    out.u16(paint.strokeGradient);
+    writer.u32(paint.fill);
+    writer.u32(paint.stroke);
+    writer.f32(paint.strokeWidth);
+    writer.f32(paint.miter);
+    writer.u8(paint.cap);
+    writer.u8(paint.join);
+    writer.u8(paint.fillRule);
+    writer.u8(0);
+    writer.u16(paint.fillGradient);
+    writer.u16(paint.strokeGradient);
   }
   let stopFirst = 0;
   for (const gradient of gradients) {
-    out.u8(gradient.type);
-    out.u8(gradient.stops.length);
-    out.u16(stopFirst);
+    writer.u8(gradient.type);
+    writer.u8(gradient.stops.length);
+    writer.u16(stopFirst);
     for (const value of [
       gradient.ax,
       gradient.ay,
@@ -693,15 +700,15 @@ function tapesTable(tapes: ProgramTape[]): Uint8Array {
       gradient.by,
       gradient.radius,
     ]) {
-      out.f32(value);
+      writer.f32(value);
     }
     stopFirst += gradient.stops.length;
   }
   for (const stop of gradients.flatMap(gradient => gradient.stops)) {
-    out.u32(stop.color);
-    out.f32(stop.position);
+    writer.u32(stop.color);
+    writer.f32(stop.position);
   }
-  return out.done();
+  return writer.done();
 }
 
 /**
@@ -714,38 +721,38 @@ function tapesTable(tapes: ProgramTape[]): Uint8Array {
 function keyboardTable(keyboard: ProgramKeyboard): Uint8Array {
   const rows = keyboard.layers.flat();
   const keys = rows.flat();
-  const out = new ByteWriter();
-  out.u16(keyboard.layers.length);
-  out.u16(rows.length);
-  out.u16(keys.length);
-  out.u16(keyboard.rowHeight);
-  out.u8(keyboard.gridCols);
-  out.u8(keyboard.keyGap);
-  out.u8(keyboard.keyRadius);
-  out.u8(keyboard.fontSize);
-  out.u32(keyboard.panelColor);
-  out.u32(keyboard.keyColor);
-  out.u32(keyboard.keyActiveColor);
-  out.u32(keyboard.labelColor);
+  const writer = new ByteWriter();
+  writer.u16(keyboard.layers.length);
+  writer.u16(rows.length);
+  writer.u16(keys.length);
+  writer.u16(keyboard.rowHeight);
+  writer.u8(keyboard.gridCols);
+  writer.u8(keyboard.keyGap);
+  writer.u8(keyboard.keyRadius);
+  writer.u8(keyboard.fontSize);
+  writer.u32(keyboard.panelColor);
+  writer.u32(keyboard.keyColor);
+  writer.u32(keyboard.keyActiveColor);
+  writer.u32(keyboard.labelColor);
   const groups = (sizes: number[]): void => {
     let first = 0;
     for (const size of sizes) {
-      out.u16(first);
-      out.u16(size);
+      writer.u16(first);
+      writer.u16(size);
       first += size;
     }
   };
   groups(keyboard.layers.map(layer => layer.length));
   groups(rows.map(row => row.length));
   for (const key of keys) {
-    out.u16(key.label);
-    out.u16(key.text);
-    out.u8(key.type);
-    out.u8(key.layer);
-    out.u8(key.span);
-    out.u8(key.highlight);
+    writer.u16(key.label);
+    writer.u16(key.text);
+    writer.u8(key.type);
+    writer.u8(key.layer);
+    writer.u8(key.span);
+    writer.u8(key.highlight);
   }
-  return out.done();
+  return writer.done();
 }
 
 /** Whether two tables hold the same bytes. */
@@ -827,47 +834,47 @@ export function writeProgram(programs: Program[]): WrittenProgram {
       sizes.push({id, bytes: [first.length]});
       continue;
     }
-    const own: number[] = [];
+    const ownCopies: number[] = [];
     copies.forEach((copy, panel) => {
       if (!copy) {
         return;
       }
-      let data = own.find(index => sameBytes(stored[index], copy));
+      let data = ownCopies.find(index => sameBytes(stored[index], copy));
       if (data === undefined) {
         data = stored.push(copy) - 1;
-        own.push(data);
+        ownCopies.push(data);
       }
       entries.push({id, panel, data});
     });
-    sizes.push({id, bytes: own.map(index => stored[index].length)});
+    sizes.push({id, bytes: ownCopies.map(index => stored[index].length)});
   }
 
   const panels = programs.map(program => program.panels[0]);
   const needs = panelNeeds(programs);
-  const out = new ByteWriter();
-  out.u16(FORMAT_MAJOR);
-  out.u16(FORMAT_MINOR);
-  out.u16(ENGINE_ABI);
-  out.u16(programs[0].flags);
-  const buildIdAt = out.length;
-  out.u32(0);
-  out.u32(Math.max(...panels.map(panel => panel.arenaBytes)));
-  out.u16(Math.max(...panels.map(panel => panel.nodeCount)));
-  out.u16(panels.length);
-  out.u16(needs.length);
-  out.u16(entries.length);
+  const writer = new ByteWriter();
+  writer.u16(FORMAT_MAJOR);
+  writer.u16(FORMAT_MINOR);
+  writer.u16(ENGINE_ABI);
+  writer.u16(programs[0].flags);
+  const buildIdAt = writer.length;
+  writer.u32(0);
+  writer.u32(Math.max(...panels.map(panel => panel.arenaBytes)));
+  writer.u16(Math.max(...panels.map(panel => panel.nodeCount)));
+  writer.u16(panels.length);
+  writer.u16(needs.length);
+  writer.u16(entries.length);
   panels.forEach((panel, index) => {
-    out.u32(checks.starts[index]);
-    out.u32(panel.arenaBytes);
-    out.u16(panel.nodeCount);
-    out.u16(panel.rootTemplate);
-    out.u16(panel.bootFunction);
-    out.u16(panel.updateFunction);
+    writer.u32(checks.starts[index]);
+    writer.u32(panel.arenaBytes);
+    writer.u16(panel.nodeCount);
+    writer.u16(panel.rootTemplate);
+    writer.u16(panel.bootFunction);
+    writer.u16(panel.updateFunction);
   });
   for (const need of needs) {
-    out.u16(need.resource);
-    out.u16(need.panel);
-    out.u32(need.amount);
+    writer.u16(need.resource);
+    writer.u16(need.panel);
+    writer.u32(need.amount);
   }
 
   // The directory, then the tables, each starting 4-aligned since every one is a multiple of 4 long.
@@ -882,16 +889,16 @@ export function writeProgram(programs: Program[]): WrittenProgram {
     offset += bytes.length;
   }
   for (const entry of entries) {
-    out.u16(entry.id);
-    out.u16(entry.panel);
-    out.u32(offsets[entry.data]);
-    out.u32(stored[entry.data].length);
+    writer.u16(entry.id);
+    writer.u16(entry.panel);
+    writer.u32(offsets[entry.data]);
+    writer.u32(stored[entry.data].length);
   }
   for (const bytes of stored) {
-    out.bytes(bytes);
+    writer.bytes(bytes);
   }
 
-  const bytes = out.done();
+  const bytes = writer.done();
   const buildId = crc32(bytes);
   new DataView(bytes.buffer).setUint32(buildIdAt, buildId, true);
   return {bytes, buildId, tables: sizes};
@@ -918,9 +925,14 @@ function debugTable(
     const at = strings.indexOf(text);
     return at >= 0 ? at : strings.push(text) - 1;
   };
-  const names = functions.map(fn => string(fn.debug?.name ?? ''));
-  const entries = functions.flatMap((fn, index) =>
-    (fn.debug?.lines ?? []).map(line => ({...line, function: index})),
+  const names = functions.map(programFunction =>
+    string(programFunction.debug?.name ?? ''),
+  );
+  const entries = functions.flatMap((programFunction, index) =>
+    (programFunction.debug?.lines ?? []).map(line => ({
+      ...line,
+      function: index,
+    })),
   );
   const stringBytes = stringsTable(strings);
   const stringsAt =
@@ -928,26 +940,26 @@ function debugTable(
     entries.length * DEBUG_ENTRY_SIZE +
     Math.ceil(names.length / 2) * 4;
 
-  const out = new ByteWriter();
-  out.u32(buildId);
-  out.u32(entries.length);
-  out.u16(functions.length);
-  out.u16(panel);
-  out.u32(stringsAt);
-  out.u32(stringsAt + stringBytes.length);
+  const writer = new ByteWriter();
+  writer.u32(buildId);
+  writer.u32(entries.length);
+  writer.u16(functions.length);
+  writer.u16(panel);
+  writer.u32(stringsAt);
+  writer.u32(stringsAt + stringBytes.length);
   for (const entry of entries) {
-    out.u16(entry.function);
-    out.u16(0);
-    out.u32(entry.offset);
-    out.u16(0);
+    writer.u16(entry.function);
+    writer.u16(0);
+    writer.u32(entry.offset);
+    writer.u16(0);
     // 1-based, as the compiler's errors show it.
-    out.u16(Math.min(entry.column + 1, NONE));
-    out.u32(entry.line);
+    writer.u16(Math.min(entry.column + 1, NONE));
+    writer.u32(entry.line);
   }
-  names.forEach(name => out.u16(name));
-  out.pad4();
-  out.bytes(stringBytes);
-  return out.done();
+  names.forEach(name => writer.u16(name));
+  writer.pad4();
+  writer.bytes(stringBytes);
+  return writer.done();
 }
 
 /**
@@ -970,9 +982,9 @@ export function writeDebug(
   if (shared.every(table => sameBytes(table, shared[0]))) {
     return shared[0];
   }
-  const out = new ByteWriter();
+  const writer = new ByteWriter();
   programs.forEach((program, panel) =>
-    out.bytes(debugTable(program.functions, buildId, file, panel)),
+    writer.bytes(debugTable(program.functions, buildId, file, panel)),
   );
-  return out.done();
+  return writer.done();
 }
