@@ -77,47 +77,53 @@ check(
 );
 
 /** Uploads a tape, commits, and reports whether the triangle at (x, y) is filled. */
-function paintedAt(ops, x, y) {
-  NativeUI.setVectorOps(svgRef.current, ops, PAINTS);
+function paintedAt(tape, x, y) {
+  NativeUI.setVectorOps(svgRef.current, tape, PAINTS);
   NativeUI.commit();
-  const p = inside(x, y);
-  return __pixel(p[0], p[1]) === FILL;
+  const point = inside(x, y);
+  return __pixel(point[0], point[1]) === FILL;
 }
 
-const A = [10, 10];
-const B = [140, 140];
+const NEAR_CORNER = [10, 10];
+const FAR_CORNER = [140, 140];
 
 // Baseline: a plain-Array tape fills where it says it will, and nowhere else.
-check(paintedAt(tapeAt(...A), ...A), 'plain Array tape filled its triangle');
-check(!paintedAt(tapeAt(...A), ...B), 'and left the far corner unpainted');
+check(
+  paintedAt(tapeAt(...NEAR_CORNER), ...NEAR_CORNER),
+  'plain Array tape filled its triangle',
+);
+check(
+  !paintedAt(tapeAt(...NEAR_CORNER), ...FAR_CORNER),
+  'and left the far corner unpainted',
+);
 
 // The same numbers through the typed-array path have to land in the same place.
 check(
-  paintedAt(Float32Array.from(tapeAt(...B)), ...B),
+  paintedAt(Float32Array.from(tapeAt(...FAR_CORNER)), ...FAR_CORNER),
   'Float32Array tape filled the same triangle',
 );
 check(
-  !paintedAt(Float32Array.from(tapeAt(...B)), ...A),
+  !paintedAt(Float32Array.from(tapeAt(...FAR_CORNER)), ...NEAR_CORNER),
   'and left the far corner unpainted',
 );
 
 // A Float32Array view into a larger buffer: the fast path has to honour its byte offset and length,
 // not the whole buffer's. Padding either side is nonzero, so reading past the view paints garbage.
-const tape = tapeAt(...A);
+const tape = tapeAt(...NEAR_CORNER);
 const backing = new Float32Array(tape.length + 8).fill(99);
 backing.set(tape, 4);
 check(
-  paintedAt(backing.subarray(4, 4 + tape.length), ...A),
+  paintedAt(backing.subarray(4, 4 + tape.length), ...NEAR_CORNER),
   'an offset Float32Array view filled the right triangle',
 );
 check(
-  !paintedAt(backing.subarray(4, 4 + tape.length), ...B),
+  !paintedAt(backing.subarray(4, 4 + tape.length), ...FAR_CORNER),
   'and did not spill into the far corner',
 );
 
 // An empty typed array clears the geometry, exactly as an empty Array does.
 check(
-  !paintedAt(new Float32Array(0), ...A),
+  !paintedAt(new Float32Array(0), ...NEAR_CORNER),
   'an empty Float32Array cleared the geometry',
 );
 

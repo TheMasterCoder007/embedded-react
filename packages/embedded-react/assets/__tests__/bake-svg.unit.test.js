@@ -40,11 +40,11 @@ function opcodes(ops) {
     [CLOSE]: 0,
   };
   const codes = [];
-  let i = 0;
-  while (i < ops.length) {
-    const op = ops[i++];
-    codes.push(op);
-    i += args[op] ?? 0;
+  let cursor = 0;
+  while (cursor < ops.length) {
+    const opcode = ops[cursor++];
+    codes.push(opcode);
+    cursor += args[opcode] ?? 0;
   }
   return codes;
 }
@@ -117,107 +117,107 @@ describe('bake-svg: svgToVector', () => {
   });
 
   it('bakes a <linearGradient> fill into the gradient table with a 1-based fill_grad', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="g"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
         '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
         '</svg>',
     );
-    expect(a.gradients).toHaveLength(1);
-    const g = a.gradients[0];
-    expect(g.type).toBe(1); // GRAD_LINEAR
-    expect(g.stops.map(s => s.color >>> 0)).toEqual([0xffff0000, 0xff0000ff]);
+    expect(artifact.gradients).toHaveLength(1);
+    const gradient = artifact.gradients[0];
+    expect(gradient.type).toBe(1); // GRAD_LINEAR
+    expect(gradient.stops.map(stop => stop.color >>> 0)).toEqual([0xffff0000, 0xff0000ff]);
     // objectBoundingBox default: axis (0,0)->(1,0) maps onto the rect's bbox (0,0,10,10).
     expect([
-      Math.round(g.ax),
-      Math.round(g.ay),
-      Math.round(g.bx),
-      Math.round(g.by),
+      Math.round(gradient.ax),
+      Math.round(gradient.ay),
+      Math.round(gradient.bx),
+      Math.round(gradient.by),
     ]).toEqual([0, 0, 10, 0]);
     // The rect's paint: solid fill 0, fill_grad = 1 (1-based; the 8th paint field).
-    expect(a.paints[0]).toBe(0);
-    expect(a.paints[7]).toBe(1);
+    expect(artifact.paints[0]).toBe(0);
+    expect(artifact.paints[7]).toBe(1);
   });
 
   it('bakes a <radialGradient> fill (centre + radius)', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 100 100">' +
         '<defs><radialGradient id="r"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#000000"/></radialGradient></defs>' +
         '<rect x="0" y="0" width="100" height="100" fill="url(#r)"/>' +
         '</svg>',
     );
-    expect(a.gradients).toHaveLength(1);
-    expect(a.gradients[0].type).toBe(2); // GRAD_RADIAL
+    expect(artifact.gradients).toHaveLength(1);
+    expect(artifact.gradients[0].type).toBe(2); // GRAD_RADIAL
     expect([
-      Math.round(a.gradients[0].ax),
-      Math.round(a.gradients[0].ay),
+      Math.round(artifact.gradients[0].ax),
+      Math.round(artifact.gradients[0].ay),
     ]).toEqual([50, 50]); // bbox centre
-    expect(a.gradients[0].r).toBeGreaterThan(0);
-    expect(a.paints[7]).toBe(1);
+    expect(artifact.gradients[0].r).toBeGreaterThan(0);
+    expect(artifact.paints[7]).toBe(1);
   });
 
   it('bakes a <conicGradient> fill (centre + start angle in radians)', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 100 100">' +
         '<defs><conicGradient id="c" from="90"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></conicGradient></defs>' +
         '<rect x="0" y="0" width="100" height="100" fill="url(#c)"/>' +
         '</svg>',
     );
-    expect(a.gradients).toHaveLength(1);
-    expect(a.gradients[0].type).toBe(3); // GRAD_CONIC
+    expect(artifact.gradients).toHaveLength(1);
+    expect(artifact.gradients[0].type).toBe(3); // GRAD_CONIC
     expect([
-      Math.round(a.gradients[0].ax),
-      Math.round(a.gradients[0].ay),
+      Math.round(artifact.gradients[0].ax),
+      Math.round(artifact.gradients[0].ay),
     ]).toEqual([50, 50]); // bbox centre
-    expect(a.gradients[0].r).toBeCloseTo(Math.PI / 2, 3); // from="90deg" -> π/2 rad start angle
-    expect(a.paints[7]).toBe(1);
+    expect(artifact.gradients[0].r).toBeCloseTo(Math.PI / 2, 3); // from="90deg" -> π/2 rad start angle
+    expect(artifact.paints[7]).toBe(1);
   });
 
   it('bakes a STROKE gradient into stroke_grad while the fill stays solid', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="s"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
         '<rect x="0" y="0" width="10" height="10" fill="#101010" stroke="url(#s)" stroke-width="2"/>' +
         '</svg>',
     );
-    expect(a.gradients).toHaveLength(1);
-    expect(a.gradients[0].type).toBe(1); // GRAD_LINEAR
-    expect(a.paints[0] & 0xffffff).toBe(0x101010); // solid fill kept
-    expect(a.paints[7]).toBe(0); // fill_grad = none
-    expect(a.paints[8]).toBe(1); // stroke_grad = 1 (the 9th paint field)
+    expect(artifact.gradients).toHaveLength(1);
+    expect(artifact.gradients[0].type).toBe(1); // GRAD_LINEAR
+    expect(artifact.paints[0] & 0xffffff).toBe(0x101010); // solid fill kept
+    expect(artifact.paints[7]).toBe(0); // fill_grad = none
+    expect(artifact.paints[8]).toBe(1); // stroke_grad = 1 (the 9th paint field)
   });
 
   it('falls back to default coordinates when <linearGradient> attributes evaluate to NaN', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="g" x1="abc" y1="invalid" x2="bad" y2="none"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
         '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
         '</svg>',
     );
-    expect(a.gradients).toHaveLength(1);
-    const g = a.gradients[0];
+    expect(artifact.gradients).toHaveLength(1);
+    const gradient = artifact.gradients[0];
     // Defaults: x1=0, y1=0, x2=1, y2=0 mapped onto bbox (0,0,10,10) -> (0,0) to (10,0)
     expect([
-      Math.round(g.ax),
-      Math.round(g.ay),
-      Math.round(g.bx),
-      Math.round(g.by),
+      Math.round(gradient.ax),
+      Math.round(gradient.ay),
+      Math.round(gradient.bx),
+      Math.round(gradient.by),
     ]).toEqual([0, 0, 10, 0]);
   });
 
   it('falls back to default coordinates when <radialGradient> and <conicGradient> attributes evaluate to NaN', async () => {
-    const rad = await svgToVector(
+    const radial = await svgToVector(
       '<svg viewBox="0 0 100 100">' +
         '<defs><radialGradient id="r" cx="bad" cy="abc" r="xyz"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient></defs>' +
         '<rect x="0" y="0" width="100" height="100" fill="url(#r)"/>' +
         '</svg>',
     );
-    expect(rad.gradients).toHaveLength(1);
+    expect(radial.gradients).toHaveLength(1);
     expect([
-      Math.round(rad.gradients[0].ax),
-      Math.round(rad.gradients[0].ay),
+      Math.round(radial.gradients[0].ax),
+      Math.round(radial.gradients[0].ay),
     ]).toEqual([50, 50]); // default cx=0.5, cy=0.5 -> center (50, 50)
-    expect(rad.gradients[0].r).toBeCloseTo(50, 1); // default r=0.5 * 100 = 50
+    expect(radial.gradients[0].r).toBeCloseTo(50, 1); // default r=0.5 * 100 = 50
 
     const conic = await svgToVector(
       '<svg viewBox="0 0 100 100">' +
@@ -233,68 +233,68 @@ describe('bake-svg: svgToVector', () => {
   });
 
   it('falls back to default coordinates when gradient attributes are infinite', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="g" x1="-Infinity" y1="1e999" x2="Infinity" y2="1e999%"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
         '<rect x="0" y="0" width="10" height="10" fill="url(#g)"/>' +
         '</svg>',
     );
-    expect(a.gradients).toHaveLength(1);
-    const g = a.gradients[0];
+    expect(artifact.gradients).toHaveLength(1);
+    const gradient = artifact.gradients[0];
     expect([
-      Math.round(g.ax),
-      Math.round(g.ay),
-      Math.round(g.bx),
-      Math.round(g.by),
+      Math.round(gradient.ax),
+      Math.round(gradient.ay),
+      Math.round(gradient.bx),
+      Math.round(gradient.by),
     ]).toEqual([0, 0, 10, 0]);
   });
 
   it('bakes opacity / fill-opacity / stroke-opacity into the alpha channel', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="#ff0000" opacity="0.5"/></svg>',
     );
-    expect(a.paints[0] >>> 24).toBe(0x80); // 0xff * 0.5 -> 128
-    expect(a.paints[0] & 0xffffff).toBe(0xff0000); // color preserved
+    expect(artifact.paints[0] >>> 24).toBe(0x80); // 0xff * 0.5 -> 128
+    expect(artifact.paints[0] & 0xffffff).toBe(0xff0000); // color preserved
 
-    const b = await svgToVector(
+    const second = await svgToVector(
       '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" stroke="#00ff00" stroke-opacity="0.25"/></svg>',
     );
-    expect(b.paints[1] >>> 24).toBe(0x40); // 0xff * 0.25 -> 64, stroke only
+    expect(second.paints[1] >>> 24).toBe(0x40); // 0xff * 0.25 -> 64, stroke only
   });
 });
 
 describe('svgToVector — dropped-feature detection (raster-fallback trigger)', () => {
   it('reports no dropped features for a fully vector SVG', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10"><rect width="10" height="10"/><circle cx="5" cy="5" r="3"/></svg>',
     );
-    expect(a.dropped).toEqual([]);
+    expect(artifact.dropped).toEqual([]);
   });
 
   it('flags unsupported visual elements (text/image/use) but not metadata/defs/gradients', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><text x="0" y="9">hi</text></svg>',
     );
-    expect(a.dropped).toEqual(['text']); // title/defs ignored; rect baked; text recorded
+    expect(artifact.dropped).toEqual(['text']); // title/defs ignored; rect baked; text recorded
   });
 
   it('flags a filter/mask/clip-path applied to an otherwise-bakeable shape', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10"><rect width="10" height="10" filter="url(#f)"/></svg>',
     );
-    expect(a.dropped).toContain('filter');
+    expect(artifact.dropped).toContain('filter');
   });
 
   it('flags a dashed stroke (op-tape bakes solid → raster fallback renders the dashes)', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="black" stroke-dasharray="2 1"/></svg>',
     );
-    expect(a.dropped).toContain('stroke-dasharray');
+    expect(artifact.dropped).toContain('stroke-dasharray');
     // inherited from a <g> too
-    const g = await svgToVector(
+    const gradient = await svgToVector(
       '<svg viewBox="0 0 10 10"><g stroke="red" stroke-dasharray="3"><line x1="0" y1="0" x2="9" y2="9"/></g></svg>',
     );
-    expect(g.dropped).toContain('stroke-dasharray');
+    expect(gradient.dropped).toContain('stroke-dasharray');
   });
 
   it('does NOT flag stroke-dasharray when there is no visible/positive dash', async () => {
@@ -317,7 +317,7 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
 
 describe('svgToVector — <rect rx/ry>', () => {
   it('bakes rounded corners as cubics instead of squaring them off', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 40 20"><rect width="40" height="20" rx="5" fill="#fff"/></svg>',
     );
     // Four edges + four corner cubics. Walk the tape — every opcode is also a plausible coordinate.
@@ -330,27 +330,27 @@ describe('svgToVector — <rect rx/ry>', () => {
       [ARC]: 6,
       [CLOSE]: 0,
     };
-    for (let i = 0; i < a.ops.length; ) {
-      const op = a.ops[i++];
-      if (op === SHAPE) {
-        i++;
+    for (let cursor = 0; cursor < artifact.ops.length; ) {
+      const opcode = artifact.ops[cursor++];
+      if (opcode === SHAPE) {
+        cursor++;
         continue;
       }
-      seen.push(op);
-      i += argc[op];
+      seen.push(opcode);
+      cursor += argc[opcode];
     }
-    expect(seen.filter(o => o === CUBIC).length).toBe(4);
-    expect(seen.filter(o => o === LINE).length).toBe(4);
+    expect(seen.filter(opcode => opcode === CUBIC).length).toBe(4);
+    expect(seen.filter(opcode => opcode === LINE).length).toBe(4);
     // Opens on the top edge one radius in from the left, and stays inside the box.
-    expect(a.ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 5, 0]);
-    expect(a.dropped).toEqual([]);
+    expect(artifact.ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 5, 0]);
+    expect(artifact.dropped).toEqual([]);
   });
 
   it('leaves a rect with no rx/ry square-cornered', async () => {
-    const a = await svgToVector(
+    const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/></svg>',
     );
-    expect(a.ops).toEqual([
+    expect(artifact.ops).toEqual([
       SHAPE,
       0,
       MOVE,

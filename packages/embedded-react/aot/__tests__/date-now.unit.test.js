@@ -19,11 +19,11 @@ import {compilePackage} from '../compile.mts';
 
 // Date.now() / performance.now() in Flow B: the engine clock as 64-bit whole milliseconds, the same surface
 // Flow A's lite profile gives.
-const PRE = `import { useState, useEffect, useRef } from 'react';
+const PREAMBLE = `import { useState, useEffect, useRef } from 'react';
 import { View, Text, Pressable } from 'embedded-react';
 `;
-const gen = src => compilePackage(src, 'test');
-const app = (body, jsx) => `${PRE}
+const gen = source => compilePackage(source, 'test');
+const app = (body, jsx) => `${PREAMBLE}
 export function App() {
   ${body}
   return (${jsx});
@@ -51,8 +51,8 @@ describe('AOT Date.now() / performance.now()', () => {
       '<View style={{width: Date.now()}} />',
       /cannot be used here/,
     ],
-  ])('refuses %s', (_, jsx, err) => {
-    expect(() => gen(app('', `<View>${jsx}</View>`))).toThrow(err);
+  ])('refuses %s', (_, jsx, pattern) => {
+    expect(() => gen(app('', `<View>${jsx}</View>`))).toThrow(pattern);
   });
 
   it('refuses to store a timestamp in a float or boolean state', () => {
@@ -118,7 +118,7 @@ describe('AOT Date.now() / performance.now()', () => {
       ),
     ).toThrow(/unsupported call expression/);
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
 const performance = {now: 5};
 export function App() {
   return (<Text>{performance.now()}</Text>);

@@ -59,38 +59,42 @@ describe('isTextContent', () => {
 describe('flattenTextChildren', () => {
   it('coalesces plain interpolation into a single base-style segment', () => {
     const base = flattenStyleObj({color: 'white'});
-    const segs = flattenTextChildren(['Hi ', 'Ada', '!'], base);
-    expect(segs).toHaveLength(1);
-    expect(segs[0].text).toBe('Hi Ada!');
-    expect(segs[0].style).toBe(base); // same reference → no spans needed
+    const segments = flattenTextChildren(['Hi ', 'Ada', '!'], base);
+    expect(segments).toHaveLength(1);
+    expect(segments[0].text).toBe('Hi Ada!');
+    expect(segments[0].style).toBe(base); // same reference → no spans needed
   });
 
   it('stringifies numbers and drops null/false', () => {
     const base = flattenStyleObj({});
-    const segs = flattenTextChildren(['n=', 42, null, false], base);
-    expect(segs).toHaveLength(1);
-    expect(segs[0].text).toBe('n=42');
+    const segments = flattenTextChildren(['n=', 42, null, false], base);
+    expect(segments).toHaveLength(1);
+    expect(segments[0].text).toBe('n=42');
   });
 
   it('produces distinct segments for nested styled <Text>', () => {
     const base = flattenStyleObj({color: 'white'});
-    const segs = flattenTextChildren(
+    const segments = flattenTextChildren(
       ['Hello ', Text({fontWeight: 'bold'}, 'world'), '!'],
       base,
     );
-    expect(segs.map(s => s.text)).toEqual(['Hello ', 'world', '!']);
-    expect(segs[0].style).toBe(base);
-    expect(segs[2].style).toBe(base);
-    expect(segs[1].style).not.toBe(base);
-    expect(segs[1].style.fontWeight).toBe('bold');
-    expect(segs[1].style.color).toBe('white'); // inherited via merge
+    expect(segments.map(segment => segment.text)).toEqual([
+      'Hello ',
+      'world',
+      '!',
+    ]);
+    expect(segments[0].style).toBe(base);
+    expect(segments[2].style).toBe(base);
+    expect(segments[1].style).not.toBe(base);
+    expect(segments[1].style.fontWeight).toBe('bold');
+    expect(segments[1].style.color).toBe('white'); // inherited via merge
   });
 
   it('keeps the base reference for an unstyled nested <Text> (still coalesces)', () => {
     const base = flattenStyleObj({color: 'white'});
-    const segs = flattenTextChildren(['a', Text(null, 'b'), 'c'], base);
-    expect(segs).toHaveLength(1);
-    expect(segs[0].text).toBe('abc');
+    const segments = flattenTextChildren(['a', Text(null, 'b'), 'c'], base);
+    expect(segments).toHaveLength(1);
+    expect(segments[0].text).toBe('abc');
   });
 });
 

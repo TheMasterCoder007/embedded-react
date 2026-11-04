@@ -4,11 +4,11 @@ import {View, Text, Pressable, Svg, Circle, Path, G} from 'embedded-react';
 
 const WIDE = Math.max(screen.width, 100, 200) >= 480;
 const LANDSCAPE = screen.width > screen.height;
-const PAD = LANDSCAPE ? 4 : 8;
+const PADDING = LANDSCAPE ? 4 : 8;
 
 function Columns({label}: {label: string}) {
   return (
-    <View style={{flexDirection: 'row', gap: PAD, height: 40}}>
+    <View style={{flexDirection: 'row', gap: PADDING, height: 40}}>
       <View style={{flex: 1, backgroundColor: '#203048'}} />
       <View style={{flex: 2, backgroundColor: '#305048'}}>
         <Text style={{color: '#ffffff'}}>{label}</Text>
@@ -27,8 +27,8 @@ export function App() {
       style={{
         width: screen.width,
         height: screen.height,
-        padding: PAD,
-        gap: PAD,
+        padding: PADDING,
+        gap: PADDING,
         backgroundColor: LANDSCAPE ? '#101820' : '#181010',
       }}>
       <Svg
@@ -55,7 +55,7 @@ export function App() {
       <Pressable
         onPress={() => setCount(count + 1)}
         style={{
-          width: screen.width - 2 * PAD,
+          width: screen.width - 2 * PADDING,
           height: 32,
           backgroundColor: '#404040',
         }}>

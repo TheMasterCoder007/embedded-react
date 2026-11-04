@@ -41,7 +41,7 @@ function lowerBody(source) {
   const animations = new Map(
     ['a', 'b', 'c'].map(name => [name, {slotName: `anim_${name}`, initial: 0}]),
   );
-  const env = {
+  const environment = {
     state: state.byName,
     locals: new Map(),
     constants: {},
@@ -51,20 +51,23 @@ function lowerBody(source) {
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     stores: [],
   };
-  const ctx = {stateChanged: false, output: new Out(new Map(), null)};
-  return {stmts: lowerStmts(statements, env, state, ctx), ctx};
+  const context = {stateChanged: false, output: new Out(new Map(), null)};
+  return {
+    statements: lowerStmts(statements, environment, state, context),
+    context,
+  };
 }
 
 /** The one statement a body lowers to. */
 function lowerOne(source) {
-  const {stmts, ctx} = lowerBody(source);
-  expect(stmts).toHaveLength(1);
-  return {stmt: stmts[0], ctx};
+  const {statements, context} = lowerBody(source);
+  expect(statements).toHaveLength(1);
+  return {statement: statements[0], context};
 }
 
 describe('animation IR: flat starts', () => {
   it('fills spring defaults and keeps bezier control points', () => {
-    const {stmt: spring} = lowerOne(
+    const {statement: spring} = lowerOne(
       'Animated.spring(a, {toValue: 2}).start();',
     );
     expect(spring.animations[0].curve).toEqual({
@@ -74,7 +77,7 @@ describe('animation IR: flat starts', () => {
       mass: 1,
     });
 
-    const {stmt: bezier} = lowerOne(
+    const {statement: bezier} = lowerOne(
       'Animated.timing(a, {toValue: 1, easing: Easing.bezier(0.25, 0.1, 0.25, 1)}).start();',
     );
     expect(bezier.animations[0].curve).toMatchObject({
@@ -84,24 +87,24 @@ describe('animation IR: flat starts', () => {
   });
 
   it('runs an endless loop of one timing on the engine loop', () => {
-    const {stmt, ctx} = lowerOne(
+    const {statement, context} = lowerOne(
       'Animated.loop(Animated.timing(a, {toValue: 1, duration: 500})).start();',
     );
-    expect(stmt.kind).toBe('startAnimations');
-    expect(stmt.animations[0].isLooping).toBe(true);
-    expect(ctx.output.animationCallbacks).toHaveLength(0);
+    expect(statement.kind).toBe('startAnimations');
+    expect(statement.animations[0].isLooping).toBe(true);
+    expect(context.output.animationCallbacks).toHaveLength(0);
   });
 });
 
 describe('animation IR: chains', () => {
   it("adds a looped sequence's trailing delay to the restart only", () => {
-    const {stmt} = lowerOne(
+    const {statement} = lowerOne(
       'Animated.loop(Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.timing(a, {toValue: 0}), Animated.delay(200)])).start();',
     );
-    expect(stmt.loop.iterations).toBe(-1);
-    expect(stmt.loop.resetHandle).toBeNull();
-    expect(stmt.steps[0].delayMs).toBe(0);
-    expect(stmt.loop.restart.delayMs).toBe(200);
+    expect(statement.loop.iterations).toBe(-1);
+    expect(statement.loop.resetHandle).toBeNull();
+    expect(statement.steps[0].delayMs).toBe(0);
+    expect(statement.loop.restart.delayMs).toBe(200);
   });
 });
 
@@ -112,9 +115,9 @@ describe('animation IR: completions', () => {
       'Animated.parallel([]).start(() => setN(1));',
       'Animated.stagger(50, []).start(() => setN(1));',
     ]) {
-      const {stmt, ctx} = lowerOne(source);
-      expect(stmt).toMatchObject({kind: 'completeAfter', delayMs: 0});
-      expect(ctx.output.timerFunctions).toHaveLength(0);
+      const {statement, context} = lowerOne(source);
+      expect(statement).toMatchObject({kind: 'completeAfter', delayMs: 0});
+      expect(context.output.timerFunctions).toHaveLength(0);
     }
   });
 
@@ -123,38 +126,41 @@ describe('animation IR: completions', () => {
       'Animated.parallel([Animated.timing(a, {toValue: 1, duration: 600}), Animated.delay(500)]).start(() => setN(1));',
       'Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(100)]).start();',
     ]) {
-      const {stmt, ctx} = lowerOne(source);
-      expect(stmt.completionWait).toBeNull();
-      expect(ctx.output.timerFunctions).toHaveLength(0);
+      const {statement, context} = lowerOne(source);
+      expect(statement.completionWait).toBeNull();
+      expect(context.output.timerFunctions).toHaveLength(0);
     }
   });
 
   it('numbers a chain after its completion, whose own starts come first', () => {
-    const {stmt} = lowerOne(
+    const {statement} = lowerOne(
       'Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})]).start(() => { Animated.sequence([Animated.timing(c, {toValue: 1}), Animated.timing(c, {toValue: 0})]).start(); });',
     );
-    expect(stmt.completion.name).toBe('done_0');
-    expect(stmt.completion.body[0]).toMatchObject({kind: 'startChain', id: 1});
-    expect(stmt.id).toBe(2);
+    expect(statement.completion.name).toBe('done_0');
+    expect(statement.completion.body[0]).toMatchObject({
+      kind: 'startChain',
+      id: 1,
+    });
+    expect(statement.id).toBe(2);
   });
 });
 
 describe('animation IR: stopping a wait', () => {
   it('gives each composition written apart its own owner, even when they are alike', () => {
-    const {stmts, ctx} = lowerBody(
+    const {statements, context} = lowerBody(
       'Animated.delay(500).start(() => setN(1)); Animated.delay(500).start(() => setN(2)); Animated.timing(a, {toValue: 1}).stop(); Animated.delay(500).stop();',
     );
-    expect(stmts[0].owner).toBe(0);
-    expect(stmts[1].owner).toBe(1);
-    expect(stmts[2]).toMatchObject({
+    expect(statements[0].owner).toBe(0);
+    expect(statements[1].owner).toBe(1);
+    expect(statements[2]).toMatchObject({
       kind: 'stopAnimations',
       handles: ['anim_a'],
       waitOwner: null,
     });
 
     // A stop of a third delay names an owner of its own, which nothing starts (assembly drops the stop).
-    expect(stmts[3]).toMatchObject({handles: [], waitOwner: 2});
-    expect([...ctx.output.animationWaits.values()]).toEqual([
+    expect(statements[3]).toMatchObject({handles: [], waitOwner: 2});
+    expect([...context.output.animationWaits.values()]).toEqual([
       {owner: 0, isStarted: true},
       {owner: 1, isStarted: true},
       {owner: 2, isStarted: false},
@@ -162,13 +168,13 @@ describe('animation IR: stopping a wait', () => {
   });
 
   it('gives a stop that comes first the owner a later start waits under', () => {
-    const {stmts, ctx} = lowerBody(
+    const {statements, context} = lowerBody(
       'const pulse = Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(300)]); pulse.stop(); pulse.start(() => setN(1));',
     );
-    const [stop, start] = stmts;
+    const [stop, start] = statements;
     expect(stop.waitOwner).toBe(0);
     expect(start.completionWait.owner).toBe(0);
-    expect([...ctx.output.animationWaits.values()]).toEqual([
+    expect([...context.output.animationWaits.values()]).toEqual([
       {owner: 0, isStarted: true},
     ]);
   });

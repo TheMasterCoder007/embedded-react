@@ -36,35 +36,43 @@ import {
   SECTION_VENDOR_BYTECODE,
 } from '../../assets/emit-container.mjs';
 
-const PKG = resolve(import.meta.dirname, '../..'); // .../packages/embedded-react
-const REPO = resolve(PKG, '../..');
-const libSrc = resolve(PKG, 'src/embedded-react/index.js');
-const nodePaths = [resolve(PKG, 'node_modules')];
+const PACKAGE_DIRECTORY = resolve(import.meta.dirname, '../..'); // .../packages/embedded-react
+const REPO = resolve(PACKAGE_DIRECTORY, '../..');
+const librarySource = resolve(PACKAGE_DIRECTORY, 'src/embedded-react/index.js');
+const nodePaths = [resolve(PACKAGE_DIRECTORY, 'node_modules')];
 const entry = resolve(REPO, 'demos/thermostat/index.jsx');
 const projectRoot = resolve(REPO, 'demos/thermostat');
 
-/** Parse an ERCF container into {version, crcOk, tag, sections:[{type,len}]}. */
-function parseContainer(buf) {
-  expect(buf.subarray(0, 4).toString('ascii')).toBe('ERCF');
-  const version = buf.readUInt32LE(4);
-  const crc = buf.readUInt32LE(8);
-  const body = buf.subarray(12);
-  const crcOk = crc32(body) === crc;
-  let o = 12;
-  const tagLen = buf.readUInt16LE(o);
-  o += 2;
-  const tag = buf.subarray(o, o + tagLen).toString('utf8');
-  o += tagLen;
-  const count = buf.readUInt32LE(o);
-  o += 4;
+// The container header: magic, version and CRC, then the tag the CRC covers from.
+const CONTAINER_MAGIC_BYTES = 4;
+const CONTAINER_VERSION_AT = 4;
+const CONTAINER_CRC_AT = 8;
+const CONTAINER_TAG_AT = 12;
+
+/** Parse an ERCF container into {version, crcOk, tag, sections:[{type,length}]}. */
+function parseContainer(bytes) {
+  expect(bytes.subarray(0, CONTAINER_MAGIC_BYTES).toString('ascii')).toBe(
+    'ERCF',
+  );
+  const version = bytes.readUInt32LE(CONTAINER_VERSION_AT);
+  const storedCrc = bytes.readUInt32LE(CONTAINER_CRC_AT);
+  const body = bytes.subarray(CONTAINER_TAG_AT);
+  const crcOk = crc32(body) === storedCrc;
+  let offset = CONTAINER_TAG_AT;
+  const tagLength = bytes.readUInt16LE(offset);
+  offset += 2;
+  const tag = bytes.subarray(offset, offset + tagLength).toString('utf8');
+  offset += tagLength;
+  const count = bytes.readUInt32LE(offset);
+  offset += 4;
   const sections = [];
-  for (let i = 0; i < count; i++) {
-    const type = buf.readUInt32LE(o);
-    o += 4;
-    const len = buf.readUInt32LE(o);
-    o += 4;
-    sections.push({type, len});
-    o += len;
+  for (let index = 0; index < count; index++) {
+    const type = bytes.readUInt32LE(offset);
+    offset += 4;
+    const length = bytes.readUInt32LE(offset);
+    offset += 4;
+    sections.push({type, length});
+    offset += length;
   }
   return {version, crcOk, tag, sections};
 }
@@ -80,13 +88,13 @@ describe('pack-split: vendor/app split', () => {
   });
 
   it('vendor chunk installs the module registry + require shim', async () => {
-    const source = await bundleVendorSource({libSrc, nodePaths});
+    const source = await bundleVendorSource({libSrc: librarySource, nodePaths});
     expect(source).toContain('__er_modules');
     expect(source).toMatch(/globalThis\.require\s*=/);
   });
 
   it('vendor source dwarfs the app source (the split payoff)', async () => {
-    const vendor = await bundleVendorSource({libSrc, nodePaths});
+    const vendor = await bundleVendorSource({libSrc: librarySource, nodePaths});
     const {source: app} = await bundleAppSource({
       entry,
       projectRoot,
@@ -111,9 +119,9 @@ describe('pack-split: vendor/app split', () => {
     });
     const frame = await emitAppFrame({appBytecode, assetPack});
 
-    const bootP = parseContainer(boot);
-    expect(bootP.crcOk).toBe(true);
-    const bootTypes = bootP.sections.map(s => s.type);
+    const bootContainer = parseContainer(boot);
+    expect(bootContainer.crcOk).toBe(true);
+    const bootTypes = bootContainer.sections.map(section => section.type);
     expect(bootTypes).toContain(SECTION_VENDOR_BYTECODE);
     expect(bootTypes).toContain(SECTION_ASSET_PACK);
     expect(bootTypes).toContain(SECTION_BYTECODE);
@@ -122,9 +130,9 @@ describe('pack-split: vendor/app split', () => {
       bootTypes.indexOf(SECTION_BYTECODE),
     );
 
-    const frameP = parseContainer(frame);
-    expect(frameP.crcOk).toBe(true);
-    const frameTypes = frameP.sections.map(s => s.type);
+    const frameContainer = parseContainer(frame);
+    expect(frameContainer.crcOk).toBe(true);
+    const frameTypes = frameContainer.sections.map(section => section.type);
     expect(frameTypes).not.toContain(SECTION_VENDOR_BYTECODE); // no vendor on the wire per edit
     expect(frameTypes).toContain(SECTION_BYTECODE);
 
@@ -135,10 +143,12 @@ describe('pack-split: vendor/app split', () => {
   it('emitContainer stays backwards-compatible: no vendor section when none is given', () => {
     const fake = Buffer.from('not-real-bytecode-but-nonempty');
     const mono = emitContainer({bytecode: fake, qjsTag: 'v0.15.0'});
-    const p = parseContainer(mono);
-    expect(p.sections.map(s => s.type)).toEqual([SECTION_BYTECODE]);
-    expect(p.sections.some(s => s.type === SECTION_VENDOR_BYTECODE)).toBe(
-      false,
-    );
+    const parsed = parseContainer(mono);
+    expect(parsed.sections.map(section => section.type)).toEqual([
+      SECTION_BYTECODE,
+    ]);
+    expect(
+      parsed.sections.some(section => section.type === SECTION_VENDOR_BYTECODE),
+    ).toBe(false);
   });
 });

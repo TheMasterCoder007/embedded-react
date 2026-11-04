@@ -25,23 +25,23 @@ import {
 
 describe('flattenStyle', () => {
   it('merges a plain style object', () => {
-    const out = {};
-    flattenStyle({width: 10, height: 20}, out);
-    expect(out).toEqual({width: 10, height: 20});
+    const output = {};
+    flattenStyle({width: 10, height: 20}, output);
+    expect(output).toEqual({width: 10, height: 20});
   });
 
   it('flattens nested arrays, later entries winning', () => {
-    const out = {};
-    flattenStyle([{a: 1}, [{b: 2}, {a: 3}]], out);
-    expect(out).toEqual({a: 3, b: 2});
+    const output = {};
+    flattenStyle([{a: 1}, [{b: 2}, {a: 3}]], output);
+    expect(output).toEqual({a: 3, b: 2});
   });
 
   it('ignores null / undefined / false', () => {
-    const out = {};
-    flattenStyle(null, out);
-    flattenStyle(undefined, out);
-    flattenStyle(false, out);
-    expect(out).toEqual({});
+    const output = {};
+    flattenStyle(null, output);
+    flattenStyle(undefined, output);
+    flattenStyle(false, output);
+    expect(output).toEqual({});
   });
 });
 
@@ -170,7 +170,7 @@ describe('buildProps', () => {
 
   it('PASSTHROUGH is a non-empty list of strings', () => {
     expect(PASSTHROUGH.length).toBeGreaterThan(0);
-    expect(PASSTHROUGH.every(k => typeof k === 'string')).toBe(true);
+    expect(PASSTHROUGH.every(key => typeof key === 'string')).toBe(true);
   });
 
   it('an explicit flatStyle is used verbatim instead of re-flattening props.style', () => {
@@ -232,7 +232,7 @@ describe('isEventProp', () => {
 
 describe('<Dial> props', () => {
   it('passes the arc widget props through and resolves a knobImage asset source', () => {
-    const out = buildProps('Dial', {
+    const output = buildProps('Dial', {
       value: 7,
       startAngle: 90,
       sweepAngle: 180,
@@ -241,7 +241,7 @@ describe('<Dial> props', () => {
       knob: 'image',
       knobImage: 'knob.png',
     });
-    expect(out).toEqual({
+    expect(output).toEqual({
       value: 7,
       startAngle: 90,
       sweepAngle: 180,

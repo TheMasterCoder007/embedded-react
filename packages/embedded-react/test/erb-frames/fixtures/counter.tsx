@@ -3,9 +3,9 @@
 import {useState, useRef} from 'react';
 import {View, Text, Pressable, StyleSheet} from 'embedded-react';
 
-const SW = screen.width;
-const PAD = Math.round(SW / 24);
-const BUTTON = (SW - PAD * 4) / 3;
+const SCREEN_WIDTH = screen.width;
+const PADDING = Math.round(SCREEN_WIDTH / 24);
+const BUTTON = (SCREEN_WIDTH - PADDING * 4) / 3;
 
 export function App() {
   const [count, setCount] = useState(0);
@@ -21,7 +21,7 @@ export function App() {
   };
 
   return (
-    <View style={[styles.root, {padding: PAD}]}>
+    <View style={[styles.root, {padding: PADDING}]}>
       <Text style={[styles.count, {color: count > 2 ? '#ff6060' : '#f0f0f0'}]}>
         Count: {count}
       </Text>

@@ -41,13 +41,16 @@ const envWith = (...slots) => ({
   math64: false,
 });
 
-const lower = (source, env = envWith()) =>
-  lowerExprWide(parseExpression(source), env);
+const lower = (source, environment = envWith()) =>
+  lowerExprWide(parseExpression(source), environment);
 
 describe('expressions lower to the IR', () => {
   it('folds `flag === 1` to false, since a boolean never equals a number in JS', () => {
-    const expr = lower('flag === 1', envWith(scalar('flag', 'int', true)));
-    expect(expr).toMatchObject({
+    const expression = lower(
+      'flag === 1',
+      envWith(scalar('flag', 'int', true)),
+    );
+    expect(expression).toMatchObject({
       kind: 'boolean',
       value: false,
       type: {kind: 'bool'},
@@ -55,8 +58,8 @@ describe('expressions lower to the IR', () => {
   });
 
   it('folds whole-number constants exactly past the int range', () => {
-    const expr = lower('2147483647 + 1');
-    expect(expr).toMatchObject({
+    const expression = lower('2147483647 + 1');
+    expect(expression).toMatchObject({
       kind: 'number',
       value: 2147483648,
       type: {kind: 'int64', source: 'number'},
@@ -78,11 +81,11 @@ describe('expressions lower to the IR', () => {
 
 describe('expressions: the source and the typing pass', () => {
   /** An expression's source and its type, over the given state. */
-  const both = (source, env = envWith()) =>
-    lowerSource(parseExpression(source), env);
+  const both = (source, environment = envWith()) =>
+    lowerSource(parseExpression(source), environment);
 
   it('records what JS asked for, and types it apart', () => {
-    const {source, expression: expr} = both(
+    const {source, expression} = both(
       'count + 1',
       envWith(scalar('count', 'int')),
     );
@@ -94,7 +97,7 @@ describe('expressions: the source and the typing pass', () => {
       divisor: {constant: 1},
     });
     expect(source).not.toHaveProperty('type');
-    expect(typeSource(source, false)).toEqual(expr);
+    expect(typeSource(source, false)).toEqual(expression);
   });
 
   it('types the same source again as 64-bit math beside a time', () => {
@@ -112,27 +115,33 @@ describe('expressions: the source and the typing pass', () => {
   });
 
   it('keeps a division under Math.floor apart, so whole numbers divide exactly', () => {
-    const env = envWith(scalar('a', 'int'), scalar('ms', 'i64'));
-    const {source, expression: expr} = both('Math.floor(a / 3)', env);
+    const environment = envWith(scalar('a', 'int'), scalar('ms', 'i64'));
+    const {source, expression} = both('Math.floor(a / 3)', environment);
     expect(source).toMatchObject({
       kind: 'math',
       mathFunction: 'floor',
       exactDivision: true,
       callArguments: [{kind: 'binary', operator: '/'}],
     });
-    expect(expr).toMatchObject({kind: 'helper', helper: 'floordiv', bits: 32});
-    expect(both('Math.floor(ms / 1000)', env).expression).toMatchObject({
+    expect(expression).toMatchObject({
+      kind: 'helper',
       helper: 'floordiv',
-      bits: 64,
-      type: {kind: 'int64', source: 'time'},
+      bits: 32,
     });
+    expect(both('Math.floor(ms / 1000)', environment).expression).toMatchObject(
+      {
+        helper: 'floordiv',
+        bits: 64,
+        type: {kind: 'int64', source: 'time'},
+      },
+    );
   });
 
   it('reports a typing error at the expression it is about', () => {
-    const env = envWith(scalar('ms', 'i64'), scalar('n', 'int'));
+    const environment = envWith(scalar('ms', 'i64'), scalar('n', 'int'));
     let error;
     try {
-      both('1 + Math.floor(ms / n)', env);
+      both('1 + Math.floor(ms / n)', environment);
     } catch (caught) {
       error = caught;
     }

@@ -45,7 +45,7 @@ const el = (type, props) => ({type, props});
 
 // Walk the op-tape (args-per-op are fixed by the ER_VOP_* contract) and return each SHAPE's paint
 // index. Needed because SHAPE === 0 collides with zero coordinates, so a naive scan is unreliable.
-const OP_ARGC = {
+const ARGUMENTS_PER_OP = {
   [MOVE]: 2,
   [LINE]: 2,
   [QUAD]: 4,
@@ -54,17 +54,17 @@ const OP_ARGC = {
   [CLOSE]: 0,
 };
 function shapeIndices(ops) {
-  const out = [];
-  let i = 0;
-  while (i < ops.length) {
-    const op = ops[i++];
-    if (op === SHAPE) {
-      out.push(ops[i++]);
+  const indices = [];
+  let cursor = 0;
+  while (cursor < ops.length) {
+    const opcode = ops[cursor++];
+    if (opcode === SHAPE) {
+      indices.push(ops[cursor++]);
     } else {
-      i += OP_ARGC[op];
+      cursor += ARGUMENTS_PER_OP[opcode];
     }
   }
-  return out;
+  return indices;
 }
 
 describe('parseColor', () => {
@@ -83,10 +83,10 @@ describe('parseColor', () => {
     expect(parseColor(null)).toBe(0);
   });
   it('parses rgba()', () => {
-    const c = parseColor('rgba(255,0,0,0.5)') >>> 0;
-    expect((c >>> 24) & 0xff).toBeGreaterThanOrEqual(126);
-    expect((c >>> 24) & 0xff).toBeLessThanOrEqual(130);
-    expect(c & 0xffffff).toBe(0xff0000);
+    const color = parseColor('rgba(255,0,0,0.5)') >>> 0;
+    expect((color >>> 24) & 0xff).toBeGreaterThanOrEqual(126);
+    expect((color >>> 24) & 0xff).toBeLessThanOrEqual(130);
+    expect(color & 0xffffff).toBe(0xff0000);
   });
 });
 
@@ -131,12 +131,12 @@ describe('parsePath', () => {
     const ops = parsePath('M0 0 A 10 10 0 0 1 20 0');
     expect(ops[0]).toBe(MOVE);
     // remaining ops should all be cubics
-    let i = 3;
+    let cursor = 3;
     let cubics = 0;
-    while (i < ops.length) {
-      expect(ops[i]).toBe(CUBIC);
+    while (cursor < ops.length) {
+      expect(ops[cursor]).toBe(CUBIC);
       cubics++;
-      i += 7;
+      cursor += 7;
     }
     expect(cubics).toBeGreaterThanOrEqual(1);
   });
@@ -144,29 +144,32 @@ describe('parsePath', () => {
 
 describe('parsePath cache', () => {
   it('returns the same ops for a repeated `d`, and re-parses after a clear', () => {
-    const d = 'M0 0 L10 0 A 4 4 0 0 1 20 0 Z';
-    const first = parsePath(d);
-    expect(parsePath(d)).toBe(first); // cached: same array, not just an equal one
+    const path = 'M0 0 L10 0 A 4 4 0 0 1 20 0 Z';
+    const first = parsePath(path);
+    expect(parsePath(path)).toBe(first); // cached: same array, not just an equal one
     clearPathCache();
-    const fresh = parsePath(d);
+    const fresh = parsePath(path);
     expect(fresh).not.toBe(first);
     expect(fresh).toEqual(first);
   });
 
   it('keeps each `d` distinct as the cache evicts', () => {
     clearPathCache();
-    const ds = [];
-    for (let i = 0; i < 400; i++) ds.push(`M${i} 0 L${i + 1} 1`);
-    const expected = ds.map(d => parsePath(d).slice());
-    ds.forEach((d, i) => expect(parsePath(d)).toEqual(expected[i]));
+    const paths = [];
+    for (let index = 0; index < 400; index++)
+      paths.push(`M${index} 0 L${index + 1} 1`);
+    const expected = paths.map(path => parsePath(path).slice());
+    paths.forEach((path, index) =>
+      expect(parsePath(path)).toEqual(expected[index]),
+    );
   });
 
   it('hits the cache for a `d` that is not a plain string', () => {
     clearPathCache();
-    const d = 'M0 0 L10 0 Z';
-    const first = parsePath(d);
+    const path = 'M0 0 L10 0 Z';
+    const first = parsePath(path);
     // eslint-disable-next-line no-new-wrappers
-    expect(parsePath(new String(d))).toBe(first);
+    expect(parsePath(new String(path))).toBe(first);
   });
 
   it('does not store a path too big for the whole budget', () => {
@@ -175,7 +178,8 @@ describe('parsePath cache', () => {
     const cached = parsePath(small);
     // Comfortably over PATH_CACHE_MAX_OPS (3 ops per segment).
     let huge = 'M0 0';
-    for (let i = 0; i < 2000; i++) huge += ` L${i} ${i % 7}`;
+    for (let index = 0; index < 2000; index++)
+      huge += ` L${index} ${index % 7}`;
     const hugeOps = parsePath(huge);
     expect(hugeOps.length).toBeGreaterThan(4096);
     // Storing it would have evicted everything else to make room; it must not be stored at all.
@@ -188,12 +192,12 @@ describe('parsePath cache', () => {
     const svg = angle => ({
       children: [face, {type: 'Path', props: {d: `M5 5 L5 ${angle}`}}],
     });
-    const a = flattenSvg(svg(9));
-    const b = flattenSvg(svg(9));
-    expect(b.ops).toEqual(a.ops);
-    const c = flattenSvg(svg(12));
-    expect(c.ops.slice(0, 9)).toEqual(a.ops.slice(0, 9)); // the face segment
-    expect(c.ops).not.toEqual(a.ops);
+    const first = flattenSvg(svg(9));
+    const second = flattenSvg(svg(9));
+    expect(second.ops).toEqual(first.ops);
+    const changed = flattenSvg(svg(12));
+    expect(changed.ops.slice(0, 9)).toEqual(first.ops.slice(0, 9)); // the face segment
+    expect(changed.ops).not.toEqual(first.ops);
   });
 
   it('applies the right transform when one `d` is drawn under two of them', () => {
@@ -320,10 +324,10 @@ describe('flattenSvg', () => {
     expect(paints[17]).toBe(0); // stroke_grad
     // Tape starts with a SHAPE op and contains two of them.
     expect(ops[0]).toBe(SHAPE);
-    expect(ops.filter((_, i) => ops[i - 1] === undefined)).toBeTruthy();
-    const shapeCount = ops.reduce((n, _v, i) => {
+    expect(ops.filter((_, index) => ops[index - 1] === undefined)).toBeTruthy();
+    const shapeCount = ops.reduce((count, _opcode, index) => {
       // crude: count SHAPE ops by scanning (SHAPE is followed by an index)
-      return n;
+      return count;
     }, 0);
     // Circle produced an ARC op somewhere.
     expect(ops).toContain(ARC);
@@ -339,12 +343,12 @@ describe('flattenSvg', () => {
     const {ops} = flattenSvg(props);
     // First op after SHAPE+index is MOVE 0,0; the LINE to (50,0) should scale to (100,0).
     // ops: [SHAPE, 0, MOVE, 0, 0, LINE, 100, 0, LINE, 100, 100, LINE, 0, 100, CLOSE]
-    const moveIdx = ops.indexOf(MOVE);
-    expect(ops[moveIdx + 1]).toBe(0);
-    expect(ops[moveIdx + 2]).toBe(0);
+    const moveIndex = ops.indexOf(MOVE);
+    expect(ops[moveIndex + 1]).toBe(0);
+    expect(ops[moveIndex + 2]).toBe(0);
     // first LINE x should be 100 (50 * 2)
-    const lineIdx = ops.indexOf(LINE);
-    expect(ops[lineIdx + 1]).toBe(100);
+    const lineIndex = ops.indexOf(LINE);
+    expect(ops[lineIndex + 1]).toBe(100);
   });
 
   it('G passes inherited paint and translate to children', () => {
@@ -360,9 +364,9 @@ describe('flattenSvg', () => {
     };
     const {ops, paints} = flattenSvg(props);
     expect(paints[0] >>> 0).toBe(0xffff0000); // inherited fill
-    const moveIdx = ops.indexOf(MOVE);
-    expect(ops[moveIdx + 1]).toBe(10); // translated x
-    expect(ops[moveIdx + 2]).toBe(20); // translated y
+    const moveIndex = ops.indexOf(MOVE);
+    expect(ops[moveIndex + 1]).toBe(10); // translated x
+    expect(ops[moveIndex + 2]).toBe(20); // translated y
   });
 
   it('the <Svg> paint cascades to its shapes, under a G and a shape that override it', () => {
@@ -413,8 +417,8 @@ describe('flattenSvg child unwrapping', () => {
   });
 
   it('draws a mapped list of shapes alongside an inline sibling', () => {
-    const bars = [1, 2, 3].map(i =>
-      el('Rect', {x: i * 10, y: 0, width: 5, height: 5}),
+    const bars = [1, 2, 3].map(index =>
+      el('Rect', {x: index * 10, y: 0, width: 5, height: 5}),
     );
     const {ops, paints} = flattenSvg({
       children: [el('Circle', {cx: 0, cy: 0, r: 4}), bars],
@@ -424,7 +428,7 @@ describe('flattenSvg child unwrapping', () => {
   });
 
   it('flattens arrays at any depth (two sibling maps, nested groups of them)', () => {
-    const line = n => el('Line', {x1: n, y1: 0, x2: n, y2: 10});
+    const line = x => el('Line', {x1: x, y1: 0, x2: x, y2: 10});
     const {ops, paints} = flattenSvg({
       children: [
         [line(0), line(1)],
@@ -441,12 +445,12 @@ describe('flattenSvg child unwrapping', () => {
         Fragment,
         null,
         el('Line', {x1: 0, y1: 0, x2: 1, y2: 1}),
-        [1, 2].map(i =>
+        [1, 2].map(index =>
           createElement(
             Fragment,
-            {key: i},
-            el('Line', {x1: i, y1: 0, x2: i, y2: 1}),
-            el('Circle', {cx: i, cy: 0, r: 2}),
+            {key: index},
+            el('Line', {x1: index, y1: 0, x2: index, y2: 1}),
+            el('Circle', {cx: index, cy: 0, r: 2}),
           ),
         ),
       ),
@@ -471,9 +475,9 @@ describe('flattenSvg child unwrapping', () => {
       ],
     });
     expect(paints[0] >>> 0).toBe(0xffff0000); // inherited fill, as if written inline
-    const moveIdx = ops.indexOf(MOVE);
-    expect(ops[moveIdx + 1]).toBe(10); // group translate
-    expect(ops[moveIdx + 2]).toBe(20);
+    const moveIndex = ops.indexOf(MOVE);
+    expect(ops[moveIndex + 1]).toBe(10); // group translate
+    expect(ops[moveIndex + 2]).toBe(20);
   });
 
   it('warns once about a child it cannot draw, and still draws the siblings', () => {
@@ -645,11 +649,11 @@ describe('shapesToVector (imperative)', () => {
   });
 
   it('reuses its output buffers but resets them each call (no stale leakage)', () => {
-    const lenA = shapesToVector([{rect: [0, 0, 9, 9], fill: '#fff'}]).ops
+    const firstLength = shapesToVector([{rect: [0, 0, 9, 9], fill: '#fff'}]).ops
       .length;
-    const b = shapesToVector([{line: [0, 0, 1, 1], stroke: '#000'}]);
-    expect(b.ops).toEqual([SHAPE, 0, MOVE, 0, 0, LINE, 1, 1]); // no trailing ops from the longer prior call
-    expect(b.ops.length).toBeLessThan(lenA);
+    const second = shapesToVector([{line: [0, 0, 1, 1], stroke: '#000'}]);
+    expect(second.ops).toEqual([SHAPE, 0, MOVE, 0, 0, LINE, 1, 1]); // no trailing ops from the longer prior call
+    expect(second.ops.length).toBeLessThan(firstLength);
   });
 });
 
@@ -662,9 +666,9 @@ describe('scaleVectorArtifact (<Svg source> box scaling)', () => {
       width: 10,
       height: 10,
     };
-    const r = scaleVectorArtifact(art, 10, 10);
-    expect(r.ops).toBe(art.ops); // same reference — no needless copy
-    expect(r.paints).toBe(art.paints);
+    const scaled = scaleVectorArtifact(art, 10, 10);
+    expect(scaled.ops).toBe(art.ops); // same reference — no needless copy
+    expect(scaled.paints).toBe(art.paints);
   });
 
   it('scales coordinates + stroke width to the target box, leaving paint indices + colors alone', () => {
@@ -675,16 +679,16 @@ describe('scaleVectorArtifact (<Svg source> box scaling)', () => {
       width: 10,
       height: 10,
     };
-    const r = scaleVectorArtifact(art, 20, 20); // 2x
-    expect(r.ops).toEqual([SHAPE, 0, MOVE, 10, 10, LINE, 20, 0]); // coords doubled; SHAPE's paint index (0) untouched
-    expect(r.paints[2]).toBe(8); // strokeWidth 4 -> 8
-    expect(r.paints[0]).toBe(0xff112233); // fill color untouched
+    const scaled = scaleVectorArtifact(art, 20, 20); // 2x
+    expect(scaled.ops).toEqual([SHAPE, 0, MOVE, 10, 10, LINE, 20, 0]); // coords doubled; SHAPE's paint index (0) untouched
+    expect(scaled.paints[2]).toBe(8); // strokeWidth 4 -> 8
+    expect(scaled.paints[0]).toBe(0xff112233); // fill color untouched
   });
 });
 
 describe('encodeVectorGradients', () => {
   it('encodes a gradient to GRAD_STRIDE floats with its stops + geometry', () => {
-    const out = encodeVectorGradients([
+    const encoded = encodeVectorGradients([
       {
         type: GRAD_LINEAR,
         stops: [
@@ -698,36 +702,43 @@ describe('encodeVectorGradients', () => {
         r: 0,
       },
     ]);
-    expect(out.length).toBe(GRAD_STRIDE);
-    expect(out[0]).toBe(GRAD_LINEAR); // type
-    expect(out[1]).toBe(2); // stop_count
-    expect(out[2] >>> 0).toBe(0xffff0000); // stop0 color
-    expect(out[3]).toBe(0); // stop0 offset
-    expect(out[4] >>> 0).toBe(0xff0000ff); // stop1 color
-    const geo = 2 + GRAD_MAX_STOPS * 2; // geometry follows the (padded) stop slots
-    expect([out[geo], out[geo + 1], out[geo + 2], out[geo + 3]]).toEqual([
-      1, 2, 3, 4,
-    ]);
+    expect(encoded.length).toBe(GRAD_STRIDE);
+    expect(encoded[0]).toBe(GRAD_LINEAR); // type
+    expect(encoded[1]).toBe(2); // stop_count
+    expect(encoded[2] >>> 0).toBe(0xffff0000); // stop0 color
+    expect(encoded[3]).toBe(0); // stop0 offset
+    expect(encoded[4] >>> 0).toBe(0xff0000ff); // stop1 color
+    const geometryOffset = 2 + GRAD_MAX_STOPS * 2; // geometry follows the (padded) stop slots
+    expect([
+      encoded[geometryOffset],
+      encoded[geometryOffset + 1],
+      encoded[geometryOffset + 2],
+      encoded[geometryOffset + 3],
+    ]).toEqual([1, 2, 3, 4]);
   });
 
   it('resamples a gradient with more than GRAD_MAX_STOPS stops down to the cap (no truncation)', () => {
-    const N = GRAD_MAX_STOPS + 4;
+    const stopCount = GRAD_MAX_STOPS + 4;
     const stops = [];
-    for (let i = 0; i < N; i++) {
+    for (let index = 0; index < stopCount; index++) {
       const color =
-        i === 0 ? 0xffff0000 : i === N - 1 ? 0xff0000ff : 0xff00ff00;
-      stops.push({color, offset: i / (N - 1)});
+        index === 0
+          ? 0xffff0000
+          : index === stopCount - 1
+            ? 0xff0000ff
+            : 0xff00ff00;
+      stops.push({color, offset: index / (stopCount - 1)});
     }
-    const out = encodeVectorGradients([
+    const encoded = encodeVectorGradients([
       {type: GRAD_LINEAR, stops, ax: 0, ay: 0, bx: 0, by: 0, r: 0},
     ]);
-    expect(out[1]).toBe(GRAD_MAX_STOPS); // capped, not truncated
+    expect(encoded[1]).toBe(GRAD_MAX_STOPS); // capped, not truncated
     // Endpoints preserved by the even resample.
-    expect(out[2] >>> 0).toBe(0xffff0000); // first stop = first colour
+    expect(encoded[2] >>> 0).toBe(0xffff0000); // first stop = first colour
     const last = 2 + (GRAD_MAX_STOPS - 1) * 2;
-    expect(out[last] >>> 0).toBe(0xff0000ff); // last resampled stop = last colour
-    expect(out[3]).toBe(0); // offsets span [0,1] ascending
-    expect(out[last + 1]).toBe(1);
+    expect(encoded[last] >>> 0).toBe(0xff0000ff); // last resampled stop = last colour
+    expect(encoded[3]).toBe(0); // offsets span [0,1] ascending
+    expect(encoded[last + 1]).toBe(1);
   });
 });
 
@@ -757,20 +768,20 @@ describe('warnVectorCaps — gradient cap', () => {
 // Walks a single-shape tape into { ops: [opcode…], points: [[x, y]…] }. A raw filter/indexOf would
 // miscount here, since every opcode is also a plausible coordinate value (CUBIC === 4 vs rx = 4).
 function walkShape(tape) {
-  const ops = [];
+  const opcodes = [];
   const points = [];
-  let i = 0;
-  while (i < tape.length) {
-    const op = tape[i++];
-    if (op === SHAPE) {
-      i++; // paint index
+  let cursor = 0;
+  while (cursor < tape.length) {
+    const opcode = tape[cursor++];
+    if (opcode === SHAPE) {
+      cursor++; // paint index
       continue;
     }
-    ops.push(op);
-    for (let a = 0; a < OP_ARGC[op]; a += 2)
-      points.push([tape[i++], tape[i++]]);
+    opcodes.push(opcode);
+    for (let argument = 0; argument < ARGUMENTS_PER_OP[opcode]; argument += 2)
+      points.push([tape[cursor++], tape[cursor++]]);
   }
-  return {ops, points};
+  return {ops: opcodes, points};
 }
 
 // <Rect rx/ry> — rounded corners without hand-built <Path> arc data (issue #121).
@@ -837,8 +848,8 @@ describe('Rect corner radii', () => {
     expect(ops.slice(0, 8)).toEqual([SHAPE, 0, MOVE, 10, 0, LINE, 90, 0]);
     expect(ops[ops.length - 1]).toBe(CLOSE);
     // The top-right corner ends on the right edge, one radius down.
-    const c0 = ops.indexOf(CUBIC);
-    expect(ops.slice(c0 + 5, c0 + 7)).toEqual([100, 10]);
+    const firstCubic = ops.indexOf(CUBIC);
+    expect(ops.slice(firstCubic + 5, firstCubic + 7)).toEqual([100, 10]);
   });
 
   it('never bulges past the box: an oversized rx/ry becomes a stadium/ellipse', () => {
@@ -846,17 +857,19 @@ describe('Rect corner radii', () => {
       children: [el('Rect', {x: 0, y: 0, width: 40, height: 20, rx: 999})],
     });
     const {points} = walkShape(ops);
-    const xs = points.map(pt => pt[0]);
-    const ys = points.map(pt => pt[1]);
-    expect(Math.min(...xs)).toBe(0);
-    expect(Math.max(...xs)).toBe(40);
-    expect(Math.min(...ys)).toBe(0);
-    expect(Math.max(...ys)).toBe(20);
+    const xValues = points.map(point => point[0]);
+    const yValues = points.map(point => point[1]);
+    expect(Math.min(...xValues)).toBe(0);
+    expect(Math.max(...xValues)).toBe(40);
+    expect(Math.min(...yValues)).toBe(0);
+    expect(Math.max(...yValues)).toBe(20);
   });
 
   it('rounds an imperative { rect: [x, y, w, h, rx, ry] } descriptor too', () => {
     const {ops} = shapesToVector([{rect: [0, 0, 20, 20, 4, 4], fill: '#f00'}]);
-    expect(walkShape(ops).ops.filter(o => o === CUBIC).length).toBe(4);
+    expect(walkShape(ops).ops.filter(opcode => opcode === CUBIC).length).toBe(
+      4,
+    );
     expect(ops.slice(0, 5)).toEqual([SHAPE, 0, MOVE, 4, 0]);
     // The 4-element form stays on the allocation-free square-cornered path.
     const sharp = shapesToVector([{rect: [0, 0, 20, 20], fill: '#f00'}]);

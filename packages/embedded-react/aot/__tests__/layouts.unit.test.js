@@ -28,7 +28,7 @@ import {
 import {CHECK_BUDGET, CheckOp, MathFn} from '../compiler/package/format.mts';
 import {SizeSearch} from '../compiler/package/layouts.mts';
 
-const demosDir = resolve(
+const demosDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../../../../demos',
 );
@@ -45,7 +45,8 @@ export function App() {
 }`;
 
 const checksOf = result => result.panels.map(panel => panel.check);
-const sizesOf = result => result.panels.map(p => `${p.width}x${p.height}`);
+const sizesOf = result =>
+  result.panels.map(panel => `${panel.width}x${panel.height}`);
 
 /** A repeatable random number below `limit`. */
 function randomSource(seed = 12345) {
@@ -134,7 +135,7 @@ export function App() {
   }, 60000);
 
   it('keeps the bytes the same at any size in a layout', () => {
-    const src = `${IMPORTS}
+    const source = `${IMPORTS}
 const WIDE = screen.width >= 480;
 export function App() {
   const [half] = useState(screen.width / 2);
@@ -148,7 +149,7 @@ export function App() {
   );
 }`;
     const at = (width, height) =>
-      compilePackage(src, 'app', {screen: {width, height}}).program;
+      compilePackage(source, 'app', {screen: {width, height}}).program;
     expect(at(240, 320)).toEqual(at(301, 77));
     expect(at(800, 480)).toEqual(at(1001, 77));
     expect(at(240, 320)).not.toEqual(at(800, 480));
@@ -187,7 +188,7 @@ export function App() {
   });
 
   it('holds named panels to the same cap', () => {
-    const src = `${IMPORTS}
+    const source = `${IMPORTS}
 export function App() {
   const [label] = useState('w' + screen.width);
   return <Text>{label}</Text>;
@@ -198,11 +199,11 @@ export function App() {
         height: 320,
       }));
     expect(
-      compilePackage(src, 'app', {screens: panelsWide(16)}).panels,
+      compilePackage(source, 'app', {screens: panelsWide(16)}).panels,
     ).toHaveLength(16);
-    expect(() => compilePackage(src, 'app', {screens: panelsWide(17)})).toThrow(
-      /more than 16 layouts[^]*name fewer panels/i,
-    );
+    expect(() =>
+      compilePackage(source, 'app', {screens: panelsWide(17)}),
+    ).toThrow(/more than 16 layouts[^]*name fewer panels/i);
   });
 
   it('takes the exact size for a check too long for the loader', () => {
@@ -215,19 +216,19 @@ export function App() {
       },
     };
     const checkOfTerms = terms => {
-      let expr = screenWidth;
+      let expression = screenWidth;
       for (let term = 0; term < terms; term++) {
-        expr = {
+        expression = {
           kind: 'arithmetic',
           operator: '+',
-          left: expr,
+          left: expression,
           right: {kind: 'number', value: 1},
         };
       }
       const slot = {
         field: 'sum',
         type: {kind: 'int'},
-        initializer: {kind: 'expr', expression: expr},
+        initializer: {kind: 'expr', expression},
       };
       return lowerCheck(
         [{kind: 'value', slot, value: 240 + terms, source: 'the sum'}],
@@ -257,14 +258,16 @@ export function App() {
   });
 
   it('keeps only the layouts the named sizes pick', () => {
-    const src = branching('screen.width >= 480');
-    expect(sizesOf(compilePackage(src))).toEqual(['240x320', '480x320']);
+    const source = branching('screen.width >= 480');
+    expect(sizesOf(compilePackage(source))).toEqual(['240x320', '480x320']);
     expect(
-      sizesOf(compilePackage(src, 'app', {screen: {width: 800, height: 480}})),
+      sizesOf(
+        compilePackage(source, 'app', {screen: {width: 800, height: 480}}),
+      ),
     ).toEqual(['800x480']);
     expect(
       sizesOf(
-        compilePackage(src, 'app', {
+        compilePackage(source, 'app', {
           screens: [
             {width: 240, height: 320},
             {width: 200, height: 100},
@@ -290,11 +293,11 @@ export function App() {
     ['thermostat', ['240x320', '320x240', '480x800']],
     ['watch-face', ['240x320']],
   ])('compiles the %s at every layout', async (demo, layouts) => {
-    const dir = resolve(demosDir, demo);
-    const src = readFileSync(resolve(dir, 'App.jsx'), 'utf8');
-    const result = compilePackage(src, demo, {
-      filename: resolve(dir, 'App.jsx'),
-      svgArtifacts: await bakeSvgArtifacts(src, dir),
+    const demoDirectory = resolve(demosDirectory, demo);
+    const source = readFileSync(resolve(demoDirectory, 'App.jsx'), 'utf8');
+    const result = compilePackage(source, demo, {
+      filename: resolve(demoDirectory, 'App.jsx'),
+      svgArtifacts: await bakeSvgArtifacts(source, demoDirectory),
     });
     expect(sizesOf(result)).toEqual(layouts);
     // The S3, the CYD, the RP2040 and a size nothing names each have a layout.
@@ -363,7 +366,7 @@ describe('a layout check over a range of sizes', () => {
   });
 
   // Math functions a fold doesn't take yet, and the corners of the VM's division, as the check would run them.
-  const step = (op, arg = 0) => ({opcode: op, operand: arg});
+  const step = (opcode, operand = 0) => ({opcode, operand});
   const DIRECT = {
     sqrt: [step(CheckOp.width), step(CheckOp.math, MathFn.sqrt)],
     pow: [
@@ -494,13 +497,13 @@ export function App() {
   });
 
   it('types the state by its expression, not the size it was compiled at', () => {
-    const src = `${IMPORTS}
+    const source = `${IMPORTS}
 export function App() {
   const [half] = useState(screen.width / 2);
   return <Text>{half}</Text>;
 }`;
     const at = width =>
-      compilePackage(src, 'app', {screen: {width, height: 320}}).program;
+      compilePackage(source, 'app', {screen: {width, height: 320}}).program;
     expect(at(240)).toEqual(at(241));
   });
 

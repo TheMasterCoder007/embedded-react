@@ -17,8 +17,8 @@ import {
   updateVector,
 } from 'embedded-react';
 
-const SW = screen.width;
-const HALF = SW / 2;
+const SCREEN_WIDTH = screen.width;
+const HALF = SCREEN_WIDTH / 2;
 
 export function App() {
   const [level, setLevel] = useState(30);
@@ -143,12 +143,12 @@ export function App() {
           style={styles.button}
           onPress={() => {
             steps.current += 1;
-            const r = steps.current * 2.5;
+            const radius = steps.current * 2.5;
             updateVector(
               // @ts-expect-error The public types take a node handle, not a ref.
               marks,
-              [{circle: [20 + r, 16, r / 3], fill: '#80c0ff'}],
-              [0, 8, 20 + r * 1.5, 40 / steps.current],
+              [{circle: [20 + radius, 16, radius / 3], fill: '#80c0ff'}],
+              [0, 8, 20 + radius * 1.5, 40 / steps.current],
             );
           }}>
           <Text style={styles.label}>dots</Text>

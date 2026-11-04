@@ -53,7 +53,7 @@ const stateOf = (...slots) => ({
 /** Lowers a handler body over this state (and refs), returning its statements and the context it filled. */
 function lowerBody(source, state, refs = new Map()) {
   const statements = parse(source, {sourceType: 'module'}).program.body;
-  const env = {
+  const environment = {
     state: state.byName,
     locals: new Map(),
     constants: {},
@@ -62,8 +62,11 @@ function lowerBody(source, state, refs = new Map()) {
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     stores: [],
   };
-  const ctx = {stateChanged: false, output: new Out(new Map(), null)};
-  return {stmts: lowerStmts(statements, env, state, ctx), ctx};
+  const context = {stateChanged: false, output: new Out(new Map(), null)};
+  return {
+    statements: lowerStmts(statements, environment, state, context),
+    context,
+  };
 }
 
 describe('handler statements lower to the IR', () => {
@@ -72,7 +75,7 @@ describe('handler statements lower to the IR', () => {
       {key: 'name', kind: 'string'},
       {key: 'score', kind: 'int'},
     ];
-    const {stmts} = lowerBody(
+    const {statements} = lowerBody(
       'setItems([...items, {name: label, score: count}]);' +
         'setItems(items.slice(0, -1));' +
         'setItems([]);',
@@ -82,12 +85,12 @@ describe('handler statements lower to the IR', () => {
         scalar('count', 'int'),
       ),
     );
-    expect(stmts.map(stmt => stmt.kind)).toEqual([
+    expect(statements.map(statement => statement.kind)).toEqual([
       'appendItem',
       'dropLastItem',
       'clearList',
     ]);
-    expect(stmts[0].values).toMatchObject([
+    expect(statements[0].values).toMatchObject([
       {field: {key: 'name'}, text: {parts: [{kind: 'value'}]}},
       {field: {key: 'score'}, value: {kind: 'state'}},
     ]);

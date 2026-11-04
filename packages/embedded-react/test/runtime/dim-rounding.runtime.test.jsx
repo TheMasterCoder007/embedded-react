@@ -28,23 +28,28 @@ const box = (name, style) => (
   <View
     key={name}
     style={{position: 'absolute', ...style}}
-    onLayout={e => (seen[name] = e.layout)}
+    onLayout={event => (seen[name] = event.layout)}
   />
 );
 
-const S = 284 / 320; // the dial's authoring-unit → screen-px scale
+const SCALE = 284 / 320; // the dial's authoring-unit → screen-px scale
 
 function App() {
   return (
     <View style={{width: 480, height: 320}}>
       {/* 223.65 → 224: the dial box itself, a whole pixel of ring geometry. */}
-      {box('dial', {left: 0, top: 0, width: 2 * (116 + 10) * S, height: 4})}
+      {box('dial', {left: 0, top: 0, width: 2 * (116 + 10) * SCALE, height: 4})}
       {/* 106.5 → 107: an exact half rounds UP (Math.round), not away from zero. */}
-      {box('halfUp', {left: 0, top: 0, width: 120 * S, height: 4})}
+      {box('halfUp', {left: 0, top: 0, width: 120 * SCALE, height: 4})}
       {/* 147.325 → 147: below the half, so this one rounds down either way. */}
-      {box('down', {left: 0, top: 0, width: 166 * S, height: 4})}
+      {box('down', {left: 0, top: 0, width: 166 * SCALE, height: 4})}
       {/* 58.575 → 59 as a POSITION: the readout box's top, which used to land on 58. */}
-      {box('top', {left: 0, top: 126 * S - 60 * S, width: 4, height: 4})}
+      {box('top', {
+        left: 0,
+        top: 126 * SCALE - 60 * SCALE,
+        width: 4,
+        height: 4,
+      })}
       {/* -1.5 → -1 and -0.5 → 0: Math.round is floor(x + 0.5), so halves go up on both signs. */}
       {box('negHalf', {left: -1.5, top: 40, width: 4, height: 4})}
       {box('negTiny', {left: -0.5, top: 60, width: 4, height: 4})}

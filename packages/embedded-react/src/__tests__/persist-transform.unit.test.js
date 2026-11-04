@@ -22,7 +22,7 @@ import {transformPersist} from '../../persist-transform.mjs';
 
 describe('transformPersist', () => {
   it('rewrites imported useState to the persisting helper, keyed by component + order', () => {
-    const src = `
+    const source = `
       import { useState } from 'react';
       function Counter() {
         const [a, setA] = useState(0);
@@ -30,29 +30,29 @@ describe('transformPersist', () => {
         return null;
       }
     `;
-    const out = transformPersist(src, 'App.jsx');
-    expect(out).toContain('usePersistentState as __erPersistState');
-    expect(out).toContain('__erPersistState');
-    expect(out).toContain('App.jsx::Counter#0');
-    expect(out).toContain('App.jsx::Counter#1');
-    expect(out).not.toMatch(/=\s*useState\(/); // no bare useState calls left
+    const output = transformPersist(source, 'App.jsx');
+    expect(output).toContain('usePersistentState as __erPersistState');
+    expect(output).toContain('__erPersistState');
+    expect(output).toContain('App.jsx::Counter#0');
+    expect(output).toContain('App.jsx::Counter#1');
+    expect(output).not.toMatch(/=\s*useState\(/); // no bare useState calls left
   });
 
   it('also rewrites useState imported from embedded-react', () => {
-    const out = transformPersist(
+    const output = transformPersist(
       `import { useState } from 'embedded-react'; function A(){ const [x]=useState(1); return null; }`,
       'a.jsx',
     );
-    expect(out).toContain('App'.replace('App', '')); // noop guard to keep formatting
-    expect(out).toContain('a.jsx::A#0');
+    expect(output).toContain('App'.replace('App', '')); // noop guard to keep formatting
+    expect(output).toContain('a.jsx::A#0');
   });
 
   it('leaves a non-imported (local) useState untouched', () => {
-    const out = transformPersist(
+    const output = transformPersist(
       `function useState(){return [0]} const x = useState();`,
       'm.js',
     );
-    expect(out).not.toContain('__erPersistState');
+    expect(output).not.toContain('__erPersistState');
   });
 
   it('keys stay stable when unrelated lines change (component + order are what matter)', () => {
@@ -69,7 +69,7 @@ describe('transformPersist', () => {
   });
 
   it('no-ops a module with no useState (no helper import injected)', () => {
-    const out = transformPersist(`export const x = 1;`, 'm.js');
-    expect(out).not.toContain('__erPersistState');
+    const output = transformPersist(`export const x = 1;`, 'm.js');
+    expect(output).not.toContain('__erPersistState');
   });
 });

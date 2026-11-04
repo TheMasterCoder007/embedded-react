@@ -32,15 +32,14 @@ const BRIDGE_C = resolve(
 
 /** The bridge's k_named_colors table, as {name: argb}. */
 function bridgeNamedColors() {
-  const c = readFileSync(BRIDGE_C, 'utf8');
-  const table = c.match(/k_named_colors\[\]\s*=\s*\{([\s\S]*?)\};/);
+  const bridgeSource = readFileSync(BRIDGE_C, 'utf8');
+  const table = bridgeSource.match(/k_named_colors\[\]\s*=\s*\{([\s\S]*?)\};/);
   if (!table)
     throw new Error('native_ui_bridge.c: could not find k_named_colors');
   return Object.fromEntries(
-    [...table[1].matchAll(/\{"([a-z]+)",\s*0x([0-9A-Fa-f]{8})U\}/g)].map(m => [
-      m[1],
-      parseInt(m[2], 16),
-    ]),
+    [...table[1].matchAll(/\{"([a-z]+)",\s*0x([0-9A-Fa-f]{8})U\}/g)].map(
+      match => [match[1], parseInt(match[2], 16)],
+    ),
   );
 }
 

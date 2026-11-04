@@ -24,8 +24,9 @@ import {SectionList} from '../SectionList.js';
 
 const Row = props => createElement('Text', props);
 const render = props => SectionList(props);
-const labels = el => el.props.children.map(c => c.props.label);
-const keys = el => el.props.children.map(c => c.key);
+const labels = element =>
+  element.props.children.map(child => child.props.label);
+const keys = element => element.props.children.map(child => child.key);
 
 const SECTIONS = [
   {title: 'A', data: ['ant', 'ape']},
@@ -39,20 +40,28 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('SectionList renders as a ScrollView of flat siblings', () => {
   it('interleaves headers, rows and footers in source order', () => {
-    const el = render({
+    const element = render({
       sections: SECTIONS,
       renderSectionHeader: header,
       renderSectionFooter: footer,
       renderItem: row,
     });
-    expect(el.type).toBe('ScrollView');
-    expect(labels(el)).toEqual(['#A', 'ant', 'ape', '/A', '#B', 'bee', '/B']);
+    expect(element.type).toBe('ScrollView');
+    expect(labels(element)).toEqual([
+      '#A',
+      'ant',
+      'ape',
+      '/A',
+      '#B',
+      'bee',
+      '/B',
+    ]);
   });
 
   it('wraps nothing around a section — the rows are direct children', () => {
-    const el = render({sections: SECTIONS, renderItem: row});
-    expect(labels(el)).toEqual(['ant', 'ape', 'bee']);
-    for (const child of el.props.children) expect(child.type).toBe(Row);
+    const element = render({sections: SECTIONS, renderItem: row});
+    expect(labels(element)).toEqual(['ant', 'ape', 'bee']);
+    for (const child of element.props.children) expect(child.type).toBe(Row);
   });
 
   it('omits a header / footer that was not asked for', () => {
@@ -100,46 +109,46 @@ describe('SectionList renders as a ScrollView of flat siblings', () => {
 
   it('renders an empty scroller for missing / malformed input', () => {
     for (const sections of [undefined, null, 0, 'abc', {length: 2}]) {
-      const el = render({sections, renderItem: row});
-      expect(el.type).toBe('ScrollView');
-      expect(el.props.children).toEqual([]);
+      const element = render({sections, renderItem: row});
+      expect(element.type).toBe('ScrollView');
+      expect(element.props.children).toEqual([]);
     }
     expect(SectionList().props.children).toEqual([]);
     expect(SectionList({}).props.children).toEqual([]);
   });
 
   it('skips a null section and a section with no data array', () => {
-    const el = render({
+    const element = render({
       sections: [null, 'nope', {title: 'C'}, {title: 'D', data: ['d']}],
       renderItem: row,
     });
-    expect(labels(el)).toEqual(['d']);
+    expect(labels(element)).toEqual(['d']);
   });
 
   it('still renders a section header when the section has no rows', () => {
-    const el = render({
+    const element = render({
       sections: [{title: 'E', data: []}],
       renderSectionHeader: header,
       renderItem: row,
     });
-    expect(labels(el)).toEqual(['#E']);
+    expect(labels(element)).toEqual(['#E']);
   });
 });
 
 describe('SectionList keying', () => {
   it('namespaces row keys by section, so equal indices do not collide', () => {
-    const el = render({sections: SECTIONS, renderItem: row});
-    expect(keys(el)).toEqual(['0:0', '0:1', '1:0']);
+    const element = render({sections: SECTIONS, renderItem: row});
+    expect(keys(element)).toEqual(['0:0', '0:1', '1:0']);
   });
 
   it('uses a section `key` in place of its index', () => {
-    const el = render({
+    const element = render({
       sections: [{key: 'letters', data: ['a']}],
       renderSectionHeader: header,
       renderSectionFooter: footer,
       renderItem: row,
     });
-    expect(keys(el)).toEqual([
+    expect(keys(element)).toEqual([
       'letters:$header',
       'letters:0',
       'letters:$footer',
@@ -147,34 +156,34 @@ describe('SectionList keying', () => {
   });
 
   it('keys rows from keyExtractor, still namespaced', () => {
-    const el = render({
+    const element = render({
       sections: [{data: [{id: 7}, {id: 9}]}],
       keyExtractor: item => item.id,
       renderItem: ({item}) => createElement(Row, {label: item.id}),
     });
-    expect(keys(el)).toEqual(['0:7', '0:9']);
+    expect(keys(element)).toEqual(['0:7', '0:9']);
   });
 
   it('keeps a key renderItem already set when there is no keyExtractor', () => {
-    const el = render({
+    const element = render({
       sections: [{data: ['a']}],
       renderItem: ({item}) => createElement(Row, {key: `row-${item}`}),
     });
-    expect(keys(el)).toEqual(['0:row-a']);
+    expect(keys(element)).toEqual(['0:row-a']);
   });
 
   it('preserves row props when it clones to attach a key', () => {
-    const el = render({
+    const element = render({
       sections: [{data: ['a']}],
       renderItem: ({item}) => createElement(Row, {label: item, bold: true}),
     });
-    expect(el.props.children[0].props).toEqual({label: 'a', bold: true});
+    expect(element.props.children[0].props).toEqual({label: 'a', bold: true});
   });
 });
 
 describe('SectionList per-section overrides', () => {
   it('lets a section supply its own renderItem', () => {
-    const el = render({
+    const element = render({
       sections: [
         {title: 'A', data: ['ant']},
         {
@@ -185,16 +194,16 @@ describe('SectionList per-section overrides', () => {
       ],
       renderItem: row,
     });
-    expect(labels(el)).toEqual(['ant', '!bee']);
+    expect(labels(element)).toEqual(['ant', '!bee']);
   });
 
   it('lets a section supply its own keyExtractor', () => {
-    const el = render({
+    const element = render({
       sections: [{data: ['a'], keyExtractor: item => `s-${item}`}],
       keyExtractor: item => `g-${item}`,
       renderItem: row,
     });
-    expect(keys(el)).toEqual(['0:s-a']);
+    expect(keys(element)).toEqual(['0:s-a']);
   });
 
   it('renders nothing for a section with data but no renderer anywhere', () => {
@@ -204,7 +213,7 @@ describe('SectionList per-section overrides', () => {
 
 describe('SectionList rows that are not elements', () => {
   it('drops rows and headers that render to null / undefined / false', () => {
-    const el = render({
+    const element = render({
       sections: [{data: [1, 2, 3, 4]}],
       renderSectionHeader: () => null,
       renderSectionFooter: () => false,
@@ -217,7 +226,7 @@ describe('SectionList rows that are not elements', () => {
               ? false
               : createElement(Row, {label: 'kept'}),
     });
-    expect(labels(el)).toEqual(['kept']);
+    expect(labels(element)).toEqual(['kept']);
   });
 
   it('does not ask keyExtractor for the key of a row that rendered nothing', () => {
@@ -234,11 +243,11 @@ describe('SectionList rows that are not elements', () => {
   });
 
   it('keeps a raw string row as-is (no key to clone onto)', () => {
-    const el = render({
+    const element = render({
       sections: [{data: ['hi']}],
       renderItem: ({item}) => item,
     });
-    expect(el.props.children).toEqual(['hi']);
+    expect(element.props.children).toEqual(['hi']);
   });
 
   it('does not ask keyExtractor for the key of a raw string row', () => {

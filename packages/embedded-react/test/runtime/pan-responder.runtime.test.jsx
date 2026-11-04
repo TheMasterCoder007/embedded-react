@@ -30,17 +30,17 @@ const root = createRoot({width: screen.width, height: screen.height});
 
 /** A recorder-backed responder: logs every lifecycle callback with a gestureState snapshot. */
 function recorder(log, tag, extra = {}) {
-  const rec = name => (e, g) =>
+  const rec = name => (event, gestureState) =>
     log.push({
       tag,
       name,
-      x: e.x,
-      dx: g.dx,
-      dy: g.dy,
-      vx: g.vx,
-      x0: g.x0,
-      type: e.type,
-      touches: g.numberActiveTouches,
+      x: event.x,
+      dx: gestureState.dx,
+      dy: gestureState.dy,
+      vx: gestureState.vx,
+      x0: gestureState.x0,
+      type: event.type,
+      touches: gestureState.numberActiveTouches,
     });
   return PanResponder.create({
     onPanResponderGrant: rec('grant'),
@@ -55,7 +55,9 @@ function recorder(log, tag, extra = {}) {
 }
 
 const names = log =>
-  log.map(e => `${e.tag ? e.tag + ':' : ''}${e.name}`).join(',');
+  log
+    .map(entry => `${entry.tag ? entry.tag + ':' : ''}${entry.name}`)
+    .join(',');
 
 // ====================================================================================================
 // 1. The basic drag lifecycle (grant → move → release, velocity, cancel, re-entrant down)
@@ -165,7 +167,7 @@ const names = log =>
   root.render(
     <ScrollView
       style={{width: 240, height: 200}}
-      onScroll={e => scrolls.push(e.scrollY)}>
+      onScroll={event => scrolls.push(event.scrollY)}>
       <View style={{width: 240, height: 600}}>
         <View style={{width: 240, height: 600}} {...pan.panHandlers} />
       </View>
@@ -179,7 +181,7 @@ const names = log =>
   __touch(1, 100, 20);
   NativeUI.tick(20);
   __touch(2, 100, 20);
-  for (let i = 0; i < 30; i++) NativeUI.tick(16); // momentum window
+  for (let tick = 0; tick < 30; tick++) NativeUI.tick(16); // momentum window
 
   check(
     names(log) === 'grant,move,move,release',
@@ -198,13 +200,14 @@ const names = log =>
   const log = [];
   const scrolls = [];
   const pan = recorder(log, '', {
-    onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dy) > 40,
+    onMoveShouldSetPanResponder: (event, gestureState) =>
+      Math.abs(gestureState.dy) > 40,
   });
 
   root.render(
     <ScrollView
       style={{width: 240, height: 200}}
-      onScroll={e => scrolls.push(e.scrollY)}>
+      onScroll={event => scrolls.push(event.scrollY)}>
       <View style={{width: 240, height: 600}}>
         <View style={{width: 240, height: 600}} {...pan.panHandlers} />
       </View>
@@ -224,7 +227,7 @@ const names = log =>
   __touch(1, 100, 70);
   NativeUI.tick(20);
   __touch(2, 100, 70);
-  for (let i = 0; i < 30; i++) NativeUI.tick(16); // momentum window — a yielded scroller must not coast
+  for (let tick = 0; tick < 30; tick++) NativeUI.tick(16); // momentum window — a yielded scroller must not coast
 
   check(
     scrolledBefore > 0,
@@ -280,12 +283,13 @@ const names = log =>
     `the refused challenger is rejected after the holder's move (${seq})`,
   );
   check(
-    log.filter(e => e.tag === 'inner' && e.name === 'move').length === 2 &&
-      log.some(e => e.tag === 'inner' && e.name === 'release'),
+    log.filter(entry => entry.tag === 'inner' && entry.name === 'move')
+      .length === 2 &&
+      log.some(entry => entry.tag === 'inner' && entry.name === 'release'),
     `the holder keeps the gesture through both moves and the release (${seq})`,
   );
   check(
-    !log.some(e => e.tag === 'outer' && e.name === 'grant'),
+    !log.some(entry => entry.tag === 'outer' && entry.name === 'grant'),
     `the challenger is never granted (${seq})`,
   );
 }

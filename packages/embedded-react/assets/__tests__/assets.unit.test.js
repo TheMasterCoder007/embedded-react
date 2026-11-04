@@ -49,19 +49,21 @@ describe('rasterize', () => {
         {type: 'Z'},
       ],
     };
-    const r = rasterize(square, {ss: 4, steps: 4});
-    expect(r.width).toBe(10);
-    expect(r.height).toBe(10);
-    expect(r.xOffset).toBe(0);
-    expect(r.yOffset).toBe(0);
-    expect([...r.coverage].every(c => c === 255)).toBe(true);
+    const rasterized = rasterize(square, {ss: 4, steps: 4});
+    expect(rasterized.width).toBe(10);
+    expect(rasterized.height).toBe(10);
+    expect(rasterized.xOffset).toBe(0);
+    expect(rasterized.yOffset).toBe(0);
+    expect([...rasterized.coverage].every(coverage => coverage === 255)).toBe(
+      true,
+    );
   });
 
   it('returns an empty result for a path with no contours', () => {
-    const r = rasterize({commands: []});
-    expect(r.width).toBe(0);
-    expect(r.height).toBe(0);
-    expect(r.coverage.length).toBe(0);
+    const rasterized = rasterize({commands: []});
+    expect(rasterized.width).toBe(0);
+    expect(rasterized.height).toBe(0);
+    expect(rasterized.coverage.length).toBe(0);
   });
 });
 
@@ -71,17 +73,17 @@ describe('bakeImage', () => {
     png.data = Buffer.from([
       255, 0, 0, 255, /* opaque red */ 0, 0, 255, 128 /* half-alpha blue */,
     ]);
-    const tmp = join(os.tmpdir(), `er-baketest-${process.pid}.png`);
-    fs.writeFileSync(tmp, PNG.sync.write(png));
+    const temporaryPath = join(os.tmpdir(), `er-baketest-${process.pid}.png`);
+    fs.writeFileSync(temporaryPath, PNG.sync.write(png));
     try {
-      const out = bakeImage({path: tmp, name: 'tmp'});
-      expect(out.width).toBe(2);
-      expect(out.height).toBe(1);
-      expect(out.pixels[0] >>> 0).toBe(0xffff0000); // opaque red, unchanged by premultiply
+      const baked = bakeImage({path: temporaryPath, name: 'tmp'});
+      expect(baked.width).toBe(2);
+      expect(baked.height).toBe(1);
+      expect(baked.pixels[0] >>> 0).toBe(0xffff0000); // opaque red, unchanged by premultiply
       // half-alpha blue: a=128, b = round(255*128/255) = 128
-      expect(out.pixels[1] >>> 0).toBe(0x80000080);
+      expect(baked.pixels[1] >>> 0).toBe(0x80000080);
     } finally {
-      fs.rmSync(tmp, {force: true});
+      fs.rmSync(temporaryPath, {force: true});
     }
   });
 
@@ -91,32 +93,36 @@ describe('bakeImage', () => {
       255, 0, 0, 255 /* red */, 0, 255, 0, 255 /* green */, 0, 0, 255,
       255 /* blue */, 255, 255, 255, 255 /* white */,
     ]);
-    const tmp = join(os.tmpdir(), `er-bake565-${process.pid}.png`);
-    fs.writeFileSync(tmp, PNG.sync.write(png));
+    const temporaryPath = join(os.tmpdir(), `er-bake565-${process.pid}.png`);
+    fs.writeFileSync(temporaryPath, PNG.sync.write(png));
     try {
-      const out = bakeImage({path: tmp, name: 'bg', format: 'rgb565'});
-      expect(out.format).toBe('rgb565');
-      expect(out.pixels).toBeInstanceOf(Uint16Array);
-      expect(out.pixels[0]).toBe(0xf800); // red
-      expect(out.pixels[1]).toBe(0x07e0); // green
-      expect(out.pixels[2]).toBe(0x001f); // blue
-      expect(out.pixels[3]).toBe(0xffff); // white
+      const baked = bakeImage({
+        path: temporaryPath,
+        name: 'bg',
+        format: 'rgb565',
+      });
+      expect(baked.format).toBe('rgb565');
+      expect(baked.pixels).toBeInstanceOf(Uint16Array);
+      expect(baked.pixels[0]).toBe(0xf800); // red
+      expect(baked.pixels[1]).toBe(0x07e0); // green
+      expect(baked.pixels[2]).toBe(0x001f); // blue
+      expect(baked.pixels[3]).toBe(0xffff); // white
     } finally {
-      fs.rmSync(tmp, {force: true});
+      fs.rmSync(temporaryPath, {force: true});
     }
   });
 
   it('rejects a non-opaque source for rgb565', () => {
     const png = new PNG({width: 2, height: 1});
     png.data = Buffer.from([255, 0, 0, 255, 0, 0, 255, 128]);
-    const tmp = join(os.tmpdir(), `er-bake565a-${process.pid}.png`);
-    fs.writeFileSync(tmp, PNG.sync.write(png));
+    const temporaryPath = join(os.tmpdir(), `er-bake565a-${process.pid}.png`);
+    fs.writeFileSync(temporaryPath, PNG.sync.write(png));
     try {
       expect(() =>
-        bakeImage({path: tmp, name: 'bg', format: 'rgb565'}),
+        bakeImage({path: temporaryPath, name: 'bg', format: 'rgb565'}),
       ).toThrow(/alpha 128/);
     } finally {
-      fs.rmSync(tmp, {force: true});
+      fs.rmSync(temporaryPath, {force: true});
     }
   });
 
@@ -144,14 +150,18 @@ describe('resolveExtras', () => {
   it('resolves a named symbol set', () => {
     const common = resolveExtras('common');
     expect(common.length).toBeGreaterThan(0);
-    expect(common.every(c => c < ASCII_FIRST || c > ASCII_LAST)).toBe(true);
+    expect(
+      common.every(
+        codepoint => codepoint < ASCII_FIRST || codepoint > ASCII_LAST,
+      ),
+    ).toBe(true);
   });
 
   it('takes extraGlyphs as characters or codepoints, on top of the named set', () => {
     expect(resolveExtras('ascii', '°±')).toEqual([0x00b0, 0x00b1]);
     expect(resolveExtras('ascii', [0x2318, '≡'])).toEqual([0x2261, 0x2318]);
     expect(resolveExtras('minimal', '⌘')).toEqual(
-      [...resolveExtras('minimal'), 0x2318].sort((a, b) => a - b),
+      [...resolveExtras('minimal'), 0x2318].sort((left, right) => left - right),
     );
   });
 
@@ -171,67 +181,70 @@ describe('resolveExtras', () => {
 
 describe('bakeFont', () => {
   it('bakes the dense ASCII range with self-consistent metrics', () => {
-    const f = bakeFont({path: INTER, family: 'Inter', sizes: [20], bpp: 4});
-    expect(f.family).toBe('Inter');
-    expect(f.sizes).toHaveLength(1);
-    const s = f.sizes[0];
-    expect(s.pixelSize).toBe(20);
-    expect(s.bpp).toBe(4);
-    expect(s.baseline).toBeGreaterThan(0);
-    expect(s.lineHeight).toBeGreaterThan(s.baseline);
-    expect(s.dense).toHaveLength(ASCII_COUNT);
-    expect(s.extras).toHaveLength(0);
+    const baked = bakeFont({path: INTER, family: 'Inter', sizes: [20], bpp: 4});
+    expect(baked.family).toBe('Inter');
+    expect(baked.sizes).toHaveLength(1);
+    const size = baked.sizes[0];
+    expect(size.pixelSize).toBe(20);
+    expect(size.bpp).toBe(4);
+    expect(size.baseline).toBeGreaterThan(0);
+    expect(size.lineHeight).toBeGreaterThan(size.baseline);
+    expect(size.dense).toHaveLength(ASCII_COUNT);
+    expect(size.extras).toHaveLength(0);
 
-    const space = s.dense[0x20 - ASCII_FIRST];
+    const space = size.dense[0x20 - ASCII_FIRST];
     expect(space.width).toBe(0);
     expect(space.height).toBe(0);
     expect(space.advance).toBeGreaterThan(0);
 
-    const I = s.dense['I'.charCodeAt(0) - ASCII_FIRST];
-    expect(I.width).toBeGreaterThan(0);
-    expect(I.height).toBeGreaterThan(0);
-    expect(I.advance).toBeGreaterThan(0);
+    const capitalI = size.dense['I'.charCodeAt(0) - ASCII_FIRST];
+    expect(capitalI.width).toBeGreaterThan(0);
+    expect(capitalI.height).toBeGreaterThan(0);
+    expect(capitalI.advance).toBeGreaterThan(0);
 
     // Every inked glyph's bitmap slice must lie within the atlas.
-    expect(s.bitmap.length).toBeGreaterThan(0);
-    for (const g of s.dense) {
-      if (g.width > 0) expect(g.bitmapOffset).toBeLessThan(s.bitmap.length);
+    expect(size.bitmap.length).toBeGreaterThan(0);
+    for (const glyph of size.dense) {
+      if (glyph.width > 0)
+        expect(glyph.bitmapOffset).toBeLessThan(size.bitmap.length);
     }
   });
 
   it('includes extra glyphs when a symbol set is requested', () => {
-    const f = bakeFont({
+    const baked = bakeFont({
       path: INTER,
       family: 'Inter',
       sizes: [16],
       bpp: 4,
       glyphs: 'common',
     });
-    expect(f.sizes[0].extras.length).toBeGreaterThan(0);
+    expect(baked.sizes[0].extras.length).toBeGreaterThan(0);
   });
 
   it('bakes the per-app extraGlyphs a named set does not cover', () => {
-    const f = bakeFont({
+    const baked = bakeFont({
       path: INTER,
       family: 'Inter',
       sizes: [16],
       glyphs: 'minimal',
       extraGlyphs: '⌘',
     });
-    const extras = f.sizes[0].extras.map(e => e.codepoint);
+    const extras = baked.sizes[0].extras.map(extra => extra.codepoint);
     expect(extras).toContain(0x2318);
     expect(extras).toContain(0x00b0); // still everything 'minimal' asked for
-    expect(f.path).toBe(INTER);
+    expect(baked.path).toBe(INTER);
   });
 
   it('skips an extra glyph the font file has no glyph for', () => {
-    const f = bakeFont({
+    const baked = bakeFont({
       path: INTER,
       family: 'Inter',
       sizes: [16],
       extraGlyphs: '°漢',
     });
-    expect(f.sizes[0].extras.map(e => e.codepoint)).toEqual([0x00b0]);
+    expect(baked.sizes[0].extras.map(extra => extra.codepoint)).toEqual([
+      0x00b0,
+    ]);
   });
 
   it('rejects an unsupported bpp', () => {
@@ -242,62 +255,63 @@ describe('bakeFont', () => {
 });
 
 /** Parses an ERPK pack back into a structured form (mirrors tools/simulator/asset_pack.c). */
-function readPack(buf) {
-  let o = 0;
-  const u8 = () => buf.readUInt8(o++);
-  const i8 = () => buf.readInt8(o++);
+function readPack(pack) {
+  let offset = 0;
+  const u8 = () => pack.readUInt8(offset++);
+  const i8 = () => pack.readInt8(offset++);
   const u16 = () => {
-    const v = buf.readUInt16LE(o);
-    o += 2;
-    return v;
+    const value = pack.readUInt16LE(offset);
+    offset += 2;
+    return value;
   };
   const u32 = () => {
-    const v = buf.readUInt32LE(o);
-    o += 4;
-    return v;
+    const value = pack.readUInt32LE(offset);
+    offset += 4;
+    return value;
   };
   const str = () => {
-    const len = u16();
-    const s = buf.toString('utf8', o, o + len);
-    o += len;
-    return s;
+    const length = u16();
+    const text = pack.toString('utf8', offset, offset + length);
+    offset += length;
+    return text;
   };
-  const magic = buf.toString('ascii', 0, 4);
-  o = 4;
+  const magic = pack.toString('ascii', 0, 4);
+  offset = 4;
   const version = u32();
-  const nImages = u32();
-  const nFonts = u32();
+  const imageCount = u32();
+  const fontCount = u32();
   const images = [];
-  for (let i = 0; i < nImages; i++) {
+  for (let imageIndex = 0; imageIndex < imageCount; imageIndex++) {
     const name = str();
-    const w = u32();
-    const h = u32();
+    const width = u32();
+    const height = u32();
     let format = 0; // v1: implicitly ARGB8888
     if (version >= 2) {
       format = u8();
-      o += (4 - (o % 4)) % 4; // skip the 4-byte alignment pad before the pixels
+      offset += (4 - (offset % 4)) % 4; // skip the 4-byte alignment pad before the pixels
     }
-    const pixelOffset = o; // pack-relative; what the in-place pointer's alignment derives from
+    const pixelOffset = offset; // pack-relative; what the in-place pointer's alignment derives from
     const pixels = [];
-    for (let p = 0; p < w * h; p++) pixels.push(format === 1 ? u16() : u32());
-    images.push({name, w, h, format, pixels, pixelOffset});
+    for (let pixelIndex = 0; pixelIndex < width * height; pixelIndex++)
+      pixels.push(format === 1 ? u16() : u32());
+    images.push({name, width, height, format, pixels, pixelOffset});
   }
   const fonts = [];
-  for (let i = 0; i < nFonts; i++) {
+  for (let fontIndex = 0; fontIndex < fontCount; fontIndex++) {
     const family = str();
-    const f = {
+    const font = {
       family,
       pixel_size: u8(),
       line_height: u8(),
       baseline: u8(),
       format: u8(),
     };
-    f.first = u16();
-    f.last = u16();
-    f.gc = u16();
-    f.ec = u16();
-    f.blen = u32();
-    for (let g = 0; g < f.gc; g++) {
+    font.first = u16();
+    font.last = u16();
+    font.glyphCount = u16();
+    font.extraCount = u16();
+    font.bitmapLength = u32();
+    for (let glyphIndex = 0; glyphIndex < font.glyphCount; glyphIndex++) {
       u32();
       u8();
       u8();
@@ -305,7 +319,7 @@ function readPack(buf) {
       i8();
       u8();
     } // glyph
-    for (let e = 0; e < f.ec; e++) {
+    for (let extraIndex = 0; extraIndex < font.extraCount; extraIndex++) {
       u32();
       u32();
       u8();
@@ -314,18 +328,18 @@ function readPack(buf) {
       i8();
       u8();
     } // extra
-    o += f.blen; // bitmap
-    fonts.push(f);
+    offset += font.bitmapLength; // bitmap
+    fonts.push(font);
   }
   return {
     magic,
     version,
-    nImages,
-    nFonts,
+    imageCount,
+    fontCount,
     images,
     fonts,
-    consumed: o,
-    total: buf.length,
+    consumed: offset,
+    total: pack.length,
   };
 }
 
@@ -338,24 +352,24 @@ describe('emitAssetPack', () => {
       pixels: new Uint32Array([0xffff0000, 0x80000080]),
     };
     const font = bakeFont({path: INTER, family: 'Inter', sizes: [16], bpp: 4});
-    const p = readPack(emitAssetPack({images: [image], fonts: [font]}));
+    const parsed = readPack(emitAssetPack({images: [image], fonts: [font]}));
 
-    expect(p.magic).toBe('ERPK');
-    expect(p.version).toBe(2);
-    expect(p.nImages).toBe(1);
-    expect(p.nFonts).toBe(1); // one font *size*
+    expect(parsed.magic).toBe('ERPK');
+    expect(parsed.version).toBe(2);
+    expect(parsed.imageCount).toBe(1);
+    expect(parsed.fontCount).toBe(1); // one font *size*
 
-    expect(p.images[0]).toMatchObject({name: 'logo', w: 2, h: 1});
-    expect(p.images[0].pixels[0] >>> 0).toBe(0xffff0000);
-    expect(p.images[0].pixels[1] >>> 0).toBe(0x80000080);
+    expect(parsed.images[0]).toMatchObject({name: 'logo', width: 2, height: 1});
+    expect(parsed.images[0].pixels[0] >>> 0).toBe(0xffff0000);
+    expect(parsed.images[0].pixels[1] >>> 0).toBe(0x80000080);
 
-    expect(p.fonts[0].family).toBe('Inter');
-    expect(p.fonts[0].pixel_size).toBe(16);
-    expect(p.fonts[0].format).toBe(4);
-    expect(p.fonts[0].gc).toBe(ASCII_COUNT);
+    expect(parsed.fonts[0].family).toBe('Inter');
+    expect(parsed.fonts[0].pixel_size).toBe(16);
+    expect(parsed.fonts[0].format).toBe(4);
+    expect(parsed.fonts[0].glyphCount).toBe(ASCII_COUNT);
 
     // Every byte is accounted for — the reader consumes exactly what the writer produced.
-    expect(p.consumed).toBe(p.total);
+    expect(parsed.consumed).toBe(parsed.total);
   });
 
   it('emits version 2 (aligned pixels) even when no image is RGB565', () => {
@@ -369,29 +383,29 @@ describe('emitAssetPack', () => {
       format: 'argb8888',
       pixels: new Uint32Array([0xffffffff]),
     };
-    const p = readPack(emitAssetPack({images: [image], fonts: []}));
-    expect(p.version).toBe(2);
+    const parsed = readPack(emitAssetPack({images: [image], fonts: []}));
+    expect(parsed.version).toBe(2);
   });
 
   it("4-aligns every image's pixels relative to the pack, whatever the name lengths", () => {
     // Odd/varied name lengths are exactly what knocked v1 pixel offsets off word alignment.
-    const mk = (name, i) => ({
+    const mk = (name, index) => ({
       name,
       width: 1,
       height: 1,
-      pixels: new Uint32Array([i]),
+      pixels: new Uint32Array([index]),
     });
     const images = ['a', 'bb', 'ccc', 'dddd', 'eeeee'].map(mk);
-    const buf = emitAssetPack({images, fonts: []});
-    const p = readPack(buf);
-    expect(p.version).toBe(2);
-    for (const img of p.images) {
-      expect(img.pixelOffset % 4).toBe(0);
+    const pack = emitAssetPack({images, fonts: []});
+    const parsed = readPack(pack);
+    expect(parsed.version).toBe(2);
+    for (const image of parsed.images) {
+      expect(image.pixelOffset % 4).toBe(0);
     }
   });
 
   it('writes version 2 with per-image format + aligned pixels when RGB565 is used', () => {
-    const bg = {
+    const background = {
       name: 'bg',
       width: 3,
       height: 1,
@@ -405,26 +419,57 @@ describe('emitAssetPack', () => {
       height: 1,
       pixels: new Uint32Array([0x80000080]),
     };
-    const p = readPack(emitAssetPack({images: [bg, icon], fonts: []}));
+    const parsed = readPack(
+      emitAssetPack({images: [background, icon], fonts: []}),
+    );
 
-    expect(p.version).toBe(2);
-    expect(p.images[0]).toMatchObject({name: 'bg', w: 3, h: 1, format: 1});
-    expect(p.images[0].pixels).toEqual([0xf800, 0x07e0, 0x001f]);
-    expect(p.images[1]).toMatchObject({name: 'ico', w: 1, h: 1, format: 0});
-    expect(p.images[1].pixels[0] >>> 0).toBe(0x80000080);
-    expect(p.consumed).toBe(p.total);
+    expect(parsed.version).toBe(2);
+    expect(parsed.images[0]).toMatchObject({
+      name: 'bg',
+      width: 3,
+      height: 1,
+      format: 1,
+    });
+    expect(parsed.images[0].pixels).toEqual([0xf800, 0x07e0, 0x001f]);
+    expect(parsed.images[1]).toMatchObject({
+      name: 'ico',
+      width: 1,
+      height: 1,
+      format: 0,
+    });
+    expect(parsed.images[1].pixels[0] >>> 0).toBe(0x80000080);
+    expect(parsed.consumed).toBe(parsed.total);
   });
 
   it('emits byte-identical packs regardless of input order (reproducible builds)', () => {
     // Discovery order upstream is whatever order esbuild's onLoad callbacks fire in — the emitter
     // must not let that leak into the artifact, or in-flash asset addresses churn between builds.
-    const a = {name: 'aa', width: 1, height: 1, pixels: new Uint32Array([1])};
-    const b = {name: 'bb', width: 1, height: 1, pixels: new Uint32Array([2])};
-    const c = {name: 'cc', width: 1, height: 1, pixels: new Uint32Array([3])};
-    const one = emitAssetPack({images: [a, b, c], fonts: []});
-    const two = emitAssetPack({images: [c, a, b], fonts: []});
+    const first = {
+      name: 'aa',
+      width: 1,
+      height: 1,
+      pixels: new Uint32Array([1]),
+    };
+    const second = {
+      name: 'bb',
+      width: 1,
+      height: 1,
+      pixels: new Uint32Array([2]),
+    };
+    const third = {
+      name: 'cc',
+      width: 1,
+      height: 1,
+      pixels: new Uint32Array([3]),
+    };
+    const one = emitAssetPack({images: [first, second, third], fonts: []});
+    const two = emitAssetPack({images: [third, first, second], fonts: []});
     expect(Buffer.compare(one, two)).toBe(0);
-    expect(readPack(one).images.map(i => i.name)).toEqual(['aa', 'bb', 'cc']);
+    expect(readPack(one).images.map(image => image.name)).toEqual([
+      'aa',
+      'bb',
+      'cc',
+    ]);
   });
 });
 
@@ -437,40 +482,40 @@ describe('emitAssetsC', () => {
       height: 1,
       pixels: new Uint32Array([0xffffffff]),
     };
-    const {c, h} = emitAssetsC({
+    const {c: cSource, h: header} = emitAssetsC({
       headerName: 'assets.generated.h',
       images: [image],
       fonts: [font],
     });
 
-    expect(h).toContain('void er_register_assets(void);');
-    expect(c).toContain('#include "er_scene.h"');
-    expect(c).toContain('static const uint32_t logo_px[]');
-    expect(c).toContain('static const BitmapFont g_font_Inter_16');
-    expect(c).toContain('static const GlyphInfo s_Inter_16_glyphs');
-    expect(c).toContain('.format       = 4,');
-    expect(c).toContain('void er_register_assets(void)');
-    expect(c).toContain('er_image_load("logo", logo_px, 1, 1);');
-    expect(c).toContain('er_font_register("Inter", &g_font_Inter_16);');
+    expect(header).toContain('void er_register_assets(void);');
+    expect(cSource).toContain('#include "er_scene.h"');
+    expect(cSource).toContain('static const uint32_t logo_px[]');
+    expect(cSource).toContain('static const BitmapFont g_font_Inter_16');
+    expect(cSource).toContain('static const GlyphInfo s_Inter_16_glyphs');
+    expect(cSource).toContain('.format       = 4,');
+    expect(cSource).toContain('void er_register_assets(void)');
+    expect(cSource).toContain('er_image_load("logo", logo_px, 1, 1);');
+    expect(cSource).toContain('er_font_register("Inter", &g_font_Inter_16);');
   });
 
   it('emits uint16_t arrays and er_image_load_rgb565 for RGB565 images', () => {
-    const bg = {
+    const background = {
       name: 'bg',
       width: 2,
       height: 1,
       format: 'rgb565',
       pixels: new Uint16Array([0xf800, 0xffff]),
     };
-    const {c} = emitAssetsC({
+    const {c: cSource} = emitAssetsC({
       headerName: 'assets.generated.h',
-      images: [bg],
+      images: [background],
       fonts: [],
     });
 
-    expect(c).toContain('static const uint16_t bg_px[]');
-    expect(c).toContain('0xF800u');
-    expect(c).toContain('er_image_load_rgb565("bg", bg_px, 2, 1);');
-    expect(c).not.toContain('er_image_load("bg"');
+    expect(cSource).toContain('static const uint16_t bg_px[]');
+    expect(cSource).toContain('0xF800u');
+    expect(cSource).toContain('er_image_load_rgb565("bg", bg_px, 2, 1);');
+    expect(cSource).not.toContain('er_image_load("bg"');
   });
 });

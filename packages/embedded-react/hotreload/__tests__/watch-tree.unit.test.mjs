@@ -25,7 +25,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {watchTreePolyfill} from '../watch-tree.mjs';
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+const sleep = milliseconds =>
+  new Promise(resolve => setTimeout(resolve, milliseconds));
 // Poll instead of a fixed wait — fs.watch delivery latency varies by platform/CI load.
 async function waitFor(pred, timeoutMs = 4000, stepMs = 50) {
   for (let waited = 0; waited < timeoutMs; waited += stepMs) {
@@ -40,7 +41,10 @@ describe('watchTree recursive polyfill', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'er-watch-')));
     mkdirSync(join(root, 'src', 'components'), {recursive: true});
     const seen = [];
-    const w = watchTreePolyfill(root, (_e, name) => name && seen.push(name));
+    const watcher = watchTreePolyfill(
+      root,
+      (_eventType, name) => name && seen.push(name),
+    );
     try {
       await sleep(150); // let the per-dir watchers settle
       writeFileSync(
@@ -50,7 +54,7 @@ describe('watchTree recursive polyfill', () => {
       await waitFor(() => seen.includes('Button.jsx'));
       expect(seen).toContain('Button.jsx');
     } finally {
-      w.close();
+      watcher.close();
       rmSync(root, {recursive: true, force: true});
     }
   });
@@ -58,7 +62,10 @@ describe('watchTree recursive polyfill', () => {
   it('picks up a directory created after watching started', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'er-watch-')));
     const seen = [];
-    const w = watchTreePolyfill(root, (_e, name) => name && seen.push(name));
+    const watcher = watchTreePolyfill(
+      root,
+      (_eventType, name) => name && seen.push(name),
+    );
     try {
       await sleep(150);
       mkdirSync(join(root, 'late'));
@@ -67,7 +74,7 @@ describe('watchTree recursive polyfill', () => {
       await waitFor(() => seen.includes('z.jsx'));
       expect(seen).toContain('z.jsx');
     } finally {
-      w.close();
+      watcher.close();
       rmSync(root, {recursive: true, force: true});
     }
   });
@@ -75,9 +82,9 @@ describe('watchTree recursive polyfill', () => {
   it('close() stops delivering events', async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'er-watch-')));
     let count = 0;
-    const w = watchTreePolyfill(root, () => count++);
+    const watcher = watchTreePolyfill(root, () => count++);
     await sleep(100);
-    w.close();
+    watcher.close();
     const before = count;
     writeFileSync(join(root, 'after.jsx'), 'x');
     await sleep(300);

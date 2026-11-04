@@ -21,19 +21,19 @@ import {createRoot} from '../../src/renderer.js';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 
-const ys = {};
+const rowYs = {};
 let listRect = null;
 
 function List({order}) {
   return (
     <View
       style={{width: 100, height: 200}}
-      onLayout={e => (listRect = e.layout)}>
-      {order.map(i => (
+      onLayout={event => (listRect = event.layout)}>
+      {order.map(index => (
         <View
-          key={i}
+          key={index}
           style={{width: 40, height: 20}}
-          onLayout={e => (ys[i] = e.layout.y)}
+          onLayout={event => (rowYs[index] = event.layout.y)}
         />
       ))}
     </View>
@@ -43,7 +43,7 @@ function List({order}) {
 const root = createRoot({width: screen.width, height: screen.height});
 
 root.render(<List order={[0, 1, 2]} />);
-const mount = {0: ys[0], 1: ys[1], 2: ys[2]};
+const mount = {0: rowYs[0], 1: rowYs[1], 2: rowYs[2]};
 
 // Sanity: the fixed-size list keeps its height and items stack at their own heights (regression
 // for the flex-default bug where un-flexed nodes grew to fill their parent).
@@ -56,8 +56,8 @@ check(
 root.render(<List order={[2, 1, 0]} />);
 
 // After reverse: key2 takes the first slot, key0 the last, key1 stays put.
-check(ys[2] === mount[0], 'key 2 moved to the first slot');
-check(ys[1] === mount[1], 'key 1 stayed in the middle');
-check(ys[0] === mount[2], 'key 0 moved to the last slot');
+check(rowYs[2] === mount[0], 'key 2 moved to the first slot');
+check(rowYs[1] === mount[1], 'key 1 stayed in the middle');
+check(rowYs[0] === mount[2], 'key 0 moved to the last slot');
 
 report('reorder');

@@ -22,8 +22,8 @@ import {AppRegistry, View, usePersistentState} from 'embedded-react';
 globalThis.__erPersist.set('n', '41');
 
 function App() {
-  const [n] = usePersistentState('n', 0);
-  globalThis.__probe = {build: 'boot', n};
+  const [count] = usePersistentState('n', 0);
+  globalThis.__probe = {build: 'boot', n: count};
   return <View />;
 }
 

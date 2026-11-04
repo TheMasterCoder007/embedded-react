@@ -63,33 +63,41 @@ const installed = (address, sequence) => ({
 
 /** The bytes `pack` writes for slot a of the RP2040 example. */
 function packSlotToTemp() {
-  const outDir = mkdtempSync(join(tmpdir(), 'er-pack-'));
+  const outputDirectory = mkdtempSync(join(tmpdir(), 'er-pack-'));
   try {
     const packed = packSlot({
       packageBytes: packageBytes(),
       board: BOARDS['rp2040-touch-lcd-1.69'],
       boardName: 'rp2040-touch-lcd-1.69',
-      outDir,
+      outDir: outputDirectory,
     });
     return readFileSync(packed.file);
   } finally {
-    rmSync(outDir, {recursive: true, force: true});
+    rmSync(outputDirectory, {recursive: true, force: true});
   }
 }
 
+// An ESP-IDF partition table, as the erb slots are laid out in partitions.csv.
+const PARTITION_TABLE_BYTES = 0xc00;
+const PARTITION_ENTRY_BYTES = 32;
+const PARTITION_MAGIC = 0x50aa;
+const PARTITION_TYPE_DATA = 1;
+const PARTITION_SUBTYPE_ERB = 0x41;
+const ERASED_BYTE = 0xff;
+
 /** A partition table with the given (label, address, bytes) entries, closed by an erased entry. */
 function partitionTable(entries) {
-  const table = Buffer.alloc(0xc00, 0xff);
+  const table = Buffer.alloc(PARTITION_TABLE_BYTES, ERASED_BYTE);
   entries.forEach(([label, address, bytes], index) => {
-    const at = index * 32;
-    table.writeUInt16LE(0x50aa, at);
-    table.writeUInt8(1, at + 2);
-    table.writeUInt8(0x41, at + 3);
-    table.writeUInt32LE(address, at + 4);
-    table.writeUInt32LE(bytes, at + 8);
-    table.fill(0, at + 12, at + 28);
-    table.write(label, at + 12, 'latin1');
-    table.writeUInt32LE(0, at + 28);
+    const entryOffset = index * PARTITION_ENTRY_BYTES;
+    table.writeUInt16LE(PARTITION_MAGIC, entryOffset);
+    table.writeUInt8(PARTITION_TYPE_DATA, entryOffset + 2);
+    table.writeUInt8(PARTITION_SUBTYPE_ERB, entryOffset + 3);
+    table.writeUInt32LE(address, entryOffset + 4);
+    table.writeUInt32LE(bytes, entryOffset + 8);
+    table.fill(0, entryOffset + 12, entryOffset + 28);
+    table.write(label, entryOffset + 12, 'latin1');
+    table.writeUInt32LE(0, entryOffset + 28);
   });
   return table;
 }
@@ -105,12 +113,15 @@ function fakeBoard(flash) {
     const read = args.indexOf('read_flash');
     if (read >= 0) {
       const [address, , file] = args.slice(read + 1);
-      writeFileSync(file, flash[Number(address)] ?? Buffer.alloc(0x100, 0xff));
+      writeFileSync(
+        file,
+        flash[Number(address)] ?? Buffer.alloc(0x100, ERASED_BYTE),
+      );
     }
     if (args[0] === 'save') {
       writeFileSync(
         args[4],
-        flash[Number(args[2])] ?? Buffer.alloc(0x100, 0xff),
+        flash[Number(args[2])] ?? Buffer.alloc(0x100, ERASED_BYTE),
       );
     }
     const write = args.indexOf('write_flash');
@@ -133,16 +144,18 @@ describe('slot images', () => {
     const image = slotImage(Buffer.alloc(0x1234, 0xab), 7);
     expect(image.subarray(0, 16)).toEqual(GOLDEN_HEADER);
     expect(image.length).toBe(SLOT_HEADER_BYTES + 0x1234);
-    expect(image.subarray(16, SLOT_HEADER_BYTES).every(b => b === 0xff)).toBe(
-      true,
-    );
+    expect(
+      image.subarray(16, SLOT_HEADER_BYTES).every(byte => byte === ERASED_BYTE),
+    ).toBe(true);
     expect(image[SLOT_HEADER_BYTES]).toBe(0xab);
   });
 
   it('reads a sequence back, and only from a valid header', () => {
     const image = slotImage(Buffer.alloc(16), 42);
     expect(readSlotSequence(image, SLOT_BYTES)).toBe(42);
-    expect(readSlotSequence(Buffer.alloc(256, 0xff), SLOT_BYTES)).toBeNull();
+    expect(
+      readSlotSequence(Buffer.alloc(256, ERASED_BYTE), SLOT_BYTES),
+    ).toBeNull();
     expect(readSlotSequence(Buffer.alloc(256, 0), SLOT_BYTES)).toBeNull();
     const damaged = Buffer.from(image);
     damaged[4] ^= 1;
@@ -217,7 +230,7 @@ describe('UF2', () => {
     expect(file.readUInt32LE(512 + 12)).toBe(0x10100100);
     expect(file.readUInt32LE(512 + 20)).toBe(1);
     expect(file[512 + 32 + 43]).toBe(0xcd);
-    expect(file[512 + 32 + 44]).toBe(0xff); // the rest of the last page stays erased
+    expect(file[512 + 32 + 44]).toBe(ERASED_BYTE); // the rest of the last page stays erased
   });
 });
 
@@ -325,13 +338,13 @@ describe('flashing', () => {
   });
 
   it('writes over a newest slot left with part of a package', () => {
-    const cut = packageBytes().subarray(0, 40);
+    const truncated = packageBytes().subarray(0, 40);
     const logged = [];
     const board = fakeBoard({
       0x8000: partitionTable(espSlots),
       ...installed(0x180000, 8),
       0x2c0000: slotHeader(packageBytes().length, 9),
-      [0x2c0000 + SLOT_HEADER_BYTES]: cut,
+      [0x2c0000 + SLOT_HEADER_BYTES]: truncated,
     });
     const written = flashSlot({
       packageBytes: packageBytes(),
@@ -353,7 +366,7 @@ describe('flashing', () => {
     const board = fakeBoard({
       0x8000: partitionTable(espSlots),
       0x180000: slotHeader(packageBytes().length, 4),
-      [0x180000 + SLOT_HEADER_BYTES]: Buffer.alloc(64, 0xff),
+      [0x180000 + SLOT_HEADER_BYTES]: Buffer.alloc(64, ERASED_BYTE),
     });
     expect(
       flashSlot({
@@ -540,24 +553,24 @@ describe('flashing', () => {
 });
 
 describe('packing', () => {
-  const inDir = fn => {
-    const outDir = mkdtempSync(join(tmpdir(), 'er-pack-'));
+  const inDir = run => {
+    const outputDirectory = mkdtempSync(join(tmpdir(), 'er-pack-'));
     try {
-      fn(outDir);
+      run(outputDirectory);
     } finally {
-      rmSync(outDir, {recursive: true, force: true});
+      rmSync(outputDirectory, {recursive: true, force: true});
     }
   };
 
   it('writes an ESP32 slot image as a raw file', () =>
-    inDir(outDir => {
+    inDir(outputDirectory => {
       const packed = packSlot({
         packageBytes: packageBytes(),
         board: BOARDS['esp32-s3'],
         boardName: 'esp32-s3',
         slotName: 'b',
         sequence: 3,
-        outDir,
+        outDir: outputDirectory,
       });
       expect(packed.address).toBe(0x710000);
       expect(packed.file.endsWith('app.slot-b.bin')).toBe(true);
@@ -565,12 +578,12 @@ describe('packing', () => {
     }));
 
   it('writes an RP2040 slot image as a UF2, at the slot', () =>
-    inDir(outDir => {
+    inDir(outputDirectory => {
       const packed = packSlot({
         packageBytes: packageBytes(),
         board: BOARDS['rp2040-touch-lcd-1.69'],
         boardName: 'rp2040-touch-lcd-1.69',
-        outDir,
+        outDir: outputDirectory,
       });
       expect(packed.file.endsWith('app.slot-a.uf2')).toBe(true);
       expect(readFileSync(packed.file).readUInt32LE(12)).toBe(
@@ -579,14 +592,14 @@ describe('packing', () => {
     }));
 
   it('takes every sequence the header can hold, and no other', () =>
-    inDir(outDir => {
+    inDir(outputDirectory => {
       const pack = sequence =>
         packSlot({
           packageBytes: packageBytes(),
           board: BOARDS['esp32-s3'],
           boardName: 'esp32-s3',
           sequence,
-          outDir,
+          outDir: outputDirectory,
         });
       for (const sequence of [0, 0xffffffff]) {
         const packed = pack(sequence);
@@ -601,10 +614,15 @@ describe('packing', () => {
     }));
 
   it('refuses a slot that does not exist and a package that does not fit', () =>
-    inDir(outDir => {
+    inDir(outputDirectory => {
       const board = BOARDS['esp32-s3'];
       expect(() =>
-        packSlot({packageBytes: packageBytes(), board, slotName: 'c', outDir}),
+        packSlot({
+          packageBytes: packageBytes(),
+          board,
+          slotName: 'c',
+          outDir: outputDirectory,
+        }),
       ).toThrow(/--slot takes a or b/);
       const tiny = {
         ...board,
@@ -618,7 +636,7 @@ describe('packing', () => {
           packageBytes: packageBytes(),
           board: tiny,
           boardName: 'tiny',
-          outDir,
+          outDir: outputDirectory,
         }),
       ).toThrow(/tiny's slots hold 16 B/);
     }));
@@ -633,8 +651,8 @@ describe('boards', () => {
   it.each([
     ['esp32-2432s028r', 'esp32/esp32-2432s028r/partitions.csv'],
     ['esp32-s3', 'esp32/esp32-s3/partitions.csv'],
-  ])('%s matches %s', (name, csv) => {
-    const lines = readFileSync(resolve(examples, csv), 'utf8').split('\n');
+  ])('%s matches %s', (name, csvPath) => {
+    const lines = readFileSync(resolve(examples, csvPath), 'utf8').split('\n');
     const slot = label => {
       const [, , , address, bytes] = lines
         .find(line => line.startsWith(label + ','))

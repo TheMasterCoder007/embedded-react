@@ -39,8 +39,10 @@ const FONT_DATA = resolve(here, '../../../../engine/font/font_data.c');
 const inter = extraGlyphs =>
   bakeFont({path: INTER, family: 'Inter', sizes: [16], extraGlyphs});
 
-const cps = (source, opts) =>
-  [...scanTextCodepoints(source, opts).keys()].sort((a, b) => a - b);
+const cps = (source, options) =>
+  [...scanTextCodepoints(source, options).keys()].sort(
+    (left, right) => left - right,
+  );
 
 describe('scanTextCodepoints', () => {
   it('finds non-ASCII in every literal form, raw or escaped', () => {
@@ -78,8 +80,8 @@ describe('scanTextCodepoints', () => {
   });
 
   it('keeps comments and strings out of the JSX pass', () => {
-    const src = `{/* prose — with a dash */}\n<Text>{'±'}</Text>`;
-    expect(cps(src, {jsx: true})).toEqual([0x00b1]);
+    const source = `{/* prose — with a dash */}\n<Text>{'±'}</Text>`;
+    expect(cps(source, {jsx: true})).toEqual([0x00b1]);
   });
 
   it('does not read a comparison as element text', () => {
@@ -102,9 +104,9 @@ describe('BUILTIN_EXTRAS', () => {
           ...readFileSync(FONT_DATA, 'utf8').matchAll(
             /\.codepoint = (0x[0-9A-Fa-f]+)/g,
           ),
-        ].map(m => Number(m[1])),
+        ].map(match => Number(match[1])),
       ),
-    ].sort((a, b) => a - b);
+    ].sort((left, right) => left - right);
     expect(shipped).toEqual([...BUILTIN_EXTRAS]);
   });
 });
@@ -112,7 +114,9 @@ describe('BUILTIN_EXTRAS', () => {
 describe('findMissingGlyphs', () => {
   it('checks the built-in font when the app imports none', () => {
     const missing = findMissingGlyphs({source: `const t = '24\\xB0 \\u03C0';`});
-    expect(missing.map(m => m.codepoint)).toEqual([0x03c0]); // ° is in the built-in set, π is not
+    expect(missing.map(missingGlyph => missingGlyph.codepoint)).toEqual([
+      0x03c0,
+    ]); // ° is in the built-in set, π is not
     expect(missing[0].missingFrom).toEqual([BUILTIN_FAMILY]);
     expect(missing[0].sample).toContain('π');
   });
@@ -130,7 +134,7 @@ describe('findMissingGlyphs', () => {
       source: `const t = '24\\xB0 \\u2318S';`,
       fonts: [font],
     });
-    expect(missing.map(m => m.char)).toEqual(['⌘']);
+    expect(missing.map(missingGlyph => missingGlyph.char)).toEqual(['⌘']);
     expect(missing[0].missingFrom).toEqual(['Inter']);
     expect(missing[0].noGlyphIn).toEqual([]); // Inter has ⌘ — baking it would fix this
   });
@@ -148,7 +152,9 @@ describe('findMissingGlyphs', () => {
       source: `const t = '\\u2318';`,
       fonts: [inter('⌘'), {...inter(), family: 'Other'}],
     });
-    expect(missing.map(m => m.missingFrom)).toEqual([['Other']]);
+    expect(missing.map(missingGlyph => missingGlyph.missingFrom)).toEqual([
+      ['Other'],
+    ]);
   });
 });
 
@@ -189,7 +195,7 @@ describe('formatMissingGlyphs', () => {
 describe('warnMissingGlyphs', () => {
   it('warns once and stays quiet while the warning is unchanged', () => {
     const seen = [];
-    const log = m => seen.push(m);
+    const log = message => seen.push(message);
     const source = `const t = '\\u03C0';`;
     warnMissingGlyphs({source, log});
     warnMissingGlyphs({source, log});

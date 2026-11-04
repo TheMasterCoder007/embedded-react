@@ -37,32 +37,42 @@ const nums: number[] = [];
 export function GestureUsage() {
   const pan = PanResponder.create({
     // Queries receive a bare touchpoint — no `type`, because the engine writes none.
-    onStartShouldSetPanResponder: (e, g) =>
-      e.x > 10 && g.numberActiveTouches === 1,
-    onMoveShouldSetPanResponder: (e, g) =>
-      Math.abs(g.dx) > 8 && Math.abs(e.dy) < 4,
+    onStartShouldSetPanResponder: (event, gestureState) =>
+      event.x > 10 && gestureState.numberActiveTouches === 1,
+    onMoveShouldSetPanResponder: (event, gestureState) =>
+      Math.abs(gestureState.dx) > 8 && Math.abs(event.dy) < 4,
     onStartShouldSetPanResponderCapture: () => false,
     onMoveShouldSetPanResponderCapture: () => false,
     onPanResponderTerminationRequest: () => false,
 
     // Lifecycle callbacks receive the engine's responder events.
-    onPanResponderGrant: (e, g) => {
-      seen.push(e.type === 'responderGrant');
-      nums.push(g.x0, g.y0);
+    onPanResponderGrant: (event, gestureState) => {
+      seen.push(event.type === 'responderGrant');
+      nums.push(gestureState.x0, gestureState.y0);
     },
-    onPanResponderMove: (e, g) => {
-      seen.push(e.type === 'responderMove');
-      nums.push(g.dx, g.dy, g.vx, g.vy, g.moveX, g.moveY, g.stateID);
+    onPanResponderMove: (event, gestureState) => {
+      seen.push(event.type === 'responderMove');
+      nums.push(
+        gestureState.dx,
+        gestureState.dy,
+        gestureState.vx,
+        gestureState.vy,
+        gestureState.moveX,
+        gestureState.moveY,
+        gestureState.stateID,
+      );
     },
-    onPanResponderRelease: e => seen.push(e.type === 'responderRelease'),
-    onPanResponderTerminate: e => seen.push(e.type === 'responderTerminate'),
-    onPanResponderReject: e => seen.push(e.type === 'responderReject'),
-    onPanResponderStart: (e, g) => {
-      seen.push(e.type === 'responderGrant');
-      nums.push(g.numberActiveTouches);
+    onPanResponderRelease: event =>
+      seen.push(event.type === 'responderRelease'),
+    onPanResponderTerminate: event =>
+      seen.push(event.type === 'responderTerminate'),
+    onPanResponderReject: event => seen.push(event.type === 'responderReject'),
+    onPanResponderStart: (event, gestureState) => {
+      seen.push(event.type === 'responderGrant');
+      nums.push(gestureState.numberActiveTouches);
     },
     // The odd one out: a non-final finger's lift comes off the RAW touch stream.
-    onPanResponderEnd: e => seen.push(e.type === 'touchEnd'),
+    onPanResponderEnd: event => seen.push(event.type === 'touchEnd'),
   });
 
   // A non-object config is coerced rather than throwing, so calling with nothing must stay legal.
@@ -73,31 +83,34 @@ export function GestureUsage() {
       style={{flex: 1}}
       {...pan.panHandlers}
       // The low-level responder props, wired directly.
-      onStartShouldSetResponder={e => e.dx === 0}
-      onMoveShouldSetResponder={e => Math.abs(e.dx) > 5}
-      onResponderGrant={e => seen.push(e.type === 'responderGrant')}
-      onResponderMove={e => {
-        seen.push(e.type === 'responderMove');
-        nums.push(e.dx, e.dy);
+      onStartShouldSetResponder={event => event.dx === 0}
+      onMoveShouldSetResponder={event => Math.abs(event.dx) > 5}
+      onResponderGrant={event => seen.push(event.type === 'responderGrant')}
+      onResponderMove={event => {
+        seen.push(event.type === 'responderMove');
+        nums.push(event.dx, event.dy);
       }}
-      onResponderRelease={e => seen.push(e.type === 'responderRelease')}
-      onResponderReject={e => seen.push(e.type === 'responderReject')}
-      onResponderTerminate={e => seen.push(e.type === 'responderTerminate')}
+      onResponderRelease={event => seen.push(event.type === 'responderRelease')}
+      onResponderReject={event => seen.push(event.type === 'responderReject')}
+      onResponderTerminate={event =>
+        seen.push(event.type === 'responderTerminate')
+      }
       onResponderTerminationRequest={() => true}
       // Raw touches still bubble alongside the responder system.
-      onTouchStart={e => {
-        seen.push(e.type === 'touchStart');
-        nums.push(e.x, e.y);
+      onTouchStart={event => {
+        seen.push(event.type === 'touchStart');
+        nums.push(event.x, event.y);
       }}
-      onTouchCancel={e => seen.push(e.type === 'touchCancel')}
+      onTouchCancel={event => seen.push(event.type === 'touchCancel')}
     />
   );
 }
 
 // The exported type aliases must stay usable by name — apps annotate their own handlers with them.
 export const typedQuery = (
-  e: ResponderQueryEvent,
-  g: PanResponderGestureState,
-): boolean => e.dx > g.dx;
-export const typedEvent = (e: ResponderEvent): string => e.type;
-export const typedPoint = (p: TouchPoint): number => p.x + p.y + p.dx + p.dy;
+  event: ResponderQueryEvent,
+  gestureState: PanResponderGestureState,
+): boolean => event.dx > gestureState.dx;
+export const typedEvent = (event: ResponderEvent): string => event.type;
+export const typedPoint = (point: TouchPoint): number =>
+  point.x + point.y + point.dx + point.dy;

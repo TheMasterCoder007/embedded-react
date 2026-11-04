@@ -20,9 +20,9 @@ export function App() {
   const step = useAnimatedValue(0);
   const pulse = useAnimatedValue(0);
   const drift = useAnimatedValue(0);
-  const a = useAnimatedValue(1);
-  const b = useAnimatedValue(1);
-  const c = useAnimatedValue(1);
+  const firstScale = useAnimatedValue(1);
+  const secondScale = useAnimatedValue(1);
+  const thirdScale = useAnimatedValue(1);
   const pop = useAnimatedValue(1);
 
   return (
@@ -107,7 +107,7 @@ export function App() {
           style={styles.button}
           onPress={() =>
             Animated.parallel([
-              Animated.timing(a, {toValue: 0.5, duration: 150}),
+              Animated.timing(firstScale, {toValue: 0.5, duration: 150}),
               Animated.delay(400),
             ]).start(() => setStatus('waited'))
           }>
@@ -117,9 +117,9 @@ export function App() {
           style={styles.button}
           onPress={() =>
             Animated.stagger(80, [
-              Animated.timing(a, {toValue: 0.6, duration: 200}),
-              Animated.timing(b, {toValue: 0.4, duration: 200}),
-              Animated.timing(c, {toValue: 0.8, duration: 200}),
+              Animated.timing(firstScale, {toValue: 0.6, duration: 200}),
+              Animated.timing(secondScale, {toValue: 0.4, duration: 200}),
+              Animated.timing(thirdScale, {toValue: 0.8, duration: 200}),
             ]).start()
           }>
           <Text style={styles.label}>stag</Text>
@@ -142,7 +142,7 @@ export function App() {
           style={styles.button}
           onPress={() =>
             Animated.sequence([
-              Animated.timing(b, {toValue: 0.3, duration: 100}),
+              Animated.timing(secondScale, {toValue: 0.3, duration: 100}),
               Animated.delay(300),
             ]).start(({finished}) => setStatus(finished ? 'held' : 'held cut'))
           }>
@@ -153,8 +153,8 @@ export function App() {
           onPress={() =>
             Animated.loop(
               Animated.sequence([
-                Animated.timing(c, {toValue: 0.5, duration: 120}),
-                Animated.timing(c, {toValue: 1, duration: 120}),
+                Animated.timing(thirdScale, {toValue: 0.5, duration: 120}),
+                Animated.timing(thirdScale, {toValue: 1, duration: 120}),
                 Animated.delay(60),
               ]),
             ).start()
@@ -202,9 +202,9 @@ export function App() {
         <View style={[styles.box, {opacity: pulse}]} />
       </View>
       <View style={styles.boxes}>
-        <View style={[styles.box, {transform: [{scale: a}]}]} />
-        <View style={[styles.box, {transform: [{scale: b}]}]} />
-        <View style={[styles.box, {transform: [{scale: c}]}]} />
+        <View style={[styles.box, {transform: [{scale: firstScale}]}]} />
+        <View style={[styles.box, {transform: [{scale: secondScale}]}]} />
+        <View style={[styles.box, {transform: [{scale: thirdScale}]}]} />
         <View style={[styles.box, {transform: [{scale: pop}]}]} />
       </View>
       <View style={[styles.dot, {transform: [{translateX: drift}]}]} />

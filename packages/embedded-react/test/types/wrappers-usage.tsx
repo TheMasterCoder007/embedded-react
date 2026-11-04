@@ -60,7 +60,7 @@ export function WrapperUsage() {
         title="Save"
         color="#2196F3"
         disabled={false}
-        onPress={e => pressed.push(e.type)}
+        onPress={event => pressed.push(event.type)}
       />
 
       <ImageBackground
@@ -90,8 +90,8 @@ export function WrapperUsage() {
 }
 
 // The exported prop types must stay usable by name — apps annotate their own wrappers with them.
-export const titleOf = (p: ButtonProps): string => p.title ?? '';
-export const imageStyleOf = (p: ImageBackgroundProps) => p.imageStyle;
+export const titleOf = (props: ButtonProps): string => props.title ?? '';
+export const imageStyleOf = (props: ImageBackgroundProps) => props.imageStyle;
 export const rowLabel = (
   info: SectionListRenderItemInfo<Contact, Group>,
 ): string => `${info.section.title}/${info.item.name}/${info.index}`;

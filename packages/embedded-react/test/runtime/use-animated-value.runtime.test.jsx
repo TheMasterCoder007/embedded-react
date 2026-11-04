@@ -32,32 +32,41 @@ NativeUI.animValueDestroy = handle => {
 let seen = []; // every value instance the component rendered with
 
 function Comp() {
-  const v = useAnimatedValue(0);
-  seen.push(v);
-  return <Animated.View style={{width: 10, height: 10, opacity: v}} />;
+  const value = useAnimatedValue(0);
+  seen.push(value);
+  return <Animated.View style={{width: 10, height: 10, opacity: value}} />;
 }
 
 const root = createRoot({width: screen.width, height: screen.height});
 
 root.render(<Comp />);
 NativeUI.tick(0); // flush passive effects (the unmount-cleanup registration)
-const v = seen[0];
-check(v != null && v.__animated === true, 'hook returns an Animated.Value');
-check(v.__getValue() === 0, `value starts at its initial (${v.__getValue()})`);
+const value = seen[0];
+check(
+  value != null && value.__animated === true,
+  'hook returns an Animated.Value',
+);
+check(
+  value.__getValue() === 0,
+  `value starts at its initial (${value.__getValue()})`,
+);
 
 // It drives the native driver like any Animated.Value.
-Animated.timing(v, {
+Animated.timing(value, {
   toValue: 100,
   duration: 100,
   easing: Easing.linear,
 }).start();
 NativeUI.tick(60);
-check(v.__getValue() > 0, `value animates over time (=${v.__getValue()})`);
+check(
+  value.__getValue() > 0,
+  `value animates over time (=${value.__getValue()})`,
+);
 
 // Re-render: the hook must hand back the SAME instance (no new slot per render).
 root.render(<Comp />);
 NativeUI.tick(0);
-check(seen.length >= 2 && seen[1] === v, 'value is stable across renders');
+check(seen.length >= 2 && seen[1] === value, 'value is stable across renders');
 check(destroyCount === 0, 'value is not destroyed while still mounted');
 
 // Unmount: the cleanup frees the engine-side slot exactly once.

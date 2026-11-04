@@ -30,11 +30,11 @@ const root = createRoot({width: screen.width, height: screen.height});
 // --- a run of failures logs once (first line) ------------------------------------------------
 const handles = [];
 for (
-  let h = NativeUI.createNode('View');
-  h !== 0;
-  h = NativeUI.createNode('View')
+  let handle = NativeUI.createNode('View');
+  handle !== 0;
+  handle = NativeUI.createNode('View')
 ) {
-  handles.push(h);
+  handles.push(handle);
 }
 check(
   handles.length > 0,
@@ -51,13 +51,13 @@ const reused = NativeUI.createNode('View');
 check(reused !== 0, 'a freed slot is reused');
 handles.push(reused);
 check(NativeUI.createNode('View') === 0, 'the pool is full again');
-handles.forEach(h => NativeUI.destroyNode(h));
+handles.forEach(handle => NativeUI.destroyNode(handle));
 
 // --- a render far past the limit logs one line, not one per dropped node (third line) ---------
 root.render(
   <View style={{flexDirection: 'row', flexWrap: 'wrap'}}>
-    {Array.from({length: 600}, (_, i) => (
-      <View key={i} style={{width: 4, height: 4}} />
+    {Array.from({length: 600}, (_, index) => (
+      <View key={index} style={{width: 4, height: 4}} />
     ))}
   </View>,
 );
@@ -73,8 +73,12 @@ NativeUI.destroyNode(probe);
 let laidOut = 0;
 root.render(
   <View style={{flexDirection: 'row', flexWrap: 'wrap'}}>
-    {Array.from({length: 10}, (_, i) => (
-      <View key={i} style={{width: 4, height: 4}} onLayout={() => laidOut++} />
+    {Array.from({length: 10}, (_, index) => (
+      <View
+        key={index}
+        style={{width: 4, height: 4}}
+        onLayout={() => laidOut++}
+      />
     ))}
   </View>,
 );

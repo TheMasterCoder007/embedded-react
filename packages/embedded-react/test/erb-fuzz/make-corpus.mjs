@@ -68,17 +68,17 @@ const SEEDS = [
 
 /** Compiles one seed to its package's bytes. */
 async function compileSeed(seed) {
-  const src = readFileSync(seed.file, 'utf8');
-  const sourceDir = dirname(seed.file);
-  const packaged = compilePackage(src, seed.name, {
+  const source = readFileSync(seed.file, 'utf8');
+  const sourceDirectory = dirname(seed.file);
+  const packaged = compilePackage(source, seed.name, {
     filename: seed.file,
     listCap: seed.listCap,
-    svgArtifacts: await bakeSvgArtifacts(src, sourceDir),
+    svgArtifacts: await bakeSvgArtifacts(source, sourceDirectory),
     release: seed.release,
   });
   const images = packaged.images.map(image => ({
     name: image.name,
-    path: resolve(sourceDir, image.importPath),
+    path: resolve(sourceDirectory, image.importPath),
   }));
   const assets = images.length ? bakeAssetPackBytes({images}) : undefined;
   return packPackage(packaged, assets).bytes;

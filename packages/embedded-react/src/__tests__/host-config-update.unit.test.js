@@ -35,25 +35,26 @@ const calls = {
 };
 // Every recorded bridge call in order, so a test can pin the ones whose ORDER is the contract.
 const order = [];
-let idc = 0;
+let lastHandle = 0;
 globalThis.IS_REACT_ACT_ENVIRONMENT = false;
 globalThis.NativeUI = {
-  createNode: () => ++idc,
-  setProps: (h, p) => {
-    calls.setProps.push({h, p});
-    order.push(`setProps:${h}`);
+  createNode: () => ++lastHandle,
+  setProps: (handle, props) => {
+    calls.setProps.push({handle, props});
+    order.push(`setProps:${handle}`);
   },
   setRoot: () => {},
   appendChild: () => {},
   insertBefore: () => {},
   removeChild: () => {},
   destroyNode: () => {},
-  setEvent: (h, key, fn) => calls.setEvent.push({h, key, fn}),
-  setTextSpans: (h, spans) => calls.setTextSpans.push({h, spans}),
-  setVectorOps: (h, ops) => calls.setVectorOps.push({h, ops}),
-  animUnbind: (h, prop) => {
-    calls.animUnbind.push({h, prop});
-    order.push(`animUnbind:${h}:${prop}`);
+  setEvent: (handle, key, handler) =>
+    calls.setEvent.push({handle, key, handler}),
+  setTextSpans: (handle, spans) => calls.setTextSpans.push({handle, spans}),
+  setVectorOps: (handle, ops) => calls.setVectorOps.push({handle, ops}),
+  animUnbind: (handle, prop) => {
+    calls.animUnbind.push({handle, prop});
+    order.push(`animUnbind:${handle}:${prop}`);
   },
   commit: () => {},
   now: () => 0,
@@ -64,7 +65,7 @@ globalThis.NativeUI = {
 
 const Reconciler = (await import('react-reconciler')).default;
 const {hostConfig} = await import('../host-config.js');
-const {createElement: el} = (await import('react')).default;
+const {createElement} = (await import('react')).default;
 
 const reconciler = Reconciler(hostConfig);
 
@@ -101,7 +102,7 @@ const NOTHING = {
 };
 
 beforeEach(() => {
-  for (const a of Object.values(calls)) a.length = 0;
+  for (const recorded of Object.values(calls)) recorded.length = 0;
   order.length = 0;
 });
 
@@ -112,9 +113,9 @@ class FakeAnimatedValue {
     this.__animated = true;
     this.bound = [];
   }
-  __bind(h, prop) {
-    this.bound.push({h, prop});
-    order.push(`bind:${h}:${prop}`);
+  __bind(handle, prop) {
+    this.bound.push({handle, prop});
+    order.push(`bind:${handle}:${prop}`);
   }
 }
 
@@ -122,15 +123,17 @@ describe('prepareUpdate diffing: unchanged re-renders are bridge-free', () => {
   it('a re-render with recreated-but-identical props makes zero NativeUI calls', () => {
     const onPress = () => {};
     const ui = () =>
-      el(
+      createElement(
         'View',
         {style: {width: 100, padding: 4}},
-        el('Text', {style: {color: '#ffffff'}}, 'Hello ', 'World'),
-        el('View', {style: [{flex: 1}, {backgroundColor: '#101010'}]}),
-        el('View', {onPress, style: {height: 20}}),
+        createElement('Text', {style: {color: '#ffffff'}}, 'Hello ', 'World'),
+        createElement('View', {
+          style: [{flex: 1}, {backgroundColor: '#101010'}],
+        }),
+        createElement('View', {onPress, style: {height: 20}}),
       );
     const update = mount(ui());
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui()); // every props/style object is a NEW identity with the same values
 
@@ -138,118 +141,126 @@ describe('prepareUpdate diffing: unchanged re-renders are bridge-free', () => {
   });
 
   it('a changed style re-serializes only that node, and only its props section', () => {
-    const ui = w =>
-      el(
+    const ui = width =>
+      createElement(
         'View',
-        {style: {width: w}},
-        el('Text', {style: {color: '#ffffff'}}, 'Hi'),
+        {style: {width}},
+        createElement('Text', {style: {color: '#ffffff'}}, 'Hi'),
       );
     const update = mount(ui(100));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(120));
 
     expect(counts()).toEqual({...NOTHING, setProps: 1});
-    expect(calls.setProps[0].p.width).toBe(120);
+    expect(calls.setProps[0].props.width).toBe(120);
   });
 
   it('a new inline handler re-registers the event WITHOUT re-serializing props', () => {
-    const ui = () => el('View', {onPress: () => {}, style: {width: 50}});
+    const ui = () =>
+      createElement('View', {onPress: () => {}, style: {width: 50}});
     const update = mount(ui());
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui()); // fresh closure each render — its captures may be stale, must re-store
 
     expect(counts()).toEqual({...NOTHING, setEvent: 1});
     expect(calls.setEvent[0].key).toBe('onPress');
-    expect(typeof calls.setEvent[0].fn).toBe('function');
+    expect(typeof calls.setEvent[0].handler).toBe('function');
   });
 
   it('removing a handler clears it on the node', () => {
-    const update = mount(el('View', {onPress: () => {}}));
-    Object.values(calls).forEach(a => (a.length = 0));
+    const update = mount(createElement('View', {onPress: () => {}}));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
-    update(el('View', {}));
+    update(createElement('View', {}));
 
     expect(counts()).toEqual({...NOTHING, setEvent: 1});
-    expect(calls.setEvent[0].fn).toBe(null);
+    expect(calls.setEvent[0].handler).toBe(null);
   });
 
   it('changed text content re-applies the text', () => {
-    const ui = n => el('Text', {style: {fontSize: 14}}, 'count: ', n);
+    const ui = count =>
+      createElement('Text', {style: {fontSize: 14}}, 'count: ', count);
     const update = mount(ui(0));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(0));
     expect(counts()).toEqual(NOTHING);
 
     update(ui(1));
     expect(calls.setProps).toHaveLength(1);
-    expect(calls.setProps[0].p.text).toBe('count: 1');
+    expect(calls.setProps[0].props.text).toBe('count: 1');
     expect(calls.setVectorOps).toHaveLength(0);
   });
 
   it('nested styled <Text> spans: unchanged spans are skipped, changed spans re-upload', () => {
     const ui = color =>
-      el(
+      createElement(
         'Text',
         {style: {color: '#ffffff'}},
         'temp ',
-        el('Text', {style: {color}}, '72°'),
+        createElement('Text', {style: {color}}, '72°'),
       );
     const update = mount(ui('#ff0000'));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui('#ff0000'));
     expect(counts()).toEqual(NOTHING);
 
     update(ui('#00ff00'));
     expect(calls.setTextSpans).toHaveLength(1);
-    expect(calls.setTextSpans[0].spans.some(s => s.color === '#00ff00')).toBe(
-      true,
-    );
+    expect(
+      calls.setTextSpans[0].spans.some(span => span.color === '#00ff00'),
+    ).toBe(true);
   });
 
   it('a simultaneous text-content AND span-style change resolves both correctly from one flatten', () => {
     // Exercises commitUpdate's payload.props + payload.spans path together: applyProps and
     // applyTextSpans must each see the CURRENT (post-change) style even though the flattened style
     // is computed once and shared between them.
-    const ui = (n, color) =>
-      el(
+    const ui = (count, color) =>
+      createElement(
         'Text',
         {style: {color: '#ffffff'}},
-        `count: ${n} `,
-        el('Text', {style: {color}}, 'live'),
+        `count: ${count} `,
+        createElement('Text', {style: {color}}, 'live'),
       );
     const update = mount(ui(0, '#ff0000'));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(1, '#00ff00'));
 
     expect(calls.setProps).toHaveLength(1);
-    expect(calls.setProps[0].p.text).toBe('count: 1 live');
+    expect(calls.setProps[0].props.text).toBe('count: 1 live');
     expect(calls.setTextSpans).toHaveLength(1);
     const spans = calls.setTextSpans[0].spans;
-    expect(spans.find(s => s.text === 'count: 1 ').color).toBe('#ffffff');
-    expect(spans.find(s => s.text === 'live').color).toBe('#00ff00');
+    expect(spans.find(span => span.text === 'count: 1 ').color).toBe('#ffffff');
+    expect(spans.find(span => span.text === 'live').color).toBe('#00ff00');
   });
 });
 
 describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs', () => {
   const shapes = d => [
-    el('Circle', {key: 'c', cx: 50, cy: 50, r: 40, stroke: '#ffffff'}),
-    el('Path', {key: 'p', d, stroke: '#ff0000'}),
+    createElement('Circle', {
+      key: 'c',
+      cx: 50,
+      cy: 50,
+      r: 40,
+      stroke: '#ffffff',
+    }),
+    createElement('Path', {key: 'p', d, stroke: '#ff0000'}),
   ];
 
   it('identical declarative children (recreated elements) do not re-flatten', () => {
     const ui = () =>
-      el(
+      createElement(
         'Svg',
         {width: 100, height: 100, viewBox: '0 0 100 100'},
         ...shapes('M0 0 L10 10'),
       );
     const update = mount(ui());
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui());
 
@@ -258,24 +269,25 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
 
   it('a position-only style move (the drag hot path) skips the tape upload', () => {
     const ui = left =>
-      el(
+      createElement(
         'Svg',
         {width: 100, height: 100, style: {left}},
         ...shapes('M0 0 L10 10'),
       );
     const update = mount(ui(0));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(25));
 
     expect(counts()).toEqual({...NOTHING, setProps: 1});
-    expect(calls.setProps[0].p.left).toBe(25);
+    expect(calls.setProps[0].props.left).toBe(25);
   });
 
   it('a changed shape re-uploads the tape', () => {
-    const ui = d => el('Svg', {width: 100, height: 100}, ...shapes(d));
+    const ui = d =>
+      createElement('Svg', {width: 100, height: 100}, ...shapes(d));
     const update = mount(ui('M0 0 L10 10'));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui('M0 0 L20 20'));
 
@@ -284,9 +296,13 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
 
   it('a changed <Svg> paint re-uploads the tape', () => {
     const ui = fill =>
-      el('Svg', {width: 100, height: 100, fill}, ...shapes('M0 0 L10 10'));
+      createElement(
+        'Svg',
+        {width: 100, height: 100, fill},
+        ...shapes('M0 0 L10 10'),
+      );
     const update = mount(ui('#ff0000'));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui('#00ff00'));
 
@@ -295,9 +311,9 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
 
   it('<Svg source>: same artifact and box skip the upload; a resized box re-uploads', () => {
     const art = {kind: 'vector', ops: [], paints: [], width: 24, height: 24};
-    const ui = w => el('Svg', {source: art, width: w, height: 24});
+    const ui = width => createElement('Svg', {source: art, width, height: 24});
     const update = mount(ui(24));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(24));
     expect(counts()).toEqual(NOTHING);
@@ -309,9 +325,10 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
 
   it('<Svg source>: a changed root paint skips the upload, since the artifact ignores it', () => {
     const art = {kind: 'vector', ops: [], paints: [], width: 24, height: 24};
-    const ui = fill => el('Svg', {source: art, width: 24, height: 24, fill});
+    const ui = fill =>
+      createElement('Svg', {source: art, width: 24, height: 24, fill});
     const update = mount(ui('#ff0000'));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui('#00ff00'));
 
@@ -320,46 +337,48 @@ describe('prepareUpdate diffing: <Svg> op-tape uploads track their real inputs',
 
   it('<Svg source> raster fallback: unchanged props are bridge-free, a style change re-applies image props', () => {
     const art = {kind: 'raster', name: 'logo.png', width: 24, height: 24};
-    const ui = top => el('Svg', {source: art, style: {top}});
+    const ui = top => createElement('Svg', {source: art, style: {top}});
     const update = mount(ui(0));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(0));
     expect(counts()).toEqual(NOTHING);
 
     update(ui(10));
     expect(calls.setProps).toHaveLength(1);
-    expect(calls.setProps[0].p.imageName).toBe('logo.png');
+    expect(calls.setProps[0].props.imageName).toBe('logo.png');
     expect(calls.setVectorOps).toHaveLength(0); // raster never uploads a tape
   });
 
   it('<Image> with a constant source: a style change re-applies its imageName', () => {
-    const ui = width => el('Image', {source: 'logo', style: {width}});
+    const ui = width =>
+      createElement('Image', {source: 'logo', style: {width}});
     const update = mount(ui(20));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(40));
     expect(calls.setProps).toHaveLength(1);
-    expect(calls.setProps[0].p.imageName).toBe('logo');
+    expect(calls.setProps[0].props.imageName).toBe('logo');
   });
 });
 
 describe('prepareUpdate diffing: Animated.Value binding stays correct', () => {
   it('the same value instance is not re-bound; a fresh instance is', () => {
-    const v1 = new FakeAnimatedValue();
-    const ui = v => el('View', {style: {opacity: v, width: 80}});
-    const update = mount(ui(v1));
-    expect(v1.bound).toHaveLength(1); // bound on mount
-    Object.values(calls).forEach(a => (a.length = 0));
+    const firstValue = new FakeAnimatedValue();
+    const ui = value =>
+      createElement('View', {style: {opacity: value, width: 80}});
+    const update = mount(ui(firstValue));
+    expect(firstValue.bound).toHaveLength(1); // bound on mount
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
-    update(ui(v1)); // same instance — already bound, nothing to do
+    update(ui(firstValue)); // same instance — already bound, nothing to do
     expect(counts()).toEqual(NOTHING);
-    expect(v1.bound).toHaveLength(1);
+    expect(firstValue.bound).toHaveLength(1);
 
-    const v2 = new FakeAnimatedValue();
-    update(ui(v2)); // a NEW instance must be treated as changed and bound
+    const secondValue = new FakeAnimatedValue();
+    update(ui(secondValue)); // a NEW instance must be treated as changed and bound
     expect(calls.setProps).toHaveLength(1);
-    expect(v2.bound).toHaveLength(1);
+    expect(secondValue.bound).toHaveLength(1);
   });
 });
 
@@ -368,111 +387,129 @@ describe('prepareUpdate diffing: Animated.Value binding stays correct', () => {
 // following its old value and the static value React just set never sticks.
 describe('animated bindings are released when a prop stops being animated', () => {
   it('animated → static unbinds the prop, and unbinds it BEFORE re-applying the props', () => {
-    const v = new FakeAnimatedValue();
-    const ui = op => el('View', {style: {opacity: op, width: 80}});
-    const update = mount(ui(v));
-    const h = v.bound[0].h;
-    Object.values(calls).forEach(a => (a.length = 0));
+    const animatedValue = new FakeAnimatedValue();
+    const ui = opacity => createElement('View', {style: {opacity, width: 80}});
+    const update = mount(ui(animatedValue));
+    const handle = animatedValue.bound[0].handle;
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
     order.length = 0;
 
     update(ui(0.5));
 
-    expect(calls.animUnbind).toEqual([{h, prop: 'opacity'}]);
-    expect(calls.setProps[0].p.opacity).toBe(0.5);
+    expect(calls.animUnbind).toEqual([{handle, prop: 'opacity'}]);
+    expect(calls.setProps[0].props.opacity).toBe(0.5);
     // setProps re-pushes every value STILL bound to the node (er_anim_reapply_bound), so unbinding
     // afterwards would leave the last animated float on the node instead of the 0.5 just written.
-    expect(order).toEqual([`animUnbind:${h}:opacity`, `setProps:${h}`]);
+    expect(order).toEqual([
+      `animUnbind:${handle}:opacity`,
+      `setProps:${handle}`,
+    ]);
   });
 
   it('a prop dropped from the style entirely is unbound too', () => {
-    const v = new FakeAnimatedValue();
-    const update = mount(el('View', {style: {opacity: v, width: 80}}));
-    const h = v.bound[0].h;
-    Object.values(calls).forEach(a => (a.length = 0));
+    const animatedValue = new FakeAnimatedValue();
+    const update = mount(
+      createElement('View', {style: {opacity: animatedValue, width: 80}}),
+    );
+    const handle = animatedValue.bound[0].handle;
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
-    update(el('View', {style: {width: 80}})); // no opacity at all — reverts to the engine default
+    update(createElement('View', {style: {width: 80}})); // no opacity at all — reverts to the engine default
 
-    expect(calls.animUnbind).toEqual([{h, prop: 'opacity'}]);
+    expect(calls.animUnbind).toEqual([{handle, prop: 'opacity'}]);
   });
 
   it('swapping the value unbinds the old one before binding the new one', () => {
-    const v1 = new FakeAnimatedValue();
-    const v2 = new FakeAnimatedValue();
-    const ui = v => el('View', {style: {opacity: v, width: 80}});
-    const update = mount(ui(v1));
-    const h = v1.bound[0].h;
-    Object.values(calls).forEach(a => (a.length = 0));
+    const firstValue = new FakeAnimatedValue();
+    const secondValue = new FakeAnimatedValue();
+    const ui = value =>
+      createElement('View', {style: {opacity: value, width: 80}});
+    const update = mount(ui(firstValue));
+    const handle = firstValue.bound[0].handle;
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
     order.length = 0;
 
-    update(ui(v2));
+    update(ui(secondValue));
 
     // Without the unbind both values keep writing opacity — whichever ticks last wins.
-    expect(calls.animUnbind).toEqual([{h, prop: 'opacity'}]);
-    expect(v2.bound).toEqual([{h, prop: 'opacity'}]);
+    expect(calls.animUnbind).toEqual([{handle, prop: 'opacity'}]);
+    expect(secondValue.bound).toEqual([{handle, prop: 'opacity'}]);
     expect(order).toEqual([
-      `animUnbind:${h}:opacity`,
-      `setProps:${h}`,
-      `bind:${h}:opacity`,
+      `animUnbind:${handle}:opacity`,
+      `setProps:${handle}`,
+      `bind:${handle}:opacity`,
     ]);
   });
 
   it('an unrelated prop change re-applies the props without touching a live binding', () => {
-    const v = new FakeAnimatedValue();
-    const ui = w => el('View', {style: {opacity: v, width: w}});
+    const animatedValue = new FakeAnimatedValue();
+    const ui = width =>
+      createElement('View', {style: {opacity: animatedValue, width}});
     const update = mount(ui(80));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(90));
 
     expect(counts()).toEqual({...NOTHING, setProps: 1});
-    expect(v.bound).toHaveLength(1); // still bound from the mount, not re-bound
+    expect(animatedValue.bound).toHaveLength(1); // still bound from the mount, not re-bound
   });
 
   it('`transform: [{scale}]` releases both axes it bound', () => {
-    const v = new FakeAnimatedValue();
-    const ui = s => el('View', {style: {transform: [{scale: s}], width: 80}});
-    const update = mount(ui(v));
-    const h = v.bound[0].h;
-    expect(v.bound.map(b => b.prop)).toEqual(['scaleX', 'scaleY']);
-    Object.values(calls).forEach(a => (a.length = 0));
+    const animatedValue = new FakeAnimatedValue();
+    const ui = scale =>
+      createElement('View', {style: {transform: [{scale}], width: 80}});
+    const update = mount(ui(animatedValue));
+    const handle = animatedValue.bound[0].handle;
+    expect(animatedValue.bound.map(binding => binding.prop)).toEqual([
+      'scaleX',
+      'scaleY',
+    ]);
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(1));
 
     expect(calls.animUnbind).toEqual([
-      {h, prop: 'scaleX'},
-      {h, prop: 'scaleY'},
+      {handle, prop: 'scaleX'},
+      {handle, prop: 'scaleY'},
     ]);
   });
 
   it('<Dial value>: animated → static unbinds the arc value and marshals the number', () => {
-    const v = new FakeAnimatedValue();
-    const ui = value => el('Dial', {style: {width: 100, height: 100}, value});
-    const update = mount(ui(v));
-    const h = v.bound[0].h;
-    expect(v.bound[0].prop).toBe('value');
-    Object.values(calls).forEach(a => (a.length = 0));
+    const animatedValue = new FakeAnimatedValue();
+    const ui = value =>
+      createElement('Dial', {style: {width: 100, height: 100}, value});
+    const update = mount(ui(animatedValue));
+    const handle = animatedValue.bound[0].handle;
+    expect(animatedValue.bound[0].prop).toBe('value');
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(42));
 
-    expect(calls.animUnbind).toEqual([{h, prop: 'value'}]);
-    expect(calls.setProps[0].p.value).toBe(42);
+    expect(calls.animUnbind).toEqual([{handle, prop: 'value'}]);
+    expect(calls.setProps[0].props.value).toBe(42);
   });
 
   it('a deleted descendant leaves no record, so its handle would bind from scratch', () => {
     // React hands removeChild only the TOP of a deleted subtree; destroyNode reclaims the descendants
     // in C. Their records go when React detaches them, or the map would keep one per destroyed node,
     // and the handle would look already-bound if its generation ever wrapped back round to it.
-    const v = new FakeAnimatedValue();
-    const update = mount(el('View', {}, el('View', {style: {opacity: v}})));
-    const inner = v.bound[0].h;
+    const animatedValue = new FakeAnimatedValue();
+    const update = mount(
+      createElement(
+        'View',
+        {},
+        createElement('View', {style: {opacity: animatedValue}}),
+      ),
+    );
+    const inner = animatedValue.bound[0].handle;
 
     update(null); // only the outer View goes through removeChildFromContainer
-    idc = inner - 1; // the engine hands the freed handle to the next node
-    update(el('View', {style: {opacity: v}}));
+    lastHandle = inner - 1; // the engine hands the freed handle to the next node
+    update(createElement('View', {style: {opacity: animatedValue}}));
 
-    expect(v.bound).toEqual([
-      {h: inner, prop: 'opacity'},
-      {h: inner, prop: 'opacity'},
+    expect(animatedValue.bound).toEqual([
+      {handle: inner, prop: 'opacity'},
+      {handle: inner, prop: 'opacity'},
     ]);
   });
 });
@@ -487,9 +524,9 @@ describe('interpolated bindings compare by parent + config', () => {
       this._config = config;
       this.bound = [];
     }
-    __bind(h, prop) {
-      this.bound.push({h, prop});
-      order.push(`bind:${h}:${prop}`);
+    __bind(handle, prop) {
+      this.bound.push({handle, prop});
+      order.push(`bind:${handle}:${prop}`);
     }
     __bindEq(other) {
       return (
@@ -501,14 +538,19 @@ describe('interpolated bindings compare by parent + config', () => {
   }
 
   const parent = new FakeAnimatedValue();
-  const interp = out =>
-    new FakeInterpolation(parent, {inputRange: [0, 1], outputRange: out});
+  const interp = outputRange =>
+    new FakeInterpolation(parent, {
+      inputRange: [0, 1],
+      outputRange: outputRange,
+    });
 
   it('a re-render with an equal interpolation leaves the binding alone', () => {
-    const ui = (w, out) =>
-      el('View', {style: {opacity: interp(out), width: w}});
+    const ui = (width, outputRange) =>
+      createElement('View', {
+        style: {opacity: interp(outputRange), width},
+      });
     const update = mount(ui(80, [0, 1]));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
 
     update(ui(90, [0, 1])); // fresh interpolation object, same mapping
 
@@ -516,9 +558,10 @@ describe('interpolated bindings compare by parent + config', () => {
   });
 
   it('a changed range is re-bound — the engine ignores a duplicate bind, so the old one must go', () => {
-    const ui = out => el('View', {style: {opacity: interp(out), width: 80}});
+    const ui = outputRange =>
+      createElement('View', {style: {opacity: interp(outputRange), width: 80}});
     const update = mount(ui([0, 1]));
-    Object.values(calls).forEach(a => (a.length = 0));
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
     order.length = 0;
 
     update(ui([0, 0.5]));
@@ -533,7 +576,7 @@ describe('<Dial>: the native arc widget marshals its props and binds an animated
   it('passes the widget props through and registers onChange', () => {
     const onChange = () => {};
     mount(
-      el('Dial', {
+      createElement('Dial', {
         style: {width: 200, height: 200},
         value: 42,
         min: 0,
@@ -548,28 +591,40 @@ describe('<Dial>: the native arc widget marshals its props and binds an animated
         onChange,
       }),
     );
-    const p = calls.setProps.find(c => c.p.thickness === 14).p;
-    expect(p.value).toBe(42);
-    expect(p.max).toBe(100);
-    expect(p.knob).toBe('circle');
-    expect(p.adjustable).toBe(true);
-    expect(p.indicatorGradient.type).toBe('conic');
+    const props = calls.setProps.find(
+      call => call.props.thickness === 14,
+    ).props;
+    expect(props.value).toBe(42);
+    expect(props.max).toBe(100);
+    expect(props.knob).toBe('circle');
+    expect(props.adjustable).toBe(true);
+    expect(props.indicatorGradient.type).toBe('conic');
     expect(
-      calls.setEvent.some(e => e.key === 'onChange' && e.fn === onChange),
+      calls.setEvent.some(
+        call => call.key === 'onChange' && call.handler === onChange,
+      ),
     ).toBe(true);
   });
 
   it('an Animated.Value as `value` is bound to the node, not marshalled as a prop', () => {
-    const v = new FakeAnimatedValue();
+    const animatedValue = new FakeAnimatedValue();
     const update = mount(
-      el('Dial', {style: {width: 100, height: 100}, value: v}),
+      createElement('Dial', {
+        style: {width: 100, height: 100},
+        value: animatedValue,
+      }),
     );
-    expect(v.bound).toHaveLength(1);
-    expect(v.bound[0].prop).toBe('value');
-    const p = calls.setProps.find(c => c.p.width === 100).p;
-    expect(p.value).toBeUndefined();
-    Object.values(calls).forEach(a => (a.length = 0));
-    update(el('Dial', {style: {width: 100, height: 100}, value: v}));
+    expect(animatedValue.bound).toHaveLength(1);
+    expect(animatedValue.bound[0].prop).toBe('value');
+    const props = calls.setProps.find(call => call.props.width === 100).props;
+    expect(props.value).toBeUndefined();
+    Object.values(calls).forEach(recorded => (recorded.length = 0));
+    update(
+      createElement('Dial', {
+        style: {width: 100, height: 100},
+        value: animatedValue,
+      }),
+    );
     expect(counts()).toEqual(NOTHING); // same instance: nothing to re-send or re-bind
   });
 });

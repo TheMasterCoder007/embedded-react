@@ -25,18 +25,18 @@ import {View} from 'embedded-react';
 import {LayoutAnimation} from 'embedded-react';
 import {check, report} from './harness.js';
 
-const ys = {};
+const layouts = {};
 
 function App({big}) {
   return (
     <View style={{width: 200, height: 300}}>
       <View
         style={{width: 200, height: big ? 120 : 40}}
-        onLayout={e => (ys.a = e.layout)}
+        onLayout={event => (layouts.a = event.layout)}
       />
       <View
         style={{width: 200, height: 40}}
-        onLayout={e => (ys.b = e.layout.y)}
+        onLayout={event => (layouts.b = event.layout.y)}
       />
     </View>
   );
@@ -46,7 +46,10 @@ const root = createRoot({width: screen.width, height: screen.height});
 
 // Mount: new nodes snap to position — no animation should be pending.
 root.render(<App big={false} />);
-check(ys.b === 40, `second item starts below the 40px first item (y=${ys.b})`);
+check(
+  layouts.b === 40,
+  `second item starts below the 40px first item (y=${layouts.b})`,
+);
 check(
   NativeUI.hasPendingLayoutAnimation() === false,
   'no layout animation pending after initial mount',
@@ -62,8 +65,8 @@ check(
 // The change (first item grows 40 -> 120, pushing the second down) commits and consumes the config.
 root.render(<App big={true} />);
 check(
-  ys.b === 120,
-  `second item's computed target moved to y=120 (got ${ys.b})`,
+  layouts.b === 120,
+  `second item's computed target moved to y=120 (got ${layouts.b})`,
 );
 check(
   NativeUI.hasPendingLayoutAnimation() === false,
@@ -72,7 +75,7 @@ check(
 
 // Control: a layout change WITHOUT configureNext must not arm anything.
 root.render(<App big={false} />);
-check(ys.b === 40, 'second item snapped back to y=40');
+check(layouts.b === 40, 'second item snapped back to y=40');
 check(
   NativeUI.hasPendingLayoutAnimation() === false,
   'no config armed without configureNext',

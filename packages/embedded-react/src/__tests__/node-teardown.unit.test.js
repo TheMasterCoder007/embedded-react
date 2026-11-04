@@ -30,37 +30,37 @@ import {describe, it, expect, vi, beforeEach, afterEach} from 'vitest';
 // is what frees the descendants. If the host config stopped destroying removed subtree tops, the recursive
 // destroy would never run and the live set would not return to baseline — which these tests assert.
 function installMockNativeUI() {
-  let idc = 0;
+  let lastHandle = 0;
   const live = new Set();
-  const kids = new Map(); // handle → [child handles]
+  const childHandles = new Map(); // handle → [child handles]
   globalThis.IS_REACT_ACT_ENVIRONMENT = false;
-  const destroy = h => {
-    if (!live.has(h))
+  const destroy = handle => {
+    if (!live.has(handle))
       throw new Error(
-        `destroyNode on a non-live node ${h} (double-free or unknown handle)`,
+        `destroyNode on a non-live node ${handle} (double-free or unknown handle)`,
       );
-    for (const c of kids.get(h) || []) destroy(c); // recurse the subtree, like the real bridge
-    live.delete(h);
-    kids.delete(h);
+    for (const child of childHandles.get(handle) || []) destroy(child); // recurse the subtree, like the real bridge
+    live.delete(handle);
+    childHandles.delete(handle);
   };
   globalThis.NativeUI = {
     createNode: () => {
-      const h = ++idc;
-      live.add(h);
-      kids.set(h, []);
-      return h;
+      const handle = ++lastHandle;
+      live.add(handle);
+      childHandles.set(handle, []);
+      return handle;
     },
     setProps: () => {},
     setRoot: () => {},
-    appendChild: (p, c) => kids.get(p)?.push(c),
-    insertBefore: (p, c, before) => {
-      const arr = kids.get(p) || [];
-      const i = arr.indexOf(before);
-      arr.splice(i < 0 ? arr.length : i, 0, c);
+    appendChild: (parent, child) => childHandles.get(parent)?.push(child),
+    insertBefore: (parent, child, before) => {
+      const children = childHandles.get(parent) || [];
+      const index = children.indexOf(before);
+      children.splice(index < 0 ? children.length : index, 0, child);
     },
-    removeChild: (p, c) => {
-      const arr = kids.get(p);
-      if (arr) arr.splice(arr.indexOf(c), 1);
+    removeChild: (parent, child) => {
+      const children = childHandles.get(parent);
+      if (children) children.splice(children.indexOf(child), 1);
     },
     destroyNode: destroy,
     setEvent: () => {},
@@ -82,7 +82,7 @@ describe('node teardown: deleting a subtree destroys every node in it', () => {
   it('does not leak descendant nodes when a nested subtree is removed', async () => {
     const Reconciler = (await import('react-reconciler')).default;
     const {hostConfig} = await import('../host-config.js');
-    const {createElement: el} = (await import('react')).default;
+    const {createElement} = (await import('react')).default;
     const reconciler = Reconciler(hostConfig);
 
     const container = globalThis.NativeUI.createNode('View'); // created outside the reconciler
@@ -98,12 +98,16 @@ describe('node teardown: deleting a subtree destroys every node in it', () => {
     );
 
     // Mount: A > B > [C, D]. The reconciler creates A, B, C, D (4 nodes; container was created above).
-    const tree = el('View', null, el('View', null, el('View'), el('View')));
+    const tree = createElement(
+      'View',
+      null,
+      createElement('View', null, createElement('View'), createElement('View')),
+    );
     reconciler.updateContainer(tree, root, null, null);
     expect(globalThis.NativeUI.__live.size).toBe(5); // container + A + B + C + D
 
     // Re-render with B's whole subtree gone — React deletes B, C, and D.
-    reconciler.updateContainer(el('View'), root, null, null);
+    reconciler.updateContainer(createElement('View'), root, null, null);
 
     // Only container + A may remain. If destroyNode fired only for B (the subtree top), C and D leak.
     expect(globalThis.NativeUI.__live.size).toBe(2);
@@ -112,7 +116,7 @@ describe('node teardown: deleting a subtree destroys every node in it', () => {
   it('cold-swapping the root component destroys the entire previous tree (the hot-reload soft swap)', async () => {
     const Reconciler = (await import('react-reconciler')).default;
     const {hostConfig} = await import('../host-config.js');
-    const {createElement: el} = (await import('react')).default;
+    const {createElement} = (await import('react')).default;
     const reconciler = Reconciler(hostConfig);
 
     const container = globalThis.NativeUI.createNode('View');
@@ -129,15 +133,25 @@ describe('node teardown: deleting a subtree destroys every node in it', () => {
 
     // Two distinct root components (a new function each "reload"), each a small nested tree.
     const AppV1 = () =>
-      el('View', null, el('View', null, el('View')), el('View'));
+      createElement(
+        'View',
+        null,
+        createElement('View', null, createElement('View')),
+        createElement('View'),
+      );
     const AppV2 = () =>
-      el('View', null, el('View', null, el('View')), el('View'));
+      createElement(
+        'View',
+        null,
+        createElement('View', null, createElement('View')),
+        createElement('View'),
+      );
 
-    reconciler.updateContainer(el(AppV1), root, null, null);
+    reconciler.updateContainer(createElement(AppV1), root, null, null);
     const afterV1 = globalThis.NativeUI.__live.size;
 
     // Reload: swap the root to a different component type → React unmounts ALL of V1, mounts V2.
-    reconciler.updateContainer(el(AppV2), root, null, null);
+    reconciler.updateContainer(createElement(AppV2), root, null, null);
 
     // The live count must not grow across the swap — every V1 node is destroyed as V2 mounts.
     expect(globalThis.NativeUI.__live.size).toBe(afterV1);

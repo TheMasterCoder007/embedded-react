@@ -29,13 +29,17 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('FlatList renders as a ScrollView + .map', () => {
   it('returns a ScrollView holding one child per data item', () => {
-    const el = render({
+    const element = render({
       data: [{id: 'a'}, {id: 'b'}, {id: 'c'}],
       renderItem: ({item}) => createElement(Row, {label: item.id}),
     });
-    expect(el.type).toBe('ScrollView');
-    expect(el.props.children).toHaveLength(3);
-    expect(el.props.children.map(c => c.props.label)).toEqual(['a', 'b', 'c']);
+    expect(element.type).toBe('ScrollView');
+    expect(element.props.children).toHaveLength(3);
+    expect(element.props.children.map(child => child.props.label)).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
   });
 
   it('passes item and index to renderItem', () => {
@@ -55,20 +59,23 @@ describe('FlatList renders as a ScrollView + .map', () => {
 
   it('forwards style to the ScrollView and nothing else', () => {
     const style = {flex: 1};
-    const el = render({data: [], renderItem: () => null, style});
-    expect(el.props.style).toBe(style);
+    const element = render({data: [], renderItem: () => null, style});
+    expect(element.props.style).toBe(style);
   });
 
   it('omits style entirely when none was given', () => {
-    const el = render({data: [], renderItem: () => null});
-    expect('style' in el.props).toBe(false);
+    const element = render({data: [], renderItem: () => null});
+    expect('style' in element.props).toBe(false);
   });
 
   it('renders an empty scroller for missing / non-array data', () => {
     for (const data of [undefined, null, 0, 'abc', {length: 2}]) {
-      const el = render({data, renderItem: () => createElement(Row, null)});
-      expect(el.type).toBe('ScrollView');
-      expect(el.props.children).toEqual([]);
+      const element = render({
+        data,
+        renderItem: () => createElement(Row, null),
+      });
+      expect(element.type).toBe('ScrollView');
+      expect(element.props.children).toEqual([]);
     }
   });
 
@@ -80,21 +87,21 @@ describe('FlatList renders as a ScrollView + .map', () => {
   // direct call too rather than throwing at the destructure.
   it('renders an empty scroller when called with no props at all', () => {
     for (const props of [undefined, {}]) {
-      const el = FlatList(props);
-      expect(el.type).toBe('ScrollView');
-      expect(el.props.children).toEqual([]);
+      const element = FlatList(props);
+      expect(element.type).toBe('ScrollView');
+      expect(element.props.children).toEqual([]);
     }
   });
 });
 
 describe('FlatList keying', () => {
   it('keys each row from keyExtractor', () => {
-    const el = render({
+    const element = render({
       data: [{id: 7}, {id: 9}],
       keyExtractor: item => item.id,
       renderItem: ({item}) => createElement(Row, {label: item.id}),
     });
-    expect(el.props.children.map(c => c.key)).toEqual(['7', '9']);
+    expect(element.props.children.map(child => child.key)).toEqual(['7', '9']);
   });
 
   it('passes item and index to keyExtractor', () => {
@@ -114,43 +121,46 @@ describe('FlatList keying', () => {
   });
 
   it('keeps a key renderItem already set when there is no keyExtractor', () => {
-    const el = render({
+    const element = render({
       data: ['a', 'b'],
       renderItem: ({item}) => createElement(Row, {key: `row-${item}`}),
     });
-    expect(el.props.children.map(c => c.key)).toEqual(['row-a', 'row-b']);
+    expect(element.props.children.map(child => child.key)).toEqual([
+      'row-a',
+      'row-b',
+    ]);
   });
 
   it('lets keyExtractor override a key renderItem set', () => {
-    const el = render({
+    const element = render({
       data: ['a'],
       keyExtractor: item => `k-${item}`,
       renderItem: ({item}) => createElement(Row, {key: `row-${item}`}),
     });
-    expect(el.props.children[0].key).toBe('k-a');
+    expect(element.props.children[0].key).toBe('k-a');
   });
 
   it('falls back to the index when nothing supplies a key', () => {
-    const el = render({
+    const element = render({
       data: ['a', 'b'],
       renderItem: () => createElement(Row, null),
     });
-    expect(el.props.children.map(c => c.key)).toEqual(['0', '1']);
+    expect(element.props.children.map(child => child.key)).toEqual(['0', '1']);
   });
 
   it('preserves row props when it clones to attach a key', () => {
-    const el = render({
+    const element = render({
       data: [{id: 'a'}],
       keyExtractor: item => item.id,
       renderItem: ({item}) => createElement(Row, {label: item.id, bold: true}),
     });
-    expect(el.props.children[0].props).toEqual({label: 'a', bold: true});
+    expect(element.props.children[0].props).toEqual({label: 'a', bold: true});
   });
 });
 
 describe('FlatList row results that are not elements', () => {
   it('drops rows that render to null / undefined / false', () => {
-    const el = render({
+    const element = render({
       data: [1, 2, 3, 4],
       renderItem: ({item}) =>
         item === 1
@@ -161,7 +171,7 @@ describe('FlatList row results that are not elements', () => {
               ? false
               : createElement(Row, null),
     });
-    expect(el.props.children).toHaveLength(1);
+    expect(element.props.children).toHaveLength(1);
   });
 
   it('does not ask keyExtractor for the key of a row that rendered nothing', () => {
@@ -178,8 +188,8 @@ describe('FlatList row results that are not elements', () => {
   });
 
   it('keeps a raw string row as-is (no key to clone onto)', () => {
-    const el = render({data: ['hi'], renderItem: ({item}) => item});
-    expect(el.props.children).toEqual(['hi']);
+    const element = render({data: ['hi'], renderItem: ({item}) => item});
+    expect(element.props.children).toEqual(['hi']);
   });
 
   it('does not ask keyExtractor for the key of a raw string row', () => {

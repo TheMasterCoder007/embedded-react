@@ -26,7 +26,7 @@ import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url)); // .../embedded-react/test/runtime
 const jsRoot = path.resolve(here, '../..'); // .../embedded-react
-const outDir = path.join(jsRoot, 'dist', 'runtime');
+const outputDirectory = path.join(jsRoot, 'dist', 'runtime');
 
 // --bytecode: precompile each bundle to a QuickJS bytecode blob (.qbc) and run THAT instead of the
 // source — exercises the bytecode load path the MCU hosts use (er-bridge-quickjs-compile +
@@ -39,7 +39,10 @@ const bridgeBuild = process.env.ER_BRIDGE_BUILD_DIR
   ? path.resolve(process.env.ER_BRIDGE_BUILD_DIR)
   : path.resolve(jsRoot, '../../bridges/quickjs/build');
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-const exe = path.join(bridgeBuild, `er-bridge-quickjs-runtest${exeSuffix}`);
+const executable = path.join(
+  bridgeBuild,
+  `er-bridge-quickjs-runtest${exeSuffix}`,
+);
 const compileExe = path.join(
   bridgeBuild,
   `er-bridge-quickjs-compile${exeSuffix}`,
@@ -53,8 +56,8 @@ const buildHint = target =>
   `Build it first (from the repo root):\n  cmake --build ${buildArg} --target ${target}\n` +
   'or set ER_BRIDGE_BUILD_DIR to a bridge build that has it.';
 
-if (!existsSync(exe)) {
-  console.error(`Runtime test harness not found at:\n  ${exe}\n`);
+if (!existsSync(executable)) {
+  console.error(`Runtime test harness not found at:\n  ${executable}\n`);
   console.error(buildHint('er-bridge-quickjs-runtest'));
   process.exit(2);
 }
@@ -65,18 +68,23 @@ if (bytecodeMode && !existsSync(compileExe)) {
 }
 
 const tests = readdirSync(here).filter(
-  f => f.endsWith('.runtime.test.jsx') || f.endsWith('.runtime.test.js'),
+  fileName =>
+    fileName.endsWith('.runtime.test.jsx') ||
+    fileName.endsWith('.runtime.test.js'),
 );
 if (tests.length === 0) {
   console.log('No runtime tests found.');
   process.exit(0);
 }
 
-mkdirSync(outDir, {recursive: true});
+mkdirSync(outputDirectory, {recursive: true});
 
 let failed = 0;
 for (const test of tests) {
-  const bundle = path.join(outDir, test.replace(/\.jsx?$/, '.bundle.js'));
+  const bundle = path.join(
+    outputDirectory,
+    test.replace(/\.jsx?$/, '.bundle.js'),
+  );
   await build({
     entryPoints: [path.join(here, test)],
     bundle: true,
@@ -108,13 +116,13 @@ for (const test of tests) {
   // A test about a diagnostic lists the stderr lines it expects, one marker each; its stderr must be
   // exactly those lines.
   const expectedStderr = [...source.matchAll(/@runtime-stderr: (.*)$/gm)].map(
-    m => m[1],
+    match => match[1],
   );
 
   process.stdout.write(
     `\n=== ${test}${bytecodeMode ? ' [bytecode]' : ''} ===\n`,
   );
-  const run = spawnSync(exe, [...flags, runArg], {encoding: 'utf8'});
+  const run = spawnSync(executable, [...flags, runArg], {encoding: 'utf8'});
   process.stdout.write(run.stdout ?? '');
   const stderrLines = (run.stderr ?? '').split('\n').filter(Boolean);
   const stderrOk =

@@ -26,31 +26,35 @@ let setRootCount;
 let persistStore;
 
 function installMocks() {
-  let idc = 0;
+  let lastHandle = 0;
   setRootCount = 0;
   persistStore = new Map();
   globalThis.IS_REACT_ACT_ENVIRONMENT = false;
   globalThis.screen = {width: 480, height: 320};
   globalThis.__erPersist = {
-    get: k => persistStore.get(k),
-    set: (k, v) => persistStore.set(k, v),
+    get: key => persistStore.get(key),
+    set: (key, value) => persistStore.set(key, value),
   };
   globalThis.NativeUI = {
-    createNode: type => ({id: ++idc, type, props: {}, children: []}),
-    setProps: (h, p) => {
-      h.props = p;
+    createNode: type => ({id: ++lastHandle, type, props: {}, children: []}),
+    setProps: (node, props) => {
+      node.props = props;
     },
     setRoot: () => {
       setRootCount++;
     },
-    appendChild: (p, c) => p.children.push(c),
-    insertBefore: (p, c, before) => {
-      const i = p.children.indexOf(before);
-      p.children.splice(i < 0 ? p.children.length : i, 0, c);
+    appendChild: (parent, child) => parent.children.push(child),
+    insertBefore: (parent, child, before) => {
+      const index = parent.children.indexOf(before);
+      parent.children.splice(
+        index < 0 ? parent.children.length : index,
+        0,
+        child,
+      );
     },
-    removeChild: (p, c) => {
-      const i = p.children.indexOf(c);
-      if (i >= 0) p.children.splice(i, 1);
+    removeChild: (parent, child) => {
+      const index = parent.children.indexOf(child);
+      if (index >= 0) parent.children.splice(index, 1);
     },
     destroyNode: () => {},
     setEvent: () => {},
@@ -76,7 +80,7 @@ describe('AppRegistry soft reload (resident root + persisted state)', () => {
   });
 
   it('reuses the root and preserves usePersistentState across an app-chunk reload', async () => {
-    const {createElement: el} = (await import('react')).default;
+    const {createElement} = (await import('react')).default;
     const {AppRegistry} = await import('../AppRegistry.js');
     const {usePersistentState} = await import('../usePersistentState.js');
 
@@ -85,10 +89,10 @@ describe('AppRegistry soft reload (resident root + persisted state)', () => {
 
     // "App v1" — the running app.
     function AppV1() {
-      const [n, set] = usePersistentState('counter', 0);
-      setN = set;
-      seen = {version: 'v1', n};
-      return el('View', {});
+      const [count, setCount] = usePersistentState('counter', 0);
+      setN = setCount;
+      seen = {version: 'v1', n: count};
+      return createElement('View', {});
     }
     AppRegistry.registerComponent('demo', () => AppV1);
     expect(seen).toEqual({version: 'v1', n: 0});
@@ -101,9 +105,9 @@ describe('AppRegistry soft reload (resident root + persisted state)', () => {
     // "Edit + save" — only the app chunk re-evaluates; AppRegistry is resident, so re-register a NEW
     // component. This is the soft reload.
     function AppV2() {
-      const [n] = usePersistentState('counter', 0);
-      seen = {version: 'v2', n};
-      return el('View', {});
+      const [count] = usePersistentState('counter', 0);
+      seen = {version: 'v2', n: count};
+      return createElement('View', {});
     }
     AppRegistry.registerComponent('demo', () => AppV2);
 

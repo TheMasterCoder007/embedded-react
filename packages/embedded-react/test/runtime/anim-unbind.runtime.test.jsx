@@ -40,7 +40,7 @@ const y = new Animated.Value(0);
 
 // Animated.View, the wrapper the bug was reported against: its style is bound by the host config like
 // any other element's. The box is 40 wide at left 0, so translateX t makes it hittable over [t, t+40).
-function App({tx}) {
+function App({translateX}) {
   return (
     <View style={{width: 300, height: 200}}>
       <Animated.View
@@ -50,7 +50,7 @@ function App({tx}) {
           top: 0,
           width: 40,
           height: 40,
-          transform: [{translateX: tx}],
+          transform: [{translateX}],
         }}
         onPress={() => presses.push(1)}
       />
@@ -59,22 +59,22 @@ function App({tx}) {
 }
 
 /** Taps at (px, py) and reports whether the animated node was the one pressed. */
-function pressAt(px, py) {
+function pressAt(x, y) {
   const before = presses.length;
-  __touch(0, px, py);
-  __touch(2, px, py);
+  __touch(0, x, y);
+  __touch(2, x, y);
   return presses.length > before;
 }
 
 const root = createRoot({width: screen.width, height: screen.height});
 
-root.render(<App tx={x} />);
+root.render(<App translateX={x} />);
 x.setValue(100);
 check(pressAt(120, 20), 'the node follows its bound value');
 check(!pressAt(20, 20), 'and has left its unshifted layout box');
 
 // --- animated → static ---------------------------------------------------------------------------
-root.render(<App tx={0} />);
+root.render(<App translateX={0} />);
 check(
   unbound('translateX') === 1,
   'the released prop was unbound at the bridge',
@@ -88,7 +88,7 @@ x.setValue(200);
 check(pressAt(20, 20), 'the released value no longer writes the prop');
 
 // --- swapping to a different Animated.Value -------------------------------------------------------
-root.render(<App tx={y} />);
+root.render(<App translateX={y} />);
 y.setValue(60);
 check(pressAt(80, 20), 'the prop follows the new value');
 x.setValue(250);
@@ -98,7 +98,7 @@ check(unbound('translateX') === 1, 're-binding a free prop needs no unbind');
 // A re-render that changes nothing about the binding must leave it alone (an unbind/re-bind per commit
 // would be pure bridge traffic on the hot path).
 const before = unbound('translateX');
-root.render(<App tx={y} />);
+root.render(<App translateX={y} />);
 check(unbound('translateX') === before, 'an unchanged binding is not churned');
 
 // --- <Dial value>, the same path through a native widget prop -------------------------------------

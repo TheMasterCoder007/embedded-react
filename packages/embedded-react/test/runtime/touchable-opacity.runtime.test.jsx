@@ -30,22 +30,22 @@ let handle = null;
 let bind = null;
 const realCreateNode = NativeUI.createNode;
 NativeUI.createNode = type => {
-  const h = realCreateNode(type);
-  if (type === 'Pressable') pressable = h;
-  return h;
+  const handle = realCreateNode(type);
+  if (type === 'Pressable') pressable = handle;
+  return handle;
 };
 const realCreate = NativeUI.animValueCreate;
 NativeUI.animValueCreate = initial => (handle = realCreate(initial));
 const realBind = NativeUI.animValueBind;
-NativeUI.animValueBind = (h, node, prop) => {
-  bind = {h, node, prop};
-  return realBind(h, node, prop);
+NativeUI.animValueBind = (handle, node, prop) => {
+  bind = {h: handle, node, prop};
+  return realBind(handle, node, prop);
 };
 
 /** The live opacity, straight out of the engine-side value. */
 const opacity = () => NativeUI.animValueGet(handle);
 /** Float32 round-trips through the engine, so compare with a tolerance. */
-const near = (a, b) => Math.abs(a - b) < 0.01;
+const near = (actual, expected) => Math.abs(actual - expected) < 0.01;
 
 const root = createRoot({width: screen.width, height: screen.height});
 
@@ -54,7 +54,9 @@ const presses = [];
 const App = ({disabled}) => (
   // alignSelf shrink-wraps the wrapper onto the touchable, so its rect IS the touchable's.
   <View>
-    <View style={{alignSelf: 'flex-start'}} onLayout={e => (box = e.layout)}>
+    <View
+      style={{alignSelf: 'flex-start'}}
+      onLayout={event => (box = event.layout)}>
       <TouchableOpacity
         style={{padding: 8}}
         disabled={disabled}

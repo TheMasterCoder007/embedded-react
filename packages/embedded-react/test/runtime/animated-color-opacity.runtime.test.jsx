@@ -26,7 +26,7 @@ const BLUE = 0xff0000ff;
 const BACKDROP = {width: 200, height: 200, backgroundColor: '#0000ff'};
 
 const warnings = [];
-console.warn = msg => warnings.push(String(msg));
+console.warn = message => warnings.push(String(message));
 
 /** True when any pixel of the 200x40 strip at the top of the backdrop is not the backdrop. */
 function inked() {
@@ -39,14 +39,14 @@ function inked() {
 }
 
 // --- backgroundColor through a color interpolation ------------------------------------------------
-const c = new Animated.Value(0);
+const color = new Animated.Value(0);
 root.render(
   <View style={BACKDROP}>
     <Animated.View
       style={{
         width: 100,
         height: 100,
-        backgroundColor: c.interpolate({
+        backgroundColor: color.interpolate({
           inputRange: [0, 1],
           outputRange: ['#ff0000', 'rgb(0, 255, 0)'],
         }),
@@ -55,10 +55,10 @@ root.render(
   </View>,
 );
 check(__pixel(50, 50) === 0xffff0000, 'the color binds at its current value');
-c.setValue(1);
+color.setValue(1);
 NativeUI.commit();
 check(__pixel(50, 50) === 0xff00ff00, 'and follows the value to the end color');
-c.setValue(0.5);
+color.setValue(0.5);
 NativeUI.commit();
 check(__pixel(50, 50) === 0xff808000, 'with each channel interpolated between');
 
@@ -71,7 +71,7 @@ root.render(
 );
 check(__pixel(50, 50) === BLUE, 'a plain value does not write a color');
 check(
-  warnings.some(w => w.includes('"backgroundColor" needs colors')),
+  warnings.some(warning => warning.includes('"backgroundColor" needs colors')),
   'and says how to animate one',
 );
 
@@ -94,7 +94,9 @@ root.render(
 );
 check(__pixel(50, 50) === 0xffff0000, 'colors do not write an opacity');
 check(
-  warnings.some(w => w.includes('"opacity" takes an outputRange of numbers')),
+  warnings.some(warning =>
+    warning.includes('"opacity" takes an outputRange of numbers'),
+  ),
   'and the warning names the prop',
 );
 
@@ -120,16 +122,16 @@ check(
 );
 
 // --- opacity on a Text ----------------------------------------------------------------------------
-const o = new Animated.Value(0);
+const opacity = new Animated.Value(0);
 root.render(
   <View style={BACKDROP}>
-    <Animated.Text style={{color: '#ffffff', fontSize: 20, opacity: o}}>
+    <Animated.Text style={{color: '#ffffff', fontSize: 20, opacity}}>
       MMMM
     </Animated.Text>
   </View>,
 );
 check(!inked(), 'a Text at an animated opacity of 0 paints nothing');
-o.setValue(1);
+opacity.setValue(1);
 NativeUI.commit();
 check(inked(), 'and paints once the value reaches 1');
 

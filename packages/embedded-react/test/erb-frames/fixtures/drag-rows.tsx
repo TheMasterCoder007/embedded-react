@@ -7,8 +7,8 @@ function Row({label}: {label: string}) {
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onPanResponderMove: (e, g) =>
-        setMoved((label === 'second' ? 100 : 200) + g.dx),
+      onPanResponderMove: (event, gestureState) =>
+        setMoved((label === 'second' ? 100 : 200) + gestureState.dx),
     }),
   ).current;
   return (

@@ -55,10 +55,10 @@ function engineSim(handlers) {
       startY = y;
       handlers.onTouchStart?.(ev('touchStart', x, y));
       if (granted) return; // a later finger: negotiation re-grants below via downJoin
-      const e = ev('', x, y);
+      const event = ev('', x, y);
       if (
-        handlers.onStartShouldSetResponderCapture?.(e) === true ||
-        handlers.onStartShouldSetResponder?.(e) === true
+        handlers.onStartShouldSetResponderCapture?.(event) === true ||
+        handlers.onStartShouldSetResponder?.(event) === true
       ) {
         granted = true;
         handlers.onResponderGrant?.(ev('responderGrant', x, y));
@@ -104,18 +104,19 @@ function engineSim(handlers) {
 /** A recorder that logs every callback as [name, {dx, dy, vx, vy, x0, y0, numberActiveTouches}]. */
 function recorder(extra = {}) {
   const log = [];
-  const snap = g => ({
-    dx: g.dx,
-    dy: g.dy,
-    vx: g.vx,
-    vy: g.vy,
-    x0: g.x0,
-    y0: g.y0,
-    moveX: g.moveX,
-    moveY: g.moveY,
-    numberActiveTouches: g.numberActiveTouches,
+  const snap = gestureState => ({
+    dx: gestureState.dx,
+    dy: gestureState.dy,
+    vx: gestureState.vx,
+    vy: gestureState.vy,
+    x0: gestureState.x0,
+    y0: gestureState.y0,
+    moveX: gestureState.moveX,
+    moveY: gestureState.moveY,
+    numberActiveTouches: gestureState.numberActiveTouches,
   });
-  const tap = name => (e, g) => log.push([name, snap(g)]);
+  const tap = name => (event, gestureState) =>
+    log.push([name, snap(gestureState)]);
   return {
     log,
     names: () => log.map(entry => entry[0]),
@@ -170,8 +171,8 @@ describe('PanResponder.create', () => {
     const make = () =>
       engineSim(
         PanResponder.create({
-          onStartShouldSetPanResponder: (e, g) => {
-            seen.push(g.stateID);
+          onStartShouldSetPanResponder: (event, gestureState) => {
+            seen.push(gestureState.stateID);
             return true;
           },
         }).panHandlers,
@@ -207,34 +208,44 @@ describe('PanResponder.create', () => {
 
 describe('start-should-set gestures', () => {
   it('grants on touch-down, then reports travel per move and on release', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(100, 50);
     sim.move(130, 60);
     sim.move(160, 90);
     sim.up(160, 90);
 
-    expect(r.names()).toEqual(['grant', 'move', 'move', 'release']);
-    expect(r.log[1][1]).toMatchObject({dx: 30, dy: 10, x0: 100, y0: 50});
-    expect(r.log[2][1]).toMatchObject({dx: 60, dy: 40, moveX: 160, moveY: 90});
-    expect(r.log[3][1]).toMatchObject({dx: 60, dy: 40});
+    expect(recording.names()).toEqual(['grant', 'move', 'move', 'release']);
+    expect(recording.log[1][1]).toMatchObject({
+      dx: 30,
+      dy: 10,
+      x0: 100,
+      y0: 50,
+    });
+    expect(recording.log[2][1]).toMatchObject({
+      dx: 60,
+      dy: 40,
+      moveX: 160,
+      moveY: 90,
+    });
+    expect(recording.log[3][1]).toMatchObject({dx: 60, dy: 40});
   });
 
   it('folds the release point in, so dx is the full travel with no final move', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     sim.up(45, -12);
 
-    expect(r.names()).toEqual(['grant', 'release']);
-    expect(r.log[1][1]).toMatchObject({dx: 45, dy: -12});
+    expect(recording.names()).toEqual(['grant', 'release']);
+    expect(recording.log[1][1]).toMatchObject({dx: 45, dy: -12});
   });
 
   it('resets the gesture state between gestures', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     sim.move(80, 80);
@@ -243,70 +254,73 @@ describe('start-should-set gestures', () => {
     sim.down(5, 5);
     sim.move(15, 5);
 
-    const last = r.log[r.log.length - 1][1];
+    const last = recording.log[recording.log.length - 1][1];
     expect(last).toMatchObject({dx: 10, dy: 0, x0: 5, y0: 5});
   });
 
   it('does not grant when the predicate returns false', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => false});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => false});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
     sim.down(0, 0);
     sim.move(40, 0);
     sim.up(40, 0);
-    expect(r.names()).toEqual([]);
+    expect(recording.names()).toEqual([]);
   });
 
   it('routes the capture predicate to the capture query prop', () => {
-    const r = recorder({onStartShouldSetPanResponderCapture: () => true});
-    const {panHandlers} = PanResponder.create(r.config);
+    const recording = recorder({
+      onStartShouldSetPanResponderCapture: () => true,
+    });
+    const {panHandlers} = PanResponder.create(recording.config);
     expect(typeof panHandlers.onStartShouldSetResponderCapture).toBe(
       'function',
     );
     expect(panHandlers.onStartShouldSetResponder).toBeUndefined();
     engineSim(panHandlers).down(10, 10);
-    expect(r.names()).toEqual(['grant']);
+    expect(recording.names()).toEqual(['grant']);
   });
 });
 
 describe('move-should-set gestures', () => {
   it('claims the pan past the slop and re-anchors dx/dy at the grant point', () => {
-    const r = recorder({
-      onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 10,
+    const recording = recorder({
+      onMoveShouldSetPanResponder: (event, gestureState) =>
+        Math.abs(gestureState.dx) > 10,
     });
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(100, 0);
     sim.move(105, 0); // inside the slop — nothing yet
-    expect(r.names()).toEqual([]);
+    expect(recording.names()).toEqual([]);
 
     sim.move(120, 0); // crosses it: the engine grants; travel re-anchors here
-    expect(r.names()).toEqual(['grant']);
-    expect(r.log[0][1]).toMatchObject({dx: 0, dy: 0, x0: 120, y0: 0});
+    expect(recording.names()).toEqual(['grant']);
+    expect(recording.log[0][1]).toMatchObject({dx: 0, dy: 0, x0: 120, y0: 0});
 
     sim.move(130, 0); // first real move, measured from the grant point
-    expect(r.names()).toEqual(['grant', 'move']);
-    expect(r.log[1][1]).toMatchObject({dx: 10});
+    expect(recording.names()).toEqual(['grant', 'move']);
+    expect(recording.log[1][1]).toMatchObject({dx: 10});
   });
 });
 
 describe('velocity', () => {
   it('reports pixels per millisecond from the last move', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     clock = 20;
     sim.move(40, 10); // 40px / 20ms, 10px / 20ms
-    expect(r.log[1][1]).toMatchObject({vx: 2, vy: 0.5});
+    expect(recording.log[1][1]).toMatchObject({vx: 2, vy: 0.5});
 
     clock = 30;
     sim.move(45, 10); // 5px / 10ms
-    expect(r.log[2][1]).toMatchObject({vx: 0.5, vy: 0});
+    expect(recording.log[2][1]).toMatchObject({vx: 0.5, vy: 0});
   });
 
   it('keeps the fling speed on release instead of re-measuring across the lift', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     clock = 10;
@@ -314,41 +328,41 @@ describe('velocity', () => {
     clock = 26; // a frame passes with the finger resting where it landed
     sim.up(40, 0);
 
-    expect(r.log[2][1].vx).toBe(4);
-    expect(r.log[2][1].dx).toBe(40);
+    expect(recording.log[2][1].vx).toBe(4);
+    expect(recording.log[2][1].dx).toBe(40);
   });
 
   it('keeps the last velocity when the clock has not advanced (no Infinity/NaN)', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     clock = 10;
     sim.move(30, 0);
-    expect(r.log[1][1].vx).toBe(3);
+    expect(recording.log[1][1].vx).toBe(3);
 
     sim.move(60, 0); // same frame: dt === 0
-    expect(r.log[2][1].vx).toBe(3);
-    expect(Number.isFinite(r.log[2][1].vx)).toBe(true);
-    expect(r.log[2][1].dx).toBe(60);
+    expect(recording.log[2][1].vx).toBe(3);
+    expect(Number.isFinite(recording.log[2][1].vx)).toBe(true);
+    expect(recording.log[2][1].dx).toBe(60);
   });
 });
 
 describe('termination and rejection', () => {
   it('reports a cancelled touch as terminate, not release', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     sim.move(20, 0);
     sim.cancel(20, 0);
 
-    expect(r.names()).toEqual(['grant', 'move', 'terminate']);
+    expect(recording.names()).toEqual(['grant', 'move', 'terminate']);
   });
 
   it('starts clean after a terminate', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(0, 0);
     sim.move(50, 0);
@@ -356,8 +370,14 @@ describe('termination and rejection', () => {
     sim.down(200, 200);
     sim.move(210, 200);
 
-    expect(r.names()).toEqual(['grant', 'move', 'terminate', 'grant', 'move']);
-    expect(r.log[4][1]).toMatchObject({
+    expect(recording.names()).toEqual([
+      'grant',
+      'move',
+      'terminate',
+      'grant',
+      'move',
+    ]);
+    expect(recording.log[4][1]).toMatchObject({
       dx: 10,
       x0: 200,
       numberActiveTouches: 1,
@@ -365,8 +385,8 @@ describe('termination and rejection', () => {
   });
 
   it('forwards a rejection to onPanResponderReject', () => {
-    const r = recorder({onMoveShouldSetPanResponder: () => true});
-    const {panHandlers} = PanResponder.create(r.config);
+    const recording = recorder({onMoveShouldSetPanResponder: () => true});
+    const {panHandlers} = PanResponder.create(recording.config);
     panHandlers.onResponderReject({
       type: 'responderReject',
       x: 5,
@@ -374,27 +394,33 @@ describe('termination and rejection', () => {
       dx: 0,
       dy: 0,
     });
-    expect(r.names()).toEqual(['reject']);
+    expect(recording.names()).toEqual(['reject']);
   });
 });
 
 describe('multiple fingers', () => {
   it('folds a later finger into the gesture: start on join, end on its lift, release on the last', () => {
-    const r = recorder({onStartShouldSetPanResponder: () => true});
-    const sim = engineSim(PanResponder.create(r.config).panHandlers);
+    const recording = recorder({onStartShouldSetPanResponder: () => true});
+    const sim = engineSim(PanResponder.create(recording.config).panHandlers);
 
     sim.down(100, 0); // finger A → grant
     sim.downJoin(300, 0); // finger B joins → its slot re-grants → start
-    expect(r.names()).toEqual(['grant', 'start']);
-    expect(r.log[1][1].numberActiveTouches).toBe(2);
+    expect(recording.names()).toEqual(['grant', 'start']);
+    expect(recording.log[1][1].numberActiveTouches).toBe(2);
 
     sim.move(140, 0);
     sim.upJoin(300, 0); // finger B lifts → end; the gesture continues
-    expect(r.names()).toEqual(['grant', 'start', 'move', 'end']);
+    expect(recording.names()).toEqual(['grant', 'start', 'move', 'end']);
 
     sim.up(140, 0); // last finger → release
-    expect(r.names()).toEqual(['grant', 'start', 'move', 'end', 'release']);
-    expect(r.log[4][1].numberActiveTouches).toBe(0);
+    expect(recording.names()).toEqual([
+      'grant',
+      'start',
+      'move',
+      'end',
+      'release',
+    ]);
+    expect(recording.log[4][1].numberActiveTouches).toBe(0);
   });
 });
 

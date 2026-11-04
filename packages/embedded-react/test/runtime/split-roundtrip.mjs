@@ -32,51 +32,55 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url)); // .../embedded-react/test/runtime
 const jsRoot = resolve(here, '../..'); // .../embedded-react
-const libSrc = resolve(jsRoot, 'src/embedded-react/index.js');
-const simDir = resolve(jsRoot, 'sim');
+const librarySource = resolve(jsRoot, 'src/embedded-react/index.js');
+const simDirectory = resolve(jsRoot, 'sim');
 const nodePaths = [resolve(jsRoot, 'node_modules')];
 const fixtures = resolve(here, 'split-fixtures');
-const outDir = resolve(jsRoot, 'dist', 'runtime');
+const outputDirectory = resolve(jsRoot, 'dist', 'runtime');
 
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 // bridges/quickjs/build, or the bridge build ER_BRIDGE_BUILD_DIR names, as for run.mjs.
-const exe = resolve(
+const executable = resolve(
   process.env.ER_BRIDGE_BUILD_DIR ||
     resolve(jsRoot, '../../bridges/quickjs/build'),
   `er-bridge-quickjs-splittest${exeSuffix}`,
 );
 
-if (!existsSync(resolve(simDir, 'embedded-react.cjs'))) {
+if (!existsSync(resolve(simDirectory, 'embedded-react.cjs'))) {
   console.error(
-    `Prebuilt sim wasm not found at ${simDir}/embedded-react.cjs\n  Build it: node tools/web-sim/build.mjs`,
+    `Prebuilt sim wasm not found at ${simDirectory}/embedded-react.cjs\n  Build it: node tools/web-sim/build.mjs`,
   );
   process.exit(2);
 }
-if (!existsSync(exe)) {
+if (!existsSync(executable)) {
   console.error(
-    `Harness not built at:\n  ${exe}\n  Build it: cmake --build bridges/quickjs/build --target er-bridge-quickjs-splittest\n` +
+    `Harness not built at:\n  ${executable}\n  Build it: cmake --build bridges/quickjs/build --target er-bridge-quickjs-splittest\n` +
       '  or set ER_BRIDGE_BUILD_DIR to a bridge build that has it.',
   );
   process.exit(2);
 }
 
-mkdirSync(outDir, {recursive: true});
+mkdirSync(outputDirectory, {recursive: true});
 
 console.log('building vendor + boot-app + reloaded-app …');
-const vendor = await packVendor({libSrc, nodePaths, simDir});
+const vendor = await packVendor({
+  libSrc: librarySource,
+  nodePaths,
+  simDir: simDirectory,
+});
 const bootApp = await packApp({
   entry: resolve(fixtures, 'boot-app.jsx'),
   projectRoot: fixtures,
-  libSrc,
+  libSrc: librarySource,
   nodePaths,
-  simDir,
+  simDir: simDirectory,
 });
 const reloadedApp = await packApp({
   entry: resolve(fixtures, 'reloaded-app.jsx'),
   projectRoot: fixtures,
-  libSrc,
+  libSrc: librarySource,
   nodePaths,
-  simDir,
+  simDir: simDirectory,
 });
 
 const boot = await emitBootContainer({
@@ -89,11 +93,12 @@ const frame = await emitAppFrame({
   assetPack: reloadedApp.assetPack,
 });
 
-const bootPath = resolve(outDir, 'split-boot.erpkg');
-const framePath = resolve(outDir, 'split-reloaded.erpkg');
+const bootPath = resolve(outputDirectory, 'split-boot.erpkg');
+const framePath = resolve(outputDirectory, 'split-reloaded.erpkg');
 writeFileSync(bootPath, boot);
 writeFileSync(framePath, frame);
-const kb = n => `${(n / 1024).toFixed(1)} KB`;
+const BYTES_PER_KILOBYTE = 1024;
+const kb = bytes => `${(bytes / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
 console.log(
   `boot ${kb(boot.length)} (vendor ${kb(vendor.bytecodeLen)} + app ${kb(bootApp.bytecodeLen)}), ` +
     `soft-reload frame ${kb(frame.length)} (app ${kb(reloadedApp.bytecodeLen)})\n`,
@@ -101,13 +106,13 @@ console.log(
 
 try {
   process.stdout.write(
-    execFileSync(exe, [bootPath, framePath], {encoding: 'utf8'}),
+    execFileSync(executable, [bootPath, framePath], {encoding: 'utf8'}),
   );
   console.log('\nsplit round-trip: PASS');
   process.exit(0);
-} catch (e) {
-  if (e.stdout) process.stdout.write(e.stdout);
-  if (e.stderr) process.stderr.write(e.stderr);
+} catch (error) {
+  if (error.stdout) process.stdout.write(error.stdout);
+  if (error.stderr) process.stderr.write(error.stderr);
   console.error('\nsplit round-trip: FAIL');
   process.exit(1);
 }

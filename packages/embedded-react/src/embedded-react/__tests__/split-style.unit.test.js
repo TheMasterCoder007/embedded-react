@@ -28,37 +28,40 @@ describe('splitAnimatedStyle', () => {
   });
 
   it('extracts an animated top-level prop into a binding', () => {
-    const o = anim('o');
-    const {staticStyle, bindings} = splitAnimatedStyle({width: 10, opacity: o});
+    const opacity = anim('o');
+    const {staticStyle, bindings} = splitAnimatedStyle({
+      width: 10,
+      opacity: opacity,
+    });
     expect(staticStyle).toEqual({width: 10});
-    expect(bindings).toEqual([{prop: 'opacity', value: o}]);
+    expect(bindings).toEqual([{prop: 'opacity', value: opacity}]);
   });
 
   it('extracts an animated transform axis, keeping static transform entries', () => {
-    const tx = anim('tx');
+    const translateX = anim('tx');
     const {staticStyle, bindings} = splitAnimatedStyle({
-      transform: [{translateX: tx}, {rotate: '10deg'}],
+      transform: [{translateX}, {rotate: '10deg'}],
     });
     expect(staticStyle).toEqual({transform: [{rotate: '10deg'}]});
-    expect(bindings).toEqual([{prop: 'translateX', value: tx}]);
+    expect(bindings).toEqual([{prop: 'translateX', value: translateX}]);
   });
 
   it('animated scale binds both axes', () => {
-    const s = anim('s');
-    const {bindings} = splitAnimatedStyle({transform: [{scale: s}]});
+    const scale = anim('s');
+    const {bindings} = splitAnimatedStyle({transform: [{scale}]});
     expect(bindings).toEqual([
-      {prop: 'scaleX', value: s},
-      {prop: 'scaleY', value: s},
+      {prop: 'scaleX', value: scale},
+      {prop: 'scaleY', value: scale},
     ]);
   });
 
   it('flattens nested style arrays before splitting', () => {
-    const o = anim('o');
+    const opacity = anim('o');
     const {staticStyle, bindings} = splitAnimatedStyle([
       {width: 10},
-      {opacity: o},
+      {opacity},
     ]);
     expect(staticStyle).toEqual({width: 10});
-    expect(bindings).toEqual([{prop: 'opacity', value: o}]);
+    expect(bindings).toEqual([{prop: 'opacity', value: opacity}]);
   });
 });

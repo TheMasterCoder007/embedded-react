@@ -63,19 +63,19 @@ check(
 );
 
 // The native driver takes the same value through its own path to the opacity byte.
-let v = null;
+let value = null;
 function Fading() {
-  v = useAnimatedValue(1);
+  value = useAnimatedValue(1);
   return (
     <View style={BACKDROP}>
-      <Animated.View style={{...BOX, opacity: v}} />
+      <Animated.View style={{...BOX, opacity: value}} />
     </View>
   );
 }
 root.render(<Fading />);
 NativeUI.tick(0); // flush passive effects
 check(__pixel(50, 50) === RED, 'an animated opacity of 1 paints the box');
-v.setValue(NaN);
+value.setValue(NaN);
 NativeUI.commit(); // tick() only advances the engine; a frame is painted on commit
 check(
   __pixel(50, 50) === BLUE,

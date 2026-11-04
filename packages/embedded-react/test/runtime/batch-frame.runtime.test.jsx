@@ -35,33 +35,36 @@ let setC;
 let renders = 0;
 
 function App() {
-  const [a, sa] = useState(10);
-  const [b, sb] = useState(10);
-  const [c, sc] = useState(10);
-  setA = sa;
-  setB = sb;
-  setC = sc;
+  const [first, setFirst] = useState(10);
+  const [second, setSecond] = useState(10);
+  const [third, setThird] = useState(10);
+  setA = setFirst;
+  setB = setSecond;
+  setC = setThird;
   renders++;
   return (
     <View
       style={{width: 200, height: 200}}
       onTouchStart={() => (setA(60), setB(60))}>
-      <View style={{width: a, height: 20}} />
-      <View style={{width: b, height: 20}} />
-      <View style={{width: c, height: 20}} />
+      <View style={{width: first, height: 20}} />
+      <View style={{width: second, height: 20}} />
+      <View style={{width: third, height: 20}} />
     </View>
   );
 }
 
 root.render(<App />);
 
-/** Runs `fn`, then one host frame, and reports the renders and commits it cost. */
-function frame(fn) {
-  const r0 = renders;
-  const p0 = __layoutPasses();
-  fn();
+/** Runs `update`, then one host frame, and reports the renders and commits it cost. */
+function frame(update) {
+  const rendersBefore = renders;
+  const passesBefore = __layoutPasses();
+  update();
   NativeUI.tick(16);
-  return {renders: renders - r0, commits: __layoutPasses() - p0};
+  return {
+    renders: renders - rendersBefore,
+    commits: __layoutPasses() - passesBefore,
+  };
 }
 
 // ====================================================================================================
@@ -112,16 +115,16 @@ function frame(fn) {
 //    eagerly, so the layout the next hit test reads is already the new one
 // ====================================================================================================
 {
-  const r0 = renders;
-  const p0 = __layoutPasses();
+  const rendersBefore = renders;
+  const passesBefore = __layoutPasses();
   __touch(0, 10, 10);
   check(
-    __layoutPasses() - p0 === 1,
-    `a handler setting two states commits once (got ${__layoutPasses() - p0})`,
+    __layoutPasses() - passesBefore === 1,
+    `a handler setting two states commits once (got ${__layoutPasses() - passesBefore})`,
   );
   check(
-    renders - r0 === 1,
-    `a handler setting two states renders once (got ${renders - r0})`,
+    renders - rendersBefore === 1,
+    `a handler setting two states renders once (got ${renders - rendersBefore})`,
   );
   __touch(2, 10, 10);
 }
@@ -130,11 +133,11 @@ function frame(fn) {
 // 4. A render outside any frame still commits immediately — layout is never left stale
 // ====================================================================================================
 {
-  const p0 = __layoutPasses();
+  const passesBefore = __layoutPasses();
   root.render(<App key="remount" />);
   check(
-    __layoutPasses() - p0 === 1,
-    `a top-level render commits on the spot (got ${__layoutPasses() - p0})`,
+    __layoutPasses() - passesBefore === 1,
+    `a top-level render commits on the spot (got ${__layoutPasses() - passesBefore})`,
   );
 }
 

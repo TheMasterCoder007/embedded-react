@@ -25,17 +25,17 @@ import {flattenStyleObj} from '../../props.js';
 
 const render = (props, ref = null) => ImageBackground.render(props, ref);
 /** [image, ...children] of the returned <View>. */
-const kids = el => el.props.children;
-const image = el => kids(el)[0];
-const flat = el => flattenStyleObj(el.props.style);
+const kids = element => element.props.children;
+const image = element => kids(element)[0];
+const flat = element => flattenStyleObj(element.props.style);
 
 describe('ImageBackground renders as a View + filling Image', () => {
   it('returns a View whose first child is the Image', () => {
-    const el = render({source: 'bg', children: 'hi'});
-    expect(el.type).toBe('View');
-    expect(image(el).type).toBe('Image');
+    const element = render({source: 'bg', children: 'hi'});
+    expect(element.type).toBe('View');
+    expect(image(element).type).toBe('Image');
     // The image paints first (tree order), so the children are drawn over it.
-    expect(kids(el)[1]).toBe('hi');
+    expect(kids(element)[1]).toBe('hi');
   });
 
   it('gives the image an absolute fill', () => {
@@ -46,17 +46,17 @@ describe('ImageBackground renders as a View + filling Image', () => {
 
   it('puts `style` on the container and leaves it off the image', () => {
     const style = {flex: 1, padding: 8};
-    const el = render({source: 'bg', style});
-    expect(el.props.style).toBe(style);
-    expect(flat(image(el)).flex).toBe(undefined);
+    const element = render({source: 'bg', style});
+    expect(element.props.style).toBe(style);
+    expect(flat(image(element)).flex).toBe(undefined);
   });
 
   it('merges `imageStyle` over the fill', () => {
-    const el = render({
+    const element = render({
       source: 'bg',
       imageStyle: {opacity: 0.4, borderRadius: 6, top: 4},
     });
-    expect(flat(image(el))).toMatchObject({
+    expect(flat(image(element))).toMatchObject({
       position: 'absolute',
       left: 0,
       opacity: 0.4,
@@ -67,31 +67,31 @@ describe('ImageBackground renders as a View + filling Image', () => {
 
   it('forwards every other prop to the Image, as upstream does', () => {
     const onLayout = () => {};
-    const el = render({
+    const element = render({
       source: {uri: 'bg'},
       resizeMode: 'contain',
       tintColor: '#f00',
       onLayout,
     });
-    expect(image(el).props).toMatchObject({
+    expect(image(element).props).toMatchObject({
       source: {uri: 'bg'},
       resizeMode: 'contain',
       tintColor: '#f00',
       onLayout,
     });
     // …and none of them leak onto the container.
-    expect(el.props.resizeMode).toBe(undefined);
-    expect(el.props.onLayout).toBe(undefined);
+    expect(element.props.resizeMode).toBe(undefined);
+    expect(element.props.onLayout).toBe(undefined);
   });
 
   it('renders the image alone when there are no children', () => {
-    const el = render({source: 'bg'});
-    expect(kids(el)[1]).toBe(undefined);
+    const element = render({source: 'bg'});
+    expect(kids(element)[1]).toBe(undefined);
   });
 
   it('keeps multiple children in order after the image', () => {
-    const el = render({source: 'bg', children: ['a', 'b']});
-    expect(kids(el)[1]).toEqual(['a', 'b']);
+    const element = render({source: 'bg', children: ['a', 'b']});
+    expect(kids(element)[1]).toEqual(['a', 'b']);
   });
 });
 
@@ -99,16 +99,16 @@ describe('ImageBackground refs', () => {
   it('points the outer ref at the View and imageRef at the Image', () => {
     const viewRef = {current: null};
     const imageRef = {current: null};
-    const el = render({source: 'bg', imageRef}, viewRef);
-    expect(el.ref).toBe(viewRef);
-    expect(image(el).ref).toBe(imageRef);
+    const element = render({source: 'bg', imageRef}, viewRef);
+    expect(element.ref).toBe(viewRef);
+    expect(image(element).ref).toBe(imageRef);
     // imageRef is consumed here, not forwarded on as an Image prop.
-    expect(image(el).props.imageRef).toBe(undefined);
+    expect(image(element).props.imageRef).toBe(undefined);
   });
 
   it('leaves both refs null when neither is given', () => {
-    const el = render({source: 'bg'});
-    expect(el.ref).toBe(null);
-    expect(image(el).ref).toBe(null);
+    const element = render({source: 'bg'});
+    expect(element.ref).toBe(null);
+    expect(image(element).ref).toBe(null);
   });
 });

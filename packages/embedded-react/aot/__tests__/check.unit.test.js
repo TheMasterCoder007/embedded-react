@@ -30,10 +30,10 @@ import {resolveOptions} from '../compiler/options.mts';
 
 // Lowering records the values it can't vouch for; the check pass reports the first bad one, where it was lowered.
 
-const opts = resolveOptions({});
+const options = resolveOptions({});
 
 /** The app a source lowers to. */
-const lower = source => lowerApp(source, opts, new Map(), []);
+const lower = source => lowerApp(source, options, new Map(), []);
 
 /** An app whose component returns `jsx`. */
 const app = jsx =>
@@ -219,8 +219,8 @@ describe('check pass: fixed caps', () => {
 
 describe('check pass: animation times', () => {
   it('refuses a time that is not whole milliseconds from 0 to INT_MAX', () => {
-    for (const ms of [0, 300.4, 2 ** 31 - 1]) {
-      expect(millisecondsProblem('the time', ms)).toBeNull();
+    for (const milliseconds of [0, 300.4, 2 ** 31 - 1]) {
+      expect(millisecondsProblem('the time', milliseconds)).toBeNull();
     }
     expect(millisecondsProblem('the time', 0 / 0)).toMatchObject({
       message: 'AOT: the time folded to NaN, which is not a time',
@@ -238,7 +238,7 @@ describe('check pass: animation times', () => {
   });
 
   /** An app whose touch starts `animation` on `a` (and `b`), on line 6. */
-  const animApp = animation =>
+  const animationApp = animation =>
     "import React from 'react';\n" +
     "import {View, Animated, useAnimatedValue} from 'embedded-react';\n" +
     'export function App() {\n  const a = useAnimatedValue(0);\n  const b = useAnimatedValue(0);\n' +
@@ -277,7 +277,7 @@ describe('check pass: animation times', () => {
       '3e9',
     ],
   ])('refuses %s, at the time', (_what, animation, message, written) => {
-    const source = animApp(animation);
+    const source = animationApp(animation);
     const error = thrown(() => lower(source));
     expect(error.message).toBe(`AOT: ${message}`);
     expect(error.aotLoc).toMatchObject({
@@ -289,7 +289,7 @@ describe('check pass: animation times', () => {
   it('refuses times that add up past the int range, at the start', () => {
     const error = thrown(() =>
       lower(
-        animApp(
+        animationApp(
           'Animated.sequence([Animated.delay(2e9), Animated.delay(2e9), Animated.timing(a, {toValue: 1})])',
         ),
       ),
@@ -302,7 +302,7 @@ describe('check pass: animation times', () => {
 
   it('refuses a loop of delays whose passes add up past the int range, rather than cutting the wait short', () => {
     const loop = completion =>
-      animApp(
+      animationApp(
         'Animated.loop(Animated.sequence([Animated.delay(2e9)]), {iterations: 2})',
       ).replace('.start(() => {})', `.start(${completion})`);
     expect(thrown(() => lower(loop('() => {}'))).message).toBe(

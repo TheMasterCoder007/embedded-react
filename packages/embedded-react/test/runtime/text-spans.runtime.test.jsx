@@ -24,17 +24,17 @@ import {check, report} from './harness.js';
 
 const layouts = {};
 
-function App({n, bold}) {
+function App({count, bold}) {
   return (
     <View style={{width: 300, height: 200}}>
       <Text
         style={{fontSize: 16, color: 'white', alignSelf: 'flex-start'}}
-        onLayout={e => (layouts.plain = e.layout)}>
-        {`count: ${n}`}
+        onLayout={event => (layouts.plain = event.layout)}>
+        {`count: ${count}`}
       </Text>
       <Text
         style={{fontSize: 16, color: 'white', alignSelf: 'flex-start'}}
-        onLayout={e => (layouts.rich = e.layout)}>
+        onLayout={event => (layouts.rich = event.layout)}>
         Hello <Text style={{fontWeight: 'bold', color: 'red'}}>{bold}</Text>!
       </Text>
     </View>
@@ -42,7 +42,7 @@ function App({n, bold}) {
 }
 
 const root = createRoot({width: screen.width, height: screen.height});
-root.render(<App n={1} bold="world" />);
+root.render(<App count={1} bold="world" />);
 
 check(layouts.plain != null, 'interpolated Text rendered (onLayout fired)');
 check(layouts.rich != null, 'nested-span Text rendered (onLayout fired)');
@@ -56,7 +56,7 @@ check(
 );
 
 // Re-render with a much longer interpolation; the plain Text must measure wider (more glyphs).
-root.render(<App n={1234567890} bold="world" />);
+root.render(<App count={1234567890} bold="world" />);
 const wLong = layouts.plain ? layouts.plain.width : -1;
 check(
   wLong > wShort,
@@ -70,7 +70,7 @@ check(
 );
 
 // Re-render the nested-span child text; should still render cleanly.
-root.render(<App n={1234567890} bold="universe" />);
+root.render(<App count={1234567890} bold="universe" />);
 check(layouts.rich != null, 'nested-span Text re-rendered with new inner text');
 
 report('text-spans');

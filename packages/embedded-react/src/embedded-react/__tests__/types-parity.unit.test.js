@@ -28,19 +28,19 @@ import {dirname, resolve} from 'node:path';
 // counterpart and are intentionally ignored.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(HERE, '..');
+const SOURCE_DIRECTORY = resolve(HERE, '..');
 
 /** Strip // line and block comments so an `export` inside a comment is never mistaken for a real one. */
-const stripComments = src =>
-  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+const stripComments = source =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
 /** Value-export names of the runtime entry (index.js): `export { A, B as C } from '...'` + direct decls. */
-function runtimeExports(src) {
-  const code = stripComments(src);
+function runtimeExports(source) {
+  const code = stripComments(source);
   const names = new Set();
   // Re-export blocks: export { A, B as C } from './x';  and local export { A, B };
-  for (const m of code.matchAll(/export\s*\{([^}]*)\}/g)) {
-    for (const part of m[1].split(',')) {
+  for (const match of code.matchAll(/export\s*\{([^}]*)\}/g)) {
+    for (const part of match[1].split(',')) {
       const name = part
         .trim()
         .split(/\s+as\s+/)
@@ -50,10 +50,10 @@ function runtimeExports(src) {
     }
   }
   // Direct declarations: export const/let/var/function/class/async function NAME.
-  for (const m of code.matchAll(
+  for (const match of code.matchAll(
     /export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g,
   )) {
-    names.add(m[1]);
+    names.add(match[1]);
   }
   // `export * from` can't be enumerated statically — fail loudly rather than silently under-report.
   if (/export\s+\*\s+from/.test(code)) {
@@ -65,21 +65,24 @@ function runtimeExports(src) {
 }
 
 /** Value-export names of the declarations (index.d.ts): const / function / class only — NOT interface/type. */
-function declaredValueExports(src) {
-  const code = stripComments(src);
+function declaredValueExports(source) {
+  const code = stripComments(source);
   const names = new Set();
-  for (const m of code.matchAll(
+  for (const match of code.matchAll(
     /export\s+(?:declare\s+)?(?:const|function|class)\s+([A-Za-z_$][\w$]*)/g,
   )) {
-    names.add(m[1]);
+    names.add(match[1]);
   }
   return names;
 }
 
 describe('embedded-react public types match the runtime surface', () => {
-  const js = readFileSync(resolve(SRC, 'index.js'), 'utf8');
-  const dts = readFileSync(resolve(SRC, 'index.d.ts'), 'utf8');
-  const runtime = runtimeExports(js);
+  const indexSource = readFileSync(
+    resolve(SOURCE_DIRECTORY, 'index.js'),
+    'utf8',
+  );
+  const dts = readFileSync(resolve(SOURCE_DIRECTORY, 'index.d.ts'), 'utf8');
+  const runtime = runtimeExports(indexSource);
   const declared = declaredValueExports(dts);
 
   it('parses a non-trivial set of exports from both files (sanity)', () => {
@@ -88,7 +91,7 @@ describe('embedded-react public types match the runtime surface', () => {
   });
 
   it('has no runtime export missing from index.d.ts', () => {
-    const missing = [...runtime].filter(n => !declared.has(n)).sort();
+    const missing = [...runtime].filter(name => !declared.has(name)).sort();
     expect(
       missing,
       `index.js exports these with no value declaration in index.d.ts: ${missing.join(', ')}`,
@@ -96,7 +99,7 @@ describe('embedded-react public types match the runtime surface', () => {
   });
 
   it('has no index.d.ts value export absent from the runtime', () => {
-    const extra = [...declared].filter(n => !runtime.has(n)).sort();
+    const extra = [...declared].filter(name => !runtime.has(name)).sort();
     expect(
       extra,
       `index.d.ts declares these as values but index.js does not export them (make them \`type\`/\`interface\`, or export them): ${extra.join(', ')}`,

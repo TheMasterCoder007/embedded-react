@@ -20,13 +20,15 @@
 import {Animated, Easing} from 'embedded-react';
 import {check, report} from './harness.js';
 
-const lin = {duration: 100, easing: Easing.linear};
+const LINEAR = {duration: 100, easing: Easing.linear};
 
 // --- .start(callback) fires with { finished: true } on natural completion --------------------
 {
-  const v = new Animated.Value(0);
+  const value = new Animated.Value(0);
   let result = null;
-  Animated.timing(v, {toValue: 100, ...lin}).start(r => (result = r));
+  Animated.timing(value, {toValue: 100, ...LINEAR}).start(
+    outcome => (result = outcome),
+  );
   NativeUI.tick(50);
   check(result === null, 'completion callback has not fired mid-animation');
   NativeUI.tick(60); // past the end
@@ -34,16 +36,18 @@ const lin = {duration: 100, easing: Easing.linear};
     result && result.finished === true,
     'completion fires { finished: true } at the end',
   );
-  check(Math.abs(v.__getValue() - 100) < 0.5, 'value reached toValue');
+  check(Math.abs(value.__getValue() - 100) < 0.5, 'value reached toValue');
 }
 
 // --- interrupting an animation fires the old callback with { finished: false } ----------------
 {
-  const v = new Animated.Value(0);
+  const value = new Animated.Value(0);
   let first = null;
-  Animated.timing(v, {toValue: 100, ...lin}).start(r => (first = r));
+  Animated.timing(value, {toValue: 100, ...LINEAR}).start(
+    result => (first = result),
+  );
   NativeUI.tick(20);
-  Animated.timing(v, {toValue: 0, ...lin}).start(); // supersedes the first
+  Animated.timing(value, {toValue: 0, ...LINEAR}).start(); // supersedes the first
   check(
     first && first.finished === false,
     'interrupted animation reports { finished: false }',
@@ -52,16 +56,16 @@ const lin = {duration: 100, easing: Easing.linear};
 
 // --- sequence: animations run in order, callback fires once at the end ------------------------
 {
-  const v = new Animated.Value(0);
+  const value = new Animated.Value(0);
   let done = null;
   Animated.sequence([
-    Animated.timing(v, {toValue: 50, ...lin}),
-    Animated.timing(v, {toValue: 200, ...lin}),
-  ]).start(r => (done = r));
+    Animated.timing(value, {toValue: 50, ...LINEAR}),
+    Animated.timing(value, {toValue: 200, ...LINEAR}),
+  ]).start(result => (done = result));
 
   NativeUI.tick(110); // first leg completes → second starts
   check(done === null, 'sequence not done after first leg');
-  const mid = v.__getValue();
+  const mid = value.__getValue();
   check(
     mid >= 50 && mid <= 200,
     `sequence advanced into second leg (v=${mid})`,
@@ -73,25 +77,29 @@ const lin = {duration: 100, easing: Easing.linear};
     'sequence completes after the last entry',
   );
   check(
-    Math.abs(v.__getValue() - 200) < 0.5,
+    Math.abs(value.__getValue() - 200) < 0.5,
     'sequence ended at the final toValue',
   );
 }
 
 // --- parallel: both run at once, callback fires when all finish -------------------------------
 {
-  const a = new Animated.Value(0);
-  const b = new Animated.Value(0);
+  const first = new Animated.Value(0);
+  const second = new Animated.Value(0);
   let done = null;
   Animated.parallel([
-    Animated.timing(a, {toValue: 100, ...lin}),
-    Animated.timing(b, {toValue: 100, duration: 200, easing: Easing.linear}),
-  ]).start(r => (done = r));
+    Animated.timing(first, {toValue: 100, ...LINEAR}),
+    Animated.timing(second, {
+      toValue: 100,
+      duration: 200,
+      easing: Easing.linear,
+    }),
+  ]).start(result => (done = result));
 
   NativeUI.tick(110); // a done, b still going
   check(done === null, 'parallel waits for the slowest child');
-  check(Math.abs(a.__getValue() - 100) < 0.5, 'fast child (a) finished');
-  const bMid = b.__getValue();
+  check(Math.abs(first.__getValue() - 100) < 0.5, 'fast child (a) finished');
+  const bMid = second.__getValue();
   check(bMid > 40 && bMid < 90, `slow child (b) still animating (b=${bMid})`);
 
   NativeUI.tick(110); // b done
@@ -104,7 +112,7 @@ const lin = {duration: 100, easing: Easing.linear};
 // --- delay: a pure spacer driven by setTimeout -----------------------------------------------
 {
   let done = null;
-  Animated.delay(80).start(r => (done = r));
+  Animated.delay(80).start(result => (done = result));
   NativeUI.tick(50);
   check(done === null, 'delay has not elapsed yet');
   NativeUI.tick(40);
@@ -113,11 +121,11 @@ const lin = {duration: 100, easing: Easing.linear};
 
 // --- loop: repeats a fixed number of iterations, resetting the value each time ----------------
 {
-  const v = new Animated.Value(0);
+  const value = new Animated.Value(0);
   let done = null;
-  Animated.loop(Animated.timing(v, {toValue: 100, ...lin}), {
+  Animated.loop(Animated.timing(value, {toValue: 100, ...LINEAR}), {
     iterations: 3,
-  }).start(r => (done = r));
+  }).start(result => (done = result));
 
   // Three 100ms legs; step well past each. Reset-before-iteration means each leg goes 0→100.
   NativeUI.tick(110);
@@ -135,15 +143,15 @@ const lin = {duration: 100, easing: Easing.linear};
 // The sequence's internal `current` index must reset on every start(); otherwise the 2nd iteration
 // finds current === length, completes instantly, and loop re-enters synchronously → stack overflow.
 {
-  const v = new Animated.Value(0);
+  const value = new Animated.Value(0);
   let done = null;
   Animated.loop(
     Animated.sequence([
-      Animated.timing(v, {toValue: 100, ...lin}),
-      Animated.timing(v, {toValue: 0, ...lin}),
+      Animated.timing(value, {toValue: 100, ...LINEAR}),
+      Animated.timing(value, {toValue: 0, ...LINEAR}),
     ]),
     {iterations: 3},
-  ).start(r => (done = r));
+  ).start(result => (done = result));
 
   // Each iteration is two 100ms legs; one tick fires one completion, so tick per leg.
   NativeUI.tick(110);
@@ -165,15 +173,19 @@ const lin = {duration: 100, easing: Easing.linear};
 
 // --- stop() halts a sequence and reports not-finished ----------------------------------------
 {
-  const v = new Animated.Value(0);
+  const value = new Animated.Value(0);
   let done = null;
-  const seq = Animated.sequence([
-    Animated.timing(v, {toValue: 100, duration: 200, easing: Easing.linear}),
-    Animated.timing(v, {toValue: 200, ...lin}),
+  const sequence = Animated.sequence([
+    Animated.timing(value, {
+      toValue: 100,
+      duration: 200,
+      easing: Easing.linear,
+    }),
+    Animated.timing(value, {toValue: 200, ...LINEAR}),
   ]);
-  seq.start(r => (done = r));
+  sequence.start(result => (done = result));
   NativeUI.tick(50);
-  seq.stop();
+  sequence.stop();
   check(
     done && done.finished === false,
     'stopped sequence reports { finished: false }',

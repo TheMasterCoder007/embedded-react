@@ -30,8 +30,8 @@ function FlexRow({styleA}) {
   return (
     <View
       style={{width: 300, height: 50, flexDirection: 'row'}}
-      onLayout={e => (rowRect = e.layout)}>
-      <View style={styleA} onLayout={e => (aRect = e.layout)} />
+      onLayout={event => (rowRect = event.layout)}>
+      <View style={styleA} onLayout={event => (aRect = event.layout)} />
       <View style={{width: 100}} />
     </View>
   );
