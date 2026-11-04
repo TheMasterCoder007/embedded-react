@@ -30,27 +30,32 @@ import {packApp, emitAppFrame} from './pack-split.mjs';
 import {SerialUploader, listSerialPorts} from './uploader.mjs';
 import {watchTree} from './watch-tree.mjs';
 
-const kb = n => `${(n / 1024).toFixed(1)} KB`;
+const BYTES_PER_KB = 1024;
+const WATCH_DEBOUNCE_MS = 120;
+const LIVENESS_CHECKS = 30;
+const LIVENESS_INTERVAL_MS = 100;
+
+const kb = bytes => `${(bytes / BYTES_PER_KB).toFixed(1)} KB`;
 
 /** Debounce: coalesce a burst of file events (editors often write several) into one rebuild. */
-function debounce(fn, ms) {
-  let t = null;
+function debounce(callback, delayMs) {
+  let timer = null;
   return (...args) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => {
-      t = null;
-      fn(...args);
-    }, ms);
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      callback(...args);
+    }, delayMs);
   };
 }
 
 /**
  * Run the device hot-reload dev loop until interrupted.
  *
- * @param {object}   o
- * @param {string}   o.entry, o.projectRoot, o.libSrc, o.simDir, o.label, o.device
- * @param {string[]} o.nodePaths
- * @param {() => Promise<Buffer>} [o.compilePackage]  Flow B: builds the package to send. Throws to report a build error.
+ * @param {object}   options
+ * @param {string}   options.entry, options.projectRoot, options.libSrc, options.simDir, options.label, options.device
+ * @param {string[]} options.nodePaths
+ * @param {() => Promise<Buffer>} [options.compilePackage]  Flow B: builds the package to send. Throws to report a build error.
  */
 export async function runDeviceDevServer({
   entry,
@@ -94,19 +99,21 @@ export async function runDeviceDevServer({
 
   const uploader = new SerialUploader({device, onLog: onDeviceLog});
   if (compilePackage) {
-    transfer = new PackageTransfer({write: frame => uploader.writeFrame(frame)});
+    transfer = new PackageTransfer({
+      write: frame => uploader.writeFrame(frame),
+    });
   }
 
   try {
     await uploader.open();
-  } catch (e) {
-    console.error(`✗ ${e.message}`);
+  } catch (error) {
+    console.error(`✗ ${error.message}`);
     const ports = await listSerialPorts();
     if (ports.length) {
       console.error('\nAvailable ports:');
-      for (const p of ports)
+      for (const port of ports)
         console.error(
-          `  ${p.path}${p.manufacturer ? `  (${p.manufacturer})` : ''}`,
+          `  ${port.path}${port.manufacturer ? `  (${port.manufacturer})` : ''}`,
         );
     }
     process.exit(1);
@@ -131,12 +138,12 @@ export async function runDeviceDevServer({
   const nextOutcome = (timeoutMs = APPLY_TIMEOUT_MS) =>
     new Promise(resolve => {
       let done = false;
-      const finish = r => {
+      const finish = outcome => {
         if (done) return;
         done = true;
         settleOutcome = null;
         clearTimeout(timer);
-        resolve(r);
+        resolve(outcome);
       };
       const timer = setTimeout(() => finish('timeout'), timeoutMs);
       settleOutcome = finish; // armed before the send so the terminal log can't be missed
@@ -153,10 +160,10 @@ export async function runDeviceDevServer({
   ) => {
     for (let attempt = 0; ; attempt++) {
       const outcome = nextOutcome(timeoutMs);
-      uploader.send(container).catch(err => {
+      uploader.send(container).catch(error => {
         if (closing) return;
         if (settleOutcome) settleOutcome('senderr');
-        else console.error(`✗ send failed: ${err.message}`);
+        else console.error(`✗ send failed: ${error.message}`);
       });
       const result = await outcome;
       if (result === 'ok' || result === 'rejected') return result;
@@ -181,15 +188,15 @@ export async function runDeviceDevServer({
     let packageData;
     try {
       packageData = await compilePackage();
-    } catch (e) {
-      console.error(`✗ build failed: ${e.message}`);
+    } catch (error) {
+      console.error(`✗ build failed: ${error.message}`);
       return;
     }
     triedToSend = true;
     const result = await transfer
       .send(packageData, probe ? {beginTimeoutMs: PROBE_TIMEOUT_MS} : {})
-      .catch(err => {
-        if (!closing) console.error(`✗ send failed: ${err.message}`);
+      .catch(error => {
+        if (!closing) console.error(`✗ send failed: ${error.message}`);
         return 'senderr';
       });
     if (result === 'ok') {
@@ -221,7 +228,7 @@ export async function runDeviceDevServer({
           continue;
         }
         const started = Date.now();
-        let container, bytecodeLen, assetsLen;
+        let container, bytecodeLength, assetsLength;
         try {
           const app = await packApp({
             entry,
@@ -235,10 +242,10 @@ export async function runDeviceDevServer({
             appBytecode: app.bytecode,
             assetPack: app.assetPack,
           });
-          bytecodeLen = app.bytecodeLen;
-          assetsLen = app.assetsLen;
-        } catch (e) {
-          console.error(`✗ build failed: ${e.message}`);
+          bytecodeLength = app.bytecodeLen;
+          assetsLength = app.assetsLen;
+        } catch (error) {
+          console.error(`✗ build failed: ${error.message}`);
           continue;
         }
         triedToSend = true;
@@ -249,8 +256,8 @@ export async function runDeviceDevServer({
         firstSend = false;
         if (result === 'ok') {
           console.log(
-            `↻ reloaded app ${kb(container.length)} (bytecode ${kb(bytecodeLen)}` +
-              (assetsLen ? `, assets ${kb(assetsLen)}` : '') +
+            `↻ reloaded app ${kb(container.length)} (bytecode ${kb(bytecodeLength)}` +
+              (assetsLength ? `, assets ${kb(assetsLength)}` : '') +
               `) in ${Date.now() - started} ms`,
           );
         }
@@ -263,8 +270,8 @@ export async function runDeviceDevServer({
   // Before flooding the port with a frame, give the board a moment to prove it's alive (one log line is
   // enough). Flooding a firmware that never drains its RX can congest the link, so we sample liveness
   // first — this is also what tells "hot reload disabled" apart from "dead/wrong port" if no ack comes.
-  for (let i = 0; i < 30 && !sawAnyLog; i++)
-    await new Promise(r => setTimeout(r, 100));
+  for (let check = 0; check < LIVENESS_CHECKS && !sawAnyLog; check++)
+    await new Promise(resolve => setTimeout(resolve, LIVENESS_INTERVAL_MS));
 
   await reloadCycle({probe: true});
   if (triedToSend && !sawReceiverAck) {
@@ -286,7 +293,7 @@ export async function runDeviceDevServer({
     console.warn('');
   }
 
-  const onChange = debounce(reloadCycle, 120);
+  const onChange = debounce(reloadCycle, WATCH_DEBOUNCE_MS);
   const onWatchEvent = (_event, file) => {
     if (!file) return;
     // Ignore churn that can't affect the bundle (build output, deps, VCS, editor temp files).

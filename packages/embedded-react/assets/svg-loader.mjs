@@ -27,7 +27,7 @@ import {readFileSync} from 'node:fs';
 import {basename} from 'node:path';
 import {svgToVector, svgToRaster, writeRasterPng} from './bake-svg.mjs';
 
-const assetName = p => basename(p).replace(/\.[^.]+$/, '');
+const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
 
 /**
  * Registers a `.svg` onLoad on an esbuild build.
@@ -41,12 +41,12 @@ export function registerSvgVectorLoader(build, addRasterAsset) {
   build.onLoad({filter: /\.svg$/i}, async args => {
     try {
       const svg = readFileSync(args.path, 'utf8');
-      const {dropped = [], ...vec} = await svgToVector(svg);
+      const {dropped = [], ...vector} = await svgToVector(svg);
       if (dropped.length) {
-        const feats = dropped.join(', ');
+        const features = dropped.join(', ');
         if (addRasterAsset) {
           console.warn(
-            `embedded-react: ${basename(args.path)} uses unsupported SVG feature(s) [${feats}] — rasterizing ` +
+            `embedded-react: ${basename(args.path)} uses unsupported SVG feature(s) [${features}] — rasterizing ` +
               `it as a fallback image. (Raster loses scalability and costs RAM; simplify the SVG to keep it a ` +
               `live vector.)`,
           );
@@ -59,20 +59,20 @@ export function registerSvgVectorLoader(build, addRasterAsset) {
           };
         }
         console.warn(
-          `embedded-react: ${basename(args.path)} uses unsupported SVG feature(s) [${feats}] and this build has ` +
+          `embedded-react: ${basename(args.path)} uses unsupported SVG feature(s) [${features}] and this build has ` +
             `no raster fallback — that content will NOT render. Simplify the SVG, or import it via a bundler that ` +
             `supports the image pipeline.`,
         );
       }
       return {
-        contents: `module.exports = ${JSON.stringify({kind: 'vector', ...vec})};`,
+        contents: `module.exports = ${JSON.stringify({kind: 'vector', ...vector})};`,
         loader: 'js',
       };
-    } catch (e) {
+    } catch (error) {
       return {
         errors: [
           {
-            text: `embedded-react: failed to bake SVG ${args.path}: ${e.message}`,
+            text: `embedded-react: failed to bake SVG ${args.path}: ${error.message}`,
           },
         ],
       };

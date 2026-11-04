@@ -32,6 +32,19 @@ import {rasterize} from './rasterize.mjs';
 export const ASCII_FIRST = 0x20;
 export const ASCII_LAST = 0x7e;
 
+const SPACE_CODEPOINT = 0x20;
+const MAX_CODEPOINT = 0x10ffff;
+const SUPPORTED_BPP = [1, 2, 4, 8];
+const DEFAULT_BPP = 4;
+const BITS_PER_BYTE = 8;
+const UINT8_MAX = 255;
+const COVERAGE_MAX = 255;
+const COVERAGE_THRESHOLD_1BPP = 128;
+const SUPERSAMPLE = 4;
+const SUPERSAMPLE_8BPP = 8;
+const MIN_CURVE_STEPS = 6;
+const PIXELS_PER_CURVE_STEP = 3;
+
 // Named extra-symbol sets selectable from assets.config.js (glyphs: 'common' | 'minimal' | ...).
 const SYMBOLS_MINIMAL = [
   0x00b0, 0x00b1, 0x00b5, 0x00d7, 0x00f7, 0x2013, 0x2014, 0x2022, 0x2026,
@@ -46,15 +59,17 @@ const SYMBOLS_COMMON = [
   0x2713, 0x2717,
 ];
 const SYMBOLS_GREEK = [];
-for (let c = 0x0391; c <= 0x03a9; c++) if (c !== 0x03a2) SYMBOLS_GREEK.push(c); // uppercase (skip gap)
-for (let c = 0x03b1; c <= 0x03c9; c++) SYMBOLS_GREEK.push(c); // lowercase
+for (let codepoint = 0x0391; codepoint <= 0x03a9; codepoint++)
+  if (codepoint !== 0x03a2) SYMBOLS_GREEK.push(codepoint); // uppercase (skip gap)
+for (let codepoint = 0x03b1; codepoint <= 0x03c9; codepoint++)
+  SYMBOLS_GREEK.push(codepoint); // lowercase
 const SYMBOL_SETS = {
   none: [],
   minimal: SYMBOLS_MINIMAL,
   common: SYMBOLS_COMMON,
   greek: SYMBOLS_GREEK,
   'common-greek': [...new Set([...SYMBOLS_COMMON, ...SYMBOLS_GREEK])].sort(
-    (a, b) => a - b,
+    (left, right) => left - right,
   ),
 };
 
@@ -89,24 +104,24 @@ export const BUILTIN_SIZES = Object.freeze([10, 12, 16, 20, 24, 32, 48]);
  */
 function toCodepoints(spec, field) {
   if (spec === undefined || spec === null) return [];
-  const out = [];
+  const codepoints = [];
   for (const item of Array.isArray(spec) ? spec : [spec]) {
     if (typeof item === 'string') {
-      for (const ch of item) out.push(ch.codePointAt(0));
+      for (const character of item) codepoints.push(character.codePointAt(0));
     } else if (
       typeof item === 'number' &&
       Number.isInteger(item) &&
       item >= 0 &&
-      item <= 0x10ffff
+      item <= MAX_CODEPOINT
     ) {
-      out.push(item);
+      codepoints.push(item);
     } else {
       throw new Error(
         `${field}: expected a codepoint number or a string of characters, got ${JSON.stringify(item)}`,
       );
     }
   }
-  return out;
+  return codepoints;
 }
 
 /**
@@ -120,15 +135,15 @@ function toCodepoints(spec, field) {
  * @returns {number[]} Sorted extra codepoints outside the dense ASCII range.
  */
 export function resolveExtras(glyphs, extraGlyphs) {
-  let cps;
-  if (!glyphs || glyphs === 'ascii') cps = [];
+  let codepoints;
+  if (!glyphs || glyphs === 'ascii') codepoints = [];
   else if (typeof glyphs === 'string') {
     if (!SYMBOL_SETS[glyphs])
       throw new Error(
         `unknown glyph set "${glyphs}" (use 'ascii', one of [${Object.keys(SYMBOL_SETS).join(', ')}], or a list of codepoints/characters)`,
       );
-    cps = SYMBOL_SETS[glyphs].slice();
-  } else cps = toCodepoints(glyphs, 'glyphs');
+    codepoints = SYMBOL_SETS[glyphs].slice();
+  } else codepoints = toCodepoints(glyphs, 'glyphs');
 
   // A bare set name here is almost certainly meant for `glyphs` — as characters it would be a
   // silent no-op (all ASCII), so say so instead of baking nothing.
@@ -136,11 +151,11 @@ export function resolveExtras(glyphs, extraGlyphs) {
     throw new Error(
       `extraGlyphs: "${extraGlyphs}" is a named glyph set — put it in \`glyphs\` (extraGlyphs takes the characters themselves)`,
     );
-  cps.push(...toCodepoints(extraGlyphs, 'extraGlyphs'));
+  codepoints.push(...toCodepoints(extraGlyphs, 'extraGlyphs'));
 
-  return [...new Set(cps)]
-    .filter(c => c < ASCII_FIRST || c > ASCII_LAST)
-    .sort((a, b) => a - b);
+  return [...new Set(codepoints)]
+    .filter(codepoint => codepoint < ASCII_FIRST || codepoint > ASCII_LAST)
+    .sort((left, right) => left - right);
 }
 
 /**
@@ -149,13 +164,14 @@ export function resolveExtras(glyphs, extraGlyphs) {
  * simply cannot draw the character ("pick a different font").
  *
  * @param {string} path  Path to the .ttf/.otf file.
- * @returns {(cp:number)=>boolean} Always true if the file can't be read, so a probe failure never
+ * @returns {(codepoint:number)=>boolean} Always true if the file can't be read, so a probe failure never
  *          turns into a misleading claim about the font.
  */
 export function loadGlyphProbe(path) {
   try {
     const font = opentype.parse(fs.readFileSync(path).buffer);
-    return cp => font.charToGlyphIndex(String.fromCodePoint(cp)) !== 0;
+    return codepoint =>
+      font.charToGlyphIndex(String.fromCodePoint(codepoint)) !== 0;
   } catch {
     return () => true;
   }
@@ -164,36 +180,41 @@ export function loadGlyphProbe(path) {
 /**
  * Packs an 8-bit coverage bitmap (one byte per pixel) into the engine's per-row bpp layout.
  *
- * @param {Uint8Array} cov  Row-major coverage, width*height bytes.
- * @param {number} w        Glyph width in pixels.
- * @param {number} h        Glyph height in pixels.
- * @param {number} bpp      Bits per pixel (1, 2, 4, or 8).
+ * @param {Uint8Array} coverage  Row-major coverage, width*height bytes.
+ * @param {number} width         Glyph width in pixels.
+ * @param {number} height        Glyph height in pixels.
+ * @param {number} bpp           Bits per pixel (1, 2, 4, or 8).
  * @returns {number[]} Packed bytes (row-major, each row padded to a whole byte).
  */
-function packCoverage(cov, w, h, bpp) {
-  const out = [];
-  if (bpp === 8) {
-    for (let i = 0; i < w * h; i++) out.push(cov[i]);
-    return out;
+function packCoverage(coverage, width, height, bpp) {
+  const packed = [];
+  if (bpp === BITS_PER_BYTE) {
+    for (let pixel = 0; pixel < width * height; pixel++)
+      packed.push(coverage[pixel]);
+    return packed;
   }
-  const maxVal = (1 << bpp) - 1;
-  const perByte = 8 / bpp;
-  const rowBytes = Math.ceil(w / perByte);
-  for (let row = 0; row < h; row++) {
-    for (let b = 0; b < rowBytes; b++) {
+  const maxLevel = (1 << bpp) - 1;
+  const pixelsPerByte = BITS_PER_BYTE / bpp;
+  const rowBytes = Math.ceil(width / pixelsPerByte);
+  for (let row = 0; row < height; row++) {
+    for (let byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
       let byte = 0;
-      for (let s = 0; s < perByte; s++) {
-        const col = b * perByte + s;
-        if (col >= w) continue;
-        const c = cov[row * w + col];
-        const v =
-          bpp === 1 ? (c >= 128 ? 1 : 0) : Math.round((c * maxVal) / 255);
-        byte |= v << (8 - bpp - s * bpp); // first pixel in the high bits
+      for (let slot = 0; slot < pixelsPerByte; slot++) {
+        const column = byteIndex * pixelsPerByte + slot;
+        if (column >= width) continue;
+        const sample = coverage[row * width + column];
+        const level =
+          bpp === 1
+            ? sample >= COVERAGE_THRESHOLD_1BPP
+              ? 1
+              : 0
+            : Math.round((sample * maxLevel) / COVERAGE_MAX);
+        byte |= level << (BITS_PER_BYTE - bpp - slot * bpp); // first pixel in the high bits
       }
-      out.push(byte);
+      packed.push(byte);
     }
   }
-  return out;
+  return packed;
 }
 
 /**
@@ -201,33 +222,42 @@ function packCoverage(cov, w, h, bpp) {
  *
  * @returns {{glyph:object, bytes:number[]}|null} null when the font has no glyph for the codepoint.
  */
-function bakeGlyph(font, cp, pixelSize, baseline, scale, bpp) {
-  if (font.charToGlyphIndex(String.fromCodePoint(cp)) === 0 && cp !== 0x20)
+function bakeGlyph(font, codepoint, pixelSize, baseline, scale, bpp) {
+  if (
+    font.charToGlyphIndex(String.fromCodePoint(codepoint)) === 0 &&
+    codepoint !== SPACE_CODEPOINT
+  )
     return null;
-  const glyph = font.charToGlyph(String.fromCodePoint(cp));
+  const glyph = font.charToGlyph(String.fromCodePoint(codepoint));
   const advance = Math.round(glyph.advanceWidth * scale);
-  const ss = bpp === 8 ? 8 : 4;
-  const steps = Math.max(6, Math.ceil(pixelSize / 3));
-  const r = rasterize(glyph.getPath(0, baseline, pixelSize), {ss, steps});
+  const supersample = bpp === BITS_PER_BYTE ? SUPERSAMPLE_8BPP : SUPERSAMPLE;
+  const steps = Math.max(
+    MIN_CURVE_STEPS,
+    Math.ceil(pixelSize / PIXELS_PER_CURVE_STEP),
+  );
+  const raster = rasterize(glyph.getPath(0, baseline, pixelSize), {
+    ss: supersample,
+    steps,
+  });
 
-  if (r.width > 255 || r.height > 255) {
+  if (raster.width > UINT8_MAX || raster.height > UINT8_MAX) {
     throw new Error(
-      `glyph U+${cp.toString(16)} is ${r.width}x${r.height}px — exceeds the uint8 glyph limit`,
+      `glyph U+${codepoint.toString(16)} is ${raster.width}x${raster.height}px — exceeds the uint8 glyph limit`,
     );
   }
-  const glyphRec = {
+  const glyphRecord = {
     bitmapOffset: 0, // filled in by the caller once the running offset is known
-    width: r.width,
-    height: r.height,
-    xOffset: r.xOffset,
-    yOffset: r.yOffset,
-    advance: Math.min(advance, 255),
+    width: raster.width,
+    height: raster.height,
+    xOffset: raster.xOffset,
+    yOffset: raster.yOffset,
+    advance: Math.min(advance, UINT8_MAX),
   };
   const bytes =
-    r.width > 0 && r.height > 0
-      ? packCoverage(r.coverage, r.width, r.height, bpp)
+    raster.width > 0 && raster.height > 0
+      ? packCoverage(raster.coverage, raster.width, raster.height, bpp)
       : [];
-  return {glyph: glyphRec, bytes};
+  return {glyph: glyphRecord, bytes};
 }
 
 /**
@@ -247,16 +277,16 @@ export function bakeFont({
   path,
   family,
   sizes,
-  bpp = 4,
+  bpp = DEFAULT_BPP,
   glyphs = 'ascii',
   extraGlyphs,
 }) {
-  if (![1, 2, 4, 8].includes(bpp))
+  if (!SUPPORTED_BPP.includes(bpp))
     throw new Error(`bpp must be 1, 2, 4, or 8 (got ${bpp})`);
   const font = opentype.parse(fs.readFileSync(path).buffer);
-  const extraCps = resolveExtras(glyphs, extraGlyphs);
+  const extraCodepoints = resolveExtras(glyphs, extraGlyphs);
 
-  const baked = [];
+  const bakedSizes = [];
   for (const pixelSize of sizes) {
     const scale = pixelSize / font.unitsPerEm;
     const baseline = Math.round(font.ascender * scale);
@@ -264,8 +294,15 @@ export function bakeFont({
 
     const bitmap = [];
     const dense = [];
-    for (let cp = ASCII_FIRST; cp <= ASCII_LAST; cp++) {
-      const baked1 = bakeGlyph(font, cp, pixelSize, baseline, scale, bpp) || {
+    for (let codepoint = ASCII_FIRST; codepoint <= ASCII_LAST; codepoint++) {
+      const bakedGlyph = bakeGlyph(
+        font,
+        codepoint,
+        pixelSize,
+        baseline,
+        scale,
+        bpp,
+      ) || {
         glyph: {
           bitmapOffset: 0,
           width: 0,
@@ -276,24 +313,33 @@ export function bakeFont({
         },
         bytes: [],
       };
-      baked1.glyph.bitmapOffset = baked1.bytes.length > 0 ? bitmap.length : 0;
-      bitmap.push(...baked1.bytes);
-      dense.push(baked1.glyph);
+      bakedGlyph.glyph.bitmapOffset =
+        bakedGlyph.bytes.length > 0 ? bitmap.length : 0;
+      bitmap.push(...bakedGlyph.bytes);
+      dense.push(bakedGlyph.glyph);
     }
 
     const extras = [];
-    for (const cp of extraCps) {
-      const b = bakeGlyph(font, cp, pixelSize, baseline, scale, bpp);
-      if (!b) continue; // font has no such glyph
-      b.glyph.bitmapOffset = b.bytes.length > 0 ? bitmap.length : 0;
-      bitmap.push(...b.bytes);
-      extras.push({codepoint: cp, info: b.glyph});
+    for (const codepoint of extraCodepoints) {
+      const bakedGlyph = bakeGlyph(
+        font,
+        codepoint,
+        pixelSize,
+        baseline,
+        scale,
+        bpp,
+      );
+      if (!bakedGlyph) continue; // font has no such glyph
+      bakedGlyph.glyph.bitmapOffset =
+        bakedGlyph.bytes.length > 0 ? bitmap.length : 0;
+      bitmap.push(...bakedGlyph.bytes);
+      extras.push({codepoint, info: bakedGlyph.glyph});
     }
 
-    baked.push({
+    bakedSizes.push({
       pixelSize,
-      lineHeight: Math.min(lineHeight, 255),
-      baseline: Math.min(baseline, 255),
+      lineHeight: Math.min(lineHeight, UINT8_MAX),
+      baseline: Math.min(baseline, UINT8_MAX),
       first: ASCII_FIRST,
       last: ASCII_LAST,
       bpp,
@@ -302,5 +348,5 @@ export function bakeFont({
       bitmap,
     });
   }
-  return {family, path, sizes: baked};
+  return {family, path, sizes: bakedSizes};
 }

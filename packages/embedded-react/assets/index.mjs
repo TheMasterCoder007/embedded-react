@@ -47,13 +47,13 @@ export function bakeAssets({
   source,
   usedSizes,
 }) {
-  const bakedImages = images.map(i => bakeImage(i));
-  const bakedFonts = fonts.map(f => bakeFont(f));
+  const bakedImages = images.map(image => bakeImage(image));
+  const bakedFonts = fonts.map(font => bakeFont(font));
   if (source) warnMissingGlyphs({source, fonts: bakedFonts});
   if (usedSizes) warnFontSizes({used: usedSizes, fonts: bakedFonts});
 
   const headerName = 'assets.generated.h';
-  const {c, h} = emitAssetsC({
+  const {c: cSource, h: header} = emitAssetsC({
     headerName,
     images: bakedImages,
     fonts: bakedFonts,
@@ -62,10 +62,13 @@ export function bakeAssets({
   fs.mkdirSync(outDir, {recursive: true});
   const cPath = path.join(outDir, 'assets.generated.c');
   const hPath = path.join(outDir, headerName);
-  fs.writeFileSync(cPath, c);
-  fs.writeFileSync(hPath, h);
+  fs.writeFileSync(cPath, cSource);
+  fs.writeFileSync(hPath, header);
 
-  const fontSizes = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
+  const fontSizes = bakedFonts.reduce(
+    (total, font) => total + font.sizes.length,
+    0,
+  );
   return {cPath, hPath, images: bakedImages.length, fonts: fontSizes};
 }
 
@@ -80,8 +83,8 @@ export function bakeAssets({
  */
 export function bakeAssetPackBytes({images = [], fonts = []}) {
   return emitAssetPack({
-    images: images.map(i => bakeImage(i)),
-    fonts: fonts.map(f => bakeFont(f)),
+    images: images.map(image => bakeImage(image)),
+    fonts: fonts.map(font => bakeFont(font)),
   });
 }
 
@@ -105,14 +108,17 @@ export function bakeAssetPack({
   source,
   usedSizes,
 }) {
-  const bakedImages = images.map(i => bakeImage(i));
-  const bakedFonts = fonts.map(f => bakeFont(f));
+  const bakedImages = images.map(image => bakeImage(image));
+  const bakedFonts = fonts.map(font => bakeFont(font));
   if (source) warnMissingGlyphs({source, fonts: bakedFonts});
   if (usedSizes) warnFontSizes({used: usedSizes, fonts: bakedFonts});
   const pack = emitAssetPack({images: bakedImages, fonts: bakedFonts});
   fs.mkdirSync(path.dirname(outPath), {recursive: true});
   fs.writeFileSync(outPath, pack);
-  const fontSizes = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
+  const fontSizes = bakedFonts.reduce(
+    (total, font) => total + font.sizes.length,
+    0,
+  );
   return {
     path: outPath,
     bytes: pack.length,

@@ -21,6 +21,9 @@
 /** Fallback pixel size when no fontSize could be discovered and the config pins none. */
 const DEFAULT_SIZE = 16;
 
+/** Bits per pixel when the config pins none. */
+const DEFAULT_BPP = 4;
+
 /**
  * Resolves discovered font imports against their per-project config.
  *
@@ -32,18 +35,18 @@ const DEFAULT_SIZE = 16;
  */
 export function resolveFontJobs(fonts, fontConfig = {}, discoveredSizes = []) {
   return [...fonts.entries()].map(([family, path]) => {
-    const fc = fontConfig[family] || {};
+    const familyConfig = fontConfig[family] || {};
     return {
       path,
       family,
-      sizes: fc.sizes?.length
-        ? fc.sizes
+      sizes: familyConfig.sizes?.length
+        ? familyConfig.sizes
         : discoveredSizes.length
           ? discoveredSizes
           : [DEFAULT_SIZE],
-      bpp: fc.bpp ?? 4,
-      glyphs: fc.glyphs ?? 'ascii',
-      extraGlyphs: fc.extraGlyphs,
+      bpp: familyConfig.bpp ?? DEFAULT_BPP,
+      glyphs: familyConfig.glyphs ?? 'ascii',
+      extraGlyphs: familyConfig.extraGlyphs,
     };
   });
 }

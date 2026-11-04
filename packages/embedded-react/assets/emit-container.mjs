@@ -50,6 +50,16 @@
 
 const FORMAT_VERSION = 1;
 
+const HEADER_BYTES = 12; // magic + format_version + crc32
+const TAG_LENGTH_BYTES = 2;
+const SECTION_COUNT_BYTES = 4;
+const SECTION_HEADER_BYTES = 8; // type + len
+const SECTION_ALIGNMENT = 4;
+
+const CRC32_POLYNOMIAL = 0xedb88320;
+const CRC32_INVERT = 0xffffffff;
+const BITS_PER_BYTE = 8;
+
 export const SECTION_PAD = 0;
 export const SECTION_BYTECODE = 1;
 export const SECTION_ASSET_PACK = 2;
@@ -61,18 +71,18 @@ export const SECTION_VENDOR_BYTECODE = 3;
  * container, the hot-reload transport frame that carries it, and the device's verification of both).
  * hotreload/protocol.mjs imports this rather than keeping its own.
  *
- * @param {Buffer|Uint8Array} buf  Bytes to checksum.
+ * @param {Buffer|Uint8Array} data  Bytes to checksum.
  * @returns {number} The CRC as an unsigned 32-bit integer.
  */
-export function crc32(buf) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) {
-    crc ^= buf[i];
-    for (let b = 0; b < 8; b++) {
-      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+export function crc32(data) {
+  let crc = CRC32_INVERT;
+  for (let index = 0; index < data.length; index++) {
+    crc ^= data[index];
+    for (let bit = 0; bit < BITS_PER_BYTE; bit++) {
+      crc = (crc >>> 1) ^ (CRC32_POLYNOMIAL & -(crc & 1));
     }
   }
-  return (crc ^ 0xffffffff) >>> 0;
+  return (crc ^ CRC32_INVERT) >>> 0;
 }
 
 /** Accumulates little-endian binary chunks (mirrors emit-pack.mjs's Writer). */
@@ -80,23 +90,23 @@ class Writer {
   constructor() {
     this.chunks = [];
   }
-  u16(v) {
-    const b = Buffer.alloc(2);
-    b.writeUInt16LE(v & 0xffff, 0);
-    this.chunks.push(b);
+  u16(value) {
+    const buffer = Buffer.alloc(2);
+    buffer.writeUInt16LE(value & 0xffff, 0);
+    this.chunks.push(buffer);
   }
-  u32(v) {
-    const b = Buffer.alloc(4);
-    b.writeUInt32LE(v >>> 0, 0);
-    this.chunks.push(b);
+  u32(value) {
+    const buffer = Buffer.alloc(4);
+    buffer.writeUInt32LE(value >>> 0, 0);
+    this.chunks.push(buffer);
   }
-  str(s) {
-    const b = Buffer.from(s, 'utf8');
-    this.u16(b.length);
-    this.chunks.push(b);
+  str(text) {
+    const buffer = Buffer.from(text, 'utf8');
+    this.u16(buffer.length);
+    this.chunks.push(buffer);
   }
-  bytes(buf) {
-    this.chunks.push(Buffer.from(buf));
+  bytes(data) {
+    this.chunks.push(Buffer.from(data));
   }
   done() {
     return Buffer.concat(this.chunks);
@@ -135,33 +145,41 @@ export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
   // 4-align the asset pack's first byte relative to the container (see the alignment contract above)
   // by inserting a type-0 padding section ahead of it when the layout calls for one. Walk the layout
   // once to place pads, then write — section_count must already include them.
-  const withPads = [];
-  let off = 12 + 2 + Buffer.byteLength(qjsTag, 'utf8') + 4; // header + tag + section_count
+  const paddedSections = [];
+  let offset =
+    HEADER_BYTES +
+    TAG_LENGTH_BYTES +
+    Buffer.byteLength(qjsTag, 'utf8') +
+    SECTION_COUNT_BYTES;
   for (const [type, data] of sections) {
     if (type === SECTION_ASSET_PACK) {
-      const pad = (4 - ((off + 8) % 4)) % 4; // +8 = this section's own type+len header
-      if (pad) {
-        withPads.push([SECTION_PAD, Buffer.alloc(pad)]);
-        off += 8 + pad;
+      // Counts this section's own type+len header.
+      const padding =
+        (SECTION_ALIGNMENT -
+          ((offset + SECTION_HEADER_BYTES) % SECTION_ALIGNMENT)) %
+        SECTION_ALIGNMENT;
+      if (padding) {
+        paddedSections.push([SECTION_PAD, Buffer.alloc(padding)]);
+        offset += SECTION_HEADER_BYTES + padding;
       }
     }
-    withPads.push([type, data]);
-    off += 8 + data.length;
+    paddedSections.push([type, data]);
+    offset += SECTION_HEADER_BYTES + data.length;
   }
 
-  body.u32(withPads.length);
-  for (const [type, data] of withPads) {
+  body.u32(paddedSections.length);
+  for (const [type, data] of paddedSections) {
     body.u32(type);
     body.u32(data.length);
     body.bytes(data);
   }
   const bodyBytes = body.done();
 
-  const head = new Writer();
-  head.bytes(Buffer.from('ERCF', 'ascii'));
-  head.u32(FORMAT_VERSION);
-  head.u32(crc32(bodyBytes));
-  return Buffer.concat([head.done(), bodyBytes]);
+  const header = new Writer();
+  header.bytes(Buffer.from('ERCF', 'ascii'));
+  header.u32(FORMAT_VERSION);
+  header.u32(crc32(bodyBytes));
+  return Buffer.concat([header.done(), bodyBytes]);
 }
 
 export const SECTION_PROGRAM = 4;
@@ -189,34 +207,45 @@ export function emitPackageContainer({program, assetPack, debug}) {
   sections.push([SECTION_PROGRAM, program]);
   if (debug && debug.length) sections.push([SECTION_DEBUG, debug]);
 
-  const withPads = [];
+  const paddedSections = [];
   const placed = [];
-  let off = 12 + 2 + Buffer.byteLength(tag, 'utf8') + 4; // header + tag + section_count
+  let offset =
+    HEADER_BYTES +
+    TAG_LENGTH_BYTES +
+    Buffer.byteLength(tag, 'utf8') +
+    SECTION_COUNT_BYTES;
   for (const [type, data] of sections) {
-    if ((off + 8) % 4) {
+    if ((offset + SECTION_HEADER_BYTES) % SECTION_ALIGNMENT) {
       // A padding section has its own 8-byte header, so its data has to cover what is left after it.
-      const pad = (4 - ((off + 16) % 4)) % 4;
-      withPads.push([SECTION_PAD, Buffer.alloc(pad)]);
-      off += 8 + pad;
+      const padding =
+        (SECTION_ALIGNMENT -
+          ((offset + 2 * SECTION_HEADER_BYTES) % SECTION_ALIGNMENT)) %
+        SECTION_ALIGNMENT;
+      paddedSections.push([SECTION_PAD, Buffer.alloc(padding)]);
+      offset += SECTION_HEADER_BYTES + padding;
     }
-    placed.push({type, offset: off + 8, bytes: data.length});
-    withPads.push([type, data]);
-    off += 8 + data.length;
+    placed.push({
+      type,
+      offset: offset + SECTION_HEADER_BYTES,
+      bytes: data.length,
+    });
+    paddedSections.push([type, data]);
+    offset += SECTION_HEADER_BYTES + data.length;
   }
 
   const body = new Writer();
   body.str(tag);
-  body.u32(withPads.length);
-  for (const [type, data] of withPads) {
+  body.u32(paddedSections.length);
+  for (const [type, data] of paddedSections) {
     body.u32(type);
     body.u32(data.length);
     body.bytes(data);
   }
   const bodyBytes = body.done();
 
-  const head = new Writer();
-  head.bytes(Buffer.from('ERCF', 'ascii'));
-  head.u32(FORMAT_VERSION);
-  head.u32(crc32(bodyBytes));
-  return {bytes: Buffer.concat([head.done(), bodyBytes]), sections: placed};
+  const header = new Writer();
+  header.bytes(Buffer.from('ERCF', 'ascii'));
+  header.u32(FORMAT_VERSION);
+  header.u32(crc32(bodyBytes));
+  return {bytes: Buffer.concat([header.done(), bodyBytes]), sections: placed};
 }

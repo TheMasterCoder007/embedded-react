@@ -88,14 +88,14 @@ globalThis.require = function (id) {
 /**
  * Bundle the vendor chunk (react + reconciler + embedded-react lib) to a self-contained IIFE source.
  *
- * @param {object}   o
- * @param {string}   o.libSrc     embedded-react library entry (aliased as 'embedded-react').
- * @param {string[]} o.nodePaths  esbuild nodePaths (package + project node_modules).
+ * @param {object}   options
+ * @param {string}   options.libSrc     embedded-react library entry (aliased as 'embedded-react').
+ * @param {string[]} options.nodePaths  esbuild nodePaths (package + project node_modules).
  * @returns {Promise<string>} The bundled JS source.
  */
 export async function bundleVendorSource({libSrc, nodePaths}) {
   const esbuild = require('esbuild');
-  const out = await esbuild.build({
+  const result = await esbuild.build({
     ...esbuildCommon(nodePaths),
     stdin: {
       contents: vendorEntrySource(),
@@ -105,7 +105,7 @@ export async function bundleVendorSource({libSrc, nodePaths}) {
     },
     alias: {'embedded-react': libSrc},
   });
-  return out.outputFiles[0].text;
+  return result.outputFiles[0].text;
 }
 
 /**
@@ -114,51 +114,55 @@ export async function bundleVendorSource({libSrc, nodePaths}) {
  * own source gets the useState→persist transform so state survives a live reload.
  */
 function makeAssetPlugin({images, fonts, persistHooks, projectRoot}) {
-  const assetName = p => basename(p).replace(/\.[^.]+$/, '');
+  const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
   return {
     name: 'embedded-react-assets',
-    async setup(b) {
+    async setup(build) {
       const {registerSvgVectorLoader} =
         await import('../assets/svg-loader.mjs');
       if (persistHooks) {
-        b.onLoad({filter: /\.(jsx?|tsx?)$/}, a => {
-          const {transformPersist, shouldPersist, projNorm} = persistHooks;
-          if (!shouldPersist(a.path, projNorm)) return undefined;
+        build.onLoad({filter: /\.(jsx?|tsx?)$/}, args => {
+          const {transformPersist, shouldPersist, normalizedProjectRoot} =
+            persistHooks;
+          if (!shouldPersist(args.path, normalizedProjectRoot))
+            return undefined;
           try {
-            const loader = a.path.endsWith('.tsx')
+            const loader = args.path.endsWith('.tsx')
               ? 'tsx'
-              : a.path.endsWith('.ts')
+              : args.path.endsWith('.ts')
                 ? 'ts'
                 : 'jsx';
             return {
               contents: transformPersist(
-                readFileSync(a.path, 'utf8'),
-                relative(projectRoot, a.path).replace(/\\/g, '/'),
+                readFileSync(args.path, 'utf8'),
+                relative(projectRoot, args.path).replace(/\\/g, '/'),
               ),
               loader,
             };
-          } catch (e) {
-            return {errors: [{text: `persist transform: ${e.message}`}]};
+          } catch (error) {
+            return {errors: [{text: `persist transform: ${error.message}`}]};
           }
         });
       }
-      b.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, a => {
-        const n = assetName(a.path);
-        images.set(n, a.path);
+      build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
+        const name = assetName(args.path);
+        images.set(name, args.path);
         return {
-          contents: `module.exports = ${JSON.stringify(n)};`,
+          contents: `module.exports = ${JSON.stringify(name)};`,
           loader: 'js',
         };
       });
-      b.onLoad({filter: /\.(ttf|otf)$/i}, a => {
-        const f = assetName(a.path);
-        fonts.set(f, a.path);
+      build.onLoad({filter: /\.(ttf|otf)$/i}, args => {
+        const family = assetName(args.path);
+        fonts.set(family, args.path);
         return {
-          contents: `module.exports = ${JSON.stringify(f)};`,
+          contents: `module.exports = ${JSON.stringify(family)};`,
           loader: 'js',
         };
       });
-      registerSvgVectorLoader(b, (name, p) => images.set(name, p));
+      registerSvgVectorLoader(build, (name, pngPath) =>
+        images.set(name, pngPath),
+      );
     },
   };
 }
@@ -184,17 +188,17 @@ export async function bundleAppSource({
     persistHooks = {
       transformPersist,
       shouldPersist,
-      projNorm: projectRoot.replace(/\\/g, '/'),
+      normalizedProjectRoot: projectRoot.replace(/\\/g, '/'),
     };
   }
 
-  const out = await esbuild.build({
+  const result = await esbuild.build({
     ...esbuildCommon(nodePaths),
     entryPoints: [entry],
     external: VENDOR_EXTERNALS,
     plugins: [makeAssetPlugin({images, fonts, persistHooks, projectRoot})],
   });
-  return {source: out.outputFiles[0].text, images, fonts};
+  return {source: result.outputFiles[0].text, images, fonts};
 }
 
 /** Bake the discovered images/fonts into an ERPK asset pack (or null if there are none). */
@@ -209,14 +213,17 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
 
   const usedSizes = analyzeFontSizes(source);
 
-  let cfg = {};
-  const cp = resolve(projectRoot, 'assets.config.js');
-  if (existsSync(cp))
-    cfg =
-      (await import(`${pathToFileURL(cp).href}?t=${statSync(cp).mtimeMs}`))
-        .default || {};
-  const fontConfig = cfg.fonts || {};
-  const imageConfig = cfg.images || {};
+  let config = {};
+  const configPath = resolve(projectRoot, 'assets.config.js');
+  if (existsSync(configPath))
+    config =
+      (
+        await import(
+          `${pathToFileURL(configPath).href}?t=${statSync(configPath).mtimeMs}`
+        )
+      ).default || {};
+  const fontConfig = config.fonts || {};
+  const imageConfig = config.images || {};
 
   const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
@@ -296,9 +303,9 @@ export function emitAppFrame({appBytecode, assetPack}) {
 }
 
 // emitBootContainer/emitAppFrame are async (emit() dynamically imports the emitter) — callers await them.
-async function emit(opts) {
+async function emit(options) {
   const {emitContainer} = await import('../assets/emit-container.mjs');
-  return emitContainer({...opts, qjsTag: QJS_TAG});
+  return emitContainer({...options, qjsTag: QJS_TAG});
 }
 
 export {QJS_TAG};

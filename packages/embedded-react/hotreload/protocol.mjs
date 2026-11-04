@@ -43,6 +43,14 @@ export const ERHR_MAGIC = 'ERHR';
 export const ERHR_PROTO_VERSION = 1;
 export const ERHR_HEADER_SIZE = 16;
 
+const MAGIC_BYTES = 4;
+const VERSION_OFFSET = 4;
+const TYPE_OFFSET = 5;
+const FLAGS_OFFSET = 6;
+const PAYLOAD_LENGTH_OFFSET = 8;
+const PAYLOAD_CRC_OFFSET = 12;
+const DEFAULT_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
+
 /** Frame message types (room to grow: ping/ack/reset later without a version bump). */
 export const MSG_LOAD_CONTAINER = 1;
 export const MSG_PACKAGE_BEGIN = 2; // Flow B: see package-transfer.mjs
@@ -62,11 +70,11 @@ export function encodeFrame(erpkg, {type = MSG_LOAD_CONTAINER} = {}) {
   const payload = Buffer.from(erpkg);
   const header = Buffer.alloc(ERHR_HEADER_SIZE);
   header.write(ERHR_MAGIC, 0, 'ascii');
-  header.writeUInt8(ERHR_PROTO_VERSION, 4);
-  header.writeUInt8(type & 0xff, 5);
-  header.writeUInt16LE(0, 6); // flags (reserved)
-  header.writeUInt32LE(payload.length >>> 0, 8);
-  header.writeUInt32LE(crc32(payload), 12);
+  header.writeUInt8(ERHR_PROTO_VERSION, VERSION_OFFSET);
+  header.writeUInt8(type & 0xff, TYPE_OFFSET);
+  header.writeUInt16LE(0, FLAGS_OFFSET); // reserved
+  header.writeUInt32LE(payload.length >>> 0, PAYLOAD_LENGTH_OFFSET);
+  header.writeUInt32LE(crc32(payload), PAYLOAD_CRC_OFFSET);
   return Buffer.concat([header, payload]);
 }
 
@@ -83,7 +91,7 @@ export class FrameDecoder {
    * @param {(payload: Buffer, meta: {type: number}) => void} [handlers.onFrame]  A complete, CRC-valid frame.
    * @param {(reason: string) => void}                        [handlers.onError]  A framed payload failed validation.
    */
-  constructor({onFrame, onError, maxPayload = 32 * 1024 * 1024} = {}) {
+  constructor({onFrame, onError, maxPayload = DEFAULT_MAX_PAYLOAD_BYTES} = {}) {
     this.onFrame = onFrame || (() => {});
     this.onError = onError || (() => {});
     this.maxPayload = maxPayload; // guard against a coincidental "ERHR" in noise claiming a huge length
@@ -92,76 +100,79 @@ export class FrameDecoder {
 
   _reset() {
     this._state = 'scan'; // scan magic → header → payload
-    this._window = Buffer.alloc(4); // rolling 4-byte window for magic resync
-    this._winLen = 0;
+    this._window = Buffer.alloc(MAGIC_BYTES); // rolling 4-byte window for magic resync
+    this._windowLength = 0;
     this._header = Buffer.alloc(ERHR_HEADER_SIZE);
-    this._headerGot = 4; // magic already in _header once matched
-    this._payloadLen = 0;
+    this._headerReceived = MAGIC_BYTES; // magic already in _header once matched
+    this._payloadLength = 0;
     this._payloadCrc = 0;
     this._type = 0;
     this._payload = null;
-    this._payloadGot = 0;
+    this._payloadReceived = 0;
   }
 
   /** Feed a chunk of received bytes. May complete zero, one, or several frames. */
   push(chunk) {
     const data = Buffer.from(chunk);
-    for (let i = 0; i < data.length; i++) this._byte(data[i]);
+    for (let index = 0; index < data.length; index++) this._byte(data[index]);
   }
 
-  _byte(b) {
+  _byte(byte) {
     if (this._state === 'scan') {
       // Slide the byte into a 4-byte window; a full match transitions to header collection. This
       // naturally handles partial matches and overlaps without backtracking.
-      if (this._winLen < 4) {
-        this._window[this._winLen++] = b;
+      if (this._windowLength < MAGIC_BYTES) {
+        this._window[this._windowLength++] = byte;
       } else {
         this._window.copyWithin(0, 1);
-        this._window[3] = b;
+        this._window[MAGIC_BYTES - 1] = byte;
       }
-      if (this._winLen === 4 && this._window.toString('ascii') === ERHR_MAGIC) {
-        this._window.copy(this._header, 0, 0, 4);
-        this._headerGot = 4;
-        this._winLen = 0;
+      if (
+        this._windowLength === MAGIC_BYTES &&
+        this._window.toString('ascii') === ERHR_MAGIC
+      ) {
+        this._window.copy(this._header, 0, 0, MAGIC_BYTES);
+        this._headerReceived = MAGIC_BYTES;
+        this._windowLength = 0;
         this._state = 'header';
       }
       return;
     }
     if (this._state === 'header') {
-      this._header[this._headerGot++] = b;
-      if (this._headerGot < ERHR_HEADER_SIZE) return;
-      const version = this._header.readUInt8(4);
-      this._type = this._header.readUInt8(5);
-      this._payloadLen = this._header.readUInt32LE(8);
-      this._payloadCrc = this._header.readUInt32LE(12);
+      this._header[this._headerReceived++] = byte;
+      if (this._headerReceived < ERHR_HEADER_SIZE) return;
+      const version = this._header.readUInt8(VERSION_OFFSET);
+      this._type = this._header.readUInt8(TYPE_OFFSET);
+      this._payloadLength = this._header.readUInt32LE(PAYLOAD_LENGTH_OFFSET);
+      this._payloadCrc = this._header.readUInt32LE(PAYLOAD_CRC_OFFSET);
       if (version !== ERHR_PROTO_VERSION) {
         this.onError(`unsupported protocol version ${version}`);
         this._reset();
         return;
       }
-      if (this._payloadLen === 0) {
+      if (this._payloadLength === 0) {
         this.onError('empty payload');
         this._reset();
         return;
       }
-      if (this._payloadLen > this.maxPayload) {
+      if (this._payloadLength > this.maxPayload) {
         // Almost certainly a false magic in noise — drop it and keep scanning, don't allocate.
-        this.onError(`payload too large (${this._payloadLen} bytes)`);
+        this.onError(`payload too large (${this._payloadLength} bytes)`);
         this._reset();
         return;
       }
-      this._payload = Buffer.alloc(this._payloadLen);
-      this._payloadGot = 0;
+      this._payload = Buffer.alloc(this._payloadLength);
+      this._payloadReceived = 0;
       this._state = 'payload';
       return;
     }
     // payload
-    this._payload[this._payloadGot++] = b;
-    if (this._payloadGot < this._payloadLen) return;
-    const got = crc32(this._payload);
-    if (got !== this._payloadCrc) {
+    this._payload[this._payloadReceived++] = byte;
+    if (this._payloadReceived < this._payloadLength) return;
+    const actualCrc = crc32(this._payload);
+    if (actualCrc !== this._payloadCrc) {
       this.onError(
-        `payload CRC mismatch (got ${got.toString(16)}, want ${this._payloadCrc.toString(16)})`,
+        `payload CRC mismatch (got ${actualCrc.toString(16)}, want ${this._payloadCrc.toString(16)})`,
       );
       this._reset();
       return;
