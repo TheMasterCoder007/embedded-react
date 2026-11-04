@@ -38,10 +38,10 @@ const GOT_LINE = /erb reload: got (\d+)/;
 
 /** What a line from the device says, or null when it is only a log. */
 export function parseReply(line) {
-  const ready = READY_LINE.exec(line);
-  if (ready) return {kind: 'ready', value: Number(ready[1])};
-  const got = GOT_LINE.exec(line);
-  if (got) return {kind: 'got', value: Number(got[1])};
+  const readyMatch = READY_LINE.exec(line);
+  if (readyMatch) return {kind: 'ready', value: Number(readyMatch[1])};
+  const gotMatch = GOT_LINE.exec(line);
+  if (gotMatch) return {kind: 'got', value: Number(gotMatch[1])};
   if (/dropped frame/i.test(line)) return {kind: 'dropped'};
   if (/hot reload:\s*ok\b/i.test(line)) return {kind: 'ok'};
   if (/hot reload:/i.test(line)) return {kind: 'rejected'};
@@ -57,17 +57,17 @@ export function beginFrame(packageBytes) {
 
 /** The frame for the bytes of @p packageData at @p offset. */
 export function chunkFrame(packageData, offset, chunkBytes) {
-  const bytes = packageData.subarray(offset, offset + chunkBytes);
-  const payload = Buffer.alloc(CHUNK_OFFSET_BYTES + bytes.length);
+  const chunk = packageData.subarray(offset, offset + chunkBytes);
+  const payload = Buffer.alloc(CHUNK_OFFSET_BYTES + chunk.length);
   payload.writeUInt32LE(offset, 0);
-  bytes.copy(payload, CHUNK_OFFSET_BYTES);
+  chunk.copy(payload, CHUNK_OFFSET_BYTES);
   return encodeFrame(payload, {type: MSG_PACKAGE_CHUNK});
 }
 
 export class PackageTransfer {
   /**
-   * @param {object} o
-   * @param {(frame: Buffer) => Promise<unknown>} o.write  Writes a frame to the device.
+   * @param {object} options
+   * @param {(frame: Buffer) => Promise<unknown>} options.write  Writes a frame to the device.
    */
   constructor({
     write,
@@ -130,8 +130,8 @@ export class PackageTransfer {
    * Sends one package and waits for the device to load it.
    *
    * @param {Buffer} packageData
-   * @param {object} [o]
-   * @param {number} [o.beginTimeoutMs]  How long a device may take to answer at all.
+   * @param {object} [options]
+   * @param {number} [options.beginTimeoutMs]  How long a device may take to answer at all.
    * @returns {Promise<'ok'|'rejected'|'dropped'|'timeout'>}
    */
   async send(packageData, {beginTimeoutMs = BEGIN_TIMEOUT_MS} = {}) {

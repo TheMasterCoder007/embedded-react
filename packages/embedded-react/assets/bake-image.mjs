@@ -21,6 +21,12 @@
 import fs from 'node:fs';
 import {PNG} from 'pngjs';
 
+const RGBA_BYTES = 4;
+const CHANNEL_MAX = 255;
+const CHANNEL_ROUND = 127;
+const RGB565_RED_BLUE_MAX = 31;
+const RGB565_GREEN_MAX = 63;
+
 /**
  * Decodes an image and returns its baked pixels.
  *
@@ -52,39 +58,50 @@ export function bakeImage({path, name, format = 'argb8888'}) {
 
   if (format === 'rgb565') {
     const pixels = new Uint16Array(width * height);
-    for (let i = 0; i < width * height; i++) {
-      const r = data[i * 4];
-      const g = data[i * 4 + 1];
-      const b = data[i * 4 + 2];
-      const a = data[i * 4 + 3];
-      if (a !== 255) {
-        const x = i % width;
-        const y = (i - x) / width;
+    for (let pixel = 0; pixel < width * height; pixel++) {
+      const red = data[pixel * RGBA_BYTES];
+      const green = data[pixel * RGBA_BYTES + 1];
+      const blue = data[pixel * RGBA_BYTES + 2];
+      const alpha = data[pixel * RGBA_BYTES + 3];
+      if (alpha !== CHANNEL_MAX) {
+        const x = pixel % width;
+        const y = (pixel - x) / width;
         throw new Error(
-          `image "${name}": rgb565 requires a fully opaque source, but pixel (${x},${y}) has alpha ${a} — ` +
+          `image "${name}": rgb565 requires a fully opaque source, but pixel (${x},${y}) has alpha ${alpha} — ` +
             `flatten the art onto its background, or keep the default argb8888 format`,
         );
       }
       // Round-to-nearest 8→5/6/5 bit reduction (the engine bit-replicates back on expand).
-      const r5 = Math.round((r * 31) / 255);
-      const g6 = Math.round((g * 63) / 255);
-      const b5 = Math.round((b * 31) / 255);
-      pixels[i] = ((r5 << 11) | (g6 << 5) | b5) & 0xffff;
+      const red5 = Math.round((red * RGB565_RED_BLUE_MAX) / CHANNEL_MAX);
+      const green6 = Math.round((green * RGB565_GREEN_MAX) / CHANNEL_MAX);
+      const blue5 = Math.round((blue * RGB565_RED_BLUE_MAX) / CHANNEL_MAX);
+      pixels[pixel] = ((red5 << 11) | (green6 << 5) | blue5) & 0xffff;
     }
     return {name, width, height, format, pixels};
   }
 
   const pixels = new Uint32Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    const r = data[i * 4];
-    const g = data[i * 4 + 1];
-    const b = data[i * 4 + 2];
-    const a = data[i * 4 + 3];
+  for (let pixel = 0; pixel < width * height; pixel++) {
+    const red = data[pixel * RGBA_BYTES];
+    const green = data[pixel * RGBA_BYTES + 1];
+    const blue = data[pixel * RGBA_BYTES + 2];
+    const alpha = data[pixel * RGBA_BYTES + 3];
     // Premultiply the color channels by alpha (round-to-nearest) — the engine's image format.
-    const rp = Math.floor((r * a + 127) / 255);
-    const gp = Math.floor((g * a + 127) / 255);
-    const bp = Math.floor((b * a + 127) / 255);
-    pixels[i] = ((a << 24) | (rp << 16) | (gp << 8) | bp) >>> 0;
+    const premultipliedRed = Math.floor(
+      (red * alpha + CHANNEL_ROUND) / CHANNEL_MAX,
+    );
+    const premultipliedGreen = Math.floor(
+      (green * alpha + CHANNEL_ROUND) / CHANNEL_MAX,
+    );
+    const premultipliedBlue = Math.floor(
+      (blue * alpha + CHANNEL_ROUND) / CHANNEL_MAX,
+    );
+    pixels[pixel] =
+      ((alpha << 24) |
+        (premultipliedRed << 16) |
+        (premultipliedGreen << 8) |
+        premultipliedBlue) >>>
+      0;
   }
   return {name, width, height, format, pixels};
 }

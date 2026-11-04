@@ -26,7 +26,7 @@ import {join} from 'node:path';
 
 // Directories never worth watching (build output, deps, VCS/tool caches). Skipping them keeps the watcher
 // count low on the per-directory fallback and avoids rebuild storms from generated files.
-const IGNORE_DIR =
+const IGNORED_DIRECTORY =
   /^(node_modules|dist|build|out|coverage|\.git|\.hg|\.svn|\.next|\.cache)$/;
 
 /**
@@ -39,8 +39,8 @@ const IGNORE_DIR =
  */
 export function watchTree(root, onEvent) {
   try {
-    const w = watch(root, {recursive: true}, onEvent);
-    return {close: () => w.close()};
+    const watcher = watch(root, {recursive: true}, onEvent);
+    return {close: () => watcher.close()};
   } catch {
     // Native recursive watching unavailable (older Linux/Node, or an unsupported FS) — use the fallback.
     return watchTreePolyfill(root, onEvent);
@@ -57,17 +57,17 @@ export function watchTree(root, onEvent) {
  * @returns {{close: () => void}}
  */
 export function watchTreePolyfill(root, onEvent) {
-  const watchers = new Map(); // absolute dir path -> FSWatcher
+  const watchers = new Map(); // absolute directory path -> FSWatcher
 
-  const watchDir = dir => {
-    if (watchers.has(dir)) return;
-    let w;
+  const watchDirectory = directory => {
+    if (watchers.has(directory)) return;
+    let watcher;
     try {
-      w = watch(dir, {}, (event, name) => {
+      watcher = watch(directory, {}, (event, name) => {
         onEvent(event, name);
         // `mkdir src/components` needs its own watcher — hook any freshly-created subdirectory.
-        if (!name || IGNORE_DIR.test(name)) return;
-        const child = join(dir, name);
+        if (!name || IGNORED_DIRECTORY.test(name)) return;
+        const child = join(directory, name);
         try {
           if (statSync(child).isDirectory()) scan(child);
         } catch {
@@ -75,28 +75,28 @@ export function watchTreePolyfill(root, onEvent) {
         }
       });
     } catch {
-      return; // dir vanished between scan and watch
+      return; // directory vanished between scan and watch
     }
-    watchers.set(dir, w);
+    watchers.set(directory, watcher);
   };
 
-  const scan = dir => {
-    watchDir(dir);
+  const scan = directory => {
+    watchDirectory(directory);
     let entries;
     try {
-      entries = readdirSync(dir, {withFileTypes: true});
+      entries = readdirSync(directory, {withFileTypes: true});
     } catch {
       return;
     }
-    for (const ent of entries)
-      if (ent.isDirectory() && !IGNORE_DIR.test(ent.name))
-        scan(join(dir, ent.name));
+    for (const entry of entries)
+      if (entry.isDirectory() && !IGNORED_DIRECTORY.test(entry.name))
+        scan(join(directory, entry.name));
   };
 
   scan(root);
   return {
     close() {
-      for (const w of watchers.values()) w.close();
+      for (const watcher of watchers.values()) watcher.close();
       watchers.clear();
     },
   };

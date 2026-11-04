@@ -32,6 +32,10 @@ import {
 /** Name used for the engine's fallback font in warnings (it has no family of its own). */
 export const BUILTIN_FAMILY = 'the built-in font';
 
+const MAX_CODEPOINT = 0x10ffff;
+const CODEPOINT_HEX_DIGITS = 4;
+const EXCERPT_CONTEXT = 12; // characters shown either side of the one found
+
 // Comments first so an apostrophe inside one can't open a bogus string; then the three literal
 // forms. Bundled output is machine-generated, so the simple form is enough (a regex literal
 // containing a lone quote is the only realistic misread, and it costs at most a stray sample).
@@ -44,26 +48,29 @@ const SIMPLE_ESCAPES = {n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v'};
 function decodeEscapes(body) {
   return body.replace(
     /\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([\s\S])/g,
-    (_m, braced, u, x, other) => {
+    (_match, braced, unicode, hex, other) => {
       if (braced !== undefined) {
-        const cp = parseInt(braced, 16);
-        return cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+        const codepoint = parseInt(braced, 16);
+        return codepoint <= MAX_CODEPOINT
+          ? String.fromCodePoint(codepoint)
+          : '';
       }
-      if (u !== undefined) return String.fromCharCode(parseInt(u, 16));
-      if (x !== undefined) return String.fromCharCode(parseInt(x, 16));
+      if (unicode !== undefined)
+        return String.fromCharCode(parseInt(unicode, 16));
+      if (hex !== undefined) return String.fromCharCode(parseInt(hex, 16));
       return SIMPLE_ESCAPES[other] ?? other; // \\ \' \" \` and friends: the character itself
     },
   );
 }
 
 /** Invisible/formatting characters that are never baked and never render — not worth warning about. */
-function ignorable(cp) {
+function ignorable(codepoint) {
   return (
-    (cp >= 0x7f && cp <= 0x9f) || // DEL + C1 controls
-    (cp >= 0x200b && cp <= 0x200f) || // zero-width + bidi marks
-    (cp >= 0x2028 && cp <= 0x202e) || // line/paragraph separators + bidi overrides
-    (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors
-    cp === 0xfeff // BOM
+    (codepoint >= 0x7f && codepoint <= 0x9f) || // DEL + C1 controls
+    (codepoint >= 0x200b && codepoint <= 0x200f) || // zero-width + bidi marks
+    (codepoint >= 0x2028 && codepoint <= 0x202e) || // line/paragraph separators + bidi overrides
+    (codepoint >= 0xfe00 && codepoint <= 0xfe0f) || // variation selectors
+    codepoint === 0xfeff // BOM
   );
 }
 
@@ -84,22 +91,26 @@ const JSX_TEXT = />([^<>{}]+)</g;
 export function scanTextCodepoints(source, {jsx = false} = {}) {
   const found = new Map();
   const collect = text => {
-    let i = 0;
-    for (const ch of text) {
-      const cp = ch.codePointAt(0);
-      if (cp > ASCII_LAST && !ignorable(cp) && !found.has(cp))
-        found.set(cp, excerpt(text, i, ch.length));
-      i += ch.length;
+    let offset = 0;
+    for (const character of text) {
+      const codepoint = character.codePointAt(0);
+      if (
+        codepoint > ASCII_LAST &&
+        !ignorable(codepoint) &&
+        !found.has(codepoint)
+      )
+        found.set(codepoint, excerpt(text, offset, character.length));
+      offset += character.length;
     }
   };
 
   // Blank each token out as it is read, so the JSX pass below sees neither strings (already
   // collected) nor comments (never rendered) — only real element text.
-  const bare = source.replace(LITERALS, tok => {
-    if (tok[0] !== '/') collect(decodeEscapes(tok.slice(1, -1)));
-    return ' '.repeat(tok.length);
+  const bare = source.replace(LITERALS, token => {
+    if (token[0] !== '/') collect(decodeEscapes(token.slice(1, -1)));
+    return ' '.repeat(token.length);
   });
-  if (jsx) for (const m of bare.matchAll(JSX_TEXT)) collect(m[1]);
+  if (jsx) for (const match of bare.matchAll(JSX_TEXT)) collect(match[1]);
   return found;
 }
 
@@ -113,14 +124,14 @@ export function scanTextCodepoints(source, {jsx = false} = {}) {
  */
 export function textSignature(source, opts) {
   return [...scanTextCodepoints(source, opts).keys()]
-    .sort((a, b) => a - b)
+    .sort((left, right) => left - right)
     .join(',');
 }
 
 /** A one-line, printable window of `text` around the character at `at` (a UTF-16 index). */
-function excerpt(text, at, len) {
-  const start = Math.max(0, at - 12);
-  const end = Math.min(text.length, at + len + 12);
+function excerpt(text, at, length) {
+  const start = Math.max(0, at - EXCERPT_CONTEXT);
+  const end = Math.min(text.length, at + length + EXCERPT_CONTEXT);
   const body = text
     .slice(start, end)
     .replace(/[\n\r\t]/g, ' ')
@@ -135,8 +146,9 @@ function coverageOf(baked) {
   const covered = new Set();
   const first = size ? size.first : ASCII_FIRST;
   const last = size ? size.last : ASCII_LAST;
-  for (let cp = first; cp <= last; cp++) covered.add(cp);
-  for (const e of size?.extras ?? []) covered.add(e.codepoint);
+  for (let codepoint = first; codepoint <= last; codepoint++)
+    covered.add(codepoint);
+  for (const extra of size?.extras ?? []) covered.add(extra.codepoint);
   return covered;
 }
 
@@ -172,33 +184,35 @@ function builtinFont() {
  */
 export function findMissingGlyphs({source, fonts = [], jsx = false}) {
   const checked = fonts.length ? fonts : [builtinFont()];
-  const coverage = checked.map(f => ({
-    family: f.family,
-    path: f.path,
-    covered: coverageOf(f),
+  const coverage = checked.map(font => ({
+    family: font.family,
+    path: font.path,
+    covered: coverageOf(font),
   }));
   // Opened lazily and only for a font with a gap: most builds have none and pay nothing.
   const probes = new Map();
-  const hasGlyph = (font, cp) => {
+  const hasGlyph = (font, codepoint) => {
     if (!font.path) return true; // the built-in font's coverage is its bake, nothing more to ask
     if (!probes.has(font.path))
       probes.set(font.path, loadGlyphProbe(font.path));
-    return probes.get(font.path)(cp);
+    return probes.get(font.path)(codepoint);
   };
 
   const missing = [];
-  for (const [cp, sample] of scanTextCodepoints(source, {jsx})) {
-    const gaps = coverage.filter(c => !c.covered.has(cp));
+  for (const [codepoint, sample] of scanTextCodepoints(source, {jsx})) {
+    const gaps = coverage.filter(entry => !entry.covered.has(codepoint));
     if (!gaps.length) continue;
     missing.push({
-      codepoint: cp,
-      char: String.fromCodePoint(cp),
+      codepoint,
+      char: String.fromCodePoint(codepoint),
       sample,
-      missingFrom: gaps.map(g => g.family),
-      noGlyphIn: gaps.filter(g => !hasGlyph(g, cp)).map(g => g.family),
+      missingFrom: gaps.map(gap => gap.family),
+      noGlyphIn: gaps
+        .filter(gap => !hasGlyph(gap, codepoint))
+        .map(gap => gap.family),
     });
   }
-  return missing.sort((a, b) => a.codepoint - b.codepoint);
+  return missing.sort((left, right) => left.codepoint - right.codepoint);
 }
 
 const MAX_LISTED = 12;
@@ -213,31 +227,37 @@ const MAX_LISTED = 12;
  */
 export function formatMissingGlyphs(missing, fonts = []) {
   if (!missing.length) return '';
-  const lines = missing.slice(0, MAX_LISTED).map(m => {
-    const hex = m.codepoint.toString(16).toUpperCase().padStart(4, '0');
-    const note = m.noGlyphIn.length
+  const lines = missing.slice(0, MAX_LISTED).map(glyph => {
+    const hex = glyph.codepoint
+      .toString(16)
+      .toUpperCase()
+      .padStart(CODEPOINT_HEX_DIGITS, '0');
+    const note = glyph.noGlyphIn.length
       ? ` (the font file itself has no glyph for it — pick a font that covers it)`
       : '';
-    return `  U+${hex} '${m.char}'  missing from ${m.missingFrom.join(', ')}${note}   in "${m.sample}"`;
+    return `  U+${hex} '${glyph.char}'  missing from ${glyph.missingFrom.join(', ')}${note}   in "${glyph.sample}"`;
   });
   if (missing.length > MAX_LISTED)
     lines.push(`  … and ${missing.length - MAX_LISTED} more`);
 
   // One config entry per font, listing only what baking it there would actually fix.
   const perFamily = fonts
-    .map(f => {
-      const chars = missing
+    .map(font => {
+      const characters = missing
         .filter(
-          m =>
-            m.missingFrom.includes(f.family) && !m.noGlyphIn.includes(f.family),
+          glyph =>
+            glyph.missingFrom.includes(font.family) &&
+            !glyph.noGlyphIn.includes(font.family),
         )
-        .map(m => m.char)
+        .map(glyph => glyph.char)
         .join('');
       // A family is a file basename, so it often needs quoting to be a valid key ('Inter-Regular').
-      const key = /^[A-Za-z_$][\w$]*$/.test(f.family)
-        ? f.family
-        : JSON.stringify(f.family);
-      return chars ? `${key}: {extraGlyphs: ${JSON.stringify(chars)}}` : null;
+      const key = /^[A-Za-z_$][\w$]*$/.test(font.family)
+        ? font.family
+        : JSON.stringify(font.family);
+      return characters
+        ? `${key}: {extraGlyphs: ${JSON.stringify(characters)}}`
+        : null;
     })
     .filter(Boolean);
 
@@ -246,7 +266,7 @@ export function formatMissingGlyphs(missing, fonts = []) {
     : fonts.length
       ? `  fix: bake these from a font that has them (assets.config.js → fonts: {<Family>: {extraGlyphs: ...}})`
       : `  fix: the built-in font covers ASCII + common symbols only — import a .ttf/.otf and bake the\n` +
-        `       rest with assets.config.js → fonts: {<Family>: {extraGlyphs: ${JSON.stringify(missing.map(m => m.char).join(''))}}}`;
+        `       rest with assets.config.js → fonts: {<Family>: {extraGlyphs: ${JSON.stringify(missing.map(glyph => glyph.char).join(''))}}}`;
 
   return (
     `embedded-react: ${missing.length} character(s) in the app's text have no baked glyph and will ` +

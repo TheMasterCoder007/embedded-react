@@ -31,8 +31,9 @@ import {emitBuiltinFont} from './emit-c.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react/assets
 const repoRoot = resolve(here, '../../..');
-const FONT = resolve(repoRoot, 'assets/fonts/Inter-Regular.ttf');
-const OUT = resolve(repoRoot, 'engine/font/font_data.c');
+const FONT_PATH = resolve(repoRoot, 'assets/fonts/Inter-Regular.ttf');
+const OUTPUT_PATH = resolve(repoRoot, 'engine/font/font_data.c');
+const BITS_PER_PIXEL = 4;
 
 // The built-in covers printable ASCII plus a fixed set of common symbols (degrees, arrows, math,
 // punctuation, etc.) the UI components rely on — kept stable across regenerations. The set lives in
@@ -41,18 +42,21 @@ const OUT = resolve(repoRoot, 'engine/font/font_data.c');
 const SIZES = BUILTIN_SIZES;
 
 const font = bakeFont({
-  path: FONT,
+  path: FONT_PATH,
   family: 'Inter',
   sizes: SIZES,
-  bpp: 4,
+  bpp: BITS_PER_PIXEL,
   glyphs: BUILTIN_EXTRAS,
 });
 writeFileSync(
-  OUT,
+  OUTPUT_PATH,
   emitBuiltinFont({font, symbol: 'inter', sourceName: 'Inter-Regular.ttf'}),
 );
 
-const bytes = font.sizes.reduce((n, s) => n + s.bitmap.length, 0);
+const bitmapBytes = font.sizes.reduce(
+  (total, size) => total + size.bitmap.length,
+  0,
+);
 console.log(
-  `Regenerated ${OUT}\n  ${SIZES.length} sizes [${SIZES.join(',')}], bpp 4, ${font.sizes[0].extras.length} extra glyphs, ${bytes} bitmap bytes`,
+  `Regenerated ${OUTPUT_PATH}\n  ${SIZES.length} sizes [${SIZES.join(',')}], bpp ${BITS_PER_PIXEL}, ${font.sizes[0].extras.length} extra glyphs, ${bitmapBytes} bitmap bytes`,
 );

@@ -37,44 +37,53 @@
 // no alignment machinery, so whether an image's pixels landed word-aligned in flash was an accident
 // of the name strings — it varied build to build. Parsers still accept v1 packs from older tooling.
 
+const INT8_MIN = -128;
+const INT8_MAX = 127;
+const PIXEL_ALIGNMENT = 4;
+const FORMAT_ARGB8888 = 0;
+const FORMAT_RGB565 = 1;
+
 /** Accumulates little-endian binary chunks. */
 class Writer {
   constructor() {
     this.chunks = [];
   }
-  u8(v) {
-    const b = Buffer.alloc(1);
-    b.writeUInt8(v & 0xff, 0);
-    this.chunks.push(b);
+  u8(value) {
+    const buffer = Buffer.alloc(1);
+    buffer.writeUInt8(value & 0xff, 0);
+    this.chunks.push(buffer);
   }
-  i8(v) {
-    const b = Buffer.alloc(1);
-    b.writeInt8(Math.max(-128, Math.min(127, v | 0)), 0);
-    this.chunks.push(b);
+  i8(value) {
+    const buffer = Buffer.alloc(1);
+    buffer.writeInt8(Math.max(INT8_MIN, Math.min(INT8_MAX, value | 0)), 0);
+    this.chunks.push(buffer);
   }
-  u16(v) {
-    const b = Buffer.alloc(2);
-    b.writeUInt16LE(v & 0xffff, 0);
-    this.chunks.push(b);
+  u16(value) {
+    const buffer = Buffer.alloc(2);
+    buffer.writeUInt16LE(value & 0xffff, 0);
+    this.chunks.push(buffer);
   }
-  u32(v) {
-    const b = Buffer.alloc(4);
-    b.writeUInt32LE(v >>> 0, 0);
-    this.chunks.push(b);
+  u32(value) {
+    const buffer = Buffer.alloc(4);
+    buffer.writeUInt32LE(value >>> 0, 0);
+    this.chunks.push(buffer);
   }
-  str(s) {
-    const b = Buffer.from(s, 'utf8');
-    this.u16(b.length);
-    this.chunks.push(b);
+  str(text) {
+    const buffer = Buffer.from(text, 'utf8');
+    this.u16(buffer.length);
+    this.chunks.push(buffer);
   }
-  bytes(buf) {
-    this.chunks.push(Buffer.from(buf));
+  bytes(data) {
+    this.chunks.push(Buffer.from(data));
   }
   /** Zero-pads so the next write lands on an n-byte boundary from the pack start. */
-  align(n) {
-    const len = this.chunks.reduce((a, b) => a + b.length, 0);
-    const pad = (n - (len % n)) % n;
-    if (pad) this.chunks.push(Buffer.alloc(pad));
+  align(alignment) {
+    const length = this.chunks.reduce(
+      (total, chunk) => total + chunk.length,
+      0,
+    );
+    const padding = (alignment - (length % alignment)) % alignment;
+    if (padding) this.chunks.push(Buffer.alloc(padding));
   }
   done() {
     return Buffer.concat(this.chunks);
@@ -82,13 +91,13 @@ class Writer {
 }
 
 /** Writes one glyph record (9 bytes). */
-function writeGlyph(w, g) {
-  w.u32(g.bitmapOffset);
-  w.u8(g.width);
-  w.u8(g.height);
-  w.i8(g.xOffset);
-  w.i8(g.yOffset);
-  w.u8(g.advance);
+function writeGlyph(writer, glyph) {
+  writer.u32(glyph.bitmapOffset);
+  writer.u8(glyph.width);
+  writer.u8(glyph.height);
+  writer.i8(glyph.xOffset);
+  writer.i8(glyph.yOffset);
+  writer.u8(glyph.advance);
 }
 
 /**
@@ -103,57 +112,58 @@ export function emitAssetPack({images = [], fonts = []}) {
   // Emit in a locale-independent sorted order: the discovery maps upstream are filled by esbuild
   // onLoad callbacks in whatever order the bundler visits files, which varies run to run — and an
   // unstable pack means unstable in-flash addresses and non-reproducible builds.
-  const byName = k => (a, b) => (a[k] < b[k] ? -1 : a[k] > b[k] ? 1 : 0);
+  const byName = key => (left, right) =>
+    left[key] < right[key] ? -1 : left[key] > right[key] ? 1 : 0;
   images = [...images].sort(byName('name'));
   fonts = [...fonts].sort(byName('family'));
 
   const version = 2;
-  const w = new Writer();
-  w.bytes(Buffer.from('ERPK', 'ascii'));
-  w.u32(version);
-  w.u32(images.length);
-  const fontSizes = fonts.reduce((n, f) => n + f.sizes.length, 0);
-  w.u32(fontSizes);
+  const writer = new Writer();
+  writer.bytes(Buffer.from('ERPK', 'ascii'));
+  writer.u32(version);
+  writer.u32(images.length);
+  const fontSizes = fonts.reduce((total, font) => total + font.sizes.length, 0);
+  writer.u32(fontSizes);
 
-  for (const img of images) {
-    w.str(img.name);
-    w.u32(img.width);
-    w.u32(img.height);
+  for (const image of images) {
+    writer.str(image.name);
+    writer.u32(image.width);
+    writer.u32(image.height);
     if (version >= 2) {
-      w.u8(img.format === 'rgb565' ? 1 : 0);
-      w.align(4); // the engine reads the pixels in place; keep the pointer 4-byte aligned
+      writer.u8(image.format === 'rgb565' ? FORMAT_RGB565 : FORMAT_ARGB8888);
+      writer.align(PIXEL_ALIGNMENT); // the engine reads the pixels in place; keep the pointer 4-byte aligned
     }
     // pixels is a Uint32Array (premultiplied ARGB words) or Uint16Array (RGB565);
     // copy its LE bytes verbatim.
-    w.bytes(
+    writer.bytes(
       Buffer.from(
-        img.pixels.buffer,
-        img.pixels.byteOffset,
-        img.pixels.byteLength,
+        image.pixels.buffer,
+        image.pixels.byteOffset,
+        image.pixels.byteLength,
       ),
     );
   }
 
   for (const font of fonts) {
-    for (const sz of font.sizes) {
-      w.str(font.family);
-      w.u8(sz.pixelSize);
-      w.u8(sz.lineHeight);
-      w.u8(sz.baseline);
-      w.u8(sz.bpp);
-      w.u16(sz.first);
-      w.u16(sz.last);
-      w.u16(sz.dense.length);
-      w.u16(sz.extras.length);
-      w.u32(sz.bitmap.length);
-      for (const g of sz.dense) writeGlyph(w, g);
-      for (const e of sz.extras) {
-        w.u32(e.codepoint);
-        writeGlyph(w, e.info);
+    for (const size of font.sizes) {
+      writer.str(font.family);
+      writer.u8(size.pixelSize);
+      writer.u8(size.lineHeight);
+      writer.u8(size.baseline);
+      writer.u8(size.bpp);
+      writer.u16(size.first);
+      writer.u16(size.last);
+      writer.u16(size.dense.length);
+      writer.u16(size.extras.length);
+      writer.u32(size.bitmap.length);
+      for (const glyph of size.dense) writeGlyph(writer, glyph);
+      for (const extra of size.extras) {
+        writer.u32(extra.codepoint);
+        writeGlyph(writer, extra.info);
       }
-      w.bytes(Buffer.from(sz.bitmap));
+      writer.bytes(Buffer.from(size.bitmap));
     }
   }
 
-  return w.done();
+  return writer.done();
 }

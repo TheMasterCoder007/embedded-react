@@ -53,7 +53,10 @@ const MAX_DEPTH = 16;
 // parser chokes on (a future syntax, a mangled bundle). Strictly weaker, never silently preferred.
 const LITERAL_SIZE = /\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g;
 
-const PARSER_OPTS = {
+// Unresolved fontSize expressions are reported up to this many characters.
+const SNIPPET_MAX_LENGTH = 48;
+
+const PARSER_OPTIONS = {
   sourceType: 'unambiguous', // an IIFE bundle is a script; an app entry is a module
   errorRecovery: true,
   // Same pair the AOT parser uses: the TS plugin is harmless on plain JS/JSX and lets a .tsx app
@@ -80,7 +83,7 @@ const NON_NODE_KEYS = new Set([
 /** Depth-first visit of every AST node under `node`, in source order. */
 function walk(node, visit) {
   if (Array.isArray(node)) {
-    for (const n of node) walk(n, visit);
+    for (const item of node) walk(item, visit);
     return;
   }
   if (!node || typeof node !== 'object' || typeof node.type !== 'string')
@@ -96,11 +99,11 @@ function walk(node, visit) {
 /** Static name of a non-computed property key, or null when the key isn't a fixed string. */
 function keyName(node) {
   if (node.computed) return null;
-  const k = node.key;
-  if (!k) return null;
-  if (k.type === 'Identifier') return k.name;
-  if (k.type === 'StringLiteral') return k.value;
-  if (k.type === 'NumericLiteral') return String(k.value);
+  const key = node.key;
+  if (!key) return null;
+  if (key.type === 'Identifier') return key.name;
+  if (key.type === 'StringLiteral') return key.value;
+  if (key.type === 'NumericLiteral') return String(key.value);
   return null;
 }
 
@@ -108,9 +111,11 @@ function keyName(node) {
 
 // A folded value is either a number or a Scale: an object/array whose properties are themselves
 // candidate lists, so `TYPE.title` is a lookup and a ternary is a union.
-const scale = props => ({props});
-const isScale = v =>
-  v !== null && typeof v === 'object' && v.props instanceof Map;
+const scale = properties => ({properties});
+const isScale = value =>
+  value !== null &&
+  typeof value === 'object' &&
+  value.properties instanceof Map;
 
 /** Trims a candidate list to the fan-out budget, dropping duplicates first. */
 const cap = values =>
@@ -119,20 +124,20 @@ const cap = values =>
     : values;
 
 /** The numbers in a candidate list (a Scale is not a size). */
-const numbers = values => values.filter(v => typeof v === 'number');
+const numbers = values => values.filter(value => typeof value === 'number');
 
 const ARITHMETIC = {
-  '+': (a, b) => a + b,
-  '-': (a, b) => a - b,
-  '*': (a, b) => a * b,
-  '/': (a, b) => a / b,
-  '%': (a, b) => a % b,
-  '**': (a, b) => a ** b,
+  '+': (left, right) => left + right,
+  '-': (left, right) => left - right,
+  '*': (left, right) => left * right,
+  '/': (left, right) => left / right,
+  '%': (left, right) => left % right,
+  '**': (left, right) => left ** right,
 };
 
 // Rounding is how a ratio-based scale lands on whole pixels (Math.round(base * 1.25)); min/max is
 // how it gets clamped. Anything else on Math is left unresolved rather than guessed.
-const MATH_FNS = {
+const MATH_FUNCTIONS = {
   round: Math.round,
   floor: Math.floor,
   ceil: Math.ceil,
@@ -151,7 +156,7 @@ const MATH_FNS = {
  */
 function evaluate(node, scope, depth = 0) {
   if (!node || depth > MAX_DEPTH) return [];
-  const rec = n => evaluate(n, scope, depth + 1);
+  const evaluateChild = child => evaluate(child, scope, depth + 1);
 
   switch (node.type) {
     case 'NumericLiteral':
@@ -167,77 +172,84 @@ function evaluate(node, scope, depth = 0) {
     case 'TSNonNullExpression':
     case 'TSTypeAssertion':
     case 'TypeCastExpression':
-      return rec(node.expression);
+      return evaluateChild(node.expression);
 
     case 'UnaryExpression': {
       if (node.operator !== '-' && node.operator !== '+') return [];
       const sign = node.operator === '-' ? -1 : 1;
-      return numbers(rec(node.argument)).map(v => sign * v);
+      return numbers(evaluateChild(node.argument)).map(value => sign * value);
     }
 
     case 'BinaryExpression': {
-      const op = ARITHMETIC[node.operator];
-      if (!op) return [];
-      const left = numbers(rec(node.left));
-      const right = numbers(rec(node.right));
-      const out = [];
-      for (const a of left) for (const b of right) out.push(op(a, b));
-      return cap(out);
+      const operation = ARITHMETIC[node.operator];
+      if (!operation) return [];
+      const left = numbers(evaluateChild(node.left));
+      const right = numbers(evaluateChild(node.right));
+      const results = [];
+      for (const leftValue of left)
+        for (const rightValue of right)
+          results.push(operation(leftValue, rightValue));
+      return cap(results);
     }
 
     // Both arms: which one a responsive app takes depends on the panel it boots on, and the same
     // bundle runs on all of them.
     case 'ConditionalExpression':
-      return cap([...rec(node.consequent), ...rec(node.alternate)]);
+      return cap([
+        ...evaluateChild(node.consequent),
+        ...evaluateChild(node.alternate),
+      ]);
 
     // `a ?? b` / `a || b` are the same shape of choice; `&&` can only ever yield its right arm.
     case 'LogicalExpression':
       return node.operator === '&&'
-        ? rec(node.right)
-        : cap([...rec(node.left), ...rec(node.right)]);
+        ? evaluateChild(node.right)
+        : cap([...evaluateChild(node.left), ...evaluateChild(node.right)]);
 
     case 'ObjectExpression': {
-      const props = new Map();
-      for (const p of node.properties) {
-        if (p.type === 'SpreadElement') {
-          for (const base of rec(p.argument).filter(isScale))
-            for (const [k, v] of base.props) props.set(k, v);
+      const properties = new Map();
+      for (const property of node.properties) {
+        if (property.type === 'SpreadElement') {
+          for (const base of evaluateChild(property.argument).filter(isScale))
+            for (const [key, values] of base.properties)
+              properties.set(key, values);
           continue;
         }
-        if (p.type !== 'ObjectProperty') continue; // a method is never a size
-        const name = keyName(p);
+        if (property.type !== 'ObjectProperty') continue; // a method is never a size
+        const name = keyName(property);
         if (name === null) continue;
-        const values = rec(p.value);
-        if (values.length) props.set(name, values);
+        const values = evaluateChild(property.value);
+        if (values.length) properties.set(name, values);
       }
-      return [scale(props)];
+      return [scale(properties)];
     }
 
     case 'ArrayExpression': {
-      const props = new Map();
-      node.elements.forEach((el, i) => {
-        if (!el || el.type === 'SpreadElement') return;
-        const values = rec(el);
-        if (values.length) props.set(String(i), values);
+      const properties = new Map();
+      node.elements.forEach((element, index) => {
+        if (!element || element.type === 'SpreadElement') return;
+        const values = evaluateChild(element);
+        if (values.length) properties.set(String(index), values);
       });
-      return [scale(props)];
+      return [scale(properties)];
     }
 
     case 'MemberExpression': {
-      const objects = rec(node.object).filter(isScale);
+      const objects = evaluateChild(node.object).filter(isScale);
       if (!objects.length) return [];
       const key = memberKey(node, scope, depth);
-      const out = [];
-      for (const obj of objects) {
+      const results = [];
+      for (const object of objects) {
         // An unresolvable key (`TYPE[variant]`) still narrows things to one scale, and every entry
         // in it is something the app can reach — take the lot rather than nothing.
         if (key === null) {
-          for (const v of obj.props.values()) out.push(...v);
+          for (const values of object.properties.values())
+            results.push(...values);
         } else {
-          out.push(...(obj.props.get(key) ?? []));
+          results.push(...(object.properties.get(key) ?? []));
         }
       }
-      return cap(out);
+      return cap(results);
     }
 
     case 'CallExpression': {
@@ -250,12 +262,20 @@ function evaluate(node, scope, depth = 0) {
         callee.property?.type !== 'Identifier'
       )
         return [];
-      const fn = MATH_FNS[callee.property.name];
-      if (!fn) return [];
+      const mathFunction = MATH_FUNCTIONS[callee.property.name];
+      if (!mathFunction) return [];
       // Every argument must resolve, or the result isn't the one the app computes.
-      const args = node.arguments.map(a => numbers(rec(a)));
-      if (!args.length || args.some(a => !a.length)) return [];
-      return cap(combine(args).map(vals => fn(...vals)));
+      const argumentValues = node.arguments.map(argument =>
+        numbers(evaluateChild(argument)),
+      );
+      if (
+        !argumentValues.length ||
+        argumentValues.some(candidates => !candidates.length)
+      )
+        return [];
+      return cap(
+        combine(argumentValues).map(values => mathFunction(...values)),
+      );
     }
 
     default:
@@ -269,9 +289,9 @@ function combine(lists) {
   for (const list of lists) {
     const next = [];
     for (const row of rows)
-      for (const v of list) {
+      for (const value of list) {
         if (next.length >= MAX_CANDIDATES) break;
-        next.push([...row, v]);
+        next.push([...row, value]);
       }
     rows = next;
   }
@@ -297,7 +317,7 @@ function memberKey(node, scope, depth) {
  * names a bundle contains are only ever evaluated for the handful a fontSize actually reads.
  */
 function lookup(name, scope, depth) {
-  const known = scope.env.get(name);
+  const known = scope.environment.get(name);
   if (known !== undefined) return known; // a memoized "nothing" is an answer, not a miss
   const bound = scope.bindings.get(name);
   if (!bound || scope.resolving.has(name)) return [];
@@ -307,7 +327,7 @@ function lookup(name, scope, depth) {
     bound.flatMap(node => evaluate(node, scope, depth + 1)).filter(isScale),
   );
   scope.resolving.delete(name);
-  scope.env.set(name, values);
+  scope.environment.set(name, values);
   return values;
 }
 
@@ -326,7 +346,7 @@ function lookup(name, scope, depth) {
  * places resolves to all of them, which over-bakes at worst; declared names always win.
  *
  * @param {object} ast  Parsed program.
- * @returns {{env: Map<string,any[]>, bindings: Map<string,object[]>, resolving: Set<string>}}
+ * @returns {{environment: Map<string,any[]>, bindings: Map<string,object[]>, resolving: Set<string>}}
  */
 function buildScope(ast) {
   const declarations = [];
@@ -339,25 +359,25 @@ function buildScope(ast) {
     else bindings.set(name, [node]);
   };
 
-  walk(ast.program, n => {
-    if (n.type === 'VariableDeclarator') {
-      if (n.id?.type === 'Identifier' && n.init) {
-        declarations.push(n);
-        counts.set(n.id.name, (counts.get(n.id.name) ?? 0) + 1);
+  walk(ast.program, node => {
+    if (node.type === 'VariableDeclarator') {
+      if (node.id?.type === 'Identifier' && node.init) {
+        declarations.push(node);
+        counts.set(node.id.name, (counts.get(node.id.name) ?? 0) + 1);
       }
       return;
     }
     if (
-      n.type === 'JSXAttribute' &&
-      n.name?.type === 'JSXIdentifier' &&
-      n.value?.type === 'JSXExpressionContainer'
+      node.type === 'JSXAttribute' &&
+      node.name?.type === 'JSXIdentifier' &&
+      node.value?.type === 'JSXExpressionContainer'
     ) {
-      bind(n.name.name, n.value.expression);
+      bind(node.name.name, node.value.expression);
       return;
     }
-    if (n.type === 'ObjectProperty') {
-      const name = keyName(n);
-      if (name !== null) bind(name, n.value);
+    if (node.type === 'ObjectProperty') {
+      const name = keyName(node);
+      if (name !== null) bind(name, node.value);
     }
   });
 
@@ -365,13 +385,17 @@ function buildScope(ast) {
   // binding consulted mid-fold could cache an answer taken from a half-built environment. Two passes,
   // so a scale that reads a constant declared below it still folds; a third would only help a chain
   // that deep, which no type scale is.
-  const scope = {env: new Map(), bindings: new Map(), resolving: new Set()};
+  const scope = {
+    environment: new Map(),
+    bindings: new Map(),
+    resolving: new Set(),
+  };
   for (let pass = 0; pass < 2; pass++) {
-    for (const d of declarations) {
-      const name = d.id.name;
+    for (const declaration of declarations) {
+      const name = declaration.id.name;
       if (counts.get(name) > 1) continue;
-      const values = evaluate(d.init, scope);
-      if (values.length) scope.env.set(name, values);
+      const values = evaluate(declaration.init, scope);
+      if (values.length) scope.environment.set(name, values);
     }
   }
   // A declared name resolves to its declaration or to nothing; it never falls through to a binding.
@@ -384,24 +408,30 @@ function buildScope(ast) {
 
 /** Rounds a folded value to a bakeable pixel size, or null when it isn't one. */
 function toPixelSize(value) {
-  const px = Math.round(value);
-  return Number.isFinite(px) && px >= MIN_PX && px <= MAX_PX ? px : null;
+  const pixelSize = Math.round(value);
+  return Number.isFinite(pixelSize) &&
+    pixelSize >= MIN_PX &&
+    pixelSize <= MAX_PX
+    ? pixelSize
+    : null;
 }
 
 /** One-line, length-capped rendering of the expression behind an unresolved fontSize. */
 function snippet(source, node) {
   const raw = source.slice(node.start, node.end).replace(/\s+/g, ' ').trim();
-  return raw.length > 48 ? `${raw.slice(0, 47)}…` : raw;
+  return raw.length > SNIPPET_MAX_LENGTH
+    ? `${raw.slice(0, SNIPPET_MAX_LENGTH - 1)}…`
+    : raw;
 }
 
 /** Literal-only discovery, for a source the parser rejected. */
 function scanLiterals(source) {
   const sizes = new Set();
-  for (const m of source.matchAll(LITERAL_SIZE)) {
-    const px = toPixelSize(Number(m[1]));
-    if (px !== null) sizes.add(px);
+  for (const match of source.matchAll(LITERAL_SIZE)) {
+    const pixelSize = toPixelSize(Number(match[1]));
+    if (pixelSize !== null) sizes.add(pixelSize);
   }
-  return {sizes: [...sizes].sort((a, b) => a - b), dynamic: []};
+  return {sizes: [...sizes].sort((left, right) => left - right), dynamic: []};
 }
 
 /**
@@ -416,7 +446,7 @@ export function analyzeFontSizes(source) {
   if (!source) return {sizes: [], dynamic: []};
   let ast;
   try {
-    ast = parse(source, PARSER_OPTS);
+    ast = parse(source, PARSER_OPTIONS);
   } catch {
     return scanLiterals(source); // never worse than the literal scan this replaced
   }
@@ -424,27 +454,30 @@ export function analyzeFontSizes(source) {
   const scope = buildScope(ast);
   const sizes = new Set();
   const dynamic = new Map(); // expression text → occurrences
-  walk(ast.program, n => {
-    if (n.type !== 'ObjectProperty' || keyName(n) !== 'fontSize') return;
+  walk(ast.program, node => {
+    if (node.type !== 'ObjectProperty' || keyName(node) !== 'fontSize') return;
     // A value that resolves but can't be baked (0, negative, past the engine's uint8 pixel_size) is
     // an authoring slip, not a discovery failure: leave it out of the bake and out of the report.
-    const resolved = numbers(evaluate(n.value, scope));
+    const resolved = numbers(evaluate(node.value, scope));
     if (resolved.length) {
       for (const value of resolved) {
-        const px = toPixelSize(value);
-        if (px !== null) sizes.add(px);
+        const pixelSize = toPixelSize(value);
+        if (pixelSize !== null) sizes.add(pixelSize);
       }
       return;
     }
-    const expr = snippet(source, n.value);
-    dynamic.set(expr, (dynamic.get(expr) ?? 0) + 1);
+    const expression = snippet(source, node.value);
+    dynamic.set(expression, (dynamic.get(expression) ?? 0) + 1);
   });
 
   return {
-    sizes: [...sizes].sort((a, b) => a - b),
+    sizes: [...sizes].sort((left, right) => left - right),
     dynamic: [...dynamic]
-      .map(([expr, count]) => ({expr, count}))
-      .sort((a, b) => b.count - a.count || a.expr.localeCompare(b.expr)),
+      .map(([expression, count]) => ({expr: expression, count}))
+      .sort(
+        (left, right) =>
+          right.count - left.count || left.expr.localeCompare(right.expr),
+      ),
   };
 }
 
@@ -462,7 +495,7 @@ export function analyzeFontSizes(source) {
  */
 export function fontSizeSignature(used) {
   const {sizes = [], dynamic = []} = used ?? {};
-  return `${sizes.join(',')}|${dynamic.map(d => d.expr).join('\u0000')}`;
+  return `${sizes.join(',')}|${dynamic.map(entry => entry.expr).join('\u0000')}`;
 }
 
 /*--- Coverage check -----------------------------------------------------------------------------*/
@@ -470,8 +503,8 @@ export function fontSizeSignature(used) {
 /** Pixel sizes a bakeFont() result — or the job that produced it — covers. */
 function bakedSizes(font) {
   return (font.sizes ?? [])
-    .map(s => (typeof s === 'number' ? s : s?.pixelSize))
-    .filter(px => Number.isFinite(px));
+    .map(size => (typeof size === 'number' ? size : size?.pixelSize))
+    .filter(pixelSize => Number.isFinite(pixelSize));
 }
 
 /**
@@ -486,10 +519,14 @@ function bakedSizes(font) {
 export function pickBakedSize(baked, wanted) {
   const target = Math.min(Math.max(wanted, RENDER_MIN_PX), RENDER_MAX_PX);
   let best = baked[0];
-  for (const px of baked.slice(1)) {
-    const diff = Math.abs(target - px);
-    const bestDiff = Math.abs(target - best);
-    if (diff < bestDiff || (diff === bestDiff && px > best)) best = px;
+  for (const size of baked.slice(1)) {
+    const difference = Math.abs(target - size);
+    const bestDifference = Math.abs(target - best);
+    if (
+      difference < bestDifference ||
+      (difference === bestDifference && size > best)
+    )
+      best = size;
   }
   return best;
 }
@@ -511,7 +548,7 @@ export function pickBakedSize(baked, wanted) {
  */
 export function findSizeGaps({sizes = [], fonts = []}) {
   const checked = fonts.length
-    ? fonts.map(f => ({family: f.family, baked: bakedSizes(f)}))
+    ? fonts.map(font => ({family: font.family, baked: bakedSizes(font)}))
     : [{family: BUILTIN_FAMILY, baked: [...BUILTIN_SIZES]}];
 
   const gaps = [];
@@ -535,13 +572,14 @@ export function findSizeGaps({sizes = [], fonts = []}) {
           baked: live,
         });
   }
-  return {gaps: gaps.sort((a, b) => a.size - b.size), dropped};
+  return {gaps: gaps.sort((left, right) => left.size - right.size), dropped};
 }
 
 const MAX_LISTED = 8;
 
 /** `[a, b, c]` as an assets.config.js `sizes` line would spell it. */
-const sizeList = sizes => `[${[...sizes].sort((a, b) => a - b).join(', ')}]`;
+const sizeList = sizes =>
+  `[${[...sizes].sort((left, right) => left - right).join(', ')}]`;
 
 /** A family name as a valid object key (a family is a file basename — `Inter-Regular` needs quotes). */
 const configKey = family =>
@@ -569,8 +607,8 @@ export function formatFontSizeReport({
     const lines = gaps
       .slice(0, MAX_LISTED)
       .map(
-        g =>
-          `  ${g.size}px → renders at ${g.snapsTo}px in ${g.family} (baked: ${g.baked.join(', ')})`,
+        gap =>
+          `  ${gap.size}px → renders at ${gap.snapsTo}px in ${gap.family} (baked: ${gap.baked.join(', ')})`,
       );
     if (gaps.length > MAX_LISTED)
       lines.push(`  … and ${gaps.length - MAX_LISTED} more`);
@@ -581,10 +619,10 @@ export function formatFontSizeReport({
   }
 
   if (dynamic.length) {
-    const total = dynamic.reduce((n, d) => n + d.count, 0);
-    const lines = dynamic.slice(0, MAX_LISTED).map(d => {
-      const times = d.count > 1 ? `  (×${d.count})` : '';
-      return `  fontSize: ${d.expr}${times}`;
+    const total = dynamic.reduce((sum, entry) => sum + entry.count, 0);
+    const lines = dynamic.slice(0, MAX_LISTED).map(entry => {
+      const times = entry.count > 1 ? `  (×${entry.count})` : '';
+      return `  fontSize: ${entry.expr}${times}`;
     });
     if (dynamic.length > MAX_LISTED)
       lines.push(`  … and ${dynamic.length - MAX_LISTED} more`);
@@ -598,12 +636,12 @@ export function formatFontSizeReport({
     );
   }
 
-  for (const d of dropped) {
+  for (const droppedFamily of dropped) {
     blocks.push(
-      `embedded-react: ${d.family} is baked at more than ${MAX_BAKED_SIZES} sizes — the engine ` +
-        `registers the first ${MAX_BAKED_SIZES} and ignores ${sizeList(d.ignored)}, so text at ` +
+      `embedded-react: ${droppedFamily.family} is baked at more than ${MAX_BAKED_SIZES} sizes — the engine ` +
+        `registers the first ${MAX_BAKED_SIZES} and ignores ${sizeList(droppedFamily.ignored)}, so text at ` +
         `those sizes snaps to one that did register.\n  fix: choose the ${MAX_BAKED_SIZES} that ` +
-        `matter — assets.config.js → fonts: {${configKey(d.family)}: {sizes: ${sizeList(d.registered)}}}`,
+        `matter — assets.config.js → fonts: {${configKey(droppedFamily.family)}: {sizes: ${sizeList(droppedFamily.registered)}}}`,
     );
   }
 
@@ -616,15 +654,17 @@ function gapFix(gaps, fonts) {
     return (
       `  fix: the built-in font is baked at ${sizeList(BUILTIN_SIZES)} — use one of those sizes, or ` +
       `import a .ttf/.otf\n       and bake your own (assets.config.js → fonts: ` +
-      `{<Family>: {sizes: ${sizeList(new Set(gaps.map(g => g.size)))}}})`
+      `{<Family>: {sizes: ${sizeList(new Set(gaps.map(gap => gap.size)))}}})`
     );
   }
   const perFamily = fonts
-    .map(f => {
-      const missing = gaps.filter(g => g.family === f.family).map(g => g.size);
+    .map(font => {
+      const missing = gaps
+        .filter(gap => gap.family === font.family)
+        .map(gap => gap.size);
       if (!missing.length) return null;
-      const wanted = new Set([...bakedSizes(f), ...missing]);
-      return `${configKey(f.family)}: {sizes: ${sizeList(wanted)}}`;
+      const wanted = new Set([...bakedSizes(font), ...missing]);
+      return `${configKey(font.family)}: {sizes: ${sizeList(wanted)}}`;
     })
     .filter(Boolean);
   return `  fix: assets.config.js → fonts: {${perFamily.join(', ')}}`;

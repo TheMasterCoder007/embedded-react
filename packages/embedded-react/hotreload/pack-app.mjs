@@ -36,13 +36,13 @@ const QJS_TAG = 'v0.15.0';
 /**
  * Bundle + compile + bake an app into an ERCF container Buffer.
  *
- * @param {object}   o
- * @param {string}   o.entry        App entry (index.jsx/tsx).
- * @param {string}   o.projectRoot  Project cwd (for assets.config.js + persist scoping).
- * @param {string}   o.libSrc       Path to the embedded-react library entry (aliased as 'embedded-react').
- * @param {string[]} o.nodePaths    esbuild nodePaths (package + project node_modules).
- * @param {string}   o.simDir       Dir holding the prebuilt sim wasm (used to compile bytecode).
- * @param {boolean}  [o.persist]    Apply the useState→persist transform (dev hot reload preserves state).
+ * @param {object}   options
+ * @param {string}   options.entry        App entry (index.jsx/tsx).
+ * @param {string}   options.projectRoot  Project cwd (for assets.config.js + persist scoping).
+ * @param {string}   options.libSrc       Path to the embedded-react library entry (aliased as 'embedded-react').
+ * @param {string[]} options.nodePaths    esbuild nodePaths (package + project node_modules).
+ * @param {string}   options.simDir       Dir holding the prebuilt sim wasm (used to compile bytecode).
+ * @param {boolean}  [options.persist]    Apply the useState→persist transform (dev hot reload preserves state).
  * @returns {Promise<{container: Buffer, bytecodeLen: number, assetsLen: number}>}
  */
 export async function packAppContainer({
@@ -66,7 +66,7 @@ export async function packAppContainer({
   const {registerSvgVectorLoader} = await import('../assets/svg-loader.mjs');
   const {compileToBytecode} = await import('../qjsc-wasm.mjs');
 
-  const assetName = p => basename(p).replace(/\.[^.]+$/, '');
+  const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
   const images = new Map();
   const fonts = new Map();
 
@@ -77,59 +77,71 @@ export async function packAppContainer({
     const {transformPersist, shouldPersist} =
       await import('../persist-transform.mjs');
     const {relative} = await import('node:path');
-    const projNorm = projectRoot.replace(/\\/g, '/');
-    persistHooks = {transformPersist, shouldPersist, relative, projNorm};
+    const normalizedProjectRoot = projectRoot.replace(/\\/g, '/');
+    persistHooks = {
+      transformPersist,
+      shouldPersist,
+      relative,
+      normalizedProjectRoot,
+    };
   }
 
   const assetPlugin = {
     name: 'embedded-react-assets',
-    setup(b) {
+    setup(build) {
       if (persistHooks) {
-        b.onLoad({filter: /\.(jsx?|tsx?)$/}, a => {
-          const {transformPersist, shouldPersist, relative, projNorm} =
-            persistHooks;
-          if (!shouldPersist(a.path, projNorm)) return undefined;
+        build.onLoad({filter: /\.(jsx?|tsx?)$/}, args => {
+          const {
+            transformPersist,
+            shouldPersist,
+            relative,
+            normalizedProjectRoot,
+          } = persistHooks;
+          if (!shouldPersist(args.path, normalizedProjectRoot))
+            return undefined;
           try {
-            const loader = a.path.endsWith('.tsx')
+            const loader = args.path.endsWith('.tsx')
               ? 'tsx'
-              : a.path.endsWith('.ts')
+              : args.path.endsWith('.ts')
                 ? 'ts'
                 : 'jsx';
             return {
               contents: transformPersist(
-                readFileSync(a.path, 'utf8'),
-                relative(projectRoot, a.path).replace(/\\/g, '/'),
+                readFileSync(args.path, 'utf8'),
+                relative(projectRoot, args.path).replace(/\\/g, '/'),
               ),
               loader,
             };
-          } catch (e) {
-            return {errors: [{text: `persist transform: ${e.message}`}]};
+          } catch (error) {
+            return {errors: [{text: `persist transform: ${error.message}`}]};
           }
         });
       }
-      b.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, a => {
-        const n = assetName(a.path);
-        images.set(n, a.path);
+      build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
+        const name = assetName(args.path);
+        images.set(name, args.path);
         return {
-          contents: `module.exports = ${JSON.stringify(n)};`,
+          contents: `module.exports = ${JSON.stringify(name)};`,
           loader: 'js',
         };
       });
-      b.onLoad({filter: /\.(ttf|otf)$/i}, a => {
-        const f = assetName(a.path);
-        fonts.set(f, a.path);
+      build.onLoad({filter: /\.(ttf|otf)$/i}, args => {
+        const family = assetName(args.path);
+        fonts.set(family, args.path);
         return {
-          contents: `module.exports = ${JSON.stringify(f)};`,
+          contents: `module.exports = ${JSON.stringify(family)};`,
           loader: 'js',
         };
       });
-      registerSvgVectorLoader(b, (name, p) => images.set(name, p));
+      registerSvgVectorLoader(build, (name, pngPath) =>
+        images.set(name, pngPath),
+      );
     },
   };
 
-  const tmp = resolve(tmpdir(), 'embedded-react-build');
-  mkdirSync(tmp, {recursive: true});
-  const bundlePath = resolve(tmp, 'app.bundle.js');
+  const buildDirectory = resolve(tmpdir(), 'embedded-react-build');
+  mkdirSync(buildDirectory, {recursive: true});
+  const bundlePath = resolve(buildDirectory, 'app.bundle.js');
   await esbuild.build({
     entryPoints: [entry],
     bundle: true,
@@ -145,17 +157,17 @@ export async function packAppContainer({
     legalComments: 'none',
     logLevel: 'silent',
   });
-  const bundleSrc = readFileSync(bundlePath, 'utf8');
+  const bundleSource = readFileSync(bundlePath, 'utf8');
 
-  const bytecode = await compileToBytecode(bundleSrc, simDir, {strip});
+  const bytecode = await compileToBytecode(bundleSource, simDir, {strip});
 
-  const usedSizes = analyzeFontSizes(bundleSrc);
-  let cfg = {};
-  const cp = resolve(projectRoot, 'assets.config.js');
-  if (existsSync(cp))
-    cfg = (await import(pathToFileURL(cp).href)).default || {};
-  const fontConfig = cfg.fonts || {};
-  const imageConfig = cfg.images || {};
+  const usedSizes = analyzeFontSizes(bundleSource);
+  let config = {};
+  const configPath = resolve(projectRoot, 'assets.config.js');
+  if (existsSync(configPath))
+    config = (await import(pathToFileURL(configPath).href)).default || {};
+  const fontConfig = config.fonts || {};
+  const imageConfig = config.images || {};
   const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
     path,
@@ -164,7 +176,7 @@ export async function packAppContainer({
   }));
   const bakedImages = imageJobs.map(bakeImage);
   const bakedFonts = fontJobs.map(bakeFont);
-  warnMissingGlyphs({source: bundleSrc, fonts: bakedFonts});
+  warnMissingGlyphs({source: bundleSource, fonts: bakedFonts});
   warnFontSizes({used: usedSizes, fonts: bakedFonts});
   const assetPack =
     bakedImages.length || bakedFonts.length

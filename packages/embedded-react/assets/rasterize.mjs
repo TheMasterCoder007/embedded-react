@@ -23,6 +23,11 @@
 // pixelSize), so xOffset is the glyph's left bearing from the pen and yOffset is the distance from
 // the line box top (y = 0) down to the top of the glyph ink.
 
+const DEFAULT_SUPERSAMPLE = 4;
+const DEFAULT_CURVE_STEPS = 12;
+const COVERAGE_MAX = 255;
+const SAMPLE_CENTER = 0.5;
+
 /**
  * Flattens opentype path commands into closed contours of {x, y} points.
  *
@@ -32,60 +37,66 @@
  */
 function flattenCommands(commands, steps) {
   const contours = [];
-  let cur = null;
-  let cx = 0;
-  let cy = 0; // current point
-  let sx = 0;
-  let sy = 0; // contour start
-  for (const c of commands) {
-    if (c.type === 'M') {
-      if (cur && cur.length > 1) contours.push(cur);
-      cur = [{x: c.x, y: c.y}];
-      cx = sx = c.x;
-      cy = sy = c.y;
-    } else if (c.type === 'L') {
-      cur.push({x: c.x, y: c.y});
-      cx = c.x;
-      cy = c.y;
-    } else if (c.type === 'Q') {
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps;
-        const mt = 1 - t;
-        cur.push({
-          x: mt * mt * cx + 2 * mt * t * c.x1 + t * t * c.x,
-          y: mt * mt * cy + 2 * mt * t * c.y1 + t * t * c.y,
-        });
-      }
-      cx = c.x;
-      cy = c.y;
-    } else if (c.type === 'C') {
-      for (let i = 1; i <= steps; i++) {
-        const t = i / steps;
-        const mt = 1 - t;
-        cur.push({
+  let contour = null;
+  let currentX = 0;
+  let currentY = 0;
+  let startX = 0;
+  let startY = 0;
+  for (const command of commands) {
+    if (command.type === 'M') {
+      if (contour && contour.length > 1) contours.push(contour);
+      contour = [{x: command.x, y: command.y}];
+      currentX = startX = command.x;
+      currentY = startY = command.y;
+    } else if (command.type === 'L') {
+      contour.push({x: command.x, y: command.y});
+      currentX = command.x;
+      currentY = command.y;
+    } else if (command.type === 'Q') {
+      for (let step = 1; step <= steps; step++) {
+        const t = step / steps;
+        const oneMinusT = 1 - t;
+        contour.push({
           x:
-            mt * mt * mt * cx +
-            3 * mt * mt * t * c.x1 +
-            3 * mt * t * t * c.x2 +
-            t * t * t * c.x,
+            oneMinusT * oneMinusT * currentX +
+            2 * oneMinusT * t * command.x1 +
+            t * t * command.x,
           y:
-            mt * mt * mt * cy +
-            3 * mt * mt * t * c.y1 +
-            3 * mt * t * t * c.y2 +
-            t * t * t * c.y,
+            oneMinusT * oneMinusT * currentY +
+            2 * oneMinusT * t * command.y1 +
+            t * t * command.y,
         });
       }
-      cx = c.x;
-      cy = c.y;
-    } else if (c.type === 'Z') {
-      if (cur) {
-        cur.push({x: sx, y: sy}); // close the contour
-        if (cur.length > 1) contours.push(cur);
-        cur = null;
+      currentX = command.x;
+      currentY = command.y;
+    } else if (command.type === 'C') {
+      for (let step = 1; step <= steps; step++) {
+        const t = step / steps;
+        const oneMinusT = 1 - t;
+        contour.push({
+          x:
+            oneMinusT * oneMinusT * oneMinusT * currentX +
+            3 * oneMinusT * oneMinusT * t * command.x1 +
+            3 * oneMinusT * t * t * command.x2 +
+            t * t * t * command.x,
+          y:
+            oneMinusT * oneMinusT * oneMinusT * currentY +
+            3 * oneMinusT * oneMinusT * t * command.y1 +
+            3 * oneMinusT * t * t * command.y2 +
+            t * t * t * command.y,
+        });
+      }
+      currentX = command.x;
+      currentY = command.y;
+    } else if (command.type === 'Z') {
+      if (contour) {
+        contour.push({x: startX, y: startY}); // close the contour
+        if (contour.length > 1) contours.push(contour);
+        contour = null;
       }
     }
   }
-  if (cur && cur.length > 1) contours.push(cur);
+  if (contour && contour.length > 1) contours.push(contour);
   return contours;
 }
 
@@ -100,20 +111,20 @@ function flattenCommands(commands, steps) {
  *          An empty (width 0, height 0) result for whitespace / glyphs with no ink.
  */
 export function rasterize(path, opts = {}) {
-  const ss = opts.ss || 4;
-  const steps = opts.steps || 12;
+  const supersample = opts.ss || DEFAULT_SUPERSAMPLE;
+  const steps = opts.steps || DEFAULT_CURVE_STEPS;
   const contours = flattenCommands(path.commands, steps);
 
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  for (const ct of contours) {
-    for (const p of ct) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
+  for (const contour of contours) {
+    for (const point of contour) {
+      if (point.x < minX) minX = point.x;
+      if (point.x > maxX) maxX = point.x;
+      if (point.y < minY) minY = point.y;
+      if (point.y > maxY) maxY = point.y;
     }
   }
   if (!Number.isFinite(minX)) {
@@ -126,10 +137,10 @@ export function rasterize(path, opts = {}) {
     };
   }
 
-  const x0 = Math.floor(minX);
-  const y0 = Math.floor(minY);
-  const width = Math.ceil(maxX) - x0;
-  const height = Math.ceil(maxY) - y0;
+  const originX = Math.floor(minX);
+  const originY = Math.floor(minY);
+  const width = Math.ceil(maxX) - originX;
+  const height = Math.ceil(maxY) - originY;
   if (width <= 0 || height <= 0) {
     return {
       width: 0,
@@ -140,64 +151,80 @@ export function rasterize(path, opts = {}) {
     };
   }
 
-  // Non-horizontal edges, normalized so ylo < yhi; dir is the winding contribution.
+  // Non-horizontal edges, normalized so yLow < yHigh; winding is the edge's winding contribution.
   const edges = [];
-  for (const ct of contours) {
-    for (let i = 0; i + 1 < ct.length; i++) {
-      const a = ct[i];
-      const b = ct[i + 1];
-      if (a.y === b.y) continue;
-      if (a.y < b.y)
+  for (const contour of contours) {
+    for (let index = 0; index + 1 < contour.length; index++) {
+      const from = contour[index];
+      const to = contour[index + 1];
+      if (from.y === to.y) continue;
+      if (from.y < to.y)
         edges.push({
-          ylo: a.y,
-          yhi: b.y,
-          x: a.x,
-          dxdy: (b.x - a.x) / (b.y - a.y),
-          dir: 1,
+          yLow: from.y,
+          yHigh: to.y,
+          x: from.x,
+          slope: (to.x - from.x) / (to.y - from.y),
+          winding: 1,
         });
       else
         edges.push({
-          ylo: b.y,
-          yhi: a.y,
-          x: b.x,
-          dxdy: (a.x - b.x) / (a.y - b.y),
-          dir: -1,
+          yLow: to.y,
+          yHigh: from.y,
+          x: to.x,
+          slope: (from.x - to.x) / (from.y - to.y),
+          winding: -1,
         });
     }
   }
 
   const counts = new Uint16Array(width * height); // covered subsamples per output pixel
-  const subW = width * ss;
-  for (let sy = 0; sy < height * ss; sy++) {
-    const sampleY = y0 + (sy + 0.5) / ss;
-    const xs = [];
-    for (const e of edges) {
-      if (sampleY >= e.ylo && sampleY < e.yhi) {
-        xs.push({x: e.x + (sampleY - e.ylo) * e.dxdy, dir: e.dir});
+  const subsampleWidth = width * supersample;
+  for (
+    let subsampleRow = 0;
+    subsampleRow < height * supersample;
+    subsampleRow++
+  ) {
+    const sampleY = originY + (subsampleRow + SAMPLE_CENTER) / supersample;
+    const crossings = [];
+    for (const edge of edges) {
+      if (sampleY >= edge.yLow && sampleY < edge.yHigh) {
+        crossings.push({
+          x: edge.x + (sampleY - edge.yLow) * edge.slope,
+          winding: edge.winding,
+        });
       }
     }
-    if (xs.length < 2) continue;
-    xs.sort((p, q) => p.x - q.x);
-    const outRow = (sy / ss) | 0;
-    let wind = 0;
-    for (let i = 0; i + 1 < xs.length; i++) {
-      wind += xs[i].dir;
-      if (wind === 0) continue;
-      // Interior span [xs[i].x, xs[i+1].x): tally the subsample columns whose centre falls inside.
-      let sxa = Math.ceil((xs[i].x - x0) * ss - 0.5);
-      let sxb = Math.ceil((xs[i + 1].x - x0) * ss - 0.5);
-      if (sxa < 0) sxa = 0;
-      if (sxb > subW) sxb = subW;
-      for (let sx = sxa; sx < sxb; sx++) {
-        counts[outRow * width + ((sx / ss) | 0)]++;
+    if (crossings.length < 2) continue;
+    crossings.sort((left, right) => left.x - right.x);
+    const outputRow = (subsampleRow / supersample) | 0;
+    let winding = 0;
+    for (let index = 0; index + 1 < crossings.length; index++) {
+      winding += crossings[index].winding;
+      if (winding === 0) continue;
+      // Interior span [crossings[index].x, crossings[index+1].x): tally the subsample columns whose
+      // centre falls inside.
+      let spanStart = Math.ceil(
+        (crossings[index].x - originX) * supersample - SAMPLE_CENTER,
+      );
+      let spanEnd = Math.ceil(
+        (crossings[index + 1].x - originX) * supersample - SAMPLE_CENTER,
+      );
+      if (spanStart < 0) spanStart = 0;
+      if (spanEnd > subsampleWidth) spanEnd = subsampleWidth;
+      for (
+        let subsampleColumn = spanStart;
+        subsampleColumn < spanEnd;
+        subsampleColumn++
+      ) {
+        counts[outputRow * width + ((subsampleColumn / supersample) | 0)]++;
       }
     }
   }
 
-  const maxCov = ss * ss;
+  const maxCoverage = supersample * supersample;
   const coverage = new Uint8Array(width * height);
-  for (let i = 0; i < coverage.length; i++) {
-    coverage[i] = Math.round((counts[i] * 255) / maxCov);
+  for (let index = 0; index < coverage.length; index++) {
+    coverage[index] = Math.round((counts[index] * COVERAGE_MAX) / maxCoverage);
   }
-  return {width, height, xOffset: x0, yOffset: y0, coverage};
+  return {width, height, xOffset: originX, yOffset: originY, coverage};
 }
