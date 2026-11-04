@@ -206,7 +206,7 @@ static void setup_backend(TestCtx* test_context, EmbeddedRenderBackend* backend)
     backend->fill_rect = fill_cb;
     backend->copy_rect = copy_cb;
     backend->blend_rect = blend_cb;
-    backend->ctx = test_context;
+    backend->context = test_context;
     embedded_renderer_set_backend(backend);
 }
 
@@ -229,7 +229,7 @@ static ERProps make_props(void)
     props.margin_left = props.margin_top = props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
     props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
     props.flex_basis = ER_LAYOUT_AUTO;
-    props.flex_direction = ER_FLEX_COL;
+    props.flex_direction = ER_FLEX_COLUMN;
     props.align_items = ER_ALIGN_STRETCH;
     props.align_self = ER_ALIGN_AUTO;
     props.justify_content = ER_JUSTIFY_FLEX_START;

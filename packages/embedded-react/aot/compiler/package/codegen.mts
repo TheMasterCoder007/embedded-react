@@ -199,8 +199,8 @@ const EVENT_FIELDS: Record<string, number> = {
 const LAYOUT_FIELDS: Record<LayoutField, number> = {
   x: EventField.layoutX,
   y: EventField.layoutY,
-  width: EventField.layoutW,
-  height: EventField.layoutH,
+  width: EventField.layoutWidth,
+  height: EventField.layoutHeight,
 };
 
 /** The engine's display values. */

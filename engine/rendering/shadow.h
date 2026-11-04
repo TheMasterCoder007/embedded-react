@@ -34,8 +34,8 @@ extern "C"
      * The shadow is blended directly into the current render destination before the node's
      * own background is drawn, so it appears underneath the node.  A two-pass separable box
      * blur (horizontal then vertical) approximates a soft Gaussian shadow.  The blur radius
-     * is automatically clamped so the working buffer stays within ERUI_SCRATCH_W ×
-     * ERUI_SCRATCH_H pixels.  When the node is larger than the scratch buffer the shadow is
+     * is automatically clamped so the working buffer stays within ERUI_SCRATCH_WIDTH ×
+     * ERUI_SCRATCH_HEIGHT pixels.  When the node is larger than the scratch buffer the shadow is
      * silently skipped.
      *
      * When ERUI_SHADOWS is 0 this function compiles to a no-op and adds zero code size.

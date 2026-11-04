@@ -27,7 +27,7 @@ import type {IrUpdateVector} from './statements.mts';
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** The most stops the engine's gradient holds (ER_VGRAD_MAX_STOPS). */
+/** The most stops the engine's gradient holds (ER_VECTOR_GRADIENT_MAX_STOPS). */
 export const MAX_GRADIENT_STOPS = 8;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -67,7 +67,7 @@ export interface IrVectorTables {
  * piece of shape geometry: a sum or difference of coordinates, a scaled handle, an angle, a clamped radius.
  */
 export type IrTapeValue =
-  /** An opcode, an ER_VOP_* name. */
+  /** An opcode, an ER_VECTOR_OP_* name. */
   | {kind: 'op'; operation: string}
   | {kind: 'number'; value: number}
   /** A state-driven attribute, read as a float. */

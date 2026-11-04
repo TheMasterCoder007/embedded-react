@@ -216,11 +216,11 @@ static const EmbeddedRenderBackend k_noop_backend = {
     noop_blend,
     NULL,
     NULL,
-    NULL, /* fill / copy / blend / wait / frame_ready / ctx */
+    NULL, /* fill / copy / blend / wait / frame_ready / context */
     0,    /* band_height: 0 = classic full-framebuffer path */
     NULL,
     NULL, /* band_begin / band_flush (unused without banding) */
-    NULL  /* copy_rect_fmt (headless: nothing to blit into) */
+    NULL  /* copy_rect_format (headless: nothing to blit into) */
 };
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -493,7 +493,7 @@ static void run_app(void)
     }
     else if (config_status != ER_CONTAINER_OK)
     {
-        const char* reason = er_runtime_container_status_str(config_status);
+        const char* reason = er_runtime_container_status_name(config_status);
         ESP_LOGE(TAG, "config rejected: %s", reason);
         er_runtime_show_message("Couldn't load config", reason, "Re-pack with `npm run pack` and re-flash the config.");
     }
@@ -510,7 +510,8 @@ static void run_app(void)
     }
     ERRect dirty = {0, 0, 0, 0};
     const bool painted = er_get_dirty_rect(&dirty);
-    ESP_LOGI(TAG, "first commit painted=%d dirty=%d,%d %dx%d", (int)painted, dirty.x, dirty.y, dirty.w, dirty.h);
+    ESP_LOGI(
+        TAG, "first commit painted=%d dirty=%d,%d %dx%d", (int)painted, dirty.x, dirty.y, dirty.width, dirty.height);
     ESP_LOGI(TAG,
              "free PSRAM after boot: %u, free internal: %u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -659,8 +660,8 @@ static void run_app(void)
             static int s_pie_diag_logged = 0;
             if (!s_pie_diag_logged && !er_esp32_lcd_pie_enabled())
             {
-                extern const char* er_pie_diag(void);
-                const char* diag = er_pie_diag();
+                extern const char* er_pie_diagnostics(void);
+                const char* diag = er_pie_diagnostics();
                 if (diag[0] != '\0')
                 {
                     ESP_LOGW(TAG, "PIE self-test diag: %s", diag);

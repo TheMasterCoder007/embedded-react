@@ -2,7 +2,7 @@
 
 Reference implementations of `EmbeddedRenderBackend`: the five function pointers (`fill_rect`,
 `copy_rect`, `blend_rect`, `wait`, `frame_ready`) plus the optional extensions (banded rendering,
-the opaque `copy_rect_fmt` blit, multiple display buffers). The engine is portable; backends are
+the opaque `copy_rect_format` blit, multiple display buffers). The engine is portable; backends are
 not. Each folder is one rendering API or peripheral, not one chip.
 
 **Docs:** [Engine and backends](https://embedded-react.dev/concepts/engine-and-backends) for the

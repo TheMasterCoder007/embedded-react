@@ -41,18 +41,18 @@
  * rendering/scratch_pool.c owns the allocation; rendering/shadow.c and rendering/transform.c size their own
  * working buffers to match and refuse anything larger.
  */
-#ifndef ERUI_SCRATCH_W
-#define ERUI_SCRATCH_W 240
+#ifndef ERUI_SCRATCH_WIDTH
+#define ERUI_SCRATCH_WIDTH 240
 #endif
 
 /** @brief Scratch height in pixels; also the default for the band strip and the transform source. */
-#ifndef ERUI_SCRATCH_H
-#define ERUI_SCRATCH_H 240
+#ifndef ERUI_SCRATCH_HEIGHT
+#define ERUI_SCRATCH_HEIGHT 240
 #endif
 
 /** @brief Opacity-composite strip height; smaller trades RAM for extra banded passes over a tall subtree. */
-#ifndef ERUI_SCRATCH_BAND_H
-#define ERUI_SCRATCH_BAND_H ERUI_SCRATCH_H
+#ifndef ERUI_SCRATCH_BAND_HEIGHT
+#define ERUI_SCRATCH_BAND_HEIGHT ERUI_SCRATCH_HEIGHT
 #endif
 
 /** @brief Nested offscreen-composite layers the scratch pool can hold at once. */
@@ -60,13 +60,13 @@
 #define ERUI_MAX_OPACITY_DEPTH 4
 #endif
 
-/* The transform source defaults to the scratch dims so a consumer that sizes only ERUI_SCRATCH_W/H keeps its
- * old transform budget; set ERUI_XFORM_W/H to decouple them (useful when the strips are screen-wide). */
-#ifndef ERUI_XFORM_W
-#define ERUI_XFORM_W ERUI_SCRATCH_W
+/* The transform source defaults to the scratch dims so a consumer that sizes only ERUI_SCRATCH_WIDTH/HEIGHT keeps its
+ * old transform budget; set ERUI_TRANSFORM_WIDTH/HEIGHT to decouple them (useful when the strips are screen-wide). */
+#ifndef ERUI_TRANSFORM_WIDTH
+#define ERUI_TRANSFORM_WIDTH ERUI_SCRATCH_WIDTH
 #endif
-#ifndef ERUI_XFORM_H
-#define ERUI_XFORM_H ERUI_SCRATCH_H
+#ifndef ERUI_TRANSFORM_HEIGHT
+#define ERUI_TRANSFORM_HEIGHT ERUI_SCRATCH_HEIGHT
 #endif
 
 /**
@@ -74,11 +74,11 @@
  *
  * rendering/image_scaler.c and rendering/gradient.c both assemble one row here, but they do NOT handle an
  * over-wide row alike: the image scaler chunks across it, while the gradient renders only the first
- * ERUI_MAX_IMG_ROW_PIXELS columns and truncates the rest. So size this to cover the widest GRADIENT on the
+ * ERUI_MAX_IMAGE_ROW_PIXELS columns and truncates the rest. So size this to cover the widest GRADIENT on the
  * screen, not just the widest scaled image — below that, wide gradients lose their right-hand side.
  */
-#ifndef ERUI_MAX_IMG_ROW_PIXELS
-#define ERUI_MAX_IMG_ROW_PIXELS 800
+#ifndef ERUI_MAX_IMAGE_ROW_PIXELS
+#define ERUI_MAX_IMAGE_ROW_PIXELS 800
 #endif
 
 /**

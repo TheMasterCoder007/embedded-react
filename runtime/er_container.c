@@ -74,7 +74,7 @@ uint32_t er_crc32(const uint8_t* bytes, size_t byte_count)
     return ~crc;
 }
 
-const char* er_container_status_str(ErContainerStatus status)
+const char* er_container_status_name(ErContainerStatus status)
 {
     switch (status)
     {
@@ -86,7 +86,7 @@ const char* er_container_status_str(ErContainerStatus status)
             return "unsupported or malformed container";
         case ER_CONTAINER_BAD_CRC:
             return "CRC mismatch (corrupt or partially written)";
-        case ER_CONTAINER_BAD_QJS:
+        case ER_CONTAINER_BAD_QUICKJS:
             return "built for a different QuickJS version";
         case ER_CONTAINER_LOAD_FAILED:
             return "app load failed";

@@ -124,40 +124,40 @@ int main(void)
     /* A mixed static tape: a filled+stroked polygon, a stroked open path with round joins, and a full
      * circle that routes through the analytic arc core. */
     const float tape[] = {/* shape 0: filled + stroked quad */
-                          ER_VOP_SHAPE,
+                          ER_VECTOR_OP_SHAPE,
                           0,
-                          ER_VOP_MOVE,
+                          ER_VECTOR_OP_MOVE,
                           12,
                           12,
-                          ER_VOP_LINE,
+                          ER_VECTOR_OP_LINE,
                           52,
                           16,
-                          ER_VOP_LINE,
+                          ER_VECTOR_OP_LINE,
                           48,
                           52,
-                          ER_VOP_LINE,
+                          ER_VECTOR_OP_LINE,
                           14,
                           44,
-                          ER_VOP_CLOSE,
+                          ER_VECTOR_OP_CLOSE,
                           /* shape 1: open zigzag, stroked with round joins */
-                          ER_VOP_SHAPE,
+                          ER_VECTOR_OP_SHAPE,
                           1,
-                          ER_VOP_MOVE,
+                          ER_VECTOR_OP_MOVE,
                           70,
                           20,
-                          ER_VOP_LINE,
+                          ER_VECTOR_OP_LINE,
                           90,
                           40,
-                          ER_VOP_LINE,
+                          ER_VECTOR_OP_LINE,
                           74,
                           58,
-                          ER_VOP_LINE,
+                          ER_VECTOR_OP_LINE,
                           96,
                           74,
                           /* shape 2: full circle -> analytic arc route (fill + stroke) */
-                          ER_VOP_SHAPE,
+                          ER_VECTOR_OP_SHAPE,
                           2,
-                          ER_VOP_ARC,
+                          ER_VECTOR_OP_ARC,
                           40,
                           90,
                           20,
@@ -166,9 +166,9 @@ int main(void)
                           0};
     const int tape_count = (int)(sizeof(tape) / sizeof(tape[0]));
     const ERVectorPaint paints[3] = {
-        {0xFF3355AAu, 0xFFFFFFFFu, 3.0f, 0.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO, 0, 0},
-        {0x00000000u, 0xFF22CC44u, 5.0f, 0.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO, 0, 0},
-        {0xFF884422u, 0xFFDDDDDDu, 4.0f, 0.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO, 0, 0},
+        {0xFF3355AAu, 0xFFFFFFFFu, 3.0f, 0.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_NONZERO, 0, 0},
+        {0x00000000u, 0xFF22CC44u, 5.0f, 0.0f, ER_VECTOR_CAP_ROUND, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO, 0, 0},
+        {0xFF884422u, 0xFFDDDDDDu, 4.0f, 0.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_NONZERO, 0, 0},
     };
 
     const int slot = er_vector_store(-1, tape, tape_count, paints, 3, NULL, 0);
@@ -230,22 +230,22 @@ int main(void)
     /* --- er_vector_store() invalidates: new geometry must paint, and an every-render tape update
      *     (an animated node) must never record --- */
     {
-        const float tape2[] = {ER_VOP_SHAPE,
+        const float tape2[] = {ER_VECTOR_OP_SHAPE,
                                0,
-                               ER_VOP_MOVE,
+                               ER_VECTOR_OP_MOVE,
                                100,
                                100,
-                               ER_VOP_LINE,
+                               ER_VECTOR_OP_LINE,
                                120,
                                100,
-                               ER_VOP_LINE,
+                               ER_VECTOR_OP_LINE,
                                120,
                                120,
-                               ER_VOP_LINE,
+                               ER_VECTOR_OP_LINE,
                                100,
                                120,
-                               ER_VOP_CLOSE};
-        const ERVectorPaint red_paint = {0xFFFF0000u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 0, 0};
+                               ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint red_paint = {0xFFFF0000u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO, 0, 0};
 #if ERUI_VECTOR_EDGE_CACHE
         const uint32_t builds_before = er_vector_cache_builds();
         const uint32_t hits_before = er_vector_cache_hits();
@@ -291,22 +291,22 @@ int main(void)
         er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
         er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record */
         er_vector_free(slot);
-        const float tape3[] = {ER_VOP_SHAPE,
+        const float tape3[] = {ER_VECTOR_OP_SHAPE,
                                0,
-                               ER_VOP_MOVE,
+                               ER_VECTOR_OP_MOVE,
                                4,
                                4,
-                               ER_VOP_LINE,
+                               ER_VECTOR_OP_LINE,
                                24,
                                4,
-                               ER_VOP_LINE,
+                               ER_VECTOR_OP_LINE,
                                24,
                                24,
-                               ER_VOP_LINE,
+                               ER_VECTOR_OP_LINE,
                                4,
                                24,
-                               ER_VOP_CLOSE};
-        const ERVectorPaint green_paint = {0xFF00FF00u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 0, 0};
+                               ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint green_paint = {0xFF00FF00u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO, 0, 0};
         const int slot2 = er_vector_store(-1, tape3, (int)(sizeof(tape3) / sizeof(tape3[0])), &green_paint, 1, NULL, 0);
         if (slot2 != slot)
             return fail("freed slot was not re-issued (test setup assumption)");
@@ -343,19 +343,26 @@ int main(void)
          * the legacy build does. */
         static float big[512];
         int big_count = 0;
-        big[big_count++] = ER_VOP_SHAPE;
+        big[big_count++] = ER_VECTOR_OP_SHAPE;
         big[big_count++] = 0;
-        big[big_count++] = ER_VOP_MOVE;
+        big[big_count++] = ER_VECTOR_OP_MOVE;
         big[big_count++] = 4.0f;
         big[big_count++] = 60.0f;
         for (int segment_index = 0; segment_index < 160; segment_index++)
         {
-            big[big_count++] = ER_VOP_LINE;
+            big[big_count++] = ER_VECTOR_OP_LINE;
             big[big_count++] = 5.0f + (float)(segment_index % 2) * 110.0f;
             big[big_count++] = 60.0f + (float)segment_index * 0.05f;
         }
-        const ERVectorPaint big_paint = {
-            0x00000000u, 0xFF8080FFu, 6.0f, 0.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO, 0, 0};
+        const ERVectorPaint big_paint = {0x00000000u,
+                                         0xFF8080FFu,
+                                         6.0f,
+                                         0.0f,
+                                         ER_VECTOR_CAP_ROUND,
+                                         ER_VECTOR_JOIN_ROUND,
+                                         ER_VECTOR_FILL_NONZERO,
+                                         0,
+                                         0};
         const int big_slot = er_vector_store(-1, big, big_count, &big_paint, 1, NULL, 0);
         if (big_slot < 0)
             return fail("no slot for the overflow test");

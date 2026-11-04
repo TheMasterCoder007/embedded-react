@@ -80,7 +80,7 @@ ERProps g_erb_props;
 
 static ErbProgram s_candidate;
 static ERVectorPaint s_paints[ERUI_VECTOR_PAINTS_MAX];
-static ERVectorGradient s_gradients[ERUI_VECTOR_GRADS_MAX];
+static ERVectorGradient s_gradients[ERUI_VECTOR_GRADIENTS_MAX];
 #if ERUI_ONSCREEN_KEYBOARD
 static ERKeyboardKey s_keyboard_keys[ERB_MAX_KEYBOARD_KEYS];
 static ERKeyboardRow s_keyboard_rows[ERB_MAX_KEYBOARD_ROWS];
@@ -127,7 +127,7 @@ static ErbTimer* timers(void)
 
 static ErbAnimEntry* anim_entries(void)
 {
-    return (ErbAnimEntry*)region(ERB_REGION_ANIMS);
+    return (ErbAnimEntry*)region(ERB_REGION_ANIMATIONS);
 }
 
 static ErbEvent* queue_record(uint32_t position)
@@ -145,44 +145,44 @@ static uint8_t* slot_data(uint16_t slot)
  - Faults and reports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-const char* erb_status_str(ErbStatus status)
+const char* erb_status_name(ErbStatus status)
 {
     static const char* const reasons[ERB_STATUS_COUNT_] = {
         [ERB_OK] = "ok",
-        [ERB_ERR_NO_PACKAGE] = "no package installed",
-        [ERB_ERR_CORRUPT] = "not a package, or corrupt",
-        [ERB_ERR_NOT_FLOW_B] = "not a Flow B package",
-        [ERB_ERR_NEWER_FORMAT] = "built for a newer runtime",
-        [ERB_ERR_ENGINE_ABI] = "built for another engine ABI",
-        [ERB_ERR_NO_PANEL] = "no layout for this screen",
-        [ERB_ERR_TOO_BIG] = "needs more than the firmware reserves",
-        [ERB_ERR_TABLE] = "malformed table",
-        [ERB_ERR_STRING] = "malformed string",
-        [ERB_ERR_ARENA] = "bad arena layout",
-        [ERB_ERR_STATE] = "bad state layout",
-        [ERB_ERR_PROP] = "bad prop",
-        [ERB_ERR_TEMPLATE] = "bad template",
-        [ERB_ERR_BINDING] = "bad binding",
-        [ERB_ERR_ANIMATION] = "bad animation",
-        [ERB_ERR_TAPE] = "bad vector tape",
-        [ERB_ERR_FUNCTION] = "bad function",
-        [ERB_ERR_BYTECODE] = "bad bytecode",
-        [ERB_ERR_CONTROL_FLOW] = "bad control flow",
-        [ERB_ERR_RECURSION] = "recursive call",
-        [ERB_ERR_STACK] = "stack too deep",
-        [ERB_ERR_IMPORT] = "missing native module",
-        [ERB_ERR_INPUT] = "bad input",
-        [ERB_ERR_DEBUG] = "debug table does not match",
-        [ERB_ERR_ASSETS] = "asset pack failed to load",
-        [ERB_ERR_SLOT] = "couldn't write the package slot",
-        [ERB_ERR_BUDGET] = "instruction budget exceeded",
-        [ERB_ERR_UPDATE_LOOP] = "update loop",
-        [ERB_ERR_QUEUE_FULL] = "event queue full",
-        [ERB_ERR_LIST_INDEX] = "list read past its end",
-        [ERB_ERR_TRAP] = "app stopped",
-        [ERB_ERR_NATIVE] = "native module failed",
-        [ERB_ERR_STALE_NODE] = "stale node handle",
-        [ERB_ERR_OUT_OF_NODES] = "out of nodes",
+        [ERB_ERROR_NO_PACKAGE] = "no package installed",
+        [ERB_ERROR_CORRUPT] = "not a package, or corrupt",
+        [ERB_ERROR_NOT_FLOW_B] = "not a Flow B package",
+        [ERB_ERROR_NEWER_FORMAT] = "built for a newer runtime",
+        [ERB_ERROR_ENGINE_ABI] = "built for another engine ABI",
+        [ERB_ERROR_NO_PANEL] = "no layout for this screen",
+        [ERB_ERROR_TOO_BIG] = "needs more than the firmware reserves",
+        [ERB_ERROR_TABLE] = "malformed table",
+        [ERB_ERROR_STRING] = "malformed string",
+        [ERB_ERROR_ARENA] = "bad arena layout",
+        [ERB_ERROR_STATE] = "bad state layout",
+        [ERB_ERROR_PROP] = "bad prop",
+        [ERB_ERROR_TEMPLATE] = "bad template",
+        [ERB_ERROR_BINDING] = "bad binding",
+        [ERB_ERROR_ANIMATION] = "bad animation",
+        [ERB_ERROR_TAPE] = "bad vector tape",
+        [ERB_ERROR_FUNCTION] = "bad function",
+        [ERB_ERROR_BYTECODE] = "bad bytecode",
+        [ERB_ERROR_CONTROL_FLOW] = "bad control flow",
+        [ERB_ERROR_RECURSION] = "recursive call",
+        [ERB_ERROR_STACK] = "stack too deep",
+        [ERB_ERROR_IMPORT] = "missing native module",
+        [ERB_ERROR_INPUT] = "bad input",
+        [ERB_ERROR_DEBUG] = "debug table does not match",
+        [ERB_ERROR_ASSETS] = "asset pack failed to load",
+        [ERB_ERROR_SLOT] = "couldn't write the package slot",
+        [ERB_ERROR_BUDGET] = "instruction budget exceeded",
+        [ERB_ERROR_UPDATE_LOOP] = "update loop",
+        [ERB_ERROR_QUEUE_FULL] = "event queue full",
+        [ERB_ERROR_LIST_INDEX] = "list read past its end",
+        [ERB_ERROR_TRAP] = "app stopped",
+        [ERB_ERROR_NATIVE] = "native module failed",
+        [ERB_ERROR_STALE_NODE] = "stale node handle",
+        [ERB_ERROR_OUT_OF_NODES] = "out of nodes",
     };
     return (unsigned)status < ERB_STATUS_COUNT_ ? reasons[status] : "unknown";
 }
@@ -197,21 +197,21 @@ static const char* resource_name(uint16_t resource)
             return "nodes";
         case ERB_RESOURCE_SLOT:
             return "package slot";
-        case ERB_RES_VECTOR_NODES:
+        case ERB_RESOURCE_VECTOR_NODES:
             return "vector nodes";
-        case ERB_RES_ANIM_VALUES:
+        case ERB_RESOURCE_ANIMATION_VALUES:
             return "animated values";
-        case ERB_RES_ANIMATIONS:
+        case ERB_RESOURCE_ANIMATIONS:
             return "animations";
-        case ERB_RES_ANIM_GROUPS:
+        case ERB_RESOURCE_ANIMATION_GROUPS:
             return "animation groups";
-        case ERB_RES_IMAGES:
+        case ERB_RESOURCE_IMAGES:
             return "images";
-        case ERB_RES_FONTS:
+        case ERB_RESOURCE_FONTS:
             return "fonts";
-        case ERB_RES_GLYPHS:
+        case ERB_RESOURCE_GLYPHS:
             return "glyphs";
-        case ERB_RES_EXTRA_GLYPHS:
+        case ERB_RESOURCE_EXTRA_GLYPHS:
             return "extra glyphs";
         default:
             return "an unknown resource";
@@ -273,7 +273,7 @@ static size_t error_amounts(const ErbError* error, char* buffer, size_t capacity
     int written;
     switch (error->status)
     {
-        case ERB_ERR_TOO_BIG:
+        case ERB_ERROR_TOO_BIG:
         {
             const bool bytes = error->resource == ERB_RESOURCE_ARENA || error->resource == ERB_RESOURCE_SLOT;
             format_amount(error->needed, bytes, needed);
@@ -286,7 +286,7 @@ static size_t error_amounts(const ErbError* error, char* buffer, size_t capacity
                                available);
             break;
         }
-        case ERB_ERR_ENGINE_ABI:
+        case ERB_ERROR_ENGINE_ABI:
             written = snprintf(buffer,
                                capacity,
                                "built for engine ABI %lu, this firmware runs %d to %d",
@@ -294,14 +294,14 @@ static size_t error_amounts(const ErbError* error, char* buffer, size_t capacity
                                ER_ABI_MIN,
                                ER_ABI);
             break;
-        case ERB_ERR_NO_PANEL:
+        case ERB_ERROR_NO_PANEL:
             written = snprintf(buffer,
                                capacity,
                                "this screen is %lu x %lu",
                                (unsigned long)error->needed,
                                (unsigned long)error->available);
             break;
-        case ERB_ERR_STACK:
+        case ERB_ERROR_STACK:
             format_amount(error->needed, false, needed);
             format_amount(error->available, false, available);
             written = snprintf(buffer, capacity, "needs %s cells, the arena has %s", needed, available);
@@ -351,7 +351,7 @@ static size_t error_reason(const ErbError* error, char* buffer, size_t capacity)
     return written_length(snprintf(buffer,
                                    capacity,
                                    "%s%s%s",
-                                   erb_status_str(error->status),
+                                   erb_status_name(error->status),
                                    error->name ? ": " : "",
                                    error->name ? error->name : ""),
                           capacity);
@@ -366,11 +366,11 @@ size_t erb_error_message(const ErbError* error, char* buffer, size_t capacity)
     size_t length;
     switch (error->status)
     {
-        case ERB_ERR_TOO_BIG:
-        case ERB_ERR_ENGINE_ABI:
+        case ERB_ERROR_TOO_BIG:
+        case ERB_ERROR_ENGINE_ABI:
             length = error_amounts(error, buffer, capacity);
             break;
-        case ERB_ERR_NO_PANEL:
+        case ERB_ERROR_NO_PANEL:
             length = written_length(snprintf(buffer,
                                              capacity,
                                              "no layout for %lu x %lu",
@@ -378,7 +378,7 @@ size_t erb_error_message(const ErbError* error, char* buffer, size_t capacity)
                                              (unsigned long)error->available),
                                     capacity);
             break;
-        case ERB_ERR_STACK:
+        case ERB_ERROR_STACK:
             length = written_length(snprintf(buffer, capacity, "stack too deep: "), capacity);
             length += error_amounts(error, buffer + length, capacity - length);
             break;
@@ -488,15 +488,15 @@ static void store(const ErbPropInfo* info, uint32_t bits)
     uint8_t* field = (uint8_t*)&g_erb_props + info->offset;
     switch (info->kind)
     {
-        case ERB_PK_I16:
-        case ERB_PK_U16:
+        case ERB_PROP_KIND_I16:
+        case ERB_PROP_KIND_U16:
         {
             const uint16_t value = (uint16_t)bits;
             memcpy(field, &value, sizeof(value));
             break;
         }
-        case ERB_PK_COLOR:
-        case ERB_PK_FLOAT:
+        case ERB_PROP_KIND_COLOR:
+        case ERB_PROP_KIND_FLOAT:
             memcpy(field, &bits, sizeof(bits));
             break;
         default:
@@ -525,7 +525,7 @@ void erb_rt_props(uint16_t set)
         const uint8_t* entry = program->prop_entries + (first + index) * ERB_PROP_SIZE;
         const ErbPropInfo* info = erb_prop_info(erb_u16(entry + ERB_PROP_ID_AT));
         const uint32_t value = erb_u32(entry + ERB_PROP_VALUE_AT);
-        if (info->kind == ERB_PK_STRING || info->kind == ERB_PK_IMAGE)
+        if (info->kind == ERB_PROP_KIND_STRING || info->kind == ERB_PROP_KIND_IMAGE)
         {
             strcpy((char*)&g_erb_props + info->offset, erb_string(program, value)); /* fits: checked at load */
         }
@@ -541,23 +541,23 @@ void erb_rt_pset_int(uint16_t prop, int32_t value)
     const ErbPropInfo* info = erb_prop_info(prop);
     switch (info->kind)
     {
-        case ERB_PK_I16:
+        case ERB_PROP_KIND_I16:
             store(info, (uint32_t)clamp(value, INT16_MIN, INT16_MAX));
             break;
-        case ERB_PK_U8:
-        case ERB_PK_OPACITY:
+        case ERB_PROP_KIND_U8:
+        case ERB_PROP_KIND_OPACITY:
             store(info, (uint32_t)clamp(value, 0, UINT8_MAX));
             break;
-        case ERB_PK_U16:
+        case ERB_PROP_KIND_U16:
             store(info, (uint32_t)clamp(value, 0, UINT16_MAX));
             break;
-        case ERB_PK_ENUM:
+        case ERB_PROP_KIND_ENUM:
             store(info, (uint32_t)clamp(value, 0, info->max));
             break;
-        case ERB_PK_BOOL:
+        case ERB_PROP_KIND_BOOL:
             store(info, value != 0);
             break;
-        case ERB_PK_FLOAT:
+        case ERB_PROP_KIND_FLOAT:
         {
             const float as_float = (float)value;
             uint32_t bits;
@@ -596,14 +596,14 @@ void erb_rt_pset_float(uint16_t prop, float value)
     const ErbPropInfo* info = erb_prop_info(prop);
     switch (info->kind)
     {
-        case ERB_PK_FLOAT:
+        case ERB_PROP_KIND_FLOAT:
         {
             uint32_t bits;
             memcpy(&bits, &value, sizeof(bits));
             store(info, bits);
             break;
         }
-        case ERB_PK_OPACITY:
+        case ERB_PROP_KIND_OPACITY:
             /* As app_opacity: 0 at or below 0 (and NaN), 255 at or above 1, else rounded. */
             store(info,
                   !(value > 0.0f) ? 0u
@@ -624,7 +624,7 @@ bool erb_rt_pset_string(uint16_t prop, const char* value)
     const size_t take = length < info->max ? length : info->max;
     memcpy(field, value, take);
     field[take] = '\0';
-    return take == length && (info->kind != ERB_PK_IMAGE || take == 0u || er_image_exists(field));
+    return take == length && (info->kind != ERB_PROP_KIND_IMAGE || take == 0u || er_image_exists(field));
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -640,7 +640,7 @@ static ErbStatus queue_insert(uint32_t position, const ErbEvent* event)
     const uint32_t capacity = g_erb.program.regions[ERB_REGION_EVENTS].count;
     if (s_queue_count >= capacity)
     {
-        return erb_rt_fault(ERB_ERR_QUEUE_FULL, "events keep raising each other", NULL, ERB_NONE, 0u);
+        return erb_rt_fault(ERB_ERROR_QUEUE_FULL, "events keep raising each other", NULL, ERB_NONE, 0u);
     }
     for (uint32_t index = s_queue_count; index > position; index--)
     {
@@ -709,7 +709,7 @@ static ErbStatus settle(void)
         {
             if (++passes > ERB_MAX_UPDATE_PASSES)
             {
-                return erb_rt_fault(ERB_ERR_UPDATE_LOOP, "state keeps changing in effects", NULL, ERB_NONE, 0u);
+                return erb_rt_fault(ERB_ERROR_UPDATE_LOOP, "state keeps changing in effects", NULL, ERB_NONE, 0u);
             }
             /* The pass reads its own copy, so what it sets lands in the next pass. */
             uint32_t* words = dirty_words();
@@ -794,8 +794,8 @@ static void on_event(ERNode* node, const EREventData* data, void* user_data)
     {
         event.x = (int16_t)data->layout_rect.x;
         event.y = (int16_t)data->layout_rect.y;
-        event.delta_x = (int16_t)data->layout_rect.w;
-        event.delta_y = (int16_t)data->layout_rect.h;
+        event.delta_x = (int16_t)data->layout_rect.width;
+        event.delta_y = (int16_t)data->layout_rect.height;
     }
     else
     {
@@ -861,13 +861,13 @@ void erb_rt_load_paints(uint16_t tape)
         ERVectorPaint* out = &s_paints[index];
         out->fill = erb_u32(paint + ERB_PAINT_FILL_AT);
         out->stroke = erb_u32(paint + ERB_PAINT_STROKE_AT);
-        out->stroke_w = erb_f32(paint + ERB_PAINT_STROKE_WIDTH_AT);
+        out->stroke_width = erb_f32(paint + ERB_PAINT_STROKE_WIDTH_AT);
         out->miter = erb_f32(paint + ERB_PAINT_MITER_AT);
         out->cap = paint[ERB_PAINT_CAP_AT];
         out->join = paint[ERB_PAINT_JOIN_AT];
         out->fill_rule = paint[ERB_PAINT_FILL_RULE_AT];
-        out->fill_grad = (int16_t)erb_u16(paint + ERB_PAINT_FILL_GRADIENT_AT);
-        out->stroke_grad = (int16_t)erb_u16(paint + ERB_PAINT_STROKE_GRADIENT_AT);
+        out->fill_gradient = (int16_t)erb_u16(paint + ERB_PAINT_FILL_GRADIENT_AT);
+        out->stroke_gradient = (int16_t)erb_u16(paint + ERB_PAINT_STROKE_GRADIENT_AT);
     }
     for (uint32_t index = 0; index < gradient_count; index++)
     {
@@ -896,20 +896,20 @@ void erb_rt_set_paint(uint8_t paint, uint8_t field, const int32_t* cell)
     ERVectorPaint* out = &s_paints[paint];
     switch (field)
     {
-        case ERB_VPAINT_FILL:
+        case ERB_VECTOR_PAINT_FILL:
             out->fill = (uint32_t)*cell;
             break;
-        case ERB_VPAINT_STROKE:
+        case ERB_VECTOR_PAINT_STROKE:
             out->stroke = (uint32_t)*cell;
             break;
-        case ERB_VPAINT_STROKE_WIDTH:
-            memcpy(&out->stroke_w, cell, sizeof(out->stroke_w));
+        case ERB_VECTOR_PAINT_STROKE_WIDTH:
+            memcpy(&out->stroke_width, cell, sizeof(out->stroke_width));
             break;
-        case ERB_VPAINT_FILL_GRADIENT:
-            out->fill_grad = (int16_t)*cell;
+        case ERB_VECTOR_PAINT_FILL_GRADIENT:
+            out->fill_gradient = (int16_t)*cell;
             break;
         default:
-            out->stroke_grad = (int16_t)*cell;
+            out->stroke_gradient = (int16_t)*cell;
             break;
     }
 }
@@ -918,13 +918,13 @@ void erb_rt_set_gradient(uint8_t gradient, uint8_t field, const int32_t* cell)
 {
     ERVectorGradient* out = &s_gradients[gradient];
     float* const geometry[] = {&out->ax, &out->ay, &out->bx, &out->by, &out->r};
-    if (field <= ERB_VGRAD_RADIUS)
+    if (field <= ERB_VECTOR_GRADIENT_RADIUS)
     {
         memcpy(geometry[field], cell, sizeof(float));
         return;
     }
-    ERGradientStop* stop = &out->stops[(field - ERB_VGRAD_STOPS) / 2u];
-    if ((field - ERB_VGRAD_STOPS) % 2u)
+    ERGradientStop* stop = &out->stops[(field - ERB_VECTOR_GRADIENT_STOPS) / 2u];
+    if ((field - ERB_VECTOR_GRADIENT_STOPS) % 2u)
     {
         memcpy(&stop->position, cell, sizeof(stop->position));
     }
@@ -952,40 +952,40 @@ void erb_rt_commit_tape(ERNode* node, uint16_t tape, const float* floats, bool o
 
 /** @brief Wires one template node's bindings. */
 /** @brief Binds an animated value to @p prop through interpolation @p index, copied out of the package. */
-static void bind_interpolated(ERNode* node, ERAnimProp prop, uint16_t index)
+static void bind_interpolated(ERNode* node, ERAnimationProp prop, uint16_t index)
 {
     const uint8_t* interp = erb_interp(&g_erb.program, index);
     uint32_t handle;
-    memcpy(&handle, slot_data(erb_u16(interp + ERB_INTERP_SLOT_AT)), sizeof(handle));
-    const uint8_t points = interp[ERB_INTERP_POINT_COUNT_AT];
-    const ERExtrapolate left = (ERExtrapolate)interp[ERB_INTERP_EXTRAPOLATE_LEFT_AT];
-    const ERExtrapolate right = (ERExtrapolate)interp[ERB_INTERP_EXTRAPOLATE_RIGHT_AT];
-    if (interp[ERB_INTERP_FLAGS_AT] & ERB_INTERP_FLAG_COLOR)
+    memcpy(&handle, slot_data(erb_u16(interp + ERB_INTERPOLATION_SLOT_AT)), sizeof(handle));
+    const uint8_t points = interp[ERB_INTERPOLATION_POINT_COUNT_AT];
+    const ERExtrapolate left = (ERExtrapolate)interp[ERB_INTERPOLATION_EXTRAPOLATE_LEFT_AT];
+    const ERExtrapolate right = (ERExtrapolate)interp[ERB_INTERPOLATION_EXTRAPOLATE_RIGHT_AT];
+    if (interp[ERB_INTERPOLATION_FLAGS_AT] & ERB_INTERPOLATION_FLAG_COLOR)
     {
         ERColorInterpolation colors;
         memset(&colors, 0, sizeof(colors));
         for (uint8_t point = 0; point < points; point++)
         {
-            colors.input_range[point] = erb_f32(interp + ERB_INTERP_INPUT_AT + point * 4u);
-            colors.output_range[point] = erb_u32(interp + ERB_INTERP_OUTPUT_AT + point * 4u);
+            colors.input_range[point] = erb_f32(interp + ERB_INTERPOLATION_INPUT_AT + point * 4u);
+            colors.output_range[point] = erb_u32(interp + ERB_INTERPOLATION_OUTPUT_AT + point * 4u);
         }
         colors.point_count = points;
         colors.extrapolate_left = left;
         colors.extrapolate_right = right;
-        er_anim_value_bind_color((ERAnimValueHandle)handle, node, prop, &colors);
+        er_animation_value_bind_color((ERAnimationValueHandle)handle, node, prop, &colors);
         return;
     }
     ERInterpolation mapping;
     memset(&mapping, 0, sizeof(mapping));
     for (uint8_t point = 0; point < points; point++)
     {
-        mapping.input_range[point] = erb_f32(interp + ERB_INTERP_INPUT_AT + point * 4u);
-        mapping.output_range[point] = erb_f32(interp + ERB_INTERP_OUTPUT_AT + point * 4u);
+        mapping.input_range[point] = erb_f32(interp + ERB_INTERPOLATION_INPUT_AT + point * 4u);
+        mapping.output_range[point] = erb_f32(interp + ERB_INTERPOLATION_OUTPUT_AT + point * 4u);
     }
     mapping.point_count = points;
     mapping.extrapolate_left = left;
     mapping.extrapolate_right = right;
-    er_anim_value_bind_interpolated((ERAnimValueHandle)handle, node, prop, &mapping);
+    er_animation_value_bind_interpolated((ERAnimationValueHandle)handle, node, prop, &mapping);
 }
 
 static void bind(ERNode* node, const uint8_t* record, uint32_t instance)
@@ -1009,12 +1009,14 @@ static void bind(ERNode* node, const uint8_t* record, uint32_t instance)
             {
                 uint32_t handle;
                 memcpy(&handle, slot_data(target), sizeof(handle));
-                er_anim_value_bind(
-                    (ERAnimValueHandle)handle, node, (ERAnimProp)erb_prop_info(binding[ERB_BINDING_EVENT_AT])->anim);
+                er_animation_value_bind((ERAnimationValueHandle)handle,
+                                        node,
+                                        (ERAnimationProp)erb_prop_info(binding[ERB_BINDING_EVENT_AT])->animation_prop);
                 break;
             }
             case ERB_BIND_INTERPOLATED:
-                bind_interpolated(node, (ERAnimProp)erb_prop_info(binding[ERB_BINDING_EVENT_AT])->anim, target);
+                bind_interpolated(
+                    node, (ERAnimationProp)erb_prop_info(binding[ERB_BINDING_EVENT_AT])->animation_prop, target);
                 break;
             default:
             {
@@ -1043,14 +1045,14 @@ ErbStatus erb_rt_build(uint16_t template_index, ERNode* parent, ERNode* before, 
         ERNode* node = er_node_create((ERNodeType)record[ERB_NODE_TYPE_AT]);
         if (!node)
         {
-            return erb_rt_fault(ERB_ERR_OUT_OF_NODES, "the engine's node pool is empty", NULL, ERB_NONE, 0u);
+            return erb_rt_fault(ERB_ERROR_OUT_OF_NODES, "the engine's node pool is empty", NULL, ERB_NONE, 0u);
         }
         erb_rt_props(erb_u16(record + ERB_NODE_PROPS_AT));
         /* The root fills the real panel, which the layout was not compiled for. */
         if (index == 0u && template_index == program->root_template)
         {
-            g_erb_props.width = (int16_t)g_erb.config.screen_w;
-            g_erb_props.height = (int16_t)g_erb.config.screen_h;
+            g_erb_props.width = (int16_t)g_erb.config.screen_width;
+            g_erb_props.height = (int16_t)g_erb.config.screen_height;
         }
         er_node_set_props(node, &g_erb_props);
 
@@ -1061,7 +1063,7 @@ ErbStatus erb_rt_build(uint16_t template_index, ERNode* parent, ERNode* before, 
             if (capacity && (instance < 0 || (uint32_t)instance >= capacity))
             {
                 er_node_destroy(node);
-                return erb_rt_fault(ERB_ERR_LIST_INDEX, "row instance past its handle array", NULL, ERB_NONE, 0u);
+                return erb_rt_fault(ERB_ERROR_LIST_INDEX, "row instance past its handle array", NULL, ERB_NONE, 0u);
             }
             int32_t cells[2];
             erb_rt_set_node(cells, node);
@@ -1217,7 +1219,7 @@ static void anim_start_entry(uint32_t index);
 
 static uint32_t anim_count(void)
 {
-    return g_erb.program.regions[ERB_REGION_ANIMS].count;
+    return g_erb.program.regions[ERB_REGION_ANIMATIONS].count;
 }
 
 /** @brief The @p nth child entry of entry @p index (children follow their parent in its block). */
@@ -1273,10 +1275,10 @@ static void anim_complete(uint32_t index, bool finished)
         return;
     }
     const uint8_t* descriptor = erb_anim(&g_erb.program, parent->descriptor);
-    const uint16_t children = erb_u16(descriptor + ERB_ANIM_COUNT_AT);
-    switch (descriptor[ERB_ANIM_KIND_AT])
+    const uint16_t children = erb_u16(descriptor + ERB_ANIMATION_COUNT_AT);
+    switch (descriptor[ERB_ANIMATION_KIND_AT])
     {
-        case ERB_ANIM_SEQUENCE:
+        case ERB_ANIMATION_SEQUENCE:
             if (!finished)
             {
                 anim_complete(parent_index, false);
@@ -1290,9 +1292,9 @@ static void anim_complete(uint32_t index, bool finished)
                 anim_complete(parent_index, true);
             }
             break;
-        case ERB_ANIM_LOOP:
+        case ERB_ANIMATION_LOOP:
         {
-            const uint32_t iterations = erb_u32(descriptor + ERB_ANIM_AMOUNT_AT);
+            const uint32_t iterations = erb_u32(descriptor + ERB_ANIMATION_AMOUNT_AT);
             if (!finished)
             {
                 anim_complete(parent_index, false);
@@ -1307,13 +1309,13 @@ static void anim_complete(uint32_t index, bool finished)
             /* A loop of an animated value starts each pass from where the first one did. */
             const uint32_t child = anim_child(parent_index, 0u);
             const uint8_t* child_descriptor = erb_anim(&g_erb.program, entries[child].descriptor);
-            const uint16_t target = erb_u16(child_descriptor + ERB_ANIM_TARGET_AT);
-            if (child_descriptor[ERB_ANIM_KIND_AT] <= ERB_ANIM_DECAY && target != ERB_NONE
-                && erb_slot(&g_erb.program, target)[ERB_SLOT_TYPE_AT] == ERB_T_AVALUE)
+            const uint16_t target = erb_u16(child_descriptor + ERB_ANIMATION_TARGET_AT);
+            if (child_descriptor[ERB_ANIMATION_KIND_AT] <= ERB_ANIMATION_DECAY && target != ERB_NONE
+                && erb_slot(&g_erb.program, target)[ERB_SLOT_TYPE_AT] == ERB_TYPE_ANIMATED_VALUE)
             {
                 uint32_t handle;
                 memcpy(&handle, slot_data(target), sizeof(handle));
-                er_anim_value_set((ERAnimValueHandle)handle, parent->value);
+                er_animation_value_set((ERAnimationValueHandle)handle, parent->value);
             }
             anim_start_entry(child);
             break;
@@ -1354,39 +1356,39 @@ static void anim_start_entry(uint32_t index)
     ErbAnimEntry* entries = anim_entries();
     ErbAnimEntry* entry = &entries[index];
     const uint8_t* descriptor = erb_anim(program, entry->descriptor);
-    const uint8_t kind = descriptor[ERB_ANIM_KIND_AT];
-    const uint16_t target = erb_u16(descriptor + ERB_ANIM_TARGET_AT);
-    const uint16_t children = erb_u16(descriptor + ERB_ANIM_COUNT_AT);
+    const uint8_t kind = descriptor[ERB_ANIMATION_KIND_AT];
+    const uint16_t target = erb_u16(descriptor + ERB_ANIMATION_TARGET_AT);
+    const uint16_t children = erb_u16(descriptor + ERB_ANIMATION_COUNT_AT);
     entry->state = ANIM_RUNNING;
     entry->step = 0u;
     entry->passes = 0u;
 
-    if (kind <= ERB_ANIM_DECAY)
+    if (kind <= ERB_ANIMATION_DECAY)
     {
         if (target == ERB_NONE)
         {
             entry->state = ANIM_DELAY;
-            entry->value = (float)erb_u32(descriptor + ERB_ANIM_AMOUNT_AT);
+            entry->value = (float)erb_u32(descriptor + ERB_ANIMATION_AMOUNT_AT);
             return;
         }
-        ERAnimConfig config;
+        ERAnimationConfig config;
         memset(&config, 0, sizeof(config));
-        config.type = (ERAnimType)(kind - ERB_ANIM_TIMING);
-        config.easing = (ERAnimEasing)descriptor[ERB_ANIM_EASING_AT];
-        config.duration_ms = erb_u32(descriptor + ERB_ANIM_AMOUNT_AT);
-        config.delay_ms = erb_u32(descriptor + ERB_ANIM_DELAY_MS_AT);
-        const float param0 = erb_f32(descriptor + ERB_ANIM_PARAM0_AT);
-        const float param1 = erb_f32(descriptor + ERB_ANIM_PARAM1_AT);
-        const float param2 = erb_f32(descriptor + ERB_ANIM_PARAM2_AT);
-        const float param3 = erb_f32(descriptor + ERB_ANIM_PARAM3_AT);
-        if (kind == ERB_ANIM_SPRING)
+        config.type = (ERAnimationType)(kind - ERB_ANIMATION_TIMING);
+        config.easing = (ERAnimationEasing)descriptor[ERB_ANIMATION_EASING_AT];
+        config.duration_ms = erb_u32(descriptor + ERB_ANIMATION_AMOUNT_AT);
+        config.delay_ms = erb_u32(descriptor + ERB_ANIMATION_DELAY_MS_AT);
+        const float param0 = erb_f32(descriptor + ERB_ANIMATION_PARAM0_AT);
+        const float param1 = erb_f32(descriptor + ERB_ANIMATION_PARAM1_AT);
+        const float param2 = erb_f32(descriptor + ERB_ANIMATION_PARAM2_AT);
+        const float param3 = erb_f32(descriptor + ERB_ANIMATION_PARAM3_AT);
+        if (kind == ERB_ANIMATION_SPRING)
         {
             config.stiffness = param0;
             config.damping = param1;
             config.mass = param2;
             config.velocity = param3;
         }
-        else if (kind == ERB_ANIM_DECAY)
+        else if (kind == ERB_ANIMATION_DECAY)
         {
             config.velocity = param0;
             config.deceleration = param1;
@@ -1398,18 +1400,18 @@ static void anim_start_entry(uint32_t index)
             config.bezier_x2 = param2;
             config.bezier_y2 = param3;
         }
-        config.loop = (descriptor[ERB_ANIM_FLAGS_AT] & ERB_ANIM_FLAG_LOOP) != 0u;
-        config.loop_reverse = (descriptor[ERB_ANIM_FLAGS_AT] & ERB_ANIM_FLAG_LOOP_REVERSE) != 0u;
+        config.loop = (descriptor[ERB_ANIMATION_FLAGS_AT] & ERB_ANIMATION_FLAG_LOOP) != 0u;
+        config.loop_reverse = (descriptor[ERB_ANIMATION_FLAGS_AT] & ERB_ANIMATION_FLAG_LOOP_REVERSE) != 0u;
         config.on_complete = anim_leaf_done;
         config.on_complete_user_data = (void*)(uintptr_t)ERB_PACK16(index, entry->generation);
 
-        ERAnimHandle handle = ER_ANIM_HANDLE_INVALID;
+        ERAnimationHandle handle = ER_ANIMATION_HANDLE_INVALID;
         const uint8_t* slot = erb_slot(program, target);
-        if (slot[ERB_SLOT_TYPE_AT] == ERB_T_AVALUE)
+        if (slot[ERB_SLOT_TYPE_AT] == ERB_TYPE_ANIMATED_VALUE)
         {
             uint32_t value;
             memcpy(&value, slot_data(target), sizeof(value));
-            handle = er_anim_value_animate((ERAnimValueHandle)value, entry->value, &config);
+            handle = er_animation_value_animate((ERAnimationValueHandle)value, entry->value, &config);
         }
         else
         {
@@ -1418,15 +1420,16 @@ static void anim_start_entry(uint32_t index)
             ERNode* node = erb_rt_node(cells);
             if (node)
             {
-                handle = er_anim_start(node,
-                                       (ERAnimProp)erb_prop_info(erb_u16(descriptor + ERB_ANIM_PROP_AT))->anim,
-                                       entry->value,
-                                       &config);
+                handle = er_animation_start(
+                    node,
+                    (ERAnimationProp)erb_prop_info(erb_u16(descriptor + ERB_ANIMATION_PROP_AT))->animation_prop,
+                    entry->value,
+                    &config);
             }
             else if (cells[0] != 0 && (program->flags & ERB_FLAG_DEBUG))
             {
                 /* An empty handle only means the node isn't built yet; this one outlived its node. */
-                erb_rt_fault(ERB_ERR_STALE_NODE, "a node handle outlived its node", NULL, ERB_NONE, 0u);
+                erb_rt_fault(ERB_ERROR_STALE_NODE, "a node handle outlived its node", NULL, ERB_NONE, 0u);
                 return;
             }
         }
@@ -1434,7 +1437,7 @@ static void anim_start_entry(uint32_t index)
         if (entry->state == ANIM_RUNNING)
         {
             entry->engine = handle;
-            if (handle == ER_ANIM_HANDLE_INVALID)
+            if (handle == ER_ANIMATION_HANDLE_INVALID)
             {
                 erb_rt_report("animation not started: no node, or the engine's pool is full", ERB_NONE, 0u);
                 anim_complete(index, false);
@@ -1443,19 +1446,19 @@ static void anim_start_entry(uint32_t index)
         return;
     }
 
-    if (kind == ERB_ANIM_SEQUENCE || kind == ERB_ANIM_LOOP)
+    if (kind == ERB_ANIMATION_SEQUENCE || kind == ERB_ANIMATION_LOOP)
     {
         const uint32_t first = anim_child(index, 0u);
-        if (kind == ERB_ANIM_LOOP)
+        if (kind == ERB_ANIMATION_LOOP)
         {
             const uint8_t* child_descriptor = erb_anim(program, entries[first].descriptor);
-            const uint16_t child_target = erb_u16(child_descriptor + ERB_ANIM_TARGET_AT);
-            if (child_descriptor[ERB_ANIM_KIND_AT] <= ERB_ANIM_DECAY && child_target != ERB_NONE
-                && erb_slot(program, child_target)[ERB_SLOT_TYPE_AT] == ERB_T_AVALUE)
+            const uint16_t child_target = erb_u16(child_descriptor + ERB_ANIMATION_TARGET_AT);
+            if (child_descriptor[ERB_ANIMATION_KIND_AT] <= ERB_ANIMATION_DECAY && child_target != ERB_NONE
+                && erb_slot(program, child_target)[ERB_SLOT_TYPE_AT] == ERB_TYPE_ANIMATED_VALUE)
             {
                 uint32_t handle;
                 memcpy(&handle, slot_data(child_target), sizeof(handle));
-                entry->value = er_anim_value_get((ERAnimValueHandle)handle);
+                entry->value = er_animation_value_get((ERAnimationValueHandle)handle);
             }
         }
         anim_start_entry(first);
@@ -1464,11 +1467,11 @@ static void anim_start_entry(uint32_t index)
 
     /* Parallel and stagger: every child at once, a stagger's each n ms after the one before. */
     entry->step = children;
-    const uint32_t gap = erb_u32(descriptor + ERB_ANIM_AMOUNT_AT);
+    const uint32_t gap = erb_u32(descriptor + ERB_ANIMATION_AMOUNT_AT);
     for (uint32_t nth = 0; nth < children && entry->state == ANIM_RUNNING; nth++)
     {
         const uint32_t child = anim_child(index, nth);
-        if (kind == ERB_ANIM_STAGGER && nth > 0u)
+        if (kind == ERB_ANIMATION_STAGGER && nth > 0u)
         {
             entries[child].state = ANIM_WAIT;
             entries[child].value = (float)(gap * nth);
@@ -1490,13 +1493,13 @@ uint32_t erb_rt_anim_start(uint16_t descriptor, uint16_t done_function, const in
     for (uint32_t index = 0; index < size; index++)
     {
         const uint8_t* anim = erb_anim(program, s_tree[index]);
-        if (anim[ERB_ANIM_KIND_AT] <= ERB_ANIM_DECAY)
+        if (anim[ERB_ANIMATION_KIND_AT] <= ERB_ANIMATION_DECAY)
         {
             continue;
         }
-        for (uint16_t child = 0; child < erb_u16(anim + ERB_ANIM_COUNT_AT); child++)
+        for (uint16_t child = 0; child < erb_u16(anim + ERB_ANIMATION_COUNT_AT); child++)
         {
-            s_tree[size] = (uint16_t)(erb_u16(anim + ERB_ANIM_FIRST_AT) + child);
+            s_tree[size] = (uint16_t)(erb_u16(anim + ERB_ANIMATION_FIRST_AT) + child);
             s_tree_parent[size] = (uint8_t)index;
             size++;
         }
@@ -1527,9 +1530,9 @@ uint32_t erb_rt_anim_start(uint16_t descriptor, uint16_t done_function, const in
         entry->done_fn = index ? ERB_NONE : done_function;
         entry->first = index == 0u;
         entry->state = ANIM_DONE;
-        uint32_t to_bits = erb_u32(anim + ERB_ANIM_TO_AT);
-        if (anim[ERB_ANIM_KIND_AT] <= ERB_ANIM_DECAY && (anim[ERB_ANIM_FLAGS_AT] & ERB_ANIM_FLAG_TO_REGISTER)
-            && to_cells)
+        uint32_t to_bits = erb_u32(anim + ERB_ANIMATION_TO_AT);
+        if (anim[ERB_ANIMATION_KIND_AT] <= ERB_ANIMATION_DECAY
+            && (anim[ERB_ANIMATION_FLAGS_AT] & ERB_ANIMATION_FLAG_TO_REGISTER) && to_cells)
         {
             to_bits = (uint32_t)to_cells[to_index++];
         }
@@ -1548,7 +1551,7 @@ void erb_rt_anim_stop(uint32_t handle)
     {
         return;
     }
-    /* Mark the tree stopped first, so the callbacks er_anim_stop makes find nothing to move on. */
+    /* Mark the tree stopped first, so the callbacks er_animation_stop makes find nothing to move on. */
     uint32_t end = root + 1u;
     while (end < anim_count() && !entries[end].first && entries[end].state != ANIM_FREE)
     {
@@ -1558,9 +1561,9 @@ void erb_rt_anim_stop(uint32_t handle)
     {
         const bool running = entries[index].state == ANIM_RUNNING;
         entries[index].state = ANIM_STOPPED;
-        if (running && entries[index].engine != ER_ANIM_HANDLE_INVALID)
+        if (running && entries[index].engine != ER_ANIMATION_HANDLE_INVALID)
         {
-            er_anim_stop(entries[index].engine);
+            er_animation_stop(entries[index].engine);
         }
     }
     entries[root].parent = ERB_NONE;
@@ -1570,7 +1573,7 @@ void erb_rt_anim_stop(uint32_t handle)
 static void tick_anims(uint32_t elapsed_ms)
 {
     /* Every wait counts down before any that ran out moves on, so a wait one of them starts waits its full time. */
-    const uint32_t count = g_erb.program.regions[ERB_REGION_ANIMS].count;
+    const uint32_t count = g_erb.program.regions[ERB_REGION_ANIMATIONS].count;
     ErbAnimEntry* entries = anim_entries();
     for (uint32_t index = 0; index < count; index++)
     {
@@ -1649,7 +1652,7 @@ static void apply_keyboard(void)
     s_keyboard = (ERKeyboardConfig){
         .layers = layers ? s_keyboard_layers : NULL,
         .layer_count = (uint8_t)layers,
-        .grid_cols = table[ERB_KEYBOARD_GRID_COLS_AT],
+        .grid_columns = table[ERB_KEYBOARD_GRID_COLUMNS_AT],
         .row_height_px = erb_u16(table + ERB_KEYBOARD_ROW_HEIGHT_AT),
         .key_gap_px = table[ERB_KEYBOARD_KEY_GAP_AT],
         .key_radius_px = table[ERB_KEYBOARD_KEY_RADIUS_AT],
@@ -1712,34 +1715,34 @@ static ErbStatus init_slots(void)
         const uint32_t initial_bits = erb_u32(slot + ERB_SLOT_INIT_AT);
         switch (slot[ERB_SLOT_TYPE_AT])
         {
-            case ERB_T_INT:
-            case ERB_T_BOOL:
-            case ERB_T_FLOAT:
-            case ERB_T_ENUM:
+            case ERB_TYPE_INT:
+            case ERB_TYPE_BOOL:
+            case ERB_TYPE_FLOAT:
+            case ERB_TYPE_ENUM:
                 memcpy(data, &initial_bits, sizeof(initial_bits));
                 break;
-            case ERB_T_INT64:
-            case ERB_T_DOUBLE:
+            case ERB_TYPE_INT64:
+            case ERB_TYPE_DOUBLE:
                 if (initial_bits != UINT32_MAX)
                 {
                     memcpy(data, program->const64 + initial_bits * sizeof(uint64_t), 8u);
                 }
                 break;
-            case ERB_T_STRING:
+            case ERB_TYPE_STRING:
                 if (initial_bits != UINT32_MAX)
                 {
                     strcpy((char*)data, erb_string(program, initial_bits));
                 }
                 break;
-            case ERB_T_AVALUE:
+            case ERB_TYPE_ANIMATED_VALUE:
             {
                 float initial_value;
                 memcpy(&initial_value, &initial_bits, sizeof(initial_value));
-                const uint32_t handle = er_anim_value_create(initial_value);
-                if (handle == ER_ANIM_VALUE_INVALID)
+                const uint32_t handle = er_animation_value_create(initial_value);
+                if (handle == ER_ANIMATION_VALUE_INVALID)
                 {
                     return erb_rt_fault(
-                        ERB_ERR_TOO_BIG, "the engine's animated value pool is full", NULL, ERB_NONE, 0u);
+                        ERB_ERROR_TOO_BIG, "the engine's animated value pool is full", NULL, ERB_NONE, 0u);
                 }
                 memcpy(data, &handle, sizeof(handle));
                 break;
@@ -1769,7 +1772,7 @@ static ErbStatus start(const ErbConfig* config)
      * check-only pass, so this can't fail part way. */
     er_error_screen_hide();
     er_reset();
-    er_set_screen_bounds(config->screen_w, config->screen_h);
+    er_set_screen_bounds(config->screen_width, config->screen_height);
     er_image_clear();
     er_font_clear();
     const ErbProgram* program = &g_erb.program;
@@ -1782,7 +1785,7 @@ static ErbStatus start(const ErbConfig* config)
             program->assets, program->assets_length, config->fonts ? config->fonts : &no_fonts);
         if (!loaded)
         {
-            return erb_rt_fault(ERB_ERR_ASSETS, "registering the checked pack failed", NULL, ERB_NONE, 0u);
+            return erb_rt_fault(ERB_ERROR_ASSETS, "registering the checked pack failed", NULL, ERB_NONE, 0u);
         }
     }
     g_erb.loaded = true;
@@ -1830,15 +1833,15 @@ bool erb_load(const void* package, size_t package_bytes, const ErbConfig* config
     ErbError* out = error ? error : &local;
     if (config)
     {
-        s_screen_width = config->screen_w;
-        s_screen_height = config->screen_h;
+        s_screen_width = config->screen_width;
+        s_screen_height = config->screen_height;
     }
     if (!config || !erb_verify(package, package_bytes, config ? config : &g_erb.config, &s_candidate, out))
     {
         if (!config)
         {
             memset(out, 0, sizeof(*out));
-            out->status = ERB_ERR_NO_PACKAGE;
+            out->status = ERB_ERROR_NO_PACKAGE;
             out->function = ERB_NONE;
         }
         /* The running app, if any, is untouched. */
@@ -1934,7 +1937,7 @@ static bool input_set(int input, uint8_t type, const void* value, size_t bytes)
     }
     uint8_t* data = slot_data(slot_index);
     bool changed;
-    if (type == ERB_T_STRING)
+    if (type == ERB_TYPE_STRING)
     {
         const uint16_t capacity = erb_u16(slot + ERB_SLOT_CAP_AT);
         changed = strcmp((const char*)data, (const char*)value) != 0;
@@ -1968,23 +1971,23 @@ static bool input_set(int input, uint8_t type, const void* value, size_t bytes)
 
 bool erb_input_set_int(int input, int32_t value)
 {
-    return input_set(input, ERB_T_INT, &value, sizeof(value));
+    return input_set(input, ERB_TYPE_INT, &value, sizeof(value));
 }
 
 bool erb_input_set_bool(int input, bool value)
 {
     const int32_t cell = value ? 1 : 0;
-    return input_set(input, ERB_T_BOOL, &cell, sizeof(cell));
+    return input_set(input, ERB_TYPE_BOOL, &cell, sizeof(cell));
 }
 
 bool erb_input_set_float(int input, float value)
 {
-    return input_set(input, ERB_T_FLOAT, &value, sizeof(value));
+    return input_set(input, ERB_TYPE_FLOAT, &value, sizeof(value));
 }
 
 bool erb_input_set_string(int input, const char* value)
 {
-    return value && input_set(input, ERB_T_STRING, value, 0u);
+    return value && input_set(input, ERB_TYPE_STRING, value, 0u);
 }
 
 void erb_set_wall_clock(int64_t epoch_ms)
@@ -2025,7 +2028,7 @@ void erb_show_error_hint(const ErbError* error, const char* hint)
     error_amounts(error, amounts, sizeof(amounts));
     error_location(error, location, sizeof(location));
     const ERErrorScreen screen = {
-        .title = error->status < ERB_ERR_BUDGET ? ERROR_TITLE_LOAD : ERROR_TITLE_RUN,
+        .title = error->status < ERB_ERROR_BUDGET ? ERROR_TITLE_LOAD : ERROR_TITLE_RUN,
         .reason = reason,
         .amounts = amounts,
         .location = location,

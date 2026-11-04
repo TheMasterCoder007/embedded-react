@@ -167,7 +167,7 @@ static void paint_init(void)
     memset(&g_paint, 0, sizeof(g_paint));
     g_paint.fill = 0x00000000U;
     g_paint.stroke = 0xFFF4A261U;
-    g_paint.stroke_w = 3.0f;
+    g_paint.stroke_width = 3.0f;
     g_paint.miter = 4.0f;
 }
 
@@ -185,7 +185,7 @@ static void build_scene(ERNode** out_root, ERNode** out_svg)
     ERProps svg_props = props_default();
     svg_props.width = 160;
     svg_props.height = 160;
-    svg_props.position = ER_POS_ABSOLUTE;
+    svg_props.position = ER_POSITION_ABSOLUTE;
     svg_props.left = 20;
     svg_props.top = 20;
     er_node_set_props(svg, &svg_props);
@@ -214,12 +214,12 @@ static void tape_needle_open(int step, float* tape, int* tape_count)
 {
     const float angle = 0.12f * (float)step;
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = HUB_X;
     tape[cursor++] = HUB_Y;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = HUB_X + NEEDLE_RADIUS * cosf(angle);
     tape[cursor++] = HUB_Y + NEEDLE_RADIUS * sinf(angle);
     *tape_count = cursor;
@@ -229,7 +229,7 @@ static void tape_needle_closed(int step, float* tape, int* tape_count)
 {
     int cursor = 0;
     tape_needle_open(step, tape, &cursor);
-    tape[cursor++] = (float)ER_VOP_CLOSE;
+    tape[cursor++] = (float)ER_VECTOR_OP_CLOSE;
     *tape_count = cursor;
 }
 
@@ -237,12 +237,12 @@ static void tape_curve(int step, float* tape, int* tape_count)
 {
     const float angle = 0.12f * (float)step;
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = HUB_X;
     tape[cursor++] = HUB_Y;
-    tape[cursor++] = (float)ER_VOP_CUBIC;
+    tape[cursor++] = (float)ER_VECTOR_OP_CUBIC;
     tape[cursor++] = HUB_X + 30.0f * cosf(angle);
     tape[cursor++] = HUB_Y + 30.0f * sinf(angle);
     tape[cursor++] = HUB_X + 50.0f * cosf(angle);
@@ -257,12 +257,12 @@ static void tape_far_line(int step, float* tape, int* tape_count)
 {
     const float y = 20.0f + 20.0f * (float)step;
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = 20.0f;
     tape[cursor++] = y;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = 40000.0f;
     tape[cursor++] = y;
     *tape_count = cursor;
@@ -276,12 +276,12 @@ static void tape_arc_blowup(int step, float* tape, int* tape_count)
 {
     static const float k_end[7] = {1.2f, 1e10f, -1e10f, INFINITY, 1.2f, -INFINITY, 2.0f};
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = HUB_X + 40.0f;
     tape[cursor++] = HUB_Y;
-    tape[cursor++] = (float)ER_VOP_ARC;
+    tape[cursor++] = (float)ER_VECTOR_OP_ARC;
     tape[cursor++] = HUB_X;
     tape[cursor++] = HUB_Y;
     tape[cursor++] = 40.0f;
@@ -295,12 +295,12 @@ static void tape_arc_blowup(int step, float* tape, int* tape_count)
 static void tape_pivot_line(int step, float* tape, int* tape_count)
 {
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = 30.0f;
     tape[cursor++] = 40.0f + 8.0f * (float)step;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = 140.0f;
     tape[cursor++] = 80.0f;
     *tape_count = cursor;
@@ -310,12 +310,12 @@ static void tape_pivot_line(int step, float* tape, int* tape_count)
 static void tape_pivot_cubic(int step, float* tape, int* tape_count)
 {
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = 30.0f;
     tape[cursor++] = 40.0f + 8.0f * (float)step;
-    tape[cursor++] = (float)ER_VOP_CUBIC;
+    tape[cursor++] = (float)ER_VECTOR_OP_CUBIC;
     tape[cursor++] = 70.0f;
     tape[cursor++] = 30.0f;
     tape[cursor++] = 110.0f;
@@ -330,12 +330,12 @@ static void tape_pivot_cubic(int step, float* tape, int* tape_count)
 static void tape_pivot_arc(int step, float* tape, int* tape_count)
 {
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = 30.0f;
     tape[cursor++] = 40.0f + 8.0f * (float)step;
-    tape[cursor++] = (float)ER_VOP_ARC;
+    tape[cursor++] = (float)ER_VECTOR_OP_ARC;
     tape[cursor++] = HUB_X;
     tape[cursor++] = HUB_Y;
     tape[cursor++] = 40.0f;
@@ -440,27 +440,27 @@ static int check_huge_dirty_rect(void)
 static int tape_grad_rect_and_line(float line_y, float* tape)
 {
     int cursor = 0;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 0.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = 10.0f;
     tape[cursor++] = 10.0f;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = 60.0f;
     tape[cursor++] = 10.0f;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = 60.0f;
     tape[cursor++] = 150.0f;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = 10.0f;
     tape[cursor++] = 150.0f;
-    tape[cursor++] = (float)ER_VOP_CLOSE;
-    tape[cursor++] = (float)ER_VOP_SHAPE;
+    tape[cursor++] = (float)ER_VECTOR_OP_CLOSE;
+    tape[cursor++] = (float)ER_VECTOR_OP_SHAPE;
     tape[cursor++] = 1.0f;
-    tape[cursor++] = (float)ER_VOP_MOVE;
+    tape[cursor++] = (float)ER_VECTOR_OP_MOVE;
     tape[cursor++] = 110.0f;
     tape[cursor++] = line_y;
-    tape[cursor++] = (float)ER_VOP_LINE;
+    tape[cursor++] = (float)ER_VECTOR_OP_LINE;
     tape[cursor++] = 140.0f;
     tape[cursor++] = line_y;
     return cursor;
@@ -479,8 +479,8 @@ static int check_gradient_change(void)
 
     ERVectorPaint paints[2];
     memset(paints, 0, sizeof(paints));
-    paints[0].fill_rule = ER_VFILL_NONZERO;
-    paints[0].fill_grad = 1; /* grads[0] */
+    paints[0].fill_rule = ER_VECTOR_FILL_NONZERO;
+    paints[0].fill_gradient = 1; /* grads[0] */
     paints[1] = g_paint;
 
     ERVectorGradient grad;

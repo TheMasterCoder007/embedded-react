@@ -147,7 +147,7 @@ export interface NodeRef {
 
 export type RefRecord = ValueRef | NodeRef;
 
-/** A useAnimatedValue: an engine-side ERAnimValueHandle. */
+/** A useAnimatedValue: an engine-side ERAnimationValueHandle. */
 export interface AnimRecord {
   slotName: string;
   initial: number;

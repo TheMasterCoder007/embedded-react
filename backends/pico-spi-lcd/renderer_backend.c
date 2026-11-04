@@ -235,7 +235,7 @@ static void copy_fmt_cb(
     }
     const int skip_x = x - original_x;
     const int skip_y = y - original_y;
-    if (format == ER_IMG_RGB565)
+    if (format == ER_IMAGE_RGB565)
     {
         for (int row = 0; row < height; row++)
         {
@@ -396,10 +396,10 @@ bool er_pico_spi_lcd_backend_init(const ErPicoLcdPanelOps* ops, int width, int h
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
-    backend.copy_rect_fmt = copy_fmt_cb;
+    backend.copy_rect_format = copy_fmt_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL;
-    backend.ctx = NULL;
+    backend.context = NULL;
     embedded_renderer_set_backend(&backend);
     return true;
 }

@@ -52,7 +52,7 @@ set(EMBEDDED_REACT_SOURCES
 # The engine compiles with its built-in #ifndef defaults (desktop-sized: 512 nodes / 240x240 scratch), so a
 # RAM-constrained consumer MUST shrink the ERUI_* flags from their own project build, e.g. in the app's
 # CMakeLists.txt:
-#     idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_W=8;ERUI_SCRATCH_H=8;ERUI_VECTOR_EDGE_CACHE=0" APPEND)
+#     idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_WIDTH=8;ERUI_SCRATCH_HEIGHT=8;ERUI_VECTOR_EDGE_CACHE=0" APPEND)
 # (A Kconfig / menuconfig front-end for these knobs is a planned follow-up.) libm is part of the IDF toolchain,
 # so no extra link is needed here.
 # ---------------------------------------------------------------------------
@@ -104,17 +104,17 @@ set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
 set(ERUI_RENDER_WORKERS "1" CACHE STRING "Max render workers (multi-core scaffolding; >1 sizes per-worker contexts, no effect until the parallel commit lands)")
-set(ERUI_SCRATCH_W "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
-set(ERUI_SCRATCH_H "240" CACHE STRING "Transform-source scratch height in pixels (max transformable node height)")
-set(ERUI_SCRATCH_BAND_H "${ERUI_SCRATCH_H}" CACHE STRING "Opacity-composite strip height; smaller = less RAM, taller fades render in multiple band passes")
-set(ERUI_XFORM_W "${ERUI_SCRATCH_W}" CACHE STRING "Transform-source width (max rotatable/scalable node width); decouple from ERUI_SCRATCH_W when strips are screen-wide")
-set(ERUI_XFORM_H "${ERUI_SCRATCH_H}" CACHE STRING "Transform-source height (max rotatable/scalable node height)")
-set(ERUI_FADE_CACHE_W "0" CACHE STRING "Fade-cache width: composited-subtree cache reused across frames of an opacity animation; 0 disables")
-set(ERUI_FADE_CACHE_H "0" CACHE STRING "Fade-cache height; 0 disables")
+set(ERUI_SCRATCH_WIDTH "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
+set(ERUI_SCRATCH_HEIGHT "240" CACHE STRING "Transform-source scratch height in pixels (max transformable node height)")
+set(ERUI_SCRATCH_BAND_HEIGHT "${ERUI_SCRATCH_HEIGHT}" CACHE STRING "Opacity-composite strip height; smaller = less RAM, taller fades render in multiple band passes")
+set(ERUI_TRANSFORM_WIDTH "${ERUI_SCRATCH_WIDTH}" CACHE STRING "Transform-source width (max rotatable/scalable node width); decouple from ERUI_SCRATCH_WIDTH when strips are screen-wide")
+set(ERUI_TRANSFORM_HEIGHT "${ERUI_SCRATCH_HEIGHT}" CACHE STRING "Transform-source height (max rotatable/scalable node height)")
+set(ERUI_FADE_CACHE_WIDTH "0" CACHE STRING "Fade-cache width: composited-subtree cache reused across frames of an opacity animation; 0 disables")
+set(ERUI_FADE_CACHE_HEIGHT "0" CACHE STRING "Fade-cache height; 0 disables")
 set(ERUI_FONT_POOL_BYTES "0" CACHE STRING "Static pool for runtime-loaded fonts (bytes); 0 disables er_font_load")
-set(ERUI_MAX_IMG_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
+set(ERUI_MAX_IMAGE_ROW_PIXELS "800" CACHE STRING "Static row buffer width for nearest-neighbor image scaling")
 set(ERUI_IMAGE_REGISTRY_MAX "128" CACHE STRING "Concurrently registered images (~80 B/slot; images past it never draw)")
-set(ERUI_MAX_ANIM_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
+set(ERUI_MAX_ANIMATION_VALUES "16" CACHE STRING "Pool size for standalone Animated.Values (useNativeDriver)")
 set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Animated.Value")
 
 # Vector (SVG / <Svg>) rasterizer static pools — see engine/README.md "Vector pools". The rasterizer's own
@@ -122,14 +122,14 @@ set(ERUI_MAX_VALUE_BINDINGS "4" CACHE STRING "Max node-property bindings per Ani
 # below; the three per-node STORAGE caps go out PUBLIC because callers marshal into them. Overflow is
 # silently truncated; build a debug config (or -DERUI_DIAGNOSTICS=2) to get a stderr warning that
 # names the pool to raise.
-set(ERUI_VECTOR_MAX_PTS "2048" CACHE STRING "Vector: flattened vertices per shape")
+set(ERUI_VECTOR_MAX_POINTS "2048" CACHE STRING "Vector: flattened vertices per shape")
 set(ERUI_VECTOR_MAX_SUBPATHS "256" CACHE STRING "Vector: subpaths (contours/holes) per shape")
 set(ERUI_VECTOR_MAX_EDGES "2048" CACHE STRING "Vector: edges submitted to one rasterize pass")
 set(ERUI_VECTOR_MAX_ROW "1024" CACHE STRING "Vector: max vector-node width in px (coverage row)")
 set(ERUI_MAX_VECTOR_NODES "8" CACHE STRING "Vector: concurrent vector nodes holding geometry")
 set(ERUI_VECTOR_TAPE_MAX "1024" CACHE STRING "Vector: op-tape floats stored per node")
 set(ERUI_VECTOR_PAINTS_MAX "16" CACHE STRING "Vector: paint entries stored per node")
-set(ERUI_VECTOR_GRADS_MAX "8" CACHE STRING "Vector: gradient entries stored per node (ERUI_GRADIENT)")
+set(ERUI_VECTOR_GRADIENTS_MAX "8" CACHE STRING "Vector: gradient entries stored per node (ERUI_GRADIENT)")
 set(ERUI_VECTOR_GRAD_LUT "256" CACHE STRING "Vector: gradient colour-LUT entries (ERUI_GRADIENT; 1KB internal at 256)")
 
 # Vector edge cache (vector_cache.c): cached rasterizer geometry for static <Svg> nodes, so repainting
@@ -182,26 +182,26 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_MAX_NODES=${ERUI_MAX_NODES}
         ERUI_MAX_OPACITY_DEPTH=${ERUI_MAX_OPACITY_DEPTH}
         ERUI_RENDER_WORKERS=${ERUI_RENDER_WORKERS}
-        ERUI_SCRATCH_W=${ERUI_SCRATCH_W}
-        ERUI_SCRATCH_H=${ERUI_SCRATCH_H}
-        ERUI_SCRATCH_BAND_H=${ERUI_SCRATCH_BAND_H}
-        ERUI_XFORM_W=${ERUI_XFORM_W}
-        ERUI_XFORM_H=${ERUI_XFORM_H}
-        ERUI_FADE_CACHE_W=${ERUI_FADE_CACHE_W}
-        ERUI_FADE_CACHE_H=${ERUI_FADE_CACHE_H}
+        ERUI_SCRATCH_WIDTH=${ERUI_SCRATCH_WIDTH}
+        ERUI_SCRATCH_HEIGHT=${ERUI_SCRATCH_HEIGHT}
+        ERUI_SCRATCH_BAND_HEIGHT=${ERUI_SCRATCH_BAND_HEIGHT}
+        ERUI_TRANSFORM_WIDTH=${ERUI_TRANSFORM_WIDTH}
+        ERUI_TRANSFORM_HEIGHT=${ERUI_TRANSFORM_HEIGHT}
+        ERUI_FADE_CACHE_WIDTH=${ERUI_FADE_CACHE_WIDTH}
+        ERUI_FADE_CACHE_HEIGHT=${ERUI_FADE_CACHE_HEIGHT}
         ERUI_IMAGE_REGISTRY_MAX=${ERUI_IMAGE_REGISTRY_MAX}
         ERUI_VECTOR_TAPE_MAX=${ERUI_VECTOR_TAPE_MAX}
         ERUI_VECTOR_PAINTS_MAX=${ERUI_VECTOR_PAINTS_MAX}
-        ERUI_VECTOR_GRADS_MAX=${ERUI_VECTOR_GRADS_MAX}
+        ERUI_VECTOR_GRADIENTS_MAX=${ERUI_VECTOR_GRADIENTS_MAX}
         $<$<BOOL:${ERUI_PERF_STATS}>:ER_PERF_STATS=1>
 )
 
 target_compile_definitions(embedded-react PRIVATE
         ERUI_FONT_POOL_BYTES=${ERUI_FONT_POOL_BYTES}
-        ERUI_MAX_IMG_ROW_PIXELS=${ERUI_MAX_IMG_ROW_PIXELS}
-        ERUI_MAX_ANIM_VALUES=${ERUI_MAX_ANIM_VALUES}
+        ERUI_MAX_IMAGE_ROW_PIXELS=${ERUI_MAX_IMAGE_ROW_PIXELS}
+        ERUI_MAX_ANIMATION_VALUES=${ERUI_MAX_ANIMATION_VALUES}
         ERUI_MAX_VALUE_BINDINGS=${ERUI_MAX_VALUE_BINDINGS}
-        ERUI_VECTOR_MAX_PTS=${ERUI_VECTOR_MAX_PTS}
+        ERUI_VECTOR_MAX_POINTS=${ERUI_VECTOR_MAX_POINTS}
         ERUI_VECTOR_MAX_SUBPATHS=${ERUI_VECTOR_MAX_SUBPATHS}
         ERUI_VECTOR_MAX_EDGES=${ERUI_VECTOR_MAX_EDGES}
         ERUI_VECTOR_MAX_ROW=${ERUI_VECTOR_MAX_ROW}

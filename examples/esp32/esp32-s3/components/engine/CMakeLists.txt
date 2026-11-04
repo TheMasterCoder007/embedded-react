@@ -51,8 +51,8 @@ idf_component_register(
 
 # Feature flags — PUBLIC so dependents (bridge, main) agree on struct layout.
 #
-# ERUI_SCRATCH_W/BAND_H size the opacity-compositing strip pool (kept in internal DRAM, see
-# linker_psram.lf); ERUI_XFORM_W/H cap the largest node that can be rotated or scaled. See
+# ERUI_SCRATCH_WIDTH/BAND_HEIGHT size the opacity-compositing strip pool (kept in internal DRAM, see
+# linker_psram.lf); ERUI_TRANSFORM_WIDTH/HEIGHT cap the largest node that can be rotated or scaled. See
 # engine/README.md "Scratch buffers" for what each controls.
 # ERUI_TRANSFORMS=FULL enables the 2D affine path (scale/rotate) the starter's
 # Animated.timing(scale) logo pulse needs; under TRANSLATE_ONLY that pulse silently does
@@ -70,15 +70,15 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_MAX_NODES=512
     ERUI_MAX_OPACITY_DEPTH=2
     ERUI_RENDER_WORKERS=2
-    ERUI_SCRATCH_W=800
-    ERUI_SCRATCH_H=240
-    ERUI_SCRATCH_BAND_H=10
-    ERUI_XFORM_W=240
-    ERUI_XFORM_H=240
-    ERUI_FADE_CACHE_W=800
-    ERUI_FADE_CACHE_H=480
+    ERUI_SCRATCH_WIDTH=800
+    ERUI_SCRATCH_HEIGHT=240
+    ERUI_SCRATCH_BAND_HEIGHT=10
+    ERUI_TRANSFORM_WIDTH=240
+    ERUI_TRANSFORM_HEIGHT=240
+    ERUI_FADE_CACHE_WIDTH=800
+    ERUI_FADE_CACHE_HEIGHT=480
     ERUI_FONT_POOL_BYTES=0
-    ERUI_MAX_IMG_ROW_PIXELS=800
+    ERUI_MAX_IMAGE_ROW_PIXELS=800
     ERUI_ONSCREEN_KEYBOARD=1
 )
 

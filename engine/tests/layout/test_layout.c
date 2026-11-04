@@ -121,7 +121,7 @@ static void blend_cb(const void* source, int stride, uint8_t first, int x, int y
 static void on_layout(ERNode* node, const EREventData* data, void* user_data)
 {
     (void)node;
-    *(int*)user_data = data->layout_rect.h;
+    *(int*)user_data = data->layout_rect.height;
 }
 
 /**
@@ -246,7 +246,7 @@ int main(void)
     ERProps root_props = props_default();
     root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
     root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     er_node_set_props(root, &root_props);
 
@@ -315,9 +315,9 @@ int main(void)
         er_tree_set_root(aspect_root);
         er_commit();
 
-        if (aspect_rect.w != 100)
+        if (aspect_rect.width != 100)
             return fail("aspectRatio: child width should be 100");
-        if (aspect_rect.h != 50)
+        if (aspect_rect.height != 50)
             return fail("aspectRatio: child height should be 50 (width/ratio=100/2)");
 
         er_tree_remove_child(aspect_root, aspect_child);
@@ -326,8 +326,8 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
-     * Test: flex_basis_pct — child claims 50% of parent's main axis.
-     * Container: row 200×80.  Child: flex_basis_pct=50 → width=100.
+     * Test: flex_basis_percent — child claims 50% of parent's main axis.
+     * Container: row 200×80.  Child: flex_basis_percent=50 → width=100.
      * -----------------------------------------------------------------------*/
     {
         er_reset();
@@ -343,7 +343,7 @@ int main(void)
         ERNode* percent_child = er_node_create(ER_NODE_VIEW);
         ERRect percent_rect = {-1, -1, -1, -1};
         percent_root_props = props_default();
-        percent_root_props.flex_basis_pct = 50.0f;
+        percent_root_props.flex_basis_percent = 50.0f;
         er_node_set_props(percent_child, &percent_root_props);
         er_event_set(percent_child, ER_EVENT_LAYOUT, on_layout_rect, &percent_rect);
 
@@ -351,8 +351,8 @@ int main(void)
         er_tree_set_root(percent_root);
         er_commit();
 
-        if (percent_rect.w != 100)
-            return fail("flex_basis_pct: 50% of 200px parent should yield width=100");
+        if (percent_rect.width != 100)
+            return fail("flex_basis_percent: 50% of 200px parent should yield width=100");
 
         er_tree_remove_child(percent_root, percent_child);
         er_node_destroy(percent_child);
@@ -370,7 +370,7 @@ int main(void)
         ERProps margin_root_props = props_default();
         margin_root_props.width = 200;
         margin_root_props.height = 200;
-        margin_root_props.flex_direction = ER_FLEX_COL;
+        margin_root_props.flex_direction = ER_FLEX_COLUMN;
         margin_root_props.align_items = ER_ALIGN_STRETCH;
         er_node_set_props(margin_root, &margin_root_props);
 
@@ -388,7 +388,7 @@ int main(void)
 
         if (margin_rect.x != 20)
             return fail("marginHorizontal: child should be offset 20px from parent left");
-        if (margin_rect.w != 160)
+        if (margin_rect.width != 160)
             return fail("marginHorizontal: child width should be 160 (200 - 20*2)");
 
         er_tree_remove_child(margin_root, margin_child);
@@ -407,7 +407,7 @@ int main(void)
         ERProps padding_root_props = props_default();
         padding_root_props.width = 200;
         padding_root_props.height = 200;
-        padding_root_props.flex_direction = ER_FLEX_COL;
+        padding_root_props.flex_direction = ER_FLEX_COLUMN;
         padding_root_props.align_items = ER_ALIGN_STRETCH;
         padding_root_props.padding_horizontal = 15;
         er_node_set_props(padding_root, &padding_root_props);
@@ -425,7 +425,7 @@ int main(void)
 
         if (padding_rect.x != 15)
             return fail("paddingHorizontal: child should start at x=15");
-        if (padding_rect.w != 170)
+        if (padding_rect.width != 170)
             return fail("paddingHorizontal: child width should be 170 (200 - 15*2)");
 
         er_tree_remove_child(padding_root, padding_child);
@@ -454,7 +454,7 @@ int main(void)
         ERProps text_padding_root_props = props_default();
         text_padding_root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
         text_padding_root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
-        text_padding_root_props.flex_direction = ER_FLEX_COL;
+        text_padding_root_props.flex_direction = ER_FLEX_COLUMN;
         text_padding_root_props.align_items = ER_ALIGN_FLEX_START; /* shrink-wrap each child onto its own content */
         er_node_set_props(text_padding_root, &text_padding_root_props);
 
@@ -508,17 +508,17 @@ int main(void)
         er_tree_set_root(text_padding_root);
         er_commit();
 
-        if (bare_rect.w <= 0 || bare_rect.h <= 0)
+        if (bare_rect.width <= 0 || bare_rect.height <= 0)
             return fail("text padding: unpadded baseline measured non-positive");
-        if (padded_rect.w != bare_rect.w + 16)
+        if (padded_rect.width != bare_rect.width + 16)
             return fail("text padding: padding=8 did not widen the auto text node by 16");
-        if (padded_rect.h != bare_rect.h + 16)
+        if (padded_rect.height != bare_rect.height + 16)
             return fail("text padding: padding=8 did not heighten the auto text node by 16");
-        if (edges_rect.w != bare_rect.w + 20)
+        if (edges_rect.width != bare_rect.width + 20)
             return fail("text padding: paddingHorizontal=10 did not widen the text node by 20");
-        if (edges_rect.h != bare_rect.h + 10)
+        if (edges_rect.height != bare_rect.height + 10)
             return fail("text padding: paddingTop=3 + paddingBottom=7 did not add 10 to the height");
-        if (fixed_rect.w != 100 || fixed_rect.h != 40)
+        if (fixed_rect.width != 100 || fixed_rect.height != 40)
             return fail("text padding: an explicit width/height must already include its padding");
 
         er_tree_remove_child(text_padding_root, bare_text);
@@ -548,7 +548,7 @@ int main(void)
         ERProps scroll_view_props = props_default();
         scroll_view_props.width = 200;
         scroll_view_props.height = 100;
-        scroll_view_props.flex_direction = ER_FLEX_COL;
+        scroll_view_props.flex_direction = ER_FLEX_COLUMN;
         scroll_view_props.overflow = ER_OVERFLOW_SCROLL;
         er_node_set_props(scroll_view, &scroll_view_props);
 
@@ -573,7 +573,7 @@ int main(void)
         /* Each child must keep its explicit 60 px height (no shrinking). */
         for (int kid_index = 0; kid_index < 3; kid_index++)
         {
-            if (krect[kid_index].h != 60)
+            if (krect[kid_index].height != 60)
                 return fail("overflow:scroll: child was shrunk to fit the viewport (flex_shrink not suppressed)");
         }
         /* Children stack starting at y=0 (ScrollView is root, placed at origin). */
@@ -604,7 +604,7 @@ int main(void)
         ERProps dirty_root_props = props_default();
         dirty_root_props.width = 200;
         dirty_root_props.height = 200;
-        dirty_root_props.flex_direction = ER_FLEX_COL;
+        dirty_root_props.flex_direction = ER_FLEX_COLUMN;
         dirty_root_props.align_items = ER_ALIGN_FLEX_START;
         er_node_set_props(dirty_root, &dirty_root_props);
 
@@ -625,7 +625,7 @@ int main(void)
         const uint32_t second_passes = er_layout_pass_count();
         if (second_passes != first_passes + 1)
             return fail("layout-dirty: first commit did not run exactly one layout pass");
-        if (dirty_rect.w != 80 || dirty_rect.h != 40)
+        if (dirty_rect.width != 80 || dirty_rect.height != 40)
             return fail("layout-dirty: child rect wrong after first commit");
 
         /* A commit with no mutations must take the fast path (no layout pass). */
@@ -644,15 +644,15 @@ int main(void)
         er_event_set(dirty_child, ER_EVENT_LAYOUT, on_layout_rect, &dirty_rect);
         /* (No layout fired during skips, so dirty_rect stays at the sentinel — that itself
          * confirms ER_EVENT_LAYOUT did not fire when layout was skipped.) */
-        if (dirty_rect.w != -1)
+        if (dirty_rect.width != -1)
             return fail("layout-dirty: ER_EVENT_LAYOUT fired on a skipped commit");
 
         /* An animation mutates render-only props; it must NOT trigger a layout pass. */
-        ERAnimConfig animation_config;
+        ERAnimationConfig animation_config;
         memset(&animation_config, 0, sizeof(animation_config));
-        animation_config.type = ER_ANIM_TIMING;
+        animation_config.type = ER_ANIMATION_TIMING;
         animation_config.duration_ms = 100U;
-        er_anim_start(dirty_child, ER_PROP_OPACITY, 0.0f, &animation_config);
+        er_animation_start(dirty_child, ER_PROP_OPACITY, 0.0f, &animation_config);
         const uint32_t passes_before_animation = er_layout_pass_count();
         for (int frame_index = 0; frame_index < 5; frame_index++)
         {
@@ -671,7 +671,7 @@ int main(void)
         er_commit();
         if (er_layout_pass_count() != passes_before_mutation + 1)
             return fail("layout-dirty: prop change did not trigger a layout pass");
-        if (dirty_rect.w != 120 || dirty_rect.h != 50)
+        if (dirty_rect.width != 120 || dirty_rect.height != 50)
             return fail("layout-dirty: child rect did not update after prop change");
 
         /* Back to idle — no further layout passes. */
@@ -681,7 +681,7 @@ int main(void)
 
         /* A pending LayoutAnimation must force a layout pass even with no prop change. */
         const uint32_t passes_before_layout_animation = er_layout_pass_count();
-        er_layout_anim_configure_next(&ER_LAYOUT_ANIM_EASE_IN_EASE_OUT);
+        er_layout_animation_configure_next(&ER_LAYOUT_ANIMATION_EASE_IN_EASE_OUT);
         er_commit();
         if (er_layout_pass_count() != passes_before_layout_animation + 1)
             return fail("layout-dirty: pending LayoutAnimation did not force a layout pass");
@@ -786,7 +786,7 @@ int main(void)
         ERProps cross_root_props = props_default();
         cross_root_props.width = 200;
         cross_root_props.height = 200;
-        cross_root_props.flex_direction = ER_FLEX_COL;
+        cross_root_props.flex_direction = ER_FLEX_COLUMN;
         cross_root_props.align_items = ER_ALIGN_STRETCH;
         er_node_set_props(cross_root, &cross_root_props);
 
@@ -817,16 +817,17 @@ int main(void)
         er_tree_set_root(cross_root);
         er_commit();
 
-        if (cross_row_rect.h != 60)
+        if (cross_row_rect.height != 60)
             return fail("auto cross-size: row should grow to its children's height (60), not collapse to 0");
-        if (cross_row_rect.w != 200)
+        if (cross_row_rect.width != 200)
             return fail("auto cross-size: row should stretch to the column's width (200)");
         for (int kid_index = 0; kid_index < 2; kid_index++)
         {
-            if (cross_kid_rects[kid_index].h != 60)
+            if (cross_kid_rects[kid_index].height != 60)
                 return fail("auto cross-size: child height should be 60");
             if (cross_kid_rects[kid_index].y < cross_row_rect.y
-                || cross_kid_rects[kid_index].y + cross_kid_rects[kid_index].h > cross_row_rect.y + cross_row_rect.h)
+                || cross_kid_rects[kid_index].y + cross_kid_rects[kid_index].height
+                       > cross_row_rect.y + cross_row_rect.height)
                 return fail("auto cross-size: child falls outside the row's bounds (not hit-testable)");
         }
 
@@ -852,7 +853,7 @@ int main(void)
         ERProps insert_root_props = props_default();
         insert_root_props.width = 100;
         insert_root_props.height = 100;
-        insert_root_props.flex_direction = ER_FLEX_COL;
+        insert_root_props.flex_direction = ER_FLEX_COLUMN;
         insert_root_props.align_items = ER_ALIGN_FLEX_START;
         er_node_set_props(insert_root, &insert_root_props);
 
@@ -918,7 +919,7 @@ int main(void)
         ERProps nested_root_props = props_default();
         nested_root_props.width = 480;
         nested_root_props.height = 320;
-        nested_root_props.flex_direction = ER_FLEX_COL;
+        nested_root_props.flex_direction = ER_FLEX_COLUMN;
         er_node_set_props(nested_root, &nested_root_props);
 
         ERNode* nested_child = er_node_create(ER_NODE_VIEW);
@@ -926,7 +927,7 @@ int main(void)
         nested_root_props = props_default();
         nested_root_props.width = 100;
         nested_root_props.height = 200;
-        nested_root_props.flex_direction = ER_FLEX_COL;
+        nested_root_props.flex_direction = ER_FLEX_COLUMN;
         er_node_set_props(nested_child, &nested_root_props);
         er_event_set(nested_child, ER_EVENT_LAYOUT, on_layout_rect, &nested_child_rect);
         er_tree_append_child(nested_root, nested_child);
@@ -948,11 +949,11 @@ int main(void)
         er_tree_set_root(nested_root);
         er_commit();
 
-        if (nested_child_rect.h != 200)
+        if (nested_child_rect.height != 200)
             return fail("nested explicit size: fixed-height child should stay 200, not fill the root");
         if (nested_item_rects[0].y != 0 || nested_item_rects[1].y != 20 || nested_item_rects[2].y != 40)
             return fail("nested explicit size: grandchildren should stack at 0,20,40");
-        if (nested_item_rects[0].h != 20)
+        if (nested_item_rects[0].height != 20)
             return fail("nested explicit size: grandchild height should stay 20");
 
         for (int item_index = 0; item_index < 3; item_index++)
@@ -1155,7 +1156,7 @@ int main(void)
         ERProps wrap_root_props = props_default();
         wrap_root_props.width = (int16_t)FRAMEBUFFER_WIDTH;
         wrap_root_props.height = (int16_t)FRAMEBUFFER_HEIGHT;
-        wrap_root_props.flex_direction = ER_FLEX_COL;
+        wrap_root_props.flex_direction = ER_FLEX_COLUMN;
         wrap_root_props.align_items = ER_ALIGN_FLEX_START;
         er_node_set_props(wrap_root, &wrap_root_props);
 
@@ -1224,21 +1225,21 @@ int main(void)
         er_tree_set_root(wrap_root);
         er_commit();
 
-        if (save_rect.w != 120 || save_rect.h != line_height)
+        if (save_rect.width != 120 || save_rect.height != line_height)
             return fail("text wrap: a label that fits keeps its one-line height");
-        if (description_rect.w != 120 || description_rect.h != description_lines_120 * line_height)
+        if (description_rect.width != 120 || description_rect.height != description_lines_120 * line_height)
             return fail("text wrap: the long text in the 120 px column is not as tall as its wrapped lines");
-        if (short_rect.y != description_rect.y + description_rect.h || short_rect.h != line_height)
+        if (short_rect.y != description_rect.y + description_rect.height || short_rect.height != line_height)
             return fail("text wrap: numberOfLines={3} on a one-line label must stay one line tall");
-        if (clip_rect.h != 2 * line_height)
+        if (clip_rect.height != 2 * line_height)
             return fail("text wrap: numberOfLines={2} must cap a long text at two lines");
-        if (flex_rect.x != 200 || flex_rect.w != 100 || flex_rect.h != description_lines_100 * line_height)
+        if (flex_rect.x != 200 || flex_rect.width != 100 || flex_rect.height != description_lines_100 * line_height)
             return fail("text wrap: the flex: 1 Text must wrap at the 100 px it flexes to");
-        if (row_rect.h != flex_rect.h)
+        if (row_rect.height != flex_rect.height)
             return fail("text wrap: the row must grow to hold its wrapped flex: 1 Text");
-        if (wrap_rect.w != description_width_120 || wrap_rect.h != description_lines_120 * line_height)
+        if (wrap_rect.width != description_width_120 || wrap_rect.height != description_lines_120 * line_height)
             return fail("text wrap: a shrink-wrapped Text should take its widest line at the width it is offered");
-        if (one_line_rect.w > 120 || one_line_rect.h != line_height)
+        if (one_line_rect.width > 120 || one_line_rect.height != line_height)
             return fail("text wrap: numberOfLines={1} must stay inside the column it would overflow");
 
         /* The same row without its own width takes the column's, and still grows to hold the Text. */
@@ -1249,8 +1250,8 @@ int main(void)
         wrap_root_props.width = 300;
         er_node_set_props(wrap_root, &wrap_root_props);
         er_commit();
-        if (row_rect.w != 300 || flex_rect.w != 100 || flex_rect.h != description_lines_100 * line_height
-            || row_rect.h != flex_rect.h)
+        if (row_rect.width != 300 || flex_rect.width != 100 || flex_rect.height != description_lines_100 * line_height
+            || row_rect.height != flex_rect.height)
             return fail("text wrap: an auto-width row must flex and wrap its Text at the width its parent offers");
 
         er_reset();
@@ -1314,11 +1315,11 @@ int main(void)
         er_tree_set_root(bound_root);
         er_commit();
 
-        if (narrow_rect.w != width_120 || narrow_rect.h != lines120 * line_height)
+        if (narrow_rect.width != width_120 || narrow_rect.height != lines120 * line_height)
             return fail("row text: a long Text in a 120 px row must wrap at the row's edge");
-        if (boxed_rect.x != 200 || boxed_rect.w != width_300 || boxed_rect.h != lines300 * line_height)
+        if (boxed_rect.x != 200 || boxed_rect.width != width_300 || boxed_rect.height != lines300 * line_height)
             return fail("row text: beside a box, a non-shrinking Text keeps the width it wraps at in the row");
-        if (scroll_rect.h != line_height || scroll_rect.w <= 120)
+        if (scroll_rect.height != line_height || scroll_rect.width <= 120)
             return fail("row text: a scrolling row must leave its Text on one line");
 
         er_reset();
@@ -1366,7 +1367,7 @@ int main(void)
         const uint32_t flex_measures_before = er_text_measure_count();
         er_commit();
         const uint32_t flex_measures_after = er_text_measure_count();
-        if (flex_row_lines < 2 || flex_row_rect.w != 100 || flex_row_rect.h != flex_row_lines * line_height)
+        if (flex_row_lines < 2 || flex_row_rect.width != 100 || flex_row_rect.height != flex_row_lines * line_height)
             return fail("text wrap: the flex: 1 Text must wrap at the 100 px it flexes to");
         if (flex_measures_after != flex_measures_before + 3U)
             return fail("measure-cache: a flexed row re-measured its Text more than once per width");

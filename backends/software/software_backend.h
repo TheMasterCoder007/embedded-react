@@ -90,12 +90,12 @@ extern "C"
     /**
      * @brief Returns the framebuffer width in pixels (0 before init).
      */
-    int er_software_fb_width(void);
+    int er_software_framebuffer_width(void);
 
     /**
      * @brief Returns the framebuffer height in pixels (0 before init).
      */
-    int er_software_fb_height(void);
+    int er_software_framebuffer_height(void);
 
 #ifdef __cplusplus
 }

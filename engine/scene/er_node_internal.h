@@ -53,23 +53,23 @@ typedef struct
     int16_t margin_left, margin_top, margin_right, margin_bottom;
     int16_t gap, row_gap, column_gap;
     int16_t flex_grow, flex_shrink, flex_basis;
-    uint8_t flex_direction;  /**< ERFlexDirection  */
-    uint8_t flex_wrap;       /**< ERFlexWrap       */
-    uint8_t align_items;     /**< ERFlexAlign      */
-    uint8_t align_self;      /**< ERFlexAlign      */
-    uint8_t align_content;   /**< ERAlignContent   */
-    uint8_t justify_content; /**< ERFlexJustify    */
-    uint8_t position;        /**< ERPositionType   */
-    uint8_t display;         /**< ERDisplayMode    */
-    uint8_t overflow;        /**< EROverflow       */
-    float aspect_ratio;      /**< Width/height ratio; 0.0 = not set. */
-    float flex_basis_pct;    /**< flex_basis as % of parent main-axis; 0.0 = not set. */
-    float width_pct;         /**< width as % of parent content width; 0.0 = not set. */
-    float height_pct;        /**< height as % of parent content height; 0.0 = not set. */
-    float left_pct;          /**< left as % of the containing block's width; 0.0 = not set. */
-    float top_pct;           /**< top as % of the containing block's height; 0.0 = not set. */
-    float right_pct;         /**< right as % of the containing block's width; 0.0 = not set. */
-    float bottom_pct;        /**< bottom as % of the containing block's height; 0.0 = not set. */
+    uint8_t flex_direction;   /**< ERFlexDirection  */
+    uint8_t flex_wrap;        /**< ERFlexWrap       */
+    uint8_t align_items;      /**< ERFlexAlign      */
+    uint8_t align_self;       /**< ERFlexAlign      */
+    uint8_t align_content;    /**< ERAlignContent   */
+    uint8_t justify_content;  /**< ERFlexJustify    */
+    uint8_t position;         /**< ERPositionType   */
+    uint8_t display;          /**< ERDisplayMode    */
+    uint8_t overflow;         /**< EROverflow       */
+    float aspect_ratio;       /**< Width/height ratio; 0.0 = not set. */
+    float flex_basis_percent; /**< flex_basis as % of parent main-axis; 0.0 = not set. */
+    float width_percent;      /**< width as % of parent content width; 0.0 = not set. */
+    float height_percent;     /**< height as % of parent content height; 0.0 = not set. */
+    float left_percent;       /**< left as % of the containing block's width; 0.0 = not set. */
+    float top_percent;        /**< top as % of the containing block's height; 0.0 = not set. */
+    float right_percent;      /**< right as % of the containing block's width; 0.0 = not set. */
+    float bottom_percent;     /**< bottom as % of the containing block's height; 0.0 = not set. */
 } ERLayoutSpec;
 
 /**

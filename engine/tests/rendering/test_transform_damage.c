@@ -19,7 +19,7 @@
  * transformed box, not force a full-screen repaint every frame.
  *
  * This guards the path that drove the starter logo pulse to ~8 fps on ESP32-S3:
- * an Animated.Value bound to scaleX/scaleY (er_anim_value_bind), advanced each
+ * an Animated.Value bound to scaleX/scaleY (er_animation_value_bind), advanced each
  * frame. The per-frame cost is the framebuffer repaint + panel flush region,
  * which equals the union of the backend's paint ops — NOT er_get_dirty_rect(),
  * which reports semantic change only. So this records the bounding box of every
@@ -156,14 +156,14 @@ static int check_pulse_bounded(int screen)
     er_commit(); /* frame 1: first commit is a full repaint by design */
 
     /* The starter logo pulse: one Animated.Value bound to scaleX AND scaleY. */
-    ERAnimValueHandle pulse = er_anim_value_create(1.0f);
-    er_anim_value_bind(pulse, logo, ER_PROP_SCALE_X);
-    er_anim_value_bind(pulse, logo, ER_PROP_SCALE_Y);
+    ERAnimationValueHandle pulse = er_animation_value_create(1.0f);
+    er_animation_value_bind(pulse, logo, ER_PROP_SCALE_X);
+    er_animation_value_bind(pulse, logo, ER_PROP_SCALE_Y);
 
-    ERAnimConfig config = {0};
-    config.type = ER_ANIM_TIMING;
+    ERAnimationConfig config = {0};
+    config.type = ER_ANIMATION_TIMING;
     config.duration_ms = 800U;
-    er_anim_value_animate(pulse, 1.2f, &config);
+    er_animation_value_animate(pulse, 1.2f, &config);
 
     embedded_renderer_tick(100U); /* advance ~1/8: scale ~1.025, logo marked source-dirty */
 
@@ -183,7 +183,7 @@ static int check_pulse_bounded(int screen)
            painted_height,
            100.0 * (double)paint_area / (double)screen_area);
 
-    er_anim_value_destroy(pulse);
+    er_animation_value_destroy(pulse);
     er_node_destroy(root); /* tears down the subtree */
 
     if (g_extent.operation_count == 0)
@@ -300,7 +300,7 @@ static int check_activity_indicator_translate(int screen)
     const int box = 40, offset = 60;
     ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
     ERProps spinner_props = props_default();
-    spinner_props.position = ER_POS_ABSOLUTE;
+    spinner_props.position = ER_POSITION_ABSOLUTE;
     spinner_props.left = 20;
     spinner_props.top = 20;
     spinner_props.width = (int16_t)box;
@@ -339,8 +339,8 @@ static int check_activity_indicator_translate(int screen)
            20 + offset,
            reported.x,
            reported.y,
-           reported.w,
-           reported.h);
+           reported.width,
+           reported.height);
 
     er_node_destroy(root);
 
@@ -398,7 +398,7 @@ static int check_spinner_bounded(int screen, float scale_x, float scale_y, const
     const int box = 40;
     ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
     ERProps spinner_props = props_default();
-    spinner_props.position = ER_POS_ABSOLUTE;
+    spinner_props.position = ER_POSITION_ABSOLUTE;
     spinner_props.left = 20;
     spinner_props.top = 20;
     spinner_props.width = (int16_t)box;
@@ -479,7 +479,7 @@ static int check_spinner_bounded(int screen, float scale_x, float scale_y, const
 
 #if ERUI_TRANSFORMS_FULL
 /* Scenario 5: a transformed node too large for the transform scratch must not become a permanent damage
- * source. er_transform_source_begin() refuses a node wider/taller than ERUI_XFORM_W/H, and render_tree
+ * source. er_transform_source_begin() refuses a node wider/taller than ERUI_TRANSFORM_WIDTH/HEIGHT, and render_tree
  * then degrades to painting it UNTRANSFORMED at its raw box — but the damage pre-pass used to measure
  * every transformed node by its transformed AABB regardless. last_paint_rect held the box while the
  * pre-pass computed an AABB, the two could never agree, `moved` latched true, and the node damaged and
@@ -493,7 +493,7 @@ static int check_spinner_bounded(int screen, float scale_x, float scale_y, const
  * identical.
  *
  * @param[in] side            Node size (square); the capture succeeds only when it clears BOTH
- *                            ERUI_XFORM_W and ERUI_XFORM_H.
+ *                            ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT.
  * @param[in] screen          Root size.
  * @param[in] expect_capture  Which path this case is meant to exercise — asserted, not assumed.
  * @param[in] label           Printed name for the case.
@@ -521,7 +521,7 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
     /* Scaled-down box in the top-left. Nothing ever changes about it after the first commit. */
     ERNode* node = er_node_create(ER_NODE_VIEW);
     ERProps node_props = props_default();
-    node_props.position = ER_POS_ABSOLUTE;
+    node_props.position = ER_POSITION_ABSOLUTE;
     node_props.left = 10;
     node_props.top = 10;
     node_props.width = (int16_t)side;
@@ -535,7 +535,7 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
     const int marker_x = side + 40;
     ERNode* marker = er_node_create(ER_NODE_VIEW);
     ERProps marker_props = props_default();
-    marker_props.position = ER_POS_ABSOLUTE;
+    marker_props.position = ER_POSITION_ABSOLUTE;
     marker_props.left = (int16_t)marker_x;
     marker_props.top = (int16_t)marker_x;
     marker_props.width = 40;
@@ -574,8 +574,8 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
            marker_x,
            reported.x,
            reported.y,
-           reported.w,
-           reported.h,
+           reported.width,
+           reported.height,
            idle_operations);
 
     er_node_destroy(root);
@@ -620,7 +620,7 @@ static int check_nested_transform_no_damage(int screen)
      * whole of the subtree below it. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
     ERProps outer_props = props_default();
-    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.position = ER_POSITION_ABSOLUTE;
     outer_props.left = 10;
     outer_props.top = 10;
     outer_props.width = 100;
@@ -632,7 +632,7 @@ static int check_nested_transform_no_damage(int screen)
     /* Inner transform: tiny, but refused the scratch because the outer capture holds it. */
     ERNode* inner = er_node_create(ER_NODE_VIEW);
     ERProps inner_props = props_default();
-    inner_props.position = ER_POS_ABSOLUTE;
+    inner_props.position = ER_POSITION_ABSOLUTE;
     inner_props.left = 10;
     inner_props.top = 10;
     inner_props.width = 40;
@@ -645,7 +645,7 @@ static int check_nested_transform_no_damage(int screen)
     const int marker_x = screen - 50;
     ERNode* marker = er_node_create(ER_NODE_VIEW);
     ERProps marker_props = props_default();
-    marker_props.position = ER_POS_ABSOLUTE;
+    marker_props.position = ER_POSITION_ABSOLUTE;
     marker_props.left = (int16_t)marker_x;
     marker_props.top = (int16_t)marker_x;
     marker_props.width = 30;
@@ -676,8 +676,8 @@ static int check_nested_transform_no_damage(int screen)
            marker_x,
            reported.x,
            reported.y,
-           reported.w,
-           reported.h);
+           reported.width,
+           reported.height);
 
     er_node_destroy(root);
 
@@ -723,13 +723,13 @@ static int check_3d_rotate_bounded(int screen)
     er_tree_set_root(root);
     er_commit(); /* full first frame */
 
-    ERAnimValueHandle spin = er_anim_value_create(1.0f);
-    er_anim_value_bind(spin, card, ER_PROP_ROTATE_Y);
+    ERAnimationValueHandle spin = er_animation_value_create(1.0f);
+    er_animation_value_bind(spin, card, ER_PROP_ROTATE_Y);
 
-    ERAnimConfig config = {0};
-    config.type = ER_ANIM_TIMING;
+    ERAnimationConfig config = {0};
+    config.type = ER_ANIMATION_TIMING;
     config.duration_ms = 800U;
-    er_anim_value_animate(spin, 40.0f, &config);
+    er_animation_value_animate(spin, 40.0f, &config);
 
     embedded_renderer_tick(100U); /* rotateY advances → card source-dirty, still 3D */
 
@@ -749,7 +749,7 @@ static int check_3d_rotate_bounded(int screen)
            painted_height,
            100.0 * (double)paint_area / (double)screen_area);
 
-    er_anim_value_destroy(spin);
+    er_animation_value_destroy(spin);
     er_node_destroy(root);
 
     if (g_extent.operation_count == 0)
@@ -797,8 +797,8 @@ int main(void)
         return result;
 
 #if ERUI_TRANSFORMS_FULL
-    const int fits = (ERUI_XFORM_W < ERUI_XFORM_H) ? ERUI_XFORM_W : ERUI_XFORM_H;
-    const int limit = (ERUI_XFORM_W > ERUI_XFORM_H) ? ERUI_XFORM_W : ERUI_XFORM_H;
+    const int fits = (ERUI_TRANSFORM_WIDTH < ERUI_TRANSFORM_HEIGHT) ? ERUI_TRANSFORM_WIDTH : ERUI_TRANSFORM_HEIGHT;
+    const int limit = (ERUI_TRANSFORM_WIDTH > ERUI_TRANSFORM_HEIGHT) ? ERUI_TRANSFORM_WIDTH : ERUI_TRANSFORM_HEIGHT;
     const int over = limit + 1;
     const int big_screen = over + 120;
 

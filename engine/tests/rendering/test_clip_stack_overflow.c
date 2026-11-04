@@ -277,7 +277,7 @@ static void build_scene(int depth)
     er_tree_set_root(root);
 
     ERProps outer_props = props_default();
-    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.position = ER_POSITION_ABSOLUTE;
     outer_props.left = 0;
     outer_props.top = 0;
     outer_props.width = OUTER_WIDTH;
@@ -299,7 +299,7 @@ static void build_scene(int depth)
 
     ERNode* sibling = er_node_create(ER_NODE_VIEW);
     ERProps sibling_props = props_default();
-    sibling_props.position = ER_POS_ABSOLUTE;
+    sibling_props.position = ER_POSITION_ABSOLUTE;
     sibling_props.left = SIBLING_X;
     sibling_props.top = SIBLING_Y;
     sibling_props.width = SIBLING_WIDTH;

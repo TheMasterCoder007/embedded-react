@@ -120,15 +120,15 @@ enum
 /** @brief Engine resources a package names in its needs, besides nodes. */
 enum
 {
-    ERB_RES_VECTOR_NODES = 1,
-    ERB_RES_ANIM_VALUES = 2,
-    ERB_RES_ANIMATIONS = 3,
-    ERB_RES_ANIM_GROUPS = 4,
-    ERB_RES_IMAGES = 5,
-    ERB_RES_FONTS = 6,
-    ERB_RES_GLYPHS = 7,
-    ERB_RES_EXTRA_GLYPHS = 8,
-    ERB_RES_COUNT_ = 9,
+    ERB_RESOURCE_VECTOR_NODES = 1,
+    ERB_RESOURCE_ANIMATION_VALUES = 2,
+    ERB_RESOURCE_ANIMATIONS = 3,
+    ERB_RESOURCE_ANIMATION_GROUPS = 4,
+    ERB_RESOURCE_IMAGES = 5,
+    ERB_RESOURCE_FONTS = 6,
+    ERB_RESOURCE_GLYPHS = 7,
+    ERB_RESOURCE_EXTRA_GLYPHS = 8,
+    ERB_RESOURCE_COUNT_ = 9,
 };
 
 /** @brief Table ids. */
@@ -147,13 +147,13 @@ enum
     ERB_TABLE_FUNCTIONS = 11,
     ERB_TABLE_TYPES = 12,
     ERB_TABLE_CODE = 13,
-    ERB_TABLE_ANIMS = 14,
+    ERB_TABLE_ANIMATIONS = 14,
     ERB_TABLE_TAPES = 15,
     ERB_TABLE_IMPORTS = 16,
     ERB_TABLE_INPUTS = 17,
-    ERB_TABLE_INTERPS = 18,  /**< Since minor 1. */
-    ERB_TABLE_KEYBOARD = 19, /**< Since minor 3. */
-    ERB_TABLE_CHECKS = 20,   /**< Since minor 6. */
+    ERB_TABLE_INTERPOLATIONS = 18, /**< Since minor 1. */
+    ERB_TABLE_KEYBOARD = 19,       /**< Since minor 3. */
+    ERB_TABLE_CHECKS = 20,         /**< Since minor 6. */
     ERB_TABLE_COUNT_ = 21,
 };
 
@@ -168,7 +168,7 @@ enum
 #define ERB_NODE_SIZE 12u
 #define ERB_BINDING_SIZE 4u
 #define ERB_FUNCTION_SIZE 16u
-#define ERB_ANIM_SIZE 40u
+#define ERB_ANIMATION_SIZE 40u
 #define ERB_TAPE_SIZE 16u
 #define ERB_TAPE_HEADER_SIZE 16u
 #define ERB_PAINT_SIZE 24u
@@ -176,7 +176,7 @@ enum
 #define ERB_STOP_SIZE 8u
 #define ERB_IMPORT_SIZE 8u
 #define ERB_INPUT_SIZE 4u
-#define ERB_INTERP_SIZE 72u
+#define ERB_INTERPOLATION_SIZE 72u
 #define ERB_KEYBOARD_HEADER_SIZE 28u
 #define ERB_KEYBOARD_GROUP_SIZE 4u
 #define ERB_KEYBOARD_KEY_SIZE 8u
@@ -248,33 +248,33 @@ enum
 #define ERB_FUNCTION_KIND_AT 15u
 
 /** @brief Animation descriptor. */
-#define ERB_ANIM_KIND_AT 0u
-#define ERB_ANIM_EASING_AT 1u
-#define ERB_ANIM_FLAGS_AT 2u
-#define ERB_ANIM_TARGET_AT 4u
-#define ERB_ANIM_PROP_AT 6u
-#define ERB_ANIM_FIRST_AT 8u
-#define ERB_ANIM_COUNT_AT 10u
-#define ERB_ANIM_AMOUNT_AT 12u /**< Duration ms (timing, delay), gap ms (stagger) or iterations (loop). */
-#define ERB_ANIM_DELAY_MS_AT 16u
-#define ERB_ANIM_TO_AT 20u
-#define ERB_ANIM_PARAM0_AT 24u /**< Spring stiffness, decay velocity, or bezier x1. */
-#define ERB_ANIM_PARAM1_AT 28u /**< Spring damping, decay deceleration, or bezier y1. */
-#define ERB_ANIM_PARAM2_AT 32u /**< Spring mass, or bezier x2. */
-#define ERB_ANIM_PARAM3_AT 36u /**< Spring velocity, or bezier y2. */
+#define ERB_ANIMATION_KIND_AT 0u
+#define ERB_ANIMATION_EASING_AT 1u
+#define ERB_ANIMATION_FLAGS_AT 2u
+#define ERB_ANIMATION_TARGET_AT 4u
+#define ERB_ANIMATION_PROP_AT 6u
+#define ERB_ANIMATION_FIRST_AT 8u
+#define ERB_ANIMATION_COUNT_AT 10u
+#define ERB_ANIMATION_AMOUNT_AT 12u /**< Duration ms (timing, delay), gap ms (stagger) or iterations (loop). */
+#define ERB_ANIMATION_DELAY_MS_AT 16u
+#define ERB_ANIMATION_TO_AT 20u
+#define ERB_ANIMATION_PARAM0_AT 24u /**< Spring stiffness, decay velocity, or bezier x1. */
+#define ERB_ANIMATION_PARAM1_AT 28u /**< Spring damping, decay deceleration, or bezier y1. */
+#define ERB_ANIMATION_PARAM2_AT 32u /**< Spring mass, or bezier x2. */
+#define ERB_ANIMATION_PARAM3_AT 36u /**< Spring velocity, or bezier y2. */
 
 /** @brief Interpolation: the animated value, its breakpoints, and the inputs then the outputs (f32, or ARGB). */
-#define ERB_INTERP_SLOT_AT 0u
-#define ERB_INTERP_POINT_COUNT_AT 2u
-#define ERB_INTERP_FLAGS_AT 3u
-#define ERB_INTERP_EXTRAPOLATE_LEFT_AT 4u
-#define ERB_INTERP_EXTRAPOLATE_RIGHT_AT 5u
-#define ERB_INTERP_INPUT_AT 8u
-#define ERB_INTERP_OUTPUT_AT 40u
+#define ERB_INTERPOLATION_SLOT_AT 0u
+#define ERB_INTERPOLATION_POINT_COUNT_AT 2u
+#define ERB_INTERPOLATION_FLAGS_AT 3u
+#define ERB_INTERPOLATION_EXTRAPOLATE_LEFT_AT 4u
+#define ERB_INTERPOLATION_EXTRAPOLATE_RIGHT_AT 5u
+#define ERB_INTERPOLATION_INPUT_AT 8u
+#define ERB_INTERPOLATION_OUTPUT_AT 40u
 
 /** @brief Interpolation flag bits. */
-#define ERB_INTERP_FLAG_COLOR 0x01u /**< The outputs are ARGB8888 colors. */
-#define ERB_INTERP_FLAGS_KNOWN ERB_INTERP_FLAG_COLOR
+#define ERB_INTERPOLATION_FLAG_COLOR 0x01u /**< The outputs are ARGB8888 colors. */
+#define ERB_INTERPOLATION_FLAGS_KNOWN ERB_INTERPOLATION_FLAG_COLOR
 
 /** @brief The tapes table's header, a tape record, and the paints, gradients and stops it names. */
 #define ERB_TAPES_COUNT_AT 0u
@@ -310,24 +310,24 @@ enum
 /** @brief What VPAINT sets in a paint of the scratch (C), and the register type each takes. */
 enum
 {
-    ERB_VPAINT_FILL = 0,            /**< int: ARGB. */
-    ERB_VPAINT_STROKE = 1,          /**< int: ARGB. */
-    ERB_VPAINT_STROKE_WIDTH = 2,    /**< float. */
-    ERB_VPAINT_FILL_GRADIENT = 3,   /**< int: a 1-based gradient, or 0 for none. */
-    ERB_VPAINT_STROKE_GRADIENT = 4, /**< int: a 1-based gradient, or 0 for none. */
-    ERB_VPAINT_COUNT_ = 5,
+    ERB_VECTOR_PAINT_FILL = 0,            /**< int: ARGB. */
+    ERB_VECTOR_PAINT_STROKE = 1,          /**< int: ARGB. */
+    ERB_VECTOR_PAINT_STROKE_WIDTH = 2,    /**< float. */
+    ERB_VECTOR_PAINT_FILL_GRADIENT = 3,   /**< int: a 1-based gradient, or 0 for none. */
+    ERB_VECTOR_PAINT_STROKE_GRADIENT = 4, /**< int: a 1-based gradient, or 0 for none. */
+    ERB_VECTOR_PAINT_COUNT_ = 5,
 };
 
 /** @brief What VGRAD sets in a gradient of the scratch (C): its geometry (floats), then each stop's color (int) and
- *         position (float), stop k at ERB_VGRAD_STOPS + 2k. */
+ *         position (float), stop k at ERB_VECTOR_GRADIENT_STOPS + 2k. */
 enum
 {
-    ERB_VGRAD_AX = 0,
-    ERB_VGRAD_AY = 1,
-    ERB_VGRAD_BX = 2,
-    ERB_VGRAD_BY = 3,
-    ERB_VGRAD_RADIUS = 4,
-    ERB_VGRAD_STOPS = 8,
+    ERB_VECTOR_GRADIENT_AX = 0,
+    ERB_VECTOR_GRADIENT_AY = 1,
+    ERB_VECTOR_GRADIENT_BX = 2,
+    ERB_VECTOR_GRADIENT_BY = 3,
+    ERB_VECTOR_GRADIENT_RADIUS = 4,
+    ERB_VECTOR_GRADIENT_STOPS = 8,
 };
 
 /** @brief The keyboard table (since minor 3): a header, then its layers, its rows and its keys. A layer names its
@@ -336,7 +336,7 @@ enum
 #define ERB_KEYBOARD_ROW_COUNT_AT 2u
 #define ERB_KEYBOARD_KEY_COUNT_AT 4u
 #define ERB_KEYBOARD_ROW_HEIGHT_AT 6u
-#define ERB_KEYBOARD_GRID_COLS_AT 8u
+#define ERB_KEYBOARD_GRID_COLUMNS_AT 8u
 #define ERB_KEYBOARD_KEY_GAP_AT 9u
 #define ERB_KEYBOARD_KEY_RADIUS_AT 10u
 #define ERB_KEYBOARD_FONT_SIZE_AT 11u
@@ -365,22 +365,22 @@ enum
 /** @brief Arena region kinds. Each appears at most once; `count` is what each one holds. */
 enum
 {
-    ERB_REGION_SLOTS = 1,   /**< Value slots. count unused. */
-    ERB_REGION_DIRTY = 2,   /**< count dirty bits, kept twice (live and the pass's copy). */
-    ERB_REGION_STRINGS = 3, /**< String slot buffers. count unused. */
-    ERB_REGION_LISTS = 4,   /**< List pools. count unused. */
-    ERB_REGION_HANDLES = 5, /**< Node handle slots. count unused. */
-    ERB_REGION_TIMERS = 6,  /**< count timers, ERB_TIMER_SIZE each. */
-    ERB_REGION_ANIMS = 7,   /**< count running animation entries, ERB_ANIM_ENTRY_SIZE each. */
-    ERB_REGION_STACK = 8,   /**< count register cells for VM frames. */
-    ERB_REGION_TAPE = 9,    /**< count floats of vector tape scratch. */
-    ERB_REGION_EVENTS = 10, /**< count queued events, ERB_EVENT_SIZE each. */
+    ERB_REGION_SLOTS = 1,      /**< Value slots. count unused. */
+    ERB_REGION_DIRTY = 2,      /**< count dirty bits, kept twice (live and the pass's copy). */
+    ERB_REGION_STRINGS = 3,    /**< String slot buffers. count unused. */
+    ERB_REGION_LISTS = 4,      /**< List pools. count unused. */
+    ERB_REGION_HANDLES = 5,    /**< Node handle slots. count unused. */
+    ERB_REGION_TIMERS = 6,     /**< count timers, ERB_TIMER_SIZE each. */
+    ERB_REGION_ANIMATIONS = 7, /**< count running animation entries, ERB_ANIMATION_ENTRY_SIZE each. */
+    ERB_REGION_STACK = 8,      /**< count register cells for VM frames. */
+    ERB_REGION_TAPE = 9,       /**< count floats of vector tape scratch. */
+    ERB_REGION_EVENTS = 10,    /**< count queued events, ERB_EVENT_SIZE each. */
     ERB_REGION_COUNT_ = 11,
 };
 
 /** @brief Fixed arena record sizes. */
 #define ERB_TIMER_SIZE 16u
-#define ERB_ANIM_ENTRY_SIZE 20u
+#define ERB_ANIMATION_ENTRY_SIZE 20u
 #define ERB_EVENT_SIZE 32u
 
 /** @brief The dirty region keeps its bits twice: live, and the copy the update pass reads. */
@@ -395,20 +395,20 @@ enum
 /** @brief Register and slot value types. A 64-bit type takes two cells, the first even. */
 enum
 {
-    ERB_T_PAIR = 0, /**< In the types table: the second cell of a 64-bit register. */
-    ERB_T_INT = 1,
-    ERB_T_BOOL = 2,
-    ERB_T_FLOAT = 3,
-    ERB_T_INT64 = 4,
-    ERB_T_DOUBLE = 5,
-    ERB_T_STRING = 6,
-    ERB_T_ENUM = 7,
-    ERB_T_NODE = 8,
-    ERB_T_ANIM = 9,
-    ERB_T_REGISTER_COUNT_ = 10,
-    ERB_T_AVALUE = 10, /**< Slot only: an animated value the app owns. */
-    ERB_T_LIST = 11,   /**< Slot only: a list pool. */
-    ERB_T_COUNT_ = 12,
+    ERB_TYPE_PAIR = 0, /**< In the types table: the second cell of a 64-bit register. */
+    ERB_TYPE_INT = 1,
+    ERB_TYPE_BOOL = 2,
+    ERB_TYPE_FLOAT = 3,
+    ERB_TYPE_INT64 = 4,
+    ERB_TYPE_DOUBLE = 5,
+    ERB_TYPE_STRING = 6,
+    ERB_TYPE_ENUM = 7,
+    ERB_TYPE_NODE = 8,
+    ERB_TYPE_ANIMATION = 9,
+    ERB_TYPE_REGISTER_COUNT_ = 10,
+    ERB_TYPE_ANIMATED_VALUE = 10, /**< Slot only: an animated value the app owns. */
+    ERB_TYPE_LIST = 11,           /**< Slot only: a list pool. */
+    ERB_TYPE_COUNT_ = 12,
 };
 
 /** @brief Slot flag bits. */
@@ -419,9 +419,9 @@ enum
 /** @brief Template kinds. */
 enum
 {
-    ERB_TPL_ROOT = 1,
-    ERB_TPL_BRANCH = 2,
-    ERB_TPL_ROW = 3,
+    ERB_TEMPLATE_KIND_ROOT = 1,
+    ERB_TEMPLATE_KIND_BRANCH = 2,
+    ERB_TEMPLATE_KIND_ROW = 3,
 };
 
 /** @brief Binding kinds. */
@@ -435,74 +435,75 @@ enum
 };
 
 /**
- * @brief Function kinds. Below ERB_FN_QUERY a kind is the EREventType its handler is bound to; between
- *        ERB_FN_QUERY and ERB_FN_TIMER it is ERB_FN_QUERY + an ERResponderQuery. Only a helper can be
- *        called; every other kind is an entry point the runtime runs.
+ * @brief Function kinds. Below ERB_FUNCTION_KIND_QUERY a kind is the EREventType its handler is bound to; between
+ *        ERB_FUNCTION_KIND_QUERY and ERB_FUNCTION_KIND_TIMER it is ERB_FUNCTION_KIND_QUERY + an ERResponderQuery. Only
+ * a helper can be called; every other kind is an entry point the runtime runs.
  */
 enum
 {
-    ERB_FN_QUERY = 0x40,
-    ERB_FN_TIMER = 0x80,
-    ERB_FN_EFFECT = 0x81,
-    ERB_FN_UPDATE = 0x82,
-    ERB_FN_BOOT = 0x83,
-    ERB_FN_HELPER = 0x84,
-    ERB_FN_ANIM_DONE = 0x85,
+    ERB_FUNCTION_KIND_QUERY = 0x40,
+    ERB_FUNCTION_KIND_TIMER = 0x80,
+    ERB_FUNCTION_KIND_EFFECT = 0x81,
+    ERB_FUNCTION_KIND_UPDATE = 0x82,
+    ERB_FUNCTION_KIND_BOOT = 0x83,
+    ERB_FUNCTION_KIND_HELPER = 0x84,
+    ERB_FUNCTION_KIND_ANIMATION_DONE = 0x85,
 };
 
 /** @brief Constant prop value kinds (each ABI prop has one; see erb_props.c). */
 enum
 {
-    ERB_PK_I16 = 1,     /**< A whole pixel, int16; ER_LAYOUT_AUTO is auto. */
-    ERB_PK_U8 = 2,      /**< 0 to 255. */
-    ERB_PK_U16 = 3,     /**< 0 to 65535. */
-    ERB_PK_ENUM = 4,    /**< 0 to the prop's largest value. */
-    ERB_PK_BOOL = 5,    /**< 0 or 1. */
-    ERB_PK_COLOR = 6,   /**< ARGB8888. */
-    ERB_PK_FLOAT = 7,   /**< f32 bits. */
-    ERB_PK_OPACITY = 8, /**< The engine's byte, 0 to 255. Set from a float as app_opacity does. */
-    ERB_PK_STRING = 9,  /**< A string index; its length within the prop's cap. */
-    ERB_PK_IMAGE = 10,  /**< A string index naming an image in the asset pack. */
+    ERB_PROP_KIND_I16 = 1,     /**< A whole pixel, int16; ER_LAYOUT_AUTO is auto. */
+    ERB_PROP_KIND_U8 = 2,      /**< 0 to 255. */
+    ERB_PROP_KIND_U16 = 3,     /**< 0 to 65535. */
+    ERB_PROP_KIND_ENUM = 4,    /**< 0 to the prop's largest value. */
+    ERB_PROP_KIND_BOOL = 5,    /**< 0 or 1. */
+    ERB_PROP_KIND_COLOR = 6,   /**< ARGB8888. */
+    ERB_PROP_KIND_FLOAT = 7,   /**< f32 bits. */
+    ERB_PROP_KIND_OPACITY = 8, /**< The engine's byte, 0 to 255. Set from a float as app_opacity does. */
+    ERB_PROP_KIND_STRING = 9,  /**< A string index; its length within the prop's cap. */
+    ERB_PROP_KIND_IMAGE = 10,  /**< A string index naming an image in the asset pack. */
 };
 
 /** @brief Animation descriptor kinds. */
 enum
 {
-    ERB_ANIM_TIMING = 1,
-    ERB_ANIM_SPRING = 2,
-    ERB_ANIM_DECAY = 3,
-    ERB_ANIM_SEQUENCE = 4,
-    ERB_ANIM_PARALLEL = 5,
-    ERB_ANIM_STAGGER = 6,
-    ERB_ANIM_LOOP = 7,
+    ERB_ANIMATION_TIMING = 1,
+    ERB_ANIMATION_SPRING = 2,
+    ERB_ANIMATION_DECAY = 3,
+    ERB_ANIMATION_SEQUENCE = 4,
+    ERB_ANIMATION_PARALLEL = 5,
+    ERB_ANIMATION_STAGGER = 6,
+    ERB_ANIMATION_LOOP = 7,
 };
 
 /** @brief Animation descriptor flag bits. */
-#define ERB_ANIM_FLAG_LOOP 0x01u
-#define ERB_ANIM_FLAG_LOOP_REVERSE 0x02u
-#define ERB_ANIM_FLAG_TO_REGISTER 0x04u
-#define ERB_ANIM_FLAGS_KNOWN 0x07u
+#define ERB_ANIMATION_FLAG_LOOP 0x01u
+#define ERB_ANIMATION_FLAG_LOOP_REVERSE 0x02u
+#define ERB_ANIMATION_FLAG_TO_REGISTER 0x04u
+#define ERB_ANIMATION_FLAGS_KNOWN 0x07u
 
 /** @brief Event data fields EVT reads. */
 enum
 {
-    ERB_EVT_X = 0,
-    ERB_EVT_Y = 1,
-    ERB_EVT_DX = 2,
-    ERB_EVT_DY = 3,
-    ERB_EVT_VX = 4,
-    ERB_EVT_VY = 5,
-    ERB_EVT_SCROLL_X = 6,
-    ERB_EVT_SCROLL_Y = 7,
-    ERB_EVT_LAYOUT_X = 8,
-    ERB_EVT_LAYOUT_Y = 9,
-    ERB_EVT_LAYOUT_W = 10,
-    ERB_EVT_LAYOUT_H = 11,
-    ERB_EVT_VALUE = 12,
-    ERB_EVT_VALUE_START = 13,
-    ERB_EVT_FINISHED = 14, /**< bool: an animation ran to its end (in an ERB_FN_ANIM_DONE function). */
-    ERB_EVT_TOUCHES = 15,  /**< int: fingers down when the touch arrived. Since minor 2. */
-    ERB_EVT_COUNT_ = 16,
+    ERB_EVENT_FIELD_X = 0,
+    ERB_EVENT_FIELD_Y = 1,
+    ERB_EVENT_FIELD_DX = 2,
+    ERB_EVENT_FIELD_DY = 3,
+    ERB_EVENT_FIELD_VX = 4,
+    ERB_EVENT_FIELD_VY = 5,
+    ERB_EVENT_FIELD_SCROLL_X = 6,
+    ERB_EVENT_FIELD_SCROLL_Y = 7,
+    ERB_EVENT_FIELD_LAYOUT_X = 8,
+    ERB_EVENT_FIELD_LAYOUT_Y = 9,
+    ERB_EVENT_FIELD_LAYOUT_WIDTH = 10,
+    ERB_EVENT_FIELD_LAYOUT_HEIGHT = 11,
+    ERB_EVENT_FIELD_VALUE = 12,
+    ERB_EVENT_FIELD_VALUE_START = 13,
+    ERB_EVENT_FIELD_FINISHED =
+        14, /**< bool: an animation ran to its end (in an ERB_FUNCTION_KIND_ANIMATION_DONE function). */
+    ERB_EVENT_FIELD_TOUCHES = 15, /**< int: fingers down when the touch arrived. Since minor 2. */
+    ERB_EVENT_FIELD_COUNT_ = 16,
 };
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -521,7 +522,7 @@ enum
 
 /** @brief A check's word: the op in the low byte, its signed argument above it. */
 #define ERB_CHECK_OP(word) ((uint8_t)(word))
-#define ERB_CHECK_ARG(word) ((int32_t)(word) >> 8)
+#define ERB_CHECK_ARGUMENT(word) ((int32_t)(word) >> 8)
 
 /**
  * @brief A check's ops: a stack machine over doubles with no jumps, run before anything else in the package is
@@ -529,43 +530,43 @@ enum
  */
 enum
 {
-    ERB_CK_END = 1,
-    ERB_CK_WIDTH,  /**< Push the screen's width. */
-    ERB_CK_HEIGHT, /**< Push the screen's height. */
-    ERB_CK_PUSHI,  /**< Push the argument. */
-    ERB_CK_PUSHK,  /**< Push the double in the next two words, low word first. */
-    ERB_CK_LOAD,   /**< Push local arg. */
-    ERB_CK_STORE,  /**< Pop into local arg. */
-    ERB_CK_ADD,
-    ERB_CK_SUB,
-    ERB_CK_MUL,
-    ERB_CK_DIV,
-    ERB_CK_NEG,
-    ERB_CK_MATH,  /**< An ERB_MATH_ function, by the argument. */
-    ERB_CK_TOINT, /**< To a whole number toward zero: NaN as 0, saturating at the int range. */
-    ERB_CK_IDIV,  /**< Whole-number division with the VM's rules, by an ERB_CK_IDIV_ argument. */
-    ERB_CK_LT,
-    ERB_CK_GT,
-    ERB_CK_LE,
-    ERB_CK_GE,
-    ERB_CK_EQ,
-    ERB_CK_NE,
-    ERB_CK_NOT,
-    ERB_CK_AND,
-    ERB_CK_OR,
-    ERB_CK_SELECT, /**< Pop the alternate, the consequent and the test; push the one the test picks. */
-    ERB_CK_COUNT_,
+    ERB_CHECK_OP_END = 1,
+    ERB_CHECK_OP_WIDTH,  /**< Push the screen's width. */
+    ERB_CHECK_OP_HEIGHT, /**< Push the screen's height. */
+    ERB_CHECK_OP_PUSHI,  /**< Push the argument. */
+    ERB_CHECK_OP_PUSHK,  /**< Push the double in the next two words, low word first. */
+    ERB_CHECK_OP_LOAD,   /**< Push local arg. */
+    ERB_CHECK_OP_STORE,  /**< Pop into local arg. */
+    ERB_CHECK_OP_ADD,
+    ERB_CHECK_OP_SUB,
+    ERB_CHECK_OP_MUL,
+    ERB_CHECK_OP_DIV,
+    ERB_CHECK_OP_NEG,
+    ERB_CHECK_OP_MATH,  /**< An ERB_MATH_ function, by the argument. */
+    ERB_CHECK_OP_TOINT, /**< To a whole number toward zero: NaN as 0, saturating at the int range. */
+    ERB_CHECK_OP_IDIV,  /**< Whole-number division with the VM's rules, by an ERB_CHECK_OP_IDIV_ argument. */
+    ERB_CHECK_OP_LT,
+    ERB_CHECK_OP_GT,
+    ERB_CHECK_OP_LE,
+    ERB_CHECK_OP_GE,
+    ERB_CHECK_OP_EQ,
+    ERB_CHECK_OP_NE,
+    ERB_CHECK_OP_NOT,
+    ERB_CHECK_OP_AND,
+    ERB_CHECK_OP_OR,
+    ERB_CHECK_OP_SELECT, /**< Pop the alternate, the consequent and the test; push the one the test picks. */
+    ERB_CHECK_OP_COUNT_,
 };
 
-/** @brief ERB_CK_IDIV's arguments. */
+/** @brief ERB_CHECK_OP_IDIV's arguments. */
 enum
 {
-    ERB_CK_IDIV_TRUNC = 0,
-    ERB_CK_IDIV_FLOOR = 1,
-    ERB_CK_IDIV_CEIL = 2,
-    ERB_CK_IDIV_ROUND = 3,
-    ERB_CK_IDIV_MOD = 4,
-    ERB_CK_IDIV_COUNT_ = 5,
+    ERB_CHECK_OP_IDIV_TRUNC = 0,
+    ERB_CHECK_OP_IDIV_FLOOR = 1,
+    ERB_CHECK_OP_IDIV_CEIL = 2,
+    ERB_CHECK_OP_IDIV_ROUND = 3,
+    ERB_CHECK_OP_IDIV_MOD = 4,
+    ERB_CHECK_OP_IDIV_COUNT_ = 5,
 };
 
 /** @brief FMATH and DMATH functions. Those from ERB_MATH_MIN on take two operands. */
@@ -629,15 +630,15 @@ enum
 #define ERB_F_ABC 0u
 #define ERB_F_ABX 1u
 
-#define ERBO_I ERB_T_INT
-#define ERBO_B ERB_T_BOOL
-#define ERBO_F ERB_T_FLOAT
-#define ERBO_L ERB_T_INT64
-#define ERBO_D ERB_T_DOUBLE
-#define ERBO_S ERB_T_STRING
-#define ERBO_E ERB_T_ENUM
-#define ERBO_N ERB_T_NODE
-#define ERBO_A ERB_T_ANIM
+#define ERBO_I ERB_TYPE_INT
+#define ERBO_B ERB_TYPE_BOOL
+#define ERBO_F ERB_TYPE_FLOAT
+#define ERBO_L ERB_TYPE_INT64
+#define ERBO_D ERB_TYPE_DOUBLE
+#define ERBO_S ERB_TYPE_STRING
+#define ERBO_E ERB_TYPE_ENUM
+#define ERBO_N ERB_TYPE_NODE
+#define ERBO_A ERB_TYPE_ANIMATION
 #define ERBO_R ERB_K_REG
 #define ERBO_K ERB_K_IMM
 #define ERBO_X ERB_K_NONE
@@ -839,8 +840,8 @@ enum
 #define ERB_PACK16(low, high) ((uint32_t)(uint16_t)(low) | ((uint32_t)(uint16_t)(high) << 16))
 
 /** @brief An extension word's operand byte (bits 16-23) and top byte (bits 24-31, 0 when unused). */
-#define ERB_EXT_OPERAND(extension) ((uint8_t)(((extension) >> 16) & 0xFFu))
-#define ERB_EXT_TOP(extension) ((uint8_t)((extension) >> 24))
+#define ERB_EXTENSION_OPERAND(extension) ((uint8_t)(((extension) >> 16) & 0xFFu))
+#define ERB_EXTENSION_TOP(extension) ((uint8_t)((extension) >> 24))
 
 /** @brief Builds an instruction word. */
 #define ERB_ABC(opcode, operand_a, operand_b, operand_c)                                                               \

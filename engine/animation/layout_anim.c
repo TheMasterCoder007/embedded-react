@@ -26,8 +26,8 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief Maximum number of simultaneous layout animations across all nodes. */
-#ifndef ERUI_MAX_LAYOUT_ANIMS
-#define ERUI_MAX_LAYOUT_ANIMS 16
+#ifndef ERUI_MAX_LAYOUT_ANIMATIONS
+#define ERUI_MAX_LAYOUT_ANIMATIONS 16
 #endif
 
 /** @brief Spring considered settled when |displacement from target| < this. */
@@ -45,7 +45,7 @@
 /** @brief Default spring mass m (matches React Native Animated.spring() default). */
 #define LA_SPRING_DEFAULT_MASS 1.0f
 
-/** @brief ERLayoutAnim::elapsed_ms holds at this instead of wrapping. */
+/** @brief ERLayoutAnimation::elapsed_ms holds at this instead of wrapping. */
 #define LA_ELAPSED_MAX 0xFFFFU
 
 /** @brief Newton's method on a bezier curve: iteration cap, and the error or slope too small to go on. */
@@ -76,49 +76,49 @@ typedef struct
 {
     bool active;
     uint16_t node_tag;
-    ERLayoutRect from;    /**< Display rect when the animation started. */
-    ERLayoutRect to;      /**< Target rect (== node->computed). */
-    uint16_t elapsed_ms;  /**< Elapsed time for ER_ANIM_TIMING. */
-    uint8_t type;         /**< ERAnimType value. */
-    uint16_t duration_ms; /**< Total duration for ER_ANIM_TIMING. */
-    uint8_t easing;       /**< ERAnimEasing value for ER_ANIM_TIMING. */
-    float bezier_x1;      /**< Bezier CP1 X for ER_EASE_BEZIER. */
-    float bezier_y1;      /**< Bezier CP1 Y for ER_EASE_BEZIER. */
-    float bezier_x2;      /**< Bezier CP2 X for ER_EASE_BEZIER. */
-    float bezier_y2;      /**< Bezier CP2 Y for ER_EASE_BEZIER. */
-    float stiffness;      /**< Spring stiffness k. */
-    float damping;        /**< Spring damping c. */
-    float mass;           /**< Spring mass m. */
+    ERLayoutRect from;     /**< Display rect when the animation started. */
+    ERLayoutRect to;       /**< Target rect (== node->computed). */
+    uint16_t elapsed_ms;   /**< Elapsed time for ER_ANIMATION_TIMING. */
+    uint8_t type;          /**< ERAnimationType value. */
+    uint16_t duration_ms;  /**< Total duration for ER_ANIMATION_TIMING. */
+    uint8_t easing;        /**< ERAnimationEasing value for ER_ANIMATION_TIMING. */
+    float bezier_x1;       /**< Bezier CP1 X for ER_EASE_BEZIER. */
+    float bezier_y1;       /**< Bezier CP1 Y for ER_EASE_BEZIER. */
+    float bezier_x2;       /**< Bezier CP2 X for ER_EASE_BEZIER. */
+    float bezier_y2;       /**< Bezier CP2 Y for ER_EASE_BEZIER. */
+    float stiffness;       /**< Spring stiffness k. */
+    float damping;         /**< Spring damping c. */
+    float mass;            /**< Spring mass m. */
     float spring_position; /**< Normalised spring position: 0.0 = from, 1.0 = to. */
     float spring_velocity; /**< Spring velocity in normalised units per millisecond. */
-} ERLayoutAnim;
+} ERLayoutAnimation;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static ERLayoutAnim s_layout_anims[ERUI_MAX_LAYOUT_ANIMS];
-static ERLayoutAnimConfig s_pending_config;
+static ERLayoutAnimation s_layout_anims[ERUI_MAX_LAYOUT_ANIMATIONS];
+static ERLayoutAnimationConfig s_pending_config;
 static bool s_pending_active;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public — reset
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_layout_anim_reset(void)
+void er_layout_animation_reset(void)
 {
     memset(s_layout_anims, 0, sizeof(s_layout_anims));
     memset(&s_pending_config, 0, sizeof(s_pending_config));
     s_pending_active = false;
 }
 
-void er_layout_anim_cancel_node(uint16_t node_tag)
+void er_layout_animation_cancel_node(uint16_t node_tag)
 {
-    /* Same recycled-tag hazard er_anim_cancel_node() exists for, in this module's own slot table: the
+    /* Same recycled-tag hazard er_animation_cancel_node() exists for, in this module's own slot table: the
      * tick below deactivates a slot whose node is gone, but only while the tag is still on the free
      * list. A node created before the next tick takes the tag and inherits the interpolation — the
      * destroyed node's position animation would drive it to coordinates it never asked for. */
-    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMATIONS; slot_index++)
     {
         if (s_layout_anims[slot_index].active && s_layout_anims[slot_index].node_tag == node_tag)
             s_layout_anims[slot_index].active = false;
@@ -129,20 +129,20 @@ void er_layout_anim_cancel_node(uint16_t node_tag)
  - Constants: Public (preset configs)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-const ERLayoutAnimConfig ER_LAYOUT_ANIM_EASE_IN_EASE_OUT = {
-    .type = ER_ANIM_TIMING,
-    .duration_ms = ER_ANIM_DEFAULT_DURATION_MS,
+const ERLayoutAnimationConfig ER_LAYOUT_ANIMATION_EASE_IN_EASE_OUT = {
+    .type = ER_ANIMATION_TIMING,
+    .duration_ms = ER_ANIMATION_DEFAULT_DURATION_MS,
     .easing = ER_EASE_EASE_IN_OUT,
 };
 
-const ERLayoutAnimConfig ER_LAYOUT_ANIM_LINEAR = {
-    .type = ER_ANIM_TIMING,
-    .duration_ms = ER_ANIM_DEFAULT_DURATION_MS,
+const ERLayoutAnimationConfig ER_LAYOUT_ANIMATION_LINEAR = {
+    .type = ER_ANIMATION_TIMING,
+    .duration_ms = ER_ANIMATION_DEFAULT_DURATION_MS,
     .easing = ER_EASE_LINEAR,
 };
 
-const ERLayoutAnimConfig ER_LAYOUT_ANIM_SPRING = {
-    .type = ER_ANIM_SPRING,
+const ERLayoutAnimationConfig ER_LAYOUT_ANIMATION_SPRING = {
+    .type = ER_ANIMATION_SPRING,
     .stiffness = LA_SPRING_DEFAULT_STIFFNESS,
     .damping = LA_SPRING_DEFAULT_DAMPING,
     .mass = LA_SPRING_DEFAULT_MASS,
@@ -243,7 +243,7 @@ static float la_cubic_bezier(float time, float x1, float y1, float x2, float y2)
  * @brief Applies an easing curve to a linear normalised progress value.
  *
  * @param[in] progress   Linear progress [0,1].
- * @param[in] easing     ERAnimEasing enum value.
+ * @param[in] easing     ERAnimationEasing enum value.
  * @param[in] bezier_x1  Bezier X1 (only for ER_EASE_BEZIER).
  * @param[in] bezier_y1  Bezier Y1 (only for ER_EASE_BEZIER).
  * @param[in] bezier_x2  Bezier X2 (only for ER_EASE_BEZIER).
@@ -251,8 +251,8 @@ static float la_cubic_bezier(float time, float x1, float y1, float x2, float y2)
  *
  * @return Eased progress value.
  */
-static float
-la_apply_easing(float progress, ERAnimEasing easing, float bezier_x1, float bezier_y1, float bezier_x2, float bezier_y2)
+static float la_apply_easing(
+    float progress, ERAnimationEasing easing, float bezier_x1, float bezier_y1, float bezier_x2, float bezier_y2)
 {
     switch (easing)
     {
@@ -348,7 +348,7 @@ la_apply_easing(float progress, ERAnimEasing easing, float bezier_x1, float bezi
  *
  * @return true when the spring has settled at the target.
  */
-static bool la_tick_spring(ERLayoutAnim* layout_anim, uint32_t delta_ms)
+static bool la_tick_spring(ERLayoutAnimation* layout_anim, uint32_t delta_ms)
 {
     uint32_t steps = delta_ms;
     if (steps > ER_SPRING_MAX_STEPS)
@@ -378,9 +378,9 @@ static bool la_tick_spring(ERLayoutAnim* layout_anim, uint32_t delta_ms)
  *
  * @return Pointer to the matching slot, or NULL.
  */
-static ERLayoutAnim* la_find_slot(uint16_t tag)
+static ERLayoutAnimation* la_find_slot(uint16_t tag)
 {
-    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMATIONS; slot_index++)
     {
         if (s_layout_anims[slot_index].active && s_layout_anims[slot_index].node_tag == tag)
             return &s_layout_anims[slot_index];
@@ -398,14 +398,14 @@ static ERLayoutAnim* la_find_slot(uint16_t tag)
  *
  * @return Pointer to the claimed slot, or NULL if the pool is exhausted.
  */
-static ERLayoutAnim* la_alloc_slot(uint16_t tag)
+static ERLayoutAnimation* la_alloc_slot(uint16_t tag)
 {
     /* Reuse existing slot for the same node. */
-    ERLayoutAnim* existing = la_find_slot(tag);
+    ERLayoutAnimation* existing = la_find_slot(tag);
     if (existing)
         return existing;
 
-    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMATIONS; slot_index++)
     {
         if (!s_layout_anims[slot_index].active)
         {
@@ -428,7 +428,7 @@ static ERLayoutAnim* la_alloc_slot(uint16_t tag)
  * @param[in]     position     Normalised position [0 = from, 1 = to]; may slightly overshoot.
  * @param[in,out] node         Node whose animated rect is updated.
  */
-static void la_apply_pos(const ERLayoutAnim* layout_anim, float position, ERNode* node)
+static void la_apply_pos(const ERLayoutAnimation* layout_anim, float position, ERNode* node)
 {
     const float from_x = (float)layout_anim->from.x;
     const float from_y = (float)layout_anim->from.y;
@@ -456,7 +456,7 @@ static void la_apply_pos(const ERLayoutAnim* layout_anim, float position, ERNode
  * @param[in]     has_pending  true when a pending layout animation config is active.
  * @param[in]     config       Pending config pointer (only dereferenced when has_pending is true).
  */
-static void la_post_layout_node(ERNode* node, bool has_pending, const ERLayoutAnimConfig* config)
+static void la_post_layout_node(ERNode* node, bool has_pending, const ERLayoutAnimationConfig* config)
 {
     if (!node || node->layout.display == ER_DISPLAY_NONE)
         return;
@@ -471,7 +471,7 @@ static void la_post_layout_node(ERNode* node, bool has_pending, const ERLayoutAn
     const bool changed = (current.x != node->animated.x || current.y != node->animated.y
                           || current.width != node->animated.width || current.height != node->animated.height);
 
-    ERLayoutAnim* layout_anim = la_find_slot(node->tag);
+    ERLayoutAnimation* layout_anim = la_find_slot(node->tag);
 
     if (layout_anim)
     {
@@ -535,7 +535,7 @@ static void la_post_layout_node(ERNode* node, bool has_pending, const ERLayoutAn
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
-void er_layout_anim_configure_next(const ERLayoutAnimConfig* config)
+void er_layout_animation_configure_next(const ERLayoutAnimationConfig* config)
 {
     if (!config)
         return;
@@ -543,14 +543,14 @@ void er_layout_anim_configure_next(const ERLayoutAnimConfig* config)
     s_pending_active = true;
 }
 
-void er_layout_anim_post_layout(ERNode* root)
+void er_layout_animation_post_layout(ERNode* root)
 {
     const bool has_pending = s_pending_active;
     la_post_layout_node(root, has_pending, &s_pending_config);
     s_pending_active = false;
 }
 
-bool er_layout_anim_has_pending(void)
+bool er_layout_animation_has_pending(void)
 {
     return s_pending_active;
 }
@@ -564,19 +564,19 @@ bool er_layout_anim_has_pending(void)
  *
  * @return true if at least one layout animation slot is active, false otherwise.
  */
-bool er_layout_anim_is_active(void)
+bool er_layout_animation_is_active(void)
 {
-    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMATIONS; slot_index++)
         if (s_layout_anims[slot_index].active)
             return true;
     return false;
 }
 
-void er_layout_anim_tick(uint32_t delta_ms)
+void er_layout_animation_tick(uint32_t delta_ms)
 {
-    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMS; slot_index++)
+    for (int slot_index = 0; slot_index < ERUI_MAX_LAYOUT_ANIMATIONS; slot_index++)
     {
-        ERLayoutAnim* layout_anim = &s_layout_anims[slot_index];
+        ERLayoutAnimation* layout_anim = &s_layout_anims[slot_index];
         if (!layout_anim->active)
             continue;
 
@@ -589,7 +589,7 @@ void er_layout_anim_tick(uint32_t delta_ms)
 
         bool finished = false;
 
-        if (layout_anim->type == (uint8_t)ER_ANIM_TIMING)
+        if (layout_anim->type == (uint8_t)ER_ANIMATION_TIMING)
         {
             const uint32_t elapsed_new = (uint32_t)layout_anim->elapsed_ms + delta_ms;
             layout_anim->elapsed_ms = (elapsed_new > LA_ELAPSED_MAX) ? LA_ELAPSED_MAX : (uint16_t)elapsed_new;
@@ -599,7 +599,7 @@ void er_layout_anim_tick(uint32_t delta_ms)
                 progress = (float)layout_anim->elapsed_ms / (float)layout_anim->duration_ms;
 
             const float eased = la_apply_easing(progress,
-                                                (ERAnimEasing)layout_anim->easing,
+                                                (ERAnimationEasing)layout_anim->easing,
                                                 layout_anim->bezier_x1,
                                                 layout_anim->bezier_y1,
                                                 layout_anim->bezier_x2,
@@ -609,7 +609,7 @@ void er_layout_anim_tick(uint32_t delta_ms)
             if (progress >= 1.0f)
                 finished = true;
         }
-        else /* ER_ANIM_SPRING */
+        else /* ER_ANIMATION_SPRING */
         {
             const bool settled = la_tick_spring(layout_anim, delta_ms);
 

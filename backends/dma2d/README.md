@@ -23,7 +23,7 @@ ErDma2dBackendConfig cfg = {
     .width         = 800,
     .height        = 480,
     .stride_pixels = 800,                    /* LTDC rows often pad to 64 bytes */
-    .format        = ER_DMA2D_FB_RGB888,     /* ARGB8888, RGB888 or RGB565 */
+    .format        = ER_DMA2D_FRAMEBUFFER_RGB888,     /* ARGB8888, RGB888 or RGB565 */
     .start         = my_dma2d_start,         /* optional pair, for a host-owned DMA2D IRQ; */
     .wait_complete = my_dma2d_wait,          /* NULL = the backend starts and polls TCIF */
     .cache_clean   = NULL,                   /* SCB_CleanDCache_by_Addr etc. when the fb is cacheable */

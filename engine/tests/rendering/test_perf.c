@@ -27,7 +27,7 @@
  *   - a frame that ran layout reports layout_us == step; a static frame reports exactly 0 (the phase
  *     was never entered — the fast path really was taken),
  *   - the four phases plus other_us always reconstruct frame_us,
- *   - the raster split attributes the phase to pre-pass / composite / blit / sweep, and blit_px
+ *   - the raster split attributes the phase to pre-pass / composite / blit / sweep, and blit_pixels
  *     counts exactly the pixels handed to the backend,
  *   - the JS split attributes the phase to dispatch / reconcile / marshalling, with the commit the
  *     pump drove taken back OUT of the JS phase so it is not counted there and in layout+raster too,
@@ -154,14 +154,14 @@ static int check_bounds_refresh_is_timed(int screen)
 
     frame(); /* mount frame: layout runs */
 
-    ERAnimValueHandle value = er_anim_value_create(0.0f);
-    er_anim_value_bind(value, box, ER_PROP_TRANSLATE_X);
-    ERAnimConfig config;
+    ERAnimationValueHandle value = er_animation_value_create(0.0f);
+    er_animation_value_bind(value, box, ER_PROP_TRANSLATE_X);
+    ERAnimationConfig config;
     memset(&config, 0, sizeof(config));
-    config.type = ER_ANIM_TIMING;
+    config.type = ER_ANIMATION_TIMING;
     config.duration_ms = 320U;
     config.easing = ER_EASE_LINEAR;
-    er_anim_value_animate(value, 60.0f, &config);
+    er_animation_value_animate(value, 60.0f, &config);
 
     const uint32_t passes = er_layout_pass_count();
 
@@ -257,7 +257,7 @@ static int check_phase_split(int screen)
 /* The raster phase's own split: pre-pass / composite / blit / sweep, plus the backend pixel count.
  * This is the instrumentation that turns "raster is 31 ms" into a named culprit — the node-pool
  * walk, the compositing, or the framebuffer writes — so what it must get right is attribution:
- * every sub-step that ran shows up, none of them over-claims the phase, and blit_px counts exactly
+ * every sub-step that ran shows up, none of them over-claims the phase, and blit_pixels counts exactly
  * the pixels the backend was handed (not the damage, not the walk). */
 static int check_raster_split(int screen)
 {
@@ -284,9 +284,9 @@ static int check_raster_split(int screen)
     if (sub_sum > perf_frame.phase_us[ER_PERF_PHASE_RASTER])
         return fail("the raster sub-steps sum to more than the raster phase");
     /* The mount paints the root AND the box over it, so the backend saw at least every screen pixel
-     * once — blit_px is write traffic, not coverage, and overlap is exactly what it must not hide. */
-    if (perf_frame.blit_px < (uint32_t)(screen * screen))
-        return fail("the mount frame's blit_px is less than the screen it painted");
+     * once — blit_pixels is write traffic, not coverage, and overlap is exactly what it must not hide. */
+    if (perf_frame.blit_pixels < (uint32_t)(screen * screen))
+        return fail("the mount frame's blit_pixels is less than the screen it painted");
 
     /* Idle: the pre-pass and the sweep still walk the pool (their cost is the per-commit floor this
      * split exists to expose), but not one pixel may reach the backend. */
@@ -296,12 +296,12 @@ static int check_raster_split(int screen)
         return fail("idle frame did not time the damage pre-pass (the pool walk still runs)");
     if (perf_frame.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
         return fail("idle frame did not time the dirty-flag sweep");
-    if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U || perf_frame.blit_px != 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U || perf_frame.blit_pixels != 0U)
         return fail("an idle frame reported backend blit work");
 
     /* One recoloured 30x30 box. The composite restores the parent's background over the padded
-     * damage rect and then paints the box over it, and the backend sees BOTH writes: blit_px is
-     * deliberately the write-traffic number, not the coverage number, so here it EXCEEDS dirty_px —
+     * damage rect and then paints the box over it, and the backend sees BOTH writes: blit_pixels is
+     * deliberately the write-traffic number, not the coverage number, so here it EXCEEDS dirty_pixels —
      * the write amplification the counter exists to expose (with the fake clock, blit time counts
      * the backend calls exactly: one step each). */
     recolour(box, 0xFF22CC88U);
@@ -309,15 +309,15 @@ static int check_raster_split(int screen)
     er_perf_get_last(&perf_frame);
     if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 2U * g_step)
         return fail("the recolour frame's blit time is not exactly two backend calls (bg + box)");
-    if (perf_frame.blit_px < 900U)
-        return fail("the recolour frame's blit_px does not cover the recoloured box");
-    if (perf_frame.blit_px <= perf_frame.dirty_px)
-        return fail("blit_px hides the bg-restore write under the box (no amplification reported)");
-    if (perf_frame.blit_px >= (uint32_t)(screen * screen))
+    if (perf_frame.blit_pixels < 900U)
+        return fail("the recolour frame's blit_pixels does not cover the recoloured box");
+    if (perf_frame.blit_pixels <= perf_frame.dirty_pixels)
+        return fail("blit_pixels hides the bg-restore write under the box (no amplification reported)");
+    if (perf_frame.blit_pixels >= (uint32_t)(screen * screen))
         return fail("a single recoloured box pushed a whole screen of pixels");
 
     er_node_destroy(root);
-    printf("PASS: raster split — pre-pass/composite/blit/sweep attributed, blit_px counts write traffic\n");
+    printf("PASS: raster split — pre-pass/composite/blit/sweep attributed, blit_pixels counts write traffic\n");
     return EXIT_SUCCESS;
 }
 
@@ -445,7 +445,8 @@ static int check_worst_frame_is_retained(int screen)
         return fail("a later, faster frame displaced the retained peak");
     if (still.phase_us[ER_PERF_PHASE_JS] != spike.phase_us[ER_PERF_PHASE_JS])
         return fail("the retained peak's split changed");
-    if (still.dirty_px != spike.dirty_px || still.dirty_w != spike.dirty_w || still.dirty_h != spike.dirty_h)
+    if (still.dirty_pixels != spike.dirty_pixels || still.dirty_width != spike.dirty_width
+        || still.dirty_height != spike.dirty_height)
         return fail("the retained peak's repaint region changed (PKDRT would show the wrong frame)");
 
     ERPerfFrame last;
@@ -476,12 +477,12 @@ static int check_counters(int screen)
     frame(); /* mount: full-screen repaint */
     ERPerfFrame perf_frame;
     er_perf_get_last(&perf_frame);
-    if (perf_frame.dirty_px != (uint32_t)(screen * screen))
+    if (perf_frame.dirty_pixels != (uint32_t)(screen * screen))
         return fail("the mount frame's dirty area is not the whole screen");
 
     frame(); /* idle: nothing repainted */
     er_perf_get_last(&perf_frame);
-    if (perf_frame.dirty_w != 0 || perf_frame.dirty_h != 0 || perf_frame.dirty_px != 0U)
+    if (perf_frame.dirty_width != 0 || perf_frame.dirty_height != 0 || perf_frame.dirty_pixels != 0U)
         return fail("an idle frame reported a non-empty dirty rect");
 
     /* A recolour repaints the box and nothing else, so the area collapses by orders of magnitude —
@@ -489,15 +490,15 @@ static int check_counters(int screen)
     recolour(box, 0xFF9900FFU);
     frame();
     er_perf_get_last(&perf_frame);
-    if (perf_frame.dirty_px == 0U)
+    if (perf_frame.dirty_pixels == 0U)
         return fail("the recolour frame reported no repaint");
-    if (perf_frame.dirty_px >= (uint32_t)(screen * screen))
+    if (perf_frame.dirty_pixels >= (uint32_t)(screen * screen))
         return fail("a single recoloured node repainted the whole screen");
-    if (perf_frame.dirty_w < 30 || perf_frame.dirty_h < 30)
+    if (perf_frame.dirty_width < 30 || perf_frame.dirty_height < 30)
         return fail("the dirty rect does not cover the changed node");
 
-    /* Disjoint damage: recolour the box AND a second box in the far corner in one frame. dirty_w/h
-     * grow to the union bbox (spanning both corners) while dirty_px stays the SUM of the two small
+    /* Disjoint damage: recolour the box AND a second box in the far corner in one frame. dirty_width/h
+     * grow to the union bbox (spanning both corners) while dirty_pixels stays the SUM of the two small
      * rects — strictly less than the bbox area. This is what lets the overlay show "two small
      * changes" instead of "most of the screen". */
     ERNode* far_box = er_node_create(ER_NODE_VIEW);
@@ -516,12 +517,12 @@ static int check_counters(int screen)
     er_node_set_props(far_box, &far_box_props);
     frame();
     er_perf_get_last(&perf_frame);
-    if (perf_frame.dirty_px == 0U)
+    if (perf_frame.dirty_pixels == 0U)
         return fail("the two-corner frame reported no repaint");
-    if (perf_frame.dirty_w < 100 || perf_frame.dirty_h < 100)
+    if (perf_frame.dirty_width < 100 || perf_frame.dirty_height < 100)
         return fail("the two-corner bbox does not span both corners");
-    if (perf_frame.dirty_px >= (uint32_t)(perf_frame.dirty_w * perf_frame.dirty_h))
-        return fail("dirty_px is not the sum of disjoint rects (equals the bbox area)");
+    if (perf_frame.dirty_pixels >= (uint32_t)(perf_frame.dirty_width * perf_frame.dirty_height))
+        return fail("dirty_pixels is not the sum of disjoint rects (equals the bbox area)");
     er_node_destroy(far_box);
     frame(); /* consume the removal damage so later assertions see a settled scene */
     frame();
@@ -541,21 +542,21 @@ static int check_counters(int screen)
     vector_props.height = 40;
     er_node_set_props(vector, &vector_props);
     /* One filled rectangle: MOVE, LINE x3, CLOSE — enough to claim a storage slot. */
-    const float tape[] = {(float)ER_VOP_MOVE,
+    const float tape[] = {(float)ER_VECTOR_OP_MOVE,
                           0.0f,
                           0.0f,
-                          (float)ER_VOP_LINE,
+                          (float)ER_VECTOR_OP_LINE,
                           40.0f,
                           0.0f,
-                          (float)ER_VOP_LINE,
+                          (float)ER_VECTOR_OP_LINE,
                           40.0f,
                           40.0f,
-                          (float)ER_VOP_LINE,
+                          (float)ER_VECTOR_OP_LINE,
                           0.0f,
                           40.0f};
     ERVectorPaint paint = {0};
     paint.fill = 0xFF00FF00U;
-    paint.fill_rule = ER_VFILL_NONZERO;
+    paint.fill_rule = ER_VECTOR_FILL_NONZERO;
     er_node_set_vector_ops(vector, tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint, 1, NULL, 0);
     er_tree_append_child(root, vector);
 
@@ -572,9 +573,9 @@ static int check_counters(int screen)
         return fail("a scene well inside the vector pool reported an overflow");
 
     printf("PASS: counters — dirty %dx%d (%u px), VEC %u/%u, IMG %u/%u\n",
-           (int)perf_frame.dirty_w,
-           (int)perf_frame.dirty_h,
-           (unsigned)perf_frame.dirty_px,
+           (int)perf_frame.dirty_width,
+           (int)perf_frame.dirty_height,
+           (unsigned)perf_frame.dirty_pixels,
            (unsigned)perf_frame.vector_slots_used,
            (unsigned)perf_frame.vector_slots_total,
            (unsigned)perf_frame.image_slots_used,
@@ -597,7 +598,7 @@ static int check_overlay_lines(void)
     ERPerfFrame last, worst;
     er_perf_get_last(&last);
     er_perf_get_worst(&worst);
-    if (last.dirty_px != 0U || worst.dirty_px == 0U)
+    if (last.dirty_pixels != 0U || worst.dirty_pixels == 0U)
         return fail("setup: expected an empty last frame under a non-empty retained peak");
 
     const int line_count = er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES);
@@ -615,7 +616,7 @@ static int check_overlay_lines(void)
     /* The region line: labelled as the peak's, showing the peak's geometry — not the last frame's
      * zeros, which would make the line read 0 on almost every refresh. */
     char want[ER_PERF_LINE_MAX];
-    snprintf(want, sizeof(want), "PKDRT %dx%d", (int)worst.dirty_w, (int)worst.dirty_h);
+    snprintf(want, sizeof(want), "PKDRT %dx%d", (int)worst.dirty_width, (int)worst.dirty_height);
     if (strncmp(lines[3], want, strlen(want)) != 0)
         return fail("the region line does not show the PEAK frame's repaint region");
 
@@ -696,7 +697,7 @@ static int check_degrades_safely(int screen)
     if (perf_frame.js_us[ER_PERF_JS_RECONCILE] != 0U)
         return fail("an unbalanced JS span leaked into the following frame");
 
-    /* No clock: timings go to zero, counters keep working — including blit_px, which must keep
+    /* No clock: timings go to zero, counters keep working — including blit_pixels, which must keep
      * counting pixels while the blit TIME correctly collapses to zero. */
     er_perf_set_clock(NULL);
     recolour(box, 0xFF112233U); /* make the clockless frame actually paint something */
@@ -706,8 +707,8 @@ static int check_degrades_safely(int screen)
         return fail("timings are non-zero without a clock installed");
     if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U)
         return fail("blit time is non-zero without a clock installed");
-    if (perf_frame.blit_px == 0U)
-        return fail("blit_px stopped counting without a clock");
+    if (perf_frame.blit_pixels == 0U)
+        return fail("blit_pixels stopped counting without a clock");
     if (perf_frame.vector_slots_total == 0U)
         return fail("counters stopped working without a clock");
     er_perf_set_clock(fake_now_us);
@@ -736,7 +737,7 @@ int main(void)
     ERPerfFrame perf_frame;
     if (er_perf_get_last(&perf_frame) || er_perf_get_worst(&perf_frame))
         return fail("ER_PERF_STATS=0 reported a frame");
-    if (perf_frame.frame_us != 0U || perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U || perf_frame.blit_px != 0U)
+    if (perf_frame.frame_us != 0U || perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U || perf_frame.blit_pixels != 0U)
         return fail("ER_PERF_STATS=0 did not zero the out struct");
     if (perf_frame.js_us[ER_PERF_JS_MARSHAL] != 0U)
         return fail("ER_PERF_STATS=0 recorded a JS sub-step");

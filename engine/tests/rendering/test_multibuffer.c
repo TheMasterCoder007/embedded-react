@@ -240,7 +240,7 @@ static int check_double_buffer_replays_one_frame(int screen)
 
     /* er_get_dirty_rect() must report the actually-painted (replayed) region on the replay frame. */
     ERRect dirty;
-    if (!er_get_dirty_rect(&dirty) || dirty.w <= 0 || dirty.h <= 0)
+    if (!er_get_dirty_rect(&dirty) || dirty.width <= 0 || dirty.height <= 0)
         return fail("n=2: er_get_dirty_rect() reported nothing on the replay frame");
     er_display_present(); /* end of frame B */
 

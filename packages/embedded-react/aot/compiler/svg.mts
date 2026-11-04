@@ -103,7 +103,7 @@ interface DynamicAttr {
   node: t.Expression | t.JSXEmptyExpression;
 }
 
-/** A gradient attribute (fillGrad / strokeGrad), kept as its expression for gradAttr to read. */
+/** A gradient attribute (fillGradient / strokeGradient), kept as its expression for gradAttr to read. */
 interface GradientAttr {
   gradientNode: t.Expression | t.JSXEmptyExpression;
 }
@@ -188,7 +188,7 @@ function checkShape(child: t.JSXElement): void {
 }
 
 /**
- * Refuses a constant `fillGrad` / `strokeGrad` the engine cannot draw as written: the same type and stop rules
+ * Refuses a constant `fillGradient` / `strokeGradient` the engine cannot draw as written: the same type and stop rules
  * a state-driven one meets (see lowerGradient). `null` is no gradient.
  *
  * @param name  The attribute.
@@ -332,7 +332,7 @@ function jsxToSvgElement(
   }
 
   // A baked gradient takes the same checks as a state-driven one.
-  for (const name of ['fillGrad', 'strokeGrad']) {
+  for (const name of ['fillGradient', 'strokeGradient']) {
     checkStaticGradient(name, props[name]);
   }
 
@@ -350,8 +350,8 @@ function jsxToSvgElement(
 }
 
 /**
- * A flattenSvg paint record [fill, stroke, w, miter, cap, join, rule, fill_grad, stroke_grad] as a paint.
- * fill_grad/stroke_grad (1-based gradient-table indices, 0 = solid) are absent on inline-<Svg> records (7-wide)
+ * A flattenSvg paint record [fill, stroke, w, miter, cap, join, rule, fill_gradient, stroke_gradient] as a paint.
+ * fill_gradient/stroke_gradient (1-based gradient-table indices, 0 = solid) are absent on inline-<Svg> records (7-wide)
  * and set on a baked <Svg source>.
  *
  * @param record  The paint record.
@@ -473,7 +473,7 @@ function svgAttrs(
 
     // Keep a gradient as its expression; gradAttr lowers it, conditions included.
     const valueNode = attribute.value;
-    if (name === 'fillGrad' || name === 'strokeGrad') {
+    if (name === 'fillGradient' || name === 'strokeGradient') {
       if (valueNode == null || valueNode.type !== 'JSXExpressionContainer') {
         throw new Error(`AOT: "${name}" must be an object expression`);
       }
@@ -713,7 +713,7 @@ function lowerGradientAttr(
  *   - fill / stroke may be state-driven (a color string, a ternary of them, or a folded theme token);
  *   - strokeWidth may be state-driven;
  *   - cap / join / miterlimit / fillRule must be static (a state-driven one throws a clear error);
- *   - fillGrad / strokeGrad are lowered here; the caller gives them places in the drawing's table.
+ *   - fillGradient / strokeGradient are lowered here; the caller gives them places in the drawing's table.
  *
  * @param attributes  The shape's attributes.
  * @param environment  The expression environment.
@@ -768,16 +768,16 @@ function lowerShapePaint(
     fillRule: attributes.fillRule === 'evenodd' ? 1 : 0,
   };
   const fillGradient = lowerGradientAttr(
-    attributes.fillGrad as GradientAttr | undefined,
+    attributes.fillGradient as GradientAttr | undefined,
     scope,
     environment,
-    'fillGrad',
+    'fillGradient',
   );
   const strokeGradient = lowerGradientAttr(
-    attributes.strokeGrad as GradientAttr | undefined,
+    attributes.strokeGradient as GradientAttr | undefined,
     scope,
     environment,
-    'strokeGrad',
+    'strokeGradient',
   );
 
   return {paint, fillGradient, strokeGradient};
@@ -806,7 +806,7 @@ export const checkedTapeNumber = (value: number): IrTapeValue => {
 /**
  * An opcode as a tape slot.
  *
- * @param operation  The ER_VOP_* name.
+ * @param operation  The ER_VECTOR_OP_* name.
  *
  * @returns The slot.
  */
@@ -862,7 +862,7 @@ export const arcTape = (
   startDeg: IrTapeValue,
   endDeg: IrTapeValue,
 ): IrTapeValue[] => [
-  tapeOp('ER_VOP_ARC'),
+  tapeOp('ER_VECTOR_OP_ARC'),
   cx,
   cy,
   radius,
@@ -885,17 +885,17 @@ export const circleTape = (
   cy: IrTapeValue,
   radius: IrTapeValue,
 ): IrTapeValue[] => [
-  tapeOp('ER_VOP_MOVE'),
+  tapeOp('ER_VECTOR_OP_MOVE'),
   tapeChain(cx, ['+', radius]),
   cy,
-  tapeOp('ER_VOP_ARC'),
+  tapeOp('ER_VECTOR_OP_ARC'),
   cx,
   cy,
   radius,
   TAPE_ZERO,
   {kind: 'fullTurn'},
   TAPE_ZERO,
-  tapeOp('ER_VOP_CLOSE'),
+  tapeOp('ER_VECTOR_OP_CLOSE'),
 ];
 
 /**
@@ -935,24 +935,24 @@ const sharpRectTape = (
   width: IrTapeValue,
   height: IrTapeValue,
 ): IrTapeValue[] => [
-  tapeOp('ER_VOP_MOVE'),
+  tapeOp('ER_VECTOR_OP_MOVE'),
   x,
   y,
-  tapeOp('ER_VOP_LINE'),
+  tapeOp('ER_VECTOR_OP_LINE'),
   tapeChain(x, ['+', width]),
   y,
-  tapeOp('ER_VOP_LINE'),
+  tapeOp('ER_VECTOR_OP_LINE'),
   tapeChain(x, ['+', width]),
   tapeChain(y, ['+', height]),
-  tapeOp('ER_VOP_LINE'),
+  tapeOp('ER_VECTOR_OP_LINE'),
   x,
   tapeChain(y, ['+', height]),
-  tapeOp('ER_VOP_CLOSE'),
+  tapeOp('ER_VECTOR_OP_CLOSE'),
 ];
 
 /**
  * A rectangle's tape slots. rx/ry are null when the rect has no corner radius at all. Corners are cubics, not
- * ER_VOP_ARC, for the same reason svg-ops uses them: a corner must start at EXACTLY the preceding line's
+ * ER_VECTOR_OP_ARC, for the same reason svg-ops uses them: a corner must start at EXACTLY the preceding line's
  * endpoint. `tag` names the locals and must be unique within the caller's block.
  *
  * @param x  The left edge.
@@ -1018,50 +1018,50 @@ export const rectTape = (
   const right = tapeChain(x, ['+', width]);
   const bottom = tapeChain(y, ['+', height]);
   const entries = [
-    tapeOp('ER_VOP_MOVE'),
+    tapeOp('ER_VECTOR_OP_MOVE'),
     innerLeft,
     y,
-    tapeOp('ER_VOP_LINE'),
+    tapeOp('ER_VECTOR_OP_LINE'),
     innerRight,
     y,
-    tapeOp('ER_VOP_CUBIC'),
+    tapeOp('ER_VECTOR_OP_CUBIC'),
     tapeChain(innerRight, ['+', handleX]),
     y,
     right,
     tapeChain(innerTop, ['-', handleY]),
     right,
     innerTop,
-    tapeOp('ER_VOP_LINE'),
+    tapeOp('ER_VECTOR_OP_LINE'),
     right,
     innerBottom,
-    tapeOp('ER_VOP_CUBIC'),
+    tapeOp('ER_VECTOR_OP_CUBIC'),
     right,
     tapeChain(innerBottom, ['+', handleY]),
     tapeChain(innerRight, ['+', handleX]),
     bottom,
     innerRight,
     bottom,
-    tapeOp('ER_VOP_LINE'),
+    tapeOp('ER_VECTOR_OP_LINE'),
     innerLeft,
     bottom,
-    tapeOp('ER_VOP_CUBIC'),
+    tapeOp('ER_VECTOR_OP_CUBIC'),
     tapeChain(innerLeft, ['-', handleX]),
     bottom,
     x,
     tapeChain(innerBottom, ['+', handleY]),
     x,
     innerBottom,
-    tapeOp('ER_VOP_LINE'),
+    tapeOp('ER_VECTOR_OP_LINE'),
     x,
     innerTop,
-    tapeOp('ER_VOP_CUBIC'),
+    tapeOp('ER_VECTOR_OP_CUBIC'),
     x,
     tapeChain(innerTop, ['-', handleY]),
     tapeChain(innerLeft, ['-', handleX]),
     y,
     innerLeft,
     y,
-    tapeOp('ER_VOP_CLOSE'),
+    tapeOp('ER_VECTOR_OP_CLOSE'),
   ];
 
   return {entries, locals};
@@ -1083,10 +1083,10 @@ export const lineTape = (
   x2: IrTapeValue,
   y2: IrTapeValue,
 ): IrTapeValue[] => [
-  tapeOp('ER_VOP_MOVE'),
+  tapeOp('ER_VECTOR_OP_MOVE'),
   x1,
   y1,
-  tapeOp('ER_VOP_LINE'),
+  tapeOp('ER_VECTOR_OP_LINE'),
   x2,
   y2,
 ];
@@ -1356,7 +1356,7 @@ function lowerSvgBox(
   // A style width or height wins over the attribute, in pixels or as a percentage of the parent.
   const size = [...width, ...height].filter(
     assign =>
-      !styleWrites(staticAssigns, [], assign.field.replace(/_pct$/, '')),
+      !styleWrites(staticAssigns, [], assign.field.replace(/_percent$/, '')),
   );
   const node: IrNode = {
     id: nodeId,
@@ -1369,7 +1369,7 @@ function lowerSvgBox(
           !styleWrites(
             staticAssigns,
             dynamicAssigns,
-            assign.field.replace(/_pct$/, ''),
+            assign.field.replace(/_percent$/, ''),
           ),
       ),
       ...dynamicAssigns,
@@ -1503,17 +1503,17 @@ function emitSvgScaled(
   const along = (value: number, side: IrTapeValue): IrTapeValue =>
     tapeChain(tapeNumber(value), ['*', side]);
   const operationNames: Record<number, string> = {
-    [VOP_MOVE]: 'ER_VOP_MOVE',
-    [VOP_LINE]: 'ER_VOP_LINE',
-    [VOP_QUAD]: 'ER_VOP_QUAD',
-    [VOP_CUBIC]: 'ER_VOP_CUBIC',
-    [VOP_ARC]: 'ER_VOP_ARC',
+    [VOP_MOVE]: 'ER_VECTOR_OP_MOVE',
+    [VOP_LINE]: 'ER_VECTOR_OP_LINE',
+    [VOP_QUAD]: 'ER_VECTOR_OP_QUAD',
+    [VOP_CUBIC]: 'ER_VECTOR_OP_CUBIC',
+    [VOP_ARC]: 'ER_VECTOR_OP_ARC',
   };
   const tape: IrTapeValue[] = [];
   for (let index = 0; index < ops.length;) {
     const operation = ops[index++];
     if (operation === VOP_SHAPE) {
-      tape.push(tapeOp('ER_VOP_SHAPE'), tapeNumber(ops[index++]));
+      tape.push(tapeOp('ER_VECTOR_OP_SHAPE'), tapeNumber(ops[index++]));
     } else if (operation === VOP_ARC) {
       tape.push(
         tapeOp(operationNames[operation]),
@@ -1535,7 +1535,7 @@ function emitSvgScaled(
         tape.push(along(ops[index++], sideX), along(ops[index++], sideY));
       }
     } else {
-      tape.push(tapeOp('ER_VOP_CLOSE'));
+      tape.push(tapeOp('ER_VECTOR_OP_CLOSE'));
     }
   }
 
@@ -1739,7 +1739,7 @@ function emitSvgSource(
     elementSpec('Svg')!,
   );
   const boxSize = (field: 'width' | 'height', fallback: number): number => {
-    if (style.some(assign => assign.field === `${field}_pct`)) {
+    if (style.some(assign => assign.field === `${field}_percent`)) {
       throw aotError(
         `AOT: a percentage style ${field} on an <Svg source> is not supported`,
         'the drawing is scaled to the box at build time, when the parent size is unknown; give the ' +
@@ -1825,7 +1825,7 @@ function emitSvgDynamic(
     );
   }
 
-  // Lower each shape to tape slots (after an ER_VOP_SHAPE marker naming its paint) and its paint.
+  // Lower each shape to tape slots (after an ER_VECTOR_OP_SHAPE marker naming its paint) and its paint.
   const tape: IrTapeValue[] = [];
   const locals: IrGeometry['locals'] = []; // declared ahead of the tape (rounded-rect radii)
   const shapePaints: ShapePaint[] = [];
@@ -1844,7 +1844,7 @@ function emitSvgDynamic(
     if (!shape.entries.length) continue;
     locals.push(...shape.locals);
     tape.push(
-      tapeOp('ER_VOP_SHAPE'),
+      tapeOp('ER_VECTOR_OP_SHAPE'),
       tapeNumber(shapePaints.length),
       ...shape.entries,
     );

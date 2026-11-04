@@ -17,7 +17,7 @@
 // Pure SVG -> engine op-tape compiler. No engine/React imports, so it is unit-testable in isolation.
 //
 // The engine's ER_NODE_VECTOR node takes a flat float "op-tape" plus a flat paint table (see the
-// ER_VOP_* contract in er_scene.h). This module compiles a declarative <Svg> subtree (Path/Circle/
+// ER_VECTOR_OP_* contract in er_scene.h). This module compiles a declarative <Svg> subtree (Path/Circle/
 // Rect/Line/Ellipse/G elements) into that form: it parses SVG `d` path data, converts primitive
 // shapes to path ops, bakes viewBox + <G> translate/scale into coordinates, and resolves inherited
 // paint. The opcodes below MUST stay in sync with er_scene.h.
@@ -42,15 +42,15 @@ export const CAP = {butt: 0, round: 1, square: 2};
 export const JOIN = {miter: 0, round: 1, bevel: 2};
 
 // Paint record width in the flat paint table: [fill, stroke, strokeWidth, miter, cap, join, fillRule,
-// fillGrad, strokeGrad]. fillGrad/strokeGrad are 1-based indices into the gradient table (0 = solid). MUST
+// fillGradient, strokeGradient]. fillGradient/strokeGradient are 1-based indices into the gradient table (0 = solid). MUST
 // match the bridge's VEC_PAINT_STRIDE (native_ui_bridge.c) and the AOT's paint emission.
 export const PAINT_STRIDE = 9;
 
 // Gradient table encoding — a gradient descriptor is { type, stops: [{color, offset}], ax, ay, bx, by, r }.
 // type 1 = linear (axis (ax,ay)->(bx,by)), 2 = radial (centre (ax,ay), radius r). The flat float record is
 // [type, stopCount, (color, offset) × GRAD_MAX_STOPS, ax, ay, bx, by, r]; MUST match the bridge's
-// VEC_GRADIENT_STRIDE and the engine's ER_VGRAD_MAX_STOPS.
-export const GRAD_MAX_STOPS = 8; // MUST match the engine's ER_VGRAD_MAX_STOPS (er_scene.h)
+// VEC_GRADIENT_STRIDE and the engine's ER_VECTOR_GRADIENT_MAX_STOPS.
+export const GRAD_MAX_STOPS = 8; // MUST match the engine's ER_VECTOR_GRADIENT_MAX_STOPS (er_scene.h)
 export const GRAD_STRIDE = 2 + GRAD_MAX_STOPS * 2 + 5; // 23
 export const GRAD_LINEAR = 1;
 export const GRAD_RADIAL = 2;
@@ -842,7 +842,7 @@ export function shapesToVector(shapes) {
       ops.length = opStart; // nothing emitted — roll back the SHAPE header
       continue;
     }
-    // Optional gradients. `paint.fill_grad` / `stroke_grad` are 1-BASED indices into the gradient table
+    // Optional gradients. `paint.fill_gradient` / `stroke_gradient` are 1-BASED indices into the gradient table
     // (0 = solid), which is what lets one shape carry a smooth ramp instead of being chopped into many
     // solid pieces. Stop colors may be strings here; the engine wants packed ARGB.
     paints.push(
@@ -853,8 +853,8 @@ export function shapesToVector(shapes) {
       CAP[shape.cap] ?? CAP.butt,
       JOIN[shape.join] ?? JOIN.miter,
       shape.fillRule === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
-      shape.fillGrad ? pushGrad(gradients, shape.fillGrad) : 0,
-      shape.strokeGrad ? pushGrad(gradients, shape.strokeGrad) : 0,
+      shape.fillGradient ? pushGrad(gradients, shape.fillGradient) : 0,
+      shape.strokeGradient ? pushGrad(gradients, shape.strokeGradient) : 0,
     );
   }
   return {ops, paints, gradients};
@@ -888,8 +888,8 @@ const PAINT_DEFAULT = {
   strokeLinejoin: 'miter',
   strokeMiterlimit: DEFAULT_MITER_LIMIT,
   fillRule: 'nonzero',
-  fillGrad: null,
-  strokeGrad: null,
+  fillGradient: null,
+  strokeGradient: null,
 };
 
 /** The props that make up a shape's paint; a <G> or the <Svg> itself passes them down. */
@@ -903,7 +903,7 @@ function mergePaint(base, props) {
 }
 
 /** Maps the resolved paint to the PAINT_STRIDE-number record [fill, stroke, strokeWidth, miter, cap, join, rule,
- *  fillGrad, strokeGrad]. Any gradient descriptor is appended to `gradients` and referenced by its
+ *  fillGradient, strokeGradient]. Any gradient descriptor is appended to `gradients` and referenced by its
  *  1-BASED index (0 = solid), the same encoding shapesToVector uses. */
 function paintRecord(paint, scale, gradients) {
   return [
@@ -914,8 +914,12 @@ function paintRecord(paint, scale, gradients) {
     CAP[paint.strokeLinecap] ?? CAP.butt,
     JOIN[paint.strokeLinejoin] ?? JOIN.miter,
     paint.fillRule === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
-    paint.fillGrad && gradients ? pushGrad(gradients, paint.fillGrad) : 0,
-    paint.strokeGrad && gradients ? pushGrad(gradients, paint.strokeGrad) : 0,
+    paint.fillGradient && gradients
+      ? pushGrad(gradients, paint.fillGradient)
+      : 0,
+    paint.strokeGradient && gradients
+      ? pushGrad(gradients, paint.strokeGradient)
+      : 0,
   ];
 }
 
@@ -1052,7 +1056,7 @@ function warnSvgChild(child) {
  * Flattens an <Svg> element's props into {ops, paints, gradients} flat arrays for NativeUI.setVectorOps.
  * Handles Path/Circle/Ellipse/Rect/Line shapes, <G> grouping (inherited paint + translate/scale), and
  * a root viewBox -> width/height scale. Arrays and fragments are unwrapped at any depth, so a mapped
- * list of shapes draws like an inline one. A shape's fillGrad/strokeGrad descriptor lands in
+ * list of shapes draws like an inline one. A shape's fillGradient/strokeGradient descriptor lands in
  * `gradients` and is referenced 1-based from its paint record. Returns empty arrays when there is
  * nothing to draw.
  */
@@ -1285,7 +1289,7 @@ export function warnVectorCaps(
     console.warn(
       `embedded-react: an <Svg> references ${gradientsLength} gradients (> ${maxGradients}) — the extra gradients are ` +
         `dropped and shapes that use them fall back to solid fills/strokes. Reuse fewer distinct gradients across ` +
-        `shapes; raising the limit needs ERUI_VECTOR_GRADS_MAX.`,
+        `shapes; raising the limit needs ERUI_VECTOR_GRADIENTS_MAX.`,
     );
   }
 }

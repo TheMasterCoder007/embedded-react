@@ -321,7 +321,7 @@ void er_blit_copy(const void* source, int stride, int x, int y, int width, int h
  * @brief Copies a KNOWN-FULLY-OPAQUE source buffer in the given pixel format via the active backend.
  *
  * The caller guarantees every source pixel is opaque (the image registry's registration-time scan,
- * or the format itself for RGB565). When the backend provides copy_rect_fmt and no engine-side
+ * or the format itself for RGB565). When the backend provides copy_rect_format and no engine-side
  * compositing is pending (no inherited draw alpha, no scratch capture), the buffer is handed
  * through in its source format as ONE backend call for the whole rect — on DMA2D-class hardware
  * a single M2M(_PFC) transfer.
@@ -335,8 +335,8 @@ void er_blit_copy(const void* source, int stride, int x, int y, int width, int h
  * @param[in] height  Height of the region in pixels.
  *
  * @return true when the blit was fully handled (including "fully clipped, nothing to draw").
- *         false only when format != ER_IMG_ARGB8888 and the format-aware backend path is unavailable
- *         (no copy_rect_fmt backend, scratch capture, or inherited alpha) — the caller must then
+ *         false only when format != ER_IMAGE_ARGB8888 and the format-aware backend path is unavailable
+ *         (no copy_rect_format backend, scratch capture, or inherited alpha) — the caller must then
  *         expand rows on the CPU and emit them through er_blit_copy/er_blit_blend.
  */
 bool er_blit_copy_fmt(const void* source, int stride, ERImageFormat format, int x, int y, int width, int height);
@@ -432,24 +432,24 @@ void er_tick(uint32_t delta_ms);
  *
  * @param[in] delta_ms  Milliseconds elapsed since the last tick.
  */
-void er_anim_tick(uint32_t delta_ms);
+void er_animation_tick(uint32_t delta_ms);
 
 /**
  * @brief Clears all native animations, animation groups, and Animated.Values back to empty.
  *
  * Part of er_reset(); drops every running animation and frees every value/binding slot.
  */
-void er_anim_reset(void);
+void er_animation_reset(void);
 
 /**
  * @brief Reports the animation pools' sizes (part of er_pool_limits()).
  *
- * @param[out] limits  Receives animations, anim_groups, group_entries and anim_values.
+ * @param[out] limits  Receives animations, animation_groups, group_entries and animation_values.
  */
-void er_anim_pool_limits(ERPoolLimits* limits);
+void er_animation_pool_limits(ERPoolLimits* limits);
 
 /**
- * @brief Re-applies the current value of every ERAnimValue bound to this node.
+ * @brief Re-applies the current value of every ERAnimationValue bound to this node.
  *
  * Call after er_node_set_props so a declarative prop update does not clobber a native-driver
  * animation — setProps writes the static value, then this restores the animated one in the same
@@ -457,10 +457,10 @@ void er_anim_pool_limits(ERPoolLimits* limits);
  *
  * @param[in] node  Node whose animated-bound props should be restored.
  */
-void er_anim_reapply_bound(struct ERNode* node);
+void er_animation_reapply_bound(struct ERNode* node);
 
 /**
- * @brief Removes every ERAnimValue binding that targets the given node tag.
+ * @brief Removes every ERAnimationValue binding that targets the given node tag.
  *
  * Call from er_node_destroy: the destroyed node's tag is recycled by the node pool, so any binding left
  * pointing at it would drive whatever node next reuses the tag (a value pushing its float to the wrong
@@ -468,30 +468,30 @@ void er_anim_reapply_bound(struct ERNode* node);
  *
  * @param[in] node_tag  Tag of the node being destroyed.
  */
-void er_anim_unbind_node(uint16_t node_tag);
+void er_animation_unbind_node(uint16_t node_tag);
 
 /**
- * @brief Stops every animation started against the given node tag (er_anim_start), and any group holding it.
+ * @brief Stops every animation started against the given node tag (er_animation_start), and any group holding it.
  *
- * The other half of er_anim_unbind_node, which covers only ERAnimValue bindings. Call from
- * er_node_destroy: er_anim_tick drops an animation whose node has gone, but only while the tag is still
+ * The other half of er_animation_unbind_node, which covers only ERAnimationValue bindings. Call from
+ * er_node_destroy: er_animation_tick drops an animation whose node has gone, but only while the tag is still
  * on the free list — the next er_node_create recycles it, and an animation left pointing at it then
  * drives the new node instead (an <ActivityIndicator> unmounted mid-spin makes a plain View rotate).
  * Fires no completion callback; see the implementation for why. No-op when nothing targets the tag.
  *
  * @param[in] node_tag  Tag of the node being destroyed.
  */
-void er_anim_cancel_node(uint16_t node_tag);
+void er_animation_cancel_node(uint16_t node_tag);
 
 /**
  * @brief Stops any layout animation interpolating the given node tag.
  *
- * The er_layout_anim_tick half of the same recycled-tag hazard er_anim_cancel_node covers. Call from
+ * The er_layout_animation_tick half of the same recycled-tag hazard er_animation_cancel_node covers. Call from
  * er_node_destroy. No-op when the tag has no layout animation.
  *
  * @param[in] node_tag  Tag of the node being destroyed.
  */
-void er_layout_anim_cancel_node(uint16_t node_tag);
+void er_layout_animation_cancel_node(uint16_t node_tag);
 
 /**
  * @brief Advances all active layout animations by delta_ms milliseconds.
@@ -501,14 +501,14 @@ void er_layout_anim_cancel_node(uint16_t node_tag);
  *
  * @param[in] delta_ms  Milliseconds elapsed since the last tick.
  */
-void er_layout_anim_tick(uint32_t delta_ms);
+void er_layout_animation_tick(uint32_t delta_ms);
 
 /**
  * @brief Clears all running layout animations and any pending LayoutAnimation config.
  *
  * Part of er_reset().
  */
-void er_layout_anim_reset(void);
+void er_layout_animation_reset(void);
 
 /**
  * @brief Clears input gesture state.

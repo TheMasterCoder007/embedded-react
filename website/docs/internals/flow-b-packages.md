@@ -229,7 +229,7 @@ An animation descriptor is `kind u8`, `easing u8`, `flags u8`, `reserved u8`, `t
 
 - `kind` is timing, spring or decay for a leaf, and sequence, parallel, stagger, or loop for a group.
 - `target` is the slot holding the node or animated value, and `prop` the animated prop's ABI id
-  (unused for an animated value). `easing` is the engine's `ERAnimEasing`.
+  (unused for an animated value). `easing` is the engine's `ERAnimationEasing`.
 - A group's children are `count` records starting at `first`, all after the group itself, so the
   descriptors form trees. A leaf has none.
 - `amount` is the duration in ms for timing, the gap in ms for stagger, and the iterations for loop (0
@@ -256,8 +256,8 @@ The `tapes` table starts with `count u32` and the byte offsets of its paints, gr
 `paint_first u16`, `paint_count u16`, `grad_first u16`, `grad_count u16`, `reserved u16`.
 
 - The floats are an op-tape exactly as `er_node_set_vector_ops` takes it.
-- A paint is 24 bytes: `fill u32`, `stroke u32`, `stroke_w f32`, `miter f32`, `cap u8`, `join u8`,
-  `fill_rule u8`, `reserved u8`, `fill_grad i16`, `stroke_grad i16`.
+- A paint is 24 bytes: `fill u32`, `stroke u32`, `stroke_width f32`, `miter f32`, `cap u8`, `join u8`,
+  `fill_rule u8`, `reserved u8`, `fill_gradient i16`, `stroke_gradient i16`.
 - A gradient is 24 bytes: `type u8`, `stop_count u8`, `stop_first u16`, then `ax`, `ay`, `bx`, `by`
   and `radius` (`f32`). A stop is `color u32`, `position f32`.
 
@@ -277,7 +277,7 @@ commits with `VCOMMITP`, which keeps them:
 ### The keyboard
 
 The `keyboard` table is `setKeyboardConfig`: a 28-byte header, `layer_count u16`, `row_count u16`,
-`key_count u16`, `row_height u16`, `grid_cols u8`, `key_gap u8`, `key_radius u8`, `font_size u8`, then the
+`key_count u16`, `row_height u16`, `grid_columns u8`, `key_gap u8`, `key_radius u8`, `font_size u8`, then the
 panel, key, active key and label colors (`u32` each). A 0 size or color is the engine's default, and no
 layers keeps its built-in layout. Then `layer_count` layers and `row_count` rows, each `first u16`,
 `count u16` naming a run of the rows or keys after the ones before it, and `key_count` 8-byte keys:
@@ -628,7 +628,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Bindings  | Each event bound to a function of the matching kind; each animated binding to an animated-value slot and an animatable prop that isn't a color; each interpolated one to an interpolation onto colors exactly when its prop is a color; each tape index valid                  | bad binding                        |
 | Interps   | An animated-value slot; 2 to `ER_INTERPOLATE_MAX_POINTS` points; known flags and extrapolation modes                                                                                                                                                                           | bad animation                      |
 | Anims     | A known kind and easing; a group's children are later records and no child has two parents; at most `ERUI_MAX_GROUP_ENTRIES` children; the target a `node` or `anim` slot; the prop animatable                                                                                 | bad animation                      |
-| Tapes     | Each tape's floats parse as ops with their argument counts and fit `ERUI_VECTOR_TAPE_MAX`; paint and gradient counts within the firmware's caps; every paint, gradient and stop index in range; 2 to `ER_VGRAD_MAX_STOPS` stops                                                | bad vector tape                    |
+| Tapes     | Each tape's floats parse as ops with their argument counts and fit `ERUI_VECTOR_TAPE_MAX`; paint and gradient counts within the firmware's caps; every paint, gradient and stop index in range; 2 to `ER_VECTOR_GRADIENT_MAX_STOPS` stops                                      | bad vector tape                    |
 | Functions | Code in bounds; register count and types valid; parameters and result typed; ends in `RET` or `TRAP`, so it can't run off its end                                                                                                                                              | bad function                       |
 | Code      | Every opcode known to this format; every register operand below the frame size and of the type the opcode takes; `int64`, `double` and `node` registers on an even cell                                                                                                        | bad bytecode                       |
 | Code      | Every slot, constant, string, enum, prop, template, animation, tape and import index in range, and of the kind the opcode takes; `SET` only to writable slots; an enum write from the slot's own set                                                                           | bad bytecode                       |
@@ -736,8 +736,8 @@ void app_start(const void* package, size_t package_bytes)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = PANEL_W,
-        .screen_h = PANEL_H,
+        .screen_width = PANEL_W,
+        .screen_height = PANEL_H,
         .natives = s_natives,
         .native_count = sizeof(s_natives) / sizeof(s_natives[0]),
     };
@@ -821,10 +821,10 @@ frames. The firmware feeds `erb_package_reload_feed()` what its serial channel r
 
 Two message types carry a package, one frame at a time:
 
-| `msg_type` | Name            | Payload                                 |
-| ---------- | --------------- | --------------------------------------- |
-| 2          | `PACKAGE_BEGIN` | `package_bytes` (`u32`)                 |
-| 3          | `PACKAGE_CHUNK` | `offset` (`u32`), then the package data |
+| `message_type` | Name            | Payload                                 |
+| -------------- | --------------- | --------------------------------------- |
+| 2              | `PACKAGE_BEGIN` | `package_bytes` (`u32`)                 |
+| 3              | `PACKAGE_CHUNK` | `offset` (`u32`), then the package data |
 
 The host waits for a reply to each frame, one line in the board's log, before it sends the next. Writing flash stalls
 the chip, and this way nothing arrives while it does, so a UART with no flow control loses nothing, and no board needs

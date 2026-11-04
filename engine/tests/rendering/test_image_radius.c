@@ -47,7 +47,7 @@
 typedef struct
 {
     uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT]; /**< Premultiplied ARGB8888 pixel storage. */
-    int format_calls;                                             /**< copy_rect_fmt calls received. */
+    int format_calls;                                             /**< copy_rect_format calls received. */
 } TestCtx;
 
 /**
@@ -57,7 +57,7 @@ typedef struct
 {
     const char* what;    /**< Label for failure messages. */
     const char* image;   /**< Registered asset name. */
-    bool format_backend; /**< Whether the backend offers copy_rect_fmt. */
+    bool format_backend; /**< Whether the backend offers copy_rect_format. */
     uint8_t resize;      /**< ERResizeMode. */
     int16_t padding;     /**< Node padding; the bitmap goes in the content box, the clip stays on the border box. */
 } DrawCase;
@@ -171,7 +171,7 @@ static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y
 }
 
 /**
- * @brief copy_rect_fmt stub — writes ARGB rows verbatim and expands RGB565 ones, as a DMA2D blitter would.
+ * @brief copy_rect_format stub — writes ARGB rows verbatim and expands RGB565 ones, as a DMA2D blitter would.
  *
  * @param[in] source  Source rows in @p format.
  * @param[in] stride  Source row stride in bytes.
@@ -193,7 +193,7 @@ copy_fmt_cb(const void* source, int stride, ERImageFormat format, int x, int y, 
         for (int column = 0; column < width; column++)
         {
             uint32_t pixel;
-            if (format == ER_IMG_RGB565)
+            if (format == ER_IMAGE_RGB565)
             {
                 const uint16_t rgb565 = ((const uint16_t*)source_row)[column];
                 const uint32_t red_bits = (rgb565 >> 11) & 0x1Fu, green_bits = (rgb565 >> 5) & 0x3Fu,
@@ -227,11 +227,11 @@ static int fail(const char* message)
 }
 
 /**
- * @brief Installs the test backend, with or without copy_rect_fmt, and registers the test images.
+ * @brief Installs the test backend, with or without copy_rect_format, and registers the test images.
  *
  * Installing a backend resets the image registry, so the images are registered after it.
  *
- * @param[in] with_format  Whether to offer copy_rect_fmt.
+ * @param[in] with_format  Whether to offer copy_rect_format.
  */
 static void set_backend(bool with_format)
 {
@@ -240,8 +240,8 @@ static void set_backend(bool with_format)
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
-    backend.copy_rect_fmt = with_format ? copy_fmt_cb : NULL;
-    backend.ctx = &s_test_context;
+    backend.copy_rect_format = with_format ? copy_fmt_cb : NULL;
+    backend.context = &s_test_context;
     embedded_renderer_set_backend(&backend);
     er_image_load("argb_box", s_argb_box, BOX_WIDTH, BOX_HEIGHT);
     er_image_load_rgb565("rgb565_box", s_rgb565_box, BOX_WIDTH, BOX_HEIGHT);
@@ -292,7 +292,7 @@ render_coverage(ERNodeType type, const ERProps* shape, uint8_t coverage[FRAMEBUF
 
     ERNode* node = er_node_create(type);
     ERProps props = *shape;
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = BOX_X;
     props.top = BOX_Y;
     props.width = BOX_WIDTH;
@@ -357,7 +357,7 @@ same_coverage(const uint8_t* want, const uint8_t* got, int min_x, int min_y, int
  * A rounded image has to stop at exactly the edge a background with the same radii fills, anti-aliased
  * fringe included. Each case renders an opaque white image and a white rounded View at the same box and
  * requires their coverage to match pixel for pixel, through every path of the image scaler: the ARGB and
- * RGB565 1:1 transfers (with and without copy_rect_fmt), the scaled row path, per-corner radii, and an
+ * RGB565 1:1 transfers (with and without copy_rect_format), the scaled row path, per-corner radii, and an
  * image inset by padding, which is clipped to the border box rather than to its content box.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
@@ -380,9 +380,9 @@ int main(void)
      * ---------------------------------------------------------------------- */
     static const DrawCase k_cases[] = {
         {"ARGB 1:1", "argb_box", true, ER_RESIZE_STRETCH, 0},
-        {"ARGB 1:1 without copy_rect_fmt", "argb_box", false, ER_RESIZE_STRETCH, 0},
+        {"ARGB 1:1 without copy_rect_format", "argb_box", false, ER_RESIZE_STRETCH, 0},
         {"RGB565 1:1", "rgb565_box", true, ER_RESIZE_STRETCH, 0},
-        {"RGB565 1:1 without copy_rect_fmt", "rgb565_box", false, ER_RESIZE_STRETCH, 0},
+        {"RGB565 1:1 without copy_rect_format", "rgb565_box", false, ER_RESIZE_STRETCH, 0},
         {"scaled", "argb_small", true, ER_RESIZE_STRETCH, 0},
         {"cover", "argb_small", true, ER_RESIZE_COVER, 0},
     };
@@ -410,7 +410,7 @@ int main(void)
         /* At 1:1 the rows between the arcs still reach the backend as one whole-rect transfer. */
         if (k_cases[case_index].format_backend && strcmp(k_cases[case_index].image, "argb_small") != 0
             && s_test_context.format_calls != 1)
-            return fail("a rounded 1:1 image no longer sends its straight rows as one copy_rect_fmt call");
+            return fail("a rounded 1:1 image no longer sends its straight rows as one copy_rect_format call");
     }
 
     /* -----------------------------------------------------------------------

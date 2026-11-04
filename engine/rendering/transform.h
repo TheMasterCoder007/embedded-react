@@ -314,8 +314,8 @@ void er_transform_source_replay_blit_3d(int source_x,
  *
  * @param[in] source_x  World-space X origin of the content being captured (= render px).
  * @param[in] source_y  World-space Y origin of the content being captured (= render py).
- * @param[in] width     Content width in pixels (must be ≤ ERUI_XFORM_W).
- * @param[in] height    Content height in pixels (must be ≤ ERUI_XFORM_H).
+ * @param[in] width     Content width in pixels (must be ≤ ERUI_TRANSFORM_WIDTH).
+ * @param[in] height    Content height in pixels (must be ≤ ERUI_TRANSFORM_HEIGHT).
  *
  * @return true when capture was started successfully.
  */

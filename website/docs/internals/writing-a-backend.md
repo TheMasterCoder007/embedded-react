@@ -71,15 +71,15 @@ takes exclusive bounds, an ST7789-style `set_window` takes inclusive ones.
 `band_begin(x, y, w, h)` and `band_flush()`. The engine then renders each commit's damaged rows as
 full-width horizontal strips of at most `band_height` rows: for each strip it calls `band_begin`,
 emits fill/copy/blend calls with **band-local** Y (already offset by the strip's top) into a
-`screen_w × band_height` buffer, then calls `band_flush` to push it to the panel, whose own memory
+`screen_width × band_height` buffer, then calls `band_flush` to push it to the panel, whose own memory
 retains the rest of the picture. Band tiling is applied when ops are emitted, not as a clip, so
 transform and opacity scratch sources do not truncate at a seam. `esp32-spi-lcd` keeps two band
 buffers and ping-pongs them, compositing the next strip while the panel DMAs the previous one;
 without that overlap a large repaint shows as a stepped top-to-bottom wave.
 
-**Format-aware copy.** Provide `copy_rect_fmt(src, stride, fmt, x, y, w, h)` and the engine hands
-you images it has proved fully opaque, in their baked format (`ER_IMG_ARGB8888` or
-`ER_IMG_RGB565`), as one call for the whole rectangle: replace destination pixels outright, no
+**Format-aware copy.** Provide `copy_rect_format(src, stride, fmt, x, y, w, h)` and the engine hands
+you images it has proved fully opaque, in their baked format (`ER_IMAGE_ARGB8888` or
+`ER_IMAGE_RGB565`), as one call for the whole rectangle: replace destination pixels outright, no
 per-pixel alpha, no read-modify-write. On DMA2D this is a single M2M/PFC transfer; on an RGB565
 framebuffer a 565 source is a row `memcpy`. Leave it NULL and the engine expands non-ARGB sources on
 the CPU and goes through `copy_rect`.

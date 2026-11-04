@@ -16,8 +16,8 @@
 
 // LayoutAnimation — the React Native analog. Calling configureNext(...) before a state update that
 // changes layout makes the engine tween every node whose computed rect moved (instead of snapping)
-// on the next commit. Backed by the engine's er_layout_anim_configure_next; the tween advances in C
-// each frame (er_layout_anim_tick), so there's no per-frame JS.
+// on the next commit. Backed by the engine's er_layout_animation_configure_next; the tween advances in C
+// each frame (er_layout_animation_tick), so there's no per-frame JS.
 import {NativeUI} from '../native-ui.js';
 import {
   Types,

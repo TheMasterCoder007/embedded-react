@@ -166,7 +166,7 @@ static uint32_t spinner(float angle)
     ERNode* spin = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
     ERProps spin_props;
     er_props_default(&spin_props);
-    spin_props.position = ER_POS_ABSOLUTE;
+    spin_props.position = ER_POSITION_ABSOLUTE;
     spin_props.left = 0;
     spin_props.top = 0;
     spin_props.width = 40;
@@ -200,7 +200,7 @@ static uint32_t spinner(float angle)
 static ERProps node_props(const ERProps* transform_props)
 {
     ERProps test_node_props = *transform_props;
-    test_node_props.position = ER_POS_ABSOLUTE;
+    test_node_props.position = ER_POSITION_ABSOLUTE;
     test_node_props.left = 20;
     test_node_props.top = 20;
     test_node_props.width = 20;
@@ -329,7 +329,7 @@ static int oversized_dirty_top(void)
     ERNode* dot = er_node_create(ER_NODE_VIEW);
     ERProps dot_props;
     er_props_default(&dot_props);
-    dot_props.position = ER_POS_ABSOLUTE;
+    dot_props.position = ER_POSITION_ABSOLUTE;
     dot_props.left = 2;
     dot_props.top = 52;
     dot_props.width = 4;

@@ -121,16 +121,16 @@ static void er_hotreload_rx_task(void* parameter)
             const ErHotReloadStatus status =
                 er_hotreload_feed(&reload, chunk + offset, (size_t)received - offset, &consumed, &out_length);
             offset += consumed;
-            if (status == ER_HR_NEED_MORE)
+            if (status == ER_HOTRELOAD_NEED_MORE)
             {
                 break;
             }
-            if (status != ER_HR_FRAME_READY)
+            if (status != ER_HOTRELOAD_FRAME_READY)
             {
-                ESP_LOGW(TAG, "dropped frame: %s", er_hotreload_status_str(status));
+                ESP_LOGW(TAG, "dropped frame: %s", er_hotreload_status_name(status));
                 continue;
             }
-            if (reload.msg_type != ER_HR_MSG_LOAD_CONTAINER)
+            if (reload.message_type != ER_HOTRELOAD_MESSAGE_LOAD_CONTAINER)
             {
                 ESP_LOGW(TAG, "hot reload: this firmware runs Flow A: use dev --device without --aot");
                 continue;
@@ -240,7 +240,7 @@ void er_hotreload_usb_pump(void)
     const ErContainerStatus status = er_hotreload_apply(s_buffer, length);
     ESP_LOGI(TAG,
              "hot reload: %s (%u bytes; %u KB PSRAM free; %d nodes)",
-             er_runtime_container_status_str(status),
+             er_runtime_container_status_name(status),
              (unsigned)length,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / BYTES_PER_KB),
              er_node_in_use_count());

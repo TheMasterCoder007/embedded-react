@@ -154,13 +154,13 @@ static uint32_t glyph_row_bytes(uint8_t format, uint32_t width)
 {
     switch (format)
     {
-        case ERUI_FONT_FMT_1BIT:
+        case ERUI_FONT_FORMAT_1BIT:
             return (width + 7u) / 8u;
-        case ERUI_FONT_FMT_2BIT:
+        case ERUI_FONT_FORMAT_2BIT:
             return (width + 3u) / 4u;
-        case ERUI_FONT_FMT_4BIT:
+        case ERUI_FONT_FORMAT_4BIT:
             return (width + 1u) / 2u;
-        case ERUI_FONT_FMT_8BIT:
+        case ERUI_FONT_FORMAT_8BIT:
             return width;
         default:
             return 0u;

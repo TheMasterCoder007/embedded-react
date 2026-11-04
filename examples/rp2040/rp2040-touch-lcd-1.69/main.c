@@ -277,7 +277,7 @@ static void show_recorded_fault(bool touch)
     {
         return;
     }
-    boot_report("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.pc);
+    boot_report("restarted after a fault: %s (pc 0x%08lx)\n", s_fault.reason, (unsigned long)s_fault.program_counter);
     er_fault_show_recorded(&s_fault, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT);
     hold_error_screen(touch);
 }
@@ -396,8 +396,8 @@ static void load_package(bool touch)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = BOARD_LCD_WIDTH,
-        .screen_h = BOARD_LCD_HEIGHT,
+        .screen_width = BOARD_LCD_WIDTH,
+        .screen_height = BOARD_LCD_HEIGHT,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);

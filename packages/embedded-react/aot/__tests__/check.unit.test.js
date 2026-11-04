@@ -128,7 +128,7 @@ describe('check pass: state-driven drawings', () => {
     /** A state-driven circle whose radial gradient's center x is `ax`. */
     const gradientApp = ax =>
       app(
-        '<Svg width={10} height={10}><Circle cx={n} cy={5} r={2} fillGrad={{type: 2, ' +
+        '<Svg width={10} height={10}><Circle cx={n} cy={5} r={2} fillGradient={{type: 2, ' +
           `ax: ${ax}, ay: 5, r: 3, stops: [{offset: 0, color: '#f00'}, {offset: 1, color: '#00f'}]}} /></Svg>`,
       );
     expect(lower(gradientApp('2.5')).checks).toContainEqual(
@@ -162,14 +162,14 @@ describe('check pass: fixed caps', () => {
     });
     for (const count of [2, 8]) {
       expect(
-        checkProblem({kind: 'gradientStops', attribute: 'fillGrad', count}),
+        checkProblem({kind: 'gradientStops', attribute: 'fillGradient', count}),
       ).toBeNull();
     }
     for (const count of [1, 9]) {
       expect(
-        checkProblem({kind: 'gradientStops', attribute: 'fillGrad', count})
+        checkProblem({kind: 'gradientStops', attribute: 'fillGradient', count})
           .message,
-      ).toBe(`AOT: "fillGrad.stops" needs 2..8 entries (got ${count})`);
+      ).toBe(`AOT: "fillGradient.stops" needs 2..8 entries (got ${count})`);
     }
     expect(checkProblem({kind: 'dialGradientStops', count: 2})).toBeNull();
     expect(checkProblem({kind: 'dialGradientStops', count: 1}).message).toBe(
@@ -191,12 +191,12 @@ describe('check pass: fixed caps', () => {
       lower(
         app(
           '<Svg width={10} height={10}><Circle cx={n} cy={5} r={2} ' +
-            'fillGrad={{type: 1, stops: [1, 2, 3, 4, 5, 6, 7, 8, 9]}} /></Svg>',
+            'fillGradient={{type: 1, stops: [1, 2, 3, 4, 5, 6, 7, 8, 9]}} /></Svg>',
         ),
       ),
     );
     expect(error.message).toBe(
-      'AOT: "fillGrad.stops" needs 2..8 entries (got 9)',
+      'AOT: "fillGradient.stops" needs 2..8 entries (got 9)',
     );
     expect(error.aotLoc).toMatchObject({line: 5, column: 9});
   });

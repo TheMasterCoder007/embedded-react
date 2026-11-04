@@ -36,13 +36,13 @@
  * different jobs is slow — the damage pre-pass walks the whole node pool whether one node changed or
  * none did, the composite cost scales with the damage area, and the backend blits scale with memory
  * bandwidth (on a PSRAM framebuffer they can dwarf the compositing that produced the pixels). So the
- * raster phase reports its own split (ERPerfRasterSub, disjoint by construction) plus the pixel count
- * actually pushed through the backend — blit_px against dirty_px is the write-amplification ratio.
+ * raster phase reports its own split (ERPerfRasterSubphase, disjoint by construction) plus the pixel count
+ * actually pushed through the backend — blit_pixels against dirty_pixels is the write-amplification ratio.
  *
  * JS gets the same treatment, for the same reason: "JS is 40 ms" says nothing about whether the cost
  * is delivering the event, re-rendering the component tree, pushing the resulting props into the
  * engine, or the engine commit the reconciler asked for on the way out. The bridge marks its own
- * split (ERPerfJsSub) as those four steps run.
+ * split (ERPerfJsSubphase) as those four steps run.
  *
  * That last one also fixes an accounting bug: the reconciler commits from INSIDE the pump, so the
  * er_commit() it drives used to be counted twice — once in the host's JS span and again in
@@ -156,12 +156,12 @@ extern "C"
                                          the backend blits they emitted. */
         ER_PERF_RASTER_BLIT,        /**< Backend pixel emission: the fill/copy/blend(_fmt) callbacks
                                          (the actual framebuffer writes) plus banded band_begin/flush.
-                                         Scales with blit_px and the framebuffer's write bandwidth. */
+                                         Scales with blit_pixels and the framebuffer's write bandwidth. */
         ER_PERF_RASTER_SWEEP,       /**< Post-paint bookkeeping: the dirty-flag sweep over the node pool
                                          and the per-worker dirty-rect merge. Like PREPASS, an
                                          ERUI_MAX_NODES-proportional floor. */
         ER_PERF_RASTER_COUNT
-    } ERPerfRasterSub;
+    } ERPerfRasterSubphase;
 
     /**
      * @brief The sub-steps the JS phase is split into (all marked by the QuickJS bridge).
@@ -201,7 +201,7 @@ extern "C"
                                       for one as it finishes. Accounted in LAYOUT + RASTER, and removed
                                       from the JS phase so it is not counted in both. */
         ER_PERF_JS_COUNT
-    } ERPerfJsSub;
+    } ERPerfJsSubphase;
 
     /**
      * @brief One frame's timing split and resource counters.
@@ -215,31 +215,31 @@ extern "C"
         uint32_t frame_us;                        /**< Whole frame: frame_begin -> frame_end. */
         uint32_t phase_us[ER_PERF_PHASE_COUNT];   /**< Per-phase totals (a phase may be entered more than once). */
         uint32_t other_us;                        /**< frame_us minus the four phases: input, tick, host work. */
-        uint32_t raster_us[ER_PERF_RASTER_COUNT]; /**< RASTER's own split (see ERPerfRasterSub): disjoint; may exceed
-                                                       the wall-time phase_us[ER_PERF_PHASE_RASTER] when BLIT is summed
-                                                     across workers. */
-        uint32_t js_us[ER_PERF_JS_COUNT];         /**< JS's own split (see ERPerfJsSub): exclusive times. DISPATCH +
-                                                       RECONCILE + MARSHAL fit inside phase_us[ER_PERF_PHASE_JS];
-                                                       COMMIT sits outside it, in LAYOUT + RASTER. */
-        uint32_t blit_px;                         /**< Pixels pushed through the backend blit callbacks this
-                                                       frame (sum of each call's w*h, post-clip). Against
-                                                       dirty_px this is the write amplification: overlapping
-                                                       layers, erase-then-repaint, and multi-buffer debt
-                                                       replay all raise it above the damage area. */
-        int32_t dirty_x;                          /**< Bounding box of this frame's repaint rects (screen px). */
-        int32_t dirty_y;                          /**< @see dirty_x */
-        int32_t dirty_w;                          /**< Repaint bbox width; 0 when the frame painted nothing. */
-        int32_t dirty_h;                          /**< Repaint bbox height; 0 when the frame painted nothing. */
-        uint32_t dirty_px;                        /**< SUM of the disjoint repaint rects' areas (<= bbox area) — the
-                                                       pixels actually repainted, which raster cost scales with. */
-        uint16_t vector_slots_used;               /**< Vector (Svg) storage slots holding geometry. */
-        uint16_t vector_slots_total;              /**< ERUI_MAX_VECTOR_NODES. */
-        uint16_t image_slots_used;                /**< Image registry slots holding a registered asset. */
-        uint16_t image_slots_total;               /**< ERUI_IMAGE_REGISTRY_MAX. */
-        bool vector_slots_overflow;               /**< A vector node was denied a slot since the last er_reset(): it
-                                                       holds no geometry and draws NOTHING. Sticky, not per-frame —
-                                                       the store fails at commit time but the blank node persists. */
-        uint32_t index;                           /**< Monotonic frame number since the last er_perf_reset(). */
+        uint32_t raster_us[ER_PERF_RASTER_COUNT]; /**< RASTER's own split (see ERPerfRasterSubphase): disjoint; may
+                                                     exceed the wall-time phase_us[ER_PERF_PHASE_RASTER] when BLIT is
+                                                     summed across workers. */
+        uint32_t js_us[ER_PERF_JS_COUNT]; /**< JS's own split (see ERPerfJsSubphase): exclusive times. DISPATCH +
+                                               RECONCILE + MARSHAL fit inside phase_us[ER_PERF_PHASE_JS];
+                                               COMMIT sits outside it, in LAYOUT + RASTER. */
+        uint32_t blit_pixels;             /**< Pixels pushed through the backend blit callbacks this
+                                           frame (sum of each call's w*h, post-clip). Against
+                                           dirty_pixels this is the write amplification: overlapping
+                                           layers, erase-then-repaint, and multi-buffer debt
+                                           replay all raise it above the damage area. */
+        int32_t dirty_x;                  /**< Bounding box of this frame's repaint rects (screen px). */
+        int32_t dirty_y;                  /**< @see dirty_x */
+        int32_t dirty_width;              /**< Repaint bbox width; 0 when the frame painted nothing. */
+        int32_t dirty_height;             /**< Repaint bbox height; 0 when the frame painted nothing. */
+        uint32_t dirty_pixels;            /**< SUM of the disjoint repaint rects' areas (<= bbox area) — the
+                                           pixels actually repainted, which raster cost scales with. */
+        uint16_t vector_slots_used;       /**< Vector (Svg) storage slots holding geometry. */
+        uint16_t vector_slots_total;      /**< ERUI_MAX_VECTOR_NODES. */
+        uint16_t image_slots_used;        /**< Image registry slots holding a registered asset. */
+        uint16_t image_slots_total;       /**< ERUI_IMAGE_REGISTRY_MAX. */
+        bool vector_slots_overflow;       /**< A vector node was denied a slot since the last er_reset(): it
+                                               holds no geometry and draws NOTHING. Sticky, not per-frame —
+                                               the store fails at commit time but the blank node persists. */
+        uint32_t index;                   /**< Monotonic frame number since the last er_perf_reset(). */
     } ERPerfFrame;
 
     /**
@@ -301,7 +301,7 @@ extern "C"
      *
      * @param[in] subphase  Raster sub-step to start.
      */
-    void er_perf_raster_begin(ERPerfRasterSub subphase);
+    void er_perf_raster_begin(ERPerfRasterSubphase subphase);
 
     /**
      * @brief Stops timing raster sub-step @p subphase (called by the engine).
@@ -310,7 +310,7 @@ extern "C"
      *
      * @param[in] subphase  Raster sub-step to stop.
      */
-    void er_perf_raster_end(ERPerfRasterSub subphase);
+    void er_perf_raster_end(ERPerfRasterSubphase subphase);
 
     /**
      * @brief Starts timing JS sub-step @p subphase within the open frame (called by the bridge).
@@ -324,7 +324,7 @@ extern "C"
      *
      * @param[in] subphase  JS sub-step to start.
      */
-    void er_perf_js_begin(ERPerfJsSub subphase);
+    void er_perf_js_begin(ERPerfJsSubphase subphase);
 
     /**
      * @brief Stops timing JS sub-step @p subphase and charges the elapsed time to it (called by the bridge).
@@ -334,7 +334,7 @@ extern "C"
      *
      * @param[in] subphase  JS sub-step to stop.
      */
-    void er_perf_js_end(ERPerfJsSub subphase);
+    void er_perf_js_end(ERPerfJsSubphase subphase);
 
     /**
      * @brief Adds already-measured backend-blit time and pixels to this frame (called by the engine).
@@ -364,7 +364,7 @@ extern "C"
      *
      * The compositor calls this once per disjoint repaint rect — its own scissors, which also bound
      * the backend's flush. The frame accumulates: dirty_x/y/w/h grow to the union bounding box and
-     * dirty_px sums the (disjoint) areas, so it reports the pixels actually repainted rather than the
+     * dirty_pixels sums the (disjoint) areas, so it reports the pixels actually repainted rather than the
      * span between far-apart changes. Empty rects and calls outside an open frame are ignored; a
      * frame with no notes reports all-zero.
      *
@@ -417,11 +417,11 @@ extern "C"
      *     PKDRT 800x40 32k       the WORST frame's repainted region (pairs with PK above)
      *     VEC 3/8 IMG 5/32       vector + image slots in use, out of the compiled-in pool size
      *     RST P0.4 C7.2 B22.1 S0.9 W96k   last frame's raster split: pre-pass, composite, blit,
-     *                            sweep (ERPerfRasterSub) + pixels pushed through the backend — the
+     *                            sweep (ERPerfRasterSubphase) + pixels pushed through the backend — the
      *                            line to watch during a steady drag, where the peak lines are stuck
      *                            on the mount frame
      *     PKR P2 C11 B16 S1 W96k the WORST frame's raster split + blit pixels (pairs with PK)
-     *     JSS D2.1 R7.4 M3.8 C9.0 last frame's JS split (ERPerfJsSub): dispatch, reconcile, marshal,
+     *     JSS D2.1 R7.4 M3.8 C9.0 last frame's JS split (ERPerfJsSubphase): dispatch, reconcile, marshal,
      *                            and the commit the pump drove — the line that says whether a slow
      *                            frame is React's render or the bridge shovelling props
      *     PKJ D3 R40 M12 C31     the WORST frame's JS split (pairs with PK)

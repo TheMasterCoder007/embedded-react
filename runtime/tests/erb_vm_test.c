@@ -85,8 +85,8 @@ static TPkg* base(void)
     memset(&s_config, 0, sizeof(s_config));
     s_config.arena = s_arena;
     s_config.arena_bytes = sizeof(s_arena);
-    s_config.screen_w = TPKG_SCREEN;
-    s_config.screen_h = TPKG_SCREEN;
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
     s_config.native_count = 1;
     s_config.log = log_line;
@@ -99,9 +99,9 @@ static bool load(void)
 {
     const uint32_t length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
     const bool ok = erb_load(s_package, length, &s_config, &s_error);
-    if (!ok && s_error.status != ERB_ERR_UPDATE_LOOP)
+    if (!ok && s_error.status != ERB_ERROR_UPDATE_LOOP)
     {
-        printf("  (load: %s, %s)\n", erb_status_str(s_error.status), s_error.detail ? s_error.detail : "");
+        printf("  (load: %s, %s)\n", erb_status_name(s_error.status), s_error.detail ? s_error.detail : "");
     }
     return ok;
 }
@@ -128,7 +128,7 @@ static ERNode* slot_node(uint16_t index, uint32_t element)
 static uint16_t
 helper(const uint8_t* types, uint8_t registers, uint8_t params, uint8_t result, const uint32_t* code, uint32_t words)
 {
-    return tpkg_function(&s_package_spec, ERB_FN_HELPER, params, result, types, registers, code, words);
+    return tpkg_function(&s_package_spec, ERB_FUNCTION_KIND_HELPER, params, result, types, registers, code, words);
 }
 
 /** @brief Runs a function directly, as the runtime would (the VM marked as running). */
@@ -205,41 +205,41 @@ static uint16_t binop(uint8_t opcode, uint8_t type)
 static void test_screen(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_INT};
     const uint32_t boot[] = {
         OP_ABX(SCREEN, 0, 1),
         OP_ABX(SET32, 0, SLOT_COUNT),
         OP_ABC(RET, 0, 0, 0),
     };
     tpkg_set_code(&s_package_spec, FUNCTION_BOOT, types, 1, boot, 3);
-    static const uint32_t any_size[] = {ERB_CK_WIDTH, ERB_CK_END};
+    static const uint32_t any_size[] = {ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_END};
     s_package_spec.check_words = any_size;
     s_package_spec.check_word_count = 2u;
     s_package_spec.panel_checks[0] = 0u;
-    s_config.screen_w = 321;
-    s_config.screen_h = 123;
+    s_config.screen_width = 321;
+    s_config.screen_height = 123;
     CHECK(load(), "a package loads on a size it never names");
     CHECK(slot_int(SLOT_COUNT) == 123, "SCREEN reads the panel's height");
     ERNode* root = slot_node(SLOT_ROOT, 0);
     CHECK(root && root->layout.width == 321 && root->layout.height == 123, "the root fills the panel");
     erb_unload();
-    s_config.screen_w = TPKG_SCREEN;
-    s_config.screen_h = TPKG_SCREEN;
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
 }
 
 static void test_int_arithmetic(void)
 {
     base();
-    const uint16_t add_function = binop(ERB_OP_ADD, ERB_T_INT);
-    const uint16_t subtract_function = binop(ERB_OP_SUB, ERB_T_INT);
-    const uint16_t multiply_function = binop(ERB_OP_MUL, ERB_T_INT);
-    const uint16_t divide_function = binop(ERB_OP_DIV, ERB_T_INT);
-    const uint16_t floordiv = binop(ERB_OP_FLOORDIV, ERB_T_INT);
-    const uint16_t ceildiv = binop(ERB_OP_CEILDIV, ERB_T_INT);
-    const uint16_t rounddiv = binop(ERB_OP_ROUNDDIV, ERB_T_INT);
-    const uint16_t modulo_function = binop(ERB_OP_MOD, ERB_T_INT);
-    const uint16_t negate_function = binop(ERB_OP_NEG, ERB_T_INT);
-    const uint16_t absolute_function = binop(ERB_OP_ABS, ERB_T_INT);
+    const uint16_t add_function = binop(ERB_OP_ADD, ERB_TYPE_INT);
+    const uint16_t subtract_function = binop(ERB_OP_SUB, ERB_TYPE_INT);
+    const uint16_t multiply_function = binop(ERB_OP_MUL, ERB_TYPE_INT);
+    const uint16_t divide_function = binop(ERB_OP_DIV, ERB_TYPE_INT);
+    const uint16_t floordiv = binop(ERB_OP_FLOORDIV, ERB_TYPE_INT);
+    const uint16_t ceildiv = binop(ERB_OP_CEILDIV, ERB_TYPE_INT);
+    const uint16_t rounddiv = binop(ERB_OP_ROUNDDIV, ERB_TYPE_INT);
+    const uint16_t modulo_function = binop(ERB_OP_MOD, ERB_TYPE_INT);
+    const uint16_t negate_function = binop(ERB_OP_NEG, ERB_TYPE_INT);
+    const uint16_t absolute_function = binop(ERB_OP_ABS, ERB_TYPE_INT);
     CHECK(load(), "loads");
 
     CHECK(call(add_function, INT_MAX, 1) == INT_MAX, "+ saturates up");
@@ -266,13 +266,13 @@ static void test_int_arithmetic(void)
 static void test_int64_arithmetic(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_INT64, ERB_T_PAIR, ERB_T_INT64, ERB_T_PAIR};
+    const uint8_t types[] = {ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_INT64, ERB_TYPE_PAIR};
     const uint32_t add_code[] = {OP_ABC(ADDL, 0, 0, 2), OP_ABC(RET, 0, 0, 0)};
     const uint32_t round_code[] = {OP_ABC(ROUNDDIVL, 0, 0, 2), OP_ABC(RET, 0, 0, 0)};
     const uint32_t floor_code[] = {OP_ABC(FLOORDIVL, 0, 0, 2), OP_ABC(RET, 0, 0, 0)};
-    const uint16_t add_function = helper(types, 4, 4, ERB_T_INT64, add_code, 2);
-    const uint16_t round = helper(types, 4, 4, ERB_T_INT64, round_code, 2);
-    const uint16_t floor_function = helper(types, 4, 4, ERB_T_INT64, floor_code, 2);
+    const uint16_t add_function = helper(types, 4, 4, ERB_TYPE_INT64, add_code, 2);
+    const uint16_t round = helper(types, 4, 4, ERB_TYPE_INT64, round_code, 2);
+    const uint16_t floor_function = helper(types, 4, 4, ERB_TYPE_INT64, floor_code, 2);
     CHECK(load(), "loads");
     CHECK(call64(add_function, INT64_MAX, 1) == INT64_MAX, "64-bit + saturates");
     CHECK(call64(add_function, 1700000000000LL, 1) == 1700000000001LL, "64-bit + of a timestamp");
@@ -283,16 +283,16 @@ static void test_int64_arithmetic(void)
 static void test_float_rules(void)
 {
     base();
-    const uint8_t to_int_types[] = {ERB_T_FLOAT, ERB_T_INT};
+    const uint8_t to_int_types[] = {ERB_TYPE_FLOAT, ERB_TYPE_INT};
     const uint32_t to_int[] = {OP_ABC(FTOI, 1, 0, 0), OP_ABC(RET, 1, 0, 0)};
-    const uint16_t float_to_int_function = helper(to_int_types, 2, 1, ERB_T_INT, to_int, 2);
-    const uint8_t math_types[] = {ERB_T_FLOAT, ERB_T_FLOAT};
+    const uint16_t float_to_int_function = helper(to_int_types, 2, 1, ERB_TYPE_INT, to_int, 2);
+    const uint8_t math_types[] = {ERB_TYPE_FLOAT, ERB_TYPE_FLOAT};
     const uint32_t round_code[] = {OP_ABC(FMATH, 0, 0, 1), ERB_MATH_ROUND, OP_ABC(RET, 0, 0, 0)};
     const uint32_t min_code[] = {OP_ABC(FMATH, 0, 0, 1), ERB_MATH_MIN, OP_ABC(RET, 0, 0, 0)};
     const uint32_t div_code[] = {OP_ABC(FDIV, 0, 0, 1), OP_ABC(RET, 0, 0, 0)};
-    const uint16_t round = helper(math_types, 2, 2, ERB_T_FLOAT, round_code, 3);
-    const uint16_t min_function = helper(math_types, 2, 2, ERB_T_FLOAT, min_code, 3);
-    const uint16_t float_divide_function = helper(math_types, 2, 2, ERB_T_FLOAT, div_code, 2);
+    const uint16_t round = helper(math_types, 2, 2, ERB_TYPE_FLOAT, round_code, 3);
+    const uint16_t min_function = helper(math_types, 2, 2, ERB_TYPE_FLOAT, min_code, 3);
+    const uint16_t float_divide_function = helper(math_types, 2, 2, ERB_TYPE_FLOAT, div_code, 2);
     CHECK(load(), "loads");
     CHECK(call(float_to_int_function, bits(NAN), 0) == 0, "NaN to int is 0");
     CHECK(call(float_to_int_function, bits(3e10f), 0) == INT_MAX
@@ -314,7 +314,7 @@ static void test_float_rules(void)
 static void test_loops_and_calls(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_INT, ERB_T_INT, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT};
     const uint32_t loop_code[] = {
         OP_ABX(LOADI, 2, 1),
         OP_ABX(LOOPSET, 1, 10),
@@ -322,7 +322,7 @@ static void test_loops_and_calls(void)
         OP_ABX(LOOP, 1, -2),
         OP_ABC(RET, 0, 0, 0),
     };
-    const uint16_t loop = helper(types, 3, 1, ERB_T_INT, loop_code, 5);
+    const uint16_t loop = helper(types, 3, 1, ERB_TYPE_INT, loop_code, 5);
     const uint32_t once_code[] = {
         OP_ABX(LOADI, 2, 1),
         OP_ABX(LOOPSET, 1, 0),
@@ -330,16 +330,16 @@ static void test_loops_and_calls(void)
         OP_ABX(LOOP, 1, -2),
         OP_ABC(RET, 0, 0, 0),
     };
-    const uint16_t once = helper(types, 3, 1, ERB_T_INT, once_code, 5);
+    const uint16_t once = helper(types, 3, 1, ERB_TYPE_INT, once_code, 5);
     const uint32_t native_code[] = {OP_ABX(CALLN, 0, 0), OP_ABC(RET, 0, 0, 0)};
-    const uint16_t native = helper(types, 1, 1, ERB_T_INT, native_code, 2);
+    const uint16_t native = helper(types, 1, 1, ERB_TYPE_INT, native_code, 2);
     CHECK(load(), "loads");
     CHECK(call(loop, 0, 0) == 10, "a loop runs its bound");
     CHECK(call(once, 0, 0) == 1, "a loop with bound 0 runs its body once");
     CHECK(call(native, 41, 0) == 42, "a native import is called with its arguments");
     s_native_fails = true;
     call(native, 41, 0);
-    CHECK(s_status == ERB_ERR_NATIVE && g_erb.error.name && strcmp(g_erb.error.name, "sensors.read") == 0,
+    CHECK(s_status == ERB_ERROR_NATIVE && g_erb.error.name && strcmp(g_erb.error.name, "sensors.read") == 0,
           "a native that fails stops the app, naming the module");
 }
 
@@ -350,7 +350,7 @@ static void test_loops_and_calls(void)
 static void test_text(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_INT, ERB_T_FLOAT, ERB_T_BOOL, ERB_T_ENUM};
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_FLOAT, ERB_TYPE_BOOL, ERB_TYPE_ENUM};
     const uint32_t mixed_code[] = {
         OP_ABX(LOADI, 0, 7),
         OP_ABC(FMTI, 0, 0, 0),
@@ -404,7 +404,7 @@ static void test_text(void)
 static void test_lists(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_INT, ERB_T_FLOAT, ERB_T_INT, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_FLOAT, ERB_TYPE_INT, ERB_TYPE_INT};
     const uint32_t speed = add_const(2.5f);
     const uint32_t fill_code[] = {
         OP_ABX(LOADK, 1, speed),
@@ -419,11 +419,11 @@ static void test_lists(void)
         SLOT_ITEMS,
         OP_ABC(RET, 3, 0, 0),
     };
-    const uint16_t fill = helper(types, 4, 0, ERB_T_INT, fill_code, 11);
+    const uint16_t fill = helper(types, 4, 0, ERB_TYPE_INT, fill_code, 11);
     const uint32_t length_code[] = {OP_ABX(LEN, 0, SLOT_ITEMS), OP_ABC(RET, 0, 0, 0)};
-    const uint16_t length_function = helper(types, 4, 0, ERB_T_INT, length_code, 2);
+    const uint16_t length_function = helper(types, 4, 0, ERB_TYPE_INT, length_code, 2);
     const uint32_t pop_code[] = {OP_ABX(POP, 0, SLOT_ITEMS), OP_ABX(LEN, 0, SLOT_ITEMS), OP_ABC(RET, 0, 0, 0)};
-    const uint16_t pop_function = helper(types, 4, 0, ERB_T_INT, pop_code, 3);
+    const uint16_t pop_function = helper(types, 4, 0, ERB_TYPE_INT, pop_code, 3);
     const uint32_t slice_code[] = {
         OP_ABX(LOADI, 2, -1),
         OP_ABX(LOADI, 3, 9),
@@ -434,9 +434,9 @@ static void test_lists(void)
         SLOT_ITEMS,
         OP_ABC(RET, 0, 0, 0),
     };
-    const uint16_t slice = helper(types, 4, 0, ERB_T_INT, slice_code, 8);
+    const uint16_t slice = helper(types, 4, 0, ERB_TYPE_INT, slice_code, 8);
     const uint32_t past_code[] = {OP_ABX(LOADI, 2, 9), OP_ABC(ROWGET, 0, 2, 0), SLOT_ITEMS, OP_ABC(RET, 0, 0, 0)};
-    const uint16_t past = helper(types, 4, 0, ERB_T_INT, past_code, 4);
+    const uint16_t past = helper(types, 4, 0, ERB_TYPE_INT, past_code, 4);
     CHECK(load(), "loads");
     CHECK(call(fill, 0, 0) == 20, "rows append and read back");
     CHECK(call(length_function, 0, 0) == 3, "LEN counts them");
@@ -448,7 +448,7 @@ static void test_lists(void)
     CHECK(call(length_function, 0, 0) == 4, "a full list keeps its cap");
     CHECK(strstr(s_log, "list full") != NULL, "and the dropped row is reported");
     call(past, 0, 0);
-    CHECK(s_status == ERB_ERR_LIST_INDEX, "a read past the end stops the app");
+    CHECK(s_status == ERB_ERROR_LIST_INDEX, "a read past the end stops the app");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -458,7 +458,7 @@ static void test_lists(void)
 static void test_props(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_FLOAT, ERB_T_INT, ERB_T_NODE, ERB_T_PAIR};
+    const uint8_t types[] = {ERB_TYPE_FLOAT, ERB_TYPE_INT, ERB_TYPE_NODE, ERB_TYPE_PAIR};
     const uint32_t angle = add_const(45.0f);
     const uint32_t code[] = {
         OP_ABX(LOADK, 0, angle),
@@ -487,7 +487,7 @@ static void test_props(void)
     erb_rt_pset_float(PROP_OPACITY, 1.5f);
     CHECK(g_erb_props.opacity == ERB_OPACITY_OPAQUE, "an opacity past 1 is opaque");
     erb_rt_pset_int(PROP_FLEX_DIRECTION, 9);
-    CHECK(g_erb_props.flex_direction == ER_FLEX_COL_REVERSE, "an enum prop clamps to its range");
+    CHECK(g_erb_props.flex_direction == ER_FLEX_COLUMN_REVERSE, "an enum prop clamps to its range");
     CHECK(!erb_rt_pset_string(PROP_IMAGE_NAME, "missing"), "an image that isn't registered is reported");
     CHECK(erb_rt_pset_string(PROP_IMAGE_NAME, "img"), "one that is isn't");
 }
@@ -495,7 +495,7 @@ static void test_props(void)
 static void test_templates(void)
 {
     base();
-    const uint8_t types[] = {ERB_T_NODE, ERB_T_PAIR, ERB_T_NODE, ERB_T_PAIR, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_NODE, ERB_TYPE_PAIR, ERB_TYPE_NODE, ERB_TYPE_PAIR, ERB_TYPE_INT};
     const uint32_t build_code[] = {
         OP_ABX(LOADI, 4, 2),
         OP_ABX(GET64, 2, SLOT_ROOT),
@@ -562,7 +562,7 @@ static void test_templates(void)
     CHECK(s_status == ERB_OK && er_node_in_use_count() == 4,
           "a release package skips a BUILD before a stale handle, rather than putting the row last");
     call(build_past, 0, 0);
-    CHECK(s_status == ERB_ERR_LIST_INDEX, "a row index past the handle array stops the app");
+    CHECK(s_status == ERB_ERROR_LIST_INDEX, "a row index past the handle array stops the app");
 
     base()->flags = ERB_FLAG_DEBUG;
     const uint16_t debug_build = helper(types, 5, 0, 0, build_code, 5);
@@ -572,7 +572,7 @@ static void test_templates(void)
     call(debug_build, 0, 0);
     call(debug_destroy, 0, 0);
     call(debug_commit, 0, 0);
-    CHECK(s_status == ERB_ERR_STALE_NODE, "a debug package stops on a stale handle");
+    CHECK(s_status == ERB_ERROR_STALE_NODE, "a debug package stops on a stale handle");
 
     base()->flags = ERB_FLAG_DEBUG;
     const uint16_t before_build = helper(types, 5, 0, 0, build_code, 5);
@@ -582,7 +582,7 @@ static void test_templates(void)
     call(before_build, 0, 0);
     call(before_destroy, 0, 0);
     call(before_stale, 0, 0);
-    CHECK(s_status == ERB_ERR_STALE_NODE, "a debug package stops on a BUILD before a stale handle");
+    CHECK(s_status == ERB_ERROR_STALE_NODE, "a debug package stops on a BUILD before a stale handle");
 }
 
 /**
@@ -592,10 +592,10 @@ static void test_templates(void)
  */
 static uint16_t node_animation(void)
 {
-    s_package_spec.anims[2] =
-        (TAnim){ERB_ANIM_TIMING, ER_EASE_LINEAR, 0, SLOT_ROOT, PROP_OPACITY, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
+    s_package_spec.anims[2] = (TAnim){
+        ERB_ANIMATION_TIMING, ER_EASE_LINEAR, 0, SLOT_ROOT, PROP_OPACITY, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
     s_package_spec.anim_count = 3;
-    static const uint8_t types[] = {ERB_T_ANIM};
+    static const uint8_t types[] = {ERB_TYPE_ANIMATION};
     static const uint32_t start[] = {
         OP_ABX(ASTART, 0, 2), ERB_PACK16(FUNCTION_DONE, ERB_NO_REGISTER), OP_ABC(RET, 0, 0, 0)};
     return helper(types, 1, 0, 0, start, 3);
@@ -603,7 +603,7 @@ static uint16_t node_animation(void)
 
 static void test_stale_animation_target(void)
 {
-    static const uint8_t types[] = {ERB_T_NODE, ERB_T_PAIR};
+    static const uint8_t types[] = {ERB_TYPE_NODE, ERB_TYPE_PAIR};
     static const uint32_t destroy_code[] = {
         OP_ABX(GET64, 0, SLOT_ROOT),
         OP_ABC(DESTROY, 0, 0, 0),
@@ -625,7 +625,7 @@ static void test_stale_animation_target(void)
     CHECK(load(), "a debug package loads");
     call(destroy, 0, 0);
     call(start, 0, 0);
-    CHECK(s_status == ERB_ERR_STALE_NODE && !erb_running(),
+    CHECK(s_status == ERB_ERROR_STALE_NODE && !erb_running(),
           "a debug package stops on an animation of a destroyed node");
 
     /* A node with no handle yet is not stale: only the report, even in a debug package. */
@@ -653,18 +653,18 @@ static void test_vectors(void)
     const uint32_t wide = add_const(2.5f);
     s_package_spec.const32[s_package_spec.const32_count] = COLOR_BLUE;
     const uint32_t blue = s_package_spec.const32_count++;
-    const uint8_t types[] = {ERB_T_NODE, ERB_T_PAIR, ERB_T_FLOAT, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_NODE, ERB_TYPE_PAIR, ERB_TYPE_FLOAT, ERB_TYPE_INT};
     const uint32_t own_code[] = {
         OP_ABX(GET64, 0, SLOT_ROOT),
         OP_ABX(VTAPE, 0, 0),
         OP_ABX(LOADK, 2, four),
         OP_ABX(VSET, 2, 6),
         OP_ABX(LOADK, 3, blue),
-        OP_ABC(VPAINT, 3, 0, ERB_VPAINT_FILL),
-        OP_ABC(VGRAD, 3, 0, ERB_VGRAD_STOPS + 2u),
+        OP_ABC(VPAINT, 3, 0, ERB_VECTOR_PAINT_FILL),
+        OP_ABC(VGRAD, 3, 0, ERB_VECTOR_GRADIENT_STOPS + 2u),
         OP_ABX(LOADK, 2, wide),
-        OP_ABC(VPAINT, 2, 0, ERB_VPAINT_STROKE_WIDTH),
-        OP_ABC(VGRAD, 2, 0, ERB_VGRAD_BX),
+        OP_ABC(VPAINT, 2, 0, ERB_VECTOR_PAINT_STROKE_WIDTH),
+        OP_ABC(VGRAD, 2, 0, ERB_VECTOR_GRADIENT_BX),
         OP_ABX(VCOMMITP, 0, 0),
         OP_ABC(RET, 0, 0, 0),
     };
@@ -673,7 +673,7 @@ static void test_vectors(void)
         OP_ABX(GET64, 0, SLOT_ROOT),
         OP_ABX(VTAPE, 0, 0),
         OP_ABX(LOADK, 3, blue),
-        OP_ABC(VPAINT, 3, 0, ERB_VPAINT_FILL),
+        OP_ABC(VPAINT, 3, 0, ERB_VECTOR_PAINT_FILL),
         OP_ABX(VCOMMIT, 0, 0),
         OP_ABC(RET, 0, 0, 0),
     };
@@ -689,7 +689,7 @@ static void test_vectors(void)
     const ERVectorPaint* paint = er_vector_slot_paints(node->vector_slot, &count);
     const ERVectorGradient* gradient = er_vector_slot_grads(node->vector_slot, &count);
     CHECK(s_status == ERB_OK && tape[6] == 4.0f, "VSET writes a float of the scratch");
-    CHECK(paint[0].fill == COLOR_BLUE && paint[0].stroke_w == 2.5f, "VPAINT sets the scratch's paint fields");
+    CHECK(paint[0].fill == COLOR_BLUE && paint[0].stroke_width == 2.5f, "VPAINT sets the scratch's paint fields");
 #if ERUI_GRADIENT
     CHECK(count == 1 && gradient[0].stops[1].color == COLOR_BLUE && gradient[0].bx == 2.5f
               && gradient[0].stops[0].color == COLOR_WHITE,
@@ -717,7 +717,7 @@ static void test_vectors(void)
 /** @brief An update that writes the count into the label whenever bit 0 is dirty. */
 static void count_to_label_update(void)
 {
-    const uint8_t types[] = {ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_INT};
     const uint32_t code[] = {
         OP_ABX(JDIRTY, 0, 1),
         1u,
@@ -747,10 +747,10 @@ static void test_events_and_inputs(void)
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "40") == 0, "and runs the update");
     CHECK(!erb_input_set_float(steps, 1.0f), "an input of another type is refused");
 
-    const uint8_t types[] = {ERB_T_INT64, ERB_T_PAIR};
+    const uint8_t types[] = {ERB_TYPE_INT64, ERB_TYPE_PAIR};
     const uint32_t code[] = {OP_ABC(DATENOW, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
     base();
-    const uint16_t date = helper(types, 2, 0, ERB_T_INT64, code, 2);
+    const uint16_t date = helper(types, 2, 0, ERB_TYPE_INT64, code, 2);
     CHECK(load(), "loads");
     erb_set_wall_clock(1700000000000LL);
     CHECK(call64(date, 0, 0) >= 1700000000000LL, "DATENOW reads the wall clock");
@@ -760,15 +760,15 @@ static void test_queries(void)
 {
     base();
     /* Says yes while no finger is down. */
-    const uint8_t types[] = {ERB_T_BOOL, ERB_T_INT, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_BOOL, ERB_TYPE_INT, ERB_TYPE_INT};
     const uint32_t code[] = {
-        OP_ABC(EVT, 1, ERB_EVT_TOUCHES, 0),
+        OP_ABC(EVT, 1, ERB_EVENT_FIELD_TOUCHES, 0),
         OP_ABX(LOADI, 2, 0),
         OP_ABC(EQ, 0, 1, 2),
         OP_ABC(RET, 0, 0, 0),
     };
-    const uint16_t query =
-        tpkg_function(&s_package_spec, ERB_FN_QUERY + ER_QUERY_START_SHOULD_SET, 0, ERB_T_BOOL, types, 3, code, 4);
+    const uint16_t query = tpkg_function(
+        &s_package_spec, ERB_FUNCTION_KIND_QUERY + ER_QUERY_START_SHOULD_SET, 0, ERB_TYPE_BOOL, types, 3, code, 4);
     s_package_spec.bindings[3] = s_package_spec.bindings[0];
     s_package_spec.bindings[4] = (TBinding){ERB_BIND_QUERY, ER_QUERY_START_SHOULD_SET, query};
     s_package_spec.binding_count = 5;
@@ -787,7 +787,7 @@ static void test_timers_and_effects(void)
 {
     base();
     {
-        const uint8_t types[] = {ERB_T_BOOL, ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_BOOL, ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t boot[] = {
             OP_ABX(LOADI, 0, 1),
             OP_ABX(SET32, 0, SLOT_READY),
@@ -797,7 +797,7 @@ static void test_timers_and_effects(void)
             OP_ABC(RET, 0, 0, 0),
         };
         tpkg_set_code(&s_package_spec, FUNCTION_BOOT, types, 3, boot, 6);
-        const uint8_t timer_types[] = {ERB_T_INT, ERB_T_INT};
+        const uint8_t timer_types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t timer[] = {
             OP_ABX(GET32, 0, SLOT_COUNT),
             OP_ABX(LOADI, 1, 1),
@@ -819,7 +819,7 @@ static void test_timers_and_effects(void)
     {
         const uint32_t boot[] = {OP_ABX(EFFECT, 0, FUNCTION_EFFECT), OP_ABC(RET, 0, 0, 0)};
         tpkg_set_code(&s_package_spec, FUNCTION_BOOT, NULL, 0, boot, 2);
-        const uint8_t types[] = {ERB_T_STRING};
+        const uint8_t types[] = {ERB_TYPE_STRING};
         const uint32_t effect[] = {OP_ABX(LOADS, 0, STRING_ON), OP_ABX(SETS, 0, SLOT_LABEL), OP_ABC(RET, 0, 0, 0)};
         tpkg_set_code(&s_package_spec, FUNCTION_EFFECT, types, 1, effect, 3);
     }
@@ -837,7 +837,7 @@ static void test_timers_and_effects(void)
             OP_ABC(RET, 0, 0, 0),
         };
         tpkg_set_code(&s_package_spec, FUNCTION_UPDATE, NULL, 0, update, 5);
-        const uint8_t types[] = {ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t effect[] = {
             OP_ABX(GET32, 0, SLOT_COUNT),
             OP_ABX(LOADI, 1, 1),
@@ -847,7 +847,7 @@ static void test_timers_and_effects(void)
         };
         tpkg_set_code(&s_package_spec, FUNCTION_EFFECT, types, 2, effect, 5);
     }
-    CHECK(!load() && s_error.status == ERB_ERR_UPDATE_LOOP, "more than 50 update passes is a fault");
+    CHECK(!load() && s_error.status == ERB_ERROR_UPDATE_LOOP, "more than 50 update passes is a fault");
     CHECK(!erb_running() && er_node_in_use_count() == 0, "and the app is torn down");
     CHECK(er_error_screen_active(), "for the error screen");
 }
@@ -861,15 +861,15 @@ static void test_animations(void)
     base();
     const uint16_t press = FUNCTION_PRESS;
     {
-        const uint8_t types[] = {ERB_T_ANIM};
+        const uint8_t types[] = {ERB_TYPE_ANIMATION};
         const uint32_t start[] = {OP_ABX(ASTART, 0, 0),
                                   ERB_PACK16(FUNCTION_DONE, ERB_NO_REGISTER),
                                   OP_ABX(SET32, 0, SLOT_ANIMATION),
                                   OP_ABC(RET, 0, 0, 0)};
         tpkg_set_code(&s_package_spec, press, types, 1, start, 4);
-        const uint8_t done_types[] = {ERB_T_BOOL, ERB_T_INT};
+        const uint8_t done_types[] = {ERB_TYPE_BOOL, ERB_TYPE_INT};
         const uint32_t done[] = {
-            OP_ABC(EVT, 0, ERB_EVT_FINISHED, 0),
+            OP_ABC(EVT, 0, ERB_EVENT_FIELD_FINISHED, 0),
             OP_ABX(LOADI, 1, 100),
             OP_ABX(JF, 0, 1),
             OP_ABX(LOADI, 1, 200),
@@ -878,7 +878,7 @@ static void test_animations(void)
         };
         tpkg_set_code(&s_package_spec, FUNCTION_DONE, done_types, 2, done, 6);
         /* A long press stops it. */
-        const uint8_t stop_types[] = {ERB_T_ANIM};
+        const uint8_t stop_types[] = {ERB_TYPE_ANIMATION};
         const uint32_t stop[] = {OP_ABX(GET32, 0, SLOT_ANIMATION), OP_ABC(ASTOP, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
         const uint16_t stop_function =
             tpkg_function(&s_package_spec, ER_EVENT_LONG_PRESS, 0, 0, stop_types, 1, stop, 3);
@@ -900,10 +900,11 @@ static void test_animations(void)
     {
         embedded_renderer_tick(40);
     }
-    CHECK(er_anim_value_get((ERAnimValueHandle)fade) == 1.0f, "a sequence's timing leaf drives the animated value");
+    CHECK(er_animation_value_get((ERAnimationValueHandle)fade) == 1.0f,
+          "a sequence's timing leaf drives the animated value");
     CHECK(slot_int(SLOT_COUNT) == 200, "the completion function runs, finished");
 
-    er_anim_value_set((ERAnimValueHandle)fade, 0.0f);
+    er_animation_value_set((ERAnimationValueHandle)fade, 0.0f);
     fire(root, ER_EVENT_PRESS);
     embedded_renderer_tick(20);
     fire(root, ER_EVENT_LONG_PRESS);
@@ -918,18 +919,18 @@ static void test_animations(void)
     /* A parallel group of a delay and a timing: done when both are, and not finished once the timing stops. */
     base();
     {
-        s_package_spec.anims[2] = (TAnim){ERB_ANIM_PARALLEL, 0, 0, ERB_NONE, 0, 3, 2, 0, 0, 0, {0, 0, 0, 0}};
-        s_package_spec.anims[3] = (TAnim){ERB_ANIM_TIMING, 0, 0, ERB_NONE, 0, 0, 0, 200, 0, 0, {0, 0, 0, 0}};
+        s_package_spec.anims[2] = (TAnim){ERB_ANIMATION_PARALLEL, 0, 0, ERB_NONE, 0, 3, 2, 0, 0, 0, {0, 0, 0, 0}};
+        s_package_spec.anims[3] = (TAnim){ERB_ANIMATION_TIMING, 0, 0, ERB_NONE, 0, 0, 0, 200, 0, 0, {0, 0, 0, 0}};
         s_package_spec.anims[4] =
-            (TAnim){ERB_ANIM_TIMING, ER_EASE_LINEAR, 0, SLOT_FADE, 0, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
+            (TAnim){ERB_ANIMATION_TIMING, ER_EASE_LINEAR, 0, SLOT_FADE, 0, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
         s_package_spec.anim_count = 5;
-        const uint8_t types[] = {ERB_T_ANIM};
+        const uint8_t types[] = {ERB_TYPE_ANIMATION};
         const uint32_t start[] = {
             OP_ABX(ASTART, 0, 2), ERB_PACK16(FUNCTION_DONE, ERB_NO_REGISTER), OP_ABC(RET, 0, 0, 0)};
         tpkg_set_code(&s_package_spec, press, types, 1, start, 3);
-        const uint8_t done_types[] = {ERB_T_BOOL, ERB_T_INT};
+        const uint8_t done_types[] = {ERB_TYPE_BOOL, ERB_TYPE_INT};
         const uint32_t done[] = {
-            OP_ABC(EVT, 0, ERB_EVT_FINISHED, 0),
+            OP_ABC(EVT, 0, ERB_EVENT_FIELD_FINISHED, 0),
             OP_ABX(LOADI, 1, 100),
             OP_ABX(JF, 0, 1),
             OP_ABX(LOADI, 1, 200),
@@ -956,11 +957,11 @@ static void test_animations(void)
     }
     CHECK(slot_int(SLOT_COUNT) == 200, "and is done, finished, once both are");
 
-    er_anim_value_set((ERAnimValueHandle)fade, 0.0f);
+    er_animation_value_set((ERAnimationValueHandle)fade, 0.0f);
     fire(root, ER_EVENT_PRESS);
     embedded_renderer_tick(20);
     erb_tick(20);
-    er_anim_value_set((ERAnimValueHandle)fade, 0.5f);
+    er_animation_value_set((ERAnimationValueHandle)fade, 0.5f);
     CHECK(slot_int(SLOT_COUNT) == 100, "a stopped child ends it at once, not finished, before its delay is up");
 
     /* An interpolated binding maps the value onto the prop. */
@@ -973,9 +974,9 @@ static void test_animations(void)
     s_package_spec.has_debug = false;
     CHECK(load(), "an interpolated binding loads");
     memcpy(&fade, slot(SLOT_FADE), sizeof(fade));
-    er_anim_value_set((ERAnimValueHandle)fade, 0.5f);
+    er_animation_value_set((ERAnimationValueHandle)fade, 0.5f);
     CHECK(slot_node(SLOT_ROOT, 0)->transform_rotate_z == 45.0f, "and drives its prop through the interpolation");
-    er_anim_value_set((ERAnimValueHandle)fade, 3.0f);
+    er_animation_value_set((ERAnimationValueHandle)fade, 3.0f);
     CHECK(slot_node(SLOT_ROOT, 0)->transform_rotate_z == 90.0f, "clamped past its range");
 }
 
@@ -996,7 +997,7 @@ static void test_faults(void)
     CHECK(!erb_running(), "a TRAP stops the app");
     erb_tick(0);
     const ErbError* error = erb_last_error();
-    CHECK(error->status == ERB_ERR_TRAP && error->name && strcmp(error->name, "boom") == 0, "with the trap's reason");
+    CHECK(error->status == ERB_ERROR_TRAP && error->name && strcmp(error->name, "boom") == 0, "with the trap's reason");
     CHECK(error->file && strcmp(error->file, "App.jsx") == 0 && error->line == 41, "and the source line");
     CHECK(er_error_screen_active(), "the next tick shows the error screen");
     CHECK(load() && !er_error_screen_active(), "and a good load takes it down");
@@ -1004,7 +1005,7 @@ static void test_faults(void)
     /* A timer that can run past the budget is counted, and stopped when it does. */
     base();
     {
-        const uint8_t types[] = {ERB_T_BOOL, ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_BOOL, ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t boot[] = {
             OP_ABX(LOADI, 2, 10),
             OP_ABC(TSTART, 1, 2, 0),
@@ -1012,7 +1013,7 @@ static void test_faults(void)
             OP_ABC(RET, 0, 0, 0),
         };
         tpkg_set_code(&s_package_spec, FUNCTION_BOOT, types, 3, boot, 4);
-        const uint8_t loop_types[] = {ERB_T_INT, ERB_T_INT, ERB_T_INT};
+        const uint8_t loop_types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t loop[] = {
             OP_ABX(LOOPSET, 0, 1000),
             OP_ABX(LOOPSET, 1, 1000),
@@ -1026,7 +1027,7 @@ static void test_faults(void)
     s_config.budget = 5000;
     CHECK(load(), "loads");
     erb_tick(10);
-    CHECK(!erb_running() && erb_last_error()->status == ERB_ERR_BUDGET, "running out of budget stops the app");
+    CHECK(!erb_running() && erb_last_error()->status == ERB_ERROR_BUDGET, "running out of budget stops the app");
 }
 
 static void test_reload(void)
@@ -1038,7 +1039,7 @@ static void test_reload(void)
     static uint32_t bad[TEST_PACKAGE_WORDS];
     const uint32_t bad_length = tpkg_build(&s_package_spec, (uint8_t*)bad);
     ErbError error;
-    CHECK(!erb_load(bad, bad_length, &s_config, &error) && error.status == ERB_ERR_NEWER_FORMAT,
+    CHECK(!erb_load(bad, bad_length, &s_config, &error) && error.status == ERB_ERROR_NEWER_FORMAT,
           "a package that fails verification is refused");
     CHECK(erb_running() && er_node_in_use_count() == 4, "and the running app is left as it was");
     s_package_spec.major = ERB_FORMAT_MAJOR;

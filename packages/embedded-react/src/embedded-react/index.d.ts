@@ -670,9 +670,9 @@ export interface SvgPaintProps {
   strokeMiterlimit?: SvgNumber;
   fillRule?: 'nonzero' | 'evenodd';
   /** Fills with a gradient instead of the solid `fill`. */
-  fillGrad?: VectorGradient;
+  fillGradient?: VectorGradient;
   /** Strokes with a gradient instead of the solid `stroke`. */
-  strokeGrad?: VectorGradient;
+  strokeGradient?: VectorGradient;
 }
 
 /** A `.svg` import: the build bakes it to a vector op-tape, or to a raster asset when it uses features the
@@ -1058,8 +1058,8 @@ export interface VectorShape {
   cap?: 'butt' | 'round' | 'square';
   join?: 'miter' | 'round' | 'bevel';
   fillRule?: 'nonzero' | 'evenodd';
-  fillGrad?: VectorGradient;
-  strokeGrad?: VectorGradient;
+  fillGradient?: VectorGradient;
+  strokeGradient?: VectorGradient;
 }
 
 /**
@@ -1103,7 +1103,7 @@ export interface KeyboardConfig {
   rowHeight?: number;
   keyGap?: number;
   keyRadius?: number;
-  gridCols?: number;
+  gridColumns?: number;
   layers?: KeyboardKey[][][];
 }
 

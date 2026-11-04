@@ -121,7 +121,7 @@ int main(int argc, char** argv)
     ErContainerStatus boot_status = er_runtime_load_container(boot, boot_length);
     if (boot_status != ER_CONTAINER_OK)
     {
-        printf("FAIL: boot load -> %s\n", er_runtime_container_status_str(boot_status));
+        printf("FAIL: boot load -> %s\n", er_runtime_container_status_name(boot_status));
         return 1;
     }
     er_runtime_pump();
@@ -143,7 +143,7 @@ int main(int argc, char** argv)
     ErContainerStatus reload_status = er_hotreload_apply(frame, frame_length);
     if (reload_status != ER_CONTAINER_OK)
     {
-        printf("FAIL: app-only soft reload -> %s\n", er_runtime_container_status_str(reload_status));
+        printf("FAIL: app-only soft reload -> %s\n", er_runtime_container_status_name(reload_status));
         return 1;
     }
     er_runtime_pump();

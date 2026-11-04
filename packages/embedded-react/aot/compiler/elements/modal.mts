@@ -38,7 +38,7 @@ import type {IrNode} from '../ir/nodes.mts';
 // Overlay defaults: absolute, fill the parent via four 0 insets (the robust "stretch" for an absolute
 // node), center the content. The user's style overrides any of these.
 const DEFAULTS: StaticAssign[] = [
-  {field: 'position', value: 'ER_POS_ABSOLUTE'},
+  {field: 'position', value: 'ER_POSITION_ABSOLUTE'},
   {field: 'left', value: 0},
   {field: 'top', value: 0},
   {field: 'right', value: 0},

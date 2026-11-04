@@ -219,7 +219,7 @@ static ERProps props_default(void)
  */
 static void pin_box(ERProps* props, bool padded)
 {
-    props->position = ER_POS_ABSOLUTE; /* pin the box so padding is the ONLY difference between cases */
+    props->position = ER_POSITION_ABSOLUTE; /* pin the box so padding is the ONLY difference between cases */
     props->left = BOX_X;
     props->top = BOX_Y;
     props->width = BOX_WIDTH;
@@ -279,8 +279,21 @@ static void render_leaf(const ERProps* leaf_props, ERNodeType type, void (*confi
  */
 static void configure_vector(ERNode* node)
 {
-    static const float tape[] = {
-        ER_VOP_SHAPE, 0, ER_VOP_MOVE, 0, 0, ER_VOP_LINE, 12, 0, ER_VOP_LINE, 12, 12, ER_VOP_LINE, 0, 12, ER_VOP_CLOSE};
+    static const float tape[] = {ER_VECTOR_OP_SHAPE,
+                                 0,
+                                 ER_VECTOR_OP_MOVE,
+                                 0,
+                                 0,
+                                 ER_VECTOR_OP_LINE,
+                                 12,
+                                 0,
+                                 ER_VECTOR_OP_LINE,
+                                 12,
+                                 12,
+                                 ER_VECTOR_OP_LINE,
+                                 0,
+                                 12,
+                                 ER_VECTOR_OP_CLOSE};
     ERVectorPaint paint = {0};
     paint.fill = 0xFFFF0000U;
     er_node_set_vector_ops(node, tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint, 1, NULL, 0);
@@ -489,7 +502,7 @@ int main(void)
                     BOX_Y + PADDING_TOP + 5);
             return EXIT_FAILURE;
         }
-        if (dirty.w != 10 || dirty.h != 10)
+        if (dirty.width != 10 || dirty.height != 10)
             return fail("Svg: padding changed the size of the sub-region damage rect");
 
         er_tree_remove_child(root, vector);

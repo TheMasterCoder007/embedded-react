@@ -1591,12 +1591,12 @@ void er_dispatch_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y)
                     {
                         const uint8_t new_value = press_target->props.switch_props.value ? 0U : 1U;
                         press_target->props.switch_props.value = new_value;
-                        ERAnimConfig config;
+                        ERAnimationConfig config;
                         memset(&config, 0, sizeof(config));
-                        config.type = ER_ANIM_TIMING;
+                        config.type = ER_ANIMATION_TIMING;
                         config.easing = ER_EASE_EASE_IN_OUT;
                         config.duration_ms = ER_SWITCH_THUMB_MS;
-                        er_anim_start(press_target, ER_PROP_SWITCH_THUMB, new_value ? 1.0f : 0.0f, &config);
+                        er_animation_start(press_target, ER_PROP_SWITCH_THUMB, new_value ? 1.0f : 0.0f, &config);
                         er_mark_dirty_upward(press_target);
                         /* onValueChange: the new value, so a host needs no PRESS-then-guess round-trip. */
                         const EREventHandler* value_handler = &press_target->events[ER_EVENT_VALUE_CHANGE];

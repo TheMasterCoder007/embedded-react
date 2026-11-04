@@ -141,7 +141,7 @@ static void setup_backend(TestCtx* test_context)
     backend.blend_rect = blend_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL;
-    backend.ctx = test_context;
+    backend.context = test_context;
     embedded_renderer_set_backend(&backend);
 }
 

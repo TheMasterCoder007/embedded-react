@@ -233,7 +233,7 @@ static void* worker_main(void* argument)
         if (stop)
             return NULL;
 
-        er_render_worker_exec(worker_index);
+        er_render_worker_execute(worker_index);
 
         pthread_mutex_lock(&s_done_mutex);
         s_done_count++;
@@ -345,7 +345,7 @@ int main(void)
         .dispatch = host_dispatch,
         .sync = host_sync,
         .worker_id = host_worker_id,
-        .ctx = NULL,
+        .context = NULL,
     };
     embedded_renderer_set_workers(&hooks);
     if (er_render_workers_active() != WORKER_COUNT)
@@ -392,7 +392,7 @@ int main(void)
         /* A 40px-tall tile whose color changes drive the partial-damage round below. */
         ERNode* tile = er_node_create(ER_NODE_VIEW);
         ERProps tile_props = base;
-        tile_props.position = ER_POS_ABSOLUTE;
+        tile_props.position = ER_POSITION_ABSOLUTE;
         tile_props.left = 2;
         tile_props.top = 2;
         tile_props.width = 14;
@@ -406,7 +406,7 @@ int main(void)
          * translucent child: cross-slice strip composites at depth 2. */
         ERNode* group = er_node_create(ER_NODE_VIEW);
         ERProps group_props = base;
-        group_props.position = ER_POS_ABSOLUTE;
+        group_props.position = ER_POSITION_ABSOLUTE;
         group_props.left = 20;
         group_props.top = 20;
         group_props.width = 30;
@@ -416,7 +416,7 @@ int main(void)
         er_node_set_props(group, &group_props);
         ERNode* inner = er_node_create(ER_NODE_VIEW);
         ERProps inner_props = base;
-        inner_props.position = ER_POS_ABSOLUTE;
+        inner_props.position = ER_POSITION_ABSOLUTE;
         inner_props.left = 6;
         inner_props.top = 10;
         inner_props.width = 18;
@@ -432,7 +432,7 @@ int main(void)
          * (a no-op scale on TRANSLATE_ONLY builds — equivalence holds either way). */
         ERNode* scaled = er_node_create(ER_NODE_VIEW);
         ERProps scaled_props = base;
-        scaled_props.position = ER_POS_ABSOLUTE;
+        scaled_props.position = ER_POSITION_ABSOLUTE;
         scaled_props.left = 52;
         scaled_props.top = 26;
         scaled_props.width = 8;
@@ -488,7 +488,7 @@ int main(void)
         ERNode* root = new_scene();
         ERNode* arc = er_node_create(ER_NODE_ARC);
         ERProps arc_props = auto_props();
-        arc_props.position = ER_POS_ABSOLUTE;
+        arc_props.position = ER_POSITION_ABSOLUTE;
         arc_props.left = 10;
         arc_props.top = 10;
         arc_props.width = 40;

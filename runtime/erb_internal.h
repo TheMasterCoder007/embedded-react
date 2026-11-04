@@ -170,7 +170,7 @@ typedef struct
 
     uint32_t largest_tape;                               /**< Floats in the largest tape (the scratch must hold it). */
     uint16_t natives[ERB_MAX_IMPORTS];                   /**< Each import's index in ErbConfig::natives. */
-    uint32_t needs[ERB_RES_COUNT_];                      /**< Each resource's declared need (0 when not named). */
+    uint32_t needs[ERB_RESOURCE_COUNT_];                 /**< Each resource's declared need (0 when not named). */
     uint32_t counting[ERB_BIT_WORDS(ERB_MAX_FUNCTIONS)]; /**< Entry points whose worst case exceeds the budget. */
 } ErbProgram;
 
@@ -197,12 +197,12 @@ static inline const uint8_t* erb_template(const ErbProgram* program, uint32_t in
 
 static inline const uint8_t* erb_anim(const ErbProgram* program, uint32_t index)
 {
-    return program->anims + index * ERB_ANIM_SIZE;
+    return program->anims + index * ERB_ANIMATION_SIZE;
 }
 
 static inline const uint8_t* erb_interp(const ErbProgram* program, uint32_t index)
 {
-    return program->interps + index * ERB_INTERP_SIZE;
+    return program->interps + index * ERB_INTERPOLATION_SIZE;
 }
 
 static inline const uint8_t* erb_tape(const ErbProgram* program, uint32_t index)
@@ -238,7 +238,7 @@ uint32_t erb_field_bytes(uint8_t type, uint16_t capacity);
 /** @brief Register cells a value type takes. */
 static inline uint32_t erb_type_cells(uint8_t type)
 {
-    return (type == ERB_T_INT64 || type == ERB_T_DOUBLE || type == ERB_T_NODE) ? 2u : 1u;
+    return (type == ERB_TYPE_INT64 || type == ERB_TYPE_DOUBLE || type == ERB_TYPE_NODE) ? 2u : 1u;
 }
 
 /** @brief Instruction length in words, or 0 for an opcode this format doesn't have. */
@@ -270,7 +270,7 @@ typedef struct
     uint16_t reserved;
 } ErbTimer;
 
-/** @brief A running animation descriptor (ERB_ANIM_ENTRY_SIZE bytes): one per descriptor in a started tree. */
+/** @brief A running animation descriptor (ERB_ANIMATION_ENTRY_SIZE bytes): one per descriptor in a started tree. */
 typedef struct
 {
     uint16_t descriptor; /**< Descriptor index. */
@@ -326,7 +326,7 @@ bool erb_verify(
     const void* package, size_t package_bytes, const ErbConfig* config, ErbProgram* program, ErbError* error);
 
 /** @brief The VM's arithmetic, for a layout check: an ERB_MATH_ function, its int conversion and its whole-number
- * division (an ERB_CK_IDIV_ mode). */
+ * division (an ERB_CHECK_OP_IDIV_ mode). */
 double erb_vm_dmath(uint32_t function, double left, double right);
 double erb_vm_to_int(double value);
 double erb_vm_idiv(uint32_t mode, double dividend, double divisor);

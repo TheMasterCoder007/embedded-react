@@ -25,16 +25,16 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief BitmapFont format: packed 1-bit-per-pixel glyph bitmaps (MSB-first). */
-#define ERUI_FONT_FMT_1BIT 1
+#define ERUI_FONT_FORMAT_1BIT 1
 
 /** @brief BitmapFont format: packed 2-bit-per-pixel grayscale (4 pixels/byte, MSB pair = left). */
-#define ERUI_FONT_FMT_2BIT 2
+#define ERUI_FONT_FORMAT_2BIT 2
 
 /** @brief BitmapFont format: packed 4-bit-per-pixel grayscale (2 pixels/byte, high nibble = left). */
-#define ERUI_FONT_FMT_4BIT 4
+#define ERUI_FONT_FORMAT_4BIT 4
 
 /** @brief BitmapFont format: 8-bit grayscale glyph bitmaps (1 byte per pixel). */
-#define ERUI_FONT_FMT_8BIT 8
+#define ERUI_FONT_FORMAT_8BIT 8
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types
@@ -73,7 +73,7 @@ typedef struct
  *
  * The dense glyph array covers the contiguous range [first, last].
  * Additional symbols outside that range are stored in the extra array.
- * The format field stores the bits-per-pixel of the bitmap data (ERUI_FONT_FMT_*
+ * The format field stores the bits-per-pixel of the bitmap data (ERUI_FONT_FORMAT_*
  * constants): 1 (packed 1-bit, MSB-first), 2 (2-bit grayscale, 4px/byte),
  * 4 (4-bit grayscale, 2px/byte), or 8 (8-bit grayscale, 1 byte/pixel).
  * A value of 0 is treated as 1-bit for backward compatibility.
@@ -89,7 +89,7 @@ typedef struct
     uint8_t pixel_size;       /**< Nominal font size in pixels (cap height). */
     uint8_t line_height;      /**< Recommended line height including leading. */
     uint8_t baseline;         /**< Distance from the top of the line box to the text baseline. */
-    uint8_t format;           /**< Bits per pixel: 1, 2, 4, or 8 (ERUI_FONT_FMT_* constants). 0 treated as 1-bit. */
+    uint8_t format;           /**< Bits per pixel: 1, 2, 4, or 8 (ERUI_FONT_FORMAT_* constants). 0 treated as 1-bit. */
 } BitmapFont;
 
 /*----------------------------------------------------------------------------------------------------------------------

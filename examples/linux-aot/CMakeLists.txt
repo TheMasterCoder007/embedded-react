@@ -26,13 +26,13 @@ set(ERUI_GRADIENT_RADIAL ON     CACHE BOOL   "" FORCE)
 set(ERUI_GRADIENT_CONIC  ON     CACHE BOOL   "" FORCE)
 set(ERUI_ONSCREEN_KEYBOARD ON   CACHE BOOL   "" FORCE)
 set(ERUI_TRANSFORMS      "FULL" CACHE STRING "" FORCE)
-set(ERUI_SCRATCH_W       "512"  CACHE STRING "" FORCE)
-set(ERUI_SCRATCH_H       "512"  CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_WIDTH   "512"  CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_HEIGHT  "512"  CACHE STRING "" FORCE)
 # Roomy vector pools so a baked <Svg source> (a designer dial = many flattened arc points) renders without
 # truncating — matches tools/simulator + tools/web-sim.
 set(ERUI_VECTOR_TAPE_MAX   "8192" CACHE STRING "" FORCE)
 set(ERUI_VECTOR_PAINTS_MAX "1024" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_MAX_PTS    "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_POINTS "4096" CACHE STRING "" FORCE)
 set(ERUI_VECTOR_MAX_EDGES  "4096" CACHE STRING "" FORCE)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../engine       ${CMAKE_CURRENT_BINARY_DIR}/engine)

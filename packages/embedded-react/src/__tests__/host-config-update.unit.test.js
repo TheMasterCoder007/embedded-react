@@ -398,7 +398,7 @@ describe('animated bindings are released when a prop stops being animated', () =
 
     expect(calls.animUnbind).toEqual([{handle, prop: 'opacity'}]);
     expect(calls.setProps[0].props.opacity).toBe(0.5);
-    // setProps re-pushes every value STILL bound to the node (er_anim_reapply_bound), so unbinding
+    // setProps re-pushes every value STILL bound to the node (er_animation_reapply_bound), so unbinding
     // afterwards would leave the last animated float on the node instead of the 0.5 just written.
     expect(order).toEqual([
       `animUnbind:${handle}:opacity`,

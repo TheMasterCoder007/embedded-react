@@ -33,28 +33,28 @@ set(ERUI_ONSCREEN_KEYBOARD ON   CACHE BOOL   "" FORCE)
 set(ERUI_TRANSFORMS      "FULL" CACHE STRING "" FORCE)
 
 # Scene / compositor / animation pools — generous so large screens and busy UIs render fully.
-set(ERUI_MAX_NODES          "4096"    CACHE STRING "" FORCE)
-set(ERUI_MAX_OPACITY_DEPTH  "16"      CACHE STRING "" FORCE)
-set(ERUI_MAX_ANIM_VALUES    "256"     CACHE STRING "" FORCE)
-set(ERUI_MAX_VALUE_BINDINGS "16"      CACHE STRING "" FORCE)
-set(ERUI_FONT_POOL_BYTES    "1048576" CACHE STRING "" FORCE)  # enable runtime er_font_load (0 disables it)
-set(ERUI_MAX_IMG_ROW_PIXELS "4096"    CACHE STRING "" FORCE)
-set(ERUI_SCRATCH_W          "1024"    CACHE STRING "" FORCE)  # max compositable / transformed node size
-set(ERUI_SCRATCH_H          "1024"    CACHE STRING "" FORCE)
-set(ERUI_FADE_CACHE_W       "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
-set(ERUI_FADE_CACHE_H       "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
+set(ERUI_MAX_NODES            "4096"    CACHE STRING "" FORCE)
+set(ERUI_MAX_OPACITY_DEPTH    "16"      CACHE STRING "" FORCE)
+set(ERUI_MAX_ANIMATION_VALUES "256"     CACHE STRING "" FORCE)
+set(ERUI_MAX_VALUE_BINDINGS   "16"      CACHE STRING "" FORCE)
+set(ERUI_FONT_POOL_BYTES      "1048576" CACHE STRING "" FORCE)  # enable runtime er_font_load (0 disables it)
+set(ERUI_MAX_IMAGE_ROW_PIXELS "4096"    CACHE STRING "" FORCE)
+set(ERUI_SCRATCH_WIDTH        "1024"    CACHE STRING "" FORCE)  # max compositable / transformed node size
+set(ERUI_SCRATCH_HEIGHT       "1024"    CACHE STRING "" FORCE)
+set(ERUI_FADE_CACHE_WIDTH     "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
+set(ERUI_FADE_CACHE_HEIGHT    "1024"    CACHE STRING "" FORCE)  # composited-subtree cache for opacity animations
 
 # Roomy vector pools so imported SVGs (many shapes / a long op-tape) render in the preview without
 # truncating — matches tools/web-sim. Per-board caps are tuned separately.
-set(ERUI_VECTOR_TAPE_MAX     "8192" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_PAINTS_MAX   "1024" CACHE STRING "" FORCE)  # a designer dial face is ~100 shapes = ~700 paints
-set(ERUI_VECTOR_GRADS_MAX    "256"  CACHE STRING "" FORCE)  # gradient entries per node (linear/radial/conic)
-set(ERUI_VECTOR_GRAD_LUT     "1024" CACHE STRING "" FORCE)  # gradient colour-LUT entries (smoother ramps)
-set(ERUI_VECTOR_MAX_PTS      "4096" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_MAX_SUBPATHS "1024" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_MAX_EDGES    "4096" CACHE STRING "" FORCE)
-set(ERUI_VECTOR_MAX_ROW      "4096" CACHE STRING "" FORCE)  # max vector-node width in px
-set(ERUI_MAX_VECTOR_NODES    "64"   CACHE STRING "" FORCE)  # concurrent vector nodes holding geometry
+set(ERUI_VECTOR_TAPE_MAX      "8192" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_PAINTS_MAX    "1024" CACHE STRING "" FORCE)  # a designer dial face is ~100 shapes = ~700 paints
+set(ERUI_VECTOR_GRADIENTS_MAX "256"  CACHE STRING "" FORCE)  # gradient entries per node (linear/radial/conic)
+set(ERUI_VECTOR_GRAD_LUT      "1024" CACHE STRING "" FORCE)  # gradient colour-LUT entries (smoother ramps)
+set(ERUI_VECTOR_MAX_POINTS    "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_SUBPATHS  "1024" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_EDGES     "4096" CACHE STRING "" FORCE)
+set(ERUI_VECTOR_MAX_ROW       "4096" CACHE STRING "" FORCE)  # max vector-node width in px
+set(ERUI_MAX_VECTOR_NODES     "64"   CACHE STRING "" FORCE)  # concurrent vector nodes holding geometry
 
 set(ER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
@@ -69,15 +69,15 @@ add_subdirectory(${ER_ROOT}/bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/
 # Match the engine's raised caps on the bridge side. The bridge keeps its OWN fixed-size pools (node-handle
 # table, animation-completion slots, timers, and a copy of the JS vector op-tape) that gate JS-side creation
 # independently of the engine, so each must be >= its engine counterpart or the simulator silently caps below
-# the engine limit (e.g. handles < ERUI_MAX_NODES truncates node creation; completions < ERUI_MAX_ANIM_VALUES
+# the engine limit (e.g. handles < ERUI_MAX_NODES truncates node creation; completions < ERUI_MAX_ANIMATION_VALUES
 # drops callbacks; a small op-tape buffer truncates large SVGs first).
 target_compile_definitions(er-bridge-quickjs PRIVATE
         ER_BRIDGE_MAX_HANDLES=8192            # >= ERUI_MAX_NODES (4096)
-        ER_BRIDGE_MAX_ANIM_COMPLETIONS=256    # >= ERUI_MAX_ANIM_VALUES (256)
+        ER_BRIDGE_MAX_ANIM_COMPLETIONS=256    # >= ERUI_MAX_ANIMATION_VALUES (256)
         ER_BRIDGE_MAX_TIMERS=256
         VEC_BRIDGE_MAX_OPS=8192               # >= ERUI_VECTOR_TAPE_MAX
         VEC_BRIDGE_MAX_PAINTS=1024            # >= ERUI_VECTOR_PAINTS_MAX
-        VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADS_MAX})
+        VEC_BRIDGE_MAX_GRADS=${ERUI_VECTOR_GRADIENTS_MAX})
 
 # A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

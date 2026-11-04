@@ -78,8 +78,8 @@ extern "C"
     typedef struct
     {
         uint32_t magic;
-        uint32_t pc;      /**< Where the fault happened, or 0. */
-        uint32_t address; /**< The address it touched, or 0. */
+        uint32_t program_counter; /**< Where the fault happened, or 0. */
+        uint32_t address;         /**< The address it touched, or 0. */
         char reason[ER_FAULT_REASON_BYTES];
         uint32_t check;
     } ERFaultRecord;

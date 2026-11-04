@@ -368,7 +368,7 @@ import gauge from './gauge.svg';
 
 **Paint props**, on `<Svg>`, `<G>` and every shape: `fill`, `stroke`, `strokeWidth`, `strokeLinecap`
 (`butt`/`round`/`square`), `strokeLinejoin` (`miter`/`round`/`bevel`), `strokeMiterlimit`,
-`fillRule` (`nonzero`/`evenodd`), and `fillGrad`/`strokeGrad`, a gradient
+`fillRule` (`nonzero`/`evenodd`), and `fillGradient`/`strokeGradient`, a gradient
 `{type: 1 linear | 2 radial | 3 conic, stops: [{color, offset}], ax, ay, bx, by, r}` with up to 8
 stops. Colors accept `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`/`rgba()` and the
 [named colours](./styles.md#colours).
@@ -474,13 +474,13 @@ updateVector(
 - **`updateVector(handle, shapes, dirtyRect?)`** sets an `<Svg>` node's geometry from primitive
   descriptors, skipping React and the `d` parser. Each shape has exactly one geometry key (`arc`,
   `circle`, `line`, `rect`, `path`) plus paint in the short spellings (`fill`, `stroke`, `strokeWidth`,
-  `cap`, `join`, `miter`, `fillRule`, `fillGrad`, `strokeGrad`). The optional `dirtyRect`
+  `cap`, `join`, `miter`, `fillRule`, `fillGradient`, `strokeGradient`). The optional `dirtyRect`
   `[x, y, w, h]`, in node-local pixels, limits the repaint to that region.
 - **`updateText(handle, text)`** sets a `<Text>` node's content without touching its style. A later
   React render reverts it cleanly.
 - **`setKeyboardConfig(config?)`** replaces the on-screen keyboard's layout and colours
   (`panelColor`, `keyColor`, `keyActiveColor`, `labelColor`, `fontSize`, `rowHeight`, `keyGap`,
-  `keyRadius`, `gridCols`, and `layers` as rows of keys with `char`, `label`, `layer`, `backspace`,
+  `keyRadius`, `gridColumns`, and `layers` as rows of keys with `char`, `label`, `layer`, `backspace`,
   `done`, `span`, `highlight`). Pass nothing to restore the built-in QWERTY. A no-op in builds without
   the keyboard.
 

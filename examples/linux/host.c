@@ -272,7 +272,7 @@ bool er_host_load_app(ErHost* host, const char* explicit_path)
         const ErContainerStatus status = er_runtime_load_container(loaded, length);
         if (status != ER_CONTAINER_OK)
         {
-            const char* reason = er_runtime_container_status_str(status);
+            const char* reason = er_runtime_container_status_name(status);
             SDL_Log("config rejected: %s", reason);
             er_runtime_show_message("Couldn't load config", reason, "Re-pack with `npm run pack`.");
         }
@@ -318,7 +318,7 @@ bool er_host_load_config(ErHost* host)
     const ErContainerStatus status = er_runtime_load_container(loaded, length);
     if (status != ER_CONTAINER_OK)
     {
-        const char* reason = er_runtime_container_status_str(status);
+        const char* reason = er_runtime_container_status_name(status);
         SDL_Log("config rejected: %s", reason);
         er_runtime_show_message("Couldn't load config", reason, "Re-pack with `npm run pack`, then restart.");
         return false; /* `loaded` kept: asset sections may already reference it */

@@ -147,11 +147,11 @@ static int test_image_replace(void)
     for (int slot_index = 1; slot_index < (int)ERUI_IMAGE_REGISTRY_MAX; slot_index++) /* slot 0 holds "logo" */
     {
         snprintf(name, sizeof(name), "img%d", slot_index);
-        const bool ok = image_registry_store(name, pixels_a, 1, 1, ER_IMG_ARGB8888);
+        const bool ok = image_registry_store(name, pixels_a, 1, 1, ER_IMAGE_ARGB8888);
         CHECK(ok, "image: fill to capacity");
     }
-    CHECK(image_registry_store("logo", pixels_a, 2, 2, ER_IMG_ARGB8888), "image: replace when registry is full");
-    CHECK(!image_registry_store("overflow", pixels_a, 1, 1, ER_IMG_ARGB8888), "image: new name rejected when full");
+    CHECK(image_registry_store("logo", pixels_a, 2, 2, ER_IMAGE_ARGB8888), "image: replace when registry is full");
+    CHECK(!image_registry_store("overflow", pixels_a, 1, 1, ER_IMAGE_ARGB8888), "image: new name rejected when full");
 
     /* The pool really is ERUI_IMAGE_REGISTRY_MAX slots deep, not the header's #ifndef fallback. The
      * define is PUBLIC precisely so a build that tunes the knob moves this loop with it; were it
@@ -188,21 +188,21 @@ static int test_image_format_and_opacity(void)
 
     er_image_load("opaque", opaque_pixels, 2, 2);
     const ImageEntry* entry = image_registry_get("opaque");
-    CHECK(entry && entry->format == ER_IMG_ARGB8888 && entry->opaque, "format: fully opaque ARGB scans as opaque");
+    CHECK(entry && entry->format == ER_IMAGE_ARGB8888 && entry->opaque, "format: fully opaque ARGB scans as opaque");
 
     er_image_load("translucent", translucent_pixels, 2, 2);
     entry = image_registry_get("translucent");
-    CHECK(entry && entry->format == ER_IMG_ARGB8888 && !entry->opaque,
+    CHECK(entry && entry->format == ER_IMAGE_ARGB8888 && !entry->opaque,
           "format: one translucent pixel scans as non-opaque");
 
     er_image_load_rgb565("bg565", rgb565_pixels, 2, 2);
     entry = image_registry_get("bg565");
-    CHECK(entry && entry->format == ER_IMG_RGB565 && entry->opaque, "format: RGB565 registers as opaque 565");
+    CHECK(entry && entry->format == ER_IMAGE_RGB565 && entry->opaque, "format: RGB565 registers as opaque 565");
 
     /* Re-registering an existing name with new pixels must re-scan and can change format. */
     er_image_load("bg565", translucent_pixels, 2, 2);
     entry = image_registry_get("bg565");
-    CHECK(entry && entry->format == ER_IMG_ARGB8888 && !entry->opaque, "format: replace re-scans opacity and format");
+    CHECK(entry && entry->format == ER_IMAGE_ARGB8888 && !entry->opaque, "format: replace re-scans opacity and format");
 
     /* An out-of-range format must be rejected before it decides the buffer's element size. */
     CHECK(!image_registry_store("badfmt", opaque_pixels, 2, 2, (ERImageFormat)7), "format: unknown format rejected");
@@ -210,7 +210,7 @@ static int test_image_format_and_opacity(void)
 
     /* RGB565 buffers are read as uint16_t: a misaligned pointer must be rejected up front. */
     const uint8_t* misaligned = (const uint8_t*)rgb565_pixels + 1;
-    CHECK(!image_registry_store("badalign", misaligned, 1, 1, ER_IMG_RGB565),
+    CHECK(!image_registry_store("badalign", misaligned, 1, 1, ER_IMAGE_RGB565),
           "format: misaligned RGB565 buffer rejected");
     CHECK(image_registry_get("badalign") == NULL, "format: rejected alignment stored nothing");
 

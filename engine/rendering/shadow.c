@@ -38,13 +38,13 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /* Alpha-only working buffer: the blurred shape lives here before being tinted and blitted. */
-static uint8_t s_alpha[ERUI_SCRATCH_H][ERUI_SCRATCH_W];
+static uint8_t s_alpha[ERUI_SCRATCH_HEIGHT][ERUI_SCRATCH_WIDTH];
 
 /* Running-sum accumulator shared by hblur() and vblur(). Sized for the longer dimension. */
-static uint16_t s_blur_sums[ERUI_SCRATCH_W >= ERUI_SCRATCH_H ? ERUI_SCRATCH_W : ERUI_SCRATCH_H];
+static uint16_t s_blur_sums[ERUI_SCRATCH_WIDTH >= ERUI_SCRATCH_HEIGHT ? ERUI_SCRATCH_WIDTH : ERUI_SCRATCH_HEIGHT];
 
 /* One row of premultiplied ARGB8888 pixels assembled before each er_blit_blend() call. */
-static uint32_t s_row_buffer[ERUI_SCRATCH_W];
+static uint32_t s_row_buffer[ERUI_SCRATCH_WIDTH];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -207,12 +207,12 @@ void er_shadow_render(const ERViewProps* view_props, int x, int y, int width, in
         return;
 
     /* Skip gracefully when the node alone already exceeds the scratch buffer. */
-    if (width > ERUI_SCRATCH_W || height > ERUI_SCRATCH_H)
+    if (width > ERUI_SCRATCH_WIDTH || height > ERUI_SCRATCH_HEIGHT)
         return;
 
     /* Clamp blur radius so the padded shadow fits inside the scratch buffer. */
-    int max_radius_x = (ERUI_SCRATCH_W - width) / 2;
-    int max_radius_y = (ERUI_SCRATCH_H - height) / 2;
+    int max_radius_x = (ERUI_SCRATCH_WIDTH - width) / 2;
+    int max_radius_y = (ERUI_SCRATCH_HEIGHT - height) / 2;
     if (radius > max_radius_x)
         radius = max_radius_x;
     if (radius > max_radius_y)

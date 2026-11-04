@@ -394,7 +394,7 @@ static void copy_fmt_cb(
     }
     const int skip_x = x - original_x;
     const int skip_y = y - original_y;
-    if (format == ER_IMG_RGB565)
+    if (format == ER_IMAGE_RGB565)
     {
         for (int row = 0; row < height; row++)
         {
@@ -648,10 +648,10 @@ bool er_esp32_spi_lcd_backend_init(esp_lcd_panel_handle_t panel, esp_lcd_panel_i
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
-    backend.copy_rect_fmt = copy_fmt_cb;
+    backend.copy_rect_format = copy_fmt_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL;
-    backend.ctx = NULL;
+    backend.context = NULL;
 #if ER_LCD_BANDED
     backend.band_height = ER_LCD_BANDED_ROWS;
     backend.band_begin = band_begin_cb;

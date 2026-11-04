@@ -425,7 +425,7 @@ int main(void)
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
         ERProps child_props = props_default();
-        child_props.position = ER_POS_ABSOLUTE;
+        child_props.position = ER_POSITION_ABSOLUTE;
         child_props.left = (int16_t)(center_x - 8);
         child_props.top = (int16_t)(center_y - 8);
         child_props.width = 16;
@@ -476,7 +476,7 @@ int main(void)
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
         ERProps child_props = props_default();
-        child_props.position = ER_POS_ABSOLUTE;
+        child_props.position = ER_POSITION_ABSOLUTE;
         child_props.left = (int16_t)(center_x - 8);
         child_props.top = (int16_t)(center_y - 8);
         child_props.width = 16;
@@ -683,7 +683,7 @@ int main(void)
         ERProps child_props = props_default();
         child_props.width = 200;
         child_props.height = 200;
-        child_props.position = ER_POS_ABSOLUTE;
+        child_props.position = ER_POSITION_ABSOLUTE;
         child_props.left = (int16_t)(FRAMEBUFFER_WIDTH / 2 - 100); /* centre the 200×200 node on the framebuffer */
         child_props.top = (int16_t)(FRAMEBUFFER_HEIGHT / 2 - 100);
         child_props.background_color = 0xFFFF0000U; /* red */

@@ -216,7 +216,7 @@ static void render_padded_text(int16_t pad_left, int16_t pad_top, DrawBox* out)
 
     ERNode* text = er_node_create(ER_NODE_TEXT);
     ERProps text_props = props_default();
-    text_props.position = ER_POS_ABSOLUTE; /* pin the box so padding is the ONLY difference between cases */
+    text_props.position = ER_POSITION_ABSOLUTE; /* pin the box so padding is the ONLY difference between cases */
     text_props.left = BOX_X;
     text_props.top = BOX_Y;
     text_props.width = BOX_WIDTH;

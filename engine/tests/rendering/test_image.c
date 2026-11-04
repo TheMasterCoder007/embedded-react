@@ -43,8 +43,8 @@ typedef struct
     int framebuffer_height; /**< Framebuffer height in pixels. */
     int blend_calls;        /**< Total blend_rect calls received. */
     int copy_calls;         /**< Total copy_rect calls received. */
-    int format_calls;       /**< Total copy_rect_fmt calls received. */
-    int last_format;        /**< Format of the most recent copy_rect_fmt call (-1 = none). */
+    int format_calls;       /**< Total copy_rect_format calls received. */
+    int last_format;        /**< Format of the most recent copy_rect_format call (-1 = none). */
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -191,7 +191,7 @@ static uint32_t expand565(uint16_t pixel)
 }
 
 /**
- * @brief Backend copy_rect_fmt that consumes the source in its native format.
+ * @brief Backend copy_rect_format that consumes the source in its native format.
  *
  * Emulates a format-converting blitter (DMA2D M2M_PFC): RGB565 sources are expanded per pixel on
  * write, ARGB sources are written verbatim — no alpha inspection, per the opaque-source contract.
@@ -212,8 +212,8 @@ copy_fmt_cb(const void* source, int stride, ERImageFormat format, int x, int y, 
             if (pixel_x < 0 || pixel_x >= test_context->framebuffer_width || pixel_y < 0
                 || pixel_y >= test_context->framebuffer_height)
                 continue;
-            const uint32_t pixel = (format == ER_IMG_RGB565) ? expand565(((const uint16_t*)source_row)[column])
-                                                             : ((const uint32_t*)source_row)[column];
+            const uint32_t pixel = (format == ER_IMAGE_RGB565) ? expand565(((const uint16_t*)source_row)[column])
+                                                               : ((const uint32_t*)source_row)[column];
             test_context->framebuffer[pixel_y * test_context->framebuffer_width + pixel_x] = pixel;
         }
     }
@@ -765,12 +765,12 @@ int main(void)
     }
 
     /* =======================================================================
-     * copy_rect_fmt backend: opaque sources must reach the backend in their
+     * copy_rect_format backend: opaque sources must reach the backend in their
      * native format as ONE whole-rect call (the DMA2D M2M_PFC path) — never
      * row-expanded on the CPU, never per-pixel scanned via copy_rect.
      * ======================================================================= */
     EmbeddedRenderBackend format_backend = backend;
-    format_backend.copy_rect_fmt = copy_fmt_cb;
+    format_backend.copy_rect_format = copy_fmt_cb;
     embedded_renderer_set_backend(&format_backend); /* resets the image registry: re-register below */
 
     static const uint16_t image_565b[4] = {0xF800, 0x07E0, 0x001F, 0xFFFF};
@@ -780,7 +780,7 @@ int main(void)
     er_image_load_rgb565("test565", image_565b, 2, 2);
 
     /* -----------------------------------------------------------------------
-     * RGB565 1:1 — one copy_rect_fmt call carrying raw 565 rows; no CPU
+     * RGB565 1:1 — one copy_rect_format call carrying raw 565 rows; no CPU
      * expansion (copy_rect stays untouched), no blending.
      * ---------------------------------------------------------------------- */
     reset(&test_context);
@@ -806,8 +806,8 @@ int main(void)
         er_commit();
 
         if (test_context.format_calls != 1)
-            return fail("fmt backend rgb565 1:1: expected exactly one copy_rect_fmt call");
-        if (test_context.last_format != (int)ER_IMG_RGB565)
+            return fail("fmt backend rgb565 1:1: expected exactly one copy_rect_format call");
+        if (test_context.last_format != (int)ER_IMAGE_RGB565)
             return fail("fmt backend rgb565 1:1: source should arrive as RGB565");
         if (test_context.copy_calls != 0)
             return fail("fmt backend rgb565 1:1: copy_rect must not be used (no CPU row expansion)");
@@ -826,7 +826,7 @@ int main(void)
         er_commit();
 
         if (test_context.format_calls != 0)
-            return fail("fmt backend rgb565 scaled: copy_rect_fmt must not be used for scaling");
+            return fail("fmt backend rgb565 scaled: copy_rect_format must not be used for scaling");
         if (test_context.copy_calls == 0)
             return fail("fmt backend rgb565 scaled: expected the CPU copy path");
         if (px(&test_context, 0, 0) != 0xFFFF0000 || px(&test_context, 3, 3) != 0xFFFFFFFF)
@@ -838,7 +838,7 @@ int main(void)
     }
 
     /* -----------------------------------------------------------------------
-     * Opaque ARGB 1:1 — also routed through copy_rect_fmt (the opacity
+     * Opaque ARGB 1:1 — also routed through copy_rect_format (the opacity
      * guarantee lets the backend skip its per-pixel alpha scan).
      * ---------------------------------------------------------------------- */
     reset(&test_context);
@@ -864,8 +864,8 @@ int main(void)
         er_commit();
 
         if (test_context.format_calls != 1)
-            return fail("fmt backend argb 1:1: expected exactly one copy_rect_fmt call");
-        if (test_context.last_format != (int)ER_IMG_ARGB8888)
+            return fail("fmt backend argb 1:1: expected exactly one copy_rect_format call");
+        if (test_context.last_format != (int)ER_IMAGE_ARGB8888)
             return fail("fmt backend argb 1:1: source should arrive as ARGB8888");
         if (test_context.copy_calls != 0)
             return fail("fmt backend argb 1:1: copy_rect must not be used");
@@ -903,7 +903,7 @@ int main(void)
         er_commit();
 
         if (test_context.format_calls != 0)
-            return fail("fmt backend translucent: copy_rect_fmt must not receive a non-opaque source");
+            return fail("fmt backend translucent: copy_rect_format must not receive a non-opaque source");
         if (test_context.blend_calls == 0)
             return fail("fmt backend translucent: expected blend_rect");
 
@@ -920,7 +920,7 @@ int main(void)
      * larger than the repainted rect.
      * ---------------------------------------------------------------------- */
     {
-        /* No copy_rect_fmt, so RGB565 1:1 expands on the CPU. Setting the backend resets the image
+        /* No copy_rect_format, so RGB565 1:1 expands on the CPU. Setting the backend resets the image
          * registry, so the images load after it. */
         embedded_renderer_set_backend(&backend);
         er_image_load("test2x2", image_2x2, 2, 2);
@@ -963,7 +963,7 @@ int main(void)
 
             ERNode* overlay = er_node_create(ER_NODE_VIEW);
             ERProps overlay_props = props_default();
-            overlay_props.position = ER_POS_ABSOLUTE;
+            overlay_props.position = ER_POSITION_ABSOLUTE;
             overlay_props.left = 13;
             overlay_props.top = 17;
             overlay_props.width = 6;

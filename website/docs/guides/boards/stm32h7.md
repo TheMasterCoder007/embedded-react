@@ -72,7 +72,7 @@ ErDma2dBackendConfig cfg = {
     .width         = 800,
     .height        = 480,
     .stride_pixels = 800,                    /* LTDC rows often pad to 64 bytes */
-    .format        = ER_DMA2D_FB_RGB888,     /* or ARGB8888, RGB565 */
+    .format        = ER_DMA2D_FRAMEBUFFER_RGB888,     /* or ARGB8888, RGB565 */
     /* optional: interrupt-driven start/wait owned elsewhere (else the backend polls TCIF) */
     .start         = my_dma2d_start,
     .wait_complete = my_dma2d_wait,
@@ -91,7 +91,7 @@ target_link_libraries(my_firmware PRIVATE er-backend-dma2d)
 | ------------------------------------------------------------ | ------------------------------------------------------------- |
 | `fill_rect`, alpha 255                                       | DMA2D register-to-memory fill (R2M)                           |
 | `copy_rect`, source scans opaque                             | DMA2D memory-to-memory with pixel-format conversion (M2M/PFC) |
-| `copy_rect_fmt` (the engine guarantees opaque)               | DMA2D M2M/PFC, source in its own format, one transfer         |
+| `copy_rect_format` (the engine guarantees opaque)            | DMA2D M2M/PFC, source in its own format, one transfer         |
 | Translucent `fill_rect`, `copy_rect`/`blend_rect` with alpha | CPU source-over                                               |
 
 Translucent work stays on the CPU because DMA2D blends straight alpha and the engine emits

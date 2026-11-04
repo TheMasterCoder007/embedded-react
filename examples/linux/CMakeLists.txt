@@ -36,8 +36,8 @@ set(ERUI_GRADIENT_RADIAL   ON             CACHE BOOL   "Enable radial gradients"
 set(ERUI_GRADIENT_CONIC    ON             CACHE BOOL   "Enable conic/angular vector gradients"      FORCE)
 set(ERUI_ONSCREEN_KEYBOARD ON             CACHE BOOL   "Built-in on-screen software keyboard"        FORCE)
 set(ERUI_TRANSFORMS        "FULL"         CACHE STRING "FULL 2D affine transform path"              FORCE)
-set(ERUI_SCRATCH_W         "512"          CACHE STRING "Scratch buffer width in pixels"             FORCE)
-set(ERUI_SCRATCH_H         "512"          CACHE STRING "Scratch buffer height in pixels"            FORCE)
+set(ERUI_SCRATCH_WIDTH     "512"          CACHE STRING "Scratch buffer width in pixels"             FORCE)
+set(ERUI_SCRATCH_HEIGHT    "512"          CACHE STRING "Scratch buffer height in pixels"            FORCE)
 
 add_subdirectory(
         ${CMAKE_CURRENT_SOURCE_DIR}/../../engine

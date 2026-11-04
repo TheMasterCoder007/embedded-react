@@ -350,14 +350,14 @@ static void test_dirty_rect_noop_commit(void)
     er_commit();
     ERRect dirty;
     assert(er_get_dirty_rect(&dirty) && "first commit on a dirty scene must report a dirty rect");
-    assert(dirty.w > 0 && dirty.h > 0 && "dirty rect must be non-empty after first commit");
+    assert(dirty.width > 0 && dirty.height > 0 && "dirty rect must be non-empty after first commit");
 
     /* Second commit: nothing changed, so the first commit's rect must survive unchanged. */
     er_commit();
     ERRect second_dirty;
     assert(er_get_dirty_rect(&second_dirty) && "a commit with no changes must keep the last painted rect");
-    assert(second_dirty.x == dirty.x && second_dirty.y == dirty.y && second_dirty.w == dirty.w
-           && second_dirty.h == dirty.h && "a commit with no changes must not alter the reported rect");
+    assert(second_dirty.x == dirty.x && second_dirty.y == dirty.y && second_dirty.width == dirty.width
+           && second_dirty.height == dirty.height && "a commit with no changes must not alter the reported rect");
 
     er_tree_set_root(NULL);
     er_node_destroy(root);
@@ -417,8 +417,8 @@ static void test_dirty_rect_union_coverage(void)
     assert(er_get_dirty_rect(&dirty) && "dirty rect must be non-empty when children were re-rendered");
     /* The union must span at least from the left child's x to beyond the right child's right edge. */
     assert(dirty.x <= 0 && "dirty rect left edge must start at or before the left child");
-    assert(dirty.x + dirty.w >= 160 && "dirty rect right edge must cover both children");
-    assert(dirty.h >= 0 && "dirty rect height must be non-negative");
+    assert(dirty.x + dirty.width >= 160 && "dirty rect right edge must cover both children");
+    assert(dirty.height >= 0 && "dirty rect height must be non-negative");
 
     er_tree_set_root(NULL);
     er_node_destroy(left_child);
@@ -431,12 +431,12 @@ static void test_dirty_rect_union_coverage(void)
 /**
  * @brief Drains the Animated.Value pool, returning how many values could be created before exhaustion.
  *
- * @return The pool capacity (number of successful er_anim_value_create calls).
+ * @return The pool capacity (number of successful er_animation_value_create calls).
  */
 static int drain_anim_values(void)
 {
     int count = 0;
-    while (er_anim_value_create(0.0f) != ER_ANIM_VALUE_INVALID)
+    while (er_animation_value_create(0.0f) != ER_ANIMATION_VALUE_INVALID)
         count++;
     return count;
 }
@@ -466,7 +466,7 @@ static void test_reset(void)
     }
     er_tree_set_root(root);
     er_commit();
-    assert(er_anim_value_create(1.0f) != ER_ANIM_VALUE_INVALID);
+    assert(er_animation_value_create(1.0f) != ER_ANIMATION_VALUE_INVALID);
 
     /* Reset must free every node: the whole pool is allocatable again. */
     er_reset();
@@ -496,7 +496,7 @@ static void test_reset(void)
     er_tree_set_root(root2);
     er_commit();
     ERRect dirty;
-    assert(er_get_dirty_rect(&dirty) && dirty.w > 0 && dirty.h > 0 && "fresh scene after reset must paint");
+    assert(er_get_dirty_rect(&dirty) && dirty.width > 0 && dirty.height > 0 && "fresh scene after reset must paint");
 
     er_reset(); /* leave an empty scene for the tests that follow */
     printf("test_reset PASSED\n");

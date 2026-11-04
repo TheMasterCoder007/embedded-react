@@ -57,10 +57,10 @@ extern "C"
     /** @brief Framebuffer pixel format (matches the DMA2D output PFC color-mode encoding). */
     typedef enum
     {
-        ER_DMA2D_FB_ARGB8888 = 0, /**< 4 bytes/pixel, 0xAARRGGBB. */
-        ER_DMA2D_FB_RGB888 = 1,   /**< 3 bytes/pixel, packed B,G,R in ascending addresses. */
-        ER_DMA2D_FB_RGB565 = 2,   /**< 2 bytes/pixel. */
-    } ErDma2dFbFormat;
+        ER_DMA2D_FRAMEBUFFER_ARGB8888 = 0, /**< 4 bytes/pixel, 0xAARRGGBB. */
+        ER_DMA2D_FRAMEBUFFER_RGB888 = 1,   /**< 3 bytes/pixel, packed B,G,R in ascending addresses. */
+        ER_DMA2D_FRAMEBUFFER_RGB565 = 2,   /**< 2 bytes/pixel. */
+    } ErDma2dFramebufferFormat;
 
     /**
      * @brief Configuration for er_dma2d_backend_init.
@@ -72,12 +72,12 @@ extern "C"
     {
         volatile void* dma2d; /**< DMA2D peripheral. The register layout is common to all STM32 families with DMA2D. */
 
-        void* framebuffer;      /**< Initial render target (the OFF-screen buffer on page-flipped panels). */
-        int width;              /**< Framebuffer width in pixels. */
-        int height;             /**< Framebuffer height in pixels. */
-        int stride_pixels;      /**< Row pitch in pixels (>= width); 0 = tightly packed. LTDC framebuffers
-                                     are commonly padded to a 64-byte row boundary. */
-        ErDma2dFbFormat format; /**< Framebuffer pixel format. */
+        void* framebuffer;               /**< Initial render target (the OFF-screen buffer on page-flipped panels). */
+        int width;                       /**< Framebuffer width in pixels. */
+        int height;                      /**< Framebuffer height in pixels. */
+        int stride_pixels;               /**< Row pitch in pixels (>= width); 0 = tightly packed. LTDC framebuffers
+                                              are commonly padded to a 64-byte row boundary. */
+        ErDma2dFramebufferFormat format; /**< Framebuffer pixel format. */
 
         /*------------------------------------------------------------------------------------------------
          - Optional hooks. With `start`/`wait_complete` NULL the backend starts transfers itself and

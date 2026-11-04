@@ -40,16 +40,16 @@ positioned children against the parent's padding box. Its scratch arrays are sta
 A subtree with `opacity < 1`, a transform, or a shadow is composited into a static offscreen
 buffer first; a render pass never allocates.
 
-- **Opacity strips**: `ERUI_MAX_OPACITY_DEPTH` strips of `ERUI_SCRATCH_W × ERUI_SCRATCH_BAND_H`
+- **Opacity strips**: `ERUI_MAX_OPACITY_DEPTH` strips of `ERUI_SCRATCH_WIDTH × ERUI_SCRATCH_BAND_HEIGHT`
   pixels. A group taller than a strip is composited in band passes, so any node up to
-  `ERUI_SCRATCH_W` wide fades correctly whatever its height. A smaller band height saves RAM and
+  `ERUI_SCRATCH_WIDTH` wide fades correctly whatever its height. A smaller band height saves RAM and
   costs passes. Past the depth, a group's opacity is multiplied into each draw instead of dropped.
-- **Transform source**: one `ERUI_XFORM_W × ERUI_XFORM_H` buffer holding the untransformed subtree.
+- **Transform source**: one `ERUI_TRANSFORM_WIDTH × ERUI_TRANSFORM_HEIGHT` buffer holding the untransformed subtree.
   It cannot be banded (a rotation reads across the whole source), so it caps the largest node you
   can rotate or scale. Damage inside a transformed subtree is whole-node: a change to one child
   repaints the node's entire transformed box.
-- **Shadow plane**: `ERUI_SCRATCH_W × ERUI_SCRATCH_H` bytes of coverage (`ERUI_SHADOWS` only).
-- **Fade cache** (optional, `ERUI_FADE_CACHE_W/H`): keeps the last translucent group's composite so
+- **Shadow plane**: `ERUI_SCRATCH_WIDTH × ERUI_SCRATCH_HEIGHT` bytes of coverage (`ERUI_SHADOWS` only).
+- **Fade cache** (optional, `ERUI_FADE_CACHE_WIDTH/HEIGHT`): keeps the last translucent group's composite so
   a pure opacity animation is one blend per frame instead of a re-render, roughly double the frame
   rate on fades of static content. Any content change invalidates it.
 
@@ -111,7 +111,7 @@ split** until `er_perf_reset()`, so a one-off spike can be attributed after the 
 | `ER_PERF_PHASE_PRESENT` | host      | Backend flush and panel transfer                                  |
 
 Anything else lands in `other_us`, so the split always reconstructs `frame_us`. Per frame the engine
-also samples the repainted area, `blit_px` (pixels handed to the backend; read against `dirty_px`
+also samples the repainted area, `blit_pixels` (pixels handed to the backend; read against `dirty_pixels`
 for write amplification), and the vector and image pool usage.
 
 RASTER splits further (`ERPerfFrame.raster_us`): `PREPASS` (the node-pool walk, scales with
@@ -153,7 +153,7 @@ JSS D2.1 R7.4 M3.8 C9.0          last frame's JS split
 PKJ D3 R40 M12 C31               the WORST frame's JS split
 ```
 
-For "what did that interaction just cost?", latch the last frame with `dirty_px > 0` from
+For "what did that interaction just cost?", latch the last frame with `dirty_pixels > 0` from
 `er_perf_get_last()` into your own overlay line; most frames repaint nothing. Instrumentation is
 gated by the C define `ER_PERF_STATS`, which defaults to `ER_PERF_OVERLAY` (itself 0 unless defined);
 set it explicitly, or configure the engine with `-DERUI_PERF_STATS=ON`, to collect without drawing.
@@ -168,29 +168,29 @@ Set these in CMake before `FetchContent_MakeAvailable`, or with
 The pool and buffer sizes default desktop-sized; the optional features default off.
 [Memory](../guides/memory.md) walks through sizing them for a board.
 
-| Flag                                 | Default          | Effect                                                                                                                                                                                                                                         |
-| ------------------------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ERUI_MAX_NODES`                     | 512              | Scene-graph node pool                                                                                                                                                                                                                          |
-| `ERUI_SCRATCH_W`, `_H`               | 240, 240         | Strip width and transform-source height: the largest node that can fade, rotate or scale                                                                                                                                                       |
-| `ERUI_SCRATCH_BAND_H`                | `ERUI_SCRATCH_H` | Opacity strip height; shrink to trade band passes for RAM                                                                                                                                                                                      |
-| `ERUI_XFORM_W`, `_H`                 | scratch size     | Transform-source size, when it should differ from the strips                                                                                                                                                                                   |
-| `ERUI_MAX_OPACITY_DEPTH`             | 4                | Nested opacity strips                                                                                                                                                                                                                          |
-| `ERUI_FADE_CACHE_W`, `_H`            | 0                | The fade cache; 0 disables                                                                                                                                                                                                                     |
-| `ER_DAMAGE_RECTS_MAX`                | 16               | Disjoint dirty rectangles per commit                                                                                                                                                                                                           |
-| `ERUI_IMAGE_REGISTRY_MAX`            | 128              | Registered images, about 80 bytes each. Past it an image is refused and does not draw, so keep it at or above the asset count                                                                                                                  |
-| `ERUI_FONT_POOL_BYTES`               | 0                | Pool for fonts loaded at runtime; 0 disables `er_font_load`                                                                                                                                                                                    |
-| `ERUI_SHADOWS`                       | 0                | Box shadows                                                                                                                                                                                                                                    |
-| `ERUI_3D_TRANSFORMS`                 | 0                | `rotateX`/`rotateY`/`perspective`; needs `ERUI_TRANSFORMS=FULL`                                                                                                                                                                                |
-| `ERUI_TRANSFORMS`                    | `TRANSLATE_ONLY` | `FULL` adds scale and rotate (the resampling paths); translate-only builds leave them out                                                                                                                                                      |
-| `ERUI_GRADIENT`, `_RADIAL`, `_CONIC` | 0, 0, 0          | Linear gradients; radial and conic (vector) gradients on top of `ERUI_GRADIENT`                                                                                                                                                                |
-| `ERUI_BILINEAR_SCALE`                | 0                | Bilinear image scaling (versus nearest-neighbour)                                                                                                                                                                                              |
-| `ERUI_BORDER_AA`                     | 1                | Anti-aliased border-radius edges                                                                                                                                                                                                               |
-| `ERUI_OCCLUSION_CULLING`             | 1                | Skip layers a fully opaque node covers                                                                                                                                                                                                         |
-| `ERUI_PERF_STATS`                    | `OFF`            | CMake option: `ON` compiles in the frame instrumentation (`ER_PERF_STATS=1`) without the overlay. Otherwise `ER_PERF_STATS` follows `ER_PERF_OVERLAY`                                                                                          |
-| `ERUI_ONSCREEN_KEYBOARD`             | 0                | The built-in on-screen keyboard for `TextInput`, for touch-only devices                                                                                                                                                                        |
-| `ERUI_MAX_ANIM_VALUES`               | 16               | Standalone `Animated.Value`s on the native driver                                                                                                                                                                                              |
-| `ERUI_RENDER_WORKERS`                | 1                | Render workers for multi-core rendering: the repaint region is sliced per core. The opacity strips are split between workers and each extra worker costs a transform-source buffer; scenes with vector, arc or shadow nodes render single-core |
-| `ERUI_DIAGNOSTICS`                   | 1 or 2           | One-shot developer warnings: `0` none (no `<stdio.h>`), `1` only failures that leave no trace on the panel, `2` everything. Defaults to 1 under `NDEBUG`                                                                                       |
+| Flag                                 | Default               | Effect                                                                                                                                                                                                                                         |
+| ------------------------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ERUI_MAX_NODES`                     | 512                   | Scene-graph node pool                                                                                                                                                                                                                          |
+| `ERUI_SCRATCH_WIDTH`, `_H`           | 240, 240              | Strip width and transform-source height: the largest node that can fade, rotate or scale                                                                                                                                                       |
+| `ERUI_SCRATCH_BAND_HEIGHT`           | `ERUI_SCRATCH_HEIGHT` | Opacity strip height; shrink to trade band passes for RAM                                                                                                                                                                                      |
+| `ERUI_TRANSFORM_WIDTH`, `_H`         | scratch size          | Transform-source size, when it should differ from the strips                                                                                                                                                                                   |
+| `ERUI_MAX_OPACITY_DEPTH`             | 4                     | Nested opacity strips                                                                                                                                                                                                                          |
+| `ERUI_FADE_CACHE_WIDTH`, `_H`        | 0                     | The fade cache; 0 disables                                                                                                                                                                                                                     |
+| `ER_DAMAGE_RECTS_MAX`                | 16                    | Disjoint dirty rectangles per commit                                                                                                                                                                                                           |
+| `ERUI_IMAGE_REGISTRY_MAX`            | 128                   | Registered images, about 80 bytes each. Past it an image is refused and does not draw, so keep it at or above the asset count                                                                                                                  |
+| `ERUI_FONT_POOL_BYTES`               | 0                     | Pool for fonts loaded at runtime; 0 disables `er_font_load`                                                                                                                                                                                    |
+| `ERUI_SHADOWS`                       | 0                     | Box shadows                                                                                                                                                                                                                                    |
+| `ERUI_3D_TRANSFORMS`                 | 0                     | `rotateX`/`rotateY`/`perspective`; needs `ERUI_TRANSFORMS=FULL`                                                                                                                                                                                |
+| `ERUI_TRANSFORMS`                    | `TRANSLATE_ONLY`      | `FULL` adds scale and rotate (the resampling paths); translate-only builds leave them out                                                                                                                                                      |
+| `ERUI_GRADIENT`, `_RADIAL`, `_CONIC` | 0, 0, 0               | Linear gradients; radial and conic (vector) gradients on top of `ERUI_GRADIENT`                                                                                                                                                                |
+| `ERUI_BILINEAR_SCALE`                | 0                     | Bilinear image scaling (versus nearest-neighbour)                                                                                                                                                                                              |
+| `ERUI_BORDER_AA`                     | 1                     | Anti-aliased border-radius edges                                                                                                                                                                                                               |
+| `ERUI_OCCLUSION_CULLING`             | 1                     | Skip layers a fully opaque node covers                                                                                                                                                                                                         |
+| `ERUI_PERF_STATS`                    | `OFF`                 | CMake option: `ON` compiles in the frame instrumentation (`ER_PERF_STATS=1`) without the overlay. Otherwise `ER_PERF_STATS` follows `ER_PERF_OVERLAY`                                                                                          |
+| `ERUI_ONSCREEN_KEYBOARD`             | 0                     | The built-in on-screen keyboard for `TextInput`, for touch-only devices                                                                                                                                                                        |
+| `ERUI_MAX_ANIMATION_VALUES`          | 16                    | Standalone `Animated.Value`s on the native driver                                                                                                                                                                                              |
+| `ERUI_RENDER_WORKERS`                | 1                     | Render workers for multi-core rendering: the repaint region is sliced per core. The opacity strips are split between workers and each extra worker costs a transform-source buffer; scenes with vector, arc or shadow nodes render single-core |
+| `ERUI_DIAGNOSTICS`                   | 1 or 2                | One-shot developer warnings: `0` none (no `<stdio.h>`), `1` only failures that leave no trace on the panel, `2` everything. Defaults to 1 under `NDEBUG`                                                                                       |
 
 ### Vector pools
 
@@ -203,7 +203,7 @@ plus about 36 KB of per-node storage and 170 KB of edge cache.
 | `ERUI_MAX_VECTOR_NODES`    | 8       | `<Svg>` nodes with geometry at once                              |
 | `ERUI_VECTOR_PAINTS_MAX`   | 16      | Shapes per `<Svg>`                                               |
 | `ERUI_VECTOR_TAPE_MAX`     | 1024    | Op-tape floats stored per node                                   |
-| `ERUI_VECTOR_MAX_PTS`      | 2048    | Flattened vertices in one shape                                  |
+| `ERUI_VECTOR_MAX_POINTS`   | 2048    | Flattened vertices in one shape                                  |
 | `ERUI_VECTOR_MAX_EDGES`    | 2048    | Edges in one rasterise pass (about 32 bytes each)                |
 | `ERUI_VECTOR_MAX_SUBPATHS` | 256     | Contours or holes in one shape                                   |
 | `ERUI_VECTOR_MAX_ROW`      | 1024    | The widest vector node, in pixels                                |

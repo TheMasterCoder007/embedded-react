@@ -210,8 +210,8 @@ int main(int argc, char** argv)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = (uint16_t)physical_width,
-        .screen_h = (uint16_t)physical_height,
+        .screen_width = (uint16_t)physical_width,
+        .screen_height = (uint16_t)physical_height,
         .log = log_line,
     };
     ErbError load_error;

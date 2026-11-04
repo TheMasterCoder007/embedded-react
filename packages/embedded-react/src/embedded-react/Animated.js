@@ -15,7 +15,7 @@
  */
 
 // Animated — the React Native analog, backed by the engine's native-driver value system
-// (er_anim_value_*). An Animated.Value is a handle to an engine-side float; binding it to a node
+// (er_animation_value_*). An Animated.Value is a handle to an engine-side float; binding it to a node
 // prop (via Animated.View) lets the engine advance the animation each frame with NO per-frame JS.
 import {createElement, useRef, useEffect} from 'react';
 import {NativeUI} from '../native-ui.js';

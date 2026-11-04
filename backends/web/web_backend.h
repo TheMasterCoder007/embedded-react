@@ -102,7 +102,7 @@ extern "C"
      * Resizes the framebuffer + present buffer, resets the engine pools, and rebuilds the current scene at
      * the new dimensions. In W1 that scene is er_web_demo_scene(); in W2+ the loaded app re-runs with the
      * new screen size (the on-device "responsive layout" path). The host must resize its canvas to match
-     * (er_web_fb_width/height).
+     * (er_web_framebuffer_width/height).
      *
      * @param[in] screen_width  New board width in pixels (> 0).
      * @param[in] screen_height  New board height in pixels (> 0).
@@ -157,12 +157,12 @@ extern "C"
     /**
      * @brief Returns the framebuffer width in pixels (0 before init).
      */
-    int er_web_fb_width(void);
+    int er_web_framebuffer_width(void);
 
     /**
      * @brief Returns the framebuffer height in pixels (0 before init).
      */
-    int er_web_fb_height(void);
+    int er_web_framebuffer_height(void);
 
 #ifdef __cplusplus
 }

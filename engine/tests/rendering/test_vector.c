@@ -229,22 +229,22 @@ int main(void)
     /* --- filled rectangle (nonzero): interior filled, outside empty --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE,
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
                               0,
-                              ER_VOP_MOVE,
+                              ER_VECTOR_OP_MOVE,
                               10,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               30,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               30,
                               30,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               10,
                               30,
-                              ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0xFF112233u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO};
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0xFF112233u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape,
                          (int)(sizeof(tape) / sizeof(tape[0])),
                          &paint,
@@ -266,9 +266,20 @@ int main(void)
     /* --- filled circle via a full VOP_ARC (nonzero) --- */
     {
         reset(&test_context);
-        const float tape[] = {
-            ER_VOP_SHAPE, 0, ER_VOP_MOVE, 94, 64, ER_VOP_ARC, 64, 64, 30, 0.0f, TWO_PI, 0, ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0xFF00FF00u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO};
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
+                              0,
+                              ER_VECTOR_OP_MOVE,
+                              94,
+                              64,
+                              ER_VECTOR_OP_ARC,
+                              64,
+                              64,
+                              30,
+                              0.0f,
+                              TWO_PI,
+                              0,
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0xFF00FF00u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape,
                          (int)(sizeof(tape) / sizeof(tape[0])),
                          &paint,
@@ -290,11 +301,35 @@ int main(void)
     /* --- even-odd hole: outer loop + inner loop wound the same way leaves the inner region empty --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE, 0,  ER_VOP_MOVE, 10,          10, ER_VOP_LINE, 40,           10,
-                              ER_VOP_LINE,  40, 40,          ER_VOP_LINE, 10, 40,          ER_VOP_CLOSE, ER_VOP_MOVE,
-                              20,           20, ER_VOP_LINE, 30,          20, ER_VOP_LINE, 30,           30,
-                              ER_VOP_LINE,  20, 30,          ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0xFF445566u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_EVENODD};
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
+                              0,
+                              ER_VECTOR_OP_MOVE,
+                              10,
+                              10,
+                              ER_VECTOR_OP_LINE,
+                              40,
+                              10,
+                              ER_VECTOR_OP_LINE,
+                              40,
+                              40,
+                              ER_VECTOR_OP_LINE,
+                              10,
+                              40,
+                              ER_VECTOR_OP_CLOSE,
+                              ER_VECTOR_OP_MOVE,
+                              20,
+                              20,
+                              ER_VECTOR_OP_LINE,
+                              30,
+                              20,
+                              ER_VECTOR_OP_LINE,
+                              30,
+                              30,
+                              ER_VECTOR_OP_LINE,
+                              20,
+                              30,
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0xFF445566u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_EVENODD};
         er_vector_render(tape,
                          (int)(sizeof(tape) / sizeof(tape[0])),
                          &paint,
@@ -317,8 +352,9 @@ int main(void)
     /* Horizontal line (40,30)->(80,30), 10px wide => band y=25..35. Round caps (r=5) past each end.   */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 40, 30, ER_VOP_LINE, 80, 30};
-        const ERVectorPaint paint = {0, 0xFFF4A261u, 10.0f, 4.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        const float tape[] = {ER_VECTOR_OP_SHAPE, 0, ER_VECTOR_OP_MOVE, 40, 30, ER_VECTOR_OP_LINE, 80, 30};
+        const ERVectorPaint paint = {
+            0, 0xFFF4A261u, 10.0f, 4.0f, ER_VECTOR_CAP_ROUND, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape,
                          (int)(sizeof(tape) / sizeof(tape[0])),
                          &paint,
@@ -344,22 +380,22 @@ int main(void)
     /* --- clip box bounds the rasterize: geometry left of clipx0 emits nothing --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE,
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
                               0,
-                              ER_VOP_MOVE,
+                              ER_VECTOR_OP_MOVE,
                               10,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               30,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               30,
                               30,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               10,
                               30,
-                              ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0xFF112233u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO};
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0xFF112233u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape,
                          (int)(sizeof(tape) / sizeof(tape[0])),
                          &paint,
@@ -382,22 +418,22 @@ int main(void)
     /* --- linear gradient fill: red at the left edge -> blue at the right, blended across a rect --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE,
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
                               0,
-                              ER_VOP_MOVE,
+                              ER_VECTOR_OP_MOVE,
                               10,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               50,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               50,
                               50,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               10,
                               50,
-                              ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 1 /* fill_grad = grads[0] */};
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO, 1 /* fill_gradient = grads[0] */};
         ERVectorGradient gradient;
         memset(&gradient, 0, sizeof(gradient));
         gradient.type = ER_GRADIENT_LINEAR;
@@ -440,9 +476,10 @@ int main(void)
     /* --- linear gradient STROKE: a thick horizontal line whose stroke ramps red -> blue along its length --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 40, 30, ER_VOP_LINE, 80, 30};
-        /* fill 0, stroke 0 (no solid colour), width 10, round caps, fill_grad 0, stroke_grad 1. */
-        const ERVectorPaint paint = {0, 0, 10.0f, 4.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO, 0, 1};
+        const float tape[] = {ER_VECTOR_OP_SHAPE, 0, ER_VECTOR_OP_MOVE, 40, 30, ER_VECTOR_OP_LINE, 80, 30};
+        /* fill 0, stroke 0 (no solid colour), width 10, round caps, fill_gradient 0, stroke_gradient 1. */
+        const ERVectorPaint paint = {
+            0, 0, 10.0f, 4.0f, ER_VECTOR_CAP_ROUND, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO, 0, 1};
         ERVectorGradient gradient;
         memset(&gradient, 0, sizeof(gradient));
         gradient.type = ER_GRADIENT_LINEAR;
@@ -481,22 +518,22 @@ int main(void)
     /* --- radial gradient fill: bright centre fading to a dark edge --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE,
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
                               0,
-                              ER_VOP_MOVE,
+                              ER_VECTOR_OP_MOVE,
                               10,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               50,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               50,
                               50,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               10,
                               50,
-                              ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 1};
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO, 1};
         ERVectorGradient gradient;
         memset(&gradient, 0, sizeof(gradient));
         gradient.type = ER_GRADIENT_RADIAL;
@@ -533,22 +570,22 @@ int main(void)
     /* --- conic gradient fill: colour sweeps by ANGLE around the centre (red at top -> green at bottom) --- */
     {
         reset(&test_context);
-        const float tape[] = {ER_VOP_SHAPE,
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
                               0,
-                              ER_VOP_MOVE,
+                              ER_VECTOR_OP_MOVE,
                               10,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               50,
                               10,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               50,
                               50,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               10,
                               50,
-                              ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 1, 0};
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {0, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO, 1, 0};
         ERVectorGradient gradient;
         memset(&gradient, 0, sizeof(gradient));
         gradient.type = ER_GRADIENT_CONIC;
@@ -591,12 +628,32 @@ int main(void)
         reset(&test_context);
         /* Shape 0: a vertical line at x=20, 20px wide -> covers x=10..30. Clip starts at x=25.
          * Shape 1: a filled rect at x=90..110, nowhere near the clip. */
-        const float tape[] = {ER_VOP_SHAPE, 0,   ER_VOP_MOVE, 20,          10, ER_VOP_LINE, 20,          60,
-                              ER_VOP_SHAPE, 1,   ER_VOP_MOVE, 90,          10, ER_VOP_LINE, 110,         10,
-                              ER_VOP_LINE,  110, 60,          ER_VOP_LINE, 90, 60,          ER_VOP_CLOSE};
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
+                              0,
+                              ER_VECTOR_OP_MOVE,
+                              20,
+                              10,
+                              ER_VECTOR_OP_LINE,
+                              20,
+                              60,
+                              ER_VECTOR_OP_SHAPE,
+                              1,
+                              ER_VECTOR_OP_MOVE,
+                              90,
+                              10,
+                              ER_VECTOR_OP_LINE,
+                              110,
+                              10,
+                              ER_VECTOR_OP_LINE,
+                              110,
+                              60,
+                              ER_VECTOR_OP_LINE,
+                              90,
+                              60,
+                              ER_VECTOR_OP_CLOSE};
         const ERVectorPaint paint[2] = {
-            {0, 0xFF3366CCu, 20.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO},
-            {0xFFCC3366u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO},
+            {0, 0xFF3366CCu, 20.0f, 4.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_NONZERO},
+            {0xFFCC3366u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO},
         };
         er_vector_render(
             tape, (int)(sizeof(tape) / sizeof(tape[0])), paint, 2, NULL, 0, 0, 0, 25, 0, 60, FRAMEBUFFER_HEIGHT);
@@ -614,15 +671,15 @@ int main(void)
     {
         reset(&test_context);
         /* A vertical line at x=20, 20 px wide -> ink covers x=10..30. The clip starts at x=25. */
-        const float tape[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 20, 10, ER_VOP_LINE, 20, 60};
+        const float tape[] = {ER_VECTOR_OP_SHAPE, 0, ER_VECTOR_OP_MOVE, 20, 10, ER_VECTOR_OP_LINE, 20, 60};
         ERVectorPaint paint;
         memset(&paint, 0, sizeof(paint));
         paint.stroke = 0x00000000u; /* transparent: only the gradient paints */
-        paint.stroke_w = 20.0f;
+        paint.stroke_width = 20.0f;
         paint.miter = 4.0f;
-        paint.cap = ER_VCAP_BUTT;
-        paint.join = ER_VJOIN_MITER;
-        paint.stroke_grad = 1;
+        paint.cap = ER_VECTOR_CAP_BUTT;
+        paint.join = ER_VECTOR_JOIN_MITER;
+        paint.stroke_gradient = 1;
         ERVectorGradient gradient;
         memset(&gradient, 0, sizeof(gradient));
         gradient.type = ER_GRADIENT_LINEAR;
@@ -664,19 +721,20 @@ int main(void)
         /* A 12px-wide stroke along a gently bending polyline (about 8 degrees per vertex). */
         float tape[2 + 3 + 3 * 12];
         int tape_count = 0;
-        tape[tape_count++] = ER_VOP_SHAPE;
+        tape[tape_count++] = ER_VECTOR_OP_SHAPE;
         tape[tape_count++] = 0;
-        tape[tape_count++] = ER_VOP_MOVE;
+        tape[tape_count++] = ER_VECTOR_OP_MOVE;
         tape[tape_count++] = 10.0f;
         tape[tape_count++] = 64.0f;
         for (int vertex_index = 1; vertex_index <= 12; vertex_index++)
         {
             const float bend = (float)vertex_index * 0.14f;
-            tape[tape_count++] = ER_VOP_LINE;
+            tape[tape_count++] = ER_VECTOR_OP_LINE;
             tape[tape_count++] = 10.0f + (float)vertex_index * 8.0f;
             tape[tape_count++] = 64.0f - 30.0f * (1.0f - cosf(bend));
         }
-        const ERVectorPaint paint = {0, 0xFF22DD88u, 12.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        const ERVectorPaint paint = {
+            0, 0xFF22DD88u, 12.0f, 4.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape, tape_count, &paint, 1, NULL, 0, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
         for (int vertex_index = 1; vertex_index <= 11; vertex_index++)
         {
@@ -696,17 +754,18 @@ int main(void)
         reset(&test_context);
         float tape[2 + 3 + 3 * 24 + 1];
         int tape_count = 0;
-        tape[tape_count++] = ER_VOP_SHAPE;
+        tape[tape_count++] = ER_VECTOR_OP_SHAPE;
         tape[tape_count++] = 0;
         for (int step_index = 0; step_index <= 24; step_index++)
         {
             const float angle = (float)step_index * (TWO_PI / 24.0f);
-            tape[tape_count++] = (step_index == 0) ? ER_VOP_MOVE : ER_VOP_LINE;
+            tape[tape_count++] = (step_index == 0) ? ER_VECTOR_OP_MOVE : ER_VECTOR_OP_LINE;
             tape[tape_count++] = 64.0f + 45.0f * cosf(angle);
             tape[tape_count++] = 64.0f + 45.0f * sinf(angle);
         }
-        tape[tape_count++] = ER_VOP_CLOSE;
-        const ERVectorPaint paint = {0, 0xFFEEBB33u, 6.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        tape[tape_count++] = ER_VECTOR_OP_CLOSE;
+        const ERVectorPaint paint = {
+            0, 0xFFEEBB33u, 6.0f, 4.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape, tape_count, &paint, 1, NULL, 0, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
         for (int step_index = 0; step_index < 24; step_index++)
         {
@@ -730,17 +789,18 @@ int main(void)
         reset(&test_context);
         float tape[2 + 3 + 3 * 48 + 1];
         int tape_count = 0;
-        tape[tape_count++] = ER_VOP_SHAPE;
+        tape[tape_count++] = ER_VECTOR_OP_SHAPE;
         tape[tape_count++] = 0;
         for (int step_index = 0; step_index <= 48; step_index++)
         {
             const float angle = (float)step_index * (TWO_PI / 48.0f);
-            tape[tape_count++] = (step_index == 0) ? ER_VOP_MOVE : ER_VOP_LINE;
+            tape[tape_count++] = (step_index == 0) ? ER_VECTOR_OP_MOVE : ER_VECTOR_OP_LINE;
             tape[tape_count++] = 64.0f + 50.0f * cosf(angle);
             tape[tape_count++] = 64.0f + 50.0f * sinf(angle);
         }
-        tape[tape_count++] = ER_VOP_CLOSE;
-        const ERVectorPaint paint = {0, 0xFF66CCFFu, 5.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_ROUND, ER_VFILL_NONZERO};
+        tape[tape_count++] = ER_VECTOR_OP_CLOSE;
+        const ERVectorPaint paint = {
+            0, 0xFF66CCFFu, 5.0f, 4.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_ROUND, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape, tape_count, &paint, 1, NULL, 0, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
 
         if (g_blit_pixels != inked(&test_context))
@@ -763,30 +823,31 @@ int main(void)
         reset(&test_context);
         const float center_x = 64.0f, center_y = 64.0f, outer_radius = 50.0f, inner_radius = 30.0f;
         const float start_angle = 2.4f, end_angle = start_angle + 4.5f;
-        const float tape[] = {ER_VOP_SHAPE,
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
                               0,
-                              ER_VOP_MOVE,
+                              ER_VECTOR_OP_MOVE,
                               center_x + outer_radius * cosf(start_angle),
                               center_y + outer_radius * sinf(start_angle),
-                              ER_VOP_ARC,
+                              ER_VECTOR_OP_ARC,
                               center_x,
                               center_y,
                               outer_radius,
                               start_angle,
                               end_angle,
                               0,
-                              ER_VOP_LINE,
+                              ER_VECTOR_OP_LINE,
                               center_x + inner_radius * cosf(end_angle),
                               center_y + inner_radius * sinf(end_angle),
-                              ER_VOP_ARC,
+                              ER_VECTOR_OP_ARC,
                               center_x,
                               center_y,
                               inner_radius,
                               end_angle,
                               start_angle,
                               1,
-                              ER_VOP_CLOSE};
-        const ERVectorPaint paint = {0, 0xFF66CCFFu, 5.0f, 4.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO};
+                              ER_VECTOR_OP_CLOSE};
+        const ERVectorPaint paint = {
+            0, 0xFF66CCFFu, 5.0f, 4.0f, ER_VECTOR_CAP_BUTT, ER_VECTOR_JOIN_MITER, ER_VECTOR_FILL_NONZERO};
         er_vector_render(tape,
                          (int)(sizeof(tape) / sizeof(tape[0])),
                          &paint,
@@ -817,9 +878,20 @@ int main(void)
         if (er_vector_slots_overflowed())
             return fail("storage pool: er_vector_reset left the overflow flag raised");
 
-        const float tape[] = {ER_VOP_SHAPE, 0, ER_VOP_MOVE, 0, 0, ER_VOP_LINE, 4, 0, ER_VOP_LINE, 4, 4, ER_VOP_CLOSE};
+        const float tape[] = {ER_VECTOR_OP_SHAPE,
+                              0,
+                              ER_VECTOR_OP_MOVE,
+                              0,
+                              0,
+                              ER_VECTOR_OP_LINE,
+                              4,
+                              0,
+                              ER_VECTOR_OP_LINE,
+                              4,
+                              4,
+                              ER_VECTOR_OP_CLOSE};
         const int tape_count = (int)(sizeof(tape) / sizeof(tape[0]));
-        const ERVectorPaint paint = {0xFF010203u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO};
+        const ERVectorPaint paint = {0xFF010203u, 0, 0.0f, 0.0f, 0, 0, ER_VECTOR_FILL_NONZERO};
         const int total = er_vector_slots_total();
 
         for (int slot_index = 0; slot_index < total; slot_index++)

@@ -43,7 +43,7 @@ export interface IrKeyboardKey {
 export interface IrKeyboard {
   /** The layout, or null to keep the built-in QWERTY. */
   layers: IrKeyboardKey[][][] | null;
-  gridCols: number | null;
+  gridColumns: number | null;
   rowHeight: number | null;
   keyGap: number | null;
   keyRadius: number | null;

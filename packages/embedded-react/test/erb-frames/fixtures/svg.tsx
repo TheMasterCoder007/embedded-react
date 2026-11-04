@@ -43,7 +43,7 @@ export function App() {
           <Path
             d="M14 40 L30 14 L46 40 Z"
             fill="#ffffff"
-            fillGrad={{
+            fillGradient={{
               type: 1,
               ax: 14,
               ay: 14,
@@ -84,7 +84,7 @@ export function App() {
             rx={on ? 12 : 4}
             fill="#ffffff"
             // @ts-expect-error The public types don't allow null, which a conditional gradient needs.
-            fillGrad={
+            fillGradient={
               on
                 ? {
                     type: 1,

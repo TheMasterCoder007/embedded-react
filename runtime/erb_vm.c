@@ -367,13 +367,13 @@ double erb_vm_idiv(uint32_t mode, double dividend, double divisor)
     const int32_t right = double_to_int32(divisor);
     switch (mode)
     {
-        case ERB_CK_IDIV_FLOOR:
+        case ERB_CHECK_OP_IDIV_FLOOR:
             return floordiv32(left, right);
-        case ERB_CK_IDIV_CEIL:
+        case ERB_CHECK_OP_IDIV_CEIL:
             return ceildiv32(left, right);
-        case ERB_CK_IDIV_ROUND:
+        case ERB_CHECK_OP_IDIV_ROUND:
             return rounddiv32(left, right);
-        case ERB_CK_IDIV_MOD:
+        case ERB_CHECK_OP_IDIV_MOD:
             return mod32(left, right);
         default:
             return div32(left, right);
@@ -509,7 +509,7 @@ static ErbStatus stale(void)
 {
     if (g_erb.program.flags & ERB_FLAG_DEBUG)
     {
-        return fault(ERB_ERR_STALE_NODE, "a node handle outlived its node", NULL);
+        return fault(ERB_ERROR_STALE_NODE, "a node handle outlived its node", NULL);
     }
     report("stale node handle; the instruction was skipped");
     return ERB_OK;
@@ -549,7 +549,7 @@ static uint8_t* row_field(uint32_t extension, int32_t row, const uint8_t** slot_
     const uint8_t* slot = erb_slot(program, ERB_LOW16(extension));
     const uint8_t* layout = erb_row(program, erb_u16(slot + ERB_SLOT_AUX_AT));
     const uint8_t* field =
-        program->fields + (erb_u16(layout + ERB_ROW_FIRST_AT) + ERB_EXT_OPERAND(extension)) * ERB_FIELD_SIZE;
+        program->fields + (erb_u16(layout + ERB_ROW_FIRST_AT) + ERB_EXTENSION_OPERAND(extension)) * ERB_FIELD_SIZE;
     uint8_t* pool = slot_data(slot);
     uint32_t count;
     memcpy(&count, pool, sizeof(count));
@@ -604,7 +604,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
         {
             if (budget_left == 0u)
             {
-                return fault(ERB_ERR_BUDGET, "instruction budget exceeded", NULL);
+                return fault(ERB_ERROR_BUDGET, "instruction budget exceeded", NULL);
             }
             budget_left--;
         }
@@ -624,7 +624,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 registers[operand_a] = ERB_SBX(word);
                 break;
             case ERB_OP_SCREEN:
-                registers[operand_a] = operand_bx ? g_erb.config.screen_h : g_erb.config.screen_w;
+                registers[operand_a] = operand_bx ? g_erb.config.screen_height : g_erb.config.screen_width;
                 break;
             case ERB_OP_LOADK:
                 registers[operand_a] = (int32_t)program->const32[operand_bx];
@@ -676,7 +676,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 const uint8_t* slot = erb_slot(program, ERB_LOW16(code[program_counter + 1u]));
                 if (registers[operand_b] < 0 || (uint32_t)registers[operand_b] >= erb_u16(slot + ERB_SLOT_CAP_AT))
                 {
-                    return fault(ERB_ERR_LIST_INDEX, "handle index past its array", NULL);
+                    return fault(ERB_ERROR_LIST_INDEX, "handle index past its array", NULL);
                 }
                 memcpy(&registers[operand_a], slot_data(slot) + (uint32_t)registers[operand_b] * 8u, 8u);
                 next = program_counter + 2u;
@@ -695,12 +695,12 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 uint8_t* data = row_field(code[program_counter + 1u], registers[operand_b], &slot, &field);
                 if (!data)
                 {
-                    return fault(ERB_ERR_LIST_INDEX, "list row past the list's end", NULL);
+                    return fault(ERB_ERROR_LIST_INDEX, "list row past the list's end", NULL);
                 }
                 const uint8_t type = field[ERB_FIELD_TYPE_AT];
                 if (ERB_OP(word) == ERB_OP_ROWGET)
                 {
-                    if (type == ERB_T_STRING)
+                    if (type == ERB_TYPE_STRING)
                     {
                         registers[operand_a] = (int32_t)(ERB_STRING_ARENA | (uint32_t)(data - arena));
                     }
@@ -709,7 +709,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                         memcpy(&registers[operand_a], data, erb_type_cells(type) * sizeof(int32_t));
                     }
                 }
-                else if (type == ERB_T_STRING)
+                else if (type == ERB_TYPE_STRING)
                 {
                     store_string(slot, (char*)data, erb_u16(field + ERB_FIELD_CAP_AT), string_of(registers[operand_a]));
                 }
@@ -740,7 +740,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                     const uint8_t* field =
                         program->fields + (erb_u16(layout + ERB_ROW_FIRST_AT) + index) * ERB_FIELD_SIZE;
                     uint8_t* data = row + erb_u32(field + ERB_FIELD_OFFSET_AT);
-                    if (field[ERB_FIELD_TYPE_AT] == ERB_T_STRING)
+                    if (field[ERB_FIELD_TYPE_AT] == ERB_TYPE_STRING)
                     {
                         if (!copy_capped((char*)data, erb_u16(field + ERB_FIELD_CAP_AT), string_of(registers[cell])))
                         {
@@ -1125,7 +1125,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 int32_t value = 0;
                 if (!native->callback(&registers[operand_a], &value, g_erb.config.context))
                 {
-                    return fault(ERB_ERR_NATIVE,
+                    return fault(ERB_ERROR_NATIVE,
                                  "a native import reported failure",
                                  erb_string(program, erb_u16(import + ERB_IMPORT_NAME_AT)));
                 }
@@ -1281,7 +1281,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_BUILD:
             {
                 const uint32_t extension = code[program_counter + 1u];
-                const uint8_t index = ERB_EXT_OPERAND(extension);
+                const uint8_t index = ERB_EXTENSION_OPERAND(extension);
                 ERNode* parent = erb_rt_node(&registers[operand_b]);
                 ERNode* before = operand_c == operand_b ? NULL : erb_rt_node(&registers[operand_c]);
                 next = program_counter + 2u;
@@ -1297,7 +1297,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                         erb_u16(erb_template(program, ERB_LOW16(extension)) + ERB_TEMPLATE_NODE_COUNT_AT);
                     if (budget_left < nodes)
                     {
-                        return fault(ERB_ERR_BUDGET, "instruction budget exceeded", NULL);
+                        return fault(ERB_ERROR_BUDGET, "instruction budget exceeded", NULL);
                     }
                     budget_left -= nodes;
                 }
@@ -1383,7 +1383,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_ASTART:
             {
                 const uint32_t extension = code[program_counter + 1u];
-                const uint8_t to_first = ERB_EXT_OPERAND(extension);
+                const uint8_t to_first = ERB_EXTENSION_OPERAND(extension);
                 registers[operand_a] = (int32_t)erb_rt_anim_start(
                     operand_bx, ERB_LOW16(extension), to_first == ERB_NO_REGISTER ? NULL : &registers[to_first]);
                 if (g_erb.faulted)
@@ -1407,11 +1407,11 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 memcpy(&handle, slot_data(erb_slot(program, operand_bx)), sizeof(handle));
                 if (ERB_OP(word) == ERB_OP_AVSET)
                 {
-                    er_anim_value_set((ERAnimValueHandle)handle, get_float(&registers[operand_a]));
+                    er_animation_value_set((ERAnimationValueHandle)handle, get_float(&registers[operand_a]));
                 }
                 else
                 {
-                    set_float(&registers[operand_a], er_anim_value_get((ERAnimValueHandle)handle));
+                    set_float(&registers[operand_a], er_animation_value_get((ERAnimationValueHandle)handle));
                 }
                 break;
             }
@@ -1442,37 +1442,37 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 const ErbEvent* event = &g_erb.event;
                 switch (operand_b)
                 {
-                    case ERB_EVT_X:
-                    case ERB_EVT_LAYOUT_X:
+                    case ERB_EVENT_FIELD_X:
+                    case ERB_EVENT_FIELD_LAYOUT_X:
                         registers[operand_a] = event->x;
                         break;
-                    case ERB_EVT_Y:
-                    case ERB_EVT_LAYOUT_Y:
+                    case ERB_EVENT_FIELD_Y:
+                    case ERB_EVENT_FIELD_LAYOUT_Y:
                         registers[operand_a] = event->y;
                         break;
-                    case ERB_EVT_DX:
-                    case ERB_EVT_LAYOUT_W:
+                    case ERB_EVENT_FIELD_DX:
+                    case ERB_EVENT_FIELD_LAYOUT_WIDTH:
                         registers[operand_a] = event->delta_x;
                         break;
-                    case ERB_EVT_DY:
-                    case ERB_EVT_LAYOUT_H:
+                    case ERB_EVENT_FIELD_DY:
+                    case ERB_EVENT_FIELD_LAYOUT_HEIGHT:
                         registers[operand_a] = event->delta_y;
                         break;
-                    case ERB_EVT_VX:
-                    case ERB_EVT_SCROLL_X:
+                    case ERB_EVENT_FIELD_VX:
+                    case ERB_EVENT_FIELD_SCROLL_X:
                         set_float(&registers[operand_a], event->motion_x);
                         break;
-                    case ERB_EVT_VY:
-                    case ERB_EVT_SCROLL_Y:
+                    case ERB_EVENT_FIELD_VY:
+                    case ERB_EVENT_FIELD_SCROLL_Y:
                         set_float(&registers[operand_a], event->motion_y);
                         break;
-                    case ERB_EVT_VALUE:
+                    case ERB_EVENT_FIELD_VALUE:
                         set_float(&registers[operand_a], event->value);
                         break;
-                    case ERB_EVT_VALUE_START:
+                    case ERB_EVENT_FIELD_VALUE_START:
                         set_float(&registers[operand_a], event->value_start);
                         break;
-                    case ERB_EVT_TOUCHES:
+                    case ERB_EVENT_FIELD_TOUCHES:
                         registers[operand_a] = event->touches;
                         break;
                     default:
@@ -1491,7 +1491,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
 
             /* Faults and effects */
             case ERB_OP_TRAP:
-                return fault(ERB_ERR_TRAP,
+                return fault(ERB_ERROR_TRAP,
                              "the app stopped itself",
                              operand_bx == ERB_NONE ? NULL : erb_string(program, operand_bx));
             case ERB_OP_EFFECT:
@@ -1499,7 +1499,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 break;
 
             default:
-                return fault(ERB_ERR_BYTECODE, "unverified opcode", NULL);
+                return fault(ERB_ERROR_BYTECODE, "unverified opcode", NULL);
         }
         if (status != ERB_OK)
         {

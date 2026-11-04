@@ -31,14 +31,14 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {
-  ANIM_PROP_FIELDS,
-  AnimFlag,
-  AnimKind,
+  ANIMATION_PROP_FIELDS,
+  AnimationFlag,
+  AnimationKind,
   BindingKind,
   ENGINE_VALUES,
   EventField,
   FunctionKind,
-  InterpFlag,
+  InterpolationFlag,
   NONE,
   ValueType,
 } from './format.mts';
@@ -144,12 +144,12 @@ export class AnimationPlan {
     for (const value of app.animations) {
       this.values.set(
         value.slotName,
-        arena.slot(ValueType.avalue, floatBits(value.initial)),
+        arena.slot(ValueType.animatedValue, floatBits(value.initial)),
       );
     }
     for (const [, record] of output.animationWaits) {
       if (record.isStarted) {
-        this.owners.set(record.owner, arena.slot(ValueType.anim));
+        this.owners.set(record.owner, arena.slot(ValueType.animation));
       }
     }
 
@@ -297,7 +297,7 @@ export class AnimationPlan {
       index =
         this.animations.push({
           ...leafDefaults(),
-          kind: AnimKind.timing,
+          kind: AnimationKind.timing,
           easing: ENGINE_VALUES.get(PRESS_FADE_EASING)!,
           target: this.value(fade.value).index,
           amount: fade.durationMs,
@@ -339,7 +339,7 @@ export class AnimationPlan {
       this.animations.push(
         {
           ...leafDefaults(),
-          kind: AnimKind.parallel,
+          kind: AnimationKind.parallel,
           first: index + 1,
           count: 2,
         },
@@ -359,7 +359,7 @@ export class AnimationPlan {
    * @returns The binding.
    */
   binding(bind: AnimBind): ProgramBinding {
-    const field = ANIM_PROP_FIELDS.get(bind.prop);
+    const field = ANIMATION_PROP_FIELDS.get(bind.prop);
     if (!field) {
       throw new Error(`AOT internal: no ABI prop for ${bind.prop}`);
     }
@@ -373,7 +373,7 @@ export class AnimationPlan {
     // Interpolations that are the same are stored once, so list rows that bind one can share a template.
     const record: ProgramInterp = {
       slot: slot.index,
-      flags: interpolation.colors ? InterpFlag.color : 0,
+      flags: interpolation.colors ? InterpolationFlag.color : 0,
       extrapolateLeft: ENGINE_VALUES.get(interpolation.extrapolateLeft)!,
       extrapolateRight: ENGINE_VALUES.get(interpolation.extrapolateRight)!,
       input: interpolation.input.map(floatBits),
@@ -412,15 +412,15 @@ export class AnimationPlan {
       target: this.value(animation.handle).index,
       delayMs: animation.delayMs,
       flags:
-        (animation.isLooping ? AnimFlag.loop : 0) |
-        (animation.to?.kind === 'number' ? 0 : AnimFlag.toRegister),
+        (animation.isLooping ? AnimationFlag.loop : 0) |
+        (animation.to?.kind === 'number' ? 0 : AnimationFlag.toRegister),
       to: animation.to?.kind === 'number' ? floatBits(animation.to.value) : 0,
     };
     switch (curve.kind) {
       case 'spring':
         return {
           ...record,
-          kind: AnimKind.spring,
+          kind: AnimationKind.spring,
           parameters: [
             floatBits(curve.stiffness),
             floatBits(curve.damping),
@@ -431,7 +431,7 @@ export class AnimationPlan {
       case 'decay':
         return {
           ...record,
-          kind: AnimKind.decay,
+          kind: AnimationKind.decay,
           parameters: [
             floatBits(curve.velocity),
             floatBits(curve.deceleration),
@@ -442,7 +442,7 @@ export class AnimationPlan {
       case 'timing':
         return {
           ...record,
-          kind: AnimKind.timing,
+          kind: AnimationKind.timing,
           easing: ENGINE_VALUES.get(curve.easing)!,
           amount: curve.durationMs,
           parameters: curve.bezier
@@ -463,7 +463,7 @@ export class AnimationPlan {
  * @returns The record.
  */
 const leafDefaults = (): ProgramAnim => ({
-  kind: AnimKind.timing,
+  kind: AnimationKind.timing,
   easing: 0,
   flags: 0,
   target: NONE,
@@ -513,7 +513,7 @@ function afterStep(
 }
 
 /**
- * Starts a descriptor, as er_anim_value_animate starts an animation.
+ * Starts a descriptor, as er_animation_value_animate starts an animation.
  *
  * @param codegen  The function's codegen.
  * @param descriptor  The descriptor.
@@ -528,7 +528,7 @@ function start(
   done: number,
   to: Register | null,
 ): Register {
-  const handle = codegen.builder.register('anim');
+  const handle = codegen.builder.register('animation');
   codegen.builder.abx(
     'ASTART',
     handle.index,
@@ -769,7 +769,7 @@ export function animationStatement(
         plan.owners.has(statement.waitOwner)
       ) {
         codegen.scoped(() => {
-          const handle = builder.register('anim');
+          const handle = builder.register('animation');
           builder.abx(
             'GET32',
             handle.index,
@@ -811,7 +811,7 @@ export function doneFunctions(
 ): ProgramFunction[] {
   return [...plan.doneFunctions].map(([name, done]) => {
     const builder = new FunctionBuilder(
-      FunctionKind.animDone,
+      FunctionKind.animationDone,
       `animation ${name}`,
     );
     const codegen = codegenFor(builder);

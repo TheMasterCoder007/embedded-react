@@ -497,7 +497,7 @@ int main(void)
      * Banded compositing across strip seams: a tall translucent group with two
      * fully-overlapping opaque children.
      *
-     * The 16×24 group is taller than a small ERUI_SCRATCH_BAND_H strip, so it is
+     * The 16×24 group is taller than a small ERUI_SCRATCH_BAND_HEIGHT strip, so it is
      * composited in multiple band passes. Group semantics require the composite
      * (blue — the topmost opaque child) to be blended ONCE at alpha 128 over
      * white: 0xFF7F7FFF on every row. Per-primitive alpha (red@128 then blue@128)
@@ -528,7 +528,7 @@ int main(void)
 
         ERNode* red = er_node_create(ER_NODE_VIEW);
         ERProps red_props = props_default();
-        red_props.position = 1; /* ER_POS_ABSOLUTE */
+        red_props.position = 1; /* ER_POSITION_ABSOLUTE */
         red_props.left = 0;
         red_props.top = 0;
         red_props.width = 16;
@@ -538,7 +538,7 @@ int main(void)
 
         ERNode* blue = er_node_create(ER_NODE_VIEW);
         ERProps blue_props = props_default();
-        blue_props.position = 1; /* ER_POS_ABSOLUTE */
+        blue_props.position = 1; /* ER_POSITION_ABSOLUTE */
         blue_props.left = 0;
         blue_props.top = 0;
         blue_props.width = 16;
@@ -658,7 +658,7 @@ int main(void)
      *
      * A translucent group re-rendered because its bound opacity VALUE changed
      * (a visual-only mark) may be served from the fade cache in builds with
-     * ERUI_FADE_CACHE_W/H set; a content change (child recolored via props)
+     * ERUI_FADE_CACHE_WIDTH/HEIGHT set; a content change (child recolored via props)
      * must invalidate it. The pixel expectations are identical with the cache
      * compiled out, so this test runs in every configuration — with the cache
      * on, it verifies the cached blend is bit-exact and invalidation works.
@@ -697,15 +697,15 @@ int main(void)
         if (px(&test_context, 2, 2) != 0xFFFF7F7FU)
             return fail("fade cache: initial composite should be red at alpha 128");
 
-        /* Drive opacity through an animated value: er_anim_value_set marks the group
+        /* Drive opacity through an animated value: er_animation_value_set marks the group
          * visual-only, so cache-enabled builds serve the next commits from the cache. */
-        ERAnimValueHandle value = er_anim_value_create(0.25f);
-        er_anim_value_bind(value, group, ER_PROP_OPACITY); /* bind-time apply → opacity 64 */
+        ERAnimationValueHandle value = er_animation_value_create(0.25f);
+        er_animation_value_bind(value, group, ER_PROP_OPACITY); /* bind-time apply → opacity 64 */
         er_commit();
         if (px(&test_context, 2, 2) != 0xFFFFBFBFU)
             return fail("fade cache: red at alpha 64 after value bind");
 
-        er_anim_value_set(value, 0.5f); /* alpha-only change → cache hit when enabled */
+        er_animation_value_set(value, 0.5f); /* alpha-only change → cache hit when enabled */
         er_commit();
         if (px(&test_context, 2, 2) != 0xFFFF7F7FU)
             return fail("fade cache: red at alpha 128 after alpha-only value change");
@@ -717,7 +717,7 @@ int main(void)
         if (px(&test_context, 2, 2) != 0xFF7F7FFFU)
             return fail("fade cache: child recolor mid-fade must show blue (stale cache?)");
 
-        er_anim_value_destroy(value);
+        er_animation_value_destroy(value);
         er_tree_remove_child(group, child);
         er_tree_remove_child(root, group);
         er_node_destroy(child);
@@ -758,19 +758,19 @@ int main(void)
         er_tree_append_child(root, group);
         er_tree_set_root(root);
 
-        ERAnimValueHandle value = er_anim_value_create(1.0f);
-        er_anim_value_bind(value, child, ER_PROP_OPACITY);
+        ERAnimationValueHandle value = er_animation_value_create(1.0f);
+        er_animation_value_bind(value, child, ER_PROP_OPACITY);
         er_commit();
         er_commit(); /* capture, in cache-enabled builds */
         if (px(&test_context, 2, 2) != 0xFFFF7F7FU)
             return fail("nested fade: red at the group alpha");
 
-        er_anim_value_set(value, 0.0f);
+        er_animation_value_set(value, 0.0f);
         er_commit();
         if (px(&test_context, 2, 2) != 0xFFFFFFFFU)
             return fail("nested fade: a child faded out inside a cached group must disappear");
 
-        er_anim_value_destroy(value);
+        er_animation_value_destroy(value);
         er_tree_remove_child(group, child);
         er_tree_remove_child(root, group);
         er_node_destroy(child);
@@ -802,21 +802,21 @@ int main(void)
         er_tree_append_child(root, box);
         er_tree_set_root(root);
 
-        ERAnimValueHandle value = er_anim_value_create(1.0f);
+        ERAnimationValueHandle value = er_animation_value_create(1.0f);
         const ERColorInterpolation color_interpolation = {
             {0.0f, 1.0f}, {0xFF000000U, 0xFF0000FFU}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
-        er_anim_value_bind_color(value, box, ER_PROP_BACKGROUND_COLOR, &color_interpolation);
+        er_animation_value_bind_color(value, box, ER_PROP_BACKGROUND_COLOR, &color_interpolation);
         er_commit();
         if (px(&test_context, 2, 2) != 0xFF0000FFU)
             return fail("unbind all: the bound color should paint");
 
-        er_anim_value_unbind_all(value);
+        er_animation_value_unbind_all(value);
         er_node_set_props(box, &box_props);
         er_commit();
         if (px(&test_context, 2, 2) != 0xFFFF0000U)
             return fail("unbind all: the static color should repaint");
 
-        er_anim_value_destroy(value);
+        er_animation_value_destroy(value);
         er_tree_remove_child(root, box);
         er_node_destroy(box);
         er_node_destroy(root);
@@ -855,9 +855,9 @@ int main(void)
 
         ERNode* card = er_node_create(ER_NODE_VIEW);
         ERProps card_props = props_default();
-        card_props.position = 1; /* ER_POS_ABSOLUTE */
+        card_props.position = 1; /* ER_POSITION_ABSOLUTE */
         card_props.left = 4;
-        card_props.top = 8; /* spans band seams for any small ERUI_SCRATCH_BAND_H */
+        card_props.top = 8; /* spans band seams for any small ERUI_SCRATCH_BAND_HEIGHT */
         card_props.width = 8;
         card_props.height = 8;
         card_props.background_color = 0xFFFF0000U; /* red, fully opaque */
@@ -941,7 +941,7 @@ int main(void)
 
         ERNode* text_node = er_node_create(ER_NODE_TEXT);
         ERProps text_props = props_default();
-        text_props.position = ER_POS_ABSOLUTE;
+        text_props.position = ER_POSITION_ABSOLUTE;
         text_props.left = 0;
         text_props.top = 8;
         text_props.width = FRAMEBUFFER_WIDTH;
@@ -980,16 +980,16 @@ int main(void)
          * blue backdrop tells the two apart. */
         root_props.background_color = 0xFF0000FFU;
         er_node_set_props(root, &root_props);
-        ERAnimValueHandle color_value = er_anim_value_create(0.0f);
+        ERAnimationValueHandle color_value = er_animation_value_create(0.0f);
         const ERColorInterpolation color_interpolation = {
             {0.0f, 1.0f}, {0x00000000U, 0xFF000000U}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
-        er_anim_value_bind_color(color_value, text_node, ER_PROP_COLOR, &color_interpolation);
+        er_animation_value_bind_color(color_value, text_node, ER_PROP_COLOR, &color_interpolation);
         er_commit();
         for (int y = 8; y < 28; y++)
             for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
                 if (px(&test_context, x, y) != 0xFF0000FFU)
                     return fail("text color: an animated transparent color should paint nothing");
-        er_anim_value_destroy(color_value);
+        er_animation_value_destroy(color_value);
 
         er_tree_remove_child(root, text_node);
         er_tree_remove_child(root, image);

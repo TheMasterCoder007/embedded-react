@@ -206,7 +206,7 @@ static void test_paints_over_the_scene(void)
     CHECK(s_recorded.scene_fills == 0, "the scene doesn't paint under it");
     CHECK(s_recorded.operation_count > 1, "the text draws");
     ERRect dirty;
-    CHECK(er_get_dirty_rect(&dirty) && dirty.w == SCREEN_WIDTH && dirty.h == SCREEN_HEIGHT,
+    CHECK(er_get_dirty_rect(&dirty) && dirty.width == SCREEN_WIDTH && dirty.height == SCREEN_HEIGHT,
           "the whole screen is reported");
 
     commit();
@@ -297,9 +297,9 @@ static void test_fault_record(void)
     CHECK(er_fault_recorded(&record), "a recorded fault is kept");
     CHECK(strlen(record.reason) == ER_FAULT_REASON_BYTES - 1u, "its reason is cut to fit");
 
-    record.pc ^= 1u;
+    record.program_counter ^= 1u;
     CHECK(!er_fault_recorded(&record), "a changed record fails its check");
-    record.pc ^= 1u;
+    record.program_counter ^= 1u;
 
     CHECK(er_fault_show_recorded(&record, SCREEN_WIDTH, SCREEN_HEIGHT), "a recorded fault shows");
     CHECK(er_error_screen_active(), "on the error screen");

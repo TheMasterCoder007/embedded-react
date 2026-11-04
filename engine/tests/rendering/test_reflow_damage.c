@@ -193,12 +193,12 @@ static int check_moved_child_only(void)
     /* Both footprints, or the contract is broken in the other direction: the reported rect has to
      * COVER what was repainted, and a move repaints the trail as well as the destination. Old spot
      * is x[0,20), new spot x[40,60). */
-    if (dirty.x > 0 || dirty.x + dirty.w < 40 + KID_SIZE)
+    if (dirty.x > 0 || dirty.x + dirty.width < 40 + KID_SIZE)
         return fail("reported damage does not cover both the old and new position of a moved child");
     /* ...and no wider than that, or nothing was saved over damaging the whole 200px bar. */
-    if (dirty.w > 100)
+    if (dirty.width > 100)
         return fail("a moved child damaged the whole re-measured container");
-    if (dirty.h > BAR_HEIGHT + 8)
+    if (dirty.height > BAR_HEIGHT + 8)
         return fail("damage spilled outside the bar's own strip");
     return EXIT_SUCCESS;
 }
@@ -217,7 +217,7 @@ static int check_visual_change_still_damages(void)
     ERRect dirty;
     if (!er_get_dirty_rect(&dirty))
         return fail("a recolour reported no damage");
-    if (dirty.w < SCREEN || dirty.h < BAR_HEIGHT)
+    if (dirty.width < SCREEN || dirty.height < BAR_HEIGHT)
         return fail("a recolour damaged less than the node's box");
     if ((s_framebuffer[10 * SCREEN + 150] & 0x00FFFFFFU) != 0x0000AA00U)
         return fail("the new colour did not reach the far end of the bar");

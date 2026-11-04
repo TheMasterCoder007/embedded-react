@@ -28,27 +28,29 @@
  */
 static bool touch_or_overlap(const ERRect* first, const ERRect* second)
 {
-    return !(first->x + first->w < second->x || second->x + second->w < first->x || first->y + first->h < second->y
-             || second->y + second->h < first->y);
+    return !(first->x + first->width < second->x || second->x + second->width < first->x
+             || first->y + first->height < second->y || second->y + second->height < first->y);
 }
 
 /** @brief Grows @p target in place to the bounding box of target ∪ other. */
 static void bbox_union(ERRect* target, const ERRect* other)
 {
-    const int right = (target->x + target->w > other->x + other->w) ? target->x + target->w : other->x + other->w;
-    const int bottom = (target->y + target->h > other->y + other->h) ? target->y + target->h : other->y + other->h;
+    const int right =
+        (target->x + target->width > other->x + other->width) ? target->x + target->width : other->x + other->width;
+    const int bottom =
+        (target->y + target->height > other->y + other->height) ? target->y + target->height : other->y + other->height;
     if (other->x < target->x)
         target->x = other->x;
     if (other->y < target->y)
         target->y = other->y;
-    target->w = right - target->x;
-    target->h = bottom - target->y;
+    target->width = right - target->x;
+    target->height = bottom - target->y;
 }
 
 /** @brief Rect area in pixels (fields are non-negative by construction). */
 static uint32_t rect_area(const ERRect* rect)
 {
-    return (uint32_t)rect->w * (uint32_t)rect->h;
+    return (uint32_t)rect->width * (uint32_t)rect->height;
 }
 
 /**
@@ -126,8 +128,8 @@ void er_damage_set_add(ERDamageSet* set, int x, int y, int width, int height)
     ERRect accumulated;
     accumulated.x = x;
     accumulated.y = y;
-    accumulated.w = width;
-    accumulated.h = height;
+    accumulated.width = width;
+    accumulated.height = height;
 
     /* Merge with everything the input touches (disjointness invariant), cascading. */
     absorb_touching(set, &accumulated);
@@ -196,8 +198,8 @@ bool er_damage_set_bounds(const ERDamageSet* set, ERRect* out)
         {
             out->x = 0;
             out->y = 0;
-            out->w = 0;
-            out->h = 0;
+            out->width = 0;
+            out->height = 0;
         }
         return false;
     }

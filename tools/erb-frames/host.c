@@ -164,8 +164,8 @@ int main(int argc, char** argv)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = (uint16_t)width,
-        .screen_h = (uint16_t)height,
+        .screen_width = (uint16_t)width,
+        .screen_height = (uint16_t)height,
         .log = log_line,
     };
     ErbError error;

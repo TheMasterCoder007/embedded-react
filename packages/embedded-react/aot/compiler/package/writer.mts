@@ -198,7 +198,7 @@ export interface ProgramKey {
 export interface ProgramKeyboard {
   layers: ProgramKey[][][];
   rowHeight: number;
-  gridCols: number;
+  gridColumns: number;
   keyGap: number;
   keyRadius: number;
   fontSize: number;
@@ -586,7 +586,7 @@ function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
     }
   });
   if (program.animations.length) {
-    table(Table.anims, writer => {
+    table(Table.animations, writer => {
       for (const animation of program.animations) {
         writer.u8(animation.kind);
         writer.u8(animation.easing);
@@ -612,7 +612,7 @@ function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
     });
   }
   if (program.interpolations.length) {
-    table(Table.interps, writer => {
+    table(Table.interpolations, writer => {
       for (const interpolation of program.interpolations) {
         writer.u16(interpolation.slot);
         writer.u8(interpolation.input.length);
@@ -726,7 +726,7 @@ function keyboardTable(keyboard: ProgramKeyboard): Uint8Array {
   writer.u16(rows.length);
   writer.u16(keys.length);
   writer.u16(keyboard.rowHeight);
-  writer.u8(keyboard.gridCols);
+  writer.u8(keyboard.gridColumns);
   writer.u8(keyboard.keyGap);
   writer.u8(keyboard.keyRadius);
   writer.u8(keyboard.fontSize);

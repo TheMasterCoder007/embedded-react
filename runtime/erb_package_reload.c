@@ -82,7 +82,7 @@ static void report_failure(ErbPackageReload* reload, const ErbError* error)
     say(reload, "hot reload: %s", message);
     const bool running = erb_running();
     erb_show_error_hint(error, running ? HINT_STILL_RUNNING : HINT_SAVE_AGAIN);
-    reload->reason_up = running;
+    reload->error_screen_shown = running;
     reload->receiving = false;
 }
 
@@ -121,7 +121,7 @@ static void begin(ErbPackageReload* reload, uint32_t package_bytes)
     {
         ErbError error;
         memset(&error, 0, sizeof(error));
-        error.status = ERB_ERR_TOO_BIG;
+        error.status = ERB_ERROR_TOO_BIG;
         error.needed = package_bytes;
         error.available = slot_bytes > ERB_PACKAGE_SLOT_HEADER_BYTES ? slot_bytes - ERB_PACKAGE_SLOT_HEADER_BYTES : 0u;
         error.resource = ERB_RESOURCE_SLOT;
@@ -135,12 +135,12 @@ static void begin(ErbPackageReload* reload, uint32_t package_bytes)
         && !erb_package_slot_read(&reload->slots.slots[reload->active], NULL, NULL, NULL)
         && erb_package_slot_read(&reload->slots.slots[reload->staging], NULL, NULL, NULL))
     {
-        report_status(reload, ERB_ERR_SLOT, "the running package has no header: reset the board before saving again");
+        report_status(reload, ERB_ERROR_SLOT, "the running package has no header: reset the board before saving again");
         return;
     }
     if (!reload->slots.erase((unsigned)reload->staging, 0u, ERB_PACKAGE_SLOT_HEADER_BYTES, reload->slots.context))
     {
-        report_status(reload, ERB_ERR_SLOT, "erasing the staging slot's header failed");
+        report_status(reload, ERB_ERROR_SLOT, "erasing the staging slot's header failed");
         return;
     }
     reload->package_bytes = package_bytes;
@@ -168,7 +168,7 @@ static bool apply(ErbPackageReload* reload)
         report_failure(reload, &error);
         return false;
     }
-    reload->reason_up = false;
+    reload->error_screen_shown = false;
 
     const unsigned other = slot == 0u ? 1u : 0u;
     uint32_t newest = 0u;
@@ -210,7 +210,7 @@ static bool chunk(ErbPackageReload* reload, size_t frame_bytes)
     if (length > reload->chunk_bytes || length > remaining
         || (length % ERB_PACKAGE_SLOT_PAGE_BYTES != 0u && length != remaining))
     {
-        report_status(reload, ERB_ERR_CORRUPT, "a chunk doesn't fit the package");
+        report_status(reload, ERB_ERROR_CORRUPT, "a chunk doesn't fit the package");
         return false;
     }
 
@@ -226,14 +226,14 @@ static bool chunk(ErbPackageReload* reload, size_t frame_bytes)
     {
         if (!reload->slots.erase(slot, reload->erased_to, ERB_PACKAGE_SLOT_SECTOR_BYTES, reload->slots.context))
         {
-            report_status(reload, ERB_ERR_SLOT, "erasing the staging slot failed");
+            report_status(reload, ERB_ERROR_SLOT, "erasing the staging slot failed");
             return false;
         }
         reload->erased_to += ERB_PACKAGE_SLOT_SECTOR_BYTES;
     }
     if (!reload->slots.program(slot, flash_offset, data, padded, reload->slots.context))
     {
-        report_status(reload, ERB_ERR_SLOT, "programming the staging slot failed");
+        report_status(reload, ERB_ERROR_SLOT, "programming the staging slot failed");
         return false;
     }
     reload->received += length;
@@ -277,24 +277,24 @@ bool erb_package_reload_feed(ErbPackageReload* reload, const uint8_t* data, size
         const ErHotReloadStatus status =
             er_hotreload_feed(&reload->parser, data + done, length - done, &consumed, &frame_bytes);
         done += consumed;
-        if (status == ER_HR_NEED_MORE)
+        if (status == ER_HOTRELOAD_NEED_MORE)
         {
             break;
         }
-        if (status != ER_HR_FRAME_READY)
+        if (status != ER_HOTRELOAD_FRAME_READY)
         {
-            say(reload, "dropped frame: %s", er_hotreload_status_str(status));
+            say(reload, "dropped frame: %s", er_hotreload_status_name(status));
             continue;
         }
-        switch (reload->parser.msg_type)
+        switch (reload->parser.message_type)
         {
-            case ER_HR_MSG_PACKAGE_BEGIN:
+            case ER_HOTRELOAD_MESSAGE_PACKAGE_BEGIN:
                 if (frame_bytes == BEGIN_PAYLOAD_BYTES)
                 {
                     begin(reload, read_u32(reload->buffer));
                 }
                 break;
-            case ER_HR_MSG_PACKAGE_CHUNK:
+            case ER_HOTRELOAD_MESSAGE_PACKAGE_CHUNK:
                 started = chunk(reload, frame_bytes) || started;
                 break;
             default:
@@ -307,9 +307,9 @@ bool erb_package_reload_feed(ErbPackageReload* reload, const uint8_t* data, size
 
 void erb_package_reload_tap(ErbPackageReload* reload)
 {
-    if (reload->reason_up && erb_running())
+    if (reload->error_screen_shown && erb_running())
     {
         er_error_screen_hide();
     }
-    reload->reason_up = false;
+    reload->error_screen_shown = false;
 }

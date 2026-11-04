@@ -130,9 +130,9 @@ typedef struct
 typedef struct
 {
     uint32_t fill, stroke;
-    float stroke_w, miter;
+    float stroke_width, miter;
     uint8_t cap, join, fill_rule;
-    int16_t fill_grad, stroke_grad;
+    int16_t fill_gradient, stroke_gradient;
 } TPaint;
 
 typedef struct
@@ -163,7 +163,7 @@ typedef struct
     uint16_t slot;
     uint8_t point_count, flags, extrapolate_left, extrapolate_right;
     float input[8];
-    uint32_t output[8]; /**< f32 bits, or ARGB with ERB_INTERP_FLAG_COLOR. */
+    uint32_t output[8]; /**< f32 bits, or ARGB with ERB_INTERPOLATION_FLAG_COLOR. */
 } TInterp;
 
 typedef struct
@@ -181,7 +181,7 @@ typedef struct
 typedef struct
 {
     uint16_t row_height;
-    uint8_t grid_cols, key_gap, key_radius, font_size;
+    uint8_t grid_columns, key_gap, key_radius, font_size;
     uint32_t colors[4]; /**< Panel, key, active key and label. */
     TGroup layers[12];
     uint32_t layer_count;
@@ -393,14 +393,14 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
             }
             for (uint32_t index = 0; index < package->panel_count; index++)
             {
-                tb_u32(buffer, ERB_CK_WIDTH);
-                tb_u32(buffer, ERB_CK_PUSHI | ((uint32_t)package->panels[index].width << 8));
-                tb_u32(buffer, ERB_CK_EQ);
-                tb_u32(buffer, ERB_CK_HEIGHT);
-                tb_u32(buffer, ERB_CK_PUSHI | ((uint32_t)package->panels[index].height << 8));
-                tb_u32(buffer, ERB_CK_EQ);
-                tb_u32(buffer, ERB_CK_AND);
-                tb_u32(buffer, ERB_CK_END);
+                tb_u32(buffer, ERB_CHECK_OP_WIDTH);
+                tb_u32(buffer, ERB_CHECK_OP_PUSHI | ((uint32_t)package->panels[index].width << 8));
+                tb_u32(buffer, ERB_CHECK_OP_EQ);
+                tb_u32(buffer, ERB_CHECK_OP_HEIGHT);
+                tb_u32(buffer, ERB_CHECK_OP_PUSHI | ((uint32_t)package->panels[index].height << 8));
+                tb_u32(buffer, ERB_CHECK_OP_EQ);
+                tb_u32(buffer, ERB_CHECK_OP_AND);
+                tb_u32(buffer, ERB_CHECK_OP_END);
             }
             break;
         case ERB_TABLE_STRINGS:
@@ -543,7 +543,7 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
             for (uint32_t index = 0; index < package->code_count; index++)
                 tb_u32(buffer, package->code[index]);
             return true;
-        case ERB_TABLE_ANIMS:
+        case ERB_TABLE_ANIMATIONS:
             for (uint32_t index = 0; index < package->anim_count; index++)
             {
                 const TAnim* animation = &package->anims[index];
@@ -592,14 +592,14 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
                 const TPaint* paint = &package->paints[index];
                 tb_u32(buffer, paint->fill);
                 tb_u32(buffer, paint->stroke);
-                tb_f32(buffer, paint->stroke_w);
+                tb_f32(buffer, paint->stroke_width);
                 tb_f32(buffer, paint->miter);
                 tb_u8(buffer, paint->cap);
                 tb_u8(buffer, paint->join);
                 tb_u8(buffer, paint->fill_rule);
                 tb_u8(buffer, 0u);
-                tb_u16(buffer, (uint16_t)paint->fill_grad);
-                tb_u16(buffer, (uint16_t)paint->stroke_grad);
+                tb_u16(buffer, (uint16_t)paint->fill_gradient);
+                tb_u16(buffer, (uint16_t)paint->stroke_gradient);
             }
             for (uint32_t index = 0; index < package->gradient_count; index++)
             {
@@ -636,7 +636,7 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
                 tb_u16(buffer, package->inputs[index].slot);
             }
             break;
-        case ERB_TABLE_INTERPS:
+        case ERB_TABLE_INTERPOLATIONS:
             for (uint32_t index = 0; index < package->interp_count; index++)
             {
                 const TInterp* interp = &package->interps[index];
@@ -661,7 +661,7 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
             tb_u16(buffer, (uint16_t)keyboard->row_count);
             tb_u16(buffer, (uint16_t)keyboard->key_count);
             tb_u16(buffer, keyboard->row_height);
-            tb_u8(buffer, keyboard->grid_cols);
+            tb_u8(buffer, keyboard->grid_columns);
             tb_u8(buffer, keyboard->key_gap);
             tb_u8(buffer, keyboard->key_radius);
             tb_u8(buffer, keyboard->font_size);
@@ -1050,8 +1050,8 @@ static void tpkg_base(TPkg* package)
     package->build_id = TPKG_BUILD_ID;
     package->panels[0] = (TPanel){TPKG_SCREEN, TPKG_SCREEN, TPKG_ARENA_BYTES, 8u, 0u, FUNCTION_BOOT, FUNCTION_UPDATE};
     package->panel_count = 1;
-    package->needs[0] = (TNeed){ERB_RES_ANIM_VALUES, 1u};
-    package->needs[1] = (TNeed){ERB_RES_IMAGES, 1u};
+    package->needs[0] = (TNeed){ERB_RESOURCE_ANIMATION_VALUES, 1u};
+    package->needs[1] = (TNeed){ERB_RESOURCE_IMAGES, 1u};
     package->need_count = 2;
     for (uint32_t index = 0; index < 8u; index++)
     {
@@ -1062,7 +1062,7 @@ static void tpkg_base(TPkg* package)
     memcpy(package->strings, strings, sizeof(strings));
     package->string_count = 8;
     package->const32[0] = 7u;
-    package->const32[1] = ER_FLEX_COL;
+    package->const32[1] = ER_FLEX_COLUMN;
     package->const32[2] = ER_FLEX_ROW;
     package->const32_count = 3;
     package->const64[0] = 1234567890123ull;
@@ -1075,7 +1075,7 @@ static void tpkg_base(TPkg* package)
         {ERB_REGION_LISTS, 0, 56, 36},
         {ERB_REGION_HANDLES, 0, 92, 40},
         {ERB_REGION_TIMERS, 2, 132, 32},
-        {ERB_REGION_ANIMS, 4, 164, 80},
+        {ERB_REGION_ANIMATIONS, 4, 164, 80},
         {ERB_REGION_TAPE, 16, 244, 64},
         {ERB_REGION_EVENTS, 4, 308, 128},
         {ERB_REGION_STACK, 64, 436, 256},
@@ -1087,17 +1087,17 @@ static void tpkg_base(TPkg* package)
     uint32_t speed_bits;
     memcpy(&speed_bits, &speed, sizeof(speed_bits));
     const TSlot slots[] = {
-        {ERB_T_INT, ERB_SLOT_TRACKED, 0, 0, 5, 0, ERB_NONE},
-        {ERB_T_FLOAT, 0, ERB_NONE, 4, speed_bits, 0, ERB_NONE},
-        {ERB_T_INT64, 0, ERB_NONE, 8, 0, 0, ERB_NONE},
-        {ERB_T_ENUM, 0, ERB_NONE, 16, 1, 0, 0},
-        {ERB_T_BOOL, ERB_SLOT_BOOT_ONLY, ERB_NONE, 20, 0, 0, ERB_NONE},
-        {ERB_T_AVALUE, 0, ERB_NONE, 24, 0, 0, ERB_NONE},
-        {ERB_T_ANIM, 0, ERB_NONE, 28, 0, 0, ERB_NONE},
-        {ERB_T_STRING, ERB_SLOT_TRACKED, 1, 40, STRING_HELLO, 15, ERB_NONE},
-        {ERB_T_LIST, 0, ERB_NONE, 56, 0, 4, 0},
-        {ERB_T_NODE, 0, ERB_NONE, 92, 0, 0, ERB_NONE},
-        {ERB_T_NODE, 0, ERB_NONE, 100, 0, 4, ERB_NONE},
+        {ERB_TYPE_INT, ERB_SLOT_TRACKED, 0, 0, 5, 0, ERB_NONE},
+        {ERB_TYPE_FLOAT, 0, ERB_NONE, 4, speed_bits, 0, ERB_NONE},
+        {ERB_TYPE_INT64, 0, ERB_NONE, 8, 0, 0, ERB_NONE},
+        {ERB_TYPE_ENUM, 0, ERB_NONE, 16, 1, 0, 0},
+        {ERB_TYPE_BOOL, ERB_SLOT_BOOT_ONLY, ERB_NONE, 20, 0, 0, ERB_NONE},
+        {ERB_TYPE_ANIMATED_VALUE, 0, ERB_NONE, 24, 0, 0, ERB_NONE},
+        {ERB_TYPE_ANIMATION, 0, ERB_NONE, 28, 0, 0, ERB_NONE},
+        {ERB_TYPE_STRING, ERB_SLOT_TRACKED, 1, 40, STRING_HELLO, 15, ERB_NONE},
+        {ERB_TYPE_LIST, 0, ERB_NONE, 56, 0, 4, 0},
+        {ERB_TYPE_NODE, 0, ERB_NONE, 92, 0, 0, ERB_NONE},
+        {ERB_TYPE_NODE, 0, ERB_NONE, 100, 0, 4, ERB_NONE},
     };
     memcpy(package->slots, slots, sizeof(slots));
     package->slot_count = 11;
@@ -1110,23 +1110,23 @@ static void tpkg_base(TPkg* package)
 
     package->rows[0] = (TRow){8, 0, 2};
     package->row_count = 1;
-    package->fields[0] = (TField){ERB_T_INT, 0, 0};
-    package->fields[1] = (TField){ERB_T_FLOAT, 0, 4};
+    package->fields[0] = (TField){ERB_TYPE_INT, 0, 0};
+    package->fields[1] = (TField){ERB_TYPE_FLOAT, 0, 4};
     package->field_count = 2;
 
     package->prop_sets[0] = (TSet){0, 1};
     package->prop_sets[1] = (TSet){1, 2};
     package->prop_sets[2] = (TSet){3, 1};
     package->prop_set_count = 3;
-    package->prop_entries[0] = (TPropEntry){PROP_TEXT, ERB_PK_STRING, STRING_HELLO};
-    package->prop_entries[1] = (TPropEntry){PROP_WIDTH, ERB_PK_I16, 100};
-    package->prop_entries[2] = (TPropEntry){PROP_BACKGROUND_COLOR, ERB_PK_COLOR, COLOR_BLUE};
-    package->prop_entries[3] = (TPropEntry){PROP_IMAGE_NAME, ERB_PK_IMAGE, STRING_IMG};
+    package->prop_entries[0] = (TPropEntry){PROP_TEXT, ERB_PROP_KIND_STRING, STRING_HELLO};
+    package->prop_entries[1] = (TPropEntry){PROP_WIDTH, ERB_PROP_KIND_I16, 100};
+    package->prop_entries[2] = (TPropEntry){PROP_BACKGROUND_COLOR, ERB_PROP_KIND_COLOR, COLOR_BLUE};
+    package->prop_entries[3] = (TPropEntry){PROP_IMAGE_NAME, ERB_PROP_KIND_IMAGE, STRING_IMG};
     package->prop_entry_count = 4;
 
-    package->templates[0] = (TTemplate){0, 4, ERB_TPL_ROOT};
-    package->templates[1] = (TTemplate){4, 1, ERB_TPL_ROW};
-    package->templates[2] = (TTemplate){5, 1, ERB_TPL_BRANCH};
+    package->templates[0] = (TTemplate){0, 4, ERB_TEMPLATE_KIND_ROOT};
+    package->templates[1] = (TTemplate){4, 1, ERB_TEMPLATE_KIND_ROW};
+    package->templates[2] = (TTemplate){5, 1, ERB_TEMPLATE_KIND_BRANCH};
     package->template_count = 3;
     const TNode nodes[] = {
         {ER_NODE_VIEW, 0, 3, 1, SLOT_ROOT, 0, 1},
@@ -1145,16 +1145,16 @@ static void tpkg_base(TPkg* package)
     package->binding_count = 3;
 
     {
-        const uint8_t types[] = {ERB_T_BOOL};
+        const uint8_t types[] = {ERB_TYPE_BOOL};
         const uint32_t code[] = {OP_ABX(LOADI, 0, 1), OP_ABX(SET32, 0, SLOT_READY), OP_ABC(RET, 0, 0, 0)};
-        tpkg_function(package, ERB_FN_BOOT, 0, 0, types, 1, code, 3);
+        tpkg_function(package, ERB_FUNCTION_KIND_BOOT, 0, 0, types, 1, code, 3);
     }
     {
         const uint32_t code[] = {OP_ABX(JDIRTY, 0, 0), 1u, OP_ABC(RET, 0, 0, 0)};
-        tpkg_function(package, ERB_FN_UPDATE, 0, 0, NULL, 0, code, 3);
+        tpkg_function(package, ERB_FUNCTION_KIND_UPDATE, 0, 0, NULL, 0, code, 3);
     }
     {
-        const uint8_t types[] = {ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t code[] = {
             OP_ABX(GET32, 0, SLOT_COUNT),
             OP_ABX(LOADI, 1, 1),
@@ -1167,19 +1167,19 @@ static void tpkg_base(TPkg* package)
     }
     {
         const uint32_t code[] = {OP_ABC(RET, 0, 0, 0)};
-        tpkg_function(package, ERB_FN_TIMER, 0, 0, NULL, 0, code, 1);
-        tpkg_function(package, ERB_FN_EFFECT, 0, 0, NULL, 0, code, 1);
-        tpkg_function(package, ERB_FN_ANIM_DONE, 0, 0, NULL, 0, code, 1);
+        tpkg_function(package, ERB_FUNCTION_KIND_TIMER, 0, 0, NULL, 0, code, 1);
+        tpkg_function(package, ERB_FUNCTION_KIND_EFFECT, 0, 0, NULL, 0, code, 1);
+        tpkg_function(package, ERB_FUNCTION_KIND_ANIMATION_DONE, 0, 0, NULL, 0, code, 1);
     }
     {
-        const uint8_t types[] = {ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t code[] = {OP_ABX(LOADI, 1, 2), OP_ABC(MUL, 0, 0, 1), OP_ABC(RET, 0, 0, 0)};
-        tpkg_function(package, ERB_FN_HELPER, 1, ERB_T_INT, types, 2, code, 3);
+        tpkg_function(package, ERB_FUNCTION_KIND_HELPER, 1, ERB_TYPE_INT, types, 2, code, 3);
     }
 
-    package->anims[0] = (TAnim){ERB_ANIM_SEQUENCE, 0, 0, ERB_NONE, 0, 1, 1, 0, 0, 0, {0, 0, 0, 0}};
+    package->anims[0] = (TAnim){ERB_ANIMATION_SEQUENCE, 0, 0, ERB_NONE, 0, 1, 1, 0, 0, 0, {0, 0, 0, 0}};
     package->anims[1] =
-        (TAnim){ERB_ANIM_TIMING, ER_EASE_LINEAR, 0, SLOT_FADE, 0, 0, 0, 100, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
+        (TAnim){ERB_ANIMATION_TIMING, ER_EASE_LINEAR, 0, SLOT_FADE, 0, 0, 0, 100, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
     package->anim_count = 2;
 
     const float floats[] = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 2.0f, 10.0f, 10.0f, 6.0f};
@@ -1199,7 +1199,7 @@ static void tpkg_base(TPkg* package)
         (TInterp){SLOT_FADE, 2, 0, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP, {0.0f, 1.0f}, {0u, 0x42B40000u}};
     package->interps[1] = (TInterp){SLOT_FADE,
                                     2,
-                                    ERB_INTERP_FLAG_COLOR,
+                                    ERB_INTERPOLATION_FLAG_COLOR,
                                     ER_EXTRAPOLATE_EXTEND,
                                     ER_EXTRAPOLATE_EXTEND,
                                     {0.0f, 1.0f},

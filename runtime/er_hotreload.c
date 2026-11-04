@@ -45,7 +45,7 @@ static uint32_t er_hr_rd_le32(const uint8_t* bytes)
 }
 
 /* The magic, as 4 bytes (avoids embedding a NUL-terminated string to memcmp against). */
-static const uint8_t ER_HR_MAGIC[ER_HR_MAGIC_SIZE] = {'E', 'R', 'H', 'R'};
+static const uint8_t ER_HOTRELOAD_MAGIC[ER_HOTRELOAD_MAGIC_SIZE] = {'E', 'R', 'H', 'R'};
 
 /** @brief Returns the parser to the magic-scan phase, discarding any partial frame. */
 static void er_hr_rescan(ErHotReload* parser)
@@ -65,24 +65,24 @@ static void er_hr_rescan(ErHotReload* parser)
 void er_hotreload_init(ErHotReload* parser, uint8_t* buffer, size_t capacity)
 {
     memset(parser, 0, sizeof(*parser));
-    parser->buf = buffer;
-    parser->cap = capacity;
+    parser->buffer = buffer;
+    parser->capacity = capacity;
     er_hr_rescan(parser);
 }
 
-const char* er_hotreload_status_str(ErHotReloadStatus status)
+const char* er_hotreload_status_name(ErHotReloadStatus status)
 {
     switch (status)
     {
-        case ER_HR_NEED_MORE:
+        case ER_HOTRELOAD_NEED_MORE:
             return "need more";
-        case ER_HR_FRAME_READY:
+        case ER_HOTRELOAD_FRAME_READY:
             return "frame ready";
-        case ER_HR_BAD_CRC:
+        case ER_HOTRELOAD_BAD_CRC:
             return "transport CRC mismatch";
-        case ER_HR_OVERFLOW:
+        case ER_HOTRELOAD_OVERFLOW:
             return "payload exceeds buffer";
-        case ER_HR_BAD_VERSION:
+        case ER_HOTRELOAD_BAD_VERSION:
             return "unsupported frame version";
         default:
             return "unknown";
@@ -99,7 +99,7 @@ er_hotreload_feed(ErHotReload* parser, const uint8_t* data, size_t data_length, 
 
         if (parser->phase == PHASE_MAGIC) /* scan for magic via a rolling 4-byte window (matches at any offset) */
         {
-            if (parser->magic_window_length < ER_HR_MAGIC_SIZE)
+            if (parser->magic_window_length < ER_HOTRELOAD_MAGIC_SIZE)
             {
                 parser->magic_window[parser->magic_window_length++] = byte;
             }
@@ -110,11 +110,11 @@ er_hotreload_feed(ErHotReload* parser, const uint8_t* data, size_t data_length, 
                 parser->magic_window[2] = parser->magic_window[3];
                 parser->magic_window[3] = byte;
             }
-            if (parser->magic_window_length == ER_HR_MAGIC_SIZE
-                && memcmp(parser->magic_window, ER_HR_MAGIC, ER_HR_MAGIC_SIZE) == 0)
+            if (parser->magic_window_length == ER_HOTRELOAD_MAGIC_SIZE
+                && memcmp(parser->magic_window, ER_HOTRELOAD_MAGIC, ER_HOTRELOAD_MAGIC_SIZE) == 0)
             {
-                memcpy(parser->header, ER_HR_MAGIC, ER_HR_MAGIC_SIZE);
-                parser->header_received = ER_HR_MAGIC_SIZE;
+                memcpy(parser->header, ER_HOTRELOAD_MAGIC, ER_HOTRELOAD_MAGIC_SIZE);
+                parser->header_received = ER_HOTRELOAD_MAGIC_SIZE;
                 parser->magic_window_length = 0u;
                 parser->phase = PHASE_HEADER;
             }
@@ -124,29 +124,29 @@ er_hotreload_feed(ErHotReload* parser, const uint8_t* data, size_t data_length, 
         if (parser->phase == PHASE_HEADER) /* collect the rest of the 16-byte header */
         {
             parser->header[parser->header_received++] = byte;
-            if (parser->header_received < ER_HR_HEADER_SIZE)
+            if (parser->header_received < ER_HOTRELOAD_HEADER_SIZE)
             {
                 continue;
             }
             const uint8_t version = parser->header[VERSION_OFFSET];
-            parser->msg_type = parser->header[MSG_TYPE_OFFSET];
+            parser->message_type = parser->header[MSG_TYPE_OFFSET];
             parser->payload_length = er_hr_rd_le32(parser->header + PAYLOAD_LENGTH_OFFSET);
             parser->payload_crc = er_hr_rd_le32(parser->header + PAYLOAD_CRC_OFFSET);
 
-            if (version != ER_HR_PROTO_VERSION || parser->payload_length == 0u)
+            if (version != ER_HOTRELOAD_PROTOCOL_VERSION || parser->payload_length == 0u)
             {
                 er_hr_rescan(parser);
                 *consumed = byte_index + 1u;
-                return ER_HR_BAD_VERSION;
+                return ER_HOTRELOAD_BAD_VERSION;
             }
-            if (parser->payload_length > parser->cap)
+            if (parser->payload_length > parser->capacity)
             {
                 /* Too big for our buffer (or a false magic claiming a bogus length): drop and resync
                  * from the next byte rather than skipping payload_len bytes, which could swallow a real
                  * frame that follows a bogus header. */
                 er_hr_rescan(parser);
                 *consumed = byte_index + 1u;
-                return ER_HR_OVERFLOW;
+                return ER_HOTRELOAD_OVERFLOW;
             }
             parser->payload_received = 0u;
             parser->phase = PHASE_PAYLOAD;
@@ -154,27 +154,27 @@ er_hotreload_feed(ErHotReload* parser, const uint8_t* data, size_t data_length, 
         }
 
         /* PHASE_PAYLOAD */
-        parser->buf[parser->payload_received++] = byte;
+        parser->buffer[parser->payload_received++] = byte;
         if (parser->payload_received < parser->payload_length)
         {
             continue;
         }
-        const uint32_t computed_crc = er_crc32(parser->buf, parser->payload_length);
+        const uint32_t computed_crc = er_crc32(parser->buffer, parser->payload_length);
         const size_t payload_length = parser->payload_length;
         const bool crc_matches = (computed_crc == parser->payload_crc);
         er_hr_rescan(parser);
         *consumed = byte_index + 1u;
         if (!crc_matches)
         {
-            return ER_HR_BAD_CRC;
+            return ER_HOTRELOAD_BAD_CRC;
         }
         if (out_length)
         {
             *out_length = payload_length;
         }
-        return ER_HR_FRAME_READY;
+        return ER_HOTRELOAD_FRAME_READY;
     }
 
     *consumed = byte_index; /* == data_length: all input processed without finishing a frame */
-    return ER_HR_NEED_MORE;
+    return ER_HOTRELOAD_NEED_MORE;
 }

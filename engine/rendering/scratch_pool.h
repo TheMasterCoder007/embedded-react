@@ -30,14 +30,14 @@ extern "C"
      ---------------------------------------------------------------------------------------------------------------------*/
 
     /**
-     * @brief Width in pixels of one opacity-composite strip (ERUI_SCRATCH_W).
+     * @brief Width in pixels of one opacity-composite strip (ERUI_SCRATCH_WIDTH).
      */
     int er_scratch_strip_w(void);
 
     /**
-     * @brief Height in pixels of one opacity-composite strip (ERUI_SCRATCH_BAND_H).
+     * @brief Height in pixels of one opacity-composite strip (ERUI_SCRATCH_BAND_HEIGHT).
      *
-     * Defaults to ERUI_SCRATCH_H; boards shrink it to trade repeated banded subtree
+     * Defaults to ERUI_SCRATCH_HEIGHT; boards shrink it to trade repeated banded subtree
      * walks for static RAM.
      */
     int er_scratch_strip_h(void);
@@ -56,8 +56,8 @@ extern "C"
      * er_scratch_pop_blend().
      *
      * Up to ERUI_MAX_OPACITY_DEPTH nested slots may be active simultaneously.  A push fails
-     * (returning false) when the pool is exhausted or the region is wider than ERUI_SCRATCH_W
-     * or taller than ERUI_SCRATCH_BAND_H.  On failure blit routing is unchanged and no matching
+     * (returning false) when the pool is exhausted or the region is wider than ERUI_SCRATCH_WIDTH
+     * or taller than ERUI_SCRATCH_BAND_HEIGHT.  On failure blit routing is unchanged and no matching
      * er_scratch_pop_blend() is required.  Regions larger than one strip are composited by the
      * compositor in multiple band passes, one push per band.
      *

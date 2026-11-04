@@ -179,13 +179,13 @@ typedef enum
 static void
 pcheck(const char* fixture, const char* label, ParityStatus status, ERRect got, int x, int y, int width, int height)
 {
-    const bool match = (got.x == x && got.y == y && got.w == width && got.h == height);
+    const bool match = (got.x == x && got.y == y && got.width == width && got.height == height);
     if (status == EXPECT)
     {
         if (match)
         {
             g_pass++;
-            printf("  [PASS ] %-20s %-8s (%d,%d,%d,%d)\n", fixture, label, got.x, got.y, got.w, got.h);
+            printf("  [PASS ] %-20s %-8s (%d,%d,%d,%d)\n", fixture, label, got.x, got.y, got.width, got.height);
         }
         else
         {
@@ -195,8 +195,8 @@ pcheck(const char* fixture, const char* label, ParityStatus status, ERRect got, 
                    label,
                    got.x,
                    got.y,
-                   got.w,
-                   got.h,
+                   got.width,
+                   got.height,
                    x,
                    y,
                    width,
@@ -213,8 +213,8 @@ pcheck(const char* fixture, const char* label, ParityStatus status, ERRect got, 
                    label,
                    got.x,
                    got.y,
-                   got.w,
-                   got.h,
+                   got.width,
+                   got.height,
                    x,
                    y,
                    width,
@@ -228,8 +228,8 @@ pcheck(const char* fixture, const char* label, ParityStatus status, ERRect got, 
                    label,
                    got.x,
                    got.y,
-                   got.w,
-                   got.h);
+                   got.width,
+                   got.height);
         }
     }
 }
@@ -253,7 +253,7 @@ static void fixture_column_stack(void)
     ERProps root_props = props_default();
     root_props.width = 100;
     root_props.height = 100;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
@@ -379,7 +379,7 @@ static void fixture_padding_stretch(void)
     ERProps root_props = props_default();
     root_props.width = 100;
     root_props.height = 100;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.padding = 10;
     ERNode* root = mk(root_props, NULL);
 
@@ -439,7 +439,7 @@ static void fixture_auto_cross_row(void)
     ERProps root_props = props_default();
     root_props.width = 100;
     root_props.height = 100;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     ERNode* root = mk(root_props, NULL);
 
     ERRect row_rect, first_rect, second_rect;
@@ -479,13 +479,13 @@ static void fixture_auto_main_column(void)
     ERProps root_props = props_default();
     root_props.width = 100;
     root_props.height = 100;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
     ERRect inner_rect, first_rect, second_rect;
     ERProps inner_props = props_default();
-    inner_props.flex_direction = ER_FLEX_COL; /* no width/height — derived from children */
+    inner_props.flex_direction = ER_FLEX_COLUMN; /* no width/height — derived from children */
     ERNode* inner = mk(inner_props, &inner_rect);
     er_tree_append_child(root, inner);
 
@@ -661,7 +661,7 @@ static void fixture_pct_width_main(void)
 
     ERRect first_rect;
     ERProps props = props_default();
-    props.width_pct = 50.0f;
+    props.width_percent = 50.0f;
     props.height = 40;
     ERNode* first_child = mk(props, &first_rect);
     er_tree_append_child(root, first_child);
@@ -682,14 +682,14 @@ static void fixture_pct_height_main(void)
     ERProps root_props = props_default();
     root_props.width = 100;
     root_props.height = 200;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
     ERRect first_rect;
     ERProps props = props_default();
     props.width = 30;
-    props.height_pct = 25.0f;
+    props.height_percent = 25.0f;
     ERNode* first_child = mk(props, &first_rect);
     er_tree_append_child(root, first_child);
 
@@ -709,13 +709,13 @@ static void fixture_pct_width_cross(void)
     ERProps root_props = props_default();
     root_props.width = 200;
     root_props.height = 100;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
     ERRect first_rect;
     ERProps props = props_default();
-    props.width_pct = 50.0f;
+    props.width_percent = 50.0f;
     props.height = 20;
     ERNode* first_child = mk(props, &first_rect);
     er_tree_append_child(root, first_child);
@@ -743,7 +743,7 @@ static void fixture_pct_content_box(void)
 
     ERRect first_rect;
     ERProps props = props_default();
-    props.width_pct = 50.0f;
+    props.width_percent = 50.0f;
     props.height = 40;
     ERNode* first_child = mk(props, &first_rect);
     er_tree_append_child(root, first_child);
@@ -770,13 +770,13 @@ static void fixture_abs_auto_height(void)
     ERProps root_props = props_default();
     root_props.width = 200;
     root_props.height = 200;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
     ERRect absolute_rect, kid_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 20;
     absolute_props.top = 30;
     absolute_props.width = 100;
@@ -811,10 +811,10 @@ static void fixture_abs_auto_both(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 10;
     absolute_props.top = 10;
-    absolute_props.flex_direction = ER_FLEX_COL;
+    absolute_props.flex_direction = ER_FLEX_COLUMN;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
     ERProps kid_props = props_default();
@@ -850,11 +850,11 @@ static void fixture_abs_pct(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 10;
     absolute_props.top = 5;
-    absolute_props.width_pct = 50.0f;
-    absolute_props.height_pct = 25.0f;
+    absolute_props.width_percent = 50.0f;
+    absolute_props.height_percent = 25.0f;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
     er_tree_append_child(root, absolute);
@@ -878,7 +878,7 @@ static void fixture_abs_aspect_ratio(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 0;
     absolute_props.top = 0;
     absolute_props.width = 100;
@@ -912,7 +912,7 @@ static void fixture_abs_aspect_ratio_both_auto(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 0;
     absolute_props.top = 0;
     absolute_props.aspect_ratio = 2.0f;
@@ -953,7 +953,7 @@ static void fixture_flow_aspect_ratio_row(void)
     er_tree_append_child(root, mk(props, &first_rect));
 
     props = props_default();
-    props.height_pct = 50.0f;
+    props.height_percent = 50.0f;
     props.aspect_ratio = 2.0f;
     er_tree_append_child(root, mk(props, &second_rect));
 
@@ -978,7 +978,7 @@ static void fixture_flow_aspect_ratio_column(void)
     ERProps root_props = props_default();
     root_props.width = 200;
     root_props.height = 200;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
@@ -1034,7 +1034,7 @@ static void fixture_flow_aspect_ratio_auto_parent(void)
     ERProps root_props = props_default();
     root_props.width = 300;
     root_props.height = 200;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
@@ -1108,7 +1108,7 @@ static void fixture_flow_aspect_ratio_pct_measured(void)
     er_tree_append_child(root, column);
 
     props = props_default();
-    props.width_pct = 50.0f;
+    props.width_percent = 50.0f;
     props.aspect_ratio = 2.0f;
     er_tree_append_child(column, mk(props, &first_rect));
 
@@ -1138,7 +1138,7 @@ static void build_flexed_aspect(
     ERProps root_props = props_default();
     root_props.width = width;
     root_props.height = height;
-    root_props.flex_direction = row ? ER_FLEX_ROW : ER_FLEX_COL;
+    root_props.flex_direction = row ? ER_FLEX_ROW : ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
@@ -1172,7 +1172,7 @@ static void fixture_flow_aspect_ratio_flexed(void)
     ERProps root_props = props_default();
     root_props.width = 300;
     root_props.height = 200;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
@@ -1232,7 +1232,7 @@ static void fixture_abs_content_overflows(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 0;
     absolute_props.top = 0;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1271,10 +1271,10 @@ static void fixture_abs_containing_block(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 0;
     absolute_props.top = 0;
-    absolute_props.width_pct = 50.0f;
+    absolute_props.width_percent = 50.0f;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
     ERProps kid_props = props_default();
@@ -1316,7 +1316,7 @@ static void fixture_abs_padding_box_edges(void)
 
     ERRect first_rect, second_rect, third_rect;
     ERProps first_props = props_default();
-    first_props.position = ER_POS_ABSOLUTE;
+    first_props.position = ER_POSITION_ABSOLUTE;
     first_props.left = 0;
     first_props.top = 0;
     first_props.width = 20;
@@ -1324,7 +1324,7 @@ static void fixture_abs_padding_box_edges(void)
     ERNode* first = mk(first_props, &first_rect);
 
     ERProps second_props = props_default();
-    second_props.position = ER_POS_ABSOLUTE;
+    second_props.position = ER_POSITION_ABSOLUTE;
     second_props.right = 0;
     second_props.bottom = 0;
     second_props.width = 20;
@@ -1332,9 +1332,9 @@ static void fixture_abs_padding_box_edges(void)
     ERNode* second = mk(second_props, &second_rect);
 
     ERProps third_props = props_default();
-    third_props.position = ER_POS_ABSOLUTE;
-    third_props.width_pct = 50.0f;
-    third_props.height_pct = 50.0f;
+    third_props.position = ER_POSITION_ABSOLUTE;
+    third_props.width_percent = 50.0f;
+    third_props.height_percent = 50.0f;
     ERNode* third = mk(third_props, &third_rect);
 
     er_tree_append_child(root, first);
@@ -1365,7 +1365,7 @@ static void fixture_abs_inset_pair_padding(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 10;
     absolute_props.right = 30;
     absolute_props.top = 0;
@@ -1397,9 +1397,9 @@ static void fixture_abs_pct_inset(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = 10.0f;
-    absolute_props.top_pct = 25.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = 10.0f;
+    absolute_props.top_percent = 25.0f;
     absolute_props.width = 20;
     absolute_props.height = 20;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1425,9 +1425,9 @@ static void fixture_abs_pct_inset_axis(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = 50.0f;
-    absolute_props.top_pct = 50.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = 50.0f;
+    absolute_props.top_percent = 50.0f;
     absolute_props.width = 10;
     absolute_props.height = 10;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1453,9 +1453,9 @@ static void fixture_abs_pct_inset_far(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.right_pct = 10.0f;
-    absolute_props.bottom_pct = 20.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.right_percent = 10.0f;
+    absolute_props.bottom_percent = 20.0f;
     absolute_props.width = 20;
     absolute_props.height = 20;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1481,11 +1481,11 @@ static void fixture_abs_pct_inset_pair(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = 10.0f;
-    absolute_props.right_pct = 25.0f;
-    absolute_props.top_pct = 10.0f;
-    absolute_props.bottom_pct = 30.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = 10.0f;
+    absolute_props.right_percent = 25.0f;
+    absolute_props.top_percent = 10.0f;
+    absolute_props.bottom_percent = 30.0f;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
     er_tree_append_child(root, absolute);
@@ -1509,9 +1509,9 @@ static void fixture_abs_pct_inset_negative(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = -10.0f;
-    absolute_props.top_pct = -20.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = -10.0f;
+    absolute_props.top_percent = -20.0f;
     absolute_props.width = 20;
     absolute_props.height = 20;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1537,9 +1537,9 @@ static void fixture_abs_pct_inset_margin(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = 10.0f;
-    absolute_props.top_pct = 10.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = 10.0f;
+    absolute_props.top_percent = 10.0f;
     absolute_props.margin_left = 5;
     absolute_props.margin_top = 7;
     absolute_props.width = 20;
@@ -1572,8 +1572,8 @@ static void fixture_abs_pct_inset_half_pixel(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.right_pct = 50.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.right_percent = 50.0f;
     absolute_props.width = 20;
     absolute_props.height = 20;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1603,11 +1603,11 @@ static void fixture_abs_pct_pair_half_pixel(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = 50.0f;
-    absolute_props.right_pct = 25.0f;
-    absolute_props.top_pct = 50.0f;
-    absolute_props.bottom_pct = 25.0f;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = 50.0f;
+    absolute_props.right_percent = 25.0f;
+    absolute_props.top_percent = 50.0f;
+    absolute_props.bottom_percent = 25.0f;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
     er_tree_append_child(root, absolute);
@@ -1631,7 +1631,7 @@ static void fixture_abs_far_inset_auto_size(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.right = 30;
     absolute_props.bottom = 10;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1671,10 +1671,10 @@ static void fixture_abs_pct_saturates(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
-    absolute_props.left_pct = -10000.0f;  /* -48000 px, clamped to the int16 floor. */
-    absolute_props.width_pct = 20000.0f;  /* 96000 px, so the far edge clamps to the ceiling. */
-    absolute_props.top_pct = 0.0f / 0.0f; /* A style may spell a percentage "NaN%". */
+    absolute_props.position = ER_POSITION_ABSOLUTE;
+    absolute_props.left_percent = -10000.0f;  /* -48000 px, clamped to the int16 floor. */
+    absolute_props.width_percent = 20000.0f;  /* 96000 px, so the far edge clamps to the ceiling. */
+    absolute_props.top_percent = 0.0f / 0.0f; /* A style may spell a percentage "NaN%". */
     absolute_props.height = 20;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
@@ -1707,8 +1707,8 @@ static void fixture_rel_pct_offset(void)
 
     ERRect first_rect;
     ERProps first_props = props_default();
-    first_props.left_pct = 10.0f;
-    first_props.top_pct = 25.0f;
+    first_props.left_percent = 10.0f;
+    first_props.top_percent = 25.0f;
     first_props.width = 20;
     first_props.height = 20;
     ERNode* first = mk(first_props, &first_rect);
@@ -1738,8 +1738,8 @@ static void fixture_rel_pct_offset_far(void)
 
     ERRect first_rect;
     ERProps first_props = props_default();
-    first_props.right_pct = 10.0f;
-    first_props.bottom_pct = 25.0f;
+    first_props.right_percent = 10.0f;
+    first_props.bottom_percent = 25.0f;
     first_props.width = 20;
     first_props.height = 20;
     ERNode* first = mk(first_props, &first_rect);
@@ -1766,7 +1766,7 @@ static void fixture_abs_margin_inset_padding(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.left = 10;
     absolute_props.top = 10;
     absolute_props.width = 50;
@@ -1801,7 +1801,7 @@ static void fixture_abs_static_position_padding(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.width = 50;
     absolute_props.height = 40;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1829,14 +1829,14 @@ static void fixture_abs_static_position_align(void)
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.justify_content = ER_JUSTIFY_CENTER;
     root_props.align_items = ER_ALIGN_CENTER;
     ERNode* root = mk(root_props, NULL);
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.width = 50;
     absolute_props.height = 40;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -1882,7 +1882,7 @@ static void static_pos_case(const char* label,
     ERNode* root = mk(root_props, NULL);
 
     ERRect absolute_rect;
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     if (!auto_size)
     {
         absolute_props.width = 50;
@@ -1921,7 +1921,7 @@ static void static_pos_case(const char* label,
 static void fixture_abs_static_justify(void)
 {
     ERProps root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     ERProps absolute_props = props_default();
 
     root_props.justify_content = ER_JUSTIFY_FLEX_START;
@@ -1949,7 +1949,7 @@ static void fixture_abs_static_justify(void)
 static void fixture_abs_static_align(void)
 {
     ERProps root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     ERProps absolute_props = props_default();
 
     root_props.align_items = ER_ALIGN_FLEX_START;
@@ -1965,7 +1965,7 @@ static void fixture_abs_static_align(void)
     static_pos_case("align-center-row", EXPECT, root_props, absolute_props, false, 20, 80, 50, 40);
 
     /* alignSelf wins over the parent's alignItems, exactly as it does for a flow child. */
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_CENTER;
     absolute_props.align_self = ER_ALIGN_FLEX_END;
     static_pos_case("align-self-end", EXPECT, root_props, absolute_props, false, 130, 20, 50, 40);
@@ -1982,7 +1982,7 @@ static void fixture_abs_static_align(void)
 static void fixture_abs_static_stretch(void)
 {
     ERProps root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_STRETCH;
     ERProps absolute_props = props_default();
     static_pos_case("stretch-auto", EXPECT, root_props, absolute_props, true, 20, 20, 24, 18);
@@ -2002,7 +2002,7 @@ static void fixture_abs_static_reverse(void)
     ERProps root_props = props_default();
     ERProps absolute_props = props_default();
 
-    root_props.flex_direction = ER_FLEX_COL_REVERSE;
+    root_props.flex_direction = ER_FLEX_COLUMN_REVERSE;
     static_pos_case("rev-col-start", EXPECT, root_props, absolute_props, false, 20, 140, 50, 40);
     root_props.justify_content = ER_JUSTIFY_FLEX_END;
     static_pos_case("rev-col-end", EXPECT, root_props, absolute_props, false, 20, 20, 50, 40);
@@ -2015,7 +2015,7 @@ static void fixture_abs_static_reverse(void)
 
     /* Reversed main axis + margins: marginBottom is the one that leads. */
     root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL_REVERSE;
+    root_props.flex_direction = ER_FLEX_COLUMN_REVERSE;
     absolute_props.margin_top = 7;
     absolute_props.margin_bottom = 3;
     static_pos_case("rev-col-margin", EXPECT, root_props, absolute_props, false, 20, 137, 50, 40);
@@ -2024,7 +2024,7 @@ static void fixture_abs_static_reverse(void)
 
     /* wrap-reverse mirrors the CROSS axis, against the full content extent. */
     root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.flex_wrap = ER_WRAP_WRAP_REVERSE;
     root_props.align_items = ER_ALIGN_FLEX_START;
     absolute_props = props_default();
@@ -2043,7 +2043,7 @@ static void fixture_abs_static_reverse(void)
 static void fixture_abs_static_margins(void)
 {
     ERProps root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.justify_content = ER_JUSTIFY_CENTER;
     root_props.align_items = ER_ALIGN_CENTER;
 
@@ -2090,7 +2090,7 @@ static void fixture_abs_static_overflow(void)
     er_reset();
 
     ERProps root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.justify_content = ER_JUSTIFY_CENTER;
     root_props.align_items = ER_ALIGN_CENTER;
 
@@ -2104,7 +2104,7 @@ static void fixture_abs_static_overflow(void)
     ERNode* root = mk(root_props, NULL);
 
     ERRect absolute_rect;
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
 
     er_tree_append_child(root, absolute);
@@ -2122,7 +2122,7 @@ static void fixture_abs_static_overflow(void)
 static void fixture_abs_static_per_axis(void)
 {
     ERProps root_props = props_default();
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.justify_content = ER_JUSTIFY_CENTER;
     root_props.align_items = ER_ALIGN_CENTER;
 
@@ -2144,7 +2144,7 @@ static void fixture_abs_static_per_axis(void)
  * hide the bug entirely. Both children are 50 on the cross axis so alignItems never enters into it.
  *
  * @param[in] name       Fixture name for the output.
- * @param[in] direction  ER_FLEX_COL_REVERSE or ER_FLEX_ROW_REVERSE.
+ * @param[in] direction  ER_FLEX_COLUMN_REVERSE or ER_FLEX_ROW_REVERSE.
  * @param[in] justify    justifyContent mode.
  * @param[in] gap        Main-axis gap, or 0 for none.
  * @param[in] first_x    Expected x of child A.
@@ -2233,7 +2233,7 @@ static void fixture_flow_reverse_margin(void)
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL_REVERSE;
+    root_props.flex_direction = ER_FLEX_COLUMN_REVERSE;
     root_props.align_items = ER_ALIGN_FLEX_START;
     ERNode* root = mk(root_props, NULL);
 
@@ -2259,7 +2259,7 @@ static void fixture_flow_reverse_margin(void)
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL_REVERSE;
+    root_props.flex_direction = ER_FLEX_COLUMN_REVERSE;
     root_props.align_items = ER_ALIGN_FLEX_START;
     root = mk(root_props, NULL);
 
@@ -2282,13 +2282,13 @@ static void fixture_flow_reverse_margin(void)
  */
 static void fixture_flow_reverse_margin_justify(void)
 {
-    rev_pair_case("rev-pair-start", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 0, 20, 137, 20, 95);
-    rev_pair_case("rev-pair-end", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 20, 63, 20, 21);
-    rev_pair_case("rev-pair-between", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 20, 137, 20, 21);
-    rev_pair_case("rev-pair-around", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 20, 119, 20, 40);
-    rev_pair_case("rev-pair-evenly", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 20, 112, 20, 46);
-    rev_pair_case("rev-pair-center", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 0, 20, 100, 20, 58);
-    rev_pair_case("rev-pair-gap", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 10, 20, 137, 20, 85);
+    rev_pair_case("rev-pair-start", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_START, 0, 20, 137, 20, 95);
+    rev_pair_case("rev-pair-end", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_END, 0, 20, 63, 20, 21);
+    rev_pair_case("rev-pair-between", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 20, 137, 20, 21);
+    rev_pair_case("rev-pair-around", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 20, 119, 20, 40);
+    rev_pair_case("rev-pair-evenly", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 20, 112, 20, 46);
+    rev_pair_case("rev-pair-center", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_CENTER, 0, 20, 100, 20, 58);
+    rev_pair_case("rev-pair-gap", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_START, 10, 20, 137, 20, 85);
 
     rev_pair_case("rev-row-pair-start", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_FLEX_START, 0, 137, 20, 95, 20);
     rev_pair_case("rev-row-pair-between", ER_FLEX_ROW_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 137, 20, 21, 20);
@@ -2315,7 +2315,7 @@ static void build_wrap_rev(int count,
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.flex_wrap = ER_WRAP_WRAP_REVERSE;
     root_props.align_items = ER_ALIGN_FLEX_START;
     root_props.align_content = align_content;
@@ -2448,7 +2448,7 @@ static void fixture_abs_static_ignores_siblings(void)
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.justify_content = ER_JUSTIFY_CENTER;
     root_props.align_items = ER_ALIGN_CENTER;
     ERNode* root = mk(root_props, NULL);
@@ -2462,7 +2462,7 @@ static void fixture_abs_static_ignores_siblings(void)
 
     ERRect absolute_rect;
     ERProps absolute_props = props_default();
-    absolute_props.position = ER_POS_ABSOLUTE;
+    absolute_props.position = ER_POSITION_ABSOLUTE;
     absolute_props.width = 50;
     absolute_props.height = 40;
     ERNode* absolute = mk(absolute_props, &absolute_rect);
@@ -2511,10 +2511,10 @@ static void fixture_half_pixel_center(void)
         int16_t x, y;          /**< Expected origin. */
     } k_cases[] = {
         /* The issue's exact repro, then the same thing with the axes swapped. */
-        {"half-center-col", ER_FLEX_COL, 51, 41, 75, 80},
+        {"half-center-col", ER_FLEX_COLUMN, 51, 41, 75, 80},
         {"half-center-row", ER_FLEX_ROW, 51, 41, 75, 80},
         /* A reversed axis measures from the far edge but must still round to the same pixel. */
-        {"half-center-colrev", ER_FLEX_COL_REVERSE, 51, 41, 75, 80},
+        {"half-center-colrev", ER_FLEX_COLUMN_REVERSE, 51, 41, 75, 80},
         {"half-center-rowrev", ER_FLEX_ROW_REVERSE, 51, 41, 75, 80},
     };
 
@@ -2544,7 +2544,7 @@ static void fixture_half_pixel_center(void)
         /* An uninset ABSOLUTE child takes the same static position, so it must round the same way. */
         root_props.flex_direction = k_cases[case_index].direction;
         ERProps absolute_child_props = child_props;
-        absolute_child_props.position = ER_POS_ABSOLUTE;
+        absolute_child_props.position = ER_POSITION_ABSOLUTE;
         root = mk(root_props, NULL);
         ERNode* absolute_child = mk(absolute_child_props, &child_rect);
         er_tree_append_child(root, absolute_child);
@@ -2565,12 +2565,12 @@ static void fixture_half_pixel_center(void)
     /* A 201x171 child centred in a 160x160 content box overhangs both edges evenly: -20.5 rounds up
      * to -20, same rule on both axes. Flow and absolute have to agree — the same child placed either
      * way lands in the same place. */
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     child_props.width = 201;
     child_props.height = 171;
 
     ERProps overflow_props = child_props;
-    overflow_props.position = ER_POS_ABSOLUTE;
+    overflow_props.position = ER_POSITION_ABSOLUTE;
     ERNode* root = mk(root_props, NULL);
     ERRect overflow_rect;
     ERNode* overflow = mk(overflow_props, &overflow_rect);
@@ -2665,7 +2665,7 @@ static void stack_sizes_case(const char* name,
  * @brief stack_sizes_case() with `n` identically sized children and no gap.
  *
  * @param[in] name       Assertion label.
- * @param[in] direction  ER_FLEX_COL or ER_FLEX_COL_REVERSE.
+ * @param[in] direction  ER_FLEX_COLUMN or ER_FLEX_COLUMN_REVERSE.
  * @param[in] justify    justifyContent under test.
  * @param[in] count      Child count (<= 8).
  * @param[in] item       Child main-axis size.
@@ -2701,7 +2701,7 @@ static void wrap_overflow_case(const char* name, uint8_t justify, const int16_t*
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.flex_wrap = ER_WRAP_WRAP;
     root_props.align_content = ER_ALIGN_CONTENT_FLEX_START;
     root_props.align_items = ER_ALIGN_FLEX_START;
@@ -2762,19 +2762,19 @@ static void fixture_flow_justify_overflow(void)
     static const int16_t k_rsolo_center[] = {15};
     static const int16_t k_rsolo_end[] = {20};
 
-    stack_sizes_case("ovf-start", ER_FLEX_COL, ER_JUSTIFY_FLEX_START, 0, 1, k_solo, k_solo_start);
-    stack_sizes_case("ovf-center", ER_FLEX_COL, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_solo_center);
-    stack_sizes_case("ovf-end", ER_FLEX_COL, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_solo_end);
-    stack_sizes_case("ovf-between", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 0, 1, k_solo, k_solo_start);
-    stack_sizes_case("ovf-around", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 0, 1, k_solo, k_solo_start);
-    stack_sizes_case("ovf-evenly", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-start", ER_FLEX_COLUMN, ER_JUSTIFY_FLEX_START, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-center", ER_FLEX_COLUMN, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_solo_center);
+    stack_sizes_case("ovf-end", ER_FLEX_COLUMN, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_solo_end);
+    stack_sizes_case("ovf-between", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_BETWEEN, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-around", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_AROUND, 0, 1, k_solo, k_solo_start);
+    stack_sizes_case("ovf-evenly", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_EVENLY, 0, 1, k_solo, k_solo_start);
 
-    stack_sizes_case("ovf-rstart", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 0, 1, k_solo, k_rsolo_start);
-    stack_sizes_case("ovf-rcenter", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_rsolo_center);
-    stack_sizes_case("ovf-rend", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_rsolo_end);
-    stack_sizes_case("ovf-rbetween", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 1, k_solo, k_rsolo_start);
-    stack_sizes_case("ovf-raround", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 1, k_solo, k_rsolo_start);
-    stack_sizes_case("ovf-revenly", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-rstart", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_START, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-rcenter", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_rsolo_center);
+    stack_sizes_case("ovf-rend", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_END, 0, 1, k_solo, k_rsolo_end);
+    stack_sizes_case("ovf-rbetween", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-raround", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 1, k_solo, k_rsolo_start);
+    stack_sizes_case("ovf-revenly", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 1, k_solo, k_rsolo_start);
 
     /* The same overflow on a row, to pin that this is the main axis and not the y one. */
     stack_sizes_case("ovf-row-center", ER_FLEX_ROW, ER_JUSTIFY_CENTER, 0, 1, k_solo, k_solo_center);
@@ -2792,19 +2792,19 @@ static void fixture_flow_justify_overflow(void)
     static const int16_t k_rpair_center[] = {101, 10};
     static const int16_t k_rpair_end[] = {111, 20};
 
-    stack_sizes_case("ovf2-start", ER_FLEX_COL, ER_JUSTIFY_FLEX_START, 0, 2, k_pair, k_pair_start);
-    stack_sizes_case("ovf2-center", ER_FLEX_COL, ER_JUSTIFY_CENTER, 0, 2, k_pair, k_pair_center);
-    stack_sizes_case("ovf2-end", ER_FLEX_COL, ER_JUSTIFY_FLEX_END, 0, 2, k_pair, k_pair_end);
-    stack_sizes_case("ovf2-between", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 0, 2, k_pair, k_pair_start);
-    stack_sizes_case("ovf2-around", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 0, 2, k_pair, k_pair_start);
-    stack_sizes_case("ovf2-evenly", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-start", ER_FLEX_COLUMN, ER_JUSTIFY_FLEX_START, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-center", ER_FLEX_COLUMN, ER_JUSTIFY_CENTER, 0, 2, k_pair, k_pair_center);
+    stack_sizes_case("ovf2-end", ER_FLEX_COLUMN, ER_JUSTIFY_FLEX_END, 0, 2, k_pair, k_pair_end);
+    stack_sizes_case("ovf2-between", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_BETWEEN, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-around", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_AROUND, 0, 2, k_pair, k_pair_start);
+    stack_sizes_case("ovf2-evenly", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_EVENLY, 0, 2, k_pair, k_pair_start);
 
-    stack_sizes_case("ovf2-rstart", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_START, 0, 2, k_pair, k_rpair_start);
-    stack_sizes_case("ovf2-rcenter", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 0, 2, k_pair, k_rpair_center);
-    stack_sizes_case("ovf2-rend", ER_FLEX_COL_REVERSE, ER_JUSTIFY_FLEX_END, 0, 2, k_pair, k_rpair_end);
-    stack_sizes_case("ovf2-rbetween", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 2, k_pair, k_rpair_start);
-    stack_sizes_case("ovf2-raround", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 2, k_pair, k_rpair_start);
-    stack_sizes_case("ovf2-revenly", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-rstart", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_START, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-rcenter", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_CENTER, 0, 2, k_pair, k_rpair_center);
+    stack_sizes_case("ovf2-rend", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_FLEX_END, 0, 2, k_pair, k_rpair_end);
+    stack_sizes_case("ovf2-rbetween", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-raround", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_AROUND, 0, 2, k_pair, k_rpair_start);
+    stack_sizes_case("ovf2-revenly", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 0, 2, k_pair, k_rpair_start);
 
     /* 3 x 50 plus two 8px gaps = 166 in 160: the gaps alone put the line 6 over. */
     static const int16_t k_gap3[] = {50, 50, 50};
@@ -2812,12 +2812,12 @@ static void fixture_flow_justify_overflow(void)
     static const int16_t k_gap3_center[] = {17, 75, 133};
     static const int16_t k_gap3_end[] = {14, 72, 130};
 
-    stack_sizes_case("ovf-gap-start", ER_FLEX_COL, ER_JUSTIFY_FLEX_START, 8, 3, k_gap3, k_gap3_start);
-    stack_sizes_case("ovf-gap-center", ER_FLEX_COL, ER_JUSTIFY_CENTER, 8, 3, k_gap3, k_gap3_center);
-    stack_sizes_case("ovf-gap-end", ER_FLEX_COL, ER_JUSTIFY_FLEX_END, 8, 3, k_gap3, k_gap3_end);
-    stack_sizes_case("ovf-gap-between", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 8, 3, k_gap3, k_gap3_start);
-    stack_sizes_case("ovf-gap-around", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 8, 3, k_gap3, k_gap3_start);
-    stack_sizes_case("ovf-gap-evenly", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-start", ER_FLEX_COLUMN, ER_JUSTIFY_FLEX_START, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-center", ER_FLEX_COLUMN, ER_JUSTIFY_CENTER, 8, 3, k_gap3, k_gap3_center);
+    stack_sizes_case("ovf-gap-end", ER_FLEX_COLUMN, ER_JUSTIFY_FLEX_END, 8, 3, k_gap3, k_gap3_end);
+    stack_sizes_case("ovf-gap-between", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_BETWEEN, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-around", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_AROUND, 8, 3, k_gap3, k_gap3_start);
+    stack_sizes_case("ovf-gap-evenly", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_EVENLY, 8, 3, k_gap3, k_gap3_start);
 
     /* Wrapped: the sign is per line, so lines that fit are unaffected by the one that does not. */
     static const int16_t k_wrap_start[] = {20, 20, 20};
@@ -2856,20 +2856,20 @@ static void fixture_half_pixel_justify(void)
     static const int16_t k_evenly4[] = {38, 74, 109, 145};
     static const int16_t k_center4[] = {66, 83, 100, 117};
 
-    stack_case("half-between3", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 3, 17, k_between3);
-    stack_case("half-around3", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 3, 17, k_around3);
-    stack_case("half-evenly3", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 3, 17, k_evenly3);
-    stack_case("half-center3", ER_FLEX_COL, ER_JUSTIFY_CENTER, 3, 17, k_center3);
+    stack_case("half-between3", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_BETWEEN, 3, 17, k_between3);
+    stack_case("half-around3", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_AROUND, 3, 17, k_around3);
+    stack_case("half-evenly3", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_EVENLY, 3, 17, k_evenly3);
+    stack_case("half-center3", ER_FLEX_COLUMN, ER_JUSTIFY_CENTER, 3, 17, k_center3);
 
-    stack_case("half-rbetween3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 3, 17, k_rbetween3);
-    stack_case("half-raround3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_AROUND, 3, 17, k_raround3);
-    stack_case("half-revenly3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 3, 17, k_revenly3);
-    stack_case("half-rcenter3", ER_FLEX_COL_REVERSE, ER_JUSTIFY_CENTER, 3, 17, k_rcenter3);
+    stack_case("half-rbetween3", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_BETWEEN, 3, 17, k_rbetween3);
+    stack_case("half-raround3", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_AROUND, 3, 17, k_raround3);
+    stack_case("half-revenly3", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_SPACE_EVENLY, 3, 17, k_revenly3);
+    stack_case("half-rcenter3", ER_FLEX_COLUMN_REVERSE, ER_JUSTIFY_CENTER, 3, 17, k_rcenter3);
 
-    stack_case("half-between4", ER_FLEX_COL, ER_JUSTIFY_SPACE_BETWEEN, 4, 17, k_between4);
-    stack_case("half-around4", ER_FLEX_COL, ER_JUSTIFY_SPACE_AROUND, 4, 17, k_around4);
-    stack_case("half-evenly4", ER_FLEX_COL, ER_JUSTIFY_SPACE_EVENLY, 4, 17, k_evenly4);
-    stack_case("half-center4", ER_FLEX_COL, ER_JUSTIFY_CENTER, 4, 17, k_center4);
+    stack_case("half-between4", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_BETWEEN, 4, 17, k_between4);
+    stack_case("half-around4", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_AROUND, 4, 17, k_around4);
+    stack_case("half-evenly4", ER_FLEX_COLUMN, ER_JUSTIFY_SPACE_EVENLY, 4, 17, k_evenly4);
+    stack_case("half-center4", ER_FLEX_COLUMN, ER_JUSTIFY_CENTER, 4, 17, k_center4);
 }
 
 /**
@@ -2898,7 +2898,7 @@ static void wrap_line_case(const char* name,
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.flex_wrap = wrap;
     root_props.align_content = align_content;
     root_props.align_items = align_items;
@@ -2988,7 +2988,7 @@ static void fixture_half_pixel_align_content(void)
     root_props.width = 200;
     root_props.height = 200;
     root_props.padding = 20;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.align_items = ER_ALIGN_CENTER;
     ERNode* root = mk(root_props, NULL);
     ERRect child_rect;
@@ -3129,7 +3129,7 @@ static void fixture_half_pixel_flex_sizes(void)
     static const int16_t k_grow3_position[] = {0, 33, 67};
     static const int16_t k_grow3_size[] = {33, 34, 33};
     flex_case("flexsz-grow3", ER_FLEX_ROW, 100, 0, 0, 3, k_grow1, k_grow3_position, k_grow3_size);
-    flex_case("flexsz-col3", ER_FLEX_COL, 100, 0, 0, 3, k_grow1, k_grow3_position, k_grow3_size);
+    flex_case("flexsz-col3", ER_FLEX_COLUMN, 100, 0, 0, 3, k_grow1, k_grow3_position, k_grow3_size);
 
     /* Padding shifts every edge by a whole pixel, so it cannot change which child takes the leftover;
      * 80 over three is 26.67, and this time it is the OUTER two that round up. */
@@ -3242,7 +3242,7 @@ static void stretch_line_case(const char* name,
     root_props.width = width;
     root_props.height = height;
     root_props.padding = pad;
-    root_props.flex_direction = ER_FLEX_COL;
+    root_props.flex_direction = ER_FLEX_COLUMN;
     root_props.flex_wrap = wrap;
     root_props.align_content = ER_ALIGN_CONTENT_STRETCH;
     root_props.align_items = ER_ALIGN_STRETCH;
@@ -3314,7 +3314,7 @@ static void build_wrap_auto(int16_t column_width, int16_t gap, bool nested, ERRe
     ERProps column_props = props_default();
     column_props.width = column_width;
     column_props.height = 200;
-    column_props.flex_direction = ER_FLEX_COL;
+    column_props.flex_direction = ER_FLEX_COLUMN;
     column_props.align_items = nested ? ER_ALIGN_FLEX_START : ER_ALIGN_STRETCH;
     ERNode* column = mk(column_props, NULL);
 
@@ -3322,7 +3322,7 @@ static void build_wrap_auto(int16_t column_width, int16_t gap, bool nested, ERRe
     if (nested)
     {
         ERProps outer_props = props_default();
-        outer_props.flex_direction = ER_FLEX_COL;
+        outer_props.flex_direction = ER_FLEX_COLUMN;
         parent = mk(outer_props, outer);
         er_tree_append_child(column, parent);
     }
@@ -3393,7 +3393,7 @@ static void fixture_wrap_auto_height_flexed(void)
     ERProps column_props = props_default();
     column_props.width = 200;
     column_props.height = 200;
-    column_props.flex_direction = ER_FLEX_COL;
+    column_props.flex_direction = ER_FLEX_COLUMN;
     ERNode* column = mk(column_props, NULL);
 
     ERRect outer, wrap_rect, marker;

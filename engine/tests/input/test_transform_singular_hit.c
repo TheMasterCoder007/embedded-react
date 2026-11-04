@@ -212,7 +212,7 @@ static ERProps node_props(void)
 {
     ERProps props;
     er_props_default(&props);
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = NODE_X;
     props.top = NODE_Y;
     props.width = NODE_WIDTH;
@@ -373,7 +373,7 @@ static int test_singular_arc_still_drags(void)
     ERNode* arc = er_node_create(ER_NODE_ARC);
     ERProps arc_props;
     er_props_default(&arc_props);
-    arc_props.position = ER_POS_ABSOLUTE;
+    arc_props.position = ER_POSITION_ABSOLUTE;
     arc_props.left = NODE_X;
     arc_props.top = NODE_Y;
     arc_props.width = NODE_WIDTH;

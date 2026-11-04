@@ -272,7 +272,7 @@ static int run_slide(TestCtx* test_context, bool with_fade)
 
     ERNode* bar = er_node_create(ER_NODE_VIEW);
     ERProps bar_props = props_default();
-    bar_props.position = ER_POS_ABSOLUTE;
+    bar_props.position = ER_POSITION_ABSOLUTE;
     bar_props.left = 0;
     bar_props.top = 0;
     bar_props.width = 64;
@@ -282,7 +282,7 @@ static int run_slide(TestCtx* test_context, bool with_fade)
 
     ERNode* fader = er_node_create(ER_NODE_VIEW);
     ERProps fader_props = props_default();
-    fader_props.position = ER_POS_ABSOLUTE;
+    fader_props.position = ER_POSITION_ABSOLUTE;
     fader_props.left = 0;
     fader_props.top = 34;
     fader_props.width = 300;
@@ -297,20 +297,20 @@ static int run_slide(TestCtx* test_context, bool with_fade)
     er_commit();
 
     /* Bind AFTER the layout above, exactly as a press handler starting an animation does. */
-    ERAnimConfig config = {0};
-    config.type = ER_ANIM_TIMING;
+    ERAnimationConfig config = {0};
+    config.type = ER_ANIMATION_TIMING;
     config.duration_ms = ANIMATION_MS;
     config.easing = ER_EASE_LINEAR;
 
-    ERAnimValueHandle slide = er_anim_value_create(0.0f);
-    er_anim_value_bind(slide, bar, ER_PROP_TRANSLATE_X);
-    er_anim_value_animate(slide, 240.0f, &config);
+    ERAnimationValueHandle slide = er_animation_value_create(0.0f);
+    er_animation_value_bind(slide, bar, ER_PROP_TRANSLATE_X);
+    er_animation_value_animate(slide, 240.0f, &config);
 
-    ERAnimValueHandle fade = er_anim_value_create(0.0f);
+    ERAnimationValueHandle fade = er_animation_value_create(0.0f);
     if (with_fade)
     {
-        er_anim_value_bind(fade, fader, ER_PROP_OPACITY);
-        er_anim_value_animate(fade, 1.0f, &config);
+        er_animation_value_bind(fade, fader, ER_PROP_OPACITY);
+        er_animation_value_animate(fade, 1.0f, &config);
     }
 
     for (int frame_index = 0; frame_index < FRAMES; frame_index++)

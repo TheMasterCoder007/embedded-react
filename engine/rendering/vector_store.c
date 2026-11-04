@@ -26,7 +26,7 @@
  * With the pool in PSRAM, ERUI_MAX_VECTOR_NODES can be raised well past the internal-RAM-bound default.
  */
 
-#include "vector.h" /* er_vector_store/... decls, ERVectorPaint, and the ERUI_VEC_WARN_ONCE diagnostics macro */
+#include "vector.h" /* er_vector_store/... decls, ERVectorPaint, and the ERUI_VECTOR_WARN_ONCE diagnostics macro */
 
 #include <stdbool.h>
 #include <string.h>
@@ -51,7 +51,8 @@ typedef struct
     ERVectorPaint paints[ERUI_VECTOR_PAINTS_MAX];
     int paint_count;
 #if ERUI_GRADIENT
-    ERVectorGradient gradients[ERUI_VECTOR_GRADS_MAX]; /**< Gradient table; a paint's fill_grad indexes it (1-based). */
+    ERVectorGradient
+        gradients[ERUI_VECTOR_GRADIENTS_MAX]; /**< Gradient table; a paint's fill_gradient indexes it (1-based). */
     int gradient_count;
 #endif
 } VecSlot;
@@ -110,23 +111,25 @@ int er_vector_store(int slot,
     VecSlot* stored = &s_slots[slot];
     stored->used = true;
     if (op_count > ERUI_VECTOR_TAPE_MAX)
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_TAPE_MAX", ERUI_VECTOR_TAPE_MAX);
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_TAPE_MAX", ERUI_VECTOR_TAPE_MAX);
     int stored_op_count = (op_count < 0) ? 0 : (op_count > ERUI_VECTOR_TAPE_MAX ? ERUI_VECTOR_TAPE_MAX : op_count);
     if (ops && stored_op_count > 0)
         memcpy(stored->ops, ops, (size_t)stored_op_count * sizeof(float));
     stored->op_count = stored_op_count;
     if (paint_count > ERUI_VECTOR_PAINTS_MAX)
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_PAINTS_MAX", ERUI_VECTOR_PAINTS_MAX);
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_PAINTS_MAX", ERUI_VECTOR_PAINTS_MAX);
     int stored_paint_count =
         (paint_count < 0) ? 0 : (paint_count > ERUI_VECTOR_PAINTS_MAX ? ERUI_VECTOR_PAINTS_MAX : paint_count);
     if (paints && stored_paint_count > 0)
         memcpy(stored->paints, paints, (size_t)stored_paint_count * sizeof(ERVectorPaint));
     stored->paint_count = stored_paint_count;
 #if ERUI_GRADIENT
-    if (gradient_count > ERUI_VECTOR_GRADS_MAX)
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_GRADS_MAX", ERUI_VECTOR_GRADS_MAX);
+    if (gradient_count > ERUI_VECTOR_GRADIENTS_MAX)
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_GRADIENTS_MAX", ERUI_VECTOR_GRADIENTS_MAX);
     int stored_gradient_count =
-        (gradient_count < 0) ? 0 : (gradient_count > ERUI_VECTOR_GRADS_MAX ? ERUI_VECTOR_GRADS_MAX : gradient_count);
+        (gradient_count < 0)
+            ? 0
+            : (gradient_count > ERUI_VECTOR_GRADIENTS_MAX ? ERUI_VECTOR_GRADIENTS_MAX : gradient_count);
     if (gradients && stored_gradient_count > 0)
         memcpy(stored->gradients, gradients, (size_t)stored_gradient_count * sizeof(ERVectorGradient));
     stored->gradient_count = stored_gradient_count;

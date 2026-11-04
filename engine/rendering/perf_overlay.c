@@ -136,8 +136,8 @@ void er_perf_overlay_draw(int screen_width,
         params.text = lines[line_index];
         params.clip.x = panel_x + ER_PERF_PADDING;
         params.clip.y = panel_y + ER_PERF_PADDING + line_index * line_height;
-        params.clip.w = panel_width - ER_PERF_PADDING * 2;
-        params.clip.h = line_height;
+        params.clip.width = panel_width - ER_PERF_PADDING * 2;
+        params.clip.height = line_height;
         params.color = ER_PERF_FOREGROUND;
         params.font_size = (uint8_t)ER_PERF_FONT_SIZE;
         params.font_family = NULL;

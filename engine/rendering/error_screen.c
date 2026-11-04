@@ -158,7 +158,7 @@ static int line_height(int line, int width)
 /** @brief The check word for a fault record's contents. */
 static uint32_t fault_check(const ERFaultRecord* record)
 {
-    uint32_t hash = FAULT_HASH_SEED ^ record->magic ^ record->pc ^ record->address;
+    uint32_t hash = FAULT_HASH_SEED ^ record->magic ^ record->program_counter ^ record->address;
     for (size_t index = 0u; index < sizeof(record->reason); index++)
     {
         hash = (hash ^ (unsigned char)record->reason[index]) * FAULT_HASH_PRIME;
@@ -204,8 +204,8 @@ void er_error_screen_draw(void)
         line_params(line, &params);
         params.clip.x = ERROR_SCREEN_PADDING;
         params.clip.y = top;
-        params.clip.w = text_width;
-        params.clip.h = top + heights[line] < bottom ? heights[line] : bottom - top;
+        params.clip.width = text_width;
+        params.clip.height = top + heights[line] < bottom ? heights[line] : bottom - top;
         er_text_render(&params);
         top += heights[line] + ERROR_SCREEN_GAP;
     }
@@ -256,7 +256,7 @@ bool er_error_screen_active(void)
 void er_fault_record(ERFaultRecord* record, const char* reason, uint32_t program_counter, uint32_t address)
 {
     record->magic = FAULT_MAGIC;
-    record->pc = program_counter;
+    record->program_counter = program_counter;
     record->address = address;
     size_t index = 0u;
     for (; reason && reason[index] && index + 1u < sizeof(record->reason); index++)
@@ -283,9 +283,9 @@ bool er_fault_show_recorded(ERFaultRecord* record, int screen_width, int screen_
     }
     char location[FAULT_HEX_BYTES] = "";
     char detail[FAULT_HEX_BYTES] = "";
-    if (record->pc)
+    if (record->program_counter)
     {
-        snprintf(location, sizeof(location), "pc 0x%08lx", (unsigned long)record->pc);
+        snprintf(location, sizeof(location), "pc 0x%08lx", (unsigned long)record->program_counter);
     }
     if (record->address)
     {

@@ -34,7 +34,7 @@ import {splitAnimatedStyle} from './embedded-react/split-style.js';
 
 // --- Animated bindings ---------------------------------------------------------------------------
 // A bound prop is owned by the engine from then on: it re-pushes the animated value over the static
-// props of every later setProps (er_anim_reapply_bound), which is what keeps a re-render from jumping
+// props of every later setProps (er_animation_reapply_bound), which is what keeps a re-render from jumping
 // a running animation back to its declared value. Nothing in React says "this prop stopped being
 // animated", so the binding has to be released explicitly or it keeps writing the prop forever — and a
 // prop that swapped Animated.Values ends up written by both. Instances are bare node handles with no
@@ -103,7 +103,7 @@ function applyBindings(handle, bindings) {
 
 /**
  * Forgets what a handle was bound to. The engine releases the bindings itself when a node is destroyed
- * (er_anim_unbind_node), so this only drops our record — but it has to happen, or the map keeps a
+ * (er_animation_unbind_node), so this only drops our record — but it has to happen, or the map keeps a
  * record for every destroyed node. Called on destroy for the node React hands us, and again from
  * detachDeletedInstance because destroyNode reclaims a whole SUBTREE in C — React never hands
  * removeChild the descendants, and detaching is where it names them.

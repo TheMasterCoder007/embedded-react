@@ -55,8 +55,8 @@ static TPkg* base(void)
     memset(&s_config, 0, sizeof(s_config));
     s_config.arena = s_arena;
     s_config.arena_bytes = sizeof(s_arena);
-    s_config.screen_w = TPKG_SCREEN;
-    s_config.screen_h = TPKG_SCREEN;
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
     s_config.native_count = 1;
     return &s_package_spec;
@@ -81,8 +81,8 @@ static void expect(ErbStatus expected, const char* what, int line)
         printf("FAIL line %d (%s): expected %s, got %s (%s)\n",
                line,
                what,
-               erb_status_str(expected),
-               ok ? "ok" : erb_status_str(error.status),
+               erb_status_name(expected),
+               ok ? "ok" : erb_status_name(error.status),
                ok ? "" : error.detail);
         s_failed = 1;
     }
@@ -149,27 +149,27 @@ static void test_container(void)
     ((uint8_t*)s_package)[length - 1u] ^= 0xFFu;
     bool ok;
     ErbError error = verify_bytes(s_package, length, &ok);
-    CHECK(!ok && error.status == ERB_ERR_CORRUPT, "a CRC mismatch is corrupt");
+    CHECK(!ok && error.status == ERB_ERROR_CORRUPT, "a CRC mismatch is corrupt");
 
     length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
     ((uint8_t*)s_package)[0] = 'X';
     error = verify_bytes(s_package, length, &ok);
-    CHECK(!ok && error.status == ERB_ERR_CORRUPT, "a bad magic is not a package");
+    CHECK(!ok && error.status == ERB_ERROR_CORRUPT, "a bad magic is not a package");
 
     length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
     static uint32_t shifted[TEST_PACKAGE_WORDS + 8];
     memcpy((uint8_t*)shifted + 2, s_package, length);
     error = verify_bytes((uint8_t*)shifted + 2, length, &ok);
-    CHECK(!ok && error.status == ERB_ERR_NOT_FLOW_B, "a container off 4-byte alignment is rejected");
+    CHECK(!ok && error.status == ERB_ERROR_NOT_FLOW_B, "a container off 4-byte alignment is rejected");
 
     base()->tag = "v0.15.0";
-    EXPECT(ERB_ERR_NOT_FLOW_B, "a Flow A tag");
+    EXPECT(ERB_ERROR_NOT_FLOW_B, "a Flow A tag");
     base()->program_twice = true;
-    EXPECT(ERB_ERR_NOT_FLOW_B, "two program sections");
+    EXPECT(ERB_ERROR_NOT_FLOW_B, "two program sections");
 
     bool ok_null;
     error = verify_bytes(NULL, 0, &ok_null);
-    CHECK(!ok_null && error.status == ERB_ERR_NO_PACKAGE, "no package");
+    CHECK(!ok_null && error.status == ERB_ERROR_NO_PACKAGE, "no package");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -179,51 +179,51 @@ static void test_container(void)
 static void test_header(void)
 {
     base()->major = ERB_FORMAT_MAJOR + 1u;
-    EXPECT(ERB_ERR_NEWER_FORMAT, "a newer format major");
+    EXPECT(ERB_ERROR_NEWER_FORMAT, "a newer format major");
     base()->minor = ERB_FORMAT_MINOR + 1u;
-    EXPECT(ERB_ERR_NEWER_FORMAT, "a newer format minor");
+    EXPECT(ERB_ERROR_NEWER_FORMAT, "a newer format minor");
     base()->flags = UNKNOWN_FLAG;
-    EXPECT(ERB_ERR_NEWER_FORMAT, "an unknown flag bit");
+    EXPECT(ERB_ERROR_NEWER_FORMAT, "an unknown flag bit");
     base()->abi = ER_ABI + 1u;
-    EXPECT(ERB_ERR_ENGINE_ABI, "an engine ABI past the firmware's");
+    EXPECT(ERB_ERROR_ENGINE_ABI, "an engine ABI past the firmware's");
     base()->abi = ER_ABI_MIN - 1u;
-    EXPECT(ERB_ERR_ENGINE_ABI, "an engine ABI older than the firmware runs");
+    EXPECT(ERB_ERROR_ENGINE_ABI, "an engine ABI older than the firmware runs");
 }
 
 static void test_panel_and_needs(void)
 {
     base();
-    s_config.screen_w = 320;
-    EXPECT(ERB_ERR_NO_PANEL, "no panel for the screen size");
+    s_config.screen_width = 320;
+    EXPECT(ERB_ERROR_NO_PANEL, "no panel for the screen size");
 
     base();
     s_config.arena_bytes = 600;
     const uint32_t length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
     bool ok;
     const ErbError error = verify_bytes(s_package, length, &ok);
-    CHECK(!ok && error.status == ERB_ERR_TOO_BIG && error.resource == ERB_RESOURCE_ARENA && error.needed == 692u
+    CHECK(!ok && error.status == ERB_ERROR_TOO_BIG && error.resource == ERB_RESOURCE_ARENA && error.needed == 692u
               && error.available == 600u,
           "an arena that doesn't fit, with the amounts");
 
     base()->panels[0].node_count = ERUI_MAX_NODES + 1u;
-    EXPECT(ERB_ERR_TOO_BIG, "more nodes than the pool");
+    EXPECT(ERB_ERROR_TOO_BIG, "more nodes than the pool");
     base();
     s_config.node_count = 4;
-    EXPECT(ERB_ERR_TOO_BIG, "more nodes than the firmware allows");
+    EXPECT(ERB_ERROR_TOO_BIG, "more nodes than the firmware allows");
     base()->needs[0].amount = 10000u;
-    EXPECT(ERB_ERR_TOO_BIG, "more animated values than the engine has");
+    EXPECT(ERB_ERROR_TOO_BIG, "more animated values than the engine has");
     base()->needs[0].resource = 99u;
-    EXPECT(ERB_ERR_TOO_BIG, "an unknown resource");
-    base()->needs[0].resource = ERB_RES_FONTS;
-    EXPECT(ERB_ERR_TOO_BIG, "fonts with no font storage");
+    EXPECT(ERB_ERROR_TOO_BIG, "an unknown resource");
+    base()->needs[0].resource = ERB_RESOURCE_FONTS;
+    EXPECT(ERB_ERROR_TOO_BIG, "fonts with no font storage");
     static GlyphInfo glyphs[1];
     static ErAssetsStorage no_array = {NULL, 1, glyphs, 1, NULL, 0, 0, 0, 0};
     s_config.fonts = &no_array;
-    EXPECT(ERB_ERR_TOO_BIG, "font storage with a count but no array");
-    base()->needs[1].resource = ERB_RES_ANIM_VALUES;
-    EXPECT(ERB_ERR_TABLE, "a resource needed twice");
+    EXPECT(ERB_ERROR_TOO_BIG, "font storage with a count but no array");
+    base()->needs[1].resource = ERB_RESOURCE_ANIMATION_VALUES;
+    EXPECT(ERB_ERROR_TABLE, "a resource needed twice");
     base()->needs[0].amount = 0u;
-    EXPECT(ERB_ERR_STATE, "more animated value slots than the needs declare");
+    EXPECT(ERB_ERROR_STATE, "more animated value slots than the needs declare");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -233,18 +233,18 @@ static void test_panel_and_needs(void)
 static void test_directory(void)
 {
     base()->misalign_tables = true;
-    EXPECT(ERB_ERR_TABLE, "tables off 4-byte alignment");
+    EXPECT(ERB_ERROR_TABLE, "tables off 4-byte alignment");
     base()->overlap_tables = true;
-    EXPECT(ERB_ERR_TABLE, "two tables overlapping");
+    EXPECT(ERB_ERROR_TABLE, "two tables overlapping");
     base()->omit[ERB_TABLE_CODE] = true;
-    EXPECT(ERB_ERR_TABLE, "a required table missing");
+    EXPECT(ERB_ERROR_TABLE, "a required table missing");
     base()->extra_table_id = 99u;
-    EXPECT(ERB_ERR_TABLE, "an unknown table id");
+    EXPECT(ERB_ERROR_TABLE, "an unknown table id");
     base()->extra_table_id = ERB_TABLE_STRINGS;
-    EXPECT(ERB_ERR_TABLE, "a table listed twice");
+    EXPECT(ERB_ERROR_TABLE, "a table listed twice");
     base()->extra_table_id = ERB_TABLE_STRINGS;
     s_package_spec.extra_table_panel = 1u;
-    EXPECT(ERB_ERR_TABLE, "a table for a panel the package doesn't declare");
+    EXPECT(ERB_ERROR_TABLE, "a table for a panel the package doesn't declare");
 }
 
 /** @brief Adds a second panel, the first one 80 px wider. */
@@ -262,7 +262,7 @@ static void test_panel_tables(void)
     two_panels()->per_panel = true;
     EXPECT(ERB_OK, "each panel's own tables, stored once");
     two_panels()->per_panel = true;
-    s_config.screen_w = TPKG_SCREEN + 80u;
+    s_config.screen_width = TPKG_SCREEN + 80u;
     EXPECT(ERB_OK, "the second panel's tables");
 
     /* Another panel's table is skipped, and only this panel's must not overlap. */
@@ -271,28 +271,29 @@ static void test_panel_tables(void)
     EXPECT(ERB_OK, "a table for another panel");
     two_panels()->extra_table_id = ERB_TABLE_STRINGS;
     s_package_spec.extra_table_panel = 1u;
-    s_config.screen_w = TPKG_SCREEN + 80u;
-    EXPECT(ERB_ERR_TABLE, "a panel's table beside the shared one");
+    s_config.screen_width = TPKG_SCREEN + 80u;
+    EXPECT(ERB_ERROR_TABLE, "a panel's table beside the shared one");
     two_panels()->per_panel = true;
     s_package_spec.extra_table_id = ERB_TABLE_CODE;
     s_package_spec.extra_table_panel = 0u;
-    EXPECT(ERB_ERR_TABLE, "a table listed twice for one panel");
+    EXPECT(ERB_ERROR_TABLE, "a table listed twice for one panel");
     two_panels()->per_panel = true;
     s_package_spec.omit[ERB_TABLE_CODE] = true;
     s_package_spec.extra_table_id = ERB_TABLE_CODE;
     s_package_spec.extra_table_panel = 1u;
-    EXPECT(ERB_ERR_TABLE, "a required table only another panel has");
+    EXPECT(ERB_ERROR_TABLE, "a required table only another panel has");
     two_panels()->panel_field_zero = true;
     s_package_spec.minor = ERB_FORMAT_MINOR_PANELS - 1u;
-    s_config.screen_w = TPKG_SCREEN + 80u;
+    s_config.screen_width = TPKG_SCREEN + 80u;
     EXPECT(ERB_OK, "an older package's tables on its second panel");
     two_panels()->panel_field_zero = true;
-    s_config.screen_w = TPKG_SCREEN + 80u;
-    EXPECT(ERB_ERR_TABLE, "panel 0's tables only, on the second panel");
+    s_config.screen_width = TPKG_SCREEN + 80u;
+    EXPECT(ERB_ERROR_TABLE, "panel 0's tables only, on the second panel");
 }
 
 /** @brief A check that passes on a panel at least arg wide: WIDTH, PUSHI, GE, END. */
-#define WIDE_CHECK(width) ERB_CK_WIDTH, ERB_CK_PUSHI | ((uint32_t)(width) << 8), ERB_CK_GE, ERB_CK_END
+#define WIDE_CHECK(width)                                                                                              \
+    ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_PUSHI | ((uint32_t)(width) << 8), ERB_CHECK_OP_GE, ERB_CHECK_OP_END
 
 /** @brief The base package with @p words as its only check. */
 static TPkg* checked(const uint32_t* words, uint32_t count)
@@ -313,7 +314,7 @@ static void test_layout_checks(void)
     s_package_spec.check_word_count = 4u;
     s_package_spec.panel_checks[0] = 0u;
     s_package_spec.panel_checks[1] = ERB_CHECK_ALWAYS;
-    s_config.screen_w = 500;
+    s_config.screen_width = 500;
     EXPECT(ERB_OK, "the first layout whose check passes");
     CHECK(s_program.panel == 0u, "it is the first panel");
     two_panels();
@@ -322,7 +323,7 @@ static void test_layout_checks(void)
     s_package_spec.panel_checks[0] = 0u;
     s_package_spec.panel_checks[1] = ERB_CHECK_ALWAYS;
     s_package_spec.panels[0].node_count = ERUI_MAX_NODES + 1u;
-    s_config.screen_w = 399;
+    s_config.screen_width = 399;
     EXPECT(ERB_OK, "a layout too big for the firmware, on a screen that doesn't pick it");
     CHECK(s_program.panel == 1u, "it falls to the second panel");
 
@@ -331,87 +332,90 @@ static void test_layout_checks(void)
     s_package_spec.check_words = wide_then_any;
     s_package_spec.check_word_count = 4u;
     s_package_spec.panel_checks[0] = ERB_CHECK_ALWAYS;
-    EXPECT(ERB_ERR_TOO_BIG, "a layout too big for the firmware, on a screen that picks it");
+    EXPECT(ERB_ERROR_TOO_BIG, "a layout too big for the firmware, on a screen that picks it");
 
     checked(wide_then_any, 4u);
-    s_config.screen_w = 399;
-    EXPECT(ERB_ERR_NO_PANEL, "a screen no check passes");
+    s_config.screen_width = 399;
+    EXPECT(ERB_ERROR_NO_PANEL, "a screen no check passes");
 
     /* What the VM's arithmetic gives, through each kind of op. */
     static const uint32_t math[] = {
-        ERB_CK_WIDTH,
-        ERB_CK_PUSHI | (3u << 8),
-        ERB_CK_DIV,
-        ERB_CK_STORE | (5u << 8),
-        ERB_CK_LOAD | (5u << 8),
-        ERB_CK_MATH | ((uint32_t)ERB_MATH_FLOOR << 8),
-        ERB_CK_PUSHI | (2u << 8),
-        ERB_CK_MATH | ((uint32_t)ERB_MATH_MAX << 8),
-        ERB_CK_HEIGHT,
-        ERB_CK_PUSHI | (7u << 8),
-        ERB_CK_IDIV | ((uint32_t)ERB_CK_IDIV_MOD << 8),
-        ERB_CK_ADD,
-        ERB_CK_PUSHK,
+        ERB_CHECK_OP_WIDTH,
+        ERB_CHECK_OP_PUSHI | (3u << 8),
+        ERB_CHECK_OP_DIV,
+        ERB_CHECK_OP_STORE | (5u << 8),
+        ERB_CHECK_OP_LOAD | (5u << 8),
+        ERB_CHECK_OP_MATH | ((uint32_t)ERB_MATH_FLOOR << 8),
+        ERB_CHECK_OP_PUSHI | (2u << 8),
+        ERB_CHECK_OP_MATH | ((uint32_t)ERB_MATH_MAX << 8),
+        ERB_CHECK_OP_HEIGHT,
+        ERB_CHECK_OP_PUSHI | (7u << 8),
+        ERB_CHECK_OP_IDIV | ((uint32_t)ERB_CHECK_OP_IDIV_MOD << 8),
+        ERB_CHECK_OP_ADD,
+        ERB_CHECK_OP_PUSHK,
         0x00000000u,
         0x40590000u, /* 100.0 */
-        ERB_CK_EQ,
-        ERB_CK_NOT,
-        ERB_CK_NOT,
-        ERB_CK_PUSHI | (1u << 8),
-        ERB_CK_PUSHI,
-        ERB_CK_SELECT,
-        ERB_CK_END,
+        ERB_CHECK_OP_EQ,
+        ERB_CHECK_OP_NOT,
+        ERB_CHECK_OP_NOT,
+        ERB_CHECK_OP_PUSHI | (1u << 8),
+        ERB_CHECK_OP_PUSHI,
+        ERB_CHECK_OP_SELECT,
+        ERB_CHECK_OP_END,
     };
     checked(math, sizeof(math) / sizeof(math[0]));
-    s_config.screen_w = 297; /* 297 / 3 = 99 */
-    s_config.screen_h = 8;   /* 8 % 7 = 1 */
+    s_config.screen_width = 297; /* 297 / 3 = 99 */
+    s_config.screen_height = 8;  /* 8 % 7 = 1 */
     EXPECT(ERB_OK, "a check that works the size out");
     checked(math, sizeof(math) / sizeof(math[0]));
-    s_config.screen_w = 300;
-    s_config.screen_h = 8;
-    EXPECT(ERB_ERR_NO_PANEL, "the same check on a size it rejects");
+    s_config.screen_width = 300;
+    s_config.screen_height = 8;
+    EXPECT(ERB_ERROR_NO_PANEL, "the same check on a size it rejects");
 
     /* A malformed check fails the load, and never reads past its table. */
     static const uint32_t no_op[] = {0u};
     checked(no_op, 1u);
-    EXPECT(ERB_ERR_TABLE, "a check op of 0");
-    static const uint32_t unknown[] = {ERB_CK_COUNT_};
+    EXPECT(ERB_ERROR_TABLE, "a check op of 0");
+    static const uint32_t unknown[] = {ERB_CHECK_OP_COUNT_};
     checked(unknown, 1u);
-    EXPECT(ERB_ERR_TABLE, "an unknown check op");
-    static const uint32_t underflow[] = {ERB_CK_ADD};
+    EXPECT(ERB_ERROR_TABLE, "an unknown check op");
+    static const uint32_t underflow[] = {ERB_CHECK_OP_ADD};
     checked(underflow, 1u);
-    EXPECT(ERB_ERR_TABLE, "a check that pops an empty stack");
-    static const uint32_t no_end[] = {ERB_CK_WIDTH};
+    EXPECT(ERB_ERROR_TABLE, "a check that pops an empty stack");
+    static const uint32_t no_end[] = {ERB_CHECK_OP_WIDTH};
     checked(no_end, 1u);
-    EXPECT(ERB_ERR_TABLE, "a check that runs off its table");
-    static const uint32_t cut_constant[] = {ERB_CK_PUSHK, 0u};
+    EXPECT(ERB_ERROR_TABLE, "a check that runs off its table");
+    static const uint32_t cut_constant[] = {ERB_CHECK_OP_PUSHK, 0u};
     checked(cut_constant, 2u);
-    EXPECT(ERB_ERR_TABLE, "a constant cut off by the table's end");
-    static const uint32_t far_local[] = {ERB_CK_LOAD | (ERB_CHECK_LOCALS << 8), ERB_CK_END};
+    EXPECT(ERB_ERROR_TABLE, "a constant cut off by the table's end");
+    static const uint32_t far_local[] = {ERB_CHECK_OP_LOAD | (ERB_CHECK_LOCALS << 8), ERB_CHECK_OP_END};
     checked(far_local, 2u);
-    EXPECT(ERB_ERR_TABLE, "a local past the check's locals");
-    static const uint32_t negative_local[] = {ERB_CK_LOAD | 0xFFFFFF00u, ERB_CK_END};
+    EXPECT(ERB_ERROR_TABLE, "a local past the check's locals");
+    static const uint32_t negative_local[] = {ERB_CHECK_OP_LOAD | 0xFFFFFF00u, ERB_CHECK_OP_END};
     checked(negative_local, 2u);
-    EXPECT(ERB_ERR_TABLE, "a negative local");
-    static const uint32_t bad_math[] = {ERB_CK_WIDTH, ERB_CK_MATH | ((uint32_t)ERB_MATH_COUNT_ << 8), ERB_CK_END};
+    EXPECT(ERB_ERROR_TABLE, "a negative local");
+    static const uint32_t bad_math[] = {
+        ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_MATH | ((uint32_t)ERB_MATH_COUNT_ << 8), ERB_CHECK_OP_END};
     checked(bad_math, 3u);
-    EXPECT(ERB_ERR_TABLE, "an unknown math function");
-    static const uint32_t bad_division[] = {
-        ERB_CK_WIDTH, ERB_CK_WIDTH, ERB_CK_IDIV | ((uint32_t)ERB_CK_IDIV_COUNT_ << 8), ERB_CK_END};
+    EXPECT(ERB_ERROR_TABLE, "an unknown math function");
+    static const uint32_t bad_division[] = {ERB_CHECK_OP_WIDTH,
+                                            ERB_CHECK_OP_WIDTH,
+                                            ERB_CHECK_OP_IDIV | ((uint32_t)ERB_CHECK_OP_IDIV_COUNT_ << 8),
+                                            ERB_CHECK_OP_END};
     checked(bad_division, 4u);
-    EXPECT(ERB_ERR_TABLE, "an unknown division");
+    EXPECT(ERB_ERROR_TABLE, "an unknown division");
     static uint32_t deep[ERB_CHECK_STACK + 1u];
     for (uint32_t index = 0; index < ERB_CHECK_STACK + 1u; index++)
     {
-        deep[index] = ERB_CK_WIDTH;
+        deep[index] = ERB_CHECK_OP_WIDTH;
     }
     checked(deep, ERB_CHECK_STACK + 1u);
-    EXPECT(ERB_ERR_TABLE, "a check that overflows its stack");
-    static const uint32_t end_only[] = {ERB_CK_WIDTH, ERB_CK_END};
+    EXPECT(ERB_ERROR_TABLE, "a check that overflows its stack");
+    static const uint32_t end_only[] = {ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_END};
     checked(end_only, 2u)->panel_checks[0] = 2u;
-    EXPECT(ERB_ERR_TABLE, "a panel's check past the table");
+    EXPECT(ERB_ERROR_TABLE, "a panel's check past the table");
     checked(end_only, 2u)->omit[ERB_TABLE_CHECKS] = true;
-    EXPECT(ERB_ERR_TABLE, "a panel's check with no table");
+    EXPECT(ERB_ERROR_TABLE, "a panel's check with no table");
 
     /* A later check counts too, whichever panel the screen picks. */
     static const uint32_t wide_then_malformed[] = {WIDE_CHECK(400), 0u};
@@ -420,47 +424,48 @@ static void test_layout_checks(void)
     s_package_spec.check_word_count = 5u;
     s_package_spec.panel_checks[0] = 0u;
     s_package_spec.panel_checks[1] = 4u;
-    s_config.screen_w = 500;
-    EXPECT(ERB_ERR_TABLE, "a malformed check after the one that passes");
+    s_config.screen_width = 500;
+    EXPECT(ERB_ERROR_TABLE, "a malformed check after the one that passes");
     two_panels();
     s_package_spec.check_words = wide_then_malformed;
     s_package_spec.check_word_count = 5u;
     s_package_spec.panel_checks[0] = ERB_CHECK_ALWAYS;
     s_package_spec.panel_checks[1] = 4u;
-    EXPECT(ERB_ERR_TABLE, "a malformed check after a layout that takes any screen");
+    EXPECT(ERB_ERROR_TABLE, "a malformed check after a layout that takes any screen");
 
     /* Only the chosen panel's needs have to fit. */
-    static const uint32_t narrow_then_any[] = {ERB_CK_WIDTH, ERB_CK_PUSHI | (400u << 8), ERB_CK_LT, ERB_CK_END};
+    static const uint32_t narrow_then_any[] = {
+        ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_PUSHI | (400u << 8), ERB_CHECK_OP_LT, ERB_CHECK_OP_END};
     checked(narrow_then_any, 4u);
     s_package_spec.panels[1] = s_package_spec.panels[0];
     s_package_spec.panel_count = 2;
     s_package_spec.panel_checks[1] = ERB_CHECK_ALWAYS;
-    s_package_spec.needs[2] = (TNeed){ERB_RES_VECTOR_NODES, 100000u};
+    s_package_spec.needs[2] = (TNeed){ERB_RESOURCE_VECTOR_NODES, 100000u};
     s_package_spec.need_panels[2] = 1u;
     s_package_spec.need_count = 3;
     EXPECT(ERB_OK, "another layout's need that doesn't fit");
-    s_config.screen_w = 400;
+    s_config.screen_width = 400;
     s_package_spec.need_panels[2] = 1u;
-    EXPECT(ERB_ERR_TOO_BIG, "the chosen layout's need that doesn't fit");
+    EXPECT(ERB_ERROR_TOO_BIG, "the chosen layout's need that doesn't fit");
     base()->need_panels[0] = 1u;
-    EXPECT(ERB_ERR_TABLE, "a need for a panel the package doesn't declare");
+    EXPECT(ERB_ERROR_TABLE, "a need for a panel the package doesn't declare");
 
     /* A package before minor 6 still matches its exact sizes. */
     base()->minor = ERB_FORMAT_MINOR_CHECKS - 1u;
     EXPECT(ERB_OK, "an older package on its size");
     base()->minor = ERB_FORMAT_MINOR_CHECKS - 1u;
-    s_config.screen_w = TPKG_SCREEN + 1u;
-    EXPECT(ERB_ERR_NO_PANEL, "an older package on another size");
+    s_config.screen_width = TPKG_SCREEN + 1u;
+    EXPECT(ERB_ERROR_NO_PANEL, "an older package on another size");
 }
 
 static void test_strings(void)
 {
     base()->strings[STRING_BOOM] = "\xC3\x28";
-    EXPECT(ERB_ERR_STRING, "invalid UTF-8");
+    EXPECT(ERB_ERROR_STRING, "invalid UTF-8");
     base()->strings[STRING_BOOM] = "\xC0\xAF";
-    EXPECT(ERB_ERR_STRING, "an overlong UTF-8 form");
+    EXPECT(ERB_ERROR_STRING, "an overlong UTF-8 form");
     base()->strings[STRING_BOOM] = "\xED\xA0\x80";
-    EXPECT(ERB_ERR_STRING, "a UTF-16 surrogate");
+    EXPECT(ERB_ERROR_STRING, "a UTF-16 surrogate");
     base()->strings[STRING_BOOM] = "caf\xC3\xA9";
     EXPECT(ERB_OK, "valid UTF-8 passes");
 }
@@ -468,211 +473,211 @@ static void test_strings(void)
 static void test_arena(void)
 {
     base()->regions[1].offset = 28u;
-    EXPECT(ERB_ERR_ARENA, "regions overlapping");
+    EXPECT(ERB_ERROR_ARENA, "regions overlapping");
     base();
     s_package_spec.panels[0].arena_bytes = 700u;
-    EXPECT(ERB_ERR_ARENA, "regions that don't add up to arena_bytes");
+    EXPECT(ERB_ERROR_ARENA, "regions that don't add up to arena_bytes");
     base()->regions[2].kind = 99u;
-    EXPECT(ERB_ERR_ARENA, "an unknown region kind");
+    EXPECT(ERB_ERROR_ARENA, "an unknown region kind");
     base()->regions[2].kind = ERB_REGION_SLOTS;
-    EXPECT(ERB_ERR_ARENA, "a region kind twice");
+    EXPECT(ERB_ERROR_ARENA, "a region kind twice");
     base()->regions[1].count = 100u;
-    EXPECT(ERB_ERR_ARENA, "a region whose size doesn't match its count");
+    EXPECT(ERB_ERROR_ARENA, "a region whose size doesn't match its count");
     base()->regions[0].offset = 2u;
-    EXPECT(ERB_ERR_ARENA, "an unaligned region");
+    EXPECT(ERB_ERROR_ARENA, "an unaligned region");
     base()->region_count = 9u;
     s_package_spec.panels[0].arena_bytes = 436u;
-    EXPECT(ERB_ERR_ARENA, "no register stack");
+    EXPECT(ERB_ERROR_ARENA, "no register stack");
 }
 
 static void test_slots(void)
 {
     base()->slots[SLOT_COUNT].type = 99u;
-    EXPECT(ERB_ERR_STATE, "an unknown slot type");
+    EXPECT(ERB_ERROR_STATE, "an unknown slot type");
     base()->slots[SLOT_SPEED].offset = 0u;
-    EXPECT(ERB_ERR_STATE, "slots overlapping");
+    EXPECT(ERB_ERROR_STATE, "slots overlapping");
     base()->slots[SLOT_COUNT].offset = 2u;
-    EXPECT(ERB_ERR_STATE, "an unaligned slot");
-    base()->slots[SLOT_ROOT].type = ERB_T_INT64;
-    EXPECT(ERB_ERR_STATE, "a slot outside its type's region");
+    EXPECT(ERB_ERROR_STATE, "an unaligned slot");
+    base()->slots[SLOT_ROOT].type = ERB_TYPE_INT64;
+    EXPECT(ERB_ERROR_STATE, "a slot outside its type's region");
     base()->slots[SLOT_COUNT].dirty_bit = 5u;
-    EXPECT(ERB_ERR_STATE, "a dirty bit past the region");
+    EXPECT(ERB_ERROR_STATE, "a dirty bit past the region");
     base()->slots[SLOT_READY].init = 2u;
-    EXPECT(ERB_ERR_STATE, "a bool initialised to 2");
+    EXPECT(ERB_ERROR_STATE, "a bool initialised to 2");
     base()->slots[SLOT_MODE].init = 2u;
-    EXPECT(ERB_ERR_STATE, "an enum initialised past its set");
+    EXPECT(ERB_ERROR_STATE, "an enum initialised past its set");
     base()->slots[SLOT_MODE].aux = 5u;
-    EXPECT(ERB_ERR_STATE, "an enum naming no set");
+    EXPECT(ERB_ERROR_STATE, "an enum naming no set");
     base()->slots[SLOT_LABEL].cap = 3u;
-    EXPECT(ERB_ERR_STATE, "a string initialised past its cap");
+    EXPECT(ERB_ERROR_STATE, "a string initialised past its cap");
     base()->slots[SLOT_COUNT].cap = 3u;
-    EXPECT(ERB_ERR_STATE, "a cap on an int");
+    EXPECT(ERB_ERROR_STATE, "a cap on an int");
     base()->slots[SLOT_BIG].init = 9u;
-    EXPECT(ERB_ERR_STATE, "an int64 naming no constant");
+    EXPECT(ERB_ERROR_STATE, "an int64 naming no constant");
     base()->slots[SLOT_COUNT].flags = UNKNOWN_SLOT_FLAG;
-    EXPECT(ERB_ERR_STATE, "an unknown slot flag");
+    EXPECT(ERB_ERROR_STATE, "an unknown slot flag");
 }
 
 static void test_lists(void)
 {
     base()->fields[1].offset = 8u;
-    EXPECT(ERB_ERR_STATE, "a row field past the row");
-    base()->fields[1].type = ERB_T_STRING;
-    EXPECT(ERB_ERR_STATE, "a string field with no cap");
+    EXPECT(ERB_ERROR_STATE, "a row field past the row");
+    base()->fields[1].type = ERB_TYPE_STRING;
+    EXPECT(ERB_ERROR_STATE, "a string field with no cap");
     base()->rows[0].size = 6u;
-    EXPECT(ERB_ERR_STATE, "a row size that isn't a multiple of 4");
+    EXPECT(ERB_ERROR_STATE, "a row size that isn't a multiple of 4");
     base()->slots[SLOT_ITEMS].aux = 3u;
-    EXPECT(ERB_ERR_STATE, "a list naming no row layout");
+    EXPECT(ERB_ERROR_STATE, "a list naming no row layout");
 }
 
 static void test_props(void)
 {
     base()->prop_entries[1].prop = 9999u;
-    EXPECT(ERB_ERR_PROP, "a prop id the firmware doesn't have");
-    base()->prop_entries[1].kind = ERB_PK_COLOR;
-    EXPECT(ERB_ERR_PROP, "a value kind that isn't the prop's");
+    EXPECT(ERB_ERROR_PROP, "a prop id the firmware doesn't have");
+    base()->prop_entries[1].kind = ERB_PROP_KIND_COLOR;
+    EXPECT(ERB_ERROR_PROP, "a value kind that isn't the prop's");
     base()->prop_entries[1].value = 40000u;
-    EXPECT(ERB_ERR_PROP, "a dimension past int16");
-    base()->prop_entries[1] = (TPropEntry){27, ERB_PK_ENUM, 7u}; /* flex_direction */
-    EXPECT(ERB_ERR_PROP, "an enum value past the prop's range");
+    EXPECT(ERB_ERROR_PROP, "a dimension past int16");
+    base()->prop_entries[1] = (TPropEntry){27, ERB_PROP_KIND_ENUM, 7u}; /* flex_direction */
+    EXPECT(ERB_ERROR_PROP, "an enum value past the prop's range");
     static char long_text[300];
     memset(long_text, 'a', sizeof(long_text) - 1u);
     base()->strings[STRING_BOOM] = long_text;
     s_package_spec.prop_entries[0].value = STRING_BOOM;
-    EXPECT(ERB_ERR_PROP, "text past the firmware's cap");
+    EXPECT(ERB_ERROR_PROP, "text past the firmware's cap");
     base()->prop_entries[3].value = STRING_HELLO;
-    EXPECT(ERB_ERR_PROP, "an image the asset pack doesn't have");
+    EXPECT(ERB_ERROR_PROP, "an image the asset pack doesn't have");
     base()->prop_entries[0].value = 99u;
-    EXPECT(ERB_ERR_PROP, "a string index past the table");
+    EXPECT(ERB_ERROR_PROP, "a string index past the table");
 }
 
 static void test_templates(void)
 {
     base()->nodes[1].type = 99u;
-    EXPECT(ERB_ERR_TEMPLATE, "an unknown node type");
+    EXPECT(ERB_ERROR_TEMPLATE, "an unknown node type");
     base()->nodes[0].children = 5u;
-    EXPECT(ERB_ERR_TEMPLATE, "child counts past the template's nodes");
+    EXPECT(ERB_ERROR_TEMPLATE, "child counts past the template's nodes");
     base()->nodes[0].children = 2u;
-    EXPECT(ERB_ERR_TEMPLATE, "nodes left over after the tree");
+    EXPECT(ERB_ERROR_TEMPLATE, "nodes left over after the tree");
     base()->nodes[0].handle = SLOT_COUNT;
-    EXPECT(ERB_ERR_TEMPLATE, "a handle slot that isn't a node");
+    EXPECT(ERB_ERROR_TEMPLATE, "a handle slot that isn't a node");
     base()->nodes[1].children = 1u;
     s_package_spec.nodes[0].children = 2u;
-    EXPECT(ERB_ERR_TEMPLATE, "a text node with a child");
+    EXPECT(ERB_ERROR_TEMPLATE, "a text node with a child");
     base()->panels[0].node_count = 3u;
-    EXPECT(ERB_ERR_TEMPLATE, "a template with more nodes than the panel");
+    EXPECT(ERB_ERROR_TEMPLATE, "a template with more nodes than the panel");
     base()->panels[0].root_template = 2u;
-    EXPECT(ERB_ERR_TEMPLATE, "a root that isn't a root template");
+    EXPECT(ERB_ERROR_TEMPLATE, "a root that isn't a root template");
     base()->nodes[4].handle = SLOT_ROOT;
-    EXPECT(ERB_ERR_TEMPLATE, "a row template keeping handles in a single slot");
+    EXPECT(ERB_ERROR_TEMPLATE, "a row template keeping handles in a single slot");
     base()->nodes[2].props = 9u;
-    EXPECT(ERB_ERR_TEMPLATE, "a prop set that doesn't exist");
+    EXPECT(ERB_ERROR_TEMPLATE, "a prop set that doesn't exist");
     base()->nodes[0].flags = 1u;
-    EXPECT(ERB_ERR_TEMPLATE, "an unknown node flag");
+    EXPECT(ERB_ERROR_TEMPLATE, "an unknown node flag");
 }
 
 static void test_bindings(void)
 {
     base()->bindings[0].target = FUNCTION_TIMER;
-    EXPECT(ERB_ERR_BINDING, "an event bound to a function of another kind");
+    EXPECT(ERB_ERROR_BINDING, "an event bound to a function of another kind");
     base()->bindings[2].event = 5u; /* width */
-    EXPECT(ERB_ERR_BINDING, "an animated value bound to a prop that can't animate");
+    EXPECT(ERB_ERROR_BINDING, "an animated value bound to a prop that can't animate");
     base()->bindings[2].target = SLOT_COUNT;
-    EXPECT(ERB_ERR_BINDING, "an animated binding to a slot that isn't an animated value");
+    EXPECT(ERB_ERROR_BINDING, "an animated binding to a slot that isn't an animated value");
     base()->nodes[1].bindings = 1u;
     s_package_spec.nodes[1].binding_count = 1u;
-    EXPECT(ERB_ERR_BINDING, "a tape on a text node");
+    EXPECT(ERB_ERROR_BINDING, "a tape on a text node");
     base()->bindings[1].target = 4u;
-    EXPECT(ERB_ERR_BINDING, "a tape that doesn't exist");
+    EXPECT(ERB_ERROR_BINDING, "a tape that doesn't exist");
     base()->bindings[1].kind = 9u;
-    EXPECT(ERB_ERR_BINDING, "an unknown binding kind");
+    EXPECT(ERB_ERROR_BINDING, "an unknown binding kind");
     base()->nodes[0].binding_count = 9u;
-    EXPECT(ERB_ERR_BINDING, "node bindings past the table");
+    EXPECT(ERB_ERROR_BINDING, "node bindings past the table");
     base()->bindings[2] = (TBinding){ERB_BIND_ANIMATED, PROP_BACKGROUND_COLOR, SLOT_FADE};
-    EXPECT(ERB_ERR_BINDING, "a plain animated binding to a color");
+    EXPECT(ERB_ERROR_BINDING, "a plain animated binding to a color");
 
     base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 0};
     EXPECT(ERB_OK, "an interpolated binding");
     base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_BACKGROUND_COLOR, 1};
     EXPECT(ERB_OK, "an interpolation onto colors, bound to a color");
     base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_BACKGROUND_COLOR, 0};
-    EXPECT(ERB_ERR_BINDING, "an interpolation onto numbers, bound to a color");
+    EXPECT(ERB_ERROR_BINDING, "an interpolation onto numbers, bound to a color");
     base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 1};
-    EXPECT(ERB_ERR_BINDING, "an interpolation onto colors, bound to a number");
+    EXPECT(ERB_ERROR_BINDING, "an interpolation onto colors, bound to a number");
     base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_WIDTH, 0};
-    EXPECT(ERB_ERR_BINDING, "an interpolation bound to a prop that can't animate");
+    EXPECT(ERB_ERROR_BINDING, "an interpolation bound to a prop that can't animate");
     base()->bindings[2] = (TBinding){ERB_BIND_INTERPOLATED, PROP_ROTATE_Z, 2};
-    EXPECT(ERB_ERR_BINDING, "an interpolation that doesn't exist");
+    EXPECT(ERB_ERROR_BINDING, "an interpolation that doesn't exist");
 }
 
 static void test_interps(void)
 {
     base()->interps[0].point_count = 1u;
-    EXPECT(ERB_ERR_ANIMATION, "an interpolation of one point");
+    EXPECT(ERB_ERROR_ANIMATION, "an interpolation of one point");
     base()->interps[0].point_count = ER_INTERPOLATE_MAX_POINTS + 1u;
-    EXPECT(ERB_ERR_ANIMATION, "more points than the engine holds");
+    EXPECT(ERB_ERROR_ANIMATION, "more points than the engine holds");
     base()->interps[0].slot = SLOT_COUNT;
-    EXPECT(ERB_ERR_ANIMATION, "an interpolation of a slot that isn't an animated value");
+    EXPECT(ERB_ERROR_ANIMATION, "an interpolation of a slot that isn't an animated value");
     base()->interps[0].extrapolate_right = ER_EXTRAPOLATE_IDENTITY + 1u;
-    EXPECT(ERB_ERR_ANIMATION, "an unknown extrapolation");
+    EXPECT(ERB_ERROR_ANIMATION, "an unknown extrapolation");
     base()->interps[0].flags = 0x02u;
-    EXPECT(ERB_ERR_ANIMATION, "an unknown interpolation flag");
+    EXPECT(ERB_ERROR_ANIMATION, "an unknown interpolation flag");
 }
 
 static void test_anims(void)
 {
     base()->anims[1].kind = 99u;
-    EXPECT(ERB_ERR_ANIMATION, "an unknown animation kind");
+    EXPECT(ERB_ERROR_ANIMATION, "an unknown animation kind");
     base()->anims[1].easing = 99u;
-    EXPECT(ERB_ERR_ANIMATION, "an unknown easing");
+    EXPECT(ERB_ERROR_ANIMATION, "an unknown easing");
     base()->anims[0].first = 0u;
-    EXPECT(ERB_ERR_ANIMATION, "a group whose child comes before it");
+    EXPECT(ERB_ERROR_ANIMATION, "a group whose child comes before it");
     base()->anims[0].count = 3u;
-    EXPECT(ERB_ERR_ANIMATION, "a group's children past the table");
+    EXPECT(ERB_ERROR_ANIMATION, "a group's children past the table");
     base()->anims[1].target = SLOT_COUNT;
-    EXPECT(ERB_ERR_ANIMATION, "a leaf animating an int slot");
-    base()->anims[2] = (TAnim){ERB_ANIM_PARALLEL, 0, 0, ERB_NONE, 0, 1, 1, 0, 0, 0, {0, 0, 0, 0}};
+    EXPECT(ERB_ERROR_ANIMATION, "a leaf animating an int slot");
+    base()->anims[2] = (TAnim){ERB_ANIMATION_PARALLEL, 0, 0, ERB_NONE, 0, 1, 1, 0, 0, 0, {0, 0, 0, 0}};
     s_package_spec.anim_count = 3u;
-    EXPECT(ERB_ERR_ANIMATION, "a child with two parents");
-    base()->anims[0].kind = ERB_ANIM_LOOP;
+    EXPECT(ERB_ERROR_ANIMATION, "a child with two parents");
+    base()->anims[0].kind = ERB_ANIMATION_LOOP;
     s_package_spec.anims[0].count = 2u;
     s_package_spec.anims[2] = s_package_spec.anims[1];
     s_package_spec.anim_count = 3u;
-    EXPECT(ERB_ERR_ANIMATION, "a loop of two children");
+    EXPECT(ERB_ERROR_ANIMATION, "a loop of two children");
     base()->anims[1].flags = 0x80u;
-    EXPECT(ERB_ERR_ANIMATION, "an unknown animation flag");
+    EXPECT(ERB_ERROR_ANIMATION, "an unknown animation flag");
 }
 
 static void test_tapes(void)
 {
     base()->tape_floats[0] = 9.0f;
-    EXPECT(ERB_ERR_TAPE, "an unknown vector op");
+    EXPECT(ERB_ERROR_TAPE, "an unknown vector op");
     base()->tape_floats[1] = 3.0f;
-    EXPECT(ERB_ERR_TAPE, "a shape naming no paint");
+    EXPECT(ERB_ERROR_TAPE, "a shape naming no paint");
     base()->tapes[0].float_count = 7u;
-    EXPECT(ERB_ERR_TAPE, "an op cut off from its arguments");
+    EXPECT(ERB_ERROR_TAPE, "an op cut off from its arguments");
     base()->paints[0].cap = 9u;
-    EXPECT(ERB_ERR_TAPE, "an unknown stroke cap");
-    base()->paints[0].fill_grad = 1;
-    EXPECT(ERB_ERR_TAPE, "a paint naming a gradient the tape doesn't have");
+    EXPECT(ERB_ERROR_TAPE, "an unknown stroke cap");
+    base()->paints[0].fill_gradient = 1;
+    EXPECT(ERB_ERROR_TAPE, "a paint naming a gradient the tape doesn't have");
     base()->gradients[0] = (TGradient){ER_GRADIENT_LINEAR, 1, 0, 0, 0, 1, 1, 0};
     s_package_spec.gradient_count = 1u;
     s_package_spec.stops[0] = (TStop){COLOR_WHITE, 0.0f};
     s_package_spec.stop_count = 1u;
     s_package_spec.tapes[0].gradient_count = 1u;
-    EXPECT(ERB_ERR_TAPE, "a gradient with one stop");
+    EXPECT(ERB_ERROR_TAPE, "a gradient with one stop");
     s_package_spec.gradients[0].stop_count = 2u;
     s_package_spec.stops[1] = (TStop){COLOR_BLACK, 1.0f};
     s_package_spec.stop_count = 2u;
     EXPECT(ERB_OK, "a gradient with two stops passes");
     base()->tapes[0].paint_count = ERUI_VECTOR_PAINTS_MAX + 1u;
-    EXPECT(ERB_ERR_TAPE, "more paints than the firmware keeps");
+    EXPECT(ERB_ERROR_TAPE, "more paints than the firmware keeps");
 }
 
 /** @brief Checks one timer function of an int and a float register against the verifier. */
 static void expect_vector_code(ErbStatus expected, const char* what, uint32_t instruction, int line)
 {
-    const uint8_t types[] = {ERB_T_INT, ERB_T_FLOAT};
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_FLOAT};
     const uint32_t code[] = {OP_ABX(LOADI, 0, 1), OP_ABX(LOADK, 1, 0), instruction, OP_ABC(RET, 0, 0, 0)};
     base();
     set_code_types(FUNCTION_TIMER, types, 2, code, 4);
@@ -682,22 +687,26 @@ static void expect_vector_code(ErbStatus expected, const char* what, uint32_t in
 
 static void test_vector_code(void)
 {
-    EXPECT_VECTOR_CODE(ERB_OK, "a fill from an int", OP_ABC(VPAINT, 0, 0, ERB_VPAINT_FILL));
-    EXPECT_VECTOR_CODE(ERB_OK, "a stroke width from a float", OP_ABC(VPAINT, 1, 0, ERB_VPAINT_STROKE_WIDTH));
-    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a fill from a float", OP_ABC(VPAINT, 1, 0, ERB_VPAINT_FILL));
-    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "an unknown paint field", OP_ABC(VPAINT, 0, 0, ERB_VPAINT_COUNT_));
+    EXPECT_VECTOR_CODE(ERB_OK, "a fill from an int", OP_ABC(VPAINT, 0, 0, ERB_VECTOR_PAINT_FILL));
+    EXPECT_VECTOR_CODE(ERB_OK, "a stroke width from a float", OP_ABC(VPAINT, 1, 0, ERB_VECTOR_PAINT_STROKE_WIDTH));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE, "a fill from a float", OP_ABC(VPAINT, 1, 0, ERB_VECTOR_PAINT_FILL));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE, "an unknown paint field", OP_ABC(VPAINT, 0, 0, ERB_VECTOR_PAINT_COUNT_));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE,
+                       "a paint past the firmware's",
+                       OP_ABC(VPAINT, 0, ERUI_VECTOR_PAINTS_MAX, ERB_VECTOR_PAINT_FILL));
+    EXPECT_VECTOR_CODE(ERB_OK, "a gradient's radius from a float", OP_ABC(VGRAD, 1, 0, ERB_VECTOR_GRADIENT_RADIUS));
+    EXPECT_VECTOR_CODE(ERB_OK, "a stop's color from an int", OP_ABC(VGRAD, 0, 0, ERB_VECTOR_GRADIENT_STOPS + 2u));
+    EXPECT_VECTOR_CODE(ERB_OK, "a stop's position from a float", OP_ABC(VGRAD, 1, 0, ERB_VECTOR_GRADIENT_STOPS + 3u));
     EXPECT_VECTOR_CODE(
-        ERB_ERR_BYTECODE, "a paint past the firmware's", OP_ABC(VPAINT, 0, ERUI_VECTOR_PAINTS_MAX, ERB_VPAINT_FILL));
-    EXPECT_VECTOR_CODE(ERB_OK, "a gradient's radius from a float", OP_ABC(VGRAD, 1, 0, ERB_VGRAD_RADIUS));
-    EXPECT_VECTOR_CODE(ERB_OK, "a stop's color from an int", OP_ABC(VGRAD, 0, 0, ERB_VGRAD_STOPS + 2u));
-    EXPECT_VECTOR_CODE(ERB_OK, "a stop's position from a float", OP_ABC(VGRAD, 1, 0, ERB_VGRAD_STOPS + 3u));
-    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a stop's position from an int", OP_ABC(VGRAD, 0, 0, ERB_VGRAD_STOPS + 1u));
-    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a field between the geometry and the stops", OP_ABC(VGRAD, 1, 0, 5u));
-    EXPECT_VECTOR_CODE(
-        ERB_ERR_BYTECODE, "a stop past the gradient's", OP_ABC(VGRAD, 0, 0, ERB_VGRAD_STOPS + 2u * ER_VGRAD_MAX_STOPS));
-    EXPECT_VECTOR_CODE(
-        ERB_ERR_BYTECODE, "a gradient past the firmware's", OP_ABC(VGRAD, 1, ERUI_VECTOR_GRADS_MAX, ERB_VGRAD_AX));
-    EXPECT_VECTOR_CODE(ERB_ERR_BYTECODE, "a commit of a tape that doesn't exist", OP_ABX(VCOMMITP, 0, 1));
+        ERB_ERROR_BYTECODE, "a stop's position from an int", OP_ABC(VGRAD, 0, 0, ERB_VECTOR_GRADIENT_STOPS + 1u));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE, "a field between the geometry and the stops", OP_ABC(VGRAD, 1, 0, 5u));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE,
+                       "a stop past the gradient's",
+                       OP_ABC(VGRAD, 0, 0, ERB_VECTOR_GRADIENT_STOPS + 2u * ER_VECTOR_GRADIENT_MAX_STOPS));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE,
+                       "a gradient past the firmware's",
+                       OP_ABC(VGRAD, 1, ERUI_VECTOR_GRADIENTS_MAX, ERB_VECTOR_GRADIENT_AX));
+    EXPECT_VECTOR_CODE(ERB_ERROR_BYTECODE, "a commit of a tape that doesn't exist", OP_ABX(VCOMMITP, 0, 1));
 }
 
 /** @brief The baseline package with a keyboard of one layer: a row of a key that types and a backspace. */
@@ -709,8 +718,8 @@ static TKeyboard* keyboard(void)
     layout->layer_count = 1;
     layout->rows[0] = (TGroup){0, 2};
     layout->row_count = 1;
-    layout->keys[0] = (TKey){ERB_NONE, STRING_ON, ER_KBD_KEY_CHAR, 0, 2, 0xFFu};
-    layout->keys[1] = (TKey){STRING_OFF, ERB_NONE, ER_KBD_KEY_BACKSPACE, 0, 1, 0xFFu};
+    layout->keys[0] = (TKey){ERB_NONE, STRING_ON, ER_KEYBOARD_KEY_CHAR, 0, 2, 0xFFu};
+    layout->keys[1] = (TKey){STRING_OFF, ERB_NONE, ER_KEYBOARD_KEY_BACKSPACE, 0, 1, 0xFFu};
     layout->key_count = 2;
     return layout;
 }
@@ -723,25 +732,25 @@ static void test_keyboard(void)
     s_package_spec.keyboard.colors[1] = COLOR_BLUE;
     EXPECT(ERB_OK, "a keyboard's look over the built-in layout");
     keyboard()->key_count = 3;
-    EXPECT(ERB_ERR_TABLE, "a keyboard table that isn't whole records");
+    EXPECT(ERB_ERROR_TABLE, "a keyboard table that isn't whole records");
     keyboard()->rows[0].first = 1;
-    EXPECT(ERB_ERR_TABLE, "a row that doesn't start after the one before it");
+    EXPECT(ERB_ERROR_TABLE, "a row that doesn't start after the one before it");
     keyboard()->rows[0].count = 1;
-    EXPECT(ERB_ERR_TABLE, "rows that leave a key out");
+    EXPECT(ERB_ERROR_TABLE, "rows that leave a key out");
     TKeyboard* layout = keyboard();
     layout->layers[1] = (TGroup){1, 0};
     layout->layer_count = 2;
-    EXPECT(ERB_ERR_TABLE, "a layer with no rows");
+    EXPECT(ERB_ERROR_TABLE, "a layer with no rows");
     keyboard()->keys[0].text = ERB_NONE;
-    EXPECT(ERB_ERR_TABLE, "a key that types nothing");
+    EXPECT(ERB_ERROR_TABLE, "a key that types nothing");
     keyboard()->keys[1].label = 40;
-    EXPECT(ERB_ERR_TABLE, "a key label that isn't a string");
-    keyboard()->keys[1].type = ER_KBD_KEY_LAYER + 1u;
-    EXPECT(ERB_ERR_TABLE, "an unknown key type");
-    keyboard()->keys[1] = (TKey){STRING_OFF, ERB_NONE, ER_KBD_KEY_LAYER, 0, 1, 0xFFu};
+    EXPECT(ERB_ERROR_TABLE, "a key label that isn't a string");
+    keyboard()->keys[1].type = ER_KEYBOARD_KEY_LAYER + 1u;
+    EXPECT(ERB_ERROR_TABLE, "an unknown key type");
+    keyboard()->keys[1] = (TKey){STRING_OFF, ERB_NONE, ER_KEYBOARD_KEY_LAYER, 0, 1, 0xFFu};
     EXPECT(ERB_OK, "a layer key");
-    keyboard()->keys[1] = (TKey){STRING_OFF, ERB_NONE, ER_KBD_KEY_LAYER, 1, 1, 0xFFu};
-    EXPECT(ERB_ERR_TABLE, "a layer key switching to a layer that isn't there");
+    keyboard()->keys[1] = (TKey){STRING_OFF, ERB_NONE, ER_KEYBOARD_KEY_LAYER, 1, 1, 0xFFu};
+    EXPECT(ERB_ERROR_TABLE, "a layer key switching to a layer that isn't there");
     layout = keyboard();
     for (uint32_t index = 0; index <= ERB_MAX_KEYBOARD_LAYERS; index++)
     {
@@ -750,7 +759,7 @@ static void test_keyboard(void)
         layout->keys[index] = layout->keys[0];
     }
     layout->layer_count = layout->row_count = layout->key_count = ERB_MAX_KEYBOARD_LAYERS + 1u;
-    EXPECT(ERB_ERR_TOO_BIG, "more keyboard layers than the firmware holds");
+    EXPECT(ERB_ERROR_TOO_BIG, "more keyboard layers than the firmware holds");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -760,37 +769,37 @@ static void test_keyboard(void)
 static void test_functions(void)
 {
     base()->functions[FUNCTION_BOOT].words = 999u;
-    EXPECT(ERB_ERR_FUNCTION, "code past the table");
+    EXPECT(ERB_ERROR_FUNCTION, "code past the table");
     {
         const uint8_t types[] = {99u};
         const uint32_t code[] = {OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 1);
-        EXPECT(ERB_ERR_FUNCTION, "an unknown register type");
+        EXPECT(ERB_ERROR_FUNCTION, "an unknown register type");
     }
     {
-        const uint8_t types[] = {ERB_T_INT, ERB_T_INT64, ERB_T_PAIR};
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR};
         const uint32_t code[] = {OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 3, code, 1);
-        EXPECT(ERB_ERR_FUNCTION, "a 64-bit register on an odd cell");
+        EXPECT(ERB_ERROR_FUNCTION, "a 64-bit register on an odd cell");
     }
     {
         const uint32_t code[] = {OP_ABX(LOADI, 0, 1)};
         base();
         set_code(FUNCTION_BOOT, code, 1);
-        EXPECT(ERB_ERR_FUNCTION, "code that runs off its end");
+        EXPECT(ERB_ERROR_FUNCTION, "code that runs off its end");
     }
     base()->functions[FUNCTION_BOOT].params = 1u;
-    EXPECT(ERB_ERR_FUNCTION, "a boot function with a parameter");
-    base()->functions[FUNCTION_TIMER].kind = ERB_FN_QUERY;
-    EXPECT(ERB_ERR_FUNCTION, "a query that returns nothing");
+    EXPECT(ERB_ERROR_FUNCTION, "a boot function with a parameter");
+    base()->functions[FUNCTION_TIMER].kind = ERB_FUNCTION_KIND_QUERY;
+    EXPECT(ERB_ERROR_FUNCTION, "a query that returns nothing");
     base()->functions[FUNCTION_TIMER].kind = 0x70u;
-    EXPECT(ERB_ERR_FUNCTION, "an unknown function kind");
+    EXPECT(ERB_ERROR_FUNCTION, "an unknown function kind");
     base()->panels[0].boot_function = FUNCTION_TIMER;
-    EXPECT(ERB_ERR_FUNCTION, "a panel's boot function that isn't one");
+    EXPECT(ERB_ERROR_FUNCTION, "a panel's boot function that isn't one");
     base()->panels[0].update_function = 40u;
-    EXPECT(ERB_ERR_FUNCTION, "a panel's update function past the table");
+    EXPECT(ERB_ERROR_FUNCTION, "a panel's update function past the table");
 }
 
 static void test_bytecode(void)
@@ -799,108 +808,108 @@ static void test_bytecode(void)
         const uint32_t code[] = {250u, OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_TIMER, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "an unknown opcode");
+        EXPECT(ERB_ERROR_BYTECODE, "an unknown opcode");
     }
     {
         const uint32_t code[] = {OP_ABX(LOADI, 5, 1), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_BOOT, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "a register past the frame");
+        EXPECT(ERB_ERROR_BYTECODE, "a register past the frame");
     }
     {
         const uint32_t code[] = {OP_ABX(LOADI, 0, 5), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_BOOT, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "a bool loaded with 5");
+        EXPECT(ERB_ERROR_BYTECODE, "a bool loaded with 5");
     }
     {
-        const uint8_t types[] = {ERB_T_FLOAT, ERB_T_FLOAT};
+        const uint8_t types[] = {ERB_TYPE_FLOAT, ERB_TYPE_FLOAT};
         const uint32_t code[] = {OP_ABC(ADD, 0, 0, 1), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 2, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "integer ADD on float registers");
+        EXPECT(ERB_ERROR_BYTECODE, "integer ADD on float registers");
     }
     {
         const uint32_t code[] = {OP_ABX(GET32, 0, 99), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_PRESS, code, 3);
-        EXPECT(ERB_ERR_BYTECODE, "a slot past the table");
+        EXPECT(ERB_ERROR_BYTECODE, "a slot past the table");
     }
     {
         const uint32_t code[] = {OP_ABX(GET32, 0, SLOT_SPEED), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_PRESS, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "a float slot read into an int");
+        EXPECT(ERB_ERROR_BYTECODE, "a float slot read into an int");
     }
     {
-        const uint8_t types[] = {ERB_T_BOOL};
+        const uint8_t types[] = {ERB_TYPE_BOOL};
         const uint32_t code[] = {OP_ABX(LOADI, 0, 1), OP_ABX(SET32, 0, SLOT_READY), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 3);
-        EXPECT(ERB_ERR_BYTECODE, "a boot-only slot written outside boot");
+        EXPECT(ERB_ERROR_BYTECODE, "a boot-only slot written outside boot");
     }
     {
-        const uint8_t types[] = {ERB_T_ENUM};
+        const uint8_t types[] = {ERB_TYPE_ENUM};
         const uint32_t code[] = {OP_ABX(LOADE, 0, 2), 0u, OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 3);
-        EXPECT(ERB_ERR_BYTECODE, "an enum value past its set");
+        EXPECT(ERB_ERROR_BYTECODE, "an enum value past its set");
     }
     base()->functions[FUNCTION_UPDATE].words = 1u;
-    EXPECT(ERB_ERR_BYTECODE, "an instruction cut off from its extension word");
+    EXPECT(ERB_ERROR_BYTECODE, "an instruction cut off from its extension word");
     {
         const uint32_t code[] = {OP_ABX(GET32, 0, SLOT_COUNT), OP_ABX(CALL, 0, FUNCTION_DONE), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_PRESS, code, 3);
-        EXPECT(ERB_ERR_BYTECODE, "a CALL to an entry point");
+        EXPECT(ERB_ERROR_BYTECODE, "a CALL to an entry point");
     }
     {
-        const uint8_t types[] = {ERB_T_FLOAT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_FLOAT, ERB_TYPE_INT};
         const uint32_t code[] = {OP_ABX(CALL, 0, FUNCTION_DOUBLE), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_PRESS, types, 2, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "a CALL with a float for an int parameter");
+        EXPECT(ERB_ERROR_BYTECODE, "a CALL with a float for an int parameter");
     }
     {
-        const uint8_t types[] = {ERB_T_INT};
-        const uint32_t code[] = {OP_ABC(EVT, 0, ERB_EVT_X, 0), OP_ABC(RET, 0, 0, 0)};
+        const uint8_t types[] = {ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABC(EVT, 0, ERB_EVENT_FIELD_X, 0), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "EVT in a timer");
+        EXPECT(ERB_ERROR_BYTECODE, "EVT in a timer");
         base();
         set_code_types(FUNCTION_PRESS, types, 1, code, 2);
         EXPECT(ERB_OK, "EVT x in a press handler");
     }
     {
-        const uint8_t types[] = {ERB_T_INT};
-        const uint32_t code[] = {OP_ABC(EVT, 0, ERB_EVT_TOUCHES, 0), OP_ABC(RET, 0, 0, 0)};
+        const uint8_t types[] = {ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABC(EVT, 0, ERB_EVENT_FIELD_TOUCHES, 0), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "EVT touches in a timer");
+        EXPECT(ERB_ERROR_BYTECODE, "EVT touches in a timer");
         base();
         set_code_types(FUNCTION_PRESS, types, 1, code, 2);
         EXPECT(ERB_OK, "EVT touches in a press handler");
     }
     {
-        const uint8_t types[] = {ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_INT};
         const uint32_t code[] = {OP_ABX(PSETI, 0, 73), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 2);
-        EXPECT(ERB_ERR_PROP, "an int set on a text prop");
+        EXPECT(ERB_ERROR_PROP, "an int set on a text prop");
     }
     {
-        const uint8_t types[] = {ERB_T_FLOAT};
+        const uint8_t types[] = {ERB_TYPE_FLOAT};
         const uint32_t code[] = {OP_ABX(CALLN, 0, 0), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 2);
-        EXPECT(ERB_ERR_BYTECODE, "a native called with a float for an int");
+        EXPECT(ERB_ERROR_BYTECODE, "a native called with a float for an int");
     }
     {
-        const uint8_t types[] = {ERB_T_NODE, ERB_T_PAIR};
+        const uint8_t types[] = {ERB_TYPE_NODE, ERB_TYPE_PAIR};
         const uint32_t code[] = {OP_ABC(BUILD, 0, 0, 0), 0u, OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 2, code, 3);
-        EXPECT(ERB_ERR_BYTECODE, "BUILD of the root template");
+        EXPECT(ERB_ERROR_BYTECODE, "BUILD of the root template");
     }
 }
 
@@ -910,33 +919,33 @@ static void test_control_flow(void)
         const uint32_t code[] = {OP_ABC(RET, 0, 0, 0), OP_ABX(JMP, 0, -2), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_TIMER, code, 3);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a backward JMP");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a backward JMP");
     }
     {
         /* -1 wraps to UINT32_MAX. */
         const uint32_t code[] = {OP_ABX(JMP, 0, -2), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_TIMER, code, 2);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a branch to -1");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a branch to -1");
     }
     {
         const uint32_t code[] = {OP_ABX(JMP, 0, 1), OP_ABX(JDIRTY, 0, 0), 1u, OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_UPDATE, code, 4);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a branch into an extension word");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a branch into an extension word");
     }
     {
         const uint32_t code[] = {OP_ABX(JMP, 0, 5), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_TIMER, code, 2);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a branch past the end");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a branch past the end");
     }
-    const uint8_t types[] = {ERB_T_INT, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
     {
         const uint32_t code[] = {OP_ABX(LOADI, 1, 0), OP_ABX(LOOP, 0, -2), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 2, code, 3);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a LOOP with no LOOPSET before its body");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a LOOP with no LOOPSET before its body");
     }
     {
         const uint32_t code[] = {
@@ -947,7 +956,7 @@ static void test_control_flow(void)
         };
         base();
         set_code_types(FUNCTION_TIMER, types, 2, code, 4);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a loop counter written in the body");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a loop counter written in the body");
     }
     {
         const uint32_t code[] = {
@@ -959,7 +968,7 @@ static void test_control_flow(void)
         };
         base();
         set_code_types(FUNCTION_TIMER, types, 2, code, 5);
-        EXPECT(ERB_ERR_CONTROL_FLOW, "a jump into a loop's body");
+        EXPECT(ERB_ERROR_CONTROL_FLOW, "a jump into a loop's body");
     }
     {
         const uint32_t code[] = {
@@ -977,22 +986,23 @@ static void test_control_flow(void)
 static void test_calls(void)
 {
     {
-        const uint8_t types[] = {ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t code[] = {OP_ABX(CALL, 0, FUNCTION_DOUBLE), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_DOUBLE, types, 2, code, 2);
-        EXPECT(ERB_ERR_RECURSION, "a helper calling itself");
+        EXPECT(ERB_ERROR_RECURSION, "a helper calling itself");
     }
     {
         /* A second helper, before the first in the table, that the first calls: a call back up the table. */
-        const uint8_t types[] = {ERB_T_INT, ERB_T_INT};
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
         const uint32_t helper[] = {OP_ABC(RET, 0, 0, 0)};
         base();
-        const uint16_t later = tpkg_function(&s_package_spec, ERB_FN_HELPER, 1, ERB_T_INT, types, 2, helper, 1);
+        const uint16_t later =
+            tpkg_function(&s_package_spec, ERB_FUNCTION_KIND_HELPER, 1, ERB_TYPE_INT, types, 2, helper, 1);
         const uint32_t code[] = {OP_ABX(CALL, 0, FUNCTION_DOUBLE), OP_ABC(RET, 0, 0, 0)};
         set_code_types(later, types, 2, code, 2);
         s_package_spec.functions[later].params = 1;
-        EXPECT(ERB_ERR_RECURSION, "a call to a function earlier in the table");
+        EXPECT(ERB_ERROR_RECURSION, "a call to a function earlier in the table");
     }
     base()->regions[9].count = 4u;
     s_package_spec.regions[9].bytes = 16u;
@@ -1001,7 +1011,7 @@ static void test_calls(void)
         const uint32_t length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
         bool ok;
         const ErbError error = verify_bytes(s_package, length, &ok);
-        CHECK(!ok && error.status == ERB_ERR_STACK && error.needed == 10u && error.available == 4u,
+        CHECK(!ok && error.status == ERB_ERROR_STACK && error.needed == 10u && error.available == 4u,
               "a call path deeper than the register stack, with the amounts");
     }
 }
@@ -1009,7 +1019,7 @@ static void test_calls(void)
 static void test_budget(void)
 {
     /* Two nested loops of 1000 run past the default budget, so the timer is run counting. */
-    const uint8_t types[] = {ERB_T_INT, ERB_T_INT, ERB_T_INT};
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT};
     const uint32_t code[] = {
         OP_ABX(LOOPSET, 0, 1000),
         OP_ABX(LOOPSET, 1, 1000),
@@ -1033,38 +1043,38 @@ static void test_imports_and_inputs(void)
         const uint32_t length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
         bool ok;
         const ErbError error = verify_bytes(s_package, length, &ok);
-        CHECK(!ok && error.status == ERB_ERR_IMPORT && error.name && strcmp(error.name, "sensors.read") == 0,
+        CHECK(!ok && error.status == ERB_ERROR_IMPORT && error.name && strcmp(error.name, "sensors.read") == 0,
               "a missing native, named");
     }
     base()->imports[0].version = 2u;
-    EXPECT(ERB_ERR_IMPORT, "a native of another version");
+    EXPECT(ERB_ERROR_IMPORT, "a native of another version");
     base()->imports[0].signature = STRING_HELLO;
-    EXPECT(ERB_ERR_IMPORT, "a native with another signature");
+    EXPECT(ERB_ERROR_IMPORT, "a native with another signature");
 
     base()->inputs[0].slot = SLOT_ITEMS;
-    EXPECT(ERB_ERR_INPUT, "an input on a list");
+    EXPECT(ERB_ERROR_INPUT, "an input on a list");
     base()->inputs[1] = s_package_spec.inputs[0];
     s_package_spec.input_count = 2u;
-    EXPECT(ERB_ERR_INPUT, "two inputs with one name");
+    EXPECT(ERB_ERROR_INPUT, "two inputs with one name");
     base()->inputs[0].slot = 99u;
-    EXPECT(ERB_ERR_INPUT, "an input on a slot past the table");
+    EXPECT(ERB_ERROR_INPUT, "an input on a slot past the table");
 }
 
 static void test_debug(void)
 {
     base()->debug_build_id = 1u;
-    EXPECT(ERB_ERR_DEBUG, "a debug table for another build");
+    EXPECT(ERB_ERROR_DEBUG, "a debug table for another build");
     base()->debug_entries[0] = (TDebugEntry){FUNCTION_UPDATE, 0, 1, 1};
-    EXPECT(ERB_ERR_DEBUG, "an entry on an extension word");
+    EXPECT(ERB_ERROR_DEBUG, "an entry on an extension word");
     base()->debug_entries[1] = (TDebugEntry){FUNCTION_BOOT, 0, 0, 1};
     s_package_spec.debug_entry_count = 2u;
-    EXPECT(ERB_ERR_DEBUG, "entries out of order");
+    EXPECT(ERB_ERROR_DEBUG, "entries out of order");
     base()->debug_entries[0].file = 3u;
-    EXPECT(ERB_ERR_DEBUG, "an entry naming no file");
+    EXPECT(ERB_ERROR_DEBUG, "an entry naming no file");
     base()->debug_names[0] = 7u;
-    EXPECT(ERB_ERR_DEBUG, "a function name past the strings");
+    EXPECT(ERB_ERROR_DEBUG, "a function name past the strings");
     base()->debug_strings[0] = "\xFF";
-    EXPECT(ERB_ERR_DEBUG, "a malformed debug string");
+    EXPECT(ERB_ERROR_DEBUG, "a malformed debug string");
     base()->has_debug = false;
     EXPECT(ERB_OK, "no debug table is fine");
     base()->minor = ERB_FORMAT_MINOR_DEBUG_PANELS - 1u;
@@ -1078,7 +1088,7 @@ static void test_panel_debug(void)
     two_panels()->debug_panels[0] = 1u;
     s_package_spec.debug_panels[1] = 0u;
     s_package_spec.debug_table_count = 2u;
-    s_config.screen_w = TPKG_SCREEN + 80u;
+    s_config.screen_width = TPKG_SCREEN + 80u;
     EXPECT(ERB_OK, "a table for each panel");
     CHECK(s_program.debug_entries == s_program.debug + ERB_DEBUG_HEADER_SIZE, "the second panel's is the first");
     two_panels()->debug_panels[0] = 1u;
@@ -1087,19 +1097,19 @@ static void test_panel_debug(void)
     CHECK(s_program.debug_entries == NULL, "and isn't used");
     two_panels()->debug_panels[1] = 0u;
     s_package_spec.debug_table_count = 2u;
-    EXPECT(ERB_ERR_DEBUG, "two tables for one panel");
+    EXPECT(ERB_ERROR_DEBUG, "two tables for one panel");
     base()->debug_panels[0] = 1u;
-    EXPECT(ERB_ERR_DEBUG, "a table for a panel the package doesn't declare");
+    EXPECT(ERB_ERROR_DEBUG, "a table for a panel the package doesn't declare");
     base()->debug_table_count = 0u;
-    EXPECT(ERB_ERR_DEBUG, "an empty debug section");
+    EXPECT(ERB_ERROR_DEBUG, "an empty debug section");
 }
 
 static void test_assets(void)
 {
     base()->assets_length = 20u;
-    EXPECT(ERB_ERR_ASSETS, "a truncated asset pack");
+    EXPECT(ERB_ERROR_ASSETS, "a truncated asset pack");
     base()->assets[4] = 9u;
-    EXPECT(ERB_ERR_ASSETS, "an asset pack of an unknown version");
+    EXPECT(ERB_ERROR_ASSETS, "an asset pack of an unknown version");
     /* The same image as a v1 pack: no pad, so its pixels land at 29. */
     static const uint8_t version1_pack[] = {
         'E', 'R', 'P', 'K', 1, 0, 0, 0, 1, 0, 0, 0, 0,    0,    0,    0,    3,
@@ -1108,7 +1118,7 @@ static void test_assets(void)
     base();
     memcpy(s_package_spec.assets, version1_pack, sizeof(version1_pack));
     s_package_spec.assets_length = sizeof(version1_pack);
-    EXPECT(ERB_ERR_ASSETS, "image pixels off their word");
+    EXPECT(ERB_ERROR_ASSETS, "image pixels off their word");
     /* A font, with no storage for its tables. */
     static const uint8_t font[] = {
         1, 0, 'f', 16, 18, 14, 1, 'A', 0, 'A', 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0xFF,
@@ -1117,7 +1127,7 @@ static void test_assets(void)
     s_package_spec.assets[TEST_FONT_COUNT_AT] = 1u;
     memcpy(s_package_spec.assets + s_package_spec.assets_length, font, sizeof(font));
     s_package_spec.assets_length += sizeof(font);
-    EXPECT(ERB_ERR_ASSETS, "a font that doesn't fit the firmware's font storage");
+    EXPECT(ERB_ERROR_ASSETS, "a font that doesn't fit the firmware's font storage");
     static BitmapFont fonts[1];
     static GlyphInfo glyphs[1];
     static ErAssetsStorage storage = {fonts, 1, glyphs, 1, NULL, 0, 0, 0, 0};
@@ -1126,14 +1136,14 @@ static void test_assets(void)
 
     base();
     s_package_spec.assets[21] = 0u; /* the image's width */
-    EXPECT(ERB_ERR_ASSETS, "an image with no width");
+    EXPECT(ERB_ERROR_ASSETS, "an image with no width");
 
     base()->assets[TEST_FONT_COUNT_AT] = 1u;
     memcpy(s_package_spec.assets + s_package_spec.assets_length, font, sizeof(font));
     s_package_spec.assets_length += sizeof(font);
     static ErAssetsStorage no_fonts_array = {NULL, 1, glyphs, 1, NULL, 0, 0, 0, 0};
     s_config.fonts = &no_fonts_array;
-    EXPECT(ERB_ERR_ASSETS, "a font with font storage that has a count but no array");
+    EXPECT(ERB_ERROR_ASSETS, "a font with font storage that has a count but no array");
 }
 
 /** @brief A font for the test pack: each glyph is glyph_width by 1 pixel at bitmap_offset. */
@@ -1155,7 +1165,7 @@ typedef struct
 /** @brief A font that passes every check: 'A' only, one 1-bit pixel. */
 static TestFont good_font(const char* family, uint8_t pixel_size)
 {
-    return (TestFont){family, pixel_size, ERUI_FONT_FMT_1BIT, 'A', 'A', 1u, 1u, 0u, 1u, 0u, {0u, 0u}};
+    return (TestFont){family, pixel_size, ERUI_FONT_FORMAT_1BIT, 'A', 'A', 1u, 1u, 0u, 1u, 0u, {0u, 0u}};
 }
 
 static void put_u8(uint8_t value)
@@ -1267,7 +1277,7 @@ static void test_image_index(void)
     }
     else
     {
-        EXPECT(ERB_ERR_ASSETS, "more images than the image registry holds");
+        EXPECT(ERB_ERROR_ASSETS, "more images than the image registry holds");
     }
     CHECK(er_assets_check_pack_images(s_package_spec.assets, s_package_spec.assets_length, &info, names, 2u)
               && info.images == 5u,
@@ -1302,24 +1312,24 @@ static void test_fonts(void)
     TestFont font = good_font("f", 16u);
     expect_font(&font, ERB_OK, "a font that passes every check", __LINE__);
     font.format = 3u;
-    expect_font(&font, ERB_ERR_ASSETS, "a font format the engine can't draw", __LINE__);
+    expect_font(&font, ERB_ERROR_ASSETS, "a font format the engine can't draw", __LINE__);
     font = good_font("f", 16u);
     font.first = 'B';
-    expect_font(&font, ERB_ERR_ASSETS, "a font whose range ends before it starts", __LINE__);
+    expect_font(&font, ERB_ERROR_ASSETS, "a font whose range ends before it starts", __LINE__);
     font = good_font("f", 16u);
     font.last = 'B';
-    expect_font(&font, ERB_ERR_ASSETS, "a dense glyph array shorter than its range", __LINE__);
+    expect_font(&font, ERB_ERROR_ASSETS, "a dense glyph array shorter than its range", __LINE__);
     font = good_font("f", 16u);
     font.bitmap_offset = 1u;
-    expect_font(&font, ERB_ERR_ASSETS, "a glyph that starts past its font's bitmap", __LINE__);
+    expect_font(&font, ERB_ERROR_ASSETS, "a glyph that starts past its font's bitmap", __LINE__);
     font = good_font("f", 16u);
     font.glyph_width = 9u; /* two bytes a row at 1 bit */
-    expect_font(&font, ERB_ERR_ASSETS, "a glyph that runs past its font's bitmap", __LINE__);
+    expect_font(&font, ERB_ERROR_ASSETS, "a glyph that runs past its font's bitmap", __LINE__);
     font = good_font("f", 16u);
     font.extras_count = 2u;
     font.extra_codepoints[0] = 300u;
     font.extra_codepoints[1] = 200u;
-    expect_font(&font, ERB_ERR_ASSETS, "extra glyphs out of codepoint order", __LINE__);
+    expect_font(&font, ERB_ERROR_ASSETS, "extra glyphs out of codepoint order", __LINE__);
     font.extra_codepoints[1] = 400u;
     expect_font(&font, ERB_OK, "extra glyphs in order", __LINE__);
 
@@ -1342,7 +1352,7 @@ static void test_fonts(void)
     EXPECT(ERB_OK, "as many font families as the registry holds");
     font = good_font(families[limits.font_families], 16u);
     add_font(&font);
-    EXPECT(ERB_ERR_ASSETS, "one family more than the registry holds");
+    EXPECT(ERB_ERROR_ASSETS, "one family more than the registry holds");
 
     /* The registry compares ER_FONT_FAMILY_MAX bytes, so these two are one family. */
     base();
@@ -1368,7 +1378,7 @@ static void test_fonts(void)
     EXPECT(ERB_OK, "as many sizes of one family as the registry holds");
     font = good_font("f", (uint8_t)(8u + limits.font_sizes));
     add_font(&font);
-    EXPECT(ERB_ERR_ASSETS, "one size more than the registry holds");
+    EXPECT(ERB_ERROR_ASSETS, "one size more than the registry holds");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1380,7 +1390,7 @@ static void test_messages(void)
     ErbError error;
     memset(&error, 0, sizeof(error));
     error.function = ERB_NONE;
-    error.status = ERB_ERR_TOO_BIG;
+    error.status = ERB_ERROR_TOO_BIG;
     error.resource = ERB_RESOURCE_ARENA;
     error.needed = 30000;
     error.available = 24576;
@@ -1394,17 +1404,17 @@ static void test_messages(void)
     erb_error_message(&error, text, sizeof(text));
     CHECK(strcmp(text, "nodes: needs 1,234,567, firmware reserves 512") == 0, "a count has no unit");
 
-    error.status = ERB_ERR_ENGINE_ABI;
+    error.status = ERB_ERROR_ENGINE_ABI;
     error.needed = 9;
     erb_error_message(&error, text, sizeof(text));
     CHECK(strstr(text, "built for engine ABI 9") != NULL, "the ABI message names the package's level");
 
-    error.status = ERB_ERR_IMPORT;
+    error.status = ERB_ERROR_IMPORT;
     error.name = "sensors.read";
     erb_error_message(&error, text, sizeof(text));
     CHECK(strcmp(text, "missing native module: sensors.read") == 0, "the import message names the module");
 
-    error.status = ERB_ERR_TRAP;
+    error.status = ERB_ERROR_TRAP;
     error.name = NULL;
     error.file = "App.jsx";
     error.line = 41;

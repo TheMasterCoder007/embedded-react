@@ -34,7 +34,7 @@
 /** @brief Single-row premultiplied ARGB8888 scratch buffer used during gradient rasterization. */
 /* One assembled row per render worker: cheap enough to duplicate, and it keeps gradient
  * backgrounds parallel-safe (see the multi-core render fork in compositor.c). */
-static uint32_t s_gradient_row_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
+static uint32_t s_gradient_row_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMAGE_ROW_PIXELS];
 
 /** @brief The calling worker's gradient row buffer. */
 static inline uint32_t* grow(void)
@@ -299,7 +299,7 @@ static void render_linear(const ERViewProps* view_props, int x, int y, int width
 
     const float span = max_projection - min_projection;
     const float inverse_span = (span > GRADIENT_EPSILON) ? 1.0f / span : 0.0f;
-    const int capped_width = (width <= ERUI_MAX_IMG_ROW_PIXELS) ? width : ERUI_MAX_IMG_ROW_PIXELS;
+    const int capped_width = (width <= ERUI_MAX_IMAGE_ROW_PIXELS) ? width : ERUI_MAX_IMAGE_ROW_PIXELS;
 
     for (int row = 0; row < height; row++)
     {
@@ -347,7 +347,7 @@ static void render_radial(const ERViewProps* view_props, int x, int y, int width
     const float center_y = (float)(height - 1) * 0.5f;
     const float radius = sqrtf(center_x * center_x + center_y * center_y);
     const float inverse_radius = (radius > GRADIENT_EPSILON) ? 1.0f / radius : 0.0f;
-    const int capped_width = (width <= ERUI_MAX_IMG_ROW_PIXELS) ? width : ERUI_MAX_IMG_ROW_PIXELS;
+    const int capped_width = (width <= ERUI_MAX_IMAGE_ROW_PIXELS) ? width : ERUI_MAX_IMAGE_ROW_PIXELS;
 
     for (int row = 0; row < height; row++)
     {

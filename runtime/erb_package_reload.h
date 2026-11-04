@@ -68,13 +68,13 @@ typedef struct
     void* log_context;
     uint32_t* buffer;
     uint32_t chunk_bytes;
-    int active;             /**< The slot the running app came from, or ERB_PACKAGE_SLOT_NONE. */
-    int staging;            /**< The slot the next package goes into. */
-    uint32_t package_bytes; /**< The package coming in. */
-    uint32_t received;      /**< Its bytes so far. */
-    uint32_t erased_to;     /**< The slot's erased bytes so far. */
-    bool receiving;         /**< A package is coming in. */
-    bool reason_up;         /**< The error screen is up over a running app. */
+    int active;              /**< The slot the running app came from, or ERB_PACKAGE_SLOT_NONE. */
+    int staging;             /**< The slot the next package goes into. */
+    uint32_t package_bytes;  /**< The package coming in. */
+    uint32_t received;       /**< Its bytes so far. */
+    uint32_t erased_to;      /**< The slot's erased bytes so far. */
+    bool receiving;          /**< A package is coming in. */
+    bool error_screen_shown; /**< The error screen is up over a running app. */
 } ErbPackageReload;
 
 /*----------------------------------------------------------------------------------------------------------------------

@@ -39,7 +39,7 @@
 /**
  * @brief QuickJS release this build is bytecode-compatible with — MUST match the FetchContent pin in
  *        bridges/quickjs/CMakeLists.txt and the tag the packager stamps into the container. A config
- *        built for a different QuickJS is rejected (ER_CONTAINER_BAD_QJS) rather than run as garbage.
+ *        built for a different QuickJS is rejected (ER_CONTAINER_BAD_QUICKJS) rather than run as garbage.
  */
 #define ER_QUICKJS_TAG "v0.15.0"
 
@@ -695,9 +695,9 @@ void er_runtime_free(void* buffer)
  * The reader (er_container.c) checks the structure and the CRC; this half checks the tag against the
  * QuickJS this firmware links and runs the sections. */
 
-const char* er_runtime_container_status_str(ErContainerStatus status)
+const char* er_runtime_container_status_name(ErContainerStatus status)
 {
-    return er_container_status_str(status);
+    return er_container_status_name(status);
 }
 
 bool er_runtime_container_has_vendor(const void* buffer, size_t length)
@@ -763,7 +763,7 @@ static ErContainerStatus check_container(const void* buffer, size_t length, bool
     if (container->tag_length != strlen(ER_QUICKJS_TAG)
         || memcmp(container->tag, ER_QUICKJS_TAG, container->tag_length) != 0)
     {
-        return ER_CONTAINER_BAD_QJS;
+        return ER_CONTAINER_BAD_QUICKJS;
     }
     if (!asset_packs_fit(container, copy_assets))
     {
@@ -837,7 +837,7 @@ ErContainerStatus er_hotreload_apply(const void* erpkg, size_t erpkg_length)
     if (status != ER_CONTAINER_OK)
     {
         er_runtime_show_message(
-            "Hot reload failed", er_container_status_str(status), "Fix the app and save again to re-send.");
+            "Hot reload failed", er_container_status_name(status), "Fix the app and save again to re-send.");
     }
     return status;
 }

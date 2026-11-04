@@ -144,15 +144,15 @@ extern "C"
      */
     typedef struct
     {
-        uint16_t nodes;         /**< ERUI_MAX_NODES. */
-        uint16_t vector_nodes;  /**< ERUI_MAX_VECTOR_NODES. */
-        uint16_t anim_values;   /**< ERUI_MAX_ANIM_VALUES. */
-        uint16_t animations;    /**< ERUI_MAX_ANIMATIONS. */
-        uint16_t anim_groups;   /**< ERUI_MAX_ANIM_GROUPS. */
-        uint16_t group_entries; /**< ERUI_MAX_GROUP_ENTRIES. */
-        uint16_t images;        /**< ERUI_IMAGE_REGISTRY_MAX. */
-        uint16_t font_families; /**< Font families the registry holds. */
-        uint16_t font_sizes;    /**< Sizes the registry holds per family. */
+        uint16_t nodes;            /**< ERUI_MAX_NODES. */
+        uint16_t vector_nodes;     /**< ERUI_MAX_VECTOR_NODES. */
+        uint16_t animation_values; /**< ERUI_MAX_ANIMATION_VALUES. */
+        uint16_t animations;       /**< ERUI_MAX_ANIMATIONS. */
+        uint16_t animation_groups; /**< ERUI_MAX_ANIMATION_GROUPS. */
+        uint16_t group_entries;    /**< ERUI_MAX_GROUP_ENTRIES. */
+        uint16_t images;           /**< ERUI_IMAGE_REGISTRY_MAX. */
+        uint16_t font_families;    /**< Font families the registry holds. */
+        uint16_t font_sizes;       /**< Sizes the registry holds per family. */
     } ERPoolLimits;
 
     /**
@@ -160,10 +160,10 @@ extern "C"
      */
     typedef struct
     {
-        int x; /**< Left edge in pixels. */
-        int y; /**< Top edge in pixels. */
-        int w; /**< Width in pixels. */
-        int h; /**< Height in pixels. */
+        int x;      /**< Left edge in pixels. */
+        int y;      /**< Top edge in pixels. */
+        int width;  /**< Width in pixels. */
+        int height; /**< Height in pixels. */
     } ERRect;
 
     /**
@@ -190,30 +190,30 @@ extern "C"
      * table; the JS/SVG layer compiles its shapes into this form and the engine rasterizes it. The JS
      * mirror of these opcodes must stay in sync. Tape coordinates are node-local pixels; each op is an
      * opcode float followed by a fixed argument count:
-     *   ER_VOP_SHAPE  paint_index            begin a shape; following path ops use paints[index]
-     *   ER_VOP_MOVE   x y                     start a subpath
-     *   ER_VOP_LINE   x y                     line to
-     *   ER_VOP_QUAD   cx cy x y               quadratic bezier
-     *   ER_VOP_CUBIC  c1x c1y c2x c2y x y     cubic bezier
-     *   ER_VOP_ARC    cx cy r a0 a1 ccw       circular arc (radians, clockwise-from-+X; ccw!=0 reverses)
-     *   ER_VOP_CLOSE                          close the current subpath
+     *   ER_VECTOR_OP_SHAPE  paint_index            begin a shape; following path ops use paints[index]
+     *   ER_VECTOR_OP_MOVE   x y                     start a subpath
+     *   ER_VECTOR_OP_LINE   x y                     line to
+     *   ER_VECTOR_OP_QUAD   cx cy x y               quadratic bezier
+     *   ER_VECTOR_OP_CUBIC  c1x c1y c2x c2y x y     cubic bezier
+     *   ER_VECTOR_OP_ARC    cx cy r a0 a1 ccw       circular arc (radians, clockwise-from-+X; ccw!=0 reverses)
+     *   ER_VECTOR_OP_CLOSE                          close the current subpath
      */
-#define ER_VOP_SHAPE 0.0f
-#define ER_VOP_MOVE 1.0f
-#define ER_VOP_LINE 2.0f
-#define ER_VOP_QUAD 3.0f
-#define ER_VOP_CUBIC 4.0f
-#define ER_VOP_ARC 5.0f
-#define ER_VOP_CLOSE 6.0f
+#define ER_VECTOR_OP_SHAPE 0.0f
+#define ER_VECTOR_OP_MOVE 1.0f
+#define ER_VECTOR_OP_LINE 2.0f
+#define ER_VECTOR_OP_QUAD 3.0f
+#define ER_VECTOR_OP_CUBIC 4.0f
+#define ER_VECTOR_OP_ARC 5.0f
+#define ER_VECTOR_OP_CLOSE 6.0f
 
-#define ER_VCAP_BUTT 0
-#define ER_VCAP_ROUND 1
-#define ER_VCAP_SQUARE 2
-#define ER_VJOIN_MITER 0
-#define ER_VJOIN_ROUND 1
-#define ER_VJOIN_BEVEL 2
-#define ER_VFILL_NONZERO 0
-#define ER_VFILL_EVENODD 1
+#define ER_VECTOR_CAP_BUTT 0
+#define ER_VECTOR_CAP_ROUND 1
+#define ER_VECTOR_CAP_SQUARE 2
+#define ER_VECTOR_JOIN_MITER 0
+#define ER_VECTOR_JOIN_ROUND 1
+#define ER_VECTOR_JOIN_BEVEL 2
+#define ER_VECTOR_FILL_NONZERO 0
+#define ER_VECTOR_FILL_EVENODD 1
 
     /**
      * @brief Paint for one vector shape. Colors are exact uint32 ARGB8888 (never floats — a 32-bit
@@ -221,15 +221,16 @@ extern "C"
      */
     typedef struct
     {
-        uint32_t fill;       /**< Fill ARGB8888; alpha 0 => no fill. */
-        uint32_t stroke;     /**< Stroke ARGB8888; alpha 0 => no stroke. */
-        float stroke_w;      /**< Stroke width in px; <= 0 => no stroke. */
-        float miter;         /**< Miter limit; <= 0 => default 4. */
-        uint8_t cap;         /**< ER_VCAP_*. */
-        uint8_t join;        /**< ER_VJOIN_*. */
-        uint8_t fill_rule;   /**< ER_VFILL_*. */
-        int16_t fill_grad;   /**< 1-based index into the gradient table for the FILL (0 = solid). ERUI_GRADIENT. */
-        int16_t stroke_grad; /**< 1-based index into the gradient table for the STROKE (0 = solid). ERUI_GRADIENT. */
+        uint32_t fill;         /**< Fill ARGB8888; alpha 0 => no fill. */
+        uint32_t stroke;       /**< Stroke ARGB8888; alpha 0 => no stroke. */
+        float stroke_width;    /**< Stroke width in px; <= 0 => no stroke. */
+        float miter;           /**< Miter limit; <= 0 => default 4. */
+        uint8_t cap;           /**< ER_VECTOR_CAP_*. */
+        uint8_t join;          /**< ER_VECTOR_JOIN_*. */
+        uint8_t fill_rule;     /**< ER_VECTOR_FILL_*. */
+        int16_t fill_gradient; /**< 1-based index into the gradient table for the FILL (0 = solid). ERUI_GRADIENT. */
+        int16_t
+            stroke_gradient; /**< 1-based index into the gradient table for the STROKE (0 = solid). ERUI_GRADIENT. */
     } ERVectorPaint;
 
     /**
@@ -237,10 +238,10 @@ extern "C"
      */
     typedef enum
     {
-        ER_FLEX_COL = 0,         /**< Children stacked top-to-bottom (default). */
-        ER_FLEX_ROW = 1,         /**< Children laid out left-to-right. */
-        ER_FLEX_ROW_REVERSE = 2, /**< Children laid out right-to-left. */
-        ER_FLEX_COL_REVERSE = 3, /**< Children stacked bottom-to-top. */
+        ER_FLEX_COLUMN = 0,         /**< Children stacked top-to-bottom (default). */
+        ER_FLEX_ROW = 1,            /**< Children laid out left-to-right. */
+        ER_FLEX_ROW_REVERSE = 2,    /**< Children laid out right-to-left. */
+        ER_FLEX_COLUMN_REVERSE = 3, /**< Children stacked bottom-to-top. */
     } ERFlexDirection;
 
     /**
@@ -300,8 +301,8 @@ extern "C"
      */
     typedef enum
     {
-        ER_POS_RELATIVE = 0, /**< In-flow; left/top/right/bottom offset from flex position. */
-        ER_POS_ABSOLUTE = 1, /**< Out of flow; positioned against the parent's padding box. */
+        ER_POSITION_RELATIVE = 0, /**< In-flow; left/top/right/bottom offset from flex position. */
+        ER_POSITION_ABSOLUTE = 1, /**< Out of flow; positioned against the parent's padding box. */
     } ERPositionType;
 
     /**
@@ -428,7 +429,7 @@ extern "C"
 
 /** @brief Maximum number of color stops in a VECTOR gradient. Larger than the View cap (vector gradients
  *         live in the small per-node vector pool, not in every node), and the baker downsamples beyond it. */
-#define ER_VGRAD_MAX_STOPS 8
+#define ER_VECTOR_GRADIENT_MAX_STOPS 8
 
 /** @brief Maximum number of inline text spans in a Text node. */
 #define ER_TEXT_MAX_SPANS 4
@@ -451,8 +452,8 @@ extern "C"
 #ifndef ERUI_VECTOR_PAINTS_MAX
 #define ERUI_VECTOR_PAINTS_MAX 16 /**< Paint entries (shapes) stored per vector node. */
 #endif
-#ifndef ERUI_VECTOR_GRADS_MAX
-#define ERUI_VECTOR_GRADS_MAX 8 /**< Gradient entries stored per vector node (ERUI_GRADIENT only). */
+#ifndef ERUI_VECTOR_GRADIENTS_MAX
+#define ERUI_VECTOR_GRADIENTS_MAX 8 /**< Gradient entries stored per vector node (ERUI_GRADIENT only). */
 #endif
 
     /**
@@ -484,7 +485,7 @@ extern "C"
     } ERGradientStop;
 
     /**
-     * @brief A gradient fill for a vector shape (referenced by ERVectorPaint.fill_grad, 1-based).
+     * @brief A gradient fill for a vector shape (referenced by ERVectorPaint.fill_gradient, 1-based).
      *
      * Unlike the View-background gradient (angle within the node box), a vector gradient uses explicit SVG
      * axis geometry in op-tape (node-local) coordinates; the rasterizer offsets it by the node origin. A
@@ -495,14 +496,14 @@ extern "C"
      */
     typedef struct
     {
-        uint8_t type;                             /**< ERGradientType: LINEAR, RADIAL, or CONIC. */
-        uint8_t stop_count;                       /**< Stop count [2–ER_VGRAD_MAX_STOPS]. */
-        ERGradientStop stops[ER_VGRAD_MAX_STOPS]; /**< Color stops, ascending position. */
-        float ax;                                 /**< Linear: axis start x. Radial/Conic: centre x. */
-        float ay;                                 /**< Linear: axis start y. Radial/Conic: centre y. */
-        float bx;                                 /**< Linear: axis end x. Radial/Conic: unused. */
-        float by;                                 /**< Linear: axis end y. Radial/Conic: unused. */
-        float r;                                  /**< Radial: radius. Conic: start angle (rad). Linear: unused. */
+        uint8_t type;                                       /**< ERGradientType: LINEAR, RADIAL, or CONIC. */
+        uint8_t stop_count;                                 /**< Stop count [2–ER_VECTOR_GRADIENT_MAX_STOPS]. */
+        ERGradientStop stops[ER_VECTOR_GRADIENT_MAX_STOPS]; /**< Color stops, ascending position. */
+        float ax;                                           /**< Linear: axis start x. Radial/Conic: centre x. */
+        float ay;                                           /**< Linear: axis start y. Radial/Conic: centre y. */
+        float bx;                                           /**< Linear: axis end x. Radial/Conic: unused. */
+        float by;                                           /**< Linear: axis end y. Radial/Conic: unused. */
+        float r; /**< Radial: radius. Conic: start angle (rad). Linear: unused. */
     } ERVectorGradient;
 
     /**
@@ -541,23 +542,23 @@ extern "C"
         ER_PROP_SWITCH_THUMB,     /**< Switch thumb position 0.0 (off) – 1.0 (on). */
         ER_PROP_ARC_VALUE,        /**< Arc value in [arc_min, arc_max] units (ER_NODE_ARC only). */
         ER_PROP_ARC_VALUE_START,  /**< Arc range-mode low end, same units (ER_NODE_ARC with arc_range). */
-    } ERAnimProp;
+    } ERAnimationProp;
 
     /**
-     * @brief Animation algorithm used by ERAnimConfig.
+     * @brief Animation algorithm used by ERAnimationConfig.
      */
     typedef enum
     {
-        ER_ANIM_TIMING = 0, /**< Time-based easing curve. */
-        ER_ANIM_SPRING = 1, /**< Damped harmonic oscillator. */
-        ER_ANIM_DECAY = 2,  /**< Exponential friction decay. */
-    } ERAnimType;
+        ER_ANIMATION_TIMING = 0, /**< Time-based easing curve. */
+        ER_ANIMATION_SPRING = 1, /**< Damped harmonic oscillator. */
+        ER_ANIMATION_DECAY = 2,  /**< Exponential friction decay. */
+    } ERAnimationType;
 
     /**
-     * @brief Easing curve applied to ER_ANIM_TIMING animations.
+     * @brief Easing curve applied to ER_ANIMATION_TIMING animations.
      *
      * Mirrors the Easing module from React Native.  ER_EASE_BEZIER uses the four
-     * bezier_* control-point fields in ERAnimConfig.  All other values are self-
+     * bezier_* control-point fields in ERAnimationConfig.  All other values are self-
      * contained.
      */
     typedef enum
@@ -576,18 +577,18 @@ extern "C"
         ER_EASE_BOUNCE_OUT,   /**< Bouncing deceleration at the end. */
         ER_EASE_ELASTIC_OUT,  /**< Elastic overshoot with decay at the end. */
         ER_EASE_BEZIER,       /**< Custom cubic-bezier; set bezier_x1/y1/x2/y2. */
-    } ERAnimEasing;
+    } ERAnimationEasing;
 
     /**
-     * @brief Opaque handle returned by er_anim_start() and the group functions.
+     * @brief Opaque handle returned by er_animation_start() and the group functions.
      *
-     * Pass to er_anim_stop() to cancel before completion.  ER_ANIM_HANDLE_INVALID
+     * Pass to er_animation_stop() to cancel before completion.  ER_ANIMATION_HANDLE_INVALID
      * (0) is the sentinel for "no animation".
      */
-    typedef uint16_t ERAnimHandle;
+    typedef uint16_t ERAnimationHandle;
 
 /** @brief Sentinel value indicating no animation or an already-completed animation. */
-#define ER_ANIM_HANDLE_INVALID 0U
+#define ER_ANIMATION_HANDLE_INVALID 0U
 
     /**
      * @brief Opaque handle for a standalone animatable value (useNativeDriver binding model).
@@ -597,21 +598,21 @@ extern "C"
      * changes every bound pair is updated automatically without re-entering any higher-level
      * layer per frame — the engine-side equivalent of React Native's useNativeDriver: true.
      *
-     * Obtain via er_anim_value_create(), release via er_anim_value_destroy().
+     * Obtain via er_animation_value_create(), release via er_animation_value_destroy().
      */
-    typedef uint16_t ERAnimValueHandle;
+    typedef uint16_t ERAnimationValueHandle;
 
 /** @brief Sentinel indicating an invalid or destroyed animatable value handle. */
-#define ER_ANIM_VALUE_INVALID 0U
+#define ER_ANIMATION_VALUE_INVALID 0U
 
     /**
      * @brief Callback invoked when an animation or group finishes.
      *
      * @param[in] finished    true when the animation ran to completion; false when
-     *                        it was stopped early via er_anim_stop().
+     *                        it was stopped early via er_animation_stop().
      * @param[in] user_data   Opaque pointer supplied at registration.
      */
-    typedef void (*ERAnimCompleteFn)(bool finished, void* user_data);
+    typedef void (*ERAnimationCompleteFn)(bool finished, void* user_data);
 
     /**
      * @brief Event types that can be wired to a callback via er_event_set().
@@ -697,13 +698,13 @@ extern "C"
         int16_t flex_grow;       /**< How much to grow relative to siblings (0 = no grow). */
         int16_t flex_shrink;     /**< How much to shrink relative to siblings (0 = no shrink). */
         int16_t flex_basis;      /**< Base size before grow/shrink (ER_LAYOUT_AUTO = use width/height). */
-        uint8_t flex_direction;  /**< ERFlexDirection — default ER_FLEX_COL. */
+        uint8_t flex_direction;  /**< ERFlexDirection — default ER_FLEX_COLUMN. */
         uint8_t flex_wrap;       /**< ERFlexWrap     — default ER_WRAP_NOWRAP. */
         uint8_t align_items;     /**< ERFlexAlign    — default ER_ALIGN_STRETCH. */
         uint8_t align_self;      /**< ERFlexAlign    — default ER_ALIGN_AUTO. */
         uint8_t align_content;   /**< ERAlignContent — default ER_ALIGN_CONTENT_FLEX_START. */
         uint8_t justify_content; /**< ERFlexJustify  — default ER_JUSTIFY_FLEX_START. */
-        uint8_t position;        /**< ERPositionType — default ER_POS_RELATIVE. */
+        uint8_t position;        /**< ERPositionType — default ER_POSITION_RELATIVE. */
         uint8_t display;         /**< ERDisplayMode  — default ER_DISPLAY_FLEX. */
         float aspect_ratio; /**< Width/height ratio (0.0 = not set). When one dimension is auto the other is derived. */
         int16_t
@@ -713,16 +714,17 @@ extern "C"
             padding_horizontal; /**< Shorthand for padding_left and padding_right; overridden by the per-edge fields. */
         int16_t
             padding_vertical; /**< Shorthand for padding_top and padding_bottom; overridden by the per-edge fields. */
-        float flex_basis_pct; /**< flex_basis as a percentage of the parent's main-axis size [0.0–100.0]; 0.0 = not set.
-                                 Takes precedence over flex_basis. */
-        float width_pct;      /**< width as a percentage of the parent's content width [0.0–100.0]; 0.0 = not set.
+        float flex_basis_percent; /**< flex_basis as a percentage of the parent's main-axis size [0.0–100.0]; 0.0 = not
+                                 set. Takes precedence over flex_basis. */
+        float width_percent;      /**< width as a percentage of the parent's content width [0.0–100.0]; 0.0 = not set.
                                  Takes precedence over width. */
-        float height_pct;     /**< height as a percentage of the parent's content height [0.0–100.0]; 0.0 = not set.
+        float height_percent;     /**< height as a percentage of the parent's content height [0.0–100.0]; 0.0 = not set.
                                  Takes precedence over height. */
-        float left_pct;   /**< left as a percentage of the containing block's width; 0.0 = not set. Wins over left. */
-        float top_pct;    /**< top as a percentage of the containing block's height; 0.0 = not set. Wins over top. */
-        float right_pct;  /**< right as a percentage of the containing block's width; 0.0 = not set. Wins over right. */
-        float bottom_pct; /**< bottom as a percentage of the containing block's height; 0.0 = not set. Wins over
+        float left_percent; /**< left as a percentage of the containing block's width; 0.0 = not set. Wins over left. */
+        float top_percent;  /**< top as a percentage of the containing block's height; 0.0 = not set. Wins over top. */
+        float right_percent; /**< right as a percentage of the containing block's width; 0.0 = not set. Wins over right.
+                              */
+        float bottom_percent; /**< bottom as a percentage of the containing block's height; 0.0 = not set. Wins over
                              bottom. */
         /* A 0% inset is expressed as 0 in the pixel field above, not as 0.0 here: the two mean the same
            pixel, and 0.0 is this field's "not set" sentinel. */
@@ -867,77 +869,77 @@ extern "C"
  * @brief The duration a caller should fill in for a timing animation that names none.
  *
  * The engine itself has no default — a duration_ms of 0 simply finishes at once — so the value lives
- * here for everyone who has to supply one: the built-in ERLayoutAnimConfig presets, and any binding
+ * here for everyone who has to supply one: the built-in ERLayoutAnimationConfig presets, and any binding
  * that marshals a config object with the duration left out. They must agree, or a
  * `LayoutAnimation.configureNext({})` runs at a different speed than the preset it is meant to match.
  */
-#define ER_ANIM_DEFAULT_DURATION_MS 300U
+#define ER_ANIMATION_DEFAULT_DURATION_MS 300U
 
     /**
-     * @brief Animation configuration passed to er_anim_start() and group functions.
+     * @brief Animation configuration passed to er_animation_start() and group functions.
      *
      * Zero-initialise, then set only the fields relevant to the chosen type.
      * All fields that are not set default to sensible values (see field docs).
      */
-    typedef struct ERAnimConfig
+    typedef struct ERAnimationConfig
     {
-        ERAnimType type;              /**< Animation algorithm (default ER_ANIM_TIMING). */
-        ERAnimEasing easing;          /**< Easing curve for ER_ANIM_TIMING (default ER_EASE_LINEAR). */
-        uint32_t duration_ms;         /**< Duration for ER_ANIM_TIMING; ignored for spring/decay. 0 finishes at once. */
-        uint32_t delay_ms;            /**< Delay before the animation begins; 0 = start immediately. */
-        float stiffness;              /**< Spring stiffness k (ER_ANIM_SPRING; default 100). */
-        float damping;                /**< Spring damping coefficient c (ER_ANIM_SPRING; default 10). */
-        float mass;                   /**< Spring mass m (ER_ANIM_SPRING; default 1). */
-        float velocity;               /**< Initial velocity in value/s for spring; value/ms for decay. */
-        float deceleration;           /**< Per-ms friction [0,1) for ER_ANIM_DECAY (default 0.998). */
-        float bezier_x1;              /**< First control point X for ER_EASE_BEZIER [0,1]. */
-        float bezier_y1;              /**< First control point Y for ER_EASE_BEZIER. */
-        float bezier_x2;              /**< Second control point X for ER_EASE_BEZIER [0,1]. */
-        float bezier_y2;              /**< Second control point Y for ER_EASE_BEZIER. */
-        bool loop;                    /**< Repeat for ER_ANIM_TIMING when it completes; ignored otherwise. By
-                                           default each cycle RESTARTS from the start (a continuous one-way loop,
-                                           e.g. a spinner's 0→360° rotation), matching RN's Animated.loop. */
-        bool loop_reverse;            /**< When loop is set: reverse direction each cycle (ping-pong, e.g. an
-                                           opacity 0.3↔1.0 "breathing" pulse) instead of restarting. Default false. */
-        ERAnimCompleteFn on_complete; /**< Called when the animation finishes; NULL = none. */
-        void* on_complete_user_data;  /**< Forwarded to on_complete as user_data. */
-    } ERAnimConfig;
+        ERAnimationType type;     /**< Animation algorithm (default ER_ANIMATION_TIMING). */
+        ERAnimationEasing easing; /**< Easing curve for ER_ANIMATION_TIMING (default ER_EASE_LINEAR). */
+        uint32_t duration_ms; /**< Duration for ER_ANIMATION_TIMING; ignored for spring/decay. 0 finishes at once. */
+        uint32_t delay_ms;    /**< Delay before the animation begins; 0 = start immediately. */
+        float stiffness;      /**< Spring stiffness k (ER_ANIMATION_SPRING; default 100). */
+        float damping;        /**< Spring damping coefficient c (ER_ANIMATION_SPRING; default 10). */
+        float mass;           /**< Spring mass m (ER_ANIMATION_SPRING; default 1). */
+        float velocity;       /**< Initial velocity in value/s for spring; value/ms for decay. */
+        float deceleration;   /**< Per-ms friction [0,1) for ER_ANIMATION_DECAY (default 0.998). */
+        float bezier_x1;      /**< First control point X for ER_EASE_BEZIER [0,1]. */
+        float bezier_y1;      /**< First control point Y for ER_EASE_BEZIER. */
+        float bezier_x2;      /**< Second control point X for ER_EASE_BEZIER [0,1]. */
+        float bezier_y2;      /**< Second control point Y for ER_EASE_BEZIER. */
+        bool loop;            /**< Repeat for ER_ANIMATION_TIMING when it completes; ignored otherwise. By
+                                   default each cycle RESTARTS from the start (a continuous one-way loop,
+                                   e.g. a spinner's 0→360° rotation), matching RN's Animated.loop. */
+        bool loop_reverse;    /**< When loop is set: reverse direction each cycle (ping-pong, e.g. an
+                                   opacity 0.3↔1.0 "breathing" pulse) instead of restarting. Default false. */
+        ERAnimationCompleteFn on_complete; /**< Called when the animation finishes; NULL = none. */
+        void* on_complete_user_data;       /**< Forwarded to on_complete as user_data. */
+    } ERAnimationConfig;
 
     /**
      * @brief Configuration for a layout animation applied to nodes whose computed rect changes.
      *
-     * Pass to er_layout_anim_configure_next() before calling er_commit().  On the next commit
+     * Pass to er_layout_animation_configure_next() before calling er_commit().  On the next commit
      * every node whose computed layout rectangle changed will animate from its current display
      * position to the new computed position using this config.  The config is consumed by the
      * first commit after it is registered and has no effect on subsequent commits.
      *
-     * Convenience presets: ER_LAYOUT_ANIM_EASE_IN_EASE_OUT, ER_LAYOUT_ANIM_LINEAR,
-     * ER_LAYOUT_ANIM_SPRING.
+     * Convenience presets: ER_LAYOUT_ANIMATION_EASE_IN_EASE_OUT, ER_LAYOUT_ANIMATION_LINEAR,
+     * ER_LAYOUT_ANIMATION_SPRING.
      */
-    typedef struct ERLayoutAnimConfig
+    typedef struct ERLayoutAnimationConfig
     {
-        ERAnimType type;      /**< ER_ANIM_TIMING or ER_ANIM_SPRING. */
-        uint16_t duration_ms; /**< Duration for ER_ANIM_TIMING; ignored for spring. 0 finishes at once. */
-        ERAnimEasing easing;  /**< Easing curve for ER_ANIM_TIMING; ignored for spring. */
-        float stiffness;      /**< Spring stiffness k (ER_ANIM_SPRING; 0 = default 100). */
-        float damping;        /**< Spring damping c (ER_ANIM_SPRING; 0 = default 10). */
-        float mass;           /**< Spring mass m (ER_ANIM_SPRING; 0 = default 1). */
-        float bezier_x1;      /**< Bezier CP1 X for ER_EASE_BEZIER. */
-        float bezier_y1;      /**< Bezier CP1 Y for ER_EASE_BEZIER. */
-        float bezier_x2;      /**< Bezier CP2 X for ER_EASE_BEZIER. */
-        float bezier_y2;      /**< Bezier CP2 Y for ER_EASE_BEZIER. */
-    } ERLayoutAnimConfig;
+        ERAnimationType type;     /**< ER_ANIMATION_TIMING or ER_ANIMATION_SPRING. */
+        uint16_t duration_ms;     /**< Duration for ER_ANIMATION_TIMING; ignored for spring. 0 finishes at once. */
+        ERAnimationEasing easing; /**< Easing curve for ER_ANIMATION_TIMING; ignored for spring. */
+        float stiffness;          /**< Spring stiffness k (ER_ANIMATION_SPRING; 0 = default 100). */
+        float damping;            /**< Spring damping c (ER_ANIMATION_SPRING; 0 = default 10). */
+        float mass;               /**< Spring mass m (ER_ANIMATION_SPRING; 0 = default 1). */
+        float bezier_x1;          /**< Bezier CP1 X for ER_EASE_BEZIER. */
+        float bezier_y1;          /**< Bezier CP1 Y for ER_EASE_BEZIER. */
+        float bezier_x2;          /**< Bezier CP2 X for ER_EASE_BEZIER. */
+        float bezier_y2;          /**< Bezier CP2 Y for ER_EASE_BEZIER. */
+    } ERLayoutAnimationConfig;
 
     /**
-     * @brief Single entry in an animation group (er_anim_sequence / parallel / stagger).
+     * @brief Single entry in an animation group (er_animation_sequence / parallel / stagger).
      */
     typedef struct
     {
-        ERNode* node;     /**< Target scene node. */
-        ERAnimProp prop;  /**< Property to animate. */
-        float value;      /**< Target value (same encoding as er_anim_start). */
-        ERAnimConfig cfg; /**< Per-entry animation configuration. */
-    } ERAnimEntry;
+        ERNode* node;             /**< Target scene node. */
+        ERAnimationProp prop;     /**< Property to animate. */
+        float value;              /**< Target value (same encoding as er_animation_start). */
+        ERAnimationConfig config; /**< Per-entry animation configuration. */
+    } ERAnimationEntry;
 
     /**
      * @brief Payload delivered to an EREventFn callback.
@@ -1373,9 +1375,10 @@ extern "C"
      *                   a float via memcpy (use the color_bits() pattern).
      * @param[in] config  Animation configuration, or NULL for an immediate snap.
      *
-     * @return Handle identifying this animation; ER_ANIM_HANDLE_INVALID on failure.
+     * @return Handle identifying this animation; ER_ANIMATION_HANDLE_INVALID on failure.
      */
-    ERAnimHandle er_anim_start(ERNode* node, ERAnimProp prop, float value, const ERAnimConfig* config);
+    ERAnimationHandle
+    er_animation_start(ERNode* node, ERAnimationProp prop, float value, const ERAnimationConfig* config);
 
     /**
      * @brief Cancels a running animation on a node property.
@@ -1383,17 +1386,17 @@ extern "C"
      * @param[in] node  Node whose animation should be cancelled.
      * @param[in] prop  Property whose animation should be cancelled.
      */
-    void er_anim_cancel(ERNode* node, ERAnimProp prop);
+    void er_animation_cancel(ERNode* node, ERAnimationProp prop);
 
     /**
      * @brief Stops any animation (or group) identified by handle.
      *
      * The on_complete callback, if any, is called with finished = false.  Passing
-     * ER_ANIM_HANDLE_INVALID is a no-op.
+     * ER_ANIMATION_HANDLE_INVALID is a no-op.
      *
-     * @param[in] handle  Handle returned by er_anim_start() or a group function.
+     * @param[in] handle  Handle returned by er_animation_start() or a group function.
      */
-    void er_anim_stop(ERAnimHandle handle);
+    void er_animation_stop(ERAnimationHandle handle);
 
     /**
      * @brief Runs a list of animations one after another (Animated.sequence equivalent).
@@ -1406,10 +1409,12 @@ extern "C"
      * @param[in] on_complete  Called when all entries finish; NULL = none.
      * @param[in] user_data    Forwarded to on_complete.
      *
-     * @return Group handle, or ER_ANIM_HANDLE_INVALID if no group slot is free.
+     * @return Group handle, or ER_ANIMATION_HANDLE_INVALID if no group slot is free.
      */
-    ERAnimHandle
-    er_anim_sequence(const ERAnimEntry* entries, uint16_t count, ERAnimCompleteFn on_complete, void* user_data);
+    ERAnimationHandle er_animation_sequence(const ERAnimationEntry* entries,
+                                            uint16_t count,
+                                            ERAnimationCompleteFn on_complete,
+                                            void* user_data);
 
     /**
      * @brief Starts all animations simultaneously (Animated.parallel equivalent).
@@ -1421,10 +1426,12 @@ extern "C"
      * @param[in] on_complete  Called when every entry finishes; NULL = none.
      * @param[in] user_data    Forwarded to on_complete.
      *
-     * @return Group handle, or ER_ANIM_HANDLE_INVALID if no group slot is free.
+     * @return Group handle, or ER_ANIMATION_HANDLE_INVALID if no group slot is free.
      */
-    ERAnimHandle
-    er_anim_parallel(const ERAnimEntry* entries, uint16_t count, ERAnimCompleteFn on_complete, void* user_data);
+    ERAnimationHandle er_animation_parallel(const ERAnimationEntry* entries,
+                                            uint16_t count,
+                                            ERAnimationCompleteFn on_complete,
+                                            void* user_data);
 
     /**
      * @brief Starts animations with a fixed delay between each start (Animated.stagger equivalent).
@@ -1438,64 +1445,67 @@ extern "C"
      * @param[in] on_complete  Called when every entry finishes; NULL = none.
      * @param[in] user_data    Forwarded to on_complete.
      *
-     * @return Group handle, or ER_ANIM_HANDLE_INVALID if no group slot is free.
+     * @return Group handle, or ER_ANIMATION_HANDLE_INVALID if no group slot is free.
      */
-    ERAnimHandle er_anim_stagger(
-        const ERAnimEntry* entries, uint16_t count, uint32_t stagger_ms, ERAnimCompleteFn on_complete, void* user_data);
+    ERAnimationHandle er_animation_stagger(const ERAnimationEntry* entries,
+                                           uint16_t count,
+                                           uint32_t stagger_ms,
+                                           ERAnimationCompleteFn on_complete,
+                                           void* user_data);
 
     /**
      * @brief Creates a standalone animatable float value.
      *
      * The value is independent of any specific node or property until node-property pairs
-     * are registered with er_anim_value_bind().  When animated, every bound pair is updated
+     * are registered with er_animation_value_bind().  When animated, every bound pair is updated
      * on each engine tick without any higher-level involvement per frame.
      *
      * @param[in] initial_value  Starting float value.
      *
-     * @return New handle, or ER_ANIM_VALUE_INVALID if the value pool is exhausted.
+     * @return New handle, or ER_ANIMATION_VALUE_INVALID if the value pool is exhausted.
      */
-    ERAnimValueHandle er_anim_value_create(float initial_value);
+    ERAnimationValueHandle er_animation_value_create(float initial_value);
 
     /**
      * @brief Destroys a standalone animatable value and cancels any running animation on it.
      *
-     * Any node-property bindings registered via er_anim_value_bind() are released.
-     * Passing ER_ANIM_VALUE_INVALID is a no-op.
+     * Any node-property bindings registered via er_animation_value_bind() are released.
+     * Passing ER_ANIMATION_VALUE_INVALID is a no-op.
      *
-     * @param[in] handle  Handle returned by er_anim_value_create().
+     * @param[in] handle  Handle returned by er_animation_value_create().
      */
-    void er_anim_value_destroy(ERAnimValueHandle handle);
+    void er_animation_value_destroy(ERAnimationValueHandle handle);
 
     /**
      * @brief Binds a node property to this value.
      *
-     * From this point on, whenever the value changes (via er_anim_value_animate() or
-     * er_anim_value_set()), node->prop is updated automatically and the node is marked dirty.
+     * From this point on, whenever the value changes (via er_animation_value_animate() or
+     * er_animation_value_set()), node->prop is updated automatically and the node is marked dirty.
      * Duplicate bindings for the same node+prop pair are silently ignored.  The binding
      * capacity per value is fixed at compile time (ERUI_MAX_VALUE_BINDINGS, default 4).
-     * A color property is refused; bind one with er_anim_value_bind_color().
+     * A color property is refused; bind one with er_animation_value_bind_color().
      *
      * @param[in] handle  Target animatable value.
      * @param[in] node    Scene node to receive updates.
      * @param[in] prop    Animatable property on the node to update.
      */
-    void er_anim_value_bind(ERAnimValueHandle handle, ERNode* node, ERAnimProp prop);
+    void er_animation_value_bind(ERAnimationValueHandle handle, ERNode* node, ERAnimationProp prop);
 
     /**
      * @brief Removes all node-property bindings from this value.
      *
-     * The value itself is not destroyed; call er_anim_value_destroy() to free the slot.
+     * The value itself is not destroyed; call er_animation_value_destroy() to free the slot.
      *
      * @param[in] handle  Target animatable value.
      */
-    void er_anim_value_unbind_all(ERAnimValueHandle handle);
+    void er_animation_value_unbind_all(ERAnimationValueHandle handle);
 
     /**
      * @brief Releases whatever animated value drives one property of one node.
      *
-     * The counterpart to er_anim_value_bind() for a caller that knows the node and the property but not
+     * The counterpart to er_animation_value_bind() for a caller that knows the node and the property but not
      * which value owns the binding — a reconciler re-rendering a prop that used to be animated and now is
-     * not, or is now driven by a different value.  er_anim_value_unbind_all() is too coarse there: it would
+     * not, or is now driven by a different value.  er_animation_value_unbind_all() is too coarse there: it would
      * also unbind that value from every other node it drives.
      *
      * Bindings for this exact node+property pair are dropped from EVERY value, so a property that ended up
@@ -1506,7 +1516,7 @@ extern "C"
      * @param[in] node  Scene node to release; NULL is a no-op.
      * @param[in] prop  Animatable property to release on that node.
      */
-    void er_anim_unbind_prop(ERNode* node, ERAnimProp prop);
+    void er_animation_unbind_prop(ERNode* node, ERAnimationProp prop);
 
     /**
      * @brief Starts an animation that drives a standalone value toward to_value.
@@ -1516,27 +1526,28 @@ extern "C"
      * zero-duration snap is applied immediately.
      *
      * Supports the same animation types (timing/spring/decay), easing, delay, loop, and
-     * completion callback as er_anim_start().  Color properties are not supported for
+     * completion callback as er_animation_start().  Color properties are not supported for
      * standalone values.
      *
      * @param[in] handle    Standalone value to animate.
      * @param[in] to_value  Target float value.
      * @param[in] config    Animation configuration, or NULL for an immediate snap.
      *
-     * @return Handle identifying this animation; ER_ANIM_HANDLE_INVALID on failure.
+     * @return Handle identifying this animation; ER_ANIMATION_HANDLE_INVALID on failure.
      */
-    ERAnimHandle er_anim_value_animate(ERAnimValueHandle handle, float to_value, const ERAnimConfig* config);
+    ERAnimationHandle
+    er_animation_value_animate(ERAnimationValueHandle handle, float to_value, const ERAnimationConfig* config);
 
     /**
      * @brief Immediately sets a standalone value and pushes it to all bound node properties.
      *
      * Any running animation on the value is cancelled before the new value is applied.
-     * Equivalent to er_anim_value_animate(handle, value, NULL).
+     * Equivalent to er_animation_value_animate(handle, value, NULL).
      *
      * @param[in] handle  Target animatable value.
      * @param[in] value   New float value to apply.
      */
-    void er_anim_value_set(ERAnimValueHandle handle, float value);
+    void er_animation_value_set(ERAnimationValueHandle handle, float value);
 
     /**
      * @brief Returns the current float of a standalone animatable value.
@@ -1545,7 +1556,7 @@ extern "C"
      *
      * @return Current value, or 0.0f if handle is invalid.
      */
-    float er_anim_value_get(ERAnimValueHandle handle);
+    float er_animation_value_get(ERAnimationValueHandle handle);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interpolation ranges
@@ -1603,7 +1614,7 @@ extern "C"
     /**
      * @brief Binds a shared animatable value to a node property through an interpolation mapping.
      *
-     * @details Like er_anim_value_bind(), but on every value change the raw float is first mapped
+     * @details Like er_animation_value_bind(), but on every value change the raw float is first mapped
      * through @p interpolation before being written to the property.  This is the engine-side equivalent
      * of `value.interpolate({ inputRange, outputRange })` in React Native's useNativeDriver path.
      *
@@ -1612,10 +1623,10 @@ extern "C"
      * @param[in] prop           Property to drive.
      * @param[in] interpolation  Interpolation mapping (copied; must have point_count >= 2).
      */
-    void er_anim_value_bind_interpolated(ERAnimValueHandle handle,
-                                         ERNode* node,
-                                         ERAnimProp prop,
-                                         const ERInterpolation* interpolation);
+    void er_animation_value_bind_interpolated(ERAnimationValueHandle handle,
+                                              ERNode* node,
+                                              ERAnimationProp prop,
+                                              const ERInterpolation* interpolation);
 
     /**
      * @brief Piecewise-linear mapping from an input range to ARGB8888 colors.
@@ -1647,18 +1658,18 @@ extern "C"
      * @brief Binds a shared animatable value to a color property through a color interpolation.
      *
      * @details The native-driver form of `value.interpolate({ inputRange, outputRange: [colors] })` on
-     * `backgroundColor` or `color`. A color prop takes only this binding: er_anim_value_bind() and
-     * er_anim_value_bind_interpolated() refuse one, since a plain float is not a color.
+     * `backgroundColor` or `color`. A color prop takes only this binding: er_animation_value_bind() and
+     * er_animation_value_bind_interpolated() refuse one, since a plain float is not a color.
      *
      * @param[in] handle         Animatable value to bind.
      * @param[in] node           Target node.
      * @param[in] prop           ER_PROP_BACKGROUND_COLOR or ER_PROP_COLOR.
      * @param[in] interpolation  Color mapping (copied; must have point_count >= 2).
      */
-    void er_anim_value_bind_color(ERAnimValueHandle handle,
-                                  ERNode* node,
-                                  ERAnimProp prop,
-                                  const ERColorInterpolation* interpolation);
+    void er_animation_value_bind_color(ERAnimationValueHandle handle,
+                                       ERNode* node,
+                                       ERAnimationProp prop,
+                                       const ERColorInterpolation* interpolation);
 
     /**
      * @brief Returns the axis-aligned bounding rectangle of all pixels repainted by the last er_commit()
@@ -1769,21 +1780,21 @@ extern "C"
     /** @brief What a keyboard key does when pressed. */
     typedef enum ERKeyboardKeyType
     {
-        ER_KBD_KEY_CHAR = 0,  /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
-        ER_KBD_KEY_BACKSPACE, /**< deletes the character before the cursor */
-        ER_KBD_KEY_DONE,      /**< submits the input, then dismisses the keyboard (blurs the input) */
-        ER_KBD_KEY_LAYER      /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
+        ER_KEYBOARD_KEY_CHAR = 0,  /**< types the key's `text` (a letter, digit, symbol, or " " for space) */
+        ER_KEYBOARD_KEY_BACKSPACE, /**< deletes the character before the cursor */
+        ER_KEYBOARD_KEY_DONE,      /**< submits the input, then dismisses the keyboard (blurs the input) */
+        ER_KEYBOARD_KEY_LAYER      /**< switches the visible layer to `layer` (shift / 123 / #+= / ABC) */
     } ERKeyboardKeyType;
 
     /** @brief One key. `span` is its width in grid columns; rows are laid out proportionally so keys flex
-     *         to any screen width. For ER_KBD_KEY_LAYER, `highlight_layer` (else 0xFF) draws the key active
+     *         to any screen width. For ER_KEYBOARD_KEY_LAYER, `highlight_layer` (else 0xFF) draws the key active
      *         when that layer is showing — e.g. a shift key lit on the UPPERCASE layer. */
     typedef struct ERKeyboardKey
     {
         const char* label;       /**< text shown on the key; NULL falls back to `text` */
-        const char* text;        /**< string typed for ER_KBD_KEY_CHAR (e.g. "a", " "); ignored otherwise */
+        const char* text;        /**< string typed for ER_KEYBOARD_KEY_CHAR (e.g. "a", " "); ignored otherwise */
         uint8_t type;            /**< ERKeyboardKeyType */
-        uint8_t layer;           /**< target layer for ER_KBD_KEY_LAYER */
+        uint8_t layer;           /**< target layer for ER_KEYBOARD_KEY_LAYER */
         uint8_t span;            /**< width in grid columns (>= 1) */
         uint8_t highlight_layer; /**< highlight this key while this layer shows (0xFF = never) */
     } ERKeyboardKey;
@@ -1808,7 +1819,7 @@ extern "C"
     {
         const ERKeyboardLayer* layers; /**< layer array; NULL = built-in QWERTY (lower/UPPER/123/#+=) */
         uint8_t layer_count;
-        uint8_t grid_cols;         /**< total columns a row's spans add up to (0 = 20) */
+        uint8_t grid_columns;      /**< total columns a row's spans add up to (0 = 20) */
         uint16_t row_height_px;    /**< height of each key row (0 = auto, ~1/11 of the screen height) */
         uint8_t key_gap_px;        /**< gap inset around each key (0 = 2) */
         uint8_t key_radius_px;     /**< key corner radius (0 = 5) */
@@ -1897,7 +1908,7 @@ extern "C"
      * node's geometry. The node takes its size from its layout/style (width/height), not the tape.
      *
      * @param[in] node            Vector node to configure (no-op for other node types).
-     * @param[in] ops             Flat op-tape (see the ER_VOP_* contract above).
+     * @param[in] ops             Flat op-tape (see the ER_VECTOR_OP_* contract above).
      * @param[in] op_count        Number of floats in @p ops.
      * @param[in] paints          Paint table (one ERVectorPaint per shape).
      * @param[in] paint_count     Number of paint entries.
@@ -1939,21 +1950,21 @@ extern "C"
      *
      * Mirrors React Native's LayoutAnimation.Presets.easeInEaseOut.
      */
-    extern const ERLayoutAnimConfig ER_LAYOUT_ANIM_EASE_IN_EASE_OUT;
+    extern const ERLayoutAnimationConfig ER_LAYOUT_ANIMATION_EASE_IN_EASE_OUT;
 
     /**
      * @brief 300 ms timing animation with linear easing.
      *
      * Mirrors React Native's LayoutAnimation.Presets.linear.
      */
-    extern const ERLayoutAnimConfig ER_LAYOUT_ANIM_LINEAR;
+    extern const ERLayoutAnimationConfig ER_LAYOUT_ANIMATION_LINEAR;
 
     /**
      * @brief Spring animation using the default React Native spring parameters.
      *
      * Mirrors React Native's LayoutAnimation.Presets.spring.
      */
-    extern const ERLayoutAnimConfig ER_LAYOUT_ANIM_SPRING;
+    extern const ERLayoutAnimationConfig ER_LAYOUT_ANIMATION_SPRING;
 
     /**
      * @brief Registers a layout animation config to apply on the next er_commit().
@@ -1961,7 +1972,7 @@ extern "C"
      * On the next commit every node whose computed layout rectangle changed from the
      * previous commit will animate from its current display position to the new computed
      * position using this config.  The config is consumed after one commit and has no
-     * effect on subsequent commits unless er_layout_anim_configure_next() is called again.
+     * effect on subsequent commits unless er_layout_animation_configure_next() is called again.
      *
      * Nodes that are appearing for the first time (prev computed rect was zero-size) are
      * snapped to their target immediately without animation; they are treated as creations
@@ -1969,18 +1980,18 @@ extern "C"
      *
      * @param[in] config  Layout animation config. NULL is a no-op.
      */
-    void er_layout_anim_configure_next(const ERLayoutAnimConfig* config);
+    void er_layout_animation_configure_next(const ERLayoutAnimationConfig* config);
 
     /**
      * @brief Reports whether a layout-animation config is armed for the next commit.
      *
-     * Returns true between an er_layout_anim_configure_next() call and the er_commit() that
+     * Returns true between an er_layout_animation_configure_next() call and the er_commit() that
      * consumes it; false otherwise.  Useful for coordinating layout transitions (e.g. avoid
      * arming a second config before the first is consumed).
      *
      * @return true when a configured layout animation has not yet been consumed by a commit.
      */
-    bool er_layout_anim_has_pending(void);
+    bool er_layout_animation_has_pending(void);
 
 #ifdef __cplusplus
 }

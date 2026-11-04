@@ -56,7 +56,7 @@ above them covers. Primitives are painted straight into the framebuffer through 
 
 Three things need an offscreen buffer first: a subtree with `opacity` below 1, a transformed
 subtree, and a shadow. Those composite into statically allocated scratch buffers, then blend onto
-the frame. The buffers are sized at compile time (`ERUI_SCRATCH_W`/`H`, `ERUI_XFORM_W`/`H`), and a
+the frame. The buffers are sized at compile time (`ERUI_SCRATCH_WIDTH`/`H`, `ERUI_TRANSFORM_WIDTH`/`H`), and a
 translucent group taller than a strip is rendered in band passes rather than failing. A
 transformed subtree is the one case that cannot be banded, because a rotation reads across its
 whole source, so the transform buffer caps the largest node you can rotate or scale.

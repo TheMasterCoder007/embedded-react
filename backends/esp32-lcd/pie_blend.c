@@ -36,7 +36,7 @@
  * makes both alpha edges exact — a==0 leaves the destination bit-identical and a==255 replaces
  * it exactly; mid alphas stay within one 565 LSB of over_premul_fast in renderer_backend.c.
  * er_pie_blend_selftest() verifies every lane against a scalar reference at init — if it ever
- * fails, the backend falls back to the C loops and er_pie_diag() describes the first mismatch.
+ * fails, the backend falls back to the C loops and er_pie_diagnostics() describes the first mismatch.
  *
  * Alignment contract: dst and src rows are 16-byte aligned (the backend stages rows through
  * aligned internal buffers, so this holds for every call).
@@ -87,10 +87,10 @@ typedef struct
     uint16_t bias_6bit[ER_PIE_LANES];
 } PieDitherBlock;
 
-/* Last self-test failure description (empty = passed); printable after boot via er_pie_diag(). */
+/* Last self-test failure description (empty = passed); printable after boot via er_pie_diagnostics(). */
 static char s_pie_diag[DIAG_BYTES] = "";
 
-const char* er_pie_diag(void)
+const char* er_pie_diagnostics(void)
 {
     return s_pie_diag;
 }
@@ -438,7 +438,7 @@ bool er_pie_blend_selftest(void)
                 {
                     const uint16_t before = destination_reference[pixel];
                     destination_reference[pixel] =
-                        er_pie_blend_px_565(destination_reference[pixel], source[pixel], global_alpha, phase, pixel);
+                        er_pie_blend_pixel_565(destination_reference[pixel], source[pixel], global_alpha, phase, pixel);
                     if (destination_pie[pixel] != destination_reference[pixel])
                     {
                         snprintf(s_pie_diag,
@@ -479,7 +479,7 @@ bool er_pie_blend_selftest(void)
         er_pie_fill_row_565(destination_pie, source_pixel, SELFTEST_PIXELS / ER_PIE_LANES);
         for (int pixel = 0; pixel < SELFTEST_PIXELS; pixel++)
         {
-            destination_reference[pixel] = er_pie_blend_px_565(
+            destination_reference[pixel] = er_pie_blend_pixel_565(
                 destination_reference[pixel], source_pixel, ER_PIE_ALPHA_OPAQUE, ER_PIE_FILL_MATH, pixel);
             if (destination_pie[pixel] != destination_reference[pixel])
             {
