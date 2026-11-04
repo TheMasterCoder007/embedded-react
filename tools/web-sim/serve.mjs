@@ -28,10 +28,12 @@ import {fileURLToPath} from 'node:url';
 import {dirname, extname, normalize, resolve} from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const portIdx = process.argv.indexOf('--port');
+const portIndex = process.argv.indexOf('--port');
 // 3333 by default — a memorable repdigit port that's clear of the common dev-server ports (Vite 5173,
 // CRA/Next 3000, Astro 4321, webpack 8080) and not browser-blocked. Override with --port.
-const PORT = portIdx >= 0 ? parseInt(process.argv[portIdx + 1], 10) : 3333;
+const DEFAULT_PORT = 3333;
+const PORT =
+  portIndex >= 0 ? parseInt(process.argv[portIndex + 1], 10) : DEFAULT_PORT;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -42,26 +44,27 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
 };
 
-const server = createServer(async (req, res) => {
+const server = createServer(async (request, response) => {
   try {
     const urlPath = decodeURIComponent(
-      new URL(req.url, 'http://localhost').pathname,
+      new URL(request.url, 'http://localhost').pathname,
     );
-    const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
+    const relativePath =
+      urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
     // Confine to HERE — reject any path that escapes the served directory.
-    const file = normalize(resolve(HERE, rel));
+    const file = normalize(resolve(HERE, relativePath));
     if (!file.startsWith(HERE)) {
-      res.writeHead(403).end('forbidden');
+      response.writeHead(403).end('forbidden');
       return;
     }
     const body = await readFile(file);
-    res
+    response
       .writeHead(200, {
         'content-type': MIME[extname(file)] || 'application/octet-stream',
       })
       .end(body);
   } catch {
-    res.writeHead(404).end('not found');
+    response.writeHead(404).end('not found');
   }
 });
 

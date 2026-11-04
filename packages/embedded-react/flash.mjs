@@ -32,19 +32,29 @@ import {crc32} from './assets/emit-container.mjs';
 export const SLOT_HEADER_BYTES = 4096; // bytes before the package: one erase sector
 const SLOT_HEADER_PAGE_BYTES = 256; // the part of it that is written
 const SEQUENCE_MAX = 0xffffffff;
+const ERASED_BYTE = 0xff;
 const SLOT_MAGIC = 0x53425245; // "ERBS", little-endian
+const SLOT_MAGIC_AT = 0;
+const SLOT_SEQUENCE_AT = 4;
+const SLOT_PACKAGE_LENGTH_AT = 8;
 const SLOT_HEADER_CHECKED_BYTES = 12;
+const SLOT_HEADER_CRC_BYTES = 4;
 const SLOT_NAMES = ['a', 'b'];
 
 const CONTAINER_MAGIC = 'ERCF';
+const CONTAINER_MAGIC_BYTES = 4;
+const CONTAINER_CRC_AT = 8;
 const CONTAINER_CRC_END = 12;
 const CONTAINER_TAG_AT = 12;
+const CONTAINER_TAG_LENGTH_BYTES = 2;
 const PACKAGE_TAG = 'erb';
 
 const ESP_PARTITION_TABLE_AT = 0x8000;
 const ESP_PARTITION_TABLE_BYTES = 0xc00;
 const ESP_PARTITION_ENTRY_BYTES = 32;
 const ESP_PARTITION_MAGIC = 0x50aa;
+const ESP_PARTITION_OFFSET_AT = 4;
+const ESP_PARTITION_SIZE_AT = 8;
 const ESP_PARTITION_LABEL_AT = 12;
 const ESP_PARTITION_LABEL_BYTES = 16;
 const ESP_SLOT_LABELS = ['erb_a', 'erb_b'];
@@ -60,6 +70,13 @@ const UF2_MAGIC_START_1 = 0x9e5d5157;
 const UF2_MAGIC_END = 0x0ab16f30;
 const UF2_FLAG_FAMILY = 0x2000;
 const UF2_FAMILY_RP2040 = 0xe48bff56;
+const UF2_MAGIC_START_1_AT = 4;
+const UF2_FLAGS_AT = 8;
+const UF2_ADDRESS_AT = 12;
+const UF2_PAYLOAD_SIZE_AT = 16;
+const UF2_BLOCK_NUMBER_AT = 20;
+const UF2_BLOCK_COUNT_AT = 24;
+const UF2_FAMILY_AT = 28;
 const UF2_PAYLOAD_AT = 32;
 const UF2_MAGIC_END_AT = 508;
 
@@ -110,19 +127,22 @@ export function boardByName(name) {
 /** Checks the bytes are a whole Flow B package, so a stale or Flow A file never reaches a slot. */
 export function checkPackage(bytes) {
   if (
-    bytes.length < CONTAINER_TAG_AT + 2 ||
-    bytes.toString('latin1', 0, 4) !== CONTAINER_MAGIC
+    bytes.length < CONTAINER_TAG_AT + CONTAINER_TAG_LENGTH_BYTES ||
+    bytes.toString('latin1', 0, CONTAINER_MAGIC_BYTES) !== CONTAINER_MAGIC
   ) {
     throw new Error('Not a package: no ERCF container in this file.');
   }
-  if (bytes.readUInt32LE(8) !== crc32(bytes.subarray(CONTAINER_CRC_END))) {
+  if (
+    bytes.readUInt32LE(CONTAINER_CRC_AT) !==
+    crc32(bytes.subarray(CONTAINER_CRC_END))
+  ) {
     throw new Error('This package is corrupt: its CRC does not match.');
   }
   const tagBytes = bytes.readUInt16LE(CONTAINER_TAG_AT);
   const tag = bytes.toString(
     'latin1',
-    CONTAINER_TAG_AT + 2,
-    CONTAINER_TAG_AT + 2 + tagBytes,
+    CONTAINER_TAG_AT + CONTAINER_TAG_LENGTH_BYTES,
+    CONTAINER_TAG_AT + CONTAINER_TAG_LENGTH_BYTES + tagBytes,
   );
   if (tag !== PACKAGE_TAG) {
     throw new Error(
@@ -143,10 +163,10 @@ function isWholePackage(bytes) {
 
 /** A slot's header page. */
 export function slotHeader(packageLength, sequence) {
-  const header = Buffer.alloc(SLOT_HEADER_PAGE_BYTES, 0xff);
-  header.writeUInt32LE(SLOT_MAGIC, 0);
-  header.writeUInt32LE(sequence, 4);
-  header.writeUInt32LE(packageLength, 8);
+  const header = Buffer.alloc(SLOT_HEADER_PAGE_BYTES, ERASED_BYTE);
+  header.writeUInt32LE(SLOT_MAGIC, SLOT_MAGIC_AT);
+  header.writeUInt32LE(sequence, SLOT_SEQUENCE_AT);
+  header.writeUInt32LE(packageLength, SLOT_PACKAGE_LENGTH_AT);
   header.writeUInt32LE(
     crc32(header.subarray(0, SLOT_HEADER_CHECKED_BYTES)),
     SLOT_HEADER_CHECKED_BYTES,
@@ -156,7 +176,7 @@ export function slotHeader(packageLength, sequence) {
 
 /** A slot's whole image: the header in its sector, then the package. */
 export function slotImage(packageBytes, sequence) {
-  const headerSector = Buffer.alloc(SLOT_HEADER_BYTES, 0xff);
+  const headerSector = Buffer.alloc(SLOT_HEADER_BYTES, ERASED_BYTE);
   slotHeader(packageBytes.length, sequence).copy(headerSector);
   return Buffer.concat([headerSector, packageBytes]);
 }
@@ -164,18 +184,18 @@ export function slotImage(packageBytes, sequence) {
 /** What a slot's first bytes say: its sequence and package length, or null when it has no valid header. */
 export function readSlotHeader(bytes, slotBytes) {
   if (
-    bytes.length < SLOT_HEADER_CHECKED_BYTES + 4 ||
-    bytes.readUInt32LE(0) !== SLOT_MAGIC ||
+    bytes.length < SLOT_HEADER_CHECKED_BYTES + SLOT_HEADER_CRC_BYTES ||
+    bytes.readUInt32LE(SLOT_MAGIC_AT) !== SLOT_MAGIC ||
     bytes.readUInt32LE(SLOT_HEADER_CHECKED_BYTES) !==
       crc32(bytes.subarray(0, SLOT_HEADER_CHECKED_BYTES))
   ) {
     return null;
   }
-  const packageBytes = bytes.readUInt32LE(8);
+  const packageBytes = bytes.readUInt32LE(SLOT_PACKAGE_LENGTH_AT);
   if (packageBytes === 0 || packageBytes > slotBytes - SLOT_HEADER_BYTES) {
     return null;
   }
-  return {sequence: bytes.readUInt32LE(4), packageBytes};
+  return {sequence: bytes.readUInt32LE(SLOT_SEQUENCE_AT), packageBytes};
 }
 
 /** A slot's sequence from its first bytes, or null when it has no valid header. */
@@ -220,27 +240,27 @@ export function uf2(runs) {
     ),
   );
   const blockCount = pages.length;
-  const out = Buffer.alloc(blockCount * UF2_BLOCK_BYTES);
+  const blocks = Buffer.alloc(blockCount * UF2_BLOCK_BYTES);
   for (let block = 0; block < blockCount; block++) {
     const at = block * UF2_BLOCK_BYTES;
-    out.writeUInt32LE(UF2_MAGIC_START_0, at);
-    out.writeUInt32LE(UF2_MAGIC_START_1, at + 4);
-    out.writeUInt32LE(UF2_FLAG_FAMILY, at + 8);
-    out.writeUInt32LE(pages[block].address, at + 12);
-    out.writeUInt32LE(UF2_PAYLOAD_BYTES, at + 16);
-    out.writeUInt32LE(block, at + 20);
-    out.writeUInt32LE(blockCount, at + 24);
-    out.writeUInt32LE(UF2_FAMILY_RP2040, at + 28);
+    blocks.writeUInt32LE(UF2_MAGIC_START_0, at);
+    blocks.writeUInt32LE(UF2_MAGIC_START_1, at + UF2_MAGIC_START_1_AT);
+    blocks.writeUInt32LE(UF2_FLAG_FAMILY, at + UF2_FLAGS_AT);
+    blocks.writeUInt32LE(pages[block].address, at + UF2_ADDRESS_AT);
+    blocks.writeUInt32LE(UF2_PAYLOAD_BYTES, at + UF2_PAYLOAD_SIZE_AT);
+    blocks.writeUInt32LE(block, at + UF2_BLOCK_NUMBER_AT);
+    blocks.writeUInt32LE(blockCount, at + UF2_BLOCK_COUNT_AT);
+    blocks.writeUInt32LE(UF2_FAMILY_RP2040, at + UF2_FAMILY_AT);
     // A short last page is padded as erased flash, since the bootrom programs whole pages.
-    out.fill(
-      0xff,
+    blocks.fill(
+      ERASED_BYTE,
       at + UF2_PAYLOAD_AT,
       at + UF2_PAYLOAD_AT + UF2_PAYLOAD_BYTES,
     );
-    pages[block].bytes.copy(out, at + UF2_PAYLOAD_AT);
-    out.writeUInt32LE(UF2_MAGIC_END, at + UF2_MAGIC_END_AT);
+    pages[block].bytes.copy(blocks, at + UF2_PAYLOAD_AT);
+    blocks.writeUInt32LE(UF2_MAGIC_END, at + UF2_MAGIC_END_AT);
   }
-  return out;
+  return blocks;
 }
 
 /** The package slots in an ESP32 partition table's bytes, or null when the firmware on the board has none. */
@@ -259,8 +279,8 @@ export function slotsFromPartitionTable(table) {
     const index = ESP_SLOT_LABELS.indexOf(label);
     if (index >= 0) {
       slots[index] = {
-        address: table.readUInt32LE(at + 4),
-        bytes: table.readUInt32LE(at + 8),
+        address: table.readUInt32LE(at + ESP_PARTITION_OFFSET_AT),
+        bytes: table.readUInt32LE(at + ESP_PARTITION_SIZE_AT),
       };
     }
   }
@@ -445,14 +465,14 @@ export function flashSlot({
     board.tool === 'picotool'
       ? picoAccess({board, run, sleep})
       : espAccess({chip: board.chip, port, run});
-  const dir = mkdtempSync(join(tmpdir(), 'er-flash-'));
+  const scratchDir = mkdtempSync(join(tmpdir(), 'er-flash-'));
   let begun = false;
   try {
     access.begin();
     begun = true;
-    const slots = access.slots(dir);
+    const slots = access.slots(scratchDir);
     const headers = slots.map((slot, index) => {
-      const file = join(dir, `header-${index}.bin`);
+      const file = join(scratchDir, `header-${index}.bin`);
       access.read(slot.address, SLOT_HEADER_PAGE_BYTES, file);
       return readSlotHeader(readFileSync(file), slot.bytes);
     });
@@ -462,7 +482,7 @@ export function flashSlot({
     // The newest slot is what this write leaves as the fallback, so it has to be whole. A write cut short can leave
     // a header over part of a package, and no boot may have cleared it yet.
     if (lastGood !== null) {
-      const file = join(dir, 'newest.bin');
+      const file = join(scratchDir, 'newest.bin');
       access.read(
         slots[lastGood].address + SLOT_HEADER_BYTES,
         headers[lastGood].packageBytes,
@@ -484,8 +504,8 @@ export function flashSlot({
         `The package takes ${slotBytesUsed} B with its header, and this board's slots hold ${bytes} B.`,
       );
     }
-    const packageFile = join(dir, 'package.bin');
-    const headerFile = join(dir, 'header.bin');
+    const packageFile = join(scratchDir, 'package.bin');
+    const headerFile = join(scratchDir, 'header.bin');
     writeFileSync(packageFile, packageBytes);
     writeFileSync(headerFile, slotHeader(packageBytes.length, sequence));
     log(
@@ -512,6 +532,6 @@ export function flashSlot({
     }
     throw error;
   } finally {
-    rmSync(dir, {recursive: true, force: true});
+    rmSync(scratchDir, {recursive: true, force: true});
   }
 }

@@ -67,7 +67,7 @@ export function App() {
     <View style={styles.screen}>
       <Text style={styles.title}>Hello, embedded-react</Text>
       <Text style={styles.subtitle}>Edit src in demos/${name} and save.</Text>
-      <Pressable style={styles.button} onPress={() => setCount((c) => c + 1)}>
+      <Pressable style={styles.button} onPress={() => setCount((previous) => previous + 1)}>
         <Text style={styles.buttonText}>Tapped {count} times</Text>
       </Pressable>
     </View>
@@ -133,8 +133,8 @@ See the [thermostat demo](../thermostat/) for a fuller example and \`tools/simul
 };
 
 mkdirSync(resolve(appDir, 'assets'), {recursive: true});
-for (const [rel, contents] of Object.entries(files)) {
-  writeFileSync(resolve(appDir, rel), contents);
+for (const [relativePath, contents] of Object.entries(files)) {
+  writeFileSync(resolve(appDir, relativePath), contents);
 }
 
 console.log(`Created demos/${name}/`);

@@ -39,9 +39,9 @@ const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 // JSON manifests — the "version" field (preserve 2-space formatting + trailing newline).
 const jsonRead = text => JSON.parse(text).version;
 const jsonWrite = (text, version) => {
-  const obj = JSON.parse(text);
-  obj.version = version;
-  return JSON.stringify(obj, null, 2) + '\n';
+  const manifest = JSON.parse(text);
+  manifest.version = version;
+  return JSON.stringify(manifest, null, 2) + '\n';
 };
 
 // npm lockfiles (lockfileVersion 3) carry the package version in TWO places — the top-level `version`
@@ -49,24 +49,26 @@ const jsonWrite = (text, version) => {
 // JSON.parse → re-stringify roundtrip of an npm-written lockfile is byte-identical, so the only change
 // is the version lines.)
 const lockRead = text => {
-  const obj = JSON.parse(text);
-  const top = obj.version;
-  const pkg = obj.packages?.['']?.version;
-  if (top && pkg && top !== pkg) return `${top} (lockfile versions disagree)`;
-  return pkg || top;
+  const lockfile = JSON.parse(text);
+  const topVersion = lockfile.version;
+  const packageVersion = lockfile.packages?.['']?.version;
+  if (topVersion && packageVersion && topVersion !== packageVersion)
+    return `${topVersion} (lockfile versions disagree)`;
+  return packageVersion || topVersion;
 };
 const lockWrite = (text, version) => {
-  const obj = JSON.parse(text);
-  obj.version = version;
-  if (obj.packages && obj.packages['']) obj.packages[''].version = version;
-  return JSON.stringify(obj, null, 2) + '\n';
+  const lockfile = JSON.parse(text);
+  lockfile.version = version;
+  if (lockfile.packages && lockfile.packages[''])
+    lockfile.packages[''].version = version;
+  return JSON.stringify(lockfile, null, 2) + '\n';
 };
 
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
-const YAML_VER = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
-const yamlRead = text => YAML_VER.exec(text)?.[1]?.trim();
+const YAML_VERSION = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
+const yamlRead = text => YAML_VERSION.exec(text)?.[1]?.trim();
 const yamlWrite = (text, version) =>
-  text.replace(YAML_VER, `version: "${version}"`);
+  text.replace(YAML_VERSION, `version: "${version}"`);
 
 // The runtime's idf_component.yml also pins the engine component, which ships at the same version.
 const YAML_ENGINE_PIN = /(embedded-react:\s*\n\s*version:\s*")(\d+\.\d+\.\d+)/;
@@ -80,8 +82,8 @@ const runtimeYamlWrite = (text, version) =>
   yamlWrite(text, version).replace(YAML_ENGINE_PIN, `$1${version}`);
 
 // er_version.h — the C single-source-of-truth header; regenerate the macro block.
-const H_VER = /#define ER_VERSION_STRING "([^"]+)"/;
-const headerRead = text => H_VER.exec(text)?.[1];
+const HEADER_VERSION = /#define ER_VERSION_STRING "([^"]+)"/;
+const headerRead = text => HEADER_VERSION.exec(text)?.[1];
 const headerWrite = (text, version) => {
   const [, major, minor, patch] = SEMVER.exec(version);
   return text
@@ -114,10 +116,10 @@ const README_PINS = [
   /(embedded-react\.git#v)(\d+\.\d+\.\d+)/g, // PlatformIO lib_deps
 ];
 const readmeRead = text => {
-  const found = README_PINS.map(re =>
-    re.global
-      ? [...text.matchAll(re)].map(match => match[2])
-      : (re.exec(text)?.slice(2) ?? []),
+  const found = README_PINS.map(pattern =>
+    pattern.global
+      ? [...text.matchAll(pattern)].map(match => match[2])
+      : (pattern.exec(text)?.slice(2) ?? []),
   );
   if (found.some(versions => !versions.length)) return undefined; // every pin has to be there
   const versions = found.flat();
@@ -126,20 +128,24 @@ const readmeRead = text => {
     : `${versions[0]} (install pins disagree)`;
 };
 const readmeWrite = (text, version) =>
-  README_PINS.reduce((t, re) => t.replace(re, `$1${version}`), text);
+  README_PINS.reduce(
+    (updated, pattern) => updated.replace(pattern, `$1${version}`),
+    text,
+  );
 
 // Demo apps (demos/<name>/package.json) — self-contained consumer projects, and the source the
 // `create-embedded-react --template <name>` starters ship. Each pins `embedded-react` in dependencies;
 // keep it in lockstep so a checked-out demo installs the matching release. (The scaffolder re-pins to its
 // own version at scaffold time, but the source pin must not drift, or --check fails.)
-const depPinRead = dep => text => {
-  const v = JSON.parse(text).dependencies?.[dep];
-  return v ? v.replace(/^[\^~]/, '') : undefined;
+const depPinRead = dependency => text => {
+  const pin = JSON.parse(text).dependencies?.[dependency];
+  return pin ? pin.replace(/^[\^~]/, '') : undefined;
 };
-const depPinWrite = dep => (text, version) => {
-  const obj = JSON.parse(text);
-  if (obj.dependencies?.[dep]) obj.dependencies[dep] = `^${version}`;
-  return JSON.stringify(obj, null, 2) + '\n';
+const depPinWrite = dependency => (text, version) => {
+  const manifest = JSON.parse(text);
+  if (manifest.dependencies?.[dependency])
+    manifest.dependencies[dependency] = `^${version}`;
+  return JSON.stringify(manifest, null, 2) + '\n';
 };
 
 // Example CMakeLists (ESP32 + RP2040) — the Flow A / Flow B fetch templates pin the embedded-react release they pull
@@ -202,9 +208,9 @@ const MANIFESTS = [
     path: 'website/package.json',
     read: text => JSON.parse(text).devDependencies?.['embedded-react'],
     write: (text, version) => {
-      const obj = JSON.parse(text);
-      obj.devDependencies['embedded-react'] = version;
-      return JSON.stringify(obj, null, 2) + '\n';
+      const manifest = JSON.parse(text);
+      manifest.devDependencies['embedded-react'] = version;
+      return JSON.stringify(manifest, null, 2) + '\n';
     },
   },
   {
@@ -236,7 +242,9 @@ const PACKAGE_DIRS = [
   'runtime',
 ];
 const legalMirrors = () =>
-  PACKAGE_DIRS.flatMap(dir => LEGAL_FILES.map(f => `${dir}/${f}`));
+  PACKAGE_DIRS.flatMap(dir =>
+    LEGAL_FILES.map(legalFile => `${dir}/${legalFile}`),
+  );
 
 /**
  * @brief The complete set of repo-relative files a version bump touches: the VERSION file, every
@@ -246,7 +254,11 @@ const legalMirrors = () =>
  * @return Array of repo-root-relative paths.
  */
 export function versionedFiles() {
-  return ['VERSION', ...MANIFESTS.map(t => t.path), ...legalMirrors()];
+  return [
+    'VERSION',
+    ...MANIFESTS.map(manifest => manifest.path),
+    ...legalMirrors(),
+  ];
 }
 
 /**
@@ -260,11 +272,11 @@ export function missingTargets() {
   const missing = ['VERSION', ...LEGAL_FILES, ...PACKAGE_DIRS].filter(
     path => !existsSync(resolve(ROOT, path)),
   );
-  for (const t of MANIFESTS) {
-    const path = resolve(ROOT, t.path);
-    if (!existsSync(path)) missing.push(t.path);
-    else if (t.read(readFileSync(path, 'utf8')) === undefined)
-      missing.push(`${t.path} (its version or an install pin)`);
+  for (const manifest of MANIFESTS) {
+    const path = resolve(ROOT, manifest.path);
+    if (!existsSync(path)) missing.push(manifest.path);
+    else if (manifest.read(readFileSync(path, 'utf8')) === undefined)
+      missing.push(`${manifest.path} (its version or an install pin)`);
   }
   return missing;
 }
@@ -286,9 +298,11 @@ function main() {
   //   --check X.Y.Z    verify every artifact AND the VERSION file match X.Y.Z (the release tag gate).
   const args = process.argv.slice(2);
   const check = args.includes('--check');
-  const setIdx = args.indexOf('--set');
-  const setVersion = setIdx >= 0 ? args[setIdx + 1] : null;
-  const versionArg = args.find((a, i) => SEMVER.test(a) && i !== setIdx + 1); // bare X.Y.Z (not the --set value)
+  const setIndex = args.indexOf('--set');
+  const setVersion = setIndex >= 0 ? args[setIndex + 1] : null;
+  const versionArg = args.find(
+    (arg, argIndex) => SEMVER.test(arg) && argIndex !== setIndex + 1,
+  ); // bare X.Y.Z (not the --set value)
 
   if (setVersion && !SEMVER.test(setVersion)) {
     console.error(
@@ -329,36 +343,38 @@ function main() {
   }
 
   // Version-bearing manifests.
-  for (const t of MANIFESTS) {
-    const path = resolve(ROOT, t.path);
+  for (const manifest of MANIFESTS) {
+    const path = resolve(ROOT, manifest.path);
     const text = readFileSync(path, 'utf8');
     if (check) {
-      const found = t.read(text);
-      if (found !== version) drift.push({file: t.path, found});
+      const found = manifest.read(text);
+      if (found !== version) drift.push({file: manifest.path, found});
       continue;
     }
-    const next = t.write(text, version);
+    const next = manifest.write(text, version);
     if (next !== text) {
       writeFileSync(path, next);
-      wrote.push(t.path);
+      wrote.push(manifest.path);
     }
   }
 
   // Per-package LICENSE + NOTICE mirrors.
   for (const dir of PACKAGE_DIRS) {
-    for (const f of LEGAL_FILES) {
-      const want = readFileSync(resolve(ROOT, f), 'utf8');
-      const dst = resolve(ROOT, dir, f);
-      const have = existsSync(dst) ? readFileSync(dst, 'utf8') : null;
+    for (const legalFile of LEGAL_FILES) {
+      const want = readFileSync(resolve(ROOT, legalFile), 'utf8');
+      const destination = resolve(ROOT, dir, legalFile);
+      const have = existsSync(destination)
+        ? readFileSync(destination, 'utf8')
+        : null;
       if (check) {
         if (have !== want)
           drift.push({
-            file: `${dir}/${f}`,
+            file: `${dir}/${legalFile}`,
             found: have == null ? '(missing)' : 'differs from root',
           });
       } else if (have !== want) {
-        writeFileSync(dst, want);
-        wrote.push(`${dir}/${f}`);
+        writeFileSync(destination, want);
+        wrote.push(`${dir}/${legalFile}`);
       }
     }
   }
@@ -368,7 +384,8 @@ function main() {
       console.error(
         `Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`,
       );
-      for (const d of drift) console.error(`  ${d.file}: ${d.found}`);
+      for (const entry of drift)
+        console.error(`  ${entry.file}: ${entry.found}`);
       console.error('Run `node tools/sync-version.mjs` and commit.');
       process.exit(1);
     }

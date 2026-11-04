@@ -29,10 +29,11 @@ import syntaxJsx from '@babel/plugin-syntax-jsx';
 
 /** Best-effort name of the function/component enclosing a path (for a stable, readable key). */
 function enclosingName(path) {
-  const fn = path.getFunctionParent();
-  if (!fn) return '_';
-  if (fn.node.id && fn.node.id.name) return fn.node.id.name; // function Foo() {}
-  const parent = fn.parentPath && fn.parentPath.node;
+  const functionPath = path.getFunctionParent();
+  if (!functionPath) return '_';
+  if (functionPath.node.id && functionPath.node.id.name)
+    return functionPath.node.id.name; // function Foo() {}
+  const parent = functionPath.parentPath && functionPath.parentPath.node;
   if (parent) {
     if (parent.type === 'VariableDeclarator' && parent.id && parent.id.name)
       return parent.id.name; // const Foo = () =>
@@ -48,7 +49,7 @@ function enclosingName(path) {
 }
 
 /** Babel plugin: useState(init) → __erPersistState("key", init), importing the helper when used. */
-function persistPlugin({types: t}) {
+function persistPlugin({types}) {
   return {
     name: 'er-persist-usestate',
     visitor: {
@@ -61,35 +62,37 @@ function persistPlugin({types: t}) {
           if (!state.erUsed) return;
           path.unshiftContainer(
             'body',
-            t.importDeclaration(
+            types.importDeclaration(
               [
-                t.importSpecifier(
-                  t.identifier('__erPersistState'),
-                  t.identifier('usePersistentState'),
+                types.importSpecifier(
+                  types.identifier('__erPersistState'),
+                  types.identifier('usePersistentState'),
                 ),
               ],
-              t.stringLiteral('embedded-react'),
+              types.stringLiteral('embedded-react'),
             ),
           );
         },
       },
       CallExpression(path, state) {
-        if (!t.isIdentifier(path.node.callee, {name: 'useState'})) return;
+        if (!types.isIdentifier(path.node.callee, {name: 'useState'})) return;
         // Only rewrite the real useState (an imported binding from react / embedded-react).
         const binding = path.scope.getBinding('useState');
         if (!binding || binding.kind !== 'module') return;
-        const decl = binding.path.parentPath && binding.path.parentPath.node;
-        const src = decl && decl.source && decl.source.value;
-        if (src !== 'react' && src !== 'embedded-react') return;
+        const declaration =
+          binding.path.parentPath && binding.path.parentPath.node;
+        const source =
+          declaration && declaration.source && declaration.source.value;
+        if (source !== 'react' && source !== 'embedded-react') return;
 
-        const fnName = enclosingName(path);
-        const idx = state.erCounters.get(fnName) || 0;
-        state.erCounters.set(fnName, idx + 1);
-        const key = `${state.opts.moduleId}::${fnName}#${idx}`;
+        const functionName = enclosingName(path);
+        const index = state.erCounters.get(functionName) || 0;
+        state.erCounters.set(functionName, index + 1);
+        const key = `${state.opts.moduleId}::${functionName}#${index}`;
 
         path.replaceWith(
-          t.callExpression(t.identifier('__erPersistState'), [
-            t.stringLiteral(key),
+          types.callExpression(types.identifier('__erPersistState'), [
+            types.stringLiteral(key),
             ...path.node.arguments,
           ]),
         );
@@ -101,20 +104,23 @@ function persistPlugin({types: t}) {
 }
 
 /**
- * Whether `absPath` is an app source file that should receive the persist transform: under the project
+ * Whether `absolutePath` is an app source file that should receive the persist transform: under the project
  * root, but NOT a dependency. The library itself lives under the project root in a consumer install
  * (`<project>/node_modules/embedded-react`), and transforming it would rewrite the `useState` *inside*
  * `usePersistentState` into a call to `usePersistentState` — infinite self-recursion → stack overflow.
  * Excluding `node_modules` is what keeps the helper (and react) untransformed in a published install,
  * not just in the monorepo (where the library happens to sit outside the demo's project root).
  *
- * @param {string} absPath          Absolute path of the module esbuild is loading.
- * @param {string} projectRootNorm  Project root, forward-slash normalized.
+ * @param {string} absolutePath           Absolute path of the module esbuild is loading.
+ * @param {string} projectRootNormalized  Project root, forward-slash normalized.
  * @returns {boolean}
  */
-export function shouldPersist(absPath, projectRootNorm) {
-  const p = absPath.replace(/\\/g, '/');
-  return p.startsWith(projectRootNorm) && !p.includes('/node_modules/');
+export function shouldPersist(absolutePath, projectRootNormalized) {
+  const normalizedPath = absolutePath.replace(/\\/g, '/');
+  return (
+    normalizedPath.startsWith(projectRootNormalized) &&
+    !normalizedPath.includes('/node_modules/')
+  );
 }
 
 /**
@@ -137,7 +143,7 @@ export function transformPersist(code, moduleId) {
     : isTs
       ? ['typescript']
       : ['jsx'];
-  const out = transformSync(code, {
+  const result = transformSync(code, {
     filename: moduleId,
     babelrc: false,
     configFile: false,
@@ -146,5 +152,5 @@ export function transformPersist(code, moduleId) {
     // syntaxJsx only enables jsx parsing; for ts/tsx we drive the parser via parserOpts above instead.
     plugins: [...(isTs ? [] : [syntaxJsx]), [persistPlugin, {moduleId}]],
   });
-  return out.code;
+  return result.code;
 }

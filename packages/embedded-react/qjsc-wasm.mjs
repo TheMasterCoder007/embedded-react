@@ -25,13 +25,14 @@ import {fileURLToPath} from 'node:url';
 import {existsSync} from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const UINT32_BYTES = 4;
 
 /**
  * Compile JS source to a QuickJS bytecode blob via the prebuilt sim module.
  *
  * @param {string} jsSource  The bundled app (esbuild IIFE output).
  * @param {string} [simDir]  Dir holding embedded-react.{js,wasm} (defaults to the package's sim/).
- * @param {{strip?: boolean}} [opts]  strip: true drops the embedded source text + debug tables
+ * @param {{strip?: boolean}} [options]  strip: true drops the embedded source text + debug tables
  *   (release/device — ~8x smaller blob); default false keeps them so dev-loop stack traces have
  *   line numbers. (A sim .wasm built before the strip parameter existed ignores it and always
  *   keeps debug info.)
@@ -58,10 +59,10 @@ export async function compileToBytecode(
   // QuickJS's JS_Eval requires the source buffer to be NUL-terminated (buf[len] === 0). Allocate one
   // extra byte and zero it: without the terminator the lexer reads an uninitialized sentinel and can
   // stop early ("unexpected token ''") — a heap-state-dependent failure that only bites on larger inputs.
-  const srcPtr = Module._malloc(bytes.length + 1);
-  Module.HEAPU8.set(bytes, srcPtr);
-  Module.HEAPU8[srcPtr + bytes.length] = 0;
-  const outLenPtr = Module._malloc(4);
+  const sourcePointer = Module._malloc(bytes.length + 1);
+  Module.HEAPU8.set(bytes, sourcePointer);
+  Module.HEAPU8[sourcePointer + bytes.length] = 0;
+  const outputLengthPointer = Module._malloc(UINT32_BYTES);
 
   const compile = Module.cwrap('er_web_compile_bytecode', 'number', [
     'number',
@@ -69,21 +70,31 @@ export async function compileToBytecode(
     'number',
     'number',
   ]);
-  const bcPtr = compile(srcPtr, bytes.length, outLenPtr, strip ? 1 : 0);
+  const bytecodePointer = compile(
+    sourcePointer,
+    bytes.length,
+    outputLengthPointer,
+    strip ? 1 : 0,
+  );
 
   // ALLOW_MEMORY_GROWTH=1 can detach views across the malloc/compile calls — read through a FRESH buffer.
   const heap = () => new Uint8Array(Module.HEAPU8.buffer);
-  const bcLen = new DataView(heap().buffer).getUint32(outLenPtr, true);
+  const bytecodeLength = new DataView(heap().buffer).getUint32(
+    outputLengthPointer,
+    true,
+  );
 
-  Module._free(srcPtr);
-  Module._free(outLenPtr);
-  if (!bcPtr || !bcLen) {
-    if (bcPtr) Module._free(bcPtr);
+  Module._free(sourcePointer);
+  Module._free(outputLengthPointer);
+  if (!bytecodePointer || !bytecodeLength) {
+    if (bytecodePointer) Module._free(bytecodePointer);
     throw new Error(
       'bytecode compile failed — check the bundle for a syntax error (see stderr above)',
     );
   }
-  const out = Buffer.from(heap().subarray(bcPtr, bcPtr + bcLen)); // copy out before freeing
-  Module._free(bcPtr);
-  return out;
+  const bytecode = Buffer.from(
+    heap().subarray(bytecodePointer, bytecodePointer + bytecodeLength),
+  ); // copy out before freeing
+  Module._free(bytecodePointer);
+  return bytecode;
 }

@@ -51,7 +51,8 @@ import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
 
 // QuickJS release the bytecode targets — MUST match the FetchContent pin in
 // bridges/quickjs/CMakeLists.txt and ER_QUICKJS_TAG in er_runtime.c. The loader rejects a mismatch.
-const QJS_TAG = 'v0.15.0';
+const QUICKJS_TAG = 'v0.15.0';
+const BYTES_PER_KILOBYTE = 1024;
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
 const repoRoot = resolve(here, '../..');
@@ -66,8 +67,8 @@ const entry = resolve(demoDir, 'index.jsx');
 if (!existsSync(entry)) {
   const available = existsSync(demosDir)
     ? readdirSync(demosDir, {withFileTypes: true})
-        .filter(d => d.isDirectory())
-        .map(d => d.name)
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
     : [];
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   console.error(`Available demos: ${available.join(', ') || '(none)'}`);
@@ -86,8 +87,8 @@ const images = new Map(); // name -> path
 const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
-  setup(b) {
-    b.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
+  setup(pluginBuild) {
+    pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');
       images.set(name, args.path);
       return {
@@ -95,7 +96,7 @@ const assetPlugin = {
         loader: 'js',
       };
     });
-    b.onLoad({filter: /\.(ttf|otf)$/i}, args => {
+    pluginBuild.onLoad({filter: /\.(ttf|otf)$/i}, args => {
       const family = basename(args.path).replace(/\.[^.]+$/, '');
       fonts.set(family, args.path);
       return {
@@ -103,7 +104,9 @@ const assetPlugin = {
         loader: 'js',
       };
     });
-    registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
+    registerSvgVectorLoader(pluginBuild, (name, svgPath) =>
+      images.set(name, svgPath),
+    ); // raster-fallback SVGs join the image pack
   },
 };
 
@@ -136,17 +139,19 @@ await build({
 console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
 
 // --- Precompile to QuickJS bytecode -------------------------------------------------------------
-const qbcPath = resolve(distDir, 'app.bundle.qbc');
-const cc = spawnSync(compileBin, [bundlePath, qbcPath], {stdio: 'inherit'});
-if (cc.status !== 0) {
+const bytecodePath = resolve(distDir, 'app.bundle.qbc');
+const compileResult = spawnSync(compileBin, [bundlePath, bytecodePath], {
+  stdio: 'inherit',
+});
+if (compileResult.status !== 0) {
   console.error('Bytecode compile failed.');
   process.exit(1);
 }
-const bytecode = readFileSync(qbcPath);
+const bytecode = readFileSync(bytecodePath);
 
 // --- Bake imported assets into an ERPK pack (same sizing rules as build.mjs / sim.mjs) ----------
-const bundleSrc = readFileSync(bundlePath, 'utf8');
-const usedSizes = analyzeFontSizes(bundleSrc);
+const bundleSource = readFileSync(bundlePath, 'utf8');
+const usedSizes = analyzeFontSizes(bundleSource);
 
 let config = {};
 const configPath = resolve(demoDir, 'assets.config.js');
@@ -162,25 +167,28 @@ const imageJobs = [...images.entries()].map(([name, path]) => ({
   format: imageConfig[name]?.format,
 }));
 
-const bakedImages = imageJobs.map(i => bakeImage(i));
-const bakedFonts = fontJobs.map(f => bakeFont(f));
-warnMissingGlyphs({source: bundleSrc, fonts: bakedFonts});
+const bakedImages = imageJobs.map(imageJob => bakeImage(imageJob));
+const bakedFonts = fontJobs.map(fontJob => bakeFont(fontJob));
+warnMissingGlyphs({source: bundleSource, fonts: bakedFonts});
 warnFontSizes({used: usedSizes, fonts: bakedFonts});
 const assetPack =
   bakedImages.length || bakedFonts.length
     ? emitAssetPack({images: bakedImages, fonts: bakedFonts})
     : null;
-const fontSizeCount = bakedFonts.reduce((n, f) => n + f.sizes.length, 0);
+const fontSizeCount = bakedFonts.reduce(
+  (count, font) => count + font.sizes.length,
+  0,
+);
 
 // --- Wrap into the ERCF container ---------------------------------------------------------------
-const container = emitContainer({bytecode, assetPack, qjsTag: QJS_TAG});
+const container = emitContainer({bytecode, assetPack, qjsTag: QUICKJS_TAG});
 const outPath = resolve(distDir, 'app.erpkg');
 writeFileSync(outPath, container);
 
-const kb = n => `${(n / 1024).toFixed(1)} KB`;
+const kb = byteCount => `${(byteCount / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
 console.log(
   `Packed config -> dist/app.erpkg (${kb(container.length)})\n` +
-    `  qjs ${QJS_TAG} · bytecode ${kb(bytecode.length)}` +
+    `  qjs ${QUICKJS_TAG} · bytecode ${kb(bytecode.length)}` +
     (assetPack
       ? ` · assets ${kb(assetPack.length)} (${bakedImages.length} image(s), ${fontSizeCount} font size(s))`
       : ' · no assets'),

@@ -54,15 +54,15 @@ if (!existsSync(entry)) {
 
 // Locate the built simulator binary (override with ER_SIM_BIN).
 const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-const simBin =
+const simulatorBinary =
   process.env.ER_SIM_BIN ||
   resolve(
     repoRoot,
     'tools/simulator/build',
     `embedded-react-simulator${exeSuffix}`,
   );
-if (!existsSync(simBin)) {
-  console.error(`Simulator binary not found at:\n  ${simBin}\n`);
+if (!existsSync(simulatorBinary)) {
+  console.error(`Simulator binary not found at:\n  ${simulatorBinary}\n`);
   console.error('Build it once (then re-run `npm run sim`):');
   console.error(
     '  cmake -S tools/simulator -B tools/simulator/build [-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake]',
@@ -72,10 +72,10 @@ if (!existsSync(simBin)) {
   process.exit(1);
 }
 
-const assetName = p => basename(p).replace(/\.[^.]+$/, '');
-const mtime = p => {
+const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
+const mtime = filePath => {
   try {
-    return statSync(p).mtimeMs;
+    return statSync(filePath).mtimeMs;
   } catch {
     return 0;
   }
@@ -85,20 +85,24 @@ const mtime = p => {
 // onEnd. The bundle still references the baked names (the import resolves to the file basename).
 const images = new Map(); // name -> path
 const fonts = new Map(); // family -> path
-let lastAssetSig = null; // skip re-baking the pack on pure-JS saves (font rasterization is the cost)
+let lastAssetSignature = null; // skip re-baking the pack on pure-JS saves (font rasterization is the cost)
 
 async function bakePack() {
   // Font sizes: bake exactly the sizes the bundle uses, constants folded (engine has no rasterizer).
-  const bundleSrc = readFileSync(bundlePath, 'utf8');
-  const usedSizes = analyzeFontSizes(bundleSrc);
+  const bundleSource = readFileSync(bundlePath, 'utf8');
+  const usedSizes = analyzeFontSizes(bundleSource);
 
-  let cfg = {};
-  const cp = resolve(demoDir, 'assets.config.js');
-  if (existsSync(cp))
-    cfg =
-      (await import(`${pathToFileURL(cp).href}?t=${mtime(cp)}`)).default || {};
-  const fontConfig = cfg.fonts || {};
-  const imageConfig = cfg.images || {};
+  let assetsConfig = {};
+  const assetsConfigPath = resolve(demoDir, 'assets.config.js');
+  if (existsSync(assetsConfigPath))
+    assetsConfig =
+      (
+        await import(
+          `${pathToFileURL(assetsConfigPath).href}?t=${mtime(assetsConfigPath)}`
+        )
+      ).default || {};
+  const fontConfig = assetsConfig.fonts || {};
+  const imageConfig = assetsConfig.images || {};
 
   const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
   const imageJobs = [...images.entries()].map(([name, path]) => ({
@@ -110,42 +114,44 @@ async function bakePack() {
   // Only re-bake when the asset inputs actually changed (avoids re-rasterizing fonts on every save).
   // The app's text counts as an input: new characters and new font sizes must both be re-checked
   // against the bake, even when no font or image file changed.
-  const sig = JSON.stringify({
-    t: textSignature(bundleSrc),
-    z: fontSizeSignature(usedSizes),
-    i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
-    f: fontJobs
-      .map(j => [
-        j.family,
-        j.path,
-        mtime(j.path),
-        j.sizes,
-        j.bpp,
-        j.glyphs,
-        j.extraGlyphs,
+  const assetSignature = JSON.stringify({
+    text: textSignature(bundleSource),
+    fontSizes: fontSizeSignature(usedSizes),
+    images: imageJobs
+      .map(job => [job.name, job.path, mtime(job.path), job.format])
+      .sort(),
+    fonts: fontJobs
+      .map(job => [
+        job.family,
+        job.path,
+        mtime(job.path),
+        job.sizes,
+        job.bpp,
+        job.glyphs,
+        job.extraGlyphs,
       ])
       .sort(),
   });
-  if (sig === lastAssetSig) return;
-  lastAssetSig = sig;
+  if (assetSignature === lastAssetSignature) return;
+  lastAssetSignature = assetSignature;
 
   try {
-    const s = bakeAssetPack({
+    const summary = bakeAssetPack({
       images: imageJobs,
       fonts: fontJobs,
       outPath: packPath,
-      source: bundleSrc,
+      source: bundleSource,
       usedSizes,
     });
     console.log(
-      `  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B → dist/assets.pack`,
+      `  assets → ${summary.images} image(s), ${summary.fonts} font size(s), ${summary.bytes} B → dist/assets.pack`,
     );
-  } catch (e) {
-    console.error(`  asset bake failed: ${e.message}`);
+  } catch (error) {
+    console.error(`  asset bake failed: ${error.message}`);
   }
 }
 
-const ctx = await context({
+const buildContext = await context({
   entryPoints: [entry],
   bundle: true,
   format: 'iife',
@@ -158,27 +164,28 @@ const ctx = await context({
   plugins: [
     {
       name: 'embedded-react-sim',
-      setup(b) {
-        b.onStart(() => {
+      setup(pluginBuild) {
+        pluginBuild.onStart(() => {
           images.clear();
           fonts.clear();
         });
         // App files only (not the library/React): rewrite useState → a persisting helper so state
         // survives reload transparently. Library/node_modules files fall through to esbuild untouched.
-        b.onLoad({filter: /\.(jsx?|tsx?)$/}, args => {
-          const norm = args.path.replace(/\\/g, '/');
-          if (!norm.startsWith(demoDir.replace(/\\/g, '/'))) return undefined; // not app code
+        pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args => {
+          const normalizedPath = args.path.replace(/\\/g, '/');
+          if (!normalizedPath.startsWith(demoDir.replace(/\\/g, '/')))
+            return undefined; // not app code
           try {
             const code = transformPersist(
               readFileSync(args.path, 'utf8'),
               relative(demoDir, args.path).replace(/\\/g, '/'),
             );
             return {contents: code, loader: 'jsx'};
-          } catch (e) {
-            return {errors: [{text: `persist transform: ${e.message}`}]};
+          } catch (error) {
+            return {errors: [{text: `persist transform: ${error.message}`}]};
           }
         });
-        b.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
+        pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
           const name = assetName(args.path);
           images.set(name, args.path);
           return {
@@ -186,7 +193,7 @@ const ctx = await context({
             loader: 'js',
           };
         });
-        b.onLoad({filter: /\.(ttf|otf)$/i}, args => {
+        pluginBuild.onLoad({filter: /\.(ttf|otf)$/i}, args => {
           const family = assetName(args.path);
           fonts.set(family, args.path);
           return {
@@ -194,11 +201,13 @@ const ctx = await context({
             loader: 'js',
           };
         });
-        registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
-        b.onEnd(async r => {
-          if (r.errors.length) {
+        registerSvgVectorLoader(pluginBuild, (name, svgPath) =>
+          images.set(name, svgPath),
+        ); // raster-fallback SVGs join the image pack
+        pluginBuild.onEnd(async result => {
+          if (result.errors.length) {
             console.error(
-              `✗ build failed (${r.errors.length} error(s)) — fix and save to retry`,
+              `✗ build failed (${result.errors.length} error(s)) — fix and save to retry`,
             );
             return;
           }
@@ -213,23 +222,25 @@ const ctx = await context({
   logLevel: 'silent',
 });
 
-await ctx.rebuild(); // initial build → bundle + pack
-await ctx.watch();
+await buildContext.rebuild(); // initial build → bundle + pack
+await buildContext.watch();
 console.log(
   `Building demo "${demo}" — watching for changes. Close the window or Ctrl-C to quit.`,
 );
 
 // Launch the simulator pointed at the watched bundle + asset pack.
-const sim = spawn(simBin, [bundlePath, packPath], {stdio: 'inherit'});
+const simulator = spawn(simulatorBinary, [bundlePath, packPath], {
+  stdio: 'inherit',
+});
 const shutdown = async () => {
   try {
-    await ctx.dispose();
+    await buildContext.dispose();
   } catch {}
   try {
-    sim.kill();
+    simulator.kill();
   } catch {}
   process.exit(0);
 };
-sim.on('exit', shutdown);
+simulator.on('exit', shutdown);
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

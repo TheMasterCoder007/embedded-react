@@ -30,10 +30,10 @@ import {existsSync, mkdirSync} from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
-const JS = resolve(REPO, 'packages/embedded-react'); // where esbuild + react + the library live
+const PACKAGE_DIR = resolve(REPO, 'packages/embedded-react'); // where esbuild + react + the library live
 
 // esbuild + react + the reconciler are installed in the JS package, not here — resolve from there.
-const require = createRequire(resolve(JS, 'package.json'));
+const require = createRequire(resolve(PACKAGE_DIR, 'package.json'));
 const {build} = require('esbuild');
 const demo = process.argv[2] || process.env.DEMO || 'watch-face';
 const entry = resolve(REPO, 'demos', demo, 'index.jsx');
@@ -54,14 +54,16 @@ try {
     platform: 'neutral',
     target: 'es2020',
     jsx: 'automatic',
-    alias: {'embedded-react': resolve(JS, 'src/embedded-react/index.js')},
-    nodePaths: [resolve(JS, 'node_modules')],
+    alias: {
+      'embedded-react': resolve(PACKAGE_DIR, 'src/embedded-react/index.js'),
+    },
+    nodePaths: [resolve(PACKAGE_DIR, 'node_modules')],
     define: {'process.env.NODE_ENV': '"production"'},
     legalComments: 'none',
     logLevel: 'info',
   });
   console.log(`✓ bundled demos/${demo} → tools/web-sim/public/app.js`);
-} catch (e) {
-  console.error(`bundle failed: ${e.message}`);
+} catch (error) {
+  console.error(`bundle failed: ${error.message}`);
   process.exit(1);
 }

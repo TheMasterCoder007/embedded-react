@@ -56,8 +56,11 @@ const {transformPersist, shouldPersist} = await import(
 
 const REACT_PIN = Object.fromEntries(
   ['react', 'react-reconciler', 'scheduler']
-    .map(p => [p, resolve(HERE, 'node_modules', p)])
-    .filter(([, p]) => existsSync(p)),
+    .map(packageName => [
+      packageName,
+      resolve(HERE, 'node_modules', packageName),
+    ])
+    .filter(([, pinPath]) => existsSync(pinPath)),
 );
 
 const MIME = {
@@ -66,10 +69,10 @@ const MIME = {
   '.wasm': 'application/wasm',
   '.pack': 'application/octet-stream',
 };
-const assetName = p => basename(p).replace(/\.[^.]+$/, '');
-const mtime = p => {
+const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
+const mtime = filePath => {
   try {
-    return statSync(p).mtimeMs;
+    return statSync(filePath).mtimeMs;
   } catch {
     return 0;
   }
@@ -97,23 +100,26 @@ function createBundle({
 }) {
   const bundlePath = resolve(outDir, 'app.js');
   const packPath = resolve(outDir, 'assets.pack');
-  const projNorm = projectRoot.replace(/\\/g, '/');
+  const projectRootNormalized = projectRoot.replace(/\\/g, '/');
   const images = new Map();
   const fonts = new Map();
-  let lastAssetSig = null;
+  let lastAssetSignature = null;
 
   async function bakePack() {
-    const bundleSrc = readFileSync(bundlePath, 'utf8');
-    const usedSizes = analyzeFontSizes(bundleSrc);
+    const bundleSource = readFileSync(bundlePath, 'utf8');
+    const usedSizes = analyzeFontSizes(bundleSource);
 
-    let cfg = {};
-    const cp = resolve(projectRoot, 'assets.config.js');
-    if (existsSync(cp))
-      cfg =
-        (await import(`${pathToFileURL(cp).href}?t=${mtime(cp)}`)).default ||
-        {};
-    const fontConfig = cfg.fonts || {};
-    const imageConfig = cfg.images || {};
+    let assetsConfig = {};
+    const assetsConfigPath = resolve(projectRoot, 'assets.config.js');
+    if (existsSync(assetsConfigPath))
+      assetsConfig =
+        (
+          await import(
+            `${pathToFileURL(assetsConfigPath).href}?t=${mtime(assetsConfigPath)}`
+          )
+        ).default || {};
+    const fontConfig = assetsConfig.fonts || {};
+    const imageConfig = assetsConfig.images || {};
 
     const fontJobs = resolveFontJobs(fonts, fontConfig, usedSizes.sizes);
     const imageJobs = [...images.entries()].map(([name, path]) => ({
@@ -124,44 +130,46 @@ function createBundle({
 
     // The app's text is an asset input too: new characters and new font sizes must both be
     // re-checked against the bake even when no font or image file changed.
-    const sig = JSON.stringify({
-      t: textSignature(bundleSrc),
-      z: fontSizeSignature(usedSizes),
-      i: imageJobs.map(j => [j.name, j.path, mtime(j.path), j.format]).sort(),
-      f: fontJobs
-        .map(j => [
-          j.family,
-          j.path,
-          mtime(j.path),
-          j.sizes,
-          j.bpp,
-          j.glyphs,
-          j.extraGlyphs,
+    const assetSignature = JSON.stringify({
+      text: textSignature(bundleSource),
+      fontSizes: fontSizeSignature(usedSizes),
+      images: imageJobs
+        .map(job => [job.name, job.path, mtime(job.path), job.format])
+        .sort(),
+      fonts: fontJobs
+        .map(job => [
+          job.family,
+          job.path,
+          mtime(job.path),
+          job.sizes,
+          job.bpp,
+          job.glyphs,
+          job.extraGlyphs,
         ])
         .sort(),
     });
-    if (sig === lastAssetSig) return;
-    lastAssetSig = sig;
+    if (assetSignature === lastAssetSignature) return;
+    lastAssetSignature = assetSignature;
     if (!imageJobs.length && !fontJobs.length) {
       // Built-in font only → no pack, but its glyph and size coverage still bind.
-      warnMissingGlyphs({source: bundleSrc});
+      warnMissingGlyphs({source: bundleSource});
       warnFontSizes({used: usedSizes});
       return;
     }
 
     try {
-      const s = bakeAssetPack({
+      const summary = bakeAssetPack({
         images: imageJobs,
         fonts: fontJobs,
         outPath: packPath,
-        source: bundleSrc,
+        source: bundleSource,
         usedSizes,
       });
       console.log(
-        `  assets → ${s.images} image(s), ${s.fonts} font size(s), ${s.bytes} B`,
+        `  assets → ${summary.images} image(s), ${summary.fonts} font size(s), ${summary.bytes} B`,
       );
-    } catch (e) {
-      console.error(`  asset bake failed: ${e.message}`);
+    } catch (error) {
+      console.error(`  asset bake failed: ${error.message}`);
     }
   }
 
@@ -181,52 +189,63 @@ function createBundle({
     plugins: [
       {
         name: 'embedded-react-websim',
-        setup(b) {
-          b.onStart(() => {
+        setup(pluginBuild) {
+          pluginBuild.onStart(() => {
             images.clear();
             fonts.clear();
           });
-          b.onLoad({filter: /\.(jsx?|tsx?)$/}, a => {
+          pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, loadArgs => {
             // Transform ONLY the app's own source — never dependencies (see shouldPersist: excluding
             // node_modules is what stops the library's usePersistentState being rewritten to call itself).
-            if (!persist || !shouldPersist(a.path, projNorm)) return undefined;
+            if (
+              !persist ||
+              !shouldPersist(loadArgs.path, projectRootNormalized)
+            )
+              return undefined;
             try {
               // Match the esbuild loader to the source extension so TS type syntax (preserved by the
               // persist transform) is stripped: .tsx → tsx, .ts → ts, .jsx/.js → jsx.
-              const loader = a.path.endsWith('.tsx')
+              const loader = loadArgs.path.endsWith('.tsx')
                 ? 'tsx'
-                : a.path.endsWith('.ts')
+                : loadArgs.path.endsWith('.ts')
                   ? 'ts'
                   : 'jsx';
               return {
                 contents: transformPersist(
-                  readFileSync(a.path, 'utf8'),
-                  relative(projectRoot, a.path).replace(/\\/g, '/'),
+                  readFileSync(loadArgs.path, 'utf8'),
+                  relative(projectRoot, loadArgs.path).replace(/\\/g, '/'),
                 ),
                 loader,
               };
-            } catch (e) {
-              return {errors: [{text: `persist transform: ${e.message}`}]};
+            } catch (error) {
+              return {errors: [{text: `persist transform: ${error.message}`}]};
             }
           });
-          b.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, a => {
-            images.set(assetName(a.path), a.path);
+          pluginBuild.onLoad(
+            {filter: /\.(png|jpe?g|webp|gif|bmp)$/i},
+            loadArgs => {
+              images.set(assetName(loadArgs.path), loadArgs.path);
+              return {
+                contents: `module.exports = ${JSON.stringify(assetName(loadArgs.path))};`,
+                loader: 'js',
+              };
+            },
+          );
+          pluginBuild.onLoad({filter: /\.(ttf|otf)$/i}, loadArgs => {
+            fonts.set(assetName(loadArgs.path), loadArgs.path);
             return {
-              contents: `module.exports = ${JSON.stringify(assetName(a.path))};`,
+              contents: `module.exports = ${JSON.stringify(assetName(loadArgs.path))};`,
               loader: 'js',
             };
           });
-          b.onLoad({filter: /\.(ttf|otf)$/i}, a => {
-            fonts.set(assetName(a.path), a.path);
-            return {
-              contents: `module.exports = ${JSON.stringify(assetName(a.path))};`,
-              loader: 'js',
-            };
-          });
-          registerSvgVectorLoader(b, (name, p) => images.set(name, p)); // raster-fallback SVGs join the image pack
-          b.onEnd(async r => {
-            if (r.errors.length) {
-              console.error(`✗ build failed (${r.errors.length} error(s))`);
+          registerSvgVectorLoader(pluginBuild, (name, svgPath) =>
+            images.set(name, svgPath),
+          ); // raster-fallback SVGs join the image pack
+          pluginBuild.onEnd(async result => {
+            if (result.errors.length) {
+              console.error(
+                `✗ build failed (${result.errors.length} error(s))`,
+              );
               return;
             }
             await bakePack();
@@ -283,7 +302,7 @@ export async function runDevServer({
 }) {
   const clients = new Set();
   const broadcastReload = () => {
-    for (const res of clients) res.write('data: reload\n\n');
+    for (const response of clients) response.write('data: reload\n\n');
   };
 
   const {options} = createBundle({
@@ -299,38 +318,38 @@ export async function runDevServer({
     },
   });
 
-  const ctx = await esbuild.context(options);
-  await ctx.rebuild();
-  await ctx.watch();
+  const buildContext = await esbuild.context(options);
+  await buildContext.rebuild();
+  await buildContext.watch();
 
   // Serve the host page; embedded-react.{js,wasm} from simDir, the freshly bundled app.js/assets.pack from
   // outDir. The page references ./public/<name>. window.__erHot is injected so the page connects to /reload.
-  const send = async (res, file) => {
+  const send = async (response, file) => {
     try {
       const body = await readFile(file);
-      res
+      response
         .writeHead(200, {
           'content-type': MIME[extname(file)] || 'application/octet-stream',
           'cache-control': 'no-store',
         })
         .end(body);
     } catch {
-      res.writeHead(404).end('not found');
+      response.writeHead(404).end('not found');
     }
   };
-  const server = createServer(async (req, res) => {
+  const server = createServer(async (request, response) => {
     const path = decodeURIComponent(
-      new URL(req.url, 'http://localhost').pathname,
+      new URL(request.url, 'http://localhost').pathname,
     );
     if (path === '/reload') {
-      res.writeHead(200, {
+      response.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
         connection: 'keep-alive',
       });
-      res.write('retry: 1000\n\n');
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
+      response.write('retry: 1000\n\n');
+      clients.add(response);
+      request.on('close', () => clients.delete(response));
       return;
     }
     if (path === '/' || path === '/index.html') {
@@ -339,14 +358,14 @@ export async function runDevServer({
           '</head>',
           '<script>window.__erHot=true</script></head>',
         );
-        res
+        response
           .writeHead(200, {
             'content-type': MIME['.html'],
             'cache-control': 'no-store',
           })
           .end(html);
       } catch {
-        res.writeHead(404).end('not found');
+        response.writeHead(404).end('not found');
       }
       return;
     }
@@ -356,23 +375,23 @@ export async function runDevServer({
         name === 'embedded-react.js' || name === 'embedded-react.wasm'
           ? simDir
           : outDir;
-      return void send(res, resolve(dir, name));
+      return void send(response, resolve(dir, name));
     }
-    res.writeHead(404).end('not found');
+    response.writeHead(404).end('not found');
   });
 
-  await new Promise(r => server.listen(port, r));
+  await new Promise(onListening => server.listen(port, onListening));
   console.log(`embedded-react WASM sim → http://localhost:${port}/`);
   console.log(`watching ${label} — edit & save to hot-reload. Ctrl-C to quit.`);
 
   const shutdown = async () => {
     try {
-      await ctx.dispose();
+      await buildContext.dispose();
     } catch {}
     server.close();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  return {ctx, server};
+  return {ctx: buildContext, server};
 }

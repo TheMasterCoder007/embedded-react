@@ -48,11 +48,16 @@ const clean = process.argv.includes('--clean');
 const buildType = debug ? 'Debug' : 'Release';
 
 const run = cmd => execSync(cmd, {stdio: 'inherit', cwd: HERE});
-const has = c => {
+const has = command => {
   try {
-    execSync(process.platform === 'win32' ? `where ${c}` : `command -v ${c}`, {
-      stdio: 'ignore',
-    });
+    execSync(
+      process.platform === 'win32'
+        ? `where ${command}`
+        : `command -v ${command}`,
+      {
+        stdio: 'ignore',
+      },
+    );
     return true;
   } catch {
     return false;
@@ -67,14 +72,14 @@ function pickGenerator() {
 }
 
 /** Where an Emscripten install keeps its CMake toolchain file. */
-const TOOLCHAIN_REL = 'cmake/Modules/Platform/Emscripten.cmake';
+const TOOLCHAIN_RELATIVE_PATH = 'cmake/Modules/Platform/Emscripten.cmake';
 
 /** Resolve symlinks where we can; a path that doesn't exist comes back unchanged. */
-const real = p => {
+const real = filePath => {
   try {
-    return realpathSync(p);
+    return realpathSync(filePath);
   } catch {
-    return p;
+    return filePath;
   }
 };
 
@@ -89,14 +94,14 @@ const real = p => {
 function toolchainNear(dir) {
   if (!dir) return null;
   for (const base of new Set([dir, real(dir)])) {
-    for (const cand of [
+    for (const candidate of [
       base,
       resolve(base, 'upstream/emscripten'),
       resolve(base, '../libexec'),
       resolve(base, '..'),
     ]) {
-      const p = resolve(cand, TOOLCHAIN_REL);
-      if (existsSync(p)) return p;
+      const toolchainPath = resolve(candidate, TOOLCHAIN_RELATIVE_PATH);
+      if (existsSync(toolchainPath)) return toolchainPath;
     }
   }
   return null;
@@ -105,11 +110,13 @@ function toolchainNear(dir) {
 /** First non-empty line of `cmd`'s stdout, or null if it fails. */
 function firstLine(cmd) {
   try {
-    const out = execSync(cmd, {
+    const output = execSync(cmd, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return (out.split(/\r?\n/).find(l => l.trim()) || '').trim() || null;
+    return (
+      (output.split(/\r?\n/).find(line => line.trim()) || '').trim() || null
+    );
   } catch {
     return null;
   }
@@ -122,9 +129,11 @@ function firstLine(cmd) {
 function findToolchain() {
   const forced = process.env.EMSCRIPTEN_ROOT;
   if (forced) {
-    const t = toolchainNear(forced);
-    if (t) return t;
-    console.error(`EMSCRIPTEN_ROOT=${forced} has no ${TOOLCHAIN_REL}.`);
+    const toolchainPath = toolchainNear(forced);
+    if (toolchainPath) return toolchainPath;
+    console.error(
+      `EMSCRIPTEN_ROOT=${forced} has no ${TOOLCHAIN_RELATIVE_PATH}.`,
+    );
     console.error('Set it to the output of `em-config EMSCRIPTEN_ROOT`.');
     process.exit(1);
   }
@@ -136,8 +145,8 @@ function findToolchain() {
     emcc && dirname(real(emcc)), // through the PATH symlink, to the install's own bin/
     emcc && dirname(emcc),
   ]) {
-    const t = dir && toolchainNear(dir);
-    if (t) return t;
+    const toolchainPath = dir && toolchainNear(dir);
+    if (toolchainPath) return toolchainPath;
   }
   return null;
 }
@@ -145,7 +154,7 @@ function findToolchain() {
 const toolchain = findToolchain();
 if (!toolchain) {
   console.error(
-    `Could not find the Emscripten CMake toolchain (${TOOLCHAIN_REL}).`,
+    `Could not find the Emscripten CMake toolchain (${TOOLCHAIN_RELATIVE_PATH}).`,
   );
   console.error(
     'Checked $EMSCRIPTEN_ROOT, $EMSDK, `em-config EMSCRIPTEN_ROOT` and `emcc` on PATH.',
@@ -159,8 +168,8 @@ if (!toolchain) {
   process.exit(1);
 }
 
-const gen = pickGenerator();
-const genArg = gen ? `-G "${gen}" ` : '';
+const generator = pickGenerator();
+const generatorArg = generator ? `-G "${generator}" ` : '';
 
 // A cache from a failed/native configure (wrong compiler) or a different generator can't be reconfigured in
 // place — wipe it. (Also honor an explicit --clean.)
@@ -169,37 +178,39 @@ let needWipe = clean;
 let toolchainArg = toolchain;
 if (!needWipe && existsSync(cachePath)) {
   const cache = readFileSync(cachePath, 'utf8');
-  const cachedGen = (cache.match(/^CMAKE_GENERATOR:INTERNAL=(.*)$/m) || [])[1];
-  const cachedTc =
+  const cachedGenerator = (cache.match(/^CMAKE_GENERATOR:INTERNAL=(.*)$/m) ||
+    [])[1];
+  const cachedToolchain =
     (cache.match(/^CMAKE_TOOLCHAIN_FILE:[^=]*=(.*)$/m) || [])[1] || '';
-  const genOk = !gen || cachedGen === gen;
+  const generatorMatches = !generator || cachedGenerator === generator;
   // Key off the toolchain file, not CMAKE_C_COMPILER: the Emscripten toolchain re-forces the compilers
   // on every configure and never caches that variable, so testing it wiped the cache — and paid for a
   // full rebuild — on every single run. A native/failed cache has no toolchain line at all.
-  const tcOk = !!cachedTc && real(cachedTc) === real(toolchain);
-  needWipe = !genOk || !tcOk;
+  const toolchainMatches =
+    !!cachedToolchain && real(cachedToolchain) === real(toolchain);
+  needWipe = !generatorMatches || !toolchainMatches;
   // Same install spelled differently (Homebrew's opt/ symlink vs the versioned Cellar path): keep the
   // cache's spelling so CMake doesn't see the compiler move under it.
-  if (!needWipe) toolchainArg = cachedTc;
+  if (!needWipe) toolchainArg = cachedToolchain;
 }
 if (needWipe) {
   rmSync(BUILD_DIR, {recursive: true, force: true});
 }
 mkdirSync(OUT_DIR, {recursive: true});
 console.log(
-  `cmake (Emscripten, ${buildType}${gen ? `, ${gen}` : ''}) → ${OUT_DIR}`,
+  `cmake (Emscripten, ${buildType}${generator ? `, ${generator}` : ''}) → ${OUT_DIR}`,
 );
 console.log(`  toolchain: ${toolchainArg}`);
 try {
   // Configure once; re-runs are cheap and pick up CMakeLists edits. First configure clones + builds
   // QuickJS-ng (FetchContent) — a few minutes; subsequent builds are incremental.
   run(
-    `cmake -S "${HERE}" -B "${BUILD_DIR}" ${genArg}-DCMAKE_TOOLCHAIN_FILE="${toolchainArg}" -DCMAKE_BUILD_TYPE=${buildType}`,
+    `cmake -S "${HERE}" -B "${BUILD_DIR}" ${generatorArg}-DCMAKE_TOOLCHAIN_FILE="${toolchainArg}" -DCMAKE_BUILD_TYPE=${buildType}`,
   );
   run(`cmake --build "${BUILD_DIR}" -j`);
-} catch (e) {
+} catch (error) {
   console.error('\nbuild failed (see output above).');
-  process.exit(e.status || 1);
+  process.exit(error.status || 1);
 }
 
 // Stage a .cjs copy alongside the .js: the host page loads the .js as a classic <script>, but the npm
@@ -223,10 +234,13 @@ stage(OUT_DIR);
 
 // Stage the prebuilt module + host page into the npm package's sim/ dir so `npx embedded-react dev` ships
 // with it (the `files` whitelist includes sim/). This is what CI builds + publishes; not committed.
-const PKG_SIM = resolve(HERE, '../../packages/embedded-react/sim');
-mkdirSync(PKG_SIM, {recursive: true});
-stage(PKG_SIM);
-copyFileSync(resolve(HERE, 'index.html'), resolve(PKG_SIM, 'index.html'));
+const PACKAGE_SIM_DIR = resolve(HERE, '../../packages/embedded-react/sim');
+mkdirSync(PACKAGE_SIM_DIR, {recursive: true});
+stage(PACKAGE_SIM_DIR);
+copyFileSync(
+  resolve(HERE, 'index.html'),
+  resolve(PACKAGE_SIM_DIR, 'index.html'),
+);
 
 console.log(
   '✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + packages/embedded-react/sim/',
