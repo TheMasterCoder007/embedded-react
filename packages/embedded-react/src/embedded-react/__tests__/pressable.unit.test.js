@@ -22,12 +22,12 @@ const calls = {
   setEvent: [],
   setProps: [],
 };
-let idc = 0;
+let lastHandle = 0;
 globalThis.IS_REACT_ACT_ENVIRONMENT = false;
 globalThis.NativeUI = {
   createNode: type => {
     calls.createNode.push(type);
-    return ++idc;
+    return ++lastHandle;
   },
   setProps: (handle, props) => {
     calls.setProps.push({handle, props});
@@ -37,7 +37,8 @@ globalThis.NativeUI = {
   insertBefore: () => {},
   removeChild: () => {},
   destroyNode: () => {},
-  setEvent: (h, key, fn) => calls.setEvent.push({h, key, fn}),
+  setEvent: (handle, key, handler) =>
+    calls.setEvent.push({handle, key, handler}),
   setTextSpans: () => {},
   setVectorOps: () => {},
   animUnbind: () => {},
@@ -73,15 +74,15 @@ function mount(tree) {
 }
 
 const handler = key => {
-  const found = calls.setEvent.filter(e => e.key === key).pop();
-  return found && found.fn;
+  const found = calls.setEvent.filter(call => call.key === key).pop();
+  return found && found.handler;
 };
 
 beforeEach(() => {
   calls.createNode.length = 0;
   calls.setEvent.length = 0;
   calls.setProps.length = 0;
-  idc = 0;
+  lastHandle = 0;
 });
 
 describe('Pressable host node creation', () => {
@@ -143,7 +144,7 @@ describe('Pressable disabled handler withholding', () => {
       }),
     );
 
-    const live = calls.setEvent.filter(e => e.fn);
+    const live = calls.setEvent.filter(call => call.handler);
     expect(live).toEqual([]);
   });
 

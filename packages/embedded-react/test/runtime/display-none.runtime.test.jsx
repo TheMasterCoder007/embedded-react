@@ -55,7 +55,7 @@ function Page({counter}) {
   return (
     <View
       style={{width: PAGE_W, height: PAGE_H}}
-      onLayout={e => (contentRect = e.layout)}>
+      onLayout={event => (contentRect = event.layout)}>
       <Text>page {counter}</Text>
     </View>
   );
@@ -69,7 +69,7 @@ function App({hidden, counter, useVisibleProp}) {
       <View
         style={style}
         visible={visible}
-        onLayout={e => (pageRect = e.layout)}>
+        onLayout={event => (pageRect = event.layout)}>
         <Page counter={counter} />
       </View>
     </View>
@@ -79,8 +79,8 @@ function App({hidden, counter, useVisibleProp}) {
 const root = createRoot({width: screen.width, height: screen.height});
 
 /** Renders and pumps, so React's passive effects (the mount/unmount counters) have flushed. */
-const render = el => {
-  root.render(el);
+const render = element => {
+  root.render(element);
   NativeUI.tick(0); // passive effects are scheduled during commit and run on a pump
 };
 
@@ -179,20 +179,20 @@ let creates = 0;
 let destroys = 0;
 const realCreate = NativeUI.createNode;
 const realDestroy = NativeUI.destroyNode;
-NativeUI.createNode = t => {
+NativeUI.createNode = type => {
   creates++;
-  return realCreate(t);
+  return realCreate(type);
 };
-NativeUI.destroyNode = h => {
+NativeUI.destroyNode = handle => {
   destroys++;
-  return realDestroy(h);
+  return realDestroy(handle);
 };
 
-const rows = Array.from({length: PAGE_NODES}, (_, i) => i);
+const rows = Array.from({length: PAGE_NODES}, (_, index) => index);
 const Rows = () => (
   <View>
-    {rows.map(i => (
-      <View key={i} style={{height: 2}} />
+    {rows.map(index => (
+      <View key={index} style={{height: 2}} />
     ))}
   </View>
 );
@@ -261,7 +261,7 @@ function WithModal({open}) {
         }}>
         <View
           style={{width: 60, height: 40}}
-          onLayout={e => (sheetRect = e.layout)}
+          onLayout={event => (sheetRect = event.layout)}
         />
       </Modal>
     </View>

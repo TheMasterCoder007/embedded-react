@@ -46,7 +46,9 @@ const tap = box => {
   const App = ({disabled}) => (
     // alignSelf shrink-wraps each wrapper onto its child, so the rects ARE the child's.
     <View>
-      <View style={{alignSelf: 'flex-start'}} onLayout={e => (box = e.layout)}>
+      <View
+        style={{alignSelf: 'flex-start'}}
+        onLayout={event => (box = event.layout)}>
         <Button
           title="Save"
           disabled={disabled}
@@ -54,7 +56,9 @@ const tap = box => {
         />
       </View>
       {/* The same label with no button around it — the baseline the padding is measured against. */}
-      <View style={{alignSelf: 'flex-start'}} onLayout={e => (bare = e.layout)}>
+      <View
+        style={{alignSelf: 'flex-start'}}
+        onLayout={event => (bare = event.layout)}>
         <Text>Save</Text>
       </View>
     </View>
@@ -101,10 +105,12 @@ const tap = box => {
       resizeMode="cover"
       style={{width: 200, height: 120, padding: 10}}
       imageStyle={{opacity: 0.5}}
-      onLayout={e => (seen.image = e.layout)}
-      ref={h => (refs.view = h)}
-      imageRef={h => (refs.image = h)}>
-      <Text style={{height: 20}} onLayout={e => (seen.child = e.layout)}>
+      onLayout={event => (seen.image = event.layout)}
+      ref={handle => (refs.view = handle)}
+      imageRef={handle => (refs.image = handle)}>
+      <Text
+        style={{height: 20}}
+        onLayout={event => (seen.child = event.layout)}>
         on top
       </Text>
     </ImageBackground>,
@@ -135,12 +141,12 @@ const tap = box => {
 // 3. <SectionList> — headers, rows and footers as flat siblings of one scroller
 // ====================================================================================================
 {
-  const ys = [];
+  const rows = [];
   const row = label => (
     <Text
       key={label}
       style={{height: 20}}
-      onLayout={e => ys.push([label, e.layout.y])}>
+      onLayout={event => rows.push([label, event.layout.y])}>
       {label}
     </Text>
   );
@@ -162,14 +168,14 @@ const tap = box => {
     </View>,
   );
 
-  const order = ys.map(e => e[0]).join(',');
+  const order = rows.map(entry => entry[0]).join(',');
   check(
     order === '#A,ant,ape,/A,#B,bee,/B',
     `sections laid out header-rows-footer in order (got ${order})`,
   );
-  const tops = ys.map(e => e[1]);
+  const tops = rows.map(entry => entry[1]);
   check(
-    tops.every((y, i) => i === 0 || y > tops[i - 1]),
+    tops.every((y, index) => index === 0 || y > tops[index - 1]),
     `every row stacked below the one before it (${tops.join(',')})`,
   );
   check(

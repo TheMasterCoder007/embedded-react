@@ -20,18 +20,18 @@ import {compilePackage} from '../compile.mts';
 import {ENGINE_STRING_MAX} from '../compiler/diagnostics.mts';
 
 // The Flow B AOT compiler turns an App.jsx source string into a package. These tests check what it refuses
-// (compilePackage is pure — no file I/O), so each fixture is a complete minimal app. `PRE` is the usual import
+// (compilePackage is pure — no file I/O), so each fixture is a complete minimal app. `PREAMBLE` is the usual import
 // preamble (the compiler pattern-matches names, it does not resolve imports, so the import line is cosmetic but
 // kept for realism).
-const PRE = `import { useState } from 'react';
+const PREAMBLE = `import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet, Animated, useAnimatedValue } from 'embedded-react';
 `;
-const gen = src => compilePackage(src, 'test');
+const gen = source => compilePackage(source, 'test');
 
 describe('AOT baseline (regression)', () => {
   it('rejects `visible` on an <Svg> instead of silently dropping it', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
       export function App() {
         return (<View><Svg visible={false} width={10} height={10}><Path d="M0 0 L1 1" fill="none" stroke="#fff" /></Svg></View>);
       }`),
@@ -50,10 +50,10 @@ describe('AOT baseline (regression)', () => {
 });
 
 describe('AOT animation completeness', () => {
-  const A = `import { View, Animated, Easing, useAnimatedValue } from 'embedded-react';`;
+  const IMPORTS = `import { View, Animated, Easing, useAnimatedValue } from 'embedded-react';`;
   // Wraps a handler body in an App with two animated values a and b, on an onPress View.
   const app = (body, style = '') =>
-    gen(`${A}
+    gen(`${IMPORTS}
       export function App() {
         const a = useAnimatedValue(0);
         const b = useAnimatedValue(0);
@@ -109,13 +109,13 @@ describe('AOT animation completeness', () => {
 
 describe('AOT responsive layout', () => {
   it('throws on a top-level if whose test is not compile-time constant', () => {
-    const src = `${PRE}
+    const source = `${PREAMBLE}
       export function App() {
         const [n, setN] = useState(0);
         if (n > 5) return (<View><Text>a</Text></View>);
         return (<View><Text>b</Text></View>);
       }`;
-    expect(() => compilePackage(src, 'test')).toThrow(
+    expect(() => compilePackage(source, 'test')).toThrow(
       /compile-time-constant test/,
     );
   });
@@ -124,7 +124,7 @@ describe('AOT responsive layout', () => {
 describe('AOT inline-Svg gradients', () => {
   // endAngle is state-driven, so the <Svg> takes the dynamic path — the only one that supports
   // gradients on inline shapes. A fully static <Svg> ignores them.
-  const arc = extra => `${PRE}
+  const arc = extra => `${PREAMBLE}
     export function App() {
       const [lo, setLo] = useState(68);
       return (<View><Svg width={200} height={200}>
@@ -155,7 +155,7 @@ describe('AOT inline-Svg gradients', () => {
   it('rejects a stop count the engine table cannot hold', () => {
     const many = Array.from(
       {length: 9},
-      (_, i) => `{color: '#F2A64B', offset: ${i / 9}}`,
+      (_, index) => `{color: '#F2A64B', offset: ${index / 9}}`,
     ).join(', ');
     expect(() =>
       gen(
@@ -171,7 +171,7 @@ describe('AOT inline-Svg gradients', () => {
 // see only direct JSXElements. A fragment around a shape matched nothing and was dropped from the
 // package without a word, on both the static and the state-driven path.
 describe('AOT <Svg> child unwrapping', () => {
-  const svg = body => `${PRE}
+  const svg = body => `${PREAMBLE}
     import { Svg, Circle, Line, Arc, G } from 'embedded-react';
     export function App() {
       const [t, setT] = useState(0);
@@ -205,8 +205,8 @@ describe('AOT <Svg> child unwrapping', () => {
 
 describe('AOT arithmetic semantics', () => {
   it('refuses a constant that folds to NaN or Infinity, which a number slot cannot hold', () => {
-    const app = (decl, handler) => `${PRE}
-      ${decl}
+    const app = (declaration, handler) => `${PREAMBLE}
+      ${declaration}
       export function App() {
         const [n, setN] = useState(0);
         const [f, setF] = useState(0.5);
@@ -227,7 +227,7 @@ describe('AOT arithmetic semantics', () => {
 describe('AOT touch drag', () => {
   it('refuses a layout read outside an onLayout handler', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         import { useRef } from 'react';
         export function App() {
           const top = useRef(0);
@@ -338,15 +338,15 @@ import { View, Pressable, ScrollView, Text, PanResponder } from 'embedded-react'
 describe('AOT diagnostics', () => {
   // A responsive app folds its layout from `screen`, so the size picks the branch the compiler walks, and every
   // located error names it.
-  const errAtScreen = opts => {
+  const errAtScreen = options => {
     try {
       compilePackage(
-        `${PRE}\nexport function App() { const [n, setN] = useState(0); return (<Pressable onPress={() => setN(window.x)}><Text>{n}</Text></Pressable>); }`,
+        `${PREAMBLE}\nexport function App() { const [n, setN] = useState(0); return (<Pressable onPress={() => setN(window.x)}><Text>{n}</Text></Pressable>); }`,
         'demo',
-        opts,
+        options,
       );
-    } catch (e) {
-      return e;
+    } catch (error) {
+      return error;
     }
   };
 
@@ -377,7 +377,7 @@ describe('AOT diagnostics', () => {
   it('rejects a spread on a host element instead of silently dropping it', () => {
     expect(() =>
       gen(
-        `${PRE}\nexport function App() { const o = window.x; return (<View {...o} />); }`,
+        `${PREAMBLE}\nexport function App() { const o = window.x; return (<View {...o} />); }`,
       ),
     ).toThrow(/spread \{\.\.\.\} on <View> is not supported/);
   });
@@ -386,7 +386,7 @@ describe('AOT diagnostics', () => {
 describe('AOT Switch', () => {
   it('throws when a Switch has onValueChange but no value prop', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         import { Switch } from 'embedded-react';
         export function App() { const [on, setOn] = useState(false); return (<Switch onValueChange={(v) => setOn(v)} />); }`),
     ).toThrow(/needs a value prop/);
@@ -396,12 +396,12 @@ describe('AOT Switch', () => {
 describe('AOT Dial', () => {
   it('rejects an unsupported prop and a bad enum token', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         import { Dial } from 'embedded-react';
         export function App() { return (<Dial value={1} bogus={2} />); }`),
     ).toThrow(/prop "bogus" is not supported/);
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         import { Dial } from 'embedded-react';
         export function App() { return (<Dial value={1} knob="triangle" />); }`),
     ).toThrow(/unsupported <Dial knob>/);
@@ -411,7 +411,7 @@ describe('AOT Dial', () => {
 describe('AOT Modal', () => {
   it('throws when a Modal has no visible prop', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         import { Modal } from 'embedded-react';
         export function App() { return (<Modal><Text>x</Text></Modal>); }`),
     ).toThrow(/needs a visible prop/);
@@ -421,7 +421,7 @@ describe('AOT Modal', () => {
 describe('AOT dynamic enum styles', () => {
   it('throws on an unknown enum value in a dynamic enum style', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         export function App() {
           const [r, setR] = useState(false);
           return (<View style={{ flexDirection: r ? 'sideways' : 'row' }}><Text>x</Text></View>);
@@ -433,7 +433,7 @@ describe('AOT dynamic enum styles', () => {
 describe('AOT nested Text spans', () => {
   it('throws when a <Text> exceeds the engine span limit (4)', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         export function App() {
           return (<Text>a <Text style={{ fontWeight: 'bold' }}>b</Text> c <Text style={{ fontWeight: 'bold' }}>d</Text> e</Text>);
         }`),
@@ -444,7 +444,7 @@ describe('AOT nested Text spans', () => {
 describe('AOT FlatList (thin rewrite → ScrollView + .map)', () => {
   it('throws when renderItem is not a ({ item }) destructuring function', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         import { FlatList } from 'embedded-react';
         export function App() { const d = []; return (<FlatList data={d} renderItem={(x) => <Text>x</Text>} />); }`),
     ).toThrow(/must destructure/);
@@ -458,20 +458,20 @@ describe('AOT Flow-A-only components', () => {
   // The catch-all must still fire for a name that really is a typo / a missing import.
   it('still reports a genuinely unknown element as unknown', () => {
     expect(() =>
-      gen(`${PRE}
+      gen(`${PREAMBLE}
         export function App() { return (<Vieww />); }`),
     ).toThrow(/unknown element <Vieww>/);
   });
 });
 
 describe('AOT TouchableOpacity (press-to-dim on the native driver)', () => {
-  const T = `import { useState, useCallback } from 'react';
+  const IMPORTS = `import { useState, useCallback } from 'react';
 import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embedded-react';
 `;
   /** The body of the handler wired to `event` on the (single) node, so a test can read its animate call. */
   it('rejects a state-driven opacity, which the feedback would overwrite', () => {
     expect(() =>
-      gen(`${T}
+      gen(`${IMPORTS}
         export function App() {
           const [o, setO] = useState(1);
           return (<TouchableOpacity style={{opacity: o}} onPress={() => setO(0.5)}><Text>x</Text></TouchableOpacity>);
@@ -481,7 +481,7 @@ import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embed
 
   it('rejects a state-driven disabled, which it cannot compile away', () => {
     expect(() =>
-      gen(`${T}
+      gen(`${IMPORTS}
         export function App() {
           const [d, setD] = useState(true);
           return (<TouchableOpacity disabled={d} onPress={() => setD(false)}><Text>x</Text></TouchableOpacity>);
@@ -499,25 +499,25 @@ import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embed
       'an interpolation',
       'style={{opacity: fade.interpolate({inputRange: [0, 1], outputRange: [0.3, 1]})}}',
     ],
-  ])('rejects %s driving a TouchableOpacity opacity', (_what, attr) => {
+  ])('rejects %s driving a TouchableOpacity opacity', (_what, attribute) => {
     expect(() =>
-      gen(`${T}
+      gen(`${IMPORTS}
         export function App() {
           const fade = useAnimatedValue(1);
-          return (<TouchableOpacity ${attr}><Text>x</Text></TouchableOpacity>);
+          return (<TouchableOpacity ${attribute}><Text>x</Text></TouchableOpacity>);
         }`),
     ).toThrow(/cannot take an Animated opacity/);
   });
 });
 
 describe('AOT Pressable disabled', () => {
-  const P = `import { useState } from 'react';
+  const IMPORTS = `import { useState } from 'react';
 import { View, Text, Pressable } from 'embedded-react';
 `;
 
   it('rejects a state-driven disabled on Pressable', () => {
     expect(() =>
-      gen(`${P}
+      gen(`${IMPORTS}
         export function App() {
           const [d, setD] = useState(true);
           return (<Pressable disabled={d} onPress={() => setD(false)}><Text>x</Text></Pressable>);
@@ -527,20 +527,20 @@ import { View, Text, Pressable } from 'embedded-react';
 });
 
 describe('AOT TextInput', () => {
-  const T = `import { useState } from 'react';
+  const IMPORTS = `import { useState } from 'react';
 import { View, Text, TextInput } from 'embedded-react';
 `;
 
   it('rejects a non-function onChangeText', () => {
     expect(() =>
-      gen(`${T}
+      gen(`${IMPORTS}
         export function App() { const [n, setN] = useState(''); return (<TextInput value={n} onChangeText={n} />); }`),
     ).toThrow(/onChangeText must be an inline function/);
   });
 
   it('rejects an unsupported TextInput prop', () => {
     expect(() =>
-      gen(`${T}
+      gen(`${IMPORTS}
         export function App() { return (<TextInput selectionColor="#fff" />); }`),
     ).toThrow(/not supported/);
   });
@@ -549,7 +549,7 @@ import { View, Text, TextInput } from 'embedded-react';
 describe('AOT images', () => {
   // `import x from './x.png'` + <Image source={x}> → the node's image_name is the file's basename, and
   // compilePackage returns the import so the CLI can bake it (er_register_assets).
-  const IMG = `import { View, Image } from 'embedded-react';
+  const IMPORTS = `import { View, Image } from 'embedded-react';
 import logo from './assets/logo.png';
 `;
 
@@ -565,7 +565,7 @@ import logo from './assets/logo.png';
   it('rejects an unsupported resizeMode', () => {
     expect(() =>
       compilePackage(
-        `${IMG}\nexport function App() { return (<Image source={logo} resizeMode="squish" />); }`,
+        `${IMPORTS}\nexport function App() { return (<Image source={logo} resizeMode="squish" />); }`,
         'demo',
       ),
     ).toThrow(/unsupported <Image resizeMode>/);
@@ -641,13 +641,13 @@ describe('AOT useHostValue (host-fed input)', () => {
 // rule rather than one instance of it — a child component is declared at module level, so its body sees
 // MODULE scope plus its own props and consts, never the caller's locals.
 describe('AOT const scoping', () => {
-  const D = `import {useState} from 'react';
+  const IMPORTS = `import {useState} from 'react';
 import {View, Text} from 'embedded-react';
 `;
   it('a prop default cannot read its own or a later binding', () => {
     for (const params of ['{ size = size }', '{ size = SIZE, SIZE = 5 }']) {
       expect(() =>
-        gen(`${D}const size = 30; const SIZE = 30;
+        gen(`${IMPORTS}const size = 30; const SIZE = 30;
           function Box(${params}) { return (<View style={{width: size}} />); }
           export function App() { return (<View><Box /></View>); }`),
       ).toThrow(/cannot statically resolve identifier/);
@@ -656,16 +656,16 @@ import {View, Text} from 'embedded-react';
 });
 
 describe('AOT strings where a number belongs', () => {
-  const D = `import {useState} from 'react';
+  const IMPORTS = `import {useState} from 'react';
 import {View, Text, Pressable, Switch} from 'embedded-react';
 `;
   it('rejects arithmetic other than + on a string', () => {
-    for (const op of ['-', '*', '/', '%']) {
+    for (const operator of ['-', '*', '/', '%']) {
       expect(() =>
         gen(
-          `${D}export function App() { const [n] = useState(1); return (<Text>{'5' ${op} n}</Text>); }`,
+          `${IMPORTS}export function App() { const [n] = useState(1); return (<Text>{'5' ${operator} n}</Text>); }`,
         ),
-      ).toThrow(new RegExp(`"\\${op}" on a string is not supported`));
+      ).toThrow(new RegExp(`"\\${operator}" on a string is not supported`));
     }
   });
 });
@@ -673,14 +673,14 @@ import {View, Text, Pressable, Switch} from 'embedded-react';
 // The global `undefined` folds like any constant — text needs it (`s + undefined` is "…undefined") — so
 // every TYPED slot has to refuse it (and null / NaN) itself, with a location, or it reaches the package as `NaN`.
 describe('AOT typed slots refuse nothing-values', () => {
-  const D = `import {useState, useRef} from 'react';
+  const IMPORTS = `import {useState, useRef} from 'react';
 import {View, Text, useAnimatedValue} from 'embedded-react';
 `;
-  const err = src => {
+  const err = source => {
     try {
-      gen(src);
-    } catch (e) {
-      return e;
+      gen(source);
+    } catch (error) {
+      return error;
     }
     throw new Error('expected a compile error');
   };
@@ -711,12 +711,12 @@ import {View, Text, useAnimatedValue} from 'embedded-react';
       /useRef initial for "r"/,
     ],
     ['useRef(NaN)', 'const r = useRef(0 / 0);', /useRef initial for "r"/],
-  ])('%s is a located error', (_n, decl, re) => {
-    const e = err(
-      `${D}export function App() { ${decl} return (<Text>x</Text>); }`,
+  ])('%s is a located error', (_name, declaration, pattern) => {
+    const error = err(
+      `${IMPORTS}export function App() { ${declaration} return (<Text>x</Text>); }`,
     );
-    expect(e.message).toMatch(re);
-    expect(e.aotLoc).toBeTruthy();
+    expect(error.message).toMatch(pattern);
+    expect(error.aotLoc).toBeTruthy();
   });
 });
 
@@ -724,14 +724,14 @@ import {View, Text, useAnimatedValue} from 'embedded-react';
 // did — beat a same-named module const in EVERY fold, not only the ones that consult env — which went
 // unenforced for them: a style, prop, conditional or svg attribute silently used the module value.
 describe('AOT hook bindings beat module consts', () => {
-  const D = `import {useState, useRef} from 'react';
+  const IMPORTS = `import {useState, useRef} from 'react';
 import {View, Text, Svg, Circle} from 'embedded-react';
 `;
   // A dynamic child const is unsupported, as it is in App — so it must fail loudly, never quietly fall
   // back to the module const it shadows.
   it("a child's dynamic const is a located error, never the module value", () => {
     const child = body =>
-      `${D}const k = 99;
+      `${IMPORTS}const k = 99;
       function C({n}) { const k = n * 2; ${body} }
       export function App() { const [n] = useState(3); return (<View><C n={n} /></View>); }`;
     expect(() => gen(child(`return (<Text>{'k=' + k}</Text>);`))).toThrow(
@@ -746,7 +746,7 @@ import {View, Text, Svg, Circle} from 'embedded-react';
 describe('AOT a string where a style needs a number', () => {
   it('a string state cannot drive a numeric style', () => {
     expect(() =>
-      gen(`${PRE}export function App() {
+      gen(`${PREAMBLE}export function App() {
         const [radius] = useState('10');
         return (<View style={{borderTopLeftRadius: radius}} />);
       }`),
@@ -755,13 +755,13 @@ describe('AOT a string where a style needs a number', () => {
 });
 
 describe('AOT name shadowing', () => {
-  const D = `import {useState, useCallback} from 'react';
+  const IMPORTS = `import {useState, useCallback} from 'react';
 import {View, Text, Pressable} from 'embedded-react';
 `;
 
   it('a .map parameter shadows a callback of the same name', () => {
     expect(() =>
-      gen(`${D}export function App() {
+      gen(`${IMPORTS}export function App() {
         const [n, setN] = useState(0);
         const onTap = useCallback(() => setN(n + 1), [n]);
         return (<View>{['a'].map(onTap => <Pressable key={onTap} onPress={onTap}><Text>x</Text></Pressable>)}</View>);
@@ -771,35 +771,35 @@ import {View, Text, Pressable} from 'embedded-react';
 
   it('a hook binding shadows a module const before the local consts fold', () => {
     expect(() =>
-      gen(`${D}const r = 10;
+      gen(`${IMPORTS}const r = 10;
         export function App() { const [r] = useState(4); const copy = r; return (<Text>{copy}</Text>); }`),
     ).toThrow(/cannot resolve identifier "copy"/);
     expect(() =>
-      gen(`${D}const r = 10;
+      gen(`${IMPORTS}const r = 10;
         function C() { const [r] = useState(4); const copy = r; return (<Text>{copy}</Text>); }
         export function App() { return (<View><C /></View>); }`),
     ).toThrow(/cannot resolve identifier "copy"/);
   });
 
   it("App's dynamic const is a located error, never the module value it shadows", () => {
-    const src = use =>
-      `${D}const L = 'module';
+    const source = use =>
+      `${IMPORTS}const L = 'module';
       export function App() { const [n] = useState(3); const L = n; return (${use}); }`;
     for (const use of [
       `<Text>{'L=' + L}</Text>`,
       `<View style={{width: L}} />`,
     ])
-      expect(() => gen(src(use))).toThrow(/cannot resolve identifier "L"/);
+      expect(() => gen(source(use))).toThrow(/cannot resolve identifier "L"/);
   });
 });
 
 describe('AOT unary arithmetic on a string', () => {
-  it.each(['+', '-'])('rejects unary %s on a string', op => {
+  it.each(['+', '-'])('rejects unary %s on a string', operator => {
     expect(() =>
       gen(
-        `${PRE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${op}label)}</Text>); }`,
+        `${PREAMBLE}export function App() { const [label] = useState('5'); return (<Text>{'v=' + (${operator}label)}</Text>); }`,
       ),
-    ).toThrow(new RegExp(`unary "\\${op}" on a string is not supported`));
+    ).toThrow(new RegExp(`unary "\\${operator}" on a string is not supported`));
   });
 });
 
@@ -807,35 +807,35 @@ describe('AOT unary arithmetic on a string', () => {
 // {undefined}, as in Flow A. Read as a value, `visible` hid the node and `placeholder` printed the word
 // "undefined"; both did so on master too.
 describe('AOT props that fold to undefined are omitted', () => {
-  const D = `import {useState} from 'react';
+  const IMPORTS = `import {useState} from 'react';
 import {View, Text, Pressable, TextInput} from 'embedded-react';
 `;
   const withChild = child =>
-    gen(`${D}${child}
+    gen(`${IMPORTS}${child}
       export function App() { return (<View><C /></View>); }`);
 
   it('placeholder from an absent prop is not the word "undefined"', () => {
-    const c = withChild(
+    const compiled = withChild(
       `function C({x}) { const [v, setV] = useState(''); return (<TextInput value={v} placeholder={x} onChangeText={t => setV(t)} />); }`,
     );
-    expect(c).not.toContain('"undefined"');
+    expect(compiled).not.toContain('"undefined"');
   });
 
   it('a handler from an absent prop is simply not attached', () => {
-    const c = withChild(
+    const compiled = withChild(
       `function C({x}) { return (<Pressable onPress={x}><Text>t</Text></Pressable>); }`,
     );
-    expect(c).not.toContain('ER_EVENT_PRESS,');
+    expect(compiled).not.toContain('ER_EVENT_PRESS,');
   });
 });
 
 describe('AOT delayLongPress', () => {
-  const D = `import { View, Text, Pressable, TouchableOpacity } from 'embedded-react';
+  const IMPORTS = `import { View, Text, Pressable, TouchableOpacity } from 'embedded-react';
 `;
 
   it('rejects a value that does not fold', () => {
     expect(() =>
-      gen(`${D}import { useState } from 'react';
+      gen(`${IMPORTS}import { useState } from 'react';
       export function App() {
         const [ms] = useState(700);
         return (<Pressable delayLongPress={ms} onLongPress={() => {}}><Text>x</Text></Pressable>);
@@ -845,7 +845,7 @@ describe('AOT delayLongPress', () => {
 });
 
 describe('AOT string concatenation in text', () => {
-  const D = `import { useState } from 'react';
+  const IMPORTS = `import { useState } from 'react';
 import { View, Text, TextInput } from 'embedded-react';
 `;
 
@@ -853,15 +853,15 @@ import { View, Text, TextInput } from 'embedded-react';
   // "1" (or relabelling it "true") is a wrong answer either way, so text refuses the shape instead.
   const textErr = body => {
     try {
-      gen(`${D}
+      gen(`${IMPORTS}
       export function App() {
         const [n, setN] = useState(0);
         const [m, setM] = useState(1);
         const [on, setOn] = useState(false);
         return (${body});
       }`);
-    } catch (e) {
-      return e;
+    } catch (error) {
+      return error;
     }
     throw new Error('expected a compile error');
   };
@@ -872,61 +872,63 @@ import { View, Text, TextInput } from 'embedded-react';
     ['|| yielding a string', `<Text>{'x: ' + (on || 'no')}</Text>`],
     ['&& of two numbers', `<Text>{'x: ' + (n && m)}</Text>`],
   ])('refuses %s in text, with a location', (_name, body) => {
-    const e = textErr(body);
-    expect(e.message).toMatch(/evaluates to one of its operands/);
-    expect(e.aotLoc).toBeTruthy();
-    expect(e.message).toContain('^');
+    const error = textErr(body);
+    expect(error.message).toMatch(/evaluates to one of its operands/);
+    expect(error.aotLoc).toBeTruthy();
+    expect(error.message).toContain('^');
   });
 
   // `(ok ? 1 : "none")` has no single type.
   it.each([
     ['numeric then string', `on ? 1 : 'none'`],
     ['string then numeric', `on ? 'none' : 1`],
-  ])('refuses a ternary mixing %s', (_name, expr) => {
-    const e = textErr(`<Text>{'x: ' + (${expr})}</Text>`);
-    expect(e.message).toMatch(/cannot mix a string branch with a numeric one/);
-    expect(e.aotLoc).toBeTruthy();
+  ])('refuses a ternary mixing %s', (_name, expression) => {
+    const error = textErr(`<Text>{'x: ' + (${expression})}</Text>`);
+    expect(error.message).toMatch(
+      /cannot mix a string branch with a numeric one/,
+    );
+    expect(error.aotLoc).toBeTruthy();
   });
 
   // A branch that concatenates would need a format of its own, and a text has one. The generic
   // "not supported in this position" used to fire first, with a hint that text buffers are fine — which
   // is exactly wrong inside a text buffer.
   it('names a ternary whose branch concatenates, instead of the generic position error', () => {
-    const e = textErr(`<Text>{'x: ' + (on ? 'a' + n : 'b')}</Text>`);
-    expect(e.message).toMatch(
+    const error = textErr(`<Text>{'x: ' + (on ? 'a' + n : 'b')}</Text>`);
+    expect(error.message).toMatch(
       /ternary in text cannot concatenate inside its test or a branch/,
     );
-    expect(e.message).not.toMatch(/not supported in this position/);
-    expect(e.aotLoc).toBeTruthy();
+    expect(error.message).not.toMatch(/not supported in this position/);
+    expect(error.aotLoc).toBeTruthy();
   });
 
   it('names a logical whose operand concatenates, and a ternary whose test does', () => {
-    const e1 = textErr(`<Text>{on && ('n=' + n)}</Text>`);
-    expect(e1.message).toMatch(
+    const logicalError = textErr(`<Text>{on && ('n=' + n)}</Text>`);
+    expect(logicalError.message).toMatch(
       /"&&" in text cannot concatenate inside an operand/,
     );
-    const e2 = textErr(`<Text>{('a' + n) ? 'x' : 'y'}</Text>`);
-    expect(e2.message).toMatch(
+    const ternaryError = textErr(`<Text>{('a' + n) ? 'x' : 'y'}</Text>`);
+    expect(ternaryError.message).toMatch(
       /cannot concatenate inside its test or a branch/,
     );
   });
 
   it('refuses a ternary mixing a boolean branch with a non-boolean one', () => {
-    const e = textErr(`<Text>{'x: ' + (on ? on : 5)}</Text>`);
-    expect(e.message).toMatch(/mixes a boolean branch/);
-    expect(e.aotLoc).toBeTruthy();
+    const error = textErr(`<Text>{'x: ' + (on ? on : 5)}</Text>`);
+    expect(error.message).toMatch(/mixes a boolean branch/);
+    expect(error.aotLoc).toBeTruthy();
   });
 });
 
 describe('AOT style diagnostics', () => {
-  const D = `import { useState } from 'react';
+  const IMPORTS = `import { useState } from 'react';
 import { View, StyleSheet } from 'embedded-react';
 `;
-  const err = src => {
+  const err = source => {
     try {
-      gen(src);
-    } catch (e) {
-      return e;
+      gen(source);
+    } catch (error) {
+      return error;
     }
     throw new Error('expected a compile error');
   };
@@ -934,42 +936,42 @@ import { View, StyleSheet } from 'embedded-react';
   // A key the static lowering does not know used to fall through to the dynamic branch and be reported
   // as state-driven, which sent the author looking for state that isn't there.
   it('names an unknown style key as unknown, not as state-driven', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         return (<View style={{transform: [{scale: 2}]}} />);
       }`);
-    expect(e.message).toMatch(/style "transform" is not supported/);
-    expect(e.message).not.toMatch(/state-driven/);
-    expect(e.aotHint).toMatch(/Flow B lowers these:/);
+    expect(error.message).toMatch(/style "transform" is not supported/);
+    expect(error.message).not.toMatch(/state-driven/);
+    expect(error.aotHint).toMatch(/Flow B lowers these:/);
   });
 
   it('says the same for an unknown key given a state-driven value', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         const [n, setN] = useState(0);
         return (<View style={{shadowRadius: n}} />);
       }`);
-    expect(e.message).toMatch(/style "shadowRadius" is not supported/);
-    expect(e.message).not.toMatch(/state-driven/);
+    expect(error.message).toMatch(/style "shadowRadius" is not supported/);
+    expect(error.message).not.toMatch(/state-driven/);
   });
 
   it('still reports a state-driven value on a known key as state-driven', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         const [n, setN] = useState(0);
         return (<View style={{flex: n}} />);
       }`);
-    expect(e.message).toMatch(/state-driven value for style "flex"/);
+    expect(error.message).toMatch(/state-driven value for style "flex"/);
   });
 
   it('reports a bad value on a known key as a bad value, with a location', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         return (<View style={{alignItems: 'baseline'}} />);
       }`);
-    expect(e.message).toMatch(/unsupported value for style "alignItems"/);
-    expect(e.message).toMatch(/one of auto, flex-start/);
-    expect(e.aotLoc).toBeTruthy();
+    expect(error.message).toMatch(/unsupported value for style "alignItems"/);
+    expect(error.message).toMatch(/one of auto, flex-start/);
+    expect(error.aotLoc).toBeTruthy();
   });
 
   // DYN_FIELDS/KEYS are plain objects, so `style={{toString: n}}` used to find Object.prototype's method,
@@ -978,18 +980,20 @@ import { View, StyleSheet } from 'embedded-react';
   it.each(['toString', 'constructor', 'valueOf', 'hasOwnProperty'])(
     'rejects the inherited Object.prototype key "%s" as an unknown style',
     key => {
-      const e = err(`${D}
+      const error = err(`${IMPORTS}
       export function App() {
         const [n, setN] = useState(0);
         return (<View style={{${key}: n}} />);
       }`);
-      expect(e.message).toMatch(new RegExp(`style "${key}" is not supported`));
+      expect(error.message).toMatch(
+        new RegExp(`style "${key}" is not supported`),
+      );
     },
   );
 
   it('does not emit an undefined ERProps field for a prototype key', () => {
     expect(() =>
-      gen(`${D}
+      gen(`${IMPORTS}
       export function App() {
         const [n, setN] = useState(0);
         return (<View style={{toString: n}} />);
@@ -997,7 +1001,7 @@ import { View, StyleSheet } from 'embedded-react';
     ).toThrow();
     // And the static path too, which goes through lowerStyle's own key lookup.
     expect(() =>
-      gen(`${D}
+      gen(`${IMPORTS}
       export function App() {
         return (<View style={{valueOf: 4}} />);
       }`),
@@ -1005,24 +1009,24 @@ import { View, StyleSheet } from 'embedded-react';
   });
 
   it('rejects an Object.prototype name as an enum value', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         return (<View style={{alignItems: 'toString'}} />);
       }`);
-    expect(e.message).toMatch(/unsupported value for style "alignItems"/);
+    expect(error.message).toMatch(/unsupported value for style "alignItems"/);
   });
 
   it('rejects an Object.prototype name as a color', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         return (<View style={{backgroundColor: 'constructor'}} />);
       }`);
-    expect(e.message).toMatch(/unsupported color "constructor"/);
+    expect(error.message).toMatch(/unsupported color "constructor"/);
   });
 
   it('does not resolve an undeclared Object.prototype name as a constant', () => {
     expect(() =>
-      gen(`${D}
+      gen(`${IMPORTS}
       export function App() {
         return (<View style={{width: toString ? 10 : 20}} />);
       }`),
@@ -1030,28 +1034,28 @@ import { View, StyleSheet } from 'embedded-react';
   });
 
   it('rejects an Object.prototype name in a state-driven enum style', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       export function App() {
         const [on, setOn] = useState(false);
         return (<View style={{alignItems: on ? 'toString' : 'center'}} />);
       }`);
-    expect(e.message).toMatch(/unsupported enum value "toString"/);
+    expect(error.message).toMatch(/unsupported enum value "toString"/);
   });
 
   it('locates an unknown key that arrived through a StyleSheet', () => {
-    const e = err(`${D}
+    const error = err(`${IMPORTS}
       const styles = StyleSheet.create({ card: { shadowOpacity: 0.5 } });
       export function App() {
         return (<View style={styles.card} />);
       }`);
-    expect(e.message).toMatch(/style "shadowOpacity" is not supported/);
-    expect(e.aotLoc).toBeTruthy();
+    expect(error.message).toMatch(/style "shadowOpacity" is not supported/);
+    expect(error.aotLoc).toBeTruthy();
   });
 });
 
 describe('AOT list setters', () => {
   const app = body =>
-    gen(`${PRE}
+    gen(`${PREAMBLE}
       export function App() {
         const [k, setK] = useState(-2);
         const [f, setF] = useState(0.5);
@@ -1070,9 +1074,9 @@ describe('AOT list setters', () => {
 });
 
 describe('AOT fixed limits', () => {
-  const T = `import {useState} from 'react';\nimport {Text, Pressable} from 'embedded-react';\n`;
-  const small = src =>
-    compilePackage(T + src, 'test', {listCap: 2, listStrCap: 8});
+  const IMPORTS = `import {useState} from 'react';\nimport {Text, Pressable} from 'embedded-react';\n`;
+  const small = source =>
+    compilePackage(IMPORTS + source, 'test', {listCap: 2, listStrCap: 8});
 
   it('refuses an initial list with more rows than a list holds', () => {
     expect(() =>

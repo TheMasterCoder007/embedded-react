@@ -36,12 +36,12 @@ function App({left, padding = 5}) {
         height: 80,
         padding,
       }}
-      onLayout={e => (outer = e.nativeEvent.layout)}>
+      onLayout={event => (outer = event.nativeEvent.layout)}>
       <View
         style={{width: 20, height: 10, marginLeft: 3}}
-        onLayout={e => {
-          inner = e.nativeEvent.layout;
-          sameObject = e.layout === e.nativeEvent.layout;
+        onLayout={event => {
+          inner = event.nativeEvent.layout;
+          sameObject = event.layout === event.nativeEvent.layout;
           innerFires++;
         }}
       />

@@ -20,10 +20,10 @@ import {resolveOptions} from '../compiler/options.mts';
 
 // An app lowers to one IrApp, which the package backend writes as a package.
 
-const opts = resolveOptions({});
+const options = resolveOptions({});
 
 /** The app a source lowers to. */
-const lower = source => lowerApp(source, opts, new Map(), []);
+const lower = source => lowerApp(source, options, new Map(), []);
 
 describe('the lowered app: functions', () => {
   /** An app module around a component body and the JSX it returns. */

@@ -43,9 +43,9 @@ describe('device auto-detect', () => {
   });
 
   it('maps tty.* → cu.* on macOS, and passes other paths through unchanged', () => {
-    const tty = '/dev/tty.usbmodem1401';
-    expect(preferCalloutPath(tty)).toBe(
-      process.platform === 'darwin' ? '/dev/cu.usbmodem1401' : tty,
+    const ttyPath = '/dev/tty.usbmodem1401';
+    expect(preferCalloutPath(ttyPath)).toBe(
+      process.platform === 'darwin' ? '/dev/cu.usbmodem1401' : ttyPath,
     );
     expect(preferCalloutPath('/dev/cu.usbmodem1401')).toBe(
       '/dev/cu.usbmodem1401',

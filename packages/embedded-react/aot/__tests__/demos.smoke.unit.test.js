@@ -26,15 +26,16 @@ import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mjs';
 // Regression guard: the demos must keep compiling end-to-end (no thrown "AOT: …"). This is the cheap counterpart to
 // a full compile-and-screenshot harness — it would have caught any compiler change that broke a demo's lowering
 // during development.
-const demosDir = resolve(
+const demosDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../../../../demos',
 );
-const appSrc = demo => readFileSync(resolve(demosDir, demo, 'App.jsx'), 'utf8');
+const appSource = demo =>
+  readFileSync(resolve(demosDirectory, demo, 'App.jsx'), 'utf8');
 
 describe('AOT demo compile smoke', () => {
   it('compiles the watch-face demo for the RP2040 240×280 panel', () => {
-    const result = compilePackage(appSrc('watch-face'), 'watch-face', {
+    const result = compilePackage(appSource('watch-face'), 'watch-face', {
       screen: {width: 240, height: 280},
       filename: 'demos/watch-face/App.jsx',
     });
@@ -42,12 +43,12 @@ describe('AOT demo compile smoke', () => {
   });
 
   it('compiles the thermostat demo with a layout for every panel', async () => {
-    const src = appSrc('thermostat');
-    const result = compilePackage(src, 'thermostat', {
+    const source = appSource('thermostat');
+    const result = compilePackage(source, 'thermostat', {
       filename: 'demos/thermostat/App.jsx',
       svgArtifacts: await bakeSvgArtifacts(
-        src,
-        resolve(demosDir, 'thermostat'),
+        source,
+        resolve(demosDirectory, 'thermostat'),
       ),
     });
     expect(result.program.length).toBeGreaterThan(0);
@@ -58,22 +59,28 @@ describe('AOT demo compile smoke', () => {
 // ahead of time for a no-PSRAM board and use only the font sizes the built-in font is baked at.
 describe('create-embedded-react starters build clean', () => {
   const starters = ['template/App.jsx', 'template-typescript/App.tsx'].map(
-    rel => [
-      rel,
-      readFileSync(resolve(demosDir, '../create-embedded-react', rel), 'utf8'),
+    relativePath => [
+      relativePath,
+      readFileSync(
+        resolve(demosDirectory, '../create-embedded-react', relativePath),
+        'utf8',
+      ),
     ],
   );
 
-  it.each(starters)('%s compiles for a 240×320 panel', (rel, src) => {
-    const result = compilePackage(src, 'starter', {
-      screen: {width: 240, height: 320},
-      filename: rel,
-    });
-    expect(result.program.length).toBeGreaterThan(0);
-  });
+  it.each(starters)(
+    '%s compiles for a 240×320 panel',
+    (relativePath, source) => {
+      const result = compilePackage(source, 'starter', {
+        screen: {width: 240, height: 320},
+        filename: relativePath,
+      });
+      expect(result.program.length).toBeGreaterThan(0);
+    },
+  );
 
-  it.each(starters)('%s uses only baked font sizes', (rel, src) => {
-    const used = analyzeFontSizes(src);
+  it.each(starters)('%s uses only baked font sizes', (relativePath, source) => {
+    const used = analyzeFontSizes(source);
     expect(used.dynamic).toEqual([]);
     expect(findSizeGaps({sizes: used.sizes}).gaps).toEqual([]);
   });
@@ -81,19 +88,22 @@ describe('create-embedded-react starters build clean', () => {
 
 describe('embedded-react build --aot', () => {
   it.each(['thermostat', 'watch-face'])('builds %s to a package', demo => {
-    const cwd = resolve(demosDir, demo);
-    const out = mkdtempSync(join(tmpdir(), 'er-cli-'));
+    const demoDirectory = resolve(demosDirectory, demo);
+    const outputDirectory = mkdtempSync(join(tmpdir(), 'er-cli-'));
     try {
-      const cli = resolve(demosDir, '../packages/embedded-react/cli.mjs');
+      const cliPath = resolve(
+        demosDirectory,
+        '../packages/embedded-react/cli.mjs',
+      );
       const built = spawnSync(
         process.execPath,
-        [cli, 'build', '--aot', '--out', out],
-        {cwd, encoding: 'utf8'},
+        [cliPath, 'build', '--aot', '--out', outputDirectory],
+        {cwd: demoDirectory, encoding: 'utf8'},
       );
       expect(built.status).toBe(0);
-      expect(existsSync(join(out, 'app.erpkg'))).toBe(true);
+      expect(existsSync(join(outputDirectory, 'app.erpkg'))).toBe(true);
     } finally {
-      rmSync(out, {recursive: true, force: true});
+      rmSync(outputDirectory, {recursive: true, force: true});
     }
   });
 });

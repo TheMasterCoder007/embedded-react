@@ -65,7 +65,7 @@ describe('shouldPersist', () => {
 // loader to strip downstream — not choke on them (the jsx-only parser did).
 describe('transformPersist with TypeScript', () => {
   it('rewrites useState in a .tsx file and preserves JSX + type syntax', () => {
-    const out = transformPersist(
+    const output = transformPersist(
       `import {useState} from 'react';
        type Props = {label: string};
        export function App({label}: Props) {
@@ -74,16 +74,16 @@ describe('transformPersist with TypeScript', () => {
        }`,
       'App.tsx',
     );
-    expect(out).toContain('__erPersistState'); // useState was rewritten
-    expect(out).toContain('Props'); // TS type kept for esbuild to strip
-    expect(out).toContain('<text>'); // JSX preserved
+    expect(output).toContain('__erPersistState'); // useState was rewritten
+    expect(output).toContain('Props'); // TS type kept for esbuild to strip
+    expect(output).toContain('<text>'); // JSX preserved
   });
 
   it('parses a plain .ts file (no JSX) with type assertions', () => {
-    const out = transformPersist(
+    const output = transformPersist(
       `export const n: number = <number>1; export type T = string;`,
       'util.ts',
     );
-    expect(out).toContain('export type T'); // parsed and re-emitted, not a throw
+    expect(output).toContain('export type T'); // parsed and re-emitted, not a throw
   });
 });

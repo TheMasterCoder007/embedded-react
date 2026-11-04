@@ -37,8 +37,8 @@ const envWith = (...slots) => ({
   math64: false,
 });
 
-const textOf = (source, env = envWith()) =>
-  lowerText(parseExpression(source), env);
+const textOf = (source, environment = envWith()) =>
+  lowerText(parseExpression(source), environment);
 
 describe('text lowers to IR parts', () => {
   it('renders a boolean on its own as nothing, as React does', () => {

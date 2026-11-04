@@ -30,13 +30,13 @@ const calls = {
   animValueAnimate: [],
   animValueDestroy: [],
 };
-let idc = 0;
-let vidc = 0;
+let lastHandle = 0;
+let lastValueHandle = 0;
 globalThis.IS_REACT_ACT_ENVIRONMENT = false;
 globalThis.NativeUI = {
   createNode: type => {
     calls.createNode.push(type);
-    return ++idc;
+    return ++lastHandle;
   },
   setProps: () => {},
   setRoot: () => {},
@@ -44,22 +44,23 @@ globalThis.NativeUI = {
   insertBefore: () => {},
   removeChild: () => {},
   destroyNode: () => {},
-  setEvent: (h, key, fn) => calls.setEvent.push({h, key, fn}),
+  setEvent: (handle, key, handler) =>
+    calls.setEvent.push({handle, key, handler}),
   setTextSpans: () => {},
   setVectorOps: () => {},
   animUnbind: () => {},
   animValueCreate: initial => {
     calls.animValueCreate.push(initial);
-    return ++vidc;
+    return ++lastValueHandle;
   },
   animValueBind: (handle, node, prop) =>
     calls.animValueBind.push({handle, node, prop}),
-  animValueSet: (handle, v) => calls.animValueSet.push({handle, v}),
+  animValueSet: (handle, value) => calls.animValueSet.push({handle, value}),
   animValueGet: () => 1,
   animValueDestroy: handle => calls.animValueDestroy.push(handle),
-  animValueAnimate: (handle, to, cfg) => {
-    calls.animValueAnimate.push({handle, to, cfg});
-    return ++vidc;
+  animValueAnimate: (handle, toValue, config) => {
+    calls.animValueAnimate.push({handle, toValue, config});
+    return ++lastValueHandle;
   },
   animStop: () => {},
   commit: () => {},
@@ -71,7 +72,7 @@ globalThis.NativeUI = {
 
 const Reconciler = (await import('react-reconciler')).default;
 const {hostConfig} = await import('../../host-config.js');
-const {createElement: el} = (await import('react')).default;
+const {createElement} = (await import('react')).default;
 const {TouchableOpacity} = await import('../TouchableOpacity.js');
 
 const reconciler = Reconciler(hostConfig);
@@ -102,38 +103,40 @@ function mount(tree) {
 
 /** The handler last registered for `key`, as the engine would hold it. */
 const handler = key => {
-  const found = calls.setEvent.filter(e => e.key === key).pop();
-  return found && found.fn;
+  const found = calls.setEvent.filter(call => call.key === key).pop();
+  return found && found.handler;
 };
 /** The one animate call, or the nth. */
-const animated = (n = 0) => calls.animValueAnimate[n];
+const animated = (index = 0) => calls.animValueAnimate[index];
 
 beforeEach(() => {
-  for (const a of Object.values(calls)) a.length = 0;
+  for (const recorded of Object.values(calls)) recorded.length = 0;
 });
 
 describe('TouchableOpacity renders one Pressable with a bound opacity', () => {
   it('costs a single engine node — the dim is a binding, not a wrapper', () => {
-    mount(el(TouchableOpacity, {}, el('Text', {}, 'Tap')));
+    mount(
+      createElement(TouchableOpacity, {}, createElement('Text', {}, 'Tap')),
+    );
     // Children are created before their parent, so order is the reconciler's, not the tree's.
     expect(calls.createNode).toHaveLength(2);
     expect(calls.createNode).toContain('Pressable');
   });
 
   it('binds its animated value to the node’s opacity', () => {
-    mount(el(TouchableOpacity, {}));
+    mount(createElement(TouchableOpacity, {}));
     expect(calls.animValueCreate).toEqual([1]);
     expect(calls.animValueBind).toHaveLength(1);
     expect(calls.animValueBind[0].prop).toBe('opacity');
   });
 
   it('starts at the opacity the style asks for', () => {
-    mount(el(TouchableOpacity, {style: {opacity: 0.6}}));
+    mount(createElement(TouchableOpacity, {style: {opacity: 0.6}}));
     expect(calls.animValueCreate).toEqual([0.6]);
   });
 
   it('registers both ends of the press so the engine can drive the fade', () => {
-    mount(el(TouchableOpacity, {}));
+    mount(createElement(TouchableOpacity, {}));
     expect(handler('onPressIn')).toBeTypeOf('function');
     expect(handler('onPressOut')).toBeTypeOf('function');
   });
@@ -141,27 +144,27 @@ describe('TouchableOpacity renders one Pressable with a bound opacity', () => {
 
 describe('TouchableOpacity press feedback', () => {
   it('dims to RN’s 0.2 with no ramp on press-in', () => {
-    mount(el(TouchableOpacity, {}));
+    mount(createElement(TouchableOpacity, {}));
     handler('onPressIn')({});
-    expect(animated()).toMatchObject({to: 0.2});
-    expect(animated().cfg).toMatchObject({type: 'timing', duration: 0});
+    expect(animated()).toMatchObject({toValue: 0.2});
+    expect(animated().config).toMatchObject({type: 'timing', duration: 0});
   });
 
   it('fades back to the resting opacity over a quarter second on press-out', () => {
-    mount(el(TouchableOpacity, {style: {opacity: 0.6}}));
+    mount(createElement(TouchableOpacity, {style: {opacity: 0.6}}));
     handler('onPressOut')({});
-    expect(animated()).toMatchObject({to: 0.6});
-    expect(animated().cfg).toMatchObject({type: 'timing', duration: 250});
+    expect(animated()).toMatchObject({toValue: 0.6});
+    expect(animated().config).toMatchObject({type: 'timing', duration: 250});
   });
 
   it('honours activeOpacity', () => {
-    mount(el(TouchableOpacity, {activeOpacity: 0.85}));
+    mount(createElement(TouchableOpacity, {activeOpacity: 0.85}));
     handler('onPressIn')({});
-    expect(animated().to).toBe(0.85);
+    expect(animated().toValue).toBe(0.85);
   });
 
   it('drives the same value both ways (one binding, not two animations racing)', () => {
-    mount(el(TouchableOpacity, {}));
+    mount(createElement(TouchableOpacity, {}));
     handler('onPressIn')({});
     handler('onPressOut')({});
     expect(animated(0).handle).toBe(animated(1).handle);
@@ -171,7 +174,7 @@ describe('TouchableOpacity press feedback', () => {
   it('still calls the app’s own onPressIn/onPressOut', () => {
     const seen = [];
     mount(
-      el(TouchableOpacity, {
+      createElement(TouchableOpacity, {
         onPressIn: () => seen.push('in'),
         onPressOut: () => seen.push('out'),
       }),
@@ -184,17 +187,17 @@ describe('TouchableOpacity press feedback', () => {
 
 describe('TouchableOpacity disabled', () => {
   it('registers no press handler at all, so it neither fires nor dims', () => {
-    mount(el(TouchableOpacity, {disabled: true, onPress: () => {}}));
-    const live = calls.setEvent.filter(e => e.fn);
+    mount(createElement(TouchableOpacity, {disabled: true, onPress: () => {}}));
+    const live = calls.setEvent.filter(call => call.handler);
     expect(live).toEqual([]);
   });
 
   it('presses and dims again once it is enabled', () => {
-    const update = mount(el(TouchableOpacity, {disabled: true}));
-    update(el(TouchableOpacity, {disabled: false}));
+    const update = mount(createElement(TouchableOpacity, {disabled: true}));
+    update(createElement(TouchableOpacity, {disabled: false}));
     expect(handler('onPressIn')).toBeTypeOf('function');
     handler('onPressIn')({});
-    expect(animated().to).toBe(0.2);
+    expect(animated().toValue).toBe(0.2);
   });
 });
 
@@ -212,9 +215,11 @@ describe('TouchableOpacity with an animated opacity in its style', () => {
 
   it('says so rather than dropping it in silence — once, not once per render', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const update = mount(el(TouchableOpacity, {style: animatedStyle()}));
-    update(el(TouchableOpacity, {style: animatedStyle()}));
-    mount(el(TouchableOpacity, {style: animatedStyle()}));
+    const update = mount(
+      createElement(TouchableOpacity, {style: animatedStyle()}),
+    );
+    update(createElement(TouchableOpacity, {style: animatedStyle()}));
+    mount(createElement(TouchableOpacity, {style: animatedStyle()}));
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toMatch(/ignores an animated `opacity`/);
     expect(warn.mock.calls[0][0]).toMatch(/<Pressable>/);
@@ -222,16 +227,16 @@ describe('TouchableOpacity with an animated opacity in its style', () => {
   });
 
   it('binds the press value only — never two things writing one prop', () => {
-    mount(el(TouchableOpacity, {style: animatedStyle()}));
+    mount(createElement(TouchableOpacity, {style: animatedStyle()}));
     expect(calls.animValueBind).toHaveLength(1);
     expect(calls.animValueBind[0].prop).toBe('opacity');
   });
 
   it('rests fully opaque, since what it was handed is not a number', () => {
-    mount(el(TouchableOpacity, {style: animatedStyle()}));
+    mount(createElement(TouchableOpacity, {style: animatedStyle()}));
     expect(calls.animValueCreate).toEqual([1]);
     handler('onPressOut')({});
-    expect(animated().to).toBe(1);
+    expect(animated().toValue).toBe(1);
   });
 });
 
@@ -239,34 +244,38 @@ describe('TouchableOpacity across renders', () => {
   it('keeps its press handlers stable, so an idle re-render re-registers nothing', () => {
     const style = {padding: 8};
     const onPress = () => {};
-    const update = mount(el(TouchableOpacity, {style, onPress}));
+    const update = mount(createElement(TouchableOpacity, {style, onPress}));
     calls.setEvent.length = 0;
-    update(el(TouchableOpacity, {style, onPress}));
+    update(createElement(TouchableOpacity, {style, onPress}));
     expect(calls.setEvent).toEqual([]);
   });
 
   it('pushes a changed style opacity through the binding that owns it', () => {
-    const update = mount(el(TouchableOpacity, {style: {opacity: 1}}));
+    const update = mount(
+      createElement(TouchableOpacity, {style: {opacity: 1}}),
+    );
     calls.animValueSet.length = 0;
-    update(el(TouchableOpacity, {style: {opacity: 0.4}}));
+    update(createElement(TouchableOpacity, {style: {opacity: 0.4}}));
     expect(calls.animValueSet).toEqual([
-      {handle: calls.animValueBind[0].handle, v: 0.4},
+      {handle: calls.animValueBind[0].handle, value: 0.4},
     ]);
     // …and the press-out now restores to the new one.
     handler('onPressOut')({});
-    expect(animated().to).toBe(0.4);
+    expect(animated().toValue).toBe(0.4);
   });
 
   it('leaves the value alone mid-press, where the dim owns it', () => {
-    const update = mount(el(TouchableOpacity, {style: {opacity: 1}}));
+    const update = mount(
+      createElement(TouchableOpacity, {style: {opacity: 1}}),
+    );
     handler('onPressIn')({});
     calls.animValueSet.length = 0;
-    update(el(TouchableOpacity, {style: {opacity: 0.4}}));
+    update(createElement(TouchableOpacity, {style: {opacity: 0.4}}));
     expect(calls.animValueSet).toEqual([]);
   });
 
   it('frees the engine-side value slot on unmount', () => {
-    const update = mount(el(TouchableOpacity, {}));
+    const update = mount(createElement(TouchableOpacity, {}));
     expect(calls.animValueDestroy).toEqual([]);
     update(null);
     expect(calls.animValueDestroy).toEqual([calls.animValueBind[0].handle]);

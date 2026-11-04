@@ -25,24 +25,24 @@ import {flattenStyleObj} from '../../props.js';
 
 const render = props => Button(props);
 /** The <Text> the button wraps. */
-const label = el => el.props.children;
+const label = element => element.props.children;
 /** A node's style as the bridge would see it: the array collapsed to one object. */
-const flat = el => flattenStyleObj(el.props.style);
+const flat = element => flattenStyleObj(element.props.style);
 
 afterEach(() => vi.restoreAllMocks());
 
 describe('Button renders as a Pressable + Text', () => {
   it('returns a Pressable wrapping exactly one Text', () => {
-    const el = render({title: 'Save'});
-    expect(el.type).toBe(Pressable);
-    expect(label(el).type).toBe('Text');
-    expect(label(el).props.children).toBe('Save');
+    const element = render({title: 'Save'});
+    expect(element.type).toBe(Pressable);
+    expect(label(element).type).toBe('Text');
+    expect(label(element).props.children).toBe('Save');
   });
 
   it('does not add RN’s intermediate View (two engine nodes, not three)', () => {
-    const el = render({title: 'Save'});
-    expect(Array.isArray(label(el))).toBe(false);
-    expect(label(el).type).not.toBe('View');
+    const element = render({title: 'Save'});
+    expect(Array.isArray(label(element))).toBe(false);
+    expect(label(element).type).not.toBe('View');
   });
 
   it('wires onPress onto the Pressable', () => {
@@ -51,9 +51,9 @@ describe('Button renders as a Pressable + Text', () => {
   });
 
   it('paints the default fill and centres the label', () => {
-    const el = render({title: 'x'});
-    expect(flat(el).backgroundColor).toBe('#2196F3');
-    expect(flat(label(el))).toMatchObject({
+    const element = render({title: 'x'});
+    expect(flat(element).backgroundColor).toBe('#2196F3');
+    expect(flat(label(element))).toMatchObject({
       color: '#ffffff',
       textAlign: 'center',
       padding: 8,
@@ -63,8 +63,8 @@ describe('Button renders as a Pressable + Text', () => {
 
 describe('Button color and disabled', () => {
   it('replaces the fill with `color`, keeping the rest of the style', () => {
-    const el = render({title: 'x', color: '#ff0000'});
-    expect(flat(el)).toMatchObject({
+    const element = render({title: 'x', color: '#ff0000'});
+    expect(flat(element)).toMatchObject({
       backgroundColor: '#ff0000',
       borderRadius: 2,
     });
@@ -77,9 +77,9 @@ describe('Button color and disabled', () => {
   });
 
   it('greys both nodes out when disabled', () => {
-    const el = render({title: 'x', disabled: true});
-    expect(flat(el).backgroundColor).toBe('#dfdfdf');
-    expect(flat(label(el)).color).toBe('#a1a1a1');
+    const element = render({title: 'x', disabled: true});
+    expect(flat(element).backgroundColor).toBe('#dfdfdf');
+    expect(flat(label(element)).color).toBe('#a1a1a1');
   });
 
   // Button forwards `disabled` and `onPress` to Pressable, which drops the press handler when disabled.

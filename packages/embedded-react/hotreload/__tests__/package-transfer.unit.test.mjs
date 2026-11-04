@@ -97,7 +97,7 @@ function connect(device, options = {}) {
 describe('frames', () => {
   it('begins with the package length', () => {
     const decoded = [];
-    new FrameDecoder({onFrame: (p, m) => decoded.push([p, m])}).push(
+    new FrameDecoder({onFrame: (payload, meta) => decoded.push([payload, meta])}).push(
       beginFrame(0x1234),
     );
     expect(decoded[0][1].type).toBe(MSG_PACKAGE_BEGIN);
@@ -106,7 +106,7 @@ describe('frames', () => {
 
   it('puts the offset in front of each chunk, and cuts the last short', () => {
     const decoded = [];
-    new FrameDecoder({onFrame: (p, m) => decoded.push([p, m])}).push(
+    new FrameDecoder({onFrame: (payload, meta) => decoded.push([payload, meta])}).push(
       chunkFrame(samplePackage, CHUNK_BYTES * 3, CHUNK_BYTES),
     );
     expect(decoded[0][1].type).toBe(MSG_PACKAGE_CHUNK);

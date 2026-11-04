@@ -16,41 +16,61 @@ export function App() {
   const knobPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e, g) => {
+      onPanResponderGrant: (event, gestureState) => {
         setActive(true);
         setGrants(grants + 1);
-        setGranted('grant at ' + g.x0 + ',' + g.y0 + ' id ' + g.stateID);
-      },
-      onPanResponderMove: (e, g) => {
-        setDrag(g.dx);
-        setMoved(
-          'move ' +
-            g.dx +
+        setGranted(
+          'grant at ' +
+            gestureState.x0 +
             ',' +
-            g.dy +
-            ' at ' +
-            g.moveX +
-            ',' +
-            g.moveY +
-            ' x' +
-            g.numberActiveTouches,
+            gestureState.y0 +
+            ' id ' +
+            gestureState.stateID,
         );
       },
-      onPanResponderRelease: (e, g) => {
-        setKnob(Math.max(0, Math.min(180, knob + g.dx)));
+      onPanResponderMove: (event, gestureState) => {
+        setDrag(gestureState.dx);
+        setMoved(
+          'move ' +
+            gestureState.dx +
+            ',' +
+            gestureState.dy +
+            ' at ' +
+            gestureState.moveX +
+            ',' +
+            gestureState.moveY +
+            ' x' +
+            gestureState.numberActiveTouches,
+        );
+      },
+      onPanResponderRelease: (event, gestureState) => {
+        setKnob(Math.max(0, Math.min(180, knob + gestureState.dx)));
         setDrag(0);
         setActive(false);
-        setReleased('release ' + g.dx + ' fast ' + (Math.abs(g.vx) > 0.2));
+        setReleased(
+          'release ' +
+            gestureState.dx +
+            ' fast ' +
+            (Math.abs(gestureState.vx) > 0.2),
+        );
       },
     }),
   ).current;
 
   const padPan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 12,
-      onPanResponderMove: (e, g) => setPad(g.dx),
-      onPanResponderRelease: (e, g) =>
-        setReleased('pad ' + g.dx + ' from ' + g.x0 + ' id ' + g.stateID),
+      onMoveShouldSetPanResponder: (event, gestureState) =>
+        Math.abs(gestureState.dx) > 12,
+      onPanResponderMove: (event, gestureState) => setPad(gestureState.dx),
+      onPanResponderRelease: (event, gestureState) =>
+        setReleased(
+          'pad ' +
+            gestureState.dx +
+            ' from ' +
+            gestureState.x0 +
+            ' id ' +
+            gestureState.stateID,
+        ),
     }),
   ).current;
 

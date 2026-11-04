@@ -50,18 +50,18 @@ check(fired === 1, 'one-shot setTimeout fires exactly once');
 
 // --- clearTimeout cancels a pending timer ------------------------------------------------------
 let cancelled = 0;
-const cid = setTimeout(() => {
+const timeoutId = setTimeout(() => {
   cancelled++;
 }, 20);
-clearTimeout(cid);
+clearTimeout(timeoutId);
 NativeUI.tick(50);
 check(cancelled === 0, 'clearTimeout prevents the callback from firing');
 
 // --- extra args are forwarded to the callback (web spec) ---------------------------------------
 let argSum = 0;
 setTimeout(
-  (a, b) => {
-    argSum = a + b;
+  (first, second) => {
+    argSum = first + second;
   },
   10,
   3,
@@ -72,7 +72,7 @@ check(argSum === 7, 'setTimeout forwards extra args to the callback');
 
 // --- setInterval repeats every period; clearInterval stops it ----------------------------------
 let intervalTicks = 0;
-const iid = setInterval(() => {
+const intervalId = setInterval(() => {
   intervalTicks++;
 }, 25);
 NativeUI.tick(25); // fire 1
@@ -82,7 +82,7 @@ check(
   intervalTicks === 3,
   `setInterval fires each period (ticks=${intervalTicks})`,
 );
-clearInterval(iid);
+clearInterval(intervalId);
 NativeUI.tick(100);
 check(intervalTicks === 3, 'clearInterval stops further firing');
 

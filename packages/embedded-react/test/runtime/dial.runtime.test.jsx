@@ -43,8 +43,8 @@ function App({value, hot}) {
         knob="circle"
         adjustable
         indicatorColor={hot ? '#ff0000' : '#0a84ff'}
-        onLayout={e => (layouts.dial = e.layout)}
-        onChange={v => changes.push(v)}
+        onLayout={event => (layouts.dial = event.layout)}
+        onChange={value => changes.push(value)}
       />
       <Switch
         style={{
@@ -90,14 +90,20 @@ check(
 // A React re-render mid-drag (the readout updating) must not snap the value back.
 root.render(<App value={25} hot={true} />);
 __touch(1, 166, 36); // tiny move: same quantized value → no new event
-const n = changes.length;
+const changeCount = changes.length;
 __touch(2, 166, 36);
-check(changes.length === n, 'release does not emit a spurious change');
+check(
+  changes.length === changeCount,
+  'release does not emit a spurious change',
+);
 
 // Tap in the hole: nothing (the centre is transparent to the dial).
 __touch(0, 100, 100);
 __touch(2, 100, 100);
-check(changes.length === n, 'tap in the hole does not change the value');
+check(
+  changes.length === changeCount,
+  'tap in the hole does not change the value',
+);
 
 // Switch: tap toggles, onValueChange gets a boolean (the bridge maps it to ER_EVENT_VALUE_CHANGE).
 __touch(0, 325, 35);

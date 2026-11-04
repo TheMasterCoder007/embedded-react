@@ -43,16 +43,16 @@ const stateMap = new Map([
 
 describe('keyboard IR', () => {
   it('rejects a layout with no layers, or a layer with no rows, at the config', () => {
-    let err;
+    let error;
     try {
       keyboardOf('setKeyboardConfig({layers: []});');
-    } catch (e) {
-      err = e;
+    } catch (thrown) {
+      error = thrown;
     }
-    expect(err.message).toBe(
+    expect(error.message).toBe(
       'AOT: setKeyboardConfig `layers` needs at least one layer',
     );
-    expect(err.aotLoc).toMatchObject({line: 1, column: 18});
+    expect(error.aotLoc).toMatchObject({line: 1, column: 18});
     expect(() =>
       keyboardOf('setKeyboardConfig({layers: [[[{char: "a"}]], []]});'),
     ).toThrow('AOT: setKeyboardConfig `layers[1]` needs at least one row');
@@ -73,7 +73,7 @@ describe('vector IR: updateVector', () => {
   /** Lowers a handler body that can update the node ref `art`, inside a touch handler's event `e`. */
   function lowerHandler(source) {
     const statements = parse(source, {sourceType: 'module'}).program.body;
-    const env = {
+    const environment = {
       state: stateMap,
       locals: new Map(),
       constants: {},
@@ -85,18 +85,18 @@ describe('vector IR: updateVector', () => {
       caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
       stores: [],
     };
-    const ctx = {
+    const context = {
       stateChanged: false,
       output: new Out(new Map(), null),
     };
     return {
       stmts: lowerStmts(
         statements,
-        env,
+        environment,
         {byName: stateMap, bySetter: new Map()},
-        ctx,
+        context,
       ),
-      ctx,
+      context,
     };
   }
 

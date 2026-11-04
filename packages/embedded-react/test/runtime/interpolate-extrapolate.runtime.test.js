@@ -22,16 +22,16 @@
 import {Animated} from 'embedded-react';
 import {check, report} from './harness.js';
 
-const v = new Animated.Value(0);
+const value = new Animated.Value(0);
 
-function driveMode(cfg, label) {
+function driveMode(config, label) {
   const node = NativeUI.createNode('View');
   NativeUI.setProps(node, {width: 50, height: 50});
-  const interp = v.interpolate(cfg);
+  const interp = value.interpolate(config);
   interp.__bind(node, 'opacity'); // output applied in C; not readable from JS
-  v.setValue(-50); // below inputRange[0]
+  value.setValue(-50); // below inputRange[0]
   NativeUI.tick(1);
-  v.setValue(150); // above the last breakpoint
+  value.setValue(150); // above the last breakpoint
   NativeUI.tick(1);
   check(true, `bound + driven past the range without error (${label})`);
 }
@@ -46,9 +46,9 @@ driveMode(
 );
 
 // The raw value still tracks regardless of any interpolation bindings.
-v.setValue(42);
+value.setValue(42);
 check(
-  Math.abs(v.__getValue() - 42) < 0.001,
+  Math.abs(value.__getValue() - 42) < 0.001,
   'raw value still tracks alongside interpolation bindings',
 );
 

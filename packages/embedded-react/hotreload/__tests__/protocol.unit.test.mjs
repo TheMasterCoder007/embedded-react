@@ -28,11 +28,11 @@ import {
 function drive(chunks) {
   const frames = [];
   const errors = [];
-  const dec = new FrameDecoder({
+  const decoder = new FrameDecoder({
     onFrame: (payload, meta) => frames.push({payload, meta}),
     onError: reason => errors.push(reason),
   });
-  for (const c of chunks) dec.push(c);
+  for (const chunk of chunks) decoder.push(chunk);
   return {frames, errors};
 }
 
@@ -68,8 +68,8 @@ describe('FrameDecoder roundtrip', () => {
   it('reassembles a frame split across arbitrary chunk boundaries', () => {
     const frame = encodeFrame(sample);
     const chunks = [];
-    for (let i = 0; i < frame.length; i += 7)
-      chunks.push(frame.subarray(i, i + 7));
+    for (let offset = 0; offset < frame.length; offset += 7)
+      chunks.push(frame.subarray(offset, offset + 7));
     const {frames, errors} = drive(chunks);
     expect(errors).toEqual([]);
     expect(frames).toHaveLength(1);
@@ -78,18 +78,18 @@ describe('FrameDecoder roundtrip', () => {
 
   it('feeding one byte at a time still completes the frame', () => {
     const frame = encodeFrame(sample);
-    const {frames, errors} = drive([...frame].map(b => Buffer.from([b])));
+    const {frames, errors} = drive([...frame].map(byte => Buffer.from([byte])));
     expect(errors).toEqual([]);
     expect(frames).toHaveLength(1);
     expect(frames[0].payload).toEqual(sample);
   });
 
   it('decodes two back-to-back frames in one stream', () => {
-    const a = encodeFrame(Buffer.from('first-payload'));
-    const b = encodeFrame(Buffer.from('second-much-longer-payload-xyz'));
-    const {frames, errors} = drive([Buffer.concat([a, b])]);
+    const first = encodeFrame(Buffer.from('first-payload'));
+    const second = encodeFrame(Buffer.from('second-much-longer-payload-xyz'));
+    const {frames, errors} = drive([Buffer.concat([first, second])]);
     expect(errors).toEqual([]);
-    expect(frames.map(f => f.payload.toString())).toEqual([
+    expect(frames.map(frame => frame.payload.toString())).toEqual([
       'first-payload',
       'second-much-longer-payload-xyz',
     ]);
@@ -108,12 +108,15 @@ describe('FrameDecoder resync (in-band channel shared with device logs)', () => 
   });
 
   it('skips noise BETWEEN two frames', () => {
-    const a = encodeFrame(Buffer.from('alpha'));
+    const first = encodeFrame(Buffer.from('alpha'));
     const log = Buffer.from('\nI (9999) js: reloaded ok\n');
-    const b = encodeFrame(Buffer.from('beta'));
-    const {frames, errors} = drive([Buffer.concat([a, log, b])]);
+    const second = encodeFrame(Buffer.from('beta'));
+    const {frames, errors} = drive([Buffer.concat([first, log, second])]);
     expect(errors).toEqual([]);
-    expect(frames.map(f => f.payload.toString())).toEqual(['alpha', 'beta']);
+    expect(frames.map(frame => frame.payload.toString())).toEqual([
+      'alpha',
+      'beta',
+    ]);
   });
 
   it('handles a false "ERH" prefix that is not a real magic', () => {

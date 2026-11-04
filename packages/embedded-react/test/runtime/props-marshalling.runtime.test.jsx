@@ -69,7 +69,8 @@ check(
 // More distinct colors than the cache holds, cycled twice: every one still parses to itself, whether
 // it survived eviction or had to be re-parsed.
 const ramp = [];
-for (let i = 0; i < 40; i++) ramp.push((0xff000000 | (i * 6)) >>> 0); // >>> 0: `|` yields a signed int32
+for (let index = 0; index < 40; index++)
+  ramp.push((0xff000000 | (index * 6)) >>> 0); // >>> 0: `|` yields a signed int32
 let rampOk = true;
 for (let pass = 0; pass < 2; pass++) {
   for (const argb of ramp) {
@@ -95,33 +96,33 @@ check(
 
 // Enum tokens: flexDirection decides whether two children stack or sit side by side, so the layout
 // reports whether the second render re-read the token or reused the first one's.
-function Row({dir}) {
+function Row({direction}) {
   return (
-    <View style={{width: 100, height: 100, flexDirection: dir}}>
+    <View style={{width: 100, height: 100, flexDirection: direction}}>
       <View style={{width: 20, height: 20}} />
       <View
         style={{width: 20, height: 20}}
-        onLayout={e => (layouts.second = e.layout)}
+        onLayout={event => (layouts.second = event.layout)}
       />
     </View>
   );
 }
-root.render(<Row dir="row" />);
+root.render(<Row direction="row" />);
 check(
   layouts.second.x === 20 && layouts.second.y === 0,
   'flexDirection row laid the second child beside the first',
 );
-root.render(<Row dir="column" />);
+root.render(<Row direction="column" />);
 check(
   layouts.second.x === 0 && layouts.second.y === 20,
   'switching to column stacked it below',
 );
-root.render(<Row dir="row" />);
+root.render(<Row direction="row" />);
 check(
   layouts.second.x === 20 && layouts.second.y === 0,
   'and switching back restored the row',
 );
-root.render(<Row dir={'ro' + 'w'} />);
+root.render(<Row direction={'ro' + 'w'} />);
 check(
   layouts.second.x === 20 && layouts.second.y === 0,
   'a computed token mapped the same as the literal',

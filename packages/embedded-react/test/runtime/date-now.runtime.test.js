@@ -23,14 +23,17 @@ check(
   typeof Date.now === 'function',
   'Date.now exists without the Date intrinsic',
 );
-const d0 = Date.now();
-const p0 = performance.now();
+const dateStart = Date.now();
+const performanceStart = performance.now();
 NativeUI.tick(250);
 check(
-  Date.now() - d0 === 250,
-  `Date.now advances with the engine clock (${Date.now() - d0})`,
+  Date.now() - dateStart === 250,
+  `Date.now advances with the engine clock (${Date.now() - dateStart})`,
 );
-check(performance.now() - p0 === 250, 'performance.now advances with it');
+check(
+  performance.now() - performanceStart === 250,
+  'performance.now advances with it',
+);
 check(Number.isInteger(Date.now()), 'Date.now is whole milliseconds');
 check(
   NativeUI.now() === performance.now(),
@@ -50,8 +53,8 @@ check(stamped === Date.now(), 'Date.now works inside a timer callback');
 const thrownBy = make => {
   try {
     return `no throw (${typeof make()})`;
-  } catch (e) {
-    return String(e && e.message);
+  } catch (error) {
+    return String(error && error.message);
   }
 };
 const viaNew = thrownBy(() => new Date());
@@ -79,20 +82,23 @@ check(
 let rejected = false;
 try {
   __setWallClock(Symbol('not a time'));
-} catch (e) {
-  rejected = e instanceof TypeError;
+} catch (error) {
+  rejected = error instanceof TypeError;
 }
 check(rejected, 'a value that cannot become a number throws');
 check(Date.now() === 1700000001000, 'and leaves the wall clock alone');
 
 // --- both keep counting past the engine clock's 32-bit wrap (~49.7 days) -----------------------
-const dw = Date.now();
-const pw = performance.now();
-for (let i = 0; i < 5; i++) NativeUI.tick(1000000000); // 5e9 ms in total, past 2^32
+const dateBeforeWrap = Date.now();
+const performanceBeforeWrap = performance.now();
+for (let tick = 0; tick < 5; tick++) NativeUI.tick(1000000000); // 5e9 ms in total, past 2^32
 check(
-  performance.now() - pw === 5e9,
-  `performance.now does not wrap (${performance.now() - pw})`,
+  performance.now() - performanceBeforeWrap === 5e9,
+  `performance.now does not wrap (${performance.now() - performanceBeforeWrap})`,
 );
-check(Date.now() - dw === 5e9, `Date.now does not wrap (${Date.now() - dw})`);
+check(
+  Date.now() - dateBeforeWrap === 5e9,
+  `Date.now does not wrap (${Date.now() - dateBeforeWrap})`,
+);
 
 report('date-now');

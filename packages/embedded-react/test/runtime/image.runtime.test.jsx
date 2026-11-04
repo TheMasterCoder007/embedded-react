@@ -32,7 +32,7 @@ function Panel({mode}) {
         resizeMode={mode}
         tintColor="#ff0000"
         style={{width: 64, height: 64}}
-        onLayout={e => (layouts.img = e.layout)}
+        onLayout={event => (layouts.img = event.layout)}
       />
     </View>
   );

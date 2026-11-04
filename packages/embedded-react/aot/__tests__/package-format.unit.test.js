@@ -237,7 +237,7 @@ describe('package format copy', () => {
         ...propsSource.matchAll(
           /\{offsetof\(ERProps, (\w+)\), ERB_PK_\w+, (ER_PROP_\w+), \w+\}/g,
         ),
-      ].map(([, field, anim]) => [anim, field]),
+      ].map(([, field, animatedProp]) => [animatedProp, field]),
     );
     expect(new Map(format.ANIM_PROP_FIELDS)).toEqual(animated);
   });

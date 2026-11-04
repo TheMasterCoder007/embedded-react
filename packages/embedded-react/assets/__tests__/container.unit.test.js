@@ -27,40 +27,43 @@ import {
   SECTION_VENDOR_BYTECODE,
 } from '../emit-container.mjs';
 
+const MAGIC_BYTES = 4;
+
 /** Re-reads a little-endian ERCF container into a structured object (mirrors the C loader's walk). */
-function parseContainer(buf) {
-  let off = 0;
+function parseContainer(bytes) {
+  let offset = 0;
   const u16 = () => {
-    const v = buf.readUInt16LE(off);
-    off += 2;
-    return v;
+    const value = bytes.readUInt16LE(offset);
+    offset += 2;
+    return value;
   };
   const u32 = () => {
-    const v = buf.readUInt32LE(off);
-    off += 4;
-    return v;
+    const value = bytes.readUInt32LE(offset);
+    offset += 4;
+    return value;
   };
-  const magic = buf.toString('ascii', 0, 4);
-  off = 4;
+  const magic = bytes.toString('ascii', 0, MAGIC_BYTES);
+  offset = MAGIC_BYTES;
   const formatVersion = u32();
   const storedCrc = u32();
-  const tagLen = u16();
-  const qjsTag = buf.toString('utf8', off, off + tagLen);
-  off += tagLen;
+  const tagLength = u16();
+  const qjsTag = bytes.toString('utf8', offset, offset + tagLength);
+  offset += tagLength;
   const sectionCount = u32();
   const sections = [];
-  for (let i = 0; i < sectionCount; i++) {
+  for (let index = 0; index < sectionCount; index++) {
     const type = u32();
-    const len = u32();
-    const data = buf.subarray(off, off + len);
-    sections.push({type, data, dataOffset: off});
-    off += len;
+    const length = u32();
+    const data = bytes.subarray(offset, offset + length);
+    sections.push({type, data, dataOffset: offset});
+    offset += length;
   }
-  return {magic, formatVersion, storedCrc, qjsTag, sections, end: off};
+  return {magic, formatVersion, storedCrc, qjsTag, sections, end: offset};
 }
 
 /** The sections a loader acts on — type-0 padding is skipped exactly like any unknown type. */
-const realSections = p => p.sections.filter(s => s.type !== SECTION_PAD);
+const realSections = parsed =>
+  parsed.sections.filter(section => section.type !== SECTION_PAD);
 
 describe('crc32', () => {
   it('matches the canonical CRC-32/IEEE check value (so it matches the C loader)', () => {
@@ -79,14 +82,14 @@ describe('emitContainer', () => {
   const assetPack = Buffer.from('ERPK fake pack bytes', 'ascii');
 
   it('emits a well-formed container with assets (pack first, bytecode last)', () => {
-    const c = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
-    const p = parseContainer(c);
-    expect(p.magic).toBe('ERCF');
-    expect(p.formatVersion).toBe(1);
-    expect(p.qjsTag).toBe('v0.15.0');
-    expect(p.end).toBe(c.length); // consumed every byte — no trailing slop
-    const real = realSections(p);
-    expect(real.map(s => s.type)).toEqual([
+    const container = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
+    const parsed = parseContainer(container);
+    expect(parsed.magic).toBe('ERCF');
+    expect(parsed.formatVersion).toBe(1);
+    expect(parsed.qjsTag).toBe('v0.15.0');
+    expect(parsed.end).toBe(container.length); // consumed every byte — no trailing slop
+    const real = realSections(parsed);
+    expect(real.map(section => section.type)).toEqual([
       SECTION_ASSET_PACK,
       SECTION_BYTECODE,
     ]);
@@ -102,18 +105,27 @@ describe('emitContainer', () => {
     for (const qjsTag of ['v', 'v0', 'v0.15', 'v0.15.0', 'v0.15.0-rc1']) {
       for (let vlen = 0; vlen <= 5; vlen++) {
         const vendorBytecode = vlen ? Buffer.alloc(vlen, 0xab) : undefined;
-        const c = emitContainer({bytecode, vendorBytecode, assetPack, qjsTag});
-        const p = parseContainer(c);
-        const pack = p.sections.find(s => s.type === SECTION_ASSET_PACK);
+        const container = emitContainer({
+          bytecode,
+          vendorBytecode,
+          assetPack,
+          qjsTag,
+        });
+        const parsed = parseContainer(container);
+        const pack = parsed.sections.find(
+          section => section.type === SECTION_ASSET_PACK,
+        );
         expect(pack.dataOffset % 4).toBe(0);
         expect(Buffer.compare(pack.data, assetPack)).toBe(0);
         // Padding, when present, is zero-filled, precedes the pack, and is at most 3 bytes.
-        for (const pad of p.sections.filter(s => s.type === SECTION_PAD)) {
+        for (const pad of parsed.sections.filter(
+          section => section.type === SECTION_PAD,
+        )) {
           expect(pad.data.length).toBeLessThan(4);
-          expect(pad.data.every(b => b === 0)).toBe(true);
+          expect(pad.data.every(byte => byte === 0)).toBe(true);
         }
         // The loader-visible sections are unchanged by padding.
-        expect(realSections(p).map(s => s.type)).toEqual(
+        expect(realSections(parsed).map(section => section.type)).toEqual(
           vlen
             ? [SECTION_VENDOR_BYTECODE, SECTION_ASSET_PACK, SECTION_BYTECODE]
             : [SECTION_ASSET_PACK, SECTION_BYTECODE],
@@ -124,29 +136,33 @@ describe('emitContainer', () => {
 
   it('emits no padding section when there is nothing to align', () => {
     // No asset pack → nothing has an alignment requirement → byte-identical to the old emitter.
-    const c = emitContainer({bytecode, qjsTag: 'v0.15.0'});
-    const p = parseContainer(c);
-    expect(p.sections.map(s => s.type)).toEqual([SECTION_BYTECODE]);
+    const container = emitContainer({bytecode, qjsTag: 'v0.15.0'});
+    const parsed = parseContainer(container);
+    expect(parsed.sections.map(section => section.type)).toEqual([
+      SECTION_BYTECODE,
+    ]);
   });
 
   it('stores a CRC over the bytes after the crc field, and it verifies', () => {
-    const c = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
-    const p = parseContainer(c);
-    expect(p.storedCrc).toBe(crc32(c.subarray(12)));
+    const container = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
+    const parsed = parseContainer(container);
+    expect(parsed.storedCrc).toBe(crc32(container.subarray(12)));
   });
 
   it('flipping any body byte breaks the CRC (integrity check)', () => {
-    const c = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
-    const tampered = Buffer.from(c);
+    const container = emitContainer({bytecode, assetPack, qjsTag: 'v0.15.0'});
+    const tampered = Buffer.from(container);
     tampered[tampered.length - 1] ^= 0xff;
-    const p = parseContainer(tampered);
-    expect(p.storedCrc).not.toBe(crc32(tampered.subarray(12)));
+    const parsed = parseContainer(tampered);
+    expect(parsed.storedCrc).not.toBe(crc32(tampered.subarray(12)));
   });
 
   it('omits the asset section when there are no assets', () => {
-    const c = emitContainer({bytecode, qjsTag: 'v0.15.0'});
-    const p = parseContainer(c);
-    expect(realSections(p).map(s => s.type)).toEqual([SECTION_BYTECODE]);
+    const container = emitContainer({bytecode, qjsTag: 'v0.15.0'});
+    const parsed = parseContainer(container);
+    expect(realSections(parsed).map(section => section.type)).toEqual([
+      SECTION_BYTECODE,
+    ]);
   });
 
   it('rejects missing bytecode or tag', () => {

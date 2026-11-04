@@ -25,16 +25,16 @@ import {check, report} from './harness.js';
 // In-memory __erPersist (what the C host provides in the simulator).
 const store = new Map();
 globalThis.__erPersist = {
-  get: k => store.get(k),
-  set: (k, v) => store.set(k, v),
+  get: key => store.get(key),
+  set: (key, value) => store.set(key, value),
 };
 
 let lastValue;
 let setter;
 function Comp() {
-  const [v, setV] = usePersistentState('counter', 10);
-  lastValue = v;
-  setter = setV;
+  const [count, setCount] = usePersistentState('counter', 10);
+  lastValue = count;
+  setter = setCount;
   return <View style={{width: 1, height: 1}} />;
 }
 
@@ -66,7 +66,7 @@ check(
 );
 
 // Functional updates work and persist too.
-setter(n => n + 1);
+setter(previous => previous + 1);
 NativeUI.tick(0);
 check(
   lastValue === 43 && store.get('counter') === '43',

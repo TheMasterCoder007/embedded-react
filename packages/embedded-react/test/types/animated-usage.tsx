@@ -35,17 +35,17 @@ const styles = StyleSheet.create({
 });
 
 export function AnimatedUsage() {
-  const v = useAnimatedValue(0);
-  const spin = v.interpolate({
+  const value = useAnimatedValue(0);
+  const spin = value.interpolate({
     inputRange: [0, 1],
     outputRange: [0, 360],
     extrapolate: 'clamp',
     extrapolateRight: 'extend',
   });
 
-  v.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']});
+  value.interpolate({inputRange: [0, 1], outputRange: ['#000', '#fff']});
   // @ts-expect-error — an outputRange is all numbers or all colors.
-  v.interpolate({inputRange: [0, 1], outputRange: [0, '#fff']});
+  value.interpolate({inputRange: [0, 1], outputRange: [0, '#fff']});
   // @ts-expect-error — an interpolation is not a settable value.
   spin.setValue(1);
   // @ts-expect-error — nor does it own an engine slot to free.
@@ -58,28 +58,34 @@ export function AnimatedUsage() {
     <View style={styles.fill}>
       <AnimatedPressable
         onPress={() => {
-          Animated.timing(v, {
+          Animated.timing(value, {
             toValue: 1,
             easing: Easing.bezier(0.2, 0, 0, 1),
           }).start();
-          Animated.timing(v, {toValue: 0, easing: Easing.easeInOut}).start();
-          Animated.spring(v, {
+          Animated.timing(value, {
+            toValue: 0,
+            easing: Easing.easeInOut,
+          }).start();
+          Animated.spring(value, {
             toValue: 1,
             stiffness: 180,
             damping: 12,
             mass: 1,
             velocity: 0.5,
           }).start();
-          Animated.decay(v, {velocity: 0.8, deceleration: 0.997}).start();
+          Animated.decay(value, {velocity: 0.8, deceleration: 0.997}).start();
           // @ts-expect-error — RN's spelling; the engine reads stiffness/damping.
-          Animated.spring(v, {toValue: 1, tension: 40});
-          // @ts-expect-error — easing is an engine token, not a JS function.
-          Animated.timing(v, {toValue: 1, easing: (t: number) => t});
+          Animated.spring(value, {toValue: 1, tension: 40});
+          Animated.timing(value, {
+            toValue: 1,
+            // @ts-expect-error — easing is an engine token, not a JS function.
+            easing: (progress: number) => progress,
+          });
 
           const scratch = new Animated.Value(0);
           scratch.destroy();
         }}
-        style={{opacity: v, transform: [{rotate: spin}]}}
+        style={{opacity: value, transform: [{rotate: spin}]}}
       />
       <Dial value={spin} />
     </View>

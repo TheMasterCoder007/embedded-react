@@ -38,7 +38,7 @@ const state = {
   bySetter: new Map([['setN', nState]]),
 };
 
-const env = {
+const environment = {
   state: state.byName,
   locals: new Map(),
   constants: {},
@@ -51,18 +51,18 @@ const env = {
 /** The responder `pan` a component body declares with this config, given gesture id 1. */
 function responder(config) {
   const source = `function App() { const pan = useRef(PanResponder.create(${config})).current; }`;
-  const fn = parse(source, {sourceType: 'module'}).program.body[0];
-  const pan = collectPanResponders(fn.body).get('pan');
+  const functionNode = parse(source, {sourceType: 'module'}).program.body[0];
+  const pan = collectPanResponders(functionNode.body).get('pan');
   pan.stateID = 1;
   return pan;
 }
 
 /** Lowers the responder `pan` with this config. */
 function lowerConfig(config) {
-  const out = new Out(new Map(), null);
+  const output = new Out(new Map(), null);
   return {
-    lowered: lowerPanResponder(responder(config), env, state, out),
-    out,
+    lowered: lowerPanResponder(responder(config), environment, state, output),
+    output,
   };
 }
 

@@ -75,6 +75,21 @@ const styles = StyleSheet.create({
 
 const SCREEN = {screen: {width: 240, height: 320}};
 
+// Program layout: the header, then the panel records, the need records and the table directory.
+const HEADER_BYTES = 24;
+const PANEL_COUNT_AT = 18;
+const NEED_COUNT_AT = 20;
+const TABLE_COUNT_AT = 22;
+const PANEL_RECORD_BYTES = 16;
+const NEED_RECORD_BYTES = 8;
+const DIRECTORY_ENTRY_BYTES = 12;
+const FUNCTION_RECORD_BYTES = 16;
+// The function record word holding its kind, parameter count and register cells.
+const FUNCTION_INFO_AT = 12;
+const SLOT_RECORD_BYTES = 16;
+const ARENA_REGION_BYTES = 12;
+const NODE_RECORD_BYTES = 12;
+
 const OP_NAMES = Object.fromEntries(
   Object.entries(OP).map(([name, {code}]) => [code, name]),
 );
@@ -82,16 +97,22 @@ const OP_NAMES = Object.fromEntries(
 /** The program section's header, panel and table directory. */
 function readProgram(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
-  const u16 = at => view.getUint16(at, true);
-  const u32 = at => view.getUint32(at, true);
-  const panelCount = u16(18);
-  const needCount = u16(20);
-  const tableCount = u16(22);
-  const directory = 24 + panelCount * 16 + needCount * 8;
+  const u16 = offset => view.getUint16(offset, true);
+  const u32 = offset => view.getUint32(offset, true);
+  const panelCount = u16(PANEL_COUNT_AT);
+  const needCount = u16(NEED_COUNT_AT);
+  const tableCount = u16(TABLE_COUNT_AT);
+  const directory =
+    HEADER_BYTES +
+    panelCount * PANEL_RECORD_BYTES +
+    needCount * NEED_RECORD_BYTES;
   const tables = new Map();
   for (let index = 0; index < tableCount; index++) {
-    const at = directory + index * 12;
-    tables.set(u16(at), {offset: u32(at + 4), length: u32(at + 8)});
+    const entryOffset = directory + index * DIRECTORY_ENTRY_BYTES;
+    tables.set(u16(entryOffset), {
+      offset: u32(entryOffset + 4),
+      length: u32(entryOffset + 8),
+    });
   }
   return {
     view,
@@ -141,33 +162,43 @@ function functionsOf(bytes) {
   const functions = tables.get(Table.functions);
   const code = tables.get(Table.code);
   const word = index => u32(code.offset + index * 4);
-  return Array.from({length: functions.length / 16}, (_, index) => {
-    const at = functions.offset + index * 16;
-    const start = u32(at);
-    const ops = [];
-    for (let pc = start; pc < start + u32(at + 4);) {
-      const first = word(pc);
-      const name = OP_NAMES[first & 0xff];
-      ops.push({
-        name,
-        a: (first >>> 8) & 0xff,
-        bx: first >>> 16,
-        c: first >>> 24,
-        ext: OP[name].words === 2 ? word(pc + 1) : undefined,
-      });
-      pc += OP[name].words;
-    }
-    return {kind: u32(at + 12) >>> 24, ops};
-  });
+  return Array.from(
+    {length: functions.length / FUNCTION_RECORD_BYTES},
+    (_, index) => {
+      const recordOffset = functions.offset + index * FUNCTION_RECORD_BYTES;
+      const start = u32(recordOffset);
+      const instructions = [];
+      for (
+        let programCounter = start;
+        programCounter < start + u32(recordOffset + 4);
+      ) {
+        const first = word(programCounter);
+        const name = OP_NAMES[first & 0xff];
+        instructions.push({
+          name,
+          a: (first >>> 8) & 0xff,
+          bx: first >>> 16,
+          c: first >>> 24,
+          ext: OP[name].words === 2 ? word(programCounter + 1) : undefined,
+        });
+        programCounter += OP[name].words;
+      }
+      return {kind: u32(recordOffset + 12) >>> 24, ops: instructions};
+    },
+  );
 }
 
 /** The arena's regions. */
 function regionsOf(bytes) {
   const {u16, u32, tables} = readProgram(bytes);
   const arena = tables.get(Table.arena);
-  return Array.from({length: arena.length / 12}, (_, index) => {
-    const at = arena.offset + index * 12;
-    return {kind: u16(at), count: u16(at + 2), bytes: u32(at + 8)};
+  return Array.from({length: arena.length / ARENA_REGION_BYTES}, (_, index) => {
+    const regionOffset = arena.offset + index * ARENA_REGION_BYTES;
+    return {
+      kind: u16(regionOffset),
+      count: u16(regionOffset + 2),
+      bytes: u32(regionOffset + 8),
+    };
   });
 }
 
@@ -228,9 +259,9 @@ describe('package', () => {
     expect(u32(templates.offset)).toBe(1);
     const nodes = templates.offset + 4 + 8;
     const node = index => ({
-      type: result.program[nodes + index * 12],
-      children: u16(nodes + index * 12 + 2),
-      props: u16(nodes + index * 12 + 4),
+      type: result.program[nodes + index * NODE_RECORD_BYTES],
+      children: u16(nodes + index * NODE_RECORD_BYTES + 2),
+      props: u16(nodes + index * NODE_RECORD_BYTES + 4),
     });
     expect([0, 1, 2, 3].map(index => node(index).children)).toEqual([
       1, 2, 0, 0,
@@ -242,12 +273,12 @@ describe('package', () => {
   });
 
   it('shares identical prop sets', () => {
-    const src = STATIC_APP.replace(
+    const source = STATIC_APP.replace(
       '<View style={styles.box} />',
       '<View style={styles.box} /><View style={styles.box} />',
     );
     const one = compilePackage(STATIC_APP, 'app', SCREEN);
-    const two = compilePackage(src, 'app', SCREEN);
+    const two = compilePackage(source, 'app', SCREEN);
     const sets = result => {
       const {u32, tables} = readProgram(result.program);
       return u32(tables.get(Table.props).offset);
@@ -256,7 +287,7 @@ describe('package', () => {
   });
 
   it('refuses what it does not lower yet, at its place in the source', () => {
-    const src = `
+    const source = `
 import {useState, useRef} from 'react';
 import {View, Pressable, Svg, updateVector} from 'embedded-react';
 export function App() {
@@ -272,13 +303,13 @@ export function App() {
     </Pressable>
   );
 }`;
-    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+    expect(() => compilePackage(source, 'app', SCREEN)).toThrow(
       /a package doesn't support updateVector on a node in a list row yet[\s\S]*App\.jsx:11:11/,
     );
   });
 
   it('binds a handler to its event, and re-sets what state drives in the update', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Text} from 'embedded-react';
 export function App() {
@@ -286,12 +317,15 @@ export function App() {
   return <Pressable onPress={() => setCount(count + 1)}><Text>{count}</Text></Pressable>;
 }`;
     const {u16, u32, tables, panel} = readProgram(
-      compilePackage(src, 'app', SCREEN).program,
+      compilePackage(source, 'app', SCREEN).program,
     );
     const functions = tables.get(Table.functions);
     const kinds = Array.from(
-      {length: functions.length / 16},
-      (_, index) => u32(functions.offset + index * 16 + 12) >>> 24,
+      {length: functions.length / FUNCTION_RECORD_BYTES},
+      (_, index) =>
+        u32(
+          functions.offset + index * FUNCTION_RECORD_BYTES + FUNCTION_INFO_AT,
+        ) >>> 24,
     );
     expect(kinds).toEqual([0, FunctionKind.update]); // ER_EVENT_PRESS, then the update
     expect(panel.update).toBe(1);
@@ -305,36 +339,41 @@ export function App() {
     // The count is an int slot with a dirty bit; the handler's request bit is a tracked bool.
     const slots = tables.get(Table.slots);
     const slot = index => ({
-      type: u16(slots.offset + index * 16) & 0xff,
-      flags: u16(slots.offset + index * 16) >> 8,
+      type: u16(slots.offset + index * SLOT_RECORD_BYTES) & 0xff,
+      flags: u16(slots.offset + index * SLOT_RECORD_BYTES) >> 8,
     });
     expect(slot(0)).toEqual({type: ValueType.int, flags: SlotFlag.tracked});
     expect(slot(1)).toEqual({type: ValueType.bool, flags: SlotFlag.tracked});
   });
 
   it('works out values from the screen size in a boot function, in doubles', () => {
-    const src = `
+    const source = `
 import {View} from 'embedded-react';
 const HALF = screen.width / 2;
 export function App() {
   return <View style={{width: HALF, height: 10}} />;
 }`;
     const {u16, u32, tables, panel} = readProgram(
-      compilePackage(src, 'app', SCREEN).program,
+      compilePackage(source, 'app', SCREEN).program,
     );
     const functions = tables.get(Table.functions);
-    expect(u32(functions.offset + panel.boot * 16 + 12) >>> 24).toBe(
-      FunctionKind.boot,
-    );
+    expect(
+      u32(
+        functions.offset +
+          panel.boot * FUNCTION_RECORD_BYTES +
+          FUNCTION_INFO_AT,
+      ) >>> 24,
+    ).toBe(FunctionKind.boot);
     const slots = tables.get(Table.slots);
-    const types = Array.from({length: slots.length / 16}, (_, index) =>
-      u16(slots.offset + index * 16),
+    const types = Array.from(
+      {length: slots.length / SLOT_RECORD_BYTES},
+      (_, index) => u16(slots.offset + index * SLOT_RECORD_BYTES),
     );
     expect(types).toContain(ValueType.double | (SlotFlag.bootOnly << 8));
   });
 
   it('interns a string state that holds one of a closed set of values', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Text} from 'embedded-react';
 export function App() {
@@ -346,7 +385,7 @@ export function App() {
     </Pressable>
   );
 }`;
-    const result = compilePackage(src, 'app', SCREEN);
+    const result = compilePackage(source, 'app', SCREEN);
     const {u16, u32, tables} = readProgram(result.program);
     const strings = tables.get(Table.strings);
     const string = index => {
@@ -369,22 +408,22 @@ export function App() {
 
     // label is read as a string to build its next value, so it stays a buffer.
     const types = Array.from(
-      {length: slots.length / 16},
-      (_, index) => u16(slots.offset + index * 16) & 0xff,
+      {length: slots.length / SLOT_RECORD_BYTES},
+      (_, index) => u16(slots.offset + index * SLOT_RECORD_BYTES) & 0xff,
     );
     expect(types.filter(type => type === ValueType.enum)).toHaveLength(1);
     expect(types).toContain(ValueType.string);
   });
 
   it('lists the values the host feeds, by name', () => {
-    const src = `
+    const source = `
 import {Text, useHostValue} from 'embedded-react';
 export function App() {
   const zeta = useHostValue(0);
   const alpha = useHostValue(0.5);
   return <Text>{zeta} {alpha}</Text>;
 }`;
-    const result = compilePackage(src, 'app', SCREEN);
+    const result = compilePackage(source, 'app', SCREEN);
     const {u16, u32, tables} = readProgram(result.program);
     const inputs = tables.get(Table.inputs);
     const strings = tables.get(Table.strings);
@@ -407,24 +446,24 @@ export function App() {
       ],
       ['zIndex: -40000', /`z_index` is -40000/],
     ]) {
-      const src = `
+      const source = `
 import {Text} from 'embedded-react';
 export function App() {
   return <Text style={{${style}}}>x</Text>;
 }`;
-      expect(() => compilePackage(src, 'app', SCREEN), style).toThrow(
+      expect(() => compilePackage(source, 'app', SCREEN), style).toThrow(
         new RegExp(`${message.source}[\\s\\S]*App\\.jsx:4:10`),
       );
     }
   });
 
   it('refuses an image the package does not bake', () => {
-    const src = `
+    const source = `
 import {Image} from 'embedded-react';
 export function App() {
   return <Image source={{uri: 'logo'}} style={{width: 20, height: 20}} />;
 }`;
-    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+    expect(() => compilePackage(source, 'app', SCREEN)).toThrow(
       /the package has no image named "logo"[\s\S]*App\.jsx:4:10/,
     );
   });
@@ -439,23 +478,23 @@ export function App() {
       expect(bytes.subarray(14, 17).toString('ascii')).toBe('erb');
 
       // Walk the sections: each one's data starts 4-aligned.
-      let at = 17;
-      const count = bytes.readUInt32LE(at);
-      at += 4;
+      let cursor = 17;
+      const count = bytes.readUInt32LE(cursor);
+      cursor += 4;
       const types = [];
       for (let index = 0; index < count; index++) {
-        const type = bytes.readUInt32LE(at);
-        const length = bytes.readUInt32LE(at + 4);
+        const type = bytes.readUInt32LE(cursor);
+        const length = bytes.readUInt32LE(cursor + 4);
         if (type !== 0) {
           types.push(type);
           expect(
-            (at + 8) % 4,
+            (cursor + 8) % 4,
             `section ${type} with a ${assetPack?.length ?? 0} B pack`,
           ).toBe(0);
         }
-        at += 8 + length;
+        cursor += 8 + length;
       }
-      expect(at).toBe(bytes.length);
+      expect(cursor).toBe(bytes.length);
       expect(types).toEqual(assetPack ? [2, 4, 5] : [4, 5]);
       const end = file.bytes.length - result.debug.length;
       expect(Buffer.from(file.bytes.subarray(end))).toEqual(
@@ -513,12 +552,15 @@ export function App() {
   /** Each directory entry, with the panel it is for. */
   function directoryOf(bytes) {
     const {u16, u32, header} = readProgram(bytes);
-    const at = 24 + header.panelCount * 16 + u16(20) * 8;
-    return Array.from({length: u16(22)}, (_, index) => ({
-      id: u16(at + index * 12),
-      panel: u16(at + index * 12 + 2),
-      offset: u32(at + index * 12 + 4),
-      length: u32(at + index * 12 + 8),
+    const directoryOffset =
+      HEADER_BYTES +
+      header.panelCount * PANEL_RECORD_BYTES +
+      u16(NEED_COUNT_AT) * NEED_RECORD_BYTES;
+    return Array.from({length: u16(TABLE_COUNT_AT)}, (_, index) => ({
+      id: u16(directoryOffset + index * DIRECTORY_ENTRY_BYTES),
+      panel: u16(directoryOffset + index * DIRECTORY_ENTRY_BYTES + 2),
+      offset: u32(directoryOffset + index * DIRECTORY_ENTRY_BYTES + 4),
+      length: u32(directoryOffset + index * DIRECTORY_ENTRY_BYTES + 8),
     }));
   }
 
@@ -526,11 +568,11 @@ export function App() {
   function panelsOf(bytes) {
     const {u16, u32, header} = readProgram(bytes);
     return Array.from({length: header.panelCount}, (_, index) => {
-      const at = 24 + index * 16;
+      const panelOffset = HEADER_BYTES + index * PANEL_RECORD_BYTES;
       return {
-        check: u32(at),
-        arenaBytes: u32(at + 4),
-        nodeCount: u16(at + 8),
+        check: u32(panelOffset),
+        arenaBytes: u32(panelOffset + 4),
+        nodeCount: u16(panelOffset + 8),
       };
     });
   }
@@ -598,9 +640,16 @@ export function App() {
     const {u16, u32, header} = readProgram(
       compilePackage(app, 'app', {}).program,
     );
-    const needs = Array.from({length: u16(20)}, (_, index) => {
-      const at = 24 + header.panelCount * 16 + index * 8;
-      return {resource: u16(at), panel: u16(at + 2), amount: u32(at + 4)};
+    const needs = Array.from({length: u16(NEED_COUNT_AT)}, (_, index) => {
+      const needOffset =
+        HEADER_BYTES +
+        header.panelCount * PANEL_RECORD_BYTES +
+        index * NEED_RECORD_BYTES;
+      return {
+        resource: u16(needOffset),
+        panel: u16(needOffset + 2),
+        amount: u32(needOffset + 4),
+      };
     });
     expect(needs).toContainEqual({
       resource: Resource.vectorNodes,
@@ -661,19 +710,22 @@ export function App() {
   return <Pressable onPress={() => setCount(count + 1)}><Text>{count} {doubled}</Text></Pressable>;
 }`;
 
-  const names = fn => fn.ops.map(op => op.name);
+  const names = functionRecord =>
+    functionRecord.ops.map(instruction => instruction.name);
 
   it('starts each timer on its callback, in a table maxTimers sizes', () => {
     const {program} = compilePackage(TIMER_APP, 'app', SCREEN);
     const functions = functionsOf(program);
-    expect(functions.map(fn => fn.kind)).toEqual([
+    expect(functions.map(functionRecord => functionRecord.kind)).toEqual([
       0, // ER_EVENT_PRESS
       0,
       FunctionKind.timer,
       FunctionKind.update,
     ]);
     // A repeating timer on function 2, and the clear.
-    expect(functions[0].ops.find(op => op.name === 'TSTART')).toMatchObject({
+    expect(
+      functions[0].ops.find(instruction => instruction.name === 'TSTART'),
+    ).toMatchObject({
       c: 1,
       ext: 2,
     });
@@ -724,7 +776,7 @@ export function App() {
     const {program} = compilePackage(EFFECT_APP, 'app', SCREEN);
     const functions = functionsOf(program);
     // The press, the timeout, the dep check, the two mount effects, then the update.
-    expect(functions.map(fn => fn.kind)).toEqual([
+    expect(functions.map(functionRecord => functionRecord.kind)).toEqual([
       0,
       FunctionKind.timer,
       FunctionKind.effect,
@@ -733,8 +785,10 @@ export function App() {
       FunctionKind.update,
     ]);
     const [, , check, firstMount, secondMount, update] = functions;
-    const effects = fn =>
-      fn.ops.filter(op => op.name === 'EFFECT').map(op => op.bx);
+    const effects = functionRecord =>
+      functionRecord.ops
+        .filter(instruction => instruction.name === 'EFFECT')
+        .map(instruction => instruction.bx);
     // Every pass queues the dep check; the first one, the first mount effect too.
     expect(effects(update)).toEqual([2, 3]);
     // The dep-driven mount effect asks for no update, so it queues the next one itself.
@@ -757,8 +811,9 @@ export function App() {
     const {program} = compilePackage(EFFECT_APP, 'app', SCREEN);
     const {u16, tables} = readProgram(program);
     const slots = tables.get(Table.slots);
-    const untracked = Array.from({length: slots.length / 16}, (_, index) =>
-      u16(slots.offset + index * 16),
+    const untracked = Array.from(
+      {length: slots.length / SLOT_RECORD_BYTES},
+      (_, index) => u16(slots.offset + index * SLOT_RECORD_BYTES),
     ).filter(word => !(word >> 8) && (word & 0xff) !== ValueType.node);
     // The timeout's id, the armed flag and the copy of count, then the pending flag and the mount's next.
     expect(untracked.map(word => word & 0xff).sort()).toEqual(
@@ -773,7 +828,7 @@ export function App() {
   });
 
   it('refuses an effect without deps', () => {
-    const src = `
+    const source = `
 import {useEffect, useRef} from 'react';
 import {View} from 'embedded-react';
 export function App() {
@@ -783,7 +838,7 @@ export function App() {
   });
   return <View />;
 }`;
-    expect(() => compilePackage(src, 'app', SCREEN)).toThrow(
+    expect(() => compilePackage(source, 'app', SCREEN)).toThrow(
       'useEffect needs a dependency list',
     );
   });
@@ -814,7 +869,8 @@ export function App() {
 }`;
   const CAPS = {...SCREEN, listCap: 4};
 
-  const names = fn => fn.ops.map(op => op.name);
+  const names = functionRecord =>
+    functionRecord.ops.map(instruction => instruction.name);
 
   /** The templates: each one's kind and nodes. */
   function templatesOf(bytes) {
@@ -823,12 +879,17 @@ export function App() {
     const count = u32(offset);
     const nodes = offset + 4 + count * 8;
     return Array.from({length: count}, (_, index) => {
-      const at = offset + 4 + index * 8;
+      const templateOffset = offset + 4 + index * 8;
       return {
-        kind: u16(at + 4),
-        nodes: Array.from({length: u16(at + 2)}, (_, node) => ({
-          handle: u16(nodes + (u16(at) + node) * 12 + 6),
-        })),
+        kind: u16(templateOffset + 4),
+        nodes: Array.from(
+          {length: u16(templateOffset + 2)},
+          (_, nodeIndex) => ({
+            handle: u16(
+              nodes + (u16(templateOffset) + nodeIndex) * NODE_RECORD_BYTES + 6,
+            ),
+          }),
+        ),
       };
     });
   }
@@ -837,13 +898,13 @@ export function App() {
   function slotsOf(bytes) {
     const {u16, tables} = readProgram(bytes);
     const {offset, length} = tables.get(Table.slots);
-    return Array.from({length: length / 16}, (_, index) => {
-      const at = offset + index * 16;
+    return Array.from({length: length / SLOT_RECORD_BYTES}, (_, index) => {
+      const slotOffset = offset + index * SLOT_RECORD_BYTES;
       return {
-        type: u16(at) & 0xff,
-        flags: u16(at) >> 8,
-        cap: u16(at + 12),
-        aux: u16(at + 14),
+        type: u16(slotOffset) & 0xff,
+        flags: u16(slotOffset) >> 8,
+        cap: u16(slotOffset + 12),
+        aux: u16(slotOffset + 14),
       };
     });
   }
@@ -857,8 +918,12 @@ export function App() {
     expect(u32(rows.offset)).toBe(1);
     expect([u16(rows.offset + 4), u16(rows.offset + 8)]).toEqual([56, 3]);
     const fields = Array.from({length: 3}, (_, index) => {
-      const at = rows.offset + 12 + index * 8;
-      return {type: program[at], cap: u16(at + 2), offset: u32(at + 4)};
+      const fieldOffset = rows.offset + 12 + index * 8;
+      return {
+        type: program[fieldOffset],
+        cap: u16(fieldOffset + 2),
+        offset: u32(fieldOffset + 4),
+      };
     });
     expect(fields).toEqual([
       {type: ValueType.string, cap: 47, offset: 0},
@@ -896,7 +961,9 @@ export function App() {
     const functions = functionsOf(program);
     const update = functions.at(-1);
     expect(update.kind).toBe(FunctionKind.update);
-    const builds = update.ops.filter(op => op.name === 'BUILD');
+    const builds = update.ops.filter(
+      instruction => instruction.name === 'BUILD',
+    );
     expect(builds.map(build => build.ext & 0xffff)).toEqual([1, 1, 1, 1]);
     expect(names(update)).toContain('GETNI');
     expect(names(update)).toContain('ROWGET');
@@ -910,8 +977,12 @@ export function App() {
     const {program} = compilePackage(LIST_APP, 'app', CAPS);
     const {u32, tables} = readProgram(program);
     const functions = tables.get(Table.functions);
-    const records = Array.from({length: functions.length / 16}, (_, index) =>
-      u32(functions.offset + index * 16 + 12),
+    const records = Array.from(
+      {length: functions.length / FUNCTION_RECORD_BYTES},
+      (_, index) =>
+        u32(
+          functions.offset + index * FUNCTION_RECORD_BYTES + FUNCTION_INFO_AT,
+        ),
     );
     // Five buttons and one row press; only the row's takes its row.
     const presses = records.filter(record => record >>> 24 === 0);
@@ -920,23 +991,25 @@ export function App() {
       0, 0, 0, 0, 0, 1,
     ]);
 
-    const ops = functionsOf(program).slice(0, 5).map(names);
-    expect(ops[0]).toEqual(expect.arrayContaining(['FMTSET', 'APPEND']));
-    expect(ops[1]).toContain('POP');
-    expect(ops[2]).toContain('KEEP');
-    expect(ops[3]).toContain('SLICE');
-    expect(ops[4]).toContain('CLEAR');
+    const instructionNames = functionsOf(program).slice(0, 5).map(names);
+    expect(instructionNames[0]).toEqual(
+      expect.arrayContaining(['FMTSET', 'APPEND']),
+    );
+    expect(instructionNames[1]).toContain('POP');
+    expect(instructionNames[2]).toContain('KEEP');
+    expect(instructionNames[3]).toContain('SLICE');
+    expect(instructionNames[4]).toContain('CLEAR');
   });
 
   it('gives rows that differ by their index their own templates', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {View} from 'embedded-react';
 export function App() {
   const [dots, setDots] = useState([{size: 4}]);
   return <View>{dots.map((dot, index) => <View key={index} style={{width: dot.size}}><View style={{height: index % 2 ? 2 : 3}} /></View>)}</View>;
 }`;
-    const templates = templatesOf(compilePackage(src, 'app', CAPS).program);
+    const templates = templatesOf(compilePackage(source, 'app', CAPS).program);
     expect(templates.map(template => template.kind)).toEqual([
       TemplateKind.root,
       TemplateKind.row,
@@ -990,19 +1063,25 @@ export function App() {
 
   it('reuses the registers each first item is appended from', () => {
     const items = `[${Array.from({length: 16}, (_, index) => `{a: ${index}, b: 1.5, c: 'x', d: 2}`).join(', ')}]`;
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Text} from 'embedded-react';
 export function App() {
   ${Array.from({length: 5}, (_, index) => `const [l${index}] = useState(${items});`).join('\n  ')}
   return <Text>{l0.length}</Text>;
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const boot = functionsOf(program)[readProgram(program).panel.boot];
-    expect(boot.ops.filter(op => op.name === 'APPEND')).toHaveLength(80);
+    expect(
+      boot.ops.filter(instruction => instruction.name === 'APPEND'),
+    ).toHaveLength(80);
     // Each append reads the same four registers.
     expect(
-      new Set(boot.ops.filter(op => op.name === 'APPEND').map(op => op.a)).size,
+      new Set(
+        boot.ops
+          .filter(instruction => instruction.name === 'APPEND')
+          .map(instruction => instruction.a),
+      ).size,
     ).toBe(1);
   });
 
@@ -1054,15 +1133,16 @@ export function App() {
   );
 }`;
 
-  const names = fn => fn.ops.map(op => op.name);
+  const names = functionRecord =>
+    functionRecord.ops.map(instruction => instruction.name);
 
   /** The slots: each one's type and initial value. */
   function slotsOf(bytes) {
     const {u32, tables, view} = readProgram(bytes);
     const {offset, length} = tables.get(Table.slots);
-    return Array.from({length: length / 16}, (_, index) => ({
-      type: view.getUint8(offset + index * 16),
-      init: u32(offset + index * 16 + 8),
+    return Array.from({length: length / SLOT_RECORD_BYTES}, (_, index) => ({
+      type: view.getUint8(offset + index * SLOT_RECORD_BYTES),
+      init: u32(offset + index * SLOT_RECORD_BYTES + 8),
     }));
   }
 
@@ -1071,18 +1151,20 @@ export function App() {
     const {u16, u32, tables, view} = readProgram(bytes);
     const {offset, length} = tables.get(Table.anims);
     return Array.from({length: length / 40}, (_, index) => {
-      const at = offset + index * 40;
+      const animationOffset = offset + index * 40;
       return {
-        kind: view.getUint8(at),
-        easing: view.getUint8(at + 1),
-        flags: view.getUint8(at + 2),
-        target: u16(at + 4),
-        first: u16(at + 8),
-        count: u16(at + 10),
-        amount: u32(at + 12),
-        delayMs: u32(at + 16),
-        to: u32(at + 20),
-        params: [0, 1, 2, 3].map(param => u32(at + 24 + param * 4)),
+        kind: view.getUint8(animationOffset),
+        easing: view.getUint8(animationOffset + 1),
+        flags: view.getUint8(animationOffset + 2),
+        target: u16(animationOffset + 4),
+        first: u16(animationOffset + 8),
+        count: u16(animationOffset + 10),
+        amount: u32(animationOffset + 12),
+        delayMs: u32(animationOffset + 16),
+        to: u32(animationOffset + 20),
+        params: [0, 1, 2, 3].map(paramIndex =>
+          u32(animationOffset + 24 + paramIndex * 4),
+        ),
       };
     });
   }
@@ -1109,9 +1191,13 @@ export function App() {
     ]);
 
     const {u16, u32} = readProgram(program);
-    const needs = Array.from({length: u16(20)}, (_, index) => ({
-      resource: u16(24 + 16 + index * 8),
-      amount: u32(24 + 16 + index * 8 + 4),
+    const needs = Array.from({length: u16(NEED_COUNT_AT)}, (_, index) => ({
+      resource: u16(
+        HEADER_BYTES + PANEL_RECORD_BYTES + index * NEED_RECORD_BYTES,
+      ),
+      amount: u32(
+        HEADER_BYTES + PANEL_RECORD_BYTES + index * NEED_RECORD_BYTES + 4,
+      ),
     }));
     expect(needs).toEqual([
       {resource: Resource.animValues, amount: 2},
@@ -1148,10 +1234,14 @@ export function App() {
     });
 
     const functions = functionsOf(program);
-    const press = functions[0].ops.find(op => op.name === 'ASTART');
+    const press = functions[0].ops.find(
+      instruction => instruction.name === 'ASTART',
+    );
     expect(press.bx).toBe(0);
     expect(press.ext >>> 16).toBe(0xff);
-    const go = functions[1].ops.find(op => op.name === 'ASTART');
+    const go = functions[1].ops.find(
+      instruction => instruction.name === 'ASTART',
+    );
     expect(go).toMatchObject({bx: 1, ext: NONE | (go.ext & 0xff0000)});
     expect(go.ext >>> 16).not.toBe(0xff);
     // The stop freezes the value where it is.
@@ -1161,11 +1251,16 @@ export function App() {
   it('runs a completion as a helper, entered through a done function and called with finished', () => {
     const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
     const functions = functionsOf(program);
-    const done = functions.findIndex(fn => fn.kind === FunctionKind.animDone);
-    const helper = functions.findIndex(fn => fn.kind === FunctionKind.helper);
-    expect(functions[0].ops.find(op => op.name === 'ASTART').ext & 0xffff).toBe(
-      done,
+    const done = functions.findIndex(
+      functionRecord => functionRecord.kind === FunctionKind.animDone,
     );
+    const helper = functions.findIndex(
+      functionRecord => functionRecord.kind === FunctionKind.helper,
+    );
+    expect(
+      functions[0].ops.find(instruction => instruction.name === 'ASTART').ext &
+        0xffff,
+    ).toBe(done);
     expect(names(functions[done])).toEqual(['EVT', 'CALL', 'RET']);
     expect(functions[done].ops[1].bx).toBe(helper);
     // The helper comes after every caller, and requests the update its setState needs.
@@ -1175,7 +1270,9 @@ export function App() {
     // The register stack holds the done function's frame and the helper's.
     const {u32, tables} = readProgram(program);
     const records = tables.get(Table.functions);
-    const cells = index => u32(records.offset + index * 16 + 12) & 0xff;
+    const cells = index =>
+      u32(records.offset + index * FUNCTION_RECORD_BYTES + FUNCTION_INFO_AT) &
+      0xff;
     const stack = regionsOf(program).find(
       region => region.kind === Region.stack,
     );
@@ -1209,15 +1306,23 @@ export function App() {
     const {offset, length} = tables.get(Table.interps);
     expect(length).toBe(2 * 72);
     const record = index => {
-      const at = offset + index * 72;
+      const recordOffset = offset + index * 72;
       return {
-        slot: u16(at),
-        points: view.getUint8(at + 2),
-        flags: view.getUint8(at + 3),
-        left: view.getUint8(at + 4),
-        right: view.getUint8(at + 5),
-        input: [u32(at + 8), u32(at + 12), u32(at + 16)],
-        output: [u32(at + 40), u32(at + 44), u32(at + 48)],
+        slot: u16(recordOffset),
+        points: view.getUint8(recordOffset + 2),
+        flags: view.getUint8(recordOffset + 3),
+        left: view.getUint8(recordOffset + 4),
+        right: view.getUint8(recordOffset + 5),
+        input: [
+          u32(recordOffset + 8),
+          u32(recordOffset + 12),
+          u32(recordOffset + 16),
+        ],
+        output: [
+          u32(recordOffset + 40),
+          u32(recordOffset + 44),
+          u32(recordOffset + 48),
+        ],
       };
     };
     expect(record(0)).toEqual({
@@ -1237,7 +1342,7 @@ export function App() {
   });
 
   it('chains a sequence through done functions, and waits on a trailing delay with a delay leaf', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
 export function App() {
@@ -1249,24 +1354,28 @@ export function App() {
     </Pressable>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const functions = functionsOf(program);
     const anims = animsOf(program);
-    const dones = functions.flatMap((fn, index) =>
-      fn.kind === FunctionKind.animDone ? [index] : [],
+    const dones = functions.flatMap((functionRecord, index) =>
+      functionRecord.kind === FunctionKind.animDone ? [index] : [],
     );
     // The completion's, the wait's, then the second step's.
     expect(dones).toHaveLength(3);
     const [completion, wait, second] = dones;
-    expect(functions[0].ops.find(op => op.name === 'ASTART').ext & 0xffff).toBe(
-      second,
-    );
     expect(
-      functions[second].ops.find(op => op.name === 'ASTART').ext & 0xffff,
+      functions[0].ops.find(instruction => instruction.name === 'ASTART').ext &
+        0xffff,
+    ).toBe(second);
+    expect(
+      functions[second].ops.find(instruction => instruction.name === 'ASTART')
+        .ext & 0xffff,
     ).toBe(wait);
     // An interrupted step calls the completion as not finished.
     expect(names(functions[second]).slice(0, 3)).toEqual(['EVT', 'JT', 'CALL']);
-    const delay = functions[wait].ops.find(op => op.name === 'ASTART');
+    const delay = functions[wait].ops.find(
+      instruction => instruction.name === 'ASTART',
+    );
     expect(delay.ext & 0xffff).toBe(completion);
     expect(anims[delay.bx]).toMatchObject({
       kind: AnimKind.timing,
@@ -1278,7 +1387,7 @@ export function App() {
   });
 
   it('joins a spring and a longer delay as a parallel group', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
 export function App() {
@@ -1290,21 +1399,23 @@ export function App() {
     </Pressable>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const anims = animsOf(program);
-    expect(anims.map(anim => anim.kind)).toEqual([
+    expect(anims.map(animation => animation.kind)).toEqual([
       AnimKind.parallel,
       AnimKind.timing,
       AnimKind.spring,
     ]);
     expect(anims[0]).toMatchObject({first: 1, count: 2});
     expect(anims[1]).toMatchObject({target: NONE, amount: 500});
-    const start = functionsOf(program)[0].ops.find(op => op.name === 'ASTART');
+    const start = functionsOf(program)[0].ops.find(
+      instruction => instruction.name === 'ASTART',
+    );
     expect(start.bx).toBe(0);
   });
 
   it('gives an app that only waits a running-animation table for its delay', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Text, Animated} from 'embedded-react';
 export function App() {
@@ -1315,7 +1426,7 @@ export function App() {
     </Pressable>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const regions = regionsOf(program);
     expect(regions.find(region => region.kind === Region.anims)).toEqual({
       kind: Region.anims,
@@ -1325,7 +1436,9 @@ export function App() {
     expect(
       regions.find(region => region.kind === Region.events).count,
     ).toBeGreaterThan(0);
-    const start = functionsOf(program)[0].ops.find(op => op.name === 'ASTART');
+    const start = functionsOf(program)[0].ops.find(
+      instruction => instruction.name === 'ASTART',
+    );
     expect(animsOf(program)[start.bx]).toMatchObject({
       target: NONE,
       amount: 250,
@@ -1333,20 +1446,20 @@ export function App() {
   });
 
   it('sizes the event queue for an app whose values nothing starts', () => {
-    const src = `
+    const source = `
 import {View, useAnimatedValue} from 'embedded-react';
 export function App() {
   const fade = useAnimatedValue(0.5);
   return <View style={{opacity: fade}} />;
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     expect(
       regionsOf(program).find(region => region.kind === Region.events),
     ).toEqual({kind: Region.events, count: 2, bytes: 64});
   });
 
   it("fades a <TouchableOpacity> before the app's own handler runs", () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {TouchableOpacity, Text} from 'embedded-react';
 export function App() {
@@ -1357,11 +1470,12 @@ export function App() {
     </TouchableOpacity>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const functions = functionsOf(program);
     const anims = animsOf(program);
     const pressIn = functions.find(
-      fn => fn.kind === ENGINE_VALUES.get('ER_EVENT_PRESS_IN'),
+      functionRecord =>
+        functionRecord.kind === ENGINE_VALUES.get('ER_EVENT_PRESS_IN'),
     );
     expect(names(pressIn)[0]).toBe('ASTART');
     expect(names(pressIn)).toContain('SET32');
@@ -1373,7 +1487,8 @@ export function App() {
       to: floatBits(0.4),
     });
     const pressOut = functions.find(
-      fn => fn.kind === ENGINE_VALUES.get('ER_EVENT_PRESS_OUT'),
+      functionRecord =>
+        functionRecord.kind === ENGINE_VALUES.get('ER_EVENT_PRESS_OUT'),
     );
     expect(names(pressOut)).toEqual(['ASTART', 'RET']);
     expect(anims[pressOut.ops[0].bx]).toMatchObject({to: floatBits(1)});
@@ -1402,21 +1517,29 @@ export function App() {
 
   const event = name => ENGINE_VALUES.get(name);
   const query = name => FunctionKind.query + ENGINE_VALUES.get(name);
-  const names = fn => fn.ops.map(op => op.name);
+  const names = functionRecord =>
+    functionRecord.ops.map(instruction => instruction.name);
 
   /** Each function's result type. */
   function resultsOf(bytes) {
     const {u32, tables} = readProgram(bytes);
     const functions = tables.get(Table.functions);
     return Array.from(
-      {length: functions.length / 16},
-      (_, index) => (u32(functions.offset + index * 16 + 12) >>> 16) & 0xff,
+      {length: functions.length / FUNCTION_RECORD_BYTES},
+      (_, index) =>
+        (u32(
+          functions.offset + index * FUNCTION_RECORD_BYTES + FUNCTION_INFO_AT,
+        ) >>>
+          16) &
+        0xff,
     );
   }
 
   it('binds a handler to each responder event and a query to each predicate, once for every node', () => {
     const {program} = compilePackage(PAN_APP, 'app', SCREEN);
-    const kinds = functionsOf(program).map(fn => fn.kind);
+    const kinds = functionsOf(program).map(
+      functionRecord => functionRecord.kind,
+    );
     expect(kinds).toEqual([
       event('ER_EVENT_RESPONDER_GRANT'),
       event('ER_EVENT_RESPONDER_RELEASE'),
@@ -1465,12 +1588,14 @@ export function App() {
       'RET',
     ]);
     expect(
-      grant.ops.filter(op => op.name === 'EVT').map(op => op.bx & 0xff),
+      grant.ops
+        .filter(instruction => instruction.name === 'EVT')
+        .map(instruction => instruction.bx & 0xff),
     ).toEqual([2, 3, 0, 1]); // dx, dy, x, y
 
     // With no callback, release and terminate only clear the gesture, and only while it is granted.
-    for (const fn of [release, terminate]) {
-      expect(names(fn)).toEqual([
+    for (const functionRecord of [release, terminate]) {
+      expect(names(functionRecord)).toEqual([
         'GET32',
         'JF',
         'LOADI',
@@ -1486,7 +1611,9 @@ export function App() {
     expect(names(move).slice(0, 2)).toEqual(['GET32', 'JF']);
     expect(names(move)).toContain('SUB');
     expect(
-      move.ops.filter(op => op.name === 'EVT').map(op => op.bx & 0xff),
+      move.ops
+        .filter(instruction => instruction.name === 'EVT')
+        .map(instruction => instruction.bx & 0xff),
     ).toEqual([2, 15]); // dx, touches
 
     // A reject runs as it is: the node never owned the gesture.
@@ -1494,19 +1621,19 @@ export function App() {
   });
 
   it('keeps each responder its own gesture slots', () => {
-    const src = PAN_APP.replace(
+    const source = PAN_APP.replace(
       '<View {...pan.panHandlers} />',
       '<View {...other.panHandlers} />',
     ).replace(
       '  return (',
       '  const other = useRef(PanResponder.create({onPanResponderGrant: (e, g) => setX(g.stateID)})).current;\n  return (',
     );
-    const {program} = compilePackage(src, 'app', SCREEN);
-    const fns = functionsOf(program);
+    const {program} = compilePackage(source, 'app', SCREEN);
+    const functions = functionsOf(program);
     // The second responder's grant, after the first's seven functions.
-    const otherGrant = fns[7];
+    const otherGrant = functions[7];
     expect(otherGrant.kind).toBe(event('ER_EVENT_RESPONDER_GRANT'));
-    expect(otherGrant.ops[0].bx).not.toBe(fns[0].ops[0].bx);
+    expect(otherGrant.ops[0].bx).not.toBe(functions[0].ops[0].bx);
     // stateID is a constant: the second responder is gesture 2.
     expect(otherGrant.ops).toContainEqual(
       expect.objectContaining({name: 'LOADI', bx: 2}),
@@ -1514,7 +1641,7 @@ export function App() {
   });
 
   it('shares one responder across list rows, its functions entered with no row', () => {
-    const src = `
+    const source = `
 import {useState, useRef} from 'react';
 import {View, Text, PanResponder} from 'embedded-react';
 export function App() {
@@ -1531,12 +1658,18 @@ export function App() {
     </View>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const {u32, tables, view} = readProgram(program);
     const functions = tables.get(Table.functions);
     const params = index =>
-      (u32(functions.offset + index * 16 + 12) >>> 8) & 0xff;
-    const kinds = functionsOf(program).map(fn => fn.kind);
+      (u32(
+        functions.offset + index * FUNCTION_RECORD_BYTES + FUNCTION_INFO_AT,
+      ) >>>
+        8) &
+      0xff;
+    const kinds = functionsOf(program).map(
+      functionRecord => functionRecord.kind,
+    );
     const grant = kinds.indexOf(event('ER_EVENT_RESPONDER_GRANT'));
     const startQuery = kinds.indexOf(query('ER_QUERY_START_SHOULD_SET'));
     expect(params(grant)).toBe(0);
@@ -1555,7 +1688,7 @@ export function App() {
   });
 
   it("lowers a row component's responder that reads what the row passes it", () => {
-    const src = `
+    const source = `
 import {useState, useRef} from 'react';
 import {View, Text, PanResponder} from 'embedded-react';
 function Row({label}) {
@@ -1569,28 +1702,31 @@ export function App() {
   const [items, setItems] = useState([{id: 1, name: 'a'}]);
   return <View>{items.map(item => <Row key={item.id} label={item.name} />)}</View>;
 }`;
-    expect(() => compilePackage(src, 'app', SCREEN)).not.toThrow();
+    expect(() => compilePackage(source, 'app', SCREEN)).not.toThrow();
   });
 });
 
 describe('drawings and the keyboard', () => {
-  const names = fn => fn.ops.map(op => op.name);
+  const names = functionRecord =>
+    functionRecord.ops.map(instruction => instruction.name);
   const updateOf = program =>
-    functionsOf(program).find(fn => fn.kind === FunctionKind.update);
+    functionsOf(program).find(
+      functionRecord => functionRecord.kind === FunctionKind.update,
+    );
 
   /** The tapes table: each tape's floats, and its paints' and gradients' counts. */
   function tapesOf(bytes) {
     const {u16, u32, view, tables} = readProgram(bytes);
     const {offset} = tables.get(Table.tapes);
     return Array.from({length: u32(offset)}, (_, index) => {
-      const at = offset + 16 + index * 16;
-      const floats = u32(at);
+      const tapeOffset = offset + 16 + index * 16;
+      const floats = u32(tapeOffset);
       return {
-        floats: Array.from({length: u16(at + 4)}, (_, float) =>
-          view.getFloat32(offset + floats + float * 4, true),
+        floats: Array.from({length: u16(tapeOffset + 4)}, (_, floatIndex) =>
+          view.getFloat32(offset + floats + floatIndex * 4, true),
         ),
-        paints: u16(at + 8),
-        gradients: u16(at + 12),
+        paints: u16(tapeOffset + 8),
+        gradients: u16(tapeOffset + 12),
       };
     });
   }
@@ -1607,7 +1743,7 @@ describe('drawings and the keyboard', () => {
   }
 
   it('bakes a drawing into a tape its node commits when it is built', () => {
-    const src = `
+    const source = `
 import {View, Svg, Circle, Path} from 'embedded-react';
 export function App() {
   return (
@@ -1620,7 +1756,7 @@ export function App() {
     </View>
   );
 }`;
-    const result = compilePackage(src, 'app', SCREEN);
+    const result = compilePackage(source, 'app', SCREEN);
     const [tape] = tapesOf(result.program);
     expect(tapesOf(result.program)).toHaveLength(1);
     expect(tape.paints).toBe(2);
@@ -1633,7 +1769,7 @@ export function App() {
   });
 
   it('rebuilds a drawing state drives in the update, after the nodes, from its tape', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Text, Svg, Arc} from 'embedded-react';
 export function App() {
@@ -1647,7 +1783,7 @@ export function App() {
     </Pressable>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const update = names(updateOf(program));
     expect(update.indexOf('VTAPE')).toBeGreaterThan(update.indexOf('COMMIT'));
     expect(update).toContain('VSET');
@@ -1668,7 +1804,7 @@ export function App() {
   });
 
   it('sets the paints and gradients state drives in the scratch, and commits with them', () => {
-    const src = `
+    const source = `
 import {useState} from 'react';
 import {Pressable, Svg, Rect} from 'embedded-react';
 export function App() {
@@ -1684,21 +1820,24 @@ export function App() {
     </Pressable>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
-    const ops = updateOf(program).ops;
-    const fields = name => ops.filter(op => op.name === name).map(op => op.c);
+    const {program} = compilePackage(source, 'app', SCREEN);
+    const instructions = updateOf(program).ops;
+    const fields = name =>
+      instructions
+        .filter(instruction => instruction.name === name)
+        .map(instruction => instruction.c);
     expect(fields('VPAINT')).toEqual([
       PaintField.fill,
       PaintField.strokeWidth,
       PaintField.fillGradient,
     ]);
     expect(fields('VGRAD')).toEqual([GradientField.stops + 2]);
-    expect(names({ops})).toContain('VCOMMITP');
+    expect(names({ops: instructions})).toContain('VCOMMITP');
     expect(tapesOf(program)[0].gradients).toBe(1);
   });
 
   it('runs updateVector where it is called, with its damage hint in ints or worked out in floats', () => {
-    const src = `
+    const source = `
 import {useRef} from 'react';
 import {View, Pressable, Svg, updateVector} from 'embedded-react';
 export function App() {
@@ -1715,15 +1854,15 @@ export function App() {
     </View>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const [ints, floats] = functionsOf(program);
     expect(names(ints)).toEqual(
       expect.arrayContaining(['VTAPE', 'VSET', 'VCOMMIT', 'VDIRTY']),
     );
     expect(names(ints)).not.toContain('FMATH');
     const rounding = floats.ops
-      .filter(op => op.name === 'FMATH')
-      .map(op => op.ext);
+      .filter(instruction => instruction.name === 'FMATH')
+      .map(instruction => instruction.ext);
     expect(rounding.slice(0, 2)).toEqual([MathFn.floor, MathFn.max]);
     expect(rounding).toContain(MathFn.ceil);
     expect(names(floats).at(-2)).toBe('VDIRTY');
@@ -1731,7 +1870,7 @@ export function App() {
   });
 
   it('gives an empty tape a scratch to copy into', () => {
-    const src = `
+    const source = `
 import {useRef} from 'react';
 import {View, Pressable, Svg, updateVector} from 'embedded-react';
 export function App() {
@@ -1743,7 +1882,7 @@ export function App() {
     </View>
   );
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     expect(tapesOf(program)[0].floats).toEqual([]);
     expect(regionsOf(program)).toContainEqual({
       kind: Region.tape,
@@ -1760,7 +1899,7 @@ export function App() {
       width: 10,
       height: 10,
     };
-    const src = `
+    const source = `
 import {View, Svg} from 'embedded-react';
 import badge from './badge.svg';
 export function App() {
@@ -1771,14 +1910,17 @@ export function App() {
   );
 }`;
     expect(() =>
-      compilePackage(src, 'app', {...SCREEN, svgArtifacts: {badge: artifact}}),
+      compilePackage(source, 'app', {
+        ...SCREEN,
+        svgArtifacts: {badge: artifact},
+      }),
     ).toThrow(
       /an <Svg> gradient has 1 stop, but a gradient needs at least two[\s\S]*App\.jsx:7:7/,
     );
   });
 
   it('writes setKeyboardConfig as the keyboard table', () => {
-    const src = `
+    const source = `
 import {View, setKeyboardConfig} from 'embedded-react';
 setKeyboardConfig({
   gridCols: 10,
@@ -1792,12 +1934,14 @@ setKeyboardConfig({
 export function App() {
   return <View />;
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const {u16, u32, view, tables} = readProgram(program);
     const {offset, length} = tables.get(Table.keyboard);
-    const u8 = at => view.getUint8(offset + at);
+    const u8 = fieldOffset => view.getUint8(offset + fieldOffset);
     expect(length).toBe(28 + (2 + 3) * 4 + 5 * 8);
-    expect([0, 2, 4, 6].map(at => u16(offset + at))).toEqual([2, 3, 5, 30]);
+    expect([0, 2, 4, 6].map(fieldOffset => u16(offset + fieldOffset))).toEqual([
+      2, 3, 5, 30,
+    ]);
     expect([u8(8), u8(9), u32(offset + 16), u32(offset + 12)]).toEqual([
       10, 0, 0xff333333, 0,
     ]);
@@ -1814,14 +1958,14 @@ export function App() {
       [3, 2],
     ]);
     const key = index => {
-      const at = 48 + index * 8;
+      const keyOffset = 48 + index * 8;
       return [
-        u16(offset + at),
-        u16(offset + at + 2),
-        u8(at + 4),
-        u8(at + 5),
-        u8(at + 6),
-        u8(at + 7),
+        u16(offset + keyOffset),
+        u16(offset + keyOffset + 2),
+        u8(keyOffset + 4),
+        u8(keyOffset + 5),
+        u8(keyOffset + 6),
+        u8(keyOffset + 7),
       ];
     };
     const kind = name => ENGINE_VALUES.get(name);
@@ -1837,13 +1981,13 @@ export function App() {
   });
 
   it('keeps the built-in layout when the config gives only a look', () => {
-    const src = `
+    const source = `
 import {View, setKeyboardConfig} from 'embedded-react';
 setKeyboardConfig({labelColor: 'white'});
 export function App() {
   return <View />;
 }`;
-    const {program} = compilePackage(src, 'app', SCREEN);
+    const {program} = compilePackage(source, 'app', SCREEN);
     const {u16, u32, tables} = readProgram(program);
     const {offset, length} = tables.get(Table.keyboard);
     expect(length).toBe(28);
@@ -1853,17 +1997,17 @@ export function App() {
 
 describe('bytecode', () => {
   it('keeps a function within the 255 register cells its record counts', () => {
-    const fn = new FunctionBuilder(FunctionKind.update, 'the update');
+    const builder = new FunctionBuilder(FunctionKind.update, 'the update');
     for (let index = 0; index < 255; index++) {
-      fn.register('int');
+      builder.register('int');
     }
-    expect(() => fn.register('int')).toThrow(/more than 255 registers/);
+    expect(() => builder.register('int')).toThrow(/more than 255 registers/);
   });
 
   it('keeps the empty string register out of the pool', () => {
-    const fn = new FunctionBuilder(FunctionKind.update, 'the update');
+    const builder = new FunctionBuilder(FunctionKind.update, 'the update');
     const tables = new ProgramTables();
-    const codegen = new Codegen(fn, {
+    const codegen = new Codegen(builder, {
       arena: new Arena(),
       tables,
       states: new Map(),
@@ -1876,8 +2020,8 @@ describe('bytecode', () => {
       timerFunctions: new Map(),
     });
     const loadString = text => {
-      const register = fn.register('string');
-      fn.abx('LOADS', register.index, tables.string(text));
+      const register = builder.register('string');
+      builder.abx('LOADS', register.index, tables.string(text));
       return register;
     };
 
@@ -1886,7 +2030,7 @@ describe('bytecode', () => {
     codegen.scoped(() => loadString('b'));
     codegen.scoped(() => codegen.truthy(loadString('c')));
 
-    const {code} = fn.finish();
+    const {code} = builder.finish();
     const opOf = word => word & 0xff;
     const empty = code
       .filter(word => opOf(word) === OP.SEQ.code)
@@ -1919,8 +2063,8 @@ export function App() {
   /** Each of the section's tables: its header, entries, function names and strings. */
   function readDebug(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
-    const u16 = at => view.getUint16(at, true);
-    const u32 = at => view.getUint32(at, true);
+    const u16 = offset => view.getUint16(offset, true);
+    const u32 = offset => view.getUint32(offset, true);
     const tables = [];
     for (let start = 0; start < bytes.length; start += u32(start + 16)) {
       const entryCount = u32(start + 4);
@@ -1941,13 +2085,13 @@ export function App() {
           text(u16(names + index * 2)),
         ),
         entries: Array.from({length: entryCount}, (_, index) => {
-          const at = start + 20 + index * 16;
+          const entryOffset = start + 20 + index * 16;
           return {
-            function: u16(at),
-            offset: u32(at + 4),
-            file: u16(at + 8),
-            column: u16(at + 10),
-            line: u32(at + 12),
+            function: u16(entryOffset),
+            offset: u32(entryOffset + 4),
+            file: u16(entryOffset + 8),
+            column: u16(entryOffset + 10),
+            line: u32(entryOffset + 12),
           };
         }),
       });
@@ -1957,11 +2101,11 @@ export function App() {
 
   /** The word offset of each instruction in each function. */
   const startsOf = bytes =>
-    functionsOf(bytes).map(fn => {
-      let at = 0;
-      return fn.ops.map(op => {
-        const start = at;
-        at += OP[op.name].words;
+    functionsOf(bytes).map(functionRecord => {
+      let wordOffset = 0;
+      return functionRecord.ops.map(instruction => {
+        const start = wordOffset;
+        wordOffset += OP[instruction.name].words;
         return start;
       });
     });
@@ -1976,9 +2120,9 @@ export function App() {
     expect(table.names.length).toBe(functionsOf(result.program).length);
     const handler = table.names.findIndex(name => name.startsWith('handler'));
     expect(handler).toBeGreaterThanOrEqual(0);
-    const at = fn =>
+    const at = functionIndex =>
       table.entries
-        .filter(entry => entry.function === fn)
+        .filter(entry => entry.function === functionIndex)
         .map(({line, column}) => [line, column]);
     expect(at(handler)).toEqual([
       [8, 9],
@@ -2073,15 +2217,15 @@ export function App() {
   });
 
   it('marks code once for each place, replacing a mark nothing followed', () => {
-    const fn = new FunctionBuilder(FunctionKind.timer, 'timer tick');
-    fn.at({line: 3, column: 0});
-    fn.at({line: 4, column: 2});
-    fn.abx('LOADI', 0, 1);
-    fn.at({line: 4, column: 2});
-    fn.abx('LOADI', 0, 1);
-    fn.at(undefined);
-    fn.at({line: 5, column: 2});
-    expect(fn.finish().debug).toEqual({
+    const builder = new FunctionBuilder(FunctionKind.timer, 'timer tick');
+    builder.at({line: 3, column: 0});
+    builder.at({line: 4, column: 2});
+    builder.abx('LOADI', 0, 1);
+    builder.at({line: 4, column: 2});
+    builder.abx('LOADI', 0, 1);
+    builder.at(undefined);
+    builder.at({line: 5, column: 2});
+    expect(builder.finish().debug).toEqual({
       name: 'timer tick',
       lines: [
         {offset: 0, line: 4, column: 2},

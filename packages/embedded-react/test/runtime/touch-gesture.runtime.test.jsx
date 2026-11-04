@@ -28,8 +28,15 @@ import {check, report} from './harness.js';
 const root = createRoot({width: screen.width, height: screen.height});
 
 const log = [];
-const rec = name => e =>
-  log.push({name, x: e.x, dx: e.dx, dy: e.dy, vx: e.vx, vy: e.vy});
+const rec = name => event =>
+  log.push({
+    name,
+    x: event.x,
+    dx: event.dx,
+    dy: event.dy,
+    vx: event.vx,
+    vy: event.vy,
+  });
 
 const tree = (
   <View

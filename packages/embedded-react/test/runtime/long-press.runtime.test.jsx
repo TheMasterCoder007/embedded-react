@@ -32,9 +32,9 @@ const log = [];
 const rec = name => () => log.push(name);
 
 /** Holds a finger on (x, y) for ms, ticking in 10 ms steps the way a frame loop would, then lifts. */
-const hold = (x, y, ms, {lift = true} = {}) => {
+const hold = (x, y, durationMs, {lift = true} = {}) => {
   __touch(0, x, y);
-  for (let held = 0; held < ms; held += 10) NativeUI.tick(10);
+  for (let held = 0; held < durationMs; held += 10) NativeUI.tick(10);
   if (lift) __touch(2, x, y);
 };
 
@@ -63,7 +63,7 @@ const hold = (x, y, ms, {lift = true} = {}) => {
   log.length = 0;
   hold(40, 40, 300, {lift: false});
   check(log.length === 0, 'nothing fires before the 500 ms threshold');
-  for (let i = 0; i < 25; i++) NativeUI.tick(10); // past 500 ms
+  for (let tick = 0; tick < 25; tick++) NativeUI.tick(10); // past 500 ms
   check(log.join() === 'long', `onLongPress fires on the hold (${log.join()})`);
   __touch(2, 40, 40);
   check(
@@ -99,7 +99,7 @@ const hold = (x, y, ms, {lift = true} = {}) => {
     log.length === 0,
     `delayLongPress={1200} still holds at 600 ms (${log.join() || 'nothing'})`,
   );
-  for (let i = 0; i < 70; i++) NativeUI.tick(10); // past 1200 ms
+  for (let tick = 0; tick < 70; tick++) NativeUI.tick(10); // past 1200 ms
   check(log.join() === 'slow-long', `the slow hold fires (${log.join()})`);
   __touch(2, 40, 40);
 

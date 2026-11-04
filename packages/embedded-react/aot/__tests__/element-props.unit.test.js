@@ -27,7 +27,7 @@ import {
 // Every element declares its props, style keys and children. Each declared prop must change the package it
 // compiles to (or be listed here as lowering to nothing, with why); anything undeclared must be an AOT: error.
 
-const PRE = `import {useState, useRef} from 'react';
+const PREAMBLE = `import {useState, useRef} from 'react';
 import logo from './logo.png';
 import knob from './knob.png';
 import {View, Text, Svg, Circle, Ellipse, Rect, Line, Arc, G, Path, Pressable, TouchableOpacity, Image,
@@ -37,7 +37,7 @@ import {View, Text, Svg, Circle, Ellipse, Rect, Line, Arc, G, Path, Pressable, T
 
 /** An app whose App returns `jsx`, with state `n`, an animated value `a` and a node ref `r` in reach. */
 const app = jsx =>
-  `${PRE}export function App() {
+  `${PREAMBLE}export function App() {
   const [n, setN] = useState(0);
   const a = useAnimatedValue(0);
   const r = useRef(null);
@@ -411,7 +411,7 @@ describe('a baked <Svg source>', () => {
   };
   const baked = attrs =>
     compilePackage(
-      `${PRE}import art from './art.svg';
+      `${PREAMBLE}import art from './art.svg';
 export function App() { return <Svg source={art} ${attrs} />; }`,
       'App.jsx',
       {svgArtifacts: {art: artifact}},

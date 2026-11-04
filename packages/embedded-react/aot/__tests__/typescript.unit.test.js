@@ -21,17 +21,17 @@ import {compilePackage} from '../compile.mts';
 // type-only syntax before the compiler walks the JSX. The contract is that the package is IDENTICAL to the
 // same component written untyped (App.jsx) — types are erased, nothing else changes.
 
-const PRE = `import { useState } from 'react';
+const PREAMBLE = `import { useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'embedded-react';`;
 
-const jsGen = src => compilePackage(src, 'test');
-const tsGen = src => compilePackage(src, 'test', {filename: 'App.tsx'});
+const jsGen = source => compilePackage(source, 'test');
+const tsGen = source => compilePackage(source, 'test', {filename: 'App.tsx'});
 
 describe('AOT TypeScript: error locations survive type stripping', () => {
   it('points the code frame at the real .tsx line after stripped type decls above it', () => {
     // The interface + type import on lines 3-4 are stripped; the unsupported expression on line 8 must
     // still report its true source line, proving remaining nodes keep their original .loc.
-    const ts = `${PRE}
+    const typescriptSource = `${PREAMBLE}
       import type { ViewStyle } from 'embedded-react';
       interface Props { n?: number }
       export function App({ n }: Props) {
@@ -39,14 +39,14 @@ describe('AOT TypeScript: error locations survive type stripping', () => {
         const bump: ViewStyle = n;
         return <Pressable onPress={() => setCount(bump)}><Text>x</Text></Pressable>;
       }`;
-    expect(() => tsGen(ts)).toThrow(/AOT:/);
+    expect(() => tsGen(typescriptSource)).toThrow(/AOT:/);
   });
 });
 
 describe('AOT TypeScript: the JS path is unchanged', () => {
   it('does not enable the typescript parser for a non-TS entry (type syntax is a parse error)', () => {
     // With no .tsx filename the parser is jsx-only, so TS syntax must NOT silently parse.
-    const withTsSyntax = `${PRE}
+    const withTsSyntax = `${PREAMBLE}
       export function App() {
         const [n] = useState<number>(0);
         return <Text>{n}</Text>;

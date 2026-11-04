@@ -24,7 +24,11 @@ import {check, report} from './harness.js';
 
 const seen = {};
 const box = (name, style) => (
-  <View key={name} style={style} onLayout={e => (seen[name] = e.layout)} />
+  <View
+    key={name}
+    style={style}
+    onLayout={event => (seen[name] = event.layout)}
+  />
 );
 
 function App() {
@@ -68,8 +72,10 @@ function App() {
 createRoot({width: screen.width, height: screen.height}).render(<App />);
 
 const rect = name => {
-  const l = seen[name];
-  return l ? `${l.x},${l.y},${l.width},${l.height}` : 'missing';
+  const layout = seen[name];
+  return layout
+    ? `${layout.x},${layout.y},${layout.width},${layout.height}`
+    : 'missing';
 };
 
 check(seen.abs != null, 'percent-inset boxes laid out (onLayout fired)');

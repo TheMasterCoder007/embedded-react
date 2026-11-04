@@ -29,13 +29,13 @@ import {check, report} from './harness.js';
 const layouts = {};
 
 function Dial({value}) {
-  const ex = 100 + value;
-  const ey = 100 - value;
+  const endX = 100 + value;
+  const endY = 100 - value;
   return (
     <View style={{width: 200, height: 200}}>
       <Svg
         style={{position: 'absolute', left: 0, top: 0, width: 200, height: 200}}
-        onLayout={e => (layouts.svg = e.layout)}>
+        onLayout={event => (layouts.svg = event.layout)}>
         <Path
           d="M 20 180 A 80 80 0 1 1 180 180"
           stroke="#2c3a4f"
@@ -45,7 +45,7 @@ function Dial({value}) {
         />
         {value > 0 && (
           <Path
-            d={`M 20 180 A 80 80 0 0 1 ${ex} ${ey}`}
+            d={`M 20 180 A 80 80 0 0 1 ${endX} ${endY}`}
             stroke="#f4a261"
             strokeWidth={10}
             strokeLinecap="round"
@@ -53,8 +53,8 @@ function Dial({value}) {
           />
         )}
         <Circle
-          cx={ex}
-          cy={ey}
+          cx={endX}
+          cy={endY}
           r={8}
           fill="#16202f"
           stroke="#f4a261"
@@ -79,7 +79,8 @@ root.render(<Dial value={40} />);
 check(true, 're-render with new path geometry did not crash');
 
 // Many rapid geometry updates (simulates dragging) — exercises store/free slot reuse.
-for (let v = 0; v <= 60; v += 5) root.render(<Dial value={v} />);
+for (let value = 0; value <= 60; value += 5)
+  root.render(<Dial value={value} />);
 check(true, 'rapid geometry updates (drag simulation) did not crash');
 
 // An empty <Svg> (no shapes) must clear cleanly.
@@ -139,7 +140,7 @@ root.render(<ImperativeSvg />);
 check(imperativeRef.current != null, 'Svg ref resolved to a node handle');
 
 // Sweep the progress arc imperatively with a tight dirty rect each step — slot reuse + sub-region damage.
-for (let a = -135; a <= 135; a += 30) {
+for (let angle = -135; angle <= 135; angle += 30) {
   updateVector(
     imperativeRef.current,
     [
@@ -150,7 +151,7 @@ for (let a = -135; a <= 135; a += 30) {
         cap: 'round',
       },
       {
-        arc: [100, 100, 80, -135, a],
+        arc: [100, 100, 80, -135, angle],
         stroke: '#f4a261',
         strokeWidth: 10,
         cap: 'round',
@@ -185,7 +186,7 @@ root.render(
     <Svg
       source={importedIcon}
       style={{position: 'absolute', left: 0, top: 0, width: 50, height: 50}}
-      onLayout={e => (layouts.src = e.layout)}
+      onLayout={event => (layouts.src = event.layout)}
     />
   </View>,
 );
@@ -216,7 +217,7 @@ root.render(
     <Svg
       source={rasterIcon}
       style={{position: 'absolute', left: 0, top: 0, width: 64, height: 64}}
-      onLayout={e => (layouts.raster = e.layout)}
+      onLayout={event => (layouts.raster = event.layout)}
     />
   </View>,
 );
@@ -238,9 +239,9 @@ check(true, '<Svg source> raster fallback re-sized did not crash');
 // the paint records (one per shape). Dropping the wrappers' shapes shows up here as a short count.
 const uploads = [];
 const realSetVectorOps = NativeUI.setVectorOps;
-NativeUI.setVectorOps = function (handle, ops, paints, grads) {
+NativeUI.setVectorOps = function (handle, ops, paints, gradients) {
   uploads.push(paints ? paints.length / PAINT_STRIDE : 0);
-  return realSetVectorOps.call(this, handle, ops, paints, grads);
+  return realSetVectorOps.call(this, handle, ops, paints, gradients);
 };
 // finally, not a trailing assignment: a throw inside render would otherwise leave the bridge patched
 // for everything after this point, turning one failure into a cascade.
@@ -258,13 +259,13 @@ try {
             strokeWidth={4}
           />
         </>
-        {[0, 1, 2, 3].map(i => (
+        {[0, 1, 2, 3].map(index => (
           <Line
-            key={i}
+            key={index}
             x1={100}
-            y1={10 + i * 4}
+            y1={10 + index * 4}
             x2={100}
-            y2={30 + i * 4}
+            y2={30 + index * 4}
             stroke="#f4a261"
             strokeWidth={4}
           />

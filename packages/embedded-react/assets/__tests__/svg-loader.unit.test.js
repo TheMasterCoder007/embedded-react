@@ -30,19 +30,24 @@ async function bundleWithSvg(
     assets,
   } = {},
 ) {
-  const dir = mkdtempSync(join(tmpdir(), 'svgld-'));
-  writeFileSync(join(dir, 'icon.svg'), svg);
-  writeFileSync(join(dir, 'entry.js'), entry);
-  const addRaster = assets ? (name, p) => assets.set(name, p) : undefined;
-  const r = await build({
-    entryPoints: [join(dir, 'entry.js')],
+  const directory = mkdtempSync(join(tmpdir(), 'svgld-'));
+  writeFileSync(join(directory, 'icon.svg'), svg);
+  writeFileSync(join(directory, 'entry.js'), entry);
+  const addRaster = assets ? (name, path) => assets.set(name, path) : undefined;
+  const result = await build({
+    entryPoints: [join(directory, 'entry.js')],
     bundle: true,
     write: false,
     format: 'iife',
     logLevel: 'silent',
-    plugins: [{name: 'svg', setup: b => registerSvgVectorLoader(b, addRaster)}],
+    plugins: [
+      {
+        name: 'svg',
+        setup: pluginBuild => registerSvgVectorLoader(pluginBuild, addRaster),
+      },
+    ],
   });
-  return r.outputFiles[0].text;
+  return result.outputFiles[0].text;
 }
 
 // Evaluate the bundled IIFE (which assigns the import to globalThis.__icon) and return the artifact.
@@ -55,10 +60,10 @@ function evalArtifact(bundle) {
 
 describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
   it('inlines an imported .svg as a {kind:vector} op-tape artifact', async () => {
-    const out = await bundleWithSvg(
+    const artifact = await bundleWithSvg(
       '<svg viewBox="0 0 10 10"><path d="M0 0 L10 0" fill="red"/></svg>',
     );
-    const art = evalArtifact(out);
+    const art = evalArtifact(artifact);
     expect(art.kind).toBe('vector');
     expect(art.width).toBe(10);
     expect(art.height).toBe(10);
@@ -73,12 +78,12 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
   it('falls back to a raster image artifact when the SVG uses unsupported features', async () => {
     const assets = new Map();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const out = await bundleWithSvg(
+    const artifact = await bundleWithSvg(
       '<svg viewBox="0 0 20 20" width="20" height="20"><text x="2" y="10">hi</text></svg>',
       {assets},
     );
     warn.mockRestore();
-    const art = evalArtifact(out);
+    const art = evalArtifact(artifact);
     expect(art.kind).toBe('raster');
     expect(art.name).toBe('icon'); // basename of icon.svg
     expect(art.width).toBe(20);
@@ -92,16 +97,16 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
   it('warns when an unsupported SVG has no raster fallback, and still bakes the vector subset', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // No `assets` map → no raster fallback available; the <text> is dropped, the <rect> still bakes.
-    const out = await bundleWithSvg(
+    const artifact = await bundleWithSvg(
       '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="lime"/><text>x</text></svg>',
     );
     const warned = warn.mock.calls.some(
-      c =>
-        /unsupported SVG feature/.test(String(c[0])) &&
-        /text/.test(String(c[0])),
+      call =>
+        /unsupported SVG feature/.test(String(call[0])) &&
+        /text/.test(String(call[0])),
     );
     warn.mockRestore();
-    const art = evalArtifact(out);
+    const art = evalArtifact(artifact);
     expect(art.kind).toBe('vector'); // degrades to the vector subset (the rect)
     expect(warned).toBe(true); // but the dropped <text> is surfaced, not silent
   });

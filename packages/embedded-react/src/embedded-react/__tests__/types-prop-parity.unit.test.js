@@ -33,42 +33,46 @@ import {dirname, resolve} from 'node:path';
 // it belongs on is a judgement call (style vs component, View vs Image) that this test does not make.
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = resolve(HERE, '..');
+const SOURCE_DIRECTORY = resolve(HERE, '..');
 const BRIDGE_C = resolve(
   HERE,
   '../../../../../bridges/quickjs/native_ui_bridge.c',
 );
 
 /** Strip // line and block comments so a name mentioned only in prose never counts as declared. */
-const stripComments = src =>
-  src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+const stripComments = source =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
 // Props the renderer owns and an app never writes, so they are deliberately absent from the public types.
 // `text` is filled in from a <Text>'s children by buildProps.
 const INTERNAL_PROPS = new Set(['text']);
 
 /** The JS prop names of the bridge's `k_prop_names` table (designated initializers keep it exhaustive). */
-const bridgePropNames = c =>
-  [...c.matchAll(/\[PROP_[A-Z0-9_]+\]\s*=\s*"([A-Za-z]+)"/g)].map(m => m[1]);
+const bridgePropNames = bridgeSource =>
+  [...bridgeSource.matchAll(/\[PROP_[A-Z0-9_]+\]\s*=\s*"([A-Za-z]+)"/g)].map(
+    match => match[1],
+  );
 
 /** The handler names of the bridge's `event_type_from_name` + `query_type_from_name` maps (responder
  *  negotiation queries ride the same setEvent prop path as events, so both are part of the routed
  *  handler surface). */
-const bridgeEventNames = c =>
-  [...c.matchAll(/\{"(on[A-Za-z]+)",\s*ER_(?:EVENT|QUERY)_/g)].map(m => m[1]);
+const bridgeEventNames = bridgeSource =>
+  [...bridgeSource.matchAll(/\{"(on[A-Za-z]+)",\s*ER_(?:EVENT|QUERY)_/g)].map(
+    match => match[1],
+  );
 
 /** The entries of props.js's PASSTHROUGH array. */
-function passthroughNames(js) {
-  const body = js.match(/export const PASSTHROUGH = \[([\s\S]*?)\];/);
+function passthroughNames(propsSource) {
+  const body = propsSource.match(/export const PASSTHROUGH = \[([\s\S]*?)\];/);
   if (!body) throw new Error('props.js: could not find the PASSTHROUGH array');
-  return [...body[1].matchAll(/'([A-Za-z]+)'/g)].map(m => m[1]);
+  return [...body[1].matchAll(/'([A-Za-z]+)'/g)].map(match => match[1]);
 }
 
 /** Names declared as an object key (`name?: T` / `name: T`) anywhere in the declarations. */
 const declaredKeys = dts =>
   new Set(
     [...stripComments(dts).matchAll(/^\s*([A-Za-z][A-Za-z0-9]*)\??:/gm)].map(
-      m => m[1],
+      match => match[1],
     ),
   );
 
@@ -81,10 +85,11 @@ const NON_PROP_HANDLER_INTERFACES = ['PanResponderConfig'];
 function interfaceBody(dts, name) {
   const start = dts.search(new RegExp(`interface\\s+${name}\\s*\\{`));
   if (start < 0) throw new Error(`index.d.ts: interface ${name} not found`);
-  let i = dts.indexOf('{', start);
-  for (let depth = 0; i < dts.length; i++) {
-    if (dts[i] === '{') depth++;
-    else if (dts[i] === '}' && --depth === 0) return dts.slice(start, i);
+  let index = dts.indexOf('{', start);
+  for (let depth = 0; index < dts.length; index++) {
+    if (dts[index] === '{') depth++;
+    else if (dts[index] === '}' && --depth === 0)
+      return dts.slice(start, index);
   }
   throw new Error(`index.d.ts: interface ${name} is not brace-balanced`);
 }
@@ -93,19 +98,22 @@ function interfaceBody(dts, name) {
 const declaredHandlers = dts => [
   ...new Set(
     [...stripComments(dts).matchAll(/^\s*(on[A-Z][A-Za-z0-9]*)\??:/gm)].map(
-      m => m[1],
+      match => match[1],
     ),
   ),
 ];
 
 describe('embedded-react public types match the runtime prop surface', () => {
-  const c = readFileSync(BRIDGE_C, 'utf8');
-  const dts = readFileSync(resolve(SRC, 'index.d.ts'), 'utf8');
-  const js = readFileSync(resolve(SRC, '../props.js'), 'utf8');
+  const bridgeSource = readFileSync(BRIDGE_C, 'utf8');
+  const dts = readFileSync(resolve(SOURCE_DIRECTORY, 'index.d.ts'), 'utf8');
+  const propsSource = readFileSync(
+    resolve(SOURCE_DIRECTORY, '../props.js'),
+    'utf8',
+  );
 
-  const props = bridgePropNames(c);
-  const events = bridgeEventNames(c);
-  const passthrough = passthroughNames(js);
+  const props = bridgePropNames(bridgeSource);
+  const events = bridgeEventNames(bridgeSource);
+  const passthrough = passthroughNames(propsSource);
   const declared = declaredKeys(dts);
 
   it('parses a non-trivial set of names from each runtime table (sanity)', () => {
@@ -117,7 +125,7 @@ describe('embedded-react public types match the runtime prop surface', () => {
 
   it('declares every prop the bridge marshals', () => {
     const missing = props
-      .filter(p => !INTERNAL_PROPS.has(p) && !declared.has(p))
+      .filter(prop => !INTERNAL_PROPS.has(prop) && !declared.has(prop))
       .sort();
     expect(
       missing,
@@ -126,7 +134,7 @@ describe('embedded-react public types match the runtime prop surface', () => {
   });
 
   it('declares every prop buildProps forwards outside of style', () => {
-    const missing = passthrough.filter(p => !declared.has(p)).sort();
+    const missing = passthrough.filter(prop => !declared.has(prop)).sort();
     expect(
       missing,
       `props.js PASSTHROUGH forwards these but index.d.ts does not declare them: ${missing.join(', ')}`,
@@ -134,7 +142,7 @@ describe('embedded-react public types match the runtime prop surface', () => {
   });
 
   it('declares every event handler the bridge recognises', () => {
-    const missing = events.filter(e => !declared.has(e)).sort();
+    const missing = events.filter(event => !declared.has(event)).sort();
     expect(
       missing,
       `native_ui_bridge.c routes these handlers but index.d.ts does not declare them: ${missing.join(', ')}`,
@@ -144,12 +152,12 @@ describe('embedded-react public types match the runtime prop surface', () => {
   it('declares no handler the bridge would ignore', () => {
     const clean = stripComments(dts);
     const moduleCallbacks = new Set(
-      NON_PROP_HANDLER_INTERFACES.flatMap(n =>
-        declaredHandlers(interfaceBody(clean, n)),
+      NON_PROP_HANDLER_INTERFACES.flatMap(name =>
+        declaredHandlers(interfaceBody(clean, name)),
       ),
     );
     const phantom = declaredHandlers(dts)
-      .filter(n => !events.includes(n) && !moduleCallbacks.has(n))
+      .filter(name => !events.includes(name) && !moduleCallbacks.has(name))
       .sort();
     expect(
       phantom,

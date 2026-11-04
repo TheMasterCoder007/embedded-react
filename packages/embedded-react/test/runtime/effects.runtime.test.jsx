@@ -27,7 +27,7 @@ let cleanupRuns = 0;
 let depRuns = 0;
 let lastDep = null;
 
-function Comp({n}) {
+function Comp({count}) {
   // Mount-only effect with a cleanup.
   useEffect(() => {
     mountRuns++;
@@ -36,18 +36,18 @@ function Comp({n}) {
     };
   }, []);
 
-  // Dependency-tracked effect: re-runs when n changes.
+  // Dependency-tracked effect: re-runs when count changes.
   useEffect(() => {
     depRuns++;
-    lastDep = n;
-  }, [n]);
+    lastDep = count;
+  }, [count]);
 
   return <View style={{width: 10, height: 10}} />;
 }
 
 const root = createRoot({width: screen.width, height: screen.height});
 
-root.render(<Comp n={1} />);
+root.render(<Comp count={1} />);
 // Effects are scheduled during commit but run asynchronously; a pump flushes them.
 NativeUI.tick(0);
 check(
@@ -56,21 +56,21 @@ check(
 );
 check(
   depRuns === 1 && lastDep === 1,
-  `dep effect ran with n=1 (runs=${depRuns}, n=${lastDep})`,
+  `dep effect ran with count=1 (runs=${depRuns}, count=${lastDep})`,
 );
 
-// Re-render with the same n: the [] effect must not re-run, and the [n] effect must not re-run.
-root.render(<Comp n={1} />);
+// Re-render with the same count: the [] effect must not re-run, and the [count] effect must not re-run.
+root.render(<Comp count={1} />);
 NativeUI.tick(0);
 check(mountRuns === 1, 'mount-only effect did not re-run on re-render');
-check(depRuns === 1, 'dep effect did not re-run when n was unchanged');
+check(depRuns === 1, 'dep effect did not re-run when count was unchanged');
 
-// Re-render with a new n: the [n] effect re-runs (after the previous one is cleaned up).
-root.render(<Comp n={2} />);
+// Re-render with a new count: the [count] effect re-runs (after the previous one is cleaned up).
+root.render(<Comp count={2} />);
 NativeUI.tick(0);
 check(
   depRuns === 2 && lastDep === 2,
-  `dep effect re-ran when n changed to 2 (runs=${depRuns})`,
+  `dep effect re-ran when count changed to 2 (runs=${depRuns})`,
 );
 check(mountRuns === 1, 'mount-only effect still did not re-run');
 

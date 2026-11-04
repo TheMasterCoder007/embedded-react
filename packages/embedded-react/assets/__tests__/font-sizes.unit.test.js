@@ -30,7 +30,8 @@ import {
 } from '../font-sizes.mjs';
 
 const sizes = source => analyzeFontSizes(source).sizes;
-const dynamic = source => analyzeFontSizes(source).dynamic.map(d => d.expr);
+const dynamic = source =>
+  analyzeFontSizes(source).dynamic.map(dynamicSize => dynamicSize.expr);
 
 describe('analyzeFontSizes — literals', () => {
   it('finds literal sizes and rounds fractional ones', () => {
@@ -61,11 +62,11 @@ describe('analyzeFontSizes — literals', () => {
   it('ignores a value that resolves but cannot be baked', () => {
     // Zero/negative are authoring slips and the engine's pixel_size is a uint8 — neither is a size,
     // and neither is a discovery failure worth reporting.
-    const r = analyzeFontSizes(
+    const analysis = analyzeFontSizes(
       `const a = {fontSize: 0}, b = {fontSize: -4}, c = {fontSize: 900};`,
     );
-    expect(r.sizes).toEqual([]);
-    expect(r.dynamic).toEqual([]);
+    expect(analysis.sizes).toEqual([]);
+    expect(analysis.dynamic).toEqual([]);
   });
 });
 
@@ -86,9 +87,9 @@ describe('analyzeFontSizes — token scales', () => {
   });
 
   it('folds a spread onto a base scale', () => {
-    const src = `const BASE = {sm: 11}; const T = {...BASE, lg: 29};
+    const source = `const BASE = {sm: 11}; const T = {...BASE, lg: 29};
                  const a = {fontSize: T.sm}; const b = {fontSize: T.lg};`;
-    expect(sizes(src)).toEqual([11, 29]);
+    expect(sizes(source)).toEqual([11, 29]);
   });
 
   it('folds a ratio scale through arithmetic and Math', () => {
@@ -112,9 +113,9 @@ describe('analyzeFontSizes — token scales', () => {
   it('bakes both arms of a responsive ternary', () => {
     // Which arm a `screen.width`-driven scale takes is a runtime fact, and one bundle runs on any
     // panel — so both sizes have to exist.
-    const src = `const W = screen.width; const T = W > 400 ? {t: 30} : {t: 18};
+    const source = `const W = screen.width; const T = W > 400 ? {t: 30} : {t: 18};
                  const s = {fontSize: T.t};`;
-    expect(sizes(src)).toEqual([18, 30]);
+    expect(sizes(source)).toEqual([18, 30]);
   });
 
   it('bakes the whole scale when the key is picked at runtime', () => {
@@ -139,21 +140,21 @@ describe('analyzeFontSizes — scales handed to a component', () => {
   });
 
   it('unions the scales passed under one prop name', () => {
-    const src = `const A = {t: 15}; const B = {t: 31};
+    const source = `const A = {t: 15}; const B = {t: 31};
                  jsx(X, {s: A}); jsx(Y, {s: B}); const f = () => ({fontSize: s.t});`;
-    expect(sizes(src)).toEqual([15, 31]);
+    expect(sizes(source)).toEqual([15, 31]);
   });
 
   it('does not bind an inline literal — that scale is local to its own component', () => {
-    const src = `jsx(Dial, {sz: {big: 44}}); ${reader}`;
-    expect(sizes(src)).toEqual([]);
-    expect(dynamic(src)).toEqual(['sz.big']);
+    const source = `jsx(Dial, {sz: {big: 44}}); ${reader}`;
+    expect(sizes(source)).toEqual([]);
+    expect(dynamic(source)).toEqual(['sz.big']);
   });
 
   it('lets a declared name win over anything passed under the same name', () => {
-    const src = `const sz = {big: 13}; const SZ = {big: 44};
+    const source = `const sz = {big: 13}; const SZ = {big: 44};
                  jsx(D, {sz: SZ}); const f = () => ({fontSize: sz.big});`;
-    expect(sizes(src)).toEqual([13]);
+    expect(sizes(source)).toEqual([13]);
   });
 
   it('survives a prop that is passed itself', () => {
@@ -165,17 +166,17 @@ describe('analyzeFontSizes — scales handed to a component', () => {
 
 describe('analyzeFontSizes — what it cannot see', () => {
   it('reports a size that only exists at runtime, with its occurrence count', () => {
-    const src = `const f = p => [{fontSize: p.size}, {fontSize: p.size}, {fontSize: n + 1}];`;
-    expect(analyzeFontSizes(src).dynamic).toEqual([
+    const source = `const f = p => [{fontSize: p.size}, {fontSize: p.size}, {fontSize: n + 1}];`;
+    expect(analyzeFontSizes(source).dynamic).toEqual([
       {expr: 'p.size', count: 2},
       {expr: 'n + 1', count: 1},
     ]);
   });
 
   it('leaves a name bound twice unresolved rather than picking one', () => {
-    const src = `const n = 10; function f() { const n = 40; return {fontSize: n}; }`;
-    expect(sizes(src)).toEqual([]);
-    expect(dynamic(src)).toEqual(['n']);
+    const source = `const n = 10; function f() { const n = 40; return {fontSize: n}; }`;
+    expect(sizes(source)).toEqual([]);
+    expect(dynamic(source)).toEqual(['n']);
   });
 
   it('reads JSX and TypeScript sources', () => {
@@ -200,25 +201,25 @@ describe('analyzeFontSizes — what it cannot see', () => {
 });
 
 describe('fontSizeSignature', () => {
-  const sig = source => fontSizeSignature(analyzeFontSizes(source));
+  const signature = source => fontSizeSignature(analyzeFontSizes(source));
 
   it('changes when a size changes — the whole point, for an app with no imported font', () => {
     // A watch loop keys its re-bake on this. With no font imported there are no baked `sizes` in
     // that key, so without this signature a fontSize edit would skip the re-bake and its check.
-    expect(sig(`const s = {fontSize: 14};`)).not.toBe(
-      sig(`const s = {fontSize: 16};`),
+    expect(signature(`const s = {fontSize: 14};`)).not.toBe(
+      signature(`const s = {fontSize: 16};`),
     );
   });
 
   it('changes when a size stops being readable, even though the bake would not', () => {
-    expect(sig(`const T = {b: 14}; const s = {fontSize: T.b};`)).not.toBe(
-      sig(`const T = {b: 14}; const s = {fontSize: p.b};`),
+    expect(signature(`const T = {b: 14}; const s = {fontSize: T.b};`)).not.toBe(
+      signature(`const T = {b: 14}; const s = {fontSize: p.b};`),
     );
   });
 
   it('is stable across an edit that touches no size', () => {
-    expect(sig(`const s = {fontSize: 14}; const a = 1;`)).toBe(
-      sig(`const s = {fontSize: 14}; const b = 2;`),
+    expect(signature(`const s = {fontSize: 14}; const a = 1;`)).toBe(
+      signature(`const s = {fontSize: 14}; const b = 2;`),
     );
   });
 
@@ -270,7 +271,7 @@ describe('findSizeGaps', () => {
   });
 
   it('reports sizes past the engine per-family limit as never registering', () => {
-    const baked = Array.from({length: 18}, (_, i) => 8 + i);
+    const baked = Array.from({length: 18}, (_, index) => 8 + index);
     const {gaps, dropped} = findSizeGaps({
       sizes: [25],
       fonts: [{family: 'Inter', sizes: baked}],
