@@ -28,29 +28,29 @@ export function splitAnimatedStyle(style) {
   flattenStyle(style, flat);
 
   for (const key in flat) {
-    const val = flat[key];
+    const value = flat[key];
 
-    if (key === 'transform' && Array.isArray(val)) {
+    if (key === 'transform' && Array.isArray(value)) {
       const staticTransform = [];
-      for (const entry of val) {
+      for (const entry of value) {
         const axis = Object.keys(entry)[0];
-        const v = entry[axis];
-        if (v && v.__animated) {
+        const axisValue = entry[axis];
+        if (axisValue && axisValue.__animated) {
           if (axis === 'scale') {
-            bindings.push({prop: 'scaleX', value: v});
-            bindings.push({prop: 'scaleY', value: v});
+            bindings.push({prop: 'scaleX', value: axisValue});
+            bindings.push({prop: 'scaleY', value: axisValue});
           } else {
-            bindings.push({prop: axis, value: v});
+            bindings.push({prop: axis, value: axisValue});
           }
         } else {
           staticTransform.push(entry);
         }
       }
       if (staticTransform.length > 0) staticStyle.transform = staticTransform;
-    } else if (val && val.__animated) {
-      bindings.push({prop: key, value: val});
+    } else if (value && value.__animated) {
+      bindings.push({prop: key, value});
     } else {
-      staticStyle[key] = val;
+      staticStyle[key] = value;
     }
   }
 

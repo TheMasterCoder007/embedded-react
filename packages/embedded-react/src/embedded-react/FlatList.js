@@ -74,11 +74,11 @@ export function FlatList(props = {}) {
       const row = renderItem({item, index});
       // The key is built lazily: pushKeyedChild calls this only for a row that can hold one, so
       // keyExtractor never runs for a row that rendered nothing or for a raw string.
-      pushKeyedChild(rows, row, el =>
+      pushKeyedChild(rows, row, element =>
         keyExtractor
           ? String(keyExtractor(item, index))
-          : el.key !== null && el.key !== undefined
-            ? el.key
+          : element.key !== null && element.key !== undefined
+            ? element.key
             : String(index),
       );
     }

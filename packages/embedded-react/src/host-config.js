@@ -46,16 +46,16 @@ const boundValues = new Map();
  * alone. Identity settles an Animated.Value; an interpolation is a throwaway object that
  * `value.interpolate(...)` rebuilds on every render, so it answers __bindEq for itself.
  */
-function sameBinding(prev, next) {
-  if (prev === next) return true;
-  if (prev == null || next == null) return false;
-  return typeof prev.__bindEq === 'function' && prev.__bindEq(next);
+function sameBinding(previous, next) {
+  if (previous === next) return true;
+  if (previous == null || next == null) return false;
+  return typeof previous.__bindEq === 'function' && previous.__bindEq(next);
 }
 
 /** The value `bindings` (from splitAnimatedStyle) drives `prop` with, or undefined if none does. */
 function bindingFor(bindings, prop) {
-  for (const b of bindings) {
-    if (b.prop === prop) return b.value;
+  for (const binding of bindings) {
+    if (binding.prop === prop) return binding.value;
   }
   return undefined;
 }
@@ -86,15 +86,18 @@ function releaseStaleBindings(handle, bindings) {
 function applyBindings(handle, bindings) {
   if (bindings.length === 0) return;
   let bound = boundValues.get(handle);
-  for (const b of bindings) {
-    if (bound !== undefined && sameBinding(bound.get(b.prop), b.value))
+  for (const binding of bindings) {
+    if (
+      bound !== undefined &&
+      sameBinding(bound.get(binding.prop), binding.value)
+    )
       continue;
-    b.value.__bind(handle, b.prop);
+    binding.value.__bind(handle, binding.prop);
     if (bound === undefined) {
       bound = new Map();
       boundValues.set(handle, bound);
     }
-    bound.set(b.prop, b.value);
+    bound.set(binding.prop, binding.value);
   }
 }
 
@@ -114,6 +117,7 @@ function forgetBindings(handle) {
 // children of a parent that did not fit are never attached to anything, and removing that parent frees
 // nothing in C. Each failed create gets its own negative instance (the bridge ignores handles <= 0), and
 // the children appended to it are kept here so they are freed when it is deleted.
+const FAILED_CREATE = 0; // createNode's handle when the pool is full
 const orphansOf = new Map(); // failed instance → Set of child handles
 let nextFailedInstance = -1;
 
@@ -183,13 +187,14 @@ function applyTextSpans(type, handle, props, flatStyle) {
 }
 
 /** Resolves an <Svg>'s render-box dimension from style/props, falling back to the source's intrinsic size. */
-function svgBoxSize(props, dim, intrinsic) {
-  const s =
-    props.style && typeof props.style[dim] === 'number'
-      ? props.style[dim]
+function svgBoxSize(props, dimension, intrinsic) {
+  const styleSize =
+    props.style && typeof props.style[dimension] === 'number'
+      ? props.style[dimension]
       : undefined;
-  const p = typeof props[dim] === 'number' ? props[dim] : undefined;
-  return s ?? p ?? intrinsic;
+  const propSize =
+    typeof props[dimension] === 'number' ? props[dimension] : undefined;
+  return styleSize ?? propSize ?? intrinsic;
 }
 
 /**
@@ -199,17 +204,17 @@ function svgBoxSize(props, dim, intrinsic) {
  * (an imported artifact's kind is fixed at build time, so it never flips for a given element).
  */
 function rasterSvgArtifact(type, props) {
-  const src = props && props.source;
-  return type === 'Svg' && src && src.kind === 'raster' ? src : null;
+  const source = props && props.source;
+  return type === 'Svg' && source && source.kind === 'raster' ? source : null;
 }
 
 /** Maps a raster `<Svg source>` to equivalent `<Image>` props: the baked asset name + the resolved box size. */
-function rasterImageProps(props, art) {
-  const width = svgBoxSize(props, 'width', art.width);
-  const height = svgBoxSize(props, 'height', art.height);
+function rasterImageProps(props, artifact) {
+  const width = svgBoxSize(props, 'width', artifact.width);
+  const height = svgBoxSize(props, 'height', artifact.height);
   return {
     ...props,
-    source: art.name,
+    source: artifact.name,
     style: {...(props.style || {}), width, height},
   };
 }
@@ -226,12 +231,12 @@ function applyVectorOps(type, handle, props) {
   let ops;
   let paints;
   let gradients;
-  const src = props.source;
-  if (src && src.kind === 'vector' && Array.isArray(src.ops)) {
+  const source = props.source;
+  if (source && source.kind === 'vector' && Array.isArray(source.ops)) {
     ({ops, paints, gradients} = scaleVectorArtifact(
-      src,
-      svgBoxSize(props, 'width', src.width),
-      svgBoxSize(props, 'height', src.height),
+      source,
+      svgBoxSize(props, 'width', source.width),
+      svgBoxSize(props, 'height', source.height),
     ));
   } else {
     ({ops, paints, gradients} = flattenSvg(props));
@@ -261,12 +266,16 @@ function applyVectorOps(type, handle, props) {
  * drag, a color tweak) does not need the tape re-uploaded.
  */
 function svgSourceBoxChanged(prevProps, nextProps) {
-  const src = nextProps.source;
-  const iw = src && src.kind === 'vector' ? src.width : undefined;
-  const ih = src && src.kind === 'vector' ? src.height : undefined;
+  const source = nextProps.source;
+  const intrinsicWidth =
+    source && source.kind === 'vector' ? source.width : undefined;
+  const intrinsicHeight =
+    source && source.kind === 'vector' ? source.height : undefined;
   return (
-    svgBoxSize(prevProps, 'width', iw) !== svgBoxSize(nextProps, 'width', iw) ||
-    svgBoxSize(prevProps, 'height', ih) !== svgBoxSize(nextProps, 'height', ih)
+    svgBoxSize(prevProps, 'width', intrinsicWidth) !==
+      svgBoxSize(nextProps, 'width', intrinsicWidth) ||
+    svgBoxSize(prevProps, 'height', intrinsicHeight) !==
+      svgBoxSize(nextProps, 'height', intrinsicHeight)
   );
 }
 
@@ -299,10 +308,10 @@ function diffUpdate(type, prevProps, nextProps) {
   let events = false;
   let vector = false;
   const diffKey = key => {
-    const a = prevProps[key];
-    const b = nextProps[key];
-    if (Object.is(a, b)) return;
-    if (isEventProp(key, a) || isEventProp(key, b)) {
+    const previousValue = prevProps[key];
+    const nextValue = nextProps[key];
+    if (Object.is(previousValue, nextValue)) return;
+    if (isEventProp(key, previousValue) || isEventProp(key, nextValue)) {
       events = true;
       return;
     }
@@ -311,16 +320,16 @@ function diffUpdate(type, prevProps, nextProps) {
         // Only subtree-owning types render children through their OWN props (shouldSetTextContent);
         // everywhere else children are separate host instances React mutates directly.
         if (type === 'Text') {
-          if (!deepEqualProps(a, b)) {
+          if (!deepEqualProps(previousValue, nextValue)) {
             props = true; // flat.text is built from children
             spans = true;
           }
         } else if (type === 'Svg') {
-          if (!deepEqualProps(a, b)) vector = true;
+          if (!deepEqualProps(previousValue, nextValue)) vector = true;
         }
         return;
       case 'style':
-        if (!deepEqualProps(a, b)) {
+        if (!deepEqualProps(previousValue, nextValue)) {
           props = true;
           if (type === 'Text') spans = true;
           if (type === 'Svg' && nextProps.source)
@@ -341,7 +350,7 @@ function diffUpdate(type, prevProps, nextProps) {
         }
       // fall through: on other types these are ordinary (ignored or passthrough) props
       default:
-        if (!deepEqualProps(a, b)) {
+        if (!deepEqualProps(previousValue, nextValue)) {
           props = true;
           // A source tape ignores root paint.
           if (type === 'Svg' && !nextProps.source && PAINT_PROPS.includes(key))
@@ -417,13 +426,13 @@ export const hostConfig = {
     const raster = rasterSvgArtifact(type, props);
     if (raster) {
       const handle = NativeUI.createNode('Image');
-      if (handle === 0) return nextFailedInstance--;
+      if (handle === FAILED_CREATE) return nextFailedInstance--;
       applyProps('Image', handle, rasterImageProps(props, raster));
       applyEvents(handle, null, props);
       return handle;
     }
     const handle = NativeUI.createNode(type);
-    if (handle === 0) return nextFailedInstance--;
+    if (handle === FAILED_CREATE) return nextFailedInstance--;
     const flatStyle = applyProps(type, handle, props);
     applyTextSpans(type, handle, props, flatStyle);
     applyVectorOps(type, handle, props);
@@ -528,12 +537,12 @@ export const hostConfig = {
   },
 
   // --- Scheduling ---
-  scheduleTimeout: (fn, delay) => setTimeout(fn, delay),
-  cancelTimeout: id => clearTimeout(id),
+  scheduleTimeout: (callback, delay) => setTimeout(callback, delay),
+  cancelTimeout: timeoutId => clearTimeout(timeoutId),
   supportsMicrotasks: true,
   scheduleMicrotask:
     typeof queueMicrotask === 'function'
       ? queueMicrotask
-      : fn => Promise.resolve().then(fn),
+      : callback => Promise.resolve().then(callback),
   now: () => NativeUI.now(),
 };
