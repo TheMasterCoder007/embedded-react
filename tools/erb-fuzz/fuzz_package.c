@@ -59,51 +59,81 @@ static const uint16_t s_panels[][2] = {
 /** @brief Each tick, in ms, as a 60 Hz display loop runs. */
 #define FRAME_MS 16u
 
-/** @brief What a script step does. An operation past the last wraps around. */
+/** @brief The ms each unit of a frame step's argument adds. */
+#define SHORT_FRAME_UNIT_MS 4u
+#define LONG_FRAME_UNIT_MS 1000u
+
+/** @brief The values a step's byte argument takes, and the one that reads as 0 when it is signed. */
+#define ARGUMENT_RANGE 256u
+#define ARGUMENT_MIDPOINT 128
+
+/** @brief Keeps a key step's character in ASCII. */
+#define ASCII_MASK 0x7Fu
+
+#define MS_PER_SECOND 1000
+
+/** @brief Date.now() as the app sees it when a run starts. */
+#define WALL_CLOCK_MS 1767225600000LL
+
+/** @brief The finger every touch step uses. */
+#define TOUCH_FINGER 0
+
+/** @brief Room for an error's message, and a short one that cuts it off. */
+#define ERROR_MESSAGE_BYTES 256
+#define SHORT_MESSAGE_BYTES 8
+
+/** @brief The fonts, glyphs and extra glyphs a package may register. */
+#define FONT_SLOTS 8
+#define GLYPH_SLOTS 1024
+#define EXTRA_GLYPH_SLOTS 64
+
+/** @brief What a script step does with its first and second argument. An operation past the last wraps around. */
 enum
 {
-    OP_FRAME,        /* a frame of (a * 4) ms */
-    OP_LONG_FRAME,   /* a frame of (a * 1000) ms */
-    OP_TOUCH_DOWN,   /* at (a, b), as a share of the panel, then a frame */
-    OP_TOUCH_MOVE,   /* the same */
-    OP_TOUCH_UP,     /* the same */
-    OP_TOUCH_CANCEL, /* the same */
-    OP_KEY,          /* keycode a, or the character b when a is 0 */
-    OP_INPUT_INT,    /* input a set to b - 128 */
-    OP_INPUT_BOOL,   /* input a set to b & 1 */
-    OP_INPUT_FLOAT,  /* input a set to b - 128, as a float */
-    OP_INPUT_STRING, /* input a set to b copies of 'x' */
-    OP_WALL_CLOCK,   /* the clock set to (a * 256 + b) seconds */
-    OP_RELOAD,       /* the package loaded again over itself */
-    OP_UNLOAD,       /* the app unloaded and loaded again */
-    OP_COUNT_,
+    OPERATION_FRAME,        /* a frame of first * SHORT_FRAME_UNIT_MS */
+    OPERATION_LONG_FRAME,   /* a frame of first * LONG_FRAME_UNIT_MS */
+    OPERATION_TOUCH_DOWN,   /* at (first, second), as a share of the panel, then a frame */
+    OPERATION_TOUCH_MOVE,   /* the same */
+    OPERATION_TOUCH_UP,     /* the same */
+    OPERATION_TOUCH_CANCEL, /* the same */
+    OPERATION_KEY,          /* keycode first, or the character second when first is 0 */
+    OPERATION_INPUT_INT,    /* input first set to second - ARGUMENT_MIDPOINT */
+    OPERATION_INPUT_BOOL,   /* input first set to second & 1 */
+    OPERATION_INPUT_FLOAT,  /* input first set to second - ARGUMENT_MIDPOINT, as a float */
+    OPERATION_INPUT_STRING, /* input first set to second copies of 'x' */
+    OPERATION_WALL_CLOCK,   /* the clock set to (first * ARGUMENT_RANGE + second) seconds */
+    OPERATION_RELOAD,       /* the package loaded again over itself */
+    OPERATION_UNLOAD,       /* the app unloaded and loaded again */
+    OPERATION_COUNT,
 };
 
 /** @brief The host's side of a run with no script: taps across the panel, a drag, typing, inputs and time. */
 static const uint8_t s_default_script[] = {
-    OP_FRAME,      4,   0,   OP_TOUCH_DOWN,  32,  32,  OP_TOUCH_UP,     32,  32,  OP_TOUCH_DOWN, 128, 32,
-    OP_TOUCH_UP,   128, 32,  OP_TOUCH_DOWN,  224, 32,  OP_TOUCH_UP,     224, 32,  OP_TOUCH_DOWN, 32,  128,
-    OP_TOUCH_UP,   32,  128, OP_TOUCH_DOWN,  128, 128, OP_TOUCH_UP,     128, 128, OP_TOUCH_DOWN, 224, 128,
-    OP_TOUCH_UP,   224, 128, OP_TOUCH_DOWN,  32,  224, OP_TOUCH_UP,     32,  224, OP_TOUCH_DOWN, 128, 224,
-    OP_TOUCH_UP,   128, 224, OP_TOUCH_DOWN,  224, 224, OP_TOUCH_MOVE,   128, 224, OP_TOUCH_MOVE, 32,  128,
-    OP_TOUCH_UP,   32,  128, OP_KEY,         0,   'a', OP_KEY,          8,   0,   OP_INPUT_INT,  0,   200,
-    OP_INPUT_BOOL, 0,   1,   OP_INPUT_FLOAT, 0,   64,  OP_INPUT_STRING, 0,   8,   OP_WALL_CLOCK, 99,  1,
-    OP_LONG_FRAME, 1,   0,   OP_FRAME,       4,   0,
+    OPERATION_FRAME,      4,   0,   OPERATION_TOUCH_DOWN,  32,  32,  OPERATION_TOUCH_UP,     32,  32,
+    OPERATION_TOUCH_DOWN, 128, 32,  OPERATION_TOUCH_UP,    128, 32,  OPERATION_TOUCH_DOWN,   224, 32,
+    OPERATION_TOUCH_UP,   224, 32,  OPERATION_TOUCH_DOWN,  32,  128, OPERATION_TOUCH_UP,     32,  128,
+    OPERATION_TOUCH_DOWN, 128, 128, OPERATION_TOUCH_UP,    128, 128, OPERATION_TOUCH_DOWN,   224, 128,
+    OPERATION_TOUCH_UP,   224, 128, OPERATION_TOUCH_DOWN,  32,  224, OPERATION_TOUCH_UP,     32,  224,
+    OPERATION_TOUCH_DOWN, 128, 224, OPERATION_TOUCH_UP,    128, 224, OPERATION_TOUCH_DOWN,   224, 224,
+    OPERATION_TOUCH_MOVE, 128, 224, OPERATION_TOUCH_MOVE,  32,  128, OPERATION_TOUCH_UP,     32,  128,
+    OPERATION_KEY,        0,   'a', OPERATION_KEY,         8,   0,   OPERATION_INPUT_INT,    0,   200,
+    OPERATION_INPUT_BOOL, 0,   1,   OPERATION_INPUT_FLOAT, 0,   64,  OPERATION_INPUT_STRING, 0,   8,
+    OPERATION_WALL_CLOCK, 99,  1,   OPERATION_LONG_FRAME,  1,   0,   OPERATION_FRAME,        4,   0,
 };
 
 /** @brief A native function, so a package's import of it resolves. The runtime's tests build packages that use it. */
-static bool sensors_read(const int32_t* args, int32_t* result, void* context)
+static bool sensors_read(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
-    *result = args[0] == INT32_MAX ? 0 : args[0] + 1;
-    return args[0] != INT32_MIN;
+    *result = arguments[0] == INT32_MAX ? 0 : arguments[0] + 1;
+    return arguments[0] != INT32_MIN;
 }
 
 static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}};
 
-static BitmapFont s_fonts[8];
-static GlyphInfo s_glyphs[1024];
-static ExtraGlyph s_extras[64];
+static BitmapFont s_fonts[FONT_SLOTS];
+static GlyphInfo s_glyphs[GLYPH_SLOTS];
+static ExtraGlyph s_extras[EXTRA_GLYPH_SLOTS];
 
 /** @brief Reads a log line through, so one that runs off its string shows. */
 static void log_line(const char* line, void* context)
@@ -141,8 +171,8 @@ static bool load(Run* run)
     {
         return true;
     }
-    char message[256];
-    char short_message[8];
+    char message[ERROR_MESSAGE_BYTES];
+    char short_message[SHORT_MESSAGE_BYTES];
     erb_error_message(&run->error, message, sizeof(message));
     erb_error_message(&run->error, short_message, sizeof(short_message));
     erb_status_str(run->error.status);
@@ -153,64 +183,64 @@ static bool load(Run* run)
 }
 
 /** @brief Runs one step of a script. */
-static void step(Run* run, uint8_t op, uint8_t a, uint8_t b)
+static void step(Run* run, uint8_t operation, uint8_t first_argument, uint8_t second_argument)
 {
-    const int x = (int)((uint32_t)a * run->config.screen_w / 256u);
-    const int y = (int)((uint32_t)b * run->config.screen_h / 256u);
-    switch (op % OP_COUNT_)
+    const int x = (int)((uint32_t)first_argument * run->config.screen_w / ARGUMENT_RANGE);
+    const int y = (int)((uint32_t)second_argument * run->config.screen_h / ARGUMENT_RANGE);
+    switch (operation % OPERATION_COUNT)
     {
-        case OP_FRAME:
-            frame((uint32_t)a * 4u);
+        case OPERATION_FRAME:
+            frame((uint32_t)first_argument * SHORT_FRAME_UNIT_MS);
             break;
-        case OP_LONG_FRAME:
-            frame((uint32_t)a * 1000u);
+        case OPERATION_LONG_FRAME:
+            frame((uint32_t)first_argument * LONG_FRAME_UNIT_MS);
             break;
-        case OP_TOUCH_DOWN:
-            embedded_renderer_touch(0, ER_TOUCH_DOWN, x, y);
+        case OPERATION_TOUCH_DOWN:
+            embedded_renderer_touch(TOUCH_FINGER, ER_TOUCH_DOWN, x, y);
             frame(FRAME_MS);
             break;
-        case OP_TOUCH_MOVE:
-            embedded_renderer_touch(0, ER_TOUCH_MOVE, x, y);
+        case OPERATION_TOUCH_MOVE:
+            embedded_renderer_touch(TOUCH_FINGER, ER_TOUCH_MOVE, x, y);
             frame(FRAME_MS);
             break;
-        case OP_TOUCH_UP:
-            embedded_renderer_touch(0, ER_TOUCH_UP, x, y);
+        case OPERATION_TOUCH_UP:
+            embedded_renderer_touch(TOUCH_FINGER, ER_TOUCH_UP, x, y);
             frame(FRAME_MS);
             break;
-        case OP_TOUCH_CANCEL:
-            embedded_renderer_touch(0, ER_TOUCH_CANCEL, x, y);
+        case OPERATION_TOUCH_CANCEL:
+            embedded_renderer_touch(TOUCH_FINGER, ER_TOUCH_CANCEL, x, y);
             frame(FRAME_MS);
             break;
-        case OP_KEY:
+        case OPERATION_KEY:
         {
-            const char text[2] = {(char)(b & 0x7Fu), '\0'};
-            embedded_renderer_key(a, a ? NULL : text);
+            const char text[2] = {(char)(second_argument & ASCII_MASK), '\0'};
+            embedded_renderer_key(first_argument, first_argument ? NULL : text);
             break;
         }
-        case OP_INPUT_INT:
-            erb_input_set_int(a, (int32_t)b - 128);
+        case OPERATION_INPUT_INT:
+            erb_input_set_int(first_argument, (int32_t)second_argument - ARGUMENT_MIDPOINT);
             break;
-        case OP_INPUT_BOOL:
-            erb_input_set_bool(a, (b & 1u) != 0u);
+        case OPERATION_INPUT_BOOL:
+            erb_input_set_bool(first_argument, (second_argument & 1u) != 0u);
             break;
-        case OP_INPUT_FLOAT:
-            erb_input_set_float(a, (float)b - 128.0f);
+        case OPERATION_INPUT_FLOAT:
+            erb_input_set_float(first_argument, (float)second_argument - (float)ARGUMENT_MIDPOINT);
             break;
-        case OP_INPUT_STRING:
+        case OPERATION_INPUT_STRING:
         {
-            char text[256];
-            memset(text, 'x', b);
-            text[b] = '\0';
-            erb_input_set_string(a, text);
+            char text[ARGUMENT_RANGE];
+            memset(text, 'x', second_argument);
+            text[second_argument] = '\0';
+            erb_input_set_string(first_argument, text);
             break;
         }
-        case OP_WALL_CLOCK:
-            erb_set_wall_clock((int64_t)((uint32_t)a * 256u + b) * 1000);
+        case OPERATION_WALL_CLOCK:
+            erb_set_wall_clock((int64_t)((uint32_t)first_argument * ARGUMENT_RANGE + second_argument) * MS_PER_SECOND);
             break;
-        case OP_RELOAD:
+        case OPERATION_RELOAD:
             load(run);
             break;
-        case OP_UNLOAD:
+        case OPERATION_UNLOAD:
             erb_unload();
             load(run);
             break;
@@ -246,15 +276,15 @@ static void run_panel(const uint8_t* package,
                       const uint8_t* script,
                       size_t script_bytes)
 {
-    const uint16_t w = s_panels[panel % PANEL_COUNT][0];
-    const uint16_t h = s_panels[panel % PANEL_COUNT][1];
+    const uint16_t width = s_panels[panel % PANEL_COUNT][0];
+    const uint16_t height = s_panels[panel % PANEL_COUNT][1];
     uint32_t arena_bytes = scanned ? read_arena(container) : 0u;
     if (arena_bytes > MAX_ARENA_BYTES)
     {
         arena_bytes = MAX_ARENA_BYTES;
     }
     void* arena = malloc(arena_bytes ? arena_bytes : 1u);
-    if (!arena || !er_software_backend_init(w, h))
+    if (!arena || !er_software_backend_init(width, height))
     {
         abort();
     }
@@ -271,20 +301,20 @@ static void run_panel(const uint8_t* package,
     run.fonts.extra_count = sizeof(s_extras) / sizeof(s_extras[0]);
     run.config.arena = arena;
     run.config.arena_bytes = arena_bytes;
-    run.config.screen_w = w;
-    run.config.screen_h = h;
+    run.config.screen_w = width;
+    run.config.screen_h = height;
     run.config.natives = s_natives;
     run.config.native_count = sizeof(s_natives) / sizeof(s_natives[0]);
     run.config.fonts = &run.fonts;
     run.config.log = log_line;
 
-    erb_set_wall_clock(1767225600000LL);
+    erb_set_wall_clock(WALL_CLOCK_MS);
     const bool loaded = load(&run);
     if (!loaded && getenv("ERB_FUZZ_REQUIRE_LOAD"))
     {
-        char message[256];
+        char message[ERROR_MESSAGE_BYTES];
         erb_error_message(&run.error, message, sizeof(message));
-        fprintf(stderr, "a seed didn't load (%ux%u): %s\n", w, h, message);
+        fprintf(stderr, "a seed didn't load (%ux%u): %s\n", width, height, message);
         abort();
     }
     if (loaded)
@@ -312,9 +342,9 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
 
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-    ErContainer scan;
-    const bool scanned = er_container_scan(data, size, &scan) == ER_CONTAINER_OK;
-    const size_t package_bytes = scanned ? scan.size : size;
+    ErContainer input_container;
+    const bool scanned = er_container_scan(data, size, &input_container) == ER_CONTAINER_OK;
+    const size_t package_bytes = scanned ? input_container.size : size;
 
     uint8_t* package = malloc(package_bytes ? package_bytes : 1u);
     if (!package)

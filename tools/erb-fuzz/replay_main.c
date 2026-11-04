@@ -24,17 +24,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/** @brief The exit code when a file can't be read. */
+#define EXIT_UNREADABLE 2
+
 int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
 
 int main(int argc, char** argv)
 {
-    for (int index = 1; index < argc; index++)
+    for (int argument_index = 1; argument_index < argc; argument_index++)
     {
-        FILE* file = fopen(argv[index], "rb");
+        FILE* file = fopen(argv[argument_index], "rb");
         if (!file)
         {
-            fprintf(stderr, "can't read %s\n", argv[index]);
-            return 2;
+            fprintf(stderr, "can't read %s\n", argv[argument_index]);
+            return EXIT_UNREADABLE;
         }
         fseek(file, 0, SEEK_END);
         const long length = ftell(file);
@@ -42,11 +45,11 @@ int main(int argc, char** argv)
         uint8_t* bytes = malloc(length ? (size_t)length : 1u);
         if (!bytes || fread(bytes, 1, (size_t)length, file) != (size_t)length)
         {
-            fprintf(stderr, "can't read %s\n", argv[index]);
-            return 2;
+            fprintf(stderr, "can't read %s\n", argv[argument_index]);
+            return EXIT_UNREADABLE;
         }
         fclose(file);
-        fprintf(stderr, "%s\n", argv[index]);
+        fprintf(stderr, "%s\n", argv[argument_index]);
         LLVMFuzzerTestOneInput(bytes, (size_t)length);
         free(bytes);
     }
