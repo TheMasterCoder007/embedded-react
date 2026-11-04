@@ -60,7 +60,7 @@ export interface IrPanResponder {
   /** Prefix of its gesture state (`<statePrefix>_granted`, …). */
   statePrefix: string;
   /** Prefix of its functions. */
-  fnPrefix: string;
+  functionPrefix: string;
   /** The gesture's id. */
   stateID: number;
   /** In the order they are emitted. */

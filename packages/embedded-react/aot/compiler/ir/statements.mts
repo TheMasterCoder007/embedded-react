@@ -34,11 +34,11 @@ export interface IrDeclareLocal {
   kind: 'declareLocal';
   /** The slot's name, which later reads of the local use. */
   name: string;
-  init: IrExpr;
+  initializer: IrExpr;
   /** Kept in a slot (a dep-driven effect's local its cleanup reads), so only assigned here. */
   isHoisted: boolean;
   /** The buffer size a string local is copied into. */
-  stringCap: number;
+  stringCapacity: number;
 }
 
 /** `setInterval` / `setTimeout`: a timer whose callback is a function of its own. */
@@ -47,7 +47,7 @@ export interface IrTimer {
   delay: IrExpr | null;
   isRepeating: boolean;
   /** The function the callback was compiled to. */
-  fn: string;
+  functionName: string;
 }
 
 /** Starts a timer, keeping its id in a local when the code goes on to clear it. */
@@ -119,7 +119,7 @@ export interface IrSliceItems {
 export interface IrWriteRef {
   kind: 'writeRef';
   ref: RefRecord;
-  op: string;
+  operator: string;
   value: IrExpr;
 }
 
@@ -127,7 +127,7 @@ export interface IrWriteRef {
 export interface IrStepRef {
   kind: 'stepRef';
   ref: RefRecord;
-  op: '++' | '--';
+  operator: '++' | '--';
 }
 
 /** `anim.stop()`: each animated value it drives freezes where it is, and a pending completion wait ends. */
@@ -184,7 +184,7 @@ export interface IrCallback {
 }
 
 /** A lowered handler, effect, or timer statement, before any backend prints it, and where it is in the source. */
-export type IrStmt = {loc?: SourcePosition} & (
+export type IrStmt = {location?: SourcePosition} & (
   | IrDeclareLocal
   | IrStartTimer
   | IrClearTimer

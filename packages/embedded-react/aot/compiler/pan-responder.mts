@@ -211,7 +211,7 @@ function buildPanDescriptor(
   return {
     name,
     statePrefix: `pan_state_${prefix}${name}`,
-    fnPrefix: `pan_${prefix}${name}`,
+    functionPrefix: `pan_${prefix}${name}`,
     stateID: 0, // assigned when the responder is first wired to a node
     queries,
     events,
@@ -224,48 +224,48 @@ function buildPanDescriptor(
  * `useRef(…)` form (read back as `pan.current.panHandlers`) is accepted too; a bare `create(…)` is not,
  * because it would re-create the recognizer every render in Flow A and the two flows must agree.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  *
  * @returns The responders, by name.
  */
 export function collectPanResponders(
-  fnBody: t.BlockStatement | t.Expression,
+  functionBody: t.BlockStatement | t.Expression,
   prefix = '',
 ): Map<string, PanResponderRecord> {
   // Only the component body's own top-level declarations can hold a responder.
   const pans = new Map<string, PanResponderRecord>();
-  if (fnBody.type !== 'BlockStatement') return pans;
+  if (functionBody.type !== 'BlockStatement') return pans;
 
-  for (const statement of fnBody.body) {
+  for (const statement of functionBody.body) {
     if (statement.type !== 'VariableDeclaration') continue;
 
-    for (const decl of statement.declarations) {
-      const init = decl.init;
-      if (decl.id.type !== 'Identifier' || !init) continue;
+    for (const declarator of statement.declarations) {
+      const initializer = declarator.init;
+      if (declarator.id.type !== 'Identifier' || !initializer) continue;
 
       // Find the useRef call in either `useRef(…).current` or a bare `useRef(…)`.
       const viaCurrent =
-        init.type === 'MemberExpression' &&
-        !init.computed &&
-        (init.property as t.Identifier).name === 'current' &&
-        init.object.type === 'CallExpression' &&
-        (init.object.callee as t.Identifier).name === 'useRef'
-          ? init.object
+        initializer.type === 'MemberExpression' &&
+        !initializer.computed &&
+        (initializer.property as t.Identifier).name === 'current' &&
+        initializer.object.type === 'CallExpression' &&
+        (initializer.object.callee as t.Identifier).name === 'useRef'
+          ? initializer.object
           : null;
       const viaRef =
-        init.type === 'CallExpression' &&
-        (init.callee as t.Identifier).name === 'useRef'
-          ? init
+        initializer.type === 'CallExpression' &&
+        (initializer.callee as t.Identifier).name === 'useRef'
+          ? initializer
           : null;
       const useRefCall = viaCurrent || viaRef;
 
       // Skip anything that is not a useRef around PanResponder.create(…); an unwrapped create is an error.
       if (!useRefCall || !isPanCreate(useRefCall.arguments[0])) {
-        if (isPanCreate(init)) {
+        if (isPanCreate(initializer)) {
           throw aotError(
             'AOT: PanResponder.create(...) must be kept in a useRef',
-            `write \`const ${decl.id.name} = useRef(PanResponder.create({…})).current;\` — the ` +
+            `write \`const ${declarator.id.name} = useRef(PanResponder.create({…})).current;\` — the ` +
               `recognizer owns the live gesture, so a fresh one per render would throw the drag ` +
               `away (the same rule Flow A enforces).`,
           );
@@ -276,12 +276,12 @@ export function collectPanResponders(
 
       // Build the responder's descriptor and record which way the app must spell its spread.
       const pan = buildPanDescriptor(
-        decl.id.name,
+        declarator.id.name,
         useRefCall.arguments[0] as t.CallExpression,
         prefix,
       );
       pan.viaRefCurrent = !viaCurrent; // how the app spells the spread: pan.current.panHandlers
-      pans.set(decl.id.name, pan);
+      pans.set(declarator.id.name, pan);
     }
   }
 
@@ -292,40 +292,44 @@ export function collectPanResponders(
  * Lowers a should-set predicate to a single condition: the engine calls these synchronously inside
  * hit-testing, before anyone owns the gesture, so they may only READ.
  *
- * @param fnNode  The predicate.
- * @param env  The expression environment.
+ * @param functionNode  The predicate.
+ * @param environment  The expression environment.
  * @param pan  The responder it belongs to.
  *
  * @returns The condition.
  */
 function lowerPanQuery(
-  fnNode: PanCallback,
-  env: Env,
+  functionNode: PanCallback,
+  environment: Env,
   pan: PanResponderRecord,
 ): IrExpr {
   // The predicate reads the event and gestureState through its own parameter names.
-  const eventParam =
-    fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
-  const gestureParam =
-    fnNode.params[1]?.type === 'Identifier' ? fnNode.params[1].name : null;
-  const queryEnv: Env = {...env, pan};
-  if (eventParam) {
-    queryEnv.event = eventParam;
+  const eventParameter =
+    functionNode.params[0]?.type === 'Identifier'
+      ? functionNode.params[0].name
+      : null;
+  const gestureParameter =
+    functionNode.params[1]?.type === 'Identifier'
+      ? functionNode.params[1].name
+      : null;
+  const queryEnvironment: Env = {...environment, pan};
+  if (eventParameter) {
+    queryEnvironment.event = eventParameter;
   }
 
-  if (gestureParam) {
-    queryEnv.gesture = gestureParam;
+  if (gestureParameter) {
+    queryEnvironment.gesture = gestureParameter;
   }
 
   // Its body must be one expression: an expression body, or a block that only returns one.
-  const body = fnNode.body;
-  const expr =
+  const body = functionNode.body;
+  const expression =
     body.type === 'BlockStatement'
       ? body.body.length === 1 && body.body[0].type === 'ReturnStatement'
         ? body.body[0].argument
         : null
       : body;
-  if (!expr) {
+  if (!expression) {
     throw aotError(
       'AOT: a PanResponder should-set predicate must be a single boolean expression',
       'write it as `() => true` or `(e, g) => Math.abs(g.dx) > 8`. The engine asks these ' +
@@ -334,7 +338,7 @@ function lowerPanQuery(
     );
   }
 
-  return lowerExpr(expr, queryEnv);
+  return lowerExpr(expression, queryEnvironment);
 }
 
 /**
@@ -351,24 +355,24 @@ function lowerPanQuery(
  * terminate handlers. Those three are ALWAYS lowered, even with no app callback; move and reject only with one.
  *
  * @param pan  The responder; its gesture id must be assigned.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param out  Everything emitted so far.
+ * @param output  Everything emitted so far.
  *
  * @returns The responder.
  */
 export function lowerPanResponder(
   pan: PanResponderRecord,
-  env: Env,
+  environment: Env,
   state: StateTable,
-  out: Out,
+  output: Out,
 ): IrPanResponder {
-  const panEnv: Env = {...env, pan};
+  const panEnvironment: Env = {...environment, pan};
   const event = (name: string, role: IrPanRole): IrPanEvent => ({
     event: name,
     role,
     callback: pan.events.has(name)
-      ? lowerHandler(pan.events.get(name)!, panEnv, state, out, pan)
+      ? lowerHandler(pan.events.get(name)!, panEnvironment, state, output, pan)
       : null,
   });
 
@@ -387,12 +391,12 @@ export function lowerPanResponder(
   return {
     name: pan.name,
     statePrefix: pan.statePrefix,
-    fnPrefix: pan.fnPrefix,
+    functionPrefix: pan.functionPrefix,
     stateID: pan.stateID,
     events,
     queries: [...pan.queries].map(([query, predicate]) => ({
       query,
-      test: lowerPanQuery(predicate, panEnv, pan),
+      test: lowerPanQuery(predicate, panEnvironment, pan),
     })),
   };
 }
@@ -402,24 +406,28 @@ export function lowerPanResponder(
  * handlers to the output. Each node that spreads it wires them in its own build lines.
  *
  * @param pan  The responder.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The lowered responder.
  */
 export function emitPanResponder(
   pan: PanResponderRecord,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrPanResponder {
   if (!pan.lowered) {
-    pan.stateID = ++out.panN;
-    pan.lowered = lowerPanResponder(pan, env, state, out);
-    out.panResponders.push(pan.lowered);
+    pan.stateID = ++output.panCount;
+    pan.lowered = lowerPanResponder(pan, environment, state, output);
+    output.panResponders.push(pan.lowered);
     for (const panEvent of pan.lowered.events) {
-      out.handlers.push({kind: 'panEvent', pan: pan.lowered, event: panEvent});
+      output.handlers.push({
+        kind: 'panEvent',
+        pan: pan.lowered,
+        event: panEvent,
+      });
     }
   }
 
@@ -432,13 +440,13 @@ export function emitPanResponder(
  * or vice versa) is an error rather than a silent miss — Flow A would throw at runtime on the same code.
  *
  * @param argument  The spread's argument.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The responder, or null when the spread is not `<responder>.panHandlers`.
  */
 export function panSpreadTarget(
   argument: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
 ): PanResponderRecord | null {
   // Only `<name>.panHandlers` or `<name>.current.panHandlers` can spread a responder.
   if (
@@ -460,7 +468,7 @@ export function panSpreadTarget(
     : (handlersOwner as t.Identifier).name;
   const pan =
     handlersOwner.type === 'Identifier' || usesCurrent
-      ? env.pans?.get(rootName)
+      ? environment.pans?.get(rootName)
       : null;
   if (!pan) return null;
 

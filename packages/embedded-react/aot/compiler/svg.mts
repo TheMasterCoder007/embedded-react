@@ -105,7 +105,7 @@ interface DynamicAttr {
 
 /** A gradient attribute (fillGrad / strokeGrad), kept as its expression for gradAttr to read. */
 interface GradientAttr {
-  gradNode: t.Expression | t.JSXEmptyExpression;
+  gradientNode: t.Expression | t.JSXEmptyExpression;
 }
 
 /**
@@ -135,6 +135,26 @@ interface ShapePaint {
 export const CAP_MAP: Record<string, number> = {butt: 0, round: 1, square: 2};
 /** strokeLinejoin → ERVectorPaint join. */
 export const JOIN_MAP: Record<string, number> = {miter: 0, round: 1, bevel: 2};
+
+/** SVG's stroke-miterlimit when a shape sets none. */
+export const DEFAULT_MITER_LIMIT = 4;
+
+/** Gradient types: 1 linear, 2 radial, 3 conic. */
+const GRADIENT_LINEAR = 1;
+const GRADIENT_CONIC = 3;
+
+/** Where each field sits in a flattenSvg paint record. */
+const PAINT_RECORD = {
+  fill: 0,
+  stroke: 1,
+  strokeWidth: 2,
+  miter: 3,
+  cap: 4,
+  join: 5,
+  fillRule: 6,
+  fillGradient: 7,
+  strokeGradient: 8,
+} as const;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -180,7 +200,9 @@ function checkStaticGradient(name: string, value: unknown): void {
   const gradient = value as {type?: unknown; stops?: unknown};
   if (
     typeof value !== 'object' ||
-    ![1, 2, 3].includes(gradient.type as number)
+    !Number.isInteger(gradient.type) ||
+    (gradient.type as number) < GRADIENT_LINEAR ||
+    (gradient.type as number) > GRADIENT_CONIC
   ) {
     throw aotError(
       `AOT: "${name}.type" must be 1 (linear), 2 (radial) or 3 (conic)`,
@@ -283,25 +305,25 @@ function jsxToSvgElement(
   // Fold every attribute; a bare attribute is `true`.
   const type = (element.openingElement.name as t.JSXIdentifier).name;
   const props: Record<string, unknown> = {};
-  for (const attr of element.openingElement.attributes) {
-    if (attr.type !== 'JSXAttribute') {
+  for (const attribute of element.openingElement.attributes) {
+    if (attribute.type !== 'JSXAttribute') {
       throw new Error(
         'AOT: spread attributes on an <Svg> element not supported',
       );
     }
 
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'ref' || name === 'key' || name === 'style') continue; // the box's, not the drawing's
 
-    if (attr.value == null) {
+    if (attribute.value == null) {
       props[name] = true;
-    } else if (attr.value.type === 'StringLiteral') {
-      props[name] = attr.value.value;
-    } else if (attr.value.type === 'JSXExpressionContainer') {
+    } else if (attribute.value.type === 'StringLiteral') {
+      props[name] = attribute.value.value;
+    } else if (attribute.value.type === 'JSXExpressionContainer') {
       props[name] =
         type === 'Svg' && (name === 'width' || name === 'height')
-          ? evalStatic(attr.value.expression, scope, 'boot')
-          : evalDrawing(attr.value.expression, scope);
+          ? evalStatic(attribute.value.expression, scope, 'boot')
+          : evalDrawing(attribute.value.expression, scope);
     } else {
       throw new Error(
         `AOT: unsupported <${type}> attribute value for "${name}"`,
@@ -337,15 +359,15 @@ function jsxToSvgElement(
  * @returns The paint.
  */
 export const vectorPaintOf = (record: number[]): IrVectorPaint => ({
-  fill: record[0] >>> 0,
-  stroke: record[1] >>> 0,
-  strokeWidth: record[2],
-  miter: record[3],
-  cap: record[4] | 0,
-  join: record[5] | 0,
-  fillRule: record[6] | 0,
-  fillGradient: (record[7] || 0) | 0,
-  strokeGradient: (record[8] || 0) | 0,
+  fill: record[PAINT_RECORD.fill] >>> 0,
+  stroke: record[PAINT_RECORD.stroke] >>> 0,
+  strokeWidth: record[PAINT_RECORD.strokeWidth],
+  miter: record[PAINT_RECORD.miter],
+  cap: record[PAINT_RECORD.cap] | 0,
+  join: record[PAINT_RECORD.join] | 0,
+  fillRule: record[PAINT_RECORD.fillRule] | 0,
+  fillGradient: (record[PAINT_RECORD.fillGradient] || 0) | 0,
+  strokeGradient: (record[PAINT_RECORD.strokeGradient] || 0) | 0,
 });
 
 /**
@@ -368,8 +390,8 @@ export function checkVectorPaints(paints: IrVectorPaint[]): void {
  */
 function checkVectorTables(tables: IrVectorTables): void {
   if (!tables.ops.length) return;
-  for (const op of tables.ops) {
-    checkNumber(op);
+  for (const word of tables.ops) {
+    checkNumber(word);
   }
   checkVectorPaints(tables.paints);
   for (const gradient of tables.gradients) {
@@ -427,47 +449,47 @@ const isDynamicAttr = (value: unknown): value is DynamicAttr =>
  *
  * @param openingElement  The element's opening tag.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The attributes, by name.
  */
 function svgAttrs(
   openingElement: t.JSXOpeningElement,
   scope: Scope,
-  env: Env,
+  environment: Env,
 ): SvgAttrs {
-  const attrs: SvgAttrs = {};
+  const attributes: SvgAttrs = {};
   const tagName = (openingElement.name as t.JSXIdentifier).name;
-  for (const attr of openingElement.attributes) {
-    if (attr.type !== 'JSXAttribute') {
+  for (const attribute of openingElement.attributes) {
+    if (attribute.type !== 'JSXAttribute') {
       throw new Error(
         'AOT: spread attributes on an <Svg> element not supported',
       );
     }
 
     // Not geometry or paint: the box's style and ref are lowerSvgBox's.
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'ref' || name === 'key' || name === 'style') continue;
 
     // Keep a gradient as its expression; gradAttr lowers it, conditions included.
-    const valueNode = attr.value;
+    const valueNode = attribute.value;
     if (name === 'fillGrad' || name === 'strokeGrad') {
       if (valueNode == null || valueNode.type !== 'JSXExpressionContainer') {
         throw new Error(`AOT: "${name}" must be an object expression`);
       }
 
-      attrs[name] = {gradNode: valueNode.expression};
+      attributes[name] = {gradientNode: valueNode.expression};
       continue;
     }
 
     // Fold everything else; an expression that does not fold is state-driven.
     if (valueNode == null) {
-      attrs[name] = true;
+      attributes[name] = true;
     } else if (valueNode.type === 'StringLiteral') {
-      attrs[name] = valueNode.value;
+      attributes[name] = valueNode.value;
     } else if (valueNode.type === 'JSXExpressionContainer') {
       try {
-        attrs[name] =
+        attributes[name] =
           tagName === 'Svg' && (name === 'width' || name === 'height')
             ? evalStatic(valueNode.expression, withUndefined(scope), 'boot')
             : evalDrawing(valueNode.expression, withUndefined(scope));
@@ -475,13 +497,13 @@ function svgAttrs(
         if (error instanceof SvgScreenError) throw error;
         // Defer a state-driven `d` so pathEntries raises the error naming the fix, not the expression's own error.
         if (name === 'd') {
-          attrs[name] = {value: null, node: valueNode.expression};
+          attributes[name] = {value: null, node: valueNode.expression};
           continue;
         }
 
         // Keep the node too: fill/stroke lower to an ARGB color from it, not from the numeric value.
-        attrs[name] = {
-          value: lowerExpr(valueNode.expression, env),
+        attributes[name] = {
+          value: lowerExpr(valueNode.expression, environment),
           node: valueNode.expression,
         };
       }
@@ -490,7 +512,7 @@ function svgAttrs(
     }
   }
 
-  return attrs;
+  return attributes;
 }
 
 /**
@@ -503,26 +525,28 @@ function svgAttrs(
  *
  * @param node  The descriptor's object literal.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
- * @param attrName  The attribute, for errors.
+ * @param environment  The expression environment.
+ * @param attributeName  The attribute, for errors.
  *
  * @returns The gradient.
  */
 function lowerGradient(
   node: t.Node | null | undefined,
   scope: Scope,
-  env: Env,
-  attrName: string,
+  environment: Env,
+  attributeName: string,
 ): IrDrawingGradient {
   if (!node || node.type !== 'ObjectExpression') {
-    throw new Error(`AOT: "${attrName}" must be an object literal`);
+    throw new Error(`AOT: "${attributeName}" must be an object literal`);
   }
 
   // Index the descriptor's properties by key.
   const props: Record<string, t.Node> = {};
   for (const property of node.properties) {
     if (property.type !== 'ObjectProperty' || property.computed) {
-      throw new Error(`AOT: "${attrName}" takes plain key: value pairs only`);
+      throw new Error(
+        `AOT: "${attributeName}" takes plain key: value pairs only`,
+      );
     }
 
     props[
@@ -542,7 +566,7 @@ function lowerGradient(
       value = evalDrawing(valueNode, scope);
     } catch (error) {
       if (error instanceof SvgScreenError) throw error;
-      return {kind: 'float', value: lowerExpr(valueNode, env)};
+      return {kind: 'float', value: lowerExpr(valueNode, environment)};
     }
 
     checkNumber(value);
@@ -555,24 +579,24 @@ function lowerGradient(
     type = (evalStatic(props.type, scope) as number) | 0;
   } catch {
     throw new Error(
-      `AOT: "${attrName}.type" must be a compile-time constant (1 linear, 2 radial, 3 conic)`,
+      `AOT: "${attributeName}.type" must be a compile-time constant (1 linear, 2 radial, 3 conic)`,
     );
   }
 
-  if (type < 1 || type > 3) {
+  if (type < GRADIENT_LINEAR || type > GRADIENT_CONIC) {
     throw new Error(
-      `AOT: "${attrName}.type" must be 1 (linear), 2 (radial) or 3 (conic)`,
+      `AOT: "${attributeName}.type" must be 1 (linear), 2 (radial) or 3 (conic)`,
     );
   }
 
   const stopsNode = props.stops;
   if (!stopsNode || stopsNode.type !== 'ArrayExpression') {
-    throw new Error(`AOT: "${attrName}.stops" must be an array literal`);
+    throw new Error(`AOT: "${attributeName}.stops" must be an array literal`);
   }
 
   check({
     kind: 'gradientStops',
-    attribute: attrName,
+    attribute: attributeName,
     count: stopsNode.elements.length,
   });
 
@@ -580,7 +604,7 @@ function lowerGradient(
   const stops = stopsNode.elements.map(stopNode => {
     if (!stopNode || stopNode.type !== 'ObjectExpression') {
       throw new Error(
-        `AOT: each "${attrName}.stops" entry must be an object literal`,
+        `AOT: each "${attributeName}.stops" entry must be an object literal`,
       );
     }
 
@@ -600,7 +624,10 @@ function lowerGradient(
       };
     } catch (error) {
       if (error instanceof SvgScreenError) throw error;
-      color = {kind: 'state', value: lowerColorValue(stopProps.color, env)};
+      color = {
+        kind: 'state',
+        value: lowerColorValue(stopProps.color, environment),
+      };
     }
 
     return {color, offset: floatField(stopProps.offset, 0)};
@@ -626,23 +653,23 @@ function lowerGradient(
  * other state — the index is a compile-time constant, so "no gradient here" is not expressible by
  * omission: a thermostat dial's Auto ramp would paint over its Cool and Heat modes as well.
  *
- * @param gradientAttr  The attribute, if the shape has it.
+ * @param gradientAttribute  The attribute, if the shape has it.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
- * @param attrName  The attribute, for errors.
+ * @param environment  The expression environment.
+ * @param attributeName  The attribute, for errors.
  *
  * @returns The gradient and its condition, or null when the shape has none.
  */
 function lowerGradientAttr(
-  gradientAttr: GradientAttr | undefined,
+  gradientAttribute: GradientAttr | undefined,
   scope: Scope,
-  env: Env,
-  attrName: string,
+  environment: Env,
+  attributeName: string,
 ): ShapeGradient | null {
-  if (!gradientAttr) return null;
+  if (!gradientAttribute) return null;
 
   // Peel a conditional down to its object literal, keeping the condition.
-  let node: t.Node = gradientAttr.gradNode;
+  let node: t.Node = gradientAttribute.gradientNode;
   let when: ShapeGradient['when'] = null;
   const nullish = (branch: t.Node) =>
     branch.type === 'NullLiteral' ||
@@ -652,17 +679,17 @@ function lowerGradientAttr(
       node.consequent.type === 'ObjectExpression' &&
       nullish(node.alternate)
     ) {
-      when = {test: lowerExpr(node.test, env), negate: false};
+      when = {test: lowerExpr(node.test, environment), negate: false};
       node = node.consequent;
     } else if (
       node.alternate.type === 'ObjectExpression' &&
       nullish(node.consequent)
     ) {
-      when = {test: lowerExpr(node.test, env), negate: true};
+      when = {test: lowerExpr(node.test, environment), negate: true};
       node = node.alternate;
     } else {
       throw new Error(
-        `AOT: a conditional "${attrName}" must be \`cond ? { … } : null\` (one branch an ` +
+        `AOT: a conditional "${attributeName}" must be \`cond ? { … } : null\` (one branch an ` +
           `object literal, the other null)`,
       );
     }
@@ -671,11 +698,14 @@ function lowerGradientAttr(
     node.operator === '&&' &&
     node.right.type === 'ObjectExpression'
   ) {
-    when = {test: lowerExpr(node.left, env), negate: false};
+    when = {test: lowerExpr(node.left, environment), negate: false};
     node = node.right;
   }
 
-  return {gradient: lowerGradient(node, scope, env, attrName), when};
+  return {
+    gradient: lowerGradient(node, scope, environment, attributeName),
+    when,
+  };
 }
 
 /**
@@ -685,61 +715,68 @@ function lowerGradientAttr(
  *   - cap / join / miterlimit / fillRule must be static (a state-driven one throws a clear error);
  *   - fillGrad / strokeGrad are lowered here; the caller gives them places in the drawing's table.
  *
- * @param attrs  The shape's attributes.
- * @param env  The expression environment.
+ * @param attributes  The shape's attributes.
+ * @param environment  The expression environment.
  * @param scope  Compile-time constants in reach.
  *
  * @returns The paint, and the shape's gradients.
  */
-function lowerShapePaint(attrs: SvgAttrs, env: Env, scope: Scope): ShapePaint {
+function lowerShapePaint(
+  attributes: SvgAttrs,
+  environment: Env,
+  scope: Scope,
+): ShapePaint {
   // Colors and the stroke width are the only paint attributes that may be state-driven.
-  const color = (attrValue: unknown, fallback: string): IrPaintColor =>
-    isDynamicAttr(attrValue)
-      ? {kind: 'state', value: lowerColorValue(attrValue.node, env)}
-      : {kind: 'static', argb: parseColor(attrValue ?? fallback) >>> 0};
+  const color = (attributeValue: unknown, fallback: string): IrPaintColor =>
+    isDynamicAttr(attributeValue)
+      ? {
+          kind: 'state',
+          value: lowerColorValue(attributeValue.node, environment),
+        }
+      : {kind: 'static', argb: parseColor(attributeValue ?? fallback) >>> 0};
 
-  const strokeWidth: IrTapeValue = isDynamicAttr(attrs.strokeWidth)
-    ? {kind: 'float', value: attrs.strokeWidth.value!}
-    : checkedTapeNumber(svgNum(attrs.strokeWidth, 1));
+  const strokeWidth: IrTapeValue = isDynamicAttr(attributes.strokeWidth)
+    ? {kind: 'float', value: attributes.strokeWidth.value!}
+    : checkedTapeNumber(svgNum(attributes.strokeWidth, 1));
 
   // The rest of the paint must be static.
-  for (const attrName of [
+  for (const attributeName of [
     'strokeLinecap',
     'strokeLinejoin',
     'strokeMiterlimit',
     'fillRule',
   ]) {
-    if (isDynamicAttr(attrs[attrName])) {
+    if (isDynamicAttr(attributes[attributeName])) {
       throw new Error(
-        `AOT: a state-driven <Svg> "${attrName}" is not supported (only fill / stroke / ` +
+        `AOT: a state-driven <Svg> "${attributeName}" is not supported (only fill / stroke / ` +
           `strokeWidth can be state-driven)`,
       );
     }
   }
 
-  const fill = color(attrs.fill, 'black');
-  const stroke = color(attrs.stroke, 'none');
-  const miter = svgNum(attrs.strokeMiterlimit, 4);
+  const fill = color(attributes.fill, 'black');
+  const stroke = color(attributes.stroke, 'none');
+  const miter = svgNum(attributes.strokeMiterlimit, DEFAULT_MITER_LIMIT);
   checkNumber(miter);
   const paint = {
     fill,
     stroke,
     strokeWidth,
     miter,
-    cap: CAP_MAP[attrs.strokeLinecap as string] ?? 0,
-    join: JOIN_MAP[attrs.strokeLinejoin as string] ?? 0,
-    fillRule: attrs.fillRule === 'evenodd' ? 1 : 0,
+    cap: CAP_MAP[attributes.strokeLinecap as string] ?? 0,
+    join: JOIN_MAP[attributes.strokeLinejoin as string] ?? 0,
+    fillRule: attributes.fillRule === 'evenodd' ? 1 : 0,
   };
   const fillGradient = lowerGradientAttr(
-    attrs.fillGrad as GradientAttr | undefined,
+    attributes.fillGrad as GradientAttr | undefined,
     scope,
-    env,
+    environment,
     'fillGrad',
   );
   const strokeGradient = lowerGradientAttr(
-    attrs.strokeGrad as GradientAttr | undefined,
+    attributes.strokeGrad as GradientAttr | undefined,
     scope,
-    env,
+    environment,
     'strokeGrad',
   );
 
@@ -769,11 +806,11 @@ export const checkedTapeNumber = (value: number): IrTapeValue => {
 /**
  * An opcode as a tape slot.
  *
- * @param op  The ER_VOP_* name.
+ * @param operation  The ER_VOP_* name.
  *
  * @returns The slot.
  */
-const tapeOp = (op: string): IrTapeValue => ({kind: 'op', op});
+const tapeOp = (operation: string): IrTapeValue => ({kind: 'op', operation});
 
 /**
  * `first`, then each operator and operand in turn.
@@ -789,7 +826,7 @@ const tapeChain = (
 ): IrTapeValue => ({
   kind: 'chain',
   first,
-  rest: rest.map(([op, value]) => ({op, value})),
+  rest: rest.map(([operator, value]) => ({operator, value})),
 });
 
 /**
@@ -1057,64 +1094,64 @@ export const lineTape = (
 /**
  * An SVG coordinate attribute as a tape slot: a number when static, the state-driven value read as a float.
  *
- * @param attrValue  The attribute's value.
+ * @param attributeValue  The attribute's value.
  * @param fallback  The value to use when it is absent or not a number.
  *
  * @returns The slot.
  */
-const attrTape = (attrValue: unknown, fallback = 0): IrTapeValue =>
-  isDynamicAttr(attrValue)
-    ? {kind: 'float', value: attrValue.value!}
-    : checkedTapeNumber(svgNum(attrValue, fallback));
+const attrTape = (attributeValue: unknown, fallback = 0): IrTapeValue =>
+  isDynamicAttr(attributeValue)
+    ? {kind: 'float', value: attributeValue.value!}
+    : checkedTapeNumber(svgNum(attributeValue, fallback));
 
 // The JSX path: each shape's attributes resolve to tape slots via attrTape.
-const arcShape = (attrs: SvgAttrs): IrGeometry => ({
+const arcShape = (attributes: SvgAttrs): IrGeometry => ({
   entries: arcTape(
-    attrTape(attrs.cx),
-    attrTape(attrs.cy),
-    attrTape(attrs.r),
-    attrTape(attrs.startAngle),
-    attrTape(attrs.endAngle),
+    attrTape(attributes.cx),
+    attrTape(attributes.cy),
+    attrTape(attributes.r),
+    attrTape(attributes.startAngle),
+    attrTape(attributes.endAngle),
   ),
   locals: [],
 });
-const circleShape = (attrs: SvgAttrs): IrGeometry => ({
+const circleShape = (attributes: SvgAttrs): IrGeometry => ({
   entries: circleTape(
-    attrTape(attrs.cx),
-    attrTape(attrs.cy),
-    attrTape(attrs.r),
+    attrTape(attributes.cx),
+    attrTape(attributes.cy),
+    attrTape(attributes.r),
   ),
   locals: [],
 });
-const rectShape = (attrs: SvgAttrs, tag: string): IrGeometry =>
+const rectShape = (attributes: SvgAttrs, tag: string): IrGeometry =>
   rectTape(
-    attrTape(attrs.x),
-    attrTape(attrs.y),
-    attrTape(attrs.width),
-    attrTape(attrs.height),
-    attrs.rx == null ? null : attrTape(attrs.rx),
-    attrs.ry == null ? null : attrTape(attrs.ry),
+    attrTape(attributes.x),
+    attrTape(attributes.y),
+    attrTape(attributes.width),
+    attrTape(attributes.height),
+    attributes.rx == null ? null : attrTape(attributes.rx),
+    attributes.ry == null ? null : attrTape(attributes.ry),
     tag,
   );
-const lineShape = (attrs: SvgAttrs): IrGeometry => ({
+const lineShape = (attributes: SvgAttrs): IrGeometry => ({
   entries: lineTape(
-    attrTape(attrs.x1),
-    attrTape(attrs.y1),
-    attrTape(attrs.x2),
-    attrTape(attrs.y2),
+    attrTape(attributes.x1),
+    attrTape(attributes.y1),
+    attrTape(attributes.x2),
+    attrTape(attributes.y2),
   ),
   locals: [],
 });
-const pathShape = (attrs: SvgAttrs): IrGeometry => {
-  if (attrs.d == null) return {entries: [], locals: []};
-  if (isDynamicAttr(attrs.d)) {
+const pathShape = (attributes: SvgAttrs): IrGeometry => {
+  if (attributes.d == null) return {entries: [], locals: []};
+  if (isDynamicAttr(attributes.d)) {
     throw new Error(
       'AOT: a state-driven <Path d=…> is not yet supported (use Arc/Circle/Rect/Line for dynamic shapes)',
     );
   }
   // Opcodes are encoded as float values 0..6, like coords.
   return {
-    entries: parsePath(String(attrs.d)).map((value: number) =>
+    entries: parsePath(String(attributes.d)).map((value: number) =>
       checkedTapeNumber(value),
     ),
     locals: [],
@@ -1124,7 +1161,7 @@ const pathShape = (attrs: SvgAttrs): IrGeometry => {
 /** The shapes a state-driven <Svg> can hold, by tag. */
 const SHAPE_TAPES: Record<
   string,
-  (attrs: SvgAttrs, tag: string) => IrGeometry
+  (attributes: SvgAttrs, tag: string) => IrGeometry
 > = {
   Arc: arcShape,
   Circle: circleShape,
@@ -1154,16 +1191,16 @@ function svgHasDynamic(element: t.JSXElement, scope: Scope): boolean {
 
     if (node.type !== 'JSXElement') return;
 
-    for (const attr of node.openingElement.attributes) {
+    for (const attribute of node.openingElement.attributes) {
       if (
-        attr.type === 'JSXAttribute' &&
-        (attr.name as t.JSXIdentifier).name !== 'ref' &&
-        (attr.name as t.JSXIdentifier).name !== 'key' &&
-        (attr.name as t.JSXIdentifier).name !== 'style' &&
-        attr.value?.type === 'JSXExpressionContainer'
+        attribute.type === 'JSXAttribute' &&
+        (attribute.name as t.JSXIdentifier).name !== 'ref' &&
+        (attribute.name as t.JSXIdentifier).name !== 'key' &&
+        (attribute.name as t.JSXIdentifier).name !== 'style' &&
+        attribute.value?.type === 'JSXExpressionContainer'
       ) {
         try {
-          evalStatic(attr.value.expression, scope, 'boot');
+          evalStatic(attribute.value.expression, scope, 'boot');
         } catch {
           hasDynamic = true;
         }
@@ -1284,7 +1321,7 @@ function svgBootSizes(width: unknown, height: unknown): DynAssign[] {
  * @param height  Its height writes.
  * @param openingElement  The <Svg>'s opening tag, for its style and ref.
  * @param scope  Compile-time constants in reach.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param bootSizes  Its width and height writes worked out at boot.
  *
  * @returns The node, with its refs wired.
@@ -1296,20 +1333,20 @@ function lowerSvgBox(
   height: StaticAssign[],
   openingElement: t.JSXOpeningElement,
   scope: Scope,
-  env: Env,
+  environment: Env,
   bootSizes: DynAssign[] = [],
 ): IrNode {
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     openingElement,
     scope,
-    env,
+    environment,
     elementSpec('Svg')!,
   );
   // A value worked out at boot is set once, so only one state drives is refused.
   const readsOnlyBoot = (assign: DynAssign): boolean =>
     (assign.value.kind === 'dimension' || assign.value.kind === 'opacity') &&
     assign.value.value.kind === 'boot';
-  if (!dynAssigns.every(readsOnlyBoot)) {
+  if (!dynamicAssigns.every(readsOnlyBoot)) {
     throw aotError(
       'AOT: a state-driven style on an <Svg> is not supported',
       'put the changing style on a wrapping <View>: <View style={…}><Svg …/></View>.',
@@ -1323,7 +1360,7 @@ function lowerSvgBox(
   );
   const node: IrNode = {
     id: nodeId,
-    loc: currentLoc(),
+    location: currentLoc(),
     type,
     constantProps: [...size, ...staticAssigns],
     stateProps: [
@@ -1331,11 +1368,11 @@ function lowerSvgBox(
         assign =>
           !styleWrites(
             staticAssigns,
-            dynAssigns,
+            dynamicAssigns,
             assign.field.replace(/_pct$/, ''),
           ),
       ),
-      ...dynAssigns,
+      ...dynamicAssigns,
     ],
     placeholder: null,
     text: null,
@@ -1343,7 +1380,7 @@ function lowerSvgBox(
     spans: null,
     wiring: [
       ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),
-      ...lowerRefBinds(openingElement, env).map(slot => ({
+      ...lowerRefBinds(openingElement, environment).map(slot => ({
         kind: 'ref' as const,
         slot,
       })),
@@ -1361,39 +1398,40 @@ function lowerSvgBox(
  *
  * @param element  The <Svg>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param opts  How the element is placed.
+ * @param options  How the element is placed.
  *
  * @returns The node.
  */
 export function emitSvg(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
-  opts: EmitOptions,
+  options: EmitOptions,
 ): IrNode {
-  if (opts.show) {
+  if (options.show) {
     throw new Error(
       'AOT: an <Svg> inside a dynamic conditional is not yet supported',
     );
   }
 
   // Pick the path: a baked .svg file, a state-driven tape, or a static one.
-  const sourceAttr = element.openingElement.attributes.find(
+  const sourceAttribute = element.openingElement.attributes.find(
     (candidate): candidate is t.JSXAttribute =>
       candidate.type === 'JSXAttribute' &&
       candidate.name &&
       candidate.name.name === 'source',
   );
-  if (sourceAttr) return emitSvgSource(element, sourceAttr, scope, out, env);
+  if (sourceAttribute)
+    return emitSvgSource(element, sourceAttribute, scope, output, environment);
 
   return svgHasDynamic(element, scope)
-    ? emitSvgDynamic(element, scope, out, env, state)
-    : emitSvgStatic(element, scope, out, env);
+    ? emitSvgDynamic(element, scope, output, environment, state)
+    : emitSvgStatic(element, scope, output, environment);
 }
 
 /**
@@ -1429,8 +1467,8 @@ function viewBoxScale(size: unknown, view: number): IrTapeValue | null {
  * @param element  The <Svg>.
  * @param svgElement  The <Svg>, folded.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  *
  * @returns The node, or null when no viewBox drawing is sized at boot.
  */
@@ -1438,8 +1476,8 @@ function emitSvgScaled(
   element: t.JSXElement,
   svgElement: SvgElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
 ): IrNode | null {
   const {width, height, viewBox} = svgElement.props;
   if (!viewBox || !width || !height || (!isBoot(width) && !isBoot(height))) {
@@ -1464,7 +1502,7 @@ function emitSvgScaled(
   const sideY: IrTapeValue = {kind: 'local', name: 'scale_y'};
   const along = (value: number, side: IrTapeValue): IrTapeValue =>
     tapeChain(tapeNumber(value), ['*', side]);
-  const opNames: Record<number, string> = {
+  const operationNames: Record<number, string> = {
     [VOP_MOVE]: 'ER_VOP_MOVE',
     [VOP_LINE]: 'ER_VOP_LINE',
     [VOP_QUAD]: 'ER_VOP_QUAD',
@@ -1473,27 +1511,27 @@ function emitSvgScaled(
   };
   const tape: IrTapeValue[] = [];
   for (let index = 0; index < ops.length;) {
-    const op = ops[index++];
-    if (op === VOP_SHAPE) {
+    const operation = ops[index++];
+    if (operation === VOP_SHAPE) {
       tape.push(tapeOp('ER_VOP_SHAPE'), tapeNumber(ops[index++]));
-    } else if (op === VOP_ARC) {
+    } else if (operation === VOP_ARC) {
       tape.push(
-        tapeOp(opNames[op]),
+        tapeOp(operationNames[operation]),
         along(ops[index++], sideX),
         along(ops[index++], sideY),
         along(ops[index++], sideX),
         tapeNumber(ops[index++]),
         tapeNumber(ops[index++]),
       );
-    } else if (op === VOP_MOVE || op === VOP_LINE) {
+    } else if (operation === VOP_MOVE || operation === VOP_LINE) {
       tape.push(
-        tapeOp(opNames[op]),
+        tapeOp(operationNames[operation]),
         along(ops[index++], sideX),
         along(ops[index++], sideY),
       );
-    } else if (op === VOP_QUAD || op === VOP_CUBIC) {
-      tape.push(tapeOp(opNames[op]));
-      for (let point = 0; point < (op === VOP_QUAD ? 2 : 3); point++) {
+    } else if (operation === VOP_QUAD || operation === VOP_CUBIC) {
+      tape.push(tapeOp(operationNames[operation]));
+      for (let point = 0; point < (operation === VOP_QUAD ? 2 : 3); point++) {
         tape.push(along(ops[index++], sideX), along(ops[index++], sideY));
       }
     } else {
@@ -1506,9 +1544,9 @@ function emitSvgScaled(
     '*',
     tapeNumber(0.5),
   ]);
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
   const vector: IrStateDrivenVector = {
-    id: out.svgN++,
+    id: output.svgCount++,
     locals: [
       {name: 'scale_x', value: scaleX},
       {name: 'scale_y', value: scaleY},
@@ -1538,7 +1576,7 @@ function emitSvgScaled(
       r: tapeNumber(gradient.r || 0),
     })),
   };
-  out.vectors.push({kind: 'drawing', vector});
+  output.vectors.push({kind: 'drawing', vector});
 
   const node = lowerSvgBox(
     nodeId,
@@ -1547,7 +1585,7 @@ function emitSvgScaled(
     svgBoxSize('height', height, true),
     element.openingElement,
     scope,
-    env,
+    environment,
     svgBootSizes(width, height),
   );
   node.wiring.push({kind: 'stateDrivenVector', vector});
@@ -1559,35 +1597,35 @@ function emitSvgScaled(
  *
  * @param element  The <Svg>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  *
  * @returns The node.
  */
 function emitSvgStatic(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
 ): IrNode {
   // Flatten the subtree and bake its ops and paints into const tables.
   const svgElement = jsxToSvgElement(element, scope)!;
-  const scaled = emitSvgScaled(element, svgElement, scope, out, env);
+  const scaled = emitSvgScaled(element, svgElement, scope, output, environment);
   if (scaled) return scaled;
   const {ops, paints, gradients} = flattenSvg({
     ...svgElement.props,
     width: buildValueOf(svgElement.props.width),
     height: buildValueOf(svgElement.props.height),
   });
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
   const tables: IrVectorTables = {
-    id: out.svgN++,
+    id: output.svgCount++,
     ops: Array.from(ops),
     paints: paintsOf(paints),
     gradients,
   };
   checkVectorTables(tables);
-  out.vectors.push({kind: 'tables', tables});
+  output.vectors.push({kind: 'tables', tables});
 
   // Create the vector node and point it at the tables.
   const node = lowerSvgBox(
@@ -1605,7 +1643,7 @@ function emitSvgStatic(
     ),
     element.openingElement,
     scope,
-    env,
+    environment,
     svgBootSizes(svgElement.props.width, svgElement.props.height),
   );
   node.wiring.push({kind: 'vectorTables', tables});
@@ -1614,44 +1652,45 @@ function emitSvgStatic(
 
 /**
  * Baked <Svg source={importedSvg}>: the CLI pre-bakes the .svg to a vector artifact (ops/paints/GRADIENTS) *
- * (bakeSvgArtifacts → opts.svgArtifacts) since compilePackage is I/O-free. Scaled to the static
+ * (bakeSvgArtifacts → options.svgArtifacts) since compilePackage is I/O-free. Scaled to the static
  * width/height at compile time, then emitted as const tables. This is the path that carries gradients into
  * Flow B.
  *
  * @param element  The <Svg>.
- * @param sourceAttr  Its `source` attribute.
+ * @param sourceAttribute  Its `source` attribute.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  *
  * @returns The node.
  */
 function emitSvgSource(
   element: t.JSXElement,
-  sourceAttr: t.JSXAttribute,
+  sourceAttribute: t.JSXAttribute,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
 ): IrNode {
   // Resolve the source to its imported .svg's baked artifact.
-  const expr =
-    sourceAttr.value && sourceAttr.value.type === 'JSXExpressionContainer'
-      ? sourceAttr.value.expression
+  const expression =
+    sourceAttribute.value &&
+    sourceAttribute.value.type === 'JSXExpressionContainer'
+      ? sourceAttribute.value.expression
       : null;
-  if (!expr || expr.type !== 'Identifier') {
+  if (!expression || expression.type !== 'Identifier') {
     throw new Error(
       'AOT: <Svg source> must reference an imported .svg (source={importedSvg})',
     );
   }
 
-  const svgImport = env.svgImports.get(expr.name);
+  const svgImport = environment.svgImports.get(expression.name);
   if (!svgImport) {
     throw new Error(
-      `AOT: <Svg source={${expr.name}}> — no matching \`import ${expr.name} from '...svg'\``,
+      `AOT: <Svg source={${expression.name}}> — no matching \`import ${expression.name} from '...svg'\``,
     );
   }
 
-  const artifact = env.svgArtifacts[svgImport.name];
+  const artifact = environment.svgArtifacts[svgImport.name];
   if (!artifact) {
     throw new Error(
       `AOT: vector artifact for "${svgImport.name}" was not baked (internal: opts.svgArtifacts missing it)`,
@@ -1660,35 +1699,35 @@ function emitSvgSource(
 
   // Scale the artifact at compile time to a static width/height, defaulting to its intrinsic size.
   const numericAttr = (
-    attrName: 'width' | 'height',
+    attributeName: 'width' | 'height',
     fallback: number,
   ): number => {
-    const attr = element.openingElement.attributes.find(
+    const attribute = element.openingElement.attributes.find(
       (candidate): candidate is t.JSXAttribute =>
         candidate.type === 'JSXAttribute' &&
         candidate.name &&
-        candidate.name.name === attrName,
+        candidate.name.name === attributeName,
     );
-    if (!attr) return fallback;
+    if (!attribute) return fallback;
 
     let value: unknown = true; // a bare attribute
-    if (attr.value?.type === 'StringLiteral') {
-      value = attr.value.value;
-    } else if (attr.value?.type === 'JSXExpressionContainer') {
+    if (attribute.value?.type === 'StringLiteral') {
+      value = attribute.value.value;
+    } else if (attribute.value?.type === 'JSXExpressionContainer') {
       try {
-        value = evalStatic(attr.value.expression, scope);
+        value = evalStatic(attribute.value.expression, scope);
       } catch {
         throw at(
           aotError('AOT: <Svg source> width/height must be a static number'),
-          attr,
+          attribute,
         );
       }
     }
 
     try {
-      return svgPixels(attrName, value, true);
+      return svgPixels(attributeName, value, true);
     } catch (error) {
-      throw at(error as AotError, attr);
+      throw at(error as AotError, attribute);
     }
   };
 
@@ -1696,7 +1735,7 @@ function emitSvgSource(
   const {staticAssigns: style} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     elementSpec('Svg')!,
   );
   const boxSize = (field: 'width' | 'height', fallback: number): number => {
@@ -1717,17 +1756,17 @@ function emitSvgSource(
   const height = boxSize('height', artifact.height);
   if (artifact.kind === 'raster') {
     if (artifact.png) {
-      out.images.set(artifact.name, artifact.png);
+      output.images.set(artifact.name, artifact.png);
     }
 
     const node = lowerSvgBox(
-      `n${out.allocateNodeId()}`,
+      `n${output.allocateNodeId()}`,
       NODE_TYPES.Image,
       svgBoxSize('width', width, true),
       svgBoxSize('height', height, true),
       element.openingElement,
       scope,
-      env,
+      environment,
     );
     node.image = {kind: 'static', name: artifact.name};
     return node;
@@ -1735,15 +1774,15 @@ function emitSvgSource(
 
   // Scale the vector artifact to the box and bake its ops, paints and gradients into const tables.
   const scaled = scaleVectorArtifact(artifact, width, height);
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
   const tables: IrVectorTables = {
-    id: out.svgN++,
+    id: output.svgCount++,
     ops: Array.from(scaled.ops),
     paints: paintsOf(scaled.paints),
     gradients: scaled.gradients || [],
   };
   checkVectorTables(tables);
-  out.vectors.push({kind: 'tables', tables});
+  output.vectors.push({kind: 'tables', tables});
 
   // Create the vector node and point it at the tables.
   const node = lowerSvgBox(
@@ -1753,7 +1792,7 @@ function emitSvgSource(
     svgBoxSize('height', height, true),
     element.openingElement,
     scope,
-    env,
+    environment,
   );
   node.wiring.push({kind: 'vectorTables', tables});
   return node;
@@ -1765,8 +1804,8 @@ function emitSvgSource(
  *
  * @param element  The <Svg>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The node.
@@ -1774,13 +1813,13 @@ function emitSvgSource(
 function emitSvgDynamic(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrNode {
   // The root's attributes give the box; this path has no viewBox transform.
-  const rootAttrs = svgAttrs(element.openingElement, scope, env);
-  if (rootAttrs.viewBox != null) {
+  const rootAttributes = svgAttrs(element.openingElement, scope, environment);
+  if (rootAttributes.viewBox != null) {
     throw new Error(
       'AOT: a viewBox on a state-driven <Svg> is not yet supported — size shapes in the width/height space',
     );
@@ -1799,9 +1838,9 @@ function emitSvgDynamic(
       );
     }
 
-    const attrs = svgAttrs(child.openingElement, scope, env);
+    const attributes = svgAttrs(child.openingElement, scope, environment);
     // The builder is this <Svg>'s own function, so the shape index alone keeps a local's name unique.
-    const shape = lowerShape(attrs, `s${shapePaints.length}`);
+    const shape = lowerShape(attributes, `s${shapePaints.length}`);
     if (!shape.entries.length) continue;
     locals.push(...shape.locals);
     tape.push(
@@ -1810,14 +1849,15 @@ function emitSvgDynamic(
       ...shape.entries,
     );
     // The root's paint cascades to each shape, as flattenSvg does.
-    const paintAttrs = {...attrs};
-    for (const name of PAINT_PROPS) paintAttrs[name] ??= rootAttrs[name];
-    shapePaints.push(lowerShapePaint(paintAttrs, env, scope));
+    const paintAttributes = {...attributes};
+    for (const name of PAINT_PROPS)
+      paintAttributes[name] ??= rootAttributes[name];
+    shapePaints.push(lowerShapePaint(paintAttributes, environment, scope));
   }
 
   // Allocate the node and this <Svg>'s table names.
-  const nodeId = `n${out.allocateNodeId()}`;
-  const svgId = out.svgN++;
+  const nodeId = `n${output.allocateNodeId()}`;
+  const svgId = output.svgCount++;
 
   // Gather the gradients into one 1-based table per <Svg>, fill then stroke, shape by shape.
   const gradients: IrDrawingGradient[] = [];
@@ -1841,18 +1881,18 @@ function emitSvgDynamic(
   };
 
   // Declare the tables and the builder, which rewrites the tape (and anything in the paints state drives).
-  out.vectors.push({kind: 'drawing', vector});
+  output.vectors.push({kind: 'drawing', vector});
 
   // Create the vector node, build its tape once, and register it for the update to rebuild.
   const node = lowerSvgBox(
     nodeId,
     'ER_NODE_VECTOR',
-    svgBoxSize('width', rootAttrs.width, false),
-    svgBoxSize('height', rootAttrs.height, false),
+    svgBoxSize('width', rootAttributes.width, false),
+    svgBoxSize('height', rootAttributes.height, false),
     element.openingElement,
     scope,
-    env,
-    svgBootSizes(rootAttrs.width, rootAttrs.height),
+    environment,
+    svgBootSizes(rootAttributes.width, rootAttributes.height),
   );
   node.wiring.push({kind: 'stateDrivenVector', vector});
 

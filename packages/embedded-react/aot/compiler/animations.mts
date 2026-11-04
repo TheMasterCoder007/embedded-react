@@ -90,8 +90,8 @@ export interface Interpolation {
   output: number[];
   /** ARGB8888 outputs, when the outputRange holds colors. */
   colors?: number[];
-  exLeft: string;
-  exRight: string;
+  extrapolateLeft: string;
+  extrapolateRight: string;
 }
 
 /** How an on_complete chain repeats (see lowerChain). */
@@ -111,17 +111,17 @@ interface LoopSpec {
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The style keys an animated value drives only through an interpolation onto colors. */
-export const ANIM_COLOR_KEYS = new Set(['backgroundColor', 'color']);
+export const ANIMATED_COLOR_KEYS = new Set(['backgroundColor', 'color']);
 
 /** Style key → the ERAnimProp(s) an animated value binds to. */
-export const ANIM_STYLE_PROPS: Record<string, string[]> = {
+export const ANIMATED_STYLE_PROPS: Record<string, string[]> = {
   opacity: ['ER_PROP_OPACITY'],
   backgroundColor: ['ER_PROP_BACKGROUND_COLOR'],
   color: ['ER_PROP_COLOR'],
 };
 
 /** Transform key → the ERAnimProp(s) an animated value binds to. */
-export const ANIM_TRANSFORM_PROPS: Record<string, string[]> = {
+export const ANIMATED_TRANSFORM_PROPS: Record<string, string[]> = {
   scale: ['ER_PROP_SCALE_X', 'ER_PROP_SCALE_Y'],
   scaleX: ['ER_PROP_SCALE_X'],
   scaleY: ['ER_PROP_SCALE_Y'],
@@ -131,7 +131,7 @@ export const ANIM_TRANSFORM_PROPS: Record<string, string[]> = {
   rotateZ: ['ER_PROP_ROTATE_Z'],
 };
 
-const ANIM_KINDS = new Set([
+const ANIMATION_KINDS = new Set([
   'timing',
   'spring',
   'decay',
@@ -142,6 +142,15 @@ const ANIM_KINDS = new Set([
   'loop',
 ]);
 
+// What an Animated config's field is when the app leaves it out, as React Native has it.
+const DEFAULT_TIMING_DURATION_MS = 250;
+const DEFAULT_SPRING_STIFFNESS = 200;
+const DEFAULT_SPRING_DAMPING = 18;
+const DEFAULT_DECAY_DECELERATION = 0.998;
+
+/** The numbers Easing.bezier takes: x1, y1, x2, y2. */
+const BEZIER_CONTROL_POINTS = 4;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -150,66 +159,69 @@ const ANIM_KINDS = new Set([
  * Collects `const x = useAnimatedValue(initial)` → Map (name → {slotName, initial}). `prefix` namespaces the
  * handle (`anim_<prefix><name>`) so each inlined child instance gets its own engine value handle.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
  * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  *
  * @returns The animated values, by name.
  */
 export function collectAnims(
-  fnBody: t.BlockStatement | t.Expression,
+  functionBody: t.BlockStatement | t.Expression,
   scope: Scope,
   prefix = '',
 ): Map<string, AnimRecord> {
   // Collect animated value records by their JS binding name.
-  const anims = new Map<string, AnimRecord>();
+  const animations = new Map<string, AnimRecord>();
 
   // Only block-bodied functions can contain hook declarations to collect.
-  if (fnBody.type !== 'BlockStatement') return anims;
+  if (functionBody.type !== 'BlockStatement') return animations;
 
   // Scan top-level declarations in the function body for useAnimatedValue hooks to allocate animated slots.
-  for (const stmt of fnBody.body) {
+  for (const statement of functionBody.body) {
     // Only variable declarations can introduce bindings we need to inspect.
-    if (stmt.type !== 'VariableDeclaration') continue;
+    if (statement.type !== 'VariableDeclaration') continue;
 
     // Collect useAnimatedValue declarations and register their engine-side animated slots.
-    for (const decl of stmt.declarations) {
-      const init = decl.init;
+    for (const declarator of statement.declarations) {
+      const initializer = declarator.init;
       if (
-        init?.type === 'CallExpression' &&
-        (init.callee as t.Identifier).name === 'useAnimatedValue' &&
-        decl.id.type === 'Identifier'
+        initializer?.type === 'CallExpression' &&
+        (initializer.callee as t.Identifier).name === 'useAnimatedValue' &&
+        declarator.id.type === 'Identifier'
       ) {
-        const initVal = init.arguments[0]
+        const initialValue = initializer.arguments[0]
           ? evalStaticOrThrow(
-              init.arguments[0],
+              initializer.arguments[0],
               scope,
-              `AOT: the initial value of useAnimatedValue "${decl.id.name}" must be a compile-time constant`,
+              `AOT: the initial value of useAnimatedValue "${declarator.id.name}" must be a compile-time constant`,
               'give it a finite starting number: useAnimatedValue(0).',
             )
           : 0;
         // An animated value is a float slot, which null or a non-finite number doesn't fit.
         // Refuse here, at the declaration, with its location.
-        if (typeof initVal !== 'number' || !Number.isFinite(initVal)) {
-          const e = aotError(
-            `AOT: the initial value of useAnimatedValue "${decl.id.name}" is ${initVal === undefined ? 'undefined' : String(initVal)}`,
+        if (
+          typeof initialValue !== 'number' ||
+          !Number.isFinite(initialValue)
+        ) {
+          const error = aotError(
+            `AOT: the initial value of useAnimatedValue "${declarator.id.name}" is ${initialValue === undefined ? 'undefined' : String(initialValue)}`,
             'give it a finite starting number: useAnimatedValue(0).',
           );
-          if (init.arguments[0]?.loc) {
-            e.aotLoc = init.arguments[0].loc.start;
+          if (initializer.arguments[0]?.loc) {
+            error.aotLoc = initializer.arguments[0].loc.start;
           }
-          throw e;
+          throw error;
         }
-        checkNumber(initVal);
-        anims.set(decl.id.name, {
-          slotName: `anim_${prefix}${decl.id.name}`,
-          initial: initVal,
+        checkNumber(initialValue);
+        animations.set(declarator.id.name, {
+          slotName: `anim_${prefix}${declarator.id.name}`,
+          initial: initialValue,
         });
       }
     }
   }
 
-  return anims;
+  return animations;
 }
 
 /**
@@ -219,7 +231,7 @@ export function collectAnims(
  *  - NODE ref (`useRef()` / `useRef(null)`): holds an node handle, captured by `ref={r}` on an element and
  *    used as the target of imperative calls like updateVector(r, …). kind === 'node'.
  *
- * @param fnBody  The component's body.
+ * @param functionBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
  * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
  * @param wide  Slots to declare 64-bit (see compileWidened).
@@ -227,7 +239,7 @@ export function collectAnims(
  * @returns The refs, by name.
  */
 export function collectRefs(
-  fnBody: t.BlockStatement | t.Expression,
+  functionBody: t.BlockStatement | t.Expression,
   scope: Scope,
   prefix = '',
   wide: SlotWidths = NO_WIDE,
@@ -236,29 +248,29 @@ export function collectRefs(
   const refs = new Map<string, RefRecord>();
 
   // Only block-bodied functions can contain ref declarations to collect.
-  if (fnBody.type !== 'BlockStatement') return refs;
+  if (functionBody.type !== 'BlockStatement') return refs;
 
   // Collect useRef declarations, splitting null/empty node refs from numeric value refs.
-  for (const stmt of fnBody.body) {
+  for (const statement of functionBody.body) {
     // Only variable declarations can introduce bindings we need to inspect.
-    if (stmt.type !== 'VariableDeclaration') continue;
+    if (statement.type !== 'VariableDeclaration') continue;
 
     // Find useRef bindings and lower each supported initializer to either a node ref or value ref record.
-    for (const decl of stmt.declarations) {
-      const init = decl.init;
+    for (const declarator of statement.declarations) {
+      const initializer = declarator.init;
       if (
-        init?.type === 'CallExpression' &&
-        (init.callee as t.Identifier).name === 'useRef' &&
-        decl.id.type === 'Identifier'
+        initializer?.type === 'CallExpression' &&
+        (initializer.callee as t.Identifier).name === 'useRef' &&
+        declarator.id.type === 'Identifier'
       ) {
-        const arg = init.arguments[0];
+        const argument = initializer.arguments[0];
         // A PanResponder ref — collectPanResponders owns it
-        if (isPanCreate(arg)) continue;
+        if (isPanCreate(argument)) continue;
 
         // Empty or null useRef values are node refs, initialized to no bound ERNode.
-        const slotName = `ref_${prefix}${decl.id.name}`;
-        if (!arg || arg.type === 'NullLiteral') {
-          refs.set(decl.id.name, {
+        const slotName = `ref_${prefix}${declarator.id.name}`;
+        if (!argument || argument.type === 'NullLiteral') {
+          refs.set(declarator.id.name, {
             slotName,
             slotKind: 'node',
             kind: 'node',
@@ -269,18 +281,18 @@ export function collectRefs(
 
         // Value refs must start from a finite compile-time number.
         const value = evalStaticOrThrow(
-          arg,
+          argument,
           scope,
-          `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
+          `AOT: useRef initial for "${declarator.id.name}" must be a number (value ref) or null/empty (node ref)`,
           'a value ref needs a compile-time number: useRef(0).',
         );
         if (typeof value !== 'number' || !Number.isFinite(value)) {
           const error = aotError(
-            `AOT: useRef initial for "${decl.id.name}" must be a number (value ref) or null/empty (node ref)`,
+            `AOT: useRef initial for "${declarator.id.name}" must be a number (value ref) or null/empty (node ref)`,
             `got ${value === undefined ? 'undefined' : String(value)}.`,
           );
-          if (arg.loc) {
-            error.aotLoc = arg.loc.start;
+          if (argument.loc) {
+            error.aotLoc = argument.loc.start;
           }
           throw error;
         }
@@ -301,7 +313,7 @@ export function collectRefs(
         if (slotKind === 'float') {
           checkNumber(value);
         }
-        refs.set(decl.id.name, {
+        refs.set(declarator.id.name, {
           slotName,
           slotKind,
           initial: value,
@@ -340,13 +352,13 @@ function easingFamily(node: t.Node | null | undefined): string | null {
  * Easing.bezier(x1,y1,x2,y2). No easing → ER_EASE_EASE_IN_OUT (RN's timing default); unknown → same.
  *
  * @param node  The `easing:` expression, if there is one.
- * @param env  The expression environment for folding bezier control points.
+ * @param environment  The expression environment for folding bezier control points.
  *
  * @returns The engine easing, and its control points when it is a bezier.
  */
 function easingInfo(
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
 ): {ease: string; bezier: number[] | null} {
   // Use React Native's timing default whenever no easing is supplied (or the expression is unsupported).
   const FALLBACK = {ease: 'ER_EASE_EASE_IN_OUT', bezier: null};
@@ -377,24 +389,27 @@ function easingInfo(
     node.callee.type === 'MemberExpression' &&
     (node.callee.object as t.Identifier)?.name === 'Easing'
   ) {
-    const fn = (node.callee.property as t.Identifier).name;
-    if (fn === 'bezier') {
-      const cps = node.arguments
-        .slice(0, 4)
-        .map(a => Number(evalStaticOr(a, env, 0)));
-      return cps.length === 4
-        ? {ease: 'ER_EASE_BEZIER', bezier: cps}
+    const easing = (node.callee.property as t.Identifier).name;
+    if (easing === 'bezier') {
+      const controlPoints = node.arguments
+        .slice(0, BEZIER_CONTROL_POINTS)
+        .map(argument => Number(evalStaticOr(argument, environment, 0)));
+      return controlPoints.length === BEZIER_CONTROL_POINTS
+        ? {ease: 'ER_EASE_BEZIER', bezier: controlPoints}
         : FALLBACK;
     }
 
-    if (fn === 'elastic') {
+    if (easing === 'elastic') {
       return {ease: 'ER_EASE_ELASTIC_OUT', bezier: null};
     }
 
-    if (fn === 'in' || fn === 'out' || fn === 'inOut') {
-      const fam = easingFamily(node.arguments[0]);
-      const dir = fn === 'in' ? 'IN' : fn === 'out' ? 'OUT' : 'IN_OUT';
-      return fam ? {ease: `ER_EASE_${fam}_${dir}`, bezier: null} : FALLBACK;
+    if (easing === 'in' || easing === 'out' || easing === 'inOut') {
+      const family = easingFamily(node.arguments[0]);
+      const direction =
+        easing === 'in' ? 'IN' : easing === 'out' ? 'OUT' : 'IN_OUT';
+      return family
+        ? {ease: `ER_EASE_${family}_${direction}`, bezier: null}
+        : FALLBACK;
     }
   }
 
@@ -405,17 +420,17 @@ function easingInfo(
  * Parses a `.interpolate({ inputRange, outputRange, extrapolate })` config object → a static
  * { input, output, exLeft, exRight } descriptor (ranges must be static, equal-length, 2..8 points).
  *
- * @param cfgNode  The config argument.
- * @param env  The expression environment.
+ * @param configNode  The config argument.
+ * @param environment  The expression environment.
  *
  * @returns The folded interpolation.
  */
 export function parseInterp(
-  cfgNode: t.Node | null | undefined,
-  env: Env,
+  configNode: t.Node | null | undefined,
+  environment: Env,
 ): Interpolation {
   // Interpolation ranges must be known at compile time so the package can bake the breakpoints directly.
-  if (cfgNode?.type !== 'ObjectExpression') {
+  if (configNode?.type !== 'ObjectExpression') {
     throw aotError(
       'AOT: .interpolate() needs a config object literal { inputRange, outputRange }',
     );
@@ -423,7 +438,7 @@ export function parseInterp(
 
   // Read a named property from the interpolation config, accepting both identifier and string-literal keys.
   const get = (key: string) =>
-    (cfgNode.properties as t.ObjectProperty[]).find(
+    (configNode.properties as t.ObjectProperty[]).find(
       property =>
         ((property.key as t.Identifier).name ??
           (property.key as t.StringLiteral).value) === key,
@@ -434,7 +449,9 @@ export function parseInterp(
     if (node?.type !== 'ArrayExpression') {
       throw aotError(`AOT: .interpolate() ${name} must be an array literal`);
     }
-    return node.elements.map(e => evalStatic(e!, env.consts ?? {}));
+    return node.elements.map(element =>
+      evalStatic(element!, environment.constants ?? {}),
+    );
   };
 
   // inputRange and outputRange define the piecewise mapping and must line up point-for-point. An
@@ -442,10 +459,10 @@ export function parseInterp(
   const input = arr(get('inputRange'), 'inputRange').map(Number);
   const outputValues = arr(get('outputRange'), 'outputRange');
   // Colors parse as strictly as a static style color, so a typo is an error rather than black.
-  const colors = outputValues.every(v => typeof v === 'string')
-    ? outputValues.map(v => {
+  const colors = outputValues.every(value => typeof value === 'string')
+    ? outputValues.map(color => {
         try {
-          return parseColorValue(v);
+          return parseColorValue(color);
         } catch (error) {
           throw aotError(
             `AOT: .interpolate() outputRange has an ${(error as Error).message}`,
@@ -453,7 +470,7 @@ export function parseInterp(
         }
       })
     : undefined;
-  if (!colors && outputValues.some(v => typeof v !== 'number')) {
+  if (!colors && outputValues.some(value => typeof value !== 'number')) {
     throw aotError(
       'AOT: .interpolate() outputRange must be all numbers or all colors',
     );
@@ -469,7 +486,7 @@ export function parseInterp(
   // Convert RN extrapolation strings to engine enum names, defaulting to extend like React Native.
   const ex = (node: t.Node | undefined): string => {
     const extrapolateMode = node
-      ? String(evalStaticOr(node, env, 'extend'))
+      ? String(evalStaticOr(node, environment, 'extend'))
       : 'extend';
     return extrapolateMode === 'clamp'
       ? 'ER_EXTRAPOLATE_CLAMP'
@@ -484,22 +501,24 @@ export function parseInterp(
     input,
     output,
     ...(colors && {colors}),
-    exLeft: ex(get('extrapolateLeft') ?? both),
-    exRight: ex(get('extrapolateRight') ?? both),
+    extrapolateLeft: ex(get('extrapolateLeft') ?? both),
+    extrapolateRight: ex(get('extrapolateRight') ?? both),
   };
 }
 
 /**
  * Builds a `get(key)` accessor over an `Animated.*(value, config)` call's config object literal.
  *
- * @param cfgObj  The config argument, if there is one.
+ * @param configObject  The config argument, if there is one.
  *
  * @returns The accessor; it reads undefined for every key when there is no config.
  */
-function animConfigGetter(cfgObj: t.Node | null | undefined): ConfigGetter {
+function animConfigGetter(
+  configObject: t.Node | null | undefined,
+): ConfigGetter {
   return key =>
     (
-      (cfgObj as t.ObjectExpression | undefined)?.properties as
+      (configObject as t.ObjectExpression | undefined)?.properties as
         t.ObjectProperty[] | undefined
     )?.find(
       property =>
@@ -525,7 +544,7 @@ function configFloat(rawValue: unknown): number {
  * A folded config time in whole milliseconds, checked so a time too long to hold is reported at the field.
  *
  * @param node  The field's value, if the app wrote one.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param defaultValue  The time when the field is left out or not known at build time.
  * @param field  What the time is, for the error.
  *
@@ -533,11 +552,11 @@ function configFloat(rawValue: unknown): number {
  */
 function configMs(
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
   defaultValue: number,
   field: string,
 ): number {
-  const rawValue = evalStaticOr(node, env, defaultValue);
+  const rawValue = evalStaticOr(node, environment, defaultValue);
   check({kind: 'milliseconds', field, value: rawValue}, node?.loc?.start);
   return Math.round(Number(rawValue));
 }
@@ -546,24 +565,33 @@ function configMs(
  * A timing's folded duration (250 ms when it is left out, as in React Native).
  *
  * @param get  The timing's config.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The duration.
  */
-const timingDuration = (get: ConfigGetter, env: Env): number =>
-  configMs(get('duration'), env, 250, `Animated.timing's "duration"`);
+const timingDuration = (get: ConfigGetter, environment: Env): number =>
+  configMs(
+    get('duration'),
+    environment,
+    DEFAULT_TIMING_DURATION_MS,
+    `Animated.timing's "duration"`,
+  );
 
 /**
  * An animation's own delay (0 when it is left out).
  *
  * @param kind  timing, spring or decay.
  * @param get  The animation's config.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The delay.
  */
-const ownDelayMs = (kind: string, get: ConfigGetter, env: Env): number =>
-  configMs(get('delay'), env, 0, `Animated.${kind}'s "delay"`);
+const ownDelayMs = (
+  kind: string,
+  get: ConfigGetter,
+  environment: Env,
+): number =>
+  configMs(get('delay'), environment, 0, `Animated.${kind}'s "delay"`);
 
 /**
  * A time added up from a composition's times, checked like them: each fits an int, but a sum of them need not.
@@ -582,11 +610,11 @@ function totalMs(value: number): number {
  * offsets are realized) and `loop` repeats a timing on the engine's own loop.
  *
  * @param entry  The animation.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The animation.
  */
-function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
+function lowerAnimation(entry: AnimEntry, environment: Env): IrAnimation {
   const {slotName, kind, get, delayMs, loop} = entry;
 
   // Fold the curve's fields, using RN-like defaults when the app leaves one out.
@@ -594,19 +622,29 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
   if (kind === 'spring') {
     curve = {
       kind: 'spring',
-      stiffness: configFloat(evalStaticOr(get('stiffness'), env, 200)),
-      damping: configFloat(evalStaticOr(get('damping'), env, 18)),
-      mass: configFloat(evalStaticOr(get('mass'), env, 1)),
+      stiffness: configFloat(
+        evalStaticOr(get('stiffness'), environment, DEFAULT_SPRING_STIFFNESS),
+      ),
+      damping: configFloat(
+        evalStaticOr(get('damping'), environment, DEFAULT_SPRING_DAMPING),
+      ),
+      mass: configFloat(evalStaticOr(get('mass'), environment, 1)),
     };
   } else if (kind === 'decay') {
     curve = {
       kind: 'decay',
-      deceleration: configFloat(evalStaticOr(get('deceleration'), env, 0.998)),
-      velocity: configFloat(evalStaticOr(get('velocity'), env, 0)),
+      deceleration: configFloat(
+        evalStaticOr(
+          get('deceleration'),
+          environment,
+          DEFAULT_DECAY_DECELERATION,
+        ),
+      ),
+      velocity: configFloat(evalStaticOr(get('velocity'), environment, 0)),
     };
   } else {
-    const durationMs = timingDuration(get, env);
-    const {ease, bezier} = easingInfo(get('easing'), env);
+    const durationMs = timingDuration(get, environment);
+    const {ease, bezier} = easingInfo(get('easing'), environment);
     curve = {
       kind: 'timing',
       durationMs,
@@ -624,7 +662,7 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
   return {
     handle: slotName,
     curve,
-    to: toNode ? lowerExpr(toNode, env) : null,
+    to: toNode ? lowerExpr(toNode, environment) : null,
     delayMs: totalMs(delayMs),
     isLooping: loop,
   };
@@ -638,7 +676,7 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
  * null = unknown (spring/decay/loop), which is illegal to sequence anything after.
  *
  * @param node  The composition.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param baseDelay  When the composition starts, in ms.
  * @param loop  The composition repeats forever (inside an Animated.loop).
  *
@@ -646,12 +684,12 @@ function lowerAnimation(entry: AnimEntry, env: Env): IrAnimation {
  */
 function flattenAnim(
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
   baseDelay: number,
   loop: boolean,
 ): FlatAnimation {
   // Resolve a named animation handle, then require one of the supported Animated.* calls.
-  node = resolveAnim(node, env);
+  node = resolveAnim(node, environment);
   if (!isAnimatedCall(node)) {
     throw aotError(
       'AOT: an animation must be Animated.timing/spring/decay/sequence/parallel/stagger/delay/loop(...)',
@@ -660,19 +698,22 @@ function flattenAnim(
 
   // Atomic animations drive one useAnimatedValue directly; timing has a known length, spring/decay do not.
   const kind = node.callee.property.name;
-  const args = node.arguments;
+  const callArguments = node.arguments;
   if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
-    const valRef = args[0];
-    if (valRef?.type !== 'Identifier' || !env.animations?.has(valRef.name)) {
+    const valueRef = callArguments[0];
+    if (
+      valueRef?.type !== 'Identifier' ||
+      !environment.animations?.has(valueRef.name)
+    ) {
       throw aotError(
         `AOT: Animated.${kind}() first argument must be a useAnimatedValue`,
       );
     }
-    const slotName = env.animations.get(valRef.name)!.slotName;
-    const get = animConfigGetter(args[1]);
-    const ownDelay = ownDelayMs(kind, get, env);
+    const slotName = environment.animations.get(valueRef.name)!.slotName;
+    const get = animConfigGetter(callArguments[1]);
+    const ownDelay = ownDelayMs(kind, get, environment);
     const duration =
-      kind === 'timing' ? ownDelay + timingDuration(get, env) : null;
+      kind === 'timing' ? ownDelay + timingDuration(get, environment) : null;
     return {
       entries: [{slotName, kind, get, delayMs: baseDelay + ownDelay, loop}],
       duration,
@@ -683,16 +724,26 @@ function flattenAnim(
   if (kind === 'delay') {
     return {
       entries: [],
-      duration: configMs(args[0], env, 0, "Animated.delay's time"),
+      duration: configMs(
+        callArguments[0],
+        environment,
+        0,
+        "Animated.delay's time",
+      ),
     };
   }
 
   // Composition nodes flatten into atomic animations with absolute delay_ms offsets.
   if (kind === 'sequence' || kind === 'parallel' || kind === 'stagger') {
-    const list = kind === 'stagger' ? args[1] : args[0];
+    const list = kind === 'stagger' ? callArguments[1] : callArguments[0];
     const staggerMs =
       kind === 'stagger'
-        ? configMs(args[0], env, 0, "Animated.stagger's interval")
+        ? configMs(
+            callArguments[0],
+            environment,
+            0,
+            "Animated.stagger's interval",
+          )
         : 0;
     if (list?.type !== 'ArrayExpression') {
       throw aotError(`AOT: Animated.${kind}(...) needs an array of animations`);
@@ -700,25 +751,31 @@ function flattenAnim(
 
     // Sequence advances its running offset; parallel/stagger start children from the same base with offsets.
     const entries: AnimEntry[] = [];
-    let off = baseDelay; // running offset (sequence)
-    let groupDur = 0; // max end-time relative to baseDelay (parallel/stagger)
+    let offset = baseDelay; // running offset (sequence)
+    let groupDuration = 0; // max end-time relative to baseDelay (parallel/stagger)
     let index = 0;
     for (const child of list.elements) {
       if (!child) continue;
-      const start = kind === 'sequence' ? off : baseDelay + index * staggerMs;
-      const flatAnim: FlatAnimation = flattenAnim(child, env, start, loop);
-      entries.push(...flatAnim.entries);
+      const start =
+        kind === 'sequence' ? offset : baseDelay + index * staggerMs;
+      const flatAnimation: FlatAnimation = flattenAnim(
+        child,
+        environment,
+        start,
+        loop,
+      );
+      entries.push(...flatAnimation.entries);
       if (kind === 'sequence') {
-        if (flatAnim.duration == null) {
+        if (flatAnimation.duration == null) {
           throw aotError(
             'AOT: an Animated.sequence entry needs a known duration — use Animated.timing / Animated.delay (a spring/decay/loop inside a sequence is not supported; it has no fixed length to offset the next entry by)',
           );
         }
-        off += flatAnim.duration;
+        offset += flatAnimation.duration;
       } else {
-        const end = start - baseDelay + (flatAnim.duration ?? 0);
-        if (end > groupDur) {
-          groupDur = end;
+        const end = start - baseDelay + (flatAnimation.duration ?? 0);
+        if (end > groupDuration) {
+          groupDuration = end;
         }
       }
 
@@ -739,20 +796,25 @@ function flattenAnim(
     }
     return {
       entries,
-      duration: kind === 'sequence' ? off - baseDelay : groupDur,
+      duration: kind === 'sequence' ? offset - baseDelay : groupDuration,
     };
   }
 
   // A nested loop can flatten only when it wraps a single atomic animation; complex loops need start-time chaining.
   if (kind === 'loop') {
-    const flatAnim: FlatAnimation = flattenAnim(args[0], env, baseDelay, true);
-    if (flatAnim.entries.length !== 1) {
+    const flatAnimation: FlatAnimation = flattenAnim(
+      callArguments[0],
+      environment,
+      baseDelay,
+      true,
+    );
+    if (flatAnimation.entries.length !== 1) {
       throw aotError(
         'AOT: an Animated.loop inside another composition can only wrap a single Animated.timing/spring/decay',
         'a loop around a sequence works when the loop is the animation you start: Animated.loop(Animated.sequence([...])).start().',
       );
     }
-    return {entries: flatAnim.entries, duration: null};
+    return {entries: flatAnimation.entries, duration: null};
   }
 
   throw aotError(`AOT: Animated.${kind}(...) is not a supported animation`);
@@ -771,39 +833,46 @@ export const isAnimatedCall = (
   node?.type === 'CallExpression' &&
   node.callee.type === 'MemberExpression' &&
   (node.callee.object as t.Identifier)?.name === 'Animated' &&
-  ANIM_KINDS.has((node.callee.property as t.Identifier)?.name);
+  ANIMATION_KINDS.has((node.callee.property as t.Identifier)?.name);
 
 /**
  * An animation handle (`anim` after `const anim = Animated.loop(…)`) resolved to the call it names.
  *
  * @param node  An animation, or a handler local bound to one.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The animation the node stands for.
  */
 export const resolveAnim = (
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
 ): t.Node | null | undefined =>
-  node?.type === 'Identifier' && env.animLocals?.has(node.name)
-    ? env.animLocals!.get(node.name)
+  node?.type === 'Identifier' && environment.animationLocals?.has(node.name)
+    ? environment.animationLocals!.get(node.name)
     : node;
 
 /**
  * One Animated.timing/spring/decay call as a chain step, started `extraDelay` ms later than its own delay.
  *
  * @param node  The call.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param extraDelay  Milliseconds added to its own delay.
  *
  * @returns The step.
  */
-function animStep(node: AnimatedCall, env: Env, extraDelay: number): AnimEntry {
+function animStep(
+  node: AnimatedCall,
+  environment: Env,
+  extraDelay: number,
+): AnimEntry {
   const kind = node.callee.property.name;
 
   // A chain step must drive one collected useAnimatedValue.
-  const valRef = node.arguments[0];
-  if (valRef?.type !== 'Identifier' || !env.animations?.has(valRef.name)) {
+  const valueRef = node.arguments[0];
+  if (
+    valueRef?.type !== 'Identifier' ||
+    !environment.animations?.has(valueRef.name)
+  ) {
     throw aotError(
       `AOT: Animated.${kind}() first argument must be a useAnimatedValue`,
     );
@@ -811,9 +880,9 @@ function animStep(node: AnimatedCall, env: Env, extraDelay: number): AnimEntry {
 
   // Fold this step's own delay and add any delay inherited from an enclosing sequence/delay.
   const get = animConfigGetter(node.arguments[1]);
-  const ownDelay = ownDelayMs(kind, get, env);
+  const ownDelay = ownDelayMs(kind, get, environment);
   return {
-    slotName: env.animations.get(valRef.name)!.slotName,
+    slotName: environment.animations.get(valueRef.name)!.slotName,
     kind,
     get,
     delayMs: extraDelay + ownDelay,
@@ -825,17 +894,17 @@ function animStep(node: AnimatedCall, env: Env, extraDelay: number): AnimEntry {
  * The handle of every value an animation drives.
  *
  * @param node  The animation.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param accumulator  Collects the handles.
  *
  * @returns `accumulator`.
  */
 export function animValues(
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
   accumulator: Set<string> = new Set(),
 ): Set<string> {
-  node = resolveAnim(node, env);
+  node = resolveAnim(node, environment);
 
   // Reject props that the FlatList-to-ScrollView rewrite cannot preserve.
   if (!isAnimatedCall(node)) {
@@ -846,17 +915,17 @@ export function animValues(
 
   // Recurse into composed animations, skipping delay nodes because they drive no animated value.
   const kind = node.callee.property.name;
-  const args = node.arguments;
+  const callArguments = node.arguments;
   if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
-    accumulator.add(animStep(node, env, 0).slotName);
+    accumulator.add(animStep(node, environment, 0).slotName);
   } else if (kind === 'loop') {
-    animValues(args[0], env, accumulator);
+    animValues(callArguments[0], environment, accumulator);
   } else if (kind !== 'delay') {
-    const list = kind === 'stagger' ? args[1] : args[0];
+    const list = kind === 'stagger' ? callArguments[1] : callArguments[0];
     for (const child of (list as t.ArrayExpression | undefined)?.elements ??
       []) {
       if (child) {
-        animValues(child, env, accumulator);
+        animValues(child, environment, accumulator);
       }
     }
   }
@@ -868,16 +937,16 @@ export function animValues(
  * The steps of an `Animated.sequence([...])` for an on_complete chain. A delay() folds into the next step's
  * delay_ms; `trailingDelay` is what follows the last step. A nested parallel/stagger/loop throws.
  *
- * @param seqNode  The sequence call.
- * @param env  The expression environment.
+ * @param sequenceNode  The sequence call.
+ * @param environment  The expression environment.
  *
  * @returns The steps, and the delay after the last one.
  */
 function sequenceSteps(
-  seqNode: AnimatedCall,
-  env: Env,
+  sequenceNode: AnimatedCall,
+  environment: Env,
 ): {steps: AnimEntry[]; trailingDelay: number} {
-  const list = seqNode.arguments[0];
+  const list = sequenceNode.arguments[0];
 
   // Sequence composition is lowered at build time, so its children must be an array literal.
   if (list?.type !== 'ArrayExpression') {
@@ -889,7 +958,7 @@ function sequenceSteps(
   let pendingDelay = 0;
   for (const element of list.elements) {
     if (!element) continue;
-    const child = resolveAnim(element, env);
+    const child = resolveAnim(element, environment);
 
     // Reject non-animation entries in the sequence.
     if (!isAnimatedCall(child)) {
@@ -903,7 +972,7 @@ function sequenceSteps(
     if (kind === 'delay') {
       pendingDelay += configMs(
         child.arguments[0],
-        env,
+        environment,
         0,
         "Animated.delay's time",
       );
@@ -918,7 +987,7 @@ function sequenceSteps(
       );
     }
 
-    steps.push(animStep(child, env, pendingDelay));
+    steps.push(animStep(child, environment, pendingDelay));
     pendingDelay = 0;
   }
 
@@ -936,8 +1005,8 @@ function sequenceSteps(
  * put back where it started before each repeat, or null), trailingDelay (ms before each repeat)}.
  *
  * @param steps  The chain's steps.
- * @param env  The expression environment.
- * @param ctx  The statement compiler's context.
+ * @param environment  The expression environment.
+ * @param context  The statement compiler's context.
  * @param completion  The completion callback to run when the chain ends, if any.
  * @param loop  How the chain repeats, or null for once.
  * @param trailing  For a chain that runs once: the composition's key and the wait after its last step.
@@ -946,19 +1015,19 @@ function sequenceSteps(
  */
 function lowerChain(
   steps: AnimEntry[],
-  env: Env,
-  ctx: StatementContext,
+  environment: Env,
+  context: StatementContext,
   completion: IrCompletion | null,
   loop: LoopSpec | null = null,
   trailing: {key: string; delayMs: number} | null = null,
 ): IrStartChain {
   // GLOBAL: callback names must be unique across handlers
-  const id = ctx.out.seqN++;
+  const id = context.output.sequenceCount++;
 
   // Lowered from the tail, the order the callbacks are emitted in.
   const lowered: IrAnimation[] = new Array(steps.length);
   for (let index = steps.length - 1; index >= 0; index--) {
-    lowered[index] = lowerAnimation(steps[index], env);
+    lowered[index] = lowerAnimation(steps[index], environment);
   }
 
   // A repeat restarts step 0 after any trailing sequence delay.
@@ -972,13 +1041,13 @@ function lowerChain(
           resetHandle: loop.resetTo,
           restart: lowerAnimation(
             {...steps[0], delayMs: steps[0].delayMs + loop.trailingDelay},
-            env,
+            environment,
           ),
           finalWait:
             loop.iterations >= 0 && completion && loop.trailingDelay > 0
               ? {
                   delayMs: totalMs(loop.trailingDelay),
-                  owner: waitOwner(ctx, loop.key, true),
+                  owner: waitOwner(context, loop.key, true),
                 }
               : null,
         }
@@ -987,7 +1056,7 @@ function lowerChain(
     completionWait:
       !loop && completion && trailing && trailing.delayMs > 0
         ? completionWait(
-            ctx,
+            context,
             trailing.key,
             trailing.delayMs,
             `chain_${id}_${steps.length}`,
@@ -995,8 +1064,8 @@ function lowerChain(
         : null,
   };
 
-  ctx.out.animCbs.push({kind: 'chain', chain});
-  ctx.out.effectDecls.push({kind: 'chain', chain});
+  context.output.animationCallbacks.push({kind: 'chain', chain});
+  context.output.effectDeclarations.push({kind: 'chain', chain});
 
   return chain;
 }
@@ -1004,13 +1073,13 @@ function lowerChain(
 /**
  * A start with nothing to run.
  *
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  * @param completion  The completion callback, if any; it never runs.
  *
  * @returns The start.
  */
 const emptyStart = (
-  ctx: StatementContext,
+  context: StatementContext,
   completion: IrCompletion | null,
 ): IrStartAnimations => ({
   kind: 'startAnimations',
@@ -1031,38 +1100,41 @@ let nextCompositionId = 0;
  * … pulse.stop()`) reach the same node.
  *
  * @param node  The composition, resolved.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The key.
  */
-function compositionKey(node: t.Node | null | undefined, env: Env): string {
+function compositionKey(
+  node: t.Node | null | undefined,
+  environment: Env,
+): string {
   let id = node ? compositionIds.get(node) : -1;
   if (id === undefined) {
     id = nextCompositionId++;
     compositionIds.set(node!, id);
   }
 
-  return `${env.cbPrefix ?? ''}|${id}`;
+  return `${environment.callbackPrefix ?? ''}|${id}`;
 }
 
 /**
  * The owner number completion waits of a composition carry, so a stop can end them; numbered on first use.
  *
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  * @param key  The composition's key.
  * @param isStart  A start is asking, so the waits are real (a stop alone leaves nothing to end).
  *
  * @returns The owner.
  */
 function waitOwner(
-  ctx: StatementContext,
+  context: StatementContext,
   key: string,
   isStart: boolean,
 ): number {
-  let record = ctx.out.animWaits.get(key);
+  let record = context.output.animationWaits.get(key);
   if (!record) {
-    record = {owner: ctx.out.animWaits.size, isStarted: false};
-    ctx.out.animWaits.set(key, record);
+    record = {owner: context.output.animationWaits.size, isStarted: false};
+    context.output.animationWaits.set(key, record);
   }
   if (isStart) {
     record.isStarted = true;
@@ -1075,24 +1147,24 @@ function waitOwner(
  * True when a composition has an Animated.delay anywhere, the only thing a completion can wait on.
  *
  * @param node  The composition.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns Whether it does.
  */
-function hasDelay(node: t.Node | null | undefined, env: Env): boolean {
-  node = resolveAnim(node, env);
+function hasDelay(node: t.Node | null | undefined, environment: Env): boolean {
+  node = resolveAnim(node, environment);
   if (!isAnimatedCall(node)) return false;
 
   // Look through compositions; a timing, spring or decay waits on nothing beyond itself.
   const kind = node.callee.property.name;
-  const args = node.arguments;
+  const callArguments = node.arguments;
   if (kind === 'delay') return true;
-  if (kind === 'loop') return hasDelay(args[0], env);
+  if (kind === 'loop') return hasDelay(callArguments[0], environment);
   if (kind === 'sequence' || kind === 'parallel' || kind === 'stagger') {
-    const list = kind === 'stagger' ? args[1] : args[0];
+    const list = kind === 'stagger' ? callArguments[1] : callArguments[0];
     return (
       list?.type === 'ArrayExpression' &&
-      list.elements.some(child => child && hasDelay(child, env))
+      list.elements.some(child => child && hasDelay(child, environment))
     );
   }
 
@@ -1103,26 +1175,26 @@ function hasDelay(node: t.Node | null | undefined, env: Env): boolean {
  * The composition whose completion waits `anim.stop()` ends, when it has a delay to wait on.
  *
  * @param node  The composition being stopped.
- * @param env  The expression environment.
- * @param ctx  The statement compiler's context.
+ * @param environment  The expression environment.
+ * @param context  The statement compiler's context.
  *
  * @returns The owner, or null.
  */
 export function stopWaitOwner(
   node: t.Node | null | undefined,
-  env: Env,
-  ctx: StatementContext,
+  environment: Env,
+  context: StatementContext,
 ): number | null {
-  const resolved = resolveAnim(node, env);
-  return hasDelay(resolved, env)
-    ? waitOwner(ctx, compositionKey(resolved, env), false)
+  const resolved = resolveAnim(node, environment);
+  return hasDelay(resolved, environment)
+    ? waitOwner(context, compositionKey(resolved, environment), false)
     : null;
 }
 
 /**
  * The wait between a composition's last animation finishing and its completion running.
  *
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  * @param key  The composition's key.
  * @param delayMs  The wait.
  * @param callback  The name of the on_complete callback that starts it.
@@ -1130,21 +1202,21 @@ export function stopWaitOwner(
  * @returns The wait.
  */
 const completionWait = (
-  ctx: StatementContext,
+  context: StatementContext,
   key: string,
   delayMs: number,
   callback: string,
 ): IrCompletionWait => ({
   delayMs: totalMs(delayMs),
   callback,
-  owner: waitOwner(ctx, key, true),
+  owner: waitOwner(context, key, true),
 });
 
 /**
  * A start that drives no value. As in JS, its completion still runs as finished once the composition's delays
  * have passed, counted down in a completion wait of its own.
  *
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  * @param completion  The completion callback, if any.
  * @param delayMs  How long the composition takes.
  * @param key The composition's key.
@@ -1152,13 +1224,13 @@ const completionWait = (
  * @returns The start.
  */
 function startNothing(
-  ctx: StatementContext,
+  context: StatementContext,
   completion: IrCompletion | null,
   delayMs: number,
   key: string,
 ): IrStartAnimations | IrCompleteAfter {
   if (!completion) {
-    return emptyStart(ctx, completion);
+    return emptyStart(context, completion);
   }
 
   const start: IrCompleteAfter = {
@@ -1168,7 +1240,7 @@ function startNothing(
     owner: null,
   };
   if (delayMs > 0) {
-    start.owner = waitOwner(ctx, key, true);
+    start.owner = waitOwner(context, key, true);
   }
 
   return start;
@@ -1181,8 +1253,8 @@ function startNothing(
  * started before each repeat (resetBeforeIteration), and a looped sequence carries on from where it ended.
  *
  * @param loopNode  The `Animated.loop(…)` call.
- * @param env  The expression environment.
- * @param ctx  The statement compiler's context.
+ * @param environment  The expression environment.
+ * @param context  The statement compiler's context.
  * @param completion  The completion callback to run when the loop ends, if any.
  * @param key  The loop's composition key.
  *
@@ -1190,20 +1262,23 @@ function startNothing(
  */
 function lowerLoopStart(
   loopNode: AnimatedCall,
-  env: Env,
-  ctx: StatementContext,
+  environment: Env,
+  context: StatementContext,
   completion: IrCompletion | null,
   key: string,
 ): IrAnimationStart | null {
   // Fold the loop count at build time; absent or noninteger iterations mean repeat forever.
-  const inner = resolveAnim(loopNode.arguments[0], env);
+  const inner = resolveAnim(loopNode.arguments[0], environment);
   const kind = isAnimatedCall(inner) ? inner.callee.property.name : null;
   const get = animConfigGetter(loopNode.arguments[1]);
   let iterations = -1;
   if (get('iterations')) {
     let value: unknown;
     try {
-      value = evalStatic(get('iterations')!, foldScope(env, env.consts ?? {}));
+      value = evalStatic(
+        get('iterations')!,
+        foldScope(environment, environment.constants ?? {}),
+      );
     } catch {
       throw aotError(
         'AOT: Animated.loop iterations must be known at build time',
@@ -1218,15 +1293,19 @@ function lowerLoopStart(
   }
 
   // Use the engine's native loop only for endless reset timing loops; other loop shapes need callback chaining.
-  const reset = evalStaticOr(get('resetBeforeIteration'), env, true) !== false;
+  const reset =
+    evalStaticOr(get('resetBeforeIteration'), environment, true) !== false;
   let steps: AnimEntry[];
   let trailingDelay = 0;
   let resetTo: string | null = null;
   if (kind === 'sequence') {
-    ({steps, trailingDelay} = sequenceSteps(inner as AnimatedCall, env));
+    ({steps, trailingDelay} = sequenceSteps(
+      inner as AnimatedCall,
+      environment,
+    ));
   } else if (kind === 'timing' || kind === 'spring' || kind === 'decay') {
     if (kind === 'timing' && iterations < 0 && reset) return null;
-    steps = [animStep(inner as AnimatedCall, env, 0)];
+    steps = [animStep(inner as AnimatedCall, environment, 0)];
     if (reset) {
       resetTo = steps[0].slotName;
     }
@@ -1238,22 +1317,22 @@ function lowerLoopStart(
 
   // A zero-iteration loop starts nothing but still reports successful completion.
   if (iterations === 0) {
-    return startNothing(ctx, completion, 0, key);
+    return startNothing(context, completion, 0, key);
   }
 
   // A loop of delays alone completes after its passes; an endless one never does.
   if (!steps.length) {
     return iterations < 0
-      ? emptyStart(ctx, completion)
-      : startNothing(ctx, completion, iterations * trailingDelay, key);
+      ? emptyStart(context, completion)
+      : startNothing(context, completion, iterations * trailingDelay, key);
   }
 
   // A timing with no duration and no delay completes inside er_anim_value_animate, so a loop made only of
   // those would restart itself forever without returning.
-  const instant = (animEntry: AnimEntry) =>
-    animEntry.kind === 'timing' &&
-    animEntry.delayMs === 0 &&
-    timingDuration(animEntry.get, env) === 0;
+  const instant = (animationEntry: AnimEntry) =>
+    animationEntry.kind === 'timing' &&
+    animationEntry.delayMs === 0 &&
+    timingDuration(animationEntry.get, environment) === 0;
   if (trailingDelay === 0 && steps.every(instant)) {
     throw aotError(
       'AOT: every step of this Animated.loop finishes instantly, so it would never stop repeating',
@@ -1261,7 +1340,7 @@ function lowerLoopStart(
     );
   }
 
-  return lowerChain(steps, env, ctx, completion, {
+  return lowerChain(steps, environment, context, completion, {
     iterations,
     resetTo,
     trailingDelay,
@@ -1274,26 +1353,26 @@ function lowerLoopStart(
  * animation's on_complete, and adds it to the output; its body runs setters/refs/etc. and re-applies state via
  * the update if needed.
  *
- * @param fnNode  The callback.
- * @param env  The expression environment.
+ * @param functionNode  The callback.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  *
  * @returns The completion.
  */
 function lowerCompletion(
-  fnNode: FunctionNode,
-  env: Env,
+  functionNode: FunctionNode,
+  environment: Env,
   state: StateTable,
-  ctx: StatementContext,
+  context: StatementContext,
 ): IrCompletion {
   // Generate a completion callback and expose start(({finished}) => ...) as a local int.
-  const id = ctx.out.seqN++;
+  const id = context.output.sequenceCount++;
   const name = `done_${id}`;
-  const locals = new Map<string, Local>(env.locals);
-  const param = fnNode.params[0];
-  if (param?.type === 'ObjectPattern') {
-    for (const property of param.properties as t.ObjectProperty[]) {
+  const locals = new Map<string, Local>(environment.locals);
+  const parameter = functionNode.params[0];
+  if (parameter?.type === 'ObjectPattern') {
+    for (const property of parameter.properties as t.ObjectProperty[]) {
       if (
         ((property.key as t.Identifier)?.name ??
           (property.key as t.StringLiteral)?.value) === 'finished'
@@ -1307,18 +1386,23 @@ function lowerCompletion(
   }
 
   // Lower the callback body as statements; it re-renders if it changed React state.
-  const fnBody = fnNode.body;
+  const functionBody = functionNode.body;
   const list: t.Statement[] =
-    fnBody.type === 'BlockStatement'
-      ? fnBody.body
-      : [{type: 'ExpressionStatement', expression: fnBody}];
-  const cctx: StatementContext = {
+    functionBody.type === 'BlockStatement'
+      ? functionBody.body
+      : [{type: 'ExpressionStatement', expression: functionBody}];
+  const completionContext: StatementContext = {
     stateChanged: false,
-    out: ctx.out,
+    output: context.output,
   };
-  const body = lowerStmts(list, {...env, locals}, state, cctx);
-  const completion = {name, body, updatesState: cctx.stateChanged};
-  ctx.out.animCbs.push({kind: 'completion', completion});
+  const body = lowerStmts(
+    list,
+    {...environment, locals},
+    state,
+    completionContext,
+  );
+  const completion = {name, body, updatesState: completionContext.stateChanged};
+  context.output.animationCallbacks.push({kind: 'completion', completion});
 
   return completion;
 }
@@ -1329,40 +1413,46 @@ function lowerCompletion(
  * an on_complete chain (lowerChain); everything else flattens to one animation per atomic entry, composition
  * expressed through per-entry delay_ms. Native-driven; sets no React state.
  *
- * @param expr  The `.start(…)` call.
- * @param env  The expression environment.
+ * @param expression  The `.start(…)` call.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  *
  * @returns The start.
  */
 export function lowerAnimateStart(
-  expr: t.CallExpression,
-  env: Env,
+  expression: t.CallExpression,
+  environment: Env,
   state: StateTable,
-  ctx: StatementContext,
+  context: StatementContext,
 ): IrAnimationStart {
   // Resolve the animation being started and handle cases that need callback chaining before falling back to flat emission.
-  const completion = isFn(expr.arguments[0])
-    ? lowerCompletion(expr.arguments[0], env, state, ctx)
+  const completion = isFn(expression.arguments[0])
+    ? lowerCompletion(expression.arguments[0], environment, state, context)
     : null;
-  const receiver = resolveAnim((expr.callee as t.MemberExpression).object, env);
+  const receiver = resolveAnim(
+    (expression.callee as t.MemberExpression).object,
+    environment,
+  );
   const kind = isAnimatedCall(receiver) ? receiver.callee.property.name : null;
-  const key = compositionKey(receiver, env);
+  const key = compositionKey(receiver, environment);
   if (kind === 'sequence') {
-    const {steps, trailingDelay} = sequenceSteps(receiver as AnimatedCall, env);
+    const {steps, trailingDelay} = sequenceSteps(
+      receiver as AnimatedCall,
+      environment,
+    );
     return steps.length
-      ? lowerChain(steps, env, ctx, completion, null, {
+      ? lowerChain(steps, environment, context, completion, null, {
           key,
           delayMs: trailingDelay,
         })
-      : startNothing(ctx, completion, trailingDelay, key);
+      : startNothing(context, completion, trailingDelay, key);
   }
   if (kind === 'loop') {
     const start = lowerLoopStart(
       receiver as AnimatedCall,
-      env,
-      ctx,
+      environment,
+      context,
       completion,
       key,
     );
@@ -1370,9 +1460,9 @@ export function lowerAnimateStart(
   }
 
   // The flat path has no "after all entries finish" join point, so completion callbacks are limited to one entry.
-  const {entries, duration} = flattenAnim(receiver, env, 0, false);
+  const {entries, duration} = flattenAnim(receiver, environment, 0, false);
   if (!entries.length) {
-    return startNothing(ctx, completion, duration ?? 0, key);
+    return startNothing(context, completion, duration ?? 0, key);
   }
   if (completion && entries.length > 1) {
     throw aotError(
@@ -1382,9 +1472,9 @@ export function lowerAnimateStart(
   }
 
   // Each entry starts on its own, numbered after the configs already in this body.
-  const start = emptyStart(ctx, completion);
-  for (const animEntry of entries) {
-    start.animations.push(lowerAnimation(animEntry, env));
+  const start = emptyStart(context, completion);
+  for (const animationEntry of entries) {
+    start.animations.push(lowerAnimation(animationEntry, environment));
   }
 
   // A spring or decay has no fixed end, so a delay beside it that runs past its start is joined at run time.
@@ -1398,21 +1488,21 @@ export function lowerAnimateStart(
   ) {
     start.completionJoin = {
       delayMs: totalMs(duration),
-      owner: waitOwner(ctx, key, true),
+      owner: waitOwner(context, key, true),
     };
   }
 
   // A delay beside the one timing that outlasts it holds the completion back until the composition ends.
   if (completion && only.kind === 'timing' && !only.loop && duration != null) {
-    const end = only.delayMs + timingDuration(only.get, env);
+    const end = only.delayMs + timingDuration(only.get, environment);
     if (duration > end) {
       start.completionWait = completionWait(
-        ctx,
+        context,
         key,
         duration - end,
-        `wait_${ctx.out.seqN++}`,
+        `wait_${context.output.sequenceCount++}`,
       );
-      ctx.out.animCbs.push({
+      context.output.animationCallbacks.push({
         kind: 'completionWait',
         completion,
         wait: start.completionWait,

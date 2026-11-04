@@ -27,7 +27,7 @@ const nState = {
   kind: 'scalar',
   name: 'n',
   slotKind: 'int',
-  isBool: false,
+  isBoolean: false,
   slotName: 'n',
 };
 const state = {
@@ -44,14 +44,14 @@ function lowerBody(source) {
   const env = {
     state: state.byName,
     locals: new Map(),
-    consts: {},
+    constants: {},
     refs: new Map(),
     animations,
     math64: false,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     stores: [],
   };
-  const ctx = {stateChanged: false, out: new Out(new Map(), null)};
+  const ctx = {stateChanged: false, output: new Out(new Map(), null)};
   return {stmts: lowerStmts(statements, env, state, ctx), ctx};
 }
 
@@ -89,7 +89,7 @@ describe('animation IR: flat starts', () => {
     );
     expect(stmt.kind).toBe('startAnimations');
     expect(stmt.animations[0].isLooping).toBe(true);
-    expect(ctx.out.animCbs).toHaveLength(0);
+    expect(ctx.output.animationCallbacks).toHaveLength(0);
   });
 });
 
@@ -114,7 +114,7 @@ describe('animation IR: completions', () => {
     ]) {
       const {stmt, ctx} = lowerOne(source);
       expect(stmt).toMatchObject({kind: 'completeAfter', delayMs: 0});
-      expect(ctx.out.timerFns).toHaveLength(0);
+      expect(ctx.output.timerFunctions).toHaveLength(0);
     }
   });
 
@@ -125,7 +125,7 @@ describe('animation IR: completions', () => {
     ]) {
       const {stmt, ctx} = lowerOne(source);
       expect(stmt.completionWait).toBeNull();
-      expect(ctx.out.timerFns).toHaveLength(0);
+      expect(ctx.output.timerFunctions).toHaveLength(0);
     }
   });
 
@@ -154,7 +154,7 @@ describe('animation IR: stopping a wait', () => {
 
     // A stop of a third delay names an owner of its own, which nothing starts (assembly drops the stop).
     expect(stmts[3]).toMatchObject({handles: [], waitOwner: 2});
-    expect([...ctx.out.animWaits.values()]).toEqual([
+    expect([...ctx.output.animationWaits.values()]).toEqual([
       {owner: 0, isStarted: true},
       {owner: 1, isStarted: true},
       {owner: 2, isStarted: false},
@@ -168,7 +168,7 @@ describe('animation IR: stopping a wait', () => {
     const [stop, start] = stmts;
     expect(stop.waitOwner).toBe(0);
     expect(start.completionWait.owner).toBe(0);
-    expect([...ctx.out.animWaits.values()]).toEqual([
+    expect([...ctx.output.animationWaits.values()]).toEqual([
       {owner: 0, isStarted: true},
     ]);
   });

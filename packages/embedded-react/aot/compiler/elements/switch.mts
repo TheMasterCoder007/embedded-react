@@ -34,6 +34,14 @@ import type {Env, Scope, StateTable} from '../types.mts';
 import type {IrNode} from '../ir/nodes.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Constants
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** A <Switch>'s size when its style sets none, as iOS draws it. */
+const DEFAULT_WIDTH = 51;
+const DEFAULT_HEIGHT = 31;
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -45,8 +53,8 @@ import type {IrNode} from '../ir/nodes.mts';
  *
  * @param element  The <Switch>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The node's variable.
@@ -54,48 +62,49 @@ import type {IrNode} from '../ir/nodes.mts';
 export function emitSwitch(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrNode {
   // get node id
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     elementSpec('Switch')!,
   );
-  const hasField = (f: string) => styleWrites(staticAssigns, dynAssigns, f);
+  const hasField = (field: string) =>
+    styleWrites(staticAssigns, dynamicAssigns, field);
   if (!hasField('width')) {
-    staticAssigns.push({field: 'width', value: 51});
+    staticAssigns.push({field: 'width', value: DEFAULT_WIDTH});
   }
   if (!hasField('height')) {
-    staticAssigns.push({field: 'height', value: 31});
+    staticAssigns.push({field: 'height', value: DEFAULT_HEIGHT});
   }
 
   // process element attributes
   let valueNode: t.Node | null = null;
-  let onChangeFn: t.Node | null = null;
-  for (const attr of element.openingElement.attributes) {
+  let onChangeFunction: t.Node | null = null;
+  for (const attribute of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute') {
+    if (attribute.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <Switch> are not supported');
     }
 
     // skip non-props
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'style' || name === 'ref' || name === 'key') continue;
 
     // process props
-    const node = attrExpr(attr);
+    const node = attrExpr(attribute);
     if (name === 'value') {
       valueNode = node;
     } else if (name === 'onValueChange') {
-      onChangeFn = node;
+      onChangeFunction = node;
     } else if (name === 'thumbColor') {
       staticAssigns.push({
         field: 'thumb_color',
@@ -116,7 +125,7 @@ export function emitSwitch(
             'AOT: <Switch trackColor> must be an object of two colors',
             "trackColor={{false: '#767577', true: '#81b0ff'}}",
           ),
-          attr,
+          attribute,
         );
       }
 
@@ -148,7 +157,7 @@ export function emitSwitch(
             'the engine flips a Switch on every press and has no disabled state. Leave it enabled and ' +
               'ignore the change in onValueChange while it should not move.',
           ),
-          attr,
+          attribute,
         );
       }
     } else {
@@ -167,11 +176,11 @@ export function emitSwitch(
         value: evalStatic(valueNode, scope) ? 1 : 0,
       });
     } catch {
-      dynAssigns.push({
+      dynamicAssigns.push({
         field: 'switch_value',
         value: {
           kind: 'flag',
-          test: lowerExpr(valueNode, env),
+          test: lowerExpr(valueNode, environment),
           truthiness: 'condition',
           negate: false,
           whenTrue: 1,
@@ -182,10 +191,10 @@ export function emitSwitch(
 
   const node: IrNode = {
     id: nodeId,
-    loc: currentLoc(),
+    location: currentLoc(),
     type: 'ER_NODE_SWITCH',
     constantProps: staticAssigns,
-    stateProps: dynAssigns,
+    stateProps: dynamicAssigns,
     placeholder: null,
     text: null,
     image: null,
@@ -195,9 +204,9 @@ export function emitSwitch(
   };
 
   // Compile onValueChange into a press handler that receives the toggled switch value.
-  if (onChangeFn) {
+  if (onChangeFunction) {
     // Require a controlled switch so onValueChange can receive the next value.
-    if (!isFn(onChangeFn)) {
+    if (!isFn(onChangeFunction)) {
       throw aotError(
         'AOT: onValueChange must be an inline function',
         'onValueChange={(v) => setX(v)}',
@@ -211,19 +220,19 @@ export function emitSwitch(
     }
 
     // Compile onValueChange into an ER_EVENT_PRESS handler, passing the next switch value.
-    const handlerName = `handler_${out.handlers.length}`;
-    const value = lowerExpr(valueNode, env);
-    out.handlers.push({
+    const handlerName = `handler_${output.handlers.length}`;
+    const value = lowerExpr(valueNode, environment);
+    output.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerValueHandler(
-        onChangeFn,
-        env,
+        onChangeFunction,
+        environment,
         state,
-        out,
+        output,
         'int',
         true,
-        {kind: 'unary', op: '!', operand: value, type: BOOL}, // the engine toggles on press → param is !value
+        {kind: 'unary', operator: '!', operand: value, type: BOOL}, // the engine toggles on press → param is !value
       ),
     });
     node.wiring.push({
@@ -233,7 +242,7 @@ export function emitSwitch(
     });
   }
 
-  for (const slot of lowerRefBinds(element.openingElement, env)) {
+  for (const slot of lowerRefBinds(element.openingElement, environment)) {
     node.wiring.push({kind: 'ref', slot});
   }
 

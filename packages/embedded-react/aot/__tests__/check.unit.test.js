@@ -76,7 +76,9 @@ describe('check pass: numbers', () => {
         /folded to NaN/,
       );
     });
-    expect(checks).toEqual([{kind: 'number', value: 1 / 0, loc: undefined}]);
+    expect(checks).toEqual([
+      {kind: 'number', value: 1 / 0, location: undefined},
+    ]);
     expect(() => runChecks(checks)).toThrow(/folded to Infinity/);
   });
 
@@ -89,7 +91,7 @@ describe('check pass: numbers', () => {
     expect(lowered.checks.length).toBeGreaterThan(0);
     expect(lowered.checks[0]).toMatchObject({
       kind: 'number',
-      loc: {line: 5, column: 9},
+      location: {line: 5, column: 9},
     });
   });
 
@@ -180,7 +182,7 @@ describe('check pass: fixed caps', () => {
       check({kind: 'interpolationPoints', count: 9}),
     );
     expect(checks).toEqual([
-      {kind: 'interpolationPoints', count: 9, loc: undefined},
+      {kind: 'interpolationPoints', count: 9, location: undefined},
     ]);
   });
 

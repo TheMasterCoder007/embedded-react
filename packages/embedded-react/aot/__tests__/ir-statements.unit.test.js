@@ -27,7 +27,7 @@ const scalar = (name, slotKind, isBool = false) => ({
   kind: 'scalar',
   name,
   slotKind,
-  isBool,
+  isBoolean: isBool,
   slotName: name,
 });
 
@@ -36,7 +36,7 @@ const list = (name, fields) => ({
   kind: 'list',
   name,
   struct: {fields},
-  cap: 8,
+  capacity: 8,
 });
 
 /** A state table over these slots, each with its `setX` setter. */
@@ -56,13 +56,13 @@ function lowerBody(source, state, refs = new Map()) {
   const env = {
     state: state.byName,
     locals: new Map(),
-    consts: {},
+    constants: {},
     refs,
     math64: false,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     stores: [],
   };
-  const ctx = {stateChanged: false, out: new Out(new Map(), null)};
+  const ctx = {stateChanged: false, output: new Out(new Map(), null)};
   return {stmts: lowerStmts(statements, env, state, ctx), ctx};
 }
 

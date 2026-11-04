@@ -70,6 +70,9 @@ export const OP: Record<string, {code: number; words: number}> =
 /** Register cells a function may have: the function record counts them in a byte. */
 const MAX_REGISTERS = 255;
 
+/** The longest branch forward, in words: a branch keeps its offset in a signed 16 bits. */
+const MAX_BRANCH_OFFSET = 0x7fff;
+
 /** The register types that take two cells. */
 const WIDE: ReadonlySet<RegisterType> = new Set(['int64', 'double', 'node']);
 
@@ -117,10 +120,10 @@ export class FunctionBuilder {
   /**
    * Marks the code from here on as lowered from a place in the source.
    *
-   * @param loc  The place, if it has one.
+   * @param location  The place, if it has one.
    */
-  at(loc: SourcePosition | undefined): void {
-    if (!loc) {
+  at(location: SourcePosition | undefined): void {
+    if (!location) {
       return;
     }
     // A mark nothing was written after is replaced.
@@ -128,11 +131,11 @@ export class FunctionBuilder {
       this.lines.pop();
     }
     const last = this.lines.at(-1);
-    if (last?.line !== loc.line || last.column !== loc.column) {
+    if (last?.line !== location.line || last.column !== location.column) {
       this.lines.push({
         offset: this.position,
-        line: loc.line,
-        column: loc.column,
+        line: location.line,
+        column: location.column,
       });
     }
   }
@@ -239,15 +242,21 @@ export class FunctionBuilder {
    * An instruction with A, B and C.
    *
    * @param name  The opcode.
-   * @param a  A.
-   * @param b  B.
-   * @param c  C.
+   * @param operandA  A.
+   * @param operandB  B.
+   * @param operandC  C.
    * @param extension  The extension word, for an opcode that has one.
    */
-  abc(name: string, a = 0, b = 0, c = 0, extension?: number): void {
+  abc(
+    name: string,
+    operandA = 0,
+    operandB = 0,
+    operandC = 0,
+    extension?: number,
+  ): void {
     this.emit(
       name,
-      (a & 0xff) | ((b & 0xff) << 8) | ((c & 0xff) << 16),
+      (operandA & 0xff) | ((operandB & 0xff) << 8) | ((operandC & 0xff) << 16),
       extension,
     );
   }
@@ -256,18 +265,23 @@ export class FunctionBuilder {
    * An instruction with A and a 16-bit Bx.
    *
    * @param name  The opcode.
-   * @param a  A.
-   * @param bx  Bx, an index or a signed immediate.
+   * @param operandA  A.
+   * @param operandBx  Bx, an index or a signed immediate.
    * @param extension  The extension word, for an opcode that has one.
    */
-  abx(name: string, a: number, bx: number, extension?: number): void {
-    this.emit(name, (a & 0xff) | ((bx & 0xffff) << 8), extension);
+  abx(
+    name: string,
+    operandA: number,
+    operandBx: number,
+    extension?: number,
+  ): void {
+    this.emit(name, (operandA & 0xff) | ((operandBx & 0xffff) << 8), extension);
   }
 
   private emit(name: string, operands: number, extension?: number): void {
-    const op = OP[name];
-    this.code.push((op.code | (operands << 8)) >>> 0);
-    if (op.words === 2) {
+    const opcode = OP[name];
+    this.code.push((opcode.code | (operands << 8)) >>> 0);
+    if (opcode.words === 2) {
       this.code.push((extension ?? 0) >>> 0);
     }
   }
@@ -286,7 +300,7 @@ export class FunctionBuilder {
     label.at = this.position;
     for (const at of label.branches) {
       const offset = label.at - (at + wordsOf(this.code[at]));
-      if (offset > 0x7fff) {
+      if (offset > MAX_BRANCH_OFFSET) {
         throw aotError(
           `AOT: ${this.what} has a branch too long for a package`,
           'split it into smaller pieces.',
@@ -323,16 +337,16 @@ export class FunctionBuilder {
   /**
    * The finished function, ending in RET.
    *
-   * @param params  Parameter cells.
+   * @param parameters  Parameter cells.
    * @param result  What it returns, for a function that returns a value.
    *
    * @returns The function.
    */
-  finish(params = 0, result?: Register): ProgramFunction {
+  finish(parameters = 0, result?: Register): ProgramFunction {
     this.abc('RET', result?.index ?? 0);
     return {
       kind: this.kind,
-      params,
+      parameters,
       result: result ? ValueType[result.type] : 0,
       types: [...this.cellTypes],
       code: [...this.code],

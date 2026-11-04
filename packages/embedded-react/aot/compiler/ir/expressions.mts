@@ -196,7 +196,7 @@ export interface IrToFloat extends IrTyped {
 /** Unary `-` / `+` on a float, or `!` on any value. */
 export interface IrUnary extends IrTyped {
   kind: 'unary';
-  op: '-' | '+' | '!';
+  operator: '-' | '+' | '!';
   operand: IrExpr;
 }
 
@@ -205,13 +205,13 @@ export interface IrHelper extends IrTyped {
   kind: 'helper';
   helper: WholeHelper;
   bits: 32 | 64;
-  args: IrExpr[];
+  callArguments: IrExpr[];
 }
 
 /** Plain arithmetic that cannot overflow: a float `+ - *`, or `%` by a constant that is safe. */
 export interface IrArithmetic extends IrTyped {
   kind: 'arithmetic';
-  op: '+' | '-' | '*' | '%';
+  operator: '+' | '-' | '*' | '%';
   left: IrExpr;
   right: IrExpr;
 }
@@ -233,8 +233,8 @@ export interface IrNarrowRemainder extends IrTyped {
 /** A Math function worked out on floats. */
 export interface IrFloatMath extends IrTyped {
   kind: 'floatMath';
-  fn: FloatMath;
-  args: IrExpr[];
+  mathFunction: FloatMath;
+  callArguments: IrExpr[];
 }
 
 /** Math.round / floor / ceil / trunc of a value that is already whole: the value itself. */
@@ -258,7 +258,7 @@ export interface IrToInt extends IrTyped {
 /** A numeric comparison or equality, yielding a boolean. */
 export interface IrCompare extends IrTyped {
   kind: 'compare';
-  op: '<' | '>' | '<=' | '>=' | '==' | '!=';
+  operator: '<' | '>' | '<=' | '>=' | '==' | '!=';
   left: IrExpr;
   right: IrExpr;
 }
@@ -266,7 +266,7 @@ export interface IrCompare extends IrTyped {
 /** String equality, yielding a boolean. */
 export interface IrStringEquals extends IrTyped {
   kind: 'stringEquals';
-  op: '==' | '!=';
+  operator: '==' | '!=';
   left: IrExpr;
   right: IrExpr;
 }
@@ -274,7 +274,7 @@ export interface IrStringEquals extends IrTyped {
 /** `&&` / `||` over truth values, yielding their truth. */
 export interface IrLogical extends IrTyped {
   kind: 'logical';
-  op: '&&' | '||';
+  operator: '&&' | '||';
   left: IrExpr;
   right: IrExpr;
 }
@@ -282,7 +282,7 @@ export interface IrLogical extends IrTyped {
 /** `&&` / `||` over 64-bit values, yielding the operand JS would yield. */
 export interface IrPick extends IrTyped {
   kind: 'pick';
-  op: '&&' | '||';
+  operator: '&&' | '||';
   left: IrExpr;
   right: IrExpr;
 }

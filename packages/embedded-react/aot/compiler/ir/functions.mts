@@ -81,7 +81,7 @@ export type IrAnimationCallback =
  */
 export interface IrDepEffect {
   id: number;
-  deps: IrExpr[];
+  dependencies: IrExpr[];
   body: IrStmt[];
   /** It ends in a `return () => …`, so each run first runs the last run's cleanup, if that run reached it. */
   hasCleanup: boolean;

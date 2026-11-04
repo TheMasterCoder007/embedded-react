@@ -90,7 +90,7 @@ function readSource(source: IrSource, found: ReadsFound): void {
       found.untracked = true;
       return;
     case 'fixed':
-      readExpr(source.expr, found);
+      readExpr(source.expression, found);
       return;
     case 'unary':
       readSource(source.operand, found);
@@ -106,7 +106,7 @@ function readSource(source: IrSource, found: ReadsFound): void {
       readSource(source.alternate, found);
       return;
     case 'math':
-      source.args.forEach(arg => readSource(arg, found));
+      source.callArguments.forEach(argument => readSource(argument, found));
       return;
   }
 }
@@ -114,30 +114,30 @@ function readSource(source: IrSource, found: ReadsFound): void {
 /**
  * Records what an expression reads.
  *
- * @param expr  The expression.
+ * @param expression  The expression.
  * @param found  What the walk has found.
  */
-function readExpr(expr: IrExpr, found: ReadsFound): void {
-  switch (expr.kind) {
+function readExpr(expression: IrExpr, found: ReadsFound): void {
+  switch (expression.kind) {
     case 'number':
     case 'string':
     case 'boolean':
     case 'pi':
       return;
     case 'state':
-      found.states.add(expr.state);
+      found.states.add(expression.state);
       return;
     case 'boot':
       found.boot = true;
       return;
     case 'local':
-      readLocal(expr.local, found);
+      readLocal(expression.local, found);
       return;
     case 'listLength':
-      found.states.add(expr.list);
+      found.states.add(expression.list);
       return;
     case 'itemField':
-      readLocal(expr.item, found);
+      readLocal(expression.item, found);
       return;
     case 'ref':
     case 'clock':
@@ -151,11 +151,11 @@ function readExpr(expr: IrExpr, found: ReadsFound): void {
     case 'wholeRound':
     case 'trunc':
     case 'toInt':
-      readExpr(expr.operand, found);
+      readExpr(expression.operand, found);
       return;
     case 'helper':
     case 'floatMath':
-      expr.args.forEach(arg => readExpr(arg, found));
+      expression.callArguments.forEach(argument => readExpr(argument, found));
       return;
     case 'arithmetic':
     case 'floatDivide':
@@ -164,13 +164,13 @@ function readExpr(expr: IrExpr, found: ReadsFound): void {
     case 'stringEquals':
     case 'logical':
     case 'pick':
-      readExpr(expr.left, found);
-      readExpr(expr.right, found);
+      readExpr(expression.left, found);
+      readExpr(expression.right, found);
       return;
     case 'conditional':
-      readExpr(expr.test, found);
-      readExpr(expr.consequent, found);
-      readExpr(expr.alternate, found);
+      readExpr(expression.test, found);
+      readExpr(expression.consequent, found);
+      readExpr(expression.alternate, found);
       return;
   }
 }

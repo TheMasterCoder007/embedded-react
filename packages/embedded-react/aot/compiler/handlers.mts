@@ -53,6 +53,7 @@ import {
   checkedTapeNumber,
   checkVectorPaints,
   vectorPaintOf,
+  DEFAULT_MITER_LIMIT,
 } from './svg.mts';
 import {armedFlag} from './ir/functions.mts';
 import type * as t from '@babel/types';
@@ -103,7 +104,7 @@ import type {
 const ZERO: IrExpr = {kind: 'number', value: 0, type: INT};
 
 /** Each updateVector shape key and the numbers its array takes, for errors. */
-const UPDATE_VECTOR_ARGS: Record<string, string> = {
+const UPDATE_VECTOR_ARGUMENTS: Record<string, string> = {
   arc: '[cx, cy, r, startAngle, endAngle]',
   circle: '[cx, cy, r]',
   rect: '[x, y, width, height] or [x, y, width, height, rx, ry]',
@@ -119,16 +120,16 @@ const UPDATE_VECTOR_ARGS: Record<string, string> = {
  *
  * @param listState  The list state.
  * @param nextList  The setter's argument: the list's next value.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The statements.
  */
 function lowerListOp(
   listState: ListState,
   nextList: t.CallExpression['arguments'][number],
-  env: Env,
+  environment: Env,
 ): IrStmt[] {
-  const {cap: capacity, struct} = listState;
+  const {capacity: capacity, struct} = listState;
 
   // setItems([...items, a, b]) — append; setItems([]) — clear.
   if (nextList.type === 'ArrayExpression') {
@@ -183,17 +184,17 @@ function lowerListOp(
                 },
           );
         } else if (field.kind === 'string') {
-          const text = lowerText(valueNode, env);
+          const text = lowerText(valueNode, environment);
           checkConstantFits(
             text,
             `field "${field.key}" of list state "${listState.name}"`,
-            env,
+            environment,
           );
           values.push({field, text});
         } else {
           values.push({
             field,
-            value: storeValue(lowerExpr(valueNode, env), field.kind),
+            value: storeValue(lowerExpr(valueNode, environment), field.kind),
           });
         }
       }
@@ -212,7 +213,7 @@ function lowerListOp(
     (nextList.callee.property as t.Identifier).name === 'slice'
   ) {
     const [start, end] = nextList.arguments;
-    if (start && staticInt(start, env) !== 0) {
+    if (start && staticInt(start, environment) !== 0) {
       throw aotError(
         `AOT: only ${listState.name}.slice(0, end) is supported on a list`,
         `a list is a fixed pool and a count, so a slice can only drop items from the end — ` +
@@ -223,7 +224,7 @@ function lowerListOp(
     if (!end) return [];
 
     // Settle a constant end here, clamped to ±capacity (past which nothing changes), so it needs no 64-bit math.
-    const staticEnd = staticInt(end, env);
+    const staticEnd = staticInt(end, environment);
     if (staticEnd !== null) {
       const clampedEnd = Math.max(-capacity, Math.min(capacity, staticEnd));
       if (clampedEnd === -1) {
@@ -243,7 +244,11 @@ function lowerListOp(
 
     // A runtime end applies the same JS rules when it runs.
     return [
-      {kind: 'sliceItems', list: listState, end: asInt(lowerExpr(end, env))},
+      {
+        kind: 'sliceItems',
+        list: listState,
+        end: asInt(lowerExpr(end, environment)),
+      },
     ];
   }
 
@@ -266,39 +271,39 @@ function blockList(node: t.Statement): t.Statement[] {
 
 /**
  * Checks a value written to a numeric state or ref slot, whose kind came from its initial value. Every value
- * written to an int slot is recorded in env.stores, from which the typing pass infers the slots that hold a
+ * written to an int slot is recorded in environment.stores, from which the typing pass infers the slots that hold a
  * 64-bit timestamp, and compileWidened compiles again with those slots widened to 64 bits. A timestamp cannot
  * go into a float or boolean slot (a 64-bit constant can go into a float one), and a widened slot takes no
  * floats.
  *
  * @param lowered  The value: its source, and its type.
  * @param slotType  The slot's kind.
- * @param isBool  The slot holds a boolean.
+ * @param isBoolean  The slot holds a boolean.
  * @param widened  What the slot holds, if it was widened to 64 bits.
- * @param slotName  The slot's name, for env.stores.
+ * @param slotName  The slot's name, for environment.stores.
  * @param slotDescription  The slot, for the message.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  */
 function storeCheck(
-  lowered: {source: IrSource; expr: IrExpr},
+  lowered: {source: IrSource; expression: IrExpr},
   slotType: SlotKind,
-  isBool: boolean,
+  isBoolean: boolean,
   widened: WideSlot | undefined,
   slotName: string,
   slotDescription: string,
-  env: Env,
+  environment: Env,
 ): void {
-  const value = lowered.expr;
-  if ((slotType === 'int' && !isBool) || widened === 'number') {
-    env.stores.push({
+  const value = lowered.expression;
+  if ((slotType === 'int' && !isBoolean) || widened === 'number') {
+    environment.stores.push({
       slot: slotName,
       value: lowered.source,
-      math64: Boolean(env.math64),
+      math64: Boolean(environment.math64),
     });
   }
 
   if (value.type.kind === 'int64' && slotType !== 'i64') {
-    if (slotType === 'int' && !isBool) return;
+    if (slotType === 'int' && !isBoolean) return;
 
     if (isConvertible64(value.type) && slotType === 'float') return;
 
@@ -356,18 +361,18 @@ const refRead = (ref: RefRecord): IrExpr => ({
  *
  * @param text  The text written.
  * @param what  What it is written into, for the error.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  */
-function checkConstantFits(text: IrText, what: string, env: Env): void {
+function checkConstantFits(text: IrText, what: string, environment: Env): void {
   const constant = constantText(text);
   if (constant === null) {
     return;
   }
 
   const bytes = Buffer.byteLength(constant, 'utf8');
-  if (bytes >= env.caps.listStrCap) {
+  if (bytes >= environment.caps.listStrCap) {
     throw aotError(
-      `AOT: ${what} is set to a ${bytes}-byte string, but a string holds ${env.caps.listStrCap - 1} bytes`,
+      `AOT: ${what} is set to a ${bytes}-byte string, but a string holds ${environment.caps.listStrCap - 1} bytes`,
       'raise ER_AOT_LIST_STR_CAP (the listStrCap option), or shorten the string.',
     );
   }
@@ -379,30 +384,32 @@ function checkConstantFits(text: IrText, what: string, env: Env): void {
  *
  * @param scalarState  The state slot.
  * @param valueNode  The value.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The write.
  */
 function lowerScalarSet(
   scalarState: ScalarState,
   valueNode: t.Node,
-  env: Env,
+  environment: Env,
 ): IrStmt {
   if (scalarState.slotKind !== 'string') {
     // A 64-bit slot takes int `+ - *` worked out in 64 bits.
     const lowered = lowerSource(
       valueNode,
-      scalarState.slotKind === 'i64' ? {...env, math64: true} : env,
+      scalarState.slotKind === 'i64'
+        ? {...environment, math64: true}
+        : environment,
     );
-    const value = lowered.expr;
+    const value = lowered.expression;
     storeCheck(
       lowered,
       scalarState.slotKind,
-      scalarState.isBool,
+      scalarState.isBoolean,
       scalarState.widened,
       scalarState.slotName,
       `state "${scalarState.name}"`,
-      env,
+      environment,
     );
 
     return {
@@ -412,8 +419,8 @@ function lowerScalarSet(
     };
   }
 
-  const text = lowerText(valueNode, env);
-  checkConstantFits(text, `state "${scalarState.name}"`, env);
+  const text = lowerText(valueNode, environment);
+  checkConstantFits(text, `state "${scalarState.name}"`, environment);
   return {
     kind: 'setStateText',
     state: scalarState,
@@ -425,22 +432,22 @@ function lowerScalarSet(
  * Resolves `node` to its ref when it is `<ref>.current` member access on a known value ref.
  *
  * @param node  An assignment or update target.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  *
  * @returns The ref, marked used, or null when the node is not such an access.
  */
 function refTarget(
   node: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
 ): RefRecord | null {
   if (
     node?.type === 'MemberExpression' &&
     !node.computed &&
     node.object.type === 'Identifier' &&
     (node.property as t.Identifier).name === 'current' &&
-    env.refs?.has(node.object.name)
+    environment.refs?.has(node.object.name)
   ) {
-    const ref = env.refs.get(node.object.name)!;
+    const ref = environment.refs.get(node.object.name)!;
     ref.used = true;
     return ref;
   }
@@ -455,14 +462,14 @@ function refTarget(
  * be unique in the handler block they are written into.
  *
  * @param shapeNode  The shape's object literal.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param tag  Names the shape's locals.
  *
  * @returns The shape's tape slots, the locals they need, and its paint.
  */
 function imperativeShape(
   shapeNode: t.Node | null | undefined,
-  env: Env,
+  environment: Env,
   tag: string,
 ): IrGeometry & {paint: IrVectorPaint} {
   // Index the shape's properties by name.
@@ -493,7 +500,7 @@ function imperativeShape(
     }
 
     const elements = (props[key] as t.ArrayExpression).elements;
-    const shapeHint = `${key}: ${UPDATE_VECTOR_ARGS[key]}.`;
+    const shapeHint = `${key}: ${UPDATE_VECTOR_ARGUMENTS[key]}.`;
     if (elements.length < required) {
       throw aotError(
         `AOT: updateVector "${key}" needs ${required} numbers (got ${elements.length})`,
@@ -510,7 +517,7 @@ function imperativeShape(
         );
       }
 
-      return {kind: 'float', value: lowerExpr(valueNode, env)};
+      return {kind: 'float', value: lowerExpr(valueNode, environment)};
     });
   };
   let geometry: IrGeometry;
@@ -532,9 +539,9 @@ function imperativeShape(
     geometry = {entries: lineTape(x1, y1, x2, y2), locals: []};
   } else if (props.path) {
     geometry = {
-      entries: parsePath(String(evalStatic(props.path, env.consts ?? {}))).map(
-        (value: number) => checkedTapeNumber(value),
-      ),
+      entries: parsePath(
+        String(evalStatic(props.path, environment.constants ?? {})),
+      ).map((value: number) => checkedTapeNumber(value)),
       locals: [],
     };
   } else {
@@ -547,7 +554,7 @@ function imperativeShape(
   const paintValue = (key: string, fallback: unknown): unknown => {
     if (props[key] == null) return fallback;
     try {
-      return evalStatic(props[key], env.consts ?? {});
+      return evalStatic(props[key], environment.constants ?? {});
     } catch {
       throw new Error(`AOT: updateVector paint "${key}" must be static`);
     }
@@ -556,7 +563,7 @@ function imperativeShape(
     parseColor(paintValue('fill', 'none')),
     parseColor(paintValue('stroke', 'none')),
     svgNum(paintValue('strokeWidth', 1), 1),
-    svgNum(paintValue('miter', 4), 4),
+    svgNum(paintValue('miter', DEFAULT_MITER_LIMIT), DEFAULT_MITER_LIMIT),
     CAP_MAP[paintValue('cap', 'butt') as string] ?? 0,
     JOIN_MAP[paintValue('join', 'miter') as string] ?? 0,
     paintValue('fillRule', 'nonzero') === 'evenodd' ? 1 : 0,
@@ -570,21 +577,24 @@ function imperativeShape(
  * (optionally) hint the dirty sub-rect — the imperative fast path (drag) that bypasses the update. The call's
  * tables are declared here.
  *
- * @param expr  The updateVector call.
- * @param env  The expression environment.
- * @param ctx  The statement compiler's context.
+ * @param expression  The updateVector call.
+ * @param environment  The expression environment.
+ * @param context  The statement compiler's context.
  *
  * @returns The statement.
  */
 function lowerUpdateVector(
-  expr: t.CallExpression,
-  env: Env,
-  ctx: StatementContext,
+  expression: t.CallExpression,
+  environment: Env,
+  context: StatementContext,
 ): IrUpdateVector {
   // The first argument must be a node ref, and the second an array literal of shapes.
-  const out = ctx.out;
-  const [refArg, shapesArg, dirtyArg] = expr.arguments;
-  const ref = refArg?.type === 'Identifier' ? env.refs?.get(refArg.name) : null;
+  const output = context.output;
+  const [refArgument, shapesArgument, dirtyArgument] = expression.arguments;
+  const ref =
+    refArgument?.type === 'Identifier'
+      ? environment.refs?.get(refArgument.name)
+      : null;
   if (ref?.kind !== 'node') {
     throw new Error(
       'AOT: updateVector(ref, …) first arg must be a node ref (const r = useRef())',
@@ -592,14 +602,14 @@ function lowerUpdateVector(
   }
 
   ref.used = true;
-  if (shapesArg?.type !== 'ArrayExpression') {
+  if (shapesArgument?.type !== 'ArrayExpression') {
     throw new Error(
       'AOT: updateVector(ref, shapes, …) shapes must be an array literal',
     );
   }
 
   // Claim the id first so two updateVector calls in one handler get distinct locals, then lower each shape.
-  const vectorId = out.svgN++;
+  const vectorId = output.svgCount++;
   const update: IrUpdateVector = {
     kind: 'updateVector',
     id: vectorId,
@@ -609,15 +619,15 @@ function lowerUpdateVector(
     paints: [],
     dirty: null,
   };
-  for (const shapeNode of shapesArg.elements) {
+  for (const shapeNode of shapesArgument.elements) {
     const shape = imperativeShape(
       shapeNode,
-      env,
+      environment,
       `uv${vectorId}_${update.paints.length}`,
     );
     update.locals.push(...shape.locals);
     update.tape.push(
-      {kind: 'op', op: 'ER_VOP_SHAPE'},
+      {kind: 'op', operation: 'ER_VOP_SHAPE'},
       checkedTapeNumber(update.paints.length),
       ...shape.entries,
     );
@@ -626,24 +636,27 @@ function lowerUpdateVector(
 
   // Declare the op-tape and its paint table.
   checkVectorPaints(update.paints);
-  out.vectors.push({kind: 'updateVector', update});
+  output.vectors.push({kind: 'updateVector', update});
 
   // Hint the dirty sub-rect when the call gives one.
-  if (dirtyArg) {
-    if (dirtyArg.type !== 'ArrayExpression' || dirtyArg.elements.length < 4) {
+  if (dirtyArgument) {
+    if (
+      dirtyArgument.type !== 'ArrayExpression' ||
+      dirtyArgument.elements.length < 4
+    ) {
       throw new Error(
         'AOT: updateVector dirtyRect must be a [x, y, w, h] array literal',
       );
     }
 
-    update.dirty = dirtyArg.elements.slice(0, 4).map((edgeNode, edge) => {
+    update.dirty = dirtyArgument.elements.slice(0, 4).map((edgeNode, edge) => {
       if (!edgeNode) {
         throw aotError(
           `AOT: updateVector dirtyRect has an empty slot at position ${edge}`,
         );
       }
 
-      return lowerExpr(edgeNode, env);
+      return lowerExpr(edgeNode, environment);
     });
   }
 
@@ -653,21 +666,21 @@ function lowerUpdateVector(
 /**
  * Lowers setInterval/setTimeout(cb, ms) to a timer, and registers cb as a timer function of its own.
  *
- * @param expr  The setInterval / setTimeout call.
- * @param env  The expression environment.
+ * @param expression  The setInterval / setTimeout call.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  *
  * @returns The timer.
  */
 function lowerTimer(
-  expr: t.CallExpression,
-  env: Env,
+  expression: t.CallExpression,
+  environment: Env,
   state: StateTable,
-  ctx: StatementContext,
+  context: StatementContext,
 ): IrTimer {
-  const cb = expr.arguments[0];
-  if (!isFn(cb)) {
+  const callback = expression.arguments[0];
+  if (!isFn(callback)) {
     throw aotError(
       'AOT: a setInterval/setTimeout callback must be an inline function',
       'pass an inline arrow, e.g. setInterval(() => setTick((t) => t + 1), 1000).',
@@ -675,17 +688,23 @@ function lowerTimer(
   }
 
   // Any delay is accepted here; the printer converts a timestamp or float one the way Flow A's setTimeout does.
-  const delay = expr.arguments[1]
-    ? lowerExprWide(expr.arguments[1], env)
+  const delay = expression.arguments[1]
+    ? lowerExprWide(expression.arguments[1], environment)
     : null;
-  const isRepeating = (expr.callee as t.Identifier).name === 'setInterval';
+  const isRepeating =
+    (expression.callee as t.Identifier).name === 'setInterval';
 
   // Reserve the timer's slot before compiling its body, which may add timers of its own.
-  const slot = ctx.out.timerFns.length;
-  const timerFnName = `timer_${slot}`;
-  ctx.out.timerFns.push({name: timerFnName, callback: null});
-  ctx.out.timerFns[slot].callback = lowerHandler(cb, env, state, ctx.out);
-  return {delay, isRepeating, fn: timerFnName};
+  const slot = context.output.timerFunctions.length;
+  const timerFunctionName = `timer_${slot}`;
+  context.output.timerFunctions.push({name: timerFunctionName, callback: null});
+  context.output.timerFunctions[slot].callback = lowerHandler(
+    callback,
+    environment,
+    state,
+    context.output,
+  );
+  return {delay, isRepeating, functionName: timerFunctionName};
 }
 
 /**
@@ -694,24 +713,24 @@ function lowerTimer(
  *
  * @param helperName  The helper's name.
  * @param helper  The helper.
- * @param args  The call's arguments.
- * @param env  The expression environment.
+ * @param callArguments  The call's arguments.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  *
  * @returns The helper's body as statements.
  */
 function inlineHelperCall(
   helperName: string,
   helper: FunctionNode,
-  args: t.CallExpression['arguments'],
-  env: Env,
+  callArguments: t.CallExpression['arguments'],
+  environment: Env,
   state: StateTable,
-  ctx: StatementContext,
+  context: StatementContext,
 ): IrStmt[] {
   // A helper already being inlined further up this call chain is recursive.
-  ctx.inlining = ctx.inlining ?? new Set();
-  if (ctx.inlining.has(helperName)) {
+  context.inlining = context.inlining ?? new Set();
+  if (context.inlining.has(helperName)) {
     throw aotError(
       `AOT: helper "${helperName}" is recursive — can't be inlined into a handler`,
       'handlers are flattened to straight-line code, so a helper that calls itself (directly ' +
@@ -721,9 +740,9 @@ function inlineHelperCall(
   }
 
   // Bind each passed argument to its parameter as a local holding the argument's expression.
-  const locals = new Map<string, Local>(env.locals);
-  helper.params.forEach((param, paramIndex) => {
-    if (param.type !== 'Identifier') {
+  const locals = new Map<string, Local>(environment.locals);
+  helper.params.forEach((parameter, parameterIndex) => {
+    if (parameter.type !== 'Identifier') {
       throw aotError(
         `AOT: helper "${helperName}" must take simple (identifier) params to be inlined`,
         'a helper called from a handler must use plain positional params (e.g. `(a, b) => …`) ' +
@@ -731,15 +750,18 @@ function inlineHelperCall(
       );
     }
 
-    if (args[paramIndex]) {
-      const argExpr = lowerSourcedWide(args[paramIndex], env);
-      locals.set(param.name, {
-        slotKind: argExpr.slotKind,
-        isBool: argExpr.isBool,
-        lit: argExpr.lit,
-        wide: argExpr.wide,
-        source: argExpr.source,
-        expr: argExpr.expr,
+    if (callArguments[parameterIndex]) {
+      const argumentExpression = lowerSourcedWide(
+        callArguments[parameterIndex],
+        environment,
+      );
+      locals.set(parameter.name, {
+        slotKind: argumentExpression.slotKind,
+        isBoolean: argumentExpression.isBoolean,
+        isLiteral: argumentExpression.isLiteral,
+        wide: argumentExpression.wide,
+        source: argumentExpression.source,
+        expression: argumentExpression.expression,
       });
     }
   });
@@ -752,14 +774,14 @@ function inlineHelperCall(
       : [{type: 'ExpressionStatement', expression: body}];
 
   // The body is spliced into the caller, so reject its `return`, even in an effect body where one is allowed.
-  const outerAllowReturn = ctx.allowReturn;
-  ctx.inlining.add(helperName);
-  ctx.allowReturn = false;
+  const outerAllowReturn = context.allowReturn;
+  context.inlining.add(helperName);
+  context.allowReturn = false;
   try {
-    return lowerStmts(statements, {...env, locals}, state, ctx);
+    return lowerStmts(statements, {...environment, locals}, state, context);
   } finally {
-    ctx.allowReturn = outerAllowReturn;
-    ctx.inlining.delete(helperName);
+    context.allowReturn = outerAllowReturn;
+    context.inlining.delete(helperName);
   }
 }
 
@@ -767,38 +789,39 @@ function inlineHelperCall(
  * Lowers one handler ExpressionStatement: a state setter, ref mutation, timer, updateVector, helper call, or
  * Animated.*(...).start() / .stop() (see lowerHandlerExpr, the located entry point).
  *
- * @param expr  The statement's expression.
- * @param env  The expression environment.
+ * @param expression  The statement's expression.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  *
  * @returns The statements.
  */
 function lowerHandlerExprImpl(
-  expr: t.Expression,
-  env: Env,
+  expression: t.Expression,
+  environment: Env,
   state: StateTable,
-  ctx: StatementContext,
+  context: StatementContext,
 ): IrStmt[] {
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
   if (
-    expr.type === 'CallExpression' &&
-    expr.callee.type === 'Identifier' &&
-    expr.callee.name === 'updateVector'
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'Identifier' &&
+    expression.callee.name === 'updateVector'
   ) {
-    return [lowerUpdateVector(expr, env, ctx)];
+    return [lowerUpdateVector(expression, environment, context)];
   }
 
   // setInterval / setTimeout(cb, ms) → register a host-tick timer (the returned id is discarded here).
   if (
-    expr.type === 'CallExpression' &&
-    expr.callee.type === 'Identifier' &&
-    (expr.callee.name === 'setInterval' || expr.callee.name === 'setTimeout')
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'Identifier' &&
+    (expression.callee.name === 'setInterval' ||
+      expression.callee.name === 'setTimeout')
   ) {
     return [
       {
         kind: 'startTimer',
-        timer: lowerTimer(expr, env, state, ctx),
+        timer: lowerTimer(expression, environment, state, context),
         idLocal: null,
       },
     ];
@@ -806,17 +829,22 @@ function lowerHandlerExprImpl(
 
   // clearInterval / clearTimeout(id) → deactivate the timer slot.
   if (
-    expr.type === 'CallExpression' &&
-    expr.callee.type === 'Identifier' &&
-    (expr.callee.name === 'clearInterval' ||
-      expr.callee.name === 'clearTimeout')
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'Identifier' &&
+    (expression.callee.name === 'clearInterval' ||
+      expression.callee.name === 'clearTimeout')
   ) {
-    return [{kind: 'clearTimer', id: asInt(lowerExpr(expr.arguments[0], env))}];
+    return [
+      {
+        kind: 'clearTimer',
+        id: asInt(lowerExpr(expression.arguments[0], environment)),
+      },
+    ];
   }
 
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
-  if (expr.type === 'AssignmentExpression') {
-    const ref = refTarget(expr.left, env);
+  if (expression.type === 'AssignmentExpression') {
+    const ref = refTarget(expression.left, environment);
     if (!ref) {
       throw new Error(
         'AOT: the only assignment allowed in a handler is `ref.current = ...`',
@@ -824,20 +852,25 @@ function lowerHandlerExprImpl(
     }
 
     // Lower the right side in the ref's width and check it fits; a 64-bit `%=` keeps its constant divisor.
-    const refEnv = ref.slotKind === 'i64' ? {...env, math64: true} : env;
-    const loweredValue = lowerSource(expr.right, refEnv);
-    const valueExpr = loweredValue.expr;
+    const refEnvironment =
+      ref.slotKind === 'i64' ? {...environment, math64: true} : environment;
+    const loweredValue = lowerSource(expression.right, refEnvironment);
+    const valueExpression = loweredValue.expression;
     const refHoldsTime = isTime(refType(ref));
-    if (expr.operator === '/=' && (refHoldsTime || isTime64(valueExpr))) {
+    if (
+      expression.operator === '/=' &&
+      (refHoldsTime || isTime64(valueExpression))
+    ) {
       throw aotError(
         'AOT: `/=` on a 64-bit time value is not supported',
         'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
       );
     }
 
-    const wideModDivisor =
-      expr.operator === '%=' && (refHoldsTime || isTime64(valueExpr))
-        ? constDivisor(expr.right, env)
+    const wideModuloDivisor =
+      expression.operator === '%=' &&
+      (refHoldsTime || isTime64(valueExpression))
+        ? constDivisor(expression.right, environment)
         : null;
     storeCheck(
       loweredValue,
@@ -845,41 +878,42 @@ function lowerHandlerExprImpl(
       false,
       ref.kind === 'value' ? ref.widened : undefined,
       ref.slotName,
-      `ref "${((expr.left as t.MemberExpression).object as t.Identifier).name}"`,
-      env,
+      `ref "${((expression.left as t.MemberExpression).object as t.Identifier).name}"`,
+      environment,
     );
 
     // Lower whole-ref `+= -= *=`, float `/=` and float `%=` as the binary op to share its checked and float math.
     const isWholeRef = ref.slotKind === 'int' || ref.slotKind === 'i64';
-    const binaryOp = (
+    const binaryOperation = (
       {'+=': '+', '-=': '-', '*=': '*'} as Record<string, string>
-    )[expr.operator];
-    const isFloatMod =
-      expr.operator === '%=' &&
-      (ref.slotKind === 'float' || valueExpr.type.kind === 'float');
+    )[expression.operator];
+    const isFloatModulo =
+      expression.operator === '%=' &&
+      (ref.slotKind === 'float' || valueExpression.type.kind === 'float');
     if (
       (isWholeRef &&
-        (binaryOp ||
-          (expr.operator === '/=' && valueExpr.type.kind === 'float'))) ||
-      isFloatMod
+        (binaryOperation ||
+          (expression.operator === '/=' &&
+            valueExpression.type.kind === 'float'))) ||
+      isFloatModulo
     ) {
-      const resultExpr = lowerExprWide(
+      const resultExpression = lowerExprWide(
         {
           type: 'BinaryExpression',
-          operator: binaryOp ?? expr.operator.slice(0, -1),
-          left: expr.left,
-          right: expr.right,
-          loc: expr.loc,
+          operator: binaryOperation ?? expression.operator.slice(0, -1),
+          left: expression.left,
+          right: expression.right,
+          loc: expression.loc,
         } as t.BinaryExpression,
-        refEnv,
+        refEnvironment,
       );
 
       return [
         {
           kind: 'writeRef',
           ref,
-          op: '=',
-          value: storeValue(resultExpr, ref.slotKind as SlotKind),
+          operator: '=',
+          value: storeValue(resultExpression, ref.slotKind as SlotKind),
         },
       ];
     }
@@ -887,29 +921,29 @@ function lowerHandlerExprImpl(
     // Whole-number `/=` and `%=` use the checked helpers for JS's answer, in 64 bits on a 64-bit ref that holds no
     // time; a constant divisor other than 0 or -1 needs no check.
     const isWholeValue =
-      isIntSlot(valueExpr.type) ||
-      (valueExpr.type.kind === 'int64' && !isTime64(valueExpr));
+      isIntSlot(valueExpression.type) ||
+      (valueExpression.type.kind === 'int64' && !isTime64(valueExpression));
     const refBits = ref.slotKind === 'i64' ? 64 : 32;
     if (
-      ((ref.slotKind === 'int' && isIntSlot(valueExpr.type)) ||
+      ((ref.slotKind === 'int' && isIntSlot(valueExpression.type)) ||
         (ref.slotKind === 'i64' && !refHoldsTime && isWholeValue)) &&
-      (expr.operator === '/=' || expr.operator === '%=')
+      (expression.operator === '/=' || expression.operator === '%=')
     ) {
-      const staticDivisor = staticInt(expr.right, env);
+      const staticDivisor = staticInt(expression.right, environment);
       if (
-        expr.operator === '/=' &&
+        expression.operator === '/=' &&
         (staticDivisor === null || staticDivisor === 0 || staticDivisor === -1)
       ) {
         return [
           {
             kind: 'writeRef',
             ref,
-            op: '=',
+            operator: '=',
             value: {
               kind: 'helper',
               helper: 'div',
               bits: refBits,
-              args: [refRead(ref), valueExpr],
+              callArguments: [refRead(ref), valueExpression],
               type: refType(ref),
             },
           },
@@ -917,23 +951,23 @@ function lowerHandlerExprImpl(
       }
 
       if (
-        expr.operator === '%=' &&
+        expression.operator === '%=' &&
         (staticDivisor === 0 || staticDivisor === -1)
       ) {
-        return [{kind: 'writeRef', ref, op: '=', value: ZERO}];
+        return [{kind: 'writeRef', ref, operator: '=', value: ZERO}];
       }
 
-      if (expr.operator === '%=' && staticDivisor === null) {
+      if (expression.operator === '%=' && staticDivisor === null) {
         return [
           {
             kind: 'writeRef',
             ref,
-            op: '=',
+            operator: '=',
             value: {
               kind: 'helper',
               helper: 'mod',
               bits: refBits,
-              args: [refRead(ref), valueExpr],
+              callArguments: [refRead(ref), valueExpression],
               type: refType(ref),
             },
           },
@@ -942,8 +976,12 @@ function lowerHandlerExprImpl(
     }
 
     // A 64-bit `%=` by 0 or ±1 stores 0: no remainder, JS's NaN as 0, and no overflow on INT64_MIN % -1.
-    if (wideModDivisor === 0 || wideModDivisor === 1 || wideModDivisor === -1) {
-      return [{kind: 'writeRef', ref, op: '=', value: ZERO}];
+    if (
+      wideModuloDivisor === 0 ||
+      wideModuloDivisor === 1 ||
+      wideModuloDivisor === -1
+    ) {
+      return [{kind: 'writeRef', ref, operator: '=', value: ZERO}];
     }
 
     // Everything else is a plain assignment or compound assignment.
@@ -951,18 +989,18 @@ function lowerHandlerExprImpl(
       {
         kind: 'writeRef',
         ref,
-        op: expr.operator,
+        operator: expression.operator,
         value:
-          expr.operator === '='
-            ? storeValue(valueExpr, ref.slotKind as SlotKind)
-            : valueExpr,
+          expression.operator === '='
+            ? storeValue(valueExpression, ref.slotKind as SlotKind)
+            : valueExpression,
       },
     ];
   }
 
   // `ref.current++` / `ref.current--`; a whole-number ref steps through the checked `+ 1` / `- 1`.
-  if (expr.type === 'UpdateExpression') {
-    const ref = refTarget(expr.argument, env);
+  if (expression.type === 'UpdateExpression') {
+    const ref = refTarget(expression.argument, environment);
     if (!ref) {
       throw new Error(
         'AOT: the only ++/-- allowed in a handler is on `ref.current`',
@@ -974,48 +1012,58 @@ function lowerHandlerExprImpl(
         {
           kind: 'writeRef',
           ref,
-          op: '=',
+          operator: '=',
           value: {
             kind: 'helper',
-            helper: expr.operator === '++' ? 'add' : 'sub',
+            helper: expression.operator === '++' ? 'add' : 'sub',
             bits: ref.slotKind === 'i64' ? 64 : 32,
-            args: [refRead(ref), {kind: 'number', value: 1, type: INT}],
+            callArguments: [
+              refRead(ref),
+              {kind: 'number', value: 1, type: INT},
+            ],
             type: refType(ref),
           },
         },
       ];
     }
 
-    return [{kind: 'stepRef', ref, op: expr.operator}];
+    return [{kind: 'stepRef', ref, operator: expression.operator}];
   }
 
   // `anim.stop()` freezes each driven value; the cancel reports !finished, which ends any sequence or loop chain.
   if (
-    expr.type === 'CallExpression' &&
-    expr.callee.type === 'MemberExpression' &&
-    (expr.callee.property as t.Identifier).name === 'stop' &&
-    isAnimatedCall(resolveAnim(expr.callee.object, env))
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'MemberExpression' &&
+    (expression.callee.property as t.Identifier).name === 'stop' &&
+    isAnimatedCall(resolveAnim(expression.callee.object, environment))
   ) {
     return [
       {
         kind: 'stopAnimations',
-        handles: [...animValues(expr.callee.object, env)],
-        waitOwner: stopWaitOwner(expr.callee.object, env, ctx),
+        handles: [...animValues(expression.callee.object, environment)],
+        waitOwner: stopWaitOwner(
+          expression.callee.object,
+          environment,
+          context,
+        ),
       },
     ];
   }
 
   // Animated.*(…).start(), atomic or composed, is native-driven, so it sets no state and needs no update.
   if (
-    expr.type === 'CallExpression' &&
-    expr.callee.type === 'MemberExpression' &&
-    (expr.callee.property as t.Identifier).name === 'start'
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'MemberExpression' &&
+    (expression.callee.property as t.Identifier).name === 'start'
   ) {
-    return [lowerAnimateStart(expr, env, state, ctx)];
+    return [lowerAnimateStart(expression, environment, state, context)];
   }
 
   // What is left must be a plain call: to a helper or a state setter.
-  if (expr.type !== 'CallExpression' || expr.callee.type !== 'Identifier') {
+  if (
+    expression.type !== 'CallExpression' ||
+    expression.callee.type !== 'Identifier'
+  ) {
     throw aotError(
       'AOT: a handler statement must be a state setter, a ref write, or Animated.timing/spring(...).start()',
       'each statement in a handler must be one of: setX(value) / setX(prev => …), a ' +
@@ -1025,147 +1073,164 @@ function lowerHandlerExprImpl(
   }
 
   // A call to a helper / useCallback (e.g. `reset();`) → inline its body here so handlers can compose logic.
-  const helperFn =
-    env.helpers?.get(expr.callee.name) ?? env.callbacks?.get(expr.callee.name);
-  if (helperFn) {
+  const helperFunction =
+    environment.helpers?.get(expression.callee.name) ??
+    environment.callbacks?.get(expression.callee.name);
+  if (helperFunction) {
     return inlineHelperCall(
-      expr.callee.name,
-      helperFn,
-      expr.arguments,
-      env,
+      expression.callee.name,
+      helperFunction,
+      expression.arguments,
+      environment,
       state,
-      ctx,
+      context,
     );
   }
 
   // A state setter. Flag the state change, which tells the caller to re-apply state once the body is done.
-  const targetState = state.bySetter.get(expr.callee.name);
+  const targetState = state.bySetter.get(expression.callee.name);
   if (!targetState) {
     throw aotError(
-      `AOT: "${expr.callee.name}" is not a known state setter`,
+      `AOT: "${expression.callee.name}" is not a known state setter`,
       `a handler can only call a setter from this component's own useState (e.g. setCount), ` +
-        `a ref write, updateVector(…), or Animated…start(). "${expr.callee.name}" isn't one ` +
+        `a ref write, updateVector(…), or Animated…start(). "${expression.callee.name}" isn't one ` +
         `of those — arbitrary functions (fetch, console.*, helpers) can't be lowered.`,
     );
   }
 
-  ctx.stateChanged = true;
-  const setterArg = expr.arguments[0];
+  context.stateChanged = true;
+  const setterArgument = expression.arguments[0];
   if (targetState.kind === 'list') {
-    return lowerListOp(targetState, setterArg, env);
+    return lowerListOp(targetState, setterArgument, environment);
   }
 
   // A scalar setter takes either an updater function or the new value itself.
   if (
-    setterArg &&
-    (setterArg.type === 'ArrowFunctionExpression' ||
-      setterArg.type === 'FunctionExpression')
+    setterArgument &&
+    (setterArgument.type === 'ArrowFunctionExpression' ||
+      setterArgument.type === 'FunctionExpression')
   ) {
     // setState(prev => expr): bind the param to the current value, typed as a read of it, and assign the result.
-    const prevParam = (setterArg.params[0] as t.Identifier | undefined)?.name;
-    const locals = new Map<string, Local>(env.locals);
-    if (prevParam) {
-      locals.set(prevParam, {
+    const previousParameter = (
+      setterArgument.params[0] as t.Identifier | undefined
+    )?.name;
+    const locals = new Map<string, Local>(environment.locals);
+    if (previousParameter) {
+      locals.set(previousParameter, {
         slotKind: targetState.slotKind,
-        isBool: targetState.isBool,
-        ...(targetState.widened === 'number' ? {lit: true} : {}),
-        source: {kind: 'state', state: targetState, loc: undefined},
-        expr: {kind: 'state', state: targetState, type: stateType(targetState)},
+        isBoolean: targetState.isBoolean,
+        ...(targetState.widened === 'number' ? {isLiteral: true} : {}),
+        source: {kind: 'state', state: targetState, location: undefined},
+        expression: {
+          kind: 'state',
+          state: targetState,
+          type: stateType(targetState),
+        },
       });
     }
 
-    if (setterArg.body.type === 'BlockStatement') {
+    if (setterArgument.body.type === 'BlockStatement') {
       throw new Error(
         'AOT: updater function must be a single expression (for now)',
       );
     }
 
-    return [lowerScalarSet(targetState, setterArg.body, {...env, locals})];
+    return [
+      lowerScalarSet(targetState, setterArgument.body, {
+        ...environment,
+        locals,
+      }),
+    ];
   }
 
-  return [lowerScalarSet(targetState, setterArg, env)];
+  return [lowerScalarSet(targetState, setterArgument, environment)];
 }
 
 /** lowerHandlerExprImpl, with the expression's source location attached to any AOT error it throws. */
-const lowerHandlerExpr = withLoc(lowerHandlerExprImpl);
+const lowerHandlerExpression = withLoc(lowerHandlerExprImpl);
 
 /**
  * Lowers a list of handler statements to the IR. This one-statement lowering runs event handlers, effect bodies
  * (useEffect), timer callbacks, and inlined helper calls. Supports: `const x = expr` (a local, visible to later
  * statements), `if (cond) {...} else {...}`, state setters (list setters included), ref writes, timers,
- * updateVector() and Animated.*(...).start(). `ctx` accumulates `stateChanged` (→ a trailing update)
+ * updateVector() and Animated.*(...).start(). `context` accumulates `stateChanged` (→ a trailing update)
  * and `usedReturn` (an early `return` was lowered, so the body needs a
- * function of its own). `ctx.allowReturn` and `ctx.bodyList` mark which body a `return` may exit and which
+ * function of its own). `context.allowReturn` and `context.bodyList` mark which body a `return` may exit and which
  * statement of it is the tail.
  *
  * @param statements  The statements.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param ctx  The statement compiler's context.
+ * @param context  The statement compiler's context.
  *
  * @returns The lowered statements.
  */
 export function lowerStmts(
   statements: t.Statement[],
-  env: Env,
+  environment: Env,
   state: StateTable,
-  ctx: StatementContext,
+  context: StatementContext,
 ): IrStmt[] {
   const lowered: IrStmt[] = [];
   // What each statement lowers to is marked with where it is, once the next one starts.
   let from = 0;
-  let loc: SourcePosition | undefined;
+  let location: SourcePosition | undefined;
   for (
     let statementIndex = 0;
     statementIndex < statements.length;
     statementIndex++
   ) {
-    markLoc(lowered, from, loc);
+    markLoc(lowered, from, location);
     const statement = statements[statementIndex];
     from = lowered.length;
-    loc = startOf(statement);
+    location = startOf(statement);
 
     // `const x = …` declares a local that the statements after it can read.
     if (statement.type === 'VariableDeclaration') {
-      for (const decl of statement.declarations) {
-        if (decl.id.type !== 'Identifier') {
+      for (const declarator of statement.declarations) {
+        if (declarator.id.type !== 'Identifier') {
           throw new Error(
             'AOT: destructuring a handler local is not supported',
           );
         }
 
-        if (!decl.init) {
+        if (!declarator.init) {
           throw new Error('AOT: a handler local must have an initializer');
         }
 
         // `const anim = Animated.…` holds no value; `anim.start()`/`anim.stop()` compile the animation it names.
-        if (isAnimatedCall(decl.init)) {
-          const locals = new Map(env.locals);
-          locals.delete(decl.id.name);
-          env = {
-            ...env,
+        if (isAnimatedCall(declarator.init)) {
+          const locals = new Map(environment.locals);
+          locals.delete(declarator.id.name);
+          environment = {
+            ...environment,
             locals,
-            animLocals: new Map(env.animLocals).set(decl.id.name, decl.init),
+            animationLocals: new Map(environment.animationLocals).set(
+              declarator.id.name,
+              declarator.init,
+            ),
           };
           continue;
         }
 
         // A dep-driven effect's cleanup outlives the call, so the body's locals become slots.
-        const isHoisted = Boolean(ctx.hoist && statements === ctx.bodyList);
+        const isHoisted = Boolean(
+          context.hoist && statements === context.bodyList,
+        );
         const localName = isHoisted
-          ? `${ctx.hoist!.prefix}${decl.id.name}`
-          : `local_${decl.id.name}`;
+          ? `${context.hoist!.prefix}${declarator.id.name}`
+          : `local_${declarator.id.name}`;
 
         // `const id = setInterval/setTimeout(…)` is an int timer-id local, so a later clearInterval(id) resolves.
         if (
-          decl.init.type === 'CallExpression' &&
-          decl.init.callee.type === 'Identifier' &&
-          (decl.init.callee.name === 'setInterval' ||
-            decl.init.callee.name === 'setTimeout')
+          declarator.init.type === 'CallExpression' &&
+          declarator.init.callee.type === 'Identifier' &&
+          (declarator.init.callee.name === 'setInterval' ||
+            declarator.init.callee.name === 'setTimeout')
         ) {
           // The id is only needed for a later clear*(); a mount effect drops its cleanup, so mark it used.
           if (isHoisted) {
-            ctx.hoist!.decls.push({
+            context.hoist!.declarations.push({
               kind: 'local',
               name: localName,
               slotKind: 'int',
@@ -1173,12 +1238,12 @@ export function lowerStmts(
           }
           lowered.push({
             kind: 'startTimer',
-            timer: lowerTimer(decl.init, env, state, ctx),
+            timer: lowerTimer(declarator.init, environment, state, context),
             idLocal: {name: localName, isHoisted},
           });
-          env = {
-            ...env,
-            locals: new Map(env.locals).set(decl.id.name, {
+          environment = {
+            ...environment,
+            locals: new Map(environment.locals).set(declarator.id.name, {
               name: localName,
               slotKind: 'int',
             }),
@@ -1188,29 +1253,27 @@ export function lowerStmts(
         }
 
         // Any other initializer must lower to a number, a boolean or a string.
-        const {source: initSource, expr: initExpr} = lowerSource(
-          decl.init,
-          env,
-        );
-        if (initExpr.type.kind === 'string') {
-          if (initExpr.kind === 'string') {
+        const {source: initialSource, expression: initialExpression} =
+          lowerSource(declarator.init, environment);
+        if (initialExpression.type.kind === 'string') {
+          if (initialExpression.kind === 'string') {
             checkConstantFits(
-              {parts: [{kind: 'literal', text: initExpr.value}]},
-              `local "${decl.id.name}"`,
-              env,
+              {parts: [{kind: 'literal', text: initialExpression.value}]},
+              `local "${declarator.id.name}"`,
+              environment,
             );
           }
 
           // Copy into a buffer of its own; aliasing a state slot would hide a self-read like `setLabel(t + '!')`.
           if (isHoisted) {
-            ctx.hoist!.decls.push({
+            context.hoist!.declarations.push({
               kind: 'local',
               name: localName,
               slotKind: 'string',
             });
           }
         } else {
-          const slot = slotOf(initExpr.type);
+          const slot = slotOf(initialExpression.type);
           if (slot !== 'int' && slot !== 'float' && slot !== 'i64') {
             throw aotError(
               'AOT: a handler local must hold a number, a boolean or a string',
@@ -1219,7 +1282,7 @@ export function lowerStmts(
           }
 
           if (isHoisted) {
-            ctx.hoist!.decls.push({
+            context.hoist!.declarations.push({
               kind: 'local',
               name: localName,
               slotKind: slot,
@@ -1230,18 +1293,18 @@ export function lowerStmts(
         lowered.push({
           kind: 'declareLocal',
           name: localName,
-          init: initExpr,
+          initializer: initialExpression,
           isHoisted,
-          stringCap: env.caps.listStrCap,
+          stringCapacity: environment.caps.listStrCap,
         });
 
         // Later statements read the name as the local.
-        env = {
-          ...env,
-          locals: new Map(env.locals).set(decl.id.name, {
-            ...slotValueOf(initExpr),
+        environment = {
+          ...environment,
+          locals: new Map(environment.locals).set(declarator.id.name, {
+            ...slotValueOf(initialExpression),
             name: localName,
-            source: initSource,
+            source: initialSource,
           }),
         };
       }
@@ -1251,7 +1314,7 @@ export function lowerStmts(
 
     // A tail `return` is the cleanup, dropped on mount and armed if dep-driven; an earlier one is a guard.
     if (statement.type === 'ReturnStatement') {
-      if (!ctx.allowReturn) {
+      if (!context.allowReturn) {
         const error = aotError(
           'AOT: `return` is only supported inside a useEffect body',
           'a handler, timer, animation or inlined-helper body cannot return early — flatten the logic into if/else.',
@@ -1264,8 +1327,9 @@ export function lowerStmts(
       }
 
       const isTail =
-        statements === ctx.bodyList && statementIndex === statements.length - 1;
-      if (ctx.depDriven && isFn(statement.argument) && !isTail) {
+        statements === context.bodyList &&
+        statementIndex === statements.length - 1;
+      if (context.dependencyDriven && isFn(statement.argument) && !isTail) {
         const error = aotError(
           'AOT: a useEffect cleanup must be the last statement of the effect body',
           'a cleanup returned from inside an `if` would be dropped. Return `undefined` from the ' +
@@ -1280,30 +1344,35 @@ export function lowerStmts(
       }
 
       if (isTail) {
-        if (ctx.cleanup && isFn(statement.argument)) {
-          ctx.cleanup.emit(statement.argument, env);
-          lowered.push({kind: 'armCleanup', flag: ctx.cleanup.armed});
+        if (context.cleanup && isFn(statement.argument)) {
+          context.cleanup.emit(statement.argument, environment);
+          lowered.push({kind: 'armCleanup', flag: context.cleanup.armed});
         }
 
         continue;
       }
 
-      ctx.usedReturn = true;
+      context.usedReturn = true;
       lowered.push({kind: 'return'});
       continue;
     }
 
     // `if (…) { … } else { … }` lowers each branch in order: the test, then the consequent, then the alternate.
     if (statement.type === 'IfStatement') {
-      const test = lowerExprWide(statement.test, env);
+      const test = lowerExprWide(statement.test, environment);
       const consequent = lowerStmts(
         blockList(statement.consequent),
-        env,
+        environment,
         state,
-        ctx,
+        context,
       );
       const alternate = statement.alternate
-        ? lowerStmts(blockList(statement.alternate), env, state, ctx)
+        ? lowerStmts(
+            blockList(statement.alternate),
+            environment,
+            state,
+            context,
+          )
         : null;
       lowered.push({kind: 'if', test, consequent, alternate});
       continue;
@@ -1320,10 +1389,17 @@ export function lowerStmts(
       );
     }
 
-    lowered.push(...lowerHandlerExpr(statement.expression, env, state, ctx));
+    lowered.push(
+      ...lowerHandlerExpression(
+        statement.expression,
+        environment,
+        state,
+        context,
+      ),
+    );
   }
 
-  markLoc(lowered, from, loc);
+  markLoc(lowered, from, location);
   return lowered;
 }
 
@@ -1349,15 +1425,15 @@ function startOf(statement: t.Statement): SourcePosition | undefined {
  *
  * @param lowered  The statements lowered so far.
  * @param from  The first one the source statement lowered to.
- * @param loc  Where the source statement is.
+ * @param location  Where the source statement is.
  */
 function markLoc(
   lowered: IrStmt[],
   from: number,
-  loc: SourcePosition | undefined,
+  location: SourcePosition | undefined,
 ): void {
   for (let index = from; index < lowered.length; index++) {
-    lowered[index].loc ??= loc;
+    lowered[index].location ??= location;
   }
 }
 
@@ -1371,18 +1447,18 @@ function markLoc(
  *    A dep-driven `return () => …` becomes `effect_N_cleanup()`, run at the top of the next re-run.
  *
  * @param effect  The effect.
- * @param env  The expression environment.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param out  Everything emitted so far; the effect is added to it.
+ * @param output  Everything emitted so far; the effect is added to it.
  */
 export function lowerEffect(
   effect: EffectRecord,
-  env: Env,
+  environment: Env,
   state: StateTable,
-  out: Out,
+  output: Out,
 ): void {
   // An expression body is a single statement.
-  const body = effect.fn.body;
+  const body = effect.functionNode.body;
   const statements: t.Statement[] =
     body.type === 'BlockStatement'
       ? body.body
@@ -1390,217 +1466,242 @@ export function lowerEffect(
 
   // A mount-once effect (`[]`) runs once, from the build.
   const isMount =
-    effect.deps.type === 'ArrayExpression' && effect.deps.elements.length === 0;
+    effect.dependencies.type === 'ArrayExpression' &&
+    effect.dependencies.elements.length === 0;
   if (isMount) {
-    const ctx: StatementContext = {
+    const context: StatementContext = {
       stateChanged: false,
-      out,
+      output,
       allowReturn: true,
       bodyList: statements,
     };
-    const lowered = lowerStmts(statements, env, state, ctx);
-    if (!ctx.usedReturn) {
-      out.mountEffects.push({
+    const lowered = lowerStmts(statements, environment, state, context);
+    if (!context.usedReturn) {
+      output.mountEffects.push({
         kind: 'inline',
-        callback: {body: lowered, updatesState: ctx.stateChanged},
+        callback: {body: lowered, updatesState: context.stateChanged},
       });
 
       return;
     }
 
     // With an early `return` the body gets its own function, so it cannot skip later mount effects.
-    const name = `effect_${out.effN++}`;
-    out.effectFns.push({kind: 'mount', name, body: lowered});
-    out.mountEffects.push({
+    const name = `effect_${output.effectCount++}`;
+    output.effectFunctions.push({kind: 'mount', name, body: lowered});
+    output.mountEffects.push({
       kind: 'call',
       name,
-      updatesState: ctx.stateChanged,
+      updatesState: context.stateChanged,
     });
 
     return;
   }
 
   // A dep-driven effect gets its own function; each dep must be scalar, so a change shows against a stored copy.
-  if (effect.deps.type !== 'ArrayExpression') {
+  if (effect.dependencies.type !== 'ArrayExpression') {
     throw aotError(
       'AOT: a useEffect dependency list must be an array literal',
       'pass `[]` (run once) or `[a, b]` (re-run when a/b change).',
     );
   }
-  const effectId = out.effN++;
-  const deps = (effect.deps as t.ArrayExpression).elements.map(depNode => {
-    if (!depNode) {
-      throw aotError('AOT: a useEffect dependency must be an expression');
-    }
+  const effectId = output.effectCount++;
+  const dependencies = (effect.dependencies as t.ArrayExpression).elements.map(
+    dependencyNode => {
+      if (!dependencyNode) {
+        throw aotError('AOT: a useEffect dependency must be an expression');
+      }
 
-    const depExpr = lowerExprWide(depNode, env);
-    if (
-      !['int', 'float', 'i64', 'string'].includes(slotValueOf(depExpr).slotKind)
-    ) {
-      throw aotError(
-        'AOT: useEffect dependencies must be scalar (number / bool / string)',
-        'depend on scalar state values; object/array dependencies are not yet supported.',
-      );
-    }
+      const dependencyExpression = lowerExprWide(dependencyNode, environment);
+      if (
+        !['int', 'float', 'i64', 'string'].includes(
+          slotValueOf(dependencyExpression).slotKind,
+        )
+      ) {
+        throw aotError(
+          'AOT: useEffect dependencies must be scalar (number / bool / string)',
+          'depend on scalar state values; object/array dependencies are not yet supported.',
+        );
+      }
 
-    return depExpr;
-  });
+      return dependencyExpression;
+    },
+  );
 
   // React runs the previous cleanup before a re-run; an `armed` flag records whether the last run reached it.
   const lastStatement = statements[statements.length - 1];
   const hasCleanup =
     lastStatement?.type === 'ReturnStatement' && isFn(lastStatement.argument);
-  const depEffect: IrDepEffect = {
+  const dependencyEffect: IrDepEffect = {
     id: effectId,
-    deps,
+    dependencies,
     body: [],
     hasCleanup,
     cleanup: null,
   };
-  const ctx: StatementContext = {
+  const context: StatementContext = {
     stateChanged: false,
-    out,
+    output,
     allowReturn: true,
     bodyList: statements,
-    depDriven: true,
+    dependencyDriven: true,
   };
 
   // With a cleanup, hoist the body's locals and lower the tail `return () => …` into `<effect>_cleanup()`.
   if (hasCleanup) {
-    ctx.hoist = {prefix: `effect${effectId}_local_`, decls: out.effectDecls};
-    ctx.cleanup = {
+    context.hoist = {
+      prefix: `effect${effectId}_local_`,
+      declarations: output.effectDeclarations,
+    };
+    context.cleanup = {
       armed: armedFlag(effectId),
-      emit: (cleanupFn, cleanupEnv) => {
-        const cleanupBody = cleanupFn.body;
+      emit: (cleanupFunction, cleanupEnvironment) => {
+        const cleanupBody = cleanupFunction.body;
         const cleanupStatements: t.Statement[] =
           cleanupBody.type === 'BlockStatement'
             ? cleanupBody.body
             : [{type: 'ExpressionStatement', expression: cleanupBody}];
-        const cleanupCtx: StatementContext = {
+        const cleanupContext: StatementContext = {
           stateChanged: false,
-          out,
+          output,
         };
-        depEffect.cleanup = lowerStmts(
+        dependencyEffect.cleanup = lowerStmts(
           cleanupStatements,
-          cleanupEnv,
+          cleanupEnvironment,
           state,
-          cleanupCtx,
+          cleanupContext,
         );
-        out.effectFns.push({kind: 'cleanup', effect: depEffect});
+        output.effectFunctions.push({
+          kind: 'cleanup',
+          effect: dependencyEffect,
+        });
       },
     };
 
-    out.effectDecls.push({kind: 'armed', effect: depEffect});
+    output.effectDeclarations.push({kind: 'armed', effect: dependencyEffect});
   }
 
   // The effect function runs the last run's cleanup first, if that run armed it, then the body.
-  depEffect.body = lowerStmts(statements, env, state, ctx);
-  out.effectFns.push({kind: 'effect', effect: depEffect});
+  dependencyEffect.body = lowerStmts(statements, environment, state, context);
+  output.effectFunctions.push({kind: 'effect', effect: dependencyEffect});
 
   // A copy of each dep, taken at mount; the update re-runs the effect when one no longer matches its copy.
-  out.effectDecls.push({kind: 'deps', effect: depEffect});
-  out.mountEffects.push({kind: 'depEffect', effect: depEffect});
-  out.depEffects.push(depEffect);
+  output.effectDeclarations.push({kind: 'deps', effect: dependencyEffect});
+  output.mountEffects.push({kind: 'depEffect', effect: dependencyEffect});
+  output.dependencyEffects.push(dependencyEffect);
 }
 
 /**
  * Lowers an event handler to a callback. Its first parameter is the event, whose touch fields read
  * EREventData; a PanResponder callback's second is RN's gestureState (see lowerGestureField).
  *
- * @param fnNode  The handler.
- * @param env  The expression environment.
+ * @param functionNode  The handler.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param out  Everything emitted so far.
+ * @param output  Everything emitted so far.
  * @param pan  The PanResponder the handler belongs to, if any.
  *
  * @returns The callback.
  */
 export function lowerHandler(
-  fnNode: PanCallback,
-  env: Env,
+  functionNode: PanCallback,
+  environment: Env,
   state: StateTable,
-  out: Out,
+  output: Out,
   pan: PanResponderRecord | null = null,
 ): IrCallback {
   // An expression body is a single statement.
-  const body = fnNode.body;
+  const body = functionNode.body;
   const statements: t.Statement[] =
     body.type === 'BlockStatement'
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
 
   // The first parameter is the event (fields map to EREventData); a PanResponder's second is RN's gestureState.
-  const eventParam =
-    fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
-  const gestureParam =
-    pan && fnNode.params[1]?.type === 'Identifier'
-      ? fnNode.params[1].name
+  const eventParameter =
+    functionNode.params[0]?.type === 'Identifier'
+      ? functionNode.params[0].name
       : null;
-  let handlerEnv = env;
-  if (eventParam) {
-    handlerEnv = {...handlerEnv, event: eventParam};
+  const gestureParameter =
+    pan && functionNode.params[1]?.type === 'Identifier'
+      ? functionNode.params[1].name
+      : null;
+  let handlerEnvironment = environment;
+  if (eventParameter) {
+    handlerEnvironment = {...handlerEnvironment, event: eventParameter};
   }
 
-  if (gestureParam) {
-    handlerEnv = {...handlerEnv, gesture: gestureParam, pan};
+  if (gestureParameter) {
+    handlerEnvironment = {
+      ...handlerEnvironment,
+      gesture: gestureParameter,
+      pan,
+    };
   }
 
   // The body re-applies state-dependent props once at its end if it set state.
-  const ctx: StatementContext = {stateChanged: false, out};
+  const context: StatementContext = {stateChanged: false, output};
   return {
-    body: lowerStmts(statements, handlerEnv, state, ctx),
-    updatesState: ctx.stateChanged,
+    body: lowerStmts(statements, handlerEnvironment, state, context),
+    updatesState: context.stateChanged,
   };
 }
 
 /**
  * Lowers a value-callback (e.g., Switch onValueChange) — binds its first param to `valueCode`, not an event.
  *
- * @param fnNode  The callback.
- * @param env  The expression environment.
+ * @param functionNode  The callback.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param out  Everything emitted so far.
+ * @param output  Everything emitted so far.
  * @param slotKind  The value's kind.
- * @param isBool  The value is a boolean, so text prints it as true/false.
- * @param valueExpr  The value as a typed expression.
- * @param secondValueExpr  The second parameter's value as a typed expression, if any.
+ * @param isBoolean  The value is a boolean, so text prints it as true/false.
+ * @param valueExpression  The value as a typed expression.
+ * @param secondValueExpression  The second parameter's value as a typed expression, if any.
  *
  * @returns The callback.
  */
 export function lowerValueHandler(
-  fnNode: FunctionNode,
-  env: Env,
+  functionNode: FunctionNode,
+  environment: Env,
   state: StateTable,
-  out: Out,
+  output: Out,
   slotKind: SlotKind,
-  isBool: boolean,
-  valueExpr: IrExpr,
-  secondValueExpr?: IrExpr,
+  isBoolean: boolean,
+  valueExpression: IrExpr,
+  secondValueExpression?: IrExpr,
 ): IrCallback {
   // A <Switch> hands its callback a boolean; carry that so `'on=' + v` prints true/false, not 1/0.
-  const valueParam =
-    fnNode.params[0]?.type === 'Identifier' ? fnNode.params[0].name : null;
-  const locals = new Map<string, Local>(env.locals);
-  if (valueParam) {
-    locals.set(valueParam, {slotKind, isBool, expr: valueExpr});
+  const valueParameter =
+    functionNode.params[0]?.type === 'Identifier'
+      ? functionNode.params[0].name
+      : null;
+  const locals = new Map<string, Local>(environment.locals);
+  if (valueParameter) {
+    locals.set(valueParameter, {
+      slotKind,
+      isBoolean,
+      expression: valueExpression,
+    });
   }
 
   // A RANGE <Dial>'s second parameter binds the same way, lowering to the event's value_start with no object on device.
-  const secondParam =
-    fnNode.params[1]?.type === 'Identifier' ? fnNode.params[1].name : null;
-  if (secondParam && secondValueExpr) {
-    locals.set(secondParam, {slotKind, expr: secondValueExpr});
+  const secondParameter =
+    functionNode.params[1]?.type === 'Identifier'
+      ? functionNode.params[1].name
+      : null;
+  if (secondParameter && secondValueExpression) {
+    locals.set(secondParameter, {slotKind, expression: secondValueExpression});
   }
 
   // Lower the body (an expression body is a single statement); it re-applies state once if it set any.
-  const ctx: StatementContext = {stateChanged: false, out};
-  const body = fnNode.body;
+  const context: StatementContext = {stateChanged: false, output};
+  const body = functionNode.body;
   const statements: t.Statement[] =
     body.type === 'BlockStatement'
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
   return {
-    body: lowerStmts(statements, {...env, locals}, state, ctx),
-    updatesState: ctx.stateChanged,
+    body: lowerStmts(statements, {...environment, locals}, state, context),
+    updatesState: context.stateChanged,
   };
 }

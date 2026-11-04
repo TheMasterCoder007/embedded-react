@@ -211,7 +211,7 @@ export function App() {
       slot: {
         field: 'width',
         type: {kind: 'int'},
-        init: {kind: 'screen', dimension: 'width'},
+        initializer: {kind: 'screen', dimension: 'width'},
       },
     };
     const checkOfTerms = terms => {
@@ -219,7 +219,7 @@ export function App() {
       for (let term = 0; term < terms; term++) {
         expr = {
           kind: 'arithmetic',
-          op: '+',
+          operator: '+',
           left: expr,
           right: {kind: 'number', value: 1},
         };
@@ -227,7 +227,7 @@ export function App() {
       const slot = {
         field: 'sum',
         type: {kind: 'int'},
-        init: {kind: 'expr', expr},
+        initializer: {kind: 'expr', expression: expr},
       };
       return lowerCheck(
         [{kind: 'value', slot, value: 240 + terms, source: 'the sum'}],
@@ -363,7 +363,7 @@ describe('a layout check over a range of sizes', () => {
   });
 
   // Math functions a fold doesn't take yet, and the corners of the VM's division, as the check would run them.
-  const step = (op, arg = 0) => ({op, arg});
+  const step = (op, arg = 0) => ({opcode: op, operand: arg});
   const DIRECT = {
     sqrt: [step(CheckOp.width), step(CheckOp.math, MathFn.sqrt)],
     pow: [

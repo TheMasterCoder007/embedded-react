@@ -68,7 +68,7 @@ export interface IrVectorTables {
  */
 export type IrTapeValue =
   /** An opcode, an ER_VOP_* name. */
-  | {kind: 'op'; op: string}
+  | {kind: 'op'; operation: string}
   | {kind: 'number'; value: number}
   /** A state-driven attribute, read as a float. */
   | {kind: 'float'; value: IrExpr}
@@ -78,7 +78,7 @@ export type IrTapeValue =
   | {
       kind: 'chain';
       first: IrTapeValue;
-      rest: {op: '+' | '-' | '*'; value: IrTapeValue}[];
+      rest: {operator: '+' | '-' | '*'; value: IrTapeValue}[];
     }
   /** An angle in degrees clockwise from the top, as the engine's radians clockwise from 3 o'clock. */
   | {kind: 'radians'; degrees: IrTapeValue}

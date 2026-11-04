@@ -114,10 +114,10 @@ import type {SlotWidths} from './compiler/ir/types.mts';
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-const aotDir = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react/aot
-const repoRoot = resolve(aotDir, '../../..');
-const demosDir = resolve(repoRoot, 'demos');
-const distDir = resolve(aotDir, '..', 'dist');
+const aotDirectory = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react/aot
+const repositoryRoot = resolve(aotDirectory, '../../..');
+const demosDirectory = resolve(repositoryRoot, 'demos');
+const distDirectory = resolve(aotDirectory, '..', 'dist');
 
 /** Where the search for an app's layouts starts. */
 const FIRST_SIZE: Screen = {width: 240, height: 320};
@@ -130,7 +130,7 @@ export {bakePackage, bakeSvgArtifacts, packPackage, resourceReport};
 
 /**
  * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
- * Date.now() in it. A compile records every value stored into an int slot (env.stores), and the typing pass
+ * Date.now() in it. A compile records every value stored into an int slot (environment.stores), and the typing pass
  * infers from them which slots have to hold 64 bits, following a timestamp through every slot it reaches; the
  * app is then compiled again with those slots widened, so every read of a slot sees its final type.
  *
@@ -171,18 +171,18 @@ function compileWidened<Result>(
  * Runs a compilation, annotating an AOT error with file:line:col + a source code-frame (+ hint) so the failure
  * points at the exact unsupported construct.
  *
- * @param src  The App.jsx/App.tsx source text.
+ * @param source  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file the error names when opts has none.
- * @param opts  The compile's options.
+ * @param options  The compile's options.
  * @param resolved  The same options, resolved.
  * @param compileOnce  One compile, as compileWidened runs it.
  *
  * @returns What the compile produced.
  */
 function compileLocated<Result>(
-  src: string,
+  source: string,
   demo: string,
-  opts: CompileOptions,
+  options: CompileOptions,
   resolved: ResolvedOptions,
   compileOnce: (wide: SlotWidths, stores: IrSlotStore[]) => Result,
 ): Result {
@@ -197,8 +197,8 @@ function compileLocated<Result>(
     ) {
       throw formatAotError(
         error,
-        src,
-        opts.filename || `demos/${demo}/App.jsx`,
+        source,
+        options.filename || `demos/${demo}/App.jsx`,
         resolved,
       );
     }
@@ -208,19 +208,19 @@ function compileLocated<Result>(
 }
 
 /**
- * The sizes a package build was told to keep layouts for: opts.screens, opts.screen or ER_AOT_SCREEN_W/H.
+ * The sizes a package build was told to keep layouts for: options.screens, options.screen or ER_AOT_SCREEN_W/H.
  *
- * @param opts  The build's options.
+ * @param options  The build's options.
  *
  * @returns The sizes, or null to find every layout.
  */
-function requestedScreens(opts: CompileOptions): Screen[] | null {
-  if (opts.screens?.length) return opts.screens;
-  if (opts.screen) return [opts.screen];
+function requestedScreens(options: CompileOptions): Screen[] | null {
+  if (options.screens?.length) return options.screens;
+  if (options.screen) return [options.screen];
   const fromEnv = (name: string): boolean =>
     (process.env[name] ?? '').trim() !== '';
   return fromEnv('ER_AOT_SCREEN_W') || fromEnv('ER_AOT_SCREEN_H')
-    ? [resolveOptions(opts).screen]
+    ? [resolveOptions(options).screen]
     : null;
 }
 
@@ -262,37 +262,40 @@ function tooManyLayouts(panels: PanelProgram[], named: boolean): Error {
  * compiles again until every size has a layout. Named sizes keep only the layouts they pick. An AOT error is annotated
  * with file:line:col + a source code-frame (+ hint), so the failure points at the exact unsupported construct.
  *
- * @param src  The App.jsx/App.tsx source text.
+ * @param source  The App.jsx/App.tsx source text.
  * @param demo  Demo name, for the file an error names when opts has none.
- * @param opts  filename, svgArtifacts, ts, screens, release, and the screen and caps resolveOptions documents.
+ * @param compileOptions  filename, svgArtifacts, ts, screens, release, and the screen and caps resolveOptions documents.
  *
  * @returns The program and debug sections, and what the package holds.
  */
 export function compilePackage(
-  src: string,
+  source: string,
   demo = 'app',
-  opts: CompileOptions = {},
+  compileOptions: CompileOptions = {},
 ): PackageResult {
   const panels: PanelProgram[] = [];
   const checks = (): LayoutCheck[] =>
     panels.map(panel => panel.program.panels[0].check);
   const compileAt = (screen: Screen, searched: boolean): void => {
-    const options = resolveOptions({...opts, screen});
+    const options = resolveOptions({...compileOptions, screen});
     const resolved: ResolvedOptions = searched
       ? {...options, screenFrom: 'search'}
       : options;
     panels.push(
-      compileLocated(src, demo, opts, resolved, (wide, stores) =>
-        compilePanel(src, resolved, wide, stores),
+      compileLocated(source, demo, compileOptions, resolved, (wide, stores) =>
+        compilePanel(source, resolved, wide, stores),
       ),
     );
   };
 
-  const requested = requestedScreens(opts);
+  const requested = requestedScreens(compileOptions);
   if (requested) {
     const seen = new Set<string>();
     for (const screen of requested) {
-      const {width, height} = resolveOptions({...opts, screen}).screen;
+      const {width, height} = resolveOptions({
+        ...compileOptions,
+        screen,
+      }).screen;
       const size = `${width}x${height}`;
       if (seen.has(size)) {
         throw new Error(`AOT: the panel ${size} is listed twice`);
@@ -326,8 +329,8 @@ export function compilePackage(
 
   return assemblePackage(
     panels,
-    basename(opts.filename || 'App.jsx'),
-    opts.release,
+    basename(compileOptions.filename || 'App.jsx'),
+    compileOptions.release,
   );
 }
 
@@ -337,31 +340,31 @@ if (
   resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
 ) {
   // Find the demo's App.jsx, listing the available demos when it is missing.
-  const args = process.argv.slice(2);
-  const screenAt = args.indexOf('--screen');
+  const commandArguments = process.argv.slice(2);
+  const screenAt = commandArguments.indexOf('--screen');
   const screens =
     screenAt < 0
       ? undefined
-      : (args[screenAt + 1] ?? '').split(',').map(size => {
+      : (commandArguments[screenAt + 1] ?? '').split(',').map(size => {
           const match = /^([1-9]\d*)x([1-9]\d*)$/i.exec(size);
           if (!match) {
             console.error(
-              `AOT: --screen expects <width>x<height> (e.g. --screen 240x320), got: ${args[screenAt + 1] ?? '(nothing)'}`,
+              `AOT: --screen expects <width>x<height> (e.g. --screen 240x320), got: ${commandArguments[screenAt + 1] ?? '(nothing)'}`,
             );
             process.exit(1);
           }
           return {width: Number(match[1]), height: Number(match[2])};
         });
   const demo =
-    args.find(
-      (arg, index) =>
-        !arg.startsWith('--') && (screenAt < 0 || index !== screenAt + 1),
+    commandArguments.find(
+      (argument, index) =>
+        !argument.startsWith('--') && (screenAt < 0 || index !== screenAt + 1),
     ) ||
     process.env.DEMO ||
     'thermostat';
-  const appPath = resolve(demosDir, demo, 'App.jsx');
-  const availableDemos = existsSync(demosDir)
-    ? readdirSync(demosDir, {withFileTypes: true})
+  const appPath = resolve(demosDirectory, demo, 'App.jsx');
+  const availableDemos = existsSync(demosDirectory)
+    ? readdirSync(demosDirectory, {withFileTypes: true})
         .filter(entry => entry.isDirectory())
         .map(entry => entry.name)
     : [];
@@ -373,12 +376,15 @@ if (
   }
 
   // Compile the app, baking <Svg source> .svg imports first so the compile itself stays pure (no I/O).
-  const src = readFileSync(appPath, 'utf8');
+  const source = readFileSync(appPath, 'utf8');
   let result: PackageResult;
   try {
-    result = compilePackage(src, demo, {
-      filename: resolve(demosDir, demo, 'App.jsx'),
-      svgArtifacts: await bakeSvgArtifacts(src, resolve(demosDir, demo)),
+    result = compilePackage(source, demo, {
+      filename: resolve(demosDirectory, demo, 'App.jsx'),
+      svgArtifacts: await bakeSvgArtifacts(
+        source,
+        resolve(demosDirectory, demo),
+      ),
       screen: screens?.[0],
       screens,
     });
@@ -393,7 +399,7 @@ if (
   // Locate the images the app imports; each importPath is source-relative to the demo's App.jsx.
   const imageJobs = result.images.map(image => ({
     name: image.name,
-    path: resolve(demosDir, demo, image.importPath),
+    path: resolve(demosDirectory, demo, image.importPath),
   }));
 
   // Stop on an imported image that is not on disk.
@@ -407,16 +413,16 @@ if (
   }
 
   // Flow B renders all text in the built-in font, so check the app's glyphs and font sizes against it.
-  warnMissingGlyphs({source: src, jsx: true});
-  warnFontSizes({used: analyzeFontSizes(src)});
+  warnMissingGlyphs({source: source, jsx: true});
+  warnFontSizes({used: analyzeFontSizes(source)});
 
   // The package carries its images as an asset pack.
   const file = packPackage(
     result,
     imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
   );
-  mkdirSync(distDir, {recursive: true});
-  writeFileSync(resolve(distDir, 'app.erpkg'), file.bytes);
+  mkdirSync(distDirectory, {recursive: true});
+  writeFileSync(resolve(distDirectory, 'app.erpkg'), file.bytes);
   console.log(`AOT: compiled demo "${demo}" -> dist/app.erpkg`);
   console.log(resourceReport(result, file).join('\n'));
 }

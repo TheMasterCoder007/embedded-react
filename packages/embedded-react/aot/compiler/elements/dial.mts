@@ -92,6 +92,9 @@ const DIAL_ENUM_PROPS: Record<
   },
 };
 
+/** A <Dial>'s width and height when its style sets neither. */
+const DEFAULT_SIZE = 120;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -107,8 +110,8 @@ const DIAL_ENUM_PROPS: Record<
  *
  * @param element  The <Dial>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The node's variable.
@@ -116,27 +119,27 @@ const DIAL_ENUM_PROPS: Record<
 export function emitDial(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrNode {
   // get node id
-  const nodeID = `n${out.allocateNodeId()}`;
+  const nodeID = `n${output.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     elementSpec('Dial')!,
   );
   const hasField = (field: string) =>
-    styleWrites(staticAssigns, dynAssigns, field);
+    styleWrites(staticAssigns, dynamicAssigns, field);
   if (!hasField('width')) {
-    staticAssigns.push({field: 'width', value: 120});
+    staticAssigns.push({field: 'width', value: DEFAULT_SIZE});
   }
   if (!hasField('height')) {
-    staticAssigns.push({field: 'height', value: 120});
+    staticAssigns.push({field: 'height', value: DEFAULT_SIZE});
   }
 
   // Fold numeric props when possible; otherwise emit runtime assignments for the update.
@@ -144,14 +147,14 @@ export function emitDial(
     field: string,
     node: t.Node,
     isFloat: boolean,
-    attr: t.JSXAttribute,
+    attribute: t.JSXAttribute,
   ): void => {
     let number: unknown;
     try {
       number = evalStatic(node, scope, 'strict');
     } catch {
-      const value = lowerExpr(node, env);
-      dynAssigns.push({
+      const value = lowerExpr(node, environment);
+      dynamicAssigns.push({
         field,
         value: isFloat ? {kind: 'float', value} : {kind: 'dimension', value},
       });
@@ -161,9 +164,9 @@ export function emitDial(
     if (typeof number !== 'number') {
       throw at(
         aotError(
-          `AOT: <Dial ${attr.name.name as string}> must be a number (got ${JSON.stringify(number) ?? String(number)})`,
+          `AOT: <Dial ${attribute.name.name as string}> must be a number (got ${JSON.stringify(number) ?? String(number)})`,
         ),
-        attr,
+        attribute,
       );
     }
 
@@ -179,21 +182,25 @@ export function emitDial(
   };
 
   // Fold static colors now; emit dynamic color expressions for the update.
-  const colour = (field: string, node: t.Node, attr: t.JSXAttribute): void => {
+  const colour = (
+    field: string,
+    node: t.Node,
+    attribute: t.JSXAttribute,
+  ): void => {
     let color: unknown;
     try {
       color = evalStatic(node, scope, 'strict');
     } catch {
-      dynAssigns.push({field, value: lowerColorValue(node, env)});
+      dynamicAssigns.push({field, value: lowerColorValue(node, environment)});
       return;
     }
 
     if (typeof color !== 'string') {
       throw at(
         aotError(
-          `AOT: <Dial ${attr.name.name as string}> must be a color string (got ${JSON.stringify(color) ?? String(color)})`,
+          `AOT: <Dial ${attribute.name.name as string}> must be a color string (got ${JSON.stringify(color) ?? String(color)})`,
         ),
-        attr,
+        attribute,
       );
     }
 
@@ -201,37 +208,37 @@ export function emitDial(
   };
 
   // Process <Dial> props, splitting them into static props, dynamic updates, binds, assets, and handlers.
-  let onChangeFn: t.Node | null | undefined = null;
+  let onChangeFunction: t.Node | null | undefined = null;
   let knobImage: string | null = null; // static asset name
-  for (const attr of element.openingElement.attributes) {
+  for (const attribute of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute') {
+    if (attribute.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <Dial> are not supported');
     }
 
     // skip non-props
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'style' || name === 'ref' || name === 'key') continue;
 
     // process props
-    const node = attrExpr(attr);
+    const node = attrExpr(attribute);
     if (
       (name === 'value' || name === 'valueStart') &&
       node?.type === 'Identifier' &&
-      env.animations?.has(node.name)
+      environment.animations?.has(node.name)
     ) {
       binds.push({
-        slotName: env.animations.get(node.name)!.slotName,
+        slotName: environment.animations.get(node.name)!.slotName,
         prop:
           name === 'value' ? 'ER_PROP_ARC_VALUE' : 'ER_PROP_ARC_VALUE_START',
       });
     } else if (DIAL_FLOAT_PROPS[name]) {
-      numeric(DIAL_FLOAT_PROPS[name], node, true, attr);
+      numeric(DIAL_FLOAT_PROPS[name], node, true, attribute);
     } else if (DIAL_INT_PROPS[name]) {
-      numeric(DIAL_INT_PROPS[name], node, false, attr);
+      numeric(DIAL_INT_PROPS[name], node, false, attribute);
     } else if (DIAL_COLOR_PROPS[name]) {
-      colour(DIAL_COLOR_PROPS[name], node, attr);
+      colour(DIAL_COLOR_PROPS[name], node, attribute);
     } else if (DIAL_ENUM_PROPS[name]) {
       const {field, table} = DIAL_ENUM_PROPS[name];
       let token: unknown = null;
@@ -250,9 +257,12 @@ export function emitDial(
         }
         staticAssigns.push({field, value: table[token]});
       } else {
-        dynAssigns.push({
+        dynamicAssigns.push({
           field,
-          value: {kind: 'byte', value: lowerEnumValue(node, table, env)},
+          value: {
+            kind: 'byte',
+            value: lowerEnumValue(node, table, environment),
+          },
         });
       }
     } else if (name === 'adjustable' || name === 'range') {
@@ -263,11 +273,11 @@ export function emitDial(
           value: evalStatic(node, scope, 'strict') ? 1 : 0,
         });
       } catch {
-        dynAssigns.push({
+        dynamicAssigns.push({
           field,
           value: {
             kind: 'flag',
-            test: lowerExpr(node, env),
+            test: lowerExpr(node, environment),
             truthiness: 'value',
             negate: false,
             whenTrue: 1,
@@ -275,37 +285,43 @@ export function emitDial(
         });
       }
     } else if (name === 'knobImage') {
-      knobImage = imageNameFromSource(node, env);
+      knobImage = imageNameFromSource(node, environment);
       if (knobImage == null) {
         throw aotError(
           'AOT: <Dial knobImage> must resolve to a static asset name',
           "use an imported image (`import knob from './knob.png'` → knobImage={knob}) or a string asset name.",
         );
       }
-      const path = env.imageNames?.get(knobImage);
+      const path = environment.imageNames?.get(knobImage);
       if (path) {
-        out.images.set(knobImage, path);
+        output.images.set(knobImage, path);
       }
     } else if (name === 'indicatorGradient') {
       // Allow indicatorGradient to be statically defined but conditionally enabled with a ternary against null/undefined.
-      let gradNode: t.Node = node;
-      let gradCond: {test: IrExpr; negate: boolean} | null = null;
+      let gradientNode: t.Node = node;
+      let gradientCondition: {test: IrExpr; negate: boolean} | null = null;
       if (node?.type === 'ConditionalExpression') {
-        const nullish = (n: t.Node | null | undefined) =>
-          n?.type === 'NullLiteral' ||
-          (n?.type === 'Identifier' && n.name === 'undefined');
+        const nullish = (candidate: t.Node | null | undefined) =>
+          candidate?.type === 'NullLiteral' ||
+          (candidate?.type === 'Identifier' && candidate.name === 'undefined');
         if (nullish(node.alternate)) {
-          gradNode = node.consequent;
-          gradCond = {test: lowerExpr(node.test, env), negate: false};
+          gradientNode = node.consequent;
+          gradientCondition = {
+            test: lowerExpr(node.test, environment),
+            negate: false,
+          };
         } else if (nullish(node.consequent)) {
-          gradNode = node.alternate;
-          gradCond = {test: lowerExpr(node.test, env), negate: true};
+          gradientNode = node.alternate;
+          gradientCondition = {
+            test: lowerExpr(node.test, environment),
+            negate: true,
+          };
         }
       }
 
       // Validate and normalize the static gradient definition, keeping only the engine-supported stop count.
       const gradient = evalStaticOrThrow(
-        gradNode,
+        gradientNode,
         scope,
         'AOT: <Dial indicatorGradient> must be a static object (optionally behind a ternary against null)',
         "indicatorGradient={{ type: 'conic', stops: [{ color: '#00f' }, { color: '#f00' }] }}, or " +
@@ -326,14 +342,14 @@ export function emitDial(
       });
 
       // Emit the stop count separately so a ternary can enable/disable the static gradient at runtime.
-      if (gradCond) {
-        dynAssigns.push({
+      if (gradientCondition) {
+        dynamicAssigns.push({
           field: 'gradient_stop_count',
           value: {
             kind: 'flag',
-            test: gradCond.test,
+            test: gradientCondition.test,
             truthiness: 'value',
-            negate: gradCond.negate,
+            negate: gradientCondition.negate,
             whenTrue: stops.length,
           },
         });
@@ -345,20 +361,22 @@ export function emitDial(
       }
 
       // Emit each fixed stop, filling in missing offsets with evenly spaced positions.
-      stops.forEach((st, i) => {
-        const off =
-          typeof st.offset === 'number' ? st.offset : i / (stops.length - 1);
+      stops.forEach((stop, index) => {
+        const offset =
+          typeof stop.offset === 'number'
+            ? stop.offset
+            : index / (stops.length - 1);
         staticAssigns.push({
-          field: `gradient_stops[${i}].color`,
-          value: parseColorValue(String(st.color)),
+          field: `gradient_stops[${index}].color`,
+          value: parseColorValue(String(stop.color)),
         });
         staticAssigns.push({
-          field: `gradient_stops[${i}].position`,
-          value: floatConstant(off),
+          field: `gradient_stops[${index}].position`,
+          value: floatConstant(offset),
         });
       });
     } else if (name === 'onChange') {
-      onChangeFn = node;
+      onChangeFunction = node;
     } else {
       throw aotError(`AOT: <Dial> prop "${name}" is not supported`);
     }
@@ -367,10 +385,10 @@ export function emitDial(
   // Animated bindings: style props plus an animated `value` (ER_PROP_ARC_VALUE).
   const node: IrNode = {
     id: nodeID,
-    loc: currentLoc(),
+    location: currentLoc(),
     type: 'ER_NODE_ARC',
     constantProps: staticAssigns,
-    stateProps: dynAssigns,
+    stateProps: dynamicAssigns,
     placeholder: null,
     text: null,
     image: knobImage != null ? {kind: 'static', name: knobImage} : null,
@@ -380,33 +398,33 @@ export function emitDial(
   };
 
   // Compile <Dial onChange> into an ER_EVENT_VALUE_CHANGE handler.
-  if (onChangeFn) {
+  if (onChangeFunction) {
     // A useCallback identifier resolves to its arrow, the same way the generic host-node event path does —
     // a dial's change handler is exactly the kind of thing an app wraps in useCallback.
     if (
-      onChangeFn.type === 'Identifier' &&
-      env.callbacks?.has(onChangeFn.name)
+      onChangeFunction.type === 'Identifier' &&
+      environment.callbacks?.has(onChangeFunction.name)
     ) {
-      onChangeFn = env.callbacks.get(onChangeFn.name);
+      onChangeFunction = environment.callbacks.get(onChangeFunction.name);
     }
 
     // Require a function node so lowerValueHandler can bind the dial's value parameters.
-    if (!isFn(onChangeFn)) {
+    if (!isFn(onChangeFunction)) {
       throw aotError(
         'AOT: <Dial onChange> must be an inline function or a useCallback',
         'onChange={(v) => setValue(v)}',
       );
     }
 
-    const handlerName = `handler_${out.handlers.length}`;
-    out.handlers.push({
+    const handlerName = `handler_${output.handlers.length}`;
+    output.handlers.push({
       kind: 'callback',
       name: handlerName,
       callback: lowerValueHandler(
-        onChangeFn,
-        env,
+        onChangeFunction,
+        environment,
         state,
-        out,
+        output,
         'float',
         false,
         {kind: 'event', field: 'value', type: FLOAT},
@@ -420,11 +438,17 @@ export function emitDial(
     });
   }
 
-  for (const slot of lowerRefBinds(element.openingElement, env)) {
+  for (const slot of lowerRefBinds(element.openingElement, environment)) {
     node.wiring.push({kind: 'ref', slot});
   }
 
   checkInterpolations(node);
-  node.children = emitChildren(element.children, scope, out, env, state);
+  node.children = emitChildren(
+    element.children,
+    scope,
+    output,
+    environment,
+    state,
+  );
   return node;
 }

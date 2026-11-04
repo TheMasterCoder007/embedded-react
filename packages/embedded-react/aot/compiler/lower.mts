@@ -68,24 +68,27 @@ import type {Env, Scope, StateRecord} from './types.mts';
  * Settles what only the whole app decides. With nothing for an update to re-apply there is no update,
  * so no body ends by asking for one. A composition that no start waits on has no waits for a stop to end.
  *
- * @param out  The lowered app's functions.
+ * @param output  The lowered app's functions.
  * @param hasUpdate  The app has an update.
  */
-function settleFunctions(out: Out, hasUpdate: boolean): void {
+function settleFunctions(output: Out, hasUpdate: boolean): void {
   const idleOwners = new Set(
-    [...out.animWaits.values()]
+    [...output.animationWaits.values()]
       .filter(record => !record.isStarted)
       .map(record => record.owner),
   );
-  const settleStmts = (stmts: IrStmt[]): void => {
-    for (const stmt of stmts) {
-      if (stmt.kind === 'stopAnimations') {
-        if (stmt.waitOwner !== null && idleOwners.has(stmt.waitOwner)) {
-          stmt.waitOwner = null;
+  const settleStmts = (statements: IrStmt[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === 'stopAnimations') {
+        if (
+          statement.waitOwner !== null &&
+          idleOwners.has(statement.waitOwner)
+        ) {
+          statement.waitOwner = null;
         }
-      } else if (stmt.kind === 'if') {
-        settleStmts(stmt.consequent);
-        settleStmts(stmt.alternate ?? []);
+      } else if (statement.kind === 'if') {
+        settleStmts(statement.consequent);
+        settleStmts(statement.alternate ?? []);
       }
     }
   };
@@ -97,22 +100,22 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
     settleStmts(callback.body);
   };
 
-  for (const handler of out.handlers) {
+  for (const handler of output.handlers) {
     if (handler.kind === 'callback') {
       settle(handler.callback);
     } else if (handler.kind === 'panEvent') {
       settle(handler.event.callback);
     }
   }
-  for (const timer of out.timerFns) {
+  for (const timer of output.timerFunctions) {
     settle(timer.callback);
   }
-  for (const animationCallback of out.animCbs) {
+  for (const animationCallback of output.animationCallbacks) {
     if (animationCallback.kind === 'completion') {
       settle(animationCallback.completion);
     }
   }
-  for (const effectFunction of out.effectFns) {
+  for (const effectFunction of output.effectFunctions) {
     if (effectFunction.kind === 'mount') {
       settleStmts(effectFunction.body);
     } else if (effectFunction.kind === 'cleanup') {
@@ -121,7 +124,7 @@ function settleFunctions(out: Out, hasUpdate: boolean): void {
       settleStmts(effectFunction.effect.body);
     }
   }
-  for (const mountEffect of out.mountEffects) {
+  for (const mountEffect of output.mountEffects) {
     if (mountEffect.kind === 'inline') {
       settle(mountEffect.callback);
     } else if (mountEffect.kind === 'call' && !hasUpdate) {
@@ -173,23 +176,23 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
  * Lowers a Flow B app's JSX (or TSX) source, then runs the check pass over what lowering recorded. Pure (no
  * I/O); the package backend (package/) writes the result.
  *
- * @param src  The App.jsx/App.tsx source text.
- * @param opts  compilePackage's options, resolved (see resolveOptions).
+ * @param source  The App.jsx/App.tsx source text.
+ * @param options  compilePackage's options, resolved (see resolveOptions).
  * @param wide  State/ref slots to declare 64-bit (see compileWidened).
  * @param stores  Collects every value stored into an int slot.
  *
  * @returns The lowered app.
  */
 export function lowerApp(
-  src: string,
-  opts: ResolvedOptions,
+  source: string,
+  options: ResolvedOptions,
   wide: SlotWidths,
   stores: IrSlotStore[],
 ): IrApp {
-  beginBoot(src);
+  beginBoot(source);
   try {
     const {result, checks} = lowerWithChecks(() =>
-      lowerProgram(src, opts, wide, stores),
+      lowerProgram(source, options, wide, stores),
     );
     const app = {...result, boot: endBoot(), checks};
     runChecks(app.checks);
@@ -203,26 +206,26 @@ export function lowerApp(
  * Runs the compiler passes over the parsed app, from its module scope and hooks through the element tree to its
  * effects, recording the values the check pass checks.
  *
- * @param src  The App.jsx/App.tsx source text.
- * @param opts  compilePackage's options, resolved (see resolveOptions).
+ * @param source  The App.jsx/App.tsx source text.
+ * @param options  compilePackage's options, resolved (see resolveOptions).
  * @param wide  State/ref slots to declare 64-bit (see compileWidened).
  * @param stores  Collects every value stored into an int slot.
  *
  * @returns The lowered app, without its checks.
  */
 function lowerProgram(
-  src: string,
-  opts: ResolvedOptions,
+  source: string,
+  options: ResolvedOptions,
   wide: SlotWidths,
   stores: IrSlotStore[],
 ): Omit<IrApp, 'boot' | 'checks'> {
   // Parse the app and prepare the AST for the passes below.
-  const ast = parseApp(src, opts);
+  const ast = parseApp(source, options);
   normalizeUndefined(ast);
   const shadowedClock = findShadowedClockCalls(ast);
 
   // Seed the module scope with image imports (each is its baked-name string) so consts that use them can fold.
-  const {screen} = opts;
+  const {screen} = options;
   const imageImports = collectImageImports(ast.program);
   const svgImports = collectSvgImports(ast.program);
   const imageSeed = Object.fromEntries(
@@ -230,7 +233,7 @@ function lowerProgram(
   );
   const scope: Scope = moduleScope(ast.program, screen, imageSeed);
   // Snapshot module bindings before App's consts fold in: child components close over these, not App's shadows.
-  const moduleConsts: Scope = {...scope};
+  const moduleConstants: Scope = {...scope};
   const component = findComponent(ast.program);
   // Hide redeclared module names, then fold the body's static consts so responsive `if`s resolve at compile time.
   for (const name of declaredNames((component.body as BlockStatement).body)) {
@@ -245,20 +248,20 @@ function lowerProgram(
       continue;
     }
 
-    for (const decl of statement.declarations) {
-      if (decl.id.type !== 'Identifier' || !decl.init) continue;
+    for (const declarator of statement.declarations) {
+      if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
       try {
         setBinding(
           scope,
-          decl.id.name,
+          declarator.id.name,
           bindConst(
-            decl.id.name,
-            evalStatic(decl.init, withUndefined(scope), 'boot'),
+            declarator.id.name,
+            evalStatic(declarator.init, withUndefined(scope), 'boot'),
           ),
         );
       } catch {
         // A dynamic const must hide a same-named module const, or the JSX quietly renders the module value.
-        delete scope[decl.id.name];
+        delete scope[declarator.id.name];
       }
     }
   }
@@ -267,7 +270,7 @@ function lowerProgram(
   const state = collectState(
     component.body as BlockStatement,
     scope,
-    opts.caps,
+    options.caps,
     '',
     wide,
   );
@@ -277,9 +280,9 @@ function lowerProgram(
 
   // Collect the component's other hooks, plus the file's helpers and child components.
   const rootJSX = findReturnJSX(component.body as BlockStatement, scope);
-  const anims = collectAnims(component.body, scope);
+  const animations = collectAnims(component.body, scope);
   const refs = collectRefs(component.body, scope, '', wide);
-  for (const name of [...anims.keys(), ...refs.keys()]) {
+  for (const name of [...animations.keys(), ...refs.keys()]) {
     delete scope[name];
   }
 
@@ -296,87 +299,91 @@ function lowerProgram(
   ); // asset name → path
 
   // The expression environment every emitter compiles against.
-  const env: Env = {
+  const environment: Env = {
     state: state.byName,
     locals: new Map(),
-    consts: scope,
-    moduleConsts, // what an inlined child component sees (see emitComponent)
-    animations: anims,
+    constants: scope,
+    moduleConstants, // what an inlined child component sees (see emitComponent)
+    animations: animations,
     refs,
     pans,
     callbacks,
     helpers,
     imageNames,
     svgImports,
-    svgArtifacts: opts.svgArtifacts || {},
-    caps: opts.caps,
+    svgArtifacts: options.svgArtifacts || {},
+    caps: options.caps,
     wide,
     stores,
     shadowedClock,
   };
 
   // A value worked out at boot lowers its slot against the app's environment.
-  setBootLowering(env, lowerExpr);
+  setBootLowering(environment, lowerExpr);
   settleBootInitials(state.byName.values());
 
   // Before emit, fold each memo or inline its expression at each use (no cache needed: dep tracking re-applies).
-  for (const [name, expr] of memos) {
+  for (const [name, expression] of memos) {
     try {
-      setBinding(scope, name, bindConst(name, evalStatic(expr, scope, 'boot')));
+      setBinding(
+        scope,
+        name,
+        bindConst(name, evalStatic(expression, scope, 'boot')),
+      );
     } catch {
-      const memo = lowerSourcedWide(expr, env);
-      env.locals.set(name, {
+      const memo = lowerSourcedWide(expression, environment);
+      environment.locals.set(name, {
         slotKind: memo.slotKind,
-        isBool: memo.isBool,
-        lit: memo.lit,
+        isBoolean: memo.isBoolean,
+        isLiteral: memo.isLiteral,
         wide: memo.wide,
         source: memo.source,
-        expr: memo.expr,
+        expression: memo.expression,
       });
       delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
 
-  // Emit the scene graph from the root JSX; `out` collects everything else it lowers.
-  const out = new Out(components, ast.program);
+  // Emit the scene graph from the root JSX; `output` collects everything else it lowers.
+  const output = new Out(components, ast.program);
   const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
-  const root = emitNode(rootJSX, scope, out, env, state);
+  const root = emitNode(rootJSX, scope, output, environment, state);
 
   // Emit registered only the images it reached; a dynamic source can't be enumerated, so bake every import.
-  if (out.bakeAllImages) {
+  if (output.bakeAllImages) {
     for (const [, imageImport] of imageImports) {
-      out.images.set(imageImport.name, imageImport.importPath);
+      output.images.set(imageImport.name, imageImport.importPath);
     }
   }
 
-  // Lower effects (mount-once or dep-driven) after emit, so out.timerFns includes handler timers too.
+  // Lower effects (mount-once or dep-driven) after emit, so output.timerFunctions includes handler timers too.
   for (const effect of collectEffects(component.body)) {
-    lowerEffect(effect, env, state, out);
+    lowerEffect(effect, environment, state, output);
   }
 
   // An update exists only when something has to be re-applied after a state change.
   const hasUpdate =
     nodesOf(root).some(
       node => isStateDriven(node) || updatedVectorOf(node) !== null,
-    ) || out.depEffects.length > 0;
-  settleFunctions(out, hasUpdate);
+    ) || output.dependencyEffects.length > 0;
+  settleFunctions(output, hasUpdate);
   if (hasUpdate) {
     watchState(nodesOf(root));
   }
 
-  const stateRecords = [...state.byName.values(), ...out.childStateRecords];
+  const stateRecords = [...state.byName.values(), ...output.childStateRecords];
   checkStateRecords(stateRecords);
 
   return {
     state: stateRecords,
-    refs: [...refs.values(), ...out.childRefs],
-    animations: [...anims.values(), ...out.childAnimations],
+    refs: [...refs.values(), ...output.childRefs],
+    animations: [...animations.values(), ...output.childAnimations],
     keyboard,
     root,
-    images: [...out.images.entries()].map(([name, importPath]) => ({
+    images: [...output.images.entries()].map(([name, importPath]) => ({
       name,
       importPath,
     })),
-    out,
+    output,
   };
 }

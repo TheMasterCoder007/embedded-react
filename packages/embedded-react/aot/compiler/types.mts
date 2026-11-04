@@ -47,9 +47,9 @@ export type SlotKind = 'int' | 'float' | 'i64' | 'string';
 export interface SlotValue {
   slotKind: SlotKind;
   /** The value is a JS boolean, which renders as nothing on its own and as "true"/"false" when concatenated. */
-  isBool?: boolean;
+  isBoolean?: boolean;
   /** A 64-bit constant, which converts like any number, as opposed to a runtime timestamp. */
-  lit?: boolean;
+  isLiteral?: boolean;
   /** Whole-number math worked out in 64 bits beside a timestamp, as opposed to the timestamp itself. */
   wide?: boolean;
 }
@@ -67,7 +67,7 @@ export interface ItemStruct {
 
 /** A name bound at runtime: a handler local, a dynamic prop, or a list row's item (which has a `struct`). */
 export interface Local extends SlotValue {
-  /** What a local with no `expr` is known by in the function that holds it. */
+  /** What a local with no `expression` is known by in the function that holds it. */
   name?: string;
   struct?: ItemStruct;
   /** A list row's item: the list it is a row of. */
@@ -77,7 +77,7 @@ export interface Local extends SlotValue {
   /** What it was set from, which the typing pass reads when it infers slot widths. */
   source?: IrSource;
   /** The typed expression it stands for, when every read of it is that expression (a memo, a prop). */
-  expr?: IrExpr;
+  expression?: IrExpr;
 }
 
 /** What a useState / useHostValue slot and a list state have in common. */
@@ -96,7 +96,7 @@ interface StateSlot {
 export interface ScalarState extends StateSlot {
   kind: 'scalar';
   slotKind: SlotKind;
-  isBool: boolean;
+  isBoolean: boolean;
   /** Its initial value: a string for a string slot, a number otherwise. */
   initial: number | string;
   /** Fed by the host through an input (useHostValue). */
@@ -114,7 +114,7 @@ export interface ListState extends StateSlot {
   kind: 'list';
   struct: ItemStruct;
   items: Record<string, unknown>[];
-  cap: number;
+  capacity: number;
 }
 
 export type StateRecord = ScalarState | ListState;
@@ -231,8 +231,8 @@ export interface AssetImport {
 
 /** A `useEffect(fn, deps)` call. The deps are checked when the effect is compiled. */
 export interface EffectRecord {
-  fn: FunctionNode;
-  deps: t.CallExpression['arguments'][number];
+  functionNode: FunctionNode;
+  dependencies: t.CallExpression['arguments'][number];
   node: t.CallExpression;
 }
 
@@ -246,7 +246,7 @@ export interface PanResponderRecord {
   /** Prefix of its gesture state (`<statePrefix>_granted`, …). */
   statePrefix: string;
   /** Prefix of its functions. */
-  fnPrefix: string;
+  functionPrefix: string;
   /** The gesture's id, assigned when the responder is first wired to a node. */
   stateID: number;
   /** Should-set predicates, by engine query. */
@@ -269,14 +269,14 @@ export interface ChildrenRef {
 export interface ChildrenSlot {
   nodes: t.JSXElement['children'];
   scope: Scope;
-  env: Env;
+  environment: Env;
   ref: ChildrenRef | null;
 }
 
 /** A callback prop: the caller's function, compiled in the caller's env and state. */
 export interface FunctionProp {
   node: FunctionNode;
-  env: Env;
+  environment: Env;
   state: StateTable;
 }
 
@@ -291,9 +291,9 @@ export interface Env {
   /** Runtime bindings: handler locals, dynamic props, list rows. */
   locals: Map<string, Local>;
   /** Compile-time constants. */
-  consts: Scope;
+  constants: Scope;
   /** The module's own constants, which an inlined component closes over instead of its caller's. */
-  moduleConsts: Scope;
+  moduleConstants: Scope;
   animations: Map<string, AnimRecord>;
   refs: Map<string, RefRecord>;
   pans: Map<string, PanResponderRecord>;
@@ -316,9 +316,9 @@ export interface Env {
   /** Children passed to the component being inlined. */
   children?: ChildrenSlot | null;
   /** Callback props of the component being inlined. */
-  fnProps?: Map<string, FunctionProp>;
+  functionProps?: Map<string, FunctionProp>;
   /** Namespaces the handlers an inlined component instance emits. */
-  cbPrefix?: string;
+  callbackPrefix?: string;
   /** The handler's event parameter, whose touch fields read EREventData. */
   event?: string | null;
   /** The handler is an onLayout handler, so its event carries the layout rect. */
@@ -329,7 +329,7 @@ export interface Env {
   /** Whole-number math is being worked out in 64 bits, beside a timestamp. */
   math64?: boolean;
   /** Handler locals bound to an Animated composition, which `.start()` / `.stop()` compile. */
-  animLocals?: Map<string, t.Expression>;
+  animationLocals?: Map<string, t.Expression>;
 }
 
 /**
@@ -339,7 +339,7 @@ export interface Env {
 export interface StatementContext {
   /** A statement set state, so the body ends with the update. */
   stateChanged: boolean;
-  out: Out;
+  output: Out;
   /** A `return` may exit this body: it is an effect body. */
   allowReturn?: boolean;
   /** The body's own top-level statements, which a tail `return` and hoisted locals are measured against. */
@@ -347,13 +347,16 @@ export interface StatementContext {
   /** An early `return` was lowered, so the body needs a function of its own. */
   usedReturn?: boolean;
   /** The body is a dep-driven effect. */
-  depDriven?: boolean;
-  /** The body's locals become slots named `<prefix><name>`, declared into `decls`: its cleanup
+  dependencyDriven?: boolean;
+  /** The body's locals become slots named `<prefix><name>`, declared into `declarations`: its cleanup
    *  closure outlives the call. */
-  hoist?: {prefix: string; decls: IrStaticDecl[]};
+  hoist?: {prefix: string; declarations: IrStaticDecl[]};
   /** Compiles a dep-driven effect's `return () => …` into its companion cleanup function; `armed` is the flag
    *  that says the last run reached it. */
-  cleanup?: {armed: string; emit: (fn: FunctionNode, env: Env) => void};
+  cleanup?: {
+    armed: string;
+    emit: (functionNode: FunctionNode, environment: Env) => void;
+  };
   /** Helpers being inlined, so a recursive one is refused. */
   inlining?: Set<string>;
 }

@@ -68,12 +68,12 @@ import type {
  * `item.field`, say), or a callback compiled where the component uses it as an event handler.
  */
 type PropDescriptor =
-  | {static: true; value: unknown; fn?: undefined}
-  | (Local & {static: false; fn?: undefined})
+  | {static: true; value: unknown; isCallback?: undefined}
+  | (Local & {static: false; isCallback?: undefined})
   | {
-      fn: true;
+      isCallback: true;
       node: FunctionNode;
-      env?: Env;
+      environment?: Env;
       state?: StateTable;
       static?: undefined;
     };
@@ -89,21 +89,21 @@ type PropDescriptor =
  *
  * @param openingElement  The component instance's opening tag.
  * @param scope  Compile-time constants in reach at the call site.
- * @param env  The caller's expression environment.
+ * @param environment  The caller's expression environment.
  *
  * @returns The props, by name.
  */
 function extractProps(
   openingElement: t.JSXOpeningElement,
   scope: Scope,
-  env: Env,
+  environment: Env,
 ): Record<string, PropDescriptor> {
   const props: Record<string, PropDescriptor> = {};
-  for (const attr of openingElement.attributes) {
+  for (const attribute of openingElement.attributes) {
     // Static spread: {...obj} where obj folds to a compile-time object → merge its keys as props.
-    if (attr.type === 'JSXSpreadAttribute') {
+    if (attribute.type === 'JSXSpreadAttribute') {
       // A PanResponder's handlers need a real scene node, which a component instance is not.
-      if (panSpreadTarget(attr.argument, env)) {
+      if (panSpreadTarget(attribute.argument, environment)) {
         throw aotError(
           'AOT: a PanResponder can only be spread onto a host element',
           'spread `{...pan.panHandlers}` onto the <View> (or <Pressable>/<ScrollView>) that ' +
@@ -114,7 +114,7 @@ function extractProps(
 
       let spreadObject;
       try {
-        spreadObject = evalStatic(attr.argument, scope);
+        spreadObject = evalStatic(attribute.argument, scope);
       } catch {
         throw new Error(
           'AOT: only a compile-time-constant object can be spread to a component ({...obj})',
@@ -136,31 +136,37 @@ function extractProps(
 
     // `key` is React's, not the component's.
     if (
-      attr.type !== 'JSXAttribute' ||
-      (attr.name as t.JSXIdentifier).name === 'key'
+      attribute.type !== 'JSXAttribute' ||
+      (attribute.name as t.JSXIdentifier).name === 'key'
     ) {
       continue;
     }
 
     // A callback prop (inline arrow, caller's useCallback or forwarded prop) is an ` fn `, resolved at its handler.
-    const node = attrExpr(attr);
+    const node = attrExpr(attribute);
     if (isFn(node)) {
-      props[(attr.name as t.JSXIdentifier).name] = {fn: true, node};
-      continue;
-    }
-
-    if (node.type === 'Identifier' && env.callbacks?.has(node.name)) {
-      props[(attr.name as t.JSXIdentifier).name] = {
-        fn: true,
-        node: env.callbacks.get(node.name)!,
+      props[(attribute.name as t.JSXIdentifier).name] = {
+        isCallback: true,
+        node,
       };
       continue;
     }
 
-    if (node.type === 'Identifier' && env.fnProps?.has(node.name)) {
-      props[(attr.name as t.JSXIdentifier).name] = {
-        fn: true,
-        ...env.fnProps.get(node.name)!,
+    if (node.type === 'Identifier' && environment.callbacks?.has(node.name)) {
+      props[(attribute.name as t.JSXIdentifier).name] = {
+        isCallback: true,
+        node: environment.callbacks.get(node.name)!,
+      };
+      continue;
+    }
+
+    if (
+      node.type === 'Identifier' &&
+      environment.functionProps?.has(node.name)
+    ) {
+      props[(attribute.name as t.JSXIdentifier).name] = {
+        isCallback: true,
+        ...environment.functionProps.get(node.name)!,
       }; // forward original {node, env, state}
 
       continue;
@@ -168,15 +174,15 @@ function extractProps(
 
     // Any other prop folds to a constant when it can, else becomes a runtime expression.
     try {
-      const propName = (attr.name as t.JSXIdentifier).name;
+      const propName = (attribute.name as t.JSXIdentifier).name;
       props[propName] = {
         static: true,
         value: bindConst(propName, evalStatic(node, scope, 'boot')),
       };
     } catch {
-      props[(attr.name as t.JSXIdentifier).name] = {
+      props[(attribute.name as t.JSXIdentifier).name] = {
         static: false,
-        ...lowerSourcedWide(node, env),
+        ...lowerSourcedWide(node, environment),
       };
     }
   }
@@ -187,23 +193,23 @@ function extractProps(
 /**
  * Maps a component's parameter to its prop descriptors (handles destructure rename and defaults).
  *
- * @param fn  The component.
+ * @param functionNode  The component.
  * @param props  The props the instance was given.
  * @param scope  Module constants a default can refer to.
  *
  * @returns The descriptor each name in the component's body is bound to.
  */
 function bindParams(
-  fn: FunctionNode,
+  functionNode: FunctionNode,
   props: Record<string, PropDescriptor>,
   scope: Scope,
 ): Map<string, PropDescriptor> {
   const bindings = new Map<string, PropDescriptor>();
-  const param = fn.params[0];
-  if (!param) return bindings;
+  const parameter = functionNode.params[0];
+  if (!parameter) return bindings;
 
   // `function C(props)`: the whole props object is one constant, so every prop must fold.
-  if (param.type === 'Identifier') {
+  if (parameter.type === 'Identifier') {
     const propsObject: Record<string, unknown> = {};
     for (const [propName, descriptor] of Object.entries(props)) {
       if (!descriptor.static) {
@@ -215,10 +221,10 @@ function bindParams(
       propsObject[propName] = descriptor.value;
     }
 
-    bindings.set(param.name, {static: true, value: propsObject});
-  } else if (param.type === 'ObjectPattern') {
+    bindings.set(parameter.name, {static: true, value: propsObject});
+  } else if (parameter.type === 'ObjectPattern') {
     // `function C({x, y: renamed, z = 1})`: bind each name to its prop, else to its folded default.
-    const properties = param.properties.map(property => {
+    const properties = parameter.properties.map(property => {
       if (property.type === 'RestElement') {
         throw new Error(
           'AOT: rest props (...rest) in a component param not supported',
@@ -267,26 +273,28 @@ function bindParams(
 }
 
 /**
- * True if `expr` is how a component body refers to its children (destructured {children} or props.children).
+ * True if `expression` is how a component body refers to its children (destructured {children} or props.children).
  *
- * @param expr  A child expression.
- * @param env  The expression environment.
+ * @param expression  A child expression.
+ * @param environment  The expression environment.
  *
  * @returns Whether it names the children slot.
  */
-function isChildrenRef(expr: t.Node, env: Env): boolean {
-  const childrenRef = env.children?.ref;
+function isChildrenRef(expression: t.Node, environment: Env): boolean {
+  const childrenRef = environment.children?.ref;
   if (!childrenRef) return false;
   if (childrenRef.kind === 'local') {
-    return expr.type === 'Identifier' && expr.name === childrenRef.name;
+    return (
+      expression.type === 'Identifier' && expression.name === childrenRef.name
+    );
   }
 
   return (
-    expr.type === 'MemberExpression' &&
-    !expr.computed &&
-    expr.object.type === 'Identifier' &&
-    expr.object.name === childrenRef.name &&
-    (expr.property as t.Identifier).name === 'children'
+    expression.type === 'MemberExpression' &&
+    !expression.computed &&
+    expression.object.type === 'Identifier' &&
+    expression.object.name === childrenRef.name &&
+    (expression.property as t.Identifier).name === 'children'
   );
 }
 
@@ -296,24 +304,24 @@ function isChildrenRef(expr: t.Node, env: Env): boolean {
  *
  * @param element  The component instance.
  * @param scope  Compile-time constants in reach at the call site.
- * @param out  Everything emitted so far.
- * @param env  The caller's expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The caller's expression environment.
  * @param state  The caller's state table.
- * @param opts  How the instance is placed.
+ * @param options  How the instance is placed.
  *
  * @returns The instance, wrapping the element the component's JSX lowered to.
  */
 export function emitComponent(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
-  opts?: EmitOptions,
+  options?: EmitOptions,
 ): IrElement {
   // Look up the component and keep the call-site children that render something.
   const componentName = (element.openingElement.name as t.JSXIdentifier).name;
-  const fn = out.components.get(componentName)!;
+  const functionNode = output.components.get(componentName)!;
   const childNodes = inlineFragments(element.children).filter(
     child =>
       !(child.type === 'JSXText' && !child.value.trim()) &&
@@ -324,10 +332,10 @@ export function emitComponent(
   );
 
   // How the body refers to children: destructured `{ children }` (a local) or whole `props` → props.children.
-  const param = fn.params[0];
+  const parameter = functionNode.params[0];
   let childrenRef: ChildrenRef | null = null;
-  if (param?.type === 'ObjectPattern') {
-    for (const property of param.properties as t.ObjectProperty[]) {
+  if (parameter?.type === 'ObjectPattern') {
+    for (const property of parameter.properties as t.ObjectProperty[]) {
       if (
         ((property.key as t.Identifier)?.name ??
           (property.key as t.StringLiteral)?.value) === 'children'
@@ -338,29 +346,31 @@ export function emitComponent(
         };
       }
     }
-  } else if (param?.type === 'Identifier') {
-    childrenRef = {kind: 'props', name: param.name};
+  } else if (parameter?.type === 'Identifier') {
+    childrenRef = {kind: 'props', name: parameter.name};
   }
 
   // A child sees only module scope: start from module consts with no locals, so caller bindings cannot leak in.
-  const moduleScope = env.moduleConsts ?? scope;
+  const moduleScope = environment.moduleConstants ?? scope;
   const childScope: Scope = {...moduleScope};
   const childLocals = new Map<string, Local>();
   // Callback props resolve to the caller's function, env and state; inherit the caller's own so they forward.
-  const fnProps = new Map<string, FunctionProp>(env.fnProps);
+  const functionProps = new Map<string, FunctionProp>(
+    environment.functionProps,
+  );
 
   // Bind each prop: a callback to fnProps, a constant to the child's scope, a runtime value to its locals.
   for (const [name, descriptor] of bindParams(
-    fn,
-    extractProps(element.openingElement, scope, env),
+    functionNode,
+    extractProps(element.openingElement, scope, environment),
     moduleScope,
   )) {
     // The children binding comes from the slot, not from a value prop.
     if (childrenRef?.kind === 'local' && name === childrenRef?.name) continue;
-    if (descriptor.fn) {
-      fnProps.set(name, {
+    if (descriptor.isCallback) {
+      functionProps.set(name, {
         node: descriptor.node,
-        env: descriptor.env ?? env,
+        environment: descriptor.environment ?? environment,
         state: descriptor.state ?? state,
       });
     } else if (descriptor.static) {
@@ -370,11 +380,11 @@ export function emitComponent(
         name: descriptor.name,
         slotKind: descriptor.slotKind,
         struct: descriptor.struct,
-        isBool: descriptor.isBool, // keep boolean-ness across the prop boundary (extractProps supplies it)
-        lit: descriptor.lit,
+        isBoolean: descriptor.isBoolean, // keep boolean-ness across the prop boundary (extractProps supplies it)
+        isLiteral: descriptor.isLiteral,
         wide: descriptor.wide,
         source: descriptor.source,
-        expr: descriptor.expr,
+        expression: descriptor.expression,
       });
 
       // A dynamic prop is a runtime binding; drop any same-named module const so no fold emits it instead.
@@ -386,152 +396,160 @@ export function emitComponent(
   const children: ChildrenSlot = {
     nodes: childNodes,
     scope,
-    env,
+    environment,
     ref: childrenRef,
   };
 
   // Each inlined instance namespaces its own hooks under a unique `c<N>_` prefix so instances stay independent.
-  const prefix = `c${out.instN++}_`;
+  const prefix = `c${output.instanceCount++}_`;
 
   // Fold the child body's static consts as lowerApp does for App; they shadow same-named module consts.
-  if (fn.body.type === 'BlockStatement') {
+  if (functionNode.body.type === 'BlockStatement') {
     // As in App: the body's own names, hook bindings included, shadow module ones before anything folds.
-    for (const name of declaredNames(fn.body.body)) {
+    for (const name of declaredNames(functionNode.body.body)) {
       delete childScope[name];
     }
 
-    for (const stmt of fn.body.body) {
-      if (stmt.type !== 'VariableDeclaration' || stmt.kind !== 'const') {
+    for (const statement of functionNode.body.body) {
+      if (
+        statement.type !== 'VariableDeclaration' ||
+        statement.kind !== 'const'
+      ) {
         continue;
       }
-      for (const decl of stmt.declarations) {
-        if (decl.id.type !== 'Identifier' || !decl.init) continue;
-        if (childLocals.has(decl.id.name)) continue; // a dynamic prop of that name is already bound
+      for (const declarator of statement.declarations) {
+        if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
+        if (childLocals.has(declarator.id.name)) continue; // a dynamic prop of that name is already bound
         try {
           setBinding(
             childScope,
-            decl.id.name,
+            declarator.id.name,
             bindConst(
-              decl.id.name,
-              evalStatic(decl.init, withUndefined(childScope), 'boot'),
+              declarator.id.name,
+              evalStatic(declarator.init, withUndefined(childScope), 'boot'),
             ),
           );
         } catch {
           // A dynamic const hides any same-named module const; a memo re-binds it below, else it stays unresolved.
-          delete childScope[decl.id.name];
+          delete childScope[declarator.id.name];
         }
       }
     }
   }
 
   // Collect the child's own hooks under its prefix; its state slots are runtime bindings, so they leave the scope.
-  const childAnims = collectAnims(fn.body, childScope, prefix);
-  const childRefs = collectRefs(fn.body, childScope, prefix, env.wide);
-  const childPans = collectPanResponders(fn.body, prefix);
-  const childCallbacks = collectCallbacks(fn.body);
-  const childMemos = collectMemos(fn.body);
+  const childAnimations = collectAnims(functionNode.body, childScope, prefix);
+  const childRefs = collectRefs(
+    functionNode.body,
+    childScope,
+    prefix,
+    environment.wide,
+  );
+  const childPans = collectPanResponders(functionNode.body, prefix);
+  const childCallbacks = collectCallbacks(functionNode.body);
+  const childMemos = collectMemos(functionNode.body);
   let childState = state;
-  if (usesState(fn)) {
+  if (usesState(functionNode)) {
     childState = collectState(
-      fn.body as t.BlockStatement,
+      functionNode.body as t.BlockStatement,
       childScope,
-      env.caps,
+      environment.caps,
       prefix,
-      env.wide,
+      environment.wide,
     );
     settleBootInitials(childState.byName.values());
-    out.childStateRecords.push(...childState.byName.values());
+    output.childStateRecords.push(...childState.byName.values());
     for (const name of childState.byName.keys()) {
       delete childScope[name];
     }
   }
 
   // The child's own refs and animated values are runtime bindings too (see lowerApp).
-  for (const name of [...childAnims.keys(), ...childRefs.keys()]) {
+  for (const name of [...childAnimations.keys(), ...childRefs.keys()]) {
     delete childScope[name];
   }
-  out.childRefs.push(...childRefs.values());
-  out.childAnimations.push(...childAnims.values());
+  output.childRefs.push(...childRefs.values());
+  output.childAnimations.push(...childAnimations.values());
 
   // The child's expression environment: the caller's, with every name-keyed table replaced by the child's.
-  const childEnv: Env = {
-    ...env,
-    consts: childScope,
+  const childEnvironment: Env = {
+    ...environment,
+    constants: childScope,
     locals: childLocals,
     children,
-    fnProps,
+    functionProps,
     state: childState.byName,
-    animations: childAnims,
+    animations: childAnimations,
     refs: childRefs,
     pans: childPans,
     callbacks: childCallbacks,
-    helpers: collectHelpers(fn.body, out.program),
-    cbPrefix: prefix,
+    helpers: collectHelpers(functionNode.body, output.program),
+    callbackPrefix: prefix,
   };
 
   // Resolve memos in order (fold, else a local expression), then compile its effects, all in the child's env/state.
-  for (const [name, expr] of childMemos) {
+  for (const [name, expression] of childMemos) {
     try {
       setBinding(
         childScope,
         name,
-        bindConst(name, evalStatic(expr, childScope, 'boot')),
+        bindConst(name, evalStatic(expression, childScope, 'boot')),
       );
     } catch {
-      const memo = lowerSourcedWide(expr, childEnv);
+      const memo = lowerSourcedWide(expression, childEnvironment);
       childLocals.set(name, {
         slotKind: memo.slotKind,
-        isBool: memo.isBool,
-        lit: memo.lit,
+        isBoolean: memo.isBoolean,
+        isLiteral: memo.isLiteral,
         wide: memo.wide,
         source: memo.source,
-        expr: memo.expr,
+        expression: memo.expression,
       });
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
 
-  for (const effect of collectEffects(fn.body)) {
-    lowerEffect(effect, childEnv, childState, out);
+  for (const effect of collectEffects(functionNode.body)) {
+    lowerEffect(effect, childEnvironment, childState, output);
   }
 
   // Emit the JSX the component returns, in the child's own scope.
   const root = emitNode(
-    componentReturnJSX(fn, childScope),
+    componentReturnJSX(functionNode, childScope),
     childScope,
-    out,
-    childEnv,
+    output,
+    childEnvironment,
     childState,
-    opts,
+    options,
   );
   return {kind: 'component', id: root.id, name: componentName, prefix, root};
 }
 
 /**
- * Emits an element / component child. opts.show toggles its display.
+ * Emits an element / component child. options.show toggles its display.
  *
  * @param node  The child; anything but a JSX element is refused.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param opts  How the child is placed.
+ * @param options  How the child is placed.
  *
  * @returns The child.
  */
 function emitElementInto(
   node: t.Node,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
-  opts?: EmitOptions,
+  options?: EmitOptions,
 ): IrElement {
   if (node.type !== 'JSXElement') {
     throw new Error(`AOT: expected a JSX element here, got ${node.type}`);
   }
 
-  return emitNode(node, scope, out, env, state, opts);
+  return emitNode(node, scope, output, environment, state, options);
 }
 
 /**
@@ -539,8 +557,8 @@ function emitElementInto(
  *
  * @param call  The `.map(…)` call.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The rows.
@@ -548,8 +566,8 @@ function emitElementInto(
 function emitMap(
   call: t.CallExpression,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrElement[] {
   // The array must fold at compile time and the callback must be inline.
@@ -566,14 +584,14 @@ function emitMap(
     throw new Error('AOT: .map target did not resolve to an array');
   }
 
-  const mapFn = call.arguments[0];
-  if (!isFn(mapFn)) {
+  const mapFunction = call.arguments[0];
+  if (!isFn(mapFunction)) {
     throw new Error('AOT: .map argument must be an inline function');
   }
 
-  const itemName = (mapFn.params[0] as t.Identifier | undefined)?.name;
-  const indexName = (mapFn.params[1] as t.Identifier | undefined)?.name;
-  const rowJSX = componentReturnJSX(mapFn);
+  const itemName = (mapFunction.params[0] as t.Identifier | undefined)?.name;
+  const indexName = (mapFunction.params[1] as t.Identifier | undefined)?.name;
+  const rowJSX = componentReturnJSX(mapFunction);
 
   // Emit one row per element, with its item and index bound as compile-time constants.
   return items.map((item, index) => {
@@ -587,8 +605,8 @@ function emitMap(
     return emitElementInto(
       rowJSX,
       rowScope,
-      out,
-      rowEnv(env, [itemName, indexName], rowScope),
+      output,
+      rowEnv(environment, [itemName, indexName], rowScope),
       state,
     );
   });
@@ -597,24 +615,24 @@ function emitMap(
 /**
  * The env for one `.map` row. Its callback params (item, index) shadow every outer binding of the same
  * name — a JS arrow parameter always does — so those names leave every name-keyed map (state, locals,
- * callbacks, helpers, …), and the row's own binding wins: in `consts`, or in `ownLocals` for a pooled
+ * callbacks, helpers, …), and the row's own binding wins: in `constants`, or in `ownLocals` for a pooled
  * row's struct item.
  *
- * @param env  The expression environment around the `.map`.
- * @param params  The callback's parameter names (item, index), where present.
- * @param consts  The row's compile-time scope.
+ * @param environment  The expression environment around the `.map`.
+ * @param parameters  The callback's parameter names (item, index), where present.
+ * @param constants  The row's compile-time scope.
  * @param ownLocals  The row's runtime bindings, when its item is one (a pooled row).
  *
  * @returns The row's environment.
  */
 function rowEnv(
-  env: Env,
-  params: (string | undefined)[],
-  consts: Scope,
+  environment: Env,
+  parameters: (string | undefined)[],
+  constants: Scope,
   ownLocals: Map<string, Local> | null = null,
 ): Env {
   // Copy a table without the row's names; one that binds none of them is shared as is.
-  const names = params.filter(Boolean) as string[];
+  const names = parameters.filter(Boolean) as string[];
   const drop = <Table extends Map<string, unknown> | undefined>(
     bindings: Table,
   ): Table => {
@@ -630,34 +648,34 @@ function rowEnv(
 
   // A row param named like the children reference (`children` or `props`) shadows it, leaving no children slot.
   return {
-    ...env,
-    consts,
-    state: drop(env.state),
-    refs: drop(env.refs),
-    animations: drop(env.animations),
-    locals: ownLocals ?? drop(env.locals),
-    callbacks: drop(env.callbacks),
-    fnProps: drop(env.fnProps),
-    pans: drop(env.pans),
-    helpers: drop(env.helpers),
-    svgImports: drop(env.svgImports),
-    children: names.includes(env.children?.ref?.name as string)
+    ...environment,
+    constants,
+    state: drop(environment.state),
+    refs: drop(environment.refs),
+    animations: drop(environment.animations),
+    locals: ownLocals ?? drop(environment.locals),
+    callbacks: drop(environment.callbacks),
+    functionProps: drop(environment.functionProps),
+    pans: drop(environment.pans),
+    helpers: drop(environment.helpers),
+    svgImports: drop(environment.svgImports),
+    children: names.includes(environment.children?.ref?.name as string)
       ? null
-      : env.children,
+      : environment.children,
   };
 }
 
 /**
  * `{listState.map((item, i) => <Row/>)}` over a STATE array of variable length. Pre-allocates a fixed
- * pool of `cap` rows (no runtime malloc); the row at index `row` binds `item` to `s_<name>[row]` (a struct
+ * pool of `capacity` rows (no runtime malloc); the row at index `row` binds `item` to `s_<name>[row]` (a struct
  * local) and is shown only while `row < count` (display toggle). the update then drives every row's content
  * and show.
  *
  * @param call  The `.map(…)` call.
  * @param listState  The list state it maps over.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The pool.
@@ -666,22 +684,22 @@ function emitDynamicMap(
   call: t.CallExpression,
   listState: ListState,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrChild {
-  const mapFn = call.arguments[0];
-  if (!isFn(mapFn)) {
+  const mapFunction = call.arguments[0];
+  if (!isFn(mapFunction)) {
     throw new Error('AOT: .map argument must be an inline function');
   }
 
-  const itemName = (mapFn.params[0] as t.Identifier | undefined)?.name;
-  const indexName = (mapFn.params[1] as t.Identifier | undefined)?.name;
-  const rowJSX = componentReturnJSX(mapFn);
+  const itemName = (mapFunction.params[0] as t.Identifier | undefined)?.name;
+  const indexName = (mapFunction.params[1] as t.Identifier | undefined)?.name;
+  const rowJSX = componentReturnJSX(mapFunction);
 
   // Build every row of the pool; each row's display is tied to the list's current count.
   const rows: IrElement[] = [];
-  for (let rowIndex = 0; rowIndex < listState.cap; rowIndex++) {
+  for (let rowIndex = 0; rowIndex < listState.capacity; rowIndex++) {
     // The item is a runtime struct slot, so drop any same-named const from the row scope, as emitComponent does.
     const rowScope: Scope = {...scope};
     if (itemName) {
@@ -692,7 +710,7 @@ function emitDynamicMap(
       setBinding(rowScope, indexName, rowIndex); // the index is a compile-time literal per pooled row
     }
 
-    const rowLocals = new Map<string, Local>(env.locals);
+    const rowLocals = new Map<string, Local>(environment.locals);
     if (indexName) {
       rowLocals.delete(indexName); // the index is a per-row literal in rowScope
     }
@@ -711,8 +729,8 @@ function emitDynamicMap(
       emitElementInto(
         rowJSX,
         rowScope,
-        out,
-        rowEnv(env, [itemName, indexName], rowScope, rowLocals),
+        output,
+        rowEnv(environment, [itemName, indexName], rowScope, rowLocals),
         state,
         {show: {kind: 'rowInUse', row: rowIndex, list: listState}},
       ),
@@ -738,16 +756,16 @@ const rendersNothing = (value: unknown): boolean =>
 /**
  * The error for a child expression that is not lowered; `what` describes it when it folded to a value.
  *
- * @param expr  The child expression.
+ * @param expression  The child expression.
  * @param what  Its folded value, described, or null when it does not fold.
  *
  * @returns The error, for the caller to throw.
  */
-function unsupportedChild(expr: t.Node, what: string | null): AotError {
+function unsupportedChild(expression: t.Node, what: string | null): AotError {
   const error =
     what == null
       ? aotError(
-          `AOT: unsupported expression child "${expr.type}" in a container`,
+          `AOT: unsupported expression child "${expression.type}" in a container`,
           'a child expression must be a JSX element, `cond && <El/>` / a ternary of elements, ' +
             "or `list.map(item => <El/>)`. A bare variable holding JSX isn't inlined — write the " +
             'element directly. (If this is a responsive Flow-A-only branch, compile at the target ' +
@@ -757,8 +775,8 @@ function unsupportedChild(expr: t.Node, what: string | null): AotError {
           `AOT: a non-element expression child (${what}) cannot render here`,
           'only JSX elements render as children; wrap text in a <Text>{…}</Text>.',
         );
-  if (expr.loc) {
-    error.aotLoc = expr.loc.start;
+  if (expression.loc) {
+    error.aotLoc = expression.loc.start;
   }
 
   return error;
@@ -769,43 +787,46 @@ function unsupportedChild(expr: t.Node, what: string | null): AotError {
  * nothing. A condition that folds picks its branch now; a state-driven one builds every branch and shows each
  * only while it is chosen, `within` the branch it sits in.
  *
- * @param expr  The branch.
+ * @param expression  The branch.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  * @param within  When the branch it sits in shows, or null at the top.
  *
  * @returns The branch.
  */
 function lowerBranch(
-  expr: t.Node,
+  expression: t.Node,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
   within: IrShow | null,
 ): IrBranch {
-  if (expr.type === 'JSXElement') {
+  if (expression.type === 'JSXElement') {
     return emitElementInto(
-      expr,
+      expression,
       scope,
-      out,
-      env,
+      output,
+      environment,
       state,
       within ? {show: within} : {},
     );
   }
 
-  const isAnd = expr.type === 'LogicalExpression' && expr.operator === '&&';
-  if (isAnd || expr.type === 'ConditionalExpression') {
-    const testNode = isAnd ? expr.left : (expr as t.ConditionalExpression).test;
+  const isAnd =
+    expression.type === 'LogicalExpression' && expression.operator === '&&';
+  if (isAnd || expression.type === 'ConditionalExpression') {
+    const testNode = isAnd
+      ? expression.left
+      : (expression as t.ConditionalExpression).test;
     const whenTrue = isAnd
-      ? expr.right
-      : (expr as t.ConditionalExpression).consequent;
+      ? expression.right
+      : (expression as t.ConditionalExpression).consequent;
     const whenFalse = isAnd
       ? null
-      : (expr as t.ConditionalExpression).alternate;
+      : (expression as t.ConditionalExpression).alternate;
 
     // A test that folds picks its branch at build time; `&&` with a false test renders nothing.
     let folded: {value: unknown} | null;
@@ -821,7 +842,8 @@ function lowerBranch(
         whenTrue.type === 'JSXElement' && whenFalse?.type === 'JSXElement'
           ? mergeBranchElements(testNode, whenTrue, whenFalse)
           : null;
-      if (merged) return lowerBranch(merged, scope, out, env, state, within);
+      if (merged)
+        return lowerBranch(merged, scope, output, environment, state, within);
       folded = {value: foldBoot(folded.value)};
     }
 
@@ -829,19 +851,19 @@ function lowerBranch(
       // A false `&&` yields its left value, which must be one React renders as nothing (`0` is text).
       if (isAnd && !folded.value && !rendersNothing(folded.value)) {
         throw unsupportedChild(
-          expr,
+          expression,
           JSON.stringify(folded.value) ?? String(folded.value),
         );
       }
 
       const chosen = folded.value ? whenTrue : whenFalse;
       return chosen
-        ? lowerBranch(chosen, scope, out, env, state, within)
+        ? lowerBranch(chosen, scope, output, environment, state, within)
         : null;
     }
 
     // A state-driven test builds every branch; each shows while the test picks it.
-    const test = lowerExpr(testNode, env);
+    const test = lowerExpr(testNode, environment);
     if (isAnd && NUMERIC_KINDS.has(test.type.kind)) {
       const error = aotError(
         'AOT: a number on the left of `&&` renders 0 as text when it is 0',
@@ -862,9 +884,16 @@ function lowerBranch(
     return {
       kind: 'conditional',
       test,
-      whenTrue: lowerBranch(whenTrue, scope, out, env, state, shown(false)),
+      whenTrue: lowerBranch(
+        whenTrue,
+        scope,
+        output,
+        environment,
+        state,
+        shown(false),
+      ),
       whenFalse: whenFalse
-        ? lowerBranch(whenFalse, scope, out, env, state, shown(true))
+        ? lowerBranch(whenFalse, scope, output, environment, state, shown(true))
         : null,
     };
   }
@@ -872,13 +901,13 @@ function lowerBranch(
   // Anything else must be a constant that renders nothing.
   let value: unknown;
   try {
-    value = evalStatic(expr, withUndefined(scope));
+    value = evalStatic(expression, withUndefined(scope));
   } catch {
-    throw unsupportedChild(expr, null);
+    throw unsupportedChild(expression, null);
   }
 
   if (!rendersNothing(value)) {
-    throw unsupportedChild(expr, JSON.stringify(value) ?? String(value));
+    throw unsupportedChild(expression, JSON.stringify(value) ?? String(value));
   }
 
   return null;
@@ -893,8 +922,8 @@ function lowerBranch(
  *
  * @param children  The container's children.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The container's children.
@@ -902,8 +931,8 @@ function lowerBranch(
 export function emitChildren(
   children: t.JSXElement['children'],
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrChild[] {
   const lowered: IrChild[] = [];
@@ -912,7 +941,7 @@ export function emitChildren(
   for (const child of inlineFragments(children)) {
     // An element child is emitted as it is; an {expression} child is lowered by its shape below.
     if (child.type === 'JSXElement') {
-      element(emitElementInto(child, scope, out, env, state));
+      element(emitElementInto(child, scope, output, environment, state));
       continue;
     }
 
@@ -937,17 +966,17 @@ export function emitChildren(
       throw unsupportedChild(child, null);
     }
 
-    const expr = child.expression;
-    if (expr.type === 'JSXEmptyExpression') continue;
+    const expression = child.expression;
+    if (expression.type === 'JSXEmptyExpression') continue;
 
-    if (isChildrenRef(expr, env)) {
+    if (isChildrenRef(expression, environment)) {
       // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env.
       lowered.push(
         ...emitChildren(
-          env.children!.nodes,
-          env.children!.scope,
-          out,
-          env.children!.env,
+          environment.children!.nodes,
+          environment.children!.scope,
+          output,
+          environment.children!.environment,
           state,
         ),
       );
@@ -955,25 +984,43 @@ export function emitChildren(
     }
 
     if (
-      expr.type === 'CallExpression' &&
-      expr.callee.type === 'MemberExpression' &&
-      (expr.callee.property as t.Identifier).name === 'map'
+      expression.type === 'CallExpression' &&
+      expression.callee.type === 'MemberExpression' &&
+      (expression.callee.property as t.Identifier).name === 'map'
     ) {
       // `{items.map(item => <X/>)}`: a pool of rows over list state, else unrolled over a constant array.
-      const mapTarget = expr.callee.object;
+      const mapTarget = expression.callee.object;
       const stateRecord =
-        mapTarget.type === 'Identifier' ? env.state.get(mapTarget.name) : null;
+        mapTarget.type === 'Identifier'
+          ? environment.state.get(mapTarget.name)
+          : null;
       if (stateRecord?.kind === 'list') {
-        lowered.push(emitDynamicMap(expr, stateRecord, scope, out, env, state));
+        lowered.push(
+          emitDynamicMap(
+            expression,
+            stateRecord,
+            scope,
+            output,
+            environment,
+            state,
+          ),
+        );
       } else {
-        emitMap(expr, scope, out, env, state).forEach(element);
+        emitMap(expression, scope, output, environment, state).forEach(element);
       }
 
       continue;
     }
 
     // An element, `cond && <X/>`, a ternary of them (nested too), or a constant that renders nothing.
-    const branch = lowerBranch(expr, scope, out, env, state, null);
+    const branch = lowerBranch(
+      expression,
+      scope,
+      output,
+      environment,
+      state,
+      null,
+    );
     if (branch?.kind === 'conditional') {
       lowered.push(branch);
     } else if (branch) {

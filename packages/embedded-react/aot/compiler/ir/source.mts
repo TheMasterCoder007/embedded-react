@@ -28,14 +28,14 @@ import type {IrExpr} from './expressions.mts';
 
 /** Where a source expression is in the app, for the errors its typing reports. */
 interface Located {
-  loc: SourcePosition | undefined;
+  location: SourcePosition | undefined;
 }
 
 /** A divisor that may have to be a constant (a time's), with where its error points. */
 export interface IrSourceDivisor {
   /** Its value, when it folds to a whole number. */
   constant: number | null;
-  loc: SourcePosition | undefined;
+  location: SourcePosition | undefined;
 }
 
 /**
@@ -63,12 +63,12 @@ export type IrSource = Located &
     | {kind: 'local'; local: Local}
     | {kind: 'ref'; ref: RefRecord}
     /** A value whose source fixes its type: an event or layout field, a clock, Math.PI, a list's count … */
-    | {kind: 'fixed'; expr: IrExpr}
-    | {kind: 'unary'; op: '-' | '+' | '!'; operand: IrSource}
+    | {kind: 'fixed'; expression: IrExpr}
+    | {kind: 'unary'; operator: '-' | '+' | '!'; operand: IrSource}
     /** Any binary operator; one the typing pass cannot compute is refused there, after its operands. */
     | {
         kind: 'binary';
-        op: string;
+        operator: string;
         left: IrSource;
         right: IrSource;
         /** The right operand as a divisor, for `%` and a time's `/`. */
@@ -77,7 +77,7 @@ export type IrSource = Located &
         leftIsNumber: boolean;
         rightIsNumber: boolean;
       }
-    | {kind: 'logical'; op: '&&' | '||'; left: IrSource; right: IrSource}
+    | {kind: 'logical'; operator: '&&' | '||'; left: IrSource; right: IrSource}
     | {
         kind: 'conditional';
         test: IrSource;
@@ -90,8 +90,8 @@ export type IrSource = Located &
      */
     | {
         kind: 'math';
-        fn: string;
-        args: IrSource[];
+        mathFunction: string;
+        callArguments: IrSource[];
         exactDivision: boolean;
         /** It keeps a whole number whole (floor, abs, min …), so beside a 64-bit value it is 64-bit math. */
         wholeMath: boolean;

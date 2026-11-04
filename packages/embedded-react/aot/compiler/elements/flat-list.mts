@@ -39,43 +39,43 @@ import type {EmitOptions, Env, Scope, StateTable} from '../types.mts';
  *
  * @param element  The <FlatList>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
- * @param opts  How the element is placed.
+ * @param options  How the element is placed.
  *
  * @returns The variable of the <ScrollView> node it lowers to.
  */
 export function emitFlatList(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
-  opts?: EmitOptions,
+  options?: EmitOptions,
 ): IrElement {
   // Collect the supported <FlatList> props, rejecting anything the AOT rewrite cannot statically lower.
   let dataNode: t.Node | null = null;
   let renderItem: t.Node | null = null;
-  let styleAttr: t.JSXAttribute | null = null;
-  for (const attr of element.openingElement.attributes) {
+  let styleAttribute: t.JSXAttribute | null = null;
+  for (const attribute of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute') {
+    if (attribute.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <FlatList> are not supported');
     }
 
     // skip non-props
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'keyExtractor' || name === 'key') continue;
 
     // process props
     if (name === 'data') {
-      dataNode = attrExpr(attr);
+      dataNode = attrExpr(attribute);
     } else if (name === 'renderItem') {
-      renderItem = attrExpr(attr);
+      renderItem = attrExpr(attribute);
     } else if (name === 'style') {
-      styleAttr = attr;
+      styleAttribute = attribute;
     } else {
       throw aotError(
         `AOT: <FlatList> prop "${name}" is not supported`,
@@ -97,8 +97,8 @@ export function emitFlatList(
       'renderItem={({ item, index }) => <Row item={item} />}',
     );
   }
-  const param = renderItem.params[0];
-  if (!param || param.type !== 'ObjectPattern') {
+  const parameter = renderItem.params[0];
+  if (!parameter || parameter.type !== 'ObjectPattern') {
     throw aotError(
       'AOT: FlatList renderItem must destructure ({ item, index })',
       'renderItem={({ item }) => <Row item={item} />}',
@@ -108,7 +108,7 @@ export function emitFlatList(
   // Extract the local item/index names from renderItem's destructured parameter, rejecting any unsupported row fields or patterns.
   let itemName: string | null = null;
   let indexName: string | null = null;
-  for (const prop of param.properties) {
+  for (const prop of parameter.properties) {
     if (prop.type !== 'ObjectProperty' || prop.value.type !== 'Identifier') {
       throw aotError(
         'AOT: FlatList renderItem may destructure only item / index (to plain names)',
@@ -134,13 +134,15 @@ export function emitFlatList(
   }
 
   // Rewrite renderItem `({ item, index }) => BODY` → a positional `.map` callback `(item, index) => BODY`.
-  const cbParams: t.Identifier[] = [{type: 'Identifier', name: itemName}];
+  const callbackParameters: t.Identifier[] = [
+    {type: 'Identifier', name: itemName},
+  ];
   if (indexName) {
-    cbParams.push({type: 'Identifier', name: indexName});
+    callbackParameters.push({type: 'Identifier', name: indexName});
   }
-  const cb: t.ArrowFunctionExpression = {
+  const callback: t.ArrowFunctionExpression = {
     type: 'ArrowFunctionExpression',
-    params: cbParams,
+    params: callbackParameters,
     body: renderItem.body,
     async: false,
     expression: renderItem.body.type !== 'BlockStatement',
@@ -153,14 +155,14 @@ export function emitFlatList(
       property: {type: 'Identifier', name: 'map'},
       computed: false,
     },
-    arguments: [cb],
+    arguments: [callback],
   };
   const scrollView: t.JSXElement = {
     type: 'JSXElement',
     openingElement: {
       type: 'JSXOpeningElement',
       name: {type: 'JSXIdentifier', name: 'ScrollView'},
-      attributes: styleAttr ? [styleAttr] : [],
+      attributes: styleAttribute ? [styleAttribute] : [],
       selfClosing: false,
     },
     closingElement: {
@@ -169,5 +171,5 @@ export function emitFlatList(
     },
     children: [{type: 'JSXExpressionContainer', expression: mapCall}],
   };
-  return emitNode(scrollView, scope, out, env, state, opts);
+  return emitNode(scrollView, scope, output, environment, state, options);
 }

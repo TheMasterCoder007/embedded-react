@@ -53,39 +53,42 @@ export class Out {
   /** Event handlers, one function each. */
   readonly handlers: IrHandler[] = [];
   /** A useCallback's handler, by component prefix and name, so each is emitted once. */
-  readonly cbEmitted = new Map<string, string>();
+  readonly emittedCallbacks = new Map<string, string>();
   /** File-scope vector op-tapes and paint tables, and the builders of state-driven drawings. */
   readonly vectors: IrVectorData[] = [];
   /** Numbers the next <Svg> (which names its tapes). */
-  svgN = 0;
-  readonly timerFns: IrTimerFunction[] = [];
+  svgCount = 0;
+  readonly timerFunctions: IrTimerFunction[] = [];
   /** What the build runs last: mount-once effects, and the first run of each dep-driven one. */
   readonly mountEffects: IrMountEffect[] = [];
   /** Animations' on_complete callbacks: completions, completion waits, and chains. */
-  readonly animCbs: IrAnimationCallback[] = [];
+  readonly animationCallbacks: IrAnimationCallback[] = [];
   /** The owner number of each composition that completion waits belong to, by composition; `isStarted` once a start waits. */
-  readonly animWaits = new Map<string, {owner: number; isStarted: boolean}>();
+  readonly animationWaits = new Map<
+    string,
+    {owner: number; isStarted: boolean}
+  >();
   /** Numbers the next animation sequence. */
-  seqN = 0;
+  sequenceCount = 0;
   /** Image assets the app reaches: asset name → source-relative import path. */
   readonly images = new Map<string, string>();
   /** A dynamic image source was reached, so every imported image has to be baked. */
   bakeAllImages = false;
   /** Numbers the next inlined component instance (its storage prefix is `c<n>_`). */
-  instN = 0;
+  instanceCount = 0;
   /** State, refs, and animated values that belong to inlined component instances. */
   readonly childStateRecords: StateRecord[] = [];
   readonly childRefs: RefRecord[] = [];
   readonly childAnimations: AnimRecord[] = [];
   /** Numbers the next effect. */
-  effN = 0;
-  readonly effectFns: IrEffectFunction[] = [];
+  effectCount = 0;
+  readonly effectFunctions: IrEffectFunction[] = [];
   /** File-scope variables the effects and animation loops need. */
-  readonly effectDecls: IrStaticDecl[] = [];
+  readonly effectDeclarations: IrStaticDecl[] = [];
   /** Dep-driven effects, which the update re-runs when one of their deps changed. */
-  readonly depEffects: IrDepEffect[] = [];
+  readonly dependencyEffects: IrDepEffect[] = [];
   /** Numbers the next PanResponder. */
-  panN = 0;
+  panCount = 0;
   /** Every PanResponder a node spreads, lowered once each. */
   readonly panResponders: IrPanResponder[] = [];
   /** The module's function components, by name, for inlining. */

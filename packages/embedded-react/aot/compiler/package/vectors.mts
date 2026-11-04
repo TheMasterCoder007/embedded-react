@@ -52,7 +52,7 @@ import type {ProgramGradient, ProgramPaint, ProgramTape} from './writer.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** The engine's vector opcodes, as their ER_VOP_* names. */
-const VECTOR_OPS: Record<string, number> = {
+const VECTOR_OPCODES: Record<string, number> = {
   ER_VOP_SHAPE: 0,
   ER_VOP_MOVE: 1,
   ER_VOP_LINE: 2,
@@ -62,10 +62,14 @@ const VECTOR_OPS: Record<string, number> = {
   ER_VOP_CLOSE: 6,
 };
 
-const CHAIN_OPS = {'+': 'FADD', '-': 'FSUB', '*': 'FMUL'} as const;
+const CHAIN_OPCODES = {'+': 'FADD', '-': 'FSUB', '*': 'FMUL'} as const;
 
 /** Pi, as a float. */
 const FLOAT_PI = Math.fround(Math.PI);
+
+/** An arc's 0° points up, 90° from the math's; and the degrees in half a turn. */
+const ARC_ZERO_DEGREES = 90;
+const HALF_TURN_DEGREES = 180;
 
 /** The bound a damage hint's edges are kept within. */
 const DIRTY_BOUND = 1e9;
@@ -229,7 +233,7 @@ const isConstant = (value: IrTapeValue): boolean =>
 function constantFloat(value: IrTapeValue): number {
   switch (value.kind) {
     case 'op':
-      return VECTOR_OPS[value.op];
+      return VECTOR_OPCODES[value.operation];
     case 'number':
       return value.value;
     case 'fullTurn':
@@ -302,8 +306,8 @@ function tapeValue(
   value: IrTapeValue,
   locals: Map<string, Register>,
 ): Register {
-  const {fn} = codegen;
-  const result = (): Register => fn.register('float');
+  const {builder} = codegen;
+  const result = (): Register => builder.register('float');
   switch (value.kind) {
     case 'op':
     case 'number':
@@ -323,8 +327,8 @@ function tapeValue(
       let sum = tapeValue(codegen, value.first, locals);
       for (const term of value.rest) {
         const next = result();
-        fn.abc(
-          CHAIN_OPS[term.op],
+        builder.abc(
+          CHAIN_OPCODES[term.operator],
           next.index,
           sum.index,
           tapeValue(codegen, term.value, locals).index,
@@ -336,23 +340,23 @@ function tapeValue(
     case 'radians': {
       // (degrees - 90) * pi / 180
       const radians = result();
-      fn.abc(
+      builder.abc(
         'FSUB',
         radians.index,
         tapeValue(codegen, value.degrees, locals).index,
-        codegen.load('float', 90).index,
+        codegen.load('float', ARC_ZERO_DEGREES).index,
       );
-      fn.abc(
+      builder.abc(
         'FMUL',
         radians.index,
         radians.index,
         codegen.load('float', FLOAT_PI).index,
       );
-      fn.abc(
+      builder.abc(
         'FDIV',
         radians.index,
         radians.index,
-        codegen.load('float', 180).index,
+        codegen.load('float', HALF_TURN_DEGREES).index,
       );
       return radians;
     }
@@ -360,8 +364,8 @@ function tapeValue(
       // min(max(radius, 0), side / 2), passing over a NaN, where FMATH would keep it.
       const radius = tapeValue(codegen, value.radius, locals);
       const zero = codegen.load('float', 0);
-      const above = fn.register('bool');
-      fn.abc('FLT', above.index, zero.index, radius.index);
+      const above = builder.register('bool');
+      builder.abc('FLT', above.index, zero.index, radius.index);
       const atLeastZero = codegen.choose(
         above,
         () => radius,
@@ -369,14 +373,14 @@ function tapeValue(
         'float',
       );
       const half = result();
-      fn.abc(
+      builder.abc(
         'FMUL',
         half.index,
         tapeValue(codegen, value.side, locals).index,
         codegen.load('float', 0.5).index,
       );
-      const below = fn.register('bool');
-      fn.abc('FLT', below.index, half.index, atLeastZero.index);
+      const below = builder.register('bool');
+      builder.abc('FLT', below.index, half.index, atLeastZero.index);
       return codegen.choose(
         below,
         () => half,
@@ -421,7 +425,11 @@ function setTape(
   tape.forEach((value, slot) => {
     if (!isConstant(value)) {
       codegen.scoped(() =>
-        codegen.fn.abx('VSET', tapeValue(codegen, value, locals).index, slot),
+        codegen.builder.abx(
+          'VSET',
+          tapeValue(codegen, value, locals).index,
+          slot,
+        ),
       );
     }
   });
@@ -441,16 +449,16 @@ function setPaints(
   vector: IrStateDrivenVector,
   locals: Map<string, Register>,
 ): boolean {
-  const {fn} = codegen;
+  const {builder} = codegen;
   let set = false;
   const field = (
-    op: 'VPAINT' | 'VGRAD',
+    opcode: 'VPAINT' | 'VGRAD',
     index: number,
     code: number,
     value: () => Register,
   ): void => {
     set = true;
-    codegen.scoped(() => fn.abc(op, value().index, index, code));
+    codegen.scoped(() => builder.abc(opcode, value().index, index, code));
   };
   const color = (paintColor: IrPaintColor & {kind: 'state'}) => () =>
     codegen.convert(codegen.propRegister(paintColor.value), 'int');
@@ -527,14 +535,14 @@ export function commitDrawing(
   plan: VectorPlan,
   node: () => Register,
 ): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   const tape = plan.drawingTape(vector);
   codegen.scoped(() => {
-    fn.abx('VTAPE', 0, tape);
+    builder.abx('VTAPE', 0, tape);
     const locals = drawingLocals(codegen, vector.locals);
     setTape(codegen, vector.tape, locals);
     const ownPaints = setPaints(codegen, vector, locals);
-    fn.abx(ownPaints ? 'VCOMMITP' : 'VCOMMIT', node().index, tape);
+    builder.abx(ownPaints ? 'VCOMMITP' : 'VCOMMIT', node().index, tape);
   });
 }
 
@@ -550,7 +558,7 @@ export function updateVector(
   update: IrUpdateVector,
   plan: VectorPlan,
 ): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   // A ref no node holds draws nothing.
   const handle = plan.refNodes.get(update.node);
   if (!handle) {
@@ -558,12 +566,12 @@ export function updateVector(
   }
   const tape = plan.updateTape(update);
   codegen.scoped(() => {
-    fn.abx('VTAPE', 0, tape);
+    builder.abx('VTAPE', 0, tape);
     const locals = drawingLocals(codegen, update.locals);
     setTape(codegen, update.tape, locals);
-    const node = fn.register('node');
-    fn.abx('GET64', node.index, handle.index);
-    fn.abx('VCOMMIT', node.index, tape);
+    const node = builder.register('node');
+    builder.abx('GET64', node.index, handle.index);
+    builder.abx('VCOMMIT', node.index, tape);
     const {dirty} = update;
     if (!dirty) {
       return;
@@ -572,13 +580,17 @@ export function updateVector(
       floatDirty(codegen, node, dirty);
       return;
     }
-    const edges = fn.consecutive(['int', 'int', 'int', 'int']);
+    const edges = builder.consecutive(['int', 'int', 'int', 'int']);
     dirty.forEach((edge, index) =>
       codegen.scoped(() =>
-        fn.abc('MOVE', edges[index].index, codegen.valueAs(edge, 'int').index),
+        builder.abc(
+          'MOVE',
+          edges[index].index,
+          codegen.valueAs(edge, 'int').index,
+        ),
       ),
     );
-    fn.abc('VDIRTY', node.index, edges[0].index);
+    builder.abc('VDIRTY', node.index, edges[0].index);
   });
 }
 
@@ -595,8 +607,8 @@ function floatDirty(
   node: Register,
   dirty: IrUpdateVector['dirty'] & object,
 ): void {
-  const {fn} = codegen;
-  const skip = fn.label();
+  const {builder} = codegen;
+  const skip = builder.label();
   const [x, y, width, height] = dirty.map(edge =>
     codegen.valueAs(edge, 'float'),
   );
@@ -604,16 +616,16 @@ function floatDirty(
   const zero = codegen.load('float', 0);
   for (const edge of [x, y, width, height]) {
     codegen.scoped(() => {
-      const difference = fn.register('float');
-      const finite = fn.register('bool');
-      fn.abc('FSUB', difference.index, edge.index, edge.index);
-      fn.abc('FEQ', finite.index, difference.index, zero.index);
-      fn.branch('JF', skip, finite);
+      const difference = builder.register('float');
+      const finite = builder.register('bool');
+      builder.abc('FSUB', difference.index, edge.index, edge.index);
+      builder.abc('FEQ', finite.index, difference.index, zero.index);
+      builder.branch('JF', skip, finite);
     });
   }
   const sum = (left: Register, right: Register): Register => {
-    const total = fn.register('float');
-    fn.abc('FADD', total.index, left.index, right.index);
+    const total = builder.register('float');
+    builder.abc('FADD', total.index, left.index, right.index);
     return total;
   };
   const low = codegen.load('float', -DIRTY_BOUND);
@@ -626,17 +638,17 @@ function floatDirty(
       [sum(y, height), MathFn.ceil],
     ] as const
   ).map(([value, rounding]) => {
-    const edge = fn.register('float');
-    fn.abc('FMATH', edge.index, value.index, value.index, rounding);
-    fn.abc('FMATH', edge.index, edge.index, low.index, MathFn.max);
-    fn.abc('FMATH', edge.index, edge.index, high.index, MathFn.min);
+    const edge = builder.register('float');
+    builder.abc('FMATH', edge.index, value.index, value.index, rounding);
+    builder.abc('FMATH', edge.index, edge.index, low.index, MathFn.max);
+    builder.abc('FMATH', edge.index, edge.index, high.index, MathFn.min);
     return codegen.convert(edge, 'int');
   });
-  const rect = fn.consecutive(['int', 'int', 'int', 'int']);
-  fn.abc('MOVE', rect[0].index, corners[0].index);
-  fn.abc('MOVE', rect[1].index, corners[1].index);
-  fn.abc('SUB', rect[2].index, corners[2].index, corners[0].index);
-  fn.abc('SUB', rect[3].index, corners[3].index, corners[1].index);
-  fn.abc('VDIRTY', node.index, rect[0].index);
-  fn.place(skip);
+  const rect = builder.consecutive(['int', 'int', 'int', 'int']);
+  builder.abc('MOVE', rect[0].index, corners[0].index);
+  builder.abc('MOVE', rect[1].index, corners[1].index);
+  builder.abc('SUB', rect[2].index, corners[2].index, corners[0].index);
+  builder.abc('SUB', rect[3].index, corners[3].index, corners[1].index);
+  builder.abc('VDIRTY', node.index, rect[0].index);
+  builder.place(skip);
 }

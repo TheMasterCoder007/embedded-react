@@ -33,7 +33,7 @@ const scalar = (name, isBool) => ({
   kind: 'scalar',
   name,
   slotKind: 'int',
-  isBool,
+  isBoolean: isBool,
   slotName: name,
 });
 const stateMap = new Map([
@@ -76,7 +76,7 @@ describe('vector IR: updateVector', () => {
     const env = {
       state: stateMap,
       locals: new Map(),
-      consts: {},
+      constants: {},
       refs: new Map([
         ['art', {kind: 'node', slotName: 'ref_art', used: false}],
       ]),
@@ -87,7 +87,7 @@ describe('vector IR: updateVector', () => {
     };
     const ctx = {
       stateChanged: false,
-      out: new Out(new Map(), null),
+      output: new Out(new Map(), null),
     };
     return {
       stmts: lowerStmts(

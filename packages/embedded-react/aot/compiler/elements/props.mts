@@ -40,7 +40,7 @@ export interface ElementSpec {
   /** Attributes React Native or Flow A know that Flow B refuses, each with what to do instead. */
   refused: Readonly<Record<string, string>>;
   /** Whether it takes the RN props that wrap an OS service the board does not have (testID and the like). */
-  platformNoOps: boolean;
+  takesPlatformProps: boolean;
   /** The style keys its node lays out or draws with, or null when it takes no style at all. */
   styleKeys: ReadonlySet<string> | null;
   /** The style keys the engine animates on its node, when bound to an animated value. */
@@ -367,7 +367,7 @@ const ELEMENTS: Record<string, ElementSpec> = {
       },
     ),
     // The Flow A wrapper warns about these too, so a list that runs in the simulator also compiles.
-    platformNoOps: false,
+    takesPlatformProps: false,
   },
   Svg: element(
     'Svg',
@@ -436,7 +436,7 @@ function element(
     tag,
     props: new Set(props),
     refused,
-    platformNoOps: true,
+    takesPlatformProps: true,
     styleKeys: new Set(styleKeys),
     animatedStyleKeys: new Set(animatedStyleKeys),
     children,
@@ -456,7 +456,7 @@ function shape(tag: string, geometry: string[]): ElementSpec {
     tag,
     props: new Set([...geometry, ...SVG_PAINT]),
     refused: {},
-    platformNoOps: false,
+    takesPlatformProps: false,
     styleKeys: null,
     animatedStyleKeys: new Set(),
     children: 'none',
@@ -492,14 +492,14 @@ export const svgShapeSpec = (tag: string): ElementSpec | undefined =>
 /**
  * An attribute's name as written, a namespaced one (`xlink:href`) included.
  *
- * @param attr  The attribute.
+ * @param attribute  The attribute.
  *
  * @returns Its name.
  */
-export const attrName = (attr: t.JSXAttribute): string =>
-  attr.name.type === 'JSXNamespacedName'
-    ? `${attr.name.namespace.name}:${attr.name.name.name}`
-    : attr.name.name;
+export const attrName = (attribute: t.JSXAttribute): string =>
+  attribute.name.type === 'JSXNamespacedName'
+    ? `${attribute.name.namespace.name}:${attribute.name.name.name}`
+    : attribute.name.name;
 
 /**
  * Pins an error to a construct's location.
@@ -528,20 +528,20 @@ export function at(error: AotError, node: t.Node): AotError {
 const declares = (spec: ElementSpec, name: string): boolean =>
   name === 'key' ||
   spec.props.has(name) ||
-  (spec.platformNoOps && RN_PLATFORM_NO_OPS.includes(name));
+  (spec.takesPlatformProps && RN_PLATFORM_NO_OPS.includes(name));
 
 /**
- * Whether `attr` sits on a built-in element or shape that does not declare it. A component's props are its own,
+ * Whether `attribute` sits on a built-in element or shape that does not declare it. A component's props are its own,
  * so an attribute on one is never undeclared.
  *
  * @param openingElement  The element's opening tag.
- * @param attr  One of its attributes.
+ * @param attribute  One of its attributes.
  *
  * @returns Whether the element would refuse it.
  */
 export function isUndeclaredAttribute(
   openingElement: t.JSXOpeningElement,
-  attr: t.JSXAttribute,
+  attribute: t.JSXAttribute,
 ): boolean {
   const nameNode = openingElement.name;
   const tag =
@@ -554,7 +554,7 @@ export function isUndeclaredAttribute(
         : null;
   const spec =
     tag == null ? undefined : (elementSpec(tag) ?? svgShapeSpec(tag));
-  return spec != null && !declares(spec, attrName(attr));
+  return spec != null && !declares(spec, attrName(attribute));
 }
 
 /**
@@ -568,10 +568,10 @@ export function checkAttributes(
   spec: ElementSpec,
   openingElement: t.JSXOpeningElement,
 ): void {
-  for (const attr of openingElement.attributes) {
-    if (attr.type !== 'JSXAttribute') continue;
+  for (const attribute of openingElement.attributes) {
+    if (attribute.type !== 'JSXAttribute') continue;
 
-    const name = attrName(attr);
+    const name = attrName(attribute);
     if (declares(spec, name)) continue;
 
     const refusal = Object.hasOwn(spec.refused, name)
@@ -582,7 +582,7 @@ export function checkAttributes(
         `AOT: <${spec.tag}> prop "${name}" is not supported`,
         refusal ?? `supported props: ${[...spec.props].join(', ')}.`,
       ),
-      attr,
+      attribute,
     );
   }
 }
@@ -600,15 +600,15 @@ export function withoutPlatformNoOps(
   spec: ElementSpec,
   element: t.JSXElement,
 ): t.JSXElement {
-  if (!spec.platformNoOps) return element;
+  if (!spec.takesPlatformProps) return element;
 
-  const attrs = element.openingElement.attributes;
-  const kept = attrs.filter(
-    attr =>
-      attr.type !== 'JSXAttribute' ||
-      !RN_PLATFORM_NO_OPS.includes(attrName(attr)),
+  const attributes = element.openingElement.attributes;
+  const kept = attributes.filter(
+    attribute =>
+      attribute.type !== 'JSXAttribute' ||
+      !RN_PLATFORM_NO_OPS.includes(attrName(attribute)),
   );
-  return kept.length === attrs.length
+  return kept.length === attributes.length
     ? element
     : {
         ...element,

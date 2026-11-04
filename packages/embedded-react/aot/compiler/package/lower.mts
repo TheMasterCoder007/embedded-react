@@ -248,13 +248,13 @@ const SPAN_FIELDS = [
  * Refuses what a package can't lower yet, pointing at where it is.
  *
  * @param what  What the app uses.
- * @param loc  Where in the source, when it is known.
+ * @param location  Where in the source, when it is known.
  */
-function notYetAt(what: string, loc?: SourcePosition): never {
+function notYetAt(what: string, location?: SourcePosition): never {
   try {
     notYet(what);
   } catch (error) {
-    locateError(error, loc);
+    locateError(error, location);
     throw error;
   }
 }
@@ -270,11 +270,11 @@ const isSetOnce = (node: IrNode): boolean =>
 /**
  * The most bytes a boot value's string can be: its longest literal, since nothing else reaches it at boot.
  *
- * @param expr  The value.
+ * @param expression  The value.
  *
  * @returns The bytes.
  */
-function longestLiteral(expr: IrExpr): number {
+function longestLiteral(expression: IrExpr): number {
   let longest = 0;
   const walk = (value: unknown): void => {
     if (!value || typeof value !== 'object') {
@@ -287,26 +287,29 @@ function longestLiteral(expr: IrExpr): number {
     }
     Object.values(node).forEach(walk);
   };
-  walk(expr);
+  walk(expression);
   return Math.max(longest, 1);
 }
 
 /**
  * Every string local a statement list declares, with its cap.
  *
- * @param stmts  The statements.
+ * @param statements  The statements.
  * @param found  Collects each local's name and cap.
  */
-function stringLocals(stmts: IrStmt[], found: Map<string, number>): void {
-  for (const stmt of stmts) {
-    if (stmt.kind === 'declareLocal' && stmt.init.type.kind === 'string') {
+function stringLocals(statements: IrStmt[], found: Map<string, number>): void {
+  for (const statement of statements) {
+    if (
+      statement.kind === 'declareLocal' &&
+      statement.initializer.type.kind === 'string'
+    ) {
       found.set(
-        stmt.name,
-        Math.max(found.get(stmt.name) ?? 0, stmt.stringCap - 1),
+        statement.name,
+        Math.max(found.get(statement.name) ?? 0, statement.stringCapacity - 1),
       );
-    } else if (stmt.kind === 'if') {
-      stringLocals(stmt.consequent, found);
-      stringLocals(stmt.alternate ?? [], found);
+    } else if (statement.kind === 'if') {
+      stringLocals(statement.consequent, found);
+      stringLocals(statement.alternate ?? [], found);
     }
   }
 }
@@ -314,16 +317,16 @@ function stringLocals(stmts: IrStmt[], found: Map<string, number>): void {
 /**
  * Every updateVector call a statement list makes.
  *
- * @param stmts  The statements.
+ * @param statements  The statements.
  * @param found  Collects the calls.
  */
-function updateVectors(stmts: IrStmt[], found: IrUpdateVector[]): void {
-  for (const stmt of stmts) {
-    if (stmt.kind === 'updateVector') {
-      found.push(stmt);
-    } else if (stmt.kind === 'if') {
-      updateVectors(stmt.consequent, found);
-      updateVectors(stmt.alternate ?? [], found);
+function updateVectors(statements: IrStmt[], found: IrUpdateVector[]): void {
+  for (const statement of statements) {
+    if (statement.kind === 'updateVector') {
+      found.push(statement);
+    } else if (statement.kind === 'if') {
+      updateVectors(statement.consequent, found);
+      updateVectors(statement.alternate ?? [], found);
     }
   }
 }
@@ -331,18 +334,18 @@ function updateVectors(stmts: IrStmt[], found: IrUpdateVector[]): void {
 /**
  * Every state and list a statement list sets.
  *
- * @param stmts  The statements.
+ * @param statements  The statements.
  * @param found  Collects the states.
  */
-function statesSet(stmts: IrStmt[], found: Set<StateRecord>): void {
-  for (const stmt of stmts) {
-    if (stmt.kind === 'setState' || stmt.kind === 'setStateText') {
-      found.add(stmt.state);
-    } else if ('list' in stmt) {
-      found.add(stmt.list);
-    } else if (stmt.kind === 'if') {
-      statesSet(stmt.consequent, found);
-      statesSet(stmt.alternate ?? [], found);
+function statesSet(statements: IrStmt[], found: Set<StateRecord>): void {
+  for (const statement of statements) {
+    if (statement.kind === 'setState' || statement.kind === 'setStateText') {
+      found.add(statement.state);
+    } else if ('list' in statement) {
+      found.add(statement.list);
+    } else if (statement.kind === 'if') {
+      statesSet(statement.consequent, found);
+      statesSet(statement.alternate ?? [], found);
     }
   }
 }
@@ -350,17 +353,17 @@ function statesSet(stmts: IrStmt[], found: Set<StateRecord>): void {
 /**
  * The type a dep's copy is kept in.
  *
- * @param dep  The dep.
+ * @param dependency  The dep.
  *
  * @returns Its type.
  */
-function depType(dep: IrExpr): ExprType {
-  switch (dep.type.kind) {
+function depType(dependency: IrExpr): ExprType {
+  switch (dependency.type.kind) {
     case 'bool':
     case 'float':
     case 'int64':
     case 'string':
-      return dep.type.kind;
+      return dependency.type.kind;
     default:
       return 'int';
   }
@@ -386,24 +389,24 @@ const mountUpdates = (mountEffect: IrMountEffect): boolean =>
  * @returns The lists.
  */
 function bodies(app: IrApp): IrStmt[][] {
-  const {out} = app;
+  const {output} = app;
   return [
-    ...out.handlers.flatMap(handler =>
+    ...output.handlers.flatMap(handler =>
       handler.kind === 'callback'
         ? [handler.callback.body]
         : handler.kind === 'panEvent' && handler.event.callback
           ? [handler.event.callback.body]
           : [],
     ),
-    ...out.timerFns.map(timer => timer.callback!.body),
-    ...out.effectFns.map(effectFunction =>
+    ...output.timerFunctions.map(timer => timer.callback!.body),
+    ...output.effectFunctions.map(effectFunction =>
       effectFunction.kind === 'mount'
         ? effectFunction.body
         : effectFunction.kind === 'cleanup'
           ? effectFunction.effect.cleanup!
           : effectFunction.effect.body,
     ),
-    ...out.mountEffects.flatMap(mountEffect =>
+    ...output.mountEffects.flatMap(mountEffect =>
       mountEffect.kind === 'inline' ? [mountEffect.callback.body] : [],
     ),
     ...completionsOf(app).map(completion => completion.body),
@@ -418,7 +421,7 @@ function bodies(app: IrApp): IrStmt[][] {
  * @returns The completions.
  */
 const completionsOf = (app: IrApp): IrCompletion[] =>
-  app.out.animCbs.flatMap(callback =>
+  app.output.animationCallbacks.flatMap(callback =>
     callback.kind === 'completion' ? [callback.completion] : [],
   );
 
@@ -469,7 +472,7 @@ function poolsOf(element: IrElement, found: Pool[]): void {
           rowNode.children.some(rowChild => rowChild.kind === 'pool'),
         );
         if (nested) {
-          notYetAt('a list inside a list row', nested.loc);
+          notYetAt('a list inside a list row', nested.location);
         }
       }
       // The rows go before the next node the parent builds itself.
@@ -518,8 +521,8 @@ function planSlots(
   | 'once'
   | 'effects'
 > {
-  const {listStrCap} = caps;
-  const {out} = app;
+  const {listStrCap: listStringCapacity} = caps;
+  const {output} = app;
   const arena = new Arena();
   const animations = new AnimationPlan(app, arena);
   const slots: ProgramSlots = {
@@ -561,7 +564,7 @@ function planSlots(
         ? arena.slot(
             ValueType.string,
             tables.string(String(initial)),
-            listStrCap - 1,
+            listStringCapacity - 1,
           )
         : state.slotKind === 'i64'
           ? arena.slot(
@@ -571,11 +574,11 @@ function planSlots(
           : state.slotKind === 'float'
             ? arena.slot(ValueType.float, floatBits(Number(initial)))
             : arena.slot(
-                state.isBool ? ValueType.bool : ValueType.int,
+                state.isBoolean ? ValueType.bool : ValueType.int,
                 Math.trunc(Number(initial)) | 0,
               );
     // A host value an effect's deps may read runs an update when it is set.
-    if (state.isWatched || (state.host && out.depEffects.length)) {
+    if (state.isWatched || (state.host && output.dependencyEffects.length)) {
       arena.track(slot);
     }
     slots.states.set(state, slot);
@@ -599,9 +602,9 @@ function planSlots(
     }
     let size = 0;
     const fields = state.struct.fields.map(field => {
-      const cap = field.kind === 'string' ? listStrCap - 1 : 0;
-      const entry = {type: ValueType[field.kind], cap, offset: size};
-      size += field.kind === 'string' ? (cap + 1 + 3) & ~3 : 4;
+      const capacity = field.kind === 'string' ? listStringCapacity - 1 : 0;
+      const entry = {type: ValueType[field.kind], cap: capacity, offset: size};
+      size += field.kind === 'string' ? (capacity + 1 + 3) & ~3 : 4;
       return entry;
     });
     if (size > MAX_U16) {
@@ -610,7 +613,7 @@ function planSlots(
         'lower ER_AOT_LIST_STR_CAP (the listStrCap option), or give the items fewer text fields.',
       );
     }
-    const slot = arena.list(rows.length, size, state.cap);
+    const slot = arena.list(rows.length, size, state.capacity);
     rows.push({size, fields});
     if (state.isWatched) {
       arena.track(slot);
@@ -621,7 +624,7 @@ function planSlots(
         .filter(field => field.kind === 'string')
         .map(field => [
           field.key,
-          arena.slot(ValueType.string, undefined, listStrCap - 1),
+          arena.slot(ValueType.string, undefined, listStringCapacity - 1),
         ]),
     );
     slots.lists.set(state, {slot, buffers});
@@ -660,8 +663,8 @@ function planSlots(
           ? arena.slot(
               ValueType.string,
               undefined,
-              bootSlot.init.kind === 'expr'
-                ? longestLiteral(bootSlot.init.expr)
+              bootSlot.initializer.kind === 'expr'
+                ? longestLiteral(bootSlot.initializer.expression)
                 : 1,
             )
           : arena.slot(
@@ -672,35 +675,38 @@ function planSlots(
   }
 
   // The effect locals a cleanup reads, and each effect's armed flag and copy of each dep.
-  for (const decl of out.effectDecls) {
-    if (decl.kind === 'local') {
+  for (const declaration of output.effectDeclarations) {
+    if (declaration.kind === 'local') {
       slots.hoisted.set(
-        decl.name,
-        decl.slotKind === 'string'
-          ? arena.slot(ValueType.string, undefined, listStrCap - 1)
+        declaration.name,
+        declaration.slotKind === 'string'
+          ? arena.slot(ValueType.string, undefined, listStringCapacity - 1)
           : arena.slot(
-              decl.slotKind === 'i64'
+              declaration.slotKind === 'i64'
                 ? ValueType.int64
-                : decl.slotKind === 'float'
+                : declaration.slotKind === 'float'
                   ? ValueType.float
                   : ValueType.int,
             ),
       );
-    } else if (decl.kind === 'armed') {
-      slots.armed.set(armedFlag(decl.effect.id), arena.slot(ValueType.bool));
+    } else if (declaration.kind === 'armed') {
+      slots.armed.set(
+        armedFlag(declaration.effect.id),
+        arena.slot(ValueType.bool),
+      );
     }
   }
   const copies = new Map<IrDepEffect, DepCopy[]>();
-  for (const effect of out.depEffects) {
+  for (const effect of output.dependencyEffects) {
     copies.set(
       effect,
-      effect.deps.map(dep => {
-        const type = depType(dep);
+      effect.dependencies.map(dependency => {
+        const type = depType(dependency);
         return {
           type,
           slot:
             type === 'string'
-              ? arena.slot(ValueType.string, undefined, listStrCap - 1)
+              ? arena.slot(ValueType.string, undefined, listStringCapacity - 1)
               : arena.slot(ValueType[type]),
         };
       }),
@@ -711,11 +717,11 @@ function planSlots(
   for (const body of bodies(app)) {
     stringLocals(body, locals);
   }
-  for (const [name, cap] of locals) {
+  for (const [name, capacity] of locals) {
     if (!slots.hoisted.has(name)) {
       slots.stringLocals.set(
         name,
-        arena.slot(ValueType.string, undefined, cap),
+        arena.slot(ValueType.string, undefined, capacity),
       );
     }
   }
@@ -757,13 +763,13 @@ function planSlots(
     pool.rows.forEach((rowElement, row) =>
       nodesOf(rowElement).forEach((node, place) => {
         if (readsInput(node)) {
-          notYetAt('onChangeText in a list row', node.loc);
+          notYetAt('onChangeText in a list row', node.location);
         }
         if (drawnOn.has(node)) {
-          notYetAt('updateVector on a node in a list row', node.loc);
+          notYetAt('updateVector on a node in a list row', node.location);
         }
         if (reached(node)) {
-          arrays[place] ??= arena.slot(ValueType.node, 0, pool.list.cap);
+          arrays[place] ??= arena.slot(ValueType.node, 0, pool.list.capacity);
           rowHandles.set(node, {array: arrays[place], row});
         }
       }),
@@ -792,29 +798,30 @@ function planSlots(
     : null;
 
   // Each PanResponder's gesture state.
-  for (const pan of out.panResponders) {
+  for (const pan of output.panResponders) {
     slots.gestures.set(pan.statePrefix, {
       granted: arena.slot(ValueType.bool),
-      baseDx: arena.slot(ValueType.int),
-      baseDy: arena.slot(ValueType.int),
+      baseDeltaX: arena.slot(ValueType.int),
+      baseDeltaY: arena.slot(ValueType.int),
       x0: arena.slot(ValueType.int),
       y0: arena.slot(ValueType.int),
     });
   }
 
   const requestsUpdate =
-    out.handlers.some(handler =>
+    output.handlers.some(handler =>
       handler.kind === 'callback'
         ? handler.callback.updatesState
         : handler.kind === 'panEvent' && !!handler.event.callback?.updatesState,
     ) ||
-    out.timerFns.some(timer => timer.callback!.updatesState) ||
-    out.mountEffects.some(mountUpdates) ||
+    output.timerFunctions.some(timer => timer.callback!.updatesState) ||
+    output.mountEffects.some(mountUpdates) ||
     completionsOf(app).some(completion => completion.updatesState);
   const requested = requestsUpdate
     ? arena.track(arena.slot(ValueType.bool))
     : null;
-  const hasEffects = out.depEffects.length > 0 || out.mountEffects.length > 0;
+  const hasEffects =
+    output.dependencyEffects.length > 0 || output.mountEffects.length > 0;
   const once =
     hasEffects ||
     pools.length ||
@@ -827,7 +834,7 @@ function planSlots(
 
   // A state an effect sets that a node reads waits for the next update in a pending flag.
   const effectWrites = new Set<StateRecord>();
-  for (const effect of out.depEffects) {
+  for (const effect of output.dependencyEffects) {
     statesSet(effect.body, effectWrites);
     statesSet(effect.cleanup ?? [], effectWrites);
   }
@@ -845,16 +852,16 @@ function planSlots(
     }
   }
   // The first mount effect is queued by the first pass.
-  const mountNext = out.mountEffects.length
+  const mountNext = output.mountEffects.length
     ? arena.slot(ValueType.int, 1)
     : null;
 
-  if (out.timerFns.length) {
+  if (output.timerFunctions.length) {
     arena.timerTable(caps.maxTimers);
   }
   // A pass queues each dep-driven effect and the next mount effect, and a mount effect the one after it.
   if (hasEffects) {
-    arena.eventQueue(out.depEffects.length + 1);
+    arena.eventQueue(output.dependencyEffects.length + 1);
   }
 
   arena.layOut();
@@ -936,7 +943,7 @@ function handlerFunction(
   inRow: boolean,
 ): number {
   // A PanResponder's handlers are wired as a responder, not by name.
-  const handler = lowering.app.out.handlers.find(
+  const handler = lowering.app.output.handlers.find(
     candidate => candidate.kind !== 'panEvent' && candidate.name === name,
   );
   if (!handler || handler.kind === 'panEvent') {
@@ -946,7 +953,7 @@ function handlerFunction(
   const then =
     handler.kind === 'pressFade'
       ? handler.then
-        ? lowering.app.out.handlers.find(
+        ? lowering.app.output.handlers.find(
             candidate =>
               candidate.kind === 'callback' && candidate.name === handler.then,
           )
@@ -1008,7 +1015,7 @@ function responderBindings(
       return {
         kind: BindingKind.event,
         event: kind,
-        target: made(`pan ${pan.fnPrefix} ${event.role}`, {
+        target: made(`pan ${pan.functionPrefix} ${event.role}`, {
           ...common,
           callback: event.callback ?? {body: [], updatesState: false},
           event: kind,
@@ -1022,7 +1029,7 @@ function responderBindings(
       return {
         kind: BindingKind.query,
         event: kind,
-        target: made(`pan ${pan.fnPrefix} query ${kind}`, {
+        target: made(`pan ${pan.functionPrefix} query ${kind}`, {
           ...common,
           callback: {body: [], updatesState: false},
           event: FunctionKind.query + kind,
@@ -1110,7 +1117,7 @@ function templateNodes(
     });
     lowering.bindings.push(...bindings);
   } catch (error) {
-    locateError(error, node.loc);
+    locateError(error, node.location);
     throw error;
   }
 
@@ -1164,7 +1171,7 @@ function rowTemplates(lowering: Lowering): void {
  * @param lowering  The program being lowered.
  */
 function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   const {tables} = lowering.slots;
   const spans = isSetOnce(node) ? node.spans : null;
   if (spans && spans.length > MAX_SPANS) {
@@ -1183,7 +1190,7 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
       ),
     ),
   );
-  fn.abx('PROPS', 0, tables.propSet(entries));
+  builder.abx('PROPS', 0, tables.propSet(entries));
 
   for (const {field, value} of node.stateProps) {
     codegen.setProp(field, value);
@@ -1191,7 +1198,7 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
   if (node.image?.kind === 'value') {
     const image = node.image.value;
     codegen.scoped(() =>
-      fn.abx(
+      builder.abx(
         'PSETS',
         codegen.valueAs(image, 'string').index,
         abiProp('image_name').id,
@@ -1202,19 +1209,19 @@ function setNode(codegen: Codegen, node: IrNode, lowering: Lowering): void {
     const {parts} = node.text;
     codegen.scoped(() => {
       codegen.text(parts);
-      fn.abc('FMTTEXT');
+      builder.abc('FMTTEXT');
     });
   }
   spans?.forEach((span, index) => {
-    fn.abx('FMTK', 0, tables.string(span.text));
-    fn.abc('FMTSPAN', index);
+    builder.abx('FMTK', 0, tables.string(span.text));
+    builder.abc('FMTSPAN', index);
   });
   if (spans) {
-    fn.abc('SPANS', spans.length);
+    builder.abc('SPANS', spans.length);
   }
 
   codegen.scoped(() =>
-    fn.abc('COMMIT', nodeHandle(codegen, node, lowering).index),
+    builder.abc('COMMIT', nodeHandle(codegen, node, lowering).index),
   );
 }
 
@@ -1232,11 +1239,11 @@ function nodeHandle(
   node: IrNode,
   lowering: Lowering,
 ): Register {
-  const {fn} = codegen;
-  const handle = fn.register('node');
+  const {builder} = codegen;
+  const handle = builder.register('node');
   const inRow = lowering.rowHandles.get(node);
   if (inRow) {
-    fn.abc(
+    builder.abc(
       'GETNI',
       handle.index,
       codegen.load('int', inRow.row).index,
@@ -1244,7 +1251,7 @@ function nodeHandle(
       inRow.array.index,
     );
   } else {
-    fn.abx('GET64', handle.index, lowering.handles.get(node)!.index);
+    builder.abx('GET64', handle.index, lowering.handles.get(node)!.index);
   }
   return handle;
 }
@@ -1256,7 +1263,7 @@ function nodeHandle(
  * @param lowering  The program being lowered.
  */
 function buildRows(codegen: Codegen, lowering: Lowering): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   for (const pool of lowering.pools) {
     codegen.scoped(() => {
       const parent = nodeHandle(codegen, pool.parent, lowering);
@@ -1266,9 +1273,9 @@ function buildRows(codegen: Codegen, lowering: Lowering): void {
         : parent;
       pool.templates.forEach((template, row) =>
         codegen.scoped(() =>
-          fn.abc(
+          builder.abc(
             'BUILD',
-            fn.register('node').index,
+            builder.register('node').index,
             parent.index,
             before.index,
             template | (codegen.load('int', row).index << 16),
@@ -1301,33 +1308,33 @@ function dirtyMasks(slots: Slot[]): Map<number, number> {
 /**
  * Runs `body` only when one of a set of dirty bits is set in this update pass, or one of a set of pending flags.
  *
- * @param fn  The update function.
+ * @param builder  The update function.
  * @param slots  The slots whose bits guard it.
  * @param body  Emits what it guards.
  * @param pending  The pending flags that guard it too.
  */
 function whenDirty(
-  fn: FunctionBuilder,
+  builder: FunctionBuilder,
   slots: Slot[],
   body: () => void,
   pending: Slot[] = [],
 ): void {
-  const run = fn.label();
-  const skip = fn.label();
+  const run = builder.label();
+  const skip = builder.label();
   for (const [word, mask] of dirtyMasks(slots)) {
-    fn.branchIfDirty(word, mask, run);
+    builder.branchIfDirty(word, mask, run);
   }
   for (const flag of pending) {
-    const checkpoint = fn.checkpoint();
-    const set = fn.register('bool');
-    fn.abx('GET32', set.index, flag.index);
-    fn.branch('JT', run, set);
-    fn.release(checkpoint);
+    const checkpoint = builder.checkpoint();
+    const set = builder.register('bool');
+    builder.abx('GET32', set.index, flag.index);
+    builder.branch('JT', run, set);
+    builder.release(checkpoint);
   }
-  fn.branch('JMP', skip);
-  fn.place(run);
+  builder.branch('JMP', skip);
+  builder.place(run);
   body();
-  fn.place(skip);
+  builder.place(skip);
 }
 
 /**
@@ -1339,7 +1346,7 @@ function whenDirty(
  */
 function setConstant(codegen: Codegen, slot: Slot, value: number): void {
   codegen.scoped(() =>
-    codegen.fn.abx(
+    codegen.builder.abx(
       'SET32',
       codegen.load(slot.type === ValueType.bool ? 'bool' : 'int', value).index,
       slot.index,
@@ -1356,7 +1363,7 @@ function setConstant(codegen: Codegen, slot: Slot, value: number): void {
  * @returns The function, or null when nothing needs it.
  */
 function updateFunction(lowering: Lowering): ProgramFunction | null {
-  const {out} = lowering.app;
+  const {output} = lowering.app;
   const nodes = nodesOf(lowering.app.root);
   const updated = nodes.filter(isStateDriven);
   const setOnce = nodes.filter(isSetOnce);
@@ -1368,21 +1375,21 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     !updated.length &&
     !setOnce.length &&
     !drawings.length &&
-    !out.depEffects.length &&
-    !out.mountEffects.length
+    !output.dependencyEffects.length &&
+    !output.mountEffects.length
   ) {
     return null;
   }
 
-  const fn = new FunctionBuilder(FunctionKind.update, 'the update');
-  const codegen = new Codegen(fn, lowering.slots);
+  const builder = new FunctionBuilder(FunctionKind.update, 'the update');
+  const codegen = new Codegen(builder, lowering.slots);
   const {pending, realBits, mountNext} = lowering.effects;
   const located = (node: IrNode, lower: () => void): void => {
-    fn.at(node.loc);
+    builder.at(node.location);
     try {
       lower();
     } catch (error) {
-      locateError(error, node.loc);
+      locateError(error, node.location);
       throw error;
     }
   };
@@ -1400,7 +1407,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
       : [];
     if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
       whenDirty(
-        fn,
+        builder,
         bits,
         lower,
         bits.flatMap(slot => pending.get(slot) ?? []),
@@ -1411,23 +1418,23 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
   };
 
   // A pass only an effect's writes started keeps what they changed for the next one.
-  const end = fn.label();
+  const end = builder.label();
   if (pending.size) {
-    const real = fn.label();
+    const real = builder.label();
     for (const [word, mask] of dirtyMasks(realBits)) {
-      fn.branchIfDirty(word, mask, real);
+      builder.branchIfDirty(word, mask, real);
     }
     for (const [state, flag] of pending) {
-      whenDirty(fn, [state], () => setConstant(codegen, flag, 1));
+      whenDirty(builder, [state], () => setConstant(codegen, flag, 1));
     }
-    fn.branch('JMP', end);
-    fn.place(real);
+    builder.branch('JMP', end);
+    builder.place(real);
   }
 
   // The rows, the props that read only boot values, and the drawings that do, built once.
   const builtOnce = drawings.filter(({node}) => !updatedVectorOf(node));
   if (setOnce.length || lowering.pools.length || builtOnce.length) {
-    whenDirty(fn, [lowering.once!], () => {
+    whenDirty(builder, [lowering.once!], () => {
       buildRows(codegen, lowering);
       setOnce.forEach(node =>
         located(node, () => setNode(codegen, node, lowering)),
@@ -1453,36 +1460,38 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
 
   // Each dep-driven effect checks its deps when it runs, each in turn.
   for (const check of lowering.effectFunctions.checks) {
-    fn.abx('EFFECT', 0, check);
+    builder.abx('EFFECT', 0, check);
   }
 
   // The first mount effect, then each one after a mount effect that set state.
   if (mountNext) {
     const {mounts} = lowering.effectFunctions;
-    const queued = out.mountEffects.flatMap((_, index) =>
-      index === 0 || mountUpdates(out.mountEffects[index - 1]) ? [index] : [],
+    const queued = output.mountEffects.flatMap((_, index) =>
+      index === 0 || mountUpdates(output.mountEffects[index - 1])
+        ? [index]
+        : [],
     );
     for (const index of queued) {
       codegen.scoped(() => {
-        const skip = fn.label();
-        const next = fn.register('int');
-        const isNext = fn.register('bool');
-        fn.abx('GET32', next.index, mountNext.index);
-        fn.abc(
+        const skip = builder.label();
+        const next = builder.register('int');
+        const isNext = builder.register('bool');
+        builder.abx('GET32', next.index, mountNext.index);
+        builder.abc(
           'EQ',
           isNext.index,
           next.index,
           codegen.load('int', index + 1).index,
         );
-        fn.branch('JF', skip, isNext);
-        fn.abx('EFFECT', 0, mounts[index]);
-        fn.place(skip);
+        builder.branch('JF', skip, isNext);
+        builder.abx('EFFECT', 0, mounts[index]);
+        builder.place(skip);
       });
     }
     setConstant(codegen, mountNext, 0);
   }
-  fn.place(end);
-  return fn.finish();
+  builder.place(end);
+  return builder.finish();
 }
 
 /**
@@ -1496,12 +1505,12 @@ function requestUpdate(codegen: Codegen, lowering: Lowering): void {
   if (!requested) {
     return;
   }
-  const {fn} = codegen;
+  const {builder} = codegen;
   codegen.scoped(() => {
-    const flag = fn.register('bool');
-    fn.abx('GET32', flag.index, requested.index);
-    fn.abc('NOT', flag.index, flag.index);
-    fn.abx('SET32', flag.index, requested.index);
+    const flag = builder.register('bool');
+    builder.abx('GET32', flag.index, requested.index);
+    builder.abc('NOT', flag.index, flag.index);
+    builder.abx('SET32', flag.index, requested.index);
   });
 }
 
@@ -1517,17 +1526,20 @@ function handlerBody(
   handler: HandlerFunction,
   lowering: Lowering,
 ): ProgramFunction {
-  const fn = new FunctionBuilder(handler.event, `handler ${handler.name}`);
+  const builder = new FunctionBuilder(handler.event, `handler ${handler.name}`);
   // A row's handler is entered with its row, in its first register.
-  const row = handler.inRow ? fn.reserved('int') : undefined;
-  const codegen = new Codegen(fn, lowering.slots, {input: handler.input, row});
+  const row = handler.inRow ? builder.reserved('int') : undefined;
+  const codegen = new Codegen(builder, lowering.slots, {
+    input: handler.input,
+    row,
+  });
   if (handler.test) {
-    return fn.finish(0, codegen.condition(handler.test));
+    return builder.finish(0, codegen.condition(handler.test));
   }
   if (handler.fade) {
     startPressFade(codegen, handler.fade, lowering.slots.animations);
   }
-  const end = fn.label();
+  const end = builder.label();
   if (handler.gesture) {
     keepGesture(codegen, handler.gesture, 'before', end, lowering);
   }
@@ -1538,8 +1550,8 @@ function handlerBody(
   if (handler.gesture) {
     keepGesture(codegen, handler.gesture, 'after', end, lowering);
   }
-  fn.place(end);
-  return fn.finish(row ? 1 : 0);
+  builder.place(end);
+  return builder.finish(row ? 1 : 0);
 }
 
 /**
@@ -1560,33 +1572,33 @@ function keepGesture(
   end: Label,
   lowering: Lowering,
 ): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   const slots = lowering.slots.gestures.get(gesture.statePrefix)!;
   const {role} = gesture;
   codegen.scoped(() => {
     if (when === 'before' && role !== 'reject') {
       const granted = codegen.get(slots.granted);
-      fn.branch(role === 'grant' ? 'JT' : 'JF', end, granted);
+      builder.branch(role === 'grant' ? 'JT' : 'JF', end, granted);
     }
     if (when === 'before' && role === 'grant') {
       codegen.set(slots.granted, codegen.load('bool', 1));
       const fields: [Slot, number][] = [
-        [slots.baseDx, EventField.dx],
-        [slots.baseDy, EventField.dy],
+        [slots.baseDeltaX, EventField.dx],
+        [slots.baseDeltaY, EventField.dy],
         [slots.x0, EventField.x],
         [slots.y0, EventField.y],
       ];
       for (const [slot, field] of fields) {
-        const value = fn.register('int');
-        fn.abc('EVT', value.index, field);
+        const value = builder.register('int');
+        builder.abc('EVT', value.index, field);
         codegen.set(slot, value);
       }
     }
     if (when === 'after' && (role === 'release' || role === 'terminate')) {
       codegen.set(slots.granted, codegen.load('bool', 0));
       const zero = codegen.load('int', 0);
-      codegen.set(slots.baseDx, zero);
-      codegen.set(slots.baseDy, zero);
+      codegen.set(slots.baseDeltaX, zero);
+      codegen.set(slots.baseDeltaY, zero);
     }
   });
 }
@@ -1605,13 +1617,13 @@ function timerBody(
   callback: IrCallback,
   lowering: Lowering,
 ): ProgramFunction {
-  const fn = new FunctionBuilder(FunctionKind.timer, `timer ${name}`);
-  const codegen = new Codegen(fn, lowering.slots);
+  const builder = new FunctionBuilder(FunctionKind.timer, `timer ${name}`);
+  const codegen = new Codegen(builder, lowering.slots);
   codegen.statements(callback.body);
   if (callback.updatesState) {
     requestUpdate(codegen, lowering);
   }
-  return fn.finish();
+  return builder.finish();
 }
 
 /**
@@ -1626,17 +1638,17 @@ function completionBody(
   completion: IrCompletion,
   lowering: Lowering,
 ): ProgramFunction {
-  const fn = new FunctionBuilder(
+  const builder = new FunctionBuilder(
     FunctionKind.helper,
     `completion ${completion.name}`,
   );
-  const finished = fn.reserved('bool');
-  const codegen = new Codegen(fn, lowering.slots, {finished});
+  const finished = builder.reserved('bool');
+  const codegen = new Codegen(builder, lowering.slots, {finished});
   codegen.statements(completion.body);
   if (completion.updatesState) {
     requestUpdate(codegen, lowering);
   }
-  return fn.finish(1);
+  return builder.finish(1);
 }
 
 /**
@@ -1665,16 +1677,20 @@ function stackCells(functions: ProgramFunction[]): number {
 /**
  * How many of some instructions a function has.
  *
- * @param fn  The function.
+ * @param programFunction  The function.
  * @param names  The opcodes.
  *
  * @returns The count.
  */
-function countOps(fn: ProgramFunction, names: string[]): number {
+function countOps(programFunction: ProgramFunction, names: string[]): number {
   const codes = new Set(names.map(name => OP[name].code));
   let count = 0;
-  for (let at = 0; at < fn.code.length; at += wordsOf(fn.code[at])) {
-    count += codes.has(fn.code[at] & 0xff) ? 1 : 0;
+  for (
+    let at = 0;
+    at < programFunction.code.length;
+    at += wordsOf(programFunction.code[at])
+  ) {
+    count += codes.has(programFunction.code[at] & 0xff) ? 1 : 0;
   }
   return count;
 }
@@ -1687,7 +1703,7 @@ function countOps(fn: ProgramFunction, names: string[]): number {
  * @returns Its length in words.
  */
 const wordsOf = (word: number): number =>
-  Object.values(OP).find(op => op.code === (word & 0xff))!.words;
+  Object.values(OP).find(opcode => opcode.code === (word & 0xff))!.words;
 
 /**
  * A dep-driven effect's run: the last run's cleanup, if that run reached it, then the body.
@@ -1701,18 +1717,18 @@ function runEffect(
   codegen: Codegen,
   lowering: Lowering,
 ): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   if (effect.hasCleanup) {
     const armed = lowering.slots.armed.get(armedFlag(effect.id))!;
-    const skip = fn.label();
+    const skip = builder.label();
     codegen.scoped(() => {
-      const flag = fn.register('bool');
-      fn.abx('GET32', flag.index, armed.index);
-      fn.branch('JF', skip, flag);
+      const flag = builder.register('bool');
+      builder.abx('GET32', flag.index, armed.index);
+      builder.branch('JF', skip, flag);
     });
     setConstant(codegen, armed, 0);
     codegen.statements(effect.cleanup ?? []);
-    fn.place(skip);
+    builder.place(skip);
   }
   codegen.statements(effect.body);
 }
@@ -1730,27 +1746,30 @@ function checkedEffect(
   effect: IrDepEffect,
   lowering: Lowering,
 ): ProgramFunction {
-  const fn = new FunctionBuilder(FunctionKind.effect, `effect ${effect.id}`);
-  const end = fn.label();
-  const codegen = new Codegen(fn, lowering.slots, {onReturn: end});
+  const builder = new FunctionBuilder(
+    FunctionKind.effect,
+    `effect ${effect.id}`,
+  );
+  const end = builder.label();
+  const codegen = new Codegen(builder, lowering.slots, {onReturn: end});
   const copies = lowering.effects.copies.get(effect)!;
-  const changed = fn.register('bool');
-  fn.abx('LOADI', changed.index, 0);
-  effect.deps.forEach((dep, index) => {
+  const changed = builder.register('bool');
+  builder.abx('LOADI', changed.index, 0);
+  effect.dependencies.forEach((dependency, index) => {
     const {slot, type} = copies[index];
     codegen.scoped(() => {
-      const value = codegen.valueAs(dep, type);
-      const same = fn.label();
-      fn.branch('JT', same, codegen.same(value, codegen.get(slot)));
+      const value = codegen.valueAs(dependency, type);
+      const same = builder.label();
+      builder.branch('JT', same, codegen.same(value, codegen.get(slot)));
       codegen.set(slot, value);
-      fn.abx('LOADI', changed.index, 1);
-      fn.place(same);
+      builder.abx('LOADI', changed.index, 1);
+      builder.place(same);
     });
   });
-  fn.branch('JF', end, changed);
+  builder.branch('JF', end, changed);
   runEffect(effect, codegen, lowering);
-  fn.place(end);
-  return fn.finish();
+  builder.place(end);
+  return builder.finish();
 }
 
 /**
@@ -1763,17 +1782,20 @@ function checkedEffect(
  * @returns The function.
  */
 function mountEffect(index: number, lowering: Lowering): ProgramFunction {
-  const {out} = lowering.app;
-  const mount = out.mountEffects[index];
-  const fn = new FunctionBuilder(FunctionKind.effect, `mount effect ${index}`);
-  const end = fn.label();
-  const codegen = new Codegen(fn, lowering.slots, {onReturn: end});
+  const {output} = lowering.app;
+  const mount = output.mountEffects[index];
+  const builder = new FunctionBuilder(
+    FunctionKind.effect,
+    `mount effect ${index}`,
+  );
+  const end = builder.label();
+  const codegen = new Codegen(builder, lowering.slots, {onReturn: end});
   switch (mount.kind) {
     case 'inline':
       codegen.statements(mount.callback.body);
       break;
     case 'call': {
-      const called = out.effectFns.find(
+      const called = output.effectFunctions.find(
         effectFunction =>
           effectFunction.kind === 'mount' && effectFunction.name === mount.name,
       );
@@ -1784,31 +1806,31 @@ function mountEffect(index: number, lowering: Lowering): ProgramFunction {
       runEffect(mount.effect, codegen, lowering);
       break;
   }
-  fn.place(end);
+  builder.place(end);
 
   // A dep-driven effect keeps a copy of each dep, taken after it ran.
   if (mount.kind === 'depEffect') {
     const copies = lowering.effects.copies.get(mount.effect)!;
-    mount.effect.deps.forEach((dep, depIndex) =>
+    mount.effect.dependencies.forEach((dependency, dependencyIndex) =>
       codegen.scoped(() =>
         codegen.set(
-          copies[depIndex].slot,
-          codegen.valueAs(dep, copies[depIndex].type),
+          copies[dependencyIndex].slot,
+          codegen.valueAs(dependency, copies[dependencyIndex].type),
         ),
       ),
     );
   }
 
-  const hasNext = index + 1 < out.mountEffects.length;
+  const hasNext = index + 1 < output.mountEffects.length;
   if (mountUpdates(mount)) {
     requestUpdate(codegen, lowering);
     if (hasNext) {
       setConstant(codegen, lowering.effects.mountNext!, index + 2);
     }
   } else if (hasNext) {
-    fn.abx('EFFECT', 0, lowering.effectFunctions.mounts[index + 1]);
+    builder.abx('EFFECT', 0, lowering.effectFunctions.mounts[index + 1]);
   }
-  return fn.finish();
+  return builder.finish();
 }
 
 /**
@@ -1824,17 +1846,17 @@ function appendInitialItems(
   codegen: Codegen,
   lowering: Lowering,
 ): void {
-  const {fn} = codegen;
+  const {builder} = codegen;
   const {fields} = list.struct;
   for (const item of list.items) {
     codegen.scoped(() => {
-      const row = fn.consecutive(
+      const row = builder.consecutive(
         fields.map(field => (field.kind === 'string' ? 'string' : field.kind)),
       );
       fields.forEach((field, index) => {
         const value = item[field.key];
         if (field.kind === 'string') {
-          fn.abx(
+          builder.abx(
             'LOADS',
             row[index].index,
             lowering.slots.tables.string(String(value ?? '')),
@@ -1843,7 +1865,7 @@ function appendInitialItems(
         }
         const number = Number(value) || 0;
         codegen.scoped(() =>
-          fn.abc(
+          builder.abc(
             'MOVE',
             row[index].index,
             codegen.load(
@@ -1853,7 +1875,7 @@ function appendInitialItems(
           ),
         );
       });
-      fn.abx(
+      builder.abx(
         'APPEND',
         row[0].index,
         lowering.slots.lists.get(list)!.slot.index,
@@ -1883,21 +1905,25 @@ function bootFunction(
   if (!bootSlots.length && !lists.length) {
     return null;
   }
-  const fn = new FunctionBuilder(FunctionKind.boot, 'the boot values');
-  const codegen = new Codegen(fn, lowering.slots, {inDoubles: true});
+  const builder = new FunctionBuilder(FunctionKind.boot, 'the boot values');
+  const codegen = new Codegen(builder, lowering.slots, {inDoubles: true});
   for (const list of lists) {
     appendInitialItems(list, codegen, lowering);
   }
   for (const bootSlot of bootSlots) {
     const slot = lowering.slots.boot.get(bootSlot)!;
-    const {init} = bootSlot;
+    const {initializer} = bootSlot;
     codegen.scoped(() => {
-      if (init.kind === 'screen') {
-        const size = fn.register('int');
-        fn.abx('SCREEN', size.index, init.dimension === 'width' ? 0 : 1);
+      if (initializer.kind === 'screen') {
+        const size = builder.register('int');
+        builder.abx(
+          'SCREEN',
+          size.index,
+          initializer.dimension === 'width' ? 0 : 1,
+        );
         codegen.set(slot, size);
       } else {
-        codegen.set(slot, codegen.value(init.expr));
+        codegen.set(slot, codegen.value(initializer.expression));
       }
     });
   }
@@ -1917,7 +1943,7 @@ function bootFunction(
       ),
     );
   }
-  return fn.finish();
+  return builder.finish();
 }
 
 /**
@@ -1969,27 +1995,27 @@ function keyboardTable(
  * Lowers an app to a program for one panel.
  *
  * @param app  The lowered app.
- * @param opts  The compile's options: the panel, and the string cap.
+ * @param options  The compile's options: the panel, and the string cap.
  *
  * @returns The program.
  */
-export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
-  const {screen} = opts;
+export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
+  const {screen} = options;
   const tables = new ProgramTables();
   const lowering: Lowering = {
     app,
-    ...planSlots(app, tables, opts.caps),
+    ...planSlots(app, tables, options.caps),
     images: new Set(app.images.map(image => image.name)),
     handlers: new Map(),
     bindings: [],
     templates: [],
     effectFunctions: {checks: [], mounts: []},
   };
-  const {out} = app;
+  const {output} = app;
 
   // A row's handlers are compared by their code before the functions are numbered, so each timer they start
   // stands in by its own place until then.
-  out.timerFns.forEach((timer, index) =>
+  output.timerFunctions.forEach((timer, index) =>
     lowering.slots.timerFunctions.set(timer.name, index),
   );
 
@@ -2028,12 +2054,12 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   // Handlers first, as the bindings number them, then the timer callbacks, the effects, and the boot and
   // update functions. Each is numbered before any code is written, since code names them.
   let next = lowering.handlers.size;
-  for (const timer of out.timerFns) {
+  for (const timer of output.timerFunctions) {
     lowering.slots.timerFunctions.set(timer.name, next++);
   }
   lowering.effectFunctions = {
-    checks: out.depEffects.map(() => next++),
-    mounts: out.mountEffects.map(() => next++),
+    checks: output.dependencyEffects.map(() => next++),
+    mounts: output.mountEffects.map(() => next++),
   };
   // Then the animations' done functions, and the completions they and the rest call, after every caller.
   const {animations} = lowering.slots;
@@ -2042,12 +2068,15 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     ...[...lowering.handlers.values()].map(handler =>
       handlerBody(handler, lowering),
     ),
-    ...out.timerFns.map(timer =>
+    ...output.timerFunctions.map(timer =>
       timerBody(timer.name, timer.callback!, lowering),
     ),
-    ...out.depEffects.map(effect => checkedEffect(effect, lowering)),
-    ...out.mountEffects.map((_, index) => mountEffect(index, lowering)),
-    ...doneFunctions(animations, fn => new Codegen(fn, lowering.slots)),
+    ...output.dependencyEffects.map(effect => checkedEffect(effect, lowering)),
+    ...output.mountEffects.map((_, index) => mountEffect(index, lowering)),
+    ...doneFunctions(
+      animations,
+      builder => new Codegen(builder, lowering.slots),
+    ),
     ...[...animations.completions.values()].map(completion =>
       completionBody(completion, lowering),
     ),
@@ -2062,7 +2091,9 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
   if (animations.entries) {
     const ends = Math.max(
       0,
-      ...functions.map(fn => countOps(fn, ['ASTART', 'AVSET', 'ASTOP'])),
+      ...functions.map(programFunction =>
+        countOps(programFunction, ['ASTART', 'AVSET', 'ASTOP']),
+      ),
     );
     lowering.slots.arena.eventQueue(animations.entries + 2 * ends);
   }
@@ -2123,9 +2154,9 @@ export function lowerPackage(app: IrApp, opts: ResolvedOptions): Program {
     templates: [{kind: TemplateKind.root, nodes}, ...lowering.templates],
     bindings: lowering.bindings,
     functions,
-    anims: animations.anims,
+    animations: animations.animations,
     inputs,
-    interps: animations.interps,
+    interpolations: animations.interpolations,
     tapes: lowering.slots.vectors.tapes,
     keyboard: app.keyboard ? keyboardTable(app.keyboard, tables) : null,
   };

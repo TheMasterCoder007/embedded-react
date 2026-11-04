@@ -146,14 +146,15 @@ function isLowerableMath(node: t.Node): boolean {
     node.callee.object.type !== 'Identifier' ||
     node.callee.object.name !== 'Math' ||
     node.callee.property.type !== 'Identifier' ||
-    node.arguments.some(arg => arg.type === 'SpreadElement')
+    node.arguments.some(argument => argument.type === 'SpreadElement')
   ) {
     return false;
   }
 
-  const fn = node.callee.property.name;
+  const mathFunction = node.callee.property.name;
   return (
-    Object.hasOwn(MATH_ARITY, fn) && MATH_ARITY[fn] === node.arguments.length
+    Object.hasOwn(MATH_ARITY, mathFunction) &&
+    MATH_ARITY[mathFunction] === node.arguments.length
   );
 }
 

@@ -60,8 +60,8 @@ const DEFAULTS: StaticAssign[] = [
  *
  * @param element  The <Modal>.
  * @param scope  Compile-time constants in reach.
- * @param out  Everything emitted so far.
- * @param env  The expression environment.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
  * @param state  The component's state table.
  *
  * @returns The node's variable.
@@ -69,21 +69,22 @@ const DEFAULTS: StaticAssign[] = [
 export function emitModal(
   element: t.JSXElement,
   scope: Scope,
-  out: Out,
-  env: Env,
+  output: Out,
+  environment: Env,
   state: StateTable,
 ): IrNode {
   // get node id
-  const nodeId = `n${out.allocateNodeId()}`;
+  const nodeId = `n${output.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynAssigns, binds} = collectStyleAssigns(
+  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
     element.openingElement,
     scope,
-    env,
+    environment,
     elementSpec('Modal')!,
   );
-  const hasField = (f: string) => styleWrites(staticAssigns, dynAssigns, f);
+  const hasField = (field: string) =>
+    styleWrites(staticAssigns, dynamicAssigns, field);
 
   // Apply modal overlay defaults only for fields the user's style has not already set.
   for (const assign of DEFAULTS) {
@@ -94,19 +95,19 @@ export function emitModal(
 
   // process element attributes
   let visibleNode: t.Node | null = null;
-  for (const attr of element.openingElement.attributes) {
+  for (const attribute of element.openingElement.attributes) {
     // Ensure all props are explicit named attributes.
     // Spread props cannot be analyzed statically
-    if (attr.type !== 'JSXAttribute') {
+    if (attribute.type !== 'JSXAttribute') {
       throw aotError('AOT: spread props on <Modal> are not supported');
     }
 
     // skip non-props
-    const name = (attr.name as t.JSXIdentifier).name;
+    const name = (attribute.name as t.JSXIdentifier).name;
     if (name === 'style' || name === 'ref' || name === 'key') continue;
 
     // process props
-    const node = attrExpr(attr);
+    const node = attrExpr(attribute);
     if (name === 'visible') {
       visibleNode = node;
     } else if (name === 'backdropColor') {
@@ -129,7 +130,7 @@ export function emitModal(
             `AOT: <Modal animationType> ${typeof animationType === 'string' ? `"${animationType}"` : 'from state'} is not supported`,
             'the engine shows and hides a Modal at once; use animationType="none", or drop the prop.',
           ),
-          attr,
+          attribute,
         );
       }
     } else if (name === 'onRequestClose' || name === 'statusBarTranslucent') {
@@ -152,11 +153,11 @@ export function emitModal(
       value: evalStatic(visibleNode, scope) ? 1 : 0,
     });
   } catch {
-    dynAssigns.push({
+    dynamicAssigns.push({
       field: 'modal_visible',
       value: {
         kind: 'flag',
-        test: lowerExpr(visibleNode, env),
+        test: lowerExpr(visibleNode, environment),
         truthiness: 'value',
         negate: false,
         whenTrue: 1,
@@ -166,10 +167,10 @@ export function emitModal(
 
   const node: IrNode = {
     id: nodeId,
-    loc: currentLoc(),
+    location: currentLoc(),
     type: 'ER_NODE_MODAL',
     constantProps: staticAssigns,
-    stateProps: dynAssigns,
+    stateProps: dynamicAssigns,
     placeholder: null,
     text: null,
     image: null,
@@ -177,7 +178,7 @@ export function emitModal(
     children: [],
     wiring: [
       ...binds.map((bind, index) => ({kind: 'bind' as const, bind, index})),
-      ...lowerRefBinds(element.openingElement, env).map(slot => ({
+      ...lowerRefBinds(element.openingElement, environment).map(slot => ({
         kind: 'ref' as const,
         slot,
       })),
@@ -186,7 +187,13 @@ export function emitModal(
   checkInterpolations(node);
 
   // The modal's content, shown and hidden with the modal.
-  node.children = emitChildren(element.children, scope, out, env, state);
+  node.children = emitChildren(
+    element.children,
+    scope,
+    output,
+    environment,
+    state,
+  );
 
   return node;
 }

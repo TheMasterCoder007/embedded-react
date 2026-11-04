@@ -53,5 +53,5 @@ export interface IrApp {
   /** The values lowering recorded for the check pass, in order. */
   checks: IrCheck[];
   /** Everything else the tree and its effects emitted. */
-  out: Out;
+  output: Out;
 }
