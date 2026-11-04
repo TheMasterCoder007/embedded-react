@@ -27,27 +27,28 @@ import wxRain from '../assets/wx_rain.png';
 
 const ICONS = {sun: wxSun, partly: wxPartly, cloud: wxCloud, rain: wxRain};
 
-// The 14-day outlook. `p` is precipitation probability; the bar spans lo→hi within WMIN..WMAX.
+// The 14-day outlook. `precipitation` is its probability; the bar spans low→high within SCALE_MIN..SCALE_MAX.
 export const FORECAST = [
-  {day: 'TODAY', c: 'sun', hi: 82, lo: 61, p: 0},
-  {day: 'TUE', c: 'sun', hi: 84, lo: 63, p: 0},
-  {day: 'WED', c: 'partly', hi: 79, lo: 62, p: 10},
-  {day: 'THU', c: 'cloud', hi: 74, lo: 60, p: 20},
-  {day: 'FRI', c: 'rain', hi: 70, lo: 58, p: 70},
-  {day: 'SAT', c: 'rain', hi: 68, lo: 57, p: 55},
-  {day: 'SUN', c: 'partly', hi: 75, lo: 59, p: 15},
-  {day: 'MON', c: 'sun', hi: 80, lo: 60, p: 0},
-  {day: 'TUE', c: 'sun', hi: 85, lo: 64, p: 0},
-  {day: 'WED', c: 'partly', hi: 83, lo: 65, p: 5},
-  {day: 'THU', c: 'cloud', hi: 76, lo: 62, p: 25},
-  {day: 'FRI', c: 'rain', hi: 71, lo: 59, p: 60},
-  {day: 'SAT', c: 'partly', hi: 77, lo: 60, p: 10},
-  {day: 'SUN', c: 'sun', hi: 81, lo: 62, p: 0},
+  {day: 'TODAY', condition: 'sun', high: 82, low: 61, precipitation: 0},
+  {day: 'TUE', condition: 'sun', high: 84, low: 63, precipitation: 0},
+  {day: 'WED', condition: 'partly', high: 79, low: 62, precipitation: 10},
+  {day: 'THU', condition: 'cloud', high: 74, low: 60, precipitation: 20},
+  {day: 'FRI', condition: 'rain', high: 70, low: 58, precipitation: 70},
+  {day: 'SAT', condition: 'rain', high: 68, low: 57, precipitation: 55},
+  {day: 'SUN', condition: 'partly', high: 75, low: 59, precipitation: 15},
+  {day: 'MON', condition: 'sun', high: 80, low: 60, precipitation: 0},
+  {day: 'TUE', condition: 'sun', high: 85, low: 64, precipitation: 0},
+  {day: 'WED', condition: 'partly', high: 83, low: 65, precipitation: 5},
+  {day: 'THU', condition: 'cloud', high: 76, low: 62, precipitation: 25},
+  {day: 'FRI', condition: 'rain', high: 71, low: 59, precipitation: 60},
+  {day: 'SAT', condition: 'partly', high: 77, low: 60, precipitation: 10},
+  {day: 'SUN', condition: 'sun', high: 81, low: 62, precipitation: 0},
 ];
-const WMIN = 57;
-const WMAX = 85;
+const SCALE_MIN = 57;
+const SCALE_MAX = 85;
 
-const OUTDOOR_F = 78;
+const OUTDOOR_FAHRENHEIT = 78;
+const RAINY_PERCENT = 40; // a chance of rain from here up is shown in the rain color
 
 // ----------------------------------------------------------------------------------------------------
 // Weather panel — the right column when the layout is `split`, the lower card when it is `stack`. Not
@@ -60,20 +61,22 @@ const OUTDOOR_F = 78;
 //
 //   theme   the resolved palette (a module-level object, stable per theme)
 //   unit    'F' | 'C'
-//   barW    pixel width of the hi/lo range bar's track (the row's flexible column)
+//   barWidth  pixel width of the high/low range bar's track (the row's flexible column)
 // ----------------------------------------------------------------------------------------------------
 export const WeatherPanel = memo(function WeatherPanel({
   theme,
   unit,
-  barW,
+  barWidth,
   style,
 }) {
-  const fmt = f =>
-    unit === 'C' ? Math.round(((f - 32) * 5) / 9) + '°' : Math.round(f) + '°';
-  const fmtBare = f =>
+  const fmt = fahrenheit =>
     unit === 'C'
-      ? String(Math.round(((f - 32) * 5) / 9))
-      : String(Math.round(f));
+      ? Math.round(((fahrenheit - 32) * 5) / 9) + '°'
+      : Math.round(fahrenheit) + '°';
+  const fmtBare = fahrenheit =>
+    unit === 'C'
+      ? String(Math.round(((fahrenheit - 32) * 5) / 9))
+      : String(Math.round(fahrenheit));
   return (
     <View style={style}>
       <View
@@ -88,13 +91,18 @@ export const WeatherPanel = memo(function WeatherPanel({
               fontSize: 12,
               letterSpacing: 1,
               fontWeight: '600',
-              color: theme.fg,
+              color: theme.foreground,
             }}>
             CUPERTINO, CA
           </Text>
           <View style={{flexDirection: 'row', alignItems: 'flex-end', gap: 10}}>
-            <Text style={{fontSize: 32, fontWeight: '500', color: theme.fg}}>
-              {fmt(OUTDOOR_F)}
+            <Text
+              style={{
+                fontSize: 32,
+                fontWeight: '500',
+                color: theme.foreground,
+              }}>
+              {fmt(OUTDOOR_FAHRENHEIT)}
             </Text>
             <Text
               style={{
@@ -114,15 +122,18 @@ export const WeatherPanel = memo(function WeatherPanel({
         />
       </View>
 
-      <View style={{height: 1, backgroundColor: theme.trackBg}} />
+      <View style={{height: 1, backgroundColor: theme.trackBackground}} />
 
       <ScrollView style={{flex: 1}}>
-        {FORECAST.map((d, i) => {
-          const left = ((d.lo - WMIN) / (WMAX - WMIN)) * barW;
-          const width = ((d.hi - d.lo) / (WMAX - WMIN)) * barW;
+        {FORECAST.map((forecast, dayIndex) => {
+          const left =
+            ((forecast.low - SCALE_MIN) / (SCALE_MAX - SCALE_MIN)) * barWidth;
+          const width =
+            ((forecast.high - forecast.low) / (SCALE_MAX - SCALE_MIN)) *
+            barWidth;
           return (
             <View
-              key={i}
+              key={dayIndex}
               style={{
                 height: 44,
                 flexDirection: 'row',
@@ -134,12 +145,12 @@ export const WeatherPanel = memo(function WeatherPanel({
                   width: 46,
                   fontSize: 10,
                   letterSpacing: 1,
-                  color: theme.fg,
+                  color: theme.foreground,
                 }}>
-                {d.day}
+                {forecast.day}
               </Text>
               <Image
-                source={ICONS[d.c]}
+                source={ICONS[forecast.condition]}
                 resizeMode="contain"
                 style={{width: 24, height: 24}}
               />
@@ -147,21 +158,26 @@ export const WeatherPanel = memo(function WeatherPanel({
                 style={{
                   width: 36,
                   fontSize: 10,
-                  color: d.p >= 40 ? theme.rainText : theme.dim2,
+                  color:
+                    forecast.precipitation >= RAINY_PERCENT
+                      ? theme.rainText
+                      : theme.secondary,
                 }}>
-                {d.p > 0 ? d.p + '%' : '—'}
+                {forecast.precipitation > 0
+                  ? forecast.precipitation + '%'
+                  : '—'}
               </Text>
               <Text style={{width: 30, fontSize: 12, color: theme.dim}}>
-                {fmtBare(d.lo)}
+                {fmtBare(forecast.low)}
               </Text>
-              {/* The hi/lo range bar: a track with the day's span laid over it at a pixel offset. Percent
+              {/* The high/low range bar: a track with the day's span laid over it at a pixel offset. Percent
                   offsets aren't available here, and the column width is known, so both are in px. */}
               <View
                 style={{
-                  width: barW,
+                  width: barWidth,
                   height: 3,
                   borderRadius: 2,
-                  backgroundColor: theme.trackBg,
+                  backgroundColor: theme.trackBackground,
                 }}>
                 <View
                   style={{
@@ -175,8 +191,8 @@ export const WeatherPanel = memo(function WeatherPanel({
                   }}
                 />
               </View>
-              <Text style={{width: 30, fontSize: 12, color: theme.fg}}>
-                {fmtBare(d.hi)}
+              <Text style={{width: 30, fontSize: 12, color: theme.foreground}}>
+                {fmtBare(forecast.high)}
               </Text>
             </View>
           );

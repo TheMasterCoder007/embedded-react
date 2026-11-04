@@ -27,16 +27,16 @@ export default function Flows(): ReactNode {
   return (
     <Section eyebrow="Two ways to ship" title="The same app, resolved at runtime or at compile time." tinted>
       <div className={styles.flows}>
-        {flows.map((f) => (
-          <article key={f.tag} className={clsx(card.card, styles.flow)}>
-            <p className={styles.tag}>{f.tag}</p>
-            <Heading as="h3">{f.title}</Heading>
+        {flows.map((flow) => (
+          <article key={flow.tag} className={clsx(card.card, styles.flow)}>
+            <p className={styles.tag}>{flow.tag}</p>
+            <Heading as="h3">{flow.title}</Heading>
             <ol className={styles.steps}>
-              {f.steps.map((s) => (
-                <li key={s}>{s}</li>
+              {flow.steps.map((step) => (
+                <li key={step}>{step}</li>
               ))}
             </ol>
-            <p className={styles.body}>{f.body}</p>
+            <p className={styles.body}>{flow.body}</p>
           </article>
         ))}
       </div>

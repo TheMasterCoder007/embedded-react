@@ -77,8 +77,8 @@ counts from a 1 Hz `setInterval`. **Steps and the level are real** on the RP2040
 480-wide track, with a ~30 fps interval easing to the settled page on release. It works in both
 flows: the AOT lowers `PanResponder.create` and the `{...pan.panHandlers}` spread onto the engine's
 C gesture responder, so the RP2040 gets it with no JavaScript. Release commits on a long enough drag
-(58 px) or a fast enough throw (`g.vx` ≥ 0.4 px/ms); `onPanResponderTerminate` clears the drag flag
-if the panel driver abandons the touch; and `g.dx` is travel since the grant, so nothing records a
+(58 px) or a fast enough throw (`gestureState.vx` ≥ 0.4 px/ms); `onPanResponderTerminate` clears the drag flag
+if the panel driver abandons the touch; and `gestureState.dx` is travel since the grant, so nothing records a
 touch-down position by hand. `PanResponder.create` runs once, in a ref, so its callbacks close over
 the first render's state, hence the `pageRef` mirror.
 
@@ -90,7 +90,7 @@ the first render's state, hence the `pageRef` mirror.
 - `left` and `top` cannot be state-driven, while margins can, which is why the level dot and the
   swipe track move with `marginLeft`/`marginTop`.
 - Module-scope constants fold to literals; `Math.*` is only available inside dynamic expressions,
-  so the clock digits are computed inline from the `t` state.
+  so the clock digits are computed inline from the `seconds` state.
 - A handler can call a helper as a statement but not read one mid-expression, which is why the
   clamp is written out at both use sites rather than factored into a `clamp()`.
 - Font sizes come from the built-in font's baked set; the clock uses the largest, 48.

@@ -12,20 +12,23 @@ import logo from './assets/icons/embedded-react.png';
 // The panel size. The host injects `screen` at runtime (Flow A) and the ahead-of-time build works out
 // what derives from it at boot (Flow B). Everything below derives from it with arithmetic and ternaries, so this one file fits
 // a 240×240 watch face and an 800×480 panel alike.
-const SW = screen.width;
-const SH = screen.height;
-const SHORT = SW < SH ? SW : SH;
-const COMPACT = SHORT < 300; // 240×320, 320×240, 240×280 …
-const ROOMY = SHORT >= 460; // 800×480 and up
-const TINY = SH < 260; // not enough rows for the tagline
+const SCREEN_WIDTH = screen.width;
+const SCREEN_HEIGHT = screen.height;
+const SHORT_SIDE = SCREEN_WIDTH < SCREEN_HEIGHT ? SCREEN_WIDTH : SCREEN_HEIGHT;
+const COMPACT = SHORT_SIDE < 300; // 240×320, 320×240, 240×280 …
+const ROOMY = SHORT_SIDE >= 460; // 800×480 and up
+const TINY = SCREEN_HEIGHT < 260; // not enough rows for the tagline
 
-const PAD = COMPACT ? 8 : 20;
-const LOGO = COMPACT ? 44 : ROOMY ? 88 : 64;
-const TITLE = COMPACT ? 20 : ROOMY ? 32 : 24;
-const BODY = COMPACT ? 12 : 16;
-const SMALL = COMPACT ? 10 : 12;
-const CARD_MAX = ROOMY ? 460 : 380;
-const CARD_W = SW - 2 * PAD < CARD_MAX ? SW - 2 * PAD : CARD_MAX;
+const PADDING = COMPACT ? 8 : 20;
+const LOGO_SIZE = COMPACT ? 44 : ROOMY ? 88 : 64;
+const TITLE_SIZE = COMPACT ? 20 : ROOMY ? 32 : 24;
+const BODY_SIZE = COMPACT ? 12 : 16;
+const SMALL_SIZE = COMPACT ? 10 : 12;
+const CARD_MAX_WIDTH = ROOMY ? 460 : 380;
+const CARD_WIDTH =
+  SCREEN_WIDTH - 2 * PADDING < CARD_MAX_WIDTH
+    ? SCREEN_WIDTH - 2 * PADDING
+    : CARD_MAX_WIDTH;
 
 export function App(): React.JSX.Element {
   const [count, setCount] = useState(0);
@@ -33,14 +36,14 @@ export function App(): React.JSX.Element {
 
   // Pulse the logo forever. The animation runs in the engine, with no per-frame JavaScript.
   useEffect(() => {
-    const anim = Animated.loop(
+    const animation = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {toValue: 1.1, duration: 900}),
         Animated.timing(pulse, {toValue: 1.0, duration: 900}),
       ]),
     );
-    anim.start();
-    return () => anim.stop();
+    animation.start();
+    return () => animation.stop();
   }, []);
 
   return (
@@ -59,7 +62,7 @@ export function App(): React.JSX.Element {
         )}
         <Pressable
           style={styles.button}
-          onPress={() => setCount((c: number) => c + 1)}>
+          onPress={() => setCount((previous: number) => previous + 1)}>
           <Text style={styles.buttonText}>count is {count}</Text>
         </Pressable>
         {!COMPACT && (
@@ -70,7 +73,7 @@ export function App(): React.JSX.Element {
         {COMPACT && <Text style={styles.hint}>Edit App.tsx and save</Text>}
         {COMPACT && <Text style={styles.hint}>to see it hot-reload.</Text>}
         <Text style={styles.meta}>
-          {SW} × {SH}
+          {SCREEN_WIDTH} × {SCREEN_HEIGHT}
         </Text>
       </View>
     </View>
@@ -83,10 +86,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#07111f',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: PAD,
+    padding: PADDING,
   },
   card: {
-    width: CARD_W,
+    width: CARD_WIDTH,
     alignItems: 'center',
     gap: COMPACT ? 6 : 12,
     padding: COMPACT ? 12 : 24,
@@ -95,11 +98,11 @@ const styles = StyleSheet.create({
     borderColor: '#1f3550',
     backgroundColor: '#0d2035',
   },
-  logo: {width: LOGO, height: LOGO},
+  logo: {width: LOGO_SIZE, height: LOGO_SIZE},
   title: {flexDirection: 'row', alignItems: 'center'},
-  titleLight: {color: '#e6edf5', fontSize: TITLE},
-  titleBold: {color: '#38bdf8', fontSize: TITLE, fontWeight: '700'},
-  tagline: {color: '#9fc3da', fontSize: BODY},
+  titleLight: {color: '#e6edf5', fontSize: TITLE_SIZE},
+  titleBold: {color: '#38bdf8', fontSize: TITLE_SIZE, fontWeight: '700'},
+  tagline: {color: '#9fc3da', fontSize: BODY_SIZE},
   button: {
     marginTop: COMPACT ? 2 : 4,
     paddingVertical: COMPACT ? 8 : 10,
@@ -109,7 +112,7 @@ const styles = StyleSheet.create({
     borderColor: '#38bdf8',
     backgroundColor: '#0b2a44',
   },
-  buttonText: {color: '#bfe6fc', fontSize: BODY, fontWeight: '700'},
-  hint: {color: '#5f7a94', fontSize: SMALL},
-  meta: {color: '#3d5a75', fontSize: SMALL, letterSpacing: 1},
+  buttonText: {color: '#bfe6fc', fontSize: BODY_SIZE, fontWeight: '700'},
+  hint: {color: '#5f7a94', fontSize: SMALL_SIZE},
+  meta: {color: '#3d5a75', fontSize: SMALL_SIZE, letterSpacing: 1},
 });

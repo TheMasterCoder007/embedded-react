@@ -37,99 +37,116 @@ import {View, Text, Pressable, Dial, updateText} from 'embedded-react';
 
 // Angles. The design's sweep is SVG degrees (0° at 3 o'clock): 150° → 390°, a 240° arc with a 120° dead
 // zone centred on the bottom. <Dial> uses that same convention, so they carry straight over.
-export const A0 = 150;
-export const SWEEP = 240;
+export const START_ANGLE = 150;
+export const SWEEP_ANGLE = 240;
 
 // --- Colour mixing -----------------------------------------------------------------------------------
 // Used for ONE thing: tinting the centre disc towards the active mode's accent. A View background takes
 // no alpha, so the tint is pre-mixed to a solid hex.
-const hex3 = c => {
-  const n = parseInt(c.slice(1, 7), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+const hex3 = color => {
+  const packed = parseInt(color.slice(1, 7), 16);
+  return [(packed >> 16) & 255, (packed >> 8) & 255, packed & 255];
 };
-const clamp255 = v => (v < 0 ? 0 : v > 255 ? 255 : v);
-export function mix(a, b, t) {
-  const A = hex3(a);
-  const B = hex3(b);
-  let s = '#';
-  for (let i = 0; i < 3; i++)
-    s += clamp255(Math.round(A[i] + (B[i] - A[i]) * t))
+const CHANNEL_MAX = 255;
+const clamp255 = channel =>
+  channel < 0 ? 0 : channel > CHANNEL_MAX ? CHANNEL_MAX : channel;
+export function mix(from, to, amount) {
+  const fromChannels = hex3(from);
+  const toChannels = hex3(to);
+  let hex = '#';
+  for (let channelIndex = 0; channelIndex < 3; channelIndex++)
+    hex += clamp255(
+      Math.round(
+        fromChannels[channelIndex] +
+          (toChannels[channelIndex] - fromChannels[channelIndex]) * amount,
+      ),
+    )
       .toString(16)
       .padStart(2, '0');
-  return s;
+  return hex;
 }
 
 // ----------------------------------------------------------------------------------------------------
 // ThermoDial
 //
-//   geo       pixel geometry from App ({S, boxW, boxH, cx, cy, rRing, ringW, rCore, …})
-//   theme     resolved palette; accent = the current mode's accent
-//   mode      cool | heat | auto | off
-//   value     single-setpoint °F (cool / heat / off)
-//   lo, hi    the auto-mode range, °F
-//   active    'lo' | 'hi' — which auto handle the steppers move
-//   minF/maxF the range the sweep spans
-//   gap       minimum value kept between the AUTO low and high setpoints (the engine enforces it)
-//   fmt       (°F) → display string, e.g. "72°" — owns the unit conversion
-//   labels    { ambient } for the centre readout
-//   sz        { big, dual, small } font sizes for this layout
-//   onCommit  ({v, lo, hi, which}) once, on release — AUTO commits BOTH ends
-//   onPick    ('lo' | 'hi') when a drag grabs an auto handle
+//   geometry   pixel geometry from App ({scale, boxWidth, boxHeight, centerX, centerY, ringRadius, …})
+//   theme      resolved palette; accent = the current mode's accent
+//   mode       cool | heat | auto | off
+//   value      single-setpoint °F (cool / heat / off)
+//   low, high  the auto-mode range, °F
+//   active     'lo' | 'hi' — which auto handle the steppers move
+//   minimum    the bottom of the range the sweep spans
+//   maximum    the top of it
+//   gap        minimum value kept between the AUTO low and high setpoints (the engine enforces it)
+//   fmt        (°F) → display string, e.g. "72°" — owns the unit conversion
+//   labels     { ambient } for the centre readout
+//   fontSizes  { big, dual, small } font sizes for this layout
+//   onCommit   ({value, low, high, which}) once, on release — AUTO commits BOTH ends
+//   onPick     ('lo' | 'hi') when a drag grabs an auto handle
 // ----------------------------------------------------------------------------------------------------
 export function ThermoDial({
-  geo,
+  geometry,
   theme,
   accent,
   mode,
   value,
-  lo,
-  hi,
+  low,
+  high,
   active,
-  minF,
-  maxF,
+  minimum,
+  maximum,
   gap,
   fmt,
   labels,
-  sz,
+  fontSizes,
   onCommit,
   onPick,
 }) {
-  const {boxW, boxH, cx, cy, rRing, ringW, rCore, S} = geo;
+  const {
+    boxWidth,
+    boxHeight,
+    centerX,
+    centerY,
+    ringRadius,
+    ringWidth,
+    coreRadius,
+    scale,
+  } = geometry;
   const isAuto = mode === 'auto';
   const isOff = mode === 'off';
   // A <Dial> sizes its ring from its BOX — outer radius is half the smaller side — so the node is a
   // square exactly as wide as the ring's outer edge, centred on the design's (cx, cy).
-  const dialSize = 2 * (rRing + ringW / 2);
+  const dialSize = 2 * (ringRadius + ringWidth / 2);
 
   // Live values the drag advances. A drag performs no React render, so this is what the readout and the
   // eventual commit read; it is refreshed from props on every real render (never one mid-drag).
-  const liveRef = useRef({v: value, lo, hi});
-  liveRef.current = {v: value, lo, hi};
+  const liveRef = useRef({value, low, high});
+  liveRef.current = {value, low, high};
   const movedRef = useRef(null); // which AUTO end this gesture moved
 
-  const bigRef = useRef(null);
-  const loRef = useRef(null);
-  const hiRef = useRef(null);
+  const readoutRef = useRef(null);
+  const lowRef = useRef(null);
+  const highRef = useRef(null);
   const textRef = useRef('');
 
   // The engine reports every quantized change. Write the new number straight to the text node instead of
   // going through React — on an ESP32-S3 a reconcile costs ~10 ms per node, and a drag produces one of
   // these per frame.
-  const onChange = (v, vLo) => {
+  const onChange = (dialValue, dialLow) => {
     const live = liveRef.current;
     if (isAuto) {
-      if (vLo !== live.lo) movedRef.current = 'lo';
-      else if (v !== live.hi) movedRef.current = 'hi';
-      live.lo = vLo;
-      live.hi = v;
-      updateText(loRef.current, fmt(vLo));
-      updateText(hiRef.current, fmt(v));
+      if (dialLow !== live.low) movedRef.current = 'lo';
+      else if (dialValue !== live.high) movedRef.current = 'hi';
+      live.low = dialLow;
+      live.high = dialValue;
+      updateText(lowRef.current, fmt(dialLow));
+      updateText(highRef.current, fmt(dialValue));
     } else {
-      live.v = v;
-      const s = fmt(v);
-      if (s !== textRef.current) {
-        textRef.current = s;
-        updateText(bigRef.current, s);
+      live.value = dialValue;
+      const text = fmt(dialValue);
+      if (text !== textRef.current) {
+        textRef.current = text;
+        updateText(readoutRef.current, text);
       }
     }
   };
@@ -140,27 +157,27 @@ export function ThermoDial({
     if (movedRef.current && movedRef.current !== active)
       onPick(movedRef.current);
     onCommit({
-      v: live.v,
-      lo: live.lo,
-      hi: live.hi,
+      value: live.value,
+      low: live.low,
+      high: live.high,
       which: movedRef.current || active,
     });
     movedRef.current = null;
   };
 
-  const dualNum = (which, ref, v) => (
+  const dualNum = (which, ref, number) => (
     <Pressable onPress={() => onPick(which)} style={{width: '46%'}}>
       <Text
         ref={ref}
         numberOfLines={1}
         style={{
-          fontSize: sz.dual,
+          fontSize: fontSizes.dual,
           fontWeight: '500',
-          color: theme.fg,
+          color: theme.foreground,
           width: '100%',
           textAlign: which === 'lo' ? 'right' : 'left',
         }}>
-        {fmt(v)}
+        {fmt(number)}
       </Text>
     </Pressable>
   );
@@ -171,29 +188,29 @@ export function ThermoDial({
         position: 'absolute',
         left: 0,
         top: 0,
-        width: boxW,
-        height: boxH,
+        width: boxWidth,
+        height: boxHeight,
       }}>
       <Dial
         style={{
           position: 'absolute',
-          left: cx - dialSize / 2,
-          top: cy - dialSize / 2,
+          left: centerX - dialSize / 2,
+          top: centerY - dialSize / 2,
           width: dialSize,
           height: dialSize,
         }}
-        min={minF}
-        max={maxF}
+        min={minimum}
+        max={maximum}
         step={0.5}
-        startAngle={A0}
-        sweepAngle={SWEEP}
-        thickness={ringW}
+        startAngle={START_ANGLE}
+        sweepAngle={SWEEP_ANGLE}
+        thickness={ringWidth}
         trackColor={theme.tick}
         cap="butt"
         range={isAuto}
-        valueStart={isAuto ? lo : minF}
+        valueStart={isAuto ? low : minimum}
         minSpan={gap}
-        value={isOff ? minF : isAuto ? hi : value}
+        value={isOff ? minimum : isAuto ? high : value}
         indicatorColor={accent}
         indicatorGradient={
           isAuto
@@ -207,21 +224,21 @@ export function ThermoDial({
             : null
         }
         knob={isOff ? 'none' : 'circle'}
-        knobSize={26 * S}
-        knobColor={theme.fg}
+        knobSize={26 * scale}
+        knobColor={theme.foreground}
         adjustable={!isOff}
         onChange={onChange}
         onTouchEnd={onRelease}>
-        {/* Face: a single solid accent-tinted disc, sitting at r=rCore with clear background out to the
+        {/* Face: a single solid accent-tinted disc, sitting at r=coreRadius with clear background out to the
             ring band's inner edge. Its coordinates are relative to the DIAL's box. */}
         <View
           style={{
             position: 'absolute',
-            left: dialSize / 2 - rCore,
-            top: dialSize / 2 - rCore,
-            width: 2 * rCore,
-            height: 2 * rCore,
-            borderRadius: rCore,
+            left: dialSize / 2 - coreRadius,
+            top: dialSize / 2 - coreRadius,
+            width: 2 * coreRadius,
+            height: 2 * coreRadius,
+            borderRadius: coreRadius,
             backgroundColor: mix(theme.surface, accent, 0.14),
           }}
         />
@@ -234,16 +251,20 @@ export function ThermoDial({
         <View
           style={{
             position: 'absolute',
-            left: dialSize / 2 - 83 * S,
-            top: dialSize / 2 - 60 * S,
-            width: 166 * S,
-            height: 120 * S,
+            left: dialSize / 2 - 83 * scale,
+            top: dialSize / 2 - 60 * scale,
+            width: 166 * scale,
+            height: 120 * scale,
             alignItems: 'center',
             justifyContent: 'center',
             gap: 6,
           }}>
           <Text
-            style={{fontSize: sz.small, letterSpacing: 2, color: theme.dim}}>
+            style={{
+              fontSize: fontSizes.small,
+              letterSpacing: 2,
+              color: theme.dim,
+            }}>
             {labels.ambient}
           </Text>
           {isAuto ? (
@@ -252,26 +273,30 @@ export function ThermoDial({
                 flexDirection: 'row',
                 alignItems: 'flex-end',
                 gap: 0,
-                width: 166 * S,
+                width: 166 * scale,
               }}>
-              {dualNum('lo', loRef, lo)}
+              {dualNum('lo', lowRef, low)}
               {/* Sized with the numbers, not the captions: as a caption-sized glyph between two readouts
                   three times its height it read as a stray mark rather than a separator. */}
               <Text
-                style={{fontSize: sz.dual, color: theme.dim, marginBottom: 1}}>
+                style={{
+                  fontSize: fontSizes.dual,
+                  color: theme.dim,
+                  marginBottom: 1,
+                }}>
                 -
               </Text>
-              {dualNum('hi', hiRef, hi)}
+              {dualNum('hi', highRef, high)}
             </View>
           ) : (
             <Text
-              ref={bigRef}
+              ref={readoutRef}
               numberOfLines={1}
               style={{
-                fontSize: sz.big,
+                fontSize: fontSizes.big,
                 fontWeight: '500',
-                color: theme.fg,
-                width: 166 * S,
+                color: theme.foreground,
+                width: 166 * scale,
                 textAlign: 'center',
               }}>
               {isOff ? '––' : fmt(value)}

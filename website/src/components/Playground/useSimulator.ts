@@ -2,37 +2,47 @@ import {useEffect, useRef, useState, type RefObject} from 'react';
 
 /** The engine's host ABI (backends/web/web_backend.h), as cwrapped functions. */
 type Engine = {
-  init: (w: number, h: number) => number;
-  loadSource: (ptr: number, len: number) => void;
-  loadPack: (ptr: number, len: number) => number;
-  resize: (w: number, h: number) => number;
-  pump: (dtMs: number) => void;
+  init: (width: number, height: number) => number;
+  loadSource: (pointer: number, length: number) => void;
+  loadPack: (pointer: number, length: number) => number;
+  resize: (width: number, height: number) => number;
+  pump: (elapsedMs: number) => void;
   touch: (phase: number, x: number, y: number) => void;
   framebuffer: () => number;
-  fbWidth: () => number;
-  fbHeight: () => number;
+  framebufferWidth: () => number;
+  framebufferHeight: () => number;
   /** Forgets persisted state; absent in engines older than the export (then the caller works around it). */
   clearPersist: (() => void) | null;
   module: {
-    _malloc: (n: number) => number;
-    _free: (p: number) => void;
+    _malloc: (size: number) => number;
+    _free: (pointer: number) => void;
     HEAPU8: Uint8Array;
     cwrap: (
       name: string,
-      ret: string | null,
-      args: string[],
-    ) => (...a: number[]) => number;
+      returnType: string | null,
+      argumentTypes: string[],
+    ) => (...values: number[]) => number;
     _er_web_clear_persist?: () => void;
   };
 };
 
 declare global {
   interface Window {
-    createEmbeddedReact?: (opts: {
-      locateFile: (f: string) => string;
+    createEmbeddedReact?: (options: {
+      locateFile: (file: string) => string;
     }) => Promise<Engine['module']>;
   }
 }
+
+// The engine's touch phases, as the host page passes them.
+const TOUCH_DOWN = 0;
+const TOUCH_MOVE = 1;
+const TOUCH_UP = 2;
+
+const BYTES_PER_PIXEL = 4;
+const INT32_MAX = 2147483647;
+// How often the app's timers still run while requestAnimationFrame is throttled or stopped.
+const BACKGROUND_TICK_MS = 250;
 
 // One engine per page: the wasm module is created once and every caller shares it. Coming back to
 // the page reuses the running engine (resized) rather than bringing up a second one.
@@ -41,15 +51,18 @@ let booted = false;
 
 function loadEngine(base: string): Promise<Engine> {
   if (enginePromise) return enginePromise;
-  enginePromise = new Promise<void>((ok, fail) => {
-    const s = document.createElement('script');
-    s.src = `${base}engine/embedded-react.js`;
-    s.onload = () => ok();
-    s.onerror = () => fail(new Error('could not load the engine script'));
-    document.head.appendChild(s);
+  enginePromise = new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = `${base}engine/embedded-react.js`;
+    script.onload = () => resolve();
+    script.onerror = () =>
+      reject(new Error('could not load the engine script'));
+    document.head.appendChild(script);
   })
     .then(() =>
-      window.createEmbeddedReact!({locateFile: f => `${base}engine/${f}`}),
+      window.createEmbeddedReact!({
+        locateFile: file => `${base}engine/${file}`,
+      }),
     )
     .then(module => ({
       module,
@@ -66,8 +79,8 @@ function loadEngine(base: string): Promise<Engine> {
       pump: module.cwrap('er_web_pump', null, ['number']),
       touch: module.cwrap('er_web_touch', null, ['number', 'number', 'number']),
       framebuffer: module.cwrap('er_web_framebuffer', 'number', []),
-      fbWidth: module.cwrap('er_web_fb_width', 'number', []),
-      fbHeight: module.cwrap('er_web_fb_height', 'number', []),
+      framebufferWidth: module.cwrap('er_web_fb_width', 'number', []),
+      framebufferHeight: module.cwrap('er_web_fb_height', 'number', []),
       clearPersist: module._er_web_clear_persist
         ? () => module._er_web_clear_persist!()
         : null,
@@ -78,14 +91,14 @@ function loadEngine(base: string): Promise<Engine> {
 const withBytes = (
   engine: Engine,
   bytes: Uint8Array,
-  fn: (ptr: number, len: number) => unknown,
+  callback: (pointer: number, length: number) => unknown,
 ) => {
-  const ptr = engine.module._malloc(bytes.length);
-  engine.module.HEAPU8.set(bytes, ptr);
+  const pointer = engine.module._malloc(bytes.length);
+  engine.module.HEAPU8.set(bytes, pointer);
   try {
-    return fn(ptr, bytes.length);
+    return callback(pointer, bytes.length);
   } finally {
-    engine.module._free(ptr);
+    engine.module._free(pointer);
   }
 };
 
@@ -93,7 +106,7 @@ export type Simulator = {
   /** Runs an app bundle, replacing the current one. */
   load: (source: string, pack: Uint8Array | null) => void;
   /** Changes the panel size; the engine re-runs the current bundle at the new size. */
-  resize: (w: number, h: number) => void;
+  resize: (width: number, height: number) => void;
   /** Forgets persisted state, when the engine supports it. */
   clearPersist: (() => void) | null;
 };
@@ -118,28 +131,28 @@ export function useSimulator(
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
     let stopped = false;
-    let raf = 0;
+    let animationFrame = 0;
     let interval = 0;
     const cleanups: (() => void)[] = [];
 
     loadEngine(base)
       .then(engine => {
         if (stopped) return;
-        const ctx = canvas.getContext('2d')!;
-        let w = 0;
-        let h = 0;
+        const context = canvas.getContext('2d')!;
+        let framebufferWidth = 0;
+        let framebufferHeight = 0;
         let image: ImageData | null = null;
         const syncCanvas = () => {
-          w = engine.fbWidth();
-          h = engine.fbHeight();
-          canvas.width = w;
-          canvas.height = h;
-          image = ctx.createImageData(w, h);
+          framebufferWidth = engine.framebufferWidth();
+          framebufferHeight = engine.framebufferHeight();
+          canvas.width = framebufferWidth;
+          canvas.height = framebufferHeight;
+          image = context.createImageData(framebufferWidth, framebufferHeight);
         };
-        const up = booted
+        const started = booted
           ? engine.resize(size.current.width, size.current.height) || 1
           : engine.init(size.current.width, size.current.height);
-        if (!up) {
+        if (!started) {
           setError('the engine failed to start');
           return;
         }
@@ -149,54 +162,60 @@ export function useSimulator(
         // The clock is elapsed wall-clock time, however long the gap: a tab coming back from the
         // background is immediately at the right time. A slow interval keeps the app's timers
         // moving while requestAnimationFrame is throttled or stopped.
-        let prev = performance.now();
-        let lastFrame = prev;
+        let previousTime = performance.now();
+        let lastFrame = previousTime;
         const step = (paint: boolean) => {
           const now = performance.now();
-          engine.pump(Math.round(Math.min(2147483647, now - prev)));
-          prev = now;
+          engine.pump(Math.round(Math.min(INT32_MAX, now - previousTime)));
+          previousTime = now;
           if (!paint || !image) return;
           image.data.set(
             new Uint8ClampedArray(
               engine.module.HEAPU8.buffer,
               engine.framebuffer(),
-              w * h * 4,
+              framebufferWidth * framebufferHeight * BYTES_PER_PIXEL,
             ),
           );
-          ctx.putImageData(image, 0, 0);
+          context.putImageData(image, 0, 0);
         };
         const frame = () => {
           step(true);
           lastFrame = performance.now();
-          raf = requestAnimationFrame(frame);
+          animationFrame = requestAnimationFrame(frame);
         };
-        raf = requestAnimationFrame(frame);
+        animationFrame = requestAnimationFrame(frame);
         interval = window.setInterval(() => {
-          if (performance.now() - lastFrame >= 250) step(!document.hidden);
-        }, 250);
+          if (performance.now() - lastFrame >= BACKGROUND_TICK_MS)
+            step(!document.hidden);
+        }, BACKGROUND_TICK_MS);
 
         // Pointer to framebuffer coordinates, through whatever CSS scaling the canvas has.
-        let down = false;
-        const toFb = (e: PointerEvent): [number, number] => {
-          const r = canvas.getBoundingClientRect();
+        let pointerDown = false;
+        const toFb = (event: PointerEvent): [number, number] => {
+          const bounds = canvas.getBoundingClientRect();
           return [
-            Math.round(((e.clientX - r.left) / r.width) * w),
-            Math.round(((e.clientY - r.top) / r.height) * h),
+            Math.round(
+              ((event.clientX - bounds.left) / bounds.width) * framebufferWidth,
+            ),
+            Math.round(
+              ((event.clientY - bounds.top) / bounds.height) *
+                framebufferHeight,
+            ),
           ];
         };
-        const onDown = (e: PointerEvent) => {
-          e.preventDefault();
-          down = true;
-          canvas.setPointerCapture(e.pointerId);
-          engine.touch(0, ...toFb(e));
+        const onDown = (event: PointerEvent) => {
+          event.preventDefault();
+          pointerDown = true;
+          canvas.setPointerCapture(event.pointerId);
+          engine.touch(TOUCH_DOWN, ...toFb(event));
         };
-        const onMove = (e: PointerEvent) => {
-          if (down) engine.touch(1, ...toFb(e));
+        const onMove = (event: PointerEvent) => {
+          if (pointerDown) engine.touch(TOUCH_MOVE, ...toFb(event));
         };
-        const onUp = (e: PointerEvent) => {
-          if (!down) return;
-          down = false;
-          engine.touch(2, ...toFb(e));
+        const onUp = (event: PointerEvent) => {
+          if (!pointerDown) return;
+          pointerDown = false;
+          engine.touch(TOUCH_UP, ...toFb(event));
         };
         canvas.addEventListener('pointerdown', onDown);
         canvas.addEventListener('pointermove', onMove);
@@ -218,20 +237,24 @@ export function useSimulator(
               engine.loadSource,
             );
           },
-          resize: (nw, nh) => {
-            if (nw === w && nh === h) return;
-            if (engine.resize(nw, nh)) syncCanvas();
+          resize: (newWidth, newHeight) => {
+            if (
+              newWidth === framebufferWidth &&
+              newHeight === framebufferHeight
+            )
+              return;
+            if (engine.resize(newWidth, newHeight)) syncCanvas();
           },
           clearPersist: engine.clearPersist,
         });
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((caught: Error) => setError(caught.message));
 
     return () => {
       stopped = true;
-      cancelAnimationFrame(raf);
+      cancelAnimationFrame(animationFrame);
       clearInterval(interval);
-      cleanups.forEach(fn => fn());
+      cleanups.forEach(cleanup => cleanup());
     };
     // The engine is brought up once; size changes go through `resize`.
     // eslint-disable-next-line react-hooks/exhaustive-deps

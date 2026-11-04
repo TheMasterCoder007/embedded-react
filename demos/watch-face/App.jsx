@@ -44,18 +44,29 @@ import {
 // Seconds since midnight. Starts at 0 (12:00 AM) — the factory default of a device whose clock has
 // never been set. The weekday/date below (Wed, Jan 1 2020) is the matching unset default.
 const START_TIME = 0;
-const PAGE_W = 240; // page width == screen width
+const PAGE_WIDTH = 240; // page width == screen width
 
 /** Past this much of a page dragged, release commits to the neighbor (directional, so both ways are easy). */
 const LATCH_PX = 58;
 /** …or past this speed, in px/ms, however short the drag was. A flick, rather than a haul. */
 const LATCH_VELOCITY = 0.4;
 
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3600;
+const SECONDS_PER_HALF_DAY = 43200;
+const CLOCK_TICK_MS = 1000;
+const SETTLE_TICK_MS = 33; // ~30 fps
+const SETTLE_EASE = 0.35; // the share of the remaining distance each settle tick covers
+const SETTLE_SNAP_PX = 0.5;
+const MIN_HEART_RATE = 61;
+const MAX_HEART_RATE = 68;
+const GOLDEN_RATIO_FRACTION = 0.6180339887;
+
 // ----------------------------------------------------------------------------------------------------
 // Design tokens
 // ----------------------------------------------------------------------------------------------------
 const theme = {
-  bg: '#0d0d0f',
+  background: '#0d0d0f',
   card: '#1b1b1e',
   cardBorder: '#2a2a2e',
   white: '#f5f5f7',
@@ -76,7 +87,7 @@ const theme = {
 function StatCard({dot, label, value, unit}) {
   return (
     <View style={styles.card}>
-      <View style={styles.cardHead}>
+      <View style={styles.cardHeader}>
         <View style={[styles.dot, {backgroundColor: dot}]} />
         <Text style={styles.cardLabel}>{label}</Text>
       </View>
@@ -91,7 +102,7 @@ function StatCard({dot, label, value, unit}) {
 // ----------------------------------------------------------------------------------------------------
 // Page 0 — the watch face
 // ----------------------------------------------------------------------------------------------------
-function WatchFace({t, hr, steps}) {
+function WatchFace({seconds, heartRate, steps}) {
   return (
     <View style={styles.page}>
       <View style={styles.topBar}>
@@ -99,35 +110,39 @@ function WatchFace({t, hr, steps}) {
           <Text style={styles.weekday}>WEDNESDAY</Text>
           <Text style={styles.date}>Jan 1, 2020</Text>
         </View>
-        <Text style={styles.batteryPct}>84%</Text>
+        <Text style={styles.batteryPercent}>84%</Text>
       </View>
 
       <View style={styles.middle}>
         <View style={styles.timeRow}>
           <Text style={styles.time}>
-            {((Math.floor(t / 3600) + 11) % 12) + 1}
+            {((Math.floor(seconds / SECONDS_PER_HOUR) + 11) % 12) + 1}
           </Text>
           <Text style={styles.timeColon}>:</Text>
           <Text style={styles.time}>
-            {Math.floor((Math.floor(t / 60) % 60) / 10)}
-            {(Math.floor(t / 60) % 60) % 10}
+            {Math.floor(
+              (Math.floor(seconds / SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE) /
+                10,
+            )}
+            {(Math.floor(seconds / SECONDS_PER_MINUTE) % SECONDS_PER_MINUTE) %
+              10}
           </Text>
         </View>
         <View style={styles.metaRow}>
           <Text style={styles.ampm}>
-            {Math.floor(t / 43200) % 2 === 0 ? 'AM' : 'PM'}
+            {Math.floor(seconds / SECONDS_PER_HALF_DAY) % 2 === 0 ? 'AM' : 'PM'}
           </Text>
           <View style={styles.pill}>
             <Text style={styles.pillText}>
-              {Math.floor((t % 60) / 10)}
-              {(t % 60) % 10}
+              {Math.floor((seconds % SECONDS_PER_MINUTE) / 10)}
+              {(seconds % SECONDS_PER_MINUTE) % 10}
             </Text>
           </View>
         </View>
       </View>
 
       <View style={styles.cardsRow}>
-        <StatCard dot={theme.red} label="HEART" value={hr} unit="BPM" />
+        <StatCard dot={theme.red} label="HEART" value={heartRate} unit="BPM" />
         <StatCard dot={theme.green} label="STEPS" value={steps} unit="" />
       </View>
     </View>
@@ -143,8 +158,8 @@ function LevelPage({dotx, doty}) {
       <Text style={styles.levelTitle}>LEVEL</Text>
       <View style={styles.levelArea}>
         <View style={styles.target}>
-          <View style={styles.crossH} />
-          <View style={styles.crossV} />
+          <View style={styles.crossHorizontal} />
+          <View style={styles.crossVertical} />
           <View style={styles.centerRing} />
           {/* The dot: parked at the target center, then nudged by dynamic margins = the tilt offset. Turns
               green when it settles inside the center ring (the board is level). */}
@@ -171,8 +186,8 @@ function LevelPage({dotx, doty}) {
 // App — the swipe pager
 // ----------------------------------------------------------------------------------------------------
 export function App() {
-  const [t, setT] = useState(START_TIME); // seconds since midnight
-  const [hr, setHr] = useState(66); // heart rate — a gentle random walk-in [61, 68]
+  const [seconds, setSeconds] = useState(START_TIME); // seconds since midnight
+  const [heartRate, setHeartRate] = useState(66); // heart rate — a gentle random walk-in [MIN_HEART_RATE, MAX_HEART_RATE]
   const steps = useHostValue(0); // real step count (IMU pedometer, via erb_input_set_int)
   const dotx = useHostValue(0); // level dot offset in px, from the accel tilt (via erb_input_set_int)
   const doty = useHostValue(0);
@@ -190,7 +205,7 @@ export function App() {
     pageRef.current = page;
   }, [page]);
 
-  // Where the track sat when the finger landed. Everything the gesture does is that plus g.dx, so the
+  // Where the track sat when the finger landed. Everything the gesture does is that plus gestureState.dx, so the
   // handlers never need to read `slide` back out of state.
   const slideAtGrant = useRef(0);
 
@@ -198,24 +213,34 @@ export function App() {
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
-        slideAtGrant.current = pageRef.current * PAGE_W;
+        slideAtGrant.current = pageRef.current * PAGE_WIDTH;
         setDragging(1);
       },
       // Drag right-to-left (negative dx) to pull the next page over.
-      onPanResponderMove: (e, g) =>
-        setSlide(Math.max(0, Math.min(PAGE_W, slideAtGrant.current - g.dx))),
-      onPanResponderRelease: (e, g) => {
+      onPanResponderMove: (event, gestureState) =>
+        setSlide(
+          Math.max(
+            0,
+            Math.min(PAGE_WIDTH, slideAtGrant.current - gestureState.dx),
+          ),
+        ),
+      onPanResponderRelease: (event, gestureState) => {
         setDragging(0);
         const settled = Math.max(
           0,
-          Math.min(PAGE_W, slideAtGrant.current - g.dx),
+          Math.min(PAGE_WIDTH, slideAtGrant.current - gestureState.dx),
         );
         // Commit on a long enough drag (~25% of a page, directional so it's easy both ways) OR on a
         // fast enough flick, however short. Otherwise, the ease springs back to where you started.
         if (pageRef.current === 0) {
-          if (settled > LATCH_PX || g.vx <= -LATCH_VELOCITY) setPage(1);
+          if (settled > LATCH_PX || gestureState.vx <= -LATCH_VELOCITY)
+            setPage(1);
         } else {
-          if (settled < PAGE_W - LATCH_PX || g.vx >= LATCH_VELOCITY) setPage(0);
+          if (
+            settled < PAGE_WIDTH - LATCH_PX ||
+            gestureState.vx >= LATCH_VELOCITY
+          )
+            setPage(0);
         }
       },
       // The engine can abandon the sequence (a canceled touch from the panel driver, or a fresh
@@ -227,21 +252,23 @@ export function App() {
 
   useEffect(() => {
     const clockId = setInterval(() => {
-      setT(v => v + 1);
-      setHr(p =>
+      setSeconds(previous => previous + 1);
+      setHeartRate(previous =>
         Math.max(
-          61,
+          MIN_HEART_RATE,
           Math.min(
-            68,
-            p +
+            MAX_HEART_RATE,
+            previous +
               (Math.floor(
-                (p * 0.6180339887 - Math.floor(p * 0.6180339887)) * 3,
+                (previous * GOLDEN_RATIO_FRACTION -
+                  Math.floor(previous * GOLDEN_RATIO_FRACTION)) *
+                  3,
               ) -
                 1),
           ),
         ),
       );
-    }, 1000);
+    }, CLOCK_TICK_MS);
     return () => clearInterval(clockId);
   }, []);
 
@@ -249,14 +276,14 @@ export function App() {
   // it comes to rest exactly and stops nudging). The finger owns `slide` during a drag.
   useEffect(() => {
     const settleId = setInterval(() => {
-      setSlide(s =>
+      setSlide(current =>
         dragging
-          ? s
-          : Math.abs(page * PAGE_W - s) < 0.5
-            ? page * PAGE_W
-            : s + (page * PAGE_W - s) * 0.35,
+          ? current
+          : Math.abs(page * PAGE_WIDTH - current) < SETTLE_SNAP_PX
+            ? page * PAGE_WIDTH
+            : current + (page * PAGE_WIDTH - current) * SETTLE_EASE,
       );
-    }, 33);
+    }, SETTLE_TICK_MS);
     return () => clearInterval(settleId);
   }, [page, dragging]);
 
@@ -264,7 +291,7 @@ export function App() {
     <View style={styles.root}>
       {/* The 480-wide track holds both pages; marginLeft slides it (0 → page 0, −240 → page 1). */}
       <View style={[styles.track, {marginLeft: -slide}]}>
-        <WatchFace t={t} hr={hr} steps={steps} />
+        <WatchFace seconds={seconds} heartRate={heartRate} steps={steps} />
         <LevelPage dotx={dotx} doty={doty} />
       </View>
 
@@ -275,10 +302,10 @@ export function App() {
 }
 
 const styles = StyleSheet.create({
-  root: {flex: 1, backgroundColor: theme.bg},
+  root: {flex: 1, backgroundColor: theme.background},
   track: {flexDirection: 'row', width: 480, height: 280},
   page: {
-    width: PAGE_W,
+    width: PAGE_WIDTH,
     height: 280,
     paddingHorizontal: 16,
     paddingTop: 16,
@@ -299,7 +326,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   date: {color: theme.amber, fontSize: 12, fontWeight: '500', marginTop: 2},
-  batteryPct: {color: theme.green, fontSize: 16, fontWeight: '600'},
+  batteryPercent: {color: theme.green, fontSize: 16, fontWeight: '600'},
 
   middle: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   timeRow: {flexDirection: 'row', alignItems: 'center'},
@@ -338,7 +365,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: 6,
   },
-  cardHead: {flexDirection: 'row', alignItems: 'center', gap: 6},
+  cardHeader: {flexDirection: 'row', alignItems: 'center', gap: 6},
   dot: {width: 7, height: 7, borderRadius: 4},
   cardLabel: {
     color: theme.muted,
@@ -372,7 +399,7 @@ const styles = StyleSheet.create({
     borderColor: theme.cardBorder,
     backgroundColor: theme.card,
   },
-  crossH: {
+  crossHorizontal: {
     position: 'absolute',
     left: 16,
     right: 16,
@@ -380,7 +407,7 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: theme.cardBorder,
   },
-  crossV: {
+  crossVertical: {
     position: 'absolute',
     top: 16,
     bottom: 16,

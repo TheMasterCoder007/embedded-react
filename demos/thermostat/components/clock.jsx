@@ -35,37 +35,38 @@ import {
 // __erClock.utcOffsetMs(), so there the offset is just the time zone. It lives outside React state, so a
 // change re-renders the two clock views rather than the whole thermostat.
 let offset = null; // null until the clock has been set
-let netOffset = null; // the host's offset as last applied; null until it has synced
+let networkOffset = null; // the host's offset as last applied; null until it has synced
 const listeners = new Set();
-const subscribe = fn => {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
+const subscribe = listener => {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 };
 const getOffset = () => offset;
-const setOffset = v => {
-  offset = v;
-  listeners.forEach(fn => fn());
+const setOffset = nextOffset => {
+  offset = nextOffset;
+  listeners.forEach(listener => listener());
 };
 const useOffset = () => useSyncExternalStore(subscribe, getOffset);
+const NETWORK_TIME_POLL_MS = 1000;
 
 /** Re-renders at each local minute boundary while the clock is set — once a minute, not every frame. */
-function useMinuteTick(off) {
+function useMinuteTick(clockOffset) {
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (off === null) return undefined;
-    let id = 0;
+    if (clockOffset === null) return undefined;
+    let timerId = 0;
     const arm = () => {
-      id = setTimeout(
+      timerId = setTimeout(
         () => {
-          setTick(n => n + 1);
+          setTick(count => count + 1);
           arm();
         },
-        MINUTE - ((Date.now() + off) % MINUTE),
+        MINUTE - ((Date.now() + clockOffset) % MINUTE),
       );
     };
     arm();
-    return () => clearTimeout(id);
-  }, [off]);
+    return () => clearTimeout(timerId);
+  }, [clockOffset]);
 }
 
 /**
@@ -76,35 +77,36 @@ function useNetworkTime() {
   useEffect(() => {
     const host = globalThis.__erClock;
     if (!host) return undefined;
-    const id = setInterval(() => {
-      const v = host.utcOffsetMs();
-      if (v !== null && v !== netOffset) {
-        netOffset = v;
-        setOffset(v);
+    const timerId = setInterval(() => {
+      const hostOffset = host.utcOffsetMs();
+      if (hostOffset !== null && hostOffset !== networkOffset) {
+        networkOffset = hostOffset;
+        setOffset(hostOffset);
       }
-    }, 1000);
-    return () => clearInterval(id);
+    }, NETWORK_TIME_POLL_MS);
+    return () => clearInterval(timerId);
   }, []);
 }
 
 /** The header readout. Tapping it opens the settings sheet, where the clock is set. */
 export const HeaderClock = memo(function HeaderClock({theme, onPress}) {
-  const off = useOffset();
+  const clockOffset = useOffset();
   useNetworkTime();
-  useMinuteTick(off);
-  const p = off === null ? null : clockParts(Date.now() + off);
+  useMinuteTick(clockOffset);
+  const parts =
+    clockOffset === null ? null : clockParts(Date.now() + clockOffset);
   return (
     <Pressable onPress={onPress} style={{alignItems: 'flex-end', gap: 3}}>
       <Text
         style={{
           fontSize: 20,
           fontWeight: '500',
-          color: p ? theme.fg : theme.dim,
+          color: parts ? theme.foreground : theme.dim,
         }}>
-        {p ? fmtTime(p) : '--:--'}
+        {parts ? fmtTime(parts) : '--:--'}
       </Text>
       <Text style={{fontSize: 10, letterSpacing: 1, color: theme.dim}}>
-        {p ? fmtDate(p) : 'SET CLOCK'}
+        {parts ? fmtDate(parts) : 'SET CLOCK'}
       </Text>
     </Pressable>
   );
@@ -116,7 +118,7 @@ const HOLD_MS = 400;
 const REPEAT_MS = 110;
 const REPEAT_MAX = 300;
 
-function RepeatStepper({dir, onStep, theme}) {
+function RepeatStepper({direction, onStep, theme}) {
   const stepRef = useRef(onStep);
   stepRef.current = onStep;
   const timer = useRef(0);
@@ -126,10 +128,10 @@ function RepeatStepper({dir, onStep, theme}) {
   };
   const start = () => {
     stop();
-    let n = 0;
+    let steps = 0;
     const tick = delay => {
-      stepRef.current(dir);
-      if (++n < REPEAT_MAX) {
+      stepRef.current(direction);
+      if (++steps < REPEAT_MAX) {
         timer.current = setTimeout(() => tick(REPEAT_MS), delay);
       }
     };
@@ -150,10 +152,12 @@ function RepeatStepper({dir, onStep, theme}) {
         alignItems: 'center',
         justifyContent: 'center',
       }}>
-      {dir < 0 ? (
-        <View style={{width: 16, height: 2, backgroundColor: theme.fg}} />
+      {direction < 0 ? (
+        <View
+          style={{width: 16, height: 2, backgroundColor: theme.foreground}}
+        />
       ) : (
-        <Text style={{fontSize: 20, color: theme.fg}}>+</Text>
+        <Text style={{fontSize: 20, color: theme.foreground}}>+</Text>
       )}
     </Pressable>
   );
@@ -171,10 +175,13 @@ function Field({id, label, width, big, selected, onSelect, theme}) {
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: on ? theme.trackBg : theme.surface,
+        backgroundColor: on ? theme.trackBackground : theme.surface,
       }}>
       <Text
-        style={{fontSize: big ? 24 : 16, color: on ? theme.fg : theme.dim2}}>
+        style={{
+          fontSize: big ? 24 : 16,
+          color: on ? theme.foreground : theme.secondary,
+        }}>
         {label}
       </Text>
     </Pressable>
@@ -186,15 +193,21 @@ function Field({id, label, width, big, selected, onSelect, theme}) {
  * Each step applies at once, and the weekday follows from the date.
  */
 export function ClockSetter({theme}) {
-  const off = useOffset();
-  useMinuteTick(off);
+  const clockOffset = useOffset();
+  useMinuteTick(clockOffset);
   const [field, setField] = useState('hour');
-  const p = clockParts(off === null ? UNSET_START : Date.now() + off);
-  const step = dir => {
-    const cur = getOffset();
+  const parts = clockParts(
+    clockOffset === null ? UNSET_START : Date.now() + clockOffset,
+  );
+  const step = direction => {
+    const current = getOffset();
     const now = Date.now();
     setOffset(
-      stepField(cur === null ? UNSET_START : now + cur, field, dir) - now,
+      stepField(
+        current === null ? UNSET_START : now + current,
+        field,
+        direction,
+      ) - now,
     );
   };
   const f = (id, label, width, big) => (
@@ -211,28 +224,28 @@ export function ClockSetter({theme}) {
   return (
     <View style={{gap: 9}}>
       <Text style={{fontSize: 10, letterSpacing: 2, color: theme.dim}}>
-        {off === null
+        {clockOffset === null
           ? 'CLOCK • NOT SET'
-          : off === netOffset
+          : clockOffset === networkOffset
             ? 'CLOCK • NETWORK'
             : 'CLOCK'}
       </Text>
       <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
-        <RepeatStepper dir={-1} onStep={step} theme={theme} />
+        <RepeatStepper direction={-1} onStep={step} theme={theme} />
         <View style={{flex: 1, alignItems: 'center', gap: 4}}>
           <View style={{flexDirection: 'row', alignItems: 'center', gap: 2}}>
-            {f('hour', fmtHour(p), 44, true)}
+            {f('hour', fmtHour(parts), 44, true)}
             <Text style={{fontSize: 24, color: theme.dim}}>:</Text>
-            {f('min', fmtMin(p), 44, true)}
-            {f('ampm', fmtAmPm(p), 52, true)}
+            {f('min', fmtMin(parts), 44, true)}
+            {f('ampm', fmtAmPm(parts), 52, true)}
           </View>
           <View style={{flexDirection: 'row', alignItems: 'center', gap: 4}}>
-            {f('month', MONTHS[p.m - 1], 52)}
-            {f('day', String(p.d), 40)}
-            {f('year', String(p.y), 60)}
+            {f('month', MONTHS[parts.month - 1], 52)}
+            {f('day', String(parts.day), 40)}
+            {f('year', String(parts.year), 60)}
           </View>
         </View>
-        <RepeatStepper dir={1} onStep={step} theme={theme} />
+        <RepeatStepper direction={1} onStep={step} theme={theme} />
       </View>
     </View>
   );

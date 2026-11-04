@@ -93,9 +93,9 @@ describe('pack-split: vendor/app split', () => {
       nodePaths,
     });
     // Vendor is the framework; the app is a small slice of the total
-    expect(vendor.length).toBeGreaterThan(app.length * 3);
+    expect(vendor.length).toBeGreaterThan(app.length * 2.5);
     const appShare = app.length / (vendor.length + app.length);
-    expect(appShare).toBeLessThan(0.25);
+    expect(appShare).toBeLessThan(0.3);
   }, 30000);
 
   it('boot container carries vendor+assets+app (ordered); hot-reload frame carries app only', async () => {

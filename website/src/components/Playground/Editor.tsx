@@ -51,20 +51,20 @@ export default function Editor({path, value, dark, onChange}: Props): ReactNode 
         javascript({jsx: true, typescript: /\.tsx?$/.test(latest.current.path)}),
         chrome,
         theme.current.of(dark ? [oneDark, navy] : []),
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged) latest.current.onChange(latest.current.path, u.state.doc.toString());
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) latest.current.onChange(latest.current.path, update.state.doc.toString());
         }),
       ],
     });
 
   useEffect(() => {
     if (!host.current) return undefined;
-    const v = new EditorView({
+    const editorView = new EditorView({
       parent: host.current,
       state: makeState(value),
     });
-    view.current = v;
-    return () => v.destroy();
+    view.current = editorView;
+    return () => editorView.destroy();
     // Created once; file switches and theme changes are dispatched below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -72,18 +72,18 @@ export default function Editor({path, value, dark, onChange}: Props): ReactNode 
   // Switching files replaces the whole document (and its undo history).
   const shownPath = useRef(path);
   useEffect(() => {
-    const v = view.current;
-    if (!v || shownPath.current === path) return;
+    const editorView = view.current;
+    if (!editorView || shownPath.current === path) return;
     shownPath.current = path;
-    v.setState(makeState(value));
+    editorView.setState(makeState(value));
   }, [path, value, dark]);
 
   // A reset from outside (same file, new text) replaces the text in place.
   useEffect(() => {
-    const v = view.current;
-    if (!v || shownPath.current !== path) return;
-    const current = v.state.doc.toString();
-    if (current !== value) v.dispatch({changes: {from: 0, to: current.length, insert: value}});
+    const editorView = view.current;
+    if (!editorView || shownPath.current !== path) return;
+    const current = editorView.state.doc.toString();
+    if (current !== value) editorView.dispatch({changes: {from: 0, to: current.length, insert: value}});
   }, [path, value]);
 
   useEffect(() => {
