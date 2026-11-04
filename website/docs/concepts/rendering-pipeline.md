@@ -56,10 +56,11 @@ above them covers. Primitives are painted straight into the framebuffer through 
 
 Three things need an offscreen buffer first: a subtree with `opacity` below 1, a transformed
 subtree, and a shadow. Those composite into statically allocated scratch buffers, then blend onto
-the frame. The buffers are sized at compile time (`ERUI_SCRATCH_WIDTH`/`H`, `ERUI_TRANSFORM_WIDTH`/`H`), and a
-translucent group taller than a strip is rendered in band passes rather than failing. A
-transformed subtree is the one case that cannot be banded, because a rotation reads across its
-whole source, so the transform buffer caps the largest node you can rotate or scale.
+the frame. The buffers are sized at compile time (`ERUI_SCRATCH_WIDTH`, `ERUI_SCRATCH_HEIGHT`,
+`ERUI_TRANSFORM_WIDTH` and `ERUI_TRANSFORM_HEIGHT`), and a translucent group taller than a strip is
+rendered in band passes rather than failing. A transformed subtree is the one case that cannot be
+banded, because a rotation reads across its whole source, so the transform buffer caps the largest
+node you can rotate or scale.
 
 **Present.** The backend gets the damaged rows. A full-framebuffer backend flushes those
 rectangles to the panel, one transfer window per rectangle on drivers that support it. A banded

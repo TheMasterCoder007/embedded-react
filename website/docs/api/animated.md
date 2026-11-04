@@ -109,7 +109,8 @@ translate repaints the old and new positions, a `Dial` value repaints the swept 
 cost more and are worth knowing:
 
 - A node with `opacity` below 1, or a transform, composites through scratch memory each frame. Keep
-  such nodes small, and enable the engine's fade cache (`ERUI_FADE_CACHE_WIDTH/HEIGHT`) on boards with the RAM
-  for it: after one capture, each frame of a pure opacity animation is a single blend.
+  such nodes small, and enable the engine's fade cache (`ERUI_FADE_CACHE_WIDTH` and
+  `ERUI_FADE_CACHE_HEIGHT`) on boards with the RAM for it: after one capture, each frame of a pure
+  opacity animation is a single blend.
 - `setState` on a timer is not an animation. Sixty `setState`s a second re-render, re-diff and
   re-commit sixty times; a `timing` on an `Animated.Value` does none of that.

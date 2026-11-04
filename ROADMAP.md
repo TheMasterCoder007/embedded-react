@@ -33,9 +33,9 @@ additions.
 - **Static RAM footprint is desktop-sized by default.** The opacity/transform/shadow
   scratch buffers default to generous dims. Opacity now composites through band strips
   (`ERUI_SCRATCH_BAND_HEIGHT`) — shrink the strip height for a large RAM saving with no size
-  cap on fades — and the transform source has its own dims (`ERUI_TRANSFORM_WIDTH/HEIGHT`). Tune these
-  plus `ERUI_MAX_OPACITY_DEPTH` and shadows/transforms per board — the defaults are not
-  board defaults.
+  cap on fades — and the transform source has its own dims (`ERUI_TRANSFORM_WIDTH` and
+  `ERUI_TRANSFORM_HEIGHT`). Tune these plus `ERUI_MAX_OPACITY_DEPTH` and shadows/transforms per
+  board — the defaults are not board defaults.
 - **Performance ceiling on JS-driven drag (Flow A).** A drag whose handler runs in JS
   still costs a React render per frame — around ~24 fps on PSRAM-QuickJS hardware,
   bounded by per-event dispatch rather than rendering. The common cases are now covered:

@@ -49,7 +49,7 @@ buffer first; a render pass never allocates.
   can rotate or scale. Damage inside a transformed subtree is whole-node: a change to one child
   repaints the node's entire transformed box.
 - **Shadow plane**: `ERUI_SCRATCH_WIDTH × ERUI_SCRATCH_HEIGHT` bytes of coverage (`ERUI_SHADOWS` only).
-- **Fade cache** (optional, `ERUI_FADE_CACHE_WIDTH/HEIGHT`): keeps the last translucent group's composite so
+- **Fade cache** (optional, `ERUI_FADE_CACHE_WIDTH` and `ERUI_FADE_CACHE_HEIGHT`): keeps the last translucent group's composite so
   a pure opacity animation is one blend per frame instead of a re-render, roughly double the frame
   rate on fades of static content. Any content change invalidates it.
 
