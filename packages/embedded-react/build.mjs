@@ -50,8 +50,8 @@ const entry = resolve(demoDir, 'index.jsx');
 if (!existsSync(entry)) {
   const available = existsSync(demosDir)
     ? readdirSync(demosDir, {withFileTypes: true})
-        .filter(d => d.isDirectory())
-        .map(d => d.name)
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name)
     : [];
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   console.error(`Available demos: ${available.join(', ') || '(none)'}`);
@@ -66,8 +66,8 @@ const images = new Map(); // name -> path
 const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
-  setup(build) {
-    build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
+  setup(pluginBuild) {
+    pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');
       images.set(name, args.path);
       return {
@@ -75,7 +75,7 @@ const assetPlugin = {
         loader: 'js',
       };
     });
-    build.onLoad({filter: /\.(ttf|otf)$/i}, args => {
+    pluginBuild.onLoad({filter: /\.(ttf|otf)$/i}, args => {
       const family = basename(args.path).replace(/\.[^.]+$/, '');
       fonts.set(family, args.path);
       return {
@@ -83,7 +83,9 @@ const assetPlugin = {
         loader: 'js',
       };
     });
-    registerSvgVectorLoader(build, (name, p) => images.set(name, p));
+    registerSvgVectorLoader(pluginBuild, (name, svgPath) =>
+      images.set(name, svgPath),
+    );
   },
 };
 
@@ -124,8 +126,8 @@ console.log(`Bundled demo "${demo}" -> dist/app.bundle.js`);
 // Fonts are pre-rasterized at fixed sizes (the engine has no runtime rasterizer), so bake exactly the
 // fontSize values the bundle uses — constants and token scales folded, not just literals. A size that
 // only exists at runtime can't be discovered; the bake reports those rather than snapping silently.
-const bundleSrc = readFileSync(bundlePath, 'utf8');
-const usedSizes = analyzeFontSizes(bundleSrc);
+const bundleSource = readFileSync(bundlePath, 'utf8');
+const usedSizes = analyzeFontSizes(bundleSource);
 
 // Optional per-demo overrides: demos/<demo>/assets.config.js
 //   export default { fonts: { 'Family': { sizes: [..], bpp: 4, glyphs: 'ascii'|'common'|[cps],
@@ -149,15 +151,15 @@ const summary = bakeAssets({
   images: imageJobs,
   fonts: fontJobs,
   outDir: distDir,
-  source: bundleSrc,
+  source: bundleSource,
   usedSizes,
 });
-const fontDesc = fontJobs.length
+const fontDescription = fontJobs.length
   ? fontJobs
-      .map(f => `${f.family}@[${f.sizes.join(',')}]x${f.bpp}bpp`)
+      .map(font => `${font.family}@[${font.sizes.join(',')}]x${font.bpp}bpp`)
       .join(', ')
   : 'none';
 console.log(
   `Baked ${summary.images} image(s), ${summary.fonts} font size(s) -> dist/assets.generated.c\n` +
-    `  fonts: ${fontDesc}`,
+    `  fonts: ${fontDescription}`,
 );

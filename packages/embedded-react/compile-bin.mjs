@@ -26,7 +26,7 @@ import {fileURLToPath} from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
 const repoRoot = resolve(here, '../..');
-const exe = process.platform === 'win32' ? '.exe' : '';
+const exeSuffix = process.platform === 'win32' ? '.exe' : '';
 
 const SEARCH_DIRS = [
   'bridges/quickjs/build',
@@ -47,8 +47,8 @@ export function findCompileBin() {
     return existsSync(override) ? override : null;
   }
   return (
-    SEARCH_DIRS.map(d =>
-      resolve(repoRoot, d, `er-bridge-quickjs-compile${exe}`),
+    SEARCH_DIRS.map(searchDir =>
+      resolve(repoRoot, searchDir, `er-bridge-quickjs-compile${exeSuffix}`),
     ).find(existsSync) || null
   );
 }

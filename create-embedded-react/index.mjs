@@ -41,24 +41,24 @@ import {
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve, join, relative, basename} from 'node:path';
 
-const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
-const erVersion = JSON.parse(
-  readFileSync(resolve(PKG_ROOT, 'package.json'), 'utf8'),
+const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
+const embeddedReactVersion = JSON.parse(
+  readFileSync(resolve(PACKAGE_ROOT, 'package.json'), 'utf8'),
 ).version;
 
 // The built-in starters ship inside this package. --ts is shorthand for the `starter-ts` template.
 const BUILTINS = [
   {
     name: 'starter',
-    lang: 'js',
-    dir: resolve(PKG_ROOT, 'template'),
+    language: 'js',
+    dir: resolve(PACKAGE_ROOT, 'template'),
     description:
       'The responsive starter — a card with a pulsing logo and a counter (default).',
   },
   {
     name: 'starter-ts',
-    lang: 'ts',
-    dir: resolve(PKG_ROOT, 'template-typescript'),
+    language: 'ts',
+    dir: resolve(PACKAGE_ROOT, 'template-typescript'),
     description: 'The minimal starter in TypeScript (same as --ts).',
   },
 ];
@@ -68,9 +68,9 @@ const BUILTINS = [
  * ran: fall back to the repo's demos/ directly, so the scaffolder works straight from a clone.
  */
 function demoTemplatesRoot() {
-  const staged = resolve(PKG_ROOT, 'templates');
+  const staged = resolve(PACKAGE_ROOT, 'templates');
   if (existsSync(staged)) return staged;
-  const repoDemos = resolve(PKG_ROOT, '..', 'demos');
+  const repoDemos = resolve(PACKAGE_ROOT, '..', 'demos');
   if (existsSync(repoDemos)) return repoDemos;
   return null;
 }
@@ -80,19 +80,28 @@ function demoTemplates() {
   const root = demoTemplatesRoot();
   if (!root) return [];
   return readdirSync(root, {withFileTypes: true})
-    .filter(d => d.isDirectory() && existsSync(join(root, d.name, 'index.jsx')))
-    .map(d => {
+    .filter(
+      entry =>
+        entry.isDirectory() && existsSync(join(root, entry.name, 'index.jsx')),
+    )
+    .map(entry => {
       let description = '';
       try {
         description =
-          JSON.parse(readFileSync(join(root, d.name, 'package.json'), 'utf8'))
-            .description || '';
+          JSON.parse(
+            readFileSync(join(root, entry.name, 'package.json'), 'utf8'),
+          ).description || '';
       } catch {
         /* a demo without a package.json still scaffolds; just no blurb */
       }
-      return {name: d.name, lang: 'js', dir: join(root, d.name), description};
+      return {
+        name: entry.name,
+        language: 'js',
+        dir: join(root, entry.name),
+        description,
+      };
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((first, second) => first.name.localeCompare(second.name));
 }
 
 /** The full template registry: built-in starters + discovered demos, in listing order. */
@@ -103,9 +112,11 @@ function allTemplates() {
 function printTemplates() {
   console.log('Available templates (--template <name>):\n');
   const rows = allTemplates();
-  const w = Math.max(...rows.map(t => t.name.length));
-  for (const t of rows) {
-    console.log(`  ${t.name.padEnd(w)}  ${t.description}`);
+  const nameWidth = Math.max(...rows.map(template => template.name.length));
+  for (const template of rows) {
+    console.log(
+      `  ${template.name.padEnd(nameWidth)}  ${template.description}`,
+    );
   }
   console.log('');
 }
@@ -137,27 +148,27 @@ let wantsHelp = false;
 const positional = [];
 const unknown = [];
 
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (KNOWN_VALUE_FLAGS.has(a)) {
-    const value = argv[i + 1];
+for (let argIndex = 0; argIndex < argv.length; argIndex++) {
+  const arg = argv[argIndex];
+  if (KNOWN_VALUE_FLAGS.has(arg)) {
+    const value = argv[argIndex + 1];
     if (!value || value.startsWith('-')) {
-      console.error(`Missing value for ${a}\n`);
+      console.error(`Missing value for ${arg}\n`);
       printHelp();
       process.exit(1);
     }
     templateArg = value;
-    i++; // consume the value
-  } else if (a === '--ts' || a === '--typescript') {
+    argIndex++; // consume the value
+  } else if (arg === '--ts' || arg === '--typescript') {
     wantsTs = true;
-  } else if (a === '--list') {
+  } else if (arg === '--list') {
     wantsList = true;
-  } else if (a === '-h' || a === '--help') {
+  } else if (arg === '-h' || arg === '--help') {
     wantsHelp = true;
-  } else if (a.startsWith('-')) {
-    unknown.push(a);
+  } else if (arg.startsWith('-')) {
+    unknown.push(arg);
   } else {
-    positional.push(a);
+    positional.push(arg);
   }
 }
 
@@ -200,50 +211,56 @@ if (wantsTs) {
 if (templateName == null) templateName = 'starter';
 
 const templates = allTemplates();
-const template = templates.find(t => t.name === templateName);
+const template = templates.find(candidate => candidate.name === templateName);
 if (!template) {
   console.error(`Unknown template: ${templateName}\n`);
   printTemplates();
   process.exit(1);
 }
 
-const arg = positional[0];
-if (!arg) {
+const projectArg = positional[0];
+if (!projectArg) {
   printHelp();
   printTemplates();
   process.exit(1);
 }
 
-const destDir = resolve(process.cwd(), arg);
-const appName = basename(destDir);
-const pkgName =
+const destinationDir = resolve(process.cwd(), projectArg);
+const appName = basename(destinationDir);
+const packageName =
   appName
     .toLowerCase()
     .replace(/[^a-z0-9-~.]/g, '-')
     .replace(/^[-.]+/, '') || 'embedded-react-app';
 
-if (existsSync(destDir) && readdirSync(destDir).length) {
-  console.error(`Target directory "${arg}" already exists and is not empty.`);
+if (existsSync(destinationDir) && readdirSync(destinationDir).length) {
+  console.error(
+    `Target directory "${projectArg}" already exists and is not empty.`,
+  );
   process.exit(1);
 }
 
-const TEXT = /\.(jsx?|tsx?|json|md)$/;
-const subst = s =>
-  s
-    .replaceAll('__APP_NAME__', pkgName)
-    .replaceAll('__ER_VERSION__', `^${erVersion}`);
+const TEXT_FILE = /\.(jsx?|tsx?|json|md)$/;
+const subst = text =>
+  text
+    .replaceAll('__APP_NAME__', packageName)
+    .replaceAll('__ER_VERSION__', `^${embeddedReactVersion}`);
 
 /** Copy template → dest, substituting placeholders in text files and restoring the dotfile name. */
-function copyDir(src, dst) {
-  mkdirSync(dst, {recursive: true});
-  for (const name of readdirSync(src)) {
-    const sp = join(src, name);
+function copyDir(source, destination) {
+  mkdirSync(destination, {recursive: true});
+  for (const name of readdirSync(source)) {
+    const sourcePath = join(source, name);
     // npm strips a published .gitignore, so templates ship it as `gitignore`; restore the dot here.
-    const dp = join(dst, name === 'gitignore' ? '.gitignore' : name);
-    if (statSync(sp).isDirectory()) copyDir(sp, dp);
-    else if (TEXT.test(name) || name === 'gitignore')
-      writeFileSync(dp, subst(readFileSync(sp, 'utf8')));
-    else copyFileSync(sp, dp); // binary asset (png, ttf, …)
+    const destinationPath = join(
+      destination,
+      name === 'gitignore' ? '.gitignore' : name,
+    );
+    if (statSync(sourcePath).isDirectory())
+      copyDir(sourcePath, destinationPath);
+    else if (TEXT_FILE.test(name) || name === 'gitignore')
+      writeFileSync(destinationPath, subst(readFileSync(sourcePath, 'utf8')));
+    else copyFileSync(sourcePath, destinationPath); // binary asset (png, ttf, …)
   }
 }
 
@@ -253,21 +270,21 @@ function copyDir(src, dst) {
  * with its own name and a concrete dependency version — into a fresh <my-app> starter.
  */
 function finalizePackageJson(dir) {
-  const p = join(dir, 'package.json');
-  if (!existsSync(p)) return;
-  const pkg = JSON.parse(readFileSync(p, 'utf8'));
-  pkg.name = pkgName;
-  pkg.private = true;
-  pkg.version = '0.0.0';
-  if (pkg.dependencies?.['embedded-react'])
-    pkg.dependencies['embedded-react'] = `^${erVersion}`;
-  writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n');
+  const packageJsonPath = join(dir, 'package.json');
+  if (!existsSync(packageJsonPath)) return;
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  packageJson.name = packageName;
+  packageJson.private = true;
+  packageJson.version = '0.0.0';
+  if (packageJson.dependencies?.['embedded-react'])
+    packageJson.dependencies['embedded-react'] = `^${embeddedReactVersion}`;
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
 }
 
-copyDir(template.dir, destDir);
-finalizePackageJson(destDir);
+copyDir(template.dir, destinationDir);
+finalizePackageJson(destinationDir);
 
-const where = relative(process.cwd(), destDir) || '.';
+const where = relative(process.cwd(), destinationDir) || '.';
 console.log(
   `\n✓ Created "${appName}"${
     template.name === 'starter' ? '' : ` from the "${template.name}" template`

@@ -42,45 +42,52 @@ import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const JS = resolve(ROOT, 'packages/embedded-react');
-export const STAGE = resolve(JS, 'dist/npm-package');
+const PACKAGE_DIR = resolve(ROOT, 'packages/embedded-react');
+export const STAGE = resolve(PACKAGE_DIR, 'dist/npm-package');
 
-const MODULE = /\.(m?js|mts)$/;
+const MODULE_FILE = /\.(m?js|mts)$/;
 
 /** The source with each relative import of a .mts file pointed at its .mjs. */
-function retargetImports(ts, source, fileName) {
+function retargetImports(typescript, source, fileName) {
   // preProcessFile is TypeScript's own import scanner: static imports, re-exports and import() calls.
-  const {importedFiles} = ts.preProcessFile(source, true, true);
+  const {importedFiles} = typescript.preProcessFile(source, true, true);
   let result = source;
-  for (const ref of [...importedFiles].sort(
+  for (const importedFile of [...importedFiles].sort(
     (later, earlier) => earlier.pos - later.pos,
   )) {
-    if (!/^\.\.?\//.test(ref.fileName) || !ref.fileName.endsWith('.mts')) {
+    if (
+      !/^\.\.?\//.test(importedFile.fileName) ||
+      !importedFile.fileName.endsWith('.mts')
+    ) {
       continue;
     }
-    const target = ref.fileName.replace(/\.mts$/, '.mjs');
+    const target = importedFile.fileName.replace(/\.mts$/, '.mjs');
     // `pos` is the specifier's opening quote.
-    const start = /['"]/.test(result[ref.pos]) ? ref.pos + 1 : ref.pos;
-    if (!result.startsWith(ref.fileName, start)) {
+    const start = /['"]/.test(result[importedFile.pos])
+      ? importedFile.pos + 1
+      : importedFile.pos;
+    if (!result.startsWith(importedFile.fileName, start)) {
       throw new Error(
-        `${fileName}: could not locate the import of ${ref.fileName}`,
+        `${fileName}: could not locate the import of ${importedFile.fileName}`,
       );
     }
     result =
       result.slice(0, start) +
       target +
-      result.slice(start + ref.fileName.length);
+      result.slice(start + importedFile.fileName.length);
   }
   return result;
 }
 
 /** Stages the package and returns the directory. */
 export function stageNpmPackage() {
-  const ts = createRequire(join(JS, 'package.json'))('typescript');
+  const typescript = createRequire(join(PACKAGE_DIR, 'package.json'))(
+    'typescript',
+  );
   // Exactly the files `npm pack` would ship (the `files` whitelist, plus package.json, README, LICENSE).
   const [{files}] = JSON.parse(
     execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-      cwd: JS,
+      cwd: PACKAGE_DIR,
       encoding: 'utf8',
       shell: process.platform === 'win32',
     }),
@@ -94,30 +101,34 @@ export function stageNpmPackage() {
   rmSync(STAGE, {recursive: true, force: true});
   for (const {path} of files) {
     mkdirSync(dirname(join(STAGE, path)), {recursive: true});
-    copyFileSync(join(JS, path), join(STAGE, path));
+    copyFileSync(join(PACKAGE_DIR, path), join(STAGE, path));
   }
 
   let compiled = 0;
-  for (const {path} of files.filter(entry => MODULE.test(entry.path))) {
+  for (const {path} of files.filter(entry => MODULE_FILE.test(entry.path))) {
     const file = join(STAGE, path);
-    const source = retargetImports(ts, readFileSync(file, 'utf8'), path);
+    const source = retargetImports(
+      typescript,
+      readFileSync(file, 'utf8'),
+      path,
+    );
     if (!path.endsWith('.mts')) {
       writeFileSync(file, source);
       continue;
     }
     // Erase the types only; verbatimModuleSyntax keeps every import as written, as Node runs it in the repo.
-    const {outputText, diagnostics} = ts.transpileModule(source, {
+    const {outputText, diagnostics} = typescript.transpileModule(source, {
       fileName: path,
       reportDiagnostics: true,
       compilerOptions: {
-        module: ts.ModuleKind.ESNext,
-        target: ts.ScriptTarget.ES2022, // what tsconfig.aot.json checks against
+        module: typescript.ModuleKind.ESNext,
+        target: typescript.ScriptTarget.ES2022, // what tsconfig.aot.json checks against
         verbatimModuleSyntax: true,
       },
     });
     if (diagnostics?.length) {
       throw new Error(
-        `${path}: ${ts.flattenDiagnosticMessageText(diagnostics[0].messageText, '\n')}`,
+        `${path}: ${typescript.flattenDiagnosticMessageText(diagnostics[0].messageText, '\n')}`,
       );
     }
     writeFileSync(file.replace(/\.mts$/, '.mjs'), outputText);
@@ -126,15 +137,17 @@ export function stageNpmPackage() {
   }
 
   // Nothing may still point at TypeScript: an installed package cannot load it.
-  for (const {path} of files.filter(entry => MODULE.test(entry.path))) {
+  for (const {path} of files.filter(entry => MODULE_FILE.test(entry.path))) {
     const staged = join(STAGE, path.replace(/\.mts$/, '.mjs'));
-    const left = ts
+    const leftover = typescript
       .preProcessFile(readFileSync(staged, 'utf8'), true, true)
       .importedFiles.find(
-        ref => /^\.\.?\//.test(ref.fileName) && /\.m?ts$/.test(ref.fileName),
+        importedFile =>
+          /^\.\.?\//.test(importedFile.fileName) &&
+          /\.m?ts$/.test(importedFile.fileName),
       );
-    if (left) {
-      throw new Error(`${path} still imports ${left.fileName}`);
+    if (leftover) {
+      throw new Error(`${path} still imports ${leftover.fileName}`);
     }
   }
   console.error(

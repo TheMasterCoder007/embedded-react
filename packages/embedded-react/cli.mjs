@@ -44,12 +44,15 @@ import {runDeviceDevServer} from './hotreload/dev-device.mjs';
 import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mjs';
 import {boardByName, flashSlot, packSlot} from './flash.mjs';
 
-const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
+const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
 
 // QuickJS release the bytecode container targets — MUST match bridges/quickjs/CMakeLists.txt and
 // ER_QUICKJS_TAG in er_runtime.c (the device loader rejects a mismatch). The wasm that compiles the
 // bytecode embeds this same QuickJS.
-const QJS_TAG = 'v0.15.0';
+const QUICKJS_TAG = 'v0.15.0';
+
+const DEFAULT_PORT = 3333;
+const BYTES_PER_KILOBYTE = 1024;
 
 function usage() {
   console.log(`embedded-react — React Native for embedded MCUs
@@ -92,7 +95,7 @@ Usage:
 
 /** Locate the package's prebuilt simulator assets (the .wasm ships with this package). */
 function simDirOrExit() {
-  const simDir = resolve(PKG_ROOT, 'sim');
+  const simDir = resolve(PACKAGE_ROOT, 'sim');
   if (!existsSync(resolve(simDir, 'embedded-react.wasm'))) {
     console.error(
       'The prebuilt simulator (sim/embedded-react.wasm) is missing from this install.',
@@ -105,23 +108,23 @@ function simDirOrExit() {
   return simDir;
 }
 
-const libSrc = () => resolve(PKG_ROOT, 'src/embedded-react/index.js');
+const libSrc = () => resolve(PACKAGE_ROOT, 'src/embedded-react/index.js');
 const nodePaths = cwd => [
-  resolve(PKG_ROOT, 'node_modules'),
+  resolve(PACKAGE_ROOT, 'node_modules'),
   resolve(cwd, 'node_modules'),
 ];
 
 /** Resolve the app entry: an explicit arg, else common conventions, else package.json "main"/"source". */
 function resolveEntry(cwd, explicit) {
   if (explicit) {
-    const p = resolve(cwd, explicit);
-    if (!existsSync(p)) {
-      console.error(`Entry not found: ${p}`);
+    const entryPath = resolve(cwd, explicit);
+    if (!existsSync(entryPath)) {
+      console.error(`Entry not found: ${entryPath}`);
       process.exit(1);
     }
-    return p;
+    return entryPath;
   }
-  for (const rel of [
+  for (const relativePath of [
     'index.jsx',
     'src/index.jsx',
     'index.tsx',
@@ -129,17 +132,17 @@ function resolveEntry(cwd, explicit) {
     'App.jsx',
     'src/App.jsx',
   ]) {
-    const p = resolve(cwd, rel);
-    if (existsSync(p)) return p;
+    const entryPath = resolve(cwd, relativePath);
+    if (existsSync(entryPath)) return entryPath;
   }
-  const pkgPath = resolve(cwd, 'package.json');
-  if (existsSync(pkgPath)) {
+  const packageJsonPath = resolve(cwd, 'package.json');
+  if (existsSync(packageJsonPath)) {
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
-      for (const field of [pkg.source, pkg.main]) {
-        if (field) {
-          const p = resolve(cwd, field);
-          if (existsSync(p)) return p;
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+      for (const entryField of [packageJson.source, packageJson.main]) {
+        if (entryField) {
+          const entryPath = resolve(cwd, entryField);
+          if (existsSync(entryPath)) return entryPath;
         }
       }
     } catch {
@@ -156,34 +159,34 @@ function resolveEntry(cwd, explicit) {
 }
 
 function optValue(args, flag) {
-  const idx = args.indexOf(flag);
-  if (idx < 0) return null;
-  const value = args[idx + 1];
+  const flagIndex = args.indexOf(flag);
+  if (flagIndex < 0) return null;
+  const value = args[flagIndex + 1];
   if (!value || value.startsWith('--')) {
     console.error(`Missing value for ${flag}\n`);
     usage();
     process.exit(1);
   }
-  return {value, idx, valueIdx: idx + 1};
+  return {value, index: flagIndex, valueIndex: flagIndex + 1};
 }
 
 /** Like optValue, but the value is OPTIONAL: `--flag` alone → {value: null}; `--flag x` → {value: 'x'}. */
 function optFlagMaybeValue(args, flag) {
-  const idx = args.indexOf(flag);
-  if (idx < 0) return null;
-  const next = args[idx + 1];
-  const hasValue = next != null && !next.startsWith('--');
+  const flagIndex = args.indexOf(flag);
+  if (flagIndex < 0) return null;
+  const nextArg = args[flagIndex + 1];
+  const hasValue = nextArg != null && !nextArg.startsWith('--');
   return {
-    value: hasValue ? next : null,
-    idx,
-    valueIdx: hasValue ? idx + 1 : -1,
+    value: hasValue ? nextArg : null,
+    index: flagIndex,
+    valueIndex: hasValue ? flagIndex + 1 : -1,
   };
 }
 
 /** A token that names a serial port rather than an app entry file (so `--device App.jsx` isn't a port). */
-const looksLikeDevicePath = s =>
-  /^(\/dev\/|com\d|\\\\\.\\)/i.test(s) ||
-  /(tty|usbmodem|usbserial|cu\.)/i.test(s);
+const looksLikeDevicePath = token =>
+  /^(\/dev\/|com\d|\\\\\.\\)/i.test(token) ||
+  /(tty|usbmodem|usbserial|cu\.)/i.test(token);
 
 /**
  * Resolve the `--device` port. An explicit path is the universal, board-agnostic mechanism (any serial
@@ -204,11 +207,11 @@ async function resolveDevicePortOrExit(explicit) {
     process.exit(1);
   }
   if (matches.length === 1) {
-    const p = matches[0];
-    const path = preferCalloutPath(p.path);
+    const port = matches[0];
+    const path = preferCalloutPath(port.path);
     console.log(
       `✓ auto-detected ESP32 USB-Serial-JTAG at ${path}` +
-        (p.serialNumber ? `  (SN ${p.serialNumber})` : ''),
+        (port.serialNumber ? `  (SN ${port.serialNumber})` : ''),
     );
     return path;
   }
@@ -223,13 +226,13 @@ async function resolveDevicePortOrExit(explicit) {
     console.error('      embedded-react dev --device <port>');
     if (all.length) {
       console.error('\n  Serial ports seen (pick yours):');
-      for (const p of all)
+      for (const port of all)
         console.error(
-          `   ${p.path}` +
-            (p.vendorId && p.productId
-              ? `  [${p.vendorId}:${p.productId}]`
+          `   ${port.path}` +
+            (port.vendorId && port.productId
+              ? `  [${port.vendorId}:${port.productId}]`
               : '') +
-            (p.manufacturer ? `  ${p.manufacturer}` : ''),
+            (port.manufacturer ? `  ${port.manufacturer}` : ''),
         );
     } else {
       console.error(
@@ -247,18 +250,18 @@ async function resolveDevicePortOrExit(explicit) {
   console.error(
     `✗ found ${matches.length} ESP32 USB-Serial-JTAG ports; pass one explicitly with --device <port>:`,
   );
-  for (const p of matches)
+  for (const port of matches)
     console.error(
-      `   ${preferCalloutPath(p.path)}${p.serialNumber ? `  (SN ${p.serialNumber})` : ''}`,
+      `   ${preferCalloutPath(port.path)}${port.serialNumber ? `  (SN ${port.serialNumber})` : ''}`,
     );
   process.exit(1);
 }
 
 async function dev(args) {
   const cwd = process.cwd();
-  const deviceOpt = optFlagMaybeValue(args, '--device');
+  const deviceOption = optFlagMaybeValue(args, '--device');
   const aot = args.includes('--aot');
-  if (aot && !deviceOpt) {
+  if (aot && !deviceOption) {
     console.error(
       '--aot only applies to --device: the simulator runs the app as Flow A.\n',
     );
@@ -268,10 +271,10 @@ async function dev(args) {
 
   // --device [port] → stream the app to a real board over USB on every save (on-device hot reload).
   // With no port (or `auto`), the ESP32 USB-Serial-JTAG is auto-detected. Otherwise → the WASM simulator.
-  if (deviceOpt) {
+  if (deviceOption) {
     // The token-after --device is normally the port. But `--device App.jsx` means "auto-detect + this
     // entry": if the value names an existing file (and isn't a device path), treat it as the entry.
-    let deviceValue = deviceOpt.value;
+    let deviceValue = deviceOption.value;
     let entryFromDeviceSlot = null;
     if (
       deviceValue &&
@@ -285,10 +288,10 @@ async function dev(args) {
     const explicit =
       entryFromDeviceSlot ??
       args.find(
-        (a, i) =>
-          !a.startsWith('--') &&
-          i !== deviceOpt.idx &&
-          i !== deviceOpt.valueIdx,
+        (arg, argIndex) =>
+          !arg.startsWith('--') &&
+          argIndex !== deviceOption.index &&
+          argIndex !== deviceOption.valueIndex,
       );
 
     if (aot) {
@@ -321,14 +324,18 @@ async function dev(args) {
     return;
   }
 
-  const portOpt = optValue(args, '--port');
-  const consumed = new Set(portOpt ? [portOpt.idx, portOpt.valueIdx] : []);
-  const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
+  const portOption = optValue(args, '--port');
+  const consumed = new Set(
+    portOption ? [portOption.index, portOption.valueIndex] : [],
+  );
+  const explicit = args.find(
+    (arg, argIndex) => !arg.startsWith('--') && !consumed.has(argIndex),
+  );
 
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
 
-  const port = portOpt ? parseInt(portOpt.value, 10) : 3333;
+  const port = portOption ? parseInt(portOption.value, 10) : DEFAULT_PORT;
   const outDir = resolve(tmpdir(), 'embedded-react-sim');
   mkdirSync(outDir, {recursive: true});
 
@@ -347,16 +354,20 @@ async function dev(args) {
 
 async function exportApp(args) {
   const cwd = process.cwd();
-  const outIdx = args.indexOf('--out');
-  const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'sim-export');
+  const outIndex = args.indexOf('--out');
+  const outDir = resolve(
+    cwd,
+    outIndex >= 0 ? args[outIndex + 1] : 'sim-export',
+  );
   const explicit = args.find(
-    (a, i) => !a.startsWith('--') && (outIdx < 0 || i !== outIdx + 1),
+    (arg, argIndex) =>
+      !arg.startsWith('--') && (outIndex < 0 || argIndex !== outIndex + 1),
   );
 
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
-  const pub = resolve(outDir, 'public');
-  mkdirSync(pub, {recursive: true});
+  const publicDir = resolve(outDir, 'public');
+  mkdirSync(publicDir, {recursive: true});
 
   // Bundle the app + bake assets into public/, then drop the prebuilt module + host page alongside.
   await buildApp({
@@ -364,10 +375,10 @@ async function exportApp(args) {
     projectRoot: cwd,
     libSrc: libSrc(),
     nodePaths: nodePaths(cwd),
-    outDir: pub,
+    outDir: publicDir,
   });
-  for (const f of ['embedded-react.js', 'embedded-react.wasm'])
-    copyFileSync(resolve(simDir, f), resolve(pub, f));
+  for (const fileName of ['embedded-react.js', 'embedded-react.wasm'])
+    copyFileSync(resolve(simDir, fileName), resolve(publicDir, fileName));
   copyFileSync(resolve(simDir, 'index.html'), resolve(outDir, 'index.html'));
 
   console.log(
@@ -381,16 +392,21 @@ async function exportApp(args) {
 /** Resolve the root component file for the AOT compiler (App.jsx), distinct from the registry entry. */
 function resolveAppComponent(cwd, explicit) {
   if (explicit) {
-    const p = resolve(cwd, explicit);
-    if (!existsSync(p)) {
-      console.error(`Entry not found: ${p}`);
+    const entryPath = resolve(cwd, explicit);
+    if (!existsSync(entryPath)) {
+      console.error(`Entry not found: ${entryPath}`);
       process.exit(1);
     }
-    return p;
+    return entryPath;
   }
-  for (const rel of ['App.jsx', 'src/App.jsx', 'App.tsx', 'src/App.tsx']) {
-    const p = resolve(cwd, rel);
-    if (existsSync(p)) return p;
+  for (const relativePath of [
+    'App.jsx',
+    'src/App.jsx',
+    'App.tsx',
+    'src/App.tsx',
+  ]) {
+    const entryPath = resolve(cwd, relativePath);
+    if (existsSync(entryPath)) return entryPath;
   }
   console.error(
     'No App component found. Pass one explicitly:  embedded-react build --aot <App.jsx>',
@@ -414,12 +430,12 @@ async function compileAppPackage(
   const {analyzeFontSizes, warnFontSizes} =
     await import('./assets/font-sizes.mjs');
   const appDir = dirname(appPath);
-  const src = readFileSync(appPath, 'utf8');
+  const source = readFileSync(appPath, 'utf8');
   // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
-  const svgArtifacts = await bakeSvgArtifacts(src, appDir);
+  const svgArtifacts = await bakeSvgArtifacts(source, appDir);
   // A package has every layout the app's breakpoints call for, and --screen <WxH>,<WxH> keeps only those the
   // sizes pick.
-  const result = compilePackage(src, basename(dirname(appPath)), {
+  const result = compilePackage(source, basename(dirname(appPath)), {
     filename: appPath,
     svgArtifacts,
     screen: screens?.[0] ?? null, // null without --screen
@@ -429,28 +445,31 @@ async function compileAppPackage(
 
   // Optional per-image overrides (same file the JS flows read): assets.config.js
   //   export default { images: { 'bg': { format: 'rgb565' } } }
-  let cfg = {};
-  const cp = resolve(cwd, 'assets.config.js');
-  if (existsSync(cp))
-    cfg =
-      (await import(`${pathToFileURL(cp).href}?t=${statSync(cp).mtimeMs}`))
-        .default || {};
-  const imageConfig = cfg.images || {};
+  let assetsConfig = {};
+  const assetsConfigPath = resolve(cwd, 'assets.config.js');
+  if (existsSync(assetsConfigPath))
+    assetsConfig =
+      (
+        await import(
+          `${pathToFileURL(assetsConfigPath).href}?t=${statSync(assetsConfigPath).mtimeMs}`
+        )
+      ).default || {};
+  const imageConfig = assetsConfig.images || {};
 
-  const imageJobs = result.images.map(im => ({
-    name: im.name,
-    path: resolve(appDir, im.importPath),
-    format: imageConfig[im.name]?.format,
+  const imageJobs = result.images.map(image => ({
+    name: image.name,
+    path: resolve(appDir, image.importPath),
+    format: imageConfig[image.name]?.format,
   }));
-  for (const j of imageJobs) {
-    if (!existsSync(j.path)) {
-      throw new Error(`<Image> asset "${j.name}" not found at ${j.path}`);
+  for (const job of imageJobs) {
+    if (!existsSync(job.path)) {
+      throw new Error(`<Image> asset "${job.name}" not found at ${job.path}`);
     }
   }
   // Flow B renders everything in the engine's built-in font (no font imports) — check the app's text
   // and its font sizes against what that font actually covers.
-  warnMissingGlyphs({source: src, jsx: true});
-  warnFontSizes({used: analyzeFontSizes(src)});
+  warnMissingGlyphs({source, jsx: true});
+  warnFontSizes({used: analyzeFontSizes(source)});
   const file = packPackage(
     result,
     imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
@@ -475,24 +494,26 @@ async function buildAot(
   let compiled;
   try {
     compiled = await compileAppPackage(cwd, appPath, {screens, release});
-  } catch (e) {
-    console.error(e && e.aotLoc ? e.message : e?.message || String(e));
+  } catch (error) {
+    console.error(
+      error && error.aotLoc ? error.message : error?.message || String(error),
+    );
     process.exit(1);
   }
   const {result, file, imageJobs} = compiled;
-  const out = relative(cwd, outDir) || '.';
+  const displayDir = relative(cwd, outDir) || '.';
   const name = bake ? 'app.erpkg.c' : 'app.erpkg';
   writeFileSync(
     resolve(outDir, name),
     bake ? bakePackage(file.bytes) : file.bytes,
   );
   console.log(
-    `✓ Flow B package → ${out}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s))`,
+    `✓ Flow B package → ${displayDir}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s))`,
   );
   if (release) {
     writeFileSync(resolve(outDir, 'app.erdbg'), result.debug);
     console.log(
-      `  Debug table → ${out}/app.erdbg (${result.debug.length} B), to map a fault back to the source`,
+      `  Debug table → ${displayDir}/app.erdbg (${result.debug.length} B), to map a fault back to the source`,
     );
   }
   console.log(resourceReport(result, file).join('\n'));
@@ -510,13 +531,13 @@ async function buildAot(
 async function buildContainer(cwd, explicit, outDir) {
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
-  const lib = libSrc();
+  const librarySource = libSrc();
   const paths = nodePaths(cwd);
 
   // Release artifact: strip the embedded source text + debug tables from the bytecode (~8x smaller
   // erpkg; stack traces lose line numbers). The dev loop (`embedded-react dev`) keeps them.
   const vendor = await packVendor({
-    libSrc: lib,
+    libSrc: librarySource,
     nodePaths: paths,
     simDir,
     strip: true,
@@ -524,7 +545,7 @@ async function buildContainer(cwd, explicit, outDir) {
   const app = await packApp({
     entry,
     projectRoot: cwd,
-    libSrc: lib,
+    libSrc: librarySource,
     nodePaths: paths,
     simDir,
     strip: true,
@@ -537,9 +558,9 @@ async function buildContainer(cwd, explicit, outDir) {
 
   const outPath = resolve(outDir, 'app.erpkg');
   writeFileSync(outPath, container);
-  const kb = n => `${(n / 1024).toFixed(1)} KB`;
+  const kb = byteCount => `${(byteCount / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
   console.log(
-    `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QJS_TAG}, ` +
+    `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QUICKJS_TAG}, ` +
       `vendor ${kb(vendor.bytecodeLen)} + app ${kb(app.bytecodeLen)}` +
       (app.assetsLen ? `, assets ${kb(app.assetsLen)}` : '') +
       ')',
@@ -568,14 +589,14 @@ async function build(args) {
       process.exit(1);
     }
   }
-  const outIdx = args.indexOf('--out');
-  const outDir = resolve(cwd, outIdx >= 0 ? args[outIdx + 1] : 'dist');
+  const outIndex = args.indexOf('--out');
+  const outDir = resolve(cwd, outIndex >= 0 ? args[outIndex + 1] : 'dist');
 
   // --screen <WxH> (AOT only): the panels to keep layouts for, comma-separated. Optional: a package has every
   // layout without it. Flow A reads the screen from the host at runtime.
-  const screenIdx = args.indexOf('--screen');
+  const screenIndex = args.indexOf('--screen');
   let screens = null;
-  if (screenIdx >= 0) {
+  if (screenIndex >= 0) {
     if (!aot) {
       console.error(
         '--screen only applies to --aot (Flow A reads the panel size from the host at runtime).\n',
@@ -583,13 +604,13 @@ async function build(args) {
       usage();
       process.exit(1);
     }
-    const raw = args[screenIdx + 1];
-    const sizes = (raw ?? '')
+    const screenList = args[screenIndex + 1];
+    const sizes = (screenList ?? '')
       .split(',')
       .map(size => /^([1-9]\d*)x([1-9]\d*)$/i.exec(size));
-    if (!raw || sizes.some(size => !size)) {
+    if (!screenList || sizes.some(size => !size)) {
       console.error(
-        `--screen expects <width>x<height> (e.g. --screen 240x320), got: ${raw ?? '(nothing)'}\n`,
+        `--screen expects <width>x<height> (e.g. --screen 240x320), got: ${screenList ?? '(nothing)'}\n`,
       );
       usage();
       process.exit(1);
@@ -602,9 +623,11 @@ async function build(args) {
 
   // Consume the flag VALUES so they aren't mistaken for the entry (which is a bare, non-`--` token).
   const consumed = new Set();
-  if (outIdx >= 0) consumed.add(outIdx + 1);
-  if (screenIdx >= 0) consumed.add(screenIdx + 1);
-  const explicit = args.find((a, i) => !a.startsWith('--') && !consumed.has(i));
+  if (outIndex >= 0) consumed.add(outIndex + 1);
+  if (screenIndex >= 0) consumed.add(screenIndex + 1);
+  const explicit = args.find(
+    (arg, argIndex) => !arg.startsWith('--') && !consumed.has(argIndex),
+  );
 
   mkdirSync(outDir, {recursive: true});
   if (aot) await buildAot(cwd, explicit, outDir, screens, {release, bake});
@@ -627,10 +650,12 @@ function readPackageOrExit(cwd, explicit) {
 function bareArgs(args, flagsWithValues) {
   const consumed = new Set();
   for (const flag of flagsWithValues) {
-    const idx = args.indexOf(flag);
-    if (idx >= 0) consumed.add(idx + 1);
+    const flagIndex = args.indexOf(flag);
+    if (flagIndex >= 0) consumed.add(flagIndex + 1);
   }
-  return args.filter((a, i) => !a.startsWith('--') && !consumed.has(i));
+  return args.filter(
+    (arg, argIndex) => !arg.startsWith('--') && !consumed.has(argIndex),
+  );
 }
 
 /** `embedded-react pack [package] --board <name> [--slot a|b] [--sequence n] [--out dir]` */
@@ -659,8 +684,8 @@ function pack(args) {
     console.log(
       `✓ Slot ${packed.slot}, sequence ${packed.sequence} → ${relative(cwd, packed.file)}, for flash address 0x${packed.address.toString(16)}`,
     );
-  } catch (e) {
-    console.error(e.message);
+  } catch (error) {
+    console.error(error.message);
     process.exit(1);
   }
 }
@@ -684,27 +709,32 @@ function flash(args) {
           ? `, and slot ${written.lastGood} stays as the last good package.`
           : '.'),
     );
-  } catch (e) {
-    console.error(e.message);
+  } catch (error) {
+    console.error(error.message);
     process.exit(1);
   }
 }
 
-const [cmd, ...rest] = process.argv.slice(2);
-if (cmd === 'dev') {
-  await dev(rest);
-} else if (cmd === 'export') {
-  await exportApp(rest);
-} else if (cmd === 'build') {
-  await build(rest);
-} else if (cmd === 'pack') {
-  pack(rest);
-} else if (cmd === 'flash') {
-  flash(rest);
-} else if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') {
+const [command, ...commandArgs] = process.argv.slice(2);
+if (command === 'dev') {
+  await dev(commandArgs);
+} else if (command === 'export') {
+  await exportApp(commandArgs);
+} else if (command === 'build') {
+  await build(commandArgs);
+} else if (command === 'pack') {
+  pack(commandArgs);
+} else if (command === 'flash') {
+  flash(commandArgs);
+} else if (
+  !command ||
+  command === '--help' ||
+  command === '-h' ||
+  command === 'help'
+) {
   usage();
 } else {
-  console.error(`Unknown command: ${cmd}\n`);
+  console.error(`Unknown command: ${command}\n`);
   usage();
   process.exit(1);
 }

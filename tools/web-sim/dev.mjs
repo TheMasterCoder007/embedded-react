@@ -28,15 +28,17 @@ import {dirname, resolve} from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '../..');
-const JS = resolve(REPO, 'packages/embedded-react');
+const PACKAGE_DIR = resolve(REPO, 'packages/embedded-react');
 const PUBLIC = resolve(HERE, 'public');
+const DEFAULT_PORT = 3333;
 
 const args = process.argv.slice(2);
-const portIdx = args.indexOf('--port');
-const port = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : 3333;
+const portIndex = args.indexOf('--port');
+const port = portIndex >= 0 ? parseInt(args[portIndex + 1], 10) : DEFAULT_PORT;
 const demo =
   args.find(
-    (a, i) => !a.startsWith('--') && (portIdx < 0 || i !== portIdx + 1),
+    (arg, argIndex) =>
+      !arg.startsWith('--') && (portIndex < 0 || argIndex !== portIndex + 1),
   ) ||
   process.env.DEMO ||
   'watch-face';
@@ -53,14 +55,14 @@ if (!existsSync(resolve(PUBLIC, 'embedded-react.wasm'))) {
 }
 
 const {runDevServer} = await import(
-  pathToFileURL(resolve(JS, 'sim-server.mjs')).href
+  pathToFileURL(resolve(PACKAGE_DIR, 'sim-server.mjs')).href
 );
 
 await runDevServer({
   entry,
   projectRoot: demoDir,
-  libSrc: resolve(JS, 'src/embedded-react/index.js'),
-  nodePaths: [resolve(JS, 'node_modules')],
+  libSrc: resolve(PACKAGE_DIR, 'src/embedded-react/index.js'),
+  nodePaths: [resolve(PACKAGE_DIR, 'node_modules')],
   indexHtml: resolve(HERE, 'index.html'),
   simDir: PUBLIC, // embedded-react.{js,wasm}
   outDir: PUBLIC, // app.js + assets.pack

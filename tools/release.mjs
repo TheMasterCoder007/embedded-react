@@ -54,8 +54,8 @@ export function stampChangelog(
 ) {
   if (!existsSync(changelogPath)) return false;
   let text = readFileSync(changelogPath, 'utf8');
-  const verEsc = version.replace(/\./g, '\\.');
-  if (new RegExp(`^## \\[${verEsc}\\]`, 'm').test(text)) return false; // already stamped
+  const escapedVersion = version.replace(/\./g, '\\.');
+  if (new RegExp(`^## \\[${escapedVersion}\\]`, 'm').test(text)) return false; // already stamped
 
   if (!/^## \[Unreleased\]\s*$/m.test(text)) {
     throw new Error('CHANGELOG.md has no "## [Unreleased]" heading to promote');
@@ -71,10 +71,10 @@ export function stampChangelog(
     /^\[Unreleased\]:\s*(.*?)\/compare\/v(\d+\.\d+\.\d+)\.\.\.HEAD\s*$/m,
   );
   if (link) {
-    const [, base, prev] = link;
+    const [, base, previousVersion] = link;
     text = text.replace(
       /^\[Unreleased\]:.*$/m,
-      `[Unreleased]: ${base}/compare/v${version}...HEAD\n[${version}]: ${base}/compare/v${prev}...v${version}`,
+      `[Unreleased]: ${base}/compare/v${version}...HEAD\n[${version}]: ${base}/compare/v${previousVersion}...v${version}`,
     );
   }
   writeFileSync(changelogPath, text);
@@ -84,7 +84,7 @@ export function stampChangelog(
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
-  const version = args.find(a => /^\d+\.\d+\.\d+$/.test(a));
+  const version = args.find(arg => /^\d+\.\d+\.\d+$/.test(arg));
   if (!version) {
     console.error(
       'usage: node tools/release.mjs <MAJOR.MINOR.PATCH> [--dry-run]',
@@ -98,18 +98,19 @@ async function main() {
   // (never `git add -A`) so unrelated working-tree changes are never swept into the release commit.
   const FILES = versionedFiles();
 
-  const git = (...a) => execFileSync('git', a, {cwd: ROOT, stdio: 'inherit'});
-  const gitOut = (...a) =>
-    execFileSync('git', a, {cwd: ROOT, encoding: 'utf8'}).trim();
-  const gitTry = (...a) => {
+  const git = (...gitArgs) =>
+    execFileSync('git', gitArgs, {cwd: ROOT, stdio: 'inherit'});
+  const gitOut = (...gitArgs) =>
+    execFileSync('git', gitArgs, {cwd: ROOT, encoding: 'utf8'}).trim();
+  const gitTry = (...gitArgs) => {
     try {
-      return gitOut(...a);
+      return gitOut(...gitArgs);
     } catch {
       return '';
     }
   };
-  const node = (...a) =>
-    execFileSync(process.execPath, a, {cwd: ROOT, stdio: 'inherit'});
+  const node = (...nodeArgs) =>
+    execFileSync(process.execPath, nodeArgs, {cwd: ROOT, stdio: 'inherit'});
 
   // Preconditions (checked even in dry-run so the preview is honest).
 

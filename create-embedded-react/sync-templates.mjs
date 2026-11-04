@@ -39,9 +39,9 @@ import {
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve, join} from 'node:path';
 
-const PKG_ROOT = dirname(fileURLToPath(import.meta.url));
-const DEMOS_DIR = resolve(PKG_ROOT, '..', 'demos');
-const OUT_DIR = resolve(PKG_ROOT, 'templates');
+const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
+const DEMOS_DIR = resolve(PACKAGE_ROOT, '..', 'demos');
+const OUT_DIR = resolve(PACKAGE_ROOT, 'templates');
 
 // Never copied into a template: dependency/build output and editor/OS cruft.
 const SKIP_DIRS = new Set([
@@ -56,16 +56,19 @@ const SKIP_DIRS = new Set([
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
 
 /** Recursively copy src → dst, skipping build/junk and renaming .gitignore → gitignore for publish. */
-function copyDir(src, dst) {
-  mkdirSync(dst, {recursive: true});
-  for (const name of readdirSync(src)) {
+function copyDir(source, destination) {
+  mkdirSync(destination, {recursive: true});
+  for (const name of readdirSync(source)) {
     if (SKIP_FILES.has(name)) continue;
-    const sp = join(src, name);
-    if (statSync(sp).isDirectory()) {
+    const sourcePath = join(source, name);
+    if (statSync(sourcePath).isDirectory()) {
       if (SKIP_DIRS.has(name)) continue;
-      copyDir(sp, join(dst, name));
+      copyDir(sourcePath, join(destination, name));
     } else {
-      copyFileSync(sp, join(dst, name === '.gitignore' ? 'gitignore' : name));
+      copyFileSync(
+        sourcePath,
+        join(destination, name === '.gitignore' ? 'gitignore' : name),
+      );
     }
   }
 }
@@ -78,9 +81,11 @@ if (!existsSync(DEMOS_DIR)) {
 // A demo is any ../demos/<name> with an index.jsx entry (the same rule the in-repo build tools use).
 const demos = readdirSync(DEMOS_DIR, {withFileTypes: true})
   .filter(
-    d => d.isDirectory() && existsSync(join(DEMOS_DIR, d.name, 'index.jsx')),
+    entry =>
+      entry.isDirectory() &&
+      existsSync(join(DEMOS_DIR, entry.name, 'index.jsx')),
   )
-  .map(d => d.name);
+  .map(entry => entry.name);
 
 rmSync(OUT_DIR, {recursive: true, force: true});
 for (const name of demos) copyDir(join(DEMOS_DIR, name), join(OUT_DIR, name));
