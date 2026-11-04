@@ -806,9 +806,9 @@ static uint8_t map_flex_direction(const char* token)
     }
     if (strcmp(token, "column-reverse") == 0)
     {
-        return ER_FLEX_COL_REVERSE;
+        return ER_FLEX_COLUMN_REVERSE;
     }
-    return ER_FLEX_COL;
+    return ER_FLEX_COLUMN;
 }
 
 /** @brief Maps a justifyContent string to ERFlexJustify. @param[in] token String. @return Enum value. */
@@ -888,7 +888,7 @@ static uint8_t map_align_content(const char* token)
 /** @brief Maps a position string to ERPositionType. @param[in] token String. @return Enum value. */
 static uint8_t map_position(const char* token)
 {
-    return strcmp(token, "absolute") == 0 ? ER_POS_ABSOLUTE : ER_POS_RELATIVE;
+    return strcmp(token, "absolute") == 0 ? ER_POSITION_ABSOLUTE : ER_POSITION_RELATIVE;
 }
 
 /** @brief Maps a display string to ERDisplayMode. @param[in] token String. @return Enum value. */
@@ -1677,7 +1677,7 @@ static void apply_flex_basis(JSContext* ctx, JSValueConst value, ERProps* props)
                 }
                 else
                 {
-                    props->flex_basis_pct = (float)percent;
+                    props->flex_basis_percent = (float)percent;
                 }
             }
             JS_FreeCString(ctx, text);
@@ -2177,16 +2177,16 @@ static void apply_props(JSContext* ctx, ERNode* node, JSValueConst object)
     gather_prop_slots(ctx, object);
 
     /* Layout — dimensions and box model. */
-    apply_dim_pct(ctx, s_prop_slots[PROP_WIDTH], &props.width, &props.width_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_HEIGHT], &props.height, &props.height_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_WIDTH], &props.width, &props.width_percent);
+    apply_dim_pct(ctx, s_prop_slots[PROP_HEIGHT], &props.height, &props.height_percent);
     ER_DIM(PROP_MIN_WIDTH, min_width);
     ER_DIM(PROP_MAX_WIDTH, max_width);
     ER_DIM(PROP_MIN_HEIGHT, min_height);
     ER_DIM(PROP_MAX_HEIGHT, max_height);
-    apply_dim_pct(ctx, s_prop_slots[PROP_TOP], &props.top, &props.top_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_LEFT], &props.left, &props.left_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_RIGHT], &props.right, &props.right_pct);
-    apply_dim_pct(ctx, s_prop_slots[PROP_BOTTOM], &props.bottom, &props.bottom_pct);
+    apply_dim_pct(ctx, s_prop_slots[PROP_TOP], &props.top, &props.top_percent);
+    apply_dim_pct(ctx, s_prop_slots[PROP_LEFT], &props.left, &props.left_percent);
+    apply_dim_pct(ctx, s_prop_slots[PROP_RIGHT], &props.right, &props.right_percent);
+    apply_dim_pct(ctx, s_prop_slots[PROP_BOTTOM], &props.bottom, &props.bottom_percent);
     ER_DIM(PROP_MARGIN, margin);
     ER_DIM(PROP_MARGIN_TOP, margin_top);
     ER_DIM(PROP_MARGIN_RIGHT, margin_right);
@@ -2517,8 +2517,8 @@ static JSValue build_event_object(JSContext* ctx, EREventType type, const EREven
         JSValue layout = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, layout, "x", JS_NewInt32(ctx, data->layout_rect.x));
         JS_SetPropertyStr(ctx, layout, "y", JS_NewInt32(ctx, data->layout_rect.y));
-        JS_SetPropertyStr(ctx, layout, "width", JS_NewInt32(ctx, data->layout_rect.w));
-        JS_SetPropertyStr(ctx, layout, "height", JS_NewInt32(ctx, data->layout_rect.h));
+        JS_SetPropertyStr(ctx, layout, "width", JS_NewInt32(ctx, data->layout_rect.width));
+        JS_SetPropertyStr(ctx, layout, "height", JS_NewInt32(ctx, data->layout_rect.height));
         // React Native reads it from e.nativeEvent.layout; e.layout is the same object.
         JSValue native_event = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, native_event, "layout", JS_DupValue(ctx, layout));
@@ -3668,8 +3668,8 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
         config->key_gap_px = (uint8_t)number;
     if (kbd_int(ctx, config_object, "keyRadius", &number))
         config->key_radius_px = (uint8_t)number;
-    if (kbd_int(ctx, config_object, "gridCols", &number))
-        config->grid_cols = (uint8_t)number;
+    if (kbd_int(ctx, config_object, "gridColumns", &number))
+        config->grid_columns = (uint8_t)number;
 
     JSValue layers = JS_GetPropertyStr(ctx, config_object, "layers");
     if (JS_IsArray(layers))
@@ -3696,24 +3696,24 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
                     int layer_target = 0;
                     if (kbd_bool(ctx, key, "backspace"))
                     {
-                        keyboard_key->type = ER_KBD_KEY_BACKSPACE;
+                        keyboard_key->type = ER_KEYBOARD_KEY_BACKSPACE;
                         keyboard_key->label = label ? label : "<";
                     }
                     else if (kbd_bool(ctx, key, "done"))
                     {
-                        keyboard_key->type = ER_KBD_KEY_DONE;
+                        keyboard_key->type = ER_KEYBOARD_KEY_DONE;
                         keyboard_key->label = label ? label : "OK";
                     }
                     else if (kbd_int(ctx, key, "layer", &layer_target))
                     {
-                        keyboard_key->type = ER_KBD_KEY_LAYER;
+                        keyboard_key->type = ER_KEYBOARD_KEY_LAYER;
                         keyboard_key->layer = (uint8_t)layer_target;
                         keyboard_key->label = label;
                     }
                     else
                     {
                         const char* character = kbd_intern_prop(ctx, key, "char");
-                        keyboard_key->type = ER_KBD_KEY_CHAR;
+                        keyboard_key->type = ER_KEYBOARD_KEY_CHAR;
                         keyboard_key->text = character;
                         keyboard_key->label =
                             label ? label
@@ -3756,13 +3756,14 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
 #define VEC_BRIDGE_MAX_PAINTS ERUI_VECTOR_PAINTS_MAX
 #endif
 #ifndef VEC_BRIDGE_MAX_GRADS
-#define VEC_BRIDGE_MAX_GRADS ERUI_VECTOR_GRADS_MAX
+#define VEC_BRIDGE_MAX_GRADS ERUI_VECTOR_GRADIENTS_MAX
 #endif
 _Static_assert(VEC_BRIDGE_MAX_OPS >= ERUI_VECTOR_TAPE_MAX, "VEC_BRIDGE_MAX_OPS must be >= ERUI_VECTOR_TAPE_MAX");
 _Static_assert(VEC_BRIDGE_MAX_PAINTS >= ERUI_VECTOR_PAINTS_MAX,
                "VEC_BRIDGE_MAX_PAINTS must be >= ERUI_VECTOR_PAINTS_MAX");
-_Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADS_MAX, "VEC_BRIDGE_MAX_GRADS must be >= ERUI_VECTOR_GRADS_MAX");
-/* JS paint record (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_grad + stroke_grad. */
+_Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADIENTS_MAX,
+               "VEC_BRIDGE_MAX_GRADS must be >= ERUI_VECTOR_GRADIENTS_MAX");
+/* JS paint record (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_gradient + stroke_gradient. */
 #define VEC_PAINT_FILL 0
 #define VEC_PAINT_STROKE 1
 #define VEC_PAINT_STROKE_WIDTH 2
@@ -3774,14 +3775,14 @@ _Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADS_MAX, "VEC_BRIDGE_MAX_GR
 #define VEC_PAINT_STROKE_GRADIENT 8
 #define VEC_PAINT_STRIDE 9
 /* JS gradient record (kept in sync with svg-ops.js encodeVectorGradients):
- * [type, stop_count, (color, position) × ER_VGRAD_MAX_STOPS, ax, ay, bx, by, r]. */
+ * [type, stop_count, (color, position) × ER_VECTOR_GRADIENT_MAX_STOPS, ax, ay, bx, by, r]. */
 #define VEC_GRADIENT_TYPE 0
 #define VEC_GRADIENT_STOP_COUNT 1
 #define VEC_GRADIENT_STOPS 2
 #define VEC_GRADIENT_STOP_COLOR 0
 #define VEC_GRADIENT_STOP_POSITION 1
 #define VEC_GRADIENT_STOP_FIELDS 2
-#define VEC_GRADIENT_GEOMETRY (VEC_GRADIENT_STOPS + ER_VGRAD_MAX_STOPS * VEC_GRADIENT_STOP_FIELDS)
+#define VEC_GRADIENT_GEOMETRY (VEC_GRADIENT_STOPS + ER_VECTOR_GRADIENT_MAX_STOPS * VEC_GRADIENT_STOP_FIELDS)
 #define VEC_GRADIENT_AX 0
 #define VEC_GRADIENT_AY 1
 #define VEC_GRADIENT_BX 2
@@ -3878,10 +3879,10 @@ static int vec_read_tape(JSContext* ctx, JSValueConst tape, float* out, int capa
 /**
  * @brief NativeUI.setVectorOps(handle, ops, paints, gradients, dirtyRect) — sets the path geometry on an Svg.
  *
- * @p ops is a flat number array (the op-tape; see the ER_VOP_* contract). @p paints is a flat number array
+ * @p ops is a flat number array (the op-tape; see the ER_VECTOR_OP_* contract). @p paints is a flat number array
  * of VEC_PAINT_STRIDE (9) fields per shape: [fill, stroke, strokeWidth, miterLimit, cap, join, fillRule,
- * fillGrad, strokeGrad] where fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly) and fillGrad /
- * strokeGrad are 1-based indices into @p gradients (0 = solid). @p gradients is an optional flat array of
+ * fillGradient, strokeGradient] where fill/stroke are uint32 ARGB8888 (JS numbers hold them exactly) and fillGradient /
+ * strokeGradient are 1-based indices into @p gradients (0 = solid). @p gradients is an optional flat array of
  * VEC_GRADIENT_STRIDE fields per gradient. A missing/empty ops array clears the node's geometry.
  *
  * @return JS_UNDEFINED.
@@ -3928,14 +3929,14 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
             /* Colors fit a double exactly, so (uint32_t)double is bit-accurate ARGB8888. */
             paints[entry_index].fill = (uint32_t)paint_fields[VEC_PAINT_FILL];
             paints[entry_index].stroke = (uint32_t)paint_fields[VEC_PAINT_STROKE];
-            paints[entry_index].stroke_w = (float)paint_fields[VEC_PAINT_STROKE_WIDTH];
+            paints[entry_index].stroke_width = (float)paint_fields[VEC_PAINT_STROKE_WIDTH];
             paints[entry_index].miter = (float)paint_fields[VEC_PAINT_MITER_LIMIT];
             paints[entry_index].cap = (uint8_t)paint_fields[VEC_PAINT_CAP];
             paints[entry_index].join = (uint8_t)paint_fields[VEC_PAINT_JOIN];
             paints[entry_index].fill_rule = (uint8_t)paint_fields[VEC_PAINT_FILL_RULE];
-            paints[entry_index].fill_grad =
+            paints[entry_index].fill_gradient =
                 (int16_t)paint_fields[VEC_PAINT_FILL_GRADIENT]; /* 1-based fill gradient index (0 = solid) */
-            paints[entry_index].stroke_grad =
+            paints[entry_index].stroke_gradient =
                 (int16_t)paint_fields[VEC_PAINT_STROKE_GRADIENT]; /* 1-based stroke gradient index (0 = solid) */
         }
     }
@@ -3960,7 +3961,7 @@ ER_BRIDGE_MARSHAL_FN(js_set_vector_ops)
             }
             gradients[entry_index].type = (uint8_t)gradient_fields[VEC_GRADIENT_TYPE];
             gradients[entry_index].stop_count = (uint8_t)gradient_fields[VEC_GRADIENT_STOP_COUNT];
-            for (int stop_index = 0; stop_index < ER_VGRAD_MAX_STOPS; stop_index++)
+            for (int stop_index = 0; stop_index < ER_VECTOR_GRADIENT_MAX_STOPS; stop_index++)
             {
                 gradients[entry_index].stops[stop_index].color =
                     (uint32_t)gradient_fields[VEC_GRADIENT_STOPS + VEC_GRADIENT_STOP_COLOR
@@ -4176,7 +4177,7 @@ ER_BRIDGE_MARSHAL_FN(js_set_event)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
- - Functions: Private — Animated (er_anim_value_*)
+ - Functions: Private — Animated (er_animation_value_*)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
@@ -4207,19 +4208,19 @@ static bool obj_f32(JSContext* ctx, JSValueConst object, const char* key, float*
 }
 
 /**
- * @brief Maps an animatable prop name (opacity, translateX, rotate, …) to an ERAnimProp.
+ * @brief Maps an animatable prop name (opacity, translateX, rotate, …) to an ERAnimationProp.
  *
  * @param[in]  name  Prop name.
- * @param[out] out   Receives the ERAnimProp when recognised.
+ * @param[out] out   Receives the ERAnimationProp when recognised.
  *
  * @return true when the name maps to a supported animatable prop.
  */
-static bool anim_prop_from_name(const char* name, ERAnimProp* out)
+static bool anim_prop_from_name(const char* name, ERAnimationProp* out)
 {
     static const struct
     {
         const char* name;
-        ERAnimProp prop;
+        ERAnimationProp prop;
     } k_animatable_props[] = {
         {"opacity", ER_PROP_OPACITY},
         {"translateX", ER_PROP_TRANSLATE_X},
@@ -4247,8 +4248,8 @@ static bool anim_prop_from_name(const char* name, ERAnimProp* out)
     return false;
 }
 
-/** @brief Maps an easing token to ERAnimEasing. @param[in] token String. @return Enum value (default ease). */
-static ERAnimEasing easing_from_name(const char* token)
+/** @brief Maps an easing token to ERAnimationEasing. @param[in] token String. @return Enum value (default ease). */
+static ERAnimationEasing easing_from_name(const char* token)
 {
     if (strcmp(token, "linear") == 0)
     {
@@ -4302,7 +4303,7 @@ static ERAnimEasing easing_from_name(const char* token)
 }
 
 /**
- * @brief Marshals a JS animation config object into an ERAnimConfig.
+ * @brief Marshals a JS animation config object into an ERAnimationConfig.
  *
  * Recognised keys: type ("timing"|"spring"|"decay"), duration, delay, loop, easing (string token or
  * a {x1,y1,x2,y2} bezier object), spring stiffness/damping/mass/velocity, decay deceleration/velocity.
@@ -4311,12 +4312,12 @@ static ERAnimEasing easing_from_name(const char* token)
  * @param[in]  object  Config object (may be undefined).
  * @param[out] config  Zero-initialised then populated.
  */
-static void marshal_anim_config(JSContext* ctx, JSValueConst object, ERAnimConfig* config)
+static void marshal_anim_config(JSContext* ctx, JSValueConst object, ERAnimationConfig* config)
 {
     memset(config, 0, sizeof(*config));
-    config->type = ER_ANIM_TIMING;
+    config->type = ER_ANIMATION_TIMING;
     config->easing = ER_EASE_EASE;
-    config->duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
+    config->duration_ms = ER_ANIMATION_DEFAULT_DURATION_MS;
 
     if (!JS_IsObject(object))
     {
@@ -4331,11 +4332,11 @@ static void marshal_anim_config(JSContext* ctx, JSValueConst object, ERAnimConfi
         {
             if (strcmp(token, "spring") == 0)
             {
-                config->type = ER_ANIM_SPRING;
+                config->type = ER_ANIMATION_SPRING;
             }
             else if (strcmp(token, "decay") == 0)
             {
-                config->type = ER_ANIM_DECAY;
+                config->type = ER_ANIMATION_DECAY;
             }
             JS_FreeCString(ctx, token);
         }
@@ -4413,11 +4414,11 @@ static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst t
 {
     (void)this_val;
 
-    ERLayoutAnimConfig config;
+    ERLayoutAnimationConfig config;
     memset(&config, 0, sizeof(config));
-    config.type = ER_ANIM_TIMING;
+    config.type = ER_ANIMATION_TIMING;
     config.easing = ER_EASE_EASE_IN_OUT;
-    config.duration_ms = ER_ANIM_DEFAULT_DURATION_MS;
+    config.duration_ms = ER_ANIMATION_DEFAULT_DURATION_MS;
 
     JSValueConst object = (argc > 0) ? argv[0] : JS_UNDEFINED;
     if (JS_IsObject(object))
@@ -4430,7 +4431,7 @@ static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst t
             {
                 if (strcmp(token, "spring") == 0)
                 {
-                    config.type = ER_ANIM_SPRING;
+                    config.type = ER_ANIMATION_SPRING;
                 }
                 JS_FreeCString(ctx, token);
             }
@@ -4471,7 +4472,7 @@ static JSValue js_configure_next_layout_animation(JSContext* ctx, JSValueConst t
         obj_f32(ctx, object, "mass", &config.mass);
     }
 
-    er_layout_anim_configure_next(&config);
+    er_layout_animation_configure_next(&config);
     return JS_UNDEFINED;
 }
 
@@ -4487,7 +4488,7 @@ static JSValue js_has_pending_layout_animation(JSContext* ctx, JSValueConst this
     (void)this_val;
     (void)argc;
     (void)argv;
-    return JS_NewBool(ctx, er_layout_anim_has_pending());
+    return JS_NewBool(ctx, er_layout_animation_has_pending());
 }
 
 /**
@@ -4508,7 +4509,7 @@ static JSValue js_anim_value_create(JSContext* ctx, JSValueConst this_val, int a
     {
         JS_ToFloat64(ctx, &initial, argv[0]);
     }
-    return JS_NewInt32(ctx, (int32_t)er_anim_value_create((float)initial));
+    return JS_NewInt32(ctx, (int32_t)er_animation_value_create((float)initial));
 }
 
 /** @brief NativeUI.animValueDestroy(handle). @return JS_UNDEFINED. */
@@ -4522,7 +4523,7 @@ static JSValue js_anim_value_destroy(JSContext* ctx, JSValueConst this_val, int 
     int32_t value_handle = 0;
     if (JS_ToInt32(ctx, &value_handle, argv[0]) == 0)
     {
-        er_anim_value_destroy((ERAnimValueHandle)value_handle);
+        er_animation_value_destroy((ERAnimationValueHandle)value_handle);
     }
     return JS_UNDEFINED;
 }
@@ -4539,7 +4540,7 @@ static JSValue js_anim_value_set(JSContext* ctx, JSValueConst this_val, int argc
     double value = 0.0;
     if (JS_ToInt32(ctx, &value_handle, argv[0]) == 0 && JS_ToFloat64(ctx, &value, argv[1]) == 0)
     {
-        er_anim_value_set((ERAnimValueHandle)value_handle, (float)value);
+        er_animation_value_set((ERAnimationValueHandle)value_handle, (float)value);
     }
     return JS_UNDEFINED;
 }
@@ -4557,7 +4558,7 @@ static JSValue js_anim_value_get(JSContext* ctx, JSValueConst this_val, int argc
     {
         return JS_NewFloat64(ctx, 0.0);
     }
-    return JS_NewFloat64(ctx, (double)er_anim_value_get((ERAnimValueHandle)value_handle));
+    return JS_NewFloat64(ctx, (double)er_animation_value_get((ERAnimationValueHandle)value_handle));
 }
 
 /**
@@ -4581,10 +4582,10 @@ static JSValue js_anim_value_bind(JSContext* ctx, JSValueConst this_val, int arg
     const char* name = JS_ToCString(ctx, argv[2]);
     if (node && name)
     {
-        ERAnimProp prop;
+        ERAnimationProp prop;
         if (anim_prop_from_name(name, &prop))
         {
-            er_anim_value_bind((ERAnimValueHandle)value_handle, node, prop);
+            er_animation_value_bind((ERAnimationValueHandle)value_handle, node, prop);
         }
     }
     if (name)
@@ -4613,10 +4614,10 @@ static JSValue js_anim_unbind(JSContext* ctx, JSValueConst this_val, int argc, J
     const char* name = JS_ToCString(ctx, argv[1]);
     if (node && name)
     {
-        ERAnimProp prop;
+        ERAnimationProp prop;
         if (anim_prop_from_name(name, &prop))
         {
-            er_anim_unbind_prop(node, prop);
+            er_animation_unbind_prop(node, prop);
         }
     }
     if (name)
@@ -4698,7 +4699,7 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
         return JS_UNDEFINED;
     }
 
-    ERAnimProp prop;
+    ERAnimationProp prop;
     const bool prop_known = anim_prop_from_name(name, &prop);
     JS_FreeCString(ctx, name);
     if (!prop_known)
@@ -4769,11 +4770,11 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
         color_interpolation.point_count = interpolation.point_count;
         color_interpolation.extrapolate_left = interpolation.extrapolate_left;
         color_interpolation.extrapolate_right = interpolation.extrapolate_right;
-        er_anim_value_bind_color((ERAnimValueHandle)value_handle, node, prop, &color_interpolation);
+        er_animation_value_bind_color((ERAnimationValueHandle)value_handle, node, prop, &color_interpolation);
     }
     else
     {
-        er_anim_value_bind_interpolated((ERAnimValueHandle)value_handle, node, prop, &interpolation);
+        er_animation_value_bind_interpolated((ERAnimationValueHandle)value_handle, node, prop, &interpolation);
     }
     return JS_UNDEFINED;
 }
@@ -4783,7 +4784,7 @@ static JSValue js_anim_value_bind_interpolated(JSContext* ctx, JSValueConst this
  *
  * user_data is the completion slot index. The handler is one-shot: it is captured (owned) and the
  * slot freed before the JS call, so a handler that chains the next animation can safely reuse this
- * slot. Runs inside er_anim_tick (the engine deactivates the finished animation before calling
+ * slot. Runs inside er_animation_tick (the engine deactivates the finished animation before calling
  * this), so starting a new animation from the handler is safe. Handler exceptions are swallowed.
  *
  * @param[in] finished   true if the animation ran to completion; false if interrupted/stopped.
@@ -4843,11 +4844,11 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
     {
         return JS_NewInt32(ctx, 0);
     }
-    ERAnimConfig config;
+    ERAnimationConfig config;
     marshal_anim_config(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &config);
 
     /* Optional completion callback (argv[3]): grab a slot, root the callback, and route the
-       engine's on_complete through the trampoline. Must be registered BEFORE er_anim_value_animate,
+       engine's on_complete through the trampoline. Must be registered BEFORE er_animation_value_animate,
        which may synchronously cancel a superseded animation (firing that one's callback). */
     if (argc > 3 && JS_IsFunction(ctx, argv[3]))
     {
@@ -4873,8 +4874,8 @@ static JSValue js_anim_value_animate(JSContext* ctx, JSValueConst this_val, int 
         }
     }
 
-    const ERAnimHandle animation_handle =
-        er_anim_value_animate((ERAnimValueHandle)value_handle, (float)to_value, &config);
+    const ERAnimationHandle animation_handle =
+        er_animation_value_animate((ERAnimationValueHandle)value_handle, (float)to_value, &config);
     return JS_NewInt32(ctx, (int32_t)animation_handle);
 }
 
@@ -4889,7 +4890,7 @@ static JSValue js_anim_stop(JSContext* ctx, JSValueConst this_val, int argc, JSV
     int32_t animation_handle = 0;
     if (JS_ToInt32(ctx, &animation_handle, argv[0]) == 0)
     {
-        er_anim_stop((ERAnimHandle)animation_handle);
+        er_animation_stop((ERAnimationHandle)animation_handle);
     }
     return JS_UNDEFINED;
 }
@@ -5087,7 +5088,7 @@ void er_bridge_install(JSContext* ctx)
                       "hasPendingLayoutAnimation",
                       JS_NewCFunction(ctx, js_has_pending_layout_animation, "hasPendingLayoutAnimation", 0));
 
-    /* Animated (er_anim_value_* — native-driver animation). */
+    /* Animated (er_animation_value_* — native-driver animation). */
     JS_SetPropertyStr(
         ctx, native_ui, "animValueCreate", JS_NewCFunction(ctx, js_anim_value_create, "animValueCreate", 1));
     JS_SetPropertyStr(
@@ -5124,7 +5125,7 @@ void er_bridge_install(JSContext* ctx)
     /* Animation completion-callback registry (Animated `.start(cb)`); same ownership trick. */
     JSValue anim_complete_handlers = JS_NewObject(ctx);
     s_anim_complete_handlers = anim_complete_handlers;
-    JS_SetPropertyStr(ctx, native_ui, "__er_anim_complete_handlers", anim_complete_handlers);
+    JS_SetPropertyStr(ctx, native_ui, "__er_animation_complete_handlers", anim_complete_handlers);
 
     /* Frame-batching slots (the installed batcher + the pump body it runs); same ownership trick. */
     JSValue batch_slots = JS_NewObject(ctx);

@@ -220,8 +220,8 @@ static int diff_frames(const uint32_t* first_frame, const uint32_t* second_frame
     {
         bbox->x = min_x;
         bbox->y = min_y;
-        bbox->w = max_x - min_x + 1;
-        bbox->h = max_y - min_y + 1;
+        bbox->width = max_x - min_x + 1;
+        bbox->height = max_y - min_y + 1;
     }
     return count;
 }
@@ -247,8 +247,8 @@ static int unreported_pixels(const uint32_t* before, const uint32_t* after, cons
                 continue;
             bool covered = false;
             for (int rect_index = 0; rect_index < count && !covered; rect_index++)
-                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
-                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h);
+                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].width
+                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].height);
             if (!covered)
                 missed++;
         }
@@ -299,7 +299,7 @@ static int check_inner_mutation(int outer_x, int outer_y, float rotation, Mutati
      * renders in SOURCE space behind it. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
     ERProps outer_props = props_default();
-    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.position = ER_POSITION_ABSOLUTE;
     outer_props.left = (int16_t)outer_x;
     outer_props.top = (int16_t)outer_y;
     outer_props.width = 100;
@@ -391,7 +391,7 @@ static int check_inner_mutation(int outer_x, int outer_y, float rotation, Mutati
            missed,
            idle_differ);
     if (differ)
-        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.w, bbox.h);
+        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.width, bbox.height);
 
     if (mutation != MUTATION_REMOVE)
         er_node_destroy(root); /* tears down the subtree */
@@ -443,7 +443,7 @@ static int check_noninvertible_outer(int screen)
      * far below the threshold er_transform_invert() rejects at, so no capture starts here. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
     ERProps outer_props = props_default();
-    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.position = ER_POSITION_ABSOLUTE;
     outer_props.left = 10;
     outer_props.top = 10;
     outer_props.width = 100;
@@ -461,7 +461,7 @@ static int check_noninvertible_outer(int screen)
      * contain what the inner's blit writes, instead of one that happens to. */
     ERNode* inner = er_node_create(ER_NODE_VIEW);
     ERProps inner_props = props_default();
-    inner_props.position = ER_POS_ABSOLUTE;
+    inner_props.position = ER_POSITION_ABSOLUTE;
     inner_props.left = 70;
     inner_props.top = 70;
     inner_props.width = 60;
@@ -474,7 +474,7 @@ static int check_noninvertible_outer(int screen)
      * pixels come out of the blit past the outer's box entirely. */
     ERNode* leaf = er_node_create(ER_NODE_VIEW);
     ERProps leaf_props = props_default();
-    leaf_props.position = ER_POS_ABSOLUTE;
+    leaf_props.position = ER_POSITION_ABSOLUTE;
     leaf_props.left = 35;
     leaf_props.top = 35;
     leaf_props.width = 25;
@@ -518,7 +518,7 @@ static int check_noninvertible_outer(int screen)
            missed,
            changed);
     if (differ)
-        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.w, bbox.h);
+        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.width, bbox.height);
 
     er_node_destroy(root);
 

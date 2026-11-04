@@ -543,7 +543,7 @@ function tryLowering<Result>(attempt: () => Result): Result | null {
 
 /**
  * Whether a style already writes `field`, counting its percentage twin: `width: '50%'` lowers to
- * `width_pct`, and the author has still set the width. Used by the components that fall back to a
+ * `width_percent`, and the author has still set the width. Used by the components that fall back to a
  * built-in size or inset when the style leaves one out — without the twin they inject a pixel default
  * ALONGSIDE the percentage, and the engine prefers the pixel value for a size.
  *
@@ -551,14 +551,14 @@ function tryLowering<Result>(attempt: () => Result): Result | null {
  * @param dynamicAssigns  State-driven field writes from collectStyleAssigns().
  * @param field  ERProps field to look for.
  *
- * @returns Whether either list writes the field or its `_pct` twin.
+ * @returns Whether either list writes the field or its `_percent` twin.
  */
 export const styleWrites = (
   staticAssigns: {field: string}[],
   dynamicAssigns: {field: string}[],
   field: string,
 ): boolean =>
-  [field, `${field}_pct`].some(
+  [field, `${field}_percent`].some(
     fieldName =>
       staticAssigns.some(assign => assign.field === fieldName) ||
       dynamicAssigns.some(assign => assign.field === fieldName),
@@ -598,7 +598,9 @@ export function collectStyleAssigns(
     write: {constant: PropConstant} | {value: IrPropValue},
   ): void => {
     fields.delete(
-      field.endsWith('_pct') ? field.slice(0, -'_pct'.length) : `${field}_pct`,
+      field.endsWith('_percent')
+        ? field.slice(0, -'_percent'.length)
+        : `${field}_percent`,
     );
     fields.set(field, write);
   };

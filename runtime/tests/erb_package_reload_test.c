@@ -40,7 +40,7 @@ static int s_checked = 0;
 #define SLOT_BYTES ((uint32_t)(SLOT_WORDS * sizeof(uint32_t)))
 #define CHUNK_BYTES 512u
 #define PACKAGE_MAX_BYTES 65536u
-#define FRAME_MAX_BYTES (ER_HR_HEADER_SIZE + ERB_PACKAGE_RELOAD_BUFFER_BYTES(CHUNK_BYTES))
+#define FRAME_MAX_BYTES (ER_HOTRELOAD_HEADER_SIZE + ERB_PACKAGE_RELOAD_BUFFER_BYTES(CHUNK_BYTES))
 #define LAST_LINE_BYTES 256u
 
 /** @brief A sequence past which the next one wraps. */
@@ -172,8 +172,8 @@ static void reset(void)
     memset(&s_config, 0, sizeof(s_config));
     s_config.arena = s_arena;
     s_config.arena_bytes = sizeof(s_arena);
-    s_config.screen_w = TPKG_SCREEN;
-    s_config.screen_h = TPKG_SCREEN;
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
     s_config.native_count = 1;
     memset(&s_slots, 0, sizeof(s_slots));
@@ -238,22 +238,22 @@ static void install(unsigned slot, uint32_t sequence, int kind)
 /** @brief Encodes a frame. */
 static size_t frame(uint8_t* out, uint8_t type, const void* payload, uint32_t bytes)
 {
-    memset(out, 0, ER_HR_HEADER_SIZE);
+    memset(out, 0, ER_HOTRELOAD_HEADER_SIZE);
     memcpy(out, "ERHR", 4u);
-    out[4] = ER_HR_PROTO_VERSION;
+    out[4] = ER_HOTRELOAD_PROTOCOL_VERSION;
     out[5] = type;
     memcpy(out + 8, &bytes, sizeof(bytes));
     const uint32_t checksum = er_crc32((const uint8_t*)payload, bytes);
     memcpy(out + 12, &checksum, sizeof(checksum));
-    memcpy(out + ER_HR_HEADER_SIZE, payload, bytes);
-    return ER_HR_HEADER_SIZE + bytes;
+    memcpy(out + ER_HOTRELOAD_HEADER_SIZE, payload, bytes);
+    return ER_HOTRELOAD_HEADER_SIZE + bytes;
 }
 
 /** @brief Sends a package's begin frame. */
 static bool send_begin(uint32_t length)
 {
-    uint8_t out[ER_HR_HEADER_SIZE + sizeof(length)];
-    const size_t bytes = frame(out, ER_HR_MSG_PACKAGE_BEGIN, &length, sizeof(length));
+    uint8_t out[ER_HOTRELOAD_HEADER_SIZE + sizeof(length)];
+    const size_t bytes = frame(out, ER_HOTRELOAD_MESSAGE_PACKAGE_BEGIN, &length, sizeof(length));
     return erb_package_reload_feed(&s_reload, out, bytes);
 }
 
@@ -264,7 +264,7 @@ static bool send_chunk(uint32_t offset, uint32_t bytes)
     memcpy(payload, &offset, sizeof(offset));
     memcpy(payload + sizeof(offset), s_package + offset, bytes);
     uint8_t out[FRAME_MAX_BYTES];
-    const size_t frame_bytes = frame(out, ER_HR_MSG_PACKAGE_CHUNK, payload, bytes + sizeof(offset));
+    const size_t frame_bytes = frame(out, ER_HOTRELOAD_MESSAGE_PACKAGE_CHUNK, payload, bytes + sizeof(offset));
     return erb_package_reload_feed(&s_reload, out, frame_bytes);
 }
 
@@ -355,8 +355,8 @@ static void test_rejected_keeps_running(void)
         int kind;
         ErbStatus status;
     } cases[] = {
-        {BAD_CRC, ERB_ERR_CORRUPT},
-        {TOO_BIG, ERB_ERR_TOO_BIG},
+        {BAD_CRC, ERB_ERROR_CORRUPT},
+        {TOO_BIG, ERB_ERROR_TOO_BIG},
     };
     for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); index++)
     {
@@ -396,7 +396,7 @@ static void test_boot_fault(void)
     install(0, 5u, GOOD);
     boot();
     CHECK(!send_package(build(BOOT_TRAP)), "a package that faults at boot doesn't start");
-    CHECK(erb_last_error()->status == ERB_ERR_TRAP, "with the reason kept");
+    CHECK(erb_last_error()->status == ERB_ERROR_TRAP, "with the reason kept");
     CHECK(!erb_running(), "the old app is gone by then");
     CHECK(er_error_screen_active(), "and the panel shows why");
     erb_package_reload_tap(&s_reload);
@@ -516,7 +516,7 @@ static void test_flaky_link(void)
     memcpy(payload, &offset, sizeof(offset));
     memcpy(payload + sizeof(offset), s_package + offset, CHUNK_BYTES);
     uint8_t out[FRAME_MAX_BYTES];
-    const size_t bytes = frame(out, ER_HR_MSG_PACKAGE_CHUNK, payload, sizeof(payload));
+    const size_t bytes = frame(out, ER_HOTRELOAD_MESSAGE_PACKAGE_CHUNK, payload, sizeof(payload));
     out[bytes - 1u] ^= 0xFFu;
     static const uint8_t noise[] = {'E', 'R', 'x', 0x00, 0xFF};
     erb_package_reload_feed(&s_reload, noise, sizeof(noise));
@@ -531,7 +531,7 @@ static void test_flaky_link(void)
         const uint32_t take = remaining < CHUNK_BYTES ? remaining : CHUNK_BYTES;
         memcpy(payload, &chunk_start, sizeof(chunk_start));
         memcpy(payload + sizeof(chunk_start), s_package + chunk_start, take);
-        const size_t frame_bytes = frame(out, ER_HR_MSG_PACKAGE_CHUNK, payload, take + sizeof(chunk_start));
+        const size_t frame_bytes = frame(out, ER_HOTRELOAD_MESSAGE_PACKAGE_CHUNK, payload, take + sizeof(chunk_start));
         for (size_t index = 0; index < frame_bytes; index++)
         {
             started = erb_package_reload_feed(&s_reload, out + index, 1u) || started;
@@ -566,11 +566,11 @@ static void test_bad_chunks(void)
     memset(payload + sizeof(offset), 0, CHUNK_BYTES);
     s_outcome[0] = '\0';
     uint8_t out[FRAME_MAX_BYTES];
-    size_t bytes = frame(out, ER_HR_MSG_PACKAGE_CHUNK, payload, CHUNK_BYTES / 2u + sizeof(offset));
+    size_t bytes = frame(out, ER_HOTRELOAD_MESSAGE_PACKAGE_CHUNK, payload, CHUNK_BYTES / 2u + sizeof(offset));
     erb_package_reload_feed(&s_reload, out, bytes);
     CHECK(s_outcome[0] == '\0', "a partial package isn't loaded");
 
-    bytes = frame(out, ER_HR_MSG_LOAD_CONTAINER, payload, 8u);
+    bytes = frame(out, ER_HOTRELOAD_MESSAGE_LOAD_CONTAINER, payload, 8u);
     erb_package_reload_feed(&s_reload, out, bytes);
     CHECK(strstr(s_outcome, "--aot") != NULL, "a Flow A frame says what to do");
 }

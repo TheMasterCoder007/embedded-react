@@ -96,26 +96,26 @@ keyboard feeds the focused text input through `embedded_renderer_key(keycode, ut
 The engine animates two things: a node property directly, and a standalone value bound to one or
 more properties.
 
-- `er_anim_start(node, prop, to, &cfg)` / `er_anim_cancel(node, prop)` animate a property in place.
-- `er_anim_value_create()` makes a standalone float; `er_anim_value_bind(v, node, prop)` and
-  `er_anim_value_bind_interpolated(v, node, prop, &map)` attach it, and a color prop takes
-  `er_anim_value_bind_color(v, node, prop, &colors)` only. `er_anim_value_animate(v, to, &cfg)`
-  drives it, `er_anim_value_set`/`get` read and write it, `er_anim_value_unbind_all` and
-  `er_anim_unbind_prop` detach, `er_anim_value_destroy` frees it. This is what an `Animated.Value`
+- `er_animation_start(node, prop, to, &cfg)` / `er_animation_cancel(node, prop)` animate a property in place.
+- `er_animation_value_create()` makes a standalone float; `er_animation_value_bind(v, node, prop)` and
+  `er_animation_value_bind_interpolated(v, node, prop, &map)` attach it, and a color prop takes
+  `er_animation_value_bind_color(v, node, prop, &colors)` only. `er_animation_value_animate(v, to, &cfg)`
+  drives it, `er_animation_value_set`/`get` read and write it, `er_animation_value_unbind_all` and
+  `er_animation_unbind_prop` detach, `er_animation_value_destroy` frees it. This is what an `Animated.Value`
   is.
-- `er_anim_sequence`, `er_anim_parallel`, `er_anim_stagger` group animations; `er_anim_stop(handle)`
+- `er_animation_sequence`, `er_animation_parallel`, `er_animation_stagger` group animations; `er_animation_stop(handle)`
   stops any of them. `er_interpolate` maps a float through a breakpoint table, and
   `er_interpolate_color` maps one onto colors.
 
-`ERAnimConfig` selects the algorithm (`ER_ANIM_TIMING`, `ER_ANIM_SPRING`, `ER_ANIM_DECAY`), the
+`ERAnimationConfig` selects the algorithm (`ER_ANIMATION_TIMING`, `ER_ANIMATION_SPRING`, `ER_ANIMATION_DECAY`), the
 easing (`ER_EASE_LINEAR` through `ER_EASE_ELASTIC_OUT`, or `ER_EASE_BEZIER` with four control
 points), `duration_ms` and `delay_ms`, the spring's `stiffness`, `damping`, `mass` and `velocity`,
 decay's `deceleration`, `loop` and `loop_reverse`, and an `on_complete` callback.
 
-Layout animations take their own `ERLayoutAnimConfig` (timing or spring, a `uint16_t duration_ms`,
-easing and spring constants): `er_layout_anim_configure_next(&cfg)` arms it for the next commit, and
-`ER_LAYOUT_ANIM_EASE_IN_EASE_OUT`, `ER_LAYOUT_ANIM_LINEAR` and `ER_LAYOUT_ANIM_SPRING` are ready-made.
-`er_layout_anim_has_pending()` reports an armed config the next commit has not consumed yet.
+Layout animations take their own `ERLayoutAnimationConfig` (timing or spring, a `uint16_t duration_ms`,
+easing and spring constants): `er_layout_animation_configure_next(&cfg)` arms it for the next commit, and
+`ER_LAYOUT_ANIMATION_EASE_IN_EASE_OUT`, `ER_LAYOUT_ANIMATION_LINEAR` and `ER_LAYOUT_ANIMATION_SPRING` are ready-made.
+`er_layout_animation_has_pending()` reports an armed config the next commit has not consumed yet.
 
 ## Assets
 
@@ -134,10 +134,10 @@ due animations. `er_now_ms()` and `er_now_ms64()` read it; JavaScript's `perform
 ## The backend struct
 
 `native_renderer.h` declares `EmbeddedRenderBackend`: `fill_rect`, `copy_rect`, `blend_rect`,
-`wait`, `frame_ready` and a `ctx` pointer, plus the optional banded rendering (`band_height`,
-`band_begin`, `band_flush`) and format-aware copy (`copy_rect_fmt`) extensions. A multicore host
+`wait`, `frame_ready` and a `context` pointer, plus the optional banded rendering (`band_height`,
+`band_begin`, `band_flush`) and format-aware copy (`copy_rect_format`) extensions. A multicore host
 also passes its render threads with `embedded_renderer_set_workers()` and calls
-`er_render_worker_exec(k)` on worker `k` when dispatched (only with `ERUI_RENDER_WORKERS` above 1).
+`er_render_worker_execute(k)` on worker `k` when dispatched (only with `ERUI_RENDER_WORKERS` above 1).
 [Engine and backends](../concepts/engine-and-backends.md) explains the contract and
 [Writing a backend](../internals/writing-a-backend.md) the conventions.
 

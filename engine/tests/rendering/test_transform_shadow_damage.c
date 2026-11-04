@@ -34,10 +34,11 @@
  *
  * CONFIGURATION. Both halves have to be reachable at once — the capture must fail while the shadow
  * still renders — and the two have separate size limits: er_transform_source_begin() refuses a node
- * larger than ERUI_XFORM_W/H, er_shadow_render() bails on one larger than ERUI_SCRATCH_W/H. With the
- * default ERUI_XFORM_W = ERUI_SCRATCH_W any node over the transform limit is over the shadow limit too
- * and simply casts no shadow, so the defect needs the decoupled configuration these knobs exist for
- * ("decouple from ERUI_SCRATCH_W when strips are screen-wide"). The scenarios below compile out unless
+ * larger than ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT, er_shadow_render() bails on one larger than
+ * ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT. With the default ERUI_TRANSFORM_WIDTH = ERUI_SCRATCH_WIDTH any node over
+ * the transform limit is over the shadow limit too and simply casts no shadow, so the defect needs the decoupled
+ * configuration these knobs exist for
+ * ("decouple from ERUI_SCRATCH_WIDTH when strips are screen-wide"). The scenarios below compile out unless
  * the build actually provides that gap; .github/workflows/ci.yml has a pass that does.
  */
 
@@ -247,13 +248,14 @@ static ERProps props_default(void)
     return props;
 }
 
-#if ERUI_SHADOWS && ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W < ERUI_SCRATCH_W) && (ERUI_XFORM_H < ERUI_SCRATCH_H)
+#if ERUI_SHADOWS && ERUI_TRANSFORMS_FULL && (ERUI_TRANSFORM_WIDTH < ERUI_SCRATCH_WIDTH)                                \
+    && (ERUI_TRANSFORM_HEIGHT < ERUI_SCRATCH_HEIGHT)
 #define XFORM_SHADOW_GAP 1
 
 /* A node in this range fails the transform capture but still gets a shadow — the only size band where
  * the two halves of the defect coexist. */
-#define FALLBACK_SIDE (ERUI_XFORM_W + 1)
-#define CAPTURED_SIDE (ERUI_XFORM_W / 2)
+#define FALLBACK_SIDE (ERUI_TRANSFORM_WIDTH + 1)
+#define CAPTURED_SIDE (ERUI_TRANSFORM_WIDTH / 2)
 
 /** @brief Gives a node a shadow big enough that a clipped band is unmistakable. */
 static void set_shadow(ERProps* props)
@@ -308,7 +310,7 @@ static int compare_to_full_repaint(const char* label)
  * shrinking the bar above it moves the card WITHOUT making it source_dirty, which is precisely the case
  * that has to reason about the vacated footprint — the old shadow — on its own.
  *
- * @param[in] side               Card size; > ERUI_XFORM_W makes its scratch capture fail.
+ * @param[in] side               Card size; > ERUI_TRANSFORM_WIDTH makes its scratch capture fail.
  * @param[in] bar_height_before  Bar height before the reflow.
  * @param[in] bar_height_after   Bar height after it.
  * @param[in] label              Scenario name for the report.
@@ -382,7 +384,7 @@ static int resize_case(int from, int to, const char* label)
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps root_props = props_default();
-    root_props.position = ER_POS_RELATIVE;
+    root_props.position = ER_POSITION_RELATIVE;
     root_props.width = FRAMEBUFFER_WIDTH;
     root_props.height = FRAMEBUFFER_HEIGHT;
     root_props.background_color = 0xFFFFFFFFU;
@@ -390,7 +392,7 @@ static int resize_case(int from, int to, const char* label)
 
     ERNode* card = er_node_create(ER_NODE_VIEW);
     ERProps card_props = props_default();
-    card_props.position = ER_POS_ABSOLUTE;
+    card_props.position = ER_POSITION_ABSOLUTE;
     card_props.left = 60;
     card_props.top = 60;
     card_props.width = (int16_t)from;
@@ -435,14 +437,14 @@ int main(void)
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
-    backend.ctx = &ctx;
+    backend.context = &ctx;
     embedded_renderer_set_backend(&backend);
 
     printf("transform limit %dx%d, shadow limit %dx%d → fallback side %d, captured side %d\n",
-           ERUI_XFORM_W,
-           ERUI_XFORM_H,
-           ERUI_SCRATCH_W,
-           ERUI_SCRATCH_H,
+           ERUI_TRANSFORM_WIDTH,
+           ERUI_TRANSFORM_HEIGHT,
+           ERUI_SCRATCH_WIDTH,
+           ERUI_SCRATCH_HEIGHT,
            FALLBACK_SIDE,
            CAPTURED_SIDE);
 
@@ -461,7 +463,8 @@ int main(void)
 
     printf("PASS: a fallback-painted transformed node damages its shadow\n");
 #else
-    printf("SKIP: needs ERUI_SHADOWS, ERUI_TRANSFORMS=FULL, and ERUI_XFORM_W/H < ERUI_SCRATCH_W/H\n");
+    printf("SKIP: needs ERUI_SHADOWS, ERUI_TRANSFORMS=FULL, and ERUI_TRANSFORM_WIDTH/ERUI_TRANSFORM_HEIGHT < "
+           "ERUI_SCRATCH_WIDTH/ERUI_SCRATCH_HEIGHT\n");
 #endif
     return EXIT_SUCCESS;
 }

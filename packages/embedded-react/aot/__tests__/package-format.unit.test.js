@@ -110,13 +110,13 @@ describe('package format copy', () => {
       defineValue(formatHeader, 'ERB_FRAME_CELLS'),
     );
     expect(format.TIMER_SIZE).toBe(defineValue(formatHeader, 'ERB_TIMER_SIZE'));
-    expect(format.AnimFlag).toEqual({
-      loop: defineValue(formatHeader, 'ERB_ANIM_FLAG_LOOP'),
-      loopReverse: defineValue(formatHeader, 'ERB_ANIM_FLAG_LOOP_REVERSE'),
-      toRegister: defineValue(formatHeader, 'ERB_ANIM_FLAG_TO_REGISTER'),
+    expect(format.AnimationFlag).toEqual({
+      loop: defineValue(formatHeader, 'ERB_ANIMATION_FLAG_LOOP'),
+      loopReverse: defineValue(formatHeader, 'ERB_ANIMATION_FLAG_LOOP_REVERSE'),
+      toRegister: defineValue(formatHeader, 'ERB_ANIMATION_FLAG_TO_REGISTER'),
     });
-    expect(format.InterpFlag).toEqual({
-      color: defineValue(formatHeader, 'ERB_INTERP_FLAG_COLOR'),
+    expect(format.InterpolationFlag).toEqual({
+      color: defineValue(formatHeader, 'ERB_INTERPOLATION_FLAG_COLOR'),
     });
     expect(format.EVENT_SIZE).toBe(defineValue(formatHeader, 'ERB_EVENT_SIZE'));
     expect(format.LIST_HEADER_SIZE).toBe(
@@ -145,9 +145,9 @@ describe('package format copy', () => {
       'NODE',
       'BINDING',
       'FUNCTION',
-      'ANIM',
-      'INTERP',
-      'ANIM_ENTRY',
+      'ANIMATION',
+      'INTERPOLATION',
+      'ANIMATION_ENTRY',
       'TAPE',
       'TAPE_HEADER',
       'PAINT',
@@ -169,19 +169,19 @@ describe('package format copy', () => {
     const groups = [
       [format.Table, 'ERB_TABLE_'],
       [format.Region, 'ERB_REGION_'],
-      [format.Resource, 'ERB_RES_'],
-      [format.TemplateKind, 'ERB_TPL_'],
-      [format.PropKind, 'ERB_PK_'],
-      [format.ValueType, 'ERB_T_'],
+      [format.Resource, 'ERB_RESOURCE_'],
+      [format.TemplateKind, 'ERB_TEMPLATE_KIND_'],
+      [format.PropKind, 'ERB_PROP_KIND_'],
+      [format.ValueType, 'ERB_TYPE_'],
       [format.BindingKind, 'ERB_BIND_'],
-      [format.AnimKind, 'ERB_ANIM_'],
-      [format.FunctionKind, 'ERB_FN_'],
-      [format.EventField, 'ERB_EVT_'],
+      [format.AnimationKind, 'ERB_ANIMATION_'],
+      [format.FunctionKind, 'ERB_FUNCTION_KIND_'],
+      [format.EventField, 'ERB_EVENT_FIELD_'],
       [format.MathFn, 'ERB_MATH_'],
-      [format.CheckOp, 'ERB_CK_'],
-      [format.CheckDivide, 'ERB_CK_IDIV_'],
-      [format.PaintField, 'ERB_VPAINT_'],
-      [format.GradientField, 'ERB_VGRAD_'],
+      [format.CheckOp, 'ERB_CHECK_OP_'],
+      [format.CheckDivide, 'ERB_CHECK_OP_IDIV_'],
+      [format.PaintField, 'ERB_VECTOR_PAINT_'],
+      [format.GradientField, 'ERB_VECTOR_GRADIENT_'],
     ];
     for (const [group, prefix] of groups) {
       for (const [name, value] of Object.entries(group)) {
@@ -201,7 +201,7 @@ describe('package format copy', () => {
     const props = new Map(
       [
         ...propsSource.matchAll(
-          /\[(\d+)\] = \{offsetof\(ERProps, ([\w.[\]]+)\), ERB_PK_(\w+), \w+, (\w+)\}/g,
+          /\[(\d+)\] = \{offsetof\(ERProps, ([\w.[\]]+)\), ERB_PROP_KIND_(\w+), \w+, (\w+)\}/g,
         ),
       ].map(([, id, field, kind, max]) => [
         field,
@@ -214,7 +214,7 @@ describe('package format copy', () => {
     const spanFields = enumValues(propsHeader);
     const spanKinds = [
       ...propsSource.matchAll(
-        /ERB_SPAN_(\w+)\)\]\s*=\s*\{\s*offsetof\(ERProps,\s*spans\[span\]\.(\w+)\),\s*ERB_PK_(\w+)/g,
+        /ERB_SPAN_(\w+)\)\]\s*=\s*\{\s*offsetof\(ERProps,\s*spans\[span\]\.(\w+)\),\s*ERB_PROP_KIND_(\w+)/g,
       ),
     ];
     expect(spanKinds.length).toBe(6);
@@ -231,15 +231,15 @@ describe('package format copy', () => {
     }
     expect(new Map(format.ABI_PROPS)).toEqual(props);
 
-    // Each animatable prop, by the ERAnimProp it drives.
+    // Each animatable prop, by the ERAnimationProp it drives.
     const animated = new Map(
       [
         ...propsSource.matchAll(
-          /\{offsetof\(ERProps, (\w+)\), ERB_PK_\w+, (ER_PROP_\w+), \w+\}/g,
+          /\{offsetof\(ERProps, (\w+)\), ERB_PROP_KIND_\w+, (ER_PROP_\w+), \w+\}/g,
         ),
       ].map(([, field, animatedProp]) => [animatedProp, field]),
     );
-    expect(new Map(format.ANIM_PROP_FIELDS)).toEqual(animated);
+    expect(new Map(format.ANIMATION_PROP_FIELDS)).toEqual(animated);
   });
 
   it('has the engine ABI level and the er_scene.h values constant props use', () => {

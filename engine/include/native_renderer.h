@@ -35,8 +35,8 @@ extern "C"
      */
     typedef enum
     {
-        ER_IMG_ARGB8888 = 0, /**< 32-bit premultiplied ARGB (0xAARRGGBB), 4 bytes per pixel. */
-        ER_IMG_RGB565 = 1,   /**< 16-bit RGB565, 2 bytes per pixel; inherently fully opaque. */
+        ER_IMAGE_ARGB8888 = 0, /**< 32-bit premultiplied ARGB (0xAARRGGBB), 4 bytes per pixel. */
+        ER_IMAGE_RGB565 = 1,   /**< 16-bit RGB565, 2 bytes per pixel; inherently fully opaque. */
     } ERImageFormat;
 
     /**
@@ -67,7 +67,7 @@ extern "C"
         void (*frame_ready)(void* ctx);
 
         /** @brief Opaque context pointer forwarded to every callback. */
-        void* ctx;
+        void* context;
 
         /*------------------------------------------------------------------------------------------------
          - Banded rendering (optional). A backend with no RAM for a full framebuffer keeps only a small
@@ -76,7 +76,7 @@ extern "C"
            strips: for every strip it calls band_begin(), emits the (Y-translated) fill/copy/blend ops for
            that strip into the band buffer, then calls band_flush() to push it to the panel. The fill/copy/
            blend callbacks receive BAND-LOCAL Y (already offset by the strip's top), so the band buffer is
-           a plain `screen_w x band_height` surface. Leave band_height = 0 (and these NULL) for the
+           a plain `screen_width x band_height` surface. Leave band_height = 0 (and these NULL) for the
            classic full-framebuffer path — the engine behaviour is then unchanged.
          ------------------------------------------------------------------------------------------------*/
 
@@ -93,7 +93,7 @@ extern "C"
          - Format-aware opaque copy (optional). The engine hands a KNOWN-FULLY-OPAQUE source buffer to
            the backend in its registered pixel format, as one call for the whole rect. Contract:
              * fmt names src's pixel layout; src_stride_bytes is the row stride in BYTES of that format.
-             * The callback may be invoked with ER_IMG_ARGB8888 or ER_IMG_RGB565; implementations must
+             * The callback may be invoked with ER_IMAGE_ARGB8888 or ER_IMAGE_RGB565; implementations must
                handle both (ARGB sources may be forwarded to copy_rect).
              * Every source pixel is opaque — the engine only routes buffers its registration-time scan
                (or the format itself, for RGB565) proved opaque. Replace destination pixels outright:
@@ -108,7 +108,7 @@ extern "C"
          ------------------------------------------------------------------------------------------------*/
 
         /** @brief Copy a fully opaque src in the given format into the framebuffer (replace). */
-        void (*copy_rect_fmt)(
+        void (*copy_rect_format)(
             const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx);
     } EmbeddedRenderBackend;
 
@@ -146,9 +146,9 @@ extern "C"
      * worker, runs its own share on the calling thread, then calls sync() to join.
      *
      * Contract:
-     *  - dispatch(k): cause er_render_worker_exec(k) to be called as soon as possible on
+     *  - dispatch(k): cause er_render_worker_execute(k) to be called as soon as possible on
      *    worker k's thread, then return without waiting for it.
-     *  - sync(): return only after every er_render_worker_exec() call triggered since the
+     *  - sync(): return only after every er_render_worker_execute() call triggered since the
      *    previous sync() has returned. dispatch()/sync() must order memory like a semaphore
      *    (any real OS primitive does), so job state written before dispatch is visible to the
      *    worker and the worker's writes are visible after sync.
@@ -163,10 +163,10 @@ extern "C"
     typedef struct EmbeddedRenderWorkers
     {
         int count;                               /**< Total workers including worker 0 (the render thread). */
-        void (*dispatch)(int worker, void* ctx); /**< Signal worker k to run er_render_worker_exec(k). */
+        void (*dispatch)(int worker, void* ctx); /**< Signal worker k to run er_render_worker_execute(k). */
         void (*sync)(void* ctx);                 /**< Wait for all dispatched workers to finish. */
         int (*worker_id)(void);                  /**< Calling thread's worker index. */
-        void* ctx;                               /**< Opaque host context passed to dispatch/sync. */
+        void* context;                           /**< Opaque host context passed to dispatch/sync. */
     } EmbeddedRenderWorkers;
 
     /**
@@ -183,7 +183,7 @@ extern "C"
      * Called by the HOST from worker k's thread in response to a dispatch(k) — never by
      * application code directly, and never for worker 0.
      */
-    void er_render_worker_exec(int worker);
+    void er_render_worker_execute(int worker);
 
     /**
      * @brief Advances the renderer by one time step.

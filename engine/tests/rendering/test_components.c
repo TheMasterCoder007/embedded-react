@@ -654,7 +654,7 @@ static void test_modal_visible(void)
     props = props_auto();
     props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
     /* Absolute position fills the root. */
-    props.position = 1; /* ER_POS_ABSOLUTE */
+    props.position = 1; /* ER_POSITION_ABSOLUTE */
     props.left = 0;
     props.top = 0;
     props.width = SCREEN_WIDTH;
@@ -712,7 +712,7 @@ static void test_flatlist_scrolls(void)
     props.width = SCREEN_WIDTH;
     props.height = 120;
     props.overflow = 2;       /* ER_OVERFLOW_SCROLL */
-    props.flex_direction = 0; /* ER_FLEX_COL */
+    props.flex_direction = 0; /* ER_FLEX_COLUMN */
     props.align_items = 1;    /* ER_ALIGN_STRETCH */
     er_node_set_props(flat_list, &props);
 

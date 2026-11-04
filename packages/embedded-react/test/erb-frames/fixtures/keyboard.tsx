@@ -10,7 +10,7 @@ import {
 } from 'embedded-react';
 
 setKeyboardConfig({
-  gridCols: 10,
+  gridColumns: 10,
   rowHeight: 30,
   keyGap: 3,
   keyRadius: 4,

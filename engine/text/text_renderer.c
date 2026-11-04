@@ -237,8 +237,8 @@ static void draw_glyph(const GlyphInfo* glyph,
 
     const int clip_left = clip->x;
     const int clip_top = clip->y;
-    const int clip_right = clip->x + clip->w;
-    const int clip_bottom = clip->y + clip->h;
+    const int clip_right = clip->x + clip->width;
+    const int clip_bottom = clip->y + clip->height;
 
     const int base_origin_x = cursor_x + glyph->x_offset;
     const int origin_y = cursor_y + glyph->y_offset;
@@ -395,8 +395,8 @@ static void draw_glyph_aa(const GlyphInfo* glyph,
     const uint8_t* glyph_bitmap = bitmap + glyph->bitmap_offset;
     const int clip_left = clip->x;
     const int clip_top = clip->y;
-    const int clip_right = clip->x + clip->w;
-    const int clip_bottom = clip->y + clip->h;
+    const int clip_right = clip->x + clip->width;
+    const int clip_bottom = clip->y + clip->height;
     const int base_origin_x = cursor_x + glyph->x_offset;
     const int origin_y = cursor_y + glyph->y_offset;
 
@@ -527,7 +527,7 @@ static void draw_cp(const BitmapFont* font,
                     bool italic)
 {
     const GlyphInfo* glyph = font_glyph(font, codepoint);
-    if (font->format != ERUI_FONT_FMT_1BIT)
+    if (font->format != ERUI_FONT_FORMAT_1BIT)
         draw_glyph_aa(glyph, font->bitmap, font->format, cursor_x, cursor_y, clip, color, italic);
     else
         draw_glyph(glyph, font->bitmap, cursor_x, cursor_y, clip, color, italic);
@@ -723,7 +723,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
     /* Lines break at the advance each glyph is drawn with, span styles and faux bold included. */
     LineBreaker breaker = {text,
                            font,
-                           params->clip.w,
+                           params->clip.width,
                            letter_spacing,
                            bold,
                            (int)params->number_of_lines,
@@ -742,7 +742,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
     {
         line = next;
         const int cursor_y = params->clip.y + line_index * line_height;
-        if (cursor_y >= params->clip.y + params->clip.h)
+        if (cursor_y >= params->clip.y + params->clip.height)
             break;
 
         have_next = next_line(&breaker, &next);
@@ -767,7 +767,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
 
         if (apply_ellipsis)
         {
-            const int available_width = params->clip.w - ellipsis_width;
+            const int available_width = params->clip.width - ellipsis_width;
             const char* cursor = line.start;
             const char* cut_position = cursor;
             int kept_width = 0;
@@ -796,12 +796,12 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
         }
         else if (params->text_align == ER_TEXT_ALIGN_CENTER)
         {
-            const int free_space = (params->clip.w - line.pixel_width) / 2;
+            const int free_space = (params->clip.width - line.pixel_width) / 2;
             cursor_x = params->clip.x + (free_space > 0 ? free_space : 0);
         }
         else /* ER_TEXT_ALIGN_RIGHT */
         {
-            const int free_space = params->clip.w - line.pixel_width;
+            const int free_space = params->clip.width - line.pixel_width;
             cursor_x = params->clip.x + (free_space > 0 ? free_space : 0);
         }
 
@@ -845,7 +845,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
                 if (segment_decoration != ER_TEXT_DECORATION_NONE)
                 {
                     int decoration_width = pen_x - segment_start_x;
-                    const int right_edge = params->clip.x + params->clip.w;
+                    const int right_edge = params->clip.x + params->clip.width;
                     if (segment_start_x + decoration_width > right_edge)
                         decoration_width = right_edge - segment_start_x;
                     if (decoration_width > 0)
@@ -854,7 +854,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
                             (segment_decoration == ER_TEXT_DECORATION_UNDERLINE)
                                 ? cursor_y + (int)font->baseline + 1
                                 : cursor_y + (int)font->baseline * LINE_THROUGH_NUMERATOR / LINE_THROUGH_DENOMINATOR;
-                        if (decoration_y >= params->clip.y && decoration_y < params->clip.y + params->clip.h)
+                        if (decoration_y >= params->clip.y && decoration_y < params->clip.y + params->clip.height)
                             er_blit_fill(segment_color, segment_start_x, decoration_y, decoration_width, 1);
                     }
                 }
@@ -895,7 +895,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
             if (params->text_decoration != ER_TEXT_DECORATION_NONE)
             {
                 int decoration_width = apply_ellipsis ? (render_width + ellipsis_width) : line.pixel_width;
-                const int right_edge = params->clip.x + params->clip.w;
+                const int right_edge = params->clip.x + params->clip.width;
                 if (cursor_x + decoration_width > right_edge)
                     decoration_width = right_edge - cursor_x;
                 if (decoration_width > 0)
@@ -907,7 +907,7 @@ static ER_NOINLINE void render_lines(const ERTextRenderParams* params,
                         decoration_y =
                             cursor_y + (int)font->baseline * LINE_THROUGH_NUMERATOR / LINE_THROUGH_DENOMINATOR;
 
-                    if (decoration_y >= params->clip.y && decoration_y < params->clip.y + params->clip.h)
+                    if (decoration_y >= params->clip.y && decoration_y < params->clip.y + params->clip.height)
                         er_blit_fill(params->color, cursor_x, decoration_y, decoration_width, 1);
                 }
             }
@@ -1036,7 +1036,7 @@ void er_text_render(const ERTextRenderParams* params)
 {
     if (!params || ((params->color >> 24) & 0xFFU) == 0U)
         return;
-    if (params->clip.w <= 0 || params->clip.h <= 0)
+    if (params->clip.width <= 0 || params->clip.height <= 0)
         return;
 
     /* Span mode: params->text is ignored; spans[] provides the content. */

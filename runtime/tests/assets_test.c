@@ -54,7 +54,7 @@ static void test_loads_a_good_pack(void)
     tpack_begin(&s_pack, 2u, 1u);
     tpack_image(&s_pack, "argb", 0u);
     tpack_image(&s_pack, "rgb565", 1u);
-    tpack_font(&s_pack, "f", ERUI_FONT_FMT_1BIT);
+    tpack_font(&s_pack, "f", ERUI_FONT_FORMAT_1BIT);
     CHECK(er_assets_load_pack(s_pack.bytes, s_pack.length), "a good pack loads");
     CHECK(er_image_exists("argb") && er_image_exists("rgb565"), "both images are registered");
 }
@@ -84,7 +84,7 @@ static void test_truncated_pack_registers_nothing(void)
     clear_registries();
     tpack_begin(&s_pack, 1u, 1u);
     tpack_image(&s_pack, "early", 0u);
-    tpack_font(&s_pack, "f", ERUI_FONT_FMT_1BIT);
+    tpack_font(&s_pack, "f", ERUI_FONT_FORMAT_1BIT);
     CHECK(!er_assets_load_pack(s_pack.bytes, s_pack.length - 1u), "a record past the end fails the load");
     CHECK(!er_image_exists("early"), "the image before it isn't registered");
 }
@@ -100,7 +100,7 @@ static void test_copy_registers_nothing_on_failure(void)
 
     tpack_begin(&s_pack, 1u, 1u);
     tpack_image(&s_pack, "copied", 0u);
-    tpack_font(&s_pack, "f", ERUI_FONT_FMT_1BIT);
+    tpack_font(&s_pack, "f", ERUI_FONT_FORMAT_1BIT);
     CHECK(er_assets_load_pack_ex(s_pack.bytes, s_pack.length, true), "a good pack loads from a copy");
     CHECK(er_image_exists("copied"), "the copy's image is registered");
 }
@@ -110,7 +110,7 @@ static void test_storage_that_doesnt_fit_registers_nothing(void)
     clear_registries();
     tpack_begin(&s_pack, 1u, 1u);
     tpack_image(&s_pack, "early", 0u);
-    tpack_font(&s_pack, "f", ERUI_FONT_FMT_1BIT);
+    tpack_font(&s_pack, "f", ERUI_FONT_FORMAT_1BIT);
 
     static BitmapFont fonts[1];
     static GlyphInfo glyphs[1];

@@ -105,7 +105,7 @@ static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ct
 
 /*
  * copy_rect hands over a PREMULTIPLIED ARGB8888 buffer, not an opaque one — the engine has a separate
- * copy_rect_fmt for the known-opaque case. So the per-pixel alpha is honoured here, and a fully
+ * copy_rect_format for the known-opaque case. So the per-pixel alpha is honoured here, and a fully
  * transparent pixel is skipped outright rather than "blended" at alpha 0: put() would leave the colour
  * alone but still count the pixel as touched, and a touched-pixel count is exactly what this test
  * measures. Today's scene is solid opaque Views, so neither this nor blend_cb is reached at all — the
@@ -287,8 +287,8 @@ static int reported_covers(int x, int y)
     ERRect rects[ER_DAMAGE_RECTS_MAX];
     const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
     for (int rect_index = 0; rect_index < rect_count; rect_index++)
-        if (x >= rects[rect_index].x && y >= rects[rect_index].y && x < rects[rect_index].x + rects[rect_index].w
-            && y < rects[rect_index].y + rects[rect_index].h)
+        if (x >= rects[rect_index].x && y >= rects[rect_index].y && x < rects[rect_index].x + rects[rect_index].width
+            && y < rects[rect_index].y + rects[rect_index].height)
             return 1;
     return 0;
 }
@@ -307,7 +307,7 @@ static void build_scene(void)
 
     s_clipper = er_node_create(ER_NODE_VIEW);
     s_clip_props = props_default();
-    s_clip_props.position = ER_POS_ABSOLUTE;
+    s_clip_props.position = ER_POSITION_ABSOLUTE;
     s_clip_props.left = CLIP_X;
     s_clip_props.top = CLIP_Y;
     s_clip_props.width = CLIP_WIDTH;
@@ -318,7 +318,7 @@ static void build_scene(void)
 
     ERNode* child = er_node_create(ER_NODE_VIEW);
     ERProps child_props = props_default();
-    child_props.position = ER_POS_ABSOLUTE;
+    child_props.position = ER_POSITION_ABSOLUTE;
     child_props.left = CHILD_X;
     child_props.top = CHILD_Y;
     child_props.width = CHILD_WIDTH;
@@ -329,7 +329,7 @@ static void build_scene(void)
 
     ERNode* sibling = er_node_create(ER_NODE_VIEW);
     ERProps sibling_props = props_default();
-    sibling_props.position = ER_POS_ABSOLUTE;
+    sibling_props.position = ER_POSITION_ABSOLUTE;
     sibling_props.left = SIBLING_X;
     sibling_props.top = SIBLING_Y;
     sibling_props.width = SIBLING_WIDTH;

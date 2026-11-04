@@ -28,8 +28,8 @@ import {
 } from '../compile.mts';
 import {
   ABI_PROPS,
-  AnimFlag,
-  AnimKind,
+  AnimationFlag,
+  AnimationKind,
   ENGINE_ABI,
   ENGINE_VALUES,
   FLAG_DEBUG,
@@ -39,7 +39,7 @@ import {
   CHECK_ALWAYS,
   FunctionKind,
   GradientField,
-  InterpFlag,
+  InterpolationFlag,
   MathFn,
   NONE,
   PaintField,
@@ -1149,7 +1149,7 @@ export function App() {
   /** The animation descriptors. */
   function animsOf(bytes) {
     const {u16, u32, tables, view} = readProgram(bytes);
-    const {offset, length} = tables.get(Table.anims);
+    const {offset, length} = tables.get(Table.animations);
     return Array.from({length: length / 40}, (_, index) => {
       const animationOffset = offset + index * 40;
       return {
@@ -1183,7 +1183,7 @@ export function App() {
   it('keeps each animated value in a slot, and declares the values and their animations as needs', () => {
     const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
     const values = slotsOf(program).filter(
-      slot => slot.type === ValueType.avalue,
+      slot => slot.type === ValueType.animatedValue,
     );
     expect(values.map(slot => slot.init)).toEqual([
       floatBits(0.5),
@@ -1200,22 +1200,22 @@ export function App() {
       ),
     }));
     expect(needs).toEqual([
-      {resource: Resource.animValues, amount: 2},
+      {resource: Resource.animationValues, amount: 2},
       {resource: Resource.animations, amount: 2},
     ]);
     // A value's animation, and one more while a start cancels it.
     expect(
-      regionsOf(program).find(region => region.kind === Region.anims),
-    ).toEqual({kind: Region.anims, count: 3, bytes: 60});
+      regionsOf(program).find(region => region.kind === Region.animations),
+    ).toEqual({kind: Region.animations, count: 3, bytes: 60});
   });
 
   it('starts each animation as a leaf, its toValue held in the descriptor or passed in a register', () => {
     const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
     const anims = animsOf(program);
     const slots = slotsOf(program);
-    const fade = slots.findIndex(slot => slot.type === ValueType.avalue);
+    const fade = slots.findIndex(slot => slot.type === ValueType.animatedValue);
     expect(anims[0]).toEqual({
-      kind: AnimKind.timing,
+      kind: AnimationKind.timing,
       easing: ENGINE_VALUES.get('ER_EASE_QUAD_OUT'),
       flags: 0,
       target: fade,
@@ -1227,8 +1227,8 @@ export function App() {
       params: [0, 0, 0, 0],
     });
     expect(anims[1]).toMatchObject({
-      kind: AnimKind.spring,
-      flags: AnimFlag.toRegister,
+      kind: AnimationKind.spring,
+      flags: AnimationFlag.toRegister,
       target: fade + 1,
       params: [floatBits(90), floatBits(18), floatBits(1), 0],
     });
@@ -1252,7 +1252,7 @@ export function App() {
     const {program} = compilePackage(ANIM_APP, 'app', SCREEN);
     const functions = functionsOf(program);
     const done = functions.findIndex(
-      functionRecord => functionRecord.kind === FunctionKind.animDone,
+      functionRecord => functionRecord.kind === FunctionKind.animationDone,
     );
     const helper = functions.findIndex(
       functionRecord => functionRecord.kind === FunctionKind.helper,
@@ -1286,7 +1286,7 @@ export function App() {
     const {u16, u32, tables, view} = readProgram(program);
     const prop = field => ABI_PROPS.get(field).id;
     const slots = slotsOf(program);
-    const fade = slots.findIndex(slot => slot.type === ValueType.avalue);
+    const fade = slots.findIndex(slot => slot.type === ValueType.animatedValue);
     expect(
       bindingsOf(program).filter(binding => binding.kind !== BindingKind.event),
     ).toEqual([
@@ -1303,7 +1303,7 @@ export function App() {
       },
     ]);
 
-    const {offset, length} = tables.get(Table.interps);
+    const {offset, length} = tables.get(Table.interpolations);
     expect(length).toBe(2 * 72);
     const record = index => {
       const recordOffset = offset + index * 72;
@@ -1335,7 +1335,7 @@ export function App() {
       output: [floatBits(0), floatBits(50), 0],
     });
     expect(record(1)).toMatchObject({
-      flags: InterpFlag.color,
+      flags: InterpolationFlag.color,
       left: ENGINE_VALUES.get('ER_EXTRAPOLATE_EXTEND'),
       output: [0xff000000, 0xffff8000, 0],
     });
@@ -1358,7 +1358,7 @@ export function App() {
     const functions = functionsOf(program);
     const anims = animsOf(program);
     const dones = functions.flatMap((functionRecord, index) =>
-      functionRecord.kind === FunctionKind.animDone ? [index] : [],
+      functionRecord.kind === FunctionKind.animationDone ? [index] : [],
     );
     // The completion's, the wait's, then the second step's.
     expect(dones).toHaveLength(3);
@@ -1378,7 +1378,7 @@ export function App() {
     );
     expect(delay.ext & 0xffff).toBe(completion);
     expect(anims[delay.bx]).toMatchObject({
-      kind: AnimKind.timing,
+      kind: AnimationKind.timing,
       target: NONE,
       amount: 250,
     });
@@ -1402,9 +1402,9 @@ export function App() {
     const {program} = compilePackage(source, 'app', SCREEN);
     const anims = animsOf(program);
     expect(anims.map(animation => animation.kind)).toEqual([
-      AnimKind.parallel,
-      AnimKind.timing,
-      AnimKind.spring,
+      AnimationKind.parallel,
+      AnimationKind.timing,
+      AnimationKind.spring,
     ]);
     expect(anims[0]).toMatchObject({first: 1, count: 2});
     expect(anims[1]).toMatchObject({target: NONE, amount: 500});
@@ -1428,8 +1428,8 @@ export function App() {
 }`;
     const {program} = compilePackage(source, 'app', SCREEN);
     const regions = regionsOf(program);
-    expect(regions.find(region => region.kind === Region.anims)).toEqual({
-      kind: Region.anims,
+    expect(regions.find(region => region.kind === Region.animations)).toEqual({
+      kind: Region.animations,
       count: 17,
       bytes: 340,
     });
@@ -1481,7 +1481,7 @@ export function App() {
     expect(names(pressIn)).toContain('SET32');
     const fade = anims[pressIn.ops[0].bx];
     expect(fade).toMatchObject({
-      kind: AnimKind.timing,
+      kind: AnimationKind.timing,
       easing: ENGINE_VALUES.get('ER_EASE_QUAD_IN_OUT'),
       amount: 0,
       to: floatBits(0.4),
@@ -1814,7 +1814,7 @@ export function App() {
       <Svg width={100} height={40}>
         <Rect x={0} y={0} width={80} height={20} fill={on ? '#ff0000' : '#00ff00'} strokeWidth={on ? 4 : 2}
           stroke="#ffffff"
-          fillGrad={on ? {type: 1, ax: 0, ay: 0, bx: 80, by: 0,
+          fillGradient={on ? {type: 1, ax: 0, ay: 0, bx: 80, by: 0,
             stops: [{color: '#000000', offset: 0}, {color: on ? '#ffffff' : '#808080', offset: 1}]} : null} />
       </Svg>
     </Pressable>
@@ -1923,7 +1923,7 @@ export function App() {
     const source = `
 import {View, setKeyboardConfig} from 'embedded-react';
 setKeyboardConfig({
-  gridCols: 10,
+  gridColumns: 10,
   rowHeight: 30,
   keyColor: '#333',
   layers: [
@@ -1971,12 +1971,12 @@ export function App() {
     const kind = name => ENGINE_VALUES.get(name);
     expect(key(1).slice(1)).toEqual([
       NONE,
-      kind('ER_KBD_KEY_LAYER'),
+      kind('ER_KEYBOARD_KEY_LAYER'),
       1,
       5,
       255,
     ]);
-    expect(key(2)[2]).toBe(kind('ER_KBD_KEY_DONE'));
+    expect(key(2)[2]).toBe(kind('ER_KEYBOARD_KEY_DONE'));
     expect(key(3)[1]).not.toBe(NONE);
   });
 

@@ -627,7 +627,7 @@ function lowerUpdateVector(
     );
     update.locals.push(...shape.locals);
     update.tape.push(
-      {kind: 'op', operation: 'ER_VOP_SHAPE'},
+      {kind: 'op', operation: 'ER_VECTOR_OP_SHAPE'},
       checkedTapeNumber(update.paints.length),
       ...shape.entries,
     );

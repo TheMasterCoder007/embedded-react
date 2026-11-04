@@ -303,7 +303,7 @@ bool er_software_backend_init(int framebuffer_width, int framebuffer_height)
     s_backend.blend_rect = blend_rect_cb;
     s_backend.wait = NULL;
     s_backend.frame_ready = NULL;
-    s_backend.ctx = &s_ctx;
+    s_backend.context = &s_ctx;
     s_backend.band_height = 0; /* full-framebuffer path */
     s_backend.band_begin = NULL;
     s_backend.band_flush = NULL;
@@ -351,12 +351,12 @@ uint32_t* er_software_framebuffer(void)
     return s_ctx.framebuffer;
 }
 
-int er_software_fb_width(void)
+int er_software_framebuffer_width(void)
 {
     return s_ctx.framebuffer_width;
 }
 
-int er_software_fb_height(void)
+int er_software_framebuffer_height(void)
 {
     return s_ctx.framebuffer_height;
 }

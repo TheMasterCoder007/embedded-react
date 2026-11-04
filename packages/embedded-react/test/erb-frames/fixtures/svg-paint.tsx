@@ -96,7 +96,7 @@ export function App() {
             height={35}
             rx={10}
             ry={5}
-            fillGrad={LINEAR}
+            fillGradient={LINEAR}
           />
           <Ellipse
             cx={50}
@@ -105,7 +105,7 @@ export function App() {
             ry={20}
             fill="none"
             stroke="#000000"
-            strokeGrad={LINEAR}
+            strokeGradient={LINEAR}
             strokeWidth={6}
           />
         </Svg>
@@ -136,7 +136,7 @@ export function App() {
             fill="none"
             stroke="#404040"
             strokeWidth={8}
-            strokeGrad={LINEAR}
+            strokeGradient={LINEAR}
             strokeLinecap="round"
           />
         </Svg>

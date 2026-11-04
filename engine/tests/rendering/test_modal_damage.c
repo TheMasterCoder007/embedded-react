@@ -188,15 +188,15 @@ static int dirty_rect_spans_root(const char* when)
         fprintf(stderr, "  %s: er_get_dirty_rect() reported nothing\n", when);
         return 1;
     }
-    if (dirty.x > 0 || dirty.y > 0 || dirty.x + dirty.w < SCREEN_WIDTH || dirty.y + dirty.h < SCREEN_HEIGHT)
+    if (dirty.x > 0 || dirty.y > 0 || dirty.x + dirty.width < SCREEN_WIDTH || dirty.y + dirty.height < SCREEN_HEIGHT)
     {
         fprintf(stderr,
                 "  %s: dirty rect (%d,%d %dx%d) does not span the %dx%d root\n",
                 when,
                 dirty.x,
                 dirty.y,
-                dirty.w,
-                dirty.h,
+                dirty.width,
+                dirty.height,
                 SCREEN_WIDTH,
                 SCREEN_HEIGHT);
         return 1;
@@ -238,7 +238,7 @@ static void build_scene(void)
     {
         ERNode* card = er_node_create(ER_NODE_VIEW);
         ERProps card_props = props_default();
-        card_props.position = ER_POS_ABSOLUTE;
+        card_props.position = ER_POSITION_ABSOLUTE;
         card_props.left = 20;
         card_props.top = (int16_t)(20 + frame_index * 150);
         card_props.width = 360;
@@ -251,7 +251,7 @@ static void build_scene(void)
 
     s_page_node = er_node_create(ER_NODE_VIEW);
     s_page_props = props_default();
-    s_page_props.position = ER_POS_ABSOLUTE;
+    s_page_props.position = ER_POSITION_ABSOLUTE;
     s_page_props.left = 30;
     s_page_props.top = 30;
     s_page_props.width = PAGE_NODE_WIDTH;
@@ -265,7 +265,7 @@ static void build_scene(void)
      * scrim scissored to its own box — hence the full-screen style every demo gives it. */
     s_modal = er_node_create(ER_NODE_MODAL);
     s_modal_props = props_default();
-    s_modal_props.position = ER_POS_ABSOLUTE;
+    s_modal_props.position = ER_POSITION_ABSOLUTE;
     s_modal_props.left = 0;
     s_modal_props.top = 0;
     s_modal_props.width = SCREEN_WIDTH;
@@ -277,7 +277,7 @@ static void build_scene(void)
 
     ERNode* sheet = er_node_create(ER_NODE_VIEW);
     ERProps sheet_props = props_default();
-    sheet_props.position = ER_POS_ABSOLUTE;
+    sheet_props.position = ER_POSITION_ABSOLUTE;
     sheet_props.left = SHEET_X;
     sheet_props.top = SHEET_Y;
     sheet_props.width = SHEET_WIDTH;
@@ -289,7 +289,7 @@ static void build_scene(void)
 
     s_control = er_node_create(ER_NODE_VIEW);
     s_control_props = props_default();
-    s_control_props.position = ER_POS_ABSOLUTE;
+    s_control_props.position = ER_POSITION_ABSOLUTE;
     s_control_props.left = 20;
     s_control_props.top = 20;
     s_control_props.width = CONTROL_WIDTH;
@@ -486,7 +486,7 @@ int main(void)
         if (frame_distinct() != 0)
             return fail("a non-full-screen modal repainted on an idle frame");
 
-#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SCREEN_WIDTH) && (ERUI_XFORM_H + 1 < SCREEN_HEIGHT)
+#if ERUI_TRANSFORMS_FULL && (ERUI_TRANSFORM_WIDTH + 1 < SCREEN_WIDTH) && (ERUI_TRANSFORM_HEIGHT + 1 < SCREEN_HEIGHT)
     /* --- a TRANSFORMED modal owes the same root-wide scrim damage (issue #142) ---
      *
      * The pre-pass measures a node with a scale/rotate transform down a different branch, and that
@@ -505,8 +505,8 @@ int main(void)
     build_scene();
     s_modal_props.left = 60;
     s_modal_props.top = 200;
-    s_modal_props.width = (int16_t)(ERUI_XFORM_W + 1);
-    s_modal_props.height = (int16_t)(ERUI_XFORM_H + 1);
+    s_modal_props.width = (int16_t)(ERUI_TRANSFORM_WIDTH + 1);
+    s_modal_props.height = (int16_t)(ERUI_TRANSFORM_HEIGHT + 1);
     s_modal_props.transform_scale_x = 1.0f;
     s_modal_props.transform_scale_y = 1.0f;
     s_modal_props.modal_visible = 0;
@@ -576,12 +576,12 @@ int main(void)
            control_pixels * 2);
     printf("      the scrim does not drift; a non-full-screen modal scrims and un-scrims the whole\n");
     printf("      page; the modal node itself is full-screen by design\n");
-#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SCREEN_WIDTH) && (ERUI_XFORM_H + 1 < SCREEN_HEIGHT)
+#if ERUI_TRANSFORMS_FULL && (ERUI_TRANSFORM_WIDTH + 1 < SCREEN_WIDTH) && (ERUI_TRANSFORM_HEIGHT + 1 < SCREEN_HEIGHT)
     printf("      a %dx%d transformed modal (past the %dx%d transform source) does the same\n",
-           ERUI_XFORM_W + 1,
-           ERUI_XFORM_H + 1,
-           ERUI_XFORM_W,
-           ERUI_XFORM_H);
+           ERUI_TRANSFORM_WIDTH + 1,
+           ERUI_TRANSFORM_HEIGHT + 1,
+           ERUI_TRANSFORM_WIDTH,
+           ERUI_TRANSFORM_HEIGHT);
 #endif
     return EXIT_SUCCESS;
 }

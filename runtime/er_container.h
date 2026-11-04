@@ -60,14 +60,14 @@ enum
  - Types
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Result of reading or loading a container (see er_container_status_str). */
+/** @brief Result of reading or loading a container (see er_container_status_name). */
 typedef enum
 {
     ER_CONTAINER_OK = 0,      /**< Read (or loaded and ran) cleanly. */
     ER_CONTAINER_BAD_MAGIC,   /**< Not an ERCF container. */
     ER_CONTAINER_BAD_VERSION, /**< Unsupported container format version (or malformed structure). */
     ER_CONTAINER_BAD_CRC,     /**< Integrity check failed — corrupt or partially written. */
-    ER_CONTAINER_BAD_QJS,     /**< Built for a different QuickJS version than this firmware (er_runtime). */
+    ER_CONTAINER_BAD_QUICKJS, /**< Built for a different QuickJS version than this firmware (er_runtime). */
     ER_CONTAINER_LOAD_FAILED, /**< No bytecode section, or the app threw on evaluation (er_runtime). */
     ER_CONTAINER_BAD_ASSETS,  /**< An asset pack is malformed, or couldn't be loaded (er_runtime). */
 } ErContainerStatus;
@@ -124,7 +124,7 @@ ErContainerStatus er_container_read(const void* buffer, size_t buffer_length, Er
 ErContainerStatus er_container_scan(const void* buffer, size_t buffer_length, ErContainer* container);
 
 /** @brief Returns a short human-readable string for an ErContainerStatus (for logging). */
-const char* er_container_status_str(ErContainerStatus status);
+const char* er_container_status_name(ErContainerStatus status);
 
 /**
  * @brief CRC-32/IEEE (zlib polynomial 0xEDB88320), table-free.

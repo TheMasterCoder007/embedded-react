@@ -342,7 +342,7 @@ int main(void)
 
     /* ---- Narrow clip: no out-of-bounds fills ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.clip = (ERRect){0, 0, 4, FRAMEBUFFER_HEIGHT};
     er_text_render(&params);
@@ -353,14 +353,14 @@ int main(void)
     params.clip = (ERRect){0, 0, 200, 40};
 
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.text_align = ER_TEXT_ALIGN_LEFT;
     er_text_render(&params);
     const int left_min_x = test_context.min_x;
 
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.text_align = ER_TEXT_ALIGN_CENTER;
     er_text_render(&params);
@@ -371,7 +371,7 @@ int main(void)
 
     /* ---- textAlign RIGHT must be further right than CENTER ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.text_align = ER_TEXT_ALIGN_RIGHT;
     er_text_render(&params);
@@ -382,7 +382,7 @@ int main(void)
 
     /* ---- numberOfLines=1 + TAIL ellipsis: all pixels must stay within clip ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "This is a long string that should get truncated with an ellipsis";
@@ -400,7 +400,7 @@ int main(void)
 
     /* ---- Word-boundary wrapping: wide text in narrow clip spans more lines ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "Hello World How Are You Today";
@@ -413,7 +413,7 @@ int main(void)
 
     /* Single-line render of the same text (unlimited width) for comparison. */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.clip = (ERRect){0, 0, FRAMEBUFFER_WIDTH, 200};
     er_text_render(&params);
@@ -428,7 +428,7 @@ int main(void)
 
     /* ---- letter_spacing during render stays in bounds ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "Spaced";
@@ -444,7 +444,7 @@ int main(void)
 
     /* ---- textDecoration UNDERLINE produces extra pixels below baseline ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "Underline";
@@ -456,7 +456,7 @@ int main(void)
     const int under_max_y = test_context.max_y;
 
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.text_decoration = ER_TEXT_DECORATION_NONE;
     er_text_render(&params);
@@ -470,7 +470,7 @@ int main(void)
      * as if the line ended in whitespace. "Hello world" was committed as just
      * "Hello", so typing past a space in a TextInput appeared to do nothing. */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "Hello world";
@@ -483,7 +483,7 @@ int main(void)
     const int two_word_max_x = test_context.max_x;
 
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.text = "Hello";
     er_text_render(&params);
@@ -494,7 +494,7 @@ int main(void)
 
     /* ---- Regression: trailing whitespace should still be trimmed at EOF ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.text = "Hello   ";
     er_text_render(&params);
@@ -505,7 +505,7 @@ int main(void)
 
     /* ---- fontWeight bold: bold text must render wider than normal ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "Bold";
@@ -521,7 +521,7 @@ int main(void)
         return fail("bold render emitted out-of-bounds pixels");
 
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.font_weight = 0;
     er_text_render(&params);
@@ -532,7 +532,7 @@ int main(void)
 
     /* ---- fontStyle italic: italic must render in-bounds ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     memset(&params, 0, sizeof(params));
     params.text = "Italic";
@@ -548,7 +548,7 @@ int main(void)
 
     /* ---- bold-italic: combined must also render in-bounds ---- */
     ctx_reset(&test_context);
-    backend.ctx = &test_context;
+    backend.context = &test_context;
     embedded_renderer_set_backend(&backend);
     params.font_weight = 1;
     params.font_style = 1;
@@ -562,7 +562,7 @@ int main(void)
     {
         /* Render the merged string in plain mode. */
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         memset(&params, 0, sizeof(params));
         params.text = "HelloWorld";
@@ -577,7 +577,7 @@ int main(void)
 
         /* Render the same content via two spans — no style overrides (all inherit). */
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
 
         ERTextSpan plain_spans[2];
@@ -615,7 +615,7 @@ int main(void)
     {
         /* Single-span in red produces some pixels. */
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
 
         ERTextSpan color_spans[2];
@@ -655,7 +655,7 @@ int main(void)
     /* ---- Bold span: mixed-weight spans render in-bounds ---- */
     {
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
 
         ERTextSpan bold_spans[2];
@@ -701,14 +701,14 @@ int main(void)
         params.number_of_lines = 2;
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         er_text_render(&params);
         if (test_context.max_y > line_height)
             return fail("regular text exactly as wide as its box did not fit on one line");
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         params.font_weight = 1;
         er_text_render(&params);
@@ -724,7 +724,7 @@ int main(void)
         strncpy(bold_span.text, "Hello World", ER_SPAN_TEXT_MAX);
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         params.font_weight = 0;
         params.text = NULL;
@@ -769,7 +769,7 @@ int main(void)
         params.spans = spaced_spans;
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         er_text_render(&params);
         if (test_context.out_of_bounds != 0)
@@ -783,14 +783,14 @@ int main(void)
         params.number_of_lines = 0;
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         params.text_align = ER_TEXT_ALIGN_LEFT;
         er_text_render(&params);
         const int spaced_left_min_x = test_context.min_x;
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         params.text_align = ER_TEXT_ALIGN_RIGHT;
         er_text_render(&params);
@@ -798,7 +798,7 @@ int main(void)
             return fail("right-aligned letter-spaced span was not placed at its drawn width");
 
         ctx_reset(&test_context);
-        backend.ctx = &test_context;
+        backend.context = &test_context;
         embedded_renderer_set_backend(&backend);
         params.text_align = ER_TEXT_ALIGN_CENTER;
         er_text_render(&params);

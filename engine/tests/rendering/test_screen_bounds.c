@@ -96,7 +96,7 @@ static ERNode* commit_scene(int side)
     ERNode* arc = er_node_create(ER_NODE_ARC);
     ERProps arc_props;
     er_props_default(&arc_props);
-    arc_props.position = ER_POS_ABSOLUTE;
+    arc_props.position = ER_POSITION_ABSOLUTE;
     arc_props.left = 0;
     arc_props.top = 0;
     arc_props.width = HUGE_SIDE;
@@ -159,7 +159,7 @@ int main(void)
     ERNode* far_child = er_node_create(ER_NODE_VIEW);
     ERProps far_child_props;
     er_props_default(&far_child_props);
-    far_child_props.position = ER_POS_ABSOLUTE;
+    far_child_props.position = ER_POSITION_ABSOLUTE;
     far_child_props.left = HUGE_SIDE;
     far_child_props.top = 0;
     far_child_props.width = HUGE_SIDE;

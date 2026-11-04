@@ -247,8 +247,8 @@ static JSValue rt_dirty_rect(JSContext* ctx, JSValueConst this_val, int argc, JS
     JSValue result = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, result, 0, JS_NewInt32(ctx, rect.x));
     JS_SetPropertyUint32(ctx, result, 1, JS_NewInt32(ctx, rect.y));
-    JS_SetPropertyUint32(ctx, result, 2, JS_NewInt32(ctx, rect.w));
-    JS_SetPropertyUint32(ctx, result, 3, JS_NewInt32(ctx, rect.h));
+    JS_SetPropertyUint32(ctx, result, 2, JS_NewInt32(ctx, rect.width));
+    JS_SetPropertyUint32(ctx, result, 3, JS_NewInt32(ctx, rect.height));
     return result;
 }
 

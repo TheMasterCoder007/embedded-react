@@ -52,7 +52,7 @@ void image_registry_init(void)
  */
 static bool scan_opaque(const void* pixels, int width, int height, ERImageFormat format)
 {
-    if (format == ER_IMG_RGB565)
+    if (format == ER_IMAGE_RGB565)
         return true; /* no alpha channel */
     const uint32_t* argb_pixels = (const uint32_t*)pixels;
     const size_t pixel_count = (size_t)width * (size_t)height;
@@ -68,13 +68,13 @@ bool image_registry_store(const char* name, const void* pixels, int width, int h
         return false;
     /* Validate the format before it decides the buffer's element size: an out-of-range value would make
      * scan_opaque() and the renderer read the buffer with the wrong stride (out-of-bounds reads). */
-    if (format != ER_IMG_ARGB8888 && format != ER_IMG_RGB565)
+    if (format != ER_IMAGE_ARGB8888 && format != ER_IMAGE_RGB565)
         return false;
     /* RGB565 pixels are read as uint16_t; reject a misaligned buffer at registration rather than
      * fault mid-frame on strict-alignment targets. ARGB8888 is deliberately not word-checked:
      * version-1 asset packs have always handed out pixel pointers at offset 2 (mod 4) and every
      * shipping target tolerates those reads — rejecting them here would break existing packs. */
-    if (format == ER_IMG_RGB565 && ((uintptr_t)pixels & RGB565_ALIGN_MASK) != 0u)
+    if (format == ER_IMAGE_RGB565 && ((uintptr_t)pixels & RGB565_ALIGN_MASK) != 0u)
     {
         ERUI_WARN_ONCE("embedded-react image: \"%s\" RGB565 pixels at odd address %p - rejected, will not draw "
                        "(is the asset pack/container placed word-aligned?).\n",

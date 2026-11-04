@@ -83,8 +83,8 @@ const PAINT = {
   strokeLinejoin: 'strokeLinejoin="round"',
   strokeMiterlimit: 'strokeMiterlimit={9}',
   fillRule: 'fillRule="evenodd"',
-  fillGrad: `fillGrad=${GRADIENT}`,
-  strokeGrad: `strokeGrad=${GRADIENT}`,
+  fillGradient: `fillGradient=${GRADIENT}`,
+  strokeGradient: `strokeGradient=${GRADIENT}`,
 };
 
 /**

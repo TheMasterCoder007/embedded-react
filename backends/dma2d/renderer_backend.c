@@ -321,14 +321,14 @@ static uint32_t pack_ocolr(uint32_t argb)
 {
     switch (s_ctx.config.format)
     {
-        case ER_DMA2D_FB_RGB565:
+        case ER_DMA2D_FRAMEBUFFER_RGB565:
         {
             const uint32_t red = (argb >> 16) & 0xFFU;
             const uint32_t green = (argb >> 8) & 0xFFU;
             const uint32_t blue = argb & 0xFFU;
             return ((red >> 3) << 11) | ((green >> 2) << 5) | (blue >> 3);
         }
-        case ER_DMA2D_FB_RGB888:
+        case ER_DMA2D_FRAMEBUFFER_RGB888:
             return argb & 0x00FFFFFFU;
         default:
             return ARGB_OPAQUE_ALPHA | (argb & 0x00FFFFFFU);
@@ -533,7 +533,7 @@ static void copy_rect_fmt_cb(
     mark_dirty(x, y, width, height);
     wait_pending();
 
-    const int source_bytes_per_pixel = (format == ER_IMG_RGB565) ? RGB565_BYTES : ARGB8888_BYTES;
+    const int source_bytes_per_pixel = (format == ER_IMAGE_RGB565) ? RGB565_BYTES : ARGB8888_BYTES;
     const uint8_t* first = (const uint8_t*)source + (size_t)source_y * (size_t)source_stride_bytes
                            + (size_t)source_x * (size_t)source_bytes_per_pixel;
 
@@ -555,7 +555,7 @@ static void copy_rect_fmt_cb(
         s_ctx.regs->FGMAR = (uint32_t)(uintptr_t)first;
         /* FGOR is the gap in PIXELS of the SOURCE format, not the destination's. */
         s_ctx.regs->FGOR = (uint32_t)(source_stride_bytes / source_bytes_per_pixel - width);
-        s_ctx.regs->FGPFCCR = (format == ER_IMG_RGB565) ? DMA2D_CM_RGB565 : DMA2D_CM_ARGB8888;
+        s_ctx.regs->FGPFCCR = (format == ER_IMAGE_RGB565) ? DMA2D_CM_RGB565 : DMA2D_CM_ARGB8888;
         s_ctx.regs->OPFCCR = (uint32_t)s_ctx.config.format;
         s_ctx.regs->OMAR = (uint32_t)(uintptr_t)fb_at(x, y);
         s_ctx.regs->OOR = (uint32_t)(s_ctx.stride_pixels - width);
@@ -566,7 +566,7 @@ static void copy_rect_fmt_cb(
 
     /* Below the floor where programming the peripheral pays for itself. Still a plain replace -
        the opacity guarantee means no destination read and no blend either way. */
-    if (format == ER_IMG_RGB565)
+    if (format == ER_IMAGE_RGB565)
     {
         for (int row = 0; row < height; row++)
         {
@@ -633,9 +633,9 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     s_ctx.regs = (ErDma2dRegs*)config->dma2d;
     s_ctx.framebuffer = (uint8_t*)config->framebuffer;
     s_ctx.stride_pixels = config->stride_pixels > 0 ? config->stride_pixels : config->width;
-    s_ctx.bytes_per_pixel = (config->format == ER_DMA2D_FB_RGB565)   ? RGB565_BYTES
-                            : (config->format == ER_DMA2D_FB_RGB888) ? RGB888_BYTES
-                                                                     : ARGB8888_BYTES;
+    s_ctx.bytes_per_pixel = (config->format == ER_DMA2D_FRAMEBUFFER_RGB565)   ? RGB565_BYTES
+                            : (config->format == ER_DMA2D_FRAMEBUFFER_RGB888) ? RGB888_BYTES
+                                                                              : ARGB8888_BYTES;
     if (s_ctx.config.min_dma_pixels <= 0)
         s_ctx.config.min_dma_pixels = DMA2D_MIN_DMA_PIXELS_DEFAULT;
 
@@ -644,10 +644,10 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     memset(&s_backend, 0, sizeof(s_backend));
     s_backend.fill_rect = fill_rect_cb;
     s_backend.copy_rect = copy_rect_cb;
-    s_backend.copy_rect_fmt = copy_rect_fmt_cb;
+    s_backend.copy_rect_format = copy_rect_fmt_cb;
     s_backend.blend_rect = blend_rect_cb;
     s_backend.wait = wait_cb;
-    s_backend.ctx = &s_ctx;
+    s_backend.context = &s_ctx;
 
     embedded_renderer_set_backend(&s_backend);
     return true;

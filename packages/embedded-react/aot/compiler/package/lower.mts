@@ -221,10 +221,10 @@ const MAX_ROW_FIELDS = 255;
 
 /** Key kind → its ERKeyboardKey type. */
 const KEY_TYPES: Record<IrKeyKind, string> = {
-  char: 'ER_KBD_KEY_CHAR',
-  layer: 'ER_KBD_KEY_LAYER',
-  backspace: 'ER_KBD_KEY_BACKSPACE',
-  done: 'ER_KBD_KEY_DONE',
+  char: 'ER_KEYBOARD_KEY_CHAR',
+  layer: 'ER_KEYBOARD_KEY_LAYER',
+  backspace: 'ER_KEYBOARD_KEY_BACKSPACE',
+  done: 'ER_KEYBOARD_KEY_DONE',
 };
 
 /** The highlight layer that means "never highlighted". */
@@ -1976,7 +1976,7 @@ function keyboardTable(
       ),
     ),
     rowHeight: (keyboard.rowHeight ?? 0) & 0xffff,
-    gridCols: byte(keyboard.gridCols),
+    gridColumns: byte(keyboard.gridColumns),
     keyGap: byte(keyboard.keyGap),
     keyRadius: byte(keyboard.keyRadius),
     fontSize: byte(keyboard.fontSize),
@@ -2133,7 +2133,10 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
       // Each animated value runs one engine animation at a time.
       ...(animations.values.size
         ? [
-            {resource: Resource.animValues, amount: animations.values.size},
+            {
+              resource: Resource.animationValues,
+              amount: animations.values.size,
+            },
             {resource: Resource.animations, amount: animations.values.size},
           ]
         : []),

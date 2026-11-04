@@ -101,50 +101,50 @@
  - Types
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Why a load failed or an app stopped. erb_status_str() gives each one's reason. */
+/** @brief Why a load failed or an app stopped. erb_status_name() gives each one's reason. */
 typedef enum
 {
     ERB_OK = 0,
     /* Load */
-    ERB_ERR_NO_PACKAGE,   /**< No package installed. */
-    ERB_ERR_CORRUPT,      /**< Not a package, or corrupt. */
-    ERB_ERR_NOT_FLOW_B,   /**< Not a Flow B package. */
-    ERB_ERR_NEWER_FORMAT, /**< Built for a newer runtime. */
-    ERB_ERR_ENGINE_ABI,   /**< Built for an engine ABI this firmware doesn't run. */
-    ERB_ERR_NO_PANEL,     /**< No layout for the screen size. */
-    ERB_ERR_TOO_BIG,      /**< Needs more than the firmware reserves. */
-    ERB_ERR_TABLE,        /**< Malformed table. */
-    ERB_ERR_STRING,       /**< Malformed string. */
-    ERB_ERR_ARENA,        /**< Bad arena layout. */
-    ERB_ERR_STATE,        /**< Bad state layout. */
-    ERB_ERR_PROP,         /**< Bad prop. */
-    ERB_ERR_TEMPLATE,     /**< Bad template. */
-    ERB_ERR_BINDING,      /**< Bad binding. */
-    ERB_ERR_ANIMATION,    /**< Bad animation. */
-    ERB_ERR_TAPE,         /**< Bad vector tape. */
-    ERB_ERR_FUNCTION,     /**< Bad function. */
-    ERB_ERR_BYTECODE,     /**< Bad bytecode. */
-    ERB_ERR_CONTROL_FLOW, /**< Bad control flow. */
-    ERB_ERR_RECURSION,    /**< Recursive call. */
-    ERB_ERR_STACK,        /**< Stack too deep. */
-    ERB_ERR_IMPORT,       /**< Missing native module. */
-    ERB_ERR_INPUT,        /**< Bad input. */
-    ERB_ERR_DEBUG,        /**< Debug table does not match. */
-    ERB_ERR_ASSETS,       /**< Asset pack failed to load. */
-    ERB_ERR_SLOT,         /**< Flash wouldn't take a hot reload's package. */
+    ERB_ERROR_NO_PACKAGE,   /**< No package installed. */
+    ERB_ERROR_CORRUPT,      /**< Not a package, or corrupt. */
+    ERB_ERROR_NOT_FLOW_B,   /**< Not a Flow B package. */
+    ERB_ERROR_NEWER_FORMAT, /**< Built for a newer runtime. */
+    ERB_ERROR_ENGINE_ABI,   /**< Built for an engine ABI this firmware doesn't run. */
+    ERB_ERROR_NO_PANEL,     /**< No layout for the screen size. */
+    ERB_ERROR_TOO_BIG,      /**< Needs more than the firmware reserves. */
+    ERB_ERROR_TABLE,        /**< Malformed table. */
+    ERB_ERROR_STRING,       /**< Malformed string. */
+    ERB_ERROR_ARENA,        /**< Bad arena layout. */
+    ERB_ERROR_STATE,        /**< Bad state layout. */
+    ERB_ERROR_PROP,         /**< Bad prop. */
+    ERB_ERROR_TEMPLATE,     /**< Bad template. */
+    ERB_ERROR_BINDING,      /**< Bad binding. */
+    ERB_ERROR_ANIMATION,    /**< Bad animation. */
+    ERB_ERROR_TAPE,         /**< Bad vector tape. */
+    ERB_ERROR_FUNCTION,     /**< Bad function. */
+    ERB_ERROR_BYTECODE,     /**< Bad bytecode. */
+    ERB_ERROR_CONTROL_FLOW, /**< Bad control flow. */
+    ERB_ERROR_RECURSION,    /**< Recursive call. */
+    ERB_ERROR_STACK,        /**< Stack too deep. */
+    ERB_ERROR_IMPORT,       /**< Missing native module. */
+    ERB_ERROR_INPUT,        /**< Bad input. */
+    ERB_ERROR_DEBUG,        /**< Debug table does not match. */
+    ERB_ERROR_ASSETS,       /**< Asset pack failed to load. */
+    ERB_ERROR_SLOT,         /**< Flash wouldn't take a hot reload's package. */
     /* Run */
-    ERB_ERR_BUDGET,       /**< Instruction budget exceeded. */
-    ERB_ERR_UPDATE_LOOP,  /**< More than ERB_MAX_UPDATE_PASSES update passes. */
-    ERB_ERR_QUEUE_FULL,   /**< The event queue filled. */
-    ERB_ERR_LIST_INDEX,   /**< A list read past its end. */
-    ERB_ERR_TRAP,         /**< The app stopped itself (a TRAP). */
-    ERB_ERR_NATIVE,       /**< A native import reported failure. */
-    ERB_ERR_STALE_NODE,   /**< A node handle outlived its node (debug packages only). */
-    ERB_ERR_OUT_OF_NODES, /**< The engine couldn't give a node. */
+    ERB_ERROR_BUDGET,       /**< Instruction budget exceeded. */
+    ERB_ERROR_UPDATE_LOOP,  /**< More than ERB_MAX_UPDATE_PASSES update passes. */
+    ERB_ERROR_QUEUE_FULL,   /**< The event queue filled. */
+    ERB_ERROR_LIST_INDEX,   /**< A list read past its end. */
+    ERB_ERROR_TRAP,         /**< The app stopped itself (a TRAP). */
+    ERB_ERROR_NATIVE,       /**< A native import reported failure. */
+    ERB_ERROR_STALE_NODE,   /**< A node handle outlived its node (debug packages only). */
+    ERB_ERROR_OUT_OF_NODES, /**< The engine couldn't give a node. */
     ERB_STATUS_COUNT_,
 } ErbStatus;
 
-/** @brief ErbError::resource for ERB_ERR_TOO_BIG, besides the ERB_RES_ resource ids. */
+/** @brief ErbError::resource for ERB_ERROR_TOO_BIG, besides the ERB_RESOURCE_ resource ids. */
 #define ERB_RESOURCE_ARENA 0u
 #define ERB_RESOURCE_NODES 0x100u
 #define ERB_RESOURCE_SLOT 0x101u
@@ -156,7 +156,7 @@ typedef struct
     const char* detail; /**< Which check failed, for a developer; static text. */
     uint32_t needed;    /**< TOO_BIG: amount needed. ENGINE_ABI: the package's level. NO_PANEL: width. */
     uint32_t available; /**< TOO_BIG: amount reserved. NO_PANEL: height. */
-    uint16_t resource;  /**< TOO_BIG: an ERB_RESOURCE_ value or an ERB_RES_ id. */
+    uint16_t resource;  /**< TOO_BIG: an ERB_RESOURCE_ value or an ERB_RESOURCE_ id. */
     uint16_t function;  /**< The function running, or 0xFFFF. */
     uint32_t offset;    /**< Its word offset when it failed. */
     const char* name;   /**< IMPORT and NATIVE: the module. TRAP: its message. Else NULL. */
@@ -172,7 +172,7 @@ typedef struct
  * @param[out] result     The result cell (unused when the signature returns nothing).
  * @param[in]  context    ErbConfig::context.
  *
- * @return false to stop the app with ERB_ERR_NATIVE, naming the module.
+ * @return false to stop the app with ERB_ERROR_NATIVE, naming the module.
  */
 typedef bool (*ErbNativeFn)(const int32_t* arguments, int32_t* result, void* context);
 
@@ -192,10 +192,10 @@ typedef struct
 /** @brief What the firmware gives the runtime. */
 typedef struct
 {
-    void* arena;          /**< 4-byte aligned, for the app's mutable state. */
-    uint32_t arena_bytes; /**< Its size. */
-    uint16_t screen_w;    /**< The panel size, which picks the package's layout. */
-    uint16_t screen_h;
+    void* arena;           /**< 4-byte aligned, for the app's mutable state. */
+    uint32_t arena_bytes;  /**< Its size. */
+    uint16_t screen_width; /**< The panel size, which picks the package's layout. */
+    uint16_t screen_height;
     uint16_t node_count;      /**< Nodes the app may use; 0 means ERUI_MAX_NODES. */
     const ErbNative* natives; /**< Native functions packages may import. */
     uint16_t native_count;
@@ -260,7 +260,7 @@ void erb_show_error(const ErbError* error);
 void erb_show_error_hint(const ErbError* error, const char* hint);
 
 /** @brief The short reason for a status. */
-const char* erb_status_str(ErbStatus status);
+const char* erb_status_name(ErbStatus status);
 
 /**
  * @brief Writes a one-line description of @p error: the reason, the amounts and where it happened.

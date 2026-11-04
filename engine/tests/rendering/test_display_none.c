@@ -92,7 +92,7 @@ static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ct
 
 /*
  * copy_rect hands over a PREMULTIPLIED ARGB8888 buffer, not an opaque one — the engine has a separate
- * copy_rect_fmt for the known-opaque case. So the per-pixel alpha is honoured here, and a fully
+ * copy_rect_format for the known-opaque case. So the per-pixel alpha is honoured here, and a fully
  * transparent pixel is skipped outright rather than "blended" at alpha 0: put() would leave the colour
  * alone but still count the pixel as touched, and this test is built entirely on touched-pixel counts
  * ("a hidden page is free per frame"). The page is solid opaque Views today, so neither this nor
@@ -184,7 +184,7 @@ static long reported_dirty_area(void)
     ERRect dirty;
     if (!er_get_dirty_rect(&dirty))
         return 0;
-    return (long)dirty.w * (long)dirty.h;
+    return (long)dirty.width * (long)dirty.height;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -241,7 +241,7 @@ static void build_scene(void)
 
     s_page = er_node_create(ER_NODE_VIEW);
     s_page_props = props_default();
-    s_page_props.position = ER_POS_ABSOLUTE;
+    s_page_props.position = ER_POSITION_ABSOLUTE;
     s_page_props.left = PAGE_X;
     s_page_props.top = PAGE_Y;
     s_page_props.width = 1;
@@ -251,7 +251,7 @@ static void build_scene(void)
 
     ERNode* content = er_node_create(ER_NODE_VIEW);
     ERProps content_props = props_default();
-    content_props.position = ER_POS_ABSOLUTE;
+    content_props.position = ER_POSITION_ABSOLUTE;
     content_props.left = CONTENT_X;
     content_props.top = CONTENT_Y;
     content_props.width = CONTENT_WIDTH;
@@ -262,7 +262,7 @@ static void build_scene(void)
 
     /* The page's own widgets — the "few hundred nodes" a cached page is made of, scaled down. */
     s_leaf_props = props_default();
-    s_leaf_props.position = ER_POS_ABSOLUTE;
+    s_leaf_props.position = ER_POSITION_ABSOLUTE;
     s_leaf_props.width = 6;
     s_leaf_props.height = 6;
     s_leaf_props.background_color = 0xFF2255AAu;
@@ -279,7 +279,7 @@ static void build_scene(void)
     /* A second page that is never hidden: hiding must be a SUBTREE operation, not a global one. */
     s_sibling = er_node_create(ER_NODE_VIEW);
     s_sibling_props = props_default();
-    s_sibling_props.position = ER_POS_ABSOLUTE;
+    s_sibling_props.position = ER_POSITION_ABSOLUTE;
     s_sibling_props.left = SIBLING_X;
     s_sibling_props.top = SIBLING_Y;
     s_sibling_props.width = SIBLING_WIDTH;

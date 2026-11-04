@@ -184,7 +184,7 @@ const lowerConfig = withLoc((configArgument: t.Node): IrKeyboard => {
 
   return {
     layers,
-    gridCols: kbdSize(config.gridCols),
+    gridColumns: kbdSize(config.gridColumns),
     rowHeight: kbdSize(config.rowHeight),
     keyGap: kbdSize(config.keyGap),
     keyRadius: kbdSize(config.keyRadius),

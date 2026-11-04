@@ -174,8 +174,8 @@ const SVG_PAINT = [
   'strokeLinejoin',
   'strokeMiterlimit',
   'fillRule',
-  'fillGrad',
-  'strokeGrad',
+  'fillGradient',
+  'strokeGradient',
 ];
 
 /** The attributes every host node lowers: style, visibility, a node ref, and its events. */

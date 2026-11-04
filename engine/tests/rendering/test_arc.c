@@ -374,8 +374,8 @@ static void test_value_damage(void)
                 "dirty %d,%d %dx%d touched [%d,%d]-[%d,%d] vec_has_dirty=%d local %d,%d %dx%d\n",
                 dirty.x,
                 dirty.y,
-                dirty.w,
-                dirty.h,
+                dirty.width,
+                dirty.height,
                 min_x,
                 min_y,
                 max_x,
@@ -386,13 +386,14 @@ static void test_value_damage(void)
                 arc->vector_dirty_width,
                 arc->vector_dirty_height);
     }
-    CHECK(dirty.w < 120 && dirty.h < 120, "value-change damage is a sliver, not the 200x200 box");
+    CHECK(dirty.width < 120 && dirty.height < 120, "value-change damage is a sliver, not the 200x200 box");
     /* Value end moved 202.5° → 216°; those pixels (and the knob spots) are inside the rect. */
     {
         const float angle = 205.0f * ER_DEG2RAD; /* inside the swept 202.5°→216°, clear of the knob */
         const int touch_x = (int)floorf(120.0f + 92.0f * cosf(angle)),
                   touch_y = (int)floorf(120.0f + 92.0f * sinf(angle));
-        CHECK(touch_x >= dirty.x && touch_x < dirty.x + dirty.w && touch_y >= dirty.y && touch_y < dirty.y + dirty.h,
+        CHECK(touch_x >= dirty.x && touch_x < dirty.x + dirty.width && touch_y >= dirty.y
+                  && touch_y < dirty.y + dirty.height,
               "dirty rect covers the swept sub-arc");
         CHECK(near_color(px(touch_x, touch_y), 0x00A0FFU, 2), "swept sub-arc now shows the indicator");
     }
@@ -400,7 +401,8 @@ static void test_value_damage(void)
     for (int y = 0; y < SCREEN; y++)
         for (int x = 0; x < SCREEN; x++)
             if (s_touched[y * SCREEN + x]
-                && !(x >= dirty.x - 2 && x < dirty.x + dirty.w + 2 && y >= dirty.y - 2 && y < dirty.y + dirty.h + 2))
+                && !(x >= dirty.x - 2 && x < dirty.x + dirty.width + 2 && y >= dirty.y - 2
+                     && y < dirty.y + dirty.height + 2))
                 touched_outside++;
     CHECK(touched_outside == 0, "no pixel written outside the reported dirty rect");
 
@@ -428,7 +430,8 @@ static void test_value_damage(void)
     props.arc_track_color = 0xFF808080U;
     er_node_set_props(arc, &props);
     er_commit();
-    CHECK(er_get_dirty_rect(&dirty) && dirty.w >= 200 && dirty.h >= 200, "track recolour repaints the whole box");
+    CHECK(er_get_dirty_rect(&dirty) && dirty.width >= 200 && dirty.height >= 200,
+          "track recolour repaints the whole box");
 }
 
 /** @brief ER_PROP_ARC_VALUE animates natively and each tick damages only the moved sliver. */
@@ -443,11 +446,11 @@ static void test_native_animation(void)
     er_tree_append_child(root, arc);
     er_commit();
 
-    ERAnimConfig config;
+    ERAnimationConfig config;
     memset(&config, 0, sizeof(config));
-    config.type = ER_ANIM_TIMING;
+    config.type = ER_ANIMATION_TIMING;
     config.duration_ms = 400U;
-    er_anim_start(arc, ER_PROP_ARC_VALUE, 80.0f, &config);
+    er_animation_start(arc, ER_PROP_ARC_VALUE, 80.0f, &config);
 
     float last = 0.0f;
     for (int tick_index = 0; tick_index < 10; tick_index++)
@@ -456,7 +459,7 @@ static void test_native_animation(void)
         er_commit();
         ERRect dirty;
         if (er_get_dirty_rect(&dirty))
-            CHECK(dirty.w < 200 || dirty.h < 200, "animation tick damage is narrower than the box");
+            CHECK(dirty.width < 200 || dirty.height < 200, "animation tick damage is narrower than the box");
         CHECK(arc->arc_value >= last, "value ramps monotonically");
         last = arc->arc_value;
     }
@@ -465,7 +468,7 @@ static void test_native_animation(void)
     CHECK(near_color(polar_px(120, 120, 92.0f, 360.0f), 0x404040U, 2), "track past 80%%");
 
     /* Out-of-range targets clamp. */
-    er_anim_start(arc, ER_PROP_ARC_VALUE, 500.0f, NULL);
+    er_animation_start(arc, ER_PROP_ARC_VALUE, 500.0f, NULL);
     er_commit();
     CHECK(arc->arc_value == 100.0f, "value clamps to max");
 }
@@ -504,7 +507,7 @@ static void test_drag(void)
     ERNode* button = er_node_create(ER_NODE_PRESSABLE);
     ERProps button_props;
     er_props_default(&button_props);
-    button_props.position = ER_POS_ABSOLUTE;
+    button_props.position = ER_POSITION_ABSOLUTE;
     button_props.left = 60;
     button_props.top = 60;
     button_props.width = 80;
@@ -558,7 +561,7 @@ static void test_drag(void)
         ERNode* readout = er_node_create(ER_NODE_VIEW);
         ERProps root_props;
         er_props_default(&root_props);
-        root_props.position = ER_POS_ABSOLUTE;
+        root_props.position = ER_POSITION_ABSOLUTE;
         root_props.left = 50;
         root_props.top = 50;
         root_props.width = 100;
@@ -826,7 +829,7 @@ static void test_span_cache(void)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
- - <Svg> arc ↔ native arc parity (issue #87's follow-up: retarget ER_VOP_ARC at the shared analytic core)
+ - <Svg> arc ↔ native arc parity (issue #87's follow-up: retarget ER_VECTOR_OP_ARC at the shared analytic core)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 static uint32_t s_snapshot_a[SCREEN * SCREEN];
@@ -885,12 +888,13 @@ static void test_svg_native_parity(void)
     {
         const bool round_cap = (round == 1);
         /* Tape is NODE-LOCAL: the node box is at (20,20), so its centre is (100,100) locally. */
-        const float tape[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, start_angle, end_angle, 0.0f};
+        const float tape[] = {
+            ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, 92.0f, start_angle, end_angle, 0.0f};
         ERVectorPaint paint;
         memset(&paint, 0, sizeof(paint));
         paint.stroke = track_color;
-        paint.stroke_w = 16.0f;
-        paint.cap = round_cap ? ER_VCAP_ROUND : ER_VCAP_BUTT;
+        paint.stroke_width = 16.0f;
+        paint.cap = round_cap ? ER_VECTOR_CAP_ROUND : ER_VECTOR_CAP_BUTT;
 
         render_svg_arc(tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint);
         CHECK(er_vector_analytic_arc_count() == 1U, "a lone stroked <Svg> arc takes the analytic route");
@@ -909,24 +913,24 @@ static void test_svg_native_parity(void)
 static void test_svg_circle_route(void)
 {
     /* Exactly what svg-ops.js / the AOT emit for <Circle cx=100 cy=100 r=60>. */
-    const float tape[] = {ER_VOP_SHAPE,
+    const float tape[] = {ER_VECTOR_OP_SHAPE,
                           0.0f,
-                          ER_VOP_MOVE,
+                          ER_VECTOR_OP_MOVE,
                           160.0f,
                           100.0f,
-                          ER_VOP_ARC,
+                          ER_VECTOR_OP_ARC,
                           100.0f,
                           100.0f,
                           60.0f,
                           0.0f,
                           TWO_PI,
                           0.0f,
-                          ER_VOP_CLOSE};
+                          ER_VECTOR_OP_CLOSE};
     ERVectorPaint paint;
     memset(&paint, 0, sizeof(paint));
     paint.fill = 0xFF203040U;
     paint.stroke = 0xFFFFAA00U;
-    paint.stroke_w = 10.0f;
+    paint.stroke_width = 10.0f;
 
     render_svg_arc(tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint);
     CHECK(er_vector_analytic_arc_count() == 1U, "a filled+stroked <Circle> takes the analytic route");
@@ -957,15 +961,16 @@ static void test_svg_fallbacks(void)
 {
     const float start_angle = 135.0f * ER_DEG2RAD;
     const float end_angle = 270.0f * ER_DEG2RAD;
-    const float arc_tape[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, start_angle, end_angle, 0.0f};
+    const float arc_tape[] = {
+        ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, 92.0f, start_angle, end_angle, 0.0f};
     const int arc_tape_count = (int)(sizeof(arc_tape) / sizeof(arc_tape[0]));
     ERVectorPaint paint;
 
     /* Square cap: the sector core has butt and round only. */
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
-    paint.stroke_w = 16.0f;
-    paint.cap = ER_VCAP_SQUARE;
+    paint.stroke_width = 16.0f;
+    paint.cap = ER_VECTOR_CAP_SQUARE;
     render_svg_arc(arc_tape, arc_tape_count, &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "a square-cap arc falls back");
     CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 200.0f), 0x00A0FFU, 2), "square-cap arc still draws");
@@ -981,42 +986,42 @@ static void test_svg_fallbacks(void)
     /* A stroke wide enough to swallow the centre self-intersects — keep the outline path. */
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
-    paint.stroke_w = 200.0f;
+    paint.stroke_width = 200.0f;
     render_svg_arc(arc_tape, arc_tape_count, &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "an over-wide stroke falls back");
 
     /* An arc joined to a line is a multi-op subpath with a join — the general path owns that. */
-    const float joined[] = {ER_VOP_SHAPE,
+    const float joined[] = {ER_VECTOR_OP_SHAPE,
                             0.0f,
-                            ER_VOP_ARC,
+                            ER_VECTOR_OP_ARC,
                             100.0f,
                             100.0f,
                             92.0f,
                             start_angle,
                             end_angle,
                             0.0f,
-                            ER_VOP_LINE,
+                            ER_VECTOR_OP_LINE,
                             100.0f,
                             100.0f};
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
-    paint.stroke_w = 8.0f;
+    paint.stroke_width = 8.0f;
     render_svg_arc(joined, (int)(sizeof(joined) / sizeof(joined[0])), &paint);
     CHECK(er_vector_analytic_arc_count() == 0U, "an arc joined to a line falls back");
 
     /* Two arcs in one shape (a track + value pair) route independently — one call each. */
-    const float two[] = {ER_VOP_SHAPE,
+    const float two[] = {ER_VECTOR_OP_SHAPE,
                          0.0f,
-                         ER_VOP_ARC,
+                         ER_VECTOR_OP_ARC,
                          100.0f,
                          100.0f,
                          92.0f,
                          start_angle,
                          end_angle,
                          0.0f,
-                         ER_VOP_SHAPE,
+                         ER_VECTOR_OP_SHAPE,
                          0.0f,
-                         ER_VOP_ARC,
+                         ER_VECTOR_OP_ARC,
                          100.0f,
                          100.0f,
                          70.0f,
@@ -1025,7 +1030,7 @@ static void test_svg_fallbacks(void)
                          0.0f};
     memset(&paint, 0, sizeof(paint));
     paint.stroke = 0xFF00A0FFU;
-    paint.stroke_w = 8.0f;
+    paint.stroke_width = 8.0f;
     render_svg_arc(two, (int)(sizeof(two) / sizeof(two[0])), &paint);
     CHECK(er_vector_analytic_arc_count() == 2U, "two arc shapes route as two sectors");
 }
@@ -1053,21 +1058,21 @@ static void test_extreme_geometry(void)
     ERVectorPaint ring;
     memset(&ring, 0, sizeof(ring));
     ring.stroke = 0xFF00A0FFU;
-    ring.stroke_w = 16.0f;
+    ring.stroke_width = 16.0f;
 
     /* A full turn from a huge start: in degrees, the start swallowed the 360 added to it, so nothing drew. */
-    const float huge_start[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, 1e10f, 2e10f, 0.0f};
+    const float huge_start[] = {ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, 92.0f, 1e10f, 2e10f, 0.0f};
     render_svg_arc(huge_start, (int)(sizeof(huge_start) / sizeof(huge_start[0])), &ring);
     CHECK(er_vector_analytic_arc_count() == 1U, "a full turn from a huge start takes the analytic route");
     CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 20.0f), 0x00A0FFU, 2), "a full turn from a huge start draws");
 
     /* Ends too far apart to subtract are more than a turn apart: the whole ring, not nothing. */
-    const float far_ends[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, -3e38f, 3e38f, 0.0f};
+    const float far_ends[] = {ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, 92.0f, -3e38f, 3e38f, 0.0f};
     render_svg_arc(far_ends, (int)(sizeof(far_ends) / sizeof(far_ends[0])), &ring);
     CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 200.0f), 0x00A0FFU, 2), "ends too far apart draw the ring");
 
     /* A NaN end draws nothing. */
-    const float nan_end[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 92.0f, 0.0f, NAN, 0.0f};
+    const float nan_end[] = {ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, 92.0f, 0.0f, NAN, 0.0f};
     render_svg_arc(nan_end, (int)(sizeof(nan_end) / sizeof(nan_end[0])), &ring);
     CHECK(near_color(polar_px(120.0f, 120.0f, 92.0f, 20.0f), 0x000000U, 0), "a NaN end draws nothing");
 
@@ -1075,12 +1080,13 @@ static void test_extreme_geometry(void)
     ERVectorPaint disc;
     memset(&disc, 0, sizeof(disc));
     disc.fill = 0xFF44FF44U;
-    const float big[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, 1e10f, 0.0f, TWO_PI, 0.0f};
+    const float big[] = {ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, 1e10f, 0.0f, TWO_PI, 0.0f};
     render_svg_arc(big, (int)(sizeof(big) / sizeof(big[0])), &disc);
     CHECK(er_vector_analytic_arc_count() == 1U, "a huge disc takes the analytic route");
     CHECK(near_color(px(25, 25), 0x44FF44U, 0) && near_color(px(214, 214), 0x44FF44U, 0),
           "a disc past the int range fills the node");
-    const float nan_radius_tape[] = {ER_VOP_SHAPE, 0.0f, ER_VOP_ARC, 100.0f, 100.0f, NAN, 0.0f, TWO_PI, 0.0f};
+    const float nan_radius_tape[] = {
+        ER_VECTOR_OP_SHAPE, 0.0f, ER_VECTOR_OP_ARC, 100.0f, 100.0f, NAN, 0.0f, TWO_PI, 0.0f};
     render_svg_arc(nan_radius_tape, (int)(sizeof(nan_radius_tape) / sizeof(nan_radius_tape[0])), &disc);
     CHECK(near_color(px(120, 120), 0x000000U, 0), "a NaN radius draws nothing");
 
@@ -1178,7 +1184,7 @@ static void test_range(void)
     er_commit();
     ERRect dirty;
     CHECK(er_get_dirty_rect(&dirty), "a range value change reports a dirty rect");
-    CHECK(dirty.w < 140 && dirty.h < 140, "range value-change damage stays a sliver");
+    CHECK(dirty.width < 140 && dirty.height < 140, "range value-change damage stays a sliver");
 
     /* Widening the band in ONE setProps (both ends move outward) must not self-clamp. */
     props.arc_value_start = 10.0f;
@@ -1188,7 +1194,7 @@ static void test_range(void)
     CHECK(arc->arc_value_start == 10.0f && arc->arc_value == 90.0f, "both ends widen in one setProps");
 
     /* And the animation driver drives each end independently. */
-    er_anim_start(arc, ER_PROP_ARC_VALUE_START, 30.0f, NULL);
+    er_animation_start(arc, ER_PROP_ARC_VALUE_START, 30.0f, NULL);
     er_commit();
     CHECK(arc->arc_value_start == 30.0f, "ER_PROP_ARC_VALUE_START animates the low end");
 }
@@ -1278,7 +1284,7 @@ static void test_range_conic_damage(void)
     er_commit();
     CHECK(memcmp(incremental, s_framebuffer, sizeof(incremental)) == 0,
           "a sweep-anchored conic arc still matches a full repaint");
-    CHECK(got_single && (long)single_dirty.w * (long)single_dirty.h < 14000L,
+    CHECK(got_single && (long)single_dirty.width * (long)single_dirty.height < 14000L,
           "a sweep-anchored conic arc keeps its damage to the swept sliver");
 
     /* The same move on a SOLID band must still damage only a sliver — the fix must not widen that. */
@@ -1297,7 +1303,7 @@ static void test_range_conic_damage(void)
     er_mark_dirty_upward(arc);
     er_commit();
     ERRect dirty;
-    CHECK(er_get_dirty_rect(&dirty) && dirty.w < 150 && dirty.h < 150,
+    CHECK(er_get_dirty_rect(&dirty) && dirty.width < 150 && dirty.height < 150,
           "a solid range band still damages only the swept sliver");
 }
 
@@ -1424,7 +1430,7 @@ static void test_grid_damage(void)
             props.width = BOX;
             props.height = BOX;
             props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = (float)(5 + grid_column * PITCH);
             props.top = (float)(5 + grid_row * PITCH);
             props.arc_width = 8;
@@ -1444,7 +1450,7 @@ static void test_grid_damage(void)
             props.width = BOX;
             props.height = BOX;
             props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = (float)(5 + grid_column * PITCH);
             props.top = (float)(5 + grid_row * PITCH);
             props.arc_width = 8;
@@ -1468,7 +1474,7 @@ static void test_grid_damage(void)
               "the saturated grid stays within the configured budget");
     uint32_t damage = 0U;
     for (int rect_index = 0; rect_index < rect_count; rect_index++)
-        damage += (uint32_t)rects[rect_index].w * (uint32_t)rects[rect_index].h;
+        damage += (uint32_t)rects[rect_index].width * (uint32_t)rects[rect_index].height;
 
     /* The raster is what the clip really governs: count the pixels the backend wrote. Repainting all
      * nine rings in full would be an order of magnitude more than the nine slivers. */

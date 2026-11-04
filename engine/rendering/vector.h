@@ -18,7 +18,7 @@
 #define EMBEDDED_REACT_VECTOR_H
 
 #include "er_diagnostics.h" /* ERUI_WARN_ONCE — the pool-overflow warnings below */
-#include "er_scene.h"       /* ERVectorPaint + the ER_VOP / ER_VCAP / ER_VJOIN / ER_VFILL contract */
+#include "er_scene.h"       /* ERVectorPaint + the ER_VECTOR_OP / _CAP / _JOIN / _FILL contract */
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -44,7 +44,7 @@
 /* When a static pool is exhausted the vector code silently drops geometry — correct and memory-safe, but a
  * truncated shape is easy to mistake for a bug. The first overflow of each pool prints a one-line warning
  * naming the macro to raise. One wording, one latch, one knob (ERUI_DIAGNOSTICS — see er_diagnostics.h). */
-#define ERUI_VEC_WARN_ONCE(macro_name, capacity)                                                                       \
+#define ERUI_VECTOR_WARN_ONCE(macro_name, capacity)                                                                    \
     ERUI_WARN_ONCE(                                                                                                    \
         "embedded-react vector: %s (%d) exhausted - shape truncated; raise it.\n", macro_name, (int)(capacity))
 
@@ -115,11 +115,12 @@ void er_vector_cache_stats_reset(void);
  * the engine blit layer, so it blends correctly into the framebuffer and through opacity/transform
  * scratch. Painting is clipped to [clip_x0, clip_x1) x [clip_y0, clip_y1).
  *
- * @param[in] ops             Flat op-tape (see the ER_VOP_* contract in er_scene.h).
+ * @param[in] ops             Flat op-tape (see the ER_VECTOR_OP_* contract in er_scene.h).
  * @param[in] op_count        Number of floats in @p ops.
  * @param[in] paints          Paint table (one ERVectorPaint per entry).
  * @param[in] paint_count     Number of paint entries.
- * @param[in] gradients       Gradient table; a paint's 1-based fill_grad indexes it (NULL/0 when none). ERUI_GRADIENT.
+ * @param[in] gradients       Gradient table; a paint's 1-based fill_gradient indexes it (NULL/0 when none).
+ * ERUI_GRADIENT.
  * @param[in] gradient_count  Number of gradient entries.
  * @param[in] origin_x        Geometry origin X in framebuffer pixels (node box left).
  * @param[in] origin_y        Geometry origin Y in framebuffer pixels (node box top).

@@ -113,14 +113,14 @@ interface LoopSpec {
 /** The style keys an animated value drives only through an interpolation onto colors. */
 export const ANIMATED_COLOR_KEYS = new Set(['backgroundColor', 'color']);
 
-/** Style key → the ERAnimProp(s) an animated value binds to. */
+/** Style key → the ERAnimationProp(s) an animated value binds to. */
 export const ANIMATED_STYLE_PROPS: Record<string, string[]> = {
   opacity: ['ER_PROP_OPACITY'],
   backgroundColor: ['ER_PROP_BACKGROUND_COLOR'],
   color: ['ER_PROP_COLOR'],
 };
 
-/** Transform key → the ERAnimProp(s) an animated value binds to. */
+/** Transform key → the ERAnimationProp(s) an animated value binds to. */
 export const ANIMATED_TRANSFORM_PROPS: Record<string, string[]> = {
   scale: ['ER_PROP_SCALE_X', 'ER_PROP_SCALE_Y'],
   scaleX: ['ER_PROP_SCALE_X'],
@@ -782,7 +782,7 @@ function flattenAnim(
       index++;
     }
 
-    // The same value can't appear twice in a flat (delay_ms) composition: er_anim_value_animate cancels the
+    // The same value can't appear twice in a flat (delay_ms) composition: er_animation_value_animate cancels the
     // running anim on a value, so concurrent/flat-sequenced same-value steps cancel each other. (A
     // top-level Animated.sequence is handled separately via on_complete chaining, which does support this.)
     const seen = new Set<string>();
@@ -996,7 +996,7 @@ function sequenceSteps(
 
 /**
  * Lowers steps to an on_complete CHAIN: step 0 starts inline, and each step's completion callback starts the
- * next. Unlike the flat delay_ms path, this is correct when steps share a value — er_anim_value_animate
+ * next. Unlike the flat delay_ms path, this is correct when steps share a value — er_animation_value_animate
  * cancels the running anim on a value, so starting them together would cancel all but the last — and needs
  * no fixed duration. A step that is interrupted (finished == false) ends the chain, as it does in JS. The
  * chain's callbacks and loop slots are added to the output here.
@@ -1327,7 +1327,7 @@ function lowerLoopStart(
       : startNothing(context, completion, iterations * trailingDelay, key);
   }
 
-  // A timing with no duration and no delay completes inside er_anim_value_animate, so a loop made only of
+  // A timing with no duration and no delay completes inside er_animation_value_animate, so a loop made only of
   // those would restart itself forever without returning.
   const instant = (animationEntry: AnimEntry) =>
     animationEntry.kind === 'timing' &&
@@ -1349,7 +1349,7 @@ function lowerLoopStart(
 }
 
 /**
- * Lowers a `.start(onComplete)` completion callback to a function (ERAnimCompleteFn) set as the
+ * Lowers a `.start(onComplete)` completion callback to a function (ERAnimationCompleteFn) set as the
  * animation's on_complete, and adds it to the output; its body runs setters/refs/etc. and re-applies state via
  * the update if needed.
  *

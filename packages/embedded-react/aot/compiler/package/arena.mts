@@ -25,7 +25,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {
-  ANIM_ENTRY_SIZE,
+  ANIMATION_ENTRY_SIZE,
   CELL_SIZE,
   EVENT_SIZE,
   FRAME_CELLS,
@@ -246,8 +246,13 @@ export class Arena {
       offset += bytes;
     }
     if (this.animations) {
-      const bytes = this.animations * ANIM_ENTRY_SIZE;
-      regions.push({kind: Region.anims, count: this.animations, offset, bytes});
+      const bytes = this.animations * ANIMATION_ENTRY_SIZE;
+      regions.push({
+        kind: Region.animations,
+        count: this.animations,
+        offset,
+        bytes,
+      });
       offset += bytes;
     }
 

@@ -136,7 +136,7 @@ static void render_worker_main(void* parameter)
     for (;;)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        er_render_worker_exec(RENDER_WORKER_ID);
+        er_render_worker_execute(RENDER_WORKER_ID);
         xSemaphoreGive(s_render_worker_done);
     }
 }
@@ -166,7 +166,7 @@ void install_render_workers(void)
         .dispatch = render_worker_dispatch,
         .sync = render_worker_sync,
         .worker_id = render_worker_id,
-        .ctx = NULL,
+        .context = NULL,
     };
     /* 24 KB: the worker runs the full render recursion (nested composites + transform emits with
      * their on-stack column arrays) but never QuickJS, so it needs render-depth headroom only —

@@ -46,8 +46,8 @@ static int fail(const char* message)
 /** @brief True when the two rects overlap OR touch (closed-interval test — the set must merge both). */
 static bool rects_touch(const ERRect* first, const ERRect* second)
 {
-    return !(first->x + first->w < second->x || second->x + second->w < first->x || first->y + first->h < second->y
-             || second->y + second->h < first->y);
+    return !(first->x + first->width < second->x || second->x + second->width < first->x
+             || first->y + first->height < second->y || second->y + second->height < first->y);
 }
 
 /** @brief Asserts the set's core invariant: pairwise disjoint AND non-abutting. */
@@ -55,7 +55,7 @@ static bool check_disjoint(const ERDamageSet* damage)
 {
     for (uint8_t rect_index = 0; rect_index < damage->count; rect_index++)
     {
-        if (damage->rects[rect_index].w <= 0 || damage->rects[rect_index].h <= 0)
+        if (damage->rects[rect_index].width <= 0 || damage->rects[rect_index].height <= 0)
         {
             return false; /* an empty rect must never be stored */
         }
@@ -76,9 +76,9 @@ static bool covers_point(const ERDamageSet* damage, int pixel_x, int pixel_y)
     for (uint8_t rect_index = 0; rect_index < damage->count; rect_index++)
     {
         if (pixel_x >= damage->rects[rect_index].x
-            && pixel_x < damage->rects[rect_index].x + damage->rects[rect_index].w
+            && pixel_x < damage->rects[rect_index].x + damage->rects[rect_index].width
             && pixel_y >= damage->rects[rect_index].y
-            && pixel_y < damage->rects[rect_index].y + damage->rects[rect_index].h)
+            && pixel_y < damage->rects[rect_index].y + damage->rects[rect_index].height)
         {
             return true;
         }
@@ -92,8 +92,8 @@ static bool covers_rect(const ERDamageSet* damage, const ERRect* rect)
     /* Disjoint axis-aligned rects can't jointly cover an input rect unless one rect alone covers it
      * (a straddled input would have been merged), so sampling is sufficient — but sample densely
      * anyway to catch a hypothetical splitting bug: all 9 anchor points. */
-    const int sample_xs[3] = {rect->x, rect->x + rect->w / 2, rect->x + rect->w - 1};
-    const int sample_ys[3] = {rect->y, rect->y + rect->h / 2, rect->y + rect->h - 1};
+    const int sample_xs[3] = {rect->x, rect->x + rect->width / 2, rect->x + rect->width - 1};
+    const int sample_ys[3] = {rect->y, rect->y + rect->height / 2, rect->y + rect->height - 1};
     for (int sample_x_index = 0; sample_x_index < 3; sample_x_index++)
     {
         for (int sample_y_index = 0; sample_y_index < 3; sample_y_index++)
@@ -129,8 +129,8 @@ static bool add_checked(ERDamageSet* damage, int x, int y, int width, int height
     {
         g_history[g_history_count].x = x;
         g_history[g_history_count].y = y;
-        g_history[g_history_count].w = width;
-        g_history[g_history_count].h = height;
+        g_history[g_history_count].width = width;
+        g_history[g_history_count].height = height;
         g_history_count++;
     }
     if (!check_disjoint(damage))
@@ -163,7 +163,7 @@ static int check_basics(void)
     if (damage.count != 0U)
         return fail("empty rects were stored");
     ERRect bounds;
-    if (er_damage_set_bounds(&damage, &bounds) || bounds.w != 0 || bounds.h != 0)
+    if (er_damage_set_bounds(&damage, &bounds) || bounds.width != 0 || bounds.height != 0)
         return fail("empty set reported bounds");
     if (er_damage_set_area(&damage) != 0U)
         return fail("empty set reported area");
@@ -177,7 +177,8 @@ static int check_basics(void)
         return fail("two disjoint rects were merged");
     if (er_damage_set_area(&damage) != 1800U)
         return fail("area is not the sum of the two rects");
-    if (!er_damage_set_bounds(&damage, &bounds) || bounds.x != 0 || bounds.y != 0 || bounds.w != 200 || bounds.h != 200)
+    if (!er_damage_set_bounds(&damage, &bounds) || bounds.x != 0 || bounds.y != 0 || bounds.width != 200
+        || bounds.height != 200)
         return fail("bounds is not the union bbox");
 
     /* Overlap merges. */
@@ -216,7 +217,7 @@ static int check_cascade(void)
         return fail("invariant: bridge rect");
     if (damage.count != 1U)
         return fail("bridge did not cascade-merge both sides");
-    if (damage.rects[0].x != 0 || damage.rects[0].w != 140)
+    if (damage.rects[0].x != 0 || damage.rects[0].width != 140)
         return fail("cascaded union has the wrong extent");
 
     printf("PASS: cascade — a bridge rect collapses everything it connects\n");
@@ -260,7 +261,7 @@ static int check_saturation(void)
     bool found = false;
     for (uint8_t rect_index = 0; rect_index < damage.count; rect_index++)
     {
-        if (damage.rects[rect_index].x == 0 && damage.rects[rect_index].x + damage.rects[rect_index].w == 42)
+        if (damage.rects[rect_index].x == 0 && damage.rects[rect_index].x + damage.rects[rect_index].width == 42)
             found = true;
     }
     if (!found)
@@ -335,8 +336,8 @@ static int check_limit(void)
     er_damage_set_limit(&damage, 1U);
     if (damage.count != 1U)
         return fail("limit to 1 did not collapse to a single rect");
-    if (damage.rects[0].x != bounds.x || damage.rects[0].y != bounds.y || damage.rects[0].w != bounds.w
-        || damage.rects[0].h != bounds.h)
+    if (damage.rects[0].x != bounds.x || damage.rects[0].y != bounds.y || damage.rects[0].width != bounds.width
+        || damage.rects[0].height != bounds.height)
         return fail("the collapsed rect is not the covering bounding box");
 
     /* Zero empties it; a limit on an empty set is a no-op. */
@@ -359,9 +360,9 @@ static int check_limit(void)
     bool fused = false, far_kept = false;
     for (uint8_t rect_index = 0; rect_index < damage.count; rect_index++)
     {
-        if (damage.rects[rect_index].x == 0 && damage.rects[rect_index].w == 42)
+        if (damage.rects[rect_index].x == 0 && damage.rects[rect_index].width == 42)
             fused = true;
-        if (damage.rects[rect_index].x == 500 && damage.rects[rect_index].w == 20)
+        if (damage.rects[rect_index].x == 500 && damage.rects[rect_index].width == 20)
             far_kept = true;
     }
     if (!fused || !far_kept)

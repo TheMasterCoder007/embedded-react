@@ -40,8 +40,9 @@
  *
  * CONFIGURATION. The plain scenarios need only ERUI_SHADOWS. The transform-fallback ones additionally
  * need a node that fails its scratch capture while still casting a shadow, which exists only when
- * ERUI_XFORM_W/H is decoupled below ERUI_SCRATCH_W/H — the same gap test_transform_shadow_damage.c
- * needs, and the same CI pass ("shadows, decoupled transform scratch") that provides it.
+ * ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT are decoupled below ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT — the
+ * same gap test_transform_shadow_damage.c needs, and the same CI pass ("shadows, decoupled transform scratch") that
+ * provides it.
  */
 
 #include "er_scene.h"
@@ -258,7 +259,8 @@ static ERProps props_default(void)
 #define SHADOW_RADIUS 10
 #define SHADOW_OFFSET 6
 
-/* Plain (untransformed) card: comfortably inside ERUI_SCRATCH_W/H, so it really does cast a shadow. */
+/* Plain (untransformed) card: comfortably inside ERUI_SCRATCH_WIDTH and ERUI_SCRATCH_HEIGHT, so it really does cast a
+ * shadow. */
 #define PLAIN_SIDE 200
 #define CARD_LEFT 60
 #define CARD_TOP 60
@@ -266,12 +268,12 @@ static ERProps props_default(void)
 #define MOVE_DISTANCE 40
 
 /* The transform-fallback band exists only when the transform source is smaller than the shadow's: a
- * node above ERUI_XFORM_W/H refuses the capture and paints its raw box, shadow and all. With the
- * default (equal) limits such a node is over the shadow limit too and casts nothing. */
-#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W < ERUI_SCRATCH_W) && (ERUI_XFORM_H < ERUI_SCRATCH_H)
+ * node above ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT refuses the capture and paints its raw box, shadow and all.
+ * With the default (equal) limits such a node is over the shadow limit too and casts nothing. */
+#if ERUI_TRANSFORMS_FULL && (ERUI_TRANSFORM_WIDTH < ERUI_SCRATCH_WIDTH) && (ERUI_TRANSFORM_HEIGHT < ERUI_SCRATCH_HEIGHT)
 #define XFORM_SHADOW_GAP 1
-#define FALLBACK_SIDE (ERUI_XFORM_W + 1)
-#define CAPTURED_SIDE (ERUI_XFORM_W / 2)
+#define FALLBACK_SIDE (ERUI_TRANSFORM_WIDTH + 1)
+#define CAPTURED_SIDE (ERUI_TRANSFORM_WIDTH / 2)
 #endif
 
 /** @brief How the card under test reaches the screen — which damage path measures it. */
@@ -358,8 +360,8 @@ static int check_reported_damage(const char* label)
                 continue; /* unchanged: the host owes it nothing */
             bool covered = false;
             for (int rect_index = 0; rect_index < rect_count && !covered; rect_index++)
-                covered = (column >= rects[rect_index].x && column < rects[rect_index].x + rects[rect_index].w
-                           && row >= rects[rect_index].y && row < rects[rect_index].y + rects[rect_index].h);
+                covered = (column >= rects[rect_index].x && column < rects[rect_index].x + rects[rect_index].width
+                           && row >= rects[rect_index].y && row < rects[rect_index].y + rects[rect_index].height);
             if (covered)
                 continue;
             uncovered++;
@@ -406,7 +408,7 @@ static int run_case(CardKind kind, bool shadowed, Act act, const char* label)
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps root_props = props_default();
-    root_props.position = ER_POS_RELATIVE;
+    root_props.position = ER_POSITION_RELATIVE;
     root_props.width = FRAMEBUFFER_WIDTH;
     root_props.height = FRAMEBUFFER_HEIGHT;
     root_props.background_color = 0xFFFFFFFFU; /* opaque, so a missed erase really shows */
@@ -422,7 +424,7 @@ static int run_case(CardKind kind, bool shadowed, Act act, const char* label)
 
     ERNode* card = er_node_create(ER_NODE_VIEW);
     ERProps card_props = props_default();
-    card_props.position = ER_POS_ABSOLUTE;
+    card_props.position = ER_POSITION_ABSOLUTE;
     card_props.left = CARD_LEFT;
     card_props.top = CARD_TOP;
     card_props.width = (int16_t)side;
@@ -502,7 +504,7 @@ int main(void)
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
     backend.blend_rect = blend_cb;
-    backend.ctx = &ctx;
+    backend.context = &ctx;
     embedded_renderer_set_backend(&backend);
 
     int bad = 0;
@@ -529,10 +531,10 @@ int main(void)
 
 #ifdef XFORM_SHADOW_GAP
     printf("transform limit %dx%d, shadow limit %dx%d → fallback side %d, captured side %d\n",
-           ERUI_XFORM_W,
-           ERUI_XFORM_H,
-           ERUI_SCRATCH_W,
-           ERUI_SCRATCH_H,
+           ERUI_TRANSFORM_WIDTH,
+           ERUI_TRANSFORM_HEIGHT,
+           ERUI_SCRATCH_WIDTH,
+           ERUI_SCRATCH_HEIGHT,
            FALLBACK_SIDE,
            CAPTURED_SIDE);
 
@@ -547,7 +549,8 @@ int main(void)
     bad += run_case(CARD_CAPTURED, true, ACT_REMOVE, "captured: removed (casts no shadow, control)");
     bad += run_case(CARD_CAPTURED, true, ACT_HIDE, "captured: display:none (control)");
 #else
-    printf("(transform-fallback scenarios need ERUI_XFORM_W/H < ERUI_SCRATCH_W/H — skipped)\n");
+    printf("(transform-fallback scenarios need ERUI_TRANSFORM_WIDTH/ERUI_TRANSFORM_HEIGHT < "
+           "ERUI_SCRATCH_WIDTH/ERUI_SCRATCH_HEIGHT — skipped)\n");
 #endif
 
     if (bad)

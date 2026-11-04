@@ -267,7 +267,7 @@ ErContainerStatus er_runtime_load_container_ex(const void* buffer, size_t length
 bool er_runtime_container_has_vendor(const void* buffer, size_t length);
 
 /** @brief Returns a short human-readable string for an ErContainerStatus (for logging). */
-const char* er_runtime_container_status_str(ErContainerStatus status);
+const char* er_runtime_container_status_name(ErContainerStatus status);
 
 /**
  * @brief Loads a container received over hot reload, painting the on-screen error panel on failure (so a

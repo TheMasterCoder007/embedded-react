@@ -50,7 +50,7 @@ export interface IrDecayCurve {
   velocity: number;
 }
 
-/** How an animated value moves: one ERAnimConfig's type-specific fields. */
+/** How an animated value moves: one ERAnimationConfig's type-specific fields. */
 export type IrAnimCurve = IrTimingCurve | IrSpringCurve | IrDecayCurve;
 
 /** One animated value driven toward a target. */

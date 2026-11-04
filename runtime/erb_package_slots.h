@@ -82,7 +82,7 @@ typedef struct
     int active;        /**< The slot running, or ERB_PACKAGE_SLOT_NONE. */
     int staging;       /**< The slot the next package goes into. */
     int rejected;      /**< The newest slot, when it failed to load; else ERB_PACKAGE_SLOT_NONE. */
-    ErbError error;    /**< Why it failed, or ERB_ERR_NO_PACKAGE. Status ERB_OK when neither happened. */
+    ErbError error;    /**< Why it failed, or ERB_ERROR_NO_PACKAGE. Status ERB_OK when neither happened. */
     bool clear_failed; /**< The rejected slot's header still reads as valid, so the next package could replace the
                             last good one. */
 } ErbPackageSlotBoot;

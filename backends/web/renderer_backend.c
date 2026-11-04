@@ -399,13 +399,13 @@ const uint8_t* er_web_framebuffer(void)
 }
 
 EMSCRIPTEN_KEEPALIVE
-int er_web_fb_width(void)
+int er_web_framebuffer_width(void)
 {
     return s_width;
 }
 
 EMSCRIPTEN_KEEPALIVE
-int er_web_fb_height(void)
+int er_web_framebuffer_height(void)
 {
     return s_height;
 }

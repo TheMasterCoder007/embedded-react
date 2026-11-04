@@ -180,7 +180,7 @@ static void blend_rect_cb(
  *
  * @param[in] source              Source pixel buffer (fully opaque, in format's layout).
  * @param[in] source_stride_bytes Row stride of source in bytes.
- * @param[in] format              Pixel format of source (ER_IMG_ARGB8888 or ER_IMG_RGB565).
+ * @param[in] format              Pixel format of source (ER_IMAGE_ARGB8888 or ER_IMAGE_RGB565).
  * @param[in] x                Destination X coordinate.
  * @param[in] y                Destination Y coordinate.
  * @param[in] width                Width of the region in pixels.
@@ -194,7 +194,7 @@ static void copy_rect_fmt_cb(
     SDL_Rect source_rect = {0, 0, width, height};
     SDL_Rect destination_rect = {x, y, width, height};
 
-    if (format == ER_IMG_RGB565)
+    if (format == ER_IMAGE_RGB565)
     {
         SDL_UpdateTexture(context->scratch565, &source_rect, source, source_stride_bytes);
         SDL_RenderCopy(context->renderer, context->scratch565, &source_rect, &destination_rect);
@@ -309,17 +309,17 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int framebuffer_width, int fram
     s_backend.blend_rect = blend_rect_cb;
     s_backend.wait = NULL;
     s_backend.frame_ready = NULL;
-    s_backend.ctx = &s_ctx;
+    s_backend.context = &s_ctx;
 
     /* Opaque native-format blit path. Optional: if the RGB565 texture can't be created the hook stays
      * NULL and the engine falls back to CPU expansion through copy_rect — behaviour is unchanged. */
-    s_backend.copy_rect_fmt = NULL;
+    s_backend.copy_rect_format = NULL;
     s_ctx.scratch565 = SDL_CreateTexture(
         renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, framebuffer_width, framebuffer_height);
     if (s_ctx.scratch565)
     {
         SDL_SetTextureBlendMode(s_ctx.scratch565, SDL_BLENDMODE_NONE);
-        s_backend.copy_rect_fmt = copy_rect_fmt_cb;
+        s_backend.copy_rect_format = copy_rect_fmt_cb;
     }
 
 #if ER_LCD_BANDED
@@ -371,8 +371,8 @@ void er_sdl_present(void)
             SDL_Rect overlay_rect = {
                 (int)((float)dirty_rect.x / s_dirty_scale),
                 (int)((float)dirty_rect.y / s_dirty_scale),
-                (int)((float)dirty_rect.w / s_dirty_scale),
-                (int)((float)dirty_rect.h / s_dirty_scale),
+                (int)((float)dirty_rect.width / s_dirty_scale),
+                (int)((float)dirty_rect.height / s_dirty_scale),
             };
             SDL_SetRenderDrawBlendMode(s_ctx.renderer, SDL_BLENDMODE_NONE);
             SDL_SetRenderDrawColor(

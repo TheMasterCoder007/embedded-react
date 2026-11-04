@@ -238,8 +238,8 @@ static int diff_frames(const uint32_t* first_frame, const uint32_t* second_frame
     {
         bounds->x = min_x;
         bounds->y = min_y;
-        bounds->w = max_x - min_x + 1;
-        bounds->h = max_y - min_y + 1;
+        bounds->width = max_x - min_x + 1;
+        bounds->height = max_y - min_y + 1;
     }
     return count;
 }
@@ -265,8 +265,8 @@ static int unreported_pixels(const uint32_t* before, const uint32_t* after, cons
                 continue;
             bool covered = false;
             for (int rect_index = 0; rect_index < count && !covered; rect_index++)
-                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
-                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h);
+                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].width
+                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].height);
             if (!covered)
                 missed++;
         }
@@ -291,8 +291,8 @@ static int reported_area(const ERRect* rects, int count)
         {
             for (int rect_index = 0; rect_index < count; rect_index++)
             {
-                if (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
-                    && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h)
+                if (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].width
+                    && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].height)
                 {
                     area++;
                     break;
@@ -356,7 +356,7 @@ static int check_singular_crossing(const Scenario* scenario)
 
     ERNode* node = er_node_create(ER_NODE_VIEW);
     ERProps node_props = props_default();
-    node_props.position = ER_POS_ABSOLUTE;
+    node_props.position = ER_POSITION_ABSOLUTE;
     node_props.left = NODE_X;
     node_props.top = NODE_Y;
     node_props.width = NODE_WIDTH;
@@ -437,7 +437,7 @@ static int check_singular_crossing(const Scenario* scenario)
            changed,
            painted_raw ? "raw" : "transformed");
     if (differ)
-        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.w, bbox.h);
+        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.width, bbox.height);
 
     er_node_destroy(root);
 

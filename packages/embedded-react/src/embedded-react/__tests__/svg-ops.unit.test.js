@@ -43,7 +43,7 @@ const CLOSE = 6;
 
 const el = (type, props) => ({type, props});
 
-// Walk the op-tape (args-per-op are fixed by the ER_VOP_* contract) and return each SHAPE's paint
+// Walk the op-tape (args-per-op are fixed by the ER_VECTOR_OP_* contract) and return each SHAPE's paint
 // index. Needed because SHAPE === 0 collides with zero coordinates, so a naive scan is unreliable.
 const ARGUMENTS_PER_OP = {
   [MOVE]: 2,
@@ -241,7 +241,7 @@ describe('flattenSvg gradients', () => {
     ],
   };
 
-  it('collects a strokeGrad and references it 1-based from the paint', () => {
+  it('collects a strokeGradient and references it 1-based from the paint', () => {
     const props = {
       children: {
         type: 'Arc',
@@ -251,7 +251,7 @@ describe('flattenSvg gradients', () => {
           r: 40,
           startAngle: 0,
           endAngle: 90,
-          strokeGrad: grad,
+          strokeGradient: grad,
         },
       },
     };
@@ -260,8 +260,8 @@ describe('flattenSvg gradients', () => {
     expect(gradients[0].type).toBe(3);
     // String stop colours are normalised to ARGB on the way in.
     expect(typeof gradients[0].stops[0].color).toBe('number');
-    expect(paints[8]).toBe(1); // stroke_grad, 1-based
-    expect(paints[7]).toBe(0); // fill_grad stays solid
+    expect(paints[8]).toBe(1); // stroke_gradient, 1-based
+    expect(paints[7]).toBe(0); // fill_gradient stays solid
   });
 
   it('leaves a shape with no gradient solid and the table empty', () => {
@@ -279,7 +279,7 @@ describe('flattenSvg gradients', () => {
       children: {
         type: 'G',
         props: {
-          strokeGrad: grad,
+          strokeGradient: grad,
           children: {
             type: 'Line',
             props: {x1: 0, y1: 0, x2: 10, y2: 10},
@@ -315,13 +315,13 @@ describe('flattenSvg', () => {
     expect(paints[1] >>> 0).toBe(0xff4cc9f0); // stroke
     expect(paints[2]).toBe(3); // width
     expect(paints[4]).toBe(1); // round cap
-    expect(paints[7]).toBe(0); // fill_grad
-    expect(paints[8]).toBe(0); // stroke_grad
+    expect(paints[7]).toBe(0); // fill_gradient
+    expect(paints[8]).toBe(0); // stroke_gradient
     // Circle paint (record 2 starts at index 9): fill set, stroke none.
     expect(paints[9] >>> 0).toBe(0xff16202f);
     expect(paints[10]).toBe(0);
-    expect(paints[16]).toBe(0); // fill_grad
-    expect(paints[17]).toBe(0); // stroke_grad
+    expect(paints[16]).toBe(0); // fill_gradient
+    expect(paints[17]).toBe(0); // stroke_gradient
     // Tape starts with a SHAPE op and contains two of them.
     expect(ops[0]).toBe(SHAPE);
     expect(ops.filter((_, index) => ops[index - 1] === undefined)).toBeTruthy();
@@ -532,7 +532,7 @@ describe('shapesToVector (imperative)', () => {
         arc: [100, 100, 80, 0, 90],
         stroke: '#F2A64B',
         strokeWidth: 20,
-        strokeGrad: {
+        strokeGradient: {
           type: 3, // conic
           ax: 100,
           ay: 100,
@@ -544,8 +544,8 @@ describe('shapesToVector (imperative)', () => {
         },
       },
     ]);
-    expect(paints[7]).toBe(0); // fill_grad — unused
-    expect(paints[8]).toBe(1); // stroke_grad — 1-based index into the table
+    expect(paints[7]).toBe(0); // fill_gradient — unused
+    expect(paints[8]).toBe(1); // stroke_gradient — 1-based index into the table
     expect(gradients.length).toBe(1);
     expect(gradients[0].type).toBe(3);
     // Stop colours given as strings are normalized to packed ARGB for the engine.
@@ -831,7 +831,7 @@ describe('Rect corner radii', () => {
       ],
     });
     // Four straight edges + four corners, and NO arc op: a corner must start at exactly the previous
-    // line's endpoint, which ER_VOP_ARC's cos/sin start point cannot guarantee (the miter-spike trap).
+    // line's endpoint, which ER_VECTOR_OP_ARC's cos/sin start point cannot guarantee (the miter-spike trap).
     expect(walkShape(ops).ops).toEqual([
       MOVE,
       LINE,

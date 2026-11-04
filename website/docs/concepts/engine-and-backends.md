@@ -106,7 +106,7 @@ Three optional extensions cover hardware that the basic contract would waste:
   The ESP32 SPI backend keeps two 40-row RGB565 band buffers, about 38 KB for a 240-wide panel,
   so it can draw one strip while the other flushes. This is how the no-PSRAM ESP32 drives a 240×320 panel
   in 16-bit colour.
-- **Format-aware copy.** `copy_rect_fmt` receives an image that the engine has already proved
+- **Format-aware copy.** `copy_rect_format` receives an image that the engine has already proved
   fully opaque, in its baked format (ARGB8888 or RGB565), as one call for the whole rectangle. A
   DMA2D blitter turns that into a single transfer; an RGB565 framebuffer turns a 565 source into a
   row copy.

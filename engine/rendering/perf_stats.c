@@ -130,7 +130,7 @@ void er_perf_phase_end(ERPerfPhase phase)
     s_phase_open[phase] = false;
 }
 
-void er_perf_raster_begin(ERPerfRasterSub subphase)
+void er_perf_raster_begin(ERPerfRasterSubphase subphase)
 {
     if (!s_frame_open || (int)subphase < 0 || (int)subphase >= (int)ER_PERF_RASTER_COUNT)
     {
@@ -140,7 +140,7 @@ void er_perf_raster_begin(ERPerfRasterSub subphase)
     s_subphase_open[subphase] = true;
 }
 
-void er_perf_raster_end(ERPerfRasterSub subphase)
+void er_perf_raster_end(ERPerfRasterSubphase subphase)
 {
     if (!s_frame_open || (int)subphase < 0 || (int)subphase >= (int)ER_PERF_RASTER_COUNT)
     {
@@ -154,7 +154,7 @@ void er_perf_raster_end(ERPerfRasterSub subphase)
     s_subphase_open[subphase] = false;
 }
 
-void er_perf_js_begin(ERPerfJsSub subphase)
+void er_perf_js_begin(ERPerfJsSubphase subphase)
 {
     if (!s_frame_open || (int)subphase < 0 || (int)subphase >= (int)ER_PERF_JS_COUNT)
     {
@@ -174,7 +174,7 @@ void er_perf_js_begin(ERPerfJsSub subphase)
     s_js_stack[s_js_depth++] = (uint8_t)subphase;
 }
 
-void er_perf_js_end(ERPerfJsSub subphase)
+void er_perf_js_end(ERPerfJsSubphase subphase)
 {
     if (!s_frame_open)
     {
@@ -202,7 +202,7 @@ void er_perf_note_blit(uint32_t elapsed_us, uint32_t pixels)
         return;
     }
     s_current.raster_us[ER_PERF_RASTER_BLIT] += elapsed_us;
-    s_current.blit_px += pixels;
+    s_current.blit_pixels += pixels;
 }
 
 uint32_t er_perf_now_us(void)
@@ -217,29 +217,31 @@ void er_perf_note_repaint(int x, int y, int width, int height)
         return; /* frame_begin zeroed the counters, so a frame that never notes stays at 0 */
     }
     /* Accumulate: the engine notes each disjoint repaint rect separately. dirty_x/y/w/h grow to the
-     * union bounding box; dirty_px sums the areas — exact, since the rects are disjoint, and the
+     * union bounding box; dirty_pixels sums the areas — exact, since the rects are disjoint, and the
      * honest cost number (two small corners sum small even when their bbox spans the screen). */
-    if (s_current.dirty_px == 0U)
+    if (s_current.dirty_pixels == 0U)
     {
         s_current.dirty_x = (int32_t)x;
         s_current.dirty_y = (int32_t)y;
-        s_current.dirty_w = (int32_t)width;
-        s_current.dirty_h = (int32_t)height;
+        s_current.dirty_width = (int32_t)width;
+        s_current.dirty_height = (int32_t)height;
     }
     else
     {
-        const int32_t x1 =
-            (s_current.dirty_x + s_current.dirty_w > x + width) ? s_current.dirty_x + s_current.dirty_w : x + width;
-        const int32_t y1 =
-            (s_current.dirty_y + s_current.dirty_h > y + height) ? s_current.dirty_y + s_current.dirty_h : y + height;
+        const int32_t x1 = (s_current.dirty_x + s_current.dirty_width > x + width)
+                               ? s_current.dirty_x + s_current.dirty_width
+                               : x + width;
+        const int32_t y1 = (s_current.dirty_y + s_current.dirty_height > y + height)
+                               ? s_current.dirty_y + s_current.dirty_height
+                               : y + height;
         if ((int32_t)x < s_current.dirty_x)
             s_current.dirty_x = (int32_t)x;
         if ((int32_t)y < s_current.dirty_y)
             s_current.dirty_y = (int32_t)y;
-        s_current.dirty_w = x1 - s_current.dirty_x;
-        s_current.dirty_h = y1 - s_current.dirty_y;
+        s_current.dirty_width = x1 - s_current.dirty_x;
+        s_current.dirty_height = y1 - s_current.dirty_y;
     }
-    s_current.dirty_px += (uint32_t)width * (uint32_t)height;
+    s_current.dirty_pixels += (uint32_t)width * (uint32_t)height;
 }
 
 void er_perf_frame_end(void)
@@ -298,7 +300,7 @@ void er_perf_frame_end(void)
     /* The composite passes were timed as one span WITH the backend blits they emitted inside it;
      * subtract the blit total so the two buckets are disjoint and the split sums to the raster
      * phase. Clamped at zero: with parallel workers the blit total is CPU time summed across
-     * workers and can legitimately exceed the composite wall span (see ERPerfRasterSub). */
+     * workers and can legitimately exceed the composite wall span (see ERPerfRasterSubphase). */
     if (s_current.raster_us[ER_PERF_RASTER_RENDER] > s_current.raster_us[ER_PERF_RASTER_BLIT])
     {
         s_current.raster_us[ER_PERF_RASTER_RENDER] -= s_current.raster_us[ER_PERF_RASTER_BLIT];
@@ -410,23 +412,23 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
              ER_PERF_MS(worst->phase_us[ER_PERF_PHASE_RASTER]),
              ER_PERF_MS(worst->phase_us[ER_PERF_PHASE_PRESENT]));
 
-    if (worst->dirty_px >= ER_PERF_KILO_THRESHOLD)
+    if (worst->dirty_pixels >= ER_PERF_KILO_THRESHOLD)
     {
         snprintf(s_lines[3],
                  sizeof(s_lines[3]),
                  "PKDRT %dx%d %uk",
-                 (int)worst->dirty_w,
-                 (int)worst->dirty_h,
-                 (unsigned)(worst->dirty_px / ER_PERF_KILO));
+                 (int)worst->dirty_width,
+                 (int)worst->dirty_height,
+                 (unsigned)(worst->dirty_pixels / ER_PERF_KILO));
     }
     else
     {
         snprintf(s_lines[3],
                  sizeof(s_lines[3]),
                  "PKDRT %dx%d %upx",
-                 (int)worst->dirty_w,
-                 (int)worst->dirty_h,
-                 (unsigned)worst->dirty_px);
+                 (int)worst->dirty_width,
+                 (int)worst->dirty_height,
+                 (unsigned)worst->dirty_pixels);
     }
     /* "!FULL" only when the pool actually turned a node away: "VEC 8/8" alone is legitimate (a screen
      * that exactly fills the pool renders fine), so the counter cannot carry this on its own. */
@@ -441,19 +443,19 @@ int er_perf_overlay_lines(const char** lines, int max_lines)
 
     /* The raster split, LAST frame: unlike the PK lines this stays live during a steady-state drag —
      * the case where every frame is equally slow and the peak lines are stuck on the mount frame. W is
-     * the pixels handed to the backend; read it against PKDRT/dirty_px for the write amplification.
+     * the pixels handed to the backend; read it against PKDRT/dirty_pixels for the write amplification.
      * The W field is pre-formatted so each line keeps one literal format string (same k/px switch as
      * the PKDRT line). */
     char blit_last[ER_PERF_FIELD_BYTES];
     char blit_worst[ER_PERF_FIELD_BYTES];
-    if (last->blit_px >= ER_PERF_KILO_THRESHOLD)
-        snprintf(blit_last, sizeof(blit_last), "%uk", (unsigned)(last->blit_px / ER_PERF_KILO));
+    if (last->blit_pixels >= ER_PERF_KILO_THRESHOLD)
+        snprintf(blit_last, sizeof(blit_last), "%uk", (unsigned)(last->blit_pixels / ER_PERF_KILO));
     else
-        snprintf(blit_last, sizeof(blit_last), "%upx", (unsigned)last->blit_px);
-    if (worst->blit_px >= ER_PERF_KILO_THRESHOLD)
-        snprintf(blit_worst, sizeof(blit_worst), "%uk", (unsigned)(worst->blit_px / ER_PERF_KILO));
+        snprintf(blit_last, sizeof(blit_last), "%upx", (unsigned)last->blit_pixels);
+    if (worst->blit_pixels >= ER_PERF_KILO_THRESHOLD)
+        snprintf(blit_worst, sizeof(blit_worst), "%uk", (unsigned)(worst->blit_pixels / ER_PERF_KILO));
     else
-        snprintf(blit_worst, sizeof(blit_worst), "%upx", (unsigned)worst->blit_px);
+        snprintf(blit_worst, sizeof(blit_worst), "%upx", (unsigned)worst->blit_pixels);
 
     snprintf(s_lines[5],
              sizeof(s_lines[5]),
@@ -522,22 +524,22 @@ void er_perf_phase_end(ERPerfPhase phase)
     (void)phase;
 }
 
-void er_perf_raster_begin(ERPerfRasterSub subphase)
+void er_perf_raster_begin(ERPerfRasterSubphase subphase)
 {
     (void)subphase;
 }
 
-void er_perf_raster_end(ERPerfRasterSub subphase)
+void er_perf_raster_end(ERPerfRasterSubphase subphase)
 {
     (void)subphase;
 }
 
-void er_perf_js_begin(ERPerfJsSub subphase)
+void er_perf_js_begin(ERPerfJsSubphase subphase)
 {
     (void)subphase;
 }
 
-void er_perf_js_end(ERPerfJsSub subphase)
+void er_perf_js_end(ERPerfJsSubphase subphase)
 {
     (void)subphase;
 }

@@ -51,8 +51,8 @@
 /* These back STATIC working buffers that the rasterizer touches per-pixel/per-scanline, so on a
  * PSRAM-bss target (ESP32) they must stay in INTERNAL RAM (see the engine component's linker fragment)
  * — sized to fit there. Raise them (and the internal-RAM budget) for very complex paths. */
-#ifndef ERUI_VECTOR_MAX_PTS
-#define ERUI_VECTOR_MAX_PTS 2048 /**< Flattened polyline vertices per shape. */
+#ifndef ERUI_VECTOR_MAX_POINTS
+#define ERUI_VECTOR_MAX_POINTS 2048 /**< Flattened polyline vertices per shape. */
 #endif
 #ifndef ERUI_VECTOR_MAX_SUBPATHS
 #define ERUI_VECTOR_MAX_SUBPATHS 256
@@ -128,7 +128,7 @@
 #define ERUI_VECTOR_ANALYTIC_ARC 1
 #endif
 
-/* ERUI_VEC_WARN_ONCE lives in vector.h (shared with vector_store.c); the knob behind it is
+/* ERUI_VECTOR_WARN_ONCE lives in vector.h (shared with vector_store.c); the knob behind it is
  * ERUI_DIAGNOSTICS in er_diagnostics.h. */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -145,8 +145,8 @@ typedef struct
     int closed;
 } VecSub;
 
-static float s_point_x[ERUI_VECTOR_MAX_PTS];
-static float s_point_y[ERUI_VECTOR_MAX_PTS];
+static float s_point_x[ERUI_VECTOR_MAX_POINTS];
+static float s_point_y[ERUI_VECTOR_MAX_POINTS];
 static int s_point_count;
 static VecSub s_subpaths[ERUI_VECTOR_MAX_SUBPATHS];
 static int s_subpath_count;
@@ -202,9 +202,9 @@ static bool s_recording_failed; /**< The recording overflowed/truncated; entry w
 /** @brief Appends a vertex to the current subpath (last entry of s_subpaths). */
 static void pt_add(float x, float y)
 {
-    if (s_point_count >= ERUI_VECTOR_MAX_PTS)
+    if (s_point_count >= ERUI_VECTOR_MAX_POINTS)
     {
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_PTS", ERUI_VECTOR_MAX_PTS);
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_POINTS", ERUI_VECTOR_MAX_POINTS);
         return;
     }
     if (s_subpath_count == 0)
@@ -228,7 +228,7 @@ static void sub_begin(float x, float y)
 {
     if (s_subpath_count >= ERUI_VECTOR_MAX_SUBPATHS)
     {
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_SUBPATHS", ERUI_VECTOR_MAX_SUBPATHS);
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_SUBPATHS", ERUI_VECTOR_MAX_SUBPATHS);
         return;
     }
     s_subpaths[s_subpath_count].start = s_point_count;
@@ -346,7 +346,7 @@ static void edge_add(float x0, float y0, float x1, float y1)
         return;
     if (s_edge_count >= ERUI_VECTOR_MAX_EDGES)
     {
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_EDGES", ERUI_VECTOR_MAX_EDGES);
         s_edge_truncated = true;
         return;
     }
@@ -721,7 +721,7 @@ static void rasterize(const ERVecEdge* edges,
         return;
     if (width > ERUI_VECTOR_MAX_ROW)
     {
-        ERUI_VEC_WARN_ONCE("ERUI_VECTOR_MAX_ROW", ERUI_VECTOR_MAX_ROW);
+        ERUI_VECTOR_WARN_ONCE("ERUI_VECTOR_MAX_ROW", ERUI_VECTOR_MAX_ROW);
         return;
     }
 #if ERUI_GRADIENT
@@ -1099,7 +1099,7 @@ static bool join_merge(float in_x,
  * @param[in] in_x,in_y  Incoming segment direction (unit).
  * @param[in] out_x,out_y  Outgoing segment direction (unit).
  * @param[in] half_width  Stroke half-width.
- * @param[in] join        ER_VJOIN_* style.
+ * @param[in] join        ER_VECTOR_JOIN_* style.
  * @param[in] miter       Miter limit (multiples of the half-width).
  */
 static void add_join(float vertex_x,
@@ -1120,7 +1120,7 @@ static void add_join(float vertex_x,
     const float outer_in_x = vertex_x + side * in_normal_x, outer_in_y = vertex_y + side * in_normal_y;
     const float outer_out_x = vertex_x + side * out_normal_x, outer_out_y = vertex_y + side * out_normal_y;
 
-    if (join == ER_VJOIN_ROUND)
+    if (join == ER_VECTOR_JOIN_ROUND)
     {
         /* Fan the outer gap with triangles back to the vertex — a true round join in a handful of
          * edges (one triangle for a gentle bend), not a full disc per vertex. */
@@ -1147,7 +1147,7 @@ static void add_join(float vertex_x,
         }
         return;
     }
-    if (join == ER_VJOIN_MITER)
+    if (join == ER_VECTOR_JOIN_MITER)
     {
         /* Miter point = intersection of the two outer offset lines. */
         const float denominator = cross;
@@ -1199,7 +1199,7 @@ static void stroke_subpath(const VecSub* subpath, float stroke_width, int cap, i
 
     if (vertex_count == 1)
     {
-        if (cap == ER_VCAP_ROUND)
+        if (cap == ER_VECTOR_CAP_ROUND)
             add_disc(points_x[0], points_y[0], half_width);
         return;
     }
@@ -1279,7 +1279,7 @@ static void stroke_subpath(const VecSub* subpath, float stroke_width, int cap, i
         float start_x = points_x[start_index], start_y = points_y[start_index], end_x = points_x[end_index],
               end_y = points_y[end_index];
         /* Square cap: extend the open ends by half_width along the segment direction. */
-        if (cap == ER_VCAP_SQUARE && !closed)
+        if (cap == ER_VECTOR_CAP_SQUARE && !closed)
         {
             if (segment == 0)
             {
@@ -1363,7 +1363,7 @@ static void stroke_subpath(const VecSub* subpath, float stroke_width, int cap, i
     }
 
     /* Caps at open endpoints. */
-    if (!closed && cap == ER_VCAP_ROUND)
+    if (!closed && cap == ER_VECTOR_CAP_ROUND)
     {
         add_disc(points_x[0], points_y[0], half_width);
         add_disc(points_x[vertex_count - 1], points_y[vertex_count - 1], half_width);
@@ -1445,12 +1445,12 @@ static float paint_margin(const ERVectorPaint* paint)
         return 1.0f;
     float margin = 1.0f;
     const bool has_stroke =
-        paint->stroke_w > 0.0f && (((paint->stroke >> 24) & 0xFFU) != 0U || paint->stroke_grad != 0);
+        paint->stroke_width > 0.0f && (((paint->stroke >> 24) & 0xFFU) != 0U || paint->stroke_gradient != 0);
     if (has_stroke)
     {
-        const float half_width = paint->stroke_w * 0.5f;
+        const float half_width = paint->stroke_width * 0.5f;
         float reach = VEC_CAP_REACH; /* round/butt/square caps and bevel joins all stay inside 1.5 * half-width */
-        if (paint->join == ER_VJOIN_MITER)
+        if (paint->join == ER_VECTOR_JOIN_MITER)
         {
             const float miter_limit = (paint->miter > 0.0f) ? paint->miter : VEC_DEFAULT_MITER_LIMIT;
             if (miter_limit > reach)
@@ -1497,17 +1497,17 @@ static bool shape_clipped_out(const float* ops,
     bool found_any = false;
     float bounds_x0 = VEC_UNBOUNDED, bounds_y0 = VEC_UNBOUNDED, bounds_x1 = -VEC_UNBOUNDED, bounds_y1 = -VEC_UNBOUNDED;
 
-    while (op_index < op_count && ops[op_index] != ER_VOP_SHAPE)
+    while (op_index < op_count && ops[op_index] != ER_VECTOR_OP_SHAPE)
     {
         const float opcode = ops[op_index++];
-        const int argument_count = (opcode == ER_VOP_MOVE || opcode == ER_VOP_LINE)   ? VEC_POINT_ARGS
-                                   : (opcode == ER_VOP_QUAD)                          ? VEC_QUAD_ARGS
-                                   : (opcode == ER_VOP_CUBIC || opcode == ER_VOP_ARC) ? VEC_CURVE_ARGS
-                                   : (opcode == ER_VOP_CLOSE)                         ? 0
-                                                                                      : -1;
+        const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
+                                   : (opcode == ER_VECTOR_OP_QUAD)                                ? VEC_QUAD_ARGS
+                                   : (opcode == ER_VECTOR_OP_CUBIC || opcode == ER_VECTOR_OP_ARC) ? VEC_CURVE_ARGS
+                                   : (opcode == ER_VECTOR_OP_CLOSE)                               ? 0
+                                                                                                  : -1;
         if (argument_count < 0 || op_index + argument_count > op_count)
             return false; /* unknown or truncated: let the general parser deal with it */
-        if (opcode == ER_VOP_ARC)
+        if (opcode == ER_VECTOR_OP_ARC)
         {
             /* Bound the whole circle: cheaper than working out which quadrants the sweep touches, and
              * a partial arc is only ever a sub-box of it. */
@@ -1593,10 +1593,10 @@ static bool arc_run_match(const float* ops, int op_index, int op_count, int orig
     bool have_move = false, have_arc = false;
     float move_x = 0.0f, move_y = 0.0f, arc_start_x = 0.0f, arc_start_y = 0.0f;
 
-    while (op_index < op_count && ops[op_index] != ER_VOP_SHAPE)
+    while (op_index < op_count && ops[op_index] != ER_VECTOR_OP_SHAPE)
     {
         const float opcode = ops[op_index];
-        if (opcode == ER_VOP_MOVE)
+        if (opcode == ER_VECTOR_OP_MOVE)
         {
             if (have_move || have_arc || op_index + VEC_MOVE_OP_SIZE > op_count)
                 return false; /* a second subpath, or a MOVE after the arc: not a lone arc */
@@ -1605,7 +1605,7 @@ static bool arc_run_match(const float* ops, int op_index, int op_count, int orig
             have_move = true;
             op_index += VEC_MOVE_OP_SIZE;
         }
-        else if (opcode == ER_VOP_ARC)
+        else if (opcode == ER_VECTOR_OP_ARC)
         {
             if (have_arc || op_index + VEC_ARC_OP_SIZE > op_count)
                 return false;
@@ -1639,7 +1639,7 @@ static bool arc_run_match(const float* ops, int op_index, int op_count, int orig
             have_arc = true;
             op_index += VEC_ARC_OP_SIZE;
         }
-        else if (opcode == ER_VOP_CLOSE)
+        else if (opcode == ER_VECTOR_OP_CLOSE)
         {
             if (!have_arc)
                 return false;
@@ -1673,7 +1673,7 @@ static bool arc_paint_ok(const ERVectorPaint* paint, const VecArcRun* arc)
     if (!paint || arc->radius <= 0.0f)
         return false;
     const bool has_fill = ((paint->fill >> 24) & 0xFFU) != 0U;
-    const bool has_stroke = ((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_w > 0.0f;
+    const bool has_stroke = ((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_width > 0.0f;
     if (!has_fill && !has_stroke)
         return false; /* nothing to draw; let the general path no-op */
     /* A filled PARTIAL arc closes on a CHORD (a circular segment), while the analytic core draws a
@@ -1682,9 +1682,9 @@ static bool arc_paint_ok(const ERVectorPaint* paint, const VecArcRun* arc)
         return false;
     if (has_stroke)
     {
-        if (paint->cap == ER_VCAP_SQUARE)
+        if (paint->cap == ER_VECTOR_CAP_SQUARE)
             return false; /* the analytic core has butt and round caps only */
-        if (paint->stroke_w * 0.5f >= arc->radius)
+        if (paint->stroke_width * 0.5f >= arc->radius)
             return false; /* the band swallows the centre and self-intersects — keep the outline path */
     }
     return true;
@@ -1713,12 +1713,12 @@ arc_run_draw(const VecArcRun* arc, const ERVectorPaint* paint, int clip_x0, int 
         sector.color = paint->fill;
         er_arc_fill_sector(&sector);
     }
-    if (((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_w > 0.0f)
+    if (((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_width > 0.0f)
     {
-        const float half_width = paint->stroke_w * 0.5f;
+        const float half_width = paint->stroke_width * 0.5f;
         sector.outer_radius = arc->radius + half_width;
         sector.inner_radius = arc->radius - half_width;
-        sector.cap = (paint->cap == ER_VCAP_ROUND) ? ER_ARC_CAP_ROUND : ER_ARC_CAP_BUTT;
+        sector.cap = (paint->cap == ER_VECTOR_CAP_ROUND) ? ER_ARC_CAP_ROUND : ER_ARC_CAP_BUTT;
         sector.color = paint->stroke;
         er_arc_fill_sector(&sector);
     }
@@ -1746,8 +1746,8 @@ static bool record_arc(const VecArcRun* arc, int paint_index, const ERVectorPain
     /* Ink reach: the radius, plus half the stroke width when one is drawn (arc_paint_ok already
      * limited caps/joins to styles that stay inside it). */
     float reach = arc->radius;
-    if (((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_w > 0.0f)
-        reach += paint->stroke_w * 0.5f;
+    if (((paint->stroke >> 24) & 0xFFU) != 0U && paint->stroke_width > 0.0f)
+        reach += paint->stroke_width * 0.5f;
     pass->bounds_x0 = arc->center_x - reach;
     pass->bounds_y0 = arc->center_y - reach;
     pass->bounds_x1 = arc->center_x + reach;
@@ -1807,7 +1807,7 @@ static void render_tape(const float* ops,
     int op_index = 0;
     while (op_index < op_count)
     {
-        if (ops[op_index] != ER_VOP_SHAPE)
+        if (ops[op_index] != ER_VECTOR_OP_SHAPE)
         {
             op_index++; /* tape must start with SHAPE; skip stray values defensively */
             continue;
@@ -1850,7 +1850,7 @@ static void render_tape(const float* ops,
          * core, skipping flatten + stroke-outline + scanline coverage entirely. A gradient paint keeps
          * the general path — vector gradients carry SVG axis geometry, which the sector core's
          * angle/thickness ramps do not express. */
-        if (shape_paint && shape_paint->fill_grad == 0 && shape_paint->stroke_grad == 0)
+        if (shape_paint && shape_paint->fill_gradient == 0 && shape_paint->stroke_gradient == 0)
         {
             VecArcRun arc_run;
             if (arc_run_match(ops, op_index, op_count, origin_x, origin_y, &arc_run)
@@ -1872,32 +1872,32 @@ static void render_tape(const float* ops,
         s_point_count = 0;
         s_subpath_count = 0;
         float current_x = 0.0f, current_y = 0.0f;
-        while (op_index < op_count && ops[op_index] != ER_VOP_SHAPE)
+        while (op_index < op_count && ops[op_index] != ER_VECTOR_OP_SHAPE)
         {
             const float opcode = ops[op_index++];
             /* Verify this op's args fit within the tape before reading them. A tape truncated mid-op —
              * e.g. the JS bridge capping it at ERUI_VECTOR_TAPE_MAX, or any malformed input — would
              * otherwise read past op_count into adjacent memory, producing NaN/garbage coordinates that
              * index s_cover[] out of bounds and crash. Stop parsing the shape's tail instead. */
-            const int argument_count = (opcode == ER_VOP_MOVE || opcode == ER_VOP_LINE)   ? VEC_POINT_ARGS
-                                       : (opcode == ER_VOP_QUAD)                          ? VEC_QUAD_ARGS
-                                       : (opcode == ER_VOP_CUBIC || opcode == ER_VOP_ARC) ? VEC_CURVE_ARGS
-                                                                                          : 0;
+            const int argument_count = (opcode == ER_VECTOR_OP_MOVE || opcode == ER_VECTOR_OP_LINE)   ? VEC_POINT_ARGS
+                                       : (opcode == ER_VECTOR_OP_QUAD)                                ? VEC_QUAD_ARGS
+                                       : (opcode == ER_VECTOR_OP_CUBIC || opcode == ER_VECTOR_OP_ARC) ? VEC_CURVE_ARGS
+                                                                                                      : 0;
             if (op_index + argument_count > op_count)
                 break;
-            if (opcode == ER_VOP_MOVE)
+            if (opcode == ER_VECTOR_OP_MOVE)
             {
                 current_x = (float)origin_x + ops[op_index++];
                 current_y = (float)origin_y + ops[op_index++];
                 sub_begin(current_x, current_y);
             }
-            else if (opcode == ER_VOP_LINE)
+            else if (opcode == ER_VECTOR_OP_LINE)
             {
                 current_x = (float)origin_x + ops[op_index++];
                 current_y = (float)origin_y + ops[op_index++];
                 pt_add(current_x, current_y);
             }
-            else if (opcode == ER_VOP_QUAD)
+            else if (opcode == ER_VECTOR_OP_QUAD)
             {
                 const float control_x = (float)origin_x + ops[op_index++];
                 const float control_y = (float)origin_y + ops[op_index++];
@@ -1912,7 +1912,7 @@ static void render_tape(const float* ops,
                 current_x = end_x;
                 current_y = end_y;
             }
-            else if (opcode == ER_VOP_CUBIC)
+            else if (opcode == ER_VECTOR_OP_CUBIC)
             {
                 const float control1_x = (float)origin_x + ops[op_index++];
                 const float control1_y = (float)origin_y + ops[op_index++];
@@ -1924,7 +1924,7 @@ static void render_tape(const float* ops,
                 current_x = end_x;
                 current_y = end_y;
             }
-            else if (opcode == ER_VOP_ARC)
+            else if (opcode == ER_VECTOR_OP_ARC)
             {
                 const float arc_center_x = (float)origin_x + ops[op_index++];
                 const float arc_center_y = (float)origin_y + ops[op_index++];
@@ -1939,7 +1939,7 @@ static void render_tape(const float* ops,
                 current_x = arc_center_x + arc_radius * cosf(end_angle);
                 current_y = arc_center_y + arc_radius * sinf(end_angle);
             }
-            else if (opcode == ER_VOP_CLOSE)
+            else if (opcode == ER_VECTOR_OP_CLOSE)
             {
                 if (s_subpath_count > 0)
                 {
@@ -1964,23 +1964,23 @@ static void render_tape(const float* ops,
 #if ERUI_GRADIENT
             ERVectorGradient fill_resolved, stroke_resolved;
             fill_gradient =
-                resolve_grad(paint->fill_grad, gradients, gradient_count, origin_x, origin_y, &fill_resolved);
+                resolve_grad(paint->fill_gradient, gradients, gradient_count, origin_x, origin_y, &fill_resolved);
             stroke_gradient =
-                resolve_grad(paint->stroke_grad, gradients, gradient_count, origin_x, origin_y, &stroke_resolved);
+                resolve_grad(paint->stroke_gradient, gradients, gradient_count, origin_x, origin_y, &stroke_resolved);
 #endif
             if (fill_gradient || ((paint->fill >> 24) & 0xFFU) != 0U)
                 fill_shape(paint->fill,
                            fill_gradient,
-                           paint->fill_rule == ER_VFILL_EVENODD,
+                           paint->fill_rule == ER_VECTOR_FILL_EVENODD,
                            paint_index,
                            clip_left,
                            clip_top,
                            clip_right,
                            clip_bottom);
-            if ((stroke_gradient || ((paint->stroke >> 24) & 0xFFU) != 0U) && paint->stroke_w > 0.0f)
+            if ((stroke_gradient || ((paint->stroke >> 24) & 0xFFU) != 0U) && paint->stroke_width > 0.0f)
                 stroke_shape(paint->stroke,
                              stroke_gradient,
-                             paint->stroke_w,
+                             paint->stroke_width,
                              paint->cap,
                              paint->join,
                              paint->miter > 0.0f ? paint->miter : VEC_DEFAULT_MITER_LIMIT,
@@ -2078,7 +2078,7 @@ static void replay_cache(const ERVecCache* entry,
         const ERVectorGradient* gradient = NULL;
 #if ERUI_GRADIENT
         ERVectorGradient resolved;
-        gradient = resolve_grad((pass->kind == ER_VEC_PASS_FILL) ? paint->fill_grad : paint->stroke_grad,
+        gradient = resolve_grad((pass->kind == ER_VEC_PASS_FILL) ? paint->fill_gradient : paint->stroke_gradient,
                                 gradients,
                                 gradient_count,
                                 origin_x,
@@ -2090,7 +2090,7 @@ static void replay_cache(const ERVecCache* entry,
                       pass->count,
                       paint->fill,
                       gradient,
-                      paint->fill_rule == ER_VFILL_EVENODD,
+                      paint->fill_rule == ER_VECTOR_FILL_EVENODD,
                       clip_x0,
                       clip_y0,
                       clip_x1,

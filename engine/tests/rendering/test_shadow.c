@@ -388,7 +388,7 @@ int main(void)
         child_props.top = 8;
         child_props.width = 4;
         child_props.height = 4;
-        child_props.position = 1;                   /* ER_POS_ABSOLUTE */
+        child_props.position = 1;                   /* ER_POSITION_ABSOLUTE */
         child_props.background_color = 0x00000000U; /* transparent */
         child_props.shadow_color = 0xFF000000U;
         child_props.shadow_offset_x = 0.0f;
@@ -506,7 +506,7 @@ int main(void)
         child_props.top = 4;
         child_props.width = 4;
         child_props.height = 4;
-        child_props.position = 1;                   /* ER_POS_ABSOLUTE */
+        child_props.position = 1;                   /* ER_POSITION_ABSOLUTE */
         child_props.background_color = 0x00000000U; /* transparent */
         child_props.shadow_opacity = 0.0f;          /* use elevation path */
         child_props.elevation = 4;
@@ -603,7 +603,7 @@ int main(void)
 
         ERNode* child = er_node_create(ER_NODE_VIEW);
         ERProps child_props = props_default();
-        child_props.position = ER_POS_ABSOLUTE;
+        child_props.position = ER_POSITION_ABSOLUTE;
         child_props.left = 2;
         child_props.top = 2;
         child_props.width = 4;

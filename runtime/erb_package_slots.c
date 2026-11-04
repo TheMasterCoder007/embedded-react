@@ -161,7 +161,7 @@ void erb_package_slots_show_error(const ErbPackageSlotBoot* boot)
     {
         hint = boot->clear_failed ? HINT_CLEAR_FAILED : HINT_LAST_GOOD;
     }
-    else if (boot->error.status == ERB_ERR_NO_PACKAGE)
+    else if (boot->error.status == ERB_ERROR_NO_PACKAGE)
     {
         hint = HINT_NO_PACKAGE;
     }

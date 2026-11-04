@@ -51,15 +51,15 @@ import type {ProgramGradient, ProgramPaint, ProgramTape} from './writer.mts';
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** The engine's vector opcodes, as their ER_VOP_* names. */
+/** The engine's vector opcodes, as their ER_VECTOR_OP_* names. */
 const VECTOR_OPCODES: Record<string, number> = {
-  ER_VOP_SHAPE: 0,
-  ER_VOP_MOVE: 1,
-  ER_VOP_LINE: 2,
-  ER_VOP_QUAD: 3,
-  ER_VOP_CUBIC: 4,
-  ER_VOP_ARC: 5,
-  ER_VOP_CLOSE: 6,
+  ER_VECTOR_OP_SHAPE: 0,
+  ER_VECTOR_OP_MOVE: 1,
+  ER_VECTOR_OP_LINE: 2,
+  ER_VECTOR_OP_QUAD: 3,
+  ER_VECTOR_OP_CUBIC: 4,
+  ER_VECTOR_OP_ARC: 5,
+  ER_VECTOR_OP_CLOSE: 6,
 };
 
 const CHAIN_OPCODES = {'+': 'FADD', '-': 'FSUB', '*': 'FMUL'} as const;

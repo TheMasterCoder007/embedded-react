@@ -43,7 +43,7 @@ enum
 };
 
 /** @brief ErbPropInfo::anim of a prop nothing animates. */
-#define ERB_NO_ANIM (-1)
+#define ERB_NO_ANIMATION (-1)
 
 /** @brief Prop values the engine has no name for. */
 #define ERB_FONT_WEIGHT_BOLD 1u
@@ -52,10 +52,10 @@ enum
 /** @brief One prop. */
 typedef struct
 {
-    uint16_t offset; /**< offsetof(ERProps, field). */
-    uint8_t kind;    /**< ERB_PK_ value kind. */
-    int8_t anim;     /**< The ERAnimProp that animates it, or ERB_NO_ANIM. */
-    uint16_t max;    /**< ENUM: largest value. STRING and IMAGE: cap in bytes. */
+    uint16_t offset;       /**< offsetof(ERProps, field). */
+    uint8_t kind;          /**< ERB_PROP_KIND_ value kind. */
+    int8_t animation_prop; /**< The ERAnimationProp that animates it, or ERB_NO_ANIMATION. */
+    uint16_t max;          /**< ENUM: largest value. STRING and IMAGE: cap in bytes. */
 } ErbPropInfo;
 
 /**

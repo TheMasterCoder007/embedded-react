@@ -175,7 +175,7 @@ static bool load(Run* run)
     char short_message[SHORT_MESSAGE_BYTES];
     erb_error_message(&run->error, message, sizeof(message));
     erb_error_message(&run->error, short_message, sizeof(short_message));
-    erb_status_str(run->error.status);
+    erb_status_name(run->error.status);
     log_line(message, NULL);
     erb_show_error(&run->error);
     er_commit();
@@ -185,8 +185,8 @@ static bool load(Run* run)
 /** @brief Runs one step of a script. */
 static void step(Run* run, uint8_t operation, uint8_t first_argument, uint8_t second_argument)
 {
-    const int x = (int)((uint32_t)first_argument * run->config.screen_w / ARGUMENT_RANGE);
-    const int y = (int)((uint32_t)second_argument * run->config.screen_h / ARGUMENT_RANGE);
+    const int x = (int)((uint32_t)first_argument * run->config.screen_width / ARGUMENT_RANGE);
+    const int y = (int)((uint32_t)second_argument * run->config.screen_height / ARGUMENT_RANGE);
     switch (operation % OPERATION_COUNT)
     {
         case OPERATION_FRAME:
@@ -301,8 +301,8 @@ static void run_panel(const uint8_t* package,
     run.fonts.extra_count = sizeof(s_extras) / sizeof(s_extras[0]);
     run.config.arena = arena;
     run.config.arena_bytes = arena_bytes;
-    run.config.screen_w = width;
-    run.config.screen_h = height;
+    run.config.screen_width = width;
+    run.config.screen_height = height;
     run.config.natives = s_natives;
     run.config.native_count = sizeof(s_natives) / sizeof(s_natives[0]);
     run.config.fonts = &run.fonts;

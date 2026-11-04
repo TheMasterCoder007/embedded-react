@@ -171,18 +171,18 @@ static void init_layout_defaults(ERLayoutSpec* spec)
     spec->flex_grow = 0;
     spec->flex_shrink = 0;
     spec->flex_basis = ER_LAYOUT_AUTO;
-    spec->flex_direction = ER_FLEX_COL;
+    spec->flex_direction = ER_FLEX_COLUMN;
     spec->flex_wrap = ER_WRAP_NOWRAP;
     spec->align_items = ER_ALIGN_STRETCH;
     spec->align_self = ER_ALIGN_AUTO;
     spec->align_content = ER_ALIGN_CONTENT_FLEX_START;
     spec->justify_content = ER_JUSTIFY_FLEX_START;
-    spec->position = ER_POS_RELATIVE;
+    spec->position = ER_POSITION_RELATIVE;
     spec->aspect_ratio = 0.0f;
-    spec->flex_basis_pct = 0.0f;
-    spec->width_pct = 0.0f;
-    spec->height_pct = 0.0f;
-    spec->left_pct = spec->top_pct = spec->right_pct = spec->bottom_pct = 0.0f;
+    spec->flex_basis_percent = 0.0f;
+    spec->width_percent = 0.0f;
+    spec->height_percent = 0.0f;
+    spec->left_percent = spec->top_percent = spec->right_percent = spec->bottom_percent = 0.0f;
 }
 
 /**
@@ -424,14 +424,14 @@ static void union_dirty_rect(int x, int y, int width, int height)
     {
         cc()->dirty_rect.x = x;
         cc()->dirty_rect.y = y;
-        cc()->dirty_rect.w = width;
-        cc()->dirty_rect.h = height;
+        cc()->dirty_rect.width = width;
+        cc()->dirty_rect.height = height;
         cc()->has_dirty = true;
         return;
     }
 
-    const int right = cc()->dirty_rect.x + cc()->dirty_rect.w;
-    const int bottom = cc()->dirty_rect.y + cc()->dirty_rect.h;
+    const int right = cc()->dirty_rect.x + cc()->dirty_rect.width;
+    const int bottom = cc()->dirty_rect.y + cc()->dirty_rect.height;
     const int new_right = x + width;
     const int new_bottom = y + height;
 
@@ -439,8 +439,8 @@ static void union_dirty_rect(int x, int y, int width, int height)
         cc()->dirty_rect.x = x;
     if (y < cc()->dirty_rect.y)
         cc()->dirty_rect.y = y;
-    cc()->dirty_rect.w = (new_right > right ? new_right : right) - cc()->dirty_rect.x;
-    cc()->dirty_rect.h = (new_bottom > bottom ? new_bottom : bottom) - cc()->dirty_rect.y;
+    cc()->dirty_rect.width = (new_right > right ? new_right : right) - cc()->dirty_rect.x;
+    cc()->dirty_rect.height = (new_bottom > bottom ? new_bottom : bottom) - cc()->dirty_rect.y;
 }
 
 void er_force_full_repaint(void)
@@ -1849,16 +1849,17 @@ static void compute_subtree_bounds(ERNode* node)
  * changes — so after a first full capture, each frame is a single blend of this buffer at the
  * new alpha instead of a re-render + re-composite. Valid while the owning node, its size, and
  * the global content generation are unchanged; ANY content mutation anywhere invalidates it
- * (coarse but O(1) and always safe). Sized by ERUI_FADE_CACHE_W/H; 0 disables the feature. */
-#ifndef ERUI_FADE_CACHE_W
-#define ERUI_FADE_CACHE_W 0
+ * (coarse but O(1) and always safe). Sized by ERUI_FADE_CACHE_WIDTH and ERUI_FADE_CACHE_HEIGHT; 0 disables the
+ * feature. */
+#ifndef ERUI_FADE_CACHE_WIDTH
+#define ERUI_FADE_CACHE_WIDTH 0
 #endif
-#ifndef ERUI_FADE_CACHE_H
-#define ERUI_FADE_CACHE_H 0
+#ifndef ERUI_FADE_CACHE_HEIGHT
+#define ERUI_FADE_CACHE_HEIGHT 0
 #endif
-#define ER_FADE_CACHE_ENABLED (ERUI_FADE_CACHE_W > 0 && ERUI_FADE_CACHE_H > 0)
+#define ER_FADE_CACHE_ENABLED (ERUI_FADE_CACHE_WIDTH > 0 && ERUI_FADE_CACHE_HEIGHT > 0)
 #if ER_FADE_CACHE_ENABLED
-static uint32_t s_fade_cache[(size_t)ERUI_FADE_CACHE_H * ERUI_FADE_CACHE_W];
+static uint32_t s_fade_cache[(size_t)ERUI_FADE_CACHE_HEIGHT * ERUI_FADE_CACHE_WIDTH];
 static uint16_t s_fade_cache_tag = ER_INVALID_TAG; /* owning node */
 static uint32_t s_fade_cache_generation = 0;       /* s_content_generation at capture */
 static int s_fade_cache_width = 0;
@@ -1994,7 +1995,7 @@ static bool composite_from_cache(
 #if ER_FADE_CACHE_ENABLED
     if (cc()->tile_active || !er_scratch_idle() || er_get_draw_alpha() != ER_ALPHA_OPAQUE)
         return false;
-    if (width <= 0 || height <= 0 || width > ERUI_FADE_CACHE_W || height > ERUI_FADE_CACHE_H)
+    if (width <= 0 || height <= 0 || width > ERUI_FADE_CACHE_WIDTH || height > ERUI_FADE_CACHE_HEIGHT)
         return false;
 
     /* The cache buffer is the node BOX. A subtree that paints past it does not fit, and capturing it
@@ -2012,7 +2013,7 @@ static bool composite_from_cache(
     if (s_fade_cache_tag == node->tag && s_fade_cache_generation == s_content_generation && s_fade_cache_width == width
         && s_fade_cache_height == height)
     {
-        er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, box_x, box_y, width, height);
+        er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_WIDTH * (int)sizeof(uint32_t), alpha, box_x, box_y, width, height);
         return true;
     }
 
@@ -2043,8 +2044,8 @@ static bool composite_from_cache(
     s_fade_capture_commit = s_commit_sequence;
 
     for (int row = 0; row < height; row++)
-        memset(s_fade_cache + (size_t)row * ERUI_FADE_CACHE_W, 0, (size_t)width * sizeof(uint32_t));
-    er_scratch_push_base(s_fade_cache, ERUI_FADE_CACHE_W, ERUI_FADE_CACHE_H, box_x, box_y);
+        memset(s_fade_cache + (size_t)row * ERUI_FADE_CACHE_WIDTH, 0, (size_t)width * sizeof(uint32_t));
+    er_scratch_push_base(s_fade_cache, ERUI_FADE_CACHE_WIDTH, ERUI_FADE_CACHE_HEIGHT, box_x, box_y);
     render_node_content(node, true, false, box_x, box_y, width, height, translate_x, translate_y);
     er_scratch_pop_base();
 
@@ -2052,7 +2053,7 @@ static bool composite_from_cache(
     s_fade_cache_generation = s_content_generation;
     s_fade_cache_width = width;
     s_fade_cache_height = height;
-    er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_W * (int)sizeof(uint32_t), alpha, box_x, box_y, width, height);
+    er_blit_blend(s_fade_cache, ERUI_FADE_CACHE_WIDTH * (int)sizeof(uint32_t), alpha, box_x, box_y, width, height);
     return true;
 #else
     (void)node;
@@ -2412,8 +2413,8 @@ static int paint_masked_text(const char* text, const ERTextRenderParams* params)
     const int dot_size = (size * 3 + 4) / 8; /* 6 px at 16 px */
     const int dot_gap = (size / 4 > 2) ? size / 4 : 2;
     const int y = params->clip.y + (line_height - dot_size) / 2;
-    const bool fits = y >= params->clip.y && y + dot_size <= params->clip.y + params->clip.h;
-    const int right = params->clip.x + params->clip.w;
+    const bool fits = y >= params->clip.y && y + dot_size <= params->clip.y + params->clip.height;
+    const int right = params->clip.x + params->clip.width;
     int x = params->clip.x + dot_gap / 2;
     int count = 0;
     for (const char* cursor = text; *cursor; cursor++)
@@ -2705,8 +2706,8 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
         cc()->transform_capturing = true;
         cc()->transform_capture_destination.x = destination_x;
         cc()->transform_capture_destination.y = destination_y;
-        cc()->transform_capture_destination.w = destination_width;
-        cc()->transform_capture_destination.h = destination_height;
+        cc()->transform_capture_destination.width = destination_width;
+        cc()->transform_capture_destination.height = destination_height;
     }
 
     /* Record where this node is painted so the next commit can damage-clip a move: the old rect
@@ -2777,7 +2778,8 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
     {
         if (outer_capturing)
         {
-            union_dirty_rect(outer_destination.x, outer_destination.y, outer_destination.w, outer_destination.h);
+            union_dirty_rect(
+                outer_destination.x, outer_destination.y, outer_destination.width, outer_destination.height);
         }
         else if (transformed_footprint)
         {
@@ -3455,8 +3457,8 @@ static void dispatch_layout_events(ERNode* node, ERLayoutRect parent_rect)
             EREventData data = {0};
             data.layout_rect.x = relative.x;
             data.layout_rect.y = relative.y;
-            data.layout_rect.w = relative.width;
-            data.layout_rect.h = relative.height;
+            data.layout_rect.width = relative.width;
+            data.layout_rect.height = relative.height;
             handler->callback(node, &data, handler->user_data);
         }
     }
@@ -3511,7 +3513,7 @@ void er_pool_limits(ERPoolLimits* limits)
     limits->images = (uint16_t)ERUI_IMAGE_REGISTRY_MAX;
     limits->font_families = (uint16_t)FONT_REGISTRY_MAX;
     limits->font_sizes = (uint16_t)FONT_FAMILY_MAX_SIZES;
-    er_anim_pool_limits(limits);
+    er_animation_pool_limits(limits);
 }
 
 ERNode* er_get_root_node(void)
@@ -3616,12 +3618,12 @@ ERNode* er_node_create(ERNodeType type)
     if (type == ER_NODE_ACTIVITY_INDICATOR)
     {
         node->props.activity_indicator.animating = 1U;
-        ERAnimConfig config;
+        ERAnimationConfig config;
         memset(&config, 0, sizeof(config));
-        config.type = ER_ANIM_TIMING;
+        config.type = ER_ANIMATION_TIMING;
         config.duration_ms = ER_ACTIVITY_SPIN_MS;
         config.loop = true;
-        er_anim_start(node, ER_PROP_ROTATE_Z, 360.0f, &config);
+        er_animation_start(node, ER_PROP_ROTATE_Z, 360.0f, &config);
     }
 
     /* TextInput: default to editable. */
@@ -3664,13 +3666,13 @@ void er_node_destroy(ERNode* node)
     }
     /* Cut every animation loose from this node — its tag is about to be recycled onto the free list, and
      * anything still pointing at it would drive whatever node next reuses it. Three separate tables hold
-     * such a reference: ERAnimValue bindings (er_anim_unbind_node), animations keyed by tag
-     * (er_anim_cancel_node, groups included) and layout animations (er_layout_anim_cancel_node). The tick
+     * such a reference: ERAnimationValue bindings (er_animation_unbind_node), animations keyed by tag
+     * (er_animation_cancel_node, groups included) and layout animations (er_layout_animation_cancel_node). The tick
      * functions each drop a reference whose node has gone, but only while the tag is still unclaimed —
      * a node created before the next tick inherits it. */
-    er_anim_unbind_node(node->tag);
-    er_anim_cancel_node(node->tag);
-    er_layout_anim_cancel_node(node->tag);
+    er_animation_unbind_node(node->tag);
+    er_animation_cancel_node(node->tag);
+    er_layout_animation_cancel_node(node->tag);
     /* A touch handler destroying nodes mid-dispatch must not let the rest of the dispatch reach their slots. */
     er_input_forget_node(node->tag);
     /* The focus goes with the input, or the next node in its slot would take the typing. No blur: the node is
@@ -3929,13 +3931,13 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     spec->display = props->display;
     spec->overflow = props->overflow;
     spec->aspect_ratio = props->aspect_ratio;
-    spec->flex_basis_pct = props->flex_basis_pct;
-    spec->width_pct = props->width_pct;
-    spec->height_pct = props->height_pct;
-    spec->left_pct = props->left_pct;
-    spec->top_pct = props->top_pct;
-    spec->right_pct = props->right_pct;
-    spec->bottom_pct = props->bottom_pct;
+    spec->flex_basis_percent = props->flex_basis_percent;
+    spec->width_percent = props->width_percent;
+    spec->height_percent = props->height_percent;
+    spec->left_percent = props->left_percent;
+    spec->top_percent = props->top_percent;
+    spec->right_percent = props->right_percent;
+    spec->bottom_percent = props->bottom_percent;
     node->z_index = props->z_index;
     node->pointer_events = props->pointer_events;
     node->hit_slop_left = props->hit_slop_left;
@@ -4046,16 +4048,16 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             if (props->animating && !was_animating)
             {
                 /* (Re-)start the looping spin animation. */
-                ERAnimConfig config;
+                ERAnimationConfig config;
                 memset(&config, 0, sizeof(config));
-                config.type = ER_ANIM_TIMING;
+                config.type = ER_ANIMATION_TIMING;
                 config.duration_ms = ER_ACTIVITY_SPIN_MS;
                 config.loop = true;
-                er_anim_start(node, ER_PROP_ROTATE_Z, 360.0f, &config);
+                er_animation_start(node, ER_PROP_ROTATE_Z, 360.0f, &config);
             }
             else if (!props->animating && was_animating)
             {
-                er_anim_cancel(node, ER_PROP_ROTATE_Z);
+                er_animation_cancel(node, ER_PROP_ROTATE_Z);
             }
             break;
         }
@@ -4070,12 +4072,12 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             /* Animate the thumb when the value changes. */
             if (props->switch_value != old_value)
             {
-                ERAnimConfig config;
+                ERAnimationConfig config;
                 memset(&config, 0, sizeof(config));
-                config.type = ER_ANIM_TIMING;
+                config.type = ER_ANIMATION_TIMING;
                 config.easing = ER_EASE_EASE_IN_OUT;
                 config.duration_ms = ER_SWITCH_THUMB_MS;
-                er_anim_start(node, ER_PROP_SWITCH_THUMB, props->switch_value ? 1.0f : 0.0f, &config);
+                er_animation_start(node, ER_PROP_SWITCH_THUMB, props->switch_value ? 1.0f : 0.0f, &config);
             }
             break;
         }
@@ -4176,10 +4178,10 @@ void er_node_set_props(ERNode* node, const ERProps* props)
             break;
     }
 
-    /* Native-driver props (opacity/transform/color animated via an ERAnimValue) are owned by the
+    /* Native-driver props (opacity/transform/color animated via an ERAnimationValue) are owned by the
      * animation, not this declarative update — restore them so a React commitUpdate doesn't snap
      * the node back to its static value mid-animation. No-op when nothing is bound to this node. */
-    er_anim_reapply_bound(node);
+    er_animation_reapply_bound(node);
 
     /* Props may change layout inputs (size, flex, margins, text content/font). Conservatively
      * request a layout pass; only when something actually changed (see the hash gate above) —
@@ -4364,8 +4366,8 @@ void er_node_set_text_spans(ERNode* node, const ERTextSpan* spans, uint8_t count
         destination->letter_spacing = spans[span_index].letter_spacing;
     }
 
-    const bool pinned_width = (node->layout.width != ER_LAYOUT_AUTO) || (node->layout.width_pct > 0.0f);
-    const bool pinned_height = (node->layout.height != ER_LAYOUT_AUTO) || (node->layout.height_pct > 0.0f);
+    const bool pinned_width = (node->layout.width != ER_LAYOUT_AUTO) || (node->layout.width_percent > 0.0f);
+    const bool pinned_height = (node->layout.height != ER_LAYOUT_AUTO) || (node->layout.height_percent > 0.0f);
     const bool single_line = (node->props.text.number_of_lines == 1U);
     if (!(pinned_width && (single_line || pinned_height)))
     {
@@ -4529,11 +4531,11 @@ static bool vec_diff_dirty_rect(const float* old_tape,
     while (tape_index < old_count)
     {
         if (old_tape[tape_index] != new_tape[tape_index])
-            return false;                                       /* opcode / shape structure differs */
+            return false; /* opcode / shape structure differs */
         const int code = fabsf(old_tape[tape_index]) < VEC_OPCODE_LIMIT
                              ? (int)old_tape[tape_index]
                              : -1; /* a package's VSET can write any float here */
-        if (code == (int)ER_VOP_SHAPE)
+        if (code == (int)ER_VECTOR_OP_SHAPE)
         {
             tape_index++;
             if (tape_index < old_count)
@@ -4547,16 +4549,16 @@ static bool vec_diff_dirty_rect(const float* old_tape,
         }
         tape_index++; /* consume opcode (identical in both tapes) */
         const bool pen_moved = have_pen && (old_pen_x != new_pen_x || old_pen_y != new_pen_y);
-        if (code == (int)ER_VOP_MOVE || code == (int)ER_VOP_LINE)
+        if (code == (int)ER_VECTOR_OP_MOVE || code == (int)ER_VECTOR_OP_LINE)
         {
             if (tape_index + 2 > old_count)
                 return false;
 
             const bool changed =
                 (old_tape[tape_index] != new_tape[tape_index] || old_tape[tape_index + 1] != new_tape[tape_index + 1]);
-            if (changed || (code == (int)ER_VOP_LINE && pen_moved))
+            if (changed || (code == (int)ER_VECTOR_OP_LINE && pen_moved))
             {
-                if (code == (int)ER_VOP_LINE)
+                if (code == (int)ER_VECTOR_OP_LINE)
                     VEC_ADD_PEN(); /* the segment sweeps from the pen, not just between the endpoints */
                 VEC_ADD_POINT(old_tape[tape_index], old_tape[tape_index + 1]);
                 VEC_ADD_POINT(new_tape[tape_index], new_tape[tape_index + 1]);
@@ -4565,7 +4567,7 @@ static bool vec_diff_dirty_rect(const float* old_tape,
             old_pen_y = old_tape[tape_index + 1];
             new_pen_x = new_tape[tape_index];
             new_pen_y = new_tape[tape_index + 1];
-            if (code == (int)ER_VOP_MOVE)
+            if (code == (int)ER_VECTOR_OP_MOVE)
             {
                 old_start_x = old_pen_x;
                 old_start_y = old_pen_y;
@@ -4575,7 +4577,7 @@ static bool vec_diff_dirty_rect(const float* old_tape,
             have_pen = true;
             tape_index += 2;
         }
-        else if (code == (int)ER_VOP_QUAD)
+        else if (code == (int)ER_VECTOR_OP_QUAD)
         {
             if (tape_index + 4 > old_count)
                 return false;
@@ -4598,7 +4600,7 @@ static bool vec_diff_dirty_rect(const float* old_tape,
             have_pen = true;
             tape_index += 4;
         }
-        else if (code == (int)ER_VOP_CUBIC)
+        else if (code == (int)ER_VECTOR_OP_CUBIC)
         {
             if (tape_index + 6 > old_count)
                 return false;
@@ -4622,7 +4624,7 @@ static bool vec_diff_dirty_rect(const float* old_tape,
             have_pen = true;
             tape_index += 6;
         }
-        else if (code == (int)ER_VOP_ARC)
+        else if (code == (int)ER_VECTOR_OP_ARC)
         {
             if (tape_index + 6 > old_count)
                 return false;
@@ -4691,7 +4693,7 @@ static bool vec_diff_dirty_rect(const float* old_tape,
             have_pen = true;
             tape_index += 6;
         }
-        else if (code == (int)ER_VOP_CLOSE)
+        else if (code == (int)ER_VECTOR_OP_CLOSE)
         {
             /* No coordinates of its own, but it draws pen -> subpath start, which sweeps when either end
              * moved — the `Z` on a rotating `M cx cy L tip Z` needle. */
@@ -4726,7 +4728,7 @@ static bool vec_diff_dirty_rect(const float* old_tape,
     float fringe = VEC_DAMAGE_PAD;
     for (int paint_index = 0; paint_index < new_paint_count; paint_index++)
     {
-        const float stroke_width = new_paints[paint_index].stroke_w;
+        const float stroke_width = new_paints[paint_index].stroke_width;
         if (stroke_width > 0.0f)
         {
             const float reach = stroke_width * 0.5f + VEC_DAMAGE_PAD;
@@ -4929,13 +4931,14 @@ void er_text_input_key(uint32_t keycode, const char* utf8_char)
 #if ERUI_ONSCREEN_KEYBOARD
 
 /* ---- Built-in default layout: lowercase / UPPERCASE / numbers / symbols, the iOS-style QWERTY pages. ---- */
-#define KEY_CHAR(text) {(text), (text), ER_KBD_KEY_CHAR, 0, 2, 0xFFU} /* char key, span 2 */
-#define KEY_SPACE {NULL, " ", ER_KBD_KEY_CHAR, 0, 12, 0xFFU}          /* blank space bar */
-#define KEY_BACKSPACE {"<", NULL, ER_KBD_KEY_BACKSPACE, 0, 3, 0xFFU}
-#define KEY_DONE {"OK", NULL, ER_KBD_KEY_DONE, 0, 4, 0xFFU}
+#define KEY_CHAR(text) {(text), (text), ER_KEYBOARD_KEY_CHAR, 0, 2, 0xFFU} /* char key, span 2 */
+#define KEY_SPACE {NULL, " ", ER_KEYBOARD_KEY_CHAR, 0, 12, 0xFFU}          /* blank space bar */
+#define KEY_BACKSPACE {"<", NULL, ER_KEYBOARD_KEY_BACKSPACE, 0, 3, 0xFFU}
+#define KEY_DONE {"OK", NULL, ER_KEYBOARD_KEY_DONE, 0, 4, 0xFFU}
 #define KEY_SWITCH_ROW2(label, target, highlight)                                                                      \
-    {(label), NULL, ER_KBD_KEY_LAYER, (target), 3, (highlight)}                              /* row-2 left switch */
-#define KEY_SWITCH_ROW3(label, target) {(label), NULL, ER_KBD_KEY_LAYER, (target), 4, 0xFFU} /* row-3 left switch */
+    {(label), NULL, ER_KEYBOARD_KEY_LAYER, (target), 3, (highlight)} /* row-2 left switch */
+#define KEY_SWITCH_ROW3(label, target)                                                                                 \
+    {(label), NULL, ER_KEYBOARD_KEY_LAYER, (target), 4, 0xFFU} /* row-3 left switch */
 
 static const ERKeyboardKey s_lower_row0[] = {KEY_CHAR("q"),
                                              KEY_CHAR("w"),
@@ -5120,32 +5123,33 @@ static int er_kbd_rows(void)
  * fingertip: below it the keys stop being reliably hittable on the small panels this runs on, and it
  * wins over the divisor on a short screen. The ceiling then wins over both — a keyboard past half the
  * screen leaves nothing to type into. */
-#define ER_KBD_ROW_HEIGHT_DIVISOR 11
-#define ER_KBD_ROW_HEIGHT_MIN 24
-#define ER_KBD_MAX_SCREEN_FRACTION 2 /* strip height <= screen_height / this */
+#define ER_KEYBOARD_ROW_HEIGHT_DIVISOR 11
+#define ER_KEYBOARD_ROW_HEIGHT_MIN 24
+#define ER_KEYBOARD_MAX_SCREEN_FRACTION 2 /* strip height <= screen_height / this */
 
 /* Defaults for the ERKeyboardConfig fields left 0. */
-#define ER_KBD_GRID_COLUMNS 20
-#define ER_KBD_KEY_GAP 2
-#define ER_KBD_KEY_RADIUS 5
-#define ER_KBD_FONT_SIZE 16
-#define ER_KBD_KEY_COLOR 0xFF2A3340U
-#define ER_KBD_KEY_ACTIVE_COLOR 0xFF4A6488U
-#define ER_KBD_LABEL_COLOR 0xFFE7EDF5U
-#define ER_KBD_PANEL_COLOR 0xFF12181FU
+#define ER_KEYBOARD_GRID_COLUMNS 20
+#define ER_KEYBOARD_KEY_GAP 2
+#define ER_KEYBOARD_KEY_RADIUS 5
+#define ER_KEYBOARD_FONT_SIZE 16
+#define ER_KEYBOARD_KEY_COLOR 0xFF2A3340U
+#define ER_KEYBOARD_KEY_ACTIVE_COLOR 0xFF4A6488U
+#define ER_KEYBOARD_LABEL_COLOR 0xFFE7EDF5U
+#define ER_KEYBOARD_PANEL_COLOR 0xFF12181FU
 
 /** @brief Gap (px) kept between a focused input and the keyboard strip above it. */
-#define ER_KBD_INPUT_CLEARANCE 8
+#define ER_KEYBOARD_INPUT_CLEARANCE 8
 
 /** @brief Per-row height: configured, else a fraction of the screen; floored for touch, capped for room. */
 static int er_kbd_row_h(int screen_height)
 {
     const ERKeyboardConfig* config = er_kbd_cfg();
-    int row_height = config->row_height_px ? (int)config->row_height_px : (screen_height / ER_KBD_ROW_HEIGHT_DIVISOR);
-    if (row_height < ER_KBD_ROW_HEIGHT_MIN)
-        row_height = ER_KBD_ROW_HEIGHT_MIN;
+    int row_height =
+        config->row_height_px ? (int)config->row_height_px : (screen_height / ER_KEYBOARD_ROW_HEIGHT_DIVISOR);
+    if (row_height < ER_KEYBOARD_ROW_HEIGHT_MIN)
+        row_height = ER_KEYBOARD_ROW_HEIGHT_MIN;
     const int rows = er_kbd_rows();
-    const int max_strip = screen_height / ER_KBD_MAX_SCREEN_FRACTION;
+    const int max_strip = screen_height / ER_KEYBOARD_MAX_SCREEN_FRACTION;
     if (row_height * rows > max_strip)
         row_height = max_strip / rows;
     return row_height;
@@ -5157,8 +5161,8 @@ static void er_keyboard_rect(int screen_width, int screen_height, ERRect* out)
     const int strip_height = er_kbd_row_h(screen_height) * er_kbd_rows();
     out->x = 0;
     out->y = screen_height - strip_height;
-    out->w = screen_width;
-    out->h = strip_height;
+    out->width = screen_width;
+    out->height = strip_height;
 }
 
 /** One laid-out key: its screen rect, the source key descriptor, and whether to draw it highlighted. */
@@ -5180,10 +5184,10 @@ static void er_kbd_foreach(int screen_width, int screen_height, er_kbd_key_fn ca
         return;
     ERRect strip;
     er_keyboard_rect(screen_width, screen_height, &strip);
-    const int grid = config->grid_cols ? (int)config->grid_cols : ER_KBD_GRID_COLUMNS;
-    const int column_width = strip.w / grid;
+    const int grid = config->grid_columns ? (int)config->grid_columns : ER_KEYBOARD_GRID_COLUMNS;
+    const int column_width = strip.width / grid;
     const int row_height = er_kbd_row_h(screen_height);
-    const int gap = config->key_gap_px ? (int)config->key_gap_px : ER_KBD_KEY_GAP;
+    const int gap = config->key_gap_px ? (int)config->key_gap_px : ER_KEYBOARD_KEY_GAP;
     const ERKeyboardLayer* layer = &layers[s_keyboard_layer];
 
     for (uint8_t row_index = 0; row_index < layer->count; row_index++)
@@ -5205,7 +5209,7 @@ static void er_kbd_foreach(int screen_width, int screen_height, er_kbd_key_fn ca
             hit.width = span * column_width - 2 * gap;
             hit.height = row_height - 2 * gap;
             hit.key = key;
-            hit.highlight = (key->type == ER_KBD_KEY_LAYER && key->highlight_layer == s_keyboard_layer);
+            hit.highlight = (key->type == ER_KEYBOARD_KEY_LAYER && key->highlight_layer == s_keyboard_layer);
             callback(&hit, user_data);
             column += span;
         }
@@ -5216,11 +5220,11 @@ static void er_kbd_foreach(int screen_width, int screen_height, er_kbd_key_fn ca
 static void er_kbd_draw_key(const ERKbdHit1* hit, void* user_data)
 {
     const ERKeyboardConfig* config = (const ERKeyboardConfig*)user_data;
-    const uint32_t key_color = config->key_color ? config->key_color : ER_KBD_KEY_COLOR;
-    const uint32_t active_color = config->key_active_color ? config->key_active_color : ER_KBD_KEY_ACTIVE_COLOR;
-    const uint32_t label_color = config->label_color ? config->label_color : ER_KBD_LABEL_COLOR;
-    const int radius = config->key_radius_px ? (int)config->key_radius_px : ER_KBD_KEY_RADIUS;
-    const int font_size = config->font_size_px ? (int)config->font_size_px : ER_KBD_FONT_SIZE;
+    const uint32_t key_color = config->key_color ? config->key_color : ER_KEYBOARD_KEY_COLOR;
+    const uint32_t active_color = config->key_active_color ? config->key_active_color : ER_KEYBOARD_KEY_ACTIVE_COLOR;
+    const uint32_t label_color = config->label_color ? config->label_color : ER_KEYBOARD_LABEL_COLOR;
+    const int radius = config->key_radius_px ? (int)config->key_radius_px : ER_KEYBOARD_KEY_RADIUS;
+    const int font_size = config->font_size_px ? (int)config->font_size_px : ER_KEYBOARD_FONT_SIZE;
     er_rrect_fill_bordered(
         hit->highlight ? active_color : key_color, 0xFF000000U, 0, hit->x, hit->y, hit->width, hit->height, radius);
     const char* label = hit->key->label ? hit->key->label : hit->key->text;
@@ -5248,7 +5252,11 @@ void er_keyboard_draw(int screen_width, int screen_height)
     const ERKeyboardConfig* config = er_kbd_cfg();
     ERRect strip;
     er_keyboard_rect(screen_width, screen_height, &strip);
-    er_blit_fill(config->panel_color ? config->panel_color : ER_KBD_PANEL_COLOR, strip.x, strip.y, strip.w, strip.h);
+    er_blit_fill(config->panel_color ? config->panel_color : ER_KEYBOARD_PANEL_COLOR,
+                 strip.x,
+                 strip.y,
+                 strip.width,
+                 strip.height);
     er_kbd_foreach(screen_width, screen_height, er_kbd_draw_key, (void*)config);
 }
 
@@ -5280,7 +5288,7 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
     const int screen_height = (int)root->computed.height;
     ERRect strip;
     er_keyboard_rect(screen_width, screen_height, &strip);
-    if (x < strip.x || x >= strip.x + strip.w || y < strip.y || y >= strip.y + strip.h)
+    if (x < strip.x || x >= strip.x + strip.width || y < strip.y || y >= strip.y + strip.height)
         return false; /* outside the keyboard → let the scene handle the touch */
     if (phase == ER_TOUCH_DOWN)
     {
@@ -5293,14 +5301,14 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
         {
             switch (search.key->type)
             {
-                case ER_KBD_KEY_LAYER:
+                case ER_KEYBOARD_KEY_LAYER:
                     s_keyboard_layer = search.key->layer;
                     s_keyboard_dirty = true; /* the whole keyboard relabels → repaint its strip next commit */
                     break;
-                case ER_KBD_KEY_BACKSPACE:
+                case ER_KEYBOARD_KEY_BACKSPACE:
                     er_text_input_key(ER_KEY_BACKSPACE, NULL);
                     break;
-                case ER_KBD_KEY_DONE:
+                case ER_KEYBOARD_KEY_DONE:
                 {
                     /* Submit, then blur, unless the app's handler moved the focus itself. A ref, since a node
                        made in the handler can reuse a destroyed input's tag. */
@@ -5313,7 +5321,7 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
                     }
                     break;
                 }
-                case ER_KBD_KEY_CHAR:
+                case ER_KEYBOARD_KEY_CHAR:
                 default:
                     er_text_input_key(0, search.key->text ? search.key->text : "");
                     break;
@@ -5555,8 +5563,8 @@ void er_reset(void)
     /* Reset the per-scene subsystems. The render backend, registered images, and registered/built-in
      * fonts are kept; the monotonic clock (s_now_ms) is preserved so time never runs backwards across
      * a reload. */
-    er_anim_reset();
-    er_layout_anim_reset();
+    er_animation_reset();
+    er_layout_animation_reset();
     er_vector_reset();
     er_input_reset();
 }
@@ -5627,11 +5635,11 @@ static void commit_error_screen(void)
             const int strip_height =
                 screen_height - strip_top < backend->band_height ? screen_height - strip_top : backend->band_height;
             if (backend->band_begin)
-                backend->band_begin(0, strip_top, screen_width, strip_height, backend->ctx);
+                backend->band_begin(0, strip_top, screen_width, strip_height, backend->context);
             er_set_band(strip_top, strip_height);
             er_error_screen_draw();
             if (backend->band_flush)
-                backend->band_flush(backend->ctx);
+                backend->band_flush(backend->context);
         }
         er_set_band(0, 0);
     }
@@ -5644,8 +5652,8 @@ static void commit_error_screen(void)
     er_damage_set_clear(&debt->set);
     s_dirty_rect.x = 0;
     s_dirty_rect.y = 0;
-    s_dirty_rect.w = screen_width;
-    s_dirty_rect.h = screen_height;
+    s_dirty_rect.width = screen_width;
+    s_dirty_rect.height = screen_height;
     s_has_dirty = screen_width > 0 && screen_height > 0;
     er_damage_set_clear(&s_last_paint_set);
     er_damage_set_add(&s_last_paint_set, 0, 0, screen_width, screen_height);
@@ -5723,7 +5731,7 @@ void er_commit(void)
                 er_keyboard_rect((int)root->computed.width, (int)root->computed.height, &strip);
                 const int input_bottom =
                     (int)input->animated.y + (int)input->animated.height; /* unshifted layout pos */
-                const int needed = input_bottom + ER_KBD_INPUT_CLEARANCE - strip.y;
+                const int needed = input_bottom + ER_KEYBOARD_INPUT_CLEARANCE - strip.y;
                 if (needed > 0)
                     avoid_y = needed;
             }
@@ -5743,7 +5751,7 @@ void er_commit(void)
      * skips this whole block — the computed rects from the previous layout remain valid, and the
      * post-layout passes that read them would produce identical results, so they are simply not
      * re-run. render_tree() below still runs every commit to repaint dirty nodes. */
-    const bool layout_ran = (s_layout_dirty || er_layout_anim_has_pending());
+    const bool layout_ran = (s_layout_dirty || er_layout_animation_has_pending());
     if (layout_ran)
     {
         ER_PERF_BEGIN(ER_PERF_PHASE_LAYOUT);
@@ -5757,7 +5765,7 @@ void er_commit(void)
         er_layout_compute(s_root_tag, root_width, root_height);
         anchor_arc_children(root);
         refresh_scroll_content_sizes(root);
-        er_layout_anim_post_layout(root);
+        er_layout_animation_post_layout(root);
         dispatch_layout_events(root, (ERLayoutRect){0});
         compute_subtree_bounds(root); /* refresh cached prune bounds; stay valid through static frames */
         s_subtree_bounds_dirty = false;
@@ -5784,7 +5792,7 @@ void er_commit(void)
      * decides what to repaint, the composite itself, and the dirty-flag sweep. Attributed as one
      * RASTER phase — the pre-pass walks the whole node pool, so it belongs with the paint cost it is
      * there to reduce rather than in an unaccounted gap. Within it, the sub-steps that can
-     * independently blow up are marked separately (ERPerfRasterSub): the pre-pass and the flag sweep
+     * independently blow up are marked separately (ERPerfRasterSubphase): the pre-pass and the flag sweep
      * are ERUI_MAX_NODES-proportional floors paid even by an idle commit, while composite and blit
      * scale with the damage — the split is what tells a "the pool walk dominates" frame from a "the
      * framebuffer writes dominate" one. */
@@ -5835,16 +5843,22 @@ void er_commit(void)
             add_damage(&damage,
                        removed->x,
                        removed->y,
-                       removed->w,
-                       removed->h,
+                       removed->width,
+                       removed->height,
                        render_left,
                        render_top,
                        render_right,
                        render_bottom);
             /* Clamped to the root the same way add_damage clamps its insert, so a footprint that lies
              * (partly) off-screen is never reported as repainted when it was not. */
-            report_repaint_clamped(
-                removed->x, removed->y, removed->w, removed->h, render_left, render_top, render_right, render_bottom);
+            report_repaint_clamped(removed->x,
+                                   removed->y,
+                                   removed->width,
+                                   removed->height,
+                                   render_left,
+                                   render_top,
+                                   render_right,
+                                   render_bottom);
         }
 #if ERUI_ONSCREEN_KEYBOARD
         /* On-screen keyboard show/hide/layer-switch: repaint its bottom strip once (then GRAM retains it). */
@@ -5852,8 +5866,15 @@ void er_commit(void)
         {
             ERRect strip;
             er_keyboard_rect((int)root->computed.width, (int)root->computed.height, &strip);
-            add_damage(
-                &damage, strip.x, strip.y, strip.w, strip.h, render_left, render_top, render_right, render_bottom);
+            add_damage(&damage,
+                       strip.x,
+                       strip.y,
+                       strip.width,
+                       strip.height,
+                       render_left,
+                       render_top,
+                       render_right,
+                       render_bottom);
         }
 #endif
         for (uint16_t tag = 0U; tag < (uint16_t)ERUI_MAX_NODES; tag++)
@@ -6198,8 +6219,8 @@ void er_commit(void)
             er_damage_set_bounds(&damage, &bounds);
             render_left = bounds.x;
             render_top = bounds.y;
-            render_right = bounds.x + bounds.w;
-            render_bottom = bounds.y + bounds.h;
+            render_right = bounds.x + bounds.width;
+            render_bottom = bounds.y + bounds.height;
             render_full = false; /* narrowed to the damage rects */
         }
         else if (trackable)
@@ -6245,8 +6266,8 @@ void er_commit(void)
                         er_damage_set_add(&s_buffer_debt[buffer].set,
                                           damage.rects[rect_index].x,
                                           damage.rects[rect_index].y,
-                                          damage.rects[rect_index].w,
-                                          damage.rects[rect_index].h);
+                                          damage.rects[rect_index].width,
+                                          damage.rects[rect_index].height);
         }
 
         /* (2) Derive this commit's render set from the CURRENT buffer's debt (what it still owes). */
@@ -6268,8 +6289,8 @@ void er_commit(void)
             er_damage_set_bounds(&damage, &bounds);
             render_left = bounds.x;
             render_top = bounds.y;
-            render_right = bounds.x + bounds.w;
-            render_bottom = bounds.y + bounds.h;
+            render_right = bounds.x + bounds.width;
+            render_bottom = bounds.y + bounds.height;
             render_full = false;
             nothing_dirty = false;
         }
@@ -6288,7 +6309,7 @@ void er_commit(void)
     /* Enable subtree pruning only when no layout animation is interpolating positions (which would
      * leave the cached computed-space bounds stale). A full repaint pushes no clip, so render_tree()
      * pruning self-disables there regardless. */
-    s_prune_ok = !er_layout_anim_has_pending() && !er_layout_anim_is_active();
+    s_prune_ok = !er_layout_animation_has_pending() && !er_layout_animation_is_active();
 
     /* Rect count is a trade: each rect is a separate clipped pass, and a pass costs a tree walk plus
      * the pixels it touches. With pruning on, the walk is O(nodes near that rect), so many small rects
@@ -6320,8 +6341,8 @@ void er_commit(void)
         for (uint8_t rect_index = 0U; rect_index < damage.count; rect_index++)
             ER_PERF_REPAINT(damage.rects[rect_index].x,
                             damage.rects[rect_index].y,
-                            damage.rects[rect_index].w,
-                            damage.rects[rect_index].h);
+                            damage.rects[rect_index].width,
+                            damage.rects[rect_index].height);
     }
 
     ER_PERF_RASTER_END(ER_PERF_RASTER_PREPASS);
@@ -6364,7 +6385,7 @@ void er_commit(void)
                 for (uint8_t rect_index = 0U; rect_index < damage.count; rect_index++)
                 {
                     const int rect_top = damage.rects[rect_index].y;
-                    const int rect_bottom = damage.rects[rect_index].y + damage.rects[rect_index].h;
+                    const int rect_bottom = damage.rects[rect_index].y + damage.rects[rect_index].height;
                     int range_index = range_count++;
                     while (range_index > 0 && range_tops[range_index - 1] > rect_top)
                     {
@@ -6411,7 +6432,7 @@ void er_commit(void)
                     if (backend->band_begin)
                     {
                         ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
-                        backend->band_begin(frame_x, band_y, frame_width, band_height, backend->ctx);
+                        backend->band_begin(frame_x, band_y, frame_width, band_height, backend->context);
                         ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
                     }
                     er_set_band(band_y, band_height);
@@ -6422,7 +6443,7 @@ void er_commit(void)
                     if (backend->band_flush)
                     {
                         ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
-                        backend->band_flush(backend->ctx);
+                        backend->band_flush(backend->context);
                         ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
                     }
                 }
@@ -6512,15 +6533,15 @@ void er_commit(void)
             for (uint8_t rect_index = 0U; rect_index < damage.count; rect_index++)
             {
                 const ERRect* rect = &damage.rects[rect_index];
-                if (can_parallel && rect->h >= worker_count * ER_PARALLEL_MIN_ROWS)
+                if (can_parallel && rect->height >= worker_count * ER_PARALLEL_MIN_ROWS)
                 {
                     ParallelRenderJob job;
                     job.root = root;
                     job.full_recomposite = full_recomposite;
                     job.left = rect->x;
-                    job.right = rect->x + rect->w;
+                    job.right = rect->x + rect->width;
                     job.top = rect->y;
-                    job.bottom = rect->y + rect->h;
+                    job.bottom = rect->y + rect->height;
                     job.slice_count = worker_count;
                     job.keyboard_avoid_y = s_keyboard_avoid_y;
                     s_parallel_render = true;
@@ -6530,12 +6551,12 @@ void er_commit(void)
                 }
                 else
                 {
-                    er_push_clip_rect(rect->x, rect->y, rect->w, rect->h);
+                    er_push_clip_rect(rect->x, rect->y, rect->width, rect->height);
                     render_tree(
                         root, full_recomposite, false, 0, s_keyboard_avoid_y); /* scene shifted up for keyboard */
                     er_pop_clip_rect();
                 }
-                er_push_clip_rect(rect->x, rect->y, rect->w, rect->h);
+                er_push_clip_rect(rect->x, rect->y, rect->width, rect->height);
                 er_keyboard_draw((int)root->computed.width, (int)root->computed.height); /* overlay, per-rect clip */
                 er_pop_clip_rect();
             }
@@ -6568,18 +6589,18 @@ void er_commit(void)
         }
         else
         {
-            const int right = painted_rect.x + painted_rect.w > context->dirty_rect.x + context->dirty_rect.w
-                                  ? painted_rect.x + painted_rect.w
-                                  : context->dirty_rect.x + context->dirty_rect.w;
-            const int bottom = painted_rect.y + painted_rect.h > context->dirty_rect.y + context->dirty_rect.h
-                                   ? painted_rect.y + painted_rect.h
-                                   : context->dirty_rect.y + context->dirty_rect.h;
+            const int right = painted_rect.x + painted_rect.width > context->dirty_rect.x + context->dirty_rect.width
+                                  ? painted_rect.x + painted_rect.width
+                                  : context->dirty_rect.x + context->dirty_rect.width;
+            const int bottom = painted_rect.y + painted_rect.height > context->dirty_rect.y + context->dirty_rect.height
+                                   ? painted_rect.y + painted_rect.height
+                                   : context->dirty_rect.y + context->dirty_rect.height;
             if (context->dirty_rect.x < painted_rect.x)
                 painted_rect.x = context->dirty_rect.x;
             if (context->dirty_rect.y < painted_rect.y)
                 painted_rect.y = context->dirty_rect.y;
-            painted_rect.w = right - painted_rect.x;
-            painted_rect.h = bottom - painted_rect.y;
+            painted_rect.width = right - painted_rect.x;
+            painted_rect.height = bottom - painted_rect.y;
         }
     }
 
@@ -6618,9 +6639,9 @@ void er_commit(void)
         {
             painted_rect.x = render_left;
             painted_rect.y = render_top;
-            painted_rect.w = render_right - render_left;
-            painted_rect.h = render_bottom - render_top;
-            painted_has = (painted_rect.w > 0 && painted_rect.h > 0);
+            painted_rect.width = render_right - render_left;
+            painted_rect.height = render_bottom - render_top;
+            painted_has = (painted_rect.width > 0 && painted_rect.height > 0);
         }
         s_dirty_rect = painted_rect;
         s_has_dirty = painted_has;
@@ -6678,8 +6699,8 @@ bool er_get_dirty_rect(ERRect* out)
         {
             out->x = 0;
             out->y = 0;
-            out->w = 0;
-            out->h = 0;
+            out->width = 0;
+            out->height = 0;
         }
     }
     return s_has_dirty;

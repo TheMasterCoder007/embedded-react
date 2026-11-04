@@ -66,14 +66,14 @@ const JUSTIFY: EnumTable = {
   'space-evenly': 'ER_JUSTIFY_SPACE_EVENLY',
 };
 const FLEX_DIRECTION: EnumTable = {
-  column: 'ER_FLEX_COL',
+  column: 'ER_FLEX_COLUMN',
   row: 'ER_FLEX_ROW',
   'row-reverse': 'ER_FLEX_ROW_REVERSE',
-  'column-reverse': 'ER_FLEX_COL_REVERSE',
+  'column-reverse': 'ER_FLEX_COLUMN_REVERSE',
 };
 const POSITION: EnumTable = {
-  relative: 'ER_POS_RELATIVE',
-  absolute: 'ER_POS_ABSOLUTE',
+  relative: 'ER_POSITION_RELATIVE',
+  absolute: 'ER_POSITION_ABSOLUTE',
 };
 const DISPLAY: EnumTable = {flex: 'ER_DISPLAY_FLEX', none: 'ER_DISPLAY_NONE'};
 
@@ -287,16 +287,16 @@ const dimension = (value: unknown): PropConstant => {
 };
 
 /**
- * A dimension that may be a percentage. `'50%'` → the engine's float `*_pct` field (% of the parent);
+ * A dimension that may be a percentage. `'50%'` → the engine's float `*_percent` field (% of the parent);
  * a number → the pixel field. Used for width / height / flexBasis and the four insets, all of which the
  * engine resolves at layout.
  *
  * @param pixelField  ERProps pixel field (e.g. 'width').
- * @param percentField  ERProps percentage field (e.g. 'width_pct').
+ * @param percentField  ERProps percentage field (e.g. 'width_percent').
  *
  * @returns The lowering for that key.
  */
-const pctOrPx =
+const percentOrPixels =
   (pixelField: string, percentField: string): StyleLowering =>
   value => {
     if (typeof value === 'string' && value.trim().endsWith('%')) {
@@ -322,9 +322,9 @@ const pctOrPx =
  */
 const KEYS: Record<string, StyleLowering> = {
   // Layout
-  width: pctOrPx('width', 'width_pct'),
-  height: pctOrPx('height', 'height_pct'),
-  flexBasis: pctOrPx('flex_basis', 'flex_basis_pct'),
+  width: percentOrPixels('width', 'width_percent'),
+  height: percentOrPixels('height', 'height_percent'),
+  flexBasis: percentOrPixels('flex_basis', 'flex_basis_percent'),
   minWidth: width => [{field: 'min_width', value: dimension(width)}],
   maxWidth: width => [{field: 'max_width', value: dimension(width)}],
   minHeight: height => [{field: 'min_height', value: dimension(height)}],
@@ -385,10 +385,10 @@ const KEYS: Record<string, StyleLowering> = {
   display: display => [
     {field: 'display', value: enumKey(DISPLAY, 'display')(display)},
   ],
-  left: pctOrPx('left', 'left_pct'),
-  top: pctOrPx('top', 'top_pct'),
-  right: pctOrPx('right', 'right_pct'),
-  bottom: pctOrPx('bottom', 'bottom_pct'),
+  left: percentOrPixels('left', 'left_percent'),
+  top: percentOrPixels('top', 'top_percent'),
+  right: percentOrPixels('right', 'right_percent'),
+  bottom: percentOrPixels('bottom', 'bottom_percent'),
   // `flex: n` → grow=n, shrink=1, basis=0 (RN semantics; matches native_ui_bridge apply_flex).
   flex: flexValue => {
     const factor = Number(flexValue);

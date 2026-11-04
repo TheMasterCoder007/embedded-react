@@ -233,8 +233,8 @@ static int diff_frames(const uint32_t* first_frame, const uint32_t* second_frame
     {
         bbox->x = min_x;
         bbox->y = min_y;
-        bbox->w = max_x - min_x + 1;
-        bbox->h = max_y - min_y + 1;
+        bbox->width = max_x - min_x + 1;
+        bbox->height = max_y - min_y + 1;
     }
     return count;
 }
@@ -260,8 +260,8 @@ static int unreported_pixels(const uint32_t* before, const uint32_t* after, cons
                 continue;
             bool covered = false;
             for (int rect_index = 0; rect_index < count && !covered; rect_index++)
-                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
-                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h);
+                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].width
+                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].height);
             if (!covered)
                 missed++;
         }
@@ -286,8 +286,8 @@ static int reported_area(const ERRect* rects, int count)
         {
             for (int rect_index = 0; rect_index < count; rect_index++)
             {
-                if (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
-                    && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h)
+                if (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].width
+                    && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].height)
                 {
                     area++;
                     break;
@@ -350,7 +350,7 @@ static int check_ancestor_flip(const Scenario* scenario, Flip flip)
      * that captures — and the inner one below is refused. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
     ERProps outer_props = props_default();
-    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.position = ER_POSITION_ABSOLUTE;
     outer_props.left = (int16_t)scenario->outer_x;
     outer_props.top = (int16_t)scenario->outer_y;
     outer_props.width = 100;
@@ -363,7 +363,7 @@ static int check_ancestor_flip(const Scenario* scenario, Flip flip)
      * inside the outer's source is decided entirely by the outer. */
     ERNode* inner = er_node_create(ER_NODE_VIEW);
     ERProps inner_props = props_default();
-    inner_props.position = ER_POS_ABSOLUTE;
+    inner_props.position = ER_POSITION_ABSOLUTE;
     inner_props.left = (int16_t)scenario->inner_x;
     inner_props.top = (int16_t)scenario->inner_y;
     inner_props.width = 60;
@@ -434,7 +434,7 @@ static int check_ancestor_flip(const Scenario* scenario, Flip flip)
            idle_differ,
            changed);
     if (differ)
-        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.w, bbox.h);
+        printf("  divergence bbox %d,%d %dx%d\n", bbox.x, bbox.y, bbox.width, bbox.height);
 
     er_node_destroy(root);
 

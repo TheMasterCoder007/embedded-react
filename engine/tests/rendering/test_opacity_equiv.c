@@ -291,7 +291,7 @@ static int test_overflowing_child(TestCtx* test_context)
     /* Translucent group with a small box... */
     ERNode* group = er_node_create(ER_NODE_VIEW);
     ERProps group_props = props_default();
-    group_props.position = ER_POS_ABSOLUTE;
+    group_props.position = ER_POSITION_ABSOLUTE;
     group_props.left = 0;
     group_props.top = 0;
     group_props.width = 8;
@@ -303,7 +303,7 @@ static int test_overflowing_child(TestCtx* test_context)
     /* ...and a child that lays out entirely OUTSIDE it. */
     ERNode* child = er_node_create(ER_NODE_VIEW);
     ERProps child_props = props_default();
-    child_props.position = ER_POS_ABSOLUTE;
+    child_props.position = ER_POSITION_ABSOLUTE;
     child_props.left = 12;
     child_props.top = 12;
     child_props.width = 12;
@@ -374,7 +374,7 @@ static uint32_t rnd(uint32_t bound)
 static ERProps rand_box(void)
 {
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     if (rnd(5) < 2)
     {
         props.left = 0;

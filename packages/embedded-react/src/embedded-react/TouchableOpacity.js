@@ -22,7 +22,7 @@
 //   <Pressable style={[styles.tile, {opacity: dim}]} onPressIn={…} onPressOut={…}>…</Pressable>
 //
 // The fade is a native-driver animation, not a re-render: the two press handlers hand the engine a
-// target opacity and a duration, and it runs the ramp in C (er_anim_value_*). Nothing re-enters JS per
+// target opacity and a duration, and it runs the ramp in C (er_animation_value_*). Nothing re-enters JS per
 // frame, and the subtree React just built is not touched at all.
 //
 // Worth knowing before wrapping a whole screen in one: an opacity below 1 makes the Pressable an

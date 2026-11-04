@@ -92,7 +92,7 @@ extern "C"
     /**
      * @brief Returns a description of the last self-test failure ("" when it passed).
      */
-    const char* er_pie_diag(void);
+    const char* er_pie_diagnostics(void);
 
     /**
      * @brief Blends ONE pixel exactly as a PIE lane does — the shared scalar form of the SIMD math.
@@ -112,8 +112,8 @@ extern "C"
      *                   other value (use -1) = the truncating er_pie_fill_row_565() math.
      * @param[in] column    Column index within the row, which selects the checkerboard lane.
      */
-    static inline uint16_t
-    er_pie_blend_px_565(uint16_t destination_pixel, uint32_t source_pixel, uint8_t global_alpha, int phase, int column)
+    static inline uint16_t er_pie_blend_pixel_565(
+        uint16_t destination_pixel, uint32_t source_pixel, uint8_t global_alpha, int phase, int column)
     {
         uint32_t alpha = source_pixel >> 24;
         uint32_t red = (source_pixel >> 16) & 0xFFU;

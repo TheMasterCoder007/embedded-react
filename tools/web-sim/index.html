@@ -200,8 +200,8 @@
         const pump = Module.cwrap('er_web_pump', null, ['number']);
         const touch = Module.cwrap('er_web_touch', null, ['number', 'number', 'number']);
         const framebuffer = Module.cwrap('er_web_framebuffer', 'number', []);
-        const framebufferWidth = Module.cwrap('er_web_fb_width', 'number', []);
-        const framebufferHeight = Module.cwrap('er_web_fb_height', 'number', []);
+        const framebufferWidth = Module.cwrap('er_web_framebuffer_width', 'number', []);
+        const framebufferHeight = Module.cwrap('er_web_framebuffer_height', 'number', []);
 
         const MIN_SCREEN_SIZE = 64;
         const MAX_SCREEN_SIZE = 4096;

@@ -98,26 +98,26 @@ target_compile_definitions(er_engine PUBLIC
     ERUI_MAX_NODES=48  # two-page pager (watch face + level page) is 42 nodes; each node is ~1.3 KB of .bss
                        # (plus per-node layout work-arrays), so keep this trimmed to fit beside the framebuffer
     ERUI_MAX_OPACITY_DEPTH=1
-    ERUI_SCRATCH_W=8
-    ERUI_SCRATCH_H=8
+    ERUI_SCRATCH_WIDTH=8
+    ERUI_SCRATCH_HEIGHT=8
     ERUI_FONT_POOL_BYTES=0
-    ERUI_MAX_IMG_ROW_PIXELS=240
+    ERUI_MAX_IMAGE_ROW_PIXELS=240
     ER_DAMAGE_RECTS_MAX=4      # the engine default (16) pays ~1.2 KB of .bss (6 rect sets) to keep clips
                                # tight on screens full of scattered updaters. A watch face has a handful
                                # of updaters, and this board has ~15 KB of heap left after the
                                # 240x280 framebuffer, so it takes the smaller budget.
     ERUI_IMAGE_REGISTRY_MAX=8  # the watch face registers none; the engine default (128) is sized for
                                # icon-heavy apps and would cost ~10 KB of .bss this board cannot spare
-    ERUI_MAX_ANIMATIONS=16     # the watch face runs none; the defaults (64 animations, 32 values, 8 groups)
-    ERUI_MAX_ANIM_VALUES=8     # cost ~16 KB of .bss, and the Flow B runtime needs that room. A package that
-    ERUI_MAX_ANIM_GROUPS=4     # needs more is rejected at load, saying which
+    ERUI_MAX_ANIMATIONS=16      # the watch face runs none; the defaults (64 animations, 32 values, 8 groups)
+    ERUI_MAX_ANIMATION_VALUES=8 # cost ~16 KB of .bss, and the Flow B runtime needs that room. A package that
+    ERUI_MAX_ANIMATION_GROUPS=4 # needs more is rejected at load, saying which
 )
 # Vector rasterizer pools (internal to vector.c → PRIVATE). The current digital watch face uses NO <Svg>,
 # so these are sized to the floor — just enough that the pools exist. Bump them if a demo brings back
 # vector art (e.g. an analog dial): the edge pool + its three edge-sized work arrays are the second-biggest
 # .bss cost after the node pool, so shrinking them here buys back a lot of headroom beside the framebuffer.
 target_compile_definitions(er_engine PRIVATE
-    ERUI_VECTOR_MAX_PTS=64
+    ERUI_VECTOR_MAX_POINTS=64
     ERUI_VECTOR_MAX_SUBPATHS=8
     ERUI_VECTOR_MAX_EDGES=256
     ERUI_VECTOR_MAX_ROW=240
@@ -131,7 +131,7 @@ target_compile_definitions(er_engine PRIVATE
 target_compile_definitions(er_engine PUBLIC
     ERUI_VECTOR_TAPE_MAX=64
     ERUI_VECTOR_PAINTS_MAX=8
-    ERUI_VECTOR_GRADS_MAX=1
+    ERUI_VECTOR_GRADIENTS_MAX=1
 )
 
 # --- Flow B runtime --------------------------------------------------------------------------------

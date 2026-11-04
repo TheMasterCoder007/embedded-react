@@ -181,19 +181,19 @@ int main(void)
         const bool painted = er_get_dirty_rect(&dirty);
 
         printf("layout passes: %u\n", passes);
-        printf("dirty rect: x=%d y=%d w=%d h=%d painted=%d\n", dirty.x, dirty.y, dirty.w, dirty.h, painted);
+        printf("dirty rect: x=%d y=%d w=%d h=%d painted=%d\n", dirty.x, dirty.y, dirty.width, dirty.height, painted);
 
         if (passes == 0)
         {
             fprintf(stderr, "FAIL: no layout pass ran\n");
             status = 1;
         }
-        else if (!painted || dirty.w <= 0 || dirty.h <= 0)
+        else if (!painted || dirty.width <= 0 || dirty.height <= 0)
         {
             fprintf(stderr, "FAIL: commit repainted nothing\n");
             status = 1;
         }
-        else if (dirty.w > SMOKE_SCREEN_WIDTH || dirty.h > SMOKE_SCREEN_HEIGHT)
+        else if (dirty.width > SMOKE_SCREEN_WIDTH || dirty.height > SMOKE_SCREEN_HEIGHT)
         {
             fprintf(stderr, "FAIL: dirty rect exceeds screen bounds\n");
             status = 1;

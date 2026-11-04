@@ -70,23 +70,23 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=42           # the thermostat's 41 and one spare; each slot is ~1.4 KB of .bss
     ERUI_MAX_OPACITY_DEPTH=1
-    ERUI_SCRATCH_W=8
-    ERUI_SCRATCH_H=8
+    ERUI_SCRATCH_WIDTH=8
+    ERUI_SCRATCH_HEIGHT=8
     ERUI_FONT_POOL_BYTES=0
-    ERUI_MAX_IMG_ROW_PIXELS=240
+    ERUI_MAX_IMAGE_ROW_PIXELS=240
     ERUI_IMAGE_REGISTRY_MAX=16  # the engine default (128) is sized for icon-heavy apps at ~80 B/slot;
                                 # ~10 KB of .bss does not fit beside the 150 KB framebuffer here
     ER_DAMAGE_RECTS_MAX=4       # the engine default (16) buys tight clips on screens full of scattered
                                 # updaters; this one is a single dial, so it would spend ~1.2 KB of .bss
                                 # (6 rect sets) on rects it can never fill. DRAM here is 93% full.
     ERUI_MAX_ANIMATIONS=16      # the thermostat runs none; the defaults (64 animations, 32 values, 8 groups)
-    ERUI_MAX_ANIM_VALUES=8      # cost ~18 KB of .bss, and the Flow B runtime needs that room. A package that
-    ERUI_MAX_ANIM_GROUPS=4      # needs more is rejected at load, saying which
+    ERUI_MAX_ANIMATION_VALUES=8 # cost ~18 KB of .bss, and the Flow B runtime needs that room. A package that
+    ERUI_MAX_ANIMATION_GROUPS=4 # needs more is rejected at load, saying which
 )
 
 # The SVG/vector rasterizer's static pools
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    ERUI_VECTOR_MAX_PTS=512      # flattened vertices per shape (a 270° wide-stroke arc bakes to cubics → ~200+ pts)
+    ERUI_VECTOR_MAX_POINTS=512   # flattened vertices per shape (a 270° wide-stroke arc bakes to cubics → ~200+ pts)
     ERUI_VECTOR_MAX_SUBPATHS=8
     ERUI_VECTOR_MAX_EDGES=1536   # stroke-outline edges for the largest single shape. A wide-stroke 240° arc
                                  # tessellates to >600, and 600 truncated on HW (ERUI_VECTOR_MAX_EDGES
@@ -104,7 +104,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_VECTOR_TAPE_MAX=256     # op-tape floats per node (the dial is ~45)
     ERUI_VECTOR_PAINTS_MAX=16    # paints per node (the dial uses 4)
-    ERUI_VECTOR_GRADS_MAX=2      # gradient entries per node (the dial uses none; default 8 → trim RAM)
+    ERUI_VECTOR_GRADIENTS_MAX=2  # gradient entries per node (the dial uses none; default 8 → trim RAM)
 )
 
 # Perf overlay off (saves code/RAM); the host doesn't gather metrics either.

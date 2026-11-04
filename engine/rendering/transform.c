@@ -50,11 +50,11 @@
 /* Source buffer: the untransformed subtree is rendered into this scratch slot. One per render
  * worker so concurrent transform captures on disjoint screen regions never collide (each extra
  * worker costs a full buffer — document when raising ERUI_RENDER_WORKERS). */
-static uint32_t s_transform_source_pool[ERUI_RENDER_WORKERS][ERUI_XFORM_H * ERUI_XFORM_W];
+static uint32_t s_transform_source_pool[ERUI_RENDER_WORKERS][ERUI_TRANSFORM_HEIGHT * ERUI_TRANSFORM_WIDTH];
 /* Row segment buffer: transformed output is streamed out one row segment at a time
- * (≤ ERUI_XFORM_W pixels), so the destination AABB is not size-limited — only the
+ * (≤ ERUI_TRANSFORM_WIDTH pixels), so the destination AABB is not size-limited — only the
  * SOURCE subtree must fit the scratch. */
-static uint32_t s_transform_row_pool[ERUI_RENDER_WORKERS][ERUI_XFORM_W];
+static uint32_t s_transform_row_pool[ERUI_RENDER_WORKERS][ERUI_TRANSFORM_WIDTH];
 
 /**
  * @brief Per-worker transform-capture state (see er_render_worker_id).
@@ -129,7 +129,7 @@ static inline uint32_t er_blend4(
  * unpremultiply/repremultiply pass is needed.  Out-of-bounds neighbours
  * are treated as fully transparent (0).
  *
- * @param[in] source         Source pixel buffer (row stride = ERUI_XFORM_W).
+ * @param[in] source         Source pixel buffer (row stride = ERUI_TRANSFORM_WIDTH).
  * @param[in] source_width   Logical width of the source region.
  * @param[in] source_height  Logical height of the source region.
  * @param[in] sample_x       Sub-pixel X in source-local coordinates.
@@ -148,13 +148,13 @@ static uint32_t er_bilerp(const uint32_t* source, int source_width, int source_h
     const uint32_t weight_y = (uint32_t)((sample_y - (float)y0) * ER_BILERP_WEIGHT_SCALE);
 
     const uint32_t corner00 =
-        (x0 >= 0 && x0 < source_width && y0 >= 0 && y0 < source_height) ? source[y0 * ERUI_XFORM_W + x0] : 0u;
+        (x0 >= 0 && x0 < source_width && y0 >= 0 && y0 < source_height) ? source[y0 * ERUI_TRANSFORM_WIDTH + x0] : 0u;
     const uint32_t corner10 =
-        (x1 >= 0 && x1 < source_width && y0 >= 0 && y0 < source_height) ? source[y0 * ERUI_XFORM_W + x1] : 0u;
+        (x1 >= 0 && x1 < source_width && y0 >= 0 && y0 < source_height) ? source[y0 * ERUI_TRANSFORM_WIDTH + x1] : 0u;
     const uint32_t corner01 =
-        (x0 >= 0 && x0 < source_width && y1 >= 0 && y1 < source_height) ? source[y1 * ERUI_XFORM_W + x0] : 0u;
+        (x0 >= 0 && x0 < source_width && y1 >= 0 && y1 < source_height) ? source[y1 * ERUI_TRANSFORM_WIDTH + x0] : 0u;
     const uint32_t corner11 =
-        (x1 >= 0 && x1 < source_width && y1 >= 0 && y1 < source_height) ? source[y1 * ERUI_XFORM_W + x1] : 0u;
+        (x1 >= 0 && x1 < source_width && y1 >= 0 && y1 < source_height) ? source[y1 * ERUI_TRANSFORM_WIDTH + x1] : 0u;
 
     return er_blend4(corner00, corner10, corner01, corner11, weight_x, weight_y);
 }
@@ -234,11 +234,12 @@ static void xform_emit_2d(int source_x,
      * bit-identical to the general path. Rotation/shear falls through below. */
     if (inverse_b == 0.0f && inverse_c == 0.0f)
     {
-        int column_x0[ERUI_XFORM_W];
-        uint16_t column_weight_x[ERUI_XFORM_W];
-        for (int segment_x = emit_x0; segment_x < emit_x1; segment_x += ERUI_XFORM_W)
+        int column_x0[ERUI_TRANSFORM_WIDTH];
+        uint16_t column_weight_x[ERUI_TRANSFORM_WIDTH];
+        for (int segment_x = emit_x0; segment_x < emit_x1; segment_x += ERUI_TRANSFORM_WIDTH)
         {
-            const int segment_width = (emit_x1 - segment_x) < ERUI_XFORM_W ? (emit_x1 - segment_x) : ERUI_XFORM_W;
+            const int segment_width =
+                (emit_x1 - segment_x) < ERUI_TRANSFORM_WIDTH ? (emit_x1 - segment_x) : ERUI_TRANSFORM_WIDTH;
             for (int output_column = 0; output_column < segment_width; output_column++)
             {
                 const float sample_x =
@@ -263,8 +264,10 @@ static void xform_emit_2d(int source_x,
                 const int y0 = (int)floorf(sample_y);
                 const int y1 = y0 + 1;
                 const uint32_t weight_y = (uint32_t)((sample_y - (float)y0) * ER_BILERP_WEIGHT_SCALE);
-                const uint32_t* row0 = (y0 >= 0 && y0 < source_height) ? xsrc() + (size_t)y0 * ERUI_XFORM_W : NULL;
-                const uint32_t* row1 = (y1 >= 0 && y1 < source_height) ? xsrc() + (size_t)y1 * ERUI_XFORM_W : NULL;
+                const uint32_t* row0 =
+                    (y0 >= 0 && y0 < source_height) ? xsrc() + (size_t)y0 * ERUI_TRANSFORM_WIDTH : NULL;
+                const uint32_t* row1 =
+                    (y1 >= 0 && y1 < source_height) ? xsrc() + (size_t)y1 * ERUI_TRANSFORM_WIDTH : NULL;
                 uint32_t any_nonzero = 0u;
                 for (int output_column = 0; output_column < segment_width; output_column++)
                 {
@@ -300,9 +303,10 @@ static void xform_emit_2d(int source_x,
     {
         const float screen_y = (float)output_y;
 
-        for (int segment_x = emit_x0; segment_x < emit_x1; segment_x += ERUI_XFORM_W)
+        for (int segment_x = emit_x0; segment_x < emit_x1; segment_x += ERUI_TRANSFORM_WIDTH)
         {
-            const int segment_width = (emit_x1 - segment_x) < ERUI_XFORM_W ? (emit_x1 - segment_x) : ERUI_XFORM_W;
+            const int segment_width =
+                (emit_x1 - segment_x) < ERUI_TRANSFORM_WIDTH ? (emit_x1 - segment_x) : ERUI_TRANSFORM_WIDTH;
             uint32_t any_nonzero = 0u;
             for (int output_column = 0; output_column < segment_width; output_column++)
             {
@@ -619,9 +623,10 @@ static void xform_emit_3d(int source_x,
     {
         const float screen_y = (float)output_y;
 
-        for (int segment_x = emit_x0; segment_x < emit_x1; segment_x += ERUI_XFORM_W)
+        for (int segment_x = emit_x0; segment_x < emit_x1; segment_x += ERUI_TRANSFORM_WIDTH)
         {
-            const int segment_width = (emit_x1 - segment_x) < ERUI_XFORM_W ? (emit_x1 - segment_x) : ERUI_XFORM_W;
+            const int segment_width =
+                (emit_x1 - segment_x) < ERUI_TRANSFORM_WIDTH ? (emit_x1 - segment_x) : ERUI_TRANSFORM_WIDTH;
             uint32_t any_nonzero = 0u;
             for (int output_column = 0; output_column < segment_width; output_column++)
             {
@@ -970,7 +975,7 @@ bool er_transform_is_invertible(const ERNode* node, int ref_x, int ref_y, int wi
 bool er_transform_source_fits(int width, int height)
 {
 #if ERUI_TRANSFORMS_FULL
-    return width > 0 && height > 0 && width <= ERUI_XFORM_W && height <= ERUI_XFORM_H;
+    return width > 0 && height > 0 && width <= ERUI_TRANSFORM_WIDTH && height <= ERUI_TRANSFORM_HEIGHT;
 #else
     (void)width;
     (void)height;
@@ -992,8 +997,8 @@ bool er_transform_source_begin(int source_x, int source_y, int width, int height
      * the output is identical.
      */
     for (int row = 0; row < height; row++)
-        memset(xsrc() + (size_t)row * ERUI_XFORM_W, 0, (size_t)width * sizeof(uint32_t));
-    er_scratch_push_base(xsrc(), ERUI_XFORM_W, ERUI_XFORM_H, source_x, source_y);
+        memset(xsrc() + (size_t)row * ERUI_TRANSFORM_WIDTH, 0, (size_t)width * sizeof(uint32_t));
+    er_scratch_push_base(xsrc(), ERUI_TRANSFORM_WIDTH, ERUI_TRANSFORM_HEIGHT, source_x, source_y);
     xc()->active = true;
     xc()->saved_alpha = er_get_draw_alpha();
     er_set_draw_alpha(ER_ALPHA_OPAQUE);

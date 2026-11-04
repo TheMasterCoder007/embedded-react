@@ -554,7 +554,7 @@ void er_blit_fill(uint32_t argb, int x, int y, int width, int height)
                 return;
         }
         ER_BLIT_PERF_BEGIN();
-        g_backend->fill_rect(argb, x, y - rc()->band_origin_y, width, height, g_backend->ctx);
+        g_backend->fill_rect(argb, x, y - rc()->band_origin_y, width, height, g_backend->context);
         ER_BLIT_PERF_END(width, height);
     }
 }
@@ -600,7 +600,7 @@ void er_blit_copy(const void* source, int stride, int x, int y, int width, int h
                 return;
         }
         ER_BLIT_PERF_BEGIN();
-        g_backend->copy_rect(source, stride, x, y - rc()->band_origin_y, width, height, g_backend->ctx);
+        g_backend->copy_rect(source, stride, x, y - rc()->band_origin_y, width, height, g_backend->context);
         ER_BLIT_PERF_END(width, height);
     }
 }
@@ -610,16 +610,16 @@ bool er_blit_copy_fmt(const void* source, int stride, ERImageFormat format, int 
     /* The format-aware hook applies only when the backend can take the buffer as-is: no inherited
      * draw alpha to composite and no scratch capture in flight (scratch buffers are ARGB8888). */
     const bool use_format_hook =
-        g_backend && g_backend->copy_rect_fmt && rc()->draw_alpha == ER_ALPHA_OPAQUE && !rc()->scratch_buffer;
+        g_backend && g_backend->copy_rect_format && rc()->draw_alpha == ER_ALPHA_OPAQUE && !rc()->scratch_buffer;
     if (!use_format_hook)
     {
-        if (format != ER_IMG_ARGB8888)
+        if (format != ER_IMAGE_ARGB8888)
             return false; /* caller expands rows on the CPU */
         er_blit_copy(source, stride, x, y, width, height);
         return true;
     }
 
-    const int bytes_per_pixel = (format == ER_IMG_RGB565) ? ER_RGB565_PIXEL_BYTES : ER_ARGB8888_PIXEL_BYTES;
+    const int bytes_per_pixel = (format == ER_IMAGE_RGB565) ? ER_RGB565_PIXEL_BYTES : ER_ARGB8888_PIXEL_BYTES;
     const int original_x = x;
     const int original_y = y;
     if (!apply_clip(&x, &y, &width, &height))
@@ -642,7 +642,7 @@ bool er_blit_copy_fmt(const void* source, int stride, ERImageFormat format, int 
             return true;
     }
     ER_BLIT_PERF_BEGIN();
-    g_backend->copy_rect_fmt(source, stride, format, x, y - rc()->band_origin_y, width, height, g_backend->ctx);
+    g_backend->copy_rect_format(source, stride, format, x, y - rc()->band_origin_y, width, height, g_backend->context);
     ER_BLIT_PERF_END(width, height);
     return true;
 }
@@ -686,7 +686,7 @@ void er_blit_blend(const void* source, int stride, uint8_t alpha, int x, int y, 
                 return;
         }
         ER_BLIT_PERF_BEGIN();
-        g_backend->blend_rect(source, stride, alpha, x, y - rc()->band_origin_y, width, height, g_backend->ctx);
+        g_backend->blend_rect(source, stride, alpha, x, y - rc()->band_origin_y, width, height, g_backend->context);
         ER_BLIT_PERF_END(width, height);
     }
 }
@@ -743,8 +743,8 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
 
 void embedded_renderer_tick(uint32_t delta_ms)
 {
-    er_anim_tick(delta_ms);
-    er_layout_anim_tick(delta_ms);
+    er_animation_tick(delta_ms);
+    er_layout_animation_tick(delta_ms);
     er_input_tick(delta_ms);
     er_tick(delta_ms);
 }

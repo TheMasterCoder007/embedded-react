@@ -84,7 +84,7 @@ int er_render_workers_active(void)
 #endif
 }
 
-void er_render_worker_exec(int worker)
+void er_render_worker_execute(int worker)
 {
 #if ERUI_RENDER_WORKERS > 1
     if (s_job && worker > 0 && worker < er_render_workers_active())
@@ -107,9 +107,9 @@ void er_parallel_for(ERParallelFn job, void* job_argument)
          * lets it preempt this dispatch loop and silently serialize the job (measured in the
          * Phase 0.5 spike — every workload came back exactly 1.00x). */
         for (int worker = worker_count - 1; worker >= 1; worker--)
-            s_workers.dispatch(worker, s_workers.ctx);
+            s_workers.dispatch(worker, s_workers.context);
         job(0, job_argument);
-        s_workers.sync(s_workers.ctx);
+        s_workers.sync(s_workers.context);
         s_job = NULL;
         s_forking = false;
         return;

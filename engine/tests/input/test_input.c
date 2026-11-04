@@ -30,9 +30,9 @@
 /* A node this size cannot fit the transform source buffer, so er_transform_source_begin() refuses it
  * and render_tree paints it UNTRANSFORMED at its raw layout box. Derived from the build's own limit
  * rather than hard-coded, so the fallback is reachable in every configuration — including the default
- * one, where ERUI_XFORM_W/H tracks the composite scratch. */
-#define TRANSFORM_TOO_BIG_WIDTH (ERUI_XFORM_W + 10)
-#define TRANSFORM_TOO_BIG_HEIGHT (ERUI_XFORM_H + 10)
+ * one, where ERUI_TRANSFORM_WIDTH and ERUI_TRANSFORM_HEIGHT track the composite scratch. */
+#define TRANSFORM_TOO_BIG_WIDTH (ERUI_TRANSFORM_WIDTH + 10)
+#define TRANSFORM_TOO_BIG_HEIGHT (ERUI_TRANSFORM_HEIGHT + 10)
 
 /* Points on the ring of the dial mount_dial() builds: centre 70,70, mid-band radius 50 - 16/2 = 42. Both are
  * inside the default sweep, and set different values. */
@@ -670,7 +670,7 @@ static ERNode* create_pressable(int16_t x, int16_t y, int16_t width, int16_t hei
 {
     ERNode* node = er_node_create(ER_NODE_PRESSABLE);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = x;
     props.top = y;
     props.width = width;
@@ -706,7 +706,7 @@ static ERNode* create_pressable_z(
 {
     ERNode* node = create_pressable(x, y, width, height, counts);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = x;
     props.top = y;
     props.width = width;
@@ -1084,7 +1084,7 @@ static int test_long_press_delay(void)
     EventCounts counts = {0};
     ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -1108,7 +1108,7 @@ static int test_long_press_delay(void)
     EventCounts slow = {0};
     ERNode* patient = create_pressable(0, 100, 80, 80, &slow);
     ERProps patient_props = props_default();
-    patient_props.position = ER_POS_ABSOLUTE;
+    patient_props.position = ER_POSITION_ABSOLUTE;
     patient_props.left = 0;
     patient_props.top = 100;
     patient_props.width = 80;
@@ -1170,7 +1170,7 @@ static int test_long_press_without_handler(void)
     EventCounts counts = {0};
     ERNode* node = er_node_create(ER_NODE_PRESSABLE);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -1360,7 +1360,7 @@ static int test_responder_start_should_set(void)
 
     ERNode* view = er_node_create(ER_NODE_PRESSABLE);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -1409,7 +1409,7 @@ static int test_responder_move_should_set(void)
 
     ERNode* view = er_node_create(ER_NODE_PRESSABLE);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -1479,7 +1479,7 @@ static int test_responder_takeover_stops_scroll(void)
 
     ERNode* scroll_view = er_node_create(ER_NODE_SCROLL_VIEW);
     ERProps scroll_view_props = props_default();
-    scroll_view_props.position = ER_POS_ABSOLUTE;
+    scroll_view_props.position = ER_POSITION_ABSOLUTE;
     scroll_view_props.left = 0;
     scroll_view_props.top = 0;
     scroll_view_props.width = 100;
@@ -1544,7 +1544,7 @@ static int test_responder_capture_wins_over_bubble(void)
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 0;
         props.top = 0;
         props.width = 80;
@@ -1558,7 +1558,7 @@ static int test_responder_capture_wins_over_bubble(void)
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 10;
         props.top = 10;
         props.width = 40;
@@ -1607,7 +1607,7 @@ static int test_responder_termination_accepted(void)
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 0;
         props.top = 0;
         props.width = 80;
@@ -1621,7 +1621,7 @@ static int test_responder_termination_accepted(void)
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 10;
         props.top = 10;
         props.width = 40;
@@ -1678,7 +1678,7 @@ static int test_responder_termination_rejected(void)
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 0;
         props.top = 0;
         props.width = 80;
@@ -1691,7 +1691,7 @@ static int test_responder_termination_rejected(void)
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 10;
         props.top = 10;
         props.width = 40;
@@ -1749,7 +1749,7 @@ static int test_pointer_events_none(void)
     ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
 
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -1787,7 +1787,7 @@ static int test_pointer_events_box_none(void)
     ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 0;
         props.top = 0;
         props.width = 80;
@@ -1834,7 +1834,7 @@ static ERNode* create_box_none_overlay(ERNode* parent, ERNode** out_child)
 {
     ERNode* overlay = er_node_create(ER_NODE_VIEW);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 120;
@@ -1844,7 +1844,7 @@ static ERNode* create_box_none_overlay(ERNode* parent, ERNode** out_child)
 
     ERNode* child = er_node_create(ER_NODE_VIEW);
     ERProps child_props = props_default();
-    child_props.position = ER_POS_ABSOLUTE;
+    child_props.position = ER_POSITION_ABSOLUTE;
     child_props.left = 40;
     child_props.top = 40;
     child_props.width = 40;
@@ -2024,7 +2024,7 @@ static int test_self_claimed_drag_cancels_press(void)
 
         ERNode* node = er_node_create(ER_NODE_PRESSABLE);
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 0;
         props.top = 0;
         props.width = 80;
@@ -2077,7 +2077,7 @@ static int test_start_capture_suppresses_press(void)
         ERNode* container = er_node_create(ER_NODE_VIEW);
         {
             ERProps props = props_default();
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = 0;
             props.top = 0;
             props.width = 80;
@@ -2095,7 +2095,7 @@ static int test_start_capture_suppresses_press(void)
         memset(&counts, 0, sizeof(counts));
         {
             ERProps props = props_default();
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = 10;
             props.top = 10;
             props.width = 40;
@@ -2252,7 +2252,7 @@ static ERNode* mount_dial(ERNode* parent, void* ctx)
     ERNode* arc = er_node_create(ER_NODE_ARC);
     ERProps props;
     er_props_default(&props);
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 20;
     props.top = 20;
     props.width = 100;
@@ -2282,7 +2282,7 @@ static ERNode* mount_text_input(ERNode* parent, void* ctx)
     ERNode* node = er_node_create(ER_NODE_TEXT_INPUT);
     ERProps props;
     er_props_default(&props);
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 10;
     props.top = 10;
     props.width = 40;
@@ -2311,7 +2311,7 @@ static ERNode* mount_view(ERNode* parent, void* ctx)
 {
     ERNode* node = er_node_create(ER_NODE_VIEW);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 150;
     props.top = 10;
     props.width = 20;
@@ -2365,7 +2365,7 @@ static ERNode* append_view(ERNode* parent, int16_t x, int16_t y, int16_t width, 
 {
     ERNode* node = er_node_create(ER_NODE_VIEW);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = x;
     props.top = y;
     props.width = width;
@@ -2395,7 +2395,7 @@ static int test_press_target_unmounted_during_grant(void)
         ERNode* container = er_node_create(ER_NODE_VIEW);
         {
             ERProps props = props_default();
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = 0;
             props.top = 0;
             props.width = 80;
@@ -2411,7 +2411,7 @@ static int test_press_target_unmounted_during_grant(void)
         memset(&counts, 0, sizeof(counts));
         {
             ERProps props = props_default();
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = 10;
             props.top = 10;
             props.width = 40;
@@ -2465,7 +2465,7 @@ static int test_touch_target_unmounted_by_touch_start(void)
         ERNode* container = er_node_create(ER_NODE_VIEW);
         {
             ERProps props = props_default();
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = 0;
             props.top = 0;
             props.width = 80;
@@ -2478,7 +2478,7 @@ static int test_touch_target_unmounted_by_touch_start(void)
         ERNode* target = er_node_create(ER_NODE_VIEW);
         {
             ERProps props = props_default();
-            props.position = ER_POS_ABSOLUTE;
+            props.position = ER_POSITION_ABSOLUTE;
             props.left = 10;
             props.top = 10;
             props.width = 40;
@@ -2665,7 +2665,7 @@ static ERNode* create_scroll_view(ERNode* parent, ERPointerEvents pointer_events
 {
     ERNode* scroll_view = er_node_create(ER_NODE_SCROLL_VIEW);
     ERProps scroll_view_props = props_default();
-    scroll_view_props.position = ER_POS_ABSOLUTE;
+    scroll_view_props.position = ER_POSITION_ABSOLUTE;
     scroll_view_props.left = 0;
     scroll_view_props.top = 0;
     scroll_view_props.width = width;
@@ -2763,7 +2763,7 @@ static int test_claimant_replaced_by_own_query(void)
     ERNode* target = er_node_create(ER_NODE_VIEW);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 10;
         props.top = 10;
         props.width = 40;
@@ -2809,7 +2809,7 @@ static int test_responder_replaced_during_move(void)
     ERNode* target = er_node_create(ER_NODE_VIEW);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 10;
         props.top = 10;
         props.width = 40;
@@ -3217,7 +3217,7 @@ static int test_box_none_scroll_view_defers_to_outer(void)
 
     ERNode* outer = er_node_create(ER_NODE_SCROLL_VIEW);
     ERProps outer_props = props_default();
-    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.position = ER_POSITION_ABSOLUTE;
     outer_props.left = 0;
     outer_props.top = 0;
     outer_props.width = 100;
@@ -3297,7 +3297,7 @@ static int test_pointer_events_box_only(void)
     ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 0;
         props.top = 0;
         props.width = 80;
@@ -3339,7 +3339,7 @@ static int test_hit_slop(void)
     ERNode* pressable = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 50;
         props.top = 50;
         props.width = 80;
@@ -3390,7 +3390,7 @@ static int test_overflow_hidden_clips_hit(void)
     ERNode* parent = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 20;
         props.top = 20;
         props.width = 80;
@@ -3409,7 +3409,7 @@ static int test_overflow_hidden_clips_hit(void)
     ERNode* child = er_node_create(ER_NODE_PRESSABLE);
     {
         ERProps props = props_default();
-        props.position = ER_POS_ABSOLUTE;
+        props.position = ER_POSITION_ABSOLUTE;
         props.left = 70;
         props.top = 0;
         props.width = 60;
@@ -3452,7 +3452,7 @@ static int test_layout_event_dispatch(void)
 
     ERNode* view = er_node_create(ER_NODE_VIEW);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 10;
     props.top = 20;
     props.width = 60;
@@ -3465,7 +3465,7 @@ static int test_layout_event_dispatch(void)
 
     if (record.count != 1)
         return fail("layout event did not fire on first commit");
-    if (record.rect.x != 10 || record.rect.y != 20 || record.rect.w != 60 || record.rect.h != 40)
+    if (record.rect.x != 10 || record.rect.y != 20 || record.rect.width != 60 || record.rect.height != 40)
         return fail("layout event payload was wrong");
 
     er_commit();
@@ -3475,7 +3475,7 @@ static int test_layout_event_dispatch(void)
 
     /* Move the node — layout event must fire again with the new rect */
     ERProps view_props = props_default();
-    view_props.position = ER_POS_ABSOLUTE;
+    view_props.position = ER_POSITION_ABSOLUTE;
     view_props.left = 30;
     view_props.top = 20;
     view_props.width = 60;
@@ -3505,7 +3505,7 @@ static int test_layout_event_parent_relative(void)
 
     ERNode* parent = er_node_create(ER_NODE_VIEW);
     ERProps parent_props = props_default();
-    parent_props.position = ER_POS_ABSOLUTE;
+    parent_props.position = ER_POSITION_ABSOLUTE;
     parent_props.left = 40;
     parent_props.top = 30;
     parent_props.width = 100;
@@ -3530,8 +3530,8 @@ static int test_layout_event_parent_relative(void)
 
     if (parent_record.count != 1 || parent_record.rect.x != 40 || parent_record.rect.y != 30)
         return fail("layout event: parent rect was wrong");
-    if (child_record.count != 1 || child_record.rect.x != 8 || child_record.rect.y != 5 || child_record.rect.w != 20
-        || child_record.rect.h != 10)
+    if (child_record.count != 1 || child_record.rect.x != 8 || child_record.rect.y != 5 || child_record.rect.width != 20
+        || child_record.rect.height != 10)
         return fail("layout event: child rect was not relative to its parent");
 
     /* Move only the parent: the child keeps its place inside it, so it doesn't fire */
@@ -3557,8 +3557,8 @@ static int test_layout_event_parent_relative(void)
     er_node_set_props(child, &child_props);
     er_commit();
 
-    if (child_record.count != 3 || child_record.rect.x != 0 || child_record.rect.y != 0 || child_record.rect.w != 0
-        || child_record.rect.h != 0)
+    if (child_record.count != 3 || child_record.rect.x != 0 || child_record.rect.y != 0 || child_record.rect.width != 0
+        || child_record.rect.height != 0)
         return fail("layout event: hidden child did not report an empty box at 0,0");
 
     parent_props.left = 80;
@@ -3573,14 +3573,15 @@ static int test_layout_event_parent_relative(void)
     er_node_set_props(child, &child_props);
     er_commit();
 
-    if (child_record.count != 4 || child_record.rect.x != 12 || child_record.rect.y != 9 || child_record.rect.w != 20)
+    if (child_record.count != 4 || child_record.rect.x != 12 || child_record.rect.y != 9
+        || child_record.rect.width != 20)
         return fail("layout event: shown child did not report its box again");
 
     parent_props.display = ER_DISPLAY_NONE;
     er_node_set_props(parent, &parent_props);
     er_commit();
 
-    if (parent_record.rect.w != 0 || parent_record.rect.x != 0)
+    if (parent_record.rect.width != 0 || parent_record.rect.x != 0)
         return fail("layout event: hidden parent did not report an empty box at 0,0");
     if (child_record.count != 4)
         return fail("layout event: child of a hidden parent fired");
@@ -3604,7 +3605,7 @@ static int test_display_none_not_hittable(void)
     ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
 
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -3637,7 +3638,7 @@ static int test_opacity_zero_not_hittable(void)
     ERNode* pressable = create_pressable(0, 0, 80, 80, &counts);
 
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 0;
     props.top = 0;
     props.width = 80;
@@ -3680,7 +3681,7 @@ static int test_auto_sized_absolute_is_hittable(void)
 
     /* Absolute container with no height, holding a pressable child. */
     ERProps box_props = props_default();
-    box_props.position = ER_POS_ABSOLUTE;
+    box_props.position = ER_POSITION_ABSOLUTE;
     box_props.left = 20;
     box_props.top = 30;
     box_props.width = 100;
@@ -3702,7 +3703,7 @@ static int test_auto_sized_absolute_is_hittable(void)
     er_tree_append_child(root, box);
     er_commit();
 
-    if (box_rect.rect.w != 100 || box_rect.rect.h != 40)
+    if (box_rect.rect.width != 100 || box_rect.rect.height != 40)
         return fail("auto-height absolute container did not size to its content");
 
     tap(60, 50);
@@ -3735,7 +3736,7 @@ static int test_uncaptured_transform_hits_painted_box(void)
     ERNode* box = create_pressable(40, 40, TRANSFORM_TOO_BIG_WIDTH, TRANSFORM_TOO_BIG_HEIGHT, &counts);
 
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 40;
     props.top = 40;
     props.width = TRANSFORM_TOO_BIG_WIDTH;
@@ -3785,7 +3786,7 @@ static int test_oversized_translate_only_keeps_offset(void)
     ERNode* box = create_pressable(40, 40, TRANSFORM_TOO_BIG_WIDTH, TRANSFORM_TOO_BIG_HEIGHT, &counts);
 
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 40;
     props.top = 40;
     props.width = TRANSFORM_TOO_BIG_WIDTH;
@@ -3823,7 +3824,7 @@ static int test_press_inside_translated_parent(void)
 
     ERNode* header = er_node_create(ER_NODE_VIEW);
     ERProps header_props = props_default();
-    header_props.position = ER_POS_ABSOLUTE;
+    header_props.position = ER_POSITION_ABSOLUTE;
     header_props.left = 0;
     header_props.top = 0;
     header_props.width = 200;
@@ -3873,7 +3874,7 @@ static int test_nested_uncaptured_transform_hits_painted_box(void)
     /* Outer: small enough to capture, so its transform genuinely reaches the screen. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 20;
     props.top = 20;
     props.width = 100;
@@ -3887,7 +3888,7 @@ static int test_nested_uncaptured_transform_hits_painted_box(void)
 
     ERNode* inner = create_pressable(20, 20, 40, 40, &counts);
     props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 20;
     props.top = 20;
     props.width = 40;
@@ -3926,7 +3927,7 @@ static int test_translated_activity_indicator_keeps_offset(void)
 
     ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 20;
     props.top = 20;
     props.width = 40;
@@ -3978,7 +3979,7 @@ static int test_3d_transform_hit_follows_projection(void)
     ERNode* box = create_pressable(50, 50, 100, 100, &counts);
 
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = 50;
     props.top = 50;
     props.width = 100;

@@ -192,7 +192,7 @@ static ERProps props_default(void)
 static ERProps box(int x, int y, int width, int height, uint32_t argb)
 {
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.left = (int16_t)x;
     props.top = (int16_t)y;
     props.width = (int16_t)width;
@@ -219,7 +219,7 @@ static void build_as(ERNodeType cover_type, const ERProps* cover_props, ERNode**
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps root_props = box(0, 0, SCREEN, SCREEN, COLOR_ROOT);
-    root_props.position = ER_POS_RELATIVE;
+    root_props.position = ER_POSITION_RELATIVE;
     er_node_set_props(root, &root_props);
 
     ERNode* deep = er_node_create(ER_NODE_VIEW);
@@ -413,7 +413,7 @@ static int check_transformed_sibling_not_buried(void)
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps root_props = box(0, 0, SCREEN, SCREEN, COLOR_ROOT);
-    root_props.position = ER_POS_RELATIVE;
+    root_props.position = ER_POSITION_RELATIVE;
     er_node_set_props(root, &root_props);
 
     ERNode* spun = er_node_create(ER_NODE_VIEW);
@@ -458,8 +458,8 @@ static int check_transformed_sibling_not_buried(void)
         ERRect idle;
         if (!er_get_dirty_rect(&idle))
             return fail("the dirty rect vanished across an idle commit");
-        if (idle.x != after_change.x || idle.y != after_change.y || idle.w != after_change.w
-            || idle.h != after_change.h)
+        if (idle.x != after_change.x || idle.y != after_change.y || idle.width != after_change.width
+            || idle.height != after_change.height)
             return fail("a buried TRANSFORMED sibling re-damages its footprint on every idle commit");
     }
     return EXIT_SUCCESS;
@@ -487,7 +487,7 @@ static bool slide_under_cover_matches_full_repaint(float rotate_z, bool animated
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps root_props = box(0, 0, SCREEN, SCREEN, COLOR_ROOT);
-    root_props.position = ER_POS_RELATIVE;
+    root_props.position = ER_POSITION_RELATIVE;
     er_node_set_props(root, &root_props);
 
     ERNode* bar = er_node_create(ER_NODE_VIEW);
@@ -517,15 +517,15 @@ static bool slide_under_cover_matches_full_repaint(float rotate_z, bool animated
 
     full_frame();
 
-    ERAnimValueHandle slide = er_anim_value_create(140.0f);
-    ERAnimValueHandle spin = er_anim_value_create(0.0f);
-    ERAnimValueHandle fade = er_anim_value_create(1.0f);
+    ERAnimationValueHandle slide = er_animation_value_create(140.0f);
+    ERAnimationValueHandle spin = er_animation_value_create(0.0f);
+    ERAnimationValueHandle fade = er_animation_value_create(1.0f);
     if (animated)
     {
-        er_anim_value_bind(slide, pill, ER_PROP_TRANSLATE_X);
-        er_anim_value_bind(spin, pill, ER_PROP_ROTATE_Z);
-        er_anim_value_bind(fade, blink, ER_PROP_OPACITY);
-        er_anim_value_set(spin, rotate_z);
+        er_animation_value_bind(slide, pill, ER_PROP_TRANSLATE_X);
+        er_animation_value_bind(spin, pill, ER_PROP_ROTATE_Z);
+        er_animation_value_bind(fade, blink, ER_PROP_OPACITY);
+        er_animation_value_set(spin, rotate_z);
         er_commit();
     }
 
@@ -534,7 +534,7 @@ static bool slide_under_cover_matches_full_repaint(float rotate_z, bool animated
     {
         fade_on = !fade_on;
         if (animated)
-            er_anim_value_set(fade, fade_on ? 0.5f : 1.0f);
+            er_animation_value_set(fade, fade_on ? 0.5f : 1.0f);
         else
         {
             blink_props.background_color = fade_on ? 0xFFE0E040U : COLOR_TOP;
@@ -543,7 +543,7 @@ static bool slide_under_cover_matches_full_repaint(float rotate_z, bool animated
         er_commit();
 
         if (animated)
-            er_anim_value_set(slide, (float)translate_x);
+            er_animation_value_set(slide, (float)translate_x);
         else
         {
             pill_props.transform_translate_x = (float)translate_x;
@@ -614,7 +614,7 @@ static const char* offscreen_change_keeps_transformed_footprint(bool three_d)
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
     ERProps root_props = box(0, 0, SCREEN, SCREEN, COLOR_ROOT);
-    root_props.position = ER_POS_RELATIVE;
+    root_props.position = ER_POSITION_RELATIVE;
     er_node_set_props(root, &root_props);
 
     ERNode* spun = er_node_create(ER_NODE_VIEW);
@@ -627,7 +627,7 @@ static const char* offscreen_change_keeps_transformed_footprint(bool three_d)
     er_tree_append_child(spun, nested);
 
     ERNode* wide = er_node_create(ER_NODE_VIEW);
-    ERProps wide_props = box(-30, 150, ERUI_XFORM_W + 10, 12, COLOR_COVER);
+    ERProps wide_props = box(-30, 150, ERUI_TRANSFORM_WIDTH + 10, 12, COLOR_COVER);
     er_node_set_props(wide, &wide_props);
 
 #if ERUI_3D_TRANSFORMS

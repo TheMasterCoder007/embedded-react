@@ -136,17 +136,17 @@ describe('AOT inline-Svg gradients', () => {
   it('rejects a conditional whose other branch is not null', () => {
     expect(() =>
       gen(
-        arc(`strokeGrad={lo > 60
+        arc(`strokeGradient={lo > 60
           ? {type: 3, ax: 0, ay: 0, r: 0, stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}
           : {type: 1, ax: 0, ay: 0, bx: 1, by: 0, stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}}`),
       ),
-    ).toThrow(/conditional "strokeGrad"/);
+    ).toThrow(/conditional "strokeGradient"/);
   });
 
   it('rejects a non-constant gradient type — it decides the emitted table shape', () => {
     expect(() =>
       gen(
-        arc(`strokeGrad={{type: lo, ax: 0, ay: 0,
+        arc(`strokeGradient={{type: lo, ax: 0, ay: 0,
           stops: [{color: '#F2A64B', offset: 0}, {color: '#4FA9F5', offset: 1}]}}`),
       ),
     ).toThrow(/type.*compile-time constant/);
@@ -160,7 +160,7 @@ describe('AOT inline-Svg gradients', () => {
     expect(() =>
       gen(
         arc(
-          `strokeGrad={{type: 1, ax: 0, ay: 0, bx: 1, by: 0, stops: [${many}]}}`,
+          `strokeGradient={{type: 1, ax: 0, ay: 0, bx: 1, by: 0, stops: [${many}]}}`,
         ),
       ),
     ).toThrow(/stops.*2\.\.8/);
@@ -491,7 +491,7 @@ import { View, Text, Pressable, TouchableOpacity, useAnimatedValue } from 'embed
 
   // An Animated.Value opacity is collected as a `binds` entry, NOT a dynAssign — a different list, so
   // the state-driven check above misses it entirely. Left alone it emits a SECOND
-  // er_anim_value_bind on the same node+prop: the engine's duplicate guard is per-value, so both
+  // er_animation_value_bind on the same node+prop: the engine's duplicate guard is per-value, so both
   // register and whichever changed last wins the frame.
   it.each([
     ['an Animated.Value', 'style={{opacity: fade}}'],

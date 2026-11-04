@@ -64,8 +64,8 @@ export const TEMPLATE_SIZE = 8;
 export const NODE_SIZE = 12;
 export const BINDING_SIZE = 4;
 export const FUNCTION_SIZE = 16;
-export const ANIM_SIZE = 40;
-export const INTERP_SIZE = 72;
+export const ANIMATION_SIZE = 40;
+export const INTERPOLATION_SIZE = 72;
 export const TAPE_SIZE = 16;
 export const TAPE_HEADER_SIZE = 16;
 export const PAINT_SIZE = 24;
@@ -78,9 +78,9 @@ export const KEYBOARD_KEY_SIZE = 8;
 /** Engine resources a package names in its needs, besides nodes. */
 export const Resource = {
   vectorNodes: 1,
-  animValues: 2,
+  animationValues: 2,
   animations: 3,
-  animGroups: 4,
+  animationGroups: 4,
   images: 5,
   fonts: 6,
   glyphs: 7,
@@ -102,11 +102,11 @@ export const Table = {
   functions: 11,
   types: 12,
   code: 13,
-  anims: 14,
+  animations: 14,
   tapes: 15,
   imports: 16,
   inputs: 17,
-  interps: 18,
+  interpolations: 18,
   keyboard: 19,
   checks: 20,
 } as const;
@@ -119,7 +119,7 @@ export const Region = {
   lists: 4,
   handles: 5,
   timers: 6,
-  anims: 7,
+  animations: 7,
   stack: 8,
   tape: 9,
   events: 10,
@@ -130,7 +130,7 @@ export const FRAME_CELLS = 3;
 
 /** Bytes a timer takes in the timer table, a running animation in the anims region, and an event in the queue. */
 export const TIMER_SIZE = 16;
-export const ANIM_ENTRY_SIZE = 20;
+export const ANIMATION_ENTRY_SIZE = 20;
 export const EVENT_SIZE = 32;
 
 /** Bytes a list pool keeps before its rows: the row count. */
@@ -152,8 +152,8 @@ export const ValueType = {
   string: 6,
   enum: 7,
   node: 8,
-  anim: 9,
-  avalue: 10,
+  animation: 9,
+  animatedValue: 10,
   list: 11,
 } as const;
 
@@ -173,7 +173,7 @@ export const BindingKind = {
 } as const;
 
 /** Animation descriptor kinds. */
-export const AnimKind = {
+export const AnimationKind = {
   timing: 1,
   spring: 2,
   decay: 3,
@@ -184,7 +184,7 @@ export const AnimKind = {
 } as const;
 
 /** Animation descriptor flag bits. */
-export const AnimFlag = {
+export const AnimationFlag = {
   loop: 0x01,
   loopReverse: 0x02,
   toRegister: 0x04,
@@ -210,12 +210,12 @@ export const GradientField = {
 } as const;
 
 /** Interpolation flag bits. */
-export const InterpFlag = {
+export const InterpolationFlag = {
   color: 0x01,
 } as const;
 
-/** Each ERAnimProp an animated value drives, as the ERProps field its ABI prop is. */
-export const ANIM_PROP_FIELDS: ReadonlyMap<string, string> = new Map([
+/** Each ERAnimationProp an animated value drives, as the ERProps field its ABI prop is. */
+export const ANIMATION_PROP_FIELDS: ReadonlyMap<string, string> = new Map([
   ['ER_PROP_BACKGROUND_COLOR', 'background_color'],
   ['ER_PROP_OPACITY', 'opacity'],
   ['ER_PROP_COLOR', 'color'],
@@ -239,7 +239,7 @@ export const FunctionKind = {
   update: 0x82,
   boot: 0x83,
   helper: 0x84,
-  animDone: 0x85,
+  animationDone: 0x85,
 } as const;
 
 /** Event data fields EVT reads. */
@@ -254,8 +254,8 @@ export const EventField = {
   scrollY: 7,
   layoutX: 8,
   layoutY: 9,
-  layoutW: 10,
-  layoutH: 11,
+  layoutWidth: 10,
+  layoutHeight: 11,
   value: 12,
   valueStart: 13,
   finished: 14,
@@ -319,7 +319,7 @@ export const CHECK_LOCALS = 48;
 /** Words one load may run across all the panels' checks. */
 export const CHECK_BUDGET = 65536;
 
-/** The ops of a layout check (erb_format.h's ERB_CK_ values). */
+/** The ops of a layout check (erb_format.h's ERB_CHECK_OP_ values). */
 export const CheckOp = {
   end: 1,
   width: 2,
@@ -348,7 +348,7 @@ export const CheckOp = {
   select: 25,
 } as const;
 
-/** The whole-number divisions of a check's idiv op (erb_format.h's ERB_CK_IDIV_ values). */
+/** The whole-number divisions of a check's idiv op (erb_format.h's ERB_CHECK_OP_IDIV_ values). */
 export const CheckDivide = {
   trunc: 0,
   floor: 1,
@@ -551,13 +551,13 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName, max?: number][] = [
   ['margin_vertical', 'i16'],
   ['padding_horizontal', 'i16'],
   ['padding_vertical', 'i16'],
-  ['flex_basis_pct', 'float'],
-  ['width_pct', 'float'],
-  ['height_pct', 'float'],
-  ['left_pct', 'float'],
-  ['top_pct', 'float'],
-  ['right_pct', 'float'],
-  ['bottom_pct', 'float'],
+  ['flex_basis_percent', 'float'],
+  ['width_percent', 'float'],
+  ['height_percent', 'float'],
+  ['left_percent', 'float'],
+  ['top_percent', 'float'],
+  ['right_percent', 'float'],
+  ['bottom_percent', 'float'],
   ['background_color', 'color'],
   ['border_color', 'color'],
   ['border_width', 'i16'],
@@ -715,10 +715,10 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_NODE_MODAL', 9],
   ['ER_NODE_VECTOR', 10],
   ['ER_NODE_ARC', 11],
-  ['ER_FLEX_COL', 0],
+  ['ER_FLEX_COLUMN', 0],
   ['ER_FLEX_ROW', 1],
   ['ER_FLEX_ROW_REVERSE', 2],
-  ['ER_FLEX_COL_REVERSE', 3],
+  ['ER_FLEX_COLUMN_REVERSE', 3],
   ['ER_WRAP_NOWRAP', 0],
   ['ER_WRAP_WRAP', 1],
   ['ER_WRAP_WRAP_REVERSE', 2],
@@ -739,8 +739,8 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_JUSTIFY_SPACE_BETWEEN', 3],
   ['ER_JUSTIFY_SPACE_AROUND', 4],
   ['ER_JUSTIFY_SPACE_EVENLY', 5],
-  ['ER_POS_RELATIVE', 0],
-  ['ER_POS_ABSOLUTE', 1],
+  ['ER_POSITION_RELATIVE', 0],
+  ['ER_POSITION_ABSOLUTE', 1],
   ['ER_DISPLAY_FLEX', 0],
   ['ER_DISPLAY_NONE', 1],
   ['ER_BORDER_SOLID', 0],
@@ -822,8 +822,8 @@ export const ENGINE_VALUES: ReadonlyMap<string, number> = new Map([
   ['ER_EXTRAPOLATE_EXTEND', 0],
   ['ER_EXTRAPOLATE_CLAMP', 1],
   ['ER_EXTRAPOLATE_IDENTITY', 2],
-  ['ER_KBD_KEY_CHAR', 0],
-  ['ER_KBD_KEY_BACKSPACE', 1],
-  ['ER_KBD_KEY_DONE', 2],
-  ['ER_KBD_KEY_LAYER', 3],
+  ['ER_KEYBOARD_KEY_CHAR', 0],
+  ['ER_KEYBOARD_KEY_BACKSPACE', 1],
+  ['ER_KEYBOARD_KEY_DONE', 2],
+  ['ER_KEYBOARD_KEY_LAYER', 3],
 ]);

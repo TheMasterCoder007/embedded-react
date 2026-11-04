@@ -136,7 +136,7 @@ static uint32_t px_at(int x, int y)
 static ERProps header_props(float translate_x, float translate_y, uint8_t opacity)
 {
     ERProps props = props_default();
-    props.position = ER_POS_ABSOLUTE;
+    props.position = ER_POSITION_ABSOLUTE;
     props.top = 0;
     props.left = 0;
     props.right = 0;

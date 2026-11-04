@@ -167,7 +167,7 @@ before `project()`. This example leaves the runtime's `ERB_*` limits at their de
 them:
 
 ```cmake
-idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_W=8;ERUI_SCRATCH_H=8;ERUI_VECTOR_EDGE_CACHE=0" APPEND)
+idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_WIDTH=8;ERUI_SCRATCH_HEIGHT=8;ERUI_VECTOR_EDGE_CACHE=0" APPEND)
 ```
 
   </TabItem>
@@ -183,7 +183,7 @@ in the library yet, so Flow A goes through the ESP-IDF examples.
 The engine's default pools are sized for a desktop, so on an ESP32 set smaller ones in `platformio.ini`:
 
 ```ini
-build_flags = -DERUI_MAX_NODES=48 -DERUI_SCRATCH_W=8 -DERUI_SCRATCH_H=8 -DERUI_VECTOR_EDGE_CACHE=0
+build_flags = -DERUI_MAX_NODES=48 -DERUI_SCRATCH_WIDTH=8 -DERUI_SCRATCH_HEIGHT=8 -DERUI_VECTOR_EDGE_CACHE=0
 ```
 
   </TabItem>

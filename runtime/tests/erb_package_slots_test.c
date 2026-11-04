@@ -107,8 +107,8 @@ static void reset(void)
     memset(&s_config, 0, sizeof(s_config));
     s_config.arena = s_arena;
     s_config.arena_bytes = sizeof(s_arena);
-    s_config.screen_w = TPKG_SCREEN;
-    s_config.screen_h = TPKG_SCREEN;
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
     s_config.native_count = 1;
     s_invalidated = NO_INVALIDATE;
@@ -199,7 +199,7 @@ static void test_no_package(void)
     CHECK(!erb_package_slots_boot(&s_slots, &s_config, &s_boot), "empty slots don't boot");
     CHECK(s_boot.active == ERB_PACKAGE_SLOT_NONE && s_boot.rejected == ERB_PACKAGE_SLOT_NONE,
           "and nothing was rejected");
-    CHECK(s_boot.error.status == ERB_ERR_NO_PACKAGE, "the reason is no package");
+    CHECK(s_boot.error.status == ERB_ERROR_NO_PACKAGE, "the reason is no package");
     CHECK(s_boot.staging == 0, "and the first package goes in the first slot");
     CHECK(s_invalidated == NO_INVALIDATE, "flash isn't touched");
     erb_package_slots_show_error(&s_boot);
@@ -240,9 +240,9 @@ static void test_rollback(void)
         ErbStatus status;
         const char* what;
     } cases[] = {
-        {BAD_CRC, ERB_ERR_CORRUPT, "a corrupt package falls back"},
-        {TOO_BIG, ERB_ERR_TOO_BIG, "a package too big for the arena falls back"},
-        {BOOT_TRAP, ERB_ERR_TRAP, "a package that faults at boot falls back"},
+        {BAD_CRC, ERB_ERROR_CORRUPT, "a corrupt package falls back"},
+        {TOO_BIG, ERB_ERROR_TOO_BIG, "a package too big for the arena falls back"},
+        {BOOT_TRAP, ERB_ERROR_TRAP, "a package that faults at boot falls back"},
     };
     for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); index++)
     {
@@ -314,7 +314,7 @@ static void test_nothing_loads(void)
     install(1, 6u, TOO_BIG);
     CHECK(!erb_package_slots_boot(&s_slots, &s_config, &s_boot), "neither package loads");
     CHECK(!erb_running() && s_boot.active == ERB_PACKAGE_SLOT_NONE, "so no app runs");
-    CHECK(s_boot.rejected == 1 && s_boot.error.status == ERB_ERR_TOO_BIG, "the reason is the newest package's");
+    CHECK(s_boot.rejected == 1 && s_boot.error.status == ERB_ERROR_TOO_BIG, "the reason is the newest package's");
     CHECK(s_boot.staging == 0, "and the older is written over next");
     CHECK(s_invalidated == NO_INVALIDATE, "both are kept: a later firmware may run them");
     erb_package_slots_show_error(&s_boot);

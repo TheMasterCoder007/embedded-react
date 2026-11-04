@@ -222,7 +222,7 @@ static int16_t span_px(const int16_t near_edge, const int16_t far_edge)
  * @brief Resolves one inset edge — left, top, right or bottom — to pixels.
  *
  * A percentage measures against `base`, the containing block's extent on the edge's OWN axis: left and
- * right take its width, top and bottom its height. It wins over the pixel field the way width_pct wins
+ * right take its width, top and bottom its height. It wins over the pixel field the way width_percent wins
  * over width, and may be negative. `0.0` is the "not set" sentinel, so the bindings lower an authored
  * `0%` onto the PIXEL field instead — 0% of any box is 0 pixels, so it pins the edge either way.
  * A NaN percentage is not a value and reads as unset.
@@ -345,11 +345,11 @@ static bool is_row_dir(const uint8_t direction)
  *
  * @param[in] direction  ERFlexDirection value.
  *
- * @return true for ER_FLEX_ROW_REVERSE or ER_FLEX_COL_REVERSE, false otherwise.
+ * @return true for ER_FLEX_ROW_REVERSE or ER_FLEX_COLUMN_REVERSE, false otherwise.
  */
 static bool is_reverse_dir(const uint8_t direction)
 {
-    return direction == ER_FLEX_ROW_REVERSE || direction == ER_FLEX_COL_REVERSE;
+    return direction == ER_FLEX_ROW_REVERSE || direction == ER_FLEX_COLUMN_REVERSE;
 }
 
 /**
@@ -653,8 +653,8 @@ offered_width(const ERLayoutSpec* container_spec, const ERLayoutSpec* child_spec
 {
     if (inner_width == ER_LAYOUT_AUTO)
         return ER_LAYOUT_AUTO;
-    if (child_spec->width_pct > 0.0f)
-        return round_px((float)inner_width * child_spec->width_pct / PERCENT_SCALE);
+    if (child_spec->width_percent > 0.0f)
+        return round_px((float)inner_width * child_spec->width_percent / PERCENT_SCALE);
     if (child_spec->width != ER_LAYOUT_AUTO
         || (is_row_dir(container_spec->flex_direction) && container_spec->overflow == ER_OVERFLOW_SCROLL))
         return ER_LAYOUT_AUTO;
@@ -678,7 +678,7 @@ static int16_t aspect_main_size(const ERLayoutSpec* child_spec, const bool is_ro
 {
     if (child_spec->aspect_ratio <= 0.0f)
         return ER_LAYOUT_AUTO;
-    const float cross_percent = is_row ? child_spec->height_pct : child_spec->width_pct;
+    const float cross_percent = is_row ? child_spec->height_percent : child_spec->width_percent;
     int16_t cross = is_row ? child_spec->height : child_spec->width;
     if (cross_percent > 0.0f)
     {
@@ -706,7 +706,7 @@ static int16_t aspect_main_size(const ERLayoutSpec* child_spec, const bool is_ro
 static bool cross_from_aspect(const ERLayoutSpec* child_spec, const bool is_row)
 {
     return child_spec->aspect_ratio > 0.0f && (is_row ? child_spec->height : child_spec->width) == ER_LAYOUT_AUTO
-           && (is_row ? child_spec->height_pct : child_spec->width_pct) <= 0.0f;
+           && (is_row ? child_spec->height_percent : child_spec->width_percent) <= 0.0f;
 }
 
 /**
@@ -727,7 +727,7 @@ static int16_t aspect_cross_size(const ERLayoutSpec* child_spec, const bool is_r
 }
 
 /**
- * @brief A flex item's base main size — flex_basis_pct (%) > flex_basis (px) > explicit size > aspect ratio >
+ * @brief A flex item's base main size — flex_basis_percent (%) > flex_basis (px) > explicit size > aspect ratio >
  * intrinsic.
  *
  * @param[in]      tag               Tag of the item.
@@ -753,9 +753,9 @@ static int16_t base_main_size(const uint16_t tag,
                               int16_t* intrinsic_height)
 {
     int16_t hypothetical_main;
-    if (child_spec->flex_basis_pct > 0.0f)
+    if (child_spec->flex_basis_percent > 0.0f)
     {
-        hypothetical_main = round_px((float)main_size * child_spec->flex_basis_pct / PERCENT_SCALE);
+        hypothetical_main = round_px((float)main_size * child_spec->flex_basis_percent / PERCENT_SCALE);
     }
     else if (child_spec->flex_basis != ER_LAYOUT_AUTO)
     {
@@ -764,7 +764,7 @@ static int16_t base_main_size(const uint16_t tag,
     else
     {
         const int16_t main_explicit = is_row ? child_spec->width : child_spec->height;
-        const float main_percent = is_row ? child_spec->width_pct : child_spec->height_pct;
+        const float main_percent = is_row ? child_spec->width_percent : child_spec->height_percent;
         if (main_percent > 0.0f)
             hypothetical_main = round_px((float)main_size * main_percent / PERCENT_SCALE);
         else if (main_explicit != ER_LAYOUT_AUTO)
@@ -956,7 +956,7 @@ static bool measure_flexed_row(const ERNode* node,
         const ERNode* child = er_get_node(child_tag);
         if (!child)
             break;
-        if (child->layout.position != ER_POS_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
+        if (child->layout.position != ER_POSITION_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
             count++;
         child_tag = child->next_sibling_tag;
     }
@@ -973,7 +973,7 @@ static bool measure_flexed_row(const ERNode* node,
         const ERNode* child = er_get_node(child_tag);
         if (!child)
             break;
-        if (child->layout.position != ER_POS_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
+        if (child->layout.position != ER_POSITION_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
         {
             const ERLayoutSpec* child_spec = &child->layout;
             const int16_t available_width = offered_width(&node->layout, child_spec, inner_width);
@@ -1087,7 +1087,7 @@ static void measure_content(const uint16_t tag, const int16_t available_width, i
      * arrives already resolved as available_width. */
     if (spec->aspect_ratio > 0.0f)
     {
-        if (explicit_width == ER_LAYOUT_AUTO && spec->width_pct > 0.0f)
+        if (explicit_width == ER_LAYOUT_AUTO && spec->width_percent > 0.0f)
             explicit_width = available_width;
         if (explicit_width == ER_LAYOUT_AUTO)
             explicit_width = aspect_main_size(spec, true, ER_LAYOUT_AUTO);
@@ -1184,7 +1184,7 @@ static void measure_content(const uint16_t tag, const int16_t available_width, i
                 ERNode* child = er_get_node(child_tag);
                 if (!child)
                     break;
-                if (child->layout.position != ER_POS_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
+                if (child->layout.position != ER_POSITION_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
                 {
                     int16_t child_width = 0, child_height = 0;
                     const ERLayoutSpec* child_spec = &child->layout;
@@ -1339,7 +1339,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
         ERNode* child = er_get_node(child_tag);
         if (!child)
             break;
-        if (child->layout.position != ER_POS_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
+        if (child->layout.position != ER_POSITION_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
         {
             const ERLayoutSpec* child_spec = &child->layout;
 
@@ -1371,7 +1371,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
             /* Base cross size (stretch may override later if still auto). When aspect_ratio
              * will drive the cross size after flexing, skip measuring. */
             const int16_t cross_explicit = is_row ? child_spec->height : child_spec->width;
-            const float cross_percent = is_row ? child_spec->height_pct : child_spec->width_pct;
+            const float cross_percent = is_row ? child_spec->height_percent : child_spec->width_percent;
             const int16_t cross_min = is_row ? child_spec->min_height : child_spec->min_width;
             const int16_t cross_max = is_row ? child_spec->max_height : child_spec->max_width;
             const bool cross_via_aspect = cross_from_aspect(child_spec, is_row);
@@ -1706,7 +1706,8 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
                     if (child)
                     {
                         const int16_t child_cross_size = is_row ? child->layout.height : child->layout.width;
-                        const float child_cross_percent = is_row ? child->layout.height_pct : child->layout.width_pct;
+                        const float child_cross_percent =
+                            is_row ? child->layout.height_percent : child->layout.width_percent;
                         if (child_cross_size == ER_LAYOUT_AUTO && child_cross_percent <= 0.0f
                             && child->layout.aspect_ratio <= 0.0f)
                         {
@@ -1787,13 +1788,13 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
          * this parent's CONTENT box, not the padding box an absolute's insets resolve against. */
         const ERLayoutSpec* child_spec = &child->layout;
         float inset = 0.0f;
-        if (inset_px(child_spec->left, child_spec->left_pct, content_width, &inset))
+        if (inset_px(child_spec->left, child_spec->left_percent, content_width, &inset))
             child_x = round_px((float)child_x + inset);
-        else if (inset_px(child_spec->right, child_spec->right_pct, content_width, &inset))
+        else if (inset_px(child_spec->right, child_spec->right_percent, content_width, &inset))
             child_x = round_px((float)child_x - inset);
-        if (inset_px(child_spec->top, child_spec->top_pct, content_height, &inset))
+        if (inset_px(child_spec->top, child_spec->top_percent, content_height, &inset))
             child_y = round_px((float)child_y + inset);
-        else if (inset_px(child_spec->bottom, child_spec->bottom_pct, content_height, &inset))
+        else if (inset_px(child_spec->bottom, child_spec->bottom_percent, content_height, &inset))
             child_y = round_px((float)child_y - inset);
 
         child->computed.x = child_x;
@@ -1815,7 +1816,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
             break;
         if (child->layout.display == ER_DISPLAY_NONE)
             compute_layout(child->tag, 0, 0, 0, 0);
-        else if (child->layout.position != ER_POS_ABSOLUTE)
+        else if (child->layout.position != ER_POSITION_ABSOLUTE)
             compute_layout(
                 child->tag, child->computed.width, child->computed.height, child->computed.x, child->computed.y);
         child_tag = child->next_sibling_tag;
@@ -1829,7 +1830,7 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
         ERNode* child = er_get_node(child_tag);
         if (!child)
             break;
-        if (child->layout.position == ER_POS_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
+        if (child->layout.position == ER_POSITION_ABSOLUTE && child->layout.display != ER_DISPLAY_NONE)
         {
             const ERLayoutSpec* child_spec = &child->layout;
             const int16_t margin_left = edge_or(child_spec->margin_left, child_spec->margin);
@@ -1851,17 +1852,17 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
              * Insets and sizes stay FRACTIONAL through all of this. A percentage rarely lands on a whole
              * pixel, and rounding one before it is combined with the rest would round twice. */
             float inset_left = 0.0f, inset_right = 0.0f, inset_top = 0.0f, inset_bottom = 0.0f;
-            const bool has_left = inset_px(child_spec->left, child_spec->left_pct, width, &inset_left);
-            const bool has_right = inset_px(child_spec->right, child_spec->right_pct, width, &inset_right);
-            const bool has_top = inset_px(child_spec->top, child_spec->top_pct, height, &inset_top);
-            const bool has_bottom = inset_px(child_spec->bottom, child_spec->bottom_pct, height, &inset_bottom);
+            const bool has_left = inset_px(child_spec->left, child_spec->left_percent, width, &inset_left);
+            const bool has_right = inset_px(child_spec->right, child_spec->right_percent, width, &inset_right);
+            const bool has_top = inset_px(child_spec->top, child_spec->top_percent, height, &inset_top);
+            const bool has_bottom = inset_px(child_spec->bottom, child_spec->bottom_percent, height, &inset_bottom);
 
             float child_width = 0.0f, child_height = 0.0f;
             bool have_width = true, have_height = true;
             if (child_spec->width != ER_LAYOUT_AUTO)
                 child_width = (float)child_spec->width;
-            else if (child_spec->width_pct > 0.0f)
-                child_width = (float)width * child_spec->width_pct / PERCENT_SCALE;
+            else if (child_spec->width_percent > 0.0f)
+                child_width = (float)width * child_spec->width_percent / PERCENT_SCALE;
             else if (has_left && has_right)
                 child_width = (float)(width - margin_left - margin_right) - inset_left - inset_right;
             else
@@ -1869,8 +1870,8 @@ compute_layout(const uint16_t tag, const int16_t width, const int16_t height, co
 
             if (child_spec->height != ER_LAYOUT_AUTO)
                 child_height = (float)child_spec->height;
-            else if (child_spec->height_pct > 0.0f)
-                child_height = (float)height * child_spec->height_pct / PERCENT_SCALE;
+            else if (child_spec->height_percent > 0.0f)
+                child_height = (float)height * child_spec->height_percent / PERCENT_SCALE;
             else if (has_top && has_bottom)
                 child_height = (float)(height - margin_top - margin_bottom) - inset_top - inset_bottom;
             else

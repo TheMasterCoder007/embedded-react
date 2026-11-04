@@ -212,7 +212,7 @@ static void recolour(ERNode* box, int margin_left, int margin_top, uint32_t argb
 
 static bool point_in(const ERRect* rect, int x, int y)
 {
-    return x >= rect->x && x < rect->x + rect->w && y >= rect->y && y < rect->y + rect->h;
+    return x >= rect->x && x < rect->x + rect->width && y >= rect->y && y < rect->y + rect->height;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -242,16 +242,16 @@ static int check_corner_isolation(void)
                rect_index,
                rects[rect_index].x,
                rects[rect_index].y,
-               rects[rect_index].w,
-               rects[rect_index].h);
+               rects[rect_index].width,
+               rects[rect_index].height);
     if (rect_count != 2)
         return fail("two far-apart changes did not report two dirty rects");
     for (int rect_index = 0; rect_index < rect_count; rect_index++)
         for (int other_index = rect_index + 1; other_index < rect_count; other_index++)
-            if (!(rects[rect_index].x + rects[rect_index].w < rects[other_index].x
-                  || rects[other_index].x + rects[other_index].w < rects[rect_index].x
-                  || rects[rect_index].y + rects[rect_index].h < rects[other_index].y
-                  || rects[other_index].y + rects[other_index].h < rects[rect_index].y))
+            if (!(rects[rect_index].x + rects[rect_index].width < rects[other_index].x
+                  || rects[other_index].x + rects[other_index].width < rects[rect_index].x
+                  || rects[rect_index].y + rects[rect_index].height < rects[other_index].y
+                  || rects[other_index].y + rects[other_index].height < rects[rect_index].y))
                 return fail("reported rects overlap or abut");
 
     /* The rects must cover the two boxes... */
@@ -307,7 +307,7 @@ static int check_pixel_equivalence(void)
     ERProps box_c_props = props_default();
     box_c_props.width = 30;
     box_c_props.height = 30;
-    box_c_props.position = ER_POS_ABSOLUTE;
+    box_c_props.position = ER_POSITION_ABSOLUTE;
     box_c_props.left = 44;
     box_c_props.top = 10;
     box_c_props.background_color = 0x8000AA55U;
@@ -416,7 +416,7 @@ static int check_scattered_grid(void)
             ERProps cell_node_props = props_default();
             cell_node_props.width = GRID_CELL;
             cell_node_props.height = GRID_CELL;
-            cell_node_props.position = ER_POS_ABSOLUTE;
+            cell_node_props.position = ER_POSITION_ABSOLUTE;
             cell_node_props.left = (float)k_grid_x[grid_column];
             cell_node_props.top = (float)k_grid_y[grid_row];
             cell_node_props.background_color = 0x80336699U;
@@ -436,7 +436,7 @@ static int check_scattered_grid(void)
             ERProps cell_props = props_default();
             cell_props.width = GRID_CELL;
             cell_props.height = GRID_CELL;
-            cell_props.position = ER_POS_ABSOLUTE;
+            cell_props.position = ER_POSITION_ABSOLUTE;
             cell_props.left = (float)k_grid_x[grid_column];
             cell_props.top = (float)k_grid_y[grid_row];
             /* Every cell gets a colour distinct from the 0x80336699 it mounted with (a cell whose
@@ -464,8 +464,8 @@ static int check_scattered_grid(void)
                rect_index,
                rects[rect_index].x,
                rects[rect_index].y,
-               rects[rect_index].w,
-               rects[rect_index].h);
+               rects[rect_index].width,
+               rects[rect_index].height);
     if (full_budget)
     {
         if (rect_count != cells)
@@ -479,11 +479,11 @@ static int check_scattered_grid(void)
 
     uint32_t area = 0U;
     for (int rect_index = 0; rect_index < rect_count; rect_index++)
-        area += (uint32_t)rects[rect_index].w * (uint32_t)rects[rect_index].h;
+        area += (uint32_t)rects[rect_index].width * (uint32_t)rects[rect_index].height;
     ERRect bbox;
     if (!er_get_dirty_rect(&bbox))
         return fail("no covering dirty rect after the grid update");
-    const uint32_t bbox_area = (uint32_t)bbox.w * (uint32_t)bbox.h;
+    const uint32_t bbox_area = (uint32_t)bbox.width * (uint32_t)bbox.height;
     printf("  damage %u px vs bbox %u px (%u%%)\n", area, bbox_area, 100U * area / bbox_area);
     /* The damage must stay a small fraction of the bounding box it used to collapse into — the whole
      * point of the budget, and therefore only claimable when the budget covers the cells. */
@@ -529,14 +529,14 @@ static int check_api_contract(void)
 
     /* Mount was a full repaint: one root-sized rect. */
     ERRect single_rect;
-    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.w != SCREEN || single_rect.h != SCREEN)
+    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.width != SCREEN || single_rect.height != SCREEN)
         return fail("a full repaint did not report one root-sized rect");
 
     /* A commit that paints nothing is non-destructive: the last commit that DID paint stays readable.
      * (Flow A commits inside er_runtime_pump(), so the host's own er_commit() is the no-op one — it
      * must not be the one that answers.) */
     frame();
-    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.w != SCREEN || single_rect.h != SCREEN)
+    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.width != SCREEN || single_rect.height != SCREEN)
         return fail("a clean frame erased the last painting commit's rect");
 
     recolour(box_a, 10, 10, 0xFF112233U);
@@ -563,10 +563,10 @@ static int check_api_contract(void)
     ERRect dirty_bounds;
     if (!er_get_dirty_rect(&dirty_bounds))
         return fail("a forced full repaint reported no dirty rect");
-    if (dirty_bounds.w != SCREEN || dirty_bounds.h != SCREEN)
+    if (dirty_bounds.width != SCREEN || dirty_bounds.height != SCREEN)
         return fail("a forced full repaint did not report the whole root as dirty");
     if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.x != dirty_bounds.x || single_rect.y != dirty_bounds.y
-        || single_rect.w != dirty_bounds.w || single_rect.h != dirty_bounds.h)
+        || single_rect.width != dirty_bounds.width || single_rect.height != dirty_bounds.height)
         return fail("er_get_dirty_rect() and er_get_dirty_rects() disagree on a forced full repaint");
 
     er_node_destroy(root);

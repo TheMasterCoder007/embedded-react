@@ -184,8 +184,8 @@ static void load_package(bool touch)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_w = SCREEN_WIDTH,
-        .screen_h = SCREEN_HEIGHT,
+        .screen_width = SCREEN_WIDTH,
+        .screen_height = SCREEN_HEIGHT,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);

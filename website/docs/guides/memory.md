@@ -12,29 +12,29 @@ choose rather than a thing you discover under load. This page is the list.
 Set these as CMake options before the engine is added (or at the ESP-IDF component level). The
 defaults are desktop-sized.
 
-| Flag                                                                         | Default          | What it sizes                                                                                                                          |
-| ---------------------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `ERUI_MAX_NODES`                                                             | 512              | The scene-graph node pool. Every `<View>`, `<Text>` and shape is one node, and a hidden page keeps its nodes                           |
-| `ERUI_SCRATCH_W`, `ERUI_SCRATCH_H`                                           | 240, 240         | The offscreen buffer for opacity groups, transforms and shadows: the largest node that can fade or rotate. `W × H × 4` bytes per strip |
-| `ERUI_MAX_OPACITY_DEPTH`                                                     | 4                | Nested translucent groups, one strip each                                                                                              |
-| `ERUI_SCRATCH_BAND_H`                                                        | `ERUI_SCRATCH_H` | Shrink to render tall fades in more, smaller passes                                                                                    |
-| `ERUI_XFORM_W`, `ERUI_XFORM_H`                                               | scratch size     | The transform source, the one buffer that cannot be banded; decouple it when strips are screen-wide but only small widgets rotate      |
-| `ERUI_FADE_CACHE_W/H`                                                        | 0 (off)          | Caches a translucent subtree during a pure opacity animation, roughly doubling fade frame rates; put it in external RAM                |
-| `ER_DAMAGE_RECTS_MAX`                                                        | 16               | Disjoint dirty rectangles per commit; 4 → 16 costs about 1.1 KB of `.bss`. A compile definition, not a CMake option                    |
-| `ERUI_IMAGE_REGISTRY_MAX`                                                    | 128              | Registered images, about 80 bytes each. Past the limit an image is refused and does not draw, so keep it at or above the asset count   |
-| `ERUI_FONT_POOL_BYTES`                                                       | 0                | A static pool for fonts loaded at runtime; 0 disables `er_font_load`                                                                   |
-| `ERUI_SHADOWS`, `ERUI_3D_TRANSFORMS`, `ERUI_GRADIENT`, `ERUI_BILINEAR_SCALE` | varies           | Features that cost code and scratch; off is free                                                                                       |
+| Flag                                                                         | Default               | What it sizes                                                                                                                          |
+| ---------------------------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `ERUI_MAX_NODES`                                                             | 512                   | The scene-graph node pool. Every `<View>`, `<Text>` and shape is one node, and a hidden page keeps its nodes                           |
+| `ERUI_SCRATCH_WIDTH`, `ERUI_SCRATCH_HEIGHT`                                  | 240, 240              | The offscreen buffer for opacity groups, transforms and shadows: the largest node that can fade or rotate. `W × H × 4` bytes per strip |
+| `ERUI_MAX_OPACITY_DEPTH`                                                     | 4                     | Nested translucent groups, one strip each                                                                                              |
+| `ERUI_SCRATCH_BAND_HEIGHT`                                                   | `ERUI_SCRATCH_HEIGHT` | Shrink to render tall fades in more, smaller passes                                                                                    |
+| `ERUI_TRANSFORM_WIDTH`, `ERUI_TRANSFORM_HEIGHT`                              | scratch size          | The transform source, the one buffer that cannot be banded; decouple it when strips are screen-wide but only small widgets rotate      |
+| `ERUI_FADE_CACHE_WIDTH`, `ERUI_FADE_CACHE_HEIGHT`                            | 0 (off)               | Caches a translucent subtree during a pure opacity animation, roughly doubling fade frame rates; put it in external RAM                |
+| `ER_DAMAGE_RECTS_MAX`                                                        | 16                    | Disjoint dirty rectangles per commit; 4 → 16 costs about 1.1 KB of `.bss`. A compile definition, not a CMake option                    |
+| `ERUI_IMAGE_REGISTRY_MAX`                                                    | 128                   | Registered images, about 80 bytes each. Past the limit an image is refused and does not draw, so keep it at or above the asset count   |
+| `ERUI_FONT_POOL_BYTES`                                                       | 0                     | A static pool for fonts loaded at runtime; 0 disables `er_font_load`                                                                   |
+| `ERUI_SHADOWS`, `ERUI_3D_TRANSFORMS`, `ERUI_GRADIENT`, `ERUI_BILINEAR_SCALE` | varies                | Features that cost code and scratch; off is free                                                                                       |
 
 The vector rasterize has its own pools, and unlike the pixel scratch they must live in **internal
 RAM** on a PSRAM board, because the scanline loops touch them per pixel:
 
-| Flag                                           | Default | Bounds                                                         |
-| ---------------------------------------------- | ------- | -------------------------------------------------------------- |
-| `ERUI_MAX_VECTOR_NODES`                        | 8       | `<Svg>` nodes with geometry at once                            |
-| `ERUI_VECTOR_PAINTS_MAX`                       | 16      | Shapes per `<Svg>`                                             |
-| `ERUI_VECTOR_MAX_PTS`, `ERUI_VECTOR_MAX_EDGES` | 2048    | Flattened points, and edges, in one shape                      |
-| `ERUI_VECTOR_MAX_ROW`                          | 1024    | The widest vector node, in pixels                              |
-| `ERUI_ARC_MAX_RADIUS`, `ERUI_ARC_SPAN_CACHE`   | 255, 8  | The arc widget's shared span cache, about 4 KB at the defaults |
+| Flag                                              | Default | Bounds                                                         |
+| ------------------------------------------------- | ------- | -------------------------------------------------------------- |
+| `ERUI_MAX_VECTOR_NODES`                           | 8       | `<Svg>` nodes with geometry at once                            |
+| `ERUI_VECTOR_PAINTS_MAX`                          | 16      | Shapes per `<Svg>`                                             |
+| `ERUI_VECTOR_MAX_POINTS`, `ERUI_VECTOR_MAX_EDGES` | 2048    | Flattened points, and edges, in one shape                      |
+| `ERUI_VECTOR_MAX_ROW`                             | 1024    | The widest vector node, in pixels                              |
+| `ERUI_ARC_MAX_RADIUS`, `ERUI_ARC_SPAN_CACHE`      | 255, 8  | The arc widget's shared span cache, about 4 KB at the defaults |
 
 Turn the perf overlay on and its `VEC n/8 IMG n/128` line shows the pools filling; a screen missing an
 asset reads as a full image pool.
@@ -100,13 +100,13 @@ The CYD logs free RAM at boot and again after start-up, the ESP32-S3 once after 
 
 ## Symptoms and causes
 
-| Symptom                                                            | Likely cause                                                                                                               |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| An image draws as a hole; `IMG` reads full in the overlay          | The image registry is full: raise `ERUI_IMAGE_REGISTRY_MAX`                                                                |
-| A `<Svg>` stops drawing; `VEC` shows `!FULL`                       | More vector nodes than `ERUI_MAX_VECTOR_NODES`, or more shapes than `ERUI_VECTOR_PAINTS_MAX` in one                        |
-| A fade or rotation is clipped, or a node will not fade at all      | The node is larger than the scratch buffer: raise `ERUI_SCRATCH_W/H` or `ERUI_XFORM_W/H`, or shrink the node               |
-| JS "stack overflow", or an RTOS stack-overflow panic               | The host task's stack is too small for the reconciler's recursion                                                          |
-| The RP2040 reboots and logs `rebooted by the watchdog`             | A frame or a driver hung, or the stack overflowed into its guard; a debug `stack=` heartbeat near 8192 points at the stack |
-| Free heap falls a few KB per re-render and never recovers (Flow A) | The custom allocator's `js_malloc_usable_size` returns 0, so the collector never runs                                      |
-| A long list stops adding rows                                      | The node pool is full (`ERUI_MAX_NODES`), or in Flow B the list is past `ER_AOT_LIST_CAP`                                  |
-| A no-PSRAM ESP32 fails to allocate its band buffers                | Internal RAM is fragmented: shrink `ER_LCD_BANDED_ROWS`, or free DMA-capable RAM elsewhere                                 |
+| Symptom                                                            | Likely cause                                                                                                                                                               |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An image draws as a hole; `IMG` reads full in the overlay          | The image registry is full: raise `ERUI_IMAGE_REGISTRY_MAX`                                                                                                                |
+| A `<Svg>` stops drawing; `VEC` shows `!FULL`                       | More vector nodes than `ERUI_MAX_VECTOR_NODES`, or more shapes than `ERUI_VECTOR_PAINTS_MAX` in one                                                                        |
+| A fade or rotation is clipped, or a node will not fade at all      | The node is larger than the scratch buffer: raise `ERUI_SCRATCH_WIDTH` and `ERUI_SCRATCH_HEIGHT` or `ERUI_TRANSFORM_WIDTH` and `ERUI_TRANSFORM_HEIGHT`, or shrink the node |
+| JS "stack overflow", or an RTOS stack-overflow panic               | The host task's stack is too small for the reconciler's recursion                                                                                                          |
+| The RP2040 reboots and logs `rebooted by the watchdog`             | A frame or a driver hung, or the stack overflowed into its guard; a debug `stack=` heartbeat near 8192 points at the stack                                                 |
+| Free heap falls a few KB per re-render and never recovers (Flow A) | The custom allocator's `js_malloc_usable_size` returns 0, so the collector never runs                                                                                      |
+| A long list stops adding rows                                      | The node pool is full (`ERUI_MAX_NODES`), or in Flow B the list is past `ER_AOT_LIST_CAP`                                                                                  |
+| A no-PSRAM ESP32 fails to allocate its band buffers                | Internal RAM is fragmented: shrink `ER_LCD_BANDED_ROWS`, or free DMA-capable RAM elsewhere                                                                                 |

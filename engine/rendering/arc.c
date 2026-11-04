@@ -17,7 +17,7 @@
 /*----------------------------------------------------------------------------------------------------------------------
  - Analytic annular-sector rasterizer (the Arc widget's core).
  *
- * A stroked arc through the generic vector path (ER_VOP_ARC) is flattened to a polyline, offset into a stroke
+ * A stroked arc through the generic vector path (ER_VECTOR_OP_ARC) is flattened to a polyline, offset into a stroke
  * outline and scan-converted with sub-scanline coverage — a cost paid again on every frame of a moving dial.
  * An arc is simple enough to evaluate in closed form instead:
  *

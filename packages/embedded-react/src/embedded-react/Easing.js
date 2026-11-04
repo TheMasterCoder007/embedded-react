@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// Easing tokens. The engine implements a fixed set of easing curves (ERAnimEasing), so unlike RN's
+// Easing tokens. The engine implements a fixed set of easing curves (ERAnimationEasing), so unlike RN's
 // composable Easing functions these are string tokens the bridge maps to the engine enum. `bezier`
 // returns a control-point object the bridge reads as a custom cubic-bezier curve.
 export const Easing = {

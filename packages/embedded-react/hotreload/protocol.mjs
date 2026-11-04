@@ -28,7 +28,7 @@
 //
 //   magic "ERHR"   (4 bytes)
 //   proto_version  u8  = 1
-//   msg_type       u8  (1 = LOAD_CONTAINER)
+//   message_type       u8  (1 = LOAD_CONTAINER)
 //   flags          u16 = 0   (reserved)
 //   payload_len    u32       — bytes of .erpkg that follow the header
 //   payload_crc    u32       — CRC-32/IEEE over the payload (same polynomial as ERCF / the C loader)

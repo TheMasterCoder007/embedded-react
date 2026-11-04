@@ -583,8 +583,8 @@ static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ct
 
                 for (int column = group_count * ER_PIE_LANES; column < width; column++)
                 {
-                    stage[column] =
-                        er_pie_blend_px_565(stage[column], source_pixel, ER_PIE_ALPHA_OPAQUE, ER_PIE_FILL_MATH, column);
+                    stage[column] = er_pie_blend_pixel_565(
+                        stage[column], source_pixel, ER_PIE_ALPHA_OPAQUE, ER_PIE_FILL_MATH, column);
                 }
                 first_scalar_column = width;
             }
@@ -652,7 +652,7 @@ static void copy_fmt_cb(
     }
     const int skip_x = x - original_x;
     const int skip_y = y - original_y;
-    if (format == ER_IMG_RGB565)
+    if (format == ER_IMAGE_RGB565)
     {
         for (int row = 0; row < height; row++)
         {
@@ -738,7 +738,7 @@ blend_cb(const void* source, int source_stride_bytes, uint8_t alpha, int x, int 
 
             for (int column = group_count * ER_PIE_LANES; column < width; column++)
             {
-                stage[column] = er_pie_blend_px_565(
+                stage[column] = er_pie_blend_pixel_565(
                     stage[column], simd_source[column], (uint8_t)global_alpha, dither_phase, column);
             }
             first_scalar_column = width;
@@ -1229,11 +1229,11 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
     static EmbeddedRenderBackend backend;
     backend.fill_rect = fill_cb;
     backend.copy_rect = copy_cb;
-    backend.copy_rect_fmt = copy_fmt_cb;
+    backend.copy_rect_format = copy_fmt_cb;
     backend.blend_rect = blend_cb;
     backend.wait = NULL;
     backend.frame_ready = NULL; /* engine doesn't auto-present; the host calls er_esp32_lcd_present() */
-    backend.ctx = NULL;
+    backend.context = NULL;
     embedded_renderer_set_backend(&backend);
     /* Direct mode rotates the panel framebuffers; tell the engine so each commit repaints the
      * target buffer's accumulated damage debt (see er_set_display_buffer_count in er_scene.h). */

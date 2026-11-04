@@ -62,7 +62,7 @@ static const ImgMask k_square_mask = {0, 0, 0, 0, 0, 0, 0, 0, false};
 /** @brief Single-row scratch buffer used when nearest-neighbor scaling is required. */
 /* One assembled row per render worker: cheap enough to duplicate, and it keeps image
  * blits parallel-safe (see the multi-core render fork in compositor.c). */
-static uint32_t s_row_buffer_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMG_ROW_PIXELS];
+static uint32_t s_row_buffer_pool[ERUI_RENDER_WORKERS][ERUI_MAX_IMAGE_ROW_PIXELS];
 
 /** @brief The calling worker's image row buffer. */
 static inline uint32_t* irow(void)
@@ -97,7 +97,7 @@ static inline uint32_t rgb565_to_argb(uint16_t pixel)
 static inline uint32_t fetch_px(const ImageEntry* image, int x, int y)
 {
     const size_t pixel_index = (size_t)y * (size_t)image->width + (size_t)x;
-    if (image->format == ER_IMG_RGB565)
+    if (image->format == ER_IMAGE_RGB565)
         return rgb565_to_argb(((const uint16_t*)image->pixels)[pixel_index]);
     return ((const uint32_t*)image->pixels)[pixel_index];
 }
@@ -248,8 +248,8 @@ static void mask_init(ImgMask* mask, const ERImageProps* props, const ERRect* bo
         return;
     mask->x = box->x;
     mask->y = box->y;
-    mask->width = box->w;
-    mask->height = box->h;
+    mask->width = box->width;
+    mask->height = box->height;
     mask->radius_top_left = props->border_top_left_radius;
     mask->radius_top_right = props->border_top_right_radius;
     mask->radius_bottom_right = props->border_bottom_right_radius;
@@ -409,7 +409,7 @@ static void emit_unscaled_row(const ImageEntry* image,
                               int visible_x0,
                               int visible_x1)
 {
-    if (image->format == ER_IMG_ARGB8888)
+    if (image->format == ER_IMAGE_ARGB8888)
     {
         const uint32_t* source_pixels =
             (const uint32_t*)image->pixels + (size_t)source_row * (size_t)image->width + (size_t)source_x;
@@ -419,10 +419,10 @@ static void emit_unscaled_row(const ImageEntry* image,
     }
     const uint16_t* source_pixels =
         (const uint16_t*)image->pixels + (size_t)source_row * (size_t)image->width + (size_t)source_x;
-    for (int chunk_x = visible_x0; chunk_x < visible_x1; chunk_x += ERUI_MAX_IMG_ROW_PIXELS)
+    for (int chunk_x = visible_x0; chunk_x < visible_x1; chunk_x += ERUI_MAX_IMAGE_ROW_PIXELS)
     {
         const int chunk_width =
-            (visible_x1 - chunk_x) < ERUI_MAX_IMG_ROW_PIXELS ? (visible_x1 - chunk_x) : ERUI_MAX_IMG_ROW_PIXELS;
+            (visible_x1 - chunk_x) < ERUI_MAX_IMAGE_ROW_PIXELS ? (visible_x1 - chunk_x) : ERUI_MAX_IMAGE_ROW_PIXELS;
         for (int chunk_column = 0; chunk_column < chunk_width; chunk_column++)
             irow()[chunk_column] = rgb565_to_argb(source_pixels[chunk_x + chunk_column]);
         emit_row(mask, irow(), true, destination_x + chunk_x, y, chunk_width);
@@ -443,17 +443,17 @@ static void emit_unscaled_row(const ImageEntry* image,
 static void render_unscaled(
     const ImageEntry* image, int source_x, int source_y, int destination_x, int destination_y, int width, int height)
 {
-    if (image->format == ER_IMG_ARGB8888)
+    if (image->format == ER_IMAGE_ARGB8888)
     {
         /* Emit directly from the source buffer rows using the image's own row stride. An opaque
-         * image goes through the format-aware entry point: with a copy_rect_fmt backend that is
+         * image goes through the format-aware entry point: with a copy_rect_format backend that is
          * one whole-rect call carrying the engine's opacity guarantee (no per-pixel alpha scan
          * backend-side); otherwise it degrades to the classic er_blit_copy. */
         const int image_stride = image->width * (int)sizeof(uint32_t);
         const uint32_t* rows =
             (const uint32_t*)image->pixels + (size_t)source_y * (size_t)image->width + (size_t)source_x;
         if (image->opaque)
-            er_blit_copy_fmt(rows, image_stride, ER_IMG_ARGB8888, destination_x, destination_y, width, height);
+            er_blit_copy_fmt(rows, image_stride, ER_IMAGE_ARGB8888, destination_x, destination_y, width, height);
         else
             er_blit_blend(rows, image_stride, ER_ALPHA_OPAQUE, destination_x, destination_y, width, height);
         return;
@@ -466,10 +466,10 @@ static void render_unscaled(
     const int rgb565_stride = image->width * (int)sizeof(uint16_t);
     const uint16_t* rgb565_rows =
         (const uint16_t*)image->pixels + (size_t)source_y * (size_t)image->width + (size_t)source_x;
-    if (er_blit_copy_fmt(rgb565_rows, rgb565_stride, ER_IMG_RGB565, destination_x, destination_y, width, height))
+    if (er_blit_copy_fmt(rgb565_rows, rgb565_stride, ER_IMAGE_RGB565, destination_x, destination_y, width, height))
         return;
 
-    /* CPU fallback (no copy_rect_fmt backend, scratch capture, or inherited alpha): expand each
+    /* CPU fallback (no copy_rect_format backend, scratch capture, or inherited alpha): expand each
      * row into the scratch buffer (internal RAM — reads from the 2 B/px source are the only
      * external-memory source traffic), then emit it. */
     int visible_x0, visible_y0, visible_x1, visible_y1;
@@ -575,7 +575,7 @@ static void render_region(const ImageEntry* image,
 
     /* General path: scale and/or tint via a one-row scratch buffer. */
     const int capped_width =
-        (destination_width <= ERUI_MAX_IMG_ROW_PIXELS) ? destination_width : ERUI_MAX_IMG_ROW_PIXELS;
+        (destination_width <= ERUI_MAX_IMAGE_ROW_PIXELS) ? destination_width : ERUI_MAX_IMAGE_ROW_PIXELS;
     int visible_x0, visible_y0, visible_x1, visible_y1;
     if (!visible_part(destination_x,
                       destination_y,
@@ -621,12 +621,12 @@ static void render_region(const ImageEntry* image,
 
 void er_image_load(const char* name, const void* argb_pixels, int width, int height)
 {
-    image_registry_store(name, argb_pixels, width, height, ER_IMG_ARGB8888);
+    image_registry_store(name, argb_pixels, width, height, ER_IMAGE_ARGB8888);
 }
 
 void er_image_load_rgb565(const char* name, const void* rgb565_pixels, int width, int height)
 {
-    image_registry_store(name, rgb565_pixels, width, height, ER_IMG_RGB565);
+    image_registry_store(name, rgb565_pixels, width, height, ER_IMAGE_RGB565);
 }
 
 bool er_image_exists(const char* name)

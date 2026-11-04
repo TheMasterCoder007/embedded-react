@@ -112,11 +112,11 @@ describe('bake-svg: svgToVector', () => {
       '<svg viewBox="0 0 10 10"><path d="M0 0 L1 1" fill="url(#missing)"/></svg>',
     );
     expect(paints[0]).toBe(0); // no solid fill
-    expect(paints[7]).toBe(0); // no gradient assigned (fill_grad = 0)
+    expect(paints[7]).toBe(0); // no gradient assigned (fill_gradient = 0)
     expect(gradients).toHaveLength(0);
   });
 
-  it('bakes a <linearGradient> fill into the gradient table with a 1-based fill_grad', async () => {
+  it('bakes a <linearGradient> fill into the gradient table with a 1-based fill_gradient', async () => {
     const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="g"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
@@ -134,7 +134,7 @@ describe('bake-svg: svgToVector', () => {
       Math.round(gradient.bx),
       Math.round(gradient.by),
     ]).toEqual([0, 0, 10, 0]);
-    // The rect's paint: solid fill 0, fill_grad = 1 (1-based; the 8th paint field).
+    // The rect's paint: solid fill 0, fill_gradient = 1 (1-based; the 8th paint field).
     expect(artifact.paints[0]).toBe(0);
     expect(artifact.paints[7]).toBe(1);
   });
@@ -173,7 +173,7 @@ describe('bake-svg: svgToVector', () => {
     expect(artifact.paints[7]).toBe(1);
   });
 
-  it('bakes a STROKE gradient into stroke_grad while the fill stays solid', async () => {
+  it('bakes a STROKE gradient into stroke_gradient while the fill stays solid', async () => {
     const artifact = await svgToVector(
       '<svg viewBox="0 0 10 10">' +
         '<defs><linearGradient id="s"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>' +
@@ -183,8 +183,8 @@ describe('bake-svg: svgToVector', () => {
     expect(artifact.gradients).toHaveLength(1);
     expect(artifact.gradients[0].type).toBe(1); // GRAD_LINEAR
     expect(artifact.paints[0] & 0xffffff).toBe(0x101010); // solid fill kept
-    expect(artifact.paints[7]).toBe(0); // fill_grad = none
-    expect(artifact.paints[8]).toBe(1); // stroke_grad = 1 (the 9th paint field)
+    expect(artifact.paints[7]).toBe(0); // fill_gradient = none
+    expect(artifact.paints[8]).toBe(1); // stroke_gradient = 1 (the 9th paint field)
   });
 
   it('falls back to default coordinates when <linearGradient> attributes evaluate to NaN', async () => {

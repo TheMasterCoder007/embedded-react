@@ -139,7 +139,7 @@ static void build_font_pack(TestPack* pack, char first_family, uint32_t family_c
     for (uint32_t family_index = 0; family_index < family_count; family_index++)
     {
         const char family[] = {(char)(first_family + family_index), '\0'};
-        tpack_font(pack, family, ERUI_FONT_FMT_1BIT);
+        tpack_font(pack, family, ERUI_FONT_FORMAT_1BIT);
     }
 }
 
@@ -175,7 +175,7 @@ static void test_bad_pack_fails_the_load(void)
     CHECK(er_runtime_load_container_ex(s_container, s_container_length, true) == ER_CONTAINER_BAD_ASSETS,
           "the same with copied assets");
     CHECK(!er_image_exists("good") && !er_image_exists("early"), "no pack is registered from the copy");
-    CHECK(strcmp(er_runtime_container_status_str(ER_CONTAINER_BAD_ASSETS), "unknown") != 0,
+    CHECK(strcmp(er_runtime_container_status_name(ER_CONTAINER_BAD_ASSETS), "unknown") != 0,
           "the status has a reason to show");
 }
 
@@ -190,7 +190,7 @@ static void test_too_many_font_families_fails_the_load(void)
     for (uint32_t family_index = 0; family_index < family_count; family_index++)
     {
         const char family[] = {(char)('a' + family_index), '\0'};
-        tpack_font(&pack, family, ERUI_FONT_FMT_1BIT);
+        tpack_font(&pack, family, ERUI_FONT_FORMAT_1BIT);
     }
     er_image_clear();
     build_with_pack(&pack);
