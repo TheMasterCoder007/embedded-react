@@ -63,14 +63,14 @@
  * settled state on the capture path at all. */
 #define NODE_X 60
 #define NODE_Y 60
-#define NODE_W 100
-#define NODE_H 100
-#define NODE_CX (NODE_X + NODE_W / 2)
-#define NODE_CY (NODE_Y + NODE_H / 2)
+#define NODE_WIDTH 100
+#define NODE_HEIGHT 100
+#define NODE_CENTER_X (NODE_X + NODE_WIDTH / 2)
+#define NODE_CENTER_Y (NODE_Y + NODE_HEIGHT / 2)
 
 /* Well outside the raw box, and outside every transformed footprint here. */
-#define OUTSIDE_X (NODE_X + NODE_W + 20)
-#define OUTSIDE_Y (NODE_Y + NODE_H + 20)
+#define OUTSIDE_X (NODE_X + NODE_WIDTH + 20)
+#define OUTSIDE_Y (NODE_Y + NODE_HEIGHT + 20)
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend
@@ -79,36 +79,36 @@
 /* Hit-testing reads no pixels, but the paint has to actually run: last_paint_untransformed is what the
  * gate under test consults, and it is written by render_tree. The callbacks discard their input. */
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
@@ -120,33 +120,33 @@ static int s_press_count = 0;
 static int s_change_count = 0;
 
 /** @brief Counts presses on the node under test. */
-static void on_press(ERNode* n, const EREventData* d, void* ud)
+static void on_press(ERNode* node, const EREventData* data, void* user_data)
 {
-    (void)n;
-    (void)d;
-    (void)ud;
+    (void)node;
+    (void)data;
+    (void)user_data;
     s_press_count++;
 }
 
 /** @brief Counts native Arc value changes, which is how a drag reports itself. */
-static void on_change(ERNode* n, const EREventData* d, void* ud)
+static void on_change(ERNode* node, const EREventData* data, void* user_data)
 {
-    (void)n;
-    (void)d;
-    (void)ud;
+    (void)node;
+    (void)data;
+    (void)user_data;
     s_change_count++;
 }
 
 /**
  * @brief Reports one failed assertion.
  *
- * @param[in] msg  What was expected.
+ * @param[in] message  What was expected.
  *
  * @return EXIT_FAILURE, for the caller to return.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -171,8 +171,8 @@ static bool tap_hits(int x, int y)
 typedef struct
 {
     float scale;     /**< 0 = unset (identity scale). */
-    float rot_z;     /**< Degrees. */
-    float rot_y;     /**< Degrees (3D; ignored unless ERUI_3D_TRANSFORMS). */
+    float rotate_z;  /**< Degrees. */
+    float rotate_y;  /**< Degrees (3D; ignored unless ERUI_3D_TRANSFORMS). */
     bool invertible; /**< What er_transform_is_invertible() must answer for it. */
 } Xform;
 
@@ -184,65 +184,65 @@ typedef struct
 } Scenario;
 
 /** @brief Applies a transform state to a props block. */
-static void set_transform(ERProps* p, const Xform* x)
+static void set_transform(ERProps* props, const Xform* transform)
 {
-    p->transform_scale_x = x->scale;
-    p->transform_scale_y = x->scale;
-    p->transform_rotate_z = x->rot_z;
+    props->transform_scale_x = transform->scale;
+    props->transform_scale_y = transform->scale;
+    props->transform_rotate_z = transform->rotate_z;
 #if ERUI_3D_TRANSFORMS
-    p->transform_rotate_y = x->rot_y;
+    props->transform_rotate_y = transform->rotate_y;
 #else
-    (void)x->rot_y;
+    (void)transform->rotate_y;
 #endif
 }
 
 /** @brief Props for the root: opaque, screen-sized, so the node has something to fall through TO. */
 static ERProps root_props(void)
 {
-    ERProps p;
-    er_props_default(&p);
-    p.width = SCREEN;
-    p.height = SCREEN;
-    p.background_color = 0xFF000000U;
-    return p;
+    ERProps props;
+    er_props_default(&props);
+    props.width = SCREEN;
+    props.height = SCREEN;
+    props.background_color = 0xFF000000U;
+    return props;
 }
 
 /** @brief Props for the node under test, before its transform is applied. */
 static ERProps node_props(void)
 {
-    ERProps p;
-    er_props_default(&p);
-    p.position = ER_POS_ABSOLUTE;
-    p.left = NODE_X;
-    p.top = NODE_Y;
-    p.width = NODE_W;
-    p.height = NODE_H;
-    p.background_color = 0xFF2244AAU;
-    return p;
+    ERProps props;
+    er_props_default(&props);
+    props.position = ER_POS_ABSOLUTE;
+    props.left = NODE_X;
+    props.top = NODE_Y;
+    props.width = NODE_WIDTH;
+    props.height = NODE_HEIGHT;
+    props.background_color = 0xFF2244AAU;
+    return props;
 }
 
 /**
  * @brief Settles a pressable on a transform and asserts it really took the capture path.
  *
- * @param[in]  x     Transform state to settle on.
- * @param[out] out   Receives the node.
+ * @param[in]  transform  Transform state to settle on.
+ * @param[out] out        Receives the node.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE when the setup did not land where the scenario says.
  */
-static int settle_pressable(const Xform* x, ERNode** out)
+static int settle_pressable(const Xform* transform, ERNode** out)
 {
     er_reset();
     s_press_count = 0;
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = root_props();
-    er_node_set_props(root, &rp);
+    ERProps root_view_props = root_props();
+    er_node_set_props(root, &root_view_props);
     er_tree_set_root(root);
 
     ERNode* node = er_node_create(ER_NODE_PRESSABLE);
-    ERProps np = node_props();
-    set_transform(&np, x);
-    er_node_set_props(node, &np);
+    ERProps pressable_props = node_props();
+    set_transform(&pressable_props, transform);
+    er_node_set_props(node, &pressable_props);
     er_event_set(node, ER_EVENT_PRESS, on_press, NULL);
     er_tree_append_child(root, node);
 
@@ -253,7 +253,7 @@ static int settle_pressable(const Xform* x, ERNode** out)
 
     /* The node has no scroll or keyboard shift above it, so its layout position IS the origin both
      * render_tree and node_map_point() hand the matrix. */
-    if (er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_W, NODE_H) != x->invertible)
+    if (er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT) != transform->invertible)
         return fail("the settled state did not land on the side of the epsilon the scenario names");
     if (!node->has_last_paint || node->last_paint_untransformed)
         return fail("the settled transform did not take the capture path — the scenario proves nothing");
@@ -264,28 +264,28 @@ static int settle_pressable(const Xform* x, ERNode** out)
 /**
  * @brief Drives one node across the invert threshold without committing, and taps its painted pixels.
  *
- * @param[in] s  Scenario to run.
+ * @param[in] scenario  Scenario to run.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
  */
-static int check_singular_crossing(const Scenario* s)
+static int check_singular_crossing(const Scenario* scenario)
 {
     ERNode* node = NULL;
-    if (settle_pressable(&s->from, &node) != EXIT_SUCCESS)
+    if (settle_pressable(&scenario->from, &node) != EXIT_SUCCESS)
         return EXIT_FAILURE;
 
     /* Control: the settled state answers, and answers only over itself. Every state here keeps the
      * node's centre fixed (a centre pivot is the default), so the centre is on the paint throughout. */
-    if (!tap_hits(NODE_CX, NODE_CY))
+    if (!tap_hits(NODE_CENTER_X, NODE_CENTER_Y))
         return fail("a tap on the middle of a settled transformed node did not reach it");
     if (tap_hits(OUTSIDE_X, OUTSIDE_Y))
         return fail("a tap past a settled transformed node still reached it");
 
-    ERProps np = node_props();
-    set_transform(&np, &s->to);
-    er_node_set_props(node, &np);
+    ERProps pressable_props = node_props();
+    set_transform(&pressable_props, &scenario->to);
+    er_node_set_props(node, &pressable_props);
 
-    if (er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_W, NODE_H) != s->to.invertible)
+    if (er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT) != scenario->to.invertible)
         return fail("the collapsed state did not land on the side of the epsilon the scenario names");
     /* The window under test: the props are the new ones, the panel is still showing the old paint, and
      * the flag still describes it. Without this the scenario could pass on a node that had quietly
@@ -294,7 +294,7 @@ static int check_singular_crossing(const Scenario* s)
         return fail("the fallback flag already retired — there is no stale window left to test");
 
     /* THE REGRESSION: pixels of the settled paint, unchanged on the panel, before any repaint. */
-    if (!tap_hits(NODE_CX, NODE_CY))
+    if (!tap_hits(NODE_CENTER_X, NODE_CENTER_Y))
         return fail("a tap on the painted pixels of a just-collapsed transform was dropped");
     /* ... and the fallback is the node's box, not the whole screen. */
     if (tap_hits(OUTSIDE_X, OUTSIDE_Y))
@@ -304,12 +304,12 @@ static int check_singular_crossing(const Scenario* s)
 
     if (!node->last_paint_untransformed)
         return fail("the collapsed transform did not fall back to its raw box on the next paint");
-    if (!tap_hits(NODE_CX, NODE_CY))
+    if (!tap_hits(NODE_CENTER_X, NODE_CENTER_Y))
         return fail("a tap on a collapsed transform's raw box missed after the repaint");
     if (tap_hits(OUTSIDE_X, OUTSIDE_Y))
         return fail("a repainted collapsed transform answered for a tap outside its box");
 
-    printf("%s: hit through the stale window and after the repaint\n", s->name);
+    printf("%s: hit through the stale window and after the repaint\n", scenario->name);
     return EXIT_SUCCESS;
 }
 
@@ -332,14 +332,14 @@ static int test_invertible_crossing_still_maps_through_transform(void)
 
     /* det = 4e-6, comfortably over the 1e-6 affine epsilon: still a real transform. */
     const Xform to = {0.002f, 0.0f, 0.0f, true};
-    ERProps np = node_props();
-    set_transform(&np, &to);
-    er_node_set_props(node, &np);
+    ERProps pressable_props = node_props();
+    set_transform(&pressable_props, &to);
+    er_node_set_props(node, &pressable_props);
 
-    if (!er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_W, NODE_H))
+    if (!er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT))
         return fail("the control state is singular — it no longer straddles the epsilon");
 
-    if (!tap_hits(NODE_CX, NODE_CY))
+    if (!tap_hits(NODE_CENTER_X, NODE_CENTER_Y))
         return fail("a tap on the speck an invertible shrink draws did not reach it");
     /* Inside the raw box, far outside the speck: the transform, not the box, has to answer. */
     if (tap_hits(NODE_X + 10, NODE_Y + 10))
@@ -366,41 +366,41 @@ static int test_singular_arc_still_drags(void)
     s_change_count = 0;
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = root_props();
-    er_node_set_props(root, &rp);
+    ERProps root_view_props = root_props();
+    er_node_set_props(root, &root_view_props);
     er_tree_set_root(root);
 
     ERNode* arc = er_node_create(ER_NODE_ARC);
-    ERProps ap;
-    er_props_default(&ap);
-    ap.position = ER_POS_ABSOLUTE;
-    ap.left = NODE_X;
-    ap.top = NODE_Y;
-    ap.width = NODE_W;
-    ap.height = NODE_H;
-    ap.arc_width = 16;
-    ap.arc_value = 25.0f;
-    ap.arc_max = 100.0f;
-    ap.arc_step = 5.0f;
-    ap.arc_adjustable = 1;
-    ap.arc_track_color = 0xFF404040U;
-    ap.arc_indicator_color = 0xFF00A0FFU;
-    ap.transform_scale_x = 1.0f; /* a real transform on the capture path, and the identity matrix */
-    ap.transform_scale_y = 1.0f;
-    er_node_set_props(arc, &ap);
+    ERProps arc_props;
+    er_props_default(&arc_props);
+    arc_props.position = ER_POS_ABSOLUTE;
+    arc_props.left = NODE_X;
+    arc_props.top = NODE_Y;
+    arc_props.width = NODE_WIDTH;
+    arc_props.height = NODE_HEIGHT;
+    arc_props.arc_width = 16;
+    arc_props.arc_value = 25.0f;
+    arc_props.arc_max = 100.0f;
+    arc_props.arc_step = 5.0f;
+    arc_props.arc_adjustable = 1;
+    arc_props.arc_track_color = 0xFF404040U;
+    arc_props.arc_indicator_color = 0xFF00A0FFU;
+    arc_props.transform_scale_x = 1.0f; /* a real transform on the capture path, and the identity matrix */
+    arc_props.transform_scale_y = 1.0f;
+    er_node_set_props(arc, &arc_props);
     er_event_set(arc, ER_EVENT_VALUE_CHANGE, on_change, NULL);
     er_tree_append_child(root, arc);
 
     er_commit();
     er_commit();
 
-    if (!er_transform_is_invertible(arc, NODE_X, NODE_Y, NODE_W, NODE_H) || !arc->has_last_paint
+    if (!er_transform_is_invertible(arc, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT) || !arc->has_last_paint
         || arc->last_paint_untransformed)
         return fail("the settled dial did not take the capture path — the scenario proves nothing");
 
     /* Top of the ring: centre 110,110, r_mid = 50 - 16/2 = 42, and 270 degrees is inside the default
      * 270-degree sweep from 135. */
-    const int ring_x = NODE_CX, ring_y = NODE_CY - 42;
+    const int ring_x = NODE_CENTER_X, ring_y = NODE_CENTER_Y - 42;
 
     embedded_renderer_touch(0, ER_TOUCH_DOWN, ring_x, ring_y);
     if (s_change_count != 1 || arc->arc_drag_finger < 0)
@@ -408,12 +408,12 @@ static int test_singular_arc_still_drags(void)
     embedded_renderer_touch(0, ER_TOUCH_UP, ring_x, ring_y);
 
     /* Collapse it, without committing. Every other prop is re-supplied as it was. */
-    ap.transform_scale_x = 0.0005f;
-    ap.transform_scale_y = 0.0005f;
-    er_node_set_props(arc, &ap);
+    arc_props.transform_scale_x = 0.0005f;
+    arc_props.transform_scale_y = 0.0005f;
+    er_node_set_props(arc, &arc_props);
     s_change_count = 0;
 
-    if (er_transform_is_invertible(arc, NODE_X, NODE_Y, NODE_W, NODE_H))
+    if (er_transform_is_invertible(arc, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT))
         return fail("the collapsed dial transform still inverts — it no longer crosses the epsilon");
     if (arc->last_paint_untransformed)
         return fail("the dial's fallback flag already retired — no stale window left to test");
@@ -436,17 +436,17 @@ static int test_singular_arc_still_drags(void)
  */
 int main(void)
 {
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {0};
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
 #if ERUI_TRANSFORMS_FULL
     /* Vacuous unless the settled state really captures, which needs the node to fit the scratch. */
-    if (!er_transform_source_fits(NODE_W, NODE_H))
+    if (!er_transform_source_fits(NODE_WIDTH, NODE_HEIGHT))
     {
-        printf("SKIP: a %dx%d node does not fit this build's transform scratch\n", NODE_W, NODE_H);
+        printf("SKIP: a %dx%d node does not fit this build's transform scratch\n", NODE_WIDTH, NODE_HEIGHT);
         return EXIT_SUCCESS;
     }
 
@@ -467,9 +467,9 @@ int main(void)
 #endif
     };
 
-    for (size_t i = 0; i < sizeof(k_scenarios) / sizeof(k_scenarios[0]); i++)
+    for (size_t scenario_index = 0; scenario_index < sizeof(k_scenarios) / sizeof(k_scenarios[0]); scenario_index++)
     {
-        if (check_singular_crossing(&k_scenarios[i]) != EXIT_SUCCESS)
+        if (check_singular_crossing(&k_scenarios[scenario_index]) != EXIT_SUCCESS)
             return EXIT_FAILURE;
     }
 

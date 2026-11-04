@@ -43,12 +43,13 @@
 #include <string.h>
 
 #define SCREEN 200
+#define OPACITY_OPAQUE 255U
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend: source-over framebuffer + per-pixel touch tracking
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_fb[SCREEN * SCREEN];
+static uint32_t s_framebuffer[SCREEN * SCREEN];
 static uint8_t s_touched[SCREEN * SCREEN]; /* pixels written by any op since touched_reset() */
 
 static void touched_reset(void)
@@ -56,69 +57,71 @@ static void touched_reset(void)
     memset(s_touched, 0, sizeof(s_touched));
 }
 
-static void mark_touched(int x, int y, int w, int h)
+static void mark_touched(int x, int y, int width, int height)
 {
-    for (int row = y; row < y + h; row++)
-        for (int col = x; col < x + w; col++)
-            if (row >= 0 && row < SCREEN && col >= 0 && col < SCREEN)
-                s_touched[row * SCREEN + col] = 1U;
+    for (int row = y; row < y + height; row++)
+        for (int column = x; column < x + width; column++)
+            if (row >= 0 && row < SCREEN && column >= 0 && column < SCREEN)
+                s_touched[row * SCREEN + column] = 1U;
 }
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
 /** @brief Straight-alpha source-over fill (mirrors backends/software), plus touch tracking. */
-static void fb_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fb_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || w <= 0 || h <= 0)
+    const uint32_t alpha = (argb >> 24) & 0xFFU;
+    if (alpha == 0U || width <= 0 || height <= 0)
         return;
-    mark_touched(x, y, w, h);
-    for (int row = y; row < y + h; row++)
+    mark_touched(x, y, width, height);
+    for (int row = y; row < y + height; row++)
     {
         if (row < 0 || row >= SCREEN)
             continue;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col < 0 || col >= SCREEN)
+            if (column < 0 || column >= SCREEN)
                 continue;
-            uint32_t* d = &s_fb[row * SCREEN + col];
-            if (a == 0xFFU)
+            uint32_t* destination = &s_framebuffer[row * SCREEN + column];
+            if (alpha == 0xFFU)
             {
-                *d = 0xFF000000U | (argb & 0x00FFFFFFU);
+                *destination = 0xFF000000U | (argb & 0x00FFFFFFU);
             }
             else
             {
-                const uint32_t inv = 255U - a;
-                const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-                const uint32_t sr = (argb >> 16) & 0xFFU, sg = (argb >> 8) & 0xFFU, sb = argb & 0xFFU;
-                const uint32_t r = div255(sr * a) + div255(dr * inv);
-                const uint32_t g = div255(sg * a) + div255(dg * inv);
-                const uint32_t b = div255(sb * a) + div255(db * inv);
-                *d = 0xFF000000U | (r << 16) | (g << 8) | b;
+                const uint32_t inverse_alpha = ER_CHANNEL_MAX - alpha;
+                const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                               destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+                const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU,
+                               source_blue = argb & 0xFFU;
+                const uint32_t red = div255(source_red * alpha) + div255(destination_red * inverse_alpha);
+                const uint32_t green = div255(source_green * alpha) + div255(destination_green * inverse_alpha);
+                const uint32_t blue = div255(source_blue * alpha) + div255(destination_blue * inverse_alpha);
+                *destination = 0xFF000000U | (red << 16) | (green << 8) | blue;
             }
         }
     }
 }
 
-static void fb_copy(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void fb_copy(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)ctx;
-    mark_touched(x, y, w, h); /* content irrelevant to these scenes; the footprint is what matters */
+    mark_touched(x, y, width, height); /* content irrelevant to these scenes; the footprint is what matters */
 }
 
-static void fb_blend(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void fb_blend(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)ctx;
-    mark_touched(x, y, w, h);
+    mark_touched(x, y, width, height);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -127,24 +130,24 @@ static void fb_blend(const void* src, int stride, uint8_t alpha, int x, int y, i
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -160,56 +163,56 @@ static void frame(void)
  * Column layout: A occupies y 10..40 at x 10; B's margins place it at (160,160)..(190,190).
  * @p alpha sets the boxes' background alpha (255 = opaque; less exercises translucent compositing).
  */
-static void build_corner_scene(uint8_t alpha, ERNode** out_root, ERNode** out_a, ERNode** out_b)
+static void build_corner_scene(uint8_t alpha, ERNode** out_root, ERNode** out_box_a, ERNode** out_box_b)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SCREEN;
-    rp.height = SCREEN;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
-    ERNode* a = er_node_create(ER_NODE_VIEW);
-    ERProps ap = props_default();
-    ap.width = 30;
-    ap.height = 30;
-    ap.margin_left = 10;
-    ap.margin_top = 10;
-    ap.background_color = ((uint32_t)alpha << 24) | 0x003366FFU;
-    er_node_set_props(a, &ap);
+    ERNode* box_a = er_node_create(ER_NODE_VIEW);
+    ERProps box_a_props = props_default();
+    box_a_props.width = 30;
+    box_a_props.height = 30;
+    box_a_props.margin_left = 10;
+    box_a_props.margin_top = 10;
+    box_a_props.background_color = ((uint32_t)alpha << 24) | 0x003366FFU;
+    er_node_set_props(box_a, &box_a_props);
 
-    ERNode* b = er_node_create(ER_NODE_VIEW);
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 160;
-    bp.margin_top = 120; /* below A's bottom edge (y=40): 40+120 = 160 */
-    bp.background_color = ((uint32_t)alpha << 24) | 0x00CC3344U;
-    er_node_set_props(b, &bp);
+    ERNode* box_b = er_node_create(ER_NODE_VIEW);
+    ERProps box_b_props = props_default();
+    box_b_props.width = 30;
+    box_b_props.height = 30;
+    box_b_props.margin_left = 160;
+    box_b_props.margin_top = 120; /* below A's bottom edge (y=40): 40+120 = 160 */
+    box_b_props.background_color = ((uint32_t)alpha << 24) | 0x00CC3344U;
+    er_node_set_props(box_b, &box_b_props);
 
-    er_tree_append_child(root, a);
-    er_tree_append_child(root, b);
+    er_tree_append_child(root, box_a);
+    er_tree_append_child(root, box_b);
     er_tree_set_root(root);
     *out_root = root;
-    *out_a = a;
-    *out_b = b;
+    *out_box_a = box_a;
+    *out_box_b = box_b;
 }
 
 /** @brief Recolours a 30x30 corner box in place (same geometry, new colour). */
 static void recolour(ERNode* box, int margin_left, int margin_top, uint32_t argb)
 {
-    ERProps p = props_default();
-    p.width = 30;
-    p.height = 30;
-    p.margin_left = (int16_t)margin_left;
-    p.margin_top = (int16_t)margin_top;
-    p.background_color = argb;
-    er_node_set_props(box, &p);
+    ERProps props = props_default();
+    props.width = 30;
+    props.height = 30;
+    props.margin_left = (int16_t)margin_left;
+    props.margin_top = (int16_t)margin_top;
+    props.background_color = argb;
+    er_node_set_props(box, &props);
 }
 
-static bool point_in(const ERRect* r, int x, int y)
+static bool point_in(const ERRect* rect, int x, int y)
 {
-    return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h;
+    return x >= rect->x && x < rect->x + rect->w && y >= rect->y && y < rect->y + rect->h;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -219,41 +222,48 @@ static bool point_in(const ERRect* r, int x, int y)
 /* The headline behaviour: two opposite-corner changes repaint two small areas, centre untouched. */
 static int check_corner_isolation(void)
 {
-    ERNode *root, *a, *b;
-    build_corner_scene(0xFFU, &root, &a, &b);
+    ERNode *root, *box_a, *box_b;
+    build_corner_scene(0xFFU, &root, &box_a, &box_b);
     frame(); /* mount: full repaint */
     frame(); /* settle */
 
     /* Recolour BOTH corners in one commit. */
-    recolour(a, 10, 10, 0xFF22CC88U);
-    recolour(b, 160, 120, 0xFF8822CCU);
+    recolour(box_a, 10, 10, 0xFF22CC88U);
+    recolour(box_b, 160, 120, 0xFF8822CCU);
     touched_reset();
     frame();
 
     /* The reported repaint: exactly two disjoint rects, one per corner. */
     ERRect rects[ER_DAMAGE_RECTS_MAX];
-    const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
-    printf("corner recolour: %d dirty rects\n", n);
-    for (int i = 0; i < n; i++)
-        printf("  rect[%d] = (%d,%d %dx%d)\n", i, rects[i].x, rects[i].y, rects[i].w, rects[i].h);
-    if (n != 2)
+    const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    printf("corner recolour: %d dirty rects\n", rect_count);
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        printf("  rect[%d] = (%d,%d %dx%d)\n",
+               rect_index,
+               rects[rect_index].x,
+               rects[rect_index].y,
+               rects[rect_index].w,
+               rects[rect_index].h);
+    if (rect_count != 2)
         return fail("two far-apart changes did not report two dirty rects");
-    for (int i = 0; i < n; i++)
-        for (int j = i + 1; j < n; j++)
-            if (!(rects[i].x + rects[i].w < rects[j].x || rects[j].x + rects[j].w < rects[i].x
-                  || rects[i].y + rects[i].h < rects[j].y || rects[j].y + rects[j].h < rects[i].y))
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        for (int other_index = rect_index + 1; other_index < rect_count; other_index++)
+            if (!(rects[rect_index].x + rects[rect_index].w < rects[other_index].x
+                  || rects[other_index].x + rects[other_index].w < rects[rect_index].x
+                  || rects[rect_index].y + rects[rect_index].h < rects[other_index].y
+                  || rects[other_index].y + rects[other_index].h < rects[rect_index].y))
                 return fail("reported rects overlap or abut");
 
     /* The rects must cover the two boxes... */
-    bool a_cov = false, b_cov = false;
-    for (int i = 0; i < n; i++)
+    bool box_a_covered = false, box_b_covered = false;
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
     {
-        if (point_in(&rects[i], 10, 10) && point_in(&rects[i], 39, 39))
-            a_cov = true;
-        if (point_in(&rects[i], 160, 160) && point_in(&rects[i], 189, 189))
-            b_cov = true;
+        if (point_in(&rects[rect_index], 10, 10) && point_in(&rects[rect_index], 39, 39))
+            box_a_covered = true;
+        if (point_in(&rects[rect_index], 160, 160) && point_in(&rects[rect_index], 189, 189))
+            box_b_covered = true;
     }
-    if (!a_cov || !b_cov)
+    if (!box_a_covered || !box_b_covered)
         return fail("the dirty rects do not cover the changed boxes");
 
     /* ...every touched pixel must lie inside a reported rect (the scissors really held)... */
@@ -263,8 +273,8 @@ static int check_corner_isolation(void)
             if (!s_touched[y * SCREEN + x])
                 continue;
             bool inside = false;
-            for (int i = 0; i < n; i++)
-                if (point_in(&rects[i], x, y))
+            for (int rect_index = 0; rect_index < rect_count; rect_index++)
+                if (point_in(&rects[rect_index], x, y))
                     inside = true;
             if (!inside)
                 return fail("an op touched pixels outside every reported dirty rect");
@@ -286,40 +296,40 @@ static int check_corner_isolation(void)
  * missed background repaint would change pixel values. */
 static int check_pixel_equivalence(void)
 {
-    ERNode *root, *a, *b;
-    build_corner_scene(0x80U, &root, &a, &b); /* translucent corners over the white root */
+    ERNode *root, *box_a, *box_b;
+    build_corner_scene(0x80U, &root, &box_a, &box_b); /* translucent corners over the white root */
     frame();
     frame();
 
     /* Also park a translucent box NEAR box A (4 px gap: the 2 px pads make the damage rects touch,
      * so the set must coalesce them — stored-overlap would double-composite the seam). */
-    ERNode* c = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.width = 30;
-    cp.height = 30;
-    cp.position = ER_POS_ABSOLUTE;
-    cp.left = 44;
-    cp.top = 10;
-    cp.background_color = 0x8000AA55U;
-    er_node_set_props(c, &cp);
-    er_tree_append_child(root, c);
+    ERNode* box_c = er_node_create(ER_NODE_VIEW);
+    ERProps box_c_props = props_default();
+    box_c_props.width = 30;
+    box_c_props.height = 30;
+    box_c_props.position = ER_POS_ABSOLUTE;
+    box_c_props.left = 44;
+    box_c_props.top = 10;
+    box_c_props.background_color = 0x8000AA55U;
+    er_node_set_props(box_c, &box_c_props);
+    er_tree_append_child(root, box_c);
     frame(); /* paint C */
     frame(); /* settle */
 
     /* Recolour all three translucent boxes in one commit (A and C damage-merge; B stays separate). */
-    recolour(a, 10, 10, 0x80CC8833U);
-    cp.background_color = 0x803355AAU;
-    er_node_set_props(c, &cp);
-    recolour(b, 160, 120, 0x8044BB66U);
+    recolour(box_a, 10, 10, 0x80CC8833U);
+    box_c_props.background_color = 0x803355AAU;
+    er_node_set_props(box_c, &box_c_props);
+    recolour(box_b, 160, 120, 0x8044BB66U);
     frame();
 
     uint32_t incremental[SCREEN * SCREEN];
-    memcpy(incremental, s_fb, sizeof(incremental));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
 
     /* Reference: force a full repaint of the identical scene and compare every pixel. */
     er_force_full_repaint();
     frame();
-    if (memcmp(incremental, s_fb, sizeof(incremental)) != 0)
+    if (memcmp(incremental, s_framebuffer, sizeof(incremental)) != 0)
         return fail("multi-rect incremental result differs from a full repaint (compositing bug)");
 
     er_node_destroy(root);
@@ -333,31 +343,31 @@ static int check_multibuffer_replay(void)
 {
     er_set_display_buffer_count(2);
 
-    ERNode *root, *a, *b;
-    build_corner_scene(0xFFU, &root, &a, &b);
+    ERNode *root, *box_a, *box_b;
+    build_corner_scene(0xFFU, &root, &box_a, &box_b);
     frame(); /* fill buffer 0 */
     frame(); /* fill buffer 1 */
     frame(); /* settle */
     frame();
 
-    recolour(a, 10, 10, 0xFFDD8800U);
-    recolour(b, 160, 120, 0xFF0088DDU);
+    recolour(box_a, 10, 10, 0xFFDD8800U);
+    recolour(box_b, 160, 120, 0xFF0088DDU);
     frame(); /* change frame: paints into one buffer */
 
     /* Replay frame: the OTHER buffer owes both corners. */
     touched_reset();
     frame();
-    bool a_touched = false, b_touched = false;
+    bool box_a_touched = false, box_b_touched = false;
     for (int y = 0; y < SCREEN; y++)
         for (int x = 0; x < SCREEN; x++)
             if (s_touched[y * SCREEN + x])
             {
                 if (x < 60 && y < 60)
-                    a_touched = true;
+                    box_a_touched = true;
                 else if (x >= 140 && y >= 140)
-                    b_touched = true;
+                    box_b_touched = true;
             }
-    if (!a_touched || !b_touched)
+    if (!box_a_touched || !box_b_touched)
         return fail("the replay frame did not repaint both corners into the stale buffer");
     for (int y = 60; y < 140; y++)
         for (int x = 60; x < 140; x++)
@@ -368,8 +378,8 @@ static int check_multibuffer_replay(void)
     touched_reset();
     frame();
     frame();
-    for (int i = 0; i < SCREEN * SCREEN; i++)
-        if (s_touched[i])
+    for (int pixel_index = 0; pixel_index < SCREEN * SCREEN; pixel_index++)
+        if (s_touched[pixel_index])
             return fail("frames after the replay still repainted");
 
     er_node_destroy(root);
@@ -384,56 +394,57 @@ static int check_multibuffer_replay(void)
  * its own rect, the lanes between them must stay untouched, and the pixels must still match a full
  * repaint (translucent cells, so a double blend would show).
  */
-#define GRID_COLS 4
+#define GRID_COLUMNS 4
 #define GRID_ROWS 3
 #define GRID_CELL 20
-static const int k_grid_x[GRID_COLS] = {5, 55, 105, 155};
+static const int k_grid_x[GRID_COLUMNS] = {5, 55, 105, 155};
 static const int k_grid_y[GRID_ROWS] = {5, 90, 175};
 
 static int check_scattered_grid(void)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SCREEN;
-    rp.height = SCREEN;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
-    ERNode* cell[GRID_ROWS * GRID_COLS];
-    for (int r = 0; r < GRID_ROWS; r++)
-        for (int c = 0; c < GRID_COLS; c++)
+    ERNode* cell[GRID_ROWS * GRID_COLUMNS];
+    for (int grid_row = 0; grid_row < GRID_ROWS; grid_row++)
+        for (int grid_column = 0; grid_column < GRID_COLUMNS; grid_column++)
         {
-            ERProps cp = props_default();
-            cp.width = GRID_CELL;
-            cp.height = GRID_CELL;
-            cp.position = ER_POS_ABSOLUTE;
-            cp.left = (float)k_grid_x[c];
-            cp.top = (float)k_grid_y[r];
-            cp.background_color = 0x80336699U;
-            ERNode* n = er_node_create(ER_NODE_VIEW);
-            er_node_set_props(n, &cp);
-            er_tree_append_child(root, n);
-            cell[r * GRID_COLS + c] = n;
+            ERProps cell_node_props = props_default();
+            cell_node_props.width = GRID_CELL;
+            cell_node_props.height = GRID_CELL;
+            cell_node_props.position = ER_POS_ABSOLUTE;
+            cell_node_props.left = (float)k_grid_x[grid_column];
+            cell_node_props.top = (float)k_grid_y[grid_row];
+            cell_node_props.background_color = 0x80336699U;
+            ERNode* cell_node = er_node_create(ER_NODE_VIEW);
+            er_node_set_props(cell_node, &cell_node_props);
+            er_tree_append_child(root, cell_node);
+            cell[grid_row * GRID_COLUMNS + grid_column] = cell_node;
         }
     er_tree_set_root(root);
     frame(); /* mount: full repaint */
     frame(); /* settle */
 
     /* Recolour every cell in ONE commit — the scattered-update frame. */
-    for (int r = 0; r < GRID_ROWS; r++)
-        for (int c = 0; c < GRID_COLS; c++)
+    for (int grid_row = 0; grid_row < GRID_ROWS; grid_row++)
+        for (int grid_column = 0; grid_column < GRID_COLUMNS; grid_column++)
         {
-            ERProps cp = props_default();
-            cp.width = GRID_CELL;
-            cp.height = GRID_CELL;
-            cp.position = ER_POS_ABSOLUTE;
-            cp.left = (float)k_grid_x[c];
-            cp.top = (float)k_grid_y[r];
+            ERProps cell_props = props_default();
+            cell_props.width = GRID_CELL;
+            cell_props.height = GRID_CELL;
+            cell_props.position = ER_POS_ABSOLUTE;
+            cell_props.left = (float)k_grid_x[grid_column];
+            cell_props.top = (float)k_grid_y[grid_row];
             /* Every cell gets a colour distinct from the 0x80336699 it mounted with (a cell whose
              * props do not actually change is not dirty, and would contribute no rect). */
-            const uint32_t rgb = ((uint32_t)(r * GRID_COLS + c) * 0x1F3A5CU + 0x040506U) & 0x00FFFFFFU;
-            cp.background_color = 0x80000000U | rgb;
-            er_node_set_props(cell[r * GRID_COLS + c], &cp);
+            const uint32_t cell_color =
+                ((uint32_t)(grid_row * GRID_COLUMNS + grid_column) * 0x1F3A5CU + 0x040506U) & 0x00FFFFFFU;
+            cell_props.background_color = 0x80000000U | cell_color;
+            er_node_set_props(cell[grid_row * GRID_COLUMNS + grid_column], &cell_props);
         }
     touched_reset();
     frame();
@@ -442,28 +453,33 @@ static int check_scattered_grid(void)
      * and RP2040 examples pin it to 4). Below one rect per cell the engine is SUPPOSED to saturate and
      * merge, so only the tightness claims are gated on a full budget — every correctness check below
      * (coverage, containment, full-repaint equivalence) runs at any budget. */
-    const int cells = GRID_ROWS * GRID_COLS;
+    const int cells = GRID_ROWS * GRID_COLUMNS;
     const bool full_budget = (ER_DAMAGE_RECTS_MAX >= cells);
 
     ERRect rects[ER_DAMAGE_RECTS_MAX];
-    const int n = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
-    printf("scattered grid: %d dirty rects for %d cells (budget %d)\n", n, cells, ER_DAMAGE_RECTS_MAX);
-    for (int i = 0; i < n; i++)
-        printf("  rect[%d] = (%d,%d %dx%d)\n", i, rects[i].x, rects[i].y, rects[i].w, rects[i].h);
+    const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
+    printf("scattered grid: %d dirty rects for %d cells (budget %d)\n", rect_count, cells, ER_DAMAGE_RECTS_MAX);
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        printf("  rect[%d] = (%d,%d %dx%d)\n",
+               rect_index,
+               rects[rect_index].x,
+               rects[rect_index].y,
+               rects[rect_index].w,
+               rects[rect_index].h);
     if (full_budget)
     {
-        if (n != cells)
+        if (rect_count != cells)
             return fail("the scattered grid did not report one rect per cell");
     }
-    else if (n < 1 || n > ER_DAMAGE_RECTS_MAX)
+    else if (rect_count < 1 || rect_count > ER_DAMAGE_RECTS_MAX)
     {
         /* Saturated: merging is expected, but never past the budget and never down to nothing. */
         return fail("the saturated grid reported a rect count outside the configured budget");
     }
 
     uint32_t area = 0U;
-    for (int i = 0; i < n; i++)
-        area += (uint32_t)rects[i].w * (uint32_t)rects[i].h;
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        area += (uint32_t)rects[rect_index].w * (uint32_t)rects[rect_index].h;
     ERRect bbox;
     if (!er_get_dirty_rect(&bbox))
         return fail("no covering dirty rect after the grid update");
@@ -481,8 +497,8 @@ static int check_scattered_grid(void)
             if (!s_touched[y * SCREEN + x])
                 continue;
             bool inside = false;
-            for (int i = 0; i < n; i++)
-                if (point_in(&rects[i], x, y))
+            for (int rect_index = 0; rect_index < rect_count; rect_index++)
+                if (point_in(&rects[rect_index], x, y))
                     inside = true;
             if (!inside)
                 return fail("a grid op touched pixels outside every reported dirty rect");
@@ -492,10 +508,10 @@ static int check_scattered_grid(void)
 
     /* Twelve clipped passes must still composite exactly like one unclipped repaint. */
     uint32_t incremental[SCREEN * SCREEN];
-    memcpy(incremental, s_fb, sizeof(incremental));
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
     er_force_full_repaint();
     frame();
-    if (memcmp(incremental, s_fb, sizeof(incremental)) != 0)
+    if (memcmp(incremental, s_framebuffer, sizeof(incremental)) != 0)
         return fail("the grid's incremental result differs from a full repaint (compositing bug)");
 
     er_node_destroy(root);
@@ -507,24 +523,24 @@ static int check_scattered_grid(void)
 /* er_get_dirty_rects() contract edges: count query, bbox collapse on a too-small buffer. */
 static int check_api_contract(void)
 {
-    ERNode *root, *a, *b;
-    build_corner_scene(0xFFU, &root, &a, &b);
+    ERNode *root, *box_a, *box_b;
+    build_corner_scene(0xFFU, &root, &box_a, &box_b);
     frame();
 
     /* Mount was a full repaint: one root-sized rect. */
-    ERRect r;
-    if (er_get_dirty_rects(&r, 1) != 1 || r.w != SCREEN || r.h != SCREEN)
+    ERRect single_rect;
+    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.w != SCREEN || single_rect.h != SCREEN)
         return fail("a full repaint did not report one root-sized rect");
 
     /* A commit that paints nothing is non-destructive: the last commit that DID paint stays readable.
      * (Flow A commits inside er_runtime_pump(), so the host's own er_commit() is the no-op one — it
      * must not be the one that answers.) */
     frame();
-    if (er_get_dirty_rects(&r, 1) != 1 || r.w != SCREEN || r.h != SCREEN)
+    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.w != SCREEN || single_rect.h != SCREEN)
         return fail("a clean frame erased the last painting commit's rect");
 
-    recolour(a, 10, 10, 0xFF112233U);
-    recolour(b, 160, 120, 0xFF445566U);
+    recolour(box_a, 10, 10, 0xFF112233U);
+    recolour(box_b, 160, 120, 0xFF445566U);
     frame();
     if (er_get_dirty_rects(NULL, 0) != 2)
         return fail("NULL/0 did not query the rect count");
@@ -534,9 +550,9 @@ static int check_api_contract(void)
         return fail("a clean frame erased the last painting commit's rect set");
 
     /* Capacity 1 for 2 rects: collapse to the covering bbox (coverage must hold at any capacity). */
-    if (er_get_dirty_rects(&r, 1) != 1)
+    if (er_get_dirty_rects(&single_rect, 1) != 1)
         return fail("a too-small buffer did not collapse to one rect");
-    if (!point_in(&r, 10, 10) || !point_in(&r, 189, 189))
+    if (!point_in(&single_rect, 10, 10) || !point_in(&single_rect, 189, 189))
         return fail("the collapsed bbox does not cover both corners");
 
     /* A forced full repaint on an otherwise-settled scene (a host re-installing its framebuffer, say)
@@ -544,12 +560,13 @@ static int check_api_contract(void)
      * Both accessors must still report the truth — and the same truth. */
     er_force_full_repaint();
     frame();
-    ERRect fr;
-    if (!er_get_dirty_rect(&fr))
+    ERRect dirty_bounds;
+    if (!er_get_dirty_rect(&dirty_bounds))
         return fail("a forced full repaint reported no dirty rect");
-    if (fr.w != SCREEN || fr.h != SCREEN)
+    if (dirty_bounds.w != SCREEN || dirty_bounds.h != SCREEN)
         return fail("a forced full repaint did not report the whole root as dirty");
-    if (er_get_dirty_rects(&r, 1) != 1 || r.x != fr.x || r.y != fr.y || r.w != fr.w || r.h != fr.h)
+    if (er_get_dirty_rects(&single_rect, 1) != 1 || single_rect.x != dirty_bounds.x || single_rect.y != dirty_bounds.y
+        || single_rect.w != dirty_bounds.w || single_rect.h != dirty_bounds.h)
         return fail("er_get_dirty_rect() and er_get_dirty_rects() disagree on a forced full repaint");
 
     er_node_destroy(root);
@@ -564,33 +581,33 @@ int main(void)
         .copy_rect = fb_copy,
         .blend_rect = fb_blend,
     };
-    memset(s_fb, 0, sizeof(s_fb));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
     touched_reset();
     embedded_renderer_set_backend(&k_backend);
 
-    int rc = check_corner_isolation();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    int result = check_corner_isolation();
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
 
-    rc = check_pixel_equivalence();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_pixel_equivalence();
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
 
-    rc = check_multibuffer_replay();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_multibuffer_replay();
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
 
-    rc = check_api_contract();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_api_contract();
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
 
-    rc = check_scattered_grid();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_scattered_grid();
+    if (result != EXIT_SUCCESS)
+        return result;
 
     return EXIT_SUCCESS;
 }

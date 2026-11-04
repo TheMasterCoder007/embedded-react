@@ -29,12 +29,12 @@
 
 static int s_fail = 0;
 
-#define CHECK(cond, msg)                                                                                               \
+#define CHECK(condition, message)                                                                                      \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (!(cond))                                                                                                   \
+        if (!(condition))                                                                                              \
         {                                                                                                              \
-            printf("FAIL: %s\n", (msg));                                                                               \
+            printf("FAIL: %s\n", (message));                                                                           \
             s_fail = 1;                                                                                                \
         }                                                                                                              \
     } while (0)
@@ -42,76 +42,76 @@ static int s_fail = 0;
 /**
  * @brief Writes a little-endian uint16_t into a byte buffer.
  *
- * @param[out] p  Destination (2 bytes).
- * @param[in]  v  Value to write.
+ * @param[out] destination  Destination (2 bytes).
+ * @param[in]  value        Value to write.
  */
-static void put_u16_le(uint8_t* p, uint16_t v)
+static void put_u16_le(uint8_t* destination, uint16_t value)
 {
-    p[0] = (uint8_t)(v & 0xFFU);
-    p[1] = (uint8_t)((v >> 8) & 0xFFU);
+    destination[0] = (uint8_t)(value & 0xFFU);
+    destination[1] = (uint8_t)((value >> 8) & 0xFFU);
 }
 
 /**
  * @brief Writes a little-endian uint32_t into a byte buffer.
  *
- * @param[out] p  Destination (4 bytes).
- * @param[in]  v  Value to write.
+ * @param[out] destination  Destination (4 bytes).
+ * @param[in]  value        Value to write.
  */
-static void put_u32_le(uint8_t* p, uint32_t v)
+static void put_u32_le(uint8_t* destination, uint32_t value)
 {
-    p[0] = (uint8_t)(v & 0xFFU);
-    p[1] = (uint8_t)((v >> 8) & 0xFFU);
-    p[2] = (uint8_t)((v >> 16) & 0xFFU);
-    p[3] = (uint8_t)((v >> 24) & 0xFFU);
+    destination[0] = (uint8_t)(value & 0xFFU);
+    destination[1] = (uint8_t)((value >> 8) & 0xFFU);
+    destination[2] = (uint8_t)((value >> 16) & 0xFFU);
+    destination[3] = (uint8_t)((value >> 24) & 0xFFU);
 }
 
 /**
- * @brief Builds a minimal valid FONT wire-format blob into dst.
+ * @brief Builds a minimal valid FONT wire-format blob into destination.
  *
  * Produces a single-glyph (or multi-glyph) version-2 font with a solid bitmap so the blob
  * passes font_blob_register()'s validation. The total size is returned via out_size.
  *
- * @param[out] dst         Destination buffer (must be large enough).
- * @param[in]  first       First character code.
- * @param[in]  last        Last character code (>= first).
- * @param[in]  pixel_size  Nominal pixel size.
- * @param[out] out_size    Receives the total blob size in bytes.
+ * @param[out] destination  Destination buffer (must be large enough).
+ * @param[in]  first        First character code.
+ * @param[in]  last         Last character code (>= first).
+ * @param[in]  pixel_size   Nominal pixel size.
+ * @param[out] out_size     Receives the total blob size in bytes.
  */
-static void build_blob(uint8_t* dst, uint8_t first, uint8_t last, uint8_t pixel_size, uint32_t* out_size)
+static void build_blob(uint8_t* destination, uint8_t first, uint8_t last, uint8_t pixel_size, uint32_t* out_size)
 {
     const uint16_t glyph_count = (uint16_t)(last - first + 1U);
     const uint32_t bitmap_size = 4U;
 
-    dst[0] = 0x46U; /* 'F' */
-    dst[1] = 0x4FU; /* 'O' */
-    dst[2] = 0x4EU; /* 'N' */
-    dst[3] = 0x54U; /* 'T' */
-    dst[4] = 2U;    /* version */
-    dst[5] = first;
-    dst[6] = last;
-    dst[7] = pixel_size;
-    dst[8] = 18U; /* line_height */
-    dst[9] = 14U; /* baseline */
-    dst[10] = 0U; /* format */
-    put_u16_le(&dst[11], glyph_count);
-    put_u32_le(&dst[13], bitmap_size);
+    destination[0] = FONT_BLOB_MAGIC_0;
+    destination[1] = FONT_BLOB_MAGIC_1;
+    destination[2] = FONT_BLOB_MAGIC_2;
+    destination[3] = FONT_BLOB_MAGIC_3;
+    destination[FONT_BLOB_VERSION_AT] = FONT_BLOB_VERSION;
+    destination[FONT_BLOB_FIRST_AT] = first;
+    destination[FONT_BLOB_LAST_AT] = last;
+    destination[FONT_BLOB_PIXEL_SIZE_AT] = pixel_size;
+    destination[FONT_BLOB_LINE_HEIGHT_AT] = 18U;
+    destination[FONT_BLOB_BASELINE_AT] = 14U;
+    destination[FONT_BLOB_FORMAT_AT] = 0U;
+    put_u16_le(&destination[FONT_BLOB_GLYPH_COUNT_AT], glyph_count);
+    put_u32_le(&destination[FONT_BLOB_BITMAP_SIZE_AT], bitmap_size);
 
-    uint8_t* g = &dst[17];
-    for (uint16_t i = 0; i < glyph_count; i++)
+    uint8_t* glyph_record = &destination[FONT_BLOB_HEADER_SIZE];
+    for (uint16_t glyph_index = 0; glyph_index < glyph_count; glyph_index++)
     {
-        put_u16_le(&g[0], 0U); /* bitmap_offset */
-        g[2] = 2U;             /* width */
-        g[3] = 2U;             /* height */
-        g[4] = 0U;             /* x_offset */
-        g[5] = 0U;             /* y_offset */
-        g[6] = 3U;             /* advance */
-        g[7] = 0U;             /* unused */
-        g += 8;
+        put_u16_le(&glyph_record[0], 0U); /* bitmap_offset */
+        glyph_record[FONT_BLOB_GLYPH_WIDTH_AT] = 2U;
+        glyph_record[FONT_BLOB_GLYPH_HEIGHT_AT] = 2U;
+        glyph_record[FONT_BLOB_GLYPH_X_OFFSET_AT] = 0U;
+        glyph_record[FONT_BLOB_GLYPH_Y_OFFSET_AT] = 0U;
+        glyph_record[FONT_BLOB_GLYPH_ADVANCE_AT] = 3U;
+        glyph_record[7] = 0U; /* unused */
+        glyph_record += FONT_BLOB_GLYPH_BYTES;
     }
-    for (uint32_t i = 0; i < bitmap_size; i++)
-        g[i] = 0xFFU;
+    for (uint32_t byte_index = 0; byte_index < bitmap_size; byte_index++)
+        glyph_record[byte_index] = 0xFFU;
 
-    *out_size = 17U + (uint32_t)glyph_count * 8U + bitmap_size;
+    *out_size = FONT_BLOB_HEADER_SIZE + (uint32_t)glyph_count * FONT_BLOB_GLYPH_BYTES + bitmap_size;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -127,29 +127,31 @@ static int test_image_replace(void)
 {
     image_registry_init();
 
-    static uint32_t buf_a[4] = {0xFF112233U, 0xFF112233U, 0xFF112233U, 0xFF112233U};
-    static uint32_t buf_b[1] = {0xFFAABBCCU};
+    static uint32_t pixels_a[4] = {0xFF112233U, 0xFF112233U, 0xFF112233U, 0xFF112233U};
+    static uint32_t pixels_b[1] = {0xFFAABBCCU};
 
-    er_image_load("logo", buf_a, 2, 2);
-    const ImageEntry* e = image_registry_get("logo");
-    CHECK(e != NULL && e->width == 2 && e->height == 2 && e->pixels == buf_a, "image: initial registration");
+    er_image_load("logo", pixels_a, 2, 2);
+    const ImageEntry* entry = image_registry_get("logo");
+    CHECK(entry != NULL && entry->width == 2 && entry->height == 2 && entry->pixels == pixels_a,
+          "image: initial registration");
 
     /* Re-register the same name with a different buffer and dimensions. */
-    er_image_load("logo", buf_b, 1, 1);
-    e = image_registry_get("logo");
-    CHECK(e != NULL && e->width == 1 && e->height == 1 && e->pixels == buf_b, "image: replace in place");
+    er_image_load("logo", pixels_b, 1, 1);
+    entry = image_registry_get("logo");
+    CHECK(entry != NULL && entry->width == 1 && entry->height == 1 && entry->pixels == pixels_b,
+          "image: replace in place");
 
     /* Fill the registry to capacity, then re-register an existing name: must still succeed
      * (replace does not consume a free slot). */
     char name[16];
-    for (int i = 1; i < (int)ERUI_IMAGE_REGISTRY_MAX; i++) /* slot 0 holds "logo" */
+    for (int slot_index = 1; slot_index < (int)ERUI_IMAGE_REGISTRY_MAX; slot_index++) /* slot 0 holds "logo" */
     {
-        snprintf(name, sizeof(name), "img%d", i);
-        const bool ok = image_registry_store(name, buf_a, 1, 1, ER_IMG_ARGB8888);
+        snprintf(name, sizeof(name), "img%d", slot_index);
+        const bool ok = image_registry_store(name, pixels_a, 1, 1, ER_IMG_ARGB8888);
         CHECK(ok, "image: fill to capacity");
     }
-    CHECK(image_registry_store("logo", buf_a, 2, 2, ER_IMG_ARGB8888), "image: replace when registry is full");
-    CHECK(!image_registry_store("overflow", buf_a, 1, 1, ER_IMG_ARGB8888), "image: new name rejected when full");
+    CHECK(image_registry_store("logo", pixels_a, 2, 2, ER_IMG_ARGB8888), "image: replace when registry is full");
+    CHECK(!image_registry_store("overflow", pixels_a, 1, 1, ER_IMG_ARGB8888), "image: new name rejected when full");
 
     /* The pool really is ERUI_IMAGE_REGISTRY_MAX slots deep, not the header's #ifndef fallback. The
      * define is PUBLIC precisely so a build that tunes the knob moves this loop with it; were it
@@ -180,33 +182,34 @@ static int test_image_format_and_opacity(void)
 {
     image_registry_init();
 
-    static const uint32_t opaque_px[4] = {0xFF112233U, 0xFFFFFFFFU, 0xFF000000U, 0xFF445566U};
-    static const uint32_t translucent_px[4] = {0xFF112233U, 0xFF445566U, 0x80102030U, 0xFF778899U};
-    static const uint16_t rgb565_px[4] = {0xF800U, 0x07E0U, 0x001FU, 0xFFFFU};
+    static const uint32_t opaque_pixels[4] = {0xFF112233U, 0xFFFFFFFFU, 0xFF000000U, 0xFF445566U};
+    static const uint32_t translucent_pixels[4] = {0xFF112233U, 0xFF445566U, 0x80102030U, 0xFF778899U};
+    static const uint16_t rgb565_pixels[4] = {0xF800U, 0x07E0U, 0x001FU, 0xFFFFU};
 
-    er_image_load("opaque", opaque_px, 2, 2);
-    const ImageEntry* e = image_registry_get("opaque");
-    CHECK(e && e->format == ER_IMG_ARGB8888 && e->opaque, "format: fully opaque ARGB scans as opaque");
+    er_image_load("opaque", opaque_pixels, 2, 2);
+    const ImageEntry* entry = image_registry_get("opaque");
+    CHECK(entry && entry->format == ER_IMG_ARGB8888 && entry->opaque, "format: fully opaque ARGB scans as opaque");
 
-    er_image_load("translucent", translucent_px, 2, 2);
-    e = image_registry_get("translucent");
-    CHECK(e && e->format == ER_IMG_ARGB8888 && !e->opaque, "format: one translucent pixel scans as non-opaque");
+    er_image_load("translucent", translucent_pixels, 2, 2);
+    entry = image_registry_get("translucent");
+    CHECK(entry && entry->format == ER_IMG_ARGB8888 && !entry->opaque,
+          "format: one translucent pixel scans as non-opaque");
 
-    er_image_load_rgb565("bg565", rgb565_px, 2, 2);
-    e = image_registry_get("bg565");
-    CHECK(e && e->format == ER_IMG_RGB565 && e->opaque, "format: RGB565 registers as opaque 565");
+    er_image_load_rgb565("bg565", rgb565_pixels, 2, 2);
+    entry = image_registry_get("bg565");
+    CHECK(entry && entry->format == ER_IMG_RGB565 && entry->opaque, "format: RGB565 registers as opaque 565");
 
     /* Re-registering an existing name with new pixels must re-scan and can change format. */
-    er_image_load("bg565", translucent_px, 2, 2);
-    e = image_registry_get("bg565");
-    CHECK(e && e->format == ER_IMG_ARGB8888 && !e->opaque, "format: replace re-scans opacity and format");
+    er_image_load("bg565", translucent_pixels, 2, 2);
+    entry = image_registry_get("bg565");
+    CHECK(entry && entry->format == ER_IMG_ARGB8888 && !entry->opaque, "format: replace re-scans opacity and format");
 
     /* An out-of-range format must be rejected before it decides the buffer's element size. */
-    CHECK(!image_registry_store("badfmt", opaque_px, 2, 2, (ERImageFormat)7), "format: unknown format rejected");
+    CHECK(!image_registry_store("badfmt", opaque_pixels, 2, 2, (ERImageFormat)7), "format: unknown format rejected");
     CHECK(image_registry_get("badfmt") == NULL, "format: rejected format stored nothing");
 
     /* RGB565 buffers are read as uint16_t: a misaligned pointer must be rejected up front. */
-    const uint8_t* misaligned = (const uint8_t*)rgb565_px + 1;
+    const uint8_t* misaligned = (const uint8_t*)rgb565_pixels + 1;
     CHECK(!image_registry_store("badalign", misaligned, 1, 1, ER_IMG_RGB565),
           "format: misaligned RGB565 buffer rejected");
     CHECK(image_registry_get("badalign") == NULL, "format: rejected alignment stored nothing");
@@ -227,32 +230,32 @@ static int test_font_registry_replace(void)
 {
     font_registry_init();
 
-    BitmapFont f16a = {0};
-    f16a.pixel_size = 16U;
-    f16a.line_height = 20U;
-    BitmapFont f16b = {0};
-    f16b.pixel_size = 16U;
-    f16b.line_height = 24U;
-    BitmapFont f24 = {0};
-    f24.pixel_size = 24U;
-    f24.line_height = 30U;
+    BitmapFont font_16_a = {0};
+    font_16_a.pixel_size = 16U;
+    font_16_a.line_height = 20U;
+    BitmapFont font_16_b = {0};
+    font_16_b.pixel_size = 16U;
+    font_16_b.line_height = 24U;
+    BitmapFont font_24 = {0};
+    font_24.pixel_size = 24U;
+    font_24.line_height = 30U;
 
-    CHECK(font_registry_add("Fam", &f16a), "registry: add 16a");
-    CHECK(font_registry_get_exact("Fam", 16U) == &f16a, "registry: exact returns 16a");
+    CHECK(font_registry_add("Fam", &font_16_a), "registry: add 16a");
+    CHECK(font_registry_get_exact("Fam", 16U) == &font_16_a, "registry: exact returns 16a");
 
     /* Same name + same pixel_size replaces in place. */
-    CHECK(font_registry_add("Fam", &f16b), "registry: replace 16");
-    CHECK(font_registry_get_exact("Fam", 16U) == &f16b, "registry: exact returns 16b after replace");
+    CHECK(font_registry_add("Fam", &font_16_b), "registry: replace 16");
+    CHECK(font_registry_get_exact("Fam", 16U) == &font_16_b, "registry: exact returns 16b after replace");
 
     /* A different pixel_size is a distinct entry, not a replacement. */
-    CHECK(font_registry_add("Fam", &f24), "registry: add 24");
-    CHECK(font_registry_get_exact("Fam", 24U) == &f24, "registry: exact returns 24");
-    CHECK(font_registry_get_exact("Fam", 16U) == &f16b, "registry: 16 still present after adding 24");
+    CHECK(font_registry_add("Fam", &font_24), "registry: add 24");
+    CHECK(font_registry_get_exact("Fam", 24U) == &font_24, "registry: exact returns 24");
+    CHECK(font_registry_get_exact("Fam", 16U) == &font_16_b, "registry: 16 still present after adding 24");
 
     /* Replacing the same (name, size) many times must never exhaust the size table. */
-    for (int i = 0; i < 100; i++)
-        CHECK(font_registry_add("Fam", &f16a), "registry: repeated replace must not overflow");
-    CHECK(font_registry_get_exact("Fam", 16U) == &f16a, "registry: final replace wins");
+    for (int repeat = 0; repeat < 100; repeat++)
+        CHECK(font_registry_add("Fam", &font_16_a), "registry: repeated replace must not overflow");
+    CHECK(font_registry_get_exact("Fam", 16U) == &font_16_a, "registry: final replace wins");
 
     /* Unknown lookups return NULL (no closest-match, no fallback). */
     CHECK(font_registry_get_exact("Fam", 99U) == NULL, "registry: exact miss on size");
@@ -284,8 +287,8 @@ static int test_font_blob_reuse(void)
     uint32_t size = 0;
     build_blob(blob, 32U, 33U, 16U, &size); /* 2 glyphs at size 16 */
 
-    const FontBlobStatus st = font_blob_register("ReuseFont", blob, size);
-    if (st != FONT_BLOB_OK)
+    const FontBlobStatus status = font_blob_register("ReuseFont", blob, size);
+    if (status != FONT_BLOB_OK)
     {
         /* Pool disabled at build time — nothing to exercise here. */
         return s_fail;

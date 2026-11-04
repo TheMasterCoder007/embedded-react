@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define OPACITY_OPAQUE 255U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -41,66 +43,66 @@ typedef struct
 /**
  * @brief Backend fill callback used to check render order.
  *
- * @param[in] argb  Fill color.
- * @param[in] x     Destination X.
- * @param[in] y     Destination Y.
- * @param[in] w     Fill width.
- * @param[in] h     Fill height.
- * @param[in] ctx   Pointer to RenderCounts.
+ * @param[in] argb    Fill color.
+ * @param[in] x       Destination X.
+ * @param[in] y       Destination Y.
+ * @param[in] width   Fill width.
+ * @param[in] handle  Fill height.
+ * @param[in] ctx     Pointer to RenderCounts.
  */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int handle, void* ctx)
 {
     RenderCounts* counts = ctx;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)handle;
     counts->last_fill_color = argb;
 }
 
 /**
  * @brief Backend copy callback unused by this test.
  *
- * @param[in] src     Source buffer.
+ * @param[in] source  Source buffer.
  * @param[in] stride  Source stride.
  * @param[in] x       Destination X.
  * @param[in] y       Destination Y.
- * @param[in] w       Width.
- * @param[in] h       Height.
+ * @param[in] width   Width.
+ * @param[in] handle  Height.
  * @param[in] ctx     Opaque context.
  */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int handle, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)handle;
     (void)ctx;
 }
 
 /**
  * @brief Backend blend callback unused by this test.
  *
- * @param[in] src     Source buffer.
+ * @param[in] source  Source buffer.
  * @param[in] stride  Source stride.
  * @param[in] alpha   Global alpha.
  * @param[in] x       Destination X.
  * @param[in] y       Destination Y.
- * @param[in] w       Width.
- * @param[in] h       Height.
+ * @param[in] width   Width.
+ * @param[in] handle  Height.
  * @param[in] ctx     Opaque context.
  */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int handle, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)handle;
     (void)ctx;
 }
 
@@ -125,31 +127,31 @@ static float float_from_bits(uint32_t bits)
  */
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
 /**
  * @brief Prints a failure message to stderr and returns EXIT_FAILURE.
  *
- * @param[in] msg  Human-readable failure description.
+ * @param[in] message  Human-readable failure description.
  *
  * @return EXIT_FAILURE.
  */
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -206,18 +208,18 @@ int main(void)
      * TIMING: basic color interpolation and dirty flag
      * ---------------------------------------------------------------------- */
     ERNode* card = er_node_create(ER_NODE_VIEW);
-    ERProps p = props_default();
-    p.width = 100;
-    p.height = 40;
-    p.background_color = 0xFFFF0000U;
-    p.opacity = 255U;
-    er_node_set_props(card, &p);
+    ERProps props = props_default();
+    props.width = 100;
+    props.height = 40;
+    props.background_color = 0xFFFF0000U;
+    props.opacity = OPACITY_OPAQUE;
+    er_node_set_props(card, &props);
 
-    ERAnimConfig cfg = {0};
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = 100U;
+    ERAnimConfig config = {0};
+    config.type = ER_ANIM_TIMING;
+    config.duration_ms = 100U;
 
-    er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &cfg);
+    er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &config);
     embedded_renderer_tick(50U);
     if (card->props.view.background_color != 0xFF808000U)
         return fail("timing: background color did not interpolate at half duration");
@@ -231,7 +233,7 @@ int main(void)
     /* -----------------------------------------------------------------------
      * TIMING: cancellation stops the animation
      * ---------------------------------------------------------------------- */
-    er_anim_start(card, ER_PROP_OPACITY, 0.0f, &cfg);
+    er_anim_start(card, ER_PROP_OPACITY, 0.0f, &config);
     embedded_renderer_tick(25U);
     er_anim_cancel(card, ER_PROP_OPACITY);
     const uint8_t cancelled_opacity = card->props.view.opacity;
@@ -242,8 +244,8 @@ int main(void)
     /* -----------------------------------------------------------------------
      * TIMING: zero-duration snaps immediately
      * ---------------------------------------------------------------------- */
-    cfg.duration_ms = 0U;
-    er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF0000FFU), &cfg);
+    config.duration_ms = 0U;
+    er_anim_start(card, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF0000FFU), &config);
     if (card->props.view.background_color != 0xFF0000FFU)
         return fail("zero-duration: animation did not apply immediately");
 
@@ -251,104 +253,104 @@ int main(void)
      * EASING: quad-in must produce a value below linear at the midpoint
      * ---------------------------------------------------------------------- */
     {
-        ERNode* eq = er_node_create(ER_NODE_VIEW);
-        ERProps ep = props_default();
-        ep.width = 10;
-        ep.height = 10;
-        ep.opacity = 0U;
-        er_node_set_props(eq, &ep);
+        ERNode* quad_node = er_node_create(ER_NODE_VIEW);
+        ERProps quad_props = props_default();
+        quad_props.width = 10;
+        quad_props.height = 10;
+        quad_props.opacity = 0U;
+        er_node_set_props(quad_node, &quad_props);
 
-        ERAnimConfig ec = {0};
-        ec.type = ER_ANIM_TIMING;
-        ec.duration_ms = 100U;
-        ec.easing = ER_EASE_QUAD_IN;
-        er_anim_start(eq, ER_PROP_OPACITY, 1.0f, &ec);
+        ERAnimConfig quad_config = {0};
+        quad_config.type = ER_ANIM_TIMING;
+        quad_config.duration_ms = 100U;
+        quad_config.easing = ER_EASE_QUAD_IN;
+        er_anim_start(quad_node, ER_PROP_OPACITY, 1.0f, &quad_config);
         embedded_renderer_tick(50U);
 
         /* Quad-in at t=0.5: f(0.5)=0.25  →  opacity ≈ 64.
          * Linear at t=0.5 would give opacity ≈ 128. */
-        if (eq->props.view.opacity >= 100U)
+        if (quad_node->props.view.opacity >= 100U)
             return fail("easing quad-in: midpoint value should be well below linear");
 
-        er_node_destroy(eq);
+        er_node_destroy(quad_node);
     }
 
     /* -----------------------------------------------------------------------
      * EASING: ease-out must produce a value above linear at the midpoint
      * ---------------------------------------------------------------------- */
     {
-        ERNode* eo = er_node_create(ER_NODE_VIEW);
-        ERProps ep = props_default();
-        ep.width = 10;
-        ep.height = 10;
-        ep.opacity = 0U;
-        er_node_set_props(eo, &ep);
+        ERNode* ease_out_node = er_node_create(ER_NODE_VIEW);
+        ERProps ease_out_props = props_default();
+        ease_out_props.width = 10;
+        ease_out_props.height = 10;
+        ease_out_props.opacity = 0U;
+        er_node_set_props(ease_out_node, &ease_out_props);
 
-        ERAnimConfig ec = {0};
-        ec.type = ER_ANIM_TIMING;
-        ec.duration_ms = 100U;
-        ec.easing = ER_EASE_EASE_OUT;
-        er_anim_start(eo, ER_PROP_OPACITY, 1.0f, &ec);
+        ERAnimConfig ease_out_config = {0};
+        ease_out_config.type = ER_ANIM_TIMING;
+        ease_out_config.duration_ms = 100U;
+        ease_out_config.easing = ER_EASE_EASE_OUT;
+        er_anim_start(ease_out_node, ER_PROP_OPACITY, 1.0f, &ease_out_config);
         embedded_renderer_tick(50U);
 
         /* ease-out is faster at the beginning → midpoint value > linear (128). */
-        if (eo->props.view.opacity <= 128U)
+        if (ease_out_node->props.view.opacity <= 128U)
             return fail("easing ease-out: midpoint value should be above linear");
 
-        er_node_destroy(eo);
+        er_node_destroy(ease_out_node);
     }
 
     /* -----------------------------------------------------------------------
      * SPRING: settles at the target within 3 seconds
      * ---------------------------------------------------------------------- */
     {
-        ERNode* sn = er_node_create(ER_NODE_VIEW);
-        ERProps sp = props_default();
-        sp.width = 10;
-        sp.height = 10;
-        sp.opacity = 0U;
-        er_node_set_props(sn, &sp);
+        ERNode* spring_node = er_node_create(ER_NODE_VIEW);
+        ERProps spring_props = props_default();
+        spring_props.width = 10;
+        spring_props.height = 10;
+        spring_props.opacity = 0U;
+        er_node_set_props(spring_node, &spring_props);
 
-        ERAnimConfig sc = {0};
-        sc.type = ER_ANIM_SPRING;
-        sc.stiffness = 100.0f;
-        sc.damping = 10.0f;
-        sc.mass = 1.0f;
-        er_anim_start(sn, ER_PROP_OPACITY, 1.0f, &sc);
+        ERAnimConfig spring_config = {0};
+        spring_config.type = ER_ANIM_SPRING;
+        spring_config.stiffness = 100.0f;
+        spring_config.damping = 10.0f;
+        spring_config.mass = 1.0f;
+        er_anim_start(spring_node, ER_PROP_OPACITY, 1.0f, &spring_config);
 
         /* Tick for up to 3 seconds; expect the spring to settle. */
         for (int tick = 0; tick < 300; tick++)
             embedded_renderer_tick(10U);
 
         /* Opacity should be 255 (fully opaque) after the spring settles. */
-        if (sn->props.view.opacity < 250U)
+        if (spring_node->props.view.opacity < 250U)
             return fail("spring: did not settle at target opacity within 3 seconds");
 
-        er_node_destroy(sn);
+        er_node_destroy(spring_node);
     }
 
     /* -----------------------------------------------------------------------
      * DECAY: velocity decreases over time
      * ---------------------------------------------------------------------- */
     {
-        ERNode* dn = er_node_create(ER_NODE_VIEW);
-        ERProps dp2 = props_default();
-        dp2.width = 10;
-        dp2.height = 10;
-        dp2.opacity = 0U;
-        er_node_set_props(dn, &dp2);
+        ERNode* decay_node = er_node_create(ER_NODE_VIEW);
+        ERProps decay_props = props_default();
+        decay_props.width = 10;
+        decay_props.height = 10;
+        decay_props.opacity = 0U;
+        er_node_set_props(decay_node, &decay_props);
 
-        ERAnimConfig dc = {0};
-        dc.type = ER_ANIM_DECAY;
-        dc.velocity = 0.1f;       /* 0.1 normalised/ms — moves toward to_value initially */
-        dc.deceleration = 0.990f; /* aggressive deceleration for a short test */
+        ERAnimConfig decay_config = {0};
+        decay_config.type = ER_ANIM_DECAY;
+        decay_config.velocity = 0.1f;       /* 0.1 normalised/ms — moves toward to_value initially */
+        decay_config.deceleration = 0.990f; /* aggressive deceleration for a short test */
 
-        er_anim_start(dn, ER_PROP_OPACITY, 1.0f, &dc);
+        er_anim_start(decay_node, ER_PROP_OPACITY, 1.0f, &decay_config);
 
         embedded_renderer_tick(50U);
-        const uint8_t mid_opacity = dn->props.view.opacity;
+        const uint8_t mid_opacity = decay_node->props.view.opacity;
         embedded_renderer_tick(500U);
-        const uint8_t late_opacity = dn->props.view.opacity;
+        const uint8_t late_opacity = decay_node->props.view.opacity;
 
         /* After 500ms extra the position must not have grown by much more than the first 50ms. */
         const int delta_mid = (int)mid_opacity;
@@ -356,29 +358,30 @@ int main(void)
         if (delta_late > delta_mid * 3)
             return fail("decay: velocity did not decelerate — position grew unexpectedly");
 
-        er_node_destroy(dn);
+        er_node_destroy(decay_node);
     }
 
     /* -----------------------------------------------------------------------
      * DECAY: an over-long frame integrates a bounded number of steps
      * ---------------------------------------------------------------------- */
     {
-        ERNode* bn = er_node_create(ER_NODE_VIEW);
-        ERProps bp2 = props_default();
-        bp2.width = 10;
-        bp2.height = 10;
-        bp2.opacity = 0U;
-        er_node_set_props(bn, &bp2);
+        ERNode* bounded_node = er_node_create(ER_NODE_VIEW);
+        ERProps bounded_props = props_default();
+        bounded_props.width = 10;
+        bounded_props.height = 10;
+        bounded_props.opacity = 0U;
+        er_node_set_props(bounded_node, &bounded_props);
 
         s_complete_count = 0;
         s_complete_finished = false;
 
-        ERAnimConfig bc = {0};
-        bc.type = ER_ANIM_DECAY;
-        bc.velocity = 0.1f; /* ~3.4s at the default deceleration before it falls below DECAY_VELOCITY_STOP */
-        bc.on_complete = on_complete;
+        ERAnimConfig bounded_config = {0};
+        bounded_config.type = ER_ANIM_DECAY;
+        bounded_config.velocity =
+            0.1f; /* ~3.4s at the default deceleration before it falls below DECAY_VELOCITY_STOP */
+        bounded_config.on_complete = on_complete;
 
-        er_anim_start(bn, ER_PROP_OPACITY, 1.0f, &bc);
+        er_anim_start(bounded_node, ER_PROP_OPACITY, 1.0f, &bounded_config);
 
         /* An hour in one frame must not buy an hour of physics — the decay keeps coasting instead. */
         embedded_renderer_tick(3600000U);
@@ -386,42 +389,42 @@ int main(void)
             return fail("decay: an over-long frame ran the decay to completion instead of capping its steps");
 
         /* The cap must not stall it either: it still settles over the frames that follow. */
-        for (int i = 0; i < 40 && s_complete_count == 0; i++)
+        for (int frame_index = 0; frame_index < 40 && s_complete_count == 0; frame_index++)
             embedded_renderer_tick(200U);
         if (s_complete_count != 1)
             return fail("decay: did not settle in the frames after a capped one");
 
-        er_node_destroy(bn);
+        er_node_destroy(bounded_node);
     }
 
     /* -----------------------------------------------------------------------
      * DELAY: animation value must not change until delay expires
      * ---------------------------------------------------------------------- */
     {
-        ERNode* ln = er_node_create(ER_NODE_VIEW);
-        ERProps lp2 = props_default();
-        lp2.width = 10;
-        lp2.height = 10;
-        lp2.opacity = 0U;
-        er_node_set_props(ln, &lp2);
+        ERNode* delay_node = er_node_create(ER_NODE_VIEW);
+        ERProps delay_props = props_default();
+        delay_props.width = 10;
+        delay_props.height = 10;
+        delay_props.opacity = 0U;
+        er_node_set_props(delay_node, &delay_props);
 
-        ERAnimConfig lc = {0};
-        lc.type = ER_ANIM_TIMING;
-        lc.duration_ms = 100U;
-        lc.delay_ms = 200U;
+        ERAnimConfig delay_config = {0};
+        delay_config.type = ER_ANIM_TIMING;
+        delay_config.duration_ms = 100U;
+        delay_config.delay_ms = 200U;
 
-        er_anim_start(ln, ER_PROP_OPACITY, 1.0f, &lc);
+        er_anim_start(delay_node, ER_PROP_OPACITY, 1.0f, &delay_config);
 
         embedded_renderer_tick(100U); /* within delay window */
-        if (ln->props.view.opacity != 0U)
+        if (delay_node->props.view.opacity != 0U)
             return fail("delay: opacity changed before delay expired");
 
         embedded_renderer_tick(200U); /* past the delay; animation should be running */
         embedded_renderer_tick(100U); /* complete the animation duration */
-        if (ln->props.view.opacity < 240U)
+        if (delay_node->props.view.opacity < 240U)
             return fail("delay: animation did not complete after delay + duration");
 
-        er_node_destroy(ln);
+        er_node_destroy(delay_node);
     }
 
     /* -----------------------------------------------------------------------
@@ -431,16 +434,16 @@ int main(void)
      * ---------------------------------------------------------------------- */
     {
         ERNode* spin = er_node_create(ER_NODE_VIEW);
-        ERProps rp = props_default();
-        rp.width = 10;
-        rp.height = 10;
-        er_node_set_props(spin, &rp);
+        ERProps root_props = props_default();
+        root_props.width = 10;
+        root_props.height = 10;
+        er_node_set_props(spin, &root_props);
 
-        ERAnimConfig rc = {0};
-        rc.type = ER_ANIM_TIMING;
-        rc.duration_ms = 100U;
-        rc.loop = true; /* loop_reverse defaults false → continuous restart */
-        er_anim_start(spin, ER_PROP_ROTATE_Z, 360.0f, &rc);
+        ERAnimConfig restart_config = {0};
+        restart_config.type = ER_ANIM_TIMING;
+        restart_config.duration_ms = 100U;
+        restart_config.loop = true; /* loop_reverse defaults false → continuous restart */
+        er_anim_start(spin, ER_PROP_ROTATE_Z, 360.0f, &restart_config);
 
         embedded_renderer_tick(100U); /* end of cycle 1 (reaches 360, then restarts at 0) */
         embedded_renderer_tick(25U);  /* into cycle 2: continuous → ~90, reversed would be ~270 */
@@ -448,42 +451,42 @@ int main(void)
             return fail("loop: default loop ping-ponged instead of restarting continuously");
         er_node_destroy(spin);
 
-        ERNode* yo = er_node_create(ER_NODE_VIEW);
-        er_node_set_props(yo, &rp);
-        ERAnimConfig yc = {0};
-        yc.type = ER_ANIM_TIMING;
-        yc.duration_ms = 100U;
-        yc.loop = true;
-        yc.loop_reverse = true; /* ping-pong */
-        er_anim_start(yo, ER_PROP_ROTATE_Z, 360.0f, &yc);
+        ERNode* yoyo_node = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(yoyo_node, &root_props);
+        ERAnimConfig yoyo_config = {0};
+        yoyo_config.type = ER_ANIM_TIMING;
+        yoyo_config.duration_ms = 100U;
+        yoyo_config.loop = true;
+        yoyo_config.loop_reverse = true; /* ping-pong */
+        er_anim_start(yoyo_node, ER_PROP_ROTATE_Z, 360.0f, &yoyo_config);
 
         embedded_renderer_tick(100U); /* peak ~360 */
         embedded_renderer_tick(25U);  /* reversing → ~270 (heading back down), not ~90 */
-        if (yo->transform_rotate_z < 180.0f)
+        if (yoyo_node->transform_rotate_z < 180.0f)
             return fail("loop_reverse: did not ping-pong back down");
-        er_node_destroy(yo);
+        er_node_destroy(yoyo_node);
     }
 
     /* -----------------------------------------------------------------------
      * COMPLETION CALLBACK: fires with finished=true at end of timing animation
      * ---------------------------------------------------------------------- */
     {
-        ERNode* cn = er_node_create(ER_NODE_VIEW);
-        ERProps cp2 = props_default();
-        cp2.width = 10;
-        cp2.height = 10;
-        cp2.opacity = 0U;
-        er_node_set_props(cn, &cp2);
+        ERNode* complete_node = er_node_create(ER_NODE_VIEW);
+        ERProps complete_props = props_default();
+        complete_props.width = 10;
+        complete_props.height = 10;
+        complete_props.opacity = 0U;
+        er_node_set_props(complete_node, &complete_props);
 
         s_complete_count = 0;
         s_complete_finished = false;
 
-        ERAnimConfig cc = {0};
-        cc.type = ER_ANIM_TIMING;
-        cc.duration_ms = 100U;
-        cc.on_complete = on_complete;
+        ERAnimConfig complete_config = {0};
+        complete_config.type = ER_ANIM_TIMING;
+        complete_config.duration_ms = 100U;
+        complete_config.on_complete = on_complete;
 
-        er_anim_start(cn, ER_PROP_OPACITY, 1.0f, &cc);
+        er_anim_start(complete_node, ER_PROP_OPACITY, 1.0f, &complete_config);
         embedded_renderer_tick(100U);
 
         if (s_complete_count != 1)
@@ -491,72 +494,72 @@ int main(void)
         if (!s_complete_finished)
             return fail("completion: on_complete called with finished=false on natural end");
 
-        er_node_destroy(cn);
+        er_node_destroy(complete_node);
     }
 
     /* -----------------------------------------------------------------------
      * COMPLETION CALLBACK: er_anim_stop fires finished=false
      * ---------------------------------------------------------------------- */
     {
-        ERNode* sn2 = er_node_create(ER_NODE_VIEW);
-        ERProps sp2 = props_default();
-        sp2.width = 10;
-        sp2.height = 10;
-        sp2.opacity = 0U;
-        er_node_set_props(sn2, &sp2);
+        ERNode* stop_node = er_node_create(ER_NODE_VIEW);
+        ERProps stop_props = props_default();
+        stop_props.width = 10;
+        stop_props.height = 10;
+        stop_props.opacity = 0U;
+        er_node_set_props(stop_node, &stop_props);
 
         s_complete_count = 0;
         s_complete_finished = true; /* will be overwritten */
 
-        ERAnimConfig sc2 = {0};
-        sc2.type = ER_ANIM_TIMING;
-        sc2.duration_ms = 500U;
-        sc2.on_complete = on_complete;
+        ERAnimConfig stop_config = {0};
+        stop_config.type = ER_ANIM_TIMING;
+        stop_config.duration_ms = 500U;
+        stop_config.on_complete = on_complete;
 
-        ERAnimHandle h = er_anim_start(sn2, ER_PROP_OPACITY, 1.0f, &sc2);
+        ERAnimHandle handle = er_anim_start(stop_node, ER_PROP_OPACITY, 1.0f, &stop_config);
         embedded_renderer_tick(100U);
-        er_anim_stop(h);
+        er_anim_stop(handle);
 
         if (s_complete_count != 1)
             return fail("er_anim_stop: on_complete not called after stop");
         if (s_complete_finished)
             return fail("er_anim_stop: on_complete should have finished=false");
 
-        er_node_destroy(sn2);
+        er_node_destroy(stop_node);
     }
 
     /* -----------------------------------------------------------------------
      * SEQUENCE: three color animations fire one after another
      * ---------------------------------------------------------------------- */
     {
-        ERNode* a = er_node_create(ER_NODE_VIEW);
-        ERNode* b = er_node_create(ER_NODE_VIEW);
-        ERNode* c = er_node_create(ER_NODE_VIEW);
+        ERNode* first_node = er_node_create(ER_NODE_VIEW);
+        ERNode* second_node = er_node_create(ER_NODE_VIEW);
+        ERNode* third_node = er_node_create(ER_NODE_VIEW);
 
-        ERProps pp = props_default();
-        pp.width = 10;
-        pp.height = 10;
-        pp.background_color = 0xFF000000U;
-        er_node_set_props(a, &pp);
-        er_node_set_props(b, &pp);
-        er_node_set_props(c, &pp);
+        ERProps sequence_props = props_default();
+        sequence_props.width = 10;
+        sequence_props.height = 10;
+        sequence_props.background_color = 0xFF000000U;
+        er_node_set_props(first_node, &sequence_props);
+        er_node_set_props(second_node, &sequence_props);
+        er_node_set_props(third_node, &sequence_props);
 
         ERAnimEntry entries[3];
         memset(entries, 0, sizeof(entries));
 
-        entries[0].node = a;
+        entries[0].node = first_node;
         entries[0].prop = ER_PROP_BACKGROUND_COLOR;
         entries[0].value = float_from_bits(0xFFFF0000U);
         entries[0].cfg.type = ER_ANIM_TIMING;
         entries[0].cfg.duration_ms = 100U;
 
-        entries[1].node = b;
+        entries[1].node = second_node;
         entries[1].prop = ER_PROP_BACKGROUND_COLOR;
         entries[1].value = float_from_bits(0xFF00FF00U);
         entries[1].cfg.type = ER_ANIM_TIMING;
         entries[1].cfg.duration_ms = 100U;
 
-        entries[2].node = c;
+        entries[2].node = third_node;
         entries[2].prop = ER_PROP_BACKGROUND_COLOR;
         entries[2].value = float_from_bits(0xFF0000FFU);
         entries[2].cfg.type = ER_ANIM_TIMING;
@@ -569,56 +572,56 @@ int main(void)
 
         /* After 100ms: first animation done, second should be running. */
         embedded_renderer_tick(100U);
-        if (a->props.view.background_color != 0xFFFF0000U)
+        if (first_node->props.view.background_color != 0xFFFF0000U)
             return fail("sequence: entry 0 did not reach target at t=100ms");
-        if (b->props.view.background_color == 0xFF00FF00U)
+        if (second_node->props.view.background_color == 0xFF00FF00U)
             return fail("sequence: entry 1 finished before entry 0 was done");
         if (s_complete_count != 0)
             return fail("sequence: group completed too early");
 
         /* After another 100ms: second done. */
         embedded_renderer_tick(100U);
-        if (b->props.view.background_color != 0xFF00FF00U)
+        if (second_node->props.view.background_color != 0xFF00FF00U)
             return fail("sequence: entry 1 did not reach target at t=200ms");
 
         /* After another 100ms: third done, group completed. */
         embedded_renderer_tick(100U);
-        if (c->props.view.background_color != 0xFF0000FFU)
+        if (third_node->props.view.background_color != 0xFF0000FFU)
             return fail("sequence: entry 2 did not reach target at t=300ms");
         if (s_complete_count != 1)
             return fail("sequence: group on_complete not called after last entry");
         if (!s_complete_finished)
             return fail("sequence: group on_complete called with finished=false");
 
-        er_node_destroy(a);
-        er_node_destroy(b);
-        er_node_destroy(c);
+        er_node_destroy(first_node);
+        er_node_destroy(second_node);
+        er_node_destroy(third_node);
     }
 
     /* -----------------------------------------------------------------------
      * PARALLEL: two animations start and finish simultaneously
      * ---------------------------------------------------------------------- */
     {
-        ERNode* pa = er_node_create(ER_NODE_VIEW);
-        ERNode* pb = er_node_create(ER_NODE_VIEW);
+        ERNode* parallel_a = er_node_create(ER_NODE_VIEW);
+        ERNode* parallel_b = er_node_create(ER_NODE_VIEW);
 
-        ERProps pp = props_default();
-        pp.width = 10;
-        pp.height = 10;
-        pp.opacity = 0U;
-        er_node_set_props(pa, &pp);
-        er_node_set_props(pb, &pp);
+        ERProps parallel_props = props_default();
+        parallel_props.width = 10;
+        parallel_props.height = 10;
+        parallel_props.opacity = 0U;
+        er_node_set_props(parallel_a, &parallel_props);
+        er_node_set_props(parallel_b, &parallel_props);
 
         ERAnimEntry entries[2];
         memset(entries, 0, sizeof(entries));
 
-        entries[0].node = pa;
+        entries[0].node = parallel_a;
         entries[0].prop = ER_PROP_OPACITY;
         entries[0].value = 1.0f;
         entries[0].cfg.type = ER_ANIM_TIMING;
         entries[0].cfg.duration_ms = 100U;
 
-        entries[1].node = pb;
+        entries[1].node = parallel_b;
         entries[1].prop = ER_PROP_OPACITY;
         entries[1].value = 1.0f;
         entries[1].cfg.type = ER_ANIM_TIMING;
@@ -629,45 +632,45 @@ int main(void)
         er_anim_parallel(entries, 2, on_complete, NULL);
 
         embedded_renderer_tick(100U);
-        if (pa->props.view.opacity < 250U)
+        if (parallel_a->props.view.opacity < 250U)
             return fail("parallel: entry 0 (100ms) not done at t=100ms");
         if (s_complete_count != 0)
             return fail("parallel: group completed before longer entry finished");
 
         embedded_renderer_tick(50U);
-        if (pb->props.view.opacity < 250U)
+        if (parallel_b->props.view.opacity < 250U)
             return fail("parallel: entry 1 (150ms) not done at t=150ms");
         if (s_complete_count != 1)
             return fail("parallel: group on_complete not called after all entries done");
 
-        er_node_destroy(pa);
-        er_node_destroy(pb);
+        er_node_destroy(parallel_a);
+        er_node_destroy(parallel_b);
     }
 
     /* -----------------------------------------------------------------------
      * STAGGER: second animation starts after stagger_ms delay
      * ---------------------------------------------------------------------- */
     {
-        ERNode* sa = er_node_create(ER_NODE_VIEW);
-        ERNode* sb = er_node_create(ER_NODE_VIEW);
+        ERNode* stagger_a = er_node_create(ER_NODE_VIEW);
+        ERNode* stagger_b = er_node_create(ER_NODE_VIEW);
 
-        ERProps sp = props_default();
-        sp.width = 10;
-        sp.height = 10;
-        sp.opacity = 0U;
-        er_node_set_props(sa, &sp);
-        er_node_set_props(sb, &sp);
+        ERProps stagger_props = props_default();
+        stagger_props.width = 10;
+        stagger_props.height = 10;
+        stagger_props.opacity = 0U;
+        er_node_set_props(stagger_a, &stagger_props);
+        er_node_set_props(stagger_b, &stagger_props);
 
         ERAnimEntry entries[2];
         memset(entries, 0, sizeof(entries));
 
-        entries[0].node = sa;
+        entries[0].node = stagger_a;
         entries[0].prop = ER_PROP_OPACITY;
         entries[0].value = 1.0f;
         entries[0].cfg.type = ER_ANIM_TIMING;
         entries[0].cfg.duration_ms = 100U;
 
-        entries[1].node = sb;
+        entries[1].node = stagger_b;
         entries[1].prop = ER_PROP_OPACITY;
         entries[1].value = 1.0f;
         entries[1].cfg.type = ER_ANIM_TIMING;
@@ -678,63 +681,63 @@ int main(void)
 
         /* At t=100ms: entry 0 done (0-100ms), entry 1 halfway (50-150ms). */
         embedded_renderer_tick(100U);
-        if (sa->props.view.opacity < 250U)
+        if (stagger_a->props.view.opacity < 250U)
             return fail("stagger: entry 0 not done at t=100ms");
-        if (sb->props.view.opacity >= 250U)
+        if (stagger_b->props.view.opacity >= 250U)
             return fail("stagger: entry 1 should not be done at t=100ms (starts at 50ms)");
-        if (sb->props.view.opacity == 0U)
+        if (stagger_b->props.view.opacity == 0U)
             return fail("stagger: entry 1 should have started by t=100ms");
 
-        er_node_destroy(sa);
-        er_node_destroy(sb);
+        er_node_destroy(stagger_a);
+        er_node_destroy(stagger_b);
     }
 
     /* -----------------------------------------------------------------------
      * RENDER ORDER: animated lower-z node must not paint over higher-z sibling
      * ---------------------------------------------------------------------- */
     RenderCounts counts = {0};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &counts};
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &counts};
+    embedded_renderer_set_backend(&backend);
 
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    p = props_default();
-    p.width = 120;
-    p.height = 80;
-    p.background_color = 0xFF000000U;
-    er_node_set_props(root, &p);
+    props = props_default();
+    props.width = 120;
+    props.height = 80;
+    props.background_color = 0xFF000000U;
+    er_node_set_props(root, &props);
     er_tree_set_root(root);
 
     ERNode* low = er_node_create(ER_NODE_VIEW);
-    p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 0;
-    p.top = 0;
-    p.width = 80;
-    p.height = 60;
-    p.background_color = 0xFFFF0000U;
-    p.z_index = 0;
-    er_node_set_props(low, &p);
+    props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 0;
+    props.top = 0;
+    props.width = 80;
+    props.height = 60;
+    props.background_color = 0xFFFF0000U;
+    props.z_index = 0;
+    er_node_set_props(low, &props);
 
     ERNode* high = er_node_create(ER_NODE_VIEW);
-    p = props_default();
-    p.position = ER_POS_ABSOLUTE;
-    p.left = 20;
-    p.top = 10;
-    p.width = 80;
-    p.height = 60;
-    p.background_color = 0xFF0000FFU;
-    p.z_index = 10;
-    er_node_set_props(high, &p);
+    props = props_default();
+    props.position = ER_POS_ABSOLUTE;
+    props.left = 20;
+    props.top = 10;
+    props.width = 80;
+    props.height = 60;
+    props.background_color = 0xFF0000FFU;
+    props.z_index = 10;
+    er_node_set_props(high, &props);
 
     er_tree_append_child(root, low);
     er_tree_append_child(root, high);
     er_commit();
 
-    cfg.duration_ms = 100U;
-    cfg.easing = ER_EASE_LINEAR;
-    er_anim_start(low, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &cfg);
+    config.duration_ms = 100U;
+    config.easing = ER_EASE_LINEAR;
+    er_anim_start(low, ER_PROP_BACKGROUND_COLOR, float_from_bits(0xFF00FF00U), &config);
     embedded_renderer_tick(50U);
     er_commit();
 
@@ -746,62 +749,62 @@ int main(void)
      * ---------------------------------------------------------------------- */
     {
         /* Create two nodes; both will receive translateX updates from one value. */
-        ERNode* va = er_node_create(ER_NODE_VIEW);
-        ERNode* vb = er_node_create(ER_NODE_VIEW);
+        ERNode* value_node_a = er_node_create(ER_NODE_VIEW);
+        ERNode* value_node_b = er_node_create(ER_NODE_VIEW);
 
-        ERProps vp = props_default();
-        vp.width = 10;
-        vp.height = 10;
-        er_node_set_props(va, &vp);
-        er_node_set_props(vb, &vp);
+        ERProps value_props = props_default();
+        value_props.width = 10;
+        value_props.height = 10;
+        er_node_set_props(value_node_a, &value_props);
+        er_node_set_props(value_node_b, &value_props);
 
         /* Create the shared value at 0 and bind both nodes. */
-        ERAnimValueHandle vh = er_anim_value_create(0.0f);
-        if (vh == ER_ANIM_VALUE_INVALID)
+        ERAnimValueHandle value = er_anim_value_create(0.0f);
+        if (value == ER_ANIM_VALUE_INVALID)
             return fail("anim_value: er_anim_value_create returned INVALID");
 
-        er_anim_value_bind(vh, va, ER_PROP_TRANSLATE_X);
-        er_anim_value_bind(vh, vb, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(value, value_node_a, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(value, value_node_b, ER_PROP_TRANSLATE_X);
 
         /* Immediate snap to 50. */
-        er_anim_value_set(vh, 50.0f);
-        if (va->transform_translate_x < 49.9f || va->transform_translate_x > 50.1f)
+        er_anim_value_set(value, 50.0f);
+        if (value_node_a->transform_translate_x < 49.9f || value_node_a->transform_translate_x > 50.1f)
             return fail("anim_value: er_anim_value_set did not propagate to first binding");
-        if (vb->transform_translate_x < 49.9f || vb->transform_translate_x > 50.1f)
+        if (value_node_b->transform_translate_x < 49.9f || value_node_b->transform_translate_x > 50.1f)
             return fail("anim_value: er_anim_value_set did not propagate to second binding");
-        if (er_anim_value_get(vh) < 49.9f || er_anim_value_get(vh) > 50.1f)
+        if (er_anim_value_get(value) < 49.9f || er_anim_value_get(value) > 50.1f)
             return fail("anim_value: er_anim_value_get did not return snapped value");
 
         /* Animate back to 0 over 100ms; verify midpoint drives both nodes. */
-        ERAnimConfig vc = {0};
-        vc.type = ER_ANIM_TIMING;
-        vc.duration_ms = 100U;
-        vc.easing = ER_EASE_LINEAR;
-        er_anim_value_animate(vh, 0.0f, &vc);
+        ERAnimConfig value_config = {0};
+        value_config.type = ER_ANIM_TIMING;
+        value_config.duration_ms = 100U;
+        value_config.easing = ER_EASE_LINEAR;
+        er_anim_value_animate(value, 0.0f, &value_config);
 
         embedded_renderer_tick(50U);
         /* At the midpoint both nodes should be near 25. */
-        if (va->transform_translate_x > 30.0f || va->transform_translate_x < 20.0f)
+        if (value_node_a->transform_translate_x > 30.0f || value_node_a->transform_translate_x < 20.0f)
             return fail("anim_value: first binding not at midpoint during animation");
-        if (vb->transform_translate_x > 30.0f || vb->transform_translate_x < 20.0f)
+        if (value_node_b->transform_translate_x > 30.0f || value_node_b->transform_translate_x < 20.0f)
             return fail("anim_value: second binding not at midpoint during animation");
 
         embedded_renderer_tick(50U);
         /* Animation complete; both should be at the target. */
-        if (va->transform_translate_x > 1.0f)
+        if (value_node_a->transform_translate_x > 1.0f)
             return fail("anim_value: first binding did not reach target at end");
-        if (vb->transform_translate_x > 1.0f)
+        if (value_node_b->transform_translate_x > 1.0f)
             return fail("anim_value: second binding did not reach target at end");
 
         /* Duplicate bind is silently ignored — binding_count must not grow past 2. */
-        er_anim_value_bind(vh, va, ER_PROP_TRANSLATE_X);
-        er_anim_value_set(vh, 10.0f);
-        if (va->transform_translate_x < 9.9f || va->transform_translate_x > 10.1f)
+        er_anim_value_bind(value, value_node_a, ER_PROP_TRANSLATE_X);
+        er_anim_value_set(value, 10.0f);
+        if (value_node_a->transform_translate_x < 9.9f || value_node_a->transform_translate_x > 10.1f)
             return fail("anim_value: duplicate bind guard broke propagation");
 
-        er_anim_value_destroy(vh);
-        er_node_destroy(va);
-        er_node_destroy(vb);
+        er_anim_value_destroy(value);
+        er_node_destroy(value_node_a);
+        er_node_destroy(value_node_b);
     }
 
     /* -----------------------------------------------------------------------
@@ -809,88 +812,89 @@ int main(void)
      * float bound to either is refused rather than written as a color.
      * ---------------------------------------------------------------------- */
     {
-        ERNode* cv = er_node_create(ER_NODE_VIEW);
-        ERNode* ct = er_node_create(ER_NODE_TEXT);
-        ERProps cp = props_default();
-        cp.background_color = 0xFF123456U;
-        er_node_set_props(cv, &cp);
-        cp.color = 0xFF123456U;
-        er_node_set_props(ct, &cp);
+        ERNode* color_view = er_node_create(ER_NODE_VIEW);
+        ERNode* color_text = er_node_create(ER_NODE_TEXT);
+        ERProps color_props = props_default();
+        color_props.background_color = 0xFF123456U;
+        er_node_set_props(color_view, &color_props);
+        color_props.color = 0xFF123456U;
+        er_node_set_props(color_text, &color_props);
 
-        ERAnimValueHandle ch = er_anim_value_create(0.0f);
-        er_anim_value_bind(ch, cv, ER_PROP_BACKGROUND_COLOR);
-        const ERInterpolation num = {{0.0f, 1.0f}, {0.0f, 1.0f}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
-        er_anim_value_bind_interpolated(ch, ct, ER_PROP_COLOR, &num);
-        er_anim_value_set(ch, 1.0f);
-        if (cv->props.view.background_color != 0xFF123456U || ct->props.text.color != 0xFF123456U)
+        ERAnimValueHandle color_value = er_anim_value_create(0.0f);
+        er_anim_value_bind(color_value, color_view, ER_PROP_BACKGROUND_COLOR);
+        const ERInterpolation numeric_mapping = {
+            {0.0f, 1.0f}, {0.0f, 1.0f}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
+        er_anim_value_bind_interpolated(color_value, color_text, ER_PROP_COLOR, &numeric_mapping);
+        er_anim_value_set(color_value, 1.0f);
+        if (color_view->props.view.background_color != 0xFF123456U || color_text->props.text.color != 0xFF123456U)
             return fail("color bind: a plain float bound to a color prop should be refused");
 
-        const ERColorInterpolation ci = {
+        const ERColorInterpolation color_interpolation = {
             {0.0f, 1.0f}, {0xFF000000U, 0xFFFFFFFFU}, 2, ER_EXTRAPOLATE_CLAMP, ER_EXTRAPOLATE_CLAMP};
-        er_anim_value_bind_color(ch, cv, ER_PROP_BACKGROUND_COLOR, &ci);
-        er_anim_value_bind_color(ch, ct, ER_PROP_COLOR, &ci);
-        if (cv->props.view.background_color != 0xFFFFFFFFU || ct->props.text.color != 0xFFFFFFFFU)
+        er_anim_value_bind_color(color_value, color_view, ER_PROP_BACKGROUND_COLOR, &color_interpolation);
+        er_anim_value_bind_color(color_value, color_text, ER_PROP_COLOR, &color_interpolation);
+        if (color_view->props.view.background_color != 0xFFFFFFFFU || color_text->props.text.color != 0xFFFFFFFFU)
             return fail("color bind: binding should apply the current value at once");
 
-        ERAnimConfig ccfg = {0};
-        ccfg.type = ER_ANIM_TIMING;
-        ccfg.duration_ms = 100U;
-        er_anim_value_animate(ch, 0.0f, &ccfg);
+        ERAnimConfig color_config = {0};
+        color_config.type = ER_ANIM_TIMING;
+        color_config.duration_ms = 100U;
+        er_anim_value_animate(color_value, 0.0f, &color_config);
         embedded_renderer_tick(50U);
-        if (cv->props.view.background_color != 0xFF808080U || ct->props.text.color != 0xFF808080U)
+        if (color_view->props.view.background_color != 0xFF808080U || color_text->props.text.color != 0xFF808080U)
             return fail("color bind: animating the value should interpolate both colors");
 
         /* setProps writes the static color; the binding puts the animated one back. */
-        er_node_set_props(cv, &cp);
-        if (cv->props.view.background_color != 0xFF808080U)
+        er_node_set_props(color_view, &color_props);
+        if (color_view->props.view.background_color != 0xFF808080U)
             return fail("color bind: setProps should not clobber an animated color");
 
-        er_anim_value_destroy(ch);
-        er_node_destroy(cv);
-        er_node_destroy(ct);
+        er_anim_value_destroy(color_value);
+        er_node_destroy(color_view);
+        er_node_destroy(color_text);
     }
 
     /* -----------------------------------------------------------------------
      * OPACITY ON TEXT AND IMAGE: both keep an opacity of their own, static and animated.
      * ---------------------------------------------------------------------- */
     {
-        ERNode* ot = er_node_create(ER_NODE_TEXT);
-        ERNode* oi = er_node_create(ER_NODE_IMAGE);
-        if (ot->props.text.opacity != 255U || oi->props.image.opacity != 255U)
+        ERNode* opacity_text = er_node_create(ER_NODE_TEXT);
+        ERNode* opacity_image = er_node_create(ER_NODE_IMAGE);
+        if (opacity_text->props.text.opacity != 255U || opacity_image->props.image.opacity != 255U)
             return fail("text/image opacity: a fresh node should be opaque");
-        ERProps op = props_default();
-        op.opacity = 64U;
-        er_node_set_props(ot, &op);
-        er_node_set_props(oi, &op);
-        if (ot->props.text.opacity != 64U || oi->props.image.opacity != 64U)
+        ERProps opacity_props = props_default();
+        opacity_props.opacity = 64U;
+        er_node_set_props(opacity_text, &opacity_props);
+        er_node_set_props(opacity_image, &opacity_props);
+        if (opacity_text->props.text.opacity != 64U || opacity_image->props.image.opacity != 64U)
             return fail("text/image opacity: setProps should store a static opacity");
 
-        ERAnimValueHandle oh = er_anim_value_create(1.0f);
-        er_anim_value_bind(oh, ot, ER_PROP_OPACITY);
-        er_anim_value_bind(oh, oi, ER_PROP_OPACITY);
-        if (ot->props.text.opacity != 255U || oi->props.image.opacity != 255U)
+        ERAnimValueHandle opacity_value = er_anim_value_create(1.0f);
+        er_anim_value_bind(opacity_value, opacity_text, ER_PROP_OPACITY);
+        er_anim_value_bind(opacity_value, opacity_image, ER_PROP_OPACITY);
+        if (opacity_text->props.text.opacity != 255U || opacity_image->props.image.opacity != 255U)
             return fail("text/image opacity: binding should apply the current value at once");
-        er_anim_value_set(oh, 0.5f);
-        if (ot->props.text.opacity != 128U || oi->props.image.opacity != 128U)
+        er_anim_value_set(opacity_value, 0.5f);
+        if (opacity_text->props.text.opacity != 128U || opacity_image->props.image.opacity != 128U)
             return fail("text/image opacity: an animated value should drive the opacity");
 
-        er_anim_value_destroy(oh);
-        er_node_destroy(ot);
-        er_node_destroy(oi);
+        er_anim_value_destroy(opacity_value);
+        er_node_destroy(opacity_text);
+        er_node_destroy(opacity_image);
 
         /* A TextInput keeps an explicit 0, so releasing an animated opacity can restore a hidden one. */
-        ERNode* oti = er_node_create(ER_NODE_TEXT_INPUT);
-        if (oti->props.text_input.opacity != 255U)
+        ERNode* opacity_text_input = er_node_create(ER_NODE_TEXT_INPUT);
+        if (opacity_text_input->props.text_input.opacity != 255U)
             return fail("text input opacity: a fresh node should be opaque");
-        ERAnimValueHandle th = er_anim_value_create(1.0f);
-        er_anim_value_bind(th, oti, ER_PROP_OPACITY);
-        er_anim_unbind_prop(oti, ER_PROP_OPACITY);
-        op.opacity = 0U;
-        er_node_set_props(oti, &op);
-        if (oti->props.text_input.opacity != 0U)
+        ERAnimValueHandle text_input_opacity = er_anim_value_create(1.0f);
+        er_anim_value_bind(text_input_opacity, opacity_text_input, ER_PROP_OPACITY);
+        er_anim_unbind_prop(opacity_text_input, ER_PROP_OPACITY);
+        opacity_props.opacity = 0U;
+        er_node_set_props(opacity_text_input, &opacity_props);
+        if (opacity_text_input->props.text_input.opacity != 0U)
             return fail("text input opacity: a static opacity of 0 should stay 0");
-        er_anim_value_destroy(th);
-        er_node_destroy(oti);
+        er_anim_value_destroy(text_input_opacity);
+        er_node_destroy(opacity_text_input);
     }
 
     /* -----------------------------------------------------------------------
@@ -899,42 +903,43 @@ int main(void)
      * 0 (for a transform component, unset), and a translate is clamped to what an int holds.
      * ---------------------------------------------------------------------- */
     {
-        ERNode* na = er_node_create(ER_NODE_VIEW);
-        ERProps np = props_default();
-        np.width = 10;
-        np.height = 10;
-        er_node_set_props(na, &np);
+        ERNode* nan_node = er_node_create(ER_NODE_VIEW);
+        ERProps nan_props = props_default();
+        nan_props.width = 10;
+        nan_props.height = 10;
+        er_node_set_props(nan_node, &nan_props);
 
-        ERAnimValueHandle th = er_anim_value_create(5.0f);
-        ERAnimValueHandle sh = er_anim_value_create(2.0f);
-        ERAnimValueHandle oh = er_anim_value_create(1.0f);
-        if (th == ER_ANIM_VALUE_INVALID || sh == ER_ANIM_VALUE_INVALID || oh == ER_ANIM_VALUE_INVALID)
+        ERAnimValueHandle translate_value = er_anim_value_create(5.0f);
+        ERAnimValueHandle scale_value = er_anim_value_create(2.0f);
+        ERAnimValueHandle opacity_value = er_anim_value_create(1.0f);
+        if (translate_value == ER_ANIM_VALUE_INVALID || scale_value == ER_ANIM_VALUE_INVALID
+            || opacity_value == ER_ANIM_VALUE_INVALID)
             return fail("nan values: er_anim_value_create returned INVALID");
-        er_anim_value_bind(th, na, ER_PROP_TRANSLATE_X);
-        er_anim_value_bind(sh, na, ER_PROP_SCALE_X);
-        er_anim_value_bind(oh, na, ER_PROP_OPACITY);
+        er_anim_value_bind(translate_value, nan_node, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(scale_value, nan_node, ER_PROP_SCALE_X);
+        er_anim_value_bind(opacity_value, nan_node, ER_PROP_OPACITY);
 
-        er_anim_value_set(th, NAN);
-        er_anim_value_set(sh, NAN);
-        er_anim_value_set(oh, NAN);
-        if (na->transform_translate_x != 0.0f)
+        er_anim_value_set(translate_value, NAN);
+        er_anim_value_set(scale_value, NAN);
+        er_anim_value_set(opacity_value, NAN);
+        if (nan_node->transform_translate_x != 0.0f)
             return fail("nan values: a NaN translate should be 0");
-        if (na->transform_scale_x != 0.0f)
+        if (nan_node->transform_scale_x != 0.0f)
             return fail("nan values: a NaN scale should be 0 (unset)");
-        if (na->props.view.opacity != 0U)
+        if (nan_node->props.view.opacity != 0U)
             return fail("nan values: a NaN opacity should be fully transparent");
 
-        er_anim_value_set(th, 1e10f);
-        if (na->transform_translate_x != 32767.0f)
+        er_anim_value_set(translate_value, 1e10f);
+        if (nan_node->transform_translate_x != 32767.0f)
             return fail("nan values: a translate past the int range should clamp to 32767");
-        er_anim_value_set(th, -1e10f);
-        if (na->transform_translate_x != -32767.0f)
+        er_anim_value_set(translate_value, -1e10f);
+        if (nan_node->transform_translate_x != -32767.0f)
             return fail("nan values: a translate below the int range should clamp to -32767");
 
-        er_anim_value_destroy(th);
-        er_anim_value_destroy(sh);
-        er_anim_value_destroy(oh);
-        er_node_destroy(na);
+        er_anim_value_destroy(translate_value);
+        er_anim_value_destroy(scale_value);
+        er_anim_value_destroy(opacity_value);
+        er_node_destroy(nan_node);
     }
 
     /* -----------------------------------------------------------------------
@@ -946,35 +951,35 @@ int main(void)
      * the tree in a live context) would otherwise hit. (Regression.)
      * ---------------------------------------------------------------------- */
     {
-        ERAnimValueHandle bh = er_anim_value_create(0.0f);
-        if (bh == ER_ANIM_VALUE_INVALID)
+        ERAnimValueHandle binding_value = er_anim_value_create(0.0f);
+        if (binding_value == ER_ANIM_VALUE_INVALID)
             return fail("stale_bind: er_anim_value_create returned INVALID");
 
         ERNode* gone = er_node_create(ER_NODE_VIEW);
-        ERProps gp = props_default();
-        gp.width = 10;
-        gp.height = 10;
-        er_node_set_props(gone, &gp);
+        ERProps gone_props = props_default();
+        gone_props.width = 10;
+        gone_props.height = 10;
+        er_node_set_props(gone, &gone_props);
         const uint16_t recycled_tag = gone->tag;
 
-        er_anim_value_bind(bh, gone, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(binding_value, gone, ER_PROP_TRANSLATE_X);
         er_node_destroy(gone); /* must drop the binding to `gone` */
 
         /* The pool hands the freed tag back to the next node (LIFO free list). */
         ERNode* fresh = er_node_create(ER_NODE_VIEW);
         if (fresh->tag != recycled_tag)
             return fail("stale_bind: precondition — freed tag was not recycled");
-        ERProps fp = props_default();
-        fp.width = 10;
-        fp.height = 10;
-        er_node_set_props(fresh, &fp);
+        ERProps fresh_props = props_default();
+        fresh_props.width = 10;
+        fresh_props.height = 10;
+        er_node_set_props(fresh, &fresh_props);
 
         /* Drive the value. A surviving binding would push 99 onto `fresh`. */
-        er_anim_value_set(bh, 99.0f);
+        er_anim_value_set(binding_value, 99.0f);
         if (fresh->transform_translate_x > 0.1f || fresh->transform_translate_x < -0.1f)
             return fail("stale_bind: binding to a destroyed node drove the node that reused its tag");
 
-        er_anim_value_destroy(bh);
+        er_anim_value_destroy(binding_value);
         er_node_destroy(fresh);
     }
 
@@ -991,16 +996,16 @@ int main(void)
      * ---------------------------------------------------------------------- */
     {
         ERNode* doomed = er_node_create(ER_NODE_VIEW);
-        ERProps dp = props_default();
-        dp.width = 10;
-        dp.height = 10;
-        er_node_set_props(doomed, &dp);
+        ERProps doomed_props = props_default();
+        doomed_props.width = 10;
+        doomed_props.height = 10;
+        er_node_set_props(doomed, &doomed_props);
         const uint16_t recycled_tag = doomed->tag;
 
-        ERAnimConfig acfg = {0};
-        acfg.type = ER_ANIM_TIMING;
-        acfg.duration_ms = 1000U;
-        er_anim_start(doomed, ER_PROP_TRANSLATE_X, 500.0f, &acfg);
+        ERAnimConfig animation_config = {0};
+        animation_config.type = ER_ANIM_TIMING;
+        animation_config.duration_ms = 1000U;
+        er_anim_start(doomed, ER_PROP_TRANSLATE_X, 500.0f, &animation_config);
 
         /* Destroyed mid-flight, and — the point of the case — with no tick in
          * between, which is the only window where the tag is still claimable. */
@@ -1009,10 +1014,10 @@ int main(void)
         ERNode* heir = er_node_create(ER_NODE_VIEW);
         if (heir->tag != recycled_tag)
             return fail("stale_anim: precondition — freed tag was not recycled");
-        ERProps hp = props_default();
-        hp.width = 10;
-        hp.height = 10;
-        er_node_set_props(heir, &hp);
+        ERProps heir_props = props_default();
+        heir_props.width = 10;
+        heir_props.height = 10;
+        er_node_set_props(heir, &heir_props);
 
         embedded_renderer_tick(200U);
         if (heir->transform_translate_x > 0.1f || heir->transform_translate_x < -0.1f)
@@ -1034,13 +1039,13 @@ int main(void)
      * ---------------------------------------------------------------------- */
     {
         ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
-        ERProps sip = props_default();
-        sip.width = 40;
-        sip.height = 40;
+        ERProps spinner_props = props_default();
+        spinner_props.width = 40;
+        spinner_props.height = 40;
         /* props_default() zeroes `animating`, which er_node_set_props reads as
          * "stop" and cancels the spin — the case would then pass vacuously. */
-        sip.animating = 1U;
-        er_node_set_props(spinner, &sip);
+        spinner_props.animating = 1U;
+        er_node_set_props(spinner, &spinner_props);
         const uint16_t spin_tag = spinner->tag;
 
         embedded_renderer_tick(100U);
@@ -1052,10 +1057,10 @@ int main(void)
         ERNode* heir = er_node_create(ER_NODE_VIEW);
         if (heir->tag != spin_tag)
             return fail("stale_spin: precondition — freed tag was not recycled");
-        ERProps hp = props_default();
-        hp.width = 10;
-        hp.height = 10;
-        er_node_set_props(heir, &hp);
+        ERProps heir_props = props_default();
+        heir_props.width = 10;
+        heir_props.height = 10;
+        er_node_set_props(heir, &heir_props);
 
         embedded_renderer_tick(100U);
         if (heir->transform_rotate_z != 0.0f)
@@ -1080,11 +1085,11 @@ int main(void)
     {
         ERNode* first = er_node_create(ER_NODE_VIEW);
         ERNode* later = er_node_create(ER_NODE_VIEW);
-        ERProps gp2 = props_default();
-        gp2.width = 10;
-        gp2.height = 10;
-        er_node_set_props(first, &gp2);
-        er_node_set_props(later, &gp2);
+        ERProps group_props = props_default();
+        group_props.width = 10;
+        group_props.height = 10;
+        er_node_set_props(first, &group_props);
+        er_node_set_props(later, &group_props);
         const uint16_t later_tag = later->tag;
 
         ERAnimEntry entries[2] = {0};
@@ -1109,7 +1114,7 @@ int main(void)
         ERNode* heir = er_node_create(ER_NODE_VIEW);
         if (heir->tag != later_tag)
             return fail("stale_group: precondition — freed tag was not recycled");
-        er_node_set_props(heir, &gp2);
+        er_node_set_props(heir, &group_props);
 
         const float first_x = first->transform_translate_x;
         embedded_renderer_tick(200U); /* long enough for entry 0 to have ended and entry 1 to start */
@@ -1137,31 +1142,31 @@ int main(void)
      * ---------------------------------------------------------------------- */
     {
         ERNode* clobber = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.width = 10;
-        cp.height = 10;
-        er_node_set_props(clobber, &cp);
+        ERProps clobber_props = props_default();
+        clobber_props.width = 10;
+        clobber_props.height = 10;
+        er_node_set_props(clobber, &clobber_props);
 
-        ERAnimValueHandle ch = er_anim_value_create(0.0f);
-        if (ch == ER_ANIM_VALUE_INVALID)
+        ERAnimValueHandle clobber_value = er_anim_value_create(0.0f);
+        if (clobber_value == ER_ANIM_VALUE_INVALID)
             return fail("clobber: er_anim_value_create returned INVALID");
 
-        er_anim_value_bind(ch, clobber, ER_PROP_TRANSLATE_X);
-        er_anim_value_set(ch, 80.0f);
+        er_anim_value_bind(clobber_value, clobber, ER_PROP_TRANSLATE_X);
+        er_anim_value_set(clobber_value, 80.0f);
         if (clobber->transform_translate_x < 79.9f || clobber->transform_translate_x > 80.1f)
             return fail("clobber: bound value did not apply before re-render");
 
         /* Simulate a React re-render: the static props carry no transform (0). */
-        ERProps cp2 = props_default();
-        cp2.width = 10;
-        cp2.height = 10;
-        er_node_set_props(clobber, &cp2);
+        ERProps rerender_props = props_default();
+        rerender_props.width = 10;
+        rerender_props.height = 10;
+        er_node_set_props(clobber, &rerender_props);
 
         /* Without the re-apply guard this would now be 0 (the jump-to-middle). */
         if (clobber->transform_translate_x < 79.9f || clobber->transform_translate_x > 80.1f)
             return fail("clobber: er_node_set_props reset the animated translateX");
 
-        er_anim_value_destroy(ch);
+        er_anim_value_destroy(clobber_value);
         er_node_destroy(clobber);
     }
 
@@ -1178,29 +1183,29 @@ int main(void)
     {
         ERNode* owned = er_node_create(ER_NODE_VIEW);
         ERNode* other = er_node_create(ER_NODE_VIEW);
-        ERProps up = props_default();
-        up.width = 10;
-        up.height = 10;
-        er_node_set_props(owned, &up);
-        er_node_set_props(other, &up);
+        ERProps owned_props = props_default();
+        owned_props.width = 10;
+        owned_props.height = 10;
+        er_node_set_props(owned, &owned_props);
+        er_node_set_props(other, &owned_props);
 
-        ERAnimValueHandle uh = er_anim_value_create(0.0f);
-        ERAnimValueHandle uh2 = er_anim_value_create(0.0f);
-        if (uh == ER_ANIM_VALUE_INVALID || uh2 == ER_ANIM_VALUE_INVALID)
+        ERAnimValueHandle first_value = er_anim_value_create(0.0f);
+        ERAnimValueHandle second_value = er_anim_value_create(0.0f);
+        if (first_value == ER_ANIM_VALUE_INVALID || second_value == ER_ANIM_VALUE_INVALID)
             return fail("unbind_prop: er_anim_value_create returned INVALID");
 
         /* translateX is driven by BOTH values (what a re-render that swapped Animated.Values without
          * releasing the old one leaves behind); translateY and the second node are bystanders. */
-        er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_X);
-        er_anim_value_bind(uh2, owned, ER_PROP_TRANSLATE_X);
-        er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_Y);
-        er_anim_value_bind(uh, other, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(first_value, owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(second_value, owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_bind(first_value, owned, ER_PROP_TRANSLATE_Y);
+        er_anim_value_bind(first_value, other, ER_PROP_TRANSLATE_X);
 
         er_anim_unbind_prop(owned, ER_PROP_TRANSLATE_X);
 
         /* Nothing drives owned->translateX now, from either value... */
-        er_anim_value_set(uh, 70.0f);
-        er_anim_value_set(uh2, 40.0f);
+        er_anim_value_set(first_value, 70.0f);
+        er_anim_value_set(second_value, 40.0f);
         if (owned->transform_translate_x > 0.1f || owned->transform_translate_x < -0.1f)
             return fail("unbind_prop: a released property still followed its animated value");
         /* ...while the same node's other property and the same value's other node keep running. */
@@ -1211,37 +1216,37 @@ int main(void)
 
         /* And the static value a declarative update writes now sticks: er_node_set_props re-applies
          * only what is still bound, so with nothing bound translateX stays where it was put. */
-        ERProps up2 = props_default();
-        up2.width = 10;
-        up2.height = 10;
-        up2.transform_translate_x = 25.0f;
-        er_node_set_props(owned, &up2);
-        er_anim_value_set(uh, 90.0f);
+        ERProps update_props = props_default();
+        update_props.width = 10;
+        update_props.height = 10;
+        update_props.transform_translate_x = 25.0f;
+        er_node_set_props(owned, &update_props);
+        er_anim_value_set(first_value, 90.0f);
         if (owned->transform_translate_x < 24.9f || owned->transform_translate_x > 25.1f)
             return fail("unbind_prop: the static value did not survive after the release");
 
         /* A freed binding slot is reusable, and must not carry the previous tenant's interpolation. */
-        ERInterpolation interp = {0};
-        interp.point_count = 2U;
-        interp.input_range[0] = 0.0f;
-        interp.input_range[1] = 1.0f;
-        interp.output_range[0] = 0.0f;
-        interp.output_range[1] = 100.0f;
-        interp.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
-        interp.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
-        er_anim_value_bind_interpolated(uh, owned, ER_PROP_TRANSLATE_X, &interp);
-        er_anim_value_set(uh, 0.5f);
+        ERInterpolation interpolation = {0};
+        interpolation.point_count = 2U;
+        interpolation.input_range[0] = 0.0f;
+        interpolation.input_range[1] = 1.0f;
+        interpolation.output_range[0] = 0.0f;
+        interpolation.output_range[1] = 100.0f;
+        interpolation.extrapolate_left = ER_EXTRAPOLATE_EXTEND;
+        interpolation.extrapolate_right = ER_EXTRAPOLATE_EXTEND;
+        er_anim_value_bind_interpolated(first_value, owned, ER_PROP_TRANSLATE_X, &interpolation);
+        er_anim_value_set(first_value, 0.5f);
         if (owned->transform_translate_x < 49.9f || owned->transform_translate_x > 50.1f)
             return fail("unbind_prop: re-binding a released property did not take effect");
 
         er_anim_unbind_prop(owned, ER_PROP_TRANSLATE_X);
-        er_anim_value_bind(uh, owned, ER_PROP_TRANSLATE_X);
-        er_anim_value_set(uh, 0.25f);
+        er_anim_value_bind(first_value, owned, ER_PROP_TRANSLATE_X);
+        er_anim_value_set(first_value, 0.25f);
         if (owned->transform_translate_x < 0.24f || owned->transform_translate_x > 0.26f)
             return fail("unbind_prop: a reused binding slot inherited the previous interpolation");
 
-        er_anim_value_destroy(uh);
-        er_anim_value_destroy(uh2);
+        er_anim_value_destroy(first_value);
+        er_anim_value_destroy(second_value);
         er_node_destroy(owned);
         er_node_destroy(other);
     }

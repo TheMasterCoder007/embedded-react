@@ -31,9 +31,12 @@
 /** @brief A font format the engine can't draw. */
 #define TPACK_UNKNOWN_FONT_FORMAT 9u
 
+/** @brief Room for one test pack. */
+#define TPACK_BYTES_MAX 4096
+
 typedef struct
 {
-    uint8_t bytes[4096];
+    uint8_t bytes[TPACK_BYTES_MAX];
     size_t length;
 } TestPack;
 

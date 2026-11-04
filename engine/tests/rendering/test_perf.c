@@ -43,6 +43,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define OPACITY_OPAQUE 255U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Fake clock: every read advances by g_step, so one begin/end pair == exactly one step
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -52,45 +54,45 @@ static uint32_t g_step = 1000U;
 
 static uint32_t fake_now_us(void)
 {
-    const uint32_t t = g_now_us;
+    const uint32_t now_us = g_now_us;
     g_now_us += g_step;
-    return t;
+    return now_us;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Helpers
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static void noop_fill(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void noop_fill(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -110,20 +112,20 @@ static void frame(void)
 static ERNode* build_scene(int screen, ERNode** out_root)
 {
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     ERNode* box = er_node_create(ER_NODE_VIEW);
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 20;
-    bp.margin_top = 20;
-    bp.background_color = 0xFF3366FFU;
-    er_node_set_props(box, &bp);
+    ERProps box_props = props_default();
+    box_props.width = 30;
+    box_props.height = 30;
+    box_props.margin_left = 20;
+    box_props.margin_top = 20;
+    box_props.background_color = 0xFF3366FFU;
+    er_node_set_props(box, &box_props);
 
     er_tree_append_child(root, box);
     er_tree_set_root(root);
@@ -134,13 +136,13 @@ static ERNode* build_scene(int screen, ERNode** out_root)
 /* Recolours the box, which dirties it without moving it (damage == the box rect, no relayout). */
 static void recolour(ERNode* box, uint32_t argb)
 {
-    ERProps bp = props_default();
-    bp.width = 30;
-    bp.height = 30;
-    bp.margin_left = 20;
-    bp.margin_top = 20;
-    bp.background_color = argb;
-    er_node_set_props(box, &bp);
+    ERProps box_props = props_default();
+    box_props.width = 30;
+    box_props.height = 30;
+    box_props.margin_left = 20;
+    box_props.margin_top = 20;
+    box_props.background_color = argb;
+    er_node_set_props(box, &box_props);
 }
 
 /* The bounds-only refresh path: a transform appearing mid-animation runs no solver, but it does walk
@@ -152,14 +154,14 @@ static int check_bounds_refresh_is_timed(int screen)
 
     frame(); /* mount frame: layout runs */
 
-    ERAnimValueHandle v = er_anim_value_create(0.0f);
-    er_anim_value_bind(v, box, ER_PROP_TRANSLATE_X);
-    ERAnimConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = 320U;
-    cfg.easing = ER_EASE_LINEAR;
-    er_anim_value_animate(v, 60.0f, &cfg);
+    ERAnimValueHandle value = er_anim_value_create(0.0f);
+    er_anim_value_bind(value, box, ER_PROP_TRANSLATE_X);
+    ERAnimConfig config;
+    memset(&config, 0, sizeof(config));
+    config.type = ER_ANIM_TIMING;
+    config.duration_ms = 320U;
+    config.easing = ER_EASE_LINEAR;
+    er_anim_value_animate(value, 60.0f, &config);
 
     const uint32_t passes = er_layout_pass_count();
 
@@ -167,27 +169,27 @@ static int check_bounds_refresh_is_timed(int screen)
     embedded_renderer_tick(16U);
     frame();
 
-    ERPerfFrame f;
-    if (!er_perf_get_last(&f))
+    ERPerfFrame perf_frame;
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded for the first animated frame");
-    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
+    if (perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
         return fail("the subtree-bounds refresh was not attributed to the layout phase");
     if (er_layout_pass_count() != passes)
         return fail("the subtree-bounds refresh ran the layout solver");
 
-    uint32_t sum = f.other_us;
-    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
-        sum += f.phase_us[i];
-    if (sum != f.frame_us)
+    uint32_t sum = perf_frame.other_us;
+    for (int phase_index = 0; phase_index < (int)ER_PERF_PHASE_COUNT; phase_index++)
+        sum += perf_frame.phase_us[phase_index];
+    if (sum != perf_frame.frame_us)
         return fail("phases + other_us do not add up on a bounds-refresh frame");
 
     /* Every later frame of the same animation: the transform is already there, nothing to refresh.
      * Exactly 0 is the assertion worth making — the refresh is per toggle, not per frame. */
     embedded_renderer_tick(16U);
     frame();
-    if (!er_perf_get_last(&f))
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded for the second animated frame");
-    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != 0U)
+    if (perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] != 0U)
         return fail("a mid-animation frame refreshed the subtree bounds again");
     if (er_layout_pass_count() != passes)
         return fail("a mid-animation frame ran the layout solver");
@@ -211,30 +213,30 @@ static int check_phase_split(int screen)
 
     frame(); /* mount frame: layout runs */
 
-    ERPerfFrame f;
-    if (!er_perf_get_last(&f))
+    ERPerfFrame perf_frame;
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded after the first commit");
-    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
+    if (perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
         return fail("mount frame did not time the layout pass");
-    if (f.phase_us[ER_PERF_PHASE_RASTER] == 0U)
+    if (perf_frame.phase_us[ER_PERF_PHASE_RASTER] == 0U)
         return fail("mount frame did not time the raster pass");
-    if (f.phase_us[ER_PERF_PHASE_JS] != g_step || f.phase_us[ER_PERF_PHASE_PRESENT] != g_step)
+    if (perf_frame.phase_us[ER_PERF_PHASE_JS] != g_step || perf_frame.phase_us[ER_PERF_PHASE_PRESENT] != g_step)
         return fail("host-marked JS/present phases were not timed");
 
-    uint32_t sum = f.other_us;
-    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
-        sum += f.phase_us[i];
-    if (sum != f.frame_us)
+    uint32_t sum = perf_frame.other_us;
+    for (int phase_index = 0; phase_index < (int)ER_PERF_PHASE_COUNT; phase_index++)
+        sum += perf_frame.phase_us[phase_index];
+    if (sum != perf_frame.frame_us)
         return fail("phases + other_us do not add up to frame_us");
 
     /* Idle frame: nothing changed, so the layout fast path skips the solver entirely and the phase is
      * never entered. Exactly 0 — not "small" — is the assertion worth making. */
     frame();
-    if (!er_perf_get_last(&f))
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded for the idle frame");
-    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != 0U)
+    if (perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] != 0U)
         return fail("idle frame reported layout time although the solver never ran");
-    if (f.phase_us[ER_PERF_PHASE_RASTER] == 0U)
+    if (perf_frame.phase_us[ER_PERF_PHASE_RASTER] == 0U)
         return fail("idle frame did not time the raster phase (the damage pre-pass still runs)");
 
     /* A recolour changes no layout input, yet er_node_set_props conservatively marks layout dirty, so
@@ -242,9 +244,9 @@ static int check_phase_split(int screen)
      * to make visible — the frame is not "just a repaint" and the numbers must not pretend it is. */
     recolour(box, 0xFF22CC88U);
     frame();
-    if (!er_perf_get_last(&f))
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded for the recolour frame");
-    if (f.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
+    if (perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] != g_step)
         return fail("a setProps-driven relayout was not attributed to the layout phase");
 
     er_node_destroy(root);
@@ -263,38 +265,38 @@ static int check_raster_split(int screen)
     ERNode* box = build_scene(screen, &root);
 
     frame(); /* mount: full-screen repaint through the backend */
-    ERPerfFrame f;
-    if (!er_perf_get_last(&f))
+    ERPerfFrame perf_frame;
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded after the mount commit");
-    if (f.raster_us[ER_PERF_RASTER_PREPASS] == 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_PREPASS] == 0U)
         return fail("mount frame did not time the damage pre-pass");
-    if (f.raster_us[ER_PERF_RASTER_RENDER] == 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_RENDER] == 0U)
         return fail("mount frame did not time the composite passes");
-    if (f.raster_us[ER_PERF_RASTER_BLIT] == 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] == 0U)
         return fail("mount frame did not time the backend blits");
-    if (f.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
         return fail("mount frame did not time the dirty-flag sweep");
     /* Disjointness: the buckets must never claim more than the phase they subdivide (RENDER is
      * reported net of BLIT precisely so this holds). */
     uint32_t sub_sum = 0U;
-    for (int i = 0; i < (int)ER_PERF_RASTER_COUNT; i++)
-        sub_sum += f.raster_us[i];
-    if (sub_sum > f.phase_us[ER_PERF_PHASE_RASTER])
+    for (int raster_index = 0; raster_index < (int)ER_PERF_RASTER_COUNT; raster_index++)
+        sub_sum += perf_frame.raster_us[raster_index];
+    if (sub_sum > perf_frame.phase_us[ER_PERF_PHASE_RASTER])
         return fail("the raster sub-steps sum to more than the raster phase");
     /* The mount paints the root AND the box over it, so the backend saw at least every screen pixel
      * once — blit_px is write traffic, not coverage, and overlap is exactly what it must not hide. */
-    if (f.blit_px < (uint32_t)(screen * screen))
+    if (perf_frame.blit_px < (uint32_t)(screen * screen))
         return fail("the mount frame's blit_px is less than the screen it painted");
 
     /* Idle: the pre-pass and the sweep still walk the pool (their cost is the per-commit floor this
      * split exists to expose), but not one pixel may reach the backend. */
     frame();
-    er_perf_get_last(&f);
-    if (f.raster_us[ER_PERF_RASTER_PREPASS] == 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.raster_us[ER_PERF_RASTER_PREPASS] == 0U)
         return fail("idle frame did not time the damage pre-pass (the pool walk still runs)");
-    if (f.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_SWEEP] == 0U)
         return fail("idle frame did not time the dirty-flag sweep");
-    if (f.raster_us[ER_PERF_RASTER_BLIT] != 0U || f.blit_px != 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U || perf_frame.blit_px != 0U)
         return fail("an idle frame reported backend blit work");
 
     /* One recoloured 30x30 box. The composite restores the parent's background over the padded
@@ -304,14 +306,14 @@ static int check_raster_split(int screen)
      * the backend calls exactly: one step each). */
     recolour(box, 0xFF22CC88U);
     frame();
-    er_perf_get_last(&f);
-    if (f.raster_us[ER_PERF_RASTER_BLIT] != 2U * g_step)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 2U * g_step)
         return fail("the recolour frame's blit time is not exactly two backend calls (bg + box)");
-    if (f.blit_px < 900U)
+    if (perf_frame.blit_px < 900U)
         return fail("the recolour frame's blit_px does not cover the recoloured box");
-    if (f.blit_px <= f.dirty_px)
+    if (perf_frame.blit_px <= perf_frame.dirty_px)
         return fail("blit_px hides the bg-restore write under the box (no amplification reported)");
-    if (f.blit_px >= (uint32_t)(screen * screen))
+    if (perf_frame.blit_px >= (uint32_t)(screen * screen))
         return fail("a single recoloured box pushed a whole screen of pixels");
 
     er_node_destroy(root);
@@ -352,47 +354,49 @@ static int check_js_split(int screen)
     er_perf_phase_end(ER_PERF_PHASE_JS);
     er_perf_frame_end();
 
-    ERPerfFrame f;
-    if (!er_perf_get_last(&f))
+    ERPerfFrame perf_frame;
+    if (!er_perf_get_last(&perf_frame))
         return fail("no frame recorded for the bridge-shaped frame");
-    if (f.js_us[ER_PERF_JS_DISPATCH] != g_step)
+    if (perf_frame.js_us[ER_PERF_JS_DISPATCH] != g_step)
         return fail("the dispatch span was not timed as exactly one step");
-    if (f.js_us[ER_PERF_JS_MARSHAL] != g_step)
+    if (perf_frame.js_us[ER_PERF_JS_MARSHAL] != g_step)
         return fail("the marshalling span was not timed as exactly one step");
-    if (f.js_us[ER_PERF_JS_RECONCILE] != 3U * g_step)
+    if (perf_frame.js_us[ER_PERF_JS_RECONCILE] != 3U * g_step)
         return fail("reconcile did not keep exactly the time its nested spans left it");
 
     /* The commit ran inside the pump, so it is layout + raster (plus er_commit's own bookkeeping). */
-    if (f.js_us[ER_PERF_JS_COMMIT] < f.phase_us[ER_PERF_PHASE_LAYOUT] + f.phase_us[ER_PERF_PHASE_RASTER])
+    if (perf_frame.js_us[ER_PERF_JS_COMMIT]
+        < perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] + perf_frame.phase_us[ER_PERF_PHASE_RASTER])
         return fail("the pump-driven commit measured less than the layout+raster it contains");
 
     /* The three in-JS buckets fit inside the phase; the frame still adds up. */
-    if (f.js_us[ER_PERF_JS_DISPATCH] + f.js_us[ER_PERF_JS_RECONCILE] + f.js_us[ER_PERF_JS_MARSHAL]
-        > f.phase_us[ER_PERF_PHASE_JS])
+    if (perf_frame.js_us[ER_PERF_JS_DISPATCH] + perf_frame.js_us[ER_PERF_JS_RECONCILE]
+            + perf_frame.js_us[ER_PERF_JS_MARSHAL]
+        > perf_frame.phase_us[ER_PERF_PHASE_JS])
         return fail("the JS sub-steps sum to more than the JS phase");
-    uint32_t sum = f.other_us;
-    for (int i = 0; i < (int)ER_PERF_PHASE_COUNT; i++)
-        sum += f.phase_us[i];
-    if (sum != f.frame_us)
+    uint32_t sum = perf_frame.other_us;
+    for (int phase_index = 0; phase_index < (int)ER_PERF_PHASE_COUNT; phase_index++)
+        sum += perf_frame.phase_us[phase_index];
+    if (sum != perf_frame.frame_us)
         return fail("phases + other_us do not add up on a frame that committed from inside the pump");
-    if (f.other_us == 0U)
+    if (perf_frame.other_us == 0U)
         return fail("the phases still claim the whole frame (the nested commit was not taken out of JS)");
 
     /* And the bug this exists to close: leave the commit in the JS phase and the four phases claim
      * more time than the frame lasted, which is what used to pin other_us at 0. */
-    if (f.phase_us[ER_PERF_PHASE_JS] + f.js_us[ER_PERF_JS_COMMIT] + f.phase_us[ER_PERF_PHASE_LAYOUT]
-            + f.phase_us[ER_PERF_PHASE_RASTER]
-        <= f.frame_us)
+    if (perf_frame.phase_us[ER_PERF_PHASE_JS] + perf_frame.js_us[ER_PERF_JS_COMMIT]
+            + perf_frame.phase_us[ER_PERF_PHASE_LAYOUT] + perf_frame.phase_us[ER_PERF_PHASE_RASTER]
+        <= perf_frame.frame_us)
         return fail("setup: this frame does not reproduce the double count, so the fix is untested");
 
     /* A commit the HOST runs, outside the pump, is nobody's JS: the bucket stays empty and the JS
      * phase keeps every microsecond the host measured. */
     recolour(box, 0xFF991144U);
     frame();
-    er_perf_get_last(&f);
-    if (f.js_us[ER_PERF_JS_COMMIT] != 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.js_us[ER_PERF_JS_COMMIT] != 0U)
         return fail("a host-driven commit was attributed to the JS phase");
-    if (f.phase_us[ER_PERF_PHASE_JS] != g_step)
+    if (perf_frame.phase_us[ER_PERF_PHASE_JS] != g_step)
         return fail("a host-driven commit was subtracted from the JS phase");
 
     er_node_destroy(root);
@@ -428,9 +432,9 @@ static int check_worst_frame_is_retained(int screen)
         return fail("the spike's largest phase is not the one that was slow");
 
     /* Twenty ordinary frames later the peak must still be the spike, with its split intact. */
-    for (int i = 0; i < 20; i++)
+    for (int frame_index = 0; frame_index < 20; frame_index++)
     {
-        recolour(box, (uint32_t)(0xFF000000U | (uint32_t)(i * 0x010203)));
+        recolour(box, (uint32_t)(0xFF000000U | (uint32_t)(frame_index * 0x010203)));
         frame();
     }
 
@@ -470,26 +474,26 @@ static int check_counters(int screen)
     ERNode* box = build_scene(screen, &root);
 
     frame(); /* mount: full-screen repaint */
-    ERPerfFrame f;
-    er_perf_get_last(&f);
-    if (f.dirty_px != (uint32_t)(screen * screen))
+    ERPerfFrame perf_frame;
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.dirty_px != (uint32_t)(screen * screen))
         return fail("the mount frame's dirty area is not the whole screen");
 
     frame(); /* idle: nothing repainted */
-    er_perf_get_last(&f);
-    if (f.dirty_w != 0 || f.dirty_h != 0 || f.dirty_px != 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.dirty_w != 0 || perf_frame.dirty_h != 0 || perf_frame.dirty_px != 0U)
         return fail("an idle frame reported a non-empty dirty rect");
 
     /* A recolour repaints the box and nothing else, so the area collapses by orders of magnitude —
      * exactly the signal that separates "one small node changed" from "the whole screen redrew". */
     recolour(box, 0xFF9900FFU);
     frame();
-    er_perf_get_last(&f);
-    if (f.dirty_px == 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.dirty_px == 0U)
         return fail("the recolour frame reported no repaint");
-    if (f.dirty_px >= (uint32_t)(screen * screen))
+    if (perf_frame.dirty_px >= (uint32_t)(screen * screen))
         return fail("a single recoloured node repainted the whole screen");
-    if (f.dirty_w < 30 || f.dirty_h < 30)
+    if (perf_frame.dirty_w < 30 || perf_frame.dirty_h < 30)
         return fail("the dirty rect does not cover the changed node");
 
     /* Disjoint damage: recolour the box AND a second box in the far corner in one frame. dirty_w/h
@@ -497,83 +501,84 @@ static int check_counters(int screen)
      * rects — strictly less than the bbox area. This is what lets the overlay show "two small
      * changes" instead of "most of the screen". */
     ERNode* far_box = er_node_create(ER_NODE_VIEW);
-    ERProps fp = props_default();
-    fp.width = 30;
-    fp.height = 30;
-    fp.margin_left = (int16_t)(screen - 40);
-    fp.margin_top = (int16_t)(screen - 90); /* below the first box (bottom edge y=50): lands at screen-40 */
-    fp.background_color = 0xFF884422U;
-    er_node_set_props(far_box, &fp);
+    ERProps far_box_props = props_default();
+    far_box_props.width = 30;
+    far_box_props.height = 30;
+    far_box_props.margin_left = (int16_t)(screen - 40);
+    far_box_props.margin_top = (int16_t)(screen - 90); /* below the first box (bottom edge y=50): lands at screen-40 */
+    far_box_props.background_color = 0xFF884422U;
+    er_node_set_props(far_box, &far_box_props);
     er_tree_append_child(root, far_box);
     frame(); /* paint it */
     frame(); /* settle */
     recolour(box, 0xFF66AA22U);
-    fp.background_color = 0xFF2266AAU;
-    er_node_set_props(far_box, &fp);
+    far_box_props.background_color = 0xFF2266AAU;
+    er_node_set_props(far_box, &far_box_props);
     frame();
-    er_perf_get_last(&f);
-    if (f.dirty_px == 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.dirty_px == 0U)
         return fail("the two-corner frame reported no repaint");
-    if (f.dirty_w < 100 || f.dirty_h < 100)
+    if (perf_frame.dirty_w < 100 || perf_frame.dirty_h < 100)
         return fail("the two-corner bbox does not span both corners");
-    if (f.dirty_px >= (uint32_t)(f.dirty_w * f.dirty_h))
+    if (perf_frame.dirty_px >= (uint32_t)(perf_frame.dirty_w * perf_frame.dirty_h))
         return fail("dirty_px is not the sum of disjoint rects (equals the bbox area)");
     er_node_destroy(far_box);
     frame(); /* consume the removal damage so later assertions see a settled scene */
     frame();
 
     /* Resource pools: start empty, then fill as the scene registers assets. */
-    if (f.vector_slots_used != 0U)
+    if (perf_frame.vector_slots_used != 0U)
         return fail("vector slots reported in use before any vector node exists");
-    if (f.vector_slots_total == 0U || f.image_slots_total == 0U)
+    if (perf_frame.vector_slots_total == 0U || perf_frame.image_slots_total == 0U)
         return fail("pool sizes reported as zero");
 
     er_image_load("perf-test-a", pixels, 2, 2);
     er_image_load("perf-test-b", pixels, 2, 2);
 
-    ERNode* vec = er_node_create(ER_NODE_VECTOR);
-    ERProps vp = props_default();
-    vp.width = 40;
-    vp.height = 40;
-    er_node_set_props(vec, &vp);
+    ERNode* vector = er_node_create(ER_NODE_VECTOR);
+    ERProps vector_props = props_default();
+    vector_props.width = 40;
+    vector_props.height = 40;
+    er_node_set_props(vector, &vector_props);
     /* One filled rectangle: MOVE, LINE x3, CLOSE — enough to claim a storage slot. */
-    const float ops[] = {(float)ER_VOP_MOVE,
-                         0.0f,
-                         0.0f,
-                         (float)ER_VOP_LINE,
-                         40.0f,
-                         0.0f,
-                         (float)ER_VOP_LINE,
-                         40.0f,
-                         40.0f,
-                         (float)ER_VOP_LINE,
-                         0.0f,
-                         40.0f};
+    const float tape[] = {(float)ER_VOP_MOVE,
+                          0.0f,
+                          0.0f,
+                          (float)ER_VOP_LINE,
+                          40.0f,
+                          0.0f,
+                          (float)ER_VOP_LINE,
+                          40.0f,
+                          40.0f,
+                          (float)ER_VOP_LINE,
+                          0.0f,
+                          40.0f};
     ERVectorPaint paint = {0};
     paint.fill = 0xFF00FF00U;
     paint.fill_rule = ER_VFILL_NONZERO;
-    er_node_set_vector_ops(vec, ops, (int)(sizeof(ops) / sizeof(ops[0])), &paint, 1, NULL, 0);
-    er_tree_append_child(root, vec);
+    er_node_set_vector_ops(vector, tape, (int)(sizeof(tape) / sizeof(tape[0])), &paint, 1, NULL, 0);
+    er_tree_append_child(root, vector);
 
     frame();
-    er_perf_get_last(&f);
-    if (f.vector_slots_used != 1U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.vector_slots_used != 1U)
         return fail("the vector node did not show up in the vector-slot counter");
-    if (f.image_slots_used != 2U)
+    if (perf_frame.image_slots_used != 2U)
         return fail("registered images did not show up in the image-slot counter");
-    if (f.vector_slots_used > f.vector_slots_total || f.image_slots_used > f.image_slots_total)
+    if (perf_frame.vector_slots_used > perf_frame.vector_slots_total
+        || perf_frame.image_slots_used > perf_frame.image_slots_total)
         return fail("a slot counter exceeded its pool size");
-    if (f.vector_slots_overflow)
+    if (perf_frame.vector_slots_overflow)
         return fail("a scene well inside the vector pool reported an overflow");
 
     printf("PASS: counters — dirty %dx%d (%u px), VEC %u/%u, IMG %u/%u\n",
-           (int)f.dirty_w,
-           (int)f.dirty_h,
-           (unsigned)f.dirty_px,
-           (unsigned)f.vector_slots_used,
-           (unsigned)f.vector_slots_total,
-           (unsigned)f.image_slots_used,
-           (unsigned)f.image_slots_total);
+           (int)perf_frame.dirty_w,
+           (int)perf_frame.dirty_h,
+           (unsigned)perf_frame.dirty_px,
+           (unsigned)perf_frame.vector_slots_used,
+           (unsigned)perf_frame.vector_slots_total,
+           (unsigned)perf_frame.image_slots_used,
+           (unsigned)perf_frame.image_slots_total);
 
     er_node_destroy(root);
     return EXIT_SUCCESS;
@@ -595,16 +600,16 @@ static int check_overlay_lines(void)
     if (last.dirty_px != 0U || worst.dirty_px == 0U)
         return fail("setup: expected an empty last frame under a non-empty retained peak");
 
-    const int n = er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES);
-    if (n != ER_PERF_OVERLAY_LINES)
+    const int line_count = er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES);
+    if (line_count != ER_PERF_OVERLAY_LINES)
         return fail("er_perf_overlay_lines did not fill the requested line count");
-    for (int i = 0; i < n; i++)
+    for (int line_index = 0; line_index < line_count; line_index++)
     {
-        if (!lines[i] || lines[i][0] == '\0')
+        if (!lines[line_index] || lines[line_index][0] == '\0')
             return fail("er_perf_overlay_lines produced an empty line");
-        if (strlen(lines[i]) >= ER_PERF_LINE_MAX)
+        if (strlen(lines[line_index]) >= ER_PERF_LINE_MAX)
             return fail("an overlay line overran ER_PERF_LINE_MAX");
-        printf("  overlay: %s\n", lines[i]);
+        printf("  overlay: %s\n", lines[line_index]);
     }
 
     /* The region line: labelled as the peak's, showing the peak's geometry — not the last frame's
@@ -659,14 +664,14 @@ static int check_degrades_safely(int screen)
     er_perf_phase_begin(ER_PERF_PHASE_JS);
     er_commit();
     er_perf_frame_end();
-    ERPerfFrame f;
-    er_perf_get_last(&f);
-    if (f.phase_us[ER_PERF_PHASE_JS] == 0U)
+    ERPerfFrame perf_frame;
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.phase_us[ER_PERF_PHASE_JS] == 0U)
         return fail("a phase left open at frame end was dropped instead of closed");
 
     frame();
-    er_perf_get_last(&f);
-    if (f.phase_us[ER_PERF_PHASE_JS] != g_step)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.phase_us[ER_PERF_PHASE_JS] != g_step)
         return fail("an unbalanced phase leaked into the following frame");
 
     /* The JS stack: a stray end, a crossed end, and a span left open at frame end. None of them may
@@ -680,15 +685,15 @@ static int check_degrades_safely(int screen)
     er_perf_js_end(ER_PERF_JS_MARSHAL);     /* crossed with the open reconcile: ignored */
     er_perf_phase_end(ER_PERF_PHASE_JS);
     er_perf_frame_end();
-    er_perf_get_last(&f);
-    if (f.js_us[ER_PERF_JS_DISPATCH] != 0U || f.js_us[ER_PERF_JS_MARSHAL] != 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.js_us[ER_PERF_JS_DISPATCH] != 0U || perf_frame.js_us[ER_PERF_JS_MARSHAL] != 0U)
         return fail("an unbalanced JS mark charged time to a bucket that never ran");
-    if (f.js_us[ER_PERF_JS_RECONCILE] == 0U)
+    if (perf_frame.js_us[ER_PERF_JS_RECONCILE] == 0U)
         return fail("a JS span left open at frame end was dropped instead of closed");
 
     frame();
-    er_perf_get_last(&f);
-    if (f.js_us[ER_PERF_JS_RECONCILE] != 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.js_us[ER_PERF_JS_RECONCILE] != 0U)
         return fail("an unbalanced JS span leaked into the following frame");
 
     /* No clock: timings go to zero, counters keep working — including blit_px, which must keep
@@ -696,14 +701,14 @@ static int check_degrades_safely(int screen)
     er_perf_set_clock(NULL);
     recolour(box, 0xFF112233U); /* make the clockless frame actually paint something */
     frame();
-    er_perf_get_last(&f);
-    if (f.frame_us != 0U || f.phase_us[ER_PERF_PHASE_RASTER] != 0U)
+    er_perf_get_last(&perf_frame);
+    if (perf_frame.frame_us != 0U || perf_frame.phase_us[ER_PERF_PHASE_RASTER] != 0U)
         return fail("timings are non-zero without a clock installed");
-    if (f.raster_us[ER_PERF_RASTER_BLIT] != 0U)
+    if (perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U)
         return fail("blit time is non-zero without a clock installed");
-    if (f.blit_px == 0U)
+    if (perf_frame.blit_px == 0U)
         return fail("blit_px stopped counting without a clock");
-    if (f.vector_slots_total == 0U)
+    if (perf_frame.vector_slots_total == 0U)
         return fail("counters stopped working without a clock");
     er_perf_set_clock(fake_now_us);
 
@@ -728,12 +733,12 @@ int main(void)
     er_perf_frame_end();
     if (er_perf_now_us() != 0U)
         return fail("ER_PERF_STATS=0 sampled the clock");
-    ERPerfFrame f;
-    if (er_perf_get_last(&f) || er_perf_get_worst(&f))
+    ERPerfFrame perf_frame;
+    if (er_perf_get_last(&perf_frame) || er_perf_get_worst(&perf_frame))
         return fail("ER_PERF_STATS=0 reported a frame");
-    if (f.frame_us != 0U || f.raster_us[ER_PERF_RASTER_BLIT] != 0U || f.blit_px != 0U)
+    if (perf_frame.frame_us != 0U || perf_frame.raster_us[ER_PERF_RASTER_BLIT] != 0U || perf_frame.blit_px != 0U)
         return fail("ER_PERF_STATS=0 did not zero the out struct");
-    if (f.js_us[ER_PERF_JS_MARSHAL] != 0U)
+    if (perf_frame.js_us[ER_PERF_JS_MARSHAL] != 0U)
         return fail("ER_PERF_STATS=0 recorded a JS sub-step");
     const char* lines[ER_PERF_OVERLAY_LINES];
     if (er_perf_overlay_lines(lines, ER_PERF_OVERLAY_LINES) != 0)
@@ -741,56 +746,56 @@ int main(void)
     printf("PASS: ER_PERF_STATS=0 — instrumentation compiled out\n");
     return EXIT_SUCCESS;
 #else
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = noop_fill;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {0};
+    backend.fill_rect = noop_fill;
+    embedded_renderer_set_backend(&backend);
     er_perf_set_clock(fake_now_us);
 
     const int screen = 200;
 
-    int rc = check_phase_split(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    int result = check_phase_split(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
     er_perf_reset();
 
-    rc = check_bounds_refresh_is_timed(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_bounds_refresh_is_timed(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
     er_perf_reset();
 
-    rc = check_raster_split(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_raster_split(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
     er_perf_reset();
 
-    rc = check_js_split(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_js_split(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
     er_perf_reset();
 
-    rc = check_worst_frame_is_retained(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_worst_frame_is_retained(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
     er_perf_reset();
 
-    rc = check_counters(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_counters(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 
-    rc = check_overlay_lines();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_overlay_lines();
+    if (result != EXIT_SUCCESS)
+        return result;
     er_reset();
     er_perf_reset();
 
-    rc = check_degrades_safely(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_degrades_safely(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 
     return EXIT_SUCCESS;
 #endif

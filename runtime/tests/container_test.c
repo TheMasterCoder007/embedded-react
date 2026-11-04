@@ -40,6 +40,9 @@ static int s_failed = 0;
 static const char TEST_TAG[] = "v0.15.0";
 #define TEST_TAG_LENGTH ((uint16_t)(sizeof(TEST_TAG) - 1u))
 
+/** @brief Room for one test container. */
+#define BUFFER_BYTES 256
+
 /** @brief Offset of the first section's length field: header (12) + tag length (2) + tag + section count (4) +
  *         the section's type (4). */
 #define FIRST_SECTION_LENGTH_OFFSET (12u + 2u + TEST_TAG_LENGTH + 4u + 4u)
@@ -113,7 +116,7 @@ static void test_crc_check_vector(void)
 
 static void test_reads_tag_and_sections(void)
 {
-    uint8_t buffer[256];
+    uint8_t buffer[BUFFER_BYTES];
     const size_t container_size = build(buffer, 3);
     ErContainer container;
     CHECK(er_container_read(buffer, container_size, &container) == ER_CONTAINER_OK, "valid container reads");
@@ -132,7 +135,7 @@ static void test_reads_tag_and_sections(void)
 
 static void test_length_is_an_upper_bound(void)
 {
-    uint8_t buffer[256];
+    uint8_t buffer[BUFFER_BYTES];
     const size_t container_size = build(buffer, 2);
     memset(buffer + container_size, 0xFF, sizeof(buffer) - container_size);
     ErContainer container;
@@ -143,7 +146,7 @@ static void test_length_is_an_upper_bound(void)
 
 static void test_rejects_bad_header(void)
 {
-    uint8_t buffer[256];
+    uint8_t buffer[BUFFER_BYTES];
     size_t container_size = build(buffer, 1);
     ErContainer container;
     CHECK(er_container_read(NULL, container_size, &container) == ER_CONTAINER_BAD_MAGIC, "NULL buffer");
@@ -158,7 +161,7 @@ static void test_rejects_bad_header(void)
 
 static void test_rejects_bad_crc(void)
 {
-    uint8_t buffer[256];
+    uint8_t buffer[BUFFER_BYTES];
     const size_t container_size = build(buffer, 2);
     buffer[container_size - 1u] ^= 0x01u;
     ErContainer container;
@@ -168,7 +171,7 @@ static void test_rejects_bad_crc(void)
 
 static void test_rejects_truncation(void)
 {
-    uint8_t buffer[256];
+    uint8_t buffer[BUFFER_BYTES];
     const size_t container_size = build(buffer, 3);
     ErContainer container;
     for (size_t truncated_length = 12u; truncated_length < container_size; truncated_length++)
@@ -183,7 +186,7 @@ static void test_rejects_truncation(void)
 
 static void test_rejects_oversized_lengths(void)
 {
-    uint8_t buffer[256];
+    uint8_t buffer[BUFFER_BYTES];
     size_t container_size = build(buffer, 1);
     ErContainer container;
 

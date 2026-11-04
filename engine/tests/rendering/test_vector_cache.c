@@ -27,8 +27,8 @@
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-#define FB_W 128
-#define FB_H 128
+#define FRAMEBUFFER_WIDTH 128
+#define FRAMEBUFFER_HEIGHT 128
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Test harness (same shape as test_vector.c: capture blit calls into a flat ARGB framebuffer)
@@ -36,49 +36,52 @@
 
 typedef struct
 {
-    uint32_t* fb;
-    int fb_w;
-    int fb_h;
+    uint32_t* framebuffer;
+    int framebuffer_width;
+    int framebuffer_height;
 } TestCtx;
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
-    TestCtx* t = ctx;
-    for (int row = y; row < y + h; row++)
-        for (int col = x; col < x + w; col++)
-            if (row >= 0 && col >= 0 && row < t->fb_h && col < t->fb_w)
-                t->fb[row * t->fb_w + col] = argb;
+    TestCtx* test_context = ctx;
+    for (int row = y; row < y + height; row++)
+        for (int column = x; column < x + width; column++)
+            if (row >= 0 && column >= 0 && row < test_context->framebuffer_height
+                && column < test_context->framebuffer_width)
+                test_context->framebuffer[row * test_context->framebuffer_width + column] = argb;
 }
 
-static void copy_cb(const void* src, int s, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
-    (void)s;
+    (void)source;
+    (void)stride;
     (void)x;
     (void)y;
-    (void)w;
-    (void)h;
+    (void)width;
+    (void)height;
     (void)ctx;
 }
 
-static void blend_cb(const void* src, int s, uint8_t a, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)a;
-    TestCtx* t = ctx;
-    const uint32_t* px_src = src;
-    const int pitch = (s > 0) ? s / (int)sizeof(uint32_t) : w;
-    for (int row = 0; row < h; row++)
-        for (int col = 0; col < w; col++)
+    (void)alpha;
+    TestCtx* test_context = ctx;
+    const uint32_t* source_pixels = source;
+    const int pitch = (stride > 0) ? stride / (int)sizeof(uint32_t) : width;
+    for (int row = 0; row < height; row++)
+        for (int column = 0; column < width; column++)
         {
-            const int fy = y + row, fx = x + col;
-            if (fy >= 0 && fx >= 0 && fy < t->fb_h && fx < t->fb_w)
-                t->fb[fy * t->fb_w + fx] = px_src[row * pitch + col];
+            const int framebuffer_y = y + row, framebuffer_x = x + column;
+            if (framebuffer_y >= 0 && framebuffer_x >= 0 && framebuffer_y < test_context->framebuffer_height
+                && framebuffer_x < test_context->framebuffer_width)
+                test_context->framebuffer[framebuffer_y * test_context->framebuffer_width + framebuffer_x] =
+                    source_pixels[row * pitch + column];
         }
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -108,11 +111,11 @@ static int fail(const char* msg)
  */
 int main(void)
 {
-    static uint32_t fb[FB_W * FB_H];
-    static uint32_t ref[FB_W * FB_H];
-    TestCtx tc = {fb, FB_W, FB_H};
-    EmbeddedRenderBackend be = {fill_cb, copy_cb, blend_cb, NULL, NULL, &tc};
-    embedded_renderer_set_backend(&be);
+    static uint32_t framebuffer[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    static uint32_t reference[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    TestCtx test_context = {framebuffer, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT};
+    EmbeddedRenderBackend backend = {fill_cb, copy_cb, blend_cb, NULL, NULL, &test_context};
+    embedded_renderer_set_backend(&backend);
 
     er_vector_reset();
     er_vector_cache_stats_reset();
@@ -161,21 +164,21 @@ int main(void)
                           0.0f,
                           6.2832f,
                           0};
-    const int n_tape = (int)(sizeof(tape) / sizeof(tape[0]));
+    const int tape_count = (int)(sizeof(tape) / sizeof(tape[0]));
     const ERVectorPaint paints[3] = {
         {0xFF3355AAu, 0xFFFFFFFFu, 3.0f, 0.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO, 0, 0},
         {0x00000000u, 0xFF22CC44u, 5.0f, 0.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO, 0, 0},
         {0xFF884422u, 0xFFDDDDDDu, 4.0f, 0.0f, ER_VCAP_BUTT, ER_VJOIN_MITER, ER_VFILL_NONZERO, 0, 0},
     };
 
-    const int slot = er_vector_store(-1, tape, n_tape, paints, 3, NULL, 0);
+    const int slot = er_vector_store(-1, tape, tape_count, paints, 3, NULL, 0);
     if (slot < 0)
         return fail("setup: no storage slot");
 
     /* --- render #1: legacy path (two-touch: nothing recorded yet); this is the reference frame --- */
-    memset(fb, 0, sizeof(fb));
-    er_vector_render_slot(slot, 0, 0, 0, 0, FB_W, FB_H);
-    memcpy(ref, fb, sizeof(fb));
+    memset(framebuffer, 0, sizeof(framebuffer));
+    er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    memcpy(reference, framebuffer, sizeof(framebuffer));
     const uint32_t arcs_per_render = er_vector_analytic_arc_count();
     if (arcs_per_render == 0)
         return fail("setup: circle did not take the analytic arc route");
@@ -185,9 +188,9 @@ int main(void)
 #endif
 
     /* --- render #2: records; output must not change --- */
-    memset(fb, 0, sizeof(fb));
-    er_vector_render_slot(slot, 0, 0, 0, 0, FB_W, FB_H);
-    if (memcmp(fb, ref, sizeof(fb)) != 0)
+    memset(framebuffer, 0, sizeof(framebuffer));
+    er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    if (memcmp(framebuffer, reference, sizeof(framebuffer)) != 0)
         return fail("recording render differs from the reference frame");
 #if ERUI_VECTOR_EDGE_CACHE
     if (er_vector_cache_builds() != 1)
@@ -197,9 +200,9 @@ int main(void)
 #endif
 
     /* --- render #3: replays; output must not change, and the arc must still route analytically --- */
-    memset(fb, 0, sizeof(fb));
-    er_vector_render_slot(slot, 0, 0, 0, 0, FB_W, FB_H);
-    if (memcmp(fb, ref, sizeof(fb)) != 0)
+    memset(framebuffer, 0, sizeof(framebuffer));
+    er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    if (memcmp(framebuffer, reference, sizeof(framebuffer)) != 0)
         return fail("replayed render differs from the reference frame");
 #if ERUI_VECTOR_EDGE_CACHE
     if (er_vector_cache_hits() != 1)
@@ -210,15 +213,15 @@ int main(void)
 
     /* --- partial clip replay: exactly the reference pixels inside the clip, nothing outside --- */
     {
-        const int cx0 = 30, cy0 = 24, cx1 = 84, cy1 = 70;
-        memset(fb, 0, sizeof(fb));
-        er_vector_render_slot(slot, 0, 0, cx0, cy0, cx1, cy1);
-        for (int y = 0; y < FB_H; y++)
-            for (int x = 0; x < FB_W; x++)
+        const int clip_left = 30, clip_top = 24, clip_right = 84, clip_bottom = 70;
+        memset(framebuffer, 0, sizeof(framebuffer));
+        er_vector_render_slot(slot, 0, 0, clip_left, clip_top, clip_right, clip_bottom);
+        for (int y = 0; y < FRAMEBUFFER_HEIGHT; y++)
+            for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
             {
-                const int inside = (x >= cx0 && x < cx1 && y >= cy0 && y < cy1);
-                const uint32_t want = inside ? ref[y * FB_W + x] : 0u;
-                if (fb[y * FB_W + x] != want)
+                const int inside = (x >= clip_left && x < clip_right && y >= clip_top && y < clip_bottom);
+                const uint32_t want = inside ? reference[y * FRAMEBUFFER_WIDTH + x] : 0u;
+                if (framebuffer[y * FRAMEBUFFER_WIDTH + x] != want)
                     return fail(inside ? "partial-clip replay differs from the reference inside the clip"
                                        : "partial-clip replay painted outside the clip");
             }
@@ -242,34 +245,34 @@ int main(void)
                                100,
                                120,
                                ER_VOP_CLOSE};
-        const ERVectorPaint p2 = {0xFFFF0000u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 0, 0};
+        const ERVectorPaint red_paint = {0xFFFF0000u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 0, 0};
 #if ERUI_VECTOR_EDGE_CACHE
         const uint32_t builds_before = er_vector_cache_builds();
         const uint32_t hits_before = er_vector_cache_hits();
 #endif
-        for (int i = 0; i < 4; i++)
+        for (int render_index = 0; render_index < 4; render_index++)
         {
             /* Alternate the two tapes so every render sees a fresh store — the animated pattern. */
-            const int use2 = i & 1;
+            const int use2 = render_index & 1;
             if (er_vector_store(slot,
                                 use2 ? tape2 : tape,
-                                use2 ? (int)(sizeof(tape2) / sizeof(tape2[0])) : n_tape,
-                                use2 ? &p2 : paints,
+                                use2 ? (int)(sizeof(tape2) / sizeof(tape2[0])) : tape_count,
+                                use2 ? &red_paint : paints,
                                 use2 ? 1 : 3,
                                 NULL,
                                 0)
                 != slot)
                 return fail("re-store changed the slot");
-            memset(fb, 0, sizeof(fb));
-            er_vector_render_slot(slot, 0, 0, 0, 0, FB_W, FB_H);
+            memset(framebuffer, 0, sizeof(framebuffer));
+            er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
             if (use2)
             {
-                if (fb[110 * FB_W + 110] != 0xFFFF0000u)
+                if (framebuffer[110 * FRAMEBUFFER_WIDTH + 110] != 0xFFFF0000u)
                     return fail("post-store render did not paint the new geometry");
-                if (fb[90 * FB_W + 40] != 0u)
+                if (framebuffer[90 * FRAMEBUFFER_WIDTH + 40] != 0u)
                     return fail("post-store render painted the OLD geometry (stale cache)");
             }
-            else if (memcmp(fb, ref, sizeof(fb)) != 0)
+            else if (memcmp(framebuffer, reference, sizeof(framebuffer)) != 0)
                 return fail("post-store render of the original tape differs from the reference");
         }
 #if ERUI_VECTOR_EDGE_CACHE
@@ -283,10 +286,10 @@ int main(void)
     /* --- er_vector_free(): a re-issued slot must not replay the previous node's geometry --- */
     {
         /* Re-establish a cached entry for the original tape first. */
-        if (er_vector_store(slot, tape, n_tape, paints, 3, NULL, 0) != slot)
+        if (er_vector_store(slot, tape, tape_count, paints, 3, NULL, 0) != slot)
             return fail("re-store changed the slot");
-        er_vector_render_slot(slot, 0, 0, 0, 0, FB_W, FB_H); /* arm */
-        er_vector_render_slot(slot, 0, 0, 0, 0, FB_W, FB_H); /* record */
+        er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
+        er_vector_render_slot(slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record */
         er_vector_free(slot);
         const float tape3[] = {ER_VOP_SHAPE,
                                0,
@@ -303,31 +306,32 @@ int main(void)
                                4,
                                24,
                                ER_VOP_CLOSE};
-        const ERVectorPaint p3 = {0xFF00FF00u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 0, 0};
-        const int slot2 = er_vector_store(-1, tape3, (int)(sizeof(tape3) / sizeof(tape3[0])), &p3, 1, NULL, 0);
+        const ERVectorPaint green_paint = {0xFF00FF00u, 0, 0.0f, 0.0f, 0, 0, ER_VFILL_NONZERO, 0, 0};
+        const int slot2 = er_vector_store(-1, tape3, (int)(sizeof(tape3) / sizeof(tape3[0])), &green_paint, 1, NULL, 0);
         if (slot2 != slot)
             return fail("freed slot was not re-issued (test setup assumption)");
-        memset(fb, 0, sizeof(fb));
-        er_vector_render_slot(slot2, 0, 0, 0, 0, FB_W, FB_H);
-        if (fb[10 * FB_W + 10] != 0xFF00FF00u)
+        memset(framebuffer, 0, sizeof(framebuffer));
+        er_vector_render_slot(slot2, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+        if (framebuffer[10 * FRAMEBUFFER_WIDTH + 10] != 0xFF00FF00u)
             return fail("re-issued slot did not paint its own geometry");
-        if (fb[90 * FB_W + 40] != 0u)
+        if (framebuffer[90 * FRAMEBUFFER_WIDTH + 40] != 0u)
             return fail("re-issued slot replayed the freed node's geometry");
     }
 
     /* --- a moved node (new origin) misses, re-records at the new position, and paints correctly --- */
     {
         er_vector_free(slot);
-        const int slot3 = er_vector_store(-1, tape, n_tape, paints, 3, NULL, 0);
+        const int slot3 = er_vector_store(-1, tape, tape_count, paints, 3, NULL, 0);
         if (slot3 < 0)
             return fail("no slot for the move test");
-        er_vector_render_slot(slot3, 0, 0, 0, 0, FB_W, FB_H); /* arm */
-        er_vector_render_slot(slot3, 0, 0, 0, 0, FB_W, FB_H); /* record at (0,0) */
-        memset(fb, 0, sizeof(fb));
-        er_vector_render_slot(slot3, 6, 3, 0, 0, FB_W, FB_H); /* moved: must NOT replay (0,0) edges */
-        for (int y = 0; y < FB_H - 3; y++)
-            for (int x = 0; x < FB_W - 6; x++)
-                if (fb[(y + 3) * FB_W + (x + 6)] != ref[y * FB_W + x])
+        er_vector_render_slot(slot3, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* arm */
+        er_vector_render_slot(slot3, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* record at (0,0) */
+        memset(framebuffer, 0, sizeof(framebuffer));
+        er_vector_render_slot(
+            slot3, 6, 3, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT); /* moved: must NOT replay (0,0) edges */
+        for (int y = 0; y < FRAMEBUFFER_HEIGHT - 3; y++)
+            for (int x = 0; x < FRAMEBUFFER_WIDTH - 6; x++)
+                if (framebuffer[(y + 3) * FRAMEBUFFER_WIDTH + (x + 6)] != reference[y * FRAMEBUFFER_WIDTH + x])
                     return fail("moved-origin render is not the reference shifted by the move");
         er_vector_free(slot3);
     }
@@ -338,47 +342,47 @@ int main(void)
          * rasterizer edge pool — the recording must abort (and block), never truncating harder than
          * the legacy build does. */
         static float big[512];
-        int n = 0;
-        big[n++] = ER_VOP_SHAPE;
-        big[n++] = 0;
-        big[n++] = ER_VOP_MOVE;
-        big[n++] = 4.0f;
-        big[n++] = 60.0f;
-        for (int i = 0; i < 160; i++)
+        int big_count = 0;
+        big[big_count++] = ER_VOP_SHAPE;
+        big[big_count++] = 0;
+        big[big_count++] = ER_VOP_MOVE;
+        big[big_count++] = 4.0f;
+        big[big_count++] = 60.0f;
+        for (int segment_index = 0; segment_index < 160; segment_index++)
         {
-            big[n++] = ER_VOP_LINE;
-            big[n++] = 5.0f + (float)(i % 2) * 110.0f;
-            big[n++] = 60.0f + (float)i * 0.05f;
+            big[big_count++] = ER_VOP_LINE;
+            big[big_count++] = 5.0f + (float)(segment_index % 2) * 110.0f;
+            big[big_count++] = 60.0f + (float)segment_index * 0.05f;
         }
-        const ERVectorPaint pb = {
+        const ERVectorPaint big_paint = {
             0x00000000u, 0xFF8080FFu, 6.0f, 0.0f, ER_VCAP_ROUND, ER_VJOIN_ROUND, ER_VFILL_NONZERO, 0, 0};
-        const int slotb = er_vector_store(-1, big, n, &pb, 1, NULL, 0);
-        if (slotb < 0)
+        const int big_slot = er_vector_store(-1, big, big_count, &big_paint, 1, NULL, 0);
+        if (big_slot < 0)
             return fail("no slot for the overflow test");
 #if ERUI_VECTOR_EDGE_CACHE
         const uint32_t builds_before = er_vector_cache_builds();
 #endif
-        static uint32_t first[FB_W * FB_H];
-        memset(fb, 0, sizeof(fb));
-        er_vector_render_slot(slotb, 0, 0, 0, 0, FB_W, FB_H);
-        memcpy(first, fb, sizeof(fb));
-        for (int i = 0; i < 3; i++)
+        static uint32_t first[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+        memset(framebuffer, 0, sizeof(framebuffer));
+        er_vector_render_slot(big_slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+        memcpy(first, framebuffer, sizeof(framebuffer));
+        for (int frame_index = 0; frame_index < 3; frame_index++)
         {
-            memset(fb, 0, sizeof(fb));
-            er_vector_render_slot(slotb, 0, 0, 0, 0, FB_W, FB_H);
-            if (memcmp(fb, first, sizeof(fb)) != 0)
+            memset(framebuffer, 0, sizeof(framebuffer));
+            er_vector_render_slot(big_slot, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+            if (memcmp(framebuffer, first, sizeof(framebuffer)) != 0)
                 return fail("overflowing node renders inconsistently across frames");
         }
 #if ERUI_VECTOR_EDGE_CACHE
         if (er_vector_cache_builds() != builds_before)
             return fail("overflowing node published a cache entry");
 #endif
-        er_vector_free(slotb);
+        er_vector_free(big_slot);
     }
 
     /* --- empty / invalid slots are safe no-ops --- */
-    er_vector_render_slot(-1, 0, 0, 0, 0, FB_W, FB_H);
-    er_vector_render_slot(1234, 0, 0, 0, 0, FB_W, FB_H);
+    er_vector_render_slot(-1, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
+    er_vector_render_slot(1234, 0, 0, 0, 0, FRAMEBUFFER_WIDTH, FRAMEBUFFER_HEIGHT);
 
     er_vector_reset();
     printf("OK\n");

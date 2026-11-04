@@ -55,112 +55,121 @@
 #include <string.h>
 
 #define SCREEN 200
-#define FB_PIXELS (SCREEN * SCREEN)
+#define FRAMEBUFFER_PIXELS (SCREEN * SCREEN)
+#define OPACITY_OPAQUE 255U
 
 /* Node geometry. The width is ODD so the default centre pivot lands on a half pixel: a matrix that
  * collapses the box to a line then still rounds out to a 1px-wide AABB instead of a zero-area one,
  * which would take the pre-pass's full-repaint fallback and heal the bug it is meant to expose. */
 #define NODE_X 60
 #define NODE_Y 60
-#define NODE_W 101
-#define NODE_H 100
+#define NODE_WIDTH 101
+#define NODE_HEIGHT 100
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend: source-over framebuffer
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_fb[FB_PIXELS];
+static uint32_t s_framebuffer[FRAMEBUFFER_PIXELS];
 
 /** @brief Rounds a 0-65025 product back to 0-255 the way the engine's blenders do. */
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127U) / 255U;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
 /** @brief Backend fill_rect: source-over composites a straight-alpha colour. */
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFU;
-    if (a == 0U || w <= 0 || h <= 0)
+    const uint32_t first_frame = (argb >> 24) & 0xFFU;
+    if (first_frame == 0U || width <= 0 || height <= 0)
         return;
-    const uint32_t inv = 255U - a;
-    const uint32_t sr = (argb >> 16) & 0xFFU, sg = (argb >> 8) & 0xFFU, sb = argb & 0xFFU;
-    for (int row = y; row < y + h; row++)
+    const uint32_t inverse_alpha = ER_CHANNEL_MAX - first_frame;
+    const uint32_t source_red = (argb >> 16) & 0xFFU, source_green = (argb >> 8) & 0xFFU, source_blue = argb & 0xFFU;
+    for (int row = y; row < y + height; row++)
     {
         if (row < 0 || row >= SCREEN)
             continue;
-        for (int col = x; col < x + w; col++)
+        for (int column = x; column < x + width; column++)
         {
-            if (col < 0 || col >= SCREEN)
+            if (column < 0 || column >= SCREEN)
                 continue;
-            uint32_t* d = &s_fb[row * SCREEN + col];
-            if (a == 0xFFU)
+            uint32_t* destination = &s_framebuffer[row * SCREEN + column];
+            if (first_frame == 0xFFU)
             {
-                *d = 0xFF000000U | (argb & 0x00FFFFFFU);
+                *destination = 0xFF000000U | (argb & 0x00FFFFFFU);
                 continue;
             }
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((div255(sr * a) + div255(dr * inv)) << 16) | ((div255(sg * a) + div255(dg * inv)) << 8)
-                 | (div255(sb * a) + div255(db * inv));
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U
+                           | ((div255(source_red * first_frame) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((div255(source_green * first_frame) + div255(destination_green * inverse_alpha)) << 8)
+                           | (div255(source_blue * first_frame) + div255(destination_blue * inverse_alpha));
         }
     }
 }
 
 /** @brief Backend copy_rect: source-over composites premultiplied scratch — this is how the blit lands. */
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int dx = x + col, dy = y + row;
-            if (dx < 0 || dx >= SCREEN || dy < 0 || dy >= SCREEN)
+            const int destination_x = x + column, destination_y = y + row;
+            if (destination_x < 0 || destination_x >= SCREEN || destination_y < 0 || destination_y >= SCREEN)
                 continue;
-            const uint32_t sp = s[col];
-            const uint32_t sa = (sp >> 24) & 0xFFU;
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = (source_pixel >> 24) & 0xFFU;
+            if (source_alpha == 0U)
                 continue; /* fully transparent: leave the destination alone */
-            uint32_t* d = &s_fb[dy * SCREEN + dx];
-            if (sa == 0xFFU)
+            uint32_t* destination = &s_framebuffer[destination_y * SCREEN + destination_x];
+            if (source_alpha == 0xFFU)
             {
-                *d = sp;
+                *destination = source_pixel;
                 continue;
             }
-            const uint32_t inv = 255U - sa;
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((((sp >> 16) & 0xFFU) + div255(dr * inv)) << 16)
-                 | ((((sp >> 8) & 0xFFU) + div255(dg * inv)) << 8) | ((sp & 0xFFU) + div255(db * inv));
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U
+                           | ((((source_pixel >> 16) & 0xFFU) + div255(destination_red * inverse_alpha)) << 16)
+                           | ((((source_pixel >> 8) & 0xFFU) + div255(destination_green * inverse_alpha)) << 8)
+                           | ((source_pixel & 0xFFU) + div255(destination_blue * inverse_alpha));
         }
     }
 }
 
 /** @brief Backend blend_rect: source-over composites premultiplied pixels scaled by a global alpha. */
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    for (int row = 0; row < h; row++)
+    for (int row = 0; row < height; row++)
     {
-        const uint32_t* s = (const uint32_t*)((const uint8_t*)src + (size_t)row * (size_t)stride);
-        for (int col = 0; col < w; col++)
+        const uint32_t* source_row = (const uint32_t*)((const uint8_t*)source + (size_t)row * (size_t)stride);
+        for (int column = 0; column < width; column++)
         {
-            const int dx = x + col, dy = y + row;
-            if (dx < 0 || dx >= SCREEN || dy < 0 || dy >= SCREEN)
+            const int destination_x = x + column, destination_y = y + row;
+            if (destination_x < 0 || destination_x >= SCREEN || destination_y < 0 || destination_y >= SCREEN)
                 continue;
-            const uint32_t sp = s[col];
-            const uint32_t sa = div255(((sp >> 24) & 0xFFU) * (uint32_t)alpha);
-            if (sa == 0U)
+            const uint32_t source_pixel = source_row[column];
+            const uint32_t source_alpha = div255(((source_pixel >> 24) & 0xFFU) * (uint32_t)alpha);
+            if (source_alpha == 0U)
                 continue;
-            const uint32_t inv = 255U - sa;
-            const uint32_t sr = div255(((sp >> 16) & 0xFFU) * (uint32_t)alpha);
-            const uint32_t sg = div255(((sp >> 8) & 0xFFU) * (uint32_t)alpha);
-            const uint32_t sb = div255((sp & 0xFFU) * (uint32_t)alpha);
-            uint32_t* d = &s_fb[dy * SCREEN + dx];
-            const uint32_t dr = (*d >> 16) & 0xFFU, dg = (*d >> 8) & 0xFFU, db = *d & 0xFFU;
-            *d = 0xFF000000U | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8)
-                 | (sb + div255(db * inv));
+            const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+            const uint32_t source_red = div255(((source_pixel >> 16) & 0xFFU) * (uint32_t)alpha);
+            const uint32_t source_green = div255(((source_pixel >> 8) & 0xFFU) * (uint32_t)alpha);
+            const uint32_t source_blue = div255((source_pixel & 0xFFU) * (uint32_t)alpha);
+            uint32_t* destination = &s_framebuffer[destination_y * SCREEN + destination_x];
+            const uint32_t destination_red = (*destination >> 16) & 0xFFU,
+                           destination_green = (*destination >> 8) & 0xFFU, destination_blue = *destination & 0xFFU;
+            *destination = 0xFF000000U | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                           | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                           | (source_blue + div255(destination_blue * inverse_alpha));
         }
     }
 }
@@ -175,64 +184,64 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
 /**
  * @brief Reports how two frames differ, and where.
  *
- * @param[in]  a     First frame.
- * @param[in]  b     Second frame.
- * @param[out] bbox  Receives the bounding box of the differing pixels (untouched when identical).
+ * @param[in]  first_frame   First frame.
+ * @param[in]  second_frame  Second frame.
+ * @param[out] bounds        Receives the bounding box of the differing pixels (untouched when identical).
  *
  * @return Number of differing pixels.
  */
-static int diff_frames(const uint32_t* a, const uint32_t* b, ERRect* bbox)
+static int diff_frames(const uint32_t* first_frame, const uint32_t* second_frame, ERRect* bounds)
 {
-    int n = 0, x0 = SCREEN, y0 = SCREEN, x1 = -1, y1 = -1;
+    int count = 0, min_x = SCREEN, min_y = SCREEN, max_x = -1, max_y = -1;
     for (int y = 0; y < SCREEN; y++)
     {
         for (int x = 0; x < SCREEN; x++)
         {
-            if (a[y * SCREEN + x] == b[y * SCREEN + x])
+            if (first_frame[y * SCREEN + x] == second_frame[y * SCREEN + x])
                 continue;
-            n++;
-            if (x < x0)
-                x0 = x;
-            if (y < y0)
-                y0 = y;
-            if (x > x1)
-                x1 = x;
-            if (y > y1)
-                y1 = y;
+            count++;
+            if (x < min_x)
+                min_x = x;
+            if (y < min_y)
+                min_y = y;
+            if (x > max_x)
+                max_x = x;
+            if (y > max_y)
+                max_y = y;
         }
     }
-    if (n > 0 && bbox)
+    if (count > 0 && bounds)
     {
-        bbox->x = x0;
-        bbox->y = y0;
-        bbox->w = x1 - x0 + 1;
-        bbox->h = y1 - y0 + 1;
+        bounds->x = min_x;
+        bounds->y = min_y;
+        bounds->w = max_x - min_x + 1;
+        bounds->h = max_y - min_y + 1;
     }
-    return n;
+    return count;
 }
 
 /**
@@ -255,9 +264,9 @@ static int unreported_pixels(const uint32_t* before, const uint32_t* after, cons
             if (before[y * SCREEN + x] == after[y * SCREEN + x])
                 continue;
             bool covered = false;
-            for (int i = 0; i < count && !covered; i++)
-                covered =
-                    (x >= rects[i].x && x < rects[i].x + rects[i].w && y >= rects[i].y && y < rects[i].y + rects[i].h);
+            for (int rect_index = 0; rect_index < count && !covered; rect_index++)
+                covered = (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
+                           && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h);
             if (!covered)
                 missed++;
         }
@@ -280,9 +289,10 @@ static int reported_area(const ERRect* rects, int count)
     {
         for (int x = 0; x < SCREEN; x++)
         {
-            for (int i = 0; i < count; i++)
+            for (int rect_index = 0; rect_index < count; rect_index++)
             {
-                if (x >= rects[i].x && x < rects[i].x + rects[i].w && y >= rects[i].y && y < rects[i].y + rects[i].h)
+                if (x >= rects[rect_index].x && x < rects[rect_index].x + rects[rect_index].w
+                    && y >= rects[rect_index].y && y < rects[rect_index].y + rects[rect_index].h)
                 {
                     area++;
                     break;
@@ -301,8 +311,8 @@ static int reported_area(const ERRect* rects, int count)
 typedef struct
 {
     float scale;     /**< 0 = unset (identity scale). */
-    float rot_z;     /**< Degrees. */
-    float rot_y;     /**< Degrees (3D; ignored unless ERUI_3D_TRANSFORMS). */
+    float rotate_z;  /**< Degrees. */
+    float rotate_y;  /**< Degrees (3D; ignored unless ERUI_3D_TRANSFORMS). */
     bool invertible; /**< What er_transform_is_invertible() must answer for it. */
 } Xform;
 
@@ -314,46 +324,46 @@ typedef struct
 } Scenario;
 
 /** @brief Applies a transform state to a props block. */
-static void set_transform(ERProps* p, const Xform* x)
+static void set_transform(ERProps* props, const Xform* x)
 {
-    p->transform_scale_x = x->scale;
-    p->transform_scale_y = x->scale;
-    p->transform_rotate_z = x->rot_z;
+    props->transform_scale_x = x->scale;
+    props->transform_scale_y = x->scale;
+    props->transform_rotate_z = x->rotate_z;
 #if ERUI_3D_TRANSFORMS
-    p->transform_rotate_y = x->rot_y;
+    props->transform_rotate_y = x->rotate_y;
 #else
-    (void)x->rot_y;
+    (void)x->rotate_y;
 #endif
 }
 
 /**
  * @brief Drives one node across the invert threshold and demands a full-repaint match.
  *
- * @param[in] s  Scenario to run.
+ * @param[in] scenario  Scenario to run.
  *
  * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
  */
-static int check_singular_crossing(const Scenario* s)
+static int check_singular_crossing(const Scenario* scenario)
 {
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SCREEN;
-    rp.height = SCREEN;
-    rp.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really covers the screen */
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really covers the screen */
+    er_node_set_props(root, &root_props);
 
     ERNode* node = er_node_create(ER_NODE_VIEW);
-    ERProps np = props_default();
-    np.position = ER_POS_ABSOLUTE;
-    np.left = NODE_X;
-    np.top = NODE_Y;
-    np.width = NODE_W;
-    np.height = NODE_H;
-    np.background_color = 0xFF2244AAU;
-    set_transform(&np, &s->from);
-    er_node_set_props(node, &np);
+    ERProps node_props = props_default();
+    node_props.position = ER_POS_ABSOLUTE;
+    node_props.left = NODE_X;
+    node_props.top = NODE_Y;
+    node_props.width = NODE_WIDTH;
+    node_props.height = NODE_HEIGHT;
+    node_props.background_color = 0xFF2244AAU;
+    set_transform(&node_props, &scenario->from);
+    er_node_set_props(node, &node_props);
 
     er_tree_append_child(root, node);
     er_tree_set_root(root);
@@ -365,25 +375,26 @@ static int check_singular_crossing(const Scenario* s)
     /* The scenario only tests anything if both states really sit where it says they do. The node has
      * no scroll or keyboard shift above it, so its layout position IS the origin render_tree hands the
      * matrix. */
-    const bool from_ok = er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_W, NODE_H) == s->from.invertible;
-    if (!from_ok || node->last_paint_untransformed == s->from.invertible)
+    const bool from_ok =
+        er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT) == scenario->from.invertible;
+    if (!from_ok || node->last_paint_untransformed == scenario->from.invertible)
     {
         fprintf(stderr,
                 "  setup: settled state invertible=%d (wanted %d), last_paint_untransformed=%d\n",
-                (int)er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_W, NODE_H),
-                (int)s->from.invertible,
+                (int)er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT),
+                (int)scenario->from.invertible,
                 (int)node->last_paint_untransformed);
         er_node_destroy(root);
         return fail("the settled state did not take the capture path the scenario names");
     }
 
-    static uint32_t before[FB_PIXELS];
-    memcpy(before, s_fb, sizeof(before));
+    static uint32_t before[FRAMEBUFFER_PIXELS];
+    memcpy(before, s_framebuffer, sizeof(before));
 
-    set_transform(&np, &s->to);
-    er_node_set_props(node, &np);
+    set_transform(&node_props, &scenario->to);
+    er_node_set_props(node, &node_props);
 
-    if (er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_W, NODE_H) != s->to.invertible)
+    if (er_transform_is_invertible(node, NODE_X, NODE_Y, NODE_WIDTH, NODE_HEIGHT) != scenario->to.invertible)
     {
         er_node_destroy(root);
         return fail("the committed state did not land on the side of the epsilon the scenario names");
@@ -395,28 +406,28 @@ static int check_singular_crossing(const Scenario* s)
     const int rect_count = er_get_dirty_rects(rects, ER_DAMAGE_RECTS_MAX);
     const bool painted_raw = node->last_paint_untransformed;
 
-    static uint32_t inc[FB_PIXELS];
-    memcpy(inc, s_fb, sizeof(inc));
+    static uint32_t incremental[FRAMEBUFFER_PIXELS];
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
 
     /* Idle commits must not be what heals it — nor damage anything of their own. The bug survived
      * every one of them, so more than a single tick is worth asking for. */
     er_commit();
     er_commit();
     er_commit();
-    const int idle_differ = diff_frames(s_fb, inc, NULL);
+    const int idle_differ = diff_frames(s_framebuffer, incremental, NULL);
 
     er_force_full_repaint();
     er_commit(); /* reference: the same scene state, painted in full */
 
     ERRect bbox = {0, 0, 0, 0};
-    const int differ = diff_frames(inc, s_fb, &bbox);
-    const int missed = unreported_pixels(before, inc, rects, rect_count);
-    const int changed = diff_frames(before, s_fb, NULL); /* the crossing has to move pixels at all */
+    const int differ = diff_frames(incremental, s_framebuffer, &bbox);
+    const int missed = unreported_pixels(before, incremental, rects, rect_count);
+    const int changed = diff_frames(before, s_framebuffer, NULL); /* the crossing has to move pixels at all */
     const int painted = reported_area(rects, rect_count);
 
     printf("%s: %d px differ from a full repaint%s; %d rect(s) over %d px reported, %d changed px "
            "unreported; 3 idle commits moved %d px (%d px changed in all; paint used the %s box)\n",
-           s->name,
+           scenario->name,
            differ,
            differ ? "" : " (identical)",
            rect_count,
@@ -434,7 +445,7 @@ static int check_singular_crossing(const Scenario* s)
         return fail("crossing the invert threshold changed nothing on screen — the case proves nothing");
     /* The paint has to have done what the pre-pass was asked to predict, or a passing frame says
      * nothing about the prediction. */
-    if (painted_raw == s->to.invertible)
+    if (painted_raw == scenario->to.invertible)
         return fail("the commit under test did not take the paint path its matrix implies");
     if (differ != 0)
         return fail("a transform that crossed the invert threshold diverged from a full repaint — "
@@ -446,7 +457,7 @@ static int check_singular_crossing(const Scenario* s)
         return fail("an idle commit repainted differently — the transformed node is churning");
     /* Asked last, and it is the reason the ones above are worth asking: widening the damage to the
      * whole root satisfies every one of them and gives up exactly what the pre-pass exists for. */
-    if (painted >= FB_PIXELS)
+    if (painted >= FRAMEBUFFER_PIXELS)
         return fail("the commit repainted the entire root — correct, but no longer damage-clipped");
     return EXIT_SUCCESS;
 }
@@ -455,17 +466,17 @@ static int check_singular_crossing(const Scenario* s)
 
 int main(void)
 {
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {0};
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
 #if ERUI_TRANSFORMS_FULL
     /* Vacuous unless the node really takes the capture path when its matrix does invert. */
-    if (!er_transform_source_fits(NODE_W, NODE_H))
+    if (!er_transform_source_fits(NODE_WIDTH, NODE_HEIGHT))
     {
-        printf("SKIP: a %dx%d node does not fit this build's transform scratch\n", NODE_W, NODE_H);
+        printf("SKIP: a %dx%d node does not fit this build's transform scratch\n", NODE_WIDTH, NODE_HEIGHT);
         return EXIT_SUCCESS;
     }
 
@@ -495,11 +506,11 @@ int main(void)
 #endif
     };
 
-    for (size_t i = 0; i < sizeof(k_scenarios) / sizeof(k_scenarios[0]); i++)
+    for (size_t scenario_index = 0; scenario_index < sizeof(k_scenarios) / sizeof(k_scenarios[0]); scenario_index++)
     {
-        const int rc = check_singular_crossing(&k_scenarios[i]);
-        if (rc != EXIT_SUCCESS)
-            return rc;
+        const int result = check_singular_crossing(&k_scenarios[scenario_index]);
+        if (result != EXIT_SUCCESS)
+            return result;
     }
 
     printf("PASS: a transform crossing the invert threshold matches a full repaint\n");

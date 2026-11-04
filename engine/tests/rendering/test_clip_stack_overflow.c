@@ -39,83 +39,87 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SW 200
-#define SH 200
+#define SCREEN_WIDTH 200
+#define SCREEN_HEIGHT 200
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend: composites for real
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_fb[SW * SH];
+static uint32_t s_framebuffer[SCREEN_WIDTH * SCREEN_HEIGHT];
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127u) / 255u;
+    return (value + ER_CHANNEL_ROUND) / ER_CHANNEL_MAX;
 }
 
-static void put(int x, int y, uint32_t sa, uint32_t sr, uint32_t sg, uint32_t sb)
+static void put(int x, int y, uint32_t source_alpha, uint32_t source_red, uint32_t source_green, uint32_t source_blue)
 {
-    if (x < 0 || x >= SW || y < 0 || y >= SH)
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT)
         return;
-    uint32_t* d = &s_fb[y * SW + x];
-    const uint32_t inv = 255u - sa;
-    const uint32_t dr = (*d >> 16) & 0xFFu, dg = (*d >> 8) & 0xFFu, db = *d & 0xFFu;
-    *d = 0xFF000000u | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8) | (sb + div255(db * inv));
+    uint32_t* destination = &s_framebuffer[y * SCREEN_WIDTH + x];
+    const uint32_t inverse_alpha = ER_CHANNEL_MAX - source_alpha;
+    const uint32_t destination_red = (*destination >> 16) & 0xFFu, destination_green = (*destination >> 8) & 0xFFu,
+                   destination_blue = *destination & 0xFFu;
+    *destination = 0xFF000000u | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                   | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                   | (source_blue + div255(destination_blue * inverse_alpha));
 }
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFu;
-    if (!a)
+    const uint32_t alpha = (argb >> 24) & 0xFFu;
+    if (!alpha)
         return;
-    const uint32_t sr = div255(((argb >> 16) & 0xFFu) * a);
-    const uint32_t sg = div255(((argb >> 8) & 0xFFu) * a);
-    const uint32_t sb = div255((argb & 0xFFu) * a);
-    for (int r = y; r < y + h; r++)
-        for (int q = x; q < x + w; q++)
-            put(q, r, a, sr, sg, sb);
+    const uint32_t source_red = div255(((argb >> 16) & 0xFFu) * alpha);
+    const uint32_t source_green = div255(((argb >> 8) & 0xFFu) * alpha);
+    const uint32_t source_blue = div255((argb & 0xFFu) * alpha);
+    for (int pixel_y = y; pixel_y < y + height; pixel_y++)
+        for (int pixel_x = x; pixel_x < x + width; pixel_x++)
+            put(pixel_x, pixel_y, alpha, source_red, source_green, source_blue);
 }
 
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint8_t* p = src;
-    for (int r = 0; r < h; r++, p += stride)
+    const uint8_t* source_bytes = source;
+    for (int row_index = 0; row_index < height; row_index++, source_bytes += stride)
     {
-        const uint32_t* row = (const uint32_t*)p;
-        for (int q = 0; q < w; q++)
+        const uint32_t* row = (const uint32_t*)source_bytes;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t v = row[q];
-            const uint32_t sa = (v >> 24) & 0xFFu;
-            if (sa == 0u)
+            const uint32_t value = row[column];
+            const uint32_t source_alpha = (value >> 24) & 0xFFu;
+            if (source_alpha == 0u)
                 continue;
-            put(x + q, y + r, sa, (v >> 16) & 0xFFu, (v >> 8) & 0xFFu, v & 0xFFu);
+            put(x + column, y + row_index, source_alpha, (value >> 16) & 0xFFu, (value >> 8) & 0xFFu, value & 0xFFu);
         }
     }
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint8_t* p = src;
-    for (int r = 0; r < h; r++, p += stride)
+    const uint8_t* source_bytes = source;
+    for (int row_index = 0; row_index < height; row_index++, source_bytes += stride)
     {
-        const uint32_t* row = (const uint32_t*)p;
-        for (int q = 0; q < w; q++)
+        const uint32_t* row = (const uint32_t*)source_bytes;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t v = row[q];
-            uint32_t sa = (v >> 24) & 0xFFu, sr = (v >> 16) & 0xFFu, sg = (v >> 8) & 0xFFu, sb = v & 0xFFu;
-            if (alpha < 255)
+            const uint32_t source_pixel = row[column];
+            uint32_t source_alpha = (source_pixel >> 24) & 0xFFu, source_red = (source_pixel >> 16) & 0xFFu,
+                     source_green = (source_pixel >> 8) & 0xFFu, source_blue = source_pixel & 0xFFu;
+            if (alpha < ER_ALPHA_OPAQUE)
             {
-                sa = div255(sa * alpha);
-                sr = div255(sr * alpha);
-                sg = div255(sg * alpha);
-                sb = div255(sb * alpha);
+                source_alpha = div255(source_alpha * alpha);
+                source_red = div255(source_red * alpha);
+                source_green = div255(source_green * alpha);
+                source_blue = div255(source_blue * alpha);
             }
-            if (sa == 0u)
+            if (source_alpha == 0u)
                 continue;
-            put(x + q, y + r, sa, sr, sg, sb);
+            put(x + column, y + row_index, source_alpha, source_red, source_green, source_blue);
         }
     }
 }
@@ -128,46 +132,47 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 #define DEEP_PUSHES 20
 
 /* The outer clipping view's box, and a sibling inside it that hangs past its bottom-right corner. */
-#define OUTER_W 100
-#define OUTER_H 100
-#define SIB_X 50
-#define SIB_Y 50
-#define SIB_W 100
-#define SIB_H 100
+#define OUTER_WIDTH 100
+#define OUTER_HEIGHT 100
+#define SIBLING_X 50
+#define SIBLING_Y 50
+#define SIBLING_WIDTH 100
+#define SIBLING_HEIGHT 100
 
 /* A point on the sibling's overflow: outside the outer box, inside the sibling. */
-#define OVER_X 120
-#define OVER_Y 120
+#define OVERFLOW_X 120
+#define OVERFLOW_Y 120
 /* And one on the part of the sibling inside the outer box. */
 #define INSIDE_X 70
 #define INSIDE_Y 70
 
-#define BG_COLOR 0xFF202020u
-#define SIB_COLOR 0xFF4DA3FFu
+#define BACKGROUND_COLOR 0xFF202020u
+#define SIBLING_COLOR 0xFF4DA3FFu
 
 static ERProps props_default(void)
 {
-    ERProps p;
-    er_props_default(&p);
-    return p;
+    ERProps props;
+    er_props_default(&props);
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
 static uint32_t at(int x, int y)
 {
-    return s_fb[y * SW + x] & 0xFFFFFFu;
+    return s_framebuffer[y * SCREEN_WIDTH + x] & 0xFFFFFFu;
 }
 
 /** @brief True when the top clip is exactly (x, y, w, h). */
-static int clip_is(int x, int y, int w, int h)
+static int clip_is(int x, int y, int width, int height)
 {
-    int cx, cy, cw, ch;
-    return er_get_clip_rect(&cx, &cy, &cw, &ch) && cx == x && cy == y && cw == w && ch == h;
+    int clip_x, clip_y, clip_width, clip_height;
+    return er_get_clip_rect(&clip_x, &clip_y, &clip_width, &clip_height) && clip_x == x && clip_y == y
+           && clip_width == width && clip_height == height;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -188,10 +193,10 @@ static int check_api(void)
         return fail("api: the clip stack is not empty between frames");
 
     int top[DEEP_PUSHES][4];
-    for (int i = 0; i < DEEP_PUSHES; i++)
+    for (int push_index = 0; push_index < DEEP_PUSHES; push_index++)
     {
-        er_push_clip_rect(i, i, SW - 2 * i, SH - 2 * i);
-        if (!er_get_clip_rect(&top[i][0], &top[i][1], &top[i][2], &top[i][3]))
+        er_push_clip_rect(push_index, push_index, SCREEN_WIDTH - 2 * push_index, SCREEN_HEIGHT - 2 * push_index);
+        if (!er_get_clip_rect(&top[push_index][0], &top[push_index][1], &top[push_index][2], &top[push_index][3]))
             return fail("api: no clip is active after a push");
     }
 
@@ -203,24 +208,24 @@ static int check_api(void)
     er_push_clip_reset();
     er_pop_clip_rect();
 
-    for (int i = DEEP_PUSHES - 1; i >= 0; i--)
+    for (int push_index = DEEP_PUSHES - 1; push_index >= 0; push_index--)
     {
-        if (!clip_is(top[i][0], top[i][1], top[i][2], top[i][3]))
+        if (!clip_is(top[push_index][0], top[push_index][1], top[push_index][2], top[push_index][3]))
         {
-            int cx = 0, cy = 0, cw = 0, ch = 0;
-            const bool any = er_get_clip_rect(&cx, &cy, &cw, &ch);
+            int clip_x = 0, clip_y = 0, clip_width = 0, clip_height = 0;
+            const bool any = er_get_clip_rect(&clip_x, &clip_y, &clip_width, &clip_height);
             fprintf(stderr,
                     "  api: back at depth %d the top clip is %s(%d,%d %dx%d), was (%d,%d %dx%d)\n",
-                    i + 1,
+                    push_index + 1,
                     any ? "" : "none ",
-                    cx,
-                    cy,
-                    cw,
-                    ch,
-                    top[i][0],
-                    top[i][1],
-                    top[i][2],
-                    top[i][3]);
+                    clip_x,
+                    clip_y,
+                    clip_width,
+                    clip_height,
+                    top[push_index][0],
+                    top[push_index][1],
+                    top[push_index][2],
+                    top[push_index][3]);
             return fail("api: a pop removed a clip that belongs to a push still in force");
         }
         er_pop_clip_rect();
@@ -264,44 +269,44 @@ static void build_scene(int depth)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SW;
-    rp.height = SH;
-    rp.background_color = BG_COLOR;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN_WIDTH;
+    root_props.height = SCREEN_HEIGHT;
+    root_props.background_color = BACKGROUND_COLOR;
+    er_node_set_props(root, &root_props);
     er_tree_set_root(root);
 
-    ERProps cp = props_default();
-    cp.position = ER_POS_ABSOLUTE;
-    cp.left = 0;
-    cp.top = 0;
-    cp.width = OUTER_W;
-    cp.height = OUTER_H;
-    cp.overflow = ER_OVERFLOW_HIDDEN;
+    ERProps outer_props = props_default();
+    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.left = 0;
+    outer_props.top = 0;
+    outer_props.width = OUTER_WIDTH;
+    outer_props.height = OUTER_HEIGHT;
+    outer_props.overflow = ER_OVERFLOW_HIDDEN;
 
     ERNode* outer = er_node_create(ER_NODE_VIEW);
-    er_node_set_props(outer, &cp);
+    er_node_set_props(outer, &outer_props);
     er_tree_append_child(root, outer);
 
     ERNode* parent = outer;
-    for (int i = 0; i < depth; i++)
+    for (int depth_index = 0; depth_index < depth; depth_index++)
     {
-        ERNode* n = er_node_create(ER_NODE_VIEW);
-        er_node_set_props(n, &cp);
-        er_tree_append_child(parent, n);
-        parent = n;
+        ERNode* node = er_node_create(ER_NODE_VIEW);
+        er_node_set_props(node, &outer_props);
+        er_tree_append_child(parent, node);
+        parent = node;
     }
 
-    ERNode* sib = er_node_create(ER_NODE_VIEW);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = SIB_X;
-    sp.top = SIB_Y;
-    sp.width = SIB_W;
-    sp.height = SIB_H;
-    sp.background_color = SIB_COLOR;
-    er_node_set_props(sib, &sp);
-    er_tree_append_child(outer, sib);
+    ERNode* sibling = er_node_create(ER_NODE_VIEW);
+    ERProps sibling_props = props_default();
+    sibling_props.position = ER_POS_ABSOLUTE;
+    sibling_props.left = SIBLING_X;
+    sibling_props.top = SIBLING_Y;
+    sibling_props.width = SIBLING_WIDTH;
+    sibling_props.height = SIBLING_HEIGHT;
+    sibling_props.background_color = SIBLING_COLOR;
+    er_node_set_props(sibling, &sibling_props);
+    er_tree_append_child(outer, sibling);
 }
 
 static int check_scene(void)
@@ -309,19 +314,19 @@ static int check_scene(void)
     for (int depth = 0; depth <= DEEP_PUSHES; depth++)
     {
         build_scene(depth);
-        memset(s_fb, 0, sizeof(s_fb));
+        memset(s_framebuffer, 0, sizeof(s_framebuffer));
         er_force_full_repaint();
         er_commit();
         er_display_present();
 
-        if (at(INSIDE_X, INSIDE_Y) != (SIB_COLOR & 0xFFFFFFu))
+        if (at(INSIDE_X, INSIDE_Y) != (SIBLING_COLOR & 0xFFFFFFu))
         {
             fprintf(stderr, "  scene: nested chain depth %d\n", depth);
             return fail("scene: the sibling was not drawn inside the outer view");
         }
-        if (at(OVER_X, OVER_Y) != (BG_COLOR & 0xFFFFFFu))
+        if (at(OVERFLOW_X, OVERFLOW_Y) != (BACKGROUND_COLOR & 0xFFFFFFu))
         {
-            fprintf(stderr, "  scene: nested chain depth %d, pixel=%06x\n", depth, at(OVER_X, OVER_Y));
+            fprintf(stderr, "  scene: nested chain depth %d, pixel=%06x\n", depth, at(OVERFLOW_X, OVERFLOW_Y));
             return fail("scene: the sibling was drawn past the outer view's clip");
         }
         if (er_get_clip_rect(NULL, NULL, NULL, NULL))
@@ -335,11 +340,11 @@ static int check_scene(void)
 
 int main(void)
 {
-    static EmbeddedRenderBackend be;
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    static EmbeddedRenderBackend backend;
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
     if (check_api() != 0)
         return EXIT_FAILURE;

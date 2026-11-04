@@ -38,62 +38,65 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define EXTENT_FAR (1 << 29)
+#define OPACITY_OPAQUE 255U
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend op-extent recorder
  ---------------------------------------------------------------------------------------------------------------------*/
 
 typedef struct
 {
-    int x0, y0, x1, y1;
-    int ops;
+    int min_x, min_y, max_x, max_y;
+    int operation_count;
 } Extent;
 
-static Extent g_ext;
+static Extent g_extent;
 
 static void ext_reset(void)
 {
-    g_ext.x0 = g_ext.y0 = 1 << 29;
-    g_ext.x1 = g_ext.y1 = -(1 << 29);
-    g_ext.ops = 0;
+    g_extent.min_x = g_extent.min_y = EXTENT_FAR;
+    g_extent.max_x = g_extent.max_y = -EXTENT_FAR;
+    g_extent.operation_count = 0;
 }
 
-static void ext_add(int x, int y, int w, int h)
+static void ext_add(int x, int y, int width, int height)
 {
-    if (w <= 0 || h <= 0)
+    if (width <= 0 || height <= 0)
         return;
-    g_ext.ops++;
-    if (x < g_ext.x0)
-        g_ext.x0 = x;
-    if (y < g_ext.y0)
-        g_ext.y0 = y;
-    if (x + w > g_ext.x1)
-        g_ext.x1 = x + w;
-    if (y + h > g_ext.y1)
-        g_ext.y1 = y + h;
+    g_extent.operation_count++;
+    if (x < g_extent.min_x)
+        g_extent.min_x = x;
+    if (y < g_extent.min_y)
+        g_extent.min_y = y;
+    if (x + width > g_extent.max_x)
+        g_extent.max_x = x + width;
+    if (y + height > g_extent.max_y)
+        g_extent.max_y = y + height;
 }
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)argb;
     (void)ctx;
-    ext_add(x, y, w, h);
+    ext_add(x, y, width, height);
 }
 
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)ctx;
-    ext_add(x, y, w, h);
+    ext_add(x, y, width, height);
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
-    (void)src;
+    (void)source;
     (void)stride;
     (void)alpha;
     (void)ctx;
-    ext_add(x, y, w, h);
+    ext_add(x, y, width, height);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -102,24 +105,24 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 
 static ERProps props_default(void)
 {
-    ERProps p = {0};
-    p.left = p.top = p.right = p.bottom = ER_LAYOUT_AUTO;
-    p.width = p.height = ER_LAYOUT_AUTO;
-    p.min_width = p.max_width = ER_LAYOUT_AUTO;
-    p.min_height = p.max_height = ER_LAYOUT_AUTO;
-    p.padding = p.padding_left = p.padding_top = ER_LAYOUT_AUTO;
-    p.padding_right = p.padding_bottom = ER_LAYOUT_AUTO;
-    p.margin = p.margin_left = p.margin_top = ER_LAYOUT_AUTO;
-    p.margin_right = p.margin_bottom = ER_LAYOUT_AUTO;
-    p.gap = p.row_gap = p.column_gap = ER_LAYOUT_AUTO;
-    p.flex_basis = ER_LAYOUT_AUTO;
-    p.opacity = 255U;
-    return p;
+    ERProps props = {0};
+    props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+    props.width = props.height = ER_LAYOUT_AUTO;
+    props.min_width = props.max_width = ER_LAYOUT_AUTO;
+    props.min_height = props.max_height = ER_LAYOUT_AUTO;
+    props.padding = props.padding_left = props.padding_top = ER_LAYOUT_AUTO;
+    props.padding_right = props.padding_bottom = ER_LAYOUT_AUTO;
+    props.margin = props.margin_left = props.margin_top = ER_LAYOUT_AUTO;
+    props.margin_right = props.margin_bottom = ER_LAYOUT_AUTO;
+    props.gap = props.row_gap = props.column_gap = ER_LAYOUT_AUTO;
+    props.flex_basis = ER_LAYOUT_AUTO;
+    props.opacity = OPACITY_OPAQUE;
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -133,20 +136,20 @@ static int check_pulse_bounded(int screen)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
+    er_node_set_props(root, &root_props);
 
     ERNode* logo = er_node_create(ER_NODE_VIEW);
-    ERProps lp = props_default();
-    lp.width = 40;
-    lp.height = 40;
-    lp.margin_left = 80;
-    lp.margin_top = 80;
-    lp.background_color = 0xFF3366FFU;
-    er_node_set_props(logo, &lp);
+    ERProps logo_props = props_default();
+    logo_props.width = 40;
+    logo_props.height = 40;
+    logo_props.margin_left = 80;
+    logo_props.margin_top = 80;
+    logo_props.background_color = 0xFF3366FFU;
+    er_node_set_props(logo, &logo_props);
 
     er_tree_append_child(root, logo);
     er_tree_set_root(root);
@@ -157,35 +160,35 @@ static int check_pulse_bounded(int screen)
     er_anim_value_bind(pulse, logo, ER_PROP_SCALE_X);
     er_anim_value_bind(pulse, logo, ER_PROP_SCALE_Y);
 
-    ERAnimConfig cfg = {0};
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = 800U;
-    er_anim_value_animate(pulse, 1.2f, &cfg);
+    ERAnimConfig config = {0};
+    config.type = ER_ANIM_TIMING;
+    config.duration_ms = 800U;
+    er_anim_value_animate(pulse, 1.2f, &config);
 
     embedded_renderer_tick(100U); /* advance ~1/8: scale ~1.025, logo marked source-dirty */
 
     ext_reset(); /* measure ONLY the mid-pulse commit */
     er_commit();
 
-    const int pw = g_ext.x1 - g_ext.x0;
-    const int ph = g_ext.y1 - g_ext.y0;
+    const int painted_width = g_extent.max_x - g_extent.min_x;
+    const int painted_height = g_extent.max_y - g_extent.min_y;
     const long screen_area = (long)screen * screen;
-    const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
+    const long paint_area = (g_extent.operation_count > 0) ? (long)painted_width * painted_height : 0;
 
     printf("mid-pulse paint: ops=%d extent=%d,%d %dx%d (%.1f%% of screen)\n",
-           g_ext.ops,
-           g_ext.x0,
-           g_ext.y0,
-           pw,
-           ph,
+           g_extent.operation_count,
+           g_extent.min_x,
+           g_extent.min_y,
+           painted_width,
+           painted_height,
            100.0 * (double)paint_area / (double)screen_area);
 
     er_anim_value_destroy(pulse);
     er_node_destroy(root); /* tears down the subtree */
 
-    if (g_ext.ops == 0)
+    if (g_extent.operation_count == 0)
         return fail("animated scale produced no repaint at all");
-    if (pw >= screen && ph >= screen)
+    if (painted_width >= screen && painted_height >= screen)
         return fail("animated scale forced a full-screen repaint (transform damage not bounded)");
     if (paint_area > screen_area / 4)
         return fail("animated scale repaint region far larger than the node's box");
@@ -205,30 +208,30 @@ static int check_reflow_moved_no_trail(int screen)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW); /* default flex column */
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     /* Sibling A: top bar whose height we grow to force the reflow. */
     ERNode* bar = er_node_create(ER_NODE_VIEW);
-    ERProps ap = props_default();
-    ap.width = screen;
-    ap.height = 20;
-    ap.background_color = 0xFF333333U;
-    er_node_set_props(bar, &ap);
+    ERProps bar_props = props_default();
+    bar_props.width = screen;
+    bar_props.height = 20;
+    bar_props.background_color = 0xFF333333U;
+    er_node_set_props(bar, &bar_props);
 
     /* Node B: static scale-transformed box, pushed into a gap 100px below the bar. */
     ERNode* badge = er_node_create(ER_NODE_VIEW);
-    ERProps bp = props_default();
-    bp.width = 60;
-    bp.height = 60;
-    bp.margin_top = 100; /* gap → starts at y = bar.height(20) + 100 = 120 */
-    bp.background_color = 0xFFEE5522U;
-    bp.transform_scale_x = 1.2f; /* non-identity → exercises the complex-transform path */
-    bp.transform_scale_y = 1.2f;
-    er_node_set_props(badge, &bp);
+    ERProps badge_props = props_default();
+    badge_props.width = 60;
+    badge_props.height = 60;
+    badge_props.margin_top = 100; /* gap → starts at y = bar.height(20) + 100 = 120 */
+    badge_props.background_color = 0xFFEE5522U;
+    badge_props.transform_scale_x = 1.2f; /* non-identity → exercises the complex-transform path */
+    badge_props.transform_scale_y = 1.2f;
+    er_node_set_props(badge, &badge_props);
 
     er_tree_append_child(root, bar);
     er_tree_append_child(root, badge);
@@ -237,24 +240,24 @@ static int check_reflow_moved_no_trail(int screen)
 
     /* Grow the bar: bar is source_dirty + a reflow shifts the badge down to y≈140. The badge itself is
      * NOT source_dirty — it only moved. */
-    ap.height = 40;
-    er_node_set_props(bar, &ap);
+    bar_props.height = 40;
+    er_node_set_props(bar, &bar_props);
 
     ext_reset();
     er_commit();
 
-    const int bottom = g_ext.y1; /* lowest painted row + 1 */
+    const int bottom = g_extent.max_y; /* lowest painted row + 1 */
     printf("post-reflow paint: ops=%d extent=%d,%d..%d,%d (bottom=%d, badge ~y120→140)\n",
-           g_ext.ops,
-           g_ext.x0,
-           g_ext.y0,
-           g_ext.x1,
-           g_ext.y1,
+           g_extent.operation_count,
+           g_extent.min_x,
+           g_extent.min_y,
+           g_extent.max_x,
+           g_extent.max_y,
            bottom);
 
     er_node_destroy(root);
 
-    if (g_ext.ops == 0)
+    if (g_extent.operation_count == 0)
         return fail("reflow produced no repaint at all");
     /* The bar alone only reaches y≈40. If the badge was repainted, the region extends past the gap to
      * its position near y≈120–200. A bottom that stops short of the badge means it was left as a trail. */
@@ -286,26 +289,26 @@ static int check_activity_indicator_translate(int screen)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = (int16_t)screen;
-    rp.height = (int16_t)screen;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = (int16_t)screen;
+    root_props.height = (int16_t)screen;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     /* Laid out top-left, drawn well clear of it: the offset is larger than the node, so the raw box and
      * the translated one do not touch and a repaint of either is unambiguous. */
-    const int box = 40, off = 60;
+    const int box = 40, offset = 60;
     ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = 20;
-    sp.top = 20;
-    sp.width = (int16_t)box;
-    sp.height = (int16_t)box;
-    sp.color = 0xFF3366FFU;
-    sp.transform_translate_x = (float)off;
-    sp.transform_translate_y = (float)off;
-    er_node_set_props(spinner, &sp);
+    ERProps spinner_props = props_default();
+    spinner_props.position = ER_POS_ABSOLUTE;
+    spinner_props.left = 20;
+    spinner_props.top = 20;
+    spinner_props.width = (int16_t)box;
+    spinner_props.height = (int16_t)box;
+    spinner_props.color = 0xFF3366FFU;
+    spinner_props.transform_translate_x = (float)offset;
+    spinner_props.transform_translate_y = (float)offset;
+    er_node_set_props(spinner, &spinner_props);
 
     er_tree_append_child(root, spinner);
     er_tree_set_root(root);
@@ -314,40 +317,41 @@ static int check_activity_indicator_translate(int screen)
     er_commit(); /* settle: the spinner has a last-painted footprint now */
 
     /* Recolour it — the one and only change, so the repaint is its footprint alone. */
-    sp.color = 0xFFFF00FFU;
-    er_node_set_props(spinner, &sp);
+    spinner_props.color = 0xFFFF00FFU;
+    er_node_set_props(spinner, &spinner_props);
     ext_reset();
     er_commit();
-    const int cx0 = g_ext.x0, cy0 = g_ext.y0, cops = g_ext.ops;
+    const int recolour_min_x = g_extent.min_x, recolour_min_y = g_extent.min_y,
+              recolour_operations = g_extent.operation_count;
 
     /* Nothing changes here: a footprint the pre-pass and the paint agree on reports nothing new, so the
      * last painting commit's rects are what stays readable. */
     er_commit();
-    ERRect rep = {0, 0, 0, 0};
-    er_get_dirty_rect(&rep);
+    ERRect reported = {0, 0, 0, 0};
+    er_get_dirty_rect(&reported);
 
     printf("activity indicator translate: recolour ops=%d from %d,%d (laid out 20,20, drawn %d,%d), "
            "after idle reported %d,%d %dx%d\n",
-           cops,
-           cx0,
-           cy0,
-           20 + off,
-           20 + off,
-           rep.x,
-           rep.y,
-           rep.w,
-           rep.h);
+           recolour_operations,
+           recolour_min_x,
+           recolour_min_y,
+           20 + offset,
+           20 + offset,
+           reported.x,
+           reported.y,
+           reported.w,
+           reported.h);
 
     er_node_destroy(root);
 
     /* The raw box ends at 20 + box; the drawn one starts at 20 + off. Anything at or past this cleared
      * the raw box entirely, with slack for the padding add_damage applies before inserting a rect. */
-    const int clear = 20 + off - 10;
-    if (cops == 0)
+    const int clear = 20 + offset - 10;
+    if (recolour_operations == 0)
         return fail("recolouring the activity indicator repainted nothing");
-    if (cx0 < clear || cy0 < clear)
+    if (recolour_min_x < clear || recolour_min_y < clear)
         return fail("the activity indicator was painted at its raw box — its translate was dropped");
-    if (rep.x < clear || rep.y < clear)
+    if (reported.x < clear || reported.y < clear)
         return fail("an idle commit re-reported the activity indicator's raw box: paint and pre-pass "
                     "disagree about where it is");
 
@@ -375,42 +379,43 @@ static int check_activity_indicator_translate(int screen)
  * the capture path by type, so it too paints untransformed at box+translate and must be bounded by the
  * same box, not by a scaled AABB it never draws.
  *
- * @param[in] screen  Root size.
- * @param[in] sx,sy   Scale to put on the indicator (0 = none: the translate-only case).
- * @param[in] label   Printed name for the case.
+ * @param[in] screen   Root size.
+ * @param[in] scale_x  Horizontal scale to put on the indicator (0 = none: the translate-only case).
+ * @param[in] scale_y  Vertical scale to put on the indicator (0 = none).
+ * @param[in] label    Printed name for the case.
  */
-static int check_spinner_bounded(int screen, float sx, float sy, const char* label)
+static int check_spinner_bounded(int screen, float scale_x, float scale_y, const char* label)
 {
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = (int16_t)screen;
-    rp.height = (int16_t)screen;
-    rp.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = (int16_t)screen;
+    root_props.height = (int16_t)screen;
+    root_props.background_color = 0xFFFFFFFFU; /* opaque: a full repaint really fills the whole screen */
+    er_node_set_props(root, &root_props);
 
     const int box = 40;
     ERNode* spinner = er_node_create(ER_NODE_ACTIVITY_INDICATOR);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = 20;
-    sp.top = 20;
-    sp.width = (int16_t)box;
-    sp.height = (int16_t)box;
-    sp.indicator_color = 0xFF3366FFU;
+    ERProps spinner_props = props_default();
+    spinner_props.position = ER_POS_ABSOLUTE;
+    spinner_props.left = 20;
+    spinner_props.top = 20;
+    spinner_props.width = (int16_t)box;
+    spinner_props.height = (int16_t)box;
+    spinner_props.indicator_color = 0xFF3366FFU;
     /* props_default() zeroes `animating`, and er_node_set_props() reads it as "stop": a spinner left at
      * the default is CANCELLED here, tp_rotate_z pinned at 0, and every assertion below passes without
      * the spin path ever being entered. */
-    sp.animating = 1U;
+    spinner_props.animating = 1U;
     /* A real transform prop, so has_transform is true — the state the spin angle used to turn into a
      * whole-screen repaint. Without one the node has no transform at all (the animation deliberately
      * skips update_has_transform for this type) and the pre-pass bounds it either way. */
-    sp.transform_translate_x = 30.0f;
-    sp.transform_translate_y = 30.0f;
-    sp.transform_scale_x = sx;
-    sp.transform_scale_y = sy;
-    er_node_set_props(spinner, &sp);
+    spinner_props.transform_translate_x = 30.0f;
+    spinner_props.transform_translate_y = 30.0f;
+    spinner_props.transform_scale_x = scale_x;
+    spinner_props.transform_scale_y = scale_y;
+    er_node_set_props(spinner, &spinner_props);
 
     er_tree_append_child(root, spinner);
     er_tree_set_root(root);
@@ -423,21 +428,21 @@ static int check_spinner_bounded(int screen, float sx, float sy, const char* lab
     ext_reset(); /* measure ONLY the mid-spin commit */
     er_commit();
 
-    const int pw = g_ext.x1 - g_ext.x0;
-    const int ph = g_ext.y1 - g_ext.y0;
+    const int painted_width = g_extent.max_x - g_extent.min_x;
+    const int painted_height = g_extent.max_y - g_extent.min_y;
     const long screen_area = (long)screen * screen;
-    const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
+    const long paint_area = (g_extent.operation_count > 0) ? (long)painted_width * painted_height : 0;
     /* Asserted, not assumed: this is the whole point of the case. If it reads translate-only the node
      * took node_screen_rect()'s ordinary fast path for a reason that has nothing to do with the fix. */
     const bool spinning = !er_transform_is_translate_only(spinner) && spinner->has_transform;
 
     printf("%s: mid-spin paint ops=%d extent=%d,%d %dx%d (%.1f%% of screen), rotate_z=%.1f\n",
            label,
-           g_ext.ops,
-           g_ext.x0,
-           g_ext.y0,
-           pw,
-           ph,
+           g_extent.operation_count,
+           g_extent.min_x,
+           g_extent.min_y,
+           painted_width,
+           painted_height,
            100.0 * (double)paint_area / (double)screen_area,
            (double)spinner->transform_rotate_z);
 
@@ -448,8 +453,8 @@ static int check_spinner_bounded(int screen, float sx, float sy, const char* lab
      * this case exists to measure. Stopping it first also retires its looping ER_PROP_ROTATE_Z: a
      * destroyed node's node-target animations outlive it, and would drive whatever node next recycles
      * its tag. */
-    sp.animating = 0U;
-    er_node_set_props(spinner, &sp);
+    spinner_props.animating = 0U;
+    er_node_set_props(spinner, &spinner_props);
     er_tree_remove_child(root, spinner);
     er_node_destroy(spinner);
     er_node_destroy(root);
@@ -461,9 +466,9 @@ static int check_spinner_bounded(int screen, float sx, float sy, const char* lab
 #else
     (void)spinning; /* TRANSLATE_ONLY compiles the refusing gate out entirely */
 #endif
-    if (g_ext.ops == 0)
+    if (g_extent.operation_count == 0)
         return fail("a spinning activity indicator produced no repaint at all");
-    if (pw >= screen && ph >= screen)
+    if (painted_width >= screen && painted_height >= screen)
         return fail("a spinning activity indicator forced a full-screen repaint (its damage is not bounded)");
     if (paint_area > screen_area / 4)
         return fail("a spinning activity indicator's repaint region is far larger than its own box");
@@ -507,36 +512,36 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     /* Scaled-down box in the top-left. Nothing ever changes about it after the first commit. */
     ERNode* node = er_node_create(ER_NODE_VIEW);
-    ERProps np = props_default();
-    np.position = ER_POS_ABSOLUTE;
-    np.left = 10;
-    np.top = 10;
-    np.width = (int16_t)side;
-    np.height = (int16_t)side;
-    np.background_color = 0xFF33AA55U;
-    np.transform_scale_x = 0.3f;
-    np.transform_scale_y = 0.3f;
-    er_node_set_props(node, &np);
+    ERProps node_props = props_default();
+    node_props.position = ER_POS_ABSOLUTE;
+    node_props.left = 10;
+    node_props.top = 10;
+    node_props.width = (int16_t)side;
+    node_props.height = (int16_t)side;
+    node_props.background_color = 0xFF33AA55U;
+    node_props.transform_scale_x = 0.3f;
+    node_props.transform_scale_y = 0.3f;
+    er_node_set_props(node, &node_props);
 
     /* The only thing that changes, parked clear of the node's raw box AND its scaled AABB. */
-    const int mx = side + 40;
+    const int marker_x = side + 40;
     ERNode* marker = er_node_create(ER_NODE_VIEW);
-    ERProps mp = props_default();
-    mp.position = ER_POS_ABSOLUTE;
-    mp.left = (int16_t)mx;
-    mp.top = (int16_t)mx;
-    mp.width = 40;
-    mp.height = 40;
-    mp.background_color = 0xFF00AAFFU;
-    er_node_set_props(marker, &mp);
+    ERProps marker_props = props_default();
+    marker_props.position = ER_POS_ABSOLUTE;
+    marker_props.left = (int16_t)marker_x;
+    marker_props.top = (int16_t)marker_x;
+    marker_props.width = 40;
+    marker_props.height = 40;
+    marker_props.background_color = 0xFF00AAFFU;
+    er_node_set_props(marker, &marker_props);
 
     er_tree_append_child(root, node);
     er_tree_append_child(root, marker);
@@ -546,45 +551,46 @@ static int check_oversized_no_idle_damage(int side, int screen, bool expect_capt
     er_commit(); /* settle: everything has a last-painted footprint now */
 
     /* Recolour the marker — the one and only change. */
-    mp.background_color = 0xFFFF00FFU;
-    er_node_set_props(marker, &mp);
+    marker_props.background_color = 0xFFFF00FFU;
+    er_node_set_props(marker, &marker_props);
     ext_reset();
     er_commit();
-    const int cx0 = g_ext.x0, cy0 = g_ext.y0, cops = g_ext.ops;
-    ERRect rep = {0, 0, 0, 0};
-    er_get_dirty_rect(&rep);
+    const int recolour_min_x = g_extent.min_x, recolour_min_y = g_extent.min_y,
+              recolour_operations = g_extent.operation_count;
+    ERRect reported = {0, 0, 0, 0};
+    er_get_dirty_rect(&reported);
 
     /* Nothing at all changes here. */
     ext_reset();
     er_commit();
-    const int idle_ops = g_ext.ops;
+    const int idle_operations = g_extent.operation_count;
 
     printf("%s: marker commit ops=%d from %d,%d (marker at %d,%d), reported %d,%d %dx%d; idle ops=%d\n",
            label,
-           cops,
-           cx0,
-           cy0,
-           mx,
-           mx,
-           rep.x,
-           rep.y,
-           rep.w,
-           rep.h,
-           idle_ops);
+           recolour_operations,
+           recolour_min_x,
+           recolour_min_y,
+           marker_x,
+           marker_x,
+           reported.x,
+           reported.y,
+           reported.w,
+           reported.h,
+           idle_operations);
 
     er_node_destroy(root);
 
-    /* The node's raw box ends at side + 10 = mx - 30 and its scaled AABB is well inside that, so a
+    /* The node's raw box ends at side + 10 = marker_x - 30 and its scaled AABB is well inside that, so a
      * repaint (or a report) that starts before this stayed clear of both. The slack absorbs the few
      * pixels add_damage pads a rect by before inserting it. */
-    const int clear = mx - 20;
-    if (cops == 0)
+    const int clear = marker_x - 20;
+    if (recolour_operations == 0)
         return fail("the marker change repainted nothing");
-    if (cx0 < clear || cy0 < clear)
+    if (recolour_min_x < clear || recolour_min_y < clear)
         return fail("the marker change dragged the transformed node's region into the repaint");
-    if (rep.x < clear || rep.y < clear)
+    if (reported.x < clear || reported.y < clear)
         return fail("the marker change reported the transformed node's region as dirty");
-    if (idle_ops != 0)
+    if (idle_operations != 0)
         return fail("an idle commit repainted — the transformed node damages its footprint forever");
 
     printf("PASS: %s contributes no damage when nothing about it changed\n", label);
@@ -604,48 +610,48 @@ static int check_nested_transform_no_damage(int screen)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     /* Outer transform: comfortably within the scratch, so ITS capture succeeds and stays active for the
      * whole of the subtree below it. */
     ERNode* outer = er_node_create(ER_NODE_VIEW);
-    ERProps op = props_default();
-    op.position = ER_POS_ABSOLUTE;
-    op.left = 10;
-    op.top = 10;
-    op.width = 100;
-    op.height = 100;
-    op.background_color = 0xFF33AA55U;
-    op.transform_rotate_z = 20.0f;
-    er_node_set_props(outer, &op);
+    ERProps outer_props = props_default();
+    outer_props.position = ER_POS_ABSOLUTE;
+    outer_props.left = 10;
+    outer_props.top = 10;
+    outer_props.width = 100;
+    outer_props.height = 100;
+    outer_props.background_color = 0xFF33AA55U;
+    outer_props.transform_rotate_z = 20.0f;
+    er_node_set_props(outer, &outer_props);
 
     /* Inner transform: tiny, but refused the scratch because the outer capture holds it. */
     ERNode* inner = er_node_create(ER_NODE_VIEW);
-    ERProps ip = props_default();
-    ip.position = ER_POS_ABSOLUTE;
-    ip.left = 10;
-    ip.top = 10;
-    ip.width = 40;
-    ip.height = 40;
-    ip.background_color = 0xFFAA3355U;
-    ip.transform_scale_x = 0.5f;
-    ip.transform_scale_y = 0.5f;
-    er_node_set_props(inner, &ip);
+    ERProps inner_props = props_default();
+    inner_props.position = ER_POS_ABSOLUTE;
+    inner_props.left = 10;
+    inner_props.top = 10;
+    inner_props.width = 40;
+    inner_props.height = 40;
+    inner_props.background_color = 0xFFAA3355U;
+    inner_props.transform_scale_x = 0.5f;
+    inner_props.transform_scale_y = 0.5f;
+    er_node_set_props(inner, &inner_props);
 
-    const int mx = screen - 50;
+    const int marker_x = screen - 50;
     ERNode* marker = er_node_create(ER_NODE_VIEW);
-    ERProps mp = props_default();
-    mp.position = ER_POS_ABSOLUTE;
-    mp.left = (int16_t)mx;
-    mp.top = (int16_t)mx;
-    mp.width = 30;
-    mp.height = 30;
-    mp.background_color = 0xFF00AAFFU;
-    er_node_set_props(marker, &mp);
+    ERProps marker_props = props_default();
+    marker_props.position = ER_POS_ABSOLUTE;
+    marker_props.left = (int16_t)marker_x;
+    marker_props.top = (int16_t)marker_x;
+    marker_props.width = 30;
+    marker_props.height = 30;
+    marker_props.background_color = 0xFF00AAFFU;
+    er_node_set_props(marker, &marker_props);
 
     er_tree_append_child(outer, inner);
     er_tree_append_child(root, outer);
@@ -655,32 +661,32 @@ static int check_nested_transform_no_damage(int screen)
     er_commit();
     er_commit();
 
-    mp.background_color = 0xFFFF00FFU;
-    er_node_set_props(marker, &mp);
+    marker_props.background_color = 0xFFFF00FFU;
+    er_node_set_props(marker, &marker_props);
     ext_reset();
     er_commit();
-    ERRect rep = {0, 0, 0, 0};
-    er_get_dirty_rect(&rep);
+    ERRect reported = {0, 0, 0, 0};
+    er_get_dirty_rect(&reported);
 
     printf("nested transform: marker commit ops=%d from %d,%d (marker at %d,%d), reported %d,%d %dx%d\n",
-           g_ext.ops,
-           g_ext.x0,
-           g_ext.y0,
-           mx,
-           mx,
-           rep.x,
-           rep.y,
-           rep.w,
-           rep.h);
+           g_extent.operation_count,
+           g_extent.min_x,
+           g_extent.min_y,
+           marker_x,
+           marker_x,
+           reported.x,
+           reported.y,
+           reported.w,
+           reported.h);
 
     er_node_destroy(root);
 
-    const int clear = mx - 20; /* the outer node ends at 110, far above this */
-    if (g_ext.ops == 0)
+    const int clear = marker_x - 20; /* the outer node ends at 110, far above this */
+    if (g_extent.operation_count == 0)
         return fail("the marker change repainted nothing");
-    if (g_ext.x0 < clear || g_ext.y0 < clear)
+    if (g_extent.min_x < clear || g_extent.min_y < clear)
         return fail("the marker change dragged the nested transform's region into the repaint");
-    if (rep.x < clear || rep.y < clear)
+    if (reported.x < clear || reported.y < clear)
         return fail("the marker change reported the nested transform's region as dirty");
 
     printf("PASS: a nested transform contributes no damage when nothing about it changed\n");
@@ -697,21 +703,21 @@ static int check_3d_rotate_bounded(int screen)
     er_reset();
 
     ERNode* root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = screen;
-    rp.height = screen;
-    rp.background_color = 0xFFFFFFFFU;
-    er_node_set_props(root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = screen;
+    root_props.height = screen;
+    root_props.background_color = 0xFFFFFFFFU;
+    er_node_set_props(root, &root_props);
 
     ERNode* card = er_node_create(ER_NODE_VIEW);
-    ERProps cp = props_default();
-    cp.width = 40;
-    cp.height = 40;
-    cp.margin_left = 80;
-    cp.margin_top = 80;
-    cp.background_color = 0xFF22CC88U;
-    cp.transform_rotate_y = 1.0f; /* non-zero → exercises the 3D/perspective path from the first commit */
-    er_node_set_props(card, &cp);
+    ERProps card_props = props_default();
+    card_props.width = 40;
+    card_props.height = 40;
+    card_props.margin_left = 80;
+    card_props.margin_top = 80;
+    card_props.background_color = 0xFF22CC88U;
+    card_props.transform_rotate_y = 1.0f; /* non-zero → exercises the 3D/perspective path from the first commit */
+    er_node_set_props(card, &card_props);
 
     er_tree_append_child(root, card);
     er_tree_set_root(root);
@@ -720,35 +726,35 @@ static int check_3d_rotate_bounded(int screen)
     ERAnimValueHandle spin = er_anim_value_create(1.0f);
     er_anim_value_bind(spin, card, ER_PROP_ROTATE_Y);
 
-    ERAnimConfig cfg = {0};
-    cfg.type = ER_ANIM_TIMING;
-    cfg.duration_ms = 800U;
-    er_anim_value_animate(spin, 40.0f, &cfg);
+    ERAnimConfig config = {0};
+    config.type = ER_ANIM_TIMING;
+    config.duration_ms = 800U;
+    er_anim_value_animate(spin, 40.0f, &config);
 
     embedded_renderer_tick(100U); /* rotateY advances → card source-dirty, still 3D */
 
     ext_reset();
     er_commit();
 
-    const int pw = g_ext.x1 - g_ext.x0;
-    const int ph = g_ext.y1 - g_ext.y0;
+    const int painted_width = g_extent.max_x - g_extent.min_x;
+    const int painted_height = g_extent.max_y - g_extent.min_y;
     const long screen_area = (long)screen * screen;
-    const long paint_area = (g_ext.ops > 0) ? (long)pw * ph : 0;
+    const long paint_area = (g_extent.operation_count > 0) ? (long)painted_width * painted_height : 0;
 
     printf("mid-spin (3D) paint: ops=%d extent=%d,%d %dx%d (%.1f%% of screen)\n",
-           g_ext.ops,
-           g_ext.x0,
-           g_ext.y0,
-           pw,
-           ph,
+           g_extent.operation_count,
+           g_extent.min_x,
+           g_extent.min_y,
+           painted_width,
+           painted_height,
            100.0 * (double)paint_area / (double)screen_area);
 
     er_anim_value_destroy(spin);
     er_node_destroy(root);
 
-    if (g_ext.ops == 0)
+    if (g_extent.operation_count == 0)
         return fail("animated 3D transform produced no repaint at all");
-    if (pw >= screen && ph >= screen)
+    if (painted_width >= screen && painted_height >= screen)
         return fail("animated 3D transform forced a full-screen repaint (3D damage not bounded)");
     if (paint_area > screen_area / 4)
         return fail("animated 3D transform repaint region far larger than the node's box");
@@ -760,35 +766,35 @@ static int check_3d_rotate_bounded(int screen)
 
 int main(void)
 {
-    EmbeddedRenderBackend be = {0};
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    EmbeddedRenderBackend backend = {0};
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
     const int screen = 200;
 
-    int rc = check_pulse_bounded(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    int result = check_pulse_bounded(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 
-    rc = check_reflow_moved_no_trail(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_reflow_moved_no_trail(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 
-    rc = check_activity_indicator_translate(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_activity_indicator_translate(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 
-    rc = check_spinner_bounded(screen, 0.0f, 0.0f, "spinning indicator (translate)");
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_spinner_bounded(screen, 0.0f, 0.0f, "spinning indicator (translate)");
+    if (result != EXIT_SUCCESS)
+        return result;
 
     /* A scaled indicator is refused the capture path by type just like the plain one, so it paints —
      * and must be damaged — at the same raw box, not at a scaled AABB it never draws. */
-    rc = check_spinner_bounded(screen, 1.8f, 1.8f, "spinning indicator (scale)");
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_spinner_bounded(screen, 1.8f, 1.8f, "spinning indicator (scale)");
+    if (result != EXIT_SUCCESS)
+        return result;
 
 #if ERUI_TRANSFORMS_FULL
     const int fits = (ERUI_XFORM_W < ERUI_XFORM_H) ? ERUI_XFORM_W : ERUI_XFORM_H;
@@ -796,23 +802,23 @@ int main(void)
     const int over = limit + 1;
     const int big_screen = over + 120;
 
-    rc = check_oversized_no_idle_damage(fits, big_screen, true, "node within the scratch limit");
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_oversized_no_idle_damage(fits, big_screen, true, "node within the scratch limit");
+    if (result != EXIT_SUCCESS)
+        return result;
 
-    rc = check_oversized_no_idle_damage(over, big_screen, false, "node over the scratch limit");
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_oversized_no_idle_damage(over, big_screen, false, "node over the scratch limit");
+    if (result != EXIT_SUCCESS)
+        return result;
 
-    rc = check_nested_transform_no_damage(300);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_nested_transform_no_damage(300);
+    if (result != EXIT_SUCCESS)
+        return result;
 #endif
 
 #if ERUI_3D_TRANSFORMS && ERUI_TRANSFORMS_FULL
-    rc = check_3d_rotate_bounded(screen);
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    result = check_3d_rotate_bounded(screen);
+    if (result != EXIT_SUCCESS)
+        return result;
 #endif
 
     return EXIT_SUCCESS;

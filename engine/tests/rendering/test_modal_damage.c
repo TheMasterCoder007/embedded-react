@@ -42,80 +42,92 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SW 400
-#define SH 640
-#define SCREEN_PX ((long)SW * (long)SH)
+#define SCREEN_WIDTH 400
+#define SCREEN_HEIGHT 640
+#define SCREEN_PIXELS ((long)SCREEN_WIDTH * (long)SCREEN_HEIGHT)
+#define ALPHA_OPAQUE 255
+#define CHANNEL_MAX 255u
+#define CHANNEL_ROUND 127u
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Backend: composites for real, and records which pixels were written
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint32_t s_fb[SW * SH];
-static uint8_t s_touched[SW * SH];
+static uint32_t s_framebuffer[SCREEN_WIDTH * SCREEN_HEIGHT];
+static uint8_t s_touched[SCREEN_WIDTH * SCREEN_HEIGHT];
 static long s_painted; /* every write, so overdraw inside the damage region is visible too */
 
-static uint32_t div255(uint32_t v)
+static uint32_t div255(uint32_t value)
 {
-    return (v + 127u) / 255u;
+    return (value + CHANNEL_ROUND) / CHANNEL_MAX;
 }
 
-static void put(int x, int y, uint32_t sa, uint32_t sr, uint32_t sg, uint32_t sb)
+static void put(int x, int y, uint32_t source_alpha, uint32_t source_red, uint32_t source_green, uint32_t source_blue)
 {
-    if (x < 0 || x >= SW || y < 0 || y >= SH)
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT)
         return;
-    uint32_t* d = &s_fb[y * SW + x];
-    const uint32_t inv = 255u - sa;
-    const uint32_t dr = (*d >> 16) & 0xFFu, dg = (*d >> 8) & 0xFFu, db = *d & 0xFFu;
-    *d = 0xFF000000u | ((sr + div255(dr * inv)) << 16) | ((sg + div255(dg * inv)) << 8) | (sb + div255(db * inv));
-    s_touched[y * SW + x] = 1u;
+    uint32_t* destination = &s_framebuffer[y * SCREEN_WIDTH + x];
+    const uint32_t inverse_alpha = CHANNEL_MAX - source_alpha;
+    const uint32_t destination_red = (*destination >> 16) & 0xFFu, destination_green = (*destination >> 8) & 0xFFu,
+                   destination_blue = *destination & 0xFFu;
+    *destination = 0xFF000000u | ((source_red + div255(destination_red * inverse_alpha)) << 16)
+                   | ((source_green + div255(destination_green * inverse_alpha)) << 8)
+                   | (source_blue + div255(destination_blue * inverse_alpha));
+    s_touched[y * SCREEN_WIDTH + x] = 1u;
     s_painted++;
 }
 
-static void fill_cb(uint32_t argb, int x, int y, int w, int h, void* ctx)
+static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint32_t a = (argb >> 24) & 0xFFu;
-    if (!a)
+    const uint32_t alpha = (argb >> 24) & 0xFFu;
+    if (!alpha)
         return;
-    const uint32_t sr = div255(((argb >> 16) & 0xFFu) * a);
-    const uint32_t sg = div255(((argb >> 8) & 0xFFu) * a);
-    const uint32_t sb = div255((argb & 0xFFu) * a);
-    for (int r = y; r < y + h; r++)
-        for (int q = x; q < x + w; q++)
-            put(q, r, a, sr, sg, sb);
+    const uint32_t source_red = div255(((argb >> 16) & 0xFFu) * alpha);
+    const uint32_t source_green = div255(((argb >> 8) & 0xFFu) * alpha);
+    const uint32_t source_blue = div255((argb & 0xFFu) * alpha);
+    for (int pixel_y = y; pixel_y < y + height; pixel_y++)
+        for (int pixel_x = x; pixel_x < x + width; pixel_x++)
+            put(pixel_x, pixel_y, alpha, source_red, source_green, source_blue);
 }
 
-static void copy_cb(const void* src, int stride, int x, int y, int w, int h, void* ctx)
+static void copy_cb(const void* source, int stride, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint8_t* p = src;
-    for (int r = 0; r < h; r++, p += stride)
+    const uint8_t* source_bytes = source;
+    for (int row_index = 0; row_index < height; row_index++, source_bytes += stride)
     {
-        const uint32_t* row = (const uint32_t*)p;
-        for (int q = 0; q < w; q++)
-            put(x + q, y + r, 255u, (row[q] >> 16) & 0xFFu, (row[q] >> 8) & 0xFFu, row[q] & 0xFFu);
+        const uint32_t* row = (const uint32_t*)source_bytes;
+        for (int column = 0; column < width; column++)
+            put(x + column,
+                y + row_index,
+                ALPHA_OPAQUE,
+                (row[column] >> 16) & 0xFFu,
+                (row[column] >> 8) & 0xFFu,
+                row[column] & 0xFFu);
     }
 }
 
-static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, int w, int h, void* ctx)
+static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
     (void)ctx;
-    const uint8_t* p = src;
-    for (int r = 0; r < h; r++, p += stride)
+    const uint8_t* source_bytes = source;
+    for (int row_index = 0; row_index < height; row_index++, source_bytes += stride)
     {
-        const uint32_t* row = (const uint32_t*)p;
-        for (int q = 0; q < w; q++)
+        const uint32_t* row = (const uint32_t*)source_bytes;
+        for (int column = 0; column < width; column++)
         {
-            const uint32_t v = row[q];
-            uint32_t sa = (v >> 24) & 0xFFu, sr = (v >> 16) & 0xFFu, sg = (v >> 8) & 0xFFu, sb = v & 0xFFu;
-            if (alpha < 255)
+            const uint32_t source_pixel = row[column];
+            uint32_t source_alpha = (source_pixel >> 24) & 0xFFu, source_red = (source_pixel >> 16) & 0xFFu,
+                     source_green = (source_pixel >> 8) & 0xFFu, source_blue = source_pixel & 0xFFu;
+            if (alpha < ALPHA_OPAQUE)
             {
-                sa = div255(sa * alpha);
-                sr = div255(sr * alpha);
-                sg = div255(sg * alpha);
-                sb = div255(sb * alpha);
+                source_alpha = div255(source_alpha * alpha);
+                source_red = div255(source_red * alpha);
+                source_green = div255(source_green * alpha);
+                source_blue = div255(source_blue * alpha);
             }
-            put(x + q, y + r, sa, sr, sg, sb);
+            put(x + column, y + row_index, source_alpha, source_red, source_green, source_blue);
         }
     }
 }
@@ -126,14 +138,14 @@ static void blend_cb(const void* src, int stride, uint8_t alpha, int x, int y, i
 
 static ERProps props_default(void)
 {
-    ERProps p;
-    er_props_default(&p);
-    return p;
+    ERProps props;
+    er_props_default(&props);
+    return props;
 }
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -144,16 +156,16 @@ static long frame_distinct(void)
     memset(s_touched, 0, sizeof(s_touched));
     er_commit();
     er_display_present();
-    long n = 0;
-    for (long i = 0; i < SCREEN_PX; i++)
-        if (s_touched[i])
-            n++;
-    return n;
+    long distinct_count = 0;
+    for (long frame_index = 0; frame_index < SCREEN_PIXELS; frame_index++)
+        if (s_touched[frame_index])
+            distinct_count++;
+    return distinct_count;
 }
 
 static uint32_t at(int x, int y)
 {
-    return s_fb[y * SW + x] & 0xFFFFFFu;
+    return s_framebuffer[y * SCREEN_WIDTH + x] & 0xFFFFFFu;
 }
 
 /**
@@ -170,16 +182,23 @@ static uint32_t at(int x, int y)
  */
 static int dirty_rect_spans_root(const char* when)
 {
-    ERRect d;
-    if (!er_get_dirty_rect(&d))
+    ERRect dirty;
+    if (!er_get_dirty_rect(&dirty))
     {
         fprintf(stderr, "  %s: er_get_dirty_rect() reported nothing\n", when);
         return 1;
     }
-    if (d.x > 0 || d.y > 0 || d.x + d.w < SW || d.y + d.h < SH)
+    if (dirty.x > 0 || dirty.y > 0 || dirty.x + dirty.w < SCREEN_WIDTH || dirty.y + dirty.h < SCREEN_HEIGHT)
     {
-        fprintf(
-            stderr, "  %s: dirty rect (%d,%d %dx%d) does not span the %dx%d root\n", when, d.x, d.y, d.w, d.h, SW, SH);
+        fprintf(stderr,
+                "  %s: dirty rect (%d,%d %dx%d) does not span the %dx%d root\n",
+                when,
+                dirty.x,
+                dirty.y,
+                dirty.w,
+                dirty.h,
+                SCREEN_WIDTH,
+                SCREEN_HEIGHT);
         return 1;
     }
     return 0;
@@ -192,92 +211,92 @@ static int dirty_rect_spans_root(const char* when)
 /* Geometry, in the same proportions an 800x1280 dialog would use. */
 #define SHEET_X 50
 #define SHEET_Y 240
-#define SHEET_W 300
-#define SHEET_H 160
-#define CTRL_W 100
-#define CTRL_H 30
-#define PAGE_NODE_W 90
-#define PAGE_NODE_H 25
+#define SHEET_WIDTH 300
+#define SHEET_HEIGHT 160
+#define CONTROL_WIDTH 100
+#define CONTROL_HEIGHT 30
+#define PAGE_NODE_WIDTH 90
+#define PAGE_NODE_HEIGHT 25
 
 static ERNode* s_root;
 static ERNode* s_modal;
-static ERNode* s_ctrl;      /* inside the dialog */
+static ERNode* s_control;   /* inside the dialog */
 static ERNode* s_page_node; /* behind the scrim */
-static ERProps s_modal_p, s_ctrl_p, s_page_p;
+static ERProps s_modal_props, s_control_props, s_page_props;
 
 static void build_scene(void)
 {
     s_root = er_node_create(ER_NODE_VIEW);
-    ERProps rp = props_default();
-    rp.width = SW;
-    rp.height = SH;
-    rp.background_color = 0xFF203040U;
-    er_node_set_props(s_root, &rp);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN_WIDTH;
+    root_props.height = SCREEN_HEIGHT;
+    root_props.background_color = 0xFF203040U;
+    er_node_set_props(s_root, &root_props);
     er_tree_set_root(s_root);
 
-    for (int i = 0; i < 4; i++)
+    for (int frame_index = 0; frame_index < 4; frame_index++)
     {
         ERNode* card = er_node_create(ER_NODE_VIEW);
-        ERProps cp = props_default();
-        cp.position = ER_POS_ABSOLUTE;
-        cp.left = 20;
-        cp.top = (int16_t)(20 + i * 150);
-        cp.width = 360;
-        cp.height = 120;
-        cp.border_radius = 12;
-        cp.background_color = 0xFF3A4A5AU;
-        er_node_set_props(card, &cp);
+        ERProps card_props = props_default();
+        card_props.position = ER_POS_ABSOLUTE;
+        card_props.left = 20;
+        card_props.top = (int16_t)(20 + frame_index * 150);
+        card_props.width = 360;
+        card_props.height = 120;
+        card_props.border_radius = 12;
+        card_props.background_color = 0xFF3A4A5AU;
+        er_node_set_props(card, &card_props);
         er_tree_append_child(s_root, card);
     }
 
     s_page_node = er_node_create(ER_NODE_VIEW);
-    s_page_p = props_default();
-    s_page_p.position = ER_POS_ABSOLUTE;
-    s_page_p.left = 30;
-    s_page_p.top = 30;
-    s_page_p.width = PAGE_NODE_W;
-    s_page_p.height = PAGE_NODE_H;
-    s_page_p.background_color = 0xFF88CCFFU;
-    er_node_set_props(s_page_node, &s_page_p);
+    s_page_props = props_default();
+    s_page_props.position = ER_POS_ABSOLUTE;
+    s_page_props.left = 30;
+    s_page_props.top = 30;
+    s_page_props.width = PAGE_NODE_WIDTH;
+    s_page_props.height = PAGE_NODE_HEIGHT;
+    s_page_props.background_color = 0xFF88CCFFU;
+    er_node_set_props(s_page_node, &s_page_props);
     er_tree_append_child(s_root, s_page_node);
 
     /* The idiomatic overlay: the Modal node covers the screen, the dialog is a child of it. The
      * scrim is painted over the root rect, so a modal that does NOT cover the screen would have its
      * scrim scissored to its own box — hence the full-screen style every demo gives it. */
     s_modal = er_node_create(ER_NODE_MODAL);
-    s_modal_p = props_default();
-    s_modal_p.position = ER_POS_ABSOLUTE;
-    s_modal_p.left = 0;
-    s_modal_p.top = 0;
-    s_modal_p.width = SW;
-    s_modal_p.height = SH;
-    s_modal_p.modal_visible = 1;
-    s_modal_p.backdrop_color = 0x99000000U;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props = props_default();
+    s_modal_props.position = ER_POS_ABSOLUTE;
+    s_modal_props.left = 0;
+    s_modal_props.top = 0;
+    s_modal_props.width = SCREEN_WIDTH;
+    s_modal_props.height = SCREEN_HEIGHT;
+    s_modal_props.modal_visible = 1;
+    s_modal_props.backdrop_color = 0x99000000U;
+    er_node_set_props(s_modal, &s_modal_props);
     er_tree_append_child(s_root, s_modal);
 
     ERNode* sheet = er_node_create(ER_NODE_VIEW);
-    ERProps sp = props_default();
-    sp.position = ER_POS_ABSOLUTE;
-    sp.left = SHEET_X;
-    sp.top = SHEET_Y;
-    sp.width = SHEET_W;
-    sp.height = SHEET_H;
-    sp.background_color = 0xFF101820U;
-    sp.border_radius = 16;
-    er_node_set_props(sheet, &sp);
+    ERProps sheet_props = props_default();
+    sheet_props.position = ER_POS_ABSOLUTE;
+    sheet_props.left = SHEET_X;
+    sheet_props.top = SHEET_Y;
+    sheet_props.width = SHEET_WIDTH;
+    sheet_props.height = SHEET_HEIGHT;
+    sheet_props.background_color = 0xFF101820U;
+    sheet_props.border_radius = 16;
+    er_node_set_props(sheet, &sheet_props);
     er_tree_append_child(s_modal, sheet);
 
-    s_ctrl = er_node_create(ER_NODE_VIEW);
-    s_ctrl_p = props_default();
-    s_ctrl_p.position = ER_POS_ABSOLUTE;
-    s_ctrl_p.left = 20;
-    s_ctrl_p.top = 20;
-    s_ctrl_p.width = CTRL_W;
-    s_ctrl_p.height = CTRL_H;
-    s_ctrl_p.background_color = 0xFF66AAFFU;
-    er_node_set_props(s_ctrl, &s_ctrl_p);
-    er_tree_append_child(sheet, s_ctrl);
+    s_control = er_node_create(ER_NODE_VIEW);
+    s_control_props = props_default();
+    s_control_props.position = ER_POS_ABSOLUTE;
+    s_control_props.left = 20;
+    s_control_props.top = 20;
+    s_control_props.width = CONTROL_WIDTH;
+    s_control_props.height = CONTROL_HEIGHT;
+    s_control_props.background_color = 0xFF66AAFFU;
+    er_node_set_props(s_control, &s_control_props);
+    er_tree_append_child(sheet, s_control);
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -286,22 +305,22 @@ static void build_scene(void)
 
 int main(void)
 {
-    static EmbeddedRenderBackend be;
-    be.fill_rect = fill_cb;
-    be.copy_rect = copy_cb;
-    be.blend_rect = blend_cb;
-    embedded_renderer_set_backend(&be);
+    static EmbeddedRenderBackend backend;
+    backend.fill_rect = fill_cb;
+    backend.copy_rect = copy_cb;
+    backend.blend_rect = blend_cb;
+    embedded_renderer_set_backend(&backend);
 
     build_scene();
 
     /* Mount, then settle. The first frame legitimately paints everything. */
     const long mount = frame_distinct();
-    if (mount < SCREEN_PX / 2)
+    if (mount < SCREEN_PIXELS / 2)
         return fail("mount frame did not paint the screen");
     frame_distinct();
 
     /* --- an idle frame under a visible modal paints NOTHING --- */
-    for (int i = 0; i < 5; i++)
+    for (int frame_index = 0; frame_index < 5; frame_index++)
     {
         const long idle = frame_distinct();
         if (idle != 0)
@@ -314,58 +333,58 @@ int main(void)
     /* --- a control inside the dialog stays local ---
      * The stack under it is rebuilt (page background, card, scrim, sheet, control), so allow overdraw
      * but require the AREA to stay near the control's own size. */
-    const long ctrl_px = (long)CTRL_W * (long)CTRL_H;
-    const int scrim_x = SW / 2, scrim_y = 100; /* over a card, under the scrim, clear of the dialog */
+    const long control_pixels = (long)CONTROL_WIDTH * (long)CONTROL_HEIGHT;
+    const int scrim_x = SCREEN_WIDTH / 2, scrim_y = 100; /* over a card, under the scrim, clear of the dialog */
     uint32_t scrim = at(scrim_x, scrim_y);
-    for (int i = 0; i < 6; i++)
+    for (int frame_index = 0; frame_index < 6; frame_index++)
     {
-        s_ctrl_p.background_color = 0xFF66AAFFU + (uint32_t)(i + 1) * 0x00010203U;
-        er_node_set_props(s_ctrl, &s_ctrl_p);
-        const long d = frame_distinct();
-        if (d > ctrl_px * 2)
+        s_control_props.background_color = 0xFF66AAFFU + (uint32_t)(frame_index + 1) * 0x00010203U;
+        er_node_set_props(s_control, &s_control_props);
+        const long distinct = frame_distinct();
+        if (distinct > control_pixels * 2)
         {
             fprintf(stderr,
                     "  changed a %ldpx control, repainted %ld px (%.1f%% of screen)\n",
-                    ctrl_px,
-                    d,
-                    100.0 * (double)d / (double)SCREEN_PX);
+                    control_pixels,
+                    distinct,
+                    100.0 * (double)distinct / (double)SCREEN_PIXELS);
             return fail("a control inside the dialog repainted far more than itself");
         }
         /* The scrim well away from the dialog must be untouched AND unchanged: a translucent fill
          * re-blended without rebuilding what is under it would darken a little every frame. */
-        const uint32_t now = at(scrim_x, scrim_y);
-        if (now != scrim)
+        const uint32_t current = at(scrim_x, scrim_y);
+        if (current != scrim)
         {
-            fprintf(stderr, "  scrim drifted %06X -> %06X\n", scrim, now);
+            fprintf(stderr, "  scrim drifted %06X -> %06X\n", scrim, current);
             return fail("the scrim darkened cumulatively while the dialog updated");
         }
-        scrim = now;
+        scrim = current;
     }
 
     /* --- a page node BEHIND the scrim stays local, and re-renders stably --- */
-    const long page_px = (long)PAGE_NODE_W * (long)PAGE_NODE_H;
-    for (int i = 0; i < 4; i++)
+    const long page_pixels = (long)PAGE_NODE_WIDTH * (long)PAGE_NODE_HEIGHT;
+    for (int frame_index = 0; frame_index < 4; frame_index++)
     {
-        s_page_p.background_color = 0xFF88CCFFU + (uint32_t)(i + 1) * 0x00020103U;
-        er_node_set_props(s_page_node, &s_page_p);
-        const long d = frame_distinct();
-        if (d > page_px * 2)
+        s_page_props.background_color = 0xFF88CCFFU + (uint32_t)(frame_index + 1) * 0x00020103U;
+        er_node_set_props(s_page_node, &s_page_props);
+        const long distinct = frame_distinct();
+        if (distinct > page_pixels * 2)
         {
-            fprintf(stderr, "  changed a %ldpx page node, repainted %ld px\n", page_px, d);
+            fprintf(stderr, "  changed a %ldpx page node, repainted %ld px\n", page_pixels, distinct);
             return fail("a page node behind the scrim repainted far more than itself");
         }
     }
     /* Settling on one colour twice must land on the same pixel both times — if the scrim were being
      * applied over an un-rebuilt stack, the second pass would come out darker. */
-    s_page_p.background_color = 0xFF88CCFFU;
-    er_node_set_props(s_page_node, &s_page_p);
+    s_page_props.background_color = 0xFF88CCFFU;
+    er_node_set_props(s_page_node, &s_page_props);
     frame_distinct();
     const uint32_t once = at(40, 40);
-    s_page_p.background_color = 0xFF88CCFFU + 0x00010101U;
-    er_node_set_props(s_page_node, &s_page_p);
+    s_page_props.background_color = 0xFF88CCFFU + 0x00010101U;
+    er_node_set_props(s_page_node, &s_page_props);
     frame_distinct();
-    s_page_p.background_color = 0xFF88CCFFU;
-    er_node_set_props(s_page_node, &s_page_p);
+    s_page_props.background_color = 0xFF88CCFFU;
+    er_node_set_props(s_page_node, &s_page_props);
     frame_distinct();
     if (at(40, 40) != once)
     {
@@ -377,21 +396,21 @@ int main(void)
      * An overlay covers the screen, so any prop change on it damages the screen. That is correct,
      * and it is the one thing not to do per frame on a scanned-out panel. Asserting it keeps the
      * cost model honest: if this ever stops being full-screen the scrim has stopped covering. */
-    s_modal_p.backdrop_color = 0x88000000U;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.backdrop_color = 0x88000000U;
+    er_node_set_props(s_modal, &s_modal_props);
     const long modal_dirty = frame_distinct();
-    if (modal_dirty < SCREEN_PX / 2)
+    if (modal_dirty < SCREEN_PIXELS / 2)
     {
-        fprintf(stderr, "  dirtying the modal repainted only %ld px of %ld\n", modal_dirty, SCREEN_PX);
+        fprintf(stderr, "  dirtying the modal repainted only %ld px of %ld\n", modal_dirty, SCREEN_PIXELS);
         return fail("dirtying a full-screen modal did not repaint the screen (scrim coverage lost?)");
     }
 
     /* --- closing the modal takes the scrim off the whole page --- */
-    s_modal_p.backdrop_color = 0x99000000U;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.backdrop_color = 0x99000000U;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     frame_distinct();
     long stale = 0;
@@ -413,38 +432,38 @@ int main(void)
      * hide. Every demo happens to give its Modal a full-screen style, which hid this. */
     er_reset();
     build_scene();
-    s_modal_p.left = 60; /* deliberately NOT full-screen */
-    s_modal_p.top = 200;
-    s_modal_p.width = 200;
-    s_modal_p.height = 150;
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.left = 60; /* deliberately NOT full-screen */
+    s_modal_props.top = 200;
+    s_modal_props.width = 200;
+    s_modal_props.height = 150;
+    s_modal_props.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     frame_distinct();
 
-    const int px_x = 40, px_y = 40; /* over the page node, far outside the small modal box */
-    const uint32_t unscrimmed = at(px_x, px_y);
+    const int probe_x = 40, probe_y = 40; /* over the page node, far outside the small modal box */
+    const uint32_t unscrimmed = at(probe_x, probe_y);
 
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
-    if (at(px_x, px_y) == unscrimmed)
+    if (at(probe_x, probe_y) == unscrimmed)
     {
-        fprintf(stderr, "  (%d,%d) still %06X with the modal shown\n", px_x, px_y, unscrimmed);
+        fprintf(stderr, "  (%d,%d) still %06X with the modal shown\n", probe_x, probe_y, unscrimmed);
         return fail("a non-full-screen modal did not scrim the page outside its own box");
     }
     if (dirty_rect_spans_root("show"))
         return fail("raising a scrim did not report a full-root dirty rect");
 
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     if (dirty_rect_spans_root("hide"))
         return fail("dropping a scrim did not report a full-root dirty rect");
     frame_distinct();
-    if (at(px_x, px_y) != unscrimmed)
+    if (at(probe_x, probe_y) != unscrimmed)
     {
-        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", px_x, px_y, at(px_x, px_y), unscrimmed);
+        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", probe_x, probe_y, at(probe_x, probe_y), unscrimmed);
         return fail("hiding a non-full-screen modal left its scrim on the page");
     }
     long stale_small = 0;
@@ -459,15 +478,15 @@ int main(void)
     }
 
     /* An on-screen non-full-screen modal must still cost nothing while idle. */
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     frame_distinct();
-    for (int i = 0; i < 3; i++)
+    for (int frame_index = 0; frame_index < 3; frame_index++)
         if (frame_distinct() != 0)
             return fail("a non-full-screen modal repainted on an idle frame");
 
-#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SW) && (ERUI_XFORM_H + 1 < SH)
+#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SCREEN_WIDTH) && (ERUI_XFORM_H + 1 < SCREEN_HEIGHT)
     /* --- a TRANSFORMED modal owes the same root-wide scrim damage (issue #142) ---
      *
      * The pre-pass measures a node with a scale/rotate transform down a different branch, and that
@@ -484,28 +503,28 @@ int main(void)
      * whatever damage this pre-pass produced: the configuration where damage alone decides the scrim. */
     er_reset();
     build_scene();
-    s_modal_p.left = 60;
-    s_modal_p.top = 200;
-    s_modal_p.width = (int16_t)(ERUI_XFORM_W + 1);
-    s_modal_p.height = (int16_t)(ERUI_XFORM_H + 1);
-    s_modal_p.transform_scale_x = 1.0f;
-    s_modal_p.transform_scale_y = 1.0f;
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.left = 60;
+    s_modal_props.top = 200;
+    s_modal_props.width = (int16_t)(ERUI_XFORM_W + 1);
+    s_modal_props.height = (int16_t)(ERUI_XFORM_H + 1);
+    s_modal_props.transform_scale_x = 1.0f;
+    s_modal_props.transform_scale_y = 1.0f;
+    s_modal_props.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     frame_distinct();
 
-    if (er_transform_source_fits(s_modal_p.width, s_modal_p.height))
+    if (er_transform_source_fits(s_modal_props.width, s_modal_props.height))
         return fail("the transformed modal fits the transform source — it is not on the intended path");
 
-    const uint32_t xf_clean = at(px_x, px_y); /* over the page node, far outside the modal's box */
+    const uint32_t transformed_clean = at(probe_x, probe_y); /* over the page node, far outside the modal's box */
 
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
-    if (at(px_x, px_y) == xf_clean)
+    if (at(probe_x, probe_y) == transformed_clean)
     {
-        fprintf(stderr, "  (%d,%d) still %06X with the transformed modal shown\n", px_x, px_y, xf_clean);
+        fprintf(stderr, "  (%d,%d) still %06X with the transformed modal shown\n", probe_x, probe_y, transformed_clean);
         return fail("a transformed modal did not scrim the page outside its own box");
     }
     if (dirty_rect_spans_root("transformed show"))
@@ -514,49 +533,50 @@ int main(void)
     /* Repaint an unrelated page node while the modal is up. With the scrim damaged to the modal's box
      * only, the backdrop fill lands on THIS damage too — a stray dark patch out on the page that the
      * hide below then has no reason to erase. */
-    s_page_p.background_color = 0xFF88CCF0U;
-    er_node_set_props(s_page_node, &s_page_p);
+    s_page_props.background_color = 0xFF88CCF0U;
+    er_node_set_props(s_page_node, &s_page_props);
     frame_distinct();
 
-    s_modal_p.modal_visible = 0;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 0;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     if (dirty_rect_spans_root("transformed hide"))
         return fail("dropping a transformed modal's scrim did not report a full-root dirty rect");
     frame_distinct();
 
-    if (at(px_x, px_y) != 0x88CCF0u)
+    if (at(probe_x, probe_y) != 0x88CCF0u)
     {
-        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", px_x, px_y, at(px_x, px_y), 0x88CCF0u);
+        fprintf(stderr, "  (%d,%d) is %06X, expected %06X\n", probe_x, probe_y, at(probe_x, probe_y), 0x88CCF0u);
         return fail("hiding a transformed modal left scrim on a node that repainted under it");
     }
-    long stale_xf = 0;
+    long transformed_stale = 0;
     for (int y = 0; y < 20; y++)
         for (int x = 200; x < 260; x++)
             if (at(x, y) != 0x203040u)
-                stale_xf++;
-    if (stale_xf != 0)
+                transformed_stale++;
+    if (transformed_stale != 0)
     {
-        fprintf(stderr, "  %ld px still scrimmed\n", stale_xf);
+        fprintf(stderr, "  %ld px still scrimmed\n", transformed_stale);
         return fail("hiding a transformed modal left scrim residue on the page");
     }
 
     /* And it must still cost nothing while it sits there — the shared handling is reached only for a
      * modal that is source-dirty or moved, exactly like the untransformed one. */
-    s_modal_p.modal_visible = 1;
-    er_node_set_props(s_modal, &s_modal_p);
+    s_modal_props.modal_visible = 1;
+    er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();
     frame_distinct();
-    for (int i = 0; i < 3; i++)
+    for (int frame_index = 0; frame_index < 3; frame_index++)
         if (frame_distinct() != 0)
             return fail("a transformed modal repainted on an idle frame");
 #endif /* ERUI_TRANSFORMS_FULL && the modal fits on screen without covering it */
 
-    printf(
-        "PASS: modal + scrim — idle frames paint nothing; a %ldpx control repaints <= %ldpx;\n", ctrl_px, ctrl_px * 2);
+    printf("PASS: modal + scrim — idle frames paint nothing; a %ldpx control repaints <= %ldpx;\n",
+           control_pixels,
+           control_pixels * 2);
     printf("      the scrim does not drift; a non-full-screen modal scrims and un-scrims the whole\n");
     printf("      page; the modal node itself is full-screen by design\n");
-#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SW) && (ERUI_XFORM_H + 1 < SH)
+#if ERUI_TRANSFORMS_FULL && (ERUI_XFORM_W + 1 < SCREEN_WIDTH) && (ERUI_XFORM_H + 1 < SCREEN_HEIGHT)
     printf("      a %dx%d transformed modal (past the %dx%d transform source) does the same\n",
            ERUI_XFORM_W + 1,
            ERUI_XFORM_H + 1,

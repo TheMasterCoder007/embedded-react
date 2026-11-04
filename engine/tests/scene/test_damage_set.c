@@ -33,9 +33,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-static int fail(const char* msg)
+static int fail(const char* message)
 {
-    fprintf(stderr, "FAIL: %s\n", msg);
+    fprintf(stderr, "FAIL: %s\n", message);
     return EXIT_FAILURE;
 }
 
@@ -44,23 +44,24 @@ static int fail(const char* msg)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief True when the two rects overlap OR touch (closed-interval test — the set must merge both). */
-static bool rects_touch(const ERRect* a, const ERRect* b)
+static bool rects_touch(const ERRect* first, const ERRect* second)
 {
-    return !(a->x + a->w < b->x || b->x + b->w < a->x || a->y + a->h < b->y || b->y + b->h < a->y);
+    return !(first->x + first->w < second->x || second->x + second->w < first->x || first->y + first->h < second->y
+             || second->y + second->h < first->y);
 }
 
 /** @brief Asserts the set's core invariant: pairwise disjoint AND non-abutting. */
-static bool check_disjoint(const ERDamageSet* s)
+static bool check_disjoint(const ERDamageSet* damage)
 {
-    for (uint8_t i = 0; i < s->count; i++)
+    for (uint8_t rect_index = 0; rect_index < damage->count; rect_index++)
     {
-        if (s->rects[i].w <= 0 || s->rects[i].h <= 0)
+        if (damage->rects[rect_index].w <= 0 || damage->rects[rect_index].h <= 0)
         {
             return false; /* an empty rect must never be stored */
         }
-        for (uint8_t j = (uint8_t)(i + 1U); j < s->count; j++)
+        for (uint8_t other_index = (uint8_t)(rect_index + 1U); other_index < damage->count; other_index++)
         {
-            if (rects_touch(&s->rects[i], &s->rects[j]))
+            if (rects_touch(&damage->rects[rect_index], &damage->rects[other_index]))
             {
                 return false;
             }
@@ -70,12 +71,14 @@ static bool check_disjoint(const ERDamageSet* s)
 }
 
 /** @brief True when the point lies inside some stored rect. */
-static bool covers_point(const ERDamageSet* s, int px, int py)
+static bool covers_point(const ERDamageSet* damage, int pixel_x, int pixel_y)
 {
-    for (uint8_t i = 0; i < s->count; i++)
+    for (uint8_t rect_index = 0; rect_index < damage->count; rect_index++)
     {
-        if (px >= s->rects[i].x && px < s->rects[i].x + s->rects[i].w && py >= s->rects[i].y
-            && py < s->rects[i].y + s->rects[i].h)
+        if (pixel_x >= damage->rects[rect_index].x
+            && pixel_x < damage->rects[rect_index].x + damage->rects[rect_index].w
+            && pixel_y >= damage->rects[rect_index].y
+            && pixel_y < damage->rects[rect_index].y + damage->rects[rect_index].h)
         {
             return true;
         }
@@ -84,18 +87,18 @@ static bool covers_point(const ERDamageSet* s, int px, int py)
 }
 
 /** @brief True when every pixel of the rect is covered (corners + edge midpoints + centre samples). */
-static bool covers_rect(const ERDamageSet* s, const ERRect* r)
+static bool covers_rect(const ERDamageSet* damage, const ERRect* rect)
 {
     /* Disjoint axis-aligned rects can't jointly cover an input rect unless one rect alone covers it
      * (a straddled input would have been merged), so sampling is sufficient — but sample densely
      * anyway to catch a hypothetical splitting bug: all 9 anchor points. */
-    const int xs[3] = {r->x, r->x + r->w / 2, r->x + r->w - 1};
-    const int ys[3] = {r->y, r->y + r->h / 2, r->y + r->h - 1};
-    for (int i = 0; i < 3; i++)
+    const int sample_xs[3] = {rect->x, rect->x + rect->w / 2, rect->x + rect->w - 1};
+    const int sample_ys[3] = {rect->y, rect->y + rect->h / 2, rect->y + rect->h - 1};
+    for (int sample_x_index = 0; sample_x_index < 3; sample_x_index++)
     {
-        for (int j = 0; j < 3; j++)
+        for (int sample_y_index = 0; sample_y_index < 3; sample_y_index++)
         {
-            if (!covers_point(s, xs[i], ys[j]))
+            if (!covers_point(damage, sample_xs[sample_x_index], sample_ys[sample_y_index]))
             {
                 return false;
             }
@@ -119,24 +122,24 @@ static void history_reset(void)
 }
 
 /** @brief er_damage_set_add + invariant re-check against everything added so far. */
-static bool add_checked(ERDamageSet* s, int x, int y, int w, int h)
+static bool add_checked(ERDamageSet* damage, int x, int y, int width, int height)
 {
-    er_damage_set_add(s, x, y, w, h);
-    if (w > 0 && h > 0 && g_history_count < MAX_HISTORY)
+    er_damage_set_add(damage, x, y, width, height);
+    if (width > 0 && height > 0 && g_history_count < MAX_HISTORY)
     {
         g_history[g_history_count].x = x;
         g_history[g_history_count].y = y;
-        g_history[g_history_count].w = w;
-        g_history[g_history_count].h = h;
+        g_history[g_history_count].w = width;
+        g_history[g_history_count].h = height;
         g_history_count++;
     }
-    if (!check_disjoint(s))
+    if (!check_disjoint(damage))
     {
         return false;
     }
-    for (int i = 0; i < g_history_count; i++)
+    for (int history_index = 0; history_index < g_history_count; history_index++)
     {
-        if (!covers_rect(s, &g_history[i]))
+        if (!covers_rect(damage, &g_history[history_index]))
         {
             return false;
         }
@@ -150,47 +153,47 @@ static bool add_checked(ERDamageSet* s, int x, int y, int w, int h)
 
 static int check_basics(void)
 {
-    ERDamageSet s = {0};
+    ERDamageSet damage = {0};
     history_reset();
 
     /* Empty inputs are ignored. */
-    er_damage_set_add(&s, 10, 10, 0, 5);
-    er_damage_set_add(&s, 10, 10, 5, 0);
-    er_damage_set_add(&s, 10, 10, -3, -3);
-    if (s.count != 0U)
+    er_damage_set_add(&damage, 10, 10, 0, 5);
+    er_damage_set_add(&damage, 10, 10, 5, 0);
+    er_damage_set_add(&damage, 10, 10, -3, -3);
+    if (damage.count != 0U)
         return fail("empty rects were stored");
-    ERRect b;
-    if (er_damage_set_bounds(&s, &b) || b.w != 0 || b.h != 0)
+    ERRect bounds;
+    if (er_damage_set_bounds(&damage, &bounds) || bounds.w != 0 || bounds.h != 0)
         return fail("empty set reported bounds");
-    if (er_damage_set_area(&s) != 0U)
+    if (er_damage_set_area(&damage) != 0U)
         return fail("empty set reported area");
 
     /* Two far-apart rects stay separate — THE point of the set. */
-    if (!add_checked(&s, 0, 0, 30, 30))
+    if (!add_checked(&damage, 0, 0, 30, 30))
         return fail("invariant after first add");
-    if (!add_checked(&s, 170, 170, 30, 30))
+    if (!add_checked(&damage, 170, 170, 30, 30))
         return fail("invariant after second add");
-    if (s.count != 2U)
+    if (damage.count != 2U)
         return fail("two disjoint rects were merged");
-    if (er_damage_set_area(&s) != 1800U)
+    if (er_damage_set_area(&damage) != 1800U)
         return fail("area is not the sum of the two rects");
-    if (!er_damage_set_bounds(&s, &b) || b.x != 0 || b.y != 0 || b.w != 200 || b.h != 200)
+    if (!er_damage_set_bounds(&damage, &bounds) || bounds.x != 0 || bounds.y != 0 || bounds.w != 200 || bounds.h != 200)
         return fail("bounds is not the union bbox");
 
     /* Overlap merges. */
-    if (!add_checked(&s, 20, 20, 30, 30))
+    if (!add_checked(&damage, 20, 20, 30, 30))
         return fail("invariant after overlapping add");
-    if (s.count != 2U)
+    if (damage.count != 2U)
         return fail("overlapping rect did not merge");
 
     /* Abutting merges (shares an edge with the 0,0,50,50 merged box). */
-    if (!add_checked(&s, 50, 0, 10, 10))
+    if (!add_checked(&damage, 50, 0, 10, 10))
         return fail("invariant after abutting add");
-    if (s.count != 2U)
+    if (damage.count != 2U)
         return fail("abutting rect did not merge");
 
-    er_damage_set_clear(&s);
-    if (s.count != 0U)
+    er_damage_set_clear(&damage);
+    if (damage.count != 0U)
         return fail("clear did not empty the set");
 
     printf("PASS: basics — empty ignored, disjoint kept apart, overlap/abut merged\n");
@@ -199,21 +202,21 @@ static int check_basics(void)
 
 static int check_cascade(void)
 {
-    ERDamageSet s = {0};
+    ERDamageSet damage = {0};
     history_reset();
 
     /* Two separated rects, then a bridge that touches both: all three must collapse to one. */
-    if (!add_checked(&s, 0, 0, 40, 40))
+    if (!add_checked(&damage, 0, 0, 40, 40))
         return fail("invariant: left rect");
-    if (!add_checked(&s, 100, 0, 40, 40))
+    if (!add_checked(&damage, 100, 0, 40, 40))
         return fail("invariant: right rect");
-    if (s.count != 2U)
+    if (damage.count != 2U)
         return fail("setup: rects merged prematurely");
-    if (!add_checked(&s, 35, 0, 70, 10))
+    if (!add_checked(&damage, 35, 0, 70, 10))
         return fail("invariant: bridge rect");
-    if (s.count != 1U)
+    if (damage.count != 1U)
         return fail("bridge did not cascade-merge both sides");
-    if (s.rects[0].x != 0 || s.rects[0].w != 140)
+    if (damage.rects[0].x != 0 || damage.rects[0].w != 140)
         return fail("cascaded union has the wrong extent");
 
     printf("PASS: cascade — a bridge rect collapses everything it connects\n");
@@ -222,51 +225,51 @@ static int check_cascade(void)
 
 static int check_saturation(void)
 {
-    ERDamageSet s = {0};
+    ERDamageSet damage = {0};
     history_reset();
 
     /* MAX rects in a horizontal row, well apart. */
-    for (int i = 0; i < ER_DAMAGE_RECTS_MAX; i++)
+    for (int rect_index = 0; rect_index < ER_DAMAGE_RECTS_MAX; rect_index++)
     {
-        if (!add_checked(&s, i * 100, 0, 20, 20))
+        if (!add_checked(&damage, rect_index * 100, 0, 20, 20))
             return fail("invariant while filling the pool");
     }
-    if (s.count != (uint8_t)ER_DAMAGE_RECTS_MAX)
+    if (damage.count != (uint8_t)ER_DAMAGE_RECTS_MAX)
         return fail("pool did not fill to MAX");
 
     /* One more, far below: must still be covered (merged somewhere), never dropped. */
-    if (!add_checked(&s, 0, 300, 20, 20))
+    if (!add_checked(&damage, 0, 300, 20, 20))
         return fail("invariant/coverage after saturating add");
-    if (s.count > (uint8_t)ER_DAMAGE_RECTS_MAX)
+    if (damage.count > (uint8_t)ER_DAMAGE_RECTS_MAX)
         return fail("count exceeded MAX");
 
     /* A saturating add adjacent to an existing rect should pick that rect (min waste ~ 0),
      * leaving the others untouched: count stays at MAX. */
-    er_damage_set_clear(&s);
+    er_damage_set_clear(&damage);
     history_reset();
-    for (int i = 0; i < ER_DAMAGE_RECTS_MAX; i++)
+    for (int rect_index = 0; rect_index < ER_DAMAGE_RECTS_MAX; rect_index++)
     {
-        if (!add_checked(&s, i * 100, 0, 20, 20))
+        if (!add_checked(&damage, rect_index * 100, 0, 20, 20))
             return fail("invariant while refilling the pool");
     }
-    if (!add_checked(&s, 22, 0, 20, 20)) /* 2px gap from rect at x=0..20: nearest, min waste */
+    if (!add_checked(&damage, 22, 0, 20, 20)) /* 2px gap from rect at x=0..20: nearest, min waste */
         return fail("invariant after min-waste add");
-    if (s.count != (uint8_t)ER_DAMAGE_RECTS_MAX)
+    if (damage.count != (uint8_t)ER_DAMAGE_RECTS_MAX)
         return fail("min-waste merge changed the rect count unexpectedly");
     /* The merged rect must be the near-left one grown rightward, not a far pairing. */
     bool found = false;
-    for (uint8_t i = 0; i < s.count; i++)
+    for (uint8_t rect_index = 0; rect_index < damage.count; rect_index++)
     {
-        if (s.rects[i].x == 0 && s.rects[i].x + s.rects[i].w == 42)
+        if (damage.rects[rect_index].x == 0 && damage.rects[rect_index].x + damage.rects[rect_index].w == 42)
             found = true;
     }
     if (!found)
         return fail("min-waste merge did not pick the adjacent rect");
 
     /* Stress: a burst of scattered + overlapping rects keeps both invariants throughout. */
-    er_damage_set_clear(&s);
+    er_damage_set_clear(&damage);
     history_reset();
-    static const int seq[][4] = {
+    static const int sequence[][4] = {
         {5, 5, 30, 30},
         {200, 5, 30, 30},
         {5, 200, 30, 30},
@@ -280,78 +283,85 @@ static int check_saturation(void)
         {150, 20, 60, 60},
         {20, 150, 60, 60},
     };
-    for (size_t i = 0; i < sizeof(seq) / sizeof(seq[0]); i++)
+    for (size_t step_index = 0; step_index < sizeof(sequence) / sizeof(sequence[0]); step_index++)
     {
-        if (!add_checked(&s, seq[i][0], seq[i][1], seq[i][2], seq[i][3]))
+        if (!add_checked(&damage,
+                         sequence[step_index][0],
+                         sequence[step_index][1],
+                         sequence[step_index][2],
+                         sequence[step_index][3]))
             return fail("invariant/coverage broke during the stress sequence");
     }
 
-    printf("PASS: saturation — MAX+1 merges min-waste pair, coverage never dropped (count=%u)\n", (unsigned)s.count);
+    printf("PASS: saturation — MAX+1 merges min-waste pair, coverage never dropped (count=%u)\n",
+           (unsigned)damage.count);
     return EXIT_SUCCESS;
 }
 
 static int check_limit(void)
 {
-    ERDamageSet s = {0};
+    ERDamageSet damage = {0};
     history_reset();
 
     /* A widely-spread row of rects, one per slot. */
     const int fill = (ER_DAMAGE_RECTS_MAX < 8) ? ER_DAMAGE_RECTS_MAX : 8;
-    for (int i = 0; i < fill; i++)
+    for (int rect_index = 0; rect_index < fill; rect_index++)
     {
-        if (!add_checked(&s, i * 100, i * 100, 20, 20))
+        if (!add_checked(&damage, rect_index * 100, rect_index * 100, 20, 20))
             return fail("invariant while filling for the limit test");
     }
 
     /* Above the current count: nothing moves. */
-    const uint8_t before = s.count;
-    er_damage_set_limit(&s, (uint8_t)(before + 3U));
-    if (s.count != before)
+    const uint8_t before = damage.count;
+    er_damage_set_limit(&damage, (uint8_t)(before + 3U));
+    if (damage.count != before)
         return fail("limit above the count changed the set");
 
     /* Trim to 2: coverage of every input must survive, and the set must stay disjoint. */
-    er_damage_set_limit(&s, 2U);
-    if (s.count > 2U)
+    er_damage_set_limit(&damage, 2U);
+    if (damage.count > 2U)
         return fail("limit did not trim to the requested count");
-    if (!check_disjoint(&s))
+    if (!check_disjoint(&damage))
         return fail("limit broke the disjointness invariant");
-    for (int i = 0; i < g_history_count; i++)
+    for (int history_index = 0; history_index < g_history_count; history_index++)
     {
-        if (!covers_rect(&s, &g_history[i]))
+        if (!covers_rect(&damage, &g_history[history_index]))
             return fail("limit dropped coverage of an earlier rect");
     }
 
     /* Trimming to 1 is the old single-bounding-box behaviour. */
     ERRect bounds;
-    er_damage_set_bounds(&s, &bounds);
-    er_damage_set_limit(&s, 1U);
-    if (s.count != 1U)
+    er_damage_set_bounds(&damage, &bounds);
+    er_damage_set_limit(&damage, 1U);
+    if (damage.count != 1U)
         return fail("limit to 1 did not collapse to a single rect");
-    if (s.rects[0].x != bounds.x || s.rects[0].y != bounds.y || s.rects[0].w != bounds.w || s.rects[0].h != bounds.h)
+    if (damage.rects[0].x != bounds.x || damage.rects[0].y != bounds.y || damage.rects[0].w != bounds.w
+        || damage.rects[0].h != bounds.h)
         return fail("the collapsed rect is not the covering bounding box");
 
     /* Zero empties it; a limit on an empty set is a no-op. */
-    er_damage_set_limit(&s, 0U);
-    if (s.count != 0U)
+    er_damage_set_limit(&damage, 0U);
+    if (damage.count != 0U)
         return fail("limit to 0 did not empty the set");
-    er_damage_set_limit(&s, 4U);
-    if (s.count != 0U)
+    er_damage_set_limit(&damage, 4U);
+    if (damage.count != 0U)
         return fail("limit on an empty set produced rects");
 
     /* The trim rule matches the saturating add's: an adjacent pair is the cheapest fuse. */
-    er_damage_set_clear(&s);
+    er_damage_set_clear(&damage);
     history_reset();
-    if (!add_checked(&s, 0, 0, 20, 20) || !add_checked(&s, 22, 0, 20, 20) || !add_checked(&s, 500, 500, 20, 20))
+    if (!add_checked(&damage, 0, 0, 20, 20) || !add_checked(&damage, 22, 0, 20, 20)
+        || !add_checked(&damage, 500, 500, 20, 20))
         return fail("invariant while building the min-waste trim case");
-    er_damage_set_limit(&s, 2U);
-    if (s.count != 2U)
+    er_damage_set_limit(&damage, 2U);
+    if (damage.count != 2U)
         return fail("min-waste trim did not land on 2 rects");
     bool fused = false, far_kept = false;
-    for (uint8_t i = 0; i < s.count; i++)
+    for (uint8_t rect_index = 0; rect_index < damage.count; rect_index++)
     {
-        if (s.rects[i].x == 0 && s.rects[i].w == 42)
+        if (damage.rects[rect_index].x == 0 && damage.rects[rect_index].w == 42)
             fused = true;
-        if (s.rects[i].x == 500 && s.rects[i].w == 20)
+        if (damage.rects[rect_index].x == 500 && damage.rects[rect_index].w == 20)
             far_kept = true;
     }
     if (!fused || !far_kept)
@@ -363,17 +373,17 @@ static int check_limit(void)
 
 int main(void)
 {
-    int rc = check_basics();
-    if (rc != EXIT_SUCCESS)
-        return rc;
-    rc = check_cascade();
-    if (rc != EXIT_SUCCESS)
-        return rc;
-    rc = check_saturation();
-    if (rc != EXIT_SUCCESS)
-        return rc;
-    rc = check_limit();
-    if (rc != EXIT_SUCCESS)
-        return rc;
+    int result = check_basics();
+    if (result != EXIT_SUCCESS)
+        return result;
+    result = check_cascade();
+    if (result != EXIT_SUCCESS)
+        return result;
+    result = check_saturation();
+    if (result != EXIT_SUCCESS)
+        return result;
+    result = check_limit();
+    if (result != EXIT_SUCCESS)
+        return result;
     return EXIT_SUCCESS;
 }
