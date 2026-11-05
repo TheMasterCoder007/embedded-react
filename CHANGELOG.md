@@ -55,6 +55,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `ERUI_*` build flags: `ERRect::w` is now `width`, `er_anim_*` is `er_animation_*`, `ERB_ERR_*` is `ERB_ERROR_*`
   and `ERUI_SCRATCH_W` is `ERUI_SCRATCH_WIDTH`, for example. In JS, the keyboard's `gridCols` is now `gridColumns`,
   and the SVG `fillGrad` and `strokeGrad` props are `fillGradient` and `strokeGradient`.
+- **Breaking:** the npm packages need Node 22.18 or later. Node 18 and 20 are past their end of life.
 - Flow B refuses two image imports that share a file name, which used to show one image for both.
 - A container whose asset packs fail to load, or don't fit the image and font registries, now fails
   with `ER_CONTAINER_BAD_ASSETS` instead of running with missing images and fonts. That includes an

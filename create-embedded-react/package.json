@@ -28,7 +28,7 @@
     "create-embedded-react": "index.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.18"
   },
   "scripts": {
     "sync-templates": "node sync-templates.mjs",
