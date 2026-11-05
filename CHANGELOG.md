@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+
+## [0.20.0] - 2026-11-05
 ### Added
 
 - One Flow B package for every panel size. The compiler finds the layouts from the app's breakpoints, proves every
@@ -1545,7 +1547,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.16.0...v0.17.0

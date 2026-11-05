@@ -111,7 +111,7 @@ npm install embedded-react react@18.3.1     # embedded-react pins React to 18.3.
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.19.0
+  GIT_TAG        v0.20.0
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -128,19 +128,19 @@ target_link_libraries(my_firmware PRIVATE erb-runtime)
 display backend and, for Flow A, QuickJS. The runtime is also on the component registry, and brings the engine with it:
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react-runtime^0.19.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react-runtime^0.20.0"
 ```
 
 The engine on its own is `TheMasterCoder007/embedded-react`:
 
 ```
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.19.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.20.0"
 ```
 
 **PlatformIO** — the engine and the Flow B runtime, as one library. It doesn't include the QuickJS bridge yet:
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.19.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.20.0
 ```
 
 [Installation](https://embedded-react.dev/getting-started/installation) has the details for each.
