@@ -29,7 +29,7 @@
     "aot"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=22.18"
   },
   "types": "./src/embedded-react/index.d.ts",
   "exports": {
