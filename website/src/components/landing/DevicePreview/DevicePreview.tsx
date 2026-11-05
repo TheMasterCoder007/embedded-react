@@ -4,7 +4,11 @@ import clsx from 'clsx';
 import styles from './DevicePreview.module.css';
 
 /** What the hero's sample app draws, as the panel would show it. */
-export default function DevicePreview({className}: {className?: string}): ReactNode {
+export default function DevicePreview({
+  className,
+}: {
+  className?: string;
+}): ReactNode {
   return (
     <figure className={clsx(styles.device, className)}>
       <div className={styles.screen}>

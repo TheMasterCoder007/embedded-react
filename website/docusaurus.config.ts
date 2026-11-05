@@ -8,7 +8,8 @@ const repoUrl = 'https://github.com/TheMasterCoder007/embedded-react';
 
 const config: Config = {
   title: 'Embedded React',
-  tagline: 'React Native for embedded MCUs. Write React, flash it, and the UI runs on the chip.',
+  tagline:
+    'React Native for embedded MCUs. Write React, flash it, and the UI runs on the chip.',
   favicon: 'img/favicon.png',
 
   future: {
@@ -70,7 +71,12 @@ const config: Config = {
         src: 'img/logo.svg',
       },
       items: [
-        {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
+        {
+          type: 'docSidebar',
+          sidebarId: 'docs',
+          position: 'left',
+          label: 'Docs',
+        },
         {to: '/api', label: 'API', position: 'left'},
         {to: '/playground', label: 'Playground', position: 'left'},
         {to: '/changelog', label: 'Changelog', position: 'right'},
@@ -101,7 +107,10 @@ const config: Config = {
           items: [
             {label: 'GitHub', href: repoUrl},
             {label: 'Issues', href: `${repoUrl}/issues`},
-            {label: 'npm', href: 'https://www.npmjs.com/package/embedded-react'},
+            {
+              label: 'npm',
+              href: 'https://www.npmjs.com/package/embedded-react',
+            },
           ],
         },
       ],

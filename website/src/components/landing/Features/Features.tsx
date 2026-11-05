@@ -47,8 +47,10 @@ export default function Features(): ReactNode {
       eyebrow="Why Embedded React"
       title="Not React talking to a microcontroller. React on the microcontroller.">
       <div className={styles.grid}>
-        {features.map((feature) => (
-          <article key={feature.title} className={clsx(card.card, card.interactive, styles.feature)}>
+        {features.map(feature => (
+          <article
+            key={feature.title}
+            className={clsx(card.card, card.interactive, styles.feature)}>
             <svg viewBox="0 0 24 24" className={styles.icon} aria-hidden="true">
               {icons[feature.icon]}
             </svg>

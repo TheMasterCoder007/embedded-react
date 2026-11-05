@@ -25,7 +25,12 @@ export default function Logo(props: Props): ReactNode {
       {logo && (
         <div className={imageClassName}>
           {/* Decorative: the wordmark beside it carries the name. */}
-          <ThemedImage sources={sources} height={logo.height} width={logo.width} alt="" />
+          <ThemedImage
+            sources={sources}
+            height={logo.height}
+            width={logo.width}
+            alt=""
+          />
         </div>
       )}
       <b className={titleClassName}>

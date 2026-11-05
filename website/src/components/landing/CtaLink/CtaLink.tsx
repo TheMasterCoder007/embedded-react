@@ -12,7 +12,11 @@ type Props = {
 };
 
 /** A large call-to-action button, colored for a navy band. */
-export default function CtaLink({variant = 'primary', children, ...target}: Props): ReactNode {
+export default function CtaLink({
+  variant = 'primary',
+  children,
+  ...target
+}: Props): ReactNode {
   return (
     <Link className={clsx('button button--lg', styles[variant])} {...target}>
       {children}
@@ -21,6 +25,12 @@ export default function CtaLink({variant = 'primary', children, ...target}: Prop
 }
 
 /** Lays out a row of CtaLinks. */
-export function CtaRow({className, children}: {className?: string; children: ReactNode}): ReactNode {
+export function CtaRow({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}): ReactNode {
   return <div className={clsx(styles.row, className)}>{children}</div>;
 }

@@ -80,7 +80,7 @@ static uint16_t s_root_tag = ER_INVALID_TAG;
 static int16_t s_bounds_width = 0; /**< er_set_screen_bounds(): the largest the root may be; 0 = no limit. */
 static int16_t s_bounds_height = 0;
 static uint64_t s_now_ms = 0;
-static uint16_t s_focused_input_tag = ER_INVALID_TAG; /**< Currently focused TextInput node. */
+static uint16_t s_focused_input_tag = ER_INVALID_TAG;         /**< Currently focused TextInput node. */
 static uint8_t s_last_cursor_phase = ER_CURSOR_PHASE_UNKNOWN; /**< Last cursor blink phase (0/1) seen by er_commit. */
 static bool s_keyboard_dirty =
     false; /**< Set when the keyboard shows/hides/switches layer so the next commit repaints it. */
@@ -1372,8 +1372,8 @@ typedef struct
         footprint_height; /**< The footprint itself: either the transformed AABB or the raw box, the
 latter already grown by the arc/shadow reach the fallback paints. */
     int hedge_x, hedge_y, hedge_width,
-        hedge_height;   /**< The OTHER candidate footprint — meaningful only when `hedge`. */
-    bool hedge;         /**< Damage both candidates: which one the paint uses is not decided here. */
+        hedge_height; /**< The OTHER candidate footprint — meaningful only when `hedge`. */
+    bool hedge;       /**< Damage both candidates: which one the paint uses is not decided here. */
 } NodeTransformDamage;
 
 #if ERUI_TRANSFORMS_FULL
@@ -3805,8 +3805,8 @@ void er_props_default(ERProps* props)
 
     /* Type-specific fields whose engine default is non-zero. Harmless for other node types, since
        er_node_set_props applies only the fields relevant to the node's type. */
-    props->editable = 1;               /* TextInput editable by default. */
-    props->animating = 1;              /* ActivityIndicator spins by default. */
+    props->editable = 1;                           /* TextInput editable by default. */
+    props->animating = 1;                          /* ActivityIndicator spins by default. */
     props->shadow_color = ER_DEFAULT_SHADOW_COLOR; /* Opaque black shadow unless overridden. */
 }
 

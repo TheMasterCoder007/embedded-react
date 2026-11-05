@@ -38,14 +38,8 @@ import {Pressable as HostPressable} from './components.js';
  * @returns {*} A host <Pressable> element.
  */
 export const Pressable = forwardRef(function Pressable(props = {}, ref) {
-  const {
-    disabled,
-    onPress,
-    onLongPress,
-    onPressIn,
-    onPressOut,
-    ...rest
-  } = props;
+  const {disabled, onPress, onLongPress, onPressIn, onPressOut, ...rest} =
+    props;
 
   return createElement(HostPressable, {
     ...rest,

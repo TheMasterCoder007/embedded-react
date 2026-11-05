@@ -12,27 +12,42 @@ const flows = [
   {
     tag: 'Flow A · runtime',
     title: 'React on QuickJS',
-    steps: ['JSX', 'esbuild bundle', 'QuickJS bytecode', 'React reconciler on the chip', 'C engine'],
+    steps: [
+      'JSX',
+      'esbuild bundle',
+      'QuickJS bytecode',
+      'React reconciler on the chip',
+      'C engine',
+    ],
     body: 'Full runtime dynamism: live state, anything JavaScript can express, and hot reload. Wants external RAM for the JavaScript heap: PSRAM on an ESP32-S3, or SDRAM on an STM32H7.',
   },
   {
     tag: 'Flow B · ahead of time',
     title: 'JSX compiled to a package',
-    steps: ['JSX', 'AOT compiler', 'Verified package', 'Flow B runtime on the chip', 'C engine'],
+    steps: [
+      'JSX',
+      'AOT compiler',
+      'Verified package',
+      'Flow B runtime on the chip',
+      'C engine',
+    ],
     body: 'State, handlers and animations are resolved at build time into a package a small runtime verifies and runs. Smaller, deterministic, and at home on MCUs with only internal RAM.',
   },
 ];
 
 export default function Flows(): ReactNode {
   return (
-    <Section eyebrow="Two ways to ship" title="The same app, resolved at runtime or at compile time." tinted>
+    <Section
+      eyebrow="Two ways to ship"
+      title="The same app, resolved at runtime or at compile time."
+      tinted>
       <div className={styles.flows}>
-        {flows.map((flow) => (
+        {flows.map(flow => (
           <article key={flow.tag} className={clsx(card.card, styles.flow)}>
             <p className={styles.tag}>{flow.tag}</p>
             <Heading as="h3">{flow.title}</Heading>
             <ol className={styles.steps}>
-              {flow.steps.map((step) => (
+              {flow.steps.map(step => (
                 <li key={step}>{step}</li>
               ))}
             </ol>

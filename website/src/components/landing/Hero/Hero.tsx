@@ -43,7 +43,8 @@ export default function Hero(): ReactNode {
           </Heading>
           <p className={styles.lead}>React Native for embedded MCUs.</p>
           <p className={styles.sub}>
-            Write React, flash it, and the UI runs on the chip. No browser, no phone, no operating system.
+            Write React, flash it, and the UI runs on the chip. No browser, no
+            phone, no operating system.
           </p>
           <CtaRow className={styles.buttons}>
             <CtaLink to="/getting-started">Get started</CtaLink>

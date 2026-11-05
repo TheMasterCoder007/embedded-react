@@ -34,28 +34,19 @@ cmake --build build --target format        # rewrite in place
 cmake --build build --target format-check  # dry run: --Werror, no edits
 ```
 
-**JavaScript** is formatted by Prettier with the root `.prettierrc.cjs`. Prettier is a dev tool of
-the npm package, not a dependency of it or of the scaffolded template, so run it from there over
-the whole repository:
+**JavaScript, TypeScript and this site's Markdown** are formatted by Prettier with the root
+`.prettierrc.cjs`. The repository root has its own `package.json` that pins the Prettier version,
+so install it once there and run it from there:
 
 ```bash
-cd packages/embedded-react
+npm install            # once, at the repository root
 npm run format         # rewrite in place
 npm run format:check   # dry-run
 ```
 
-A bare `npx prettier` from the repository root resolves a different Prettier and flags unrelated
-files; use the package's.
-
-**Markdown** for this site is formatted by the same Prettier, but `npm run format` covers only
-JavaScript, so pass the pages explicitly. `--prose-wrap preserve` keeps the line breaks as written
-and still aligns the tables:
-
-```bash
-cd packages/embedded-react
-npx prettier --prose-wrap preserve --write "../../website/docs/**/*.{md,mdx}" \
-  "!../../website/docs/{changelog,roadmap}.md"
-```
+Markdown keeps its line breaks as written (Prettier's default `proseWrap: "preserve"`), and only
+the tables are aligned. `changelog.md` and `roadmap.md` are copies synced from the root files, so
+they are left out.
 
 Neither formatter runs in CI, so run them before you push.
 

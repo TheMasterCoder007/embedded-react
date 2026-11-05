@@ -20,7 +20,11 @@ type Props = {
 const chrome = EditorView.theme({
   '&': {height: '100%', fontSize: '13px'},
   // No ligatures: a beginner should see `>=` as written, not `≥`.
-  '.cm-scroller': {fontFamily: 'var(--er-font-mono)', fontVariantLigatures: 'none', lineHeight: '1.55'},
+  '.cm-scroller': {
+    fontFamily: 'var(--er-font-mono)',
+    fontVariantLigatures: 'none',
+    lineHeight: '1.55',
+  },
   '.cm-content': {padding: '12px 0'},
   '.cm-gutters': {border: 'none'},
 });
@@ -35,7 +39,12 @@ const navy = EditorView.theme(
 );
 
 /** A CodeMirror editor for one file at a time. Uncontrolled: it owns the document between changes. */
-export default function Editor({path, value, dark, onChange}: Props): ReactNode {
+export default function Editor({
+  path,
+  value,
+  dark,
+  onChange,
+}: Props): ReactNode {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const theme = useRef(new Compartment());
@@ -48,11 +57,18 @@ export default function Editor({path, value, dark, onChange}: Props): ReactNode 
       extensions: [
         basicSetup,
         keymap.of([indentWithTab]),
-        javascript({jsx: true, typescript: /\.tsx?$/.test(latest.current.path)}),
+        javascript({
+          jsx: true,
+          typescript: /\.tsx?$/.test(latest.current.path),
+        }),
         chrome,
         theme.current.of(dark ? [oneDark, navy] : []),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged) latest.current.onChange(latest.current.path, update.state.doc.toString());
+        EditorView.updateListener.of(update => {
+          if (update.docChanged)
+            latest.current.onChange(
+              latest.current.path,
+              update.state.doc.toString(),
+            );
         }),
       ],
     });
@@ -83,11 +99,16 @@ export default function Editor({path, value, dark, onChange}: Props): ReactNode 
     const editorView = view.current;
     if (!editorView || shownPath.current !== path) return;
     const current = editorView.state.doc.toString();
-    if (current !== value) editorView.dispatch({changes: {from: 0, to: current.length, insert: value}});
+    if (current !== value)
+      editorView.dispatch({
+        changes: {from: 0, to: current.length, insert: value},
+      });
   }, [path, value]);
 
   useEffect(() => {
-    view.current?.dispatch({effects: theme.current.reconfigure(dark ? [oneDark, navy] : [])});
+    view.current?.dispatch({
+      effects: theme.current.reconfigure(dark ? [oneDark, navy] : []),
+    });
   }, [dark]);
 
   return <div ref={host} className={styles.editor} />;

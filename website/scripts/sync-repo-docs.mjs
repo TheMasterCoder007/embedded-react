@@ -8,8 +8,18 @@ const siteDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = resolve(siteDirectory, '..');
 
 const pages = [
-  {source: 'CHANGELOG.md', output: 'docs/changelog.md', title: 'Changelog', slug: '/changelog'},
-  {source: 'ROADMAP.md', output: 'docs/roadmap.md', title: 'Roadmap', slug: '/roadmap'},
+  {
+    source: 'CHANGELOG.md',
+    output: 'docs/changelog.md',
+    title: 'Changelog',
+    slug: '/changelog',
+  },
+  {
+    source: 'ROADMAP.md',
+    output: 'docs/roadmap.md',
+    title: 'Roadmap',
+    slug: '/roadmap',
+  },
 ];
 
 for (const {source, output, title, slug} of pages) {
@@ -17,8 +27,10 @@ for (const {source, output, title, slug} of pages) {
   // Drop the file's own H1; the front matter title becomes the page heading.
   body = body.replace(/^# .*\n+/, '');
   // Relative links to repo files become GitHub links; anchors and absolute URLs are left alone.
-  body = body.replace(/\]\((?!https?:|#|\/)([^)]+)\)/g, (_match, path) =>
-    `](https://github.com/TheMasterCoder007/embedded-react/blob/master/${path})`,
+  body = body.replace(
+    /\]\((?!https?:|#|\/)([^)]+)\)/g,
+    (_match, path) =>
+      `](https://github.com/TheMasterCoder007/embedded-react/blob/master/${path})`,
   );
   const frontMatter = [
     '---',

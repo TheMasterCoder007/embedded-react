@@ -11,10 +11,14 @@ export default function PlaygroundPage(): ReactNode {
       title="Playground"
       description="Edit a demo app and watch it run live on the C engine, compiled to WebAssembly."
       noFooter>
-      <BrowserOnly fallback={<div className={styles.loading}>Loading the playground…</div>}>
+      <BrowserOnly
+        fallback={
+          <div className={styles.loading}>Loading the playground…</div>
+        }>
         {() => {
           // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
-          const Playground = require('@site/src/components/Playground/Playground').default;
+          const Playground =
+            require('@site/src/components/Playground/Playground').default;
           return <Playground />;
         }}
       </BrowserOnly>

@@ -49,8 +49,8 @@
  */
 typedef struct
 {
-    int x; /**< Left edge. */
-    int y; /**< Top edge. */
+    int x;      /**< Left edge. */
+    int y;      /**< Top edge. */
     int width;  /**< Width in pixels. */
     int height; /**< Height in pixels. */
 } ClipEntry;

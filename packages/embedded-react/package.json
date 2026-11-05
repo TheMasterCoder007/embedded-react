@@ -82,9 +82,7 @@
     "test:runtime": "node test/runtime/run.mjs",
     "test:bytecode": "node test/runtime/run.mjs --bytecode",
     "test:split": "node test/runtime/split-roundtrip.mjs",
-    "typecheck": "tsc -p tsconfig.types.json && tsc -p tsconfig.aot.json && tsc -p tsconfig.frames.json",
-    "format": "cd ../.. && prettier --write \"**/*.{js,jsx,mjs,cjs,mts}\"",
-    "format:check": "cd ../.. && prettier --check \"**/*.{js,jsx,mjs,cjs,mts}\""
+    "typecheck": "tsc -p tsconfig.types.json && tsc -p tsconfig.aot.json && tsc -p tsconfig.frames.json"
   },
   "dependencies": {
     "@babel/code-frame": "^7.29.7",
@@ -105,7 +103,6 @@
     "@types/babel__core": "^7.20.5",
     "@types/node": "^22.20.4",
     "@types/react": "18.3.1",
-    "prettier": "^3.4.2",
     "typescript": "^5.5.0",
     "vitest": "^4.1.11"
   },

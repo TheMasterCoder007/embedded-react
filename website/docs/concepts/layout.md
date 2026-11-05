@@ -45,7 +45,7 @@ most `numberOfLines`; a text that fits on one line is one line tall. As in Yoga,
 measured no wider than its parent's content box, so a long `<Text>` in a row wraps at the row's
 edge, and one that flexes wraps at the width flexing gives it: `flex: 1` text beside a fixed box
 wraps in the space left, and the row grows to hold it. A row with `overflow: 'scroll'` offers no
-bound, so its text stays on one line. Fonts are bitmaps baked at fixed sizes, so a `fontSize` that 
+bound, so its text stays on one line. Fonts are bitmaps baked at fixed sizes, so a `fontSize` that
 was not baked measures at the nearest size that was. See [Assets](./assets.md).
 
 ## What is different

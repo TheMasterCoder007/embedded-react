@@ -381,17 +381,17 @@ struct ERNode
     ERNodeType type;
     bool in_use;
     bool dirty;
-    bool source_dirty;    /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
-                             dirty-rect accumulation. */
+    bool source_dirty; /**< Set only on the node that was directly dirtied, not on propagated ancestors. Used for
+                          dirty-rect accumulation. */
     uint32_t painted_sequence; /**< er_commit sequence that last painted this node. Render workers record it during the
                              paint traversal (an idempotent same-value write, safe when a node straddles two
                              workers' regions); er_commit clears dirty/source_dirty for painted nodes in one
                              sequential post-pass, so the paint recursion itself never mutates shared flags. */
-    bool subtree_hidden;  /**< This node is display:none, or an ancestor is. Maintained by the tree/prop mutators
-                             (never by the per-frame walks), so the flat per-commit passes — which have no
-                             top-down parent context — can skip a hidden page in O(1) per node instead of
-                             measuring it. It also retires its dirty flags: a pruned node can never paint, so a
-                             flag it cannot clear would make it damage the same rect on every commit forever. */
+    bool subtree_hidden;       /**< This node is display:none, or an ancestor is. Maintained by the tree/prop mutators
+                                  (never by the per-frame walks), so the flat per-commit passes — which have no
+                                  top-down parent context — can skip a hidden page in O(1) per node instead of
+                                  measuring it. It also retires its dirty flags: a pruned node can never paint, so a
+                                  flag it cannot clear would make it damage the same rect on every commit forever. */
 #if ERUI_SHADOWS
     bool casts_shadow; /**< Shadow props currently active — feeds the multi-core parallel-unsafe count
                           (the shadow blur runs through shared static scratch). */
@@ -441,7 +441,7 @@ struct ERNode
     float transform_rotate_x;    /**< X-axis rotation in degrees (3D). */
     float transform_rotate_y;    /**< Y-axis rotation in degrees (3D). */
     float transform_perspective; /**< Perspective distance in pixels; 0 = orthographic (3D). */
-    bool has_transform;   /**< True when any transform prop is non-identity. */
+    bool has_transform;          /**< True when any transform prop is non-identity. */
     EREventHandler events[ER_EVENT_TYPE_COUNT_];
     ERResponderQueryHandler queries[ER_RESPONDER_QUERY_COUNT]; /**< Gesture negotiation callbacks. */
     /* Switch: animated thumb position 0.0 (off) → 1.0 (on). */
@@ -451,14 +451,14 @@ struct ERNode
     float arc_value;
     float arc_value_start;
     float arc_painted_value;
-    int8_t arc_drag_finger; /**< Finger id currently dragging this arc natively, or -1 when idle.
-                                 Ownership is explicit because touches are PER FINGER while this state is
-                                 per node: a second finger landing on the same dial must not re-latch the
-                                 end or take the value, and releasing a finger that never owned the drag
-                                 must not end it. First finger down wins until it lifts. */
-    bool arc_drag_low;      /**< RANGE drag: the finger latched onto the LOW end (arc_value_start), not the high one.
-                               Latched on touch-down at whichever end was nearer and held for the whole gesture, so a
-                               drag never swaps ends when the two values cross. */
+    int8_t arc_drag_finger;  /**< Finger id currently dragging this arc natively, or -1 when idle.
+                                  Ownership is explicit because touches are PER FINGER while this state is
+                                  per node: a second finger landing on the same dial must not re-latch the
+                                  end or take the value, and releasing a finger that never owned the drag
+                                  must not end it. First finger down wins until it lifts. */
+    bool arc_drag_low;       /**< RANGE drag: the finger latched onto the LOW end (arc_value_start), not the high one.
+                                Latched on touch-down at whichever end was nearer and held for the whole gesture, so a
+                                drag never swaps ends when the two values cross. */
     float arc_drag_fraction; /**< Sweep fraction at the last drag sample — the anti-wrap reference. */
     /* Arc: pixels the drawn knob reaches past the layout box on each side (0 when it fits). Folded into
      * the paint bounds, the damage rects and the hit zone, so a knob larger than the ring is never clipped

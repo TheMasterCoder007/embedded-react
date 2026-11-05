@@ -61,8 +61,8 @@ extern "C"
     /**
      * @brief Resizes the framebuffer in place (for a runtime board-size change).
      *
-     * Reallocates the framebuffer to @p framebuffer_width x @p framebuffer_height and clears it to opaque black. The backend stays
-     * registered (the context pointer is unchanged), so the engine keeps rendering through it. Call
+     * Reallocates the framebuffer to @p framebuffer_width x @p framebuffer_height and clears it to opaque black. The
+     * backend stays registered (the context pointer is unchanged), so the engine keeps rendering through it. Call
      * er_reset() afterwards before rebuilding the scene at the new size. Must be called after a successful
      * er_software_backend_init().
      *

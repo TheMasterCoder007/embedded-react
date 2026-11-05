@@ -1015,11 +1015,8 @@ static void break_lines(const ERTextRenderParams* params,
  * @param[out] out_width  Receives the widest line's width in pixels.
  * @param[out] out_lines  Receives the number of lines.
  */
-static ER_NOINLINE void break_span_text(const ERTextRenderParams* params,
-                                        const BitmapFont* font,
-                                        int max_width,
-                                        int* out_width,
-                                        int* out_lines)
+static ER_NOINLINE void
+break_span_text(const ERTextRenderParams* params, const BitmapFont* font, int max_width, int* out_width, int* out_lines)
 {
     char merged[SPAN_MERGED_MAX + 1];
     uint16_t span_end[ER_TEXT_MAX_SPANS];

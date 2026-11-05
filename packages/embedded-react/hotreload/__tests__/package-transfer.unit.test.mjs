@@ -97,18 +97,18 @@ function connect(device, options = {}) {
 describe('frames', () => {
   it('begins with the package length', () => {
     const decoded = [];
-    new FrameDecoder({onFrame: (payload, meta) => decoded.push([payload, meta])}).push(
-      beginFrame(0x1234),
-    );
+    new FrameDecoder({
+      onFrame: (payload, meta) => decoded.push([payload, meta]),
+    }).push(beginFrame(0x1234));
     expect(decoded[0][1].type).toBe(MSG_PACKAGE_BEGIN);
     expect(decoded[0][0]).toEqual(Buffer.from([0x34, 0x12, 0, 0]));
   });
 
   it('puts the offset in front of each chunk, and cuts the last short', () => {
     const decoded = [];
-    new FrameDecoder({onFrame: (payload, meta) => decoded.push([payload, meta])}).push(
-      chunkFrame(samplePackage, CHUNK_BYTES * 3, CHUNK_BYTES),
-    );
+    new FrameDecoder({
+      onFrame: (payload, meta) => decoded.push([payload, meta]),
+    }).push(chunkFrame(samplePackage, CHUNK_BYTES * 3, CHUNK_BYTES));
     expect(decoded[0][1].type).toBe(MSG_PACKAGE_CHUNK);
     expect(decoded[0][0].readUInt32LE(0)).toBe(CHUNK_BYTES * 3);
     expect(decoded[0][0].subarray(4)).toEqual(
@@ -121,7 +121,18 @@ describe('frames', () => {
     const frame = beginFrame(0x01020304);
     expect(frame.subarray(0, 12)).toEqual(
       Buffer.from([
-        0x45, 0x52, 0x48, 0x52, 1, MSG_PACKAGE_BEGIN, 0, 0, 4, 0, 0, 0,
+        0x45,
+        0x52,
+        0x48,
+        0x52,
+        1,
+        MSG_PACKAGE_BEGIN,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0,
       ]),
     );
   });

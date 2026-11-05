@@ -171,8 +171,7 @@ static void load_package(bool touch)
         }
     }
 #if ER_HOTRELOAD
-    erb_package_reload_init(
-        &s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+    erb_package_reload_init(&s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
     if (uart_driver_install(RELOAD_UART, RELOAD_UART_RX_BYTES, 0, 0, NULL, 0) == ESP_OK
         && uart_set_baudrate(RELOAD_UART, RELOAD_UART_BAUD) == ESP_OK)
     {

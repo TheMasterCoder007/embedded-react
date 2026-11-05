@@ -47,12 +47,12 @@ typedef struct
     int16_t cross_position; /**< Offset within parent content along the cross-axis. */
     int16_t flex_grow;
     int16_t flex_shrink;
-    int16_t main_min;   /**< Main-axis min constraint (ER_LAYOUT_AUTO = none). */
-    int16_t main_max;   /**< Main-axis max constraint (ER_LAYOUT_AUTO = none). */
+    int16_t main_min;       /**< Main-axis min constraint (ER_LAYOUT_AUTO = none). */
+    int16_t main_max;       /**< Main-axis max constraint (ER_LAYOUT_AUTO = none). */
     int16_t measured_width; /**< Row item sized by its content's height: the width measured at (else AUTO). */
-    uint8_t line;       /**< Wrap-line index. */
-    uint8_t align;      /**< Resolved align (auto → parent align_items). */
-    uint8_t frozen;     /**< Pass 3: 1 once the item's flexed main size is final. */
+    uint8_t line;           /**< Wrap-line index. */
+    uint8_t align;          /**< Resolved align (auto → parent align_items). */
+    uint8_t frozen;         /**< Pass 3: 1 once the item's flexed main size is final. */
 } FlexChild;
 
 /**

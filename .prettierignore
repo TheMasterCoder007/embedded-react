@@ -22,5 +22,9 @@ _deps/
 tools/web-sim/public/
 packages/embedded-react/sim/
 
+# Website build output and the playground website/scripts/build-playground.mjs stages (website/.gitignore)
+website/.docusaurus/
+website/static/playground/
+
 # Lockfile
 package-lock.json

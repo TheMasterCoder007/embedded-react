@@ -28,9 +28,9 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ER_MAX_TOUCHES 5U
-#define ER_LONG_PRESS_MS 500U     /**< Long-press hold time when a node sets no delayLongPress of its own. */
-#define ER_SCROLL_SLOP 5          /**< Minimum cumulative pan distance in pixels before auto-scroll claims. */
-#define ER_SCROLL_FRICTION 0.002f /**< Velocity decay per millisecond (≈ React Native deceleration:0.998/frame). */
+#define ER_LONG_PRESS_MS 500U          /**< Long-press hold time when a node sets no delayLongPress of its own. */
+#define ER_SCROLL_SLOP 5               /**< Minimum cumulative pan distance in pixels before auto-scroll claims. */
+#define ER_SCROLL_FRICTION 0.002f      /**< Velocity decay per millisecond (≈ React Native deceleration:0.998/frame). */
 #define ER_SCROLL_VELOCITY_STOP 0.001f /**< Velocity magnitude below which momentum scrolling stops. */
 #define ER_SCROLL_VELOCITY_WINDOW_MS                                                                                   \
     200U /**< Maximum age in ms of the last recorded move used for velocity estimation. */
@@ -69,15 +69,15 @@ typedef struct
     uint32_t elapsed_ms;
     int last_x;
     int last_y;
-    int start_x;                /**< X coordinate at touch-down; used to compute dx for gesture events. */
-    int start_y;                /**< Y coordinate at touch-down; used to compute dy for gesture events. */
-    int previous_move_x;        /**< X coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
-    int previous_move_y;        /**< Y coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
+    int start_x;                    /**< X coordinate at touch-down; used to compute dx for gesture events. */
+    int start_y;                    /**< Y coordinate at touch-down; used to compute dy for gesture events. */
+    int previous_move_x;            /**< X coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
+    int previous_move_y;            /**< Y coordinate at the previous TOUCH_MOVE; used for velocity estimation. */
     uint32_t previous_move_time_ms; /**< er_now_ms() at the last recorded TOUCH_MOVE. */
     float velocity_x;               /**< Finger velocity X in px/ms at the last sampled move. */
     float velocity_y;               /**< Finger velocity Y in px/ms at the last sampled move. */
-    float initial_scroll_x;     /**< ScrollView scroll_offset_x when the responder was granted. */
-    float initial_scroll_y;     /**< ScrollView scroll_offset_y when the responder was granted. */
+    float initial_scroll_x;         /**< ScrollView scroll_offset_x when the responder was granted. */
+    float initial_scroll_y;         /**< ScrollView scroll_offset_y when the responder was granted. */
     ERNodeRef press_target;
     ERNodeRef touch_target;
     ERNodeRef responder; /**< Node currently owning this touch as the gesture responder. */

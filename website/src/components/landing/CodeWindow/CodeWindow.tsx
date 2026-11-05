@@ -13,7 +13,11 @@ type Props = {
  * An editor-style code window that is dark in both color modes, which the theme's CodeBlock
  * cannot be: it follows the page.
  */
-export default function CodeWindow({title, code, language = 'jsx'}: Props): ReactNode {
+export default function CodeWindow({
+  title,
+  code,
+  language = 'jsx',
+}: Props): ReactNode {
   return (
     <div className={styles.window}>
       <div className={styles.bar}>

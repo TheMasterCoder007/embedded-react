@@ -13,7 +13,12 @@ type Props = {
 };
 
 /** A landing-page content section: eyebrow label, heading, then the body. Follows the color mode. */
-export default function Section({eyebrow, title, tinted, children}: Props): ReactNode {
+export default function Section({
+  eyebrow,
+  title,
+  tinted,
+  children,
+}: Props): ReactNode {
   return (
     <section className={clsx(styles.section, tinted && styles.tinted)}>
       <div className="container">

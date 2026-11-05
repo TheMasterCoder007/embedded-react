@@ -126,7 +126,9 @@ describe('bake-svg: svgToVector', () => {
     expect(artifact.gradients).toHaveLength(1);
     const gradient = artifact.gradients[0];
     expect(gradient.type).toBe(1); // GRAD_LINEAR
-    expect(gradient.stops.map(stop => stop.color >>> 0)).toEqual([0xffff0000, 0xff0000ff]);
+    expect(gradient.stops.map(stop => stop.color >>> 0)).toEqual([
+      0xffff0000, 0xff0000ff,
+    ]);
     // objectBoundingBox default: axis (0,0)->(1,0) maps onto the rect's bbox (0,0,10,10).
     expect([
       Math.round(gradient.ax),
@@ -330,7 +332,7 @@ describe('svgToVector — <rect rx/ry>', () => {
       [ARC]: 6,
       [CLOSE]: 0,
     };
-    for (let cursor = 0; cursor < artifact.ops.length; ) {
+    for (let cursor = 0; cursor < artifact.ops.length;) {
       const opcode = artifact.ops[cursor++];
       if (opcode === SHAPE) {
         cursor++;

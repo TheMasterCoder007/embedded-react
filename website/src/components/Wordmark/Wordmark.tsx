@@ -10,7 +10,13 @@ import styles from './Wordmark.module.css';
  *
  * `onDark` is for surfaces that stay navy in both color modes, such as the landing hero.
  */
-export default function Wordmark({className, onDark}: {className?: string; onDark?: boolean}): ReactNode {
+export default function Wordmark({
+  className,
+  onDark,
+}: {
+  className?: string;
+  onDark?: boolean;
+}): ReactNode {
   return (
     <span
       className={clsx(styles.wordmark, onDark && styles.onDark, className)}

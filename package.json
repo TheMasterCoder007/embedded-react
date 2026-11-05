@@ -1,0 +1,12 @@
+{
+  "name": "embedded-react-repository",
+  "private": true,
+  "description": "Repository tooling. The npm package lives in packages/embedded-react.",
+  "scripts": {
+    "format": "prettier --write \"**/*.{js,jsx,mjs,cjs,mts,ts,tsx}\" \"website/docs/**/*.{md,mdx}\" \"!website/docs/{changelog,roadmap}.md\"",
+    "format:check": "prettier --check \"**/*.{js,jsx,mjs,cjs,mts,ts,tsx}\" \"website/docs/**/*.{md,mdx}\" \"!website/docs/{changelog,roadmap}.md\""
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}
