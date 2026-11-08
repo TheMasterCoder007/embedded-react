@@ -49,6 +49,11 @@
 /** @brief Bits in a float's significand, its hidden bit included. */
 #define FLOAT_SIGNIFICAND_BITS 24
 
+/** @brief UTF-8: a continuation byte is 10xxxxxx, and a lead byte from 0xF0 starts a character past the BMP. */
+#define UTF8_CONTINUATION_MASK 0xC0u
+#define UTF8_CONTINUATION 0x80u
+#define UTF8_FOUR_BYTE_LEAD 0xF0u
+
 /* Cells of a call frame, before its registers. */
 #define FRAME_CALLER 0u      /**< The calling function, or FRAME_NO_CALLER for the entry point. */
 #define FRAME_RETURN_PC 1u   /**< Where the caller resumes. */
@@ -449,6 +454,21 @@ static const char* string_of(int32_t ref)
         return (const char*)g_erb.arena + (value & ~ERB_STRING_ARENA);
     }
     return erb_string(&g_erb.program, value - 1u);
+}
+
+/** @brief The length JS gives @p bytes of UTF-8: one per character, two for one past the BMP. */
+static uint32_t js_length(const char* text, uint32_t bytes)
+{
+    uint32_t length = 0;
+    for (uint32_t index = 0; index < bytes; index++)
+    {
+        const uint8_t byte = (uint8_t)text[index];
+        if ((byte & UTF8_CONTINUATION_MASK) != UTF8_CONTINUATION)
+        {
+            length += byte >= UTF8_FOUR_BYTE_LEAD ? 2u : 1u;
+        }
+    }
+    return length;
 }
 
 static void format_append(const char* text)
@@ -1246,7 +1266,8 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             }
             case ERB_OP_FMTPAD:
             {
-                const uint32_t length = s_format_length - s_piece;
+                const uint32_t bytes = s_format_length - s_piece;
+                const uint32_t length = js_length(s_format + s_piece, bytes);
                 if (length < operand_a)
                 {
                     uint32_t shift = operand_a - length;
@@ -1255,7 +1276,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                         shift = ER_TEXT_MAX - s_format_length;
                         s_format_cut = true;
                     }
-                    memmove(s_format + s_piece + shift, s_format + s_piece, length);
+                    memmove(s_format + s_piece + shift, s_format + s_piece, bytes);
                     memset(s_format + s_piece, operand_b, shift);
                     s_format_length += shift;
                     s_format[s_format_length] = '\0';

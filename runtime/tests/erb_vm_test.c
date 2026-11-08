@@ -400,6 +400,13 @@ static void test_text(void)
         OP_ABC(RET, 0, 0, 0),
     };
     const uint16_t large = helper(types, 4, 0, 0, large_code, 4);
+    const uint32_t wide_code[] = {
+        OP_ABX(FMTK, 0, add_string("5\xC2\xB0")),
+        OP_ABC(FMTPAD, 4, '*', 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t wide = helper(types, 4, 0, 0, wide_code, 4);
     const uint16_t long_text = add_string("a string longer than its cap");
     const uint32_t long_code[] = {OP_ABX(FMTK, 0, long_text), OP_ABX(FMTSET, 0, SLOT_LABEL), OP_ABC(RET, 0, 0, 0)};
     const uint16_t too_long = helper(types, 4, 0, 0, long_code, 3);
@@ -411,6 +418,8 @@ static void test_text(void)
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "3.14NaN01.5") == 0, "toFixed, NaN, -0 and a float as JS prints them");
     call(ties, 0, 0);
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "230.3-100.0") == 0, "toFixed rounds a half away from zero");
+    call(wide, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "**5\xC2\xB0") == 0, "padStart counts characters, not bytes");
     call(large, 0, 0);
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "2e+21") == 0, "toFixed prints 1e21 and past as String() does");
     call(too_long, 0, 0);

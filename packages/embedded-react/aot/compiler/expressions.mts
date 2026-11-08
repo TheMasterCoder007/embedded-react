@@ -2100,7 +2100,7 @@ function helperInt(
 function lowerToFixed(call: t.CallExpression, environment: Env): TextParts {
   const receiver = (call.callee as t.MemberExpression).object;
   const value = lowerExprWide(receiver, environment);
-  if (value.type.kind === 'string' || isBoolean(value.type)) {
+  if (!['int', 'float', 'int64'].includes(value.type.kind)) {
     throw textShapeError(
       call,
       'AOT: toFixed is only supported on a number',

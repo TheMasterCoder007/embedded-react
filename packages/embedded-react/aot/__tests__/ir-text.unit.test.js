@@ -57,13 +57,17 @@ describe('text lowers to IR parts', () => {
 });
 
 describe('template literals and string helpers', () => {
-  const environment = () =>
-    envWith(
+  const environment = () => ({
+    ...envWith(
       scalar('count', 'int'),
       scalar('level', 'float'),
       scalar('name', 'string'),
       scalar('on', 'int', true),
-    );
+    ),
+    refs: new Map([
+      ['box', {kind: 'node', slotName: 'box', slotKind: 'node', used: true}],
+    ]),
+  });
   const kinds = text =>
     text.parts.map(part =>
       part.kind === 'literal'
@@ -118,6 +122,8 @@ describe('template literals and string helpers', () => {
 
   it.each([
     ['name.toFixed(1)', /toFixed is only supported on a number/],
+    ['on.toFixed(1)', /toFixed is only supported on a number/],
+    ['box.current.toFixed(1)', /toFixed is only supported on a number/],
     ['level.toFixed(count)', /toFixed's digits must be a compile-time/],
     ['level.toFixed(21)', /toFixed\(21\) is out of range/],
     ["count.padStart(2, '0')", /padStart is only supported on a string/],
