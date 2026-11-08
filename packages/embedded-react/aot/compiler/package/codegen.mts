@@ -1101,6 +1101,7 @@ export class Codegen {
           this.get(this.stateSlot(value.state)).index,
           this.enumOf(value)!.set,
         );
+        this.pads(part.pads, 0);
       } else {
         // The spec is by the value's IR type: a float is printed from a float, so a boot double is narrowed first.
         const type = part.value.type.kind;
