@@ -695,6 +695,88 @@ export function App() {
   });
 });
 
+describe('strings', () => {
+  const STRINGS_APP = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [count, setCount] = useState(0);
+  const [level, setLevel] = useState(0.5);
+  const [label, setLabel] = useState('');
+  return (
+    <Pressable onPress={() => { const line = \`\${count} at \${level.toFixed(1)}\`; setLabel(line); setCount(count + 1); }}>
+      <Text>{level.toFixed(2)} {count.toFixed(2).padStart(6, '0')} {label}</Text>
+    </Pressable>
+  );
+}`;
+
+  const instructions = (functionRecord, name) =>
+    functionRecord.ops.filter(instruction => instruction.name === name);
+
+  it('prints a float with FMTFX, and a whole number exactly, padded to leave room for its zeros', () => {
+    const functions = functionsOf(
+      compilePackage(STRINGS_APP, 'app', SCREEN).program,
+    );
+    const update = functions.at(-1);
+    expect(update.kind).toBe(FunctionKind.update);
+    expect(instructions(update, 'FMTFX').map(op => op.bx & 0xff)).toEqual([2]);
+    expect(instructions(update, 'FMTPAD')).toEqual([
+      expect.objectContaining({a: 3, bx: '0'.charCodeAt(0)}),
+    ]);
+    const names = update.ops.map(instruction => instruction.name);
+    expect(names.indexOf('FMTPAD')).toBe(names.indexOf('FMTI') + 1);
+    expect(names[names.indexOf('FMTPAD') + 1]).toBe('FMTK');
+  });
+
+  it("pads an interned string state's text right after printing it", () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [mode, setMode] = useState('a');
+  return <Pressable onPress={() => setMode('bb')}><Text>{mode.padStart(4, '-')}</Text></Pressable>;
+}`;
+    const update = functionsOf(
+      compilePackage(source, 'app', SCREEN).program,
+    ).at(-1);
+    const names = update.ops.map(instruction => instruction.name);
+    expect(names).toContain('FMTE');
+    expect(names[names.indexOf('FMTE') + 1]).toBe('FMTPAD');
+    expect(instructions(update, 'FMTPAD')).toEqual([
+      expect.objectContaining({a: 4, bx: '-'.charCodeAt(0)}),
+    ]);
+  });
+
+  it('pads a boolean word right after printing it', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [on, setOn] = useState(false);
+  return <Pressable onPress={() => setOn(!on)}><Text>{String(on).padStart(6, '.')}</Text></Pressable>;
+}`;
+    const update = functionsOf(
+      compilePackage(source, 'app', SCREEN).program,
+    ).at(-1);
+    const names = update.ops.map(instruction => instruction.name);
+    expect(names[names.indexOf('FMTB') + 1]).toBe('FMTPAD');
+    expect(instructions(update, 'FMTPAD')).toEqual([
+      expect.objectContaining({a: 6, bx: '.'.charCodeAt(0)}),
+    ]);
+  });
+
+  it("builds a handler's template local in a buffer of its own", () => {
+    const [press] = functionsOf(
+      compilePackage(STRINGS_APP, 'app', SCREEN).program,
+    );
+    const names = press.ops.map(instruction => instruction.name);
+    expect(names).toEqual(
+      expect.arrayContaining(['FMTI', 'FMTK', 'FMTFX', 'FMTSET', 'FMTS']),
+    );
+    expect(instructions(press, 'FMTFX').map(op => op.bx & 0xff)).toEqual([1]);
+  });
+});
+
 describe('timers and effects', () => {
   const TIMER_APP = `
 import {useState, useRef} from 'react';

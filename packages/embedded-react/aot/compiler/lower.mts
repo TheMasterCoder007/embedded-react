@@ -19,7 +19,12 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
-import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
+import {
+  evalStatic,
+  rethrowFoldLimit,
+  setBinding,
+  withUndefined,
+} from './static-eval.mts';
 import {abandonBoot, beginBoot, endBoot, setBootLowering} from './boot.mts';
 import {
   findShadowedClockCalls,
@@ -270,7 +275,8 @@ function lowerProgram(
             evalStatic(declarator.init, withUndefined(scope), 'boot'),
           ),
         );
-      } catch {
+      } catch (error) {
+        rethrowFoldLimit(error);
         // A dynamic const must hide a same-named module const, or the JSX quietly renders the module value.
         delete scope[declarator.id.name];
       }
@@ -341,7 +347,8 @@ function lowerProgram(
         name,
         bindConst(name, evalStatic(expression, scope, 'boot')),
       );
-    } catch {
+    } catch (error) {
+      rethrowFoldLimit(error);
       const memo = lowerSourcedWide(expression, environment);
       environment.locals.set(name, {
         slotKind: memo.slotKind,

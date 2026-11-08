@@ -920,6 +920,60 @@ import { View, Text, TextInput } from 'embedded-react';
   });
 });
 
+describe('AOT string helper limits on constants', () => {
+  // A constant folds with JS itself, but takes the same limits as a runtime value, so changing one to the other
+  // never changes whether the app compiles.
+  const app = ({module = '', body = '', text}) => `${PREAMBLE}
+${module}
+export function App() {
+  ${body}
+  return <Text>{${text}}</Text>;
+}`;
+
+  it.each([
+    ['in text', {text: '(1.5).toFixed(21)'}, /toFixed\(21\) is out of range/],
+    [
+      'in a module const',
+      {module: "const LABEL = 'a'.padStart(3, 'xy');", text: 'LABEL'},
+      /fill must be one printable ASCII character/,
+    ],
+    [
+      "in a component's const",
+      {body: "const label = 'a'.padStart(300);", text: 'label'},
+      /padStart\(300\) is longer than any text/,
+    ],
+    [
+      "in a state's initial value",
+      {body: 'const [label] = useState((2).toFixed(1.5));', text: 'label'},
+      /toFixed's digits must be a compile-time whole number/,
+    ],
+  ])(
+    'refuses one past the limits %s, with a location',
+    (_name, parts, message) => {
+      let error;
+      try {
+        gen(app(parts));
+      } catch (thrown) {
+        error = thrown;
+      }
+      expect(error?.message).toMatch(message);
+      expect(error.aotLoc).toBeTruthy();
+    },
+  );
+
+  it('still folds one within the limits', () => {
+    expect(() =>
+      gen(
+        app({
+          module:
+            "const LABEL = `${(1.25).toFixed(1)} ${'7'.padStart(3, '0')}`;",
+          text: 'LABEL',
+        }),
+      ),
+    ).not.toThrow();
+  });
+});
+
 describe('AOT style diagnostics', () => {
   const IMPORTS = `import { useState } from 'react';
 import { View, StyleSheet } from 'embedded-react';

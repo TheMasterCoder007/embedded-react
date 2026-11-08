@@ -380,6 +380,64 @@ static void test_text(void)
         OP_ABC(RET, 0, 0, 0),
     };
     const uint16_t floats = helper(types, 4, 0, 0, floats_code, 10);
+    const uint32_t ties_code[] = {
+        OP_ABX(LOADK, 1, add_const(22.5f)),
+        OP_ABC(FMTFX, 1, 0, 0),
+        OP_ABX(LOADK, 1, add_const(0.25f)),
+        OP_ABC(FMTFX, 1, 1, 0),
+        OP_ABX(LOADK, 1, add_const(-9.5f)),
+        OP_ABC(FMTFX, 1, 0, 0),
+        OP_ABX(LOADK, 1, add_const(-0.0f)),
+        OP_ABC(FMTFX, 1, 1, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t ties = helper(types, 4, 0, 0, ties_code, 10);
+    const uint16_t space = add_string(" ");
+    const uint32_t digits_code[] = {
+        OP_ABX(LOADK, 1, add_const(123456.7f)),
+        OP_ABC(FMTF, 1, 0, 0),
+        OP_ABX(FMTK, 0, space),
+        OP_ABX(LOADK, 1, add_const(1e-7f)),
+        OP_ABC(FMTF, 1, 0, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t digits = helper(types, 4, 0, 0, digits_code, 7);
+    const uint32_t layout_code[] = {
+        OP_ABX(LOADK, 1, add_const(0.000001f)),
+        OP_ABC(FMTF, 1, 0, 0),
+        OP_ABX(FMTK, 0, space),
+        OP_ABX(LOADK, 1, add_const(-1e21f)),
+        OP_ABC(FMTF, 1, 0, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t layout = helper(types, 4, 0, 0, layout_code, 7);
+    const uint32_t short_code[] = {
+        OP_ABX(LOADK, 1, add_const(21.5f)),
+        OP_ABC(FMTF, 1, 0, 0),
+        OP_ABX(FMTK, 0, space),
+        OP_ABX(LOADK, 1, add_const(3.5559e-40f)),
+        OP_ABC(FMTF, 1, 0, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t shortest = helper(types, 4, 0, 0, short_code, 7);
+    const uint32_t large_code[] = {
+        OP_ABX(LOADK, 1, add_const(1.2345678e21f)),
+        OP_ABC(FMTFX, 1, 2, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t large = helper(types, 4, 0, 0, large_code, 4);
+    const uint32_t wide_code[] = {
+        OP_ABX(FMTK, 0, add_string("5\xC2\xB0")),
+        OP_ABC(FMTPAD, 4, '*', 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint16_t wide = helper(types, 4, 0, 0, wide_code, 4);
     const uint16_t long_text = add_string("a string longer than its cap");
     const uint32_t long_code[] = {OP_ABX(FMTK, 0, long_text), OP_ABX(FMTSET, 0, SLOT_LABEL), OP_ABC(RET, 0, 0, 0)};
     const uint16_t too_long = helper(types, 4, 0, 0, long_code, 3);
@@ -389,6 +447,20 @@ static void test_text(void)
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "007offtrue") == 0, "padStart, an enum's string and a boolean word");
     call(floats, 0, 0);
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "3.14NaN01.5") == 0, "toFixed, NaN, -0 and a float as JS prints them");
+    call(ties, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "230.3-100.0") == 0, "toFixed rounds a half away from zero");
+    call(wide, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "**5\xC2\xB0") == 0, "padStart counts characters, not bytes");
+    call(large, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "1.2345678e+21") == 0, "toFixed prints 1e21 and past as String() does");
+    call(digits, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "123456.7 1e-7") == 0,
+          "a float prints the fewest digits that read back");
+    call(shortest, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "21.5 3.5559e-40") == 0,
+          "a short value drops its zeros, and a subnormal keeps its fewest digits");
+    call(layout, 0, 0);
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "0.000001 -1e+21") == 0, "and switches to an exponent where JS does");
     call(too_long, 0, 0);
     CHECK(strcmp((const char*)slot(SLOT_LABEL), "a string longer") == 0, "a string is cut at its slot's cap");
     CHECK(strstr(s_log, "cut short") != NULL, "and the cut is reported");

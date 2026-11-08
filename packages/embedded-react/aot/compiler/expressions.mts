@@ -20,7 +20,12 @@
 
 import {attemptLowering, checkNumber} from './check.mts';
 import {traverse} from '@babel/core';
-import {aotError, locateError, withLoc} from './diagnostics.mts';
+import {
+  ENGINE_STRING_MAX,
+  aotError,
+  locateError,
+  withLoc,
+} from './diagnostics.mts';
 import {
   bootSlotOf,
   containsBoot,
@@ -28,7 +33,14 @@ import {
   isBoot,
   wholeBootValue,
 } from './boot.mts';
-import {evalStatic, foldScope, hasBinding} from './static-eval.mts';
+import {
+  evalStatic,
+  fixedDigitsProblem,
+  foldScope,
+  hasBinding,
+  padFillProblem,
+  padWidthProblem,
+} from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
@@ -1979,6 +1991,220 @@ function textShapeError(node: t.Node, message: string, hint: string): AotError {
 }
 
 /**
+ * Whether an expression is a compile-time constant.
+ *
+ * @param node  The expression.
+ * @param scope  The constants a fold may read.
+ *
+ * @returns True when it folds.
+ */
+function foldsStatically(node: t.Node, scope: Scope): boolean {
+  try {
+    evalStatic(node, scope, 'strict');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an expression builds a string at run time: a template literal, a string helper, or a string `+`. Only a
+ * destination that holds text can take one, through lowerText.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns True when it builds a string.
+ */
+export function buildsText(node: t.Node, environment: Env): boolean {
+  const scope = foldScope(environment, environment.constants ?? {});
+  if (foldsStatically(node, scope)) return false;
+  if (node.type === 'TemplateLiteral' || textCallOf(node, scope) !== null) {
+    return true;
+  }
+
+  return (
+    node.type === 'BinaryExpression' &&
+    node.operator === '+' &&
+    lowerTextParts(node, environment, scope, true).isString
+  );
+}
+
+/**
+ * The text helper a call is: `String(x)`, `x.toFixed(n)` or `x.padStart(n, fill)`.
+ *
+ * @param node  The expression.
+ * @param scope  The constants a fold may read, which may shadow `String`.
+ *
+ * @returns The helper's name, or null for anything else.
+ */
+function textCallOf(
+  node: t.Node,
+  scope: Scope,
+): 'String' | 'toFixed' | 'padStart' | null {
+  if (node.type !== 'CallExpression') return null;
+  const {callee} = node;
+  if (
+    callee.type === 'Identifier' &&
+    callee.name === 'String' &&
+    !hasBinding(scope, 'String')
+  ) {
+    return 'String';
+  }
+
+  if (
+    callee.type === 'MemberExpression' &&
+    !callee.computed &&
+    callee.property.type === 'Identifier' &&
+    (callee.property.name === 'toFixed' || callee.property.name === 'padStart')
+  ) {
+    return callee.property.name;
+  }
+
+  return null;
+}
+
+/**
+ * A compile-time whole number a text helper takes.
+ *
+ * @param node  The argument, or undefined when it is left out.
+ * @param fallback  The value JS uses when it is left out.
+ * @param what  What the argument is, for errors.
+ * @param environment  The expression environment.
+ *
+ * @returns The number.
+ */
+function helperInt(
+  node: t.Node | undefined,
+  fallback: number,
+  what: string,
+  environment: Env,
+): number {
+  if (!node) return fallback;
+  const value = staticInt(node, environment);
+  if (value === null) {
+    throw textShapeError(
+      node,
+      `AOT: ${what} must be a compile-time whole number`,
+      'the package bakes it into the instruction, so write a literal or a module constant.',
+    );
+  }
+
+  return value;
+}
+
+/**
+ * Lowers `x.toFixed(digits)` on a runtime number.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns The text: the number, printed with that many decimals.
+ */
+function lowerToFixed(call: t.CallExpression, environment: Env): TextParts {
+  const receiver = (call.callee as t.MemberExpression).object;
+  const value = lowerExprWide(receiver, environment);
+  if (!['int', 'float', 'int64'].includes(value.type.kind)) {
+    throw textShapeError(
+      call,
+      'AOT: toFixed is only supported on a number',
+      'JS has toFixed on numbers only; call it on the number itself.',
+    );
+  }
+
+  const digits = helperInt(
+    call.arguments[0],
+    0,
+    "toFixed's digits",
+    environment,
+  );
+  const problem = fixedDigitsProblem(digits);
+  if (problem) {
+    throw textShapeError(call, ...problem);
+  }
+
+  return {isString: true, parts: [{kind: 'value', value, digits}]};
+}
+
+/**
+ * Lowers `x.padStart(width, fill)` on a runtime string.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ * @param scope  The constants a fold may read.
+ *
+ * @returns The text: the string, padded.
+ */
+function lowerPadStart(
+  call: t.CallExpression,
+  environment: Env,
+  scope: Scope,
+): TextParts {
+  const receiver = lowerTextParts(
+    (call.callee as t.MemberExpression).object,
+    environment,
+    scope,
+    true,
+  );
+  if (!receiver.isString) {
+    throw textShapeError(
+      call,
+      'AOT: padStart is only supported on a string',
+      'JS has padStart on strings only; convert first: String(n).padStart(2, "0").',
+    );
+  }
+
+  // The same limits as a constant fold, checked before the receiver so a constant one gets the same error.
+  const width = helperInt(
+    call.arguments[0],
+    0,
+    "padStart's length",
+    environment,
+  );
+  const widthProblem = padWidthProblem(width);
+  if (widthProblem) {
+    throw textShapeError(call, ...widthProblem);
+  }
+
+  const fillNode = call.arguments[1];
+  let fill: unknown = ' ';
+  if (fillNode) {
+    try {
+      fill = evalStatic(fillNode, scope, 'strict');
+    } catch {
+      fill = null;
+    }
+  }
+  const fillProblem = padFillProblem(fill);
+  if (fillProblem) {
+    throw textShapeError(fillNode ?? call, ...fillProblem);
+  }
+
+  const pieces = receiver.parts.filter(
+    part => !(part.kind === 'literal' && part.text === ''),
+  );
+  const [piece] = pieces;
+  if (pieces.length !== 1 || piece.kind === 'literal') {
+    throw textShapeError(
+      call,
+      'AOT: padStart can only pad one value',
+      'pad each value on its own and join them after: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`.',
+    );
+  }
+
+  if (fill === '' || width <= 0) {
+    return {isString: true, parts: [piece]};
+  }
+
+  return {
+    isString: true,
+    parts: [
+      {...piece, pads: [...(piece.pads ?? []), {width, fill: fill as string}]},
+    ],
+  };
+}
+
+/**
  * Text a constant renders as a standalone JSX child. React draws nothing for null, undefined, or a
  * boolean (see flattenTextChildren in Flow A), which is not how `+` treats the same values — a
  * concatenation operand goes through String() instead.
@@ -2043,11 +2269,56 @@ function lowerTextParts(
     }
   }
 
-  // A branch or operand that concatenates needs its own format; refuse before lowerExpr's misleading error.
+  // A template literal is its strings and values in order, each value printed as String() prints it.
+  if (node.type === 'TemplateLiteral') {
+    const parts: IrTextPart[] = [];
+    node.quasis.forEach((quasi, index) => {
+      parts.push({kind: 'literal', text: quasi.value.cooked ?? ''});
+      if (index < node.expressions.length) {
+        parts.push(
+          ...lowerTextParts(node.expressions[index], environment, scope, true)
+            .parts,
+        );
+      }
+    });
+    return {isString: true, parts};
+  }
+
+  // String(x) prints x as an operand of a string `+` would.
+  if (textCallOf(node, scope) === 'String') {
+    const [argument] = (node as t.CallExpression).arguments;
+    if (argument?.type === 'SpreadElement') {
+      throw textShapeError(
+        node,
+        'AOT: String(...) cannot take a spread',
+        'pass the value itself: String(n).',
+      );
+    }
+
+    return {
+      isString: true,
+      parts: argument
+        ? lowerTextParts(argument, environment, scope, true).parts
+        : [],
+    };
+  }
+
+  if (textCallOf(node, scope) === 'toFixed') {
+    return lowerToFixed(node as t.CallExpression, environment);
+  }
+
+  if (textCallOf(node, scope) === 'padStart') {
+    return lowerPadStart(node as t.CallExpression, environment, scope);
+  }
+
+  // A branch or operand that builds text needs its own format; refuse before lowerExpr's misleading error.
   const concatenates = (subExpression: t.Node) =>
-    subExpression.type === 'BinaryExpression' &&
-    subExpression.operator === '+' &&
-    lowerTextParts(subExpression, environment, scope, true).isString;
+    (subExpression.type === 'BinaryExpression' &&
+      subExpression.operator === '+' &&
+      lowerTextParts(subExpression, environment, scope, true).isString) ||
+    ((subExpression.type === 'TemplateLiteral' ||
+      textCallOf(subExpression, scope) !== null) &&
+      !foldsStatically(subExpression, scope));
   if (
     node.type === 'ConditionalExpression' &&
     (concatenates(node.test) ||

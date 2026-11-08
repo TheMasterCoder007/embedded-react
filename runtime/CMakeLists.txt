@@ -12,6 +12,7 @@ if (ESP_PLATFORM)
             erb_props.c
             erb_verify.c
             erb_vm.c
+            erb_float.c
             erb_runtime.c
             erb_package_slots.c
             erb_package_reload.c
@@ -68,6 +69,7 @@ add_library(erb-runtime STATIC
         erb_props.c
         erb_verify.c
         erb_vm.c
+        erb_float.c
         erb_runtime.c
         erb_package_slots.c
         erb_package_reload.c

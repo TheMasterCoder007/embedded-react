@@ -30,6 +30,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /** @brief Placement for the dispatch loop: an RP2040 port defines this to its RAM section. */
@@ -42,6 +43,24 @@
 
 /** @brief Room for toFixed's output: the integer digits of a large float plus ERB_FIXED_DIGITS_MAX decimals. */
 #define FIXED_TEXT_SIZE 64u
+
+/** @brief From here on, toFixed prints a number as String() does. */
+#define FIXED_LIMIT 1e21f
+
+/** @brief The most significant digits a float needs to read back as itself. */
+#define FLOAT_ROUND_TRIP_DIGITS 9
+
+/** @brief JS writes a number without an exponent while its point is past this and at most the max. */
+#define JS_PLAIN_POINT_MIN (-6)
+#define JS_PLAIN_POINT_MAX 21
+
+/** @brief Bits in a float's significand, its hidden bit included. */
+#define FLOAT_SIGNIFICAND_BITS 24
+
+/** @brief UTF-8: a continuation byte is 10xxxxxx, and a lead byte from 0xF0 starts a character past the BMP. */
+#define UTF8_CONTINUATION_MASK 0xC0u
+#define UTF8_CONTINUATION 0x80u
+#define UTF8_FOUR_BYTE_LEAD 0xF0u
 
 /* Cells of a call frame, before its registers. */
 #define FRAME_CALLER 0u      /**< The calling function, or FRAME_NO_CALLER for the entry point. */
@@ -445,6 +464,21 @@ static const char* string_of(int32_t ref)
     return erb_string(&g_erb.program, value - 1u);
 }
 
+/** @brief The length JS gives @p bytes of UTF-8: one per character, two for one past the BMP. */
+static uint32_t js_length(const char* text, uint32_t bytes)
+{
+    uint32_t length = 0;
+    for (uint32_t index = 0; index < bytes; index++)
+    {
+        const uint8_t byte = (uint8_t)text[index];
+        if ((byte & UTF8_CONTINUATION_MASK) != UTF8_CONTINUATION)
+        {
+            length += byte >= UTF8_FOUR_BYTE_LEAD ? 2u : 1u;
+        }
+    }
+    return length;
+}
+
 static void format_append(const char* text)
 {
     s_piece = s_format_length;
@@ -457,7 +491,19 @@ static void format_append(const char* text)
     s_format_cut |= take < length;
 }
 
-/** @brief A float as String() spells it where %g doesn't: Infinity, -Infinity, NaN, and 0 for -0. */
+/** @brief Adds @p character to a text of @p capacity bytes, dropping it when the text is full. */
+static void put_char(char* buffer, size_t capacity, size_t* length, char character)
+{
+    if (*length + 1u < capacity)
+    {
+        buffer[(*length)++] = character;
+    }
+}
+
+/**
+ * @brief A float as String() spells it: the fewest digits that read back as the same float, laid out as JS lays out
+ *        a number.
+ */
 static const char* float_text(char* buffer, size_t capacity, float value)
 {
     if (value != value)
@@ -472,7 +518,126 @@ static const char* float_text(char* buffer, size_t capacity, float value)
     {
         return "0";
     }
-    snprintf(buffer, capacity, "%g", (double)value);
+
+    /* The value is 0.<digits> times 10 to the power of point. */
+    int32_t power_of_ten;
+    uint32_t significand = erb_float_digits(value, &power_of_ten);
+    char digits[FLOAT_ROUND_TRIP_DIGITS];
+    size_t count = 0;
+    for (; significand != 0u && count < FLOAT_ROUND_TRIP_DIGITS; significand /= 10u)
+    {
+        digits[count++] = (char)('0' + significand % 10u);
+    }
+    for (size_t index = 0; index < count / 2u; index++)
+    {
+        const char swap = digits[index];
+        digits[index] = digits[count - 1u - index];
+        digits[count - 1u - index] = swap;
+    }
+    const int point = (int)power_of_ten + (int)count;
+
+    size_t length = 0;
+    if (value < 0.0f)
+    {
+        put_char(buffer, capacity, &length, '-');
+    }
+    if (point > JS_PLAIN_POINT_MIN && point <= JS_PLAIN_POINT_MAX)
+    {
+        if (point <= 0)
+        {
+            put_char(buffer, capacity, &length, '0');
+            put_char(buffer, capacity, &length, '.');
+            for (int zero = point; zero < 0; zero++)
+            {
+                put_char(buffer, capacity, &length, '0');
+            }
+        }
+        for (int index = 0; index < (int)count || index < point; index++)
+        {
+            if (index == point && index > 0)
+            {
+                put_char(buffer, capacity, &length, '.');
+            }
+            put_char(buffer, capacity, &length, index < (int)count ? digits[index] : '0');
+        }
+    }
+    else
+    {
+        put_char(buffer, capacity, &length, digits[0]);
+        if (count > 1u)
+        {
+            put_char(buffer, capacity, &length, '.');
+            for (size_t index = 1; index < count; index++)
+            {
+                put_char(buffer, capacity, &length, digits[index]);
+            }
+        }
+        char exponent[NUMBER_TEXT_SIZE];
+        snprintf(exponent, sizeof(exponent), "e%c%d", point - 1 < 0 ? '-' : '+', abs(point - 1));
+        for (const char* character = exponent; *character; character++)
+        {
+            put_char(buffer, capacity, &length, *character);
+        }
+    }
+    buffer[length] = '\0';
+    return buffer;
+}
+
+/** @brief Whether @p value lies exactly halfway between two numbers of @p digits decimals. */
+static bool is_half(float value, uint32_t digits)
+{
+    int exponent;
+    int32_t significand = (int32_t)ldexpf(frexpf(value, &exponent), FLOAT_SIGNIFICAND_BITS);
+    exponent -= FLOAT_SIGNIFICAND_BITS;
+    while ((significand & 1) == 0)
+    {
+        significand /= 2;
+        exponent++;
+    }
+    return exponent == -(int)digits - 1;
+}
+
+/**
+ * @brief A float as toFixed(@p digits) prints it. printf rounds a value that is exactly halfway to even, where JS
+ *        rounds it away from zero, so such a value is printed with one more decimal, which it holds exactly, and
+ *        rounded up by hand.
+ */
+static const char* fixed_text(char* buffer, size_t capacity, float value, uint32_t digits)
+{
+    if (value != value || isinf(value) || fabsf(value) >= FIXED_LIMIT)
+    {
+        return float_text(buffer, capacity, value);
+    }
+    if (value == 0.0f)
+    {
+        snprintf(buffer, capacity, "%.*f", (int)digits, 0.0);
+        return buffer;
+    }
+    if (!is_half(value, digits))
+    {
+        snprintf(buffer, capacity, "%.*f", (int)digits, (double)value);
+        return buffer;
+    }
+
+    snprintf(buffer, capacity, "%.*f", (int)digits + 1, (double)value);
+    size_t length = strlen(buffer) - (digits == 0u ? 2u : 1u);
+    buffer[length] = '\0';
+    const size_t first = buffer[0] == '-' ? 1u : 0u;
+    for (size_t index = length; index-- > first;)
+    {
+        if (buffer[index] == '.')
+        {
+            continue;
+        }
+        if (buffer[index] != '9')
+        {
+            buffer[index]++;
+            return buffer;
+        }
+        buffer[index] = '0';
+    }
+    memmove(buffer + first + 1u, buffer + first, length - first + 1u);
+    buffer[first] = '1';
     return buffer;
 }
 
@@ -587,6 +752,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
     stack[FRAME_CALLER] = FRAME_NO_CALLER;
     s_function = function;
     s_format_length = 0;
+    s_piece = 0;
     s_format[0] = '\0';
     s_format_cut = false;
 
@@ -1177,21 +1343,13 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_FMTFX:
             {
                 char text[FIXED_TEXT_SIZE];
-                const float value = get_float(&registers[operand_a]);
-                if (value != value || isinf(value))
-                {
-                    format_append(float_text(text, sizeof(text), value));
-                }
-                else
-                {
-                    snprintf(text, sizeof(text), "%.*f", (int)operand_b, value == 0.0f ? 0.0 : (double)value);
-                    format_append(text);
-                }
+                format_append(fixed_text(text, sizeof(text), get_float(&registers[operand_a]), operand_b));
                 break;
             }
             case ERB_OP_FMTPAD:
             {
-                const uint32_t length = s_format_length - s_piece;
+                const uint32_t bytes = s_format_length - s_piece;
+                const uint32_t length = js_length(s_format + s_piece, bytes);
                 if (length < operand_a)
                 {
                     uint32_t shift = operand_a - length;
@@ -1200,7 +1358,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                         shift = ER_TEXT_MAX - s_format_length;
                         s_format_cut = true;
                     }
-                    memmove(s_format + s_piece + shift, s_format + s_piece, length);
+                    memmove(s_format + s_piece + shift, s_format + s_piece, bytes);
                     memset(s_format + s_piece, operand_b, shift);
                     s_format_length += shift;
                     s_format[s_format_length] = '\0';
@@ -1229,6 +1387,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                     report("text cut short at its cap");
                 }
                 s_format_length = 0;
+                s_piece = 0;
                 s_format[0] = '\0';
                 s_format_cut = false;
                 break;

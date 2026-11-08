@@ -55,3 +55,105 @@ describe('text lowers to IR parts', () => {
     ).toThrow(/cannot concatenate inside its test or a branch/);
   });
 });
+
+describe('template literals and string helpers', () => {
+  const environment = () => ({
+    ...envWith(
+      scalar('count', 'int'),
+      scalar('level', 'float'),
+      scalar('name', 'string'),
+      scalar('on', 'int', true),
+    ),
+    refs: new Map([
+      ['box', {kind: 'node', slotName: 'box', slotKind: 'node', used: true}],
+    ]),
+  });
+  const kinds = text =>
+    text.parts.map(part =>
+      part.kind === 'literal'
+        ? part.text
+        : {[part.kind]: part.value.state?.name ?? part.value.kind},
+    );
+
+  it('splits a template literal into its strings and values, printing a boolean as a word', () => {
+    expect(
+      kinds(textOf('`${count} of ${name}, ${on}`', environment())),
+    ).toEqual([
+      '',
+      {value: 'count'},
+      ' of ',
+      {value: 'name'},
+      ', ',
+      {booleanWord: 'on'},
+      '',
+    ]);
+  });
+
+  it('folds a constant template and constant helpers to literal text', () => {
+    expect(textOf('`v${1 + 1}: ${(1.25).toFixed(1)}`').parts).toEqual([
+      {kind: 'literal', text: 'v2: 1.3'},
+    ]);
+    expect(textOf("String(7).padStart(3, '0')").parts).toEqual([
+      {kind: 'literal', text: '007'},
+    ]);
+  });
+
+  it('prints String(x) as a `+` operand would', () => {
+    expect(kinds(textOf('String(on)', environment()))).toEqual([
+      {booleanWord: 'on'},
+    ]);
+  });
+
+  it('keeps toFixed digits and padStart calls on the value they print', () => {
+    const [fixed] = textOf('level.toFixed(2)', environment()).parts;
+    expect(fixed).toMatchObject({kind: 'value', digits: 2});
+    const [padded] = textOf(
+      "count.toFixed(1).padStart(6).padStart(8, '*')",
+      environment(),
+    ).parts;
+    expect(padded).toMatchObject({
+      digits: 1,
+      pads: [
+        {width: 6, fill: ' '},
+        {width: 8, fill: '*'},
+      ],
+    });
+  });
+
+  it('pads a runtime boolean printed by String()', () => {
+    expect(textOf("String(on).padStart(5, '0')", environment()).parts).toEqual([
+      {
+        kind: 'booleanWord',
+        value: expect.anything(),
+        pads: [{width: 5, fill: '0'}],
+      },
+    ]);
+  });
+
+  it('leaves String() alone where a runtime value named String hides the global', () => {
+    const shadowed = envWith(
+      scalar('String', 'string'),
+      scalar('count', 'int'),
+    );
+    expect(() => textOf('String(7)', shadowed)).toThrow();
+    expect(() => textOf('`${String(count)}`', shadowed)).toThrow();
+  });
+
+  it.each([
+    ['name.toFixed(1)', /toFixed is only supported on a number/],
+    ['on.toFixed(1)', /toFixed is only supported on a number/],
+    ['box.current.toFixed(1)', /toFixed is only supported on a number/],
+    ['level.toFixed(count)', /toFixed's digits must be a compile-time/],
+    ['level.toFixed(21)', /toFixed\(21\) is out of range/],
+    ["count.padStart(2, '0')", /padStart is only supported on a string/],
+    ['`${count}:${count}`.padStart(5)', /padStart can only pad one value/],
+    ["name.padStart(4, 'ab')", /fill must be one printable ASCII character/],
+    ['name.padStart(300)', /longer than any text/],
+    [
+      "on ? level.toFixed(1) : '--'",
+      /cannot concatenate inside its test or a branch/,
+    ],
+  ])('refuses %s', (source, message) => {
+    expect(() => textOf(source, environment())).toThrow(message);
+  });
+});

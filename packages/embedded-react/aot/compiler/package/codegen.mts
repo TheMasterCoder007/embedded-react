@@ -50,7 +50,7 @@ import type {
 } from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
-import type {IrTextPart} from '../ir/text.mts';
+import type {IrTextPad, IrTextPart} from '../ir/text.mts';
 import type {
   ListState,
   Local,
@@ -1093,6 +1093,7 @@ export class Codegen {
         }
       } else if (part.kind === 'booleanWord') {
         builder.abc('FMTB', this.condition(part.value).index);
+        this.pads(part.pads, 0);
       } else if (this.enumOf(part.value)) {
         const value = part.value as IrExpr & {kind: 'state'};
         builder.abx(
@@ -1100,6 +1101,7 @@ export class Codegen {
           this.get(this.stateSlot(value.state)).index,
           this.enumOf(value)!.set,
         );
+        this.pads(part.pads, 0);
       } else {
         // The spec is by the value's IR type: a float is printed from a float, so a boot double is narrowed first.
         const type = part.value.type.kind;
@@ -1111,9 +1113,39 @@ export class Codegen {
               : type === 'int64'
                 ? ['FMTL', 'int64']
                 : ['FMTI', 'int'];
-        builder.abc(opcode, this.valueAs(part.value, formatType).index);
+        const register = this.valueAs(part.value, formatType).index;
+        if (part.digits !== undefined && formatType === 'float') {
+          builder.abc('FMTFX', register, part.digits);
+          this.pads(part.pads, 0);
+        } else if (part.digits) {
+          // A whole number's decimals are all zeros, so pad the number to leave room for them.
+          builder.abc(opcode, register);
+          this.pads(part.pads, part.digits + 1);
+          builder.abx(
+            'FMTK',
+            0,
+            this.program.tables.string(`.${'0'.repeat(part.digits)}`),
+          );
+        } else {
+          builder.abc(opcode, register);
+          this.pads(part.pads, 0);
+        }
       }
       builder.release(checkpoint);
+    }
+  }
+
+  /**
+   * Pads the piece just printed, as padStart would.
+   *
+   * @param pads  The padStart calls, in order.
+   * @param suffix  How many bytes are still to be printed after the piece, which each width leaves room for.
+   */
+  private pads(pads: IrTextPad[] | undefined, suffix: number): void {
+    for (const {width, fill} of pads ?? []) {
+      if (width > suffix) {
+        this.builder.abc('FMTPAD', width - suffix, fill.charCodeAt(0));
+      }
     }
   }
 
@@ -1155,7 +1187,11 @@ export class Codegen {
           const slot =
             hoisted ?? this.program.stringLocals.get(statement.name)!;
           const checkpoint = builder.checkpoint();
-          this.text([{kind: 'value', value: statement.initializer}]);
+          this.text(
+            statement.text?.parts ?? [
+              {kind: 'value', value: statement.initializer},
+            ],
+          );
           builder.abx('FMTSET', 0, slot.index);
           builder.release(checkpoint);
           this.locals.set(statement.name, {slot});
