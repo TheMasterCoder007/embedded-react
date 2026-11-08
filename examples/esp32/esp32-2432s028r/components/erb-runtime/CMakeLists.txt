@@ -9,6 +9,7 @@ idf_component_register(
         "${R}/erb_props.c"
         "${R}/erb_verify.c"
         "${R}/erb_vm.c"
+        "${R}/erb_float.c"
         "${R}/erb_runtime.c"
         "${R}/erb_package_slots.c"
         "${R}/erb_package_reload.c"

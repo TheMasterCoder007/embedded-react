@@ -47,6 +47,11 @@ under their own respective licenses and copyrights:
     Licensed under the MIT License.
     Used by the Flow A bridge to drive the native engine.
 
+The float-to-text routine in runtime/erb_float.c follows the Ryu algorithm
+(Ulf Adams, "Ryu: Fast Float-to-String Conversion", PLDI 2018) and the
+structure of its reference implementation (https://github.com/ulfjack/ryu),
+Copyright 2018 Ulf Adams, licensed under the Apache License, Version 2.0.
+
 The embedded-react public API (e.g. the View / Text / Pressable / Animated /
 StyleSheet modules under packages/embedded-react/src/embedded-react/) is an original,
 independent reimplementation inspired by the React Native API surface. It is not

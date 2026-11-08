@@ -372,6 +372,16 @@ extern ErbRuntime g_erb;
  */
 ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int32_t* result);
 
+/**
+ * @brief The shortest decimal digits that read back as @p value (erb_float.c).
+ *
+ * @param[in]  value     A finite float that isn't 0. Its sign is ignored.
+ * @param[out] exponent  Receives the power of 10: the value is the digits times 10 to it.
+ *
+ * @return The digits, at most 9 of them.
+ */
+uint32_t erb_float_digits(float value, int32_t* exponent);
+
 /** @brief The props scratch: PROPS starts it, PSET fills it, COMMIT hands it to a node. BUILD reuses it. */
 extern ERProps g_erb_props;
 

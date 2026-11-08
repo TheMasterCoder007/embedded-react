@@ -26,7 +26,6 @@
 #include "erb_internal.h"
 #include "erb_props.h"
 
-#include <float.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
@@ -48,11 +47,8 @@
 /** @brief From here on, toFixed prints a number as String() does. */
 #define FIXED_LIMIT 1e21f
 
-/** @brief Significant digits that always read back as the same float. */
+/** @brief The most significant digits a float needs to read back as itself. */
 #define FLOAT_ROUND_TRIP_DIGITS 9
-
-/** @brief Up to this many digits, rounding a normal float gives its shortest form padded with zeros. */
-#define FLOAT_SHORT_DIGITS 6
 
 /** @brief JS writes a number without an exponent while its point is past this and at most the max. */
 #define JS_PLAIN_POINT_MIN (-6)
@@ -506,7 +502,7 @@ static void put_char(char* buffer, size_t capacity, size_t* length, char charact
 
 /**
  * @brief A float as String() spells it: the fewest digits that read back as the same float, laid out as JS lays out
- *        a number. Each try is checked with strtof, so a printf that gets a last digit wrong costs a longer try.
+ *        a number.
  */
 static const char* float_text(char* buffer, size_t capacity, float value)
 {
@@ -523,40 +519,22 @@ static const char* float_text(char* buffer, size_t capacity, float value)
         return "0";
     }
 
-    /* A normal float that 6 digits read back as is that short already, plus zeros, so most values take one try. A
-       subnormal holds fewer digits, so it starts from one. */
-    const float magnitude = fabsf(value);
-    const int first = magnitude < FLT_MIN ? 1 : FLOAT_SHORT_DIGITS;
-    char scientific[NUMBER_TEXT_SIZE];
-    for (int precision = first; precision <= FLOAT_ROUND_TRIP_DIGITS; precision++)
-    {
-        snprintf(scientific, sizeof(scientific), "%.*e", precision - 1, (double)magnitude);
-        if (strtof(scientific, NULL) == magnitude)
-        {
-            break;
-        }
-    }
-
     /* The value is 0.<digits> times 10 to the power of point. */
-    char digits[FLOAT_ROUND_TRIP_DIGITS + 1];
+    int32_t power_of_ten;
+    uint32_t significand = erb_float_digits(value, &power_of_ten);
+    char digits[FLOAT_ROUND_TRIP_DIGITS];
     size_t count = 0;
-    const char* cursor = scientific;
-    for (; *cursor && *cursor != 'e' && count < FLOAT_ROUND_TRIP_DIGITS; cursor++)
+    for (; significand != 0u && count < FLOAT_ROUND_TRIP_DIGITS; significand /= 10u)
     {
-        if (*cursor != '.')
-        {
-            digits[count++] = *cursor;
-        }
+        digits[count++] = (char)('0' + significand % 10u);
     }
-    while (*cursor && *cursor != 'e')
+    for (size_t index = 0; index < count / 2u; index++)
     {
-        cursor++;
+        const char swap = digits[index];
+        digits[index] = digits[count - 1u - index];
+        digits[count - 1u - index] = swap;
     }
-    while (count > 1u && digits[count - 1u] == '0')
-    {
-        count--;
-    }
-    const int point = (*cursor ? atoi(cursor + 1) : 0) + 1;
+    const int point = (int)power_of_ten + (int)count;
 
     size_t length = 0;
     if (value < 0.0f)
