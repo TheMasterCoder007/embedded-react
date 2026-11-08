@@ -186,6 +186,10 @@ A template node record is `type u8`, `flags u8`, `children u16`, `props u16`, `h
 so the builder needs no recursion and no pointers. `props` is the node's constant prop set and
 `handle` the slot that keeps the node's handle when code needs to reach it later. In a row template
 that slot is an array (`cap` handles), and each instance's handle goes in the element `BUILD` names.
+Each branch of a conditional on state is a branch template. The update first `DESTROY`s every branch
+whose test now picks another, then `BUILD`s each branch picked that isn't built, before the first
+sibling after it that is. So a panel's `node_count` is the most nodes any one state of the app shows.
+A conditional in a list row is built with its row instead, every branch toggled by `display`.
 No node flags are defined yet, so `flags` is 0.
 
 The codes these records hold, as `runtime/erb_format.h` defines them:

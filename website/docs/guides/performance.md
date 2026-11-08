@@ -25,7 +25,7 @@ usually the slowest phase when something is slow.
 
 **Animate natively.** An `Animated.Value` driven by `timing`, `spring` or `decay` costs no
 JavaScript per frame once started, and damages only what it moves. The same motion done with
-`setState` on a 16 ms interval re-renders, re-diffs and re-commits every tick. `LayoutAnimation` for
+`setState` on a 16 ms interval re-renders, re-diffs, and re-commits every tick. `LayoutAnimation` for
 moves, `<Dial value={animatedValue}>` for gauges, and `Animated.View`/`Image`/`Text` for everything
 else.
 
@@ -43,16 +43,18 @@ viewport, about 80 ms per step for a 556×326 list on the S3, so keep scrolling 
 they need.
 
 **Hide pages instead of unmounting them.** `display: 'none'` (or `visible={false}`) drops a subtree
-out of layout, render and hit-testing while keeping its nodes and state. Switching back is a
+out of layout, render, and hit-testing while keeping its nodes and state. Switching back is a
 repaint; a conditional render rebuilds every node in the interpreter, which is the dominant cost of
-a page change in Flow A.
+a page change in Flow A. In Flow B a page in a conditional is built when it shows and its nodes go
+back to the pool when it hides, so the pool only needs the largest page; `visible` keeps them
+built, which costs nodes but makes the switch a repaint.
 
 **Keep transformed and translucent subtrees small.** They are the only things that go through
 scratch memory, and a change anywhere inside a transformed subtree repaints the subtree's whole
 transformed box.
 
 **Prefer engine widgets to re-tessellated vectors.** A `<Dial>` is one closed-form node; a stroked
-`<Svg>` arc is flattened, stroked and scan-converted every time it changes. A static `<Svg>` is
+`<Svg>` arc is flattened, stroked, and scan-converted every time it changes. A static `<Svg>` is
 cached after its first draw; a state-driven one is not.
 
 **Mind the damage budget.** The engine tracks up to 16 disjoint dirty rectangles. A screen with
@@ -79,7 +81,7 @@ a dashboard wants it at the default.
 ## Flow B specifics
 
 There is no JS phase: a state change is a slot write and a prop write. What remains is the
-engine, so layout, raster and present are the whole frame, and the habits above about repaint area
+engine, so layout, raster, and present are the whole frame, and the habits above about repaint area
 and animation are the entire story. Timers are advanced by `erb_tick()`, which the host calls
 once per frame.
 
@@ -109,7 +111,7 @@ PKJ D40 R1400 M460 C90  the WORST frame's JS split
 
 The `PK` lines are the point. A frame that spikes once and recovers is invisible to an FPS counter,
 but its full split and the region it repainted are retained until `er_perf_reset()`, so minutes
-later you can read whether the two seconds went into JavaScript, layout, raster or the panel
+later you can read whether the two seconds went into JavaScript, layout, raster, or the panel
 transfer, and whether it went full-screen doing it. The raster line splits further into the
 pre-pass (scales with the node pool), the composite (scales with damage area), the blits (write
 bandwidth) and the sweep; the JS line into delivering events, React's render, marshalling into the

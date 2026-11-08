@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Changed
+
+- Flow B: a state-driven `&&` or ternary builds the branch it picks and destroys it when another is picked, so a
+  package needs nodes for its largest screen rather than all of them. `visible={…}` keeps a branch built and toggles
+  it.
 
 ## [0.20.0] - 2026-11-05
 ### Added

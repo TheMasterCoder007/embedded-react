@@ -188,6 +188,25 @@ function functionsOf(bytes) {
   );
 }
 
+/** The templates: each one's kind and nodes. */
+function templatesOf(bytes) {
+  const {u16, u32, tables} = readProgram(bytes);
+  const {offset} = tables.get(Table.templates);
+  const count = u32(offset);
+  const nodes = offset + 4 + count * 8;
+  return Array.from({length: count}, (_, index) => {
+    const templateOffset = offset + 4 + index * 8;
+    return {
+      kind: u16(templateOffset + 4),
+      nodes: Array.from({length: u16(templateOffset + 2)}, (_, nodeIndex) => ({
+        handle: u16(
+          nodes + (u16(templateOffset) + nodeIndex) * NODE_RECORD_BYTES + 6,
+        ),
+      })),
+    };
+  });
+}
+
 /** The arena's regions. */
 function regionsOf(bytes) {
   const {u16, u32, tables} = readProgram(bytes);
@@ -872,29 +891,7 @@ export function App() {
   const names = functionRecord =>
     functionRecord.ops.map(instruction => instruction.name);
 
-  /** The templates: each one's kind and nodes. */
-  function templatesOf(bytes) {
-    const {u16, u32, tables} = readProgram(bytes);
-    const {offset} = tables.get(Table.templates);
-    const count = u32(offset);
-    const nodes = offset + 4 + count * 8;
-    return Array.from({length: count}, (_, index) => {
-      const templateOffset = offset + 4 + index * 8;
-      return {
-        kind: u16(templateOffset + 4),
-        nodes: Array.from(
-          {length: u16(templateOffset + 2)},
-          (_, nodeIndex) => ({
-            handle: u16(
-              nodes + (u16(templateOffset) + nodeIndex) * NODE_RECORD_BYTES + 6,
-            ),
-          }),
-        ),
-      };
-    });
-  }
-
-  /** The slots: each one's type, flags, cap and aux. */
+  /** The slots: each one's type, flags, cap, and aux. */
   function slotsOf(bytes) {
     const {u16, tables} = readProgram(bytes);
     const {offset, length} = tables.get(Table.slots);
@@ -1107,6 +1104,111 @@ export function App() {
 }`;
     expect(() => compilePackage(input, 'app', CAPS)).toThrow(
       "doesn't support onChangeText in a list row yet",
+    );
+  });
+});
+
+describe('conditionals', () => {
+  const SCREENS_APP = `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+export function App() {
+  const [page, setPage] = useState('home');
+  const [items, setItems] = useState([{n: 1}]);
+  return (
+    <View>
+      <Pressable onPress={() => setPage(page === 'home' ? 'list' : 'home')}><Text>go</Text></Pressable>
+      {page === 'home' ? (
+        <View><Text>home</Text><Text>{page}</Text></View>
+      ) : (
+        <View>{items.map((item, index) => <View key={index} style={{width: item.n}} />)}</View>
+      )}
+      {page !== 'home' && <Text>away</Text>}
+      <Text>footer</Text>
+    </View>
+  );
+}`;
+  const CAPS = {...SCREEN, listCap: 4};
+  const names = functionRecord =>
+    functionRecord.ops.map(instruction => instruction.name);
+
+  it('gives each branch a template, and the panel the nodes of the largest', () => {
+    const {program} = compilePackage(SCREENS_APP, 'app', CAPS);
+    const templates = templatesOf(program);
+    expect(templates.map(template => template.kind)).toEqual([
+      TemplateKind.root,
+      TemplateKind.branch,
+      TemplateKind.branch,
+      TemplateKind.branch,
+      TemplateKind.row,
+    ]);
+    // The root, the view, the button and its text, the footer; home's three, or the list's view and four rows;
+    // and the `&&` text.
+    const [root, home, list, away, row] = templates;
+    expect(root.nodes).toHaveLength(5);
+    expect([home, list, away].map(branch => branch.nodes.length)).toEqual([
+      3, 1, 1,
+    ]);
+    expect(row.nodes).toHaveLength(1);
+    expect(readProgram(program).panel.nodeCount).toBe(5 + 1 + 4 + 1);
+    // Both branches of the ternary keep their first node's handle in one slot.
+    expect(home.nodes[0].handle).toBe(list.nodes[0].handle);
+  });
+
+  it('destroys the branches a test no longer picks before it builds any', () => {
+    const {program} = compilePackage(SCREENS_APP, 'app', CAPS);
+    const update = functionsOf(program).at(-1);
+    expect(update.kind).toBe(FunctionKind.update);
+    const ops = names(update);
+    expect(ops.filter(name => name === 'DESTROY')).toHaveLength(2);
+    expect(ops.lastIndexOf('DESTROY')).toBeLessThan(ops.indexOf('BUILD'));
+
+    // A branch is no row: BUILD names no instance register. The list's rows are built with their branch.
+    const builds = update.ops.filter(
+      instruction => instruction.name === 'BUILD',
+    );
+    const branches = builds.filter(build => build.ext >>> 16 === 0xff);
+    expect(new Set(branches.map(build => build.ext & 0xffff))).toEqual(
+      new Set([1, 2, 3]),
+    );
+    expect(builds.length - branches.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('builds every branch of a conditional in a list row, and toggles it', () => {
+    const source = `
+import {useState} from 'react';
+import {View, Text} from 'embedded-react';
+export function App() {
+  const [items] = useState([{on: 1}]);
+  return <View>{items.map((item, index) => <View key={index}>{item.on > 0 ? <Text>on</Text> : <Text>off</Text>}</View>)}</View>;
+}`;
+    const {program} = compilePackage(source, 'app', CAPS);
+    const templates = templatesOf(program);
+    expect(templates.map(template => template.kind)).toEqual([
+      TemplateKind.root,
+      TemplateKind.row,
+    ]);
+    expect(templates[1].nodes).toHaveLength(3);
+    expect(names(functionsOf(program).at(-1))).not.toContain('DESTROY');
+  });
+
+  it('refuses updateVector on a node a conditional builds and destroys', () => {
+    const source = `
+import {useRef, useState} from 'react';
+import {View, Pressable, Svg, updateVector} from 'embedded-react';
+export function App() {
+  const pad = useRef(null);
+  const [shown, setShown] = useState(true);
+  return (
+    <View>
+      <Pressable onPress={() => updateVector(pad, [{rect: [0, 0, 10, 10], fill: '#ffffff'}], [0, 0, 10, 10])} />
+      <Pressable onPress={() => setShown(!shown)} />
+      {shown && <Svg ref={pad} width={100} height={20} />}
+    </View>
+  );
+}`;
+    expect(() => compilePackage(source, 'app', SCREEN)).toThrow(
+      /updateVector draws on a node a conditional builds and destroys[\s\S]*App\.jsx:11:/,
     );
   });
 });

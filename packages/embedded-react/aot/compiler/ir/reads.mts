@@ -307,6 +307,19 @@ const readsOf = (found: ReadsFound): StateReads =>
 export const nodeReads = (node: IrNode): StateReads => readsOf(nodeFound(node));
 
 /**
+ * The state an expression reads.
+ *
+ * @param expression  The expression.
+ *
+ * @returns Its reads.
+ */
+export function expressionReads(expression: IrExpr): StateReads {
+  const found: ReadsFound = {states: new Set(), untracked: false};
+  readExpr(expression, found);
+  return readsOf(found);
+}
+
+/**
  * Whether a node's runtime props read only values worked out at boot, so the build sets them once.
  *
  * @param node  The node.

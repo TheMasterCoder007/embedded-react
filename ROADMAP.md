@@ -97,7 +97,7 @@ UI needs no firmware rebuild. Tracked under the
 - **On-device hot reload** over the Flow A reload transport. The new package is checked
   in a staging slot before the swap, and the last good package is kept for rollback.
 - **Parity with Flow A** through bounded, native versions of what Flow B lacks:
-  conditionals that mount and unmount, full list and string operations, structs,
+  full list and string operations, structs,
   `useReducer`, `useContext`, custom hooks, and `Button` / `ImageBackground` /
   `SectionList`.
 - **Native modules** for work outside the UI (network, sensors, storage). A typed
