@@ -225,7 +225,7 @@ typedef struct
 
     const char* strings[32];
     uint32_t string_count;
-    uint32_t const32[16];
+    uint32_t const32[32];
     uint32_t const32_count;
     uint64_t const64[8];
     uint32_t const64_count;

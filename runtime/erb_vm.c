@@ -26,10 +26,12 @@
 #include "erb_internal.h"
 #include "erb_props.h"
 
+#include <float.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /** @brief Placement for the dispatch loop: an RP2040 port defines this to its RAM section. */
@@ -45,6 +47,16 @@
 
 /** @brief From here on, toFixed prints a number as String() does. */
 #define FIXED_LIMIT 1e21f
+
+/** @brief Significant digits that always read back as the same float. */
+#define FLOAT_ROUND_TRIP_DIGITS 9
+
+/** @brief Up to this many digits, rounding a normal float gives its shortest form padded with zeros. */
+#define FLOAT_SHORT_DIGITS 6
+
+/** @brief JS writes a number without an exponent while its point is past this and at most the max. */
+#define JS_PLAIN_POINT_MIN (-6)
+#define JS_PLAIN_POINT_MAX 21
 
 /** @brief Bits in a float's significand, its hidden bit included. */
 #define FLOAT_SIGNIFICAND_BITS 24
@@ -483,7 +495,19 @@ static void format_append(const char* text)
     s_format_cut |= take < length;
 }
 
-/** @brief A float as String() spells it where %g doesn't: Infinity, -Infinity, NaN, and 0 for -0. */
+/** @brief Adds @p character to a text of @p capacity bytes, dropping it when the text is full. */
+static void put_char(char* buffer, size_t capacity, size_t* length, char character)
+{
+    if (*length + 1u < capacity)
+    {
+        buffer[(*length)++] = character;
+    }
+}
+
+/**
+ * @brief A float as String() spells it: the fewest digits that read back as the same float, laid out as JS lays out
+ *        a number. Each try is checked with strtof, so a printf that gets a last digit wrong costs a longer try.
+ */
 static const char* float_text(char* buffer, size_t capacity, float value)
 {
     if (value != value)
@@ -498,7 +522,86 @@ static const char* float_text(char* buffer, size_t capacity, float value)
     {
         return "0";
     }
-    snprintf(buffer, capacity, "%g", (double)value);
+
+    /* A normal float that 6 digits read back as is that short already, plus zeros, so most values take one try. A
+       subnormal holds fewer digits, so it starts from one. */
+    const float magnitude = fabsf(value);
+    const int first = magnitude < FLT_MIN ? 1 : FLOAT_SHORT_DIGITS;
+    char scientific[NUMBER_TEXT_SIZE];
+    for (int precision = first; precision <= FLOAT_ROUND_TRIP_DIGITS; precision++)
+    {
+        snprintf(scientific, sizeof(scientific), "%.*e", precision - 1, (double)magnitude);
+        if (strtof(scientific, NULL) == magnitude)
+        {
+            break;
+        }
+    }
+
+    /* The value is 0.<digits> times 10 to the power of point. */
+    char digits[FLOAT_ROUND_TRIP_DIGITS + 1];
+    size_t count = 0;
+    const char* cursor = scientific;
+    for (; *cursor && *cursor != 'e' && count < FLOAT_ROUND_TRIP_DIGITS; cursor++)
+    {
+        if (*cursor != '.')
+        {
+            digits[count++] = *cursor;
+        }
+    }
+    while (*cursor && *cursor != 'e')
+    {
+        cursor++;
+    }
+    while (count > 1u && digits[count - 1u] == '0')
+    {
+        count--;
+    }
+    const int point = (*cursor ? atoi(cursor + 1) : 0) + 1;
+
+    size_t length = 0;
+    if (value < 0.0f)
+    {
+        put_char(buffer, capacity, &length, '-');
+    }
+    if (point > JS_PLAIN_POINT_MIN && point <= JS_PLAIN_POINT_MAX)
+    {
+        if (point <= 0)
+        {
+            put_char(buffer, capacity, &length, '0');
+            put_char(buffer, capacity, &length, '.');
+            for (int zero = point; zero < 0; zero++)
+            {
+                put_char(buffer, capacity, &length, '0');
+            }
+        }
+        for (int index = 0; index < (int)count || index < point; index++)
+        {
+            if (index == point && index > 0)
+            {
+                put_char(buffer, capacity, &length, '.');
+            }
+            put_char(buffer, capacity, &length, index < (int)count ? digits[index] : '0');
+        }
+    }
+    else
+    {
+        put_char(buffer, capacity, &length, digits[0]);
+        if (count > 1u)
+        {
+            put_char(buffer, capacity, &length, '.');
+            for (size_t index = 1; index < count; index++)
+            {
+                put_char(buffer, capacity, &length, digits[index]);
+            }
+        }
+        char exponent[NUMBER_TEXT_SIZE];
+        snprintf(exponent, sizeof(exponent), "e%c%d", point - 1 < 0 ? '-' : '+', abs(point - 1));
+        for (const char* character = exponent; *character; character++)
+        {
+            put_char(buffer, capacity, &length, *character);
+        }
+    }
+    buffer[length] = '\0';
     return buffer;
 }
 
@@ -671,6 +774,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
     stack[FRAME_CALLER] = FRAME_NO_CALLER;
     s_function = function;
     s_format_length = 0;
+    s_piece = 0;
     s_format[0] = '\0';
     s_format_cut = false;
 
@@ -1305,6 +1409,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                     report("text cut short at its cap");
                 }
                 s_format_length = 0;
+                s_piece = 0;
                 s_format[0] = '\0';
                 s_format_cut = false;
                 break;

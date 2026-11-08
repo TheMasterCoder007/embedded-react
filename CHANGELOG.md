@@ -17,6 +17,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 ### Changed
 
+- Flow B prints a float with the fewest digits that read back as it, laid out as JS lays out a number, instead of
+  six significant digits (`123456.7`, not `123457`).
 - Flow B: a state-driven `&&` or ternary builds the branch it picks and destroys it when another is picked, so a
   package needs nodes for its largest screen rather than all of them. `visible={…}` keeps a branch built and toggles
   it.
