@@ -81,7 +81,8 @@ while the code that breaks it is still one line.
 
 ## Handlers
 
-An event handler body may contain `const` locals holding a number, a boolean, or a string; `if` and
+An event handler body may contain `const` locals holding a number, a boolean, or a string, including one built
+with `+`, a template literal or the string helpers above; `if` and
 `else`; state setter calls; `ref.current` writes, including `+=` and `++`; `setInterval`,
 `setTimeout` and their clears; `updateVector` calls; and `.start()` or `.stop()` on any `Animated`
 animation or composition. Locals cannot be reassigned or destructured, and loops, `switch` and `try`
@@ -115,6 +116,16 @@ state-driven style on a span do not. A ternary in text cannot mix a string branc
 one, or a boolean branch with a non-boolean one; split those into two `{cond && <Text/>}` nodes.
 Comparing a string with a number is refused rather than coerced. A nested `<Text>` holds at most 4
 spans by default; `ER_AOT_MAX_TEXT_SPANS` raises it, and must match the engine's `ER_TEXT_MAX_SPANS`.
+
+Template literals, `String(x)`, `x.toFixed(n)` and `s.padStart(n, fill)` work in text and wherever else a string is
+built: a string state's setter, a list's string field, and a handler's `const`.
+
+- `toFixed` takes 0 to 20 decimals and rounds as JS does. A fraction is a 32-bit float, though, so a long one can
+  differ from Flow A in its last digits.
+- `padStart` pads one value with one ASCII character. Pad each value on its own:
+  `` `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` ``.
+- The numbers both helpers take must be constants.
+- A ternary in text still can't build a string in a branch, so `{ready ? t.toFixed(1) : '--'}` is refused.
 
 Text can only show glyphs the built-in font bakes: printable ASCII plus a fixed symbol set. `×`,
 `•`, `−`, `–` and `—` are there; `·` and `✕` are not, and render as `?`. The build warns about any

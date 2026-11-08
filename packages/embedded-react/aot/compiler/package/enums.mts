@@ -120,6 +120,7 @@ export function internedStates(app: IrApp): Map<ScalarState, string[]> {
         if (!isRead(node.initializer)) {
           walk(node.initializer);
         }
+        walk(node.text);
         return;
     }
 

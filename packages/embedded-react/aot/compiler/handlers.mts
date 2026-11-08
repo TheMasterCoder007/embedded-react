@@ -33,6 +33,7 @@ import {
   lowerExpr,
   lowerExprWide,
   lowerText,
+  buildsText,
 } from './expressions.mts';
 import {isFn} from './collect.mts';
 import {
@@ -68,6 +69,7 @@ import {
   refType,
   slotOf,
   stateType,
+  STRING,
 } from './ir/types.mts';
 import type {IrDepEffect} from './ir/functions.mts';
 import type {IrSource} from './ir/source.mts';
@@ -1252,9 +1254,16 @@ export function lowerStmts(
           continue;
         }
 
-        // Any other initializer must lower to a number, a boolean or a string.
-        const {source: initialSource, expression: initialExpression} =
-          lowerSource(declarator.init, environment);
+        // Any other initializer must lower to a number, a boolean or a string. A built string is text.
+        const text = buildsText(declarator.init, environment)
+          ? lowerText(declarator.init, environment)
+          : undefined;
+        const {source: initialSource, expression: initialExpression} = text
+          ? {
+              source: undefined,
+              expression: {kind: 'string', value: '', type: STRING} as IrExpr,
+            }
+          : lowerSource(declarator.init, environment);
         if (initialExpression.type.kind === 'string') {
           if (initialExpression.kind === 'string') {
             checkConstantFits(
@@ -1294,6 +1303,7 @@ export function lowerStmts(
           kind: 'declareLocal',
           name: localName,
           initializer: initialExpression,
+          ...(text ? {text} : {}),
           isHoisted,
           stringCapacity: environment.caps.listStrCap,
         });

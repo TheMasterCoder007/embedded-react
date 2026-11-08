@@ -62,6 +62,22 @@ const STATIC_MATH: Record<string, (...values: any[]) => number> = {
   abs: Math.abs,
 };
 
+/** The string helpers a fold works out, as JS does, and the type each one is called on. */
+const STATIC_METHODS: Record<
+  string,
+  {receiver: 'number' | 'string'; apply: (...values: any[]) => string}
+> = {
+  toFixed: {
+    receiver: 'number',
+    apply: (value: number, digits?: number) => value.toFixed(digits),
+  },
+  padStart: {
+    receiver: 'string',
+    apply: (value: string, width: number, fill?: string) =>
+      value.padStart(width, fill),
+  },
+};
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -454,7 +470,56 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
           : result;
       }
 
+      // String(x), and toFixed / padStart on a constant.
+      const isString =
+        callee.type === 'Identifier' &&
+        callee.name === 'String' &&
+        !hasBinding(scope, 'String');
+      const methodName =
+        callee.type === 'MemberExpression' && !callee.computed
+          ? (callee.property as t.Identifier).name
+          : '';
+      const method = Object.hasOwn(STATIC_METHODS, methodName)
+        ? STATIC_METHODS[methodName]
+        : undefined;
+      if (isString || method) {
+        const values = [
+          ...(isString ? [] : [(callee as t.MemberExpression).object]),
+          ...node.arguments,
+        ].map(argument => {
+          if (argument.type === 'SpreadElement') {
+            throw new Error('AOT: cannot statically evaluate a spread');
+          }
+
+          return evaluate(argument, scope, fold);
+        });
+        const built = values.map(buildValueOf);
+        if (method && typeof built[0] !== method.receiver) {
+          throw new Error('AOT: a string helper on the wrong type');
+        }
+
+        const result = isString
+          ? built.length === 0
+            ? ''
+            : String(built[0])
+          : method!.apply(...built);
+        return values.some(isBoot) ? bootOf(node, result, fold) : result;
+      }
+
       throw new Error(`AOT: cannot statically evaluate call expression`);
+    }
+    case 'TemplateLiteral': {
+      const values = node.expressions.map(expression =>
+        evaluate(expression, scope, fold),
+      );
+      const result = node.quasis
+        .map(
+          (quasi, index) =>
+            quasi.value.cooked +
+            (index < values.length ? String(buildValueOf(values[index])) : ''),
+        )
+        .join('');
+      return values.some(isBoot) ? bootOf(node, result, fold) : result;
     }
   }
 

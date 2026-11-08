@@ -43,6 +43,12 @@
 /** @brief Room for toFixed's output: the integer digits of a large float plus ERB_FIXED_DIGITS_MAX decimals. */
 #define FIXED_TEXT_SIZE 64u
 
+/** @brief From here on, toFixed prints a number as String() does. */
+#define FIXED_LIMIT 1e21f
+
+/** @brief Bits in a float's significand, its hidden bit included. */
+#define FLOAT_SIGNIFICAND_BITS 24
+
 /* Cells of a call frame, before its registers. */
 #define FRAME_CALLER 0u      /**< The calling function, or FRAME_NO_CALLER for the entry point. */
 #define FRAME_RETURN_PC 1u   /**< Where the caller resumes. */
@@ -473,6 +479,64 @@ static const char* float_text(char* buffer, size_t capacity, float value)
         return "0";
     }
     snprintf(buffer, capacity, "%g", (double)value);
+    return buffer;
+}
+
+/** @brief Whether @p value lies exactly halfway between two numbers of @p digits decimals. */
+static bool is_half(float value, uint32_t digits)
+{
+    int exponent;
+    int32_t significand = (int32_t)ldexpf(frexpf(value, &exponent), FLOAT_SIGNIFICAND_BITS);
+    exponent -= FLOAT_SIGNIFICAND_BITS;
+    while ((significand & 1) == 0)
+    {
+        significand /= 2;
+        exponent++;
+    }
+    return exponent == -(int)digits - 1;
+}
+
+/**
+ * @brief A float as toFixed(@p digits) prints it. printf rounds a value that is exactly halfway to even, where JS
+ *        rounds it away from zero, so such a value is printed with one more decimal, which it holds exactly, and
+ *        rounded up by hand.
+ */
+static const char* fixed_text(char* buffer, size_t capacity, float value, uint32_t digits)
+{
+    if (value != value || isinf(value) || fabsf(value) >= FIXED_LIMIT)
+    {
+        return float_text(buffer, capacity, value);
+    }
+    if (value == 0.0f)
+    {
+        snprintf(buffer, capacity, "%.*f", (int)digits, 0.0);
+        return buffer;
+    }
+    if (!is_half(value, digits))
+    {
+        snprintf(buffer, capacity, "%.*f", (int)digits, (double)value);
+        return buffer;
+    }
+
+    snprintf(buffer, capacity, "%.*f", (int)digits + 1, (double)value);
+    size_t length = strlen(buffer) - (digits == 0u ? 2u : 1u);
+    buffer[length] = '\0';
+    const size_t first = buffer[0] == '-' ? 1u : 0u;
+    for (size_t index = length; index-- > first;)
+    {
+        if (buffer[index] == '.')
+        {
+            continue;
+        }
+        if (buffer[index] != '9')
+        {
+            buffer[index]++;
+            return buffer;
+        }
+        buffer[index] = '0';
+    }
+    memmove(buffer + first + 1u, buffer + first, length - first + 1u);
+    buffer[first] = '1';
     return buffer;
 }
 
@@ -1177,16 +1241,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_FMTFX:
             {
                 char text[FIXED_TEXT_SIZE];
-                const float value = get_float(&registers[operand_a]);
-                if (value != value || isinf(value))
-                {
-                    format_append(float_text(text, sizeof(text), value));
-                }
-                else
-                {
-                    snprintf(text, sizeof(text), "%.*f", (int)operand_b, value == 0.0f ? 0.0 : (double)value);
-                    format_append(text);
-                }
+                format_append(fixed_text(text, sizeof(text), get_float(&registers[operand_a]), operand_b));
                 break;
             }
             case ERB_OP_FMTPAD:

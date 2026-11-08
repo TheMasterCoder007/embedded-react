@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Flow B: template literals, `String(x)`, `toFixed` and `padStart` wherever a string is built: text, a string state,
+  a list's string field and a handler's `const`.
+
 ### Changed
 
 - Flow B: a state-driven `&&` or ternary builds the branch it picks and destroys it when another is picked, so a

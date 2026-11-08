@@ -109,6 +109,14 @@ const SCENARIOS: Scenario[] = [
   ]),
   {name: 'layout', file: fixture('layout'), screen: PORTRAIT},
   {name: 'text', file: fixture('text'), screen: PORTRAIT},
+  {name: 'strings', file: fixture('strings'), screen: PORTRAIT},
+  // + twice to 22.5, then - to 22.25: halves that toFixed rounds up, in text, a local and the list.
+  {
+    name: 'strings-taps',
+    file: fixture('strings'),
+    screen: PORTRAIT,
+    taps: '112,177 112,177 40,177',
+  },
   // Focusing the TextInput brings up the engine's keyboard, with no app code involved.
   {
     name: 'text-focused',

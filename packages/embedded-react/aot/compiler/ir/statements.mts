@@ -35,6 +35,8 @@ export interface IrDeclareLocal {
   /** The slot's name, which later reads of the local use. */
   name: string;
   initializer: IrExpr;
+  /** A string built from parts, which it is set to instead of the initializer. */
+  text?: IrText;
   /** Kept in a slot (a dep-driven effect's local its cleanup reads), so only assigned here. */
   isHoisted: boolean;
   /** The buffer size a string local is copied into. */
