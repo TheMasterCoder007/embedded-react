@@ -14,6 +14,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Flow B: template literals, `String(x)`, `toFixed` and `padStart` wherever a string is built: text, a string state,
   a list's string field and a handler's `const`.
+- Flow B: `slice`, `toUpperCase` and `includes` on strings. Packages are now format minor 7.
 
 ### Changed
 

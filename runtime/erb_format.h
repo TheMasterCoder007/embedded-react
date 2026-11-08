@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 6u
+#define ERB_FORMAT_MINOR 7u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -800,7 +800,11 @@ enum
     X(VGRAD,    ERB_F_ABC, 1, 0, ERBO_R, ERBO_K, ERBO_K)  /* field C of the scratch's gradient B = A */                \
     X(VCOMMITP, ERB_F_ABX, 1, 0, ERBO_N, ERBO_K, ERBO_X)  /* the scratch, with its own paints, onto node A */       \
     /* The panel, since minor 6 */                                                                                     \
-    X(SCREEN,   ERB_F_ABX, 1, 1, ERBO_I, ERBO_K, ERBO_X)  /* A = the panel's width (Bx 0) or height (Bx 1) */
+    X(SCREEN,   ERB_F_ABX, 1, 1, ERBO_I, ERBO_K, ERBO_X)  /* A = the panel's width (Bx 0) or height (Bx 1) */           \
+    /* Strings, since minor 7 */                                                                                        \
+    X(FMTUPPER, ERB_F_ABC, 1, 0, ERBO_X, ERBO_X, ERBO_X)  /* toUpperCase() on the last piece */                         \
+    X(FMTSLICE, ERB_F_ABC, 1, 0, ERBO_I, ERBO_I, ERBO_X)  /* slice(A, B) on the last piece */                           \
+    X(SHAS,     ERB_F_ABC, 1, 1, ERBO_B, ERBO_S, ERBO_S)  /* A = B.includes(C) */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */

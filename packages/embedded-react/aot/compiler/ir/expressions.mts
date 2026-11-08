@@ -271,6 +271,13 @@ export interface IrStringEquals extends IrTyped {
   right: IrExpr;
 }
 
+/** `haystack.includes(needle)` on strings, yielding a boolean. */
+export interface IrStringIncludes extends IrTyped {
+  kind: 'stringIncludes';
+  haystack: IrExpr;
+  needle: IrExpr;
+}
+
 /** `&&` / `||` over truth values, yielding their truth. */
 export interface IrLogical extends IrTyped {
   kind: 'logical';
@@ -323,6 +330,7 @@ export type IrExpr =
   | IrToInt
   | IrCompare
   | IrStringEquals
+  | IrStringIncludes
   | IrLogical
   | IrPick
   | IrConditional;

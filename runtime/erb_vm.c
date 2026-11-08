@@ -62,6 +62,23 @@
 #define UTF8_CONTINUATION 0x80u
 #define UTF8_FOUR_BYTE_LEAD 0xF0u
 
+/** @brief The lead bytes of U+0080-U+00BF and U+00C0-U+00FF, and of U+0178 and U+039C. */
+#define UTF8_LATIN1_LOW_LEAD 0xC2u
+#define UTF8_LATIN1_HIGH_LEAD 0xC3u
+#define UTF8_Y_DIAERESIS_LEAD 0xC5u
+#define UTF8_GREEK_MU_LEAD 0xCEu
+
+/** @brief Second bytes, after their lead, of the Latin-1 letters toUpperCase changes. */
+#define UTF8_MICRO 0xB5u       /**< µ, after 0xC2: upper case is Greek Μ, U+039C. */
+#define UTF8_SHARP_S 0x9Fu     /**< ß, after 0xC3: upper case is "SS". */
+#define UTF8_LOWER_FIRST 0xA0u /**< à, after 0xC3. */
+#define UTF8_LOWER_LAST 0xBEu  /**< þ, after 0xC3. */
+#define UTF8_DIVISION 0xB7u    /**< ÷, after 0xC3: not a letter. */
+#define UTF8_Y_DIAERESIS 0xBFu /**< ÿ, after 0xC3: upper case is Ÿ, U+0178. */
+#define UTF8_CAPITAL_Y_DIAERESIS 0xB8u
+#define UTF8_CAPITAL_MU 0x9Cu
+#define LATIN1_CASE_OFFSET 0x20u
+
 /* Cells of a call frame, before its registers. */
 #define FRAME_CALLER 0u      /**< The calling function, or FRAME_NO_CALLER for the entry point. */
 #define FRAME_RETURN_PC 1u   /**< Where the caller resumes. */
@@ -447,7 +464,7 @@ static void set_double(int32_t* cell, double value)
 
 static char s_format[ER_TEXT_MAX + 1];
 static uint32_t s_format_length;
-static uint32_t s_piece; /**< Where the last piece starts, for FMTPAD. */
+static uint32_t s_piece; /**< Where the last piece starts, for FMTPAD, FMTUPPER and FMTSLICE. */
 static bool s_format_cut;
 
 static const char* string_of(int32_t ref)
@@ -477,6 +494,110 @@ static uint32_t js_length(const char* text, uint32_t bytes)
         }
     }
     return length;
+}
+
+/**
+ * @brief toUpperCase on @p bytes of UTF-8, in place: ASCII and Latin-1 letters as JS changes them, which never
+ *        changes their length in bytes. Other characters are left as they are.
+ */
+static void upper_case(char* text, uint32_t bytes)
+{
+    for (uint32_t index = 0; index < bytes; index++)
+    {
+        const uint8_t byte = (uint8_t)text[index];
+        if (byte >= 'a' && byte <= 'z')
+        {
+            text[index] = (char)(byte - LATIN1_CASE_OFFSET);
+            continue;
+        }
+        if (index + 1u >= bytes)
+        {
+            break;
+        }
+        const uint8_t next = (uint8_t)text[index + 1u];
+        if (byte == UTF8_LATIN1_LOW_LEAD && next == UTF8_MICRO)
+        {
+            text[index] = (char)UTF8_GREEK_MU_LEAD;
+            text[index + 1u] = (char)UTF8_CAPITAL_MU;
+        }
+        else if (byte == UTF8_LATIN1_HIGH_LEAD && next == UTF8_SHARP_S)
+        {
+            text[index] = 'S';
+            text[index + 1u] = 'S';
+        }
+        else if (byte == UTF8_LATIN1_HIGH_LEAD && next == UTF8_Y_DIAERESIS)
+        {
+            text[index] = (char)UTF8_Y_DIAERESIS_LEAD;
+            text[index + 1u] = (char)UTF8_CAPITAL_Y_DIAERESIS;
+        }
+        else if (byte == UTF8_LATIN1_HIGH_LEAD && next >= UTF8_LOWER_FIRST && next <= UTF8_LOWER_LAST
+                 && next != UTF8_DIVISION)
+        {
+            text[index + 1u] = (char)(next - LATIN1_CASE_OFFSET);
+        }
+        else
+        {
+            continue;
+        }
+        index++;
+    }
+}
+
+/** @brief Where slice puts @p position in a text of @p length, as JS counts a negative one from the end. */
+static uint32_t slice_position(int32_t position, uint32_t length)
+{
+    if (position < 0)
+    {
+        const uint32_t back = 0u - (uint32_t)position;
+        return back >= length ? 0u : length - back;
+    }
+    return (uint32_t)position > length ? length : (uint32_t)position;
+}
+
+/**
+ * @brief slice(@p start, @p end) on @p bytes of UTF-8, counted as JS counts: a character past the BMP is two, and one
+ *        that the cut splits is dropped.
+ *
+ * @return The bytes kept, moved to the front.
+ */
+static uint32_t slice_text(char* text, uint32_t bytes, int32_t start, int32_t end)
+{
+    const uint32_t length = js_length(text, bytes);
+    const uint32_t first = slice_position(start, length);
+    const uint32_t last = slice_position(end, length);
+    if (last <= first)
+    {
+        return 0u;
+    }
+
+    uint32_t from = bytes;
+    uint32_t to = bytes;
+    uint32_t units = 0;
+    for (uint32_t index = 0; index < bytes; index++)
+    {
+        const uint8_t byte = (uint8_t)text[index];
+        if ((byte & UTF8_CONTINUATION_MASK) == UTF8_CONTINUATION)
+        {
+            continue;
+        }
+        const uint32_t width = byte >= UTF8_FOUR_BYTE_LEAD ? 2u : 1u;
+        if (from == bytes && units >= first)
+        {
+            from = index;
+        }
+        if (units + width > last)
+        {
+            to = index;
+            break;
+        }
+        units += width;
+    }
+    if (to <= from)
+    {
+        return 0u;
+    }
+    memmove(text, text + from, to - from);
+    return to - from;
 }
 
 static void format_append(const char* text)
@@ -1197,6 +1318,9 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_SEQ:
                 registers[operand_a] = strcmp(string_of(registers[operand_b]), string_of(registers[operand_c])) == 0;
                 break;
+            case ERB_OP_SHAS:
+                registers[operand_a] = strstr(string_of(registers[operand_b]), string_of(registers[operand_c])) != NULL;
+                break;
             case ERB_OP_NOT:
                 registers[operand_a] = !registers[operand_b];
                 break;
@@ -1365,6 +1489,16 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 }
                 break;
             }
+            case ERB_OP_FMTUPPER:
+                upper_case(s_format + s_piece, s_format_length - s_piece);
+                break;
+            case ERB_OP_FMTSLICE:
+                s_format_length =
+                    s_piece
+                    + slice_text(
+                        s_format + s_piece, s_format_length - s_piece, registers[operand_a], registers[operand_b]);
+                s_format[s_format_length] = '\0';
+                break;
             case ERB_OP_FMTSET:
             case ERB_OP_FMTTEXT:
             case ERB_OP_FMTSPAN:

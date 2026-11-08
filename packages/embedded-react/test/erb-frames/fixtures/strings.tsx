@@ -1,5 +1,6 @@
-// Strings built at run time: template literals, String(), toFixed and padStart, in text, a string state, a handler's
-// local and a list's string field. The step lands on halves, which toFixed rounds away from zero.
+// Strings built at run time: template literals, String(), toFixed, padStart, slice, toUpperCase and includes, in text,
+// a string state, a handler's local and a list's string field. The step lands on halves, which toFixed rounds away
+// from zero.
 import {useState} from 'react';
 import {View, Text, Pressable, StyleSheet} from 'embedded-react';
 
@@ -11,13 +12,17 @@ export function App() {
   const [minutes, setMinutes] = useState(65);
   const [last, setLast] = useState('none');
   const [log, setLog] = useState([{line: `start at ${(21.5).toFixed(1)}`}]);
+  const [city] = useState('paris');
+  const [mood, setMood] = useState('--');
 
   const step = (by: number) => {
     const next = temperature + by;
     const line = `${String(log.length).padStart(2, '0')}: ${next.toFixed(1)}${UNIT}`;
     setTemperature(next);
     setMinutes(minutes + 7);
+    const word = by > 0 ? 'warmer' : 'cooler';
     setLast(line);
+    setMood(word.slice(0, 4).toUpperCase());
     setLog([...log, {line: `${by > 0 ? 'up' : 'down'} to ${next.toFixed(0)}`}]);
   };
 
@@ -42,6 +47,13 @@ export function App() {
           <Text style={styles.buttonText}>+</Text>
         </Pressable>
       </View>
+      <Text style={styles.label}>
+        {last.toUpperCase()} | {last.slice(-5)} |{' '}
+        {last.includes('22.') ? 'has 22.' : 'no 22.'}
+      </Text>
+      <Text style={styles.label}>
+        {city.toUpperCase()} {city.slice(0, 3)}, {mood}
+      </Text>
       {log.map((entry, index) => (
         <Text key={index} style={styles.label}>
           {entry.line}

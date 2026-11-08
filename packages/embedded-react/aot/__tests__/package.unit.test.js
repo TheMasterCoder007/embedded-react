@@ -765,6 +765,68 @@ export function App() {
     ]);
   });
 
+  it('cuts and upper-cases a string right after printing it, its positions loaded first', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [name, setName] = useState('ada');
+  const [count, setCount] = useState(1);
+  return <Pressable onPress={() => { setName(name + 'b'); setCount(count + 1); }}><Text>{name.slice(count, -1).toUpperCase()}</Text></Pressable>;
+}`;
+    const update = functionsOf(
+      compilePackage(source, 'app', SCREEN).program,
+    ).at(-1);
+    const names = update.ops.map(instruction => instruction.name);
+    const printed = names.indexOf('FMTS');
+    expect(names.slice(printed, printed + 3)).toEqual([
+      'FMTS',
+      'FMTSLICE',
+      'FMTUPPER',
+    ]);
+    const [slice] = instructions(update, 'FMTSLICE');
+    const loads = update.ops.slice(0, update.ops.indexOf(slice));
+    const loadOf = register =>
+      loads.findLast(instruction => instruction.a === register)?.name;
+    expect(loadOf(slice.a)).toBe('GET32');
+    expect(loadOf(slice.bx & 0xff)).toBe('LOADI');
+    expect(loads.indexOf(loads.findLast(op => op.a === slice.a))).toBeLessThan(
+      names.indexOf('FMTS'),
+    );
+  });
+
+  it("cuts an interned string state's text right after printing it", () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [mode, setMode] = useState('auto');
+  return <Pressable onPress={() => setMode('heat')}><Text>{mode.slice(0, 1)}</Text></Pressable>;
+}`;
+    const update = functionsOf(
+      compilePackage(source, 'app', SCREEN).program,
+    ).at(-1);
+    const names = update.ops.map(instruction => instruction.name);
+    expect(names[names.indexOf('FMTE') + 1]).toBe('FMTSLICE');
+  });
+
+  it('searches one string for another with SHAS', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [name, setName] = useState('ada');
+  return <Pressable onPress={() => setName('bob')}><Text>{name.includes('d') ? 'has d' : 'no d'}</Text></Pressable>;
+}`;
+    const update = functionsOf(
+      compilePackage(source, 'app', SCREEN).program,
+    ).at(-1);
+    const names = update.ops.map(instruction => instruction.name);
+    expect(names).toContain('SHAS');
+    expect(names).toContain('GETS');
+    expect(names).not.toContain('FMTE');
+  });
+
   it("builds a handler's template local in a buffer of its own", () => {
     const [press] = functionsOf(
       compilePackage(STRINGS_APP, 'app', SCREEN).program,

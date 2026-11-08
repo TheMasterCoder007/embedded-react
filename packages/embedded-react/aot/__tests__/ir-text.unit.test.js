@@ -16,7 +16,7 @@
 
 import {describe, it, expect} from 'vitest';
 import {parseExpression} from '@babel/parser';
-import {lowerText} from '../compiler/expressions.mts';
+import {buildsText, lowerText} from '../compiler/expressions.mts';
 
 // Text lowers to IR parts first; these check the parts.
 
@@ -113,9 +113,9 @@ describe('template literals and string helpers', () => {
     ).parts;
     expect(padded).toMatchObject({
       digits: 1,
-      pads: [
-        {width: 6, fill: ' '},
-        {width: 8, fill: '*'},
+      edits: [
+        {kind: 'pad', width: 6, fill: ' '},
+        {kind: 'pad', width: 8, fill: '*'},
       ],
     });
   });
@@ -125,9 +125,91 @@ describe('template literals and string helpers', () => {
       {
         kind: 'booleanWord',
         value: expect.anything(),
-        pads: [{width: 5, fill: '0'}],
+        edits: [{kind: 'pad', width: 5, fill: '0'}],
       },
     ]);
+  });
+
+  it('folds slice, toUpperCase and includes on a constant', () => {
+    expect(textOf("'Hello'.slice(1, -1)").parts).toEqual([
+      {kind: 'literal', text: 'ell'},
+    ]);
+    expect(textOf("'straße'.toUpperCase()").parts).toEqual([
+      {kind: 'literal', text: 'STRASSE'},
+    ]);
+    expect(textOf("`${'abc'.includes('b')}`").parts).toEqual([
+      {kind: 'literal', text: 'true'},
+    ]);
+  });
+
+  it('keeps slice on the value it cuts, cutting a constant position as JS does', () => {
+    const position = value => ({kind: 'number', value});
+    expect(textOf('name.slice(1, -1)', environment()).parts).toMatchObject([
+      {
+        kind: 'value',
+        edits: [{kind: 'slice', start: position(1), end: position(-1)}],
+      },
+    ]);
+    expect(textOf('name.slice(-3)', environment()).parts).toMatchObject([
+      {edits: [{start: position(-3), end: position(0x7fff)}]},
+    ]);
+    expect(textOf('name.slice(1.7, 99999)', environment()).parts).toMatchObject(
+      [{edits: [{start: position(1), end: position(0x7fff)}]}],
+    );
+    expect(textOf('name.slice(count)', environment()).parts).toMatchObject([
+      {edits: [{start: {kind: 'state'}, end: position(0x7fff)}]},
+    ]);
+  });
+
+  it('applies the helpers on a piece in the order they are called', () => {
+    const [piece] = textOf(
+      "name.slice(0, 3).padStart(5, '-').toUpperCase()",
+      environment(),
+    ).parts;
+    expect(piece.edits.map(edit => edit.kind)).toEqual([
+      'slice',
+      'pad',
+      'upper',
+    ]);
+  });
+
+  it('upper-cases literal text now and each value with letters as it prints', () => {
+    const parts = textOf(
+      '`id ${name}: ${count}, ${level}, ${on}`.toUpperCase()',
+      environment(),
+    ).parts;
+    expect(
+      parts.map(part => part.text ?? part.edits?.[0]?.kind ?? null),
+    ).toEqual(['ID ', 'upper', ': ', null, ', ', 'upper', ', ', 'upper', '']);
+  });
+
+  it('prints includes as a boolean word in a template', () => {
+    expect(
+      textOf("`${name.includes('a')}`", environment()).parts,
+    ).toMatchObject([
+      {kind: 'literal', text: ''},
+      {
+        kind: 'booleanWord',
+        value: {
+          kind: 'stringIncludes',
+          haystack: {kind: 'state'},
+          needle: {kind: 'string', value: 'a'},
+        },
+      },
+      {kind: 'literal', text: ''},
+    ]);
+  });
+
+  it("leaves a list's slice to the list", () => {
+    const lists = {
+      ...environment(),
+      state: new Map([
+        ...environment().state,
+        ['items', {kind: 'list', name: 'items'}],
+      ]),
+    };
+    expect(buildsText(parseExpression('items.slice(0, 2)'), lists)).toBe(false);
+    expect(buildsText(parseExpression('name.slice(1)'), lists)).toBe(true);
   });
 
   it('leaves String() alone where a runtime value named String hides the global', () => {
@@ -149,6 +231,19 @@ describe('template literals and string helpers', () => {
     ['`${count}:${count}`.padStart(5)', /padStart can only pad one value/],
     ["name.padStart(4, 'ab')", /fill must be one printable ASCII character/],
     ['name.padStart(300)', /longer than any text/],
+    ['count.slice(1)', /slice is only supported on a string/],
+    ['`${name}-${name}`.slice(1)', /slice can only cut one value/],
+    ['name.slice(level)', /slice's start and end must be whole numbers/],
+    ["name.slice('a')", /slice's start and end must be numbers/],
+    ["'abc'.slice('a')", /slice's start and end must be numbers/],
+    ['count.toFixed(2).slice(1)', /cannot cut a whole number's toFixed/],
+    ['count.toUpperCase()', /toUpperCase is only supported on a string/],
+    ["`${name.includes('a', 1)}`", /includes' position is not supported/],
+    ["`${'abc'.includes('b', 1)}`", /includes' position is not supported/],
+    ['`${name.includes(count)}`', /includes only searches for a string/],
+    ["`${'abc'.includes(1)}`", /includes only searches for a string/],
+    ["`${count.includes('a')}`", /includes is only supported on a string/],
+    ["`${`${name}!`.includes('a')}`", /not one built in place/],
     [
       "on ? level.toFixed(1) : '--'",
       /cannot concatenate inside its test or a branch/,

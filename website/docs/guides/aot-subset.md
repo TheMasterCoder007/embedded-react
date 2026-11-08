@@ -117,15 +117,20 @@ one, or a boolean branch with a non-boolean one; split those into two `{cond && 
 Comparing a string with a number is refused rather than coerced. A nested `<Text>` holds at most 4
 spans by default; `ER_AOT_MAX_TEXT_SPANS` raises it, and must match the engine's `ER_TEXT_MAX_SPANS`.
 
-Template literals, `String(x)`, `x.toFixed(n)` and `s.padStart(n, fill)` work in text and wherever else a string is
-built: a string state's setter, a list's string field, and a handler's `const`.
+Template literals, `String(x)`, `x.toFixed(n)`, `s.padStart(n, fill)`, `s.slice(start, end)` and `s.toUpperCase()`
+work in text and wherever else a string is built: a string state's setter, a list's string field, and a handler's
+`const`. `s.includes(search)` gives a boolean anywhere one is allowed.
 
 - `toFixed` takes 0 to 20 decimals and rounds as JS does. A fraction is a 32-bit float, though, so a long one can
   differ from Flow A in its last digits.
 - `padStart` pads one value with one ASCII character. Pad each value on its own:
-  `` `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` ``.
-- The numbers both helpers take must be constants. The limits above hold even when the whole call is a constant, so
-  turning a constant into state never stops an app compiling.
+  `` `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` ``. `slice` cuts one value the same way.
+- The numbers `toFixed` and `padStart` take must be constants; `slice`'s start and end can be any whole numbers.
+  The limits here hold even when the whole call is a constant, so turning a constant into state never stops an app
+  compiling.
+- `toUpperCase` changes ASCII and Latin-1 letters (`é` to `É`, `ß` to `SS`) and leaves other characters as they are.
+- `includes` searches for a string, with no start position, in a string that's kept somewhere (a state, a prop, a
+  local). Put one built in place into a `const` first.
 - A ternary in text still can't build a string in a branch, so `{ready ? t.toFixed(1) : '--'}` is refused.
 
 Text can only show glyphs the built-in font bakes: printable ASCII plus a fixed symbol set. `×`,

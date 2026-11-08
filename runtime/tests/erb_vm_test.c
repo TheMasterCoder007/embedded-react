@@ -469,6 +469,122 @@ static void test_text(void)
     CHECK(strlen(s_log) == logged, "once per place");
 }
 
+/** @brief The label toUpperCase leaves after printing @p first, then @p second as the last piece. */
+static const char* upper_cased(const char* first, const char* second)
+{
+    base();
+    const uint16_t first_string = add_string(first);
+    const uint16_t second_string = add_string(second);
+    const uint32_t code[] = {
+        OP_ABX(FMTK, 0, first_string),
+        OP_ABX(FMTK, 0, second_string),
+        OP_ABC(FMTUPPER, 0, 0, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint8_t types[] = {ERB_TYPE_INT};
+    const uint16_t function = helper(types, 1, 0, 0, code, 5);
+    if (!load())
+    {
+        return "(no load)";
+    }
+    call(function, 0, 0);
+    return (const char*)slot(SLOT_LABEL);
+}
+
+/** @brief The label slice(@p start, @p end) leaves after printing ">", then @p text as the last piece. */
+static const char* sliced(const char* text, int16_t start, int16_t end)
+{
+    base();
+    const uint16_t prefix = add_string(">");
+    const uint16_t piece = add_string(text);
+    const uint32_t code[] = {
+        OP_ABX(FMTK, 0, prefix),
+        OP_ABX(FMTK, 0, piece),
+        OP_ABX(LOADI, 0, start),
+        OP_ABX(LOADI, 1, end),
+        OP_ABC(FMTSLICE, 0, 1, 0),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+    const uint16_t function = helper(types, 2, 0, 0, code, 7);
+    if (!load())
+    {
+        return "(no load)";
+    }
+    call(function, 0, 0);
+    return (const char*)slot(SLOT_LABEL);
+}
+
+static void test_string_helpers(void)
+{
+    CHECK(strcmp(upper_cased("", ""), "") == 0, "toUpperCase on an empty buffer leaves it empty");
+    CHECK(strcmp(upper_cased("ab", "cd-\xC3\xA9\xC3\xBE"), "abCD-\xC3\x89\xC3\x9E") == 0,
+          "toUpperCase changes the last piece only, Latin-1 letters too");
+    CHECK(strcmp(upper_cased("", "\xC3\x9F\xC3\xBF\xC2\xB5\xC3\xB7\xE2\x82\xAC"),
+                 "SS\xC5\xB8\xCE\x9C\xC3\xB7\xE2\x82\xAC")
+              == 0,
+          "sharp s, y with diaeresis and micro change as JS changes them; division and euro signs stay");
+
+    CHECK(strcmp(sliced("hello", 1, -1), ">ell") == 0, "slice cuts the last piece, counting back from a negative end");
+    CHECK(strcmp(sliced("hello", -3, 32767), ">llo") == 0, "a negative start counts from the end");
+    CHECK(strcmp(sliced("hello", -100, 2), ">he") == 0, "a start before the beginning is the beginning");
+    CHECK(strcmp(sliced("hello", 3, 1), ">") == 0, "an end before the start leaves nothing");
+    CHECK(strcmp(sliced("hello", 9, 12), ">") == 0, "and so does a start past the end");
+    CHECK(strcmp(sliced("a\xF0\x9F\x98\x80"
+                        "b",
+                        1,
+                        3),
+                 ">\xF0\x9F\x98\x80")
+              == 0,
+          "a character past the BMP counts as two");
+    CHECK(strcmp(sliced("a\xF0\x9F\x98\x80"
+                        "b",
+                        0,
+                        2),
+                 ">a")
+              == 0,
+          "and is dropped when the end splits it");
+    CHECK(strcmp(sliced("a\xF0\x9F\x98\x80"
+                        "b",
+                        2,
+                        32767),
+                 ">b")
+              == 0,
+          "or the start does");
+    CHECK(strcmp(sliced("5\xC2\xB0"
+                        "C",
+                        1,
+                        2),
+                 ">\xC2\xB0")
+              == 0,
+          "a two-byte character counts as one");
+
+    base();
+    const uint16_t haystack = add_string("hello");
+    const uint16_t inside = add_string("ell");
+    const uint16_t empty = add_string("");
+    const uint16_t outside = add_string("elk");
+    const uint8_t string_types[] = {ERB_TYPE_BOOL, ERB_TYPE_STRING, ERB_TYPE_STRING};
+    const uint16_t includes[3] = {inside, empty, outside};
+    uint16_t functions[3];
+    for (uint32_t index = 0; index < 3u; index++)
+    {
+        const uint32_t code[] = {
+            OP_ABX(LOADS, 1, haystack),
+            OP_ABX(LOADS, 2, includes[index]),
+            OP_ABC(SHAS, 0, 1, 2),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        functions[index] = helper(string_types, 3, 0, ERB_TYPE_BOOL, code, 4);
+    }
+    CHECK(load(), "loads");
+    CHECK(call(functions[0], 0, 0) == 1, "includes finds a string inside");
+    CHECK(call(functions[1], 0, 0) == 1, "every string includes the empty one");
+    CHECK(call(functions[2], 0, 0) == 0, "and not one that isn't there");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Lists
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1190,6 +1306,7 @@ int main(void)
     test_float_rules();
     test_loops_and_calls();
     test_text();
+    test_string_helpers();
     test_lists();
     test_props();
     test_templates();
