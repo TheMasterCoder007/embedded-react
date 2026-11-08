@@ -33,6 +33,11 @@
  * pass; a row shows while the list holds it. Rows whose nodes and handlers
  * are the same share a template, and a row handler reads its item through the row it was built for.
  *
+ * A conditional on state is a branch template for each branch that has an element. The update destroys a branch
+ * once its test picks another, then builds the one picked, before the first sibling after it that is built. All
+ * the destroys of a pass come before its builds, so the panel's nodes are the most any one state of the app shows
+ * at once. A conditional in a list row builds every branch with the row instead, and shows the one picked.
+ *
  * A PanResponder is a handler for each responder event and a query function for each should-set predicate,
  * bound on each node that spreads it. Its gesture state is slots, kept by its grant, release and terminate
  * handlers, and a callback reads the gesture through them and EVT.
@@ -63,7 +68,7 @@ import {
   stateDrivenVectorOf,
   updatedVectorOf,
 } from '../ir/nodes.mts';
-import {nodeReads, vectorReads} from '../ir/reads.mts';
+import {expressionReads, nodeReads, vectorReads} from '../ir/reads.mts';
 import {armedFlag} from '../ir/functions.mts';
 import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
 import {Arena} from './arena.mts';
@@ -109,7 +114,13 @@ import type {
 } from '../ir/functions.mts';
 import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
 import type {IrCallback, IrStmt, IrUpdateVector} from '../ir/statements.mts';
-import type {IrElement, IrNode} from '../ir/nodes.mts';
+import type {
+  IrBranch,
+  IrChild,
+  IrConditional,
+  IrElement,
+  IrNode,
+} from '../ir/nodes.mts';
 import type {IrStateDrivenVector} from '../ir/vectors.mts';
 import type {StateReads} from '../ir/reads.mts';
 import type {ResolvedOptions} from '../options.mts';
@@ -159,9 +170,52 @@ interface Pool {
   list: ListState;
   rows: IrElement[];
   parent: IrNode;
-  /** The node the rows go before, or null for the end. */
-  anchor: IrNode | null;
+  /** The siblings after it: the rows go before the first of them that is built. */
+  after: IrChild[];
+  anchors: Anchor[];
+  /** The branch it is built with, or null for the first pass. */
+  within: Within | null;
   templates: number[];
+}
+
+/** A conditional that builds the branch its test picks, and destroys it once the test picks another. */
+interface Branching {
+  conditional: IrConditional;
+  /** The branches that build something, in source order; branch k is `alternatives[k - 1]`. */
+  alternatives: IrElement[];
+  /** Each branch's template. */
+  templates: number[];
+  parent: IrNode;
+  /** The siblings after it: a branch goes before the first of them that is built. */
+  after: IrChild[];
+  anchors: Anchor[];
+  /** The branch it sits in, or null when the root template builds its parent. */
+  within: Within | null;
+  /** The branch built, or 0 for none. */
+  built: Slot;
+  /** The built branch's first node. */
+  root: Slot;
+  /** The conditionals in its branches, at any depth, which go when it does. */
+  nested: Branching[];
+}
+
+/** A branch of a conditional: what is in it is built only while the conditional has it built. */
+interface Within {
+  branching: Branching;
+  /** Its number, from 1. */
+  alternative: number;
+}
+
+/** A sibling something built later may go before: a node, a pool's first row, or a branch while one is built. */
+type Anchor =
+  {kind: 'node'; node: IrNode} | {kind: 'branching'; branching: Branching};
+
+/** The pools and conditionals of a tree, and the branch each node sits in. */
+interface TreePlan {
+  pools: Pool[];
+  /** Each conditional that builds its branches, each before those in its branches. */
+  branchings: Branching[];
+  places: Map<IrNode, Within>;
 }
 
 /** A dep-driven effect's copy of one dep, and the type it is kept in. */
@@ -193,7 +247,10 @@ interface Lowering {
   /** Each list's row layout. */
   rows: ProgramRow[];
   pools: Pool[];
-  /** The row templates, after the root. */
+  branchings: Branching[];
+  /** The branch each node in one sits in. */
+  places: Map<IrNode, Within>;
+  /** The branch and row templates, after the root. */
   templates: ProgramTemplate[];
   /** The buffer a <TextInput>'s onChangeText reads its text into. */
   inputText: Slot | null;
@@ -215,6 +272,9 @@ interface Lowering {
 
 /** The most a u16 count or size in the format holds: a row's bytes, a panel's nodes, the row fields. */
 const MAX_U16 = 0xffff;
+
+/** BUILD's instance operand when the template is no list row's. */
+const NO_REGISTER = 0xff;
 
 /** The most fields a row has: ROWGET names one in a byte. */
 const MAX_ROW_FIELDS = 255;
@@ -449,23 +509,56 @@ const firstNode = (element: IrElement): IrNode =>
   element.kind === 'component' ? firstNode(element.root) : element.node;
 
 /**
- * Every `.map` over a list under an element, in tree order, with the node its rows go under and the one they go
- * before. A list inside a list's row is refused.
+ * Walks a tree for its pools and the conditionals that build their branches, and the branch each node sits in.
+ * A list inside a list's row is refused.
  *
  * @param element  The element.
- * @param found  Collects the pools.
+ * @param within  The branch it sits in, or null.
+ * @param plan  Collects what the walk finds.
+ * @param arena  Lays out each conditional's slots.
  */
-function poolsOf(element: IrElement, found: Pool[]): void {
+function planTree(
+  element: IrElement,
+  within: Within | null,
+  plan: TreePlan,
+  arena: Arena,
+): void {
   if (element.kind === 'component') {
-    poolsOf(element.root, found);
+    planTree(element.root, within, plan, arena);
     return;
   }
   const {node} = element;
+  if (within) {
+    plan.places.set(node, within);
+  }
   node.children.forEach((child, index) => {
+    const after = node.children.slice(index + 1);
     if (child.kind === 'element') {
-      poolsOf(child.element, found);
+      planTree(child.element, within, plan, arena);
+    } else if (child.kind === 'conditional' && child.toggle) {
+      branchElements(child).forEach(branch =>
+        planTree(branch, within, plan, arena),
+      );
     } else if (child.kind === 'conditional') {
-      branchElements(child).forEach(branch => poolsOf(branch, found));
+      const branching: Branching = {
+        conditional: child,
+        alternatives: branchElements(child),
+        templates: [],
+        parent: node,
+        after,
+        anchors: [],
+        within,
+        built: arena.slot(ValueType.int, 0),
+        root: arena.slot(ValueType.node),
+        nested: [],
+      };
+      plan.branchings.push(branching);
+      for (let outer = within; outer; outer = outer.branching.within) {
+        outer.branching.nested.push(branching);
+      }
+      branching.alternatives.forEach((alternative, place) =>
+        planTree(alternative, {branching, alternative: place + 1}, plan, arena),
+      );
     } else {
       for (const row of child.rows) {
         const nested = nodesOf(row).find(rowNode =>
@@ -474,26 +567,61 @@ function poolsOf(element: IrElement, found: Pool[]): void {
         if (nested) {
           notYetAt('a list inside a list row', nested.location);
         }
+        if (within) {
+          nodesOf(row).forEach(rowNode => plan.places.set(rowNode, within));
+        }
       }
-      // The rows go before the next node the parent builds itself.
-      const after = node.children
-        .slice(index + 1)
-        .flatMap(sibling =>
-          sibling.kind === 'element'
-            ? [sibling.element]
-            : sibling.kind === 'conditional'
-              ? branchElements(sibling)
-              : [],
-        );
-      found.push({
+      plan.pools.push({
         list: child.list,
         rows: child.rows,
         parent: node,
-        anchor: after.length ? firstNode(after[0]) : null,
+        after,
+        anchors: [],
+        within,
         templates: [],
       });
     }
   });
+}
+
+/**
+ * The siblings something goes before, in order: each branch until one that is always built when they are.
+ *
+ * @param after  The siblings after it.
+ * @param pools  The tree's pools.
+ * @param branchings  The tree's conditionals that build their branches.
+ *
+ * @returns The anchors; none when it goes last.
+ */
+function anchorsOf(
+  after: IrChild[],
+  pools: Pool[],
+  branchings: Branching[],
+): Anchor[] {
+  const anchors: Anchor[] = [];
+  for (const child of after) {
+    const first =
+      child.kind === 'element'
+        ? child.element
+        : child.kind === 'pool'
+          ? (pools.find(pool => pool.rows === child.rows)?.rows[0] ?? null)
+          : child.toggle
+            ? (branchElements(child)[0] ?? null)
+            : null;
+    if (first) {
+      anchors.push({kind: 'node', node: firstNode(first)});
+      return anchors;
+    }
+    if (child.kind === 'conditional' && !child.toggle) {
+      anchors.push({
+        kind: 'branching',
+        branching: branchings.find(
+          branching => branching.conditional === child,
+        )!,
+      });
+    }
+  }
+  return anchors;
 }
 
 /**
@@ -516,6 +644,8 @@ function planSlots(
   | 'rowHandles'
   | 'rows'
   | 'pools'
+  | 'branchings'
+  | 'places'
   | 'inputText'
   | 'requested'
   | 'once'
@@ -754,12 +884,31 @@ function planSlots(
     readsInput(node) ||
     stateDrivenVectorOf(node) !== null;
 
+  const {pools, branchings, places}: TreePlan = {
+    pools: [],
+    branchings: [],
+    places: new Map(),
+  };
+  planTree(app.root, null, {pools, branchings, places}, arena);
+  for (const placed of [...pools, ...branchings]) {
+    placed.anchors = anchorsOf(placed.after, pools, branchings);
+  }
+  // Rows and branches are built under their parent, before an anchor.
+  const builtUnder = new Set(
+    [...pools, ...branchings].flatMap(placed => [
+      placed.parent,
+      ...placed.anchors.flatMap(anchor =>
+        anchor.kind === 'node' ? [anchor.node] : [],
+      ),
+    ]),
+  );
+
   // A row's node keeps its handle in an array by the row, one array for each place in the row that needs one.
-  const pools: Pool[] = [];
-  poolsOf(app.root, pools);
   const rowHandles = new Map<IrNode, RowHandle>();
   for (const pool of pools) {
     const arrays: Slot[] = [];
+    const anchoring =
+      pool.rows.length > 0 && builtUnder.has(firstNode(pool.rows[0]));
     pool.rows.forEach((rowElement, row) =>
       nodesOf(rowElement).forEach((node, place) => {
         if (readsInput(node)) {
@@ -768,7 +917,8 @@ function planSlots(
         if (drawnOn.has(node)) {
           notYetAt('updateVector on a node in a list row', node.location);
         }
-        if (reached(node)) {
+        // Every row's first node, when the first row's is an anchor, so the rows can still share a template.
+        if (reached(node) || (anchoring && place === 0)) {
           arrays[place] ??= arena.slot(ValueType.node, 0, pool.list.capacity);
           rowHandles.set(node, {array: arrays[place], row});
         }
@@ -776,15 +926,24 @@ function planSlots(
     );
   }
 
-  // The rows are built under their parent, before the node after them.
-  const builtUnder = new Set(
-    pools.flatMap(pool =>
-      pool.anchor ? [pool.parent, pool.anchor] : [pool.parent],
-    ),
-  );
+  // A branch's first node keeps its handle in its conditional's slot, which every branch of it shares.
+  for (const branching of branchings) {
+    for (const alternative of branching.alternatives) {
+      handles.set(firstNode(alternative), branching.root);
+    }
+  }
   for (const node of nodes) {
+    if (drawnOn.has(node) && places.has(node)) {
+      const error = aotError(
+        'AOT: updateVector draws on a node a conditional builds and destroys',
+        'keep the node built and show it with visible={…} instead.',
+      );
+      locateError(error, node.location);
+      throw error;
+    }
     if (
       !rowHandles.has(node) &&
+      !handles.has(node) &&
       (reached(node) || builtUnder.has(node) || drawnOn.has(node))
     ) {
       handles.set(node, arena.slot(ValueType.node));
@@ -871,6 +1030,8 @@ function planSlots(
     rowHandles,
     rows,
     pools,
+    branchings,
+    places,
     inputText,
     requested,
     once,
@@ -1042,9 +1203,10 @@ function responderBindings(
 }
 
 /**
- * An element and everything under it as template nodes, each before its children. A conditional's branches
- * are all built, and the update shows the chosen one. A list's rows are row templates of their own. What a node
- * needs that a package can't lower yet is refused at the node's element.
+ * An element and everything under it as template nodes, each before its children. A conditional's branches are
+ * branch templates of their own, except in a list row, where all of them are built and the update shows the
+ * chosen one. A list's rows are row templates of their own. What a node needs that a package can't lower yet is
+ * refused at the node's element.
  *
  * @param element  The element.
  * @param lowering  The program being lowered.
@@ -1095,7 +1257,7 @@ function templateNodes(
     children = node.children.flatMap(child =>
       child.kind === 'element'
         ? [child.element]
-        : child.kind === 'conditional'
+        : child.kind === 'conditional' && child.toggle
           ? branchElements(child)
           : [],
     );
@@ -1156,6 +1318,58 @@ function rowTemplates(lowering: Lowering): void {
       return index;
     });
   }
+}
+
+/**
+ * Each branch's template, for every conditional that builds its branches.
+ *
+ * @param lowering  The program being lowered.
+ */
+function branchTemplates(lowering: Lowering): void {
+  for (const branching of lowering.branchings) {
+    branching.templates = branching.alternatives.map(alternative => {
+      const nodes: ProgramTemplateNode[] = [];
+      templateNodes(alternative, lowering, nodes);
+      // The root template is first, so a branch template's index is its place after it.
+      return lowering.templates.push({kind: TemplateKind.branch, nodes});
+    });
+  }
+}
+
+/**
+ * The most nodes an element and everything under it hold at once: every row of a list, and the largest branch
+ * of a conditional, or all of them in a list row.
+ *
+ * @param element  The element.
+ * @param counts  How many a node counts for.
+ *
+ * @returns The nodes.
+ */
+function mostBuilt(
+  element: IrElement,
+  counts: (node: IrNode) => number,
+): number {
+  if (element.kind === 'component') {
+    return mostBuilt(element.root, counts);
+  }
+  const sum = (elements: IrElement[]): number =>
+    elements.reduce((total, each) => total + mostBuilt(each, counts), 0);
+  let total = counts(element.node);
+  for (const child of element.node.children) {
+    if (child.kind === 'element') {
+      total += mostBuilt(child.element, counts);
+    } else if (child.kind === 'pool') {
+      total += sum(child.rows);
+    } else if (child.toggle) {
+      total += sum(branchElements(child));
+    } else {
+      total += Math.max(
+        0,
+        ...branchElements(child).map(branch => mostBuilt(branch, counts)),
+      );
+    }
+  }
+  return total;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1257,33 +1471,171 @@ function nodeHandle(
 }
 
 /**
- * Builds every list row, in order, under its parent and before the node after it.
+ * Builds under a parent, before the first anchor that is built: emits the BUILD for each node it may go before.
  *
  * @param codegen  The update function's codegen.
+ * @param parent  The parent's handle.
+ * @param anchors  What it goes before.
+ * @param lowering  The program being lowered.
+ * @param build  Emits the BUILD, before a node.
+ */
+function buildBefore(
+  codegen: Codegen,
+  parent: Register,
+  anchors: Anchor[],
+  lowering: Lowering,
+  build: (before: Register) => void,
+): void {
+  const {builder} = codegen;
+  const done = builder.label();
+  for (const anchor of anchors) {
+    if (anchor.kind === 'node') {
+      codegen.scoped(() => build(nodeHandle(codegen, anchor.node, lowering)));
+      builder.place(done);
+      return;
+    }
+    const absent = builder.label();
+    codegen.scoped(() => {
+      const {branching} = anchor;
+      builder.branch(
+        'JF',
+        absent,
+        codegen.truthy(codegen.get(branching.built)),
+      );
+      const before = builder.register('node');
+      builder.abx('GET64', before.index, branching.root.index);
+      build(before);
+      builder.branch('JMP', done);
+    });
+    builder.place(absent);
+  }
+  // BUILD before the parent itself puts it last.
+  build(parent);
+  builder.place(done);
+}
+
+/**
+ * Builds every row of a list under its parent, last row first, each before the row after it.
+ *
+ * @param codegen  The update function's codegen.
+ * @param pool  The list's pool.
  * @param lowering  The program being lowered.
  */
-function buildRows(codegen: Codegen, lowering: Lowering): void {
+function buildPool(codegen: Codegen, pool: Pool, lowering: Lowering): void {
   const {builder} = codegen;
-  for (const pool of lowering.pools) {
-    codegen.scoped(() => {
-      const parent = nodeHandle(codegen, pool.parent, lowering);
-      // BUILD before the parent itself puts the row last.
-      const before = pool.anchor
-        ? nodeHandle(codegen, pool.anchor, lowering)
-        : parent;
-      pool.templates.forEach((template, row) =>
-        codegen.scoped(() =>
-          builder.abc(
-            'BUILD',
-            builder.register('node').index,
-            parent.index,
-            before.index,
-            template | (codegen.load('int', row).index << 16),
-          ),
-        ),
-      );
-    });
+  codegen.scoped(() => {
+    const parent = nodeHandle(codegen, pool.parent, lowering);
+    const row = builder.register('int');
+    const built = [builder.register('node'), builder.register('node')];
+    const last = pool.templates.length - 1;
+    for (let index = last; index >= 0; index--) {
+      builder.abx('LOADI', row.index, index);
+      const build = (before: Register): void =>
+        builder.abc(
+          'BUILD',
+          built[index % 2].index,
+          parent.index,
+          before.index,
+          pool.templates[index] | (row.index << 16),
+        );
+      if (index === last) {
+        buildBefore(codegen, parent, pool.anchors, lowering, build);
+      } else {
+        build(built[(index + 1) % 2]);
+      }
+    }
+  });
+}
+
+/**
+ * Runs `body` only while a branch is built; at the root, always.
+ *
+ * @param codegen  The update function's codegen.
+ * @param within  The branch, or null.
+ * @param body  Emits what it guards.
+ */
+function whileBuilt(
+  codegen: Codegen,
+  within: Within | null | undefined,
+  body: () => void,
+): void {
+  if (!within) {
+    body();
+    return;
   }
+  const {builder} = codegen;
+  const skip = builder.label();
+  codegen.scoped(() => {
+    builder.branch(
+      'JF',
+      skip,
+      codegen.same(
+        codegen.get(within.branching.built),
+        codegen.load('int', within.alternative),
+      ),
+    );
+    body();
+  });
+  builder.place(skip);
+}
+
+/**
+ * The branch a conditional's tests pick: its number, or 0 for one that builds nothing.
+ *
+ * @param codegen  The function's codegen.
+ * @param branching  The conditional.
+ *
+ * @returns An int register.
+ */
+function picked(codegen: Codegen, branching: Branching): Register {
+  const {builder} = codegen;
+  const choice = builder.register('int');
+  const pick = (branch: IrBranch): void => {
+    if (branch?.kind !== 'conditional') {
+      builder.abx(
+        'LOADI',
+        choice.index,
+        branch ? branching.alternatives.indexOf(branch) + 1 : 0,
+      );
+      return;
+    }
+    const otherwise = builder.label();
+    const end = builder.label();
+    codegen.scoped(() =>
+      builder.branch('JF', otherwise, codegen.condition(branch.test)),
+    );
+    pick(branch.whenTrue);
+    builder.branch('JMP', end);
+    builder.place(otherwise);
+    pick(branch.whenFalse);
+    builder.place(end);
+  };
+  pick(branching.conditional);
+  return choice;
+}
+
+/**
+ * The state a conditional's tests read, those of the conditionals that are its branches included.
+ *
+ * @param conditional  The conditional.
+ *
+ * @returns Its reads.
+ */
+function conditionalReads(conditional: IrConditional): StateReads {
+  const reads = new Set<StateRecord>();
+  const tests = [
+    expressionReads(conditional.test),
+    ...[conditional.whenTrue, conditional.whenFalse].map(branch =>
+      branch?.kind === 'conditional' ? conditionalReads(branch) : new Set(),
+    ),
+  ];
+  for (const found of tests) {
+    if (!found) {
+      return null;
+    }
+    found.forEach(state => reads.add(state as StateRecord));
+  }
+  return reads;
 }
 
 /**
@@ -1355,8 +1707,9 @@ function setConstant(codegen: Codegen, slot: Slot, value: number): void {
 }
 
 /**
- * The update function: what a state change sets again, each node when a state it reads changed, and the nodes set
- * once in the first pass; then the effects it runs, queued.
+ * The update function: the branches a state change no longer picks destroyed, what it sets again, each node when
+ * a state it reads changed, and the nodes set once in the first pass; then the branches picked built, each with
+ * all of its props; then the effects it runs, queued.
  *
  * @param lowering  The program being lowered.
  *
@@ -1375,6 +1728,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     !updated.length &&
     !setOnce.length &&
     !drawings.length &&
+    !lowering.branchings.length &&
     !output.dependencyEffects.length &&
     !output.mountEffects.length
   ) {
@@ -1431,28 +1785,124 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     builder.place(real);
   }
 
-  // The rows, the props that read only boot values, and the drawings that do, built once.
-  const builtOnce = drawings.filter(({node}) => !updatedVectorOf(node));
-  if (setOnce.length || lowering.pools.length || builtOnce.length) {
+  // The branches a test no longer picks, destroyed before anything is built, with the conditionals in them.
+  const {branchings, places} = lowering;
+  for (const branching of branchings) {
+    codegen.scoped(() => {
+      const kept = builder.label();
+      const built = codegen.get(branching.built);
+      builder.branch('JF', kept, codegen.truthy(built));
+      whenRead(conditionalReads(branching.conditional), () =>
+        codegen.scoped(() => {
+          builder.branch(
+            'JT',
+            kept,
+            codegen.same(picked(codegen, branching), built),
+          );
+          const root = builder.register('node');
+          builder.abx('GET64', root.index, branching.root.index);
+          builder.abc('DESTROY', root.index);
+          for (const each of [branching, ...branching.nested]) {
+            setConstant(codegen, each.built, 0);
+          }
+        }),
+      );
+      builder.place(kept);
+    });
+  }
+
+  // The rows, the props that read only boot values, and the drawings that do, built once, outside the branches.
+  const atRoot = (node: IrNode): boolean => !places.has(node);
+  const rootPools = lowering.pools.filter(pool => !pool.within);
+  const rootSetOnce = setOnce.filter(atRoot);
+  const builtOnce = drawings.filter(
+    ({node}) => !updatedVectorOf(node) && atRoot(node),
+  );
+  if (rootSetOnce.length || rootPools.length || builtOnce.length) {
     whenDirty(builder, [lowering.once!], () => {
-      buildRows(codegen, lowering);
-      setOnce.forEach(node =>
+      rootPools.forEach(pool => buildPool(codegen, pool, lowering));
+      rootSetOnce.forEach(node =>
         located(node, () => setNode(codegen, node, lowering)),
       );
       builtOnce.forEach(({node, vector}) => draw(node, vector));
     });
   }
 
-  // The nodes, then the drawings.
+  // The nodes, then the drawings, each only while its branch is built.
   for (const node of updated) {
     located(node, () =>
-      whenRead(nodeReads(node), () => setNode(codegen, node, lowering)),
+      whenRead(nodeReads(node), () =>
+        whileBuilt(codegen, places.get(node), () =>
+          setNode(codegen, node, lowering),
+        ),
+      ),
     );
   }
   for (const {node, vector} of drawings) {
     if (updatedVectorOf(node)) {
-      whenRead(vectorReads(vector), () => draw(node, vector));
+      whenRead(vectorReads(vector), () =>
+        whileBuilt(codegen, places.get(node), () => draw(node, vector)),
+      );
     }
+  }
+
+  // The branches picked that aren't built, outer ones first: each built with its rows, then all of its props.
+  for (const branching of branchings) {
+    const skip = builder.label();
+    whileBuilt(codegen, branching.within, () =>
+      codegen.scoped(() => {
+        builder.branch(
+          'JT',
+          skip,
+          codegen.truthy(codegen.get(branching.built)),
+        );
+        const choice = picked(codegen, branching);
+        branching.alternatives.forEach((_, place) => {
+          const alternative = place + 1;
+          const other = builder.label();
+          codegen.scoped(() => {
+            builder.branch(
+              'JF',
+              other,
+              codegen.same(choice, codegen.load('int', alternative)),
+            );
+            const parent = nodeHandle(codegen, branching.parent, lowering);
+            const root = builder.register('node');
+            buildBefore(codegen, parent, branching.anchors, lowering, before =>
+              builder.abc(
+                'BUILD',
+                root.index,
+                parent.index,
+                before.index,
+                branching.templates[place] | (NO_REGISTER << 16),
+              ),
+            );
+            setConstant(codegen, branching.built, alternative);
+            const inside = (within: Within | null | undefined): boolean =>
+              within?.branching === branching &&
+              within.alternative === alternative;
+            lowering.pools
+              .filter(pool => inside(pool.within))
+              .forEach(pool => buildPool(codegen, pool, lowering));
+            nodes
+              .filter(
+                node =>
+                  inside(places.get(node)) &&
+                  (isStateDriven(node) || isSetOnce(node)),
+              )
+              .forEach(node =>
+                located(node, () => setNode(codegen, node, lowering)),
+              );
+            drawings
+              .filter(({node}) => inside(places.get(node)))
+              .forEach(({node, vector}) => draw(node, vector));
+            builder.branch('JMP', skip);
+          });
+          builder.place(other);
+        });
+      }),
+    );
+    builder.place(skip);
   }
   for (const flag of pending.values()) {
     setConstant(codegen, flag, 0);
@@ -2031,20 +2481,15 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     },
   ];
   templateNodes(app.root, lowering, nodes);
+  branchTemplates(lowering);
   rowTemplates(lowering);
 
-  // Every row is built, whether the list holds it or not.
-  const built = [
-    ...nodes,
-    ...lowering.pools.flatMap(pool =>
-      pool.templates.flatMap(
-        template => lowering.templates[template - 1].nodes,
-      ),
-    ),
-  ];
-  const nodeCount = built.length;
-  const vectorType = ENGINE_VALUES.get('ER_NODE_VECTOR');
-  const vectorNodes = built.filter(node => node.type === vectorType).length;
+  // Every row is built, whether the list holds it or not, and the largest branch of each conditional; the root
+  // template's own node too.
+  const nodeCount = 1 + mostBuilt(app.root, () => 1);
+  const vectorNodes = mostBuilt(app.root, node =>
+    node.type === 'ER_NODE_VECTOR' ? 1 : 0,
+  );
   if (nodeCount > MAX_U16) {
     throw aotError(
       `AOT: the app needs ${nodeCount} nodes, but a package holds ${MAX_U16}`,

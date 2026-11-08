@@ -730,7 +730,10 @@ function emitDynamicMap(
         rowJSX,
         rowScope,
         output,
-        rowEnv(environment, [itemName, indexName], rowScope, rowLocals),
+        {
+          ...rowEnv(environment, [itemName, indexName], rowScope, rowLocals),
+          inListRow: true,
+        },
         state,
         {show: {kind: 'rowInUse', row: rowIndex, list: listState}},
       ),
@@ -784,8 +787,8 @@ function unsupportedChild(expression: t.Node, what: string | null): AotError {
 
 /**
  * Lowers one branch of a conditional child: an element, a nested `&&` or ternary, or something that renders
- * nothing. A condition that folds picks its branch now; a state-driven one builds every branch and shows each
- * only while it is chosen, `within` the branch it sits in.
+ * nothing. A condition that folds picks its branch now. A state-driven one builds the branch it picks; in a list
+ * row it builds every branch with the row and shows each only while it is chosen, `within` the branch it sits in.
  *
  * @param expression  The branch.
  * @param scope  Compile-time constants in reach.
@@ -862,7 +865,7 @@ function lowerBranch(
         : null;
     }
 
-    // A state-driven test builds every branch; each shows while the test picks it.
+    // A state-driven test builds the branch it picks. A list row builds every branch, each shown while picked.
     const test = lowerExpr(testNode, environment);
     if (isAnd && NUMERIC_KINDS.has(test.type.kind)) {
       const error = aotError(
@@ -875,15 +878,13 @@ function lowerBranch(
 
       throw error;
     }
-    const shown = (negate: boolean): IrShow => ({
-      kind: 'condition',
-      test,
-      negate,
-      within,
-    });
+    const toggle = !!environment.inListRow;
+    const shown = (negate: boolean): IrShow | null =>
+      toggle ? {kind: 'condition', test, negate, within} : null;
     return {
       kind: 'conditional',
       test,
+      toggle,
       whenTrue: lowerBranch(
         whenTrue,
         scope,
@@ -914,11 +915,10 @@ function lowerBranch(
 }
 
 /**
- * Emits the children of a container node. Everything unrolls at compile time into a fixed set of nodes:
- * fragments are inlined, a state-driven condition builds its elements and toggles their display, and a
- * `.map` over list state builds a fixed pool of rows. Every child is either emitted or refused with an
- * "AOT: …" error: one that would change the node count at runtime, text outside a <Text>, or anything else
- * the engine has no node for.
+ * Emits the children of a container node. Everything unrolls at compile time: fragments are inlined, a
+ * state-driven condition lowers each of its branches, and a `.map` over list state builds a fixed pool of rows.
+ * Every child is either emitted or refused with an "AOT: …" error: text outside a <Text>, or anything else the
+ * engine has no node for.
  *
  * @param children  The container's children.
  * @param scope  Compile-time constants in reach.

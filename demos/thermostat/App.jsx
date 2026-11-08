@@ -392,10 +392,37 @@ export function App() {
                     : INSIDE_FAHRENHEIT}
                   °
                 </Text>
-                {/* Two nodes rather than one ternary: the AOT lowers a Text child to a single formatted
-                string, and it refuses a ternary that mixes the "––" string with the numeric
-                branches. */}
-                {mode !== 'off' && mode !== 'auto' && (
+                {/* One Text per mode, in a ternary rather than a Text child: the AOT lowers a Text's children
+                to a single formatted string and refuses a ternary that mixes "––" with numbers. Only
+                the picked branch is built, so the three cost one node. */}
+                {mode === 'off' ? (
+                  <Text
+                    style={{
+                      fontSize: FONT_SIZES.big,
+                      fontWeight: '500',
+                      color: '#f2f3f4',
+                    }}>
+                    ––
+                  </Text>
+                ) : mode === 'auto' ? (
+                  /* AUTO's pair. ONE Text, not three: "%d° / %d°" costs one node where a colored
+                    low/high row would cost four. */
+                  <Text
+                    style={{
+                      fontSize: FONT_SIZES.dual,
+                      fontWeight: '500',
+                      color: '#f2f3f4',
+                    }}>
+                    {unit === 'C'
+                      ? Math.round(((low - 32) * 5) / 9)
+                      : Math.round(low)}
+                    °-
+                    {unit === 'C'
+                      ? Math.round(((high - 32) * 5) / 9)
+                      : Math.round(high)}
+                    °
+                  </Text>
+                ) : (
                   <Text
                     style={{
                       fontSize: FONT_SIZES.big,
@@ -412,36 +439,6 @@ export function App() {
                       : Math.round(
                           mode === 'heat' ? heatSetpoint : coolSetpoint,
                         )}
-                    °
-                  </Text>
-                )}
-                {mode === 'off' && (
-                  <Text
-                    style={{
-                      fontSize: FONT_SIZES.big,
-                      fontWeight: '500',
-                      color: '#f2f3f4',
-                    }}>
-                    ––
-                  </Text>
-                )}
-                {/* AUTO's pair. ONE Text, not three: the AOT lowers a Text's children to a single
-                  formatted string, so "%d° / %d°" costs one node where a colored low/high row would cost
-                  four — and this branch has very little node headroom. */}
-                {mode === 'auto' && (
-                  <Text
-                    style={{
-                      fontSize: FONT_SIZES.dual,
-                      fontWeight: '500',
-                      color: '#f2f3f4',
-                    }}>
-                    {unit === 'C'
-                      ? Math.round(((low - 32) * 5) / 9)
-                      : Math.round(low)}
-                    °-
-                    {unit === 'C'
-                      ? Math.round(((high - 32) * 5) / 9)
-                      : Math.round(high)}
                     °
                   </Text>
                 )}

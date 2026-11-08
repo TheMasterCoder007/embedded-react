@@ -51,12 +51,17 @@ import {normalizeUndefined, parseApp} from './parse.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
-import {isStateDriven, nodesOf, updatedVectorOf} from './ir/nodes.mts';
-import {nodeReads, vectorReads} from './ir/reads.mts';
+import {
+  conditionalsOf,
+  isStateDriven,
+  nodesOf,
+  updatedVectorOf,
+} from './ir/nodes.mts';
+import {expressionReads, nodeReads, vectorReads} from './ir/reads.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
 import type {SlotWidths} from './ir/types.mts';
-import type {IrNode} from './ir/nodes.mts';
+import type {IrElement} from './ir/nodes.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
 import type {Env, Scope, StateRecord} from './types.mts';
 
@@ -134,19 +139,25 @@ function settleFunctions(output: Out, hasUpdate: boolean): void {
 }
 
 /**
- * Flags each state a node or drawing reads, so a write to it marks it changed and the update sets them again.
- * A node that also reads something untracked is set on every update, so its reads need no flag.
+ * Flags each state a node, drawing or conditional reads, so a write to it marks it changed and the update sets
+ * them again. One that also reads something untracked is set on every update, so its reads need no flag.
  *
- * @param nodes  The app's nodes.
+ * @param root  The app's tree.
  */
-function watchState(nodes: IrNode[]): void {
-  for (const node of nodes) {
-    const vector = updatedVectorOf(node);
-    for (const reads of [nodeReads(node), vector && vectorReads(vector)]) {
-      reads?.forEach(record => {
-        record.isWatched = true;
-      });
-    }
+function watchState(root: IrElement): void {
+  const reads = [
+    ...nodesOf(root).flatMap(node => {
+      const vector = updatedVectorOf(node);
+      return [nodeReads(node), vector && vectorReads(vector)];
+    }),
+    ...conditionalsOf(root).map(conditional =>
+      expressionReads(conditional.test),
+    ),
+  ];
+  for (const read of reads) {
+    read?.forEach(record => {
+      record.isWatched = true;
+    });
   }
 }
 
@@ -365,10 +376,12 @@ function lowerProgram(
   const hasUpdate =
     nodesOf(root).some(
       node => isStateDriven(node) || updatedVectorOf(node) !== null,
-    ) || output.dependencyEffects.length > 0;
+    ) ||
+    conditionalsOf(root).some(conditional => !conditional.toggle) ||
+    output.dependencyEffects.length > 0;
   settleFunctions(output, hasUpdate);
   if (hasUpdate) {
-    watchState(nodesOf(root));
+    watchState(root);
   }
 
   const stateRecords = [...state.byName.values(), ...output.childStateRecords];

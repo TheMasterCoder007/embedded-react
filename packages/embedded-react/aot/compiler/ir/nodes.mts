@@ -31,11 +31,11 @@ import type {IrStateDrivenVector, IrVectorTables} from './vectors.mts';
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** When a node built under a state-driven conditional shows; it exists either way. */
+/** When a node built with every row of a list, or under a conditional in one, shows; it exists either way. */
 export type IrShow =
   /**
-   * `cond && <X/>`, or a branch of `cond ? <A/> : <B/>` (the else branch is negated). A condition nested in
-   * another's branch holds only `within` that branch.
+   * `cond && <X/>`, or a branch of `cond ? <A/> : <B/>` (the else branch is negated), in a list row. A condition
+   * nested in another's branch holds only `within` that branch.
    */
   | {kind: 'condition'; test: IrExpr; negate: boolean; within: IrShow | null}
   /** A row of a list's fixed pool, shown while the list holds that many items. */
@@ -58,9 +58,9 @@ export type IrPropValue =
   | {kind: 'dimension'; value: IrExpr}
   /** `visible={expr}`: shown while the value is truthy. */
   | {kind: 'visible'; value: IrExpr}
-  /** The display toggle of a node built under a state-driven conditional. */
+  /** The display toggle of a list row, or of a node under a conditional in one. */
   | {kind: 'shown'; show: IrShow}
-  /** `value` while a node built under a state-driven conditional shows, else 0. */
+  /** `value` while a node with a display toggle shows, else 0. */
   | {kind: 'whileShown'; show: IrShow; value: IrPropValue}
   /**
    * A byte that is `whenTrue` while the test holds, else 0: a 0/1 flag, or a gradient's stop count. `truthiness`
@@ -142,8 +142,8 @@ export type IrElement =
     };
 
 /**
- * One entry of a container's children. Everything is built at boot, so the node count never changes: a condition
- * or a `.map` that folds at build time is plain elements, and a state-driven one is built in full and toggled.
+ * One entry of a container's children. A condition or a `.map` that folds at build time is plain elements. A
+ * state-driven condition builds the branch it picks, and a `.map` over list state is a fixed pool of rows.
  */
 export type IrChild =
   | {kind: 'element'; element: IrElement}
@@ -152,12 +152,15 @@ export type IrChild =
   | {kind: 'pool'; list: ListState; rows: IrElement[]};
 
 /**
- * `cond && <X/>` or `cond ? <A/> : <B/>` on state: each branch is built and shown only while it is chosen. A
- * branch is an element, another conditional (`a ? <A/> : b ? <B/> : <C/>`), or nothing.
+ * `cond && <X/>` or `cond ? <A/> : <B/>` on state: the chosen branch is built, and destroyed once another is
+ * chosen. In a list row every branch is built with the row instead, and shown only while it is chosen. A branch
+ * is an element, another conditional (`a ? <A/> : b ? <B/> : <C/>`), or nothing.
  */
 export interface IrConditional {
   kind: 'conditional';
   test: IrExpr;
+  /** In a list row: every branch is built, and toggled. */
+  toggle: boolean;
   whenTrue: IrBranch;
   whenFalse: IrBranch;
 }
@@ -223,7 +226,7 @@ export function stateDrivenVectorOf(node: IrNode): IrStateDrivenVector | null {
 }
 
 /**
- * Every node under an element, each before its children, in the order the build creates them.
+ * Every node under an element, each before its children, every branch of a conditional included.
  *
  * @param element  The element.
  *
@@ -263,4 +266,42 @@ export function branchElements(conditional: IrConditional): IrElement[] {
         ? branchElements(branch)
         : [branch],
   );
+}
+
+/**
+ * Every conditional under an element, each before those in its branches. A conditional that is another's branch
+ * is listed too.
+ *
+ * @param element  The element.
+ *
+ * @returns The conditionals.
+ */
+export function conditionalsOf(element: IrElement): IrConditional[] {
+  const found: IrConditional[] = [];
+  const visit = (branch: IrBranch): void => {
+    if (branch == null) {
+      return;
+    }
+    if (branch.kind === 'conditional') {
+      found.push(branch);
+      visit(branch.whenTrue);
+      visit(branch.whenFalse);
+      return;
+    }
+    if (branch.kind === 'component') {
+      visit(branch.root);
+      return;
+    }
+    for (const child of branch.node.children) {
+      if (child.kind === 'element') {
+        visit(child.element);
+      } else if (child.kind === 'conditional') {
+        visit(child);
+      } else {
+        child.rows.forEach(visit);
+      }
+    }
+  };
+  visit(element);
+  return found;
 }

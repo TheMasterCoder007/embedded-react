@@ -149,6 +149,39 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '200,142 200,142',
   },
+  {name: 'branches', file: fixture('branches'), screen: PORTRAIT, listCap: 6},
+  // + twice builds the home screen's badge, then the screen's own bump.
+  {
+    name: 'branches-home',
+    file: fixture('branches'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '38,56 38,56 44,128',
+  },
+  // Two adds while the list isn't built, the list screen, then one more add.
+  {
+    name: 'branches-list',
+    file: fixture('branches'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '104,56 104,56 104,22 104,56',
+  },
+  // + once, the third screen, then dark three times.
+  {
+    name: 'branches-more',
+    file: fixture('branches'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '38,56 170,22 170,56 170,56 170,56',
+  },
+  // + twice, the list with an add, then home again: built anew, with its badge and none of the list.
+  {
+    name: 'branches-back',
+    file: fixture('branches'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '38,56 38,56 104,22 104,56 38,22',
+  },
   // The mount effect's interval ticks through the frames the host settles for.
   {name: 'timers', file: fixture('timers'), screen: PORTRAIT},
   // Two timeouts, then an interval started and cleared before the last frame.

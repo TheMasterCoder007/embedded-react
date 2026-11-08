@@ -162,8 +162,8 @@ export interface Caps {
 }
 
 /**
- * How the element being emitted is placed. `show` is set under a state-driven conditional: the element exists
- * either way, and the update shows it only while the condition holds.
+ * How the element being emitted is placed. `show` is set on a list row, and under a conditional in one: the
+ * element exists either way, and the update shows it only while the condition holds.
  */
 export interface EmitOptions {
   show?: IrShow;
@@ -315,6 +315,8 @@ export interface Env {
   shadowedClock: WeakSet<t.Node>;
   /** Children passed to the component being inlined. */
   children?: ChildrenSlot | null;
+  /** Inside a list row, whose conditionals build every branch and toggle it. */
+  inListRow?: boolean;
   /** Callback props of the component being inlined. */
   functionProps?: Map<string, FunctionProp>;
   /** Namespaces the handlers an inlined component instance emits. */

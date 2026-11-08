@@ -32,6 +32,11 @@ while the code that breaks it is still one line.
   the `screen` global; runtime layout branching is expressed inside JSX with `&&` or a ternary.
   The left of a state-driven `&&` must be a condition, not a number: React draws a `0` as text, so
   write `count > 0 && <El/>`.
+- A state-driven `&&` or ternary builds the branch it picks and destroys it when another is picked,
+  so the package needs nodes for the largest set shown at once. To keep a small branch that flips
+  often built, write `<El visible={cond}/>` instead. In a list row, every branch is built with the
+  row and toggled. The state of a component in a branch is kept while the branch is gone.
+  `updateVector` can't draw on a node in a branch.
 - Components live in the same file as `App`: local `.jsx` imports are not resolved.
 - A component that receives state-driven or function props must destructure them:
   `function Card({title})`. `function Card(props)` works only when every prop is a constant. Rest
