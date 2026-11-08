@@ -56,7 +56,7 @@ from a 1280×800 tablet down to the 240×320 panel on a no-PSRAM ESP32:
 - The settings sheet offers units only. A live theme switch would require every colour in the tree to
   be a ternary of literals, so the theme is baked at build time.
 - AUTO's pair renders as one `<Text>` (`59°-76°`) rather than two tappable numbers: a `<Text>` lowers
-  to a single formatted string, so that is one node against four, and the CYD has little node headroom (41
+  to a single formatted string, so that is one node against four, and the CYD has little node headroom (39
   of 42).
 - The centre readout is state-driven rather than imperative. The drag itself is native in both
   flows.
