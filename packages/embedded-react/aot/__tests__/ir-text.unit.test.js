@@ -120,6 +120,25 @@ describe('template literals and string helpers', () => {
     });
   });
 
+  it('pads a runtime boolean printed by String()', () => {
+    expect(textOf("String(on).padStart(5, '0')", environment()).parts).toEqual([
+      {
+        kind: 'booleanWord',
+        value: expect.anything(),
+        pads: [{width: 5, fill: '0'}],
+      },
+    ]);
+  });
+
+  it('leaves String() alone where a runtime value named String hides the global', () => {
+    const shadowed = envWith(
+      scalar('String', 'string'),
+      scalar('count', 'int'),
+    );
+    expect(() => textOf('String(7)', shadowed)).toThrow();
+    expect(() => textOf('`${String(count)}`', shadowed)).toThrow();
+  });
+
   it.each([
     ['name.toFixed(1)', /toFixed is only supported on a number/],
     ['on.toFixed(1)', /toFixed is only supported on a number/],

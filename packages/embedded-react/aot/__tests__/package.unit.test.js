@@ -728,6 +728,24 @@ export function App() {
     expect(names[names.indexOf('FMTPAD') + 1]).toBe('FMTK');
   });
 
+  it('pads a boolean word right after printing it', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [on, setOn] = useState(false);
+  return <Pressable onPress={() => setOn(!on)}><Text>{String(on).padStart(6, '.')}</Text></Pressable>;
+}`;
+    const update = functionsOf(
+      compilePackage(source, 'app', SCREEN).program,
+    ).at(-1);
+    const names = update.ops.map(instruction => instruction.name);
+    expect(names[names.indexOf('FMTB') + 1]).toBe('FMTPAD');
+    expect(instructions(update, 'FMTPAD')).toEqual([
+      expect.objectContaining({a: 6, bx: '.'.charCodeAt(0)}),
+    ]);
+  });
+
   it("builds a handler's template local in a buffer of its own", () => {
     const [press] = functionsOf(
       compilePackage(STRINGS_APP, 'app', SCREEN).program,

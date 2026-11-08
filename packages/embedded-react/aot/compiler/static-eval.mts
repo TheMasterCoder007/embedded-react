@@ -27,7 +27,8 @@ import {
   isBoot,
   isContainer,
 } from './boot.mts';
-import {aotError} from './diagnostics.mts';
+import {ENGINE_STRING_MAX, aotError} from './diagnostics.mts';
+import type {AotError} from './diagnostics.mts';
 import type * as t from '@babel/types';
 import type {Env, Scope} from './types.mts';
 
@@ -40,6 +41,11 @@ import type {Env, Scope} from './types.mts';
  * not at all (`strict`). See evalStatic.
  */
 export type BootMode = 'fold' | 'boot' | 'strict';
+
+/** A fold refused because a string helper is past what a package can run. */
+interface FoldLimitError extends AotError {
+  isFoldLimit?: boolean;
+}
 
 /** One evalStatic call: the scope it folds in, and that scope's copy, made once a boot value needs it. */
 interface Fold {
@@ -62,17 +68,41 @@ const STATIC_MATH: Record<string, (...values: any[]) => number> = {
   abs: Math.abs,
 };
 
-/** The string helpers a fold works out, as JS does, and the type each one is called on. */
+/** What a fold sees for a global the code shadows with a runtime value: bound, so not the global, and not constant. */
+const RUNTIME_BINDING = Symbol('runtime binding');
+
+/** Globals a fold calls as JS does, unless the code shadows them. */
+const FOLDED_GLOBALS = ['String'];
+
+/** The most decimals toFixed prints in a package, as ERB_FIXED_DIGITS_MAX allows. */
+export const MAX_FIXED_DIGITS = 20;
+
+/** The hint for a helper's number that isn't a whole number. */
+const WHOLE_NUMBER_HINT =
+  'the package bakes it into the instruction, so write a literal or a module constant.';
+
+/**
+ * The string helpers a fold works out, as JS does, and the type each one is called on. A call past what the package
+ * could do at run time is refused, so a constant and a runtime value accept the same code.
+ */
 const STATIC_METHODS: Record<
   string,
-  {receiver: 'number' | 'string'; apply: (...values: any[]) => string}
+  {
+    receiver: 'number' | 'string';
+    problem: (...values: any[]) => [string, string] | null;
+    apply: (...values: any[]) => string;
+  }
 > = {
   toFixed: {
     receiver: 'number',
+    problem: (_value: number, digits: unknown = 0) =>
+      fixedDigitsProblem(digits),
     apply: (value: number, digits?: number) => value.toFixed(digits),
   },
   padStart: {
     receiver: 'string',
+    problem: (_value: string, width: unknown = 0, fill: unknown = ' ') =>
+      padWidthProblem(width) ?? padFillProblem(fill),
     apply: (value: string, width: number, fill?: string) =>
       value.padStart(width, fill),
   },
@@ -81,6 +111,86 @@ const STATIC_METHODS: Record<
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Why toFixed can't take these digits in a package, or null when it can.
+ *
+ * @param digits  The digits.
+ *
+ * @returns The error's message and hint.
+ */
+export function fixedDigitsProblem(digits: unknown): [string, string] | null {
+  if (!Number.isInteger(digits)) {
+    return [
+      "AOT: toFixed's digits must be a compile-time whole number",
+      WHOLE_NUMBER_HINT,
+    ];
+  }
+
+  if ((digits as number) < 0 || (digits as number) > MAX_FIXED_DIGITS) {
+    return [
+      `AOT: toFixed(${digits}) is out of range`,
+      `a package prints 0 to ${MAX_FIXED_DIGITS} decimals.`,
+    ];
+  }
+
+  return null;
+}
+
+/**
+ * Why padStart can't take this length in a package, or null when it can.
+ *
+ * @param width  The length.
+ *
+ * @returns The error's message and hint.
+ */
+export function padWidthProblem(width: unknown): [string, string] | null {
+  if (!Number.isInteger(width)) {
+    return [
+      "AOT: padStart's length must be a compile-time whole number",
+      WHOLE_NUMBER_HINT,
+    ];
+  }
+
+  if ((width as number) > ENGINE_STRING_MAX.ER_TEXT_MAX) {
+    return [
+      `AOT: padStart(${width}) is longer than any text`,
+      `a text holds at most ${ENGINE_STRING_MAX.ER_TEXT_MAX} bytes.`,
+    ];
+  }
+
+  return null;
+}
+
+/**
+ * Why padStart can't take this fill in a package, or null when it can: one printable ASCII character, or none.
+ *
+ * @param fill  The fill.
+ *
+ * @returns The error's message and hint.
+ */
+export function padFillProblem(fill: unknown): [string, string] | null {
+  if (fill === '' || (typeof fill === 'string' && /^[ -~]$/.test(fill))) {
+    return null;
+  }
+
+  return [
+    "AOT: padStart's fill must be one printable ASCII character",
+    'write a constant such as "0" or " "; a longer fill is not supported.',
+  ];
+}
+
+/**
+ * Rethrows an error that refuses a fold because a string helper is past what a package can run, so a caller that
+ * treats a fold that fails as a runtime value doesn't swallow it.
+ *
+ * @param error  What a fold threw.
+ */
+export function rethrowFoldLimit(error: unknown): void {
+  if ((error as FoldLimitError | null)?.isFoldLimit) {
+    throw error;
+  }
+}
 
 /**
  * evalStatic at a boundary that REQUIRES a compile-time constant. On a fold failure it rethrows as a
@@ -102,7 +212,8 @@ export function evalStaticOrThrow(
 ): unknown {
   try {
     return evalStatic(node, scope);
-  } catch {
+  } catch (foldError) {
+    rethrowFoldLimit(foldError);
     const error = aotError(message, hint);
     if (node && node.loc) {
       error.aotLoc = node.loc.start;
@@ -381,7 +492,12 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
         : evaluate(node.alternate, scope, fold);
     }
     case 'Identifier':
-      if (hasBinding(scope, node.name)) return scope[node.name];
+      if (
+        hasBinding(scope, node.name) &&
+        scope[node.name] !== RUNTIME_BINDING
+      ) {
+        return scope[node.name];
+      }
       throw new Error(
         `AOT: cannot statically resolve identifier "${node.name}"`,
       );
@@ -498,6 +614,16 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
           throw new Error('AOT: a string helper on the wrong type');
         }
 
+        const problem = method?.problem(...built);
+        if (problem) {
+          const error: FoldLimitError = aotError(...problem);
+          error.isFoldLimit = true;
+          if (node.loc) {
+            error.aotLoc = node.loc.start;
+          }
+          throw error;
+        }
+
         const result = isString
           ? built.length === 0
             ? ''
@@ -577,7 +703,8 @@ function binary(operator: string, left: any, right: any): unknown {
  * gesture params of the handler being compiled. lowerExpr resolves those before environment.constants, so a fold
  * that consulted the raw scope would silently swap a module const in for the value the code actually
  * uses. Every env-driven constant fold goes through this; the JSX-side folds keep the same rule by
- * deleting a name from their scope copy when they bind it (see emitComponent / emitDynamicMap).
+ * deleting a name from their scope copy when they bind it (see emitComponent / emitDynamicMap). A runtime name that
+ * hides a global the fold calls, such as `String`, is kept as bound but not constant, so the global isn't called.
  *
  * @param environment  The expression environment.
  * @param scope  The constants a fold would otherwise see.
@@ -608,9 +735,18 @@ export function foldScope(environment: Env, scope: Scope): Scope {
     }
   }
 
-  if (!hasShadowedName) return scope;
-  return Object.fromEntries(
-    Object.entries(scope).filter(([name]) => !runtimeNames.has(name)),
+  const kept = hasShadowedName
+    ? Object.fromEntries(
+        Object.entries(scope).filter(([name]) => !runtimeNames.has(name)),
+      )
+    : scope;
+
+  // A runtime value named like a global the fold calls hides that global.
+  const shadowedGlobals = FOLDED_GLOBALS.filter(name => runtimeNames.has(name));
+  if (shadowedGlobals.length === 0) return kept;
+  return Object.assign(
+    Object.create(kept),
+    Object.fromEntries(shadowedGlobals.map(name => [name, RUNTIME_BINDING])),
   );
 }
 

@@ -124,7 +124,8 @@ built: a string state's setter, a list's string field, and a handler's `const`.
   differ from Flow A in its last digits.
 - `padStart` pads one value with one ASCII character. Pad each value on its own:
   `` `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}` ``.
-- The numbers both helpers take must be constants.
+- The numbers both helpers take must be constants. The limits above hold even when the whole call is a constant, so
+  turning a constant into state never stops an app compiling.
 - A ternary in text still can't build a string in a branch, so `{ready ? t.toFixed(1) : '--'}` is refused.
 
 Text can only show glyphs the built-in font bakes: printable ASCII plus a fixed symbol set. `×`,

@@ -51,6 +51,8 @@ export interface IrTextValue {
 export interface IrTextBoolean {
   kind: 'booleanWord';
   value: IrExpr;
+  /** `padStart` calls on the word, in order. */
+  pads?: IrTextPad[];
 }
 
 /** One piece of a text. */

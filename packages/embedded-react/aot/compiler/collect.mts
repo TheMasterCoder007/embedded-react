@@ -39,6 +39,7 @@ import {
   evalStatic,
   setBinding,
   withUndefined,
+  rethrowFoldLimit,
 } from './static-eval.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
@@ -254,8 +255,9 @@ export function moduleScope(
             evalStatic(declarator.init, withUndefined(scope), 'boot'),
           ),
         );
-      } catch {
-        /* not a static const — skip */
+      } catch (error) {
+        // Not a static const, so skipped, unless a string helper in it is past what a package can run.
+        rethrowFoldLimit(error);
       }
     }
   }

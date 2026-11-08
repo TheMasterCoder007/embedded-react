@@ -1093,6 +1093,7 @@ export class Codegen {
         }
       } else if (part.kind === 'booleanWord') {
         builder.abc('FMTB', this.condition(part.value).index);
+        this.pads(part.pads, 0);
       } else if (this.enumOf(part.value)) {
         const value = part.value as IrExpr & {kind: 'state'};
         builder.abx(

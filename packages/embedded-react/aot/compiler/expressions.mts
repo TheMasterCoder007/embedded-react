@@ -33,7 +33,14 @@ import {
   isBoot,
   wholeBootValue,
 } from './boot.mts';
-import {evalStatic, foldScope, hasBinding} from './static-eval.mts';
+import {
+  evalStatic,
+  fixedDigitsProblem,
+  foldScope,
+  hasBinding,
+  padFillProblem,
+  padWidthProblem,
+} from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
@@ -100,9 +107,6 @@ interface TextParts {
 
 /** The binary operators lowered as arithmetic, and those lowered as comparisons. */
 const ARITHMETIC = new Set(['+', '-', '*', '/', '%']);
-
-/** The most decimals toFixed prints in a package, as ERB_FIXED_DIGITS_MAX allows. */
-const MAX_FIXED_DIGITS = 20;
 const COMPARE = new Set(['<', '>', '<=', '>=', '==', '!=', '===', '!==']);
 
 /** The saturating helper each whole-number operator lowers to in the IR. */
@@ -2114,12 +2118,9 @@ function lowerToFixed(call: t.CallExpression, environment: Env): TextParts {
     "toFixed's digits",
     environment,
   );
-  if (digits < 0 || digits > MAX_FIXED_DIGITS) {
-    throw textShapeError(
-      call,
-      `AOT: toFixed(${digits}) is out of range`,
-      `a package prints 0 to ${MAX_FIXED_DIGITS} decimals.`,
-    );
+  const problem = fixedDigitsProblem(digits);
+  if (problem) {
+    throw textShapeError(call, ...problem);
   }
 
   return {isString: true, parts: [{kind: 'value', value, digits}]};
@@ -2153,30 +2154,16 @@ function lowerPadStart(
     );
   }
 
-  const pieces = receiver.parts.filter(
-    part => !(part.kind === 'literal' && part.text === ''),
-  );
-  const [piece] = pieces;
-  if (pieces.length !== 1 || piece.kind !== 'value') {
-    throw textShapeError(
-      call,
-      'AOT: padStart can only pad one value',
-      'pad each value on its own and join them after: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`.',
-    );
-  }
-
+  // The same limits as a constant fold, checked before the receiver so a constant one gets the same error.
   const width = helperInt(
     call.arguments[0],
     0,
     "padStart's length",
     environment,
   );
-  if (width > ENGINE_STRING_MAX.ER_TEXT_MAX) {
-    throw textShapeError(
-      call,
-      `AOT: padStart(${width}) is longer than any text`,
-      `a text holds at most ${ENGINE_STRING_MAX.ER_TEXT_MAX} bytes.`,
-    );
+  const widthProblem = padWidthProblem(width);
+  if (widthProblem) {
+    throw textShapeError(call, ...widthProblem);
   }
 
   const fillNode = call.arguments[1];
@@ -2188,21 +2175,32 @@ function lowerPadStart(
       fill = null;
     }
   }
+  const fillProblem = padFillProblem(fill);
+  if (fillProblem) {
+    throw textShapeError(fillNode ?? call, ...fillProblem);
+  }
+
+  const pieces = receiver.parts.filter(
+    part => !(part.kind === 'literal' && part.text === ''),
+  );
+  const [piece] = pieces;
+  if (pieces.length !== 1 || piece.kind === 'literal') {
+    throw textShapeError(
+      call,
+      'AOT: padStart can only pad one value',
+      'pad each value on its own and join them after: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`.',
+    );
+  }
+
   if (fill === '' || width <= 0) {
     return {isString: true, parts: [piece]};
   }
 
-  if (typeof fill !== 'string' || !/^[ -~]$/.test(fill)) {
-    throw textShapeError(
-      fillNode ?? call,
-      "AOT: padStart's fill must be one printable ASCII character",
-      'write a constant such as "0" or " "; a longer fill is not supported.',
-    );
-  }
-
   return {
     isString: true,
-    parts: [{...piece, pads: [...(piece.pads ?? []), {width, fill}]}],
+    parts: [
+      {...piece, pads: [...(piece.pads ?? []), {width, fill: fill as string}]},
+    ],
   };
 }
 
