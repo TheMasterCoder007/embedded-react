@@ -30,6 +30,7 @@ import {evalStatic} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
 import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
 import type {ItemCallback, ListChain} from './list-order.mts';
+import {handlerSplitList, lowerSplitInto} from './list-split.mts';
 import {
   mix64Error,
   staticInt,
@@ -861,6 +862,10 @@ function lowerListOp(
   listName = listState.name,
 ): IrStmt[] {
   const {capacity: capacity, struct} = listState;
+
+  // setWords(text.split(',')) — the pieces replace the rows.
+  const split = lowerSplitInto(listState, nextList, environment, listName);
+  if (split) return split;
 
   // setItems([...items, a, b]) — append; setItems([]) — clear; [...items.slice(0, n), ...items.slice(n + 1)] — remove.
   if (nextList.type === 'ArrayExpression') {
@@ -2044,6 +2049,27 @@ export function lowerStmts(
             animationLocals: new Map(environment.animationLocals).set(
               declarator.id.name,
               declarator.init,
+            ),
+          };
+          continue;
+        }
+
+        // `const parts = text.split(',')` fills a list of the handler's own, read as `parts[i]` and `parts.length`.
+        const split = handlerSplitList(
+          declarator.id.name,
+          declarator.init,
+          environment,
+        );
+        if (split) {
+          lowered.push(...split.statements);
+          const locals = new Map(environment.locals);
+          locals.delete(declarator.id.name);
+          environment = {
+            ...environment,
+            locals,
+            state: new Map(environment.state).set(
+              declarator.id.name,
+              split.list,
             ),
           };
           continue;

@@ -135,8 +135,13 @@ export interface ListState extends StateSlot {
   capacity: number;
   /** A constant array read by a runtime index: its rows are set at boot and never change. */
   constant?: boolean;
-  /** A list filtered or sorted in render: it holds row numbers of its source, which the update rebuilds. */
+  /**
+   * A list worked out in render, which the update rebuilds: one filtered or sorted holds row numbers of its source,
+   * and one split from a string holds the pieces.
+   */
   derived?: DerivedList;
+  /** A list a handler, effect or timer splits a string into, filled where its `const` is. */
+  handlerSplit?: boolean;
 }
 
 /** One `filter` or `sort` of a list, and the environment its function is read in. */
@@ -149,15 +154,15 @@ export interface OrderStep {
   environment?: Env;
 }
 
-/** How a list filtered or sorted in render is worked out from its source. */
+/** How a list worked out in render is rebuilt. */
 export interface DerivedList {
-  /** The list whose rows it holds: a list state, or a constant array. */
-  source: ListState;
+  /** For a filtered or sorted list, the list whose rows it holds: a list state, a constant array, or a split. */
+  source?: ListState;
   /** The filters and sorts, in the order they run, which a list worked out from this one goes on from. */
   steps: OrderStep[];
-  /** Rebuilds it: the rows the filters keep, in the order the sorts leave them. */
+  /** Rebuilds it: the rows the filters keep, in the order the sorts leave them, or a string's pieces. */
   rebuild: IrStmt[];
-  /** The tests and compare functions the rebuild works out, for what it reads. */
+  /** What the rebuild works out (tests and compare functions, or the split's string), for what it reads. */
   tests: IrExpr[];
 }
 
@@ -382,6 +387,8 @@ export interface Env {
   constantLists?: Map<unknown[], ListState>;
   /** Lists filtered or sorted in render, by the call that makes them, then the component instance and the list it starts from. */
   derivedLists?: Map<t.Node, Map<string, ListState>>;
+  /** Lists a handler, effect, or timer splits a string into, by the `const` that names them, then the component instance. */
+  splitLists?: Map<t.Node, Map<string, ListState>>;
 }
 
 /**

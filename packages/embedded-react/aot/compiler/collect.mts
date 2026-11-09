@@ -25,6 +25,7 @@ import {posix, resolve} from 'node:path';
 import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {inferItemStruct} from './list-items.mts';
+import {splitCallOf} from './list-split.mts';
 import {
   bootCheckpoint,
   bootSlotOf,
@@ -407,18 +408,23 @@ export function collectState(
             ?.name;
       if (!name) continue;
 
-      // Build either a list-state record from an array initializer or a scalar record from the folded initial value.
+      // Build either a list-state record from an array initializer, or a split of a constant, or a scalar record from
+      // the folded initial value.
       const slotName = prefix + name; // storage name (== name for the App; instance-unique for a child)
       const initialArgument = initializer.arguments[0];
       let record: StateRecord;
-      if (!isHost && initialArgument?.type === 'ArrayExpression') {
+      if (
+        !isHost &&
+        (initialArgument?.type === 'ArrayExpression' ||
+          splitCallOf(initialArgument))
+      ) {
         // List state → a fixed-capacity pool of rows + a count.
         const items = evalStaticOrThrow(
           initialArgument,
           scope,
           `AOT: the initial value of list state "${name}" must be a compile-time constant array`,
-          'useState([...]) initial must be a literal array of objects, numbers, strings or booleans — no ' +
-            'runtime values or function calls in the initial.',
+          'useState([...]) initial must be a literal array of objects, numbers, strings or booleans, or a split ' +
+            'of a constant string — no runtime values or other function calls in the initial.',
         ) as unknown[];
 
         // Infer the item struct, pinning any error to the initial value since this pass adds no location.

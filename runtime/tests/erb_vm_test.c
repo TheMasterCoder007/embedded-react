@@ -688,6 +688,98 @@ static void test_lists(void)
     CHECK(s_status == ERB_ERROR_LIST_INDEX, "a read past the end stops the app");
 }
 
+/** @brief The split test's list: SLOT_ITEMS holding one string of up to 7 bytes a row. */
+static const char* split_row(uint32_t row)
+{
+    return (const char*)slot(SLOT_ITEMS) + ERB_LIST_HEADER_SIZE + row * 8u;
+}
+
+/** @brief A string's index in the package, added when it isn't there. */
+static uint16_t shared_string(const char* text)
+{
+    for (uint32_t index = 0; index < s_package_spec.string_count; index++)
+    {
+        if (strcmp(s_package_spec.strings[index], text) == 0)
+        {
+            return (uint16_t)index;
+        }
+    }
+    return add_string(text);
+}
+
+/** @brief A helper that splits @p text by @p separator, at most @p limit pieces, into SLOT_ITEMS; it gives the count.
+ */
+static uint16_t split_helper(const char* text, const char* separator, int16_t limit)
+{
+    const uint8_t types[] = {ERB_TYPE_STRING, ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT};
+    const uint32_t code[] = {
+        OP_ABX(LOADS, 0, shared_string(text)),
+        OP_ABX(LOADS, 1, shared_string(separator)),
+        OP_ABX(LOADI, 2, (uint16_t)limit),
+        OP_ABC(SPLIT, 0, 1, 2),
+        SLOT_ITEMS,
+        OP_ABX(LEN, 3, SLOT_ITEMS),
+        OP_ABC(RET, 3, 0, 0),
+    };
+    return helper(types, 4, 0, ERB_TYPE_INT, code, 7);
+}
+
+static void test_split(void)
+{
+    TPkg* package = base();
+    package->rows[0] = (TRow){8, 0, 1};
+    package->fields[0] = (TField){ERB_TYPE_STRING, 7, 0};
+    package->field_count = 1;
+    const uint16_t commas = split_helper("a,bb,ccc", ",", -1);
+    const uint16_t limited = split_helper("a,bb,ccc", ",", 2);
+    const uint16_t none = split_helper("a,bb,ccc", ",", 0);
+    const uint16_t empty = split_helper("", ",", -1);
+    const uint16_t empty_both = split_helper("", "", -1);
+    const uint16_t characters = split_helper("ab\xC2\xB0", "", -1);
+    const uint16_t trailing = split_helper("a,", ",", -1);
+    const uint16_t long_separator = split_helper("a<>b<>c", "<>", -1);
+    const uint16_t missing = split_helper("abc", ";", -1);
+    const uint16_t too_many = split_helper("1,2,3,4,5", ",", -1);
+    const uint16_t too_long = split_helper("abcdefghij,x", ",", -1);
+    const uint8_t own_types[] = {ERB_TYPE_STRING, ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT};
+    const uint32_t own_code[] = {
+        OP_ABX(LOADI, 2, 1),
+        OP_ABC(ROWGET, 0, 2, 0),
+        SLOT_ITEMS,
+        OP_ABX(LOADS, 1, shared_string(";")),
+        OP_ABX(LOADI, 2, -1),
+        OP_ABC(SPLIT, 0, 1, 2),
+        SLOT_ITEMS,
+        OP_ABX(LEN, 3, SLOT_ITEMS),
+        OP_ABC(RET, 3, 0, 0),
+    };
+    const uint16_t own_row = helper(own_types, 4, 0, ERB_TYPE_INT, own_code, 9);
+    const uint16_t own_setup = split_helper("a,x;y;z", ",", -1);
+    CHECK(load(), "loads");
+    CHECK(call(commas, 0, 0) == 3 && strcmp(split_row(0), "a") == 0 && strcmp(split_row(1), "bb") == 0
+              && strcmp(split_row(2), "ccc") == 0,
+          "SPLIT fills a list with the pieces between separators");
+    CHECK(call(limited, 0, 0) == 2 && strcmp(split_row(1), "bb") == 0, "and keeps at most the limit");
+    CHECK(call(none, 0, 0) == 0, "a limit of 0 gives no pieces");
+    CHECK(call(empty, 0, 0) == 1 && split_row(0)[0] == '\0', "an empty string gives one empty piece");
+    CHECK(call(empty_both, 0, 0) == 0, "and none split by an empty separator");
+    CHECK(call(characters, 0, 0) == 3 && strcmp(split_row(2), "\xC2\xB0") == 0,
+          "an empty separator gives each character, whole");
+    CHECK(call(trailing, 0, 0) == 2 && split_row(1)[0] == '\0', "a separator at the end leaves an empty piece");
+    CHECK(call(long_separator, 0, 0) == 3 && strcmp(split_row(2), "c") == 0, "a separator can be longer than one byte");
+    CHECK(call(missing, 0, 0) == 1 && strcmp(split_row(0), "abc") == 0, "no separator found gives the whole string");
+    s_log[0] = '\0';
+    CHECK(call(too_many, 0, 0) == 4 && strcmp(split_row(3), "4") == 0, "pieces past the cap are dropped");
+    CHECK(strstr(s_log, "list full") != NULL, "and reported");
+    s_log[0] = '\0';
+    CHECK(call(too_long, 0, 0) == 2 && strcmp(split_row(0), "abcdefg") == 0 && strcmp(split_row(1), "x") == 0,
+          "a piece past its field's cap is cut");
+    CHECK(strstr(s_log, "cut short") != NULL, "and reported");
+    call(own_setup, 0, 0);
+    CHECK(call(own_row, 0, 0) == 3 && strcmp(split_row(0), "x") == 0 && strcmp(split_row(2), "z") == 0,
+          "a list can split one of its own rows");
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Props and templates
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1357,6 +1449,7 @@ int main(void)
     test_text();
     test_string_helpers();
     test_lists();
+    test_split();
     test_props();
     test_templates();
     test_stale_animation_target();

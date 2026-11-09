@@ -191,6 +191,17 @@ export interface IrFillOrder {
   keep: IrExpr | null;
 }
 
+/** Fills a list of strings with a string's pieces, `text.split(',')`, dropping those past the list's cap. */
+export interface IrSplitItems {
+  kind: 'splitItems';
+  list: ListState;
+  text: IrExpr;
+  /** What it splits at: an empty string gives each character. */
+  separator: IrExpr;
+  /** The most pieces it keeps, or null for no limit. */
+  limit: IrExpr | null;
+}
+
 /** `ref.current = …` or a compound assignment to it. */
 export interface IrWriteRef {
   kind: 'writeRef';
@@ -277,6 +288,7 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrFilterItems
   | IrSortItems
   | IrFillOrder
+  | IrSplitItems
   | IrWriteRef
   | IrStepRef
   | IrStopAnimations

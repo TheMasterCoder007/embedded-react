@@ -21,6 +21,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   items with `map` and `with`. A list setter takes the updater form too. Packages are now format minor 8.
 - Flow B lists: `filter` and `sort` (`toSorted`, or `sort` on a copy), in a setter and in render. Strings compare
   with `<`, `>` and `localeCompare`, by UTF-16 code unit. Packages are now format minor 9.
+- Flow B: `split` a string into a list of strings, in a setter, in render and in a handler's `const`. Pieces past
+  the list's cap are dropped and reported. Packages are now format minor 10.
 
 ### Changed
 

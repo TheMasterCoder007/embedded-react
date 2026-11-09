@@ -1827,6 +1827,163 @@ export function App() {
   });
 });
 
+describe('list split', () => {
+  const CAPS = {...SCREEN, listCap: 4};
+
+  /** An app whose one button runs a handler, and which renders what the body and JSX give it. */
+  const splitApp = (handler, body = '', jsx = '') => `
+import {useEffect, useMemo, useState} from 'react';
+import {View, Pressable, Text, TextInput} from 'embedded-react';
+export function App() {
+  const [line, setLine] = useState('red,green,blue');
+  const [sep, setSep] = useState(',');
+  const [words, setWords] = useState(['-']);
+  const [counts, setCounts] = useState([1]);
+  const [last, setLast] = useState('-');
+  const [n, setN] = useState(0);
+  ${body}
+  return (
+    <View>
+      <Pressable onPress={() => ${handler}}><Text>go {n} {last} {sep}</Text></Pressable>
+      {words.map((word, index) => <Text key={index}>{word}</Text>)}
+      ${jsx}
+    </View>
+  );
+}`;
+
+  const compiled = (handler, body, jsx) =>
+    functionsOf(
+      compilePackage(splitApp(handler, body, jsx), 'app', CAPS).program,
+    );
+
+  /** The instructions of the button's handler. */
+  const handlerOps = handler =>
+    compiled(handler)[0].ops.map(instruction => instruction.name);
+
+  /** The instructions of the update. */
+  const updateOps = (body, jsx) =>
+    compiled('setN(n + 1)', body, jsx)
+      .find(compiled => compiled.kind === FunctionKind.update)
+      .ops.map(instruction => instruction.name);
+
+  const refuses = (handler, message, body, jsx) =>
+    expect(() =>
+      compilePackage(splitApp(handler, body, jsx), 'app', CAPS),
+    ).toThrow(message);
+
+  it('fills a list of strings in a setter with one SPLIT', () => {
+    for (const handler of [
+      "setWords(line.split(','))",
+      'setWords(line.split(sep, n))',
+      "setWords(prev => line.split(''))",
+      "setWords(words[0].split(';'))",
+    ]) {
+      const ops = handlerOps(handler);
+      expect(ops.filter(name => name === 'SPLIT')).toHaveLength(1);
+      expect(ops).not.toContain('LOOPSET');
+    }
+    // No separator keeps the whole string.
+    const whole = handlerOps('setWords(line.split())');
+    expect(whole).toEqual(expect.arrayContaining(['CLEAR', 'APPEND']));
+    expect(whole).not.toContain('SPLIT');
+  });
+
+  it('splits in render in the update, before what reads the pieces', () => {
+    for (const [body, jsx] of [
+      ['', '{line.split(sep).map((part, i) => <Text key={i}>{part}</Text>)}'],
+      ["const parts = line.split(',', 2);", '<Text>{parts[1] ?? "-"}</Text>'],
+      [
+        "const parts = useMemo(() => line.split(','), [line]);",
+        '<Text>{parts.length}</Text>',
+      ],
+      [
+        '',
+        "{line.split(',').filter(word => word !== 'x').toSorted().map((word, i) => <Text key={i}>{word}</Text>)}",
+      ],
+    ]) {
+      const ops = updateOps(body, jsx);
+      expect(ops).toContain('SPLIT');
+      expect(ops.indexOf('SPLIT')).toBeLessThan(ops.indexOf('COMMIT'));
+    }
+    // A split of a constant folds, and its pieces unroll.
+    expect(
+      updateOps(
+        "const kinds = 'a,b'.split(',');",
+        '{kinds.map((kind, i) => <Text key={i}>{kind} {n}</Text>)}',
+      ),
+    ).not.toContain('SPLIT');
+  });
+
+  it("fills a handler's const where it is, and reads its pieces", () => {
+    const ops = handlerOps(
+      "{ const parts = line.split(','); setLast(parts[parts.length - 1] ?? '?'); }",
+    );
+    expect(ops.indexOf('SPLIT')).toBeLessThan(ops.indexOf('LEN'));
+    expect(ops.indexOf('LEN')).toBeLessThan(ops.indexOf('ROWGET'));
+    expect(() =>
+      compilePackage(
+        splitApp(
+          'setN(1)',
+          "useEffect(() => { const parts = line.split(','); setLast(parts[0] ?? ''); }, [line]);",
+          "<TextInput onChangeText={text => { const parts = text.split(' '); setLast(parts[0] ?? ''); }} />",
+        ),
+        'app',
+        CAPS,
+      ),
+    ).not.toThrow();
+  });
+
+  it('starts a list state from a split of a constant', () => {
+    expect(() =>
+      compilePackage(
+        splitApp(
+          'setN(kinds.length)',
+          "const [kinds, setKinds] = useState('a,b,c'.split(','));",
+        ),
+        'app',
+        CAPS,
+      ),
+    ).not.toThrow();
+  });
+
+  it('refuses what it cannot lower', () => {
+    refuses(
+      "setCounts(line.split(','))",
+      'only a list of strings takes a split, and "counts" holds ints',
+    );
+    refuses('setWords(line.split(/,/))', 'split only splits at a string');
+    refuses('setWords(line.split(n))', 'split only splits at a string');
+    refuses(
+      "setWords(line.split(',', 1.5))",
+      "split's limit must be a whole number",
+    );
+    refuses(
+      "setWords(line.split(',', 2, 3))",
+      'split takes a separator and a limit',
+    );
+    refuses('setWords(String(n).split(""))', 'not built in place');
+    refuses('setWords(n.split(","))', 'split is only supported on a string');
+    refuses(
+      'setWords(line.split(words[0]))',
+      'a split into "words" can\'t split at one of its own items',
+    );
+    refuses(
+      "setN(line.split(',').length)",
+      'a split in a handler, effect or timer must be a const',
+    );
+    refuses(
+      "{ const parts = line.split(','); setN(parts.filter(part => part !== 'x').length); }",
+      "parts.filter can't filter or sort a handler's split",
+    );
+    refuses(
+      'setN(1)',
+      "split inside a list row isn't supported",
+      '',
+      "{words.map((word, i) => <Text key={i}>{word.split('').length}</Text>)}",
+    );
+  });
+});
+
 describe('conditionals', () => {
   const SCREENS_APP = `
 import {useState} from 'react';

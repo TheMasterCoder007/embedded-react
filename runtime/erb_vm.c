@@ -890,6 +890,104 @@ static uint8_t* row_field(uint32_t extension, int32_t row, const uint8_t** slot_
            + erb_u32(field + ERB_FIELD_OFFSET_AT);
 }
 
+/**
+ * @brief Fills the list in @p slot with the pieces of @p text between each @p separator, as JS's split does: an
+ *        empty separator gives each character, and at most @p limit pieces are kept (none when it is negative).
+ *        Pieces past the list's cap are dropped, and a piece past its field's cap is cut; both are reported.
+ */
+static void split_into(const uint8_t* slot, const char* text, const char* separator, int32_t limit)
+{
+    const ErbProgram* program = &g_erb.program;
+    const uint8_t* layout = erb_row(program, erb_u16(slot + ERB_SLOT_AUX_AT));
+    const uint8_t* field = program->fields + erb_u16(layout + ERB_ROW_FIRST_AT) * ERB_FIELD_SIZE;
+    const uint32_t row_size = erb_u16(layout + ERB_ROW_SIZE_AT);
+    const uint32_t field_cap = erb_u16(field + ERB_FIELD_CAP_AT);
+    const uint32_t capacity = erb_u16(slot + ERB_SLOT_CAP_AT);
+    uint8_t* pool = slot_data(slot);
+    uint8_t* rows = pool + ERB_LIST_HEADER_SIZE + erb_u32(field + ERB_FIELD_OFFSET_AT);
+    uint32_t count;
+    memcpy(&count, pool, sizeof(count));
+
+    /* The text may be one of this list's rows, which the pieces overwrite, so split a copy of it. */
+    const uint8_t* pool_end = pool + ERB_LIST_HEADER_SIZE + capacity * row_size;
+    if ((const uint8_t*)text >= pool && (const uint8_t*)text < pool_end)
+    {
+        if (!copy_capped(s_format, ER_TEXT_MAX, text))
+        {
+            report("string cut short at its cap");
+        }
+        text = s_format;
+    }
+
+    const size_t separator_length = strlen(separator);
+    const uint32_t most = limit < 0 ? UINT32_MAX : (uint32_t)limit;
+    uint32_t pieces = 0;
+    bool changed = false;
+    bool full = false;
+    bool cut = false;
+    /* ''.split('') gives no pieces; any other text gives at least one. */
+    const char* start = text;
+    while (pieces < most && (separator_length || *start))
+    {
+        const char* end;
+        if (separator_length)
+        {
+            end = strstr(start, separator);
+        }
+        else
+        {
+            end = start + 1;
+            while (((uint8_t)*end & UTF8_CONTINUATION_MASK) == UTF8_CONTINUATION)
+            {
+                end++;
+            }
+        }
+        if (pieces >= capacity)
+        {
+            full = true;
+            break;
+        }
+        const size_t length = end ? (size_t)(end - start) : strlen(start);
+        const size_t take = length < field_cap ? length : field_cap;
+        char* data = (char*)rows + pieces * row_size;
+        if (pieces >= count || memcmp(data, start, take) != 0 || data[take] != '\0')
+        {
+            memmove(data, start, take);
+            data[take] = '\0';
+            changed = true;
+        }
+        cut |= take < length;
+        pieces++;
+        if (!end || (!separator_length && !*end))
+        {
+            break;
+        }
+        start = end + separator_length;
+    }
+
+    if (pieces != count)
+    {
+        memcpy(pool, &pieces, sizeof(pieces));
+        changed = true;
+    }
+    if (changed)
+    {
+        mark(slot);
+    }
+    if (full)
+    {
+        report("list full; the rest of a split was dropped (raise ER_AOT_LIST_CAP)");
+    }
+    if (cut)
+    {
+        report("string cut short at its cap");
+    }
+    if (text == s_format)
+    {
+        s_format[0] = '\0';
+    }
+}
+
 ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int32_t* result)
 {
     const ErbProgram* program = &g_erb.program;
@@ -1157,6 +1255,13 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 mark(slot);
                 break;
             }
+            case ERB_OP_SPLIT:
+                split_into(erb_slot(program, ERB_LOW16(code[program_counter + 1u])),
+                           string_of(registers[operand_a]),
+                           string_of(registers[operand_b]),
+                           registers[operand_c]);
+                next = program_counter + 2u;
+                break;
 
             /* Whole numbers */
             case ERB_OP_ADD:

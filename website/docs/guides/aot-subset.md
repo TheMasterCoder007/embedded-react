@@ -104,6 +104,14 @@ while the code that breaks it is still one line.
   `a.n - b.n || a.m - b.m` breaks a tie on another field.
 - Strings compare with `<`, `>`, `<=`, `>=` and `a.localeCompare(b)`, by UTF-16 code unit as JS's `<` orders them:
   capitals before small letters, and no locale rules.
+- `text.split(separator, limit)` makes a list of strings. A setter takes it on a list of strings,
+  `setWords(line.split(','))`; in render it works inline before `.map`, `.length`, `[i]`, `filter` or a sort, and in a
+  `const` or a `useMemo`, rebuilt when what it reads changes; in a handler, effect, or timer it must be a `const`, read
+  as `parts[i]` and `parts.length`. `useState('a,b'.split(','))` starts a list state.
+- The separator is any string, an empty one giving each character, and the limit any whole number. A regular
+  expression is refused. Pieces past the list's cap (`ER_AOT_LIST_CAP`) are dropped and reported, so `.length` counts
+  at most the cap. Each piece holds as many bytes as the string it comes from, which must be kept somewhere (a state,
+  a prop, a local), not built in place.
 - `.map` over an array built in render (inline, a `const`, a `useMemo`, or a prop) unrolls one row
   per element, and its elements can read state. Such an array can't be read by a runtime index.
   A list computed at runtime from anything else does not compile.
@@ -262,7 +270,7 @@ can know the answer, and the app reports the rest at run time:
 
 | Limit                                                                   | Default               | Raise it with                                      | When it is past                                                                                                                                                                                        |
 | ----------------------------------------------------------------------- | --------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Rows in a list state                                                    | 16                    | `ER_AOT_LIST_CAP`                                  | An initial list with more rows fails the build. An append to a full list is skipped and reported.                                                                                                      |
+| Rows in a list state                                                    | 16                    | `ER_AOT_LIST_CAP`                                  | An initial list with more rows fails the build. An append to a full list is skipped and reported, and so are a split's pieces past it.                                                                 |
 | Bytes in a string built from itself, like `setLog(log + '.')`           | 47 (a 48-byte buffer) | `ER_AOT_LIST_STR_CAP`                              | A constant string that is too long, as an initial value or a write, fails the build. A string built at run time is cut short and reported.                                                             |
 | Bytes in a string written at run time                                   | 255                   | Fixed in `er_scene.h` (`ER_TEXT_MAX`)              | A constant string that is too long fails the build. A string built at run time is cut short and reported.                                                                                              |
 | Bytes in a node's text, a `<Text>` span, a placeholder or an image name | 255, 63, 63, 63       | Fixed in `er_scene.h` (`ER_TEXT_MAX` and the like) | A constant string that is too long fails the build. A string built at run time is cut short and reported.                                                                                              |
