@@ -1054,10 +1054,10 @@ export function App() {
     const {program} = compilePackage(LIST_APP, 'app', CAPS);
     const {u16, u32, tables} = readProgram(program);
 
-    // One layout: the label as a 48-byte string (47 and a NUL), then the int and the float.
+    // One layout: the label as a 16-byte string ('row ' and an int, and a NUL), then the int and the float.
     const rows = tables.get(Table.rows);
     expect(u32(rows.offset)).toBe(1);
-    expect([u16(rows.offset + 4), u16(rows.offset + 8)]).toEqual([56, 3]);
+    expect([u16(rows.offset + 4), u16(rows.offset + 8)]).toEqual([24, 3]);
     const fields = Array.from({length: 3}, (_, index) => {
       const fieldOffset = rows.offset + 12 + index * 8;
       return {
@@ -1067,9 +1067,9 @@ export function App() {
       };
     });
     expect(fields).toEqual([
-      {type: ValueType.string, cap: 47, offset: 0},
-      {type: ValueType.int, cap: 0, offset: 48},
-      {type: ValueType.float, cap: 0, offset: 52},
+      {type: ValueType.string, cap: 15, offset: 0},
+      {type: ValueType.int, cap: 0, offset: 16},
+      {type: ValueType.float, cap: 0, offset: 20},
     ]);
 
     // A node reads it, so it has a dirty bit; its pool is the row count, then four rows.
@@ -1078,7 +1078,7 @@ export function App() {
     );
     expect(
       regionsOf(program).find(region => region.kind === Region.lists),
-    ).toEqual({kind: Region.lists, count: 0, bytes: 4 + 4 * 56});
+    ).toEqual({kind: Region.lists, count: 0, bytes: 4 + 4 * 24});
   });
 
   it('builds every row from one row template, its handles in arrays by row', () => {
@@ -1159,16 +1159,15 @@ export function App() {
   });
 
   it('refuses a row or a node count too big for its u16 field', () => {
+    const long = 'x'.repeat(32767);
     const texts = `
 import {useState} from 'react';
 import {Text} from 'embedded-react';
 export function App() {
-  const [items] = useState([{a: 'x', b: 'y'}]);
+  const [items] = useState([{a: '${long}', b: '${long}'}]);
   return <Text>{items.length}</Text>;
 }`;
-    expect(() =>
-      compilePackage(texts, 'app', {...SCREEN, listStrCap: 32767}),
-    ).toThrow(
+    expect(() => compilePackage(texts, 'app', SCREEN)).toThrow(
       'a row of list state "items" takes 65536 bytes, but a package row holds 65532',
     );
 

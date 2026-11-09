@@ -23,6 +23,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: a state-driven `&&` or ternary builds the branch it picks and destroys it when another is picked, so a
   package needs nodes for its largest screen rather than all of them. `visible={…}` keeps a branch built and toggles
   it.
+- Flow B sizes each string state, list field and local from the values that can reach it, instead of giving every
+  one 48 bytes. `ER_AOT_LIST_STR_CAP` now only sizes a string built from itself, like `setLog(log + '.')`, and a
+  `slice` with a fixed length bounds one: `setLog(log.slice(-39) + '.')`.
 
 ## [0.20.0] - 2026-11-05
 ### Added

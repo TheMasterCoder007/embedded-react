@@ -19,7 +19,12 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {parseColor, parsePath} from '../../src/embedded-react/svg-ops.js';
-import {aotError, constantText, withLoc} from './diagnostics.mts';
+import {
+  aotError,
+  constantText,
+  ENGINE_STRING_MAX,
+  withLoc,
+} from './diagnostics.mts';
 import type {SourcePosition} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {
@@ -190,7 +195,6 @@ function lowerListOp(
           checkConstantFits(
             text,
             `field "${field.key}" of list state "${listState.name}"`,
-            environment,
           );
           values.push({field, text});
         } else {
@@ -358,24 +362,23 @@ const refRead = (ref: RefRecord): IrExpr => ({
 });
 
 /**
- * Refuses a constant string too long for the buffer it is written into, which would cut it short. A string
+ * Refuses a constant string too long for the buffer a write is built in, which would cut it short. A string
  * built at run time is checked when it is written instead.
  *
  * @param text  The text written.
  * @param what  What it is written into, for the error.
- * @param environment  The expression environment.
  */
-function checkConstantFits(text: IrText, what: string, environment: Env): void {
+function checkConstantFits(text: IrText, what: string): void {
   const constant = constantText(text);
   if (constant === null) {
     return;
   }
 
   const bytes = Buffer.byteLength(constant, 'utf8');
-  if (bytes >= environment.caps.listStrCap) {
+  if (bytes > ENGINE_STRING_MAX.ER_TEXT_MAX) {
     throw aotError(
-      `AOT: ${what} is set to a ${bytes}-byte string, but a string holds ${environment.caps.listStrCap - 1} bytes`,
-      'raise ER_AOT_LIST_STR_CAP (the listStrCap option), or shorten the string.',
+      `AOT: ${what} is set to a ${bytes}-byte string, but a write holds ${ENGINE_STRING_MAX.ER_TEXT_MAX} bytes (ER_TEXT_MAX)`,
+      'shorten the string: a write is built in a buffer that ER_TEXT_MAX in er_scene.h sizes.',
     );
   }
 }
@@ -422,7 +425,7 @@ function lowerScalarSet(
   }
 
   const text = lowerText(valueNode, environment);
-  checkConstantFits(text, `state "${scalarState.name}"`, environment);
+  checkConstantFits(text, `state "${scalarState.name}"`);
   return {
     kind: 'setStateText',
     state: scalarState,
@@ -1269,7 +1272,6 @@ export function lowerStmts(
             checkConstantFits(
               {parts: [{kind: 'literal', text: initialExpression.value}]},
               `local "${declarator.id.name}"`,
-              environment,
             );
           }
 
@@ -1305,7 +1307,6 @@ export function lowerStmts(
           initializer: initialExpression,
           ...(text ? {text} : {}),
           isHoisted,
-          stringCapacity: environment.caps.listStrCap,
         });
 
         // Later statements read the name as the local.

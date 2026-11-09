@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {BootValue} from './boot.mts';
+import type {SourcePosition} from './diagnostics.mts';
 import type {IrBootSlot} from './ir/boot.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
@@ -90,6 +91,8 @@ interface StateSlot {
   setter: string | undefined;
   /** A node or drawing reads it, so a write flags it for the update to set them again. */
   isWatched?: boolean;
+  /** Where its initial value is, for errors about it. */
+  initialAt?: SourcePosition;
 }
 
 /** A scalar state: one field of the ErAppState struct. */

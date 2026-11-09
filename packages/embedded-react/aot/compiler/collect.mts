@@ -312,48 +312,32 @@ function inferItemStruct(items: unknown, name: string): ItemStruct {
 }
 
 /**
- * Refuses an initial value too big for its fixed buffer: it would be cut short at boot without a word.
+ * Refuses an initial list with more rows than a list holds: they would be dropped at boot without a word. Each
+ * string's cap is sized from its values when the app is lowered.
  *
  * @param stateName  The state's JS name.
- * @param items  The list's initial rows, or null for a scalar.
- * @param strings  The initial strings it starts with, as `[what, text]` pairs.
+ * @param items  The list's initial rows.
  * @param caps  The compile's caps.
  * @param initialArgument  The initial value, for the error's location.
  */
-function checkInitialFits(
+function checkInitialRows(
   stateName: string,
-  items: unknown[] | null,
-  strings: [string, string][],
+  items: unknown[],
   caps: Caps,
   initialArgument: t.Node | undefined,
 ): void {
-  let error: AotError | null = null;
-  if (items && items.length > caps.listCap) {
-    error = aotError(
-      `AOT: list state "${stateName}" starts with ${items.length} rows, but a list holds ${caps.listCap}`,
-      'raise ER_AOT_LIST_CAP (the listCap option), or start with fewer rows.',
-    );
+  if (items.length <= caps.listCap) {
+    return;
   }
 
-  // A string buffer keeps one byte for the terminator.
-  const tooLong = strings.find(
-    ([, text]) => Buffer.byteLength(text, 'utf8') >= caps.listStrCap,
+  const error = aotError(
+    `AOT: list state "${stateName}" starts with ${items.length} rows, but a list holds ${caps.listCap}`,
+    'raise ER_AOT_LIST_CAP (the listCap option), or start with fewer rows.',
   );
-  if (!error && tooLong) {
-    const [what, text] = tooLong;
-    error = aotError(
-      `AOT: ${what} starts ${Buffer.byteLength(text, 'utf8')} bytes long, but a string holds ` +
-        `${caps.listStrCap - 1} bytes`,
-      'raise ER_AOT_LIST_STR_CAP (the listStrCap option), or shorten the string.',
-    );
+  if (initialArgument?.loc) {
+    error.aotLoc = initialArgument.loc.start;
   }
-
-  if (error) {
-    if (initialArgument?.loc) {
-      error.aotLoc = initialArgument.loc.start;
-    }
-    throw error;
-  }
+  throw error;
 }
 
 /**
@@ -493,20 +477,7 @@ export function collectState(
           }
           throw error;
         }
-        checkInitialFits(
-          name,
-          items,
-          items.flatMap(item =>
-            struct.fields
-              .filter(field => field.kind === 'string')
-              .map((field): [string, string] => [
-                `field "${field.key}" of list state "${name}"`,
-                String(item[field.key] ?? ''),
-              ]),
-          ),
-          caps,
-          initialArgument,
-        );
+        checkInitialRows(name, items, caps, initialArgument);
         record = {
           name,
           slotName,
@@ -515,6 +486,7 @@ export function collectState(
           struct,
           items,
           capacity: caps.listCap,
+          initialAt: initialArgument?.loc?.start,
         };
       } else {
         // Scalar state → one slot. Fold the initial value; no argument starts it at 0. A number derived
@@ -599,14 +571,6 @@ export function collectState(
           checkNumber(initial);
         } else if (slotKind === 'i64') {
           BigInt(initial as number); // refuses a value that is not a whole number
-        } else if (slotKind === 'string') {
-          checkInitialFits(
-            name,
-            null,
-            [[`state "${name}"`, String(initial)]],
-            caps,
-            initialArgument,
-          );
         }
         record = {
           name,
@@ -617,6 +581,7 @@ export function collectState(
           isBoolean,
           initial,
           host: isHost, // host-fed → also an input the host sets
+          initialAt: initialArgument?.loc?.start,
           ...(widened ? {widened} : {}),
           ...(bootValue ? {bootValue} : {}),
         };

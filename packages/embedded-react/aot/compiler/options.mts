@@ -127,7 +127,8 @@ function wholeInRange(
  *                                                  unless told a size, with both variables or the option.
  *   listCap       ER_AOT_LIST_CAP         16       Rows a list state holds. Each pooled row costs engine
  *                                                  nodes, so lower it on a tight-RAM MCU.
- *   listStrCap    ER_AOT_LIST_STR_CAP     48       Characters per string buffer (list field, string state).
+ *   listStrCap    ER_AOT_LIST_STR_CAP     48       Bytes for a string built from itself (`log + '.'`), with
+ *                                                  its terminator. Every other string is sized from its values.
  *   maxTextSpans  ER_AOT_MAX_TEXT_SPANS   4        Inline segments in a nested <Text>. Must match the
  *                                                  engine's ER_TEXT_MAX_SPANS.
  *   maxTimers     ER_AOT_MAX_TIMERS       8        Timers that run at once. Sizes the package's timer

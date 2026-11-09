@@ -39,8 +39,6 @@ export interface IrDeclareLocal {
   text?: IrText;
   /** Kept in a slot (a dep-driven effect's local its cleanup reads), so only assigned here. */
   isHoisted: boolean;
-  /** The buffer size a string local is copied into. */
-  stringCapacity: number;
 }
 
 /** `setInterval` / `setTimeout`: a timer whose callback is a function of its own. */

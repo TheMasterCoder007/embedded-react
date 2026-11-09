@@ -74,6 +74,7 @@ import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
 import {Arena} from './arena.mts';
 import {FunctionBuilder, OP} from './bytecode.mts';
 import {internedStates} from './enums.mts';
+import {longestLiteral, stringCaps} from './string-caps.mts';
 import {Codegen, notYet} from './codegen.mts';
 import {
   BindingKind,
@@ -328,45 +329,18 @@ const isSetOnce = (node: IrNode): boolean =>
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * The most bytes a boot value's string can be: its longest literal, since nothing else reaches it at boot.
- *
- * @param expression  The value.
- *
- * @returns The bytes.
- */
-function longestLiteral(expression: IrExpr): number {
-  let longest = 0;
-  const walk = (value: unknown): void => {
-    if (!value || typeof value !== 'object') {
-      return;
-    }
-    const node = value as {kind?: string; value?: unknown};
-    if (node.kind === 'string' && typeof node.value === 'string') {
-      longest = Math.max(longest, Buffer.byteLength(node.value, 'utf8'));
-      return;
-    }
-    Object.values(node).forEach(walk);
-  };
-  walk(expression);
-  return Math.max(longest, 1);
-}
-
-/**
- * Every string local a statement list declares, with its cap.
+ * Every string local a statement list declares.
  *
  * @param statements  The statements.
- * @param found  Collects each local's name and cap.
+ * @param found  Collects each local's name.
  */
-function stringLocals(statements: IrStmt[], found: Map<string, number>): void {
+function stringLocals(statements: IrStmt[], found: Set<string>): void {
   for (const statement of statements) {
     if (
       statement.kind === 'declareLocal' &&
       statement.initializer.type.kind === 'string'
     ) {
-      found.set(
-        statement.name,
-        Math.max(found.get(statement.name) ?? 0, statement.stringCapacity - 1),
-      );
+      found.add(statement.name);
     } else if (statement.kind === 'if') {
       stringLocals(statement.consequent, found);
       stringLocals(statement.alternate ?? [], found);
@@ -651,7 +625,6 @@ function planSlots(
   | 'once'
   | 'effects'
 > {
-  const {listStrCap: listStringCapacity} = caps;
   const {output} = app;
   const arena = new Arena();
   const animations = new AnimationPlan(app, arena);
@@ -680,6 +653,13 @@ function planSlots(
     });
   }
 
+  // Each string buffer is sized from the values that reach it.
+  const stringCap = stringCaps(
+    app,
+    new Map([...slots.enums].map(([state, {values}]) => [state, values])),
+    caps.listStrCap - 1,
+  );
+
   // State, each with a dirty bit when a node reads it.
   for (const state of app.state) {
     if (state.kind === 'list') {
@@ -694,7 +674,7 @@ function planSlots(
         ? arena.slot(
             ValueType.string,
             tables.string(String(initial)),
-            listStringCapacity - 1,
+            stringCap.state(state),
           )
         : state.slotKind === 'i64'
           ? arena.slot(
@@ -732,7 +712,8 @@ function planSlots(
     }
     let size = 0;
     const fields = state.struct.fields.map(field => {
-      const capacity = field.kind === 'string' ? listStringCapacity - 1 : 0;
+      const capacity =
+        field.kind === 'string' ? stringCap.field(state, field.key) : 0;
       const entry = {type: ValueType[field.kind], cap: capacity, offset: size};
       size += field.kind === 'string' ? (capacity + 1 + 3) & ~3 : 4;
       return entry;
@@ -740,7 +721,7 @@ function planSlots(
     if (size > MAX_U16) {
       throw aotError(
         `AOT: a row of list state "${state.name}" takes ${size} bytes, but a package row holds ${MAX_U16 - 3}`,
-        'lower ER_AOT_LIST_STR_CAP (the listStrCap option), or give the items fewer text fields.',
+        'shorten its strings, or give the items fewer text fields.',
       );
     }
     const slot = arena.list(rows.length, size, state.capacity);
@@ -754,7 +735,11 @@ function planSlots(
         .filter(field => field.kind === 'string')
         .map(field => [
           field.key,
-          arena.slot(ValueType.string, undefined, listStringCapacity - 1),
+          arena.slot(
+            ValueType.string,
+            undefined,
+            stringCap.field(state, field.key),
+          ),
         ]),
     );
     slots.lists.set(state, {slot, buffers});
@@ -810,7 +795,11 @@ function planSlots(
       slots.hoisted.set(
         declaration.name,
         declaration.slotKind === 'string'
-          ? arena.slot(ValueType.string, undefined, listStringCapacity - 1)
+          ? arena.slot(
+              ValueType.string,
+              undefined,
+              stringCap.local(declaration.name),
+            )
           : arena.slot(
               declaration.slotKind === 'i64'
                 ? ValueType.int64
@@ -836,22 +825,26 @@ function planSlots(
           type,
           slot:
             type === 'string'
-              ? arena.slot(ValueType.string, undefined, listStringCapacity - 1)
+              ? arena.slot(
+                  ValueType.string,
+                  undefined,
+                  stringCap.value(dependency),
+                )
               : arena.slot(ValueType[type]),
         };
       }),
     );
   }
 
-  const locals = new Map<string, number>();
+  const locals = new Set<string>();
   for (const body of bodies(app)) {
     stringLocals(body, locals);
   }
-  for (const [name, capacity] of locals) {
+  for (const name of locals) {
     if (!slots.hoisted.has(name)) {
       slots.stringLocals.set(
         name,
-        arena.slot(ValueType.string, undefined, capacity),
+        arena.slot(ValueType.string, undefined, stringCap.local(name)),
       );
     }
   }
