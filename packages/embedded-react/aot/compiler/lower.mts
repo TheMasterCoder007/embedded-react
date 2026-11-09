@@ -65,13 +65,19 @@ import {
   nodesOf,
   updatedVectorOf,
 } from './ir/nodes.mts';
-import {expressionReads, nodeReads, vectorReads} from './ir/reads.mts';
+import {
+  expressionReads,
+  listStates,
+  nodeReads,
+  vectorReads,
+} from './ir/reads.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
 import type {SlotWidths} from './ir/types.mts';
 import type {IrElement} from './ir/nodes.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
-import type {Env, Scope, StateRecord} from './types.mts';
+import {bindDerivedList, renderBindings} from './list-order.mts';
+import type {Env, ListState, Scope, StateRecord} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -147,12 +153,12 @@ function settleFunctions(output: Out, hasUpdate: boolean): void {
 }
 
 /**
- * Flags each state a node, drawing or conditional reads, so a write to it marks it changed and the update sets
+ * Flags each state a node, drawing, or conditional reads, so a write to it marks it changed and the update sets
  * them again. One that also reads something untracked is set on every update, so its reads need no flag.
  *
  * @param root  The app's tree.
  */
-function watchState(root: IrElement): void {
+function watchState(root: IrElement, derivedLists: ListState[]): void {
   const reads = [
     ...nodesOf(root).flatMap(node => {
       const vector = updatedVectorOf(node);
@@ -161,6 +167,8 @@ function watchState(root: IrElement): void {
     ...conditionalsOf(root).map(conditional =>
       expressionReads(conditional.test),
     ),
+    // A handler can read a filtered or sorted list that nothing draws, which must still be rebuilt.
+    ...derivedLists.map(listStates),
   ];
   for (const read of reads) {
     read?.forEach(record => {
@@ -339,6 +347,7 @@ function lowerProgram(
     stores,
     shadowedClock,
     constantLists: new Map(),
+    derivedLists: new Map(),
   };
 
   // A value worked out at boot lowers its slot against the app's environment.
@@ -346,7 +355,14 @@ function lowerProgram(
   settleBootInitials(state.byName.values());
 
   // Before emit, fold each memo or inline its expression at each use (no cache needed: dep tracking re-applies).
-  for (const [name, expression] of memos) {
+  for (const {name, expression, isMemo} of renderBindings(
+    component.body,
+    memos,
+  )) {
+    if (!isMemo) {
+      bindDerivedList(name, expression, environment);
+      continue;
+    }
     try {
       setBinding(
         scope,
@@ -355,6 +371,9 @@ function lowerProgram(
       );
     } catch (error) {
       rethrowFoldLimit(error);
+      if (bindDerivedList(name, expression, environment)) {
+        continue;
+      }
       if (
         expression.type === 'ArrayExpression' ||
         expression.type === 'ObjectExpression'
@@ -394,22 +413,28 @@ function lowerProgram(
     lowerEffect(effect, environment, state, output);
   }
 
-  // An update exists only when something has to be re-applied after a state change.
+  // An update exists only when something has to be re-applied after a state change, or a list filtered or sorted
+  // in render rebuilt.
+  const derivedLists = [...environment.derivedLists!.values()].flatMap(
+    lists => [...lists.values()],
+  );
   const hasUpdate =
     nodesOf(root).some(
       node => isStateDriven(node) || updatedVectorOf(node) !== null,
     ) ||
     conditionalsOf(root).some(conditional => !conditional.toggle) ||
-    output.dependencyEffects.length > 0;
+    output.dependencyEffects.length > 0 ||
+    derivedLists.length > 0;
   settleFunctions(output, hasUpdate);
   if (hasUpdate) {
-    watchState(root);
+    watchState(root, derivedLists);
   }
 
   const stateRecords = [
     ...state.byName.values(),
     ...output.childStateRecords,
     ...environment.constantLists!.values(),
+    ...derivedLists,
   ];
   checkStateRecords(stateRecords);
 

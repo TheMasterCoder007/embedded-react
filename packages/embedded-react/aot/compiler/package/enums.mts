@@ -151,6 +151,9 @@ export function internedStates(app: IrApp): Map<ScalarState, string[]> {
     output.panResponders,
     output.vectors,
     app.boot,
+    app.state.flatMap(state =>
+      state.kind === 'list' && state.derived ? [state.derived] : [],
+    ),
   ]);
 
   for (const state of refused) {

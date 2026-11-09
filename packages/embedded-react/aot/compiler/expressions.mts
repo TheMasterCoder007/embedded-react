@@ -47,6 +47,7 @@ import {
   slicePositionProblem,
 } from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
+import {derivedListOf, rowItemOf} from './list-order.mts';
 import {MAX_LIST_CAPACITY} from './options.mts';
 import {
   fieldsUnder,
@@ -1020,13 +1021,15 @@ function typeBinary(
             `Compare like with like, or use === / !== (which never coerce).`,
         );
       }
-      // Equality is exact, but strcmp's UTF-8 order can differ from JS's UTF-16 order, so refuse ordering.
+      // Strings order by code point, which is JS's order by UTF-16 code unit outside the rarest characters.
       if (comparison !== '==' && comparison !== '!=') {
-        throw aotError(
-          `AOT: ordering strings with "${source.operator}" is not supported`,
-          'JS orders strings by UTF-16 code unit but the device holds UTF-8, so the order can ' +
-            'differ. Use === / !==, or compare numbers.',
-        );
+        return {
+          kind: 'compare',
+          operator: comparison as IrCompare['operator'],
+          left: {kind: 'stringOrder', left, right, type: INT},
+          right: {kind: 'number', value: 0, type: INT},
+          type: BOOL,
+        };
       }
 
       return {
@@ -1574,7 +1577,7 @@ const holdsRuntime = (value: unknown): boolean =>
  *
  * @returns The list.
  */
-function constantListOf(
+export function constantListOf(
   array: unknown[],
   node: t.Node,
   environment: Env,
@@ -1632,6 +1635,8 @@ function indexedListOf(
     const record = environment.state.get(object.name)!;
     return record.kind === 'list' ? record : null;
   }
+  const derived = derivedListOf(object, environment);
+  if (derived) return derived;
   const scope = foldScope(environment, environment.constants ?? {});
   const folds = (part: t.Node): {value: unknown} | null => {
     try {
@@ -1693,15 +1698,10 @@ function itemPathOf(node: t.Node, environment: Env): ItemPath | null {
       'an index is an int: Math.floor(x) or a whole-number state.',
     );
   }
+  // A plain value past the end is undefined; a field of an item there throws in JS, and faults here.
+  const item = rowItemOf(list, {name: `${list.name}[]`, index} as Local);
   return {
-    item: {
-      name: `${list.name}[]`,
-      struct: list.struct,
-      list,
-      index,
-      // A plain value past the end is undefined; a field of an item there throws in JS, and faults here.
-      guarded: !!list.struct.plain,
-    } as Local,
+    item: {...item, guarded: !!item.struct!.plain},
     path: [],
   };
 }
@@ -2169,17 +2169,15 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         expression,
         location,
       });
-      // `<list>.length` → the runtime count.
-      if (
-        object.type === 'Identifier' &&
-        environment.state.get(object.name)?.kind === 'list' &&
-        prop === 'length'
-      ) {
-        return fixed({
-          kind: 'listLength',
-          list: environment.state.get(object.name) as ListState,
-          type: INT,
-        });
+      // `<list>.length` → the runtime count, of a filtered or sorted list too.
+      if (prop === 'length') {
+        const list =
+          object.type === 'Identifier'
+            ? environment.state.get(object.name)
+            : derivedListOf(object, environment);
+        if (list?.kind === 'list') {
+          return fixed({kind: 'listLength', list, type: INT});
+        }
       }
 
       // A value worked out at run time in an array or object built in render.
@@ -2321,6 +2319,20 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         return {
           kind: 'fixed',
           expression: lowerIncludes(node, environment),
+          location,
+        };
+      }
+
+      // `a.localeCompare(b)` on strings: -1, 0 or 1.
+      if (
+        callee.type === 'MemberExpression' &&
+        !callee.computed &&
+        callee.property.type === 'Identifier' &&
+        callee.property.name === 'localeCompare'
+      ) {
+        return {
+          kind: 'fixed',
+          expression: lowerLocaleCompare(node, environment),
           location,
         };
       }
@@ -2960,6 +2972,47 @@ function lowerIncludes(call: t.CallExpression, environment: Env): IrExpr {
   ]);
   const needle = stringOf(needleNode, () => includesProblem(0, false)!);
   return {kind: 'stringIncludes', haystack, needle, type: BOOL};
+}
+
+/**
+ * Lowers `text.localeCompare(other)` on runtime strings, which orders them by code point as QuickJS does.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns -1, 0 or 1.
+ */
+function lowerLocaleCompare(call: t.CallExpression, environment: Env): IrExpr {
+  const receiver = (call.callee as t.MemberExpression).object;
+  const [otherNode, ...rest] = call.arguments;
+  if (!otherNode || otherNode.type === 'SpreadElement' || rest.length) {
+    throw aotError(
+      'AOT: localeCompare takes one string',
+      'pass just the string to compare with: a.name.localeCompare(b.name). Locales and options are not supported.',
+    );
+  }
+  const stringOf = (node: t.Node): IrExpr => {
+    if (buildsText(node, environment)) {
+      throw aotError(
+        'AOT: localeCompare needs a string kept somewhere, not one built in place',
+        'build it into a local first: `const label = `${a} ${b}`;` then label.localeCompare(x).',
+      );
+    }
+    const value = lowerExprWide(node, environment);
+    if (value.type.kind !== 'string') {
+      throw aotError(
+        'AOT: localeCompare is only supported on strings',
+        'compare numbers by subtracting them: (a, b) => a.n - b.n.',
+      );
+    }
+    return value;
+  };
+  return {
+    kind: 'stringOrder',
+    left: stringOf(receiver),
+    right: stringOf(otherNode),
+    type: INT,
+  };
 }
 
 /**

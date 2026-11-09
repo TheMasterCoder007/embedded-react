@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 8;
+export const FORMAT_MINOR = 9;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -500,6 +500,7 @@ export const OPCODES: readonly OpcodeInfo[] = [
   ['FMTSLICE', 'abc', 1],
   ['SHAS', 'abc', 1],
   ['REMOVE', 'abx', 1],
+  ['SCMP', 'abc', 1],
 ];
 
 /*----------------------------------------------------------------------------------------------------------------------

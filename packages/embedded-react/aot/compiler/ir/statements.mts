@@ -162,6 +162,35 @@ export interface IrSetRow {
   cleared: ItemField[];
 }
 
+/** Keeps the rows a test passes, in order: `items.filter(item => …)`. The rows are tested last to first. */
+export interface IrFilterItems {
+  kind: 'filterItems';
+  list: ListState;
+  /** The local the test reads the row's index through. */
+  position: Local;
+  keep: IrExpr;
+}
+
+/** Sorts a list's rows in place, keeping equal ones in order: `items.toSorted((a, b) => …)`. */
+export interface IrSortItems {
+  kind: 'sortItems';
+  list: ListState;
+  /** The locals the compare function reads the two rows' indexes through. */
+  first: Local;
+  second: Local;
+  /** Above zero when the first row goes after the second. */
+  order: IrExpr;
+}
+
+/** Fills a filtered or sorted list with its source's rows, those a test passes when it has one. */
+export interface IrFillOrder {
+  kind: 'fillOrder';
+  list: ListState;
+  /** The local the test reads the source row's index through. */
+  row: Local;
+  keep: IrExpr | null;
+}
+
 /** `ref.current = …` or a compound assignment to it. */
 export interface IrWriteRef {
   kind: 'writeRef';
@@ -245,6 +274,9 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrRemoveItem
   | IrUpdateItems
   | IrSetRow
+  | IrFilterItems
+  | IrSortItems
+  | IrFillOrder
   | IrWriteRef
   | IrStepRef
   | IrStopAnimations

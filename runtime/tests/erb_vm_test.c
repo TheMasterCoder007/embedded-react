@@ -583,6 +583,31 @@ static void test_string_helpers(void)
     CHECK(call(functions[0], 0, 0) == 1, "includes finds a string inside");
     CHECK(call(functions[1], 0, 0) == 1, "every string includes the empty one");
     CHECK(call(functions[2], 0, 0) == 0, "and not one that isn't there");
+
+    base();
+    const uint16_t lower = add_string("apple");
+    const uint16_t upper = add_string("Apple");
+    const uint16_t longer = add_string("apples");
+    const uint16_t accented = add_string("\xC3\xA9"
+                                         "clair");
+    const uint8_t order_types[] = {ERB_TYPE_INT, ERB_TYPE_STRING, ERB_TYPE_STRING};
+    const uint16_t pairs[5][2] = {{lower, lower}, {upper, lower}, {longer, lower}, {lower, longer}, {accented, lower}};
+    uint16_t orders[5];
+    for (uint32_t index = 0; index < 5u; index++)
+    {
+        const uint32_t code[] = {
+            OP_ABX(LOADS, 1, pairs[index][0]),
+            OP_ABX(LOADS, 2, pairs[index][1]),
+            OP_ABC(SCMP, 0, 1, 2),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        orders[index] = helper(order_types, 3, 0, ERB_TYPE_INT, code, 4);
+    }
+    CHECK(load(), "loads");
+    CHECK(call(orders[0], 0, 0) == 0, "a string sorts with itself");
+    CHECK(call(orders[1], 0, 0) == -1, "a capital sorts before a small letter, by code point");
+    CHECK(call(orders[2], 0, 0) == 1 && call(orders[3], 0, 0) == -1, "a longer string sorts after its start");
+    CHECK(call(orders[4], 0, 0) == 1, "a letter past ASCII sorts after one in it");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

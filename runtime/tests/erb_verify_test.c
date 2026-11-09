@@ -852,6 +852,18 @@ static void test_bytecode(void)
         base();
         set_code_types(FUNCTION_TIMER, types, 4, int_includes, 2);
         EXPECT(ERB_ERROR_BYTECODE, "includes of an int register");
+        const uint32_t order[] = {OP_ABC(SCMP, 0, 3, 3), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, order, 2);
+        EXPECT(ERB_OK, "a string order into an int register");
+        const uint32_t bool_order[] = {OP_ABC(SCMP, 2, 3, 3), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, bool_order, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a string order into a bool register");
+        const uint32_t int_order[] = {OP_ABC(SCMP, 0, 3, 1), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, int_order, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a string order of an int register");
     }
     {
         const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_FLOAT};

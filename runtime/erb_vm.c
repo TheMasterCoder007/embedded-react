@@ -1339,6 +1339,13 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_SEQ:
                 registers[operand_a] = strcmp(string_of(registers[operand_b]), string_of(registers[operand_c])) == 0;
                 break;
+            case ERB_OP_SCMP:
+            {
+                /* strcmp orders UTF-8 by code point, as localeCompare does in QuickJS. */
+                const int order = strcmp(string_of(registers[operand_b]), string_of(registers[operand_c]));
+                registers[operand_a] = order < 0 ? -1 : order > 0;
+                break;
+            }
             case ERB_OP_SHAS:
                 registers[operand_a] = strstr(string_of(registers[operand_b]), string_of(registers[operand_c])) != NULL;
                 break;

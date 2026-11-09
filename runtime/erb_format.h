@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 8u
+#define ERB_FORMAT_MINOR 9u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -806,7 +806,9 @@ enum
     X(FMTSLICE, ERB_F_ABC, 1, 0, ERBO_I, ERBO_I, ERBO_X)  /* slice(A, B) on the last piece */                           \
     X(SHAS,     ERB_F_ABC, 1, 1, ERBO_B, ERBO_S, ERBO_S)  /* A = B.includes(C) */                                     \
     /* Lists, since minor 8 */                                                                                         \
-    X(REMOVE,   ERB_F_ABX, 1, 0, ERBO_I, ERBO_K, ERBO_X)  /* drop row A, moving the rows after it up */
+    X(REMOVE,   ERB_F_ABX, 1, 0, ERBO_I, ERBO_K, ERBO_X)  /* drop row A, moving the rows after it up */               \
+    /* Strings, since minor 9 */                                                                                      \
+    X(SCMP,     ERB_F_ABC, 1, 1, ERBO_I, ERBO_S, ERBO_S)  /* A = -1, 0 or 1 as B sorts before, with or after C */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */

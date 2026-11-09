@@ -47,6 +47,12 @@ import {collectAnims, collectRefs} from './animations.mts';
 import {attrExpr} from './style-text.mts';
 import {inlineFragments} from './elements/props.mts';
 import {lowerEffect} from './handlers.mts';
+import {
+  bindDerivedList,
+  derivedListOf,
+  renderBindings,
+  rowItemOf,
+} from './list-order.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
 import type * as t from '@babel/types';
@@ -524,7 +530,14 @@ export function emitComponent(
   };
 
   // Resolve memos in order (fold, else a local expression), then compile its effects, all in the child's env/state.
-  for (const [name, expression] of childMemos) {
+  for (const {name, expression, isMemo} of renderBindings(
+    functionNode.body,
+    childMemos,
+  )) {
+    if (!isMemo) {
+      bindDerivedList(name, expression, childEnvironment);
+      continue;
+    }
     try {
       setBinding(
         childScope,
@@ -532,6 +545,9 @@ export function emitComponent(
         bindConst(name, evalStatic(expression, childScope, 'boot')),
       );
     } catch {
+      if (bindDerivedList(name, expression, childEnvironment)) {
+        continue;
+      }
       if (
         expression.type === 'ArrayExpression' ||
         expression.type === 'ObjectExpression'
@@ -769,12 +785,10 @@ function emitDynamicMap(
 
     // A row's item has no slot of its own: only its fields are read, through `struct`.
     if (itemName) {
-      rowLocals.set(itemName, {
-        name: itemName,
-        struct: listState.struct,
-        list: listState,
-        row: rowIndex,
-      } as Local);
+      rowLocals.set(
+        itemName,
+        rowItemOf(listState, {name: itemName, row: rowIndex} as Local),
+      );
     }
 
     rows.push(
@@ -1045,7 +1059,7 @@ export function emitChildren(
       const stateRecord =
         mapTarget.type === 'Identifier'
           ? environment.state.get(mapTarget.name)
-          : null;
+          : derivedListOf(mapTarget, environment);
       if (stateRecord?.kind === 'list') {
         lowered.push(
           emitDynamicMap(

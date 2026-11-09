@@ -52,8 +52,11 @@ import type {
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {
   IrAppendItem,
+  IrFillOrder,
+  IrFilterItems,
   IrRemoveItem,
   IrSetRow,
+  IrSortItems,
   IrStmt,
   IrTimer,
   IrUpdateItems,
@@ -247,6 +250,8 @@ export class Codegen {
   private emptyString: Register | null = null;
   /** The counter of the function's update loops, which only LOOPSET and LOOP write. Reserved, for that. */
   private loopCounter: Register | null = null;
+  /** The counter of a sort's inner loop. */
+  private innerLoopCounter: Register | null = null;
   /** The row the update being lowered visits, which its setRows write. */
   private updatingRow: Register | undefined;
 
@@ -538,6 +543,16 @@ export class Codegen {
         if (expression.operator === '!=') {
           builder.abc('NOT', register.index, register.index);
         }
+        return register;
+      }
+      case 'stringOrder': {
+        const register = builder.register('int');
+        builder.abc(
+          'SCMP',
+          register.index,
+          this.valueAs(expression.left, 'string').index,
+          this.valueAs(expression.right, 'string').index,
+        );
         return register;
       }
       case 'stringIncludes': {
@@ -953,7 +968,7 @@ export class Codegen {
       builder.abc(
         'ROWGET',
         register.index,
-        row.index,
+        this.sourceRow(item, row).index,
         0,
         pool.index | (index << 16),
       );
@@ -971,6 +986,28 @@ export class Codegen {
   }
 
   /**
+   * The row of its list an item is: the row itself, or for a row of a filtered or sorted list, the source row it
+   * holds.
+   *
+   * @param item  The row's item.
+   * @param row  Its row, in the list it counts in.
+   *
+   * @returns An int register.
+   */
+  private sourceRow(item: Local, row: Register): Register {
+    if (!item.through) return row;
+    const source = this.builder.register('int');
+    this.builder.abc(
+      'ROWGET',
+      source.index,
+      row.index,
+      0,
+      this.listPool(item.through).slot.index,
+    );
+    return source;
+  }
+
+  /**
    * Whether an item's row is in its list: below the count, and not negative for an index worked out at run time.
    *
    * @param item  The row's item.
@@ -980,7 +1017,7 @@ export class Codegen {
    */
   private rowInRange(item: Local, row: Register): Register {
     const {builder} = this;
-    const pool = this.listPool(item.list!).slot;
+    const pool = this.listPool(item.through ?? item.list!).slot;
     const count = builder.register('int');
     const below = builder.register('bool');
     builder.abx('LEN', count.index, pool.index);
@@ -1527,6 +1564,15 @@ export class Codegen {
       case 'setRow':
         this.scoped(() => this.setRow(statement));
         return;
+      case 'filterItems':
+        this.scoped(() => this.filterItems(statement));
+        return;
+      case 'sortItems':
+        this.scoped(() => this.sortItems(statement));
+        return;
+      case 'fillOrder':
+        this.scoped(() => this.fillOrder(statement));
+        return;
       case 'stopAnimations':
       case 'startAnimations':
       case 'startChain':
@@ -1741,6 +1787,222 @@ export class Codegen {
       }),
     );
     builder.place(done);
+  }
+
+  /**
+   * Visits a list's rows in a loop as long as its cap that stops at its count: first to last, or last to first.
+   *
+   * @param list  The list.
+   * @param backwards  Visit the last row first.
+   * @param visit  Lowers the body, given the row.
+   */
+  private eachRow(
+    list: ListState,
+    backwards: boolean,
+    visit: (row: Register) => void,
+  ): void {
+    const {builder} = this;
+    const pool = this.listPool(list).slot;
+    const count = builder.register('int');
+    builder.abx('LEN', count.index, pool.index);
+    const capacity = this.load('int', list.capacity);
+    const counter = (this.loopCounter ??= builder.reserved('int'));
+    const done = builder.label();
+    builder.loop(counter, list.capacity, () =>
+      this.scoped(() => {
+        // The counter runs from the cap down to 1, so cap - counter is the visit's number from 0.
+        const row = builder.register('int');
+        builder.abc('SUB', row.index, capacity.index, counter.index);
+        const inList = builder.register('bool');
+        if (backwards) {
+          builder.abc('SUB', row.index, count.index, row.index);
+          builder.abc('SUB', row.index, row.index, this.load('int', 1).index);
+          builder.abc('LE', inList.index, this.load('int', 0).index, row.index);
+        } else {
+          builder.abc('LT', inList.index, row.index, count.index);
+        }
+        builder.branch('JF', done, inList);
+        visit(row);
+      }),
+    );
+    builder.place(done);
+  }
+
+  /**
+   * Drops the rows a filter doesn't keep, last to first, so the rows still to test stay where they are.
+   *
+   * @param statement  The filter.
+   */
+  private filterItems(statement: IrFilterItems): void {
+    const {builder} = this;
+    const pool = this.listPool(statement.list).slot;
+    const name = required(statement.position.name, 'the filtered row');
+    this.eachRow(statement.list, true, row => {
+      this.locals.set(name, {register: row});
+      const kept = builder.label();
+      builder.branch('JT', kept, this.condition(statement.keep));
+      builder.abx('REMOVE', row.index, pool.index);
+      builder.place(kept);
+      this.locals.delete(name);
+    });
+  }
+
+  /**
+   * Fills a filtered or sorted list with the source rows its first filter keeps, or all of them.
+   *
+   * @param statement  The fill.
+   */
+  private fillOrder(statement: IrFillOrder): void {
+    const {builder} = this;
+    const pool = this.listPool(statement.list).slot;
+    const source = required(statement.list.derived, 'a derived list').source;
+    const name = required(statement.row.name, 'the visited row');
+    builder.abx('CLEAR', 0, pool.index);
+    this.eachRow(source, false, row => {
+      const skip = builder.label();
+      if (statement.keep) {
+        this.locals.set(name, {register: row});
+        builder.branch('JF', skip, this.condition(statement.keep));
+        this.locals.delete(name);
+      }
+      builder.abx('APPEND', row.index, pool.index);
+      builder.place(skip);
+    });
+  }
+
+  /**
+   * Sorts a list's rows in place by insertion: each row moves back past the rows before it that go after it, so
+   * equal rows keep their order, as JS's sort does.
+   *
+   * @param statement  The sort.
+   */
+  private sortItems(statement: IrSortItems): void {
+    const {builder} = this;
+    const {list} = statement;
+    const pool = this.listPool(list).slot;
+    const firstName = required(statement.first.name, 'the first row');
+    const secondName = required(statement.second.name, 'the second row');
+    const count = builder.register('int');
+    builder.abx('LEN', count.index, pool.index);
+    const capacity = this.load('int', list.capacity);
+    const one = this.load('int', 1);
+    const outer = (this.loopCounter ??= builder.reserved('int'));
+    const inner = (this.innerLoopCounter ??= builder.reserved('int'));
+    const sorted = builder.label();
+    builder.loop(outer, list.capacity, () =>
+      this.scoped(() => {
+        // Row cap - counter + 1 moves back next, from row 1 on.
+        const moving = builder.register('int');
+        builder.abc('SUB', moving.index, capacity.index, outer.index);
+        builder.abc('ADD', moving.index, moving.index, one.index);
+        const inList = builder.register('bool');
+        builder.abc('LT', inList.index, moving.index, count.index);
+        builder.branch('JF', sorted, inList);
+        const placed = builder.label();
+        builder.loop(inner, list.capacity, () =>
+          this.scoped(() => {
+            // It is at row moving - (cap - counter) now; it stops at row 0.
+            const second = builder.register('int');
+            builder.abc('SUB', second.index, capacity.index, inner.index);
+            builder.abc('SUB', second.index, moving.index, second.index);
+            const above = builder.register('bool');
+            builder.abc(
+              'LT',
+              above.index,
+              this.load('int', 0).index,
+              second.index,
+            );
+            builder.branch('JF', placed, above);
+            const first = builder.register('int');
+            builder.abc('SUB', first.index, second.index, one.index);
+            this.locals.set(firstName, {register: first});
+            this.locals.set(secondName, {register: second});
+            builder.branch('JF', placed, this.after(statement.order));
+            this.locals.delete(firstName);
+            this.locals.delete(secondName);
+            this.swapRows(list, first, second);
+          }),
+        );
+        builder.place(placed);
+      }),
+    );
+    builder.place(sorted);
+  }
+
+  /**
+   * Whether a compare function's result puts the first row after the second: it is above zero.
+   *
+   * @param order  The result.
+   *
+   * @returns A bool register.
+   */
+  private after(order: IrExpr): Register {
+    const {builder} = this;
+    const value = this.value(order);
+    const type = value.type as ExprType;
+    const result = builder.register('bool');
+    if (type === 'bool') {
+      // true is 1, which puts the first row after the second.
+      builder.abc('MOVE', result.index, value.index);
+    } else if (type === 'float' || type === 'double') {
+      builder.abc(
+        type === 'float' ? 'FLT' : 'DLT',
+        result.index,
+        this.load(type, 0).index,
+        value.index,
+      );
+    } else if (type === 'int64') {
+      builder.abc(
+        'LLT',
+        result.index,
+        this.load('int64', 0).index,
+        value.index,
+      );
+    } else {
+      builder.abc('LT', result.index, this.load('int', 0).index, value.index);
+    }
+    return result;
+  }
+
+  /**
+   * Swaps two rows of a list, field by field. A string goes through its field's own buffer.
+   *
+   * @param list  The list.
+   * @param first  One row.
+   * @param second  The other.
+   */
+  private swapRows(list: ListState, first: Register, second: Register): void {
+    const {builder} = this;
+    const pool = this.listPool(list);
+    rowEntries(list.struct).forEach(({field, presence}, index) =>
+      this.scoped(() => {
+        const extension = pool.slot.index | (index << 16);
+        const read = (row: Register, type: RegisterType): Register => {
+          const register = builder.register(type);
+          builder.abc('ROWGET', register.index, row.index, 0, extension);
+          return register;
+        };
+        const write = (value: Register, row: Register): void =>
+          builder.abc('ROWSET', value.index, row.index, 0, extension);
+        if (!presence && field.kind === 'string') {
+          const buffer = required(
+            pool.buffers.get(field.key),
+            `field "${field.key}"`,
+          );
+          builder.abx('SETS', read(first, 'string').index, buffer.index);
+          write(read(second, 'string'), first);
+          const kept = builder.register('string');
+          builder.abx('GETS', kept.index, buffer.index);
+          write(kept, second);
+          return;
+        }
+        const type = presence ? 'bool' : field.kind;
+        const firstValue = read(first, type);
+        const secondValue = read(second, type);
+        write(secondValue, first);
+        write(firstValue, second);
+      }),
+    );
   }
 
   /**
