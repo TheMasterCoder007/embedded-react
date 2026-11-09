@@ -504,13 +504,12 @@ export function stringCaps(
         ) {
           return;
         }
-        const adds =
-          (part.edits ?? []).some(edit => edit.kind === 'pad') ||
-          text.parts.some(
-            (other, otherIndex) =>
-              otherIndex !== index &&
-              !(other.kind === 'literal' && other.text === ''),
-          );
+        // A pad's width already bounds it, so only another part adds.
+        const adds = text.parts.some(
+          (other, otherIndex) =>
+            otherIndex !== index &&
+            !(other.kind === 'literal' && other.text === ''),
+        );
         const read: StringBuffer[] = [];
         readsOf(part.value, read);
         found.push(...read.map(readBuffer => ({buffer: readBuffer, adds})));
@@ -595,6 +594,7 @@ export function stringCaps(
 
   checkFits(buffers, defaultCap);
 
+  // The package verifier refuses a string cap of 0.
   const capOf = (buffer: StringBuffer | undefined): number =>
     Math.max(1, buffer ? buffer.bound.bytes : WRITE_MAX);
   return {

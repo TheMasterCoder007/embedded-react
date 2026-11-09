@@ -108,6 +108,14 @@ describe('string caps', () => {
     expect(caps.state('log')).toBe(40);
   });
 
+  it('bounds a string padded from itself by the pad width', () => {
+    const caps = capsOf(
+      "  const [log, setLog] = useState('');",
+      "<Pressable onPress={() => setLog(log.padStart(100, '.'))}><Text>{log}</Text></Pressable>",
+    );
+    expect(caps.state('log')).toBe(100);
+  });
+
   it('does not count strings that only copy each other as built from themselves', () => {
     const long = 'x'.repeat(60);
     const caps = capsOf(
