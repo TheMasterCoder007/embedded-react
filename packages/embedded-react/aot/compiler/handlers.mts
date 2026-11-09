@@ -530,6 +530,15 @@ function setRow(node: t.Node, update: RowUpdate): IrStmt {
   const {struct} = list;
   const given = new Map<ItemField, t.Node>();
   const cleared = new Set<ItemField>();
+  // A key written twice takes its last value, as in JS.
+  const give = (field: ItemField, value: t.Node): void => {
+    cleared.delete(field);
+    given.set(field, value);
+  };
+  const clear = (field: ItemField): void => {
+    given.delete(field);
+    cleared.add(field);
+  };
   if (struct.plain) {
     if (node.type === 'ObjectExpression') {
       throw aotError(
@@ -538,9 +547,9 @@ function setRow(node: t.Node, update: RowUpdate): IrStmt {
       );
     }
     if (leavesOut(node)) {
-      cleared.add(struct.fields[0]);
+      clear(struct.fields[0]);
     } else {
-      given.set(struct.fields[0], node);
+      give(struct.fields[0], node);
     }
   } else {
     if (node.type !== 'ObjectExpression') {
@@ -581,12 +590,12 @@ function setRow(node: t.Node, update: RowUpdate): IrStmt {
         if (value.type === 'ObjectExpression') {
           visit(value, fieldPath);
         } else if (leavesOut(value)) {
-          fields.forEach(field => cleared.add(field));
+          fields.forEach(field => clear(field));
         } else if (
           fields.length === 1 &&
           fields[0].key === fieldPath.join('.')
         ) {
-          given.set(fields[0], value);
+          give(fields[0], value);
         } else if (!update.isRow(value, fieldPath)) {
           throw aotError(
             `AOT: field "${fieldPath.join('.')}" of list state "${listName}" holds an object`,
@@ -597,7 +606,7 @@ function setRow(node: t.Node, update: RowUpdate): IrStmt {
       if (!keeps) {
         for (const field of fieldsUnder(struct, path)) {
           if (!seen.has(field)) {
-            cleared.add(field);
+            clear(field);
           }
         }
       }
@@ -627,6 +636,47 @@ function updateRowLocal(): Local {
 }
 
 /**
+ * Whether an expression reads a row of a list by index: `items[k]`, under the list's name or the name a setter's
+ * updater gives it.
+ *
+ * @param node  The expression.
+ * @param listState  The list.
+ * @param listName  What the setter's argument calls it.
+ * @param environment  The expression environment.
+ *
+ * @returns Whether it does.
+ */
+function readsRowsOf(
+  node: unknown,
+  listState: ListState,
+  listName: string,
+  environment: Env,
+): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) {
+    return node.some(child =>
+      readsRowsOf(child, listState, listName, environment),
+    );
+  }
+  const astNode = node as t.Node;
+  if (
+    (astNode.type === 'MemberExpression' ||
+      astNode.type === 'OptionalMemberExpression') &&
+    astNode.computed &&
+    astNode.object.type === 'Identifier' &&
+    (astNode.object.name === listName ||
+      environment.state.get(astNode.object.name) === listState)
+  ) {
+    return true;
+  }
+  return Object.entries(astNode).some(
+    ([key, child]) =>
+      !POSITION_KEYS.has(key) &&
+      readsRowsOf(child, listState, listName, environment),
+  );
+}
+
+/**
  * Lowers `items.map(…)` as a list's next value: each row is visited, and set to what the function gives it.
  *
  * @param listState  The list.
@@ -643,6 +693,14 @@ function lowerItemsMap(
   environment: Env,
 ): IrStmt[] {
   const {itemName, indexName, body} = itemCallback(argument, `${listName}.map`);
+  // The rows are set in place, one after another, so a read of another row could see its new value.
+  if (readsRowsOf(body, listState, listName, environment)) {
+    throw aotError(
+      `AOT: ${listName}.map's function can't read other items of ${listName}`,
+      'its items are set in place, so a read of another one could see its new value. Read it into a const ' +
+        `before the setter: const first = ${listName}[0].n.`,
+    );
+  }
   const row = updateRowLocal();
   const locals = new Map(environment.locals);
   if (itemName) {
@@ -737,9 +795,8 @@ function lowerItemsWith(
     environment,
     isRow: (node, path) => isPathOf(node, path, isItem),
   });
-  return statements.length
-    ? [{kind: 'updateItems', list: listState, row, index, body: statements}]
-    : [];
+  // Even an update that changes nothing reads the row, so an index past the end faults.
+  return [{kind: 'updateItems', list: listState, row, index, body: statements}];
 }
 
 /**
@@ -847,7 +904,7 @@ function lowerListOp(
           kind: 'removeItem',
           list: listState,
           index: rowIndexOf(slicedOut, listName, environment),
-          countsBack: false,
+          negative: 'sliced',
         },
       ];
     }
@@ -904,7 +961,7 @@ function lowerListOp(
         kind: 'removeItem',
         list: listState,
         index: rowIndexOf(index, listName, environment),
-        countsBack: false,
+        negative: 'none',
       },
     ];
   }
@@ -926,7 +983,7 @@ function lowerListOp(
         kind: 'removeItem',
         list: listState,
         index: rowIndexOf(start, listName, environment),
-        countsBack: true,
+        negative: 'spliced',
       },
     ];
   }

@@ -127,8 +127,11 @@ export interface IrRemoveItem {
   list: ListState;
   /** The row. Past either end, nothing is removed. */
   index: IrExpr;
-  /** A negative index counts back from the end, as `toSpliced` counts it. */
-  countsBack: boolean;
+  /**
+   * What a negative index does: nothing (`filter`), counts back from the end and no further than the first item
+   * (`toSpliced`), or counts back with -1 stopping the app, since the pair of slices repeats the list there.
+   */
+  negative: 'none' | 'spliced' | 'sliced';
 }
 
 /**

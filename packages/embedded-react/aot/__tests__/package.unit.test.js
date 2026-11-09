@@ -1500,6 +1500,38 @@ export function App() {
     expect(ops.filter(name => name === 'ROWSET')).toHaveLength(6);
   });
 
+  it('checks the index of a `with` that changes nothing', () => {
+    const ops = handlerOps('setItems(items.with(picked, items[picked]))');
+    expect(ops).toContain('ROWGET');
+    expect(ops).not.toContain('ROWSET');
+  });
+
+  it('counts a negative index back for a pair of slices, stopping at -1', () => {
+    const sliced = handlerOps(
+      'setItems([...items.slice(0, picked), ...items.slice(picked + 1)])',
+    );
+    expect(sliced).toEqual(
+      expect.arrayContaining(['EQ', 'TRAP', 'LEN', 'ADD', 'REMOVE']),
+    );
+    expect(sliced).not.toContain('MAX');
+    expect(
+      handlerOps('setItems(items.filter((_, i) => i !== picked))'),
+    ).not.toContain('TRAP');
+  });
+
+  it('takes the last of a key written twice', () => {
+    const stores = handler =>
+      handlerOps(handler).filter(name => name === 'ROWSET').length;
+    // The value is kept, so the field isn't optional: one store.
+    expect(
+      stores('setItems(items.map(item => ({...item, n: undefined, n: 5})))'),
+    ).toBe(1);
+    // It is left out: the value and its flag.
+    expect(
+      stores('setItems(items.map(item => ({...item, n: 5, n: undefined})))'),
+    ).toBe(2);
+  });
+
   it('refuses what it cannot lower', () => {
     refuses(
       'setItems(items.filter(item => item.done))',
@@ -1552,6 +1584,14 @@ export function App() {
     refuses(
       'setItems(items.with(picked + 0.5, items[0]))',
       'an index into "items" must be a whole number',
+    );
+    refuses(
+      'setItems(items.map((item, i) => ({...item, n: items[0].n})))',
+      "items.map's function can't read other items of items",
+    );
+    refuses(
+      'setItems(prev => prev.map(item => (prev[1]?.done ? item : {...item, done: true})))',
+      "prev.map's function can't read other items of prev",
     );
     refuses(
       'setItems(items.reverse())',

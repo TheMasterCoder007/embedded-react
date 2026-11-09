@@ -1606,18 +1606,32 @@ export class Codegen {
    * @param statement  The removal.
    */
   private removeItem(statement: IrRemoveItem): void {
+    const {builder} = this;
     const pool = this.listPool(statement.list).slot;
-    const index = this.valueAs(statement.index, 'int');
-    this.builder.abx(
-      'REMOVE',
-      (statement.countsBack ? this.countedBack(index, pool, true) : index)
-        .index,
-      pool.index,
-    );
+    let index = this.valueAs(statement.index, 'int');
+    if (statement.negative === 'sliced') {
+      // [...items.slice(0, -1), ...items.slice(0)] repeats the list, which a list can't hold.
+      const repeats = builder.register('bool');
+      builder.abc('EQ', repeats.index, index.index, this.load('int', -1).index);
+      const fits = builder.label();
+      builder.branch('JF', fits, repeats);
+      builder.abx(
+        'TRAP',
+        0,
+        this.program.tables.string(
+          `[...${statement.list.name}.slice(0, -1), ...${statement.list.name}.slice(0)] repeats the list`,
+        ),
+      );
+      builder.place(fits);
+    }
+    if (statement.negative !== 'none') {
+      index = this.countedBack(index, pool, statement.negative === 'spliced');
+    }
+    builder.abx('REMOVE', index.index, pool.index);
   }
 
   /**
-   * A row index with a negative one counted back from the end, as `toSpliced` and `with` count it.
+   * A row index with a negative one counted back from the end, as `toSpliced`, `with` and a pair of slices count it.
    *
    * @param index  The index.
    * @param pool  The list's pool.
