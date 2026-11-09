@@ -1384,6 +1384,256 @@ export function App() {
   });
 });
 
+describe('list edits', () => {
+  const CAPS = {...SCREEN, listCap: 4};
+
+  /** An app whose one button runs a handler on a list of tasks, and a list of plain counts. */
+  const editApp = handler => `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+export function App() {
+  const [items, setItems] = useState([{title: 'a', n: 1, done: false, pos: {x: 1, y: 2}}, {title: 'b', n: 2, done: true, pos: {x: 3, y: 4}}]);
+  const [counts, setCounts] = useState([3, 1]);
+  const [picked, setPicked] = useState(0);
+  return (
+    <View>
+      <Pressable onPress={() => ${handler}}><Text>edit</Text></Pressable>
+      <Pressable onPress={() => setPicked(picked + 1)}><Text>next</Text></Pressable>
+      {items.map((item, index) => (
+        <Text key={index}>{item.title} {item.n} {item.done ? 'y' : 'n'} {item.pos.x} {item.pos.y}</Text>
+      ))}
+      {counts.map((count, index) => <Text key={index}>{count}</Text>)}
+    </View>
+  );
+}`;
+
+  /** The instructions of the edit button's handler. */
+  const handlerOps = handler =>
+    functionsOf(
+      compilePackage(editApp(handler), 'app', CAPS).program,
+    )[0].ops.map(instruction => instruction.name);
+
+  const refuses = (handler, message) =>
+    expect(() => compilePackage(editApp(handler), 'app', CAPS)).toThrow(
+      message,
+    );
+
+  it('removes an item by index with REMOVE, however it is written', () => {
+    for (const handler of [
+      'setItems(items.filter((_, i) => i !== picked))',
+      'setItems(items.filter((item, i) => picked != i))',
+      'setItems([...items.slice(0, picked), ...items.slice(picked + 1)])',
+      'setItems(prev => prev.filter((_, i) => i !== picked))',
+      'setCounts([...counts.slice(0, 1), ...counts.slice(2)])',
+    ]) {
+      const ops = handlerOps(handler);
+      expect(ops.filter(name => name === 'REMOVE')).toHaveLength(1);
+      expect(ops).not.toContain('MAX');
+    }
+    // toSpliced counts a negative index back from the end, and no further than the first item.
+    expect(handlerOps('setItems(items.toSpliced(picked, 1))')).toEqual(
+      expect.arrayContaining(['LEN', 'ADD', 'MAX', 'REMOVE']),
+    );
+  });
+
+  it('updates items in a counted loop that stops at the count', () => {
+    const ops = handlerOps(
+      'setItems(items.map((item, i) => i === picked ? {...item, n: item.n + 1} : item))',
+    );
+    const loop = ops.slice(ops.indexOf('LOOPSET'), ops.indexOf('LOOP') + 1);
+    expect(loop.slice(0, 4)).toEqual(['LOOPSET', 'SUB', 'LT', 'JF']);
+    expect(loop).toContain('EQ');
+    expect(loop.filter(name => name === 'ROWSET')).toHaveLength(1);
+    // Every row is visited, so an unconditional map has no test.
+    expect(
+      handlerOps('setCounts(counts.map(count => count * 2))').filter(
+        name => name === 'JT' || name === 'EQ',
+      ),
+    ).toEqual([]);
+  });
+
+  it('works every value out before it stores any', () => {
+    const ops = handlerOps(
+      "setItems(items.map(item => ({...item, title: item.title + '!', n: item.pos.x, pos: {...item.pos, x: item.n}})))",
+    );
+    const stores = ops.flatMap((name, index) =>
+      name === 'ROWSET' ? [index] : [],
+    );
+    expect(stores).toHaveLength(3);
+    expect(ops.lastIndexOf('ROWGET')).toBeLessThan(stores[0]);
+    expect(stores).toEqual([stores[0], stores[0] + 1, stores[0] + 2]);
+  });
+
+  it('sets one item with `with`, which faults past the end', () => {
+    const ops = handlerOps(
+      "setItems(items.with(picked, {...items[picked], title: 'z', done: !items[picked].done}))",
+    );
+    expect(ops).not.toContain('LOOP');
+    expect(ops.indexOf('ROWGET')).toBeLessThan(ops.indexOf('ROWSET'));
+    expect(ops.filter(name => name === 'ROWSET')).toHaveLength(2);
+  });
+
+  it('makes a field set to undefined optional, its flag cleared', () => {
+    const {program} = compilePackage(
+      editApp(
+        'setItems(items.map((item, i) => i === picked ? {...item, pos: {...item.pos, y: undefined}} : item))',
+      ),
+      'app',
+      CAPS,
+    );
+    const {u16, u32, tables} = readProgram(program);
+    const rows = tables.get(Table.rows);
+    // title, n, done, pos.x, pos.y, then pos.y's flag.
+    expect(u16(rows.offset + 8)).toBe(6);
+    expect(u32(rows.offset)).toBe(2);
+    const ops = functionsOf(program)[0].ops.filter(
+      instruction => instruction.name === 'ROWSET',
+    );
+    expect(ops.map(instruction => instruction.ext >>> 16)).toEqual([4, 5]);
+  });
+
+  it('replaces an item without a spread, leaving out what it does not set', () => {
+    const ops = handlerOps(
+      "setItems(items.with(0, {title: 'z', n: 1, done: true, pos: {x: 1}}))",
+    );
+    // Every field, and pos.y's flag.
+    expect(ops.filter(name => name === 'ROWSET')).toHaveLength(6);
+  });
+
+  it('checks the index of a `with` that changes nothing', () => {
+    const ops = handlerOps('setItems(items.with(picked, items[picked]))');
+    expect(ops).toContain('ROWGET');
+    expect(ops).not.toContain('ROWSET');
+  });
+
+  it('stops a `with` that keeps fields of items[n] at a negative n', () => {
+    expect(
+      handlerOps(
+        "setItems(items.with(picked, {...items[picked], title: 'z'}))",
+      ),
+    ).toEqual(expect.arrayContaining(['LT', 'TRAP', 'ROWSET']));
+    // An item that keeps nothing from items[n] needs no check.
+    expect(
+      handlerOps(
+        "setItems(items.with(picked, {title: 'z', n: 1, done: true, pos: {x: 1, y: 2}}))",
+      ),
+    ).not.toContain('TRAP');
+  });
+
+  it('counts a negative index back for a pair of slices, stopping at -1', () => {
+    const sliced = handlerOps(
+      'setItems([...items.slice(0, picked), ...items.slice(picked + 1)])',
+    );
+    expect(sliced).toEqual(
+      expect.arrayContaining(['EQ', 'TRAP', 'LEN', 'ADD', 'REMOVE']),
+    );
+    expect(sliced).not.toContain('MAX');
+    expect(
+      handlerOps('setItems(items.filter((_, i) => i !== picked))'),
+    ).not.toContain('TRAP');
+  });
+
+  it('takes the last of a key written twice', () => {
+    const stores = handler =>
+      handlerOps(handler).filter(name => name === 'ROWSET').length;
+    // The value is kept, so the field isn't optional: one store.
+    expect(
+      stores('setItems(items.map(item => ({...item, n: undefined, n: 5})))'),
+    ).toBe(1);
+    // It is left out: the value and its flag.
+    expect(
+      stores('setItems(items.map(item => ({...item, n: 5, n: undefined})))'),
+    ).toBe(2);
+    // A nested key written twice keeps only what its last object sets. Fields are title, n, done, pos.x, pos.y,
+    // then pos.y's flag once it can be left out.
+    const storedFields = handler =>
+      functionsOf(compilePackage(editApp(handler), 'app', CAPS).program)[0]
+        .ops.filter(instruction => instruction.name === 'ROWSET')
+        .map(instruction => instruction.ext >>> 16);
+    expect(
+      storedFields(
+        'setItems(items.map(item => ({...item, pos: {...item.pos, x: 1}, pos: {...item.pos, y: 7}})))',
+      ),
+    ).toEqual([4]);
+    expect(
+      storedFields(
+        'setItems(items.map(item => ({...item, pos: {x: 1, y: 2}, pos: {x: 3}})))',
+      ),
+    ).toEqual([3, 4, 5]);
+  });
+
+  it('refuses what it cannot lower', () => {
+    refuses(
+      'setItems(items.filter(item => item.done))',
+      'only items.filter((_, i) => i !== n) is supported on a list',
+    );
+    refuses(
+      'setItems(items.filter((_, i) => i !== i + picked))',
+      'only items.filter((_, i) => i !== n) is supported on a list',
+    );
+    refuses(
+      'setItems(items.toSpliced(picked, 2))',
+      'only items.toSpliced(n, 1) is supported on a list',
+    );
+    refuses(
+      'setItems([...items.slice(0, picked), ...items.slice(picked + 2)])',
+      'only [...items.slice(0, n), ...items.slice(n + 1)] is supported',
+    );
+    refuses(
+      'setItems([...items.slice(0, -1), ...items.slice(0)])',
+      'only [...items.slice(0, n), ...items.slice(n + 1)] is supported',
+    );
+    refuses(
+      'setItems(items.with(-1, {...items[-1], n: 5}))',
+      'items.with(-1, …) keeps fields of items[-1], which is undefined',
+    );
+    refuses(
+      'setItems(items.with(0, {...items[1], n: 5}))',
+      'an updated item can spread only the item it replaces, first',
+    );
+    refuses(
+      'setItems(items.map(item => ({n: 5, ...item})))',
+      'an updated item can spread only the item it replaces, first',
+    );
+    refuses(
+      'setItems(items.map(item => item.n))',
+      'an item of "items" must be replaced with an object literal',
+    );
+    refuses(
+      'setItems(items.map(item => ({...item, size: 5})))',
+      'list state "items" has no field "size"',
+    );
+    refuses(
+      'setItems(items.map(item => ({...item, pos: 5})))',
+      'field "pos" of list state "items" holds an object',
+    );
+    refuses(
+      "setItems(items.map(item => ({...item, done: 'yes'})))",
+      'field "done" of list state "items" holds a boolean',
+    );
+    refuses(
+      'setItems(items.map(({n}) => n))',
+      "items.map's function must name its parameters",
+    );
+    refuses(
+      'setItems(items.with(picked + 0.5, items[0]))',
+      'an index into "items" must be a whole number',
+    );
+    refuses(
+      'setItems(items.map((item, i) => ({...item, n: items[0].n})))',
+      "items.map's function can't read other items of items",
+    );
+    refuses(
+      'setItems(prev => prev.map(item => (prev[1]?.done ? item : {...item, done: true})))',
+      "prev.map's function can't read other items of prev",
+    );
+    refuses(
+      'setItems(items.reverse())',
+      'unsupported list operation on "items"',
+    );
+  });
+});
+
 describe('conditionals', () => {
   const SCREENS_APP = `
 import {useState} from 'react';

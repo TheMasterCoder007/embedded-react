@@ -93,6 +93,7 @@ import type {
   EffectRecord,
   Env,
   FunctionNode,
+  ItemField,
   ItemStruct,
   ListState,
   Local,
@@ -111,6 +112,21 @@ import type {
 /** The constant 0, which a remainder by 0 or ±1 stores. */
 const ZERO: IrExpr = {kind: 'number', value: 0, type: INT};
 
+/** Keys an AST node keeps besides what it says: where it is, and its comments. */
+const POSITION_KEYS = new Set([
+  'loc',
+  'start',
+  'end',
+  'range',
+  'extra',
+  'leadingComments',
+  'trailingComments',
+  'innerComments',
+]);
+
+/** Update locals made so far, which numbers the next one's name. */
+let updateRows = 0;
+
 /** Each updateVector shape key and the numbers its array takes, for errors. */
 const UPDATE_VECTOR_ARGUMENTS: Record<string, string> = {
   arc: '[cx, cy, r, startAngle, endAngle]',
@@ -122,6 +138,118 @@ const UPDATE_VECTOR_ARGUMENTS: Record<string, string> = {
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * Whether a value is left out of an item: null or undefined.
+ *
+ * @param node  The value.
+ *
+ * @returns Whether it is.
+ */
+const leavesOut = (node: t.Node): boolean =>
+  node.type === 'NullLiteral' ||
+  (node.type === 'Identifier' && node.name === 'undefined');
+
+/**
+ * Whether two expressions are written the same, wherever they are.
+ *
+ * @param first  One.
+ * @param second  The other.
+ *
+ * @returns Whether they are.
+ */
+function sameNode(first: unknown, second: unknown): boolean {
+  if (first === second) return true;
+  if (
+    !first ||
+    !second ||
+    typeof first !== 'object' ||
+    typeof second !== 'object' ||
+    Array.isArray(first) !== Array.isArray(second)
+  ) {
+    return false;
+  }
+  const keysOf = (value: object): string[] =>
+    Object.keys(value).filter(key => !POSITION_KEYS.has(key));
+  const firstKeys = keysOf(first);
+  return (
+    firstKeys.length === keysOf(second).length &&
+    firstKeys.every(key =>
+      sameNode(
+        (first as Record<string, unknown>)[key],
+        (second as Record<string, unknown>)[key],
+      ),
+    )
+  );
+}
+
+/**
+ * Whether an expression reads any of some names.
+ *
+ * @param node  The expression.
+ * @param names  The names.
+ *
+ * @returns Whether it does.
+ */
+function mentions(node: unknown, names: ReadonlySet<string>): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(child => mentions(child, names));
+  const astNode = node as t.Node;
+  if (astNode.type === 'Identifier') return names.has(astNode.name);
+  return Object.entries(astNode).some(
+    ([key, child]) =>
+      !POSITION_KEYS.has(key) &&
+      !(
+        key === 'property' &&
+        (astNode.type === 'MemberExpression' ||
+          astNode.type === 'OptionalMemberExpression') &&
+        !astNode.computed
+      ) &&
+      !(
+        key === 'key' &&
+        astNode.type === 'ObjectProperty' &&
+        !astNode.computed
+      ) &&
+      mentions(child, names),
+  );
+}
+
+/**
+ * The value an item's field is set to, checked against the field.
+ *
+ * @param field  The field.
+ * @param valueNode  Its value.
+ * @param listState  The list.
+ * @param environment  The expression environment.
+ *
+ * @returns The value.
+ */
+function itemValue(
+  field: ItemField,
+  valueNode: t.Node,
+  listState: ListState,
+  environment: Env,
+): IrItemValue {
+  if (field.kind === 'string') {
+    const text = lowerText(valueNode, environment);
+    checkConstantFits(
+      text,
+      `field "${field.key}" of list state "${listState.name}"`,
+    );
+    return {field, text};
+  }
+  const value = lowerExpr(valueNode, environment);
+  if ((field.kind === 'bool') !== (value.type.kind === 'bool')) {
+    throw aotError(
+      `AOT: field "${field.key || 'value'}" of list state "${listState.name}" holds ${field.kind === 'bool' ? 'a boolean' : 'a number'}`,
+      'give it a value of the same kind as the initial ones.',
+    );
+  }
+  return {
+    field,
+    value: field.kind === 'bool' ? value : storeValue(value, field.kind),
+  };
+}
 
 /**
  * The fields an appended item sets, by key: an object literal's, nested ones flattened into dotted keys, or a plain
@@ -139,9 +267,6 @@ function appendedFields(
   listName: string,
 ): Map<string, t.Node> {
   const given = new Map<string, t.Node>();
-  const leavesOut = (node: t.Node): boolean =>
-    node.type === 'NullLiteral' ||
-    (node.type === 'Identifier' && node.name === 'undefined');
   if (struct.plain) {
     if (item.type === 'ObjectExpression') {
       throw aotError(
@@ -163,10 +288,7 @@ function appendedFields(
           'write each field out: {title: t, n: 1}. Spreads, methods and computed keys are not lowered.',
         );
       }
-      const key =
-        (property.key as t.Identifier).name ??
-        String((property.key as t.StringLiteral).value);
-      const fieldPath = [...path, key];
+      const fieldPath = [...path, propertyKey(property)];
       if (property.value.type === 'ObjectExpression') {
         visit(property.value, fieldPath);
         continue;
@@ -178,11 +300,7 @@ function appendedFields(
         !isField &&
         !(leavesOut(property.value) && fieldsUnder(struct, fieldPath).length)
       ) {
-        throw aotError(
-          `AOT: list state "${listName}" has no field "${name}"`,
-          "a list's fields are those of its initial items. Give one of them the field, and leave it out of the " +
-            'others to make it optional.',
-        );
+        throw noField(listName, name);
       }
       if (!leavesOut(property.value)) {
         given.set(name, property.value);
@@ -197,11 +315,596 @@ function appendedFields(
 }
 
 /**
+ * An object property's key.
+ *
+ * @param property  The property.
+ *
+ * @returns The key.
+ */
+const propertyKey = (property: t.ObjectProperty): string =>
+  (property.key as t.Identifier).name ??
+  String((property.key as t.StringLiteral).value);
+
+/**
+ * The error for a field a list's items don't have.
+ *
+ * @param listName  The list.
+ * @param name  The field.
+ *
+ * @returns The error.
+ */
+const noField = (listName: string, name: string): Error =>
+  aotError(
+    `AOT: list state "${listName}" has no field "${name}"`,
+    "a list's fields are those of its initial items. Give one of them the field, and leave it out of the " +
+      'others to make it optional.',
+  );
+
+/** A function a list method is given, inline: its parameters and the value it returns. */
+interface ItemCallback {
+  itemName?: string;
+  indexName?: string;
+  body: t.Expression;
+}
+
+/**
+ * The inline function a list method is given.
+ *
+ * @param node  The argument.
+ * @param what  The call, for errors: `items.map`.
+ *
+ * @returns Its parameters and what it returns.
+ */
+function itemCallback(node: t.Node | undefined, what: string): ItemCallback {
+  if (!isFn(node)) {
+    throw aotError(
+      `AOT: ${what} needs an inline function`,
+      `write the function in the call: ${what}((item, i) => …).`,
+    );
+  }
+  const names = node.params.map(parameter => {
+    if (parameter.type !== 'Identifier') {
+      throw aotError(
+        `AOT: ${what}'s function must name its parameters`,
+        'name the item and its index, e.g. (item, i) => …, and read fields as item.done.',
+      );
+    }
+    return parameter.name;
+  });
+  let {body} = node;
+  if (body.type === 'BlockStatement') {
+    const [statement] = body.body;
+    if (
+      body.body.length !== 1 ||
+      statement.type !== 'ReturnStatement' ||
+      !statement.argument
+    ) {
+      throw aotError(
+        `AOT: ${what}'s function must return a single expression`,
+        'return one value, e.g. (item, i) => (i === n ? {...item, done: true} : item).',
+      );
+    }
+    body = statement.argument;
+  }
+  return {itemName: names[0], indexName: names[1], body};
+}
+
+/**
+ * A list row index: a whole number.
+ *
+ * @param node  The index.
+ * @param listName  The list, for errors.
+ * @param environment  The expression environment.
+ *
+ * @returns The index.
+ */
+function rowIndexOf(node: t.Node, listName: string, environment: Env): IrExpr {
+  const index = lowerExpr(node, environment);
+  if (index.type.kind !== 'int') {
+    throw aotError(
+      `AOT: an index into "${listName}" must be a whole number`,
+      'an index is an int: Math.floor(x) or a whole-number state.',
+    );
+  }
+  return index;
+}
+
+/**
+ * The index `items.filter((_, i) => i !== n)` removes: n.
+ *
+ * @param callback  The filter's function.
+ * @param listName  The list, for errors.
+ *
+ * @returns n.
+ */
+function filteredIndex(callback: ItemCallback, listName: string): t.Node {
+  const {itemName, indexName, body} = callback;
+  const isIndex = (node: t.Node): boolean =>
+    node.type === 'Identifier' && node.name === indexName;
+  const other =
+    indexName &&
+    body.type === 'BinaryExpression' &&
+    (body.operator === '!==' || body.operator === '!=')
+      ? isIndex(body.left)
+        ? body.right
+        : isIndex(body.right)
+          ? body.left
+          : null
+      : null;
+  const names = new Set([itemName, indexName].filter(Boolean) as string[]);
+  if (!other || mentions(other, names)) {
+    throw aotError(
+      `AOT: only ${listName}.filter((_, i) => i !== n) is supported on a list`,
+      'it removes item n. A filter on the items themselves is not lowered yet.',
+    );
+  }
+  return other;
+}
+
+/** What an update reads: the list, and which item is the row it replaces. */
+interface RowUpdate {
+  list: ListState;
+  listName: string;
+  environment: Env;
+  /**
+   * Whether an expression is the replaced item, or the object at a path in it: `item`, `item.pos`.
+   *
+   * @param node  The expression.
+   * @param path  The path.
+   *
+   * @returns Whether it is.
+   */
+  isRow(node: t.Node, path: string[]): boolean;
+}
+
+/**
+ * Whether an expression is the object at a path in an item: `base.pos.x` for ['pos', 'x'].
+ *
+ * @param node  The expression.
+ * @param path  The path.
+ * @param isItem  Whether an expression is the item.
+ *
+ * @returns Whether it is.
+ */
+function isPathOf(
+  node: t.Node,
+  path: string[],
+  isItem: (node: t.Node) => boolean,
+): boolean {
+  let current = node;
+  for (let index = path.length - 1; index >= 0; index--) {
+    if (
+      current.type !== 'MemberExpression' ||
+      current.computed ||
+      (current.property as t.Identifier).name !== path[index]
+    ) {
+      return false;
+    }
+    current = current.object;
+  }
+  return isItem(current);
+}
+
+/**
+ * The statements an update runs on a row: `if`s for a ternary's tests, and a `setRow` for each item it builds.
+ * A branch that gives back the item itself changes nothing.
+ *
+ * @param node  What the update gives the row.
+ * @param update  The update.
+ *
+ * @returns The statements.
+ */
+function updateBody(node: t.Node, update: RowUpdate): IrStmt[] {
+  if (update.isRow(node, [])) {
+    return [];
+  }
+  if (node.type === 'ConditionalExpression') {
+    const consequent = updateBody(node.consequent, update);
+    const alternate = updateBody(node.alternate, update);
+    if (!consequent.length && !alternate.length) {
+      return [];
+    }
+    return [
+      {
+        kind: 'if',
+        test: lowerExprWide(node.test, update.environment),
+        consequent,
+        alternate: alternate.length ? alternate : null,
+      },
+    ];
+  }
+  return [setRow(node, update)];
+}
+
+/**
+ * Sets a row to an item: a spread of the row's own item keeps the fields it doesn't set; without one, every field
+ * it leaves out is undefined from then on.
+ *
+ * @param node  The item.
+ * @param update  The update.
+ *
+ * @returns The statement.
+ */
+function setRow(node: t.Node, update: RowUpdate): IrStmt {
+  const {list, listName, environment} = update;
+  const {struct} = list;
+  const given = new Map<ItemField, t.Node>();
+  const cleared = new Set<ItemField>();
+  // A key written twice takes its last value, as in JS.
+  const give = (field: ItemField, value: t.Node): void => {
+    cleared.delete(field);
+    given.set(field, value);
+  };
+  const clear = (field: ItemField): void => {
+    given.delete(field);
+    cleared.add(field);
+  };
+  if (struct.plain) {
+    if (node.type === 'ObjectExpression') {
+      throw aotError(
+        `AOT: list state "${listName}" holds plain values, not objects`,
+        'give a value of the same kind as the initial ones.',
+      );
+    }
+    if (leavesOut(node)) {
+      clear(struct.fields[0]);
+    } else {
+      give(struct.fields[0], node);
+    }
+  } else {
+    if (node.type !== 'ObjectExpression') {
+      throw aotError(
+        `AOT: an item of "${listName}" must be replaced with an object literal`,
+        'spread the item and set the fields that change: {...item, done: true}.',
+      );
+    }
+    const visit = (object: t.ObjectExpression, path: string[]): void => {
+      const seen = new Set<ItemField>();
+      let keeps = false;
+      object.properties.forEach((property, position) => {
+        if (property.type === 'SpreadElement') {
+          if (position !== 0 || !update.isRow(property.argument, path)) {
+            throw aotError(
+              'AOT: an updated item can spread only the item it replaces, first',
+              path.length
+                ? `spread the same object: {...item, ${path[0]}: {...item.${path.join('.')}, x: 1}}.`
+                : 'spread the item, then set the fields that change: {...item, done: true}.',
+            );
+          }
+          keeps = true;
+          return;
+        }
+        if (property.type !== 'ObjectProperty' || property.computed) {
+          throw aotError(
+            'AOT: an updated item must be an object literal of plain fields',
+            'write each field out: {...item, title: t, n: 1}. Methods and computed keys are not lowered.',
+          );
+        }
+        const fieldPath = [...path, propertyKey(property)];
+        const fields = fieldsUnder(struct, fieldPath);
+        if (!fields.length) {
+          throw noField(listName, fieldPath.join('.'));
+        }
+        // A key written again replaces all an earlier value set under it.
+        fields.forEach(field => {
+          seen.add(field);
+          given.delete(field);
+          cleared.delete(field);
+        });
+        const {value} = property;
+        if (value.type === 'ObjectExpression') {
+          visit(value, fieldPath);
+        } else if (leavesOut(value)) {
+          fields.forEach(field => clear(field));
+        } else if (
+          fields.length === 1 &&
+          fields[0].key === fieldPath.join('.')
+        ) {
+          give(fields[0], value);
+        } else if (!update.isRow(value, fieldPath)) {
+          throw aotError(
+            `AOT: field "${fieldPath.join('.')}" of list state "${listName}" holds an object`,
+            `set its fields with an object literal: {...item, ${fieldPath[0]}: {...item.${fieldPath.join('.')}, x: 1}}.`,
+          );
+        }
+      });
+      if (!keeps) {
+        for (const field of fieldsUnder(struct, path)) {
+          if (!seen.has(field)) {
+            clear(field);
+          }
+        }
+      }
+    };
+    visit(node, []);
+  }
+
+  const values: IrItemValue[] = [];
+  for (const field of struct.fields) {
+    const valueNode = given.get(field);
+    if (cleared.has(field)) {
+      field.optional = true;
+    } else if (valueNode) {
+      values.push(itemValue(field, valueNode, list, environment));
+    }
+  }
+  return {kind: 'setRow', list, values, cleared: [...cleared]};
+}
+
+/**
+ * The local an update's row index is read through. Each has a name of its own, which no JS name can clash with.
+ *
+ * @returns The local.
+ */
+function updateRowLocal(): Local {
+  return {slotKind: 'int', name: `#row${updateRows++}`};
+}
+
+/**
+ * Whether an expression reads a row of a list by index: `items[k]`, under the list's name or the name a setter's
+ * updater gives it.
+ *
+ * @param node  The expression.
+ * @param listState  The list.
+ * @param listName  What the setter's argument calls it.
+ * @param environment  The expression environment.
+ *
+ * @returns Whether it does.
+ */
+function readsRowsOf(
+  node: unknown,
+  listState: ListState,
+  listName: string,
+  environment: Env,
+): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) {
+    return node.some(child =>
+      readsRowsOf(child, listState, listName, environment),
+    );
+  }
+  const astNode = node as t.Node;
+  if (
+    (astNode.type === 'MemberExpression' ||
+      astNode.type === 'OptionalMemberExpression') &&
+    astNode.computed &&
+    astNode.object.type === 'Identifier' &&
+    (astNode.object.name === listName ||
+      environment.state.get(astNode.object.name) === listState)
+  ) {
+    return true;
+  }
+  return Object.entries(astNode).some(
+    ([key, child]) =>
+      !POSITION_KEYS.has(key) &&
+      readsRowsOf(child, listState, listName, environment),
+  );
+}
+
+/**
+ * Lowers `items.map(…)` as a list's next value: each row is visited, and set to what the function gives it.
+ *
+ * @param listState  The list.
+ * @param listName  What the setter's argument calls it.
+ * @param argument  The map's function.
+ * @param environment  The expression environment.
+ *
+ * @returns The statements.
+ */
+function lowerItemsMap(
+  listState: ListState,
+  listName: string,
+  argument: t.Node | undefined,
+  environment: Env,
+): IrStmt[] {
+  const {itemName, indexName, body} = itemCallback(argument, `${listName}.map`);
+  // The rows are set in place, one after another, so a read of another row could see its new value.
+  if (readsRowsOf(body, listState, listName, environment)) {
+    throw aotError(
+      `AOT: ${listName}.map's function can't read other items of ${listName}`,
+      'its items are set in place, so a read of another one could see its new value. Read it into a const ' +
+        `before the setter: const first = ${listName}[0].n.`,
+    );
+  }
+  const row = updateRowLocal();
+  const locals = new Map(environment.locals);
+  if (itemName) {
+    locals.set(itemName, {
+      name: itemName,
+      struct: listState.struct,
+      list: listState,
+      index: {kind: 'local', local: row, type: INT},
+    } as Local);
+  }
+  if (indexName) {
+    locals.set(indexName, row);
+  }
+  const statements = updateBody(body, {
+    list: listState,
+    listName,
+    environment: {...environment, locals},
+    isRow: (node, path) =>
+      isPathOf(
+        node,
+        path,
+        item => item.type === 'Identifier' && item.name === itemName,
+      ),
+  });
+  return statements.length
+    ? [
+        {
+          kind: 'updateItems',
+          list: listState,
+          row,
+          index: null,
+          body: statements,
+        },
+      ]
+    : [];
+}
+
+/**
+ * Lowers `items.with(n, item)` as a list's next value: row n is set to the item. A negative n counts back from the
+ * end, and a row past either end stops the app, as JS throws there.
+ *
+ * @param listState  The list.
+ * @param listName  What the setter's argument calls it.
+ * @param argumentNodes  The call's arguments.
+ * @param environment  The expression environment.
+ *
+ * @returns The statements.
+ */
+function lowerItemsWith(
+  listState: ListState,
+  listName: string,
+  argumentNodes: t.CallExpression['arguments'],
+  environment: Env,
+): IrStmt[] {
+  const [indexNode, itemNode] = argumentNodes;
+  if (
+    argumentNodes.length !== 2 ||
+    indexNode.type === 'SpreadElement' ||
+    itemNode.type === 'SpreadElement'
+  ) {
+    throw aotError(
+      `AOT: ${listName}.with takes an index and an item`,
+      `e.g. ${listName}.with(n, {...${listName}[n], done: true}).`,
+    );
+  }
+  const index = rowIndexOf(indexNode, listName, environment);
+  const constantIndex = staticInt(indexNode, environment);
+  // The replaced item: items[n], or a row's own item when n is that row's index. For a negative n, with() counts
+  // back but items[n] is undefined, so what the update keeps from it isn't the row's.
+  let keepsIndexed = false;
+  const isItem = (node: t.Node): boolean => {
+    if (
+      node.type === 'MemberExpression' &&
+      node.computed &&
+      node.object.type === 'Identifier' &&
+      node.object.name === listName
+    ) {
+      const same = sameNode(node.property, indexNode);
+      keepsIndexed ||= same;
+      return same;
+    }
+    const local =
+      node.type === 'Identifier'
+        ? environment.locals.get(node.name)
+        : undefined;
+    return (
+      local?.list === listState &&
+      local.row !== undefined &&
+      local.row === constantIndex
+    );
+  };
+  const row = updateRowLocal();
+  const statements = updateBody(itemNode, {
+    list: listState,
+    listName,
+    environment,
+    isRow: (node, path) => isPathOf(node, path, isItem),
+  });
+  if (keepsIndexed && constantIndex !== null && constantIndex < 0) {
+    throw aotError(
+      `AOT: ${listName}.with(${constantIndex}, …) keeps fields of ${listName}[${constantIndex}], which is undefined`,
+      `with() counts a negative index back from the end, but ${listName}[${constantIndex}] doesn't. ` +
+        `Use the index it counts back to, e.g. ${listName}.length - 1.`,
+    );
+  }
+  // Even an update that changes nothing reads the row, so an index past the end faults.
+  return [
+    {
+      kind: 'updateItems',
+      list: listState,
+      row,
+      index,
+      body: statements,
+      negativeKeeps: keepsIndexed && constantIndex === null,
+    },
+  ];
+}
+
+/**
+ * The arguments of a call to a method of the list: `items.slice(…)`, or null when it is no such call.
+ *
+ * @param node  The expression.
+ * @param listName  The list's name.
+ * @param method  The method.
+ *
+ * @returns The arguments.
+ */
+function listCall(
+  node: t.Node | null | undefined,
+  listName: string,
+  method: string,
+): t.CallExpression['arguments'] | null {
+  return node?.type === 'CallExpression' &&
+    node.callee.type === 'MemberExpression' &&
+    !node.callee.computed &&
+    node.callee.object.type === 'Identifier' &&
+    node.callee.object.name === listName &&
+    (node.callee.property as t.Identifier).name === method
+    ? node.arguments
+    : null;
+}
+
+/**
+ * The index `[...items.slice(0, n), ...items.slice(n + 1)]` removes, or null when the list literal is not that.
+ *
+ * @param nextList  The list literal.
+ * @param listName  The list's name.
+ * @param environment  The expression environment.
+ *
+ * @returns n.
+ */
+function slicedOutIndex(
+  nextList: t.ArrayExpression,
+  listName: string,
+  environment: Env,
+): t.Node | null {
+  const [first, second] = nextList.elements;
+  if (
+    nextList.elements.length !== 2 ||
+    first?.type !== 'SpreadElement' ||
+    second?.type !== 'SpreadElement'
+  ) {
+    return null;
+  }
+  const before = listCall(first.argument, listName, 'slice');
+  const after = listCall(second.argument, listName, 'slice');
+  if (before?.length !== 2 || after?.length !== 1) {
+    return null;
+  }
+  const [start, end] = before;
+  const [next] = after;
+  const constantEnd = staticInt(end, environment);
+  const constantNext = staticInt(next, environment);
+  const followsOn =
+    (next.type === 'BinaryExpression' &&
+      next.operator === '+' &&
+      sameNode(next.left, end) &&
+      staticInt(next.right, environment) === 1) ||
+    (constantEnd !== null && constantNext === constantEnd + 1);
+  if (
+    staticInt(start, environment) !== 0 ||
+    !followsOn ||
+    (constantEnd !== null && constantEnd < 0)
+  ) {
+    throw aotError(
+      `AOT: only [...${listName}.slice(0, n), ...${listName}.slice(n + 1)] is supported to splice a list`,
+      'it removes item n, which must not be negative.',
+    );
+  }
+  return end;
+}
+
+/**
  * Lowers a list-state setter call (`setItems(...)`) to bounded list operations.
  *
  * @param listState  The list state.
  * @param nextList  The setter's argument: the list's next value.
  * @param environment  The expression environment.
+ * @param listName  What the argument calls the list: its name, or an updater's parameter.
  *
  * @returns The statements.
  */
@@ -209,22 +912,35 @@ function lowerListOp(
   listState: ListState,
   nextList: t.CallExpression['arguments'][number],
   environment: Env,
+  listName = listState.name,
 ): IrStmt[] {
   const {capacity: capacity, struct} = listState;
 
-  // setItems([...items, a, b]) — append; setItems([]) — clear.
+  // setItems([...items, a, b]) — append; setItems([]) — clear; [...items.slice(0, n), ...items.slice(n + 1)] — remove.
   if (nextList.type === 'ArrayExpression') {
     if (nextList.elements.length === 0) {
       return [{kind: 'clearList', list: listState}];
     }
 
+    const slicedOut = slicedOutIndex(nextList, listName, environment);
+    if (slicedOut) {
+      return [
+        {
+          kind: 'removeItem',
+          list: listState,
+          index: rowIndexOf(slicedOut, listName, environment),
+          negative: 'sliced',
+        },
+      ];
+    }
+
     const [firstElement, ...appendedItems] = nextList.elements;
     if (
       firstElement?.type !== 'SpreadElement' ||
-      (firstElement.argument as t.Identifier).name !== listState.name
+      (firstElement.argument as t.Identifier).name !== listName
     ) {
       throw new Error(
-        `AOT: a list literal must spread the current list first: [...${listState.name}, item]`,
+        `AOT: a list literal must spread the current list first: [...${listName}, item]`,
       );
     }
 
@@ -237,36 +953,18 @@ function lowerListOp(
       }
       if (item.type === 'SpreadElement') {
         throw aotError(
-          `AOT: a list literal can spread only the current list, first: [...${listState.name}, item]`,
+          `AOT: a list literal can spread only the current list, first: [...${listName}, item]`,
         );
       }
 
-      const given = appendedFields(item, struct, listState.name);
+      const given = appendedFields(item, struct, listName);
       const values: IrItemValue[] = [];
       for (const field of struct.fields) {
         const valueNode = given.get(field.key);
-        if (!valueNode) {
-          field.optional = true;
-        } else if (field.kind === 'string') {
-          const text = lowerText(valueNode, environment);
-          checkConstantFits(
-            text,
-            `field "${field.key}" of list state "${listState.name}"`,
-          );
-          values.push({field, text});
+        if (valueNode) {
+          values.push(itemValue(field, valueNode, listState, environment));
         } else {
-          const value = lowerExpr(valueNode, environment);
-          if ((field.kind === 'bool') !== (value.type.kind === 'bool')) {
-            throw aotError(
-              `AOT: field "${field.key || 'value'}" of list state "${listState.name}" holds ${field.kind === 'bool' ? 'a boolean' : 'a number'}`,
-              'append an item of the same shape as the initial ones.',
-            );
-          }
-          values.push({
-            field,
-            value:
-              field.kind === 'bool' ? value : storeValue(value, field.kind),
-          });
+          field.optional = true;
         }
       }
 
@@ -276,19 +974,64 @@ function lowerListOp(
     return statements;
   }
 
+  // filter((_, i) => i !== n) and toSpliced(n, 1) remove item n; toSpliced counts a negative n back from the end.
+  const filterArguments = listCall(nextList, listName, 'filter');
+  if (filterArguments) {
+    const index = filteredIndex(
+      itemCallback(filterArguments[0], `${listName}.filter`),
+      listName,
+    );
+    return [
+      {
+        kind: 'removeItem',
+        list: listState,
+        index: rowIndexOf(index, listName, environment),
+        negative: 'none',
+      },
+    ];
+  }
+  const splicedArguments = listCall(nextList, listName, 'toSpliced');
+  if (splicedArguments) {
+    const [start, count] = splicedArguments;
+    if (
+      splicedArguments.length !== 2 ||
+      start.type === 'SpreadElement' ||
+      staticInt(count, environment) !== 1
+    ) {
+      throw aotError(
+        `AOT: only ${listName}.toSpliced(n, 1) is supported on a list`,
+        'it removes item n.',
+      );
+    }
+    return [
+      {
+        kind: 'removeItem',
+        list: listState,
+        index: rowIndexOf(start, listName, environment),
+        negative: 'spliced',
+      },
+    ];
+  }
+
+  // map(item => …) and with(n, item) set items in place.
+  const mapArguments = listCall(nextList, listName, 'map');
+  if (mapArguments) {
+    return lowerItemsMap(listState, listName, mapArguments[0], environment);
+  }
+  const withArguments = listCall(nextList, listName, 'with');
+  if (withArguments) {
+    return lowerItemsWith(listState, listName, withArguments, environment);
+  }
+
   // slice(0, end) keeps the first items by JS rules: a negative end counts back, a large or missing one keeps all.
-  if (
-    nextList.type === 'CallExpression' &&
-    nextList.callee.type === 'MemberExpression' &&
-    (nextList.callee.object as t.Identifier).name === listState.name &&
-    (nextList.callee.property as t.Identifier).name === 'slice'
-  ) {
-    const [start, end] = nextList.arguments;
+  const sliceArguments = listCall(nextList, listName, 'slice');
+  if (sliceArguments) {
+    const [start, end] = sliceArguments;
     if (start && staticInt(start, environment) !== 0) {
       throw aotError(
-        `AOT: only ${listState.name}.slice(0, end) is supported on a list`,
+        `AOT: only ${listName}.slice(0, end) is supported on a list`,
         `a list is a fixed pool and a count, so a slice can only drop items from the end — ` +
-          `e.g. ${listState.name}.slice(0, -1) drops the last one.`,
+          `e.g. ${listName}.slice(0, -1) drops the last one.`,
       );
     }
 
@@ -323,9 +1066,10 @@ function lowerListOp(
     ];
   }
 
-  throw new Error(
-    `AOT: unsupported list operation on "${listState.name}" (use [...${listState.name}, ` +
-      `item], ${listState.name}.slice(0, n), or [])`,
+  throw aotError(
+    `AOT: unsupported list operation on "${listName}"`,
+    `use [...${listName}, item], ${listName}.slice(0, n), [], ${listName}.filter((_, i) => i !== n), ` +
+      `${listName}.toSpliced(n, 1), ${listName}.map(item => …) or ${listName}.with(n, item).`,
   );
 }
 
@@ -1171,6 +1915,25 @@ function lowerHandlerExprImpl(
   context.stateChanged = true;
   const setterArgument = expression.arguments[0];
   if (targetState.kind === 'list') {
+    // setItems(prev => …): the parameter names the list.
+    if (isFn(setterArgument)) {
+      const {itemName: previousName, body} = itemCallback(
+        setterArgument,
+        `${expression.callee.name}'s updater`,
+      );
+      if (!previousName) {
+        return lowerListOp(targetState, body, environment);
+      }
+      return lowerListOp(
+        targetState,
+        body,
+        {
+          ...environment,
+          state: new Map(environment.state).set(previousName, targetState),
+        },
+        previousName,
+      );
+    }
     return lowerListOp(targetState, setterArgument, environment);
   }
 

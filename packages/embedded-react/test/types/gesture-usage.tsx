@@ -22,7 +22,7 @@
 // The event `type` strings below are the runtime's (k_event_names in native_ui_bridge.c). Comparing
 // against a literal is the assertion: TS rejects `===` between types with no overlap, so a union that
 // loses 'responderGrant' — or a query that wrongly claims to carry a `type` — breaks this file.
-// No `console` here on purpose: the lib is ES2020 with no DOM, matching the device runtime.
+// No `console` here on purpose: the lib is ES2023 with no DOM, matching the device runtime.
 import {View, PanResponder} from '../../src/embedded-react/index';
 import type {
   ResponderEvent,

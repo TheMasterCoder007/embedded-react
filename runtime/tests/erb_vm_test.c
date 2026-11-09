@@ -625,6 +625,11 @@ static void test_lists(void)
     const uint16_t slice = helper(types, 4, 0, ERB_TYPE_INT, slice_code, 8);
     const uint32_t past_code[] = {OP_ABX(LOADI, 2, 9), OP_ABC(ROWGET, 0, 2, 0), SLOT_ITEMS, OP_ABC(RET, 0, 0, 0)};
     const uint16_t past = helper(types, 4, 0, ERB_TYPE_INT, past_code, 4);
+    const uint8_t remove_types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+    const uint32_t remove_code[] = {OP_ABX(REMOVE, 0, SLOT_ITEMS), OP_ABX(LEN, 1, SLOT_ITEMS), OP_ABC(RET, 1, 0, 0)};
+    const uint16_t remove = helper(remove_types, 2, 1, ERB_TYPE_INT, remove_code, 3);
+    const uint32_t row_code[] = {OP_ABC(ROWGET, 1, 0, 0), SLOT_ITEMS, OP_ABC(RET, 1, 0, 0)};
+    const uint16_t row = helper(remove_types, 2, 1, ERB_TYPE_INT, row_code, 3);
     CHECK(load(), "loads");
     CHECK(call(fill, 0, 0) == 20, "rows append and read back");
     CHECK(call(length_function, 0, 0) == 3, "LEN counts them");
@@ -635,6 +640,10 @@ static void test_lists(void)
     call(fill, 0, 0);
     CHECK(call(length_function, 0, 0) == 4, "a full list keeps its cap");
     CHECK(strstr(s_log, "list full") != NULL, "and the dropped row is reported");
+    CHECK(call(remove, 0, 0) == 3 && call(row, 0, 0) == 10 && call(row, 2, 0) == 30,
+          "REMOVE drops a row and moves the rest up");
+    CHECK(call(remove, 3, 0) == 3 && call(remove, -1, 0) == 3, "and leaves the list be for a row past either end");
+    CHECK(call(remove, 2, 0) == 2 && call(row, 1, 0) == 20, "the last row goes too");
     call(past, 0, 0);
     CHECK(s_status == ERB_ERROR_LIST_INDEX, "a read past the end stops the app");
 }

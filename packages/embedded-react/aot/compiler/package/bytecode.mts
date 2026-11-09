@@ -323,6 +323,28 @@ export class FunctionBuilder {
   }
 
   /**
+   * A counted loop: the body runs `bound` times, the counter going from `bound` down to 1. Only LOOPSET and LOOP
+   * may write the counter, so it is a register no release hands out.
+   *
+   * @param counter  The counter.
+   * @param bound  How many times.
+   * @param body  Lowers the body.
+   */
+  loop(counter: Register, bound: number, body: () => void): void {
+    this.abx('LOOPSET', counter.index, bound);
+    const start = this.position;
+    body();
+    const offset = start - (this.position + 1);
+    if (-offset > MAX_BRANCH_OFFSET + 1) {
+      throw aotError(
+        `AOT: ${this.what} has a loop too long for a package`,
+        'split it into smaller pieces.',
+      );
+    }
+    this.abx('LOOP', counter.index, offset);
+  }
+
+  /**
    * A branch to a label when any of a dirty word's bits is set in this update pass.
    *
    * @param word  The dirty word.

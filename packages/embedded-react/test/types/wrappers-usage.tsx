@@ -18,7 +18,7 @@
 // It uses the JS-only RN wrappers (<Button>, <ImageBackground>, <SectionList>) the way an app does, so
 // a signature that is well-formed but WRONG — a `section` that loses the app's own fields, an
 // `index` that isn't a number, a `renderItem` that can't return an element — fails the build here.
-// No `console`: the lib is ES2020 with no DOM, matching the device runtime.
+// No `console`: the lib is ES2023 with no DOM, matching the device runtime.
 import {
   Button,
   ImageBackground,

@@ -80,6 +80,17 @@ while the code that breaks it is still one line.
   `items[i]?.field` and `values[i]` read as `undefined`. A constant array read by a runtime index
   is kept in RAM, like a list state, and holds at most 32767 elements.
 - A list state, a row's item, or `items[i]` can be passed to a component.
+- A list's setter takes `[...items, item]` to append, `items.slice(0, n)` to keep the first items, `[]` to clear,
+  and these to remove item n: `items.filter((_, i) => i !== n)`, `items.toSpliced(n, 1)` and
+  `[...items.slice(0, n), ...items.slice(n + 1)]`. Past the end, nothing is removed. A negative n counts back from
+  the end as JS does, except in the slices at -1, where JS repeats the list: that stops the app with the error
+  screen. The updater form, `setItems(prev => …)`, works too.
+- `items.map(item => …)` and `items.with(n, item)` change items in place. The new item spreads the old one first and
+  sets what changes, `{...item, done: !item.done}`, and `map`'s function can pick between items and `item` itself
+  with `?:` on the item and its index. It can't read other items by index, since they are set in place; read one
+  into a `const` before the setter. A field set to `undefined` is left out from then on. `with` past the end stops
+  the app with the error screen, as JS throws there. `with` counts a negative n back from the end, but
+  `items[n]` doesn't, so `items.with(n, {...items[n], …})` with a negative n stops the app too.
 - `.map` over an array built in render (inline, a `const`, a `useMemo`, or a prop) unrolls one row
   per element, and its elements can read state. Such an array can't be read by a runtime index.
   A list computed at runtime from anything else does not compile.

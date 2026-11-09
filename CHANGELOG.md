@@ -17,9 +17,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: `slice`, `toUpperCase` and `includes` on strings. Packages are now format minor 7.
 - Flow B lists: `items[i]` reads, nested, optional and boolean fields, lists of plain values, a list passed to a
   component, and `.map` over an array built in render.
+- Flow B lists: remove an item with `filter((_, i) => i !== n)`, `toSpliced(n, 1)` or a pair of slices, and update
+  items with `map` and `with`. A list setter takes the updater form too. Packages are now format minor 8.
 
 ### Changed
 
+- The TypeScript app template and the type tests use the ES2023 lib, which the device's QuickJS supports, so
+  `with` and `toSpliced` type-check.
 - Flow B prints a float with the fewest digits that read back as it, laid out as JS lays out a number, instead of
   six significant digits (`123456.7`, not `123457`).
 - Flow B: a state-driven `&&` or ternary builds the branch it picks and destroys it when another is picked, so a

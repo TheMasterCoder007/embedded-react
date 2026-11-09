@@ -19,7 +19,13 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {SourcePosition} from '../diagnostics.mts';
-import type {ItemField, ListState, RefRecord, ScalarState} from '../types.mts';
+import type {
+  ItemField,
+  ListState,
+  Local,
+  RefRecord,
+  ScalarState,
+} from '../types.mts';
 import type {IrAnimationStart} from './animations.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrText} from './text.mts';
@@ -77,7 +83,7 @@ export interface IrSetStateText {
   text: IrText;
 }
 
-/** One field of an appended list item: a number, or text. */
+/** One field of an appended or updated list item: a number, or text. */
 export type IrItemValue =
   {field: ItemField; value: IrExpr} | {field: ItemField; text: IrText};
 
@@ -113,6 +119,47 @@ export interface IrSliceItems {
   kind: 'sliceItems';
   list: ListState;
   end: IrExpr;
+}
+
+/** Drops one row, moving the rest up: `items.filter((_, i) => i !== n)`, `items.toSpliced(n, 1)` and the like. */
+export interface IrRemoveItem {
+  kind: 'removeItem';
+  list: ListState;
+  /** The row. Past either end, nothing is removed. */
+  index: IrExpr;
+  /**
+   * What a negative index does: nothing (`filter`), counts back from the end and no further than the first item
+   * (`toSpliced`), or counts back with -1 stopping the app, since the pair of slices repeats the list there.
+   */
+  negative: 'none' | 'spliced' | 'sliced';
+}
+
+/**
+ * Visits a list's rows and runs its body on each: `items.map(item => …)` visits every row, `items.with(n, …)`
+ * just row n. The body is `if`s and `setRow`s, which read the row through a local.
+ */
+export interface IrUpdateItems {
+  kind: 'updateItems';
+  list: ListState;
+  /** The local the body reads the row's index through. */
+  row: Local;
+  /** The one row `with` visits, a negative one counting back; null to visit every row. */
+  index: IrExpr | null;
+  body: IrStmt[];
+  /**
+   * `with` keeps fields of `items[n]`, which is undefined for a negative n, so such an n stops the app rather than
+   * keep the row's.
+   */
+  negativeKeeps?: boolean;
+}
+
+/** Sets fields of the row an `updateItems` visits. Every value is worked out before any is stored. */
+export interface IrSetRow {
+  kind: 'setRow';
+  list: ListState;
+  values: IrItemValue[];
+  /** Fields set to undefined. */
+  cleared: ItemField[];
 }
 
 /** `ref.current = …` or a compound assignment to it. */
@@ -195,6 +242,9 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrDropLastItem
   | IrKeepFirstItems
   | IrSliceItems
+  | IrRemoveItem
+  | IrUpdateItems
+  | IrSetRow
   | IrWriteRef
   | IrStepRef
   | IrStopAnimations
