@@ -151,6 +151,14 @@ export interface IrItemField extends IrTyped {
   field: ItemField;
 }
 
+/** Whether a list item, or some of its fields, is there: false where JS would read undefined. */
+export interface IrItemPresent extends IrTyped {
+  kind: 'itemPresent';
+  item: Local;
+  /** The fields read; none for the item itself, any of several for an object of fields. */
+  fields: ItemField[];
+}
+
 /** A touch field of the handler's event (`e.x`, `e.vx` …). */
 export interface IrEvent extends IrTyped {
   kind: 'event';
@@ -313,6 +321,7 @@ export type IrExpr =
   | IrRef
   | IrListLength
   | IrItemField
+  | IrItemPresent
   | IrEvent
   | IrLayout
   | IrClock

@@ -69,6 +69,8 @@ export interface IrTextValue {
   digits?: number;
   /** String helpers on the printed value, in order. */
   edits?: IrTextEdit[];
+  /** What prints when the value is a list item's field that isn't there: '' as a child, 'undefined' in a `+`. */
+  missing?: string;
 }
 
 /** A boolean operand of a string `+`, printed as "true" or "false". */
@@ -77,6 +79,8 @@ export interface IrTextBoolean {
   value: IrExpr;
   /** String helpers on the word, in order. */
   edits?: IrTextEdit[];
+  /** What prints when the value is a list item's field that isn't there. */
+  missing?: string;
 }
 
 /** One piece of a text. */

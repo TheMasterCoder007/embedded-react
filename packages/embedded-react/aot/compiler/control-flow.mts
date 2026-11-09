@@ -22,7 +22,14 @@ import {aotError} from './diagnostics.mts';
 import {foldBoot, isBoot} from './boot.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
-import {lowerExpr, lowerSourcedWide} from './expressions.mts';
+import {
+  bindBuiltValues,
+  foldRuntime,
+  listItemOf,
+  lowerExpr,
+  lowerSourcedWide,
+} from './expressions.mts';
+import {STRUCT} from './ir/types.mts';
 import {
   isFn,
   declaredNames,
@@ -69,6 +76,7 @@ import type {
  */
 type PropDescriptor =
   | {static: true; value: unknown; isCallback?: undefined}
+  | {static: 'list'; list: ListState; isCallback?: undefined}
   | (Local & {static: false; isCallback?: undefined})
   | {
       isCallback: true;
@@ -172,18 +180,35 @@ function extractProps(
       continue;
     }
 
-    // Any other prop folds to a constant when it can, else becomes a runtime expression.
+    // A list state passes as it is.
+    const propName = (attribute.name as t.JSXIdentifier).name;
+    const listState =
+      node.type === 'Identifier' ? environment.state.get(node.name) : null;
+    if (listState?.kind === 'list') {
+      props[propName] = {static: 'list', list: listState};
+      continue;
+    }
+
+    // Any other prop folds to a constant when it can, else becomes a runtime expression. A list's item by index
+    // passes as it is, and an array or object built from runtime values folds with those values kept as runtime
+    // reads.
     try {
-      const propName = (attribute.name as t.JSXIdentifier).name;
       props[propName] = {
         static: true,
         value: bindConst(propName, evalStatic(node, scope, 'boot')),
       };
     } catch {
-      props[(attribute.name as t.JSXIdentifier).name] = {
-        static: false,
-        ...lowerSourcedWide(node, environment),
-      };
+      const item = listItemOf(node, environment);
+      props[propName] = item
+        ? {
+            static: false,
+            ...item,
+            source: {kind: 'local', local: item, location: node.loc?.start},
+            expression: {kind: 'local', local: item, type: STRUCT},
+          }
+        : node.type === 'ArrayExpression' || node.type === 'ObjectExpression'
+          ? {static: true, value: foldRuntime(node, environment, scope)}
+          : {static: false, ...lowerSourcedWide(node, environment)};
     }
   }
 
@@ -212,7 +237,7 @@ function bindParams(
   if (parameter.type === 'Identifier') {
     const propsObject: Record<string, unknown> = {};
     for (const [propName, descriptor] of Object.entries(props)) {
-      if (!descriptor.static) {
+      if (descriptor.static !== true) {
         throw new Error(
           'AOT: dynamic props require a destructured component parameter (e.g. `function C({ x })`)',
         );
@@ -261,7 +286,7 @@ function bindParams(
       }
 
       descriptor ??= {static: true, value: undefined};
-      if (descriptor.static)
+      if (descriptor.static === true)
         setBinding(defaultScope, bindName, descriptor.value);
       bindings.set(bindName, descriptor);
     }
@@ -359,7 +384,9 @@ export function emitComponent(
     environment.functionProps,
   );
 
-  // Bind each prop: a callback to fnProps, a constant to the child's scope, a runtime value to its locals.
+  // Bind each prop: a callback to fnProps, a constant to the child's scope, a runtime value to its locals, and a
+  // list state to its state.
+  const listProps = new Map<string, ListState>();
   for (const [name, descriptor] of bindParams(
     functionNode,
     extractProps(element.openingElement, scope, environment),
@@ -373,6 +400,9 @@ export function emitComponent(
         environment: descriptor.environment ?? environment,
         state: descriptor.state ?? state,
       });
+    } else if (descriptor.static === 'list') {
+      listProps.set(name, descriptor.list);
+      delete childScope[name];
     } else if (descriptor.static) {
       setBinding(childScope, name, descriptor.value);
     } else {
@@ -380,6 +410,10 @@ export function emitComponent(
         name: descriptor.name,
         slotKind: descriptor.slotKind,
         struct: descriptor.struct,
+        list: descriptor.list,
+        row: descriptor.row,
+        index: descriptor.index,
+        guarded: descriptor.guarded,
         isBoolean: descriptor.isBoolean, // keep boolean-ness across the prop boundary (extractProps supplies it)
         isLiteral: descriptor.isLiteral,
         wide: descriptor.wide,
@@ -478,7 +512,9 @@ export function emitComponent(
     locals: childLocals,
     children,
     functionProps,
-    state: childState.byName,
+    state: listProps.size
+      ? new Map([...childState.byName, ...listProps])
+      : childState.byName,
     animations: childAnimations,
     refs: childRefs,
     pans: childPans,
@@ -496,6 +532,13 @@ export function emitComponent(
         bindConst(name, evalStatic(expression, childScope, 'boot')),
       );
     } catch {
+      if (
+        expression.type === 'ArrayExpression' ||
+        expression.type === 'ObjectExpression'
+      ) {
+        setBinding(childScope, name, foldRuntime(expression, childEnvironment));
+        continue;
+      }
       const memo = lowerSourcedWide(expression, childEnvironment);
       childLocals.set(name, {
         slotKind: memo.slotKind,
@@ -507,6 +550,10 @@ export function emitComponent(
       });
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }
+  }
+
+  if (functionNode.body.type === 'BlockStatement') {
+    bindBuiltValues(functionNode.body.body, childEnvironment);
   }
 
   for (const effect of collectEffects(functionNode.body)) {
@@ -570,14 +617,19 @@ function emitMap(
   environment: Env,
   state: StateTable,
 ): IrElement[] {
-  // The array must fold at compile time and the callback must be inline.
+  // The array must fold at compile time, its values worked out at run time aside, and the callback must be inline.
+  const target = (call.callee as t.MemberExpression).object;
   let items;
-  try {
-    items = evalStatic((call.callee as t.MemberExpression).object, scope);
-  } catch {
-    throw new Error(
-      'AOT: .map target must be a compile-time-constant array (dynamic lists not yet supported)',
-    );
+  if (target.type === 'ArrayExpression') {
+    items = foldRuntime(target, environment, scope);
+  } else {
+    try {
+      items = evalStatic(target, scope);
+    } catch {
+      throw new Error(
+        'AOT: .map target must be a list state, a constant array, or an array literal built in render',
+      );
+    }
   }
 
   if (!Array.isArray(items)) {

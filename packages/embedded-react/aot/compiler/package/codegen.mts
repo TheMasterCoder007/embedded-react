@@ -45,13 +45,17 @@ import type {IrBootSlot} from '../ir/boot.mts';
 import type {
   IrExpr,
   IrGesture,
+  IrItemPresent,
   LayoutField,
   WholeHelper,
 } from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
 import type {IrTextEdit, IrTextPart} from '../ir/text.mts';
+import {itemReadOf, rowEntries, rowIndexOf} from '../list-items.mts';
+import {BOOL} from '../ir/types.mts';
 import type {
+  ItemField,
   ListState,
   Local,
   PropConstant,
@@ -326,6 +330,8 @@ export class Codegen {
         return 'int64';
       case 'itemField':
         return expression.field.kind;
+      case 'itemPresent':
+        return 'bool';
       case 'pi':
       case 'toFloat':
       case 'floatDivide':
@@ -416,7 +422,9 @@ export class Codegen {
         return register;
       }
       case 'itemField':
-        return this.itemField(expression.item, expression.field.key, type);
+        return this.itemField(expression.item, expression.field, type);
+      case 'itemPresent':
+        return this.itemPresent(expression);
       case 'gesture':
         return this.gesture(expression);
       case 'event':
@@ -893,40 +901,149 @@ export class Codegen {
   }
 
   /**
-   * A field of a list row's item. A row past the list's end, as a hidden row is, reads as zero or "".
+   * A field of a list row's item. A row past the list's end, as a hidden row is, reads as zero or "", and so does
+   * `list[i]?.field`; `list[i].field` past the end faults, as JS throws there.
    *
    * @param item  The row's item.
-   * @param key  The field.
+   * @param field  The field.
    * @param type  Its type.
    *
    * @returns The register.
    */
-  private itemField(item: Local, key: string, type: ExprType): Register {
+  private itemField(item: Local, field: ItemField, type: ExprType): Register {
+    const list = required(item.list, `the list of "${item.name}"`);
+    return this.rowRead(item, rowIndexOf(list.struct, field), type, false);
+  }
+
+  /**
+   * Reads one field of an item's row, its value or its flag.
+   *
+   * @param item  The row's item.
+   * @param index  The field's index in the row.
+   * @param type  Its type.
+   * @param checked  Read zero past the list's end even for an unguarded index.
+   *
+   * @returns The register.
+   */
+  private rowRead(
+    item: Local,
+    index: number,
+    type: ExprType,
+    checked: boolean,
+  ): Register {
     const {builder} = this;
     const list = required(item.list, `the list of "${item.name}"`);
-    const field = list.struct.fields.findIndex(entry => entry.key === key);
     const pool = this.listPool(list).slot;
-    const row = this.row ?? this.load('int', required(item.row, item.name!));
-    const count = builder.register('int');
-    const inUse = builder.register('bool');
-    builder.abx('LEN', count.index, pool.index);
-    builder.abc('LT', inUse.index, row.index, count.index);
+    const row = item.index
+      ? this.valueAs(item.index, 'int')
+      : (this.row ?? this.load('int', required(item.row, item.name!)));
+    const read = (): Register => {
+      const register = builder.register(type as RegisterType);
+      builder.abc(
+        'ROWGET',
+        register.index,
+        row.index,
+        0,
+        pool.index | (index << 16),
+      );
+      return register;
+    };
+    if (item.index && !item.guarded && !checked) {
+      return read();
+    }
     return this.choose(
-      inUse,
-      () => {
-        const register = builder.register(type as RegisterType);
-        builder.abc(
-          'ROWGET',
-          register.index,
-          row.index,
-          0,
-          pool.index | (field << 16),
-        );
-        return register;
-      },
+      this.rowInRange(item, row),
+      read,
       () => this.zero(type),
       type,
     );
+  }
+
+  /**
+   * Whether an item's row is in its list: below the count, and not negative for an index worked out at run time.
+   *
+   * @param item  The row's item.
+   * @param row  Its row.
+   *
+   * @returns A bool register.
+   */
+  private rowInRange(item: Local, row: Register): Register {
+    const {builder} = this;
+    const pool = this.listPool(item.list!).slot;
+    const count = builder.register('int');
+    const below = builder.register('bool');
+    builder.abx('LEN', count.index, pool.index);
+    builder.abc('LT', below.index, row.index, count.index);
+    if (!item.index) {
+      return below;
+    }
+    return this.choose(
+      below,
+      () => {
+        const nonNegative = builder.register('bool');
+        builder.abc(
+          'LE',
+          nonNegative.index,
+          this.load('int', 0).index,
+          row.index,
+        );
+        return nonNegative;
+      },
+      () => this.load('bool', 0),
+      'bool',
+    );
+  }
+
+  /**
+   * Whether an item, or a field of it, is there. An item is there while its row is in the list; a field some item
+   * leaves out has a flag, and an object of fields is there when any of them is.
+   *
+   * @param expression  The test.
+   *
+   * @returns A bool register.
+   */
+  private itemPresent(expression: IrItemPresent): Register {
+    const {builder} = this;
+    const {item, fields} = expression;
+    const struct = required(item.list, `the list of "${item.name}"`).struct;
+    const flags = fields.filter(field => field.optional);
+    if (fields.length && flags.length < fields.length) {
+      // Some field every item has: there whenever the row is.
+      return item.index && !item.guarded
+        ? this.load('bool', 1)
+        : this.rowPresent(item);
+    }
+    if (!fields.length) {
+      return this.rowPresent(item);
+    }
+    const result = builder.register('bool');
+    const end = builder.label();
+    flags.forEach((flag, index) => {
+      builder.abc(
+        'MOVE',
+        result.index,
+        this.rowRead(item, rowIndexOf(struct, flag, true), 'bool', false).index,
+      );
+      if (index < flags.length - 1) {
+        builder.branch('JT', end, result);
+      }
+    });
+    builder.place(end);
+    return result;
+  }
+
+  /**
+   * Whether an item's row is in its list.
+   *
+   * @param item  The row's item.
+   *
+   * @returns A bool register.
+   */
+  private rowPresent(item: Local): Register {
+    const row = item.index
+      ? this.valueAs(item.index, 'int')
+      : (this.row ?? this.load('int', required(item.row, item.name!)));
+    return this.rowInRange(item, row);
   }
 
   /** Zero, or the empty string, in a register of a type. */
@@ -1098,7 +1215,34 @@ export class Codegen {
     const {builder} = this;
     for (const part of parts) {
       const checkpoint = builder.checkpoint();
-      if (part.kind === 'literal') {
+      const read = part.kind === 'literal' ? null : itemReadOf(part.value);
+      if (
+        part.kind !== 'literal' &&
+        part.missing !== undefined &&
+        read &&
+        (read.field.optional || read.item.guarded)
+      ) {
+        // A field that isn't there prints as JS prints undefined.
+        const otherwise = builder.label();
+        const end = builder.label();
+        builder.branch(
+          'JF',
+          otherwise,
+          this.itemPresent({
+            kind: 'itemPresent',
+            item: read.item,
+            fields: [read.field],
+            type: BOOL,
+          }),
+        );
+        this.text([{...part, missing: undefined}]);
+        builder.branch('JMP', end);
+        builder.place(otherwise);
+        if (part.missing) {
+          builder.abx('FMTK', 0, this.program.tables.string(part.missing));
+        }
+        builder.place(end);
+      } else if (part.kind === 'literal') {
         if (part.text) {
           builder.abx('FMTK', 0, this.program.tables.string(part.text));
         }
@@ -1389,17 +1533,29 @@ export class Codegen {
   private appendItem(statement: IrAppendItem): void {
     const {builder} = this;
     const pool = this.listPool(statement.list);
+    const entries = rowEntries(statement.list.struct);
+    const given = new Map(statement.values.map(value => [value.field, value]));
     const row = builder.consecutive(
-      statement.values.map(({field}) =>
-        field.kind === 'string' ? 'string' : field.kind,
+      entries.map(({field, presence}) =>
+        presence ? 'bool' : field.kind === 'string' ? 'string' : field.kind,
       ),
     );
-    statement.values.forEach((itemValue, index) =>
+    entries.forEach(({field, presence}, index) =>
       this.scoped(() => {
-        if ('text' in itemValue) {
+        const itemValue = given.get(field);
+        if (presence || !itemValue) {
+          // A field the item leaves out is 0 or "", and its flag says so.
+          builder.abc(
+            'MOVE',
+            row[index].index,
+            presence
+              ? this.load('bool', itemValue ? 1 : 0).index
+              : this.zero(field.kind).index,
+          );
+        } else if ('text' in itemValue) {
           const buffer = required(
-            pool.buffers.get(itemValue.field.key),
-            `field "${itemValue.field.key}"`,
+            pool.buffers.get(field.key),
+            `field "${field.key}"`,
           );
           this.text(itemValue.text.parts);
           builder.abx('FMTSET', 0, buffer.index);
@@ -1408,7 +1564,7 @@ export class Codegen {
           builder.abc(
             'MOVE',
             row[index].index,
-            this.valueAs(itemValue.value, itemValue.field.kind).index,
+            this.valueAs(itemValue.value, field.kind).index,
           );
         }
       }),

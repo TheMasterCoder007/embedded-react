@@ -1225,6 +1225,122 @@ export function App() {
     ).toBe(1);
   });
 
+  /** The fields of the one row layout: each one's type and cap. */
+  function rowFieldsOf(bytes) {
+    const {u16, tables} = readProgram(bytes);
+    const rows = tables.get(Table.rows);
+    return Array.from({length: u16(rows.offset + 8)}, (_, index) => {
+      const fieldOffset = rows.offset + 12 + index * 8;
+      return {type: bytes[fieldOffset], cap: u16(fieldOffset + 2)};
+    });
+  }
+
+  it('flattens nested fields, and gives each optional field a flag after the values', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [items, setItems] = useState([{t: 'a', pos: {x: 1}, done: false, note: 'n'}, {t: 'b', pos: {x: 2}, done: true}]);
+  return <Pressable onPress={() => setItems([...items, {t: 'c', done: true}])}><Text>{items[0].pos.x} {items[1].note}</Text></Pressable>;
+}`;
+    const {program} = compilePackage(source, 'app', CAPS);
+    // t, pos.x, done, note; then the flags of note (left out of the second item) and pos.x (of the append).
+    expect(rowFieldsOf(program).map(field => field.type)).toEqual([
+      ValueType.string,
+      ValueType.int,
+      ValueType.bool,
+      ValueType.string,
+      ValueType.bool,
+      ValueType.bool,
+    ]);
+    const boot = functionsOf(program)[readProgram(program).panel.boot];
+    expect(names(boot).filter(name => name === 'APPEND')).toHaveLength(2);
+  });
+
+  it('faults on items[i].field past the end, and reads items[i]?.field as missing there', () => {
+    const app = read => `
+import {useState} from 'react';
+import {Text} from 'embedded-react';
+export function App() {
+  const [items] = useState([{t: 'a'}, {t: 'b'}]);
+  const [at, setAt] = useState(0);
+  return <Text onPress={() => setAt(at + 1)}>{${read}}</Text>;
+}`;
+    const updateOf = read => {
+      const {program} = compilePackage(app(read), 'app', CAPS);
+      return names(functionsOf(program).at(-1));
+    };
+    const plain = updateOf('items[at].t');
+    expect(plain).toContain('ROWGET');
+    expect(plain).not.toContain('LEN');
+    const guarded = updateOf('items[at]?.t');
+    expect(guarded).toEqual(
+      expect.arrayContaining(['LEN', 'LT', 'LE', 'ROWGET']),
+    );
+  });
+
+  it('keeps a constant array read by index as a list its boot fills, which nothing tracks', () => {
+    const source = `
+import {useState} from 'react';
+import {Text} from 'embedded-react';
+const NAMES = ['zero', 'one', 'two'];
+export function App() {
+  const [at, setAt] = useState(0);
+  return <Text onPress={() => setAt(at + 1)}>{NAMES[at] ?? 'none'}</Text>;
+}`;
+    const {program} = compilePackage(source, 'app', CAPS);
+    expect(slotsOf(program).find(slot => slot.type === ValueType.list)).toEqual(
+      {type: ValueType.list, flags: 0, cap: 3, aux: 0},
+    );
+    expect(rowFieldsOf(program)).toEqual([{type: ValueType.string, cap: 4}]);
+    const boot = functionsOf(program)[readProgram(program).panel.boot];
+    expect(names(boot).filter(name => name === 'APPEND')).toHaveLength(3);
+  });
+
+  it('refuses list shapes and reads it cannot lower', () => {
+    const app = (initial, read, extra = '', press = 'setAt(at + 1)') => `
+import {useState} from 'react';
+import {Pressable, Text} from 'embedded-react';
+export function App() {
+  const [items, setItems] = useState(${initial});
+  const [at, setAt] = useState(0.5);
+  ${extra}
+  return <Pressable onPress={() => ${press}}><Text>{${read}}</Text></Pressable>;
+}`;
+    const refuses = (source, message) =>
+      expect(() => compilePackage(source, 'app', CAPS)).toThrow(message);
+    refuses(
+      app("[{t: 'a'}, {t: 1}]", 'items.length'),
+      'field "t" of list state "items" is a string in one item and not in another',
+    );
+    refuses(
+      app("[{t: 'a', tags: ['x']}]", 'items.length'),
+      'field "tags" of list state "items" must be a string',
+    );
+    refuses(
+      app("[1, 'a']", 'items.length'),
+      'list state "items" must hold objects, or values of one kind',
+    );
+    refuses(
+      app("[{t: 'a'}]", 'items[at].t'),
+      'an index into "items" must be a whole number',
+    );
+    refuses(
+      app("[{t: 'a'}]", 'rows[Math.floor(at)].v', 'const rows = [{v: at}];'),
+      'an array built from runtime values cannot be read by a runtime index',
+    );
+    refuses(app("[{t: 'a'}]", 'at?.x'), '`?.` is only lowered on a list item');
+    refuses(
+      app(
+        "[{t: 'a'}]",
+        'items.length',
+        '',
+        "setItems([...items, {t: 'b', z: 1}])",
+      ),
+      'list state "items" has no field "z"',
+    );
+  });
+
   it('refuses a list inside a list row, and onChangeText in one', () => {
     const nested = `
 import {useState} from 'react';

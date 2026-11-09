@@ -30,7 +30,7 @@ import {
 import {ENGINE_STRING_MAX, aotError} from './diagnostics.mts';
 import type {AotError} from './diagnostics.mts';
 import type * as t from '@babel/types';
-import type {Env, Scope} from './types.mts';
+import type {Env, Local, Scope} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -70,6 +70,23 @@ const STATIC_MATH: Record<string, (...values: any[]) => number> = {
 
 /** What a fold sees for a global the code shadows with a runtime value: bound, so not the global, and not constant. */
 const RUNTIME_BINDING = Symbol('runtime binding');
+
+/**
+ * A value inside an array or object built in render that is worked out at run time. The array folds, so its length
+ * and constant fields do; a read of this value doesn't, and lowers to the local it holds.
+ *
+ * @class RuntimeLeaf
+ */
+export class RuntimeLeaf {
+  readonly local: Local;
+
+  /**
+   * @param local  What a read of the value lowers to.
+   */
+  constructor(local: Local) {
+    this.local = local;
+  }
+}
 
 /** Globals a fold calls as JS does, unless the code shadows them. */
 const FOLDED_GLOBALS = ['String'];
@@ -561,7 +578,8 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
     case 'Identifier':
       if (
         hasBinding(scope, node.name) &&
-        scope[node.name] !== RUNTIME_BINDING
+        scope[node.name] !== RUNTIME_BINDING &&
+        !(scope[node.name] instanceof RuntimeLeaf)
       ) {
         return scope[node.name];
       }
@@ -589,6 +607,9 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
 
       if (object == null) {
         throw new Error(`AOT: member access on null/undefined ("${key}")`);
+      }
+      if (object[key] instanceof RuntimeLeaf) {
+        throw new Error(`AOT: "${key}" is worked out at run time`);
       }
       return object[key];
     }

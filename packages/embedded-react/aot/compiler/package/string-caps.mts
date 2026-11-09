@@ -30,6 +30,7 @@
 
 import {aotError, constantText, ENGINE_STRING_MAX} from '../diagnostics.mts';
 import {nodesOf} from '../ir/nodes.mts';
+import {itemReadOf, itemValueAt} from '../list-items.mts';
 import {TEXT_END} from '../ir/text.mts';
 import type {AotError, SourcePosition} from '../diagnostics.mts';
 import type {IrApp} from '../ir/app.mts';
@@ -338,7 +339,10 @@ export function stringCaps(
               field.key,
               newBuffer(
                 `field "${field.key}" of list state "${state.name}"`,
-                state.items.map(item => String(item[field.key] ?? '')),
+                state.items.map(item => {
+                  const {present, value} = itemValueAt(item, field);
+                  return present ? String(value) : '';
+                }),
                 state.initialAt,
               ),
             ]),
@@ -457,7 +461,11 @@ export function stringCaps(
               ascii: true,
             };
     }
-    return (part.edits ?? []).reduce(editedBound, bound);
+    bound = (part.edits ?? []).reduce(editedBound, bound);
+    const read = itemReadOf(part.value);
+    return part.missing && (read?.field.optional || read?.item.guarded)
+      ? widest([bound, literalBound(part.missing)])
+      : bound;
   };
 
   const writtenBound = (text: IrText): Bound => {

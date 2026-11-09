@@ -97,6 +97,7 @@ import {
   stringPropEntry,
 } from './props.mts';
 import {ProgramTables} from './tables.mts';
+import {itemValueAt, rowEntries} from '../list-items.mts';
 import {commitDrawing, VectorPlan} from './vectors.mts';
 import type {Slot} from './arena.mts';
 import type {Label, Register} from './bytecode.mts';
@@ -704,18 +705,23 @@ function planSlots(
     if (!state.struct.fields.length) {
       notYet(`list state "${state.name}", whose items have no fields`);
     }
-    if (state.struct.fields.length > MAX_ROW_FIELDS) {
+    const entries = rowEntries(state.struct);
+    if (entries.length > MAX_ROW_FIELDS) {
       throw aotError(
-        `AOT: list state "${state.name}" has ${state.struct.fields.length} fields, but a package row holds ${MAX_ROW_FIELDS}`,
-        'give the items fewer fields.',
+        `AOT: list state "${state.name}" has ${entries.length} fields, but a package row holds ${MAX_ROW_FIELDS}`,
+        'give the items fewer fields, or fewer that some items leave out (each of those takes two).',
       );
     }
     let size = 0;
-    const fields = state.struct.fields.map(field => {
-      const capacity =
-        field.kind === 'string' ? stringCap.field(state, field.key) : 0;
-      const entry = {type: ValueType[field.kind], cap: capacity, offset: size};
-      size += field.kind === 'string' ? (capacity + 1 + 3) & ~3 : 4;
+    const fields = entries.map(({field, presence}) => {
+      const isString = !presence && field.kind === 'string';
+      const capacity = isString ? stringCap.field(state, field.key) : 0;
+      const entry = {
+        type: presence ? ValueType.bool : ValueType[field.kind],
+        cap: capacity,
+        offset: size,
+      };
+      size += isString ? (capacity + 1 + 3) & ~3 : 4;
       return entry;
     });
     if (size > MAX_U16) {
@@ -2290,31 +2296,37 @@ function appendInitialItems(
   lowering: Lowering,
 ): void {
   const {builder} = codegen;
-  const {fields} = list.struct;
+  const entries = rowEntries(list.struct);
   for (const item of list.items) {
     codegen.scoped(() => {
       const row = builder.consecutive(
-        fields.map(field => (field.kind === 'string' ? 'string' : field.kind)),
+        entries.map(({field, presence}) =>
+          presence ? 'bool' : field.kind === 'string' ? 'string' : field.kind,
+        ),
       );
-      fields.forEach((field, index) => {
-        const value = item[field.key];
-        if (field.kind === 'string') {
+      entries.forEach(({field, presence}, index) => {
+        const {present, value} = itemValueAt(item, field);
+        if (field.kind === 'string' && !presence) {
           builder.abx(
             'LOADS',
             row[index].index,
-            lowering.slots.tables.string(String(value ?? '')),
+            lowering.slots.tables.string(present ? String(value) : ''),
           );
           return;
         }
-        const number = Number(value) || 0;
+        const number =
+          presence || field.kind === 'bool'
+            ? Number(presence ? present : !!value)
+            : Number(value) || 0;
+        const kind = presence
+          ? 'bool'
+          : (field.kind as 'int' | 'float' | 'bool');
         codegen.scoped(() =>
           builder.abc(
             'MOVE',
             row[index].index,
-            codegen.load(
-              field.kind as 'int' | 'float',
-              field.kind === 'float' ? number : Math.round(number),
-            ).index,
+            codegen.load(kind, kind === 'float' ? number : Math.round(number))
+              .index,
           ),
         );
       });
