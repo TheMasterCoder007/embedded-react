@@ -590,10 +590,22 @@ static void test_string_helpers(void)
     const uint16_t longer = add_string("apples");
     const uint16_t accented = add_string("\xC3\xA9"
                                          "clair");
+    const uint16_t astral = add_string("\xF0\x9F\x98\x80");
+    const uint16_t private_use = add_string("\xEE\x80\x80");
+    const uint16_t hangul = add_string("\xED\x9F\xBF");
     const uint8_t order_types[] = {ERB_TYPE_INT, ERB_TYPE_STRING, ERB_TYPE_STRING};
-    const uint16_t pairs[5][2] = {{lower, lower}, {upper, lower}, {longer, lower}, {lower, longer}, {accented, lower}};
-    uint16_t orders[5];
-    for (uint32_t index = 0; index < 5u; index++)
+    const uint16_t pairs[8][2] = {
+        {lower, lower},
+        {upper, lower},
+        {longer, lower},
+        {lower, longer},
+        {accented, lower},
+        {astral, private_use},
+        {private_use, astral},
+        {astral, hangul},
+    };
+    uint16_t orders[8];
+    for (uint32_t index = 0; index < 8u; index++)
     {
         const uint32_t code[] = {
             OP_ABX(LOADS, 1, pairs[index][0]),
@@ -605,9 +617,12 @@ static void test_string_helpers(void)
     }
     CHECK(load(), "loads");
     CHECK(call(orders[0], 0, 0) == 0, "a string sorts with itself");
-    CHECK(call(orders[1], 0, 0) == -1, "a capital sorts before a small letter, by code point");
+    CHECK(call(orders[1], 0, 0) == -1, "a capital sorts before a small letter");
     CHECK(call(orders[2], 0, 0) == 1 && call(orders[3], 0, 0) == -1, "a longer string sorts after its start");
     CHECK(call(orders[4], 0, 0) == 1, "a letter past ASCII sorts after one in it");
+    CHECK(call(orders[5], 0, 0) == -1 && call(orders[6], 0, 0) == 1,
+          "a character past the BMP sorts before U+E000, as its surrogates do in UTF-16");
+    CHECK(call(orders[7], 0, 0) == 1, "and after U+D7FF");
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

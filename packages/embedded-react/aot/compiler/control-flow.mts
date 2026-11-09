@@ -186,10 +186,12 @@ function extractProps(
       continue;
     }
 
-    // A list state passes as it is.
+    // A list state passes as it is, and so does a list filtered or sorted in render.
     const propName = (attribute.name as t.JSXIdentifier).name;
     const listState =
-      node.type === 'Identifier' ? environment.state.get(node.name) : null;
+      node.type === 'Identifier'
+        ? environment.state.get(node.name)
+        : derivedListOf(node, environment);
     if (listState?.kind === 'list') {
       props[propName] = {static: 'list', list: listState};
       continue;

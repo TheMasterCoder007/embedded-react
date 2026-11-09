@@ -20,7 +20,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B lists: remove an item with `filter((_, i) => i !== n)`, `toSpliced(n, 1)` or a pair of slices, and update
   items with `map` and `with`. A list setter takes the updater form too. Packages are now format minor 8.
 - Flow B lists: `filter` and `sort` (`toSorted`, or `sort` on a copy), in a setter and in render. Strings compare
-  with `<`, `>` and `localeCompare`, by code point. Packages are now format minor 9.
+  with `<`, `>` and `localeCompare`, by UTF-16 code unit. Packages are now format minor 9.
 
 ### Changed
 

@@ -1749,6 +1749,33 @@ export function App() {
     expect(counted).toEqual(expect.arrayContaining(['CLEAR', 'APPEND', 'LEN']));
   });
 
+  it('gives each instance of a component its own list, and passes one built inline', () => {
+    const rowsApp = rows => `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+function Rows({items, min}) {
+  return <View>{items.filter(item => item.n >= min).map((item, i) => <Text key={i}>{item.title}</Text>)}</View>;
+}
+export function App() {
+  const [items, setItems] = useState([{title: 'b', n: 2}, {title: 'a', n: 1}]);
+  const [low, setLow] = useState(0);
+  return <View><Pressable onPress={() => setLow(low + 1)}><Text>go</Text></Pressable>${rows}</View>;
+}`;
+    const rebuilds = rows =>
+      functionsOf(compilePackage(rowsApp(rows), 'app', CAPS).program)
+        .find(compiled => compiled.kind === FunctionKind.update)
+        .ops.filter(instruction => instruction.name === 'CLEAR').length;
+    expect(
+      rebuilds(
+        '<Rows items={items} min={low} /><Rows items={items} min={2} />',
+      ),
+    ).toBe(2);
+    // The inline filter, then the component's own on top of it.
+    expect(
+      rebuilds('<Rows items={items.filter(item => item.n > 0)} min={low} />'),
+    ).toBe(2);
+  });
+
   it('refuses what it cannot lower', () => {
     refuses(
       'setItems(items.sort((a, b) => a.n - b.n))',

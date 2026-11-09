@@ -101,8 +101,8 @@ while the code that breaks it is still one line.
 - A sort keeps equal items in order, as JS's does. It compares each item with those before it, so a list of n items
   takes up to n²/2 compares: fine for a list in the tens. It needs a compare function, except on a list of strings.
   `a.n - b.n || a.m - b.m` breaks a tie on another field.
-- Strings compare with `<`, `>`, `<=`, `>=` and `a.localeCompare(b)`, by code point as QuickJS orders them: capitals
-  before small letters, and no locale rules.
+- Strings compare with `<`, `>`, `<=`, `>=` and `a.localeCompare(b)`, by UTF-16 code unit as JS's `<` orders them:
+  capitals before small letters, and no locale rules.
 - `.map` over an array built in render (inline, a `const`, a `useMemo`, or a prop) unrolls one row
   per element, and its elements can read state. Such an array can't be read by a runtime index.
   A list computed at runtime from anything else does not compile.

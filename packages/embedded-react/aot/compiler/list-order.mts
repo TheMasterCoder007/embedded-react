@@ -309,7 +309,7 @@ function keepsNumber(node: t.Expression): t.Expression {
 
 /**
  * What a sort's compare function gives two rows: above zero when the first goes after the second. With no function,
- * a list of strings sorts by code point; JS sorts any other list by its text, which a package doesn't.
+ * a list of strings sorts by UTF-16 code unit, as JS does; JS sorts any other list by its text, which a package doesn't.
  *
  * @param step  The sort.
  * @param rows  The rows it visits.
@@ -362,7 +362,7 @@ function sortOrder(
       [indexName, rows.itemAt(second)],
     ]),
   );
-  if (!['int', 'float', 'bool'].includes(order.type.kind)) {
+  if (!['int', 'float', 'bool', 'int64'].includes(order.type.kind)) {
     throw aotError(
       `AOT: ${step.what}'s compare function must give a number`,
       'give a negative number when a goes first, a positive one when b does, and 0 to keep their order: ' +
@@ -524,7 +524,9 @@ export function derivedListOf(
   if (!lists) {
     throw new Error('AOT internal: no table for filtered and sorted lists');
   }
-  const known = lists.get(node)?.get(base);
+  // Each instance of a component reads its own props, so it gets a list of its own.
+  const key = `${environment.callbackPrefix ?? ''}${base.slotName}`;
+  const known = lists.get(node)?.get(key);
   if (known) return known;
 
   const source = base.derived?.source ?? base;
@@ -581,7 +583,7 @@ export function derivedListOf(
   list.derived = {source, steps, rebuild, tests};
 
   if (!lists.has(node)) lists.set(node, new Map());
-  lists.get(node)!.set(base, list);
+  lists.get(node)!.set(key, list);
   return list;
 }
 

@@ -279,7 +279,7 @@ export interface IrStringEquals extends IrTyped {
   right: IrExpr;
 }
 
-/** Strings' order by code point: -1, 0 or 1, as `left.localeCompare(right)` gives it. */
+/** Strings' order by UTF-16 code unit: -1, 0 or 1. */
 export interface IrStringOrder extends IrTyped {
   kind: 'stringOrder';
   left: IrExpr;

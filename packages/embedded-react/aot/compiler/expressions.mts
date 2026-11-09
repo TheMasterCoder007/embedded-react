@@ -1021,7 +1021,7 @@ function typeBinary(
             `Compare like with like, or use === / !== (which never coerce).`,
         );
       }
-      // Strings order by code point, which is JS's order by UTF-16 code unit outside the rarest characters.
+      // Strings order by UTF-16 code unit, as JS orders them.
       if (comparison !== '==' && comparison !== '!=') {
         return {
           kind: 'compare',
@@ -2975,7 +2975,7 @@ function lowerIncludes(call: t.CallExpression, environment: Env): IrExpr {
 }
 
 /**
- * Lowers `text.localeCompare(other)` on runtime strings, which orders them by code point as QuickJS does.
+ * Lowers `text.localeCompare(other)` on runtime strings, which orders them as `<` does, with no locale rules.
  *
  * @param call  The call.
  * @param environment  The expression environment.

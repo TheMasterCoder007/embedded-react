@@ -378,8 +378,8 @@ export interface Env {
   animationLocals?: Map<string, t.Expression>;
   /** Constant arrays read by a runtime index, each kept as a list whose rows never change. */
   constantLists?: Map<unknown[], ListState>;
-  /** Lists filtered or sorted in render, by the call that makes them and the list it starts from. */
-  derivedLists?: Map<t.Node, Map<ListState, ListState>>;
+  /** Lists filtered or sorted in render, by the call that makes them, then the component instance and the list it starts from. */
+  derivedLists?: Map<t.Node, Map<string, ListState>>;
 }
 
 /**
