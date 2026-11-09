@@ -1128,7 +1128,7 @@ describe('AOT list setters', () => {
 });
 
 describe('AOT fixed limits', () => {
-  const IMPORTS = `import {useState} from 'react';\nimport {Text, Pressable} from 'embedded-react';\n`;
+  const IMPORTS = `import {useState} from 'react';\nimport {Text, Pressable, View} from 'embedded-react';\n`;
   const small = source =>
     compilePackage(IMPORTS + source, 'test', {listCap: 2, listStrCap: 8});
 
@@ -1141,42 +1141,63 @@ describe('AOT fixed limits', () => {
     ).toThrow(/list state "items" starts with 3 rows, but a list holds 2/);
   });
 
-  it('refuses an initial string longer than its buffer', () => {
+  it('refuses an initial value too long for a string built from itself', () => {
     expect(() =>
       small(`export function App() {
-        const [label] = useState('12345678');
-        return (<Text>{label}</Text>);
+        const [label, setLabel] = useState('12345678');
+        return (<Pressable onPress={() => setLabel(label + '!')}><Text>{label}</Text></Pressable>);
       }`),
-    ).toThrow(/state "label" starts 8 bytes long, but a string holds 7 bytes/);
+    ).toThrow(
+      /state "label" starts 8 bytes long, but a string built from itself holds 7 bytes/,
+    );
     expect(() =>
       small(`export function App() {
-        const [items] = useState([{t: 'ok'}, {t: 'much too long'}]);
-        return (<Text>{items.length}</Text>);
+        const [items, setItems] = useState([{t: 'ok'}, {t: 'much too long'}]);
+        return (<View>{items.map((item, index) => <Pressable key={index} onPress={() => setItems([...items, {t: item.t + '!'}])}><Text>{item.t}</Text></Pressable>)}</View>);
       }`),
     ).toThrow(/field "t" of list state "items" starts 13 bytes long/);
   });
 
-  it('refuses a constant string write longer than its buffer', () => {
+  it('sizes a string that is not built from itself to fit its values', () => {
+    expect(() =>
+      small(`export function App() {
+        const [label, setLabel] = useState('12345678');
+        return (<Pressable onPress={() => setLabel('much too long')}><Text>{label}</Text></Pressable>);
+      }`),
+    ).not.toThrow();
+  });
+
+  it('refuses a constant string write too long for its buffer', () => {
     expect(() =>
       small(`export function App() {
         const [label, setLabel] = useState('');
-        return (<Pressable onPress={() => setLabel('much too long')}><Text>{label}</Text></Pressable>);
+        return (<Pressable onPress={() => { setLabel(label + '!'); setLabel('much too long'); }}><Text>{label}</Text></Pressable>);
       }`),
     ).toThrow(
-      /state "label" is set to a 13-byte string, but a string holds 7 bytes/,
+      /state "label" is set to a 13-byte string, but a string built from itself holds 7 bytes/,
+    );
+
+    const long = 'x'.repeat(256);
+    expect(() =>
+      small(`export function App() {
+        const [label, setLabel] = useState('');
+        return (<Pressable onPress={() => setLabel('${long}')}><Text>{label}</Text></Pressable>);
+      }`),
+    ).toThrow(
+      /state "label" is set to a 256-byte string, but a write holds 255 bytes \(ER_TEXT_MAX\)/,
     );
     expect(() =>
       small(`export function App() {
         const [items, setItems] = useState([{t: ''}]);
-        return (<Pressable onPress={() => setItems([...items, {t: 'much too long'}])}><Text>x</Text></Pressable>);
+        return (<Pressable onPress={() => setItems([...items, {t: '${long}'}])}><Text>x</Text></Pressable>);
       }`),
-    ).toThrow(/field "t" of list state "items" is set to a 13-byte string/);
+    ).toThrow(/field "t" of list state "items" is set to a 256-byte string/);
     expect(() =>
       small(`export function App() {
         const [label, setLabel] = useState('');
-        return (<Pressable onPress={() => { const t = 'much too long'; setLabel(t); }}><Text>{label}</Text></Pressable>);
+        return (<Pressable onPress={() => { const t = '${long}'; setLabel(t); }}><Text>{label}</Text></Pressable>);
       }`),
-    ).toThrow(/local "t" is set to a 13-byte string/);
+    ).toThrow(/local "t" is set to a 256-byte string/);
   });
 
   it('keeps its copy of the engine string limits in step with er_scene.h', () => {

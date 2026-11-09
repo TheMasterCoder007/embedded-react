@@ -78,6 +78,7 @@ import type {
   IrTextPart,
   IrTextValue,
 } from './ir/text.mts';
+import {TEXT_END} from './ir/text.mts';
 import {
   BOOL,
   FLOAT,
@@ -177,9 +178,6 @@ const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
 
 /** The largest 32-bit int. */
 const INT32_MAX = 0x7fffffff;
-
-/** slice's end when the call leaves it out: past any text, so the cut runs to the end. LOADI's largest immediate. */
-const TEXT_END = 0x7fff;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
