@@ -585,7 +585,12 @@ function setRow(node: t.Node, update: RowUpdate): IrStmt {
         if (!fields.length) {
           throw noField(listName, fieldPath.join('.'));
         }
-        fields.forEach(field => seen.add(field));
+        // A key written again replaces all an earlier value set under it.
+        fields.forEach(field => {
+          seen.add(field);
+          given.delete(field);
+          cleared.delete(field);
+        });
         const {value} = property;
         if (value.type === 'ObjectExpression') {
           visit(value, fieldPath);

@@ -1544,6 +1544,22 @@ export function App() {
     expect(
       stores('setItems(items.map(item => ({...item, n: 5, n: undefined})))'),
     ).toBe(2);
+    // A nested key written twice keeps only what its last object sets. Fields are title, n, done, pos.x, pos.y,
+    // then pos.y's flag once it can be left out.
+    const storedFields = handler =>
+      functionsOf(compilePackage(editApp(handler), 'app', CAPS).program)[0]
+        .ops.filter(instruction => instruction.name === 'ROWSET')
+        .map(instruction => instruction.ext >>> 16);
+    expect(
+      storedFields(
+        'setItems(items.map(item => ({...item, pos: {...item.pos, x: 1}, pos: {...item.pos, y: 7}})))',
+      ),
+    ).toEqual([4]);
+    expect(
+      storedFields(
+        'setItems(items.map(item => ({...item, pos: {x: 1, y: 2}, pos: {x: 3}})))',
+      ),
+    ).toEqual([3, 4, 5]);
   });
 
   it('refuses what it cannot lower', () => {
