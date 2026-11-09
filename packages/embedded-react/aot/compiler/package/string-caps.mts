@@ -253,6 +253,7 @@ function eachStatement(app: IrApp, visit: (statement: IrStmt) => void): void {
     if (
       node.kind === 'setStateText' ||
       node.kind === 'appendItem' ||
+      node.kind === 'setRow' ||
       node.kind === 'declareLocal'
     ) {
       visit(node as unknown as IrStmt);
@@ -366,7 +367,7 @@ export function stringCaps(
       states
         .get(statement.state)
         ?.writes.push({text: statement.text, location});
-    } else if (statement.kind === 'appendItem') {
+    } else if (statement.kind === 'appendItem' || statement.kind === 'setRow') {
       for (const itemValue of statement.values) {
         const buffer = fields.get(statement.list)?.get(itemValue.field.key);
         buffer?.writes.push({

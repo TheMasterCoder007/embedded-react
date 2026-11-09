@@ -259,6 +259,21 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '84,20 32,20 136,20 188,20 32,20 32,20 84,20',
   },
+  {name: 'list-edits', file: fixture('list-edits'), screen: PORTRAIT},
+  // Next, bump row 1, flip every row, swap row 1, double every other count, then presses on rows 0 and 2.
+  {
+    name: 'list-edits-updates',
+    file: fixture('list-edits'),
+    screen: PORTRAIT,
+    taps: '32,20 32,47 84,47 136,47 188,47 98,87 98,127',
+  },
+  // Next twice, drop row 2, skip count 2, cut the last, row 1's x, next twice (past the end), drop (nothing), flip.
+  {
+    name: 'list-edits-removes',
+    file: fixture('list-edits'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 84,20 188,20 136,20 202,107 32,20 32,20 84,20 84,47',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

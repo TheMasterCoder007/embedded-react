@@ -2091,6 +2091,7 @@ static bool check_operands(const FunctionContext* context, uint32_t program_coun
         case ERB_OP_CLEAR:
         case ERB_OP_POP:
         case ERB_OP_KEEP:
+        case ERB_OP_REMOVE:
             if (!slot_of(context, operand_bx, ERB_TYPE_LIST)
                 || (opcode != ERB_OP_LEN && !writable(context, slot_of(context, operand_bx, ERB_TYPE_LIST))))
                 BAD("list slot");

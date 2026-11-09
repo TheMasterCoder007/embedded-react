@@ -854,6 +854,21 @@ static void test_bytecode(void)
         EXPECT(ERB_ERROR_BYTECODE, "includes of an int register");
     }
     {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_FLOAT};
+        const uint32_t code[] = {OP_ABX(LOADI, 0, 1), OP_ABX(REMOVE, 0, SLOT_ITEMS), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 2, code, 3);
+        EXPECT(ERB_OK, "REMOVE on a list slot");
+        const uint32_t float_row[] = {OP_ABX(REMOVE, 1, SLOT_ITEMS), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 2, float_row, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "REMOVE with a float row");
+        const uint32_t not_list[] = {OP_ABX(LOADI, 0, 1), OP_ABX(REMOVE, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 2, not_list, 3);
+        EXPECT(ERB_ERROR_BYTECODE, "REMOVE on a slot that isn't a list");
+    }
+    {
         const uint32_t code[] = {OP_ABX(GET32, 0, 99), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_PRESS, code, 3);

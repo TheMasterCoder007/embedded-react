@@ -50,7 +50,14 @@ import type {
   WholeHelper,
 } from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
-import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
+import type {
+  IrAppendItem,
+  IrRemoveItem,
+  IrSetRow,
+  IrStmt,
+  IrTimer,
+  IrUpdateItems,
+} from '../ir/statements.mts';
 import type {IrTextEdit, IrTextPart} from '../ir/text.mts';
 import {itemReadOf, rowEntries, rowIndexOf} from '../list-items.mts';
 import {BOOL} from '../ir/types.mts';
@@ -238,6 +245,10 @@ export class Codegen {
   private readonly locals = new Map<string, LocalBinding>();
   /** A string register nothing writes, so it stays the empty string. Reserved, so no release reuses it. */
   private emptyString: Register | null = null;
+  /** The counter of the function's update loops, which only LOOPSET and LOOP write. Reserved, for that. */
+  private loopCounter: Register | null = null;
+  /** The row the update being lowered visits, which its setRows write. */
+  private updatingRow: Register | undefined;
 
   /**
    * @param builder  The function being built.
@@ -1507,6 +1518,15 @@ export class Codegen {
           ),
         );
         return;
+      case 'removeItem':
+        this.scoped(() => this.removeItem(statement));
+        return;
+      case 'updateItems':
+        this.scoped(() => this.updateItems(statement));
+        return;
+      case 'setRow':
+        this.scoped(() => this.setRow(statement));
+        return;
       case 'stopAnimations':
       case 'startAnimations':
       case 'startChain':
@@ -1578,6 +1598,163 @@ export class Codegen {
       }),
     );
     builder.abx('APPEND', row[0].index, pool.slot.index);
+  }
+
+  /**
+   * Drops a row, moving the rest up. Past either end, nothing is removed.
+   *
+   * @param statement  The removal.
+   */
+  private removeItem(statement: IrRemoveItem): void {
+    const pool = this.listPool(statement.list).slot;
+    const index = this.valueAs(statement.index, 'int');
+    this.builder.abx(
+      'REMOVE',
+      (statement.countsBack ? this.countedBack(index, pool, true) : index)
+        .index,
+      pool.index,
+    );
+  }
+
+  /**
+   * A row index with a negative one counted back from the end, as `toSpliced` and `with` count it.
+   *
+   * @param index  The index.
+   * @param pool  The list's pool.
+   * @param floor  One still negative after counting back is 0, as `toSpliced` makes it.
+   *
+   * @returns The row.
+   */
+  private countedBack(index: Register, pool: Slot, floor: boolean): Register {
+    const {builder} = this;
+    const negative = builder.register('bool');
+    builder.abc('LT', negative.index, index.index, this.load('int', 0).index);
+    return this.choose(
+      negative,
+      () => {
+        const count = builder.register('int');
+        builder.abx('LEN', count.index, pool.index);
+        const back = builder.register('int');
+        builder.abc('ADD', back.index, index.index, count.index);
+        if (floor) {
+          builder.abc('MAX', back.index, back.index, this.load('int', 0).index);
+        }
+        return back;
+      },
+      () => index,
+      'int',
+    );
+  }
+
+  /**
+   * Runs an update's body on its rows: every row, in a loop as long as the list's cap that stops at its count, or
+   * the one row `with` names, which must be in the list.
+   *
+   * @param statement  The update.
+   */
+  private updateItems(statement: IrUpdateItems): void {
+    const {builder} = this;
+    const pool = this.listPool(statement.list).slot;
+    const name = required(statement.row.name, 'the update row');
+    const visit = (row: Register): void => {
+      this.locals.set(name, {register: row});
+      this.updatingRow = row;
+      this.statements(statement.body);
+      this.updatingRow = undefined;
+      this.locals.delete(name);
+    };
+    if (statement.index) {
+      const row = this.countedBack(
+        this.valueAs(statement.index, 'int'),
+        pool,
+        false,
+      );
+      // A read of the row faults past the end, as with() throws there.
+      const [first] = rowEntries(statement.list.struct);
+      builder.abc(
+        'ROWGET',
+        builder.register(first.field.kind).index,
+        row.index,
+        0,
+        pool.index,
+      );
+      visit(row);
+      return;
+    }
+
+    const count = builder.register('int');
+    builder.abx('LEN', count.index, pool.index);
+    const capacity = this.load('int', statement.list.capacity);
+    const counter = (this.loopCounter ??= builder.reserved('int'));
+    const done = builder.label();
+    builder.loop(counter, statement.list.capacity, () =>
+      this.scoped(() => {
+        const row = builder.register('int');
+        builder.abc('SUB', row.index, capacity.index, counter.index);
+        const inList = builder.register('bool');
+        builder.abc('LT', inList.index, row.index, count.index);
+        builder.branch('JF', done, inList);
+        visit(row);
+      }),
+    );
+    builder.place(done);
+  }
+
+  /**
+   * Sets fields of the row an update visits. Every value is worked out before any is stored, text in its field's
+   * own buffer, so a value that reads another field of the row reads it as it was.
+   *
+   * @param statement  The fields.
+   */
+  private setRow(statement: IrSetRow): void {
+    const {builder} = this;
+    const {struct} = statement.list;
+    const pool = this.listPool(statement.list);
+    const row = required(this.updatingRow, 'the row an update visits');
+    const writes: {index: number; value: Register}[] = [];
+    for (const itemValue of statement.values) {
+      const {field} = itemValue;
+      let value: Register;
+      if ('text' in itemValue) {
+        const buffer = required(
+          pool.buffers.get(field.key),
+          `field "${field.key}"`,
+        );
+        this.text(itemValue.text.parts);
+        builder.abx('FMTSET', 0, buffer.index);
+        value = builder.register('string');
+        builder.abx('GETS', value.index, buffer.index);
+      } else {
+        value = this.valueAs(itemValue.value, field.kind);
+      }
+      writes.push({index: rowIndexOf(struct, field), value});
+      if (field.optional) {
+        writes.push({
+          index: rowIndexOf(struct, field, true),
+          value: this.load('bool', 1),
+        });
+      }
+    }
+    // A field set to undefined is 0 or "", and its flag says it isn't there.
+    for (const field of statement.cleared) {
+      writes.push({
+        index: rowIndexOf(struct, field),
+        value: this.zero(field.kind),
+      });
+      writes.push({
+        index: rowIndexOf(struct, field, true),
+        value: this.load('bool', 0),
+      });
+    }
+    for (const {index, value} of writes) {
+      builder.abc(
+        'ROWSET',
+        value.index,
+        row.index,
+        0,
+        pool.slot.index | (index << 16),
+      );
+    }
   }
 
   /**

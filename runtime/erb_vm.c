@@ -1096,6 +1096,27 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 break;
             }
 
+            case ERB_OP_REMOVE:
+            {
+                const uint8_t* slot = erb_slot(program, operand_bx);
+                const uint32_t row_size = erb_u16(erb_row(program, erb_u16(slot + ERB_SLOT_AUX_AT)) + ERB_ROW_SIZE_AT);
+                uint8_t* pool = slot_data(slot);
+                uint32_t count;
+                memcpy(&count, pool, sizeof(count));
+                /* A row past either end leaves the list as it is, as filter((_, i) => i !== n) does. */
+                if (registers[operand_a] < 0 || (uint32_t)registers[operand_a] >= count)
+                {
+                    break;
+                }
+                const uint32_t removed = (uint32_t)registers[operand_a];
+                uint8_t* row = pool + ERB_LIST_HEADER_SIZE + removed * row_size;
+                memmove(row, row + row_size, (count - removed - 1u) * row_size);
+                count--;
+                memcpy(pool, &count, sizeof(count));
+                mark(slot);
+                break;
+            }
+
             /* Whole numbers */
             case ERB_OP_ADD:
                 registers[operand_a] = saturate32((int64_t)registers[operand_b] + registers[operand_c]);
