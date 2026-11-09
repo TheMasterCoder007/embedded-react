@@ -24,6 +24,7 @@ import {readFileSync, existsSync} from 'node:fs';
 import {posix, resolve} from 'node:path';
 import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
+import {inferItemStruct} from './list-items.mts';
 import {
   bootCheckpoint,
   bootSlotOf,
@@ -51,7 +52,6 @@ import type {
   SlotKind,
   EffectRecord,
   FunctionNode,
-  ItemField,
   ItemStruct,
   Scope,
   StateRecord,
@@ -266,52 +266,6 @@ export function moduleScope(
 }
 
 /**
- * Infers a row's fields from a list-state's initial elements (objects of strings/numbers).
- *
- * @param items  The folded initial value.
- * @param name  The state's name, for errors.
- *
- * @returns The struct: one field per key of the first element.
- */
-function inferItemStruct(items: unknown, name: string): ItemStruct {
-  // Require a non-empty array so the first element can define the list state's fixed item shape.
-  const shapeHint =
-    'a list state is a fixed-shape struct array: each element must be an OBJECT with the same string/number fields, ' +
-    'e.g. useState([{ title: "A", n: 1 }, { title: "B", n: 2 }]). The first element defines the columns.';
-  if (!Array.isArray(items) || !items.length) {
-    throw aotError(
-      `AOT: list state "${name}" needs ≥1 initial element to infer its item shape`,
-      shapeHint,
-    );
-  }
-
-  // Require the first list element to be a plain object so its keys can define the item struct.
-  const first = items[0];
-  if (typeof first !== 'object' || first === null || Array.isArray(first)) {
-    throw aotError(
-      `AOT: list state "${name}" elements must be objects`,
-      shapeHint,
-    );
-  }
-
-  // Type each field from the first element's value: a string, an int or a float.
-  const fields = Object.keys(first).map((key): ItemField => {
-    const fieldValue = first[key];
-    if (typeof fieldValue === 'string') return {key, kind: 'string'};
-    if (typeof fieldValue === 'number') {
-      return {key, kind: Number.isInteger(fieldValue) ? 'int' : 'float'};
-    }
-
-    throw aotError(
-      `AOT: list state "${name}" field "${key}" must be a string or number`,
-      shapeHint,
-    );
-  });
-
-  return {fields};
-}
-
-/**
  * Refuses an initial list with more rows than a list holds: they would be dropped at boot without a word. Each
  * string's cap is sized from its values when the app is lowered.
  *
@@ -463,14 +417,14 @@ export function collectState(
           initialArgument,
           scope,
           `AOT: the initial value of list state "${name}" must be a compile-time constant array`,
-          'useState([...]) initial must be a literal array of objects/numbers/strings — no ' +
+          'useState([...]) initial must be a literal array of objects, numbers, strings or booleans — no ' +
             'runtime values or function calls in the initial.',
-        ) as Record<string, unknown>[];
+        ) as unknown[];
 
         // Infer the item struct, pinning any error to the initial value since this pass adds no location.
         let struct: ItemStruct;
         try {
-          struct = inferItemStruct(items, name);
+          struct = inferItemStruct(items, `list state "${name}"`);
         } catch (error) {
           if (initialArgument.loc && !(error as AotError).aotLoc) {
             (error as AotError).aotLoc = initialArgument.loc.start; // collectState isn't withLoc-wrapped

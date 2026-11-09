@@ -34,7 +34,9 @@ import {
   wholeBootValue,
 } from './boot.mts';
 import {
+  RuntimeLeaf,
   evalStatic,
+  setBinding,
   fixedDigitsProblem,
   foldScope,
   hasBinding,
@@ -45,6 +47,13 @@ import {
   slicePositionProblem,
 } from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
+import {MAX_LIST_CAPACITY} from './options.mts';
+import {
+  fieldsUnder,
+  inferItemStruct,
+  isPlainObject,
+  itemReadOf,
+} from './list-items.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
@@ -52,6 +61,7 @@ import type {IrSlotStore, IrSource, IrSourceDivisor} from './ir/source.mts';
 import type {
   SlotKind,
   Env,
+  ItemField,
   ListState,
   Local,
   ScalarState,
@@ -71,7 +81,7 @@ import type {
   LayoutField,
   WholeHelper,
 } from './ir/expressions.mts';
-import type {SlotWidths} from './ir/types.mts';
+import type {IrType, SlotWidths} from './ir/types.mts';
 import type {
   IrText,
   IrTextBoolean,
@@ -1513,6 +1523,456 @@ function isEventRoot(node: t.Node, event: string | null | undefined): boolean {
   );
 }
 
+/** A read into a list item: the item, and the field names under it. */
+interface ItemPath {
+  item: Local;
+  path: string[];
+}
+
+/**
+ * The type a list item's field reads as.
+ *
+ * @param field  The field.
+ *
+ * @returns Its type.
+ */
+export const fieldType = (field: ItemField): IrType =>
+  field.kind === 'bool' ? BOOL : typeOfSlot(field.kind);
+
+/**
+ * A member's key when it is a name: `a.b`, or `a['b']`.
+ *
+ * @param node  The member.
+ *
+ * @returns The key, or null for a computed one.
+ */
+function memberKey(
+  node: t.MemberExpression | t.OptionalMemberExpression,
+): string | null {
+  if (!node.computed) return (node.property as t.Identifier).name;
+  return node.property.type === 'StringLiteral' ? node.property.value : null;
+}
+
+/**
+ * Whether a value holds a value worked out at run time, at any depth.
+ *
+ * @param value  The value.
+ *
+ * @returns Whether it does.
+ */
+const holdsRuntime = (value: unknown): boolean =>
+  value instanceof RuntimeLeaf ||
+  ((Array.isArray(value) || isPlainObject(value)) &&
+    Object.values(value).some(holdsRuntime));
+
+/**
+ * A constant array read by a runtime index, kept as a list whose rows are set at boot and never change.
+ *
+ * @param array  The array.
+ * @param node  What names it, for its name and errors.
+ * @param environment  The expression environment.
+ *
+ * @returns The list.
+ */
+function constantListOf(
+  array: unknown[],
+  node: t.Node,
+  environment: Env,
+): ListState {
+  const lists = environment.constantLists;
+  if (!lists) {
+    throw new Error('AOT internal: no table for constant lists');
+  }
+  const known = lists.get(array);
+  if (known) return known;
+
+  if (holdsRuntime(array)) {
+    throw aotError(
+      'AOT: an array built from runtime values cannot be read by a runtime index',
+      'index a constant array or a list state, or read a fixed element: rows[0].value.',
+    );
+  }
+  const name = node.type === 'Identifier' ? node.name : 'array';
+  if (array.length > MAX_LIST_CAPACITY) {
+    throw aotError(
+      `AOT: the array "${name}" has ${array.length} elements, but an array read by a runtime index holds ${MAX_LIST_CAPACITY}`,
+      'split it into smaller arrays, or index a list state.',
+    );
+  }
+  const list: ListState = {
+    kind: 'list',
+    name,
+    slotName: `k${lists.size}_${name}`,
+    setter: undefined,
+    struct: inferItemStruct(array, `the array "${name}"`),
+    items: array,
+    capacity: array.length,
+    constant: true,
+    initialAt: node.loc?.start,
+  };
+  lists.set(array, list);
+  return list;
+}
+
+/**
+ * The list a computed member reads a row of by a runtime index: a list state, or a constant array. A constant
+ * array's element at a constant index folds instead.
+ *
+ * @param node  The member.
+ * @param environment  The expression environment.
+ *
+ * @returns The list, or null when it is neither.
+ */
+function indexedListOf(
+  node: t.MemberExpression | t.OptionalMemberExpression,
+  environment: Env,
+): ListState | null {
+  const {object} = node;
+  if (object.type === 'Identifier' && environment.state.has(object.name)) {
+    const record = environment.state.get(object.name)!;
+    return record.kind === 'list' ? record : null;
+  }
+  const scope = foldScope(environment, environment.constants ?? {});
+  const folds = (part: t.Node): {value: unknown} | null => {
+    try {
+      return {value: evalStatic(part, scope, 'boot')};
+    } catch (error) {
+      rethrowFoldLimit(error);
+      return null;
+    }
+  };
+  if (folds(node.property)) return null;
+  const array = folds(object)?.value;
+  return Array.isArray(array)
+    ? constantListOf(array, object, environment)
+    : null;
+}
+
+/**
+ * What a member chain reads in a list item: a row's item (`item.pos.x`), a row by index (`items[i].title`), or a
+ * plain value by index (`values[i]`). `?.` after an index reads undefined past the list's end.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The item and the path under it, or null when it reads no list item.
+ */
+function itemPathOf(node: t.Node, environment: Env): ItemPath | null {
+  if (node.type === 'TSNonNullExpression') {
+    return itemPathOf(node.expression, environment);
+  }
+  if (node.type === 'Identifier') {
+    const local = environment.locals.get(node.name);
+    return local?.struct && local.list ? {item: local, path: []} : null;
+  }
+  if (
+    node.type !== 'MemberExpression' &&
+    node.type !== 'OptionalMemberExpression'
+  ) {
+    return null;
+  }
+
+  const key = memberKey(node);
+  if (key !== null) {
+    const base = itemPathOf(node.object, environment);
+    if (!base) return null;
+    const guards =
+      node.optional && !base.path.length && base.item.index !== undefined;
+    return {
+      item: guards ? {...base.item, guarded: true} : base.item,
+      path: [...base.path, key],
+    };
+  }
+
+  const list = indexedListOf(node, environment);
+  if (!list) return null;
+  const index = lowerExpr(node.property, environment);
+  if (index.type.kind !== 'int') {
+    throw aotError(
+      `AOT: an index into "${list.name}" must be a whole number`,
+      'an index is an int: Math.floor(x) or a whole-number state.',
+    );
+  }
+  return {
+    item: {
+      name: `${list.name}[]`,
+      struct: list.struct,
+      list,
+      index,
+      // A plain value past the end is undefined; a field of an item there throws in JS, and faults here.
+      guarded: !!list.struct.plain,
+    } as Local,
+    path: [],
+  };
+}
+
+/**
+ * The source of a read into a list item: a field, or whether an object of fields (or the item) is there, as
+ * an object is truthy.
+ *
+ * @param itemPath  The read.
+ * @param location  Where it is.
+ *
+ * @returns The source.
+ */
+function itemSource(
+  {item, path}: ItemPath,
+  location: SourcePosition | undefined,
+): IrSource {
+  const struct = item.struct!;
+  const key = path.join('.');
+  const field = struct.fields.find(entry => entry.key === key);
+  if (field && (path.length || struct.plain)) {
+    return {
+      kind: 'fixed',
+      expression: {kind: 'itemField', item, field, type: fieldType(field)},
+      location,
+    };
+  }
+  const fields = path.length ? fieldsUnder(struct, path) : [];
+  if (path.length && !fields.length) {
+    throw new Error(`AOT: unknown field "${key}" on a list item`);
+  }
+  return {
+    kind: 'fixed',
+    expression: {kind: 'itemPresent', item, fields, type: BOOL},
+    location,
+  };
+}
+
+/**
+ * The row of a list a whole item names, `items[i]`, for passing to a component.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The item, or null when it names none.
+ */
+export function listItemOf(node: t.Node, environment: Env): Local | null {
+  if (node.type !== 'MemberExpression' || !node.computed) return null;
+  const itemPath = itemPathOf(node, environment);
+  return itemPath && !itemPath.item.struct!.plain ? itemPath.item : null;
+}
+
+/**
+ * Whether a value is there, where it can be missing: a list item's field, an object of fields or an item, or a
+ * local that stands for a field read.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns A boolean expression, or null when the value is always there.
+ */
+function presenceOf(node: t.Node, environment: Env): IrExpr | null {
+  const itemPath = itemPathOf(node, environment);
+  if (itemPath) {
+    const read = itemSource(itemPath, undefined) as IrSource & {
+      kind: 'fixed';
+    };
+    const {expression} = read;
+    return expression.kind === 'itemField'
+      ? {
+          kind: 'itemPresent',
+          item: expression.item,
+          fields: [expression.field],
+          type: BOOL,
+        }
+      : expression;
+  }
+  if (node.type === 'Identifier' && environment.locals.has(node.name)) {
+    const local = environment.locals.get(node.name)!;
+    const read = local.expression ? itemReadOf(local.expression) : null;
+    if (read) {
+      return {
+        kind: 'itemPresent',
+        item: read.item,
+        fields: [read.field],
+        type: BOOL,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether an expression is null or undefined, as a constant.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns Whether it is.
+ */
+function isNullish(node: t.Node, environment: Env): boolean {
+  if (node.type === 'Identifier' && node.name === 'undefined') return true;
+  try {
+    return (
+      evalStatic(node, foldScope(environment, environment.constants ?? {})) ==
+      null
+    );
+  } catch (error) {
+    rethrowFoldLimit(error);
+    return false;
+  }
+}
+
+/**
+ * `x === undefined`, `x !== undefined`, `x == null` and `x != null` (either way round) on a value that can be
+ * missing: whether it is there.
+ *
+ * @param node  The comparison.
+ * @param environment  The expression environment.
+ *
+ * @returns A boolean expression, or null when it is no such test.
+ */
+function presenceTestOf(
+  node: t.BinaryExpression,
+  environment: Env,
+): IrExpr | null {
+  const {operator} = node;
+  if (!['==', '!=', '===', '!=='].includes(operator)) return null;
+  const isUndefined = (side: t.Node) =>
+    side.type === 'Identifier' && side.name === 'undefined';
+  const matches = (side: t.Node) =>
+    isUndefined(side) ||
+    ((operator === '==' || operator === '!=') && side.type === 'NullLiteral');
+  const value = matches(node.right)
+    ? node.left
+    : matches(node.left)
+      ? node.right
+      : null;
+  if (!value || value.type === 'PrivateName') return null;
+  const present = presenceOf(value, environment);
+  if (!present) return null;
+  return operator === '!=' || operator === '!=='
+    ? present
+    : {kind: 'unary', operator: '!', operand: present, type: BOOL};
+}
+
+/**
+ * The local a member reads when it names a value worked out at run time in an array or object built in render.
+ *
+ * @param node  The member.
+ * @param environment  The expression environment.
+ *
+ * @returns The local, or null.
+ */
+function runtimeLeafOf(
+  node: t.MemberExpression,
+  environment: Env,
+): Local | null {
+  const key = memberKey(node);
+  const scope = foldScope(environment, environment.constants ?? {});
+  let container: unknown;
+  let index: unknown = key;
+  try {
+    container = evalStatic(node.object, scope, 'boot');
+    if (key === null) {
+      index = evalStatic(node.property, scope);
+    }
+  } catch (error) {
+    rethrowFoldLimit(error);
+    return null;
+  }
+  const value =
+    typeof container === 'object' && container !== null
+      ? (container as Record<string, unknown>)[index as string]
+      : undefined;
+  return value instanceof RuntimeLeaf ? value.local : null;
+}
+
+/**
+ * Folds an array or object built in render: what folds stays a constant, and each value worked out at run time
+ * becomes a RuntimeLeaf, so a `.map` over it unrolls and its constant fields still fold.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ * @param scope  The constants it folds against.
+ *
+ * @returns The value.
+ */
+export function foldRuntime(
+  node: t.Node,
+  environment: Env,
+  scope: Scope = environment.constants ?? {},
+): unknown {
+  try {
+    return evalStatic(node, scope, 'boot');
+  } catch (error) {
+    rethrowFoldLimit(error);
+  }
+
+  if (node.type === 'ArrayExpression') {
+    return node.elements.map(element => {
+      if (!element || element.type === 'SpreadElement') {
+        throw aotError(
+          'AOT: an array built in render cannot have holes or spreads',
+          'write each element out.',
+        );
+      }
+      return foldRuntime(element, environment, scope);
+    });
+  }
+
+  if (node.type === 'ObjectExpression') {
+    const folded: Record<string, unknown> = {};
+    for (const property of node.properties) {
+      if (property.type !== 'ObjectProperty' || property.computed) {
+        throw aotError(
+          'AOT: an object built in render must be plain fields',
+          'write each field out: {label: "A", value: n}. Spreads, methods and computed keys are not lowered.',
+        );
+      }
+      const key =
+        (property.key as t.Identifier).name ??
+        String((property.key as t.StringLiteral).value);
+      folded[key] = foldRuntime(property.value, environment, scope);
+    }
+    return folded;
+  }
+
+  const value = lowerSourcedWide(node, environment);
+  return new RuntimeLeaf({
+    slotKind: value.slotKind,
+    isBoolean: value.isBoolean,
+    isLiteral: value.isLiteral,
+    wide: value.wide,
+    source: value.source,
+    expression: value.expression,
+  });
+}
+
+/**
+ * Binds each `const` of a component body that builds an array or object in render from runtime values, as
+ * foldRuntime folds it. A const that folds is bound already, and a hook's binding is not a literal.
+ *
+ * @param body  The component's body.
+ * @param environment  Its expression environment; the bindings go into its constants.
+ */
+export function bindBuiltValues(body: t.Statement[], environment: Env): void {
+  const scope = environment.constants;
+  for (const statement of body) {
+    if (
+      statement.type !== 'VariableDeclaration' ||
+      statement.kind !== 'const'
+    ) {
+      continue;
+    }
+    for (const declarator of statement.declarations) {
+      const {id, init} = declarator;
+      if (
+        id.type !== 'Identifier' ||
+        (init?.type !== 'ArrayExpression' &&
+          init?.type !== 'ObjectExpression') ||
+        hasBinding(scope, id.name) ||
+        environment.locals.has(id.name)
+      ) {
+        continue;
+      }
+      setBinding(scope, id.name, foldRuntime(init, environment, scope));
+    }
+  }
+}
+
 /**
  * Lowers one JS expression to its source: names resolved, constants folded, and each operand lowered and typed
  * in turn, so an error in it is reported before anything after it.
@@ -1542,18 +2002,19 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
     case 'Identifier': {
       // A name resolves to a local first, then to state, then to a compile-time constant.
       if (environment.locals.has(node.name)) {
-        return {
-          kind: 'local',
-          local: environment.locals.get(node.name)!,
-          location,
-        };
+        const local = environment.locals.get(node.name)!;
+        // An item of a list of plain values is its one field.
+        if (local.struct?.plain && local.list) {
+          return itemSource({item: local, path: []}, location);
+        }
+        return {kind: 'local', local, location};
       }
 
       if (environment.state.has(node.name)) {
         const stateRecord = environment.state.get(node.name)!;
         if (stateRecord.kind === 'list') {
           throw new Error(
-            `AOT: a list state ("${node.name}") can only be used via .length or .map`,
+            `AOT: a list state ("${node.name}") can only be used via .length, .map or [index]`,
           );
         }
 
@@ -1562,6 +2023,9 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
 
       if (hasBinding(environment.constants, node.name)) {
         const constantValue = environment.constants[node.name];
+        if (constantValue instanceof RuntimeLeaf) {
+          return {kind: 'local', local: constantValue.local, location};
+        }
         if (isBoot(constantValue)) return bootSource(constantValue, location);
         if (typeof constantValue === 'number')
           return numberSource(constantValue, location);
@@ -1601,6 +2065,12 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
+      // `field === undefined`, `field != null` …: whether a list item's field is there.
+      const presenceTest = presenceTestOf(node, environment);
+      if (presenceTest) {
+        return {kind: 'fixed', expression: presenceTest, location};
+      }
+
       // Fold `+ - *` over two whole-number constants as JS would, so a product past int range stays exact.
       const leftConstant = CHECKED_HELPER[node.operator]
         ? staticInt(node.left, environment)
@@ -1626,7 +2096,24 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       );
     }
     case 'LogicalExpression': {
-      // Only `&&` and `||` are supported (not `??`).
+      // `a ?? b`: b where a is a list item's field that isn't there; a value that is always there is a.
+      if (node.operator === '??') {
+        const present = presenceOf(node.left, environment);
+        if (present) {
+          return {
+            kind: 'conditional',
+            test: {kind: 'fixed', expression: present, location},
+            consequent: operand(node.left),
+            alternate: operand(node.right),
+            location,
+          };
+        }
+        return isNullish(node.left, environment)
+          ? operand(node.right)
+          : operand(node.left);
+      }
+
+      // Otherwise only `&&` and `||`.
       const operator =
         node.operator === '&&' || node.operator === '||' ? node.operator : null;
       if (!operator) {
@@ -1695,26 +2182,16 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         });
       }
 
-      // `<item>.field` where item is a struct local (a list row's bound element).
-      if (
-        object.type === 'Identifier' &&
-        environment.locals.get(object.name)?.struct &&
-        prop
-      ) {
-        const item = environment.locals.get(object.name)!;
-        const field = item.struct!.fields.find(
-          structField => structField.key === prop,
-        );
-        if (!field) {
-          throw new Error(`AOT: unknown field "${prop}" on a list item`);
-        }
+      // A value worked out at run time in an array or object built in render.
+      const leaf = runtimeLeafOf(node, environment);
+      if (leaf) {
+        return {kind: 'local', local: leaf, location};
+      }
 
-        return fixed({
-          kind: 'itemField',
-          item,
-          field,
-          type: typeOfSlot(field.kind),
-        });
+      // `item.field`, `item.pos.x`, `items[i].field` and `values[i]`: a field of a list item.
+      const itemPath = itemPathOf(node, environment);
+      if (itemPath) {
+        return itemSource(itemPath, location);
       }
 
       // `<ref>.current` — a value ref's mutable slot.
@@ -1787,9 +2264,20 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       }
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
-        'in a handler or dynamic expression you can read state, `ref.current`, a `.map` item ' +
-          'field, event fields (e.x / e.y / e.dx / e.dy / e.vx / e.vy / e.layout.*), and ' +
+        "in a handler or dynamic expression you can read state, `ref.current`, a list item's " +
+          'field (`item.title`, `items[i].title`), event fields (e.x / e.y / e.dx / e.dy / e.vx / e.vy / e.layout.*), and ' +
           'Math.PI — other member access must be a compile-time constant.',
+      );
+    }
+    case 'OptionalMemberExpression': {
+      // `items[i]?.field`, or `item.pos?.x`: a list item's field, undefined where it isn't there.
+      const itemPath = itemPathOf(node, environment);
+      if (itemPath) {
+        return itemSource(itemPath, location);
+      }
+      throw aotError(
+        'AOT: `?.` is only lowered on a list item',
+        'read a field of a list item with it, as in `items[i]?.title` — anything else must be there.',
       );
     }
     case 'CallExpression': {
@@ -2629,7 +3117,11 @@ function lowerTextParts(
   const value = lowerExprWide(node, environment);
 
   // `&&`/`||` collapse to 0/1 and a ternary to one slot, so text matches JS only when operands agree in kind.
-  if (node.type === 'LogicalExpression' && !isBoolean(value.type)) {
+  if (
+    node.type === 'LogicalExpression' &&
+    node.operator !== '??' &&
+    !isBoolean(value.type)
+  ) {
     throw textShapeError(
       node,
       `AOT: "${node.operator}" in text evaluates to one of its operands, not to true/false`,
@@ -2651,16 +3143,21 @@ function lowerTextParts(
     );
   }
 
+  // A list item's field that isn't there prints as undefined does.
+  const missing = itemReadOf(value)
+    ? {missing: isOperand ? 'undefined' : ''}
+    : {};
+
   // A boolean prints nothing as a child, "true"/"false" as an operand; isString stays false so `on + n` adds.
   if (isBoolean(value.type)) {
     return isOperand
-      ? {isString: false, parts: [{kind: 'booleanWord', value}]}
+      ? {isString: false, parts: [{kind: 'booleanWord', value, ...missing}]}
       : {isString: false, parts: [{kind: 'literal', text: ''}]};
   }
 
   return {
     isString: value.type.kind === 'string',
-    parts: [{kind: 'value', value}],
+    parts: [{kind: 'value', value, ...missing}],
   };
 }
 

@@ -15,6 +15,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: template literals, `String(x)`, `toFixed` and `padStart` wherever a string is built: text, a string state,
   a list's string field and a handler's `const`.
 - Flow B: `slice`, `toUpperCase` and `includes` on strings. Packages are now format minor 7.
+- Flow B lists: `items[i]` reads, nested, optional and boolean fields, lists of plain values, a list passed to a
+  component, and `.map` over an array built in render.
 
 ### Changed
 
@@ -26,6 +28,13 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B sizes each string state, list field and local from the values that can reach it, instead of giving every
   one 48 bytes. `ER_AOT_LIST_STR_CAP` now only sizes a string built from itself, like `setLog(log + '.')`, and a
   `slice` with a fixed length bounds one: `setLog(log.slice(-39) + '.')`.
+- Flow B: a field a list item leaves out reads as `undefined`, as in JS, so `{item.n}` shows nothing instead of `0`.
+- Flow B: a list's number field is a fraction when any initial item's value is one, instead of taking the first
+  item's kind.
+
+### Fixed
+
+- Flow B: a list row's item passed to a component no longer fails to compile.
 
 ## [0.20.0] - 2026-11-05
 ### Added

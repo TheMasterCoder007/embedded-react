@@ -27,6 +27,7 @@ import {
 } from './diagnostics.mts';
 import type {SourcePosition} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
+import {fieldsUnder} from './list-items.mts';
 import {
   mix64Error,
   staticInt,
@@ -66,7 +67,6 @@ import type * as t from '@babel/types';
 import type {Out} from './out.mts';
 import type {IrExpr} from './ir/expressions.mts';
 import {
-  FLOAT,
   INT,
   isConvertible64,
   isIntSlot,
@@ -93,6 +93,7 @@ import type {
   EffectRecord,
   Env,
   FunctionNode,
+  ItemStruct,
   ListState,
   Local,
   PanCallback,
@@ -121,6 +122,79 @@ const UPDATE_VECTOR_ARGUMENTS: Record<string, string> = {
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * The fields an appended item sets, by key: an object literal's, nested ones flattened into dotted keys, or a plain
+ * value's one field. A field set to null or undefined is left out.
+ *
+ * @param item  The appended item.
+ * @param struct  The list's fields.
+ * @param listName  The list, for errors.
+ *
+ * @returns Each field's value.
+ */
+function appendedFields(
+  item: t.Expression,
+  struct: ItemStruct,
+  listName: string,
+): Map<string, t.Node> {
+  const given = new Map<string, t.Node>();
+  const leavesOut = (node: t.Node): boolean =>
+    node.type === 'NullLiteral' ||
+    (node.type === 'Identifier' && node.name === 'undefined');
+  if (struct.plain) {
+    if (item.type === 'ObjectExpression') {
+      throw aotError(
+        `AOT: list state "${listName}" holds plain values, not objects`,
+        'append a value of the same kind as the initial ones.',
+      );
+    }
+    if (!leavesOut(item)) {
+      given.set('', item);
+    }
+    return given;
+  }
+
+  const visit = (object: t.ObjectExpression, path: string[]): void => {
+    for (const property of object.properties) {
+      if (property.type !== 'ObjectProperty' || property.computed) {
+        throw aotError(
+          'AOT: an appended item must be an object literal of plain fields',
+          'write each field out: {title: t, n: 1}. Spreads, methods and computed keys are not lowered.',
+        );
+      }
+      const key =
+        (property.key as t.Identifier).name ??
+        String((property.key as t.StringLiteral).value);
+      const fieldPath = [...path, key];
+      if (property.value.type === 'ObjectExpression') {
+        visit(property.value, fieldPath);
+        continue;
+      }
+      // A field set to null or undefined, or an object of fields set to one, is left out.
+      const name = fieldPath.join('.');
+      const isField = struct.fields.some(field => field.key === name);
+      if (
+        !isField &&
+        !(leavesOut(property.value) && fieldsUnder(struct, fieldPath).length)
+      ) {
+        throw aotError(
+          `AOT: list state "${listName}" has no field "${name}"`,
+          "a list's fields are those of its initial items. Give one of them the field, and leave it out of the " +
+            'others to make it optional.',
+        );
+      }
+      if (!leavesOut(property.value)) {
+        given.set(name, property.value);
+      }
+    }
+  };
+  if (item.type !== 'ObjectExpression') {
+    throw new Error('AOT: appended list items must be object literals');
+  }
+  visit(item, []);
+  return given;
+}
 
 /**
  * Lowers a list-state setter call (`setItems(...)`) to bounded list operations.
@@ -154,42 +228,25 @@ function lowerListOp(
       );
     }
 
-    // Each appended object literal fills every field of the next free slot; a full list drops it. A field it
-    // leaves out is reset to 0 or "", as an initial item's is, so the slot keeps nothing from a cleared item.
+    // Each appended item fills the next free row; a full list drops it. A field it leaves out is 0 or "", and
+    // optional from then on, so a read of it sees undefined.
     const statements: IrStmt[] = [];
     for (const item of appendedItems) {
       if (!item) {
         throw aotError('AOT: a list literal has an empty slot');
       }
-      if (item.type !== 'ObjectExpression') {
-        throw new Error('AOT: appended list items must be object literals');
+      if (item.type === 'SpreadElement') {
+        throw aotError(
+          `AOT: a list literal can spread only the current list, first: [...${listState.name}, item]`,
+        );
       }
 
-      const props = new Map(
-        (item.properties as t.ObjectProperty[]).map(
-          (prop): [string, t.Node] => [
-            (prop.key as t.Identifier).name ??
-              (prop.key as t.StringLiteral).value,
-            prop.value,
-          ],
-        ),
-      );
+      const given = appendedFields(item, struct, listState.name);
       const values: IrItemValue[] = [];
       for (const field of struct.fields) {
-        const valueNode = props.get(field.key);
+        const valueNode = given.get(field.key);
         if (!valueNode) {
-          values.push(
-            field.kind === 'string'
-              ? {field, text: {parts: []}}
-              : {
-                  field,
-                  value: {
-                    kind: 'number',
-                    value: 0,
-                    type: field.kind === 'float' ? FLOAT : INT,
-                  },
-                },
-          );
+          field.optional = true;
         } else if (field.kind === 'string') {
           const text = lowerText(valueNode, environment);
           checkConstantFits(
@@ -198,9 +255,17 @@ function lowerListOp(
           );
           values.push({field, text});
         } else {
+          const value = lowerExpr(valueNode, environment);
+          if ((field.kind === 'bool') !== (value.type.kind === 'bool')) {
+            throw aotError(
+              `AOT: field "${field.key || 'value'}" of list state "${listState.name}" holds ${field.kind === 'bool' ? 'a boolean' : 'a number'}`,
+              'append an item of the same shape as the initial ones.',
+            );
+          }
           values.push({
             field,
-            value: storeValue(lowerExpr(valueNode, environment), field.kind),
+            value:
+              field.kind === 'bool' ? value : storeValue(value, field.kind),
           });
         }
       }

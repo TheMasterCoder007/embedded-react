@@ -55,15 +55,21 @@ export interface SlotValue {
   wide?: boolean;
 }
 
-/** One column of a list-state item: a string or a number. */
+/** One column of a list item: a string, a number or a boolean, at a path into the item. */
 export interface ItemField {
+  /** The path joined with dots: `pos.x`. A list of plain values has one field, keyed ''. */
   key: string;
-  kind: 'string' | 'int' | 'float';
+  path: string[];
+  kind: 'string' | 'int' | 'float' | 'bool';
+  /** Some item leaves it out, so its row holds a flag for whether it is there. */
+  optional?: boolean;
 }
 
-/** The fields of each item in a list state, inferred from the list's first initial item. */
+/** The fields of each item in a list, the union of its initial items' fields. */
 export interface ItemStruct {
   fields: ItemField[];
+  /** The items are plain values, not objects: one field, keyed ''. */
+  plain?: boolean;
 }
 
 /** A name bound at runtime: a handler local, a dynamic prop, or a list row's item (which has a `struct`). */
@@ -75,6 +81,10 @@ export interface Local extends SlotValue {
   list?: ListState;
   /** A list row's item: the row it is. */
   row?: number;
+  /** `list[i]`: the row, worked out at run time. */
+  index?: IrExpr;
+  /** `list[i]` reads as undefined past the list's end instead of faulting, as `list[i]?.field` does. */
+  guarded?: boolean;
   /** What it was set from, which the typing pass reads when it infers slot widths. */
   source?: IrSource;
   /** The typed expression it stands for, when every read of it is that expression (a memo, a prop). */
@@ -116,8 +126,10 @@ export interface ScalarState extends StateSlot {
 export interface ListState extends StateSlot {
   kind: 'list';
   struct: ItemStruct;
-  items: Record<string, unknown>[];
+  items: unknown[];
   capacity: number;
+  /** A constant array read by a runtime index: its rows are set at boot and never change. */
+  constant?: boolean;
 }
 
 export type StateRecord = ScalarState | ListState;
@@ -335,6 +347,8 @@ export interface Env {
   math64?: boolean;
   /** Handler locals bound to an Animated composition, which `.start()` / `.stop()` compile. */
   animationLocals?: Map<string, t.Expression>;
+  /** Constant arrays read by a runtime index, each kept as a list whose rows never change. */
+  constantLists?: Map<unknown[], ListState>;
 }
 
 /**

@@ -1,13 +1,13 @@
 // Lists: `.map` over list state, a pool of rows. Taps add, drop, keep, slice and clear rows, and a row's press
-// reads its own item. The first items leave a field out and round a whole number. The dots alternate a child's
-// style by index, so their rows don't share one template, and one tap appends two at once.
+// reads its own item. The first items leave a field out. The dots alternate a child's style by index, so their rows
+// don't share one template, and one tap appends two at once.
 import {useState} from 'react';
 import {View, Text, Pressable, StyleSheet} from 'embedded-react';
 
 export function App() {
   const [items, setItems] = useState([
     {label: 'one', n: 1, w: 40.5},
-    {label: 'two', n: 2.6, w: 60},
+    {label: 'two', n: 3, w: 60},
     {label: 'three', w: 80.25},
   ]);
   const [dots, setDots] = useState([{size: 6}]);

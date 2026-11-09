@@ -27,7 +27,9 @@ import {
 } from './static-eval.mts';
 import {abandonBoot, beginBoot, endBoot, setBootLowering} from './boot.mts';
 import {
+  bindBuiltValues,
   findShadowedClockCalls,
+  foldRuntime,
   lowerSourcedWide,
   lowerExpr,
 } from './expressions.mts';
@@ -52,6 +54,7 @@ import {lowerEffect} from './handlers.mts';
 import {collectPanResponders} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
+import {itemValueAt} from './list-items.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
@@ -177,8 +180,10 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
     if (record.kind !== 'list') continue;
     for (const item of record.items) {
       for (const field of record.struct.fields) {
-        const value = item[field.key];
-        if (field.kind === 'string' || value == null) continue;
+        const {present, value} = itemValueAt(item, field);
+        if (field.kind === 'string' || field.kind === 'bool' || !present) {
+          continue;
+        }
         const number = Number(value);
         if (field.kind === 'float' || !Number.isFinite(number)) {
           checkNumber(number);
@@ -333,6 +338,7 @@ function lowerProgram(
     wide,
     stores,
     shadowedClock,
+    constantLists: new Map(),
   };
 
   // A value worked out at boot lowers its slot against the app's environment.
@@ -349,6 +355,13 @@ function lowerProgram(
       );
     } catch (error) {
       rethrowFoldLimit(error);
+      if (
+        expression.type === 'ArrayExpression' ||
+        expression.type === 'ObjectExpression'
+      ) {
+        setBinding(scope, name, foldRuntime(expression, environment));
+        continue;
+      }
       const memo = lowerSourcedWide(expression, environment);
       environment.locals.set(name, {
         slotKind: memo.slotKind,
@@ -361,6 +374,8 @@ function lowerProgram(
       delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
+
+  bindBuiltValues((component.body as BlockStatement).body, environment);
 
   // Emit the scene graph from the root JSX; `output` collects everything else it lowers.
   const output = new Out(components, ast.program);
@@ -391,7 +406,11 @@ function lowerProgram(
     watchState(root);
   }
 
-  const stateRecords = [...state.byName.values(), ...output.childStateRecords];
+  const stateRecords = [
+    ...state.byName.values(),
+    ...output.childStateRecords,
+    ...environment.constantLists!.values(),
+  ];
   checkStateRecords(stateRecords);
 
   return {

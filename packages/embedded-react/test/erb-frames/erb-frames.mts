@@ -251,6 +251,14 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '20,92 20,76 160,20 204,20 20,60 28,20 28,20 72,20',
   },
+  {name: 'list-items', file: fixture('list-items'), screen: PORTRAIT},
+  // Copy, next, add, more, next twice (past the end), copy.
+  {
+    name: 'list-items-taps',
+    file: fixture('list-items'),
+    screen: PORTRAIT,
+    taps: '84,20 32,20 136,20 188,20 32,20 32,20 84,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

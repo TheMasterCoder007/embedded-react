@@ -60,7 +60,13 @@ interface ReadsFound {
  */
 function readLocal(local: Local, found: ReadsFound): void {
   if (local.list) {
-    found.states.add(local.list);
+    // A constant array's rows never change.
+    if (!local.list.constant) {
+      found.states.add(local.list);
+    }
+    if (local.index) {
+      readExpr(local.index, found);
+    }
   } else if (local.source) {
     readSource(local.source, found);
   } else {
@@ -137,6 +143,7 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
       found.states.add(expression.list);
       return;
     case 'itemField':
+    case 'itemPresent':
       readLocal(expression.item, found);
       return;
     case 'ref':

@@ -71,7 +71,7 @@ export interface ResolvedOptions extends CompileOptions {
  * nested <Text>'s segment count in the engine's uint8_t `span_count`.
  */
 const MAX_SCREEN = 32767;
-const MAX_LIST_CAPACITY = 32767;
+export const MAX_LIST_CAPACITY = 32767;
 const MAX_LIST_STRING_CAPACITY = 32767;
 const MAX_TEXT_SPANS = 255;
 const MAX_TIMERS = 4096;
