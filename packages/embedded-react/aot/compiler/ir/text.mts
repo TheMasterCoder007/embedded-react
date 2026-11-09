@@ -30,12 +30,29 @@ export interface IrTextLiteral {
   text: string;
 }
 
-/** `padStart(width, fill)` on the piece before it. */
+/** `padStart(width, fill)` on the printed piece. */
 export interface IrTextPad {
+  kind: 'pad';
   width: number;
   /** One printable ASCII character. */
   fill: string;
 }
+
+/** `toUpperCase()` on the printed piece. */
+export interface IrTextUpper {
+  kind: 'upper';
+}
+
+/** `slice(start, end)` on the printed piece. */
+export interface IrTextSlice {
+  kind: 'slice';
+  start: IrExpr;
+  /** TEXT_END when the call leaves it out. */
+  end: IrExpr;
+}
+
+/** A string helper on the printed piece. */
+export type IrTextEdit = IrTextPad | IrTextUpper | IrTextSlice;
 
 /** A runtime value, printed the way JS converts it to a string. */
 export interface IrTextValue {
@@ -43,16 +60,16 @@ export interface IrTextValue {
   value: IrExpr;
   /** `toFixed(digits)` on a number. */
   digits?: number;
-  /** `padStart` calls on the printed value, in order. */
-  pads?: IrTextPad[];
+  /** String helpers on the printed value, in order. */
+  edits?: IrTextEdit[];
 }
 
 /** A boolean operand of a string `+`, printed as "true" or "false". */
 export interface IrTextBoolean {
   kind: 'booleanWord';
   value: IrExpr;
-  /** `padStart` calls on the word, in order. */
-  pads?: IrTextPad[];
+  /** String helpers on the word, in order. */
+  edits?: IrTextEdit[];
 }
 
 /** One piece of a text. */

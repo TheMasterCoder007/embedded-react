@@ -38,8 +38,11 @@ import {
   fixedDigitsProblem,
   foldScope,
   hasBinding,
+  includesProblem,
   padFillProblem,
   padWidthProblem,
+  rethrowFoldLimit,
+  slicePositionProblem,
 } from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
 import type * as t from '@babel/types';
@@ -69,7 +72,12 @@ import type {
   WholeHelper,
 } from './ir/expressions.mts';
 import type {SlotWidths} from './ir/types.mts';
-import type {IrText, IrTextPart} from './ir/text.mts';
+import type {
+  IrText,
+  IrTextBoolean,
+  IrTextPart,
+  IrTextValue,
+} from './ir/text.mts';
 import {
   BOOL,
   FLOAT,
@@ -169,6 +177,9 @@ const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
 
 /** The largest 32-bit int. */
 const INT32_MAX = 0x7fffffff;
+
+/** slice's end when the call leaves it out: past any text, so the cut runs to the end. LOADI's largest immediate. */
+const TEXT_END = 0x7fff;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -1814,6 +1825,20 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         throw dateObjectError();
       }
 
+      // `text.includes(search)` on strings, a boolean.
+      if (
+        callee.type === 'MemberExpression' &&
+        !callee.computed &&
+        callee.property.type === 'Identifier' &&
+        callee.property.name === 'includes'
+      ) {
+        return {
+          kind: 'fixed',
+          expression: lowerIncludes(node, environment),
+          location,
+        };
+      }
+
       // Math.*: a division under floor / ceil / round / trunc stays apart, for the typing pass to divide exactly.
       if (
         callee.type === 'MemberExpression' &&
@@ -2019,7 +2044,10 @@ function foldsStatically(node: t.Node, scope: Scope): boolean {
 export function buildsText(node: t.Node, environment: Env): boolean {
   const scope = foldScope(environment, environment.constants ?? {});
   if (foldsStatically(node, scope)) return false;
-  if (node.type === 'TemplateLiteral' || textCallOf(node, scope) !== null) {
+  if (
+    node.type === 'TemplateLiteral' ||
+    textCallOf(node, environment, scope) !== null
+  ) {
     return true;
   }
 
@@ -2030,18 +2058,27 @@ export function buildsText(node: t.Node, environment: Env): boolean {
   );
 }
 
+/** The string helpers that build text. */
+const TEXT_METHODS = new Set(['toFixed', 'padStart', 'slice', 'toUpperCase']);
+
+/** A helper that builds text. */
+type TextCall = 'String' | 'toFixed' | 'padStart' | 'slice' | 'toUpperCase';
+
 /**
- * The text helper a call is: `String(x)`, `x.toFixed(n)` or `x.padStart(n, fill)`.
+ * The text helper a call is: `String(x)`, or `x.toFixed(n)`, `x.padStart(n, fill)`, `x.slice(start, end)` or
+ * `x.toUpperCase()`. A list's slice is not one.
  *
  * @param node  The expression.
+ * @param environment  The expression environment.
  * @param scope  The constants a fold may read, which may shadow `String`.
  *
  * @returns The helper's name, or null for anything else.
  */
 function textCallOf(
   node: t.Node,
+  environment: Env,
   scope: Scope,
-): 'String' | 'toFixed' | 'padStart' | null {
+): TextCall | null {
   if (node.type !== 'CallExpression') return null;
   const {callee} = node;
   if (
@@ -2053,15 +2090,18 @@ function textCallOf(
   }
 
   if (
-    callee.type === 'MemberExpression' &&
-    !callee.computed &&
-    callee.property.type === 'Identifier' &&
-    (callee.property.name === 'toFixed' || callee.property.name === 'padStart')
+    callee.type !== 'MemberExpression' ||
+    callee.computed ||
+    callee.property.type !== 'Identifier' ||
+    !TEXT_METHODS.has(callee.property.name)
   ) {
-    return callee.property.name;
+    return null;
   }
 
-  return null;
+  const isList =
+    callee.object.type === 'Identifier' &&
+    environment.state.get(callee.object.name)?.kind === 'list';
+  return isList ? null : (callee.property.name as TextCall);
 }
 
 /**
@@ -2180,18 +2220,12 @@ function lowerPadStart(
     throw textShapeError(fillNode ?? call, ...fillProblem);
   }
 
-  const pieces = receiver.parts.filter(
-    part => !(part.kind === 'literal' && part.text === ''),
+  const piece = onePiece(
+    receiver,
+    call,
+    'AOT: padStart can only pad one value',
+    'pad each value on its own and join them after: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`.',
   );
-  const [piece] = pieces;
-  if (pieces.length !== 1 || piece.kind === 'literal') {
-    throw textShapeError(
-      call,
-      'AOT: padStart can only pad one value',
-      'pad each value on its own and join them after: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`.',
-    );
-  }
-
   if (fill === '' || width <= 0) {
     return {isString: true, parts: [piece]};
   }
@@ -2199,9 +2233,247 @@ function lowerPadStart(
   return {
     isString: true,
     parts: [
-      {...piece, pads: [...(piece.pads ?? []), {width, fill: fill as string}]},
+      {
+        ...piece,
+        edits: [
+          ...(piece.edits ?? []),
+          {kind: 'pad', width, fill: fill as string},
+        ],
+      },
     ],
   };
+}
+
+/**
+ * One of slice's positions: a constant cut to a whole number as JS cuts it, or a runtime whole number.
+ *
+ * @param node  The argument, or undefined when it is left out.
+ * @param fallback  The position JS uses when it is left out.
+ * @param environment  The expression environment.
+ * @param scope  The constants a fold may read.
+ *
+ * @returns The position.
+ */
+function slicePosition(
+  node: t.Node | undefined,
+  fallback: number,
+  environment: Env,
+  scope: Scope,
+): IrExpr {
+  if (!node) return numConst(fallback);
+  if (node.type === 'SpreadElement') {
+    throw textShapeError(
+      node,
+      'AOT: slice cannot take a spread',
+      'pass the start and end themselves: text.slice(0, 3).',
+    );
+  }
+
+  let constant: {value: unknown} | null = null;
+  try {
+    constant = {value: evalStatic(node, scope, 'strict')};
+  } catch (error) {
+    rethrowFoldLimit(error);
+  }
+  if (constant) {
+    const problem = slicePositionProblem([constant.value]);
+    if (problem) {
+      throw textShapeError(node, ...problem);
+    }
+
+    const position = Math.trunc(constant.value as number) || 0;
+    return numConst(Math.max(-TEXT_END, Math.min(TEXT_END, position)));
+  }
+
+  const position = lowerExpr(node, environment);
+  if (position.type.kind !== 'int') {
+    throw textShapeError(
+      node,
+      "AOT: slice's start and end must be whole numbers",
+      'a package cuts at whole positions; round it first: text.slice(0, Math.floor(n)).',
+    );
+  }
+
+  return position;
+}
+
+/**
+ * The one piece a helper that edits a printed piece (padStart, slice) can work on.
+ *
+ * @param receiver  The text the helper is called on.
+ * @param call  The call, for errors.
+ * @param message  The error when there is more than one value, or none.
+ * @param hint  How to rewrite it.
+ *
+ * @returns The piece.
+ */
+function onePiece(
+  receiver: TextParts,
+  call: t.Node,
+  message: string,
+  hint: string,
+): IrTextValue | IrTextBoolean {
+  const pieces = receiver.parts.filter(
+    part => !(part.kind === 'literal' && part.text === ''),
+  );
+  const [piece] = pieces;
+  if (pieces.length !== 1 || piece.kind === 'literal') {
+    throw textShapeError(call, message, hint);
+  }
+
+  return piece;
+}
+
+/**
+ * Lowers `x.slice(start, end)` on a runtime string.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ * @param scope  The constants a fold may read.
+ *
+ * @returns The text: the part of the string between the two positions.
+ */
+function lowerSlice(
+  call: t.CallExpression,
+  environment: Env,
+  scope: Scope,
+): TextParts {
+  const receiver = lowerTextParts(
+    (call.callee as t.MemberExpression).object,
+    environment,
+    scope,
+    true,
+  );
+  if (!receiver.isString) {
+    throw textShapeError(
+      call,
+      'AOT: slice is only supported on a string',
+      'on a number, convert first: String(n).slice(-2). A list slices only as list.slice(0, end).map(…).',
+    );
+  }
+
+  const [startNode, endNode] = call.arguments;
+  const start = slicePosition(startNode, 0, environment, scope);
+  const end = slicePosition(endNode, TEXT_END, environment, scope);
+  const piece = onePiece(
+    receiver,
+    call,
+    'AOT: slice can only cut one value',
+    'slice each value on its own and join them after: `${a.slice(0, 3)}-${b.slice(0, 3)}`.',
+  );
+  if (
+    piece.kind === 'value' &&
+    piece.digits &&
+    piece.value.type.kind !== 'float'
+  ) {
+    throw textShapeError(
+      call,
+      "AOT: slice cannot cut a whole number's toFixed",
+      'its decimals are printed apart from it; slice String(n) and add the decimals after it.',
+    );
+  }
+
+  return {
+    isString: true,
+    parts: [
+      {...piece, edits: [...(piece.edits ?? []), {kind: 'slice', start, end}]},
+    ],
+  };
+}
+
+/**
+ * Lowers `x.toUpperCase()` on a runtime string. Its literal text is upper-cased here, and each value as it is
+ * printed; a whole number has no letters to change.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ * @param scope  The constants a fold may read.
+ *
+ * @returns The text, upper-cased.
+ */
+function lowerToUpperCase(
+  call: t.CallExpression,
+  environment: Env,
+  scope: Scope,
+): TextParts {
+  const receiver = lowerTextParts(
+    (call.callee as t.MemberExpression).object,
+    environment,
+    scope,
+    true,
+  );
+  if (!receiver.isString) {
+    throw textShapeError(
+      call,
+      'AOT: toUpperCase is only supported on a string',
+      'JS has toUpperCase on strings only; convert first: String(on).toUpperCase().',
+    );
+  }
+
+  return {
+    isString: true,
+    parts: receiver.parts.map(part => {
+      if (part.kind === 'literal') {
+        return {...part, text: part.text.toUpperCase()};
+      }
+
+      if (
+        part.kind === 'value' &&
+        (part.value.type.kind === 'int' || part.value.type.kind === 'int64')
+      ) {
+        return part;
+      }
+
+      return {...part, edits: [...(part.edits ?? []), {kind: 'upper'}]};
+    }),
+  };
+}
+
+/**
+ * Lowers `text.includes(search)` on runtime strings.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns The boolean.
+ */
+function lowerIncludes(call: t.CallExpression, environment: Env): IrExpr {
+  const receiver = (call.callee as t.MemberExpression).object;
+  const [needleNode, ...rest] = call.arguments;
+  if (needleNode?.type === 'SpreadElement') {
+    throw aotError(
+      'AOT: includes cannot take a spread',
+      'pass the string to search for: name.includes(x).',
+    );
+  }
+
+  const problem = includesProblem(needleNode ? '' : undefined, rest.length > 0);
+  if (problem) {
+    throw aotError(...problem);
+  }
+
+  // A string built in place lives in the format buffer, not in a string register.
+  const stringOf = (node: t.Node, problemOf: () => [string, string]) => {
+    if (buildsText(node, environment)) {
+      throw aotError(
+        'AOT: includes needs a string kept somewhere, not one built in place',
+        'build it into a local first: `const label = `${a} ${b}`;` then label.includes(x).',
+      );
+    }
+
+    const value = lowerExprWide(node, environment);
+    if (value.type.kind !== 'string') {
+      throw aotError(...problemOf());
+    }
+
+    return value;
+  };
+  const haystack = stringOf(receiver, () => [
+    'AOT: includes is only supported on a string',
+    'JS has includes on strings and arrays; a package has it on a string only. Compare with === for one value.',
+  ]);
+  const needle = stringOf(needleNode, () => includesProblem(0, false)!);
+  return {kind: 'stringIncludes', haystack, needle, type: BOOL};
 }
 
 /**
@@ -2285,7 +2557,8 @@ function lowerTextParts(
   }
 
   // String(x) prints x as an operand of a string `+` would.
-  if (textCallOf(node, scope) === 'String') {
+  const textCall = textCallOf(node, environment, scope);
+  if (textCall === 'String') {
     const [argument] = (node as t.CallExpression).arguments;
     if (argument?.type === 'SpreadElement') {
       throw textShapeError(
@@ -2303,12 +2576,20 @@ function lowerTextParts(
     };
   }
 
-  if (textCallOf(node, scope) === 'toFixed') {
+  if (textCall === 'toFixed') {
     return lowerToFixed(node as t.CallExpression, environment);
   }
 
-  if (textCallOf(node, scope) === 'padStart') {
+  if (textCall === 'padStart') {
     return lowerPadStart(node as t.CallExpression, environment, scope);
+  }
+
+  if (textCall === 'slice') {
+    return lowerSlice(node as t.CallExpression, environment, scope);
+  }
+
+  if (textCall === 'toUpperCase') {
+    return lowerToUpperCase(node as t.CallExpression, environment, scope);
   }
 
   // A branch or operand that builds text needs its own format; refuse before lowerExpr's misleading error.
@@ -2317,7 +2598,7 @@ function lowerTextParts(
       subExpression.operator === '+' &&
       lowerTextParts(subExpression, environment, scope, true).isString) ||
     ((subExpression.type === 'TemplateLiteral' ||
-      textCallOf(subExpression, scope) !== null) &&
+      textCallOf(subExpression, environment, scope) !== null) &&
       !foldsStatically(subExpression, scope));
   if (
     node.type === 'ConditionalExpression' &&

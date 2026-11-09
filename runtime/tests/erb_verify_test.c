@@ -830,6 +830,30 @@ static void test_bytecode(void)
         EXPECT(ERB_ERROR_BYTECODE, "integer ADD on float registers");
     }
     {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_BOOL, ERB_TYPE_STRING};
+        const uint32_t code[] = {
+            OP_ABX(LOADI, 0, 1),
+            OP_ABX(LOADI, 1, -1),
+            OP_ABX(LOADS, 3, STRING_OFF),
+            OP_ABC(FMTS, 3, 0, 0),
+            OP_ABC(FMTSLICE, 0, 1, 0),
+            OP_ABC(FMTUPPER, 0, 0, 0),
+            OP_ABC(SHAS, 2, 3, 3),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, code, 8);
+        EXPECT(ERB_OK, "slice, toUpperCase and includes on registers of their types");
+        const uint32_t float_slice[] = {OP_ABC(FMTSLICE, 3, 1, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, float_slice, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "slice with a string as its start");
+        const uint32_t int_includes[] = {OP_ABC(SHAS, 2, 3, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, int_includes, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "includes of an int register");
+    }
+    {
         const uint32_t code[] = {OP_ABX(GET32, 0, 99), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_PRESS, code, 3);

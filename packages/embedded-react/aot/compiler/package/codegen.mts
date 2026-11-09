@@ -50,7 +50,7 @@ import type {
 } from '../ir/expressions.mts';
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {IrAppendItem, IrStmt, IrTimer} from '../ir/statements.mts';
-import type {IrTextPad, IrTextPart} from '../ir/text.mts';
+import type {IrTextEdit, IrTextPart} from '../ir/text.mts';
 import type {
   ListState,
   Local,
@@ -346,6 +346,7 @@ export class Codegen {
         return this.typeOf(expression.operand);
       case 'compare':
       case 'stringEquals':
+      case 'stringIncludes':
       case 'logical':
         return 'bool';
       case 'pick':
@@ -518,6 +519,16 @@ export class Codegen {
         if (expression.operator === '!=') {
           builder.abc('NOT', register.index, register.index);
         }
+        return register;
+      }
+      case 'stringIncludes': {
+        const register = builder.register('bool');
+        builder.abc(
+          'SHAS',
+          register.index,
+          this.valueAs(expression.haystack, 'string').index,
+          this.valueAs(expression.needle, 'string').index,
+        );
         return register;
       }
       case 'logical': {
@@ -1092,16 +1103,18 @@ export class Codegen {
           builder.abx('FMTK', 0, this.program.tables.string(part.text));
         }
       } else if (part.kind === 'booleanWord') {
+        const positions = this.slicePositions(part.edits);
         builder.abc('FMTB', this.condition(part.value).index);
-        this.pads(part.pads, 0);
+        this.edits(part.edits, positions, 0);
       } else if (this.enumOf(part.value)) {
         const value = part.value as IrExpr & {kind: 'state'};
+        const positions = this.slicePositions(part.edits);
         builder.abx(
           'FMTE',
           this.get(this.stateSlot(value.state)).index,
           this.enumOf(value)!.set,
         );
-        this.pads(part.pads, 0);
+        this.edits(part.edits, positions, 0);
       } else {
         // The spec is by the value's IR type: a float is printed from a float, so a boot double is narrowed first.
         const type = part.value.type.kind;
@@ -1114,13 +1127,14 @@ export class Codegen {
                 ? ['FMTL', 'int64']
                 : ['FMTI', 'int'];
         const register = this.valueAs(part.value, formatType).index;
+        const positions = this.slicePositions(part.edits);
         if (part.digits !== undefined && formatType === 'float') {
           builder.abc('FMTFX', register, part.digits);
-          this.pads(part.pads, 0);
+          this.edits(part.edits, positions, 0);
         } else if (part.digits) {
           // A whole number's decimals are all zeros, so pad the number to leave room for them.
           builder.abc(opcode, register);
-          this.pads(part.pads, part.digits + 1);
+          this.edits(part.edits, positions, part.digits + 1);
           builder.abx(
             'FMTK',
             0,
@@ -1128,7 +1142,7 @@ export class Codegen {
           );
         } else {
           builder.abc(opcode, register);
-          this.pads(part.pads, 0);
+          this.edits(part.edits, positions, 0);
         }
       }
       builder.release(checkpoint);
@@ -1136,15 +1150,48 @@ export class Codegen {
   }
 
   /**
-   * Pads the piece just printed, as padStart would.
+   * The registers each slice of a piece cuts at, worked out before the piece is printed.
    *
-   * @param pads  The padStart calls, in order.
-   * @param suffix  How many bytes are still to be printed after the piece, which each width leaves room for.
+   * @param edits  The piece's string helpers.
+   *
+   * @returns The start and end registers of each slice, in order.
    */
-  private pads(pads: IrTextPad[] | undefined, suffix: number): void {
-    for (const {width, fill} of pads ?? []) {
-      if (width > suffix) {
-        this.builder.abc('FMTPAD', width - suffix, fill.charCodeAt(0));
+  private slicePositions(edits: IrTextEdit[] | undefined): Register[][] {
+    return (edits ?? [])
+      .filter(edit => edit.kind === 'slice')
+      .map(edit => [
+        this.valueAs(edit.start, 'int'),
+        this.valueAs(edit.end, 'int'),
+      ]);
+  }
+
+  /**
+   * Applies the string helpers to the piece just printed, in order.
+   *
+   * @param edits  The padStart, slice and toUpperCase calls, in order.
+   * @param positions  Each slice's registers, from slicePositions.
+   * @param suffix  How many bytes are still to be printed after the piece, which each padStart width leaves room for.
+   */
+  private edits(
+    edits: IrTextEdit[] | undefined,
+    positions: Register[][],
+    suffix: number,
+  ): void {
+    const slices = positions[Symbol.iterator]();
+    for (const edit of edits ?? []) {
+      if (edit.kind === 'pad') {
+        if (edit.width > suffix) {
+          this.builder.abc(
+            'FMTPAD',
+            edit.width - suffix,
+            edit.fill.charCodeAt(0),
+          );
+        }
+      } else if (edit.kind === 'upper') {
+        this.builder.abc('FMTUPPER', 0);
+      } else {
+        const [start, end] = slices.next().value!;
+        this.builder.abc('FMTSLICE', start.index, end.index);
       }
     }
   }

@@ -167,6 +167,10 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
       readExpr(expression.left, found);
       readExpr(expression.right, found);
       return;
+    case 'stringIncludes':
+      readExpr(expression.haystack, found);
+      readExpr(expression.needle, found);
+      return;
     case 'conditional':
       readExpr(expression.test, found);
       readExpr(expression.consequent, found);
@@ -240,6 +244,12 @@ function readText(text: IrText, found: ReadsFound): void {
   for (const part of text.parts) {
     if (part.kind !== 'literal') {
       readExpr(part.value, found);
+      for (const edit of part.edits ?? []) {
+        if (edit.kind === 'slice') {
+          readExpr(edit.start, found);
+          readExpr(edit.end, found);
+        }
+      }
     }
   }
 }

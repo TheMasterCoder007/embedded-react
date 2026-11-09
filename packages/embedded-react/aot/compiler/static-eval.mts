@@ -90,7 +90,7 @@ const STATIC_METHODS: Record<
   {
     receiver: 'number' | 'string';
     problem: (...values: any[]) => [string, string] | null;
-    apply: (...values: any[]) => string;
+    apply: (...values: any[]) => unknown;
   }
 > = {
   toFixed: {
@@ -105,6 +105,24 @@ const STATIC_METHODS: Record<
       padWidthProblem(width) ?? padFillProblem(fill),
     apply: (value: string, width: number, fill?: string) =>
       value.padStart(width, fill),
+  },
+  slice: {
+    receiver: 'string',
+    problem: (_value: string, ...positions: unknown[]) =>
+      slicePositionProblem(positions),
+    apply: (value: string, start?: number, end?: number) =>
+      value.slice(start, end),
+  },
+  toUpperCase: {
+    receiver: 'string',
+    problem: () => null,
+    apply: (value: string) => value.toUpperCase(),
+  },
+  includes: {
+    receiver: 'string',
+    problem: (_value: string, needle: unknown, ...rest: unknown[]) =>
+      includesProblem(needle, rest.length > 0),
+    apply: (value: string, needle: string) => value.includes(needle),
   },
 };
 
@@ -178,6 +196,55 @@ export function padFillProblem(fill: unknown): [string, string] | null {
     "AOT: padStart's fill must be one printable ASCII character",
     'write a constant such as "0" or " "; a longer fill is not supported.',
   ];
+}
+
+/**
+ * Why slice can't take these positions in a package, or null when it can: numbers, or left out.
+ *
+ * @param positions  The start and end, as given.
+ *
+ * @returns The error's message and hint.
+ */
+export function slicePositionProblem(
+  positions: unknown[],
+): [string, string] | null {
+  if (positions.every(position => typeof position === 'number')) {
+    return null;
+  }
+
+  return [
+    "AOT: slice's start and end must be numbers",
+    'pass whole numbers, or leave the end out to cut to the end.',
+  ];
+}
+
+/**
+ * Why includes can't take this search in a package, or null when it can: a string, and no position.
+ *
+ * @param needle  What it searches for.
+ * @param hasPosition  Whether the call gives a position to search from.
+ *
+ * @returns The error's message and hint.
+ */
+export function includesProblem(
+  needle: unknown,
+  hasPosition: boolean,
+): [string, string] | null {
+  if (hasPosition) {
+    return [
+      "AOT: includes' position is not supported",
+      'slice the string into a local first: `const rest = name.slice(2);` then `rest.includes(x)`.',
+    ];
+  }
+
+  if (typeof needle !== 'string') {
+    return [
+      'AOT: includes only searches for a string',
+      'JS converts anything else to a string first; convert it yourself: name.includes(String(n)).',
+    ];
+  }
+
+  return null;
 }
 
 /**
@@ -586,7 +653,7 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
           : result;
       }
 
-      // String(x), and toFixed / padStart on a constant.
+      // String(x), and the string helpers on a constant.
       const isString =
         callee.type === 'Identifier' &&
         callee.name === 'String' &&
