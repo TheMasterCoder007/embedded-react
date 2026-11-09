@@ -768,7 +768,9 @@ function lowerItemsWith(
   }
   const index = rowIndexOf(indexNode, listName, environment);
   const constantIndex = staticInt(indexNode, environment);
-  // The replaced item: items[n], or a row's own item when n is that row's index.
+  // The replaced item: items[n], or a row's own item when n is that row's index. For a negative n, with() counts
+  // back but items[n] is undefined, so what the update keeps from it isn't the row's.
+  let keepsIndexed = false;
   const isItem = (node: t.Node): boolean => {
     if (
       node.type === 'MemberExpression' &&
@@ -776,7 +778,9 @@ function lowerItemsWith(
       node.object.type === 'Identifier' &&
       node.object.name === listName
     ) {
-      return sameNode(node.property, indexNode);
+      const same = sameNode(node.property, indexNode);
+      keepsIndexed ||= same;
+      return same;
     }
     const local =
       node.type === 'Identifier'
@@ -795,8 +799,24 @@ function lowerItemsWith(
     environment,
     isRow: (node, path) => isPathOf(node, path, isItem),
   });
+  if (keepsIndexed && constantIndex !== null && constantIndex < 0) {
+    throw aotError(
+      `AOT: ${listName}.with(${constantIndex}, …) keeps fields of ${listName}[${constantIndex}], which is undefined`,
+      `with() counts a negative index back from the end, but ${listName}[${constantIndex}] doesn't. ` +
+        `Use the index it counts back to, e.g. ${listName}.length - 1.`,
+    );
+  }
   // Even an update that changes nothing reads the row, so an index past the end faults.
-  return [{kind: 'updateItems', list: listState, row, index, body: statements}];
+  return [
+    {
+      kind: 'updateItems',
+      list: listState,
+      row,
+      index,
+      body: statements,
+      negativeKeeps: keepsIndexed && constantIndex === null,
+    },
+  ];
 }
 
 /**

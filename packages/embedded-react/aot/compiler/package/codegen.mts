@@ -1611,23 +1611,46 @@ export class Codegen {
     let index = this.valueAs(statement.index, 'int');
     if (statement.negative === 'sliced') {
       // [...items.slice(0, -1), ...items.slice(0)] repeats the list, which a list can't hold.
-      const repeats = builder.register('bool');
-      builder.abc('EQ', repeats.index, index.index, this.load('int', -1).index);
-      const fits = builder.label();
-      builder.branch('JF', fits, repeats);
-      builder.abx(
-        'TRAP',
-        0,
-        this.program.tables.string(
-          `[...${statement.list.name}.slice(0, -1), ...${statement.list.name}.slice(0)] repeats the list`,
-        ),
+      const list = statement.list.name;
+      this.trapWhen(
+        'EQ',
+        index,
+        -1,
+        `[...${list}.slice(0, -1), ...${list}.slice(0)] repeats the list`,
       );
-      builder.place(fits);
     }
     if (statement.negative !== 'none') {
       index = this.countedBack(index, pool, statement.negative === 'spliced');
     }
     builder.abx('REMOVE', index.index, pool.index);
+  }
+
+  /**
+   * Stops the app with a message when a whole number compares to a constant: is equal to it, or below it.
+   *
+   * @param compare  EQ or LT.
+   * @param value  The number.
+   * @param constant  The constant.
+   * @param message  Why it stops.
+   */
+  private trapWhen(
+    compare: 'EQ' | 'LT',
+    value: Register,
+    constant: number,
+    message: string,
+  ): void {
+    const {builder} = this;
+    const stops = builder.register('bool');
+    builder.abc(
+      compare,
+      stops.index,
+      value.index,
+      this.load('int', constant).index,
+    );
+    const goesOn = builder.label();
+    builder.branch('JF', goesOn, stops);
+    builder.abx('TRAP', 0, this.program.tables.string(message));
+    builder.place(goesOn);
   }
 
   /**
@@ -1678,11 +1701,17 @@ export class Codegen {
       this.locals.delete(name);
     };
     if (statement.index) {
-      const row = this.countedBack(
-        this.valueAs(statement.index, 'int'),
-        pool,
-        false,
-      );
+      const index = this.valueAs(statement.index, 'int');
+      if (statement.negativeKeeps) {
+        const list = statement.list.name;
+        this.trapWhen(
+          'LT',
+          index,
+          0,
+          `${list}.with(n, …) keeps fields of ${list}[n], which is undefined for a negative n`,
+        );
+      }
+      const row = this.countedBack(index, pool, false);
       // A read of the row faults past the end, as with() throws there.
       const [first] = rowEntries(statement.list.struct);
       builder.abc(

@@ -89,7 +89,8 @@ while the code that breaks it is still one line.
   sets what changes, `{...item, done: !item.done}`, and `map`'s function can pick between items and `item` itself
   with `?:` on the item and its index. It can't read other items by index, since they are set in place; read one
   into a `const` before the setter. A field set to `undefined` is left out from then on. `with` past the end stops
-  the app with the error screen, as JS throws there.
+  the app with the error screen, as JS throws there. `with` counts a negative n back from the end, but
+  `items[n]` doesn't, so `items.with(n, {...items[n], …})` with a negative n stops the app too.
 - `.map` over an array built in render (inline, a `const`, a `useMemo`, or a prop) unrolls one row
   per element, and its elements can read state. Such an array can't be read by a runtime index.
   A list computed at runtime from anything else does not compile.

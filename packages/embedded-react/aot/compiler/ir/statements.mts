@@ -146,6 +146,11 @@ export interface IrUpdateItems {
   /** The one row `with` visits, a negative one counting back; null to visit every row. */
   index: IrExpr | null;
   body: IrStmt[];
+  /**
+   * `with` keeps fields of `items[n]`, which is undefined for a negative n, so such an n stops the app rather than
+   * keep the row's.
+   */
+  negativeKeeps?: boolean;
 }
 
 /** Sets fields of the row an `updateItems` visits. Every value is worked out before any is stored. */

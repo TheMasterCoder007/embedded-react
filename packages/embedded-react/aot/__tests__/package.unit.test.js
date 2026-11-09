@@ -1506,6 +1506,20 @@ export function App() {
     expect(ops).not.toContain('ROWSET');
   });
 
+  it('stops a `with` that keeps fields of items[n] at a negative n', () => {
+    expect(
+      handlerOps(
+        "setItems(items.with(picked, {...items[picked], title: 'z'}))",
+      ),
+    ).toEqual(expect.arrayContaining(['LT', 'TRAP', 'ROWSET']));
+    // An item that keeps nothing from items[n] needs no check.
+    expect(
+      handlerOps(
+        "setItems(items.with(picked, {title: 'z', n: 1, done: true, pos: {x: 1, y: 2}}))",
+      ),
+    ).not.toContain('TRAP');
+  });
+
   it('counts a negative index back for a pair of slices, stopping at -1', () => {
     const sliced = handlerOps(
       'setItems([...items.slice(0, picked), ...items.slice(picked + 1)])',
@@ -1552,6 +1566,10 @@ export function App() {
     refuses(
       'setItems([...items.slice(0, -1), ...items.slice(0)])',
       'only [...items.slice(0, n), ...items.slice(n + 1)] is supported',
+    );
+    refuses(
+      'setItems(items.with(-1, {...items[-1], n: 5}))',
+      'items.with(-1, …) keeps fields of items[-1], which is undefined',
     );
     refuses(
       'setItems(items.with(0, {...items[1], n: 5}))',
