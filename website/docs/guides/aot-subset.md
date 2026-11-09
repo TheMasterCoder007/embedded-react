@@ -78,7 +78,7 @@ while the code that breaks it is still one line.
 - `items[i].field` and `values[i]` read a row by a runtime whole-number index, in render and in
   handlers. Past the end, `items[i].field` stops the app with the error screen, as JS throws there;
   `items[i]?.field` and `values[i]` read as `undefined`. A constant array read by a runtime index
-  is kept in RAM, like a list state.
+  is kept in RAM, like a list state, and holds at most 32767 elements.
 - A list state, a row's item, or `items[i]` can be passed to a component.
 - `.map` over an array built in render (inline, a `const`, a `useMemo`, or a prop) unrolls one row
   per element, and its elements can read state. Such an array can't be read by a runtime index.

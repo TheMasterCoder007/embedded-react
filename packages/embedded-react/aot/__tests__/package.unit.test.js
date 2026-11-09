@@ -1262,7 +1262,7 @@ export function App() {
 import {useState} from 'react';
 import {Text} from 'embedded-react';
 export function App() {
-  const [items] = useState([{t: 'a'}, {t: 'b'}]);
+  const [items] = useState([{t: 'a', note: 'n'}, {t: 'b'}]);
   const [at, setAt] = useState(0);
   return <Text onPress={() => setAt(at + 1)}>{${read}}</Text>;
 }`;
@@ -1277,6 +1277,10 @@ export function App() {
     const tested = updateOf("items[at].t === undefined ? 'gone' : 'here'");
     expect(tested).toContain('ROWGET');
     expect(tested).not.toContain('LEN');
+    // An optional field's test reads its flag, which faults the same way.
+    const optional = updateOf("items[at].note ?? 'none'");
+    expect(optional).toContain('ROWGET');
+    expect(optional).not.toContain('LEN');
     const guarded = updateOf('items[at]?.t');
     expect(guarded).toEqual(
       expect.arrayContaining(['LEN', 'LT', 'LE', 'ROWGET']),
@@ -1297,6 +1301,15 @@ export function App() {
       {type: ValueType.list, flags: 0, cap: 3, aux: 0},
     );
     expect(rowFieldsOf(program)).toEqual([{type: ValueType.string, cap: 4}]);
+
+    // Its capacity is a u16 in the package, as a list state's is.
+    const long = source.replace(
+      "['zero', 'one', 'two']",
+      `[${Array.from({length: 32768}, (_, index) => index).join(', ')}]`,
+    );
+    expect(() => compilePackage(long, 'app', CAPS)).toThrow(
+      'the array "NAMES" has 32768 elements, but an array read by a runtime index holds 32767',
+    );
     const boot = functionsOf(program)[readProgram(program).panel.boot];
     expect(names(boot).filter(name => name === 'APPEND')).toHaveLength(3);
   });

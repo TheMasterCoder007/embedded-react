@@ -47,6 +47,7 @@ import {
   slicePositionProblem,
 } from './static-eval.mts';
 import {lowerGestureField} from './pan-responder.mts';
+import {MAX_LIST_CAPACITY} from './options.mts';
 import {
   fieldsUnder,
   inferItemStruct,
@@ -1592,6 +1593,12 @@ function constantListOf(
     );
   }
   const name = node.type === 'Identifier' ? node.name : 'array';
+  if (array.length > MAX_LIST_CAPACITY) {
+    throw aotError(
+      `AOT: the array "${name}" has ${array.length} elements, but an array read by a runtime index holds ${MAX_LIST_CAPACITY}`,
+      'split it into smaller arrays, or index a list state.',
+    );
+  }
   const list: ListState = {
     kind: 'list',
     name,
