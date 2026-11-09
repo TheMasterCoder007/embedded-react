@@ -428,13 +428,40 @@ const testsOf = (statements: IrStmt[]): IrExpr[] =>
           : [],
   );
 
+/** What the walk of a test skips: where a value came from, and the lists an item reads, checked when they were made. */
+const UNWALKED_KEYS = new Set([
+  'source',
+  'location',
+  'list',
+  'through',
+  'struct',
+]);
+
+/** What a handler reads that the update, which rebuilds the list later, can't read as the handler did. */
+const HANDLER_READS: Record<string, string> = {
+  event: 'its event',
+  gesture: 'its gesture',
+  layout: 'its layout',
+  ref: 'a ref',
+  clock: 'the clock',
+};
+
 /**
- * Refuses a test that reads what only a handler has, which the update can't work out.
+ * Refuses a test that reads what the update can't work out as the code that made the list sees it: a handler's
+ * locals, and in a handler, effect or timer its event, a ref or the clock too.
  *
  * @param tests  The tests.
  * @param what  The call, for errors.
+ * @param environment  Where the list is made.
  */
-function checkRenderReads(tests: IrExpr[], what: string): void {
+function checkReads(tests: IrExpr[], what: string, environment: Env): void {
+  const refuse = (read: string): never => {
+    throw aotError(
+      `AOT: ${what} in a handler, effect or timer can't read ${read}`,
+      'a filtered or sorted list is worked out with the render, from state and props. Filter in the setter ' +
+        'instead, or read the value into state first.',
+    );
+  };
   const seen = new Set<object>();
   const walk = (value: unknown): void => {
     if (!value || typeof value !== 'object' || seen.has(value)) return;
@@ -447,15 +474,14 @@ function checkRenderReads(tests: IrExpr[], what: string): void {
     if (node.kind === 'local' && node.local) {
       const {local} = node;
       if (!local.list && !local.visit && !local.expression) {
-        throw aotError(
-          `AOT: ${what}'s function reads a local of the handler`,
-          'a filtered or sorted list is worked out with the render, from state and props. Filter in the ' +
-            `setter instead, or test the rows in a loop of your own.`,
-        );
+        refuse("the handler's locals");
       }
     }
+    if (environment.outsideRender && node.kind && node.kind in HANDLER_READS) {
+      refuse(HANDLER_READS[node.kind]);
+    }
     for (const [key, child] of Object.entries(value)) {
-      if (key !== 'source' && key !== 'location') walk(child);
+      if (!UNWALKED_KEYS.has(key)) walk(child);
     }
   };
   tests.forEach(walk);
@@ -579,7 +605,7 @@ export function derivedListOf(
     ...orderStatements(list, filtersFirst ? rest : steps, orderRows),
   ];
   const tests = testsOf(rebuild);
-  checkRenderReads(tests, chain.steps[0].what);
+  checkReads(tests, chain.steps[0].what, environment);
   list.derived = {source, steps, rebuild, tests};
 
   if (!lists.has(node)) lists.set(node, new Map());

@@ -1609,10 +1609,13 @@ function inlineHelperCall(
  */
 function lowerHandlerExprImpl(
   expression: t.Expression,
-  environment: Env,
+  handlerEnvironment: Env,
   state: StateTable,
   context: StatementContext,
 ): IrStmt[] {
+  const environment = handlerEnvironment.outsideRender
+    ? handlerEnvironment
+    : {...handlerEnvironment, outsideRender: true};
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
   if (
     expression.type === 'CallExpression' &&
@@ -1997,10 +2000,13 @@ const lowerHandlerExpression = withLoc(lowerHandlerExprImpl);
  */
 export function lowerStmts(
   statements: t.Statement[],
-  environment: Env,
+  bodyEnvironment: Env,
   state: StateTable,
   context: StatementContext,
 ): IrStmt[] {
+  let environment = bodyEnvironment.outsideRender
+    ? bodyEnvironment
+    : {...bodyEnvironment, outsideRender: true};
   const lowered: IrStmt[] = [];
   // What each statement lowers to is marked with where it is, once the next one starts.
   let from = 0;

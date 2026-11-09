@@ -1805,7 +1805,24 @@ export function App() {
     );
     refuses(
       '{ const k = 1; setMin(items.filter(item => item.n > k).length); }',
-      "items.filter's function reads a local of the handler",
+      "items.filter in a handler, effect or timer can't read the handler's locals",
+    );
+    // A handler's list is rebuilt later, in the update, which can't see its event, nor a ref or the clock as it was.
+    refuses(
+      'setMin(items.filter(item => item.n > Date.now()).length)',
+      "items.filter in a handler, effect or timer can't read the clock",
+    );
+    expect(() =>
+      compilePackage(
+        orderApp('setMin(min)').replace(
+          '<Pressable onPress',
+          '<Pressable onPressIn={e => setMin(items.filter(item => item.n > e.x).length)} onPress',
+        ),
+        'app',
+        CAPS,
+      ),
+    ).toThrow(
+      "items.filter in a handler, effect or timer can't read its event",
     );
   });
 });

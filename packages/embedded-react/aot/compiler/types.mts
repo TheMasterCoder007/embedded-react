@@ -361,6 +361,8 @@ export interface Env {
   children?: ChildrenSlot | null;
   /** Inside a list row, whose conditionals build every branch and toggle it. */
   inListRow?: boolean;
+  /** Lowering a handler, an effect or a timer, which runs apart from the render. */
+  outsideRender?: boolean;
   /** Callback props of the component being inlined. */
   functionProps?: Map<string, FunctionProp>;
   /** Namespaces the handlers an inlined component instance emits. */

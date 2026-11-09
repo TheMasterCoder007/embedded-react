@@ -96,8 +96,9 @@ while the code that breaks it is still one line.
   other items by index. `items.sort(…)` on the list itself is refused, as it would change state in place.
 - In render, `items.filter(…)` and a sort work inline before `.map`, `.length` or `[i]`, and in a `const` or a
   `useMemo`. The list they make holds the row numbers they keep, as many as the source holds, and is rebuilt when
-  what it reads changes. Their functions read state and props, but not a handler's locals, and they can't be used
-  inside a list row.
+  what it reads changes. Their functions read state and props, but not a handler's locals, and in a handler, effect, or
+  timer not its event, a ref or the clock either, since the list is worked out later. They can't be used inside a
+  list row.
 - A sort keeps equal items in order, as JS's does. It compares each item with those before it, so a list of n items
   takes up to n²/2 compares: fine for a list in the tens. It needs a compare function, except on a list of strings.
   `a.n - b.n || a.m - b.m` breaks a tie on another field.
