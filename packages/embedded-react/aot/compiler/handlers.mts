@@ -27,6 +27,7 @@ import {
 } from './diagnostics.mts';
 import type {SourcePosition} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
+import {fieldsUnder} from './list-items.mts';
 import {
   mix64Error,
   staticInt,
@@ -170,8 +171,13 @@ function appendedFields(
         visit(property.value, fieldPath);
         continue;
       }
+      // A field set to null or undefined, or an object of fields set to one, is left out.
       const name = fieldPath.join('.');
-      if (!struct.fields.some(field => field.key === name)) {
+      const isField = struct.fields.some(field => field.key === name);
+      if (
+        !isField &&
+        !(leavesOut(property.value) && fieldsUnder(struct, fieldPath).length)
+      ) {
         throw aotError(
           `AOT: list state "${listName}" has no field "${name}"`,
           "a list's fields are those of its initial items. Give one of them the field, and leave it out of the " +

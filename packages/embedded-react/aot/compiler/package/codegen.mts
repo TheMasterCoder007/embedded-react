@@ -1008,10 +1008,18 @@ export class Codegen {
     const struct = required(item.list, `the list of "${item.name}"`).struct;
     const flags = fields.filter(field => field.optional);
     if (fields.length && flags.length < fields.length) {
-      // Some field every item has: there whenever the row is.
-      return item.index && !item.guarded
-        ? this.load('bool', 1)
-        : this.rowPresent(item);
+      // Some field every item has: there whenever the row is. Past the end of an unguarded index, reading the
+      // field faults, as JS throws there.
+      if (item.index && !item.guarded) {
+        this.rowRead(
+          item,
+          rowIndexOf(struct, fields[0]),
+          fields[0].kind,
+          false,
+        );
+        return this.load('bool', 1);
+      }
+      return this.rowPresent(item);
     }
     if (!fields.length) {
       return this.rowPresent(item);

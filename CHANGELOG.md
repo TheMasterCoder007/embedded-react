@@ -29,6 +29,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   one 48 bytes. `ER_AOT_LIST_STR_CAP` now only sizes a string built from itself, like `setLog(log + '.')`, and a
   `slice` with a fixed length bounds one: `setLog(log.slice(-39) + '.')`.
 - Flow B: a field a list item leaves out reads as `undefined`, as in JS, so `{item.n}` shows nothing instead of `0`.
+- Flow B: a list's number field is a fraction when any initial item's value is one, instead of taking the first
+  item's kind.
 
 ### Fixed
 

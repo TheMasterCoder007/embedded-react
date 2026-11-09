@@ -74,7 +74,7 @@ function kindOf(value: unknown): ItemField['kind'] | null {
 }
 
 /**
- * Whether two kinds can share a field: a whole number and a fraction can, as the first item's kind.
+ * Whether two kinds can share a field: a whole number and a fraction can, as a fraction.
  *
  * @param first  The kind the field has.
  * @param other  Another item's kind.
@@ -92,7 +92,7 @@ const kindsAgree = (
 /**
  * Works out the fields of a list's items from its initial items. Objects take the union of their fields, nested
  * objects flattened into dotted paths; a field some item leaves out, or sets to null, is optional. Plain values
- * (numbers, strings or booleans) are one field. A field takes the kind of the first item that has it.
+ * (numbers, strings or booleans) are one field. A number field is a fraction when any item's value is one.
  *
  * @param items  The initial items.
  * @param what  The list, for errors: `list state "items"`.
@@ -110,7 +110,7 @@ export function inferItemStruct(items: unknown, what: string): ItemStruct {
     );
   }
 
-  // Plain values: one field, of the first value's kind.
+  // Plain values: one field, of the values' kind.
   if (!items.some(isPlainObject)) {
     const kind = kindOf(items[0]);
     if (
@@ -123,14 +123,17 @@ export function inferItemStruct(items: unknown, what: string): ItemStruct {
       );
     }
 
-    return {fields: [{key: '', path: [], kind}], plain: true};
+    const widened = items.some(item => kindOf(item) === 'float')
+      ? 'float'
+      : kind;
+    return {fields: [{key: '', path: [], kind: widened}], plain: true};
   }
 
   if (!items.every(isPlainObject)) {
     throw aotError(`AOT: ${what} elements must all be objects`, shapeHint);
   }
 
-  // Each field in the order it first appears, typed by the first item with a value for it.
+  // Each field in the order it first appears, typed by the items' values.
   const fields = new Map<string, ItemField>();
   const objects = new Set<string>();
   const nulls = new Set<string>();
@@ -187,6 +190,8 @@ export function inferItemStruct(items: unknown, what: string): ItemStruct {
           `AOT: field "${name}" of ${what} is a ${field.kind === 'bool' ? 'boolean' : field.kind === 'string' ? 'string' : 'number'} in one item and not in another`,
           shapeHint,
         );
+      } else if (kind === 'float') {
+        field.kind = 'float';
       }
     }
   };

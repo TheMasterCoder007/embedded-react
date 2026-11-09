@@ -84,11 +84,15 @@ describe('item fields', () => {
     expect(itemValueAt({pos: {x: null}}, x).present).toBe(false);
   });
 
-  it('keeps plain values as one field, typed by the first', () => {
+  it('keeps plain values as one field, a fraction when any value is one', () => {
     expect(inferItemStruct([1, 2.5], 'list')).toEqual({
-      fields: [{key: '', path: [], kind: 'int'}],
+      fields: [{key: '', path: [], kind: 'float'}],
       plain: true,
     });
+    expect(inferItemStruct([1, 2], 'list').fields[0].kind).toBe('int');
+    expect(inferItemStruct([{n: 1}, {n: 2.6}], 'list').fields[0].kind).toBe(
+      'float',
+    );
     expect(inferItemStruct([true, false], 'list').fields[0].kind).toBe('bool');
   });
 
@@ -139,6 +143,23 @@ function Names({list}) { return <View>{list.map((task, index) => <Name key={inde
       before,
     );
     expect(compiles(source)).not.toThrow();
+  });
+
+  it('leaves out every field of a nested object an append sets to null', () => {
+    const source = appOf(
+      '  const [items, setItems] = useState([{t: "a", pos: {x: 1, y: 2}}]);',
+      '<Pressable onPress={() => setItems([...items, {t: "b", pos: null}, {t: "c", pos: undefined}])}>' +
+        '<Text>{items[0].pos.x}</Text></Pressable>',
+    );
+    expect(compiles(source)).not.toThrow();
+    expect(
+      compiles(
+        appOf(
+          '  const [items, setItems] = useState([{t: "a"}]);',
+          '<Pressable onPress={() => setItems([...items, {t: "b", pos: null}])}><Text>{items.length}</Text></Pressable>',
+        ),
+      ),
+    ).toThrow('list state "items" has no field "pos"');
   });
 
   it('refuses holes and spreads in an array built in render', () => {

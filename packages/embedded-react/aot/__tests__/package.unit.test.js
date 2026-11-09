@@ -1273,6 +1273,10 @@ export function App() {
     const plain = updateOf('items[at].t');
     expect(plain).toContain('ROWGET');
     expect(plain).not.toContain('LEN');
+    // A test of whether a field is there reads it first, so it faults past the end as well.
+    const tested = updateOf("items[at].t === undefined ? 'gone' : 'here'");
+    expect(tested).toContain('ROWGET');
+    expect(tested).not.toContain('LEN');
     const guarded = updateOf('items[at]?.t');
     expect(guarded).toEqual(
       expect.arrayContaining(['LEN', 'LT', 'LE', 'ROWGET']),
