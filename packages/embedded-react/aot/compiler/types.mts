@@ -28,6 +28,7 @@ import type {IrExpr} from './ir/expressions.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrStaticDecl} from './ir/functions.mts';
 import type {IrSlotStore, IrSource} from './ir/source.mts';
+import type {IrStmt} from './ir/statements.mts';
 import type {SlotWidths, WideSlot} from './ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -81,6 +82,10 @@ export interface Local extends SlotValue {
   list?: ListState;
   /** A list row's item: the row it is. */
   row?: number;
+  /** A row of a filtered or sorted list: its row and index count in this list, which holds the row of `list`. */
+  through?: ListState;
+  /** The row a filter or sort visits, which reads no state. */
+  visit?: boolean;
   /** `list[i]`: the row, worked out at run time. */
   index?: IrExpr;
   /** `list[i]` reads as undefined past the list's end instead of faulting, as `list[i]?.field` does. */
@@ -130,6 +135,30 @@ export interface ListState extends StateSlot {
   capacity: number;
   /** A constant array read by a runtime index: its rows are set at boot and never change. */
   constant?: boolean;
+  /** A list filtered or sorted in render: it holds row numbers of its source, which the update rebuilds. */
+  derived?: DerivedList;
+}
+
+/** One `filter` or `sort` of a list, and the environment its function is read in. */
+export interface OrderStep {
+  kind: 'filter' | 'sort';
+  /** The function it is given, if any. */
+  callback: t.Node | undefined;
+  /** The call, for errors: `items.filter`. */
+  what: string;
+  environment?: Env;
+}
+
+/** How a list filtered or sorted in render is worked out from its source. */
+export interface DerivedList {
+  /** The list whose rows it holds: a list state, or a constant array. */
+  source: ListState;
+  /** The filters and sorts, in the order they run, which a list worked out from this one goes on from. */
+  steps: OrderStep[];
+  /** Rebuilds it: the rows the filters keep, in the order the sorts leave them. */
+  rebuild: IrStmt[];
+  /** The tests and compare functions the rebuild works out, for what it reads. */
+  tests: IrExpr[];
 }
 
 export type StateRecord = ScalarState | ListState;
@@ -332,6 +361,8 @@ export interface Env {
   children?: ChildrenSlot | null;
   /** Inside a list row, whose conditionals build every branch and toggle it. */
   inListRow?: boolean;
+  /** Lowering a handler, an effect or a timer, which runs apart from the render. */
+  outsideRender?: boolean;
   /** Callback props of the component being inlined. */
   functionProps?: Map<string, FunctionProp>;
   /** Namespaces the handlers an inlined component instance emits. */
@@ -349,6 +380,8 @@ export interface Env {
   animationLocals?: Map<string, t.Expression>;
   /** Constant arrays read by a runtime index, each kept as a list whose rows never change. */
   constantLists?: Map<unknown[], ListState>;
+  /** Lists filtered or sorted in render, by the call that makes them, then the component instance and the list it starts from. */
+  derivedLists?: Map<t.Node, Map<string, ListState>>;
 }
 
 /**

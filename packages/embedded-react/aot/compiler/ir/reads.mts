@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import type {Local, StateRecord} from '../types.mts';
+import type {ListState, Local, StateRecord} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrNode, IrPropValue, IrShow} from './nodes.mts';
 import type {IrSource} from './source.mts';
@@ -45,6 +45,8 @@ interface ReadsFound {
   untracked: boolean;
   /** A value worked out at boot, which never changes after it. */
   boot?: boolean;
+  /** The filtered and sorted lists walked so far, whose rebuilds read their own rows. */
+  derived?: Set<ListState>;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -59,10 +61,11 @@ interface ReadsFound {
  * @param found  What the walk has found.
  */
 function readLocal(local: Local, found: ReadsFound): void {
+  if (local.visit) return;
   if (local.list) {
-    // A constant array's rows never change.
-    if (!local.list.constant) {
-      found.states.add(local.list);
+    readList(local.list, found);
+    if (local.through) {
+      readList(local.through, found);
     }
     if (local.index) {
       readExpr(local.index, found);
@@ -71,6 +74,27 @@ function readLocal(local: Local, found: ReadsFound): void {
     readSource(local.source, found);
   } else {
     found.untracked = true;
+  }
+}
+
+/**
+ * Records what reading a list depends on. A constant array's rows never change; a filtered or sorted list is
+ * rebuilt from what its source and its tests read, which a state write flags.
+ *
+ * @param list  The list.
+ * @param found  What the walk has found.
+ */
+function readList(list: ListState, found: ReadsFound): void {
+  if (list.derived) {
+    found.derived ??= new Set();
+    if (found.derived.has(list)) return;
+    found.derived.add(list);
+    readList(list.derived.source, found);
+    list.derived.tests.forEach(test => readExpr(test, found));
+    return;
+  }
+  if (!list.constant) {
+    found.states.add(list);
   }
 }
 
@@ -140,7 +164,7 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
       readLocal(expression.local, found);
       return;
     case 'listLength':
-      found.states.add(expression.list);
+      readList(expression.list, found);
       return;
     case 'itemField':
     case 'itemPresent':
@@ -174,6 +198,10 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
       readExpr(expression.left, found);
       readExpr(expression.right, found);
       return;
+    case 'stringOrder':
+      readExpr(expression.left, found);
+      readExpr(expression.right, found);
+      return;
     case 'stringIncludes':
       readExpr(expression.haystack, found);
       readExpr(expression.needle, found);
@@ -194,7 +222,7 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
  */
 function readShow(show: IrShow, found: ReadsFound): void {
   if (show.kind === 'rowInUse') {
-    found.states.add(show.list);
+    readList(show.list, found);
     return;
   }
 
@@ -334,6 +362,32 @@ export function expressionReads(expression: IrExpr): StateReads {
   const found: ReadsFound = {states: new Set(), untracked: false};
   readExpr(expression, found);
   return readsOf(found);
+}
+
+/**
+ * What a filtered or sorted list's rebuild reads.
+ *
+ * @param list  The list.
+ *
+ * @returns Its reads.
+ */
+export function listReads(list: ListState): StateReads {
+  const found: ReadsFound = {states: new Set(), untracked: false};
+  readList(list, found);
+  return readsOf(found);
+}
+
+/**
+ * The state a filtered or sorted list's rebuild reads, even beside something untracked.
+ *
+ * @param list  The list.
+ *
+ * @returns The state.
+ */
+export function listStates(list: ListState): Set<StateRecord> {
+  const found: ReadsFound = {states: new Set(), untracked: false};
+  readList(list, found);
+  return found.states;
 }
 
 /**

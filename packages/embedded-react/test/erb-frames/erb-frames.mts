@@ -274,6 +274,44 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '32,20 32,20 84,20 188,20 136,20 202,107 32,20 32,20 84,20 84,47',
   },
+  {
+    name: 'list-order',
+    file: fixture('list-order'),
+    screen: PORTRAIT,
+    listCap: 6,
+  },
+  // Counts high first, then tasks by n, which keeps cook before Read.
+  {
+    name: 'list-order-sorts',
+    file: fixture('list-order'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '136,48 136,20',
+  },
+  // Odd counts, done tasks first and the rest by n, highest first, then clean out the done ones.
+  {
+    name: 'list-order-filters',
+    file: fixture('list-order'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,48 84,48 84,20',
+  },
+  // Tasks by title, with < and >.
+  {
+    name: 'list-order-abc',
+    file: fixture('list-order'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,20',
+  },
+  // Min up to 3, flip wash in the first column and Read in the second, then add twice (the second is dropped).
+  {
+    name: 'list-order-render',
+    file: fixture('list-order'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,20 32,20 32,20 44,101 120,101 32,48 32,48',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

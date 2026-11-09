@@ -1564,14 +1564,6 @@ export function App() {
 
   it('refuses what it cannot lower', () => {
     refuses(
-      'setItems(items.filter(item => item.done))',
-      'only items.filter((_, i) => i !== n) is supported on a list',
-    );
-    refuses(
-      'setItems(items.filter((_, i) => i !== i + picked))',
-      'only items.filter((_, i) => i !== n) is supported on a list',
-    );
-    refuses(
       'setItems(items.toSpliced(picked, 2))',
       'only items.toSpliced(n, 1) is supported on a list',
     );
@@ -1630,6 +1622,207 @@ export function App() {
     refuses(
       'setItems(items.reverse())',
       'unsupported list operation on "items"',
+    );
+  });
+});
+
+describe('list order', () => {
+  const CAPS = {...SCREEN, listCap: 4};
+
+  /** An app whose one button runs a handler, and which renders what the body and JSX give it. */
+  const orderApp = (handler, body = '', jsx = '') => `
+import {useMemo, useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+export function App() {
+  const [items, setItems] = useState([{title: 'b', n: 2, done: false}, {title: 'a', n: 1, done: true}]);
+  const [names, setNames] = useState(['b', 'a']);
+  const [min, setMin] = useState(0);
+  ${body}
+  return (
+    <View>
+      <Pressable onPress={() => ${handler}}><Text>edit</Text></Pressable>
+      {items.map((item, index) => <Text key={index}>{item.title} {item.n}</Text>)}
+      ${jsx}
+    </View>
+  );
+}`;
+
+  const compiled = (handler, body, jsx) =>
+    functionsOf(
+      compilePackage(orderApp(handler, body, jsx), 'app', CAPS).program,
+    );
+
+  /** The instructions of the edit button's handler. */
+  const handlerOps = handler =>
+    compiled(handler)[0].ops.map(instruction => instruction.name);
+
+  /** The instructions of the update. */
+  const updateOps = (body, jsx) =>
+    compiled('setMin(min + 1)', body, jsx)
+      .find(compiled => compiled.kind === FunctionKind.update)
+      .ops.map(instruction => instruction.name);
+
+  const refuses = (handler, message, body, jsx) =>
+    expect(() =>
+      compilePackage(orderApp(handler, body, jsx), 'app', CAPS),
+    ).toThrow(message);
+
+  it('filters in a setter by removing rows, last to first', () => {
+    for (const handler of [
+      'setItems(items.filter(item => !item.done))',
+      'setItems(prev => prev.filter((item, i) => item.n >= min && i < 3))',
+      "setNames(names.filter(name => name !== 'a'))",
+    ]) {
+      const ops = handlerOps(handler);
+      const loop = ops.slice(ops.indexOf('LOOPSET'), ops.indexOf('LOOP') + 1);
+      expect(loop).toContain('REMOVE');
+      expect(ops.filter(name => name === 'LOOPSET')).toHaveLength(1);
+    }
+  });
+
+  it('sorts in a setter by swapping rows in two loops', () => {
+    const ops = handlerOps('setItems(items.toSorted((a, b) => a.n - b.n))');
+    expect(ops.filter(name => name === 'LOOPSET')).toHaveLength(2);
+    expect(ops.filter(name => name === 'LOOP')).toHaveLength(2);
+    // title, n and done, each read from both rows and written back crosswise; the title goes through a buffer.
+    expect(ops.filter(name => name === 'ROWSET')).toHaveLength(6);
+    expect(ops).toEqual(expect.arrayContaining(['SETS', 'GETS']));
+    for (const handler of [
+      'setItems([...items].sort((a, b) => b.n - a.n))',
+      'setItems(items.slice().sort((a, b) => a.n - b.n))',
+      'setItems(items.filter(item => item.n > 0).sort((a, b) => a.n - b.n))',
+    ]) {
+      expect(
+        handlerOps(handler).filter(name => name === 'LOOPSET').length,
+      ).toBeGreaterThan(1);
+    }
+  });
+
+  it('orders strings with SCMP', () => {
+    for (const handler of [
+      'setItems(items.toSorted((a, b) => a.title.localeCompare(b.title)))',
+      'setItems(items.toSorted((a, b) => (a.title < b.title ? -1 : 1)))',
+      'setNames(names.toSorted())',
+      "setMin(names[0] >= 'b' ? 1 : 0)",
+    ]) {
+      expect(handlerOps(handler)).toContain('SCMP');
+    }
+  });
+
+  it('keeps the number an || between compare results gives', () => {
+    // A tie on done falls through to n, whose sign decides, as JS gives the number and not its truth.
+    expect(
+      handlerOps(
+        'setItems(items.toSorted((a, b) => (b.done ? 1 : 0) - (a.done ? 1 : 0) || a.n - b.n))',
+      ),
+    ).toEqual(
+      handlerOps(
+        'setItems(items.toSorted((a, b) => (b.done ? 1 : 0) - (a.done ? 1 : 0) ? (b.done ? 1 : 0) - (a.done ? 1 : 0) : a.n - b.n))',
+      ),
+    );
+  });
+
+  it('rebuilds a list filtered or sorted in render, and reads its rows through it', () => {
+    for (const [body, jsx] of [
+      [
+        '',
+        '{items.filter(item => item.n > min).map(item => <Text key={item.title}>{item.title}</Text>)}',
+      ],
+      [
+        'const visible = items.toSorted((a, b) => a.n - b.n);',
+        '{visible.map(item => <Text key={item.title}>{item.title}</Text>)}',
+      ],
+      [
+        'const visible = useMemo(() => [...items].sort((a, b) => a.n - b.n), [items]);',
+        '<Text>{visible[0]?.title}</Text>',
+      ],
+    ]) {
+      const ops = updateOps(body, jsx);
+      expect(ops.indexOf('CLEAR')).toBeLessThan(ops.indexOf('APPEND'));
+      // The rebuild comes first, so what reads the list sees it rebuilt.
+      expect(ops.indexOf('APPEND')).toBeLessThan(ops.indexOf('COMMIT'));
+    }
+    const counted = updateOps(
+      '',
+      '<Text>{items.filter(item => item.done).length} done</Text>',
+    );
+    expect(counted).toEqual(expect.arrayContaining(['CLEAR', 'APPEND', 'LEN']));
+  });
+
+  it('gives each instance of a component its own list, and passes one built inline', () => {
+    const rowsApp = rows => `
+import {useState} from 'react';
+import {View, Pressable, Text} from 'embedded-react';
+function Rows({items, min}) {
+  return <View>{items.filter(item => item.n >= min).map((item, i) => <Text key={i}>{item.title}</Text>)}</View>;
+}
+export function App() {
+  const [items, setItems] = useState([{title: 'b', n: 2}, {title: 'a', n: 1}]);
+  const [low, setLow] = useState(0);
+  return <View><Pressable onPress={() => setLow(low + 1)}><Text>go</Text></Pressable>${rows}</View>;
+}`;
+    const rebuilds = rows =>
+      functionsOf(compilePackage(rowsApp(rows), 'app', CAPS).program)
+        .find(compiled => compiled.kind === FunctionKind.update)
+        .ops.filter(instruction => instruction.name === 'CLEAR').length;
+    expect(
+      rebuilds(
+        '<Rows items={items} min={low} /><Rows items={items} min={2} />',
+      ),
+    ).toBe(2);
+    // The inline filter, then the component's own on top of it.
+    expect(
+      rebuilds('<Rows items={items.filter(item => item.n > 0)} min={low} />'),
+    ).toBe(2);
+  });
+
+  it('refuses what it cannot lower', () => {
+    refuses(
+      'setItems(items.sort((a, b) => a.n - b.n))',
+      'sort() sorts the list itself',
+    );
+    refuses(
+      'setItems(items.filter(item => item.n > items[0].n))',
+      "items.filter's function can't read other items of items",
+    );
+    refuses(
+      'setItems(items.toSorted())',
+      'items.toSorted() needs a compare function',
+    );
+    refuses(
+      'setItems(items.toSorted((a, b) => a.title))',
+      "items.toSorted's compare function must give a number",
+    );
+    refuses(
+      'setItems(items.toSorted(a => a.n))',
+      'needs an inline compare function of two items',
+    );
+    refuses(
+      'setMin(min)',
+      'items.filter inside a list row',
+      '',
+      '{items.map((item, i) => <Text key={i}>{items.filter(other => other.n > item.n).length}</Text>)}',
+    );
+    refuses(
+      '{ const k = 1; setMin(items.filter(item => item.n > k).length); }',
+      "items.filter in a handler, effect or timer can't read the handler's locals",
+    );
+    // A handler's list is rebuilt later, in the update, which can't see its event, nor a ref or the clock as it was.
+    refuses(
+      'setMin(items.filter(item => item.n > Date.now()).length)',
+      "items.filter in a handler, effect or timer can't read the clock",
+    );
+    expect(() =>
+      compilePackage(
+        orderApp('setMin(min)').replace(
+          '<Pressable onPress',
+          '<Pressable onPressIn={e => setMin(items.filter(item => item.n > e.x).length)} onPress',
+        ),
+        'app',
+        CAPS,
+      ),
+    ).toThrow(
+      "items.filter in a handler, effect or timer can't read its event",
     );
   });
 });

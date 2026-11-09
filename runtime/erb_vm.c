@@ -806,6 +806,47 @@ static uint8_t* slot_data(const uint8_t* slot)
     return g_erb.arena + erb_u32(slot + ERB_SLOT_OFFSET_AT);
 }
 
+/**
+ * @brief A UTF-8 byte's rank in UTF-16 order. A character past the BMP, a surrogate pair in UTF-16, sorts before
+ *        U+E000 to U+FFFF there, though its lead byte is higher.
+ */
+static uint32_t utf16_rank(uint8_t byte)
+{
+    if (byte >= 0xF0u)
+    {
+        return byte - 2u;
+    }
+    if (byte >= 0xEEu)
+    {
+        return byte + 5u;
+    }
+    return byte;
+}
+
+/** @brief -1, 0 or 1 as @p first sorts before, with or after @p second by UTF-16 code unit, as JS orders strings. */
+static int32_t utf16_order(const char* first, const char* second)
+{
+    const uint8_t* first_byte = (const uint8_t*)first;
+    const uint8_t* second_byte = (const uint8_t*)second;
+    while (*first_byte && *first_byte == *second_byte)
+    {
+        first_byte++;
+        second_byte++;
+    }
+    if (*first_byte == *second_byte)
+    {
+        return 0;
+    }
+    /* The strings agree up to here, so both bytes start a character or both continue one; only a lead byte moves. */
+    const uint32_t first_rank = utf16_rank(*first_byte);
+    const uint32_t second_rank = utf16_rank(*second_byte);
+    if (first_rank != second_rank)
+    {
+        return first_rank < second_rank ? -1 : 1;
+    }
+    return *first_byte < *second_byte ? -1 : 1;
+}
+
 static void mark(const uint8_t* slot)
 {
     if (slot[ERB_SLOT_FLAGS_AT] & ERB_SLOT_TRACKED)
@@ -1338,6 +1379,9 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 break;
             case ERB_OP_SEQ:
                 registers[operand_a] = strcmp(string_of(registers[operand_b]), string_of(registers[operand_c])) == 0;
+                break;
+            case ERB_OP_SCMP:
+                registers[operand_a] = utf16_order(string_of(registers[operand_b]), string_of(registers[operand_c]));
                 break;
             case ERB_OP_SHAS:
                 registers[operand_a] = strstr(string_of(registers[operand_b]), string_of(registers[operand_c])) != NULL;

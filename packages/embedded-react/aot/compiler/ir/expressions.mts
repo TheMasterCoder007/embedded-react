@@ -279,6 +279,13 @@ export interface IrStringEquals extends IrTyped {
   right: IrExpr;
 }
 
+/** Strings' order by UTF-16 code unit: -1, 0 or 1. */
+export interface IrStringOrder extends IrTyped {
+  kind: 'stringOrder';
+  left: IrExpr;
+  right: IrExpr;
+}
+
 /** `haystack.includes(needle)` on strings, yielding a boolean. */
 export interface IrStringIncludes extends IrTyped {
   kind: 'stringIncludes';
@@ -339,6 +346,7 @@ export type IrExpr =
   | IrToInt
   | IrCompare
   | IrStringEquals
+  | IrStringOrder
   | IrStringIncludes
   | IrLogical
   | IrPick

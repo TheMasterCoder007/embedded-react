@@ -68,7 +68,12 @@ import {
   stateDrivenVectorOf,
   updatedVectorOf,
 } from '../ir/nodes.mts';
-import {expressionReads, nodeReads, vectorReads} from '../ir/reads.mts';
+import {
+  expressionReads,
+  listReads,
+  nodeReads,
+  vectorReads,
+} from '../ir/reads.mts';
 import {armedFlag} from '../ir/functions.mts';
 import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
 import {Arena} from './arena.mts';
@@ -1723,7 +1728,11 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     const vector = stateDrivenVectorOf(node);
     return vector ? [{node, vector}] : [];
   });
+  const derivedLists = lowering.app.state.flatMap(state =>
+    state.kind === 'list' && state.derived ? [state] : [],
+  );
   if (
+    !derivedLists.length &&
     !updated.length &&
     !setOnce.length &&
     !drawings.length &&
@@ -1782,6 +1791,13 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     }
     builder.branch('JMP', end);
     builder.place(real);
+  }
+
+  // The lists filtered or sorted in render, rebuilt first, as what reads them counts what they read.
+  for (const list of derivedLists) {
+    whenRead(listReads(list), () =>
+      codegen.scoped(() => codegen.statements(list.derived!.rebuild)),
+    );
   }
 
   // The branches a test no longer picks, destroyed before anything is built, with the conditionals in them.

@@ -28,6 +28,8 @@ import {
 import type {SourcePosition} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
+import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
+import type {ItemCallback, ListChain} from './list-order.mts';
 import {
   mix64Error,
   staticInt,
@@ -340,55 +342,6 @@ const noField = (listName: string, name: string): Error =>
       'others to make it optional.',
   );
 
-/** A function a list method is given, inline: its parameters and the value it returns. */
-interface ItemCallback {
-  itemName?: string;
-  indexName?: string;
-  body: t.Expression;
-}
-
-/**
- * The inline function a list method is given.
- *
- * @param node  The argument.
- * @param what  The call, for errors: `items.map`.
- *
- * @returns Its parameters and what it returns.
- */
-function itemCallback(node: t.Node | undefined, what: string): ItemCallback {
-  if (!isFn(node)) {
-    throw aotError(
-      `AOT: ${what} needs an inline function`,
-      `write the function in the call: ${what}((item, i) => …).`,
-    );
-  }
-  const names = node.params.map(parameter => {
-    if (parameter.type !== 'Identifier') {
-      throw aotError(
-        `AOT: ${what}'s function must name its parameters`,
-        'name the item and its index, e.g. (item, i) => …, and read fields as item.done.',
-      );
-    }
-    return parameter.name;
-  });
-  let {body} = node;
-  if (body.type === 'BlockStatement') {
-    const [statement] = body.body;
-    if (
-      body.body.length !== 1 ||
-      statement.type !== 'ReturnStatement' ||
-      !statement.argument
-    ) {
-      throw aotError(
-        `AOT: ${what}'s function must return a single expression`,
-        'return one value, e.g. (item, i) => (i === n ? {...item, done: true} : item).',
-      );
-    }
-    body = statement.argument;
-  }
-  return {itemName: names[0], indexName: names[1], body};
-}
-
 /**
  * A list row index: a whole number.
  *
@@ -413,11 +366,10 @@ function rowIndexOf(node: t.Node, listName: string, environment: Env): IrExpr {
  * The index `items.filter((_, i) => i !== n)` removes: n.
  *
  * @param callback  The filter's function.
- * @param listName  The list, for errors.
  *
- * @returns n.
+ * @returns n, or null when the filter is no such test.
  */
-function filteredIndex(callback: ItemCallback, listName: string): t.Node {
+function filteredIndex(callback: ItemCallback): t.Node | null {
   const {itemName, indexName, body} = callback;
   const isIndex = (node: t.Node): boolean =>
     node.type === 'Identifier' && node.name === indexName;
@@ -432,13 +384,7 @@ function filteredIndex(callback: ItemCallback, listName: string): t.Node {
           : null
       : null;
   const names = new Set([itemName, indexName].filter(Boolean) as string[]);
-  if (!other || mentions(other, names)) {
-    throw aotError(
-      `AOT: only ${listName}.filter((_, i) => i !== n) is supported on a list`,
-      'it removes item n. A filter on the items themselves is not lowered yet.',
-    );
-  }
-  return other;
+  return other && !mentions(other, names) ? other : null;
 }
 
 /** What an update reads: the list, and which item is the row it replaces. */
@@ -974,22 +920,28 @@ function lowerListOp(
     return statements;
   }
 
-  // filter((_, i) => i !== n) and toSpliced(n, 1) remove item n; toSpliced counts a negative n back from the end.
-  const filterArguments = listCall(nextList, listName, 'filter');
-  if (filterArguments) {
-    const index = filteredIndex(
-      itemCallback(filterArguments[0], `${listName}.filter`),
-      listName,
-    );
-    return [
-      {
-        kind: 'removeItem',
-        list: listState,
-        index: rowIndexOf(index, listName, environment),
-        negative: 'none',
-      },
-    ];
+  // filter((_, i) => i !== n) removes item n; other filters and sorts change the rows in place.
+  const chain = listChainOf(nextList);
+  if (chain?.base.type === 'Identifier' && chain.base.name === listName) {
+    const [step] = chain.steps;
+    const index =
+      chain.steps.length === 1 && step.kind === 'filter'
+        ? filteredIndex(itemCallback(step.callback, step.what))
+        : null;
+    if (index) {
+      return [
+        {
+          kind: 'removeItem',
+          list: listState,
+          index: rowIndexOf(index, listName, environment),
+          negative: 'none',
+        },
+      ];
+    }
+    return lowerListOrder(listState, listName, chain, environment);
   }
+
+  // toSpliced(n, 1) removes item n, counting a negative n back from the end.
   const splicedArguments = listCall(nextList, listName, 'toSpliced');
   if (splicedArguments) {
     const [start, count] = splicedArguments;
@@ -1068,8 +1020,53 @@ function lowerListOp(
 
   throw aotError(
     `AOT: unsupported list operation on "${listName}"`,
-    `use [...${listName}, item], ${listName}.slice(0, n), [], ${listName}.filter((_, i) => i !== n), ` +
-      `${listName}.toSpliced(n, 1), ${listName}.map(item => …) or ${listName}.with(n, item).`,
+    `use [...${listName}, item], ${listName}.slice(0, n), [], ${listName}.filter(item => …), ` +
+      `${listName}.toSorted((a, b) => …), ${listName}.toSpliced(n, 1), ${listName}.map(item => …) or ` +
+      `${listName}.with(n, item).`,
+  );
+}
+
+/**
+ * Lowers filters and sorts as a list's next value: each changes the rows in place, a filter dropping the rows it
+ * doesn't keep and a sort moving them, equal ones kept in order.
+ *
+ * @param listState  The list.
+ * @param listName  What the setter's argument calls it.
+ * @param chain  The filters and sorts.
+ * @param environment  The expression environment.
+ *
+ * @returns The statements.
+ */
+function lowerListOrder(
+  listState: ListState,
+  listName: string,
+  chain: ListChain,
+  environment: Env,
+): IrStmt[] {
+  // The rows move as the steps run, so a read of another row could see a different one.
+  for (const step of chain.steps) {
+    if (readsRowsOf(step.callback, listState, listName, environment)) {
+      throw aotError(
+        `AOT: ${step.what}'s function can't read other items of ${listName}`,
+        'its items move as it runs, so a read of another one could see a different item. Read it into a ' +
+          `const before the setter: const first = ${listName}[0].n.`,
+      );
+    }
+  }
+  return orderStatements(
+    listState,
+    chain.steps.map(step => ({...step, environment})),
+    {
+      itemAt: position =>
+        ({
+          name: `${listName}[]`,
+          struct: listState.struct,
+          list: listState,
+          index: {kind: 'local', local: position, type: INT},
+        }) as Local,
+      listName,
+      source: listState,
+    },
   );
 }
 
@@ -1612,10 +1609,13 @@ function inlineHelperCall(
  */
 function lowerHandlerExprImpl(
   expression: t.Expression,
-  environment: Env,
+  handlerEnvironment: Env,
   state: StateTable,
   context: StatementContext,
 ): IrStmt[] {
+  const environment = handlerEnvironment.outsideRender
+    ? handlerEnvironment
+    : {...handlerEnvironment, outsideRender: true};
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
   if (
     expression.type === 'CallExpression' &&
@@ -2000,10 +2000,13 @@ const lowerHandlerExpression = withLoc(lowerHandlerExprImpl);
  */
 export function lowerStmts(
   statements: t.Statement[],
-  environment: Env,
+  bodyEnvironment: Env,
   state: StateTable,
   context: StatementContext,
 ): IrStmt[] {
+  let environment = bodyEnvironment.outsideRender
+    ? bodyEnvironment
+    : {...bodyEnvironment, outsideRender: true};
   const lowered: IrStmt[] = [];
   // What each statement lowers to is marked with where it is, once the next one starts.
   let from = 0;

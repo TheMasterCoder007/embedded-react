@@ -91,6 +91,19 @@ while the code that breaks it is still one line.
   into a `const` before the setter. A field set to `undefined` is left out from then on. `with` past the end stops
   the app with the error screen, as JS throws there. `with` counts a negative n back from the end, but
   `items[n]` doesn't, so `items.with(n, {...items[n], …})` with a negative n stops the app too.
+- A list's setter also takes `items.filter(item => …)` and a sort: `items.toSorted((a, b) => …)`, `[...items].sort(…)`
+  or `items.slice().sort(…)`, one after another too. They change the rows in place, so their functions can't read
+  other items by index. `items.sort(…)` on the list itself is refused, as it would change state in place.
+- In render, `items.filter(…)` and a sort work inline before `.map`, `.length` or `[i]`, and in a `const` or a
+  `useMemo`. The list they make holds the row numbers they keep, as many as the source holds, and is rebuilt when
+  what it reads changes. Their functions read state and props, but not a handler's locals, and in a handler, effect, or
+  timer not its event, a ref or the clock either, since the list is worked out later. They can't be used inside a
+  list row.
+- A sort keeps equal items in order, as JS's does. It compares each item with those before it, so a list of n items
+  takes up to n²/2 compares: fine for a list in the tens. It needs a compare function, except on a list of strings.
+  `a.n - b.n || a.m - b.m` breaks a tie on another field.
+- Strings compare with `<`, `>`, `<=`, `>=` and `a.localeCompare(b)`, by UTF-16 code unit as JS's `<` orders them:
+  capitals before small letters, and no locale rules.
 - `.map` over an array built in render (inline, a `const`, a `useMemo`, or a prop) unrolls one row
   per element, and its elements can read state. Such an array can't be read by a runtime index.
   A list computed at runtime from anything else does not compile.
