@@ -45,6 +45,8 @@ export interface IrDeclareLocal {
   text?: IrText;
   /** Kept in a slot (a dep-driven effect's local its cleanup reads), so only assigned here. */
   isHoisted: boolean;
+  /** A whole-number `let` widened to hold what it is later set to (see compileWidened). */
+  widenedTo?: 'float' | 'int64';
 }
 
 /** `setInterval` / `setTimeout`: a timer whose callback is a function of its own. */
@@ -245,6 +247,39 @@ export interface IrReturn {
   kind: 'return';
 }
 
+/** `x = …`, `x += …` or `x++` on a `let` local declared before it. */
+export interface IrAssignLocal {
+  kind: 'assignLocal';
+  name: string;
+  value: IrExpr;
+  /** A string built from parts, which it is set to instead of the value. */
+  text?: IrText;
+}
+
+/** A `for` or `for…of` loop: its body runs at most `bound` times, and stops early once `test` fails. */
+export interface IrLoop {
+  kind: 'loop';
+  /** The most times the body runs. */
+  bound: number;
+  /** The local each visit's number, from 0, is read through, or null when nothing reads it. */
+  visit: Local | null;
+  /** Checked before each visit, the loop ending once it is false; null when every visit runs. */
+  test: IrExpr | null;
+  body: IrStmt[];
+  /** Runs after the body and on `continue`: a `for` loop's `i++`. */
+  step: IrStmt[];
+}
+
+/** `break` out of the innermost loop. */
+export interface IrBreak {
+  kind: 'break';
+}
+
+/** `continue` with the innermost loop's next visit. */
+export interface IrContinue {
+  kind: 'continue';
+}
+
 /** Marks a dep-driven effect's cleanup as due before its next run. */
 export interface IrArmCleanup {
   kind: 'armCleanup';
@@ -301,6 +336,10 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrIf
   | IrBlock
   | IrReturn
+  | IrAssignLocal
+  | IrLoop
+  | IrBreak
+  | IrContinue
   | IrArmCleanup
   | IrAnimationStart
   | IrUpdateVector

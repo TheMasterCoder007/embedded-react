@@ -118,6 +118,7 @@ import {
   slotOf,
   typeOfSlot,
   typeOfSlotValue,
+  wideSlotOf,
 } from './ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -1370,7 +1371,7 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         const assumed =
           (state.slotKind === 'int' || state.slotKind === 'i64') &&
           !state.isBoolean
-            ? assumedWide?.get(state.slotName)
+            ? wideSlotOf(assumedWide, state.slotName)
             : undefined;
         return {
           kind: 'state',
@@ -1388,7 +1389,7 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         const assumed =
           ref.kind === 'value' &&
           (ref.slotKind === 'int' || ref.slotKind === 'i64')
-            ? assumedWide?.get(ref.slotName)
+            ? wideSlotOf(assumedWide, ref.slotName)
             : undefined;
         return {
           kind: 'ref',
@@ -1418,8 +1419,8 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
 /**
  * Infers the slots that have to hold 64 bits: an int slot a value stored into is a 64-bit number, once the
  * slots found so far are taken to hold 64 bits too, until no more are found. Each one holds a time when a time
- * is stored into it, and only 64-bit numbers otherwise. A value whose typing fails leaves its slot as it is;
- * lowering it again reports the error.
+ * is stored into it, and only 64-bit numbers otherwise. A `let` local given a fraction holds a float instead. A
+ * value whose typing fails leaves its slot as it is; lowering it again reports the error.
  *
  * @param stores  Every value lowering stored into an int slot, or into a 64-bit one that holds no time yet.
  * @param wide  The slots already 64-bit.
@@ -1435,10 +1436,17 @@ export function inferWideSlots(
   while (grew) {
     grew = false;
     for (const store of stores) {
-      if (inferred.get(store.slot) === 'time') continue;
+      const width = inferred.get(store.slot);
+      if (width === 'time' || width === 'float') continue;
       assumedWide = inferred;
       try {
         const {type} = typeSource(store.value, store.math64);
+        // A `let` given a fraction holds floats.
+        if (store.local && type.kind === 'float') {
+          inferred.set(store.slot, 'float');
+          grew = true;
+          continue;
+        }
         if (type.kind !== 'int64') continue;
         const holds = type.source === 'time' ? 'time' : 'number';
         if (holds === 'time' || !inferred.has(store.slot)) {
@@ -1639,12 +1647,32 @@ function indexedListOf(
   node: t.MemberExpression | t.OptionalMemberExpression,
   environment: Env,
 ): ListState | null {
-  const {object} = node;
-  if (object.type === 'Identifier' && environment.state.has(object.name)) {
-    const record = environment.state.get(object.name)!;
+  return listValueOf(node.object, environment, node.property);
+}
+
+/**
+ * The list an expression names: a list state, a list worked out in render, or a constant array.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ * @param index  The index it is read by, when a constant one folds the read instead.
+ *
+ * @returns The list, or null when it is none.
+ */
+export function listValueOf(
+  node: t.Node,
+  environment: Env,
+  index?: t.Node,
+): ListState | null {
+  // A local hides a state of the same name.
+  if (node.type === 'Identifier' && environment.locals.has(node.name)) {
+    return null;
+  }
+  if (node.type === 'Identifier' && environment.state.has(node.name)) {
+    const record = environment.state.get(node.name)!;
     return record.kind === 'list' ? record : null;
   }
-  const derived = derivedListOf(object, environment);
+  const derived = derivedListOf(node, environment);
   if (derived) return derived;
   const scope = foldScope(environment, environment.constants ?? {});
   const folds = (part: t.Node): {value: unknown} | null => {
@@ -1655,11 +1683,9 @@ function indexedListOf(
       return null;
     }
   };
-  if (folds(node.property)) return null;
-  const array = folds(object)?.value;
-  return Array.isArray(array)
-    ? constantListOf(array, object, environment)
-    : null;
+  if (index && folds(index)) return null;
+  const array = folds(node)?.value;
+  return Array.isArray(array) ? constantListOf(array, node, environment) : null;
 }
 
 /**

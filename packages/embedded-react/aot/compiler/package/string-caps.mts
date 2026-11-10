@@ -255,7 +255,8 @@ function eachStatement(app: IrApp, visit: (statement: IrStmt) => void): void {
       node.kind === 'appendItem' ||
       node.kind === 'setRow' ||
       node.kind === 'splitItems' ||
-      node.kind === 'declareLocal'
+      node.kind === 'declareLocal' ||
+      node.kind === 'assignLocal'
     ) {
       visit(node as unknown as IrStmt);
     }
@@ -391,8 +392,10 @@ export function stringCaps(
           location,
         });
     } else if (
-      statement.kind === 'declareLocal' &&
-      statement.initializer.type.kind === 'string'
+      (statement.kind === 'declareLocal' &&
+        statement.initializer.type.kind === 'string') ||
+      (statement.kind === 'assignLocal' &&
+        statement.value.type.kind === 'string')
     ) {
       if (!locals.has(statement.name)) {
         locals.set(
@@ -400,10 +403,12 @@ export function stringCaps(
           newBuffer(`local "${statement.name}"`, [], undefined),
         );
       }
+      const value =
+        statement.kind === 'declareLocal'
+          ? statement.initializer
+          : statement.value;
       locals.get(statement.name)!.writes.push({
-        text: statement.text ?? {
-          parts: [{kind: 'value', value: statement.initializer}],
-        },
+        text: statement.text ?? {parts: [{kind: 'value', value}]},
         location,
       });
     }

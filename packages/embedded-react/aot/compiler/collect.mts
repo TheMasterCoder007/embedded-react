@@ -51,6 +51,7 @@ import {
 } from './static-eval.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
+import {wideSlotOf} from './ir/types.mts';
 import type {AotError} from './diagnostics.mts';
 import type {Screen} from './options.mts';
 import type {
@@ -400,7 +401,7 @@ function scalarStateOf(
 
   const widened =
     slotKind === 'int' && !isBoolean
-      ? (wide.get(slotName) ??
+      ? (wideSlotOf(wide, slotName) ??
         (initialWidth === 'number' ? 'number' : undefined))
       : undefined;
   if (widened) {

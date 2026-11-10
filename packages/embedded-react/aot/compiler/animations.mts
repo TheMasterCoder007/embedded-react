@@ -33,6 +33,7 @@ import {isPanCreate} from './pan-responder.mts';
 import {parseColorValue} from '../style-map.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
+import {wideSlotOf} from './ir/types.mts';
 import type {
   IrAnimation,
   IrAnimationStart,
@@ -301,7 +302,7 @@ export function collectRefs(
         const initialWidth = wideInitial(value);
         const widened =
           Number.isInteger(value) && initialWidth !== 'float'
-            ? (wide.get(slotName) ??
+            ? (wideSlotOf(wide, slotName) ??
               (initialWidth === 'number' ? 'number' : undefined))
             : undefined;
         const slotKind =

@@ -47,6 +47,8 @@ export interface IrSlotStore {
   value: IrSource;
   /** The value was typed with whole-number math in 64 bits. */
   math64: boolean;
+  /** A `let` local's, which a fraction widens to a float. */
+  local?: boolean;
 }
 
 /**

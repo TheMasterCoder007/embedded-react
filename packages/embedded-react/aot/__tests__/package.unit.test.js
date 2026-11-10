@@ -952,22 +952,25 @@ export function App() {
       functionRecord.ops
         .filter(instruction => instruction.name === 'EFFECT')
         .map(instruction => instruction.bx);
-    // Every pass queues the dep check; the first one, the first mount effect too.
+    // A pass queues the dep check unless one is waiting; the first one, the first mount effect too.
     expect(effects(update)).toEqual([2, 3]);
-    // The dep-driven mount effect asks for no update, so it queues the next one itself.
+    const queued = names(update).indexOf('EFFECT');
+    expect(names(update).slice(0, queued)).toContain('GET32');
+    // The dep-driven mount effect asks for no update, so it queues the next one itself. The last mount effect
+    // queues the first dep check, which then marks the checks as no longer waiting.
     expect(effects(firstMount)).toEqual([4]);
-    expect(effects(secondMount)).toEqual([]);
+    expect(effects(secondMount)).toEqual([2]);
     expect(names(secondMount)).toContain('NOT');
+    expect(names(check)[1]).toBe('SET32');
     // Each run clears the last run's timeout, then starts its own.
     expect(names(check).indexOf('TCLEAR')).toBeLessThan(
       names(check).indexOf('TSTART'),
     );
-    // A pass only the effect's write started returns before it sets anything.
-    expect(update.ops[0].name).toBe('JDIRTY');
 
+    // One batch of checks waiting, the rest of the one running, and the next mount effect.
     expect(
       regionsOf(program).find(region => region.kind === Region.events),
-    ).toEqual({kind: Region.events, count: 2, bytes: 64});
+    ).toEqual({kind: Region.events, count: 3, bytes: 96});
   });
 
   it('keeps an effect local its cleanup reads, the armed flag and the dep copy in slots', () => {
@@ -978,7 +981,7 @@ export function App() {
       {length: slots.length / SLOT_RECORD_BYTES},
       (_, index) => u16(slots.offset + index * SLOT_RECORD_BYTES),
     ).filter(word => !(word >> 8) && (word & 0xff) !== ValueType.node);
-    // The timeout's id, the armed flag and the copy of count, then the pending flag and the mount's next.
+    // The timeout's id, the armed flag and the copy of count, then the checks' waiting flag and the mount's next.
     expect(untracked.map(word => word & 0xff).sort()).toEqual(
       [
         ValueType.int,

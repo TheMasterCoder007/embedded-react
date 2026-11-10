@@ -94,6 +94,12 @@ export interface Local extends SlotValue {
   source?: IrSource;
   /** The typed expression it stands for, when every read of it is that expression (a memo, a prop). */
   expression?: IrExpr;
+  /** A `let`, which assignments may set: the key its width is inferred under (see compileWidened). */
+  assignable?: string;
+  /** A `for` loop's counter, which only the loop sets. */
+  counter?: boolean;
+  /** The lowest and highest value a `for` loop's counter takes, which bounds a loop inside it. */
+  range?: [number, number];
 }
 
 /** What a useState / useHostValue slot and a list state have in common. */
@@ -433,6 +439,8 @@ export interface StatementContext {
   usedReturn?: boolean;
   /** The body is a dep-driven effect. */
   dependencyDriven?: boolean;
+  /** The loops around the statements being lowered, innermost last: the lists each visits or is bounded by. */
+  loops?: ListState[][];
   /** The body's locals become slots named `<prefix><name>`, declared into `declarations`: its cleanup
    *  closure outlives the call. */
   hoist?: {prefix: string; declarations: IrStaticDecl[]};

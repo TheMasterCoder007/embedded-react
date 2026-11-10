@@ -108,7 +108,7 @@ function settleFunctions(output: Out, hasUpdate: boolean): void {
       } else if (statement.kind === 'if') {
         settleStmts(statement.consequent);
         settleStmts(statement.alternate ?? []);
-      } else if (statement.kind === 'block') {
+      } else if (statement.kind === 'block' || statement.kind === 'loop') {
         settleStmts(statement.body);
       }
     }

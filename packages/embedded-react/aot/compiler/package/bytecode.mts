@@ -73,6 +73,9 @@ const MAX_REGISTERS = 255;
 /** The longest branch forward, in words: a branch keeps its offset in a signed 16 bits. */
 const MAX_BRANCH_OFFSET = 0x7fff;
 
+/** The most loops in one function: the verifier's ERB_MAX_LOOPS. */
+const MAX_LOOPS = 32;
+
 /** The register types that take two cells. */
 const WIDE: ReadonlySet<RegisterType> = new Set(['int64', 'double', 'node']);
 
@@ -99,6 +102,8 @@ export class FunctionBuilder {
   private readonly taken: Register[] = [];
   /** Where each run of the code starts in the source, for the debug table. */
   private readonly lines: ProgramLine[] = [];
+  /** How many loops the function has so far. */
+  private loops = 0;
 
   readonly kind: number;
   private readonly what: string;
@@ -331,6 +336,12 @@ export class FunctionBuilder {
    * @param body  Lowers the body.
    */
   loop(counter: Register, bound: number, body: () => void): void {
+    if (++this.loops > MAX_LOOPS) {
+      throw aotError(
+        `AOT: ${this.what} has more than ${MAX_LOOPS} loops`,
+        'move some of them into another handler or effect, or combine loops over the same list.',
+      );
+    }
     this.abx('LOOPSET', counter.index, bound);
     const start = this.position;
     body();
