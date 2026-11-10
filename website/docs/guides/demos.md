@@ -91,8 +91,6 @@ the first render's state, hence the `pageRef` mirror.
   swipe track move with `marginLeft`/`marginTop`.
 - Module-scope constants fold to literals; `Math.*` is only available inside dynamic expressions,
   so the clock digits are computed inline from the `seconds` state.
-- A handler can call a helper as a statement but not read one mid-expression, which is why the
-  clamp is written out at both use sites rather than factored into a `clamp()`.
 - Font sizes come from the built-in font's baked set; the clock uses the largest, 48.
 
 [The AOT subset](./aot-subset.md) is the full list of rules.

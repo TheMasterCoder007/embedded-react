@@ -56,6 +56,7 @@ import {
   isPlainObject,
   itemReadOf,
 } from './list-items.mts';
+import {helperValueOf, returnedExpression} from './helper-values.mts';
 import {isObjectTree, propertyKey} from './records.mts';
 import {
   lowerTagTest,
@@ -2478,6 +2479,10 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         };
       }
 
+      // A helper used as a value: its body as one expression.
+      const helperValue = helperValueOf(node, environment);
+      if (helperValue) return helperValue;
+
       throw new Error(
         'AOT: unsupported call expression in a dynamic expression',
       );
@@ -2658,6 +2663,10 @@ export function buildsText(node: t.Node, environment: Env): boolean {
   ) {
     return true;
   }
+
+  // A helper that returns built text builds it.
+  const returned = returnedExpression(node, environment);
+  if (returned) return buildsText(returned.node, returned.environment);
 
   return (
     node.type === 'BinaryExpression' &&
@@ -3211,6 +3220,17 @@ function lowerTextParts(
       }
     });
     return {isString: true, parts};
+  }
+
+  // A helper that returns text on its only path is that text, built where it is called.
+  const returned = returnedExpression(node, environment);
+  if (returned) {
+    return lowerTextParts(
+      returned.node,
+      returned.environment,
+      foldScope(returned.environment, returned.environment.constants),
+      isOperand,
+    );
   }
 
   // String(x) prints x as an operand of a string `+` would.

@@ -381,6 +381,43 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '32,20 84,20 32,48 84,20',
   },
+  // Buttons: add, drop, fold, mode.
+  {name: 'logic', file: fixture('logic'), screen: PORTRAIT},
+  // Add five times: full at three, and the taps still counted after the helper returns early.
+  {
+    name: 'logic-add',
+    file: fixture('logic'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 32,20 32,20 32,20',
+  },
+  // Drop at zero returns early; add twice and drop once.
+  {
+    name: 'logic-drop',
+    file: fixture('logic'),
+    screen: PORTRAIT,
+    taps: '84,20 32,20 32,20 84,20',
+  },
+  // Add three times, then fold: case 3 falls through to case 2.
+  {
+    name: 'logic-fold',
+    file: fixture('logic'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 32,20 136,20',
+  },
+  // Mode three times: off, then run at 1, 2 and 3.
+  {
+    name: 'logic-mode',
+    file: fixture('logic'),
+    screen: PORTRAIT,
+    taps: '188,20 188,20 188,20',
+  },
+  // Mode four times: run at 3 returns early with a jam.
+  {
+    name: 'logic-jam',
+    file: fixture('logic'),
+    screen: PORTRAIT,
+    taps: '188,20 188,20 188,20 188,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

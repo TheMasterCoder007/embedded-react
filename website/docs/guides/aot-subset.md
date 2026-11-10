@@ -127,11 +127,15 @@ while the code that breaks it is still one line.
 
 An event handler body may contain `const` locals holding a number, a boolean, or a string, including one built
 with `+`, a template literal or the string helpers above; `if` and
-`else`; state setter calls; `ref.current` writes, including `+=` and `++`; `setInterval`,
-`setTimeout` and their clears; `updateVector` calls; and `.start()` or `.stop()` on any `Animated`
-animation or composition. Locals cannot be reassigned or destructured, and loops, `switch` and `try`
-are not lowered. A helper function called as a statement is inlined, but one used inside an
-expression is refused, so express a calculation as a chain of `const`s and ternaries.
+`else`; `switch`; `return`, early or not; state setter calls; `ref.current` writes, including `+=` and `++`;
+`setInterval`, `setTimeout` and their clears; `updateVector` calls; and `.start()` or `.stop()` on any `Animated`
+animation or composition. Locals cannot be reassigned or destructured, and loops and `try` are not lowered. A
+`break` must end its case.
+
+Helper functions are inlined where they are called, and a helper cannot call itself. One called as a statement may
+do anything a handler does, and its `return` leaves only the helper. One whose result is used, in a handler or in
+render, works out a value: it may declare `const`s, branch with `if` and `switch`, and must return a value on every
+path. Only a helper that returns on one path can build text with `+` or a template literal.
 `setInterval`/`setTimeout` callbacks must be inline functions. `updateText` is Flow A only.
 
 ## Styles and colours
@@ -321,8 +325,7 @@ follows what real apps hit.
 - Build for Flow B from the start, and let the compiler's messages shape the code.
 - Separate static from dynamic: `StyleSheet.create` for what never changes, a small inline overlay
   for what does.
-- Express handler logic as `const` chains. If a calculation wants a helper, call the helper as a
-  statement, or compute the value in render and pass it down.
+- Express a calculation as a helper that returns a value, or as `const` chains.
 - Reach for `<Dial>` and `<Arc>` before a `<Path>` that would need to change.
 - Use `visible` and `display: 'none'` to switch pages; they cost no node churn in either flow.
 

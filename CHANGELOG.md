@@ -27,6 +27,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   built and destructured in handlers and in render, and passed to components.
 - Flow B: object state of several shapes, told apart by a tag field like `kind`. A test on the tag narrows which
   fields can be read.
+- Flow B: `switch` and early `return` in handlers, effects and helpers, and helpers that return a value, in handlers
+  and in render. A helper that calls itself is still refused.
 
 ### Changed
 

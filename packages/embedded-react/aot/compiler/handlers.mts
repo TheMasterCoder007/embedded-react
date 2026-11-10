@@ -39,12 +39,13 @@ import {
 } from './records.mts';
 import type {ObjectBinding, RecordLowering} from './records.mts';
 import {narrowOn, narrowed} from './tagged-records.mts';
+import {exits, helperEnvironment, statementsOf} from './helper-values.mts';
+import {switchAsIf} from './switch-cases.mts';
 import {
   mix64Error,
   staticInt,
   isTime64,
   constDivisor,
-  lowerSourcedWide,
   lowerSource,
   slotValueOf,
   lowerExpr,
@@ -1084,17 +1085,6 @@ function lowerListOrder(
 }
 
 /**
- * Returns a statement node's body list: a BlockStatement's contents, or the lone statement wrapped.
- *
- * @param node  An `if` branch.
- *
- * @returns Its statements.
- */
-function blockList(node: t.Statement): t.Statement[] {
-  return node.type === 'BlockStatement' ? node.body : [node];
-}
-
-/**
  * Checks a value written to a numeric state or ref slot, whose kind came from its initial value. Every value
  * written to an int slot is recorded in environment.stores, from which the typing pass infers the slots that hold a
  * 64-bit timestamp, and compileWidened compiles again with those slots widened to 64 bits. A timestamp cannot
@@ -1538,8 +1528,9 @@ function lowerTimer(
 }
 
 /**
- * Inlines a handler-statement call to a helper / useCallback: binds the call's args to the helper's params
- * as locals, then lowers the helper body here in the current env/state/ctx. Guards against recursion.
+ * Inlines a handler-statement call to a helper / useCallback: binds the call's args to the helper's params, then
+ * lowers the helper body here in the current env/state/ctx. A `return` in it leaves the helper, which becomes a
+ * block.
  *
  * @param helperName  The helper's name.
  * @param helper  The helper.
@@ -1558,44 +1549,6 @@ function inlineHelperCall(
   state: StateTable,
   context: StatementContext,
 ): IrStmt[] {
-  // A helper already being inlined further up this call chain is recursive.
-  context.inlining = context.inlining ?? new Set();
-  if (context.inlining.has(helperName)) {
-    throw aotError(
-      `AOT: helper "${helperName}" is recursive — can't be inlined into a handler`,
-      'handlers are flattened to straight-line code, so a helper that calls itself (directly ' +
-        'or via another helper) has no base case to unroll. Move recursive logic out of the ' +
-        'handler, or precompute the value.',
-    );
-  }
-
-  // Bind each passed argument to its parameter as a local holding the argument's expression.
-  const locals = new Map<string, Local>(environment.locals);
-  helper.params.forEach((parameter, parameterIndex) => {
-    if (parameter.type !== 'Identifier') {
-      throw aotError(
-        `AOT: helper "${helperName}" must take simple (identifier) params to be inlined`,
-        'a helper called from a handler must use plain positional params (e.g. `(a, b) => …`) ' +
-          '— destructuring or default params in the signature are not supported.',
-      );
-    }
-
-    if (callArguments[parameterIndex]) {
-      const argumentExpression = lowerSourcedWide(
-        callArguments[parameterIndex],
-        environment,
-      );
-      locals.set(parameter.name, {
-        slotKind: argumentExpression.slotKind,
-        isBoolean: argumentExpression.isBoolean,
-        isLiteral: argumentExpression.isLiteral,
-        wide: argumentExpression.wide,
-        source: argumentExpression.source,
-        expression: argumentExpression.expression,
-      });
-    }
-  });
-
   // An expression body is a single statement.
   const body = helper.body;
   const statements: t.Statement[] =
@@ -1603,15 +1556,20 @@ function inlineHelperCall(
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
 
-  // The body is spliced into the caller, so reject its `return`, even in an effect body where one is allowed.
-  const outerAllowReturn = context.allowReturn;
-  context.inlining.add(helperName);
-  context.allowReturn = false;
+  const {helperList, usedReturn} = context;
+  context.helperList = statements;
+  context.usedReturn = false;
   try {
-    return lowerStmts(statements, {...environment, locals}, state, context);
+    const lowered = lowerStmts(
+      statements,
+      helperEnvironment(helperName, helper, callArguments, environment),
+      state,
+      context,
+    );
+    return context.usedReturn ? [{kind: 'block', body: lowered}] : lowered;
   } finally {
-    context.allowReturn = outerAllowReturn;
-    context.inlining.delete(helperName);
+    context.helperList = helperList;
+    context.usedReturn = usedReturn;
   }
 }
 
@@ -2037,10 +1995,10 @@ const lowerHandlerExpression = withLoc(lowerHandlerExprImpl);
  * Lowers a list of handler statements to the IR. This one-statement lowering runs event handlers, effect bodies
  * (useEffect), timer callbacks, and inlined helper calls. Supports: `const x = expr` (a local, visible to later
  * statements), `if (cond) {...} else {...}`, state setters (list setters included), ref writes, timers,
- * updateVector() and Animated.*(...).start(). `context` accumulates `stateChanged` (→ a trailing update)
- * and `usedReturn` (an early `return` was lowered, so the body needs a
- * function of its own). `context.allowReturn` and `context.bodyList` mark which body a `return` may exit and which
- * statement of it is the tail.
+ * updateVector() and Animated.*(...).start(), `switch` (as an if/else chain) and `return`. `context` accumulates
+ * `stateChanged` (→ a trailing update) and `usedReturn` (an early `return` was lowered, so the body or helper is a
+ * block it leaves, or an effect's function of its own). `context.bodyList` and `context.helperList` mark the
+ * statements whose tail `return` needs no jump.
  *
  * @param statements  The statements.
  * @param environment  The expression environment.
@@ -2264,24 +2222,26 @@ export function lowerStmts(
       continue;
     }
 
-    // A tail `return` is the cleanup, dropped on mount and armed if dep-driven; an earlier one is a guard.
+    // `switch` runs as an if/else chain; a bare block lowers in place, its locals its own.
+    if (statement.type === 'SwitchStatement') {
+      lowered.push(
+        ...lowerStmts([switchAsIf(statement)], environment, state, context),
+      );
+      continue;
+    }
+
+    if (statement.type === 'BlockStatement') {
+      lowered.push(...lowerStmts(statement.body, environment, state, context));
+      continue;
+    }
+
+    // An effect body's tail `return` is the cleanup, dropped on mount and armed if dep-driven; any other `return`
+    // leaves the body or helper, the value it gives unused.
     if (statement.type === 'ReturnStatement') {
-      if (!context.allowReturn) {
-        const error = aotError(
-          'AOT: `return` is only supported inside a useEffect body',
-          'a handler, timer, animation or inlined-helper body cannot return early — flatten the logic into if/else.',
-        );
-        if (statement.loc) {
-          error.aotLoc = statement.loc.start;
-        }
-
-        throw error;
-      }
-
-      const isTail =
-        statements === context.bodyList &&
-        statementIndex === statements.length - 1;
-      if (context.dependencyDriven && isFn(statement.argument) && !isTail) {
+      const argument = statement.argument;
+      const isLast = statementIndex === statements.length - 1;
+      const isBodyTail = isLast && statements === context.bodyList;
+      if (context.dependencyDriven && isFn(argument) && !isBodyTail) {
         const error = aotError(
           'AOT: a useEffect cleanup must be the last statement of the effect body',
           'a cleanup returned from inside an `if` would be dropped. Return `undefined` from the ' +
@@ -2295,12 +2255,27 @@ export function lowerStmts(
         throw error;
       }
 
-      if (isTail) {
-        if (context.cleanup && isFn(statement.argument)) {
-          context.cleanup.emit(statement.argument, environment);
-          lowered.push({kind: 'armCleanup', flag: context.cleanup.armed});
-        }
+      if (isBodyTail && context.cleanup && isFn(argument)) {
+        context.cleanup.emit(argument, environment);
+        lowered.push({kind: 'armCleanup', flag: context.cleanup.armed});
+        continue;
+      }
 
+      // `return setX(…)` still sets it.
+      if (
+        argument?.type === 'CallExpression' ||
+        argument?.type === 'AssignmentExpression' ||
+        argument?.type === 'UpdateExpression'
+      ) {
+        lowered.push(
+          ...lowerHandlerExpression(argument, environment, state, context),
+        );
+      }
+
+      if (
+        isLast &&
+        (statements === context.bodyList || statements === context.helperList)
+      ) {
         continue;
       }
 
@@ -2314,21 +2289,32 @@ export function lowerStmts(
       const test = lowerExprWide(statement.test, environment);
       // A test on a tagged object's tag narrows the fields each branch can read.
       const narrowing = narrowOn(statement.test, environment);
+      const consequentStatements = statementsOf(statement.consequent);
+      const alternateStatements = statement.alternate
+        ? statementsOf(statement.alternate)
+        : [];
       const consequent = lowerStmts(
-        blockList(statement.consequent),
+        consequentStatements,
         narrowed(environment, narrowing.whenTrue),
         state,
         context,
       );
       const alternate = statement.alternate
         ? lowerStmts(
-            blockList(statement.alternate),
+            alternateStatements,
             narrowed(environment, narrowing.whenFalse),
             state,
             context,
           )
         : null;
       lowered.push({kind: 'if', test, consequent, alternate});
+
+      // The statements after a branch that returns read what the other branch's test leaves.
+      if (exits(consequentStatements)) {
+        environment = narrowed(environment, narrowing.whenFalse);
+      } else if (exits(alternateStatements)) {
+        environment = narrowed(environment, narrowing.whenTrue);
+      }
       continue;
     }
 
@@ -2336,9 +2322,9 @@ export function lowerStmts(
     if (statement.type !== 'ExpressionStatement') {
       throw aotError(
         `AOT: unsupported statement "${statement.type}" in event handler`,
-        'a handler supports only `const x = …` locals, `if (…) { … } else { … }`, and ' +
+        'a handler supports only `const x = …` locals, `if`, `switch`, `return`, and ' +
           'expression statements (setters / ref writes / updateVector / Animated…start). Loops ' +
-          '(for/while), switch and try/catch are not lowered — precompute values or flatten the ' +
+          '(for/while) and try/catch are not lowered — precompute values or flatten the ' +
           'logic into if/else.',
       );
     }
@@ -2355,6 +2341,28 @@ export function lowerStmts(
 
   markLoc(lowered, from, location);
   return lowered;
+}
+
+/**
+ * Lowers a body of its own: a handler's, a timer's, an animation completion's or an effect cleanup's. A `return` in
+ * it leaves the block it becomes.
+ *
+ * @param statements  The body's statements.
+ * @param environment  The expression environment.
+ * @param state  The component's state table.
+ * @param context  The statement compiler's context, new for this body.
+ *
+ * @returns The lowered statements.
+ */
+export function lowerBody(
+  statements: t.Statement[],
+  environment: Env,
+  state: StateTable,
+  context: StatementContext,
+): IrStmt[] {
+  context.bodyList = statements;
+  const lowered = lowerStmts(statements, environment, state, context);
+  return context.usedReturn ? [{kind: 'block', body: lowered}] : lowered;
 }
 
 /**
@@ -2426,7 +2434,6 @@ export function lowerEffect(
     const context: StatementContext = {
       stateChanged: false,
       output,
-      allowReturn: true,
       bodyList: statements,
     };
     const lowered = lowerStmts(statements, environment, state, context);
@@ -2502,7 +2509,6 @@ export function lowerEffect(
   const context: StatementContext = {
     stateChanged: false,
     output,
-    allowReturn: true,
     bodyList: statements,
     dependencyDriven: true,
   };
@@ -2525,7 +2531,7 @@ export function lowerEffect(
           stateChanged: false,
           output,
         };
-        dependencyEffect.cleanup = lowerStmts(
+        dependencyEffect.cleanup = lowerBody(
           cleanupStatements,
           cleanupEnvironment,
           state,
@@ -2602,7 +2608,7 @@ export function lowerHandler(
   // The body re-applies state-dependent props once at its end if it set state.
   const context: StatementContext = {stateChanged: false, output};
   return {
-    body: lowerStmts(statements, handlerEnvironment, state, context),
+    body: lowerBody(statements, handlerEnvironment, state, context),
     updatesState: context.stateChanged,
   };
 }
@@ -2662,7 +2668,7 @@ export function lowerValueHandler(
       ? body.body
       : [{type: 'ExpressionStatement', expression: body}];
   return {
-    body: lowerStmts(statements, {...environment, locals}, state, context),
+    body: lowerBody(statements, {...environment, locals}, state, context),
     updatesState: context.stateChanged,
   };
 }

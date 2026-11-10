@@ -245,6 +245,8 @@ export class Codegen {
   private readonly inDoubles: boolean;
   private readonly input: InputText | null;
   private readonly onReturn: Label | null;
+  /** The end of each block being lowered, innermost last, which a `return` in it goes to. */
+  private readonly blockEnds: Label[] = [];
   private readonly row: Register | null;
   private readonly locals = new Map<string, LocalBinding>();
   /** A string register nothing writes, so it stays the empty string. Reserved, so no release reuses it. */
@@ -1583,12 +1585,22 @@ export class Codegen {
       case 'completeAfter':
         animationStatement(this, statement, this.program.animations);
         return;
-      case 'return':
-        if (!this.onReturn) {
-          throw new Error('AOT internal: a `return` outside an effect');
-        }
-        builder.branch('JMP', this.onReturn);
+      case 'block': {
+        const end = builder.label();
+        this.blockEnds.push(end);
+        this.statements(statement.body);
+        this.blockEnds.pop();
+        builder.place(end);
         return;
+      }
+      case 'return': {
+        const end = this.blockEnds.at(-1) ?? this.onReturn;
+        if (!end) {
+          throw new Error('AOT internal: a `return` outside a block or effect');
+        }
+        builder.branch('JMP', end);
+        return;
+      }
       case 'armCleanup':
         this.scoped(() =>
           this.set(
