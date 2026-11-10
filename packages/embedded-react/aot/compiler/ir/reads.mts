@@ -78,8 +78,8 @@ function readLocal(local: Local, found: ReadsFound): void {
 }
 
 /**
- * Records what reading a list depends on. A constant array's rows never change; a filtered or sorted list is
- * rebuilt from what its source and its tests read, which a state write flags.
+ * Records what reading a list depends on. A constant array's rows never change; a list worked out in render is
+ * rebuilt from what its source, if it has one, and its tests read, which a state write flags.
  *
  * @param list  The list.
  * @param found  What the walk has found.
@@ -89,7 +89,9 @@ function readList(list: ListState, found: ReadsFound): void {
     found.derived ??= new Set();
     if (found.derived.has(list)) return;
     found.derived.add(list);
-    readList(list.derived.source, found);
+    if (list.derived.source) {
+      readList(list.derived.source, found);
+    }
     list.derived.tests.forEach(test => readExpr(test, found));
     return;
   }

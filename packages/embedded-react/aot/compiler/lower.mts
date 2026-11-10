@@ -348,6 +348,7 @@ function lowerProgram(
     shadowedClock,
     constantLists: new Map(),
     derivedLists: new Map(),
+    splitLists: new Map(),
   };
 
   // A value worked out at boot lowers its slot against the app's environment.
@@ -435,6 +436,9 @@ function lowerProgram(
     ...output.childStateRecords,
     ...environment.constantLists!.values(),
     ...derivedLists,
+    ...[...environment.splitLists!.values()].flatMap(lists => [
+      ...lists.values(),
+    ]),
   ];
   checkStateRecords(stateRecords);
 

@@ -53,6 +53,7 @@ import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {
   IrAppendItem,
   IrFillOrder,
+  IrSplitItems,
   IrFilterItems,
   IrRemoveItem,
   IrSetRow,
@@ -1573,6 +1574,9 @@ export class Codegen {
       case 'fillOrder':
         this.scoped(() => this.fillOrder(statement));
         return;
+      case 'splitItems':
+        this.scoped(() => this.splitItems(statement));
+        return;
       case 'stopAnimations':
       case 'startAnimations':
       case 'startChain':
@@ -1848,6 +1852,34 @@ export class Codegen {
   }
 
   /**
+   * Fills a list of strings with a string's pieces. Without a limit it keeps every piece the list holds; without a
+   * separator, the whole string.
+   *
+   * @param statement  The split.
+   */
+  private splitItems(statement: IrSplitItems): void {
+    const {builder} = this;
+    const pool = this.listPool(statement.list).slot;
+    if (!statement.separator) {
+      // The string is read before the clear, which only resets the count, so a row of this list still reads.
+      const text = this.valueAs(statement.text, 'string');
+      builder.abx('CLEAR', 0, pool.index);
+      builder.abx('APPEND', text.index, pool.index);
+      return;
+    }
+    builder.abc(
+      'SPLIT',
+      this.valueAs(statement.text, 'string').index,
+      this.valueAs(statement.separator, 'string').index,
+      (statement.limit
+        ? this.valueAs(statement.limit, 'int')
+        : this.load('int', -1)
+      ).index,
+      pool.index,
+    );
+  }
+
+  /**
    * Fills a filtered or sorted list with the source rows its first filter keeps, or all of them.
    *
    * @param statement  The fill.
@@ -1855,7 +1887,10 @@ export class Codegen {
   private fillOrder(statement: IrFillOrder): void {
     const {builder} = this;
     const pool = this.listPool(statement.list).slot;
-    const source = required(statement.list.derived, 'a derived list').source;
+    const source = required(
+      statement.list.derived?.source,
+      'a filtered or sorted list',
+    );
     const name = required(statement.row.name, 'the visited row');
     builder.abx('CLEAR', 0, pool.index);
     this.eachRow(source, false, row => {

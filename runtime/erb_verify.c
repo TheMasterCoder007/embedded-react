@@ -2100,6 +2100,18 @@ static bool check_operands(const FunctionContext* context, uint32_t program_coun
             if (ERB_HIGH16(extension) || !writable(context, slot_of(context, extension_index, ERB_TYPE_LIST)))
                 BAD("list slot");
             break;
+        case ERB_OP_SPLIT:
+        {
+            slot = slot_of(context, extension_index, ERB_TYPE_LIST);
+            if (ERB_HIGH16(extension) || !writable(context, slot))
+                BAD("list slot");
+            const uint8_t* layout = erb_row(program, erb_u16(slot + ERB_SLOT_AUX_AT));
+            if (erb_u16(layout + ERB_ROW_FIELD_COUNT_AT) != 1u
+                || program->fields[erb_u16(layout + ERB_ROW_FIRST_AT) * ERB_FIELD_SIZE + ERB_FIELD_TYPE_AT]
+                       != ERB_TYPE_STRING)
+                BAD("SPLIT list isn't a list of strings");
+            break;
+        }
         case ERB_OP_ROWGET:
         case ERB_OP_ROWSET:
         {

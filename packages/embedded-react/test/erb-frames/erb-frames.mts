@@ -312,6 +312,29 @@ const SCENARIOS: Scenario[] = [
     listCap: 6,
     taps: '32,20 32,20 32,20 44,101 120,101 32,48 32,48',
   },
+  // Buttons: row 1 more, sep, limit; row 2 keep, last. A list holds 5 pieces.
+  {
+    name: 'list-split',
+    file: fixture('list-split'),
+    screen: PORTRAIT,
+    listCap: 5,
+  },
+  // Three more pieces, past the cap; then keep them, and the last.
+  {
+    name: 'list-split-more',
+    file: fixture('list-split'),
+    screen: PORTRAIT,
+    listCap: 5,
+    taps: '32,20 32,20 32,20 32,48 84,48',
+  },
+  // Split at "e", up to 2 pieces, and keep them; then at each character, with no limit.
+  {
+    name: 'list-split-sep',
+    file: fixture('list-split'),
+    screen: PORTRAIT,
+    listCap: 5,
+    taps: '84,20 136,20 32,48 84,20 136,20 136,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

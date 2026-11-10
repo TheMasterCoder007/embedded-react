@@ -881,6 +881,39 @@ static void test_bytecode(void)
         EXPECT(ERB_ERROR_BYTECODE, "REMOVE on a slot that isn't a list");
     }
     {
+        const uint8_t types[] = {ERB_TYPE_STRING, ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(LOADS, 0, STRING_OFF),
+                                 OP_ABX(LOADI, 1, -1),
+                                 OP_ABC(SPLIT, 0, 0, 1),
+                                 SLOT_ITEMS,
+                                 OP_ABC(RET, 0, 0, 0)};
+        TPkg* package = base();
+        package->rows[0] = (TRow){8, 0, 1};
+        package->fields[0] = (TField){ERB_TYPE_STRING, 7, 0};
+        package->field_count = 1;
+        set_code_types(FUNCTION_TIMER, types, 2, code, 5);
+        EXPECT(ERB_OK, "SPLIT into a list of strings");
+        base();
+        set_code_types(FUNCTION_TIMER, types, 2, code, 5);
+        EXPECT(ERB_ERROR_BYTECODE, "SPLIT into a list of numbers");
+        const uint32_t int_limit[] = {
+            OP_ABX(LOADS, 0, STRING_OFF), OP_ABC(SPLIT, 0, 0, 0), SLOT_ITEMS, OP_ABC(RET, 0, 0, 0)};
+        package = base();
+        package->rows[0] = (TRow){8, 0, 1};
+        package->fields[0] = (TField){ERB_TYPE_STRING, 7, 0};
+        package->field_count = 1;
+        set_code_types(FUNCTION_TIMER, types, 2, int_limit, 4);
+        EXPECT(ERB_ERROR_BYTECODE, "SPLIT with a string as its limit");
+        const uint32_t not_list[] = {OP_ABX(LOADS, 0, STRING_OFF),
+                                     OP_ABX(LOADI, 1, -1),
+                                     OP_ABC(SPLIT, 0, 0, 1),
+                                     SLOT_LABEL,
+                                     OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 2, not_list, 5);
+        EXPECT(ERB_ERROR_BYTECODE, "SPLIT into a slot that isn't a list");
+    }
+    {
         const uint32_t code[] = {OP_ABX(GET32, 0, 99), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code(FUNCTION_PRESS, code, 3);

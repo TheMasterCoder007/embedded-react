@@ -72,6 +72,15 @@ describe('string caps', () => {
     expect(caps.field('items', 'label')).toBe(15);
   });
 
+  it("fits a split's pieces to the string they come from", () => {
+    const caps = capsOf(
+      "  const [line, setLine] = useState('red,green');\n  const [words, setWords] = useState(['-']);\n  const parts = line.split(',');",
+      "<Pressable onPress={() => { setWords(line.split(',')); setLine('a,b,c,d,e'); }}><Text>{parts[0]}</Text></Pressable>",
+    );
+    expect(caps.field('words', '')).toBe(9);
+    expect(caps.field('split', '')).toBe(9);
+  });
+
   it('fits a local to its value, and a state to what it copies', () => {
     const caps = capsOf(
       "  const [count, setCount] = useState(0);\n  const [label, setLabel] = useState('');",

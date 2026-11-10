@@ -141,6 +141,17 @@ const STATIC_METHODS: Record<
       includesProblem(needle, rest.length > 0),
     apply: (value: string, needle: string) => value.includes(needle),
   },
+  split: {
+    receiver: 'string',
+    problem: (
+      _value: string,
+      separator: unknown,
+      limit: unknown,
+      ...rest: unknown[]
+    ) => splitProblem(separator, limit, rest.length > 0),
+    apply: (value: string, separator?: string, limit?: number) =>
+      value.split(separator as string, limit),
+  },
 };
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -258,6 +269,45 @@ export function includesProblem(
     return [
       'AOT: includes only searches for a string',
       'JS converts anything else to a string first; convert it yourself: name.includes(String(n)).',
+    ];
+  }
+
+  return null;
+}
+
+/**
+ * Why split can't take these arguments in a package, or null when it can: a string or no separator, and a whole
+ * number or no limit.
+ *
+ * @param separator  What it splits at.
+ * @param limit  The most pieces it keeps.
+ * @param hasMore  Whether the call gives more arguments.
+ *
+ * @returns The error's message and hint.
+ */
+export function splitProblem(
+  separator: unknown,
+  limit: unknown,
+  hasMore: boolean,
+): [string, string] | null {
+  if (hasMore) {
+    return [
+      'AOT: split takes a separator and a limit',
+      'pass at most two arguments: text.split(",", 3).',
+    ];
+  }
+
+  if (separator !== undefined && typeof separator !== 'string') {
+    return [
+      'AOT: split only splits at a string',
+      'a regular expression is not supported; split at a string such as ",".',
+    ];
+  }
+
+  if (limit !== undefined && !Number.isInteger(limit)) {
+    return [
+      "AOT: split's limit must be a whole number",
+      'pass a whole number, or leave it out to keep every piece.',
     ];
   }
 

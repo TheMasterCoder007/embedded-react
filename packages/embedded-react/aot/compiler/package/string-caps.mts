@@ -254,6 +254,7 @@ function eachStatement(app: IrApp, visit: (statement: IrStmt) => void): void {
       node.kind === 'setStateText' ||
       node.kind === 'appendItem' ||
       node.kind === 'setRow' ||
+      node.kind === 'splitItems' ||
       node.kind === 'declareLocal'
     ) {
       visit(node as unknown as IrStmt);
@@ -277,6 +278,7 @@ function eachStatement(app: IrApp, visit: (statement: IrStmt) => void): void {
     output.panResponders,
     output.vectors,
     app.boot,
+    app.state.map(state => (state.kind === 'list' ? state.derived : null)),
   ]);
 }
 
@@ -378,6 +380,16 @@ export function stringCaps(
           location,
         });
       }
+    } else if (statement.kind === 'splitItems') {
+      // A piece is at most the whole string.
+      const [field] = statement.list.struct.fields;
+      fields
+        .get(statement.list)
+        ?.get(field.key)
+        ?.writes.push({
+          text: {parts: [{kind: 'value', value: statement.text}]},
+          location,
+        });
     } else if (
       statement.kind === 'declareLocal' &&
       statement.initializer.type.kind === 'string'

@@ -24,6 +24,7 @@
 import {aotError} from './diagnostics.mts';
 import {isFn} from './collect.mts';
 import {constantListOf, fieldType, lowerExprWide} from './expressions.mts';
+import {splitListOf} from './list-split.mts';
 import {evalStatic, foldScope, rethrowFoldLimit} from './static-eval.mts';
 import {INT} from './ir/types.mts';
 import type * as t from '@babel/types';
@@ -488,7 +489,8 @@ function checkReads(tests: IrExpr[], what: string, environment: Env): void {
 }
 
 /**
- * The list a chain starts from: a list state or one worked out in render that a name holds, or a constant array.
+ * The list a chain starts from: a list state or one worked out in render that a name holds, a split, or a constant
+ * array.
  * A chain whose functions fold with a constant array folds whole, so it is no list here.
  *
  * @param chain  The chain.
@@ -507,6 +509,8 @@ function baseListOf(
     const record = environment.state.get(base.name)!;
     return record.kind === 'list' ? record : null;
   }
+  const split = splitListOf(base, environment);
+  if (split) return split;
   const scope = foldScope(environment, environment.constants ?? {});
   const fold = (part: t.Node): {value: unknown} | null => {
     try {
@@ -524,7 +528,7 @@ function baseListOf(
 /**
  * The list a filter or sort chain makes in render: the row numbers of its source that the filters keep, in the
  * order the sorts leave them, rebuilt by the update when what it reads changes. A chain on a list that is one
- * goes on from its steps.
+ * goes on from its steps. A split makes a list of its pieces.
  *
  * @param node  The chain.
  * @param environment  The expression environment.
@@ -535,10 +539,19 @@ export function derivedListOf(
   node: t.Node,
   environment: Env,
 ): ListState | null {
+  const split = splitListOf(node, environment);
+  if (split) return split;
   const chain = listChainOf(node);
   if (!chain) return null;
   const base = baseListOf(chain, node, environment);
   if (!base) return null;
+  if (base.handlerSplit) {
+    throw aotError(
+      `AOT: ${chain.steps[0].what} can't filter or sort a handler's split`,
+      'a filtered or sorted list is worked out with the render, after the handler. Split and filter it in ' +
+        'render instead: const kept = line.split(",").filter(…).',
+    );
+  }
   if (environment.inListRow) {
     throw aotError(
       `AOT: ${chain.steps[0].what} inside a list row isn't supported`,
@@ -555,6 +568,7 @@ export function derivedListOf(
   const known = lists.get(node)?.get(key);
   if (known) return known;
 
+  // A list filtered or sorted already holds rows of its source; a split holds its own.
   const source = base.derived?.source ?? base;
   const steps = [
     ...(base.derived?.steps ?? []),
@@ -622,7 +636,7 @@ export function derivedListOf(
  * @returns The item.
  */
 export function rowItemOf(list: ListState, item: Local): Local {
-  return list.derived
+  return list.derived?.source
     ? {
         ...item,
         struct: list.derived.source.struct,
@@ -633,7 +647,7 @@ export function rowItemOf(list: ListState, item: Local): Local {
 }
 
 /**
- * A component's memos and the lists its body filters or sorts by name, in the order the body has them, so each
+ * A component's memos and the lists its body filters, sorts or splits by name, in the order the body has them, so each
  * can read the ones before it.
  *
  * @param body  The component's body.
@@ -663,7 +677,10 @@ export function renderBindings(
         bindings.push({name: id.name, expression: memo, isMemo: true});
       } else if (
         statement.kind === 'const' &&
-        (method === 'filter' || method === 'toSorted' || method === 'sort')
+        (method === 'filter' ||
+          method === 'toSorted' ||
+          method === 'sort' ||
+          method === 'split')
       ) {
         bindings.push({name: id.name, expression: init, isMemo: false});
       }
