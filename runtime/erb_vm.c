@@ -908,9 +908,11 @@ static void split_into(const uint8_t* slot, const char* text, const char* separa
     uint32_t count;
     memcpy(&count, pool, sizeof(count));
 
-    /* The text may be one of this list's rows, which the pieces overwrite, so split a copy of it. */
-    const uint8_t* pool_end = pool + ERB_LIST_HEADER_SIZE + capacity * row_size;
-    if ((const uint8_t*)text >= pool && (const uint8_t*)text < pool_end)
+    /* The text may be one of this list's rows, which the pieces overwrite, so split a copy of it. It may also be a
+     * package string, so the addresses are compared as numbers, not as pointers into different objects. */
+    const uintptr_t text_at = (uintptr_t)text;
+    const uintptr_t pool_at = (uintptr_t)pool;
+    if (text_at >= pool_at && text_at - pool_at < ERB_LIST_HEADER_SIZE + capacity * row_size)
     {
         if (!copy_capped(s_format, ER_TEXT_MAX, text))
         {
