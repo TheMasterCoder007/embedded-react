@@ -55,7 +55,8 @@ const bodyOf = ({body}: FunctionNode): t.Statement[] =>
     : [{type: 'ReturnStatement', argument: body, loc: body.loc}];
 
 /**
- * Whether statements always end in a `return`, so nothing after them runs.
+ * Whether statements always end in a `return`, so nothing after them runs. A switch does when each case and
+ * its default do.
  *
  * @param statements  The statements.
  *
@@ -66,6 +67,7 @@ export function exits(statements: t.Statement[]): boolean {
   if (!last) return false;
   if (last.type === 'ReturnStatement') return true;
   if (last.type === 'BlockStatement') return exits(last.body);
+  if (last.type === 'SwitchStatement') return exits([switchAsIf(last)]);
   return (
     last.type === 'IfStatement' &&
     last.alternate !== null &&

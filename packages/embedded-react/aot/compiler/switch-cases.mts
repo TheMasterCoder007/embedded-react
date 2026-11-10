@@ -111,15 +111,58 @@ function refuseInnerBreak(node: unknown): void {
 }
 
 /**
+ * Whether an expression reads the same each time it is worked out: a name, a field of one, or a literal.
+ *
+ * @param node  The expression.
+ *
+ * @returns Whether it does.
+ */
+const readsSame = (node: t.Expression): boolean =>
+  node.type === 'Identifier' ||
+  node.type === 'NumericLiteral' ||
+  node.type === 'StringLiteral' ||
+  node.type === 'BooleanLiteral' ||
+  (node.type === 'MemberExpression' &&
+    !node.computed &&
+    readsSame(node.object as t.Expression));
+
+/**
  * A `switch` as the `if … else if …` chain it runs as. Each case tests `discriminant === test`, and runs its own
  * statements then the next cases' until one ends. Empty cases share the next one's statements, and the
- * default is the last `else`.
+ * default is the last `else`. A discriminant that is not a plain read is worked out once, into a `const`.
  *
  * @param statement  The switch.
  *
  * @returns The chain.
  */
 export function switchAsIf(statement: t.SwitchStatement): t.Statement {
+  if (!readsSame(statement.discriminant)) {
+    const name: t.Identifier = {
+      type: 'Identifier',
+      name: `$switch${statement.start ?? 0}`,
+    };
+    return {
+      type: 'BlockStatement',
+      body: [
+        {
+          type: 'VariableDeclaration',
+          kind: 'const',
+          declarations: [
+            {
+              type: 'VariableDeclarator',
+              id: name,
+              init: statement.discriminant,
+              loc: statement.discriminant.loc,
+            },
+          ],
+          loc: statement.discriminant.loc,
+        },
+        switchAsIf({...statement, discriminant: name}),
+      ],
+      directives: [],
+    };
+  }
+
   const {cases, discriminant} = statement;
 
   // What each case runs: its own statements, then the next cases' until one ends.

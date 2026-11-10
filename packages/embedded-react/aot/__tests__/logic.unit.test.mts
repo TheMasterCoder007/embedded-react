@@ -122,6 +122,25 @@ describe('switch', () => {
     ]);
   });
 
+  it('works out a discriminant that is not a plain read once', () => {
+    const statements = lowerHandler(
+      'switch (n % 3) { case 0: setN(1); break; case 1: setN(2); }',
+    );
+    expect(shape(statements)).toEqual([
+      'declareLocal',
+      {if: ['set n'], else: [{if: ['set n']}]},
+    ]);
+    const [declaration, chain] = statements;
+    expect(chain.kind === 'if' && chain.test).toMatchObject({
+      left: {
+        kind: 'local',
+        local: {
+          name: declaration.kind === 'declareLocal' ? declaration.name : '',
+        },
+      },
+    });
+  });
+
   it('refuses a break that does not end its case', () => {
     expect(() =>
       lowerHandler('switch (n) { case 1: if (label) break; setN(1); break; }'),
@@ -167,6 +186,22 @@ describe('early return', () => {
         ),
       ),
     ).toEqual([{block: [{if: ['return']}, 'set n']}, 'set label']);
+  });
+
+  it('narrows the statements after a branch that ends in a switch that returns', () => {
+    const source =
+      "import {useState} from 'react';\n" +
+      "import {Pressable, Text} from 'embedded-react';\n" +
+      'export function App() {\n' +
+      "  const [job, setJob] = useState({kind: 'off'});\n" +
+      '  const [n, setN] = useState(0);\n' +
+      '  return <Pressable onPress={() => {\n' +
+      "    if (job.kind === 'off') {\n" +
+      '      switch (n) { case 0: return setN(1); default: return; }\n' +
+      '    }\n' +
+      "    setJob(job.speed > 2 ? {kind: 'run', speed: 0} : {...job, speed: job.speed + 1});\n" +
+      '  }}><Text>{job.kind}</Text></Pressable>;\n}';
+    expect(() => compile(source)).not.toThrow();
   });
 
   it('narrows the statements after a branch that returns', () => {
