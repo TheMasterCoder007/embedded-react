@@ -42,10 +42,8 @@
  * bound on each node that spreads it. Its gesture state is slots, kept by its grant, release and terminate
  * handlers, and a callback reads the gesture through them and EVT.
  *
- * An effect runs inside an update pass, so the state it sets shows at the next pass that isn't its own, not at
- * once. The VM runs a pass whenever state changed, so a pass that only an
- * effect's write started keeps what changed in a pending flag, and the next pass a handler, a timer or the
- * load started sets it. A dep-driven effect checks its deps itself, when it runs,
+ * An effect runs after an update pass, and one that set state asks for another, which shows what it set, as
+ * React renders again after an effect sets state. A dep-driven effect checks its deps itself, when it runs,
  * each in turn. The mount effects run one after another, after the first pass; one that set state has the
  * pass after it queue the next.
  */
@@ -235,10 +233,8 @@ interface DepCopy {
 interface EffectSlots {
   /** Each dep-driven effect's copy of each dep. */
   copies: Map<IrDepEffect, DepCopy[]>;
-  /** Each state an effect sets, by its slot: set while a change no update has set yet waits. */
-  pending: Map<Slot, Slot>;
-  /** The bits that start an update: a handler's or timer's request, the load, and the host. */
-  realBits: Slot[];
+  /** Set while the dep checks queued wait for the first of them to start, and until the mount effects end. */
+  checksQueued: Slot | null;
   /** The next mount effect the update queues, plus one; 0 for none. */
   mountNext: Slot | null;
 }
@@ -352,6 +348,9 @@ function stringLocals(statements: IrStmt[], found: Set<string>): void {
       stringLocals(statement.alternate ?? [], found);
     } else if (statement.kind === 'block') {
       stringLocals(statement.body, found);
+    } else if (statement.kind === 'loop') {
+      stringLocals(statement.body, found);
+      stringLocals(statement.step, found);
     }
   }
 }
@@ -371,6 +370,9 @@ function updateVectors(statements: IrStmt[], found: IrUpdateVector[]): void {
       updateVectors(statement.alternate ?? [], found);
     } else if (statement.kind === 'block') {
       updateVectors(statement.body, found);
+    } else if (statement.kind === 'loop') {
+      updateVectors(statement.body, found);
+      updateVectors(statement.step, found);
     }
   }
 }
@@ -392,6 +394,9 @@ function statesSet(statements: IrStmt[], found: Set<StateRecord>): void {
       statesSet(statement.alternate ?? [], found);
     } else if (statement.kind === 'block') {
       statesSet(statement.body, found);
+    } else if (statement.kind === 'loop') {
+      statesSet(statement.body, found);
+      statesSet(statement.step, found);
     }
   }
 }
@@ -414,6 +419,20 @@ function depType(dependency: IrExpr): ExprType {
       return 'int';
   }
 }
+
+/**
+ * Whether a dep-driven effect or its cleanup sets state, so an update runs after it.
+ *
+ * @param effect  The effect.
+ *
+ * @returns Whether it does.
+ */
+const setsState = (effect: IrDepEffect): boolean => {
+  const states = new Set<StateRecord>();
+  statesSet(effect.body, states);
+  statesSet(effect.cleanup ?? [], states);
+  return states.size > 0;
+};
 
 /**
  * Whether a mount effect sets state, so an update runs after it.
@@ -985,6 +1004,7 @@ function planSlots(
     ) ||
     output.timerFunctions.some(timer => timer.callback!.updatesState) ||
     output.mountEffects.some(mountUpdates) ||
+    output.dependencyEffects.some(setsState) ||
     completionsOf(app).some(completion => completion.updatesState);
   const requested = requestsUpdate
     ? arena.track(arena.slot(ValueType.bool))
@@ -1001,25 +1021,10 @@ function planSlots(
       ? arena.track(arena.slot(ValueType.bool))
       : null;
 
-  // A state an effect sets that a node reads waits for the next update in a pending flag.
-  const effectWrites = new Set<StateRecord>();
-  for (const effect of output.dependencyEffects) {
-    statesSet(effect.body, effectWrites);
-    statesSet(effect.cleanup ?? [], effectWrites);
-  }
-  const pending = new Map<Slot, Slot>();
-  for (const state of effectWrites) {
-    const slot = stateSlotOf(state, slots);
-    if (slot.flags & SlotFlag.tracked) {
-      pending.set(slot, arena.slot(ValueType.bool));
-    }
-  }
-  const realBits = [requested, once].filter(slot => slot !== null);
-  for (const [state, slot] of slots.states) {
-    if (state.host && slot.flags & SlotFlag.tracked) {
-      realBits.push(slot);
-    }
-  }
+  // The mount effects run each dep-driven effect first, so its checks wait for the last of them.
+  const checksQueued = output.dependencyEffects.length
+    ? arena.slot(ValueType.bool, 1)
+    : null;
   // The first mount effect is queued by the first pass.
   const mountNext = output.mountEffects.length
     ? arena.slot(ValueType.int, 1)
@@ -1028,9 +1033,10 @@ function planSlots(
   if (output.timerFunctions.length) {
     arena.timerTable(caps.maxTimers);
   }
-  // A pass queues each dep-driven effect and the next mount effect, and a mount effect the one after it.
+  // A pass queues each dep-driven effect's check unless a batch is waiting to start, so the queue holds one waiting
+  // batch, the rest of the one running, and the next mount effect.
   if (hasEffects) {
-    arena.eventQueue(output.dependencyEffects.length + 1);
+    arena.eventQueue(2 * output.dependencyEffects.length + 1);
   }
 
   arena.layOut();
@@ -1045,7 +1051,7 @@ function planSlots(
     inputText,
     requested,
     once,
-    effects: {copies, pending, realBits, mountNext},
+    effects: {copies, checksQueued, mountNext},
   };
 }
 
@@ -1668,30 +1674,21 @@ function dirtyMasks(slots: Slot[]): Map<number, number> {
 }
 
 /**
- * Runs `body` only when one of a set of dirty bits is set in this update pass, or one of a set of pending flags.
+ * Runs `body` only when one of a set of dirty bits is set in this update pass.
  *
  * @param builder  The update function.
  * @param slots  The slots whose bits guard it.
  * @param body  Emits what it guards.
- * @param pending  The pending flags that guard it too.
  */
 function whenDirty(
   builder: FunctionBuilder,
   slots: Slot[],
   body: () => void,
-  pending: Slot[] = [],
 ): void {
   const run = builder.label();
   const skip = builder.label();
   for (const [word, mask] of dirtyMasks(slots)) {
     builder.branchIfDirty(word, mask, run);
-  }
-  for (const flag of pending) {
-    const checkpoint = builder.checkpoint();
-    const set = builder.register('bool');
-    builder.abx('GET32', set.index, flag.index);
-    builder.branch('JT', run, set);
-    builder.release(checkpoint);
   }
   builder.branch('JMP', skip);
   builder.place(run);
@@ -1751,7 +1748,7 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
 
   const builder = new FunctionBuilder(FunctionKind.update, 'the update');
   const codegen = new Codegen(builder, lowering.slots);
-  const {pending, realBits, mountNext} = lowering.effects;
+  const {mountNext} = lowering.effects;
   const located = (node: IrNode, lower: () => void): void => {
     builder.at(node.location);
     try {
@@ -1774,30 +1771,13 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
       ? [...reads].map(state => stateSlotOf(state, lowering.slots))
       : [];
     if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
-      whenDirty(
-        builder,
-        bits,
-        lower,
-        bits.flatMap(slot => pending.get(slot) ?? []),
-      );
+      whenDirty(builder, bits, lower);
     } else {
       lower();
     }
   };
 
-  // A pass only an effect's writes started keeps what they changed for the next one.
   const end = builder.label();
-  if (pending.size) {
-    const real = builder.label();
-    for (const [word, mask] of dirtyMasks(realBits)) {
-      builder.branchIfDirty(word, mask, real);
-    }
-    for (const [state, flag] of pending) {
-      whenDirty(builder, [state], () => setConstant(codegen, flag, 1));
-    }
-    builder.branch('JMP', end);
-    builder.place(real);
-  }
 
   // The lists filtered or sorted in render, rebuilt first, as what reads them counts what they read.
   for (const list of derivedLists) {
@@ -1925,13 +1905,21 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
     );
     builder.place(skip);
   }
-  for (const flag of pending.values()) {
-    setConstant(codegen, flag, 0);
-  }
-
-  // Each dep-driven effect checks its deps when it runs, each in turn.
-  for (const check of lowering.effectFunctions.checks) {
-    builder.abx('EFFECT', 0, check);
+  // Each dep-driven effect checks its deps when it runs, each in turn. A batch already waiting sees what this pass
+  // shows, so another isn't queued.
+  const {checksQueued} = lowering.effects;
+  if (checksQueued) {
+    codegen.scoped(() => {
+      const skip = builder.label();
+      const waiting = builder.register('bool');
+      builder.abx('GET32', waiting.index, checksQueued.index);
+      builder.branch('JT', skip, waiting);
+      setConstant(codegen, checksQueued, 1);
+      for (const check of lowering.effectFunctions.checks) {
+        builder.abx('EFFECT', 0, check);
+      }
+      builder.place(skip);
+    });
   }
 
   // The first mount effect, then each one after a mount effect that set state.
@@ -2222,8 +2210,14 @@ function checkedEffect(
     `effect ${effect.id}`,
   );
   const end = builder.label();
-  const codegen = new Codegen(builder, lowering.slots, {onReturn: end});
+  // An early `return` still ends at the request.
+  const ran = builder.label();
+  const codegen = new Codegen(builder, lowering.slots, {onReturn: ran});
   const copies = lowering.effects.copies.get(effect)!;
+  // The batch has started, so a write from here on needs one of its own.
+  if (effect === lowering.app.output.dependencyEffects[0]) {
+    setConstant(codegen, lowering.effects.checksQueued!, 0);
+  }
   const changed = builder.register('bool');
   builder.abx('LOADI', changed.index, 0);
   effect.dependencies.forEach((dependency, index) => {
@@ -2239,6 +2233,10 @@ function checkedEffect(
   });
   builder.branch('JF', end, changed);
   runEffect(effect, codegen, lowering);
+  builder.place(ran);
+  if (setsState(effect)) {
+    requestUpdate(codegen, lowering);
+  }
   builder.place(end);
   return builder.finish();
 }
@@ -2300,6 +2298,12 @@ function mountEffect(index: number, lowering: Lowering): ProgramFunction {
     }
   } else if (hasNext) {
     builder.abx('EFFECT', 0, lowering.effectFunctions.mounts[index + 1]);
+  }
+  // After the last, the dep-driven effects check what the mount effects changed.
+  if (!hasNext) {
+    for (const check of lowering.effectFunctions.checks) {
+      builder.abx('EFFECT', 0, check);
+    }
   }
   return builder.finish();
 }

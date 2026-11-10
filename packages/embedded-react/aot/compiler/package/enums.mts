@@ -122,6 +122,12 @@ export function internedStates(app: IrApp): Map<ScalarState, string[]> {
         }
         walk(node.text);
         return;
+      case 'assignLocal':
+        if (!isRead(node.value)) {
+          walk(node.value);
+        }
+        walk(node.text);
+        return;
     }
 
     // A text's value part prints the state's string, which the set holds.

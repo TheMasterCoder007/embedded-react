@@ -25,7 +25,7 @@ import {
   ENGINE_STRING_MAX,
   withLoc,
 } from './diagnostics.mts';
-import type {SourcePosition} from './diagnostics.mts';
+import type {AotError, SourcePosition} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
 import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
@@ -40,6 +40,7 @@ import {
 import type {ObjectBinding, RecordLowering} from './records.mts';
 import {narrowOn, narrowed} from './tagged-records.mts';
 import {exits, helperEnvironment, statementsOf} from './helper-values.mts';
+import {lowerFor, lowerForOf} from './loops.mts';
 import {switchAsIf} from './switch-cases.mts';
 import {
   mix64Error,
@@ -111,8 +112,11 @@ import type {
   Local,
   PanCallback,
   PanResponderRecord,
+  RecordState,
   RefRecord,
   ScalarState,
+  SlotValue,
+  StateRecord,
   StateTable,
   StatementContext,
 } from './types.mts';
@@ -1098,6 +1102,7 @@ function lowerListOrder(
  * @param slotName  The slot's name, for environment.stores.
  * @param slotDescription  The slot, for the message.
  * @param environment  The expression environment.
+ * @param isLocal  The slot is a `let` local's, which a fraction widens to a float.
  */
 function storeCheck(
   lowered: {source: IrSource; expression: IrExpr},
@@ -1107,6 +1112,7 @@ function storeCheck(
   slotName: string,
   slotDescription: string,
   environment: Env,
+  isLocal = false,
 ): void {
   const value = lowered.expression;
   if ((slotType === 'int' && !isBoolean) || widened === 'number') {
@@ -1114,6 +1120,7 @@ function storeCheck(
       slot: slotName,
       value: lowered.source,
       math64: Boolean(environment.math64),
+      ...(isLocal ? {local: true} : {}),
     });
   }
 
@@ -1528,6 +1535,164 @@ function lowerTimer(
 }
 
 /**
+ * Checks a setter called inside a loop. One for a list the loop visits is refused, as the loop would see the rows
+ * it changes, where React's loops over the list as it was. So is a setter given a value that reads its own state:
+ * React's reads the value from before the loop each time, so only the last call counts, where Flow B's would see
+ * each call's.
+ *
+ * @param setter  The setter's name.
+ * @param target  What it sets.
+ * @param argument  What it is given.
+ * @param environment  The expression environment.
+ * @param loops  The lists each loop around it visits or is bounded by.
+ */
+function checkLoopSetter(
+  setter: string,
+  target: StateRecord | RecordState,
+  argument: t.CallExpression['arguments'][number] | undefined,
+  environment: Env,
+  loops: ListState[][],
+): void {
+  if (target.kind === 'list' && loops.some(lists => lists.includes(target))) {
+    throw aotError(
+      `AOT: ${setter} can't change ${target.name} inside a loop over it`,
+      'the loop would see the rows it changes, where React loops over the list as it was. Work out what to ' +
+        'change in the loop, into a let, and set the list after it.',
+    );
+  }
+  if (!argument || isFn(argument)) return;
+  const names = new Set([target.name]);
+  for (const [name, record] of environment.state) {
+    if (record === target) names.add(name);
+  }
+  if (mentions(argument, names)) {
+    throw aotError(
+      `AOT: ${setter}(…) inside a loop must take an updater to read ${target.name}`,
+      `React reads ${target.name} from before the loop each time, so only the last call would count. Write ` +
+        `${setter}(previous => …), or work the value out in a let and set it after the loop.`,
+    );
+  }
+}
+
+/**
+ * Lowers `x = …`, `x += …` or `x++` on a `let` local. A whole-number `let` given a fraction or a timestamp is
+ * widened to hold it (see compileWidened); a boolean or a string one holds only those.
+ *
+ * @param expression  The assignment or update.
+ * @param target  The local's name.
+ * @param local  The local.
+ * @param environment  The expression environment.
+ *
+ * @returns The statement.
+ */
+function lowerLocalAssign(
+  expression: t.AssignmentExpression | t.UpdateExpression,
+  target: t.Identifier,
+  local: Local,
+  environment: Env,
+): IrStmt {
+  const {name} = target;
+  if (!local.assignable) {
+    throw aotError(
+      local.counter
+        ? `AOT: "${name}" is a loop's counter, which only the loop sets`
+        : `AOT: "${name}" can't be assigned: only a \`let\` can`,
+      local.counter
+        ? `copy it into a let of its own first: let at = ${name};`
+        : `declare it with let to change it: let ${name} = …;`,
+    );
+  }
+
+  // What it is set to, as one expression: `x += e` is `x + e`, and `x++` is `x + 1`.
+  const {loc} = expression;
+  let valueNode: t.Expression;
+  if (expression.type === 'UpdateExpression') {
+    valueNode = {
+      type: 'BinaryExpression',
+      operator: expression.operator === '++' ? '+' : '-',
+      left: target,
+      right: {type: 'NumericLiteral', value: 1},
+      loc,
+    };
+  } else if (expression.operator === '=') {
+    valueNode = expression.right;
+  } else {
+    const operator = expression.operator.slice(0, -1);
+    valueNode =
+      operator === '&&' || operator === '||' || operator === '??'
+        ? {
+            type: 'LogicalExpression',
+            operator,
+            left: target,
+            right: expression.right,
+            loc,
+          }
+        : {
+            type: 'BinaryExpression',
+            operator: operator as t.BinaryExpression['operator'],
+            left: target,
+            right: expression.right,
+            loc,
+          };
+  }
+
+  const holds = (what: string): Error =>
+    aotError(
+      `AOT: "${name}" holds ${what}, so it can only be set to ${what === 'a string' ? 'strings' : what === 'a boolean' ? 'booleans' : 'numbers'}`,
+      `a let keeps the kind of value it starts with; declare another let for a value of another kind.`,
+    );
+  const localName = local.name!;
+
+  // A string is built in the local's buffer, which may be read to build it.
+  if (local.slotKind === 'string') {
+    if (buildsText(valueNode, environment)) {
+      return {
+        kind: 'assignLocal',
+        name: localName,
+        value: {kind: 'string', value: '', type: STRING},
+        text: lowerText(valueNode, environment),
+      };
+    }
+    const value = lowerExpr(valueNode, environment);
+    if (value.type.kind !== 'string') throw holds('a string');
+    if (value.kind === 'string') {
+      checkConstantFits(
+        {parts: [{kind: 'literal', text: value.value}]},
+        `local "${name}"`,
+      );
+    }
+    return {kind: 'assignLocal', name: localName, value};
+  }
+
+  const widened: WideSlot | undefined =
+    local.slotKind !== 'i64' ? undefined : local.isLiteral ? 'number' : 'time';
+  const lowered = lowerSource(
+    valueNode,
+    widened ? {...environment, math64: true} : environment,
+  );
+  const kind = lowered.expression.type.kind;
+  if (local.isBoolean ? kind !== 'bool' : kind === 'bool') {
+    throw holds(local.isBoolean ? 'a boolean' : 'a number');
+  }
+  if (kind === 'string') throw holds('a number');
+  storeCheck(
+    lowered,
+    local.slotKind,
+    Boolean(local.isBoolean),
+    widened,
+    local.assignable,
+    `local "${name}"`,
+    environment,
+    true,
+  );
+  return {
+    kind: 'assignLocal',
+    name: localName,
+    value: storeValue(lowered.expression, local.slotKind),
+  };
+}
+
+/**
  * Inlines a handler-statement call to a helper / useCallback: binds the call's args to the helper's params, then
  * lowers the helper body here in the current env/state/ctx. A `return` in it leaves the helper, which becomes a
  * block.
@@ -1633,12 +1798,33 @@ function lowerHandlerExprImpl(
     ];
   }
 
+  // `x = …`, `x += …` and `x++` on a local, which must be a `let`.
+  const assigned =
+    expression.type === 'AssignmentExpression'
+      ? expression.left
+      : expression.type === 'UpdateExpression'
+        ? expression.argument
+        : null;
+  if (assigned?.type === 'Identifier') {
+    const local = environment.locals.get(assigned.name);
+    if (local) {
+      return [
+        lowerLocalAssign(
+          expression as t.AssignmentExpression | t.UpdateExpression,
+          assigned,
+          local,
+          environment,
+        ),
+      ];
+    }
+  }
+
   // `ref.current = expr` / `ref.current += expr` — a value ref write; does NOT trigger a re-render.
   if (expression.type === 'AssignmentExpression') {
     const ref = refTarget(expression.left, environment);
     if (!ref) {
       throw new Error(
-        'AOT: the only assignment allowed in a handler is `ref.current = ...`',
+        'AOT: a handler can only assign a `let` local or `ref.current`',
       );
     }
 
@@ -1794,7 +1980,7 @@ function lowerHandlerExprImpl(
     const ref = refTarget(expression.argument, environment);
     if (!ref) {
       throw new Error(
-        'AOT: the only ++/-- allowed in a handler is on `ref.current`',
+        'AOT: a handler can only use ++/-- on a `let` local or `ref.current`',
       );
     }
 
@@ -1891,6 +2077,15 @@ function lowerHandlerExprImpl(
 
   context.stateChanged = true;
   const setterArgument = expression.arguments[0];
+  if (context.loops?.length) {
+    checkLoopSetter(
+      expression.callee.name,
+      targetState,
+      setterArgument,
+      environment,
+      context.loops,
+    );
+  }
   if (targetState.kind === 'list') {
     // setItems(prev => …): the parameter names the list.
     if (isFn(setterArgument)) {
@@ -2117,13 +2312,17 @@ export function lowerStmts(
           continue;
         }
 
-        // A dep-driven effect's cleanup outlives the call, so the body's locals become slots.
+        // A dep-driven effect's cleanup outlives the call, so the body's locals become slots. A `let` has a name of
+        // its own, so one a nested block declares again reads apart from it.
         const isHoisted = Boolean(
           context.hoist && statements === context.bodyList,
         );
+        const isLet = statement.kind !== 'const';
         const localName = isHoisted
           ? `${context.hoist!.prefix}${declarator.id.name}`
-          : `local_${declarator.id.name}`;
+          : isLet
+            ? `local_${declarator.id.name}@${declarator.start ?? 0}`
+            : `local_${declarator.id.name}`;
 
         // `const id = setInterval/setTimeout(…)` is an int timer-id local, so a later clearInterval(id) resolves.
         if (
@@ -2190,14 +2389,28 @@ export function lowerStmts(
               'bind the value itself — e.g. `const id = item.id` — rather than a list item or a node ref.',
             );
           }
+        }
 
-          if (isHoisted) {
-            context.hoist!.declarations.push({
-              kind: 'local',
-              name: localName,
-              slotKind: slot,
-            });
-          }
+        // A whole-number `let` set to a fraction or a timestamp later holds one from the start.
+        const letKey = `let@${declarator.id.name}@${declarator.start ?? 0}`;
+        const width =
+          isLet && initialExpression.type.kind === 'int'
+            ? environment.wide.get(letKey)
+            : undefined;
+        const held: SlotValue = width
+          ? width === 'float'
+            ? {slotKind: 'float'}
+            : {
+                slotKind: 'i64',
+                ...(width === 'number' ? {isLiteral: true} : {}),
+              }
+          : slotValueOf(initialExpression);
+        if (isHoisted && held.slotKind !== 'string') {
+          context.hoist!.declarations.push({
+            kind: 'local',
+            name: localName,
+            slotKind: held.slotKind,
+          });
         }
 
         lowered.push({
@@ -2206,16 +2419,23 @@ export function lowerStmts(
           initializer: initialExpression,
           ...(text ? {text} : {}),
           isHoisted,
+          ...(width ? {widenedTo: width === 'float' ? 'float' : 'int64'} : {}),
         });
 
-        // Later statements read the name as the local.
+        // Later statements read the name as the local. A `let` is read from where it is kept, whatever set it last.
+        const local: Local = isLet
+          ? {
+              slotKind: held.slotKind,
+              ...(held.isBoolean ? {isBoolean: true} : {}),
+              ...(held.isLiteral ? {isLiteral: true} : {}),
+              ...(held.wide ? {wide: true} : {}),
+              name: localName,
+              assignable: letKey,
+            }
+          : {...held, name: localName, source: initialSource};
         environment = {
           ...environment,
-          locals: new Map(environment.locals).set(declarator.id.name, {
-            ...slotValueOf(initialExpression),
-            name: localName,
-            source: initialSource,
-          }),
+          locals: new Map(environment.locals).set(declarator.id.name, local),
         };
       }
 
@@ -2233,6 +2453,72 @@ export function lowerStmts(
     if (statement.type === 'BlockStatement') {
       lowered.push(...lowerStmts(statement.body, environment, state, context));
       continue;
+    }
+
+    // `for` counts to a bound the compiler works out, and `for…of` visits a list's rows.
+    if (statement.type === 'ForStatement') {
+      lowered.push(
+        ...lowerFor(statement, environment, state, context, lowerStmts),
+      );
+      continue;
+    }
+
+    if (statement.type === 'ForOfStatement') {
+      lowered.push(
+        ...lowerForOf(statement, environment, state, context, lowerStmts),
+      );
+      continue;
+    }
+
+    if (
+      statement.type === 'BreakStatement' ||
+      statement.type === 'ContinueStatement'
+    ) {
+      const word = statement.type === 'BreakStatement' ? 'break' : 'continue';
+      if (statement.label) {
+        throw located(
+          aotError(
+            `AOT: a labeled \`${word}\` is not supported`,
+            'leave the inner loop with a plain break and test a let after it, or move the loops into a helper ' +
+              'and return from it.',
+          ),
+          statement,
+        );
+      }
+      if (!context.loops?.length) {
+        throw located(
+          aotError(`AOT: a \`${word}\` must be inside a loop`),
+          statement,
+        );
+      }
+      lowered.push({kind: word});
+      continue;
+    }
+
+    if (statement.type === 'LabeledStatement') {
+      throw located(
+        aotError(
+          'AOT: a labeled statement is not supported',
+          'leave the inner loop with a plain break and test a let after it, or move the loops into a helper ' +
+            'and return from it.',
+        ),
+        statement,
+      );
+    }
+
+    if (
+      statement.type === 'WhileStatement' ||
+      statement.type === 'DoWhileStatement' ||
+      statement.type === 'ForInStatement'
+    ) {
+      throw located(
+        aotError(
+          `AOT: a ${statement.type === 'ForInStatement' ? 'for…in' : 'while'} loop is not supported`,
+          "a loop needs a bound the compiler can count. Write a for loop from a constant or a list's length to " +
+            'another, or for (const item of items), and break out of it early.',
+        ),
+        statement,
+      );
     }
 
     // An effect body's tail `return` is the cleanup, dropped on mount and armed if dep-driven; any other `return`
@@ -2309,10 +2595,11 @@ export function lowerStmts(
         : null;
       lowered.push({kind: 'if', test, consequent, alternate});
 
-      // The statements after a branch that returns read what the other branch's test leaves.
-      if (exits(consequentStatements)) {
+      // The statements after a branch that returns, breaks or continues read what the other branch's test leaves.
+      const inLoop = Boolean(context.loops?.length);
+      if (exits(consequentStatements, inLoop)) {
         environment = narrowed(environment, narrowing.whenFalse);
-      } else if (exits(alternateStatements)) {
+      } else if (exits(alternateStatements, inLoop)) {
         environment = narrowed(environment, narrowing.whenTrue);
       }
       continue;
@@ -2322,10 +2609,9 @@ export function lowerStmts(
     if (statement.type !== 'ExpressionStatement') {
       throw aotError(
         `AOT: unsupported statement "${statement.type}" in event handler`,
-        'a handler supports only `const x = …` locals, `if`, `switch`, `return`, and ' +
-          'expression statements (setters / ref writes / updateVector / Animated…start). Loops ' +
-          '(for/while) and try/catch are not lowered — precompute values or flatten the ' +
-          'logic into if/else.',
+        'a handler supports only `const` and `let` locals, `if`, `switch`, `for`, `for…of`, `return`, and ' +
+          'expression statements (setters / ref and local writes / updateVector / Animated…start). ' +
+          'try/catch is not lowered.',
       );
     }
 
@@ -2341,6 +2627,19 @@ export function lowerStmts(
 
   markLoc(lowered, from, location);
   return lowered;
+}
+
+/**
+ * An error located at a statement.
+ *
+ * @param error  The error.
+ * @param statement  The statement.
+ *
+ * @returns The error.
+ */
+function located(error: AotError, statement: t.Node): AotError {
+  if (statement.loc) error.aotLoc = statement.loc.start;
+  return error;
 }
 
 /**
@@ -2403,9 +2702,9 @@ function markLoc(
  * Lowers a useEffect (App or child). Two shapes:
  *  - `useEffect(fn, [])` — MOUNT-ONCE: body runs after the initial the update (in the build).
  *  - `useEffect(fn, [dep…])` — DEP-DRIVEN: body becomes a function of its own; runs once at mount,
- *    then again from the update whenever a SCALAR dep changes (compared against a stored prev). The body is
- *    compiled WITHOUT a trailing update — it runs INSIDE an update / at mount, so re-applying state it
- *    sets happens on the next update (one-frame), and it can never re-enter an update (no infinite loop).
+ *    then again after an update whenever a SCALAR dep changes (compared against a stored prev). It runs after
+ *    the update pass, and one that set state asks for another pass, which shows it; an effect that keeps changing
+ *    its deps stops the app at the runtime's pass limit, where React reports an update loop.
  *    A dep-driven `return () => …` becomes `effect_N_cleanup()`, run at the top of the next re-run.
  *
  * @param effect  The effect.

@@ -52,7 +52,9 @@ import type {
 import type {IrPropValue, IrShow} from '../ir/nodes.mts';
 import type {
   IrAppendItem,
+  IrAssignLocal,
   IrFillOrder,
+  IrLoop,
   IrSplitItems,
   IrFilterItems,
   IrRemoveItem,
@@ -251,10 +253,12 @@ export class Codegen {
   private readonly locals = new Map<string, LocalBinding>();
   /** A string register nothing writes, so it stays the empty string. Reserved, so no release reuses it. */
   private emptyString: Register | null = null;
-  /** The counter of the function's update loops, which only LOOPSET and LOOP write. Reserved, for that. */
-  private loopCounter: Register | null = null;
-  /** The counter of a sort's inner loop. */
-  private innerLoopCounter: Register | null = null;
+  /** The counter of each depth of loops, which only LOOPSET and LOOP write. Reserved, for that. */
+  private readonly loopCounters: Register[] = [];
+  /** How many loops are around the code being lowered. */
+  private loopDepth = 0;
+  /** Where `break` and `continue` go in each loop being lowered, innermost last. */
+  private readonly loopLabels: {done: Label; next: Label}[] = [];
   /** The row the update being lowered visits, which its setRows write. */
   private updatingRow: Register | undefined;
 
@@ -1447,7 +1451,7 @@ export class Codegen {
           this.locals.set(statement.name, {slot});
           return;
         }
-        const type = declaredType(statement.initializer);
+        const type = statement.widenedTo ?? declaredType(statement.initializer);
         const register = builder.register(type as RegisterType);
         const checkpoint = builder.checkpoint();
         builder.abc(
@@ -1593,6 +1597,26 @@ export class Codegen {
         builder.place(end);
         return;
       }
+      case 'assignLocal':
+        this.scoped(() => this.assignLocal(statement));
+        return;
+      case 'loop':
+        this.loop(statement);
+        return;
+      case 'break':
+      case 'continue': {
+        const labels = this.loopLabels.at(-1);
+        if (!labels) {
+          throw new Error(
+            `AOT internal: a \`${statement.kind}\` outside a loop`,
+          );
+        }
+        builder.branch(
+          'JMP',
+          statement.kind === 'break' ? labels.done : labels.next,
+        );
+        return;
+      }
       case 'return': {
         const end = this.blockEnds.at(-1) ?? this.onReturn;
         if (!end) {
@@ -1612,6 +1636,107 @@ export class Codegen {
       case 'updateVector':
         updateVector(this, statement, this.program.vectors);
     }
+  }
+
+  /**
+   * A counted loop, its counter the one for its depth, so a loop inside it counts with another.
+   *
+   * @param bound  How many times the body runs.
+   * @param body  Lowers the body, given the counter, which goes from `bound` down to 1.
+   */
+  private counted(bound: number, body: (counter: Register) => void): void {
+    const counter = this.counterAt(this.loopDepth);
+    this.loopDepth++;
+    try {
+      this.builder.loop(counter, bound, () => body(counter));
+    } finally {
+      this.loopDepth--;
+    }
+  }
+
+  /**
+   * The counter of a depth of loops, taken the first time it is needed.
+   *
+   * @param depth  How many loops are around the loop.
+   *
+   * @returns The counter.
+   */
+  private counterAt(depth: number): Register {
+    return (this.loopCounters[depth] ??= this.builder.reserved('int'));
+  }
+
+  /**
+   * A `for` or `for…of` loop. A `break` goes past its end, and a `continue` to its step. The body's locals are its
+   * own, so a name it declares again reads the outer local after it.
+   *
+   * @param statement  The loop.
+   */
+  private loop(statement: IrLoop): void {
+    const {builder} = this;
+    if (statement.bound === 0) return;
+    const done = builder.label();
+    const next = builder.label();
+    const outer = new Map(this.locals);
+    this.loopLabels.push({done, next});
+    this.counted(statement.bound, counter =>
+      this.scoped(() => {
+        // The counter runs from the bound down to 1, so bound - counter is the visit's number from 0.
+        if (statement.visit) {
+          const visit = builder.register('int');
+          builder.abc(
+            'SUB',
+            visit.index,
+            this.load('int', statement.bound).index,
+            counter.index,
+          );
+          this.locals.set(required(statement.visit.name, 'the visit'), {
+            register: visit,
+          });
+        }
+        if (statement.test) {
+          const checkpoint = builder.checkpoint();
+          builder.branch('JF', done, this.condition(statement.test));
+          builder.release(checkpoint);
+        }
+        this.statements(statement.body);
+        builder.place(next);
+        this.statements(statement.step);
+      }),
+    );
+    this.loopLabels.pop();
+    this.locals.clear();
+    outer.forEach((binding, name) => this.locals.set(name, binding));
+    builder.place(done);
+  }
+
+  /**
+   * Sets a `let` local declared before: its register, or its slot when it is kept in one.
+   *
+   * @param statement  The assignment.
+   */
+  private assignLocal(statement: IrAssignLocal): void {
+    const {builder} = this;
+    const binding = this.binding(statement.name);
+    if (!binding) {
+      throw new Error(`AOT internal: no local "${statement.name}"`);
+    }
+    if ('register' in binding) {
+      const {register} = binding;
+      builder.abc(
+        'MOVE',
+        register.index,
+        this.valueAs(statement.value, register.type as ExprType).index,
+      );
+      return;
+    }
+    if (slotType(binding.slot) === 'string') {
+      this.text(
+        statement.text?.parts ?? [{kind: 'value', value: statement.value}],
+      );
+      builder.abx('FMTSET', 0, binding.slot.index);
+      return;
+    }
+    this.set(binding.slot, this.value(statement.value));
   }
 
   /**
@@ -1790,9 +1915,8 @@ export class Codegen {
     const count = builder.register('int');
     builder.abx('LEN', count.index, pool.index);
     const capacity = this.load('int', statement.list.capacity);
-    const counter = (this.loopCounter ??= builder.reserved('int'));
     const done = builder.label();
-    builder.loop(counter, statement.list.capacity, () =>
+    this.counted(statement.list.capacity, counter =>
       this.scoped(() => {
         const row = builder.register('int');
         builder.abc('SUB', row.index, capacity.index, counter.index);
@@ -1822,9 +1946,8 @@ export class Codegen {
     const count = builder.register('int');
     builder.abx('LEN', count.index, pool.index);
     const capacity = this.load('int', list.capacity);
-    const counter = (this.loopCounter ??= builder.reserved('int'));
     const done = builder.label();
-    builder.loop(counter, list.capacity, () =>
+    this.counted(list.capacity, counter =>
       this.scoped(() => {
         // The counter runs from the cap down to 1, so cap - counter is the visit's number from 0.
         const row = builder.register('int');
@@ -1933,10 +2056,11 @@ export class Codegen {
     builder.abx('LEN', count.index, pool.index);
     const capacity = this.load('int', list.capacity);
     const one = this.load('int', 1);
-    const outer = (this.loopCounter ??= builder.reserved('int'));
-    const inner = (this.innerLoopCounter ??= builder.reserved('int'));
+    // Both counters are taken before the loops, ahead of the registers the loops work in.
+    this.counterAt(this.loopDepth);
+    this.counterAt(this.loopDepth + 1);
     const sorted = builder.label();
-    builder.loop(outer, list.capacity, () =>
+    this.counted(list.capacity, outer =>
       this.scoped(() => {
         // Row cap - counter + 1 moves back next, from row 1 on.
         const moving = builder.register('int');
@@ -1946,7 +2070,7 @@ export class Codegen {
         builder.abc('LT', inList.index, moving.index, count.index);
         builder.branch('JF', sorted, inList);
         const placed = builder.label();
-        builder.loop(inner, list.capacity, () =>
+        this.counted(list.capacity, inner =>
           this.scoped(() => {
             // It is at row moving - (cap - counter) now; it stops at row 0.
             const second = builder.register('int');

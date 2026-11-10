@@ -106,8 +106,8 @@ describe('handler statements lower to the IR', () => {
   });
 
   it('refuses a statement it cannot lower', () => {
-    expect(() => lowerBody('for (;;) {}', stateOf())).toThrow(
-      /unsupported statement "ForStatement"/,
+    expect(() => lowerBody('try {} catch {}', stateOf())).toThrow(
+      /unsupported statement "TryStatement"/,
     );
   });
 });

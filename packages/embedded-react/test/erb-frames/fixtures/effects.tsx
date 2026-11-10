@@ -1,5 +1,5 @@
 // Effects: one on a number that derives state and restarts a timeout, with a cleanup that clears it; one on
-// a string; and mount effects, one with an early return. An effect's write shows at the next update.
+// a string; and mount effects, one with an early return. An effect's write shows at once, as React's does.
 import {useState, useEffect, useRef} from 'react';
 import {View, Text, Pressable, StyleSheet} from 'embedded-react';
 

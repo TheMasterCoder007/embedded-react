@@ -65,6 +65,8 @@ while the code that breaks it is still one line.
 - `useState`, `setState` (including the updater form), `useEffect` with an array-literal dependency
   list and an optional cleanup as its last statement, `useRef`, `useCallback`, `useMemo`, and
   `useAnimatedValue` with a constant initial value (every `Animated` call drives one).
+- An effect runs after the render, as React's does, and what it sets is drawn at once. One that keeps changing what
+  it depends on stops the app after 50 passes, where React reports an update loop.
 - `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the
   compiler lists it as a package input, and the host sets it with `erb_input_set_int`. The
   [RP2040 guide](./boards/rp2040.md) shows it driving a step counter.
@@ -125,17 +127,33 @@ while the code that breaks it is still one line.
 
 ## Handlers
 
-An event handler body may contain `const` locals holding a number, a boolean, or a string, including one built
-with `+`, a template literal or the string helpers above; `if` and
-`else`; `switch`; `return`, early or not; state setter calls; `ref.current` writes, including `+=` and `++`;
-`setInterval`, `setTimeout` and their clears; `updateVector` calls; and `.start()` or `.stop()` on any `Animated`
-animation or composition. Locals cannot be reassigned or destructured, and loops and `try` are not lowered. A
-`break` must end its case.
+An event handler body may contain `const` and `let` locals holding a number, a boolean, or a string, including one
+built with `+`, a template literal or the string helpers above; `if` and
+`else`; `switch`; `for` and `for…of` loops with `break` and `continue`; `return`, early or not; state setter calls;
+`ref.current` writes, including `+=` and `++`; `setInterval`, `setTimeout` and their clears; `updateVector` calls;
+and `.start()` or `.stop()` on any `Animated` animation or composition. `while` and `try` are not lowered, and a
+`break` in a `switch` must end its case.
+
+- A `let` can be set with `=`, `+=` and the like, `++` and `--`. It keeps the kind of value it starts with: a
+  boolean holds booleans and a string strings. A whole number given a fraction or a timestamp anywhere holds one
+  from the start.
+- `for…of` goes over a list state, a constant array, a filtered or sorted list, or a handler's split, at most the
+  list's cap (`ER_AOT_LIST_CAP`) times. The item can be taken apart, `for (const {id, done} of items)`, and
+  `for (const [i, item] of items.entries())` gives the index too.
+- A `for` loop declares its counter with `let` and steps it by a constant (`i++`, `i--`, `i += 2`). It starts and
+  ends at constants, lists' lengths or an outer loop's counter, so the compiler can count its visits:
+  `for (let i = items.length - 1; i >= 0; i--)`. The body can read the counter but not set it. A loop runs at most
+  65535 times, a function holds at most 32 loops, and a long loop counts against the event's instruction budget.
+- Inside a loop, a setter can't change the list it goes over, since React's loop sees the list as it was. A
+  setter given a value that reads its own state, `setTotal(total + item.n)`, must take the updater form,
+  `setTotal(t => t + item.n)`: React's would read `total` from before the loop each time. Or add up into a `let`
+  and set the state once after the loop.
+- Labels, `while`, `do…while` and `for…in` are refused.
 
 Helper functions are inlined where they are called, and a helper cannot call itself. One called as a statement may
 do anything a handler does, and its `return` leaves only the helper. One whose result is used, in a handler or in
 render, works out a value: it may declare `const`s, branch with `if` and `switch`, and must return a value on every
-path. Only a helper that returns on one path can build text with `+` or a template literal.
+path. It can't loop yet; loop in the handler instead. Only a helper that returns on one path can build text with `+` or a template literal.
 `setInterval`/`setTimeout` callbacks must be inline functions. `updateText` is Flow A only.
 
 ## Styles and colours

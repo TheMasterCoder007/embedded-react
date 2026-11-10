@@ -39,8 +39,24 @@ export type Int64Source =
 /** What an int slot widened to 64 bits holds: a time, or only 64-bit numbers that are not times. */
 export type WideSlot = 'time' | 'number';
 
-/** The slots widened to 64 bits, by name. */
-export type SlotWidths = Map<string, WideSlot>;
+/** The slots widened to 64 bits, by name, and the `let` locals widened to a float, which hold 'float'. */
+export type SlotWidths = Map<string, WideSlot | 'float'>;
+
+/**
+ * What a slot was widened to hold in 64 bits, if it was.
+ *
+ * @param widths  The widths.
+ * @param slot  The slot's name.
+ *
+ * @returns What it holds, or undefined for a slot not widened to 64 bits.
+ */
+export function wideSlotOf(
+  widths: SlotWidths | null | undefined,
+  slot: string,
+): WideSlot | undefined {
+  const width = widths?.get(slot);
+  return width === 'float' ? undefined : width;
+}
 
 /** The type of a value in the IR: what JS holds, whatever slot a backend stores it in. */
 export type IrType =

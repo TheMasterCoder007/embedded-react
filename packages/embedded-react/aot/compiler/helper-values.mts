@@ -59,21 +59,29 @@ const bodyOf = ({body}: FunctionNode): t.Statement[] =>
  * its default do.
  *
  * @param statements  The statements.
+ * @param inLoop  In a loop's body, where a `break` or `continue` leaves too.
  *
  * @returns Whether they do.
  */
-export function exits(statements: t.Statement[]): boolean {
+export function exits(statements: t.Statement[], inLoop = false): boolean {
   const last = statements.at(-1);
   if (!last) return false;
   if (last.type === 'ReturnStatement') return true;
-  if (last.type === 'BlockStatement') return exits(last.body);
-  if (last.type === 'SwitchStatement') return exits([switchAsIf(last)]);
+  if (
+    inLoop &&
+    (last.type === 'BreakStatement' || last.type === 'ContinueStatement') &&
+    !last.label
+  ) {
+    return true;
+  }
+  if (last.type === 'BlockStatement') return exits(last.body, inLoop);
+  if (last.type === 'SwitchStatement') return exits([switchAsIf(last)], inLoop);
   return (
     last.type === 'IfStatement' &&
     last.alternate !== null &&
     last.alternate !== undefined &&
-    exits(statementsOf(last.consequent)) &&
-    exits(statementsOf(last.alternate))
+    exits(statementsOf(last.consequent), inLoop) &&
+    exits(statementsOf(last.alternate), inLoop)
   );
 }
 
@@ -297,12 +305,21 @@ function valueOf(
       }
     }
 
+    const isLoop =
+      statement.type === 'ForStatement' ||
+      statement.type === 'ForOfStatement' ||
+      statement.type === 'WhileStatement' ||
+      statement.type === 'DoWhileStatement';
     const error = aotError(
       statement.type === 'ReturnStatement'
         ? `AOT: helper "${name}" is used as a value, so each \`return\` must give one`
-        : `AOT: helper "${name}" is used as a value, so it can only declare consts, branch and return`,
-      'a helper whose result is used works out a value without side effects. Call one that sets ' +
-        'state as a statement of its own.',
+        : isLoop
+          ? `AOT: helper "${name}" is used as a value, so it can't loop yet`
+          : `AOT: helper "${name}" is used as a value, so it can only declare consts, branch and return`,
+      isLoop
+        ? 'loop in the handler instead, into a let: let total = 0; for (const item of items) total += item.n;'
+        : 'a helper whose result is used works out a value without side effects. Call one that sets ' +
+            'state as a statement of its own.',
     );
     if (statement.loc) error.aotLoc = statement.loc.start;
     throw error;

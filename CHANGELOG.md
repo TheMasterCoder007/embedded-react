@@ -29,6 +29,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   fields can be read.
 - Flow B: `switch` and early `return` in handlers, effects and helpers, and helpers that return a value, in handlers
   and in render. A helper that calls itself is still refused.
+- Flow B: `for` and `for…of` loops in handlers, effects and helpers, with `break` and `continue`, over list state,
+  constant arrays and splits, or counted to a constant or a list's length. Handler locals can be `let` and reassigned.
 
 ### Changed
 
@@ -49,6 +51,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Fixed
 
 - Flow B: a list row's item passed to a component no longer fails to compile.
+- Flow B: state a dep-driven effect sets is drawn at once, not at the next event, and a dep-driven effect no longer
+  runs twice at boot.
 
 ## [0.20.0] - 2026-11-05
 ### Added

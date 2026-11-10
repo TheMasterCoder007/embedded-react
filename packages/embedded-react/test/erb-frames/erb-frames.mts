@@ -207,22 +207,22 @@ const SCENARIOS: Scenario[] = [
     taps: '120,30 45,30 45,30',
   },
   {name: 'effects', file: fixture('effects'), screen: PORTRAIT},
-  // + twice, then the mode: the mode effect's write shows when the + effect's timeout fires.
+  // + twice, then the mode: the mode effect's write shows at once.
   {
     name: 'effects-taps',
     file: fixture('effects'),
     screen: PORTRAIT,
     taps: '45,30 45,30 120,30',
   },
-  // Taps on nothing until the mount's timeout has fired, then the mode: its effect's write waits for the next
-  // update, which never comes.
+  // Taps on nothing until the mount's timeout has fired, then the mode: its effect's write shows with no event
+  // after it.
   {
     name: 'effects-stale',
     file: fixture('effects'),
     screen: PORTRAIT,
     taps: '200,300 200,300 200,300 120,30',
   },
-  // The mode, then +: the + shows the mode effect's write, and its timeout the + effect's.
+  // The mode, then +: each effect's write shows at once, and the + effect's timeout its echo.
   {
     name: 'effects-mode',
     file: fixture('effects'),
@@ -417,6 +417,47 @@ const SCENARIOS: Scenario[] = [
     file: fixture('logic'),
     screen: PORTRAIT,
     taps: '188,20 188,20 188,20 188,20',
+  },
+  // Buttons: row 1 add, sum, odd, drop; row 2 word, avg, split, rev.
+  {name: 'loops', file: fixture('loops'), screen: PORTRAIT, listCap: 6},
+  // The sum fills the effect's bars, which stop at 12; odd skips even values.
+  {
+    name: 'loops-sum',
+    file: fixture('loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '84,20 136,20 84,48',
+  },
+  // Two adds take ids from the largest; odd breaks at its second.
+  {
+    name: 'loops-add',
+    file: fixture('loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,20 32,20 84,20 136,20',
+  },
+  // Drop takes out the first value over 5; rev lists ids from the last, and the helper finds no value over 4. The
+  // sum's effect draws its bars with no event after it.
+  {
+    name: 'loops-drop',
+    file: fixture('loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,20 188,48 84,20',
+  },
+  {
+    name: 'loops-word',
+    file: fixture('loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,48 136,48',
+  },
+  {
+    name: 'loops-rev',
+    file: fixture('loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,48',
   },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
