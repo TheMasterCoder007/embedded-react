@@ -23,6 +23,7 @@
 import {aotError} from './diagnostics.mts';
 import {flattenTree, isObjectTree, propertyKey} from './records.mts';
 import {evalStatic, rethrowFoldLimit} from './static-eval.mts';
+import {returnedValues} from './updaters.mts';
 import type * as t from '@babel/types';
 import type {Scope} from './types.mts';
 
@@ -167,11 +168,14 @@ export function writtenObjects(
       collect(node.consequent);
       collect(node.alternate);
     } else if (
-      (node.type === 'ArrowFunctionExpression' ||
-        node.type === 'FunctionExpression') &&
-      node.body.type !== 'BlockStatement'
+      node.type === 'ArrowFunctionExpression' ||
+      node.type === 'FunctionExpression'
     ) {
-      collect(node.body);
+      if (node.body.type === 'BlockStatement') {
+        returnedValues(node.body).forEach(collect);
+      } else {
+        collect(node.body);
+      }
     }
   };
   const walk = (node: unknown): void => {

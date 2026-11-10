@@ -86,6 +86,20 @@ export function exits(statements: t.Statement[], inLoop = false): boolean {
 }
 
 /**
+ * What a value-giving body is, for messages: a helper used as a value, or a block-bodied memo.
+ *
+ * @param name  The helper's name.
+ *
+ * @returns The phrase.
+ */
+function valueGiver(name: string): string {
+  const memo = /^useMemo\((.*)\)$/.exec(name);
+  return memo
+    ? `the useMemo for "${memo[1]}" works out a value`
+    : `helper "${name}" is used as a value`;
+}
+
+/**
  * The helper a call names, if it is one: a plain function or a useCallback, and not a name a local or a state
  * hides.
  *
@@ -219,7 +233,7 @@ function bindConst(
       !declarator.init
     ) {
       throw aotError(
-        `AOT: helper "${name}" is used as a value, so its locals must be \`const x = …\``,
+        `AOT: ${valueGiver(name)}, so its locals must be \`const x = …\``,
         'declare each local once with const and a value.',
       );
     }
@@ -312,13 +326,17 @@ function valueOf(
       statement.type === 'DoWhileStatement';
     const error = aotError(
       statement.type === 'ReturnStatement'
-        ? `AOT: helper "${name}" is used as a value, so each \`return\` must give one`
+        ? `AOT: ${valueGiver(name)}, so each \`return\` must give one`
         : isLoop
-          ? `AOT: helper "${name}" is used as a value, so it can't loop yet`
-          : `AOT: helper "${name}" is used as a value, so it can only declare consts, branch and return`,
-      isLoop
-        ? 'loop in the handler instead, into a let: let total = 0; for (const item of items) total += item.n;'
-        : 'a helper whose result is used works out a value without side effects. Call one that sets ' +
+          ? `AOT: ${valueGiver(name)}, so it can't loop yet`
+          : `AOT: ${valueGiver(name)}, so it can only declare consts, branch and return`,
+      name.startsWith('useMemo(')
+        ? isLoop
+          ? 'keep the value in state, and update it in the handler that changes what it is worked out from.'
+          : 'a memo works out a value without side effects. Set state in a handler or an effect.'
+        : isLoop
+          ? 'loop in the handler instead, into a let: let total = 0; for (const item of items) total += item.n;'
+          : 'a helper whose result is used works out a value without side effects. Call one that sets ' +
             'state as a statement of its own.',
     );
     if (statement.loc) error.aotLoc = statement.loc.start;
@@ -351,8 +369,9 @@ export function helperValueOf(node: t.Node, environment: Env): IrSource | null {
     ),
     () => {
       throw aotError(
-        `AOT: helper "${name}" is used as a value, but can end without returning one`,
-        'return a value at the end of the helper, and from each branch that ends it.',
+        `AOT: ${valueGiver(name)}, but can end without returning one`,
+        `return a value at the end of the ${name.startsWith('useMemo(') ? 'memo' : 'helper'}, and from each branch ` +
+          'that ends it.',
       );
     },
   );
