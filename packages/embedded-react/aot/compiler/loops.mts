@@ -71,6 +71,10 @@ type CounterTest = '<' | '<=' | '>' | '>=';
 /** The most visits of one loop: LOOPSET's count is 16 bits. */
 const MAX_VISITS = 0xffff;
 
+/** The range of a 32-bit whole number, which a `for` loop's counter holds. */
+const INT_MIN = -(2 ** 31);
+const INT_MAX = 2 ** 31 - 1;
+
 /** The most list lengths worked through to find a loop's most visits. */
 const MAX_LENGTH_CASES = 100_000;
 
@@ -405,7 +409,7 @@ export function lowerFor(
   const {init, test, update} = statement;
   const declarator =
     init?.type === 'VariableDeclaration' &&
-    init.kind !== 'const' &&
+    init.kind === 'let' &&
     init.declarations.length === 1
       ? init.declarations[0]
       : null;
@@ -486,6 +490,18 @@ export function lowerFor(
       'split the work into smaller loops, or over several events.',
     );
   }
+  // The counter is an int, and so is the value the last step leaves it at.
+  if (
+    range &&
+    (Math.min(range[0], range[0] + step) < INT_MIN ||
+      Math.max(range[1], range[1] + step) > INT_MAX)
+  ) {
+    throw errorAt(
+      statement,
+      `AOT: a for loop's counter must stay a 32-bit whole number, and ${name} can reach past one`,
+      BOUND_HINT,
+    );
+  }
 
   // The counter is a local of its own, which the body reads and only the step sets.
   const counter: Local = {
@@ -562,18 +578,21 @@ function forOfParts(statement: t.ForOfStatement): {
   iterable: t.Expression;
   item: t.LVal;
   indexName: string | null;
+  kind: 'const' | 'let';
 } {
   const {left, right} = statement;
   if (
     left.type !== 'VariableDeclaration' ||
+    (left.kind !== 'const' && left.kind !== 'let') ||
     left.declarations.length !== 1 ||
     left.declarations[0].init
   ) {
     throw errorAt(
       statement,
-      'AOT: a for…of must declare its item: for (const item of items)',
+      'AOT: a for…of must declare its item with const or let: for (const item of items)',
     );
   }
+  const {kind} = left;
   const pattern = left.declarations[0].id;
 
   // `for (const [i, item] of items.entries())`.
@@ -603,17 +622,20 @@ function forOfParts(statement: t.ForOfStatement): {
       iterable: (right.callee as t.MemberExpression).object as t.Expression,
       item: item as t.LVal,
       indexName: index.name,
+      kind,
     };
   }
-  return {iterable: right, item: pattern as t.LVal, indexName: null};
+  return {iterable: right, item: pattern as t.LVal, indexName: null, kind};
 }
 
 /**
- * Binds a for…of's item pattern: a name for the row, or `{a, b: c}`, each field a `const` the body starts with.
+ * Binds a for…of's item pattern: a name for the row, or `{a, b: c}`, each field a local the body starts with,
+ * declared as the loop declares its item.
  *
  * @param pattern  The pattern.
  * @param item  The row's item.
  * @param locals  The body's locals, which the item's name is added to.
+ * @param kind  How the loop declares its item.
  *
  * @returns The declarations the body starts with.
  */
@@ -621,6 +643,7 @@ function bindItem(
   pattern: t.LVal,
   item: Local,
   locals: Map<string, Local>,
+  kind: 'const' | 'let',
 ): t.Statement[] {
   if (pattern.type === 'Identifier') {
     locals.set(pattern.name, {...item, name: pattern.name});
@@ -672,7 +695,7 @@ function bindItem(
     ? [
         {
           type: 'VariableDeclaration',
-          kind: 'const',
+          kind,
           declarations: declarators,
           loc: pattern.loc,
         },
@@ -702,7 +725,7 @@ export function lowerForOf(
   if (statement.await) {
     throw errorAt(statement, 'AOT: for await is not supported');
   }
-  const {iterable, item: pattern, indexName} = forOfParts(statement);
+  const {iterable, item: pattern, indexName, kind} = forOfParts(statement);
   const list = listValueOf(iterable, environment);
   if (!list) {
     throw errorAt(
@@ -716,7 +739,7 @@ export function lowerForOf(
   const row: IrExpr = {kind: 'local', local: visit, type: INT};
   const item = rowItemOf(list, {name: 'item', index: row} as Local);
   const locals = new Map(environment.locals);
-  const declarations = bindItem(pattern, item, locals);
+  const declarations = bindItem(pattern, item, locals, kind);
   if (indexName) {
     locals.set(indexName, {...visit, counter: true});
   }

@@ -138,17 +138,20 @@ and `.start()` or `.stop()` on any `Animated` animation or composition. `while` 
   boolean holds booleans and a string strings. A whole number given a fraction or a timestamp anywhere holds one
   from the start.
 - `for…of` goes over a list state, a constant array, a filtered or sorted list, or a handler's split, at most the
-  list's cap (`ER_AOT_LIST_CAP`) times. The item can be taken apart, `for (const {id, done} of items)`, and
-  `for (const [i, item] of items.entries())` gives the index too.
+  list's cap (`ER_AOT_LIST_CAP`) times. The item is a `const` or a `let`; it can be taken apart,
+  `for (const {id, done} of items)`, and `for (const [i, item] of items.entries())` gives the index too. The item
+  itself can't be set, but a `let`'s fields taken apart can.
 - A `for` loop declares its counter with `let` and steps it by a constant (`i++`, `i--`, `i += 2`). It starts and
   ends at constants, lists' lengths or an outer loop's counter, so the compiler can count its visits:
-  `for (let i = items.length - 1; i >= 0; i--)`. The body can read the counter but not set it. A loop runs at most
-  65535 times, a function holds at most 32 loops, and a long loop counts against the event's instruction budget.
+  `for (let i = items.length - 1; i >= 0; i--)`. The body can read the counter but not set it, and it must stay a
+  32-bit whole number. A loop runs at most 65535 times, and a long loop counts against the event's instruction
+  budget. A function holds at most 32 loops, or what the firmware's `ERB_MAX_LOOPS` allows: the RP2040 firmware
+  takes 16, and refuses a package with more when it loads.
 - Inside a loop, a setter can't change the list it goes over, since React's loop sees the list as it was. A
   setter given a value that reads its own state, `setTotal(total + item.n)`, must take the updater form,
   `setTotal(t => t + item.n)`: React's would read `total` from before the loop each time. Or add up into a `let`
   and set the state once after the loop.
-- Labels, `while`, `do…while` and `for…in` are refused.
+- Labels, `while`, `do…while`, `for…in` and a `var` in a loop's declaration are refused.
 
 Helper functions are inlined where they are called, and a helper cannot call itself. One called as a statement may
 do anything a handler does, and its `return` leaves only the helper. One whose result is used, in a handler or in

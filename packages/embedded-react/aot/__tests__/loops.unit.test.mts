@@ -176,6 +176,20 @@ describe('for…of', () => {
     ).toEqual(['splitItems', {loop: ['set label']}]);
   });
 
+  it('declares its item with const or let, and refuses var', () => {
+    expect(() =>
+      lowerHandler('for (var item of items) setN(v => v + item.v);'),
+    ).toThrow(/must declare its item with const or let/);
+    expect(() =>
+      lowerHandler('for (let item of items) item = items[0];'),
+    ).toThrow(/"item" is a list's item, which can't be set/);
+    // A let's fields can be set, as JS's can.
+    const loop = firstLoop(
+      lowerHandler('for (let {v} of items) { v += 1; setN(m => m + v); }'),
+    );
+    expect(shape(loop.body)).toEqual(['declareLocal', 'assignLocal', 'set n']);
+  });
+
   it('refuses anything but a list', () => {
     expect(() => lowerHandler('for (const ch of label) setN(1);')).toThrow(
       /a for…of must go over a list/,
@@ -235,6 +249,22 @@ describe('for', () => {
     expect(() =>
       lowerHandler('let i = 0; for (i = 0; i < 3; i++) setN(1);'),
     ).toThrow(/must declare its counter with let/);
+  });
+
+  it('refuses a var counter, and one that leaves the int range', () => {
+    expect(() => lowerHandler('for (var i = 0; i < 3; i++) setN(1);')).toThrow(
+      /must declare its counter with let/,
+    );
+    expect(() =>
+      lowerHandler(
+        'for (let i = 2147483640; i < 2147483648; i++) setN(v => v + 1);',
+      ),
+    ).toThrow(/must stay a 32-bit whole number/);
+    expect(() =>
+      lowerHandler(
+        'for (let i = 2147483640; i <= 2147483646; i += 2) setN(v => v + 1);',
+      ),
+    ).toThrow(/must stay a 32-bit whole number/);
   });
 
   it('refuses a body that sets the counter', () => {

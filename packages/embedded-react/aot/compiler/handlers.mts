@@ -1593,6 +1593,12 @@ function lowerLocalAssign(
 ): IrStmt {
   const {name} = target;
   if (!local.assignable) {
+    if (local.list) {
+      throw aotError(
+        `AOT: "${name}" is a list's item, which can't be set`,
+        `copy what you need into a let: let value = ${name}.value;`,
+      );
+    }
     throw aotError(
       local.counter
         ? `AOT: "${name}" is a loop's counter, which only the loop sets`
