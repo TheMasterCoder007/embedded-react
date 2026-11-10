@@ -24,7 +24,8 @@ import {readFileSync, existsSync} from 'node:fs';
 import {posix, resolve} from 'node:path';
 import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
-import {inferItemStruct} from './list-items.mts';
+import {inferItemStruct, isPlainObject} from './list-items.mts';
+import {stateType} from './ir/types.mts';
 import {splitCallOf} from './list-split.mts';
 import {
   bootCheckpoint,
@@ -42,6 +43,7 @@ import {
   setBinding,
   withUndefined,
   rethrowFoldLimit,
+  RuntimeLeaf,
 } from './static-eval.mts';
 import type * as t from '@babel/types';
 import type {SlotWidths} from './ir/types.mts';
@@ -54,6 +56,9 @@ import type {
   EffectRecord,
   FunctionNode,
   ItemStruct,
+  Local,
+  RecordState,
+  ScalarState,
   Scope,
   StateRecord,
   StateTable,
@@ -346,6 +351,211 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
 }
 
 /**
+ * A read of a scalar state, as a local that stands for it.
+ *
+ * @param state  The state.
+ *
+ * @returns The local.
+ */
+export const stateLocal = (state: ScalarState): Local => ({
+  slotKind: state.slotKind,
+  isBoolean: state.isBoolean,
+  ...(state.widened === 'number' ? {isLiteral: true} : {}),
+  source: {kind: 'state', state, location: undefined},
+  expression: {kind: 'state', state, type: stateType(state)},
+});
+
+/**
+ * A scalar state's slot, its kind picked from its initial value.
+ *
+ * @param name  The JS name.
+ * @param slotName  The storage name.
+ * @param setter  The setter's JS name.
+ * @param initialValue  The folded initial value.
+ * @param initialNode  What it was written as, if anything: `70.0` makes a float slot.
+ * @param isHost  It is a useHostValue.
+ * @param bootValue  An initial value derived from `screen`.
+ * @param wide  Slots to declare 64-bit (see compileWidened).
+ *
+ * @returns The state.
+ */
+function scalarStateOf(
+  name: string,
+  slotName: string,
+  setter: string | undefined,
+  initialValue: unknown,
+  initialNode: t.Node | undefined,
+  isHost: boolean,
+  bootValue: BootValue | null,
+  wide: SlotWidths,
+): ScalarState {
+  // Pick the slot's kind from the initial value.
+  let slotKind: SlotKind = slotKindOfValue(initialValue);
+  // Flag booleans: slotKindOfValue makes them int, but text lowering must render false differently from 0.
+  const isBoolean = typeof initialValue === 'boolean';
+  // A literal written like 70.0 forces a float slot so the state can hold fractions (a smooth drag).
+  if (
+    slotKind === 'int' &&
+    initialNode?.type === 'NumericLiteral' &&
+    typeof initialNode.extra?.raw === 'string' &&
+    /[.eE]/.test(initialNode.extra!.raw as string)
+  ) {
+    slotKind = 'float';
+  }
+
+  // A whole number past the int range starts it 64-bit (past 64 bits, a float), as does a setter that
+  // stores a timestamp or such a number in it (see compileWidened).
+  const initialWidth = slotKind === 'int' ? wideInitial(initialValue) : null;
+  if (initialWidth === 'float') {
+    slotKind = 'float';
+  }
+
+  const widened =
+    slotKind === 'int' && !isBoolean
+      ? (wide.get(slotName) ??
+        (initialWidth === 'number' ? 'number' : undefined))
+      : undefined;
+  if (widened) {
+    slotKind = 'i64';
+  }
+
+  // String scalar → a fixed buffer; setters format into it (see scalarAssign).
+  const initial =
+    slotKind === 'string' ? String(initialValue) : Number(initialValue);
+  if (slotKind === 'float') {
+    checkNumber(initial);
+  } else if (slotKind === 'i64') {
+    BigInt(initial as number); // refuses a value that is not a whole number
+  }
+  return {
+    name,
+    slotName,
+    setter,
+    kind: 'scalar',
+    slotKind,
+    isBoolean,
+    initial,
+    host: isHost, // host-fed → also an input the host sets
+    initialAt: initialNode?.loc?.start,
+    ...(widened ? {widened} : {}),
+    ...(bootValue ? {bootValue} : {}),
+  };
+}
+
+/**
+ * What an object literal holds at a key, when it is written as a plain field.
+ *
+ * @param node  The object.
+ * @param key  The key.
+ *
+ * @returns The field's value, or undefined.
+ */
+function fieldNodeOf(
+  node: t.Node | undefined,
+  key: string,
+): t.Node | undefined {
+  if (node?.type !== 'ObjectExpression') return undefined;
+  for (const property of [...node.properties].reverse()) {
+    if (property.type !== 'ObjectProperty' || property.computed) continue;
+    const name =
+      property.key.type === 'Identifier'
+        ? property.key.name
+        : property.key.type === 'StringLiteral'
+          ? property.key.value
+          : null;
+    if (name === key) return property.value;
+  }
+  return undefined;
+}
+
+/**
+ * An object state: one scalar state per field, nested objects flattened to dotted paths.
+ *
+ * @param name  The JS name.
+ * @param prefix  The storage prefix.
+ * @param setter  The setter's JS name.
+ * @param value  The folded initial value.
+ * @param initialNode  What it was written as.
+ * @param wide  Slots to declare 64-bit (see compileWidened).
+ *
+ * @returns The record.
+ */
+function recordStateOf(
+  name: string,
+  prefix: string,
+  setter: string | undefined,
+  value: Record<string, unknown>,
+  initialNode: t.Node,
+  wide: SlotWidths,
+): RecordState {
+  const fields = new Map<string, ScalarState>();
+  const fail = (message: string, hint: string, at: t.Node | undefined) => {
+    const error = aotError(message, hint);
+    const location = (at ?? initialNode).loc;
+    if (location) error.aotLoc = location.start;
+    return error;
+  };
+  const flatten = (
+    object: Record<string, unknown>,
+    path: string[],
+    node: t.Node | undefined,
+  ): Record<string, unknown> => {
+    const entries = Object.entries(object);
+    if (!entries.length) {
+      throw fail(
+        `AOT: state "${[name, ...path].join('.')}" is an empty object`,
+        'give it the fields it will hold, each with a starting value.',
+        node,
+      );
+    }
+    const folded: Record<string, unknown> = {};
+    for (const [key, fieldValue] of entries) {
+      const fieldPath = [...path, key];
+      const fieldName = [name, ...fieldPath].join('.');
+      const fieldNode = fieldNodeOf(node, key);
+      if (isPlainObject(fieldValue)) {
+        folded[key] = flatten(fieldValue, fieldPath, fieldNode);
+        continue;
+      }
+      if (Array.isArray(fieldValue)) {
+        throw fail(
+          `AOT: state "${fieldName}" is an array inside an object state`,
+          'keep the list in a useState of its own.',
+          fieldNode,
+        );
+      }
+      if (
+        fieldValue == null ||
+        (typeof fieldValue === 'number' && !Number.isFinite(fieldValue)) ||
+        !['number', 'string', 'boolean'].includes(typeof fieldValue)
+      ) {
+        throw fail(
+          `AOT: the initial value of state "${fieldName}" is ${typeof fieldValue === 'function' ? 'a function' : String(fieldValue)}`,
+          "give each field a concrete starting value: 0, '' or false.",
+          fieldNode,
+        );
+      }
+      const state = scalarStateOf(
+        fieldName,
+        prefix + fieldName,
+        undefined,
+        fieldValue,
+        fieldNode,
+        false,
+        null,
+        wide,
+      );
+      state.initialAt ??= initialNode.loc?.start;
+      fields.set(fieldPath.join('.'), state);
+      folded[key] = new RuntimeLeaf(stateLocal(state));
+    }
+    return folded;
+  };
+  const folded = flatten(value, [], initialNode);
+  return {kind: 'record', name, setter, fields, value: folded};
+}
+
+/**
  * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
  * name (writes). `prefix` namespaces the STORAGE so each inlined child instance gets its own slots: the
  * lookup keys stay the bare JS names (`count`), but the field / array / count derive from `slotName`
@@ -369,7 +579,7 @@ export function collectState(
 ): StateTable {
   // Index each state by its JS name and, when it has one, by its setter's name.
   const byName = new Map<string, StateRecord>();
-  const bySetter = new Map<string, StateRecord>();
+  const bySetter = new Map<string, StateRecord | RecordState>();
 
   // Scan the body's top-level declarations for useState and useHostValue calls.
   for (const statement of functionBody.body) {
@@ -467,6 +677,26 @@ export function collectState(
               )
             : 0;
 
+        // Object state → a record, a scalar slot per field, which reads of its name fold through.
+        if (!isHost && isPlainObject(initialValue)) {
+          const recordState = recordStateOf(
+            name,
+            prefix,
+            setter,
+            initialValue,
+            initialArgument,
+            wide,
+          );
+          for (const [key, field] of recordState.fields) {
+            byName.set(`${name}.${key}`, field);
+          }
+          if (setter) {
+            bySetter.set(setter, recordState);
+          }
+          setBinding(scope, name, recordState.value);
+          continue;
+        }
+
         // A host value must be a finite number; check it directly, since slotKindOfValue maps non-numbers to int.
         if (isHost && !Number.isFinite(initialValue)) {
           throw aotError(
@@ -493,58 +723,16 @@ export function collectState(
           throw error;
         }
 
-        // Pick the slot's kind from the initial value.
-        let slotKind: SlotKind = slotKindOfValue(initialValue);
-        // Flag booleans: slotKindOfValue makes them int, but text lowering must render false differently from 0.
-        const isBoolean = typeof initialValue === 'boolean';
-        // A literal written like 70.0 forces a float slot so the state can hold fractions (a smooth drag).
-        if (
-          slotKind === 'int' &&
-          initialArgument?.type === 'NumericLiteral' &&
-          typeof initialArgument.extra?.raw === 'string' &&
-          /[.eE]/.test(initialArgument.extra!.raw as string)
-        ) {
-          slotKind = 'float';
-        }
-
-        // A whole number past the int range starts it 64-bit (past 64 bits, a float), as does a setter that
-        // stores a timestamp or such a number in it (see compileWidened).
-        const initialWidth =
-          slotKind === 'int' ? wideInitial(initialValue) : null;
-        if (initialWidth === 'float') {
-          slotKind = 'float';
-        }
-
-        const widened =
-          slotKind === 'int' && !isBoolean
-            ? (wide.get(slotName) ??
-              (initialWidth === 'number' ? 'number' : undefined))
-            : undefined;
-        if (widened) {
-          slotKind = 'i64';
-        }
-
-        // String scalar → a fixed buffer; setters format into it (see scalarAssign).
-        const initial =
-          slotKind === 'string' ? String(initialValue) : Number(initialValue);
-        if (slotKind === 'float') {
-          checkNumber(initial);
-        } else if (slotKind === 'i64') {
-          BigInt(initial as number); // refuses a value that is not a whole number
-        }
-        record = {
+        record = scalarStateOf(
           name,
           slotName,
           setter,
-          kind: 'scalar',
-          slotKind,
-          isBoolean,
-          initial,
-          host: isHost, // host-fed → also an input the host sets
-          initialAt: initialArgument?.loc?.start,
-          ...(widened ? {widened} : {}),
-          ...(bootValue ? {bootValue} : {}),
-        };
+          initialValue,
+          initialArgument,
+          isHost,
+          bootValue,
+          wide,
+        );
       }
 
       // Register the state for reads by name and for writes through its setter.

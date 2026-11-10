@@ -168,10 +168,20 @@ export interface DerivedList {
 
 export type StateRecord = ScalarState | ListState;
 
-/** A component's state, by JS name (reads) and by setter name (writes). */
+/** An object state: a fixed-layout record with one scalar state per field, keyed by its path joined with dots. */
+export interface RecordState {
+  kind: 'record';
+  name: string;
+  setter: string | undefined;
+  fields: Map<string, ScalarState>;
+  /** What reads of it fold to: its fields' reads, nested as the object is. */
+  value: Record<string, unknown>;
+}
+
+/** A component's state, by JS name (reads) and by setter name (writes). A record's fields are keyed `name.path`. */
 export interface StateTable {
   byName: Map<string, StateRecord>;
-  bySetter: Map<string, StateRecord>;
+  bySetter: Map<string, StateRecord | RecordState>;
 }
 
 /** A `useRef(number)`: a mutable slot that does not re-render. */
