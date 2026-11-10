@@ -139,7 +139,8 @@ export function switchAsIf(statement: t.SwitchStatement): t.Statement {
   if (!readsSame(statement.discriminant)) {
     const name: t.Identifier = {
       type: 'Identifier',
-      name: `$switch${statement.start ?? 0}`,
+      // `@` keeps it from naming anything the app declares.
+      name: `switch@${statement.start ?? 0}`,
     };
     return {
       type: 'BlockStatement',

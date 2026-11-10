@@ -141,6 +141,18 @@ describe('switch', () => {
     });
   });
 
+  it("names that local so it hides none of the app's", () => {
+    // The switch starts at offset 21, as the old `$switch21` name did.
+    const [, , chain] = lowerHandler(
+      'const $switch21 = 5; switch (n % 3) { case 0: setN($switch21); }',
+    );
+    const [write] = chain.kind === 'if' ? chain.consequent : [];
+    expect(write.kind === 'setState' && write.value).toMatchObject({
+      kind: 'local',
+      local: {name: 'local_$switch21', source: {kind: 'number', value: 5}},
+    });
+  });
+
   it('refuses a break that does not end its case', () => {
     expect(() =>
       lowerHandler('switch (n) { case 1: if (label) break; setN(1); break; }'),
