@@ -135,6 +135,50 @@ describe('useReducer', () => {
     expect(JSON.stringify(handler[0])).toContain('"value":100');
   });
 
+  it("uses the component's binding of the reducer's name over the module's", () => {
+    const module = 'function counter(state, action) { return state + 100; }\n';
+    const [[write]] = handlersOf(
+      appOf(
+        module,
+        '  const counter = (state, action) => state + 7;\n' + COUNTER_HOOKS,
+        ["dispatch({type: 'inc'});"],
+      ),
+    );
+    expect(JSON.stringify(write)).toContain('"value":7');
+    expect(() =>
+      compile(
+        appOf(module, '  const counter = 0;\n' + COUNTER_HOOKS, [
+          "dispatch({type: 'inc'});",
+        ]),
+      ),
+    ).toThrow(/the reducer for "n" must be a function in this file/);
+  });
+
+  it('drops the branches a constant type rules out inside a loop', () => {
+    const reducer =
+      'function counter(state, action) {\n' +
+      '  let total = state;\n' +
+      "  for (let i = 0; i < 2; i++) { if (action.type === 'inc') total += 1; else throw new Error('x'); }\n" +
+      '  return total;\n}\n';
+    expect(() =>
+      compile(appOf(reducer, COUNTER_HOOKS, ["dispatch({type: 'inc'});"])),
+    ).not.toThrow();
+  });
+
+  it('folds no test through a name a block declares', () => {
+    const reducer =
+      'function counter(state, action) {\n' +
+      "  if (state > 5) { const action = {type: 'dec'}; if (action.type === 'inc') return state + 1; " +
+      'return state - 1; }\n' +
+      '  return state;\n}\n';
+    const [handler] = handlersOf(
+      appOf(reducer, COUNTER_HOOKS, ["dispatch({type: 'inc'});"]),
+    );
+    const branch = JSON.stringify(handler);
+    expect(branch).toContain('"helper":"add"');
+    expect(branch).toContain('"helper":"sub"');
+  });
+
   it('compiles for objects, tagged objects, lists and string actions, in children, helpers, effects and loops', () => {
     const before =
       COUNTER +

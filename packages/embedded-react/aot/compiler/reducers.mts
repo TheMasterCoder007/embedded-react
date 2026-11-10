@@ -32,8 +32,10 @@ import {
   evalStatic,
   foldScope,
   rethrowFoldLimit,
+  withoutNames,
 } from './static-eval.mts';
 import {switchAsIf} from './switch-cases.mts';
+import {declaredIn} from './updaters.mts';
 import type * as t from '@babel/types';
 import type {ObjectTree} from './records.mts';
 import type {Env, Local, Scope} from './types.mts';
@@ -229,9 +231,10 @@ function prunedValue(node: t.Expression, scope: Scope): t.Expression {
 }
 
 /**
- * Statements with each branch whose test folds made the one it takes. A branch taken that always ends drops the
- * statements after it, which never run. Tests on the action's constant fields fold, so a `switch (action.type)`
- * keeps only the case a dispatch takes.
+ * Statements with each branch whose test folds made the one it takes, in loops too. A branch taken that always ends
+ * drops the statements after it, which never run. Tests on the action's constant fields fold, so a `switch
+ * (action.type)` keeps only the case a dispatch takes. A name a block or a loop declares hides what it names outside,
+ * so no test folds through it.
  *
  * @param statements  The statements.
  * @param scope  The constants a fold may read.
@@ -243,6 +246,7 @@ export function prunedStatements(
   scope: Scope,
 ): t.Statement[] {
   const pruned: t.Statement[] = [];
+  scope = withoutNames(scope, declaredIn(statements));
   for (const original of statements) {
     const statement =
       original.type === 'SwitchStatement' ? switchAsIf(original) : original;
@@ -289,6 +293,23 @@ export function prunedStatements(
         const body = prunedStatements(statement.body, scope);
         pruned.push({...statement, body});
         if (exits(body)) return pruned;
+        continue;
+      }
+      case 'ForStatement':
+      case 'ForOfStatement': {
+        const head =
+          statement.type === 'ForStatement' ? statement.init : statement.left;
+        pruned.push({
+          ...statement,
+          body: {
+            type: 'BlockStatement',
+            body: prunedStatements(
+              statementsOf(statement.body),
+              withoutNames(scope, declaredIn([head])),
+            ),
+            directives: [],
+          },
+        });
         continue;
       }
       case 'ReturnStatement':

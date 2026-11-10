@@ -32,6 +32,7 @@ import {
   writtenObjects,
 } from './record-shapes.mts';
 import {stateLocal, tagText, taggedTreeOf} from './tagged-records.mts';
+import {patternNames} from './updaters.mts';
 import type {RecordShapes, WrittenObject} from './record-shapes.mts';
 import type {TaggedRecord} from './tagged-records.mts';
 import {splitCallOf} from './list-split.mts';
@@ -719,7 +720,11 @@ function reducerOf(
   functionBody: t.BlockStatement,
   program: t.Program | undefined,
 ): Reducer {
-  const declared = (statements: t.Statement[], name: string) => {
+  // What a name is bound to at one level: a function, something else, or nothing.
+  const bindingIn = (
+    statements: t.Statement[],
+    name: string,
+  ): FunctionNode | 'other' | null => {
     for (const statement of statements) {
       const declaration =
         statement.type === 'ExportNamedDeclaration'
@@ -733,24 +738,23 @@ function reducerOf(
       }
       if (declaration?.type !== 'VariableDeclaration') continue;
       for (const declarator of declaration.declarations) {
-        if (
-          declarator.id.type === 'Identifier' &&
-          declarator.id.name === name &&
-          isFn(declarator.init)
-        ) {
-          return declarator.init;
-        }
+        if (!patternNames(declarator.id).includes(name)) continue;
+        return declarator.id.type === 'Identifier' && isFn(declarator.init)
+          ? declarator.init
+          : 'other';
       }
     }
     return null;
   };
 
-  const functionNode = isFn(node)
+  // The component's own binding of the name hides the module's.
+  const bound = isFn(node)
     ? node
     : node?.type === 'Identifier'
-      ? (declared(functionBody.body, node.name) ??
-        declared(program?.body ?? [], node.name))
+      ? (bindingIn(functionBody.body, node.name) ??
+        bindingIn(program?.body ?? [], node.name))
       : null;
+  const functionNode = bound === 'other' ? null : bound;
   if (!functionNode) {
     throw locatedAt(
       aotError(

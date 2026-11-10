@@ -77,7 +77,7 @@ function locatedError(node: t.Node, message: string, hint: string): Error {
  *
  * @returns The names.
  */
-function patternNames(pattern: t.Node | null | undefined): string[] {
+export function patternNames(pattern: t.Node | null | undefined): string[] {
   if (!pattern) return [];
   switch (pattern.type) {
     case 'Identifier':
@@ -106,7 +106,9 @@ function patternNames(pattern: t.Node | null | undefined): string[] {
  *
  * @returns The names.
  */
-const declaredIn = (statements: (t.Node | null | undefined)[]): string[] =>
+export const declaredIn = (
+  statements: (t.Node | null | undefined)[],
+): string[] =>
   statements.flatMap(statement =>
     statement?.type === 'VariableDeclaration'
       ? statement.declarations.flatMap(({id}) => patternNames(id))
