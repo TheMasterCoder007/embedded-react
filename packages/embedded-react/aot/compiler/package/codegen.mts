@@ -1852,12 +1852,21 @@ export class Codegen {
   }
 
   /**
-   * Fills a list of strings with a string's pieces. Without a limit it keeps every piece the list holds.
+   * Fills a list of strings with a string's pieces. Without a limit it keeps every piece the list holds; without a
+   * separator, the whole string.
    *
    * @param statement  The split.
    */
   private splitItems(statement: IrSplitItems): void {
     const {builder} = this;
+    const pool = this.listPool(statement.list).slot;
+    if (!statement.separator) {
+      // The string is read before the clear, which only resets the count, so a row of this list still reads.
+      const text = this.valueAs(statement.text, 'string');
+      builder.abx('CLEAR', 0, pool.index);
+      builder.abx('APPEND', text.index, pool.index);
+      return;
+    }
     builder.abc(
       'SPLIT',
       this.valueAs(statement.text, 'string').index,
@@ -1866,7 +1875,7 @@ export class Codegen {
         ? this.valueAs(statement.limit, 'int')
         : this.load('int', -1)
       ).index,
-      this.listPool(statement.list).slot.index,
+      pool.index,
     );
   }
 

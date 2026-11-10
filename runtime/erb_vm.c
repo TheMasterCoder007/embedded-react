@@ -892,7 +892,7 @@ static uint8_t* row_field(uint32_t extension, int32_t row, const uint8_t** slot_
 
 /**
  * @brief Fills the list in @p slot with the pieces of @p text between each @p separator, as JS's split does: an
- *        empty separator gives each character, and at most @p limit pieces are kept (none when it is negative).
+ *        empty separator gives each character, and at most @p limit pieces are kept (any number when it is negative).
  *        Pieces past the list's cap are dropped, and a piece past its field's cap is cut; both are reported.
  */
 static void split_into(const uint8_t* slot, const char* text, const char* separator, int32_t limit)

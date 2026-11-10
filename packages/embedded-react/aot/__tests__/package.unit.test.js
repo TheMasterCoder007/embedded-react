@@ -1886,6 +1886,9 @@ export function App() {
     const whole = handlerOps('setWords(line.split())');
     expect(whole).toEqual(expect.arrayContaining(['CLEAR', 'APPEND']));
     expect(whole).not.toContain('SPLIT');
+    // A row of the list is read before the clear, which leaves its bytes in place.
+    const own = handlerOps('setWords(words[0].split())');
+    expect(own.indexOf('ROWGET')).toBeLessThan(own.indexOf('CLEAR'));
   });
 
   it('splits in render in the update, before what reads the pieces', () => {
@@ -1969,6 +1972,10 @@ export function App() {
     );
     refuses(
       "setN(line.split(',').length)",
+      'a split in a handler, effect or timer must be a const',
+    );
+    refuses(
+      "{ let parts = line.split(','); setN(parts.length); }",
       'a split in a handler, effect or timer must be a const',
     );
     refuses(

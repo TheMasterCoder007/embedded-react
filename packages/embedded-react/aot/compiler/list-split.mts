@@ -32,7 +32,7 @@ import {
 } from './static-eval.mts';
 import type * as t from '@babel/types';
 import type {IrExpr} from './ir/expressions.mts';
-import type {IrStmt} from './ir/statements.mts';
+import type {IrSplitItems, IrStmt} from './ir/statements.mts';
 import type {Env, ItemStruct, ListState} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -118,20 +118,20 @@ function keptString(node: t.Node, environment: Env, what: string): IrExpr {
 }
 
 /**
- * The statements that fill a list of strings with a string's pieces. `split()` with no separator keeps the whole
+ * The statement that fills a list of strings with a string's pieces. `split()` with no separator keeps the whole
  * string as one piece.
  *
  * @param list  The list.
  * @param split  The split.
  * @param environment  The expression environment.
  *
- * @returns The statements.
+ * @returns The statement.
  */
-function splitStatements(
+function splitStatement(
   list: ListState,
   split: SplitCall,
   environment: Env,
-): IrStmt[] {
+): IrSplitItems {
   const [separatorNode, limitNode, ...rest] = split.call.arguments;
   if ([separatorNode, limitNode].some(node => node?.type === 'SpreadElement')) {
     throw aotError(
@@ -150,14 +150,7 @@ function splitStatements(
 
   const text = keptString(split.text, environment, 'the string it splits');
   if (!separatorNode) {
-    return [
-      {kind: 'clearList', list},
-      {
-        kind: 'appendItem',
-        list,
-        values: [{field: list.struct.fields[0], value: text}],
-      },
-    ];
+    return {kind: 'splitItems', list, text, separator: null, limit: null};
   }
   const separator = keptString(separatorNode, environment, 'the separator');
   let limit: IrExpr | null = null;
@@ -170,30 +163,21 @@ function splitStatements(
       );
     }
   }
-  return [{kind: 'splitItems', list, text, separator, limit}];
+  return {kind: 'splitItems', list, text, separator, limit};
 }
 
 /**
- * What a split's statements read: its string, its separator and its limit.
+ * What a split reads: its string, its separator and its limit.
  *
- * @param statements  The statements.
+ * @param statement  The split.
  *
  * @returns The values.
  */
-const splitValuesOf = (statements: IrStmt[]): IrExpr[] =>
-  statements.flatMap(statement =>
-    statement.kind === 'splitItems'
-      ? [
-          statement.text,
-          statement.separator,
-          ...(statement.limit ? [statement.limit] : []),
-        ]
-      : statement.kind === 'appendItem'
-        ? statement.values.flatMap(value =>
-            'value' in value ? [value.value] : [],
-          )
-        : [],
-  );
+const splitValuesOf = (statement: IrSplitItems): IrExpr[] => [
+  statement.text,
+  ...(statement.separator ? [statement.separator] : []),
+  ...(statement.limit ? [statement.limit] : []),
+];
 
 /**
  * Lowers a split as a list state's next value, `setWords(text.split(','))`: its pieces replace the rows.
@@ -220,15 +204,15 @@ export function lowerSplitInto(
       'keep the pieces in a list of strings: const [words, setWords] = useState([""]).',
     );
   }
-  const statements = splitStatements(listState, split, environment);
-  const [, separator] = splitValuesOf(statements);
+  const statement = splitStatement(listState, split, environment);
+  const {separator} = statement;
   if (separator && expressionReads(separator)?.has(listState)) {
     throw aotError(
       `AOT: a split into "${listName}" can't split at one of its own items`,
       `the pieces replace its rows as they are found. Copy the separator into a const first.`,
     );
   }
-  return statements;
+  return [statement];
 }
 
 /**
@@ -286,8 +270,12 @@ export function splitListOf(node: t.Node, environment: Env): ListState | null {
     capacity: environment.caps.listCap,
     initialAt: node.loc?.start,
   };
-  const rebuild = splitStatements(list, split, environment);
-  list.derived = {steps: [], rebuild, tests: splitValuesOf(rebuild)};
+  const statement = splitStatement(list, split, environment);
+  list.derived = {
+    steps: [],
+    rebuild: [statement],
+    tests: splitValuesOf(statement),
+  };
 
   if (!lists.has(node)) lists.set(node, new Map());
   lists.get(node)!.set(key, list);
@@ -299,6 +287,7 @@ export function splitListOf(node: t.Node, environment: Env): ListState | null {
  *
  * @param name  The const's name.
  * @param init  What it is set to.
+ * @param kind  `const`, `let` or `var`.
  * @param environment  The expression environment.
  *
  * @returns The list and the statements that fill it, or null when the const is no split.
@@ -306,10 +295,17 @@ export function splitListOf(node: t.Node, environment: Env): ListState | null {
 export function handlerSplitList(
   name: string,
   init: t.Expression,
+  kind: t.VariableDeclaration['kind'],
   environment: Env,
 ): {list: ListState; statements: IrStmt[]} | null {
   const split = splitCallOf(init);
   if (!split) return null;
+  if (kind !== 'const') {
+    throw aotError(
+      'AOT: a split in a handler, effect or timer must be a const',
+      `its list can't be set again, so declare it with const: const ${name} = text.split(",").`,
+    );
+  }
   const lists = environment.splitLists;
   if (!lists) {
     throw new Error('AOT internal: no table for split lists');
@@ -332,5 +328,5 @@ export function handlerSplitList(
     if (!lists.has(init)) lists.set(init, new Map());
     lists.get(init)!.set(key, list);
   }
-  return {list, statements: splitStatements(list, split, environment)};
+  return {list, statements: [splitStatement(list, split, environment)]};
 }

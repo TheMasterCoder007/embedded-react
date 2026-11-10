@@ -196,8 +196,8 @@ export interface IrSplitItems {
   kind: 'splitItems';
   list: ListState;
   text: IrExpr;
-  /** What it splits at: an empty string gives each character. */
-  separator: IrExpr;
+  /** What it splits at, an empty string giving each character; null keeps the whole string as one piece. */
+  separator: IrExpr | null;
   /** The most pieces it keeps, or null for no limit. */
   limit: IrExpr | null;
 }

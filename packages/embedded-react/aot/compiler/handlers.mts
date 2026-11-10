@@ -2058,6 +2058,7 @@ export function lowerStmts(
         const split = handlerSplitList(
           declarator.id.name,
           declarator.init,
+          statement.kind,
           environment,
         );
         if (split) {
