@@ -28,7 +28,7 @@ import {
 } from './static-eval.mts';
 import {INT_MAX, lowerExpr} from './expressions.mts';
 import {NO_WIDE, isFn, wideInitial} from './collect.mts';
-import {lowerStmts} from './handlers.mts';
+import {lowerBody} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
 import {parseColorValue} from '../style-map.mts';
 import type * as t from '@babel/types';
@@ -1395,7 +1395,7 @@ function lowerCompletion(
     stateChanged: false,
     output: context.output,
   };
-  const body = lowerStmts(
+  const body = lowerBody(
     list,
     {...environment, locals},
     state,

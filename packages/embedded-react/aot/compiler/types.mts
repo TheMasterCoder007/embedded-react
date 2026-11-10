@@ -411,6 +411,8 @@ export interface Env {
   constantLists?: Map<unknown[], ListState>;
   /** Lists filtered or sorted in render, by the call that makes them, then the component instance and the list it starts from. */
   derivedLists?: Map<t.Node, Map<string, ListState>>;
+  /** Helpers being inlined, so a recursive one is refused. */
+  inlining?: ReadonlySet<string>;
   /** Lists a handler, effect, or timer splits a string into, by the `const` that names them, then the component instance. */
   splitLists?: Map<t.Node, Map<string, ListState>>;
 }
@@ -423,11 +425,11 @@ export interface StatementContext {
   /** A statement set state, so the body ends with the update. */
   stateChanged: boolean;
   output: Out;
-  /** A `return` may exit this body: it is an effect body. */
-  allowReturn?: boolean;
   /** The body's own top-level statements, which a tail `return` and hoisted locals are measured against. */
   bodyList?: t.Statement[];
-  /** An early `return` was lowered, so the body needs a function of its own. */
+  /** The statements of the helper being inlined, whose tail `return` needs no jump. */
+  helperList?: t.Statement[];
+  /** An early `return` was lowered, so the body or helper is a block it leaves, or an effect's function of its own. */
   usedReturn?: boolean;
   /** The body is a dep-driven effect. */
   dependencyDriven?: boolean;
@@ -440,6 +442,4 @@ export interface StatementContext {
     armed: string;
     emit: (functionNode: FunctionNode, environment: Env) => void;
   };
-  /** Helpers being inlined, so a recursive one is refused. */
-  inlining?: Set<string>;
 }

@@ -350,6 +350,8 @@ function stringLocals(statements: IrStmt[], found: Set<string>): void {
     } else if (statement.kind === 'if') {
       stringLocals(statement.consequent, found);
       stringLocals(statement.alternate ?? [], found);
+    } else if (statement.kind === 'block') {
+      stringLocals(statement.body, found);
     }
   }
 }
@@ -367,6 +369,8 @@ function updateVectors(statements: IrStmt[], found: IrUpdateVector[]): void {
     } else if (statement.kind === 'if') {
       updateVectors(statement.consequent, found);
       updateVectors(statement.alternate ?? [], found);
+    } else if (statement.kind === 'block') {
+      updateVectors(statement.body, found);
     }
   }
 }
@@ -386,6 +390,8 @@ function statesSet(statements: IrStmt[], found: Set<StateRecord>): void {
     } else if (statement.kind === 'if') {
       statesSet(statement.consequent, found);
       statesSet(statement.alternate ?? [], found);
+    } else if (statement.kind === 'block') {
+      statesSet(statement.body, found);
     }
   }
 }

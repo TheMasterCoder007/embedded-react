@@ -234,7 +234,13 @@ export interface IrIf {
   alternate: IrStmt[] | null;
 }
 
-/** An early `return` from an effect body. */
+/** A body an early `return` leaves: a handler's, or an inlined helper's. */
+export interface IrBlock {
+  kind: 'block';
+  body: IrStmt[];
+}
+
+/** An early `return`: to the end of the innermost block, or else of the effect. */
 export interface IrReturn {
   kind: 'return';
 }
@@ -293,6 +299,7 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrStepRef
   | IrStopAnimations
   | IrIf
+  | IrBlock
   | IrReturn
   | IrArmCleanup
   | IrAnimationStart
