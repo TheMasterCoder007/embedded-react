@@ -20,16 +20,25 @@
 
 import {aotError} from './diagnostics.mts';
 import {
+  HiddenField,
   RuntimeLeaf,
   evalStatic,
   foldScope,
   rethrowFoldLimit,
 } from './static-eval.mts';
+import {
+  isTagOf,
+  narrowOn,
+  narrowed,
+  shapesOf,
+  tagText,
+} from './tagged-records.mts';
 import {STRING, typeOfSlotValue} from './ir/types.mts';
 import type * as t from '@babel/types';
 import type {IrExpr} from './ir/expressions.mts';
 import type {IrStmt} from './ir/statements.mts';
 import type {Env, Local, RecordState, ScalarState} from './types.mts';
+import type {TaggedRecord} from './tagged-records.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
@@ -150,8 +159,15 @@ export function objectTreeOf(
 
   // `cond ? a : b` of two objects with the same fields: each field picks its side.
   if (node.type === 'ConditionalExpression') {
-    const consequent = objectTreeOf(node.consequent, environment);
-    const alternate = objectTreeOf(node.alternate, environment);
+    const narrowing = narrowOn(node.test, environment);
+    const consequent = objectTreeOf(
+      node.consequent,
+      narrowed(environment, narrowing.whenTrue),
+    );
+    const alternate = objectTreeOf(
+      node.alternate,
+      narrowed(environment, narrowing.whenFalse),
+    );
     if (!consequent || !alternate) return null;
     const sides = [flattenTree(consequent), flattenTree(alternate)];
     const keys = [...sides[0].keys()];
@@ -263,6 +279,7 @@ export function leafNode(
         : environment,
     };
   }
+  if (value instanceof HiddenField) throw value.error();
   if (value instanceof RuntimeLeaf) {
     const name = `field$${syntheticCount++}`;
     return {
@@ -348,23 +365,28 @@ function readsAny(value: unknown, states: Set<ScalarState>): boolean {
   return walk(value);
 }
 
+/** How a record's writes are lowered. */
+export interface RecordLowering {
+  /** Lowers a write of an expression to one field. */
+  field: (field: ScalarState, node: t.Node, environment: Env) => IrStmt;
+  /** Lowers a test. */
+  test: (node: t.Node, environment: Env) => IrExpr;
+}
+
 /**
- * Lowers a write to an object state: every field set from the new object, a field left as it is skipped. A value
- * that reads a field written before it is worked out first, so `{x: p.y, y: p.x}` swaps.
+ * The fields of the object a setter is given.
  *
  * @param record  The object state.
  * @param valueNode  The new object.
  * @param environment  The expression environment.
- * @param lowerField  Lowers a write of an expression to one field.
  *
- * @returns The writes.
+ * @returns Its fields.
  */
-export function lowerRecordSet(
+function givenLeaves(
   record: RecordState,
   valueNode: t.Node | undefined,
   environment: Env,
-  lowerField: (field: ScalarState, node: t.Node, environment: Env) => IrStmt,
-): IrStmt[] {
+): Map<string, unknown> {
   const setter = record.setter ?? `set ${record.name}`;
   const tree = valueNode ? objectTreeOf(valueNode, environment) : null;
   if (!tree) {
@@ -373,8 +395,46 @@ export function lowerRecordSet(
       `pass an object: ${setter}({...${record.name}, field: value}).`,
     );
   }
-
   const leaves = flattenTree(tree);
+  for (const key of leaves.keys()) {
+    if (!record.fields.has(key) && key !== record.tag?.key) {
+      throw aotError(
+        `AOT: state "${record.name}" has no field "${key}"`,
+        'an object state holds the fields it starts with; give the field a starting value in useState.',
+      );
+    }
+  }
+  return leaves;
+}
+
+/**
+ * Lowers a write to an object state: every field set from the new object, a field left as it is skipped. A value
+ * that reads a field written before it is worked out first, so `{x: p.y, y: p.x}` swaps.
+ *
+ * @param record  The object state.
+ * @param valueNode  The new object.
+ * @param environment  The expression environment.
+ * @param lowering  How its writes are lowered.
+ *
+ * @returns The writes.
+ */
+export function lowerRecordSet(
+  record: RecordState,
+  valueNode: t.Node | undefined,
+  environment: Env,
+  lowering: RecordLowering,
+): IrStmt[] {
+  if (record.tag) {
+    return lowerTaggedSet(
+      record as TaggedRecord,
+      valueNode,
+      environment,
+      lowering,
+    );
+  }
+
+  const setter = record.setter ?? `set ${record.name}`;
+  const leaves = givenLeaves(record, valueNode, environment);
   for (const key of record.fields.keys()) {
     if (!leaves.has(key)) {
       throw aotError(
@@ -383,19 +443,171 @@ export function lowerRecordSet(
       );
     }
   }
-  for (const key of leaves.keys()) {
-    if (!record.fields.has(key)) {
-      throw aotError(
-        `AOT: state "${record.name}" has no field "${key}"`,
-        'an object state holds the fields it starts with; give the field a starting value in useState.',
+  return writeFields(
+    [...record.fields].map(([key, field]) => [field, leaves.get(key)]),
+    environment,
+    lowering.field,
+  );
+}
+
+/**
+ * A field's value when it folds to a constant.
+ *
+ * @param value  The field.
+ * @param environment  The expression environment.
+ *
+ * @returns The constant, or the field as it is.
+ */
+function constantOf(value: unknown, environment: Env): unknown {
+  if (!(value instanceof AstLeaf) || value.locals.size) return value;
+  try {
+    return evalStatic(
+      value.node,
+      foldScope(environment, environment.constants ?? {}),
+    );
+  } catch (error) {
+    rethrowFoldLimit(error);
+    return value;
+  }
+}
+
+/**
+ * Lowers a write to a tagged object state. An object with its tag written out sets that shape: the hidden tag, and
+ * each of the shape's fields. One that keeps the tag (a spread of the state) keeps the shape. A ternary sets the
+ * shape its test picks.
+ *
+ * @param record  The object state.
+ * @param valueNode  The new object.
+ * @param environment  The expression environment.
+ * @param lowering  How its writes are lowered.
+ *
+ * @returns The writes.
+ */
+function lowerTaggedSet(
+  record: TaggedRecord,
+  valueNode: t.Node | undefined,
+  environment: Env,
+  lowering: RecordLowering,
+): IrStmt[] {
+  const {name, tag} = record;
+  const setter = record.setter ?? `set ${name}`;
+
+  if (valueNode?.type === 'ConditionalExpression') {
+    const narrowing = narrowOn(valueNode.test, environment);
+    const consequent = lowerTaggedSet(
+      record,
+      valueNode.consequent,
+      narrowed(environment, narrowing.whenTrue),
+      lowering,
+    );
+    const alternate = lowerTaggedSet(
+      record,
+      valueNode.alternate,
+      narrowed(environment, narrowing.whenFalse),
+      lowering,
+    );
+    if (!consequent.length && !alternate.length) return [];
+    return [
+      {
+        kind: 'if',
+        test: lowering.test(valueNode.test, environment),
+        consequent,
+        alternate: alternate.length ? alternate : null,
+      },
+    ];
+  }
+
+  const leaves = givenLeaves(record, valueNode, environment);
+  const leavesOut = (key: string, hint: string): Error =>
+    aotError(`AOT: ${setter} leaves out "${name}.${key}"`, hint);
+  const tagValue = constantOf(leaves.get(tag.key), environment);
+
+  // A spread of the state keeps its shape.
+  if (isTagOf(tagValue, record)) {
+    for (const key of record.fields.keys()) {
+      if (!leaves.has(key)) {
+        throw leavesOut(
+          key,
+          `spread the old value to keep its shape: ${setter}({...${name}, …}).`,
+        );
+      }
+    }
+    return writeFields(
+      [...record.fields].map(([key, field]) => [field, leaves.get(key)]),
+      environment,
+      lowering.field,
+    );
+  }
+
+  if (
+    typeof tagValue !== 'string' &&
+    typeof tagValue !== 'number' &&
+    typeof tagValue !== 'boolean'
+  ) {
+    throw aotError(
+      `AOT: ${setter} needs to know which shape "${name}" takes`,
+      `write the tag out, ${setter}({${tag.key}: ${tagText(tag.values[0])}, …}), or test ${name}.${tag.key} first.`,
+    );
+  }
+  const shape = tag.values.indexOf(tagValue);
+  if (shape < 0) {
+    throw aotError(
+      `AOT: state "${name}" has no shape with ${tag.key} ${tagText(tagValue)}`,
+      `its shapes are its initial value and the objects ${setter} is given in full; ` +
+        `write this one out in full once: ${setter}({${tag.key}: ${tagText(tagValue)}, …}).`,
+    );
+  }
+
+  const fields = tag.shapes[shape];
+  for (const key of fields) {
+    if (!leaves.has(key) || leaves.get(key) instanceof HiddenField) {
+      throw leavesOut(
+        key,
+        `give every field of the ${tagText(tagValue)} shape a value.`,
       );
     }
   }
+  for (const [key, value] of leaves) {
+    if (key === tag.key || fields.has(key) || value instanceof HiddenField) {
+      continue;
+    }
+    throw aotError(
+      `AOT: the ${tagText(tagValue)} shape of "${name}" has no field "${key}"`,
+      `write the shape out with its own fields: ${setter}({${tag.key}: ${tagText(tagValue)}, …}).`,
+    );
+  }
 
+  // The tag is written unless the state can only have that shape here.
+  const here = environment.locals.has(name)
+    ? null
+    : shapesOf(environment.constants?.[name]);
+  const entries: [ScalarState, unknown][] =
+    here?.length === 1 && here[0] === shape ? [] : [[tag.state, shape]];
+  for (const [key, field] of record.fields) {
+    if (fields.has(key)) entries.push([field, leaves.get(key)]);
+  }
+  return writeFields(entries, environment, lowering.field);
+}
+
+/**
+ * Lowers the writes of values to fields: a field set to itself is skipped, and a value that reads a field written
+ * before it is worked out first.
+ *
+ * @param entries  Each field and its value.
+ * @param environment  The expression environment.
+ * @param lowerField  Lowers a write of an expression to one field.
+ *
+ * @returns The writes.
+ */
+function writeFields(
+  entries: [ScalarState, unknown][],
+  environment: Env,
+  lowerField: RecordLowering['field'],
+): IrStmt[] {
   // A field set to itself keeps its value.
   const writes: {field: ScalarState; statement: IrStmt}[] = [];
-  for (const [key, field] of record.fields) {
-    const value = leaves.get(key);
+  for (const [field, value] of entries) {
+    if (value instanceof HiddenField && value.field === field) continue;
     const read =
       value instanceof AstLeaf && !value.locals.size
         ? fieldRead(value.node, environment)

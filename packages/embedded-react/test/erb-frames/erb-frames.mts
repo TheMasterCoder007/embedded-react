@@ -351,6 +351,36 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '32,48 84,48 84,48 136,48 136,48 188,48',
   },
+  // Buttons: row 1 start, step, skip, check; row 2 reset and two lights.
+  {name: 'tagged', file: fixture('tagged'), screen: PORTRAIT},
+  // Start, step, check, step: busy at 50, checked at 25; the first light twice.
+  {
+    name: 'tagged-busy',
+    file: fixture('tagged'),
+    screen: PORTRAIT,
+    taps: '32,20 84,20 188,20 84,20 84,48 84,48',
+  },
+  // Start, step, check, step twice to done, check again to fail; the second light round to off and on once more.
+  {
+    name: 'tagged-done',
+    file: fixture('tagged'),
+    screen: PORTRAIT,
+    taps: '32,20 84,20 188,20 84,20 84,20 188,20 136,48 136,48 136,48 136,48 136,48',
+  },
+  // Start, skip, then skip again, which keeps the shape.
+  {
+    name: 'tagged-skip',
+    file: fixture('tagged'),
+    screen: PORTRAIT,
+    taps: '32,20 136,20 136,20',
+  },
+  // Start, step, reset, then a step that does nothing while idle.
+  {
+    name: 'tagged-reset',
+    file: fixture('tagged'),
+    screen: PORTRAIT,
+    taps: '32,20 84,20 32,48 84,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

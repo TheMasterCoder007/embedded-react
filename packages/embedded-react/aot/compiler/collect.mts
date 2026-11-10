@@ -25,8 +25,11 @@ import {posix, resolve} from 'node:path';
 import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {inferItemStruct} from './list-items.mts';
-import {isObjectTree} from './records.mts';
-import {stateType} from './ir/types.mts';
+import {flattenTree, isObjectTree} from './records.mts';
+import {recordShapesOf, writtenObjects} from './record-shapes.mts';
+import {stateLocal, tagText, taggedTreeOf} from './tagged-records.mts';
+import type {RecordShapes, WrittenObject} from './record-shapes.mts';
+import type {TaggedRecord} from './tagged-records.mts';
 import {splitCallOf} from './list-split.mts';
 import {
   bootCheckpoint,
@@ -57,7 +60,6 @@ import type {
   EffectRecord,
   FunctionNode,
   ItemStruct,
-  Local,
   RecordState,
   ScalarState,
   Scope,
@@ -352,21 +354,6 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
 }
 
 /**
- * A read of a scalar state, as a local that stands for it.
- *
- * @param state  The state.
- *
- * @returns The local.
- */
-export const stateLocal = (state: ScalarState): Local => ({
-  slotKind: state.slotKind,
-  isBoolean: state.isBoolean,
-  ...(state.widened === 'number' ? {isLiteral: true} : {}),
-  source: {kind: 'state', state, location: undefined},
-  expression: {kind: 'state', state, type: stateType(state)},
-});
-
-/**
  * A scalar state's slot, its kind picked from its initial value.
  *
  * @param name  The JS name.
@@ -565,6 +552,139 @@ function recordStateOf(
 }
 
 /**
+ * Makes an object state of several shapes a tagged record: a hidden slot holding the shape's index, and a slot for
+ * every field any shape has. A field the initial value lacks takes its kind from a constant written for it, and
+ * starts at zero.
+ *
+ * @param record  The record of the initial value.
+ * @param shapes  The shapes.
+ * @param written  The objects the setter is given.
+ * @param prefix  The storage prefix.
+ * @param wide  Slots to declare 64-bit (see compileWidened).
+ * @param initialNode  What the initial value was written as.
+ *
+ * @returns The record.
+ */
+function tagRecord(
+  record: RecordState,
+  shapes: RecordShapes,
+  written: WrittenObject[],
+  prefix: string,
+  wide: SlotWidths,
+  initialNode: t.Node,
+): TaggedRecord {
+  const {name, setter} = record;
+  const fail = (message: string, hint: string): AotError => {
+    const error = aotError(message, hint);
+    if (initialNode.loc) error.aotLoc = initialNode.loc.start;
+    return error;
+  };
+  const describe = (value: unknown): string =>
+    value === null || value === undefined ? String(value) : `a ${typeof value}`;
+
+  const keys = new Set(shapes.shapes.flatMap(shape => [...shape]));
+  const fields = new Map<string, ScalarState>();
+  for (const key of keys) {
+    if ([...keys].some(other => other.startsWith(`${key}.`))) {
+      throw fail(
+        `AOT: "${name}.${key}" is an object in one shape and a value in another`,
+        'give the field the same kind in every shape.',
+      );
+    }
+
+    const constants = written.flatMap(object => {
+      const field = object.fields.get(key);
+      return field?.known ? [field] : [];
+    });
+    let field = record.fields.get(key);
+    if (!field) {
+      if (!constants.length) {
+        throw fail(
+          `AOT: "${name}.${key}" is never written with a constant`,
+          `its kind comes from a constant; write one for it once: ${setter}({…, ${key.split('.').at(-1)}: 0}).`,
+        );
+      }
+      const representative =
+        constants.find(
+          ({value}) => typeof value === 'number' && !Number.isInteger(value),
+        ) ??
+        constants.find(
+          ({node}) =>
+            node?.type === 'NumericLiteral' &&
+            /[.eE]/.test(String(node.extra?.raw ?? '')),
+        ) ??
+        constants[0];
+      const {value} = representative;
+      if (
+        !['number', 'string', 'boolean'].includes(typeof value) ||
+        (typeof value === 'number' && !Number.isFinite(value))
+      ) {
+        throw fail(
+          `AOT: "${name}.${key}" is written with ${typeof value === 'number' ? value : describe(value)}`,
+          "give each field a concrete value: 0, '' or false.",
+        );
+      }
+      field = scalarStateOf(
+        `${name}.${key}`,
+        `${prefix}${name}.${key}`,
+        undefined,
+        value,
+        representative.node,
+        false,
+        null,
+        wide,
+      );
+      field.initial = field.slotKind === 'string' ? '' : 0;
+      field.initialAt = initialNode.loc?.start;
+    }
+
+    const kind =
+      field.slotKind === 'string'
+        ? 'string'
+        : field.isBoolean
+          ? 'boolean'
+          : 'number';
+    for (const {value} of constants) {
+      if (typeof value !== kind) {
+        throw fail(
+          `AOT: "${name}.${key}" holds a ${kind} in one place and ${describe(value)} in another`,
+          `give the field one kind in every shape, as ${tagText(shapes.values[0])} gives it.`,
+        );
+      }
+    }
+    fields.set(key, field);
+  }
+
+  const tagName = `${name}.${shapes.key}`;
+  const tagState = scalarStateOf(
+    tagName,
+    prefix + tagName,
+    undefined,
+    0,
+    undefined,
+    false,
+    null,
+    wide,
+  );
+  tagState.initialAt = initialNode.loc?.start;
+  const tagged: TaggedRecord = {
+    ...record,
+    fields,
+    tag: {
+      key: shapes.key,
+      state: tagState,
+      values: shapes.values,
+      shapes: shapes.shapes,
+    },
+  };
+  tagged.value = taggedTreeOf(
+    tagged,
+    shapes.values.map((_, shape) => shape),
+  );
+  return tagged;
+}
+
+/**
  * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
  * name (writes). `prefix` namespaces the STORAGE so each inlined child instance gets its own slots: the
  * lookup keys stay the bare JS names (`count`), but the field / array / count derive from `slotName`
@@ -688,7 +808,7 @@ export function collectState(
 
         // Object state → a record, a scalar slot per field, which reads of its name fold through.
         if (!isHost && isObjectTree(initialValue)) {
-          const recordState = recordStateOf(
+          let recordState: RecordState = recordStateOf(
             name,
             prefix,
             setter,
@@ -696,6 +816,24 @@ export function collectState(
             initialArgument,
             wide,
           );
+          // Objects written with other fields make it a tagged record of several shapes.
+          const written = setter
+            ? writtenObjects(functionBody, setter, scope)
+            : [];
+          const shapes = setter
+            ? recordShapesOf(name, setter, flattenTree(initialValue), written)
+            : null;
+          if (shapes) {
+            recordState = tagRecord(
+              recordState,
+              shapes,
+              written,
+              prefix,
+              wide,
+              initialArgument,
+            );
+            byName.set(`${name}.${shapes.key}`, recordState.tag!.state);
+          }
           for (const [key, field] of recordState.fields) {
             byName.set(`${name}.${key}`, field);
           }

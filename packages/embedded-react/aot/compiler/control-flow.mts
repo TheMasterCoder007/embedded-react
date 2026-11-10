@@ -55,6 +55,7 @@ import {
 } from './list-order.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
+import {narrowOn, narrowed, narrowedScope} from './tagged-records.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
@@ -949,20 +950,29 @@ function lowerBranch(
     const toggle = !!environment.inListRow;
     const shown = (negate: boolean): IrShow | null =>
       toggle ? {kind: 'condition', test, negate, within} : null;
+    // A test on a tagged object's tag narrows the fields each branch can read.
+    const narrowing = narrowOn(testNode, environment);
     return {
       kind: 'conditional',
       test,
       toggle,
       whenTrue: lowerBranch(
         whenTrue,
-        scope,
+        narrowedScope(scope, narrowing.whenTrue),
         output,
-        environment,
+        narrowed(environment, narrowing.whenTrue),
         state,
         shown(false),
       ),
       whenFalse: whenFalse
-        ? lowerBranch(whenFalse, scope, output, environment, state, shown(true))
+        ? lowerBranch(
+            whenFalse,
+            narrowedScope(scope, narrowing.whenFalse),
+            output,
+            narrowed(environment, narrowing.whenFalse),
+            state,
+            shown(true),
+          )
         : null,
     };
   }

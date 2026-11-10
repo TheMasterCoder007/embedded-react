@@ -221,9 +221,13 @@ describe('object state', () => {
   });
 
   it('refuses a write that leaves out a field or adds one', () => {
-    expect(() => compile(boxApp("setBox({label: 'b', on: true});"))).toThrow(
-      'setBox leaves out "box.pos.x"',
-    );
+    expect(() =>
+      compile(boxApp("const next = {label: 'b', on: true}; setBox(next);")),
+    ).toThrow('setBox leaves out "box.pos.x"');
+    // Written in full with other fields, it would be a second shape, but no field names the shape.
+    expect(() =>
+      compile(boxApp('setBox({pos: {x: 1, y: 2}, on: false});')),
+    ).toThrow('state "box" is written with objects of different fields');
     expect(() => compile(boxApp('setBox({...box, size: 3});'))).toThrow(
       'state "box" has no field "size"',
     );
@@ -231,7 +235,7 @@ describe('object state', () => {
       'setBox needs an object with the fields of "box"',
     );
     expect(() =>
-      compile(boxApp("setBox(n > 1 ? {...box} : {label: 'b'});")),
+      compile(boxApp('setBox(n > 1 ? {...box} : {...box.pos});')),
     ).toThrow('both sides of a ternary must be objects with the same fields');
   });
 

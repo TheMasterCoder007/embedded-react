@@ -37,7 +37,8 @@ import {
   lowerRecordSet,
   objectTreeOf,
 } from './records.mts';
-import type {ObjectBinding} from './records.mts';
+import type {ObjectBinding, RecordLowering} from './records.mts';
+import {narrowOn, narrowed} from './tagged-records.mts';
 import {
   mix64Error,
   staticInt,
@@ -1251,6 +1252,12 @@ function lowerScalarSet(
   };
 }
 
+/** How an object setter's writes are lowered. */
+const RECORD_LOWERING: RecordLowering = {
+  field: lowerScalarSet,
+  test: (node, environment) => lowerExprWide(node, environment),
+};
+
 /**
  * Resolves `node` to its ref when it is `<ref>.current` member access on a known value ref.
  *
@@ -1970,14 +1977,14 @@ function lowerHandlerExprImpl(
         targetState,
         setterArgument.body,
         {...environment, locals, constants},
-        lowerScalarSet,
+        RECORD_LOWERING,
       );
     }
     return lowerRecordSet(
       targetState,
       setterArgument,
       environment,
-      lowerScalarSet,
+      RECORD_LOWERING,
     );
   }
 
@@ -2305,16 +2312,18 @@ export function lowerStmts(
     // `if (…) { … } else { … }` lowers each branch in order: the test, then the consequent, then the alternate.
     if (statement.type === 'IfStatement') {
       const test = lowerExprWide(statement.test, environment);
+      // A test on a tagged object's tag narrows the fields each branch can read.
+      const narrowing = narrowOn(statement.test, environment);
       const consequent = lowerStmts(
         blockList(statement.consequent),
-        environment,
+        narrowed(environment, narrowing.whenTrue),
         state,
         context,
       );
       const alternate = statement.alternate
         ? lowerStmts(
             blockList(statement.alternate),
-            environment,
+            narrowed(environment, narrowing.whenFalse),
             state,
             context,
           )

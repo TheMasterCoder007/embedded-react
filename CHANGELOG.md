@@ -25,6 +25,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   the list's cap are dropped and reported. Packages are now format minor 10.
 - Flow B: object state, with nested fields, written with spreads, an updater or a ternary of objects. Objects can be
   built and destructured in handlers and in render, and passed to components.
+- Flow B: object state of several shapes, told apart by a tag field like `kind`. A test on the tag narrows which
+  fields can be read.
 
 ### Changed
 

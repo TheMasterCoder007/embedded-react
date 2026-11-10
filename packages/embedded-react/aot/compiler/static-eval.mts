@@ -30,7 +30,7 @@ import {
 import {ENGINE_STRING_MAX, aotError} from './diagnostics.mts';
 import type {AotError} from './diagnostics.mts';
 import type * as t from '@babel/types';
-import type {Env, Local, Scope} from './types.mts';
+import type {Env, Local, ScalarState, Scope} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -85,6 +85,37 @@ export class RuntimeLeaf {
    */
   constructor(local: Local) {
     this.local = local;
+  }
+}
+
+/**
+ * A field of a tagged object that only some of its shapes have, where the shape isn't known: a test on the tag
+ * reveals it.
+ *
+ * @class HiddenField
+ */
+export class HiddenField {
+  /** The field's slot. */
+  readonly field: ScalarState;
+  readonly message: string;
+  readonly hint: string;
+
+  /**
+   * @param field  The field's slot.
+   * @param message  Why a read of it is refused.
+   * @param hint  How to read it.
+   */
+  constructor(field: ScalarState, message: string, hint: string) {
+    this.field = field;
+    this.message = message;
+    this.hint = hint;
+  }
+
+  /**
+   * @returns The error a read of it raises.
+   */
+  error(): AotError {
+    return aotError(this.message, this.hint);
   }
 }
 
@@ -629,7 +660,8 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
       if (
         hasBinding(scope, node.name) &&
         scope[node.name] !== RUNTIME_BINDING &&
-        !(scope[node.name] instanceof RuntimeLeaf)
+        !(scope[node.name] instanceof RuntimeLeaf) &&
+        !(scope[node.name] instanceof HiddenField)
       ) {
         return scope[node.name];
       }
@@ -658,7 +690,10 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
       if (object == null) {
         throw new Error(`AOT: member access on null/undefined ("${key}")`);
       }
-      if (object[key] instanceof RuntimeLeaf) {
+      if (
+        object[key] instanceof RuntimeLeaf ||
+        object[key] instanceof HiddenField
+      ) {
         throw new Error(`AOT: "${key}" is worked out at run time`);
       }
       return object[key];
