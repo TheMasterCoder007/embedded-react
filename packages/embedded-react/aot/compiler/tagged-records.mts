@@ -419,34 +419,103 @@ export function lowerTagTest(test: TagTest): IrExpr {
     }));
 }
 
+/** The shapes tagged objects can have after a test's outcome, by the names that read them. */
+type ShapeSets = Map<string, TaggedView>;
+
 /**
- * The tagged objects a test narrows: a test on a tag, `!`, `&&` and `||` of them.
+ * The tagged objects narrowed to the shapes an outcome leaves them; one that keeps every shape it had, or none, is
+ * left as it is.
+ *
+ * @param sets  The shapes, by name.
+ * @param environment  The expression environment.
+ *
+ * @returns The objects, by name.
+ */
+function treesOf(
+  sets: ShapeSets,
+  environment: Env,
+): Map<string, Record<string, unknown>> {
+  const trees = new Map<string, Record<string, unknown>>();
+  for (const [name, {record, shapes}] of sets) {
+    const here = viewOf(
+      {type: 'Identifier', name} as t.Identifier,
+      environment,
+    );
+    if (shapes.length && shapes.length !== here?.view.shapes.length) {
+      trees.set(name, taggedTreeOf(record, shapes));
+    }
+  }
+  return trees;
+}
+
+/**
+ * The shapes either of two outcomes leaves, as when `a || b` is true. A name one outcome doesn't narrow keeps the
+ * shapes it has where that outcome is tested.
+ *
+ * @param first  The first outcome's shapes.
+ * @param firstAt  Where the first outcome is tested.
+ * @param second  The second outcome's shapes.
+ * @param secondAt  Where the second outcome is tested.
+ *
+ * @returns The shapes, by name.
+ */
+function joinShapes(
+  first: ShapeSets,
+  firstAt: Env,
+  second: ShapeSets,
+  secondAt: Env,
+): ShapeSets {
+  const sets: ShapeSets = new Map();
+  for (const name of new Set([...first.keys(), ...second.keys()])) {
+    const identifier = {type: 'Identifier', name} as t.Identifier;
+    const one = first.get(name) ?? viewOf(identifier, firstAt)?.view;
+    const other = second.get(name) ?? viewOf(identifier, secondAt)?.view;
+    if (!one || !other) continue;
+    const shapes = [...new Set([...one.shapes, ...other.shapes])].sort(
+      (left, right) => left - right,
+    );
+    sets.set(name, {record: one.record, shapes});
+  }
+  return sets;
+}
+
+/**
+ * The shapes a test leaves tagged objects on each outcome: a test on a tag, `!`, `&&` and `||` of them.
  *
  * @param test  The test.
  * @param environment  The expression environment.
  *
- * @returns What each outcome narrows.
+ * @returns The shapes each outcome leaves.
  */
-export function narrowOn(test: t.Node, environment: Env): Narrowing {
+function shapesOn(
+  test: t.Node,
+  environment: Env,
+): {whenTrue: ShapeSets; whenFalse: ShapeSets} {
   if (test.type === 'UnaryExpression' && test.operator === '!') {
-    const inner = narrowOn(test.argument, environment);
+    const inner = shapesOn(test.argument, environment);
     return {whenTrue: inner.whenFalse, whenFalse: inner.whenTrue};
   }
   if (
     test.type === 'LogicalExpression' &&
     (test.operator === '&&' || test.operator === '||')
   ) {
+    // The right side is tested where the left side's outcome lets it run.
     const isAnd = test.operator === '&&';
-    const left = narrowOn(test.left, environment);
-    const leftSide = isAnd ? left.whenTrue : left.whenFalse;
-    const right = narrowOn(test.right, narrowed(environment, leftSide));
+    const left = shapesOn(test.left, environment);
+    const leftRuns = isAnd ? left.whenTrue : left.whenFalse;
+    const rightAt = narrowed(environment, treesOf(leftRuns, environment));
+    const right = shapesOn(test.right, rightAt);
+    // Both sides decide one outcome; either side decides the other.
     const both = new Map([
-      ...leftSide,
+      ...leftRuns,
       ...(isAnd ? right.whenTrue : right.whenFalse),
     ]);
+    const either = isAnd
+      ? joinShapes(left.whenFalse, environment, right.whenFalse, rightAt)
+      : joinShapes(left.whenTrue, environment, right.whenTrue, rightAt);
     return isAnd
-      ? {whenTrue: both, whenFalse: new Map()}
-      : {whenTrue: new Map(), whenFalse: both};
+      ? {whenTrue: both, whenFalse: either}
+      : {whenTrue: either, whenFalse: both};
   }
 
   // `r.ok` as a test: the shapes whose tag is truthy.
@@ -461,13 +530,29 @@ export function narrowOn(test: t.Node, environment: Env): Narrowing {
         whenFalse: read.view.shapes.filter(shape => !truthy!.includes(shape)),
       }
     : tagTestOf(test, environment);
-  const side = (shapes: number[]): Map<string, Record<string, unknown>> =>
-    tagTest && shapes.length && shapes.length !== tagTest.view.shapes.length
-      ? new Map([[tagTest.name, taggedTreeOf(tagTest.view.record, shapes)]])
+  const side = (shapes: number[]): ShapeSets =>
+    tagTest
+      ? new Map([[tagTest.name, {record: tagTest.view.record, shapes}]])
       : new Map();
   return {
     whenTrue: side(tagTest?.whenTrue ?? []),
     whenFalse: side(tagTest?.whenFalse ?? []),
+  };
+}
+
+/**
+ * The tagged objects a test narrows: a test on a tag, `!`, `&&` and `||` of them.
+ *
+ * @param test  The test.
+ * @param environment  The expression environment.
+ *
+ * @returns What each outcome narrows.
+ */
+export function narrowOn(test: t.Node, environment: Env): Narrowing {
+  const {whenTrue, whenFalse} = shapesOn(test, environment);
+  return {
+    whenTrue: treesOf(whenTrue, environment),
+    whenFalse: treesOf(whenFalse, environment),
   };
 }
 

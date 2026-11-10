@@ -255,6 +255,25 @@ describe('tagged object state', () => {
     }
   });
 
+  it('joins the shapes either side of `||` or `&&` leaves', () => {
+    const app = (test: string) =>
+      appOf(
+        "const [s, setS] = useState({kind: 'a', x: 1}); const [n, setN] = useState(0);",
+        "<View><Pressable onPress={() => { setS({kind: 'b', x: 2}); setS({kind: 'c'}); " +
+          `if (${test}) { setN(s.x); } }} /><Text>{${test} ? s.x : 0}</Text></View>`,
+      );
+    for (const test of [
+      "s.kind === 'a' || s.kind === 'b'",
+      "!(s.kind !== 'a' && s.kind !== 'b')",
+      "s.kind !== 'c' || (s.kind === 'b' && n > 1)",
+    ]) {
+      expect(() => compile(app(test)), test).not.toThrow();
+    }
+    expect(() => compile(app("s.kind === 'a' || s.kind === 'c'"))).toThrow(
+      `"s.x" is only there when s.kind is 'a' or 'b'`,
+    );
+  });
+
   it('narrows on a boolean tag read as a test', () => {
     expect(() =>
       compile(
