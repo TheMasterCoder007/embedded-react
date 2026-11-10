@@ -943,7 +943,13 @@ export function collectState(
               ? writtenObjects(functionBody, setter, scope)
               : [];
           const shapes = setter
-            ? recordShapesOf(name, setter, flattenTree(initialValue), written)
+            ? recordShapesOf(
+                name,
+                setter,
+                flattenTree(initialValue),
+                written,
+                reducer ? object => `return ${object}` : undefined,
+              )
             : null;
           if (shapes) {
             recordState = tagRecord(

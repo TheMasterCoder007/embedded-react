@@ -41,6 +41,8 @@ export interface WrittenField {
 /** An object a setter is given, as written: its fields by their paths joined with dots. */
 export interface WrittenObject {
   fields: Map<string, WrittenField>;
+  /** The object as written, for errors. */
+  node: t.ObjectExpression;
   /** It spreads something, so its other fields aren't known here. */
   spread: boolean;
 }
@@ -98,7 +100,7 @@ function writtenObjectOf(
   node: t.ObjectExpression,
   scope: Scope,
 ): WrittenObject {
-  const written: WrittenObject = {fields: new Map(), spread: false};
+  const written: WrittenObject = {fields: new Map(), spread: false, node};
   const visit = (object: t.ObjectExpression, path: string[]): void => {
     for (const property of object.properties) {
       if (property.type === 'SpreadElement') {
@@ -239,6 +241,7 @@ export function writtenObjects(
  * @param setter  The setter's name.
  * @param initial  The initial value's fields.
  * @param written  The objects the setter is given.
+ * @param write  How a write of an object is written, for errors: by default a call to the setter.
  *
  * @returns The shapes, or null when the state has one shape.
  */
@@ -247,9 +250,34 @@ export function recordShapesOf(
   setter: string,
   initial: Map<string, unknown>,
   written: WrittenObject[],
+  write: (object: string) => string = object => `${setter}(${object})`,
 ): RecordShapes | null {
-  // A write in full with other fields, or one adding a field, gives another shape.
+  // A write that spreads the old value keeps its shape, so one that changes a constant of the initial value and adds
+  // a field no shape has is a new shape written as a spread.
   const full = written.filter(object => !object.spread);
+  const known = new Set([
+    ...initial.keys(),
+    ...full.flatMap(object => [...object.fields.keys()]),
+  ]);
+  for (const object of written) {
+    if (!object.spread) continue;
+    const added = [...object.fields.keys()].find(key => !known.has(key));
+    const retagged = [...object.fields].find(
+      ([key, field]) =>
+        field.known &&
+        isTagValue(initial.get(key)) &&
+        field.value !== initial.get(key),
+    );
+    if (!added || !retagged) continue;
+    const [tagKey, {value}] = retagged;
+    const error = aotError(
+      `AOT: a write that spreads "${name}" keeps its shape, so it can't add "${added}"`,
+      `to give ${name} another shape, write the new shape out in full: ` +
+        `${write(`{${tagKey}: ${typeof value === 'string' ? `'${value}'` : String(value)}, ${added}: …}`)}.`,
+    );
+    if (object.node.loc) error.aotLoc = object.node.loc.start;
+    throw error;
+  }
   const keysDiffer = (object: WrittenObject): boolean =>
     [...object.fields.keys()].some(key => !initial.has(key)) ||
     (!object.spread && object.fields.size !== initial.size);
@@ -285,7 +313,7 @@ export function recordShapesOf(
   throw aotError(
     `AOT: state "${name}" is written with objects of different fields`,
     `an object of several shapes needs a field naming the shape, with a constant written in each: ` +
-      `${setter}({kind: 'busy', pct: 0}). Write each new shape out in full; a write that keeps the shape ` +
-      `spreads the old value: ${setter}({...${name}, pct: 1}).`,
+      `${write("{kind: 'busy', pct: 0}")}. Write each new shape out in full; a write that keeps the shape ` +
+      `spreads the old value: ${write(`{...${name}, pct: 1}`)}.`,
   );
 }

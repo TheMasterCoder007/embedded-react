@@ -219,6 +219,23 @@ describe('useReducer', () => {
     expect(() => compile(source)).not.toThrow();
   });
 
+  it('refuses a new shape a reducer returns as a spread', () => {
+    const reducer =
+      "function job(state, action) { if (action.type === 'start') return {...state, kind: 'busy', pct: 0}; " +
+      'return state; }\n';
+    expect(() =>
+      compile(
+        appOf(
+          reducer,
+          "  const [n, dispatch] = useReducer(job, {kind: 'idle'});",
+          ["dispatch({type: 'start'});"],
+        ).replace('<Text>{n}</Text>', '<Text>{n.kind}</Text>'),
+      ),
+    ).toThrow(
+      /a write that spreads "n" keeps its shape, so it can't add "pct"[\s\S]*return \{kind: 'busy', pct: …\}/,
+    );
+  });
+
   it('refuses a throw a dispatch can reach', () => {
     expect(() =>
       compile(appOf(COUNTER, COUNTER_HOOKS, ['dispatch({type: word});'])),
