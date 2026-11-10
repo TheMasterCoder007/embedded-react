@@ -26,8 +26,13 @@ import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {inferItemStruct} from './list-items.mts';
 import {flattenTree, isObjectTree} from './records.mts';
-import {recordShapesOf, writtenObjects} from './record-shapes.mts';
+import {
+  recordShapesOf,
+  returnedObjects,
+  writtenObjects,
+} from './record-shapes.mts';
 import {stateLocal, tagText, taggedTreeOf} from './tagged-records.mts';
+import {patternNames} from './updaters.mts';
 import type {RecordShapes, WrittenObject} from './record-shapes.mts';
 import type {TaggedRecord} from './tagged-records.mts';
 import {splitCallOf} from './list-split.mts';
@@ -62,6 +67,7 @@ import type {
   FunctionNode,
   ItemStruct,
   RecordState,
+  Reducer,
   ScalarState,
   Scope,
   StateRecord,
@@ -686,8 +692,97 @@ function tagRecord(
 }
 
 /**
- * Collects a component's useState declarations → state descriptors keyed by JS name (reads) and setter
- * name (writes). `prefix` namespaces the STORAGE so each inlined child instance gets its own slots: the
+ * An error pinned to a node.
+ *
+ * @param error  The error.
+ * @param node  The node.
+ *
+ * @returns The error.
+ */
+function locatedAt(error: AotError, node: t.Node | undefined): AotError {
+  locateError(error, node?.loc?.start);
+  return error;
+}
+
+/**
+ * The function a useReducer is given: written inline, or named and declared in the component or the module.
+ *
+ * @param node  The useReducer's first argument.
+ * @param stateName  The state's name, for errors.
+ * @param functionBody  The component's body.
+ * @param program  The module.
+ *
+ * @returns The reducer.
+ */
+function reducerOf(
+  node: t.Node | undefined,
+  stateName: string,
+  functionBody: t.BlockStatement,
+  program: t.Program | undefined,
+): Reducer {
+  // What a name is bound to at one level: a function, something else, or nothing.
+  const bindingIn = (
+    statements: t.Statement[],
+    name: string,
+  ): FunctionNode | 'other' | null => {
+    for (const statement of statements) {
+      const declaration =
+        statement.type === 'ExportNamedDeclaration'
+          ? statement.declaration
+          : statement;
+      if (
+        declaration?.type === 'FunctionDeclaration' &&
+        declaration.id?.name === name
+      ) {
+        return declaration;
+      }
+      if (declaration?.type !== 'VariableDeclaration') continue;
+      for (const declarator of declaration.declarations) {
+        if (!patternNames(declarator.id).includes(name)) continue;
+        return declarator.id.type === 'Identifier' && isFn(declarator.init)
+          ? declarator.init
+          : 'other';
+      }
+    }
+    return null;
+  };
+
+  // The component's own binding of the name hides the module's.
+  const bound = isFn(node)
+    ? node
+    : node?.type === 'Identifier'
+      ? (bindingIn(functionBody.body, node.name) ??
+        bindingIn(program?.body ?? [], node.name))
+      : null;
+  const functionNode = bound === 'other' ? null : bound;
+  if (!functionNode) {
+    throw locatedAt(
+      aotError(
+        `AOT: the reducer for "${stateName}" must be a function in this file`,
+        'pass a function declared in this file, or write it inline: useReducer((state, action) => …, initial).',
+      ),
+      node,
+    );
+  }
+  const name = node?.type === 'Identifier' ? node.name : 'reducer';
+  if (
+    functionNode.params.length > 2 ||
+    functionNode.params.some(parameter => parameter.type !== 'Identifier')
+  ) {
+    throw locatedAt(
+      aotError(
+        `AOT: reducer "${name}" must take plain (state, action) params`,
+        'name the state and the action: function reducer(state, action) { … }.',
+      ),
+      functionNode,
+    );
+  }
+  return {name, functionNode};
+}
+
+/**
+ * Collects a component's useState and useReducer declarations → state descriptors keyed by JS name (reads) and setter
+ * name (writes): a useReducer's dispatch is its setter, and the state keeps its reducer. `prefix` namespaces the STORAGE so each inlined child instance gets its own slots: the
  * lookup keys stay the bare JS names (`count`), but the field / array / count derive from `slotName`
  * (`<prefix>count`). prefix='' (the App) keeps the storage names exactly the JS names.
  * `caps` are the compiler's resolved caps (see resolveOptions); a list state takes its capacity from it.
@@ -697,6 +792,7 @@ function tagRecord(
  * @param caps  The compile's caps.
  * @param prefix  The storage prefix: none for the App, `c<n>_` for an inlined instance.
  * @param wide  Slots to declare 64-bit (see compileWidened).
+ * @param program  The module, where a reducer may be declared.
  *
  * @returns The component's state table.
  */
@@ -706,6 +802,7 @@ export function collectState(
   caps: Caps,
   prefix = '',
   wide: SlotWidths = NO_WIDE,
+  program?: t.Program,
 ): StateTable {
   // Index each state by its JS name and, when it has one, by its setter's name.
   const byName = new Map<string, StateRecord>();
@@ -722,9 +819,11 @@ export function collectState(
       if (initializer?.type !== 'CallExpression') continue;
 
       // useHostValue is a host-fed scalar: a state slot like useState, written only by the host through its input.
-      const isHost =
-        (initializer.callee as t.Identifier).name === 'useHostValue';
-      if ((initializer.callee as t.Identifier).name !== 'useState' && !isHost) {
+      // useReducer is a state slot whose setter is its dispatch.
+      const hook = (initializer.callee as t.Identifier).name;
+      const isHost = hook === 'useHostValue';
+      const isReducer = hook === 'useReducer';
+      if (hook !== 'useState' && !isHost && !isReducer) {
         continue;
       }
 
@@ -751,7 +850,26 @@ export function collectState(
       // Build either a list-state record from an array initializer, or a split of a constant, or a scalar record from
       // the folded initial value.
       const slotName = prefix + name; // storage name (== name for the App; instance-unique for a child)
-      const initialArgument = initializer.arguments[0];
+      const initialArgument = initializer.arguments[isReducer ? 1 : 0];
+      let reducer: Reducer | undefined;
+      if (isReducer) {
+        if (initializer.arguments.length !== 2) {
+          throw locatedAt(
+            aotError(
+              `AOT: useReducer for "${name}" must take a reducer and an initial value`,
+              'work the initial value out in the call instead of passing an init function: ' +
+                'useReducer(reducer, {count: 0}).',
+            ),
+            initializer,
+          );
+        }
+        reducer = reducerOf(
+          initializer.arguments[0],
+          name,
+          functionBody,
+          program,
+        );
+      }
       let record: StateRecord;
       if (
         !isHost &&
@@ -817,12 +935,21 @@ export function collectState(
             initialArgument,
             wide,
           );
-          // Objects written with other fields make it a tagged record of several shapes.
-          const written = setter
-            ? writtenObjects(functionBody, setter, scope)
-            : [];
+          // Objects written with other fields make it a tagged record of several shapes. A reducer writes the
+          // objects it returns.
+          const written = reducer
+            ? returnedObjects(reducer.functionNode, scope)
+            : setter
+              ? writtenObjects(functionBody, setter, scope)
+              : [];
           const shapes = setter
-            ? recordShapesOf(name, setter, flattenTree(initialValue), written)
+            ? recordShapesOf(
+                name,
+                setter,
+                flattenTree(initialValue),
+                written,
+                reducer ? object => `return ${object}` : undefined,
+              )
             : null;
           if (shapes) {
             recordState = tagRecord(
@@ -835,6 +962,7 @@ export function collectState(
             );
             byName.set(`${name}.${shapes.key}`, recordState.tag!.state);
           }
+          if (reducer) recordState.reducer = reducer;
           for (const [key, field] of recordState.fields) {
             byName.set(`${name}.${key}`, field);
           }
@@ -884,6 +1012,7 @@ export function collectState(
       }
 
       // Register the state for reads by name and for writes through its setter.
+      if (reducer) record.reducer = reducer;
       byName.set(name, record);
       if (setter) {
         bySetter.set(setter, record);
@@ -1517,7 +1646,9 @@ export function usesState(functionNode: FunctionNode): boolean {
       statement.declarations.some(
         declarator =>
           declarator.init?.type === 'CallExpression' &&
-          (declarator.init.callee as t.Identifier).name === 'useState',
+          ['useState', 'useReducer'].includes(
+            (declarator.init.callee as t.Identifier).name,
+          ),
       ),
   );
 }

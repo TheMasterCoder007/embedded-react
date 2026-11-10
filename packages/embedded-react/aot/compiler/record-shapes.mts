@@ -25,7 +25,7 @@ import {flattenTree, isObjectTree, propertyKey} from './records.mts';
 import {evalStatic, rethrowFoldLimit} from './static-eval.mts';
 import {returnedValues} from './updaters.mts';
 import type * as t from '@babel/types';
-import type {Scope} from './types.mts';
+import type {FunctionNode, Scope} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -41,6 +41,8 @@ export interface WrittenField {
 /** An object a setter is given, as written: its fields by their paths joined with dots. */
 export interface WrittenObject {
   fields: Map<string, WrittenField>;
+  /** The object as written, for errors. */
+  node: t.ObjectExpression;
   /** It spreads something, so its other fields aren't known here. */
   spread: boolean;
 }
@@ -98,7 +100,7 @@ function writtenObjectOf(
   node: t.ObjectExpression,
   scope: Scope,
 ): WrittenObject {
-  const written: WrittenObject = {fields: new Map(), spread: false};
+  const written: WrittenObject = {fields: new Map(), spread: false, node};
   const visit = (object: t.ObjectExpression, path: string[]): void => {
     for (const property of object.properties) {
       if (property.type === 'SpreadElement') {
@@ -146,6 +148,53 @@ function writtenObjectOf(
 }
 
 /**
+ * The objects a value can be: itself, a side of a ternary, or what a function returns.
+ *
+ * @param node  The value.
+ * @param scope  Compile-time constants in reach.
+ * @param objects  Takes the objects.
+ */
+function collectObjects(
+  node: t.Node,
+  scope: Scope,
+  objects: WrittenObject[],
+): void {
+  if (node.type === 'ObjectExpression') {
+    objects.push(writtenObjectOf(node, scope));
+  } else if (node.type === 'ConditionalExpression') {
+    collectObjects(node.consequent, scope, objects);
+    collectObjects(node.alternate, scope, objects);
+  } else if (
+    node.type === 'ArrowFunctionExpression' ||
+    node.type === 'FunctionExpression' ||
+    node.type === 'FunctionDeclaration'
+  ) {
+    const values =
+      node.body.type === 'BlockStatement'
+        ? returnedValues(node.body)
+        : [node.body];
+    values.forEach(value => collectObjects(value, scope, objects));
+  }
+}
+
+/**
+ * The objects a reducer returns.
+ *
+ * @param reducer  The reducer.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The objects.
+ */
+export function returnedObjects(
+  reducer: FunctionNode,
+  scope: Scope,
+): WrittenObject[] {
+  const objects: WrittenObject[] = [];
+  collectObjects(reducer, scope, objects);
+  return objects;
+}
+
+/**
  * The objects a setter is called with anywhere in a component: given directly, as a side of a ternary, or by an
  * updater.
  *
@@ -161,23 +210,6 @@ export function writtenObjects(
   scope: Scope,
 ): WrittenObject[] {
   const objects: WrittenObject[] = [];
-  const collect = (node: t.Node): void => {
-    if (node.type === 'ObjectExpression') {
-      objects.push(writtenObjectOf(node, scope));
-    } else if (node.type === 'ConditionalExpression') {
-      collect(node.consequent);
-      collect(node.alternate);
-    } else if (
-      node.type === 'ArrowFunctionExpression' ||
-      node.type === 'FunctionExpression'
-    ) {
-      if (node.body.type === 'BlockStatement') {
-        returnedValues(node.body).forEach(collect);
-      } else {
-        collect(node.body);
-      }
-    }
-  };
   const walk = (node: unknown): void => {
     if (Array.isArray(node)) {
       node.forEach(walk);
@@ -191,7 +223,7 @@ export function writtenObjects(
       astNode.callee.name === setter &&
       astNode.arguments[0]
     ) {
-      collect(astNode.arguments[0]);
+      collectObjects(astNode.arguments[0], scope, objects);
     }
     for (const [key, child] of Object.entries(astNode)) {
       if (!SKIP_KEYS.has(key)) walk(child);
@@ -209,6 +241,7 @@ export function writtenObjects(
  * @param setter  The setter's name.
  * @param initial  The initial value's fields.
  * @param written  The objects the setter is given.
+ * @param write  How a write of an object is written, for errors: by default a call to the setter.
  *
  * @returns The shapes, or null when the state has one shape.
  */
@@ -217,9 +250,34 @@ export function recordShapesOf(
   setter: string,
   initial: Map<string, unknown>,
   written: WrittenObject[],
+  write: (object: string) => string = object => `${setter}(${object})`,
 ): RecordShapes | null {
-  // A write in full with other fields, or one adding a field, gives another shape.
+  // A write that spreads the old value keeps its shape, so one that changes a constant of the initial value and adds
+  // a field no shape has is a new shape written as a spread.
   const full = written.filter(object => !object.spread);
+  const known = new Set([
+    ...initial.keys(),
+    ...full.flatMap(object => [...object.fields.keys()]),
+  ]);
+  for (const object of written) {
+    if (!object.spread) continue;
+    const added = [...object.fields.keys()].find(key => !known.has(key));
+    const retagged = [...object.fields].find(
+      ([key, field]) =>
+        field.known &&
+        isTagValue(initial.get(key)) &&
+        field.value !== initial.get(key),
+    );
+    if (!added || !retagged) continue;
+    const [tagKey, {value}] = retagged;
+    const error = aotError(
+      `AOT: a write that spreads "${name}" keeps its shape, so it can't add "${added}"`,
+      `to give ${name} another shape, write the new shape out in full: ` +
+        `${write(`{${tagKey}: ${typeof value === 'string' ? `'${value}'` : String(value)}, ${added}: …}`)}.`,
+    );
+    if (object.node.loc) error.aotLoc = object.node.loc.start;
+    throw error;
+  }
   const keysDiffer = (object: WrittenObject): boolean =>
     [...object.fields.keys()].some(key => !initial.has(key)) ||
     (!object.spread && object.fields.size !== initial.size);
@@ -255,7 +313,7 @@ export function recordShapesOf(
   throw aotError(
     `AOT: state "${name}" is written with objects of different fields`,
     `an object of several shapes needs a field naming the shape, with a constant written in each: ` +
-      `${setter}({kind: 'busy', pct: 0}). Write each new shape out in full; a write that keeps the shape ` +
-      `spreads the old value: ${setter}({...${name}, pct: 1}).`,
+      `${write("{kind: 'busy', pct: 0}")}. Write each new shape out in full; a write that keeps the shape ` +
+      `spreads the old value: ${write(`{...${name}, pct: 1}`)}.`,
   );
 }

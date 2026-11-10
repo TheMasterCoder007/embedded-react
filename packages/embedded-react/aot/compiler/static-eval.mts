@@ -944,6 +944,22 @@ export function hasBinding(scope: Scope, name: string): boolean {
 }
 
 /**
+ * `scope` with names hidden, as a block that declares them hides what they name outside it, so a fold can't read a
+ * constant they shadow.
+ *
+ * @param scope  Compile-time constants in reach.
+ * @param names  The names.
+ *
+ * @returns The scope.
+ */
+export function withoutNames(scope: Scope, names: string[]): Scope {
+  if (!names.length) return scope;
+  const hidden = Object.create(scope) as Scope;
+  for (const name of names) setBinding(hidden, name, RUNTIME_BINDING);
+  return hidden;
+}
+
+/**
  * Binds `name` in `scope` as its own property, so `__proto__` is a name rather than Object.prototype's setter.
  *
  * @param scope  The scope to bind in.

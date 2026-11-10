@@ -26,7 +26,7 @@ import {
   withLoc,
 } from './diagnostics.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
-import {evalStatic} from './static-eval.mts';
+import {evalStatic, foldScope} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
 import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
 import type {ItemCallback, ListChain} from './list-order.mts';
@@ -43,6 +43,11 @@ import {exits, helperEnvironment, statementsOf} from './helper-values.mts';
 import {lowerFor, lowerForOf} from './loops.mts';
 import {switchAsIf} from './switch-cases.mts';
 import {isReturnSet, updaterStatements} from './updaters.mts';
+import {
+  actionChoice,
+  actionEnvironment,
+  prunedStatements,
+} from './reducers.mts';
 import {
   mix64Error,
   staticInt,
@@ -114,6 +119,7 @@ import type {
   PanCallback,
   PanResponderRecord,
   RecordState,
+  Reducer,
   RefRecord,
   ScalarState,
   SlotValue,
@@ -1758,6 +1764,7 @@ function updaterEnvironment(
  * @param environment  The handler's environment.
  * @param state  The component's state table.
  * @param context  The statement compiler's context.
+ * @param what  What the updater is, for errors.
  *
  * @returns The statements.
  */
@@ -1768,8 +1775,14 @@ function inlineUpdater(
   environment: Env,
   state: StateTable,
   context: StatementContext,
+  what?: string,
 ): IrStmt[] {
-  const statements = updaterStatements(setter, updater, target.kind === 'list');
+  const statements = updaterStatements(
+    setter,
+    updater,
+    target.kind === 'list',
+    what,
+  );
   const {helperList, usedReturn} = context;
   context.helperList = statements;
   context.usedReturn = false;
@@ -1785,6 +1798,101 @@ function inlineUpdater(
     context.helperList = helperList;
     context.usedReturn = usedReturn;
   }
+}
+
+/**
+ * Lowers a dispatch: the reducer runs in place as an updater, its state parameter reading the state and its action
+ * parameter bound to what is dispatched. Branches the action's constant fields rule out are dropped first.
+ *
+ * @param dispatch  The dispatch's name.
+ * @param target  The state it sets.
+ * @param reducer  The state's reducer.
+ * @param action  What is dispatched.
+ * @param environment  The handler's environment.
+ * @param state  The component's state table.
+ * @param context  The statement compiler's context.
+ *
+ * @returns The statements.
+ */
+function inlineReducer(
+  dispatch: string,
+  target: StateRecord | RecordState,
+  {name, functionNode}: Reducer,
+  action: t.CallExpression['arguments'][number] | undefined,
+  environment: Env,
+  state: StateTable,
+  context: StatementContext,
+): IrStmt[] {
+  const [stateParameter, actionParameter] =
+    functionNode.params as t.Identifier[];
+  if (!action || action.type === 'SpreadElement') {
+    throw aotError(
+      `AOT: ${dispatch} must be given an action`,
+      `pass the action itself: ${dispatch}({type: 'increment'}).`,
+    );
+  }
+
+  // An action that picks between two at run time dispatches each in a branch of its own.
+  const choice = actionChoice(
+    action as t.Expression,
+    foldScope(environment, environment.constants ?? {}),
+  );
+  if (choice) {
+    const dispatchOf = (picked: t.Expression) =>
+      inlineReducer(
+        dispatch,
+        target,
+        {name, functionNode},
+        picked,
+        environment,
+        state,
+        context,
+      );
+    return [
+      {
+        kind: 'if',
+        test: lowerExprWide(choice.test, environment),
+        consequent: dispatchOf(choice.whenTrue),
+        alternate: dispatchOf(choice.whenFalse),
+      },
+    ];
+  }
+
+  const bodyEnvironment = actionEnvironment(
+    actionParameter?.name,
+    action as t.Expression,
+    environment,
+  );
+  const statements: t.Statement[] =
+    functionNode.body.type === 'BlockStatement'
+      ? functionNode.body.body
+      : [{type: 'ReturnStatement', argument: functionNode.body}];
+  const unpruned = {
+    type: 'ArrowFunctionExpression',
+    params: stateParameter ? [stateParameter] : [],
+    body: {type: 'BlockStatement', body: statements, directives: []},
+    loc: functionNode.loc,
+  } as unknown as FunctionNode & {body: t.BlockStatement};
+  const readEnvironment = updaterEnvironment(target, unpruned, bodyEnvironment);
+  const updater = {
+    ...unpruned,
+    body: {
+      ...unpruned.body,
+      body: prunedStatements(
+        statements,
+        foldScope(readEnvironment, readEnvironment.constants ?? {}),
+      ),
+    },
+  };
+  return inlineUpdater(
+    dispatch,
+    target,
+    updater,
+    bodyEnvironment,
+    state,
+    context,
+    `reducer "${name}"`,
+  );
 }
 
 /**
@@ -2172,6 +2280,29 @@ function lowerHandlerExprImpl(
 
   context.stateChanged = true;
   const setterArgument = expression.arguments[0];
+
+  // A dispatch runs the reducer. Its reads of the state are an updater's, so inside a loop only the list rule holds.
+  if (targetState.reducer && !isReturnSet(expression)) {
+    if (context.loops?.length) {
+      checkLoopSetter(
+        expression.callee.name,
+        targetState,
+        undefined,
+        environment,
+        context.loops,
+      );
+    }
+    return inlineReducer(
+      expression.callee.name,
+      targetState,
+      targetState.reducer,
+      setterArgument,
+      environment,
+      state,
+      context,
+    );
+  }
+
   if (context.loops?.length && !isReturnSet(expression)) {
     checkLoopSetter(
       expression.callee.name,

@@ -504,6 +504,49 @@ const SCENARIOS: Scenario[] = [
     listCap: 6,
     taps: '188,20 188,20 188,20',
   },
+  // Buttons: row 1 inc, add, reset, pick; row 2 step, down, start, tick; row 3 push, drop, clear, mode.
+  {name: 'reducer', file: fixture('reducer'), screen: PORTRAIT},
+  // 1, 2, then add 3 to 5. Pick at step 3 dispatches inc, then at step 4 adds 4.
+  {
+    name: 'reducer-count',
+    file: fixture('reducer'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 84,20 188,20 188,20',
+  },
+  {
+    name: 'reducer-reset',
+    file: fixture('reducer'),
+    screen: PORTRAIT,
+    taps: '32,20 84,20 136,20 32,20',
+  },
+  // Steps of 2 wrap at 6 into y, then down; the job starts and ticks twice to 50.
+  {
+    name: 'reducer-walk',
+    file: fixture('reducer'),
+    screen: PORTRAIT,
+    taps: '32,48 32,48 32,48 84,48 136,48 188,48 188,48',
+  },
+  // A tick while idle keeps it idle; then start and three ticks to 75.
+  {
+    name: 'reducer-job',
+    file: fixture('reducer'),
+    screen: PORTRAIT,
+    taps: '188,48 136,48 188,48 188,48 188,48',
+  },
+  {
+    name: 'reducer-list',
+    file: fixture('reducer'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,76 32,76 84,76 188,76',
+  },
+  {
+    name: 'reducer-clear',
+    file: fixture('reducer'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '136,76 32,76 32,76 188,76 188,76',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

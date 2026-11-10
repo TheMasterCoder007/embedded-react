@@ -329,6 +329,19 @@ describe('tagged object state', () => {
     );
   });
 
+  it('refuses a new shape written as a spread', () => {
+    expect(() =>
+      compile(
+        appOf(
+          "  const [job, setJob] = useState({kind: 'idle'});",
+          "<Pressable onPress={() => setJob({...job, kind: 'busy', pct: 0})}><Text>{job.kind}</Text></Pressable>",
+        ),
+      ),
+    ).toThrow(
+      'a write that spreads "job" keeps its shape, so it can\'t add "pct"',
+    );
+  });
+
   it('refuses a write that leaves out a field, adds one, or names no shape', () => {
     expect(() =>
       compile(
