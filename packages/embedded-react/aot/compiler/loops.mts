@@ -116,6 +116,31 @@ function errorAt(node: t.Node, message: string, hint?: string): Error {
 }
 
 /**
+ * Whether an expression reads a name.
+ *
+ * @param node  The expression.
+ * @param name  The name.
+ *
+ * @returns Whether it does.
+ */
+function readsName(node: unknown, name: string): boolean {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(child => readsName(child, name));
+  const astNode = node as t.Node;
+  if (astNode.type === 'Identifier') return astNode.name === name;
+  return Object.entries(astNode).some(
+    ([key, child]) =>
+      key !== 'loc' &&
+      !(
+        key === 'property' &&
+        astNode.type === 'MemberExpression' &&
+        !astNode.computed
+      ) &&
+      readsName(child, name),
+  );
+}
+
+/**
  * The local a loop's visit number is read through. Each has a name of its own, which no JS name can clash with.
  *
  * @returns The local.
@@ -458,6 +483,16 @@ export function lowerFor(
     );
   }
 
+  // In JS both read the loop's own counter, not an outer one of the same name.
+  for (const bound of [declarator.init, endNode]) {
+    if (readsName(bound, name)) {
+      throw errorAt(
+        bound,
+        `AOT: a for loop's start and end can't read its counter ${name}`,
+        BOUND_HINT,
+      );
+    }
+  }
   const start = boundedOf(declarator.init, environment);
   const end = boundedOf(endNode, environment);
   if (!start || !end) {
@@ -680,6 +715,8 @@ function bindItem(
       return {
         type: 'VariableDeclarator',
         id: property.value,
+        // Its own position names its local apart from any other.
+        start: property.start,
         init: {
           type: 'MemberExpression',
           object: hidden,

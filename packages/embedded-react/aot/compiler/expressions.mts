@@ -1664,6 +1664,10 @@ export function listValueOf(
   environment: Env,
   index?: t.Node,
 ): ListState | null {
+  // A local hides a state of the same name.
+  if (node.type === 'Identifier' && environment.locals.has(node.name)) {
+    return null;
+  }
   if (node.type === 'Identifier' && environment.state.has(node.name)) {
     const record = environment.state.get(node.name)!;
     return record.kind === 'list' ? record : null;

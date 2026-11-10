@@ -190,6 +190,26 @@ describe('for…of', () => {
     expect(shape(loop.body)).toEqual(['declareLocal', 'assignLocal', 'set n']);
   });
 
+  it('names a field that hides an outer one apart from it', () => {
+    const outer = firstLoop(
+      lowerHandler(
+        'for (const {v} of items) { for (const {v} of items) setN(m => m + v); setN(m => m + v); }',
+      ),
+    );
+    const inner = firstLoop(outer.body);
+    const [outerField] = outer.body;
+    const [innerField] = inner.body;
+    expect(outerField.kind === 'declareLocal' && outerField.name).not.toBe(
+      innerField.kind === 'declareLocal' && innerField.name,
+    );
+  });
+
+  it('refuses a local that hides a list state', () => {
+    expect(() =>
+      lowerHandler('const items = 1; for (const item of items) setN(item);'),
+    ).toThrow(/a for…of must go over a list/);
+  });
+
   it('refuses anything but a list', () => {
     expect(() => lowerHandler('for (const ch of label) setN(1);')).toThrow(
       /a for…of must go over a list/,
@@ -265,6 +285,14 @@ describe('for', () => {
         'for (let i = 2147483640; i <= 2147483646; i += 2) setN(v => v + 1);',
       ),
     ).toThrow(/must stay a 32-bit whole number/);
+  });
+
+  it("refuses a start or end that reads the loop's own counter", () => {
+    expect(() =>
+      lowerHandler(
+        'for (let i = 0; i < 3; i++) for (let i = 0; i < i; i++) setN(1);',
+      ),
+    ).toThrow(/can't read its counter i/);
   });
 
   it('refuses a body that sets the counter', () => {

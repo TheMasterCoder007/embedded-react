@@ -2318,15 +2318,15 @@ export function lowerStmts(
           continue;
         }
 
-        // A dep-driven effect's cleanup outlives the call, so the body's locals become slots. A `let` has a name of
-        // its own, so one a nested block declares again reads apart from it.
+        // A dep-driven effect's cleanup outlives the call, so the body's locals become slots. A `let`, and a local
+        // that hides an outer one, has a name of its own, so the two keep apart, string buffers too.
         const isHoisted = Boolean(
           context.hoist && statements === context.bodyList,
         );
         const isLet = statement.kind !== 'const';
         const localName = isHoisted
           ? `${context.hoist!.prefix}${declarator.id.name}`
-          : isLet
+          : isLet || environment.locals.has(declarator.id.name)
             ? `local_${declarator.id.name}@${declarator.start ?? 0}`
             : `local_${declarator.id.name}`;
 
