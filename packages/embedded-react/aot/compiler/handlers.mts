@@ -32,6 +32,13 @@ import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
 import type {ItemCallback, ListChain} from './list-order.mts';
 import {handlerSplitList, lowerSplitInto} from './list-split.mts';
 import {
+  boundObjectOf,
+  expandObjectDeclarator,
+  lowerRecordSet,
+  objectTreeOf,
+} from './records.mts';
+import type {ObjectBinding} from './records.mts';
+import {
   mix64Error,
   staticInt,
   isTime64,
@@ -1942,6 +1949,38 @@ function lowerHandlerExprImpl(
     return lowerListOp(targetState, setterArgument, environment);
   }
 
+  // An object setter writes each field; setP(prev => …) binds the parameter to the object.
+  if (targetState.kind === 'record') {
+    if (isFn(setterArgument)) {
+      const previousName = (
+        setterArgument.params[0] as t.Identifier | undefined
+      )?.name;
+      if (setterArgument.body.type === 'BlockStatement') {
+        throw new Error(
+          'AOT: updater function must be a single expression (for now)',
+        );
+      }
+      const locals = new Map(environment.locals);
+      const constants = {...environment.constants};
+      if (previousName) {
+        locals.delete(previousName);
+        constants[previousName] = targetState.value;
+      }
+      return lowerRecordSet(
+        targetState,
+        setterArgument.body,
+        {...environment, locals, constants},
+        lowerScalarSet,
+      );
+    }
+    return lowerRecordSet(
+      targetState,
+      setterArgument,
+      environment,
+      lowerScalarSet,
+    );
+  }
+
   // A scalar setter takes either an updater function or the new value itself.
   if (
     setterArgument &&
@@ -2028,7 +2067,44 @@ export function lowerStmts(
 
     // `const x = …` declares a local that the statements after it can read.
     if (statement.type === 'VariableDeclaration') {
-      for (const declarator of statement.declarations) {
+      // An object's declaration expands into a local per field, put back in the queue.
+      const queue: (t.VariableDeclarator | ObjectBinding)[] = [
+        ...statement.declarations,
+      ];
+      while (queue.length) {
+        const entry = queue.shift()!;
+        if (!('type' in entry)) {
+          const locals = new Map(environment.locals);
+          locals.delete(entry.name);
+          environment = {
+            ...environment,
+            locals,
+            constants: {
+              ...environment.constants,
+              [entry.name]: boundObjectOf(entry, environment.locals),
+            },
+          };
+          continue;
+        }
+        const declarator = entry;
+        const expanded = expandObjectDeclarator(declarator, environment);
+        if (expanded) {
+          if (statement.kind !== 'const') {
+            throw aotError(
+              'AOT: an object in a handler must be a `const`',
+              'build a new object instead of changing this one, and declare it with const.',
+            );
+          }
+          queue.unshift(...expanded.entries);
+          if (expanded.locals.size) {
+            environment = {
+              ...environment,
+              locals: new Map([...environment.locals, ...expanded.locals]),
+            };
+          }
+          continue;
+        }
+
         if (declarator.id.type !== 'Identifier') {
           throw new Error(
             'AOT: destructuring a handler local is not supported',
@@ -2378,6 +2454,13 @@ export function lowerEffect(
     dependencyNode => {
       if (!dependencyNode) {
         throw aotError('AOT: a useEffect dependency must be an expression');
+      }
+
+      if (objectTreeOf(dependencyNode, environment)) {
+        throw aotError(
+          'AOT: a useEffect dependency on a whole object',
+          'depend on the fields the effect reads: [p.x, p.y].',
+        );
       }
 
       const dependencyExpression = lowerExprWide(dependencyNode, environment);

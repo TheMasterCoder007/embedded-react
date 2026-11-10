@@ -23,6 +23,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   with `<`, `>` and `localeCompare`, by UTF-16 code unit. Packages are now format minor 9.
 - Flow B: `split` a string into a list of strings, in a setter, in render and in a handler's `const`. Pieces past
   the list's cap are dropped and reported. Packages are now format minor 10.
+- Flow B: object state, with nested fields, written with spreads, an updater or a ternary of objects. Objects can be
+  built and destructured in handlers and in render, and passed to components.
 
 ### Changed
 

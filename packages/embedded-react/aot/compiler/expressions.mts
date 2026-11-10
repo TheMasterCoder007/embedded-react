@@ -55,6 +55,7 @@ import {
   isPlainObject,
   itemReadOf,
 } from './list-items.mts';
+import {isObjectTree, propertyKey} from './records.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
@@ -1916,10 +1917,21 @@ export function foldRuntime(
   if (node.type === 'ObjectExpression') {
     const folded: Record<string, unknown> = {};
     for (const property of node.properties) {
+      if (property.type === 'SpreadElement') {
+        const spread = foldRuntime(property.argument, environment, scope);
+        if (!isObjectTree(spread)) {
+          throw aotError(
+            'AOT: only an object can be spread into an object',
+            'spread an object state or an object built from fields: {...p, x: 1}.',
+          );
+        }
+        Object.assign(folded, spread);
+        continue;
+      }
       if (property.type !== 'ObjectProperty' || property.computed) {
         throw aotError(
           'AOT: an object built in render must be plain fields',
-          'write each field out: {label: "A", value: n}. Spreads, methods and computed keys are not lowered.',
+          'write each field out: {label: "A", value: n}. Methods and computed keys are not lowered.',
         );
       }
       const key =
@@ -1942,6 +1954,55 @@ export function foldRuntime(
 }
 
 /**
+ * Binds the names an object pattern destructures from an object built in render.
+ *
+ * @param pattern  The pattern.
+ * @param value  The object.
+ * @param environment  The expression environment; the bindings go into its constants.
+ */
+function bindPattern(
+  pattern: t.ObjectPattern,
+  value: Record<string, unknown>,
+  environment: Env,
+): void {
+  const taken = new Set<string>();
+  for (const property of pattern.properties) {
+    if (property.type === 'RestElement') {
+      if (property.argument.type !== 'Identifier') {
+        throw aotError('AOT: a rest element must be a plain name');
+      }
+      setBinding(
+        environment.constants,
+        property.argument.name,
+        Object.fromEntries(
+          Object.entries(value).filter(([key]) => !taken.has(key)),
+        ),
+      );
+      continue;
+    }
+    const key = propertyKey(property);
+    if (!Object.hasOwn(value, key)) {
+      throw aotError(
+        `AOT: the object has no field "${key}" to destructure`,
+        'destructure only the fields the object holds, by name.',
+      );
+    }
+    taken.add(key);
+    const field = value[key];
+    if (property.value.type === 'Identifier') {
+      setBinding(environment.constants, property.value.name, field);
+    } else if (property.value.type === 'ObjectPattern' && isObjectTree(field)) {
+      bindPattern(property.value, field, environment);
+    } else {
+      throw aotError(
+        'AOT: a destructured field must be a plain name or a nested object pattern',
+        'defaults never apply, since every field holds a value; drop the `= …`.',
+      );
+    }
+  }
+}
+
+/**
  * Binds each `const` of a component body that builds an array or object in render from runtime values, as
  * foldRuntime folds it. A const that folds is bound already, and a hook's binding is not a literal.
  *
@@ -1959,6 +2020,17 @@ export function bindBuiltValues(body: t.Statement[], environment: Env): void {
     }
     for (const declarator of statement.declarations) {
       const {id, init} = declarator;
+      if (id.type === 'ObjectPattern' && init) {
+        const value = foldRuntime(init, environment, scope);
+        if (!isObjectTree(value)) {
+          throw aotError(
+            'AOT: only an object can be destructured',
+            'destructure an object state, or an object built from fields.',
+          );
+        }
+        bindPattern(id, value, environment);
+        continue;
+      }
       if (
         id.type !== 'Identifier' ||
         (init?.type !== 'ArrayExpression' &&
@@ -2036,6 +2108,13 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
 
         if (typeof constantValue === 'boolean') {
           return {kind: 'boolean', value: constantValue, location};
+        }
+
+        if (isObjectTree(constantValue)) {
+          throw aotError(
+            `AOT: "${node.name}" is an object, which can't be used as a value here`,
+            `read one of its fields: ${node.name}.${Object.keys(constantValue)[0] ?? 'field'}.`,
+          );
         }
       }
       throw new Error(
@@ -3024,10 +3103,18 @@ function lowerLocaleCompare(call: t.CallExpression, environment: Env): IrExpr {
  *
  * @returns The text React would render for it.
  */
-export const jsxChildText = (value: unknown): string =>
-  value === undefined || value === null || typeof value === 'boolean'
-    ? ''
-    : String(value);
+export function jsxChildText(value: unknown): string {
+  if (value === undefined || value === null || typeof value === 'boolean') {
+    return '';
+  }
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    throw aotError(
+      'AOT: an object cannot be a <Text> child',
+      'React refuses objects as children; render one of its fields: {p.label}.',
+    );
+  }
+  return String(value);
+}
 
 /**
  * Splits a string-building `+` chain into text parts, following JS's own left-to-right typing: a `+`

@@ -335,6 +335,22 @@ const SCENARIOS: Scenario[] = [
     listCap: 5,
     taps: '84,20 136,20 32,48 84,20 136,20 136,20',
   },
+  // Buttons: row 1 right, down, swap, flip; row 2 grow, reset and two counters.
+  {name: 'records', file: fixture('records'), screen: PORTRAIT},
+  // Right twice, down, swap, flip, grow.
+  {
+    name: 'records-moves',
+    file: fixture('records'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 84,20 136,20 188,20 32,48',
+  },
+  // Grow, reset all of it, reset the position; the first counter twice and the second once.
+  {
+    name: 'records-reset',
+    file: fixture('records'),
+    screen: PORTRAIT,
+    taps: '32,48 84,48 84,48 136,48 136,48 188,48',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},
