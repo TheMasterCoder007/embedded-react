@@ -25,6 +25,7 @@
 
 import {aotError} from './diagnostics.mts';
 import {exits} from './helper-values.mts';
+import {switchAsIf} from './switch-cases.mts';
 import type * as t from '@babel/types';
 import type {FunctionNode} from './types.mts';
 
@@ -138,8 +139,9 @@ function eachStatement(
         inner([statement.consequent]);
         if (statement.alternate) inner([statement.alternate]);
         break;
+      // As it runs: each case a branch of its own, then the cases it falls through to.
       case 'SwitchStatement':
-        inner(statement.cases.flatMap(switchCase => switchCase.consequent));
+        inner([switchAsIf(statement)]);
         break;
       case 'ForStatement':
         inner(

@@ -264,6 +264,16 @@ describe('updaters with a block body', () => {
         'let k = 0; setN(v => { if (v > 0) { const k = 1; } k = v; return v; }); setN(k);',
       ),
     ).toThrow(/setN's updater can only write its own locals/);
+    expect(() =>
+      lowerHandler(
+        'let k = 0; setN(v => { switch (v) { case 1: let k = 1; break; default: k = v; } return v; }); setN(k);',
+      ),
+    ).toThrow(/setN's updater can only write its own locals/);
+    expect(() =>
+      lowerHandler(
+        'setN(v => { switch (v) { case 1: let t = 5; t += 1; return t; default: return 0; } });',
+      ),
+    ).not.toThrow();
   });
 
   it('refuses side effects, writes to outer locals, and a way out without a value', () => {
