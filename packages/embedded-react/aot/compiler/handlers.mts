@@ -42,6 +42,7 @@ import {narrowOn, narrowed} from './tagged-records.mts';
 import {exits, helperEnvironment, statementsOf} from './helper-values.mts';
 import {lowerFor, lowerForOf} from './loops.mts';
 import {switchAsIf} from './switch-cases.mts';
+import {isReturnSet, updaterStatements} from './updaters.mts';
 import {
   mix64Error,
   staticInt,
@@ -1699,6 +1700,90 @@ function lowerLocalAssign(
 }
 
 /**
+ * The environment an updater's body reads: its parameter names the state's current value. A list's is the list,
+ * an object's its fields, and a scalar's a read of its slot.
+ *
+ * @param target  The state set.
+ * @param updater  The updater.
+ * @param environment  The handler's environment.
+ *
+ * @returns The body's environment.
+ */
+function updaterEnvironment(
+  target: StateRecord | RecordState,
+  updater: FunctionNode,
+  environment: Env,
+): Env {
+  const previousName = (updater.params[0] as t.Identifier | undefined)?.name;
+  if (!previousName) return environment;
+  const locals = new Map<string, Local>(environment.locals);
+  if (target.kind === 'list') {
+    locals.delete(previousName);
+    return {
+      ...environment,
+      locals,
+      state: new Map(environment.state).set(previousName, target),
+    };
+  }
+  if (target.kind === 'record') {
+    locals.delete(previousName);
+    return {
+      ...environment,
+      locals,
+      constants: {...environment.constants, [previousName]: target.value},
+    };
+  }
+
+  locals.set(previousName, {
+    slotKind: target.slotKind,
+    isBoolean: target.isBoolean,
+    ...(target.widened === 'number' ? {isLiteral: true} : {}),
+    source: {kind: 'state', state: target, location: undefined},
+    expression: {kind: 'state', state: target, type: stateType(target)},
+  });
+  return {...environment, locals};
+}
+
+/**
+ * Lowers a setter given an updater with a block body: the body runs in place, and each `return next` sets the
+ * state through an updater of its own, then leaves the body.
+ *
+ * @param setter  The setter's name.
+ * @param target  The state set.
+ * @param updater  The updater.
+ * @param environment  The handler's environment.
+ * @param state  The component's state table.
+ * @param context  The statement compiler's context.
+ *
+ * @returns The statements.
+ */
+function inlineUpdater(
+  setter: string,
+  target: StateRecord | RecordState,
+  updater: FunctionNode & {body: t.BlockStatement},
+  environment: Env,
+  state: StateTable,
+  context: StatementContext,
+): IrStmt[] {
+  const statements = updaterStatements(setter, updater, target.kind === 'list');
+  const {helperList, usedReturn} = context;
+  context.helperList = statements;
+  context.usedReturn = false;
+  try {
+    const lowered = lowerStmts(
+      statements,
+      updaterEnvironment(target, updater, environment),
+      state,
+      context,
+    );
+    return context.usedReturn ? [{kind: 'block', body: lowered}] : lowered;
+  } finally {
+    context.helperList = helperList;
+    context.usedReturn = usedReturn;
+  }
+}
+
+/**
  * Inlines a handler-statement call to a helper / useCallback: binds the call's args to the helper's params, then
  * lowers the helper body here in the current env/state/ctx. A `return` in it leaves the helper, which becomes a
  * block.
@@ -2083,7 +2168,7 @@ function lowerHandlerExprImpl(
 
   context.stateChanged = true;
   const setterArgument = expression.arguments[0];
-  if (context.loops?.length) {
+  if (context.loops?.length && !isReturnSet(expression)) {
     checkLoopSetter(
       expression.callee.name,
       targetState,
@@ -2092,6 +2177,19 @@ function lowerHandlerExprImpl(
       context.loops,
     );
   }
+
+  // An updater with a block body runs here, each `return next` setting the state.
+  if (isFn(setterArgument) && setterArgument.body.type === 'BlockStatement') {
+    return inlineUpdater(
+      expression.callee.name,
+      targetState,
+      setterArgument as FunctionNode & {body: t.BlockStatement},
+      environment,
+      state,
+      context,
+    );
+  }
+
   if (targetState.kind === 'list') {
     // setItems(prev => …): the parameter names the list.
     if (isFn(setterArgument)) {
@@ -2118,24 +2216,10 @@ function lowerHandlerExprImpl(
   // An object setter writes each field; setP(prev => …) binds the parameter to the object.
   if (targetState.kind === 'record') {
     if (isFn(setterArgument)) {
-      const previousName = (
-        setterArgument.params[0] as t.Identifier | undefined
-      )?.name;
-      if (setterArgument.body.type === 'BlockStatement') {
-        throw new Error(
-          'AOT: updater function must be a single expression (for now)',
-        );
-      }
-      const locals = new Map(environment.locals);
-      const constants = {...environment.constants};
-      if (previousName) {
-        locals.delete(previousName);
-        constants[previousName] = targetState.value;
-      }
       return lowerRecordSet(
         targetState,
-        setterArgument.body,
-        {...environment, locals, constants},
+        setterArgument.body as t.Expression,
+        updaterEnvironment(targetState, setterArgument, environment),
         RECORD_LOWERING,
       );
     }
@@ -2153,36 +2237,13 @@ function lowerHandlerExprImpl(
     (setterArgument.type === 'ArrowFunctionExpression' ||
       setterArgument.type === 'FunctionExpression')
   ) {
-    // setState(prev => expr): bind the param to the current value, typed as a read of it, and assign the result.
-    const previousParameter = (
-      setterArgument.params[0] as t.Identifier | undefined
-    )?.name;
-    const locals = new Map<string, Local>(environment.locals);
-    if (previousParameter) {
-      locals.set(previousParameter, {
-        slotKind: targetState.slotKind,
-        isBoolean: targetState.isBoolean,
-        ...(targetState.widened === 'number' ? {isLiteral: true} : {}),
-        source: {kind: 'state', state: targetState, location: undefined},
-        expression: {
-          kind: 'state',
-          state: targetState,
-          type: stateType(targetState),
-        },
-      });
-    }
-
-    if (setterArgument.body.type === 'BlockStatement') {
-      throw new Error(
-        'AOT: updater function must be a single expression (for now)',
-      );
-    }
-
+    // setState(prev => expr): the param reads the current value, and the result is assigned.
     return [
-      lowerScalarSet(targetState, setterArgument.body, {
-        ...environment,
-        locals,
-      }),
+      lowerScalarSet(
+        targetState,
+        setterArgument.body as t.Expression,
+        updaterEnvironment(targetState, setterArgument, environment),
+      ),
     ];
   }
 

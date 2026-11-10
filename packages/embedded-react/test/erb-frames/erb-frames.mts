@@ -459,6 +459,51 @@ const SCENARIOS: Scenario[] = [
     listCap: 6,
     taps: '188,48',
   },
+  // Buttons: row 1 step, walk, job, grow; row 2 twice, jump.
+  {name: 'blocks', file: fixture('blocks'), screen: PORTRAIT},
+  // 2 % 3 matches no case, so the memo goes on past the switch.
+  {
+    name: 'blocks-step',
+    file: fixture('blocks'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20',
+  },
+  // Each updater starts from what the one before set: 0 → 1 → 2, then 2 → 3 → 6.
+  {
+    name: 'blocks-twice',
+    file: fixture('blocks'),
+    screen: PORTRAIT,
+    taps: '32,48 32,48',
+  },
+  // The loop adds 1, 2, 3 to 6, then returns 9 early from 6.
+  {
+    name: 'blocks-jump',
+    file: fixture('blocks'),
+    screen: PORTRAIT,
+    taps: '84,48 84,48',
+  },
+  // Walk wraps x into y; the job's narrowed fields step to 50.
+  {
+    name: 'blocks-walk',
+    file: fixture('blocks'),
+    screen: PORTRAIT,
+    taps: '84,20 84,20 84,20 84,20 136,20 136,20 136,20',
+  },
+  {
+    name: 'blocks-grow',
+    file: fixture('blocks'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,20 188,20',
+  },
+  // The third grow's loop passes 12 and returns an empty list.
+  {
+    name: 'blocks-empty',
+    file: fixture('blocks'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,20 188,20 188,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

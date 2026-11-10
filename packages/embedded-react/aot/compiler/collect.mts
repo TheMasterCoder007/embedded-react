@@ -1190,6 +1190,13 @@ export function collectHelpers(
     }
   }
 
+  // A block-bodied memo is a helper with no params.
+  for (const [name, functionNode] of memoFunctions(componentBody)) {
+    if (functionNode.body.type === 'BlockStatement') {
+      helpers.set(memoHelperName(name), functionNode);
+    }
+  }
+
   return helpers;
 }
 
@@ -1379,19 +1386,26 @@ export function collectCallbacks(
 }
 
 /**
- * Collects `const m = useMemo(() => expr, deps)` → Map (name → the memo's expression node).
+ * The name a block-bodied memo is kept under as a helper. No binding can have it.
+ *
+ * @param name  The memo's name.
+ *
+ * @returns The helper's name.
+ */
+export const memoHelperName = (name: string): string => `useMemo(${name})`;
+
+/**
+ * Each `const m = useMemo(() => …, deps)` in a component's body, with its function.
  *
  * @param functionBody  The component's body.
  *
- * @returns Each memo's expression, by name.
+ * @returns Each memo's name and function.
  */
-export function collectMemos(
+function memoFunctions(
   functionBody: t.BlockStatement | t.Expression,
-): Map<string, t.Expression> {
-  const memos = new Map<string, t.Expression>();
-  if (functionBody.type !== 'BlockStatement') return memos;
-
-  // Collect expression-bodied useMemo bindings; block-bodied memos are rejected until statement-bodied folding is supported.
+): [string, FunctionNode][] {
+  if (functionBody.type !== 'BlockStatement') return [];
+  const found: [string, FunctionNode][] = [];
   for (const statement of functionBody.body) {
     if (statement.type !== 'VariableDeclaration') continue;
     for (const declarator of statement.declarations) {
@@ -1402,15 +1416,38 @@ export function collectMemos(
         declarator.id.type === 'Identifier' &&
         isFn(initializer.arguments[0])
       ) {
-        const body = initializer.arguments[0].body;
-        if (body.type === 'BlockStatement') {
-          throw new Error(
-            `AOT: useMemo for "${declarator.id.name}" must be a single expression (for now)`,
-          );
-        }
-        memos.set(declarator.id.name, body);
+        found.push([declarator.id.name, initializer.arguments[0]]);
       }
     }
+  }
+
+  return found;
+}
+
+/**
+ * Collects `const m = useMemo(() => expr, deps)` → Map (name → the memo's expression node). A block body is a call to
+ * the helper collectHelpers keeps it as, so it is worked out as a helper's value is.
+ *
+ * @param functionBody  The component's body.
+ *
+ * @returns Each memo's expression, by name.
+ */
+export function collectMemos(
+  functionBody: t.BlockStatement | t.Expression,
+): Map<string, t.Expression> {
+  const memos = new Map<string, t.Expression>();
+  for (const [name, {body}] of memoFunctions(functionBody)) {
+    memos.set(
+      name,
+      body.type === 'BlockStatement'
+        ? {
+            type: 'CallExpression',
+            callee: {type: 'Identifier', name: memoHelperName(name)},
+            arguments: [],
+            loc: body.loc,
+          }
+        : body,
+    );
   }
 
   return memos;

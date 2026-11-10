@@ -31,6 +31,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   and in render. A helper that calls itself is still refused.
 - Flow B: `for` and `for…of` loops in handlers, effects and helpers, with `break` and `continue`, over list state,
   constant arrays and splits, or counted to a constant or a list's length. Handler locals can be `let` and reassigned.
+- Flow B: `useMemo` and state updaters can have a block body. A memo works out its value as a helper does, and an
+  updater can use locals, branches and loops, setting the state at each `return`.
 
 ### Changed
 

@@ -65,6 +65,11 @@ while the code that breaks it is still one line.
 - `useState`, `setState` (including the updater form), `useEffect` with an array-literal dependency
   list and an optional cleanup as its last statement, `useRef`, `useCallback`, `useMemo`, and
   `useAnimatedValue` with a constant initial value (every `Animated` call drives one).
+- `useMemo` can have a block body, worked out as a helper that returns a value is (see Handlers): `const`s, `if`,
+  `switch` and a `return` on every path, but no loop yet. An updater can have a block body too:
+  `setN(v => { const next = v + 1; if (next > 9) return 0; return next; })`. It can use locals, branches, and loops,
+  and each `return` gives the new value. It can't set other state, call a helper as a statement, start a timer, or
+  write a local from outside it.
 - An effect runs after the render, as React's does, and what it sets is drawn at once. One that keeps changing what
   it depends on stops the app after 50 passes, where React reports an update loop.
 - `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the
