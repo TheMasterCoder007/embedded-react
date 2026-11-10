@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {BootValue} from './boot.mts';
+import type {Contexts, Provider} from './contexts.mts';
 import type {SourcePosition} from './diagnostics.mts';
 import type {IrBootSlot} from './ir/boot.mts';
 import type * as t from '@babel/types';
@@ -432,6 +433,10 @@ export interface Env {
   inlining?: ReadonlySet<string>;
   /** Lists a handler, effect, or timer splits a string into, by the `const` that names them, then the component instance. */
   splitLists?: Map<t.Node, Map<string, ListState>>;
+  /** The module's contexts. */
+  contexts?: Contexts;
+  /** The nearest provider of each context around what is being lowered. */
+  providers?: Map<string, Provider>;
 }
 
 /**

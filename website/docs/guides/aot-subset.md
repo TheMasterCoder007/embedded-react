@@ -76,6 +76,15 @@ while the code that breaks it is still one line.
   type no dispatch sends is dropped. A type picked at run time, `{type: up ? 'inc' : 'dec'}`, dispatches each action
   in a branch of its own. A `throw` a dispatch can reach is refused, as is an init function (the third argument).
   `dispatch` can't be passed to a component yet; pass a callback that calls it.
+- A custom hook, a `use…` function in the same file, is inlined where it is called, so each call (and each instance
+  of a component that calls it) has state of its own. Call it at the top of a component or another hook, as React
+  requires. It returns once, at its end, and can't call itself. Its result can be destructured,
+  `const {count, inc} = useCounter(0)` or `const [on, flip] = useToggle()`, or read by key, `counter.count`.
+- `createContext(default)` at module level, `<C.Provider value={…}>` and `const v = useContext(C)` (or
+  `const {a, b} = useContext(C)`) at the top of a component or hook. Each read is worked out at compile time from the
+  nearest provider above the component, or the default with none, and binds as a prop given that value would. A
+  provider adds no node: where one element is wanted, like a component's root, it must wrap one. A value can hold
+  callbacks, but not a setter: pass a callback that calls it. `<C.Consumer>` is not supported.
 - An effect runs after the render, as React's does, and what it sets is drawn at once. One that keeps changing what
   it depends on stops the app after 50 passes, where React reports an update loop.
 - `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the

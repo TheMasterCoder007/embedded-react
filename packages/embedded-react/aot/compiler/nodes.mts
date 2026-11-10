@@ -47,7 +47,8 @@ import {
 } from './elements/props.mts';
 import {lowerHandler} from './handlers.mts';
 import {emitPanResponder, panSpreadTarget} from './pan-responder.mts';
-import {emitComponent, emitChildren} from './control-flow.mts';
+import {emitComponent, emitChildren, emitProvider} from './control-flow.mts';
+import {providedContextOf} from './contexts.mts';
 import {emitSvg} from './svg.mts';
 import {emitDial} from './elements/dial.mts';
 import {emitSwitch} from './elements/switch.mts';
@@ -586,6 +587,20 @@ function emitNodeImpl(
   state: StateTable,
   options: EmitOptions = {},
 ): IrElement {
+  // A context's provider stands for the one element it wraps.
+  const context = providedContextOf(element, environment);
+  if (context) {
+    return emitProvider(
+      element,
+      context,
+      scope,
+      output,
+      environment,
+      state,
+      options,
+    );
+  }
+
   // Refuse any prop the element does not declare, whatever its value, then drop the no-ops and the props that
   // fold to undefined before dispatch.
   const tag = resolveTag(element.openingElement);

@@ -20,6 +20,7 @@
 
 import {attemptLowering, checkNumber} from './check.mts';
 import {traverse} from '@babel/core';
+import {isContextRead} from './contexts.mts';
 import {
   ENGINE_STRING_MAX,
   aotError,
@@ -2055,6 +2056,7 @@ export function bindBuiltValues(body: t.Statement[], environment: Env): void {
     }
     for (const declarator of statement.declarations) {
       const {id, init} = declarator;
+      if (isContextRead(init)) continue; // bound from its provider (see bindContextUses)
       if (id.type === 'ObjectPattern' && init) {
         const value = foldRuntime(init, environment, scope);
         if (!isObjectTree(value)) {

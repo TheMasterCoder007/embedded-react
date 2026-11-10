@@ -547,6 +547,43 @@ const SCENARIOS: Scenario[] = [
     listCap: 6,
     taps: '136,76 32,76 32,76 188,76 188,76',
   },
+  // Buttons: row 1 a, b, reset a, flip; row 2 left, right, and two instances of a component with a counter each.
+  {name: 'custom-hooks', file: fixture('custom-hooks'), screen: PORTRAIT},
+  // a to 3 (doubled 6 by the hook's effect), b by 5 to 10.
+  {
+    name: 'custom-hooks-counts',
+    file: fixture('custom-hooks'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 84,20',
+  },
+  {
+    name: 'custom-hooks-reset',
+    file: fixture('custom-hooks'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 136,20 188,20',
+  },
+  // Left 1 and right 120 sum to 121; x counts 1 and y 2, apart.
+  {
+    name: 'custom-hooks-pair',
+    file: fixture('custom-hooks'),
+    screen: PORTRAIT,
+    taps: '32,48 84,48 84,48 136,48 188,48 188,48',
+  },
+  // Buttons: dark, two bumps under a counter provider, and one with none, which reads the default.
+  {name: 'context', file: fixture('context'), screen: PORTRAIT},
+  {
+    name: 'context-dark',
+    file: fixture('context'),
+    screen: PORTRAIT,
+    taps: '32,20',
+  },
+  // Both provided bumps count to 2; the default one stays at 0.
+  {
+    name: 'context-count',
+    file: fixture('context'),
+    screen: PORTRAIT,
+    taps: '84,20 136,20 188,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},
