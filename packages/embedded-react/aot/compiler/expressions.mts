@@ -34,6 +34,7 @@ import {
   wholeBootValue,
 } from './boot.mts';
 import {
+  HiddenField,
   RuntimeLeaf,
   evalStatic,
   setBinding,
@@ -56,6 +57,12 @@ import {
   itemReadOf,
 } from './list-items.mts';
 import {isObjectTree, propertyKey} from './records.mts';
+import {
+  lowerTagTest,
+  narrowOn,
+  narrowed,
+  tagTestOf,
+} from './tagged-records.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
@@ -1878,6 +1885,7 @@ function runtimeLeafOf(
     typeof container === 'object' && container !== null
       ? (container as Record<string, unknown>)[index as string]
       : undefined;
+  if (value instanceof HiddenField) throw value.error();
   return value instanceof RuntimeLeaf ? value.local : null;
 }
 
@@ -2098,6 +2106,7 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         if (constantValue instanceof RuntimeLeaf) {
           return {kind: 'local', local: constantValue.local, location};
         }
+        if (constantValue instanceof HiddenField) throw constantValue.error();
         if (isBoot(constantValue)) return bootSource(constantValue, location);
         if (typeof constantValue === 'number')
           return numberSource(constantValue, location);
@@ -2144,6 +2153,12 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       throw new Error(`AOT: unsupported unary operator "${node.operator}"`);
     }
     case 'BinaryExpression': {
+      // `s.kind === 'busy'`: a test of a tagged object's hidden tag.
+      const tagTest = tagTestOf(node, environment);
+      if (tagTest) {
+        return {kind: 'fixed', expression: lowerTagTest(tagTest), location};
+      }
+
       // `field === undefined`, `field != null` …: whether a list item's field is there.
       const presenceTest = presenceTestOf(node, environment);
       if (presenceTest) {
@@ -2199,22 +2214,38 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         throw new Error(`AOT: unsupported logical operator "${node.operator}"`);
       }
 
+      // The right side reads a tagged object as the left side's outcome leaves it.
+      const narrowing = narrowOn(node.left, environment);
       return {
         kind: 'logical',
         operator: operator,
         left: operand(node.left),
-        right: operand(node.right),
+        right: lowerSource(
+          node.right,
+          narrowed(
+            environment,
+            operator === '&&' ? narrowing.whenTrue : narrowing.whenFalse,
+          ),
+        ).source,
         location,
       };
     }
-    case 'ConditionalExpression':
+    case 'ConditionalExpression': {
+      const narrowing = narrowOn(node.test, environment);
       return {
         kind: 'conditional',
         test: operand(node.test),
-        consequent: operand(node.consequent),
-        alternate: operand(node.alternate),
+        consequent: lowerSource(
+          node.consequent,
+          narrowed(environment, narrowing.whenTrue),
+        ).source,
+        alternate: lowerSource(
+          node.alternate,
+          narrowed(environment, narrowing.whenFalse),
+        ).source,
         location,
       };
+    }
     case 'MemberExpression': {
       // Static fold: member access that resolves to a compile-time constant (e.g., a .map item's `.key`).
       try {
@@ -3270,10 +3301,22 @@ function lowerTextParts(
     );
   }
 
+  const narrowing =
+    node.type === 'ConditionalExpression'
+      ? narrowOn(node.test, environment)
+      : null;
   if (
     node.type === 'ConditionalExpression' &&
-    isBoolean(lowerExprWide(node.consequent, environment).type) !==
-      isBoolean(lowerExprWide(node.alternate, environment).type)
+    isBoolean(
+      lowerExprWide(node.consequent, narrowed(environment, narrowing!.whenTrue))
+        .type,
+    ) !==
+      isBoolean(
+        lowerExprWide(
+          node.alternate,
+          narrowed(environment, narrowing!.whenFalse),
+        ).type,
+      )
   ) {
     throw textShapeError(
       node,

@@ -176,6 +176,20 @@ export interface RecordState {
   fields: Map<string, ScalarState>;
   /** What reads of it fold to: its fields' reads, nested as the object is. */
   value: Record<string, unknown>;
+  /** An object that takes one of several shapes: the field naming the shape, and the shapes. */
+  tag?: RecordTag;
+}
+
+/** A tagged record's shapes, told apart by a hidden slot holding the shape's index. */
+export interface RecordTag {
+  /** The field whose constant names the shape: `kind`. */
+  key: string;
+  /** The hidden slot. */
+  state: ScalarState;
+  /** Each shape's value of the tag field. */
+  values: (string | number | boolean)[];
+  /** Each shape's fields by their paths joined with dots, the tag left out. */
+  shapes: Set<string>[];
 }
 
 /** A component's state, by JS name (reads) and by setter name (writes). A record's fields are keyed `name.path`. */
