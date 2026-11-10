@@ -18,6 +18,7 @@ import {describe, it, expect} from 'vitest';
 import {parse} from '@babel/parser';
 import type * as t from '@babel/types';
 import {compilePackage} from '../compile.mts';
+import {beginBoot, endBoot, screenBinding} from '../compiler/boot.mts';
 import {collectState} from '../compiler/collect.mts';
 import {lowerStmts} from '../compiler/handlers.mts';
 import {Out} from '../compiler/out.mts';
@@ -120,6 +121,39 @@ describe('object state', () => {
     expect(Object.keys(scope.box as object)).toEqual(['pos', 'label', 'on']);
   });
 
+  it('takes a field worked out from the panel as a number', () => {
+    beginBoot('');
+    try {
+      const scope: Scope = {
+        screen: screenBinding({width: 240, height: 320}),
+      };
+      const state = collectState(
+        {
+          type: 'BlockStatement',
+          body: parse(
+            'const [p, setP] = useState({w: screen.width / 2, n: 1});',
+            {sourceType: 'module'},
+          ).program.body,
+        } as t.BlockStatement,
+        scope,
+        CAPS,
+      );
+      const record = state.bySetter.get('setP') as RecordState;
+      expect(
+        [...record.fields].map(([key, field]) => [
+          key,
+          field.slotKind,
+          field.initial,
+        ]),
+      ).toEqual([
+        ['w', 'int', 120],
+        ['n', 'int', 1],
+      ]);
+    } finally {
+      endBoot();
+    }
+  });
+
   it('writes the fields a setter changes, and skips the ones it spreads back', () => {
     const state = "const [p, setP] = useState({x: 1, y: 2, s: 'a'});";
     expect(targets(lowerHandler(state, 'setP({...p, x: p.x + 1});'))).toEqual([
@@ -216,6 +250,29 @@ describe('object state', () => {
     );
     refuses('{x: 1, pos: {}}', 'state "p.pos" is an empty object');
     refuses('{}', 'state "p" is an empty object');
+    // Fields are keyed by their dotted path, which these would share.
+    refuses("{'pos.x': 1, pos: {x: 2}}", 'state "p" has a field named "pos.x"');
+    refuses("{pos: {'': 2}}", 'state "p.pos" has a field named ""');
+    expect(() => compile(boxApp("setBox({...box, 'pos.x': 3});"))).toThrow(
+      'an object has a field named "pos.x"',
+    );
+  });
+
+  it('destructures a field named by a string or a number', () => {
+    expect(() =>
+      compile(
+        boxApp(
+          "const {'label': name} = box; setN(name === 'a' ? 1 : 0);",
+          "const {'label': text, pos: {'x': left}} = box;",
+          '<Text>{text} {left}</Text>',
+        ),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      compile(
+        boxApp('setN(1);', 'const {1: one} = {1: n};', '<Text>{one}</Text>'),
+      ),
+    ).not.toThrow();
   });
 
   it('refuses a whole object where a value goes', () => {

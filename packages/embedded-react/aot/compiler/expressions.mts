@@ -55,7 +55,7 @@ import {
   isPlainObject,
   itemReadOf,
 } from './list-items.mts';
-import {isObjectTree} from './records.mts';
+import {isObjectTree, propertyKey} from './records.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
@@ -1980,14 +1980,10 @@ function bindPattern(
       );
       continue;
     }
-    const key = property.computed
-      ? property.key.type === 'StringLiteral'
-        ? property.key.value
-        : null
-      : (property.key as t.Identifier).name;
-    if (key === null || !Object.hasOwn(value, key)) {
+    const key = propertyKey(property);
+    if (!Object.hasOwn(value, key)) {
       throw aotError(
-        `AOT: the object has no field "${key ?? '…'}" to destructure`,
+        `AOT: the object has no field "${key}" to destructure`,
         'destructure only the fields the object holds, by name.',
       );
     }

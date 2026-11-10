@@ -89,7 +89,7 @@ export function isObjectTree(value: unknown): value is ObjectTree {
  *
  * @returns The key.
  */
-function propertyKey(property: t.ObjectProperty): string {
+export function propertyKey(property: t.ObjectProperty): string {
   const {key} = property;
   if (!property.computed && key.type === 'Identifier') return key.name;
   if (key.type === 'StringLiteral') return key.value;
@@ -222,6 +222,12 @@ export function flattenTree(tree: ObjectTree): Map<string, unknown> {
   const fields = new Map<string, unknown>();
   const walk = (object: ObjectTree, path: string[]): void => {
     for (const [key, value] of Object.entries(object)) {
+      if (key === '' || key.includes('.')) {
+        throw aotError(
+          `AOT: an object has a field named "${key}"`,
+          'name each field with letters, digits or `_`.',
+        );
+      }
       if (isObjectTree(value)) {
         walk(value, [...path, key]);
       } else {

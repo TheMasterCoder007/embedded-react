@@ -24,7 +24,8 @@ import {readFileSync, existsSync} from 'node:fs';
 import {posix, resolve} from 'node:path';
 import {aotError, locateError} from './diagnostics.mts';
 import {mergeBranchElements} from './branch-merge.mts';
-import {inferItemStruct, isPlainObject} from './list-items.mts';
+import {inferItemStruct} from './list-items.mts';
+import {isObjectTree} from './records.mts';
 import {stateType} from './ir/types.mts';
 import {splitCallOf} from './list-split.mts';
 import {
@@ -513,7 +514,15 @@ function recordStateOf(
       const fieldPath = [...path, key];
       const fieldName = [name, ...fieldPath].join('.');
       const fieldNode = fieldNodeOf(node, key);
-      if (isPlainObject(fieldValue)) {
+      // Fields are keyed by their dotted path, so a key can't hold a dot.
+      if (key === '' || key.includes('.')) {
+        throw fail(
+          `AOT: state "${[name, ...path].join('.')}" has a field named "${key}"`,
+          'name each field with letters, digits or `_`.',
+          fieldNode,
+        );
+      }
+      if (isObjectTree(fieldValue)) {
         folded[key] = flatten(fieldValue, fieldPath, fieldNode);
         continue;
       }
@@ -678,7 +687,7 @@ export function collectState(
             : 0;
 
         // Object state → a record, a scalar slot per field, which reads of its name fold through.
-        if (!isHost && isPlainObject(initialValue)) {
+        if (!isHost && isObjectTree(initialValue)) {
           const recordState = recordStateOf(
             name,
             prefix,
