@@ -186,19 +186,27 @@ export function returnedValues(body: t.BlockStatement): t.Expression[] {
  * Checks an updater's body only works out the new value: it writes only its own locals in scope where it writes
  * them, and calls nothing as a statement or to start a timer. Each way out returns the new value.
  *
- * @param setter  The setter's name.
  * @param updater  The updater.
+ * @param what  What it is, for errors.
  */
 function checkUpdaterBody(
-  setter: string,
   updater: FunctionNode & {body: t.BlockStatement},
+  what: string,
 ): void {
-  const what = `${setter}'s updater`;
   const statements = updater.body.body;
   const pureHint =
-    'an updater only works out the new value from the old one. Set other state, write refs and start timers ' +
-    'in the handler, outside the updater.';
+    `${what.startsWith('reducer') ? 'a reducer' : 'an updater'} only works out the new value from the old ` +
+    'one. Set other state, write refs and start timers in the handler, outside it.';
   eachStatement(statements, (statement, inScope) => {
+    if (statement.type === 'ThrowStatement') {
+      throw locatedError(
+        statement,
+        `AOT: ${what} can reach a \`throw\``,
+        "Flow B has no exceptions. A reducer's throw for an action type no dispatch sends is dropped, so " +
+          'test the type directly: switch (action.type) { … default: throw … }.',
+      );
+    }
+
     if (statement.type === 'ReturnStatement' && !statement.argument) {
       throw locatedError(
         statement,
@@ -312,6 +320,7 @@ function settingReturns(
  * @param setter  The setter's name.
  * @param updater  The updater.
  * @param keepsParameter  Whether each set names the parameter again.
+ * @param what  What it is, for errors: by default `setN's updater`.
  *
  * @returns The statements.
  */
@@ -319,8 +328,9 @@ export function updaterStatements(
   setter: string,
   updater: FunctionNode & {body: t.BlockStatement},
   keepsParameter: boolean,
+  what = `${setter}'s updater`,
 ): t.Statement[] {
-  checkUpdaterBody(setter, updater);
+  checkUpdaterBody(updater, what);
   const setOf = (value: t.Expression): t.CallExpression => {
     const call: t.CallExpression = {
       type: 'CallExpression',

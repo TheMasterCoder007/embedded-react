@@ -114,6 +114,15 @@ interface StateSlot {
   isWatched?: boolean;
   /** Where its initial value is, for errors about it. */
   initialAt?: SourcePosition;
+  /** A useReducer's reducer, which each dispatch (its setter) runs. */
+  reducer?: Reducer;
+}
+
+/** A useReducer's reducer: `(state, action) => next`, inlined at each dispatch. */
+export interface Reducer {
+  /** Its name, for errors: the function's, or `reducer` for one written inline. */
+  name: string;
+  functionNode: FunctionNode;
 }
 
 /** A scalar state: one field of the ErAppState struct. */
@@ -184,6 +193,8 @@ export interface RecordState {
   value: Record<string, unknown>;
   /** An object that takes one of several shapes: the field naming the shape, and the shapes. */
   tag?: RecordTag;
+  /** A useReducer's reducer, which each dispatch (its setter) runs. */
+  reducer?: Reducer;
 }
 
 /** A tagged record's shapes, told apart by a hidden slot holding the shape's index. */

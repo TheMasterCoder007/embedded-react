@@ -305,6 +305,7 @@ function lowerProgram(
     options.caps,
     '',
     wide,
+    ast.program,
   );
   for (const name of state.byName.keys()) {
     delete scope[name];

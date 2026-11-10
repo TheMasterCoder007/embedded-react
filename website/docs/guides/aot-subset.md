@@ -70,6 +70,12 @@ while the code that breaks it is still one line.
   `setN(v => { const next = v + 1; if (next > 9) return 0; return next; })`. It can use locals, branches, and loops,
   and each `return` gives the new value. It can't set other state, call a helper as a statement, start a timer, or
   write a local from outside it.
+- `useReducer(reducer, initial)` holds any state `useState` can. The reducer is a function in the same file or
+  written inline, and each `dispatch(action)` runs it in place, as a block-bodied updater (above). An action's
+  constant fields fold, so `switch (action.type)` keeps only the case a dispatch takes, and a `default: throw` for a
+  type no dispatch sends is dropped. A type picked at run time, `{type: up ? 'inc' : 'dec'}`, dispatches each action
+  in a branch of its own. A `throw` a dispatch can reach is refused, as is an init function (the third argument).
+  `dispatch` can't be passed to a component yet; pass a callback that calls it.
 - An effect runs after the render, as React's does, and what it sets is drawn at once. One that keeps changing what
   it depends on stops the app after 50 passes, where React reports an update loop.
 - `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the

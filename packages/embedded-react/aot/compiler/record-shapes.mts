@@ -25,7 +25,7 @@ import {flattenTree, isObjectTree, propertyKey} from './records.mts';
 import {evalStatic, rethrowFoldLimit} from './static-eval.mts';
 import {returnedValues} from './updaters.mts';
 import type * as t from '@babel/types';
-import type {Scope} from './types.mts';
+import type {FunctionNode, Scope} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
@@ -146,6 +146,53 @@ function writtenObjectOf(
 }
 
 /**
+ * The objects a value can be: itself, a side of a ternary, or what a function returns.
+ *
+ * @param node  The value.
+ * @param scope  Compile-time constants in reach.
+ * @param objects  Takes the objects.
+ */
+function collectObjects(
+  node: t.Node,
+  scope: Scope,
+  objects: WrittenObject[],
+): void {
+  if (node.type === 'ObjectExpression') {
+    objects.push(writtenObjectOf(node, scope));
+  } else if (node.type === 'ConditionalExpression') {
+    collectObjects(node.consequent, scope, objects);
+    collectObjects(node.alternate, scope, objects);
+  } else if (
+    node.type === 'ArrowFunctionExpression' ||
+    node.type === 'FunctionExpression' ||
+    node.type === 'FunctionDeclaration'
+  ) {
+    const values =
+      node.body.type === 'BlockStatement'
+        ? returnedValues(node.body)
+        : [node.body];
+    values.forEach(value => collectObjects(value, scope, objects));
+  }
+}
+
+/**
+ * The objects a reducer returns.
+ *
+ * @param reducer  The reducer.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The objects.
+ */
+export function returnedObjects(
+  reducer: FunctionNode,
+  scope: Scope,
+): WrittenObject[] {
+  const objects: WrittenObject[] = [];
+  collectObjects(reducer, scope, objects);
+  return objects;
+}
+
+/**
  * The objects a setter is called with anywhere in a component: given directly, as a side of a ternary, or by an
  * updater.
  *
@@ -161,23 +208,6 @@ export function writtenObjects(
   scope: Scope,
 ): WrittenObject[] {
   const objects: WrittenObject[] = [];
-  const collect = (node: t.Node): void => {
-    if (node.type === 'ObjectExpression') {
-      objects.push(writtenObjectOf(node, scope));
-    } else if (node.type === 'ConditionalExpression') {
-      collect(node.consequent);
-      collect(node.alternate);
-    } else if (
-      node.type === 'ArrowFunctionExpression' ||
-      node.type === 'FunctionExpression'
-    ) {
-      if (node.body.type === 'BlockStatement') {
-        returnedValues(node.body).forEach(collect);
-      } else {
-        collect(node.body);
-      }
-    }
-  };
   const walk = (node: unknown): void => {
     if (Array.isArray(node)) {
       node.forEach(walk);
@@ -191,7 +221,7 @@ export function writtenObjects(
       astNode.callee.name === setter &&
       astNode.arguments[0]
     ) {
-      collect(astNode.arguments[0]);
+      collectObjects(astNode.arguments[0], scope, objects);
     }
     for (const [key, child] of Object.entries(astNode)) {
       if (!SKIP_KEYS.has(key)) walk(child);

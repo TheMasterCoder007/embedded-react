@@ -499,6 +499,7 @@ export function emitComponent(
       environment.caps,
       prefix,
       environment.wide,
+      output.program,
     );
     settleBootInitials(childState.byName.values());
     output.childStateRecords.push(...childState.byName.values());

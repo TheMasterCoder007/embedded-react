@@ -33,6 +33,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   constant arrays and splits, or counted to a constant or a list's length. Handler locals can be `let` and reassigned.
 - Flow B: `useMemo` and state updaters can have a block body. A memo works out its value as a helper does, and an
   updater can use locals, branches and loops, setting the state at each `return`.
+- Flow B: `useReducer`, inlined at each dispatch. Cases the action's type rules out are dropped, so a reducer can
+  throw for an unknown type.
 
 ### Changed
 
