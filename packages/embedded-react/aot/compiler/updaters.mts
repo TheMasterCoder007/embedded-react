@@ -99,37 +99,65 @@ function patternNames(pattern: t.Node | null | undefined): string[] {
 }
 
 /**
- * Each statement in a body, nested ones included, and not those of a function inside it.
+ * The names statements declare at their own level.
+ *
+ * @param statements  The statements.
+ *
+ * @returns The names.
+ */
+const declaredIn = (statements: (t.Node | null | undefined)[]): string[] =>
+  statements.flatMap(statement =>
+    statement?.type === 'VariableDeclaration'
+      ? statement.declarations.flatMap(({id}) => patternNames(id))
+      : [],
+  );
+
+/**
+ * Each statement in a body, nested ones included, and not those of a function inside it, with the body's names in
+ * scope where it is: those its own block declares and the blocks around it, and a loop's head.
  *
  * @param statements  The body.
- * @param visit  Called with each statement.
+ * @param visit  Called with each statement and the names in scope there.
+ * @param outer  The names in scope around the body.
  */
 function eachStatement(
   statements: t.Statement[],
-  visit: (statement: t.Statement) => void,
+  visit: (statement: t.Statement, inScope: ReadonlySet<string>) => void,
+  outer: ReadonlySet<string> = new Set(),
 ): void {
+  const inScope = new Set([...outer, ...declaredIn(statements)]);
+  const inner = (body: t.Statement[], names: ReadonlySet<string> = inScope) =>
+    eachStatement(body, visit, names);
   for (const statement of statements) {
-    visit(statement);
+    visit(statement, inScope);
     switch (statement.type) {
       case 'BlockStatement':
-        eachStatement(statement.body, visit);
+        inner(statement.body);
         break;
       case 'IfStatement':
-        eachStatement([statement.consequent], visit);
-        if (statement.alternate) eachStatement([statement.alternate], visit);
+        inner([statement.consequent]);
+        if (statement.alternate) inner([statement.alternate]);
         break;
       case 'SwitchStatement':
-        for (const switchCase of statement.cases) {
-          eachStatement(switchCase.consequent, visit);
-        }
+        inner(statement.cases.flatMap(switchCase => switchCase.consequent));
         break;
       case 'ForStatement':
+        inner(
+          [statement.body],
+          new Set([...inScope, ...declaredIn([statement.init])]),
+        );
+        break;
       case 'ForOfStatement':
       case 'ForInStatement':
+        inner(
+          [statement.body],
+          new Set([...inScope, ...declaredIn([statement.left])]),
+        );
+        break;
       case 'WhileStatement':
       case 'DoWhileStatement':
       case 'LabeledStatement':
-        eachStatement([statement.body], visit);
+        inner([statement.body]);
         break;
     }
   }
@@ -153,8 +181,8 @@ export function returnedValues(body: t.BlockStatement): t.Expression[] {
 }
 
 /**
- * Checks an updater's body only works out the new value: it writes only its own locals, and calls nothing as a
- * statement or to start a timer. Each way out returns the new value.
+ * Checks an updater's body only works out the new value: it writes only its own locals in scope where it writes
+ * them, and calls nothing as a statement or to start a timer. Each way out returns the new value.
  *
  * @param setter  The setter's name.
  * @param updater  The updater.
@@ -165,19 +193,10 @@ function checkUpdaterBody(
 ): void {
   const what = `${setter}'s updater`;
   const statements = updater.body.body;
-  const declared = new Set<string>();
-  eachStatement(statements, statement => {
-    if (statement.type === 'VariableDeclaration') {
-      for (const declarator of statement.declarations) {
-        patternNames(declarator.id).forEach(name => declared.add(name));
-      }
-    }
-  });
-
   const pureHint =
     'an updater only works out the new value from the old one. Set other state, write refs and start timers ' +
     'in the handler, outside the updater.';
-  eachStatement(statements, statement => {
+  eachStatement(statements, (statement, inScope) => {
     if (statement.type === 'ReturnStatement' && !statement.argument) {
       throw locatedError(
         statement,
@@ -210,7 +229,7 @@ function checkUpdaterBody(
         : expression.type === 'UpdateExpression'
           ? expression.argument
           : null;
-    if (written?.type === 'Identifier' && declared.has(written.name)) return;
+    if (written?.type === 'Identifier' && inScope.has(written.name)) return;
     const called =
       expression.type === 'CallExpression' &&
       expression.callee.type === 'Identifier'

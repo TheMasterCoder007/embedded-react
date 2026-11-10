@@ -225,6 +225,47 @@ describe('updaters with a block body', () => {
     ).not.toThrow();
   });
 
+  it('lets its parameter hide a state of the same name', () => {
+    /** The program an app compiles to whose handler is `handler`. */
+    const programOf = (handler: string) =>
+      Buffer.from(
+        compile(
+          appOf(
+            '  const [n, setN] = useState(7);\n' +
+              '  const [p, setP] = useState({x: 0, y: 0});\n' +
+              '  const [items, setItems] = useState([1]);',
+            `<Pressable onPress={() => {${handler}}}><Text>{n}{p.x}{items.length}</Text></Pressable>`,
+          ),
+        ).program,
+      ).toString('hex');
+    expect(
+      programOf('setP(n => { const x = n.x + 1; return {...n, x}; });'),
+    ).toBe(programOf('setP(q => { const x = q.x + 1; return {...q, x}; });'));
+    expect(programOf('setP(n => ({...n, x: n.x + 1}));')).toBe(
+      programOf('setP(q => ({...q, x: q.x + 1}));'),
+    );
+    expect(programOf('setN(p => { return p + 1; });')).toBe(
+      programOf('setN(v => { return v + 1; });'),
+    );
+    expect(programOf('setItems(n => [...n, 2]);')).toBe(
+      programOf('setItems(w => [...w, 2]);'),
+    );
+  });
+
+  it('writes its own locals where they are in scope', () => {
+    expect(() =>
+      lowerHandler(
+        'setN(v => { let total = v; for (let i = 0; i < 2; i++) { let step = i; step++; total += step; } ' +
+          'if (v > 1) { total = 0; } return total; });',
+      ),
+    ).not.toThrow();
+    expect(() =>
+      lowerHandler(
+        'let k = 0; setN(v => { if (v > 0) { const k = 1; } k = v; return v; }); setN(k);',
+      ),
+    ).toThrow(/setN's updater can only write its own locals/);
+  });
+
   it('refuses side effects, writes to outer locals, and a way out without a value', () => {
     expect(() =>
       lowerHandler('setN(v => { setLabel("x"); return v + 1; });'),

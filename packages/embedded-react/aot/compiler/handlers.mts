@@ -1716,20 +1716,24 @@ function updaterEnvironment(
 ): Env {
   const previousName = (updater.params[0] as t.Identifier | undefined)?.name;
   if (!previousName) return environment;
+
+  // The parameter hides any local or state of its name.
   const locals = new Map<string, Local>(environment.locals);
+  locals.delete(previousName);
+  const state = new Map(environment.state);
+  state.delete(previousName);
   if (target.kind === 'list') {
-    locals.delete(previousName);
     return {
       ...environment,
       locals,
-      state: new Map(environment.state).set(previousName, target),
+      state: state.set(previousName, target),
     };
   }
   if (target.kind === 'record') {
-    locals.delete(previousName);
     return {
       ...environment,
       locals,
+      state,
       constants: {...environment.constants, [previousName]: target.value},
     };
   }
@@ -1741,7 +1745,7 @@ function updaterEnvironment(
     source: {kind: 'state', state: target, location: undefined},
     expression: {kind: 'state', state: target, type: stateType(target)},
   });
-  return {...environment, locals};
+  return {...environment, locals, state};
 }
 
 /**
