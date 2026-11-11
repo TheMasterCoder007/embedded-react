@@ -334,6 +334,53 @@ describe('a helper used as a value that loops', () => {
     ]);
   });
 
+  it('is given a filtered list or a constant array as the list', () => {
+    const source = appOf(
+      `${HELPERS}\nconst LIMITS = [{id: 1, v: 7}, {id: 2, v: 9}];`,
+      '  const big = items.filter(item => item.v > n);',
+      '<View><Pressable onPress={() => setN(biggest(big) + biggest(LIMITS))}><Text>{n}</Text></Pressable>' +
+        '<Text>{biggest(big)}</Text><Text>{biggest(LIMITS)}</Text></View>',
+    );
+    const app = lower(source);
+    const big = app.state.find(state => state.name === 'items.filter')!;
+    const [overBig] = workedOf(source);
+    expect(big.kind === 'list' && big.derived!.order).toBeLessThan(
+      overBig.worked!.order,
+    );
+    // The constant array's loop reads no state.
+    expect(readsOf(source)).toEqual([['n'], ['items', 'n']]);
+    expect(() => compile(source)).not.toThrow();
+  });
+
+  it('nests, each helper reading its own locals', () => {
+    const source = appOf(
+      'function sum(list) { const total = 100; let s = total; for (const item of list) s += item.v; return s; }\n' +
+        'function outer(list) { const total = 1; let k = 0; for (const item of list) k += 1; ' +
+        'const inner = sum(list); return total + inner + k; }',
+      '',
+      '<Pressable onPress={() => setN(outer(items))}><Text>{n}</Text></Pressable>',
+    );
+    const declared = handlerOf(source).flatMap(function names(
+      statement: IrStmt,
+    ): string[] {
+      if (statement.kind === 'declareLocal') return [statement.name];
+      if (statement.kind === 'block' || statement.kind === 'loop') {
+        return statement.body.flatMap(names);
+      }
+      return [];
+    });
+    expect(declared.map(name => name.replace(/[#@]\d+$/, m => m[0]))).toEqual([
+      'value@outer#',
+      'local_total',
+      'local_k@',
+      'value@sum#',
+      'local_total@',
+      'local_s@',
+      'local_inner',
+    ]);
+    expect(() => compile(source)).not.toThrow();
+  });
+
   it('refuses one in a list row, and one that calls itself', () => {
     expect(() =>
       compile(
