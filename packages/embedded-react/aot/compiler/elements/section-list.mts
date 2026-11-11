@@ -25,6 +25,7 @@ import {foldRuntime} from '../expressions.mts';
 import {emitNode} from '../nodes.mts';
 import {evalStatic, setBinding} from '../static-eval.mts';
 import {attrExpr} from '../style-text.mts';
+import {patternNames} from '../updaters.mts';
 import {at} from './props.mts';
 import {elementOf, expressionChild, refuseSpreads} from './rewrite.mts';
 import type * as t from '@babel/types';
@@ -141,10 +142,21 @@ export function emitSectionList(
     callback: FunctionNode,
     allowed: string[],
     section: Section,
-    child: (names: Map<string, string>) => t.JSXElement['children'][number],
+    child: (
+      bound: FunctionNode,
+      names: Map<string, string>,
+    ) => t.JSXElement['children'][number],
   ): void => {
     const names = destructured(callback, allowed);
     const sectionName = names.get('section');
+    // A data that is list state has no value to bind, so `section.data` reads it where it is written.
+    const bound =
+      sectionName && section.data && !Object.hasOwn(section.value, 'data')
+        ? ({
+            ...callback,
+            body: withSectionData(callback.body, sectionName, section.data),
+          } as FunctionNode)
+        : callback;
     const sectionScope: Scope = {...scope};
     if (sectionName) {
       setBinding(sectionScope, sectionName, section.value);
@@ -155,7 +167,7 @@ export function emitSectionList(
 
     scrollView.node.children.push(
       ...emitChildren(
-        [child(names)],
+        [child(bound, names)],
         sectionScope,
         output,
         rowEnv(environment, [sectionName], sectionScope),
@@ -166,7 +178,7 @@ export function emitSectionList(
 
   for (const section of sections) {
     if (header) {
-      emitBound(header, ['section'], section, () => bodyChild(header));
+      emitBound(header, ['section'], section, bound => bodyChild(bound));
     }
 
     const rowRenderer = section.renderItem ?? renderItem;
@@ -186,17 +198,81 @@ export function emitSectionList(
         );
       }
 
-      emitBound(rowRenderer, ['item', 'index', 'section'], section, names =>
-        rowsChild(rowRenderer, names, rows),
+      emitBound(
+        rowRenderer,
+        ['item', 'index', 'section'],
+        section,
+        (bound, names) => rowsChild(bound, names, rows),
       );
     }
 
     if (footer) {
-      emitBound(footer, ['section'], section, () => bodyChild(footer));
+      emitBound(footer, ['section'], section, bound => bodyChild(bound));
     }
   }
 
   return scrollView;
+}
+
+/**
+ * `node` with each `<sectionName>.data` read replaced by `data`, outside functions that bind the name again.
+ * The callback is shared by every section, so what changes is copied.
+ *
+ * @param node  A node of the callback's body.
+ * @param sectionName  The callback's name for the section.
+ * @param data  The section's data, as written.
+ *
+ * @returns The node, or a copy with the reads replaced.
+ */
+function withSectionData(
+  node: unknown,
+  sectionName: string,
+  data: t.Expression,
+): unknown {
+  if (Array.isArray(node)) {
+    const replaced = node.map(entry =>
+      withSectionData(entry, sectionName, data),
+    );
+    return replaced.some((entry, index) => entry !== node[index])
+      ? replaced
+      : node;
+  }
+
+  if (!node || typeof (node as t.Node).type !== 'string') return node;
+
+  const astNode = node as t.Node;
+  if (
+    (astNode.type === 'MemberExpression' ||
+      astNode.type === 'OptionalMemberExpression') &&
+    !astNode.computed &&
+    astNode.object.type === 'Identifier' &&
+    astNode.object.name === sectionName &&
+    astNode.property.type === 'Identifier' &&
+    astNode.property.name === 'data'
+  ) {
+    return data;
+  }
+
+  if (
+    isFn(astNode) &&
+    astNode.params.some(parameter =>
+      patternNames(parameter).includes(sectionName),
+    )
+  ) {
+    return node;
+  }
+
+  let copy: Record<string, unknown> | null = null;
+  for (const [key, value] of Object.entries(astNode)) {
+    if (key === 'loc' || key.endsWith('Comments')) continue;
+    const replaced = withSectionData(value, sectionName, data);
+    if (replaced !== value) {
+      copy ??= {...astNode};
+      copy[key] = replaced;
+    }
+  }
+
+  return copy ?? node;
 }
 
 /**

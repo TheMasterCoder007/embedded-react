@@ -125,7 +125,11 @@ export function emitButton(
   // The label, coerced as Flow A coerces it: a missing title draws nothing.
   const titleAttribute = attributes.get('title');
   const label = titleAttribute
-    ? [expressionChild(attrExpr(titleAttribute) as t.Expression)]
+    ? [
+        expressionChild(
+          titleText(attrExpr(titleAttribute) as t.Expression, scope),
+        ),
+      ]
     : [];
   const text = elementOf(
     'Text',
@@ -150,6 +154,28 @@ export function emitButton(
     state,
     options,
   );
+}
+
+/**
+ * A title as Button.js draws it, `title == null ? '' : String(title)`: worked out now when it folds, else
+ * `String(title)`, so a boolean draws as "true" or "false" rather than nothing.
+ *
+ * @param title  The title.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The label's text.
+ */
+function titleText(title: t.Expression, scope: Scope): t.Expression {
+  try {
+    const value = evalStatic(title, scope);
+    return {type: 'StringLiteral', value: value == null ? '' : String(value)};
+  } catch {
+    return {
+      type: 'CallExpression',
+      callee: {type: 'Identifier', name: 'String'},
+      arguments: [title],
+    };
+  }
 }
 
 /**

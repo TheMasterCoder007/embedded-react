@@ -137,6 +137,23 @@ describe('Button', () => {
     expect(textOf(text)).toBe('n ?');
   });
 
+  it('draws a boolean title as text, as String(title) does', () => {
+    const [, constant] = nodesOf(
+      lower(appOf('', '  return <Button title={true} />;')).root,
+    );
+    expect(textOf(constant)).toBe('true');
+    const [, fromState] = nodesOf(
+      lower(
+        appOf(
+          '',
+          '  const [on, setOn] = useState(false);\n' +
+            '  return <Button title={on} onPress={() => setOn(!on)} />;',
+        ),
+      ).root,
+    );
+    expect(textOf(fromState)).toBe('?');
+  });
+
   it('refuses a disabled worked out at run time', () => {
     expect(() =>
       lower(
@@ -247,6 +264,19 @@ describe('SectionList', () => {
       'list 1',
       'own 2',
     ]);
+  });
+
+  it('reads a data that is list state through section.data', () => {
+    const source = appOf(
+      '',
+      "  const [names, setNames] = useState(['a']);\n" +
+        "  return <SectionList sections={[{title: 'Saved', data: names}]}\n" +
+        '    renderItem={({item}) => <Text>{item}</Text>}\n' +
+        '    renderSectionFooter={({section}) => <Pressable onPress={() => setNames([...names, "b"])}>' +
+        '<Text>{section.data.length} rows</Text></Pressable>} />;',
+    );
+    const footer = nodesOf(lower(source).root).at(-1)!;
+    expect(textOf(footer)).toBe('? rows');
   });
 
   it('maps over a data that is list state as a pool of rows', () => {
