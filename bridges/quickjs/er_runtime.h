@@ -146,14 +146,14 @@ typedef struct
                                                 it yourself. */
     uint32_t extra_intrinsics;                 /**< ER_JS_INTRINSIC_* flags for features beyond the lite profile;
                                                 0 = the lite set only (what the React runtime needs). */
-    const ErbNative* natives;                  /**< Native functions the app's native modules call: the table
-                                                    ErbConfig::natives takes, so both flows share it. NULL = none. */
-    uint16_t native_count;
-    void* native_context; /**< Passed to natives. */
     /** Installs the host's own globals (device-API bindings) into every context the app runs in: the one
         er_runtime_init creates and each one er_runtime_reset replaces it with. Runs after the runtime's
         globals and before any app code. NULL = none. */
     void (*install_host_globals)(JSContext* ctx);
+    const ErbNative* natives; /**< Native functions the app's native modules call: the table ErbConfig::natives
+                                   takes, so both flows share it. NULL = none. */
+    uint16_t native_count;
+    void* native_context; /**< Passed to natives. */
 } ErRuntimeConfig;
 
 /*----------------------------------------------------------------------------------------------------------------------

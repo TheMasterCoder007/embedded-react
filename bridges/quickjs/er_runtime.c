@@ -307,7 +307,10 @@ static bool native_signature_valid(const char* signature)
 static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    (void)argc;
+    if (argc < 3)
+    {
+        return JS_ThrowTypeError(ctx, "find() takes a name, a version and a signature");
+    }
     int32_t version = 0;
     if (JS_ToInt32(ctx, &version, argv[1]))
     {

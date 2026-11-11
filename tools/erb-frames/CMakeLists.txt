@@ -29,6 +29,10 @@ foreach (bridge_tool SMOKE RUNTEST SPLITTEST CONTAINERTEST HANDLETEST ERRORTEST 
     set(ER_BRIDGE_QUICKJS_${bridge_tool} OFF CACHE BOOL "" FORCE)
 endforeach ()
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../bridges/quickjs ${CMAKE_CURRENT_BINARY_DIR}/bridges/quickjs)
+# QuickJS is third-party code, which CI's -Werror=shadow isn't for.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(qjs PRIVATE -Wno-shadow)
+endif ()
 
 # A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

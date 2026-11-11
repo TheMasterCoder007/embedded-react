@@ -60,7 +60,7 @@ const Sensors = nativeModule<Sensors>('sensors', 1);
 
 **TypeScript.** Declares a module the firmware provides in C. The interface is in the app's file or in a local
 `.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `number` (a float) and
-`boolean`, and may return `void`.
+`boolean`, and may return `void`. It takes up to 16 parameters.
 
 Call a method in a handler, an effect or a timer, and keep what it returns in state. A call in render is refused,
 since Flow A would make it on every render and Flow B only when what it reads changes.

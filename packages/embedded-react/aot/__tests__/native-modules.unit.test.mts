@@ -329,6 +329,20 @@ describe('native module calls it refuses', () => {
     ).toMatch(/nativeModule\(\) is called outside module level/);
   });
 
+  it('refuses a method with more parameters than Flow A passes', () => {
+    const params = Array.from({length: 17}, (_, index) => `p${index}: Int`);
+    const source = appOf(
+      `Sensors.wide(${params.map(() => '1').join(', ')});`,
+    ).replace(
+      SENSORS,
+      `interface Sensors { wide(${params.join(', ')}): Int; }\n` +
+        "const Sensors = nativeModule<Sensors>('sensors', 2);\n",
+    );
+    expect(failure(source)).toMatch(
+      /Sensors\.wide takes more than 16 parameters/,
+    );
+  });
+
   it('refuses more native methods than a package holds', () => {
     const methods = Array.from({length: 33}, (_, index) => `m${index}(): Int;`);
     const calls = methods.map((_, index) => `Sensors.m${index}();`).join(' ');

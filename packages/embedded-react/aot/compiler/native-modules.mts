@@ -66,6 +66,9 @@ export const MAX_IMPORTS = 32;
 
 const MAX_VERSION = 0xffff;
 
+/** Parameters a native method may take: what Flow A's bridge passes (NATIVE_MAX_PARAMETERS in er_runtime.c). */
+const MAX_PARAMETERS = 16;
+
 const SIGNATURE_CODES: Record<NativeType | 'void', string> = {
   int: 'i',
   float: 'f',
@@ -417,6 +420,12 @@ function memberOf(
     return refuse('takes type parameters', typeHint);
   }
 
+  if (functionType.parameters.length > MAX_PARAMETERS) {
+    return refuse(
+      `takes more than ${MAX_PARAMETERS} parameters`,
+      'split it into methods that take fewer.',
+    );
+  }
   const params: NativeType[] = [];
   for (const parameter of functionType.parameters) {
     if (parameter.type !== 'Identifier' || parameter.optional) {
