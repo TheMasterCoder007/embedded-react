@@ -28,6 +28,7 @@ import {
 import type {AotError, SourcePosition} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
+import {lowerNativeCall, nativeCalleeOf} from './native-modules.mts';
 import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
 import type {ItemCallback, ListChain} from './list-order.mts';
 import {handlerSplitList, lowerSplitInto} from './list-split.mts';
@@ -1962,6 +1963,19 @@ function lowerHandlerExprImpl(
   const environment = handlerEnvironment.outsideRender
     ? handlerEnvironment
     : {...handlerEnvironment, outsideRender: true};
+  // `Sensors.setLed(on)`: a native method called for what it does.
+  if (expression.type === 'CallExpression') {
+    const nativeCallee = nativeCalleeOf(expression, environment);
+    if (nativeCallee) {
+      return [
+        {
+          kind: 'callNative',
+          call: lowerNativeCall(expression, nativeCallee, environment),
+        },
+      ];
+    }
+  }
+
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
   if (
     expression.type === 'CallExpression' &&

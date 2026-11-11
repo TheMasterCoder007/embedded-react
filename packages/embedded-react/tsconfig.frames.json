@@ -15,6 +15,6 @@
   },
   "include": [
     "test/erb-frames/fixtures/**/*.tsx",
-    "test/erb-frames/fixtures/*.d.ts"
+    "test/erb-frames/fixtures/*.ts"
   ]
 }

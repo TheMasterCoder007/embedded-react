@@ -36,6 +36,8 @@ export interface CompileOptions {
   filename?: string;
   /** The app's <Svg source> files, baked ahead of the compilation by bakeSvgArtifacts. */
   svgArtifacts?: Record<string, SvgArtifact>;
+  /** The local files the app imports native module interfaces from, by import path, read by readNativeInterfaces. */
+  nativeInterfaces?: Record<string, string>;
   /** Parse the source as TypeScript. By default, the filename's extension decides. */
   ts?: boolean;
   /** A panel to keep a layout for. The fallbacks for this and the caps below are listed on resolveOptions. */

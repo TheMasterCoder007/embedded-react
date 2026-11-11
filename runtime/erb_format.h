@@ -745,7 +745,7 @@ enum
     X(RET,      ERB_F_ABC, 1, 0, ERBO_R, ERBO_X, ERBO_X)  /* return A (if the function has a result) */                \
     /* Calls */                                                                                                        \
     X(CALL,     ERB_F_ABX, 1, 0, ERBO_R, ERBO_K, ERBO_X)  /* function Bx, arguments and result from A */               \
-    X(CALLN,    ERB_F_ABX, 1, 0, ERBO_R, ERBO_K, ERBO_X)  /* import Bx, arguments and result from A */                 \
+    X(CALLN,    ERB_F_ABX, 1, 0, ERBO_R, ERBO_K, ERBO_X)  /* import Bx, arguments from A, the result after them */    \
     /* Text: build into the format buffer, then put it somewhere */                                                    \
     X(FMTK,     ERB_F_ABX, 1, 0, ERBO_X, ERBO_K, ERBO_X)  /* strings[Bx] */                                            \
     X(FMTS,     ERB_F_ABC, 1, 0, ERBO_S, ERBO_X, ERBO_X)                                                               \

@@ -41,6 +41,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `SectionList`'s sections are fixed at build time, and a section's rows can be list state.
 - Flow B: loops in `useMemo` and in helpers used as values, with `let` locals, `break` and `continue`. In render the
   value is worked out again when what it reads changes. A helper can be passed a list.
+- Flow B: native modules, declared with `nativeModule<Sensors>('sensors', 1)` and a TypeScript interface. Handlers,
+  effects and timers call their methods with `Int`, `number` and `boolean` values, and the firmware registers each
+  one in C.
 
 ### Changed
 

@@ -1584,6 +1584,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             {
                 const uint8_t* import = program->imports + operand_bx * ERB_IMPORT_SIZE;
                 const ErbNative* native = &g_erb.config.natives[program->natives[operand_bx]];
+                const char* signature = erb_string(program, erb_u16(import + ERB_IMPORT_SIGNATURE_AT));
                 int32_t value = 0;
                 if (!native->callback(&registers[operand_a], &value, g_erb.config.context))
                 {
@@ -1591,9 +1592,10 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                                  "a native import reported failure",
                                  erb_string(program, erb_u16(import + ERB_IMPORT_NAME_AT)));
                 }
-                if (erb_string(program, erb_u16(import + ERB_IMPORT_SIGNATURE_AT))[0] != 'v')
+                /* The result goes in the register after the arguments. */
+                if (signature[0] != 'v')
                 {
-                    registers[operand_a] = value;
+                    registers[operand_a + strlen(signature + 2)] = value;
                 }
                 break;
             }

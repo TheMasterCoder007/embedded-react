@@ -44,6 +44,44 @@ sensor readings, clocks and any other host data reach a compiled app with no Jav
 device. In the simulator, where there is no host to write it, it returns its initial value.
 The [RP2040 guide](../guides/boards/rp2040.md) shows it driving a pedometer.
 
+## nativeModule
+
+```tsx
+import {nativeModule} from 'embedded-react';
+import type {Int} from 'embedded-react';
+
+interface Sensors {
+  read(channel: Int): number;
+  setLed(on: boolean): void;
+}
+
+const Sensors = nativeModule<Sensors>('sensors', 1);
+```
+
+**Flow B, TypeScript.** Declares a module the firmware provides in C. The interface is in the app's file or in a
+local `.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `number` (a float) and
+`boolean`, and may return `void`.
+
+Call a method in a handler, an effect or a timer, and keep what it returns in state. A call in render is refused,
+since Flow A would make it on every render and Flow B only when what it reads changes.
+
+Each method called becomes an import named `module.method`, with the module's version and a signature such as
+`f:i` (returns a float, takes an int). The firmware registers an `ErbNative` for each one in `ErbConfig::natives`,
+and a package whose imports aren't all there doesn't load: the error screen names the missing one.
+
+```c
+static bool sensors_read(const int32_t* arguments, int32_t* result, void* context)
+{
+    const float value = read_adc(arguments[0]);
+    memcpy(result, &value, sizeof(value));
+    return true;
+}
+
+static const ErbNative natives[] = {{"sensors.read", 1, "f:i", sensors_read}};
+```
+
+Flow A and the simulator don't have native modules yet, so declaring one stops the app there.
+
 ## AppRegistry
 
 ```jsx

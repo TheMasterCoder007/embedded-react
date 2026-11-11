@@ -1953,16 +1953,17 @@ static bool signature_ok(const FunctionContext* context, const char* signature, 
             return false;
         }
     }
+    /* The result goes in the register after the arguments. */
     switch (signature[0])
     {
         case 'v':
             return true;
         case 'i':
-            return reg_is(context, first, ERB_TYPE_INT);
+            return reg_is(context, register_index, ERB_TYPE_INT);
         case 'b':
-            return reg_is(context, first, ERB_TYPE_BOOL);
+            return reg_is(context, register_index, ERB_TYPE_BOOL);
         case 'f':
-            return reg_is(context, first, ERB_TYPE_FLOAT);
+            return reg_is(context, register_index, ERB_TYPE_FLOAT);
         default:
             return false;
     }
@@ -2489,14 +2490,17 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
         {
             return false;
         }
-        /* A loop counter is written by its LOOPSET and LOOP only. */
+        /* A loop counter is written by its LOOPSET and LOOP only. CALLN writes the register after its arguments. */
+        const char* native_signature =
+            opcode == ERB_OP_CALLN
+                ? erb_string(program,
+                             erb_u16(program->imports + ERB_BX(word) * ERB_IMPORT_SIZE + ERB_IMPORT_SIGNATURE_AT))
+                : NULL;
         const bool writes_operand_a =
             info->writes || (opcode == ERB_OP_CALL && erb_function(program, ERB_BX(word))[ERB_FUNCTION_RESULT_AT])
-            || (opcode == ERB_OP_CALLN
-                && erb_string(program,
-                              erb_u16(program->imports + ERB_BX(word) * ERB_IMPORT_SIZE + ERB_IMPORT_SIGNATURE_AT))[0]
-                       != 'v');
-        if (writes_operand_a && opcode != ERB_OP_LOOPSET && opcode != ERB_OP_LOOP && erb_bit_get(counters, ERB_A(word)))
+            || (native_signature && native_signature[0] != 'v');
+        const uint32_t written = native_signature ? ERB_A(word) + (uint32_t)strlen(native_signature + 2) : ERB_A(word);
+        if (writes_operand_a && opcode != ERB_OP_LOOPSET && opcode != ERB_OP_LOOP && erb_bit_get(counters, written))
         {
             return fail(error, ERB_ERROR_CONTROL_FLOW, "a loop counter is written outside its LOOPSET and LOOP");
         }

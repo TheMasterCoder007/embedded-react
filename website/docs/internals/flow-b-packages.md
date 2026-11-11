@@ -489,9 +489,9 @@ the verifier works out each function's deepest path in one pass from the last fu
 the register stack holds the deepest path from any function; a frame is its registers plus three cells
 of bookkeeping. A stack overflow can't happen at run time.
 
-A native import is called with its arguments as 32-bit cells and returns one result. It can't call
-back into the VM. Work that takes time reports back later by posting an input or an event, which the
-runtime delivers like any other.
+A native import is called with its arguments as 32-bit cells from consecutive registers, and its result
+goes in the register after them, so it can be of another type. It can't call back into the VM. Work that
+takes time reports back later by posting an input or an event, which the runtime delivers like any other.
 
 ### Loops and the instruction budget
 

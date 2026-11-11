@@ -1,0 +1,307 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {readFileSync} from 'node:fs';
+import {dirname, join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {describe, it, expect} from 'vitest';
+import {compilePackage, readNativeInterfaces} from '../compile.mts';
+import {Table} from '../compiler/package/format.mts';
+import {OP} from '../compiler/package/bytecode.mts';
+import type {CompileOptions} from '../compiler/options.mts';
+
+// Native module calls: the imports table, and the CALLN each call becomes. Whether the runtime runs them is
+// test/erb-frames' job (native-calls.tsx).
+
+const FIXTURES = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../test/erb-frames/fixtures',
+);
+
+const OPTIONS: CompileOptions = {
+  filename: 'App.tsx',
+  screen: {width: 240, height: 320},
+};
+
+const SENSORS =
+  'interface Sensors {\n' +
+  '  read(channel: Int): number;\n' +
+  '  add(left: Int, right: Int): Int;\n' +
+  '  pressed(button: Int): boolean;\n' +
+  '  count(): Int;\n' +
+  '  setLed(on: boolean): void;\n' +
+  '  scale: (value: number) => number;\n' +
+  '  name(): string;\n' +
+  '  level?(): number;\n' +
+  '}\n' +
+  "const Sensors = nativeModule<Sensors>('sensors', 2);\n";
+
+/** An app with the Sensors module, `body` before the App's return and `handler` as a button's onPress body. */
+const appOf = (handler: string, body = '', text = '{n}') =>
+  "import {useEffect, useMemo, useState} from 'react';\n" +
+  "import {Pressable, Text, nativeModule} from 'embedded-react';\n" +
+  "import type {Int} from 'embedded-react';\n" +
+  SENSORS +
+  'export function App() {\n' +
+  '  const [n, setN] = useState(0);\n' +
+  '  const [f, setF] = useState(0.0);\n' +
+  '  const [on, setOn] = useState(false);\n' +
+  body +
+  `  return <Pressable onPress={() => { ${handler} }}><Text>${text}</Text></Pressable>;\n` +
+  '}\n';
+
+const compile = (source: string, options: CompileOptions = {}) =>
+  compilePackage(source, 'app', {...OPTIONS, ...options});
+
+/** The message a compile fails with. */
+const failure = (source: string, options: CompileOptions = {}) => {
+  try {
+    compile(source, options);
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error('it compiled');
+};
+
+const OP_NAMES = Object.fromEntries(
+  Object.entries(OP).map(([name, {code}]) => [code, name]),
+);
+
+/** The program's tables, its strings, and each function's instructions. */
+function readProgram(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const u16 = (offset: number) => view.getUint16(offset, true);
+  const u32 = (offset: number) => view.getUint32(offset, true);
+  const directory = 24 + u16(18) * 16 + u16(20) * 8;
+  const tables = new Map<number, {offset: number; length: number}>();
+  for (let index = 0; index < u16(22); index++) {
+    const entry = directory + index * 12;
+    tables.set(u16(entry), {offset: u32(entry + 4), length: u32(entry + 8)});
+  }
+  const strings = tables.get(Table.strings)!;
+  const string = (index: number) => {
+    const start = strings.offset + u32(strings.offset + 4 + index * 4);
+    return Buffer.from(
+      bytes.subarray(start, bytes.indexOf(0, start)),
+    ).toString();
+  };
+  const imports = tables.get(Table.imports);
+  const importList = Array.from(
+    {length: imports ? imports.length / 8 : 0},
+    (_, index) => {
+      const at = imports!.offset + index * 8;
+      return `${string(u16(at))} v${u16(at + 2)} ${string(u16(at + 4))}`;
+    },
+  );
+  const functions = tables.get(Table.functions)!;
+  const code = tables.get(Table.code)!;
+  const ops = Array.from({length: functions.length / 16}, (_, index) => {
+    const record = functions.offset + index * 16;
+    const start = u32(record);
+    const found: {name: string; a: number; b: number; bx: number}[] = [];
+    for (let at = start; at < start + u32(record + 4);) {
+      const word = u32(code.offset + at * 4);
+      const name = OP_NAMES[word & 0xff];
+      found.push({
+        name,
+        a: (word >>> 8) & 0xff,
+        b: (word >>> 16) & 0xff,
+        bx: word >>> 16,
+      });
+      at += OP[name].words;
+    }
+    return found;
+  }).flat();
+  return {imports: importList, ops};
+}
+
+describe('native module calls', () => {
+  it('imports each method called as module.method, with its version and signature', () => {
+    const {imports} = readProgram(
+      compile(
+        appOf(
+          'setF(Sensors.read(Sensors.count())); setN(Sensors.add(n, 2)); ' +
+            'setOn(Sensors.pressed(1)); Sensors.setLed(on); setF(Sensors.read(3)); setF(Sensors.scale(f));',
+        ),
+      ).program,
+    );
+    expect(imports).toEqual([
+      'sensors.count v2 i:',
+      'sensors.read v2 f:i',
+      'sensors.add v2 i:ii',
+      'sensors.pressed v2 b:i',
+      'sensors.setLed v2 v:b',
+      'sensors.scale v2 f:f',
+    ]);
+  });
+
+  it('passes the arguments in consecutive registers and reads the result after them', () => {
+    const {ops} = readProgram(
+      compile(appOf('setN(Sensors.add(n, 2));')).program,
+    );
+    const call = ops.findIndex(op => op.name === 'CALLN');
+    expect(ops.slice(call - 2, call).map(op => [op.name, op.a])).toEqual([
+      ['MOVE', ops[call].a],
+      ['MOVE', ops[call].a + 1],
+    ]);
+    expect(ops[call + 1]).toMatchObject({name: 'MOVE', b: ops[call].a + 2});
+  });
+
+  it('drops the result of a call made as a statement', () => {
+    const {ops} = readProgram(compile(appOf('Sensors.count();')).program);
+    const call = ops.findIndex(op => op.name === 'CALLN');
+    expect(ops[call + 1].name).not.toBe('MOVE');
+  });
+
+  it('passes a whole number as a number', () => {
+    const {ops} = readProgram(
+      compile(appOf('setF(Sensors.scale(n));')).program,
+    );
+    expect(ops.map(op => op.name)).toContain('ITOF');
+  });
+
+  it('calls a method in an effect, a timer and an updater', () => {
+    expect(() =>
+      compile(
+        appOf(
+          'setN(value => Sensors.add(value, 1));',
+          '  useEffect(() => { setOn(Sensors.pressed(0)); ' +
+            'const id = setInterval(() => setF(Sensors.read(1)), 100); return () => clearInterval(id); }, []);\n',
+        ),
+      ),
+    ).not.toThrow();
+  });
+
+  it('reads the interface from the local file the app imports it from', () => {
+    const file = join(FIXTURES, 'native-calls.tsx');
+    const source = readFileSync(file, 'utf8');
+    const nativeInterfaces = readNativeInterfaces(source, FIXTURES);
+    expect(Object.keys(nativeInterfaces)).toEqual(['./native-probe']);
+    const {imports} = readProgram(
+      compile(source, {filename: file, nativeInterfaces}).program,
+    );
+    expect(imports).toContain('probe.half v1 f:i');
+    expect(failure(source, {filename: file})).toMatch(
+      /can't find the interface Probe/,
+    );
+  });
+});
+
+describe('native module calls it refuses', () => {
+  it('refuses a call in render', () => {
+    expect(failure(appOf('', '', '{Sensors.read(1)}'))).toMatch(
+      /Sensors\.read\(\) is called in render/,
+    );
+    expect(
+      failure(
+        appOf('', '  const v = useMemo(() => Sensors.count(), []);\n', '{v}'),
+      ),
+    ).toMatch(/is called in render/);
+  });
+
+  it('refuses what the interface declares but a call cannot pass yet', () => {
+    expect(failure(appOf('Sensors.name();'))).toMatch(
+      /Sensors\.name returns a string, which native modules don't pass yet/,
+    );
+    expect(failure(appOf('setF(Sensors.level());'))).toMatch(
+      /Sensors\.level is optional/,
+    );
+    expect(failure(appOf('Sensors.calibrate();'))).toMatch(
+      /Sensors has no method calibrate/,
+    );
+  });
+
+  it('refuses arguments that do not fit the parameters', () => {
+    expect(failure(appOf('setF(Sensors.read(f));'))).toMatch(
+      /Sensors\.read\(\) takes an Int here/,
+    );
+    expect(failure(appOf('Sensors.setLed(n);'))).toMatch(
+      /Sensors\.setLed\(\) takes a boolean here/,
+    );
+    expect(failure(appOf('setF(Sensors.read());'))).toMatch(
+      /takes 1 argument, not 0/,
+    );
+  });
+
+  it('refuses a void result used as a value', () => {
+    expect(failure(appOf('const x = Sensors.setLed(on);'))).toMatch(
+      /Sensors\.setLed\(\) returns nothing/,
+    );
+  });
+
+  it('refuses the module read as a value', () => {
+    expect(failure(appOf('const s = Sensors;'))).toMatch(
+      /the native module Sensors can only have its methods called/,
+    );
+  });
+
+  it('refuses a declaration it cannot read', () => {
+    const declared = (declaration: string) =>
+      appOf('Sensors.count();').replace(
+        "const Sensors = nativeModule<Sensors>('sensors', 2);",
+        declaration,
+      );
+    expect(
+      failure(declared("const Sensors = nativeModule('sensors', 2);")),
+    ).toMatch(/needs the interface that declares the module/);
+    expect(
+      failure(declared("let Sensors = nativeModule<Sensors>('sensors', 2);")),
+    ).toMatch(/must be bound to a const/);
+    expect(
+      failure(
+        declared("const Sensors = nativeModule<Sensors>('sensors', 1.5);"),
+      ),
+    ).toMatch(/version is a whole number from 0 to 65535/);
+    expect(
+      failure(
+        declared("const Sensors = nativeModule<Sensors>('my.sensors', 1);"),
+      ),
+    ).toMatch(/"my\.sensors" isn't a native module name/);
+    expect(
+      failure(
+        declared(
+          "const Sensors = nativeModule<Sensors>('sensors', 2);\n" +
+            "const Other = nativeModule<Sensors>('sensors', 3);",
+        ),
+      ),
+    ).toMatch(/the native module "sensors" is declared twice/);
+    expect(
+      failure(declared("const Sensors = nativeModule<Missing>('sensors', 2);")),
+    ).toMatch(/can't find the interface Missing/);
+  });
+
+  it('refuses nativeModule() inside a component', () => {
+    expect(
+      failure(
+        appOf(
+          'local.count();',
+          "  const local = nativeModule<Sensors>('local', 1);\n",
+        ),
+      ),
+    ).toMatch(/nativeModule\(\) is called outside module level/);
+  });
+
+  it('refuses more native methods than a package holds', () => {
+    const methods = Array.from({length: 33}, (_, index) => `m${index}(): Int;`);
+    const calls = methods.map((_, index) => `Sensors.m${index}();`).join(' ');
+    const source = appOf(calls).replace(
+      SENSORS,
+      `interface Sensors { ${methods.join(' ')} }\n` +
+        "const Sensors = nativeModule<Sensors>('sensors', 2);\n",
+    );
+    expect(failure(source)).toMatch(/at most 32 native methods/);
+  });
+});

@@ -28,6 +28,7 @@ import {
   bakeSvgArtifacts,
   compilePackage,
   packPackage,
+  readNativeInterfaces,
 } from '../../aot/compile.mts';
 import {bakeAssetPackBytes} from '../../assets/index.mjs';
 
@@ -74,6 +75,7 @@ async function compileSeed(seed) {
     filename: seed.file,
     listCap: seed.listCap,
     svgArtifacts: await bakeSvgArtifacts(source, sourceDirectory),
+    nativeInterfaces: readNativeInterfaces(source, sourceDirectory),
     release: seed.release,
   });
   const images = packaged.images.map(image => ({

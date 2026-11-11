@@ -30,6 +30,7 @@ import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrStaticDecl} from './ir/functions.mts';
 import type {IrSlotStore, IrSource} from './ir/source.mts';
 import type {IrStmt} from './ir/statements.mts';
+import type {NativeModule} from './native-modules.mts';
 import type {SlotWidths, WideSlot} from './ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -460,6 +461,8 @@ export interface Env {
   contexts?: Contexts;
   /** The nearest provider of each context around what is being lowered. */
   providers?: Map<string, Provider>;
+  /** The native modules the app declares, by the const each is bound to. */
+  nativeModules?: Map<string, NativeModule>;
 }
 
 /**

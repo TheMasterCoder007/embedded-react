@@ -317,6 +317,32 @@ export interface IrConditional extends IrTyped {
   alternate: IrExpr;
 }
 
+/** A value a native method takes or returns: an Int, a number or a boolean. */
+export type NativeType = 'int' | 'float' | 'bool';
+
+/** A native method the package imports, as the firmware registers it. */
+export interface NativeImport {
+  /** `module.method`. */
+  name: string;
+  version: number;
+  /** The result, ':', then the parameters, each one of i, f or b; v as the result means none. */
+  signature: string;
+  params: NativeType[];
+  result: NativeType | 'void';
+}
+
+/** A call to a native method, with an argument for each of its parameters. */
+export interface IrNativeCall {
+  import: NativeImport;
+  callArguments: IrExpr[];
+}
+
+/** A native method's result. */
+export interface IrNative extends IrTyped {
+  kind: 'native';
+  call: IrNativeCall;
+}
+
 /** A lowered JS expression, before any backend prints it. */
 export type IrExpr =
   | IrNumber
@@ -350,4 +376,5 @@ export type IrExpr =
   | IrStringIncludes
   | IrLogical
   | IrPick
-  | IrConditional;
+  | IrConditional
+  | IrNative;

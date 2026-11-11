@@ -56,6 +56,8 @@ import {emitNode} from './nodes.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
 import {itemValueAt} from './list-items.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
+import {collectNativeModules} from './native-modules.mts';
+import type {NativeModule} from './native-modules.mts';
 import {inlineCustomHooks} from './custom-hooks.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
@@ -274,7 +276,13 @@ function lowerProgram(
   stores: IrSlotStore[],
 ): Omit<IrApp, 'boot' | 'checks'> {
   // Parse the app and prepare the AST for the passes below.
-  const ast = parseApp(source, options);
+  let nativeModules = new Map<string, NativeModule>();
+  const ast = parseApp(source, options, typed => {
+    nativeModules = collectNativeModules(
+      typed.program,
+      options.nativeInterfaces,
+    );
+  });
   normalizeUndefined(ast);
   inlineCustomHooks(ast);
   refuseHiddenContexts(ast);
@@ -329,6 +337,7 @@ function lowerProgram(
     splitLists: new Map(),
     functionProps: new Map(),
     children: null,
+    nativeModules,
   };
   moduleEnvironment.contexts = {
     records: contextsOf(ast.program),
@@ -428,6 +437,7 @@ function lowerProgram(
     splitLists: moduleEnvironment.splitLists,
     functionProps: appFunctionProps,
     contexts: moduleEnvironment.contexts,
+    nativeModules,
   };
 
   // A value worked out at boot lowers its slot against the app's environment.

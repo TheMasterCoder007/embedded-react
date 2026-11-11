@@ -60,6 +60,7 @@
  *   compiler/nodes.mts           emitNode — the element dispatcher + the generic host node
  *   compiler/elements/*.mts      typed components: Dial / Switch / TextInput / Modal / FlatList / …
  *   compiler/keyboard.mts        setKeyboardConfig({...}) → the keyboard config
+ *   compiler/native-modules.mts  nativeModule() declarations and their interfaces → native calls
  *   compiler/lower.mts           lowerApp — run the stages above over the parsed app
  *   compiler/check.mts           the check pass — the values lowering recorded, checked in order
  *   compiler/package/*.mts       the package backend: the IR as a Flow B program, its container and report
@@ -87,6 +88,7 @@ import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mjs';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
+import {readNativeInterfaces} from './compiler/native-modules.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
   assemblePackage,
@@ -126,7 +128,13 @@ const FIRST_SIZE: Screen = {width: 240, height: 320};
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
 
-export {bakePackage, bakeSvgArtifacts, packPackage, resourceReport};
+export {
+  bakePackage,
+  bakeSvgArtifacts,
+  packPackage,
+  readNativeInterfaces,
+  resourceReport,
+};
 
 /**
  * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
@@ -382,6 +390,10 @@ if (
     result = compilePackage(source, demo, {
       filename: resolve(demosDirectory, demo, 'App.jsx'),
       svgArtifacts: await bakeSvgArtifacts(
+        source,
+        resolve(demosDirectory, demo),
+      ),
+      nativeInterfaces: readNativeInterfaces(
         source,
         resolve(demosDirectory, demo),
       ),

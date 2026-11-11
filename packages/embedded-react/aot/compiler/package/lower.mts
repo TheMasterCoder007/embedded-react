@@ -2658,6 +2658,7 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     bindings: lowering.bindings,
     functions,
     animations: animations.animations,
+    imports: tables.imports,
     inputs,
     interpolations: animations.interpolations,
     tapes: lowering.slots.vectors.tapes,

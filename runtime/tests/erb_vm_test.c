@@ -69,7 +69,16 @@ static bool sensors_read(const int32_t* arguments, int32_t* result, void* contex
     return !s_native_fails;
 }
 
-static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}};
+static bool sensors_scale(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    const float value = (float)arguments[0] / 2.0f;
+    memcpy(result, &value, sizeof(value));
+    return true;
+}
+
+static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read},
+                                      {"sensors.scale", 1, "f:i", sensors_scale}};
 
 static void log_line(const char* line, void* context)
 {
@@ -88,7 +97,7 @@ static TPkg* base(void)
     s_config.screen_width = TPKG_SCREEN;
     s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
-    s_config.native_count = 1;
+    s_config.native_count = 2;
     s_config.log = log_line;
     s_log[0] = '\0';
     s_native_fails = false;
@@ -331,12 +340,22 @@ static void test_loops_and_calls(void)
         OP_ABC(RET, 0, 0, 0),
     };
     const uint16_t once = helper(types, 3, 1, ERB_TYPE_INT, once_code, 5);
-    const uint32_t native_code[] = {OP_ABX(CALLN, 0, 0), OP_ABC(RET, 0, 0, 0)};
-    const uint16_t native = helper(types, 1, 1, ERB_TYPE_INT, native_code, 2);
+    const uint32_t native_code[] = {OP_ABX(CALLN, 0, 0), OP_ABC(RET, 1, 0, 0)};
+    const uint16_t native = helper(types, 2, 1, ERB_TYPE_INT, native_code, 2);
+    TPkg* package = &s_package_spec;
+    package->strings[package->string_count] = "sensors.scale";
+    package->strings[package->string_count + 1] = "f:i";
+    package->imports[package->import_count++] =
+        (TImport){(uint16_t)package->string_count, 1, (uint16_t)(package->string_count + 1)};
+    package->string_count += 2;
+    const uint8_t scale_types[] = {ERB_TYPE_INT, ERB_TYPE_FLOAT};
+    const uint32_t scale_code[] = {OP_ABX(CALLN, 0, 1), OP_ABC(RET, 1, 0, 0)};
+    const uint16_t scale = helper(scale_types, 2, 1, ERB_TYPE_FLOAT, scale_code, 2);
     CHECK(load(), "loads");
     CHECK(call(loop, 0, 0) == 10, "a loop runs its bound");
     CHECK(call(once, 0, 0) == 1, "a loop with bound 0 runs its body once");
     CHECK(call(native, 41, 0) == 42, "a native import is called with its arguments");
+    CHECK(as_float(call(scale, 5, 0)) == 2.5f, "a native's result goes after its arguments, in its own type");
     s_native_fails = true;
     call(native, 41, 0);
     CHECK(s_status == ERB_ERROR_NATIVE && g_erb.error.name && strcmp(g_erb.error.name, "sensors.read") == 0,

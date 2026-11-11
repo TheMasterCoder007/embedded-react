@@ -322,18 +322,21 @@ export function normalizeUndefined(ast: t.File): void {
  *
  * @param source  The entry's source.
  * @param options  compilePackage's options: its filename (or `ts`) decides whether it is TypeScript.
+ * @param readTypes  Reads what the compile needs of the types, before they are stripped.
  *
  * @returns The parsed file.
  */
 export function parseApp(
   source: string,
   options: Pick<CompileOptions, 'ts' | 'filename'> = {},
+  readTypes?: (ast: t.File) => void,
 ): t.File {
   const isTypeScript = isTsEntry(options);
   const ast = parse(source, {
     sourceType: 'module',
     plugins: parserPlugins(isTypeScript),
   });
+  readTypes?.(ast);
   if (isTypeScript) {
     stripTypeScript(ast);
   }

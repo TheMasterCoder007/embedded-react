@@ -157,7 +157,8 @@ An event handler body may contain `const` and `let` locals holding a number, a b
 built with `+`, a template literal or the string helpers above; `if` and
 `else`; `switch`; `for` and `for…of` loops with `break` and `continue`; `return`, early or not; state setter calls;
 `ref.current` writes, including `+=` and `++`; `setInterval`, `setTimeout` and their clears; `updateVector` calls;
-and `.start()` or `.stop()` on any `Animated` animation or composition. `while` and `try` are not lowered, and a
+[native module](../api/hooks.md#nativemodule) calls; and `.start()` or `.stop()` on any `Animated` animation or
+composition. `while` and `try` are not lowered, and a
 `break` in a `switch` must end its case.
 
 - A `let` can be set with `=`, `+=` and the like, `++` and `--`. It keeps the kind of value it starts with: a
@@ -178,6 +179,9 @@ and `.start()` or `.stop()` on any `Animated` animation or composition. `while` 
   `setTotal(t => t + item.n)`: React's would read `total` from before the loop each time. Or add up into a `let`
   and set the state once after the loop.
 - Labels, `while`, `do…while`, `for…in` and a `var` in a loop's declaration are refused.
+- A native method takes `Int`, `number` and `boolean` arguments. An `Int` parameter takes only a whole number, so
+  pass `Math.round(x)` for a fraction. Its result is kept in state like any value: a float result needs a float
+  state, `useState(0.0)`. Strings and objects aren't passed yet, and a call in render is refused.
 
 Helper functions are inlined where they are called, and a helper cannot call itself. One called as a statement may
 do anything a handler does, and its `return` leaves only the helper. One whose result is used, in a handler or in
