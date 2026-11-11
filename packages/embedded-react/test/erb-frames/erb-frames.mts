@@ -584,6 +584,16 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '84,20 136,20 188,20',
   },
+  // Buttons: count, add a row, and a disabled one; a picture with text over it; a section of state rows and a fixed one.
+  {name: 'wrappers', file: fixture('wrappers'), screen: PORTRAIT, listCap: 6},
+  // count twice, add two rows, then the disabled button, which leaves the count at 2.
+  {
+    name: 'wrappers-taps',
+    file: fixture('wrappers'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '33,20 33,20 84,20 84,20 127,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

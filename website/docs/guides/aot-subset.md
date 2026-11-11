@@ -59,6 +59,12 @@ while the code that breaks it is still one line.
   module-level `setKeyboardConfig({...})` also compile.
 - `<FlatList>` honours `data`, `renderItem`, `keyExtractor` and `style` only, and
   `renderItem` must destructure `({item, index})`. For anything more, use `<ScrollView>` with `.map`.
+- `<SectionList>` is unrolled at build time, so the number of sections is fixed: write `sections`
+  out in place or use a constant array. A section's fields fold or are state, and its `data` is
+  anything `.map` takes, list state included. Its callbacks destructure `({item, index, section})`
+  and `({section})`.
+- `<Button>` and `<ImageBackground>` compile to the trees they render in Flow A. `disabled` on a
+  `<Button>` must be a constant.
 
 ## State, hooks, and lists
 
@@ -347,10 +353,6 @@ for the remaining gap to be the permanent kind.
 
 Queued next, from the [roadmap](/roadmap):
 
-- **`Button`, `ImageBackground` and `SectionList`.** The three JavaScript-only wrappers that the
-  compiler currently rejects by name, with the tree to write by hand. The first two are fixed
-  rewrites of the kind `FlatList` already gets; a section is a header plus a variable-length list,
-  which the list unroller has no shape for yet.
 - **Live `toValue`.** An animation whose target depends on current state animates toward the value
   captured when the animation was set up, not the live one. Tracked for the animation hardening
   pass.

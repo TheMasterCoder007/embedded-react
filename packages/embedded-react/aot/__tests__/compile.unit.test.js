@@ -451,11 +451,7 @@ describe('AOT FlatList (thin rewrite → ScrollView + .map)', () => {
   });
 });
 
-// The package exports three RN wrappers the AOT cannot lower yet (issue #114 shipped them Flow-A only).
-// The failure mode that matters is the MESSAGE: the import resolves, the simulator renders them, and the
-// spelling is right, so a bare "unknown element" sends people hunting for a typo that isn't there.
-describe('AOT Flow-A-only components', () => {
-  // The catch-all must still fire for a name that really is a typo / a missing import.
+describe('AOT unknown elements', () => {
   it('still reports a genuinely unknown element as unknown', () => {
     expect(() =>
       gen(`${PREAMBLE}

@@ -37,6 +37,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   throw for an unknown type.
 - Flow B: `createContext`, `<C.Provider>` and `useContext`, resolved at compile time to the nearest provider.
 - Flow B: custom hooks, inlined at each call, so each call has state of its own.
+- Flow B: `Button`, `ImageBackground` and `SectionList`, compiled to the trees they render in Flow A. A
+  `SectionList`'s sections are fixed at build time, and a section's rows can be list state.
 
 ### Changed
 

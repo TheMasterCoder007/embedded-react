@@ -192,7 +192,8 @@ section.
 | `keyExtractor`                               | `(item, index) => string \| number`                    |                                                                                                                                 |
 | `style`                                      | style                                                  |                                                                                                                                 |
 
-**Flow A only** for now; the AOT has no `SectionList` lowering yet.
+Flow B unrolls the sections at build time, so their number is fixed: write `sections` out in place
+or use a constant array. A section's `data` can be list state.
 
 ## Button
 
@@ -206,12 +207,12 @@ React Native's pre-styled button: a `Pressable` around one centred `Text`, two n
 | `color`    | colour        | Fill colour, replacing the default blue |
 | `disabled` | `boolean`     | Greys it out and detaches `onPress`     |
 
-Accessibility, TV-focus, and `testID` props are accepted and ignored. **Flow A only** for now.
+Accessibility, TV-focus, and `testID` props are accepted and ignored. Flow B needs `disabled` to be a
+constant.
 
 `Button`, `ImageBackground` and `SectionList` are JavaScript over the primitives, as in React Native,
 so they add no engine node type. They exist, so a React Native source pastes in and runs; reach for the
-primitives directly when you want control. The AOT has no lowering for them yet and says which tree
-to write instead.
+primitives directly when you want control. Flow B compiles each to the tree it renders in Flow A.
 
 ## ImageBackground
 
@@ -224,8 +225,6 @@ it takes no children.
 | `imageStyle`         | style             | Merged over the fill: `borderRadius`, `opacity`, `tintColor`                              |
 | `imageRef`           | `Ref<NodeHandle>` | The `Image` node; the outer `ref` is the `View`                                           |
 | _every `Image` prop_ |                   | `source`, `resizeMode`, `tintColor` go to the image                                       |
-
-**Flow A only** for now.
 
 ## TextInput
 

@@ -56,6 +56,9 @@ import {emitTextInput} from './elements/text-input.mts';
 import {emitActivityIndicator} from './elements/activity-indicator.mts';
 import {emitModal} from './elements/modal.mts';
 import {emitFlatList} from './elements/flat-list.mts';
+import {emitButton} from './elements/button.mts';
+import {emitImageBackground} from './elements/image-background.mts';
+import {emitSectionList} from './elements/section-list.mts';
 import {resolveImageAttrs} from './elements/image.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
@@ -77,18 +80,6 @@ import type {
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
-
-// JS-only wrappers with no lowering yet, mapped to the tree to write by hand; "unknown element" would mislead.
-const FLOW_A_ONLY_COMPONENTS: Record<string, string> = {
-  Button:
-    '<Pressable style={…} onPress={…}><Text style={…}>title</Text></Pressable>.',
-  ImageBackground:
-    "<View style={…}><Image source={…} style={{position: 'absolute', top: 0, left: 0, " +
-    'right: 0, bottom: 0}} />…children…</View>.',
-  SectionList:
-    '<ScrollView> with the header element and a data.map(…) per section (a section is not ' +
-    'one .map, which is why it has no lowering).',
-};
 
 // <TouchableOpacity> press feedback (see touchablePressFades).
 const TOUCHABLE_ACTIVE_OPACITY = 0.2; // RN's default
@@ -566,8 +557,8 @@ export function lowerEventHandler(
 
 /**
  * Lowers one JSX element to its engine node (see emitNode, the located entry point): dispatches the typed
- * elements (Svg, Switch, Dial, TextInput, ActivityIndicator, Modal, FlatList) and function components to
- * their emitters, and builds a generic host node (View / Text / Pressable / TouchableOpacity / Image /
+ * elements (Svg, Switch, Dial, TextInput, ActivityIndicator, Modal), the wrappers (FlatList, SectionList,
+ * Button, ImageBackground) and function components to their emitters, and builds a generic host node (View / Text / Pressable / TouchableOpacity / Image /
  * ScrollView) itself: style, text, events, refs, and children.
  *
  * @param element  The element.
@@ -603,8 +594,10 @@ function emitNodeImpl(
 
   // Refuse any prop the element does not declare, whatever its value, then drop the no-ops and the props that
   // fold to undefined before dispatch.
+  // A component in this file wins over a built-in that is no host node, as its binding would in JS.
   const tag = resolveTag(element.openingElement);
-  const spec = elementSpec(tag);
+  const localComponent = !NODE_TYPES[tag] && output.components.has(tag);
+  const spec = localComponent ? undefined : elementSpec(tag);
   if (spec) {
     checkAttributes(spec, element.openingElement);
     if (spec.children === 'none') {
@@ -623,6 +616,9 @@ function emitNodeImpl(
 
     return {kind: 'node', id: node.id, node};
   };
+  if (localComponent) {
+    return emitComponent(element, scope, output, environment, state, options);
+  }
   if (tag === 'Svg') {
     return typed(emitSvg(element, scope, output, environment, state, options));
   }
@@ -643,24 +639,26 @@ function emitNodeImpl(
   if (tag === 'FlatList') {
     return emitFlatList(element, scope, output, environment, state, options);
   }
+  if (tag === 'SectionList') {
+    return emitSectionList(element, scope, output, environment, state, options);
+  }
+  if (tag === 'Button') {
+    return emitButton(element, scope, output, environment, state, options);
+  }
+  if (tag === 'ImageBackground') {
+    return emitImageBackground(
+      element,
+      scope,
+      output,
+      environment,
+      state,
+      options,
+    );
+  }
 
-  // Anything else must be a host node or a function component defined in this file.
+  // Anything else must be a host node.
   const nodeType = NODE_TYPES[tag];
   if (!nodeType) {
-    if (output.components.has(tag)) {
-      return emitComponent(element, scope, output, environment, state, options);
-    }
-
-    // A package export with no lowering yet gets its own error; "unknown element" would read like a typo.
-    const replacement = FLOW_A_ONLY_COMPONENTS[tag];
-    if (replacement) {
-      throw aotError(
-        `AOT: <${tag}> is not supported in Flow B yet`,
-        `it renders in Flow A (the simulator and the QuickJS runtime) but the AOT has no ` +
-          `lowering for it. Write it out by hand for the device build: ${replacement}`,
-      );
-    }
-
     throw aotError(
       `AOT: unknown element <${tag}> (not a built-in or a component in this file)`,
       `<${tag}> must be a built-in (View / Text / Pressable / TouchableOpacity / Image / ` +

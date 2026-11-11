@@ -434,8 +434,8 @@ export interface FlatListProps<T = unknown> {
 /**
  * `<SectionList>` is a thin `<ScrollView>` alias like `<FlatList>` — no virtualization, no sticky
  * headers, and every header, row and footer mounts as a real engine node and stays mounted. Header,
- * rows and footer are flat siblings, exactly as in RN. Flow A / simulator only for now: the AOT has no
- * `<SectionList>` lowering yet.
+ * rows and footer are flat siblings, exactly as in RN. Flow B unrolls the sections at build time, so
+ * write them out in place or use a constant array.
  */
 export interface SectionListProps<ItemT = unknown, SectionT = DefaultSectionT> {
   sections?: ReadonlyArray<SectionListData<ItemT, SectionT>>;

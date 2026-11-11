@@ -369,6 +369,50 @@ const ELEMENTS: Record<string, ElementSpec> = {
     // The Flow A wrapper warns about these too, so a list that runs in the simulator also compiles.
     takesPlatformProps: false,
   },
+  SectionList: element(
+    'SectionList',
+    [
+      'sections',
+      'renderItem',
+      'renderSectionHeader',
+      'renderSectionFooter',
+      'keyExtractor',
+      'style',
+    ],
+    [...LAYOUT_STYLE, ...VIEW_STYLE],
+    'none',
+    {
+      ref: 'Flow A cannot pass a ref through <SectionList> either; use <ScrollView ref={…}> with .map.',
+    },
+  ),
+  Button: element(
+    'Button',
+    ['title', 'onPress', 'color', 'disabled'],
+    [],
+    'none',
+    {
+      style:
+        'a Button takes no style, as in React Native. Build the same tree yourself to style it: ' +
+        '<Pressable style={…} onPress={…}><Text style={…}>title</Text></Pressable>.',
+    },
+  ),
+  // Its style and ref go to the View; every other prop goes to the Image, as in Flow A.
+  ImageBackground: element(
+    'ImageBackground',
+    [
+      ...HOST_PROPS,
+      'source',
+      'imageName',
+      'resizeMode',
+      'tintColor',
+      'imageStyle',
+      'imageRef',
+    ],
+    [...LAYOUT_STYLE, ...VIEW_STYLE],
+    'nodes',
+    {},
+    VIEW_ANIMATED,
+  ),
   Svg: element(
     'Svg',
     ['style', 'ref', 'width', 'height', 'viewBox', 'source', ...SVG_PAINT],
