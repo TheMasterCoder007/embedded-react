@@ -23,14 +23,54 @@
 // then. Each method is looked up in the firmware's natives (the bridge's __erNative) here, as the app loads, and
 // calls it through the bridge, which converts the arguments by the signature.
 //
+// The simulators: the bundler also passes the module's mock, which stands in for the firmware. Its values are
+// converted as the bridge converts them, so the app sees what it would on a board.
+
+// What a value becomes in a C cell, by its signature code: as the bridge converts it.
+const CONVERSIONS = {
+  i: value => value | 0,
+  b: value => !!value,
+  f: value => Math.fround(value),
+  v: () => undefined,
+};
+
+// A mock's method, called as the bridge calls the firmware's.
+function mockMethod(mock, name, method, signature) {
+  const qualifiedName = `${name}.${method}`;
+  const implementation = mock[method];
+  if (typeof implementation !== 'function') {
+    throw new Error(`the mock of native module "${name}" has no ${method}()`);
+  }
+  const parameters = signature.slice(2);
+  const convertResult = CONVERSIONS[signature[0]];
+  return (...callArguments) => {
+    if (callArguments.length !== parameters.length) {
+      throw new TypeError(
+        `${qualifiedName}() takes ${parameters.length} argument${parameters.length === 1 ? '' : 's'}, ` +
+          `not ${callArguments.length}`,
+      );
+    }
+    const converted = callArguments.map((argument, position) =>
+      CONVERSIONS[parameters[position]](argument),
+    );
+    return convertResult(implementation.apply(mock, converted));
+  };
+}
+
 // @param {string} name  The module's name, as the firmware registers it.
 // @param {number} version  Its version.
 // @param {Record<string, string | {reason: string}>} methods  Each method's signature, or why it can't be called;
 //                                                              the bundler passes it.
-export function nativeModule(name, version, methods) {
+// @param {object | null} [mock]  In the simulators, the module's mock (its default export), or null when it has none.
+export function nativeModule(name, version, methods, mock) {
   if (!methods) {
     throw new Error(
       `native module "${name}" has no signatures; build the app with the embedded-react CLI, which reads its interface`,
+    );
+  }
+  if (mock === null) {
+    throw new Error(
+      `native module "${name}" has no mock for the simulator; add ${name}.mock.ts beside its interface`,
     );
   }
   const host = globalThis.__erNative;
@@ -42,6 +82,10 @@ export function nativeModule(name, version, methods) {
       module[method] = () => {
         throw new Error(`${qualifiedName} ${signature.reason}`);
       };
+      continue;
+    }
+    if (mock) {
+      module[method] = mockMethod(mock, name, method, signature);
       continue;
     }
     const index = host ? host.find(qualifiedName, version, signature) : -1;

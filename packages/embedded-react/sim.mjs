@@ -34,6 +34,7 @@ import {analyzeFontSizes, fontSizeSignature} from './assets/font-sizes.mjs';
 import {textSignature} from './assets/glyph-coverage.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {transformPersist} from './persist-transform.mjs';
+import {loadAppFile} from './aot/app-file-loader.mts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
 const repoRoot = resolve(here, '../..');
@@ -170,17 +171,22 @@ const buildContext = await context({
           fonts.clear();
         });
         // App files only (not the library/React): rewrite useState → a persisting helper so state
-        // survives reload transparently. Library/node_modules files fall through to esbuild untouched.
-        pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args => {
+        // survives reload transparently, and run native modules on their mocks. Library/node_modules files fall
+        // through to esbuild untouched.
+        pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, async args => {
           const normalizedPath = args.path.replace(/\\/g, '/');
           if (!normalizedPath.startsWith(demoDir.replace(/\\/g, '/')))
             return undefined; // not app code
           try {
-            const code = transformPersist(
-              readFileSync(args.path, 'utf8'),
-              relative(demoDir, args.path).replace(/\\/g, '/'),
+            return await loadAppFile(
+              args.path,
+              source =>
+                transformPersist(
+                  source,
+                  relative(demoDir, args.path).replace(/\\/g, '/'),
+                ),
+              {mocks: true},
             );
-            return {contents: code, loader: 'jsx'};
           } catch (error) {
             return {errors: [{text: `persist transform: ${error.message}`}]};
           }

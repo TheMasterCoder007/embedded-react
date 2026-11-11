@@ -19,9 +19,10 @@
 // Each scenario is compiled to a package. tools/erb-frames builds a headless host around the Flow B runtime, which
 // runs the scenario's taps through the engine and the software backend, and its last frame must match the scenario's
 // golden image in golden/, as `npm run erb:frames:record [filter]` last recorded it. A scenario marked `flowA` is also
-// bundled for Flow A, which the host runs on QuickJS, and that frame must match the same golden image. Each channel may be off by one:
-// an image is recorded on one machine and checked on others, whose float rounding differs. Each package's resource
-// report is printed as it is built.
+// bundled for Flow A, which the host runs on QuickJS, and that frame must match the same golden image. One marked
+// `mocks` is bundled again on its native modules' mocks, as the simulators run it, and must match too. Each channel
+// may be off by one: an image is recorded on one machine and checked on others, whose float rounding differs. Each
+// package's resource report is printed as it is built.
 //
 // The apps are in fixtures/: small ones that each exercise a feature and never change, so a frame that differs means
 // the compiler, runtime or engine changed. A new feature gets a new app. The demos stay out of this, since they change.
@@ -74,6 +75,8 @@ interface Scenario {
   release?: boolean;
   /** Also run the app as a Flow A bundle, whose frame must match the same golden image. */
   flowA?: boolean;
+  /** Also run the Flow A bundle on its native modules' mocks, as the simulators do. */
+  mocks?: boolean;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -655,6 +658,7 @@ const SCENARIOS: Scenario[] = [
     file: fixture('native-calls'),
     screen: PORTRAIT,
     flowA: true,
+    mocks: true,
   },
   // Three nexts: total 1+2+3, half of 3, odd. Then read: on flips off, and kept is the stored 1.5 * 3.
   {
@@ -663,6 +667,7 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '32,20 32,20 32,20 84,20',
     flowA: true,
+    mocks: true,
   },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
@@ -1147,10 +1152,18 @@ async function compileScenario(
 /**
  * Bundles a scenario's app for Flow A, as the CLI does: its native modules get their signatures from the interface.
  *
+ * @param mocks  Run the native modules on their mocks, as the simulators do.
+ *
  * @returns The bundle's path.
  */
-async function bundleScenario(scenario: Scenario): Promise<string> {
-  const bundlePath = join(BUILD_DIR, `${scenario.name}.js`);
+async function bundleScenario(
+  scenario: Scenario,
+  mocks = false,
+): Promise<string> {
+  const bundlePath = join(
+    BUILD_DIR,
+    `${scenario.name}${mocks ? '.mocks' : ''}.js`,
+  );
   const fixtures = dirname(scenario.file);
   await build({
     stdin: {
@@ -1175,7 +1188,9 @@ async function bundleScenario(scenario: Scenario): Promise<string> {
         name: 'app-files',
         setup(pluginBuild) {
           pluginBuild.onLoad({filter: /\.tsx?$/}, args =>
-            args.path.startsWith(fixtures) ? loadAppFile(args.path) : undefined,
+            args.path.startsWith(fixtures)
+              ? loadAppFile(args.path, undefined, {mocks})
+              : undefined,
           );
         },
       },
@@ -1306,6 +1321,16 @@ for (const scenario of scenarios) {
         scenario,
         await bundleScenario(scenario),
         `${scenario.name}.flow-a`,
+        false,
+      ),
+    );
+  }
+  if (scenario.mocks) {
+    await report(`${label} Flow A on mocks`, async () =>
+      compareScenario(
+        scenario,
+        await bundleScenario(scenario, true),
+        `${scenario.name}.mocks`,
         false,
       ),
     );

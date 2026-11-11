@@ -85,7 +85,27 @@ table to `ErRuntimeConfig::natives`, so both flows call the same C functions and
 goes through a C float in both). When the app loads, each method in the interface is checked against the table,
 and a missing one stops the app with the error screen naming it.
 
-The simulator doesn't have native modules yet, so declaring one stops the app there.
+The simulators have no firmware, so a module runs a JS mock there instead: `sensors.mock.ts` beside the
+interface, named after the module, whose default export implements it.
+
+```ts
+import type {Sensors} from './sensors';
+
+let led = false;
+
+const sensors: Sensors = {
+  read: channel => 20 + channel / 10,
+  setLed: on => {
+    led = on;
+  },
+};
+
+export default sensors;
+```
+
+The mock's values are converted as on a board: an `Int` is cut to a whole number, a `number` goes through a C
+float, and a `boolean` is true or false. A module with no mock, or a mock missing one of the interface's methods,
+stops the app in the simulator when it loads, naming what to add. A board build never includes the mock.
 
 ## AppRegistry
 

@@ -17,7 +17,8 @@
 /*
  * Native modules: `const Sensors = nativeModule<Sensors>('sensors', 1)` at module level, typed by an interface in
  * the app's file or in a local .ts file the CLI reads. Each method called becomes an import named
- * `module.method`, and each call a CALLN. In Flow A the bundler passes nativeModule() each method's signature instead.
+ * `module.method`, and each call a CALLN. In Flow A the bundler passes nativeModule() each method's signature instead,
+ * and in the simulators the module's mock too.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -25,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {existsSync, readFileSync} from 'node:fs';
-import {resolve} from 'node:path';
+import {dirname, resolve} from 'node:path';
 import {parse} from '@babel/parser';
 import {aotError} from './diagnostics.mts';
 import {lowerExpr} from './expressions.mts';
@@ -81,6 +82,9 @@ const DECLARATION_HINT =
 
 /** What an interface file may be called, after the path the app imports it by. */
 const INTERFACE_EXTENSIONS = ['.ts', '.mts', '.tsx', '/index.ts'];
+
+/** What a module's mock may be called, after `<name>.mock`. */
+const MOCK_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -555,21 +559,25 @@ const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
 /**
  * Flow A's side: since the bundle has no types, each nativeModule() call is given its methods' signatures as a third
  * argument, read from its interface as the compiler reads it. A method that can't be called gets the reason instead.
+ * With mocks, for the simulators, each call is also given its module's mock, or null when it has none.
  *
  * @param source  An app file's source.
  * @param interfaces  The local files it imports interfaces from (see readNativeInterfaces).
+ * @param mocks  Each module's mock as the file imports it, or null when it has none, by module name.
  *
  * @returns The source with the signatures added.
  */
 export function addNativeSignatures(
   source: string,
   interfaces: Record<string, string>,
+  mocks?: Record<string, string | null>,
 ): string {
   const program = parse(source, {
     sourceType: 'module',
     plugins: ['jsx', 'typescript'],
   }).program;
   const modules = collectNativeModules(program, interfaces);
+  const mockImports: string[] = [];
   let signed = source;
   for (const declarator of declarationsOf(program).reverse()) {
     const module = modules.get((declarator.id as t.Identifier).name)!;
@@ -581,13 +589,48 @@ export function addNativeSignatures(
           : {reason: member.reason},
       ]),
     );
+    let added = `, ${JSON.stringify(methods)}`;
+    if (mocks) {
+      const mockPath = mocks[module.name];
+      if (mockPath) {
+        const mockName = `__erNativeMock_${module.name}`;
+        mockImports.push(
+          `import ${mockName} from ${JSON.stringify(mockPath)};`,
+        );
+        added += `, ${mockName}`;
+      } else {
+        added += ', null';
+      }
+    }
     const versionEnd = (declarator.init as t.CallExpression).arguments[1].end!;
-    signed =
-      signed.slice(0, versionEnd) +
-      `, ${JSON.stringify(methods)}` +
-      signed.slice(versionEnd);
+    signed = signed.slice(0, versionEnd) + added + signed.slice(versionEnd);
   }
-  return signed;
+  // At the end, so the app's lines keep their numbers.
+  return mockImports.length
+    ? `${signed}\n${mockImports.reverse().join('\n')}\n`
+    : signed;
+}
+
+/**
+ * The local file an app imports an interface from, by the path it writes: `./sensors`, `./sensors.ts`, or
+ * `./sensors.js` as NodeNext writes it.
+ *
+ * @param baseDirectory  The app's directory.
+ * @param importPath  The path the app imports it by.
+ *
+ * @returns The file, or undefined when there is none.
+ */
+function interfaceFileOf(
+  baseDirectory: string,
+  importPath: string,
+): string | undefined {
+  const base = resolve(baseDirectory, importPath);
+  const candidates = [
+    base,
+    base.replace(/\.(m?)js$/, '.$1ts'),
+    ...INTERFACE_EXTENSIONS.map(extension => base + extension),
+  ];
+  return candidates.find(path => /\.[cm]?tsx?$/.test(path) && existsSync(path));
 }
 
 /**
@@ -619,22 +662,54 @@ export function readNativeInterfaces(
     }
     const local = localImportOf(program, typeArgument.typeName.name);
     if (!local || local.path in interfaces) continue;
-
-    // `./sensors`, `./sensors.ts`, or `./sensors.js` as NodeNext writes it.
-    const base = resolve(baseDirectory, local.path);
-    const candidates = [
-      base,
-      base.replace(/\.(m?)js$/, '.$1ts'),
-      ...INTERFACE_EXTENSIONS.map(extension => base + extension),
-    ];
-    const found = candidates.find(
-      path => /\.[cm]?tsx?$/.test(path) && existsSync(path),
-    );
+    const found = interfaceFileOf(baseDirectory, local.path);
     if (found) {
       interfaces[local.path] = readFileSync(found, 'utf8');
     }
   }
   return interfaces;
+}
+
+/**
+ * Where each module's mock for the simulators may be: `<name>.mock.ts` (or .tsx, .js, .jsx) beside its interface.
+ *
+ * @param source  An app file's source.
+ * @param baseDirectory  The app file's directory.
+ *
+ * @returns The paths to look for, in order, by module name.
+ */
+export function nativeMockFiles(
+  source: string,
+  baseDirectory: string,
+): Record<string, string[]> {
+  const program = parse(source, {
+    sourceType: 'module',
+    plugins: ['jsx', 'typescript'],
+  }).program;
+  const mocks: Record<string, string[]> = {};
+  for (const declarator of declarationsOf(program)) {
+    const call = declarator.init as t.CallExpression;
+    const [name] = call.arguments;
+    if (name?.type !== 'StringLiteral') continue;
+    const typeArgument = call.typeParameters?.params[0];
+    const interfaceName =
+      typeArgument?.type === 'TSTypeReference' &&
+      typeArgument.typeName.type === 'Identifier'
+        ? typeArgument.typeName.name
+        : null;
+    const local =
+      interfaceName && declaredMembers(program, interfaceName) === null
+        ? localImportOf(program, interfaceName)
+        : null;
+    const interfaceFile = local
+      ? interfaceFileOf(baseDirectory, local.path)
+      : undefined;
+    const directory = interfaceFile ? dirname(interfaceFile) : baseDirectory;
+    mocks[name.value] = MOCK_EXTENSIONS.map(extension =>
+      resolve(directory, `${name.value}.mock${extension}`),
+    );
+  }
+  return mocks;
 }
 
 /**
