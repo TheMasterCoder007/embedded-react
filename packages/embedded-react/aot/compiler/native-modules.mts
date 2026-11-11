@@ -527,6 +527,14 @@ export function collectNativeModules(
     for (const element of members) {
       const member = memberOf(element);
       if (!member) continue;
+      // Flow A keeps the methods in objects, where __proto__ is the prototype.
+      if (member.name === '__proto__') {
+        throw errorAt(
+          call,
+          `AOT: ${interfaceName} has a method named __proto__, which a native module can't have`,
+          "rename it; JavaScript keeps __proto__ for an object's prototype.",
+        );
+      }
       // An import has one signature, so an overloaded method can't be called.
       module.members.set(
         member.name,
@@ -570,7 +578,7 @@ const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
 export function addNativeSignatures(
   source: string,
   interfaces: Record<string, string>,
-  mocks?: Record<string, string | null>,
+  mocks?: Map<string, string | null>,
 ): string {
   const program = parse(source, {
     sourceType: 'module',
@@ -578,6 +586,7 @@ export function addNativeSignatures(
   }).program;
   const modules = collectNativeModules(program, interfaces);
   const mockImports: string[] = [];
+  const mockNames = new Set<string>();
   let signed = source;
   for (const declarator of declarationsOf(program).reverse()) {
     const module = modules.get((declarator.id as t.Identifier).name)!;
@@ -591,9 +600,14 @@ export function addNativeSignatures(
     );
     let added = `, ${JSON.stringify(methods)}`;
     if (mocks) {
-      const mockPath = mocks[module.name];
+      const mockPath = mocks.get(module.name);
       if (mockPath) {
-        const mockName = `__erNativeMock_${module.name}`;
+        // A name the file doesn't use, nor another mock.
+        let mockName = `__erNativeMock_${module.name}`;
+        while (source.includes(mockName) || mockNames.has(mockName)) {
+          mockName += '_';
+        }
+        mockNames.add(mockName);
         mockImports.push(
           `import ${mockName} from ${JSON.stringify(mockPath)};`,
         );
@@ -681,12 +695,12 @@ export function readNativeInterfaces(
 export function nativeMockFiles(
   source: string,
   baseDirectory: string,
-): Record<string, string[]> {
+): Map<string, string[]> {
   const program = parse(source, {
     sourceType: 'module',
     plugins: ['jsx', 'typescript'],
   }).program;
-  const mocks: Record<string, string[]> = {};
+  const mocks = new Map<string, string[]>();
   for (const declarator of declarationsOf(program)) {
     const call = declarator.init as t.CallExpression;
     const [name] = call.arguments;
@@ -705,8 +719,11 @@ export function nativeMockFiles(
       ? interfaceFileOf(baseDirectory, local.path)
       : undefined;
     const directory = interfaceFile ? dirname(interfaceFile) : baseDirectory;
-    mocks[name.value] = MOCK_EXTENSIONS.map(extension =>
-      resolve(directory, `${name.value}.mock${extension}`),
+    mocks.set(
+      name.value,
+      MOCK_EXTENSIONS.map(extension =>
+        resolve(directory, `${name.value}.mock${extension}`),
+      ),
     );
   }
   return mocks;

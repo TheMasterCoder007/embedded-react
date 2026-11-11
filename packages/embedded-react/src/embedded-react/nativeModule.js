@@ -38,7 +38,11 @@ const CONVERSIONS = {
 function mockMethod(mock, name, method, signature) {
   const qualifiedName = `${name}.${method}`;
   const implementation = mock[method];
-  if (typeof implementation !== 'function') {
+  // A method a plain object inherits, like toString, isn't the mock's.
+  if (
+    typeof implementation !== 'function' ||
+    implementation === Object.prototype[method]
+  ) {
     throw new Error(`the mock of native module "${name}" has no ${method}()`);
   }
   const parameters = signature.slice(2);

@@ -94,6 +94,13 @@ describe('native module signatures in Flow A', () => {
         {},
       ),
     ).toThrow(/can't find the interface Missing/);
+    expect(() =>
+      addNativeSignatures(
+        'interface Odd { __proto__(): Int; }\n' +
+          "const Odd = nativeModule<Odd>('odd', 1);\n",
+        {},
+      ),
+    ).toThrow(/Odd has a method named __proto__/);
   });
 });
 
@@ -102,7 +109,10 @@ describe('native module mocks', () => {
     const signed = addNativeSignatures(
       SENSORS,
       {},
-      {sensors: './sensors.mock.ts', clock: null},
+      new Map([
+        ['sensors', './sensors.mock.ts'],
+        ['clock', null],
+      ]),
     );
     expect(signed).toContain('"scale":"f:f",');
     expect(signed).toMatch(
@@ -118,15 +128,52 @@ describe('native module mocks', () => {
     );
   });
 
+  it("names a mock's import so it doesn't clash with the file's own names", () => {
+    const signed = addNativeSignatures(
+      'interface Clock { now(): Int; }\n' +
+        'const __erNativeMock_clock = 1;\n' +
+        "const Clock = nativeModule<Clock>('clock', 1);\n" +
+        'interface Other { now(): Int; }\n' +
+        "const Other = nativeModule<Other>('clock_', 1);\n",
+      {},
+      new Map([
+        ['clock', './clock.mock.ts'],
+        ['clock_', './clock_.mock.ts'],
+      ]),
+    );
+    expect(signed).toContain('{"now":"i:"}, __erNativeMock_clock_);');
+    expect(signed).toContain('{"now":"i:"}, __erNativeMock_clock__);');
+  });
+
+  it('keeps a module named __proto__', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'native-mock-'));
+    writeFileSync(join(directory, '__proto__.mock.ts'), 'export default {};\n');
+    const appPath = join(directory, 'App.tsx');
+    writeFileSync(
+      appPath,
+      'interface Odd { now(): Int; }\n' +
+        "const Odd = nativeModule<Odd>('__proto__', 1);\n",
+    );
+    const result = await loadAppFile(appPath, undefined, {mocks: true});
+    expect(result?.contents).toContain(
+      'import __erNativeMock___proto__ from "./__proto__.mock.ts";',
+    );
+  });
+
   it('looks for a mock beside the interface', () => {
     const source = readFileSync(join(FIXTURES, 'native-calls.tsx'), 'utf8');
-    expect(nativeMockFiles(source, '/elsewhere')).toEqual({
-      probe: ['.ts', '.tsx', '.js', '.jsx'].map(extension =>
-        join('/elsewhere', `probe.mock${extension}`),
-      ),
-    });
+    expect(nativeMockFiles(source, '/elsewhere')).toEqual(
+      new Map([
+        [
+          'probe',
+          ['.ts', '.tsx', '.js', '.jsx'].map(extension =>
+            join('/elsewhere', `probe.mock${extension}`),
+          ),
+        ],
+      ]),
+    );
     const files = nativeMockFiles(source, FIXTURES);
-    expect(files.probe[0]).toBe(join(FIXTURES, 'probe.mock.ts'));
+    expect(files.get('probe')?.[0]).toBe(join(FIXTURES, 'probe.mock.ts'));
   });
 
   it("looks in the interface file's folder", () => {
@@ -141,7 +188,9 @@ describe('native module mocks', () => {
         "const Sensors = nativeModule<Sensors>('sensors', 1);\n",
       directory,
     );
-    expect(files.sensors[0]).toBe(join(directory, 'native', 'sensors.mock.ts'));
+    expect(files.get('sensors')?.[0]).toBe(
+      join(directory, 'native', 'sensors.mock.ts'),
+    );
   });
 });
 
@@ -313,6 +362,12 @@ describe('nativeModule() in Flow A', () => {
     expect(() =>
       nativeModule('sensors', 2, {read: 'f:i', setLed: 'v:b'}, {read: () => 1}),
     ).toThrow('the mock of native module "sensors" has no setLed()');
+  });
+
+  it("doesn't take a method a plain object inherits as the mock's", () => {
+    expect(() => nativeModule('sensors', 2, {toString: 'i:'}, {})).toThrow(
+      'the mock of native module "sensors" has no toString()',
+    );
   });
 
   it('stops the app at load when a module has no mock', () => {

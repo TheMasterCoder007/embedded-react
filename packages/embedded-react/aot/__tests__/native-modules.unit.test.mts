@@ -318,6 +318,17 @@ describe('native module calls it refuses', () => {
     ).toMatch(/can't find the interface Missing/);
   });
 
+  it('refuses a method named __proto__', () => {
+    const source = appOf('Sensors.count();').replace(
+      SENSORS,
+      'interface Sensors { count(): Int; __proto__(): Int; }\n' +
+        "const Sensors = nativeModule<Sensors>('sensors', 2);\n",
+    );
+    expect(failure(source)).toMatch(
+      /Sensors has a method named __proto__, which a native module can't have/,
+    );
+  });
+
   it('refuses nativeModule() inside a component', () => {
     expect(
       failure(

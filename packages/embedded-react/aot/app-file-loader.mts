@@ -56,17 +56,21 @@ export async function loadAppFile(
     const {addNativeSignatures, nativeMockFiles, readNativeInterfaces} =
       await import('./compiler/native-modules.mts');
     try {
-      let mocks: Record<string, string | null> | undefined;
+      let mocks: Map<string, string | null> | undefined;
       if (options.mocks) {
-        mocks = {};
-        for (const [name, candidates] of Object.entries(
-          nativeMockFiles(source, dirname(path)),
+        mocks = new Map();
+        for (const [name, candidates] of nativeMockFiles(
+          source,
+          dirname(path),
         )) {
           watchFiles.push(...candidates);
           const found = candidates.find(candidate => existsSync(candidate));
-          mocks[name] = found
-            ? './' + relative(dirname(path), found).replace(/\\/g, '/')
-            : null;
+          mocks.set(
+            name,
+            found
+              ? './' + relative(dirname(path), found).replace(/\\/g, '/')
+              : null,
+          );
         }
       }
       contents = addNativeSignatures(
