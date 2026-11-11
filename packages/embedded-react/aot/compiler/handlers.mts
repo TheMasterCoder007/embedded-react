@@ -2443,7 +2443,16 @@ export function lowerStmts(
       const queue: (t.VariableDeclarator | ObjectBinding)[] = [
         ...statement.declarations,
       ];
+      // Each initializer's looping values go just before it, as a later one may read an earlier local.
+      const sink = before;
+      let declaratorFrom = lowered.length;
+      const nextDeclarator = () => {
+        lowered.splice(declaratorFrom, 0, ...sink.statements);
+        sink.statements = [];
+        declaratorFrom = lowered.length;
+      };
       while (queue.length) {
+        nextDeclarator();
         const entry = queue.shift()!;
         if (!('type' in entry)) {
           const locals = new Map(environment.locals);
@@ -2651,6 +2660,7 @@ export function lowerStmts(
         };
       }
 
+      nextDeclarator();
       continue;
     }
 

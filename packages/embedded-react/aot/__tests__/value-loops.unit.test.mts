@@ -141,6 +141,32 @@ describe('a useMemo that loops', () => {
     ).toEqual([['string', false]]);
   });
 
+  it('holds a 64-bit number, a time unless each is a plain number', () => {
+    const source = appOf(
+      '',
+      '  const at = useMemo(() => {\n' +
+        '    let t = Date.now();\n' +
+        '    for (const item of items) t += item.v;\n' +
+        '    return t;\n' +
+        '  }, [items]);',
+      '<Text>{at}</Text>',
+    );
+    expect(
+      workedOf(source).map(({slotKind, widened}) => [slotKind, widened]),
+    ).toEqual([['i64', 'time']]);
+    expect(() => compile(source)).not.toThrow();
+    expect(() =>
+      compile(
+        appOf(
+          '',
+          '  const t = useMemo(() => { for (const item of items) if (item.v > 3) return Date.now(); ' +
+            'return 0.5; }, [items]);',
+          '<Text>{t}</Text>',
+        ),
+      ),
+    ).toThrow(/can't return a 64-bit whole number on one path and a fraction/);
+  });
+
   it('is worked out after a memo or a filtered list it reads', () => {
     const source = appOf(
       '',
@@ -266,6 +292,26 @@ describe('a helper used as a value that loops', () => {
       'declareLocal',
       {block: [{loop: [{if: ['assignLocal', 'return']}]}, 'assignLocal']},
       'set n',
+    ]);
+    expect(() => compile(source)).not.toThrow();
+  });
+
+  it('in a declaration, is worked out just before the initializer that reads it', () => {
+    const source = appOf(
+      HELPERS,
+      '',
+      '<Pressable onPress={() => { const a = biggest(items), b = firstOver(items, a); setN(b); }}>' +
+        '<Text>{n}</Text></Pressable>',
+    );
+    const declared = handlerOf(source).flatMap(statement =>
+      statement.kind === 'declareLocal' ? [statement.name] : [],
+    );
+    expect(declared.map(name => name.replace(/[#@]\d+$/, m => m[0]))).toEqual([
+      'value@biggest#',
+      'local_best@',
+      'local_a',
+      'value@firstOver#',
+      'local_b',
     ]);
     expect(() => compile(source)).not.toThrow();
   });

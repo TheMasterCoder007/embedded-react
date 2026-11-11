@@ -26,10 +26,10 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from './diagnostics.mts';
-import {buildsText, lowerExpr, lowerText} from './expressions.mts';
+import {buildsText, lowerExprWide, lowerText} from './expressions.mts';
 import {lowerStmts} from './handlers.mts';
 import {helperEnvironment} from './helper-values.mts';
-import {BOOL, FLOAT, INT, STRING} from './ir/types.mts';
+import {BOOL, FLOAT, INT, INT64_NUMBER, STRING, TIME} from './ir/types.mts';
 import {Out} from './out.mts';
 import {checkValueBody} from './updaters.mts';
 import type * as t from '@babel/types';
@@ -138,7 +138,8 @@ function describe(name: string): {what: string; memo: string | null} {
 }
 
 /**
- * The type a local holding every value a body returns has: a string, a boolean, or a number, a float when any is.
+ * The type a local holding every value a body returns has: a string, a boolean, or a number. A number is a float
+ * when any is, and 64 bits when any is, a time unless every 64-bit one is a plain number.
  *
  * @param types  The returned values' types.
  * @param what  What returns them, for errors.
@@ -148,14 +149,15 @@ function describe(name: string): {what: string; memo: string | null} {
 function joinedType(types: IrType[], what: string): IrType {
   const kinds = new Set(types.map(type => type.kind));
   for (const kind of kinds) {
-    if (!['bool', 'int', 'float', 'string'].includes(kind)) {
+    if (!['bool', 'int', 'float', 'int64', 'string'].includes(kind)) {
       throw aotError(
         `AOT: ${what} loops, so it must return a number, a boolean or a string`,
         'return the value itself, e.g. a field of an item rather than the item.',
       );
     }
   }
-  const isNumber = (kind: string) => kind === 'int' || kind === 'float';
+  const isNumber = (kind: string) =>
+    kind === 'int' || kind === 'float' || kind === 'int64';
   const sorts = new Set(
     [...kinds].map(kind => (isNumber(kind) ? 'number' : kind)),
   );
@@ -167,8 +169,40 @@ function joinedType(types: IrType[], what: string): IrType {
   }
   if (kinds.has('string')) return STRING;
   if (kinds.has('bool')) return BOOL;
+  if (kinds.has('int64')) {
+    if (kinds.has('float')) {
+      throw aotError(
+        `AOT: ${what} loops, so it can't return a 64-bit whole number on one path and a fraction on another`,
+        'return whole numbers on every path, e.g. Math.round(x), or fractions on every path.',
+      );
+    }
+    return types.every(
+      type => type.kind !== 'int64' || type.source === 'number',
+    )
+      ? INT64_NUMBER
+      : TIME;
+  }
   return kinds.has('float') ? FLOAT : INT;
 }
+
+/**
+ * How a local or a state holding a type is kept.
+ *
+ * @param type  The type.
+ *
+ * @returns Its slot kind, and whether it is a boolean or a 64-bit plain number.
+ */
+const heldAs = (type: IrType): Local =>
+  type.kind === 'string'
+    ? {slotKind: 'string'}
+    : type.kind === 'float'
+      ? {slotKind: 'float'}
+      : type.kind === 'int64'
+        ? {
+            slotKind: 'i64',
+            ...(type.source === 'number' ? {isLiteral: true} : {}),
+          }
+        : {slotKind: 'int', ...(type.kind === 'bool' ? {isBoolean: true} : {})};
 
 /**
  * A value of a type that a local starts at before a `return` sets it.
@@ -220,7 +254,7 @@ function lowerValueStatements(
         returned.push({value, text});
         return [{kind: 'assignLocal', name: resultName, value, text}];
       }
-      const value = lowerExpr(argument, bodyEnvironment);
+      const value = lowerExprWide(argument, bodyEnvironment);
       returned.push({value});
       return [{kind: 'assignLocal', name: resultName, value}];
     },
@@ -236,16 +270,7 @@ function lowerValueStatements(
     returned.map(({value, text}) => (text ? STRING : value.type)),
     what,
   );
-  const result: Local = {
-    name: resultName,
-    slotKind:
-      type.kind === 'string'
-        ? 'string'
-        : type.kind === 'float'
-          ? 'float'
-          : 'int',
-    ...(type.kind === 'bool' ? {isBoolean: true} : {}),
-  };
+  const result: Local = {name: resultName, ...heldAs(type)};
   return {
     statements: [
       {
@@ -343,6 +368,9 @@ export function workedValueOf(
     setter: undefined,
     slotKind: result.slotKind,
     isBoolean: Boolean(result.isBoolean),
+    ...(type.kind === 'int64'
+      ? {widened: type.source === 'number' ? 'number' : 'time'}
+      : {}),
     initial: type.kind === 'string' ? '' : 0,
     host: false,
     initialAt: location,
