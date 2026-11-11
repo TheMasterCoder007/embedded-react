@@ -17,7 +17,7 @@
 /*
  * Native modules: `const Sensors = nativeModule<Sensors>('sensors', 1)` at module level, typed by an interface in
  * the app's file or in a local .ts file the CLI reads. Each method called becomes an import named
- * `module.method`, and each call a CALLN.
+ * `module.method`, and each call a CALLN. In Flow A the bundler passes nativeModule() each method's signature instead.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -532,6 +532,56 @@ export function collectNativeModules(
 }
 
 /**
+ * A method's signature: its result, ':', then its parameters.
+ *
+ * @param member  The method.
+ *
+ * @returns The signature, such as "i:if".
+ */
+const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
+  SIGNATURE_CODES[member.result] +
+  ':' +
+  member.params.map(param => SIGNATURE_CODES[param]).join('');
+
+/**
+ * Flow A's side: since the bundle has no types, each nativeModule() call is given its methods' signatures as a third
+ * argument, read from its interface as the compiler reads it. A method that can't be called gets the reason instead.
+ *
+ * @param source  An app file's source.
+ * @param interfaces  The local files it imports interfaces from (see readNativeInterfaces).
+ *
+ * @returns The source with the signatures added.
+ */
+export function addNativeSignatures(
+  source: string,
+  interfaces: Record<string, string>,
+): string {
+  const program = parse(source, {
+    sourceType: 'module',
+    plugins: ['jsx', 'typescript'],
+  }).program;
+  const modules = collectNativeModules(program, interfaces);
+  let signed = source;
+  for (const declarator of declarationsOf(program).reverse()) {
+    const module = modules.get((declarator.id as t.Identifier).name)!;
+    const methods = Object.fromEntries(
+      [...module.members].map(([method, member]) => [
+        method,
+        member.kind === 'method'
+          ? signatureOf(member)
+          : {reason: member.reason},
+      ]),
+    );
+    const versionEnd = (declarator.init as t.CallExpression).arguments[1].end!;
+    signed =
+      signed.slice(0, versionEnd) +
+      `, ${JSON.stringify(methods)}` +
+      signed.slice(versionEnd);
+  }
+  return signed;
+}
+
+/**
  * Reads the local files an app imports its native module interfaces from, so the compile itself stays pure.
  *
  * @param source  The app's source.
@@ -715,10 +765,7 @@ export function lowerNativeCall(
   const nativeImport: NativeImport = {
     name: `${module.name}.${method}`,
     version: module.version,
-    signature:
-      SIGNATURE_CODES[member.result] +
-      ':' +
-      member.params.map(param => SIGNATURE_CODES[param]).join(''),
+    signature: signatureOf(member),
     params: member.params,
     result: member.result,
   };

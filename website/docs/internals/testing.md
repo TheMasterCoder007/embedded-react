@@ -96,7 +96,8 @@ differs between machines. A frame that differs is written as PNGs (frame, golden
 then run `npm run erb:frames:record [filter]`. Each package's resource report is printed as it is built. Some scenarios build the
 package with no size named, or with named panels, then run that one package at each size. Packages are
 debug builds, so the runtime checks each one's debug table as it loads it; a few scenarios build for
-release instead. It needs CMake and a C compiler, and CI runs it.
+release instead. A scenario marked `flowA` is also bundled for Flow A, which the same host runs on QuickJS, and that
+frame must match the same golden image. It needs CMake and a C compiler, and CI runs it.
 
 Each app exercises one feature and never changes, so a frame that differs means the compiler, runtime or engine
 changed. The demos stay out of it, since they change. A new feature, or one no app covers, gets a new app and new

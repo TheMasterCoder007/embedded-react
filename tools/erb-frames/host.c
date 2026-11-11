@@ -15,19 +15,20 @@
  */
 
 /*
- * The headless Flow B frame host: the Flow B runtime loading a package. It renders through the software backend
- * into a framebuffer in RAM, runs scripted taps, and writes the final frame, so
- * packages/embedded-react/test/erb-frames/erb-frames.mts can compare it with a golden image.
+ * The headless frame host: the Flow B runtime loading a package, or, given a .js bundle, Flow A's QuickJS runtime
+ * running it. It renders through the software backend into a framebuffer in RAM, runs scripted taps, and writes the
+ * final frame, so packages/embedded-react/test/erb-frames/erb-frames.mts can compare it with a golden image.
  *
- *   erb-frames <out.raw> <width> <height> <package.erpkg> [taps [settle_ms]]
+ *   erb-frames <out.raw> <width> <height> <package.erpkg | app.js> [taps [settle_ms]]
  *
  * taps is "x,y x,y ...": each is a press and release, with a 16 ms tick after each half. "x,y>x2,y2" is a drag
  * instead: a press at x,y, DRAG_STEPS moves to x2,y2 with a tick after each, and a release there. The frame is
  * written as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when
- * it is left out), so a scenario can take its frame in the middle of an animation. It registers a probe native
- * module, which the native-calls scenarios call.
+ * it is left out), so a scenario can take its frame in the middle of an animation. Both flows get the same probe
+ * native module, which the native-calls scenarios call.
  */
 
+#include "er_runtime.h"
 #include "er_scene.h"
 #include "erb_runtime.h"
 #include "native_renderer.h"
@@ -155,7 +156,7 @@ static void log_line(const char* line, void* context)
     fprintf(stderr, "ERB: %s\n", line);
 }
 
-/** @brief Reads a file into a 4-aligned buffer, as a board places a package. */
+/** @brief Reads a file into a 4-aligned buffer, as a board places a package, with a NUL after it for a bundle. */
 static uint32_t* read_package(const char* path, size_t* package_bytes)
 {
     FILE* file = fopen(path, "rb");
@@ -166,7 +167,7 @@ static uint32_t* read_package(const char* path, size_t* package_bytes)
     fseek(file, 0, SEEK_END);
     const long length = ftell(file);
     fseek(file, 0, SEEK_SET);
-    uint32_t* words = malloc(((size_t)length + (PACKAGE_ALIGNMENT - 1u)) & ~(size_t)(PACKAGE_ALIGNMENT - 1u));
+    uint32_t* words = calloc(((size_t)length + PACKAGE_ALIGNMENT) & ~(size_t)(PACKAGE_ALIGNMENT - 1u), 1);
     if (words && fread(words, 1, (size_t)length, file) != (size_t)length)
     {
         free(words);
@@ -177,11 +178,21 @@ static uint32_t* read_package(const char* path, size_t* package_bytes)
     return words;
 }
 
+/** @brief The app is a Flow A bundle rather than a Flow B package. */
+static bool s_flow_a;
+
 /** @brief One frame: the engine's clock and animations, the app's timers, then a commit. */
 static void frame(void)
 {
     embedded_renderer_tick(FRAME_MS);
-    erb_tick(FRAME_MS);
+    if (s_flow_a)
+    {
+        er_runtime_pump();
+    }
+    else
+    {
+        erb_tick(FRAME_MS);
+    }
     er_commit();
 }
 
@@ -219,31 +230,19 @@ static void run_taps(const char* taps)
     }
 }
 
-int main(int argc, char** argv)
+/** @brief Lets the app settle after its taps. */
+static void settle(uint32_t settle_ms)
 {
-    if (argc < 5)
+    for (uint32_t elapsed_ms = 0; elapsed_ms < settle_ms; elapsed_ms += FRAME_MS)
     {
-        fprintf(stderr, "usage: %s <out.raw> <width> <height> <package> [taps [settle_ms]]\n", argv[0]);
-        return EXIT_HOST_FAILED;
+        frame();
     }
-    const char* frame_path = argv[1];
-    const int width = atoi(argv[2]);
-    const int height = atoi(argv[3]);
-    const char* taps = argc > 5 ? argv[5] : "";
-    const uint32_t settle_ms = argc > 6 ? (uint32_t)atoi(argv[6]) : SETTLE_MS;
-    if (!er_software_backend_init(width, height))
-    {
-        fprintf(stderr, "can't make a %dx%d framebuffer\n", width, height);
-        return EXIT_HOST_FAILED;
-    }
+}
 
-    size_t package_bytes = 0;
-    uint32_t* package = read_package(argv[4], &package_bytes);
-    if (!package)
-    {
-        fprintf(stderr, "can't read %s\n", argv[4]);
-        return EXIT_HOST_FAILED;
-    }
+/** @brief Loads a Flow B package and runs it. @return 0, or an exit code. */
+static int
+run_flow_b(const uint32_t* package, size_t package_bytes, int width, int height, const char* taps, uint32_t settle_ms)
+{
     erb_set_wall_clock(WALL_CLOCK_MS);
     const ErbConfig config = {
         .arena = s_arena,
@@ -265,16 +264,82 @@ int main(int argc, char** argv)
 
     er_commit();
     run_taps(taps);
-    for (uint32_t elapsed_ms = 0; elapsed_ms < settle_ms; elapsed_ms += FRAME_MS)
-    {
-        frame();
-    }
+    settle(settle_ms);
     if (!erb_running())
     {
         char message[ERROR_MESSAGE_BYTES];
         erb_error_message(erb_last_error(), message, sizeof(message));
         fprintf(stderr, "the app stopped: %s\n", message);
         return EXIT_APP_FAILED;
+    }
+    return 0;
+}
+
+/** @brief Runs a Flow A bundle. @return 0, or an exit code. */
+static int
+run_flow_a(const uint32_t* bundle, size_t bundle_bytes, int width, int height, const char* taps, uint32_t settle_ms)
+{
+    const ErRuntimeConfig config = {
+        .screen_width = width,
+        .screen_height = height,
+        .natives = s_natives,
+        .native_count = sizeof(s_natives) / sizeof(s_natives[0]),
+    };
+    if (!er_runtime_init(&config))
+    {
+        fprintf(stderr, "can't start QuickJS\n");
+        return EXIT_HOST_FAILED;
+    }
+    er_runtime_set_wall_clock(WALL_CLOCK_MS);
+    if (!er_runtime_load_source((const char*)bundle, bundle_bytes, "app.js"))
+    {
+        fprintf(stderr, "the bundle didn't load: %s\n", er_runtime_last_error());
+        return EXIT_APP_FAILED;
+    }
+
+    er_commit();
+    run_taps(taps);
+    settle(settle_ms);
+    if (er_runtime_last_error()[0])
+    {
+        fprintf(stderr, "the app stopped: %s\n", er_runtime_last_error());
+        return EXIT_APP_FAILED;
+    }
+    return 0;
+}
+
+int main(int argc, char** argv)
+{
+    if (argc < 5)
+    {
+        fprintf(stderr, "usage: %s <out.raw> <width> <height> <package | app.js> [taps [settle_ms]]\n", argv[0]);
+        return EXIT_HOST_FAILED;
+    }
+    const char* frame_path = argv[1];
+    const int width = atoi(argv[2]);
+    const int height = atoi(argv[3]);
+    const char* taps = argc > 5 ? argv[5] : "";
+    const uint32_t settle_ms = argc > 6 ? (uint32_t)atoi(argv[6]) : SETTLE_MS;
+    if (!er_software_backend_init(width, height))
+    {
+        fprintf(stderr, "can't make a %dx%d framebuffer\n", width, height);
+        return EXIT_HOST_FAILED;
+    }
+
+    size_t package_bytes = 0;
+    uint32_t* package = read_package(argv[4], &package_bytes);
+    if (!package)
+    {
+        fprintf(stderr, "can't read %s\n", argv[4]);
+        return EXIT_HOST_FAILED;
+    }
+    const size_t path_length = strlen(argv[4]);
+    s_flow_a = path_length > 3 && strcmp(argv[4] + path_length - 3, ".js") == 0;
+    const int status = s_flow_a ? run_flow_a(package, package_bytes, width, height, taps, settle_ms)
+                                : run_flow_b(package, package_bytes, width, height, taps, settle_ms);
+    if (status != 0)
+    {
+        return status;
     }
 
     FILE* frame_file = fopen(frame_path, "wb");

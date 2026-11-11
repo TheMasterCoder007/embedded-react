@@ -53,6 +53,7 @@ const {registerSvgVectorLoader} = await import(
 const {transformPersist, shouldPersist} = await import(
   pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href
 );
+const {loadAppFile} = await import('./aot/app-file-loader.mts');
 
 const REACT_PIN = Object.fromEntries(
   ['react', 'react-reconciler', 'scheduler']
@@ -194,29 +195,26 @@ function createBundle({
             images.clear();
             fonts.clear();
           });
-          pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, loadArgs => {
-            // Transform ONLY the app's own source — never dependencies (see shouldPersist: excluding
-            // node_modules is what stops the library's usePersistentState being rewritten to call itself).
-            if (
-              !persist ||
-              !shouldPersist(loadArgs.path, projectRootNormalized)
-            )
+          pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, async loadArgs => {
+            // Only the app's own source — never dependencies (see shouldPersist: excluding node_modules is what
+            // stops the library's usePersistentState being rewritten to call itself). Native modules get their
+            // signatures, and with persist on, useState persists.
+            if (!shouldPersist(loadArgs.path, projectRootNormalized))
               return undefined;
             try {
-              // Match the esbuild loader to the source extension so TS type syntax (preserved by the
-              // persist transform) is stripped: .tsx → tsx, .ts → ts, .jsx/.js → jsx.
-              const loader = loadArgs.path.endsWith('.tsx')
-                ? 'tsx'
-                : loadArgs.path.endsWith('.ts')
-                  ? 'ts'
-                  : 'jsx';
-              return {
-                contents: transformPersist(
-                  readFileSync(loadArgs.path, 'utf8'),
-                  relative(projectRoot, loadArgs.path).replace(/\\/g, '/'),
-                ),
-                loader,
-              };
+              return await loadAppFile(
+                loadArgs.path,
+                persist
+                  ? source =>
+                      transformPersist(
+                        source,
+                        relative(projectRoot, loadArgs.path).replace(
+                          /\\/g,
+                          '/',
+                        ),
+                      )
+                  : undefined,
+              );
             } catch (error) {
               return {errors: [{text: `persist transform: ${error.message}`}]};
             }

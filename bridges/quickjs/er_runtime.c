@@ -17,7 +17,7 @@
 /*
  * er_runtime — portable QuickJS host core for Flow A (see er_runtime.h).
  *
- * Owns the JSRuntime/JSContext lifecycle and the host globals (console, screen, optional __erPersist),
+ * Owns the JSRuntime/JSContext lifecycle and the host globals (console, screen, __erNative, optional __erPersist),
  * and wraps load/pump/reset/error screen. No platform deps: the caller provides the backend, the app
  * bytes, and the frame loop. Shared by the desktop demo + simulator (examples/linux/host.c) and usable
  * directly from MCU firmware.
@@ -278,6 +278,157 @@ static void install_persist(JSContext* ctx)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Native modules (nativeModule() calls ErRuntimeConfig.natives through `__erNative`)
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Most parameters a native function may take. */
+#define NATIVE_MAX_PARAMETERS 16
+
+/** @brief Whether a signature is a result, ':', then up to NATIVE_MAX_PARAMETERS parameters of types the bridge passes.
+ */
+static bool native_signature_valid(const char* signature)
+{
+    if (!signature || signature[0] == '\0' || !strchr("ibfv", signature[0]) || signature[1] != ':')
+    {
+        return false;
+    }
+    const char* parameters = signature + 2;
+    for (const char* code = parameters; *code; code++)
+    {
+        if (!strchr("ibf", *code))
+        {
+            return false;
+        }
+    }
+    return strlen(parameters) <= NATIVE_MAX_PARAMETERS;
+}
+
+/** @brief __erNative.find(name, version, signature) → the native's index, or -1 when the firmware has none. */
+static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    int32_t version = 0;
+    if (JS_ToInt32(ctx, &version, argv[1]))
+    {
+        return JS_EXCEPTION;
+    }
+    const char* name = JS_ToCString(ctx, argv[0]);
+    const char* signature = JS_ToCString(ctx, argv[2]);
+    int32_t found = -1;
+    if (name && signature && native_signature_valid(signature))
+    {
+        for (uint16_t index = 0; index < s_config.native_count; index++)
+        {
+            const ErbNative* native = &s_config.natives[index];
+            if (native->callback && native->name && native->signature && native->version == version
+                && strcmp(native->name, name) == 0 && strcmp(native->signature, signature) == 0)
+            {
+                found = index;
+                break;
+            }
+        }
+    }
+    const bool converted = name && signature;
+    JS_FreeCString(ctx, name);
+    JS_FreeCString(ctx, signature);
+    return converted ? JS_NewInt32(ctx, found) : JS_EXCEPTION;
+}
+
+/** @brief __erNative.call(index, ...arguments) → the native's result, its arguments converted by its signature. */
+static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    int32_t index = -1;
+    if (argc < 1 || JS_ToInt32(ctx, &index, argv[0]))
+    {
+        return JS_EXCEPTION;
+    }
+    if (index < 0 || index >= s_config.native_count || !s_config.natives[index].callback
+        || !native_signature_valid(s_config.natives[index].signature))
+    {
+        return JS_ThrowRangeError(ctx, "no native function %d", (int)index);
+    }
+    const ErbNative* native = &s_config.natives[index];
+    const char* parameters = native->signature + 2;
+    const int parameter_count = (int)strlen(parameters);
+    if (argc - 1 != parameter_count)
+    {
+        return JS_ThrowTypeError(ctx,
+                                 "%s() takes %d argument%s, not %d",
+                                 native->name ? native->name : "a native function",
+                                 parameter_count,
+                                 parameter_count == 1 ? "" : "s",
+                                 argc - 1);
+    }
+
+    int32_t cells[NATIVE_MAX_PARAMETERS] = {0};
+    for (int parameter = 0; parameter < parameter_count; parameter++)
+    {
+        JSValueConst argument = argv[parameter + 1];
+        if (parameters[parameter] == 'i')
+        {
+            if (JS_ToInt32(ctx, &cells[parameter], argument))
+            {
+                return JS_EXCEPTION;
+            }
+        }
+        else if (parameters[parameter] == 'b')
+        {
+            const int truth = JS_ToBool(ctx, argument);
+            if (truth < 0)
+            {
+                return JS_EXCEPTION;
+            }
+            cells[parameter] = truth;
+        }
+        else
+        {
+            /* A number goes through a C float, as in Flow B. */
+            double number = 0.0;
+            if (JS_ToFloat64(ctx, &number, argument))
+            {
+                return JS_EXCEPTION;
+            }
+            const float single = (float)number;
+            memcpy(&cells[parameter], &single, sizeof(single));
+        }
+    }
+
+    int32_t result = 0;
+    if (!native->callback(cells, &result, s_config.native_context))
+    {
+        return JS_ThrowPlainError(ctx, "native module failed: %s", native->name ? native->name : "");
+    }
+    switch (native->signature[0])
+    {
+        case 'i':
+            return JS_NewInt32(ctx, result);
+        case 'b':
+            return JS_NewBool(ctx, result != 0);
+        case 'f':
+        {
+            float single;
+            memcpy(&single, &result, sizeof(single));
+            return JS_NewFloat64(ctx, (double)single);
+        }
+        default:
+            return JS_UNDEFINED;
+    }
+}
+
+/** @brief Installs the `__erNative` global (find/call) over ErRuntimeConfig.natives. */
+static void install_native(JSContext* ctx)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue native = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, native, "find", JS_NewCFunction(ctx, js_native_find, "find", 3));
+    JS_SetPropertyStr(ctx, native, "call", JS_NewCFunction(ctx, js_native_call, "call", 1));
+    JS_SetPropertyStr(ctx, global, "__erNative", native);
+    JS_FreeValue(ctx, global);
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Context lifecycle + eval
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -417,6 +568,7 @@ static void install_globals(void)
     install_console(s_ctx);
     install_screen(s_ctx);
     er_bridge_install(s_ctx);
+    install_native(s_ctx);
     if (s_config.install_persist)
     {
         install_persist(s_ctx);

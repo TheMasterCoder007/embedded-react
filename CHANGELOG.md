@@ -44,6 +44,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: native modules, declared with `nativeModule<Sensors>('sensors', 1)` and a TypeScript interface. Handlers,
   effects and timers call their methods with `Int`, `number` and `boolean` values, and the firmware registers each
   one in C.
+- Flow A: native modules, through the bridge. The firmware gives the same `ErbNative` table to
+  `ErRuntimeConfig::natives`, and a missing method stops the app when it loads.
 
 ### Changed
 
