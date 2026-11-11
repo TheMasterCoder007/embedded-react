@@ -420,15 +420,4 @@ describe('packages', () => {
     ).join(' ');
     expect(() => compile(appOf(loops))).toThrow(/more than 32 loops/);
   });
-
-  it('refuse a loop in a helper used as a value', () => {
-    expect(() =>
-      compile(
-        appOf(
-          'setLabel(first());',
-          "function first() { for (const name of NAMES) return name; return ''; }",
-        ),
-      ),
-    ).toThrow(/so it can't loop yet/);
-  });
 });

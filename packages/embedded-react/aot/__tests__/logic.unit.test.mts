@@ -301,7 +301,7 @@ describe('helpers that return a value', () => {
           'function next(v) { setLabel("x"); return v; }',
         ),
       ),
-    ).toThrow(/can only declare consts, branch and return/);
+    ).toThrow(/can only declare locals, branch, loop and return/);
     expect(() =>
       compile(appOf('setN(pick(n));', 'function pick(v) { if (v) return 1; }')),
     ).toThrow(/can end without returning one/);

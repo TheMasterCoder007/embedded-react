@@ -71,6 +71,7 @@ import {
   listStates,
   nodeReads,
   vectorReads,
+  workedStates,
 } from './ir/reads.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
@@ -83,6 +84,7 @@ import type {
   FunctionProp,
   ListState,
   Local,
+  ScalarState,
   Scope,
   StateRecord,
 } from './types.mts';
@@ -172,8 +174,14 @@ function settleFunctions(output: Out, hasUpdate: boolean): void {
  * them again. One that also reads something untracked is set on every update, so its reads need no flag.
  *
  * @param root  The app's tree.
+ * @param derivedLists  The lists filtered, sorted or split in render.
+ * @param workedValues  The values memos and helpers loop for in render.
  */
-function watchState(root: IrElement, derivedLists: ListState[]): void {
+function watchState(
+  root: IrElement,
+  derivedLists: ListState[],
+  workedValues: ScalarState[],
+): void {
   const reads = [
     ...nodesOf(root).flatMap(node => {
       const vector = updatedVectorOf(node);
@@ -184,6 +192,8 @@ function watchState(root: IrElement, derivedLists: ListState[]): void {
     ),
     // A handler can read a filtered or sorted list that nothing draws, which must still be rebuilt.
     ...derivedLists.map(listStates),
+    // So can a value a memo or a helper loops for.
+    ...workedValues.map(workedStates),
   ];
   for (const read of reads) {
     read?.forEach(record => {
@@ -315,6 +325,7 @@ function lowerProgram(
     shadowedClock,
     constantLists: new Map(),
     derivedLists: new Map(),
+    workedValues: new Map(),
     splitLists: new Map(),
     functionProps: new Map(),
     children: null,
@@ -413,6 +424,7 @@ function lowerProgram(
     shadowedClock,
     constantLists: moduleEnvironment.constantLists,
     derivedLists: moduleEnvironment.derivedLists,
+    workedValues: moduleEnvironment.workedValues,
     splitLists: moduleEnvironment.splitLists,
     functionProps: appFunctionProps,
     contexts: moduleEnvironment.contexts,
@@ -486,16 +498,20 @@ function lowerProgram(
   const derivedLists = [...environment.derivedLists!.values()].flatMap(
     lists => [...lists.values()],
   );
+  const workedValues = [...environment.workedValues!.values()].flatMap(
+    values => [...values.values()],
+  );
   const hasUpdate =
     nodesOf(root).some(
       node => isStateDriven(node) || updatedVectorOf(node) !== null,
     ) ||
     conditionalsOf(root).some(conditional => !conditional.toggle) ||
     output.dependencyEffects.length > 0 ||
-    derivedLists.length > 0;
+    derivedLists.length > 0 ||
+    workedValues.length > 0;
   settleFunctions(output, hasUpdate);
   if (hasUpdate) {
-    watchState(root, derivedLists);
+    watchState(root, derivedLists, workedValues);
   }
 
   const stateRecords = [
@@ -503,6 +519,7 @@ function lowerProgram(
     ...output.childStateRecords,
     ...environment.constantLists!.values(),
     ...derivedLists,
+    ...workedValues,
     ...[...environment.splitLists!.values()].flatMap(lists => [
       ...lists.values(),
     ]),

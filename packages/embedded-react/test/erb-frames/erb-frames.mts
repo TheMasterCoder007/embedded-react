@@ -594,6 +594,53 @@ const SCENARIOS: Scenario[] = [
     listCap: 6,
     taps: '33,20 33,20 84,20 84,20 127,20',
   },
+  // Buttons: row 1 add, drop, limit, best; row 2 a tally of 2s, a tally of 5s.
+  {
+    name: 'value-loops',
+    file: fixture('value-loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+  },
+  // Three rows added after the top id, 4:4 5:9 6:3; the evens line breaks after two.
+  {
+    name: 'value-loops-add',
+    file: fixture('value-loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,20 32,20 32,20',
+  },
+  // Two rows added, then the limit stepped to 8: only 5:9 is over it.
+  {
+    name: 'value-loops-limit',
+    file: fixture('value-loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,20 32,20 136,20 136,20',
+  },
+  // The biggest value, 6, then the first id over 3, 2.
+  {
+    name: 'value-loops-best',
+    file: fixture('value-loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '188,20',
+  },
+  // Every row dropped: each memo's loop runs no times.
+  {
+    name: 'value-loops-drop',
+    file: fixture('value-loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '84,20 84,20 84,20',
+  },
+  // Each tally counts its own taps, up to 4: three 2s, then one 5.
+  {
+    name: 'value-loops-tally',
+    file: fixture('value-loops'),
+    screen: PORTRAIT,
+    listCap: 6,
+    taps: '32,48 32,48 32,48 84,48',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

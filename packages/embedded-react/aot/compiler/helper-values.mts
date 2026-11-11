@@ -19,11 +19,12 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from './diagnostics.mts';
-import {lowerSource, lowerSourcedWide} from './expressions.mts';
+import {listValueOf, lowerSource, lowerSourcedWide} from './expressions.mts';
 import {objectTreeOf} from './records.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {switchAsIf} from './switch-cases.mts';
 import {narrowOn, narrowed} from './tagged-records.mts';
+import {runsAsStatements, workedValueOf} from './worked-values.mts';
 import type * as t from '@babel/types';
 import type {IrSource} from './ir/source.mts';
 import type {Env, FunctionNode} from './types.mts';
@@ -191,6 +192,17 @@ export function helperEnvironment(
       return;
     }
 
+    // A constant array folds where it is read; a list is the list.
+    if (Array.isArray(folded)) {
+      constants[parameter.name] = folded;
+      return;
+    }
+    const list = listValueOf(argument, environment);
+    if (list) {
+      state.set(parameter.name, list);
+      return;
+    }
+
     const value = lowerSourcedWide(argument, environment);
     locals.set(parameter.name, {
       slotKind: value.slotKind,
@@ -319,24 +331,13 @@ function valueOf(
       }
     }
 
-    const isLoop =
-      statement.type === 'ForStatement' ||
-      statement.type === 'ForOfStatement' ||
-      statement.type === 'WhileStatement' ||
-      statement.type === 'DoWhileStatement';
     const error = aotError(
       statement.type === 'ReturnStatement'
         ? `AOT: ${valueGiver(name)}, so each \`return\` must give one`
-        : isLoop
-          ? `AOT: ${valueGiver(name)}, so it can't loop yet`
-          : `AOT: ${valueGiver(name)}, so it can only declare consts, branch and return`,
+        : `AOT: ${valueGiver(name)}, so it can only declare locals, branch, loop and return`,
       name.startsWith('useMemo(')
-        ? isLoop
-          ? 'keep the value in state, and update it in the handler that changes what it is worked out from.'
-          : 'a memo works out a value without side effects. Set state in a handler or an effect.'
-        : isLoop
-          ? 'loop in the handler instead, into a let: let total = 0; for (const item of items) total += item.n;'
-          : 'a helper whose result is used works out a value without side effects. Call one that sets ' +
+        ? 'a memo works out a value without side effects. Set state in a handler or an effect.'
+        : 'a helper whose result is used works out a value without side effects. Call one that sets ' +
             'state as a statement of its own.',
     );
     if (statement.loc) error.aotLoc = statement.loc.start;
@@ -358,6 +359,14 @@ export function helperValueOf(node: t.Node, environment: Env): IrSource | null {
   const called = helperOf(node, environment);
   if (!called) return null;
   const {name, helper} = called;
+  if (runsAsStatements(helper)) {
+    return workedValueOf(
+      node as t.CallExpression,
+      name,
+      helper as FunctionNode & {body: t.BlockStatement},
+      environment,
+    );
+  }
   return valueOf(
     bodyOf(helper),
     name,
