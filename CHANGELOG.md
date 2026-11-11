@@ -46,6 +46,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   one in C.
 - Flow A: native modules, through the bridge. The firmware gives the same `ErbNative` table to
   `ErRuntimeConfig::natives`, and a missing method stops the app when it loads.
+- The simulators run a native module on a JS mock, `sensors.mock.ts` beside its interface, with its values
+  converted as on a board.
 
 ### Changed
 

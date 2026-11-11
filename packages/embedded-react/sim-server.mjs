@@ -198,7 +198,7 @@ function createBundle({
           pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, async loadArgs => {
             // Only the app's own source — never dependencies (see shouldPersist: excluding node_modules is what
             // stops the library's usePersistentState being rewritten to call itself). Native modules get their
-            // signatures, and with persist on, useState persists.
+            // signatures and mocks, and with persist on, useState persists.
             if (!shouldPersist(loadArgs.path, projectRootNormalized))
               return undefined;
             try {
@@ -214,6 +214,7 @@ function createBundle({
                         ),
                       )
                   : undefined,
+                {mocks: true},
               );
             } catch (error) {
               return {errors: [{text: `persist transform: ${error.message}`}]};

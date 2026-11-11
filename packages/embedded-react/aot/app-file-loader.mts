@@ -16,16 +16,16 @@
 
 /*
  * Flow A's esbuild loader for an app's own files. It gives each nativeModule() call its methods' signatures, which
- * the bundle's erased types can't, then runs the bundler's own transform when it has one. esbuild runs one onLoad per
- * file, so a bundler that transforms the app's files calls this from its own.
+ * the bundle's erased types can't, and in the simulators its mock, then runs the bundler's own transform when it has
+ * one. esbuild runs one onLoad per file, so a bundler that transforms the app's files calls this from its own.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {readFileSync} from 'node:fs';
-import {dirname} from 'node:path';
+import {existsSync, readFileSync} from 'node:fs';
+import {dirname, relative} from 'node:path';
 import type {OnLoadResult} from 'esbuild';
 import type {AotError} from './compiler/diagnostics.mts';
 
@@ -38,22 +38,45 @@ import type {AotError} from './compiler/diagnostics.mts';
  *
  * @param path  The file.
  * @param transform  The bundler's own transform, if it has one.
+ * @param options  `mocks` for the simulators: each native module runs its mock (`sensors.mock.ts` beside its
+ *                 interface) instead of the firmware's.
  *
  * @returns What esbuild loads, or undefined to let esbuild read the file itself.
  */
 export async function loadAppFile(
   path: string,
   transform?: (source: string) => string,
+  options: {mocks?: boolean} = {},
 ): Promise<OnLoadResult | undefined> {
   const source = readFileSync(path, 'utf8');
   let contents = source;
+  // A mock added later rebuilds the app.
+  const watchFiles: string[] = [];
   if (/\bnativeModule\b/.test(source)) {
-    const {addNativeSignatures, readNativeInterfaces} =
+    const {addNativeSignatures, nativeMockFiles, readNativeInterfaces} =
       await import('./compiler/native-modules.mts');
     try {
+      let mocks: Map<string, string | null> | undefined;
+      if (options.mocks) {
+        mocks = new Map();
+        for (const [name, candidates] of nativeMockFiles(
+          source,
+          dirname(path),
+        )) {
+          watchFiles.push(...candidates);
+          const found = candidates.find(candidate => existsSync(candidate));
+          mocks.set(
+            name,
+            found
+              ? './' + relative(dirname(path), found).replace(/\\/g, '/')
+              : null,
+          );
+        }
+      }
       contents = addNativeSignatures(
         source,
         readNativeInterfaces(source, dirname(path)),
+        mocks,
       );
     } catch (error) {
       const aotError = error as AotError & {code?: string};
@@ -86,5 +109,6 @@ export async function loadAppFile(
   return {
     contents,
     loader: path.endsWith('.tsx') ? 'tsx' : path.endsWith('.ts') ? 'ts' : 'jsx',
+    ...(watchFiles.length ? {watchFiles} : {}),
   };
 }
