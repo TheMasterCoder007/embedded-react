@@ -33,9 +33,7 @@
 // stays mounted. Size `sections x (1 + rows) x nodes-per-row` against ERUI_MAX_NODES before writing
 // the screen.
 //
-// Unlike <FlatList>, this has no Flow B counterpart yet — the AOT unrolls one `.map` per container
-// and a section expands to a header AND a variable number of rows. It is a Flow A / simulator
-// component until that lands; the AOT says so by name rather than "unknown element".
+// Flow B builds the same tree, unrolling the sections at build time (aot/compiler/elements/section-list.mts).
 import {createElement} from 'react';
 import {ScrollView} from './components.js';
 import {pushKeyedChild} from './list-child.js';

@@ -31,7 +31,8 @@ const PREAMBLE = `import {useState, useRef} from 'react';
 import logo from './logo.png';
 import knob from './knob.png';
 import {View, Text, Svg, Circle, Ellipse, Rect, Line, Arc, G, Path, Pressable, TouchableOpacity, Image,
-  ScrollView, Switch, TextInput, ActivityIndicator, Modal, Dial, FlatList, Animated, useAnimatedValue}
+  ScrollView, Switch, TextInput, ActivityIndicator, Modal, Dial, FlatList, SectionList, Button, ImageBackground,
+  Animated, useAnimatedValue}
   from 'embedded-react';
 `;
 
@@ -214,6 +215,45 @@ const SAMPLES = {
       style: 'style={{marginLeft: 3}}',
     },
   },
+  SectionList: {
+    base: "sections={[{title: 'A', data: [1]}]} renderItem={({item}) => <Text>{item}</Text>}",
+    props: {
+      sections: [
+        'sections={[]} renderItem={({item}) => <Text>{item}</Text>}',
+        "sections={[{title: 'A', data: [1]}]} renderItem={({item}) => <Text>{item}</Text>}",
+      ],
+      renderItem: [
+        "sections={[{title: 'A', data: [1]}]} renderItem={({item}) => <Text>{item}</Text>}",
+        "sections={[{title: 'A', data: [1]}]} renderItem={({item}) => <View />}",
+      ],
+      renderSectionHeader:
+        'renderSectionHeader={({section}) => <Text>{section.title}</Text>}',
+      renderSectionFooter:
+        'renderSectionFooter={({section}) => <Text>{section.title}</Text>}',
+      style: 'style={{marginLeft: 3}}',
+    },
+  },
+  Button: {
+    base: 'title="go"',
+    props: {
+      title: ['title="go"', 'title="stop"'],
+      onPress: `onPress=${HANDLER}`,
+      color: 'color="#f00"',
+      disabled: 'disabled',
+    },
+  },
+  ImageBackground: {
+    base: 'source="logo"',
+    children: '<View />',
+    props: {
+      ...HOST,
+      source: ['', 'source="logo"'],
+      imageName: ['', 'imageName="logo"'],
+      resizeMode: 'resizeMode="contain"',
+      tintColor: 'tintColor="#f00"',
+      imageStyle: 'imageStyle={{borderRadius: 3}}',
+    },
+  },
   Svg: {
     children: '<Circle r={4} />',
     props: {
@@ -238,6 +278,10 @@ const LOWERED_TO_NOTHING = {
   'Modal.statusBarTranslucent': 'there is no status bar',
   'FlatList.keyExtractor':
     'Flow B unrolls the rows at build time; there is no reconciler to key',
+  'SectionList.keyExtractor':
+    'Flow B unrolls the rows at build time; there is no reconciler to key',
+  'ImageBackground.imageRef':
+    'a node ref takes no room until updateVector reads it',
   'Svg.source': 'needs a baked .svg artifact; the <Svg source> tests cover it',
   ...Object.fromEntries(
     [
@@ -253,6 +297,7 @@ const LOWERED_TO_NOTHING = {
       'Modal',
       'Dial',
       'Svg',
+      'ImageBackground',
     ].map(tag => [
       `${tag}.ref`,
       'a node ref takes no room until updateVector reads it',
@@ -381,6 +426,9 @@ describe('declared element props', () => {
     );
     expect(() => gen('<Modal visible transparent />')).toThrow(
       /prop "transparent" is not supported[\s\S]*hint: the engine always draws a backdrop/,
+    );
+    expect(() => gen('<Button title="go" style={{margin: 2}} />')).toThrow(
+      /prop "style" is not supported[\s\S]*hint: a Button takes no style/,
     );
     expect(() => gen('<ScrollView onScroll={() => setN(1)} />')).toThrow(
       /prop "onScroll" is not supported/,

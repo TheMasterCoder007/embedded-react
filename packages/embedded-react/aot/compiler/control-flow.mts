@@ -820,7 +820,7 @@ function emitMap(
  *
  * @returns The row's environment.
  */
-function rowEnv(
+export function rowEnv(
   environment: Env,
   parameters: (string | undefined)[],
   constants: Scope,
