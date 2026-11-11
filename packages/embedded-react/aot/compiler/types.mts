@@ -430,6 +430,8 @@ export interface Env {
   inListRow?: boolean;
   /** Lowering a handler, an effect or a timer, which runs apart from the render. */
   outsideRender?: boolean;
+  /** Working out a value render reads, as statements, so still in render. */
+  workedInRender?: boolean;
   /** Callback props of the component being inlined. */
   functionProps?: Map<string, FunctionProp>;
   /** Namespaces the handlers an inlined component instance emits. */

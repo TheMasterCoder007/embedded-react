@@ -46,6 +46,8 @@ const SENSORS =
   '  scale: (value: number) => number;\n' +
   '  name(): string;\n' +
   '  level?(): number;\n' +
+  '  mode(index: Int): Int;\n' +
+  '  mode(on: boolean): Int;\n' +
   '}\n' +
   "const Sensors = nativeModule<Sensors>('sensors', 2);\n";
 
@@ -212,6 +214,36 @@ describe('native module calls it refuses', () => {
     ).toMatch(/is called in render/);
   });
 
+  it('refuses a call in a value render works out with a loop', () => {
+    expect(
+      failure(
+        appOf(
+          '',
+          '  const v = useMemo(() => { let sum = 0; for (let i = 0; i < 2; i++) sum += Sensors.count(); return sum + n; }, [n]);\n',
+          '{v}',
+        ),
+      ),
+    ).toMatch(/Sensors\.count\(\) is called in render/);
+    const total =
+      'function total() { let sum = 0; for (let i = 0; i < 2; i++) sum += Sensors.count(); return sum; }\n';
+    expect(
+      failure(
+        appOf('', '', '{total()}').replace(
+          'export function',
+          total + 'export function',
+        ),
+      ),
+    ).toMatch(/Sensors\.count\(\) is called in render/);
+    expect(() =>
+      compile(
+        appOf('setN(total());').replace(
+          'export function',
+          total + 'export function',
+        ),
+      ),
+    ).not.toThrow();
+  });
+
   it('refuses what the interface declares but a call cannot pass yet', () => {
     expect(failure(appOf('Sensors.name();'))).toMatch(
       /Sensors\.name returns a string, which native modules don't pass yet/,
@@ -221,6 +253,9 @@ describe('native module calls it refuses', () => {
     );
     expect(failure(appOf('Sensors.calibrate();'))).toMatch(
       /Sensors has no method calibrate/,
+    );
+    expect(failure(appOf('setN(Sensors.mode(1));'))).toMatch(
+      /Sensors\.mode is overloaded, but a native method has one signature/,
     );
   });
 

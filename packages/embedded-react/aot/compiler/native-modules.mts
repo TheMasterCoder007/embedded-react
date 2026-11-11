@@ -513,7 +513,18 @@ export function collectNativeModules(
     };
     for (const element of members) {
       const member = memberOf(element);
-      if (member) module.members.set(member.name, member.member);
+      if (!member) continue;
+      // An import has one signature, so an overloaded method can't be called.
+      module.members.set(
+        member.name,
+        module.members.has(member.name)
+          ? {
+              kind: 'refused',
+              reason: 'is overloaded, but a native method has one signature',
+              hint: 'declare each method once, and give another signature a name of its own.',
+            }
+          : member.member,
+      );
     }
     modules.set((declarator.id as t.Identifier).name, module);
   }
@@ -634,7 +645,7 @@ export function lowerNativeCall(
   const binding = ((node.callee as t.MemberExpression).object as t.Identifier)
     .name;
   const what = `${binding}.${method}`;
-  if (!environment.outsideRender) {
+  if (!environment.outsideRender || environment.workedInRender) {
     throw errorAt(
       node,
       `AOT: ${what}() is called in render`,
