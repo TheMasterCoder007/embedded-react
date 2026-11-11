@@ -30,6 +30,7 @@
  *
  *     ErRuntimeConfig config = { .screen_width = W, .screen_height = H, .log = my_log };
  *     // (optional) config.install_host_globals = my_bindings;   // custom device-API globals
+ *     // (optional) config.natives = my_natives;                 // native modules, as Flow B registers them
  *     er_runtime_init(&config);
  *     er_register_assets();                 // baked images/fonts (or load a pack)
  *     er_runtime_load_bytecode(qbc, len);   // your app — a pointer into flash/RAM
@@ -39,6 +40,7 @@
  */
 
 #include "er_container.h" /* ErContainerStatus, er_crc32 (the container reader in runtime/) */
+#include "erb_native.h"   /* ErbNative, the firmware's native functions */
 #include "quickjs.h"
 
 #include <stdbool.h>
@@ -148,6 +150,10 @@ typedef struct
         er_runtime_init creates and each one er_runtime_reset replaces it with. Runs after the runtime's
         globals and before any app code. NULL = none. */
     void (*install_host_globals)(JSContext* ctx);
+    const ErbNative* natives; /**< Native functions the app's native modules call: the table ErbConfig::natives
+                                   takes, so both flows share it. NULL = none. */
+    uint16_t native_count;
+    void* native_context; /**< Passed to natives. */
 } ErRuntimeConfig;
 
 /*----------------------------------------------------------------------------------------------------------------------

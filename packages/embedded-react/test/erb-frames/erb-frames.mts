@@ -18,7 +18,8 @@
 //
 // Each scenario is compiled to a package. tools/erb-frames builds a headless host around the Flow B runtime, which
 // runs the scenario's taps through the engine and the software backend, and its last frame must match the scenario's
-// golden image in golden/, as `npm run erb:frames:record [filter]` last recorded it. Each channel may be off by one:
+// golden image in golden/, as `npm run erb:frames:record [filter]` last recorded it. A scenario marked `flowA` is also
+// bundled for Flow A, which the host runs on QuickJS, and that frame must match the same golden image. Each channel may be off by one:
 // an image is recorded on one machine and checked on others, whose float rounding differs. Each package's resource
 // report is printed as it is built.
 //
@@ -38,9 +39,12 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import {dirname, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {build} from 'esbuild';
 import {PNG} from 'pngjs';
+
+import {loadAppFile} from '../../aot/app-file-loader.mts';
 
 import {
   bakeSvgArtifacts,
@@ -68,6 +72,8 @@ interface Scenario {
   taps?: string;
   settle?: number;
   release?: boolean;
+  /** Also run the app as a Flow A bundle, whose frame must match the same golden image. */
+  flowA?: boolean;
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +82,7 @@ const HOST_DIR = join(ROOT, 'tools/erb-frames');
 const BUILD_DIR = process.env.ERB_FRAMES_BUILD_DIR || join(HOST_DIR, 'build');
 const OUT_DIR = join(BUILD_DIR, 'out');
 const GOLDEN_DIR = join(HERE, 'golden');
+const LIBRARY = resolve(HERE, '../../src/embedded-react/index.js');
 // How far a channel may be from the golden image: what a machine's float rounding moves it by.
 const GOLDEN_TOLERANCE = 1;
 const EXE_SUFFIX = process.platform === 'win32' ? '.exe' : '';
@@ -643,13 +650,19 @@ const SCENARIOS: Scenario[] = [
     taps: '32,48 32,48 32,48 84,48',
   },
   // Buttons: next, read. The mount effect flips the probe's false to on, and the timer adds 10 to the ticks.
-  {name: 'native-calls', file: fixture('native-calls'), screen: PORTRAIT},
+  {
+    name: 'native-calls',
+    file: fixture('native-calls'),
+    screen: PORTRAIT,
+    flowA: true,
+  },
   // Three nexts: total 1+2+3, half of 3, odd. Then read: on flips off, and kept is the stored 1.5 * 3.
   {
     name: 'native-calls-taps',
     file: fixture('native-calls'),
     screen: PORTRAIT,
     taps: '32,20 32,20 32,20 84,20',
+    flowA: true,
   },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
@@ -1131,6 +1144,46 @@ async function compileScenario(
   return {packagePath, report: resourceReport(packaged, file)};
 }
 
+/**
+ * Bundles a scenario's app for Flow A, as the CLI does: its native modules get their signatures from the interface.
+ *
+ * @returns The bundle's path.
+ */
+async function bundleScenario(scenario: Scenario): Promise<string> {
+  const bundlePath = join(BUILD_DIR, `${scenario.name}.js`);
+  const fixtures = dirname(scenario.file);
+  await build({
+    stdin: {
+      contents:
+        "import {AppRegistry} from 'embedded-react';\n" +
+        `import {App} from './${basename(scenario.file)}';\n` +
+        `AppRegistry.registerComponent('${scenario.name}', () => App);\n`,
+      resolveDir: fixtures,
+      loader: 'tsx',
+    },
+    bundle: true,
+    format: 'iife',
+    outfile: bundlePath,
+    platform: 'neutral',
+    target: 'es2020',
+    jsx: 'automatic',
+    alias: {'embedded-react': LIBRARY},
+    define: {'process.env.NODE_ENV': '"production"'},
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'app-files',
+        setup(pluginBuild) {
+          pluginBuild.onLoad({filter: /\.tsx?$/}, args =>
+            args.path.startsWith(fixtures) ? loadAppFile(args.path) : undefined,
+          );
+        },
+      },
+    ],
+  });
+  return bundlePath;
+}
+
 /** The built host's path; a multi-config generator puts it under the build type. */
 function host(): string {
   const direct = join(BUILD_DIR, `erb-frames${EXE_SUFFIX}`);
@@ -1147,16 +1200,17 @@ function host(): string {
  */
 function compareScenario(
   scenario: Scenario,
-  packagePath: string,
+  appPath: string,
+  outputName: string,
   record: boolean,
 ): string | null {
   const [width, height] = scenario.screen;
-  const framePath = join(OUT_DIR, `${scenario.name}.raw`);
+  const framePath = join(OUT_DIR, `${outputName}.raw`);
   run(host(), [
     framePath,
     String(width),
     String(height),
-    packagePath,
+    appPath,
     scenario.taps || '',
     String(scenario.settle ?? 500),
   ]);
@@ -1168,7 +1222,7 @@ function compareScenario(
     writePng(goldenPath, frame, scenario.screen);
     return null;
   }
-  const outputs = join(OUT_DIR, scenario.name);
+  const outputs = join(OUT_DIR, outputName);
   const golden = readGolden(goldenPath, scenario.screen);
   if (!golden) {
     writePng(`${outputs}.frame.png`, frame, scenario.screen);
@@ -1203,22 +1257,26 @@ run('cmake', ['-S', HOST_DIR, '-B', BUILD_DIR, '-DCMAKE_BUILD_TYPE=Release']);
 run('cmake', ['--build', BUILD_DIR, '-j']);
 
 let failed = 0;
-for (const scenario of scenarios) {
-  const panels =
-    scenario.panels && scenario.panels.length > 1
-      ? ` of ${scenario.panels.length} panels`
-      : '';
-  const label = `${scenario.name} @ ${scenario.screen.join('x')}${panels}${scenario.release ? ' release' : ''}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
+let checked = 0;
+/**
+ * Runs one check and reports it.
+ *
+ * @param label  What is checked.
+ * @param check  Runs it, returning what differs or null.
+ */
+async function report(
+  label: string,
+  check: () => Promise<string | null>,
+): Promise<void> {
+  checked++;
   try {
-    const {packagePath, report} = await compileScenario(scenario);
-    const problem = compareScenario(scenario, packagePath, record);
+    const problem = await check();
     if (problem) {
       failed++;
       console.log(`✗ ${label}: ${problem}`);
     } else {
       console.log(`✓ ${label}`);
     }
-    console.log(report.join('\n'));
   } catch (error) {
     failed++;
     console.log(
@@ -1227,5 +1285,32 @@ for (const scenario of scenarios) {
   }
 }
 
-console.log(`\n${scenarios.length - failed} matched, ${failed} failed`);
+for (const scenario of scenarios) {
+  const panels =
+    scenario.panels && scenario.panels.length > 1
+      ? ` of ${scenario.panels.length} panels`
+      : '';
+  const label = `${scenario.name} @ ${scenario.screen.join('x')}${panels}${scenario.release ? ' release' : ''}${scenario.taps ? ` taps[${scenario.taps}]` : ''}${scenario.settle !== undefined ? ` +${scenario.settle}ms` : ''}`;
+  let resources: string[] = [];
+  await report(label, async () => {
+    const {packagePath, report: packageReport} =
+      await compileScenario(scenario);
+    resources = packageReport;
+    return compareScenario(scenario, packagePath, scenario.name, record);
+  });
+  console.log(resources.join('\n'));
+  if (scenario.flowA) {
+    // Flow A checks against the golden image Flow B records.
+    await report(`${label} Flow A`, async () =>
+      compareScenario(
+        scenario,
+        await bundleScenario(scenario),
+        `${scenario.name}.flow-a`,
+        false,
+      ),
+    );
+  }
+}
+
+console.log(`\n${checked - failed} matched, ${failed} failed`);
 process.exit(failed ? 1 : 0);

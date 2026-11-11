@@ -36,7 +36,7 @@
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {basename, dirname, resolve, relative} from 'node:path';
-import {existsSync, readFileSync, statSync} from 'node:fs';
+import {existsSync, statSync} from 'node:fs';
 
 const require = createRequire(import.meta.url);
 
@@ -110,40 +110,37 @@ export async function bundleVendorSource({libSrc, nodePaths}) {
 
 /**
  * Build an asset-discovering esbuild plugin shared with the monolithic packer's behavior: image/font/svg
- * imports become bare string names (the bytes live in the ERPK pack), and — when persist is on — the app's
- * own source gets the useState→persist transform so state survives a live reload.
+ * imports become bare string names (the bytes live in the ERPK pack). The app's own source gives its native modules
+ * their signatures and, when persist is on, gets the useState→persist transform so state survives a live reload.
  */
-function makeAssetPlugin({images, fonts, persistHooks, projectRoot}) {
+function makeAssetPlugin({images, fonts, persist, projectRoot}) {
   const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
   return {
     name: 'embedded-react-assets',
     async setup(build) {
       const {registerSvgVectorLoader} =
         await import('../assets/svg-loader.mjs');
-      if (persistHooks) {
-        build.onLoad({filter: /\.(jsx?|tsx?)$/}, args => {
-          const {transformPersist, shouldPersist, normalizedProjectRoot} =
-            persistHooks;
-          if (!shouldPersist(args.path, normalizedProjectRoot))
-            return undefined;
-          try {
-            const loader = args.path.endsWith('.tsx')
-              ? 'tsx'
-              : args.path.endsWith('.ts')
-                ? 'ts'
-                : 'jsx';
-            return {
-              contents: transformPersist(
-                readFileSync(args.path, 'utf8'),
-                relative(projectRoot, args.path).replace(/\\/g, '/'),
-              ),
-              loader,
-            };
-          } catch (error) {
-            return {errors: [{text: `persist transform: ${error.message}`}]};
-          }
-        });
-      }
+      const {shouldPersist, transformPersist} =
+        await import('../persist-transform.mjs');
+      const {loadAppFile} = await import('../aot/app-file-loader.mts');
+      const normalizedProjectRoot = projectRoot.replace(/\\/g, '/');
+      build.onLoad({filter: /\.(jsx?|tsx?)$/}, async args => {
+        if (!shouldPersist(args.path, normalizedProjectRoot)) return undefined;
+        try {
+          return await loadAppFile(
+            args.path,
+            persist
+              ? source =>
+                  transformPersist(
+                    source,
+                    relative(projectRoot, args.path).replace(/\\/g, '/'),
+                  )
+              : undefined,
+          );
+        } catch (error) {
+          return {errors: [{text: `persist transform: ${error.message}`}]};
+        }
+      });
       build.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
         const name = assetName(args.path);
         images.set(name, args.path);
@@ -181,22 +178,11 @@ export async function bundleAppSource({
   const images = new Map();
   const fonts = new Map();
 
-  let persistHooks = null;
-  if (persist) {
-    const {transformPersist, shouldPersist} =
-      await import('../persist-transform.mjs');
-    persistHooks = {
-      transformPersist,
-      shouldPersist,
-      normalizedProjectRoot: projectRoot.replace(/\\/g, '/'),
-    };
-  }
-
   const result = await esbuild.build({
     ...esbuildCommon(nodePaths),
     entryPoints: [entry],
     external: VENDOR_EXTERNALS,
-    plugins: [makeAssetPlugin({images, fonts, persistHooks, projectRoot})],
+    plugins: [makeAssetPlugin({images, fonts, persist, projectRoot})],
   });
   return {source: result.outputFiles[0].text, images, fonts};
 }

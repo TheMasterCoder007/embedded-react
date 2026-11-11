@@ -58,9 +58,9 @@ interface Sensors {
 const Sensors = nativeModule<Sensors>('sensors', 1);
 ```
 
-**Flow B, TypeScript.** Declares a module the firmware provides in C. The interface is in the app's file or in a
-local `.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `number` (a float) and
-`boolean`, and may return `void`.
+**TypeScript.** Declares a module the firmware provides in C. The interface is in the app's file or in a local
+`.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `number` (a float) and
+`boolean`, and may return `void`. It takes up to 16 parameters.
 
 Call a method in a handler, an effect or a timer, and keep what it returns in state. A call in render is refused,
 since Flow A would make it on every render and Flow B only when what it reads changes.
@@ -80,7 +80,12 @@ static bool sensors_read(const int32_t* arguments, int32_t* result, void* contex
 static const ErbNative natives[] = {{"sensors.read", 1, "f:i", sensors_read}};
 ```
 
-Flow A and the simulator don't have native modules yet, so declaring one stops the app there.
+In Flow A the bundler reads the same interface and gives `nativeModule()` each method's signature. Give the same
+table to `ErRuntimeConfig::natives`, so both flows call the same C functions and get the same values (a `number`
+goes through a C float in both). When the app loads, each method in the interface is checked against the table,
+and a missing one stops the app with the error screen naming it.
+
+The simulator doesn't have native modules yet, so declaring one stops the app there.
 
 ## AppRegistry
 

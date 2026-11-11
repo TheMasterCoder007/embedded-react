@@ -30,6 +30,7 @@
 
 #include "er_assets.h"
 #include "er_scene.h"
+#include "erb_native.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -164,30 +165,6 @@ typedef struct
     uint32_t line;      /**< From the debug table: the line, or 0. */
     uint32_t build_id;  /**< The package's build id, when its header was read. */
 } ErbError;
-
-/**
- * @brief A native function a package may import.
- *
- * @param[in]  arguments  Arguments as 32-bit cells, as the signature lists them.
- * @param[out] result     The result cell (unused when the signature returns nothing).
- * @param[in]  context    ErbConfig::context.
- *
- * @return false to stop the app with ERB_ERROR_NATIVE, naming the module.
- */
-typedef bool (*ErbNativeFn)(const int32_t* arguments, int32_t* result, void* context);
-
-/**
- * @brief One native function the firmware offers. The signature is the result, ':', then the parameters,
- *        each one of i (int), b (bool) or f (float); v as the result means none. "i:if" takes an int and a
- *        float and returns an int.
- */
-typedef struct
-{
-    const char* name;
-    uint16_t version;
-    const char* signature;
-    ErbNativeFn callback;
-} ErbNative;
 
 /** @brief What the firmware gives the runtime. */
 typedef struct

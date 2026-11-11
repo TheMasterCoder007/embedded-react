@@ -87,8 +87,9 @@ for (;;) {
 block sizes or the collector never runs), `max_stack_size`
 (set below the host task's real stack so deep recursion is a JavaScript error rather than a crash),
 `install_persist`, `install_host_globals` (a hook to add objects of your own, as the ESP32-S3
-example does for WiFi), and `extra_intrinsics` (opt in to `Date` objects, `Proxy`, typed arrays,
-`WeakRef`, `BigInt` or `eval`, which the default profile leaves out).
+example does for WiFi), `natives`, `native_count` and `native_context` (the C functions behind the app's
+[native modules](./hooks.md#nativemodule), the same table Flow B takes), and `extra_intrinsics` (opt in to
+`Date` objects, `Proxy`, typed arrays, `WeakRef`, `BigInt` or `eval`, which the default profile leaves out).
 
 Below `er_runtime`, for a host that drives QuickJS itself, the bridge exposes
 `er_bridge_install(ctx)`, `er_bridge_pump(ctx)`, `er_bridge_run_bytecode(ctx, buf, len)`,

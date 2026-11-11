@@ -240,6 +240,26 @@ if (ER_BRIDGE_QUICKJS_ERRORTEST)
 endif ()
 
 # ---------------------------------------------------------------------------
+# Native module test: __erNative finds the firmware's natives and converts by signature. Needs the parser.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_NATIVETEST "Build the native module test" ON)
+
+if (ER_BRIDGE_QUICKJS_LITE AND ER_BRIDGE_QUICKJS_NATIVETEST)
+    message(STATUS "er-bridge-quickjs-nativetest skipped (ER_BRIDGE_QUICKJS_LITE build has no parser)")
+    set(ER_BRIDGE_QUICKJS_NATIVETEST OFF)
+endif ()
+
+if (ER_BRIDGE_QUICKJS_NATIVETEST)
+    add_executable(er-bridge-quickjs-nativetest nativetest_main.c)
+    target_link_libraries(er-bridge-quickjs-nativetest PRIVATE er-bridge-quickjs)
+
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_test(NAME native-modules COMMAND er-bridge-quickjs-nativetest)
+    endif ()
+endif ()
+
+# ---------------------------------------------------------------------------
 # JS heap-accounting test — guards the GC trigger itself. QuickJS runs its GC (and enforces
 # memory_limit) purely off js_malloc_usable_size(); when that reports 0 the collector never fires and
 # the app grows until the heap is exhausted. Platform-dependent in the wild, but reproducible anywhere
