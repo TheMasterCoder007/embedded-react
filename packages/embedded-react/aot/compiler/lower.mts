@@ -56,6 +56,7 @@ import {emitNode} from './nodes.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
 import {itemValueAt} from './list-items.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
+import {inlineCustomHooks} from './custom-hooks.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
@@ -77,7 +78,19 @@ import type {SlotWidths} from './ir/types.mts';
 import type {IrElement} from './ir/nodes.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
 import {bindDerivedList, renderBindings} from './list-order.mts';
-import type {Env, ListState, Scope, StateRecord} from './types.mts';
+import type {
+  Env,
+  FunctionProp,
+  ListState,
+  Local,
+  Scope,
+  StateRecord,
+} from './types.mts';
+import {
+  bindContextUses,
+  contextsOf,
+  refuseHiddenContexts,
+} from './contexts.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -253,6 +266,8 @@ function lowerProgram(
   // Parse the app and prepare the AST for the passes below.
   const ast = parseApp(source, options);
   normalizeUndefined(ast);
+  inlineCustomHooks(ast);
+  refuseHiddenContexts(ast);
   const shadowedClock = findShadowedClockCalls(ast);
 
   // Seed the module scope with image imports (each is its baked-name string) so consts that use them can fold.
@@ -271,6 +286,58 @@ function lowerProgram(
     delete scope[name];
   }
 
+  // What the module itself can read, where a context's default is worked out.
+  const imageNames = new Map(
+    [...imageImports].map(([, imageImport]) => [
+      imageImport.name,
+      imageImport.importPath,
+    ]),
+  ); // asset name → path
+  const moduleEnvironment: Env = {
+    state: new Map(),
+    locals: new Map(),
+    constants: moduleConstants,
+    moduleConstants,
+    animations: new Map(),
+    refs: new Map(),
+    pans: new Map(),
+    callbacks: new Map(),
+    helpers: collectHelpers(
+      {type: 'BlockStatement', body: [], directives: []},
+      ast.program,
+    ),
+    imageNames,
+    svgImports,
+    svgArtifacts: options.svgArtifacts || {},
+    caps: options.caps,
+    wide,
+    stores,
+    shadowedClock,
+    constantLists: new Map(),
+    derivedLists: new Map(),
+    splitLists: new Map(),
+    functionProps: new Map(),
+    children: null,
+  };
+  moduleEnvironment.contexts = {
+    records: contextsOf(ast.program),
+    defaults: moduleEnvironment,
+  };
+
+  // The App has no provider above it, so a context it reads is the default.
+  const appLocals = new Map<string, Local>();
+  const appFunctionProps = new Map<string, FunctionProp>();
+  const contextNames = bindContextUses(
+    component.body as BlockStatement,
+    moduleEnvironment,
+    {
+      scope,
+      locals: appLocals,
+      functionProps: appFunctionProps,
+      lists: new Map(),
+    },
+  );
+
   for (const statement of (component.body as BlockStatement).body) {
     if (
       statement.type !== 'VariableDeclaration' ||
@@ -281,6 +348,7 @@ function lowerProgram(
 
     for (const declarator of statement.declarations) {
       if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
+      if (contextNames.has(declarator.id.name)) continue;
       try {
         setBinding(
           scope,
@@ -324,17 +392,11 @@ function lowerProgram(
   const memos = collectMemos(component.body);
   const helpers = collectHelpers(component.body, ast.program);
   const components = collectComponents(ast.program);
-  const imageNames = new Map(
-    [...imageImports].map(([, imageImport]) => [
-      imageImport.name,
-      imageImport.importPath,
-    ]),
-  ); // asset name → path
 
   // The expression environment every emitter compiles against.
   const environment: Env = {
     state: state.byName,
-    locals: new Map(),
+    locals: appLocals,
     constants: scope,
     moduleConstants, // what an inlined child component sees (see emitComponent)
     animations: animations,
@@ -349,9 +411,11 @@ function lowerProgram(
     wide,
     stores,
     shadowedClock,
-    constantLists: new Map(),
-    derivedLists: new Map(),
-    splitLists: new Map(),
+    constantLists: moduleEnvironment.constantLists,
+    derivedLists: moduleEnvironment.derivedLists,
+    splitLists: moduleEnvironment.splitLists,
+    functionProps: appFunctionProps,
+    contexts: moduleEnvironment.contexts,
   };
 
   // A value worked out at boot lowers its slot against the app's environment.

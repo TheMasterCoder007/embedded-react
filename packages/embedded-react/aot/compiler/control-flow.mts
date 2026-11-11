@@ -55,6 +55,11 @@ import {
 } from './list-order.mts';
 import {collectPanResponders, panSpreadTarget} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
+import {
+  bindContextUses,
+  providedContextOf,
+  providedEnvironment,
+} from './contexts.mts';
 import {narrowOn, narrowed, narrowedScope} from './tagged-records.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
@@ -81,7 +86,7 @@ import type {
  * A prop as a component instance receives it: a folded constant, a runtime expression (a list row's
  * `item.field`, say), or a callback compiled where the component uses it as an event handler.
  */
-type PropDescriptor =
+export type PropDescriptor =
   | {static: true; value: unknown; isCallback?: undefined}
   | {static: 'list'; list: ListState; isCallback?: undefined}
   | (Local & {static: false; isCallback?: undefined})
@@ -92,6 +97,14 @@ type PropDescriptor =
       state?: StateTable;
       static?: undefined;
     };
+
+/** The tables a component's props are bound into. */
+export interface PropTables {
+  scope: Scope;
+  locals: Map<string, Local>;
+  functionProps: Map<string, FunctionProp>;
+  lists: Map<string, ListState>;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -157,71 +170,77 @@ function extractProps(
       continue;
     }
 
-    // A callback prop (inline arrow, caller's useCallback or forwarded prop) is an ` fn `, resolved at its handler.
-    const node = attrExpr(attribute);
-    if (isFn(node)) {
-      props[(attribute.name as t.JSXIdentifier).name] = {
-        isCallback: true,
-        node,
-      };
-      continue;
-    }
-
-    if (node.type === 'Identifier' && environment.callbacks?.has(node.name)) {
-      props[(attribute.name as t.JSXIdentifier).name] = {
-        isCallback: true,
-        node: environment.callbacks.get(node.name)!,
-      };
-      continue;
-    }
-
-    if (
-      node.type === 'Identifier' &&
-      environment.functionProps?.has(node.name)
-    ) {
-      props[(attribute.name as t.JSXIdentifier).name] = {
-        isCallback: true,
-        ...environment.functionProps.get(node.name)!,
-      }; // forward original {node, env, state}
-
-      continue;
-    }
-
-    // A list state passes as it is, and so does a list filtered or sorted in render.
-    const propName = (attribute.name as t.JSXIdentifier).name;
-    const listState =
-      node.type === 'Identifier'
-        ? environment.state.get(node.name)
-        : derivedListOf(node, environment);
-    if (listState?.kind === 'list') {
-      props[propName] = {static: 'list', list: listState};
-      continue;
-    }
-
-    // Any other prop folds to a constant when it can, else becomes a runtime expression. A list's item by index
-    // passes as it is, and an array or object built from runtime values folds with those values kept as runtime
-    // reads.
-    try {
-      props[propName] = {
-        static: true,
-        value: bindConst(propName, evalStatic(node, scope, 'boot')),
-      };
-    } catch {
-      const item = listItemOf(node, environment);
-      props[propName] = item
-        ? {
-            static: false,
-            ...item,
-            source: {kind: 'local', local: item, location: node.loc?.start},
-            expression: {kind: 'local', local: item, type: STRUCT},
-          }
-        : node.type === 'ArrayExpression' || node.type === 'ObjectExpression'
-          ? {static: true, value: foldRuntime(node, environment, scope)}
-          : {static: false, ...lowerSourcedWide(node, environment)};
-    }
+    props[(attribute.name as t.JSXIdentifier).name] = propDescriptorOf(
+      (attribute.name as t.JSXIdentifier).name,
+      attrExpr(attribute) as t.Expression,
+      scope,
+      environment,
+    );
   }
 
   return props;
+}
+
+/**
+ * A prop's descriptor (see extractProps): a callback, a list, a constant, or a runtime expression.
+ *
+ * @param propName  The prop's name.
+ * @param node  Its value.
+ * @param scope  Compile-time constants in reach where the value is written.
+ * @param environment  The expression environment there.
+ *
+ * @returns The descriptor.
+ */
+export function propDescriptorOf(
+  propName: string,
+  node: t.Expression,
+  scope: Scope,
+  environment: Env,
+): PropDescriptor {
+  // A callback prop (inline arrow, caller's useCallback or forwarded prop) is an ` fn `, resolved at its handler.
+  if (isFn(node)) {
+    return {isCallback: true, node};
+  }
+
+  if (node.type === 'Identifier' && environment.callbacks?.has(node.name)) {
+    return {isCallback: true, node: environment.callbacks.get(node.name)!};
+  }
+
+  // A forwarded callback prop keeps its original {node, env, state}.
+  if (node.type === 'Identifier' && environment.functionProps?.has(node.name)) {
+    return {isCallback: true, ...environment.functionProps.get(node.name)!};
+  }
+
+  // A list state passes as it is, and so does a list filtered or sorted in render.
+  const listState =
+    node.type === 'Identifier'
+      ? environment.state.get(node.name)
+      : derivedListOf(node, environment);
+  if (listState?.kind === 'list') {
+    return {static: 'list', list: listState};
+  }
+
+  // Any other prop folds to a constant when it can, else becomes a runtime expression. A list's item by index
+  // passes as it is, and an array or object built from runtime values folds with those values kept as runtime
+  // reads.
+  try {
+    return {
+      static: true,
+      value: bindConst(propName, evalStatic(node, scope, 'boot')),
+    };
+  } catch {
+    const item = listItemOf(node, environment);
+    return item
+      ? {
+          static: false,
+          ...item,
+          source: {kind: 'local', local: item, location: node.loc?.start},
+          expression: {kind: 'local', local: item, type: STRUCT},
+        }
+      : node.type === 'ArrayExpression' || node.type === 'ObjectExpression'
+        ? {static: true, value: foldRuntime(node, environment, scope)}
+        : {static: false, ...lowerSourcedWide(node, environment)};
+  }
 }
 
 /**
@@ -304,6 +323,55 @@ function bindParams(
   }
 
   return bindings;
+}
+
+/**
+ * Binds a prop's descriptor to a name in a component's tables: a callback to its callback props, a list state to its
+ * lists, a constant to its scope, and a runtime value to its locals.
+ *
+ * @param name  The name.
+ * @param descriptor  The prop.
+ * @param tables  The component's tables.
+ * @param environment  Where a callback without one of its own is lowered.
+ * @param state  The state table it is lowered with.
+ */
+export function bindProp(
+  name: string,
+  descriptor: PropDescriptor,
+  tables: PropTables,
+  environment: Env,
+  state: StateTable,
+): void {
+  if (descriptor.isCallback) {
+    tables.functionProps.set(name, {
+      node: descriptor.node,
+      environment: descriptor.environment ?? environment,
+      state: descriptor.state ?? state,
+    });
+  } else if (descriptor.static === 'list') {
+    tables.lists.set(name, descriptor.list);
+    delete tables.scope[name];
+  } else if (descriptor.static) {
+    setBinding(tables.scope, name, descriptor.value);
+  } else {
+    tables.locals.set(name, {
+      name: descriptor.name,
+      slotKind: descriptor.slotKind,
+      struct: descriptor.struct,
+      list: descriptor.list,
+      row: descriptor.row,
+      index: descriptor.index,
+      guarded: descriptor.guarded,
+      isBoolean: descriptor.isBoolean, // keep boolean-ness across the prop boundary (extractProps supplies it)
+      isLiteral: descriptor.isLiteral,
+      wide: descriptor.wide,
+      source: descriptor.source,
+      expression: descriptor.expression,
+    });
+
+    // A dynamic prop is a runtime binding; drop any same-named module const so no fold emits it instead.
+    delete tables.scope[name];
+  }
 }
 
 /**
@@ -396,6 +464,12 @@ export function emitComponent(
   // Bind each prop: a callback to fnProps, a constant to the child's scope, a runtime value to its locals, and a
   // list state to its state.
   const listProps = new Map<string, ListState>();
+  const tables: PropTables = {
+    scope: childScope,
+    locals: childLocals,
+    functionProps,
+    lists: listProps,
+  };
   for (const [name, descriptor] of bindParams(
     functionNode,
     extractProps(element.openingElement, scope, environment),
@@ -403,36 +477,7 @@ export function emitComponent(
   )) {
     // The children binding comes from the slot, not from a value prop.
     if (childrenRef?.kind === 'local' && name === childrenRef?.name) continue;
-    if (descriptor.isCallback) {
-      functionProps.set(name, {
-        node: descriptor.node,
-        environment: descriptor.environment ?? environment,
-        state: descriptor.state ?? state,
-      });
-    } else if (descriptor.static === 'list') {
-      listProps.set(name, descriptor.list);
-      delete childScope[name];
-    } else if (descriptor.static) {
-      setBinding(childScope, name, descriptor.value);
-    } else {
-      childLocals.set(name, {
-        name: descriptor.name,
-        slotKind: descriptor.slotKind,
-        struct: descriptor.struct,
-        list: descriptor.list,
-        row: descriptor.row,
-        index: descriptor.index,
-        guarded: descriptor.guarded,
-        isBoolean: descriptor.isBoolean, // keep boolean-ness across the prop boundary (extractProps supplies it)
-        isLiteral: descriptor.isLiteral,
-        wide: descriptor.wide,
-        source: descriptor.source,
-        expression: descriptor.expression,
-      });
-
-      // A dynamic prop is a runtime binding; drop any same-named module const so no fold emits it instead.
-      delete childScope[name];
-    }
+    bindProp(name, descriptor, tables, environment, state);
   }
 
   // Capture the call-site children with the caller's scope and env, for wherever the body renders them.
@@ -447,11 +492,15 @@ export function emitComponent(
   const prefix = `c${output.instanceCount++}_`;
 
   // Fold the child body's static consts as lowerApp does for App; they shadow same-named module consts.
+  let contextNames = new Set<string>();
   if (functionNode.body.type === 'BlockStatement') {
     // As in App: the body's own names, hook bindings included, shadow module ones before anything folds.
     for (const name of declaredNames(functionNode.body.body)) {
       delete childScope[name];
     }
+
+    // A value read from a context binds as a prop does, from the nearest provider above the instance.
+    contextNames = bindContextUses(functionNode.body, environment, tables);
 
     for (const statement of functionNode.body.body) {
       if (
@@ -463,6 +512,7 @@ export function emitComponent(
       for (const declarator of statement.declarations) {
         if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
         if (childLocals.has(declarator.id.name)) continue; // a dynamic prop of that name is already bound
+        if (contextNames.has(declarator.id.name)) continue;
         try {
           setBinding(
             childScope,
@@ -522,9 +572,11 @@ export function emitComponent(
     locals: childLocals,
     children,
     functionProps,
-    state: listProps.size
-      ? new Map([...childState.byName, ...listProps])
-      : childState.byName,
+    // A child without state of its own reads none of its caller's by name.
+    state: new Map([
+      ...(childState === state ? [] : childState.byName),
+      ...listProps,
+    ]),
     animations: childAnimations,
     refs: childRefs,
     pans: childPans,
@@ -590,6 +642,77 @@ export function emitComponent(
     options,
   );
   return {kind: 'component', id: root.id, name: componentName, prefix, root};
+}
+
+/**
+ * A context's provider where one element is wanted, as a component's root or a branch: the one element it wraps,
+ * emitted reading its value. It may wrap `{children}` that are one element.
+ *
+ * @param element  The provider.
+ * @param context  The context it provides.
+ * @param scope  Compile-time constants in reach.
+ * @param output  Everything emitted so far.
+ * @param environment  The expression environment.
+ * @param state  The component's state table.
+ * @param options  How the element is placed.
+ *
+ * @returns The element.
+ */
+export function emitProvider(
+  element: t.JSXElement,
+  context: string,
+  scope: Scope,
+  output: Out,
+  environment: Env,
+  state: StateTable,
+  options?: EmitOptions,
+): IrElement {
+  const provided = providedEnvironment(
+    element,
+    context,
+    scope,
+    environment,
+    state,
+  );
+  const rendered = (nodes: t.JSXElement['children']) =>
+    inlineFragments(nodes).filter(
+      child =>
+        !(child.type === 'JSXText' && !child.value.trim()) &&
+        !(
+          child.type === 'JSXExpressionContainer' &&
+          child.expression.type === 'JSXEmptyExpression'
+        ),
+    );
+  const children = rendered(element.children);
+  if (children.length === 1 && children[0].type === 'JSXElement') {
+    return emitNode(children[0], scope, output, provided, state, options);
+  }
+
+  // `{children}`, when they are one element: emitted in the caller's scope, reading this provider.
+  if (
+    children.length === 1 &&
+    children[0].type === 'JSXExpressionContainer' &&
+    isChildrenRef(children[0].expression, environment)
+  ) {
+    const slot = environment.children!;
+    const nodes = rendered(slot.nodes);
+    if (nodes.length === 1 && nodes[0].type === 'JSXElement') {
+      return emitNode(
+        nodes[0],
+        slot.scope,
+        output,
+        {...slot.environment, providers: provided.providers},
+        state,
+        options,
+      );
+    }
+  }
+
+  throw aotError(
+    `AOT: <${context}.Provider> must wrap one element here`,
+    "a provider adds no node of its own, so where one element is wanted (a component's root, a branch) it must " +
+      'wrap exactly one: put its children in a <View>.',
+  );
 }
 
 /**
@@ -1018,6 +1141,23 @@ export function emitChildren(
   const element = (built: IrElement) =>
     lowered.push({kind: 'element', element: built});
   for (const child of inlineFragments(children)) {
+    // A context's provider is no node of its own: its children are emitted in its place, reading its value.
+    if (child.type === 'JSXElement') {
+      const context = providedContextOf(child, environment);
+      if (context) {
+        lowered.push(
+          ...emitChildren(
+            child.children,
+            scope,
+            output,
+            providedEnvironment(child, context, scope, environment, state),
+            state,
+          ),
+        );
+        continue;
+      }
+    }
+
     // An element child is emitted as it is; an {expression} child is lowered by its shape below.
     if (child.type === 'JSXElement') {
       element(emitElementInto(child, scope, output, environment, state));
@@ -1049,13 +1189,17 @@ export function emitChildren(
     if (expression.type === 'JSXEmptyExpression') continue;
 
     if (isChildrenRef(expression, environment)) {
-      // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env.
+      // {children} / {props.children}: emit the captured call-site children, in the caller's scope/env. They read
+      // a context from the providers where they are rendered, as in React.
       lowered.push(
         ...emitChildren(
           environment.children!.nodes,
           environment.children!.scope,
           output,
-          environment.children!.environment,
+          {
+            ...environment.children!.environment,
+            providers: environment.providers,
+          },
           state,
         ),
       );

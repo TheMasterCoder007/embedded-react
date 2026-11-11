@@ -35,6 +35,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   updater can use locals, branches and loops, setting the state at each `return`.
 - Flow B: `useReducer`, inlined at each dispatch. Cases the action's type rules out are dropped, so a reducer can
   throw for an unknown type.
+- Flow B: `createContext`, `<C.Provider>` and `useContext`, resolved at compile time to the nearest provider.
+- Flow B: custom hooks, inlined at each call, so each call has state of its own.
 
 ### Changed
 
@@ -57,6 +59,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: a list row's item passed to a component no longer fails to compile.
 - Flow B: state a dep-driven effect sets is drawn at once, not at the next event, and a dep-driven effect no longer
   runs twice at boot.
+- Flow B: a component without state of its own no longer reads its caller's state in place of a prop or local of
+  the same name.
 
 ## [0.20.0] - 2026-11-05
 ### Added
