@@ -25,6 +25,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {traverse} from '@babel/core';
 import {aotError} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import {attrExpr} from './style-text.mts';
@@ -151,6 +152,51 @@ export function contextsOf(program: t.Program): Map<string, ContextRecord> {
   }
 
   return contexts;
+}
+
+/**
+ * Refuses a context's name where a binding of that name hides it, in `useContext(C)` or `<C.Provider>`, since contexts
+ * are found by name.
+ *
+ * @param ast  The parsed module.
+ */
+export function refuseHiddenContexts(ast: t.File): void {
+  const names = new Set(contextsOf(ast.program).keys());
+  if (!names.size) return;
+
+  const check = (
+    name: string,
+    scope: {getBinding(name: string): {scope: {block: t.Node}} | undefined},
+    node: t.Node,
+  ) => {
+    if (!names.has(name)) return;
+    if (scope.getBinding(name)?.scope.block.type === 'Program') return;
+    throw refusal(
+      `AOT: "${name}" here is not the context: a binding of that name hides it`,
+      `rename the binding, so ${name} names the context made with createContext.`,
+      node,
+    );
+  };
+
+  traverse.cache.clear();
+  traverse(ast, {
+    JSXOpeningElement(path) {
+      const name = path.node.name;
+      if (
+        name.type === 'JSXMemberExpression' &&
+        name.object.type === 'JSXIdentifier'
+      ) {
+        check(name.object.name, path.scope, path.node);
+      }
+    },
+    CallExpression(path) {
+      const argument = path.node.arguments[0];
+      if (isContextRead(path.node) && argument?.type === 'Identifier') {
+        check(argument.name, path.scope, argument);
+      }
+    },
+  });
+  traverse.cache.clear();
 }
 
 /**

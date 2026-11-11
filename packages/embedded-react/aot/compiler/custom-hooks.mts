@@ -154,17 +154,16 @@ function hooksOf(program: t.Program): Map<string, Hook> {
 }
 
 /**
- * The module's functions that are not hooks, which may call hooks: its components among them.
+ * The module's components, which may call hooks: functions named with a capital, as React names them. A hook called
+ * in any other function is left for the check that refuses it.
  *
  * @param program  The module.
- * @param hooks  The module's hooks.
  *
- * @returns The functions, with their names.
+ * @returns The components, with their names.
  */
-function callersOf(
-  program: t.Program,
-  hooks: Map<string, Hook>,
-): [string, FunctionNode][] {
+function componentsOf(program: t.Program): [string, FunctionNode][] {
+  const isComponentName = (name: string | undefined): name is string =>
+    Boolean(name && /^[A-Z]/.test(name));
   const callers: [string, FunctionNode][] = [];
   for (const statement of program.body) {
     const declaration =
@@ -173,12 +172,12 @@ function callersOf(
         ? statement.declaration
         : statement;
     if (declaration?.type === 'FunctionDeclaration') {
-      const name = declaration.id?.name ?? 'default';
-      if (!hooks.has(name)) callers.push([name, declaration]);
+      const name = declaration.id?.name;
+      if (isComponentName(name)) callers.push([name, declaration]);
     } else if (declaration?.type === 'VariableDeclaration') {
       for (const declarator of declaration.declarations) {
         const name = (declarator.id as t.Identifier).name;
-        if (isFn(declarator.init) && !hooks.has(name)) {
+        if (isFn(declarator.init) && isComponentName(name)) {
           callers.push([name, declarator.init]);
         }
       }
@@ -879,7 +878,7 @@ export function inlineCustomHooks(ast: t.File): void {
   for (const name of hooks.keys()) {
     expandHook(name, []);
   }
-  for (const [name, functionNode] of callersOf(program, hooks)) {
+  for (const [name, functionNode] of componentsOf(program)) {
     expandBody(functionNode, name, []);
   }
 

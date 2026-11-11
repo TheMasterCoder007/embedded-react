@@ -209,6 +209,16 @@ describe('custom hooks', () => {
         ),
       ),
     ).toThrow(/must be called at the top/);
+    // A helper is not a component, even with the call at its top.
+    expect(() =>
+      compile(
+        appOf(
+          COUNTER +
+            'function helper() { const {n} = useCounter(1); return n; }\n',
+          '  return <Pressable onPress={() => { helper(); }}><Text>x</Text></Pressable>;',
+        ),
+      ),
+    ).toThrow(/hook "useCounter" must be called at the top/);
   });
 
   it('refuses recursion, early returns and parameters it would have to set', () => {

@@ -86,7 +86,11 @@ import type {
   Scope,
   StateRecord,
 } from './types.mts';
-import {bindContextUses, contextsOf} from './contexts.mts';
+import {
+  bindContextUses,
+  contextsOf,
+  refuseHiddenContexts,
+} from './contexts.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
@@ -263,6 +267,7 @@ function lowerProgram(
   const ast = parseApp(source, options);
   normalizeUndefined(ast);
   inlineCustomHooks(ast);
+  refuseHiddenContexts(ast);
   const shadowedClock = findShadowedClockCalls(ast);
 
   // Seed the module scope with image imports (each is its baked-name string) so consts that use them can fold.

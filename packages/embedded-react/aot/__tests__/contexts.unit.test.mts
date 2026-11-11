@@ -153,4 +153,25 @@ describe('useContext', () => {
       ),
     ).toThrow(/<Theme.Provider> must wrap one element here/);
   });
+
+  it('refuses a context name a binding hides', () => {
+    expect(() =>
+      compile(
+        appOf(
+          "const Theme = createContext('light');\n" +
+            'function Shown({Theme}) { const theme = useContext(Theme); return <Text>{theme}</Text>; }\n',
+          '  return <View><Shown Theme="x"/></View>;',
+        ),
+      ),
+    ).toThrow(/"Theme" here is not the context/);
+    expect(() =>
+      compile(
+        appOf(
+          THEME +
+            'function Wrap({Theme}) { return <View><Theme.Provider value="dark"><Label/></Theme.Provider></View>; }\n',
+          '  return <View><Wrap Theme={1}/></View>;',
+        ),
+      ),
+    ).toThrow(/"Theme" here is not the context/);
+  });
 });
