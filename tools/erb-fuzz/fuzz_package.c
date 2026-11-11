@@ -129,7 +129,73 @@ static bool sensors_read(const int32_t* arguments, int32_t* result, void* contex
     return arguments[0] != INT32_MIN;
 }
 
-static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}};
+/** @brief The probe module the native-calls frame test calls, so its seed loads. Each wraps rather than overflows. */
+static uint32_t s_probe_count;
+static int32_t s_probe_stored;
+
+static bool probe_add(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = (int32_t)((uint32_t)arguments[0] + (uint32_t)arguments[1]);
+    return true;
+}
+
+static bool probe_half(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    const float half = (float)arguments[0] / 2.0f;
+    memcpy(result, &half, sizeof(half));
+    return true;
+}
+
+static bool probe_even(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = arguments[0] % 2 == 0;
+    return true;
+}
+
+static bool probe_flip(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = !arguments[0];
+    return true;
+}
+
+static bool probe_next(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = (int32_t)++s_probe_count;
+    return true;
+}
+
+static bool probe_store(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    s_probe_stored = arguments[0];
+    return true;
+}
+
+static bool probe_stored(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = s_probe_stored;
+    return true;
+}
+
+static const ErbNative s_natives[] = {
+    {"sensors.read", 1, "i:i", sensors_read},
+    {"probe.add", 1, "i:ii", probe_add},
+    {"probe.half", 1, "f:i", probe_half},
+    {"probe.even", 1, "b:i", probe_even},
+    {"probe.flip", 1, "b:b", probe_flip},
+    {"probe.next", 1, "i:", probe_next},
+    {"probe.store", 1, "v:f", probe_store},
+    {"probe.stored", 1, "f:", probe_stored},
+};
 
 static BitmapFont s_fonts[FONT_SLOTS];
 static GlyphInfo s_glyphs[GLYPH_SLOTS];

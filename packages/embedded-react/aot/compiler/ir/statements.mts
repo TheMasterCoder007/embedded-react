@@ -27,7 +27,7 @@ import type {
   ScalarState,
 } from '../types.mts';
 import type {IrAnimationStart} from './animations.mts';
-import type {IrExpr} from './expressions.mts';
+import type {IrExpr, IrNativeCall} from './expressions.mts';
 import type {IrText} from './text.mts';
 import type {IrTapeValue, IrVectorPaint} from './vectors.mts';
 
@@ -305,6 +305,12 @@ export interface IrUpdateVector {
 }
 
 /** A callback lowered to statements: an event handler, a timer, or a PanResponder callback. */
+/** A native method called for what it does, its result if any dropped. */
+export interface IrCallNative {
+  kind: 'callNative';
+  call: IrNativeCall;
+}
+
 export interface IrCallback {
   body: IrStmt[];
   /** A statement in the body set state, so it ends by re-applying state. */
@@ -343,4 +349,5 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrArmCleanup
   | IrAnimationStart
   | IrUpdateVector
+  | IrCallNative
 );

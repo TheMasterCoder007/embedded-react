@@ -279,6 +279,12 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
     case 'floatMath':
       expression.callArguments.forEach(argument => readExpr(argument, found));
       return;
+    case 'native':
+      found.untracked = true;
+      expression.call.callArguments.forEach(argument =>
+        readExpr(argument, found),
+      );
+      return;
     case 'arithmetic':
     case 'floatDivide':
     case 'narrowRemainder':

@@ -24,7 +24,8 @@
  * taps is "x,y x,y ...": each is a press and release, with a 16 ms tick after each half. "x,y>x2,y2" is a drag
  * instead: a press at x,y, DRAG_STEPS moves to x2,y2 with a tick after each, and a release there. The frame is
  * written as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when
- * it is left out), so a scenario can take its frame in the middle of an animation.
+ * it is left out), so a scenario can take its frame in the middle of an animation. It registers a probe native
+ * module, which the native-calls scenarios call.
  */
 
 #include "er_scene.h"
@@ -64,6 +65,89 @@
 /** @brief The firmware's arena. */
 #define ARENA_BYTES (64u * 1024u)
 static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - The probe module, which the native-calls scenarios call
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+static int32_t s_probe_count;
+static float s_probe_stored;
+
+static float probe_float(int32_t cell)
+{
+    float value;
+    memcpy(&value, &cell, sizeof(value));
+    return value;
+}
+
+static int32_t probe_cell(float value)
+{
+    int32_t cell;
+    memcpy(&cell, &value, sizeof(cell));
+    return cell;
+}
+
+static bool probe_add(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = arguments[0] + arguments[1];
+    return true;
+}
+
+static bool probe_half(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = probe_cell((float)arguments[0] / 2.0f);
+    return true;
+}
+
+static bool probe_even(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = arguments[0] % 2 == 0;
+    return true;
+}
+
+static bool probe_flip(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = !arguments[0];
+    return true;
+}
+
+static bool probe_next(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = ++s_probe_count;
+    return true;
+}
+
+static bool probe_store(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    s_probe_stored = probe_float(arguments[0]);
+    return true;
+}
+
+static bool probe_stored(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = probe_cell(s_probe_stored);
+    return true;
+}
+
+static const ErbNative s_natives[] = {
+    {"probe.add", 1, "i:ii", probe_add},
+    {"probe.half", 1, "f:i", probe_half},
+    {"probe.even", 1, "b:i", probe_even},
+    {"probe.flip", 1, "b:b", probe_flip},
+    {"probe.next", 1, "i:", probe_next},
+    {"probe.store", 1, "v:f", probe_store},
+    {"probe.stored", 1, "f:", probe_stored},
+};
 
 static void log_line(const char* line, void* context)
 {
@@ -166,6 +250,8 @@ int main(int argc, char** argv)
         .arena_bytes = sizeof(s_arena),
         .screen_width = (uint16_t)width,
         .screen_height = (uint16_t)height,
+        .natives = s_natives,
+        .native_count = sizeof(s_natives) / sizeof(s_natives[0]),
         .log = log_line,
     };
     ErbError error;

@@ -46,6 +46,7 @@ import type {
   IrExpr,
   IrGesture,
   IrItemPresent,
+  IrNativeCall,
   LayoutField,
   WholeHelper,
 } from '../ir/expressions.mts';
@@ -351,6 +352,8 @@ export class Codegen {
           : 'int';
       case 'clock':
         return 'int64';
+      case 'native':
+        return expression.call.import.result as ExprType;
       case 'itemField':
         return expression.field.kind;
       case 'itemPresent':
@@ -464,6 +467,8 @@ export class Codegen {
         );
         return register;
       }
+      case 'native':
+        return this.callNative(expression.call)!;
       case 'pi':
         return this.load(type, Math.PI);
       case 'toFloat':
@@ -608,6 +613,42 @@ export class Codegen {
           type,
         );
     }
+  }
+
+  /**
+   * Calls a native method: its arguments in consecutive registers, and its result in the one after them.
+   *
+   * @param call  The call.
+   * @param readsResult  The caller reads the result.
+   *
+   * @returns A register holding the result, or null when the method returns nothing or it isn't read.
+   */
+  private callNative(call: IrNativeCall, readsResult = true): Register | null {
+    const {builder} = this;
+    const {params, result} = call.import;
+    const values = call.callArguments.map((argument, index) =>
+      this.valueAs(argument, params[index]),
+    );
+    const types: RegisterType[] = [
+      ...params,
+      ...(result === 'void' ? [] : [result]),
+    ];
+    const run = types.length ? builder.consecutive(types) : [];
+    values.forEach((value, index) =>
+      builder.abc('MOVE', run[index].index, value.index),
+    );
+    builder.abx(
+      'CALLN',
+      run[0]?.index ?? 0,
+      this.program.tables.nativeImport(call.import),
+    );
+    if (result === 'void' || !readsResult) {
+      return null;
+    }
+    // A copy of its own, since a run is only ever released whole.
+    const register = builder.register(result);
+    builder.abc('MOVE', register.index, run.at(-1)!.index);
+    return register;
   }
 
   /**
@@ -1531,6 +1572,9 @@ export class Codegen {
         this.scoped(() =>
           builder.abc('TCLEAR', this.valueAs(statement.id, 'int').index),
         );
+        return;
+      case 'callNative':
+        this.scoped(() => this.callNative(statement.call, false));
         return;
       case 'clearList':
         builder.abx('CLEAR', 0, this.listPool(statement.list).slot.index);

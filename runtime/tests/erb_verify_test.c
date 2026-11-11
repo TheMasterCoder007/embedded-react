@@ -989,6 +989,20 @@ static void test_bytecode(void)
         EXPECT(ERB_ERROR_BYTECODE, "a native called with a float for an int");
     }
     {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(CALLN, 0, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 2, code, 2);
+        EXPECT(ERB_OK, "a native's result in the register after its arguments");
+    }
+    {
+        const uint8_t types[] = {ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(CALLN, 0, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 1, code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a native with no register for its result");
+    }
+    {
         const uint8_t types[] = {ERB_TYPE_NODE, ERB_TYPE_PAIR};
         const uint32_t code[] = {OP_ABC(BUILD, 0, 0, 0), 0u, OP_ABC(RET, 0, 0, 0)};
         base();

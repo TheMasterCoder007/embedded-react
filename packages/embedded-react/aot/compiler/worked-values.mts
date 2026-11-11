@@ -355,7 +355,7 @@ export function workedValueOf(
     call,
     name,
     helper,
-    environment,
+    {...environment, workedInRender: true},
     {byName: new Map(environment.state), bySetter: new Map()},
     new Out(new Map(), null as unknown as t.Program),
   );

@@ -60,6 +60,11 @@ import {
 import {helperValueOf, returnedExpression} from './helper-values.mts';
 import {isObjectTree, propertyKey} from './records.mts';
 import {
+  lowerNativeCall,
+  nativeCalleeOf,
+  readsNativeModule,
+} from './native-modules.mts';
+import {
   lowerTagTest,
   narrowOn,
   narrowed,
@@ -90,6 +95,7 @@ import type {
   IrString,
   IrTyped,
   LayoutField,
+  NativeType,
   WholeHelper,
 } from './ir/expressions.mts';
 import type {IrType, SlotWidths} from './ir/types.mts';
@@ -159,6 +165,13 @@ const WHOLE_BOOT_TYPES = new Set([
 /** The range of an int. */
 const INT_MIN = -(2 ** 31);
 export const INT_MAX = 2 ** 31 - 1;
+
+/** The type a native method's result is read as. */
+const NATIVE_TYPES: Record<NativeType, IrType> = {
+  int: INT,
+  float: FLOAT,
+  bool: BOOL,
+};
 
 /** The Math functions that keep a whole number whole. */
 const WHOLE_MATH = new Set([
@@ -2155,6 +2168,12 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
           );
         }
       }
+      if (readsNativeModule(node.name, environment)) {
+        throw aotError(
+          `AOT: the native module ${node.name} can only have its methods called`,
+          `call a method of it, as in ${node.name}.read(0); it isn't a value to keep or pass on.`,
+        );
+      }
       throw new Error(
         `AOT: cannot resolve identifier "${node.name}" in a dynamic expression`,
       );
@@ -2419,6 +2438,29 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
     }
     case 'CallExpression': {
       const callee = node.callee;
+      // `Sensors.read(channel)`: a native method's result.
+      const nativeCallee = nativeCalleeOf(node, environment);
+      if (nativeCallee) {
+        const call = lowerNativeCall(node, nativeCallee, environment);
+        if (call.import.result === 'void') {
+          const binding = (
+            (callee as t.MemberExpression).object as t.Identifier
+          ).name;
+          throw aotError(
+            `AOT: ${binding}.${nativeCallee.method}() returns nothing, so it has no value`,
+            'call it as a statement of its own.',
+          );
+        }
+        return {
+          kind: 'fixed',
+          expression: {
+            kind: 'native',
+            call,
+            type: NATIVE_TYPES[call.import.result],
+          },
+          location,
+        };
+      }
       // Date.now() / performance.now() → the engine clock, as 64-bit whole milliseconds.
       if (
         callee.type === 'MemberExpression' &&

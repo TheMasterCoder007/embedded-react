@@ -122,6 +122,14 @@ export interface ProgramBinding {
   target: number;
 }
 
+export interface ProgramImport {
+  /** Its name's string index. */
+  name: number;
+  version: number;
+  /** Its signature's string index. */
+  signature: number;
+}
+
 export interface ProgramInput {
   /** Its name's string index. */
   name: number;
@@ -249,6 +257,8 @@ export interface Program {
   bindings: ProgramBinding[];
   functions: ProgramFunction[];
   animations: ProgramAnim[];
+  /** Native methods the code calls. */
+  imports: ProgramImport[];
   /** Host-fed values, sorted by name. */
   inputs: ProgramInput[];
   interpolations: ProgramInterp[];
@@ -600,6 +610,16 @@ function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
         writer.u32(animation.delayMs);
         writer.u32(animation.to);
         animation.parameters.forEach(bits => writer.u32(bits));
+      }
+    });
+  }
+  if (program.imports.length) {
+    table(Table.imports, writer => {
+      for (const nativeImport of program.imports) {
+        writer.u16(nativeImport.name);
+        writer.u16(nativeImport.version);
+        writer.u16(nativeImport.signature);
+        writer.u16(0);
       }
     });
   }

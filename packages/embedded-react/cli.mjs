@@ -423,7 +423,7 @@ async function compileAppPackage(
   appPath,
   {screens = null, release = false} = {},
 ) {
-  const {compilePackage, bakeSvgArtifacts, packPackage} =
+  const {compilePackage, bakeSvgArtifacts, packPackage, readNativeInterfaces} =
     await import('./aot/compile.mts');
   const {bakeAssetPackBytes} = await import('./assets/index.mjs');
   const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
@@ -438,6 +438,8 @@ async function compileAppPackage(
   const result = compilePackage(source, basename(dirname(appPath)), {
     filename: appPath,
     svgArtifacts,
+    // Native module interfaces in local .ts files, read here so the compile stays pure.
+    nativeInterfaces: readNativeInterfaces(source, appDir),
     screen: screens?.[0] ?? null, // null without --screen
     screens,
     release,

@@ -54,5 +54,6 @@ export {Animated, useAnimatedValue} from './Animated.js';
 export {PanResponder} from './PanResponder.js';
 export {usePersistentState} from './usePersistentState.js';
 export {useHostValue} from './useHostValue.js';
+export {nativeModule} from './nativeModule.js';
 export {Easing} from './Easing.js';
 export {LayoutAnimation} from './LayoutAnimation.js';

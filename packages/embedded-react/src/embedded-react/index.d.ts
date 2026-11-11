@@ -929,6 +929,15 @@ export function usePersistentState<S>(
 ): [S, (value: S | ((prev: S) => S)) => void];
 
 export function useHostValue(initial: number): number;
+
+/** A whole number. A native method's `Int` is an int in C, where a `number` is a float. */
+export type Int = number;
+
+/**
+ * A module the firmware provides in C, declared at module level by an interface of its methods, which take and
+ * return Int, number, and boolean: `const Sensors = nativeModule<Sensors>('sensors', 1)`. Flow B only, for now.
+ */
+export function nativeModule<T>(name: string, version: number): T;
 export const Easing: {readonly [K in EasingName]: K} & {
   bezier(x1: number, y1: number, x2: number, y2: number): BezierEasing;
 };

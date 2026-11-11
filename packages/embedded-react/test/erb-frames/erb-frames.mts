@@ -46,6 +46,7 @@ import {
   bakeSvgArtifacts,
   compilePackage,
   packPackage,
+  readNativeInterfaces,
   resourceReport,
 } from '../../aot/compile.mts';
 import {bakeAssetPackBytes} from '../../assets/index.mjs';
@@ -641,6 +642,15 @@ const SCENARIOS: Scenario[] = [
     listCap: 6,
     taps: '32,48 32,48 32,48 84,48',
   },
+  // Buttons: next, read. The mount effect flips the probe's false to on, and the timer adds 10 to the ticks.
+  {name: 'native-calls', file: fixture('native-calls'), screen: PORTRAIT},
+  // Three nexts: total 1+2+3, half of 3, odd. Then read: on flips off, and kept is the stored 1.5 * 3.
+  {
+    name: 'native-calls-taps',
+    file: fixture('native-calls'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 32,20 84,20',
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},
@@ -1101,6 +1111,7 @@ async function compileScenario(
     filename: scenario.file,
     listCap: scenario.listCap,
     svgArtifacts: await bakeSvgArtifacts(source, sourceDirectory),
+    nativeInterfaces: readNativeInterfaces(source, sourceDirectory),
     screens: scenario.everySize
       ? undefined
       : (scenario.panels ?? [scenario.screen]).map(size),

@@ -22,8 +22,11 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {aotError} from '../diagnostics.mts';
+import {MAX_IMPORTS} from '../native-modules.mts';
 import {NONE} from './format.mts';
-import type {ProgramPropEntry} from './writer.mts';
+import type {NativeImport} from '../ir/expressions.mts';
+import type {ProgramImport, ProgramPropEntry} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Classes
@@ -39,7 +42,9 @@ export class ProgramTables {
   readonly const32: number[] = [];
   readonly const64: bigint[] = [];
   readonly propSets: ProgramPropEntry[][] = [];
+  readonly imports: ProgramImport[] = [];
   private readonly stringIndex = new Map<string, number>();
+  private readonly importIndex = new Map<string, number>();
   private readonly const32Index = new Map<number, number>();
   private readonly const64Index = new Map<bigint, number>();
   private readonly propSetIndex = new Map<string, number>();
@@ -75,6 +80,33 @@ export class ProgramTables {
    */
   constant64(bits: bigint): number {
     return intern(this.const64Index, this.const64, BigInt.asUintN(64, bits));
+  }
+
+  /**
+   * A native import's index, adding it the first time.
+   *
+   * @param nativeImport  The method.
+   *
+   * @returns Its index.
+   */
+  nativeImport(nativeImport: NativeImport): number {
+    const key = `${nativeImport.name} ${nativeImport.version} ${nativeImport.signature}`;
+    if (!this.importIndex.has(key) && this.imports.length === MAX_IMPORTS) {
+      throw aotError(
+        `AOT: an app may call at most ${MAX_IMPORTS} native methods`,
+        'call fewer native methods, or have one method do more.',
+      );
+    }
+    return intern(
+      this.importIndex,
+      this.imports,
+      {
+        name: this.string(nativeImport.name),
+        version: nativeImport.version,
+        signature: this.string(nativeImport.signature),
+      },
+      key,
+    );
   }
 
   /**
