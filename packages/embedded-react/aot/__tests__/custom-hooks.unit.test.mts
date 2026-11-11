@@ -256,6 +256,18 @@ describe('custom hooks', () => {
     ).toThrow(/hook "usePoint" can only take named parameters/);
   });
 
+  it("refuses a hook's name a binding of the caller hides", () => {
+    expect(() =>
+      compile(
+        appOf(
+          COUNTER +
+            'function Row({useCounter}) { const {n} = useCounter(3); return <Text>{n}</Text>; }\n',
+          '  return <View><Row useCounter={1}/></View>;',
+        ),
+      ),
+    ).toThrow(/"useCounter" here is not the hook/);
+  });
+
   it('refuses a name the hook reads from the module that the caller hides', () => {
     expect(() =>
       compile(

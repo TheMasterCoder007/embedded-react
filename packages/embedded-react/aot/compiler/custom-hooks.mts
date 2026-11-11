@@ -495,6 +495,15 @@ export function inlineCustomHooks(ast: t.File): void {
     const callerPath = functionPath(caller);
     const callerScope = callerPath.scope;
 
+    // A binding of the caller's with the hook's name would be what JS calls.
+    if (callerScope.hasOwnBinding(name)) {
+      throw refusal(
+        `AOT: "${name}" here is not the hook: a binding of that name hides it`,
+        `rename the binding in ${callerName}, so ${name} names the hook.`,
+        call,
+      );
+    }
+
     // A name the hook reads from the module must mean the same where it is inlined.
     const copy = types.cloneNode(hooks.get(name)!.functionNode, true);
     const hookPath = functionPath(copy);
