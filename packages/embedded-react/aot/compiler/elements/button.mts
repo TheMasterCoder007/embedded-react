@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {evalStatic, evalStaticOrThrow} from '../static-eval.mts';
+import {evalStatic, evalStaticOrThrow, withUndefined} from '../static-eval.mts';
 import {attrExpr} from '../style-text.mts';
 import {emitNode} from '../nodes.mts';
 import {
@@ -158,7 +158,8 @@ export function emitButton(
 
 /**
  * A title as Button.js draws it, `title == null ? '' : String(title)`: worked out now when it folds, else
- * `String(title)`, so a boolean draws as "true" or "false" rather than nothing.
+ * `String(title)`, so a boolean draws as "true" or "false" rather than nothing. No value worked out at run time
+ * is null, so only a ternary's branches can be, and each is worked out on its own.
  *
  * @param title  The title.
  * @param scope  Compile-time constants in reach.
@@ -166,15 +167,61 @@ export function emitButton(
  * @returns The label's text.
  */
 function titleText(title: t.Expression, scope: Scope): t.Expression {
+  const folded = foldedTitle(title, scope);
+  if (folded) return folded;
+
+  if (title.type === 'ConditionalExpression')
+    return titleBranches(title, scope);
+
+  return {
+    type: 'CallExpression',
+    callee: {type: 'Identifier', name: 'String'},
+    arguments: [title],
+  };
+}
+
+/**
+ * A ternary title with each branch that folds as its text, `null` and `undefined` as nothing. A branch worked
+ * out at run time stays as written, since text lowers no call inside a ternary.
+ *
+ * @param title  The ternary.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The ternary of texts.
+ */
+function titleBranches(
+  title: t.ConditionalExpression,
+  scope: Scope,
+): t.ConditionalExpression {
+  const branch = (expression: t.Expression): t.Expression =>
+    foldedTitle(expression, scope) ??
+    (expression.type === 'ConditionalExpression'
+      ? titleBranches(expression, scope)
+      : expression);
+  return {
+    ...title,
+    consequent: branch(title.consequent),
+    alternate: branch(title.alternate),
+  };
+}
+
+/**
+ * A title that folds, as its text.
+ *
+ * @param title  The title.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns The text, or null when it is worked out at run time.
+ */
+function foldedTitle(
+  title: t.Expression,
+  scope: Scope,
+): t.StringLiteral | null {
   try {
-    const value = evalStatic(title, scope);
+    const value = evalStatic(title, withUndefined(scope));
     return {type: 'StringLiteral', value: value == null ? '' : String(value)};
   } catch {
-    return {
-      type: 'CallExpression',
-      callee: {type: 'Identifier', name: 'String'},
-      arguments: [title],
-    };
+    return null;
   }
 }
 

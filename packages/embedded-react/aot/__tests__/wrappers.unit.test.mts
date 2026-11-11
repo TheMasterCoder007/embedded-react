@@ -154,6 +154,23 @@ describe('Button', () => {
     expect(textOf(fromState)).toBe('?');
   });
 
+  it('draws a null or undefined branch of a title as nothing', () => {
+    for (const nothing of ['null', 'undefined']) {
+      const [pressable] = nodesOf(
+        lower(
+          appOf(
+            '',
+            '  const [on, setOn] = useState(false);\n' +
+              `  return <Button title={on ? 'Save' : ${nothing}} onPress={() => setOn(!on)} />;`,
+          ),
+        ).root,
+      );
+      expect(JSON.stringify(pressable.children)).toContain(
+        '"alternate":{"kind":"string","value":""',
+      );
+    }
+  });
+
   it('refuses a disabled worked out at run time', () => {
     expect(() =>
       lower(
