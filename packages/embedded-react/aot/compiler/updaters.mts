@@ -184,36 +184,49 @@ export function returnedValues(body: t.BlockStatement): t.Expression[] {
   return values;
 }
 
+/** How a body that works out a value is named in its errors. */
+interface PureWording {
+  /** What a bare `return` must give. */
+  gives: string;
+  /** How to give it. */
+  returnHint: string;
+  /** How to keep side effects out of it. */
+  pureHint: string;
+  /** How to stop a `throw` being reached. */
+  throwHint: string;
+  /** How to return on every path. */
+  endHint: string;
+}
+
 /**
- * Checks an updater's body only works out the new value: it writes only its own locals in scope where it writes
- * them, and calls nothing as a statement or to start a timer. Each way out returns the new value.
+ * Checks a body only works out a value: it writes only its own locals in scope where it writes them, calls
+ * nothing as a statement or to start a timer, and throws nothing. Each way out returns the value.
  *
- * @param updater  The updater.
+ * @param body  The body.
  * @param what  What it is, for errors.
+ * @param wording  How its errors put it.
  */
-function checkUpdaterBody(
-  updater: FunctionNode & {body: t.BlockStatement},
+function checkPureBody(
+  body: t.BlockStatement,
   what: string,
+  wording: PureWording,
 ): void {
-  const statements = updater.body.body;
-  const pureHint =
-    `${what.startsWith('reducer') ? 'a reducer' : 'an updater'} only works out the new value from the old ` +
-    'one. Set other state, write refs and start timers in the handler, outside it.';
+  const statements = body.body;
+  const {pureHint} = wording;
   eachStatement(statements, (statement, inScope) => {
     if (statement.type === 'ThrowStatement') {
       throw locatedError(
         statement,
         `AOT: ${what} can reach a \`throw\``,
-        "Flow B has no exceptions. A reducer's throw for an action type no dispatch sends is dropped, so " +
-          'test the type directly: switch (action.type) { … default: throw … }.',
+        wording.throwHint,
       );
     }
 
     if (statement.type === 'ReturnStatement' && !statement.argument) {
       throw locatedError(
         statement,
-        `AOT: each \`return\` in ${what} must give the new value`,
-        'return the value to set, e.g. return next;',
+        `AOT: each \`return\` in ${what} must give ${wording.gives}`,
+        wording.returnHint,
       );
     }
 
@@ -253,18 +266,67 @@ function checkUpdaterBody(
         ? `AOT: ${what} can't call ${called}`
         : written
           ? `AOT: ${what} can only write its own locals`
-          : `AOT: ${what} can only work out the new value`,
+          : `AOT: ${what} can only work out ${wording.gives}`,
       pureHint,
     );
   });
 
   if (!exits(statements)) {
     throw locatedError(
-      updater.body,
-      `AOT: ${what} can end without returning the new value`,
-      'return the value to set at the end of the updater, and from each branch that ends it.',
+      body,
+      `AOT: ${what} can end without returning ${wording.gives}`,
+      wording.endHint,
     );
   }
+}
+
+/**
+ * Checks an updater's body only works out the new value (see checkPureBody).
+ *
+ * @param updater  The updater.
+ * @param what  What it is, for errors.
+ */
+function checkUpdaterBody(
+  updater: FunctionNode & {body: t.BlockStatement},
+  what: string,
+): void {
+  checkPureBody(updater.body, what, {
+    gives: 'the new value',
+    returnHint: 'return the value to set, e.g. return next;',
+    pureHint:
+      `${what.startsWith('reducer') ? 'a reducer' : 'an updater'} only works out the new value from the old ` +
+      'one. Set other state, write refs and start timers in the handler, outside it.',
+    throwHint:
+      "Flow B has no exceptions. A reducer's throw for an action type no dispatch sends is dropped, so " +
+      'test the type directly: switch (action.type) { … default: throw … }.',
+    endHint:
+      'return the value to set at the end of the updater, and from each branch that ends it.',
+  });
+}
+
+/**
+ * Checks the body of a memo or a helper used as a value, which loops, only works out its value (see checkPureBody).
+ *
+ * @param body  The body.
+ * @param what  What it is, for errors: `the useMemo for "total"` or `helper "sum"`.
+ * @param isMemo  It is a memo's.
+ */
+export function checkValueBody(
+  body: t.BlockStatement,
+  what: string,
+  isMemo: boolean,
+): void {
+  checkPureBody(body, what, {
+    gives: 'a value',
+    returnHint: 'return the value, e.g. return total;',
+    pureHint: isMemo
+      ? 'a memo works out a value without side effects. Set state in a handler or an effect.'
+      : 'a helper whose result is used works out a value without side effects. Call one that sets ' +
+        'state as a statement of its own.',
+    throwHint:
+      'Flow B has no exceptions. Return a value the caller can test instead.',
+    endHint: `return a value at the end of the ${isMemo ? 'memo' : 'helper'}, and from each branch that ends it.`,
+  });
 }
 
 /**

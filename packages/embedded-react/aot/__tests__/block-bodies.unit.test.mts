@@ -141,7 +141,7 @@ describe('useMemo with a block body', () => {
     expect(() => compile(source)).not.toThrow();
   });
 
-  it('refuses a let, a loop or a side effect, and one that can end without a value', () => {
+  it('refuses a side effect, and one that can end without a value', () => {
     const memo = (body: string) =>
       compile(
         appOf(
@@ -149,14 +149,8 @@ describe('useMemo with a block body', () => {
           '<Text>{t}</Text>',
         ),
       );
-    expect(() => memo('let s = 0; return s + n;')).toThrow(
-      /the useMemo for "t" works out a value, so its locals must be `const x = …`/,
-    );
-    expect(() => memo('for (const k of [1, 2]) return k; return n;')).toThrow(
-      /the useMemo for "t" works out a value, so it can't loop yet/,
-    );
     expect(() => memo('setN(1); return n;')).toThrow(
-      /the useMemo for "t" works out a value, so it can only declare consts, branch and return/,
+      /the useMemo for "t" works out a value, so it can only declare locals, branch, loop and return/,
     );
     expect(() => memo('if (n > 1) return 1;')).toThrow(
       /the useMemo for "t" works out a value, but can end without returning one/,

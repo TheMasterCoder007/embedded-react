@@ -71,6 +71,7 @@ import {
   listReads,
   nodeReads,
   vectorReads,
+  workedReads,
 } from '../ir/reads.mts';
 import {armedFlag} from '../ir/functions.mts';
 import {AnimationPlan, doneFunctions, startPressFade} from './animations.mts';
@@ -875,6 +876,11 @@ function planSlots(
   const locals = new Set<string>();
   for (const body of bodies(app)) {
     stringLocals(body, locals);
+  }
+  for (const state of app.state) {
+    if (state.kind === 'scalar' && state.worked) {
+      stringLocals(state.worked.rebuild, locals);
+    }
   }
   for (const name of locals) {
     if (!slots.hoisted.has(name)) {
@@ -1734,8 +1740,12 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
   const derivedLists = lowering.app.state.flatMap(state =>
     state.kind === 'list' && state.derived ? [state] : [],
   );
+  const workedValues = lowering.app.state.flatMap(state =>
+    state.kind === 'scalar' && state.worked ? [state] : [],
+  );
   if (
     !derivedLists.length &&
+    !workedValues.length &&
     !updated.length &&
     !setOnce.length &&
     !drawings.length &&
@@ -1779,10 +1789,24 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
 
   const end = builder.label();
 
-  // The lists filtered or sorted in render, rebuilt first, as what reads them counts what they read.
-  for (const list of derivedLists) {
-    whenRead(listReads(list), () =>
-      codegen.scoped(() => codegen.statements(list.derived!.rebuild)),
+  // The lists filtered or sorted in render, and the values memos and helpers loop for, worked out first, each after
+  // what it reads, as what reads them counts what they read.
+  const rebuilds = [
+    ...derivedLists.map(list => ({
+      order: list.derived!.order ?? 0,
+      reads: () => listReads(list),
+      statements: list.derived!.rebuild,
+    })),
+    ...workedValues.map(value => ({
+      order: value.worked!.order,
+      reads: () => workedReads(value),
+      statements: value.worked!.rebuild,
+    })),
+  ];
+  if (workedValues.length) rebuilds.sort((a, b) => a.order - b.order);
+  for (const {reads, statements} of rebuilds) {
+    whenRead(reads(), () =>
+      codegen.scoped(() => codegen.statements(statements)),
     );
   }
 

@@ -279,7 +279,9 @@ function eachStatement(app: IrApp, visit: (statement: IrStmt) => void): void {
     output.panResponders,
     output.vectors,
     app.boot,
-    app.state.map(state => (state.kind === 'list' ? state.derived : null)),
+    app.state.map(state =>
+      state.kind === 'list' ? state.derived : state.worked,
+    ),
   ]);
 }
 

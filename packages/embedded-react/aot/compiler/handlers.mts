@@ -126,6 +126,7 @@ import type {
   StateRecord,
   StateTable,
   StatementContext,
+  ValueSink,
 } from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -2414,18 +2415,27 @@ export function lowerStmts(
     ? bodyEnvironment
     : {...bodyEnvironment, outsideRender: true};
   const lowered: IrStmt[] = [];
-  // What each statement lowers to is marked with where it is, once the next one starts.
+  // What each statement lowers to is marked with where it is, once the next one starts, after the values a helper
+  // loops for that it reads.
   let from = 0;
   let location: SourcePosition | undefined;
+  let before: ValueSink | undefined;
+  const settle = () => {
+    if (before?.statements.length)
+      lowered.splice(from, 0, ...before.statements);
+    markLoc(lowered, from, location);
+  };
   for (
     let statementIndex = 0;
     statementIndex < statements.length;
     statementIndex++
   ) {
-    markLoc(lowered, from, location);
+    settle();
     const statement = statements[statementIndex];
     from = lowered.length;
     location = startOf(statement);
+    before = {statements: [], state, output: context.output};
+    environment = {...environment, before};
 
     // `const x = …` declares a local that the statements after it can read.
     if (statement.type === 'VariableDeclaration') {
@@ -2433,7 +2443,16 @@ export function lowerStmts(
       const queue: (t.VariableDeclarator | ObjectBinding)[] = [
         ...statement.declarations,
       ];
+      // Each initializer's looping values go just before it, as a later one may read an earlier local.
+      const sink = before;
+      let declaratorFrom = lowered.length;
+      const nextDeclarator = () => {
+        lowered.splice(declaratorFrom, 0, ...sink.statements);
+        sink.statements = [];
+        declaratorFrom = lowered.length;
+      };
       while (queue.length) {
+        nextDeclarator();
         const entry = queue.shift()!;
         if (!('type' in entry)) {
           const locals = new Map(environment.locals);
@@ -2641,6 +2660,7 @@ export function lowerStmts(
         };
       }
 
+      nextDeclarator();
       continue;
     }
 
@@ -2749,8 +2769,10 @@ export function lowerStmts(
         continue;
       }
 
-      // `return setX(…)` still sets it.
-      if (
+      // A body that works out a value keeps what it returns; elsewhere `return setX(…)` still sets it.
+      if (context.returnsValue && argument) {
+        lowered.push(...context.returnsValue(argument, environment));
+      } else if (
         argument?.type === 'CallExpression' ||
         argument?.type === 'AssignmentExpression' ||
         argument?.type === 'UpdateExpression'
@@ -2827,7 +2849,7 @@ export function lowerStmts(
     );
   }
 
-  markLoc(lowered, from, location);
+  settle();
   return lowered;
 }
 

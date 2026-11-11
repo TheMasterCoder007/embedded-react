@@ -141,6 +141,23 @@ export interface ScalarState extends StateSlot {
   bootValue?: BootValue;
   /** The boot value it starts at; `initial` is then what that is on the build's panel. */
   bootInitial?: IrBootSlot;
+  /** A value a memo or a helper works out with a loop in render, which the update works out again. */
+  worked?: WorkedValue;
+}
+
+/** How the update works out a value a memo or a helper loops for in render. */
+export interface WorkedValue {
+  /** Works it out into its state. */
+  rebuild: IrStmt[];
+  /** When it was made, among these and the lists worked out in render, so each is rebuilt after what it reads. */
+  order: number;
+}
+
+/** Where a handler, effect, or timer works out a value a helper loops for: before the statement that reads it. */
+export interface ValueSink {
+  statements: IrStmt[];
+  state: StateTable;
+  output: Out;
 }
 
 /** A list state: a fixed-capacity struct array and a count. */
@@ -178,8 +195,10 @@ export interface DerivedList {
   steps: OrderStep[];
   /** Rebuilds it: the rows the filters keep, in the order the sorts leave them, or a string's pieces. */
   rebuild: IrStmt[];
-  /** What the rebuild works out (tests and compare functions, or the split's string), for what it reads. */
+  /** What the rebuild works out (tests and compare functions or the split's string), for what it reads. */
   tests: IrExpr[];
+  /** When it was made, among these and the values worked out in render (see WorkedValue). */
+  order?: number;
 }
 
 export type StateRecord = ScalarState | ListState;
@@ -431,6 +450,10 @@ export interface Env {
   derivedLists?: Map<t.Node, Map<string, ListState>>;
   /** Helpers being inlined, so a recursive one is refused. */
   inlining?: ReadonlySet<string>;
+  /** Values memos and helpers loop for in render, by the call, then the component instance and its arguments. */
+  workedValues?: Map<t.Node, Map<string, ScalarState>>;
+  /** Where the statement being lowered works out a value a helper loops for. */
+  before?: ValueSink;
   /** Lists a handler, effect, or timer splits a string into, by the `const` that names them, then the component instance. */
   splitLists?: Map<t.Node, Map<string, ListState>>;
   /** The module's contexts. */
@@ -455,6 +478,8 @@ export interface StatementContext {
   usedReturn?: boolean;
   /** The body is a dep-driven effect. */
   dependencyDriven?: boolean;
+  /** The body works out a value: each `return` gives it, as these statements. */
+  returnsValue?: (argument: t.Expression, environment: Env) => IrStmt[];
   /** The loops around the statements being lowered, innermost last: the lists each visits or is bounded by. */
   loops?: ListState[][];
   /** The body's locals become slots named `<prefix><name>`, declared into `declarations`: its cleanup

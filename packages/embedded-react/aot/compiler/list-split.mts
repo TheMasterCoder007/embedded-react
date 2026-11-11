@@ -30,6 +30,7 @@ import {
   rethrowFoldLimit,
   splitProblem,
 } from './static-eval.mts';
+import {nextRebuild} from './worked-values.mts';
 import type * as t from '@babel/types';
 import type {IrExpr} from './ir/expressions.mts';
 import type {IrSplitItems, IrStmt} from './ir/statements.mts';
@@ -275,6 +276,7 @@ export function splitListOf(node: t.Node, environment: Env): ListState | null {
     steps: [],
     rebuild: [statement],
     tests: splitValuesOf(statement),
+    order: nextRebuild(),
   };
 
   if (!lists.has(node)) lists.set(node, new Map());

@@ -71,8 +71,8 @@ while the code that breaks it is still one line.
 - `useState`, `setState` (including the updater form), `useEffect` with an array-literal dependency
   list and an optional cleanup as its last statement, `useRef`, `useCallback`, `useMemo`, and
   `useAnimatedValue` with a constant initial value (every `Animated` call drives one).
-- `useMemo` can have a block body, worked out like a helper that returns a value (see Handlers): `const`s, `if`,
-  `switch` and a `return` on every path, but no loop yet. An updater can have a block body too:
+- `useMemo` can have a block body, worked out like a helper that returns a value (see Handlers): locals, `if`,
+  `switch`, loops and a `return` on every path. An updater can have a block body too:
   `setN(v => { const next = v + 1; if (next > 9) return 0; return next; })`. It can use locals, branches, and loops,
   and each `return` gives the new value. It can't set other state, call a helper as a statement, start a timer, or
   write a local from outside it.
@@ -181,8 +181,16 @@ and `.start()` or `.stop()` on any `Animated` animation or composition. `while` 
 
 Helper functions are inlined where they are called, and a helper cannot call itself. One called as a statement may
 do anything a handler does, and its `return` leaves only the helper. One whose result is used, in a handler or in
-render, works out a value: it may declare `const`s, branch with `if` and `switch`, and must return a value on every
-path. It can't loop yet; loop in the handler instead. Only a helper that returns on one path can build text with `+` or a template literal.
+render, works out a value: it may declare locals, branch with `if` and `switch`, loop, and must return a value on
+every path. It can't set state, call a helper as a statement, or write a local from outside it. Only a helper that
+returns on one path can build text with `+` or a template literal. A helper can be passed a list, which it reads or
+loops over as the list.
+
+A memo or helper that loops (or declares a `let`) can't be one expression, so it runs as statements. Its `return`s
+must all give numbers, all booleans or all strings. In a handler, effect or timer it runs just before the statement
+that calls it. In render it keeps its value in a slot of its own, worked out again in the update, before anything
+that reads it, when what its loop reads changes. Each component instance has its own. One can't be called inside a
+list row; work it out for the whole list in a `useMemo` instead.
 `setInterval`/`setTimeout` callbacks must be inline functions. `updateText` is Flow A only.
 
 ## Styles and colours

@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {ListState, Local, StateRecord} from '../types.mts';
+import type {IrStmt} from './statements.mts';
 import type {IrExpr} from './expressions.mts';
 import type {IrNode, IrPropValue, IrShow} from './nodes.mts';
 import type {IrSource} from './source.mts';
@@ -47,6 +48,10 @@ interface ReadsFound {
   boot?: boolean;
   /** The filtered and sorted lists walked so far, whose rebuilds read their own rows. */
   derived?: Set<ListState>;
+  /** The values worked out with a loop walked so far. */
+  worked?: Set<StateRecord>;
+  /** The locals a worked value's statements declare, which read only what they are set from. */
+  internal?: Set<string>;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -61,7 +66,7 @@ interface ReadsFound {
  * @param found  What the walk has found.
  */
 function readLocal(local: Local, found: ReadsFound): void {
-  if (local.visit) return;
+  if (local.visit || (local.name && found.internal?.has(local.name))) return;
   if (local.list) {
     readList(local.list, found);
     if (local.through) {
@@ -101,6 +106,90 @@ function readList(list: ListState, found: ReadsFound): void {
 }
 
 /**
+ * Records what reading a state depends on: a value worked out with a loop is worked out again from what its
+ * statements read, which a state write flags.
+ *
+ * @param state  The state.
+ * @param found  What the walk has found.
+ */
+function readState(state: StateRecord, found: ReadsFound): void {
+  if (state.kind === 'list' || !state.worked) {
+    found.states.add(state);
+    return;
+  }
+  found.worked ??= new Set();
+  if (found.worked.has(state)) return;
+  found.worked.add(state);
+  const {rebuild} = state.worked;
+  found.internal ??= new Set();
+  declaredLocals(rebuild, found.internal);
+  readStatements(rebuild, found);
+}
+
+/**
+ * Collects the names of the locals statements declare, at any depth, loops' visit numbers included.
+ *
+ * @param statements  The statements.
+ * @param names  Collects the names.
+ */
+function declaredLocals(statements: IrStmt[], names: Set<string>): void {
+  for (const statement of statements) {
+    if (statement.kind === 'declareLocal') {
+      names.add(statement.name);
+    } else if (statement.kind === 'if') {
+      declaredLocals(statement.consequent, names);
+      declaredLocals(statement.alternate ?? [], names);
+    } else if (statement.kind === 'block') {
+      declaredLocals(statement.body, names);
+    } else if (statement.kind === 'loop') {
+      if (statement.visit?.name) names.add(statement.visit.name);
+      declaredLocals(statement.body, names);
+      declaredLocals(statement.step, names);
+    }
+  }
+}
+
+/**
+ * Records what the statements a value is worked out with read.
+ *
+ * @param statements  The statements.
+ * @param found  What the walk has found.
+ */
+function readStatements(statements: IrStmt[], found: ReadsFound): void {
+  for (const statement of statements) {
+    switch (statement.kind) {
+      case 'declareLocal':
+        readExpr(statement.initializer, found);
+        if (statement.text) readText(statement.text, found);
+        break;
+      case 'assignLocal':
+        readExpr(statement.value, found);
+        if (statement.text) readText(statement.text, found);
+        break;
+      case 'setState':
+        readExpr(statement.value, found);
+        break;
+      case 'setStateText':
+        readText(statement.text, found);
+        break;
+      case 'if':
+        readExpr(statement.test, found);
+        readStatements(statement.consequent, found);
+        readStatements(statement.alternate ?? [], found);
+        break;
+      case 'block':
+        readStatements(statement.body, found);
+        break;
+      case 'loop':
+        if (statement.test) readExpr(statement.test, found);
+        readStatements(statement.body, found);
+        readStatements(statement.step, found);
+        break;
+    }
+  }
+}
+
+/**
  * Records what an expression, before typing, reads.
  *
  * @param source  The expression.
@@ -113,7 +202,7 @@ function readSource(source: IrSource, found: ReadsFound): void {
     case 'boolean':
       return;
     case 'state':
-      found.states.add(source.state);
+      readState(source.state, found);
       return;
     case 'local':
       readLocal(source.local, found);
@@ -157,7 +246,7 @@ function readExpr(expression: IrExpr, found: ReadsFound): void {
     case 'pi':
       return;
     case 'state':
-      found.states.add(expression.state);
+      readState(expression.state, found);
       return;
     case 'boot':
       found.boot = true;
@@ -389,6 +478,33 @@ export function listReads(list: ListState): StateReads {
 export function listStates(list: ListState): Set<StateRecord> {
   const found: ReadsFound = {states: new Set(), untracked: false};
   readList(list, found);
+  return found.states;
+}
+
+/**
+ * What the update reads to work out a value a memo or a helper loops for in render.
+ *
+ * @param state  The value's state.
+ *
+ * @returns Its reads.
+ */
+export function workedReads(state: StateRecord): StateReads {
+  const found: ReadsFound = {states: new Set(), untracked: false};
+  readState(state, found);
+  return readsOf(found);
+}
+
+/**
+ * The state the update reads to work out a value a memo or a helper loops for in render, even beside something
+ * untracked.
+ *
+ * @param state  The value's state.
+ *
+ * @returns The state.
+ */
+export function workedStates(state: StateRecord): Set<StateRecord> {
+  const found: ReadsFound = {states: new Set(), untracked: false};
+  readState(state, found);
   return found.states;
 }
 

@@ -27,6 +27,7 @@ import {constantListOf, fieldType, lowerExprWide} from './expressions.mts';
 import {splitListOf} from './list-split.mts';
 import {evalStatic, foldScope, rethrowFoldLimit} from './static-eval.mts';
 import {INT} from './ir/types.mts';
+import {nextRebuild} from './worked-values.mts';
 import type * as t from '@babel/types';
 import type {IrExpr} from './ir/expressions.mts';
 import type {IrStmt} from './ir/statements.mts';
@@ -620,7 +621,7 @@ export function derivedListOf(
   ];
   const tests = testsOf(rebuild);
   checkReads(tests, chain.steps[0].what, environment);
-  list.derived = {source, steps, rebuild, tests};
+  list.derived = {source, steps, rebuild, tests, order: nextRebuild()};
 
   if (!lists.has(node)) lists.set(node, new Map());
   lists.get(node)!.set(key, list);
