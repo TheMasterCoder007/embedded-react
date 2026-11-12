@@ -52,6 +52,12 @@
  */
 #define ERB_FORMAT_MINOR_CHECKS 6u
 
+/**
+ * @brief The minor whose imports and native events name their optional module, and whose native event records are
+ * 12 bytes. Before it, every import is required and a native events table isn't read.
+ */
+#define ERB_FORMAT_MINOR_OPTIONAL 12u
+
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
 

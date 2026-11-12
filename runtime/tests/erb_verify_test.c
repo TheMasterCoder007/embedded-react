@@ -1247,6 +1247,21 @@ static void test_optional_modules(void)
     s_package_spec.native_events[0].optional = ERB_MAX_OPTIONAL_MODULES + 1u;
     EXPECT(ERB_ERROR_TABLE, "an event's optional module past the most");
 
+    /* Before minor 12 an import's module field is reserved and written as 0, which isn't optional module 0. */
+    base()->imports[0].optional = 1u;
+    s_package_spec.minor = ERB_FORMAT_MINOR_OPTIONAL - 1u;
+    s_config.native_count = 0;
+    EXPECT(ERB_ERROR_IMPORT, "a missing import before minor 12, whatever its reserved field");
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.minor = ERB_FORMAT_MINOR_OPTIONAL - 1u;
+    EXPECT(ERB_ERROR_TABLE, "a native events table before minor 12, whose records were 8 bytes");
+
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.strings[s_package_spec.native_events[0].signature] = "v:iz";
+    s_package_spec.native_events[0].optional = 1u;
+    s_package_spec.native_events[0].function = ERB_NONE;
+    EXPECT(ERB_ERROR_FUNCTION, "an unsubscribed event whose signature has an unknown code");
+
     {
         const uint8_t types[] = {ERB_TYPE_BOOL};
         const uint32_t code[] = {OP_ABX(AVAIL, 0, 0), OP_ABC(RET, 0, 0, 0)};
