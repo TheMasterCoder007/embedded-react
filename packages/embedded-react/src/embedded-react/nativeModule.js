@@ -14,17 +14,22 @@
  * limitations under the License.
  */
 
-// nativeModule — a module the firmware provides in C, declared by a TypeScript interface of its methods.
+// nativeModule — a module the firmware provides in C, declared by a TypeScript interface of its methods and events.
 //
 // Flow B (AOT): the compiler reads the interface and turns each method called into a native import, which the
-// runtime matches with what the firmware registers when it loads the package.
+// runtime matches with what the firmware registers when it loads the package. Each useNativeEvent is a handler the
+// runtime runs when the firmware posts the event, while its component is mounted.
 //
-// Flow A: the bundler reads the same interface and passes each method's signature, since the types are gone by
-// then. Each method is looked up in the firmware's natives (the bridge's __erNative) here, as the app loads, and
-// calls it through the bridge, which converts the arguments by the signature.
+// Flow A: the bundler reads the same interface and passes each method's and event's signature, since the types are
+// gone by then. Each is looked up in the firmware's natives (the bridge's __erNative) here, as the app loads. A method
+// calls the firmware through the bridge, which converts the arguments by the signature, and the bridge hands each
+// event the firmware posts to __erNativeEvent, which calls its subscribers.
 //
 // The simulators: the bundler also passes the module's mock, which stands in for the firmware. Its values are
-// converted as the bridge converts them, so the app sees what it would on a board.
+// converted as the bridge converts them, so the app sees what it would on a board. A mock that posts events is a
+// function, which is given `emit` and returns the methods.
+
+import {useEffect, useRef} from 'react';
 
 // What a value becomes in a C cell, by its signature code: as the bridge converts it.
 const CONVERSIONS = {
@@ -34,15 +39,51 @@ const CONVERSIONS = {
   v: () => undefined,
 };
 
-// A mock's method, called as the bridge calls the firmware's.
-function mockMethod(mock, name, method, signature) {
+// Each module's events, by event name: its signature and the handlers subscribed to it, or why it can't be used.
+const MODULE_EVENTS = new WeakMap();
+
+// The handlers subscribed to each of the firmware's events, by its index in the natives, as the bridge posts them.
+// An app-only hot reload evaluates the app again in this context, so every evaluation's modules share these: a post
+// reaches each mounted subscriber, whichever evaluation it came from.
+const HANDLERS_BY_INDEX = new Map();
+
+// Calls an event's handlers with its values; a handler that unsubscribes another doesn't skip it in this post.
+function deliver(handlers, values) {
+  for (const handler of [...handlers]) {
+    handler(...values);
+  }
+}
+
+// The bridge posts each event here: the event's index in the natives, and its values.
+function installDispatcher() {
+  globalThis.__erNativeEvent = (index, values) => {
+    const handlers = HANDLERS_BY_INDEX.get(index);
+    if (handlers) {
+      deliver(handlers, values);
+    }
+  };
+}
+
+// The arguments an event's values are, converted by its signature.
+function convertedValues(event, values) {
+  const parameters = event.signature.slice(2);
+  if (values.length !== parameters.length) {
+    throw new TypeError(
+      `${event.qualifiedName} is posted with ${parameters.length} value${parameters.length === 1 ? '' : 's'}, ` +
+        `not ${values.length}`,
+    );
+  }
+  return values.map((value, position) =>
+    CONVERSIONS[parameters[position]](value),
+  );
+}
+
+// A mock's method, called as the bridge calls the firmware's. `calls` counts the mock's calls running now.
+function mockMethod(implementation, name, method, signature, calls) {
   const qualifiedName = `${name}.${method}`;
-  const implementation = mock[method];
+  const found = implementation[method];
   // A method a plain object inherits, like toString, isn't the mock's.
-  if (
-    typeof implementation !== 'function' ||
-    implementation === Object.prototype[method]
-  ) {
+  if (typeof found !== 'function' || found === Object.prototype[method]) {
     throw new Error(`the mock of native module "${name}" has no ${method}()`);
   }
   const parameters = signature.slice(2);
@@ -57,17 +98,23 @@ function mockMethod(mock, name, method, signature) {
     const converted = callArguments.map((argument, position) =>
       CONVERSIONS[parameters[position]](argument),
     );
-    return convertResult(implementation.apply(mock, converted));
+    calls.running++;
+    try {
+      return convertResult(found.apply(implementation, converted));
+    } finally {
+      calls.running--;
+    }
   };
 }
 
 // @param {string} name  The module's name, as the firmware registers it.
 // @param {number} version  Its version.
-// @param {Record<string, string | {reason: string}>} methods  Each method's signature, or why it can't be called;
-//                                                              the bundler passes it.
-// @param {object | null} [mock]  In the simulators, the module's mock (its default export), or null when it has none.
-export function nativeModule(name, version, methods, mock) {
-  if (!methods) {
+// @param {{methods: Record<string, string | {reason: string}>, events: Record<string, string | {reason: string}>}}
+//        signatures  Each method's and event's signature, or why it can't be used; the bundler passes it.
+// @param {object | Function | null} [mock]  In the simulators, the module's mock (its default export), or null when
+//                                            it has none.
+export function nativeModule(name, version, signatures, mock) {
+  if (!signatures) {
     throw new Error(
       `native module "${name}" has no signatures; build the app with the embedded-react CLI, which reads its interface`,
     );
@@ -79,8 +126,63 @@ export function nativeModule(name, version, methods, mock) {
   }
   const host = globalThis.__erNative;
   const module = {};
-  for (const method of Object.keys(methods)) {
-    const signature = methods[method];
+  const events = new Map();
+  MODULE_EVENTS.set(module, {name, events});
+
+  // The events first, so a mock is given an emit that knows them.
+  for (const event of Object.keys(signatures.events)) {
+    const signature = signatures.events[event];
+    const qualifiedName = `${name}.${event}`;
+    if (typeof signature !== 'string') {
+      events.set(event, {qualifiedName, reason: signature.reason});
+      continue;
+    }
+    if (mock) {
+      events.set(event, {qualifiedName, signature, handlers: new Set()});
+      continue;
+    }
+    const index = host ? host.findEvent(qualifiedName, version, signature) : -1;
+    if (index < 0) {
+      throw new Error(
+        `missing native module: ${qualifiedName} (version ${version}, signature "${signature}")`,
+      );
+    }
+    if (!HANDLERS_BY_INDEX.has(index)) {
+      HANDLERS_BY_INDEX.set(index, new Set());
+    }
+    events.set(event, {
+      qualifiedName,
+      signature,
+      handlers: HANDLERS_BY_INDEX.get(index),
+    });
+    installDispatcher();
+  }
+
+  // A mock's emit posts as the firmware does, so it is refused while one of the mock's methods runs.
+  let implementation = mock;
+  const calls = {running: 0};
+  if (typeof mock === 'function') {
+    const emit = (event, ...values) => {
+      const entry = events.get(event);
+      if (!entry || !entry.signature) {
+        throw new Error(
+          entry
+            ? `${entry.qualifiedName} ${entry.reason}`
+            : `native module "${name}" has no event ${event}`,
+        );
+      }
+      const converted = convertedValues(entry, values);
+      if (calls.running) {
+        return false;
+      }
+      deliver(entry.handlers, converted);
+      return true;
+    };
+    implementation = mock(emit);
+  }
+
+  for (const method of Object.keys(signatures.methods)) {
+    const signature = signatures.methods[method];
     const qualifiedName = `${name}.${method}`;
     if (typeof signature !== 'string') {
       module[method] = () => {
@@ -88,8 +190,14 @@ export function nativeModule(name, version, methods, mock) {
       };
       continue;
     }
-    if (mock) {
-      module[method] = mockMethod(mock, name, method, signature);
+    if (implementation) {
+      module[method] = mockMethod(
+        implementation,
+        name,
+        method,
+        signature,
+        calls,
+      );
       continue;
     }
     const index = host ? host.find(qualifiedName, version, signature) : -1;
@@ -101,4 +209,35 @@ export function nativeModule(name, version, methods, mock) {
     module[method] = host.call.bind(host, index);
   }
   return module;
+}
+
+// useNativeEvent — runs `handler` with an event's values each time the firmware posts it, while the component is
+// mounted. The handler may change from render to render; the latest one runs.
+//
+// @param {object} module  A native module, as nativeModule() returns it.
+// @param {string} event  One of the events its interface declares.
+// @param {Function} handler  Called with the event's values.
+export function useNativeEvent(module, event, handler) {
+  const known = MODULE_EVENTS.get(module);
+  if (!known) {
+    throw new Error(
+      'useNativeEvent() takes a native module, as nativeModule() returns it',
+    );
+  }
+  const entry = known.events.get(event);
+  if (!entry) {
+    throw new Error(`native module "${known.name}" has no event ${event}`);
+  }
+  if (!entry.signature) {
+    throw new Error(`${entry.qualifiedName} ${entry.reason}`);
+  }
+  const latest = useRef(handler);
+  latest.current = handler;
+  useEffect(() => {
+    const subscriber = (...values) => latest.current(...values);
+    entry.handlers.add(subscriber);
+    return () => {
+      entry.handlers.delete(subscriber);
+    };
+  }, [entry]);
 }

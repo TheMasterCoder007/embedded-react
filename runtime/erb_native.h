@@ -18,12 +18,22 @@
 #define ERB_NATIVE_H
 
 /*
- * erb_native — the native functions the firmware offers an app's native modules. One table serves both flows: Flow B
- * takes it in ErbConfig, and Flow A in ErRuntimeConfig.
+ * erb_native — the native functions and events the firmware offers an app's native modules. One table serves both
+ * flows: Flow B takes it in ErbConfig, and Flow A in ErRuntimeConfig.
+ *
+ * An entry with no callback is an event. The firmware posts it by its index in the table, from the frame-loop task,
+ * with erb_native_post() in Flow B or er_runtime_native_post() in Flow A. The app's subscribed handlers run at once.
  */
 
 #include <stdbool.h>
 #include <stdint.h>
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Configuration
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Most parameters a native function or event may take. */
+#define ERB_NATIVE_MAX_PARAMETERS 16u
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Types
@@ -41,16 +51,16 @@
 typedef bool (*ErbNativeFn)(const int32_t* arguments, int32_t* result, void* context);
 
 /**
- * @brief One native function the firmware offers. The signature is the result, ':', then the parameters,
+ * @brief One native function or event the firmware offers. The signature is the result, ':', then the parameters,
  *        each one of i (int), b (bool) or f (float); v as the result means none. "i:if" takes an int and a
- *        float and returns an int.
+ *        float and returns an int. An event has no callback and returns nothing: "v:f" is posted with a float.
  */
 typedef struct
 {
     const char* name;
     uint16_t version;
     const char* signature;
-    ErbNativeFn callback;
+    ErbNativeFn callback; /**< NULL for an event. */
 } ErbNative;
 
 #endif

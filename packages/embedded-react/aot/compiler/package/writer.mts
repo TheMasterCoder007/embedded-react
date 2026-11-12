@@ -130,6 +130,16 @@ export interface ProgramImport {
   signature: number;
 }
 
+/** A native event's handler: the event as the firmware registers it, and the function it runs. */
+export interface ProgramNativeEvent {
+  /** Its name's string index. */
+  name: number;
+  version: number;
+  /** Its signature's string index. */
+  signature: number;
+  function: number;
+}
+
 export interface ProgramInput {
   /** Its name's string index. */
   name: number;
@@ -259,6 +269,8 @@ export interface Program {
   animations: ProgramAnim[];
   /** Native methods the code calls. */
   imports: ProgramImport[];
+  /** The handlers of the native events the app subscribes to. */
+  nativeEvents: ProgramNativeEvent[];
   /** Host-fed values, sorted by name. */
   inputs: ProgramInput[];
   interpolations: ProgramInterp[];
@@ -620,6 +632,16 @@ function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
         writer.u16(nativeImport.version);
         writer.u16(nativeImport.signature);
         writer.u16(0);
+      }
+    });
+  }
+  if (program.nativeEvents.length) {
+    table(Table.nativeEvents, writer => {
+      for (const nativeEvent of program.nativeEvents) {
+        writer.u16(nativeEvent.name);
+        writer.u16(nativeEvent.version);
+        writer.u16(nativeEvent.signature);
+        writer.u16(nativeEvent.function);
       }
     });
   }

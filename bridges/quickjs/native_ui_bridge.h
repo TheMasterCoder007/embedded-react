@@ -98,6 +98,19 @@ extern "C"
     void er_bridge_pump(JSContext* ctx);
 
     /**
+     * @brief Calls a JS function as the bridge calls an event handler: in a batch scope and inside React's
+     *        batcher, so whatever it sets renders and commits once. An exception it throws goes to the uncaught
+     *        handler.
+     *
+     * @param[in] ctx       Context the bridge was installed into.
+     * @param[in] callback  The function.
+     * @param[in] argc      Argument count (0..2).
+     * @param[in] argv      Arguments.
+     * @param[in] where     What threw, for the report, such as "native event".
+     */
+    void er_bridge_dispatch(JSContext* ctx, JSValueConst callback, int argc, JSValueConst* argv, const char* where);
+
+    /**
      * @brief The engine clock as 64 bits (`er_now_ms64`), so it keeps counting past the 32-bit wrap at
      *        ~49.7 days of uptime.
      *

@@ -25,6 +25,7 @@ import type {
   IrEffectFunction,
   IrHandler,
   IrMountEffect,
+  IrNativeEventHandler,
   IrStaticDecl,
   IrTimerFunction,
 } from './ir/functions.mts';
@@ -59,6 +60,8 @@ export class Out {
   /** Numbers the next <Svg> (which names its tapes). */
   svgCount = 0;
   readonly timerFunctions: IrTimerFunction[] = [];
+  /** useNativeEvent handlers, in the order they lower. */
+  readonly nativeEventHandlers: IrNativeEventHandler[] = [];
   /** What the build runs last: mount-once effects, and the first run of each dep-driven one. */
   readonly mountEffects: IrMountEffect[] = [];
   /** Animations' on_complete callbacks: completions, completion waits, and chains. */

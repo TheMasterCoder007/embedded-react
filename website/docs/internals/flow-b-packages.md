@@ -180,6 +180,7 @@ Every record's size is a multiple of 4. A table with a header array starts with 
 | 17  | `inputs`    | Host-fed values (`useHostValue`): `name u16`, `slot u16`                                                                                                                                                                                                                 |
 | 18  | `interps`   | Interpolations an animated value is bound through, 72 bytes each (since minor 1). See [Animations and vector tapes](#animations-and-vector-tapes)                                                                                                                        |
 | 19  | `keyboard`  | The on-screen keyboard's look and layout (since minor 3). See [The keyboard](#the-keyboard)                                                                                                                                                                              |
+| 21  | `events`    | Native events the package subscribes to (since minor 11): `name u16`, `version u16`, `signature u16` (the event, as the firmware registers it), `function u16` (its handler)                                                                                             |
 
 A template node record is `type u8`, `flags u8`, `children u16`, `props u16`, `handle u16`,
 `bindings u16`, `binding_count u8`, `reserved u8`. Nodes are listed in pre-order with a child count,
@@ -209,9 +210,10 @@ The codes these records hold, as `runtime/erb_format.h` defines them:
   interpolation). A color prop takes only an interpolation onto colors, as the engine binds one.
 - **Function kinds**: below `0x40`, a handler for that `EREventType`; `0x40` plus an
   `ERResponderQuery`, a query (returns a bool); then timer (`0x80`), effect (`0x81`), update
-  (`0x82`), boot (`0x83`), helper (`0x84`) and animation done (`0x85`). Only a helper can be called.
-  An entry point takes no parameters, except a handler's or query's one int: the row instance it was
-  built for. `params` counts register cells.
+  (`0x82`), boot (`0x83`), helper (`0x84`), animation done (`0x85`) and native event (`0x86`, since
+  minor 11). Only a helper can be called. An entry point takes no parameters, except a handler's or
+  query's one int, the row instance it was built for, and a native event handler's values, in its
+  event's types. `params` counts register cells.
 - **Inputs** are sorted by name, so names are unique, and the runtime can search them.
 - **Prop ids** are the engine ABI's, listed in `runtime/erb_props.c`.
 
@@ -538,6 +540,12 @@ The VM is never re-entered. That is what keeps the stack bound in the arena exac
 a fault: it only happens when events keep raising each other. A responder query must answer at once, so
 one that arrives while the VM runs says no.
 
+A native event the firmware posts with `erb_native_post()` runs its handler, entered with the event's values,
+then the update, as one event. It is never queued: one posted while the VM runs is refused, and the firmware
+posts it again next frame, so a burst of them can't fill the queue. The handler runs each `useNativeEvent` of the
+event whose component is mounted: from the conditions it is built under and its list row being in use, all read
+before any of them runs, as Flow A calls the subscribers it had when the event came.
+
 An effect is queued by `EFFECT` from the update (or from the boot function, for a mount effect) and runs
 after the pass, as its own run with its own budget, before any other queued event.
 
@@ -641,6 +649,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Calls     | `CALL` targets a helper later in the table, with matching parameter and result types, so the call graph has no cycle                                                                                                                                                           | recursive call                     |
 | Calls     | The deepest frame sum from any entry point fits the register stack region                                                                                                                                                                                                      | stack too deep                     |
 | Imports   | Every import resolves to a native function the firmware registered with the same name, version and signature                                                                                                                                                                   | missing native module _name_       |
+| Events    | Every native event handler is a native event function whose parameters are its event's, and the event resolves to one the firmware registered (with no callback) with the same name, version and signature                                                                     | missing native module _name_       |
 | Inputs    | Unique names, sorted, each on a slot of a type the host can set                                                                                                                                                                                                                | bad input                          |
 | Keyboard  | Whole records; each layer and row names the runs after the ones before it, with 1 to 255 rows or keys; every key a known type with valid strings, and one that types something has its text                                                                                    | malformed table                    |
 | Keyboard  | No more layers, rows and keys than `ERB_MAX_KEYBOARD_LAYERS`, `ERB_MAX_KEYBOARD_ROWS` and `ERB_MAX_KEYBOARD_KEYS`                                                                                                                                                              | needs more than firmware reserves  |
@@ -758,7 +767,8 @@ er_commit();
 ```
 
 A native's signature is its result, a colon, then its parameters, each `i` (int), `b` (bool) or `f`
-(float); `v` as the result means none. Firmware with fonts in its packages gives the runtime storage
+(float); `v` as the result means none. An entry with no callback is an event the firmware posts with
+`erb_native_post(index, values)`, from the frame loop. Firmware with fonts in its packages gives the runtime storage
 for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs, and extra glyphs, as many as its apps
 need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`
 receives the reported limits. The error screen is the engine's (`er_error_screen.h`): it shows the
@@ -766,7 +776,7 @@ reason, the amounts (`arena: needs 41,210 B, firmware reserves 32,768 B`) and th
 package that fails to load leaves a running app under it until the next good load.
 
 **Limits.** How large an app the firmware accepts is set by CMake options in `runtime/CMakeLists.txt`:
-`ERB_EVENT_BUDGET`, `ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`,
+`ERB_EVENT_BUDGET`, `ERB_MAX_FUNCTIONS`, `ERB_MAX_FUNCTION_WORDS`, `ERB_MAX_LOOPS`, `ERB_MAX_IMPORTS`, `ERB_MAX_NATIVE_EVENTS`,
 `ERB_MAX_KEYBOARD_KEYS`, `ERB_MAX_TEMPLATE_DEPTH` and `ERB_REPORT_PLACES`. The defaults suit most apps,
 and a package past one is rejected with the reason. The engine's pool sizes stay the engine's `ERUI_*`
 options. The runtime reads them at load time, so each is set once; its image name index follows

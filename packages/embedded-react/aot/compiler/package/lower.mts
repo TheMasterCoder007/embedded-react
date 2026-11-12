@@ -116,8 +116,10 @@ import type {IrCompletion} from '../ir/animations.mts';
 import type {
   IrDepEffect,
   IrMountEffect,
+  IrNativeEventHandler,
   IrPressFade,
 } from '../ir/functions.mts';
+import {MAX_NATIVE_EVENTS} from '../native-modules.mts';
 import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
 import type {IrCallback, IrStmt, IrUpdateVector} from '../ir/statements.mts';
 import type {
@@ -465,6 +467,7 @@ function bodies(app: IrApp): IrStmt[][] {
           : [],
     ),
     ...output.timerFunctions.map(timer => timer.callback!.body),
+    ...output.nativeEventHandlers.map(handler => handler.callback.body),
     ...output.effectFunctions.map(effectFunction =>
       effectFunction.kind === 'mount'
         ? effectFunction.body
@@ -1009,6 +1012,7 @@ function planSlots(
         : handler.kind === 'panEvent' && !!handler.event.callback?.updatesState,
     ) ||
     output.timerFunctions.some(timer => timer.callback!.updatesState) ||
+    output.nativeEventHandlers.some(handler => handler.callback.updatesState) ||
     output.mountEffects.some(mountUpdates) ||
     output.dependencyEffects.some(setsState) ||
     completionsOf(app).some(completion => completion.updatesState);
@@ -2110,6 +2114,74 @@ function timerBody(
 }
 
 /**
+ * The handlers of each native event the app subscribes to, in the order they lowered.
+ *
+ * @param handlers  Every useNativeEvent's handler.
+ *
+ * @returns Them, grouped by event.
+ */
+function byEvent(handlers: IrNativeEventHandler[]): IrNativeEventHandler[][] {
+  const groups = new Map<string, IrNativeEventHandler[]>();
+  for (const handler of handlers) {
+    const {name, version, signature} = handler.event;
+    const key = `${name} ${version} ${signature}`;
+    groups.set(key, [...(groups.get(key) ?? []), handler]);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * A native event's function: entered with its values, it runs each subscriber whose component is mounted. Whether
+ * each one is mounted is read before any of them runs, as Flow A calls the subscribers it had when the event came.
+ *
+ * @param handlers  The event's subscribers.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function.
+ */
+function nativeEventBody(
+  handlers: IrNativeEventHandler[],
+  lowering: Lowering,
+): ProgramFunction {
+  const {event} = handlers[0];
+  const builder = new FunctionBuilder(
+    FunctionKind.nativeEvent,
+    `native event ${event.name}`,
+  );
+  const values = event.params.map(type => builder.reserved(type));
+  const codegenOf = (handler: IrNativeEventHandler) =>
+    new Codegen(builder, lowering.slots, {
+      values: new Map(
+        handler.values.map((name, position) => [name, values[position]]),
+      ),
+    });
+  const mounted = handlers.map(handler => {
+    if (!handler.mounted) {
+      return null;
+    }
+    const test = handler.mounted;
+    const kept = builder.reserved('bool');
+    const codegen = codegenOf(handler);
+    codegen.scoped(() =>
+      builder.abc('MOVE', kept.index, codegen.condition(test).index),
+    );
+    return kept;
+  });
+  handlers.forEach((handler, index) => {
+    const skip = builder.label();
+    if (mounted[index]) {
+      builder.branch('JF', skip, mounted[index]);
+    }
+    codegenOf(handler).statements(handler.callback.body);
+    builder.place(skip);
+  });
+  if (handlers.some(handler => handler.callback.updatesState)) {
+    requestUpdate(codegenOf(handlers[0]), lowering);
+  }
+  return builder.finish(values.length);
+}
+
+/**
  * An animation completion's helper: entered with what it was passed, which the body reads as `finished`.
  *
  * @param completion  The completion.
@@ -2557,6 +2629,21 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
   for (const timer of output.timerFunctions) {
     lowering.slots.timerFunctions.set(timer.name, next++);
   }
+  if (output.nativeEventHandlers.length > MAX_NATIVE_EVENTS) {
+    throw aotError(
+      `AOT: the app subscribes to native events ${output.nativeEventHandlers.length} times, but a package holds ` +
+        `${MAX_NATIVE_EVENTS}`,
+      'each useNativeEvent counts once, and once for each row of a list it is in: subscribe in the component ' +
+        'that holds the list instead.',
+    );
+  }
+  const subscribed = byEvent(output.nativeEventHandlers);
+  const nativeEvents = subscribed.map(([{event}]) => ({
+    name: tables.string(event.name),
+    version: event.version,
+    signature: tables.string(event.signature),
+    function: next++,
+  }));
   lowering.effectFunctions = {
     checks: output.dependencyEffects.map(() => next++),
     mounts: output.mountEffects.map(() => next++),
@@ -2571,6 +2658,7 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     ...output.timerFunctions.map(timer =>
       timerBody(timer.name, timer.callback!, lowering),
     ),
+    ...subscribed.map(handlers => nativeEventBody(handlers, lowering)),
     ...output.dependencyEffects.map(effect => checkedEffect(effect, lowering)),
     ...output.mountEffects.map((_, index) => mountEffect(index, lowering)),
     ...doneFunctions(
@@ -2659,6 +2747,7 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     functions,
     animations: animations.animations,
     imports: tables.imports,
+    nativeEvents,
     inputs,
     interpolations: animations.interpolations,
     tapes: lowering.slots.vectors.tapes,

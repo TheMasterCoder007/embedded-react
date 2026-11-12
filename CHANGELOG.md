@@ -48,6 +48,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `ErRuntimeConfig::natives`, and a missing method stops the app when it loads.
 - The simulators run a native module on a JS mock, `sensors.mock.ts` beside its interface, with its values
   converted as on a board.
+- Native module events: the interface declares `events`, and `useNativeEvent(Sensors, 'reading', handler)` runs the
+  handler each time the firmware posts one, while its component is mounted. The firmware declares them in its
+  `ErbNative` table and posts with `erb_native_post()` or `er_runtime_native_post()`. A mock posts them with `emit`.
+  Packages are now format minor 11.
 
 ### Changed
 

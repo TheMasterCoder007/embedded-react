@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 10u
+#define ERB_FORMAT_MINOR 11u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -154,7 +154,8 @@ enum
     ERB_TABLE_INTERPOLATIONS = 18, /**< Since minor 1. */
     ERB_TABLE_KEYBOARD = 19,       /**< Since minor 3. */
     ERB_TABLE_CHECKS = 20,         /**< Since minor 6. */
-    ERB_TABLE_COUNT_ = 21,
+    ERB_TABLE_NATIVE_EVENTS = 21,  /**< Since minor 11. */
+    ERB_TABLE_COUNT_ = 22,
 };
 
 /** @brief Record sizes, in bytes. */
@@ -175,6 +176,7 @@ enum
 #define ERB_GRADIENT_SIZE 24u
 #define ERB_STOP_SIZE 8u
 #define ERB_IMPORT_SIZE 8u
+#define ERB_NATIVE_EVENT_SIZE 8u
 #define ERB_INPUT_SIZE 4u
 #define ERB_INTERPOLATION_SIZE 72u
 #define ERB_KEYBOARD_HEADER_SIZE 28u
@@ -358,6 +360,12 @@ enum
 #define ERB_IMPORT_VERSION_AT 2u
 #define ERB_IMPORT_SIGNATURE_AT 4u
 
+/** @brief Native event handler: the event, as the firmware registers it, and the function it runs. */
+#define ERB_NATIVE_EVENT_NAME_AT 0u
+#define ERB_NATIVE_EVENT_VERSION_AT 2u
+#define ERB_NATIVE_EVENT_SIGNATURE_AT 4u
+#define ERB_NATIVE_EVENT_FUNCTION_AT 6u
+
 /** @brief Host input. */
 #define ERB_INPUT_NAME_AT 0u
 #define ERB_INPUT_SLOT_AT 2u
@@ -448,6 +456,7 @@ enum
     ERB_FUNCTION_KIND_BOOT = 0x83,
     ERB_FUNCTION_KIND_HELPER = 0x84,
     ERB_FUNCTION_KIND_ANIMATION_DONE = 0x85,
+    ERB_FUNCTION_KIND_NATIVE_EVENT = 0x86, /**< Entered with the event's arguments. Since minor 11. */
 };
 
 /** @brief Constant prop value kinds (each ABI prop has one; see erb_props.c). */

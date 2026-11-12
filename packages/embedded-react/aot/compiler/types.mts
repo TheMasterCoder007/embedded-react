@@ -428,6 +428,8 @@ export interface Env {
   children?: ChildrenSlot | null;
   /** Inside a list row, whose conditionals build every branch and toggle it. */
   inListRow?: boolean;
+  /** Whether what is being emitted is mounted: the conditions it is built under, and its list row being in use. */
+  mounted?: IrExpr | null;
   /** Lowering a handler, an effect or a timer, which runs apart from the render. */
   outsideRender?: boolean;
   /** Working out a value render reads, as statements, so still in render. */

@@ -1990,6 +1990,65 @@ bool erb_input_set_string(int input, const char* value)
     return value && input_set(input, ERB_TYPE_STRING, value, 0u);
 }
 
+/*----------------------------------------------------------------------------------------------------------------------
+ - Native events
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+bool erb_native_post(int native, const int32_t* arguments)
+{
+    if (!erb_running() || g_erb.in_vm || native < 0 || (uint32_t)native >= g_erb.config.native_count)
+    {
+        return false;
+    }
+    const ErbNative* event = &g_erb.config.natives[native];
+    if (event->callback || !event->signature || event->signature[0] != 'v' || event->signature[1] != ':')
+    {
+        return false;
+    }
+    const char* codes = event->signature + 2;
+    const size_t params = strlen(codes);
+    if (params > ERB_NATIVE_MAX_PARAMETERS || (params && !arguments))
+    {
+        return false;
+    }
+
+    /* A bool cell is 0 or 1 in a register, whatever the firmware passed. */
+    int32_t cells[ERB_NATIVE_MAX_PARAMETERS];
+    for (size_t param = 0; param < params; param++)
+    {
+        cells[param] = codes[param] == 'b' ? arguments[param] != 0 : arguments[param];
+    }
+
+    /* Every handler runs before the update, as one event. A handler runs each subscriber whose component is mounted. */
+    ErbStatus status = ERB_OK;
+    bool ran = false;
+    for (uint32_t index = 0; index < g_erb.program.native_event_count && status == ERB_OK; index++)
+    {
+        if (g_erb.program.event_natives[index] != (uint16_t)native)
+        {
+            continue;
+        }
+        const uint8_t* record = g_erb.program.native_events + index * ERB_NATIVE_EVENT_SIZE;
+        memset(&g_erb.event, 0, sizeof(g_erb.event));
+        g_erb.in_vm = true;
+        status = erb_vm_run(erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT), cells, NULL);
+        g_erb.in_vm = false;
+        ran = true;
+    }
+    if (ran && status == ERB_OK)
+    {
+        ErbEvent update;
+        memset(&update, 0, sizeof(update));
+        update.kind = ERB_EVENT_UPDATE;
+        dispatch(&update);
+    }
+    if (s_fault_pending && !g_erb.in_vm)
+    {
+        handle_fault();
+    }
+    return true;
+}
+
 void erb_set_wall_clock(int64_t epoch_ms)
 {
     g_erb.wall_clock_base = epoch_ms;

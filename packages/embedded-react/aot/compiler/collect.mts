@@ -1583,6 +1583,62 @@ export function collectMemos(
 }
 
 /**
+ * Collects the `useNativeEvent(Module, 'event', handler)` calls at the top of a component's body. One anywhere else is
+ * refused, as a hook React calls conditionally would be.
+ *
+ * @param functionBody  The component's body.
+ *
+ * @returns The calls, in source order.
+ */
+export function collectNativeEvents(
+  functionBody: t.BlockStatement | t.Expression,
+): t.CallExpression[] {
+  const isSubscription = (node: t.Node | null | undefined): boolean =>
+    node?.type === 'CallExpression' &&
+    node.callee.type === 'Identifier' &&
+    node.callee.name === 'useNativeEvent';
+  const calls: t.CallExpression[] = [];
+  const topLevel = new Set<t.Node>();
+  if (functionBody.type === 'BlockStatement') {
+    for (const statement of functionBody.body) {
+      if (
+        statement.type === 'ExpressionStatement' &&
+        isSubscription(statement.expression)
+      ) {
+        calls.push(statement.expression as t.CallExpression);
+        topLevel.add(statement.expression);
+      }
+    }
+  }
+
+  // Anywhere else: in a condition, a loop, a handler, or as a value.
+  const refuseNested = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach(refuseNested);
+      return;
+    }
+    const record = node as Record<string, unknown> & t.Node;
+    if (typeof record.type !== 'string') return;
+    if (isSubscription(record) && !topLevel.has(record)) {
+      const error = aotError(
+        'AOT: useNativeEvent() is called inside a condition, a loop, a function or an expression',
+        'call it as a statement at the top of the component, as React calls every hook.',
+      );
+      if (record.loc) error.aotLoc = record.loc.start;
+      throw error;
+    }
+    for (const key of Object.keys(record)) {
+      if (key !== 'loc' && !key.endsWith('Comments')) {
+        refuseNested(record[key]);
+      }
+    }
+  };
+  refuseNested(functionBody);
+  return calls;
+}
+
+/**
  * Collects `useEffect(() => {…}, deps)` calls → { fn, deps, node }. Dep validity is checked at compile time.
  *
  * @param functionBody  The component's body.

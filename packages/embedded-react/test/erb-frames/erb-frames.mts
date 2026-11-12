@@ -669,6 +669,27 @@ const SCENARIOS: Scenario[] = [
     flowA: true,
     mocks: true,
   },
+  // Buttons: start, show, add, read. Nothing is posted yet but idle, which nothing subscribes to.
+  {
+    name: 'native-events',
+    file: fixture('native-events'),
+    screen: PORTRAIT,
+    listCap: 4,
+    flowA: true,
+    mocks: true,
+  },
+  // Four starts: the App hears each (last 4, half 2, even, 4 posts refused from inside start). The child hears the
+  // two while shown (+1 each), and its inner part the first, which closes it (+100). Each row adds 10 times its value
+  // while the list holds it: 10, 111, 31, 30. read shows 182.
+  {
+    name: 'native-events-taps',
+    file: fixture('native-events'),
+    screen: PORTRAIT,
+    listCap: 4,
+    taps: '32,20 84,20 32,20 136,20 32,20 84,20 32,20 188,20',
+    flowA: true,
+    mocks: true,
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

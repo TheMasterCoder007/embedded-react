@@ -281,10 +281,14 @@ static void install_persist(JSContext* ctx)
  - Native modules (nativeModule() calls ErRuntimeConfig.natives through `__erNative`)
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Most parameters a native function may take. */
-#define NATIVE_MAX_PARAMETERS 16
+/** @brief Native functions running now: a post from inside one is refused, as Flow B refuses one while the VM runs. */
+static int s_native_calls = 0;
 
-/** @brief Whether a signature is a result, ':', then up to NATIVE_MAX_PARAMETERS parameters of types the bridge passes.
+/** @brief An app has loaded into the current context. */
+static bool s_app_loaded = false;
+
+/** @brief Whether a signature is a result, ':', then up to ERB_NATIVE_MAX_PARAMETERS parameters of types the bridge
+ * passes.
  */
 static bool native_signature_valid(const char* signature)
 {
@@ -300,13 +304,17 @@ static bool native_signature_valid(const char* signature)
             return false;
         }
     }
-    return strlen(parameters) <= NATIVE_MAX_PARAMETERS;
+    return strlen(parameters) <= ERB_NATIVE_MAX_PARAMETERS;
 }
 
-/** @brief __erNative.find(name, version, signature) → the native's index, or -1 when the firmware has none. */
-static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+/**
+ * @brief __erNative.find(name, version, signature) → the native function's index, or -1 when the firmware has none;
+ *        with `magic`, findEvent() and the native event's.
+ */
+static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic)
 {
     (void)this_val;
+    const bool event = magic != 0;
     if (argc < 3)
     {
         return JS_ThrowTypeError(ctx, "find() takes a name, a version and a signature");
@@ -319,12 +327,12 @@ static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, J
     const char* name = JS_ToCString(ctx, argv[0]);
     const char* signature = JS_ToCString(ctx, argv[2]);
     int32_t found = -1;
-    if (name && signature && native_signature_valid(signature))
+    if (name && signature && native_signature_valid(signature) && (!event || signature[0] == 'v'))
     {
         for (uint16_t index = 0; index < s_config.native_count; index++)
         {
             const ErbNative* native = &s_config.natives[index];
-            if (native->callback && native->name && native->signature && native->version == version
+            if ((native->callback == NULL) == event && native->name && native->signature && native->version == version
                 && strcmp(native->name, name) == 0 && strcmp(native->signature, signature) == 0)
             {
                 found = index;
@@ -365,7 +373,7 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
                                  argc - 1);
     }
 
-    int32_t cells[NATIVE_MAX_PARAMETERS] = {0};
+    int32_t cells[ERB_NATIVE_MAX_PARAMETERS] = {0};
     for (int parameter = 0; parameter < parameter_count; parameter++)
     {
         JSValueConst argument = argv[parameter + 1];
@@ -399,7 +407,10 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
     }
 
     int32_t result = 0;
-    if (!native->callback(cells, &result, s_config.native_context))
+    s_native_calls++;
+    const bool succeeded = native->callback(cells, &result, s_config.native_context);
+    s_native_calls--;
+    if (!succeeded)
     {
         return JS_ThrowPlainError(ctx, "native module failed: %s", native->name ? native->name : "");
     }
@@ -420,12 +431,15 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
     }
 }
 
-/** @brief Installs the `__erNative` global (find/call) over ErRuntimeConfig.natives. */
+/** @brief Installs the `__erNative` global (find/findEvent/call) over ErRuntimeConfig.natives. */
 static void install_native(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue native = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, native, "find", JS_NewCFunction(ctx, js_native_find, "find", 3));
+    JS_SetPropertyStr(
+        ctx, native, "find", JS_NewCFunctionMagic(ctx, js_native_find, "find", 3, JS_CFUNC_generic_magic, 0));
+    JS_SetPropertyStr(
+        ctx, native, "findEvent", JS_NewCFunctionMagic(ctx, js_native_find, "findEvent", 3, JS_CFUNC_generic_magic, 1));
     JS_SetPropertyStr(ctx, native, "call", JS_NewCFunction(ctx, js_native_call, "call", 1));
     JS_SetPropertyStr(ctx, global, "__erNative", native);
     JS_FreeValue(ctx, global);
@@ -560,6 +574,7 @@ static void install_globals(void)
      * er_runtime_load_source (desktop demo, web sim) only works once the Eval intrinsic has installed
      * the context's eval hook. On a QJS_DISABLE_PARSER device build the hook doesn't exist and both
      * JS-level eval() and er_runtime_load_source fail gracefully — bytecode is the only load path. */
+    s_app_loaded = false;
     s_ctx = er_js_new_context(s_rt, s_config.extra_intrinsics | ER_JS_INTRINSIC_EVAL);
     if (!s_ctx)
     {
@@ -766,6 +781,7 @@ bool er_runtime_load_bytecode(const void* buffer, size_t length)
     const bool ok = rt_report(er_bridge_run_bytecode(s_ctx, (const uint8_t*)buffer, length));
     if (ok)
     {
+        s_app_loaded = true;
         er_error_screen_hide();
         er_bridge_pump(s_ctx);
     }
@@ -1002,6 +1018,7 @@ bool er_runtime_load_source(const char* source, size_t length, const char* name)
     const bool ok = rt_report(JS_Eval(s_ctx, source, length, name ? name : "<app>", JS_EVAL_TYPE_GLOBAL));
     if (ok)
     {
+        s_app_loaded = true;
         er_error_screen_hide();
         er_bridge_pump(s_ctx);
     }
@@ -1015,6 +1032,60 @@ void er_runtime_pump(void)
         er_bridge_pump(s_ctx);
     }
     apply_gc_floor();
+}
+
+bool er_runtime_native_post(int native, const int32_t* arguments)
+{
+    if (!s_ctx || !s_app_loaded || s_native_calls > 0 || native < 0 || native >= s_config.native_count)
+    {
+        return false;
+    }
+    const ErbNative* event = &s_config.natives[native];
+    if (event->callback || !native_signature_valid(event->signature) || event->signature[0] != 'v')
+    {
+        return false;
+    }
+    const char* codes = event->signature + 2;
+    const uint32_t params = (uint32_t)strlen(codes);
+    if (params && !arguments)
+    {
+        return false;
+    }
+
+    /* nativeModule() installs the dispatcher when the app declares a module; with none, nothing subscribes. */
+    JSValue global = JS_GetGlobalObject(s_ctx);
+    JSValue dispatcher = JS_GetPropertyStr(s_ctx, global, "__erNativeEvent");
+    JS_FreeValue(s_ctx, global);
+    if (JS_IsFunction(s_ctx, dispatcher))
+    {
+        /* The arguments as the app reads them, converted by the signature as a native's result is. */
+        JSValue values = JS_NewArray(s_ctx);
+        for (uint32_t param = 0; param < params; param++)
+        {
+            JSValue value;
+            if (codes[param] == 'i')
+            {
+                value = JS_NewInt32(s_ctx, arguments[param]);
+            }
+            else if (codes[param] == 'b')
+            {
+                value = JS_NewBool(s_ctx, arguments[param] != 0);
+            }
+            else
+            {
+                float single;
+                memcpy(&single, &arguments[param], sizeof(single));
+                value = JS_NewFloat64(s_ctx, (double)single);
+            }
+            JS_SetPropertyUint32(s_ctx, values, param, value);
+        }
+        JSValue call_arguments[2] = {JS_NewInt32(s_ctx, native), values};
+        er_bridge_dispatch(s_ctx, dispatcher, 2, call_arguments, "native event");
+        JS_FreeValue(s_ctx, call_arguments[0]);
+        JS_FreeValue(s_ctx, values);
+    }
+    JS_FreeValue(s_ctx, dispatcher);
+    return true;
 }
 
 bool er_runtime_reset(void)

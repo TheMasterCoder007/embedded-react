@@ -155,6 +155,11 @@ typedef struct
 
 typedef struct
 {
+    uint16_t name, version, signature, function;
+} TNativeEvent;
+
+typedef struct
+{
     uint16_t name, slot;
 } TInput;
 
@@ -271,6 +276,8 @@ typedef struct
     uint32_t stop_count;
     TImport imports[4];
     uint32_t import_count;
+    TNativeEvent native_events[4];
+    uint32_t native_event_count;
     TInput inputs[4];
     uint32_t input_count;
     TInterp interps[4];
@@ -627,6 +634,15 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
                 tb_u16(buffer, package->imports[index].version);
                 tb_u16(buffer, package->imports[index].signature);
                 tb_u16(buffer, 0u);
+            }
+            break;
+        case ERB_TABLE_NATIVE_EVENTS:
+            for (uint32_t index = 0; index < package->native_event_count; index++)
+            {
+                tb_u16(buffer, package->native_events[index].name);
+                tb_u16(buffer, package->native_events[index].version);
+                tb_u16(buffer, package->native_events[index].signature);
+                tb_u16(buffer, package->native_events[index].function);
             }
             break;
         case ERB_TABLE_INPUTS:

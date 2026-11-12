@@ -25,7 +25,8 @@
  * instead: a press at x,y, DRAG_STEPS moves to x2,y2 with a tick after each, and a release there. The frame is
  * written as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when
  * it is left out), so a scenario can take its frame in the middle of an animation. Both flows get the same probe
- * native module, which the native-calls scenarios call.
+ * native module, which the native-calls and native-events scenarios call. Its events are posted at the start of a
+ * frame, as a board's frame loop posts them.
  */
 
 #include "er_runtime.h"
@@ -67,12 +68,48 @@
 #define ARENA_BYTES (64u * 1024u)
 static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 
+/** @brief The app is a Flow A bundle rather than a Flow B package. */
+static bool s_flow_a;
+
 /*----------------------------------------------------------------------------------------------------------------------
- - The probe module, which the native-calls scenarios call
+ - The probe module, which the native-calls and native-events scenarios call
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief The probe's events, by their index in s_natives. */
+#define PROBE_DONE 9
+#define PROBE_IDLE 10
 
 static int32_t s_probe_count;
 static float s_probe_stored;
+static int32_t s_probe_refused;
+static bool s_probe_pending;
+static int32_t s_probe_pending_value;
+
+/** @brief Posts one of the probe's events through the flow that runs the app. */
+static bool probe_post(int native, const int32_t* arguments)
+{
+    return s_flow_a ? er_runtime_native_post(native, arguments) : erb_native_post(native, arguments);
+}
+
+/** @brief Posts done with the pending value, its half and whether it is even, once it is taken. */
+static void probe_post_done(void)
+{
+    if (!s_probe_pending)
+    {
+        return;
+    }
+    const float half = (float)s_probe_pending_value / 2.0f;
+    int32_t values[3] = {s_probe_pending_value, 0, s_probe_pending_value % 2 == 0};
+    memcpy(&values[1], &half, sizeof(half));
+    if (probe_post(PROBE_DONE, values))
+    {
+        s_probe_pending = false;
+    }
+    else
+    {
+        s_probe_refused++;
+    }
+}
 
 static float probe_float(int32_t cell)
 {
@@ -140,6 +177,25 @@ static bool probe_stored(const int32_t* arguments, int32_t* result, void* contex
     return true;
 }
 
+/** @brief Posts done on the next frame. The post from inside this call is refused, since the app's code runs. */
+static bool probe_start(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    s_probe_pending = true;
+    s_probe_pending_value = arguments[0];
+    probe_post_done();
+    return true;
+}
+
+static bool probe_refused(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = s_probe_refused;
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"probe.add", 1, "i:ii", probe_add},
     {"probe.half", 1, "f:i", probe_half},
@@ -148,6 +204,10 @@ static const ErbNative s_natives[] = {
     {"probe.next", 1, "i:", probe_next},
     {"probe.store", 1, "v:f", probe_store},
     {"probe.stored", 1, "f:", probe_stored},
+    {"probe.start", 1, "v:i", probe_start},
+    {"probe.refused", 1, "i:", probe_refused},
+    [PROBE_DONE] = {"probe.done", 1, "v:ifb", NULL},
+    [PROBE_IDLE] = {"probe.idle", 1, "v:", NULL},
 };
 
 static void log_line(const char* line, void* context)
@@ -178,12 +238,11 @@ static uint32_t* read_package(const char* path, size_t* package_bytes)
     return words;
 }
 
-/** @brief The app is a Flow A bundle rather than a Flow B package. */
-static bool s_flow_a;
-
-/** @brief One frame: the engine's clock and animations, the app's timers, then a commit. */
+/** @brief One frame: the probe's events, the engine's clock and animations, the app's timers, then a commit. */
 static void frame(void)
 {
+    probe_post_done();
+    probe_post(PROBE_IDLE, NULL);
     embedded_renderer_tick(FRAME_MS);
     if (s_flow_a)
     {
