@@ -487,6 +487,20 @@ describe('native events', () => {
     expect(names.indexOf('JF')).toBeLessThan(names.indexOf('SET32'));
   });
 
+  it("leaves only a subscriber's own body on an early return", () => {
+    const {events, functions} = readProgram(
+      compile(
+        eventsApp(
+          "  useNativeEvent(Sensors, 'reading', celsius => { if (celsius < 0) return; setF(celsius); });\n" +
+            "  useNativeEvent(Sensors, 'reading', () => setN(value => value + 1));\n",
+        ),
+      ).program,
+    );
+    const names = functions[events[0].handler].ops.map(op => op.name);
+    expect(names.filter(name => name === 'RET')).toEqual(['RET']);
+    expect(names.at(-1)).toBe('RET');
+  });
+
   it("subscribes each row of a list in its event's function", () => {
     const {events, functions} = readProgram(
       compile(

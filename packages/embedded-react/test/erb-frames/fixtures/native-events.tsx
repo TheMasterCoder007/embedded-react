@@ -1,8 +1,9 @@
 // Native events from the host's probe module, whose interface is in native-probe.ts. start posts done on the next
 // frame, which the App, a child shown by a condition and each list row subscribe to. A subscriber hears it only while
 // it is mounted: the child while shown, a row while the list holds it. The child adds 1 to the number the probe
-// stores and each row 10 times its value, which read shows. The first done the child hears also closes a part of it that adds 100,
-// which still hears that one, as it was mounted when it came.
+// stores and each row 10 times its value, which read shows. The first done the child hears also closes a part of it
+// that adds 100, which still hears that one, as it was mounted when it came. Once closed, the child's handler returns
+// early, which leaves only its own handler.
 import {useState} from 'react';
 import {
   View,
@@ -25,6 +26,9 @@ function Listener() {
   const [open, setOpen] = useState(true);
   useNativeEvent(Probe, 'done', () => {
     Probe.store(Probe.stored() + 1);
+    if (!open) {
+      return;
+    }
     setOpen(false);
   });
   return (
