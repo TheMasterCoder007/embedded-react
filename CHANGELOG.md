@@ -66,6 +66,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   with pack and unpack helpers, argument offsets, and an entry for the firmware's table.
 - The board examples share a device package, `examples/device`, which the watch face imports its native modules
   from. The guide and the `watch-face` template are written around device packages.
+- `Dimensions.get('window')` and `useWindowDimensions()`, the React Native way to read the panel's size. In Flow B
+  they are worked out at boot, as the `screen` global is.
+- Flow B: a `const` can destructure an object that folds, such as `const {width, height} = screen`, at module level
+  too.
 
 ### Changed
 

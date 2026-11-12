@@ -22,7 +22,7 @@ export default defineConfig({
     // surface under src/, the build-time asset bakers under assets/, and the Flow B AOT compiler
     // under aot/ (JSX → package).
     include: [
-      'src/**/__tests__/**/*.unit.test.{js,jsx}',
+      'src/**/__tests__/**/*.unit.test.{js,jsx,ts}',
       'assets/**/__tests__/**/*.unit.test.{js,jsx}',
       'aot/**/__tests__/**/*.unit.test.{js,mjs,mts}',
       'hotreload/**/__tests__/**/*.unit.test.{js,mjs}', // on-device hot-reload transport framing

@@ -32,6 +32,7 @@ import {
 import {BOOL, INT, STRUCT} from './ir/types.mts';
 import {
   isFn,
+  bindFoldedPattern,
   declaredNames,
   collectState,
   componentReturnJSX,
@@ -512,6 +513,14 @@ export function emitComponent(
         continue;
       }
       for (const declarator of statement.declarations) {
+        if (declarator.id.type === 'ObjectPattern' && declarator.init) {
+          try {
+            bindFoldedPattern(childScope, declarator.id, declarator.init);
+          } catch {
+            // Not a fold, so bindBuiltValues binds it.
+          }
+          continue;
+        }
         if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
         if (childLocals.has(declarator.id.name)) continue; // a dynamic prop of that name is already bound
         if (contextNames.has(declarator.id.name)) continue;

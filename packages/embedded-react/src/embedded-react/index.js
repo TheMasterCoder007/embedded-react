@@ -49,6 +49,7 @@ export {SectionList} from './SectionList.js';
 export {updateVector, updateText, setKeyboardConfig} from './imperative.js';
 export {StyleSheet} from './StyleSheet.js';
 export {Platform} from './Platform.js';
+export {Dimensions, useWindowDimensions} from './Dimensions.js';
 export {AppRegistry} from './AppRegistry.js';
 export {Animated, useAnimatedValue} from './Animated.js';
 export {PanResponder} from './PanResponder.js';

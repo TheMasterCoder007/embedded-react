@@ -1,7 +1,7 @@
 ---
 title: 'Hooks and app APIs'
 sidebar_label: 'Hooks'
-description: "The three hooks the package adds to React's, plus AppRegistry, Platform and the screen global."
+description: "The hooks the package adds to React's, plus AppRegistry, Platform, Dimensions and the screen global."
 ---
 
 React's own hooks come from `react` and work as they do anywhere: `useState`, `useEffect`, `useRef`,
@@ -351,6 +351,28 @@ worked out at boot from the real panel, and a branch that changes the tree adds 
 picks at boot, so one build runs on every panel; see
 [the AOT subset](../guides/aot-subset.md#assets-and-screen-size).
 [Layout](../concepts/layout.md#designing-for-small-panels) shows the pattern.
+
+## Dimensions and useWindowDimensions
+
+```jsx
+import {Dimensions, useWindowDimensions} from 'embedded-react';
+
+const {width, height} = Dimensions.get('window');
+
+export function App() {
+  const window = useWindowDimensions();
+  return <View style={{width: window.width / 2}} />;
+}
+```
+
+The React Native way to read the same size, for code shared with a phone app. Both return
+`{width, height, scale, fontScale}`: `width` and `height` are the `screen` global's, and `scale` and
+`fontScale` are always 1, since a panel has no pixel-density or font setting. `'window'` and
+`'screen'` are the same size.
+
+The size is fixed while the app runs, so `useWindowDimensions()` never re-renders and there is no
+`Dimensions.addEventListener`. **Flow B:** both are worked out at boot exactly as `screen` is, so a
+breakpoint written with either one behaves the same.
 
 ## Timers and time
 

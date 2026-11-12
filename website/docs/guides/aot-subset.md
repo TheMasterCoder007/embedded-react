@@ -288,7 +288,8 @@ Images and SVGs must be imports (`import logo from './logo.png'`).
 Values derived from `screen.width` and `screen.height` (with `+ - * /`, comparisons, ternaries and
 `Math.min`, `max`, `floor`, `ceil`, `round`, `trunc` and `abs`) are worked out at boot from the real
 panel. A branch on `screen` whose two sides differ only in values (styles, props, `{text}`) is one
-tree whose values are picked at boot.
+tree whose values are picked at boot. `Dimensions.get('window')` and `useWindowDimensions()` read the
+same values, and a `const` can destructure them: `const {width, height} = useWindowDimensions()`.
 
 A branch that changes the tree adds a layout. A package declares no sizes: the compiler finds the
 layouts from the app's breakpoints, proves every panel size up to 32767×32767 has one, and stores each

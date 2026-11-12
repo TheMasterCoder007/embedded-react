@@ -2056,6 +2056,23 @@ function bindPattern(
 }
 
 /**
+ * Whether every name an object pattern takes is bound already.
+ *
+ * @param pattern  The pattern.
+ * @param scope  The constants in reach.
+ *
+ * @returns True when each is.
+ */
+function isPatternBound(pattern: t.ObjectPattern, scope: Scope): boolean {
+  return pattern.properties.every(property => {
+    if (property.type === 'RestElement') return false;
+    const {value} = property;
+    if (value.type === 'Identifier') return hasBinding(scope, value.name);
+    return value.type === 'ObjectPattern' && isPatternBound(value, scope);
+  });
+}
+
+/**
  * Binds each `const` of a component body that builds an array or object in render from runtime values, as
  * foldRuntime folds it. A const that folds is bound already, and a hook's binding is not a literal.
  *
@@ -2075,6 +2092,7 @@ export function bindBuiltValues(body: t.Statement[], environment: Env): void {
       const {id, init} = declarator;
       if (isContextRead(init)) continue; // bound from its provider (see bindContextUses)
       if (id.type === 'ObjectPattern' && init) {
+        if (isPatternBound(id, scope)) continue; // folded already
         const value = foldRuntime(init, environment, scope);
         if (!isObjectTree(value)) {
           throw aotError(

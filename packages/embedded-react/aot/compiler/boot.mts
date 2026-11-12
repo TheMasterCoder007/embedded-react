@@ -61,6 +61,9 @@ interface BootContext {
 /** The kinds of value a boot slot holds. */
 const SLOT_KINDS = new Set(['bool', 'int', 'float', 'string']);
 
+/** The scope key the panel's size is kept under, which no name in the app can take. */
+export const PANEL_KEY = '<panel>';
+
 /** The current compile's boot values, or null outside a compile. */
 let context: BootContext | null = null;
 

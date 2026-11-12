@@ -42,7 +42,9 @@ import {
   buildValueOf,
   foldBoot,
   isBoot,
+  isContainer,
   nameBootValues,
+  PANEL_KEY,
   screenBinding,
 } from './boot.mts';
 import type {BootValue} from './boot.mts';
@@ -52,6 +54,7 @@ import {
   setBinding,
   withUndefined,
   rethrowFoldLimit,
+  HiddenField,
   RuntimeLeaf,
 } from './static-eval.mts';
 import type * as t from '@babel/types';
@@ -229,6 +232,64 @@ export function bindConst(name: string, value: unknown): unknown {
 }
 
 /**
+ * Folds a destructured const and binds each name it takes, as `const {width, height} = screen`.
+ *
+ * @param scope  The scope to fold against and bind in.
+ * @param pattern  The pattern.
+ * @param init  What it destructures.
+ *
+ * @throws An error when the object doesn't fold, or the pattern is more than plain names for fields it holds.
+ */
+export function bindFoldedPattern(
+  scope: Scope,
+  pattern: t.ObjectPattern,
+  init: t.Expression,
+): void {
+  const bound: [string, unknown][] = [];
+  const collectFields = (
+    objectPattern: t.ObjectPattern,
+    value: unknown,
+  ): void => {
+    if (!isContainer(value) || Array.isArray(value)) {
+      throw new Error('AOT: only an object that folds is destructured here');
+    }
+    const fields = value as Record<string, unknown>;
+    for (const property of objectPattern.properties) {
+      if (property.type === 'RestElement' || property.computed) {
+        throw new Error('AOT: the pattern is more than plain names');
+      }
+      const key =
+        property.key.type === 'Identifier'
+          ? property.key.name
+          : property.key.type === 'StringLiteral'
+            ? property.key.value
+            : null;
+      const field =
+        key !== null && Object.hasOwn(fields, key) ? fields[key] : undefined;
+      if (
+        field === undefined ||
+        field instanceof RuntimeLeaf ||
+        field instanceof HiddenField
+      ) {
+        throw new Error('AOT: the field does not fold');
+      }
+      if (property.value.type === 'Identifier') {
+        bound.push([property.value.name, field]);
+      } else if (property.value.type === 'ObjectPattern') {
+        collectFields(property.value, field);
+      } else {
+        throw new Error('AOT: the pattern is more than plain names');
+      }
+    }
+  };
+
+  collectFields(pattern, evalStatic(init, withUndefined(scope), 'boot'));
+  for (const [name, value] of bound) {
+    setBinding(scope, name, bindConst(name, value));
+  }
+}
+
+/**
  * The module's compile-time scope: `screen`, the seed, and every module-level `const` that folds. A const
  * derived from `screen` is a boot value (see BootValue).
  *
@@ -244,9 +305,10 @@ export function moduleScope(
   seed: Scope = {},
 ): Scope {
   // Seed the scope (image imports as asset names) before folding module consts, so a const can reference them.
-  const scope: Scope = {screen: screenBinding(screen), ...seed};
+  const panel = screenBinding(screen);
+  const scope: Scope = {screen: panel, [PANEL_KEY]: panel, ...seed};
 
-  // Fold module variables in order so later ones see earlier ones; skip functions, destructuring and non-folds.
+  // Fold module variables in order so later ones see earlier ones; skip functions and non-folds.
   for (const statement of program.body) {
     const declaration =
       statement.type === 'ExportNamedDeclaration'
@@ -254,6 +316,14 @@ export function moduleScope(
         : statement;
     if (declaration?.type !== 'VariableDeclaration') continue;
     for (const declarator of declaration.declarations) {
+      if (declarator.id?.type === 'ObjectPattern' && declarator.init) {
+        try {
+          bindFoldedPattern(scope, declarator.id, declarator.init);
+        } catch (error) {
+          rethrowFoldLimit(error);
+        }
+        continue;
+      }
       if (
         !declarator.id ||
         declarator.id.type !== 'Identifier' ||

@@ -35,6 +35,7 @@ import {
 } from './expressions.mts';
 import {
   findComponent,
+  bindFoldedPattern,
   declaredNames,
   moduleScope,
   collectState,
@@ -368,6 +369,14 @@ function lowerProgram(
     }
 
     for (const declarator of statement.declarations) {
+      if (declarator.id.type === 'ObjectPattern' && declarator.init) {
+        try {
+          bindFoldedPattern(scope, declarator.id, declarator.init);
+        } catch (error) {
+          rethrowFoldLimit(error); // not a fold, so bindBuiltValues binds it
+        }
+        continue;
+      }
       if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
       if (contextNames.has(declarator.id.name)) continue;
       try {
