@@ -170,30 +170,61 @@ function exportedPath(exports: unknown, subpath: string): string | null {
     !Array.isArray(exports) &&
     Object.keys(exports).some(key => key.startsWith('.'));
   if (!isSubpathMap) {
-    return subpath === '.' ? exportTarget(exports) : null;
+    return subpath === '.' ? packageTarget(exportTarget(exports)) : null;
   }
   const map = exports as Record<string, unknown>;
   if (Object.hasOwn(map, subpath)) {
-    return exportTarget(map[subpath]);
+    return packageTarget(exportTarget(map[subpath]));
   }
-  for (const [key, value] of Object.entries(map)) {
+  // As Node does, the pattern with the longest part before its `*` wins, then the longest pattern.
+  let best: {key: string; prefix: string; suffix: string} | null = null;
+  for (const key of Object.keys(map)) {
     const star = key.indexOf('*');
-    if (star < 0) continue;
+    if (star < 0 || key.indexOf('*', star + 1) >= 0) continue;
     const prefix = key.slice(0, star);
     const suffix = key.slice(star + 1);
-    if (
+    const matches =
       subpath.length >= key.length - 1 &&
       subpath.startsWith(prefix) &&
-      subpath.endsWith(suffix)
+      subpath.endsWith(suffix);
+    if (
+      matches &&
+      (!best ||
+        prefix.length > best.prefix.length ||
+        (prefix.length === best.prefix.length && key.length > best.key.length))
     ) {
-      const match = subpath.slice(
-        prefix.length,
-        subpath.length - suffix.length,
-      );
-      return exportTarget(value)?.replaceAll('*', match) ?? null;
+      best = {key, prefix, suffix};
     }
   }
-  return null;
+  if (!best) return null;
+  const match = subpath.slice(
+    best.prefix.length,
+    subpath.length - best.suffix.length,
+  );
+  return packageTarget(
+    exportTarget(map[best.key])?.replaceAll('*', match) ?? null,
+  );
+}
+
+/**
+ * An export's path, when it stays in its package as Node requires: `./` then no empty, `.`, `..` or node_modules part.
+ *
+ * @param path  The path the export gives.
+ *
+ * @returns The path, or null when Node would refuse it.
+ */
+function packageTarget(path: string | null): string | null {
+  if (!path?.startsWith('./')) return null;
+  const parts = path.slice(2).split(/[\\/]/);
+  return parts.some(
+    part =>
+      part === '' ||
+      part === '.' ||
+      part === '..' ||
+      part.toLowerCase() === 'node_modules',
+  )
+    ? null
+    : path;
 }
 
 /**
@@ -335,6 +366,35 @@ const shownPath = (appDirectory: string, path: string): string =>
   relative(realpathSync(appDirectory), realpathSync(path)).replace(/\\/g, '/');
 
 /**
+ * Whether a file passes on what another file declares, `export * from` or `export {Can} from`, and one of those files
+ * declares native modules.
+ *
+ * @param source  The file's source.
+ * @param path  The file.
+ *
+ * @returns True when it does.
+ */
+function passesOnModules(source: string, path: string): boolean {
+  if (!/\bexport\b[^;]*\bfrom\b/.test(source)) return false;
+  return parseFile(source).body.some(statement => {
+    if (
+      (statement.type !== 'ExportAllDeclaration' &&
+        statement.type !== 'ExportNamedDeclaration') ||
+      !statement.source ||
+      statement.exportKind === 'type'
+    ) {
+      return false;
+    }
+    const file = importedFileOf(dirname(path), statement.source.value);
+    if (!file) return false;
+    const passed = readFileSync(file, 'utf8');
+    return isSourceFile(file)
+      ? /\bnativeModule\b/.test(passed)
+      : /\.[cm]?js$/.test(file) && DECLARES_MODULE.test(passed);
+  });
+}
+
+/**
  * Reads the files an app's native modules come from: the local files it imports a module's interface from, and the
  * files and packages it imports modules from.
  *
@@ -372,7 +432,9 @@ export function readNativeFiles(
     const file = importedFileOf(appDirectory, importPath);
     if (!file) continue;
     if (isSourceFile(file)) {
-      if (/\bnativeModule\b/.test(readFileSync(file, 'utf8'))) {
+      const source = readFileSync(file, 'utf8');
+      // A file that passes modules on is read too, for the compiler to refuse.
+      if (/\bnativeModule\b/.test(source) || passesOnModules(source, file)) {
         files[importPath] = readSourceFile(file, appDirectory);
       }
     } else if (

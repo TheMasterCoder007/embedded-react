@@ -1173,6 +1173,7 @@ describe('native modules from other files and packages', () => {
       'node_modules/by-exports/package.json': JSON.stringify({
         exports: {
           '.': {types: './index.d.ts', import: './src/index.ts'},
+          './*': './src/missing/*.ts',
           './buses/*': './src/buses/*.ts',
         },
       }),
@@ -1189,6 +1190,23 @@ describe('native modules from other files and packages', () => {
       '@acme/by-main',
     ]) {
       expect(importsOf(directory, canApp(from))).toEqual(['can.send v1 b:i']);
+    }
+  });
+
+  it('reads no file an export points at outside its package', () => {
+    const directory = folderOf({
+      'outside.ts': CAN,
+      'node_modules/escapes/package.json': JSON.stringify({
+        exports: {
+          '.': '../../outside.ts',
+          './up/*': './*/../../../outside.ts',
+          './modules/*': './node_modules/*.ts',
+        },
+      }),
+      'node_modules/escapes/node_modules/can.ts': CAN,
+    });
+    for (const from of ['escapes', 'escapes/up/x', 'escapes/modules/can']) {
+      expect(readNativeFiles(canApp(from), directory)).toEqual({});
     }
   });
 
@@ -1305,12 +1323,24 @@ describe('native modules from other files and packages it refuses', () => {
   });
 
   it('refuses a module passed on from another file', () => {
-    const directory = folderOf({
-      'device.ts': "export * from './can';\n" + '// nativeModule\n',
+    const can =
+      "import {nativeModule} from 'embedded-react';\n" +
+      'export interface Can { send(id: number): boolean; }\n' +
+      "export const Can = nativeModule<Can>('can', 1);\n";
+    for (const passes of [
+      "export * from './can';\n",
+      "export {Can} from './can';\n",
+    ]) {
+      const directory = folderOf({'device.ts': passes, 'can.ts': can});
+      expect(failureIn(directory, app('./device'))).toMatch(
+        /\.\/device passes Can on from another file, and a native module isn't followed further/,
+      );
+    }
+    const plain = folderOf({
+      'device.ts': "export * from './helpers';\n",
+      'helpers.ts': 'export const answer = 42;\n',
     });
-    expect(failureIn(directory, app('./device'))).toMatch(
-      /\.\/device passes Can on from another file, and a native module isn't followed further/,
-    );
+    expect(readNativeFiles(app('./device'), plain)).toEqual({});
   });
 
   it('refuses one module declared both in the app and in a file it imports', () => {
