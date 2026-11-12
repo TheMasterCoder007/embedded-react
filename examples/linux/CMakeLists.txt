@@ -64,6 +64,8 @@ add_subdirectory(
 # mirrors how the MCU loads a separately-uploaded config (peer to examples/esp32/esp32-s3).
 # ---------------------------------------------------------------------------
 add_executable(embedded-react-desktop main.c host.c desktop_natives.c)
+# The device package's generated headers.
+target_include_directories(embedded-react-desktop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../device/include)
 
 target_link_libraries(embedded-react-desktop
         PRIVATE

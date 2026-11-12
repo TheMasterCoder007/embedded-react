@@ -16,13 +16,15 @@
 
 #include "native_modules.h"
 
+#include "chip_module.h"
 #include "erb_runtime.h"
 #include "hardware/adc.h"
+#include "motion_module.h"
+#include "thermometer_module.h"
 
 #include <malloc.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <string.h>
 #include <unistd.h>
 
 #define MS_PER_SECOND 1000u
@@ -35,6 +37,7 @@
 #define SENSOR_VOLTS_PER_DEGREE 0.001721f
 #define SENSOR_REFERENCE_CELSIUS 27.0f
 
+/* Each entry's place in the table, which an event is posted by. */
 enum
 {
     CHIP_NAME,
@@ -55,7 +58,7 @@ static bool s_measure_asked;
 
 static int32_t s_steps;
 static bool s_steps_due;
-static int32_t s_tilt[2];
+static MotionOffset s_tilt;
 static bool s_tilt_due;
 static bool s_motion_known;
 
@@ -89,13 +92,13 @@ static bool thermometer_measure(const int32_t* arguments, int32_t* result, void*
 }
 
 const ErbNative native_modules[NATIVE_COUNT] = {
-    [CHIP_NAME] = {"chip.name", 1, "s:", chip_name},
-    [CHIP_FREE_MEMORY] = {"chip.freeMemory", 1, "i:", chip_free_memory},
-    [CHIP_SECOND] = {"chip.second", 1, "v:l", NULL},
-    [THERMOMETER_MEASURE] = {"thermometer.measure", 1, "v:", thermometer_measure},
-    [THERMOMETER_READING] = {"thermometer.reading", 1, "v:f", NULL},
-    [MOTION_STEPS] = {"motion.steps", 1, "v:i", NULL},
-    [MOTION_TILT] = {"motion.tilt", 1, "v:{x:i,y:i}", NULL},
+    [CHIP_NAME] = {CHIP_NAME_ENTRY, chip_name},
+    [CHIP_FREE_MEMORY] = {CHIP_FREE_MEMORY_ENTRY, chip_free_memory},
+    [CHIP_SECOND] = {CHIP_SECOND_ENTRY, NULL},
+    [THERMOMETER_MEASURE] = {THERMOMETER_MEASURE_ENTRY, thermometer_measure},
+    [THERMOMETER_READING] = {THERMOMETER_READING_ENTRY, NULL},
+    [MOTION_STEPS] = {MOTION_STEPS_ENTRY, NULL},
+    [MOTION_TILT] = {MOTION_TILT_ENTRY, NULL},
 };
 
 const uint16_t native_module_count = NATIVE_COUNT;
@@ -118,10 +121,10 @@ void native_modules_set_steps(uint32_t steps)
 
 void native_modules_set_tilt(int x, int y)
 {
-    if (x != s_tilt[0] || y != s_tilt[1])
+    if (x != s_tilt.x || y != s_tilt.y)
     {
-        s_tilt[0] = x;
-        s_tilt[1] = y;
+        s_tilt.x = x;
+        s_tilt.y = y;
         s_tilt_due = true;
     }
 }
@@ -146,8 +149,8 @@ void native_modules_frame(uint32_t uptime_ms)
     const uint32_t seconds = uptime_ms / MS_PER_SECOND;
     if (seconds != s_posted_seconds)
     {
-        int32_t uptime[2];
-        erb_native_set_int64(uptime, (int64_t)uptime_ms);
+        int32_t uptime[CHIP_SECOND_ARG_CELLS];
+        erb_native_set_int64(&uptime[CHIP_SECOND_ARG_UPTIME_MS], (int64_t)uptime_ms);
         if (erb_native_post(CHIP_SECOND, uptime))
         {
             s_posted_seconds = seconds;
@@ -156,10 +159,9 @@ void native_modules_frame(uint32_t uptime_ms)
 
     if (s_measure_asked)
     {
-        const float celsius = read_celsius();
-        int32_t value;
-        memcpy(&value, &celsius, sizeof(value));
-        s_measure_asked = !erb_native_post(THERMOMETER_READING, &value);
+        int32_t reading[THERMOMETER_READING_ARG_CELLS];
+        erb_native_set_float(&reading[THERMOMETER_READING_ARG_CELSIUS], read_celsius());
+        s_measure_asked = !erb_native_post(THERMOMETER_READING, reading);
     }
     if (s_steps_due)
     {
@@ -167,6 +169,8 @@ void native_modules_frame(uint32_t uptime_ms)
     }
     if (s_tilt_due)
     {
-        s_tilt_due = !erb_native_post(MOTION_TILT, s_tilt);
+        int32_t offset[MOTION_TILT_ARG_CELLS];
+        motion_offset_pack(&offset[MOTION_TILT_ARG_OFFSET], &s_tilt);
+        s_tilt_due = !erb_native_post(MOTION_TILT, offset);
     }
 }

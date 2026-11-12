@@ -18,3 +18,13 @@ for choosing a flow.
 | `stm32h7/` | STM32H7 + LTDC panel | `dma2d/` | A | Planned (the backend runs on hardware; no board project yet) |
 | `raspberry-pi/` | Raspberry Pi 4 / 5 | `opengl/` or `framebuffer/` | | Planned |
 | `dashboard-demo/`, `marine-display/` | Reference apps | any | | Planned |
+
+`device/` is the device package the ESP32-S3, CYD and RP2040 firmware share: the
+[native modules](https://embedded-react.dev/guides/native-modules) they offer apps, declared in TypeScript
+with their simulator mocks, and the C headers generated from them (`include/`), which each board's
+`native_modules.c` builds its table from. Generate the headers again after changing `index.ts`, from the
+repository's root with this checkout's CLI:
+
+```bash
+node packages/embedded-react/cli.mjs native-header examples/device --out examples/device/include
+```

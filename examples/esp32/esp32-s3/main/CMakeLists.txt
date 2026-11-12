@@ -40,7 +40,7 @@ endif()
 
 idf_component_register(
     SRCS ${host_srcs}
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "${EMBEDDED_REACT_SRC_DIR}/examples/device/include" # the device package's generated headers
     REQUIRES engine er-bridge-quickjs quickjs erb-runtime esp32-lcd-backend
              esp_psram esp_timer esp_lcd esp_driver_i2c esp_driver_gpio
              esp_partition spi_flash esp_driver_usb_serial_jtag esp_driver_tsens

@@ -15,7 +15,7 @@
  */
 
 import type {NativeMock} from 'embedded-react';
-import type {Motion} from './motion';
+import type {Motion} from './index';
 
 const STEP_MS = 600;
 const TILT_MS = 50;

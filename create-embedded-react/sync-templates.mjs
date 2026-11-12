@@ -25,7 +25,8 @@
 //
 // Each demo is a self-contained consumer project already (package.json → the embedded-react CLI, its own
 // .gitignore). We copy it verbatim, minus build/junk dirs, renaming .gitignore → gitignore (npm strips a
-// published .gitignore; index.mjs restores the dot when scaffolding). Placeholder substitution and the
+// published .gitignore; index.mjs restores the dot when scaffolding). A package it depends on by a `file:` path
+// outside its folder (the watch face's device package) is copied in beside it. Placeholder substitution and the
 // package.json name/version/dependency pin happen at scaffold time in index.mjs, not here.
 
 import {
@@ -34,10 +35,12 @@ import {
   mkdirSync,
   copyFileSync,
   existsSync,
+  readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {dirname, resolve, join} from 'node:path';
+import {basename, dirname, relative, resolve, join} from 'node:path';
 
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
 const DEMOS_DIR = resolve(PACKAGE_ROOT, '..', 'demos');
@@ -73,6 +76,29 @@ function copyDir(source, destination) {
   }
 }
 
+/**
+ * Copies in the packages a demo depends on by a `file:` path outside its folder, such as the watch face's device
+ * package, and points the template's package.json at the copies.
+ */
+function stageLocalPackages(demoDirectory, templateDirectory) {
+  const manifestPath = join(templateDirectory, 'package.json');
+  if (!existsSync(manifestPath)) return;
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  let staged = false;
+  for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
+    if (!version.startsWith('file:')) continue;
+    const packageDirectory = resolve(demoDirectory, version.slice(5));
+    if (!relative(demoDirectory, packageDirectory).startsWith('..')) continue;
+    const folder = basename(packageDirectory);
+    copyDir(packageDirectory, join(templateDirectory, folder));
+    manifest.dependencies[name] = `file:./${folder}`;
+    staged = true;
+  }
+  if (staged) {
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  }
+}
+
 if (!existsSync(DEMOS_DIR)) {
   console.error(`No demos directory at ${DEMOS_DIR}; nothing to stage.`);
   process.exit(1);
@@ -89,7 +115,10 @@ const demos = readdirSync(DEMOS_DIR, {withFileTypes: true})
   .map(entry => entry.name);
 
 rmSync(OUT_DIR, {recursive: true, force: true});
-for (const name of demos) copyDir(join(DEMOS_DIR, name), join(OUT_DIR, name));
+for (const name of demos) {
+  copyDir(join(DEMOS_DIR, name), join(OUT_DIR, name));
+  stageLocalPackages(join(DEMOS_DIR, name), join(OUT_DIR, name));
+}
 
 // Log to stderr: this runs as a `prepack` lifecycle script, and npm forwards a child's stdout into the
 // `npm pack --json` output — logging there would corrupt that JSON (which tooling parses).

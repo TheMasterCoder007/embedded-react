@@ -34,6 +34,10 @@ jobs:
           cache: npm
           cache-dependency-path: packages/embedded-react/package-lock.json
       - run: npm ci
+      # Links the board examples' device package, which the watch face imports by name.
+      - name: Link the workspace packages
+        working-directory: .
+        run: npm ci
       - run: npx vitest run
       - run: npm run typecheck
       - name: Version + LICENSE/NOTICE in sync with VERSION

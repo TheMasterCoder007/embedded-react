@@ -58,8 +58,9 @@ const Sensors = nativeModule<Sensors>('sensors', 1);
 ```
 
 **TypeScript.** Declares a module the firmware provides in C. The [native modules guide](../guides/native-modules.md)
-walks through writing one, with the watch face demo's modules on three boards. The interface is in the app's file or
-in a local `.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `Int64` (a whole number past
+walks through a firmware's device package, which apps import declared modules from, with the board examples' modules
+on three boards. A module the app declares itself has its interface in the app's file or in a local `.ts` file the app
+imports it from. A method takes and returns `Int` (a whole number), `Int64` (a whole number past
 an `Int`'s range), `number` (a float), `boolean`, `string` and [records](#records) of them, and may return `void`. It
 takes up to 16 values and returns up to 16, counting each field of a record.
 

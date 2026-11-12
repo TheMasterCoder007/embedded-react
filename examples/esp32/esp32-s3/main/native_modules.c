@@ -16,12 +16,13 @@
 
 #include "native_modules.h"
 
+#include "chip_module.h"
 #include "driver/temperature_sensor.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "thermometer_module.h"
 
 #include <stddef.h>
-#include <string.h>
 
 #define MS_PER_SECOND 1000u
 
@@ -29,6 +30,7 @@
 #define TEMPERATURE_MIN_CELSIUS (-10)
 #define TEMPERATURE_MAX_CELSIUS 80
 
+/* Each entry's place in the table, which an event is posted by. */
 enum
 {
     CHIP_NAME,
@@ -74,11 +76,11 @@ static bool thermometer_measure(const int32_t* arguments, int32_t* result, void*
 }
 
 const ErbNative native_modules[NATIVE_COUNT] = {
-    [CHIP_NAME] = {"chip.name", 1, "s:", chip_name},
-    [CHIP_FREE_MEMORY] = {"chip.freeMemory", 1, "i:", chip_free_memory},
-    [CHIP_SECOND] = {"chip.second", 1, "v:l", NULL},
-    [THERMOMETER_MEASURE] = {"thermometer.measure", 1, "v:", thermometer_measure},
-    [THERMOMETER_READING] = {"thermometer.reading", 1, "v:f", NULL},
+    [CHIP_NAME] = {CHIP_NAME_ENTRY, chip_name},
+    [CHIP_FREE_MEMORY] = {CHIP_FREE_MEMORY_ENTRY, chip_free_memory},
+    [CHIP_SECOND] = {CHIP_SECOND_ENTRY, NULL},
+    [THERMOMETER_MEASURE] = {THERMOMETER_MEASURE_ENTRY, thermometer_measure},
+    [THERMOMETER_READING] = {THERMOMETER_READING_ENTRY, NULL},
 };
 
 const uint16_t native_module_count = NATIVE_COUNT;
@@ -101,8 +103,8 @@ void native_modules_frame(uint32_t uptime_ms, NativePost post)
     const uint32_t seconds = uptime_ms / MS_PER_SECOND;
     if (seconds != s_posted_seconds)
     {
-        int32_t uptime[2];
-        erb_native_set_int64(uptime, (int64_t)uptime_ms);
+        int32_t uptime[CHIP_SECOND_ARG_CELLS];
+        erb_native_set_int64(&uptime[CHIP_SECOND_ARG_UPTIME_MS], (int64_t)uptime_ms);
         if (post(CHIP_SECOND, uptime))
         {
             s_posted_seconds = seconds;
@@ -116,9 +118,9 @@ void native_modules_frame(uint32_t uptime_ms, NativePost post)
     }
     if (s_reading_ready)
     {
-        int32_t value;
-        memcpy(&value, &s_reading, sizeof(value));
-        if (post(THERMOMETER_READING, &value))
+        int32_t reading[THERMOMETER_READING_ARG_CELLS];
+        erb_native_set_float(&reading[THERMOMETER_READING_ARG_CELSIUS], s_reading);
+        if (post(THERMOMETER_READING, reading))
         {
             s_reading_ready = false;
         }
