@@ -25,7 +25,8 @@
  * with erb_native_post() in Flow B or er_runtime_native_post() in Flow A. The app's subscribed handlers run at once.
  *
  * Values pass as 32-bit cells. An int64 takes two, low word first. A string takes one, which holds it by reference:
- * erb_native_string() reads an argument's, and erb_native_text() makes one for a result or an event's argument.
+ * erb_native_string() reads an argument's, and erb_native_text() makes one for a result or an event's argument. A
+ * record takes its fields' cells, in the order the signature lists them.
  */
 
 #include <stdbool.h>
@@ -35,13 +36,14 @@
  - Configuration
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** @brief Most parameters a native function or event may take. */
+/** @brief Most values a native function or event may take, a record's fields counted one by one; and most it may
+ *         return. */
 #define ERB_NATIVE_MAX_PARAMETERS 16u
 
 /** @brief Most cells they take: two for each int64. */
 #define ERB_NATIVE_MAX_CELLS (2u * ERB_NATIVE_MAX_PARAMETERS)
 
-/** @brief Most strings held at once: an event's, then those of a call its handler makes, with room to spare. */
+/** @brief Most strings held at once: an event's, then the arguments and results of a call its handler makes. */
 #define ERB_NATIVE_MAX_TEXTS 48u
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -52,7 +54,8 @@
  * @brief A native function an app may call.
  *
  * @param[in]  arguments  Arguments as 32-bit cells, as the signature lists them.
- * @param[out] result     The result's cells: two for an int64, one otherwise, and none when it returns nothing.
+ * @param[out] result     The result's cells: two for an int64, one for another value, a record's fields' one after
+ *                        another, and none when it returns nothing. There is room for ERB_NATIVE_MAX_CELLS.
  * @param[in]  context    ErbConfig::context, or ErRuntimeConfig::native_context.
  *
  * @return false to stop the app, naming the module.
@@ -61,9 +64,10 @@ typedef bool (*ErbNativeFn)(const int32_t* arguments, int32_t* result, void* con
 
 /**
  * @brief One native function or event the firmware offers. The signature is the result, ':', then the parameters,
- *        each one of i (int), b (bool), f (float), l (int64) or s (string); v as the result means none. "i:if" takes
- *        an int and a float and returns an int. An event has no callback and returns nothing: "v:f" is posted with a
- *        float.
+ *        each one of i (int), b (bool), f (float), l (int64) or s (string), or a record of them; v as the result
+ *        means none. "i:if" takes an int and a float and returns an int. A record lists its fields by name, in
+ *        order, and may hold records: "{x:i,y:i}:{x:i,y:i}i" takes a record of two ints and an int and returns a
+ *        record of two ints. An event has no callback and returns nothing: "v:f" is posted with a float.
  */
 typedef struct
 {
@@ -72,6 +76,28 @@ typedef struct
     const char* signature;
     ErbNativeFn callback; /**< NULL for an event. */
 } ErbNative;
+
+/** @brief A signature's values one by one, a record's fields in order: what its cells hold. */
+typedef struct
+{
+    char results[ERB_NATIVE_MAX_PARAMETERS + 1u]; /**< "" when it returns nothing. */
+    char params[ERB_NATIVE_MAX_PARAMETERS + 1u];
+    bool record; /**< The result is a record. */
+} ErbNativeCodes;
+
+/*----------------------------------------------------------------------------------------------------------------------
+ - Signatures
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Reads a signature's values one by one, as its cells hold them.
+ *
+ * @param[in]  signature  The signature.
+ * @param[out] codes      Its results' and parameters' codes.
+ *
+ * @return false when it isn't a signature, or it has more than ERB_NATIVE_MAX_PARAMETERS results or parameters.
+ */
+bool erb_native_codes(const char* signature, ErbNativeCodes* codes);
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Values

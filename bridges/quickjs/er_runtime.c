@@ -287,24 +287,44 @@ static int s_native_calls = 0;
 /** @brief An app has loaded into the current context. */
 static bool s_app_loaded = false;
 
-/** @brief Whether a signature is a result, ':', then up to ERB_NATIVE_MAX_PARAMETERS parameters of types the bridge
- * passes.
+/**
+ * @brief A value from its cells, as the app reads it: from @p cell, which it moves past.
  */
-static bool native_signature_valid(const char* signature)
+static JSValue cell_value(JSContext* ctx, char code, const int32_t* cells, uint32_t* cell)
 {
-    if (!signature || signature[0] == '\0' || !strchr("ibflsv", signature[0]) || signature[1] != ':')
+    switch (code)
     {
-        return false;
-    }
-    const char* parameters = signature + 2;
-    for (const char* code = parameters; *code; code++)
-    {
-        if (!strchr("ibfls", *code))
+        case 'i':
+            return JS_NewInt32(ctx, cells[(*cell)++]);
+        case 'b':
+            return JS_NewBool(ctx, cells[(*cell)++] != 0);
+        case 'l':
         {
-            return false;
+            const int64_t whole = erb_native_int64(&cells[*cell]);
+            *cell += 2u;
+            return JS_NewInt64(ctx, whole);
+        }
+        case 's':
+            return JS_NewString(ctx, erb_native_string(cells[(*cell)++]));
+        default:
+        {
+            float single;
+            memcpy(&single, &cells[(*cell)++], sizeof(single));
+            return JS_NewFloat64(ctx, (double)single);
         }
     }
-    return strlen(parameters) <= ERB_NATIVE_MAX_PARAMETERS;
+}
+
+/** @brief An array of values from their cells, a record's fields one by one: nativeModule() builds the objects. */
+static JSValue cell_values(JSContext* ctx, const char* codes, const int32_t* cells)
+{
+    JSValue values = JS_NewArray(ctx);
+    uint32_t cell = 0;
+    for (uint32_t index = 0; codes[index]; index++)
+    {
+        JS_SetPropertyUint32(ctx, values, index, cell_value(ctx, codes[index], cells, &cell));
+    }
+    return values;
 }
 
 /**
@@ -327,7 +347,8 @@ static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, J
     const char* name = JS_ToCString(ctx, argv[0]);
     const char* signature = JS_ToCString(ctx, argv[2]);
     int32_t found = -1;
-    if (name && signature && native_signature_valid(signature) && (!event || signature[0] == 'v'))
+    ErbNativeCodes codes;
+    if (name && signature && erb_native_codes(signature, &codes) && (!event || signature[0] == 'v'))
     {
         for (uint16_t index = 0; index < s_config.native_count; index++)
         {
@@ -346,7 +367,10 @@ static JSValue js_native_find(JSContext* ctx, JSValueConst this_val, int argc, J
     return converted ? JS_NewInt32(ctx, found) : JS_EXCEPTION;
 }
 
-/** @brief __erNative.call(index, ...arguments) → the native's result, its arguments converted by its signature. */
+/**
+ * @brief __erNative.call(index, ...arguments) → the native's result, its arguments converted by its signature. A
+ *        record goes as its fields one by one, and comes back as an array of them.
+ */
 static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
@@ -355,13 +379,14 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
     {
         return JS_EXCEPTION;
     }
+    ErbNativeCodes codes;
     if (index < 0 || index >= s_config.native_count || !s_config.natives[index].callback
-        || !native_signature_valid(s_config.natives[index].signature))
+        || !erb_native_codes(s_config.natives[index].signature, &codes))
     {
         return JS_ThrowRangeError(ctx, "no native function %d", (int)index);
     }
     const ErbNative* native = &s_config.natives[index];
-    const char* parameters = native->signature + 2;
+    const char* parameters = codes.params;
     const int parameter_count = (int)strlen(parameters);
     if (argc - 1 != parameter_count)
     {
@@ -419,7 +444,7 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
         }
     }
 
-    int32_t result[2] = {0, 0};
+    int32_t result[ERB_NATIVE_MAX_CELLS] = {0};
     bool succeeded = false;
     if (converted)
     {
@@ -430,29 +455,14 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
     JSValue value = JS_UNDEFINED;
     if (converted && succeeded)
     {
-        switch (native->signature[0])
+        uint32_t result_cell = 0;
+        if (codes.record)
         {
-            case 'i':
-                value = JS_NewInt32(ctx, result[0]);
-                break;
-            case 'b':
-                value = JS_NewBool(ctx, result[0] != 0);
-                break;
-            case 'l':
-                value = JS_NewInt64(ctx, erb_native_int64(result));
-                break;
-            case 's':
-                value = JS_NewString(ctx, erb_native_string(result[0]));
-                break;
-            case 'f':
-            {
-                float single;
-                memcpy(&single, &result[0], sizeof(single));
-                value = JS_NewFloat64(ctx, (double)single);
-                break;
-            }
-            default:
-                break;
+            value = cell_values(ctx, codes.results, result);
+        }
+        else if (codes.results[0])
+        {
+            value = cell_value(ctx, codes.results[0], result, &result_cell);
         }
     }
     erb_native_texts_release(held);
@@ -1082,13 +1092,12 @@ static bool post_native(int native, const int32_t* arguments)
         return false;
     }
     const ErbNative* event = &s_config.natives[native];
-    if (event->callback || !native_signature_valid(event->signature) || event->signature[0] != 'v')
+    ErbNativeCodes codes;
+    if (event->callback || !erb_native_codes(event->signature, &codes) || event->signature[0] != 'v')
     {
         return false;
     }
-    const char* codes = event->signature + 2;
-    const uint32_t params = (uint32_t)strlen(codes);
-    if (params && !arguments)
+    if (codes.params[0] && !arguments)
     {
         return false;
     }
@@ -1100,36 +1109,7 @@ static bool post_native(int native, const int32_t* arguments)
     if (JS_IsFunction(s_ctx, dispatcher))
     {
         /* The arguments as the app reads them, converted by the signature as a native's result is. */
-        JSValue values = JS_NewArray(s_ctx);
-        uint32_t cell = 0;
-        for (uint32_t param = 0; param < params; param++)
-        {
-            JSValue value;
-            switch (codes[param])
-            {
-                case 'i':
-                    value = JS_NewInt32(s_ctx, arguments[cell++]);
-                    break;
-                case 'b':
-                    value = JS_NewBool(s_ctx, arguments[cell++] != 0);
-                    break;
-                case 'l':
-                    value = JS_NewInt64(s_ctx, erb_native_int64(&arguments[cell]));
-                    cell += 2;
-                    break;
-                case 's':
-                    value = JS_NewString(s_ctx, erb_native_string(arguments[cell++]));
-                    break;
-                default:
-                {
-                    float single;
-                    memcpy(&single, &arguments[cell++], sizeof(single));
-                    value = JS_NewFloat64(s_ctx, (double)single);
-                    break;
-                }
-            }
-            JS_SetPropertyUint32(s_ctx, values, param, value);
-        }
+        JSValue values = cell_values(s_ctx, codes.params, arguments);
         JSValue call_arguments[2] = {JS_NewInt32(s_ctx, native), values};
         er_bridge_dispatch(s_ctx, dispatcher, 2, call_arguments, "native event");
         JS_FreeValue(s_ctx, call_arguments[0]);

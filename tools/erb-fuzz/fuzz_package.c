@@ -90,6 +90,7 @@ static const uint16_t s_panels[][2] = {
 /** @brief The probe's events, by their index in s_natives. */
 #define PROBE_DONE 10
 #define PROBE_NAMED 16
+#define PROBE_LOCATED 20
 
 /** @brief What a script step does with its first and second argument. An operation past the last wraps around. */
 enum
@@ -136,7 +137,7 @@ static bool sensors_read(const int32_t* arguments, int32_t* result, void* contex
     return arguments[0] != INT32_MIN;
 }
 
-/** @brief The probe module the native-calls and native-events frame tests call, so their seeds load. Each wraps
+/** @brief The probe module the native frame tests call, so their seeds load. Each wraps
  *         rather than overflows. */
 static uint32_t s_probe_count;
 static int32_t s_probe_stored;
@@ -246,6 +247,38 @@ static bool probe_announce(const int32_t* arguments, int32_t* result, void* cont
     return true;
 }
 
+static bool probe_move(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    result[0] = (int32_t)((uint32_t)arguments[0] + (uint32_t)arguments[2]);
+    result[1] = (int32_t)((uint32_t)arguments[1] + 2u * (uint32_t)arguments[2]);
+    return true;
+}
+
+static bool probe_fix(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    result[0] = erb_native_text("fix");
+    result[1] = arguments[0];
+    erb_native_set_int64(&result[2], 6000000000LL + arguments[0]);
+    const float lat = (float)arguments[0] / 2.0f;
+    const float lon = -(float)arguments[0] / 4.0f;
+    memcpy(&result[4], &lat, sizeof(lat));
+    memcpy(&result[5], &lon, sizeof(lon));
+    result[6] = arguments[0] % 2 == 0;
+    return true;
+}
+
+/** @brief Posts located from inside the call, which the runtime refuses. */
+static bool probe_locate(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    int32_t values[9] = {erb_native_text("probe"), arguments[0]};
+    erb_native_post(PROBE_LOCATED, values);
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"sensors.read", 1, "i:i", sensors_read},
     {"probe.add", 1, "i:ii", probe_add},
@@ -264,6 +297,10 @@ static const ErbNative s_natives[] = {
     {"probe.shift", 1, "l:il", probe_shift},
     {"probe.announce", 1, "v:i", probe_announce},
     [PROBE_NAMED] = {"probe.named", 1, "v:sl", NULL},
+    {"probe.move", 1, "{x:i,y:i}:{x:i,y:i}i", probe_move},
+    {"probe.fix", 1, "{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}:i", probe_fix},
+    {"probe.locate", 1, "v:i", probe_locate},
+    [PROBE_LOCATED] = {"probe.located", 1, "v:{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}{x:i,y:i}", NULL},
 };
 
 static BitmapFont s_fonts[FONT_SLOTS];

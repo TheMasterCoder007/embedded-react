@@ -72,13 +72,14 @@ static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 static bool s_flow_a;
 
 /*----------------------------------------------------------------------------------------------------------------------
- - The probe module, which the native-calls, native-events and native-strings scenarios call
+ - The probe module, which the native-calls, native-events, native-strings and native-records scenarios call
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief The probe's events, by their index in s_natives. */
 #define PROBE_DONE 9
 #define PROBE_IDLE 10
 #define PROBE_NAMED 15
+#define PROBE_LOCATED 19
 
 static int32_t s_probe_count;
 static float s_probe_stored;
@@ -87,6 +88,8 @@ static bool s_probe_pending;
 static int32_t s_probe_pending_value;
 static bool s_probe_announced;
 static int32_t s_probe_announced_id;
+static bool s_probe_locating;
+static int32_t s_probe_locating_id;
 
 /** @brief Posts one of the probe's events through the flow that runs the app. */
 static bool probe_post(int native, const int32_t* arguments)
@@ -129,6 +132,28 @@ static void probe_post_named(void)
     if (probe_post(PROBE_NAMED, values))
     {
         s_probe_announced = false;
+    }
+}
+
+/** @brief fix(id)'s cells, its label written into @p label: "fix-<id>", the id, 6000000000 plus it, half of it and
+ *         minus a quarter, and whether it is even. */
+static void probe_fix_cells(int32_t id, char* label, size_t label_size, int32_t* cells);
+
+/** @brief Posts located with fix(id) and the point (id, 2 * id), once it is taken. */
+static void probe_post_located(void)
+{
+    if (!s_probe_locating)
+    {
+        return;
+    }
+    char label[24];
+    int32_t values[9];
+    probe_fix_cells(s_probe_locating_id, label, sizeof(label), values);
+    values[7] = s_probe_locating_id;
+    values[8] = 2 * s_probe_locating_id;
+    if (probe_post(PROBE_LOCATED, values))
+    {
+        s_probe_locating = false;
     }
 }
 
@@ -250,6 +275,45 @@ static bool probe_announce(const int32_t* arguments, int32_t* result, void* cont
     return true;
 }
 
+/** @brief The point, step to the right and twice the step down. */
+static bool probe_move(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    result[0] = arguments[0] + arguments[2];
+    result[1] = arguments[1] + 2 * arguments[2];
+    return true;
+}
+
+static void probe_fix_cells(int32_t id, char* label, size_t label_size, int32_t* cells)
+{
+    snprintf(label, label_size, "fix-%d", (int)id);
+    cells[0] = erb_native_text(label);
+    cells[1] = id;
+    erb_native_set_int64(&cells[2], 6000000000LL + id);
+    cells[4] = probe_cell((float)id / 2.0f);
+    cells[5] = probe_cell(-(float)id / 4.0f);
+    cells[6] = id % 2 == 0;
+}
+
+static bool probe_fix(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    /* Held until the call returns, as a result's text must be. */
+    static char label[24];
+    probe_fix_cells(arguments[0], label, sizeof(label), result);
+    return true;
+}
+
+/** @brief Posts located on the next frame. */
+static bool probe_locate(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    s_probe_locating = true;
+    s_probe_locating_id = arguments[0];
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"probe.add", 1, "i:ii", probe_add},
     {"probe.half", 1, "f:i", probe_half},
@@ -267,6 +331,10 @@ static const ErbNative s_natives[] = {
     {"probe.shift", 1, "l:il", probe_shift},
     {"probe.announce", 1, "v:i", probe_announce},
     [PROBE_NAMED] = {"probe.named", 1, "v:sl", NULL},
+    {"probe.move", 1, "{x:i,y:i}:{x:i,y:i}i", probe_move},
+    {"probe.fix", 1, "{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}:i", probe_fix},
+    {"probe.locate", 1, "v:i", probe_locate},
+    [PROBE_LOCATED] = {"probe.located", 1, "v:{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}{x:i,y:i}", NULL},
 };
 
 static void log_line(const char* line, void* context)
@@ -302,6 +370,7 @@ static void frame(void)
 {
     probe_post_done();
     probe_post_named();
+    probe_post_located();
     probe_post(PROBE_IDLE, NULL);
     embedded_renderer_tick(FRAME_MS);
     if (s_flow_a)

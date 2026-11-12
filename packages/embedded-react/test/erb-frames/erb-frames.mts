@@ -708,6 +708,24 @@ const SCENARIOS: Scenario[] = [
     flowA: true,
     mocks: true,
   },
+  // Buttons: move, swap, fix, tell. Nothing has moved, been fixed or been heard yet.
+  {
+    name: 'native-records',
+    file: fixture('native-records'),
+    screen: PORTRAIT,
+    flowA: true,
+    mocks: true,
+  },
+  // Two moves: 6,12. A swap moves 12,6 by 1: 13,8. fix(13): "fix-13" #13 at 6000000013, odd, at 6.5 and -3.25. tell
+  // posts located next frame, with fix(8) and the point 8,16.
+  {
+    name: 'native-records-taps',
+    file: fixture('native-records'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 84,20 136,20 188,20',
+    flowA: true,
+    mocks: true,
+  },
   // The probe is there and the radio isn't, in every pass: the radio's page is left out and its event never comes.
   {
     name: 'native-optional',

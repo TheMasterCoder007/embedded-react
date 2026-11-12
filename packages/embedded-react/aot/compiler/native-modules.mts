@@ -24,6 +24,9 @@
  *
  * `nativeModule.optional<Wifi>('wifi', 1)` is a module only some boards have. `Wifi.available` says whether the
  * firmware has every method and event of it; the package lists them all, so both flows agree.
+ *
+ * A record, an interface or object type of fields declared beside the module's interface, passes as its fields one by
+ * one, in order; its signature names them, so a renamed or reordered field doesn't load.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -35,13 +38,16 @@ import {dirname, resolve} from 'node:path';
 import {parse} from '@babel/parser';
 import {aotError} from './diagnostics.mts';
 import {buildsText, lowerExpr, lowerExprWide} from './expressions.mts';
+import {flattenTree, leafNode, objectTreeOf} from './records.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {
   IrExpr,
   IrNativeCall,
   NativeImport,
+  NativeRecord,
   NativeType,
+  NativeValue,
 } from './ir/expressions.mts';
 import {nativeAvailableSlot} from './boot.mts';
 import {BOOL} from './ir/types.mts';
@@ -54,8 +60,17 @@ import type {Env} from './types.mts';
 
 /** A method of a native module's interface, or why it can't be called yet. */
 type NativeMember =
-  | {kind: 'method'; params: NativeType[]; result: NativeType | 'void'}
+  | {kind: 'method'; params: NativeValue[]; result: NativeValue | 'void'}
   | {kind: 'refused'; reason: string; hint: string};
+
+/** The members of a record type the interface's file declares, by its name (see declaredMembers). */
+type RecordScope = (name: string) => t.TSTypeElement[] | string | null;
+
+/** One of a value's values: a record's field by its path, or the value itself at ''. */
+interface NativeLeaf {
+  path: string;
+  type: NativeType;
+}
 
 /** A module the app declares with nativeModule(). */
 export interface NativeModule {
@@ -80,8 +95,11 @@ export const MAX_IMPORTS = 32;
 
 const MAX_VERSION = 0xffff;
 
-/** Parameters a native method may take: what Flow A's bridge passes (NATIVE_MAX_PARAMETERS in er_runtime.c). */
+/** Values a native method may take, and return, a record's fields counted one by one: ERB_NATIVE_MAX_PARAMETERS. */
 const MAX_PARAMETERS = 16;
+
+/** What a record's field may be named, as a signature names it. */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const SIGNATURE_CODES: Record<NativeType | 'void', string> = {
   int: 'i',
@@ -406,18 +424,22 @@ const parseInterfaceFile = (source: string): t.Program =>
   parse(source, {sourceType: 'module', plugins: ['typescript', 'jsx']}).program;
 
 /**
- * The type a parameter or result is passed as, or why it can't be.
+ * The type a parameter, result or field is passed as, or what it is that can't be.
  *
  * @param type  The TypeScript type.
  * @param isResult  It is the result, which may be void.
+ * @param scope  The record types the interface's file declares.
+ * @param seen  The records it is part of, which it can't hold.
  *
- * @returns The native type, or a reason.
+ * @returns The native type, or what it is, as in "takes …".
  */
-function nativeTypeOf(
-  type: t.TSType | undefined,
+function nativeValueOf(
+  type: t.TSType,
   isResult: boolean,
-): NativeType | 'void' | {reason: string} {
-  switch (type?.type) {
+  scope: RecordScope,
+  seen: ReadonlySet<string> = new Set(),
+): NativeValue | 'void' | {what: string} {
+  switch (type.type) {
     case 'TSNumberKeyword':
       return 'float';
     case 'TSBooleanKeyword':
@@ -425,35 +447,106 @@ function nativeTypeOf(
     case 'TSStringKeyword':
       return 'string';
     case 'TSVoidKeyword':
-      return isResult ? 'void' : {reason: 'takes void'};
-    case 'TSTypeReference':
-      if (
-        type.typeName.type === 'Identifier' &&
-        Object.hasOwn(WHOLE_TYPES, type.typeName.name) &&
-        !type.typeParameters
-      ) {
-        return WHOLE_TYPES[type.typeName.name];
+      return isResult ? 'void' : {what: 'void'};
+    case 'TSTypeLiteral':
+      return recordOf(type.members, scope, seen);
+    case 'TSTypeReference': {
+      if (type.typeName.type !== 'Identifier' || type.typeParameters) break;
+      const {name} = type.typeName;
+      if (Object.hasOwn(WHOLE_TYPES, name)) {
+        return WHOLE_TYPES[name];
       }
-      break;
-    case undefined:
-      return {
-        reason: `has no ${isResult ? 'result' : 'parameter'} type`,
-      };
+      const members = scope(name);
+      if (typeof members === 'string') {
+        return {what: `${name}, which isn't a plain interface or object type`};
+      }
+      if (!members) break;
+      if (seen.has(name)) {
+        return {what: `the record ${name}, which holds itself`};
+      }
+      return recordOf(members, scope, new Set(seen).add(name));
+    }
   }
-  return {
-    reason: `${isResult ? 'returns' : 'takes'} a type native modules don't pass yet`,
-  };
+  return {what: "a type native modules don't pass"};
 }
 
 /**
- * One member of a module's interface: a method whose parameters and result are Int, Int64, number, boolean or string.
+ * A record: an interface or object type whose fields are each a value native modules pass, required, and named as a
+ * signature names them.
+ *
+ * @param members  Its members.
+ * @param scope  The record types the interface's file declares.
+ * @param seen  The records it is part of.
+ *
+ * @returns The record, or what it is that can't be.
+ */
+function recordOf(
+  members: t.TSTypeElement[],
+  scope: RecordScope,
+  seen: ReadonlySet<string>,
+): NativeRecord | {what: string} {
+  const record: NativeRecord = {kind: 'record', fields: []};
+  for (const member of members) {
+    if (
+      member.type !== 'TSPropertySignature' ||
+      member.computed ||
+      (member.key.type !== 'Identifier' && member.key.type !== 'StringLiteral')
+    ) {
+      return {what: 'a record with a member that is not a plain field'};
+    }
+    const name =
+      member.key.type === 'Identifier' ? member.key.name : member.key.value;
+    if (!FIELD_NAME.test(name) || name === '__proto__') {
+      return {
+        what: `a record with a field named ${name}, which a native signature can't name`,
+      };
+    }
+    if (record.fields.some(field => field.name === name)) {
+      return {what: `a record that declares ${name} twice`};
+    }
+    if (member.optional) {
+      return {what: `a record whose field ${name} is optional`};
+    }
+    const fieldType = member.typeAnnotation?.typeAnnotation;
+    if (!fieldType) {
+      return {what: `a record whose field ${name} has no type`};
+    }
+    const type = nativeValueOf(fieldType, false, scope, seen);
+    if (typeof type === 'object' && !('kind' in type)) {
+      return {what: `a record whose field ${name} is ${type.what}`};
+    }
+    record.fields.push({name, type: type as NativeValue});
+  }
+  return record.fields.length ? record : {what: 'an empty record'};
+}
+
+/**
+ * A value's values one by one, a record's fields in order, each by its path.
+ *
+ * @param value  The value.
+ * @param path  Its path, '' at the top.
+ *
+ * @returns Its values.
+ */
+const leavesOf = (value: NativeValue, path = ''): NativeLeaf[] =>
+  typeof value === 'string'
+    ? [{path, type: value}]
+    : value.fields.flatMap(field =>
+        leavesOf(field.type, path ? `${path}.${field.name}` : field.name),
+      );
+
+/**
+ * One member of a module's interface: a method whose parameters and result are Int, Int64, number, boolean, string,
+ * or records of them.
  *
  * @param member  The interface member.
+ * @param scope  The record types the interface's file declares.
  *
  * @returns Its name and what it is, or null for a member without a plain name.
  */
 function memberOf(
   member: t.TSTypeElement,
+  scope: RecordScope,
 ): {name: string; member: NativeMember} | null {
   if (
     (member.type !== 'TSMethodSignature' &&
@@ -469,8 +562,9 @@ function memberOf(
     member: {kind: 'refused' as const, reason, hint},
   });
   const typeHint =
-    'a native method takes and returns Int and Int64 (from embedded-react), number, boolean and string, and may ' +
-    'return void.';
+    'a native method takes and returns Int and Int64 (from embedded-react), number, boolean, string and records of ' +
+    'them, and may return void. A record is an interface or object type of required fields, declared beside the ' +
+    "module's: interface Fix { lat: number; lon: number; }";
 
   // A method, or a property whose type is a function.
   const functionType =
@@ -492,13 +586,7 @@ function memberOf(
     return refuse('takes type parameters', typeHint);
   }
 
-  if (functionType.parameters.length > MAX_PARAMETERS) {
-    return refuse(
-      `takes more than ${MAX_PARAMETERS} parameters`,
-      'split it into methods that take fewer.',
-    );
-  }
-  const params: NativeType[] = [];
+  const params: NativeValue[] = [];
   for (const parameter of functionType.parameters) {
     if (parameter.type !== 'Identifier' || parameter.optional) {
       return refuse(
@@ -506,21 +594,47 @@ function memberOf(
         'give each parameter a name and a type: read(channel: Int): number;',
       );
     }
-    const type = nativeTypeOf(
-      parameter.typeAnnotation?.type === 'TSTypeAnnotation'
-        ? parameter.typeAnnotation.typeAnnotation
-        : undefined,
+    if (parameter.typeAnnotation?.type !== 'TSTypeAnnotation') {
+      return refuse('has no parameter type', typeHint);
+    }
+    const type = nativeValueOf(
+      parameter.typeAnnotation.typeAnnotation,
       false,
+      scope,
     );
-    if (typeof type === 'object') return refuse(type.reason, typeHint);
-    params.push(type as NativeType);
+    if (typeof type === 'object' && !('kind' in type)) {
+      return refuse(`takes ${type.what}`, typeHint);
+    }
+    params.push(type as NativeValue);
   }
-  const result = nativeTypeOf(
-    functionType.typeAnnotation?.typeAnnotation,
-    true,
-  );
-  if (typeof result === 'object') return refuse(result.reason, typeHint);
-  return {name, member: {kind: 'method', params, result}};
+  const resultType = functionType.typeAnnotation?.typeAnnotation;
+  if (!resultType) {
+    return refuse('has no result type', typeHint);
+  }
+  const result = nativeValueOf(resultType, true, scope);
+  if (typeof result === 'object' && !('kind' in result)) {
+    return refuse(`returns ${result.what}`, typeHint);
+  }
+
+  if (params.flatMap(param => leavesOf(param)).length > MAX_PARAMETERS) {
+    return refuse(
+      `takes more than ${MAX_PARAMETERS} values, counting each field of a record`,
+      'split it into methods that take fewer.',
+    );
+  }
+  if (
+    result !== 'void' &&
+    leavesOf(result as NativeValue).length > MAX_PARAMETERS
+  ) {
+    return refuse(
+      `returns more than ${MAX_PARAMETERS} values, counting each field of its record`,
+      'split it into methods that return fewer.',
+    );
+  }
+  return {
+    name,
+    member: {kind: 'method', params, result: result as NativeValue | 'void'},
+  };
 }
 
 /**
@@ -543,6 +657,7 @@ const isEventsMember = (member: t.TSTypeElement): boolean =>
  * @param member  The `events` member.
  * @param call  The nativeModule() call, for errors.
  * @param interfaceName  The interface's name, for errors.
+ * @param scope  The record types the interface's file declares.
  *
  * @returns Each event, or why it can't be used.
  */
@@ -550,6 +665,7 @@ function eventsOf(
   member: t.TSTypeElement,
   call: t.CallExpression,
   interfaceName: string,
+  scope: RecordScope,
 ): Map<string, NativeMember> {
   const type =
     member.type === 'TSPropertySignature'
@@ -567,7 +683,7 @@ function eventsOf(
   }
   const events = new Map<string, NativeMember>();
   for (const element of type.members) {
-    const event = memberOf(element);
+    const event = memberOf(element, scope);
     if (!event) continue;
     if (event.name === '__proto__') {
       throw errorAt(
@@ -633,8 +749,9 @@ export function collectNativeModules(
     }
     names.add(name);
 
-    // The interface, in this file or in the local file the app imports it from.
+    // The interface, in this file or in the local file the app imports it from, and the records that file declares.
     let members = declaredMembers(program, interfaceName);
+    let scope: RecordScope = name => declaredMembers(program, name);
     if (members === null) {
       const local = localImportOf(program, interfaceName);
       const source = local ? interfaces[local.path] : undefined;
@@ -646,7 +763,9 @@ export function collectNativeModules(
             "import type {Sensors} from './sensors';",
         );
       }
-      members = declaredMembers(parseInterfaceFile(source), local.exported);
+      const interfaceFile = parseInterfaceFile(source);
+      members = declaredMembers(interfaceFile, local.exported);
+      scope = name => declaredMembers(interfaceFile, name);
       if (members === null) {
         throw errorAt(
           call,
@@ -681,10 +800,10 @@ export function collectNativeModules(
     };
     for (const element of members) {
       if (isEventsMember(element)) {
-        module.events = eventsOf(element, call, interfaceName);
+        module.events = eventsOf(element, call, interfaceName, scope);
         continue;
       }
-      const member = memberOf(element);
+      const member = memberOf(element, scope);
       if (!member) continue;
       if (optional && member.name === 'available') {
         throw errorAt(
@@ -728,6 +847,18 @@ export function collectNativeModules(
 }
 
 /**
+ * A value's code in a signature: a record names its fields in order, {x:i,y:i}.
+ *
+ * @param value  The value.
+ *
+ * @returns The code.
+ */
+const codeOf = (value: NativeValue | 'void'): string =>
+  typeof value === 'string'
+    ? SIGNATURE_CODES[value]
+    : `{${value.fields.map(field => `${field.name}:${codeOf(field.type)}`).join(',')}}`;
+
+/**
  * A method's signature: its result, ':', then its parameters.
  *
  * @param member  The method.
@@ -735,9 +866,7 @@ export function collectNativeModules(
  * @returns The signature, such as "i:if".
  */
 const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
-  SIGNATURE_CODES[member.result] +
-  ':' +
-  member.params.map(param => SIGNATURE_CODES[param]).join('');
+  codeOf(member.result) + ':' + member.params.map(codeOf).join('');
 
 /**
  * The optional modules, in order, each with every method and event of its interface that can be used: the package
@@ -777,12 +906,16 @@ function nativeImportOf(module: NativeModule, method: string): NativeImport {
     NativeMember,
     {kind: 'method'}
   >;
+  const {result} = member;
   return {
     name: `${module.name}.${method}`,
     version: module.version,
     signature: signatureOf(member),
-    params: member.params,
-    result: member.result,
+    params: member.params.flatMap(param =>
+      leavesOf(param).map(leaf => leaf.type),
+    ),
+    result: typeof result === 'string' ? result : 'record',
+    results: result === 'void' ? [] : leavesOf(result).map(leaf => leaf.type),
     module: module.optional,
   };
 }
@@ -804,7 +937,9 @@ function nativeEventFor(module: NativeModule, event: string): NativeEvent {
     name: `${module.name}.${event}`,
     version: module.version,
     signature: signatureOf(member),
-    params: member.params,
+    params: member.params.flatMap(param =>
+      leavesOf(param).map(leaf => leaf.type),
+    ),
     module: module.optional,
   };
 }
@@ -1078,8 +1213,9 @@ export function lowerNativeCall(
     );
   }
 
-  // Each argument must already be of its parameter's type, except a whole number passed as a number.
-  const callArguments = node.arguments.map((argument, index) => {
+  // Each argument must already be of its parameter's type, except a whole number passed as a number. A record's
+  // fields are passed one by one, each read from the object given by its name.
+  const callArguments = node.arguments.flatMap((argument, index) => {
     if (
       argument.type === 'SpreadElement' ||
       argument.type === 'ArgumentPlaceholder'
@@ -1091,30 +1227,165 @@ export function lowerNativeCall(
       );
     }
     const param = member.params[index];
-    // Built text needs a buffer to be built in, which a const has.
-    if (param === 'string' && buildsText(argument, environment)) {
+    if (typeof param === 'string') {
+      return [lowerArgument(argument, param, environment, what, null)];
+    }
+    const tree = objectTreeOf(argument, environment);
+    const leaves = leavesOf(param);
+    if (!tree) {
       throw errorAt(
         argument,
-        `AOT: ${what}() takes a string, not text built in the call`,
-        ARGUMENT_HINTS.string.hint,
+        `AOT: ${what}() takes a record here`,
+        `pass an object of its fields: {${leaves.map(leaf => leaf.path).join(', ')}}.`,
       );
     }
-    // Only an Int64 parameter holds a 64-bit value whole.
-    const lowered =
-      param === 'int64'
-        ? lowerExprWide(argument, environment)
-        : lowerExpr(argument, environment);
-    if (!ARGUMENT_TYPES[param].includes(lowered.type.kind)) {
-      throw errorAt(
+    const fields = flattenTree(tree);
+    return leaves.map(leaf => {
+      if (!fields.has(leaf.path)) {
+        throw errorAt(
+          argument,
+          `AOT: the record ${what}() takes has a field ${leaf.path}, which this object doesn't`,
+          'give the object every field the interface declares.',
+        );
+      }
+      const field = leafNode(fields.get(leaf.path), environment);
+      return lowerArgument(
+        field.node as t.Expression,
+        leaf.type,
+        field.environment,
+        what,
+        leaf.path,
         argument,
-        `AOT: ${what}() takes ${ARGUMENT_HINTS[param].what} here`,
-        ARGUMENT_HINTS[param].hint,
       );
-    }
-    return lowered;
+    });
   });
 
   return {import: nativeImportOf(module, method), callArguments};
+}
+
+/**
+ * Lowers one value a native method is given, checked against its type.
+ *
+ * @param argument  The value.
+ * @param param  Its type.
+ * @param environment  The expression environment.
+ * @param what  The method, for errors: `Sensors.read`.
+ * @param field  The record's field it is, or null for an argument.
+ * @param at  Where an error points, when not at the value: the record a field is part of.
+ *
+ * @returns The value.
+ */
+function lowerArgument(
+  argument: t.Expression,
+  param: NativeType,
+  environment: Env,
+  what: string,
+  field: string | null,
+  at: t.Node = argument,
+): IrExpr {
+  // Built text needs a buffer to be built in, which a const has.
+  if (param === 'string' && buildsText(argument, environment)) {
+    throw errorAt(
+      at,
+      `AOT: ${what}() takes a string${field === null ? '' : ` as ${field}`}, not text built in the call`,
+      ARGUMENT_HINTS.string.hint,
+    );
+  }
+  // Only an Int64 parameter holds a 64-bit value whole.
+  const lowered =
+    param === 'int64'
+      ? lowerExprWide(argument, environment)
+      : lowerExpr(argument, environment);
+  if (!ARGUMENT_TYPES[param].includes(lowered.type.kind)) {
+    throw errorAt(
+      at,
+      `AOT: ${what}() takes ${ARGUMENT_HINTS[param].what} ${field === null ? 'here' : `as ${field}`}`,
+      ARGUMENT_HINTS[param].hint,
+    );
+  }
+  return lowered;
+}
+
+/**
+ * The native method a call calls, when it returns a record: a const or an object state keeps it, as JS would.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The call's module, method and record, or null.
+ */
+export function nativeRecordCallOf(
+  node: t.Node | null | undefined,
+  environment: Env,
+): {module: NativeModule; method: string; record: NativeRecord} | null {
+  if (node?.type !== 'CallExpression') return null;
+  const callee = nativeCalleeOf(node, environment);
+  const member = callee?.module.members.get(callee.method);
+  return member?.kind === 'method' && typeof member.result === 'object'
+    ? {...callee!, record: member.result}
+    : null;
+}
+
+/**
+ * Refuses a record a native method returns where it can't be kept: anywhere but a const, an object state's setter, a
+ * native method's record parameter, or a field read of one of those.
+ *
+ * @param node  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns The error, or null when the call returns no record.
+ */
+export function unkeptRecordError(
+  node: t.Node,
+  environment: Env,
+): AotError | null {
+  const callee = nativeRecordCallOf(node, environment);
+  if (!callee) return null;
+  const binding = ((node as t.CallExpression).callee as t.MemberExpression)
+    .object as t.Identifier;
+  const what = `${binding.name}.${callee.method}`;
+  return errorAt(
+    node,
+    `AOT: ${what}() returns a record, which only a const or an object state keeps`,
+    `keep it first, then read its fields: const fix = ${what}(…); or setFix(${what}(…));`,
+  );
+}
+
+/**
+ * How many values a value is, a record's fields counted one by one.
+ *
+ * @param value  The value.
+ *
+ * @returns The count.
+ */
+export const valueCount = (value: NativeValue): number =>
+  leavesOf(value).length;
+
+/**
+ * Where each of a record's values is, by its path: a tree of `read(index, type)`, in field order.
+ *
+ * @param record  The record.
+ * @param read  Each value, by its index among the record's values.
+ * @param from  The index of the record's first value.
+ *
+ * @returns The tree.
+ */
+export function recordTreeOf<Leaf>(
+  record: NativeRecord,
+  read: (index: number, type: NativeType) => Leaf,
+  from = 0,
+): Record<string, unknown> {
+  const tree: Record<string, unknown> = {};
+  let index = from;
+  for (const field of record.fields) {
+    if (typeof field.type === 'string') {
+      tree[field.name] = read(index++, field.type);
+    } else {
+      tree[field.name] = recordTreeOf(field.type, read, index);
+      index += valueCount(field.type);
+    }
+  }
+  return tree;
 }
 
 /**
@@ -1161,13 +1432,15 @@ export function nativeAvailableOf(
  * @param call  The call.
  * @param environment  The expression environment.
  *
- * @returns The event, and the handler with no more parameters than the event's values.
+ * @returns The event and its values, and the handler with no more parameters than the event's values.
  */
 export function nativeEventOf(
   call: t.CallExpression,
   environment: Env,
 ): {
   event: NativeEvent;
+  /** The event's values, as the interface declares them. */
+  values: NativeValue[];
   handler: t.ArrowFunctionExpression | t.FunctionExpression;
 } {
   const [moduleArgument, eventArgument, handler] = call.arguments;
@@ -1232,14 +1505,23 @@ export function nativeEventOf(
       'take one parameter for each value the interface declares, or fewer.',
     );
   }
-  for (const parameter of handler.params) {
-    if (parameter.type !== 'Identifier') {
+  handler.params.forEach((parameter, position) => {
+    // A record may be destructured, as JS would.
+    if (
+      parameter.type !== 'Identifier' &&
+      (parameter.type !== 'ObjectPattern' ||
+        typeof event.params[position] === 'string')
+    ) {
       throw errorAt(
         parameter,
         "AOT: useNativeEvent()'s handler takes plain parameters",
-        'name each value: (celsius, ok) => …',
+        'name each value: (celsius, ok) => …, or destructure a record: ({lat, lon}) => …',
       );
     }
-  }
-  return {event: nativeEventFor(module, eventArgument.value), handler};
+  });
+  return {
+    event: nativeEventFor(module, eventArgument.value),
+    values: event.params,
+    handler,
+  };
 }

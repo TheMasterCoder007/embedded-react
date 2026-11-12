@@ -2002,26 +2002,26 @@ static bool post_native(int native, const int32_t* arguments)
         return false;
     }
     const ErbNative* event = &g_erb.config.natives[native];
-    if (event->callback || !event->signature || event->signature[0] != 'v' || event->signature[1] != ':')
+    ErbNativeCodes codes;
+    if (event->callback || !erb_native_codes(event->signature, &codes) || event->signature[0] != 'v')
     {
         return false;
     }
-    const char* codes = event->signature + 2;
-    const size_t params = strlen(codes);
-    if (params > ERB_NATIVE_MAX_PARAMETERS || (params && !arguments))
+    const size_t params = strlen(codes.params);
+    if (params && !arguments)
     {
         return false;
     }
 
-    /* The C cells into the handler's registers: a bool is 0 or 1, an int64 starts on an even register, and a string
-     * is read in place. */
+    /* The C cells into the handler's registers, a record's fields one by one: a bool is 0 or 1, an int64 starts on an
+     * even register, and a string is read in place. */
     int32_t registers[3u * ERB_NATIVE_MAX_PARAMETERS] = {0};
     uint32_t cell = 0;
     uint32_t register_index = 0;
     for (size_t param = 0; param < params; param++)
     {
-        register_index = erb_native_register(codes[param], register_index);
-        switch (codes[param])
+        register_index = erb_native_register(codes.params[param], register_index);
+        switch (codes.params[param])
         {
             case 'b':
                 registers[register_index++] = arguments[cell++] != 0;

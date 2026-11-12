@@ -26,12 +26,15 @@ import {
   withLoc,
 } from './diagnostics.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
-import {evalStatic, foldScope} from './static-eval.mts';
+import {evalStatic, foldScope, RuntimeLeaf} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
 import {
   lowerNativeCall,
   nativeCalleeOf,
   nativeEventOf,
+  nativeRecordCallOf,
+  recordTreeOf,
+  valueCount,
 } from './native-modules.mts';
 import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
 import type {ItemCallback, ListChain} from './list-order.mts';
@@ -164,6 +167,9 @@ const POSITION_KEYS = new Set([
 
 /** Update locals made so far, which numbers the next one's name. */
 let updateRows = 0;
+
+/** Counts the native calls whose record is kept, to name its locals as no JS binding can be named. */
+let keptRecords = 0;
 
 /** Each updateVector shape key and the numbers its array takes, for errors. */
 const UPDATE_VECTOR_ARGUMENTS: Record<string, string> = {
@@ -2495,6 +2501,27 @@ export function lowerStmts(
           continue;
         }
         const declarator = entry;
+
+        // A native method's record: its values kept in locals, then declared as an object of them, or a field.
+        const recordRoot = nativeRecordRootOf(declarator.init, environment);
+        if (recordRoot) {
+          const kept = keepNativeRecord(
+            recordRoot.call,
+            recordRoot.callee,
+            environment,
+          );
+          lowered.push(kept.statement);
+          environment = kept.environment;
+          queue.unshift({
+            ...declarator,
+            init: recordRoot.replaced({
+              type: 'Identifier',
+              name: kept.name,
+            } as t.Identifier),
+          });
+          continue;
+        }
+
         const expanded = expandObjectDeclarator(declarator, environment);
         if (expanded) {
           if (statement.kind !== 'const') {
@@ -2866,13 +2893,46 @@ export function lowerStmts(
       );
     }
 
+    // A native method's record given straight to a call that takes one, setFix(Gps.fix()), or a field of it,
+    // setLat(Gps.fix().lat): kept first, then passed by its name.
+    let expression = statement.expression;
+    const keptRoot = (argument: t.Node, index: number) => {
+      const recordRoot = nativeRecordRootOf(argument, environment);
+      return recordRoot &&
+        (recordRoot.call !== argument ||
+          takesRecord(
+            expression as t.CallExpression,
+            index,
+            environment,
+            state,
+          ))
+        ? recordRoot
+        : null;
+    };
+    if (
+      expression.type === 'CallExpression' &&
+      expression.arguments.some(keptRoot)
+    ) {
+      const callArguments = expression.arguments.map((argument, index) => {
+        const recordRoot = keptRoot(argument, index);
+        if (!recordRoot) return argument;
+        const kept = keepNativeRecord(
+          recordRoot.call,
+          recordRoot.callee,
+          environment,
+        );
+        lowered.push(kept.statement);
+        environment = kept.environment;
+        return recordRoot.replaced({
+          type: 'Identifier',
+          name: kept.name,
+        } as t.Identifier);
+      });
+      expression = {...expression, arguments: callArguments};
+    }
+
     lowered.push(
-      ...lowerHandlerExpression(
-        statement.expression,
-        environment,
-        state,
-        context,
-      ),
+      ...lowerHandlerExpression(expression, environment, state, context),
     );
   }
 
@@ -3108,6 +3168,103 @@ export function lowerEffect(
 }
 
 /**
+ * The native call that returns a record at the root of an expression: the call itself, or the record a field read
+ * starts from, `Gps.fix().place.lat`.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The call and its callee, and the expression with the call replaced by another; or null.
+ */
+function nativeRecordRootOf(
+  node: t.Node | null | undefined,
+  environment: Env,
+): {
+  call: t.CallExpression;
+  callee: NonNullable<ReturnType<typeof nativeRecordCallOf>>;
+  replaced: (by: t.Expression) => t.Expression;
+} | null {
+  if (node?.type === 'MemberExpression') {
+    const root = nativeRecordRootOf(node.object, environment);
+    return (
+      root && {
+        ...root,
+        replaced: by => ({...node, object: root.replaced(by)}),
+      }
+    );
+  }
+  const callee = nativeRecordCallOf(node, environment);
+  return (
+    callee && {
+      call: node as t.CallExpression,
+      callee,
+      replaced: by => by,
+    }
+  );
+}
+
+/**
+ * Whether a call takes a record as one of its arguments: an object state's setter, or a native method's record
+ * parameter.
+ *
+ * @param call  The call.
+ * @param index  The argument's position.
+ * @param environment  The expression environment.
+ * @param state  The component's state table.
+ *
+ * @returns True when it does.
+ */
+function takesRecord(
+  call: t.CallExpression,
+  index: number,
+  environment: Env,
+  state: StateTable,
+): boolean {
+  if (
+    call.callee.type === 'Identifier' &&
+    state.bySetter.get(call.callee.name)?.kind === 'record'
+  ) {
+    return true;
+  }
+  const callee = nativeCalleeOf(call, environment);
+  const member = callee?.module.members.get(callee.method);
+  return member?.kind === 'method' && typeof member.params[index] === 'object';
+}
+
+/**
+ * Calls a native method that returns a record, keeping its values in locals, and binds the record to a name no JS
+ * binding has, as an object of them.
+ *
+ * @param node  The call.
+ * @param callee  Its module, method and record (see nativeRecordCallOf).
+ * @param environment  The expression environment.
+ *
+ * @returns The call, the name, and the environment that binds it.
+ */
+function keepNativeRecord(
+  node: t.CallExpression,
+  callee: NonNullable<ReturnType<typeof nativeRecordCallOf>>,
+  environment: Env,
+): {statement: IrStmt; name: string; environment: Env} {
+  const call = lowerNativeCall(node, callee, environment);
+  const name = `#record${keptRecords++}`;
+  const results = call.import.results.map((_, index) => `${name}_${index}`);
+  const tree = recordTreeOf(
+    callee.record,
+    (index, type) =>
+      new RuntimeLeaf({name: results[index], ...VALUE_SLOTS[type]}),
+  );
+  return {
+    statement: {kind: 'callNative', call, results},
+    name,
+    environment: {
+      ...environment,
+      constants: {...environment.constants, [name]: tree},
+    },
+  };
+}
+
+/**
  * Lowers a `useNativeEvent(Module, 'event', handler)` to a handler the runtime runs with the event's values. The
  * handler does nothing while its component isn't mounted: the conditions it is built under, read as it runs.
  *
@@ -3122,30 +3279,66 @@ export function lowerNativeEvent(
   state: StateTable,
   output: Out,
 ): void {
-  const {event, handler} = nativeEventOf(call, environment);
+  const {event, values: declared, handler} = nativeEventOf(call, environment);
   const index = output.nativeEventHandlers.length;
 
-  // Each value is a register the handler is entered with, read by a name no JS binding can have.
+  // Each value is a register the handler is entered with, read by a name no JS binding can have. A record's fields
+  // are values of their own, and the record is bound as an object of them; destructuring one declares its fields.
   const values = event.params.map(
     (_, position) => `#native${index}_${position}`,
   );
   const locals = new Map<string, Local>(environment.locals);
+  const constants = {...environment.constants};
+  const destructured: t.Statement[] = [];
+  let first = 0;
   handler.params.forEach((parameter, position) => {
-    locals.set((parameter as t.Identifier).name, {
-      name: values[position],
-      ...VALUE_SLOTS[event.params[position]],
-    });
+    const type = declared[position];
+    const from = first;
+    first += valueCount(type);
+    if (typeof type === 'string') {
+      locals.set((parameter as t.Identifier).name, {
+        name: values[from],
+        ...VALUE_SLOTS[type],
+      });
+      return;
+    }
+    const name =
+      parameter.type === 'Identifier'
+        ? parameter.name
+        : `#value${index}_${position}`;
+    locals.delete(name);
+    constants[name] = recordTreeOf(
+      type,
+      (leaf, leafType) =>
+        new RuntimeLeaf({name: values[leaf], ...VALUE_SLOTS[leafType]}),
+      from,
+    );
+    if (parameter.type === 'ObjectPattern') {
+      destructured.push({
+        type: 'VariableDeclaration',
+        kind: 'const',
+        declarations: [
+          {
+            type: 'VariableDeclarator',
+            id: parameter,
+            init: {type: 'Identifier', name},
+          },
+        ],
+      } as t.VariableDeclaration);
+    }
   });
 
   const body = handler.body;
-  const statements: t.Statement[] =
-    body.type === 'BlockStatement'
+  const statements: t.Statement[] = [
+    ...destructured,
+    ...(body.type === 'BlockStatement'
       ? body.body
-      : [{type: 'ExpressionStatement', expression: body}];
+      : [{type: 'ExpressionStatement', expression: body} as t.Statement]),
+  ];
   const context: StatementContext = {stateChanged: false, output};
   const lowered = lowerBody(
     statements,
-    {...environment, locals},
+    {...environment, locals, constants},
     state,
     context,
   );
