@@ -17,7 +17,8 @@
 /*
  * Flow A's esbuild loader for an app's own files. It gives each nativeModule() call its methods' signatures, which
  * the bundle's erased types can't, and in the simulators its mock, then runs the bundler's own transform when it has
- * one. esbuild runs one onLoad per file, so a bundler that transforms the app's files calls this from its own.
+ * one. esbuild runs one onLoad per file, so a bundler that transforms the app's files calls this from its own, and
+ * loadDependencyFile for every other file, since a package may declare native modules too.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -53,8 +54,9 @@ export async function loadAppFile(
   // A mock added later rebuilds the app.
   const watchFiles: string[] = [];
   if (/\bnativeModule\b/.test(source)) {
-    const {addNativeSignatures, nativeMockFiles, readNativeInterfaces} =
-      await import('./compiler/native-modules.mts');
+    const {addNativeSignatures} = await import('./compiler/native-modules.mts');
+    const {nativeMockFiles, readNativeFiles} =
+      await import('./compiler/native-files.mts');
     try {
       let mocks: Map<string, string | null> | undefined;
       if (options.mocks) {
@@ -75,7 +77,7 @@ export async function loadAppFile(
       }
       contents = addNativeSignatures(
         source,
-        readNativeInterfaces(source, dirname(path)),
+        readNativeFiles(source, dirname(path)),
         mocks,
       );
     } catch (error) {
@@ -108,7 +110,30 @@ export async function loadAppFile(
   }
   return {
     contents,
-    loader: path.endsWith('.tsx') ? 'tsx' : path.endsWith('.ts') ? 'ts' : 'jsx',
+    loader: /\.[cm]?tsx$/.test(path)
+      ? 'tsx'
+      : /\.[cm]?ts$/.test(path)
+        ? 'ts'
+        : 'jsx',
     ...(watchFiles.length ? {watchFiles} : {}),
   };
+}
+
+/**
+ * esbuild's loader for a file that isn't the app's own: a package's .ts file that declares native modules gets their
+ * signatures, and in the simulators their mocks, as the app's own files do.
+ *
+ * @param path  The file.
+ * @param options  `mocks` for the simulators (see loadAppFile).
+ *
+ * @returns What esbuild loads, or undefined to let esbuild read the file itself.
+ */
+export async function loadDependencyFile(
+  path: string,
+  options: {mocks?: boolean} = {},
+): Promise<OnLoadResult | undefined> {
+  if (!/\.[cm]?tsx?$/.test(path) || /\.d\.[cm]?ts$/.test(path)) {
+    return undefined;
+  }
+  return loadAppFile(path, undefined, options);
 }

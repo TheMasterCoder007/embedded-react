@@ -60,6 +60,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   format minor 14.
 - A guide to writing a native module. The S3, CYD and RP2040 examples and both desktop hosts register the watch face
   demo's modules.
+- An app can import native modules declared in another file or a package: `import {Can} from 'my-device'`. The
+  package ships its `.ts` source, with the mocks beside it.
 
 ### Changed
 

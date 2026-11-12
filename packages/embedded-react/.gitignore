@@ -4,3 +4,6 @@ coverage/
 
 # tsc incremental state (tsconfig.*.json are composite projects)
 *.tsbuildinfo
+
+# The frame test's fixture package
+!test/erb-frames/fixtures/node_modules/

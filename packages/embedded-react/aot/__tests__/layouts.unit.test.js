@@ -21,7 +21,7 @@ import {describe, expect, it, vi} from 'vitest';
 import {
   bakeSvgArtifacts,
   compilePackage,
-  readNativeInterfaces,
+  readNativeFiles,
 } from '../compile.mts';
 import {demoFile} from '../demo-file.mts';
 import {
@@ -304,7 +304,7 @@ export function App() {
     const result = compilePackage(source, demo, {
       filename: appPath,
       svgArtifacts: await bakeSvgArtifacts(source, demoDirectory),
-      nativeInterfaces: readNativeInterfaces(source, demoDirectory),
+      nativeFiles: readNativeFiles(source, demoDirectory),
     });
     expect(sizesOf(result)).toEqual(layouts);
     // The S3, the CYD, the RP2040 and a size nothing names each have a layout.

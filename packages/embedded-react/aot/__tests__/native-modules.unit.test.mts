@@ -14,11 +14,18 @@
  * limitations under the License.
  */
 
-import {readFileSync} from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, it, expect} from 'vitest';
-import {compilePackage, readNativeInterfaces} from '../compile.mts';
+import {compilePackage} from '../compile.mts';
 import {
   FunctionKind,
   NONE,
@@ -26,6 +33,7 @@ import {
   ValueType,
 } from '../compiler/package/format.mts';
 import {addNativeSignatures} from '../compiler/native-modules.mts';
+import {readNativeFiles} from '../compiler/native-files.mts';
 import {OP} from '../compiler/package/bytecode.mts';
 import type {CompileOptions} from '../compiler/options.mts';
 
@@ -240,10 +248,10 @@ describe('native module calls', () => {
   it('reads the interface from the local file the app imports it from', () => {
     const file = join(FIXTURES, 'native-calls.tsx');
     const source = readFileSync(file, 'utf8');
-    const nativeInterfaces = readNativeInterfaces(source, FIXTURES);
-    expect(Object.keys(nativeInterfaces)).toEqual(['./native-probe']);
+    const nativeFiles = readNativeFiles(source, FIXTURES);
+    expect(Object.keys(nativeFiles)).toEqual(['./native-probe']);
     const {imports} = readProgram(
-      compile(source, {filename: file, nativeInterfaces}).program,
+      compile(source, {filename: file, nativeFiles}).program,
     );
     expect(imports).toContain('probe.half v1 f:i');
     expect(failure(source, {filename: file})).toMatch(
@@ -1084,5 +1092,325 @@ describe('native records it refuses', () => {
         `{${Array.from({length: 17}, (_, index) => `f${index}: Int`).join('; ')}}`,
       ),
     ).toMatch(/returns more than 16 values, counting each field of its record/);
+  });
+});
+
+describe('native modules from other files and packages', () => {
+  /** A folder of files, by their paths in it. */
+  const folderOf = (files: Record<string, string>) => {
+    const directory = mkdtempSync(join(tmpdir(), 'native-files-'));
+    for (const [path, source] of Object.entries(files)) {
+      mkdirSync(dirname(join(directory, path)), {recursive: true});
+      writeFileSync(join(directory, path), source);
+    }
+    return directory;
+  };
+
+  const CAN =
+    "import {nativeModule} from 'embedded-react';\n" +
+    "import type {Int} from 'embedded-react';\n" +
+    'export interface Can { send(id: Int): boolean; }\n' +
+    "export const Can = nativeModule<Can>('can', 1);\n";
+
+  /** An app that imports Can by a path and sends with it. */
+  const canApp = (from: string) =>
+    "import {useState} from 'react';\n" +
+    "import {Pressable, Text} from 'embedded-react';\n" +
+    `import {Can} from '${from}';\n` +
+    'export function App() {\n' +
+    '  const [on, setOn] = useState(false);\n' +
+    "  return <Pressable onPress={() => setOn(Can.send(1))}><Text>{on ? 'sent' : 'idle'}</Text></Pressable>;\n" +
+    '}\n';
+
+  /** The imports an app in a folder compiles to, its files read as the CLI reads them. */
+  const importsOf = (directory: string, source: string) =>
+    readProgram(
+      compile(source, {
+        filename: join(directory, 'App.tsx'),
+        nativeFiles: readNativeFiles(source, directory),
+      }).program,
+    ).imports;
+
+  it('imports a module from a package, with its interface in a file beside it', () => {
+    const file = join(FIXTURES, 'native-package.tsx');
+    const source = readFileSync(file, 'utf8');
+    const nativeFiles = readNativeFiles(source, FIXTURES);
+    expect(nativeFiles['probe-device'].path).toBe(
+      'node_modules/probe-device/index.ts',
+    );
+    expect(Object.keys(nativeFiles['probe-device'].imports)).toEqual([
+      './probe',
+    ]);
+    expect(
+      readProgram(compile(source, {filename: file, nativeFiles}).program)
+        .imports,
+    ).toEqual([
+      'radio.tune v1 b:i (optional 0)',
+      'probe.next v1 i:',
+      'probe.add v1 i:ii',
+      'probe.start v1 v:i',
+    ]);
+  });
+
+  it('imports a module from a local file, by the path NodeNext writes too', () => {
+    const directory = folderOf({
+      'device.ts':
+        "export type * from './types';\n" +
+        "export type {Reading} from './types';\n" +
+        CAN,
+      'types.ts': 'export interface Reading { id: number; }\n',
+    });
+    expect(importsOf(directory, canApp('./device'))).toEqual([
+      'can.send v1 b:i',
+    ]);
+    expect(importsOf(directory, canApp('./device.js'))).toEqual([
+      'can.send v1 b:i',
+    ]);
+  });
+
+  it("finds a package's file by its exports, its conditions and a subpath, or by its main", () => {
+    const directory = folderOf({
+      'node_modules/by-exports/package.json': JSON.stringify({
+        exports: {
+          '.': {types: './index.d.ts', import: './src/index.ts'},
+          './*': './src/missing/*.ts',
+          './buses/*': './src/buses/*.ts',
+        },
+      }),
+      'node_modules/by-exports/src/index.ts': CAN,
+      'node_modules/by-exports/src/buses/can.ts': CAN,
+      'node_modules/@acme/by-main/package.json': JSON.stringify({
+        main: 'device',
+      }),
+      'node_modules/@acme/by-main/device.ts': CAN,
+    });
+    for (const from of [
+      'by-exports',
+      'by-exports/buses/can',
+      '@acme/by-main',
+    ]) {
+      expect(importsOf(directory, canApp(from))).toEqual(['can.send v1 b:i']);
+    }
+  });
+
+  it('reads no file an export points at outside its package', () => {
+    const directory = folderOf({
+      'outside.ts': CAN,
+      'node_modules/escapes/package.json': JSON.stringify({
+        exports: {
+          '.': '../../outside.ts',
+          './up/*': './*/../../../outside.ts',
+          './modules/*': './node_modules/*.ts',
+        },
+      }),
+      'node_modules/escapes/node_modules/can.ts': CAN,
+    });
+    for (const from of ['escapes', 'escapes/up/x', 'escapes/modules/can']) {
+      expect(readNativeFiles(canApp(from), directory)).toEqual({});
+    }
+  });
+
+  it('follows a workspace link to its package, from a folder of the app', () => {
+    const directory = folderOf({
+      'device/package.json': JSON.stringify({exports: './index.ts'}),
+      'device/index.ts': CAN,
+      'app/.keep': '',
+    });
+    mkdirSync(join(directory, 'node_modules'));
+    symlinkSync(
+      join(directory, 'device'),
+      join(directory, 'node_modules', 'device'),
+      'junction',
+    );
+    const app = join(directory, 'app');
+    expect(readNativeFiles(canApp('device'), app).device.path).toBe(
+      '../device/index.ts',
+    );
+    expect(importsOf(app, canApp('device'))).toEqual(['can.send v1 b:i']);
+  });
+
+  it("keeps one module imported twice, and numbers optional ones after the app's own", () => {
+    const directory = folderOf({
+      'device.ts':
+        CAN.replace('nativeModule<Can>', 'nativeModule.optional<Can>') +
+        'export {Can as Bus};\n',
+    });
+    const source = canApp('./device')
+      .replace(
+        "import {Can} from './device';",
+        "import {Can, Bus} from './device';\n" +
+          'interface Gps { fix(): boolean; }\n' +
+          "const Gps = nativeModule.optional<Gps>('gps', 1);",
+      )
+      .replace('Can.send(1)', 'Can.send(1) && Bus.send(2) && Gps.fix()')
+      .replace(
+        "import {Pressable, Text} from 'embedded-react';",
+        "import {Pressable, Text, nativeModule} from 'embedded-react';",
+      );
+    expect(importsOf(directory, source)).toEqual([
+      'gps.fix v1 b: (optional 0)',
+      'can.send v1 b:i (optional 1)',
+    ]);
+  });
+
+  it("imports a module from the file the app's own module takes its interface from", () => {
+    const directory = folderOf({
+      'device.ts': CAN + 'export interface Gps { fix(): boolean; }\n',
+    });
+    const source = canApp('./device')
+      .replace(
+        "import {Can} from './device';",
+        "import {Can, type Gps} from './device';\n" +
+          "const Gps = nativeModule<Gps>('gps', 1);",
+      )
+      .replace('Can.send(1)', 'Can.send(1) && Gps.fix()')
+      .replace(
+        "import {Pressable, Text} from 'embedded-react';",
+        "import {Pressable, Text, nativeModule} from 'embedded-react';",
+      );
+    expect(importsOf(directory, source)).toEqual([
+      'can.send v1 b:i',
+      'gps.fix v1 b:',
+    ]);
+  });
+
+  it('leaves a file that declares no module to the rest of the compiler', () => {
+    const directory = folderOf({'helpers.ts': 'export const answer = 42;\n'});
+    expect(readNativeFiles(canApp('./helpers'), directory)).toEqual({});
+  });
+});
+
+describe('native modules from other files and packages it refuses', () => {
+  const folderOf = (files: Record<string, string>) => {
+    const directory = mkdtempSync(join(tmpdir(), 'native-files-'));
+    for (const [path, source] of Object.entries(files)) {
+      mkdirSync(dirname(join(directory, path)), {recursive: true});
+      writeFileSync(join(directory, path), source);
+    }
+    return directory;
+  };
+
+  const app = (from: string) =>
+    "import {Pressable, Text} from 'embedded-react';\n" +
+    `import {Can} from '${from}';\n` +
+    'export function App() {\n' +
+    '  return <Pressable onPress={() => { Can.send(1); }}><Text>send</Text></Pressable>;\n' +
+    '}\n';
+
+  const failureIn = (directory: string, source: string) =>
+    failure(source, {
+      filename: join(directory, 'App.tsx'),
+      nativeFiles: readNativeFiles(source, directory),
+    });
+
+  it('refuses a package that ships only JavaScript', () => {
+    const directory = folderOf({
+      'node_modules/built/package.json': JSON.stringify({
+        exports: {types: './index.d.ts', default: './index.js'},
+      }),
+      'node_modules/built/index.js':
+        "import {nativeModule} from 'embedded-react';\n" +
+        "export const Can = nativeModule('can', 1);\n",
+      'node_modules/built/index.d.ts': 'export declare const Can: unknown;\n',
+    });
+    expect(failureIn(directory, app('built'))).toMatch(
+      /built is JavaScript or a \.d\.ts, which a native module isn't read from \(node_modules\/built\/index\.js\)/,
+    );
+  });
+
+  it('refuses a package whose export is a .jsx file', () => {
+    const directory = folderOf({
+      'node_modules/built/package.json': JSON.stringify({
+        exports: './index.jsx',
+      }),
+      'node_modules/built/index.jsx':
+        "import {nativeModule} from 'embedded-react';\n" +
+        "export const Can = nativeModule('can', 1);\n",
+    });
+    expect(failureIn(directory, app('built'))).toMatch(
+      /built is JavaScript or a \.d\.ts/,
+    );
+  });
+
+  it("pins an error in the package's file to the app's import, and says where it is", () => {
+    const directory = folderOf({
+      'node_modules/broken/package.json': JSON.stringify({
+        exports: './index.ts',
+      }),
+      'node_modules/broken/index.ts':
+        "import {nativeModule} from 'embedded-react';\n" +
+        "export const Can = nativeModule<Missing>('can', 1);\n",
+    });
+    const source = app('broken');
+    let thrown: (Error & {aotLoc?: {line: number}}) | undefined;
+    try {
+      compile(source, {
+        filename: join(directory, 'App.tsx'),
+        nativeFiles: readNativeFiles(source, directory),
+      });
+    } catch (error) {
+      thrown = error as typeof thrown;
+    }
+    expect(thrown?.message).toMatch(
+      /can't find the interface Missing \(in node_modules\/broken\/index\.ts:2:20\)/,
+    );
+    expect(thrown?.aotLoc?.line).toBe(2);
+  });
+
+  it('refuses a module passed on from another file', () => {
+    const can =
+      "import {nativeModule} from 'embedded-react';\n" +
+      'export interface Can { send(id: number): boolean; }\n' +
+      "export const Can = nativeModule<Can>('can', 1);\n";
+    for (const passes of [
+      "export * from './can';\n",
+      "export {Can} from './can';\n",
+    ]) {
+      const directory = folderOf({'device.ts': passes, 'can.ts': can});
+      expect(failureIn(directory, app('./device'))).toMatch(
+        /\.\/device passes Can on from another file, and a native module isn't followed further/,
+      );
+    }
+    const chain = folderOf({
+      'device.ts': "export * from './buses';\n",
+      'buses.ts': "export {Can} from './can';\n",
+      'can.ts': can,
+    });
+    expect(failureIn(chain, app('./device'))).toMatch(
+      /\.\/device passes Can on from another file/,
+    );
+    const loop = folderOf({
+      'device.ts': "export * from './other';\n",
+      'other.ts': "export * from './device';\n",
+    });
+    expect(readNativeFiles(app('./device'), loop)).toEqual({});
+    const plain = folderOf({
+      'device.ts': "export * from './helpers';\n",
+      'helpers.ts': 'export const answer = 42;\n',
+    });
+    expect(readNativeFiles(app('./device'), plain)).toEqual({});
+  });
+
+  it('refuses one module declared both in the app and in a file it imports', () => {
+    const directory = folderOf({
+      'device.ts':
+        "import {nativeModule} from 'embedded-react';\n" +
+        'export interface Can { send(id: number): boolean; }\n' +
+        "export const Can = nativeModule<Can>('can', 1);\n",
+    });
+    const source = app('./device')
+      .replace(
+        "import {Can} from './device';",
+        "import {Can} from './device';\n" +
+          'interface Bus { send(id: number): boolean; }\n' +
+          "const Bus = nativeModule<Bus>('can', 1);",
+      )
+      .replace(
+        "import {Pressable, Text} from 'embedded-react';",
+        "import {Pressable, Text, nativeModule} from 'embedded-react';",
+      );
+    expect(failureIn(directory, source)).toMatch(
+      /the native module "can" is declared twice/,
+    );
   });
 });

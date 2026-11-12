@@ -40,18 +40,18 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import {basename, dirname, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 import {PNG} from 'pngjs';
 
-import {loadAppFile} from '../../aot/app-file-loader.mts';
+import {loadAppFile, loadDependencyFile} from '../../aot/app-file-loader.mts';
 
 import {
   bakeSvgArtifacts,
   compilePackage,
   packPackage,
-  readNativeInterfaces,
+  readNativeFiles,
   resourceReport,
 } from '../../aot/compile.mts';
 import {bakeAssetPackBytes} from '../../assets/index.mjs';
@@ -743,6 +743,23 @@ const SCENARIOS: Scenario[] = [
     flowA: true,
     mocks: true,
   },
+  // Buttons: next, start, from the probe-device package. Nothing is done yet, and no pass has the radio.
+  {
+    name: 'native-package',
+    file: fixture('native-package'),
+    screen: PORTRAIT,
+    flowA: true,
+    mocks: true,
+  },
+  // Three nexts: total 1+2+3. start posts done next frame with 6 and half of it.
+  {
+    name: 'native-package-taps',
+    file: fixture('native-package'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 32,20 84,20',
+    flowA: true,
+    mocks: true,
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},
@@ -1203,7 +1220,7 @@ async function compileScenario(
     filename: scenario.file,
     listCap: scenario.listCap,
     svgArtifacts: await bakeSvgArtifacts(source, sourceDirectory),
-    nativeInterfaces: readNativeInterfaces(source, sourceDirectory),
+    nativeFiles: readNativeFiles(source, sourceDirectory),
     screens: scenario.everySize
       ? undefined
       : (scenario.panels ?? [scenario.screen]).map(size),
@@ -1261,10 +1278,12 @@ async function bundleScenario(
       {
         name: 'app-files',
         setup(pluginBuild) {
+          // As the CLI does: the fixture package in fixtures/node_modules is a dependency.
           pluginBuild.onLoad({filter: /\.tsx?$/}, args =>
-            args.path.startsWith(fixtures)
+            args.path.startsWith(fixtures) &&
+            !args.path.includes(`${sep}node_modules${sep}`)
               ? loadAppFile(args.path, undefined, {mocks})
-              : undefined,
+              : loadDependencyFile(args.path, {mocks}),
           );
         },
       },

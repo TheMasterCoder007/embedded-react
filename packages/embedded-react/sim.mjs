@@ -34,7 +34,7 @@ import {analyzeFontSizes, fontSizeSignature} from './assets/font-sizes.mjs';
 import {textSignature} from './assets/glyph-coverage.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {transformPersist} from './persist-transform.mjs';
-import {loadAppFile} from './aot/app-file-loader.mts';
+import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
@@ -173,11 +173,11 @@ const buildContext = await context({
         });
         // App files only (not the library/React): rewrite useState → a persisting helper so state
         // survives reload transparently, and run native modules on their mocks. Library/node_modules files fall
-        // through to esbuild untouched.
+        // through to esbuild untouched, but a package's native modules run on their mocks too.
         pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, async args => {
           const normalizedPath = args.path.replace(/\\/g, '/');
           if (!normalizedPath.startsWith(demoDir.replace(/\\/g, '/')))
-            return undefined; // not app code
+            return loadDependencyFile(args.path, {mocks: true}); // not app code
           try {
             return await loadAppFile(
               args.path,

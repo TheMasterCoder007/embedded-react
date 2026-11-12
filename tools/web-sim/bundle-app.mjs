@@ -40,7 +40,7 @@ const demoDir = resolve(REPO, 'demos', demo);
 const {demoFile} = await import(
   pathToFileURL(resolve(PACKAGE_DIR, 'aot/demo-file.mts')).href
 );
-const {loadAppFile} = await import(
+const {loadAppFile, loadDependencyFile} = await import(
   pathToFileURL(resolve(PACKAGE_DIR, 'aot/app-file-loader.mts')).href
 );
 const entry = demoFile(demoDir, 'index');
@@ -65,7 +65,7 @@ try {
       'embedded-react': resolve(PACKAGE_DIR, 'src/embedded-react/index.js'),
     },
     nodePaths: [resolve(PACKAGE_DIR, 'node_modules')],
-    // The demo's own files run their native modules on mocks.
+    // The demo's own files run their native modules on mocks, and so do a package's.
     plugins: [
       {
         name: 'embedded-react-mocks',
@@ -73,7 +73,7 @@ try {
           pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args =>
             args.path.startsWith(demoDir)
               ? loadAppFile(args.path, undefined, {mocks: true})
-              : undefined,
+              : loadDependencyFile(args.path, {mocks: true}),
           );
         },
       },

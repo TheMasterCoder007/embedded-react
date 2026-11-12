@@ -21,12 +21,9 @@ import {fileURLToPath} from 'node:url';
 import {afterEach, describe, it, expect} from 'vitest';
 import Reconciler from 'react-reconciler';
 import {createElement} from 'react';
-import {loadAppFile} from '../app-file-loader.mts';
-import {
-  addNativeSignatures,
-  nativeMockFiles,
-  readNativeInterfaces,
-} from '../compiler/native-modules.mts';
+import {loadAppFile, loadDependencyFile} from '../app-file-loader.mts';
+import {addNativeSignatures} from '../compiler/native-modules.mts';
+import {nativeMockFiles, readNativeFiles} from '../compiler/native-files.mts';
 import {
   nativeModule,
   useNativeEvent,
@@ -123,7 +120,7 @@ describe('native module signatures in Flow A', () => {
   it('reads an interface from a local file', () => {
     const source = readFileSync(join(FIXTURES, 'native-calls.tsx'), 'utf8');
     expect(
-      addNativeSignatures(source, readNativeInterfaces(source, FIXTURES)),
+      addNativeSignatures(source, readNativeFiles(source, FIXTURES)),
     ).toContain(
       "nativeModule<Probe>('probe', 1, " +
         '{"methods":{"add":"i:ii","half":"f:i","even":"b:i","flip":"b:b","next":"i:","store":"v:f","stored":"f:",' +
@@ -316,6 +313,40 @@ describe('the Flow A app file loader', () => {
   it('leaves a syntax error to esbuild', async () => {
     expect(
       await loadAppFile(write('Broken.tsx', 'nativeModule(\n')),
+    ).toBeUndefined();
+  });
+});
+
+describe("the Flow A loader for a package's files", () => {
+  it('signs the modules a package declares, and runs the mock beside their interface', async () => {
+    const path = join(FIXTURES, 'node_modules/probe-device/index.ts');
+    const signed = await loadDependencyFile(path);
+    expect(signed?.loader).toBe('ts');
+    expect(signed?.contents).toContain('"start":"v:i"');
+    expect(signed?.contents).toContain('"tune":"b:i"');
+    const mocked = await loadDependencyFile(path, {mocks: true});
+    expect(mocked?.contents).toContain(
+      'import __erNativeMock_probe from "./probe.mock.ts";',
+    );
+    expect(mocked?.contents).toMatch(/'radio', 1, \{.*\}, null\)/);
+  });
+
+  it('leaves JavaScript, a .d.ts and a file without native modules to esbuild', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'native-dependency-'));
+    const write = (name: string, source: string) => {
+      const path = join(directory, name);
+      writeFileSync(path, source);
+      return path;
+    };
+    const declaration = "const Can = nativeModule<Can>('can', 1);\n";
+    expect(await loadDependencyFile(write('index.js', declaration))).toBe(
+      undefined,
+    );
+    expect(await loadDependencyFile(write('index.d.ts', declaration))).toBe(
+      undefined,
+    );
+    expect(
+      await loadDependencyFile(write('plain.ts', 'export const a = 1;\n')),
     ).toBeUndefined();
   });
 });

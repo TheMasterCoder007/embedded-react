@@ -88,7 +88,7 @@ import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mjs';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
-import {readNativeInterfaces} from './compiler/native-modules.mts';
+import {readNativeFiles} from './compiler/native-files.mts';
 import {demoFile} from './demo-file.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
@@ -133,7 +133,7 @@ export {
   bakePackage,
   bakeSvgArtifacts,
   packPackage,
-  readNativeInterfaces,
+  readNativeFiles,
   resourceReport,
 };
 
@@ -394,10 +394,7 @@ if (
         source,
         resolve(demosDirectory, demo),
       ),
-      nativeInterfaces: readNativeInterfaces(
-        source,
-        resolve(demosDirectory, demo),
-      ),
+      nativeFiles: readNativeFiles(source, resolve(demosDirectory, demo)),
       screen: screens?.[0],
       screens,
     });
