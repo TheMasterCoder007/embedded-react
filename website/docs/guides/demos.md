@@ -73,10 +73,11 @@ board's tilt. Swipe right-to-left, or flick, to change page. Its pages are the s
 runs on the S3 and the CYD.
 
 **What it shows is real.** The demo is in TypeScript, and its data comes from three
-[native modules](./native-modules.md) in `modules/`: `chip`, whose event each second drives the clock (with no
-RTC, it shows the time since boot from 12:00 AM), and the optional `thermometer` and `motion`. The S3, the
-CYD and the RP2040 each register the ones they have, and a board without one shows `--` in its place. In
-the simulator they run on the mocks beside the interfaces.
+[native modules](./native-modules.md) it imports from the boards' device package, `example-device`: `chip`, whose
+event each second drives the clock (with no RTC, it shows the time since boot from 12:00 AM), and the optional
+`thermometer` and `motion`. The S3, the CYD and the RP2040 each register the ones they have, and a board without one
+shows `--` in its place. In the simulator they run on the package's mocks. A project started from the template has
+the package in its `device/` folder.
 
 **The swipe** is a `PanResponder` on a transparent overlay, driving a dynamic `marginLeft` on a
 two-page track, with a ~30 fps interval easing to the settled page on release. It works in both
@@ -90,7 +91,7 @@ the first render's state, hence the `pageRef` mirror.
 **The AOT house rules** the demo is written to:
 
 - Components live in `App.tsx`: the compiler inlines same-file components and does not resolve
-  local `.tsx` imports. It does read the native modules' interfaces from their `.ts` files.
+  local `.tsx` imports. It does read the native modules it imports from the device package.
 - Pure `View` and `Text`, no `<Svg>`, so the RP2040 build trims the vector pools to the floor.
 - `left` and `top` cannot be state-driven, while margins can, which is why the level dot and the
   swipe track move with `marginLeft`/`marginTop`.

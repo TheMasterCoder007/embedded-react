@@ -283,7 +283,33 @@ function finalizePackageJson(dir) {
   writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
 }
 
+/**
+ * Copies in the packages the template depends on by a `file:` path outside its folder, and points the project at the
+ * copies. A published template has them already (sync-templates.mjs); a demo scaffolded straight from a clone doesn't.
+ */
+function copyLocalPackages(templateDirectory, projectDirectory) {
+  const packageJsonPath = join(projectDirectory, 'package.json');
+  if (!existsSync(packageJsonPath)) return;
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  let copied = false;
+  for (const [name, version] of Object.entries(
+    packageJson.dependencies ?? {},
+  )) {
+    if (!version.startsWith('file:')) continue;
+    const packageDirectory = resolve(templateDirectory, version.slice(5));
+    if (!relative(templateDirectory, packageDirectory).startsWith('..'))
+      continue;
+    const folder = basename(packageDirectory);
+    copyDir(packageDirectory, join(projectDirectory, folder));
+    packageJson.dependencies[name] = `file:./${folder}`;
+    copied = true;
+  }
+  if (copied)
+    writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n');
+}
+
 copyDir(template.dir, destinationDir);
+copyLocalPackages(template.dir, destinationDir);
 finalizePackageJson(destinationDir);
 
 const where = relative(process.cwd(), destinationDir) || '.';

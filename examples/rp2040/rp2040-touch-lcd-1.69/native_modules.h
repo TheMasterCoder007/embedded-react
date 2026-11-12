@@ -19,7 +19,8 @@
 
 /*
  * The native modules this board offers apps: the chip (its name, free heap and a once-a-second event), its
- * temperature sensor, and the IMU's steps and tilt. The watch face demo uses them (demos/watch-face/modules).
+ * temperature sensor, and the IMU's steps and tilt. They are the device package's chip, thermometer and motion
+ * (examples/device), and the table is built from its generated headers. The watch face demo uses them.
  */
 
 #include "erb_native.h"

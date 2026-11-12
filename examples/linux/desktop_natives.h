@@ -18,8 +18,8 @@
 #define ER_DESKTOP_NATIVES_H
 
 /*
- * The native modules the desktop hosts offer, both flows alike: the watch face's chip, which every board has. The
- * thermometer and motion sensor are optional, and a desktop has neither.
+ * The native modules the desktop hosts offer, both flows alike: the chip of the boards' device package
+ * (../device), which every board has. Its thermometer and motion sensor are optional, and a desktop has neither.
  */
 
 #include "erb_native.h"

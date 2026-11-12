@@ -108,9 +108,10 @@ A boot loop on `assert failed: vApplicationGetIdleTaskMemory` is the same shorta
 
 ## Native modules
 
-`main/native_modules.c` registers the watch face demo's `chip` [native module](../native-modules.md): the chip's
-name, its free heap, and an event each second that drives the clock. This ESP32 has no temperature sensor and no
-IMU, so the demo's optional `thermometer` and `motion` modules aren't there, and it shows `--` for them.
+`main/native_modules.c` registers the `chip` [native module](../native-modules.md) of the boards' device package
+(`examples/device`), from its generated header: the chip's name, its free heap, and an event each second that drives
+the watch face's clock. This ESP32 has no temperature sensor and no IMU, so the package's optional `thermometer` and
+`motion` modules aren't there, and the watch face shows `--` for them.
 
 The backend, `backends/esp32-spi-lcd`, works with any `esp_lcd` RGB565 SPI panel. The board brings
 the panel up (SPI bus, panel and IO handle, reset, inversion, orientation, backlight) and passes both

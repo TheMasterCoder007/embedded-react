@@ -64,6 +64,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   package ships its `.ts` source, with the mocks beside it.
 - `npx embedded-react native-header <package or file>` writes a C header for each native module: record structs
   with pack and unpack helpers, argument offsets, and an entry for the firmware's table.
+- The board examples share a device package, `examples/device`, which the watch face imports its native modules
+  from. The guide and the `watch-face` template are written around device packages.
 
 ### Changed
 

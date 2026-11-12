@@ -21,12 +21,9 @@ import {
   Text,
   StyleSheet,
   PanResponder,
-  nativeModule,
   useNativeEvent,
 } from 'embedded-react';
-import type {Chip} from './modules/chip';
-import type {Motion} from './modules/motion';
-import type {Thermometer} from './modules/thermometer';
+import {Chip, Thermometer, Motion} from 'example-device';
 
 // Watch face — a two-page swipe pager, sized for the Waveshare RP2040-Touch-LCD-1.69 (240×280):
 //   • page 0: a digital watch face (clock, weekday/date, the chip, its temperature, a live step counter)
@@ -38,18 +35,12 @@ import type {Thermometer} from './modules/thermometer';
 // transparent full-screen overlay captures the swipe with a `PanResponder`, which the AOT lowers onto the engine's
 // own C gesture-responder system (so the gesture arrives with its travel and speed already worked out).
 //
-// What the board knows comes from native modules (./modules), which each board's firmware provides in C, and the
-// simulator runs on their mocks. Every board has the chip, whose once-a-second event drives the clock. The
-// thermometer and the motion sensor are optional: a board without one shows "--" in its place.
+// What the board knows comes from native modules, imported from the boards' device package (examples/device). Each
+// board's firmware provides them in C, and the simulator runs on the package's mocks. Every board has the chip,
+// whose once-a-second event drives the clock. The thermometer and the motion sensor are optional: a board without
+// one shows "--" in its place.
 //
 // There is no RTC, so the clock shows the time since boot, from 12:00:00 AM.
-
-// ----------------------------------------------------------------------------------------------------
-// Native modules
-// ----------------------------------------------------------------------------------------------------
-const Chip = nativeModule<Chip>('chip', 1);
-const Thermometer = nativeModule.optional<Thermometer>('thermometer', 1);
-const Motion = nativeModule.optional<Motion>('motion', 1);
 
 // ----------------------------------------------------------------------------------------------------
 // Model

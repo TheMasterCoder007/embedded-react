@@ -1,0 +1,16 @@
+{
+  "name": "example-device",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The native modules the board examples' firmware offers apps: the chip, its thermometer and the motion sensor.",
+  "type": "module",
+  "exports": "./index.ts",
+  "peerDependencies": {
+    "embedded-react": "*"
+  },
+  "peerDependenciesMeta": {
+    "embedded-react": {
+      "optional": true
+    }
+  }
+}

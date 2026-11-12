@@ -15,22 +15,18 @@
  */
 
 import type {NativeMock} from 'embedded-react';
-import type {Thermometer} from './thermometer';
+import type {Chip} from './index';
 
-const READING_MS = 50;
-const ROOM_CELSIUS = 31.5;
+const SECOND_MS = 1000;
+const FREE_MEMORY = 180 * 1024;
 
-const thermometer: NativeMock<Thermometer> = emit => {
-  let readings = 0;
+const chip: NativeMock<Chip> = emit => {
+  let seconds = 0;
+  setInterval(() => emit('second', ++seconds * SECOND_MS), SECOND_MS);
   return {
-    measure: () => {
-      readings++;
-      setTimeout(
-        () => emit('reading', ROOM_CELSIUS + (readings % 3) * 0.5),
-        READING_MS,
-      );
-    },
+    name: () => 'Simulator',
+    freeMemory: () => FREE_MEMORY,
   };
 };
 
-export default thermometer;
+export default chip;

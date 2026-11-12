@@ -305,6 +305,50 @@ if (hasWasm) {
   );
 }
 
+// 6d. The watch face imports its native modules from a device package, which the scaffolder copies into the
+//     project as a `file:` dependency. Install it, typecheck against it, and build with it.
+run(
+  'node',
+  [
+    resolve(SCAFFOLDER_DIR, 'index.mjs'),
+    'smoke-watch',
+    '--template',
+    'watch-face',
+  ],
+  demoParent,
+);
+const watchProjectDir = resolve(demoParent, 'smoke-watch');
+ok(
+  existsSync(resolve(watchProjectDir, 'device/index.ts')),
+  'scaffolded --template watch-face carries its device package',
+);
+const watchPackageJson = JSON.parse(
+  readFileSync(resolve(watchProjectDir, 'package.json'), 'utf8'),
+);
+ok(
+  watchPackageJson.dependencies['example-device'] === 'file:./device',
+  'the watch face depends on the device package in its own folder',
+);
+watchPackageJson.dependencies['embedded-react'] = `file:${tarball}`;
+writeFileSync(
+  resolve(watchProjectDir, 'package.json'),
+  JSON.stringify(watchPackageJson, null, 2),
+);
+run('npm', ['install', '--no-audit', '--no-fund'], watchProjectDir);
+run('npm', ['run', 'typecheck'], watchProjectDir);
+run('npm', ['run', 'build:aot'], watchProjectDir);
+ok(
+  existsSync(resolve(watchProjectDir, 'dist/app.erpkg')),
+  'npm run build:aot (watch face demo) → dist/app.erpkg',
+);
+if (hasWasm) {
+  run('npm', ['run', 'build'], watchProjectDir);
+  ok(
+    existsSync(resolve(watchProjectDir, 'dist/app.erpkg')),
+    'npm run build (watch face demo) → dist/app.erpkg',
+  );
+}
+
 // Clean up the packed tarball + throwaway projects (best-effort).
 rmSync(tarball, {force: true});
 rmSync(jsParent, {recursive: true, force: true});

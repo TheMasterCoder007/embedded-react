@@ -18,9 +18,9 @@
 #define NATIVE_MODULES_H
 
 /*
- * The native modules the CYD offers apps: the chip, with its name, free heap and a once-a-second event. The watch
- * face demo uses it (demos/watch-face/modules). Its ESP32 has no temperature sensor, so the demo's optional
- * thermometer isn't here.
+ * The native modules the CYD offers apps: the chip, with its name, free heap and a once-a-second event. It is the
+ * device package's chip (examples/device), and the table is built from its generated header. The ESP32 has no
+ * temperature sensor and the board no motion sensor, so the package's optional thermometer and motion aren't here.
  */
 
 #include "erb_native.h"

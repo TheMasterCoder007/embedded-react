@@ -14,19 +14,23 @@
  * limitations under the License.
  */
 
-import type {Int} from 'embedded-react';
+import type {NativeMock} from 'embedded-react';
+import type {Thermometer} from './index';
 
-/** The level's dot, as its offset from the center in pixels. */
-export interface Offset {
-  x: Int;
-  y: Int;
-}
+const READING_MS = 50;
+const ROOM_CELSIUS = 31.5;
 
-/** The RP2040 board's accelerometer: a pedometer and the level's tilt. */
-export interface Motion {
-  events: {
-    /** Steps counted since boot. */
-    steps(count: Int): void;
-    tilt(offset: Offset): void;
+const thermometer: NativeMock<Thermometer> = emit => {
+  let readings = 0;
+  return {
+    measure: () => {
+      readings++;
+      setTimeout(
+        () => emit('reading', ROOM_CELSIUS + (readings % 3) * 0.5),
+        READING_MS,
+      );
+    },
   };
-}
+};
+
+export default thermometer;

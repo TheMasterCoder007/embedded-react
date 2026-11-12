@@ -44,7 +44,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../runtime ${CMAKE_CURRENT_BINAR
 # The package is read at run time, so changing the app needs no rebuild.
 # The native modules are the Flow A desktop host's, so both flows call the same C.
 add_executable(embedded-react-desktop-aot main.c ../linux/desktop_natives.c)
-target_include_directories(embedded-react-desktop-aot PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../linux)
+target_include_directories(embedded-react-desktop-aot PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../linux
+        ${CMAKE_CURRENT_SOURCE_DIR}/../device/include) # the device package's generated headers
 target_compile_definitions(embedded-react-desktop-aot PRIVATE
         ER_DEFAULT_PACKAGE="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/embedded-react/dist/app.erpkg")
 target_link_libraries(embedded-react-desktop-aot PRIVATE er-backend-sdl erb-runtime)

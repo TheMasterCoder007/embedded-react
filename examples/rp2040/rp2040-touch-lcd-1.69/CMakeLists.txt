@@ -172,6 +172,7 @@ add_executable(embedded-react-watch
 )
 target_include_directories(embedded-react-watch PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}"
+    "${EMBEDDED_REACT_SRC_DIR}/examples/device/include" # the device package's generated headers
     "${EMBEDDED_REACT_SRC_DIR}/backends/pico-spi-lcd"
 )
 target_link_libraries(embedded-react-watch

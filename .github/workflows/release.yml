@@ -64,6 +64,9 @@ jobs:
           echo "✓ ${GITHUB_REF_NAME} is on master"
 
       # Fast, display-free verification before anything is published.
+      # Links the board examples' device package, which the watch face imports by name.
+      - name: Link the workspace packages
+        run: npm ci
       - name: JS tests
         working-directory: packages/embedded-react
         run: npm ci && npx vitest run

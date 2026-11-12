@@ -2,7 +2,7 @@
 # no app at build time: the firmware loads a package from the erb_a and erb_b partitions (see ../partitions.csv).
 idf_component_register(
     SRCS "main.c" "board.c" "native_modules.c"
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "${EMBEDDED_REACT_SRC_DIR}/examples/device/include" # the device package's generated headers
     REQUIRES engine erb-runtime esp32-spi-lcd-backend esp_lcd driver esp_driver_uart esp_timer
 )
 

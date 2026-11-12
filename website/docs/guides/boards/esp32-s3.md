@@ -92,7 +92,9 @@ Inside the repository, `cd packages/embedded-react && npm run pack` packs one of
 
 The watch face demo uses the [native modules](../native-modules.md) in `main/native_modules.c`, which both
 of the S3's builds register: the chip's name, free internal RAM and a once-a-second event that drives its
-clock, and the chip's temperature sensor, read when the app asks and posted from the frame loop.
+clock, and the chip's temperature sensor, read when the app asks and posted from the frame loop. They are the
+`chip` and `thermometer` of the boards' device package (`examples/device`), and the table is built from its
+generated headers.
 
 ## Hot reload over USB
 
