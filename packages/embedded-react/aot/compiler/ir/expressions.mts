@@ -323,6 +323,8 @@ export type NativeType = 'int' | 'float' | 'bool' | 'int64' | 'string';
 /** A record a native method takes or returns: its fields, in order. */
 export interface NativeRecord {
   kind: 'record';
+  /** The type's name, when the interface's file declares it by one. */
+  name?: string;
   fields: {name: string; type: NativeValue}[];
 }
 

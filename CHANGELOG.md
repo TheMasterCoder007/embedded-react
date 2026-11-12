@@ -62,6 +62,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   demo's modules.
 - An app can import native modules declared in another file or a package: `import {Can} from 'my-device'`. The
   package ships its `.ts` source, with the mocks beside it.
+- `npx embedded-react native-header <package or file>` writes a C header for each native module: record structs
+  with pack and unpack helpers, argument offsets, and an entry for the firmware's table.
 
 ### Changed
 

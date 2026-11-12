@@ -84,6 +84,10 @@ Usage:
   embedded-react pack [package] --board <name> [--slot a|b] [--sequence <n>] [--out <dir>]
                                                Write a slot's image to a file, for a factory line or a
                                                  drag-and-drop UF2, without a board attached.
+  embedded-react native-header <package or file> [--out <dir>]
+                                               Write a C header for each native module a device package
+                                                 or a .ts file declares: its records, where each argument
+                                                 starts, and an entry for the firmware's table.
 
   board   esp32-2432s028r, esp32-s3 or rp2040-touch-lcd-1.69
   package defaults to dist/app.erpkg
@@ -717,6 +721,41 @@ function flash(args) {
   }
 }
 
+/** `embedded-react native-header <package or file> [--out dir]` */
+async function nativeHeader(args) {
+  const cwd = process.cwd();
+  const outDir = resolve(cwd, optValue(args, '--out')?.value ?? '.');
+  const [target] = bareArgs(args, ['--out']);
+  if (!target) {
+    console.error(
+      'Pass the package or the .ts file that declares the modules.\n',
+    );
+    usage();
+    process.exit(1);
+  }
+  const {nativeHeaders, readModuleFile} = await import('./aot/compile.mts');
+  let shownFile = target;
+  try {
+    const {path, source, files} = readModuleFile(target, cwd);
+    shownFile = relative(cwd, path);
+    const headers = nativeHeaders(source, files);
+    mkdirSync(outDir, {recursive: true});
+    for (const header of headers) {
+      writeFileSync(resolve(outDir, header.file), header.text);
+      console.log(
+        `✓ ${header.module} → ${relative(cwd, resolve(outDir, header.file))}`,
+      );
+    }
+  } catch (error) {
+    const where = error?.aotLoc
+      ? `${shownFile}:${error.aotLoc.line}:${error.aotLoc.column + 1}: `
+      : '';
+    console.error(where + (error?.message || String(error)));
+    if (error?.aotHint) console.error(`  ${error.aotHint}`);
+    process.exit(1);
+  }
+}
+
 const [command, ...commandArgs] = process.argv.slice(2);
 if (command === 'dev') {
   await dev(commandArgs);
@@ -728,6 +767,8 @@ if (command === 'dev') {
   pack(commandArgs);
 } else if (command === 'flash') {
   flash(commandArgs);
+} else if (command === 'native-header') {
+  await nativeHeader(commandArgs);
 } else if (
   !command ||
   command === '--help' ||

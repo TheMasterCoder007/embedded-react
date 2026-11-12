@@ -257,22 +257,38 @@ function packageFileOf(
     const manifestPath = join(directory, 'node_modules', name, 'package.json');
     if (isFile(manifestPath)) {
       // A workspace or file: package is a link to its own folder.
-      const packageDirectory = realpathSync(dirname(manifestPath));
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-      if (manifest.exports !== undefined) {
-        const path = exportedPath(manifest.exports, subpath);
-        const file = path && resolve(packageDirectory, path);
-        return file && isFile(file) ? file : undefined;
-      }
-      return fileOf(
-        resolve(
-          packageDirectory,
-          subpath === '.' ? (manifest.main ?? 'index') : subpath,
-        ),
-      );
+      return packageEntryOf(realpathSync(dirname(manifestPath)), subpath);
     }
     if (dirname(directory) === directory) return undefined;
   }
+}
+
+/**
+ * The file a package gives a subpath, by its `exports`, or else its `main` or the path itself.
+ *
+ * @param packageDirectory  The package's folder.
+ * @param subpath  The subpath, `.` for the package itself.
+ *
+ * @returns The file, or undefined when there is none.
+ */
+function packageEntryOf(
+  packageDirectory: string,
+  subpath: string,
+): string | undefined {
+  const manifest = JSON.parse(
+    readFileSync(join(packageDirectory, 'package.json'), 'utf8'),
+  );
+  if (manifest.exports !== undefined) {
+    const path = exportedPath(manifest.exports, subpath);
+    const file = path && resolve(packageDirectory, path);
+    return file && isFile(file) ? file : undefined;
+  }
+  return fileOf(
+    resolve(
+      packageDirectory,
+      subpath === '.' ? (manifest.main ?? 'index') : subpath,
+    ),
+  );
 }
 
 /**
@@ -467,6 +483,37 @@ export function readNativeFiles(
     }
   }
   return files;
+}
+
+/**
+ * Reads the file a C header is generated from, with the files its modules' interfaces are in.
+ *
+ * @param target  A file, a package's folder, or a package's name as an app imports it.
+ * @param fromDirectory  The folder a path is from, and a package is looked for from.
+ *
+ * @returns The file, its source, and its interface files.
+ */
+export function readModuleFile(
+  target: string,
+  fromDirectory: string,
+): {path: string; source: string; files: Record<string, NativeFile>} {
+  const path = resolve(fromDirectory, target);
+  const file = isFile(join(path, 'package.json'))
+    ? packageEntryOf(path, '.')
+    : (fileOf(path) ?? packageFileOf(fromDirectory, target));
+  if (!file) {
+    throw new Error(
+      `No file or package at ${target}. Pass the .ts file that declares the modules, or the package's folder or name.`,
+    );
+  }
+  if (!isSourceFile(file)) {
+    throw new Error(
+      `${file} is JavaScript or a .d.ts, which a native module isn't read from. ` +
+        'Ship the package\'s .ts source, and point its exports at it: "exports": "./index.ts".',
+    );
+  }
+  const source = readFileSync(file, 'utf8');
+  return {path: file, source, files: readNativeFiles(source, dirname(file))};
 }
 
 /**

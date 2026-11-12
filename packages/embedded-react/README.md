@@ -43,6 +43,7 @@ The package is the React Native analog: hooks come from `react`, everything else
 | `npx embedded-react build --aot --bake` | A Flow B package as a C array, `dist/app.erpkg.c`, to link into firmware with no spare partition |
 | `npx embedded-react flash --board NAME` | Writes `dist/app.erpkg` to the board's staging slot, through `esptool` or `picotool`. The last good package stays until the new one passes verification |
 | `npx embedded-react pack --board NAME` | Writes a slot's image to a file, as a UF2 on the RP2040, for a factory line or a board that isn't attached |
+| `npx embedded-react native-header PACKAGE --out DIR` | Writes a C header for each native module a device package or `.ts` file declares, for the firmware to build against |
 | `npx embedded-react export` | A self-contained static copy of the simulator with your app, for any static host |
 
 ## Where to read more

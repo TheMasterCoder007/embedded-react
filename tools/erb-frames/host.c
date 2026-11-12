@@ -33,6 +33,7 @@
 #include "er_scene.h"
 #include "erb_runtime.h"
 #include "native_renderer.h"
+#include "probe_module.h"
 #include "software_backend.h"
 
 #include <stdio.h>
@@ -72,7 +73,8 @@ static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 static bool s_flow_a;
 
 /*----------------------------------------------------------------------------------------------------------------------
- - The probe module, which the native-calls, native-events, native-strings and native-records scenarios call
+ - The probe module, which the native-calls, native-events, native-strings and native-records scenarios call. It packs
+ - with probe_module.h, generated from the scenarios' fixtures/native-probe-module.ts
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief The probe's events, by their index in s_natives. */
@@ -104,9 +106,10 @@ static void probe_post_done(void)
     {
         return;
     }
-    const float half = (float)s_probe_pending_value / 2.0f;
-    int32_t values[3] = {s_probe_pending_value, 0, s_probe_pending_value % 2 == 0};
-    memcpy(&values[1], &half, sizeof(half));
+    int32_t values[PROBE_DONE_ARG_CELLS];
+    values[PROBE_DONE_ARG_VALUE] = s_probe_pending_value;
+    erb_native_set_float(&values[PROBE_DONE_ARG_HALF], (float)s_probe_pending_value / 2.0f);
+    values[PROBE_DONE_ARG_EVEN] = s_probe_pending_value % 2 == 0;
     if (probe_post(PROBE_DONE, values))
     {
         s_probe_pending = false;
@@ -126,18 +129,29 @@ static void probe_post_named(void)
     }
     static char name[32];
     snprintf(name, sizeof(name), "probe-%d", (int)s_probe_announced_id);
-    int32_t values[3];
-    values[0] = erb_native_text(name);
-    erb_native_set_int64(&values[1], 5000000000LL + s_probe_announced_id);
+    int32_t values[PROBE_NAMED_ARG_CELLS];
+    values[PROBE_NAMED_ARG_NAME] = erb_native_text(name);
+    erb_native_set_int64(&values[PROBE_NAMED_ARG_STAMP], 5000000000LL + s_probe_announced_id);
     if (probe_post(PROBE_NAMED, values))
     {
         s_probe_announced = false;
     }
 }
 
-/** @brief fix(id)'s cells, its label written into @p label: "fix-<id>", the id, 6000000000 plus it, half of it and
- *         minus a quarter, and whether it is even. */
-static void probe_fix_cells(int32_t id, char* label, size_t label_size, int32_t* cells);
+/** @brief fix(id), its label written into @p label: "fix-<id>", the id, 6000000000 plus it, half of it and minus a
+ *         quarter, and whether it is even. */
+static ProbeFix probe_fix_of(int32_t id, char* label, size_t label_size)
+{
+    snprintf(label, label_size, "fix-%d", (int)id);
+    const ProbeFix fix = {
+        .label = label,
+        .id = id,
+        .at = 6000000000LL + id,
+        .place = {.lat = (float)id / 2.0f, .lon = -(float)id / 4.0f},
+        .ok = id % 2 == 0,
+    };
+    return fix;
+}
 
 /** @brief Posts located with fix(id) and the point (id, 2 * id), once it is taken. */
 static void probe_post_located(void)
@@ -147,28 +161,15 @@ static void probe_post_located(void)
         return;
     }
     char label[24];
-    int32_t values[9];
-    probe_fix_cells(s_probe_locating_id, label, sizeof(label), values);
-    values[7] = s_probe_locating_id;
-    values[8] = 2 * s_probe_locating_id;
+    int32_t values[PROBE_LOCATED_ARG_CELLS];
+    const ProbeFix where = probe_fix_of(s_probe_locating_id, label, sizeof(label));
+    const ProbePoint from = {.x = s_probe_locating_id, .y = 2 * s_probe_locating_id};
+    probe_fix_pack(&values[PROBE_LOCATED_ARG_WHERE], &where);
+    probe_point_pack(&values[PROBE_LOCATED_ARG_FROM], &from);
     if (probe_post(PROBE_LOCATED, values))
     {
         s_probe_locating = false;
     }
-}
-
-static float probe_float(int32_t cell)
-{
-    float value;
-    memcpy(&value, &cell, sizeof(value));
-    return value;
-}
-
-static int32_t probe_cell(float value)
-{
-    int32_t cell;
-    memcpy(&cell, &value, sizeof(cell));
-    return cell;
 }
 
 static bool probe_add(const int32_t* arguments, int32_t* result, void* context)
@@ -181,7 +182,7 @@ static bool probe_add(const int32_t* arguments, int32_t* result, void* context)
 static bool probe_half(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
-    *result = probe_cell((float)arguments[0] / 2.0f);
+    erb_native_set_float(result, (float)arguments[0] / 2.0f);
     return true;
 }
 
@@ -211,7 +212,7 @@ static bool probe_store(const int32_t* arguments, int32_t* result, void* context
 {
     (void)result;
     (void)context;
-    s_probe_stored = probe_float(arguments[0]);
+    s_probe_stored = erb_native_float(arguments[0]);
     return true;
 }
 
@@ -219,7 +220,7 @@ static bool probe_stored(const int32_t* arguments, int32_t* result, void* contex
 {
     (void)arguments;
     (void)context;
-    *result = probe_cell(s_probe_stored);
+    erb_native_set_float(result, s_probe_stored);
     return true;
 }
 
@@ -261,7 +262,9 @@ static bool probe_length(const int32_t* arguments, int32_t* result, void* contex
 static bool probe_shift(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
-    erb_native_set_int64(result, erb_native_int64(&arguments[1]) + (int64_t)arguments[0] * 1000);
+    erb_native_set_int64(result,
+                         erb_native_int64(&arguments[PROBE_SHIFT_ARG_STAMP])
+                             + (int64_t)arguments[PROBE_SHIFT_ARG_SECONDS] * 1000);
     return true;
 }
 
@@ -279,20 +282,11 @@ static bool probe_announce(const int32_t* arguments, int32_t* result, void* cont
 static bool probe_move(const int32_t* arguments, int32_t* result, void* context)
 {
     (void)context;
-    result[0] = arguments[0] + arguments[2];
-    result[1] = arguments[1] + 2 * arguments[2];
+    const ProbePoint from = probe_point_unpack(&arguments[PROBE_MOVE_ARG_FROM]);
+    const int32_t step = arguments[PROBE_MOVE_ARG_STEP];
+    const ProbePoint moved = {.x = from.x + step, .y = from.y + 2 * step};
+    probe_point_pack(result, &moved);
     return true;
-}
-
-static void probe_fix_cells(int32_t id, char* label, size_t label_size, int32_t* cells)
-{
-    snprintf(label, label_size, "fix-%d", (int)id);
-    cells[0] = erb_native_text(label);
-    cells[1] = id;
-    erb_native_set_int64(&cells[2], 6000000000LL + id);
-    cells[4] = probe_cell((float)id / 2.0f);
-    cells[5] = probe_cell(-(float)id / 4.0f);
-    cells[6] = id % 2 == 0;
 }
 
 static bool probe_fix(const int32_t* arguments, int32_t* result, void* context)
@@ -300,7 +294,8 @@ static bool probe_fix(const int32_t* arguments, int32_t* result, void* context)
     (void)context;
     /* Held until the call returns, as a result's text must be. */
     static char label[24];
-    probe_fix_cells(arguments[0], label, sizeof(label), result);
+    const ProbeFix fix = probe_fix_of(arguments[PROBE_FIX_ARG_ID], label, sizeof(label));
+    probe_fix_pack(result, &fix);
     return true;
 }
 
@@ -315,26 +310,26 @@ static bool probe_locate(const int32_t* arguments, int32_t* result, void* contex
 }
 
 static const ErbNative s_natives[] = {
-    {"probe.add", 1, "i:ii", probe_add},
-    {"probe.half", 1, "f:i", probe_half},
-    {"probe.even", 1, "b:i", probe_even},
-    {"probe.flip", 1, "b:b", probe_flip},
-    {"probe.next", 1, "i:", probe_next},
-    {"probe.store", 1, "v:f", probe_store},
-    {"probe.stored", 1, "f:", probe_stored},
-    {"probe.start", 1, "v:i", probe_start},
-    {"probe.refused", 1, "i:", probe_refused},
-    [PROBE_DONE] = {"probe.done", 1, "v:ifb", NULL},
-    [PROBE_IDLE] = {"probe.idle", 1, "v:", NULL},
-    {"probe.greet", 1, "s:s", probe_greet},
-    {"probe.length", 1, "i:s", probe_length},
-    {"probe.shift", 1, "l:il", probe_shift},
-    {"probe.announce", 1, "v:i", probe_announce},
-    [PROBE_NAMED] = {"probe.named", 1, "v:sl", NULL},
-    {"probe.move", 1, "{x:i,y:i}:{x:i,y:i}i", probe_move},
-    {"probe.fix", 1, "{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}:i", probe_fix},
-    {"probe.locate", 1, "v:i", probe_locate},
-    [PROBE_LOCATED] = {"probe.located", 1, "v:{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}{x:i,y:i}", NULL},
+    {PROBE_ADD_ENTRY, probe_add},
+    {PROBE_HALF_ENTRY, probe_half},
+    {PROBE_EVEN_ENTRY, probe_even},
+    {PROBE_FLIP_ENTRY, probe_flip},
+    {PROBE_NEXT_ENTRY, probe_next},
+    {PROBE_STORE_ENTRY, probe_store},
+    {PROBE_STORED_ENTRY, probe_stored},
+    {PROBE_START_ENTRY, probe_start},
+    {PROBE_REFUSED_ENTRY, probe_refused},
+    [PROBE_DONE] = {PROBE_DONE_ENTRY, NULL},
+    [PROBE_IDLE] = {PROBE_IDLE_ENTRY, NULL},
+    {PROBE_GREET_ENTRY, probe_greet},
+    {PROBE_LENGTH_ENTRY, probe_length},
+    {PROBE_SHIFT_ENTRY, probe_shift},
+    {PROBE_ANNOUNCE_ENTRY, probe_announce},
+    [PROBE_NAMED] = {PROBE_NAMED_ENTRY, NULL},
+    {PROBE_MOVE_ENTRY, probe_move},
+    {PROBE_FIX_ENTRY, probe_fix},
+    {PROBE_LOCATE_ENTRY, probe_locate},
+    [PROBE_LOCATED] = {PROBE_LOCATED_ENTRY, NULL},
 };
 
 static void log_line(const char* line, void* context)

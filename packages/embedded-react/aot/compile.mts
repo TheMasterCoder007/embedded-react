@@ -88,7 +88,8 @@ import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mjs';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
-import {readNativeFiles} from './compiler/native-files.mts';
+import {nativeHeaders} from './compiler/native-header.mts';
+import {readModuleFile, readNativeFiles} from './compiler/native-files.mts';
 import {demoFile} from './demo-file.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
@@ -132,7 +133,9 @@ const FIRST_SIZE: Screen = {width: 240, height: 320};
 export {
   bakePackage,
   bakeSvgArtifacts,
+  nativeHeaders,
   packPackage,
+  readModuleFile,
   readNativeFiles,
   resourceReport,
 };
