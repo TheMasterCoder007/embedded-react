@@ -253,12 +253,30 @@ uint32_t erb_op_words(uint8_t opcode);
 /*----------------------------------------------------------------------------------------------------------------------
  - Values
  *
- * A string register is 0 (the empty string), a constant's index + 1, or ERB_STRING_ARENA | an arena offset.
+ * A string register is 0 (the empty string), a constant's index + 1, ERB_STRING_ARENA | an arena offset, or
+ * ERB_STRING_NATIVE | a string cell (erb_native.h): a native event's argument, read in place while its handlers run.
  * A node register is two cells: the engine tag + 1 (0 is no node), then the serial. An anim register is
  * ERB_PACK16(running-animation entry index, generation); 0 is none.
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ERB_STRING_ARENA 0x80000000u
+#define ERB_STRING_NATIVE 0x40000000u
+
+/**
+ * @brief The register a native signature's parameter or result of type @p code takes, the first free one being
+ *        @p register_index. An int64 starts on an even register, as every 64-bit register does, so the registers may
+ *        have a gap where the C cells have none.
+ */
+static inline uint32_t erb_native_register(char code, uint32_t register_index)
+{
+    return code == 'l' ? register_index + (register_index & 1u) : register_index;
+}
+
+/** @brief The registers, and the C cells, a native signature's parameter or result of type @p code takes. */
+static inline uint32_t erb_native_cells(char code)
+{
+    return code == 'l' ? 2u : 1u;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Arena records

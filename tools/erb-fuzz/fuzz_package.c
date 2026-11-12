@@ -87,8 +87,9 @@ static const uint16_t s_panels[][2] = {
 #define GLYPH_SLOTS 1024
 #define EXTRA_GLYPH_SLOTS 64
 
-/** @brief The probe's done event, by its index in s_natives. */
+/** @brief The probe's events, by their index in s_natives. */
 #define PROBE_DONE 10
+#define PROBE_NAMED 16
 
 /** @brief What a script step does with its first and second argument. An operation past the last wraps around. */
 enum
@@ -211,6 +212,40 @@ static bool probe_refused(const int32_t* arguments, int32_t* result, void* conte
     return true;
 }
 
+static bool probe_greet(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    static char greeting[64];
+    snprintf(greeting, sizeof(greeting), "hi %s", erb_native_string(arguments[0]));
+    *result = erb_native_text(greeting);
+    return true;
+}
+
+static bool probe_length(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = (int32_t)strlen(erb_native_string(arguments[0]));
+    return true;
+}
+
+static bool probe_shift(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    erb_native_set_int64(
+        result, (int64_t)((uint64_t)erb_native_int64(&arguments[1]) + (uint64_t)(int64_t)arguments[0] * 1000u));
+    return true;
+}
+
+/** @brief Posts named from inside the call, which the runtime refuses. */
+static bool probe_announce(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    int32_t values[3] = {erb_native_text("probe"), arguments[0], 0};
+    erb_native_post(PROBE_NAMED, values);
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"sensors.read", 1, "i:i", sensors_read},
     {"probe.add", 1, "i:ii", probe_add},
@@ -224,6 +259,11 @@ static const ErbNative s_natives[] = {
     {"probe.refused", 1, "i:", probe_refused},
     [PROBE_DONE] = {"probe.done", 1, "v:ifb", NULL},
     {"probe.idle", 1, "v:", NULL},
+    {"probe.greet", 1, "s:s", probe_greet},
+    {"probe.length", 1, "i:s", probe_length},
+    {"probe.shift", 1, "l:il", probe_shift},
+    {"probe.announce", 1, "v:i", probe_announce},
+    [PROBE_NAMED] = {"probe.named", 1, "v:sl", NULL},
 };
 
 static BitmapFont s_fonts[FONT_SLOTS];
@@ -341,8 +381,9 @@ static void step(Run* run, uint8_t operation, uint8_t first_argument, uint8_t se
             break;
         case OPERATION_NATIVE_EVENT:
         {
-            int32_t values[ERB_NATIVE_MAX_PARAMETERS];
-            for (uint32_t value = 0; value < ERB_NATIVE_MAX_PARAMETERS; value++)
+            /* A string's cell is whatever the value is, so most read as "". */
+            int32_t values[ERB_NATIVE_MAX_CELLS];
+            for (uint32_t value = 0; value < ERB_NATIVE_MAX_CELLS; value++)
             {
                 values[value] = (int32_t)second_argument - ARGUMENT_MIDPOINT;
             }

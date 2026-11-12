@@ -7,6 +7,7 @@ if (ESP_PLATFORM)
     idf_component_register(
             SRCS
             er_container.c
+            erb_native.c
             er_assets.c
             er_hotreload.c
             erb_props.c
@@ -31,8 +32,9 @@ project(embedded-react-runtime C)
 
 # ---------------------------------------------------------------------------
 # er-runtime — the parts of the device runtime that no JS engine owns: the ERCF container reader and
-# CRC (er_container.c), the ERPK asset-pack loader (er_assets.c, with its heap path in er_assets_heap.c)
-# and the hot-reload frame parser (er_hotreload.c). Links only the engine. The QuickJS bridge builds on it; so will the Flow B runtime.
+# CRC (er_container.c), the ERPK asset-pack loader (er_assets.c, with its heap path in er_assets_heap.c),
+# the hot-reload frame parser (er_hotreload.c) and the strings native modules pass (erb_native.c). Links only
+# the engine. The QuickJS bridge builds on it; so will the Flow B runtime.
 #
 # Configure standalone (runs the container tests):
 #   cmake -S runtime -B runtime/build
@@ -59,6 +61,7 @@ endif ()
 
 add_library(er-runtime STATIC
         er_container.c
+        erb_native.c
         er_assets.c
         er_assets_heap.c
         er_hotreload.c

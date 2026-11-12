@@ -50,7 +50,7 @@ const SENSORS =
   '  count(): Int;\n' +
   '  setLed(on: boolean): void;\n' +
   '  scale: (value: number) => number;\n' +
-  '  name(): string;\n' +
+  '  name(): number[];\n' +
   '  level?(): number;\n' +
   '  mode(index: Int): Int;\n' +
   '  mode(on: boolean): Int;\n' +
@@ -138,7 +138,13 @@ function readProgram(bytes: Uint8Array) {
     (_, index) => {
       const record = functions.offset + index * 16;
       const start = u32(record);
-      const ops: {name: string; a: number; b: number; bx: number}[] = [];
+      const ops: {
+        name: string;
+        a: number;
+        b: number;
+        bx: number;
+        extension?: number;
+      }[] = [];
       for (let at = start; at < start + u32(record + 4);) {
         const word = u32(code.offset + at * 4);
         const name = OP_NAMES[word & 0xff];
@@ -147,6 +153,9 @@ function readProgram(bytes: Uint8Array) {
           a: (word >>> 8) & 0xff,
           b: (word >>> 16) & 0xff,
           bx: word >>> 16,
+          ...(OP[name].words === 2
+            ? {extension: u32(code.offset + (at + 1) * 4)}
+            : {}),
         });
         at += OP[name].words;
       }
@@ -287,7 +296,7 @@ describe('native module calls it refuses', () => {
 
   it('refuses what the interface declares but a call cannot pass yet', () => {
     expect(failure(appOf('Sensors.name();'))).toMatch(
-      /Sensors\.name returns a string, which native modules don't pass yet/,
+      /Sensors\.name returns a type native modules don't pass yet/,
     );
     expect(failure(appOf('setF(Sensors.level());'))).toMatch(
       /Sensors\.level is optional/,
@@ -413,7 +422,7 @@ const EVENTS =
   '  events: {\n' +
   '    reading(celsius: number, channel: Int, ok: boolean): void;\n' +
   '    tick(): void;\n' +
-  '    name(text: string): void;\n' +
+  '    name(text: number[]): void;\n' +
   '    count(): Int;\n' +
   '  };\n' +
   '}\n' +
@@ -533,7 +542,7 @@ describe('native events', () => {
             reading: 'v:fib',
             tick: 'v:',
             name: {
-              reason: "takes a string, which native modules don't pass yet",
+              reason: "takes a type native modules don't pass yet",
             },
             count: {reason: 'returns a value, but an event returns nothing'},
           },
@@ -552,7 +561,9 @@ describe('native events it refuses', () => {
     ).toMatch(/Sensors has no event done/);
     expect(
       failure(subscribed("useNativeEvent(Sensors, 'name', () => {})")),
-    ).toMatch(/Sensors's event name takes a string/);
+    ).toMatch(
+      /Sensors's event name takes a type native modules don't pass yet/,
+    );
     expect(
       failure(subscribed("useNativeEvent(Sensors, 'count', () => {})")),
     ).toMatch(/Sensors's event count returns a value/);
@@ -643,7 +654,7 @@ const WIFI =
   'interface Wifi {\n' +
   '  connect(channel: Int): boolean;\n' +
   '  strength(): Int;\n' +
-  '  name(): string;\n' +
+  '  name(): number[];\n' +
   '  events: {found(rssi: Int): void; lost(): void};\n' +
   '}\n' +
   "const Wifi = nativeModule.optional<Wifi>('wifi', 3);\n";
@@ -728,7 +739,7 @@ describe('optional native modules', () => {
             connect: 'b:i',
             strength: 'i:',
             name: {
-              reason: "returns a string, which native modules don't pass yet",
+              reason: "returns a type native modules don't pass yet",
             },
           },
           events: {found: 'v:i', lost: 'v:'},
@@ -761,7 +772,7 @@ describe('optional native modules it refuses', () => {
       failure(
         optionalApp('').replace(
           WIFI,
-          'interface Wifi { name(): string; }\n' +
+          'interface Wifi { name(): number[]; }\n' +
             "const Wifi = nativeModule.optional<Wifi>('wifi', 3);\n",
         ),
       ),
@@ -788,5 +799,116 @@ describe('optional native modules it refuses', () => {
         "const Wifi = nativeModule.optional<Wifi>('wifi', 3);\n",
     );
     expect(failure(source)).toMatch(/at most 32 native methods/);
+  });
+});
+
+const WORDS =
+  'interface Words {\n' +
+  '  greet(name: string): string;\n' +
+  '  length(text: string): Int;\n' +
+  '  shift(seconds: Int, stamp: Int64): Int64;\n' +
+  '  events: {named(name: string, stamp: Int64): void};\n' +
+  '}\n' +
+  "const Words = nativeModule<Words>('words', 1);\n";
+
+/** An app with the Words module: `handler` as a button's onPress body, and `body` at the top of the App. */
+const wordsApp = (handler: string, body = '') =>
+  "import {useState} from 'react';\n" +
+  "import {Pressable, Text, nativeModule, useNativeEvent} from 'embedded-react';\n" +
+  "import type {Int, Int64} from 'embedded-react';\n" +
+  WORDS +
+  'export function App() {\n' +
+  "  const [s, setS] = useState('x');\n" +
+  '  const [n, setN] = useState(0);\n' +
+  '  const [stamp, setStamp] = useState(4000000000);\n' +
+  body +
+  `  return <Pressable onPress={() => { ${handler} }}><Text>{s} {n} {stamp}</Text></Pressable>;\n` +
+  '}\n';
+
+describe('native strings and Int64s', () => {
+  it('signs a string s and an Int64 l', () => {
+    const {imports} = readProgram(
+      compile(
+        wordsApp(
+          'setS(Words.greet(s)); setN(Words.length(s)); setStamp(Words.shift(n, stamp));',
+        ),
+      ).program,
+    );
+    expect(imports).toEqual([
+      'words.greet v1 s:s',
+      'words.length v1 i:s',
+      'words.shift v1 l:il',
+    ]);
+  });
+
+  it("copies each call's string result into a buffer of its own", () => {
+    const {ops} = readProgram(
+      compile(wordsApp('setN(Words.length(Words.greet(Words.greet(s))));'))
+        .program,
+    );
+    const calls = ops.filter(op => op.name === 'CALLNS');
+    expect(calls).toHaveLength(2);
+    expect(calls[0].extension).not.toBe(calls[1].extension);
+    expect(ops.filter(op => op.name === 'CALLN')).toHaveLength(1);
+  });
+
+  it('passes an Int64 on an even register, after a gap', () => {
+    const {ops} = readProgram(
+      compile(wordsApp('setStamp(Words.shift(n, stamp));')).program,
+    );
+    const call = ops.findIndex(op => op.name === 'CALLN');
+    const [seconds, stamp] = ops.slice(call - 2, call);
+    expect(seconds.a).toBe(ops[call].a);
+    expect(stamp.a % 2).toBe(0);
+    expect(stamp.a).toBe(ops[call].a + 1 + ((ops[call].a + 1) % 2));
+  });
+
+  it("enters an event's handler with a string, then an Int64 on an even register", () => {
+    const {events, functions} = readProgram(
+      compile(
+        wordsApp(
+          '',
+          "  useNativeEvent(Words, 'named', (name, at) => { setS(name); setStamp(at); });\n",
+        ),
+      ).program,
+    );
+    expect(events.map(entry => entry.event)).toEqual(['words.named v1 v:sl']);
+    expect(functions[events[0].handler].parameterTypes).toEqual([
+      ValueType.string,
+      ValueType.int,
+      ValueType.int64,
+      ValueType.pair,
+    ]);
+  });
+
+  it('gives Flow A the signatures', () => {
+    expect(addNativeSignatures(wordsApp(''), {})).toContain(
+      "nativeModule<Words>('words', 1, " +
+        JSON.stringify({
+          methods: {greet: 's:s', length: 'i:s', shift: 'l:il'},
+          events: {named: 'v:sl'},
+        }) +
+        ')',
+    );
+  });
+});
+
+describe('native strings and Int64s it refuses', () => {
+  it('refuses text built in the call, and a value of another type', () => {
+    expect(failure(wordsApp('setS(Words.greet(`a${n}`));'))).toMatch(
+      /Words\.greet\(\) takes a string, not text built in the call/,
+    );
+    expect(failure(wordsApp("setS(Words.greet(s + '!'));"))).toMatch(
+      /takes a string, not text built in the call/,
+    );
+    expect(failure(wordsApp('setS(Words.greet(n));'))).toMatch(
+      /Words\.greet\(\) takes a string here/,
+    );
+    expect(failure(wordsApp('setStamp(Words.shift(n, 1.5));'))).toMatch(
+      /Words\.shift\(\) takes an Int64 here/,
+    );
+    expect(failure(wordsApp('setStamp(Words.shift(stamp, stamp));'))).toMatch(
+      /a 64-bit value .* cannot be used here/,
+    );
   });
 });

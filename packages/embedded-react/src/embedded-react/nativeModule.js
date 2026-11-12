@@ -34,11 +34,19 @@
 
 import {useEffect, useRef} from 'react';
 
-// What a value becomes in a C cell, by its signature code: as the bridge converts it.
+// What a value becomes in C, by its signature code: as the bridge converts it. An int64 is truncated and wraps, and
+// comes back as the nearest number; a string ends at its first NUL.
 const CONVERSIONS = {
   i: value => value | 0,
   b: value => !!value,
   f: value => Math.fround(value),
+  l: value => {
+    const whole = Math.trunc(Number(value));
+    return Number.isFinite(whole)
+      ? Number(BigInt.asIntN(64, BigInt(whole)))
+      : 0;
+  },
+  s: value => String(value).split('\0')[0],
   v: () => undefined,
 };
 

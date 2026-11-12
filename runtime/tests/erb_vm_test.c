@@ -94,11 +94,50 @@ static bool sensors_post(const int32_t* arguments, int32_t* result, void* contex
     return true;
 }
 
+static bool text_length(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = (int32_t)strlen(erb_native_string(arguments[0]));
+    return true;
+}
+
+static bool text_greet(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    static char greeting[64];
+    snprintf(greeting, sizeof(greeting), "hi %s", erb_native_string(arguments[0]));
+    *result = erb_native_text(greeting);
+    return true;
+}
+
+static bool text_long(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = erb_native_text("longer than fifteen bytes");
+    return true;
+}
+
+static bool clock_shift(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    erb_native_set_int64(result, erb_native_int64(arguments + 1) + (int64_t)arguments[0] * 1000);
+    return true;
+}
+
+/** @brief The text and clock natives, by their index in s_natives. */
+#define NATIVE_TEXT_NAMED 9
+
 static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read},
                                       {"sensors.scale", 1, "f:i", sensors_scale},
                                       {"sensors.reading", 1, "v:ib", NULL},
                                       {"sensors.idle", 1, "v:", NULL},
-                                      {"sensors.post", 1, "v:", sensors_post}};
+                                      {"sensors.post", 1, "v:", sensors_post},
+                                      {"text.length", 1, "i:s", text_length},
+                                      {"text.greet", 1, "s:s", text_greet},
+                                      {"text.long", 1, "s:", text_long},
+                                      {"clock.shift", 1, "l:il", clock_shift},
+                                      [NATIVE_TEXT_NAMED] = {"text.named", 1, "v:sl", NULL}};
 
 static void log_line(const char* line, void* context)
 {
@@ -117,7 +156,7 @@ static TPkg* base(void)
     s_config.screen_width = TPKG_SCREEN;
     s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
-    s_config.native_count = 5;
+    s_config.native_count = sizeof(s_natives) / sizeof(s_natives[0]);
     s_config.log = log_line;
     s_log[0] = '\0';
     s_native_fails = false;
@@ -1178,6 +1217,95 @@ static void test_native_events(void)
     CHECK(erb_last_error()->status == ERB_ERROR_TRAP, "with its reason");
 }
 
+static void test_native_values(void)
+{
+    base();
+    TPkg* package = &s_package_spec;
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "text.length";
+    package->strings[package->string_count++] = "i:s";
+    package->strings[package->string_count++] = "text.greet";
+    package->strings[package->string_count++] = "s:s";
+    package->strings[package->string_count++] = "text.long";
+    package->strings[package->string_count++] = "s:";
+    package->strings[package->string_count++] = "clock.shift";
+    package->strings[package->string_count++] = "l:il";
+    package->strings[package->string_count++] = "text.named";
+    package->strings[package->string_count++] = "v:sl";
+    const uint16_t length = (uint16_t)package->import_count;
+    for (uint16_t index = 0; index < 4; index++)
+    {
+        package->imports[package->import_count++] =
+            (TImport){(uint16_t)(name + 2 * index), 1, (uint16_t)(name + 2 * index + 1)};
+    }
+    const uint16_t greet = (uint16_t)(length + 1);
+    const uint16_t long_text = (uint16_t)(length + 2);
+    const uint16_t shift = (uint16_t)(length + 3);
+
+    /* greet("bob") into the label's buffer, then its length. */
+    const uint8_t greet_types[] = {ERB_TYPE_STRING, ERB_TYPE_STRING, ERB_TYPE_INT};
+    const uint32_t greet_code[] = {
+        OP_ABX(LOADS, 0, shared_string("bob")),
+        OP_ABX(CALLNS, 0, greet),
+        SLOT_LABEL,
+        OP_ABX(CALLN, 1, length),
+        OP_ABC(RET, 2, 0, 0),
+    };
+    const uint16_t greeting = helper(greet_types, 3, 0, ERB_TYPE_INT, greet_code, 5);
+    const uint8_t long_types[] = {ERB_TYPE_STRING};
+    const uint32_t long_code[] = {OP_ABX(CALLNS, 0, long_text), SLOT_LABEL, OP_ABC(RET, 0, 0, 0)};
+    const uint16_t cut = helper(long_types, 1, 0, 0, long_code, 3);
+    /* shift(3, big): the int64 starts on register 2, past a gap; the cells have none. */
+    const uint8_t shift_types[] = {
+        ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_INT64, ERB_TYPE_PAIR};
+    const uint32_t shift_code[] = {
+        OP_ABX(LOADI, 0, 3),
+        OP_ABX(GET64, 2, SLOT_BIG),
+        OP_ABX(CALLN, 0, shift),
+        OP_ABC(RET, 4, 0, 0),
+    };
+    const uint16_t shifted = helper(shift_types, 6, 0, ERB_TYPE_INT64, shift_code, 4);
+    /* text.named's handler keeps its int64 and the string's length, then the string, read after that call. */
+    {
+        const uint8_t types[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR};
+        const uint32_t code[] = {
+            OP_ABX(SET64, 2, SLOT_BIG),
+            OP_ABX(CALLN, 0, length),
+            OP_ABX(SET32, 1, SLOT_COUNT),
+            OP_ABX(SETS, 0, SLOT_LABEL),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        const uint16_t handler = tpkg_function(package, ERB_FUNCTION_KIND_NATIVE_EVENT, 4, 0, types, 4, code, 5);
+        package->native_events[package->native_event_count++] =
+            (TNativeEvent){(uint16_t)(name + 8), 1, (uint16_t)(name + 9), handler};
+    }
+
+    CHECK(load(), "loads");
+    CHECK(call(greeting, 0, 0) == 6, "a string argument is read in place, and a result read back by another call");
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "hi bob") == 0, "a string result is copied into its buffer");
+    CHECK(erb_native_texts_held() == 0u, "and the call lets go of its strings");
+    call(cut, 0, 0);
+    CHECK(s_status == ERB_OK && strcmp((const char*)slot(SLOT_LABEL), "longer than fif") == 0,
+          "a string result past its buffer's cap is cut short");
+    CHECK(strstr(s_log, "cut short") != NULL, "and reported");
+    CHECK(call64(shifted, 0, 0) == 1234567890123LL + 3000, "an int64 passes as two cells, low word first");
+
+    int32_t values[3];
+    values[0] = erb_native_text("posted");
+    erb_native_set_int64(values + 1, -5000000000LL);
+    CHECK(erb_native_post(NATIVE_TEXT_NAMED, values), "an event with a string and an int64 is taken");
+    int64_t big;
+    memcpy(&big, slot(SLOT_BIG), sizeof(big));
+    CHECK(big == -5000000000LL, "its handler reads the int64 past the gap");
+    CHECK(slot_int(SLOT_COUNT) == 6, "and the string, through a call");
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "posted") == 0, "which leaves the event's string as it was");
+    CHECK(erb_native_texts_held() == 0u, "and the post lets go of it");
+    values[0] = erb_native_text("refused");
+    erb_unload();
+    CHECK(!erb_native_post(NATIVE_TEXT_NAMED, values) && erb_native_texts_held() == 0u,
+          "a refused post lets go of its strings too");
+}
+
 static void test_optional_modules(void)
 {
     /* Module 0, wifi, is missing its method; module 1 is sensors.scale, which the firmware has. */
@@ -1580,6 +1708,7 @@ int main(void)
     test_float_rules();
     test_loops_and_calls();
     test_native_events();
+    test_native_values();
     test_optional_modules();
     test_text();
     test_string_helpers();

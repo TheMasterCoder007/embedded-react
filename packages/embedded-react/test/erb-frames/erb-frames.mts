@@ -690,6 +690,24 @@ const SCENARIOS: Scenario[] = [
     flowA: true,
     mocks: true,
   },
+  // Buttons: greet, shift, tell. Nothing has been greeted or heard yet, and the stamp is past an Int's range.
+  {
+    name: 'native-strings',
+    file: fixture('native-strings'),
+    screen: PORTRAIT,
+    flowA: true,
+    mocks: true,
+  },
+  // Two greets: "hi bob 1", and the length of "hi hi bob 1". A shift adds 3000 to the stamp. tell posts named next
+  // frame, with "probe-2" and 5000000002.
+  {
+    name: 'native-strings-taps',
+    file: fixture('native-strings'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20 84,20 136,20',
+    flowA: true,
+    mocks: true,
+  },
   // The probe is there and the radio isn't, in every pass: the radio's page is left out and its event never comes.
   {
     name: 'native-optional',

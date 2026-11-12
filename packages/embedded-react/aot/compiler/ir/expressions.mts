@@ -317,15 +317,15 @@ export interface IrConditional extends IrTyped {
   alternate: IrExpr;
 }
 
-/** A value a native method takes or returns: an Int, a number or a boolean. */
-export type NativeType = 'int' | 'float' | 'bool';
+/** A value a native method takes or returns: an Int, a number, a boolean, an Int64 or a string. */
+export type NativeType = 'int' | 'float' | 'bool' | 'int64' | 'string';
 
 /** A native method the package imports, as the firmware registers it. */
 export interface NativeImport {
   /** `module.method`. */
   name: string;
   version: number;
-  /** The result, ':', then the parameters, each one of i, f or b; v as the result means none. */
+  /** The result, ':', then the parameters, each one of i, f, b, l or s; v as the result means none. */
   signature: string;
   params: NativeType[];
   result: NativeType | 'void';

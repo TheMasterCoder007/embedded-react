@@ -433,27 +433,27 @@ Each opcode has one fixed form and length, from one opcode list the compiler and
 So the verifier walks a function from its first word and knows where every instruction starts; an
 extension word is never an instruction, and a branch into one is rejected. The families:
 
-| Family        | Instructions                                                                                                                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Moves         | `MOVE`, `LOADI` (signed 16-bit immediate), `LOADK`, `LOADK64`, `LOADS` (a string constant), `LOADE` (an enum value)                                                                              |
-| Slots         | `GET`, `SET` per slot type. `SET` on a tracked slot sets its dirty bit when the value changes                                                                                                    |
-| Lists         | `LEN`, `ROWGET`, `ROWSET`, `APPEND` (a row from consecutive registers), `CLEAR`, `POP`, `KEEP`, `SLICE`; since minor 8, `REMOVE` (one row); since minor 10, `SPLIT` (a string's pieces)          |
-| Whole numbers | `ADD`, `SUB`, `MUL`, `NEG`, `ABS`, `MIN`, `MAX`, `DIV`, `FLOORDIV`, `CEILDIV`, `ROUNDDIV`, `MOD`, each in 32 and 64 bits                                                                         |
-| Floats        | `FADD`, `FSUB`, `FMUL`, `FDIV`, `FNEG`, and `FMATH` with a function: `sin`, `cos`, `tan`, `sqrt`, `abs`, `round`, `floor`, `ceil`, `min`, `max`, `atan2`, `pow`, `mod`; the same set on `double` |
-| Conversions   | `ITOF`, `FTOI`, `LTOF`, `ITOL`, `LTOI`, `DTOI`, `FTOD`, `DTOF`                                                                                                                                   |
-| Comparisons   | `EQ`, `LT`, `LE` per numeric type, `SEQ` for strings, `NOT`, giving a `bool`; since minor 7, `SHAS` (a string includes another); since minor 9, `SCMP` (two strings' order)                      |
-| Control       | `JMP`, `JT`, `JF` (forward only), `JDIRTY` (any bit of a dirty set), `LOOPSET`, `LOOP` (the only backward branch), `RET`                                                                         |
-| Calls         | `CALL` a package function, `CALLN` a native import; since minor 12, `AVAIL` (whether an optional module is there)                                                                                |
-| Text          | `FMT` into a string buffer, a node's text or a span: literal, int, int64, float (as JS prints it), string, boolean word; `toFixed`, `padStart`; since minor 7, `slice` and `toUpperCase`         |
-| Props         | `PROPS` (start the scratch from a constant prop set), `PSET` per value kind, `SPANS`, `COMMIT` (to a node)                                                                                       |
-| Nodes         | `BUILD` (a branch or row template), `DESTROY`, `SCROLL`, `FOCUS`, `BLUR`, `INPUT` (read a text input)                                                                                            |
-| Timers        | `TSTART` (function, ms, repeat; gives an id), `TCLEAR`                                                                                                                                           |
-| Animation     | `ASTART` (a descriptor, with `toValue`s from registers), `ASTOP`, `AVSET`, `AVGET`                                                                                                               |
-| Vectors       | `VTAPE` (a tape and its paints into the scratch), `VSET` (a float of it), `VCOMMIT` (to a node, with the tape's paints), `VDIRTY`; since minor 3, `VPAINT`, `VGRAD`, `VCOMMITP`                  |
-| The panel     | `SCREEN` (the real width or height, since minor 6)                                                                                                                                               |
-| Event data    | `EVT` (`x`, `y`, `dx`, `dy`, `vx`, `vy`, the fingers down since minor 2, a layout field), `NOW`, `DATENOW`                                                                                       |
-| Faults        | `TRAP`, with a reason: what a lowered `throw` or an unreachable branch becomes                                                                                                                   |
-| Effects       | `EFFECT` (queue an effect to run after this update pass)                                                                                                                                         |
+| Family        | Instructions                                                                                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Moves         | `MOVE`, `LOADI` (signed 16-bit immediate), `LOADK`, `LOADK64`, `LOADS` (a string constant), `LOADE` (an enum value)                                                                                            |
+| Slots         | `GET`, `SET` per slot type. `SET` on a tracked slot sets its dirty bit when the value changes                                                                                                                  |
+| Lists         | `LEN`, `ROWGET`, `ROWSET`, `APPEND` (a row from consecutive registers), `CLEAR`, `POP`, `KEEP`, `SLICE`; since minor 8, `REMOVE` (one row); since minor 10, `SPLIT` (a string's pieces)                        |
+| Whole numbers | `ADD`, `SUB`, `MUL`, `NEG`, `ABS`, `MIN`, `MAX`, `DIV`, `FLOORDIV`, `CEILDIV`, `ROUNDDIV`, `MOD`, each in 32 and 64 bits                                                                                       |
+| Floats        | `FADD`, `FSUB`, `FMUL`, `FDIV`, `FNEG`, and `FMATH` with a function: `sin`, `cos`, `tan`, `sqrt`, `abs`, `round`, `floor`, `ceil`, `min`, `max`, `atan2`, `pow`, `mod`; the same set on `double`               |
+| Conversions   | `ITOF`, `FTOI`, `LTOF`, `ITOL`, `LTOI`, `DTOI`, `FTOD`, `DTOF`                                                                                                                                                 |
+| Comparisons   | `EQ`, `LT`, `LE` per numeric type, `SEQ` for strings, `NOT`, giving a `bool`; since minor 7, `SHAS` (a string includes another); since minor 9, `SCMP` (two strings' order)                                    |
+| Control       | `JMP`, `JT`, `JF` (forward only), `JDIRTY` (any bit of a dirty set), `LOOPSET`, `LOOP` (the only backward branch), `RET`                                                                                       |
+| Calls         | `CALL` a package function, `CALLN` a native import; since minor 12, `AVAIL` (whether an optional module is there); since minor 13, `CALLNS` (a native import whose string result it copies into a string slot) |
+| Text          | `FMT` into a string buffer, a node's text or a span: literal, int, int64, float (as JS prints it), string, boolean word; `toFixed`, `padStart`; since minor 7, `slice` and `toUpperCase`                       |
+| Props         | `PROPS` (start the scratch from a constant prop set), `PSET` per value kind, `SPANS`, `COMMIT` (to a node)                                                                                                     |
+| Nodes         | `BUILD` (a branch or row template), `DESTROY`, `SCROLL`, `FOCUS`, `BLUR`, `INPUT` (read a text input)                                                                                                          |
+| Timers        | `TSTART` (function, ms, repeat; gives an id), `TCLEAR`                                                                                                                                                         |
+| Animation     | `ASTART` (a descriptor, with `toValue`s from registers), `ASTOP`, `AVSET`, `AVGET`                                                                                                                             |
+| Vectors       | `VTAPE` (a tape and its paints into the scratch), `VSET` (a float of it), `VCOMMIT` (to a node, with the tape's paints), `VDIRTY`; since minor 3, `VPAINT`, `VGRAD`, `VCOMMITP`                                |
+| The panel     | `SCREEN` (the real width or height, since minor 6)                                                                                                                                                             |
+| Event data    | `EVT` (`x`, `y`, `dx`, `dy`, `vx`, `vy`, the fingers down since minor 2, a layout field), `NOW`, `DATENOW`                                                                                                     |
+| Faults        | `TRAP`, with a reason: what a lowered `throw` or an unreachable branch becomes                                                                                                                                 |
+| Effects       | `EFFECT` (queue an effect to run after this update pass)                                                                                                                                                       |
 
 The set covers what the compiler lowers today and what the parity work adds. A new instruction is a
 minor version bump; an old runtime rejects a package that uses one at its version check.
@@ -492,8 +492,12 @@ the register stack holds the deepest path from any function; a frame is its regi
 of bookkeeping. A stack overflow can't happen at run time.
 
 A native import is called with its arguments as 32-bit cells from consecutive registers, and its result
-goes in the register after them, so it can be of another type. It can't call back into the VM. Work that
-takes time reports back later by posting an input or an event, which the runtime delivers like any other.
+goes in the register after them, so it can be of another type. An int64 starts on an even register, as every
+64-bit register does, so the registers may have a gap the cells don't. A string argument goes as a cell that holds
+it in place. A string result is copied into the string slot `CALLNS` names, which the result register then reads,
+and only `CALLNS` calls an import that returns one. A native event's handler is entered with its values laid out the
+same way, and reads a string in place while it runs. A native can't call back into the VM. Work that takes time
+reports back later by posting an input or an event, which the runtime delivers like any other.
 
 An import or event that names an optional module doesn't have to be there. The package lists every method and
 event of an optional module, and the module is there when the firmware has them all; when it isn't, none of them
@@ -772,8 +776,9 @@ erb_tick(elapsed_ms);
 er_commit();
 ```
 
-A native's signature is its result, a colon, then its parameters, each `i` (int), `b` (bool) or `f`
-(float); `v` as the result means none. An entry with no callback is an event the firmware posts with
+A native's signature is its result, a colon, then its parameters, each `i` (int), `b` (bool), `f` (float), `l`
+(int64, two cells, low word first) or `s` (string, a cell that `erb_native_string()` reads and `erb_native_text()`
+makes); `v` as the result means none. An entry with no callback is an event the firmware posts with
 `erb_native_post(index, values)`, from the frame loop. Firmware with fonts in its packages gives the runtime storage
 for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs, and extra glyphs, as many as its apps
 need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`

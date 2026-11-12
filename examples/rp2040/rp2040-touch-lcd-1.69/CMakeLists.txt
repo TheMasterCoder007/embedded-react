@@ -139,6 +139,7 @@ target_compile_definitions(er_engine PUBLIC
 set(R "${EMBEDDED_REACT_SRC_DIR}/runtime")
 add_library(er_runtime STATIC
     "${R}/er_container.c"
+    "${R}/erb_native.c"
     "${R}/er_assets.c"
     "${R}/erb_props.c"
     "${R}/erb_verify.c"

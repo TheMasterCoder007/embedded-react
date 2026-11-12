@@ -89,7 +89,7 @@ import {
 import {armedFlag} from './ir/functions.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
-import type {IrExpr} from './ir/expressions.mts';
+import type {IrExpr, NativeType} from './ir/expressions.mts';
 import {
   INT,
   isConvertible64,
@@ -137,6 +137,15 @@ import type {
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
+
+/** The slot a native event's value of each type is read as: an Int64 converts like any number. */
+const VALUE_SLOTS: Record<NativeType, SlotValue> = {
+  int: {slotKind: 'int'},
+  float: {slotKind: 'float'},
+  bool: {slotKind: 'int', isBoolean: true},
+  int64: {slotKind: 'i64', isLiteral: true},
+  string: {slotKind: 'string'},
+};
 
 /** The constant 0, which a remainder by 0 or ±1 stores. */
 const ZERO: IrExpr = {kind: 'number', value: 0, type: INT};
@@ -3122,11 +3131,9 @@ export function lowerNativeEvent(
   );
   const locals = new Map<string, Local>(environment.locals);
   handler.params.forEach((parameter, position) => {
-    const type = event.params[position];
     locals.set((parameter as t.Identifier).name, {
       name: values[position],
-      slotKind: type === 'float' ? 'float' : 'int',
-      isBoolean: type === 'bool',
+      ...VALUE_SLOTS[event.params[position]],
     });
   });
 

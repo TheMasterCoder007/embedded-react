@@ -478,6 +478,10 @@ static const char* string_of(int32_t ref)
     {
         return (const char*)g_erb.arena + (value & ~ERB_STRING_ARENA);
     }
+    if (value & ERB_STRING_NATIVE)
+    {
+        return erb_native_string((int32_t)(value & ~ERB_STRING_NATIVE));
+    }
     return erb_string(&g_erb.program, value - 1u);
 }
 
@@ -1584,6 +1588,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 break;
             }
             case ERB_OP_CALLN:
+            case ERB_OP_CALLNS:
             {
                 const uint8_t* import = program->imports + operand_bx * ERB_IMPORT_SIZE;
                 if (program->natives[operand_bx] == ERB_NONE)
@@ -1594,17 +1599,65 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 }
                 const ErbNative* native = &g_erb.config.natives[program->natives[operand_bx]];
                 const char* signature = erb_string(program, erb_u16(import + ERB_IMPORT_SIGNATURE_AT));
-                int32_t value = 0;
-                if (!native->callback(&registers[operand_a], &value, g_erb.config.context))
+
+                /* The registers into C cells: an int64 may start after a gap, and a string goes by a cell. */
+                const uint32_t held = erb_native_texts_held();
+                int32_t cells[ERB_NATIVE_MAX_CELLS];
+                uint32_t cell = 0;
+                uint32_t register_index = operand_a;
+                for (const char* parameter = signature + 2; *parameter; parameter++)
                 {
+                    register_index = erb_native_register(*parameter, register_index);
+                    if (*parameter == 's')
+                    {
+                        cells[cell++] = erb_native_text(string_of(registers[register_index++]));
+                        continue;
+                    }
+                    for (uint32_t part = 0; part < erb_native_cells(*parameter); part++)
+                    {
+                        cells[cell++] = registers[register_index++];
+                    }
+                }
+                int32_t value[2] = {0, 0};
+                const bool succeeded = native->callback(cells, value, g_erb.config.context);
+                if (!succeeded)
+                {
+                    erb_native_texts_release(held);
                     return fault(ERB_ERROR_NATIVE,
                                  "a native import reported failure",
                                  erb_string(program, erb_u16(import + ERB_IMPORT_NAME_AT)));
                 }
+
                 /* The result goes in the register after the arguments. */
-                if (signature[0] != 'v')
+                int32_t* returned = &registers[erb_native_register(signature[0], register_index)];
+                switch (signature[0])
                 {
-                    registers[operand_a + strlen(signature + 2)] = value;
+                    case 'v':
+                        break;
+                    case 'b':
+                        returned[0] = value[0] != 0;
+                        break;
+                    case 'l':
+                        returned[0] = value[0];
+                        returned[1] = value[1];
+                        break;
+                    case 's':
+                    {
+                        /* Copied into the call's own buffer, as other strings are kept. */
+                        const uint8_t* slot = erb_slot(program, ERB_LOW16(code[program_counter + 1u]));
+                        store_string(
+                            slot, (char*)slot_data(slot), erb_u16(slot + ERB_SLOT_CAP_AT), erb_native_string(value[0]));
+                        returned[0] = (int32_t)(ERB_STRING_ARENA | erb_u32(slot + ERB_SLOT_OFFSET_AT));
+                        break;
+                    }
+                    default:
+                        returned[0] = value[0];
+                        break;
+                }
+                erb_native_texts_release(held);
+                if (ERB_OP(word) == ERB_OP_CALLNS)
+                {
+                    next = program_counter + 2u;
                 }
                 break;
             }

@@ -54,6 +54,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   Packages are now format minor 11.
 - Optional native modules: `nativeModule.optional<Wifi>('wifi', 1)` loads on a board without the module, and
   `Wifi.available` says whether it is there. Calling one that isn't stops the app. Packages are now format minor 12.
+- Native modules pass strings and `Int64` values, as arguments, results and event values. Packages are now format
+  minor 13.
 
 ### Changed
 

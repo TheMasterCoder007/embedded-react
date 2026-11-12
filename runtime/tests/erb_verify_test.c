@@ -1185,6 +1185,86 @@ static void test_native_events(void)
     EXPECT(ERB_ERROR_FUNCTION, "an event signature that returns a value");
 }
 
+/** @brief A package with the natives test_native_values() checks: text.greet ("s:s") as import 1, clock.shift
+ *         ("l:il") as import 2, and a handler of text.named ("v:sl") with these register types. */
+static void native_values_package(const uint8_t* handler_types, uint8_t handler_params)
+{
+    static const ErbNative natives[] = {{"sensors.read", 1, "i:i", sensors_read},
+                                        {"text.greet", 1, "s:s", sensors_read},
+                                        {"clock.shift", 1, "l:il", sensors_read},
+                                        {"text.named", 1, "v:sl", NULL}};
+    TPkg* package = base();
+    s_config.natives = natives;
+    s_config.native_count = 4;
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "text.greet";
+    package->strings[package->string_count++] = "s:s";
+    package->strings[package->string_count++] = "clock.shift";
+    package->strings[package->string_count++] = "l:il";
+    package->strings[package->string_count++] = "text.named";
+    package->strings[package->string_count++] = "v:sl";
+    package->imports[package->import_count++] = (TImport){name, 1, (uint16_t)(name + 1)};
+    package->imports[package->import_count++] = (TImport){(uint16_t)(name + 2), 1, (uint16_t)(name + 3)};
+    const uint32_t code[] = {OP_ABC(RET, 0, 0, 0)};
+    const uint16_t handler = tpkg_function(
+        package, ERB_FUNCTION_KIND_NATIVE_EVENT, handler_params, 0, handler_types, handler_params, code, 1);
+    package->native_events[package->native_event_count++] =
+        (TNativeEvent){(uint16_t)(name + 4), 1, (uint16_t)(name + 5), handler};
+}
+
+static void test_native_values(void)
+{
+    /* An event's int64 takes an even register, after a gap. */
+    const uint8_t named[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR};
+    native_values_package(named, 4);
+    EXPECT(ERB_OK, "strings and int64s in imports and events");
+    const uint8_t packed[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT};
+    native_values_package(packed, 4);
+    EXPECT(ERB_ERROR_FUNCTION, "an event's int64 where the gap is");
+
+    const uint8_t strings[] = {ERB_TYPE_STRING, ERB_TYPE_STRING};
+    {
+        const uint32_t code[] = {OP_ABX(CALLNS, 0, 1), SLOT_LABEL, OP_ABC(RET, 0, 0, 0)};
+        native_values_package(named, 4);
+        set_code_types(FUNCTION_TIMER, strings, 2, code, 3);
+        EXPECT(ERB_OK, "a string result copied into a string slot");
+    }
+    {
+        const uint32_t code[] = {OP_ABX(CALLN, 0, 1), OP_ABC(RET, 0, 0, 0)};
+        native_values_package(named, 4);
+        set_code_types(FUNCTION_TIMER, strings, 2, code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a string result with no slot to copy it into");
+    }
+    {
+        const uint32_t code[] = {OP_ABX(CALLNS, 0, 1), SLOT_COUNT, OP_ABC(RET, 0, 0, 0)};
+        native_values_package(named, 4);
+        set_code_types(FUNCTION_TIMER, strings, 2, code, 3);
+        EXPECT(ERB_ERROR_BYTECODE, "a string result copied into an int slot");
+    }
+    {
+        const uint8_t ints[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(CALLNS, 0, 0), SLOT_LABEL, OP_ABC(RET, 0, 0, 0)};
+        native_values_package(named, 4);
+        set_code_types(FUNCTION_TIMER, ints, 2, code, 3);
+        EXPECT(ERB_ERROR_BYTECODE, "CALLNS of an int result");
+    }
+    {
+        const uint8_t types[] = {
+            ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_INT64, ERB_TYPE_PAIR};
+        const uint32_t code[] = {OP_ABX(CALLN, 0, 2), OP_ABC(RET, 0, 0, 0)};
+        native_values_package(named, 4);
+        set_code_types(FUNCTION_TIMER, types, 6, code, 2);
+        EXPECT(ERB_OK, "an int64 argument and result on even registers");
+    }
+    {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR};
+        const uint32_t code[] = {OP_ABX(CALLN, 0, 2), OP_ABC(RET, 0, 0, 0)};
+        native_values_package(named, 4);
+        set_code_types(FUNCTION_TIMER, types, 6, code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "an int64 argument where the gap is");
+    }
+}
+
 static void test_imports_and_inputs(void)
 {
     base();
@@ -1686,6 +1766,7 @@ int main(void)
     test_budget();
     test_imports_and_inputs();
     test_native_events();
+    test_native_values();
     test_optional_modules();
     test_debug();
     test_panel_debug();

@@ -8,6 +8,7 @@ set(erb_srcs "")
 if(CONFIG_ER_FLOW_B)
     set(erb_srcs
         "${R}/er_container.c"
+        "${R}/erb_native.c"
         "${R}/er_assets.c"
         "${R}/erb_props.c"
         "${R}/erb_verify.c"

@@ -124,8 +124,25 @@ static bool native_fail(const int32_t* arguments, int32_t* result, void* context
     return false;
 }
 
-/** @brief The firmware's event, by its index in s_natives. */
+static bool native_greet(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    static char greeting[64];
+    snprintf(greeting, sizeof(greeting), "hi %s", erb_native_string(arguments[0]));
+    *result = erb_native_text(greeting);
+    return true;
+}
+
+static bool native_shift(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    erb_native_set_int64(result, erb_native_int64(arguments + 1) + (int64_t)arguments[0] * 1000);
+    return true;
+}
+
+/** @brief The firmware's events, by their index in s_natives. */
 #define NATIVE_READING 5
+#define NATIVE_NAMED 9
 
 /** @brief What er_runtime_native_post() said when test.post posted from inside its call. */
 static bool s_posted_inside = true;
@@ -148,6 +165,9 @@ static const ErbNative s_natives[] = {
     {"test.fail", 1, "v:", native_fail},
     [NATIVE_READING] = {"test.reading", 1, "v:ifb", NULL},
     {"test.post", 1, "v:", native_post},
+    {"test.greet", 1, "s:s", native_greet},
+    {"test.shift", 1, "l:il", native_shift},
+    [NATIVE_NAMED] = {"test.named", 1, "v:sl", NULL},
 };
 
 static int32_t s_poked = POKED_NOTHING;
@@ -184,6 +204,30 @@ static void test_conversions(void)
               "check(__erNative.call(poke, 7) === undefined, 'void returns undefined');\n"),
           "arguments and results convert by the signature");
     CHECK(s_poked == POKED_VALUE, "a native gets the runtime's native context");
+}
+
+static void test_strings_and_int64s(void)
+{
+    CHECK(run(SCRIPT_CHECK
+              "const greet = __erNative.find('test.greet', 1, 's:s');\n"
+              "check(__erNative.call(greet, 'bob') === 'hi bob', 'a string goes in and comes back');\n"
+              "check(__erNative.call(greet, 42) === 'hi 42', 'any value is passed as its string');\n"
+              "const shift = __erNative.find('test.shift', 1, 'l:il');\n"
+              "check(__erNative.call(shift, 3, 2 ** 40) === 2 ** 40 + 3000, 'an int64 passes as two cells');\n"
+              "check(__erNative.call(shift, 0, -5e9) === -5e9, 'with its sign');\n"
+              "check(__erNative.call(shift, 0, 7.9) === 7, 'a fraction is truncated');\n"),
+          "strings and int64s convert by the signature");
+    CHECK(erb_native_texts_held() == 0u, "a call lets go of its strings");
+
+    CHECK(run("globalThis.__erNativeEvent = (index, values) => { globalThis.heard = [index, ...values]; };\n"),
+          "a dispatcher");
+    int32_t values[3];
+    values[0] = erb_native_text("posted");
+    erb_native_set_int64(values + 1, -5000000000LL);
+    CHECK(er_runtime_native_post(NATIVE_NAMED, values), "an event with a string and an int64 is taken");
+    CHECK(run(SCRIPT_CHECK "check(heard[1] === 'posted' && heard[2] === -5e9, 'converted by the signature');\n"),
+          "the dispatcher gets the string and the int64");
+    CHECK(erb_native_texts_held() == 0u, "a post lets go of its strings");
 }
 
 static void test_wrong_calls(void)
@@ -265,6 +309,7 @@ int main(void)
     CHECK(!er_runtime_native_post(NATIVE_READING, values), "a post before an app loads is refused");
     test_find();
     test_conversions();
+    test_strings_and_int64s();
     test_wrong_calls();
     test_events();
     test_reset();

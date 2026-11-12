@@ -34,7 +34,7 @@ import {existsSync, readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {parse} from '@babel/parser';
 import {aotError} from './diagnostics.mts';
-import {lowerExpr} from './expressions.mts';
+import {buildsText, lowerExpr, lowerExprWide} from './expressions.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {
@@ -87,7 +87,39 @@ const SIGNATURE_CODES: Record<NativeType | 'void', string> = {
   int: 'i',
   float: 'f',
   bool: 'b',
+  int64: 'l',
+  string: 's',
   void: 'v',
+};
+
+/** The types a native method takes and returns, as embedded-react exports them. */
+const WHOLE_TYPES: Record<string, NativeType> = {Int: 'int', Int64: 'int64'};
+
+/** The types of value each parameter takes: a whole number may be passed as a number or an Int64. */
+const ARGUMENT_TYPES: Record<NativeType, string[]> = {
+  int: ['int'],
+  float: ['int', 'float'],
+  bool: ['bool'],
+  int64: ['int', 'int64'],
+  string: ['string'],
+};
+
+/** What each parameter takes, and how to pass one, for errors. */
+const ARGUMENT_HINTS: Record<NativeType, {what: string; hint: string}> = {
+  int: {
+    what: 'an Int',
+    hint: 'pass a whole number, e.g. Math.round(value), Math.floor(value) or Math.trunc(value).',
+  },
+  float: {what: 'a number', hint: 'pass a number.'},
+  bool: {what: 'a boolean', hint: 'pass a boolean, e.g. value > 0.'},
+  int64: {
+    what: 'an Int64',
+    hint: 'pass a whole number, e.g. Date.now() or Math.trunc(value).',
+  },
+  string: {
+    what: 'a string',
+    hint: 'build text in a const first, and pass that: const label = `${count} items`;',
+  },
 };
 
 const DECLARATION_HINT =
@@ -390,21 +422,19 @@ function nativeTypeOf(
       return 'float';
     case 'TSBooleanKeyword':
       return 'bool';
+    case 'TSStringKeyword':
+      return 'string';
     case 'TSVoidKeyword':
       return isResult ? 'void' : {reason: 'takes void'};
     case 'TSTypeReference':
       if (
         type.typeName.type === 'Identifier' &&
-        type.typeName.name === 'Int' &&
+        Object.hasOwn(WHOLE_TYPES, type.typeName.name) &&
         !type.typeParameters
       ) {
-        return 'int';
+        return WHOLE_TYPES[type.typeName.name];
       }
       break;
-    case 'TSStringKeyword':
-      return {
-        reason: `${isResult ? 'returns' : 'takes'} a string, which native modules don't pass yet`,
-      };
     case undefined:
       return {
         reason: `has no ${isResult ? 'result' : 'parameter'} type`,
@@ -416,7 +446,7 @@ function nativeTypeOf(
 }
 
 /**
- * One member of a module's interface: a method whose parameters and result are Int, number or boolean.
+ * One member of a module's interface: a method whose parameters and result are Int, Int64, number, boolean or string.
  *
  * @param member  The interface member.
  *
@@ -439,7 +469,8 @@ function memberOf(
     member: {kind: 'refused' as const, reason, hint},
   });
   const typeHint =
-    'a native method takes and returns Int (from embedded-react), number and boolean, and may return void.';
+    'a native method takes and returns Int and Int64 (from embedded-react), number, boolean and string, and may ' +
+    'return void.';
 
   // A method, or a property whose type is a function.
   const functionType =
@@ -1059,24 +1090,25 @@ export function lowerNativeCall(
         'pass each argument by itself.',
       );
     }
-    const lowered = lowerExpr(argument, environment);
     const param = member.params[index];
-    const type = lowered.type.kind;
-    const fits =
-      param === 'float'
-        ? type === 'int' || type === 'float'
-        : param === 'int'
-          ? type === 'int'
-          : type === 'bool';
-    if (!fits) {
+    // Built text needs a buffer to be built in, which a const has.
+    if (param === 'string' && buildsText(argument, environment)) {
       throw errorAt(
         argument,
-        `AOT: ${what}() takes ${param === 'int' ? 'an Int' : param === 'float' ? 'a number' : 'a boolean'} here`,
-        param === 'int'
-          ? 'pass a whole number, e.g. Math.round(value), Math.floor(value) or Math.trunc(value).'
-          : param === 'bool'
-            ? 'pass a boolean, e.g. value > 0.'
-            : 'pass a number.',
+        `AOT: ${what}() takes a string, not text built in the call`,
+        ARGUMENT_HINTS.string.hint,
+      );
+    }
+    // Only an Int64 parameter holds a 64-bit value whole.
+    const lowered =
+      param === 'int64'
+        ? lowerExprWide(argument, environment)
+        : lowerExpr(argument, environment);
+    if (!ARGUMENT_TYPES[param].includes(lowered.type.kind)) {
+      throw errorAt(
+        argument,
+        `AOT: ${what}() takes ${ARGUMENT_HINTS[param].what} here`,
+        ARGUMENT_HINTS[param].hint,
       );
     }
     return lowered;

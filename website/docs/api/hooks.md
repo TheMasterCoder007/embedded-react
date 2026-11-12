@@ -59,8 +59,8 @@ const Sensors = nativeModule<Sensors>('sensors', 1);
 ```
 
 **TypeScript.** Declares a module the firmware provides in C. The interface is in the app's file or in a local
-`.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `number` (a float) and
-`boolean`, and may return `void`. It takes up to 16 parameters.
+`.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `Int64` (a whole number past
+an `Int`'s range), `number` (a float), `boolean` and `string`, and may return `void`. It takes up to 16 parameters.
 
 Call a method in a handler, an effect or a timer, and keep what it returns in state. A call in render is refused,
 since Flow A would make it on every render and Flow B only when what it reads changes.
@@ -104,7 +104,8 @@ export default sensors;
 ```
 
 The mock's values are converted as on a board: an `Int` is cut to a whole number, a `number` goes through a C
-float, and a `boolean` is true or false. A module with no mock, or a mock missing one of the interface's methods,
+float, a `boolean` is true or false, an `Int64` is cut to a whole number that wraps at 64 bits, and a `string` is the
+value's string, up to any NUL. A module with no mock, or a mock missing one of the interface's methods,
 stops the app in the simulator when it loads, naming what to add. A board build never includes the mock.
 
 A mock that posts [events](#usenativeevent) is a function instead. It is given `emit`, which posts one of the
@@ -124,6 +125,48 @@ const sensors: NativeMock<Sensors> = emit => ({
 
 export default sensors;
 ```
+
+### Strings and Int64s
+
+```c
+static char label[32];
+
+static bool wifi_label(const int32_t* arguments, int32_t* result, void* context)
+{
+    snprintf(label, sizeof(label), "%s (%d)", erb_native_string(arguments[0]), (int)arguments[1]);
+    *result = erb_native_text(label);
+    return true;
+}
+
+static bool clock_add(const int32_t* arguments, int32_t* result, void* context)
+{
+    erb_native_set_int64(result, erb_native_int64(&arguments[0]) + arguments[2]);
+    return true;
+}
+
+static const ErbNative natives[] = {
+    {"wifi.label", 1, "s:si", wifi_label},
+    {"clock.add", 1, "l:li", clock_add},
+};
+```
+
+A `string` is `s` in a signature and an `Int64` is `l`. An `Int64` takes two cells, low word first, which
+`erb_native_int64()` and `erb_native_set_int64()` read and write. A string takes one cell, which holds it by
+reference: `erb_native_string()` reads an argument in place, so copy it to keep it past the call. A native returns
+one with `erb_native_text()`, whose text must stay as it is until the call returns. Flow B copies it into a buffer of
+the call's own, which holds 255 bytes: a longer one is cut short, and reported as other strings are.
+
+An event's string is made the same way, and its handlers read it in place, so a post doesn't copy it:
+
+```c
+int32_t values[3];
+values[0] = erb_native_text(ssid);
+erb_native_set_int64(&values[1], seen_at_ms);
+erb_native_post(WIFI_FOUND, values);
+```
+
+In JS an `Int64` is a number, exact up to 2^53. Pass a string as a string or a const that holds one: Flow B builds
+text only where it is kept, so build it in a const first rather than in the call.
 
 ### Optional modules
 
