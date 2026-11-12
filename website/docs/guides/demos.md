@@ -67,14 +67,19 @@ node in both flows.
 ## Watch face
 
 A two-page swipe pager for a small portrait display, built for the
-[RP2040-Touch-LCD-1.69](./boards/rp2040.md) (240×280): a watch face with a 12-hour clock, date,
-battery, and HEART and STEPS cards; and a bubble level whose dot rolls with the board's tilt. Swipe
-right-to-left, or flick, to change page. With no RTC on the board, the clock starts at 12:00 AM and
-counts from a 1 Hz `setInterval`. **Steps and the level are real** on the RP2040: they read
-`useHostValue(0)`, which the board's IMU writes through `erb_input_set_int()`. In the simulator they stay at their initial values.
+[RP2040-Touch-LCD-1.69](./boards/rp2040.md) (240×280): a watch face with a 12-hour clock, date, the
+chip's name and free memory, and TEMP and STEPS cards; and a bubble level whose dot rolls with the
+board's tilt. Swipe right-to-left, or flick, to change page. Its pages are the screen's size, so it also
+runs on the S3 and the CYD.
+
+**What it shows is real.** The demo is in TypeScript, and its data comes from three
+[native modules](./native-modules.md) in `modules/`: `chip`, whose event each second drives the clock (with no
+RTC, it shows the time since boot from 12:00 AM), and the optional `thermometer` and `motion`. The S3, the
+CYD and the RP2040 each register the ones they have, and a board without one shows `--` in its place. In
+the simulator they run on the mocks beside the interfaces.
 
 **The swipe** is a `PanResponder` on a transparent overlay, driving a dynamic `marginLeft` on a
-480-wide track, with a ~30 fps interval easing to the settled page on release. It works in both
+two-page track, with a ~30 fps interval easing to the settled page on release. It works in both
 flows: the AOT lowers `PanResponder.create` and the `{...pan.panHandlers}` spread onto the engine's
 C gesture responder, so the RP2040 gets it with no JavaScript. Release commits on a long enough drag
 (58 px) or a fast enough throw (`gestureState.vx` ≥ 0.4 px/ms); `onPanResponderTerminate` clears the drag flag
@@ -84,13 +89,14 @@ the first render's state, hence the `pageRef` mirror.
 
 **The AOT house rules** the demo is written to:
 
-- Components live in `App.jsx`: the compiler inlines same-file components and does not resolve
-  local `.jsx` imports.
+- Components live in `App.tsx`: the compiler inlines same-file components and does not resolve
+  local `.tsx` imports. It does read the native modules' interfaces from their `.ts` files.
 - Pure `View` and `Text`, no `<Svg>`, so the RP2040 build trims the vector pools to the floor.
 - `left` and `top` cannot be state-driven, while margins can, which is why the level dot and the
   swipe track move with `marginLeft`/`marginTop`.
 - Module-scope constants fold to literals; `Math.*` is only available inside dynamic expressions,
   so the clock digits are computed inline from the `seconds` state.
+- An optional module's `available` is read where it is used, not kept in a const.
 - Font sizes come from the built-in font's baked set; the clock uses the largest, 48.
 
 [The AOT subset](./aot-subset.md) is the full list of rules.

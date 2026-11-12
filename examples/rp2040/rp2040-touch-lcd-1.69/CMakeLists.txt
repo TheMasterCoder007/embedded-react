@@ -47,7 +47,7 @@ set(ER_PACKAGE_SLOT_BYTES 0x80000)
 # --- embedded-react engine, RAM-tuned for the RP2040 (264 KB SRAM, no FPU) -------------------------
 # The 240x280 RGB565 framebuffer is 131.3 KB, so every static pool must fit in what's left. Same
 # philosophy as the no-PSRAM CYD example (examples/esp32/esp32-2432s028r): shadows / 3D / gradients /
-# keyboard off, node pool sized to the watch-face demo (34 nodes) with headroom, vector pools sized
+# keyboard off, node pool sized to the watch-face demo (40 nodes) with headroom, vector pools sized
 # for its two <Svg> layers (the 60-segment tick ring is the big one).
 set(E "${EMBEDDED_REACT_SRC_DIR}/engine")
 add_library(er_engine STATIC
@@ -95,7 +95,7 @@ target_compile_definitions(er_engine PUBLIC
     ERUI_ONSCREEN_KEYBOARD=0
     ERUI_TRANSFORMS_TRANSLATE_ONLY=1
     ERUI_FONT_SIZES=7
-    ERUI_MAX_NODES=48  # two-page pager (watch face + level page) is 42 nodes; each node is ~1.3 KB of .bss
+    ERUI_MAX_NODES=48  # two-page pager (watch face + level page) is 40 nodes; each node is ~1.3 KB of .bss
                        # (plus per-node layout work-arrays), so keep this trimmed to fit beside the framebuffer
     ERUI_MAX_OPACITY_DEPTH=1
     ERUI_SCRATCH_WIDTH=8
@@ -166,6 +166,7 @@ target_compile_definitions(er_runtime PUBLIC
 add_executable(embedded-react-watch
     main.c
     board.c
+    native_modules.c
     pedometer.c
     "${EMBEDDED_REACT_SRC_DIR}/backends/pico-spi-lcd/renderer_backend.c"
 )
@@ -177,6 +178,7 @@ target_link_libraries(embedded-react-watch
     er_engine
     er_runtime
     pico_stdlib
+    hardware_adc
     hardware_flash
     hardware_spi
     hardware_i2c

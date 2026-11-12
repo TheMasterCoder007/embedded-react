@@ -59,7 +59,7 @@ const SEEDS = [
   },
   {
     name: 'watch-face',
-    file: join(ROOT, 'demos/watch-face/App.jsx'),
+    file: join(ROOT, 'demos/watch-face/App.tsx'),
   },
   {
     name: 'thermostat',

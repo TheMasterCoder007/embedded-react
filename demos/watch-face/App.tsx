@@ -15,36 +15,47 @@
  */
 
 import {useState, useEffect, useRef} from 'react';
+import type {JSX} from 'react';
 import {
   View,
   Text,
   StyleSheet,
   PanResponder,
-  useHostValue,
+  nativeModule,
+  useNativeEvent,
 } from 'embedded-react';
+import type {Chip} from './modules/chip';
+import type {Motion} from './modules/motion';
+import type {Thermometer} from './modules/thermometer';
 
-// Watch face — a two-page swipe pager for the Waveshare RP2040-Touch-LCD-1.69 (240×280):
-//   • page 0: a digital watch face (clock, weekday/date, battery, heart rate, live step counter)
-//   • page 1: a bubble level (a dot that rolls with the board's tilt, from the QMI8658 accelerometer)
+// Watch face — a two-page swipe pager, sized for the Waveshare RP2040-Touch-LCD-1.69 (240×280):
+//   • page 0: a digital watch face (clock, weekday/date, the chip, its temperature, a live step counter)
+//   • page 1: a bubble level (a dot that rolls with the board's tilt)
 // Swipe right-to-left to drag the level page over; release, and it eases to settle as the active page.
 //
-// Built for Flow B (AOT) — compiles to a package, no JS on the device. The pager rides only AOT-supported
-// primitives: a dynamic `marginLeft` on a 480-wide track follows the finger during the drag and is
-// eased toward the settled page by a ~30 fps interval; a transparent full-screen overlay captures the
-// swipe with a `PanResponder`, which the AOT lowers onto the engine's own C gesture-responder system
-// (so the gesture arrives with its travel and speed already worked out, and costs no JS on the device).
-// The real sensor values come from the host via useHostValue (the step count and the level dot's x/y
-// offset), fed by the IMU's accelerometer in main.c.
+// It runs in both flows. The pager rides only AOT-supported primitives: a dynamic `marginLeft` on a two-page
+// track follows the finger during the drag and is eased toward the settled page by a ~30 fps interval; a
+// transparent full-screen overlay captures the swipe with a `PanResponder`, which the AOT lowers onto the engine's
+// own C gesture-responder system (so the gesture arrives with its travel and speed already worked out).
 //
-// There is no RTC, so time is a second counter seeded at 12:00:00 AM and advanced by a 1 Hz interval.
+// What the board knows comes from native modules (./modules), which each board's firmware provides in C, and the
+// simulator runs on their mocks. Every board has the chip, whose once-a-second event drives the clock. The
+// thermometer and the motion sensor are optional: a board without one shows "--" in its place.
+//
+// There is no RTC, so the clock shows the time since boot, from 12:00:00 AM.
+
+// ----------------------------------------------------------------------------------------------------
+// Native modules
+// ----------------------------------------------------------------------------------------------------
+const Chip = nativeModule<Chip>('chip', 1);
+const Thermometer = nativeModule.optional<Thermometer>('thermometer', 1);
+const Motion = nativeModule.optional<Motion>('motion', 1);
 
 // ----------------------------------------------------------------------------------------------------
 // Model
 // ----------------------------------------------------------------------------------------------------
-// Seconds since midnight. Starts at 0 (12:00 AM) — the factory default of a device whose clock has
-// never been set. The weekday/date below (Wed, Jan 1 2020) is the matching unset default.
-const START_TIME = 0;
-const PAGE_WIDTH = 240; // page width == screen width
+const PAGE_WIDTH = screen.width;
+const PAGE_HEIGHT = screen.height;
 
 /** Past this much of a page dragged, release commits to the neighbor (directional, so both ways are easy). */
 const LATCH_PX = 58;
@@ -54,13 +65,13 @@ const LATCH_VELOCITY = 0.4;
 const SECONDS_PER_MINUTE = 60;
 const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_HALF_DAY = 43200;
-const CLOCK_TICK_MS = 1000;
+const MS_PER_SECOND = 1000;
+const MEASURE_EVERY_SECONDS = 5;
+const BYTES_PER_KILOBYTE = 1024;
 const SETTLE_TICK_MS = 33; // ~30 fps
 const SETTLE_EASE = 0.35; // the share of the remaining distance each settle tick covers
 const SETTLE_SNAP_PX = 0.5;
-const MIN_HEART_RATE = 61;
-const MAX_HEART_RATE = 68;
-const GOLDEN_RATIO_FRACTION = 0.6180339887;
+const LEVEL_PX = 8;
 
 // ----------------------------------------------------------------------------------------------------
 // Design tokens
@@ -83,18 +94,21 @@ const theme = {
 // Shared components
 // ----------------------------------------------------------------------------------------------------
 
-/** One bottom stat card: a colored dot + label, then a big value with a small unit. */
-function StatCard({dot, label, value, unit}) {
+interface StatCardProps {
+  dot: string;
+  label: string;
+  value: string;
+}
+
+/** One bottom stat card: a colored dot + label, then a big value. */
+function StatCard({dot, label, value}: StatCardProps): JSX.Element {
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
         <View style={[styles.dot, {backgroundColor: dot}]} />
         <Text style={styles.cardLabel}>{label}</Text>
       </View>
-      <View style={styles.cardValueRow}>
-        <Text style={styles.cardValue}>{value}</Text>
-        <Text style={styles.cardUnit}>{unit}</Text>
-      </View>
+      <Text style={styles.cardValue}>{value}</Text>
     </View>
   );
 }
@@ -102,7 +116,21 @@ function StatCard({dot, label, value, unit}) {
 // ----------------------------------------------------------------------------------------------------
 // Page 0 — the watch face
 // ----------------------------------------------------------------------------------------------------
-function WatchFace({seconds, heartRate, steps}) {
+interface WatchFaceProps {
+  seconds: number;
+  chipName: string;
+  freeKilobytes: number;
+  temperature: string;
+  steps: string;
+}
+
+function WatchFace({
+  seconds,
+  chipName,
+  freeKilobytes,
+  temperature,
+  steps,
+}: WatchFaceProps): JSX.Element {
   return (
     <View style={styles.page}>
       <View style={styles.topBar}>
@@ -110,7 +138,10 @@ function WatchFace({seconds, heartRate, steps}) {
           <Text style={styles.weekday}>WEDNESDAY</Text>
           <Text style={styles.date}>Jan 1, 2020</Text>
         </View>
-        <Text style={styles.batteryPercent}>84%</Text>
+        <View style={styles.chip}>
+          <Text style={styles.chipName}>{chipName}</Text>
+          <Text style={styles.chipMemory}>{freeKilobytes} KB free</Text>
+        </View>
       </View>
 
       <View style={styles.middle}>
@@ -142,41 +173,52 @@ function WatchFace({seconds, heartRate, steps}) {
       </View>
 
       <View style={styles.cardsRow}>
-        <StatCard dot={theme.red} label="HEART" value={heartRate} unit="BPM" />
-        <StatCard dot={theme.green} label="STEPS" value={steps} unit="" />
+        <StatCard dot={theme.red} label="TEMP °C" value={temperature} />
+        <StatCard dot={theme.green} label="STEPS" value={steps} />
       </View>
     </View>
   );
 }
 
 // ----------------------------------------------------------------------------------------------------
-// Page 1 — a bubble level (dot rolls with the board's tilt; from the accelerometer's gravity vector)
+// Page 1 — a bubble level (the dot rolls with the board's tilt)
 // ----------------------------------------------------------------------------------------------------
-function LevelPage({dotx, doty}) {
+interface LevelPageProps {
+  dotX: number;
+  dotY: number;
+}
+
+function LevelPage({dotX, dotY}: LevelPageProps): JSX.Element {
   return (
     <View style={styles.page}>
       <Text style={styles.levelTitle}>LEVEL</Text>
       <View style={styles.levelArea}>
-        <View style={styles.target}>
-          <View style={styles.crossHorizontal} />
-          <View style={styles.crossVertical} />
-          <View style={styles.centerRing} />
-          {/* The dot: parked at the target center, then nudged by dynamic margins = the tilt offset. Turns
-              green when it settles inside the center ring (the board is level). */}
-          <View
-            style={[
-              styles.levelDot,
-              {
-                marginLeft: dotx,
-                marginTop: doty,
-                backgroundColor:
-                  Math.abs(dotx) < 8 && Math.abs(doty) < 8
-                    ? theme.green
-                    : theme.amber,
-              },
-            ]}
-          />
-        </View>
+        {Motion.available ? (
+          <View style={styles.target}>
+            <View style={styles.crossHorizontal} />
+            <View style={styles.crossVertical} />
+            <View style={styles.centerRing} />
+            {/* The dot: parked at the target center, then nudged by dynamic margins = the tilt offset. Turns
+                green when it settles inside the center ring (the board is level). */}
+            <View
+              style={[
+                styles.levelDot,
+                {
+                  marginLeft: dotX,
+                  marginTop: dotY,
+                  backgroundColor:
+                    Math.abs(dotX) < LEVEL_PX && Math.abs(dotY) < LEVEL_PX
+                      ? theme.green
+                      : theme.amber,
+                },
+              ]}
+            />
+          </View>
+        ) : (
+          <Text style={styles.levelMissing}>
+            No motion sensor on this board
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -185,16 +227,43 @@ function LevelPage({dotx, doty}) {
 // ----------------------------------------------------------------------------------------------------
 // App — the swipe pager
 // ----------------------------------------------------------------------------------------------------
-export function App() {
-  const [seconds, setSeconds] = useState(START_TIME); // seconds since midnight
-  const [heartRate, setHeartRate] = useState(66); // heart rate — a gentle random walk-in [MIN_HEART_RATE, MAX_HEART_RATE]
-  const steps = useHostValue(0); // real step count (IMU pedometer, via erb_input_set_int)
-  const dotx = useHostValue(0); // level dot offset in px, from the accel tilt (via erb_input_set_int)
-  const doty = useHostValue(0);
+export function App(): JSX.Element {
+  const [seconds, setSeconds] = useState(0); // seconds since boot
+  const [chipName, setChipName] = useState('');
+  const [freeKilobytes, setFreeKilobytes] = useState(0);
+  const [temperature, setTemperature] = useState('--');
+  const [steps, setSteps] = useState('--');
+  const [dotX, setDotX] = useState(0); // the level dot's offset in px
+  const [dotY, setDotY] = useState(0);
 
   const [page, setPage] = useState(0); // settled page (0 = watch, 1 = level)
-  const [slide, setSlide] = useState(0.0); // px the track is shifted left (0..240); float for smooth ease
+  const [slide, setSlide] = useState(0.0); // px the track is shifted left (0..PAGE_WIDTH); float for smooth ease
   const [dragging, setDragging] = useState(0); // 1 while a finger is down
+
+  // A call is quick: the name and free memory come straight back. A reading takes a while, so measure() starts
+  // one and the thermometer posts `reading` when it is done.
+  useEffect(() => {
+    setChipName(Chip.name());
+    setFreeKilobytes(Math.floor(Chip.freeMemory() / BYTES_PER_KILOBYTE));
+    if (Thermometer.available) Thermometer.measure();
+  }, []);
+
+  useNativeEvent(Chip, 'second', uptimeMs => {
+    const uptime = Math.floor(uptimeMs / MS_PER_SECOND);
+    setSeconds(uptime);
+    if (uptime % MEASURE_EVERY_SECONDS === 0) {
+      setFreeKilobytes(Math.floor(Chip.freeMemory() / BYTES_PER_KILOBYTE));
+      if (Thermometer.available) Thermometer.measure();
+    }
+  });
+  useNativeEvent(Thermometer, 'reading', celsius =>
+    setTemperature(`${Math.round(celsius)}`),
+  );
+  useNativeEvent(Motion, 'steps', count => setSteps(`${count}`));
+  useNativeEvent(Motion, 'tilt', ({x, y}) => {
+    setDotX(x);
+    setDotY(y);
+  });
 
   // PanResponder.create runs ONCE (it owns the live gesture, so re-creating it per render would throw
   // the drag away), so its callbacks close over the FIRST render's `page`. The standard RN discipline
@@ -230,8 +299,8 @@ export function App() {
           0,
           Math.min(PAGE_WIDTH, slideAtGrant.current - gestureState.dx),
         );
-        // Commit on a long enough drag (~25% of a page, directional so it's easy both ways) OR on a
-        // fast enough flick, however short. Otherwise, the ease springs back to where you started.
+        // Commit on a long enough drag (directional, so it's easy both ways) OR on a fast enough flick, however
+        // short. Otherwise, the ease springs back to where you started.
         if (pageRef.current === 0) {
           if (settled > LATCH_PX || gestureState.vx <= -LATCH_VELOCITY)
             setPage(1);
@@ -250,28 +319,6 @@ export function App() {
     }),
   ).current;
 
-  useEffect(() => {
-    const clockId = setInterval(() => {
-      setSeconds(previous => previous + 1);
-      setHeartRate(previous =>
-        Math.max(
-          MIN_HEART_RATE,
-          Math.min(
-            MAX_HEART_RATE,
-            previous +
-              (Math.floor(
-                (previous * GOLDEN_RATIO_FRACTION -
-                  Math.floor(previous * GOLDEN_RATIO_FRACTION)) *
-                  3,
-              ) -
-                1),
-          ),
-        ),
-      );
-    }, CLOCK_TICK_MS);
-    return () => clearInterval(clockId);
-  }, []);
-
   // Settle animation: while not dragging, ease `slide` toward the settled page (snap when very close so
   // it comes to rest exactly and stops nudging). The finger owns `slide` during a drag.
   useEffect(() => {
@@ -289,10 +336,16 @@ export function App() {
 
   return (
     <View style={styles.root}>
-      {/* The 480-wide track holds both pages; marginLeft slides it (0 → page 0, −240 → page 1). */}
+      {/* The track holds both pages side by side; marginLeft slides it (0 → page 0, −PAGE_WIDTH → page 1). */}
       <View style={[styles.track, {marginLeft: -slide}]}>
-        <WatchFace seconds={seconds} heartRate={heartRate} steps={steps} />
-        <LevelPage dotx={dotx} doty={doty} />
+        <WatchFace
+          seconds={seconds}
+          chipName={chipName}
+          freeKilobytes={freeKilobytes}
+          temperature={temperature}
+          steps={steps}
+        />
+        <LevelPage dotX={dotX} dotY={dotY} />
       </View>
 
       {/* Transparent overlay captures the swipe (the pages have no handlers). */}
@@ -303,10 +356,10 @@ export function App() {
 
 const styles = StyleSheet.create({
   root: {flex: 1, backgroundColor: theme.background},
-  track: {flexDirection: 'row', width: 480, height: 280},
+  track: {flexDirection: 'row', width: 2 * PAGE_WIDTH, height: PAGE_HEIGHT},
   page: {
     width: PAGE_WIDTH,
-    height: 280,
+    height: PAGE_HEIGHT,
     paddingHorizontal: 16,
     paddingTop: 16,
     paddingBottom: 14,
@@ -326,7 +379,14 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   date: {color: theme.amber, fontSize: 12, fontWeight: '500', marginTop: 2},
-  batteryPercent: {color: theme.green, fontSize: 16, fontWeight: '600'},
+  chip: {alignItems: 'flex-end'},
+  chipName: {color: theme.green, fontSize: 16, fontWeight: '600'},
+  chipMemory: {
+    color: theme.muted,
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+  },
 
   middle: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   timeRow: {flexDirection: 'row', alignItems: 'center'},
@@ -373,14 +433,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 1,
   },
-  cardValueRow: {flexDirection: 'row', alignItems: 'flex-end', gap: 4},
   cardValue: {color: theme.white, fontSize: 24, fontWeight: 'bold'},
-  cardUnit: {
-    color: theme.muted,
-    fontSize: 10,
-    fontWeight: '500',
-    marginBottom: 3,
-  },
 
   // --- Level page ---
   levelTitle: {
@@ -425,6 +478,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.muted,
   },
+  levelMissing: {color: theme.muted, fontSize: 12, fontWeight: '500'},
   levelDot: {
     position: 'absolute',
     left: 74,

@@ -46,6 +46,7 @@ const sidebars: SidebarsConfig = {
         },
         'guides/hot-reload',
         'guides/aot-subset',
+        'guides/native-modules',
         'guides/demos',
         'guides/performance',
         'guides/memory',

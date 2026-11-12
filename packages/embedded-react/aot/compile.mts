@@ -89,6 +89,7 @@ import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
 import {readNativeInterfaces} from './compiler/native-modules.mts';
+import {demoFile} from './demo-file.mts';
 import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
   assemblePackage,
@@ -347,7 +348,7 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
 ) {
-  // Find the demo's App.jsx, listing the available demos when it is missing.
+  // Find the demo's App.tsx or App.jsx, listing the available demos when it is missing.
   const commandArguments = process.argv.slice(2);
   const screenAt = commandArguments.indexOf('--screen');
   const screens =
@@ -370,7 +371,7 @@ if (
     ) ||
     process.env.DEMO ||
     'thermostat';
-  const appPath = resolve(demosDirectory, demo, 'App.jsx');
+  const appPath = demoFile(resolve(demosDirectory, demo), 'App');
   const availableDemos = existsSync(demosDirectory)
     ? readdirSync(demosDirectory, {withFileTypes: true})
         .filter(entry => entry.isDirectory())
@@ -388,7 +389,7 @@ if (
   let result: PackageResult;
   try {
     result = compilePackage(source, demo, {
-      filename: resolve(demosDirectory, demo, 'App.jsx'),
+      filename: appPath,
       svgArtifacts: await bakeSvgArtifacts(
         source,
         resolve(demosDirectory, demo),

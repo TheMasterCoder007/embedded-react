@@ -20,7 +20,12 @@ import {resolve, dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {compilePackage, bakeSvgArtifacts} from '../compile.mts';
+import {
+  compilePackage,
+  bakeSvgArtifacts,
+  readNativeInterfaces,
+} from '../compile.mts';
+import {demoFile} from '../demo-file.mts';
 import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mjs';
 
 // Regression guard: the demos must keep compiling end-to-end (no thrown "AOT: …"). This is the cheap counterpart to
@@ -30,14 +35,19 @@ const demosDirectory = resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../../../../demos',
 );
-const appSource = demo =>
-  readFileSync(resolve(demosDirectory, demo, 'App.jsx'), 'utf8');
+const appPath = demo => demoFile(resolve(demosDirectory, demo), 'App');
+const appSource = demo => readFileSync(appPath(demo), 'utf8');
 
 describe('AOT demo compile smoke', () => {
   it('compiles the watch-face demo for the RP2040 240×280 panel', () => {
-    const result = compilePackage(appSource('watch-face'), 'watch-face', {
+    const source = appSource('watch-face');
+    const result = compilePackage(source, 'watch-face', {
       screen: {width: 240, height: 280},
-      filename: 'demos/watch-face/App.jsx',
+      filename: appPath('watch-face'),
+      nativeInterfaces: readNativeInterfaces(
+        source,
+        resolve(demosDirectory, 'watch-face'),
+      ),
     });
     expect(result.program.length).toBeGreaterThan(0);
   });

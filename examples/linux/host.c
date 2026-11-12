@@ -223,6 +223,8 @@ bool er_host_start(const ErHostConfig* config, ErHost* host)
         .screen_scale = host->dpi_scale,
         .install_persist = config->persist,
         .log = NULL, /* stdout */
+        .natives = config->natives,
+        .native_count = config->native_count,
     };
     if (!er_runtime_init(&runtime_config))
     {

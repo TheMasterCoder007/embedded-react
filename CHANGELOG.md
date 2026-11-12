@@ -58,9 +58,14 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   minor 13.
 - Native modules pass records, objects of those values, as arguments, results and event values. Packages are now
   format minor 14.
+- A guide to writing a native module. The S3, CYD and RP2040 examples and both desktop hosts register the watch face
+  demo's modules.
 
 ### Changed
 
+- The watch face demo is in TypeScript, and its clock, temperature, steps and level come from native modules instead
+  of `useHostValue`. Its pages are the screen's size, so it runs on any panel.
+- The TypeScript app template declares the timers.
 - The TypeScript app template and the type tests use the ES2023 lib, which the device's QuickJS supports, so
   `with` and `toSpliced` type-check.
 - Flow B prints a float with the fewest digits that read back as it, laid out as JS lays out a number, instead of

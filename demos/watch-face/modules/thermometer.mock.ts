@@ -14,10 +14,23 @@
  * limitations under the License.
  */
 
-// Bundle entry point — the React Native idiom. The C host injects `screen` and `NativeUI` before
-// running this; AppRegistry mounts the app into a screen-sized root.
-import {AppRegistry} from 'embedded-react';
-import {App} from './App.jsx';
+import type {NativeMock} from 'embedded-react';
+import type {Thermometer} from './thermometer';
 
-AppRegistry.registerComponent('demo', () => App);
-console.log('React mounted at', screen.width + 'x' + screen.height);
+const READING_MS = 50;
+const ROOM_CELSIUS = 31.5;
+
+const thermometer: NativeMock<Thermometer> = emit => {
+  let readings = 0;
+  return {
+    measure: () => {
+      readings++;
+      setTimeout(
+        () => emit('reading', ROOM_CELSIUS + (readings % 3) * 0.5),
+        READING_MS,
+      );
+    },
+  };
+};
+
+export default thermometer;

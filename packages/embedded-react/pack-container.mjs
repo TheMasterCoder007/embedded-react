@@ -48,6 +48,8 @@ import {emitAssetPack} from './assets/emit-pack.mjs';
 import {emitContainer} from './assets/emit-container.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
+import {loadAppFile} from './aot/app-file-loader.mts';
+import {demoFile} from './aot/demo-file.mts';
 
 // QuickJS release the bytecode targets — MUST match the FetchContent pin in
 // bridges/quickjs/CMakeLists.txt and ER_QUICKJS_TAG in er_runtime.c. The loader rejects a mismatch.
@@ -63,7 +65,7 @@ const distDir = resolve(here, 'dist');
 
 const demo = process.argv[2] || process.env.DEMO || 'thermostat';
 const demoDir = resolve(demosDir, demo);
-const entry = resolve(demoDir, 'index.jsx');
+const entry = demoFile(demoDir, 'index');
 if (!existsSync(entry)) {
   const available = existsSync(demosDir)
     ? readdirSync(demosDir, {withFileTypes: true})
@@ -88,6 +90,10 @@ const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(pluginBuild) {
+    // The demo's own files give its native modules their signatures.
+    pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args =>
+      args.path.startsWith(demoDir) ? loadAppFile(args.path) : undefined,
+    );
     pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');
       images.set(name, args.path);

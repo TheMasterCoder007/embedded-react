@@ -279,6 +279,31 @@ static bool probe_locate(const int32_t* arguments, int32_t* result, void* contex
     return true;
 }
 
+/* The watch face demo's modules, so its seed loads and its handlers run. */
+static bool chip_name(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = erb_native_text("Fuzz");
+    return true;
+}
+
+static bool chip_free_memory(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = 4096;
+    return true;
+}
+
+static bool thermometer_measure(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)result;
+    (void)context;
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"sensors.read", 1, "i:i", sensors_read},
     {"probe.add", 1, "i:ii", probe_add},
@@ -301,6 +326,13 @@ static const ErbNative s_natives[] = {
     {"probe.fix", 1, "{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}:i", probe_fix},
     {"probe.locate", 1, "v:i", probe_locate},
     [PROBE_LOCATED] = {"probe.located", 1, "v:{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}{x:i,y:i}", NULL},
+    {"chip.name", 1, "s:", chip_name},
+    {"chip.freeMemory", 1, "i:", chip_free_memory},
+    {"chip.second", 1, "v:l", NULL},
+    {"thermometer.measure", 1, "v:", thermometer_measure},
+    {"thermometer.reading", 1, "v:f", NULL},
+    {"motion.steps", 1, "v:i", NULL},
+    {"motion.tilt", 1, "v:{x:i,y:i}", NULL},
 };
 
 static BitmapFont s_fonts[FONT_SLOTS];

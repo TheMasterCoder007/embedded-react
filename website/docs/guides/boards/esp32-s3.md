@@ -23,6 +23,7 @@ was built for. To ship a new UI you write one partition; the firmware is untouch
 ```text
 main/main.c        host: PSRAM JS heap, map + load the config partition, frame loop, touch
 main/board.c       panel + touch bring-up for this board (CH422G, RGB panel, GT911)
+main/native_modules.c  the chip and its temperature sensor, as native modules (both flows)
 CMakeLists.txt     top-level IDF project; fetches QuickJS-ng and, when copied out, embedded-react
 partitions.csv     factory (firmware) + a 2 MB 'config' data partition for app.erpkg
 sdkconfig.defaults ESP32-S3, octal PSRAM, 16 MB flash, a 64 KB main task stack
@@ -88,6 +89,10 @@ the host falls back to a headless backend so the JavaScript side still runs and 
 Inside the repository, `cd packages/embedded-react && npm run pack` packs one of the demos instead
 (`npm run pack -- watch-face` picks another), and the container lands in
 `packages/embedded-react/dist/app.erpkg`.
+
+The watch face demo uses the [native modules](../native-modules.md) in `main/native_modules.c`, which both
+of the S3's builds register: the chip's name, free internal RAM and a once-a-second event that drives its
+clock, and the chip's temperature sensor, read when the app asks and posted from the frame loop.
 
 ## Hot reload over USB
 
@@ -207,8 +212,8 @@ password on the on-screen keyboard) and a **TIME ZONE** page, and the header clo
 objects into the JavaScript context through `ErRuntimeConfig.install_host_globals`: `__erWifi`
 (`scan`, `networks`, `connect`, `forget`, `status`) and `__erClock` (`utcOffsetMs`, `timeZone`,
 `setTimeZone`). Where they are absent (the simulator, other boards) the app leaves the pages out.
-This is the pattern for any host data a Flow A app needs: install an object, and let the app
-feature-detect it.
+For host data of your own, write a [native module](../native-modules.md) instead: it runs in both
+flows and on a mock in the simulator.
 
 **What it costs**, measured with the thermostat idle: about 36 KB of internal RAM once WiFi is up,
 which the WiFi build makes room for by cutting the main task stack from 64 to 36 KB (an app that

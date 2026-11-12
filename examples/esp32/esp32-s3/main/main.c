@@ -40,6 +40,7 @@
 #include "er_scene.h"
 #include "esp32_lcd_backend.h"
 #include "host_common.h"
+#include "native_modules.h" /* chip and thermometer, for the watch face */
 #include "native_renderer.h"
 #include "perf_overlay.h"
 #include "quickjs.h" /* JSMallocFunctions (PSRAM JS heap) */
@@ -447,6 +448,8 @@ static void run_app(void)
         show_reset_fault(touch);
     }
 
+    native_modules_init();
+
     /* Boot the portable QuickJS host core with the JS heap in PSRAM and the stack guard set. */
     const ErRuntimeConfig runtime_config = {
         .screen_width = SCREEN_WIDTH,
@@ -460,6 +463,8 @@ static void run_app(void)
         .max_stack_size = ER_JS_MAX_STACK,
         .memory_limit = ER_JS_MEMORY_LIMIT,
         .gc_threshold = ER_JS_GC_THRESHOLD,
+        .natives = native_modules,
+        .native_count = native_module_count,
 #if CONFIG_ER_WIFI
         .install_host_globals = network_js_install, /* __erWifi / __erClock, on every context */
 #endif
@@ -582,6 +587,8 @@ static void run_app(void)
         const int64_t frame_start_us = esp_timer_get_time();
         er_perf_frame_begin(); /* frame instrumentation: JS/layout/raster/present split (er_perf.h) */
         er_perf_phase_begin(ER_PERF_PHASE_JS);
+        /* Native module events run their handlers at once. */
+        native_modules_frame(now_ms(), er_runtime_native_post);
         er_runtime_pump(); /* drain JS promises + fire due timers */
         er_perf_phase_end(ER_PERF_PHASE_JS);
         const int64_t pump_end_us = esp_timer_get_time();

@@ -34,6 +34,8 @@ import {bakeAssets} from './assets/index.mjs';
 import {resolveFontJobs} from './assets/font-config.mjs';
 import {analyzeFontSizes} from './assets/font-sizes.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
+import {loadAppFile} from './aot/app-file-loader.mts';
+import {demoFile} from './aot/demo-file.mts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
 const repoRoot = resolve(here, '../..');
@@ -45,7 +47,7 @@ const distDir = resolve(here, 'dist');
 const DEFAULT_DEMO = 'thermostat';
 const demo = process.argv[2] || process.env.DEMO || DEFAULT_DEMO;
 const demoDir = resolve(demosDir, demo);
-const entry = resolve(demoDir, 'index.jsx');
+const entry = demoFile(demoDir, 'index');
 
 if (!existsSync(entry)) {
   const available = existsSync(demosDir)
@@ -67,6 +69,10 @@ const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(pluginBuild) {
+    // The demo's own files give its native modules their signatures.
+    pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args =>
+      args.path.startsWith(demoDir) ? loadAppFile(args.path) : undefined,
+    );
     pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');
       images.set(name, args.path);

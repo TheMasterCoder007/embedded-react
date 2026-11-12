@@ -106,6 +106,12 @@ A boot loop on `assert failed: vApplicationGetIdleTaskMemory` is the same shorta
 `app_main` runs, FreeRTOS allocates its first tasks from the RAM that static data leaves free. Lower
 `ERUI_MAX_NODES` to what the app needs; the thermostat uses 41.
 
+## Native modules
+
+`main/native_modules.c` registers the watch face demo's `chip` [native module](../native-modules.md): the chip's
+name, its free heap, and an event each second that drives the clock. This ESP32 has no temperature sensor and no
+IMU, so the demo's optional `thermometer` and `motion` modules aren't there, and it shows `--` for them.
+
 The backend, `backends/esp32-spi-lcd`, works with any `esp_lcd` RGB565 SPI panel. The board brings
 the panel up (SPI bus, panel and IO handle, reset, inversion, orientation, backlight) and passes both
 handles to `er_esp32_spi_lcd_backend_init(panel, io, width, height)`; in banded mode there is nothing
@@ -139,7 +145,7 @@ There is no official datasheet for these boards; the map comes from the communit
 
 ## Outside the repository
 
-Copy the example folder out on its own and `idf.py build` fetches the engine, the Flow B runtime and the SPI
+Copy the example folder out on its own and `idf.py build` fetches the engine, the Flow B runtime, and the SPI
 backend from GitHub. Flow B needs nothing else, no QuickJS. The engine and the runtime are also on the ESP-IDF
 Component Registry ([Installation](../../getting-started/installation.mdx) has the command), but the SPI backend is
 not, so the example uses `FetchContent`, which covers all three.
