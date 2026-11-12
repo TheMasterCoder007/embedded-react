@@ -933,6 +933,12 @@ export function useHostValue(initial: number): number;
 /** A whole number. A native method's `Int` is an int in C, where a `number` is a float. */
 export type Int = number;
 
+/**
+ * A whole number that may be past an Int's range: a native method's `Int64` is an int64_t in C. In JS it is a number,
+ * so it is exact up to 2^53.
+ */
+export type Int64 = number;
+
 /** An optional native module, as nativeModule.optional returns it. */
 export type OptionalNativeModule<T> = T & {
   /** Whether the firmware has every method and event of the module. Set at load, and it never changes. */
@@ -941,8 +947,8 @@ export type OptionalNativeModule<T> = T & {
 
 /**
  * A module the firmware provides in C, declared at module level by an interface of its methods, which take and
- * return Int, number, and boolean: `const Sensors = nativeModule<Sensors>('sensors', 1)`. Its events are the
- * interface's `events`: `events: {reading(celsius: number): void}`.
+ * return Int, Int64, number, boolean and string: `const Sensors = nativeModule<Sensors>('sensors', 1)`. Its events are
+ * the interface's `events`: `events: {reading(celsius: number): void}`.
  */
 export const nativeModule: {
   <T>(name: string, version: number): T;

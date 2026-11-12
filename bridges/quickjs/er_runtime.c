@@ -292,14 +292,14 @@ static bool s_app_loaded = false;
  */
 static bool native_signature_valid(const char* signature)
 {
-    if (!signature || signature[0] == '\0' || !strchr("ibfv", signature[0]) || signature[1] != ':')
+    if (!signature || signature[0] == '\0' || !strchr("ibflsv", signature[0]) || signature[1] != ':')
     {
         return false;
     }
     const char* parameters = signature + 2;
     for (const char* code = parameters; *code; code++)
     {
-        if (!strchr("ibf", *code))
+        if (!strchr("ibfls", *code))
         {
             return false;
         }
@@ -373,62 +373,102 @@ static JSValue js_native_call(JSContext* ctx, JSValueConst this_val, int argc, J
                                  argc - 1);
     }
 
-    int32_t cells[ERB_NATIVE_MAX_PARAMETERS] = {0};
-    for (int parameter = 0; parameter < parameter_count; parameter++)
+    /* Each argument into its cells. A string is read in place, so its C string is kept until the call returns. */
+    int32_t cells[ERB_NATIVE_MAX_CELLS] = {0};
+    const char* texts[ERB_NATIVE_MAX_PARAMETERS] = {NULL};
+    const uint32_t held = erb_native_texts_held();
+    bool converted = true;
+    int cell = 0;
+    for (int parameter = 0; parameter < parameter_count && converted; parameter++)
     {
         JSValueConst argument = argv[parameter + 1];
-        if (parameters[parameter] == 'i')
+        switch (parameters[parameter])
         {
-            if (JS_ToInt32(ctx, &cells[parameter], argument))
+            case 'i':
+                converted = JS_ToInt32(ctx, &cells[cell++], argument) == 0;
+                break;
+            case 'b':
             {
-                return JS_EXCEPTION;
+                const int truth = JS_ToBool(ctx, argument);
+                converted = truth >= 0;
+                cells[cell++] = truth > 0;
+                break;
             }
-        }
-        else if (parameters[parameter] == 'b')
-        {
-            const int truth = JS_ToBool(ctx, argument);
-            if (truth < 0)
+            case 'l':
             {
-                return JS_EXCEPTION;
+                int64_t whole = 0;
+                converted = JS_ToInt64(ctx, &whole, argument) == 0;
+                erb_native_set_int64(&cells[cell], whole);
+                cell += 2;
+                break;
             }
-            cells[parameter] = truth;
-        }
-        else
-        {
-            /* A number goes through a C float, as in Flow B. */
-            double number = 0.0;
-            if (JS_ToFloat64(ctx, &number, argument))
+            case 's':
+                texts[parameter] = JS_ToCString(ctx, argument);
+                converted = texts[parameter] != NULL;
+                cells[cell++] = erb_native_text(texts[parameter]);
+                break;
+            default:
             {
-                return JS_EXCEPTION;
+                /* A number goes through a C float, as in Flow B. */
+                double number = 0.0;
+                converted = JS_ToFloat64(ctx, &number, argument) == 0;
+                const float single = (float)number;
+                memcpy(&cells[cell++], &single, sizeof(single));
+                break;
             }
-            const float single = (float)number;
-            memcpy(&cells[parameter], &single, sizeof(single));
         }
     }
 
-    int32_t result = 0;
-    s_native_calls++;
-    const bool succeeded = native->callback(cells, &result, s_config.native_context);
-    s_native_calls--;
+    int32_t result[2] = {0, 0};
+    bool succeeded = false;
+    if (converted)
+    {
+        s_native_calls++;
+        succeeded = native->callback(cells, result, s_config.native_context);
+        s_native_calls--;
+    }
+    JSValue value = JS_UNDEFINED;
+    if (converted && succeeded)
+    {
+        switch (native->signature[0])
+        {
+            case 'i':
+                value = JS_NewInt32(ctx, result[0]);
+                break;
+            case 'b':
+                value = JS_NewBool(ctx, result[0] != 0);
+                break;
+            case 'l':
+                value = JS_NewInt64(ctx, erb_native_int64(result));
+                break;
+            case 's':
+                value = JS_NewString(ctx, erb_native_string(result[0]));
+                break;
+            case 'f':
+            {
+                float single;
+                memcpy(&single, &result[0], sizeof(single));
+                value = JS_NewFloat64(ctx, (double)single);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    erb_native_texts_release(held);
+    for (int parameter = 0; parameter < parameter_count; parameter++)
+    {
+        JS_FreeCString(ctx, texts[parameter]);
+    }
+    if (!converted)
+    {
+        return JS_EXCEPTION;
+    }
     if (!succeeded)
     {
         return JS_ThrowPlainError(ctx, "native module failed: %s", native->name ? native->name : "");
     }
-    switch (native->signature[0])
-    {
-        case 'i':
-            return JS_NewInt32(ctx, result);
-        case 'b':
-            return JS_NewBool(ctx, result != 0);
-        case 'f':
-        {
-            float single;
-            memcpy(&single, &result, sizeof(single));
-            return JS_NewFloat64(ctx, (double)single);
-        }
-        default:
-            return JS_UNDEFINED;
-    }
+    return value;
 }
 
 /** @brief Installs the `__erNative` global (find/findEvent/call) over ErRuntimeConfig.natives. */
@@ -1034,9 +1074,10 @@ void er_runtime_pump(void)
     apply_gc_floor();
 }
 
-bool er_runtime_native_post(int native, const int32_t* arguments)
+/** @brief Posts an event, once the caller has checked the runtime can take it. */
+static bool post_native(int native, const int32_t* arguments)
 {
-    if (!s_ctx || !s_app_loaded || s_native_calls > 0 || native < 0 || native >= s_config.native_count)
+    if (!s_ctx || !s_app_loaded || native < 0 || native >= s_config.native_count)
     {
         return false;
     }
@@ -1060,22 +1101,32 @@ bool er_runtime_native_post(int native, const int32_t* arguments)
     {
         /* The arguments as the app reads them, converted by the signature as a native's result is. */
         JSValue values = JS_NewArray(s_ctx);
+        uint32_t cell = 0;
         for (uint32_t param = 0; param < params; param++)
         {
             JSValue value;
-            if (codes[param] == 'i')
+            switch (codes[param])
             {
-                value = JS_NewInt32(s_ctx, arguments[param]);
-            }
-            else if (codes[param] == 'b')
-            {
-                value = JS_NewBool(s_ctx, arguments[param] != 0);
-            }
-            else
-            {
-                float single;
-                memcpy(&single, &arguments[param], sizeof(single));
-                value = JS_NewFloat64(s_ctx, (double)single);
+                case 'i':
+                    value = JS_NewInt32(s_ctx, arguments[cell++]);
+                    break;
+                case 'b':
+                    value = JS_NewBool(s_ctx, arguments[cell++] != 0);
+                    break;
+                case 'l':
+                    value = JS_NewInt64(s_ctx, erb_native_int64(&arguments[cell]));
+                    cell += 2;
+                    break;
+                case 's':
+                    value = JS_NewString(s_ctx, erb_native_string(arguments[cell++]));
+                    break;
+                default:
+                {
+                    float single;
+                    memcpy(&single, &arguments[cell++], sizeof(single));
+                    value = JS_NewFloat64(s_ctx, (double)single);
+                    break;
+                }
             }
             JS_SetPropertyUint32(s_ctx, values, param, value);
         }
@@ -1086,6 +1137,18 @@ bool er_runtime_native_post(int native, const int32_t* arguments)
     }
     JS_FreeValue(s_ctx, dispatcher);
     return true;
+}
+
+bool er_runtime_native_post(int native, const int32_t* arguments)
+{
+    /* From inside a native call, the call's strings are still held; it lets go of the post's with its own. */
+    if (s_native_calls > 0)
+    {
+        return false;
+    }
+    const bool posted = post_native(native, arguments);
+    erb_native_texts_release(0);
+    return posted;
 }
 
 bool er_runtime_reset(void)

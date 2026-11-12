@@ -34,11 +34,29 @@
 
 import {useEffect, useRef} from 'react';
 
-// What a value becomes in a C cell, by its signature code: as the bridge converts it.
+// The values an int64 holds, which it wraps around.
+const INT64_SPAN = 2 ** 64;
+
+// What a value becomes in C, by its signature code: as the bridge converts it. An int64 is truncated and wraps, and
+// comes back as the nearest number; a string ends at its first NUL.
 const CONVERSIONS = {
   i: value => value | 0,
   b: value => !!value,
   f: value => Math.fround(value),
+  l: value => {
+    const whole = Math.trunc(Number(value));
+    if (!Number.isFinite(whole)) {
+      return 0;
+    }
+    // -0 is 0 in C.
+    if (whole >= -INT64_SPAN / 2 && whole < INT64_SPAN / 2) {
+      return whole || 0;
+    }
+    // Past 2^63 a number is a multiple of 2^11, so this is exact.
+    const wrapped = whole - Math.floor(whole / INT64_SPAN) * INT64_SPAN;
+    return wrapped >= INT64_SPAN / 2 ? wrapped - INT64_SPAN : wrapped;
+  },
+  s: value => String(value).split('\0')[0],
   v: () => undefined,
 };
 

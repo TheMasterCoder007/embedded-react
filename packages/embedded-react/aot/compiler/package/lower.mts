@@ -111,7 +111,7 @@ import type {IrApp} from '../ir/app.mts';
 import type {IrKeyboard, IrKeyKind} from '../ir/keyboard.mts';
 import {lowerCheck} from './checks.mts';
 import type {IrBootSlot} from '../ir/boot.mts';
-import type {IrExpr} from '../ir/expressions.mts';
+import type {IrExpr, IrNativeCall} from '../ir/expressions.mts';
 import type {IrCompletion} from '../ir/animations.mts';
 import type {
   IrDepEffect,
@@ -355,6 +355,37 @@ function stringLocals(statements: IrStmt[], found: Set<string>): void {
     } else if (statement.kind === 'loop') {
       stringLocals(statement.body, found);
       stringLocals(statement.step, found);
+    }
+  }
+}
+
+/**
+ * Every native call in a value that returns a string, at any depth: each copies its result into a buffer of its own.
+ *
+ * @param value  The statements, or any part of them.
+ * @param found  Collects the calls.
+ * @param seen  What has been walked, so a value reached twice is walked once.
+ */
+function stringNativeCalls(
+  value: unknown,
+  found: Set<IrNativeCall>,
+  seen = new Set<object>(),
+): void {
+  if (!value || typeof value !== 'object' || seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach(child => stringNativeCalls(child, found, seen));
+    return;
+  }
+  const record = value as Record<string, unknown>;
+  const call = record as Partial<IrNativeCall>;
+  if (call.import && call.callArguments && call.import.result === 'string') {
+    found.add(call as IrNativeCall);
+  }
+  for (const [key, child] of Object.entries(record)) {
+    // Where a value came from repeats its reads, and a location holds none.
+    if (key !== 'source' && key !== 'location') {
+      stringNativeCalls(child, found, seen);
     }
   }
 }
@@ -672,6 +703,7 @@ function planSlots(
     refs: new Map(),
     boot: new Map(),
     stringLocals: new Map(),
+    nativeStrings: new Map(),
     enums: new Map(),
     hoisted: new Map(),
     armed: new Map(),
@@ -893,6 +925,16 @@ function planSlots(
         arena.slot(ValueType.string, undefined, stringCap.local(name)),
       );
     }
+  }
+
+  // A native call's string result can be anything a write holds.
+  const nativeCalls = new Set<IrNativeCall>();
+  stringNativeCalls(bodies(app), nativeCalls);
+  for (const call of nativeCalls) {
+    slots.nativeStrings.set(
+      call,
+      arena.slot(ValueType.string, undefined, ENGINE_STRING_MAX.ER_TEXT_MAX),
+    );
   }
 
   const nodes = nodesOf(app.root);
@@ -2149,7 +2191,12 @@ function nativeEventBody(
     FunctionKind.nativeEvent,
     `native event ${event.name}`,
   );
+  // The event's values from register 0, laid out as the runtime enters the function: an int64 on an even register.
   const values = event.params.map(type => builder.reserved(type));
+  const last = values.at(-1);
+  const parameterCells = last
+    ? last.index + (last.type === 'int64' ? 2 : 1)
+    : 0;
   const codegenOf = (handler: IrNativeEventHandler) =>
     new Codegen(builder, lowering.slots, {
       values: new Map(
@@ -2179,7 +2226,7 @@ function nativeEventBody(
   if (handlers.some(handler => handler.callback.updatesState)) {
     requestUpdate(codegenOf(handlers[0]), lowering);
   }
-  return builder.finish(values.length);
+  return builder.finish(parameterCells);
 }
 
 /**

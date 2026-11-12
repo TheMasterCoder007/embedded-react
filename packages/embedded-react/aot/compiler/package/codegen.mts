@@ -116,6 +116,8 @@ export interface ProgramSlots {
   boot: Map<IrBootSlot, Slot>;
   /** The buffer each string local is copied into, by its name. */
   stringLocals: Map<string, Slot>;
+  /** The buffer each native call that returns a string copies its result into. */
+  nativeStrings: Map<IrNativeCall, Slot>;
   /** The string states held as interned enums. */
   enums: Map<ScalarState, EnumSet>;
   /** The slot each effect local its cleanup reads is kept in, by its name. */
@@ -621,7 +623,8 @@ export class Codegen {
   }
 
   /**
-   * Calls a native method: its arguments in consecutive registers, and its result in the one after them.
+   * Calls a native method: its arguments in consecutive registers, and its result in the one after them (an int64
+   * on an even register, as the runtime lays them out).
    *
    * @param call  The call.
    * @param readsResult  The caller reads the result.
@@ -642,11 +645,17 @@ export class Codegen {
     values.forEach((value, index) =>
       builder.abc('MOVE', run[index].index, value.index),
     );
-    builder.abx(
-      'CALLN',
-      run[0]?.index ?? 0,
-      this.program.tables.nativeImport(call.import),
-    );
+    const importIndex = this.program.tables.nativeImport(call.import);
+    if (result === 'string') {
+      // A string result is copied into the call's own buffer.
+      const buffer = required(
+        this.program.nativeStrings.get(call),
+        `the buffer of ${call.import.name}`,
+      );
+      builder.abx('CALLNS', run[0].index, importIndex, buffer.index);
+    } else {
+      builder.abx('CALLN', run[0]?.index ?? 0, importIndex);
+    }
     if (result === 'void' || !readsResult) {
       return null;
     }

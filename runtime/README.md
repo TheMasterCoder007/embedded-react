@@ -10,6 +10,7 @@ no platform headers. The QuickJS bridge links `er-runtime`; Flow B firmware link
 | `er_assets.c`         | Checks an ERPK asset pack (images and fonts) and registers it with the engine, with font tables in caller storage.                                                    |
 | `er_assets_heap.c`    | The same with font tables from the heap, in place or from a copy. Its own file, so Flow B firmware never links the allocator.                                         |
 | `er_hotreload.c`      | Parses ERHR hot-reload frames from a byte stream into a staging buffer and checks their CRC.                                                                          |
+| `erb_native.c`        | The strings native modules pass, in both flows: a 32-bit cell for each, which `erb_native_string()` reads.                                                            |
 | `erb_runtime.c`       | Flow B: loads a package (`erb_load`), lays out the arena, builds templates, runs events, timers, effects and animations, and shows the error screen.                  |
 | `erb_verify.c`        | Flow B: checks a whole package before anything is built (the spec's verifier rules).                                                                                  |
 | `erb_vm.c`            | Flow B: the register VM, with its arithmetic rules.                                                                                                                |

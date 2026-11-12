@@ -240,6 +240,8 @@ bool erb_input_set_string(int input, const char* value);
  *
  * @param[in] native     The event's index in ErbConfig::natives.
  * @param[in] arguments  Its arguments as 32-bit cells, as its signature lists them; may be NULL when it has none.
+ *                       A string is a cell from erb_native_text(), whose text the handlers read in place, so it
+ *                       must stay as it is until this returns. Either way, the strings are let go of.
  *
  * @return false when the runtime can't take it now: no app runs, or the app is running code (a native function is
  *         posting from inside a call). Post it again next frame. Also false when @p native isn't an event.

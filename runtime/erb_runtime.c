@@ -1994,9 +1994,10 @@ bool erb_input_set_string(int input, const char* value)
  - Native events
  ---------------------------------------------------------------------------------------------------------------------*/
 
-bool erb_native_post(int native, const int32_t* arguments)
+/** @brief Posts an event, once the caller has checked the runtime can take it. */
+static bool post_native(int native, const int32_t* arguments)
 {
-    if (!erb_running() || g_erb.in_vm || native < 0 || (uint32_t)native >= g_erb.config.native_count)
+    if (native < 0 || (uint32_t)native >= g_erb.config.native_count)
     {
         return false;
     }
@@ -2012,11 +2013,32 @@ bool erb_native_post(int native, const int32_t* arguments)
         return false;
     }
 
-    /* A bool cell is 0 or 1 in a register, whatever the firmware passed. */
-    int32_t cells[ERB_NATIVE_MAX_PARAMETERS];
+    /* The C cells into the handler's registers: a bool is 0 or 1, an int64 starts on an even register, and a string
+     * is read in place. */
+    int32_t registers[3u * ERB_NATIVE_MAX_PARAMETERS] = {0};
+    uint32_t cell = 0;
+    uint32_t register_index = 0;
     for (size_t param = 0; param < params; param++)
     {
-        cells[param] = codes[param] == 'b' ? arguments[param] != 0 : arguments[param];
+        register_index = erb_native_register(codes[param], register_index);
+        switch (codes[param])
+        {
+            case 'b':
+                registers[register_index++] = arguments[cell++] != 0;
+                break;
+            case 's':
+                registers[register_index++] =
+                    arguments[cell] > 0 ? (int32_t)(ERB_STRING_NATIVE | (uint32_t)arguments[cell]) : 0;
+                cell++;
+                break;
+            case 'l':
+                registers[register_index++] = arguments[cell++];
+                registers[register_index++] = arguments[cell++];
+                break;
+            default:
+                registers[register_index++] = arguments[cell++];
+                break;
+        }
     }
 
     /* Every handler runs before the update, as one event. A handler runs each subscriber whose component is mounted. */
@@ -2032,7 +2054,7 @@ bool erb_native_post(int native, const int32_t* arguments)
         }
         memset(&g_erb.event, 0, sizeof(g_erb.event));
         g_erb.in_vm = true;
-        status = erb_vm_run(erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT), cells, NULL);
+        status = erb_vm_run(erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT), registers, NULL);
         g_erb.in_vm = false;
         ran = true;
     }
@@ -2048,6 +2070,18 @@ bool erb_native_post(int native, const int32_t* arguments)
         handle_fault();
     }
     return true;
+}
+
+bool erb_native_post(int native, const int32_t* arguments)
+{
+    /* From inside a native call, the call's strings are still held; it lets go of the post's with its own. */
+    if (g_erb.in_vm)
+    {
+        return false;
+    }
+    const bool posted = erb_running() && post_native(native, arguments);
+    erb_native_texts_release(0);
+    return posted;
 }
 
 void erb_set_wall_clock(int64_t epoch_ms)

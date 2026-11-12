@@ -5,6 +5,7 @@ set(R "${EMBEDDED_REACT_SRC_DIR}/runtime")
 idf_component_register(
     SRCS
         "${R}/er_container.c"
+        "${R}/erb_native.c"
         "${R}/er_assets.c"
         "${R}/erb_props.c"
         "${R}/erb_verify.c"

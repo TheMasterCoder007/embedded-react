@@ -98,6 +98,8 @@ export class FunctionBuilder {
   private readonly runs = new Map<string, number[]>();
   /** The types of each run, by its first cell. */
   private readonly runTypes = new Map<number, string>();
+  /** Each run's registers, by its first. */
+  private readonly runIndices = new Map<number, number[]>();
   /** Registers in use, in the order they were taken, for checkpoints. */
   private readonly taken: Register[] = [];
   /** Where each run of the code starts in the source, for the debug table. */
@@ -172,8 +174,9 @@ export class FunctionBuilder {
   }
 
   /**
-   * Registers of one-cell types in consecutive cells, as APPEND reads a row: a released run of the same types when
-   * there is one, else new ones. A run is released whole, and only ever reused as a run.
+   * Registers in consecutive cells, as APPEND reads a row and CALLN its arguments: a released run of the same types
+   * when there is one, else new ones. A two-cell register starts on an even cell, so a gap may come before it. A run
+   * is released whole, and only ever reused as a run.
    *
    * @param types  Their types.
    *
@@ -181,14 +184,16 @@ export class FunctionBuilder {
    */
   consecutive(types: RegisterType[]): Register[] {
     const key = types.join(' ');
-    let first = this.runs.get(key)?.pop();
-    if (first === undefined) {
-      first = this.cellTypes.length;
-      types.forEach(type => this.newRegister(type));
-      this.runTypes.set(first, key);
+    const reused = this.runs.get(key)?.pop();
+    let indices =
+      reused === undefined ? undefined : this.runIndices.get(reused);
+    if (!indices) {
+      indices = types.map(type => this.newRegister(type));
+      this.runTypes.set(indices[0], key);
+      this.runIndices.set(indices[0], indices);
     }
     const registers = types.map((type, index) => ({
-      index: first + index,
+      index: indices[index],
       type,
     }));
     this.taken.push(registers[0]);

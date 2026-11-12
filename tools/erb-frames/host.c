@@ -72,18 +72,21 @@ static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 static bool s_flow_a;
 
 /*----------------------------------------------------------------------------------------------------------------------
- - The probe module, which the native-calls and native-events scenarios call
+ - The probe module, which the native-calls, native-events and native-strings scenarios call
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** @brief The probe's events, by their index in s_natives. */
 #define PROBE_DONE 9
 #define PROBE_IDLE 10
+#define PROBE_NAMED 15
 
 static int32_t s_probe_count;
 static float s_probe_stored;
 static int32_t s_probe_refused;
 static bool s_probe_pending;
 static int32_t s_probe_pending_value;
+static bool s_probe_announced;
+static int32_t s_probe_announced_id;
 
 /** @brief Posts one of the probe's events through the flow that runs the app. */
 static bool probe_post(int native, const int32_t* arguments)
@@ -108,6 +111,24 @@ static void probe_post_done(void)
     else
     {
         s_probe_refused++;
+    }
+}
+
+/** @brief Posts named with the announced id's name and stamp, once it is taken. */
+static void probe_post_named(void)
+{
+    if (!s_probe_announced)
+    {
+        return;
+    }
+    static char name[32];
+    snprintf(name, sizeof(name), "probe-%d", (int)s_probe_announced_id);
+    int32_t values[3];
+    values[0] = erb_native_text(name);
+    erb_native_set_int64(&values[1], 5000000000LL + s_probe_announced_id);
+    if (probe_post(PROBE_NAMED, values))
+    {
+        s_probe_announced = false;
     }
 }
 
@@ -196,6 +217,39 @@ static bool probe_refused(const int32_t* arguments, int32_t* result, void* conte
     return true;
 }
 
+static bool probe_greet(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    static char greeting[64];
+    snprintf(greeting, sizeof(greeting), "hi %s", erb_native_string(arguments[0]));
+    *result = erb_native_text(greeting);
+    return true;
+}
+
+static bool probe_length(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    *result = (int32_t)strlen(erb_native_string(arguments[0]));
+    return true;
+}
+
+static bool probe_shift(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    erb_native_set_int64(result, erb_native_int64(&arguments[1]) + (int64_t)arguments[0] * 1000);
+    return true;
+}
+
+/** @brief Posts named on the next frame. */
+static bool probe_announce(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    s_probe_announced = true;
+    s_probe_announced_id = arguments[0];
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"probe.add", 1, "i:ii", probe_add},
     {"probe.half", 1, "f:i", probe_half},
@@ -208,6 +262,11 @@ static const ErbNative s_natives[] = {
     {"probe.refused", 1, "i:", probe_refused},
     [PROBE_DONE] = {"probe.done", 1, "v:ifb", NULL},
     [PROBE_IDLE] = {"probe.idle", 1, "v:", NULL},
+    {"probe.greet", 1, "s:s", probe_greet},
+    {"probe.length", 1, "i:s", probe_length},
+    {"probe.shift", 1, "l:il", probe_shift},
+    {"probe.announce", 1, "v:i", probe_announce},
+    [PROBE_NAMED] = {"probe.named", 1, "v:sl", NULL},
 };
 
 static void log_line(const char* line, void* context)
@@ -242,6 +301,7 @@ static uint32_t* read_package(const char* path, size_t* package_bytes)
 static void frame(void)
 {
     probe_post_done();
+    probe_post_named();
     probe_post(PROBE_IDLE, NULL);
     embedded_renderer_tick(FRAME_MS);
     if (s_flow_a)

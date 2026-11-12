@@ -276,7 +276,7 @@ typedef struct
     uint32_t gradient_count;
     TStop stops[8];
     uint32_t stop_count;
-    TImport imports[4];
+    TImport imports[8];
     uint32_t import_count;
     TNativeEvent native_events[4];
     uint32_t native_event_count;

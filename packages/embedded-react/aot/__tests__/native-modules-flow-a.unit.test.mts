@@ -50,7 +50,7 @@ const SENSORS =
   '  pressed(button: Int): boolean;\n' +
   '  setLed(on: boolean): void;\n' +
   '  scale: (value: number) => number;\n' +
-  '  name(): string;\n' +
+  '  name(): number[];\n' +
   '}\n' +
   "export const Sensors = nativeModule<Sensors>('sensors', 2);\n" +
   'interface Clock { now(): Int; }\n' +
@@ -113,7 +113,7 @@ describe('native module signatures in Flow A', () => {
     expect(signed).toContain(
       "nativeModule<Sensors>('sensors', 2, " +
         '{"methods":{"read":"f:i","pressed":"b:i","setLed":"v:b","scale":"f:f",' +
-        '"name":{"reason":"returns a string, which native modules don\'t pass yet"}},"events":{}});',
+        '"name":{"reason":"returns a type native modules don\'t pass yet"}},"events":{}});',
     );
     expect(signed).toContain(
       'nativeModule<Clock>(\'clock\', 1, {"methods":{"now":"i:"},"events":{}});',
@@ -127,7 +127,8 @@ describe('native module signatures in Flow A', () => {
     ).toContain(
       "nativeModule<Probe>('probe', 1, " +
         '{"methods":{"add":"i:ii","half":"f:i","even":"b:i","flip":"b:b","next":"i:","store":"v:f","stored":"f:",' +
-        '"start":"v:i","refused":"i:"},"events":{"done":"v:ifb","idle":"v:"}});',
+        '"start":"v:i","refused":"i:","greet":"s:s","length":"i:s","shift":"l:il","announce":"v:i"},' +
+        '"events":{"done":"v:ifb","idle":"v:","named":"v:sl"}});',
     );
   });
 
@@ -352,11 +353,11 @@ describe('nativeModule() in Flow A', () => {
       'sensors',
       2,
       methods({
-        name: {reason: "returns a string, which native modules don't pass yet"},
+        name: {reason: "returns a type native modules don't pass yet"},
       }),
     );
     expect(() => Sensors.name()).toThrow(
-      "sensors.name returns a string, which native modules don't pass yet",
+      "sensors.name returns a type native modules don't pass yet",
     );
   });
 
@@ -390,6 +391,60 @@ describe('nativeModule() in Flow A', () => {
     expect(Sensors.setLed('yes')).toBeUndefined();
     expect(Sensors.read(2 ** 32 + 5)).toBe(Math.fround(0.1));
     expect(seen).toEqual([[3], [Math.fround(0.1)], [false], [true], [5]]);
+  });
+
+  it("converts a mock's strings and Int64s as the bridge does", () => {
+    const seen: unknown[][] = [];
+    const Words = nativeModule(
+      'words',
+      1,
+      methods({greet: 's:s', shift: 'l:l'}),
+      {
+        greet: (...values: unknown[]) => (seen.push(values), 42),
+        shift: (...values: unknown[]) => (seen.push(values), 2 ** 64 + 4096),
+      },
+    );
+    // Any value passes as its string, which ends at a NUL. An Int64 is truncated and wraps at 64 bits.
+    expect(Words.greet(7)).toBe('42');
+    expect(Words.greet('a\0b')).toBe('42');
+    expect(Words.shift(-5e9 - 0.5)).toBe(4096);
+    expect(Words.shift(Number.NaN)).toBe(4096);
+    expect(Words.shift(2 ** 63)).toBe(4096);
+    expect(seen).toEqual([['7'], ['a'], [-5e9], [0], [-(2 ** 63)]]);
+  });
+
+  it('wraps an Int64 as BigInt.asIntN would, without BigInt', () => {
+    const Clock = nativeModule('clock', 1, methods({echo: 'l:l'}), {
+      echo: (value: number) => value,
+    });
+    const values = [
+      -0.5,
+      7.9,
+      -5e9 - 0.5,
+      2 ** 53 + 2,
+      2 ** 63 - 2048,
+      2 ** 63,
+      -(2 ** 63),
+      -(2 ** 63) - 4096,
+      2 ** 64 + 4096,
+      2 ** 70 + 2 ** 20,
+      -(2 ** 90) - 2 ** 40,
+      1e30,
+      2 ** 116,
+      Infinity,
+    ];
+    const expected = values.map(value =>
+      Number.isFinite(value)
+        ? Number(BigInt.asIntN(64, BigInt(Math.trunc(value))))
+        : 0,
+    );
+    const {BigInt: saved} = globalThis;
+    try {
+      delete (globalThis as {BigInt?: unknown}).BigInt;
+      expect(values.map(value => Clock.echo(value))).toEqual(expected);
+    } finally {
+      globalThis.BigInt = saved;
+    }
   });
 
   it("calls a mock's methods on the mock, so it can keep state", () => {
@@ -478,7 +533,7 @@ describe('native events in Flow A', () => {
       2,
       events({
         reading: 'v:f',
-        name: {reason: "takes a string, which native modules don't pass yet"},
+        name: {reason: "takes a type native modules don't pass yet"},
       }),
     );
     const handler = () => {};
@@ -489,7 +544,7 @@ describe('native events in Flow A', () => {
       'native module "sensors" has no event done',
     );
     expect(() => useNativeEvent(Sensors, 'name', handler)).toThrow(
-      "sensors.name takes a string, which native modules don't pass yet",
+      "sensors.name takes a type native modules don't pass yet",
     );
   });
 
@@ -573,7 +628,7 @@ describe('nativeModule.optional() in Flow A', () => {
   const WIFI = {
     methods: {
       connect: 'b:i',
-      name: {reason: "returns a string, which native modules don't pass yet"},
+      name: {reason: "returns a type native modules don't pass yet"},
     },
     events: {found: 'v:i'},
   };

@@ -172,6 +172,8 @@ const NATIVE_TYPES: Record<NativeType, IrType> = {
   int: INT,
   float: FLOAT,
   bool: BOOL,
+  int64: INT64_NUMBER,
+  string: STRING,
 };
 
 /** The Math functions that keep a whole number whole. */

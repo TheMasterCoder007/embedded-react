@@ -1733,10 +1733,24 @@ static bool check_imports(const ErbConfig* config, ErbProgram* program, ErbError
     return true;
 }
 
-/** @brief The register type a signature's parameter code passes, or 0 when it is none. */
+/** @brief The register type a native signature's code passes, or 0 when it is none. */
 static uint8_t native_type(char code)
 {
-    return code == 'i' ? ERB_TYPE_INT : code == 'b' ? ERB_TYPE_BOOL : code == 'f' ? ERB_TYPE_FLOAT : 0u;
+    switch (code)
+    {
+        case 'i':
+            return ERB_TYPE_INT;
+        case 'b':
+            return ERB_TYPE_BOOL;
+        case 'f':
+            return ERB_TYPE_FLOAT;
+        case 'l':
+            return ERB_TYPE_INT64;
+        case 's':
+            return ERB_TYPE_STRING;
+        default:
+            return 0u;
+    }
 }
 
 static bool check_native_events(const ErbConfig* config, ErbProgram* program, ErbError* error)
@@ -1784,11 +1798,16 @@ static bool check_native_events(const ErbConfig* config, ErbProgram* program, Er
             }
             const uint8_t* function = erb_function(program, handler);
             const uint8_t* types = program->types + erb_u32(function + ERB_FUNCTION_TYPES_AT);
-            signature_matches = params == function[ERB_FUNCTION_PARAMS_AT];
+            /* As the VM lays them out: an int64 on an even register. */
+            uint32_t register_index = 0;
             for (size_t param = 0; signature_matches && param < params; param++)
             {
-                signature_matches = types[param] == native_type(codes[2 + param]);
+                register_index = erb_native_register(codes[2 + param], register_index);
+                signature_matches = register_index < function[ERB_FUNCTION_PARAMS_AT]
+                                    && types[register_index] == native_type(codes[2 + param]);
+                register_index += erb_native_cells(codes[2 + param]);
             }
+            signature_matches = signature_matches && register_index == function[ERB_FUNCTION_PARAMS_AT];
         }
         if (!signature_matches)
         {
@@ -2078,39 +2097,30 @@ static bool pset_ok(uint8_t opcode, uint16_t prop_id)
     }
 }
 
-/** @brief Checks the registers from @p first against a native signature ("r:ppp"). */
-static bool signature_ok(const FunctionContext* context, const char* signature, uint32_t first)
+/**
+ * @brief Checks the registers from @p first against a native signature ("r:ppp"), as the VM lays them out.
+ *
+ * @param[out] result  The result's register (the one after the arguments, when there is none).
+ */
+static bool signature_ok(const FunctionContext* context, const char* signature, uint32_t first, uint32_t* result)
 {
-    if (!signature[0] || signature[1] != ':')
+    if (!signature[0] || signature[1] != ':' || strlen(signature + 2) > ERB_NATIVE_MAX_PARAMETERS)
     {
         return false;
     }
     uint32_t register_index = first;
-    for (const char* param = signature + 2; *param; param++, register_index++)
+    for (const char* param = signature + 2; *param; param++)
     {
-        const uint8_t type = *param == 'i'   ? ERB_TYPE_INT
-                             : *param == 'b' ? ERB_TYPE_BOOL
-                             : *param == 'f' ? ERB_TYPE_FLOAT
-                                             : 0u;
-        if (!type || !reg_is(context, register_index, type))
+        register_index = erb_native_register(*param, register_index);
+        if (!native_type(*param) || !reg_is(context, register_index, native_type(*param)))
         {
             return false;
         }
+        register_index += erb_native_cells(*param);
     }
     /* The result goes in the register after the arguments. */
-    switch (signature[0])
-    {
-        case 'v':
-            return true;
-        case 'i':
-            return reg_is(context, register_index, ERB_TYPE_INT);
-        case 'b':
-            return reg_is(context, register_index, ERB_TYPE_BOOL);
-        case 'f':
-            return reg_is(context, register_index, ERB_TYPE_FLOAT);
-        default:
-            return false;
-    }
+    *result = signature[0] == 'v' ? register_index : erb_native_register(signature[0], register_index);
+    return signature[0] == 'v' || (native_type(signature[0]) && reg_is(context, *result, native_type(signature[0])));
 }
 
 /**
@@ -2331,14 +2341,23 @@ static bool check_operands(const FunctionContext* context, uint32_t program_coun
             break;
         }
         case ERB_OP_CALLN:
-            if (operand_bx >= program->import_count
-                || !signature_ok(
-                    context,
-                    erb_string(program,
-                               erb_u16(program->imports + operand_bx * ERB_IMPORT_SIZE + ERB_IMPORT_SIGNATURE_AT)),
-                    operand_a))
+        case ERB_OP_CALLNS:
+        {
+            /* A string result is copied into a buffer, which only CALLNS names. */
+            const char* signature =
+                operand_bx < program->import_count
+                    ? erb_string(program,
+                                 erb_u16(program->imports + operand_bx * ERB_IMPORT_SIZE + ERB_IMPORT_SIGNATURE_AT))
+                    : NULL;
+            uint32_t result = 0;
+            if (!signature || !signature_ok(context, signature, operand_a, &result)
+                || (signature[0] == 's') != (opcode == ERB_OP_CALLNS))
                 BAD("CALLN import or registers");
+            if (opcode == ERB_OP_CALLNS
+                && (ERB_HIGH16(extension) || !writable(context, slot_of(context, extension_index, ERB_TYPE_STRING))))
+                BAD("CALLNS string slot");
             break;
+        }
         case ERB_OP_FMTE:
             if (operand_bx >= program->enum_set_count)
                 BAD("FMTE set");
@@ -2640,14 +2659,18 @@ static bool check_function(const ErbProgram* program, uint32_t index, ErbError* 
         }
         /* A loop counter is written by its LOOPSET and LOOP only. CALLN writes the register after its arguments. */
         const char* native_signature =
-            opcode == ERB_OP_CALLN
+            opcode == ERB_OP_CALLN || opcode == ERB_OP_CALLNS
                 ? erb_string(program,
                              erb_u16(program->imports + ERB_BX(word) * ERB_IMPORT_SIZE + ERB_IMPORT_SIGNATURE_AT))
                 : NULL;
         const bool writes_operand_a =
             info->writes || (opcode == ERB_OP_CALL && erb_function(program, ERB_BX(word))[ERB_FUNCTION_RESULT_AT])
             || (native_signature && native_signature[0] != 'v');
-        const uint32_t written = native_signature ? ERB_A(word) + (uint32_t)strlen(native_signature + 2) : ERB_A(word);
+        uint32_t written = ERB_A(word);
+        if (native_signature && !signature_ok(&context, native_signature, ERB_A(word), &written))
+        {
+            return fail(error, ERB_ERROR_BYTECODE, "CALLN import or registers");
+        }
         if (writes_operand_a && opcode != ERB_OP_LOOPSET && opcode != ERB_OP_LOOP && erb_bit_get(counters, written))
         {
             return fail(error, ERB_ERROR_CONTROL_FLOW, "a loop counter is written outside its LOOPSET and LOOP");

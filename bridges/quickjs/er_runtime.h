@@ -371,6 +371,8 @@ void er_runtime_pump(void);
  *
  * @param[in] native     The event's index in ErRuntimeConfig::natives.
  * @param[in] arguments  Its arguments as 32-bit cells, as its signature lists them; may be NULL when it has none.
+ *                       A string is a cell from erb_native_text(), copied into a JS string. Either way, the strings
+ *                       are let go of.
  *
  * @return false when the runtime can't take it now: no app is loaded, or a native function is posting from inside
  *         its call. Post it again next frame. Also false when @p native isn't an event.
