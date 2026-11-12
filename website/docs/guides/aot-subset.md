@@ -93,9 +93,9 @@ while the code that breaks it is still one line.
   callbacks, but not a setter: pass a callback that calls it. `<C.Consumer>` is not supported.
 - An effect runs after the render, as React's does, and what it sets is drawn at once. One that keeps changing what
   it depends on stops the app after 50 passes, where React reports an update loop.
-- `useHostValue(initial)` is Flow B's way to feed host data (a sensor, a clock) into the app: the
-  compiler lists it as a package input, and the host sets it with `erb_input_set_int`. The
-  [RP2040 guide](./boards/rp2040.md) shows it driving a step counter.
+- Host data (a sensor, a clock) reaches the app through a [native module](./native-modules.md), which the
+  package lists as imports and events the runtime matches at load. `useHostValue(initial)` is still there for a
+  single number: the compiler lists it as a package input, and the host sets it with `erb_input_set_int`.
 - `.map` over list state builds a pool of rows, sized by `ER_AOT_LIST_CAP` (16 by default, lower it
   on a tight board). A list state holds objects of strings, numbers and booleans, nested objects
   included, or plain numbers, strings, or booleans. Its fields are those of its initial items, and an

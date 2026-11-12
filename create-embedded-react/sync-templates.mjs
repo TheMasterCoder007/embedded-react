@@ -78,12 +78,13 @@ if (!existsSync(DEMOS_DIR)) {
   process.exit(1);
 }
 
-// A demo is any ../demos/<name> with an index.jsx entry (the same rule the in-repo build tools use).
+// A demo is any ../demos/<name> with an index.jsx or index.tsx entry (the same rule the in-repo build tools use).
 const demos = readdirSync(DEMOS_DIR, {withFileTypes: true})
   .filter(
     entry =>
       entry.isDirectory() &&
-      existsSync(join(DEMOS_DIR, entry.name, 'index.jsx')),
+      (existsSync(join(DEMOS_DIR, entry.name, 'index.jsx')) ||
+        existsSync(join(DEMOS_DIR, entry.name, 'index.tsx'))),
   )
   .map(entry => entry.name);
 

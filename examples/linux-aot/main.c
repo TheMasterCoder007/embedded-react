@@ -30,6 +30,7 @@
 
 #define SDL_MAIN_HANDLED
 
+#include "desktop_natives.h"
 #include "er_scene.h"
 #include "erb_runtime.h"
 #include "native_renderer.h"
@@ -213,6 +214,8 @@ int main(int argc, char** argv)
         .screen_width = (uint16_t)physical_width,
         .screen_height = (uint16_t)physical_height,
         .log = log_line,
+        .natives = desktop_natives,
+        .native_count = desktop_native_count,
     };
     ErbError load_error;
     const bool loaded = erb_load(package, package_bytes, &config, &load_error);
@@ -407,7 +410,8 @@ int main(int argc, char** argv)
     }
 
     bool running = true;
-    uint32_t previous_ticks = SDL_GetTicks();
+    const uint32_t start_ticks = SDL_GetTicks();
+    uint32_t previous_ticks = start_ticks;
     while (running)
     {
         SDL_Event event;
@@ -438,6 +442,7 @@ int main(int argc, char** argv)
         const uint32_t delta_ms = now - previous_ticks;
         embedded_renderer_tick(delta_ms);
         erb_tick(delta_ms); /* advance app timers (setInterval/setTimeout); no-op if the app has none */
+        desktop_natives_frame(now - start_ticks, erb_native_post);
         previous_ticks = now;
     }
 

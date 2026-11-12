@@ -9,7 +9,7 @@ touch, QMI8658 IMU, 4 MB flash. The round 1.28" sibling (GC9A01A, 240×240) shar
 chip; the guide says what to change.
 
 **Guide:** [embedded-react.dev/guides/boards/rp2040](https://embedded-react.dev/guides/boards/rp2040)
-covers the build, how the sensors reach the app through `useHostValue`, tuning for your unit,
+covers the build, how the sensors reach the app through native modules, tuning for your unit,
 bring-up debugging, and the pinout.
 
 ## Build
@@ -37,7 +37,8 @@ npx embedded-react pack --board rp2040-touch-lcd-1.69
 To send a package on every save instead, build the firmware with `-DER_HOTRELOAD=1` and run
 `npx embedded-react dev --device PORT --aot`.
 
-`main.c` runs the frame loop and feeds the pedometer and tilt into the app; `board.c` owns the panel,
-touch, and IMU; `pedometer.c` turns accelerometer peaks into steps. `-DER_BOARD_DEBUG=1` prints a 1 Hz
+`main.c` runs the frame loop and hands the pedometer and tilt to `native_modules.c`, which registers the
+watch face's native modules and posts their events; `board.c` owns the panel, touch, and IMU; `pedometer.c` turns
+accelerometer peaks into steps. `-DER_BOARD_DEBUG=1` prints a 1 Hz
 heartbeat, `=2` also holds a color-bar test pattern at boot. `-DER_BOARD_CRASH_TEST=1` forces a hard fault 5 s after
 boot and `=2` a hang, to check the error screen after the reset.

@@ -35,6 +35,8 @@
 
 #define SDL_MAIN_HANDLED
 
+#include "desktop_natives.h"
+#include "er_runtime.h"
 #include "host.h"
 
 #include <SDL2/SDL.h>
@@ -81,7 +83,13 @@ int main(int argc, char** argv)
         screen_height = SDL_atoi(value);
     }
 
-    const ErHostConfig config = {"embedded-react — desktop demo", screen_width, screen_height};
+    const ErHostConfig config = {
+        .title = "embedded-react — desktop demo",
+        .width = screen_width,
+        .height = screen_height,
+        .natives = desktop_natives,
+        .native_count = desktop_native_count,
+    };
     ErHost host;
     if (!er_host_start(&config, &host))
     {
@@ -115,7 +123,11 @@ int main(int argc, char** argv)
     }
     else
     {
-        er_host_run(&host);
+        const uint32_t start_ms = SDL_GetTicks();
+        while (er_host_step(&host))
+        {
+            desktop_natives_frame(SDL_GetTicks() - start_ms, er_runtime_native_post);
+        }
     }
     er_host_shutdown(&host);
     return 0;

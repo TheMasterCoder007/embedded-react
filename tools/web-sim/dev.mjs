@@ -44,7 +44,10 @@ const demo =
   'watch-face';
 
 const demoDir = resolve(REPO, 'demos', demo);
-const entry = resolve(demoDir, 'index.jsx');
+const {demoFile} = await import(
+  pathToFileURL(resolve(PACKAGE_DIR, 'aot/demo-file.mts')).href
+);
+const entry = demoFile(demoDir, 'index');
 if (!existsSync(entry)) {
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   process.exit(1);

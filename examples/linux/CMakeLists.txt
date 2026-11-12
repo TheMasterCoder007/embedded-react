@@ -63,7 +63,7 @@ add_subdirectory(
 # exe. This is the end-to-end "JSX on embedded" preview with only the backend swapped to SDL, and it
 # mirrors how the MCU loads a separately-uploaded config (peer to examples/esp32/esp32-s3).
 # ---------------------------------------------------------------------------
-add_executable(embedded-react-desktop main.c host.c)
+add_executable(embedded-react-desktop main.c host.c desktop_natives.c)
 
 target_link_libraries(embedded-react-desktop
         PRIVATE

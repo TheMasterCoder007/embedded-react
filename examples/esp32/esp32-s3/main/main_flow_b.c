@@ -30,6 +30,7 @@
 #include "erb_runtime.h"
 #include "esp32_lcd_backend.h"
 #include "host_common.h"
+#include "native_modules.h"
 #include "native_renderer.h"
 
 #if ER_HOTRELOAD
@@ -186,6 +187,8 @@ static void load_package(bool touch)
         .arena_bytes = sizeof(s_arena),
         .screen_width = SCREEN_WIDTH,
         .screen_height = SCREEN_HEIGHT,
+        .natives = native_modules,
+        .native_count = native_module_count,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -260,6 +263,7 @@ static void run_app(void)
     }
 
     show_reset_fault(touch);
+    native_modules_init();
     load_package(touch);
 
     /* Frame loop. The press state machine turns GT911 snapshots into down/move/up for the engine. */
@@ -306,6 +310,7 @@ static void run_app(void)
         embedded_renderer_tick(delta_ms);
         erb_tick(delta_ms);
         previous_ms = now;
+        native_modules_frame(now, erb_native_post);
 
 #if ER_HOTRELOAD
         reload_poll();

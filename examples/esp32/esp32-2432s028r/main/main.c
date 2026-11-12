@@ -32,6 +32,7 @@
 #include "erb_package_slots_esp32.h"
 #include "erb_runtime.h"
 #include "esp32_spi_lcd_backend.h"
+#include "native_modules.h"
 #include "native_renderer.h"
 
 #if ER_HOTRELOAD
@@ -148,6 +149,8 @@ static void load_package(bool touch)
         .arena_bytes = sizeof(s_arena),
         .screen_width = BOARD_LCD_WIDTH,
         .screen_height = BOARD_LCD_HEIGHT,
+        .natives = native_modules,
+        .native_count = native_module_count,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -252,6 +255,7 @@ static void run_app(void)
         embedded_renderer_tick(delta_ms);
         erb_tick(delta_ms); /* advance the app's timers (setInterval/setTimeout); no-op if the app has none */
         previous_ms = now;
+        native_modules_frame(now);
 
 #if ER_HOTRELOAD
         reload_poll();

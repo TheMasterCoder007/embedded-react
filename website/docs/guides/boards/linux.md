@@ -68,7 +68,10 @@ examples/linux-aot/build/embedded-react-desktop-aot         # or pass a package'
 The window is 800×480 unless `ER_AOT_SCREEN_W` and `ER_AOT_SCREEN_H` say otherwise, and its size picks
 the package's layout. The host reads the package when it starts, so changing the app needs no rebuild.
 `main.c` is the reference Flow B host: register the backend, call `erb_load()` once, then loop over
-input, `er_commit()`, present and tick. The [CYD](./esp32-cyd.md) and [RP2040](./rp2040.md) firmware
+input, `er_commit()`, present and tick.
+
+Both desktop hosts register the watch face demo's `chip` [native module](../native-modules.md), from
+`examples/linux/desktop_natives.c`, so its package loads and the parity harness can compare the two flows. The [CYD](./esp32-cyd.md) and [RP2040](./rp2040.md) firmware
 follow the same shape.
 
 ## Why keep a desktop host

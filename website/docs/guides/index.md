@@ -1,6 +1,6 @@
 ---
 title: 'Guides'
-description: 'Board-by-board setup, hot reload, the AOT subset, performance and memory.'
+description: 'Board-by-board setup, hot reload, the AOT subset, native modules, performance and memory.'
 ---
 
 The concepts pages explain how Embedded React works. These guides are about getting a particular
@@ -28,6 +28,8 @@ Not sure which flow your board wants? [Two flows](../concepts/two-flows.md) has 
   a board over USB, and how state survives each.
 - [The AOT subset](./aot-subset.md): what the ahead-of-time compiler accepts, what it refuses and
   how it tells you, for apps headed to a board without external RAM.
+- [Native modules](./native-modules.md): give an app a sensor, a radio or anything else the firmware does in C,
+  with the same TypeScript interface in both flows and a mock in the simulator.
 - [The demo apps](./demos.md): the thermostat and the watch face, what each exercises, and what it
   took to keep both compiling under Flow B.
 

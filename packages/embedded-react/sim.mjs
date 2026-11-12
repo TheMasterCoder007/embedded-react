@@ -35,6 +35,7 @@ import {textSignature} from './assets/glyph-coverage.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {transformPersist} from './persist-transform.mjs';
 import {loadAppFile} from './aot/app-file-loader.mts';
+import {demoFile} from './aot/demo-file.mts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
 const repoRoot = resolve(here, '../..');
@@ -47,7 +48,7 @@ const packPath = resolve(distDir, 'assets.pack');
 
 const demo = process.argv[2] || process.env.DEMO || 'thermostat';
 const demoDir = resolve(demosDir, demo);
-const entry = resolve(demoDir, 'index.jsx');
+const entry = demoFile(demoDir, 'index');
 if (!existsSync(entry)) {
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   process.exit(1);

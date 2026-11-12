@@ -42,7 +42,9 @@ set(ER_RUNTIME_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../runtime ${CMAKE_CURRENT_BINARY_DIR}/runtime)
 
 # The package is read at run time, so changing the app needs no rebuild.
-add_executable(embedded-react-desktop-aot main.c)
+# The native modules are the Flow A desktop host's, so both flows call the same C.
+add_executable(embedded-react-desktop-aot main.c ../linux/desktop_natives.c)
+target_include_directories(embedded-react-desktop-aot PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../linux)
 target_compile_definitions(embedded-react-desktop-aot PRIVATE
         ER_DEFAULT_PACKAGE="${CMAKE_CURRENT_SOURCE_DIR}/../../packages/embedded-react/dist/app.erpkg")
 target_link_libraries(embedded-react-desktop-aot PRIVATE er-backend-sdl erb-runtime)

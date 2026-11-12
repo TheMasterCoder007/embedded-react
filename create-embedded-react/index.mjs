@@ -75,14 +75,16 @@ function demoTemplatesRoot() {
   return null;
 }
 
-/** Discover the demo templates (any <root>/<name>/index.jsx), reading each package.json for its blurb. */
+/** Discover the demo templates (any <root>/<name>/index.jsx or index.tsx), reading each package.json for its blurb. */
 function demoTemplates() {
   const root = demoTemplatesRoot();
   if (!root) return [];
   return readdirSync(root, {withFileTypes: true})
     .filter(
       entry =>
-        entry.isDirectory() && existsSync(join(root, entry.name, 'index.jsx')),
+        entry.isDirectory() &&
+        (existsSync(join(root, entry.name, 'index.jsx')) ||
+          existsSync(join(root, entry.name, 'index.tsx'))),
     )
     .map(entry => {
       let description = '';
@@ -96,7 +98,7 @@ function demoTemplates() {
       }
       return {
         name: entry.name,
-        language: 'js',
+        language: existsSync(join(root, entry.name, 'index.tsx')) ? 'ts' : 'js',
         dir: join(root, entry.name),
         description,
       };

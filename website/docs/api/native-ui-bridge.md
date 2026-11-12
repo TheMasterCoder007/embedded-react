@@ -86,9 +86,9 @@ for (;;) {
 `malloc_functions` (to place the heap in external RAM; its `js_malloc_usable_size` must return real
 block sizes or the collector never runs), `max_stack_size`
 (set below the host task's real stack so deep recursion is a JavaScript error rather than a crash),
-`install_persist`, `install_host_globals` (a hook to add objects of your own, as the ESP32-S3
-example does for WiFi), `natives`, `native_count` and `native_context` (the C functions behind the app's
-[native modules](./hooks.md#nativemodule), the same table Flow B takes), and `extra_intrinsics` (opt in to
+`install_persist`, `install_host_globals` (a hook to add JavaScript objects of your own, which only Flow A has),
+`natives`, `native_count` and `native_context` (the C functions behind the app's
+[native modules](../guides/native-modules.md), the same table Flow B takes), and `extra_intrinsics` (opt in to
 `Date` objects, `Proxy`, typed arrays, `WeakRef`, `BigInt` or `eval`, which the default profile leaves out).
 `er_runtime_native_post(index, values)` posts one of the table's [events](./hooks.md#usenativeevent) to the app,
 from the frame loop, as `erb_native_post()` does in Flow B.

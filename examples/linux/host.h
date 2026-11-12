@@ -25,6 +25,8 @@
  * + reload.
  */
 
+#include "erb_native.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -39,10 +41,12 @@ struct SDL_Renderer;
 /** @brief Window configuration passed to er_host_start. */
 typedef struct
 {
-    const char* title; /**< Window title (NULL → a default). */
-    int width;         /**< Logical window width in pixels. */
-    int height;        /**< Logical window height in pixels. */
-    bool persist;      /**< Install __erPersist so usePersistentState survives reload (simulator only). */
+    const char* title;        /**< Window title (NULL → a default). */
+    int width;                /**< Logical window width in pixels. */
+    int height;               /**< Logical window height in pixels. */
+    bool persist;             /**< Install __erPersist so usePersistentState survives reload (simulator only). */
+    const ErbNative* natives; /**< Native modules the app may use (NULL = none; the simulator runs mocks). */
+    uint16_t native_count;
 } ErHostConfig;
 
 /**

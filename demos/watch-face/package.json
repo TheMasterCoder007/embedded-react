@@ -9,10 +9,15 @@
     "dev:device": "embedded-react dev --device",
     "export": "embedded-react export --out sim-export",
     "build": "embedded-react build",
-    "build:aot": "embedded-react build --aot"
+    "build:aot": "embedded-react build --aot",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "embedded-react": "^0.20.0",
     "react": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.1",
+    "typescript": "^5.5.0"
   }
 }

@@ -26,7 +26,7 @@ npm create embedded-react@latest -- --list
 | `starter` | The responsive starter (the default) |
 | `starter-ts` | The starter in TypeScript (same as `--ts`) |
 | `thermostat` | A thermostat with a native dial and a 14-day weather panel |
-| `watch-face` | A digital watch face and a bubble level, sized for a 240×280 panel |
+| `watch-face` | A digital watch face and a bubble level on native modules, sized for a 240×280 panel |
 
 Every template scaffolds the same way: `npm run dev` for the simulator, `npm run dev:device` for hot
 reload on a board, `npm run build` for the device artifact, `npm run export` for a shareable static

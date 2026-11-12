@@ -52,6 +52,13 @@ assets/            images & fonts — import them in code and they're baked auto
 Types for the `embedded-react` API ship with the package itself, so `import {View} from 'embedded-react'`
 is typed out of the box.
 
+## Native modules
+
+To reach what the UI can't do on its own (a sensor, the radio, storage), declare a native module: a TypeScript
+interface the firmware implements in C, with a mock beside it for the simulator. `nativeModule`, `useNativeEvent`
+and the `Int` and `Int64` types come from `embedded-react`. See
+[Native modules](https://embedded-react.dev/guides/native-modules).
+
 ## On real hardware
 
 The same `App.tsx` runs on a device through the C engine — interpreted on QuickJS (Flow A) or compiled

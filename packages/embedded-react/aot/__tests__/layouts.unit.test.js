@@ -18,7 +18,12 @@ import {readFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, expect, it, vi} from 'vitest';
-import {bakeSvgArtifacts, compilePackage} from '../compile.mts';
+import {
+  bakeSvgArtifacts,
+  compilePackage,
+  readNativeInterfaces,
+} from '../compile.mts';
+import {demoFile} from '../demo-file.mts';
 import {
   MAX_LAYOUTS,
   checkOverSizes,
@@ -294,10 +299,12 @@ export function App() {
     ['watch-face', ['240x320']],
   ])('compiles the %s at every layout', async (demo, layouts) => {
     const demoDirectory = resolve(demosDirectory, demo);
-    const source = readFileSync(resolve(demoDirectory, 'App.jsx'), 'utf8');
+    const appPath = demoFile(demoDirectory, 'App');
+    const source = readFileSync(appPath, 'utf8');
     const result = compilePackage(source, demo, {
-      filename: resolve(demoDirectory, 'App.jsx'),
+      filename: appPath,
       svgArtifacts: await bakeSvgArtifacts(source, demoDirectory),
+      nativeInterfaces: readNativeInterfaces(source, demoDirectory),
     });
     expect(sizesOf(result)).toEqual(layouts);
     // The S3, the CYD, the RP2040 and a size nothing names each have a layout.

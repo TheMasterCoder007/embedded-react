@@ -32,6 +32,7 @@
 #include "er_scene.h"
 #include "erb_package_slots.h"
 #include "erb_runtime.h"
+#include "native_modules.h"
 #include "native_renderer.h"
 #include "pedometer.h"
 #include "pico_spi_lcd_backend.h"
@@ -120,9 +121,6 @@ static uint32_t now_ms(void)
 #define LEVEL_FULL_TILT 4096.0f
 #define LEVEL_SMOOTHING 0.15f
 #define LEVEL_PERIOD_MS 33u
-
-/** @brief Out of the dot's range, so the first reading is always pushed. */
-#define DOT_UNSET 1000
 
 /* A forced failure, to check the error screen on hardware: `-DER_BOARD_CRASH_TEST=1` hard faults 5 s after boot, and
  * =2 hangs. Each shows the error screen after the reset, naming it, then the app comes back and it happens again. */
@@ -398,6 +396,8 @@ static void load_package(bool touch)
         .arena_bytes = sizeof(s_arena),
         .screen_width = BOARD_LCD_WIDTH,
         .screen_height = BOARD_LCD_HEIGHT,
+        .natives = native_modules,
+        .native_count = native_module_count,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -500,8 +500,9 @@ int main(void)
         printf("touch init failed — UI renders but input is disabled\n");
     }
 
-    /* IMU for real step counting (shares I2C1 with touch). If absent, steps just stay at 0. */
+    /* IMU for real step counting (shares I2C1 with touch). If absent, the app's steps and level stay unset. */
     const bool imu = board_imu_init();
+    native_modules_init();
     Pedometer pedometer;
     pedometer_reset(&pedometer);
 
@@ -511,15 +512,6 @@ int main(void)
     watchdog_enable(ER_WATCHDOG_BOOT_MS, true);
 
     load_package(touch);
-
-    /* The sensors reach the app through useHostValue. A package without one of these just ignores it. */
-    int input_steps = erb_input_find("steps");
-    int input_dot_x = erb_input_find("dotx");
-    int input_dot_y = erb_input_find("doty");
-    /* What was last pushed into the app, so a new one from a hot reload can be given it again. */
-    uint32_t last_steps = 0;
-    int last_dot_x = DOT_UNSET;
-    int last_dot_y = DOT_UNSET;
 
     /* Present the first frame while the backlight is still off, THEN light it — so the panel goes
      * straight from black to the watch face, with no flash of noise or blank. (The backlight was held
@@ -575,20 +567,14 @@ int main(void)
             }
         }
 
-        /* Real step counting: poll the accelerometer, run the pedometer, and push the total into the app
-         * (the useHostValue steps input) only when it changes — setting it runs the app's update, which
-         * re-applies dependent nodes, so there's no point re-running it every frame. */
+        /* Real step counting: poll the accelerometer, run the pedometer, and hand the total to the motion module,
+         * which posts it to the app only when it changes: a post runs the app's update. */
         if (imu)
         {
             int16_t accel_x = 0, accel_y = 0, accel_z = 0;
             if (board_imu_read_accel(&accel_x, &accel_y, &accel_z))
             {
-                const uint32_t steps = pedometer_update(&pedometer, accel_x, accel_y, accel_z, frame_start);
-                if (steps != last_steps)
-                {
-                    last_steps = steps;
-                    erb_input_set_int(input_steps, (int32_t)steps);
-                }
+                native_modules_set_steps(pedometer_update(&pedometer, accel_x, accel_y, accel_z, frame_start));
             }
 
             /* Bubble level → the showcase page. Reuse the accel sample just read: low-pass each axis to a
@@ -609,16 +595,7 @@ int main(void)
                 int dot_y = (int)(filtered_x * level_radius / LEVEL_FULL_TILT);
                 dot_x = dot_x < -level_radius ? -level_radius : (dot_x > level_radius ? level_radius : dot_x);
                 dot_y = dot_y < -level_radius ? -level_radius : (dot_y > level_radius ? level_radius : dot_y);
-                if (dot_x != last_dot_x)
-                {
-                    last_dot_x = dot_x;
-                    erb_input_set_int(input_dot_x, dot_x);
-                }
-                if (dot_y != last_dot_y)
-                {
-                    last_dot_y = dot_y;
-                    erb_input_set_int(input_dot_y, dot_y);
-                }
+                native_modules_set_tilt(dot_x, dot_y);
             }
         }
 
@@ -648,8 +625,9 @@ int main(void)
         const uint32_t now = now_ms();
         const uint32_t delta_ms = now - previous_ms;
         embedded_renderer_tick(delta_ms);
-        erb_tick(delta_ms); /* advance app timers — the watch face's 1 Hz movement lives here */
+        erb_tick(delta_ms); /* advance app timers */
         previous_ms = now;
+        native_modules_frame(now); /* the chip's second drives the watch face's clock */
 
 #ifdef ER_BOARD_CRASH_TEST
         crash_test(now - boot_ms);
@@ -669,12 +647,7 @@ int main(void)
         }
         if (started)
         {
-            input_steps = erb_input_find("steps");
-            input_dot_x = erb_input_find("dotx");
-            input_dot_y = erb_input_find("doty");
-            last_steps = 0;
-            last_dot_x = DOT_UNSET;
-            last_dot_y = DOT_UNSET;
+            native_modules_repost();
         }
 #else
         if (used < ER_TARGET_FRAME_MS)
