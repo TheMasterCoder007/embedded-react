@@ -125,6 +125,35 @@ const sensors: NativeMock<Sensors> = emit => ({
 export default sensors;
 ```
 
+### Optional modules
+
+```tsx
+import {Pressable, Text, nativeModule} from 'embedded-react';
+import type {Int} from 'embedded-react';
+
+interface Wifi {
+  connect(channel: Int): boolean;
+  events: {found(rssi: Int): void};
+}
+
+const Wifi = nativeModule.optional<Wifi>('wifi', 1);
+
+export function App() {
+  return Wifi.available ? <WifiPage /> : <Text>No Wi-Fi on this board</Text>;
+}
+```
+
+`nativeModule.optional` declares a module only some boards have. A package that uses it loads on a board without
+it, and `Wifi.available` says whether the firmware has every method and event of the interface. It is set when the
+app loads and never changes, so render can read it to leave a page out.
+
+Check `available` before calling a method: a call to a module that isn't there stops the app, with the error screen
+naming the method. A `useNativeEvent` of it is fine, and its events never arrive.
+
+Flow B lists every method and event of an optional module in the package, called or not, so `available` means the
+same as in Flow A, which looks them all up. They count toward the package's 32 imports and 32 events. In the
+simulators, a module is there when it has a mock.
+
 ## useNativeEvent
 
 ```tsx

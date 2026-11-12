@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 11;
+export const FORMAT_MINOR = 12;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -504,6 +504,7 @@ export const OPCODES: readonly OpcodeInfo[] = [
   ['REMOVE', 'abx', 1],
   ['SCMP', 'abc', 1],
   ['SPLIT', 'abc', 2],
+  ['AVAIL', 'abx', 1],
 ];
 
 /*----------------------------------------------------------------------------------------------------------------------

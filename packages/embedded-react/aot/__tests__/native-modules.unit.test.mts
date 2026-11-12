@@ -19,7 +19,12 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, it, expect} from 'vitest';
 import {compilePackage, readNativeInterfaces} from '../compile.mts';
-import {FunctionKind, Table, ValueType} from '../compiler/package/format.mts';
+import {
+  FunctionKind,
+  NONE,
+  Table,
+  ValueType,
+} from '../compiler/package/format.mts';
 import {addNativeSignatures} from '../compiler/native-modules.mts';
 import {OP} from '../compiler/package/bytecode.mts';
 import type {CompileOptions} from '../compiler/options.mts';
@@ -106,17 +111,22 @@ function readProgram(bytes: Uint8Array) {
     {length: imports ? imports.length / 8 : 0},
     (_, index) => {
       const at = imports!.offset + index * 8;
-      return `${string(u16(at))} v${u16(at + 2)} ${string(u16(at + 4))}`;
+      const module = u16(at + 6);
+      return (
+        `${string(u16(at))} v${u16(at + 2)} ${string(u16(at + 4))}` +
+        (module === NONE ? '' : ` (optional ${module})`)
+      );
     },
   );
   const nativeEvents = tables.get(Table.nativeEvents);
   const eventList = Array.from(
-    {length: nativeEvents ? nativeEvents.length / 8 : 0},
+    {length: nativeEvents ? nativeEvents.length / 12 : 0},
     (_, index) => {
-      const at = nativeEvents!.offset + index * 8;
+      const at = nativeEvents!.offset + index * 12;
       return {
         event: `${string(u16(at))} v${u16(at + 2)} ${string(u16(at + 4))}`,
         handler: u16(at + 6),
+        module: u16(at + 8),
       };
     },
   );
@@ -626,5 +636,157 @@ describe('native events it refuses', () => {
         {listCap: 33},
       ),
     ).toMatch(/subscribes to native events 33 times, but a package holds 32/);
+  });
+});
+
+const WIFI =
+  'interface Wifi {\n' +
+  '  connect(channel: Int): boolean;\n' +
+  '  strength(): Int;\n' +
+  '  name(): string;\n' +
+  '  events: {found(rssi: Int): void; lost(): void};\n' +
+  '}\n' +
+  "const Wifi = nativeModule.optional<Wifi>('wifi', 3);\n";
+
+/** An app with the Sensors module and the optional Wifi module. */
+const optionalApp = (body: string, children = '', handler = '') =>
+  eventsApp(
+    body,
+    `${children}<Pressable onPress={() => { ${handler} }}><Text>go</Text></Pressable>`,
+    WIFI,
+  );
+
+describe('optional native modules', () => {
+  it('lists every method and event of an optional module, used or not, with its module', () => {
+    const {imports, events} = readProgram(
+      compile(
+        optionalApp(
+          "  useNativeEvent(Wifi, 'found', rssi => setN(rssi));\n" +
+            "  useNativeEvent(Sensors, 'tick', () => setN(value => value + 1));\n",
+          '',
+          'Sensors.start(); setOn(Wifi.connect(n));',
+        ),
+      ).program,
+    );
+    expect(imports).toEqual([
+      'wifi.connect v3 b:i (optional 0)',
+      'wifi.strength v3 i: (optional 0)',
+      'sensors.start v2 v:',
+    ]);
+    expect(
+      events.map(entry => [entry.event, entry.handler === NONE, entry.module]),
+    ).toEqual([
+      ['wifi.found v3 v:i', false, 0],
+      ['sensors.tick v2 v:', false, NONE],
+      ['wifi.lost v3 v:', true, 0],
+    ]);
+  });
+
+  it('reads available once at boot, into a value render and handlers read', () => {
+    const {functions} = readProgram(
+      compile(
+        optionalApp(
+          '',
+          "{Wifi.available && <Text>wifi</Text>}<Text>{Wifi.available ? 'on' : 'off'}</Text>",
+          'if (Wifi.available) { setN(Wifi.strength()); }',
+        ),
+      ).program,
+    );
+    const reads = functions.filter(programFunction =>
+      programFunction.ops.some(op => op.name === 'AVAIL'),
+    );
+    expect(reads.map(programFunction => programFunction.kind)).toEqual([
+      FunctionKind.boot,
+    ]);
+    expect(reads[0].ops.find(op => op.name === 'AVAIL')!.bx).toBe(0);
+  });
+
+  it('numbers the optional modules in the order they are declared', () => {
+    const source = optionalApp(
+      '',
+      '{Gps.available && <Text>gps</Text>}',
+    ).replace(
+      WIFI,
+      WIFI +
+        'interface Gps { fix(): boolean; }\n' +
+        "const Gps = nativeModule.optional<Gps>('gps', 1);\n",
+    );
+    const {imports, functions} = readProgram(compile(source).program);
+    expect(imports).toContain('gps.fix v1 b: (optional 1)');
+    const boot = functions.find(
+      programFunction => programFunction.kind === FunctionKind.boot,
+    )!;
+    expect(boot.ops.find(op => op.name === 'AVAIL')!.bx).toBe(1);
+  });
+
+  it('gives Flow A the signatures of nativeModule.optional too', () => {
+    const signed = addNativeSignatures(optionalApp(''), {});
+    expect(signed).toContain(
+      "nativeModule.optional<Wifi>('wifi', 3, " +
+        JSON.stringify({
+          methods: {
+            connect: 'b:i',
+            strength: 'i:',
+            name: {
+              reason: "returns a string, which native modules don't pass yet",
+            },
+          },
+          events: {found: 'v:i', lost: 'v:'},
+        }) +
+        ')',
+    );
+  });
+});
+
+describe('optional native modules it refuses', () => {
+  it('refuses available on a module the firmware must have', () => {
+    expect(
+      failure(eventsApp('', '{Sensors.available && <Text>s</Text>}')),
+    ).toMatch(/Sensors is always available, since the firmware must have it/);
+  });
+
+  it('refuses a method named available', () => {
+    expect(
+      failure(
+        optionalApp('').replace(
+          'strength(): Int;',
+          'strength(): Int;\n  available(): boolean;',
+        ),
+      ),
+    ).toMatch(/Wifi has a method named available/);
+  });
+
+  it('refuses an optional module with nothing to look for', () => {
+    expect(
+      failure(
+        optionalApp('').replace(
+          WIFI,
+          'interface Wifi { name(): string; }\n' +
+            "const Wifi = nativeModule.optional<Wifi>('wifi', 3);\n",
+        ),
+      ),
+    ).toMatch(/"wifi" has no methods or events to look for/);
+  });
+
+  it('refuses nativeModule.optional() inside a component', () => {
+    expect(
+      failure(
+        eventsApp(
+          "  const Gps = nativeModule.optional<Wifi>('gps', 1);\n",
+          '',
+          WIFI,
+        ),
+      ),
+    ).toMatch(/nativeModule\(\) is called outside module level/);
+  });
+
+  it('counts every method of an optional module toward the imports a package holds', () => {
+    const methods = Array.from({length: 33}, (_, index) => `m${index}(): Int;`);
+    const source = optionalApp('').replace(
+      WIFI,
+      `interface Wifi { ${methods.join(' ')} }\n` +
+        "const Wifi = nativeModule.optional<Wifi>('wifi', 3);\n",
+    );
+    expect(failure(source)).toMatch(/at most 32 native methods/);
   });
 });

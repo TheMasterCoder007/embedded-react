@@ -28,6 +28,9 @@
 // The simulators: the bundler also passes the module's mock, which stands in for the firmware. Its values are
 // converted as the bridge converts them, so the app sees what it would on a board. A mock that posts events is a
 // function, which is given `emit` and returns the methods.
+//
+// nativeModule.optional: a module only some boards have. Its `available` is whether the firmware has every method
+// and event, and in the simulators whether it has a mock.
 
 import {useEffect, useRef} from 'react';
 
@@ -107,19 +110,30 @@ function mockMethod(implementation, name, method, signature, calls) {
   };
 }
 
-// @param {string} name  The module's name, as the firmware registers it.
-// @param {number} version  Its version.
-// @param {{methods: Record<string, string | {reason: string}>, events: Record<string, string | {reason: string}>}}
-//        signatures  Each method's and event's signature, or why it can't be used; the bundler passes it.
-// @param {object | Function | null} [mock]  In the simulators, the module's mock (its default export), or null when
-//                                            it has none.
-export function nativeModule(name, version, signatures, mock) {
+// Where the firmware has each of a module's methods and events, by name: -1 for one it doesn't have.
+function lookUp(host, name, version, signatures, finder) {
+  const indices = new Map();
+  for (const member of Object.keys(signatures)) {
+    const signature = signatures[member];
+    if (typeof signature === 'string') {
+      indices.set(
+        member,
+        host ? host[finder](`${name}.${member}`, version, signature) : -1,
+      );
+    }
+  }
+  return indices;
+}
+
+// The module nativeModule() and nativeModule.optional() return. An optional module that isn't there has methods
+// that throw, as a call to one stops the app in Flow B, and events that never arrive.
+function declareModule(name, version, signatures, mock, optional) {
   if (!signatures) {
     throw new Error(
       `native module "${name}" has no signatures; build the app with the embedded-react CLI, which reads its interface`,
     );
   }
-  if (mock === null) {
+  if (mock === null && !optional) {
     throw new Error(
       `native module "${name}" has no mock for the simulator; add ${name}.mock.ts beside its interface`,
     );
@@ -129,6 +143,34 @@ export function nativeModule(name, version, signatures, mock) {
   const events = new Map();
   MODULE_EVENTS.set(module, {name, events});
 
+  // On a board, every method and event is looked up as the app loads; in the simulators, the mock is the firmware.
+  const onBoard = mock === undefined;
+  const methodIndices = onBoard
+    ? lookUp(host, name, version, signatures.methods, 'find')
+    : new Map();
+  const eventIndices = onBoard
+    ? lookUp(host, name, version, signatures.events, 'findEvent')
+    : new Map();
+  const missing = [...eventIndices, ...methodIndices].find(
+    ([, index]) => index < 0,
+  );
+  if (missing && !optional) {
+    const [member] = missing;
+    const signature = eventIndices.has(member)
+      ? signatures.events[member]
+      : signatures.methods[member];
+    throw new Error(
+      `missing native module: ${name}.${member} (version ${version}, signature "${signature}")`,
+    );
+  }
+  const available = mock !== null && !missing;
+  if (optional) {
+    Object.defineProperty(module, 'available', {
+      value: available,
+      enumerable: true,
+    });
+  }
+
   // The events first, so a mock is given an emit that knows them.
   for (const event of Object.keys(signatures.events)) {
     const signature = signatures.events[event];
@@ -137,16 +179,11 @@ export function nativeModule(name, version, signatures, mock) {
       events.set(event, {qualifiedName, reason: signature.reason});
       continue;
     }
-    if (mock) {
+    if (!onBoard || !available) {
       events.set(event, {qualifiedName, signature, handlers: new Set()});
       continue;
     }
-    const index = host ? host.findEvent(qualifiedName, version, signature) : -1;
-    if (index < 0) {
-      throw new Error(
-        `missing native module: ${qualifiedName} (version ${version}, signature "${signature}")`,
-      );
-    }
+    const index = eventIndices.get(event);
     if (!HANDLERS_BY_INDEX.has(index)) {
       HANDLERS_BY_INDEX.set(index, new Set());
     }
@@ -190,6 +227,15 @@ export function nativeModule(name, version, signatures, mock) {
       };
       continue;
     }
+    if (!available) {
+      module[method] = () => {
+        throw new Error(
+          `missing native module: ${qualifiedName} (the optional module "${name}" isn't available; ` +
+            'read its available before calling it)',
+        );
+      };
+      continue;
+    }
     if (implementation) {
       module[method] = mockMethod(
         implementation,
@@ -200,16 +246,25 @@ export function nativeModule(name, version, signatures, mock) {
       );
       continue;
     }
-    const index = host ? host.find(qualifiedName, version, signature) : -1;
-    if (index < 0) {
-      throw new Error(
-        `missing native module: ${qualifiedName} (version ${version}, signature "${signature}")`,
-      );
-    }
-    module[method] = host.call.bind(host, index);
+    module[method] = host.call.bind(host, methodIndices.get(method));
   }
   return module;
 }
+
+// @param {string} name  The module's name, as the firmware registers it.
+// @param {number} version  Its version.
+// @param {{methods: Record<string, string | {reason: string}>, events: Record<string, string | {reason: string}>}}
+//        signatures  Each method's and event's signature, or why it can't be used; the bundler passes it.
+// @param {object | Function | null} [mock]  In the simulators, the module's mock (its default export), or null when
+//                                            it has none.
+export function nativeModule(name, version, signatures, mock) {
+  return declareModule(name, version, signatures, mock, false);
+}
+
+// A module only some boards have: it loads without the firmware's, and its `available` says whether it is there.
+// In the simulators, it is there when it has a mock. Takes what nativeModule() takes.
+nativeModule.optional = (name, version, signatures, mock) =>
+  declareModule(name, version, signatures, mock, true);
 
 // useNativeEvent — runs `handler` with an event's values each time the firmware posts it, while the component is
 // mounted. The handler may change from render to render; the latest one runs.

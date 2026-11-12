@@ -61,6 +61,7 @@ import {helperValueOf, returnedExpression} from './helper-values.mts';
 import {isObjectTree, propertyKey} from './records.mts';
 import {
   lowerNativeCall,
+  nativeAvailableOf,
   nativeCalleeOf,
   readsNativeModule,
 } from './native-modules.mts';
@@ -2327,6 +2328,8 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         expression,
         location,
       });
+      const available = nativeAvailableOf(node, environment);
+      if (available) return fixed(available);
       // `<list>.length` → the runtime count, of a filtered or sorted list too.
       if (prop === 'length') {
         const list =

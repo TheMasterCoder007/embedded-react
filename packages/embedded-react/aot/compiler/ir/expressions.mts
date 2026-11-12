@@ -329,6 +329,8 @@ export interface NativeImport {
   signature: string;
   params: NativeType[];
   result: NativeType | 'void';
+  /** The optional module it is part of, or null when the firmware must have it. */
+  module: number | null;
 }
 
 /** A call to a native method, with an argument for each of its parameters. */

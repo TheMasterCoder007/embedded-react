@@ -2024,11 +2024,12 @@ bool erb_native_post(int native, const int32_t* arguments)
     bool ran = false;
     for (uint32_t index = 0; index < g_erb.program.native_event_count && status == ERB_OK; index++)
     {
-        if (g_erb.program.event_natives[index] != (uint16_t)native)
+        const uint8_t* record = g_erb.program.native_events + index * ERB_NATIVE_EVENT_SIZE;
+        if (g_erb.program.event_natives[index] != (uint16_t)native
+            || erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT) == ERB_NONE)
         {
             continue;
         }
-        const uint8_t* record = g_erb.program.native_events + index * ERB_NATIVE_EVENT_SIZE;
         memset(&g_erb.event, 0, sizeof(g_erb.event));
         g_erb.in_vm = true;
         status = erb_vm_run(erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT), cells, NULL);

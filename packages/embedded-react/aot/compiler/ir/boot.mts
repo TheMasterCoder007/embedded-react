@@ -28,9 +28,13 @@ import type {IrType} from './types.mts';
 /** A panel dimension, as `screen` names it. */
 export type ScreenDimension = 'width' | 'height';
 
-/** What a boot slot is set from: a panel dimension, or an expression over earlier slots and constants. */
+/**
+ * What a boot slot is set from: a panel dimension, whether an optional native module is there, or an expression over
+ * earlier slots and constants.
+ */
 export type IrBootInit =
   | {kind: 'screen'; dimension: ScreenDimension}
+  | {kind: 'native'; module: number}
   | {kind: 'expr'; expression: IrExpr};
 
 /** A value worked out once at boot, from the panel size. */

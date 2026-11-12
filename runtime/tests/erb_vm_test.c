@@ -1178,6 +1178,46 @@ static void test_native_events(void)
     CHECK(erb_last_error()->status == ERB_ERROR_TRAP, "with its reason");
 }
 
+static void test_optional_modules(void)
+{
+    /* Module 0, wifi, is missing its method; module 1 is sensors.scale, which the firmware has. */
+    base();
+    TPkg* package = &s_package_spec;
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "wifi.connect";
+    package->strings[package->string_count++] = "i:i";
+    package->strings[package->string_count++] = "sensors.scale";
+    package->strings[package->string_count++] = "f:i";
+    package->strings[package->string_count++] = "sensors.idle";
+    package->strings[package->string_count++] = "v:";
+    package->imports[package->import_count++] = (TImport){name, 1, (uint16_t)(name + 1), 1};
+    package->imports[package->import_count++] = (TImport){(uint16_t)(name + 2), 1, (uint16_t)(name + 3), 2};
+    {
+        const uint8_t types[] = {ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(LOADI, 0, 99), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
+        const uint16_t handler = tpkg_function(package, ERB_FUNCTION_KIND_NATIVE_EVENT, 0, 0, types, 1, code, 3);
+        package->native_events[package->native_event_count++] =
+            (TNativeEvent){(uint16_t)(name + 4), 1, (uint16_t)(name + 5), handler, 1};
+    }
+    const uint8_t avail_types[] = {ERB_TYPE_BOOL};
+    const uint32_t wifi_code[] = {OP_ABX(AVAIL, 0, 0), OP_ABC(RET, 0, 0, 0)};
+    const uint32_t sensors_code[] = {OP_ABX(AVAIL, 0, 1), OP_ABC(RET, 0, 0, 0)};
+    const uint16_t wifi = helper(avail_types, 1, 0, ERB_TYPE_BOOL, wifi_code, 2);
+    const uint16_t sensors = helper(avail_types, 1, 0, ERB_TYPE_BOOL, sensors_code, 2);
+    const uint8_t call_types[] = {ERB_TYPE_INT, ERB_TYPE_INT};
+    const uint32_t connect_code[] = {OP_ABX(CALLN, 0, 1), OP_ABC(RET, 1, 0, 0)};
+    const uint16_t connect = helper(call_types, 2, 1, ERB_TYPE_INT, connect_code, 2);
+
+    CHECK(load(), "a package whose optional module is missing loads");
+    CHECK(call(wifi, 0, 0) == 0, "AVAIL says the missing module isn't there");
+    CHECK(call(sensors, 0, 0) == 1, "and the one the firmware has is");
+    CHECK(erb_native_post(NATIVE_IDLE, NULL) && slot_int(SLOT_COUNT) != 99,
+          "a missing module's event the firmware has never runs its handler");
+    call(connect, 1, 0);
+    CHECK(s_status == ERB_ERROR_IMPORT && g_erb.error.name && strcmp(g_erb.error.name, "wifi.connect") == 0,
+          "a call to a missing module stops the app, naming it");
+}
+
 static void test_queries(void)
 {
     base();
@@ -1540,6 +1580,7 @@ int main(void)
     test_float_rules();
     test_loops_and_calls();
     test_native_events();
+    test_optional_modules();
     test_text();
     test_string_helpers();
     test_lists();
