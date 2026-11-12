@@ -947,8 +947,9 @@ export type OptionalNativeModule<T> = T & {
 
 /**
  * A module the firmware provides in C, declared at module level by an interface of its methods, which take and
- * return Int, Int64, number, boolean and string: `const Sensors = nativeModule<Sensors>('sensors', 1)`. Its events are
- * the interface's `events`: `events: {reading(celsius: number): void}`.
+ * return Int, Int64, number, boolean, string and records of them:
+ * `const Sensors = nativeModule<Sensors>('sensors', 1)`. Its events are the interface's `events`:
+ * `events: {reading(celsius: number): void}`.
  */
 export const nativeModule: {
   <T>(name: string, version: number): T;

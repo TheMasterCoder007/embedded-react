@@ -296,7 +296,7 @@ describe('native module calls it refuses', () => {
 
   it('refuses what the interface declares but a call cannot pass yet', () => {
     expect(failure(appOf('Sensors.name();'))).toMatch(
-      /Sensors\.name returns a type native modules don't pass yet/,
+      /Sensors\.name returns a type native modules don't pass/,
     );
     expect(failure(appOf('setF(Sensors.level());'))).toMatch(
       /Sensors\.level is optional/,
@@ -399,9 +399,7 @@ describe('native module calls it refuses', () => {
       `interface Sensors { wide(${params.join(', ')}): Int; }\n` +
         "const Sensors = nativeModule<Sensors>('sensors', 2);\n",
     );
-    expect(failure(source)).toMatch(
-      /Sensors\.wide takes more than 16 parameters/,
-    );
+    expect(failure(source)).toMatch(/Sensors\.wide takes more than 16 values/);
   });
 
   it('refuses more native methods than a package holds', () => {
@@ -542,7 +540,7 @@ describe('native events', () => {
             reading: 'v:fib',
             tick: 'v:',
             name: {
-              reason: "takes a type native modules don't pass yet",
+              reason: "takes a type native modules don't pass",
             },
             count: {reason: 'returns a value, but an event returns nothing'},
           },
@@ -561,9 +559,7 @@ describe('native events it refuses', () => {
     ).toMatch(/Sensors has no event done/);
     expect(
       failure(subscribed("useNativeEvent(Sensors, 'name', () => {})")),
-    ).toMatch(
-      /Sensors's event name takes a type native modules don't pass yet/,
-    );
+    ).toMatch(/Sensors's event name takes a type native modules don't pass/);
     expect(
       failure(subscribed("useNativeEvent(Sensors, 'count', () => {})")),
     ).toMatch(/Sensors's event count returns a value/);
@@ -739,7 +735,7 @@ describe('optional native modules', () => {
             connect: 'b:i',
             strength: 'i:',
             name: {
-              reason: "returns a type native modules don't pass yet",
+              reason: "returns a type native modules don't pass",
             },
           },
           events: {found: 'v:i', lost: 'v:'},
@@ -910,5 +906,183 @@ describe('native strings and Int64s it refuses', () => {
     expect(failure(wordsApp('setStamp(Words.shift(stamp, stamp));'))).toMatch(
       /a 64-bit value .* cannot be used here/,
     );
+  });
+});
+
+const MAPS =
+  'interface Point { x: Int; y: Int; }\n' +
+  'type Fix = { name: string; at: Int64; spot: Point; ok: boolean };\n' +
+  'interface Maps {\n' +
+  '  move(from: Point, step: Int): Point;\n' +
+  '  fix(): Fix;\n' +
+  '  pair(): {first: string; second: string};\n' +
+  '  events: {found(where: Fix, count: Int): void};\n' +
+  '}\n' +
+  "const Maps = nativeModule<Maps>('maps', 1);\n";
+
+/** An app with the Maps module: `handler` as a button's onPress body, and `body` at the top of the App. */
+const mapsApp = (handler: string, body = '', module = MAPS) =>
+  "import {useState} from 'react';\n" +
+  "import {Pressable, Text, nativeModule, useNativeEvent} from 'embedded-react';\n" +
+  "import type {Int, Int64} from 'embedded-react';\n" +
+  module +
+  'export function App() {\n' +
+  '  const [p, setP] = useState({x: 0, y: 0});\n' +
+  "  const [s, setS] = useState('x');\n" +
+  '  const [n, setN] = useState(0);\n' +
+  '  const [stamp, setStamp] = useState(4000000000);\n' +
+  body +
+  `  return <Pressable onPress={() => { ${handler} }}><Text>{p.x} {p.y} {s} {n} {stamp}</Text></Pressable>;\n` +
+  '}\n';
+
+describe('native records', () => {
+  it('signs a record by its fields, in order', () => {
+    const {imports} = readProgram(
+      compile(
+        mapsApp(
+          'setP(Maps.move(p, 1)); const fix = Maps.fix(); setS(fix.name);',
+        ),
+      ).program,
+    );
+    expect(imports).toEqual([
+      'maps.move v1 {x:i,y:i}:{x:i,y:i}i',
+      'maps.fix v1 {name:s,at:l,spot:{x:i,y:i},ok:b}:',
+    ]);
+  });
+
+  it("passes a record's fields one by one, from an object state or one built in the call", () => {
+    const {ops} = readProgram(
+      compile(
+        mapsApp('setP(Maps.move(p, 1)); setP(Maps.move({y: n, x: 2}, n));'),
+      ).program,
+    );
+    expect(ops.filter(op => op.name === 'CALLN')).toHaveLength(2);
+  });
+
+  it('keeps a record in a const, destructured or not, and in an object state', () => {
+    const {ops} = readProgram(
+      compile(
+        mapsApp(
+          'const fix = Maps.fix(); setS(fix.name); setN(fix.spot.y); ' +
+            'const {at, spot: {x}} = Maps.fix(); setStamp(at); setN(x); ' +
+            'setP(Maps.fix().spot); setN(Maps.fix().spot.y);',
+        ),
+      ).program,
+    );
+    expect(ops.filter(op => op.name === 'CALLNS')).toHaveLength(4);
+  });
+
+  it("copies a record's strings into buffers of its own, one after another", () => {
+    const {ops} = readProgram(
+      compile(mapsApp('const pair = Maps.pair(); setS(pair.second);')).program,
+    );
+    expect(ops.filter(op => op.name === 'CALLNS')).toHaveLength(1);
+  });
+
+  it("enters an event's handler with a record's fields, which it may destructure", () => {
+    const {events, functions} = readProgram(
+      compile(
+        mapsApp(
+          '',
+          "  useNativeEvent(Maps, 'found', (where, count) => { setS(where.name); setN(count + where.spot.y); });\n" +
+            "  useNativeEvent(Maps, 'found', ({at, spot}) => { setStamp(at); setP(spot); });\n",
+        ),
+      ).program,
+    );
+    expect(events.map(entry => entry.event)).toEqual([
+      'maps.found v1 v:{name:s,at:l,spot:{x:i,y:i},ok:b}i',
+    ]);
+    expect(functions[events[0].handler].parameterTypes).toEqual([
+      ValueType.string,
+      ValueType.int,
+      ValueType.int64,
+      ValueType.pair,
+      ValueType.int,
+      ValueType.int,
+      ValueType.bool,
+      ValueType.int,
+    ]);
+  });
+
+  it('gives Flow A the signatures', () => {
+    expect(addNativeSignatures(mapsApp(''), {})).toContain(
+      "nativeModule<Maps>('maps', 1, " +
+        JSON.stringify({
+          methods: {
+            move: '{x:i,y:i}:{x:i,y:i}i',
+            fix: '{name:s,at:l,spot:{x:i,y:i},ok:b}:',
+            pair: '{first:s,second:s}:',
+          },
+          events: {found: 'v:{name:s,at:l,spot:{x:i,y:i},ok:b}i'},
+        }) +
+        ')',
+    );
+  });
+});
+
+describe('native records it refuses', () => {
+  it('refuses a record read as a plain value', () => {
+    for (const handler of [
+      'setN(Maps.move(p, 1) ? 1 : 0);',
+      'setN(Maps.move(p, 1));',
+      'setN(1 + Maps.fix().spot.x);',
+    ]) {
+      expect(failure(mapsApp(handler))).toMatch(
+        /Maps\.(move|fix)\(\) returns a record, which only a const or an object state keeps/,
+      );
+    }
+  });
+
+  it('refuses an argument without every field, or of another type', () => {
+    expect(failure(mapsApp('setP(Maps.move({x: 1}, 2));'))).toMatch(
+      /the record Maps\.move\(\) takes has a field y, which this object doesn't/,
+    );
+    expect(failure(mapsApp('setP(Maps.move(n, 2));'))).toMatch(
+      /Maps\.move\(\) takes a record here/,
+    );
+    expect(failure(mapsApp('setP(Maps.move({x: 1.5, y: 0}, 2));'))).toMatch(
+      /Maps\.move\(\) takes an Int as x/,
+    );
+  });
+
+  it('refuses a record kept in a let', () => {
+    expect(failure(mapsApp('let fix = Maps.fix(); setS(fix.name);'))).toMatch(
+      /an object in a handler must be a `const`/,
+    );
+  });
+
+  it("refuses a record the signature can't hold", () => {
+    const refused = (fields: string, call = 'Odd.get()') =>
+      failure(
+        mapsApp(
+          `const f = ${call};`,
+          '',
+          MAPS +
+            `type Shape = ${fields};\n` +
+            'interface Odd { get(): Shape; }\n' +
+            "const Odd = nativeModule<Odd>('odd', 1);\n",
+        ),
+      );
+    expect(refused('{x?: Int}')).toMatch(
+      /Odd\.get returns a record whose field x is optional/,
+    );
+    expect(refused('{x: Int; go(): void}')).toMatch(
+      /returns a record with a member that is not a plain field/,
+    );
+    expect(refused('{$x: Int}')).toMatch(
+      /a field named \$x, which a native signature can't name/,
+    );
+    expect(refused('{}')).toMatch(/returns an empty record/);
+    expect(refused('{next: Shape}')).toMatch(
+      /whose field next is the record Shape, which holds itself/,
+    );
+    expect(refused('{x: Int[]}')).toMatch(
+      /whose field x is a type native modules don't pass/,
+    );
+    expect(
+      refused(
+        `{${Array.from({length: 17}, (_, index) => `f${index}: Int`).join('; ')}}`,
+      ),
+    ).toMatch(/returns more than 16 values, counting each field of its record/);
   });
 });

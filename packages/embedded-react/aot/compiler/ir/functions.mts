@@ -72,8 +72,9 @@ export interface NativeEvent {
   /** `module.event`. */
   name: string;
   version: number;
-  /** 'v', ':', then the values it is posted with, each one of i, f or b. */
+  /** 'v', ':', then the values it is posted with, as a native method's signature lists its parameters. */
   signature: string;
+  /** The values one by one, a record's fields in order, as the cells hold them. */
   params: NativeType[];
   /** The optional module it is part of, or null when the firmware must have it. */
   module: number | null;

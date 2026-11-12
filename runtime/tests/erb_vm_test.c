@@ -125,8 +125,29 @@ static bool clock_shift(const int32_t* arguments, int32_t* result, void* context
     return true;
 }
 
+/** @brief The point, step to the right and twice the step down: {x:i,y:i}:{x:i,y:i}i. */
+static bool geo_move(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    result[0] = arguments[0] + arguments[2];
+    result[1] = arguments[1] + 2 * arguments[2];
+    return true;
+}
+
+/** @brief {name:s,at:l,ok:b}: "fix", 6000000000 and a true that isn't 1. */
+static bool geo_fix(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    result[0] = erb_native_text("fix");
+    erb_native_set_int64(result + 1, 6000000000LL);
+    result[3] = 7;
+    return true;
+}
+
 /** @brief The text and clock natives, by their index in s_natives. */
 #define NATIVE_TEXT_NAMED 9
+#define NATIVE_GEO_FOUND 12
 
 static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read},
                                       {"sensors.scale", 1, "f:i", sensors_scale},
@@ -137,7 +158,10 @@ static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read},
                                       {"text.greet", 1, "s:s", text_greet},
                                       {"text.long", 1, "s:", text_long},
                                       {"clock.shift", 1, "l:il", clock_shift},
-                                      [NATIVE_TEXT_NAMED] = {"text.named", 1, "v:sl", NULL}};
+                                      [NATIVE_TEXT_NAMED] = {"text.named", 1, "v:sl", NULL},
+                                      {"geo.move", 1, "{x:i,y:i}:{x:i,y:i}i", geo_move},
+                                      {"geo.fix", 1, "{name:s,at:l,ok:b}:", geo_fix},
+                                      [NATIVE_GEO_FOUND] = {"geo.found", 1, "v:{name:s,at:l}i", NULL}};
 
 static void log_line(const char* line, void* context)
 {
@@ -1306,6 +1330,77 @@ static void test_native_values(void)
           "a refused post lets go of its strings too");
 }
 
+static void test_native_records(void)
+{
+    base();
+    TPkg* package = &s_package_spec;
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "geo.move";
+    package->strings[package->string_count++] = "{x:i,y:i}:{x:i,y:i}i";
+    package->strings[package->string_count++] = "geo.fix";
+    package->strings[package->string_count++] = "{name:s,at:l,ok:b}:";
+    package->strings[package->string_count++] = "geo.found";
+    package->strings[package->string_count++] = "v:{name:s,at:l}i";
+    const uint16_t move = (uint16_t)package->import_count;
+    package->imports[package->import_count++] = (TImport){name, 1, (uint16_t)(name + 1)};
+    const uint16_t fix = (uint16_t)package->import_count;
+    package->imports[package->import_count++] = (TImport){(uint16_t)(name + 2), 1, (uint16_t)(name + 3)};
+
+    /* move({x: 1, y: 2}, 5): the record's fields, then the step, then the result's fields after them. */
+    const uint8_t move_types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT};
+    uint32_t move_code[] = {
+        OP_ABX(LOADI, 0, 1),
+        OP_ABX(LOADI, 1, 2),
+        OP_ABX(LOADI, 2, 5),
+        OP_ABX(CALLN, 0, move),
+        OP_ABC(RET, 3, 0, 0),
+    };
+    const uint16_t moved_x = helper(move_types, 5, 0, ERB_TYPE_INT, move_code, 5);
+    move_code[4] = OP_ABC(RET, 4, 0, 0);
+    const uint16_t moved_y = helper(move_types, 5, 0, ERB_TYPE_INT, move_code, 5);
+    /* fix(): its string copied into the label's buffer, its int64 past a gap, then its bool. */
+    const uint8_t fix_types[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_BOOL};
+    const uint32_t fix_code[] = {
+        OP_ABX(CALLNS, 0, fix),
+        SLOT_LABEL,
+        OP_ABX(SET64, 2, SLOT_BIG),
+        OP_ABC(RET, 4, 0, 0),
+    };
+    const uint16_t fixed = helper(fix_types, 5, 0, ERB_TYPE_BOOL, fix_code, 4);
+    /* geo.found's handler keeps the record's string and int64, and the int after it. */
+    {
+        const uint8_t types[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_INT};
+        const uint32_t code[] = {
+            OP_ABX(SETS, 0, SLOT_LABEL),
+            OP_ABX(SET64, 2, SLOT_BIG),
+            OP_ABX(SET32, 4, SLOT_COUNT),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        const uint16_t handler = tpkg_function(package, ERB_FUNCTION_KIND_NATIVE_EVENT, 5, 0, types, 5, code, 4);
+        package->native_events[package->native_event_count++] =
+            (TNativeEvent){(uint16_t)(name + 4), 1, (uint16_t)(name + 5), handler};
+    }
+
+    CHECK(load(), "loads");
+    CHECK(call(moved_x, 0, 0) == 6 && call(moved_y, 0, 0) == 12,
+          "a record goes as its fields, and comes back in the registers after the arguments");
+    CHECK(call(fixed, 0, 0) == 1, "a record's bool is 0 or 1");
+    int64_t big;
+    memcpy(&big, slot(SLOT_BIG), sizeof(big));
+    CHECK(big == 6000000000LL, "its int64 lands past the gap");
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "fix") == 0, "and its string in the call's buffer");
+    CHECK(erb_native_texts_held() == 0u, "and the call lets go of its strings");
+
+    int32_t values[4];
+    values[0] = erb_native_text("found");
+    erb_native_set_int64(values + 1, -7);
+    values[3] = 42;
+    CHECK(erb_native_post(NATIVE_GEO_FOUND, values), "an event with a record is taken");
+    memcpy(&big, slot(SLOT_BIG), sizeof(big));
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "found") == 0 && big == -7 && slot_int(SLOT_COUNT) == 42,
+          "its handler reads the record's fields and the value after them");
+}
+
 static void test_optional_modules(void)
 {
     /* Module 0, wifi, is missing its method; module 1 is sensors.scale, which the firmware has. */
@@ -1709,6 +1804,7 @@ int main(void)
     test_loops_and_calls();
     test_native_events();
     test_native_values();
+    test_native_records();
     test_optional_modules();
     test_text();
     test_string_helpers();

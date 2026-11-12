@@ -320,15 +320,30 @@ export interface IrConditional extends IrTyped {
 /** A value a native method takes or returns: an Int, a number, a boolean, an Int64 or a string. */
 export type NativeType = 'int' | 'float' | 'bool' | 'int64' | 'string';
 
+/** A record a native method takes or returns: its fields, in order. */
+export interface NativeRecord {
+  kind: 'record';
+  fields: {name: string; type: NativeValue}[];
+}
+
+/** A value of a native module's interface: one of the types, or a record of them. */
+export type NativeValue = NativeType | NativeRecord;
+
 /** A native method the package imports, as the firmware registers it. */
 export interface NativeImport {
   /** `module.method`. */
   name: string;
   version: number;
-  /** The result, ':', then the parameters, each one of i, f, b, l or s; v as the result means none. */
+  /**
+   * The result, ':', then the parameters, each one of i, f, b, l or s, or a record of them; v as the result means
+   * none. A record names its fields in order: {x:i,y:i}.
+   */
   signature: string;
+  /** The parameters' values one by one, a record's fields in order, as the cells hold them. */
   params: NativeType[];
-  result: NativeType | 'void';
+  result: NativeType | 'void' | 'record';
+  /** The result's values one by one, as params lists them: none for void. */
+  results: NativeType[];
   /** The optional module it is part of, or null when the firmware must have it. */
   module: number | null;
 }

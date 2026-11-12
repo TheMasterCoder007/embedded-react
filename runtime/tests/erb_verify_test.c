@@ -1265,6 +1265,113 @@ static void test_native_values(void)
     }
 }
 
+static void test_native_signatures(void)
+{
+    ErbNativeCodes codes;
+    CHECK(erb_native_codes("{x:i,y:i}:{x:i,y:i}i", &codes) && strcmp(codes.results, "ii") == 0
+              && strcmp(codes.params, "iii") == 0 && codes.record,
+          "a record's fields are its values, in order");
+    CHECK(erb_native_codes("v:{a:{b:l,c_2:s},d:f}b", &codes) && strcmp(codes.results, "") == 0
+              && strcmp(codes.params, "lsfb") == 0 && !codes.record,
+          "a record may hold records");
+    CHECK(erb_native_codes("i:", &codes) && strcmp(codes.results, "i") == 0 && !codes.record, "a plain signature");
+    const char* malformed[] = {
+        "{x:i",
+        "{x:i}",
+        "{x:i,}:",
+        "{}:",
+        "{1x:i}:",
+        "{x:q}:",
+        "{x i}:",
+        "v:{x:i}}",
+        "v{x:i}:",
+        "v:{x:v}",
+        ":",
+        "",
+    };
+    for (size_t index = 0; index < sizeof(malformed) / sizeof(malformed[0]); index++)
+    {
+        CHECK(!erb_native_codes(malformed[index], &codes), malformed[index]);
+    }
+    CHECK(erb_native_codes("v:{a:i,b:i,c:i,d:i,e:i,f:i,g:i,h:i}{a:i,b:i,c:i,d:i,e:i,f:i,g:i,h:i}", &codes),
+          "16 values");
+    CHECK(!erb_native_codes("v:{a:i,b:i,c:i,d:i,e:i,f:i,g:i,h:i}{a:i,b:i,c:i,d:i,e:i,f:i,g:i,h:i}i", &codes),
+          "but not 17");
+}
+
+/** @brief A package with the natives test_native_records() checks: geo.move ("{x:i,y:i}:{x:i,y:i}i") as import 1,
+ *         geo.fix ("{name:s,at:l,ok:b}:") as import 2, geo.pair ("{a:s,b:s}:") as import 3, and a handler of
+ *         geo.found ("v:{name:s,at:l}i") with these register types. */
+static void native_records_package(const uint8_t* handler_types, uint8_t handler_params)
+{
+    static const ErbNative natives[] = {{"sensors.read", 1, "i:i", sensors_read},
+                                        {"geo.move", 1, "{x:i,y:i}:{x:i,y:i}i", sensors_read},
+                                        {"geo.fix", 1, "{name:s,at:l,ok:b}:", sensors_read},
+                                        {"geo.pair", 1, "{a:s,b:s}:", sensors_read},
+                                        {"geo.found", 1, "v:{name:s,at:l}i", NULL}};
+    TPkg* package = base();
+    s_config.natives = natives;
+    s_config.native_count = 5;
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "geo.move";
+    package->strings[package->string_count++] = "{x:i,y:i}:{x:i,y:i}i";
+    package->strings[package->string_count++] = "geo.fix";
+    package->strings[package->string_count++] = "{name:s,at:l,ok:b}:";
+    package->strings[package->string_count++] = "geo.pair";
+    package->strings[package->string_count++] = "{a:s,b:s}:";
+    package->strings[package->string_count++] = "geo.found";
+    package->strings[package->string_count++] = "v:{name:s,at:l}i";
+    for (uint16_t index = 0; index < 3; index++)
+    {
+        package->imports[package->import_count++] =
+            (TImport){(uint16_t)(name + 2 * index), 1, (uint16_t)(name + 2 * index + 1)};
+    }
+    const uint32_t code[] = {OP_ABC(RET, 0, 0, 0)};
+    const uint16_t handler = tpkg_function(
+        package, ERB_FUNCTION_KIND_NATIVE_EVENT, handler_params, 0, handler_types, handler_params, code, 1);
+    package->native_events[package->native_event_count++] =
+        (TNativeEvent){(uint16_t)(name + 6), 1, (uint16_t)(name + 7), handler};
+}
+
+static void test_native_records(void)
+{
+    const uint8_t found[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_INT};
+    native_records_package(found, 5);
+    EXPECT(ERB_OK, "records in imports and events");
+    const uint8_t short_found[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR};
+    native_records_package(short_found, 4);
+    EXPECT(ERB_ERROR_FUNCTION, "an event's handler without the value after its record");
+
+    {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT, ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(CALLN, 0, 1), OP_ABC(RET, 0, 0, 0)};
+        native_records_package(found, 5);
+        set_code_types(FUNCTION_TIMER, types, 5, code, 2);
+        EXPECT(ERB_OK, "a record argument and result, field by field");
+        set_code_types(FUNCTION_TIMER, types, 4, code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a record result past the registers");
+    }
+    {
+        const uint8_t types[] = {ERB_TYPE_STRING, ERB_TYPE_INT, ERB_TYPE_INT64, ERB_TYPE_PAIR, ERB_TYPE_BOOL};
+        const uint32_t code[] = {OP_ABX(CALLNS, 0, 2), SLOT_LABEL, OP_ABC(RET, 0, 0, 0)};
+        native_records_package(found, 5);
+        set_code_types(FUNCTION_TIMER, types, 5, code, 3);
+        EXPECT(ERB_OK, "a record result with a string, copied into a string slot");
+        const uint32_t unbuffered[] = {OP_ABX(CALLN, 0, 2), OP_ABC(RET, 0, 0, 0)};
+        native_records_package(found, 5);
+        set_code_types(FUNCTION_TIMER, types, 5, unbuffered, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a record result with a string and no slot to copy it into");
+    }
+    {
+        /* The slot after the label is a list, not a second string buffer. */
+        const uint8_t types[] = {ERB_TYPE_STRING, ERB_TYPE_STRING};
+        const uint32_t code[] = {OP_ABX(CALLNS, 0, 3), SLOT_LABEL, OP_ABC(RET, 0, 0, 0)};
+        native_records_package(found, 5);
+        set_code_types(FUNCTION_TIMER, types, 2, code, 3);
+        EXPECT(ERB_ERROR_BYTECODE, "a record's second string with no buffer after the first");
+    }
+}
+
 static void test_imports_and_inputs(void)
 {
     base();
@@ -1767,6 +1874,8 @@ int main(void)
     test_imports_and_inputs();
     test_native_events();
     test_native_values();
+    test_native_signatures();
+    test_native_records();
     test_optional_modules();
     test_debug();
     test_panel_debug();

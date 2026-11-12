@@ -116,7 +116,7 @@ export interface ProgramSlots {
   boot: Map<IrBootSlot, Slot>;
   /** The buffer each string local is copied into, by its name. */
   stringLocals: Map<string, Slot>;
-  /** The buffer each native call that returns a string copies its result into. */
+  /** The buffers each native call that returns strings copies them into, one after another: one for each string. */
   nativeStrings: Map<IrNativeCall, Slot>;
   /** The string states held as interned enums. */
   enums: Map<ScalarState, EnumSet>;
@@ -632,22 +632,37 @@ export class Codegen {
    * @returns A register holding the result, or null when the method returns nothing or it isn't read.
    */
   private callNative(call: IrNativeCall, readsResult = true): Register | null {
+    const results = this.nativeCall(call);
+    if (!results.length || !readsResult) {
+      return null;
+    }
+    // A copy of its own, since a run is only ever released whole.
+    const register = this.builder.register(results[0].type);
+    this.builder.abc('MOVE', register.index, results[0].index);
+    return register;
+  }
+
+  /**
+   * Calls a native method: its arguments in consecutive registers, then its results, a record's values one by one.
+   *
+   * @param call  The call.
+   *
+   * @returns The registers the results are in.
+   */
+  private nativeCall(call: IrNativeCall): Register[] {
     const {builder} = this;
-    const {params, result} = call.import;
+    const {params, results} = call.import;
     const values = call.callArguments.map((argument, index) =>
       this.valueAs(argument, params[index]),
     );
-    const types: RegisterType[] = [
-      ...params,
-      ...(result === 'void' ? [] : [result]),
-    ];
+    const types: RegisterType[] = [...params, ...results];
     const run = types.length ? builder.consecutive(types) : [];
     values.forEach((value, index) =>
       builder.abc('MOVE', run[index].index, value.index),
     );
     const importIndex = this.program.tables.nativeImport(call.import);
-    if (result === 'string') {
-      // A string result is copied into the call's own buffer.
+    if (results.includes('string')) {
+      // A string result is copied into the call's own buffer: CALLNS names the first, one for each string.
       const buffer = required(
         this.program.nativeStrings.get(call),
         `the buffer of ${call.import.name}`,
@@ -656,13 +671,7 @@ export class Codegen {
     } else {
       builder.abx('CALLN', run[0]?.index ?? 0, importIndex);
     }
-    if (result === 'void' || !readsResult) {
-      return null;
-    }
-    // A copy of its own, since a run is only ever released whole.
-    const register = builder.register(result);
-    builder.abc('MOVE', register.index, run.at(-1)!.index);
-    return register;
+    return run.slice(params.length);
   }
 
   /**
@@ -1587,9 +1596,25 @@ export class Codegen {
           builder.abc('TCLEAR', this.valueAs(statement.id, 'int').index),
         );
         return;
-      case 'callNative':
-        this.scoped(() => this.callNative(statement.call, false));
+      case 'callNative': {
+        if (!statement.results) {
+          this.scoped(() => this.callNative(statement.call, false));
+          return;
+        }
+        // A record's values are kept, each in a register of its own, for the locals that read them.
+        const kept = statement.call.import.results.map(type =>
+          builder.register(type),
+        );
+        this.scoped(() =>
+          this.nativeCall(statement.call).forEach((result, index) =>
+            builder.abc('MOVE', kept[index].index, result.index),
+          ),
+        );
+        statement.results.forEach((name, index) =>
+          this.locals.set(name, {register: kept[index]}),
+        );
         return;
+      }
       case 'clearList':
         builder.abx('CLEAR', 0, this.listPool(statement.list).slot.index);
         return;

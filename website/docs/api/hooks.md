@@ -60,7 +60,8 @@ const Sensors = nativeModule<Sensors>('sensors', 1);
 
 **TypeScript.** Declares a module the firmware provides in C. The interface is in the app's file or in a local
 `.ts` file the app imports it from. A method takes and returns `Int` (a whole number), `Int64` (a whole number past
-an `Int`'s range), `number` (a float), `boolean` and `string`, and may return `void`. It takes up to 16 parameters.
+an `Int`'s range), `number` (a float), `boolean`, `string` and [records](#records) of them, and may return `void`. It
+takes up to 16 values and returns up to 16, counting each field of a record.
 
 Call a method in a handler, an effect or a timer, and keep what it returns in state. A call in render is refused,
 since Flow A would make it on every render and Flow B only when what it reads changes.
@@ -168,6 +169,68 @@ erb_native_post(WIFI_FOUND, values);
 In JS an `Int64` is a number, exact up to 2^53. Pass a string as a string or a const that holds one: Flow B builds
 text only where it is kept, so build it in a const first rather than in the call.
 
+### Records
+
+```tsx
+import type {Int, Int64} from 'embedded-react';
+
+interface Point {
+  x: Int;
+  y: Int;
+}
+
+interface Gps {
+  fix(): {place: Point; at: Int64; label: string};
+  move(from: Point, step: Int): Point;
+}
+
+const Gps = nativeModule<Gps>('gps', 1);
+
+// In a handler:
+const fix = Gps.fix();
+setLabel(fix.label);
+setPlace(Gps.move(fix.place, 2));
+```
+
+A record is an interface or object type of fields, each of the types above or a record, all required. Declare it
+in the interface's file, or inline. It passes as its fields one by one, in order, so the C side reads them as
+consecutive cells. The signature names them in braces, `{name:code,…}`, so a renamed or reordered field is a
+mismatch at load rather than swapped values:
+
+```c
+static char label[32];
+
+/* {place:{x:i,y:i},at:l,label:s}: */
+static bool gps_fix(const int32_t* arguments, int32_t* result, void* context)
+{
+    result[0] = fix_x;
+    result[1] = fix_y;
+    erb_native_set_int64(&result[2], fix_ms);
+    snprintf(label, sizeof(label), "%d sats", (int)satellites);
+    result[4] = erb_native_text(label);
+    return true;
+}
+
+/* {x:i,y:i}:{x:i,y:i}i */
+static bool gps_move(const int32_t* arguments, int32_t* result, void* context)
+{
+    result[0] = arguments[0] + arguments[2];
+    result[1] = arguments[1] + arguments[2];
+    return true;
+}
+
+static const ErbNative natives[] = {
+    {"gps.fix", 1, "{place:{x:i,y:i},at:l,label:s}:", gps_fix},
+    {"gps.move", 1, "{x:i,y:i}:{x:i,y:i}i", gps_move},
+};
+```
+
+Pass a record as an object with every field: an object state, a const, or an object built in the call. A record a
+method returns is kept in a `const`, which may destructure it, or given to an object state's setter or another
+native method, as is a field of it: `setPlace(Gps.fix().place)`. Anywhere else it is refused. An event's value may be
+a record too, which its handler may destructure. In Flow A the bridge passes a record as its fields and nativeModule()
+builds the object again, so the app sees the same in both flows, and a mock's records are converted field by field.
+
 ### Optional modules
 
 ```tsx
@@ -222,8 +285,8 @@ function Thermometer() {
 **TypeScript.** Runs a handler each time the firmware posts one of a native module's events. This is how
 long-running work reports back: a method starts it, and the firmware posts an event when it is done. The interface's
 `events` lists them, each a method that returns `void` and takes values as a method's parameters do. A handler runs
-only while its component is mounted, and may take fewer parameters than the event has values. Call it at the top of
-a component, as every hook.
+only while its component is mounted, and may take fewer parameters than the event has values. It may destructure a
+[record](#records) value: `({lat, lon}) => …`. Call it at the top of a component, as every hook.
 
 The firmware declares each event in the same `ErbNative` table as its functions, with no callback, and posts it by
 its index from the frame loop. The app's handlers run at once, then the update, as `erb_input_set_int()` runs it.

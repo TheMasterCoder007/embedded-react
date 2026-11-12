@@ -492,10 +492,12 @@ the register stack holds the deepest path from any function; a frame is its regi
 of bookkeeping. A stack overflow can't happen at run time.
 
 A native import is called with its arguments as 32-bit cells from consecutive registers, and its result
-goes in the register after them, so it can be of another type. An int64 starts on an even register, as every
-64-bit register does, so the registers may have a gap the cells don't. A string argument goes as a cell that holds
-it in place. A string result is copied into the string slot `CALLNS` names, which the result register then reads,
-and only `CALLNS` calls an import that returns one. A native event's handler is entered with its values laid out the
+goes in the register after them, so it can be of another type. A record, since minor 14, is its fields one by one,
+in order, as an argument and as a result, whose fields go in the registers after the arguments. An int64 starts on
+an even register, as every 64-bit register does, so the registers may have a gap the cells don't. A string argument
+goes as a cell that holds it in place. A string result is copied into the string slot `CALLNS` names, which the
+result register then reads, and only `CALLNS` calls an import that returns one. A record's strings are copied into
+that slot and the ones after it, one each. A native event's handler is entered with its values laid out the
 same way, and reads a string in place while it runs. A native can't call back into the VM. Work that takes time
 reports back later by posting an input or an event, which the runtime delivers like any other.
 
@@ -778,8 +780,9 @@ er_commit();
 
 A native's signature is its result, a colon, then its parameters, each `i` (int), `b` (bool), `f` (float), `l`
 (int64, two cells, low word first) or `s` (string, a cell that `erb_native_string()` reads and `erb_native_text()`
-makes); `v` as the result means none. An entry with no callback is an event the firmware posts with
-`erb_native_post(index, values)`, from the frame loop. Firmware with fonts in its packages gives the runtime storage
+makes), or a record of them that names its fields in order, `{x:i,y:i}`; `v` as the result means none.
+`erb_native_codes()` reads one into its values, a record's one by one. An entry with no callback is an event the
+firmware posts with `erb_native_post(index, values)`, from the frame loop. Firmware with fonts in its packages gives the runtime storage
 for their tables (`ErbConfig::fonts`): arrays of fonts, glyphs, and extra glyphs, as many as its apps
 need. `on_fault` replaces the error screen when the firmware wants to handle a fault itself, and `log`
 receives the reported limits. The error screen is the engine's (`er_error_screen.h`): it shows the

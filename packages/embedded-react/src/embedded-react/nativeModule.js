@@ -25,6 +25,9 @@
 // calls the firmware through the bridge, which converts the arguments by the signature, and the bridge hands each
 // event the firmware posts to __erNativeEvent, which calls its subscribers.
 //
+// A record passes the bridge as its fields one by one, in the order the signature names them, and is built again from
+// them here: a result, and an event's value.
+//
 // The simulators: the bundler also passes the module's mock, which stands in for the firmware. Its values are
 // converted as the bridge converts them, so the app sees what it would on a board. A mock that posts events is a
 // function, which is given `emit` and returns the methods.
@@ -60,7 +63,7 @@ const CONVERSIONS = {
   v: () => undefined,
 };
 
-// Each module's events, by event name: its signature and the handlers subscribed to it, or why it can't be used.
+// Each module's events, by event name: its values' shapes and the handlers subscribed to it, or why it can't be used.
 const MODULE_EVENTS = new WeakMap();
 
 // The handlers subscribed to each of the firmware's events, by its index in the natives, as the bridge posts them.
@@ -85,18 +88,116 @@ function installDispatcher() {
   };
 }
 
-// The arguments an event's values are, converted by its signature.
+// A value's shape, read from a signature at `at`: its code, or a record's fields in order, each [name, shape].
+function readShape(signature, at) {
+  if (signature[at] !== '{') {
+    return {shape: signature[at], next: at + 1};
+  }
+  const fields = [];
+  let next = at + 1;
+  for (;;) {
+    const colon = signature.indexOf(':', next);
+    const field = readShape(signature, colon + 1);
+    fields.push([signature.slice(next, colon), field.shape]);
+    next = field.next + 1;
+    if (signature[field.next] === '}') {
+      return {shape: fields, next};
+    }
+  }
+}
+
+// A signature's result, null for none, and its parameters, as shapes.
+function shapesOf(signature) {
+  let result = null;
+  let next = 1;
+  if (signature[0] !== 'v') {
+    ({shape: result, next} = readShape(signature, 0));
+  }
+  const parameters = [];
+  for (next++; next < signature.length;) {
+    const parameter = readShape(signature, next);
+    parameters.push(parameter.shape);
+    next = parameter.next;
+  }
+  return {result, parameters};
+}
+
+const isRecord = shape => Array.isArray(shape);
+
+// A value's fields one by one, into `cells`, as the bridge takes them; each converted as it converts them when
+// `convert`. `what` names the value for errors.
+function flatten(shape, value, what, cells, convert) {
+  if (!isRecord(shape)) {
+    cells.push(convert ? CONVERSIONS[shape](value) : value);
+    return;
+  }
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError(
+      `${what} is a record, not ${value === null ? 'null' : typeof value}`,
+    );
+  }
+  for (const [field, fieldShape] of shape) {
+    if (!(field in value)) {
+      throw new TypeError(`${what} has no field ${field}`);
+    }
+    flatten(fieldShape, value[field], `${what}.${field}`, cells, convert);
+  }
+}
+
+// A value built from its fields' values, from `cells[at]`.
+function build(shape, cells, at) {
+  if (!isRecord(shape)) {
+    return {value: cells[at], next: at + 1};
+  }
+  const record = {};
+  let next = at;
+  for (const [field, fieldShape] of shape) {
+    const built = build(fieldShape, cells, next);
+    record[field] = built.value;
+    next = built.next;
+  }
+  return {value: record, next};
+}
+
+// Values built from the fields' values the bridge passes, a record's one by one.
+function built(shapes, cells) {
+  const values = [];
+  let next = 0;
+  for (const shape of shapes) {
+    const value = build(shape, cells, next);
+    values.push(value.value);
+    next = value.next;
+  }
+  return values;
+}
+
+// Values passed through C: each converted as the bridge converts it, a record built again from its fields.
+function converted(shape, value, what) {
+  const cells = [];
+  flatten(shape, value, what, cells, true);
+  return build(shape, cells, 0).value;
+}
+
+// The fields' values an event's values are, converted by its signature, as the bridge posts them.
 function convertedValues(event, values) {
-  const parameters = event.signature.slice(2);
+  const {parameters} = event.shapes;
   if (values.length !== parameters.length) {
     throw new TypeError(
       `${event.qualifiedName} is posted with ${parameters.length} value${parameters.length === 1 ? '' : 's'}, ` +
         `not ${values.length}`,
     );
   }
-  return values.map((value, position) =>
-    CONVERSIONS[parameters[position]](value),
+  const cells = [];
+  parameters.forEach((shape, position) =>
+    flatten(
+      shape,
+      values[position],
+      `${event.qualifiedName}'s value`,
+      cells,
+      true,
+    ),
   );
+  return cells;
 }
 
 // A mock's method, called as the bridge calls the firmware's. `calls` counts the mock's calls running now.
@@ -107,8 +208,7 @@ function mockMethod(implementation, name, method, signature, calls) {
   if (typeof found !== 'function' || found === Object.prototype[method]) {
     throw new Error(`the mock of native module "${name}" has no ${method}()`);
   }
-  const parameters = signature.slice(2);
-  const convertResult = CONVERSIONS[signature[0]];
+  const {result, parameters} = shapesOf(signature);
   return (...callArguments) => {
     if (callArguments.length !== parameters.length) {
       throw new TypeError(
@@ -116,15 +216,52 @@ function mockMethod(implementation, name, method, signature, calls) {
           `not ${callArguments.length}`,
       );
     }
-    const converted = callArguments.map((argument, position) =>
-      CONVERSIONS[parameters[position]](argument),
+    const convertedArguments = callArguments.map((argument, position) =>
+      converted(
+        parameters[position],
+        argument,
+        `${qualifiedName}()'s argument`,
+      ),
     );
     calls.running++;
     try {
-      return convertResult(found.apply(implementation, converted));
+      const returned = found.apply(implementation, convertedArguments);
+      return result === null
+        ? undefined
+        : converted(result, returned, `${qualifiedName}()'s result`);
     } finally {
       calls.running--;
     }
+  };
+}
+
+// A method that calls the firmware through the bridge. A record goes as its fields, and comes back as an array of
+// them; without one, the bridge takes the arguments as they are.
+function bridgeMethod(host, index, name, method, signature) {
+  const qualifiedName = `${name}.${method}`;
+  const {result, parameters} = shapesOf(signature);
+  if (!isRecord(result) && !parameters.some(isRecord)) {
+    return host.call.bind(host, index);
+  }
+  return (...callArguments) => {
+    if (callArguments.length !== parameters.length) {
+      throw new TypeError(
+        `${qualifiedName}() takes ${parameters.length} argument${parameters.length === 1 ? '' : 's'}, ` +
+          `not ${callArguments.length}`,
+      );
+    }
+    const cells = [];
+    parameters.forEach((shape, position) =>
+      flatten(
+        shape,
+        callArguments[position],
+        `${qualifiedName}()'s argument`,
+        cells,
+        false,
+      ),
+    );
+    const returned = host.call(index, ...cells);
+    return isRecord(result) ? build(result, returned, 0).value : returned;
   };
 }
 
@@ -197,8 +334,9 @@ function declareModule(name, version, signatures, mock, optional) {
       events.set(event, {qualifiedName, reason: signature.reason});
       continue;
     }
+    const shapes = shapesOf(signature);
     if (!onBoard || !available) {
-      events.set(event, {qualifiedName, signature, handlers: new Set()});
+      events.set(event, {qualifiedName, shapes, handlers: new Set()});
       continue;
     }
     const index = eventIndices.get(event);
@@ -207,7 +345,7 @@ function declareModule(name, version, signatures, mock, optional) {
     }
     events.set(event, {
       qualifiedName,
-      signature,
+      shapes,
       handlers: HANDLERS_BY_INDEX.get(index),
     });
     installDispatcher();
@@ -219,18 +357,18 @@ function declareModule(name, version, signatures, mock, optional) {
   if (typeof mock === 'function') {
     const emit = (event, ...values) => {
       const entry = events.get(event);
-      if (!entry || !entry.signature) {
+      if (!entry || !entry.shapes) {
         throw new Error(
           entry
             ? `${entry.qualifiedName} ${entry.reason}`
             : `native module "${name}" has no event ${event}`,
         );
       }
-      const converted = convertedValues(entry, values);
+      const cells = convertedValues(entry, values);
       if (calls.running) {
         return false;
       }
-      deliver(entry.handlers, converted);
+      deliver(entry.handlers, cells);
       return true;
     };
     implementation = mock(emit);
@@ -264,7 +402,13 @@ function declareModule(name, version, signatures, mock, optional) {
       );
       continue;
     }
-    module[method] = host.call.bind(host, methodIndices.get(method));
+    module[method] = bridgeMethod(
+      host,
+      methodIndices.get(method),
+      name,
+      method,
+      signature,
+    );
   }
   return module;
 }
@@ -289,7 +433,7 @@ nativeModule.optional = (name, version, signatures, mock) =>
 //
 // @param {object} module  A native module, as nativeModule() returns it.
 // @param {string} event  One of the events its interface declares.
-// @param {Function} handler  Called with the event's values.
+// @param {Function} handler  Called with the event's values; a record is an object of its fields.
 export function useNativeEvent(module, event, handler) {
   const known = MODULE_EVENTS.get(module);
   if (!known) {
@@ -301,13 +445,15 @@ export function useNativeEvent(module, event, handler) {
   if (!entry) {
     throw new Error(`native module "${known.name}" has no event ${event}`);
   }
-  if (!entry.signature) {
+  if (!entry.shapes) {
     throw new Error(`${entry.qualifiedName} ${entry.reason}`);
   }
   const latest = useRef(handler);
   latest.current = handler;
   useEffect(() => {
-    const subscriber = (...values) => latest.current(...values);
+    // Handlers are given the fields' values; a record is built again from its own.
+    const subscriber = (...cells) =>
+      latest.current(...built(entry.shapes.parameters, cells));
     entry.handlers.add(subscriber);
     return () => {
       entry.handlers.delete(subscriber);

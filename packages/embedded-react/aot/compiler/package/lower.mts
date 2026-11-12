@@ -360,7 +360,7 @@ function stringLocals(statements: IrStmt[], found: Set<string>): void {
 }
 
 /**
- * Every native call in a value that returns a string, at any depth: each copies its result into a buffer of its own.
+ * Every native call in a value that returns strings, at any depth: each copies them into buffers of its own.
  *
  * @param value  The statements, or any part of them.
  * @param found  Collects the calls.
@@ -379,7 +379,11 @@ function stringNativeCalls(
   }
   const record = value as Record<string, unknown>;
   const call = record as Partial<IrNativeCall>;
-  if (call.import && call.callArguments && call.import.result === 'string') {
+  if (
+    call.import &&
+    call.callArguments &&
+    call.import.results.includes('string')
+  ) {
     found.add(call as IrNativeCall);
   }
   for (const [key, child] of Object.entries(record)) {
@@ -927,14 +931,17 @@ function planSlots(
     }
   }
 
-  // A native call's string result can be anything a write holds.
+  // A native call's string result can be anything a write holds. A record's strings take a buffer each, one after
+  // another, as CALLNS names the first.
   const nativeCalls = new Set<IrNativeCall>();
   stringNativeCalls(bodies(app), nativeCalls);
   for (const call of nativeCalls) {
-    slots.nativeStrings.set(
-      call,
-      arena.slot(ValueType.string, undefined, ENGINE_STRING_MAX.ER_TEXT_MAX),
-    );
+    const buffers = call.import.results
+      .filter(type => type === 'string')
+      .map(() =>
+        arena.slot(ValueType.string, undefined, ENGINE_STRING_MAX.ER_TEXT_MAX),
+      );
+    slots.nativeStrings.set(call, buffers[0]);
   }
 
   const nodes = nodesOf(app.root);

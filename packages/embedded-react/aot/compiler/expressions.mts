@@ -62,6 +62,7 @@ import {isObjectTree, propertyKey} from './records.mts';
 import {
   lowerNativeCall,
   nativeAvailableOf,
+  unkeptRecordError,
   nativeCalleeOf,
   readsNativeModule,
 } from './native-modules.mts';
@@ -2423,6 +2424,11 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       ) {
         return fixed({kind: 'pi', type: FLOAT});
       }
+      // A field of a record a native method returns, read where it can't be kept.
+      let root: t.Node = node;
+      while (root.type === 'MemberExpression') root = root.object;
+      const unkept = unkeptRecordError(root, environment);
+      if (unkept) throw unkept;
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
         "in a handler or dynamic expression you can read state, `ref.current`, a list item's " +
@@ -2446,6 +2452,8 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       // `Sensors.read(channel)`: a native method's result.
       const nativeCallee = nativeCalleeOf(node, environment);
       if (nativeCallee) {
+        const unkept = unkeptRecordError(node, environment);
+        if (unkept) throw unkept;
         const call = lowerNativeCall(node, nativeCallee, environment);
         if (call.import.result === 'void') {
           const binding = (
@@ -2461,7 +2469,8 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
           expression: {
             kind: 'native',
             call,
-            type: NATIVE_TYPES[call.import.result],
+            // A record was refused above.
+            type: NATIVE_TYPES[call.import.result as NativeType],
           },
           location,
         };

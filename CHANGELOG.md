@@ -56,6 +56,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `Wifi.available` says whether it is there. Calling one that isn't stops the app. Packages are now format minor 12.
 - Native modules pass strings and `Int64` values, as arguments, results and event values. Packages are now format
   minor 13.
+- Native modules pass records, objects of those values, as arguments, results and event values. Packages are now
+  format minor 14.
 
 ### Changed
 

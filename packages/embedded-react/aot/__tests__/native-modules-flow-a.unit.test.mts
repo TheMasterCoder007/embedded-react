@@ -113,7 +113,7 @@ describe('native module signatures in Flow A', () => {
     expect(signed).toContain(
       "nativeModule<Sensors>('sensors', 2, " +
         '{"methods":{"read":"f:i","pressed":"b:i","setLed":"v:b","scale":"f:f",' +
-        '"name":{"reason":"returns a type native modules don\'t pass yet"}},"events":{}});',
+        '"name":{"reason":"returns a type native modules don\'t pass"}},"events":{}});',
     );
     expect(signed).toContain(
       'nativeModule<Clock>(\'clock\', 1, {"methods":{"now":"i:"},"events":{}});',
@@ -127,8 +127,10 @@ describe('native module signatures in Flow A', () => {
     ).toContain(
       "nativeModule<Probe>('probe', 1, " +
         '{"methods":{"add":"i:ii","half":"f:i","even":"b:i","flip":"b:b","next":"i:","store":"v:f","stored":"f:",' +
-        '"start":"v:i","refused":"i:","greet":"s:s","length":"i:s","shift":"l:il","announce":"v:i"},' +
-        '"events":{"done":"v:ifb","idle":"v:","named":"v:sl"}});',
+        '"start":"v:i","refused":"i:","greet":"s:s","length":"i:s","shift":"l:il","announce":"v:i",' +
+        '"move":"{x:i,y:i}:{x:i,y:i}i","fix":"{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}:i","locate":"v:i"},' +
+        '"events":{"done":"v:ifb","idle":"v:","named":"v:sl",' +
+        '"located":"v:{label:s,id:i,at:l,place:{lat:f,lon:f},ok:b}{x:i,y:i}"}});',
     );
   });
 
@@ -353,11 +355,11 @@ describe('nativeModule() in Flow A', () => {
       'sensors',
       2,
       methods({
-        name: {reason: "returns a type native modules don't pass yet"},
+        name: {reason: "returns a type native modules don't pass"},
       }),
     );
     expect(() => Sensors.name()).toThrow(
-      "sensors.name returns a type native modules don't pass yet",
+      "sensors.name returns a type native modules don't pass",
     );
   });
 
@@ -533,7 +535,7 @@ describe('native events in Flow A', () => {
       2,
       events({
         reading: 'v:f',
-        name: {reason: "takes a type native modules don't pass yet"},
+        name: {reason: "takes a type native modules don't pass"},
       }),
     );
     const handler = () => {};
@@ -544,7 +546,7 @@ describe('native events in Flow A', () => {
       'native module "sensors" has no event done',
     );
     expect(() => useNativeEvent(Sensors, 'name', handler)).toThrow(
-      "sensors.name takes a type native modules don't pass yet",
+      "sensors.name takes a type native modules don't pass",
     );
   });
 
@@ -628,7 +630,7 @@ describe('nativeModule.optional() in Flow A', () => {
   const WIFI = {
     methods: {
       connect: 'b:i',
-      name: {reason: "returns a type native modules don't pass yet"},
+      name: {reason: "returns a type native modules don't pass"},
     },
     events: {found: 'v:i'},
   };
@@ -692,5 +694,97 @@ describe('nativeModule.optional() in Flow A', () => {
     global.__erNative = fakeHost(['sensors.read@2:f:i']);
     const Sensors = nativeModule('sensors', 2, methods({read: 'f:i'}));
     expect('available' in Sensors).toBe(false);
+  });
+});
+
+describe('native records in Flow A', () => {
+  const global = globalThis as {
+    __erNative?: unknown;
+    __erNativeEvent?: (index: number, values: unknown[]) => void;
+  };
+  afterEach(() => {
+    delete global.__erNative;
+    delete global.__erNativeEvent;
+  });
+  const MOVE = '{x:i,y:i}:{x:i,y:i}i';
+  const FIX = '{name:s,spot:{x:i,y:i}}:';
+  const FOUND = 'v:{name:s,spot:{x:i,y:i}}i';
+
+  it("passes a record through the bridge as its fields, and builds one from a result's", () => {
+    const host = {
+      ...fakeHost([`maps.move@1:${MOVE}`, `maps.fix@1:${FIX}`]),
+      calls: [] as unknown[][],
+    };
+    host.call = (...callArguments: unknown[]) => {
+      host.calls.push(callArguments);
+      return callArguments[0] === 0 ? [3, 4] : ['a', 1, 2];
+    };
+    global.__erNative = host;
+    const Maps = nativeModule('maps', 1, methods({move: MOVE, fix: FIX}));
+    expect(Maps.move({y: 2, x: 1, extra: 9}, 5)).toEqual({x: 3, y: 4});
+    expect(Maps.fix()).toEqual({name: 'a', spot: {x: 1, y: 2}});
+    expect(host.calls).toEqual([[0, 1, 2, 5], [1]]);
+    expect(() => Maps.move({x: 1}, 5)).toThrow(
+      "maps.move()'s argument has no field y",
+    );
+    expect(() => Maps.move(7, 5)).toThrow(
+      "maps.move()'s argument is a record, not number",
+    );
+    expect(() => Maps.move({x: 1, y: 2})).toThrow(
+      'maps.move() takes 2 arguments, not 1',
+    );
+  });
+
+  it("converts a mock's records as the bridge does", () => {
+    const seen: unknown[][] = [];
+    const Maps = nativeModule('maps', 1, methods({move: MOVE, fix: FIX}), {
+      move: (...values: unknown[]) => (
+        seen.push(values),
+        {x: 2.5, y: '3', z: 9}
+      ),
+      fix: () => ({name: 'a', spot: {x: 1}}),
+    });
+    // Each field is converted as a value of its type is, and only the fields the signature names are kept.
+    expect(Maps.move({x: 1.7, y: 2}, 4.2)).toEqual({x: 2, y: 3});
+    expect(seen).toEqual([[{x: 1, y: 2}, 4]]);
+    expect(() => Maps.fix()).toThrow("maps.fix()'s result.spot has no field y");
+  });
+
+  /** A component that subscribes to maps.found, recording what it hears. */
+  const finder = (Maps: unknown, heard: unknown[][]) => (): null => {
+    useNativeEvent(Maps, 'found', (...values: unknown[]) => heard.push(values));
+    return null;
+  };
+
+  it("builds an event's records from the fields the bridge posts", async () => {
+    global.__erNative = fakeHost([`events:maps.found@1:${FOUND}`]);
+    const Maps = nativeModule('maps', 1, {
+      methods: {},
+      events: {found: FOUND},
+    });
+    const heard: unknown[][] = [];
+    await mount(createElement(finder(Maps, heard)));
+    global.__erNativeEvent!(0, ['a', 1, 2, 7]);
+    expect(heard).toEqual([[{name: 'a', spot: {x: 1, y: 2}}, 7]]);
+  });
+
+  it("converts the records a mock's emit posts", async () => {
+    let emit: (event: string, ...values: unknown[]) => boolean = () => false;
+    const Maps = nativeModule(
+      'maps',
+      1,
+      {methods: {}, events: {found: FOUND}},
+      (given: typeof emit) => {
+        emit = given;
+        return {};
+      },
+    );
+    const heard: unknown[][] = [];
+    await mount(createElement(finder(Maps, heard)));
+    expect(emit('found', {name: 'b', spot: {x: 1.5, y: 2}}, 3)).toBe(true);
+    expect(heard).toEqual([[{name: 'b', spot: {x: 1, y: 2}}, 3]]);
+    expect(() => emit('found', {name: 'b'}, 3)).toThrow(
+      "maps.found's value has no field spot",
+    );
   });
 });

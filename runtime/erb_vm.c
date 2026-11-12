@@ -1598,14 +1598,16 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                                  erb_string(program, erb_u16(import + ERB_IMPORT_NAME_AT)));
                 }
                 const ErbNative* native = &g_erb.config.natives[program->natives[operand_bx]];
-                const char* signature = erb_string(program, erb_u16(import + ERB_IMPORT_SIGNATURE_AT));
+                /* The verifier read the signature, so it reads. */
+                ErbNativeCodes codes;
+                erb_native_codes(erb_string(program, erb_u16(import + ERB_IMPORT_SIGNATURE_AT)), &codes);
 
                 /* The registers into C cells: an int64 may start after a gap, and a string goes by a cell. */
                 const uint32_t held = erb_native_texts_held();
                 int32_t cells[ERB_NATIVE_MAX_CELLS];
                 uint32_t cell = 0;
                 uint32_t register_index = operand_a;
-                for (const char* parameter = signature + 2; *parameter; parameter++)
+                for (const char* parameter = codes.params; *parameter; parameter++)
                 {
                     register_index = erb_native_register(*parameter, register_index);
                     if (*parameter == 's')
@@ -1618,7 +1620,7 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                         cells[cell++] = registers[register_index++];
                     }
                 }
-                int32_t value[2] = {0, 0};
+                int32_t value[ERB_NATIVE_MAX_CELLS] = {0};
                 const bool succeeded = native->callback(cells, value, g_erb.config.context);
                 if (!succeeded)
                 {
@@ -1628,31 +1630,39 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                                  erb_string(program, erb_u16(import + ERB_IMPORT_NAME_AT)));
                 }
 
-                /* The result goes in the register after the arguments. */
-                int32_t* returned = &registers[erb_native_register(signature[0], register_index)];
-                switch (signature[0])
+                /* The results go in the registers after the arguments, a record's fields one by one. A string is
+                 * copied into a buffer of the call's own, as other strings are kept: CALLNS names the first. */
+                uint32_t buffer = ERB_OP(word) == ERB_OP_CALLNS ? ERB_LOW16(code[program_counter + 1u]) : 0u;
+                cell = 0;
+                for (const char* returned_code = codes.results; *returned_code; returned_code++)
                 {
-                    case 'v':
-                        break;
-                    case 'b':
-                        returned[0] = value[0] != 0;
-                        break;
-                    case 'l':
-                        returned[0] = value[0];
-                        returned[1] = value[1];
-                        break;
-                    case 's':
+                    register_index = erb_native_register(*returned_code, register_index);
+                    int32_t* returned = &registers[register_index];
+                    switch (*returned_code)
                     {
-                        /* Copied into the call's own buffer, as other strings are kept. */
-                        const uint8_t* slot = erb_slot(program, ERB_LOW16(code[program_counter + 1u]));
-                        store_string(
-                            slot, (char*)slot_data(slot), erb_u16(slot + ERB_SLOT_CAP_AT), erb_native_string(value[0]));
-                        returned[0] = (int32_t)(ERB_STRING_ARENA | erb_u32(slot + ERB_SLOT_OFFSET_AT));
-                        break;
+                        case 'b':
+                            returned[0] = value[cell] != 0;
+                            break;
+                        case 'l':
+                            returned[0] = value[cell];
+                            returned[1] = value[cell + 1u];
+                            break;
+                        case 's':
+                        {
+                            const uint8_t* slot = erb_slot(program, buffer++);
+                            store_string(slot,
+                                         (char*)slot_data(slot),
+                                         erb_u16(slot + ERB_SLOT_CAP_AT),
+                                         erb_native_string(value[cell]));
+                            returned[0] = (int32_t)(ERB_STRING_ARENA | erb_u32(slot + ERB_SLOT_OFFSET_AT));
+                            break;
+                        }
+                        default:
+                            returned[0] = value[cell];
+                            break;
                     }
-                    default:
-                        returned[0] = value[0];
-                        break;
+                    register_index += erb_native_cells(*returned_code);
+                    cell += erb_native_cells(*returned_code);
                 }
                 erb_native_texts_release(held);
                 if (ERB_OP(word) == ERB_OP_CALLNS)

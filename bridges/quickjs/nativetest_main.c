@@ -140,9 +140,29 @@ static bool native_shift(const int32_t* arguments, int32_t* result, void* contex
     return true;
 }
 
+static bool native_move(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)context;
+    result[0] = arguments[0] + arguments[2];
+    result[1] = arguments[1] + 2 * arguments[2];
+    return true;
+}
+
+static bool native_fix(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    const float lat = 0.5f;
+    result[0] = erb_native_text("fix");
+    erb_native_set_int64(result + 1, 6000000000LL);
+    memcpy(&result[3], &lat, sizeof(lat));
+    return true;
+}
+
 /** @brief The firmware's events, by their index in s_natives. */
 #define NATIVE_READING 5
 #define NATIVE_NAMED 9
+#define NATIVE_FOUND 12
 
 /** @brief What er_runtime_native_post() said when test.post posted from inside its call. */
 static bool s_posted_inside = true;
@@ -168,6 +188,9 @@ static const ErbNative s_natives[] = {
     {"test.greet", 1, "s:s", native_greet},
     {"test.shift", 1, "l:il", native_shift},
     [NATIVE_NAMED] = {"test.named", 1, "v:sl", NULL},
+    {"test.move", 1, "{x:i,y:i}:{x:i,y:i}i", native_move},
+    {"test.fix", 1, "{name:s,at:l,place:{lat:f}}:", native_fix},
+    [NATIVE_FOUND] = {"test.found", 1, "v:{name:s,at:l}i", NULL},
 };
 
 static int32_t s_poked = POKED_NOTHING;
@@ -228,6 +251,32 @@ static void test_strings_and_int64s(void)
     CHECK(run(SCRIPT_CHECK "check(heard[1] === 'posted' && heard[2] === -5e9, 'converted by the signature');\n"),
           "the dispatcher gets the string and the int64");
     CHECK(erb_native_texts_held() == 0u, "a post lets go of its strings");
+}
+
+static void test_records(void)
+{
+    CHECK(run(SCRIPT_CHECK
+              "const move = __erNative.find('test.move', 1, '{x:i,y:i}:{x:i,y:i}i');\n"
+              "check(move >= 0, 'a record signature is found');\n"
+              "check(__erNative.find('test.move', 1, '{y:i,x:i}:{x:i,y:i}i') === -1, 'fields in another order are "
+              "not');\n"
+              "check(JSON.stringify(__erNative.call(move, 1, 2, 5)) === '[6,12]', 'a record goes and comes back as its "
+              "fields');\n"
+              "const fix = __erNative.find('test.fix', 1, '{name:s,at:l,place:{lat:f}}:');\n"
+              "check(JSON.stringify(__erNative.call(fix)) === '[\"fix\",6000000000,0.5]', 'each converted by its "
+              "type');\n"),
+          "records pass as their fields");
+    CHECK(erb_native_texts_held() == 0u, "a record's call lets go of its strings");
+
+    CHECK(run("globalThis.__erNativeEvent = (index, values) => { globalThis.heard = [index, ...values]; };\n"),
+          "a dispatcher");
+    int32_t values[4];
+    values[0] = erb_native_text("found");
+    erb_native_set_int64(values + 1, -7);
+    values[3] = 42;
+    CHECK(er_runtime_native_post(NATIVE_FOUND, values), "an event with a record is taken");
+    CHECK(run(SCRIPT_CHECK "check(JSON.stringify(heard) === '[12,\"found\",-7,42]', 'as its fields');\n"),
+          "the dispatcher gets the record's fields and the value after them");
 }
 
 static void test_wrong_calls(void)
@@ -310,6 +359,7 @@ int main(void)
     test_find();
     test_conversions();
     test_strings_and_int64s();
+    test_records();
     test_wrong_calls();
     test_events();
     test_reset();
