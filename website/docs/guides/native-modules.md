@@ -108,7 +108,7 @@ The firmware's C has to match what apps compile against: each name, version and 
 in a call's cells. `native-header` writes that down from the package, one header per module:
 
 ```bash
-npx embedded-react native-header examples/device --out examples/device/include
+npx embedded-react native-header example-device --out main/generated
 ```
 
 It takes a package's name or folder, or the `.ts` file that declares the modules. Each header, `chip_module.h` for

@@ -55,7 +55,7 @@ describe('native-header', () => {
     const [header, ...others] = nativeHeaders(source, files);
     expect(others).toEqual([]);
     expect(header.file).toBe('probe_module.h');
-    // Stale? npx embedded-react native-header test/erb-frames/fixtures/native-probe-module.ts --out ../../tools/erb-frames
+    // Stale? node cli.mjs native-header test/erb-frames/fixtures/native-probe-module.ts --out ../../tools/erb-frames
     expect(header.text).toBe(
       readFileSync(join(HOST, header.file), 'utf8').replace(/\r\n/g, '\n'),
     );
@@ -69,7 +69,7 @@ describe('native-header', () => {
       'thermometer_module.h',
       'motion_module.h',
     ]);
-    // Stale? npx embedded-react native-header ../../examples/device --out ../../examples/device/include
+    // Stale? node cli.mjs native-header ../../examples/device --out ../../examples/device/include
     for (const header of headers) {
       expect(header.text).toBe(
         readFileSync(join(DEVICE, 'include', header.file), 'utf8').replace(
