@@ -86,15 +86,21 @@ const TYPESCRIPT_TYPES: Record<NativeType | 'void', string> = {
   void: 'void',
 };
 
-/** Names a struct's field can't have, in C or C++. */
-const RESERVED = new Set(
+/** The keywords of C and C++, and the names their headers define as keywords, which a struct's field can't have. */
+const KEYWORDS = new Set(
   (
-    'auto bool break case catch char class const continue default delete do double else enum explicit export extern ' +
-    'false float for friend goto if inline int long mutable namespace new operator private protected public ' +
-    'register restrict return short signed sizeof static struct switch template this throw true try typedef ' +
-    'typename union unsigned using virtual void volatile while'
+    'alignas alignof and and_eq asm auto bitand bitor bool break case catch char char8_t char16_t char32_t class ' +
+    'compl concept const consteval constexpr constinit const_cast continue co_await co_return co_yield decltype ' +
+    'default delete do double dynamic_cast else enum explicit export extern false float for friend goto if inline ' +
+    'int long mutable namespace new noexcept not not_eq nullptr operator or or_eq private protected public ' +
+    'register reinterpret_cast requires restrict return short signed sizeof static static_assert static_cast ' +
+    'struct switch template this thread_local throw true try typedef typeid typename typeof typeof_unqual union ' +
+    'unsigned using virtual void volatile wchar_t while xor xor_eq'
   ).split(' '),
 );
+
+/** A name C or C++ keeps for itself: `_Atomic`, `__packed`, or one with `__` in it. */
+const KEPT_NAME = /^_[A-Z]|__/;
 
 const INDENT = '    ';
 
@@ -157,7 +163,26 @@ const cellsOf = (value: NativeValue): number =>
  * @returns The header.
  */
 function headerOf(module: NativeModule): NativeHeader {
-  const moduleWords = wordsOf(module.name);
+  /** A name's words, which every C name it is part of needs at least one of. */
+  const namedWords = (name: string, what: string): string[] => {
+    const words = wordsOf(name);
+    if (!words.length) {
+      throw headerError(
+        `${module.interfaceName}: ${what} is named ${name}, which leaves nothing to name it by in the header`,
+        'give it a name with a letter in it.',
+      );
+    }
+    return words;
+  };
+
+  // Every name in the header starts with the module's, so it must start as a C name does.
+  const moduleWords = namedWords(module.name, 'the module');
+  if (/^[0-9]/.test(moduleWords[0])) {
+    throw headerError(
+      `${module.interfaceName}: the module is named ${module.name}, so its names in the header would start with a digit`,
+      'start its name with a letter.',
+    );
+  }
   const structs: Struct[] = [];
   const taken = new Map<string, string>();
 
@@ -178,14 +203,14 @@ function headerOf(module: NativeModule): NativeHeader {
   const structOf = (record: NativeRecord, place: string[]): Struct => {
     const words = [
       ...moduleWords,
-      ...(record.name ? wordsOf(record.name) : place),
+      ...(record.name ? namedWords(record.name, 'a record') : place),
     ];
     const type = typeOf(words);
     const known = structs.find(struct => struct.type === type);
     if (known && codeOf(known.record) === codeOf(record)) return known;
     const what = record.name ? `the record ${record.name}` : 'a record';
     const fields = record.fields.map(field => {
-      if (RESERVED.has(field.name)) {
+      if (KEYWORDS.has(field.name) || KEPT_NAME.test(field.name)) {
         throw headerError(
           `${module.interfaceName}: ${what} has a field named ${field.name}, which C keeps for itself`,
           'rename the field.',
@@ -195,7 +220,7 @@ function headerOf(module: NativeModule): NativeHeader {
         ? null
         : structOf(field.type, [
             ...words.slice(moduleWords.length),
-            ...wordsOf(field.name),
+            ...namedWords(field.name, `${what}'s field`),
           ]);
     });
     define(type, what);
@@ -221,20 +246,24 @@ function headerOf(module: NativeModule): NativeHeader {
         member.hint,
       );
     }
-    const words = [...moduleWords, ...wordsOf(name)];
     const what = `${name}()`;
+    const memberWords = namedWords(name, 'a method or event');
+    const words = [...moduleWords, ...memberWords];
+    const argumentWords = member.names.map(argument =>
+      namedWords(argument, `${what}'s argument`),
+    );
     const parameters = member.params.map(
       (param, index) =>
-        `${member.names[index]}: ${shownType(param, [name, member.names[index]])}`,
+        `${member.names[index]}: ${shownType(param, [...memberWords, ...argumentWords[index]])}`,
     );
     const lines = [
-      `/* ${name}(${parameters.join(', ')}): ${shownType(member.result, [name, 'result'])} */`,
+      `/* ${name}(${parameters.join(', ')}): ${shownType(member.result, [...memberWords, 'result'])} */`,
       `#define ${define(`${macroOf(words)}_ENTRY`, what)} ` +
         `"${module.name}.${name}", ${module.version}, "${signatureOf(member)}"`,
     ];
     let offset = 0;
     member.params.forEach((param, index) => {
-      const macro = macroOf([...words, 'ARG', ...wordsOf(member.names[index])]);
+      const macro = macroOf([...words, 'ARG', ...argumentWords[index]]);
       lines.push(
         `#define ${define(macro, `${what}'s ${member.names[index]}`)} ${offset}`,
       );

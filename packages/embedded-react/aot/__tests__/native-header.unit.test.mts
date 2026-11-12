@@ -100,6 +100,12 @@ describe('native-header', () => {
     expect(header).toContain('#define CAN_SEND_FRAME_CELLS 3');
     expect(header).toContain('} CanSendResult;');
     expect(header).toContain('/* send(frame: CanSendFrame): CanSendResult */');
+    expect(
+      headerOf(
+        'interface Can { sendFrame(rawData: {id: Int}): void }\n' +
+          "export const Can = nativeModule<Can>('can', 1);\n",
+      ),
+    ).toContain('#define CAN_SEND_FRAME_RAW_DATA_CELLS 1');
     expect(header.indexOf('} CanSendFrameData;')).toBeLessThan(
       header.indexOf('} CanSendFrame;'),
     );
@@ -176,6 +182,41 @@ describe('native-header', () => {
       ),
     ).toBe(
       'Gps: the record Fix has a field named class, which C keeps for itself',
+    );
+    for (const field of ['constexpr', 'wchar_t', '_Atomic', 'low__high']) {
+      expect(
+        refused(
+          `interface Fix { ${field}: Int }\n` +
+            'interface Gps { fix(): Fix }\n' +
+            "export const Gps = nativeModule<Gps>('gps', 1);\n",
+        ),
+      ).toBe(
+        `Gps: the record Fix has a field named ${field}, which C keeps for itself`,
+      );
+    }
+    expect(
+      refused(
+        'interface Wire { read(): Int }\n' +
+          "export const Wire = nativeModule<Wire>('_1wire', 1);\n",
+      ),
+    ).toBe(
+      'Wire: the module is named _1wire, so its names in the header would start with a digit',
+    );
+    expect(
+      refused(
+        'interface Wire { read(): Int }\n' +
+          "export const Wire = nativeModule<Wire>('_', 1);\n",
+      ),
+    ).toBe(
+      'Wire: the module is named _, which leaves nothing to name it by in the header',
+    );
+    expect(
+      refused(
+        'interface Wire { _(): Int }\n' +
+          "export const Wire = nativeModule<Wire>('wire', 1);\n",
+      ),
+    ).toBe(
+      'Wire: a method or event is named _, which leaves nothing to name it by in the header',
     );
     expect(
       refused(
