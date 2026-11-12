@@ -31,6 +31,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Configuration
@@ -114,6 +115,20 @@ static inline void erb_native_set_int64(int32_t* cells, int64_t value)
 {
     cells[0] = (int32_t)(uint32_t)(uint64_t)value;
     cells[1] = (int32_t)(uint32_t)((uint64_t)value >> 32);
+}
+
+/** @brief A float from its cell, which holds its bits. */
+static inline float erb_native_float(int32_t cell)
+{
+    float value;
+    memcpy(&value, &cell, sizeof(value));
+    return value;
+}
+
+/** @brief Writes a float's bits into a cell. */
+static inline void erb_native_set_float(int32_t* cell, float value)
+{
+    memcpy(cell, &value, sizeof(value));
 }
 
 /**

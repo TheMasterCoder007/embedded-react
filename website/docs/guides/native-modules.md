@@ -99,7 +99,7 @@ const ErbNative native_modules[NATIVE_COUNT] = {
 };
 ```
 
-Values pass as 32-bit cells: an `Int` or `boolean` in one, a float's bits in one (copy them with `memcpy`), an `Int64`
+Values pass as 32-bit cells: an `Int` or `boolean` in one, a float's bits in one (`erb_native_float()` reads it, `erb_native_set_float()` writes it), an `Int64`
 in two, low word first. A string's cell holds it by reference: `erb_native_string()` reads an argument, and
 `erb_native_text()` makes a result, whose text must stay as it is until the call returns. A function returns false to
 stop the app with the error screen naming the module.
@@ -231,6 +231,47 @@ A package is found the Node way, from the app's folder: a registry, workspace, o
 (or `main`) must point at its `.ts` source, since the types are what give each method its signature; a package that
 ships only JavaScript or `.d.ts` files is refused. The app imports the module from the file that declares it: a file
 that passes it on with `export * from` or `export {Chip} from` isn't followed.
+
+## 7. Generate the C header
+
+The firmware's C has to match what apps compile against: each name, version and signature, and where each value is
+in a call's cells. `native-header` writes that down from the module's own declaration, one header per module:
+
+```bash
+npx embedded-react native-header my-device --out main/generated
+```
+
+It takes a package's name or folder, or the `.ts` file that declares the modules. Each header, `chip_module.h` for
+`chip`, has:
+
+- An entry per method and event, to put in the table: `{CHIP_NAME_ENTRY, chip_name}`, or `{CHIP_SECOND_ENTRY, NULL}`
+  for an event.
+- Where each argument starts in a call's or post's cells, `GPS_NEAREST_ARG_RADIUS`, and how many cells they take,
+  `GPS_NEAREST_ARG_CELLS`.
+- A struct per record, its cell count, and `static inline` helpers that pack and unpack it.
+
+```c
+#include "gps_module.h"
+
+/* nearest(from: Fix, radius: Int): Fix */
+static bool gps_nearest(const int32_t* arguments, int32_t* result, void* context)
+{
+    const GpsFix from = gps_fix_unpack(&arguments[GPS_NEAREST_ARG_FROM]);
+    const int32_t radius = arguments[GPS_NEAREST_ARG_RADIUS];
+    const GpsFix nearest = find_nearest(&from, radius);
+    gps_fix_pack(result, &nearest);
+    return true;
+}
+
+const ErbNative native_modules[] = {
+    {GPS_NEAREST_ENTRY, gps_nearest},
+    {GPS_MOVED_ENTRY, NULL},
+};
+```
+
+A record is named after its type, and one written in place after where it is: `GpsFix`, `GpsFixPlace`. The headers
+are header-only, so there is nothing to link. Generate them again when the interface changes, in the firmware's build
+or with a test that fails when a committed one is stale.
 
 ## Limits
 

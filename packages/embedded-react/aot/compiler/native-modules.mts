@@ -59,8 +59,14 @@ import type {Env} from './types.mts';
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /** A method of a native module's interface, or why it can't be called yet. */
-type NativeMember =
-  | {kind: 'method'; params: NativeValue[]; result: NativeValue | 'void'}
+export type NativeMember =
+  | {
+      kind: 'method';
+      params: NativeValue[];
+      /** Each parameter's name, for the C header. */
+      names: string[];
+      result: NativeValue | 'void';
+    }
   | {kind: 'refused'; reason: string; hint: string};
 
 /** The members of a record type the interface's file declares, by its name (see declaredMembers). */
@@ -458,7 +464,8 @@ function nativeValueOf(
       if (seen.has(name)) {
         return {what: `the record ${name}, which holds itself`};
       }
-      return recordOf(members, scope, new Set(seen).add(name));
+      const record = recordOf(members, scope, new Set(seen).add(name));
+      return 'kind' in record ? {...record, name} : record;
     }
   }
   return {what: "a type native modules don't pass"};
@@ -581,6 +588,7 @@ function memberOf(
   }
 
   const params: NativeValue[] = [];
+  const names: string[] = [];
   for (const parameter of functionType.parameters) {
     if (parameter.type !== 'Identifier' || parameter.optional) {
       return refuse(
@@ -600,6 +608,7 @@ function memberOf(
       return refuse(`takes ${type.what}`, typeHint);
     }
     params.push(type as NativeValue);
+    names.push(parameter.name);
   }
   const resultType = functionType.typeAnnotation?.typeAnnotation;
   if (!resultType) {
@@ -627,7 +636,12 @@ function memberOf(
   }
   return {
     name,
-    member: {kind: 'method', params, result: result as NativeValue | 'void'},
+    member: {
+      kind: 'method',
+      params,
+      names,
+      result: result as NativeValue | 'void',
+    },
   };
 }
 
@@ -825,6 +839,22 @@ function declaredIn(
   }
   return modules;
 }
+
+/**
+ * The native modules a file declares, in order, for the C header.
+ *
+ * @param source  The file's source.
+ * @param files  The local files it imports a module's interface from (see readNativeFiles).
+ *
+ * @returns The modules.
+ */
+export const declaredModules = (
+  source: string,
+  files: Record<string, NativeFile> = {},
+): NativeModule[] =>
+  [...declaredIn(parseInterfaceFile(source), files).values()].map(
+    ({module}) => module,
+  );
 
 /**
  * The const a file exports under a name: `export const Can = …`, or `export {can as Can}`.
@@ -1036,7 +1066,7 @@ export function collectNativeModules(
  *
  * @returns The code.
  */
-const codeOf = (value: NativeValue | 'void'): string =>
+export const codeOf = (value: NativeValue | 'void'): string =>
   typeof value === 'string'
     ? SIGNATURE_CODES[value]
     : `{${value.fields.map(field => `${field.name}:${codeOf(field.type)}`).join(',')}}`;
@@ -1048,8 +1078,9 @@ const codeOf = (value: NativeValue | 'void'): string =>
  *
  * @returns The signature, such as "i:if".
  */
-const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
-  codeOf(member.result) + ':' + member.params.map(codeOf).join('');
+export const signatureOf = (
+  member: Extract<NativeMember, {kind: 'method'}>,
+): string => codeOf(member.result) + ':' + member.params.map(codeOf).join('');
 
 /**
  * The optional modules, in order, each with every method and event of its interface that can be used: the package
