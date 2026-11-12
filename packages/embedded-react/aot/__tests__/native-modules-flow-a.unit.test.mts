@@ -413,6 +413,40 @@ describe('nativeModule() in Flow A', () => {
     expect(seen).toEqual([['7'], ['a'], [-5e9], [0], [-(2 ** 63)]]);
   });
 
+  it('wraps an Int64 as BigInt.asIntN would, without BigInt', () => {
+    const Clock = nativeModule('clock', 1, methods({echo: 'l:l'}), {
+      echo: (value: number) => value,
+    });
+    const values = [
+      -0.5,
+      7.9,
+      -5e9 - 0.5,
+      2 ** 53 + 2,
+      2 ** 63 - 2048,
+      2 ** 63,
+      -(2 ** 63),
+      -(2 ** 63) - 4096,
+      2 ** 64 + 4096,
+      2 ** 70 + 2 ** 20,
+      -(2 ** 90) - 2 ** 40,
+      1e30,
+      2 ** 116,
+      Infinity,
+    ];
+    const expected = values.map(value =>
+      Number.isFinite(value)
+        ? Number(BigInt.asIntN(64, BigInt(Math.trunc(value))))
+        : 0,
+    );
+    const {BigInt: saved} = globalThis;
+    try {
+      delete (globalThis as {BigInt?: unknown}).BigInt;
+      expect(values.map(value => Clock.echo(value))).toEqual(expected);
+    } finally {
+      globalThis.BigInt = saved;
+    }
+  });
+
   it("calls a mock's methods on the mock, so it can keep state", () => {
     const Counter = nativeModule('counter', 1, methods({next: 'i:'}), {
       count: 0,
