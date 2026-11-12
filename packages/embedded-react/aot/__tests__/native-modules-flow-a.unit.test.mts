@@ -19,6 +19,8 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {afterEach, describe, it, expect} from 'vitest';
+import Reconciler from 'react-reconciler';
+import {createElement} from 'react';
 import {loadAppFile} from '../app-file-loader.mts';
 import {
   addNativeSignatures,
@@ -460,6 +462,67 @@ describe('native events in Flow A', () => {
     expect(() => useNativeEvent(Sensors, 'name', handler)).toThrow(
       "sensors.name takes a string, which native modules don't pass yet",
     );
+  });
+
+  /**
+   * Renders `element` into a root of its own, with its effects run; returns a function that renders again. The
+   * renderer needs the bridge's NativeUI, which a tree of components that draw nothing never calls.
+   */
+  async function mount(element: unknown) {
+    (globalThis as {NativeUI?: unknown}).NativeUI ??= new Proxy(
+      {},
+      {get: () => () => 0},
+    );
+    const {hostConfig} = await import('../../src/host-config.js');
+    const reconciler = Reconciler(hostConfig as never);
+    const root = reconciler.createContainer(
+      {},
+      0,
+      null,
+      false,
+      null,
+      '',
+      () => {},
+      null,
+    );
+    const render = (next: unknown) => {
+      reconciler.updateContainer(next as never, root, null, null);
+      reconciler.flushPassiveEffects();
+    };
+    render(element);
+    return render;
+  }
+
+  /** A component that subscribes to sensors.reading, recording what it hears. */
+  const listener = (Sensors: unknown, heard: unknown[][]) => (): null => {
+    useNativeEvent(Sensors, 'reading', (...values: unknown[]) =>
+      heard.push(values),
+    );
+    return null;
+  };
+
+  it('calls a subscriber with the values the bridge posts while it is mounted', async () => {
+    global.__erNative = fakeHost(['events:sensors.reading@2:v:f']);
+    const Sensors = nativeModule('sensors', 2, events({reading: 'v:f'}));
+    const heard: unknown[][] = [];
+    const render = await mount(createElement(listener(Sensors, heard)));
+    global.__erNativeEvent!(0, [21.5]);
+    render(null);
+    global.__erNativeEvent!(0, [22.5]);
+    expect(heard).toEqual([[21.5]]);
+  });
+
+  it('reaches the subscribers of an app evaluated again, as a hot reload does', async () => {
+    global.__erNative = fakeHost(['events:sensors.reading@2:v:f']);
+    const before = nativeModule('sensors', 2, events({reading: 'v:f'}));
+    const heardBefore: unknown[][] = [];
+    await mount(createElement(listener(before, heardBefore)));
+    const after = nativeModule('sensors', 2, events({reading: 'v:f'}));
+    const heardAfter: unknown[][] = [];
+    await mount(createElement(listener(after, heardAfter)));
+    global.__erNativeEvent!(0, [21.5]);
+    expect(heardBefore).toEqual([[21.5]]);
+    expect(heardAfter).toEqual([[21.5]]);
   });
 
   it("gives a mock that is a function an emit, which posts the module's events", () => {

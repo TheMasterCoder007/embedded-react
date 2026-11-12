@@ -679,8 +679,8 @@ const SCENARIOS: Scenario[] = [
     mocks: true,
   },
   // Four starts: the App hears each (last 4, half 2, even, 4 posts refused from inside start). The child hears the
-  // two while shown (+1 each), and its inner part the first, which closes it (+100). The rows add 10 each while the
-  // list holds them: 10, 111, 21, 20. read shows 162.
+  // two while shown (+1 each), and its inner part the first, which closes it (+100). Each row adds 10 times its value
+  // while the list holds it: 10, 111, 31, 30. read shows 182.
   {
     name: 'native-events-taps',
     file: fixture('native-events'),

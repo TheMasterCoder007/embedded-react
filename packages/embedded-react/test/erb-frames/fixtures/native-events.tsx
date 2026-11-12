@@ -1,7 +1,7 @@
 // Native events from the host's probe module, whose interface is in native-probe.ts. start posts done on the next
 // frame, which the App, a child shown by a condition and each list row subscribe to. A subscriber hears it only while
 // it is mounted: the child while shown, a row while the list holds it. The child adds 1 to the number the probe
-// stores and each row 10, which read shows. The first done the child hears also closes a part of it that adds 100,
+// stores and each row 10 times its value, which read shows. The first done the child hears also closes a part of it that adds 100,
 // which still hears that one, as it was mounted when it came.
 import {useState} from 'react';
 import {
@@ -36,7 +36,7 @@ function Listener() {
 }
 
 function Row({value}: {value: number}) {
-  useNativeEvent(Probe, 'done', () => Probe.store(Probe.stored() + 10));
+  useNativeEvent(Probe, 'done', () => Probe.store(Probe.stored() + 10 * value));
   return <Text style={styles.text}>row {value}</Text>;
 }
 

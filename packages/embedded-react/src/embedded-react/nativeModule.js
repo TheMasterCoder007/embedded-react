@@ -42,12 +42,14 @@ const CONVERSIONS = {
 // Each module's events, by event name: its signature and the handlers subscribed to it, or why it can't be used.
 const MODULE_EVENTS = new WeakMap();
 
-// The firmware's events the app subscribes to, by their index in its natives, as the bridge posts them.
-const EVENTS_BY_INDEX = new Map();
+// The handlers subscribed to each of the firmware's events, by its index in the natives, as the bridge posts them.
+// An app-only hot reload evaluates the app again in this context, so every evaluation's modules share these: a post
+// reaches each mounted subscriber, whichever evaluation it came from.
+const HANDLERS_BY_INDEX = new Map();
 
 // Calls an event's handlers with its values; a handler that unsubscribes another doesn't skip it in this post.
-function deliver(event, values) {
-  for (const handler of [...event.handlers]) {
+function deliver(handlers, values) {
+  for (const handler of [...handlers]) {
     handler(...values);
   }
 }
@@ -55,9 +57,9 @@ function deliver(event, values) {
 // The bridge posts each event here: the event's index in the natives, and its values.
 function installDispatcher() {
   globalThis.__erNativeEvent = (index, values) => {
-    const event = EVENTS_BY_INDEX.get(index);
-    if (event) {
-      deliver(event, values);
+    const handlers = HANDLERS_BY_INDEX.get(index);
+    if (handlers) {
+      deliver(handlers, values);
     }
   };
 }
@@ -135,9 +137,8 @@ export function nativeModule(name, version, signatures, mock) {
       events.set(event, {qualifiedName, reason: signature.reason});
       continue;
     }
-    const entry = {qualifiedName, signature, handlers: new Set()};
-    events.set(event, entry);
     if (mock) {
+      events.set(event, {qualifiedName, signature, handlers: new Set()});
       continue;
     }
     const index = host ? host.findEvent(qualifiedName, version, signature) : -1;
@@ -146,7 +147,14 @@ export function nativeModule(name, version, signatures, mock) {
         `missing native module: ${qualifiedName} (version ${version}, signature "${signature}")`,
       );
     }
-    EVENTS_BY_INDEX.set(index, entry);
+    if (!HANDLERS_BY_INDEX.has(index)) {
+      HANDLERS_BY_INDEX.set(index, new Set());
+    }
+    events.set(event, {
+      qualifiedName,
+      signature,
+      handlers: HANDLERS_BY_INDEX.get(index),
+    });
     installDispatcher();
   }
 
@@ -167,7 +175,7 @@ export function nativeModule(name, version, signatures, mock) {
       if (calls.running) {
         return false;
       }
-      deliver(entry, converted);
+      deliver(entry.handlers, converted);
       return true;
     };
     implementation = mock(emit);
