@@ -1081,6 +1081,7 @@ bool er_runtime_native_post(int native, const int32_t* arguments)
         }
         JSValue call_arguments[2] = {JS_NewInt32(s_ctx, native), values};
         er_bridge_dispatch(s_ctx, dispatcher, 2, call_arguments, "native event");
+        JS_FreeValue(s_ctx, call_arguments[0]);
         JS_FreeValue(s_ctx, values);
     }
     JS_FreeValue(s_ctx, dispatcher);

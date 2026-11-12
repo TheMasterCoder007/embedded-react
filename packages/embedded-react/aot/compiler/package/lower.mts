@@ -2114,37 +2114,70 @@ function timerBody(
 }
 
 /**
- * A useNativeEvent's handler: entered with the event's values, it runs its body while its component is mounted.
+ * The handlers of each native event the app subscribes to, in the order they lowered.
  *
- * @param handler  The handler.
+ * @param handlers  Every useNativeEvent's handler.
+ *
+ * @returns Them, grouped by event.
+ */
+function byEvent(handlers: IrNativeEventHandler[]): IrNativeEventHandler[][] {
+  const groups = new Map<string, IrNativeEventHandler[]>();
+  for (const handler of handlers) {
+    const {name, version, signature} = handler.event;
+    const key = `${name} ${version} ${signature}`;
+    groups.set(key, [...(groups.get(key) ?? []), handler]);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * A native event's function: entered with its values, it runs each subscriber whose component is mounted. Whether
+ * each one is mounted is read before any of them runs, as Flow A calls the subscribers it had when the event came.
+ *
+ * @param handlers  The event's subscribers.
  * @param lowering  The program being lowered.
  *
  * @returns The function.
  */
 function nativeEventBody(
-  handler: IrNativeEventHandler,
+  handlers: IrNativeEventHandler[],
   lowering: Lowering,
 ): ProgramFunction {
+  const {event} = handlers[0];
   const builder = new FunctionBuilder(
     FunctionKind.nativeEvent,
-    `native event ${handler.event.name}`,
+    `native event ${event.name}`,
   );
-  const values = handler.event.params.map(type => builder.reserved(type));
-  const codegen = new Codegen(builder, lowering.slots, {
-    values: new Map(
-      handler.values.map((name, position) => [name, values[position]]),
-    ),
+  const values = event.params.map(type => builder.reserved(type));
+  const codegenOf = (handler: IrNativeEventHandler) =>
+    new Codegen(builder, lowering.slots, {
+      values: new Map(
+        handler.values.map((name, position) => [name, values[position]]),
+      ),
+    });
+  const mounted = handlers.map(handler => {
+    if (!handler.mounted) {
+      return null;
+    }
+    const test = handler.mounted;
+    const kept = builder.reserved('bool');
+    const codegen = codegenOf(handler);
+    codegen.scoped(() =>
+      builder.abc('MOVE', kept.index, codegen.condition(test).index),
+    );
+    return kept;
   });
-  const end = builder.label();
-  if (handler.mounted) {
-    const mounted = handler.mounted;
-    codegen.scoped(() => builder.branch('JF', end, codegen.condition(mounted)));
+  handlers.forEach((handler, index) => {
+    const skip = builder.label();
+    if (mounted[index]) {
+      builder.branch('JF', skip, mounted[index]);
+    }
+    codegenOf(handler).statements(handler.callback.body);
+    builder.place(skip);
+  });
+  if (handlers.some(handler => handler.callback.updatesState)) {
+    requestUpdate(codegenOf(handlers[0]), lowering);
   }
-  codegen.statements(handler.callback.body);
-  if (handler.callback.updatesState) {
-    requestUpdate(codegen, lowering);
-  }
-  builder.place(end);
   return builder.finish(values.length);
 }
 
@@ -2604,10 +2637,11 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
         'that holds the list instead.',
     );
   }
-  const nativeEvents = output.nativeEventHandlers.map(handler => ({
-    name: tables.string(handler.event.name),
-    version: handler.event.version,
-    signature: tables.string(handler.event.signature),
+  const subscribed = byEvent(output.nativeEventHandlers);
+  const nativeEvents = subscribed.map(([{event}]) => ({
+    name: tables.string(event.name),
+    version: event.version,
+    signature: tables.string(event.signature),
     function: next++,
   }));
   lowering.effectFunctions = {
@@ -2624,9 +2658,7 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     ...output.timerFunctions.map(timer =>
       timerBody(timer.name, timer.callback!, lowering),
     ),
-    ...output.nativeEventHandlers.map(handler =>
-      nativeEventBody(handler, lowering),
-    ),
+    ...subscribed.map(handlers => nativeEventBody(handlers, lowering)),
     ...output.dependencyEffects.map(effect => checkedEffect(effect, lowering)),
     ...output.mountEffects.map((_, index) => mountEffect(index, lowering)),
     ...doneFunctions(

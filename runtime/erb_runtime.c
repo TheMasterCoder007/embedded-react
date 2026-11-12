@@ -2019,7 +2019,7 @@ bool erb_native_post(int native, const int32_t* arguments)
         cells[param] = codes[param] == 'b' ? arguments[param] != 0 : arguments[param];
     }
 
-    /* Every handler runs before the update, as one event. Each checks that its component is mounted. */
+    /* Every handler runs before the update, as one event. A handler runs each subscriber whose component is mounted. */
     ErbStatus status = ERB_OK;
     bool ran = false;
     for (uint32_t index = 0; index < g_erb.program.native_event_count && status == ERB_OK; index++)

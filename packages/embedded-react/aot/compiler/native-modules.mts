@@ -88,7 +88,7 @@ const DECLARATION_HINT =
 const EVENTS_HINT =
   'declare the events as an object of methods that return void: events: {reading(celsius: number): void};';
 
-/** Native event handlers a package may have: the runtime's ERB_MAX_NATIVE_EVENTS. */
+/** useNativeEvents a package may have, counting each list row; so no more events than the runtime's ERB_MAX_NATIVE_EVENTS. */
 export const MAX_NATIVE_EVENTS = 32;
 
 /** What an interface file may be called, after the path the app imports it by. */

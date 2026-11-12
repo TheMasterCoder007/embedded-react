@@ -178,9 +178,9 @@ A post the runtime can't take returns false: no app runs, or the app is running 
 from inside its call). Post it again next frame. In Flow A, `er_runtime_native_post()` takes the same index and
 values and calls the subscribed handlers as one batch.
 
-**Flow B.** Each `useNativeEvent` is a handler in the package, which checks that its component is mounted before it
-does anything: the conditions it is built under, and its list row being in use. A package holds 32, and one in a
-list row counts once for each row.
+**Flow B.** Each event the app subscribes to is a handler in the package, which runs every `useNativeEvent` of it
+whose component is mounted: the conditions it is built under, and its list row being in use, read before any of
+them runs. A package holds 32 subscriptions, and one in a list row counts once for each row.
 
 ## AppRegistry
 

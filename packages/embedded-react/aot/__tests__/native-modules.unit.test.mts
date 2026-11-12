@@ -470,7 +470,7 @@ describe('native events', () => {
     expect(functions[events[0].handler].parameterTypes).toHaveLength(3);
   });
 
-  it("checks a component's conditions before it runs a handler, and the App's runs at once", () => {
+  it("runs an event's subscribers from one function, reading whether each is mounted before any runs", () => {
     const {events, functions} = readProgram(
       compile(
         eventsApp(
@@ -480,23 +480,23 @@ describe('native events', () => {
         ),
       ).program,
     );
-    const handlers = events.map(entry => functions[entry.handler]);
-    expect(handlers).toHaveLength(2);
-    const [child, app] = handlers;
-    expect(child.ops.map(op => op.name)).toContain('JF');
-    expect(app.ops.map(op => op.name)).not.toContain('JF');
+    expect(events.map(entry => entry.event)).toEqual(['sensors.tick v2 v:']);
+    const names = functions[events[0].handler].ops.map(op => op.name);
+    // The child's test is kept, then each body runs; only the child's is skipped when its test is false.
+    expect(names.filter(name => name === 'JF')).toHaveLength(1);
+    expect(names.indexOf('JF')).toBeLessThan(names.indexOf('SET32'));
   });
 
-  it('subscribes once for each row of a list', () => {
-    const {events} = readProgram(
+  it("subscribes each row of a list in its event's function", () => {
+    const {events, functions} = readProgram(
       compile(
         eventsApp('', '{items.map(item => <Ticker key={item}/>)}', TICKER),
         {listCap: 3},
       ).program,
     );
-    expect(events.map(entry => entry.event)).toEqual(
-      Array(3).fill('sensors.tick v2 v:'),
-    );
+    expect(events.map(entry => entry.event)).toEqual(['sensors.tick v2 v:']);
+    const names = functions[events[0].handler].ops.map(op => op.name);
+    expect(names.filter(name => name === 'JF')).toHaveLength(3);
   });
 
   it("gives Flow A each method's and event's signature", () => {

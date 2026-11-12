@@ -65,7 +65,7 @@
 #define ERB_MAX_IMPORTS 32u
 #endif
 
-/** @brief Most native event handlers a package may have: one for each useNativeEvent, in each list row. */
+/** @brief Most native events a package may subscribe to: one handler function each. */
 #ifndef ERB_MAX_NATIVE_EVENTS
 #define ERB_MAX_NATIVE_EVENTS 32u
 #endif

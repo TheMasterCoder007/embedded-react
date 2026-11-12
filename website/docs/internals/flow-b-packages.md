@@ -180,7 +180,7 @@ Every record's size is a multiple of 4. A table with a header array starts with 
 | 17  | `inputs`    | Host-fed values (`useHostValue`): `name u16`, `slot u16`                                                                                                                                                                                                                 |
 | 18  | `interps`   | Interpolations an animated value is bound through, 72 bytes each (since minor 1). See [Animations and vector tapes](#animations-and-vector-tapes)                                                                                                                        |
 | 19  | `keyboard`  | The on-screen keyboard's look and layout (since minor 3). See [The keyboard](#the-keyboard)                                                                                                                                                                              |
-| 21  | `events`    | Native event handlers (since minor 11): `name u16`, `version u16`, `signature u16` (the event, as the firmware registers it), `function u16` (its handler)                                                                                                               |
+| 21  | `events`    | Native events the package subscribes to (since minor 11): `name u16`, `version u16`, `signature u16` (the event, as the firmware registers it), `function u16` (its handler)                                                                                             |
 
 A template node record is `type u8`, `flags u8`, `children u16`, `props u16`, `handle u16`,
 `bindings u16`, `binding_count u8`, `reserved u8`. Nodes are listed in pre-order with a child count,
@@ -540,11 +540,11 @@ The VM is never re-entered. That is what keeps the stack bound in the arena exac
 a fault: it only happens when events keep raising each other. A responder query must answer at once, so
 one that arrives while the VM runs says no.
 
-A native event the firmware posts with `erb_native_post()` runs every handler subscribed to it, each entered
-with the event's values, then the update, as one event. It is never queued: one posted while the VM runs is
-refused, and the firmware posts it again next frame, so a burst of them can't fill the queue. Each handler
-first tests that its component is mounted, from the conditions its component is built under and its list row
-being in use, and does nothing when it isn't.
+A native event the firmware posts with `erb_native_post()` runs its handler, entered with the event's values,
+then the update, as one event. It is never queued: one posted while the VM runs is refused, and the firmware
+posts it again next frame, so a burst of them can't fill the queue. The handler runs each `useNativeEvent` of the
+event whose component is mounted: from the conditions it is built under and its list row being in use, all read
+before any of them runs, as Flow A calls the subscribers it had when the event came.
 
 An effect is queued by `EFFECT` from the update (or from the boot function, for a mount effect) and runs
 after the pass, as its own run with its own budget, before any other queued event.
