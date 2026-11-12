@@ -57,7 +57,7 @@ export interface NativeFile {
 const SOURCE_EXTENSIONS = ['.ts', '.mts', '.tsx', '/index.ts'];
 
 /** What a JavaScript or .d.ts file may be called, after the path it is imported by. */
-const BUILT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.d.ts', '/index.js'];
+const BUILT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.jsx', '.d.ts', '/index.js'];
 
 /** What a module's mock may be called, after `<name>.mock`. */
 const MOCK_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
@@ -81,6 +81,15 @@ const DECLARES_MODULE = /\bnativeModule(?:\.optional)?\s*\(\s*['"`]/;
  */
 const isSourceFile = (path: string): boolean =>
   /\.[cm]?tsx?$/.test(path) && !/\.d\.[cm]?ts$/.test(path);
+
+/**
+ * Whether a file is JavaScript, JSX included.
+ *
+ * @param path  The file.
+ *
+ * @returns True when it is.
+ */
+const isBuiltFile = (path: string): boolean => /\.[cm]?jsx?$/.test(path);
 
 /**
  * Whether a path is a file.
@@ -367,14 +376,19 @@ const shownPath = (appDirectory: string, path: string): string =>
 
 /**
  * Whether a file passes on what another file declares, `export * from` or `export {Can} from`, and one of those files
- * declares native modules.
+ * declares native modules, or passes them on in turn.
  *
  * @param source  The file's source.
  * @param path  The file.
+ * @param seen  The files already looked at, so a loop ends.
  *
  * @returns True when it does.
  */
-function passesOnModules(source: string, path: string): boolean {
+function passesOnModules(
+  source: string,
+  path: string,
+  seen: Set<string> = new Set([path]),
+): boolean {
   if (!/\bexport\b[^;]*\bfrom\b/.test(source)) return false;
   return parseFile(source).body.some(statement => {
     if (
@@ -386,11 +400,15 @@ function passesOnModules(source: string, path: string): boolean {
       return false;
     }
     const file = importedFileOf(dirname(path), statement.source.value);
-    if (!file) return false;
+    if (!file || seen.has(file)) return false;
+    seen.add(file);
     const passed = readFileSync(file, 'utf8');
-    return isSourceFile(file)
-      ? /\bnativeModule\b/.test(passed)
-      : /\.[cm]?js$/.test(file) && DECLARES_MODULE.test(passed);
+    if (!isSourceFile(file)) {
+      return isBuiltFile(file) && DECLARES_MODULE.test(passed);
+    }
+    return (
+      /\bnativeModule\b/.test(passed) || passesOnModules(passed, file, seen)
+    );
   });
 }
 
@@ -438,7 +456,7 @@ export function readNativeFiles(
         files[importPath] = readSourceFile(file, appDirectory);
       }
     } else if (
-      /\.[cm]?js$/.test(file) &&
+      isBuiltFile(file) &&
       DECLARES_MODULE.test(readFileSync(file, 'utf8'))
     ) {
       files[importPath] = {

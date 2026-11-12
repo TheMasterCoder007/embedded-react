@@ -1253,6 +1253,27 @@ describe('native modules from other files and packages', () => {
     ]);
   });
 
+  it("imports a module from the file the app's own module takes its interface from", () => {
+    const directory = folderOf({
+      'device.ts': CAN + 'export interface Gps { fix(): boolean; }\n',
+    });
+    const source = canApp('./device')
+      .replace(
+        "import {Can} from './device';",
+        "import {Can, type Gps} from './device';\n" +
+          "const Gps = nativeModule<Gps>('gps', 1);",
+      )
+      .replace('Can.send(1)', 'Can.send(1) && Gps.fix()')
+      .replace(
+        "import {Pressable, Text} from 'embedded-react';",
+        "import {Pressable, Text, nativeModule} from 'embedded-react';",
+      );
+    expect(importsOf(directory, source)).toEqual([
+      'can.send v1 b:i',
+      'gps.fix v1 b:',
+    ]);
+  });
+
   it('leaves a file that declares no module to the rest of the compiler', () => {
     const directory = folderOf({'helpers.ts': 'export const answer = 42;\n'});
     expect(readNativeFiles(canApp('./helpers'), directory)).toEqual({});
@@ -1297,6 +1318,20 @@ describe('native modules from other files and packages it refuses', () => {
     );
   });
 
+  it('refuses a package whose export is a .jsx file', () => {
+    const directory = folderOf({
+      'node_modules/built/package.json': JSON.stringify({
+        exports: './index.jsx',
+      }),
+      'node_modules/built/index.jsx':
+        "import {nativeModule} from 'embedded-react';\n" +
+        "export const Can = nativeModule('can', 1);\n",
+    });
+    expect(failureIn(directory, app('built'))).toMatch(
+      /built is JavaScript or a \.d\.ts/,
+    );
+  });
+
   it("pins an error in the package's file to the app's import, and says where it is", () => {
     const directory = folderOf({
       'node_modules/broken/package.json': JSON.stringify({
@@ -1336,6 +1371,19 @@ describe('native modules from other files and packages it refuses', () => {
         /\.\/device passes Can on from another file, and a native module isn't followed further/,
       );
     }
+    const chain = folderOf({
+      'device.ts': "export * from './buses';\n",
+      'buses.ts': "export {Can} from './can';\n",
+      'can.ts': can,
+    });
+    expect(failureIn(chain, app('./device'))).toMatch(
+      /\.\/device passes Can on from another file/,
+    );
+    const loop = folderOf({
+      'device.ts': "export * from './other';\n",
+      'other.ts': "export * from './device';\n",
+    });
+    expect(readNativeFiles(app('./device'), loop)).toEqual({});
     const plain = folderOf({
       'device.ts': "export * from './helpers';\n",
       'helpers.ts': 'export const answer = 42;\n',
