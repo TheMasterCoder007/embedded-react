@@ -53,7 +53,8 @@ const {registerSvgVectorLoader} = await import(
 const {transformPersist, shouldPersist} = await import(
   pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href
 );
-const {loadAppFile} = await import('./aot/app-file-loader.mts');
+const {loadAppFile, loadDependencyFile} =
+  await import('./aot/app-file-loader.mts');
 
 const REACT_PIN = Object.fromEntries(
   ['react', 'react-reconciler', 'scheduler']
@@ -198,9 +199,9 @@ function createBundle({
           pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, async loadArgs => {
             // Only the app's own source — never dependencies (see shouldPersist: excluding node_modules is what
             // stops the library's usePersistentState being rewritten to call itself). Native modules get their
-            // signatures and mocks, and with persist on, useState persists.
+            // signatures and mocks, and with persist on, useState persists. A package's native modules get theirs too.
             if (!shouldPersist(loadArgs.path, projectRootNormalized))
-              return undefined;
+              return loadDependencyFile(loadArgs.path, {mocks: true});
             try {
               return await loadAppFile(
                 loadArgs.path,

@@ -122,10 +122,13 @@ function makeAssetPlugin({images, fonts, persist, projectRoot}) {
         await import('../assets/svg-loader.mjs');
       const {shouldPersist, transformPersist} =
         await import('../persist-transform.mjs');
-      const {loadAppFile} = await import('../aot/app-file-loader.mts');
+      const {loadAppFile, loadDependencyFile} =
+        await import('../aot/app-file-loader.mts');
       const normalizedProjectRoot = projectRoot.replace(/\\/g, '/');
       build.onLoad({filter: /\.(jsx?|tsx?)$/}, async args => {
-        if (!shouldPersist(args.path, normalizedProjectRoot)) return undefined;
+        if (!shouldPersist(args.path, normalizedProjectRoot)) {
+          return loadDependencyFile(args.path);
+        }
         try {
           return await loadAppFile(
             args.path,

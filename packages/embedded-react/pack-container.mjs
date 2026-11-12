@@ -48,7 +48,7 @@ import {emitAssetPack} from './assets/emit-pack.mjs';
 import {emitContainer} from './assets/emit-container.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
 import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
-import {loadAppFile} from './aot/app-file-loader.mts';
+import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 
 // QuickJS release the bytecode targets — MUST match the FetchContent pin in
@@ -90,9 +90,11 @@ const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(pluginBuild) {
-    // The demo's own files give its native modules their signatures.
+    // The demo's own files give its native modules their signatures, and so do a package's.
     pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args =>
-      args.path.startsWith(demoDir) ? loadAppFile(args.path) : undefined,
+      args.path.startsWith(demoDir)
+        ? loadAppFile(args.path)
+        : loadDependencyFile(args.path),
     );
     pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');

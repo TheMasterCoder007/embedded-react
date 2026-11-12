@@ -61,12 +61,12 @@ export function App() {
 }
 ```
 
-Call a method in an effect, a handler or a timer, and keep what it returns in state. Render can't call one: Flow A
+Call a method in an effect, a handler, or a timer, and keep what it returns in state. Render can't call one: Flow A
 would call it on every render, and Flow B only when what it reads changes.
 
 ## 2. Write the C side
 
-Each method is an `ErbNative` entry: its name (`module.method`), version, signature and a function. The signature is
+Each method is an `ErbNative` entry: its name (`module.method`), version, signature, and a function. The signature is
 the result, a colon, then the parameters, one letter each: `i` for `Int`, `f` for `number`, `b` for `boolean`, `l` for
 `Int64`, `s` for `string`, `v` for no result. A record is its fields in braces, `{x:i,y:i}`. An event is an entry
 with no function, and its signature's result is `v`.
@@ -122,7 +122,7 @@ const ErRuntimeConfig runtime_config = {
 };
 ```
 
-When the app loads, its module is matched against the table by name, version and signature. A missing or different
+When the app loads, its module is matched against the table by name, version, and signature. A missing or different
 one stops it, and the error screen names it. Bump the version when you change what a method means.
 
 ## 3. Post events for slow work
@@ -202,6 +202,35 @@ Values go through the declared types as they would on a board, so an `Int` is cu
 to a float's precision. A required module with no mock stops the app in the simulator, naming the file to add. An
 optional one with no mock is unavailable, which is how to try the app as a board without it would run. A board build
 never includes the mocks.
+
+## 6. Import modules from a package
+
+A module can be declared once, in its own file or a package, and imported by each app that uses it. The file exports
+the declaration, with the interface in the same file or a local one it imports, and the mock beside the interface
+(`my-device/chip.mock.ts` here):
+
+```ts title="my-device/index.ts"
+import {nativeModule} from 'embedded-react';
+import type {Int} from 'embedded-react';
+
+export interface Chip {
+  freeMemory(): Int;
+}
+
+export const Chip = nativeModule<Chip>('chip', 1);
+```
+
+An interface imported from another file needs a name of its own there, since TypeScript won't export a const beside
+an imported type of the same name: `import type {Chip as ChipInterface} from './chip'`.
+
+```tsx title="App.tsx"
+import {Chip} from 'my-device';
+```
+
+A package is found the Node way, from the app's folder: a registry, workspace, or `file:` dependency. Its `exports`
+(or `main`) must point at its `.ts` source, since the types are what give each method its signature; a package that
+ships only JavaScript or `.d.ts` files is refused. The app imports the module from the file that declares it: a file
+that passes it on with `export * from` or `export {Chip} from` isn't followed.
 
 ## Limits
 

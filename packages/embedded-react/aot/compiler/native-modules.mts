@@ -16,7 +16,8 @@
 
 /*
  * Native modules: `const Sensors = nativeModule<Sensors>('sensors', 1)` at module level, typed by an interface in
- * the app's file or in a local .ts file the CLI reads. Each method called becomes an import named
+ * the app's file or in a local .ts file the CLI reads. An app may import a module declared in another file or a
+ * package instead, `import {Can} from 'my-device'`, which the CLI reads too (see native-files.mts). Each method called becomes an import named
  * `module.method`, and each call a CALLN. The interface's `events: {reading(celsius: number): void}` are what the
  * firmware posts; each useNativeEvent becomes a handler the runtime runs with the event's values. In Flow A the
  * bundler passes nativeModule() each method's and event's signature instead, and in the simulators the module's mock
@@ -33,8 +34,6 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {existsSync, readFileSync} from 'node:fs';
-import {dirname, resolve} from 'node:path';
 import {parse} from '@babel/parser';
 import {aotError} from './diagnostics.mts';
 import {buildsText, lowerExpr, lowerExprWide} from './expressions.mts';
@@ -52,6 +51,7 @@ import type {
 import {nativeAvailableSlot} from './boot.mts';
 import {BOOL} from './ir/types.mts';
 import type {IrOptionalModule, NativeEvent} from './ir/functions.mts';
+import type {NativeFile} from './native-files.mts';
 import type {Env} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -152,12 +152,6 @@ const EVENTS_HINT =
 /** useNativeEvents a package may have, counting each list row; so no more events than the runtime's ERB_MAX_NATIVE_EVENTS. */
 export const MAX_NATIVE_EVENTS = 32;
 
-/** What an interface file may be called, after the path the app imports it by. */
-const INTERFACE_EXTENSIONS = ['.ts', '.mts', '.tsx', '/index.ts'];
-
-/** What a module's mock may be called, after `<name>.mock`. */
-const MOCK_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -186,7 +180,7 @@ function errorAt(node: t.Node, message: string, hint: string): AotError {
  *
  * @returns Each declarator.
  */
-function declarationsOf(program: t.Program): t.VariableDeclarator[] {
+export function declarationsOf(program: t.Program): t.VariableDeclarator[] {
   const declarators: t.VariableDeclarator[] = [];
   for (const statement of program.body) {
     const declaration =
@@ -345,7 +339,7 @@ function nameAndVersionOf(call: t.CallExpression): {
  *
  * @returns Its members, null when the file doesn't declare it, or a reason it can't be read.
  */
-function declaredMembers(
+export function declaredMembers(
   program: t.Program,
   name: string,
 ): t.TSTypeElement[] | string | null {
@@ -385,7 +379,7 @@ function declaredMembers(
  *
  * @returns The import path as the app writes it, and the name the file exports; or null.
  */
-function localImportOf(
+export function localImportOf(
   program: t.Program,
   name: string,
 ): {path: string; exported: string} | null {
@@ -716,21 +710,22 @@ function eventsOf(
 }
 
 /**
- * The native modules an app declares, by the const each is bound to. Run on the app before its types are stripped.
+ * The native modules a file declares, by the const each is bound to, before they are numbered (see
+ * collectNativeModules): an optional module's index is 0.
  *
- * @param program  The app's program, types and all.
- * @param interfaces  The local files the app imports a module's interface from, by import path (see
- *                    readNativeInterfaces).
+ * @param program  The file's program, types and all.
+ * @param files  The local files it imports a module's interface from, by import path (see readNativeFiles).
  *
- * @returns The modules.
+ * @returns Each module, and the call that declares it.
  */
-export function collectNativeModules(
+function declaredIn(
   program: t.Program,
-  interfaces: Record<string, string> = {},
-): Map<string, NativeModule> {
-  const modules = new Map<string, NativeModule>();
-  const names = new Set<string>();
-  let optionalCount = 0;
+  files: Record<string, NativeFile>,
+): Map<string, {module: NativeModule; call: t.CallExpression}> {
+  const modules = new Map<
+    string,
+    {module: NativeModule; call: t.CallExpression}
+  >();
   const declarators = declarationsOf(program);
   refuseInnerDeclarations(
     program.body,
@@ -740,22 +735,14 @@ export function collectNativeModules(
     const call = declarator.init as t.CallExpression;
     const interfaceName = interfaceNameOf(call);
     const {name, version} = nameAndVersionOf(call);
-    if (names.has(name)) {
-      throw errorAt(
-        call,
-        `AOT: the native module "${name}" is declared twice`,
-        'declare each module once, and call its methods through that const.',
-      );
-    }
-    names.add(name);
 
     // The interface, in this file or in the local file the app imports it from, and the records that file declares.
     let members = declaredMembers(program, interfaceName);
     let scope: RecordScope = name => declaredMembers(program, name);
     if (members === null) {
       const local = localImportOf(program, interfaceName);
-      const source = local ? interfaces[local.path] : undefined;
-      if (!local || source === undefined) {
+      const source = local ? files[local.path]?.source : undefined;
+      if (!local || source == null) {
         throw errorAt(
           call,
           `AOT: can't find the interface ${interfaceName}`,
@@ -783,20 +770,13 @@ export function collectNativeModules(
     }
 
     const optional = isOptionalCallee(call.callee);
-    if (optional && optionalCount === MAX_OPTIONAL_MODULES) {
-      throw errorAt(
-        call,
-        `AOT: an app may declare at most ${MAX_OPTIONAL_MODULES} optional native modules`,
-        'declare fewer optional modules, or merge ones that boards always have together.',
-      );
-    }
     const module: NativeModule = {
       name,
       version,
       interfaceName,
       members: new Map(),
       events: new Map(),
-      optional: optional ? optionalCount++ : null,
+      optional: optional ? 0 : null,
     };
     for (const element of members) {
       if (isEventsMember(element)) {
@@ -841,7 +821,210 @@ export function collectNativeModules(
           'available says.',
       );
     }
-    modules.set((declarator.id as t.Identifier).name, module);
+    modules.set((declarator.id as t.Identifier).name, {module, call});
+  }
+  return modules;
+}
+
+/**
+ * The const a file exports under a name: `export const Can = …`, or `export {can as Can}`.
+ *
+ * @param program  The file.
+ * @param exported  The name it is imported by.
+ *
+ * @returns The const's name, 'reexport' when the file may pass it on from another file, or null.
+ */
+function exportedConstOf(
+  program: t.Program,
+  exported: string,
+): string | 'reexport' | null {
+  let reexports = false;
+  for (const statement of program.body) {
+    if (
+      statement.type === 'ExportAllDeclaration' &&
+      statement.exportKind !== 'type'
+    ) {
+      reexports = true;
+    }
+    if (
+      statement.type !== 'ExportNamedDeclaration' ||
+      statement.exportKind === 'type'
+    ) {
+      continue;
+    }
+    const declaration = statement.declaration;
+    if (declaration?.type === 'VariableDeclaration') {
+      const declares = declaration.declarations.some(
+        declarator =>
+          declarator.id.type === 'Identifier' &&
+          declarator.id.name === exported,
+      );
+      if (declares) return exported;
+    }
+    for (const specifier of statement.specifiers) {
+      if (
+        specifier.type !== 'ExportSpecifier' ||
+        specifier.exportKind === 'type'
+      ) {
+        continue;
+      }
+      const name =
+        specifier.exported.type === 'Identifier'
+          ? specifier.exported.name
+          : specifier.exported.value;
+      if (name !== exported) continue;
+      return statement.source ? 'reexport' : specifier.local.name;
+    }
+  }
+  return reexports ? 'reexport' : null;
+}
+
+/**
+ * Pins an error from another file's module to the app's import of it, and says where in that file it is.
+ *
+ * @param error  The thrown value.
+ * @param file  The file, as the app imports it.
+ * @param at  The app's import.
+ *
+ * @returns The error, for the caller to throw.
+ */
+function importedError(error: unknown, file: NativeFile, at: t.Node): unknown {
+  const aotError = error as AotError;
+  if (!aotError?.message?.startsWith('AOT:')) return error;
+  const where = aotError.aotLoc
+    ? `${file.path}:${aotError.aotLoc.line}:${aotError.aotLoc.column + 1}`
+    : file.path;
+  aotError.message += ` (in ${where})`;
+  aotError.aotLoc = at.loc?.start;
+  return aotError;
+}
+
+/**
+ * The modules an app imports from other files, by the name it imports each as: the file, or the package's, declares
+ * the module.
+ *
+ * @param program  The app's program.
+ * @param files  The files it imports from (see readNativeFiles).
+ *
+ * @returns Each module, where the app imports it, and where it is declared.
+ */
+function importedIn(
+  program: t.Program,
+  files: Record<string, NativeFile>,
+): {binding: string; module: NativeModule; at: t.Node; origin: string}[] {
+  const found: {
+    binding: string;
+    module: NativeModule;
+    at: t.Node;
+    origin: string;
+  }[] = [];
+  for (const statement of program.body) {
+    if (
+      statement.type !== 'ImportDeclaration' ||
+      statement.importKind === 'type' ||
+      !Object.hasOwn(files, statement.source.value)
+    ) {
+      continue;
+    }
+    const importPath = statement.source.value;
+    const file = files[importPath];
+    const specifiers = statement.specifiers.filter(
+      specifier =>
+        specifier.type === 'ImportSpecifier' && specifier.importKind !== 'type',
+    ) as t.ImportSpecifier[];
+    if (!specifiers.length) continue;
+    if (file.source === null) {
+      throw errorAt(
+        statement.source,
+        `AOT: ${importPath} is JavaScript or a .d.ts, which a native module isn't read from (${file.path})`,
+        'ship the package\'s .ts source, and point its exports at it: "exports": "./index.ts".',
+      );
+    }
+    let fileProgram: t.Program;
+    let declared: ReturnType<typeof declaredIn>;
+    try {
+      fileProgram = parseInterfaceFile(file.source);
+      declared = declaredIn(fileProgram, file.imports);
+    } catch (error) {
+      throw importedError(error, file, statement.source);
+    }
+    for (const specifier of specifiers) {
+      const imported =
+        specifier.imported.type === 'Identifier'
+          ? specifier.imported.name
+          : specifier.imported.value;
+      const local = exportedConstOf(fileProgram, imported);
+      if (local === 'reexport') {
+        throw errorAt(
+          specifier,
+          `AOT: ${importPath} passes ${imported} on from another file, and a native module isn't followed further`,
+          'declare the module in the file the app imports, or import it from the file that declares it.',
+        );
+      }
+      const entry = local === null ? undefined : declared.get(local);
+      if (!entry) continue;
+      found.push({
+        binding: specifier.local.name,
+        module: entry.module,
+        at: specifier,
+        origin: `${file.path}:${entry.call.start}`,
+      });
+    }
+  }
+  return found;
+}
+
+/**
+ * The native modules an app declares or imports, by the const each is bound to. Run on the app before its types are
+ * stripped. Optional modules are numbered in order, the app's own first.
+ *
+ * @param program  The app's program, types and all.
+ * @param files  The files the app imports a module or its interface from, by import path (see readNativeFiles).
+ *
+ * @returns The modules.
+ */
+export function collectNativeModules(
+  program: t.Program,
+  files: Record<string, NativeFile> = {},
+): Map<string, NativeModule> {
+  const found = [
+    ...[...declaredIn(program, files)].map(([binding, {module, call}]) => ({
+      binding,
+      module,
+      at: call as t.Node,
+      origin: `:${call.start}`,
+    })),
+    ...importedIn(program, files),
+  ];
+  const modules = new Map<string, NativeModule>();
+  const byName = new Map<string, {module: NativeModule; origin: string}>();
+  let optionalCount = 0;
+  for (const {binding, module, at, origin} of found) {
+    // The same declaration imported twice is one module.
+    const first = byName.get(module.name);
+    if (first) {
+      if (first.origin !== origin) {
+        throw errorAt(
+          at,
+          `AOT: the native module "${module.name}" is declared twice`,
+          'declare each module once, and call its methods through that const.',
+        );
+      }
+      modules.set(binding, first.module);
+      continue;
+    }
+    if (module.optional !== null) {
+      if (optionalCount === MAX_OPTIONAL_MODULES) {
+        throw errorAt(
+          at,
+          `AOT: an app may declare at most ${MAX_OPTIONAL_MODULES} optional native modules`,
+          'declare fewer optional modules, or merge ones that boards always have together.',
+        );
+      }
+      module.optional = optionalCount++;
+    }
+    byName.set(module.name, {module, origin});
+    modules.set(binding, module);
   }
   return modules;
 }
@@ -951,21 +1134,21 @@ function nativeEventFor(module: NativeModule, event: string): NativeEvent {
  * With mocks, for the simulators, each call is also given its module's mock, or null when it has none.
  *
  * @param source  An app file's source.
- * @param interfaces  The local files it imports interfaces from (see readNativeInterfaces).
+ * @param files  The files it imports a module or its interface from (see readNativeFiles).
  * @param mocks  Each module's mock as the file imports it, or null when it has none, by module name.
  *
  * @returns The source with the signatures added.
  */
 export function addNativeSignatures(
   source: string,
-  interfaces: Record<string, string>,
+  files: Record<string, NativeFile>,
   mocks?: Map<string, string | null>,
 ): string {
   const program = parse(source, {
     sourceType: 'module',
     plugins: ['jsx', 'typescript'],
   }).program;
-  const modules = collectNativeModules(program, interfaces);
+  const modules = collectNativeModules(program, files);
   const mockImports: string[] = [];
   const mockNames = new Set<string>();
   let signed = source;
@@ -1008,110 +1191,6 @@ export function addNativeSignatures(
   return mockImports.length
     ? `${signed}\n${mockImports.reverse().join('\n')}\n`
     : signed;
-}
-
-/**
- * The local file an app imports an interface from, by the path it writes: `./sensors`, `./sensors.ts`, or
- * `./sensors.js` as NodeNext writes it.
- *
- * @param baseDirectory  The app's directory.
- * @param importPath  The path the app imports it by.
- *
- * @returns The file, or undefined when there is none.
- */
-function interfaceFileOf(
-  baseDirectory: string,
-  importPath: string,
-): string | undefined {
-  const base = resolve(baseDirectory, importPath);
-  const candidates = [
-    base,
-    base.replace(/\.(m?)js$/, '.$1ts'),
-    ...INTERFACE_EXTENSIONS.map(extension => base + extension),
-  ];
-  return candidates.find(path => /\.[cm]?tsx?$/.test(path) && existsSync(path));
-}
-
-/**
- * Reads the local files an app imports its native module interfaces from, so the compile itself stays pure.
- *
- * @param source  The app's source.
- * @param baseDirectory  The app's directory, which the import paths are relative to.
- *
- * @returns Each file's source, by the import path the app writes.
- */
-export function readNativeInterfaces(
-  source: string,
-  baseDirectory: string,
-): Record<string, string> {
-  const program = parse(source, {
-    sourceType: 'module',
-    plugins: ['jsx', 'typescript'],
-  }).program;
-  const interfaces: Record<string, string> = {};
-  for (const declarator of declarationsOf(program)) {
-    const call = declarator.init as t.CallExpression;
-    const typeArgument = call.typeParameters?.params[0];
-    if (
-      typeArgument?.type !== 'TSTypeReference' ||
-      typeArgument.typeName.type !== 'Identifier' ||
-      declaredMembers(program, typeArgument.typeName.name) !== null
-    ) {
-      continue;
-    }
-    const local = localImportOf(program, typeArgument.typeName.name);
-    if (!local || local.path in interfaces) continue;
-    const found = interfaceFileOf(baseDirectory, local.path);
-    if (found) {
-      interfaces[local.path] = readFileSync(found, 'utf8');
-    }
-  }
-  return interfaces;
-}
-
-/**
- * Where each module's mock for the simulators may be: `<name>.mock.ts` (or .tsx, .js, .jsx) beside its interface.
- *
- * @param source  An app file's source.
- * @param baseDirectory  The app file's directory.
- *
- * @returns The paths to look for, in order, by module name.
- */
-export function nativeMockFiles(
-  source: string,
-  baseDirectory: string,
-): Map<string, string[]> {
-  const program = parse(source, {
-    sourceType: 'module',
-    plugins: ['jsx', 'typescript'],
-  }).program;
-  const mocks = new Map<string, string[]>();
-  for (const declarator of declarationsOf(program)) {
-    const call = declarator.init as t.CallExpression;
-    const [name] = call.arguments;
-    if (name?.type !== 'StringLiteral') continue;
-    const typeArgument = call.typeParameters?.params[0];
-    const interfaceName =
-      typeArgument?.type === 'TSTypeReference' &&
-      typeArgument.typeName.type === 'Identifier'
-        ? typeArgument.typeName.name
-        : null;
-    const local =
-      interfaceName && declaredMembers(program, interfaceName) === null
-        ? localImportOf(program, interfaceName)
-        : null;
-    const interfaceFile = local
-      ? interfaceFileOf(baseDirectory, local.path)
-      : undefined;
-    const directory = interfaceFile ? dirname(interfaceFile) : baseDirectory;
-    mocks.set(
-      name.value,
-      MOCK_EXTENSIONS.map(extension =>
-        resolve(directory, `${name.value}.mock${extension}`),
-      ),
-    );
-  }
-  return mocks;
 }
 
 /**

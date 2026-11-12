@@ -23,7 +23,7 @@ import {fileURLToPath} from 'node:url';
 import {
   compilePackage,
   bakeSvgArtifacts,
-  readNativeInterfaces,
+  readNativeFiles,
 } from '../compile.mts';
 import {demoFile} from '../demo-file.mts';
 import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mjs';
@@ -44,7 +44,7 @@ describe('AOT demo compile smoke', () => {
     const result = compilePackage(source, 'watch-face', {
       screen: {width: 240, height: 280},
       filename: appPath('watch-face'),
-      nativeInterfaces: readNativeInterfaces(
+      nativeFiles: readNativeFiles(
         source,
         resolve(demosDirectory, 'watch-face'),
       ),

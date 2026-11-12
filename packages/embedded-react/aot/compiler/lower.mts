@@ -282,10 +282,7 @@ function lowerProgram(
   // Parse the app and prepare the AST for the passes below.
   let nativeModules = new Map<string, NativeModule>();
   const ast = parseApp(source, options, typed => {
-    nativeModules = collectNativeModules(
-      typed.program,
-      options.nativeInterfaces,
-    );
+    nativeModules = collectNativeModules(typed.program, options.nativeFiles);
   });
   normalizeUndefined(ast);
   inlineCustomHooks(ast);

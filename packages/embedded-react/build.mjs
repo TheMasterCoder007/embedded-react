@@ -34,7 +34,7 @@ import {bakeAssets} from './assets/index.mjs';
 import {resolveFontJobs} from './assets/font-config.mjs';
 import {analyzeFontSizes} from './assets/font-sizes.mjs';
 import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
-import {loadAppFile} from './aot/app-file-loader.mts';
+import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // packages/embedded-react
@@ -69,9 +69,11 @@ const fonts = new Map(); // family -> path
 const assetPlugin = {
   name: 'embedded-react-assets',
   setup(pluginBuild) {
-    // The demo's own files give its native modules their signatures.
+    // The demo's own files give its native modules their signatures, and so do a package's.
     pluginBuild.onLoad({filter: /\.(jsx?|tsx?)$/}, args =>
-      args.path.startsWith(demoDir) ? loadAppFile(args.path) : undefined,
+      args.path.startsWith(demoDir)
+        ? loadAppFile(args.path)
+        : loadDependencyFile(args.path),
     );
     pluginBuild.onLoad({filter: /\.(png|jpe?g|webp|gif|bmp)$/i}, args => {
       const name = basename(args.path).replace(/\.[^.]+$/, '');
