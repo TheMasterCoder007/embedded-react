@@ -26,6 +26,7 @@ import type {
   IrHandler,
   IrMountEffect,
   IrNativeEventHandler,
+  IrOptionalModule,
   IrStaticDecl,
   IrTimerFunction,
 } from './ir/functions.mts';
@@ -62,6 +63,8 @@ export class Out {
   readonly timerFunctions: IrTimerFunction[] = [];
   /** useNativeEvent handlers, in the order they lower. */
   readonly nativeEventHandlers: IrNativeEventHandler[] = [];
+  /** The optional native modules, by index, each with every method and event the package lists. */
+  optionalModules: IrOptionalModule[] = [];
   /** What the build runs last: mount-once effects, and the first run of each dep-driven one. */
   readonly mountEffects: IrMountEffect[] = [];
   /** Animations' on_complete callbacks: completions, completion waits, and chains. */

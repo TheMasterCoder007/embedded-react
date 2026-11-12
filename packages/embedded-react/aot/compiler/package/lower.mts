@@ -118,6 +118,7 @@ import type {
   IrMountEffect,
   IrNativeEventHandler,
   IrPressFade,
+  NativeEvent,
 } from '../ir/functions.mts';
 import {MAX_NATIVE_EVENTS} from '../native-modules.mts';
 import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
@@ -2499,6 +2500,10 @@ function bootFunction(
           initializer.dimension === 'width' ? 0 : 1,
         );
         codegen.set(slot, size);
+      } else if (initializer.kind === 'native') {
+        const available = builder.register('bool');
+        builder.abx('AVAIL', available.index, initializer.module);
+        codegen.set(slot, available);
       } else {
         codegen.set(slot, codegen.value(initializer.expression));
       }
@@ -2637,13 +2642,36 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
         'that holds the list instead.',
     );
   }
+  // An optional module's methods and events are all listed, used or not, so that whether it is there agrees with
+  // Flow A, which looks for them all. An event nothing subscribes to has no function.
+  for (const module of output.optionalModules) {
+    module.methods.forEach(method => tables.nativeImport(method));
+  }
   const subscribed = byEvent(output.nativeEventHandlers);
-  const nativeEvents = subscribed.map(([{event}]) => ({
+  const nativeEvent = (event: NativeEvent, handler: number) => ({
     name: tables.string(event.name),
     version: event.version,
     signature: tables.string(event.signature),
-    function: next++,
-  }));
+    function: handler,
+    module: event.module ?? NONE,
+  });
+  const nativeEvents = subscribed.map(([{event}]) =>
+    nativeEvent(event, next++),
+  );
+  const subscribedNames = new Set(subscribed.map(([{event}]) => event.name));
+  for (const module of output.optionalModules) {
+    for (const event of module.events) {
+      if (!subscribedNames.has(event.name)) {
+        nativeEvents.push(nativeEvent(event, NONE));
+      }
+    }
+  }
+  if (nativeEvents.length > MAX_NATIVE_EVENTS) {
+    throw aotError(
+      `AOT: the app lists ${nativeEvents.length} native events, but a package holds ${MAX_NATIVE_EVENTS}`,
+      'an optional module counts every event its interface declares; declare fewer events.',
+    );
+  }
   lowering.effectFunctions = {
     checks: output.dependencyEffects.map(() => next++),
     mounts: output.mountEffects.map(() => next++),

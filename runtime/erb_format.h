@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 11u
+#define ERB_FORMAT_MINOR 12u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -176,7 +176,7 @@ enum
 #define ERB_GRADIENT_SIZE 24u
 #define ERB_STOP_SIZE 8u
 #define ERB_IMPORT_SIZE 8u
-#define ERB_NATIVE_EVENT_SIZE 8u
+#define ERB_NATIVE_EVENT_SIZE 12u
 #define ERB_INPUT_SIZE 4u
 #define ERB_INTERPOLATION_SIZE 72u
 #define ERB_KEYBOARD_HEADER_SIZE 28u
@@ -359,12 +359,17 @@ enum
 #define ERB_IMPORT_NAME_AT 0u
 #define ERB_IMPORT_VERSION_AT 2u
 #define ERB_IMPORT_SIGNATURE_AT 4u
+#define ERB_IMPORT_MODULE_AT 6u /**< Since minor 12: its optional module, or ERB_NONE for a required one. */
+
+/** @brief Optional modules a package may have. A missing one doesn't refuse the package; AVAIL says which are. */
+#define ERB_MAX_OPTIONAL_MODULES 32u
 
 /** @brief Native event handler: the event, as the firmware registers it, and the function it runs. */
 #define ERB_NATIVE_EVENT_NAME_AT 0u
 #define ERB_NATIVE_EVENT_VERSION_AT 2u
 #define ERB_NATIVE_EVENT_SIGNATURE_AT 4u
-#define ERB_NATIVE_EVENT_FUNCTION_AT 6u
+#define ERB_NATIVE_EVENT_FUNCTION_AT 6u /**< ERB_NONE for an optional module's event nothing subscribes to. */
+#define ERB_NATIVE_EVENT_MODULE_AT 8u   /**< Since minor 12, as ERB_IMPORT_MODULE_AT. Then 2 reserved bytes. */
 
 /** @brief Host input. */
 #define ERB_INPUT_NAME_AT 0u
@@ -819,7 +824,9 @@ enum
     /* Strings, since minor 9 */                                                                                      \
     X(SCMP,     ERB_F_ABC, 1, 1, ERBO_I, ERBO_S, ERBO_S)  /* A = -1, 0 or 1 as B sorts before, with or after C */      \
     /* Lists, since minor 10 */                                                                                        \
-    X(SPLIT,    ERB_F_ABC, 2, 0, ERBO_S, ERBO_S, ERBO_I)  /* list slot ext = A.split(B, C), C < 0 for no limit */
+    X(SPLIT,    ERB_F_ABC, 2, 0, ERBO_S, ERBO_S, ERBO_I)  /* list slot ext = A.split(B, C), C < 0 for no limit */    \
+    /* Native modules, since minor 12 */                                                                               \
+    X(AVAIL,    ERB_F_ABX, 1, 1, ERBO_B, ERBO_K, ERBO_X)  /* A = whether optional module Bx is available */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */

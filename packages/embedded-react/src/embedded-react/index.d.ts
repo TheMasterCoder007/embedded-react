@@ -933,12 +933,26 @@ export function useHostValue(initial: number): number;
 /** A whole number. A native method's `Int` is an int in C, where a `number` is a float. */
 export type Int = number;
 
+/** An optional native module, as nativeModule.optional returns it. */
+export type OptionalNativeModule<T> = T & {
+  /** Whether the firmware has every method and event of the module. Set at load, and it never changes. */
+  readonly available: boolean;
+};
+
 /**
  * A module the firmware provides in C, declared at module level by an interface of its methods, which take and
  * return Int, number, and boolean: `const Sensors = nativeModule<Sensors>('sensors', 1)`. Its events are the
  * interface's `events`: `events: {reading(celsius: number): void}`.
  */
-export function nativeModule<T>(name: string, version: number): T;
+export const nativeModule: {
+  <T>(name: string, version: number): T;
+  /**
+   * A module only some boards have: `const Wifi = nativeModule.optional<Wifi>('wifi', 1)`. A package that uses it
+   * loads without it, and `Wifi.available` says whether it is there. Calling a method of a module that isn't stops
+   * the app; its events never arrive.
+   */
+  optional<T>(name: string, version: number): OptionalNativeModule<T>;
+};
 
 /** The events a native module's interface declares. */
 export type NativeEvents<T> = T extends {events: infer E} ? E : {};

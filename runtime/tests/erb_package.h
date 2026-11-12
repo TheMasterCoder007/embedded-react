@@ -151,11 +151,13 @@ typedef struct
 typedef struct
 {
     uint16_t name, version, signature;
+    uint16_t optional; /**< 0 for a module the firmware must offer, else its optional module + 1. */
 } TImport;
 
 typedef struct
 {
     uint16_t name, version, signature, function;
+    uint16_t optional; /**< As TImport's. */
 } TNativeEvent;
 
 typedef struct
@@ -633,7 +635,7 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
                 tb_u16(buffer, package->imports[index].name);
                 tb_u16(buffer, package->imports[index].version);
                 tb_u16(buffer, package->imports[index].signature);
-                tb_u16(buffer, 0u);
+                tb_u16(buffer, package->imports[index].optional ? package->imports[index].optional - 1u : ERB_NONE);
             }
             break;
         case ERB_TABLE_NATIVE_EVENTS:
@@ -643,6 +645,9 @@ static bool tpkg_table(const TPkg* package, uint32_t table_id, TBuf* buffer)
                 tb_u16(buffer, package->native_events[index].version);
                 tb_u16(buffer, package->native_events[index].signature);
                 tb_u16(buffer, package->native_events[index].function);
+                tb_u16(buffer,
+                       package->native_events[index].optional ? package->native_events[index].optional - 1u : ERB_NONE);
+                tb_u16(buffer, 0u);
             }
             break;
         case ERB_TABLE_INPUTS:

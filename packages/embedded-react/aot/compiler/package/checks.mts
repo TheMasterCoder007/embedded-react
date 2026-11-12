@@ -193,6 +193,10 @@ class CheckLowering {
       return;
     }
 
+    // Whether a native module is there isn't known until the firmware loads the package.
+    if (initializer.kind === 'native') {
+      throw new NotCheckable();
+    }
     let local = this.locals.get(slot);
     if (local === undefined) {
       local = this.locals.size;

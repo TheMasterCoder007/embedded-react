@@ -173,6 +173,8 @@ typedef struct
     uint32_t largest_tape;                               /**< Floats in the largest tape (the scratch must hold it). */
     uint16_t natives[ERB_MAX_IMPORTS];                   /**< Each import's index in ErbConfig::natives. */
     uint16_t event_natives[ERB_MAX_NATIVE_EVENTS];       /**< Each handler's event in ErbConfig::natives. */
+    uint32_t optional_module_count;                      /**< One past the highest optional module named. */
+    uint32_t unavailable;                                /**< Bit m: optional module m isn't all there. */
     uint32_t needs[ERB_RESOURCE_COUNT_];                 /**< Each resource's declared need (0 when not named). */
     uint32_t counting[ERB_BIT_WORDS(ERB_MAX_FUNCTIONS)]; /**< Entry points whose worst case exceeds the budget. */
 } ErbProgram;

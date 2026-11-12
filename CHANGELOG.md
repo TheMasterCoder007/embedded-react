@@ -52,6 +52,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   handler each time the firmware posts one, while its component is mounted. The firmware declares them in its
   `ErbNative` table and posts with `erb_native_post()` or `er_runtime_native_post()`. A mock posts them with `emit`.
   Packages are now format minor 11.
+- Optional native modules: `nativeModule.optional<Wifi>('wifi', 1)` loads on a board without the module, and
+  `Wifi.available` says whether it is there. Calling one that isn't stops the app. Packages are now format minor 12.
 
 ### Changed
 

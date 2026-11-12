@@ -21,6 +21,9 @@
  * firmware posts; each useNativeEvent becomes a handler the runtime runs with the event's values. In Flow A the
  * bundler passes nativeModule() each method's and event's signature instead, and in the simulators the module's mock
  * too.
+ *
+ * `nativeModule.optional<Wifi>('wifi', 1)` is a module only some boards have. `Wifi.available` says whether the
+ * firmware has every method and event of it; the package lists them all, so both flows agree.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -35,11 +38,14 @@ import {lowerExpr} from './expressions.mts';
 import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {
+  IrExpr,
   IrNativeCall,
   NativeImport,
   NativeType,
 } from './ir/expressions.mts';
-import type {NativeEvent} from './ir/functions.mts';
+import {nativeAvailableSlot} from './boot.mts';
+import {BOOL} from './ir/types.mts';
+import type {IrOptionalModule, NativeEvent} from './ir/functions.mts';
 import type {Env} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -61,6 +67,8 @@ export interface NativeModule {
   members: Map<string, NativeMember>;
   /** The interface's `events`, each a method that returns void. */
   events: Map<string, NativeMember>;
+  /** Its index among the optional modules, or null when the firmware must have it. */
+  optional: number | null;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -84,6 +92,9 @@ const SIGNATURE_CODES: Record<NativeType | 'void', string> = {
 
 const DECLARATION_HINT =
   "declare it at module level: const Sensors = nativeModule<Sensors>('sensors', 1)";
+
+/** Optional modules a package may have: the runtime's ERB_MAX_OPTIONAL_MODULES. */
+const MAX_OPTIONAL_MODULES = 32;
 
 const EVENTS_HINT =
   'declare the events as an object of methods that return void: events: {reading(celsius: number): void};';
@@ -157,8 +168,23 @@ function declarationsOf(program: t.Program): t.VariableDeclarator[] {
  */
 const isNativeModuleCall = (node: t.Node | null | undefined): boolean =>
   node?.type === 'CallExpression' &&
-  node.callee.type === 'Identifier' &&
-  node.callee.name === 'nativeModule';
+  ((node.callee.type === 'Identifier' && node.callee.name === 'nativeModule') ||
+    isOptionalCallee(node.callee));
+
+/**
+ * Whether a callee is `nativeModule.optional`.
+ *
+ * @param callee  The callee.
+ *
+ * @returns True when it is.
+ */
+const isOptionalCallee = (callee: t.Node): boolean =>
+  callee.type === 'MemberExpression' &&
+  !callee.computed &&
+  callee.object.type === 'Identifier' &&
+  callee.object.name === 'nativeModule' &&
+  callee.property.type === 'Identifier' &&
+  callee.property.name === 'optional';
 
 /**
  * Refuses a nativeModule() call anywhere but a module-level declaration.
@@ -557,6 +583,7 @@ export function collectNativeModules(
 ): Map<string, NativeModule> {
   const modules = new Map<string, NativeModule>();
   const names = new Set<string>();
+  let optionalCount = 0;
   const declarators = declarationsOf(program);
   refuseInnerDeclarations(
     program.body,
@@ -605,12 +632,21 @@ export function collectNativeModules(
       );
     }
 
+    const optional = isOptionalCallee(call.callee);
+    if (optional && optionalCount === MAX_OPTIONAL_MODULES) {
+      throw errorAt(
+        call,
+        `AOT: an app may declare at most ${MAX_OPTIONAL_MODULES} optional native modules`,
+        'declare fewer optional modules, or merge ones that boards always have together.',
+      );
+    }
     const module: NativeModule = {
       name,
       version,
       interfaceName,
       members: new Map(),
       events: new Map(),
+      optional: optional ? optionalCount++ : null,
     };
     for (const element of members) {
       if (isEventsMember(element)) {
@@ -619,6 +655,13 @@ export function collectNativeModules(
       }
       const member = memberOf(element);
       if (!member) continue;
+      if (optional && member.name === 'available') {
+        throw errorAt(
+          call,
+          `AOT: ${interfaceName} has a method named available, which an optional native module can't have`,
+          'rename it; Wifi.available says whether the firmware has the module.',
+        );
+      }
       // Flow A keeps the methods in objects, where __proto__ is the prototype.
       if (member.name === '__proto__') {
         throw errorAt(
@@ -639,6 +682,15 @@ export function collectNativeModules(
           : member.member,
       );
     }
+    const usable = [...module.members.values(), ...module.events.values()];
+    if (optional && !usable.some(member => member.kind === 'method')) {
+      throw errorAt(
+        call,
+        `AOT: the optional native module "${name}" has no methods or events to look for`,
+        'declare what the firmware provides in its interface; whether the firmware has them all is what ' +
+          'available says.',
+      );
+    }
     modules.set((declarator.id as t.Identifier).name, module);
   }
   return modules;
@@ -655,6 +707,76 @@ const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
   SIGNATURE_CODES[member.result] +
   ':' +
   member.params.map(param => SIGNATURE_CODES[param]).join('');
+
+/**
+ * The optional modules, in order, each with every method and event of its interface that can be used: the package
+ * lists them all, called or not, so that whether the module is there means what it does in Flow A.
+ *
+ * @param modules  The app's modules (see collectNativeModules).
+ *
+ * @returns The optional modules, by index.
+ */
+export function optionalModulesOf(
+  modules: Map<string, NativeModule>,
+): IrOptionalModule[] {
+  const optional = [...modules.values()]
+    .filter(module => module.optional !== null)
+    .sort((first, second) => first.optional! - second.optional!);
+  return optional.map(module => ({
+    name: module.name,
+    methods: [...module.members]
+      .filter(([, member]) => member.kind === 'method')
+      .map(([method]) => nativeImportOf(module, method)),
+    events: [...module.events]
+      .filter(([, event]) => event.kind === 'method')
+      .map(([event]) => nativeEventFor(module, event)),
+  }));
+}
+
+/**
+ * A method's import, as the firmware registers it.
+ *
+ * @param module  Its module.
+ * @param method  A method the interface declares, that can be called.
+ *
+ * @returns The import.
+ */
+function nativeImportOf(module: NativeModule, method: string): NativeImport {
+  const member = module.members.get(method) as Extract<
+    NativeMember,
+    {kind: 'method'}
+  >;
+  return {
+    name: `${module.name}.${method}`,
+    version: module.version,
+    signature: signatureOf(member),
+    params: member.params,
+    result: member.result,
+    module: module.optional,
+  };
+}
+
+/**
+ * An event, as the firmware registers it.
+ *
+ * @param module  Its module.
+ * @param event  An event the interface declares, that can be used.
+ *
+ * @returns The event.
+ */
+function nativeEventFor(module: NativeModule, event: string): NativeEvent {
+  const member = module.events.get(event) as Extract<
+    NativeMember,
+    {kind: 'method'}
+  >;
+  return {
+    name: `${module.name}.${event}`,
+    version: module.version,
+    signature: signatureOf(member),
+    params: member.params,
+    module: module.optional,
+  };
+}
 
 /**
  * Flow A's side: since the bundle has no types, each nativeModule() call is given its methods' and events' signatures
@@ -960,14 +1082,45 @@ export function lowerNativeCall(
     return lowered;
   });
 
-  const nativeImport: NativeImport = {
-    name: `${module.name}.${method}`,
-    version: module.version,
-    signature: signatureOf(member),
-    params: member.params,
-    result: member.result,
+  return {import: nativeImportOf(module, method), callArguments};
+}
+
+/**
+ * `Wifi.available`: whether the firmware has every method and event of an optional module. Boot reads it, and it
+ * never changes after.
+ *
+ * @param node  A member read.
+ * @param environment  The expression environment.
+ *
+ * @returns The read, or null when the node isn't a native module's `available`.
+ */
+export function nativeAvailableOf(
+  node: t.MemberExpression,
+  environment: Env,
+): IrExpr | null {
+  if (
+    node.computed ||
+    node.object.type !== 'Identifier' ||
+    node.property.type !== 'Identifier' ||
+    node.property.name !== 'available' ||
+    !readsNativeModule(node.object.name, environment)
+  ) {
+    return null;
+  }
+  const module = environment.nativeModules!.get(node.object.name)!;
+  if (module.optional === null) {
+    throw errorAt(
+      node,
+      `AOT: ${node.object.name} is always available, since the firmware must have it`,
+      `declare it with nativeModule.optional<${module.interfaceName}>('${module.name}', ${module.version}) ` +
+        "if some boards don't have it.",
+    );
+  }
+  return {
+    kind: 'boot',
+    slot: nativeAvailableSlot(module.optional, module.name),
+    type: BOOL,
   };
-  return {import: nativeImport, callArguments};
 }
 
 /**
@@ -1056,13 +1209,5 @@ export function nativeEventOf(
       );
     }
   }
-  return {
-    event: {
-      name: `${module.name}.${eventArgument.value}`,
-      version: module.version,
-      signature: signatureOf(event),
-      params: event.params,
-    },
-    handler,
-  };
+  return {event: nativeEventFor(module, eventArgument.value), handler};
 }

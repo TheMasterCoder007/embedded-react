@@ -690,6 +690,23 @@ const SCENARIOS: Scenario[] = [
     flowA: true,
     mocks: true,
   },
+  // The probe is there and the radio isn't, in every pass: the radio's page is left out and its event never comes.
+  {
+    name: 'native-optional',
+    file: fixture('native-optional'),
+    screen: PORTRAIT,
+    flowA: true,
+    mocks: true,
+  },
+  // Two adds through the probe: total 10. The radio's add is skipped.
+  {
+    name: 'native-optional-taps',
+    file: fixture('native-optional'),
+    screen: PORTRAIT,
+    taps: '32,20 32,20',
+    flowA: true,
+    mocks: true,
+  },
   // Buttons: row 1 fade, spring, sequence, counted loop, stop; row 2 join, wait, stagger, decay, sleep; row 3 a
   // sequence that ends on a delay, an endless chain, an empty sequence, a join stopped at once, a looped sequence.
   {name: 'animations', file: fixture('animations'), screen: PORTRAIT},

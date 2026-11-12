@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {attemptLowering} from './check.mts';
-import {INT} from './ir/types.mts';
+import {BOOL, INT} from './ir/types.mts';
 import type * as t from '@babel/types';
 import type {
   IrBoot,
@@ -238,6 +238,32 @@ export const screenBinding = (screen: {
   width: new BootValue(null, {}, screen.width, true, null, 'width'),
   height: new BootValue(null, {}, screen.height, true, null, 'height'),
 });
+
+/**
+ * The slot boot reads whether an optional native module is there into, added on first use.
+ *
+ * @param module  The module's index among the optional modules.
+ * @param name  Its name, which the slot is named after.
+ *
+ * @returns The slot.
+ */
+export function nativeAvailableSlot(module: number, name: string): IrBootSlot {
+  if (!context) {
+    throw new Error('AOT: a native module is read outside a compile');
+  }
+  const found = context.slots.find(
+    slot =>
+      slot.initializer.kind === 'native' && slot.initializer.module === module,
+  );
+  if (found) return found;
+  const slot: IrBootSlot = {
+    field: slotField(`${name}_available`),
+    type: BOOL,
+    initializer: {kind: 'native', module},
+  };
+  context.slots.push(slot);
+  return slot;
+}
 
 /**
  * Starts recording a compile's boot values.

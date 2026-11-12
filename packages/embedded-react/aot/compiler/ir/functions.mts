@@ -24,7 +24,7 @@ import type {
   IrCompletionWait,
   IrStartChain,
 } from './animations.mts';
-import type {IrExpr, NativeType} from './expressions.mts';
+import type {IrExpr, NativeImport, NativeType} from './expressions.mts';
 import type {IrPanEvent, IrPanResponder} from './pan-responder.mts';
 import type {IrCallback, IrStmt} from './statements.mts';
 
@@ -75,6 +75,15 @@ export interface NativeEvent {
   /** 'v', ':', then the values it is posted with, each one of i, f or b. */
   signature: string;
   params: NativeType[];
+  /** The optional module it is part of, or null when the firmware must have it. */
+  module: number | null;
+}
+
+/** An optional native module: every method and event of its interface, which together say whether it is there. */
+export interface IrOptionalModule {
+  name: string;
+  methods: NativeImport[];
+  events: NativeEvent[];
 }
 
 /**

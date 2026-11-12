@@ -128,6 +128,8 @@ export interface ProgramImport {
   version: number;
   /** Its signature's string index. */
   signature: number;
+  /** Its optional module, or NONE when the firmware must have it. */
+  module: number;
 }
 
 /** A native event's handler: the event as the firmware registers it, and the function it runs. */
@@ -137,7 +139,10 @@ export interface ProgramNativeEvent {
   version: number;
   /** Its signature's string index. */
   signature: number;
+  /** NONE for an optional module's event nothing subscribes to. */
   function: number;
+  /** Its optional module, or NONE when the firmware must have it. */
+  module: number;
 }
 
 export interface ProgramInput {
@@ -631,7 +636,7 @@ function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
         writer.u16(nativeImport.name);
         writer.u16(nativeImport.version);
         writer.u16(nativeImport.signature);
-        writer.u16(0);
+        writer.u16(nativeImport.module);
       }
     });
   }
@@ -642,6 +647,8 @@ function tablesOf(program: Program, bodies: Bodies): Map<number, Uint8Array> {
         writer.u16(nativeEvent.version);
         writer.u16(nativeEvent.signature);
         writer.u16(nativeEvent.function);
+        writer.u16(nativeEvent.module);
+        writer.u16(0);
       }
     });
   }

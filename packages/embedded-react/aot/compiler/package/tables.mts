@@ -94,7 +94,8 @@ export class ProgramTables {
     if (!this.importIndex.has(key) && this.imports.length === MAX_IMPORTS) {
       throw aotError(
         `AOT: an app may call at most ${MAX_IMPORTS} native methods`,
-        'call fewer native methods, or have one method do more.',
+        'call fewer native methods, or have one method do more. An optional module counts every method its ' +
+          'interface declares.',
       );
     }
     return intern(
@@ -104,6 +105,7 @@ export class ProgramTables {
         name: this.string(nativeImport.name),
         version: nativeImport.version,
         signature: this.string(nativeImport.signature),
+        module: nativeImport.module ?? NONE,
       },
       key,
     );

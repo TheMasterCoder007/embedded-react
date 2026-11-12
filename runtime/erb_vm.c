@@ -1054,6 +1054,9 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_SCREEN:
                 registers[operand_a] = operand_bx ? g_erb.config.screen_height : g_erb.config.screen_width;
                 break;
+            case ERB_OP_AVAIL:
+                registers[operand_a] = !(program->unavailable & (1u << operand_bx));
+                break;
             case ERB_OP_LOADK:
                 registers[operand_a] = (int32_t)program->const32[operand_bx];
                 break;
@@ -1583,6 +1586,12 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_CALLN:
             {
                 const uint8_t* import = program->imports + operand_bx * ERB_IMPORT_SIZE;
+                if (program->natives[operand_bx] == ERB_NONE)
+                {
+                    return fault(ERB_ERROR_IMPORT,
+                                 "the app called an optional native module the firmware doesn't have",
+                                 erb_string(program, erb_u16(import + ERB_IMPORT_NAME_AT)));
+                }
                 const ErbNative* native = &g_erb.config.natives[program->natives[operand_bx]];
                 const char* signature = erb_string(program, erb_u16(import + ERB_IMPORT_SIGNATURE_AT));
                 int32_t value = 0;

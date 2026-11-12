@@ -57,7 +57,7 @@ import {emitNode} from './nodes.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
 import {itemValueAt} from './list-items.mts';
 import {normalizeUndefined, parseApp} from './parse.mts';
-import {collectNativeModules} from './native-modules.mts';
+import {collectNativeModules, optionalModulesOf} from './native-modules.mts';
 import type {NativeModule} from './native-modules.mts';
 import {inlineCustomHooks} from './custom-hooks.mts';
 import {Out} from './out.mts';
@@ -492,6 +492,7 @@ function lowerProgram(
 
   // Emit the scene graph from the root JSX; `output` collects everything else it lowers.
   const output = new Out(components, ast.program);
+  output.optionalModules = optionalModulesOf(nativeModules);
   const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
   const root = emitNode(rootJSX, scope, output, environment, state);
 

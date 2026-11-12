@@ -1658,6 +1658,24 @@ static bool check_tapes(ErbProgram* program, ErbError* error)
     return true;
 }
 
+/** @brief Notes the optional module an import or event names, if any. False when it is past the most a package has. */
+static bool note_optional_module(ErbProgram* program, uint16_t module)
+{
+    if (module == ERB_NONE)
+    {
+        return true;
+    }
+    if (module >= ERB_MAX_OPTIONAL_MODULES)
+    {
+        return false;
+    }
+    if (module >= program->optional_module_count)
+    {
+        program->optional_module_count = module + 1u;
+    }
+    return true;
+}
+
 static bool check_imports(const ErbConfig* config, ErbProgram* program, ErbError* error)
 {
     program->imports = program->table[ERB_TABLE_IMPORTS];
@@ -1676,6 +1694,11 @@ static bool check_imports(const ErbConfig* config, ErbProgram* program, ErbError
         {
             return fail(error, ERB_ERROR_TABLE, "import names no string");
         }
+        const uint16_t module = erb_u16(import + ERB_IMPORT_MODULE_AT);
+        if (!note_optional_module(program, module))
+        {
+            return fail(error, ERB_ERROR_TABLE, "import's optional module");
+        }
         uint32_t native = 0;
         for (; native < config->native_count; native++)
         {
@@ -1687,12 +1710,16 @@ static bool check_imports(const ErbConfig* config, ErbProgram* program, ErbError
                 break;
             }
         }
-        if (native == config->native_count)
+        if (native == config->native_count && module == ERB_NONE)
         {
             error->name = erb_string(program, name);
             return fail(error, ERB_ERROR_IMPORT, "no native function with this name, version and signature");
         }
-        program->natives[index] = (uint16_t)native;
+        if (native == config->native_count)
+        {
+            program->unavailable |= 1u << module;
+        }
+        program->natives[index] = native == config->native_count ? (uint16_t)ERB_NONE : (uint16_t)native;
     }
     return true;
 }
@@ -1719,26 +1746,35 @@ static bool check_native_events(const ErbConfig* config, ErbProgram* program, Er
         const uint16_t version = erb_u16(record + ERB_NATIVE_EVENT_VERSION_AT);
         const uint16_t signature = erb_u16(record + ERB_NATIVE_EVENT_SIGNATURE_AT);
         const uint16_t handler = erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT);
+        const uint16_t module = erb_u16(record + ERB_NATIVE_EVENT_MODULE_AT);
         if (name >= program->string_count || signature >= program->string_count)
         {
             return fail(error, ERB_ERROR_TABLE, "native event names no string");
         }
-
-        /* The handler takes the event's arguments, in its registers' types. */
-        const char* codes = erb_string(program, signature);
-        if (handler >= program->function_count
-            || erb_function(program, handler)[ERB_FUNCTION_KIND_AT] != ERB_FUNCTION_KIND_NATIVE_EVENT)
+        if (!note_optional_module(program, module) || erb_u16(record + ERB_NATIVE_EVENT_MODULE_AT + 2u) != 0u)
         {
-            return fail(error, ERB_ERROR_FUNCTION, "native event handler");
+            return fail(error, ERB_ERROR_TABLE, "native event's optional module");
         }
-        const uint8_t* function = erb_function(program, handler);
-        const uint8_t* types = program->types + erb_u32(function + ERB_FUNCTION_TYPES_AT);
+
+        /* The handler takes the event's arguments, in its registers' types. Only an optional module lists an event
+         * with no handler, so that whether the module is there counts it. */
+        const char* codes = erb_string(program, signature);
         const size_t params = strlen(codes) >= 2u ? strlen(codes + 2) : 0u;
-        bool signature_matches = codes[0] == 'v' && codes[1] == ':' && params <= ERB_NATIVE_MAX_PARAMETERS
-                                 && params == function[ERB_FUNCTION_PARAMS_AT];
-        for (size_t param = 0; signature_matches && param < params; param++)
+        bool signature_matches = codes[0] == 'v' && codes[1] == ':' && params <= ERB_NATIVE_MAX_PARAMETERS;
+        if (handler != ERB_NONE || module == ERB_NONE)
         {
-            signature_matches = native_type(codes[2 + param]) && types[param] == native_type(codes[2 + param]);
+            if (handler >= program->function_count
+                || erb_function(program, handler)[ERB_FUNCTION_KIND_AT] != ERB_FUNCTION_KIND_NATIVE_EVENT)
+            {
+                return fail(error, ERB_ERROR_FUNCTION, "native event handler");
+            }
+            const uint8_t* function = erb_function(program, handler);
+            const uint8_t* types = program->types + erb_u32(function + ERB_FUNCTION_TYPES_AT);
+            signature_matches = signature_matches && params == function[ERB_FUNCTION_PARAMS_AT];
+            for (size_t param = 0; signature_matches && param < params; param++)
+            {
+                signature_matches = native_type(codes[2 + param]) && types[param] == native_type(codes[2 + param]);
+            }
         }
         if (!signature_matches)
         {
@@ -1756,12 +1792,35 @@ static bool check_native_events(const ErbConfig* config, ErbProgram* program, Er
                 break;
             }
         }
-        if (native == config->native_count)
+        if (native == config->native_count && module == ERB_NONE)
         {
             error->name = erb_string(program, name);
             return fail(error, ERB_ERROR_IMPORT, "no native event with this name, version and signature");
         }
-        program->event_natives[index] = (uint16_t)native;
+        if (native == config->native_count)
+        {
+            program->unavailable |= 1u << module;
+        }
+        program->event_natives[index] = native == config->native_count ? (uint16_t)ERB_NONE : (uint16_t)native;
+    }
+
+    /* A module the firmware has only part of isn't there: none of its methods are called, nor its events posted. */
+    for (uint32_t index = 0; index < program->import_count; index++)
+    {
+        const uint16_t module = erb_u16(program->imports + index * ERB_IMPORT_SIZE + ERB_IMPORT_MODULE_AT);
+        if (module != ERB_NONE && (program->unavailable & (1u << module)))
+        {
+            program->natives[index] = ERB_NONE;
+        }
+    }
+    for (uint32_t index = 0; index < program->native_event_count; index++)
+    {
+        const uint16_t module =
+            erb_u16(program->native_events + index * ERB_NATIVE_EVENT_SIZE + ERB_NATIVE_EVENT_MODULE_AT);
+        if (module != ERB_NONE && (program->unavailable & (1u << module)))
+        {
+            program->event_natives[index] = ERB_NONE;
+        }
     }
     return true;
 }
@@ -2104,6 +2163,10 @@ static bool check_operands(const FunctionContext* context, uint32_t program_coun
         case ERB_OP_SCREEN:
             if (operand_bx > 1u)
                 BAD("SCREEN dimension");
+            break;
+        case ERB_OP_AVAIL:
+            if (operand_bx >= program->optional_module_count)
+                BAD("AVAIL module");
             break;
         case ERB_OP_LOADK:
             if ((context->types[operand_a] != ERB_TYPE_INT && context->types[operand_a] != ERB_TYPE_FLOAT)

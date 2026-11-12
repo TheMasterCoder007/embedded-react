@@ -78,6 +78,35 @@ function fakeHost(natives: string[]) {
   };
 }
 
+/**
+ * Renders `element` into a root of its own, with its effects run; returns a function that renders again. The
+ * renderer needs the bridge's NativeUI, which a tree of components that draw nothing never calls.
+ */
+async function mount(element: unknown) {
+  (globalThis as {NativeUI?: unknown}).NativeUI ??= new Proxy(
+    {},
+    {get: () => () => 0},
+  );
+  const {hostConfig} = await import('../../src/host-config.js');
+  const reconciler = Reconciler(hostConfig as never);
+  const root = reconciler.createContainer(
+    {},
+    0,
+    null,
+    false,
+    null,
+    '',
+    () => {},
+    null,
+  );
+  const render = (next: unknown) => {
+    reconciler.updateContainer(next as never, root, null, null);
+    reconciler.flushPassiveEffects();
+  };
+  render(element);
+  return render;
+}
+
 describe('native module signatures in Flow A', () => {
   it("gives each nativeModule() call its methods' signatures", () => {
     const signed = addNativeSignatures(SENSORS, {});
@@ -464,35 +493,6 @@ describe('native events in Flow A', () => {
     );
   });
 
-  /**
-   * Renders `element` into a root of its own, with its effects run; returns a function that renders again. The
-   * renderer needs the bridge's NativeUI, which a tree of components that draw nothing never calls.
-   */
-  async function mount(element: unknown) {
-    (globalThis as {NativeUI?: unknown}).NativeUI ??= new Proxy(
-      {},
-      {get: () => () => 0},
-    );
-    const {hostConfig} = await import('../../src/host-config.js');
-    const reconciler = Reconciler(hostConfig as never);
-    const root = reconciler.createContainer(
-      {},
-      0,
-      null,
-      false,
-      null,
-      '',
-      () => {},
-      null,
-    );
-    const render = (next: unknown) => {
-      reconciler.updateContainer(next as never, root, null, null);
-      reconciler.flushPassiveEffects();
-    };
-    render(element);
-    return render;
-  }
-
   /** A component that subscribes to sensors.reading, recording what it hears. */
   const listener = (Sensors: unknown, heard: unknown[][]) => (): null => {
     useNativeEvent(Sensors, 'reading', (...values: unknown[]) =>
@@ -558,5 +558,84 @@ describe('native events in Flow A', () => {
       'sensors.reading is posted with 2 values, not 1',
     );
     expect(Sensors.start).toBeTypeOf('function');
+  });
+});
+
+describe('nativeModule.optional() in Flow A', () => {
+  const global = globalThis as {
+    __erNative?: unknown;
+    __erNativeEvent?: (index: number, values: unknown[]) => void;
+  };
+  afterEach(() => {
+    delete global.__erNative;
+    delete global.__erNativeEvent;
+  });
+  const WIFI = {
+    methods: {
+      connect: 'b:i',
+      name: {reason: "returns a string, which native modules don't pass yet"},
+    },
+    events: {found: 'v:i'},
+  };
+
+  it('is available when the firmware has every method and event', () => {
+    const host = fakeHost(['wifi.connect@1:b:i', 'events:wifi.found@1:v:i']);
+    global.__erNative = host;
+    const Wifi = nativeModule.optional('wifi', 1, WIFI);
+    expect(Wifi.available).toBe(true);
+    expect(Wifi.connect(6)).toBe(42);
+    expect(host.calls).toEqual([[0, 6]]);
+  });
+
+  it("loads without a module the firmware lacks, or has only part of, and isn't available", () => {
+    for (const natives of [[], ['wifi.connect@1:b:i']]) {
+      global.__erNative = fakeHost(natives);
+      const Wifi = nativeModule.optional('wifi', 1, WIFI);
+      expect(Wifi.available).toBe(false);
+      expect(() => Wifi.connect(6)).toThrow(
+        /missing native module: wifi\.connect \(the optional module "wifi" isn't available/,
+      );
+    }
+  });
+
+  it('keeps available as it was set at load', () => {
+    global.__erNative = fakeHost([]);
+    const Wifi = nativeModule.optional('wifi', 1, WIFI);
+    expect(() => {
+      (Wifi as {available: boolean}).available = true;
+    }).toThrow(TypeError);
+    expect(Wifi.available).toBe(false);
+  });
+
+  it("lets a component subscribe to a missing module's events, which never arrive", async () => {
+    global.__erNative = fakeHost(['events:wifi.found@1:v:i']);
+    const Wifi = nativeModule.optional('wifi', 1, WIFI);
+    const heard: unknown[][] = [];
+    const Listener = (): null => {
+      useNativeEvent(Wifi, 'found', (...values: unknown[]) =>
+        heard.push(values),
+      );
+      return null;
+    };
+    await mount(createElement(Listener));
+    global.__erNativeEvent?.(0, [-40]);
+    expect(heard).toEqual([]);
+  });
+
+  it('is available in the simulators when it has a mock, and not when it has none', () => {
+    const mocked = nativeModule.optional('wifi', 1, WIFI, {
+      connect: () => true,
+    });
+    expect(mocked.available).toBe(true);
+    expect(mocked.connect(6)).toBe(true);
+    const unmocked = nativeModule.optional('wifi', 1, WIFI, null);
+    expect(unmocked.available).toBe(false);
+    expect(() => unmocked.connect(6)).toThrow(/isn't available/);
+  });
+
+  it('leaves available off a module the firmware must have', () => {
+    global.__erNative = fakeHost(['sensors.read@2:f:i']);
+    const Sensors = nativeModule('sensors', 2, methods({read: 'f:i'}));
+    expect('available' in Sensors).toBe(false);
   });
 });

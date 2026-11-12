@@ -1210,6 +1210,62 @@ static void test_imports_and_inputs(void)
     EXPECT(ERB_ERROR_INPUT, "an input on a slot past the table");
 }
 
+static void test_optional_modules(void)
+{
+    base()->imports[0].optional = 1u;
+    s_config.native_count = 0;
+    EXPECT(ERB_OK, "an optional native the firmware doesn't offer");
+    CHECK(s_program.optional_module_count == 1u && s_program.unavailable == 1u && s_program.natives[0] == ERB_NONE,
+          "leaves its module unavailable");
+    base()->imports[0].optional = 1u;
+    EXPECT(ERB_OK, "an optional native the firmware offers");
+    CHECK(s_program.unavailable == 0u && s_program.natives[0] == 0u, "leaves its module available");
+    base()->imports[0].optional = 3u;
+    EXPECT(ERB_OK, "an optional module past others no import names");
+    CHECK(s_program.optional_module_count == 3u, "counts up to the highest");
+    base()->imports[0].optional = ERB_MAX_OPTIONAL_MODULES + 1u;
+    EXPECT(ERB_ERROR_TABLE, "an optional module past the most a package has");
+
+    /* A module the firmware has only part of isn't there at all. */
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.imports[0].optional = 1u;
+    s_package_spec.native_events[0].optional = 1u;
+    s_config.native_count = 1;
+    EXPECT(ERB_OK, "an optional module missing its event");
+    CHECK(s_program.unavailable == 1u && s_program.natives[0] == ERB_NONE && s_program.event_natives[0] == ERB_NONE,
+          "doesn't call its method that is there");
+
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].optional = 1u;
+    s_package_spec.native_events[0].function = ERB_NONE;
+    EXPECT(ERB_OK, "an optional module's event with no handler");
+    CHECK(s_program.event_natives[0] == 1u, "still matched, so availability counts it");
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].function = ERB_NONE;
+    EXPECT(ERB_ERROR_FUNCTION, "a required module's event with no handler");
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].optional = ERB_MAX_OPTIONAL_MODULES + 1u;
+    EXPECT(ERB_ERROR_TABLE, "an event's optional module past the most");
+
+    {
+        const uint8_t types[] = {ERB_TYPE_BOOL};
+        const uint32_t code[] = {OP_ABX(AVAIL, 0, 0), OP_ABC(RET, 0, 0, 0)};
+        base()->imports[0].optional = 1u;
+        set_code_types(FUNCTION_TIMER, types, 1, code, 2);
+        EXPECT(ERB_OK, "AVAIL of an optional module");
+        base();
+        set_code_types(FUNCTION_TIMER, types, 1, code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "AVAIL with no optional modules");
+    }
+    {
+        const uint8_t types[] = {ERB_TYPE_INT};
+        const uint32_t code[] = {OP_ABX(AVAIL, 0, 0), OP_ABC(RET, 0, 0, 0)};
+        base()->imports[0].optional = 1u;
+        set_code_types(FUNCTION_TIMER, types, 1, code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "AVAIL into an int");
+    }
+}
+
 static void test_debug(void)
 {
     base()->debug_build_id = 1u;
@@ -1615,6 +1671,7 @@ int main(void)
     test_budget();
     test_imports_and_inputs();
     test_native_events();
+    test_optional_modules();
     test_debug();
     test_panel_debug();
     test_assets();
