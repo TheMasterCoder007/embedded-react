@@ -24,7 +24,7 @@ import type {
   IrCompletionWait,
   IrStartChain,
 } from './animations.mts';
-import type {IrExpr} from './expressions.mts';
+import type {IrExpr, NativeType} from './expressions.mts';
 import type {IrPanEvent, IrPanResponder} from './pan-responder.mts';
 import type {IrCallback, IrStmt} from './statements.mts';
 
@@ -65,6 +65,30 @@ export type IrHandler =
 export interface IrTimerFunction {
   name: string;
   callback: IrCallback | null;
+}
+
+/** A native event an app subscribes to, as the firmware registers it. */
+export interface NativeEvent {
+  /** `module.event`. */
+  name: string;
+  version: number;
+  /** 'v', ':', then the values it is posted with, each one of i, f or b. */
+  signature: string;
+  params: NativeType[];
+}
+
+/**
+ * A useNativeEvent's handler, entered with the event's values. It does nothing unless `mounted` holds: the
+ * conditions its component is built under, and its list row being in use.
+ */
+export interface IrNativeEventHandler {
+  name: string;
+  event: NativeEvent;
+  /** The locals the handler reads its values through, in order. */
+  values: string[];
+  /** Whether its component is mounted, or null when it always is. */
+  mounted: IrExpr | null;
+  callback: IrCallback;
 }
 
 /** An animation's on_complete callbacks, in the order the app declares them. */

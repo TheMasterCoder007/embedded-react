@@ -77,8 +77,28 @@ static bool sensors_scale(const int32_t* arguments, int32_t* result, void* conte
     return true;
 }
 
+/** @brief What erb_native_post() said when sensors.post posted from inside its call. */
+static bool s_posted_inside;
+
+/** @brief The firmware's events, by their index in s_natives. */
+#define NATIVE_READING 2
+#define NATIVE_IDLE 3
+
+static bool sensors_post(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)result;
+    (void)context;
+    const int32_t values[2] = {1, 1};
+    s_posted_inside = erb_native_post(NATIVE_READING, values);
+    return true;
+}
+
 static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read},
-                                      {"sensors.scale", 1, "f:i", sensors_scale}};
+                                      {"sensors.scale", 1, "f:i", sensors_scale},
+                                      {"sensors.reading", 1, "v:ib", NULL},
+                                      {"sensors.idle", 1, "v:", NULL},
+                                      {"sensors.post", 1, "v:", sensors_post}};
 
 static void log_line(const char* line, void* context)
 {
@@ -97,7 +117,7 @@ static TPkg* base(void)
     s_config.screen_width = TPKG_SCREEN;
     s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
-    s_config.native_count = 2;
+    s_config.native_count = 5;
     s_config.log = log_line;
     s_log[0] = '\0';
     s_native_fails = false;
@@ -1104,6 +1124,60 @@ static void test_events_and_inputs(void)
     CHECK(call64(date, 0, 0) >= 1700000000000LL, "DATENOW reads the wall clock");
 }
 
+static void test_native_events(void)
+{
+    /* sensors.reading's handler sets the count to its int while its bool is true. */
+    base();
+    count_to_label_update();
+    TPkg* package = &s_package_spec;
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "sensors.reading";
+    package->strings[package->string_count++] = "v:ib";
+    package->strings[package->string_count++] = "sensors.post";
+    package->strings[package->string_count++] = "v:";
+    {
+        const uint8_t types[] = {ERB_TYPE_INT, ERB_TYPE_BOOL};
+        const uint32_t code[] = {OP_ABX(JF, 1, 1), OP_ABX(SET32, 0, SLOT_COUNT), OP_ABC(RET, 0, 0, 0)};
+        const uint16_t handler = tpkg_function(package, ERB_FUNCTION_KIND_NATIVE_EVENT, 2, 0, types, 2, code, 3);
+        package->native_events[package->native_event_count++] = (TNativeEvent){name, 1, (uint16_t)(name + 1), handler};
+    }
+    package->imports[package->import_count++] = (TImport){(uint16_t)(name + 2), 1, (uint16_t)(name + 3)};
+    const uint32_t post_code[] = {OP_ABX(CALLN, 0, 1), OP_ABC(RET, 0, 0, 0)};
+    const uint16_t post = helper(NULL, 0, 0, 0, post_code, 2);
+
+    CHECK(!erb_native_post(NATIVE_READING, NULL), "a post with no app running is refused");
+    CHECK(load(), "loads");
+    const int32_t seven[2] = {7, 1};
+    CHECK(erb_native_post(NATIVE_READING, seven), "a post is taken");
+    CHECK(slot_int(SLOT_COUNT) == 7, "its handler runs with its values");
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "7") == 0, "then the update");
+    const int32_t nine[2] = {9, 0};
+    CHECK(erb_native_post(NATIVE_READING, nine) && slot_int(SLOT_COUNT) == 7, "the handler reads its bool");
+    const int32_t eleven[2] = {11, 5};
+    CHECK(erb_native_post(NATIVE_READING, eleven) && slot_int(SLOT_COUNT) == 11, "any nonzero cell is true");
+
+    CHECK(erb_native_post(NATIVE_IDLE, NULL), "an event nothing subscribes to is taken, and dropped");
+    CHECK(!erb_native_post(0, seven), "a native function isn't posted");
+    CHECK(!erb_native_post(99, seven) && !erb_native_post(-1, seven), "nor an index past the natives");
+    CHECK(!erb_native_post(NATIVE_READING, NULL), "nor an event with values but none given");
+
+    s_posted_inside = true;
+    call(post, 0, 0);
+    CHECK(s_status == ERB_OK && !s_posted_inside, "a post from inside a native call is refused");
+    CHECK(slot_int(SLOT_COUNT) == 11, "and runs nothing");
+
+    /* A handler that faults stops the app, as any other does. */
+    {
+        const uint32_t trap[] = {OP_ABX(TRAP, 0, STRING_BOOM)};
+        const TFunction keep = package->functions[package->native_events[0].function];
+        tpkg_set_code(
+            package, package->native_events[0].function, package->types + keep.types, keep.registers, trap, 1);
+    }
+    CHECK(load(), "loads");
+    CHECK(erb_native_post(NATIVE_READING, seven) && !erb_running(), "a handler's fault stops the app");
+    CHECK(erb_last_error()->status == ERB_ERROR_TRAP, "with its reason");
+}
+
 static void test_queries(void)
 {
     base();
@@ -1465,6 +1539,7 @@ int main(void)
     test_int64_arithmetic();
     test_float_rules();
     test_loops_and_calls();
+    test_native_events();
     test_text();
     test_string_helpers();
     test_lists();

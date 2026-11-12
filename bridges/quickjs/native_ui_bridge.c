@@ -2678,6 +2678,18 @@ static void bridge_event_trampoline(ERNode* node, const EREventData* data, void*
     JS_FreeValue(ctx, handler);
 }
 
+void er_bridge_dispatch(JSContext* ctx, JSValueConst callback, int argc, JSValueConst* argv, const char* where)
+{
+    batch_enter();
+    JSValue result = bridge_call_batched(ctx, callback, argc, argv);
+    if (JS_IsException(result))
+    {
+        bridge_report_exception(ctx, where);
+    }
+    JS_FreeValue(ctx, result);
+    batch_leave();
+}
+
 /**
  * @brief Engine → JS responder-query trampoline: calls the registered predicate, returns its boolean.
  *

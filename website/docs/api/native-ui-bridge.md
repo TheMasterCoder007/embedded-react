@@ -90,10 +90,13 @@ block sizes or the collector never runs), `max_stack_size`
 example does for WiFi), `natives`, `native_count` and `native_context` (the C functions behind the app's
 [native modules](./hooks.md#nativemodule), the same table Flow B takes), and `extra_intrinsics` (opt in to
 `Date` objects, `Proxy`, typed arrays, `WeakRef`, `BigInt` or `eval`, which the default profile leaves out).
+`er_runtime_native_post(index, values)` posts one of the table's [events](./hooks.md#usenativeevent) to the app,
+from the frame loop, as `erb_native_post()` does in Flow B.
 
 Below `er_runtime`, for a host that drives QuickJS itself, the bridge exposes
-`er_bridge_install(ctx)`, `er_bridge_pump(ctx)`, `er_bridge_run_bytecode(ctx, buf, len)`,
-`er_bridge_now_ms()` and `er_bridge_release_runtime()`.
+`er_bridge_install(ctx)`, `er_bridge_pump(ctx)`, `er_bridge_dispatch(ctx, fn, argc, argv, where)` (calls a function
+as an event handler is called, in one batch), `er_bridge_run_bytecode(ctx, buf, len)`, `er_bridge_now_ms()` and
+`er_bridge_release_runtime()`.
 
 ## The lite JavaScript profile
 

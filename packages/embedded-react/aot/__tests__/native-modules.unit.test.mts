@@ -19,7 +19,8 @@ import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {describe, it, expect} from 'vitest';
 import {compilePackage, readNativeInterfaces} from '../compile.mts';
-import {Table} from '../compiler/package/format.mts';
+import {FunctionKind, Table, ValueType} from '../compiler/package/format.mts';
+import {addNativeSignatures} from '../compiler/native-modules.mts';
 import {OP} from '../compiler/package/bytecode.mts';
 import type {CompileOptions} from '../compiler/options.mts';
 
@@ -108,26 +109,56 @@ function readProgram(bytes: Uint8Array) {
       return `${string(u16(at))} v${u16(at + 2)} ${string(u16(at + 4))}`;
     },
   );
+  const nativeEvents = tables.get(Table.nativeEvents);
+  const eventList = Array.from(
+    {length: nativeEvents ? nativeEvents.length / 8 : 0},
+    (_, index) => {
+      const at = nativeEvents!.offset + index * 8;
+      return {
+        event: `${string(u16(at))} v${u16(at + 2)} ${string(u16(at + 4))}`,
+        handler: u16(at + 6),
+      };
+    },
+  );
   const functions = tables.get(Table.functions)!;
+  const types = tables.get(Table.types);
   const code = tables.get(Table.code)!;
-  const ops = Array.from({length: functions.length / 16}, (_, index) => {
-    const record = functions.offset + index * 16;
-    const start = u32(record);
-    const found: {name: string; a: number; b: number; bx: number}[] = [];
-    for (let at = start; at < start + u32(record + 4);) {
-      const word = u32(code.offset + at * 4);
-      const name = OP_NAMES[word & 0xff];
-      found.push({
-        name,
-        a: (word >>> 8) & 0xff,
-        b: (word >>> 16) & 0xff,
-        bx: word >>> 16,
-      });
-      at += OP[name].words;
-    }
-    return found;
-  }).flat();
-  return {imports: importList, ops};
+  const functionList = Array.from(
+    {length: functions.length / 16},
+    (_, index) => {
+      const record = functions.offset + index * 16;
+      const start = u32(record);
+      const ops: {name: string; a: number; b: number; bx: number}[] = [];
+      for (let at = start; at < start + u32(record + 4);) {
+        const word = u32(code.offset + at * 4);
+        const name = OP_NAMES[word & 0xff];
+        ops.push({
+          name,
+          a: (word >>> 8) & 0xff,
+          b: (word >>> 16) & 0xff,
+          bx: word >>> 16,
+        });
+        at += OP[name].words;
+      }
+      const parameters = bytes[record + 13];
+      return {
+        kind: bytes[record + 15],
+        parameterTypes: Array.from(
+          bytes.subarray(
+            types!.offset + u32(record + 8),
+            types!.offset + u32(record + 8) + parameters,
+          ),
+        ),
+        ops,
+      };
+    },
+  );
+  return {
+    imports: importList,
+    events: eventList,
+    functions: functionList,
+    ops: functionList.flatMap(programFunction => programFunction.ops),
+  };
 }
 
 describe('native module calls', () => {
@@ -363,5 +394,223 @@ describe('native module calls it refuses', () => {
         "const Sensors = nativeModule<Sensors>('sensors', 2);\n",
     );
     expect(failure(source)).toMatch(/at most 32 native methods/);
+  });
+});
+
+const EVENTS =
+  'interface Sensors {\n' +
+  '  start(): void;\n' +
+  '  events: {\n' +
+  '    reading(celsius: number, channel: Int, ok: boolean): void;\n' +
+  '    tick(): void;\n' +
+  '    name(text: string): void;\n' +
+  '    count(): Int;\n' +
+  '  };\n' +
+  '}\n' +
+  "const Sensors = nativeModule<Sensors>('sensors', 2);\n";
+
+/** An app with the Sensors module and its events, `body` at the top of the App and `children` in its view. */
+const eventsApp = (body: string, children = '', components = '') =>
+  "import {useState} from 'react';\n" +
+  "import {Pressable, Text, View, nativeModule, useNativeEvent} from 'embedded-react';\n" +
+  "import type {Int} from 'embedded-react';\n" +
+  EVENTS +
+  components +
+  'export function App() {\n' +
+  '  const [n, setN] = useState(0);\n' +
+  '  const [f, setF] = useState(0.0);\n' +
+  '  const [on, setOn] = useState(false);\n' +
+  '  const [items, setItems] = useState([1]);\n' +
+  body +
+  '  return <Pressable onPress={() => { setOn(v => !v); setItems(list => [...list, 2]); }}>' +
+  `<View><Text>{n} {f}</Text>${children}</View></Pressable>;\n` +
+  '}\n';
+
+/** A component that subscribes to tick, counting it. */
+const TICKER =
+  'function Ticker() {\n' +
+  '  const [ticks, setTicks] = useState(0);\n' +
+  "  useNativeEvent(Sensors, 'tick', () => setTicks(value => value + 1));\n" +
+  '  return <Text>{ticks}</Text>;\n' +
+  '}\n';
+
+describe('native events', () => {
+  it('lists each subscription with its event and a handler entered with its values', () => {
+    const {events, functions} = readProgram(
+      compile(
+        eventsApp(
+          "  useNativeEvent(Sensors, 'reading', (celsius, channel, ok) => { if (ok) { setF(celsius); setN(channel); } });\n" +
+            "  useNativeEvent(Sensors, 'tick', () => setN(value => value + 1));\n",
+        ),
+      ).program,
+    );
+    expect(events.map(entry => entry.event)).toEqual([
+      'sensors.reading v2 v:fib',
+      'sensors.tick v2 v:',
+    ]);
+    const [reading, tick] = events.map(entry => functions[entry.handler]);
+    expect(reading.kind).toBe(FunctionKind.nativeEvent);
+    expect(reading.parameterTypes).toEqual([
+      ValueType.float,
+      ValueType.int,
+      ValueType.bool,
+    ]);
+    expect(tick.kind).toBe(FunctionKind.nativeEvent);
+    expect(tick.parameterTypes).toEqual([]);
+  });
+
+  it('takes fewer parameters than the event has values', () => {
+    const {events, functions} = readProgram(
+      compile(
+        eventsApp(
+          "  useNativeEvent(Sensors, 'reading', celsius => setF(celsius));\n",
+        ),
+      ).program,
+    );
+    expect(functions[events[0].handler].parameterTypes).toHaveLength(3);
+  });
+
+  it("checks a component's conditions before it runs a handler, and the App's runs at once", () => {
+    const {events, functions} = readProgram(
+      compile(
+        eventsApp(
+          "  useNativeEvent(Sensors, 'tick', () => setN(value => value + 1));\n",
+          '{on && <Ticker/>}',
+          TICKER,
+        ),
+      ).program,
+    );
+    const handlers = events.map(entry => functions[entry.handler]);
+    expect(handlers).toHaveLength(2);
+    const [child, app] = handlers;
+    expect(child.ops.map(op => op.name)).toContain('JF');
+    expect(app.ops.map(op => op.name)).not.toContain('JF');
+  });
+
+  it('subscribes once for each row of a list', () => {
+    const {events} = readProgram(
+      compile(
+        eventsApp('', '{items.map(item => <Ticker key={item}/>)}', TICKER),
+        {listCap: 3},
+      ).program,
+    );
+    expect(events.map(entry => entry.event)).toEqual(
+      Array(3).fill('sensors.tick v2 v:'),
+    );
+  });
+
+  it("gives Flow A each method's and event's signature", () => {
+    const signed = addNativeSignatures(eventsApp(''), {});
+    expect(signed).toContain(
+      "nativeModule<Sensors>('sensors', 2, " +
+        JSON.stringify({
+          methods: {start: 'v:'},
+          events: {
+            reading: 'v:fib',
+            tick: 'v:',
+            name: {
+              reason: "takes a string, which native modules don't pass yet",
+            },
+            count: {reason: 'returns a value, but an event returns nothing'},
+          },
+        }) +
+        ')',
+    );
+  });
+});
+
+describe('native events it refuses', () => {
+  const subscribed = (call: string) => eventsApp(`  ${call};\n`);
+
+  it('refuses an event the interface does not declare or cannot pass', () => {
+    expect(
+      failure(subscribed("useNativeEvent(Sensors, 'done', () => {})")),
+    ).toMatch(/Sensors has no event done/);
+    expect(
+      failure(subscribed("useNativeEvent(Sensors, 'name', () => {})")),
+    ).toMatch(/Sensors's event name takes a string/);
+    expect(
+      failure(subscribed("useNativeEvent(Sensors, 'count', () => {})")),
+    ).toMatch(/Sensors's event count returns a value/);
+  });
+
+  it('refuses a call it cannot read', () => {
+    expect(failure(subscribed("useNativeEvent(n, 'tick', () => {})"))).toMatch(
+      /takes a native module, an event name and a handler/,
+    );
+    expect(failure(subscribed("useNativeEvent(Sensors, 'tick')"))).toMatch(
+      /takes a native module, an event name and a handler/,
+    );
+    const event = "'tick'";
+    expect(
+      failure(
+        eventsApp(
+          `  const which = ${event};\n  useNativeEvent(Sensors, which, () => {});\n`,
+        ),
+      ),
+    ).toMatch(/event is named by a string literal/);
+    expect(
+      failure(
+        eventsApp(
+          "  const handle = () => {};\n  useNativeEvent(Sensors, 'tick', handle);\n",
+        ),
+      ),
+    ).toMatch(/handler must be an inline function/);
+    expect(
+      failure(subscribed("useNativeEvent(Sensors, 'tick', (extra) => {})")),
+    ).toMatch(/has 0 values, but the handler takes 1/);
+    expect(
+      failure(
+        subscribed("useNativeEvent(Sensors, 'reading', ({x}) => setF(x))"),
+      ),
+    ).toMatch(/handler takes plain parameters/);
+  });
+
+  it('refuses a subscription anywhere but the top of a component', () => {
+    expect(
+      failure(
+        eventsApp("  on && useNativeEvent(Sensors, 'tick', () => {});\n"),
+      ),
+    ).toMatch(/useNativeEvent\(\) is called inside a condition/);
+    expect(
+      failure(
+        eventsApp(
+          '',
+          '',
+          'function Ticker() {\n' +
+            '  const [ticks, setTicks] = useState(0);\n' +
+            "  const subscribe = () => useNativeEvent(Sensors, 'tick', () => setTicks(1));\n" +
+            '  return <Text>{ticks}</Text>;\n' +
+            '}\n',
+        ).replace('</View>', '<Ticker/></View>'),
+      ),
+    ).toMatch(/useNativeEvent\(\) is called inside a condition/);
+  });
+
+  it('refuses events declared as anything but an object of methods', () => {
+    const declared = (events: string) =>
+      subscribed("useNativeEvent(Sensors, 'tick', () => {})").replace(
+        EVENTS,
+        `interface Sensors { ${events} }\n` +
+          "const Sensors = nativeModule<Sensors>('sensors', 2);\n",
+      );
+    expect(failure(declared('events: number;'))).toMatch(
+      /Sensors's events aren't an object type of events/,
+    );
+    expect(failure(declared('events(): void;'))).toMatch(
+      /Sensors's events aren't an object type of events/,
+    );
+    expect(failure(declared('events: {__proto__(): void};'))).toMatch(
+      /Sensors has an event named __proto__/,
+    );
+  });
+
+  it('refuses more subscriptions than a package holds', () => {
+    expect(
+      failure(
+        eventsApp('', '{items.map(item => <Ticker key={item}/>)}', TICKER),
+        {listCap: 33},
+      ),
+    ).toMatch(/subscribes to native events 33 times, but a package holds 32/);
   });
 });

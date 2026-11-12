@@ -17,8 +17,10 @@
 /*
  * Native modules: `const Sensors = nativeModule<Sensors>('sensors', 1)` at module level, typed by an interface in
  * the app's file or in a local .ts file the CLI reads. Each method called becomes an import named
- * `module.method`, and each call a CALLN. In Flow A the bundler passes nativeModule() each method's signature instead,
- * and in the simulators the module's mock too.
+ * `module.method`, and each call a CALLN. The interface's `events: {reading(celsius: number): void}` are what the
+ * firmware posts; each useNativeEvent becomes a handler the runtime runs with the event's values. In Flow A the
+ * bundler passes nativeModule() each method's and event's signature instead, and in the simulators the module's mock
+ * too.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -37,6 +39,7 @@ import type {
   NativeImport,
   NativeType,
 } from './ir/expressions.mts';
+import type {NativeEvent} from './ir/functions.mts';
 import type {Env} from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -56,6 +59,8 @@ export interface NativeModule {
   /** The interface's name, for errors. */
   interfaceName: string;
   members: Map<string, NativeMember>;
+  /** The interface's `events`, each a method that returns void. */
+  events: Map<string, NativeMember>;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -79,6 +84,12 @@ const SIGNATURE_CODES: Record<NativeType | 'void', string> = {
 
 const DECLARATION_HINT =
   "declare it at module level: const Sensors = nativeModule<Sensors>('sensors', 1)";
+
+const EVENTS_HINT =
+  'declare the events as an object of methods that return void: events: {reading(celsius: number): void};';
+
+/** Native event handlers a package may have: the runtime's ERB_MAX_NATIVE_EVENTS. */
+export const MAX_NATIVE_EVENTS = 32;
 
 /** What an interface file may be called, after the path the app imports it by. */
 const INTERFACE_EXTENSIONS = ['.ts', '.mts', '.tsx', '/index.ts'];
@@ -456,6 +467,82 @@ function memberOf(
 }
 
 /**
+ * Whether an interface member is its `events`.
+ *
+ * @param member  The member.
+ *
+ * @returns True when it is named `events`.
+ */
+const isEventsMember = (member: t.TSTypeElement): boolean =>
+  (member.type === 'TSPropertySignature' ||
+    member.type === 'TSMethodSignature') &&
+  !member.computed &&
+  member.key.type === 'Identifier' &&
+  member.key.name === 'events';
+
+/**
+ * A module's events, from its interface's `events: {…}`. Each is a method that returns void.
+ *
+ * @param member  The `events` member.
+ * @param call  The nativeModule() call, for errors.
+ * @param interfaceName  The interface's name, for errors.
+ *
+ * @returns Each event, or why it can't be used.
+ */
+function eventsOf(
+  member: t.TSTypeElement,
+  call: t.CallExpression,
+  interfaceName: string,
+): Map<string, NativeMember> {
+  const type =
+    member.type === 'TSPropertySignature'
+      ? member.typeAnnotation?.typeAnnotation
+      : undefined;
+  if (
+    type?.type !== 'TSTypeLiteral' ||
+    (member as t.TSPropertySignature).optional
+  ) {
+    throw errorAt(
+      call,
+      `AOT: ${interfaceName}'s events aren't an object type of events`,
+      EVENTS_HINT,
+    );
+  }
+  const events = new Map<string, NativeMember>();
+  for (const element of type.members) {
+    const event = memberOf(element);
+    if (!event) continue;
+    if (event.name === '__proto__') {
+      throw errorAt(
+        call,
+        `AOT: ${interfaceName} has an event named __proto__, which a native module can't have`,
+        "rename it; JavaScript keeps __proto__ for an object's prototype.",
+      );
+    }
+    const refused = (reason: string, hint: string): NativeMember => ({
+      kind: 'refused',
+      reason,
+      hint,
+    });
+    events.set(
+      event.name,
+      events.has(event.name)
+        ? refused(
+            'is overloaded, but a native event has one signature',
+            'declare each event once, and give another signature a name of its own.',
+          )
+        : event.member.kind === 'method' && event.member.result !== 'void'
+          ? refused(
+              'returns a value, but an event returns nothing',
+              EVENTS_HINT,
+            )
+          : event.member,
+    );
+  }
+  return events;
+}
+
+/**
  * The native modules an app declares, by the const each is bound to. Run on the app before its types are stripped.
  *
  * @param program  The app's program, types and all.
@@ -523,8 +610,13 @@ export function collectNativeModules(
       version,
       interfaceName,
       members: new Map(),
+      events: new Map(),
     };
     for (const element of members) {
+      if (isEventsMember(element)) {
+        module.events = eventsOf(element, call, interfaceName);
+        continue;
+      }
       const member = memberOf(element);
       if (!member) continue;
       // Flow A keeps the methods in objects, where __proto__ is the prototype.
@@ -565,8 +657,9 @@ const signatureOf = (member: Extract<NativeMember, {kind: 'method'}>): string =>
   member.params.map(param => SIGNATURE_CODES[param]).join('');
 
 /**
- * Flow A's side: since the bundle has no types, each nativeModule() call is given its methods' signatures as a third
- * argument, read from its interface as the compiler reads it. A method that can't be called gets the reason instead.
+ * Flow A's side: since the bundle has no types, each nativeModule() call is given its methods' and events' signatures
+ * as a third argument, `{methods, events}`, read from its interface as the compiler reads it. One that can't be used
+ * gets the reason instead.
  * With mocks, for the simulators, each call is also given its module's mock, or null when it has none.
  *
  * @param source  An app file's source.
@@ -590,15 +683,19 @@ export function addNativeSignatures(
   let signed = source;
   for (const declarator of declarationsOf(program).reverse()) {
     const module = modules.get((declarator.id as t.Identifier).name)!;
-    const methods = Object.fromEntries(
-      [...module.members].map(([method, member]) => [
-        method,
-        member.kind === 'method'
-          ? signatureOf(member)
-          : {reason: member.reason},
-      ]),
-    );
-    let added = `, ${JSON.stringify(methods)}`;
+    const signatures = (members: Map<string, NativeMember>) =>
+      Object.fromEntries(
+        [...members].map(([name, member]) => [
+          name,
+          member.kind === 'method'
+            ? signatureOf(member)
+            : {reason: member.reason},
+        ]),
+      );
+    let added = `, ${JSON.stringify({
+      methods: signatures(module.members),
+      events: signatures(module.events),
+    })}`;
     if (mocks) {
       const mockPath = mocks.get(module.name);
       if (mockPath) {
@@ -871,4 +968,101 @@ export function lowerNativeCall(
     result: member.result,
   };
   return {import: nativeImport, callArguments};
+}
+
+/**
+ * The event a `useNativeEvent(Module, 'event', handler)` call subscribes to, checked against its module's interface.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns The event, and the handler with no more parameters than the event's values.
+ */
+export function nativeEventOf(
+  call: t.CallExpression,
+  environment: Env,
+): {
+  event: NativeEvent;
+  handler: t.ArrowFunctionExpression | t.FunctionExpression;
+} {
+  const [moduleArgument, eventArgument, handler] = call.arguments;
+  const usage =
+    "subscribe as useNativeEvent(Sensors, 'reading', celsius => setTemperature(celsius)).";
+  if (
+    call.arguments.length !== 3 ||
+    moduleArgument.type !== 'Identifier' ||
+    !readsNativeModule(moduleArgument.name, environment)
+  ) {
+    throw errorAt(
+      call,
+      'AOT: useNativeEvent() takes a native module, an event name and a handler',
+      usage,
+    );
+  }
+  const module = environment.nativeModules!.get(moduleArgument.name)!;
+  if (eventArgument.type !== 'StringLiteral') {
+    throw errorAt(
+      eventArgument,
+      "AOT: useNativeEvent()'s event is named by a string literal",
+      usage,
+    );
+  }
+  const event = module.events.get(eventArgument.value);
+  if (!event) {
+    throw errorAt(
+      eventArgument,
+      `AOT: ${module.interfaceName} has no event ${eventArgument.value}`,
+      `declare it in the interface: events: {${eventArgument.value}(…): void};`,
+    );
+  }
+  if (event.kind === 'refused') {
+    throw errorAt(
+      eventArgument,
+      `AOT: ${module.interfaceName}'s event ${eventArgument.value} ${event.reason}`,
+      event.hint,
+    );
+  }
+  if (
+    handler.type !== 'ArrowFunctionExpression' &&
+    handler.type !== 'FunctionExpression'
+  ) {
+    throw errorAt(
+      handler,
+      "AOT: useNativeEvent()'s handler must be an inline function",
+      usage,
+    );
+  }
+  if (handler.async || handler.generator) {
+    throw errorAt(
+      handler,
+      "AOT: useNativeEvent()'s handler can't be async or a generator",
+      'write a plain function; the firmware posts the event when its work is done.',
+    );
+  }
+  if (handler.params.length > event.params.length) {
+    throw errorAt(
+      handler,
+      `AOT: ${module.interfaceName}'s event ${eventArgument.value} has ${event.params.length} value` +
+        `${event.params.length === 1 ? '' : 's'}, but the handler takes ${handler.params.length}`,
+      'take one parameter for each value the interface declares, or fewer.',
+    );
+  }
+  for (const parameter of handler.params) {
+    if (parameter.type !== 'Identifier') {
+      throw errorAt(
+        parameter,
+        "AOT: useNativeEvent()'s handler takes plain parameters",
+        'name each value: (celsius, ok) => …',
+      );
+    }
+  }
+  return {
+    event: {
+      name: `${module.name}.${eventArgument.value}`,
+      version: module.version,
+      signature: signatureOf(event),
+      params: event.params,
+    },
+    handler,
+  };
 }

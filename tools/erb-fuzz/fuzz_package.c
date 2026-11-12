@@ -87,6 +87,9 @@ static const uint16_t s_panels[][2] = {
 #define GLYPH_SLOTS 1024
 #define EXTRA_GLYPH_SLOTS 64
 
+/** @brief The probe's done event, by its index in s_natives. */
+#define PROBE_DONE 10
+
 /** @brief What a script step does with its first and second argument. An operation past the last wraps around. */
 enum
 {
@@ -104,10 +107,12 @@ enum
     OPERATION_WALL_CLOCK,   /* the clock set to (first * ARGUMENT_RANGE + second) seconds */
     OPERATION_RELOAD,       /* the package loaded again over itself */
     OPERATION_UNLOAD,       /* the app unloaded and loaded again */
+    OPERATION_NATIVE_EVENT, /* native first posted, every value second - ARGUMENT_MIDPOINT */
     OPERATION_COUNT,
 };
 
-/** @brief The host's side of a run with no script: taps across the panel, a drag, typing, inputs and time. */
+/** @brief The host's side of a run with no script: taps across the panel, a drag, typing, inputs, time and the
+ *         probe's done event (PROBE_DONE). */
 static const uint8_t s_default_script[] = {
     OPERATION_FRAME,      4,   0,   OPERATION_TOUCH_DOWN,  32,  32,  OPERATION_TOUCH_UP,     32,  32,
     OPERATION_TOUCH_DOWN, 128, 32,  OPERATION_TOUCH_UP,    128, 32,  OPERATION_TOUCH_DOWN,   224, 32,
@@ -119,6 +124,7 @@ static const uint8_t s_default_script[] = {
     OPERATION_KEY,        0,   'a', OPERATION_KEY,         8,   0,   OPERATION_INPUT_INT,    0,   200,
     OPERATION_INPUT_BOOL, 0,   1,   OPERATION_INPUT_FLOAT, 0,   64,  OPERATION_INPUT_STRING, 0,   8,
     OPERATION_WALL_CLOCK, 99,  1,   OPERATION_LONG_FRAME,  1,   0,   OPERATION_FRAME,        4,   0,
+    OPERATION_FRAME,      4,   0,   OPERATION_FRAME,       4,   0,   OPERATION_NATIVE_EVENT, 10,  133,
 };
 
 /** @brief A native function, so a package's import of it resolves. The runtime's tests build packages that use it. */
@@ -129,7 +135,8 @@ static bool sensors_read(const int32_t* arguments, int32_t* result, void* contex
     return arguments[0] != INT32_MIN;
 }
 
-/** @brief The probe module the native-calls frame test calls, so its seed loads. Each wraps rather than overflows. */
+/** @brief The probe module the native-calls and native-events frame tests call, so their seeds load. Each wraps
+ *         rather than overflows. */
 static uint32_t s_probe_count;
 static int32_t s_probe_stored;
 
@@ -186,6 +193,24 @@ static bool probe_stored(const int32_t* arguments, int32_t* result, void* contex
     return true;
 }
 
+/** @brief Posts done from inside the call, which the runtime refuses. */
+static bool probe_start(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)result;
+    (void)context;
+    const int32_t values[3] = {arguments[0], arguments[0], arguments[0] & 1};
+    erb_native_post(PROBE_DONE, values);
+    return true;
+}
+
+static bool probe_refused(const int32_t* arguments, int32_t* result, void* context)
+{
+    (void)arguments;
+    (void)context;
+    *result = 0;
+    return true;
+}
+
 static const ErbNative s_natives[] = {
     {"sensors.read", 1, "i:i", sensors_read},
     {"probe.add", 1, "i:ii", probe_add},
@@ -195,6 +220,10 @@ static const ErbNative s_natives[] = {
     {"probe.next", 1, "i:", probe_next},
     {"probe.store", 1, "v:f", probe_store},
     {"probe.stored", 1, "f:", probe_stored},
+    {"probe.start", 1, "v:i", probe_start},
+    {"probe.refused", 1, "i:", probe_refused},
+    [PROBE_DONE] = {"probe.done", 1, "v:ifb", NULL},
+    {"probe.idle", 1, "v:", NULL},
 };
 
 static BitmapFont s_fonts[FONT_SLOTS];
@@ -310,6 +339,16 @@ static void step(Run* run, uint8_t operation, uint8_t first_argument, uint8_t se
             erb_unload();
             load(run);
             break;
+        case OPERATION_NATIVE_EVENT:
+        {
+            int32_t values[ERB_NATIVE_MAX_PARAMETERS];
+            for (uint32_t value = 0; value < ERB_NATIVE_MAX_PARAMETERS; value++)
+            {
+                values[value] = (int32_t)second_argument - ARGUMENT_MIDPOINT;
+            }
+            erb_native_post(first_argument % (sizeof(s_natives) / sizeof(s_natives[0])), values);
+            break;
+        }
         default:
             break;
     }

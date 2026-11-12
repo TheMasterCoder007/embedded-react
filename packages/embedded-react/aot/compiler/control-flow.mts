@@ -29,7 +29,7 @@ import {
   lowerExpr,
   lowerSourcedWide,
 } from './expressions.mts';
-import {STRUCT} from './ir/types.mts';
+import {BOOL, INT, STRUCT} from './ir/types.mts';
 import {
   isFn,
   declaredNames,
@@ -39,6 +39,7 @@ import {
   collectCallbacks,
   collectMemos,
   collectEffects,
+  collectNativeEvents,
   usesState,
   bindConst,
   settleBootInitials,
@@ -46,7 +47,7 @@ import {
 import {collectAnims, collectRefs} from './animations.mts';
 import {attrExpr} from './style-text.mts';
 import {inlineFragments} from './elements/props.mts';
-import {lowerEffect} from './handlers.mts';
+import {lowerEffect, lowerNativeEvent} from './handlers.mts';
 import {
   bindDerivedList,
   derivedListOf,
@@ -65,6 +66,7 @@ import type * as t from '@babel/types';
 import type {AotError} from './diagnostics.mts';
 import type {Out} from './out.mts';
 import type {IrBranch, IrChild, IrElement, IrShow} from './ir/nodes.mts';
+import type {IrExpr} from './ir/expressions.mts';
 import type {
   ChildrenRef,
   ChildrenSlot,
@@ -631,6 +633,9 @@ export function emitComponent(
   for (const effect of collectEffects(functionNode.body)) {
     lowerEffect(effect, childEnvironment, childState, output);
   }
+  for (const call of collectNativeEvents(functionNode.body)) {
+    lowerNativeEvent(call, childEnvironment, childState, output);
+  }
 
   // Emit the JSX the component returns, in the child's own scope.
   const root = emitNode(
@@ -926,6 +931,13 @@ function emitDynamicMap(
         {
           ...rowEnv(environment, [itemName, indexName], rowScope, rowLocals),
           inListRow: true,
+          mounted: mountedWhile(environment, {
+            kind: 'compare',
+            operator: '<',
+            left: {kind: 'number', value: rowIndex, type: INT},
+            right: {kind: 'listLength', list: listState, type: INT},
+            type: BOOL,
+          }),
         },
         state,
         {show: {kind: 'rowInUse', row: rowIndex, list: listState}},
@@ -935,6 +947,25 @@ function emitDynamicMap(
 
   return {kind: 'pool', list: listState, rows};
 }
+
+/**
+ * Whether something under a test is mounted: the test, and whatever its surroundings are mounted under.
+ *
+ * @param environment  The environment around the test.
+ * @param test  What it is built under.
+ *
+ * @returns The condition.
+ */
+const mountedWhile = (environment: Env, test: IrExpr): IrExpr =>
+  environment.mounted
+    ? {
+        kind: 'logical',
+        operator: '&&',
+        left: environment.mounted,
+        right: test,
+        type: BOOL,
+      }
+    : test;
 
 /** The value types whose falsy value, 0, React renders as text. */
 const NUMERIC_KINDS = new Set(['int', 'float', 'int64']);
@@ -1084,7 +1115,10 @@ function lowerBranch(
         whenTrue,
         narrowedScope(scope, narrowing.whenTrue),
         output,
-        narrowed(environment, narrowing.whenTrue),
+        {
+          ...narrowed(environment, narrowing.whenTrue),
+          mounted: mountedWhile(environment, test),
+        },
         state,
         shown(false),
       ),
@@ -1093,7 +1127,15 @@ function lowerBranch(
             whenFalse,
             narrowedScope(scope, narrowing.whenFalse),
             output,
-            narrowed(environment, narrowing.whenFalse),
+            {
+              ...narrowed(environment, narrowing.whenFalse),
+              mounted: mountedWhile(environment, {
+                kind: 'unary',
+                operator: '!',
+                operand: test,
+                type: BOOL,
+              }),
+            },
             state,
             shown(true),
           )

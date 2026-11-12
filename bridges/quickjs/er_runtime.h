@@ -150,8 +150,8 @@ typedef struct
         er_runtime_init creates and each one er_runtime_reset replaces it with. Runs after the runtime's
         globals and before any app code. NULL = none. */
     void (*install_host_globals)(JSContext* ctx);
-    const ErbNative* natives; /**< Native functions the app's native modules call: the table ErbConfig::natives
-                                   takes, so both flows share it. NULL = none. */
+    const ErbNative* natives; /**< Native functions and events of the app's native modules: the table
+                                   ErbConfig::natives takes, so both flows share it. NULL = none. */
     uint16_t native_count;
     void* native_context; /**< Passed to natives. */
 } ErRuntimeConfig;
@@ -362,6 +362,20 @@ bool er_runtime_load_source(const char* source, size_t length, const char* name)
  * handler schedules settle inside this same pump.
  */
 void er_runtime_pump(void);
+
+/**
+ * @brief Posts a native event: calls the handlers the app subscribes to it with (useNativeEvent), as one batch.
+ *
+ * Call it from the frame loop, as Flow B's erb_native_post() is called, with the same index. An event the app
+ * doesn't subscribe to is dropped. A handler that throws is reported as any other.
+ *
+ * @param[in] native     The event's index in ErRuntimeConfig::natives.
+ * @param[in] arguments  Its arguments as 32-bit cells, as its signature lists them; may be NULL when it has none.
+ *
+ * @return false when the runtime can't take it now: no app is loaded, or a native function is posting from inside
+ *         its call. Post it again next frame. Also false when @p native isn't an event.
+ */
+bool er_runtime_native_post(int native, const int32_t* arguments);
 
 /**
  * @brief Tears the runtime back to a clean slate for a reload: frees the JS context, resets the engine

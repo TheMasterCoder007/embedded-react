@@ -150,6 +150,7 @@ export function internedStates(app: IrApp): Map<ScalarState, string[]> {
     nodesOf(app.root),
     output.handlers,
     output.timerFunctions,
+    output.nativeEventHandlers,
     output.effectFunctions,
     output.mountEffects,
     output.dependencyEffects,

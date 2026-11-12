@@ -65,6 +65,11 @@
 #define ERB_MAX_IMPORTS 32u
 #endif
 
+/** @brief Most native event handlers a package may have: one for each useNativeEvent, in each list row. */
+#ifndef ERB_MAX_NATIVE_EVENTS
+#define ERB_MAX_NATIVE_EVENTS 32u
+#endif
+
 /**
  * @brief Most images a package's asset pack may have: as many as the engine's image registry holds. Sizes the
  *        verifier's image name index (4 bytes each). It follows ERUI_IMAGE_REGISTRY_MAX; set that, not this.
@@ -128,7 +133,7 @@ typedef enum
     ERB_ERROR_CONTROL_FLOW, /**< Bad control flow. */
     ERB_ERROR_RECURSION,    /**< Recursive call. */
     ERB_ERROR_STACK,        /**< Stack too deep. */
-    ERB_ERROR_IMPORT,       /**< Missing native module. */
+    ERB_ERROR_IMPORT,       /**< Missing native module: a function or event the firmware doesn't offer. */
     ERB_ERROR_INPUT,        /**< Bad input. */
     ERB_ERROR_DEBUG,        /**< Debug table does not match. */
     ERB_ERROR_ASSETS,       /**< Asset pack failed to load. */
@@ -174,7 +179,7 @@ typedef struct
     uint16_t screen_width; /**< The panel size, which picks the package's layout. */
     uint16_t screen_height;
     uint16_t node_count;      /**< Nodes the app may use; 0 means ERUI_MAX_NODES. */
-    const ErbNative* natives; /**< Native functions packages may import. */
+    const ErbNative* natives; /**< Native functions and events packages may use. */
     uint16_t native_count;
     ErAssetsStorage* fonts; /**< Storage for the asset pack's font tables; NULL if packages have no fonts. */
     uint32_t budget;        /**< Instructions per run; 0 means ERB_EVENT_BUDGET. */
@@ -226,6 +231,20 @@ bool erb_input_set_int(int input, int32_t value);
 bool erb_input_set_bool(int input, bool value);
 bool erb_input_set_float(int input, float value);
 bool erb_input_set_string(int input, const char* value);
+
+/**
+ * @brief Posts a native event: runs the handlers the app subscribes to it with, then the update.
+ *
+ * Call it from the frame-loop task, as erb_input_set_int() is called. An event the app doesn't subscribe to is
+ * dropped. A handler that faults stops the app as any other would.
+ *
+ * @param[in] native     The event's index in ErbConfig::natives.
+ * @param[in] arguments  Its arguments as 32-bit cells, as its signature lists them; may be NULL when it has none.
+ *
+ * @return false when the runtime can't take it now: no app runs, or the app is running code (a native function is
+ *         posting from inside a call). Post it again next frame. Also false when @p native isn't an event.
+ */
+bool erb_native_post(int native, const int32_t* arguments);
 
 /** @brief Sets the wall clock DATENOW reads, in ms since the epoch, and runs the update. */
 void erb_set_wall_clock(int64_t epoch_ms);

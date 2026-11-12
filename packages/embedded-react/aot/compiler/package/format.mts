@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 10;
+export const FORMAT_MINOR = 11;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 1;
@@ -109,6 +109,7 @@ export const Table = {
   interpolations: 18,
   keyboard: 19,
   checks: 20,
+  nativeEvents: 21,
 } as const;
 
 /** Arena region kinds, written in this order. */
@@ -240,6 +241,7 @@ export const FunctionKind = {
   boot: 0x83,
   helper: 0x84,
   animationDone: 0x85,
+  nativeEvent: 0x86,
 } as const;
 
 /** Event data fields EVT reads. */

@@ -46,7 +46,7 @@ static bool sensors_read(const int32_t* arguments, int32_t* result, void* contex
     return true;
 }
 
-static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}};
+static const ErbNative s_natives[] = {{"sensors.read", 1, "i:i", sensors_read}, {"sensors.reading", 1, "v:ib", NULL}};
 
 /** @brief The baseline package and a config it fits. */
 static TPkg* base(void)
@@ -58,7 +58,7 @@ static TPkg* base(void)
     s_config.screen_width = TPKG_SCREEN;
     s_config.screen_height = TPKG_SCREEN;
     s_config.natives = s_natives;
-    s_config.native_count = 1;
+    s_config.native_count = 2;
     return &s_package_spec;
 }
 
@@ -1133,6 +1133,58 @@ static void test_budget(void)
     CHECK(!((s_program.counting[0] >> FUNCTION_PRESS) & 1u), "an entry well inside the budget isn't");
 }
 
+/** @brief Subscribes to sensors.reading (an int and a bool) with a handler of these register types. */
+static uint16_t subscribe(TPkg* package, uint8_t first_type, uint8_t second_type)
+{
+    const uint16_t name = (uint16_t)package->string_count;
+    package->strings[package->string_count++] = "sensors.reading";
+    package->strings[package->string_count++] = "v:ib";
+    const uint8_t types[] = {first_type, second_type};
+    const uint32_t code[] = {OP_ABC(RET, 0, 0, 0)};
+    const uint16_t handler = tpkg_function(package, ERB_FUNCTION_KIND_NATIVE_EVENT, 2, 0, types, 2, code, 1);
+    package->native_events[package->native_event_count++] = (TNativeEvent){name, 1, (uint16_t)(name + 1), handler};
+    return handler;
+}
+
+static void test_native_events(void)
+{
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    EXPECT(ERB_OK, "a handler of an event the firmware declares");
+    CHECK(s_program.native_event_count == 1 && s_program.event_natives[0] == 1, "matched to the firmware's event");
+
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_config.native_count = 1;
+    {
+        const uint32_t length = tpkg_build(&s_package_spec, (uint8_t*)s_package);
+        bool ok;
+        const ErbError error = verify_bytes(s_package, length, &ok);
+        CHECK(!ok && error.status == ERB_ERROR_IMPORT && error.name && strcmp(error.name, "sensors.reading") == 0,
+              "a missing event, named");
+    }
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].version = 2u;
+    EXPECT(ERB_ERROR_IMPORT, "an event of another version");
+    {
+        static const ErbNative functions[] = {{"sensors.read", 1, "i:i", sensors_read},
+                                              {"sensors.reading", 1, "v:ib", sensors_read}};
+        subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+        s_config.natives = functions;
+        EXPECT(ERB_ERROR_IMPORT, "a native function isn't an event");
+    }
+
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_INT);
+    EXPECT(ERB_ERROR_FUNCTION, "a handler whose parameters aren't the event's");
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].function = FUNCTION_TIMER;
+    EXPECT(ERB_ERROR_FUNCTION, "a handler that isn't a native event's");
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].function = 99u;
+    EXPECT(ERB_ERROR_FUNCTION, "a handler past the functions");
+    subscribe(base(), ERB_TYPE_INT, ERB_TYPE_BOOL);
+    s_package_spec.native_events[0].signature = STRING_SIGNATURE;
+    EXPECT(ERB_ERROR_FUNCTION, "an event signature that returns a value");
+}
+
 static void test_imports_and_inputs(void)
 {
     base();
@@ -1562,6 +1614,7 @@ int main(void)
     test_calls();
     test_budget();
     test_imports_and_inputs();
+    test_native_events();
     test_debug();
     test_panel_debug();
     test_assets();

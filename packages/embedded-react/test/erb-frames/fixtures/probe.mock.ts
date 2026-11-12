@@ -1,10 +1,13 @@
-// The simulators' stand-in for the host's probe module (tools/erb-frames/host.c), which native-calls.tsx calls.
+// The simulators' stand-in for the host's probe module (tools/erb-frames/host.c), which native-calls.tsx and
+// native-events.tsx call.
+import type {NativeMock} from 'embedded-react';
 import type {Probe} from './native-probe';
 
 let count = 0;
 let stored = 0;
+let refused = 0;
 
-const probe: Probe = {
+const probe: NativeMock<Probe> = emit => ({
   add: (left, right) => left + right,
   half: value => value / 2,
   even: value => value % 2 === 0,
@@ -14,6 +17,14 @@ const probe: Probe = {
     stored = value;
   },
   stored: () => stored,
-};
+  start: value => {
+    const post = () => emit('done', value, value / 2, value % 2 === 0);
+    if (!post()) {
+      refused++;
+      setTimeout(post, 0);
+    }
+  },
+  refused: () => refused,
+});
 
 export default probe;

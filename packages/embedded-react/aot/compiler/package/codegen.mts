@@ -271,6 +271,7 @@ export class Codegen {
    *                 onReturn: where an effect's early `return` goes.
    *                 row: the row a list row's handler was built for, which its item reads.
    *                 finished: what an animation completion was passed, which its `finished` reads.
+   *                 values: a native event handler's values, by the names its locals read them by.
    */
   constructor(
     builder: FunctionBuilder,
@@ -281,6 +282,7 @@ export class Codegen {
       onReturn?: Label;
       row?: Register;
       finished?: Register;
+      values?: Map<string, Register>;
     } = {},
   ) {
     this.builder = builder;
@@ -291,6 +293,9 @@ export class Codegen {
     this.row = options.row ?? null;
     if (options.finished) {
       this.locals.set('finished', {register: options.finished});
+    }
+    for (const [name, register] of options.values ?? []) {
+      this.locals.set(name, {register});
     }
   }
 

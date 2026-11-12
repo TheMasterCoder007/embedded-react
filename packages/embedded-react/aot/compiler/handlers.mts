@@ -28,7 +28,11 @@ import {
 import type {AotError, SourcePosition} from './diagnostics.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {fieldsUnder} from './list-items.mts';
-import {lowerNativeCall, nativeCalleeOf} from './native-modules.mts';
+import {
+  lowerNativeCall,
+  nativeCalleeOf,
+  nativeEventOf,
+} from './native-modules.mts';
 import {itemCallback, listChainOf, orderStatements} from './list-order.mts';
 import type {ItemCallback, ListChain} from './list-order.mts';
 import {handlerSplitList, lowerSplitInto} from './list-split.mts';
@@ -3092,6 +3096,59 @@ export function lowerEffect(
   output.effectDeclarations.push({kind: 'deps', effect: dependencyEffect});
   output.mountEffects.push({kind: 'depEffect', effect: dependencyEffect});
   output.dependencyEffects.push(dependencyEffect);
+}
+
+/**
+ * Lowers a `useNativeEvent(Module, 'event', handler)` to a handler the runtime runs with the event's values. The
+ * handler does nothing while its component isn't mounted: the conditions it is built under, read as it runs.
+ *
+ * @param call  The call.
+ * @param environment  The component's expression environment.
+ * @param state  The component's state table.
+ * @param output  Everything emitted so far; the handler is added to it.
+ */
+export function lowerNativeEvent(
+  call: t.CallExpression,
+  environment: Env,
+  state: StateTable,
+  output: Out,
+): void {
+  const {event, handler} = nativeEventOf(call, environment);
+  const index = output.nativeEventHandlers.length;
+
+  // Each value is a register the handler is entered with, read by a name no JS binding can have.
+  const values = event.params.map(
+    (_, position) => `#native${index}_${position}`,
+  );
+  const locals = new Map<string, Local>(environment.locals);
+  handler.params.forEach((parameter, position) => {
+    const type = event.params[position];
+    locals.set((parameter as t.Identifier).name, {
+      name: values[position],
+      slotKind: type === 'float' ? 'float' : 'int',
+      isBoolean: type === 'bool',
+    });
+  });
+
+  const body = handler.body;
+  const statements: t.Statement[] =
+    body.type === 'BlockStatement'
+      ? body.body
+      : [{type: 'ExpressionStatement', expression: body}];
+  const context: StatementContext = {stateChanged: false, output};
+  const lowered = lowerBody(
+    statements,
+    {...environment, locals},
+    state,
+    context,
+  );
+  output.nativeEventHandlers.push({
+    name: `native_event_${index}`,
+    event,
+    values,
+    mounted: environment.mounted ?? null,
+    callback: {body: lowered, updatesState: context.stateChanged},
+  });
 }
 
 /**

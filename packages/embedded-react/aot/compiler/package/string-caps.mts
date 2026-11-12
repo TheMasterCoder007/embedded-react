@@ -272,6 +272,7 @@ function eachStatement(app: IrApp, visit: (statement: IrStmt) => void): void {
     nodesOf(app.root),
     output.handlers,
     output.timerFunctions,
+    output.nativeEventHandlers,
     output.effectFunctions,
     output.mountEffects,
     output.dependencyEffects,

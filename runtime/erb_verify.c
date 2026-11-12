@@ -1208,7 +1208,7 @@ static bool is_entry_kind(uint8_t kind)
 {
     return kind < ER_EVENT_TYPE_COUNT_
            || (kind >= ERB_FUNCTION_KIND_QUERY && kind < ERB_FUNCTION_KIND_QUERY + ER_RESPONDER_QUERY_COUNT)
-           || (kind >= ERB_FUNCTION_KIND_TIMER && kind <= ERB_FUNCTION_KIND_ANIMATION_DONE
+           || (kind >= ERB_FUNCTION_KIND_TIMER && kind <= ERB_FUNCTION_KIND_NATIVE_EVENT
                && kind != ERB_FUNCTION_KIND_HELPER);
 }
 
@@ -1270,12 +1270,14 @@ static bool check_functions(ErbProgram* program, ErbError* error)
         {
             return fail(error, ERB_ERROR_FUNCTION, "function kind");
         }
-        /* Entry points take nothing but a handler's instance index, and only queries return (a bool). */
+        /* Entry points take nothing but a handler's instance index, and only queries return (a bool). A native
+         * event's handler takes the event's arguments, checked against the event in check_native_events(). */
         const bool handler = kind < ER_EVENT_TYPE_COUNT_;
         const bool query = kind >= ERB_FUNCTION_KIND_QUERY && kind < ERB_FUNCTION_KIND_QUERY + ER_RESPONDER_QUERY_COUNT;
         if (kind != ERB_FUNCTION_KIND_HELPER)
         {
-            const bool params_ok = params == 0u || ((handler || query) && params == 1u && type[0] == ERB_TYPE_INT);
+            const bool params_ok = kind == ERB_FUNCTION_KIND_NATIVE_EVENT || params == 0u
+                                   || ((handler || query) && params == 1u && type[0] == ERB_TYPE_INT);
             const bool result_ok = query ? result == ERB_TYPE_BOOL : result == 0u;
             if (!params_ok || !result_ok)
             {
@@ -1691,6 +1693,75 @@ static bool check_imports(const ErbConfig* config, ErbProgram* program, ErbError
             return fail(error, ERB_ERROR_IMPORT, "no native function with this name, version and signature");
         }
         program->natives[index] = (uint16_t)native;
+    }
+    return true;
+}
+
+/** @brief The register type a signature's parameter code passes, or 0 when it is none. */
+static uint8_t native_type(char code)
+{
+    return code == 'i' ? ERB_TYPE_INT : code == 'b' ? ERB_TYPE_BOOL : code == 'f' ? ERB_TYPE_FLOAT : 0u;
+}
+
+static bool check_native_events(const ErbConfig* config, ErbProgram* program, ErbError* error)
+{
+    program->native_events = program->table[ERB_TABLE_NATIVE_EVENTS];
+    program->native_event_count = program->table_length[ERB_TABLE_NATIVE_EVENTS] / ERB_NATIVE_EVENT_SIZE;
+    if (program->table_length[ERB_TABLE_NATIVE_EVENTS] % ERB_NATIVE_EVENT_SIZE
+        || program->native_event_count > ERB_MAX_NATIVE_EVENTS)
+    {
+        return fail(error, ERB_ERROR_TABLE, "native events table");
+    }
+    for (uint32_t index = 0; index < program->native_event_count; index++)
+    {
+        const uint8_t* record = program->native_events + index * ERB_NATIVE_EVENT_SIZE;
+        const uint16_t name = erb_u16(record + ERB_NATIVE_EVENT_NAME_AT);
+        const uint16_t version = erb_u16(record + ERB_NATIVE_EVENT_VERSION_AT);
+        const uint16_t signature = erb_u16(record + ERB_NATIVE_EVENT_SIGNATURE_AT);
+        const uint16_t handler = erb_u16(record + ERB_NATIVE_EVENT_FUNCTION_AT);
+        if (name >= program->string_count || signature >= program->string_count)
+        {
+            return fail(error, ERB_ERROR_TABLE, "native event names no string");
+        }
+
+        /* The handler takes the event's arguments, in its registers' types. */
+        const char* codes = erb_string(program, signature);
+        if (handler >= program->function_count
+            || erb_function(program, handler)[ERB_FUNCTION_KIND_AT] != ERB_FUNCTION_KIND_NATIVE_EVENT)
+        {
+            return fail(error, ERB_ERROR_FUNCTION, "native event handler");
+        }
+        const uint8_t* function = erb_function(program, handler);
+        const uint8_t* types = program->types + erb_u32(function + ERB_FUNCTION_TYPES_AT);
+        const size_t params = strlen(codes) >= 2u ? strlen(codes + 2) : 0u;
+        bool signature_matches = codes[0] == 'v' && codes[1] == ':' && params <= ERB_NATIVE_MAX_PARAMETERS
+                                 && params == function[ERB_FUNCTION_PARAMS_AT];
+        for (size_t param = 0; signature_matches && param < params; param++)
+        {
+            signature_matches = native_type(codes[2 + param]) && types[param] == native_type(codes[2 + param]);
+        }
+        if (!signature_matches)
+        {
+            return fail(error, ERB_ERROR_FUNCTION, "native event handler's parameters");
+        }
+
+        /* The firmware declares the event: an entry with no callback. */
+        uint32_t native = 0;
+        for (; native < config->native_count; native++)
+        {
+            const ErbNative* candidate = &config->natives[native];
+            if (!candidate->callback && candidate->name && candidate->signature && candidate->version == version
+                && strcmp(candidate->name, erb_string(program, name)) == 0 && strcmp(candidate->signature, codes) == 0)
+            {
+                break;
+            }
+        }
+        if (native == config->native_count)
+        {
+            error->name = erb_string(program, name);
+            return fail(error, ERB_ERROR_IMPORT, "no native event with this name, version and signature");
+        }
+        program->event_natives[index] = (uint16_t)native;
     }
     return true;
 }
@@ -2782,6 +2853,7 @@ bool erb_verify(
            && check_slots(program, error) && check_assets(config, program, error) && check_props(program, error)
            && check_functions(program, error) && check_tapes(program, error) && check_interps(program, error)
            && check_bindings(program, error) && check_templates(program, error) && check_anims(program, error)
-           && check_imports(config, program, error) && check_inputs(program, error) && check_keyboard(program, error)
-           && check_code(config, program, error) && check_debug(program, error);
+           && check_imports(config, program, error) && check_native_events(config, program, error)
+           && check_inputs(program, error) && check_keyboard(program, error) && check_code(config, program, error)
+           && check_debug(program, error);
 }

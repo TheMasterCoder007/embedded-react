@@ -107,6 +107,81 @@ The mock's values are converted as on a board: an `Int` is cut to a whole number
 float, and a `boolean` is true or false. A module with no mock, or a mock missing one of the interface's methods,
 stops the app in the simulator when it loads, naming what to add. A board build never includes the mock.
 
+A mock that posts [events](#usenativeevent) is a function instead. It is given `emit`, which posts one of the
+module's events as the firmware would, and returns the methods. As on a board, a post from inside one of the mock's
+methods is refused (`emit` returns false), so post from a timer:
+
+```ts
+import type {NativeMock} from 'embedded-react';
+import type {Sensors} from './sensors';
+
+const sensors: NativeMock<Sensors> = emit => ({
+  read: channel => 20 + channel / 10,
+  measure: () => {
+    setTimeout(() => emit('reading', 21.5), 500);
+  },
+});
+
+export default sensors;
+```
+
+## useNativeEvent
+
+```tsx
+import {useState} from 'react';
+import {Text, nativeModule, useNativeEvent} from 'embedded-react';
+
+interface Sensors {
+  measure(): void;
+  events: {
+    reading(celsius: number): void;
+  };
+}
+
+const Sensors = nativeModule<Sensors>('sensors', 1);
+
+function Thermometer() {
+  const [celsius, setCelsius] = useState(0.0);
+  useNativeEvent(Sensors, 'reading', value => setCelsius(value));
+  return <Text>{celsius}</Text>;
+}
+```
+
+**TypeScript.** Runs a handler each time the firmware posts one of a native module's events. This is how
+long-running work reports back: a method starts it, and the firmware posts an event when it is done. The interface's
+`events` lists them, each a method that returns `void` and takes values as a method's parameters do. A handler runs
+only while its component is mounted, and may take fewer parameters than the event has values. Call it at the top of
+a component, as every hook.
+
+The firmware declares each event in the same `ErbNative` table as its functions, with no callback, and posts it by
+its index from the frame loop. The app's handlers run at once, then the update, as `erb_input_set_int()` runs it.
+Native code never calls anything else in the app. A package that subscribes to an event the firmware doesn't
+declare doesn't load, naming it. An event nothing subscribes to is dropped.
+
+```c
+enum { SENSORS_READING = 1 };
+
+static const ErbNative natives[] = {
+    {"sensors.measure", 1, "v:", sensors_measure},
+    [SENSORS_READING] = {"sensors.reading", 1, "v:f", NULL},
+};
+
+/* In the frame loop, once a measurement is ready. */
+int32_t value;
+memcpy(&value, &celsius, sizeof(value));
+if (erb_native_post(SENSORS_READING, &value)) {
+    measurement_ready = false;
+}
+```
+
+A post the runtime can't take returns false: no app runs, or the app is running code (a native function posting
+from inside its call). Post it again next frame. In Flow A, `er_runtime_native_post()` takes the same index and
+values and calls the subscribed handlers as one batch.
+
+**Flow B.** Each `useNativeEvent` is a handler in the package, which checks that its component is mounted before it
+does anything: the conditions it is built under, and its list row being in use. A package holds 32, and one in a
+list row counts once for each row.
+
 ## AppRegistry
 
 ```jsx

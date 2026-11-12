@@ -47,10 +47,11 @@ import {
   collectCallbacks,
   collectMemos,
   collectEffects,
+  collectNativeEvents,
   bindConst,
 } from './collect.mts';
 import {collectAnims, collectRefs} from './animations.mts';
-import {lowerEffect} from './handlers.mts';
+import {lowerEffect, lowerNativeEvent} from './handlers.mts';
 import {collectPanResponders} from './pan-responder.mts';
 import {emitNode} from './nodes.mts';
 import {lowerKeyboardConfig} from './keyboard.mts';
@@ -147,6 +148,9 @@ function settleFunctions(output: Out, hasUpdate: boolean): void {
   }
   for (const timer of output.timerFunctions) {
     settle(timer.callback);
+  }
+  for (const handler of output.nativeEventHandlers) {
+    settle(handler.callback);
   }
   for (const animationCallback of output.animationCallbacks) {
     if (animationCallback.kind === 'completion') {
@@ -501,6 +505,9 @@ function lowerProgram(
   // Lower effects (mount-once or dep-driven) after emit, so output.timerFunctions includes handler timers too.
   for (const effect of collectEffects(component.body)) {
     lowerEffect(effect, environment, state, output);
+  }
+  for (const call of collectNativeEvents(component.body)) {
+    lowerNativeEvent(call, environment, state, output);
   }
 
   // An update exists only when something has to be re-applied after a state change, or a list filtered or sorted

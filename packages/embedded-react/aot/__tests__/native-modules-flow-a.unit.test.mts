@@ -25,11 +25,15 @@ import {
   nativeMockFiles,
   readNativeInterfaces,
 } from '../compiler/native-modules.mts';
-import {nativeModule} from '../../src/embedded-react/nativeModule.js';
+import {
+  nativeModule,
+  useNativeEvent,
+} from '../../src/embedded-react/nativeModule.js';
 
-// Native modules in Flow A: the bundler gives nativeModule() each method's signature, and nativeModule() looks each
-// one up in the bridge's __erNative, or in the simulators runs the module's mock. Whether the bridge calls them, and
-// whether a mock draws what the firmware does, is test/erb-frames' job (native-calls.tsx) and the bridge's native test.
+// Native modules in Flow A: the bundler gives nativeModule() each method's and event's signature, and nativeModule()
+// looks each one up in the bridge's __erNative, or in the simulators runs the module's mock. Whether the bridge calls
+// them, whether useNativeEvent hears only while mounted, and whether a mock draws what the firmware does, is
+// test/erb-frames' job (native-calls.tsx, native-events.tsx) and the bridge's native test.
 
 const FIXTURES = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -50,13 +54,21 @@ const SENSORS =
   'interface Clock { now(): Int; }\n' +
   "const Clock = nativeModule<Clock>('clock', 1);\n";
 
-/** A host's __erNative, offering `natives` and recording each call. */
+/** The signatures the bundler gives a module with these methods and no events. */
+const methods = (signatures: Record<string, unknown>) => ({
+  methods: signatures,
+  events: {},
+});
+
+/** A host's __erNative, offering `natives` (events after `events:`) and recording each call. */
 function fakeHost(natives: string[]) {
   const calls: unknown[][] = [];
   return {
     calls,
     find: (name: string, version: number, signature: string) =>
       natives.indexOf(`${name}@${version}:${signature}`),
+    findEvent: (name: string, version: number, signature: string) =>
+      natives.indexOf(`events:${name}@${version}:${signature}`),
     call: (...callArguments: unknown[]) => {
       calls.push(callArguments);
       return 42;
@@ -69,11 +81,11 @@ describe('native module signatures in Flow A', () => {
     const signed = addNativeSignatures(SENSORS, {});
     expect(signed).toContain(
       "nativeModule<Sensors>('sensors', 2, " +
-        '{"read":"f:i","pressed":"b:i","setLed":"v:b","scale":"f:f",' +
-        '"name":{"reason":"returns a string, which native modules don\'t pass yet"}});',
+        '{"methods":{"read":"f:i","pressed":"b:i","setLed":"v:b","scale":"f:f",' +
+        '"name":{"reason":"returns a string, which native modules don\'t pass yet"}},"events":{}});',
     );
     expect(signed).toContain(
-      'nativeModule<Clock>(\'clock\', 1, {"now":"i:"});',
+      'nativeModule<Clock>(\'clock\', 1, {"methods":{"now":"i:"},"events":{}});',
     );
   });
 
@@ -83,7 +95,8 @@ describe('native module signatures in Flow A', () => {
       addNativeSignatures(source, readNativeInterfaces(source, FIXTURES)),
     ).toContain(
       "nativeModule<Probe>('probe', 1, " +
-        '{"add":"i:ii","half":"f:i","even":"b:i","flip":"b:b","next":"i:","store":"v:f","stored":"f:"});',
+        '{"methods":{"add":"i:ii","half":"f:i","even":"b:i","flip":"b:b","next":"i:","store":"v:f","stored":"f:",' +
+        '"start":"v:i","refused":"i:"},"events":{"done":"v:ifb","idle":"v:"}});',
     );
   });
 
@@ -116,9 +129,9 @@ describe('native module mocks', () => {
     );
     expect(signed).toContain('"scale":"f:f",');
     expect(signed).toMatch(
-      /"name":\{"reason":"[^"]*"\}\}, __erNativeMock_sensors\);/,
+      /"name":\{"reason":"[^"]*"\}\},"events":\{\}\}, __erNativeMock_sensors\);/,
     );
-    expect(signed).toContain('{"now":"i:"}, null);');
+    expect(signed).toContain('{"now":"i:"},"events":{}}, null);');
     // The import goes at the end, so the app's lines keep their numbers.
     expect(signed.split('\n').slice(0, 11).join('\n')).not.toContain(
       'import __erNativeMock',
@@ -141,8 +154,12 @@ describe('native module mocks', () => {
         ['clock_', './clock_.mock.ts'],
       ]),
     );
-    expect(signed).toContain('{"now":"i:"}, __erNativeMock_clock_);');
-    expect(signed).toContain('{"now":"i:"}, __erNativeMock_clock__);');
+    expect(signed).toContain(
+      '{"now":"i:"},"events":{}}, __erNativeMock_clock_);',
+    );
+    expect(signed).toContain(
+      '{"now":"i:"},"events":{}}, __erNativeMock_clock__);',
+    );
   });
 
   it('keeps a module named __proto__', async () => {
@@ -243,11 +260,15 @@ describe('the Flow A app file loader', () => {
     const result = await loadAppFile(write('Mocked.tsx', SENSORS), undefined, {
       mocks: true,
     });
-    expect(result?.contents).toContain('{"now":"i:"}, __erNativeMock_clock);');
+    expect(result?.contents).toContain(
+      '{"now":"i:"},"events":{}}, __erNativeMock_clock);',
+    );
     expect(result?.contents).toContain(
       'import __erNativeMock_clock from "./clock.mock.ts";',
     );
-    expect(result?.contents).toMatch(/"name":\{"reason":"[^"]*"\}\}, null\);/);
+    expect(result?.contents).toMatch(
+      /"name":\{"reason":"[^"]*"\}\},"events":\{\}\}, null\);/,
+    );
     // A mock added later rebuilds the app.
     expect(result?.watchFiles).toContain(join(directory, 'sensors.mock.ts'));
   });
@@ -274,7 +295,11 @@ describe('nativeModule() in Flow A', () => {
   it('calls each method through the bridge by its index', () => {
     const host = fakeHost(['sensors.read@2:f:i', 'sensors.setLed@2:v:b']);
     global.__erNative = host;
-    const Sensors = nativeModule('sensors', 2, {read: 'f:i', setLed: 'v:b'});
+    const Sensors = nativeModule(
+      'sensors',
+      2,
+      methods({read: 'f:i', setLed: 'v:b'}),
+    );
     expect(Sensors.read(3)).toBe(42);
     Sensors.setLed(true);
     expect(host.calls).toEqual([
@@ -285,16 +310,20 @@ describe('nativeModule() in Flow A', () => {
 
   it('stops the app at load when the firmware lacks a method', () => {
     global.__erNative = fakeHost(['sensors.read@1:f:i']);
-    expect(() => nativeModule('sensors', 2, {read: 'f:i'})).toThrow(
+    expect(() => nativeModule('sensors', 2, methods({read: 'f:i'}))).toThrow(
       'missing native module: sensors.read (version 2, signature "f:i")',
     );
   });
 
   it('throws when a method that cannot be called is', () => {
     global.__erNative = fakeHost([]);
-    const Sensors = nativeModule('sensors', 2, {
-      name: {reason: "returns a string, which native modules don't pass yet"},
-    });
+    const Sensors = nativeModule(
+      'sensors',
+      2,
+      methods({
+        name: {reason: "returns a string, which native modules don't pass yet"},
+      }),
+    );
     expect(() => Sensors.name()).toThrow(
       "sensors.name returns a string, which native modules don't pass yet",
     );
@@ -303,12 +332,9 @@ describe('nativeModule() in Flow A', () => {
   it('runs the mock in the simulators, not the firmware', () => {
     const host = fakeHost(['sensors.read@2:f:i']);
     global.__erNative = host;
-    const Sensors = nativeModule(
-      'sensors',
-      2,
-      {read: 'f:i'},
-      {read: (channel: number) => channel * 2},
-    );
+    const Sensors = nativeModule('sensors', 2, methods({read: 'f:i'}), {
+      read: (channel: number) => channel * 2,
+    });
     expect(Sensors.read(3)).toBe(6);
     expect(host.calls).toEqual([]);
   });
@@ -318,7 +344,7 @@ describe('nativeModule() in Flow A', () => {
     const Sensors = nativeModule(
       'sensors',
       2,
-      {read: 'f:i', count: 'i:f', pressed: 'b:b', setLed: 'v:b'},
+      methods({read: 'f:i', count: 'i:f', pressed: 'b:b', setLed: 'v:b'}),
       {
         read: (...values: unknown[]) => (seen.push(values), 0.1),
         count: (...values: unknown[]) => (seen.push(values), 7.9),
@@ -336,23 +362,20 @@ describe('nativeModule() in Flow A', () => {
   });
 
   it("calls a mock's methods on the mock, so it can keep state", () => {
-    const Counter = nativeModule(
-      'counter',
-      1,
-      {next: 'i:'},
-      {
-        count: 0,
-        next() {
-          return ++this.count;
-        },
+    const Counter = nativeModule('counter', 1, methods({next: 'i:'}), {
+      count: 0,
+      next() {
+        return ++this.count;
       },
-    );
+    });
     Counter.next();
     expect(Counter.next()).toBe(2);
   });
 
   it('checks the arguments a mock is called with, as the bridge does', () => {
-    const Sensors = nativeModule('sensors', 2, {read: 'f:i'}, {read: () => 1});
+    const Sensors = nativeModule('sensors', 2, methods({read: 'f:i'}), {
+      read: () => 1,
+    });
     expect(() => Sensors.read()).toThrow(
       'sensors.read() takes 1 argument, not 0',
     );
@@ -360,23 +383,117 @@ describe('nativeModule() in Flow A', () => {
 
   it('stops the app at load when the mock lacks a method', () => {
     expect(() =>
-      nativeModule('sensors', 2, {read: 'f:i', setLed: 'v:b'}, {read: () => 1}),
+      nativeModule('sensors', 2, methods({read: 'f:i', setLed: 'v:b'}), {
+        read: () => 1,
+      }),
     ).toThrow('the mock of native module "sensors" has no setLed()');
   });
 
   it("doesn't take a method a plain object inherits as the mock's", () => {
-    expect(() => nativeModule('sensors', 2, {toString: 'i:'}, {})).toThrow(
-      'the mock of native module "sensors" has no toString()',
-    );
+    expect(() =>
+      nativeModule('sensors', 2, methods({toString: 'i:'}), {}),
+    ).toThrow('the mock of native module "sensors" has no toString()');
   });
 
   it('stops the app at load when a module has no mock', () => {
-    expect(() => nativeModule('sensors', 2, {read: 'f:i'}, null)).toThrow(
+    expect(() =>
+      nativeModule('sensors', 2, methods({read: 'f:i'}), null),
+    ).toThrow(
       'native module "sensors" has no mock for the simulator; add sensors.mock.ts beside its interface',
     );
   });
 
   it('needs the signatures the bundler gives', () => {
     expect(() => nativeModule('sensors', 2)).toThrow(/has no signatures/);
+  });
+});
+
+describe('native events in Flow A', () => {
+  const global = globalThis as {
+    __erNative?: unknown;
+    __erNativeEvent?: (index: number, values: unknown[]) => void;
+  };
+  afterEach(() => {
+    delete global.__erNative;
+    delete global.__erNativeEvent;
+  });
+  const events = (signatures: Record<string, unknown>) => ({
+    methods: {},
+    events: signatures,
+  });
+
+  it('looks each event up in the firmware and takes its posts', () => {
+    global.__erNative = fakeHost([
+      'sensors.read@2:f:i',
+      'events:sensors.reading@2:v:f',
+    ]);
+    nativeModule('sensors', 2, events({reading: 'v:f'}));
+    // Nothing subscribes yet, so the post is dropped, as is one for an index the app doesn't know.
+    expect(() => global.__erNativeEvent!(1, [21.5])).not.toThrow();
+    expect(() => global.__erNativeEvent!(7, [])).not.toThrow();
+  });
+
+  it('stops the app at load when the firmware lacks an event', () => {
+    global.__erNative = fakeHost(['sensors.reading@2:v:f']);
+    expect(() => nativeModule('sensors', 2, events({reading: 'v:f'}))).toThrow(
+      'missing native module: sensors.reading (version 2, signature "v:f")',
+    );
+  });
+
+  it("checks useNativeEvent's module and event before it subscribes", () => {
+    global.__erNative = fakeHost(['events:sensors.reading@2:v:f']);
+    const Sensors = nativeModule(
+      'sensors',
+      2,
+      events({
+        reading: 'v:f',
+        name: {reason: "takes a string, which native modules don't pass yet"},
+      }),
+    );
+    const handler = () => {};
+    expect(() => useNativeEvent({}, 'reading', handler)).toThrow(
+      'useNativeEvent() takes a native module, as nativeModule() returns it',
+    );
+    expect(() => useNativeEvent(Sensors, 'done', handler)).toThrow(
+      'native module "sensors" has no event done',
+    );
+    expect(() => useNativeEvent(Sensors, 'name', handler)).toThrow(
+      "sensors.name takes a string, which native modules don't pass yet",
+    );
+  });
+
+  it("gives a mock that is a function an emit, which posts the module's events", () => {
+    let emit: (event: string, ...values: unknown[]) => boolean = () => false;
+    const Sensors = nativeModule(
+      'sensors',
+      2,
+      {methods: {start: 'v:'}, events: {reading: 'v:fb'}},
+      (given: typeof emit) => {
+        emit = given;
+        return {start: () => emit('reading', 1, true)};
+      },
+    );
+    // Taken outside the mock's calls, and refused inside one, as the bridge refuses a post from a native call.
+    expect(emit('reading', 21.5, false)).toBe(true);
+    let posted: boolean | undefined;
+    const Refusing = nativeModule(
+      'refusing',
+      1,
+      {methods: {start: 'v:'}, events: {reading: 'v:fb'}},
+      (given: typeof emit) => ({
+        start: () => {
+          posted = given('reading', 1, true);
+        },
+      }),
+    );
+    Refusing.start();
+    expect(posted).toBe(false);
+    expect(() => emit('done')).toThrow(
+      'native module "sensors" has no event done',
+    );
+    expect(() => emit('reading', 1)).toThrow(
+      'sensors.reading is posted with 2 values, not 1',
+    );
+    expect(Sensors.start).toBeTypeOf('function');
   });
 });

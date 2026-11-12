@@ -935,9 +935,42 @@ export type Int = number;
 
 /**
  * A module the firmware provides in C, declared at module level by an interface of its methods, which take and
- * return Int, number, and boolean: `const Sensors = nativeModule<Sensors>('sensors', 1)`.
+ * return Int, number, and boolean: `const Sensors = nativeModule<Sensors>('sensors', 1)`. Its events are the
+ * interface's `events`: `events: {reading(celsius: number): void}`.
  */
 export function nativeModule<T>(name: string, version: number): T;
+
+/** The events a native module's interface declares. */
+export type NativeEvents<T> = T extends {events: infer E} ? E : {};
+
+/** The values an event is posted with. */
+export type NativeEventValues<
+  T,
+  K extends keyof NativeEvents<T>,
+> = NativeEvents<T>[K] extends (...values: infer V) => void ? V : never;
+
+/**
+ * Runs `handler` with an event's values each time the firmware posts it, while the component is mounted:
+ * `useNativeEvent(Sensors, 'reading', celsius => setTemperature(celsius))`.
+ */
+export function useNativeEvent<T, K extends keyof NativeEvents<T> & string>(
+  module: T,
+  event: K,
+  handler: (...values: NativeEventValues<T, K>) => void,
+): void;
+
+/** Posts one of a mocked module's events, as the firmware would. false while one of the mock's methods runs. */
+export type NativeEmit<T> = <K extends keyof NativeEvents<T> & string>(
+  event: K,
+  ...values: NativeEventValues<T, K>
+) => boolean;
+
+/**
+ * A native module's mock for the simulators, the default export of `<name>.mock.ts`: its methods, or a function
+ * that is given `emit` and returns them.
+ */
+export type NativeMock<T> =
+  Omit<T, 'events'> | ((emit: NativeEmit<T>) => Omit<T, 'events'>);
 export const Easing: {readonly [K in EasingName]: K} & {
   bezier(x1: number, y1: number, x2: number, y2: number): BezierEasing;
 };

@@ -116,8 +116,10 @@ import type {IrCompletion} from '../ir/animations.mts';
 import type {
   IrDepEffect,
   IrMountEffect,
+  IrNativeEventHandler,
   IrPressFade,
 } from '../ir/functions.mts';
+import {MAX_NATIVE_EVENTS} from '../native-modules.mts';
 import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
 import type {IrCallback, IrStmt, IrUpdateVector} from '../ir/statements.mts';
 import type {
@@ -465,6 +467,7 @@ function bodies(app: IrApp): IrStmt[][] {
           : [],
     ),
     ...output.timerFunctions.map(timer => timer.callback!.body),
+    ...output.nativeEventHandlers.map(handler => handler.callback.body),
     ...output.effectFunctions.map(effectFunction =>
       effectFunction.kind === 'mount'
         ? effectFunction.body
@@ -1009,6 +1012,7 @@ function planSlots(
         : handler.kind === 'panEvent' && !!handler.event.callback?.updatesState,
     ) ||
     output.timerFunctions.some(timer => timer.callback!.updatesState) ||
+    output.nativeEventHandlers.some(handler => handler.callback.updatesState) ||
     output.mountEffects.some(mountUpdates) ||
     output.dependencyEffects.some(setsState) ||
     completionsOf(app).some(completion => completion.updatesState);
@@ -2110,6 +2114,41 @@ function timerBody(
 }
 
 /**
+ * A useNativeEvent's handler: entered with the event's values, it runs its body while its component is mounted.
+ *
+ * @param handler  The handler.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function.
+ */
+function nativeEventBody(
+  handler: IrNativeEventHandler,
+  lowering: Lowering,
+): ProgramFunction {
+  const builder = new FunctionBuilder(
+    FunctionKind.nativeEvent,
+    `native event ${handler.event.name}`,
+  );
+  const values = handler.event.params.map(type => builder.reserved(type));
+  const codegen = new Codegen(builder, lowering.slots, {
+    values: new Map(
+      handler.values.map((name, position) => [name, values[position]]),
+    ),
+  });
+  const end = builder.label();
+  if (handler.mounted) {
+    const mounted = handler.mounted;
+    codegen.scoped(() => builder.branch('JF', end, codegen.condition(mounted)));
+  }
+  codegen.statements(handler.callback.body);
+  if (handler.callback.updatesState) {
+    requestUpdate(codegen, lowering);
+  }
+  builder.place(end);
+  return builder.finish(values.length);
+}
+
+/**
  * An animation completion's helper: entered with what it was passed, which the body reads as `finished`.
  *
  * @param completion  The completion.
@@ -2557,6 +2596,20 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
   for (const timer of output.timerFunctions) {
     lowering.slots.timerFunctions.set(timer.name, next++);
   }
+  if (output.nativeEventHandlers.length > MAX_NATIVE_EVENTS) {
+    throw aotError(
+      `AOT: the app subscribes to native events ${output.nativeEventHandlers.length} times, but a package holds ` +
+        `${MAX_NATIVE_EVENTS}`,
+      'each useNativeEvent counts once, and once for each row of a list it is in: subscribe in the component ' +
+        'that holds the list instead.',
+    );
+  }
+  const nativeEvents = output.nativeEventHandlers.map(handler => ({
+    name: tables.string(handler.event.name),
+    version: handler.event.version,
+    signature: tables.string(handler.event.signature),
+    function: next++,
+  }));
   lowering.effectFunctions = {
     checks: output.dependencyEffects.map(() => next++),
     mounts: output.mountEffects.map(() => next++),
@@ -2570,6 +2623,9 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     ),
     ...output.timerFunctions.map(timer =>
       timerBody(timer.name, timer.callback!, lowering),
+    ),
+    ...output.nativeEventHandlers.map(handler =>
+      nativeEventBody(handler, lowering),
     ),
     ...output.dependencyEffects.map(effect => checkedEffect(effect, lowering)),
     ...output.mountEffects.map((_, index) => mountEffect(index, lowering)),
@@ -2659,6 +2715,7 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     functions,
     animations: animations.animations,
     imports: tables.imports,
+    nativeEvents,
     inputs,
     interpolations: animations.interpolations,
     tapes: lowering.slots.vectors.tapes,
