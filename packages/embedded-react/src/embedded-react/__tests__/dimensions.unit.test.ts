@@ -36,6 +36,12 @@ describe('Dimensions', () => {
     expect(Dimensions.get('window').width).toBe(480);
   });
 
+  it('refuses a size it does not have', () => {
+    vi.stubGlobal('screen', {width: 240, height: 320});
+    // @ts-expect-error -- only 'window' and 'screen' name a size
+    expect(() => Dimensions.get('display')).toThrow(/display/);
+  });
+
   it('gives useWindowDimensions the same size', () => {
     vi.stubGlobal('screen', {width: 320, height: 240});
     expect(useWindowDimensions()).toEqual(Dimensions.get('window'));

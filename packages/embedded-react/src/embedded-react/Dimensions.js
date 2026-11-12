@@ -17,7 +17,11 @@
 // Dimensions — RN analog over the host-injected `screen` global. A panel has no pixel-density or font
 // setting, so `scale` and `fontScale` are 1, and 'window' and 'screen' are the same size.
 export const Dimensions = {
-  get() {
+  get(dimension) {
+    if (dimension !== 'window' && dimension !== 'screen') {
+      throw new Error(`Dimensions.get: no dimension named "${dimension}"`);
+    }
+
     return {
       width: screen.width,
       height: screen.height,

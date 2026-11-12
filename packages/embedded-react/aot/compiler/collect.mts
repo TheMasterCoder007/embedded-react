@@ -305,8 +305,13 @@ export function moduleScope(
   seed: Scope = {},
 ): Scope {
   // Seed the scope (image imports as asset names) before folding module consts, so a const can reference them.
+  // The panel's size is kept twice: as `screen`, and as React Native reports it (see rewriteWindowDimensions).
   const panel = screenBinding(screen);
-  const scope: Scope = {screen: panel, [PANEL_KEY]: panel, ...seed};
+  const scope: Scope = {
+    screen: panel,
+    [PANEL_KEY]: {...panel, scale: 1, fontScale: 1},
+    ...seed,
+  };
 
   // Fold module variables in order so later ones see earlier ones; skip functions and non-folds.
   for (const statement of program.body) {

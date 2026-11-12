@@ -21,7 +21,6 @@
 import {
   BootReadError,
   BootValue,
-  PANEL_KEY,
   buildValueOf,
   containsBoot,
   foldBoot,
@@ -421,55 +420,6 @@ export function evalStatic(
 }
 
 /**
- * Whether a call reads the panel's size: `useWindowDimensions()`, or `Dimensions.get('window')` /
- * `Dimensions.get('screen')`, which are the same on a panel.
- *
- * @param node  The call.
- * @param scope  Compile-time constants in reach.
- *
- * @returns True when it does.
- */
-function isWindowDimensionsCall(node: t.CallExpression, scope: Scope): boolean {
-  const {callee} = node;
-  if (callee.type === 'Identifier') {
-    return (
-      callee.name === 'useWindowDimensions' &&
-      node.arguments.length === 0 &&
-      !hasBinding(scope, 'useWindowDimensions')
-    );
-  }
-
-  const [target] = node.arguments;
-  return (
-    callee.type === 'MemberExpression' &&
-    !callee.computed &&
-    callee.object.type === 'Identifier' &&
-    callee.object.name === 'Dimensions' &&
-    (callee.property as t.Identifier).name === 'get' &&
-    !hasBinding(scope, 'Dimensions') &&
-    node.arguments.length === 1 &&
-    target.type === 'StringLiteral' &&
-    (target.value === 'window' || target.value === 'screen')
-  );
-}
-
-/**
- * The panel's size as React Native reports it: the `screen` global's width and height, at a scale of 1.
- *
- * @param scope  Compile-time constants in reach.
- *
- * @returns The size.
- */
-function windowDimensions(scope: Scope): Record<string, unknown> {
-  const panel = scope[PANEL_KEY] as Record<string, unknown> | undefined;
-  if (!panel) {
-    throw new Error('AOT: the panel size is not in reach');
-  }
-
-  return {width: panel.width, height: panel.height, scale: 1, fontScale: 1};
-}
-
-/**
  * The names a boot value's expression reads, copied once per fold: the scope a const was folded in can lose
  * or rebind names afterward.
  *
@@ -776,10 +726,6 @@ function evaluate(node: t.Node, scope: Scope, fold: Fold): unknown {
     case 'CallExpression': {
       // `StyleSheet.create({…})` folds to its argument; any other call is dynamic.
       const callee = node.callee;
-      if (isWindowDimensionsCall(node, scope)) {
-        return windowDimensions(scope);
-      }
-
       if (
         callee.type === 'MemberExpression' &&
         (callee.object as t.Identifier).name === 'StyleSheet' &&

@@ -124,11 +124,80 @@ export function App() {
     ).not.toThrow();
   });
 
-  it('refuses a size Dimensions does not have', () => {
-    expect(() =>
-      programOf(`
-const {width} = Dimensions.get('display');
+  it('refuses any other use of Dimensions', () => {
+    const app = (read: string) => `
+${read}
 export function App() {
+  return <View style={{width: 10}} />;
+}`;
+    const refusal = /Dimensions has only get\('window'\) and get\('screen'\)/;
+    expect(() =>
+      programOf(app("const size = Dimensions.get('display');")),
+    ).toThrow(refusal);
+    expect(() =>
+      programOf(app("Dimensions.addEventListener('change', () => {});")),
+    ).toThrow(refusal);
+  });
+
+  it('follows the import, whatever it is named', () => {
+    const app = (imports: string, size: string) => `
+import {View} from 'embedded-react';
+${imports}
+export function App() {
+  const {width} = ${size};
+  return <View style={{width: width / 2}} />;
+}`;
+    const expected = compilePackage(app('', 'screen')).program;
+    expect(
+      compilePackage(
+        app(
+          "import {useWindowDimensions as usePanel} from 'embedded-react';",
+          'usePanel()',
+        ),
+      ).program,
+    ).toEqual(expected);
+    expect(
+      compilePackage(
+        app(
+          "import {Dimensions as Panel} from 'embedded-react';",
+          "Panel.get('window')",
+        ),
+      ).program,
+    ).toEqual(expected);
+  });
+
+  it('leaves a prop, a state or a local of either name alone', () => {
+    // Each is the app's own value, so none of them reads the panel: the build refuses the call.
+    const shadowed = [
+      `function Card({Dimensions}) {
+  const {width} = Dimensions.get('window');
+  return <View style={{width}} />;
+}
+export function App() {
+  const [size, setSize] = useState(0);
+  return <Pressable onPress={() => setSize(size + 1)}><Card Dimensions={size} /></Pressable>;
+}`,
+      `export function App() {
+  const [Dimensions, setDimensions] = useState(0);
+  const {width} = Dimensions.get('window');
+  return <Pressable onPress={() => setDimensions(Dimensions + 1)} style={{width}} />;
+}`,
+      `export function App() {
+  const [useWindowDimensions, setHook] = useState(0);
+  const {width} = useWindowDimensions();
+  return <Pressable onPress={() => setHook(useWindowDimensions + 1)} style={{width}} />;
+}`,
+    ];
+    for (const body of shadowed) {
+      expect(() => programOf(body)).toThrow(/AOT/);
+    }
+  });
+
+  it('leaves a name that is not imported from the package alone', () => {
+    expect(() =>
+      compilePackage(`import {View} from 'embedded-react';
+export function App() {
+  const {width} = useWindowDimensions();
   return <View style={{width}} />;
 }`),
     ).toThrow(/AOT/);

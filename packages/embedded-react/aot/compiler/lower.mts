@@ -61,6 +61,7 @@ import {normalizeUndefined, parseApp} from './parse.mts';
 import {collectNativeModules, optionalModulesOf} from './native-modules.mts';
 import type {NativeModule} from './native-modules.mts';
 import {inlineCustomHooks} from './custom-hooks.mts';
+import {rewriteWindowDimensions} from './window-dimensions.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
@@ -286,6 +287,7 @@ function lowerProgram(
     nativeModules = collectNativeModules(typed.program, options.nativeFiles);
   });
   normalizeUndefined(ast);
+  rewriteWindowDimensions(ast);
   inlineCustomHooks(ast);
   refuseHiddenContexts(ast);
   const shadowedClock = findShadowedClockCalls(ast);
