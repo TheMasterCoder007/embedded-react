@@ -506,10 +506,7 @@ function lowerTaggedSet(
       narrowed(environment, narrowing.whenFalse),
       lowering,
     );
-    const writes = (statements: IrStmt[]): boolean =>
-      statements.some(statement => statement.kind !== 'keepField');
-    // With nothing to write, each branch keeps what the other does.
-    if (!writes(consequent) && !writes(alternate)) return consequent;
+    if (!consequent.length && !alternate.length) return [];
     return [
       {
         kind: 'if',

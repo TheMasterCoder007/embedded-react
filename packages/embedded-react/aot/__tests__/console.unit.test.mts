@@ -170,6 +170,22 @@ describe('console in a package', () => {
     );
   });
 
+  it('refuses an object or a list, constant or not', () => {
+    for (const argument of ['{x: 1}', '[1, 2]', 'POINT', 'point']) {
+      expect(
+        failure(
+          appOf(
+            `console.log(${argument});`,
+            '  const [point, setPoint] = useState({x: 1, y: 2});\n',
+          ).replace(
+            'export function',
+            'const POINT = {x: 1};\nexport function',
+          ),
+        ),
+      ).toMatch(/cannot print an object or a list|is an object/);
+    }
+  });
+
   it('refuses a spread argument', () => {
     expect(failure(appOf('console.log(...[1, 2]);'))).toContain(
       'console.* cannot take a spread',

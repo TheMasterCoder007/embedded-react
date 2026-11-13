@@ -267,6 +267,56 @@ describe('a state read after its setter', () => {
     expect(bodies.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("keeps an effect's cleanup's copy out of its body", () => {
+    const functions = slotOps(
+      appOf(
+        '',
+        '  useEffect(() => { setOther(count); ' +
+          'return () => { setCount(count + 1); setOther(count); }; }, [label]);\n',
+      ),
+    );
+    // The cleanup copies count, sets it from the copy and reads the copy once more; the body reads the state.
+    let cleanups = 0;
+    for (const ops of functions) {
+      for (let at = 0; at + 3 < ops.length; at++) {
+        const [state, kept] = [ops[at].slice(4), ops[at + 1].slice(4)];
+        if (
+          state !== kept &&
+          ops[at] === `get ${state}` &&
+          ops[at + 1] === `set ${kept}` &&
+          ops[at + 2] === `get ${kept}` &&
+          ops[at + 3] === `set ${state}`
+        ) {
+          cleanups++;
+          expect(ops.filter(op => op === `get ${kept}`)).toHaveLength(2);
+          expect(ops.slice(at + 4)).toContain(`get ${state}`);
+        }
+      }
+    }
+    expect(cleanups).toBeGreaterThan(0);
+  });
+
+  it('keeps each branch of a tagged ternary, which put back different fields', () => {
+    const ops = slotOps(
+      appOf(
+        "setJob({kind: 'busy', pct: 5}); setJob(job.kind === 'busy' ? {...job} : {...job});",
+      ).replace(
+        '  const [point, setPoint] = useState({x: 0, y: 0});\n',
+        "  const [job, setJob] = useState<{kind: 'idle'} | {kind: 'busy'; pct: number}>({kind: 'idle'});\n" +
+          '  const point = {x: 0, y: 0};\n',
+      ),
+    )[0];
+    // The tag and pct are each set, then put back from their copies.
+    const putBack = copiesOf(ops)
+      .map(copy => copy.split('>'))
+      .filter(
+        ([state, kept]) =>
+          ops.lastIndexOf(`set ${state}`) > ops.lastIndexOf(`get ${kept}`) &&
+          ops.filter(op => op === `set ${state}`).length >= 2,
+      );
+    expect(putBack).toHaveLength(2);
+  });
+
   it('copies a state a loop sets and reads on its next visit', () => {
     expect(
       copiesOf(

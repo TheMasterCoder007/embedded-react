@@ -2359,10 +2359,10 @@ function runEffect(
       builder.branch('JF', skip, flag);
     });
     setConstant(codegen, armed, 0);
-    codegen.statements(effect.cleanup ?? []);
+    codegen.body(effect.cleanup ?? []);
     builder.place(skip);
   }
-  codegen.statements(effect.body);
+  codegen.body(effect.body);
 }
 
 /**

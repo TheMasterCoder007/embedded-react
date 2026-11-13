@@ -3489,6 +3489,20 @@ export function lowerLogText(
         'pass each value itself: console.log(a, b).',
       );
     }
+    // An object or a list that folds would print as `+` prints it, "[object Object]".
+    let folded: unknown;
+    try {
+      folded = evalStatic(argument, scope, 'strict');
+    } catch {
+      /* not a compile-time constant */
+    }
+    if (folded !== null && typeof folded === 'object') {
+      throw textShapeError(
+        argument,
+        'AOT: console.* cannot print an object or a list',
+        'print its fields or items: console.log(point.x, point.y).',
+      );
+    }
     if (index > 0) parts.push({kind: 'literal', text: ' '});
     parts.push(...lowerTextParts(argument, environment, scope, true).parts);
   });

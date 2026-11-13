@@ -1488,6 +1488,18 @@ export class Codegen {
     }
   }
 
+  /**
+   * Lowers a body that shares its function with another, an effect's cleanup before its body: the copies it keeps
+   * are its own.
+   *
+   * @param statements  The body's statements.
+   */
+  body(statements: IrStmt[]): void {
+    this.keptStates.clear();
+    this.statements(statements);
+    this.keptStates.clear();
+  }
+
   private statement(statement: IrStmt): void {
     const outer = this.readsLatest;
     this.readsLatest = statement.readsLatest ?? outer;
@@ -1607,6 +1619,14 @@ export class Codegen {
         });
         return;
       case 'if': {
+        // Branches that only keep fields as they are do nothing, so the test isn't worked out either.
+        const inner = [...statement.consequent, ...(statement.alternate ?? [])];
+        if (
+          inner.some(kept => kept.kind === 'keepField') &&
+          !inner.some(kept => this.doesSomething(kept))
+        ) {
+          return;
+        }
         const otherwise = builder.label();
         const checkpoint = builder.checkpoint();
         builder.branch('JF', otherwise, this.condition(statement.test));
