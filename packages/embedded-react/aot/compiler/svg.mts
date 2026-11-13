@@ -840,7 +840,7 @@ const tapeChain = (
 function tapeLiteral(value: IrTapeValue | null): number | null {
   if (value?.kind === 'number') return value.value;
   if (value?.kind !== 'float') return null;
-  // One the typing pass has yet to type is no literal: lowering types a literal at once.
+  // A value not typed yet is no literal: lowering types a literal at once.
   const settled = settledOf(value.value);
   return settled?.kind === 'number' ? settled.value : null;
 }

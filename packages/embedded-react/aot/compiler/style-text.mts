@@ -536,7 +536,7 @@ function lowerBootStyleValue(
   }
 
   const value = lowerExpr(valueNode, environment);
-  if (value.type.kind !== 'int' && value.type.kind !== 'float') {
+  if (shapeOf(value) !== 'number') {
     throw new Error(`AOT: style "${key}" needs a number`);
   }
 
