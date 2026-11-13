@@ -18,6 +18,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {holdLater, readStateOf, shapeOf, typedLater} from './typing.mts';
+import {walkedEntries, walkedKind} from './typing.mts';
 import {aotError} from './diagnostics.mts';
 import {
   HiddenField,
@@ -357,10 +359,13 @@ function readsAny(value: unknown, states: Set<ScalarState>): boolean {
     }
     seen.add(part);
     const record = part as Record<string, unknown>;
-    if (record.kind === 'state' && states.has(record.state as ScalarState)) {
+    if (
+      walkedKind(record) === 'state' &&
+      states.has(record.state as ScalarState)
+    ) {
       return true;
     }
-    return Object.values(record).some(walk);
+    return walkedEntries(record).some(([, field]) => walk(field));
   };
   return walk(value);
 }
@@ -623,7 +628,7 @@ function writeFields(
         : value;
     const expression =
       read instanceof RuntimeLeaf ? read.local.expression : undefined;
-    if (expression?.kind === 'state' && expression.state === field) {
+    if (expression && readStateOf(expression) === field) {
       writes.push({field, statement: {kind: 'keepField', state: field}});
       continue;
     }
@@ -649,14 +654,17 @@ function writeFields(
           initializer: statement.value,
           isHoisted: false,
         });
-        const local: Local = {slotKind: field.slotKind, name};
+        const {value} = statement;
+        const local: Local = holdLater({name}, shapeOf(value), () => ({
+          slotKind: field.slotKind,
+        }));
         write.statement = {
           ...statement,
-          value: {
-            kind: 'local',
-            local,
-            type: statement.value.type,
-          } as IrExpr,
+          value: typedLater(
+            shapeOf(value),
+            () => ({kind: 'local', local, type: value.type}),
+            [value],
+          ),
         };
       } else if (statement.kind === 'setStateText') {
         staged.push({

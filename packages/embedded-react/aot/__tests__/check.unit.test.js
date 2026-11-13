@@ -24,6 +24,7 @@ import {
   millisecondsProblem,
   numberProblem,
   runChecks,
+  whenTyped,
 } from '../compiler/check.mts';
 import {lowerApp} from '../compiler/lower.mts';
 import {resolveOptions} from '../compiler/options.mts';
@@ -33,7 +34,7 @@ import {resolveOptions} from '../compiler/options.mts';
 const options = resolveOptions({});
 
 /** The app a source lowers to. */
-const lower = source => lowerApp(source, options, new Map(), []);
+const lower = source => lowerApp(source, options);
 
 /** An app whose component returns `jsx`. */
 const app = jsx =>
@@ -311,5 +312,72 @@ describe('check pass: animation times', () => {
 
     // With no completion there is nothing to wait for, so nothing is too long.
     expect(() => lower(loop(''))).not.toThrow();
+  });
+});
+
+describe('typing pass', () => {
+  it('runs a step at once outside a compile', () => {
+    let ran = false;
+    whenTyped(() => {
+      ran = true;
+    });
+    expect(ran).toBe(true);
+  });
+
+  it('runs the steps after lowering, in order, and makes the first that fails a check', () => {
+    const ran = [];
+    const {checks} = lowerWithChecks(
+      () => {
+        whenTyped(() => ran.push('first'));
+        checkNumber(1.5);
+        whenTyped(() => {
+          throw new Error('AOT: a mix');
+        });
+        whenTyped(() => ran.push('never'));
+        ran.push('lowered');
+      },
+      () => ran.push('widened'),
+    );
+    expect(ran).toEqual(['lowered', 'widened', 'first']);
+    expect(checks.map(recorded => recorded.kind)).toEqual(['number', 'typing']);
+    expect(() => runChecks(checks)).toThrow('AOT: a mix');
+  });
+
+  it('types a read with the width a later store gives its slot', () => {
+    const error = thrown(() =>
+      lower(
+        app(
+          '<View onTouchStart={() => setN(n * 0.5)}>\n' +
+            '<View onTouchStart={() => setN(Date.now())} /></View>',
+        ),
+      ),
+    );
+    expect(error.message).toBe(
+      'AOT: a 64-bit time value cannot be mixed with a float',
+    );
+    expect(error.aotLoc).toMatchObject({line: 5});
+  });
+
+  it("reports a bad value ahead of a later read's type, and a read's type ahead of a later bad value", () => {
+    const circle = radius =>
+      `<Svg width={10} height={10}><Circle cx={5} cy={5} r={${radius}} fill="#0f0" /></Svg>`;
+    const mix = '<View onTouchStart={() => setN(Date.now() * 0.5)} />';
+    expect(
+      thrown(() => lower(app(`<View>${circle('1 / 0')}${mix}</View>`))).message,
+    ).toMatch(/folded to Infinity/);
+    expect(
+      thrown(() => lower(app(`<View>${mix}${circle('1 / 0')}</View>`))).message,
+    ).toMatch(/cannot be mixed with a float/);
+  });
+
+  it("reports a read's type ahead of what lowering refuses after it", () => {
+    const error = thrown(() =>
+      lower(
+        app(
+          '<View><View onTouchStart={() => setN(Date.now() * 0.5)} /><View onTouchStart={5} /></View>',
+        ),
+      ),
+    );
+    expect(error.message).toMatch(/cannot be mixed with a float/);
   });
 });

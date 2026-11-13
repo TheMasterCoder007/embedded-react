@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {shapeOf} from '../typing.mts';
 import {aotError} from '../diagnostics.mts';
 import {at} from './props.mts';
 import {evalStatic, evalStaticOr} from '../static-eval.mts';
@@ -150,7 +151,7 @@ export function resolveImageAttrs(
       // Only triggered when a dynamic source is actually REACHED.
       output.bakeAllImages = true;
       const nameExpression = lowerExpr(sourceExpression, environment);
-      if (nameExpression.type.kind !== 'string') {
+      if (shapeOf(nameExpression) !== 'string') {
         const error = aotError(
           'AOT: an <Image source> must resolve to an asset NAME (a string)',
           "use an imported image (`import logo from './logo.png'` → source={logo}), " +

@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from './diagnostics.mts';
-import {listValueOf, lowerSource, lowerSourcedWide} from './expressions.mts';
+import {listValueOf, lowerLocal, lowerSource} from './expressions.mts';
 import {objectTreeOf} from './records.mts';
 import {evalStatic, foldScope} from './static-eval.mts';
 import {switchAsIf} from './switch-cases.mts';
@@ -203,15 +203,7 @@ export function helperEnvironment(
       return;
     }
 
-    const value = lowerSourcedWide(argument, environment);
-    locals.set(parameter.name, {
-      slotKind: value.slotKind,
-      isBoolean: value.isBoolean,
-      isLiteral: value.isLiteral,
-      wide: value.wide,
-      source: value.source,
-      expression: value.expression,
-    });
+    locals.set(parameter.name, lowerLocal(argument, environment));
   });
 
   return {
@@ -249,15 +241,10 @@ function bindConst(
         'declare each local once with const and a value.',
       );
     }
-    const value = lowerSourcedWide(declarator.init, {...environment, locals});
-    locals.set(declarator.id.name, {
-      slotKind: value.slotKind,
-      isBoolean: value.isBoolean,
-      isLiteral: value.isLiteral,
-      wide: value.wide,
-      source: value.source,
-      expression: value.expression,
-    });
+    locals.set(
+      declarator.id.name,
+      lowerLocal(declarator.init, {...environment, locals}),
+    );
   }
 
   return {...environment, locals};

@@ -34,7 +34,6 @@ import {
   typeOfSlot,
 } from '../compiler/ir/types.mts';
 
-import {inferWideSlots} from '../compiler/expressions.mts';
 import {lowerApp} from '../compiler/lower.mts';
 import {resolveOptions} from '../compiler/options.mts';
 
@@ -111,33 +110,19 @@ describe('IR types: slot widths', () => {
     '  );\n' +
     '}';
 
-  it('records every value stored into an int slot', () => {
-    const stores = [];
-    lowerApp(app, resolveOptions({}), new Map(), stores);
-    expect(stores.map(store => store.slot)).toEqual([
-      'a',
-      'b',
-      'c',
-      'ref_r',
-      'n',
-    ]);
-    expect(stores[0].value).toMatchObject({
-      kind: 'fixed',
-      expression: {kind: 'clock'},
-    });
-    expect(stores[2].value).toMatchObject({kind: 'local'});
-  });
-
   it('follows a timestamp through every slot it reaches, through locals too', () => {
-    const stores = [];
-    lowerApp(app, resolveOptions({}), new Map(), stores);
-    expect(inferWideSlots(stores, new Map())).toEqual(
-      new Map([
-        ['a', 'time'],
-        ['b', 'time'],
-        ['c', 'time'],
-        ['ref_r', 'time'],
-      ]),
-    );
+    const lowered = lowerApp(app, resolveOptions({}));
+    const held = [...lowered.state, ...lowered.refs].map(slot => [
+      slot.slotName,
+      slot.slotKind,
+      slot.widened,
+    ]);
+    expect(held).toEqual([
+      ['a', 'i64', 'time'],
+      ['b', 'i64', 'time'],
+      ['c', 'i64', 'time'],
+      ['n', 'int', undefined],
+      ['ref_r', 'i64', 'time'],
+    ]);
   });
 });

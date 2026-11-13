@@ -35,6 +35,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {parse} from '@babel/parser';
+import {whenTyped} from './check.mts';
 import {aotError} from './diagnostics.mts';
 import {buildsText, lowerExpr, lowerExprWide} from './expressions.mts';
 import {flattenTree, leafNode, objectTreeOf} from './records.mts';
@@ -1406,13 +1407,15 @@ function lowerArgument(
     param === 'int64'
       ? lowerExprWide(argument, environment)
       : lowerExpr(argument, environment);
-  if (!ARGUMENT_TYPES[param].includes(lowered.type.kind)) {
-    throw errorAt(
-      at,
-      `AOT: ${what}() takes ${ARGUMENT_HINTS[param].what} ${field === null ? 'here' : `as ${field}`}`,
-      ARGUMENT_HINTS[param].hint,
-    );
-  }
+  whenTyped(() => {
+    if (!ARGUMENT_TYPES[param].includes(lowered.type.kind)) {
+      throw errorAt(
+        at,
+        `AOT: ${what}() takes ${ARGUMENT_HINTS[param].what} ${field === null ? 'here' : `as ${field}`}`,
+        ARGUMENT_HINTS[param].hint,
+      );
+    }
+  });
   return lowered;
 }
 

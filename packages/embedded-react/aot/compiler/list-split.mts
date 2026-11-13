@@ -21,6 +21,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {whenTyped} from './check.mts';
+import {shapeOf} from './typing.mts';
 import {aotError} from './diagnostics.mts';
 import {buildsText, lowerExpr, lowerExprWide} from './expressions.mts';
 import {expressionReads} from './ir/reads.mts';
@@ -107,7 +109,7 @@ function keptString(node: t.Node, environment: Env, what: string): IrExpr {
     );
   }
   const value = lowerExprWide(node, environment);
-  if (value.type.kind !== 'string') {
+  if (shapeOf(value) !== 'string') {
     throw what === 'the separator'
       ? aotError(...splitProblem(0, undefined, false)!)
       : aotError(
@@ -156,13 +158,16 @@ function splitStatement(
   const separator = keptString(separatorNode, environment, 'the separator');
   let limit: IrExpr | null = null;
   if (limitNode) {
-    limit = lowerExpr(limitNode, environment);
-    if (limit.type.kind !== 'int') {
-      throw aotError(
-        "AOT: split's limit must be a whole number",
-        'pass a whole number, or leave it out to keep every piece.',
-      );
-    }
+    const lowered = lowerExpr(limitNode, environment);
+    limit = lowered;
+    whenTyped(() => {
+      if (lowered.type.kind !== 'int') {
+        throw aotError(
+          "AOT: split's limit must be a whole number",
+          'pass a whole number, or leave it out to keep every piece.',
+        );
+      }
+    });
   }
   return {kind: 'splitItems', list, text, separator, limit};
 }
@@ -207,12 +212,14 @@ export function lowerSplitInto(
   }
   const statement = splitStatement(listState, split, environment);
   const {separator} = statement;
-  if (separator && expressionReads(separator)?.has(listState)) {
-    throw aotError(
-      `AOT: a split into "${listName}" can't split at one of its own items`,
-      `the pieces replace its rows as they are found. Copy the separator into a const first.`,
-    );
-  }
+  whenTyped(() => {
+    if (separator && expressionReads(separator)?.has(listState)) {
+      throw aotError(
+        `AOT: a split into "${listName}" can't split at one of its own items`,
+        `the pieces replace its rows as they are found. Copy the separator into a const first.`,
+      );
+    }
+  });
   return [statement];
 }
 

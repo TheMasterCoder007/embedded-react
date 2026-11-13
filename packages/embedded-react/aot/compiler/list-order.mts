@@ -21,6 +21,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {shapeOf, walkedEntries, walkedKind} from './typing.mts';
 import {aotError} from './diagnostics.mts';
 import {isFn} from './collect.mts';
 import {constantListOf, fieldType, lowerExprWide} from './expressions.mts';
@@ -364,7 +365,7 @@ function sortOrder(
       [indexName, rows.itemAt(second)],
     ]),
   );
-  if (!['int', 'float', 'bool', 'int64'].includes(order.type.kind)) {
+  if (shapeOf(order) !== 'number' && shapeOf(order) !== 'bool') {
     throw aotError(
       `AOT: ${step.what}'s compare function must give a number`,
       'give a negative number when a goes first, a positive one when b does, and 0 to keep their order: ' +
@@ -472,17 +473,18 @@ function checkReads(tests: IrExpr[], what: string, environment: Env): void {
       value.forEach(walk);
       return;
     }
-    const node = value as {kind?: string; local?: Local};
-    if (node.kind === 'local' && node.local) {
+    const node = value as {local?: Local};
+    const kind = walkedKind(value) as string | undefined;
+    if (kind === 'local' && node.local) {
       const {local} = node;
       if (!local.list && !local.visit && !local.expression) {
         refuse("the handler's locals");
       }
     }
-    if (environment.outsideRender && node.kind && node.kind in HANDLER_READS) {
-      refuse(HANDLER_READS[node.kind]);
+    if (environment.outsideRender && kind && kind in HANDLER_READS) {
+      refuse(HANDLER_READS[kind]);
     }
-    for (const [key, child] of Object.entries(value)) {
+    for (const [key, child] of walkedEntries(value)) {
       if (!UNWALKED_KEYS.has(key)) walk(child);
     }
   };

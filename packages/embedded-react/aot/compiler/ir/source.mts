@@ -19,7 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {SourcePosition} from '../diagnostics.mts';
-import type {Local, RefRecord, ScalarState} from '../types.mts';
+import type {Local, RefRecord, ScalarState, ValueRef} from '../types.mts';
 import type {IrExpr} from './expressions.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -45,10 +45,12 @@ export interface IrSlotStore {
   /** The slot's name: a state's field, or a ref's variable. */
   slot: string;
   value: IrSource;
-  /** The value was typed with whole-number math in 64 bits. */
-  math64: boolean;
-  /** A `let` local's, which a fraction widens to a float. */
-  local?: boolean;
+  /** Whether the value is typed with whole-number math in 64 bits, if it may be. */
+  math64: (() => boolean) | undefined;
+  /** The state or ref whose slot it is; none for a `let` local's. */
+  target?: ScalarState | ValueRef;
+  /** The `let` local whose slot it is, which a fraction widens to a float. */
+  local?: Local;
 }
 
 /**

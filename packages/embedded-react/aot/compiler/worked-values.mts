@@ -25,8 +25,23 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {
+  holdLater,
+  setLater,
+  shapeOf,
+  shapeOfType,
+  typedLater,
+} from './typing.mts';
+import type {Shape} from './typing.mts';
 import {aotError} from './diagnostics.mts';
-import {buildsText, lowerExprWide, lowerText} from './expressions.mts';
+import {
+  assumeType,
+  assumedTypeOf,
+  buildsText,
+  lowerSource,
+  lowerText,
+  typeSource,
+} from './expressions.mts';
 import {lowerStmts} from './handlers.mts';
 import {helperEnvironment} from './helper-values.mts';
 import {BOOL, FLOAT, INT, INT64_NUMBER, STRING, TIME} from './ir/types.mts';
@@ -37,7 +52,7 @@ import type {IrExpr} from './ir/expressions.mts';
 import type {IrSource} from './ir/source.mts';
 import type {IrStmt} from './ir/statements.mts';
 import type {IrText} from './ir/text.mts';
-import type {IrType} from './ir/types.mts';
+import type {IrType, WideSlot} from './ir/types.mts';
 import type {
   Env,
   FunctionNode,
@@ -55,7 +70,10 @@ import type {
 interface ValueStatements {
   statements: IrStmt[];
   result: Local;
-  type: IrType;
+  /** Whether it holds a string, a boolean or a number. */
+  shape: Shape;
+  /** Its type, once the values it returns are typed. */
+  type: () => IrType;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -148,25 +166,7 @@ function describe(name: string): {what: string; memo: string | null} {
  */
 function joinedType(types: IrType[], what: string): IrType {
   const kinds = new Set(types.map(type => type.kind));
-  for (const kind of kinds) {
-    if (!['bool', 'int', 'float', 'int64', 'string'].includes(kind)) {
-      throw aotError(
-        `AOT: ${what} loops, so it must return a number, a boolean or a string`,
-        'return the value itself, e.g. a field of an item rather than the item.',
-      );
-    }
-  }
-  const isNumber = (kind: string) =>
-    kind === 'int' || kind === 'float' || kind === 'int64';
-  const sorts = new Set(
-    [...kinds].map(kind => (isNumber(kind) ? 'number' : kind)),
-  );
-  if (sorts.size > 1) {
-    throw aotError(
-      `AOT: ${what} loops, so each \`return\` must give the same kind of value`,
-      `it returns a ${[...sorts].join(' on one path and a ')} on another. Return one kind on every path.`,
-    );
-  }
+  joinedShape(types.map(shapeOfType), what);
   if (kinds.has('string')) return STRING;
   if (kinds.has('bool')) return BOOL;
   if (kinds.has('int64')) {
@@ -183,6 +183,32 @@ function joinedType(types: IrType[], what: string): IrType {
       : TIME;
   }
   return kinds.has('float') ? FLOAT : INT;
+}
+
+/**
+ * Whether a local holding every value a body returns holds a string, a boolean or a number: each must be one of
+ * those, and all the same.
+ *
+ * @param shapes  The returned values' shapes.
+ * @param what  What returns them, for errors.
+ *
+ * @returns The shape.
+ */
+function joinedShape(shapes: Shape[], what: string): Shape {
+  const sorts = new Set(shapes);
+  if (sorts.has('struct') || sorts.has('node')) {
+    throw aotError(
+      `AOT: ${what} loops, so it must return a number, a boolean or a string`,
+      'return the value itself, e.g. a field of an item rather than the item.',
+    );
+  }
+  if (sorts.size > 1) {
+    throw aotError(
+      `AOT: ${what} loops, so each \`return\` must give the same kind of value`,
+      `it returns a ${[...sorts].join(' on one path and a ')} on another. Return one kind on every path.`,
+    );
+  }
+  return shapes[0] ?? 'number';
 }
 
 /**
@@ -242,7 +268,7 @@ function lowerValueStatements(
   checkValueBody(helper.body, what, memo !== null);
 
   const resultName = `value@${name}#${results++}`;
-  const returned: {value: IrExpr; text?: IrText}[] = [];
+  const returned: {value: IrExpr; source?: IrSource; text?: IrText}[] = [];
   const context: StatementContext = {
     stateChanged: false,
     output,
@@ -254,8 +280,11 @@ function lowerValueStatements(
         returned.push({value, text});
         return [{kind: 'assignLocal', name: resultName, value, text}];
       }
-      const value = lowerExprWide(argument, bodyEnvironment);
-      returned.push({value});
+      const {source, expression: value} = lowerSource(
+        argument,
+        bodyEnvironment,
+      );
+      returned.push({value, source});
       return [{kind: 'assignLocal', name: resultName, value}];
     },
   };
@@ -266,22 +295,39 @@ function lowerValueStatements(
     context,
   );
 
-  const type = joinedType(
-    returned.map(({value, text}) => (text ? STRING : value.type)),
+  // Whether it is a string, a boolean or a number is known now; a number's width once each value is typed.
+  const shape = joinedShape(
+    returned.map(({value, text}) => (text ? 'string' : shapeOf(value))),
     what,
   );
-  const result: Local = {name: resultName, ...heldAs(type)};
+  const type = (): IrType =>
+    joinedType(
+      returned.map(({value, text}) => (text ? STRING : value.type)),
+      what,
+    );
+  const result: Local = holdLater({name: resultName}, shape, () =>
+    heldAs(type()),
+  );
+  assumeType(result, () =>
+    joinedType(
+      returned.map(({source}) =>
+        source ? typeSource(source, false).type : STRING,
+      ),
+      what,
+    ),
+  );
   return {
     statements: [
       {
         kind: 'declareLocal',
         name: resultName,
-        initializer: zeroOf(type),
+        initializer: typedLater(shape, () => zeroOf(type())),
         isHoisted: false,
       },
       ...(context.usedReturn ? [{kind: 'block', body} as IrStmt] : body),
     ],
     result,
+    shape,
     type,
   };
 }
@@ -310,7 +356,7 @@ export function workedValueOf(
   // In a handler, effect or timer: worked out just before the statement.
   const sink = environment.before;
   if (sink) {
-    const {statements, result, type} = lowerValueStatements(
+    const {statements, result} = lowerValueStatements(
       call,
       name,
       helper,
@@ -319,11 +365,7 @@ export function workedValueOf(
       sink.output,
     );
     sink.statements.push(...statements);
-    return {
-      kind: 'fixed',
-      expression: {kind: 'local', local: result, type},
-      location,
-    };
+    return {kind: 'local', local: result, location};
   }
 
   if (environment.outsideRender) {
@@ -351,7 +393,7 @@ export function workedValueOf(
   const known = shared ? values.get(call)?.get(prefix) : undefined;
   if (known) return {kind: 'state', state: known, location};
 
-  const {statements, result, type} = lowerValueStatements(
+  const {statements, result, shape, type} = lowerValueStatements(
     call,
     name,
     helper,
@@ -366,20 +408,34 @@ export function workedValueOf(
     name: label,
     slotName: `${prefix}w${count}_${label}`,
     setter: undefined,
-    slotKind: result.slotKind,
-    isBoolean: Boolean(result.isBoolean),
-    ...(type.kind === 'int64'
-      ? {widened: type.source === 'number' ? 'number' : 'time'}
-      : {}),
-    initial: type.kind === 'string' ? '' : 0,
+    slotKind: shape === 'string' ? 'string' : 'int',
+    isBoolean: shape === 'bool',
+    initial: shape === 'string' ? '' : 0,
     host: false,
     initialAt: location,
   };
-  const read: IrExpr = {kind: 'local', local: result, type};
+  if (shape === 'number') {
+    setLater(worked, ['slotKind', 'widened'], () => {
+      const held = type();
+      const widened: WideSlot | undefined =
+        held.kind !== 'int64'
+          ? undefined
+          : held.source === 'number'
+            ? 'number'
+            : 'time';
+      return {slotKind: heldAs(held).slotKind, widened};
+    });
+    assumeType(worked, () => assumedTypeOf(result));
+  }
+  const read: IrExpr = typedLater(shape, () => ({
+    kind: 'local',
+    local: result,
+    type: type(),
+  }));
   worked.worked = {
     rebuild: [
       ...statements,
-      type.kind === 'string'
+      shape === 'string'
         ? {
             kind: 'setStateText',
             state: worked,

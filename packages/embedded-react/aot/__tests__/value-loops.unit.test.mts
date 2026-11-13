@@ -39,8 +39,7 @@ const appOf = (before: string, body: string, jsx: string) =>
   `${before}\nexport function App() {\n${STATE}${body}\n  return ${jsx};\n}`;
 
 const compile = (source: string) => compilePackage(source, 'app', SCREEN);
-const lower = (source: string) =>
-  lowerApp(source, resolveOptions(SCREEN), new Map(), []);
+const lower = (source: string) => lowerApp(source, resolveOptions(SCREEN));
 
 /** The values an app works out with a loop in render. */
 const workedOf = (source: string): ScalarState[] =>

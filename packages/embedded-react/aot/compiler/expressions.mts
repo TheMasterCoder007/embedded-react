@@ -18,7 +18,17 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {attemptLowering, checkNumber} from './check.mts';
+import {attemptLowering, checkNumber, whenTyped} from './check.mts';
+import {
+  copyLocal,
+  holdLater,
+  holdsUntyped,
+  readLocalOf,
+  localShape,
+  shapeOf,
+  typedLater,
+} from './typing.mts';
+import type {Shape} from './typing.mts';
 import {traverse} from '@babel/core';
 import {isContextRead} from './contexts.mts';
 import {
@@ -211,6 +221,9 @@ const FLOAT_MATH_BINARY = new Set(['min', 'max', 'atan2', 'pow']);
 
 /** While the typing pass infers slot widths: the slots it takes to hold 64 bits, and what each holds. */
 let assumedWide: SlotWidths | null = null;
+
+/** How a state or local whose type the typing pass works out is typed while it infers slot widths. */
+const assumedTypes = new WeakMap<object, () => IrType>();
 
 /** The fields of an onLayout rect. */
 const LAYOUT_FIELDS = new Set(['x', 'y', 'width', 'height']);
@@ -1364,6 +1377,123 @@ function typeMath(
 }
 
 /**
+ * A read of a local while slot widths are inferred, when the typing pass has yet to say what it holds: a local
+ * is what it was set from, and a `let` what it was declared with or widened to, typed with the slots assumed so
+ * far.
+ *
+ * @param local  The local.
+ *
+ * @returns The typed read.
+ */
+function assumedLocal(local: Local): IrExpr {
+  const worked = assumedTypes.get(local);
+  if (worked) return {kind: 'local', local, type: worked()};
+  if (local.source) return typeSource(local.source, false);
+  if (!local.assignable || !local.declared) return localRead(local);
+
+  const declared = typeSource(local.declared, false);
+  const width =
+    declared.type.kind === 'int' ? assumedWide!.get(local.assignable) : null;
+  return {
+    kind: 'local',
+    local,
+    type: !width ? declared.type : width === 'float' ? FLOAT : int64Of(width),
+  };
+}
+
+/**
+ * Says how a state or local the typing pass works out the type of is typed while it infers slot widths.
+ *
+ * @param slot  The state or local.
+ * @param type  Its type, with the slots assumed so far.
+ */
+export function assumeType(
+  slot: Local | ScalarState,
+  type: () => IrType,
+): void {
+  assumedTypes.set(slot, type);
+}
+
+/**
+ * The type a state or local is taken to have while slot widths are inferred (see assumeType).
+ *
+ * @param slot  The state or local.
+ *
+ * @returns Its type, with the slots assumed so far.
+ */
+export const assumedTypeOf = (slot: Local | ScalarState): IrType =>
+  assumedTypes.get(slot)!();
+
+/**
+ * The shape of a scalar state's value.
+ *
+ * @param state  The state.
+ *
+ * @returns The shape.
+ */
+export const stateShape = (state: ScalarState): Shape =>
+  state.isBoolean ? 'bool' : localShape(state);
+
+/**
+ * Whether a state's type is settled where it is declared: only a whole-number slot widens.
+ *
+ * @param state  The state.
+ *
+ * @returns True for a string, a boolean or a float.
+ */
+const isSettledState = (state: ScalarState): boolean =>
+  state.isBoolean ||
+  (!holdsUntyped(state) &&
+    (state.slotKind === 'string' || state.slotKind === 'float'));
+
+/**
+ * A read of a scalar state's value, typed once the slot's width is known.
+ *
+ * @param state  The state.
+ * @param latest  It reads the value a setter left, not the render's.
+ *
+ * @returns The read.
+ */
+export function stateRead(state: ScalarState, latest = false): IrExpr {
+  const source: IrSource = {
+    kind: 'state',
+    state,
+    ...(latest ? {latest: true} : {}),
+    location: undefined,
+  };
+  return isSettledState(state)
+    ? typeSource(source, false)
+    : typedLater(stateShape(state), () => typeSource(source, false), source);
+}
+
+/**
+ * Whether a state or ref slot holds 64 bits, counting the slots the typing pass assumes to while it infers
+ * widths.
+ *
+ * @param slot  The state or ref.
+ *
+ * @returns True for a 64-bit slot.
+ */
+export const is64BitSlot = (slot: {
+  slotKind: string;
+  slotName: string;
+}): boolean =>
+  slot.slotKind === 'i64' ||
+  (slot.slotKind === 'int' &&
+    wideSlotOf(assumedWide, slot.slotName) !== undefined);
+
+/**
+ * Whether a `let` holds 64 bits (see is64BitSlot).
+ *
+ * @param local  The local.
+ *
+ * @returns True for a 64-bit local.
+ */
+export const is64BitLocal = (local: Local): boolean =>
+  (assumedWide ? assumedLocal(local).type : typeOfSlotValue(local)).kind ===
+  'int64';
+
+/**
  * The typing pass over one source expression: gives it its type and decides how it is computed. Pure, so a
  * subexpression can be typed again, as whole-number math beside a 64-bit value is. An AOT error is pinned to
  * the expression it is about, as lowering it would have been.
@@ -1386,6 +1516,16 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         return boolConst(source.value);
       case 'state': {
         const {state} = source;
+        const worked = assumedWide ? assumedTypes.get(state) : undefined;
+        if (worked) {
+          return {
+            kind: 'state',
+            state,
+            type: worked(),
+            ...(source.latest ? {latest: true} : {}),
+          };
+        }
+
         const assumed =
           (state.slotKind === 'int' || state.slotKind === 'i64') &&
           !state.isBoolean
@@ -1399,9 +1539,8 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
         };
       }
       case 'local':
-        // While slot widths are inferred, a local is what it was set from, typed with the slots assumed so far.
-        return assumedWide && source.local.source
-          ? typeSource(source.local.source, false)
+        return assumedWide
+          ? assumedLocal(source.local)
           : localRead(source.local);
       case 'ref': {
         const {ref} = source;
@@ -1459,7 +1598,13 @@ export function inferWideSlots(
       if (width === 'time' || width === 'float') continue;
       assumedWide = inferred;
       try {
-        const {type} = typeSource(store.value, store.math64);
+        // Only a `let` that holds whole numbers widens.
+        if (store.local) {
+          const held = assumedLocal(store.local).type;
+          if (held.kind !== 'int' && held !== INT64_NUMBER) continue;
+        }
+
+        const {type} = typeSource(store.value, store.math64?.() ?? false);
         // A `let` given a fraction holds floats.
         if (store.local && type.kind === 'float') {
           inferred.set(store.slot, 'float');
@@ -1472,8 +1617,11 @@ export function inferWideSlots(
           inferred.set(store.slot, holds);
           grew = true;
         }
-      } catch {
-        // Lowering the value again, with the widths inferred, reports its error.
+      } catch (error) {
+        // The typing pass reports its error, with the widths inferred.
+        if (String((error as Error)?.message).startsWith('AOT internal')) {
+          throw error;
+        }
       } finally {
         assumedWide = null;
       }
@@ -1482,18 +1630,6 @@ export function inferWideSlots(
 
   return inferred;
 }
-
-/**
- * Whether two sets of slot widths are the same.
- *
- * @param left  One set.
- * @param right  The other.
- *
- * @returns True when every slot holds the same in both.
- */
-export const sameSlotWidths = (left: SlotWidths, right: SlotWidths): boolean =>
-  left.size === right.size &&
-  [...left].every(([slot, holds]) => right.get(slot) === holds);
 
 /**
  * Whether an operand is written as a number, so a boolean on the other side of `===` never equals it: a
@@ -1523,7 +1659,7 @@ const isWrittenAsNumber = (node: t.Node, environment: Env): boolean =>
  *
  * @returns The source.
  */
-const binarySource = (
+export const binarySource = (
   node: t.BinaryExpression,
   left: IrSource,
   right: IrSource,
@@ -1746,12 +1882,14 @@ function itemPathOf(node: t.Node, environment: Env): ItemPath | null {
   const list = indexedListOf(node, environment);
   if (!list) return null;
   const index = lowerExpr(node.property, environment);
-  if (index.type.kind !== 'int') {
-    throw aotError(
-      `AOT: an index into "${list.name}" must be a whole number`,
-      'an index is an int: Math.floor(x) or a whole-number state.',
-    );
-  }
+  whenTyped(() => {
+    if (index.type.kind !== 'int') {
+      throw aotError(
+        `AOT: an index into "${list.name}" must be a whole number`,
+        'an index is an int: Math.floor(x) or a whole-number state.',
+      );
+    }
+  });
   // A plain value past the end is undefined; a field of an item there throws in JS, and faults here.
   const item = rowItemOf(list, {name: `${list.name}[]`, index} as Local);
   return {
@@ -1996,15 +2134,7 @@ export function foldRuntime(
     return folded;
   }
 
-  const value = lowerSourcedWide(node, environment);
-  return new RuntimeLeaf({
-    slotKind: value.slotKind,
-    isBoolean: value.isBoolean,
-    isLiteral: value.isLiteral,
-    wide: value.wide,
-    source: value.source,
-    expression: value.expression,
-  });
+  return new RuntimeLeaf(lowerLocal(node, environment));
 }
 
 /**
@@ -2615,13 +2745,32 @@ export const lowerSource = withLoc(
   (node: t.Node, environment: Env): {source: IrSource; expression: IrExpr} => {
     // Below a node that is not whole-number math, its operands are typed as usual (see keepsMath64Node).
     if (environment.math64 && !keepsMath64Node(node)) {
-      environment = {...environment, math64: false};
+      environment = {...environment, math64: undefined};
     }
 
     const source = sourceOf(node, environment);
+    // A constant's type, and one its source or its slot fixes, depends on no slot's width.
+    if (
+      source.kind === 'number' ||
+      source.kind === 'string' ||
+      source.kind === 'boolean' ||
+      source.kind === 'fixed' ||
+      (source.kind === 'state' && isSettledState(source.state)) ||
+      (source.kind === 'ref' &&
+        source.ref.slotKind !== 'int' &&
+        source.ref.slotKind !== 'i64')
+    ) {
+      return {source, expression: typeSource(source, false)};
+    }
+
+    const {math64} = environment;
     return {
       source,
-      expression: typeSource(source, environment.math64 ?? false),
+      expression: typedLater(
+        sourceShape(source),
+        () => typeSource(source, math64?.() ?? false),
+        source,
+      ),
     };
   },
 );
@@ -2636,6 +2785,68 @@ export const lowerSource = withLoc(
  */
 export const lowerExprWide = (node: t.Node, environment: Env): IrExpr =>
   lowerSource(node, environment).expression;
+
+/**
+ * The shape of a source expression's value, which holds whatever the typing pass makes of its numbers.
+ *
+ * @param source  The expression.
+ *
+ * @returns The shape.
+ */
+export function sourceShape(source: IrSource): Shape {
+  switch (source.kind) {
+    case 'number':
+      return 'number';
+    case 'string':
+      return 'string';
+    case 'boolean':
+      return 'bool';
+    case 'state':
+      return stateShape(source.state);
+    case 'local':
+      return localShape(source.local);
+    case 'ref':
+      return source.ref.kind === 'node' ? 'node' : 'number';
+    case 'fixed':
+      return shapeOf(source.expression);
+    case 'unary': {
+      if (source.operator === '!') return 'bool';
+      const operand = sourceShape(source.operand);
+      return operand === 'bool' ? 'number' : operand;
+    }
+    case 'binary':
+      return COMPARE.has(source.operator) ? 'bool' : 'number';
+    case 'logical':
+      return sourceShape(source.left) === 'bool' &&
+        sourceShape(source.right) === 'bool'
+        ? 'bool'
+        : 'number';
+    case 'conditional': {
+      const consequent = sourceShape(source.consequent);
+      return consequent === sourceShape(source.alternate)
+        ? consequent
+        : 'number';
+    }
+    case 'math':
+      return 'number';
+  }
+}
+
+/**
+ * The local an expression is a bare read of, if it is one.
+ *
+ * @param lowered  The expression, and its source.
+ *
+ * @returns The local, or null.
+ */
+export function bareLocalOf(lowered: {
+  source: IrSource;
+  expression: IrExpr;
+}): Local | null {
+  return lowered.source.kind === 'local'
+    ? lowered.source.local
+    : readLocalOf(lowered.expression);
+}
 
 /**
  * What a slot holding an expression's value records about it. A bare local is the Local itself, so a list row keeps
@@ -2677,11 +2888,27 @@ export function lowerSourcedWide(
   environment: Env,
 ): SlotValue & {source: IrSource; expression: IrExpr} {
   const lowered = lowerSource(node, environment);
-  return {
-    ...slotValueOf(lowered.expression),
-    source: lowered.source,
-    expression: lowered.expression,
-  };
+  const local = bareLocalOf(lowered);
+  return local
+    ? (copyLocal(local, lowered) as Local & typeof lowered)
+    : holdLater({...lowered}, shapeOf(lowered.expression), () =>
+        slotValueOf(lowered.expression),
+      );
+}
+
+/**
+ * Lowers an expression a name is bound to: the local that every read of the name is.
+ *
+ * @param node  The expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The local.
+ */
+export function lowerLocal(node: t.Node, environment: Env): Local {
+  const {source, expression} = lowerSourcedWide(node, environment);
+  return holdLater({source, expression}, shapeOf(expression), () =>
+    slotValueOf(expression),
+  );
 }
 
 /**
@@ -2698,19 +2925,22 @@ export function lowerSourcedWide(
  */
 export function lowerExpr(node: t.Node, environment: Env): IrExpr {
   const expression = lowerExprWide(node, environment);
-  if (expression.type.kind !== 'int64') return expression;
+  whenTyped(() => {
+    if (expression.type.kind !== 'int64') return;
 
-  const error = aotError(
-    'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
-    'keep it in state, a ref or a local, compare it, or show it in text. Anywhere else, ' +
-      'reduce it to a small number first — e.g. `ms % 1000`, or `Math.floor(ms / 1000) % ' +
-      '60`.',
-  );
-  if (node.loc) {
-    error.aotLoc = node.loc.start;
-  }
+    const error = aotError(
+      'AOT: a 64-bit value (Date.now() / performance.now(), or a whole number past ±2^31) cannot be used here',
+      'keep it in state, a ref or a local, compare it, or show it in text. Anywhere else, ' +
+        'reduce it to a small number first — e.g. `ms % 1000`, or `Math.floor(ms / 1000) % ' +
+        '60`.',
+    );
+    if (node.loc) {
+      error.aotLoc = node.loc.start;
+    }
 
-  throw error;
+    throw error;
+  });
+  return expression;
 }
 
 /**
@@ -2864,7 +3094,7 @@ function helperInt(
 function lowerToFixed(call: t.CallExpression, environment: Env): TextParts {
   const receiver = (call.callee as t.MemberExpression).object;
   const value = lowerExprWide(receiver, environment);
-  if (!['int', 'float', 'int64'].includes(value.type.kind)) {
+  if (shapeOf(value) !== 'number') {
     throw textShapeError(
       call,
       'AOT: toFixed is only supported on a number',
@@ -3006,13 +3236,15 @@ function slicePosition(
   }
 
   const position = lowerExpr(node, environment);
-  if (position.type.kind !== 'int') {
-    throw textShapeError(
-      node,
-      "AOT: slice's start and end must be whole numbers",
-      'a package cuts at whole positions; round it first: text.slice(0, Math.floor(n)).',
-    );
-  }
+  whenTyped(() => {
+    if (position.type.kind !== 'int') {
+      throw textShapeError(
+        node,
+        "AOT: slice's start and end must be whole numbers",
+        'a package cuts at whole positions; round it first: text.slice(0, Math.floor(n)).',
+      );
+    }
+  });
 
   return position;
 }
@@ -3081,17 +3313,19 @@ function lowerSlice(
     'AOT: slice can only cut one value',
     'slice each value on its own and join them after: `${a.slice(0, 3)}-${b.slice(0, 3)}`.',
   );
-  if (
-    piece.kind === 'value' &&
-    piece.digits &&
-    piece.value.type.kind !== 'float'
-  ) {
-    throw textShapeError(
-      call,
-      "AOT: slice cannot cut a whole number's toFixed",
-      'its decimals are printed apart from it; slice String(n) and add the decimals after it.',
-    );
-  }
+  whenTyped(() => {
+    if (
+      piece.kind === 'value' &&
+      piece.digits &&
+      piece.value.type.kind !== 'float'
+    ) {
+      throw textShapeError(
+        call,
+        "AOT: slice cannot cut a whole number's toFixed",
+        'its decimals are printed apart from it; slice String(n) and add the decimals after it.',
+      );
+    }
+  });
 
   return {
     isString: true,
@@ -3103,7 +3337,7 @@ function lowerSlice(
 
 /**
  * Lowers `x.toUpperCase()` on a runtime string. Its literal text is upper-cased here, and each value as it is
- * printed; a whole number has no letters to change.
+ * printed; a whole number has no letters to change (see typedParts).
  *
  * @param call  The call.
  * @param environment  The expression environment.
@@ -3135,13 +3369,6 @@ function lowerToUpperCase(
     parts: receiver.parts.map(part => {
       if (part.kind === 'literal') {
         return {...part, text: part.text.toUpperCase()};
-      }
-
-      if (
-        part.kind === 'value' &&
-        (part.value.type.kind === 'int' || part.value.type.kind === 'int64')
-      ) {
-        return part;
       }
 
       return {...part, edits: [...(part.edits ?? []), {kind: 'upper'}]};
@@ -3182,7 +3409,7 @@ function lowerIncludes(call: t.CallExpression, environment: Env): IrExpr {
     }
 
     const value = lowerExprWide(node, environment);
-    if (value.type.kind !== 'string') {
+    if (shapeOf(value) !== 'string') {
       throw aotError(...problemOf());
     }
 
@@ -3221,7 +3448,7 @@ function lowerLocaleCompare(call: t.CallExpression, environment: Env): IrExpr {
       );
     }
     const value = lowerExprWide(node, environment);
-    if (value.type.kind !== 'string') {
+    if (shapeOf(value) !== 'string') {
       throw aotError(
         'AOT: localeCompare is only supported on strings',
         'compare numbers by subtracting them: (a, b) => a.n - b.n.',
@@ -3414,7 +3641,7 @@ function lowerTextParts(
   if (
     node.type === 'LogicalExpression' &&
     node.operator !== '??' &&
-    !isBoolean(value.type)
+    shapeOf(value) !== 'bool'
   ) {
     throw textShapeError(
       node,
@@ -3430,16 +3657,20 @@ function lowerTextParts(
       : null;
   if (
     node.type === 'ConditionalExpression' &&
-    isBoolean(
-      lowerExprWide(node.consequent, narrowed(environment, narrowing!.whenTrue))
-        .type,
-    ) !==
-      isBoolean(
+    (shapeOf(
+      lowerExprWide(
+        node.consequent,
+        narrowed(environment, narrowing!.whenTrue),
+      ),
+    ) ===
+      'bool') !==
+      (shapeOf(
         lowerExprWide(
           node.alternate,
           narrowed(environment, narrowing!.whenFalse),
-        ).type,
-      )
+        ),
+      ) ===
+        'bool')
   ) {
     throw textShapeError(
       node,
@@ -3455,16 +3686,47 @@ function lowerTextParts(
     : {};
 
   // A boolean prints nothing as a child, "true"/"false" as an operand; isString stays false so `on + n` adds.
-  if (isBoolean(value.type)) {
+  if (shapeOf(value) === 'bool') {
     return isOperand
       ? {isString: false, parts: [{kind: 'booleanWord', value, ...missing}]}
       : {isString: false, parts: [{kind: 'literal', text: ''}]};
   }
 
   return {
-    isString: value.type.kind === 'string',
+    isString: shapeOf(value) === 'string',
     parts: [{kind: 'value', value, ...missing}],
   };
+}
+
+/**
+ * Settles a text's parts once its values are typed: a whole number has no letters for toUpperCase to change, so
+ * it is printed as it is.
+ *
+ * @param parts  The parts.
+ *
+ * @returns The parts.
+ */
+function typedParts(parts: IrTextPart[]): IrTextPart[] {
+  const cased = parts.filter(
+    part =>
+      part.kind === 'value' && part.edits?.some(edit => edit.kind === 'upper'),
+  ) as IrTextValue[];
+  if (cased.length) {
+    whenTyped(() => {
+      for (const part of cased) {
+        const {kind} = part.value.type;
+        if (kind !== 'int' && kind !== 'int64') continue;
+        const edits = part.edits!.filter(edit => edit.kind !== 'upper');
+        if (edits.length) {
+          part.edits = edits;
+        } else {
+          delete part.edits;
+        }
+      }
+    });
+  }
+
+  return parts;
 }
 
 /**
@@ -3506,7 +3768,7 @@ export function lowerLogText(
     if (index > 0) parts.push({kind: 'literal', text: ' '});
     parts.push(...lowerTextParts(argument, environment, scope, true).parts);
   });
-  return {parts};
+  return {parts: typedParts(parts)};
 }
 
 /**
@@ -3525,7 +3787,8 @@ export function lowerText(
   scope: Scope = environment.constants ?? {},
 ): IrText {
   return {
-    parts: lowerTextParts(node, environment, foldScope(environment, scope))
-      .parts,
+    parts: typedParts(
+      lowerTextParts(node, environment, foldScope(environment, scope)).parts,
+    ),
   };
 }

@@ -56,12 +56,27 @@ import {
   actionEnvironment,
   prunedStatements,
 } from './reducers.mts';
+import {whenTyped} from './check.mts';
 import {
+  copyLocal,
+  holdLater,
+  localShape,
+  setLater,
+  shapeOf,
+  typedLater,
+} from './typing.mts';
+import {
+  bareLocalOf,
+  binarySource,
+  stateRead,
+  is64BitLocal,
+  is64BitSlot,
   mix64Error,
   staticInt,
   isTime64,
   constDivisor,
   lowerSource,
+  typeSource,
   slotValueOf,
   lowerExpr,
   lowerExprWide,
@@ -101,13 +116,12 @@ import {
   isIntSlot,
   isTime,
   refType,
-  slotOf,
-  stateType,
   STRING,
 } from './ir/types.mts';
 import type {IrDepEffect} from './ir/functions.mts';
 import type {IrSource} from './ir/source.mts';
 import type {WideSlot} from './ir/types.mts';
+import type {IrStaticDecl} from './ir/functions.mts';
 import type {
   IrCallback,
   IrItemValue,
@@ -137,6 +151,7 @@ import type {
   StateTable,
   StatementContext,
   ValueSink,
+  ValueRef,
 } from './types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -285,7 +300,7 @@ function itemValue(
     return {field, text};
   }
   const value = lowerExpr(valueNode, environment);
-  if ((field.kind === 'bool') !== (value.type.kind === 'bool')) {
+  if ((field.kind === 'bool') !== (shapeOf(value) === 'bool')) {
     throw aotError(
       `AOT: field "${field.key || 'value'}" of list state "${listState.name}" holds ${field.kind === 'bool' ? 'a boolean' : 'a number'}`,
       'give it a value of the same kind as the initial ones.',
@@ -293,7 +308,10 @@ function itemValue(
   }
   return {
     field,
-    value: field.kind === 'bool' ? value : storeValue(value, field.kind),
+    value:
+      field.kind === 'bool'
+        ? value
+        : storeValue(value, () => field.kind as SlotKind),
   };
 }
 
@@ -397,12 +415,14 @@ const noField = (listName: string, name: string): Error =>
  */
 function rowIndexOf(node: t.Node, listName: string, environment: Env): IrExpr {
   const index = lowerExpr(node, environment);
-  if (index.type.kind !== 'int') {
-    throw aotError(
-      `AOT: an index into "${listName}" must be a whole number`,
-      'an index is an int: Math.floor(x) or a whole-number state.',
-    );
-  }
+  whenTyped(() => {
+    if (index.type.kind !== 'int') {
+      throw aotError(
+        `AOT: an index into "${listName}" must be a whole number`,
+        'an index is an int: Math.floor(x) or a whole-number state.',
+      );
+    }
+  });
   return index;
 }
 
@@ -1118,42 +1138,49 @@ function lowerListOrder(
   );
 }
 
-/**
- * Checks a value written to a numeric state or ref slot, whose kind came from its initial value. Every value
- * written to an int slot is recorded in environment.stores, from which the typing pass infers the slots that hold a
- * 64-bit timestamp, and compileWidened compiles again with those slots widened to 64 bits. A timestamp cannot
- * go into a float or boolean slot (a 64-bit constant can go into a float one), and a widened slot takes no
- * floats.
- *
- * @param lowered  The value: its source, and its type.
- * @param slotType  The slot's kind.
- * @param isBoolean  The slot holds a boolean.
- * @param widened  What the slot holds, if it was widened to 64 bits.
- * @param slotName  The slot's name, for environment.stores.
- * @param slotDescription  The slot, for the message.
- * @param environment  The expression environment.
- * @param isLocal  The slot is a `let` local's, which a fraction widens to a float.
- */
-function storeCheck(
-  lowered: {source: IrSource; expression: IrExpr},
-  slotType: SlotKind,
-  isBoolean: boolean,
-  widened: WideSlot | undefined,
-  slotName: string,
-  slotDescription: string,
-  environment: Env,
-  isLocal = false,
-): void {
-  const value = lowered.expression;
-  if ((slotType === 'int' && !isBoolean) || widened === 'number') {
-    environment.stores.push({
-      slot: slotName,
-      value: lowered.source,
-      math64: Boolean(environment.math64),
-      ...(isLocal ? {local: true} : {}),
-    });
-  }
+/** A numeric slot a value is written to, as the typing pass finds it. */
+interface StoreSlot {
+  slotType: SlotKind;
+  isBoolean: boolean;
+}
 
+/**
+ * Records a value written to a whole-number state, ref or `let` slot, whose kind came from its initial value:
+ * from every such value the typing pass infers the slots that hold 64 bits.
+ *
+ * @param value  The value's source.
+ * @param slotName  The slot's name.
+ * @param target  The state or ref, or the `let` local.
+ * @param environment  The expression environment.
+ */
+function recordStore(
+  value: IrSource,
+  slotName: string,
+  target: ScalarState | ValueRef | Local,
+  environment: Env,
+): void {
+  environment.stores.push({
+    slot: slotName,
+    value,
+    math64: environment.math64,
+    ...('kind' in target ? {target} : {local: target}),
+  });
+}
+
+/**
+ * Checks a value written to a numeric slot, once both are typed. A timestamp cannot go into a float or boolean
+ * slot (a 64-bit constant can go into a float one), and a 64-bit slot takes no floats.
+ *
+ * @param value  The typed value.
+ * @param slot  The slot.
+ * @param slotDescription  The slot, for the message.
+ */
+function checkStored(
+  value: IrExpr,
+  slot: StoreSlot,
+  slotDescription: string,
+): void {
+  const {slotType, isBoolean} = slot;
   if (value.type.kind === 'int64' && slotType !== 'i64') {
     if (slotType === 'int' && !isBoolean) return;
 
@@ -1171,28 +1198,56 @@ function storeCheck(
 }
 
 /**
- * `value` for an int destination. A float goes through a checked conversion: a plain one is undefined for
- * NaN or a value past the int range.
+ * The environment a value stored in a slot is lowered in: a 64-bit slot takes int `+ - *` worked out in 64
+ * bits.
+ *
+ * @param environment  The expression environment.
+ * @param is64Bit  Whether the slot holds 64 bits, asked once its width is known.
+ *
+ * @returns The value's environment.
+ */
+function storeEnvironment(environment: Env, is64Bit: () => boolean): Env {
+  const outer = environment.math64;
+  return {...environment, math64: () => is64Bit() || Boolean(outer?.())};
+}
+
+/**
+ * A typed value for an int destination. A float goes through a checked conversion: a plain one is undefined
+ * for NaN or a value past the int range.
+ *
+ * @param value  The typed value.
+ *
+ * @returns The value as an int.
+ */
+const typedAsInt = (value: IrExpr): IrExpr =>
+  value.type.kind === 'float'
+    ? {kind: 'toInt', operand: value, type: INT}
+    : value;
+
+/**
+ * `value` for an int destination (see typedAsInt).
  *
  * @param value  The lowered value.
  *
  * @returns The value as an int.
  */
 const asInt = (value: IrExpr): IrExpr =>
-  value.type.kind === 'float'
-    ? {kind: 'toInt', operand: value, type: INT}
-    : value;
+  typedLater('number', () => typedAsInt(value), [value]);
 
 /**
- * `value` for a slot of `slotType`: an int slot takes a float the way asInt does.
+ * `value` for a slot: an int slot takes a float the way asInt does.
  *
  * @param value  The lowered value.
- * @param slotType  The slot's kind.
+ * @param slotType  The slot's kind, asked once it is known.
  *
  * @returns The value the slot stores.
  */
-const storeValue = (value: IrExpr, slotType: SlotKind): IrExpr =>
-  slotType === 'int' ? asInt(value) : value;
+const storeValue = (value: IrExpr, slotType: () => SlotKind): IrExpr =>
+  typedLater(
+    shapeOf(value),
+    () => (slotType() === 'int' ? typedAsInt(value) : value),
+    [value],
+  );
 
 /**
  * A read of a ref's current value.
@@ -1245,28 +1300,34 @@ function lowerScalarSet(
   environment: Env,
 ): IrStmt {
   if (scalarState.slotKind !== 'string') {
-    // A 64-bit slot takes int `+ - *` worked out in 64 bits.
     const lowered = lowerSource(
       valueNode,
-      scalarState.slotKind === 'i64'
-        ? {...environment, math64: true}
-        : environment,
+      storeEnvironment(environment, () => is64BitSlot(scalarState)),
     );
     const value = lowered.expression;
-    storeCheck(
-      lowered,
-      scalarState.slotKind,
-      scalarState.isBoolean,
-      scalarState.widened,
-      scalarState.slotName,
-      `state "${scalarState.name}"`,
-      environment,
+    if (
+      (scalarState.slotKind === 'int' && !scalarState.isBoolean) ||
+      scalarState.widened === 'number'
+    ) {
+      recordStore(
+        lowered.source,
+        scalarState.slotName,
+        scalarState,
+        environment,
+      );
+    }
+    whenTyped(() =>
+      checkStored(
+        value,
+        {slotType: scalarState.slotKind, isBoolean: scalarState.isBoolean},
+        `state "${scalarState.name}"`,
+      ),
     );
 
     return {
       kind: 'setState',
       state: scalarState,
-      value: storeValue(value, scalarState.slotKind),
+      value: storeValue(value, () => scalarState.slotKind),
     };
   }
 
@@ -1284,6 +1345,148 @@ const RECORD_LOWERING: RecordLowering = {
   field: lowerScalarSet,
   test: (node, environment) => lowerExprWide(node, environment),
 };
+
+/**
+ * Works out a write to a value ref, `ref.current = …` or a compound assignment, once the ref and the value are
+ * typed. It does not trigger a re-render.
+ *
+ * @param expression  The assignment.
+ * @param ref  The ref.
+ * @param loweredValue  The right side: its source, and the typed value.
+ * @param environment  The expression environment.
+ *
+ * @returns The write's operator and value.
+ */
+function typedRefWrite(
+  expression: t.AssignmentExpression,
+  ref: RefRecord,
+  loweredValue: {source: IrSource; expression: IrExpr},
+  environment: Env,
+): Pick<Extract<IrStmt, {kind: 'writeRef'}>, 'operator' | 'value'> {
+  const valueExpression = loweredValue.expression;
+  const refHoldsTime = isTime(refType(ref));
+  if (
+    expression.operator === '/=' &&
+    (refHoldsTime || isTime64(valueExpression))
+  ) {
+    throw aotError(
+      'AOT: `/=` on a 64-bit time value is not supported',
+      'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
+    );
+  }
+
+  // A 64-bit `%=` keeps its constant divisor.
+  const wideModuloDivisor =
+    expression.operator === '%=' && (refHoldsTime || isTime64(valueExpression))
+      ? constDivisor(expression.right, environment)
+      : null;
+  checkStored(
+    valueExpression,
+    {slotType: ref.slotKind as SlotKind, isBoolean: false},
+    `ref "${((expression.left as t.MemberExpression).object as t.Identifier).name}"`,
+  );
+  const stored = (value: IrExpr): IrExpr =>
+    ref.slotKind === 'int' ? typedAsInt(value) : value;
+
+  // Whole-ref `+= -= *=`, float `/=` and float `%=` are the binary op, to share its checked and float math.
+  const isWholeRef = ref.slotKind === 'int' || ref.slotKind === 'i64';
+  const binaryOperation = (
+    {'+=': '+', '-=': '-', '*=': '*'} as Record<string, string>
+  )[expression.operator];
+  const isFloatModulo =
+    expression.operator === '%=' &&
+    (ref.slotKind === 'float' || valueExpression.type.kind === 'float');
+  if (
+    (isWholeRef &&
+      (binaryOperation ||
+        (expression.operator === '/=' &&
+          valueExpression.type.kind === 'float'))) ||
+    isFloatModulo
+  ) {
+    const resultExpression = typeSource(
+      binarySource(
+        {
+          type: 'BinaryExpression',
+          operator: binaryOperation ?? expression.operator.slice(0, -1),
+          left: expression.left,
+          right: expression.right,
+          loc: expression.loc,
+        } as t.BinaryExpression,
+        {kind: 'ref', ref, location: expression.left.loc?.start},
+        loweredValue.source,
+        environment,
+      ),
+      ref.slotKind === 'i64' || Boolean(environment.math64?.()),
+    );
+
+    return {operator: '=', value: stored(resultExpression)};
+  }
+
+  // Whole-number `/=` and `%=` use the checked helpers for JS's answer, in 64 bits on a 64-bit ref that holds no
+  // time; a constant divisor other than 0 or -1 needs no check.
+  const isWholeValue =
+    isIntSlot(valueExpression.type) ||
+    (valueExpression.type.kind === 'int64' && !isTime64(valueExpression));
+  const refBits = ref.slotKind === 'i64' ? 64 : 32;
+  if (
+    ((ref.slotKind === 'int' && isIntSlot(valueExpression.type)) ||
+      (ref.slotKind === 'i64' && !refHoldsTime && isWholeValue)) &&
+    (expression.operator === '/=' || expression.operator === '%=')
+  ) {
+    const staticDivisor = staticInt(expression.right, environment);
+    if (
+      expression.operator === '/=' &&
+      (staticDivisor === null || staticDivisor === 0 || staticDivisor === -1)
+    ) {
+      return {
+        operator: '=',
+        value: {
+          kind: 'helper',
+          helper: 'div',
+          bits: refBits,
+          callArguments: [refRead(ref), valueExpression],
+          type: refType(ref),
+        },
+      };
+    }
+
+    if (
+      expression.operator === '%=' &&
+      (staticDivisor === 0 || staticDivisor === -1)
+    ) {
+      return {operator: '=', value: ZERO};
+    }
+
+    if (expression.operator === '%=' && staticDivisor === null) {
+      return {
+        operator: '=',
+        value: {
+          kind: 'helper',
+          helper: 'mod',
+          bits: refBits,
+          callArguments: [refRead(ref), valueExpression],
+          type: refType(ref),
+        },
+      };
+    }
+  }
+
+  // A 64-bit `%=` by 0 or ±1 stores 0: no remainder, JS's NaN as 0, and no overflow on INT64_MIN % -1.
+  if (
+    wideModuloDivisor === 0 ||
+    wideModuloDivisor === 1 ||
+    wideModuloDivisor === -1
+  ) {
+    return {operator: '=', value: ZERO};
+  }
+
+  // Everything else is a plain assignment or compound assignment.
+  return {
+    operator: expression.operator,
+    value:
+      expression.operator === '=' ? stored(valueExpression) : valueExpression,
+  };
+}
 
 /**
  * Resolves `node` to its ref when it is `<ref>.current` member access on a known value ref.
@@ -1606,7 +1809,7 @@ function checkLoopSetter(
 
 /**
  * Lowers `x = …`, `x += …` or `x++` on a `let` local. A whole-number `let` given a fraction or a timestamp is
- * widened to hold it (see compileWidened); a boolean or a string one holds only those.
+ * widened to hold it, once every store is lowered; a boolean or a string one holds only those.
  *
  * @param expression  The assignment or update.
  * @param target  The local's name.
@@ -1680,7 +1883,7 @@ function lowerLocalAssign(
   const localName = local.name!;
 
   // A string is built in the local's buffer, which may be read to build it.
-  if (local.slotKind === 'string') {
+  if (localShape(local) === 'string') {
     if (buildsText(valueNode, environment)) {
       return {
         kind: 'assignLocal',
@@ -1690,41 +1893,42 @@ function lowerLocalAssign(
       };
     }
     const value = lowerExpr(valueNode, environment);
-    if (value.type.kind !== 'string') throw holds('a string');
-    if (value.kind === 'string') {
-      checkConstantFits(
-        {parts: [{kind: 'literal', text: value.value}]},
-        `local "${name}"`,
-      );
-    }
+    if (shapeOf(value) !== 'string') throw holds('a string');
+    whenTyped(() => {
+      if (value.kind === 'string') {
+        checkConstantFits(
+          {parts: [{kind: 'literal', text: value.value}]},
+          `local "${name}"`,
+        );
+      }
+    });
     return {kind: 'assignLocal', name: localName, value};
   }
 
-  const widened: WideSlot | undefined =
-    local.slotKind !== 'i64' ? undefined : local.isLiteral ? 'number' : 'time';
+  const holdsBoolean = localShape(local) === 'bool';
   const lowered = lowerSource(
     valueNode,
-    widened ? {...environment, math64: true} : environment,
+    storeEnvironment(environment, () => is64BitLocal(local)),
   );
-  const kind = lowered.expression.type.kind;
-  if (local.isBoolean ? kind !== 'bool' : kind === 'bool') {
-    throw holds(local.isBoolean ? 'a boolean' : 'a number');
+  const shape = shapeOf(lowered.expression);
+  if (holdsBoolean ? shape !== 'bool' : shape === 'bool') {
+    throw holds(holdsBoolean ? 'a boolean' : 'a number');
   }
-  if (kind === 'string') throw holds('a number');
-  storeCheck(
-    lowered,
-    local.slotKind,
-    Boolean(local.isBoolean),
-    widened,
-    local.assignable,
-    `local "${name}"`,
-    environment,
-    true,
+  if (shape === 'string') throw holds('a number');
+  if (!holdsBoolean) {
+    recordStore(lowered.source, local.assignable, local, environment);
+  }
+  whenTyped(() =>
+    checkStored(
+      lowered.expression,
+      {slotType: local.slotKind, isBoolean: holdsBoolean},
+      `local "${name}"`,
+    ),
   );
   return {
     kind: 'assignLocal',
     name: localName,
-    value: storeValue(lowered.expression, local.slotKind),
+    value: storeValue(lowered.expression, () => local.slotKind),
   };
 }
 
@@ -1767,18 +1971,27 @@ function updaterEnvironment(
     };
   }
 
-  locals.set(previousName, {
-    slotKind: target.slotKind,
-    isBoolean: target.isBoolean,
-    ...(target.widened === 'number' ? {isLiteral: true} : {}),
-    source: {kind: 'state', state: target, latest: true, location: undefined},
-    expression: {
-      kind: 'state',
-      state: target,
-      type: stateType(target),
-      latest: true,
-    },
-  });
+  const previous = stateRead(target, true);
+  locals.set(
+    previousName,
+    holdLater(
+      {
+        source: {
+          kind: 'state',
+          state: target,
+          latest: true,
+          location: undefined,
+        },
+        expression: previous,
+      },
+      shapeOf(previous),
+      () => ({
+        slotKind: target.slotKind,
+        isBoolean: target.isBoolean,
+        ...(target.widened === 'number' ? {isLiteral: true} : {}),
+      }),
+    ),
+  );
   return {...environment, locals, state};
 }
 
@@ -2116,151 +2329,22 @@ function lowerHandlerExprImpl(
       );
     }
 
-    // Lower the right side in the ref's width and check it fits; a 64-bit `%=` keeps its constant divisor.
-    const refEnvironment =
-      ref.slotKind === 'i64' ? {...environment, math64: true} : environment;
-    const loweredValue = lowerSource(expression.right, refEnvironment);
-    const valueExpression = loweredValue.expression;
-    const refHoldsTime = isTime(refType(ref));
-    if (
-      expression.operator === '/=' &&
-      (refHoldsTime || isTime64(valueExpression))
-    ) {
-      throw aotError(
-        'AOT: `/=` on a 64-bit time value is not supported',
-        'JS division gives a fraction; write ref.current = Math.floor(ref.current / n) for whole units.',
-      );
-    }
-
-    const wideModuloDivisor =
-      expression.operator === '%=' &&
-      (refHoldsTime || isTime64(valueExpression))
-        ? constDivisor(expression.right, environment)
-        : null;
-    storeCheck(
-      loweredValue,
-      ref.slotKind as SlotKind,
-      false,
-      ref.kind === 'value' ? ref.widened : undefined,
-      ref.slotName,
-      `ref "${((expression.left as t.MemberExpression).object as t.Identifier).name}"`,
-      environment,
+    // Lower the right side; the typing pass works out the write, once it knows the ref's width.
+    const value = lowerSource(
+      expression.right,
+      storeEnvironment(environment, () => is64BitSlot(ref)),
     );
-
-    // Lower whole-ref `+= -= *=`, float `/=` and float `%=` as the binary op to share its checked and float math.
-    const isWholeRef = ref.slotKind === 'int' || ref.slotKind === 'i64';
-    const binaryOperation = (
-      {'+=': '+', '-=': '-', '*=': '*'} as Record<string, string>
-    )[expression.operator];
-    const isFloatModulo =
-      expression.operator === '%=' &&
-      (ref.slotKind === 'float' || valueExpression.type.kind === 'float');
-    if (
-      (isWholeRef &&
-        (binaryOperation ||
-          (expression.operator === '/=' &&
-            valueExpression.type.kind === 'float'))) ||
-      isFloatModulo
-    ) {
-      const resultExpression = lowerExprWide(
-        {
-          type: 'BinaryExpression',
-          operator: binaryOperation ?? expression.operator.slice(0, -1),
-          left: expression.left,
-          right: expression.right,
-          loc: expression.loc,
-        } as t.BinaryExpression,
-        refEnvironment,
-      );
-
-      return [
-        {
-          kind: 'writeRef',
-          ref,
-          operator: '=',
-          value: storeValue(resultExpression, ref.slotKind as SlotKind),
-        },
-      ];
+    if (ref.kind === 'value' && ref.slotKind !== 'float') {
+      recordStore(value.source, ref.slotName, ref, environment);
     }
-
-    // Whole-number `/=` and `%=` use the checked helpers for JS's answer, in 64 bits on a 64-bit ref that holds no
-    // time; a constant divisor other than 0 or -1 needs no check.
-    const isWholeValue =
-      isIntSlot(valueExpression.type) ||
-      (valueExpression.type.kind === 'int64' && !isTime64(valueExpression));
-    const refBits = ref.slotKind === 'i64' ? 64 : 32;
-    if (
-      ((ref.slotKind === 'int' && isIntSlot(valueExpression.type)) ||
-        (ref.slotKind === 'i64' && !refHoldsTime && isWholeValue)) &&
-      (expression.operator === '/=' || expression.operator === '%=')
-    ) {
-      const staticDivisor = staticInt(expression.right, environment);
-      if (
-        expression.operator === '/=' &&
-        (staticDivisor === null || staticDivisor === 0 || staticDivisor === -1)
-      ) {
-        return [
-          {
-            kind: 'writeRef',
-            ref,
-            operator: '=',
-            value: {
-              kind: 'helper',
-              helper: 'div',
-              bits: refBits,
-              callArguments: [refRead(ref), valueExpression],
-              type: refType(ref),
-            },
-          },
-        ];
-      }
-
-      if (
-        expression.operator === '%=' &&
-        (staticDivisor === 0 || staticDivisor === -1)
-      ) {
-        return [{kind: 'writeRef', ref, operator: '=', value: ZERO}];
-      }
-
-      if (expression.operator === '%=' && staticDivisor === null) {
-        return [
-          {
-            kind: 'writeRef',
-            ref,
-            operator: '=',
-            value: {
-              kind: 'helper',
-              helper: 'mod',
-              bits: refBits,
-              callArguments: [refRead(ref), valueExpression],
-              type: refType(ref),
-            },
-          },
-        ];
-      }
-    }
-
-    // A 64-bit `%=` by 0 or ±1 stores 0: no remainder, JS's NaN as 0, and no overflow on INT64_MIN % -1.
-    if (
-      wideModuloDivisor === 0 ||
-      wideModuloDivisor === 1 ||
-      wideModuloDivisor === -1
-    ) {
-      return [{kind: 'writeRef', ref, operator: '=', value: ZERO}];
-    }
-
-    // Everything else is a plain assignment or compound assignment.
-    return [
-      {
-        kind: 'writeRef',
-        ref,
-        operator: expression.operator,
-        value:
-          expression.operator === '='
-            ? storeValue(valueExpression, ref.slotKind as SlotKind)
-            : valueExpression,
-      },
-    ];
+    const statement = {kind: 'writeRef', ref} as Extract<
+      IrStmt,
+      {kind: 'writeRef'}
+    >;
+    setLater(statement, ['operator', 'value'], () =>
+      typedRefWrite(expression, ref, value, environment),
+    );
+    return [statement];
   }
 
   // `ref.current++` / `ref.current--`; a whole-number ref steps through the checked `+ 1` / `- 1`.
@@ -2273,21 +2357,22 @@ function lowerHandlerExprImpl(
     }
 
     if (ref.slotKind === 'int' || ref.slotKind === 'i64') {
+      const {operator} = expression;
       return [
         {
           kind: 'writeRef',
           ref,
           operator: '=',
-          value: {
+          value: typedLater('number', () => ({
             kind: 'helper',
-            helper: expression.operator === '++' ? 'add' : 'sub',
+            helper: operator === '++' ? 'add' : 'sub',
             bits: ref.slotKind === 'i64' ? 64 : 32,
             callArguments: [
               refRead(ref),
               {kind: 'number', value: 1, type: INT},
             ],
             type: refType(ref),
-          },
+          })),
         },
       ];
     }
@@ -2721,19 +2806,24 @@ export function lowerStmts(
         const text = buildsText(declarator.init, environment)
           ? lowerText(declarator.init, environment)
           : undefined;
-        const {source: initialSource, expression: initialExpression} = text
+        const initial = text
           ? {
               source: undefined,
               expression: {kind: 'string', value: '', type: STRING} as IrExpr,
             }
           : lowerSource(declarator.init, environment);
-        if (initialExpression.type.kind === 'string') {
-          if (initialExpression.kind === 'string') {
-            checkConstantFits(
-              {parts: [{kind: 'literal', text: initialExpression.value}]},
-              `local "${declarator.id.name}"`,
-            );
-          }
+        const {source: initialSource, expression: initialExpression} = initial;
+        const localId = declarator.id.name;
+        const shape = shapeOf(initialExpression);
+        if (shape === 'string') {
+          whenTyped(() => {
+            if (initialExpression.kind === 'string') {
+              checkConstantFits(
+                {parts: [{kind: 'literal', text: initialExpression.value}]},
+                `local "${localId}"`,
+              );
+            }
+          });
 
           // Copy into a buffer of its own; aliasing a state slot would hide a self-read like `setLabel(t + '!')`.
           if (isHoisted) {
@@ -2743,58 +2833,88 @@ export function lowerStmts(
               slotKind: 'string',
             });
           }
-        } else {
-          const slot = slotOf(initialExpression.type);
-          if (slot !== 'int' && slot !== 'float' && slot !== 'i64') {
-            throw aotError(
-              'AOT: a handler local must hold a number, a boolean or a string',
-              'bind the value itself — e.g. `const id = item.id` — rather than a list item or a node ref.',
-            );
-          }
+        } else if (shape !== 'number' && shape !== 'bool') {
+          throw aotError(
+            'AOT: a handler local must hold a number, a boolean or a string',
+            'bind the value itself — e.g. `const id = item.id` — rather than a list item or a node ref.',
+          );
         }
 
-        // A whole-number `let` set to a fraction or a timestamp later holds one from the start.
+        // A whole-number `let` set to a fraction or a timestamp later holds one from the start. Later statements
+        // read the name as the local; a `let` is read from where it is kept, whatever set it last.
         const letKey = `let@${declarator.id.name}@${declarator.start ?? 0}`;
-        const width =
+        const widthOf = (): WideSlot | 'float' | undefined =>
           isLet && initialExpression.type.kind === 'int'
             ? environment.wide.get(letKey)
             : undefined;
-        const held: SlotValue = width
-          ? width === 'float'
-            ? {slotKind: 'float'}
-            : {
-                slotKind: 'i64',
-                ...(width === 'number' ? {isLiteral: true} : {}),
-              }
-          : slotValueOf(initialExpression);
-        if (isHoisted && held.slotKind !== 'string') {
-          context.hoist!.declarations.push({
-            kind: 'local',
-            name: localName,
-            slotKind: held.slotKind,
-          });
+        const bare =
+          !isLet && initialSource
+            ? bareLocalOf({
+                source: initialSource,
+                expression: initialExpression,
+              })
+            : null;
+        const local: Local = bare
+          ? copyLocal(bare, {name: localName, source: initialSource})
+          : holdLater<Local>(
+              isLet
+                ? ({
+                    name: localName,
+                    assignable: letKey,
+                    declared: initialSource,
+                  } as Local)
+                : ({name: localName, source: initialSource} as Local),
+              shape,
+              () => {
+                const width = widthOf();
+                const held: SlotValue = width
+                  ? width === 'float'
+                    ? {slotKind: 'float'}
+                    : {
+                        slotKind: 'i64',
+                        ...(width === 'number' ? {isLiteral: true} : {}),
+                      }
+                  : slotValueOf(initialExpression);
+                return isLet
+                  ? {
+                      slotKind: held.slotKind,
+                      ...(held.isBoolean ? {isBoolean: true} : {}),
+                      ...(held.isLiteral ? {isLiteral: true} : {}),
+                      ...(held.wide ? {wide: true} : {}),
+                    }
+                  : held;
+              },
+            );
+        if (isHoisted && shape !== 'string') {
+          const declaration = {kind: 'local', name: localName} as Extract<
+            IrStaticDecl,
+            {kind: 'local'}
+          >;
+          context.hoist!.declarations.push(declaration);
+          setLater(declaration, ['slotKind'], () => ({
+            slotKind: local.slotKind,
+          }));
         }
 
-        lowered.push({
+        const declare: Extract<IrStmt, {kind: 'declareLocal'}> = {
           kind: 'declareLocal',
           name: localName,
           initializer: initialExpression,
           ...(text ? {text} : {}),
           isHoisted,
-          ...(width ? {widenedTo: width === 'float' ? 'float' : 'int64'} : {}),
-        });
-
-        // Later statements read the name as the local. A `let` is read from where it is kept, whatever set it last.
-        const local: Local = isLet
-          ? {
-              slotKind: held.slotKind,
-              ...(held.isBoolean ? {isBoolean: true} : {}),
-              ...(held.isLiteral ? {isLiteral: true} : {}),
-              ...(held.wide ? {wide: true} : {}),
-              name: localName,
-              assignable: letKey,
-            }
-          : {...held, name: localName, source: initialSource};
+        };
+        if (isLet && shape === 'number') {
+          setLater(declare, ['widenedTo'], () => {
+            const width = widthOf();
+            const widenedTo: 'float' | 'int64' | undefined = !width
+              ? undefined
+              : width === 'float'
+                ? 'float'
+                : 'int64';
+            return {widenedTo};
+          });
+        }
+        lowered.push(declare);
         environment = {
           ...environment,
           locals: new Map(environment.locals).set(declarator.id.name, local),
@@ -3183,11 +3303,8 @@ export function lowerEffect(
       }
 
       const dependencyExpression = lowerExprWide(dependencyNode, environment);
-      if (
-        !['int', 'float', 'i64', 'string'].includes(
-          slotValueOf(dependencyExpression).slotKind,
-        )
-      ) {
+      const dependencyShape = shapeOf(dependencyExpression);
+      if (dependencyShape === 'struct' || dependencyShape === 'node') {
         throw aotError(
           'AOT: useEffect dependencies must be scalar (number / bool / string)',
           'depend on scalar state values; object/array dependencies are not yet supported.',

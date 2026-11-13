@@ -58,8 +58,6 @@ import {
   RuntimeLeaf,
 } from './static-eval.mts';
 import type * as t from '@babel/types';
-import type {SlotWidths} from './ir/types.mts';
-import {wideSlotOf} from './ir/types.mts';
 import type {AotError} from './diagnostics.mts';
 import type {Screen} from './options.mts';
 import type {
@@ -96,9 +94,6 @@ const slotKindOfValue = (value: unknown): 'string' | 'float' | 'int' =>
     : typeof value === 'number' && !Number.isInteger(value)
       ? 'float'
       : 'int';
-
-/** No state or ref slot widened to 64 bits — the collectors' default. */
-export const NO_WIDE: SlotWidths = new Map();
 
 /**
  * What a whole-number initial value needs beyond an int slot, typed as a constant of its size is: nothing in
@@ -445,7 +440,6 @@ export function settleBootInitials(states: Iterable<StateRecord>): void {
  * @param initialNode  What it was written as, if anything: `70.0` makes a float slot.
  * @param isHost  It is a useHostValue.
  * @param bootValue  An initial value derived from `screen`.
- * @param wide  Slots to declare 64-bit (see compileWidened).
  *
  * @returns The state.
  */
@@ -457,7 +451,6 @@ function scalarStateOf(
   initialNode: t.Node | undefined,
   isHost: boolean,
   bootValue: BootValue | null,
-  wide: SlotWidths,
 ): ScalarState {
   // Pick the slot's kind from the initial value.
   let slotKind: SlotKind = slotKindOfValue(initialValue);
@@ -473,17 +466,16 @@ function scalarStateOf(
     slotKind = 'float';
   }
 
-  // A whole number past the int range starts it 64-bit (past 64 bits, a float), as does a setter that
-  // stores a timestamp or such a number in it (see compileWidened).
+  // A whole number past the int range starts it 64-bit (past 64 bits, a float). A setter that stores a timestamp
+  // or such a number in an int slot widens it later, once every store is lowered (see lowerApp).
   const initialWidth = slotKind === 'int' ? wideInitial(initialValue) : null;
   if (initialWidth === 'float') {
     slotKind = 'float';
   }
 
   const widened =
-    slotKind === 'int' && !isBoolean
-      ? (wideSlotOf(wide, slotName) ??
-        (initialWidth === 'number' ? 'number' : undefined))
+    slotKind === 'int' && !isBoolean && initialWidth === 'number'
+      ? 'number'
       : undefined;
   if (widened) {
     slotKind = 'i64';
@@ -546,7 +538,6 @@ function fieldNodeOf(
  * @param setter  The setter's JS name.
  * @param value  The folded initial value.
  * @param initialNode  What it was written as.
- * @param wide  Slots to declare 64-bit (see compileWidened).
  *
  * @returns The record.
  */
@@ -556,7 +547,6 @@ function recordStateOf(
   setter: string | undefined,
   value: Record<string, unknown>,
   initialNode: t.Node,
-  wide: SlotWidths,
 ): RecordState {
   const fields = new Map<string, ScalarState>();
   const fail = (message: string, hint: string, at: t.Node | undefined) => {
@@ -621,7 +611,6 @@ function recordStateOf(
         fieldNode,
         false,
         null,
-        wide,
       );
       state.initialAt ??= initialNode.loc?.start;
       fields.set(fieldPath.join('.'), state);
@@ -642,7 +631,6 @@ function recordStateOf(
  * @param shapes  The shapes.
  * @param written  The objects the setter is given.
  * @param prefix  The storage prefix.
- * @param wide  Slots to declare 64-bit (see compileWidened).
  * @param initialNode  What the initial value was written as.
  *
  * @returns The record.
@@ -652,7 +640,6 @@ function tagRecord(
   shapes: RecordShapes,
   written: WrittenObject[],
   prefix: string,
-  wide: SlotWidths,
   initialNode: t.Node,
 ): TaggedRecord {
   const {name, setter} = record;
@@ -714,7 +701,6 @@ function tagRecord(
         representative.node,
         false,
         null,
-        wide,
       );
       field.initial = field.slotKind === 'string' ? '' : 0;
       field.initialAt = initialNode.loc?.start;
@@ -746,7 +732,6 @@ function tagRecord(
     undefined,
     false,
     null,
-    wide,
   );
   tagState.initialAt = initialNode.loc?.start;
   const tagged: TaggedRecord = {
@@ -866,7 +851,6 @@ function reducerOf(
  * @param scope  Compile-time constants the initial values fold against.
  * @param caps  The compile's caps.
  * @param prefix  The storage prefix: none for the App, `c<n>_` for an inlined instance.
- * @param wide  Slots to declare 64-bit (see compileWidened).
  * @param program  The module, where a reducer may be declared.
  *
  * @returns The component's state table.
@@ -876,7 +860,6 @@ export function collectState(
   scope: Scope,
   caps: Caps,
   prefix = '',
-  wide: SlotWidths = NO_WIDE,
   program?: t.Program,
 ): StateTable {
   // Index each state by its JS name and, when it has one, by its setter's name.
@@ -1008,7 +991,6 @@ export function collectState(
             setter,
             initialValue,
             initialArgument,
-            wide,
           );
           // Objects written with other fields make it a tagged record of several shapes. A reducer writes the
           // objects it returns.
@@ -1032,7 +1014,6 @@ export function collectState(
               shapes,
               written,
               prefix,
-              wide,
               initialArgument,
             );
             byName.set(`${name}.${shapes.key}`, recordState.tag!.state);
@@ -1082,7 +1063,6 @@ export function collectState(
           initialArgument,
           isHost,
           bootValue,
-          wide,
         );
       }
 

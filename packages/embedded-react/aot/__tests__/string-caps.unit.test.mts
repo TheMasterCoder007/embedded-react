@@ -33,7 +33,7 @@ const appOf = (body: string, jsx: string): string =>
 
 /** The caps of an app's string states, list fields and locals. */
 function capsOf(body: string, jsx: string) {
-  const app = lowerApp(appOf(body, jsx), resolveOptions({}), new Map(), []);
+  const app = lowerApp(appOf(body, jsx), resolveOptions({}));
   const caps = stringCaps(app, internedStates(app), DEFAULT_CAP);
   const stateNamed = (name: string) =>
     app.state.find(state => state.name === name)!;

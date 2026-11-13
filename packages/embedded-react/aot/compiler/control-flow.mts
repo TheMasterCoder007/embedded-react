@@ -22,11 +22,13 @@ import {aotError} from './diagnostics.mts';
 import {foldBoot, isBoot} from './boot.mts';
 import {mergeBranchElements} from './branch-merge.mts';
 import {evalStatic, setBinding, withUndefined} from './static-eval.mts';
+import {holdSame, shapeOf} from './typing.mts';
 import {
   bindBuiltValues,
   foldRuntime,
   listItemOf,
   lowerExpr,
+  lowerLocal,
   lowerSourcedWide,
 } from './expressions.mts';
 import {BOOL, INT, STRUCT} from './ir/types.mts';
@@ -242,7 +244,9 @@ export function propDescriptorOf(
         }
       : node.type === 'ArrayExpression' || node.type === 'ObjectExpression'
         ? {static: true, value: foldRuntime(node, environment, scope)}
-        : {static: false, ...lowerSourcedWide(node, environment)};
+        : Object.assign(lowerSourcedWide(node, environment), {
+            static: false as const,
+          });
   }
 }
 
@@ -357,20 +361,23 @@ export function bindProp(
   } else if (descriptor.static) {
     setBinding(tables.scope, name, descriptor.value);
   } else {
-    tables.locals.set(name, {
-      name: descriptor.name,
-      slotKind: descriptor.slotKind,
-      struct: descriptor.struct,
-      list: descriptor.list,
-      row: descriptor.row,
-      index: descriptor.index,
-      guarded: descriptor.guarded,
-      isBoolean: descriptor.isBoolean, // keep boolean-ness across the prop boundary (extractProps supplies it)
-      isLiteral: descriptor.isLiteral,
-      wide: descriptor.wide,
-      source: descriptor.source,
-      expression: descriptor.expression,
-    });
+    // What it holds crosses the prop boundary, a boolean as a boolean (extractProps supplies it).
+    tables.locals.set(
+      name,
+      holdSame(
+        {
+          name: descriptor.name,
+          struct: descriptor.struct,
+          list: descriptor.list,
+          row: descriptor.row,
+          index: descriptor.index,
+          guarded: descriptor.guarded,
+          source: descriptor.source,
+          expression: descriptor.expression,
+        },
+        descriptor,
+      ),
+    );
 
     // A dynamic prop is a runtime binding; drop any same-named module const so no fold emits it instead.
     delete tables.scope[name];
@@ -543,12 +550,7 @@ export function emitComponent(
 
   // Collect the child's own hooks under its prefix; its state slots are runtime bindings, so they leave the scope.
   const childAnimations = collectAnims(functionNode.body, childScope, prefix);
-  const childRefs = collectRefs(
-    functionNode.body,
-    childScope,
-    prefix,
-    environment.wide,
-  );
+  const childRefs = collectRefs(functionNode.body, childScope, prefix);
   const childPans = collectPanResponders(functionNode.body, prefix);
   const childCallbacks = collectCallbacks(functionNode.body);
   const childMemos = collectMemos(functionNode.body);
@@ -559,7 +561,6 @@ export function emitComponent(
       childScope,
       environment.caps,
       prefix,
-      environment.wide,
       output.program,
     );
     settleBootInitials(childState.byName.values());
@@ -622,15 +623,7 @@ export function emitComponent(
         setBinding(childScope, name, foldRuntime(expression, childEnvironment));
         continue;
       }
-      const memo = lowerSourcedWide(expression, childEnvironment);
-      childLocals.set(name, {
-        slotKind: memo.slotKind,
-        isBoolean: memo.isBoolean,
-        isLiteral: memo.isLiteral,
-        wide: memo.wide,
-        source: memo.source,
-        expression: memo.expression,
-      });
+      childLocals.set(name, lowerLocal(expression, childEnvironment));
       delete childScope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
@@ -976,9 +969,6 @@ const mountedWhile = (environment: Env, test: IrExpr): IrExpr =>
       }
     : test;
 
-/** The value types whose falsy value, 0, React renders as text. */
-const NUMERIC_KINDS = new Set(['int', 'float', 'int64']);
-
 /**
  * Whether a folded child value renders nothing, as React treats it: false, null, undefined and the empty string.
  *
@@ -1100,7 +1090,7 @@ function lowerBranch(
 
     // A state-driven test builds the branch it picks. A list row builds every branch, each shown while picked.
     const test = lowerExpr(testNode, environment);
-    if (isAnd && NUMERIC_KINDS.has(test.type.kind)) {
+    if (isAnd && shapeOf(test) === 'number') {
       const error = aotError(
         'AOT: a number on the left of `&&` renders 0 as text when it is 0',
         'React draws the 0 itself, and text needs a <Text>. Test it as a condition: `count > 0 && <El/>`.',

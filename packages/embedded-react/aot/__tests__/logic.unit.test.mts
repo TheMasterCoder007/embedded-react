@@ -58,7 +58,7 @@ function lowerHandler(handler: string, before = ''): IrStmt[] {
     locals: new Map(),
     constants: scope,
     refs: new Map(),
-    math64: false,
+    math64: undefined,
     caps: CAPS,
     stores: [],
     helpers: collectHelpers(

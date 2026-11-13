@@ -463,7 +463,7 @@ const bootEnv = (environment: Env, scope: Scope): Env => ({
   event: null,
   gesture: null,
   pan: null,
-  math64: false,
+  math64: undefined,
   animationLocals: undefined,
 });
 

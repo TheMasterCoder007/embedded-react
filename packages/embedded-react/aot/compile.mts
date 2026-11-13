@@ -40,7 +40,7 @@
  * inline JSX), and the CLI at the bottom reads a demo's App.jsx and writes dist/app.erpkg. The
  * compiler itself lives in compiler/, one module per stage. The pipeline: parse the App.jsx → collect
  * the module's component, state, hooks & refs → lower each piece (expressions, styles/text, handlers,
- * nodes) → write the lowered app as a package.
+ * nodes) → widen the slots that hold 64 bits and type the app → check it → write it as a package.
  *
  *   compiler/options.mts         resolveOptions — screen size + buffer caps, from opts, then ER_AOT_*
  *   compiler/types.mts           the types the stages share (Env, StatementContext, state/ref records)
@@ -62,7 +62,8 @@
  *   compiler/keyboard.mts        setKeyboardConfig({...}) → the keyboard config
  *   compiler/native-modules.mts  nativeModule() declarations and their interfaces → native calls
  *   compiler/lower.mts           lowerApp — run the stages above over the parsed app
- *   compiler/check.mts           the check pass — the values lowering recorded, checked in order
+ *   compiler/typing.mts          what lowering holds in place of a typed value, for the typing pass to fill in
+ *   compiler/check.mts           the typing and check passes — what lowering recorded, run in order
  *   compiler/package/*.mts       the package backend: the IR as a Flow B program, its container and report
  *
  * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mjs
@@ -91,7 +92,6 @@ import {bakeSvgArtifacts} from './compiler/collect.mts';
 import {nativeHeaders} from './compiler/native-header.mts';
 import {readModuleFile, readNativeFiles} from './compiler/native-files.mts';
 import {demoFile} from './demo-file.mts';
-import {inferWideSlots, sameSlotWidths} from './compiler/expressions.mts';
 import {
   assemblePackage,
   bakePackage,
@@ -111,8 +111,6 @@ import type {
   PanelProgram,
 } from './compiler/package/assemble.mts';
 import type {LayoutCheck} from './compiler/package/checks.mts';
-import type {IrSlotStore} from './compiler/ir/source.mts';
-import type {SlotWidths} from './compiler/ir/types.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -141,45 +139,6 @@ export {
 };
 
 /**
- * A state or ref slot is typed from its initial value, so `useState(0)` is an int until a setter stores
- * Date.now() in it. A compile records every value stored into an int slot (environment.stores), and the typing pass
- * infers from them which slots have to hold 64 bits, following a timestamp through every slot it reaches; the
- * app is then compiled again with those slots widened, so every read of a slot sees its final type.
- *
- * @param compileOnce  One compile with the given slots widened, recording the values stored into int slots.
- *
- * @returns What the last compile produced.
- */
-function compileWidened<Result>(
-  compileOnce: (wide: SlotWidths, stores: IrSlotStore[]) => Result,
-): Result {
-  // The slots found so far that need 64 bits; every pass compiles with all of them widened.
-  let wide: SlotWidths = new Map();
-  for (;;) {
-    // Run one pass, holding on to its error instead of throwing it straight away.
-    const stores: IrSlotStore[] = [];
-    let result: Result | undefined;
-    let error: unknown;
-    try {
-      result = compileOnce(wide, stores);
-    } catch (caught) {
-      error = caught;
-    }
-
-    // Stop once no slot is inferred to widen; a failed pass with new ones may have failed on a narrow type.
-    const inferred = inferWideSlots(stores, wide);
-    if (sameSlotWidths(inferred, wide)) {
-      if (error) {
-        throw error;
-      }
-      return result!;
-    }
-
-    wide = inferred;
-  }
-}
-
-/**
  * Runs a compilation, annotating an AOT error with file:line:col + a source code-frame (+ hint) so the failure
  * points at the exact unsupported construct.
  *
@@ -187,7 +146,7 @@ function compileWidened<Result>(
  * @param demo  Demo name, for the file the error names when opts has none.
  * @param options  The compile's options.
  * @param resolved  The same options, resolved.
- * @param compileOnce  One compile, as compileWidened runs it.
+ * @param compile  The compile.
  *
  * @returns What the compile produced.
  */
@@ -196,10 +155,10 @@ function compileLocated<Result>(
   demo: string,
   options: CompileOptions,
   resolved: ResolvedOptions,
-  compileOnce: (wide: SlotWidths, stores: IrSlotStore[]) => Result,
+  compile: () => Result,
 ): Result {
   try {
-    return compileWidened(compileOnce);
+    return compile();
   } catch (error: any) {
     // Point an AOT error at its place in the source; any other error passes through unchanged.
     if (
@@ -294,8 +253,8 @@ export function compilePackage(
       ? {...options, screenFrom: 'search'}
       : options;
     panels.push(
-      compileLocated(source, demo, compileOptions, resolved, (wide, stores) =>
-        compilePanel(source, resolved, wide, stores),
+      compileLocated(source, demo, compileOptions, resolved, () =>
+        compilePanel(source, resolved),
       ),
     );
   };
