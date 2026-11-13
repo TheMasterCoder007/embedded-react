@@ -58,7 +58,7 @@ function lowerBody(source, state, refs = new Map()) {
     locals: new Map(),
     constants: {},
     refs,
-    math64: false,
+    math64: undefined,
     caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
     stores: [],
   };

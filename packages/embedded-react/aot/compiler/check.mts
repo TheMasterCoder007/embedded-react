@@ -39,10 +39,19 @@ export type IrCheckSubject =
   /** The stops of an <Svg> shape's gradient, by the attribute that holds it. */
   | {kind: 'gradientStops'; attribute: string; count: number}
   /** The stops a <Dial indicatorGradient> has. */
-  | {kind: 'dialGradientStops'; count: number};
+  | {kind: 'dialGradientStops'; count: number}
+  /** What the typing pass refused: a 64-bit value mixed with a float, say. */
+  | {kind: 'typing'; problem: AotError};
 
 /** A recorded check, and where its error is reported. */
 export type IrCheck = IrCheckSubject & {location: SourcePosition | undefined};
+
+/** What lowering leaves for the typing pass: a decision that depends on a type, and where its error is reported. */
+interface TypingStep {
+  kind: 'typingStep';
+  run: () => void;
+  location: SourcePosition | undefined;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Constants
@@ -57,8 +66,11 @@ const MAX_MILLISECONDS = 2 ** 31 - 1;
 /** The most stops a <Dial indicatorGradient> holds (the engine's ER_GRADIENT_MAX_STOPS). */
 export const DIAL_MAX_GRADIENT_STOPS = 4;
 
-/** Where lowering records its checks while a compile runs, or null outside one, when a check runs at once. */
-let recording: IrCheck[] | null = null;
+/**
+ * Where lowering records its checks and typing steps while a compile runs, in order, or null outside one, when
+ * each runs at once.
+ */
+let recording: (IrCheck | TypingStep)[] | null = null;
 
 /** How many fallback attempts are running: a check inside one runs at once, so its failure picks the fallback. */
 let attempts = 0;
@@ -178,6 +190,8 @@ export function checkProblem(subject: IrCheckSubject): AotError | null {
             "the engine's arc holds 4 (ER_GRADIENT_MAX_STOPS); merge stops that sit close together.",
           )
         : null;
+    case 'typing':
+      return subject.problem;
   }
 }
 
@@ -202,6 +216,28 @@ export function check(
     locateError(problem, location);
     throw problem;
   }
+}
+
+/**
+ * Whether lowering is leaving types to the typing pass: during a compile, outside a fallback attempt.
+ *
+ * @returns True when a typing step is recorded rather than run.
+ */
+export const defersTyping = (): boolean => recording !== null && !attempts;
+
+/**
+ * Runs what depends on a type. During a compile it is recorded for the typing pass, which runs it once the
+ * slot widths are known; otherwise, or inside a fallback attempt, it runs at once.
+ *
+ * @param run  The step.
+ */
+export function whenTyped(run: () => void): void {
+  if (recording && !attempts) {
+    recording.push({kind: 'typingStep', run, location: currentLoc()});
+    return;
+  }
+
+  run();
 }
 
 /**
@@ -247,26 +283,60 @@ export function runChecks(checks: IrCheck[]): void {
 }
 
 /**
- * Lowers with its checks recorded rather than run. When lowering fails, the checks recorded before the
- * failure run first, so the first problem in the app is the one reported, as when every check ran at once.
+ * Lowers with its checks and typing steps recorded rather than run, then runs the typing pass: each step, in
+ * the order lowering recorded it, until one fails. That one becomes a check, so the check pass reports the first
+ * problem in the app. When lowering fails, both passes run over what was recorded before the failure, so the
+ * first problem is still the one reported.
  *
  * @param lower  The lowering.
+ * @param beforeTyping  Runs once lowering is over, before the typing pass.
  *
  * @returns What lowering returns, and its checks, in order.
  */
-export function lowerWithChecks<Result>(lower: () => Result): {
+export function lowerWithChecks<Result>(
+  lower: () => Result,
+  beforeTyping: () => void = () => {},
+): {
   result: Result;
   checks: IrCheck[];
 } {
-  const checks: IrCheck[] = [];
+  const steps: (IrCheck | TypingStep)[] = [];
   const outer = recording;
-  recording = checks;
+  recording = steps;
+  let lowered: {result: Result} | {error: unknown};
   try {
-    return {result: lower(), checks};
+    lowered = {result: lower()};
   } catch (error) {
-    runChecks(checks);
-    throw error;
+    lowered = {error};
   } finally {
     recording = outer;
   }
+
+  beforeTyping();
+  const checks: IrCheck[] = [];
+  for (const step of steps) {
+    if (step.kind !== 'typingStep') {
+      checks.push(step);
+      continue;
+    }
+
+    try {
+      step.run();
+    } catch (error) {
+      locateError(error, step.location);
+      checks.push({
+        kind: 'typing',
+        problem: error as AotError,
+        location: (error as AotError).aotLoc,
+      });
+      break;
+    }
+  }
+
+  if ('error' in lowered) {
+    runChecks(checks);
+    throw lowered.error;
+  }
+
+  return {result: lowered.result, checks};
 }

@@ -38,8 +38,7 @@ const appOf = (before: string, body: string) =>
   `${HEAD}${before}\nexport function App() {\n${body}\n}`;
 
 const compile = (source: string) => compilePackage(source, 'app', SCREEN);
-const lower = (source: string) =>
-  lowerApp(source, resolveOptions(SCREEN), new Map(), []);
+const lower = (source: string) => lowerApp(source, resolveOptions(SCREEN));
 
 /** The slots each node reads, for every node. */
 const readsOf = (source: string) =>

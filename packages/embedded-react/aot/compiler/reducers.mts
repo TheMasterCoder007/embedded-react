@@ -24,7 +24,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {lowerSourcedWide} from './expressions.mts';
+import {lowerLocal} from './expressions.mts';
 import {exits, statementsOf} from './helper-values.mts';
 import {AstLeaf, isObjectTree, objectTreeOf} from './records.mts';
 import {
@@ -70,15 +70,7 @@ function folded(node: t.Node, scope: Scope): {value: unknown} | undefined {
  * @returns The local.
  */
 function localOf(node: t.Node, environment: Env): Local {
-  const value = lowerSourcedWide(node, environment);
-  return {
-    slotKind: value.slotKind,
-    isBoolean: value.isBoolean,
-    isLiteral: value.isLiteral,
-    wide: value.wide,
-    source: value.source,
-    expression: value.expression,
-  };
+  return lowerLocal(node, environment);
 }
 
 /**

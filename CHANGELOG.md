@@ -96,6 +96,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   item's kind.
 - Flow B: interrupting one animation of a `parallel` stops the rest, as in Flow A. `stopTogether: false` lets them
   run on.
+- Flow B: an app whose state or refs hold a timestamp compiles in one pass, instead of again for each slot widened
+  to 64 bits.
 
 ### Fixed
 

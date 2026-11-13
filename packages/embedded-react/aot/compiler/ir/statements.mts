@@ -45,7 +45,7 @@ export interface IrDeclareLocal {
   text?: IrText;
   /** Kept in a slot (a dep-driven effect's local its cleanup reads), so only assigned here. */
   isHoisted: boolean;
-  /** A whole-number `let` widened to hold what it is later set to (see compileWidened). */
+  /** A whole-number `let` widened to hold what it is later set to. */
   widenedTo?: 'float' | 'int64';
 }
 

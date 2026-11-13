@@ -81,7 +81,7 @@ describe('vector IR: updateVector', () => {
         ['art', {kind: 'node', slotName: 'ref_art', used: false}],
       ]),
       event: 'e',
-      math64: false,
+      math64: undefined,
       caps: {listCap: 8, listStrCap: 48, maxTextSpans: 4},
       stores: [],
     };

@@ -41,8 +41,7 @@ const appOf = (before: string, body: string) =>
   `${HEAD}${before}\nexport function App() {\n${body}\n}`;
 
 const compile = (source: string) => compilePackage(source, 'app', SCREEN);
-const lower = (source: string) =>
-  lowerApp(source, resolveOptions(SCREEN), new Map(), []);
+const lower = (source: string) => lowerApp(source, resolveOptions(SCREEN));
 
 /** Each state's JS name and slot name. */
 const statesOf = (source: string) =>

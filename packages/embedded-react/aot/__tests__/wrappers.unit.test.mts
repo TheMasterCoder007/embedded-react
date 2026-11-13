@@ -34,8 +34,7 @@ const HEAD =
 const appOf = (before: string, body: string) =>
   `${HEAD}${before}\nexport function App() {\n${body}\n}`;
 
-const lower = (source: string) =>
-  lowerApp(source, resolveOptions(SCREEN), new Map(), []);
+const lower = (source: string) => lowerApp(source, resolveOptions(SCREEN));
 
 /** The package an app compiles to, as text to compare. */
 const packageOf = (source: string) =>

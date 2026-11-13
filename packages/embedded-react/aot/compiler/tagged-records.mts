@@ -22,6 +22,8 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {aotError} from './diagnostics.mts';
+import {stateRead, stateShape} from './expressions.mts';
+import {holdLater} from './typing.mts';
 import {
   HiddenField,
   RuntimeLeaf,
@@ -87,13 +89,19 @@ const tagLeaves = new WeakMap<RuntimeLeaf, RecordState>();
  *
  * @returns The local.
  */
-export const stateLocal = (state: ScalarState): Local => ({
-  slotKind: state.slotKind,
-  isBoolean: state.isBoolean,
-  ...(state.widened === 'number' ? {isLiteral: true} : {}),
-  source: {kind: 'state', state, location: undefined},
-  expression: {kind: 'state', state, type: stateType(state)},
-});
+export const stateLocal = (state: ScalarState): Local =>
+  holdLater(
+    {
+      source: {kind: 'state', state, location: undefined},
+      expression: stateRead(state),
+    },
+    stateShape(state),
+    () => ({
+      slotKind: state.slotKind,
+      isBoolean: state.isBoolean,
+      ...(state.widened === 'number' ? {isLiteral: true} : {}),
+    }),
+  );
 
 /**
  * A tag value as code writes it.

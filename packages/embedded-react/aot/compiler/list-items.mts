@@ -20,6 +20,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {readLocalOf, settledOf} from './typing.mts';
 import {aotError} from './diagnostics.mts';
 import type {IrExpr, IrItemField} from './ir/expressions.mts';
 import type {ItemField, ItemStruct} from './types.mts';
@@ -301,11 +302,11 @@ export function fieldsUnder(struct: ItemStruct, path: string[]): ItemField[] {
  * @returns The read, or null.
  */
 export function itemReadOf(expression: IrExpr): IrItemField | null {
-  if (expression.kind === 'itemField') {
-    return expression;
+  const settled = settledOf(expression);
+  if (settled?.kind === 'itemField') {
+    return settled;
   }
-  if (expression.kind === 'local' && expression.local.expression) {
-    return itemReadOf(expression.local.expression);
-  }
-  return null;
+
+  const local = readLocalOf(expression);
+  return local?.expression ? itemReadOf(local.expression) : null;
 }

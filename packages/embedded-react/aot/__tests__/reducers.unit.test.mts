@@ -56,7 +56,7 @@ const compile = (source: string) => compilePackage(source, 'app', SCREEN);
 
 /** Each handler's statements. */
 const handlersOf = (source: string): IrStmt[][] =>
-  lowerApp(source, resolveOptions(SCREEN), new Map(), []).output.handlers.map(
+  lowerApp(source, resolveOptions(SCREEN)).output.handlers.map(
     handler => handler.callback.body,
   );
 

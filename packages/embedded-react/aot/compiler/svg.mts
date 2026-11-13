@@ -18,6 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {settledOf} from './typing.mts';
 import {check, checkNumber} from './check.mts';
 import {lowerStyle, NODE_TYPES} from '../style-map.mts';
 import {
@@ -838,9 +839,10 @@ const tapeChain = (
  */
 function tapeLiteral(value: IrTapeValue | null): number | null {
   if (value?.kind === 'number') return value.value;
-  return value?.kind === 'float' && value.value.kind === 'number'
-    ? value.value.value
-    : null;
+  if (value?.kind !== 'float') return null;
+  // A value not typed yet is no literal: lowering types a literal at once.
+  const settled = settledOf(value.value);
+  return settled?.kind === 'number' ? settled.value : null;
 }
 
 /**
@@ -1345,7 +1347,7 @@ function lowerSvgBox(
   // A value worked out at boot is set once, so only one state drives is refused.
   const readsOnlyBoot = (assign: DynAssign): boolean =>
     (assign.value.kind === 'dimension' || assign.value.kind === 'opacity') &&
-    assign.value.value.kind === 'boot';
+    settledOf(assign.value.value)?.kind === 'boot';
   if (!dynamicAssigns.every(readsOnlyBoot)) {
     throw aotError(
       'AOT: a state-driven style on an <Svg> is not supported',

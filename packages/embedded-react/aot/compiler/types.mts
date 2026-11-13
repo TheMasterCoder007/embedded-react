@@ -96,8 +96,10 @@ export interface Local extends SlotValue {
   source?: IrSource;
   /** The typed expression it stands for, when every read of it is that expression (a memo, a prop). */
   expression?: IrExpr;
-  /** A `let`, which assignments may set: the key its width is inferred under (see compileWidened). */
+  /** A `let`, which assignments may set: the key its width is inferred under. */
   assignable?: string;
+  /** A `let`: what it was declared with, which the typing pass reads when it infers slot widths. */
+  declared?: IrSource;
   /** A `for` loop's counter, which only the loop sets. */
   counter?: boolean;
   /** The lowest and highest value a `for` loop's counter takes, which bounds a loop inside it. */
@@ -136,7 +138,7 @@ export interface ScalarState extends StateSlot {
   initial: number | string;
   /** Fed by the host through an input (useHostValue). */
   host: boolean;
-  /** What it holds once widened to 64 bits (see compileWidened). */
+  /** What it holds once widened to 64 bits. */
   widened?: WideSlot;
   /** An initial value derived from `screen`, until settleBootInitials settles it. */
   bootValue?: BootValue;
@@ -242,7 +244,7 @@ export interface ValueRef {
   slotName: string;
   slotKind: 'int' | 'float' | 'i64';
   initial: number;
-  /** What it holds once widened to 64 bits (see compileWidened). */
+  /** What it holds once widened to 64 bits. */
   widened?: WideSlot;
   /** Whether the app reads or writes it; an unused ref declares nothing. */
   used: boolean;
@@ -418,7 +420,7 @@ export interface Env {
   svgImports: Map<string, AssetImport>;
   svgArtifacts: Record<string, SvgArtifact>;
   caps: Caps;
-  /** State and ref slots declared 64-bit this pass, and what each holds (see compileWidened). */
+  /** The slots the typing pass widens, and what each holds; empty until lowering is over. */
   wide: SlotWidths;
   /** Collects every value stored into an int slot, from which the typing pass infers the slots to widen. */
   stores: IrSlotStore[];
@@ -445,8 +447,8 @@ export interface Env {
   /** A PanResponder callback's gestureState parameter, and the responder it belongs to. */
   gesture?: string | null;
   pan?: PanResponderRecord | null;
-  /** Whole-number math is being worked out in 64 bits, beside a timestamp. */
-  math64?: boolean;
+  /** Whether whole-number math is worked out in 64 bits, for a 64-bit slot: asked once the slot's width is known. */
+  math64?: () => boolean;
   /** Handler locals bound to an Animated composition, which `.start()` / `.stop()` compile. */
   animationLocals?: Map<string, t.Expression>;
   /** Constant arrays read by a runtime index, each kept as a list whose rows never change. */

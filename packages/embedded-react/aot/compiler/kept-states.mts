@@ -24,6 +24,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {defersTyping, whenTyped} from './check.mts';
 import type {IrStmt} from './ir/statements.mts';
 import type {Out} from './out.mts';
 import type {ScalarState} from './types.mts';
@@ -53,8 +54,9 @@ export function readingLatest(
   states: ReadonlySet<ScalarState>,
 ): IrStmt[] {
   if (!states.size) return statements;
+  // Each is marked in place: the typing pass has yet to fill some in, which a copy would miss.
   return statements.map(statement => {
-    const marked = {...statement, readsLatest: states};
+    const marked = Object.assign(statement, {readsLatest: states});
     switch (marked.kind) {
       case 'if':
         marked.consequent = readingLatest(marked.consequent, states);
@@ -175,8 +177,15 @@ function statesReadAfterSet(body: IrStmt[]): ScalarState[] {
  * @returns The body, after the copies when it needs any.
  */
 export function keepingStates(body: IrStmt[], output: Out): IrStmt[] {
-  const states = statesReadAfterSet(body);
-  if (!states.length) return body;
-  states.forEach(state => output.keptStates.add(state));
-  return [{kind: 'keepStates', states}, ...body];
+  // What the body reads is known once it is typed, so the copies are found then: none leaves nothing to keep.
+  const states: ScalarState[] = [];
+  const kept: IrStmt[] = [{kind: 'keepStates', states}, ...body];
+  whenTyped(() => {
+    states.push(...statesReadAfterSet(body));
+    states.forEach(state => output.keptStates.add(state));
+    if (!states.length && kept[0]?.kind === 'keepStates') {
+      kept.shift();
+    }
+  });
+  return defersTyping() || states.length ? kept : body;
 }

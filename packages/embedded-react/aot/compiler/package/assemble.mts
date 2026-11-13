@@ -35,8 +35,6 @@ import {lowerPackage} from './lower.mts';
 import {writeDebug, writeProgram} from './writer.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {IrBootAssumption} from '../ir/boot.mts';
-import type {IrSlotStore} from '../ir/source.mts';
-import type {SlotWidths} from '../ir/types.mts';
 import type {AssetImport} from '../types.mts';
 import type {Program, ProgramPanel, TableSize} from './writer.mts';
 
@@ -102,18 +100,14 @@ const WORDS_PER_LINE = 8;
  *
  * @param source  The App.jsx/App.tsx source text.
  * @param options  compilePackage's options, resolved (see resolveOptions), with the panel as the screen.
- * @param wide  State/ref slots to declare 64-bit.
- * @param stores  Collects every value stored into an int slot.
  *
  * @returns The panel's program, and its images.
  */
 export function compilePanel(
   source: string,
   options: ResolvedOptions,
-  wide: SlotWidths,
-  stores: IrSlotStore[],
 ): PanelProgram {
-  const app = lowerApp(source, options, wide, stores);
+  const app = lowerApp(source, options);
   return {
     program: lowerPackage(app, options),
     images: app.images,

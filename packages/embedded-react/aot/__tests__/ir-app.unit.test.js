@@ -23,7 +23,7 @@ import {resolveOptions} from '../compiler/options.mts';
 const options = resolveOptions({});
 
 /** The app a source lowers to. */
-const lower = source => lowerApp(source, options, new Map(), []);
+const lower = source => lowerApp(source, options);
 
 describe('the lowered app: functions', () => {
   /** An app module around a component body and the JSX it returns. */

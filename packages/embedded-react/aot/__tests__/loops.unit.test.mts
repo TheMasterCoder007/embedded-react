@@ -65,7 +65,7 @@ function lowered(handler: string): {statements: IrStmt[]; environment: Env} {
     locals: new Map(),
     constants: scope,
     refs: new Map(),
-    math64: false,
+    math64: undefined,
     caps: CAPS,
     wide: new Map(),
     stores: [],

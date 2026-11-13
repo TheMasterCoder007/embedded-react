@@ -38,7 +38,7 @@ const envWith = (...slots) => ({
   locals: new Map(),
   constants: {},
   refs: new Map(),
-  math64: false,
+  math64: undefined,
 });
 
 const lower = (source, environment = envWith()) =>

@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {checkNumber, lowerWithChecks, runChecks} from './check.mts';
+import {checkNumber, lowerWithChecks, runChecks, whenTyped} from './check.mts';
 import {
   evalStatic,
   rethrowFoldLimit,
@@ -30,7 +30,8 @@ import {
   bindBuiltValues,
   findShadowedClockCalls,
   foldRuntime,
-  lowerSourcedWide,
+  inferWideSlots,
+  lowerLocal,
   lowerExpr,
 } from './expressions.mts';
 import {
@@ -80,6 +81,7 @@ import {
 } from './ir/reads.mts';
 import type {IrApp} from './ir/app.mts';
 import type {IrSlotStore} from './ir/source.mts';
+import {wideSlotOf} from './ir/types.mts';
 import type {SlotWidths} from './ir/types.mts';
 import type {IrElement} from './ir/nodes.mts';
 import type {IrCallback, IrStmt} from './ir/statements.mts';
@@ -235,26 +237,44 @@ function checkStateRecords(stateRecords: StateRecord[]): void {
 }
 
 /**
- * Lowers a Flow B app's JSX (or TSX) source, then runs the check pass over what lowering recorded. Pure (no
- * I/O); the package backend (package/) writes the result.
+ * Widens each int slot that has to hold 64 bits. A state or ref slot is typed from its initial value, so
+ * `useState(0)` is an int until a setter stores Date.now() in it; the values lowering stored into the int slots
+ * say which hold a timestamp or a number past the int range, following one through every slot it reaches.
+ *
+ * @param wide  Takes the slots widened, and what each holds.
+ * @param stores  Every value lowering stored into an int slot.
+ */
+function widenSlots(wide: SlotWidths, stores: IrSlotStore[]): void {
+  for (const [slot, width] of inferWideSlots(stores, new Map())) {
+    wide.set(slot, width);
+  }
+
+  for (const {slot, target} of stores) {
+    const width = wideSlotOf(wide, slot);
+    if (target && width) {
+      target.slotKind = 'i64';
+      target.widened = width;
+    }
+  }
+}
+
+/**
+ * Lowers a Flow B app's JSX (or TSX) source, widens the slots that hold 64 bits, then runs the typing pass and
+ * the check pass over what lowering recorded. Pure (no I/O); the package backend (package/) writes the result.
  *
  * @param source  The App.jsx/App.tsx source text.
  * @param options  compilePackage's options, resolved (see resolveOptions).
- * @param wide  State/ref slots to declare 64-bit (see compileWidened).
- * @param stores  Collects every value stored into an int slot.
  *
  * @returns The lowered app.
  */
-export function lowerApp(
-  source: string,
-  options: ResolvedOptions,
-  wide: SlotWidths,
-  stores: IrSlotStore[],
-): IrApp {
+export function lowerApp(source: string, options: ResolvedOptions): IrApp {
   beginBoot(source);
   try {
-    const {result, checks} = lowerWithChecks(() =>
-      lowerProgram(source, options, wide, stores),
+    const wide: SlotWidths = new Map();
+    const stores: IrSlotStore[] = [];
+    const {result, checks} = lowerWithChecks(
+      () => lowerProgram(source, options, wide, stores),
+      () => widenSlots(wide, stores),
     );
     const app = {...result, boot: endBoot(), checks};
     runChecks(app.checks);
@@ -270,7 +290,7 @@ export function lowerApp(
  *
  * @param source  The App.jsx/App.tsx source text.
  * @param options  compilePackage's options, resolved (see resolveOptions).
- * @param wide  State/ref slots to declare 64-bit (see compileWidened).
+ * @param wide  Takes the slots the typing pass widens.
  * @param stores  Collects every value stored into an int slot.
  *
  * @returns The lowered app, without its checks.
@@ -404,7 +424,6 @@ function lowerProgram(
     scope,
     options.caps,
     '',
-    wide,
     ast.program,
   );
   for (const name of state.byName.keys()) {
@@ -414,7 +433,7 @@ function lowerProgram(
   // Collect the component's other hooks, plus the file's helpers and child components.
   const rootJSX = findReturnJSX(component.body as BlockStatement, scope);
   const animations = collectAnims(component.body, scope);
-  const refs = collectRefs(component.body, scope, '', wide);
+  const refs = collectRefs(component.body, scope);
   for (const name of [...animations.keys(), ...refs.keys()]) {
     delete scope[name];
   }
@@ -483,15 +502,7 @@ function lowerProgram(
         setBinding(scope, name, foldRuntime(expression, environment));
         continue;
       }
-      const memo = lowerSourcedWide(expression, environment);
-      environment.locals.set(name, {
-        slotKind: memo.slotKind,
-        isBoolean: memo.isBoolean,
-        isLiteral: memo.isLiteral,
-        wide: memo.wide,
-        source: memo.source,
-        expression: memo.expression,
-      });
+      environment.locals.set(name, lowerLocal(expression, environment));
       delete scope[name]; // a runtime binding beats a module const of its name in every fold
     }
   }
@@ -528,18 +539,21 @@ function lowerProgram(
   const workedValues = [...environment.workedValues!.values()].flatMap(
     values => [...values.values()],
   );
-  const hasUpdate =
-    nodesOf(root).some(
-      node => isStateDriven(node) || updatedVectorOf(node) !== null,
-    ) ||
-    conditionalsOf(root).some(conditional => !conditional.toggle) ||
-    output.dependencyEffects.length > 0 ||
-    derivedLists.length > 0 ||
-    workedValues.length > 0;
-  settleFunctions(output, hasUpdate);
-  if (hasUpdate) {
-    watchState(root, derivedLists, workedValues);
-  }
+  // What the tree reads is known once it is typed.
+  whenTyped(() => {
+    const hasUpdate =
+      nodesOf(root).some(
+        node => isStateDriven(node) || updatedVectorOf(node) !== null,
+      ) ||
+      conditionalsOf(root).some(conditional => !conditional.toggle) ||
+      output.dependencyEffects.length > 0 ||
+      derivedLists.length > 0 ||
+      workedValues.length > 0;
+    settleFunctions(output, hasUpdate);
+    if (hasUpdate) {
+      watchState(root, derivedLists, workedValues);
+    }
+  });
 
   const stateRecords = [
     ...state.byName.values(),

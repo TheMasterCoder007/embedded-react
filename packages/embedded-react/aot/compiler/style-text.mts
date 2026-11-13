@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import {attemptLowering, check} from './check.mts';
+import {shapeOf} from './typing.mts';
 import {
   BootReadError,
   bootEnvOf,
@@ -389,7 +390,7 @@ function lowerDynamicStyleValue(
 
   // Opacity and every size are numbers.
   const valueExpression = lowerExpr(valueNode, environment);
-  if (valueExpression.type.kind === 'string') {
+  if (shapeOf(valueExpression) === 'string') {
     const error = aotError(
       `AOT: style "${key}" needs a number, but the value is a string`,
       "JS would coerce the string; the AOT doesn't. Keep the state numeric — useState(10), not useState('10').",
@@ -535,7 +536,7 @@ function lowerBootStyleValue(
   }
 
   const value = lowerExpr(valueNode, environment);
-  if (value.type.kind !== 'int' && value.type.kind !== 'float') {
+  if (shapeOf(value) !== 'number') {
     throw new Error(`AOT: style "${key}" needs a number`);
   }
 

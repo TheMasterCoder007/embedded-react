@@ -27,13 +27,11 @@ import {
   evalStaticOr,
 } from './static-eval.mts';
 import {INT_MAX, lowerExpr} from './expressions.mts';
-import {NO_WIDE, isFn, wideInitial} from './collect.mts';
+import {isFn, wideInitial} from './collect.mts';
 import {lowerBody} from './handlers.mts';
 import {isPanCreate} from './pan-responder.mts';
 import {parseColorValue} from '../style-map.mts';
 import type * as t from '@babel/types';
-import type {SlotWidths} from './ir/types.mts';
-import {wideSlotOf} from './ir/types.mts';
 import type {
   IrAnimation,
   IrAnimationSequence,
@@ -255,7 +253,6 @@ export function collectAnims(
  * @param functionBody  The component's body.
  * @param scope  Compile-time constants the initial values fold against.
  * @param prefix  The name prefix: none for the App, `c<n>_` for an inlined instance.
- * @param wide  Slots to declare 64-bit (see compileWidened).
  *
  * @returns The refs, by name.
  */
@@ -263,7 +260,6 @@ export function collectRefs(
   functionBody: t.BlockStatement | t.Expression,
   scope: Scope,
   prefix = '',
-  wide: SlotWidths = NO_WIDE,
 ): Map<string, RefRecord> {
   // Collect ref records by their JS binding name.
   const refs = new Map<string, RefRecord>();
@@ -318,12 +314,11 @@ export function collectRefs(
           throw error;
         }
 
-        // A ref a timestamp or a number past the int range is written to hold 64 bits (see compileWidened).
+        // A ref that starts past the int range holds 64 bits; one a timestamp is written to is widened later.
         const initialWidth = wideInitial(value);
         const widened =
-          Number.isInteger(value) && initialWidth !== 'float'
-            ? (wideSlotOf(wide, slotName) ??
-              (initialWidth === 'number' ? 'number' : undefined))
+          Number.isInteger(value) && initialWidth === 'number'
+            ? 'number'
             : undefined;
         const slotKind =
           !Number.isInteger(value) || initialWidth === 'float'
