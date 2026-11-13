@@ -2476,6 +2476,49 @@ export function App() {
     ).toContain('SET32');
   });
 
+  it('runs a sequence in a stagger as a sequence in its tree, toValues in the order the tree lists them', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  const a = useAnimatedValue(0);
+  const b = useAnimatedValue(0);
+  const c = useAnimatedValue(0);
+  return (
+    <Pressable onPress={() => Animated.stagger(80, [Animated.sequence([Animated.timing(a, {toValue: n + 1}), Animated.timing(b, {toValue: 1}), Animated.delay(40)]), Animated.timing(c, {toValue: n * 2})]).start()}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(source, 'app', SCREEN);
+    const anims = animsOf(program);
+    expect(anims.map(animation => animation.kind)).toEqual([
+      AnimationKind.stagger,
+      AnimationKind.timing,
+      AnimationKind.sequence,
+      AnimationKind.timing,
+      AnimationKind.timing,
+      AnimationKind.timing,
+    ]);
+    expect(anims[0]).toMatchObject({first: 1, count: 2, amount: 0});
+    expect(anims[1].delayMs).toBe(80);
+    expect(anims[2]).toMatchObject({first: 3, count: 3});
+    expect(anims[5]).toMatchObject({target: NONE, amount: 40});
+    const press = functionsOf(program)[0];
+    const names = press.ops.map(instruction => instruction.name);
+    // The stagger's own timing comes before the sequence's steps, so its toValue (n * 2) is worked out first.
+    expect(names.indexOf('MUL')).toBeLessThan(names.indexOf('ADD'));
+    // The run before is stopped, and this one kept in its place.
+    expect(names.indexOf('ASTOP')).toBeLessThan(names.indexOf('ASTART'));
+    expect(names.indexOf('ASTART')).toBeLessThan(names.lastIndexOf('SET32'));
+    // Three values and one more, and the tree's block twice; no waits of its own.
+    expect(
+      regionsOf(program).find(region => region.kind === Region.animations)
+        .count,
+    ).toBe(16);
+  });
+
   it('gives an app that only waits a running-animation table for its delay', () => {
     const source = `
 import {useState} from 'react';

@@ -101,6 +101,31 @@ export interface IrAnimationGroup {
     /** The composition the run belongs to, which a stop names to end it. */
     owner: number;
   } | null;
+  /** The composition a group with sequences is kept under, so starting it again stops the run before; else null. */
+  owner: number | null;
+}
+
+/** One step of a sequence in a group: an animation, a delay, or a parallel or stagger of its own. */
+export type IrSequenceStep =
+  | {kind: 'animation'; animation: IrAnimation}
+  | {kind: 'delay'; delayMs: number}
+  | {
+      kind: 'group';
+      /** An interrupted animation stops the rest, as a parallel does. */
+      stopsTogether: boolean;
+      /** Its animations, their delays counted from when the step starts. */
+      animations: IrAnimation[];
+      sequences: IrAnimationSequence[];
+      /** Its last delay, when it ends after an animation may have; null when none does. */
+      waitMs: number | null;
+    };
+
+/**
+ * A sequence inside a parallel or stagger: each step starts when the one before finishes, and a step that is
+ * interrupted ends the sequence as not finished.
+ */
+export interface IrAnimationSequence {
+  steps: IrSequenceStep[];
 }
 
 /**
@@ -110,9 +135,11 @@ export interface IrAnimationGroup {
 export interface IrStartAnimations {
   kind: 'startAnimations';
   animations: IrAnimation[];
+  /** The sequences that run beside them; only a group has any. */
+  sequences: IrAnimationSequence[];
   completion: IrCompletion | null;
   completionWait: IrCompletionWait | null;
-  /** Set when the end cannot be known at build time, or several animations are waited on or stop together. */
+  /** Set when the end cannot be known at build time, several animations are waited on or stop together, or a sequence runs. */
   group: IrAnimationGroup | null;
 }
 

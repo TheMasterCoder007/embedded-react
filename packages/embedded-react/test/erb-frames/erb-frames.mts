@@ -970,6 +970,61 @@ const SCENARIOS: Scenario[] = [
     settle: 600,
     flowA: true,
   },
+  // Buttons: a stagger of a two-step sequence and a timing, a timing that cuts the sequence's first step, the stagger
+  // with no completion, two sequences side by side, a sequence that ends on a delay.
+  {
+    name: 'anim-nested',
+    file: fixture('animation-nested-sequences'),
+    screen: PORTRAIT,
+    taps: '28,23',
+    settle: 700,
+    flowA: true,
+  },
+  // Cutting the sequence's first step: its second never starts, and the stagger's timing runs on.
+  {
+    name: 'anim-nested-poke',
+    file: fixture('animation-nested-sequences'),
+    screen: PORTRAIT,
+    taps: '28,23 74,23',
+    settle: 700,
+    flowA: true,
+  },
+  // Started again mid-way: the run before is stopped, and this one runs to its end.
+  {
+    name: 'anim-nested-again',
+    file: fixture('animation-nested-sequences'),
+    screen: PORTRAIT,
+    taps: '28,23 28,23 28,23',
+    settle: 700,
+    flowA: true,
+  },
+  // The same without a completion.
+  {
+    name: 'anim-nested-bare-poke',
+    file: fixture('animation-nested-sequences'),
+    screen: PORTRAIT,
+    taps: '120,23 74,23',
+    settle: 700,
+    flowA: true,
+  },
+  // The other sequence runs both its steps.
+  {
+    name: 'anim-nested-two-poke',
+    file: fixture('animation-nested-sequences'),
+    screen: PORTRAIT,
+    taps: '166,23 74,23',
+    settle: 700,
+    flowA: true,
+  },
+  // A spring, then a timing of the same value, then a delay the completion waits on.
+  {
+    name: 'anim-nested-wait-done',
+    file: fixture('animation-nested-sequences'),
+    screen: PORTRAIT,
+    taps: '212,23',
+    settle: 3000,
+    flowA: true,
+  },
   {name: 'interpolate', file: fixture('interpolate'), screen: PORTRAIT},
   {
     name: 'interpolate-spin',

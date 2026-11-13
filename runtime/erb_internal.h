@@ -302,7 +302,7 @@ typedef struct
     uint16_t generation; /**< Generation, so a stale anim register doesn't match a reused entry. */
     uint16_t engine;     /**< The engine's handle while a leaf runs. */
     uint16_t step;       /**< Sequence: the child running. Parallel and stagger: children still running. */
-    uint16_t passes;     /**< Loop: passes finished. */
+    uint16_t passes;     /**< Loop: passes finished. Stagger: 1 once a child has stopped. */
     uint16_t done_fn;    /**< Root: the function to run when the tree finishes, or ERB_NONE. */
     uint8_t state;       /**< ErbAnimState. */
     uint8_t first;       /**< 1 when this entry is the first of its tree's block. */

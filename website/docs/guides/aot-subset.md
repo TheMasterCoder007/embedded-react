@@ -252,14 +252,17 @@ character it cannot find. See [Assets](../concepts/assets.md).
 
 - `Animated.timing`, `spring`, `decay`, `sequence`, `parallel`, `stagger`, `delay` and `loop` all
   compile, with `.start()` and `anim.stop()`. `loop` can repeat a timing, spring, decay or sequence
-  (not a parallel or stagger), and `iterations` must be a build-time constant. A `sequence` takes
-  `timing`, `spring`, `decay` and `delay` entries, but not a nested `parallel`, `stagger` or `loop`;
-  a sequence inside a `parallel` or `stagger` needs a known duration, so no spring or decay there. A
-  `.start(callback)` on a `parallel` or `stagger` runs once every animation and delay in it has ended.
-  When one is interrupted the callback runs at once with `finished: false`. Interrupting one of a
-  `parallel`'s animations stops the rest, with a callback or without (unless `stopTogether: false`);
-  a `stagger`'s animations run on. A `parallel`, or a `stagger` with a callback, takes up to 31
-  animations, or 30 when its callback waits on a delay that outlasts them.
+  (not a parallel or stagger), and `iterations` must be a build-time constant. A `sequence` you
+  start takes `timing`, `spring`, `decay` and `delay` entries, but not a nested `parallel`,
+  `stagger` or `loop`. A sequence inside a `parallel` or `stagger` takes a `parallel` or `stagger`
+  too, and ends when one of its steps is interrupted. A `.start(callback)` on a `parallel` or
+  `stagger` runs once every animation and delay in it has ended. When one is interrupted the
+  callback runs at once with `finished: false`. Interrupting one of a `parallel`'s animations stops
+  the rest, with a callback or without (unless `stopTogether: false`); a `stagger`'s animations run
+  on. A `parallel`, or a `stagger` with a callback, takes up to 31 animations, or 30 when its
+  callback waits on a delay that outlasts them. A sequence of several steps inside one counts
+  towards that, with each of its steps and delays, and starting such a `parallel` or `stagger`
+  again stops the run before it.
 - `interpolate` takes an object literal with `inputRange` and `outputRange` of equal length, up to
   8 breakpoints.
 - The engine drives every animation natively once started, in both flows.

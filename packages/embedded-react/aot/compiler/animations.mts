@@ -36,6 +36,7 @@ import type {SlotWidths} from './ir/types.mts';
 import {wideSlotOf} from './ir/types.mts';
 import type {
   IrAnimation,
+  IrAnimationSequence,
   IrAnimationStart,
   IrAnimCurve,
   IrCompleteAfter,
@@ -78,9 +79,25 @@ interface AnimEntry {
   loop: boolean;
 }
 
-/** A flattened composition: its atomic entries and its own run length (null when not fixed). */
+/** One step of a sequence that runs inside a parallel or stagger. */
+type AnimSequenceStep =
+  | {kind: 'animation'; entry: AnimEntry}
+  | {kind: 'delay'; delayMs: number}
+  /** A parallel or stagger, flattened from the moment the step starts. */
+  | {kind: 'group'; stopsTogether: boolean; flat: FlatAnimation};
+
+/** A sequence inside a parallel or stagger, run step by step so a step that is interrupted ends it. */
+interface AnimSequence {
+  steps: AnimSequenceStep[];
+}
+
+/**
+ * A flattened composition: its atomic entries, the sequences that run beside them, and its own run length (null
+ * when not fixed; a sequence that runs step by step adds nothing to it).
+ */
 interface FlatAnimation {
   entries: AnimEntry[];
+  sequences: AnimSequence[];
   duration: number | null;
 }
 
@@ -673,11 +690,236 @@ function lowerAnimation(entry: AnimEntry, environment: Env): IrAnimation {
 }
 
 /**
+ * The latest a composition's delays end, when that may be after its animations do: what a group waits on.
+ *
+ * @param flat  The flattened composition.
+ * @param environment  The expression environment.
+ *
+ * @returns The wait from the composition's start, or null when an animation is known to end last.
+ */
+function outlastingDelay(flat: FlatAnimation, environment: Env): number | null {
+  const lastKnownEnd = Math.max(
+    0,
+    ...flat.entries.map(
+      animationEntry =>
+        animationEntry.delayMs +
+        (animationEntry.kind === 'timing'
+          ? timingDuration(animationEntry.get, environment)
+          : 0),
+    ),
+  );
+  return flat.duration != null && flat.duration > lastKnownEnd
+    ? flat.duration
+    : null;
+}
+
+/**
+ * The handle of every value a sequence drives.
+ *
+ * @param sequence  The sequence.
+ * @param accumulator  Collects the handles.
+ *
+ * @returns `accumulator`.
+ */
+function sequenceValues(
+  sequence: AnimSequence,
+  accumulator: Set<string> = new Set(),
+): Set<string> {
+  for (const step of sequence.steps) {
+    if (step.kind === 'animation') {
+      accumulator.add(step.entry.slotName);
+    } else if (step.kind === 'group') {
+      for (const animationEntry of step.flat.entries) {
+        accumulator.add(animationEntry.slotName);
+      }
+      for (const nested of step.flat.sequences) {
+        sequenceValues(nested, accumulator);
+      }
+    }
+  }
+
+  return accumulator;
+}
+
+/**
+ * Running-animation entries a sequence takes: its own, and one for each step, delay and animation in it.
+ *
+ * @param sequence  The sequence.
+ * @param environment  The expression environment.
+ *
+ * @returns The entries.
+ */
+function sequenceEntries(sequence: AnimSequence, environment: Env): number {
+  let count = 1;
+  for (const step of sequence.steps) {
+    if (step.kind !== 'group') {
+      count++;
+      continue;
+    }
+    count +=
+      1 +
+      (outlastingDelay(step.flat, environment) == null ? 0 : 1) +
+      step.flat.entries.length;
+    for (const nested of step.flat.sequences) {
+      count += sequenceEntries(nested, environment);
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Lowers a sequence that runs inside a parallel or stagger.
+ *
+ * @param sequence  The sequence.
+ * @param environment  The expression environment.
+ *
+ * @returns The sequence.
+ */
+function lowerSequence(
+  sequence: AnimSequence,
+  environment: Env,
+): IrAnimationSequence {
+  return {
+    steps: sequence.steps.map(step => {
+      if (step.kind === 'animation') {
+        return {
+          kind: 'animation',
+          animation: lowerAnimation(step.entry, environment),
+        };
+      }
+      if (step.kind === 'delay') {
+        return {kind: 'delay', delayMs: totalMs(step.delayMs)};
+      }
+      const waitMs = outlastingDelay(step.flat, environment);
+      return {
+        kind: 'group',
+        stopsTogether: step.stopsTogether,
+        animations: step.flat.entries.map(animationEntry =>
+          lowerAnimation(animationEntry, environment),
+        ),
+        sequences: step.flat.sequences.map(nested =>
+          lowerSequence(nested, environment),
+        ),
+        waitMs: waitMs == null ? null : totalMs(waitMs),
+      };
+    }),
+  };
+}
+
+/**
+ * Flattens a sequence inside another composition. One with a single animation is that animation, delayed. Any
+ * other runs step by step, each step started when the one before it finishes, so a step that is interrupted ends
+ * the sequence, the same value can take several steps, and a step needs no fixed length. A sequence inside it is
+ * part of it.
+ *
+ * @param sequenceNode  The sequence call.
+ * @param environment  The expression environment.
+ * @param baseDelay  When the sequence starts, in ms.
+ * @param loop  The sequence repeats forever (inside an Animated.loop).
+ *
+ * @returns Its entries, or the sequence, and its run length.
+ */
+function flattenSequence(
+  sequenceNode: AnimatedCall,
+  environment: Env,
+  baseDelay: number,
+  loop: boolean,
+): FlatAnimation {
+  const steps: AnimSequenceStep[] = [];
+  // The delays not yet given to a step: a step's own delay takes them, and a group has a delay step before it.
+  let pendingDelay = baseDelay;
+  const collect = (node: AnimatedCall): void => {
+    const list = node.arguments[0];
+    if (list?.type !== 'ArrayExpression') {
+      throw aotError(
+        'AOT: Animated.sequence(...) needs an array of animations',
+      );
+    }
+    for (const element of list.elements) {
+      if (!element) continue;
+      const child = resolveAnim(element, environment);
+      if (!isAnimatedCall(child)) {
+        throw aotError(
+          'AOT: an animation must be Animated.timing/spring/decay/sequence/parallel/stagger/delay/loop(...)',
+        );
+      }
+
+      const kind = child.callee.property.name;
+      if (kind === 'sequence') {
+        collect(child);
+      } else if (kind === 'loop') {
+        throw aotError(
+          'AOT: an Animated.loop inside an Animated.sequence is not supported',
+          'a loop around a sequence works when the loop is the animation you start: Animated.loop(Animated.sequence([...])).start().',
+        );
+      } else if (kind === 'parallel' || kind === 'stagger') {
+        const flat = flattenAnim(child, environment, 0, loop);
+        if (!flat.entries.length && !flat.sequences.length) {
+          pendingDelay += flat.duration ?? 0;
+          continue;
+        }
+        if (pendingDelay > 0) {
+          steps.push({kind: 'delay', delayMs: pendingDelay});
+          pendingDelay = 0;
+        }
+        steps.push({
+          kind: 'group',
+          stopsTogether: stopsTogether(child, environment),
+          flat,
+        });
+      } else {
+        const flat = flattenAnim(child, environment, pendingDelay, loop);
+        if (flat.entries.length) {
+          steps.push({kind: 'animation', entry: flat.entries[0]});
+          pendingDelay = 0;
+        } else {
+          pendingDelay += flat.duration ?? 0;
+        }
+      }
+    }
+  };
+  collect(sequenceNode);
+
+  // Delays alone start nothing.
+  if (!steps.length) {
+    return {entries: [], sequences: [], duration: pendingDelay - baseDelay};
+  }
+
+  // One animation needs no sequence, unless a delay follows an animation with no fixed length.
+  const [only] = steps;
+  if (
+    steps.length === 1 &&
+    only.kind === 'animation' &&
+    (only.entry.kind === 'timing' || pendingDelay === 0)
+  ) {
+    const {entry} = only;
+    return {
+      entries: [entry],
+      sequences: [],
+      duration:
+        entry.kind === 'timing'
+          ? entry.delayMs -
+            baseDelay +
+            timingDuration(entry.get, environment) +
+            pendingDelay
+          : null,
+    };
+  }
+
+  if (pendingDelay > 0) {
+    steps.push({kind: 'delay', delayMs: pendingDelay});
+  }
+
+  return {entries: [], sequences: [{steps}], duration: null};
+}
+
+/**
  * Flattens an Animated composition (timing/spring/decay/sequence/parallel/stagger/delay/loop) into a flat
- * list of atomic entries, each with an ABSOLUTE start delay (ms) — composition is realized purely through
- * per-entry delay_ms (no engine grouping needed for standalone values). Returns { entries, duration } where
- * `duration` is this node's own run length in ms, used to offset later siblings in a sequence/stagger;
- * null = unknown (spring/decay/loop), which is illegal to sequence anything after.
+ * list of atomic entries, each with an ABSOLUTE start delay (ms) — a parallel or stagger is realized purely
+ * through per-entry delay_ms. A sequence of several steps inside one is kept whole instead (flattenSequence).
+ * Returns { entries, sequences, duration } where `duration` is this node's own run length in ms, used to offset
+ * later siblings in a stagger and to know what a completion waits on; null = unknown (spring/decay/loop).
  *
  * @param node  The composition.
  * @param environment  The expression environment.
@@ -720,6 +962,7 @@ function flattenAnim(
       kind === 'timing' ? ownDelay + timingDuration(get, environment) : null;
     return {
       entries: [{slotName, kind, get, delayMs: baseDelay + ownDelay, loop}],
+      sequences: [],
       duration,
     };
   }
@@ -728,6 +971,7 @@ function flattenAnim(
   if (kind === 'delay') {
     return {
       entries: [],
+      sequences: [],
       duration: configMs(
         callArguments[0],
         environment,
@@ -737,8 +981,12 @@ function flattenAnim(
     };
   }
 
-  // Composition nodes flatten into atomic animations with absolute delay_ms offsets.
-  if (kind === 'sequence' || kind === 'parallel' || kind === 'stagger') {
+  if (kind === 'sequence') {
+    return flattenSequence(node, environment, baseDelay, loop);
+  }
+
+  // A parallel or stagger flattens into atomic animations with absolute delay_ms offsets.
+  if (kind === 'parallel' || kind === 'stagger') {
     const list = kind === 'stagger' ? callArguments[1] : callArguments[0];
     const staggerMs =
       kind === 'stagger'
@@ -753,15 +1001,17 @@ function flattenAnim(
       throw aotError(`AOT: Animated.${kind}(...) needs an array of animations`);
     }
 
-    // Sequence advances its running offset; parallel/stagger start children from the same base with offsets.
+    // Every child starts from the same base, a stagger's each an interval after the one before. A value can be
+    // driven by one child only: er_animation_value_animate cancels the running anim on a value, so two that run
+    // at once would cancel each other.
     const entries: AnimEntry[] = [];
-    let offset = baseDelay; // running offset (sequence)
-    let groupDuration = 0; // max end-time relative to baseDelay (parallel/stagger)
+    const sequences: AnimSequence[] = [];
+    const driven = new Set<string>();
+    let groupDuration = 0; // max end-time relative to baseDelay
     let index = 0;
     for (const child of list.elements) {
       if (!child) continue;
-      const start =
-        kind === 'sequence' ? offset : baseDelay + index * staggerMs;
+      const start = baseDelay + index * staggerMs;
       const flatAnimation: FlatAnimation = flattenAnim(
         child,
         environment,
@@ -769,39 +1019,31 @@ function flattenAnim(
         loop,
       );
       entries.push(...flatAnimation.entries);
-      if (kind === 'sequence') {
-        if (flatAnimation.duration == null) {
+      sequences.push(...flatAnimation.sequences);
+      const end = start - baseDelay + (flatAnimation.duration ?? 0);
+      if (end > groupDuration) {
+        groupDuration = end;
+      }
+
+      const values = new Set(
+        flatAnimation.entries.map(animationEntry => animationEntry.slotName),
+      );
+      for (const sequence of flatAnimation.sequences) {
+        sequenceValues(sequence, values);
+      }
+      for (const value of values) {
+        if (driven.has(value)) {
           throw aotError(
-            'AOT: an Animated.sequence entry needs a known duration — use Animated.timing / Animated.delay (a spring/decay/loop inside a sequence is not supported; it has no fixed length to offset the next entry by)',
+            'AOT: the same animated value is driven more than once in this composition — animations that run at once on one value cancel each other. Use an Animated.sequence(...) for multi-step animation of one value.',
           );
         }
-        offset += flatAnimation.duration;
-      } else {
-        const end = start - baseDelay + (flatAnimation.duration ?? 0);
-        if (end > groupDuration) {
-          groupDuration = end;
-        }
+        driven.add(value);
       }
 
       index++;
     }
 
-    // The same value can't appear twice in a flat (delay_ms) composition: er_animation_value_animate cancels the
-    // running anim on a value, so concurrent/flat-sequenced same-value steps cancel each other. (A
-    // top-level Animated.sequence is handled separately via on_complete chaining, which does support this.)
-    const seen = new Set<string>();
-    for (const entry of entries) {
-      if (seen.has(entry.slotName)) {
-        throw aotError(
-          'AOT: the same animated value is driven more than once in this composition — concurrent/flat same-value steps cancel each other. Use a top-level Animated.sequence(...) for multi-step animation of one value.',
-        );
-      }
-      seen.add(entry.slotName);
-    }
-    return {
-      entries,
-      duration: kind === 'sequence' ? offset - baseDelay : groupDuration,
-    };
+    return {entries, sequences, duration: groupDuration};
   }
 
   // A nested loop can flatten only when it wraps a single atomic animation; complex loops need start-time chaining.
@@ -812,13 +1054,13 @@ function flattenAnim(
       baseDelay,
       true,
     );
-    if (flatAnimation.entries.length !== 1) {
+    if (flatAnimation.entries.length !== 1 || flatAnimation.sequences.length) {
       throw aotError(
         'AOT: an Animated.loop inside another composition can only wrap a single Animated.timing/spring/decay',
         'a loop around a sequence works when the loop is the animation you start: Animated.loop(Animated.sequence([...])).start().',
       );
     }
-    return {entries: flatAnimation.entries, duration: null};
+    return {entries: flatAnimation.entries, sequences: [], duration: null};
   }
 
   throw aotError(`AOT: Animated.${kind}(...) is not a supported animation`);
@@ -1088,6 +1330,7 @@ const emptyStart = (
 ): IrStartAnimations => ({
   kind: 'startAnimations',
   animations: [],
+  sequences: [],
   completion,
   completionWait: null,
   group: null,
@@ -1127,6 +1370,7 @@ function compositionKey(
  * @param context  The statement compiler's context.
  * @param key  The composition's key.
  * @param isStart  A start is asking, so the waits are real (a stop alone leaves nothing to end).
+ * @param hasWaits  The start runs waits of their own, beside any group it runs.
  *
  * @returns The owner.
  */
@@ -1134,14 +1378,22 @@ function waitOwner(
   context: StatementContext,
   key: string,
   isStart: boolean,
+  hasWaits: boolean = isStart,
 ): number {
   let record = context.output.animationWaits.get(key);
   if (!record) {
-    record = {owner: context.output.animationWaits.size, isStarted: false};
+    record = {
+      owner: context.output.animationWaits.size,
+      isStarted: false,
+      hasWaits: false,
+    };
     context.output.animationWaits.set(key, record);
   }
   if (isStart) {
     record.isStarted = true;
+  }
+  if (hasWaits) {
+    record.hasWaits = true;
   }
 
   return record.owner;
@@ -1479,8 +1731,9 @@ export function lowerAnimateStart(
     if (start) return start;
   }
 
-  const {entries, duration} = flattenAnim(receiver, environment, 0, false);
-  if (!entries.length) {
+  const flat = flattenAnim(receiver, environment, 0, false);
+  const {entries, sequences, duration} = flat;
+  if (!entries.length && !sequences.length) {
     return startNothing(context, completion, duration ?? 0, key);
   }
 
@@ -1490,34 +1743,43 @@ export function lowerAnimateStart(
     start.animations.push(lowerAnimation(animationEntry, environment));
   }
 
-  // Several animations run as a group when a completion waits on them all, or one stopping stops the rest.
+  // Several animations run as a group when a completion waits on them all, one stopping stops the rest, or a
+  // sequence runs among them.
+  const runners = entries.length + sequences.length;
   const stopTogether =
-    entries.length > 1 && stopsTogether(receiver as AnimatedCall, environment);
-  if (entries.length > 1 && (completion || stopTogether)) {
-    const lastKnownEnd = Math.max(
-      ...entries.map(
-        animationEntry =>
-          animationEntry.delayMs +
-          (animationEntry.kind === 'timing'
-            ? timingDuration(animationEntry.get, environment)
-            : 0),
-      ),
-    );
-    const hasWait =
-      completion != null && duration != null && duration > lastKnownEnd;
-    const groupEntries = 1 + entries.length;
-    const mostAnimations = MAX_GROUP_ENTRIES - 1 - (hasWait ? 1 : 0);
-    if (entries.length > mostAnimations) {
+    runners > 1 && stopsTogether(receiver as AnimatedCall, environment);
+  if (sequences.length || (runners > 1 && (completion || stopTogether))) {
+    const waitMs = completion ? outlastingDelay(flat, environment) : null;
+    const groupEntries =
+      1 +
+      (waitMs == null ? 0 : 1) +
+      entries.length +
+      sequences.reduce(
+        (count, sequence) => count + sequenceEntries(sequence, environment),
+        0,
+      );
+    if (groupEntries > MAX_GROUP_ENTRIES) {
+      const mostAnimations = MAX_GROUP_ENTRIES - 1 - (waitMs == null ? 0 : 1);
       throw aotError(
-        `AOT: this parallel/stagger can run at most ${mostAnimations} animations as one group`,
+        sequences.length
+          ? `AOT: this parallel/stagger takes ${groupEntries} entries to run as one group, of at most ${MAX_GROUP_ENTRIES} (one for itself, and one for each animation, sequence and delay in it)`
+          : `AOT: this parallel/stagger can run at most ${mostAnimations} animations as one group`,
         'split the composition into smaller ones.',
       );
     }
     context.output.animationGroupEntries += groupEntries;
+    start.sequences = sequences.map(sequence =>
+      lowerSequence(sequence, environment),
+    );
     start.group = {
       stopsTogether: stopTogether,
-      wait: hasWait
-        ? {delayMs: totalMs(duration), owner: waitOwner(context, key, true)}
+      wait:
+        waitMs == null
+          ? null
+          : {delayMs: totalMs(waitMs), owner: waitOwner(context, key, true)},
+      // A group with sequences is kept, so starting it again stops the run before.
+      owner: sequences.length
+        ? waitOwner(context, key, true, waitMs != null)
         : null,
     };
     return start;
@@ -1538,6 +1800,7 @@ export function lowerAnimateStart(
         delayMs: totalMs(duration),
         owner: waitOwner(context, key, true),
       },
+      owner: null,
     };
   }
 

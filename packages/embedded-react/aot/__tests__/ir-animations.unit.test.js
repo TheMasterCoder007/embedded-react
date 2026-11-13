@@ -137,7 +137,11 @@ describe('animation IR: completions', () => {
       'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.timing(b, {toValue: 1})]).start(() => setN(1));',
     );
     expect(statement.animations).toHaveLength(2);
-    expect(statement.group).toEqual({stopsTogether: true, wait: null});
+    expect(statement.group).toEqual({
+      stopsTogether: true,
+      wait: null,
+      owner: null,
+    });
     expect(context.output.animationGroupEntries).toBe(3);
     expect(context.output.animationWaits.size).toBe(0);
   });
@@ -170,7 +174,11 @@ describe('animation IR: completions', () => {
     const {statement, context} = lowerOne(
       'Animated.parallel([Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1}), Animated.delay(900)]).start();',
     );
-    expect(statement.group).toEqual({stopsTogether: true, wait: null});
+    expect(statement.group).toEqual({
+      stopsTogether: true,
+      wait: null,
+      owner: null,
+    });
     expect(context.output.animationGroupEntries).toBe(3);
   });
 
@@ -198,6 +206,127 @@ describe('animation IR: completions', () => {
   });
 });
 
+describe('animation IR: sequences in a group', () => {
+  const sequence =
+    'Animated.sequence([Animated.timing(a, {toValue: 1, duration: 200}), Animated.timing(b, {toValue: 1, duration: 200})])';
+
+  it('keeps a sequence of several steps whole, so a step that is interrupted ends it', () => {
+    for (const start of ['.start(() => setN(1));', '.start();']) {
+      const {statement, context} = lowerOne(
+        `Animated.stagger(80, [${sequence}, Animated.timing(c, {toValue: 1})])${start}`,
+      );
+      expect(statement.animations.map(animation => animation.handle)).toEqual([
+        'anim_c',
+      ]);
+      expect(statement.animations[0].delayMs).toBe(80);
+      expect(statement.sequences).toHaveLength(1);
+      expect(
+        statement.sequences[0].steps.map(step => [
+          step.kind,
+          step.animation.handle,
+          step.animation.delayMs,
+        ]),
+      ).toEqual([
+        ['animation', 'anim_a', 0],
+        ['animation', 'anim_b', 0],
+      ]);
+      // Kept under the composition, so starting it again stops the run before.
+      expect(statement.group).toEqual({
+        stopsTogether: false,
+        wait: null,
+        owner: 0,
+      });
+      // The group, its timing, the sequence and its two steps.
+      expect(context.output.animationGroupEntries).toBe(5);
+      expect([...context.output.animationWaits.values()]).toEqual([
+        {owner: 0, isStarted: true, hasWaits: false},
+      ]);
+    }
+  });
+
+  it("starts a staggered sequence late through its first step's delay", () => {
+    const {statement} = lowerOne(
+      `Animated.stagger(80, [Animated.timing(c, {toValue: 1}), ${sequence}]).start();`,
+    );
+    expect(
+      statement.sequences[0].steps.map(step => step.animation.delayMs),
+    ).toEqual([80, 0]);
+  });
+
+  it('lets a sequence drive one value twice, take a spring, and end on a delay', () => {
+    const {statement, context} = lowerOne(
+      'Animated.parallel([Animated.sequence([Animated.spring(a, {toValue: 1}), Animated.delay(50), Animated.timing(a, {toValue: 0}), Animated.delay(300)]), Animated.timing(b, {toValue: 1})]).start(() => setN(1));',
+    );
+    const {steps} = statement.sequences[0];
+    expect(steps.map(step => step.kind)).toEqual([
+      'animation',
+      'animation',
+      'delay',
+    ]);
+    expect(steps[0].animation.curve.kind).toBe('spring');
+    expect(steps[1].animation.delayMs).toBe(50);
+    expect(steps[2].delayMs).toBe(300);
+    // The sequence waits on its own delay, so the group needs none.
+    expect(statement.group).toEqual({
+      stopsTogether: true,
+      wait: null,
+      owner: 0,
+    });
+    expect(context.output.animationGroupEntries).toBe(6);
+  });
+
+  it('makes a sequence in a sequence part of it, and a parallel in it a step', () => {
+    const {statement, context} = lowerOne(
+      'Animated.stagger(80, [Animated.sequence([Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.delay(40)]), Animated.parallel([Animated.timing(b, {toValue: 1, duration: 100}), Animated.delay(300)])]), Animated.timing(c, {toValue: 1})]).start();',
+    );
+    const {steps} = statement.sequences[0];
+    expect(steps.map(step => step.kind)).toEqual([
+      'animation',
+      'delay',
+      'group',
+    ]);
+    expect(steps[1].delayMs).toBe(40);
+    expect(steps[2]).toMatchObject({
+      stopsTogether: true,
+      sequences: [],
+      waitMs: 300,
+    });
+    expect(steps[2].animations[0]).toMatchObject({
+      handle: 'anim_b',
+      delayMs: 0,
+    });
+    // The group and its timing; the sequence, its timing, its delay, the parallel, and its wait and timing.
+    expect(context.output.animationGroupEntries).toBe(8);
+  });
+
+  it('flattens a sequence of one animation to that animation', () => {
+    const {statement} = lowerOne(
+      'Animated.stagger(80, [Animated.sequence([Animated.delay(20), Animated.timing(a, {toValue: 1})]), Animated.timing(b, {toValue: 1})]).start();',
+    );
+    expect(statement.sequences).toEqual([]);
+    expect(statement.group).toBeNull();
+    expect(statement.animations.map(animation => animation.delayMs)).toEqual([
+      20, 80,
+    ]);
+  });
+
+  it('refuses a value driven by a sequence and by an animation beside it', () => {
+    expect(() =>
+      lowerOne(
+        `Animated.parallel([${sequence}, Animated.timing(b, {toValue: 0})]).start();`,
+      ),
+    ).toThrow(/driven more than once/);
+  });
+
+  it('refuses a loop inside a sequence', () => {
+    expect(() =>
+      lowerOne(
+        'Animated.parallel([Animated.sequence([Animated.loop(Animated.timing(a, {toValue: 1})), Animated.timing(b, {toValue: 1})]), Animated.timing(c, {toValue: 1})]).start();',
+      ),
+    ).toThrow(/loop inside an Animated.sequence/);
+  });
+});
+
 describe('animation IR: stopping a wait', () => {
   it('gives each composition written apart its own owner, even when they are alike', () => {
     const {statements, context} = lowerBody(
@@ -214,9 +343,9 @@ describe('animation IR: stopping a wait', () => {
     // A stop of a third delay names an owner of its own, which nothing starts (assembly drops the stop).
     expect(statements[3]).toMatchObject({handles: [], waitOwner: 2});
     expect([...context.output.animationWaits.values()]).toEqual([
-      {owner: 0, isStarted: true},
-      {owner: 1, isStarted: true},
-      {owner: 2, isStarted: false},
+      {owner: 0, isStarted: true, hasWaits: true},
+      {owner: 1, isStarted: true, hasWaits: true},
+      {owner: 2, isStarted: false, hasWaits: false},
     ]);
   });
 
@@ -228,7 +357,7 @@ describe('animation IR: stopping a wait', () => {
     expect(stop.waitOwner).toBe(0);
     expect(start.completionWait.owner).toBe(0);
     expect([...context.output.animationWaits.values()]).toEqual([
-      {owner: 0, isStarted: true},
+      {owner: 0, isStarted: true, hasWaits: true},
     ]);
   });
 });

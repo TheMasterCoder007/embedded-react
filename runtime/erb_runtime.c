@@ -1357,18 +1357,58 @@ static void anim_complete(uint32_t index, bool finished)
         }
         default:
             /* Parallel and stagger: done when every child is, and not finished as soon as one stops. A parallel
-               stops the rest with it; a stagger's run on. */
-            if (!finished)
+               stops the rest with it. A stagger's run on, so it stays until they end: `passes` marks one stopped. */
+            if (finished)
             {
-                if (descriptor[ERB_ANIMATION_KIND_AT] == ERB_ANIMATION_PARALLEL)
+                if (--parent->step == 0u)
                 {
-                    anim_stop_under(parent_index);
+                    anim_complete(parent_index, parent->passes == 0u);
                 }
-                anim_complete(parent_index, false);
+                break;
             }
-            else if (--parent->step == 0u)
+            if (descriptor[ERB_ANIMATION_KIND_AT] == ERB_ANIMATION_PARALLEL)
             {
-                anim_complete(parent_index, true);
+                anim_stop_under(parent_index);
+                anim_complete(parent_index, false);
+                break;
+            }
+            if (parent->passes == 0u)
+            {
+                parent->passes = 1u;
+                /* Its own delays have nothing left to hold back. */
+                for (uint32_t child = parent_index + 1u;
+                     child < anim_count() && !entries[child].first && entries[child].state != ANIM_FREE;
+                     child++)
+                {
+                    if (entries[child].parent == parent_index && entries[child].state == ANIM_DELAY)
+                    {
+                        entries[child].state = ANIM_DONE;
+                        parent->step--;
+                    }
+                }
+                /* The tree's function runs now, as not finished; the tree then ends without it. */
+                const uint16_t done = parent->done_fn;
+                if (parent->parent == ERB_NONE && done != ERB_NONE)
+                {
+                    const uint16_t generation = parent->generation;
+                    parent->done_fn = ERB_NONE;
+                    ErbEvent event;
+                    memset(&event, 0, sizeof(event));
+                    event.function = done;
+                    event.kind = ERB_EVENT_CALL;
+                    event.finished = false;
+                    dispatch(&event);
+                    /* The function may have stopped the tree, or started another over it. */
+                    if (!g_erb.loaded || g_erb.faulted || parent->generation != generation
+                        || parent->state != ANIM_RUNNING)
+                    {
+                        break;
+                    }
+                }
+            }
+            if (--parent->step == 0u)
+            {
+                anim_complete(parent_index, false);
             }
             break;
     }
