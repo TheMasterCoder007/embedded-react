@@ -27,14 +27,14 @@ import {
 } from 'embedded-react';
 ```
 
-| Page                                     | Covers                                                                                                                                                          |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Components](./components.md)            | Every host component and its props: `View`, `Text`, `Image`, `Pressable`, `ScrollView`, the lists, `TextInput`, `Switch`, `Modal`, `Dial`, and the `Svg` family |
-| [Hooks and app APIs](./hooks.md)         | `useAnimatedValue`, `usePersistentState`, `useHostValue`, `nativeModule`, `useNativeEvent`; `AppRegistry`, `Platform`, the `screen` global                      |
-| [Styles](./styles.md)                    | The style properties the engine reads, colour formats, `StyleSheet`, and what an `Animated.Value` can drive                                                     |
-| [Animated](./animated.md)                | Values, `timing`/`spring`/`decay`, composition, `interpolate`, `Easing`, `LayoutAnimation`                                                                      |
-| [NativeUI bridge](./native-ui-bridge.md) | The `NativeUI` global the reconciler drives, and the `er_runtime` host core a Flow A firmware calls                                                             |
-| [C engine](./c-engine.md)                | `er_scene.h`: nodes, props, commit, events, animation, assets, and the backend struct                                                                           |
+| Page                                     | Covers                                                                                                                                                                          |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Components](./components.md)            | Every host component and its props: `View`, `Text`, `Image`, `Pressable`, `ScrollView`, the lists, `TextInput`, `Switch`, `Modal`, `Dial`, and the `Svg` family                 |
+| [Hooks and app APIs](./hooks.md)         | `useAnimatedValue`, `usePersistentState`, `useHostValue`, `nativeModule`, `useNativeEvent`; `AppRegistry`, `Platform`, `Dimensions`, `useWindowDimensions`, the `screen` global |
+| [Styles](./styles.md)                    | The style properties the engine reads, colour formats, `StyleSheet`, and what an `Animated.Value` can drive                                                                     |
+| [Animated](./animated.md)                | Values, `timing`/`spring`/`decay`, composition, `interpolate`, `Easing`, `LayoutAnimation`                                                                                      |
+| [NativeUI bridge](./native-ui-bridge.md) | The `NativeUI` global the reconciler drives, and the `er_runtime` host core a Flow A firmware calls                                                                             |
+| [C engine](./c-engine.md)                | `er_scene.h`: nodes, props, commit, events, animation, assets, and the backend struct                                                                                           |
 
 Two conventions run through the reference:
 

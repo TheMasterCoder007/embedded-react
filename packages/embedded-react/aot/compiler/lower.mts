@@ -35,6 +35,7 @@ import {
 } from './expressions.mts';
 import {
   findComponent,
+  bindFoldedPattern,
   declaredNames,
   moduleScope,
   collectState,
@@ -60,6 +61,7 @@ import {normalizeUndefined, parseApp} from './parse.mts';
 import {collectNativeModules, optionalModulesOf} from './native-modules.mts';
 import type {NativeModule} from './native-modules.mts';
 import {inlineCustomHooks} from './custom-hooks.mts';
+import {rewriteWindowDimensions} from './window-dimensions.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
@@ -285,6 +287,7 @@ function lowerProgram(
     nativeModules = collectNativeModules(typed.program, options.nativeFiles);
   });
   normalizeUndefined(ast);
+  rewriteWindowDimensions(ast);
   inlineCustomHooks(ast);
   refuseHiddenContexts(ast);
   const shadowedClock = findShadowedClockCalls(ast);
@@ -368,6 +371,14 @@ function lowerProgram(
     }
 
     for (const declarator of statement.declarations) {
+      if (declarator.id.type === 'ObjectPattern' && declarator.init) {
+        try {
+          bindFoldedPattern(scope, declarator.id, declarator.init);
+        } catch (error) {
+          rethrowFoldLimit(error); // not a fold, so bindBuiltValues binds it
+        }
+        continue;
+      }
       if (declarator.id.type !== 'Identifier' || !declarator.init) continue;
       if (contextNames.has(declarator.id.name)) continue;
       try {

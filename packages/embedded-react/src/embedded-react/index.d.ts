@@ -788,6 +788,23 @@ export const Platform: {
   select<T>(specifics: Record<string, T>): T | undefined;
 };
 
+// --- Dimensions ------------------------------------------------------------
+/** The panel's size in pixels. `scale` and `fontScale` are always 1. */
+export interface ScaledSize {
+  width: number;
+  height: number;
+  scale: number;
+  fontScale: number;
+}
+
+export const Dimensions: {
+  /** The panel's size. 'window' and 'screen' are the same on a panel. */
+  get(dimension: 'window' | 'screen'): ScaledSize;
+};
+
+/** The panel's size. It is fixed while the app runs. */
+export function useWindowDimensions(): ScaledSize;
+
 // --- AppRegistry -----------------------------------------------------------
 export const AppRegistry: {
   registerComponent(
