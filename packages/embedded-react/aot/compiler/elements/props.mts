@@ -108,8 +108,18 @@ const LAYOUT_STYLE = [
   'transform',
 ];
 
+/** The shadow a View, ScrollView, Pressable or Modal casts. */
+const SHADOW_STYLE = [
+  'shadowColor',
+  'shadowOffset',
+  'shadowOpacity',
+  'shadowRadius',
+  'elevation',
+];
+
 /** What the engine draws a View, ScrollView or Pressable with. */
 const VIEW_STYLE = [
+  ...SHADOW_STYLE,
   'backgroundColor',
   'borderRadius',
   'borderTopLeftRadius',
@@ -141,8 +151,8 @@ const TEXT_STYLE = [
   'opacity',
 ];
 
-/** What the engine draws a Modal's own box with. */
-const MODAL_STYLE = [
+/** What the engine draws a box with: a TextInput's, and a Modal's own. */
+const BOX_STYLE = [
   'backgroundColor',
   'borderRadius',
   'borderWidth',
@@ -150,8 +160,11 @@ const MODAL_STYLE = [
   'opacity',
 ];
 
+/** What the engine draws a Modal's own box with. */
+const MODAL_STYLE = [...BOX_STYLE, ...SHADOW_STYLE];
+
 /** What the engine draws a TextInput with. */
-const TEXT_INPUT_STYLE = [...MODAL_STYLE, 'color', 'fontSize'];
+const TEXT_INPUT_STYLE = [...BOX_STYLE, 'color', 'fontSize'];
 
 /** The style keys the engine animates on a View, ScrollView, Pressable or Modal; `transform` animates anywhere. */
 const VIEW_ANIMATED = ['opacity', 'backgroundColor', 'transform'];

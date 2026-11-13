@@ -70,8 +70,11 @@ that can rotate or scale; see [Memory](../guides/memory.md).
 ## Shadow
 
 `shadowColor`, `shadowOffset` (`{width, height}`), `shadowOpacity`, `shadowRadius` and `elevation`,
-rendered only in a build with `ERUI_SHADOWS` and a `shadowOpacity` above 0. Shadows are a two-pass
-blur through scratch memory; the small-board examples build without them.
+rendered only in a build with `ERUI_SHADOWS`. A node casts a shadow when its `shadowOpacity` is above
+0; otherwise an `elevation` above 0 casts a black one sized from it. Shadows are a two-pass
+blur through scratch memory; the small-board examples build without them. They work on `View`,
+`ScrollView`, `Pressable`, `TouchableOpacity` and `Modal`. **Flow B:** `shadowOffset` must be static;
+the other four can follow state.
 
 ## Text
 
@@ -112,8 +115,8 @@ reference rather than an inline object.
 
 The AOT compiler rejects a style key it cannot lower. Beyond the limits above, Flow B does not accept
 `aspectRatio`, `flexWrap`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
-border widths and colors, the shadow keys and `elevation`, `transformOrigin`, `fontFamily`,
-`fontStyle`, `textAlign` or `textDecorationLine`.
+border widths and colors, `transformOrigin`, `fontFamily`, `fontStyle`, `textAlign` or
+`textDecorationLine`.
 
 It also rejects a key the engine does not draw on that element, which Flow A ignores without a word.
 The layout keys and `transform` work everywhere. `backgroundColor`, the borders and `opacity` work on

@@ -999,9 +999,9 @@ import { View, StyleSheet } from 'embedded-react';
     const error = err(`${IMPORTS}
       export function App() {
         const [n, setN] = useState(0);
-        return (<View style={{shadowRadius: n}} />);
+        return (<View style={{aspectRatio: n}} />);
       }`);
-    expect(error.message).toMatch(/style "shadowRadius" is not supported/);
+    expect(error.message).toMatch(/style "aspectRatio" is not supported/);
     expect(error.message).not.toMatch(/state-driven/);
   });
 
@@ -1094,11 +1094,11 @@ import { View, StyleSheet } from 'embedded-react';
 
   it('locates an unknown key that arrived through a StyleSheet', () => {
     const error = err(`${IMPORTS}
-      const styles = StyleSheet.create({ card: { shadowOpacity: 0.5 } });
+      const styles = StyleSheet.create({ card: { aspectRatio: 0.5 } });
       export function App() {
         return (<View style={styles.card} />);
       }`);
-    expect(error.message).toMatch(/style "shadowOpacity" is not supported/);
+    expect(error.message).toMatch(/style "aspectRatio" is not supported/);
     expect(error.aotLoc).toBeTruthy();
   });
 });

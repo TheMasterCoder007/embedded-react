@@ -38,11 +38,11 @@ type StyleLowering = (value: unknown) => StaticAssign[];
 
 /**
  * A style key whose value can be state-driven, and how an update lowers its runtime value: `num` assigns a
- * number, `opacity` scales 0–1 to 0–255, `color` takes a (ternary of) color literal(s), and `enum` maps a
- * (ternary of) string literal(s) through `table`.
+ * number, `byte` assigns one with its fraction dropped, `opacity` scales 0–1 to 0–255, `color` takes a
+ * (ternary of) color literal(s), and `enum` maps a (ternary of) string literal(s) through `table`.
  */
 export type DynamicStyleField =
-  | {field: string; kind: 'num' | 'opacity' | 'color'}
+  | {field: string; kind: 'num' | 'byte' | 'opacity' | 'color'}
   | {field: string; kind: 'enum'; table: EnumTable};
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -124,6 +124,7 @@ const NUMBER_FIELDS: Record<string, string> = {
   fontSize: 'font_size',
   lineHeight: 'line_height',
   letterSpacing: 'letter_spacing',
+  shadowOpacity: 'shadow_opacity',
 };
 
 /**
@@ -141,8 +142,8 @@ const ENUM_FIELDS: Record<string, {field: string; table: EnumTable}> = {
 
 /**
  * Every style key whose value can be state-driven, with its ERProps field and how an update lowers it (see
- * DynamicStyleField). Keys absent here (such as the `flex` shorthand, `flexBasis`, the four insets and
- * `fontWeight`) can only be static.
+ * DynamicStyleField). Keys absent here (such as the `flex` shorthand, `flexBasis`, the four insets,
+ * `fontWeight` and `shadowOffset`) can only be static.
  */
 export const DYN_FIELDS: Record<string, DynamicStyleField> = {
   ...Object.fromEntries(
@@ -160,6 +161,9 @@ export const DYN_FIELDS: Record<string, DynamicStyleField> = {
   backgroundColor: {field: 'background_color', kind: 'color'},
   color: {field: 'color', kind: 'color'},
   borderColor: {field: 'border_color', kind: 'color'},
+  shadowColor: {field: 'shadow_color', kind: 'color'},
+  shadowRadius: {field: 'shadow_radius', kind: 'byte'},
+  elevation: {field: 'elevation', kind: 'byte'},
   opacity: {field: 'opacity', kind: 'opacity'},
 };
 
@@ -168,6 +172,9 @@ export const OPACITY_OPAQUE = 255;
 
 /** The alpha of a color written without one. */
 const ALPHA_OPAQUE = 0xff;
+
+/** The largest value a byte field holds. */
+const BYTE_MAX = 255;
 
 /** The lightest numeric fontWeight drawn bold. */
 const BOLD_WEIGHT = 600;
@@ -285,6 +292,32 @@ const dimension = (value: unknown): PropConstant => {
   // Adding 0 turns -0 into 0, whose bits a float field keeps.
   return Math.round(value) + 0;
 };
+
+/**
+ * A whole number for a byte field.
+ *
+ * @param value  The style value; must be a finite number.
+ *
+ * @returns It with its fraction dropped, clamped to 0–255, as Flow A reads one.
+ */
+const byteValue = (value: unknown): PropConstant => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`expected a number, got ${JSON.stringify(value)}`);
+  }
+
+  // Adding 0 turns -0 into 0.
+  return Math.min(BYTE_MAX, Math.max(0, Math.trunc(value))) + 0;
+};
+
+/**
+ * One side of a `shadowOffset`.
+ *
+ * @param offset  `width` or `height`; left out, it is 0.
+ *
+ * @returns The offset in pixels.
+ */
+const shadowOffsetSide = (offset: unknown): number =>
+  offset === undefined || offset === null ? 0 : floatConstant(offset);
 
 /**
  * A dimension that may be a percentage. `'50%'` → the engine's float `*_percent` field (% of the parent);
@@ -442,6 +475,30 @@ const KEYS: Record<string, StyleLowering> = {
     },
   ],
   zIndex: zIndex => [{field: 'z_index', value: dimension(zIndex)}],
+
+  // Shadow, drawn only by a firmware built with ERUI_SHADOWS (same as Flow A).
+  shadowColor: color => [
+    {field: 'shadow_color', value: parseColorValue(color)},
+  ],
+  // Both sides are written, so a later shadowOffset replaces an earlier one whole, as in RN.
+  shadowOffset: offset => {
+    if (typeof offset !== 'object' || Array.isArray(offset)) {
+      throw new Error(
+        `expected {width, height}, got ${JSON.stringify(offset)}`,
+      );
+    }
+
+    const {width, height} = offset as {width?: unknown; height?: unknown};
+    return [
+      {field: 'shadow_offset_x', value: shadowOffsetSide(width)},
+      {field: 'shadow_offset_y', value: shadowOffsetSide(height)},
+    ];
+  },
+  shadowOpacity: opacity => [
+    {field: 'shadow_opacity', value: floatConstant(opacity)},
+  ],
+  shadowRadius: radius => [{field: 'shadow_radius', value: byteValue(radius)}],
+  elevation: elevation => [{field: 'elevation', value: byteValue(elevation)}],
 
   // Text
   color: color => [{field: 'color', value: parseColorValue(color)}],
