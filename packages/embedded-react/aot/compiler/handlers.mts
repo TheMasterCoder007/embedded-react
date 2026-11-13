@@ -1973,7 +1973,8 @@ function inlineHelperCall(
 const CONSOLE_METHODS = new Set(['log', 'warn', 'error']);
 
 /**
- * Whether a call is `console.log`, `console.warn` or `console.error`, on the global console.
+ * Whether a call is `console.log`, `console.warn` or `console.error`, on the global console: not a local, a state
+ * or a constant of that name.
  *
  * @param call  The call.
  * @param environment  The expression environment.
@@ -1988,7 +1989,9 @@ function isConsoleCall(call: t.CallExpression, environment: Env): boolean {
     callee.object.type !== 'Identifier' ||
     callee.object.name !== 'console' ||
     callee.property.type !== 'Identifier' ||
-    environment.locals.has('console')
+    environment.locals.has('console') ||
+    environment.state.has('console') ||
+    'console' in (environment.constants ?? {})
   ) {
     return false;
   }

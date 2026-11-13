@@ -156,6 +156,20 @@ describe('console in a package', () => {
     );
   });
 
+  it('leaves a binding named console alone', () => {
+    for (const binding of [
+      '  const [console, setConsole] = useState(0);\n',
+      '  const console = {log: 1};\n',
+    ]) {
+      expect(failure(appOf("console.log('tap');", binding))).toContain(
+        'a handler statement must be a state setter',
+      );
+    }
+    expect(failure(appOf("const console = 1; console.log('tap');"))).toContain(
+      'a handler statement must be a state setter',
+    );
+  });
+
   it('refuses a spread argument', () => {
     expect(failure(appOf('console.log(...[1, 2]);'))).toContain(
       'console.* cannot take a spread',
