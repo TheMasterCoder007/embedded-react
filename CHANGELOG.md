@@ -70,6 +70,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   they are worked out at boot, as the `screen` global is.
 - Flow B: a `const` can destructure an object that folds, such as `const {width, height} = screen`, at module level
   too.
+- Flow B: the shadow styles and `elevation`. All but `shadowOffset` can follow state.
 
 ### Changed
 
