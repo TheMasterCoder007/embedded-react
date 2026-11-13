@@ -506,7 +506,10 @@ function lowerTaggedSet(
       narrowed(environment, narrowing.whenFalse),
       lowering,
     );
-    if (!consequent.length && !alternate.length) return [];
+    const writes = (statements: IrStmt[]): boolean =>
+      statements.some(statement => statement.kind !== 'keepField');
+    // With nothing to write, each branch keeps what the other does.
+    if (!writes(consequent) && !writes(alternate)) return consequent;
     return [
       {
         kind: 'if',
@@ -532,11 +535,14 @@ function lowerTaggedSet(
         );
       }
     }
-    return writeFields(
-      [...record.fields].map(([key, field]) => [field, leaves.get(key)]),
-      environment,
-      lowering.field,
-    );
+    return [
+      {kind: 'keepField', state: tag.state},
+      ...writeFields(
+        [...record.fields].map(([key, field]) => [field, leaves.get(key)]),
+        environment,
+        lowering.field,
+      ),
+    ];
   }
 
   if (
@@ -577,20 +583,23 @@ function lowerTaggedSet(
     );
   }
 
-  // The tag is written unless the state can only have that shape here.
+  // The tag is written unless the state can only have that shape here: then it is kept.
   const here = environment.locals.has(name)
     ? null
     : shapesOf(environment.constants?.[name]);
-  const entries: [ScalarState, unknown][] =
-    here?.length === 1 && here[0] === shape ? [] : [[tag.state, shape]];
+  const keepsTag = here?.length === 1 && here[0] === shape;
+  const entries: [ScalarState, unknown][] = keepsTag
+    ? []
+    : [[tag.state, shape]];
   for (const [key, field] of record.fields) {
     if (fields.has(key)) entries.push([field, leaves.get(key)]);
   }
-  return writeFields(entries, environment, lowering.field);
+  const writes = writeFields(entries, environment, lowering.field);
+  return keepsTag ? [{kind: 'keepField', state: tag.state}, ...writes] : writes;
 }
 
 /**
- * Lowers the writes of values to fields: a field set to itself is skipped, and a value that reads a field written
+ * Lowers the writes of values to fields: a field set to itself is kept, and a value that reads a field written
  * before it is worked out first.
  *
  * @param entries  Each field and its value.
@@ -607,14 +616,20 @@ function writeFields(
   // A field set to itself keeps its value.
   const writes: {field: ScalarState; statement: IrStmt}[] = [];
   for (const [field, value] of entries) {
-    if (value instanceof HiddenField && value.field === field) continue;
+    if (value instanceof HiddenField && value.field === field) {
+      writes.push({field, statement: {kind: 'keepField', state: field}});
+      continue;
+    }
     const read =
       value instanceof AstLeaf && !value.locals.size
         ? fieldRead(value.node, environment)
         : value;
     const expression =
       read instanceof RuntimeLeaf ? read.local.expression : undefined;
-    if (expression?.kind === 'state' && expression.state === field) continue;
+    if (expression?.kind === 'state' && expression.state === field) {
+      writes.push({field, statement: {kind: 'keepField', state: field}});
+      continue;
+    }
     const leaf = leafNode(value, environment);
     writes.push({
       field,
@@ -627,6 +642,7 @@ function writeFields(
   const written = new Set<ScalarState>();
   for (const write of writes) {
     const {statement, field} = write;
+    if (statement.kind === 'keepField') continue;
     if (written.size && readsAny(statement, written)) {
       const name = `local_${field.slotName}`;
       if (statement.kind === 'setState') {

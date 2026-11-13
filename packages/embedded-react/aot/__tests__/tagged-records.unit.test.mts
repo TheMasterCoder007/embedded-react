@@ -92,17 +92,28 @@ function lowerHandler(handler: string): IrStmt[] {
 
 /** What each lowered statement writes or declares, an `if`'s branches nested. */
 const targets = (statements: IrStmt[]): unknown[] =>
-  statements.map(statement =>
-    statement.kind === 'if'
-      ? {
-          if: targets(statement.consequent),
-          else: statement.alternate && targets(statement.alternate),
-        }
-      : statement.kind === 'declareLocal'
-        ? `declare ${statement.name}`
-        : 'state' in statement
-          ? `${statement.kind} ${statement.state.name}`
-          : statement.kind,
+  statements
+    .filter(statement => statement.kind !== 'keepField')
+    .map(statement =>
+      statement.kind === 'if'
+        ? {
+            if: targets(statement.consequent),
+            else:
+              statement.alternate && targets(statement.alternate).length
+                ? targets(statement.alternate)
+                : null,
+          }
+        : statement.kind === 'declareLocal'
+          ? `declare ${statement.name}`
+          : 'state' in statement
+            ? `${statement.kind} ${statement.state.name}`
+            : statement.kind,
+    );
+
+/** The fields and the tag a setter is given back as they were. */
+const keptFields = (statements: IrStmt[]): string[] =>
+  statements.flatMap(statement =>
+    statement.kind === 'keepField' ? [statement.state.name] : [],
   );
 
 describe('tagged object state', () => {
@@ -192,6 +203,22 @@ describe('tagged object state', () => {
     // A spread of the state keeps its shape, whatever it is.
     expect(targets(lowerHandler('setJob({...job});'))).toEqual([]);
     expect(targets(lowerHandler('setJob(j => j);'))).toEqual([]);
+  });
+
+  it('keeps the tag and the fields a spread gives back', () => {
+    expect(keptFields(lowerHandler('setJob({...job});'))).toEqual([
+      'job.kind',
+      'job.pct',
+      'job.took',
+      'job.note',
+    ]);
+    // A shape written out where a test fixes it keeps the tag it has.
+    const [narrowed] = lowerHandler(
+      "if (job.kind === 'busy') { setJob({kind: 'busy', pct: 5}); }",
+    );
+    expect(narrowed.kind === 'if' && keptFields(narrowed.consequent)).toEqual([
+      'job.kind',
+    ]);
   });
 
   it('sets the shape a ternary picks', () => {

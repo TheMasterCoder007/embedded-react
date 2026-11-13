@@ -124,16 +124,28 @@ function statesReadAfterSet(body: IrStmt[]): ScalarState[] {
       }
       return;
     }
+    // A field given back as it was reads it, where the body set it before.
+    if (node.kind === 'keepField') {
+      const state = node.state as ScalarState;
+      const live =
+        (node.readsLatest as ReadonlySet<ScalarState> | undefined) ?? latest;
+      if (written.has(state) && !live?.has(state)) found.add(state);
+      return;
+    }
     const reads =
       (node.readsLatest as ReadonlySet<ScalarState> | undefined) ?? latest;
     // Only one branch runs, so neither reads what the other set.
     if (node.kind === 'if') {
       walk(node.test, reads);
+      // A branch that returns sets nothing for what comes after.
+      const returns = (branch: unknown): boolean =>
+        Array.isArray(branch) && branch.at(-1)?.kind === 'return';
       const before = new Set(written);
       walk(node.consequent, reads);
-      const consequent = written;
-      written = before;
+      const consequent = returns(node.consequent) ? before : written;
+      written = new Set(before);
       walk(node.alternate, reads);
+      if (returns(node.alternate)) written = new Set(before);
       consequent.forEach(state => written.add(state));
       return;
     }

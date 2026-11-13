@@ -186,6 +186,67 @@ describe('a state read after its setter', () => {
     ).toEqual([]);
   });
 
+  it('puts back a field a second object setter spreads from the render', () => {
+    // x is set, then given back as the render had it; y is set last.
+    const ops = handlerOps(
+      'setPoint({...point, x: 5}); setPoint({...point, y: 7});',
+    );
+    const [copy] = copiesOf(ops);
+    expect(copy).toBeDefined();
+    const [field, kept] = copy.split('>');
+    expect(ops.slice(-3)).toEqual([`get ${kept}`, `set ${field}`, 'set 5']);
+    // One setter alone writes only what it changes.
+    expect(handlerOps('setPoint({...point, x: 5});')).toEqual(['set 4']);
+    expect(
+      copiesOf(
+        handlerOps(
+          'setPoint({...point, x: 5}); setPoint(previous => ({...previous, y: 7}));',
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("puts back a tagged object's shape", () => {
+    const tagged = (handler: string) =>
+      slotOps(
+        appOf(handler).replace(
+          '  const [point, setPoint] = useState({x: 0, y: 0});\n',
+          "  const [job, setJob] = useState<{kind: 'idle'} | {kind: 'busy'; pct: number}>({kind: 'busy', pct: 1});\n" +
+            '  const point = {x: 0, y: 0};\n',
+        ),
+      )[0].slice(0, -2);
+    /** The slots a body copies and then sets twice: once by a setter, once back from the copy. */
+    const putBack = (ops: string[]) =>
+      copiesOf(ops)
+        .map(copy => copy.split('>'))
+        .filter(
+          ([state, kept]) =>
+            ops.filter(op => op === `set ${state}`).length === 2 &&
+            ops.lastIndexOf(`set ${state}`) ===
+              ops.lastIndexOf(`get ${kept}`) + 1,
+        );
+    // A spread after the shape changed, and the same shape written out where a test fixes it.
+    for (const second of [
+      'setJob({...job, pct: job.pct + 1});',
+      "setJob({kind: 'busy', pct: 5});",
+    ]) {
+      expect(
+        putBack(
+          tagged(
+            `if (job.kind === 'busy') { setJob({kind: 'idle'}); ${second} }`,
+          ),
+        ),
+      ).toHaveLength(1);
+    }
+    expect(
+      copiesOf(
+        tagged(
+          "setJob({kind: 'idle'}); setJob(j => (j.kind === 'idle' ? {kind: 'busy', pct: 1} : j));",
+        ),
+      ),
+    ).toEqual([]);
+  });
+
   it('copies in a helper, an effect and a timer', () => {
     expect(
       copiesOf(

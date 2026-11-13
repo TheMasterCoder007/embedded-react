@@ -1498,6 +1498,15 @@ export class Codegen {
     }
   }
 
+  /** Whether a statement lowers to code: all but a field kept as it is, which the body didn't set before. */
+  private doesSomething(statement: IrStmt): boolean {
+    if (statement.kind !== 'keepField') return true;
+    const latest = statement.readsLatest ?? this.readsLatest;
+    return (
+      this.keptStates.has(statement.state) && !latest?.has(statement.state)
+    );
+  }
+
   private lowerStatement(statement: IrStmt): void {
     const {builder} = this;
     builder.at(statement.location);
@@ -1603,7 +1612,8 @@ export class Codegen {
         builder.branch('JF', otherwise, this.condition(statement.test));
         builder.release(checkpoint);
         this.statements(statement.consequent);
-        if (statement.alternate) {
+        // An else of fields kept as they are does nothing.
+        if (statement.alternate?.some(inner => this.doesSomething(inner))) {
           const end = builder.label();
           builder.branch('JMP', end);
           builder.place(otherwise);
@@ -1641,6 +1651,17 @@ export class Codegen {
         );
         return;
       }
+      case 'keepField':
+        if (this.doesSomething(statement)) {
+          const {state} = statement;
+          this.scoped(() =>
+            this.set(
+              this.stateSlot(state),
+              this.get(this.program.kept.get(state)!),
+            ),
+          );
+        }
+        return;
       case 'log':
         this.scoped(() => {
           this.text(statement.text.parts);

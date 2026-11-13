@@ -317,6 +317,15 @@ export interface IrKeepStates {
   states: ScalarState[];
 }
 
+/**
+ * A field an object setter is given back as it was, `{...point}`. It keeps its value, unless the body set it
+ * before: then it goes back to the copy the body keeps.
+ */
+export interface IrKeepField {
+  kind: 'keepField';
+  state: ScalarState;
+}
+
 /** A callback lowered to statements: an event handler, a timer, or a PanResponder callback. */
 /** A native method called for what it does, its result if any dropped; or a record's, kept in locals. */
 export interface IrCallNative {
@@ -371,4 +380,5 @@ export type IrStmt = {
   | IrCallNative
   | IrLog
   | IrKeepStates
+  | IrKeepField
 );

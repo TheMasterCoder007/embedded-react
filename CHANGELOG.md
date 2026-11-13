@@ -97,7 +97,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Flow B: a list row's item passed to a component no longer fails to compile.
 - Flow B: a handler, effect or timer that reads a state after setting it reads the value its render had, as in
-  React, instead of the new one. An updater still gets the latest value.
+  React, instead of the new one. An updater still gets the latest value, and a second object setter given
+  `{...user}` puts back the fields the first one changed, and its shape when it has several.
 - Flow B: state a dep-driven effect sets is drawn at once, not at the next event, and a dep-driven effect no longer
   runs twice at boot.
 - Flow B: a component without state of its own no longer reads its caller's state in place of a prop or local of
