@@ -132,6 +132,59 @@ describe('animation IR: completions', () => {
     }
   });
 
+  it('runs several animations as a group the completion waits on', () => {
+    const {statement, context} = lowerOne(
+      'Animated.parallel([Animated.spring(a, {toValue: 1}), Animated.timing(b, {toValue: 1})]).start(() => setN(1));',
+    );
+    expect(statement.animations).toHaveLength(2);
+    expect(statement.group).toEqual({stopsTogether: true, wait: null});
+    expect(context.output.animationGroupEntries).toBe(3);
+    expect(context.output.animationWaits.size).toBe(0);
+  });
+
+  it("lets a stagger's animations, and a parallel's with stopTogether off, run on", () => {
+    for (const source of [
+      'Animated.stagger(80, [Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})]).start(() => setN(1));',
+      'Animated.parallel([Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})], {stopTogether: false}).start(() => setN(1));',
+    ]) {
+      expect(lowerOne(source).statement.group.stopsTogether).toBe(false);
+    }
+  });
+
+  it('gives a group a wait only for a delay that may end after its animations', () => {
+    const {statement: outlasted} = lowerOne(
+      'Animated.parallel([Animated.timing(a, {toValue: 1, duration: 100}), Animated.spring(b, {toValue: 1}), Animated.delay(400)]).start(() => setN(1));',
+    );
+    expect(outlasted.group.wait).toEqual({delayMs: 400, owner: 0});
+
+    const {statement: covered} = lowerOne(
+      'Animated.stagger(80, [Animated.timing(a, {toValue: 1, duration: 200}), Animated.timing(b, {toValue: 1, duration: 200}), Animated.delay(100)]).start(() => setN(1));',
+    );
+    expect(covered.animations.map(animation => animation.delayMs)).toEqual([
+      0, 80,
+    ]);
+    expect(covered.group.wait).toBeNull();
+  });
+
+  it('runs a parallel with no completion as a group too, so its animations stop together', () => {
+    const {statement, context} = lowerOne(
+      'Animated.parallel([Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1}), Animated.delay(900)]).start();',
+    );
+    expect(statement.group).toEqual({stopsTogether: true, wait: null});
+    expect(context.output.animationGroupEntries).toBe(3);
+  });
+
+  it('starts animations that run on with no completion on their own', () => {
+    for (const source of [
+      'Animated.stagger(80, [Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})]).start();',
+      'Animated.parallel([Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})], {stopTogether: false}).start();',
+    ]) {
+      const {statement, context} = lowerOne(source);
+      expect(statement.group).toBeNull();
+      expect(context.output.animationGroupEntries).toBe(0);
+    }
+  });
+
   it('numbers a chain after its completion, whose own starts come first', () => {
     const {statement} = lowerOne(
       'Animated.sequence([Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1})]).start(() => { Animated.sequence([Animated.timing(c, {toValue: 1}), Animated.timing(c, {toValue: 0})]).start(); });',

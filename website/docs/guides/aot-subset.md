@@ -255,8 +255,10 @@ character it cannot find. See [Assets](../concepts/assets.md).
   (not a parallel or stagger), and `iterations` must be a build-time constant. A `sequence` takes
   `timing`, `spring`, `decay` and `delay` entries, but not a nested `parallel`, `stagger` or `loop`;
   a sequence inside a `parallel` or `stagger` needs a known duration, so no spring or decay there. A
-  `.start(callback)` on a parallel or stagger of more than one animation is not yet supported; besides
-  delays, one animation's callback runs when whichever ends last has finished.
+  `.start(callback)` on a `parallel` or `stagger` runs once every animation and delay in it has ended.
+  When one is interrupted the callback runs at once with `finished: false`. Interrupting one of a
+  `parallel`'s stops the rest, with a callback or without (unless `stopTogether: false`); a
+  `stagger`'s run on. A `parallel`, or a `stagger` with a callback, takes up to 31 animations.
 - `interpolate` takes an object literal with `inputRange` and `outputRange` of equal length, up to
   8 breakpoints.
 - The engine drives every animation natively once started, in both flows.

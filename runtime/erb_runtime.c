@@ -1256,6 +1256,33 @@ static void anim_free_block(uint32_t root)
     }
 }
 
+/** @brief Stops everything still running under group @p group, without moving the tree on. */
+static void anim_stop_under(uint32_t group)
+{
+    ErbAnimEntry* entries = anim_entries();
+    for (uint32_t index = group + 1u;
+         index < anim_count() && !entries[index].first && entries[index].state != ANIM_FREE;
+         index++)
+    {
+        uint32_t ancestor = entries[index].parent;
+        while (ancestor != ERB_NONE && ancestor > group)
+        {
+            ancestor = entries[ancestor].parent;
+        }
+        if (ancestor != group)
+        {
+            continue;
+        }
+        /* Marked stopped first, so the callback er_animation_stop makes finds nothing to move on. */
+        const bool running = entries[index].state == ANIM_RUNNING;
+        entries[index].state = ANIM_STOPPED;
+        if (running && entries[index].engine != ER_ANIMATION_HANDLE_INVALID)
+        {
+            er_animation_stop(entries[index].engine);
+        }
+    }
+}
+
 static void anim_complete(uint32_t index, bool finished)
 {
     ErbAnimEntry* entries = anim_entries();
@@ -1329,10 +1356,14 @@ static void anim_complete(uint32_t index, bool finished)
             break;
         }
         default:
-            /* Parallel and stagger: done when every child is, and not finished as soon as one stops, as the C
-               output ends a joined run. The rest run on. */
+            /* Parallel and stagger: done when every child is, and not finished as soon as one stops. A parallel
+               stops the rest with it; a stagger's run on. */
             if (!finished)
             {
+                if (descriptor[ERB_ANIMATION_KIND_AT] == ERB_ANIMATION_PARALLEL)
+                {
+                    anim_stop_under(parent_index);
+                }
                 anim_complete(parent_index, false);
             }
             else if (--parent->step == 0u)
@@ -1479,7 +1510,7 @@ static void anim_start_entry(uint32_t index)
     for (uint32_t nth = 0; nth < children && entry->state == ANIM_RUNNING; nth++)
     {
         const uint32_t child = anim_child(index, nth);
-        if (kind == ERB_ANIMATION_STAGGER && nth > 0u)
+        if (kind == ERB_ANIMATION_STAGGER && nth > 0u && gap > 0u)
         {
             entries[child].state = ANIM_WAIT;
             entries[child].value = (float)(gap * nth);

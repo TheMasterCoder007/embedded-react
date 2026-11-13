@@ -2402,6 +2402,80 @@ export function App() {
     expect(start.bx).toBe(0);
   });
 
+  it('runs a parallel with a completion as a group, its toValues in consecutive registers', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  const a = useAnimatedValue(0);
+  const b = useAnimatedValue(0);
+  const c = useAnimatedValue(0);
+  return (
+    <Pressable onPress={() => Animated.parallel([Animated.spring(a, {toValue: n + 1}), Animated.timing(b, {toValue: 1}), Animated.timing(c, {toValue: n * 2})]).start(() => setN(n + 1))}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(source, 'app', SCREEN);
+    const anims = animsOf(program);
+    expect(anims.map(animation => animation.kind)).toEqual([
+      AnimationKind.parallel,
+      AnimationKind.spring,
+      AnimationKind.timing,
+      AnimationKind.timing,
+    ]);
+    expect(anims[0]).toMatchObject({first: 1, count: 3});
+    const press = functionsOf(program)[0];
+    const starts = press.ops.filter(
+      instruction => instruction.name === 'ASTART',
+    );
+    expect(starts).toHaveLength(1);
+    expect(starts[0].bx).toBe(0);
+    expect(starts[0].ext & 0xffff).not.toBe(NONE);
+    // The two toValues worked out at run time are moved into a run the start reads from its first register.
+    const first = starts[0].ext >>> 16;
+    const moves = press.ops.filter(instruction => instruction.name === 'MOVE');
+    expect(moves.map(move => move.a)).toEqual(
+      expect.arrayContaining([first, first + 1]),
+    );
+    // Three values and one more, and the group's block twice.
+    expect(
+      regionsOf(program).find(region => region.kind === Region.animations)
+        .count,
+    ).toBe(12);
+  });
+
+  it('runs a stagger with a completion as a stagger group with no gap, on absolute delays', () => {
+    const source = `
+import {useState} from 'react';
+import {Pressable, Text, Animated, useAnimatedValue} from 'embedded-react';
+export function App() {
+  const [n, setN] = useState(0);
+  const a = useAnimatedValue(0);
+  const b = useAnimatedValue(0);
+  return (
+    <Pressable onPress={() => Animated.stagger(80, [Animated.timing(a, {toValue: 1}), Animated.timing(b, {toValue: 1}), Animated.delay(900)]).start(() => setN(n + 1))}>
+      <Text>{n}</Text>
+    </Pressable>
+  );
+}`;
+    const {program} = compilePackage(source, 'app', SCREEN);
+    const anims = animsOf(program);
+    expect(anims[0]).toMatchObject({
+      kind: AnimationKind.stagger,
+      first: 1,
+      count: 3,
+      amount: 0,
+    });
+    expect(anims[1]).toMatchObject({target: NONE, amount: 1060});
+    expect(anims.slice(2).map(animation => animation.delayMs)).toEqual([0, 80]);
+    // The group's handle is kept where a stop of the stagger finds it.
+    expect(
+      functionsOf(program)[0].ops.map(instruction => instruction.name),
+    ).toContain('SET32');
+  });
+
   it('gives an app that only waits a running-animation table for its delay', () => {
     const source = `
 import {useState} from 'react';

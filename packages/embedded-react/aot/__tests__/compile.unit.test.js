@@ -591,18 +591,19 @@ export { App };`,
     ).toThrow(/recursive/);
   });
 
-  it('rejects a completion callback on a parallel animation (not yet supported)', () => {
+  it('rejects a parallel of more animations than one tree holds', () => {
+    const names = Array.from({length: 32}, (_, index) => `v${index}`);
     expect(() =>
       compilePackage(
         `import { Text, Pressable, Animated, useAnimatedValue } from 'embedded-react';
 function App() {
-  const a = useAnimatedValue(0); const b = useAnimatedValue(0);
-  return (<Pressable onPress={() => Animated.parallel([Animated.timing(a, { toValue: 1 }), Animated.timing(b, { toValue: 1 })]).start(() => {})}><Text>x</Text></Pressable>);
+  ${names.map(name => `const ${name} = useAnimatedValue(0);`).join(' ')}
+  return (<Pressable onPress={() => Animated.parallel([${names.map(name => `Animated.timing(${name}, { toValue: 1 })`).join(', ')}]).start(() => {})}><Text>x</Text></Pressable>);
 }
 export { App };`,
         'demo',
       ),
-    ).toThrow(/parallel\/stagger animation is not yet supported/);
+    ).toThrow(/can run at most 31 animations as one group/);
   });
 });
 

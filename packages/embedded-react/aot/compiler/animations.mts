@@ -152,6 +152,9 @@ const DEFAULT_DECAY_DECELERATION = 0.998;
 /** The numbers Easing.bezier takes: x1, y1, x2, y2. */
 const BEZIER_CONTROL_POINTS = 4;
 
+/** Most descriptors one started tree may have (the runtime's ERB_MAX_ANIM_TREE): a group, its animations, its wait. */
+const MAX_GROUP_ENTRIES = 32;
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Implementation
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -1087,7 +1090,7 @@ const emptyStart = (
   animations: [],
   completion,
   completionWait: null,
-  completionJoin: null,
+  group: null,
 });
 
 /** Numbers each composition node once, so a key names the place it is written. */
@@ -1409,10 +1412,26 @@ function lowerCompletion(
 }
 
 /**
+ * Whether one interrupted animation of a composition stops the rest: a parallel's do unless it is given
+ * `stopTogether: false`, and a stagger's run on.
+ *
+ * @param node  The parallel or stagger.
+ * @param environment  The expression environment.
+ *
+ * @returns Whether they stop together.
+ */
+function stopsTogether(node: AnimatedCall, environment: Env): boolean {
+  if (node.callee.property.name !== 'parallel') return false;
+  const stopTogether = animConfigGetter(node.arguments[1])('stopTogether');
+  return evalStaticOr(stopTogether, environment, true) !== false;
+}
+
+/**
  * Lowers `<animation>.start()` — a single Animated.timing/spring/decay or a composition
  * (sequence/parallel/stagger/delay/loop). A sequence, and a loop the engine cannot repeat on its own, become
  * an on_complete chain (lowerChain); everything else flattens to one animation per atomic entry, composition
- * expressed through per-entry delay_ms. Native-driven; sets no React state.
+ * expressed through per-entry delay_ms, run as a group when a completion waits on several or a parallel stops
+ * them together. Native-driven; sets no React state.
  *
  * @param expression  The `.start(…)` call.
  * @param environment  The expression environment.
@@ -1460,22 +1479,48 @@ export function lowerAnimateStart(
     if (start) return start;
   }
 
-  // The flat path has no "after all entries finish" join point, so completion callbacks are limited to one entry.
   const {entries, duration} = flattenAnim(receiver, environment, 0, false);
   if (!entries.length) {
     return startNothing(context, completion, duration ?? 0, key);
-  }
-  if (completion && entries.length > 1) {
-    throw aotError(
-      'AOT: a .start(onComplete) callback on a parallel/stagger animation is not yet supported',
-      'attach the completion callback to a single animation or an Animated.sequence(...). For "after all parallel anims", restructure as a sequence.',
-    );
   }
 
   // Each entry starts on its own, numbered after the configs already in this body.
   const start = emptyStart(context, completion);
   for (const animationEntry of entries) {
     start.animations.push(lowerAnimation(animationEntry, environment));
+  }
+
+  // Several animations run as a group when a completion waits on them all, or one stopping stops the rest.
+  const stopTogether =
+    entries.length > 1 && stopsTogether(receiver as AnimatedCall, environment);
+  if (entries.length > 1 && (completion || stopTogether)) {
+    const lastKnownEnd = Math.max(
+      ...entries.map(
+        animationEntry =>
+          animationEntry.delayMs +
+          (animationEntry.kind === 'timing'
+            ? timingDuration(animationEntry.get, environment)
+            : 0),
+      ),
+    );
+    const hasWait =
+      completion != null && duration != null && duration > lastKnownEnd;
+    const groupEntries = 1 + entries.length;
+    const mostAnimations = MAX_GROUP_ENTRIES - 1 - (hasWait ? 1 : 0);
+    if (entries.length > mostAnimations) {
+      throw aotError(
+        `AOT: this parallel/stagger can run at most ${mostAnimations} animations as one group`,
+        'split the composition into smaller ones.',
+      );
+    }
+    context.output.animationGroupEntries += groupEntries;
+    start.group = {
+      stopsTogether: stopTogether,
+      wait: hasWait
+        ? {delayMs: totalMs(duration), owner: waitOwner(context, key, true)}
+        : null,
+    };
+    return start;
   }
 
   // A spring or decay has no fixed end, so a delay beside it that runs past its start is joined at run time.
@@ -1487,9 +1532,12 @@ export function lowerAnimateStart(
     duration != null &&
     duration > only.delayMs
   ) {
-    start.completionJoin = {
-      delayMs: totalMs(duration),
-      owner: waitOwner(context, key, true),
+    start.group = {
+      stopsTogether: true,
+      wait: {
+        delayMs: totalMs(duration),
+        owner: waitOwner(context, key, true),
+      },
     };
   }
 

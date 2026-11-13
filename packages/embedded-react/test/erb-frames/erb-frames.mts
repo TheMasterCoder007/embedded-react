@@ -902,6 +902,74 @@ const SCENARIOS: Scenario[] = [
     taps: '212,95',
     settle: 420,
   },
+  // Buttons: a parallel, a timing that cuts it, a stagger, a timing that cuts it, a parallel beside a longer delay;
+  // row 2 a parallel with no completion.
+  // The parallel mid-way, its completion still to run. Flow A starts a tick later, so only frames at rest match it.
+  {
+    name: 'anim-group',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '28,23',
+    settle: 300,
+  },
+  {
+    name: 'anim-group-done',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '28,23',
+    settle: 600,
+    flowA: true,
+  },
+  // Cutting the parallel's fade stops its slide too.
+  {
+    name: 'anim-group-cut',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '28,23 74,23',
+    settle: 600,
+  },
+  // The same without a completion.
+  {
+    name: 'anim-group-bare-cut',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '28,59 74,23',
+    settle: 600,
+  },
+  {
+    name: 'anim-group-stagger',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '120,23',
+    settle: 600,
+    flowA: true,
+  },
+  // Cutting the stagger's first animation lets the other two run on.
+  {
+    name: 'anim-group-poke',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '120,23 166,23',
+    settle: 600,
+    flowA: true,
+  },
+  // Both timings done, the delay beside them still running; then its completion.
+  {
+    name: 'anim-group-wait',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '212,23',
+    settle: 250,
+    flowA: true,
+  },
+  {
+    name: 'anim-group-wait-done',
+    file: fixture('animation-groups'),
+    screen: PORTRAIT,
+    taps: '212,23',
+    settle: 600,
+    flowA: true,
+  },
   {name: 'interpolate', file: fixture('interpolate'), screen: PORTRAIT},
   {
     name: 'interpolate-spin',
