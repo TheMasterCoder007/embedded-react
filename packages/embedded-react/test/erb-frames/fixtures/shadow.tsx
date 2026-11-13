@@ -1,4 +1,4 @@
-// Shadows: a static one, an elevation, and one that state drives.
+// Shadows: a static one, an elevation, and one that state drives. A radius drops its fraction.
 import {useState} from 'react';
 import {View, Pressable, StyleSheet} from 'embedded-react';
 
@@ -15,7 +15,7 @@ export function App() {
           {
             shadowColor: raised ? '#203080' : '#000000',
             shadowOpacity: raised ? 0.8 : 0.3,
-            shadowRadius: raised ? 10 : 2,
+            shadowRadius: raised ? 10.9 : 2.9,
           },
         ]}
         onPress={() => setRaised(!raised)}
@@ -39,7 +39,7 @@ const styles = StyleSheet.create({
     shadowColor: '#402060',
     shadowOffset: {width: 4, height: 6},
     shadowOpacity: 0.5,
-    shadowRadius: 8,
+    shadowRadius: 8.9,
   },
   lifted: {
     width: 140,

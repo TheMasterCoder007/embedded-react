@@ -182,7 +182,7 @@ export interface ViewStyle {
   transform?: TransformStyle[];
   transformOrigin?: TransformOrigin;
 
-  // Shadow. Rendered only in a build with shadows enabled (ERUI_SHADOWS) and `shadowOpacity` above 0.
+  // Shadow. Rendered only in a build with shadows enabled (ERUI_SHADOWS), by `shadowOpacity` above 0 or an `elevation`.
   shadowColor?: string;
   shadowOffset?: ShadowOffset;
   shadowOpacity?: number;

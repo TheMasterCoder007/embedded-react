@@ -409,6 +409,16 @@ function lowerDynamicStyleValue(
     ];
   }
 
+  // A byte field takes a float with its fraction dropped, where a dimension would round it.
+  if (dynamicField.kind === 'byte') {
+    return [
+      {
+        field: dynamicField.field,
+        value: {kind: 'float', value: valueExpression},
+      },
+    ];
+  }
+
   return [
     {
       field: dynamicField.field,
@@ -481,6 +491,7 @@ export function bootStyleAssign(
   const isNumeric =
     pixelField ||
     dynamicField?.kind === 'opacity' ||
+    dynamicField?.kind === 'byte' ||
     dynamicField?.kind === 'num';
   if (!isNumeric) return null;
   value.name ??= key;
@@ -493,7 +504,12 @@ export function bootStyleAssign(
   return {
     field: pixelField ?? dynamicField!.field,
     value: {
-      kind: dynamicField?.kind === 'opacity' ? 'opacity' : 'dimension',
+      kind:
+        dynamicField?.kind === 'opacity'
+          ? 'opacity'
+          : dynamicField?.kind === 'byte'
+            ? 'float'
+            : 'dimension',
       value: {kind: 'boot', slot, type: slot.type},
     },
   };

@@ -70,7 +70,8 @@ that can rotate or scale; see [Memory](../guides/memory.md).
 ## Shadow
 
 `shadowColor`, `shadowOffset` (`{width, height}`), `shadowOpacity`, `shadowRadius` and `elevation`,
-rendered only in a build with `ERUI_SHADOWS` and a `shadowOpacity` above 0. Shadows are a two-pass
+rendered only in a build with `ERUI_SHADOWS`. A node casts a shadow when its `shadowOpacity` is above
+0; otherwise an `elevation` above 0 casts a black one sized from it. Shadows are a two-pass
 blur through scratch memory; the small-board examples build without them. They work on `View`,
 `ScrollView`, `Pressable`, `TouchableOpacity` and `Modal`. **Flow B:** `shadowOffset` must be static;
 the other four can follow state.

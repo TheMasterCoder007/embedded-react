@@ -67,6 +67,13 @@ describe('shadow styles', () => {
     ]);
   });
 
+  it('drops the fraction of a radius and an elevation, as Flow A does', () => {
+    expect(lowerStyle({shadowRadius: 6.9, elevation: 2.5})).toEqual([
+      {field: 'shadow_radius', value: 6},
+      {field: 'elevation', value: 2},
+    ]);
+  });
+
   it('replaces an earlier shadowOffset whole', () => {
     expect(
       programOf(
