@@ -87,28 +87,33 @@ export interface IrCompletionWait {
 }
 
 /**
- * A run whose animations have no fixed end (a spring or decay) besides a delay that may end later, so it is
- * joined at run time: the completion runs as finished once the delay has passed and every animation has
- * finished, whichever is last, and as not finished as soon as one is interrupted.
+ * Animations run as one group, with the completion (if any) on the group: it runs as finished once every
+ * animation has finished and the wait has passed, whichever is last, and as not finished as soon as one is
+ * interrupted.
  */
-export interface IrCompletionJoin {
-  /** Milliseconds from the start until the composition's last delay ends. */
-  delayMs: number;
-  /** The composition the run belongs to, which a stop names to end it. */
-  owner: number;
+export interface IrAnimationGroup {
+  /** An interrupted animation stops the rest, as a parallel does. A stagger's run on. */
+  stopsTogether: boolean;
+  /** The composition's last delay, when it ends after an animation may have; null when none does. */
+  wait: {
+    /** Milliseconds from the start until the delay ends. */
+    delayMs: number;
+    /** The composition the run belongs to, which a stop names to end it. */
+    owner: number;
+  } | null;
 }
 
 /**
  * Animations started together, a composition (parallel / stagger / delay) already folded into their delays.
- * The completion runs when the last one ends; there is at most one when there is a completion.
+ * The completion runs when the last one ends: on the group when there is one, else on the only animation.
  */
 export interface IrStartAnimations {
   kind: 'startAnimations';
   animations: IrAnimation[];
   completion: IrCompletion | null;
   completionWait: IrCompletionWait | null;
-  /** Set instead of completionWait when the wait cannot be known at build time. */
-  completionJoin: IrCompletionJoin | null;
+  /** Set when the end cannot be known at build time, or several animations are waited on or stop together. */
+  group: IrAnimationGroup | null;
 }
 
 /** How a chain repeats. */

@@ -79,6 +79,8 @@ export class Out {
     string,
     {owner: number; isStarted: boolean}
   >();
+  /** Running-animation entries the groups of several animations take: each group's own, and its animations'. */
+  animationGroupEntries = 0;
   /** Numbers the next animation sequence. */
   sequenceCount = 0;
   /** Image assets the app reaches: asset name → source-relative import path. */

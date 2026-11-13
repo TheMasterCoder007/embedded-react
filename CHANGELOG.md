@@ -73,6 +73,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: the shadow styles and `elevation`. All but `shadowOffset` can follow state.
 - Flow B: `console.log`, `warn` and `error` in handlers, effects and timers go to the firmware's log hook
   (`ErbConfig::log`). A `--release` package leaves them out. Packages are now format minor 15.
+- Flow B: `.start(callback)` on a `parallel` or `stagger` of several animations. The callback runs once they have
+  all ended.
 
 ### Changed
 
@@ -92,6 +94,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: a field a list item leaves out reads as `undefined`, as in JS, so `{item.n}` shows nothing instead of `0`.
 - Flow B: a list's number field is a fraction when any initial item's value is one, instead of taking the first
   item's kind.
+- Flow B: interrupting one animation of a `parallel` stops the rest, as in Flow A. `stopTogether: false` lets them
+  run on.
 
 ### Fixed
 

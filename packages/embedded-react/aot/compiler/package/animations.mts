@@ -21,9 +21,10 @@
  * toValue in a register; its delay is the engine's own delay_ms. Each on_complete callback is an
  * animation-done function: a chain's steps start one another from them, and a completion wait is a delay leaf
  * started from one. A completion is a helper that takes `finished`, entered through a done function of its own
- * when an animation ends with it, or called directly. A run joined at run time (a spring beside a
- * longer delay) is a parallel group of a delay leaf and the animation. A composition with waits keeps the handle
- * of its last wait in a slot, so a stop can end it.
+ * when an animation ends with it, or called directly. A completion that waits on several animations, or on a
+ * spring beside a longer delay, is on a group of them (and a delay leaf); a parallel of several is a group with
+ * or without one, so they stop together. A composition with waits keeps the handle of its last wait in a slot,
+ * so a stop can end it.
  */
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -93,7 +94,7 @@ type AnimationStmt = IrStmt & {
 /** Waits that run at once. */
 const MAX_WAITS = 8;
 
-/** Running-animation entries a wait takes: its delay leaf, and a joined run's group. */
+/** Running-animation entries a wait takes: its delay leaf, and its group's. */
 const WAIT_ENTRIES = 2;
 
 /** A register operand that names no register (ASTART with no toValue in one). */
@@ -206,10 +207,11 @@ export class AnimationPlan {
     }
 
     // Each value runs one animation at a time, and one more while a start cancels it; each wait takes its own,
-    // even in an app that only waits.
+    // even in an app that only waits. A group's block is counted twice, for the run a restart cancels.
     if (this.values.size || this.owners.size) {
       const waits = this.owners.size ? MAX_WAITS * WAIT_ENTRIES : 0;
-      this.entries = this.values.size + 1 + waits;
+      const groups = 2 * output.animationGroupEntries;
+      this.entries = this.values.size + 1 + waits + groups;
       arena.animTable(this.entries);
     }
   }
@@ -325,26 +327,32 @@ export class AnimationPlan {
   }
 
   /**
-   * A joined run: a parallel group of its delay and its one animation, done when both are and not finished as
-   * soon as the animation stops.
+   * A group: its wait's delay leaf, when it has one, then its animations. A parallel stops the rest when one
+   * stops; a stagger with no gap starts them together too, and lets the rest run on.
    *
    * @param start  The start.
    *
    * @returns The group's index.
    */
-  join(start: IrStartAnimations): number {
+  group(start: IrStartAnimations): number {
     let index = this.descriptors.get(start);
     if (index === undefined) {
+      const {stopsTogether, wait} = start.group!;
+      const children = start.animations.map(animation =>
+        this.leafRecord(animation),
+      );
+      if (wait) {
+        children.unshift({...leafDefaults(), amount: wait.delayMs});
+      }
       index = this.animations.length;
       this.animations.push(
         {
           ...leafDefaults(),
-          kind: AnimationKind.parallel,
+          kind: stopsTogether ? AnimationKind.parallel : AnimationKind.stagger,
           first: index + 1,
-          count: 2,
+          count: children.length,
         },
-        {...leafDefaults(), amount: start.completionJoin!.delayMs},
-        this.leafRecord(start.animations[0]),
+        ...children,
       );
       this.descriptors.set(start, index);
     }
@@ -569,6 +577,37 @@ function toValue(
 }
 
 /**
+ * The toValues a group's animations take from registers, in consecutive registers in the animations' order.
+ *
+ * @param codegen  The function's codegen.
+ * @param animations  The animations.
+ * @param plan  The program's animations.
+ *
+ * @returns The first register, or null when every descriptor holds its own.
+ */
+function toValues(
+  codegen: Codegen,
+  animations: IrAnimation[],
+  plan: AnimationPlan,
+): Register | null {
+  const fromRegisters = animations.filter(
+    animation => animation.to?.kind !== 'number',
+  );
+  if (fromRegisters.length <= 1) {
+    return fromRegisters.length
+      ? toValue(codegen, fromRegisters[0], plan)
+      : null;
+  }
+
+  const run = codegen.builder.consecutive(fromRegisters.map(() => 'float'));
+  fromRegisters.forEach((animation, index) => {
+    const value = toValue(codegen, animation, plan)!;
+    codegen.builder.abc('MOVE', run[index].index, value.index);
+  });
+  return run[0];
+}
+
+/**
  * Starts one animation.
  *
  * @param codegen  The function's codegen.
@@ -675,25 +714,27 @@ export function animationStatement(
   const {builder} = codegen;
   switch (statement.kind) {
     case 'startAnimations': {
-      const {animations, completion, completionJoin} = statement;
+      const {animations, completion, group} = statement;
       if (!animations.length) {
         return;
       }
 
-      // A joined run is one tree, kept where a stop of its composition finds it.
-      if (completionJoin && completion) {
+      // A group is one tree, kept where a stop of its composition finds it when it has a wait.
+      if (group) {
         codegen.scoped(() => {
           const handle = start(
             codegen,
-            plan.join(statement),
-            plan.done(completion.name),
-            toValue(codegen, animations[0], plan),
+            plan.group(statement),
+            completion ? plan.done(completion.name) : NONE,
+            toValues(codegen, animations, plan),
           );
-          builder.abx(
-            'SET32',
-            handle.index,
-            plan.owner(completionJoin.owner).index,
-          );
+          if (group.wait) {
+            builder.abx(
+              'SET32',
+              handle.index,
+              plan.owner(group.wait.owner).index,
+            );
+          }
         });
         return;
       }
