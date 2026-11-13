@@ -15,6 +15,7 @@ export function App() {
   const presses = useRef(0);
 
   const bump = (step: number) => {
+    console.log('bump', step, 'from', count);
     presses.current += 1;
     setCount(count + step);
     setLabel('last ' + (step > 0 ? 'up' : 'down') + ' at ' + (count + step));

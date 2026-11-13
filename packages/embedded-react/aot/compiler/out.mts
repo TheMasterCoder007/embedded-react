@@ -19,6 +19,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 import type {Program} from '@babel/types';
+import type {ScalarState} from './types.mts';
 import type {
   IrAnimationCallback,
   IrDepEffect,
@@ -61,6 +62,10 @@ export class Out {
   /** Numbers the next <Svg> (which names its tapes). */
   svgCount = 0;
   readonly timerFunctions: IrTimerFunction[] = [];
+  /** A release build, which leaves the console calls out. */
+  release = false;
+  /** The states a handler, effect or timer keeps a copy of, to read after setting them. */
+  readonly keptStates = new Set<ScalarState>();
   /** useNativeEvent handlers, in the order they lower. */
   readonly nativeEventHandlers: IrNativeEventHandler[] = [];
   /** The optional native modules, by index, each with every method and event the package lists. */

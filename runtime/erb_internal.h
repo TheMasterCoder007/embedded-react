@@ -415,6 +415,7 @@ extern ERProps g_erb_props;
 /* What the VM asks of the runtime. Those returning ErbStatus return ERB_OK or a fault (filling g_erb.error). */
 ErbStatus erb_rt_fault(ErbStatus status, const char* detail, const char* name, uint16_t function, uint32_t offset);
 void erb_rt_report(const char* what, uint16_t function, uint32_t offset);
+void erb_rt_log(const char* line);
 void erb_rt_set_dirty(uint16_t bit);
 ERNode* erb_rt_node(const int32_t* cells);
 void erb_rt_set_node(int32_t* cells, ERNode* node);

@@ -1395,6 +1395,7 @@ export function typeSource(source: IrSource, math64: boolean): IrExpr {
           kind: 'state',
           state,
           type: assumed ? int64Of(assumed) : stateType(state),
+          ...(source.latest ? {latest: true} : {}),
         };
       }
       case 'local':
@@ -3464,6 +3465,48 @@ function lowerTextParts(
     isString: value.type.kind === 'string',
     parts: [{kind: 'value', value, ...missing}],
   };
+}
+
+/**
+ * Lowers `console.log`'s arguments to the line it prints: each as a string `+` prints it, a space between them.
+ *
+ * @param callArguments  The call's arguments.
+ * @param environment  The expression environment.
+ *
+ * @returns The line.
+ */
+export function lowerLogText(
+  callArguments: t.CallExpression['arguments'],
+  environment: Env,
+): IrText {
+  const scope = foldScope(environment, environment.constants ?? {});
+  const parts: IrTextPart[] = [];
+  callArguments.forEach((argument, index) => {
+    if (argument.type === 'SpreadElement') {
+      throw textShapeError(
+        argument,
+        'AOT: console.* cannot take a spread',
+        'pass each value itself: console.log(a, b).',
+      );
+    }
+    // An object or a list that folds would print as `+` prints it, "[object Object]".
+    let folded: unknown;
+    try {
+      folded = evalStatic(argument, scope, 'strict');
+    } catch {
+      /* not a compile-time constant */
+    }
+    if (folded !== null && typeof folded === 'object') {
+      throw textShapeError(
+        argument,
+        'AOT: console.* cannot print an object or a list',
+        'print its fields or items: console.log(point.x, point.y).',
+      );
+    }
+    if (index > 0) parts.push({kind: 'literal', text: ' '});
+    parts.push(...lowerTextParts(argument, environment, scope, true).parts);
+  });
+  return {parts};
 }
 
 /**

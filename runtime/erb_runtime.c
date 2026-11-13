@@ -453,6 +453,14 @@ void erb_rt_report(const char* what, uint16_t function, uint32_t offset)
     }
 }
 
+void erb_rt_log(const char* line)
+{
+    if (g_erb.config.log)
+    {
+        g_erb.config.log(line, g_erb.config.context);
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Values the VM keeps
  ---------------------------------------------------------------------------------------------------------------------*/

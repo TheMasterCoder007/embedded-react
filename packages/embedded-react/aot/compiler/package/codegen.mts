@@ -130,6 +130,8 @@ export interface ProgramSlots {
   /** Each PanResponder's gesture state, by its prefix. */
   gestures: Map<string, GestureSlots>;
   vectors: VectorPlan;
+  /** The copy a body keeps of each state it sets and then reads. */
+  kept: Map<ScalarState, Slot>;
 }
 
 /** The <TextInput> a CHANGE_TEXT handler reads its new text from, and the buffer it reads it into. */
@@ -264,6 +266,10 @@ export class Codegen {
   private readonly loopLabels: {done: Label; next: Label}[] = [];
   /** The row the update being lowered visits, which its setRows write. */
   private updatingRow: Register | undefined;
+  /** The states the body being lowered keeps a copy of, which its reads use. */
+  private readonly keptStates = new Set<ScalarState>();
+  /** The states the statement being lowered reads as they are now: an updater's own. */
+  private readsLatest: ReadonlySet<ScalarState> | undefined;
 
   /**
    * @param builder  The function being built.
@@ -331,7 +337,7 @@ export class Codegen {
         // An interned state still reads as a string.
         return this.program.enums.has(expression.state)
           ? 'string'
-          : slotType(this.stateSlot(expression.state));
+          : slotType(this.readSlot(expression));
       case 'boot':
         return slotType(this.bootSlot(expression.slot));
       case 'ref':
@@ -438,7 +444,7 @@ export class Codegen {
             `AOT internal: state "${expression.state.name}" is interned, but read as a string`,
           );
         }
-        return this.get(this.stateSlot(expression.state));
+        return this.get(this.readSlot(expression));
       case 'boot':
         return this.get(this.bootSlot(expression.slot));
       case 'ref':
@@ -716,7 +722,7 @@ export class Codegen {
     this.builder.abc(
       'EQ',
       register.index,
-      this.get(this.stateSlot(read.state)).index,
+      this.get(this.readSlot(read)).index,
       this.enumValue(set, index).index,
     );
     if (operator === '!=') {
@@ -1382,7 +1388,7 @@ export class Codegen {
         const positions = this.slicePositions(part.edits);
         builder.abx(
           'FMTE',
-          this.get(this.stateSlot(value.state)).index,
+          this.get(this.readSlot(value)).index,
           this.enumOf(value)!.set,
         );
         this.edits(part.edits, positions, 0);
@@ -1482,10 +1488,51 @@ export class Codegen {
     }
   }
 
+  /**
+   * Lowers a body that shares its function with another, an effect's cleanup before its body: the copies it keeps
+   * are its own.
+   *
+   * @param statements  The body's statements.
+   */
+  body(statements: IrStmt[]): void {
+    this.keptStates.clear();
+    this.statements(statements);
+    this.keptStates.clear();
+  }
+
   private statement(statement: IrStmt): void {
+    const outer = this.readsLatest;
+    this.readsLatest = statement.readsLatest ?? outer;
+    try {
+      this.lowerStatement(statement);
+    } finally {
+      this.readsLatest = outer;
+    }
+  }
+
+  /** Whether a statement lowers to code: all but a field kept as it is, which the body didn't set before. */
+  private doesSomething(statement: IrStmt): boolean {
+    if (statement.kind !== 'keepField') return true;
+    const latest = statement.readsLatest ?? this.readsLatest;
+    return (
+      this.keptStates.has(statement.state) && !latest?.has(statement.state)
+    );
+  }
+
+  private lowerStatement(statement: IrStmt): void {
     const {builder} = this;
     builder.at(statement.location);
     switch (statement.kind) {
+      case 'keepStates':
+        for (const state of statement.states) {
+          const copy = required(
+            this.program.kept.get(state),
+            `the copy of state "${state.name}"`,
+          );
+          this.scoped(() => this.set(copy, this.get(this.stateSlot(state))));
+          this.keptStates.add(state);
+        }
+        return;
       case 'declareLocal': {
         const hoisted = this.program.hoisted.get(statement.name);
         if (statement.isHoisted && !hoisted) {
@@ -1572,12 +1619,21 @@ export class Codegen {
         });
         return;
       case 'if': {
+        // Branches that only keep fields as they are do nothing, so the test isn't worked out either.
+        const inner = [...statement.consequent, ...(statement.alternate ?? [])];
+        if (
+          inner.some(kept => kept.kind === 'keepField') &&
+          !inner.some(kept => this.doesSomething(kept))
+        ) {
+          return;
+        }
         const otherwise = builder.label();
         const checkpoint = builder.checkpoint();
         builder.branch('JF', otherwise, this.condition(statement.test));
         builder.release(checkpoint);
         this.statements(statement.consequent);
-        if (statement.alternate) {
+        // An else of fields kept as they are does nothing.
+        if (statement.alternate?.some(inner => this.doesSomething(inner))) {
           const end = builder.label();
           builder.branch('JMP', end);
           builder.place(otherwise);
@@ -1615,6 +1671,23 @@ export class Codegen {
         );
         return;
       }
+      case 'keepField':
+        if (this.doesSomething(statement)) {
+          const {state} = statement;
+          this.scoped(() =>
+            this.set(
+              this.stateSlot(state),
+              this.get(this.program.kept.get(state)!),
+            ),
+          );
+        }
+        return;
+      case 'log':
+        this.scoped(() => {
+          this.text(statement.text.parts);
+          builder.abc('FMTLOG', 0);
+        });
+        return;
       case 'clearList':
         builder.abx('CLEAR', 0, this.listPool(statement.list).slot.index);
         return;
@@ -2665,6 +2738,15 @@ export class Codegen {
 
   stateSlot(state: ScalarState): Slot {
     return required(this.program.states.get(state), `state "${state.name}"`);
+  }
+
+  /** The slot a read of a state takes: the copy its body keeps, unless an updater reads it. */
+  private readSlot({state, latest}: IrExpr & {kind: 'state'}): Slot {
+    return this.keptStates.has(state) &&
+      !latest &&
+      !this.readsLatest?.has(state)
+      ? this.program.kept.get(state)!
+      : this.stateSlot(state);
   }
 
   listPool(list: ListState): ListPool {

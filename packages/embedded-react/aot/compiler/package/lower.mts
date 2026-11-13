@@ -709,6 +709,7 @@ function planSlots(
     stringLocals: new Map(),
     nativeStrings: new Map(),
     enums: new Map(),
+    kept: new Map(),
     hoisted: new Map(),
     armed: new Map(),
     timerFunctions: new Map(),
@@ -764,6 +765,27 @@ function planSlots(
       arena.track(slot);
     }
     slots.states.set(state, slot);
+  }
+
+  // The copy a body keeps of a state it sets and then reads: a slot like the state's, which nothing watches.
+  for (const state of output.keptStates) {
+    const interned = slots.enums.get(state);
+    slots.kept.set(
+      state,
+      interned
+        ? Object.assign(arena.slot(ValueType.enum, 0), {aux: interned.set})
+        : state.slotKind === 'string'
+          ? arena.slot(
+              ValueType.string,
+              tables.string(''),
+              stringCap.state(state),
+            )
+          : state.slotKind === 'i64'
+            ? arena.slot(ValueType.int64, tables.constant64(0n))
+            : state.slotKind === 'float'
+              ? arena.slot(ValueType.float, 0)
+              : arena.slot(state.isBoolean ? ValueType.bool : ValueType.int, 0),
+    );
   }
 
   // A list is a pool of rows, empty at load; the boot function appends its first items. Each row field is
@@ -2337,10 +2359,10 @@ function runEffect(
       builder.branch('JF', skip, flag);
     });
     setConstant(codegen, armed, 0);
-    codegen.statements(effect.cleanup ?? []);
+    codegen.body(effect.cleanup ?? []);
     builder.place(skip);
   }
-  codegen.statements(effect.body);
+  codegen.body(effect.body);
 }
 
 /**

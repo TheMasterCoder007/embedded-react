@@ -118,6 +118,8 @@ export interface IrBoolean extends IrTyped {
 export interface IrState extends IrTyped {
   kind: 'state';
   state: ScalarState;
+  /** An updater's parameter: it reads what the state holds now, not the copy its body keeps. */
+  latest?: boolean;
 }
 
 /** A read of a value worked out at boot, from the panel size (`screen.width`, or a const derived from it). */

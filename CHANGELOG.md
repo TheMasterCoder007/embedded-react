@@ -71,6 +71,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: a `const` can destructure an object that folds, such as `const {width, height} = screen`, at module level
   too.
 - Flow B: the shadow styles and `elevation`. All but `shadowOffset` can follow state.
+- Flow B: `console.log`, `warn` and `error` in handlers, effects and timers go to the firmware's log hook
+  (`ErbConfig::log`). A `--release` package leaves them out. Packages are now format minor 15.
 
 ### Changed
 
@@ -94,6 +96,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Fixed
 
 - Flow B: a list row's item passed to a component no longer fails to compile.
+- Flow B: a handler, effect or timer that reads a state after setting it reads the value its render had, as in
+  React, instead of the new one. An updater still gets the latest value, and a second object setter given
+  `{...user}` puts back the fields the first one changed, and its shape when it has several.
 - Flow B: state a dep-driven effect sets is drawn at once, not at the next event, and a dep-driven effect no longer
   runs twice at boot.
 - Flow B: a component without state of its own no longer reads its caller's state in place of a prop or local of

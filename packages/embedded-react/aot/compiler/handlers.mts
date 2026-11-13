@@ -66,9 +66,11 @@ import {
   lowerExpr,
   lowerExprWide,
   lowerText,
+  lowerLogText,
   buildsText,
 } from './expressions.mts';
 import {isFn} from './collect.mts';
+import {keepingStates, readingLatest} from './kept-states.mts';
 import {
   isAnimatedCall,
   resolveAnim,
@@ -1769,8 +1771,13 @@ function updaterEnvironment(
     slotKind: target.slotKind,
     isBoolean: target.isBoolean,
     ...(target.widened === 'number' ? {isLiteral: true} : {}),
-    source: {kind: 'state', state: target, location: undefined},
-    expression: {kind: 'state', state: target, type: stateType(target)},
+    source: {kind: 'state', state: target, latest: true, location: undefined},
+    expression: {
+      kind: 'state',
+      state: target,
+      type: stateType(target),
+      latest: true,
+    },
   });
   return {...environment, locals, state};
 }
@@ -1962,6 +1969,41 @@ function inlineHelperCall(
   }
 }
 
+/** The console methods a package can call, as Flow A has them. */
+const CONSOLE_METHODS = new Set(['log', 'warn', 'error']);
+
+/**
+ * Whether a call is `console.log`, `console.warn` or `console.error`, on the global console: not a local, a state
+ * or a constant of that name.
+ *
+ * @param call  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns True when it is.
+ */
+function isConsoleCall(call: t.CallExpression, environment: Env): boolean {
+  const {callee} = call;
+  if (
+    callee.type !== 'MemberExpression' ||
+    callee.computed ||
+    callee.object.type !== 'Identifier' ||
+    callee.object.name !== 'console' ||
+    callee.property.type !== 'Identifier' ||
+    environment.locals.has('console') ||
+    environment.state.has('console') ||
+    'console' in (environment.constants ?? {})
+  ) {
+    return false;
+  }
+  if (!CONSOLE_METHODS.has(callee.property.name)) {
+    throw aotError(
+      `AOT: console.${callee.property.name} is not supported`,
+      'a package has console.log, console.warn and console.error, each one line in the host log.',
+    );
+  }
+  return true;
+}
+
 /**
  * Lowers one handler ExpressionStatement: a state setter, ref mutation, timer, updateVector, helper call, or
  * Animated.*(...).start() / .stop() (see lowerHandlerExpr, the located entry point).
@@ -1993,6 +2035,15 @@ function lowerHandlerExprImpl(
         },
       ];
     }
+  }
+
+  // console.log / warn / error(…) → one line for the host's log.
+  if (
+    expression.type === 'CallExpression' &&
+    isConsoleCall(expression, environment)
+  ) {
+    const text = lowerLogText(expression.arguments, environment);
+    return context.output.release ? [] : [{kind: 'log', text}];
   }
 
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
@@ -2308,11 +2359,47 @@ function lowerHandlerExprImpl(
       `AOT: "${expression.callee.name}" is not a known state setter`,
       `a handler can only call a setter from this component's own useState (e.g. setCount), ` +
         `a ref write, updateVector(…), or Animated…start(). "${expression.callee.name}" isn't one ` +
-        `of those — arbitrary functions (fetch, console.*, helpers) can't be lowered.`,
+        `of those — arbitrary functions (fetch, helpers) can't be lowered.`,
     );
   }
 
   context.stateChanged = true;
+  const setterArgument = expression.arguments[0];
+
+  const setterCall = expression as t.CallExpression & {callee: t.Identifier};
+
+  // An object's updater and reducer read its fields as they are now. A scalar's parameter is marked itself.
+  if (
+    targetState.kind === 'record' &&
+    (targetState.reducer || isFn(setterArgument))
+  ) {
+    const slots = [...targetState.fields.values(), targetState.tag?.state];
+    return readingLatest(
+      lowerSetter(setterCall, targetState, environment, state, context),
+      new Set(slots.filter(slot => slot !== undefined)),
+    );
+  }
+  return lowerSetter(setterCall, targetState, environment, state, context);
+}
+
+/**
+ * Lowers a state setter's call: a dispatch, an updater, or the new value itself.
+ *
+ * @param expression  The call.
+ * @param targetState  The state it sets.
+ * @param environment  The expression environment.
+ * @param state  The component's state table.
+ * @param context  The statement compiler's context.
+ *
+ * @returns The statements.
+ */
+function lowerSetter(
+  expression: t.CallExpression & {callee: t.Identifier},
+  targetState: StateRecord | RecordState,
+  environment: Env,
+  state: StateTable,
+  context: StatementContext,
+): IrStmt[] {
   const setterArgument = expression.arguments[0];
 
   // A dispatch runs the reducer. Its reads of the state are an updater's, so inside a loop only the list rule holds.
@@ -2972,7 +3059,10 @@ export function lowerBody(
 ): IrStmt[] {
   context.bodyList = statements;
   const lowered = lowerStmts(statements, environment, state, context);
-  return context.usedReturn ? [{kind: 'block', body: lowered}] : lowered;
+  return keepingStates(
+    context.usedReturn ? [{kind: 'block', body: lowered}] : lowered,
+    context.output,
+  );
 }
 
 /**
@@ -3046,7 +3136,10 @@ export function lowerEffect(
       output,
       bodyList: statements,
     };
-    const lowered = lowerStmts(statements, environment, state, context);
+    const lowered = keepingStates(
+      lowerStmts(statements, environment, state, context),
+      output,
+    );
     if (!context.usedReturn) {
       output.mountEffects.push({
         kind: 'inline',
@@ -3158,7 +3251,10 @@ export function lowerEffect(
   }
 
   // The effect function runs the last run's cleanup first, if that run armed it, then the body.
-  dependencyEffect.body = lowerStmts(statements, environment, state, context);
+  dependencyEffect.body = keepingStates(
+    lowerStmts(statements, environment, state, context),
+    output,
+  );
   output.effectFunctions.push({kind: 'effect', effect: dependencyEffect});
 
   // A copy of each dep, taken at mount; the update re-runs the effect when one no longer matches its copy.

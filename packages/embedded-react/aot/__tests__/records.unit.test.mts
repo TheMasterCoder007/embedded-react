@@ -72,15 +72,23 @@ function lowerHandler(stateBody: string, handler: string): IrStmt[] {
   });
 }
 
-/** What each lowered statement writes or declares. */
-const targets = (statements: IrStmt[]): string[] =>
-  statements.map(statement =>
-    statement.kind === 'declareLocal'
-      ? `declare ${statement.name}`
-      : 'state' in statement
-        ? `${statement.kind} ${statement.state.name}`
-        : statement.kind,
+/** The fields a setter is given back as they were. */
+const keptFields = (statements: IrStmt[]): string[] =>
+  statements.flatMap(statement =>
+    statement.kind === 'keepField' ? [statement.state.name] : [],
   );
+
+/** What each lowered statement writes or declares, the fields given back as they were left out. */
+const targets = (statements: IrStmt[]): string[] =>
+  statements
+    .filter(statement => statement.kind !== 'keepField')
+    .map(statement =>
+      statement.kind === 'declareLocal'
+        ? `declare ${statement.name}`
+        : 'state' in statement
+          ? `${statement.kind} ${statement.state.name}`
+          : statement.kind,
+    );
 
 describe('object state', () => {
   it('keeps a scalar state per field, nested objects flattened', () => {
@@ -154,11 +162,11 @@ describe('object state', () => {
     }
   });
 
-  it('writes the fields a setter changes, and skips the ones it spreads back', () => {
+  it('writes the fields a setter changes, and keeps the ones it spreads back', () => {
     const state = "const [p, setP] = useState({x: 1, y: 2, s: 'a'});";
-    expect(targets(lowerHandler(state, 'setP({...p, x: p.x + 1});'))).toEqual([
-      'setState p.x',
-    ]);
+    const spread = lowerHandler(state, 'setP({...p, x: p.x + 1});');
+    expect(targets(spread)).toEqual(['setState p.x']);
+    expect(keptFields(spread)).toEqual(['p.y', 'p.s']);
     expect(
       targets(lowerHandler(state, "setP(q => ({...q, s: q.s + '!'}));")),
     ).toEqual(['setStateText p.s']);

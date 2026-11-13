@@ -844,6 +844,10 @@ static void test_bytecode(void)
         base();
         set_code_types(FUNCTION_TIMER, types, 4, code, 8);
         EXPECT(ERB_OK, "slice, toUpperCase and includes on registers of their types");
+        const uint32_t logged[] = {OP_ABC(FMTS, 3, 0, 0), OP_ABC(FMTLOG, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 4, logged, 3);
+        EXPECT(ERB_OK, "a text sent to the log");
         const uint32_t float_slice[] = {OP_ABC(FMTSLICE, 3, 1, 0), OP_ABC(RET, 0, 0, 0)};
         base();
         set_code_types(FUNCTION_TIMER, types, 4, float_slice, 2);

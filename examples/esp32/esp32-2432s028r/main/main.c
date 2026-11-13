@@ -69,6 +69,13 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 
 #define US_PER_MS 1000
 
+/** @brief Prints one line to the host: reload progress, runtime reports and the app's console.*. */
+static void host_log(const char* line, void* context)
+{
+    (void)context;
+    ESP_LOGI(TAG, "%s", line);
+}
+
 #if ER_HOTRELOAD
 /* The UART moves to the host's speed once the board is up, so the console reads at this rate from then on. Its RX ring
  * only has to hold a frame: the host waits for each reply, so nothing arrives while flash is being written. */
@@ -80,13 +87,6 @@ static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
 
 static ErbPackageReload s_reload;
 static uint32_t s_reload_buffer[ERB_PACKAGE_RELOAD_BUFFER_BYTES(RELOAD_CHUNK_BYTES) / sizeof(uint32_t)];
-
-/** @brief Prints one line to the host. */
-static void reload_log(const char* line, void* context)
-{
-    (void)context;
-    ESP_LOGI(TAG, "%s", line);
-}
 
 /** @brief Hands the receiver everything the UART has. */
 static void reload_poll(void)
@@ -151,6 +151,7 @@ static void load_package(bool touch)
         .screen_height = BOARD_LCD_HEIGHT,
         .natives = native_modules,
         .native_count = native_module_count,
+        .log = host_log,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -174,7 +175,7 @@ static void load_package(bool touch)
         }
     }
 #if ER_HOTRELOAD
-    erb_package_reload_init(&s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+    erb_package_reload_init(&s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, host_log, NULL);
     if (uart_driver_install(RELOAD_UART, RELOAD_UART_RX_BYTES, 0, 0, NULL, 0) == ESP_OK
         && uart_set_baudrate(RELOAD_UART, RELOAD_UART_BAUD) == ESP_OK)
     {
