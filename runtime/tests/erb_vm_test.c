@@ -1686,6 +1686,61 @@ static void test_animations(void)
     er_animation_value_set((ERAnimationValueHandle)fade, 0.5f);
     CHECK(slot_int(SLOT_COUNT) == 100, "a stopped child ends it at once, not finished, before its delay is up");
 
+    /* A stagger of a timing and a sequence: the timing stopped ends it as not finished at once, and the sequence
+       still takes its turn. */
+    base();
+    {
+        s_package_spec.anims[2] = (TAnim){ERB_ANIMATION_STAGGER, 0, 0, ERB_NONE, 0, 3, 2, 100, 0, 0, {0, 0, 0, 0}};
+        s_package_spec.anims[3] =
+            (TAnim){ERB_ANIMATION_TIMING, ER_EASE_LINEAR, 0, SLOT_FADE, 0, 0, 0, 50, 0, FLOAT_ONE_BITS, {0, 0, 0, 0}};
+        s_package_spec.anims[4] = (TAnim){ERB_ANIMATION_SEQUENCE, 0, 0, ERB_NONE, 0, 5, 1, 0, 0, 0, {0, 0, 0, 0}};
+        s_package_spec.anims[5] = s_package_spec.anims[3];
+        s_package_spec.anim_count = 6;
+        const uint8_t types[] = {ERB_TYPE_ANIMATION};
+        const uint32_t start[] = {OP_ABX(ASTART, 0, 2),
+                                  ERB_PACK16(FUNCTION_DONE, ERB_NO_REGISTER),
+                                  OP_ABX(SET32, 0, SLOT_ANIMATION),
+                                  OP_ABC(RET, 0, 0, 0)};
+        tpkg_set_code(&s_package_spec, press, types, 1, start, 4);
+        const uint8_t done_types[] = {ERB_TYPE_BOOL, ERB_TYPE_INT};
+        const uint32_t done[] = {
+            OP_ABC(EVT, 0, ERB_EVENT_FIELD_FINISHED, 0),
+            OP_ABX(LOADI, 1, 100),
+            OP_ABX(JF, 0, 1),
+            OP_ABX(LOADI, 1, 200),
+            OP_ABX(SET32, 1, SLOT_COUNT),
+            OP_ABC(RET, 0, 0, 0),
+        };
+        tpkg_set_code(&s_package_spec, FUNCTION_DONE, done_types, 2, done, 6);
+    }
+    s_package_spec.has_debug = false;
+    CHECK(load(), "a stagger group loads");
+    root = slot_node(SLOT_ROOT, 0);
+    memcpy(&fade, slot(SLOT_FADE), sizeof(fade));
+    er_animation_value_set((ERAnimationValueHandle)fade, 0.0f);
+    fire(root, ER_EVENT_PRESS);
+    embedded_renderer_tick(20);
+    erb_tick(20);
+    er_animation_value_set((ERAnimationValueHandle)fade, 0.5f);
+    CHECK(slot_int(SLOT_COUNT) == 100, "a stagger's stopped child ends it at once, not finished");
+    for (int step = 0; step < 10; step++)
+    {
+        embedded_renderer_tick(20);
+        erb_tick(20);
+    }
+    CHECK(er_animation_value_get((ERAnimationValueHandle)fade) == 1.0f, "and its other child still takes its turn");
+    for (int press_count = 0; press_count < 3; press_count++)
+    {
+        fire(root, ER_EVENT_PRESS);
+        for (int step = 0; step < 10; step++)
+        {
+            embedded_renderer_tick(20);
+            erb_tick(20);
+        }
+    }
+    CHECK(slot_int(SLOT_ANIMATION) != 0 && slot_int(SLOT_COUNT) == 200,
+          "its entries are free once every child is done");
+
     /* An interpolated binding maps the value onto the prop. */
     base();
     s_package_spec.bindings[3] = s_package_spec.bindings[0];

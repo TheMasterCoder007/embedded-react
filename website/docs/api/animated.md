@@ -76,8 +76,7 @@ Native. Composition is JavaScript over each child's `start`/`stop`, with complet
 engine, so a sequence of timings costs one engine animation at a time.
 
 **Flow B** compiles all of these, with limits listed in [the AOT subset](../guides/aot-subset.md#animation):
-a `loop` can repeat a timing, spring, decay or sequence; a sequence entry must have a known duration;
-`iterations` must be a constant.
+a `loop` can repeat a timing, spring, decay or sequence; `iterations` must be a constant.
 
 ## Easing
 

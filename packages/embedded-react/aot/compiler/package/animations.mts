@@ -50,6 +50,7 @@ import type {Label, Register} from './bytecode.mts';
 import type {Codegen} from './codegen.mts';
 import type {
   IrAnimation,
+  IrAnimationSequence,
   IrCompletion,
   IrStartAnimations,
   IrStartChain,
@@ -81,6 +82,13 @@ type DoneFunction =
   | {kind: 'wait'; completion: IrCompletion; delayMs: number; owner: number}
   | {kind: 'step'; chain: IrStartChain; index: number}
   | {kind: 'repeat'; chain: IrStartChain};
+
+/** A descriptor in a group's tree, with the animation a leaf is and the descriptors a group runs. */
+interface TreeNode {
+  record: ProgramAnim;
+  animation: IrAnimation | null;
+  children: TreeNode[];
+}
 
 /** The animation statements. */
 type AnimationStmt = IrStmt & {
@@ -127,6 +135,8 @@ export class AnimationPlan {
   /** The completions, in function order (callers first), by name. */
   readonly completions = new Map<string, IrCompletion>();
   private readonly descriptors = new Map<object, number>();
+  /** Each group's animations, in the order its tree lists them. */
+  private readonly groupLeaves = new Map<IrStartAnimations, IrAnimation[]>();
   private readonly waits = new Map<number, number>();
   private readonly interpolationIndex = new Map<string, number>();
   /** The running-animation table's entries. */
@@ -209,7 +219,10 @@ export class AnimationPlan {
     // Each value runs one animation at a time, and one more while a start cancels it; each wait takes its own,
     // even in an app that only waits. A group's block is counted twice, for the run a restart cancels.
     if (this.values.size || this.owners.size) {
-      const waits = this.owners.size ? MAX_WAITS * WAIT_ENTRIES : 0;
+      const hasWaits = [...output.animationWaits.values()].some(
+        record => record.hasWaits,
+      );
+      const waits = hasWaits ? MAX_WAITS * WAIT_ENTRIES : 0;
       const groups = 2 * output.animationGroupEntries;
       this.entries = this.values.size + 1 + waits + groups;
       arena.animTable(this.entries);
@@ -327,8 +340,9 @@ export class AnimationPlan {
   }
 
   /**
-   * A group: its wait's delay leaf, when it has one, then its animations. A parallel stops the rest when one
-   * stops; a stagger with no gap starts them together too, and lets the rest run on.
+   * A group's tree: its wait's delay leaf, when it has one, then its animations, then its sequences, each group's
+   * children listed together after the groups before it. A parallel stops the rest when one stops; a stagger
+   * with no gap starts them together too, and lets the rest run on.
    *
    * @param start  The start.
    *
@@ -338,25 +352,43 @@ export class AnimationPlan {
     let index = this.descriptors.get(start);
     if (index === undefined) {
       const {stopsTogether, wait} = start.group!;
-      const children = start.animations.map(animation =>
-        this.leafRecord(animation),
+      const root = this.groupNode(
+        stopsTogether,
+        start.animations,
+        start.sequences,
+        wait?.delayMs ?? null,
       );
-      if (wait) {
-        children.unshift({...leafDefaults(), amount: wait.delayMs});
+      index = this.animations.push(root.record) - 1;
+      const leaves: IrAnimation[] = [];
+      const nodes = [root];
+      for (const node of nodes) {
+        if (node.animation) {
+          leaves.push(node.animation);
+        }
+        if (!node.children.length) continue;
+        node.record.first = this.animations.length;
+        node.record.count = node.children.length;
+        for (const child of node.children) {
+          this.animations.push(child.record);
+          nodes.push(child);
+        }
       }
-      index = this.animations.length;
-      this.animations.push(
-        {
-          ...leafDefaults(),
-          kind: stopsTogether ? AnimationKind.parallel : AnimationKind.stagger,
-          first: index + 1,
-          count: children.length,
-        },
-        ...children,
-      );
       this.descriptors.set(start, index);
+      this.groupLeaves.set(start, leaves);
     }
     return index;
+  }
+
+  /**
+   * A group's animations, in the order a start reads their toValues from registers: its tree's.
+   *
+   * @param start  The start.
+   *
+   * @returns The animations.
+   */
+  groupAnimations(start: IrStartAnimations): IrAnimation[] {
+    this.group(start);
+    return this.groupLeaves.get(start)!;
   }
 
   /**
@@ -411,6 +443,54 @@ export class AnimationPlan {
       throw new Error(`AOT internal: no slot for composition ${owner}`);
     }
     return slot;
+  }
+
+  private groupNode(
+    stopsTogether: boolean,
+    animations: IrAnimation[],
+    sequences: IrAnimationSequence[],
+    waitMs: number | null,
+  ): TreeNode {
+    const children = [
+      ...animations.map(animation => this.leafNode(animation)),
+      ...sequences.map(sequence => this.sequenceNode(sequence)),
+    ];
+    if (waitMs !== null) {
+      children.unshift(delayNode(waitMs));
+    }
+    return {
+      record: {
+        ...leafDefaults(),
+        kind: stopsTogether ? AnimationKind.parallel : AnimationKind.stagger,
+      },
+      animation: null,
+      children,
+    };
+  }
+
+  private sequenceNode(sequence: IrAnimationSequence): TreeNode {
+    return {
+      record: {...leafDefaults(), kind: AnimationKind.sequence},
+      animation: null,
+      children: sequence.steps.map(step => {
+        if (step.kind === 'animation') {
+          return this.leafNode(step.animation);
+        }
+        if (step.kind === 'delay') {
+          return delayNode(step.delayMs);
+        }
+        return this.groupNode(
+          step.stopsTogether,
+          step.animations,
+          step.sequences,
+          step.waitMs,
+        );
+      }),
+    };
+  }
+
+  private leafNode(animation: IrAnimation): TreeNode {
+    return {record: this.leafRecord(animation), animation, children: []};
   }
 
   private leafRecord(animation: IrAnimation): ProgramAnim {
@@ -482,6 +562,19 @@ const leafDefaults = (): ProgramAnim => ({
   delayMs: 0,
   to: 0,
   parameters: [0, 0, 0, 0],
+});
+
+/**
+ * A delay leaf in a group's tree.
+ *
+ * @param delayMs  The delay.
+ *
+ * @returns The node.
+ */
+const delayNode = (delayMs: number): TreeNode => ({
+  record: {...leafDefaults(), amount: delayMs},
+  animation: null,
+  children: [],
 });
 
 /**
@@ -715,25 +808,30 @@ export function animationStatement(
   switch (statement.kind) {
     case 'startAnimations': {
       const {animations, completion, group} = statement;
-      if (!animations.length) {
+      if (!animations.length && !statement.sequences.length) {
         return;
       }
 
-      // A group is one tree, kept where a stop of its composition finds it when it has a wait.
+      // A group is one tree, kept where a stop of its composition finds it when it has a wait. One with
+      // sequences is kept too, and stops its last run first: steps that run on would pile up runs.
       if (group) {
+        const owner = group.owner ?? group.wait?.owner ?? null;
+        if (group.owner !== null) {
+          codegen.scoped(() => {
+            const last = builder.register('animation');
+            builder.abx('GET32', last.index, plan.owner(group.owner!).index);
+            builder.abc('ASTOP', last.index);
+          });
+        }
         codegen.scoped(() => {
           const handle = start(
             codegen,
             plan.group(statement),
             completion ? plan.done(completion.name) : NONE,
-            toValues(codegen, animations, plan),
+            toValues(codegen, plan.groupAnimations(statement), plan),
           );
-          if (group.wait) {
-            builder.abx(
-              'SET32',
-              handle.index,
-              plan.owner(group.wait.owner).index,
-            );
+          if (owner !== null) {
+            builder.abx('SET32', handle.index, plan.owner(owner).index);
           }
         });
         return;

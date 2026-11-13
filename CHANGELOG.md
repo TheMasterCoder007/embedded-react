@@ -107,6 +107,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   runs twice at boot.
 - Flow B: a component without state of its own no longer reads its caller's state in place of a prop or local of
   the same name.
+- Flow B: a `sequence` inside a `parallel` or `stagger` ends when one of its steps is interrupted, as in Flow A.
+  It can now hold a spring or decay, and animate the same value more than once.
 
 ## [0.20.0] - 2026-11-05
 ### Added

@@ -74,12 +74,15 @@ export class Out {
   readonly mountEffects: IrMountEffect[] = [];
   /** Animations' on_complete callbacks: completions, completion waits, and chains. */
   readonly animationCallbacks: IrAnimationCallback[] = [];
-  /** The owner number of each composition that completion waits belong to, by composition; `isStarted` once a start waits. */
+  /**
+   * The owner number of each composition that completion waits belong to, by composition; `isStarted` once a
+   * start keeps a run under it, and `hasWaits` once one runs waits of their own.
+   */
   readonly animationWaits = new Map<
     string,
-    {owner: number; isStarted: boolean}
+    {owner: number; isStarted: boolean; hasWaits: boolean}
   >();
-  /** Running-animation entries the groups of several animations take: each group's own, and its animations'. */
+  /** Running-animation entries the groups of several animations take: each group's own, and all it runs. */
   animationGroupEntries = 0;
   /** Numbers the next animation sequence. */
   sequenceCount = 0;

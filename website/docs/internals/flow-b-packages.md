@@ -248,9 +248,12 @@ An animation descriptor is `kind u8`, `easing u8`, `flags u8`, `reserved u8`, `t
 - `param0`–`param3` are stiffness, damping, mass and velocity for spring, velocity and deceleration for decay,
   and the four control points for a bezier easing.
 - A parallel or stagger group is done when every child is, and done as not finished as soon as one child
-  stops. A parallel then stops its other children; a stagger's run on. A stagger with no gap starts every
-  child at once. This is how a completion waits on several animations, or on one beside a longer delay,
-  and how a `parallel` stops together.
+  stops. A parallel then stops its other children. A stagger's run on: a stagger at the root runs the
+  tree's function at once and keeps its entries until its other children end, dropping its own delay
+  leaves. A stagger with no gap starts every child at once. This is how a completion waits on several
+  animations, or on one beside a longer delay, and how a `parallel` stops together.
+- A sequence inside a `parallel` or `stagger` is a sequence group in that tree, so a step that stops ends
+  it and nothing after it starts. The start keeps the tree's handle, and stops the run before it first.
 - Delay leaves and staggered waits count down in `erb_tick()` before the timers, and every one counts down
   before any that ran out moves on, so a wait a completion starts there waits its full time.
 
