@@ -170,6 +170,7 @@ function readStatements(statements: IrStmt[], found: ReadsFound): void {
         readExpr(statement.value, found);
         break;
       case 'setStateText':
+      case 'log':
         readText(statement.text, found);
         break;
       case 'if':

@@ -1748,8 +1748,15 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_FMTSET:
             case ERB_OP_FMTTEXT:
             case ERB_OP_FMTSPAN:
+            case ERB_OP_FMTLOG:
             {
-                if (ERB_OP(word) == ERB_OP_FMTSET)
+                if (ERB_OP(word) == ERB_OP_FMTLOG)
+                {
+                    /* A line past the buffer is cut, and nothing reports it. */
+                    erb_rt_log(s_format);
+                    s_format_cut = false;
+                }
+                else if (ERB_OP(word) == ERB_OP_FMTSET)
                 {
                     const uint8_t* slot = erb_slot(program, operand_bx);
                     store_string(slot, (char*)slot_data(slot), erb_u16(slot + ERB_SLOT_CAP_AT), s_format);

@@ -183,7 +183,7 @@ typedef struct
     uint16_t native_count;
     ErAssetsStorage* fonts; /**< Storage for the asset pack's font tables; NULL if packages have no fonts. */
     uint32_t budget;        /**< Instructions per run; 0 means ERB_EVENT_BUDGET. */
-    void (*log)(const char* line, void* context);           /**< Reports, one line each; may be NULL. */
+    void (*log)(const char* line, void* context);           /**< Reports and console.* lines, one each; may be NULL. */
     void (*on_fault)(const ErbError* error, void* context); /**< NULL: erb_show_error(). */
     void* context;                                          /**< Passed to natives, log and on_fault. */
 } ErbConfig;

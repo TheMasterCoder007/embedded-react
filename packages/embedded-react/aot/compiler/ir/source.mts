@@ -61,7 +61,7 @@ export type IrSource = Located &
     | {kind: 'number'; value: number}
     | {kind: 'string'; value: string}
     | {kind: 'boolean'; value: boolean}
-    | {kind: 'state'; state: ScalarState}
+    | {kind: 'state'; state: ScalarState; latest?: boolean}
     | {kind: 'local'; local: Local}
     | {kind: 'ref'; ref: RefRecord}
     /** A value whose source fixes its type: an event or layout field, a clock, Math.PI, a list's count … */

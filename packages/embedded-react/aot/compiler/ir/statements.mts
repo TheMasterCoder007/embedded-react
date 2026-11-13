@@ -304,6 +304,19 @@ export interface IrUpdateVector {
   dirty: IrExpr[] | null;
 }
 
+/** `console.log(…)`, `warn` or `error`: one line for the host's log. */
+export interface IrLog {
+  kind: 'log';
+  /** The arguments as JS prints them, a space between each. */
+  text: IrText;
+}
+
+/** Starts a body that sets states and then reads them: keeps a copy of each, which its reads use. */
+export interface IrKeepStates {
+  kind: 'keepStates';
+  states: ScalarState[];
+}
+
 /** A callback lowered to statements: an event handler, a timer, or a PanResponder callback. */
 /** A native method called for what it does, its result if any dropped; or a record's, kept in locals. */
 export interface IrCallNative {
@@ -320,7 +333,11 @@ export interface IrCallback {
 }
 
 /** A lowered handler, effect, or timer statement, before any backend prints it, and where it is in the source. */
-export type IrStmt = {location?: SourcePosition} & (
+export type IrStmt = {
+  location?: SourcePosition;
+  /** The states whose reads here give what they hold now: an updater's own, not the copy its body keeps. */
+  readsLatest?: ReadonlySet<ScalarState>;
+} & (
   | IrDeclareLocal
   | IrStartTimer
   | IrClearTimer
@@ -352,4 +369,6 @@ export type IrStmt = {location?: SourcePosition} & (
   | IrAnimationStart
   | IrUpdateVector
   | IrCallNative
+  | IrLog
+  | IrKeepStates
 );

@@ -100,6 +100,13 @@ static uint32_t now_ms(void)
     return (uint32_t)(esp_timer_get_time() / US_PER_MS);
 }
 
+/** @brief Prints one line to the host: reload progress, runtime reports and the app's console.*. */
+static void host_log(const char* line, void* context)
+{
+    (void)context;
+    ESP_LOGI(TAG, "%s", line);
+}
+
 #if ER_HOTRELOAD
 /* The native USB port carries the logs out and the reload in, as it does in the Flow A host (hotreload_usb.c). */
 #define RELOAD_CHUNK_BYTES 4096U
@@ -143,13 +150,6 @@ static bool dark_program(unsigned slot, uint32_t offset, const void* data, uint3
     return programmed;
 }
 
-/** @brief Prints one line to the host. */
-static void reload_log(const char* line, void* context)
-{
-    (void)context;
-    ESP_LOGI(TAG, "%s", line);
-}
-
 /** @brief Hands the receiver everything the USB port has. */
 static void reload_poll(void)
 {
@@ -189,6 +189,7 @@ static void load_package(bool touch)
         .screen_height = SCREEN_HEIGHT,
         .natives = native_modules,
         .native_count = native_module_count,
+        .log = host_log,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -223,7 +224,7 @@ static void load_package(bool touch)
     reload_slots.erase = dark_erase;
     reload_slots.program = dark_program;
     erb_package_reload_init(
-        &s_reload, &reload_slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+        &s_reload, &reload_slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, host_log, NULL);
     usb_serial_jtag_driver_config_t usb_config = {
         .rx_buffer_size = RELOAD_USB_RX_BYTES,
         .tx_buffer_size = RELOAD_USB_TX_BYTES,

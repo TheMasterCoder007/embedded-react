@@ -297,6 +297,13 @@ static void invalidate_slot(unsigned slot, void* context)
     restore_interrupts(interrupts);
 }
 
+/** @brief Prints one line to the host: reload progress, runtime reports and the app's console.*. */
+static void host_log(const char* line, void* context)
+{
+    (void)context;
+    printf("%s\n", line);
+}
+
 #if ER_HOTRELOAD
 /** @brief Chunk size: the USB serial port is quick, so a small chunk is fine and costs little RAM beside the
  *  framebuffer. */
@@ -332,13 +339,6 @@ static bool program_slot(unsigned slot, uint32_t offset, const void* data, uint3
     flash_range_program(slot_offset(slot) + offset, data, bytes);
     restore_interrupts(interrupts);
     return true;
-}
-
-/** @brief Prints one line to the host. */
-static void reload_log(const char* line, void* context)
-{
-    (void)context;
-    printf("%s\n", line);
 }
 
 /**
@@ -398,6 +398,7 @@ static void load_package(bool touch)
         .screen_height = BOARD_LCD_HEIGHT,
         .natives = native_modules,
         .native_count = native_module_count,
+        .log = host_log,
     };
     ErbPackageSlotBoot boot;
     const bool running = erb_package_slots_boot(&slots, &config, &boot);
@@ -421,7 +422,7 @@ static void load_package(bool touch)
         }
     }
 #if ER_HOTRELOAD
-    erb_package_reload_init(&s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, reload_log, NULL);
+    erb_package_reload_init(&s_reload, &slots, &config, &boot, s_reload_buffer, RELOAD_CHUNK_BYTES, host_log, NULL);
 #endif
 }
 

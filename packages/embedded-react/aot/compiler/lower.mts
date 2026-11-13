@@ -500,6 +500,7 @@ function lowerProgram(
 
   // Emit the scene graph from the root JSX; `output` collects everything else it lowers.
   const output = new Out(components, ast.program);
+  output.release = Boolean(options.release);
   output.optionalModules = optionalModulesOf(nativeModules);
   const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
   const root = emitNode(rootJSX, scope, output, environment, state);

@@ -571,6 +571,43 @@ static void test_text(void)
     CHECK(strlen(s_log) == logged, "once per place");
 }
 
+/** @brief Loads a helper that logs "count 7", then sets the label to "count". @return The helper. */
+static uint16_t log_helper(bool with_hook)
+{
+    base();
+    const uint16_t word = add_string("count");
+    const uint16_t space = add_string(" ");
+    const uint32_t code[] = {
+        OP_ABX(FMTK, 0, word),
+        OP_ABX(FMTK, 0, space),
+        OP_ABX(LOADI, 0, 7),
+        OP_ABC(FMTI, 0, 0, 0),
+        OP_ABC(FMTLOG, 0, 0, 0),
+        OP_ABX(FMTK, 0, word),
+        OP_ABX(FMTSET, 0, SLOT_LABEL),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    const uint8_t types[] = {ERB_TYPE_INT};
+    const uint16_t function = helper(types, 1, 0, 0, code, 8);
+    if (!with_hook)
+    {
+        s_config.log = NULL;
+    }
+    CHECK(load(), "a package that logs loads");
+    s_log[0] = '\0';
+    return function;
+}
+
+static void test_log(void)
+{
+    call(log_helper(true), 0, 0);
+    CHECK(s_status == ERB_OK && strcmp(s_log, "count 7\n") == 0, "FMTLOG sends the line to the host's log");
+    CHECK(strcmp((const char*)slot(SLOT_LABEL), "count") == 0, "and empties the buffer for the next text");
+    call(log_helper(false), 0, 0);
+    CHECK(s_status == ERB_OK && strcmp((const char*)slot(SLOT_LABEL), "count") == 0,
+          "with no log hook it does nothing");
+}
+
 /** @brief The label toUpperCase leaves after printing @p first, then @p second as the last piece. */
 static const char* upper_cased(const char* first, const char* second)
 {
@@ -1807,6 +1844,7 @@ int main(void)
     test_native_records();
     test_optional_modules();
     test_text();
+    test_log();
     test_string_helpers();
     test_lists();
     test_split();

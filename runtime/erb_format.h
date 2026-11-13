@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 14u
+#define ERB_FORMAT_MINOR 15u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -834,7 +834,9 @@ enum
     /* Native modules, since minor 12 */                                                                               \
     X(AVAIL,    ERB_F_ABX, 1, 1, ERBO_B, ERBO_K, ERBO_X)  /* A = whether optional module Bx is available */      \
     /* Native modules, since minor 13 */                                                                               \
-    X(CALLNS,   ERB_F_ABX, 2, 0, ERBO_R, ERBO_K, ERBO_X)  /* CALLN with a string result, into string slot ext */
+    X(CALLNS,   ERB_F_ABX, 2, 0, ERBO_R, ERBO_K, ERBO_X)  /* CALLN with a string result, into string slot ext */  \
+    /* Logging, since minor 15 */                                                                                      \
+    X(FMTLOG,   ERB_F_ABC, 1, 0, ERBO_X, ERBO_X, ERBO_X)  /* to the host's log, as one line */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */
