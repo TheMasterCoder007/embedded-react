@@ -129,7 +129,7 @@ the same version number through the channels below. You only need this once you 
 include(FetchContent)
 FetchContent_Declare(embedded-react
   GIT_REPOSITORY https://github.com/TheMasterCoder007/embedded-react.git
-  GIT_TAG        v0.20.0
+  GIT_TAG        v0.21.0
   SOURCE_SUBDIR  engine)
 FetchContent_MakeAvailable(embedded-react)
 target_link_libraries(my_firmware PRIVATE embedded-react)
@@ -152,13 +152,13 @@ the bridge and QuickJS.
 The runtime is also on the ESP-IDF Component Registry, and brings the engine with it:
 
 ```bash
-idf.py add-dependency "TheMasterCoder007/embedded-react-runtime^0.20.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react-runtime^0.21.0"
 ```
 
 The engine on its own is a separate component:
 
 ```bash
-idf.py add-dependency "TheMasterCoder007/embedded-react^0.20.0"
+idf.py add-dependency "TheMasterCoder007/embedded-react^0.21.0"
 ```
 
 Neither includes a display backend, so you supply your own. The engine's default pools are sized for a desktop and won't
@@ -174,7 +174,7 @@ idf_build_set_property(COMPILE_DEFINITIONS "ERUI_MAX_NODES=48;ERUI_SCRATCH_WIDTH
   <TabItem value="pio" label="PlatformIO">
 
 ```ini
-lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.20.0
+lib_deps = https://github.com/TheMasterCoder007/embedded-react.git#v0.21.0
 ```
 
 This installs the engine and the Flow B runtime as one library, so `erb_load` is ready to link. The QuickJS bridge isn't

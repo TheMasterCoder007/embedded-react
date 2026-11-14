@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "embedded-react": "^0.20.0",
+    "embedded-react": "^0.21.0",
     "example-device": "file:../../examples/device",
     "react": "18.3.1"
   },

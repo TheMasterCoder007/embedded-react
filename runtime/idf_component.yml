@@ -1,4 +1,4 @@
-version: "0.20.0"
+version: "0.21.0"
 description: "embedded-react Flow B runtime: checks a compiled package and runs it, with no QuickJS and no heap. Brings in the embedded-react engine at the same version."
 url: "https://github.com/TheMasterCoder007/embedded-react"
 repository: "https://github.com/TheMasterCoder007/embedded-react.git"
@@ -12,7 +12,7 @@ dependencies:
   idf:
     version: ">=5.0"
   TheMasterCoder007/embedded-react:
-    version: "0.20.0"
+    version: "0.21.0"
     require: public
 files:
   exclude:
