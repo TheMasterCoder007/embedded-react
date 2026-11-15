@@ -21,8 +21,9 @@
 // "running the bundle IS starting the app", so registerComponent mounts immediately into a root
 // sized from the host-injected `screen` global. (A host-driven runApplication can be split out
 // later when the C host owns app lifecycle.)
-import {createElement} from 'react';
+import {createElement, Fragment} from 'react';
 import {createRoot} from '../renderer.js';
+import {AlertHost} from './Alert.js';
 
 let registered = null;
 // The mounted root is created ONCE and reused on every subsequent registration. On a full reload, the
@@ -52,6 +53,14 @@ export const AppRegistry = {
     if (!registered) return;
     if (appKey && appKey !== registered.appKey) return;
     if (!root) root = createRoot({width: screen.width, height: screen.height});
-    root.render(createElement(registered.Component));
+    // The alert host comes after the app, so an alert draws over it.
+    root.render(
+      createElement(
+        Fragment,
+        null,
+        createElement(registered.Component),
+        createElement(AlertHost),
+      ),
+    );
   },
 };

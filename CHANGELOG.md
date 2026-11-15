@@ -18,6 +18,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `scrollTo(handle, {x, y})` scrolls a ScrollView from a ref and returns where it landed, in both flows. Packages
   are now format minor 16.
 - Flow B: `onScroll` on a ScrollView, with `e.scrollX` and `e.scrollY`.
+- Flow A: `Alert.alert(title, message, buttons)` shows a stock dialog over the app.
 
 ### Changed
 
