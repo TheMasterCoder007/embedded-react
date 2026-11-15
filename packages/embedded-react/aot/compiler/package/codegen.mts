@@ -1797,6 +1797,9 @@ export class Codegen {
         return;
       case 'scrollTo':
         this.scrollTo(statement);
+        return;
+      case 'dismissKeyboard':
+        builder.abc('BLUR', 0);
     }
   }
 

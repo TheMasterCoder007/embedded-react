@@ -870,6 +870,70 @@ static void test_keyboard_done_keeps_a_new_focus(void)
  *
  * @return 0 on success.
  */
+/** @brief What on_keyboard_shown was told, in order: 's' for shown, 'h' for hidden. */
+static char s_keyboard_calls[16];
+
+/** @brief Keyboard listener for test_keyboard_listener. */
+static void on_keyboard_shown(bool shown, void* user_data)
+{
+    (void)user_data;
+    const size_t length = strlen(s_keyboard_calls);
+    assert(length + 1 < sizeof(s_keyboard_calls));
+    s_keyboard_calls[length] = shown ? 's' : 'h';
+    ERRect frame;
+    assert(er_keyboard_get_frame(&frame) == shown && "The frame must be there exactly while the keyboard shows");
+}
+
+/**
+ * @brief The keyboard listener is told once when the keyboard shows and once when it hides.
+ *
+ * Without the on-screen keyboard there is nothing to show, so the listener is never told.
+ */
+static void test_keyboard_listener(void)
+{
+    init_backend();
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps props = props_auto();
+    props.width = SCREEN_WIDTH;
+    props.height = SCREEN_HEIGHT;
+    er_node_set_props(root, &props);
+    er_tree_set_root(root);
+    ERNode* first = append_text_input(root);
+    ERNode* second = append_text_input(root);
+    er_commit();
+
+    s_keyboard_calls[0] = '\0';
+    er_keyboard_set_listener(on_keyboard_shown, NULL);
+    ERRect frame;
+    assert(!er_keyboard_get_frame(&frame) && "No frame while the keyboard is hidden");
+
+    er_text_input_blur(); /* nothing focused: nothing to tell */
+    er_text_input_focus(first);
+    er_text_input_focus(second); /* the keyboard stays up */
+    er_text_input_blur();
+    er_text_input_blur();
+
+    /* Destroying the focused input hides the keyboard too. */
+    er_text_input_focus(first);
+    er_tree_remove_child(root, first);
+    er_node_destroy(first);
+
+    /* A reset hides it without a call. */
+    er_text_input_focus(second);
+    er_reset();
+    er_keyboard_set_listener(NULL, NULL);
+
+#if ERUI_ONSCREEN_KEYBOARD
+    assert(strcmp(s_keyboard_calls, "shshs") == 0 && "One call per show and per hide");
+#else
+    assert(s_keyboard_calls[0] == '\0' && "No keyboard, no calls");
+#endif
+
+    printf("PASS: test_keyboard_listener\n");
+}
+
 int main(void)
 {
     test_activity_indicator_renders();
@@ -878,6 +942,7 @@ int main(void)
     test_text_input_secure();
     test_text_input_read_only();
     test_text_input_destroyed_while_focused();
+    test_keyboard_listener();
 #if ERUI_ONSCREEN_KEYBOARD
     test_keyboard_done_submits();
     test_keyboard_done_keeps_a_new_focus();

@@ -158,7 +158,7 @@ built with `+`, a template literal or the string helpers above; `if` and
 `else`; `switch`; `for` and `for…of` loops with `break` and `continue`; `return`, early or not; state setter calls;
 `ref.current` writes, including `+=` and `++`; `setInterval`, `setTimeout` and their clears; `updateVector` calls;
 `scrollTo(ref.current, {x, y})`, whose position a `const` keeps (`const {y, maxY} = scrollTo(list.current)`);
-[native module](../api/hooks.md#nativemodule) calls; `Alert.alert`; `console.log`, `warn` and `error`; and `.start()` or `.stop()`
+[native module](../api/hooks.md#nativemodule) calls; `Alert.alert`; `Keyboard.dismiss()`; `console.log`, `warn` and `error`; and `.start()` or `.stop()`
 on any `Animated` animation or composition. `while` and `try` are not lowered, and a
 `break` in a `switch` must end its case.
 
@@ -184,6 +184,8 @@ on any `Animated` animation or composition. `while` and `try` are not lowered, a
   they do in Flow A: the arguments printed as a string `+` prints them, with a space between. Numbers, booleans and
   strings print; an object or a list doesn't. A line is cut at 255 bytes, firmware with no hook drops it, and a
   `--release` package leaves the calls out.
+- [`Keyboard.dismiss()`](../api/components.md#keyboard) is the one `Keyboard` call a package has. Its events are
+  not lowered; an input's `onFocus` and `onBlur` say when the keyboard shows and hides.
 - [`Alert.alert(title, message, buttons, options)`](../api/components.md#alert) builds its dialog where it is
   called, so `buttons` is written out as an array there, and a button's `style` and `cancelable` are constants. The
   dialog is drawn after the handler returns: its title, message, labels and handlers read state, props and

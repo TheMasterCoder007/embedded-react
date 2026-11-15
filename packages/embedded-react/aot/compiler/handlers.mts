@@ -2294,6 +2294,28 @@ function lowerHandlerExprImpl(
     return [lowerScrollTo(expression as t.CallExpression, environment)];
   }
 
+  // Keyboard.dismiss() — blurs the focused TextInput.
+  if (
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'MemberExpression' &&
+    !expression.callee.computed &&
+    expression.callee.object.type === 'Identifier' &&
+    expression.callee.object.name === 'Keyboard' &&
+    expression.callee.property.type === 'Identifier'
+  ) {
+    const method = expression.callee.property.name;
+    if (method !== 'dismiss' || expression.arguments.length) {
+      throw aotError(
+        method === 'dismiss'
+          ? 'AOT: Keyboard.dismiss() takes no arguments'
+          : `AOT: Keyboard.${method}() is not in the subset`,
+        'Keyboard.dismiss() is the one Keyboard call a package has; to follow the keyboard, set state in the ' +
+          "<TextInput>'s onFocus and onBlur.",
+      );
+    }
+    return [{kind: 'dismissKeyboard'}];
+  }
+
   // setInterval / setTimeout(cb, ms) → register a host-tick timer (the returned id is discarded here).
   if (
     expression.type === 'CallExpression' &&

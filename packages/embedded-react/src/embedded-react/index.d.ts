@@ -833,6 +833,44 @@ export const Alert: {
   ): void;
 };
 
+// --- Keyboard --------------------------------------------------------------
+export type KeyboardEventName =
+  | 'keyboardWillShow'
+  | 'keyboardDidShow'
+  | 'keyboardWillHide'
+  | 'keyboardDidHide';
+
+/** The strip of the screen the on-screen keyboard covers, in pixels. */
+export interface KeyboardMetrics {
+  screenX: number;
+  screenY: number;
+  width: number;
+  height: number;
+}
+
+export interface KeyboardEvent {
+  /** Where the keyboard ends up: its strip when it shows, the same strip just below the screen when it hides. */
+  endCoordinates: KeyboardMetrics;
+}
+
+/**
+ * The on-screen keyboard, which shows while a `<TextInput>` has the focus. A build without it
+ * (ERUI_ONSCREEN_KEYBOARD=0) fires no events and is never visible; `dismiss()` still takes the focus away.
+ */
+export const Keyboard: {
+  /** Nothing animates, so each "will" event fires just before its "did". */
+  addListener(
+    eventName: KeyboardEventName,
+    listener: (event: KeyboardEvent) => void,
+  ): {remove(): void};
+  removeAllListeners(eventName: KeyboardEventName): void;
+  /** Takes the focus from the focused `<TextInput>`, which hides the keyboard. */
+  dismiss(): void;
+  isVisible(): boolean;
+  /** The keyboard's strip, or undefined while it is hidden. */
+  metrics(): KeyboardMetrics | undefined;
+};
+
 // --- AppRegistry -----------------------------------------------------------
 export const AppRegistry: {
   registerComponent(
