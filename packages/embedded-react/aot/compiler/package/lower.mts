@@ -2839,6 +2839,17 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     }
     lowering.slots.arena.eventQueue(scrolls);
   }
+  // A Keyboard.dismiss() in a function fires onBlur, which waits in the queue until the function ends. One input
+  // has the focus, so one blur waits at a time.
+  if (
+    functions.some(
+      programFunction =>
+        programFunction.kind === ENGINE_VALUES.get('ER_EVENT_BLUR'),
+    ) &&
+    functions.some(programFunction => countOps(programFunction, ['BLUR']))
+  ) {
+    lowering.slots.arena.eventQueue(1);
+  }
   const {regions, bytes} = lowering.slots.arena.regions(stackCells(functions));
 
   // Host values, by name, for erb_input_find().

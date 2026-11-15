@@ -270,7 +270,7 @@ it takes no children.
 | `onSubmitEditing`, `onFocus`, `onBlur`         | `(e) => void`    |                           |
 
 Focus brings up the engine's on-screen keyboard, in builds that include it (`ERUI_ONSCREEN_KEYBOARD`).
-Its done key calls `onSubmitEditing`, then takes the focus away. Its layout and colours are configurable with `setKeyboardConfig`, below. The style may set
+Its done key calls `onSubmitEditing`, then takes the focus away. Its layout and colours are configurable with `setKeyboardConfig`, below, and [`Keyboard`](#keyboard) dismisses it and reports when it shows and hides. The style may set
 `cursorColor`.
 
 ## Switch
@@ -339,6 +339,40 @@ The dialog costs scene nodes only while it is up: five, plus two per button.
 **Flow B:** the dialog is built at compile time, where the call is, so `buttons` must be written out
 there and nothing in it can read the handler's own locals. An alert raised while another is showing
 replaces it. See [Handlers](../guides/aot-subset.md#handlers).
+
+## Keyboard
+
+```jsx
+const shown = Keyboard.addListener('keyboardDidShow', event => {
+  setInset(event.endCoordinates.height);
+});
+const hidden = Keyboard.addListener('keyboardDidHide', () => setInset(0));
+// later: shown.remove(); hidden.remove();
+
+Keyboard.dismiss();
+```
+
+React Native's `Keyboard`, over the engine's on-screen keyboard, which shows while a
+[`<TextInput>`](#textinput) has the focus.
+
+| Call                                | Notes                                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| `Keyboard.dismiss()`                | Takes the focus from the focused input, which hides the keyboard and calls its `onBlur`      |
+| `Keyboard.addListener(name, fn)`    | `keyboardDidShow`, `keyboardDidHide` and their `Will` twins. Returns `{remove()}`            |
+| `Keyboard.removeAllListeners(name)` | Drops every listener for one event                                                           |
+| `Keyboard.isVisible()`              | Whether the keyboard is showing                                                              |
+| `Keyboard.metrics()`                | `{screenX, screenY, width, height}` of the strip the keyboard covers, or `undefined` if none |
+
+A listener gets `{endCoordinates}`, shaped like `metrics()`: the keyboard's strip when it shows, and the
+same strip just below the screen when it hides. Nothing animates, so each `Will` event fires just
+before its `Did`. Moving the focus from one input to another keeps the keyboard up and fires nothing.
+The engine already lifts the scene so the focused input clears the keyboard.
+
+In a build without the keyboard (`ERUI_ONSCREEN_KEYBOARD` off) no event fires and `isVisible()` is
+always `false`; `dismiss()` still takes the focus away.
+
+**Flow B:** `Keyboard.dismiss()` only. To follow the keyboard, set state in the input's `onFocus` and
+`onBlur`. See [Handlers](../guides/aot-subset.md#handlers).
 
 ## Dial
 

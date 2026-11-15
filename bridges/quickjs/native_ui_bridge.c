@@ -3756,6 +3756,69 @@ static JSValue js_set_keyboard_config(JSContext* ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
+/**
+ * @brief JS object whose slot 0 holds the NativeUI.setKeyboardListener callback. Owned by NativeUI, like
+ *        the other registries.
+ */
+static JSValue s_keyboard_slots = JS_UNDEFINED;
+
+/** @brief Engine → JS: the on-screen keyboard has shown or hidden. */
+static void keyboard_listener(bool shown, void* user_data)
+{
+    (void)user_data;
+    JSContext* ctx = s_bridge_ctx;
+    if (!ctx || !JS_IsObject(s_keyboard_slots))
+    {
+        return;
+    }
+    JSValue listener = JS_GetPropertyUint32(ctx, s_keyboard_slots, 0);
+    if (JS_IsFunction(ctx, listener))
+    {
+        JSValue argument = JS_NewBool(ctx, shown);
+        er_bridge_dispatch(ctx, listener, 1, &argument, "keyboard listener");
+    }
+    JS_FreeValue(ctx, listener);
+}
+
+/** @brief JS `setKeyboardListener(fn)` — fn(shown) runs when the on-screen keyboard shows or hides. */
+static JSValue js_set_keyboard_listener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    const bool has_listener = argc >= 1 && JS_IsFunction(ctx, argv[0]);
+    JS_SetPropertyUint32(ctx, s_keyboard_slots, 0, has_listener ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
+    return JS_UNDEFINED;
+}
+
+/** @brief JS `dismissKeyboard()` — takes the focus from the focused TextInput, which hides the keyboard. */
+static JSValue js_dismiss_keyboard(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)ctx;
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    er_text_input_blur();
+    return JS_UNDEFINED;
+}
+
+/** @brief JS `keyboardFrame()` — {x, y, width, height} of the showing keyboard, or undefined. */
+static JSValue js_keyboard_frame(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    ERRect frame;
+    if (!er_keyboard_get_frame(&frame))
+    {
+        return JS_UNDEFINED;
+    }
+    JSValue result = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, result, "x", JS_NewInt32(ctx, frame.x));
+    JS_SetPropertyStr(ctx, result, "y", JS_NewInt32(ctx, frame.y));
+    JS_SetPropertyStr(ctx, result, "width", JS_NewInt32(ctx, frame.width));
+    JS_SetPropertyStr(ctx, result, "height", JS_NewInt32(ctx, frame.height));
+    return result;
+}
+
 /* Bridge-side staging caps; the engine clamps again to its own storage limits. They default TO the engine's
  * caps rather than repeating the numbers, because a bridge that stages less truncates the op-tape before the
  * engine ever sees it — the shape just goes missing, with no pool ever reporting an overflow. Overridable
@@ -5115,6 +5178,13 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "setTextSpans", JS_NewCFunction(ctx, js_set_text_spans, "setTextSpans", 2));
     JS_SetPropertyStr(
         ctx, native_ui, "setKeyboardConfig", JS_NewCFunction(ctx, js_set_keyboard_config, "setKeyboardConfig", 1));
+    JS_SetPropertyStr(ctx,
+                      native_ui,
+                      "setKeyboardListener",
+                      JS_NewCFunction(ctx, js_set_keyboard_listener, "setKeyboardListener", 1));
+    JS_SetPropertyStr(
+        ctx, native_ui, "dismissKeyboard", JS_NewCFunction(ctx, js_dismiss_keyboard, "dismissKeyboard", 0));
+    JS_SetPropertyStr(ctx, native_ui, "keyboardFrame", JS_NewCFunction(ctx, js_keyboard_frame, "keyboardFrame", 0));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 5));
     /* Expose the bridge-side vector caps so the JS layer can warn when an <Svg> exceeds them — the bridge
      * silently truncates the op-tape / paint table otherwise (see warnVectorCaps in svg-ops.js). */
@@ -5193,6 +5263,12 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyUint32(ctx, batch_slots, ER_BATCH_SLOT_WRAP, JS_UNDEFINED);
     JS_SetPropertyUint32(ctx, batch_slots, ER_BATCH_SLOT_RUN, JS_NewCFunction(ctx, js_run_pump_body, "runPumpBody", 0));
     JS_SetPropertyStr(ctx, native_ui, "__er_batch_slots", batch_slots);
+
+    /* The keyboard listener's slot; same ownership trick. */
+    JSValue keyboard_slots = JS_NewObject(ctx);
+    s_keyboard_slots = keyboard_slots;
+    JS_SetPropertyStr(ctx, native_ui, "__er_keyboard_slots", keyboard_slots);
+    er_keyboard_set_listener(keyboard_listener, NULL);
 
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
     JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);

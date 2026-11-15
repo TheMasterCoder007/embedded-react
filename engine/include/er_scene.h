@@ -1895,10 +1895,41 @@ extern "C"
     void er_keyboard_set_config(const ERKeyboardConfig* config);
 
     /**
+     * @brief Called when the on-screen keyboard shows or hides.
+     *
+     * @param[in] shown      true when it has shown, false when it has hidden.
+     * @param[in] user_data  The pointer given to er_keyboard_set_listener().
+     */
+    typedef void (*ERKeyboardListener)(bool shown, void* user_data);
+
+    /**
+     * @brief Sets the one listener told when the on-screen keyboard shows or hides.
+     *
+     * It shows when a TextInput takes the focus with none focused before, and hides when the focus goes.
+     * Moving the focus from one input to another tells nothing. Never called when the engine is built
+     * without ERUI_ONSCREEN_KEYBOARD=1. er_reset() hides the keyboard without a call.
+     *
+     * @param[in] listener   The listener, or NULL for none.
+     * @param[in] user_data  Passed back to the listener.
+     */
+    void er_keyboard_set_listener(ERKeyboardListener listener, void* user_data);
+
+    /**
+     * @brief Reads the strip of the screen the on-screen keyboard covers.
+     *
+     * @param[out] frame  The strip, in screen pixels.
+     *
+     * @return true when the keyboard is showing; false when it is hidden or not compiled in.
+     */
+    bool er_keyboard_get_frame(ERRect* frame);
+
+    /**
      * @brief Gives keyboard focus to a TextInput node.
      *
      * Blurs any previously focused input, marks the node dirty to draw the cursor,
      * and fires ER_EVENT_FOCUS on the new node and ER_EVENT_BLUR on the old one.
+     * The old node has lost the focus by the time its blur handler runs, so the handler may blur again
+     * to no effect. A focus the handler gives an input itself stands, in place of this one.
      *
      * @param[in] node  TextInput node to focus, or NULL to only blur.
      */

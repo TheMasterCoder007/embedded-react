@@ -316,6 +316,11 @@ export interface IrScrollTo {
   results?: string[];
 }
 
+/** `Keyboard.dismiss()`: takes the focus from the focused TextInput, which hides the keyboard. */
+export interface IrDismissKeyboard {
+  kind: 'dismissKeyboard';
+}
+
 /** `console.log(…)`, `warn` or `error`: one line for the host's log. */
 export interface IrLog {
   kind: 'log';
@@ -377,6 +382,7 @@ export type IrStmt = {
   | IrFillOrder
   | IrSplitItems
   | IrScrollTo
+  | IrDismissKeyboard
   | IrWriteRef
   | IrStepRef
   | IrStopAnimations

@@ -28,6 +28,7 @@ import {
 import type {AotError, SourcePosition} from './diagnostics.mts';
 import {evalStatic, foldScope, RuntimeLeaf} from './static-eval.mts';
 import {ALERT_CALL, raiseAlert, withAlertBase} from './alerts.mts';
+import {KEYBOARD_DISMISS_CALL} from './keyboard-dismiss.mts';
 import {fieldsUnder} from './list-items.mts';
 import {
   lowerNativeCall,
@@ -2292,6 +2293,15 @@ function lowerHandlerExprImpl(
   // scrollTo(ref.current, {x, y}) — scrolls a ScrollView, its position dropped.
   if (isScrollToCall(expression)) {
     return [lowerScrollTo(expression as t.CallExpression, environment)];
+  }
+
+  // Keyboard.dismiss() — blurs the focused TextInput.
+  if (
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'Identifier' &&
+    expression.callee.name === KEYBOARD_DISMISS_CALL
+  ) {
+    return [{kind: 'dismissKeyboard'}];
   }
 
   // setInterval / setTimeout(cb, ms) → register a host-tick timer (the returned id is discarded here).

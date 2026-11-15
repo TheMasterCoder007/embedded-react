@@ -24,7 +24,7 @@ Everything the library calls, grouped:
 | Frame            | `commit()`, `tick(dtMs)`, `now()`, `setBatcher(fn)`                                                                                                                                                                         |
 | Animation        | `animValueCreate`, `animValueDestroy`, `animValueSet`, `animValueGet`, `animValueAnimate`, `animValueBind`, `animValueBindInterpolated`, `animUnbind`, `animStop`                                                           |
 | Layout animation | `configureNextLayoutAnimation(config)`, `hasPendingLayoutAnimation()`                                                                                                                                                       |
-| Keyboard         | `setKeyboardConfig(config)`                                                                                                                                                                                                 |
+| Keyboard         | `setKeyboardConfig(config)`, `dismissKeyboard()`, `setKeyboardListener(fn)`: `fn(shown)` runs when the on-screen keyboard shows or hides, `keyboardFrame()`: its `{x, y, width, height}` while it shows                     |
 | Limits           | `maxVectorOps`, `maxVectorPaints`, `maxVectorGrads`: the engine's compiled-in vector pool sizes, so the library can warn before the engine refuses                                                                          |
 | Instrumentation  | `perfCallbackBegin/End`, `perfRenderBegin/End`, `perfMarshalBegin/End`: the marks behind the JS sub-split in the [perf overlay](../guides/performance.md#measuring-on-the-device), present only in an `ER_PERF_STATS` build |
 

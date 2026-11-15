@@ -1289,6 +1289,22 @@ const SCENARIOS: Scenario[] = [
     taps: '82,48 182,48 182,48',
     flowA: true,
   },
+  // The input, then "h": the keyboard is up and onFocus has run.
+  {
+    name: 'keyboard-dismiss-typing',
+    file: fixture('keyboard-dismiss'),
+    screen: PORTRAIT,
+    taps: '120,30 140,247',
+    flowA: true,
+  },
+  // then "i", whose onChangeText dismisses the keyboard: it hides, and onBlur runs.
+  {
+    name: 'keyboard-dismiss',
+    file: fixture('keyboard-dismiss'),
+    screen: PORTRAIT,
+    taps: '120,30 140,247 177,217',
+    flowA: true,
+  },
   // A scrollTo fires onScroll: the text and the indicator follow, and the header hides.
   {
     name: 'scroll-events-jump',

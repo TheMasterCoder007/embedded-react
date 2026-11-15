@@ -20,6 +20,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow B: `onScroll` on a ScrollView, with `e.scrollX` and `e.scrollY`.
 - `Alert.alert(title, message, buttons)` shows a stock dialog over the app, in both flows.
 - Flow B: the `flexWrap` style.
+- `Keyboard`: `dismiss()` in both flows, and in Flow A the show and hide events, `isVisible()` and `metrics()`.
+- Engine: `er_keyboard_set_listener()` reports when the on-screen keyboard shows and hides, and
+  `er_keyboard_get_frame()` reads the strip it covers.
 
 ### Changed
 

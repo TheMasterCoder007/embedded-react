@@ -85,9 +85,14 @@ static uint8_t s_last_cursor_phase = ER_CURSOR_PHASE_UNKNOWN; /**< Last cursor b
 static bool s_keyboard_dirty =
     false; /**< Set when the keyboard shows/hides/switches layer so the next commit repaints it. */
 static uint8_t s_keyboard_layer = 0; /**< Active key layer index into the (default or app-supplied) layout. */
-static int s_keyboard_avoid_y = 0;   /**< Pixels the whole scene is shifted UP so a focused input clears the keyboard
-                                     (0 when no keyboard / input already visible). Applied in render_tree +
-                                     node_screen_rect so render and damage stay in sync. */
+static ERKeyboardListener s_keyboard_listener = NULL; /**< Told when the keyboard shows or hides. */
+static void* s_keyboard_listener_data = NULL;
+static bool s_keyboard_shown = false; /**< What the listener was last told. */
+static int s_focus_changes = 0; /**< er_text_input_focus() calls under way; the listener is told after the outermost. */
+static void keyboard_notify(void);
+static int s_keyboard_avoid_y = 0; /**< Pixels the whole scene is shifted UP so a focused input clears the keyboard
+                                   (0 when no keyboard / input already visible). Applied in render_tree +
+                                   node_screen_rect so render and damage stay in sync. */
 
 /* Dirty-rect tracking: union of all screen rects repainted by the last er_commit() that PAINTED.
  * A commit that finds nothing dirty leaves these alone (er_reset() clears them), so a Flow A host —
@@ -3701,7 +3706,8 @@ void er_node_destroy(ERNode* node)
     er_input_forget_node(node->tag);
     /* The focus goes with the input, or the next node in its slot would take the typing. No blur: the node is
      * gone. The keyboard it brought up still has to be erased. */
-    if (node->tag == s_focused_input_tag)
+    const bool was_focused = node->tag == s_focused_input_tag;
+    if (was_focused)
     {
         s_focused_input_tag = ER_INVALID_TAG;
         s_keyboard_dirty = true;
@@ -3712,6 +3718,9 @@ void er_node_destroy(ERNode* node)
     /* Guard against overflow (would only occur on a double-free bug in the caller). */
     if (s_free_count < (uint16_t)ERUI_MAX_NODES)
         s_free_list[s_free_count++] = node->tag;
+    /* Last, since the listener may build nodes. */
+    if (was_focused)
+        keyboard_notify();
 }
 
 /** @brief FNV-1a 32-bit parameters, as published (the mixing below is a derivative — see props_hash32). */
@@ -4283,11 +4292,29 @@ void er_node_set_props(ERNode* node, const ERProps* props)
  *
  * @param[in] node  TextInput node to focus, or NULL to blur the current input.
  */
+/** @brief Tells the listener when the keyboard has shown or hidden since it was last told. */
+static void keyboard_notify(void)
+{
+    const bool shown = er_keyboard_active();
+    if (s_focus_changes > 0 || shown == s_keyboard_shown)
+        return;
+    s_keyboard_shown = shown;
+    if (s_keyboard_listener)
+        s_keyboard_listener(shown, s_keyboard_listener_data);
+}
+
+void er_keyboard_set_listener(ERKeyboardListener listener, void* user_data)
+{
+    s_keyboard_listener = listener;
+    s_keyboard_listener_data = user_data;
+}
+
 void er_text_input_focus(ERNode* node)
 {
     if (node && node->type != ER_NODE_TEXT_INPUT)
         return;
 
+    s_focus_changes++;
     s_keyboard_dirty = true; /* focus is changing → repaint the on-screen keyboard strip (show or hide) */
     s_keyboard_layer = 0;    /* a freshly focused input starts on the lowercase layer */
 
@@ -4295,6 +4322,10 @@ void er_text_input_focus(ERNode* node)
     if (s_focused_input_tag != ER_INVALID_TAG)
     {
         ERNode* previous = er_get_node(s_focused_input_tag);
+        /* Cleared before the handler runs: a blur from inside it finds nothing focused, and a focus it gives
+         * another input is not undone. */
+        s_focused_input_tag = ER_INVALID_TAG;
+        const ERNodeRef requested = er_node_ref(node);
         if (previous)
         {
             previous->is_focused = false;
@@ -4306,11 +4337,18 @@ void er_text_input_focus(ERNode* node)
                 handler->callback(previous, &data, handler->user_data);
             }
         }
-        s_focused_input_tag = ER_INVALID_TAG;
+        /* The handler may have destroyed the node, or focused an input itself: its focus stands. */
+        node = er_node_deref(requested);
+        if (s_focused_input_tag != ER_INVALID_TAG)
+            node = NULL;
     }
 
     if (!node)
+    {
+        s_focus_changes--;
+        keyboard_notify();
         return;
+    }
 
     node->is_focused = true;
     s_focused_input_tag = node->tag;
@@ -4322,6 +4360,8 @@ void er_text_input_focus(ERNode* node)
         EREventData data = {0};
         handler->callback(node, &data, handler->user_data);
     }
+    s_focus_changes--;
+    keyboard_notify();
 }
 
 /**
@@ -5186,6 +5226,15 @@ static void er_keyboard_rect(int screen_width, int screen_height, ERRect* out)
     out->height = strip_height;
 }
 
+bool er_keyboard_get_frame(ERRect* frame)
+{
+    const ERNode* root = er_get_node(s_root_tag);
+    if (!frame || !root || !er_keyboard_active())
+        return false;
+    er_keyboard_rect((int)root->computed.width, (int)root->computed.height, frame);
+    return true;
+}
+
 /** One laid-out key: its screen rect, the source key descriptor, and whether to draw it highlighted. */
 typedef struct
 {
@@ -5356,6 +5405,11 @@ bool er_keyboard_dispatch_touch(ERTouchPhase phase, int x, int y)
 
 bool er_keyboard_active(void)
 {
+    return false;
+}
+bool er_keyboard_get_frame(ERRect* frame)
+{
+    (void)frame;
     return false;
 }
 void er_keyboard_draw(int screen_width, int screen_height)
@@ -5565,6 +5619,7 @@ void er_reset(void)
     s_parallel_unsafe = 0; /* the old scene's vectors, arcs and shadow casters are gone with it */
     s_root_tag = ER_INVALID_TAG;
     s_focused_input_tag = ER_INVALID_TAG;
+    s_keyboard_shown = false; /* the old scene's listener is not told */
     s_last_cursor_phase = ER_CURSOR_PHASE_UNKNOWN;
 
     /* Drop dirty/damage tracking and force the next commit to fully repaint and re-run layout. */
