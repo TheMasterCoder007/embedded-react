@@ -312,6 +312,34 @@ the engine lays a modal out as an ordinary flex child, so without one the sheet 
 than centred on screen. The AOT honours the same style. **Flow B:** `visible` is required, and
 `animationType` can only be `'none'`.
 
+## Alert
+
+```jsx
+Alert.alert('Delete log?', 'This cannot be undone.', [
+  {text: 'Cancel', style: 'cancel'},
+  {text: 'Delete', style: 'destructive', onPress: clearLog},
+]);
+```
+
+React Native's `Alert.alert(title, message, buttons, options)`, drawn as a stock dialog on a
+[`<Modal>`](#modal): a white sheet centred over a dimmed app, with the buttons in a row along the
+bottom. For a dialog you style yourself, use `<Modal>` directly.
+
+| Argument  | Type                       | Notes                                                  |
+| --------- | -------------------------- | ------------------------------------------------------ |
+| `title`   | `string`                   | Bold first line                                        |
+| `message` | `string`                   | Optional                                               |
+| `buttons` | `{text, onPress, style}[]` | Defaults to a single `OK`. Any button closes the alert |
+| `options` | `{cancelable, onDismiss}`  | `cancelable` lets a tap outside the sheet close it     |
+
+A button's `style` is `'default'`, `'cancel'` or `'destructive'`; `'destructive'` draws its label in
+red and `'cancel'` looks like `'default'`. An alert raised while another is showing waits its turn.
+The dialog costs scene nodes only while it is up: five, plus two per button.
+
+**Flow B:** the dialog is built at compile time, where the call is, so `buttons` must be written out
+there and nothing in it can read the handler's own locals. An alert raised while another is showing
+replaces it. See [Handlers](../guides/aot-subset.md#handlers).
+
 ## Dial
 
 The engine's native arc widget: dials, gauges, and progress rings as one node, drawn analytically,
@@ -430,7 +458,6 @@ doing nothing on the device.
 | `Appearance`, `useColorScheme`                                         | No OS light/dark setting to read                                                       | Own the theme in app state and pass it down                                                            |
 | `Linking`                                                              | No URL handler, no browser, no second app to deep-link into                            |                                                                                                        |
 | `AccessibilityInfo`, `accessibility*` props                            | No assistive-technology service on the device                                          |                                                                                                        |
-| `Alert`                                                                | No OS dialog service                                                                   | `<Modal>`, a real engine node you style yourself                                                       |
 | `Vibration`, `Share`, `Clipboard`, `PermissionsAndroid`, `BackHandler` | Phone and OS services with no embedded counterpart                                     | Drive the hardware (a haptic motor, buttons) from firmware                                             |
 | `NativeModules`, Turbo Modules                                         | No OS module registry; the firmware already _is_ the native side                       | [Native modules](../guides/native-modules.md), declared with [`nativeModule`](./hooks.md#nativemodule) |
 | `fetch`, `XMLHttpRequest`, `WebSocket`                                 | QuickJS ships no networking, and there is no socket stack underneath it                | Do the I/O in firmware (Wi-Fi, BLE) and feed values into the UI                                        |

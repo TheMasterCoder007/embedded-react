@@ -27,6 +27,7 @@ import {
 } from './diagnostics.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
 import {evalStatic, foldScope, RuntimeLeaf} from './static-eval.mts';
+import {ALERT_CALL, raiseAlert, withAlertBase} from './alerts.mts';
 import {fieldsUnder} from './list-items.mts';
 import {
   lowerNativeCall,
@@ -2264,6 +2265,21 @@ function lowerHandlerExprImpl(
     return context.output.release ? [] : [{kind: 'log', text}];
   }
 
+  // Alert.alert(…) → its dialog is built under the root, and the call sets the state that shows it.
+  if (
+    expression.type === 'CallExpression' &&
+    expression.callee.type === 'Identifier' &&
+    expression.callee.name === ALERT_CALL
+  ) {
+    const raised = raiseAlert(expression, environment, state, context.output);
+    return lowerHandlerExprImpl(
+      raised.setter,
+      raised.environment,
+      raised.state,
+      context,
+    );
+  }
+
   // updateVector(ref, shapes, dirtyRect?) — imperative vector redraw (no update).
   if (
     expression.type === 'CallExpression' &&
@@ -3238,10 +3254,11 @@ function markLoc(
  */
 export function lowerEffect(
   effect: EffectRecord,
-  environment: Env,
+  componentEnvironment: Env,
   state: StateTable,
   output: Out,
 ): void {
+  const environment = withAlertBase(componentEnvironment);
   // An expression body is a single statement.
   const body = effect.functionNode.body;
   const statements: t.Statement[] =
@@ -3540,10 +3557,11 @@ function keepScrollPosition(
  */
 export function lowerNativeEvent(
   call: t.CallExpression,
-  environment: Env,
+  componentEnvironment: Env,
   state: StateTable,
   output: Out,
 ): void {
+  const environment = withAlertBase(componentEnvironment);
   const {event, values: declared, handler} = nativeEventOf(call, environment);
   const index = output.nativeEventHandlers.length;
 
@@ -3651,7 +3669,7 @@ export function lowerHandler(
     pan && functionNode.params[1]?.type === 'Identifier'
       ? functionNode.params[1].name
       : null;
-  let handlerEnvironment = environment;
+  let handlerEnvironment = withAlertBase(environment);
   if (eventParameter) {
     handlerEnvironment = {...handlerEnvironment, event: eventParameter};
   }
@@ -3688,7 +3706,7 @@ export function lowerHandler(
  */
 export function lowerValueHandler(
   functionNode: FunctionNode,
-  environment: Env,
+  componentEnvironment: Env,
   state: StateTable,
   output: Out,
   slotKind: SlotKind,
@@ -3696,6 +3714,7 @@ export function lowerValueHandler(
   valueExpression: IrExpr,
   secondValueExpression?: IrExpr,
 ): IrCallback {
+  const environment = withAlertBase(componentEnvironment);
   // A <Switch> hands its callback a boolean; carry that so `'on=' + v` prints true/false, not 1/0.
   const valueParameter =
     functionNode.params[0]?.type === 'Identifier'

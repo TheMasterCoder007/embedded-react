@@ -79,7 +79,7 @@ const declaredKeys = dts =>
 // Interfaces that are NOT component props: the callback bag of a JS-side module. Their `on*` keys are
 // invented by that module and go nowhere near the bridge's event table, so the phantom-handler check
 // below skips them. Anything declared outside this is a prop and must map to a real engine event.
-const NON_PROP_HANDLER_INTERFACES = ['PanResponderConfig'];
+const NON_PROP_HANDLER_INTERFACES = ['PanResponderConfig', 'AlertOptions'];
 
 /** Body of `interface NAME { … }`, brace-matched so a nested object literal doesn't end it early. */
 function interfaceBody(dts, name) {

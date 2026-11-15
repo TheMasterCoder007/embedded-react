@@ -96,6 +96,7 @@ const LAYOUT_STYLE = [
   'flexGrow',
   'flexShrink',
   'flexDirection',
+  'flexWrap',
   'alignItems',
   'alignSelf',
   'justifyContent',

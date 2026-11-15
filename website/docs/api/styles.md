@@ -114,7 +114,7 @@ reference rather than an inline object.
 ## Flow B
 
 The AOT compiler rejects a style key it cannot lower. Beyond the limits above, Flow B does not accept
-`aspectRatio`, `flexWrap`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
+`aspectRatio`, `alignContent`, `overflow`, `pointerEvents`, `borderStyle`, the per-side
 border widths and colors, `transformOrigin`, `fontFamily`, `fontStyle`, `textAlign` or
 `textDecorationLine`.
 

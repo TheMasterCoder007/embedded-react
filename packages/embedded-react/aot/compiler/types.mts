@@ -471,6 +471,8 @@ export interface Env {
   providers?: Map<string, Provider>;
   /** The native modules the app declares, by the const each is bound to. */
   nativeModules?: Map<string, NativeModule>;
+  /** In a handler, effect or timer: the environment it was lowered from, which an alert's dialog is built in. */
+  alertBase?: Env;
 }
 
 /**

@@ -1161,6 +1161,82 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '120,32 120,175',
   },
+  // Buttons: reset, note (cancelable), child; then a row per item. Each raises an alert.
+  {name: 'alert', file: fixture('alert'), screen: PORTRAIT, flowA: true},
+  // reset opens its alert
+  {
+    name: 'alert-open',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '40,32',
+    flowA: true,
+  },
+  // then Reset, which closes it and zeroes the count
+  {
+    name: 'alert-reset',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '40,32 187,184',
+    flowA: true,
+  },
+  // or Cancel, which closes it and is noted
+  {
+    name: 'alert-cancel',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '40,32 133,184',
+    flowA: true,
+  },
+  // note, then a tap on its sheet, which leaves it up
+  {
+    name: 'alert-note',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '110,32 60,140',
+    flowA: true,
+  },
+  // or a tap outside, which dismisses it
+  {
+    name: 'alert-dismissed',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '110,32 120,300',
+    flowA: true,
+  },
+  // child, then Yes, which counts in the child and raises a second alert
+  {
+    name: 'alert-child-done',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '175,32 191,184',
+    flowA: true,
+  },
+  // the second row, then Remove
+  {
+    name: 'alert-row-removed',
+    file: fixture('alert'),
+    screen: PORTRAIT,
+    taps: '120,156 180,174',
+    flowA: true,
+  },
+  // Chips wrapping, a row that wraps by state, and one wrapping in reverse.
+  {name: 'wrap', file: fixture('wrap'), screen: PORTRAIT, flowA: true},
+  // the first button, which stops the middle row wrapping
+  {
+    name: 'wrap-off',
+    file: fixture('wrap'),
+    screen: PORTRAIT,
+    taps: '36,32',
+    flowA: true,
+  },
+  // ask, whose alert's three buttons take a line each
+  {
+    name: 'wrap-alert',
+    file: fixture('wrap'),
+    screen: PORTRAIT,
+    taps: '100,32',
+    flowA: true,
+  },
   // A spinner's angle moves with the clock, so two frames apart differ.
   {name: 'activity', file: fixture('activity'), screen: PORTRAIT},
   {

@@ -16,6 +16,7 @@
     "test/types/gesture-usage.tsx",
     "test/types/wrappers-usage.tsx",
     "test/types/animated-usage.tsx",
-    "test/types/dimensions-usage.tsx"
+    "test/types/dimensions-usage.tsx",
+    "test/types/alert-usage.tsx"
   ]
 }

@@ -805,6 +805,34 @@ export const Dimensions: {
 /** The panel's size. It is fixed while the app runs. */
 export function useWindowDimensions(): ScaledSize;
 
+// --- Alert -----------------------------------------------------------------
+export interface AlertButton {
+  text?: string;
+  onPress?: () => void;
+  /** 'destructive' draws the label in red; 'cancel' looks like 'default'. */
+  style?: 'default' | 'cancel' | 'destructive';
+}
+
+export interface AlertOptions {
+  /** Lets a tap outside the dialog close it. Off by default. */
+  cancelable?: boolean;
+  /** Called when a tap outside closes a cancelable alert. */
+  onDismiss?: () => void;
+}
+
+export const Alert: {
+  /**
+   * Shows a stock dialog over the app. With no buttons it gets a single "OK". A second alert waits
+   * until the first is closed; in Flow B it replaces the first.
+   */
+  alert(
+    title: string,
+    message?: string,
+    buttons?: AlertButton[],
+    options?: AlertOptions,
+  ): void;
+};
+
 // --- AppRegistry -----------------------------------------------------------
 export const AppRegistry: {
   registerComponent(

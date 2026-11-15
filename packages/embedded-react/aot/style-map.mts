@@ -71,6 +71,11 @@ const FLEX_DIRECTION: EnumTable = {
   'row-reverse': 'ER_FLEX_ROW_REVERSE',
   'column-reverse': 'ER_FLEX_COLUMN_REVERSE',
 };
+const FLEX_WRAP: EnumTable = {
+  nowrap: 'ER_WRAP_NOWRAP',
+  wrap: 'ER_WRAP_WRAP',
+  'wrap-reverse': 'ER_WRAP_WRAP_REVERSE',
+};
 const POSITION: EnumTable = {
   relative: 'ER_POSITION_RELATIVE',
   absolute: 'ER_POSITION_ABSOLUTE',
@@ -133,6 +138,7 @@ const NUMBER_FIELDS: Record<string, string> = {
  */
 const ENUM_FIELDS: Record<string, {field: string; table: EnumTable}> = {
   flexDirection: {field: 'flex_direction', table: FLEX_DIRECTION},
+  flexWrap: {field: 'flex_wrap', table: FLEX_WRAP},
   alignItems: {field: 'align_items', table: ALIGN},
   alignSelf: {field: 'align_self', table: ALIGN},
   justifyContent: {field: 'justify_content', table: JUSTIFY},
@@ -398,6 +404,9 @@ const KEYS: Record<string, StyleLowering> = {
       field: 'flex_direction',
       value: enumKey(FLEX_DIRECTION, 'flexDirection')(direction),
     },
+  ],
+  flexWrap: wrap => [
+    {field: 'flex_wrap', value: enumKey(FLEX_WRAP, 'flexWrap')(wrap)},
   ],
   alignItems: alignment => [
     {field: 'align_items', value: enumKey(ALIGN, 'alignItems')(alignment)},
