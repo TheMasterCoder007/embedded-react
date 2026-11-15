@@ -497,6 +497,37 @@ static void test_nan_offset_keeps_axis(void)
 }
 
 /**
+ * @brief The getter reports the clamped offset and the scroll range, and refuses a node that does not scroll.
+ */
+static void test_get_offset(void)
+{
+    printf("test_get_offset\n");
+    TestCtx test_context;
+    EmbeddedRenderBackend backend;
+    setup_backend(&test_context, &backend);
+
+    ERNode *scroll_view, *first_child, *second_child, *third_child;
+    build_scene(&scroll_view, &first_child, &second_child, &third_child);
+    /* content_h = 300, viewport_h = 200  →  max_y = 100 */
+
+    ERScrollOffset offset = {0};
+    ASSERT(er_scroll_view_get_offset(scroll_view, &offset));
+    ASSERT_FLOAT_NEAR(offset.x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(offset.y, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(offset.max_x, 0.0f, 0.001f);
+    ASSERT_FLOAT_NEAR(offset.max_y, 100.0f, 0.001f);
+
+    er_scroll_view_set_offset(scroll_view, 0.0f, 999.0f);
+    ASSERT(er_scroll_view_get_offset(scroll_view, &offset));
+    ASSERT_FLOAT_NEAR(offset.y, 100.0f, 0.001f);
+
+    ASSERT(!er_scroll_view_get_offset(first_child, &offset));
+    ASSERT(!er_scroll_view_get_offset(NULL, &offset));
+    ASSERT(!er_scroll_view_get_offset(scroll_view, NULL));
+    er_commit();
+}
+
+/**
  * @brief Scrolled-out children are clipped and produce no fill inside the viewport.
  *
  * After scrolling down 100 px child0 (red, layout y=0..100) maps to screen y=-100..0.
@@ -718,6 +749,7 @@ int main(void)
     test_scroll_event_dedup();
     test_subpixel_step_repaints_nothing();
     test_nan_offset_keeps_axis();
+    test_get_offset();
     test_clip_hides_scrolled_out();
     test_clip_shows_scrolled_in();
     test_gesture_claims_scroll_view();

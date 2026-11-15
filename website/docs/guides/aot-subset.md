@@ -36,7 +36,7 @@ while the code that breaks it is still one line.
   so the package needs nodes for the largest set shown at once. To keep a small branch that flips
   often built, write `<El visible={cond}/>` instead. In a list row, every branch is built with the
   row and toggled. The state of a component in a branch is kept while the branch is gone.
-  `updateVector` can't draw on a node in a branch.
+  `updateVector` can't draw on a node in a branch, and `scrollTo` can't scroll one.
 - Components live in the same file as `App`: local `.jsx` imports are not resolved.
 - A component that receives state-driven or function props must destructure them:
   `function Card({title})`. `function Card(props)` works only when every prop is a constant. Rest
@@ -157,6 +157,7 @@ An event handler body may contain `const` and `let` locals holding a number, a b
 built with `+`, a template literal or the string helpers above; `if` and
 `else`; `switch`; `for` and `for…of` loops with `break` and `continue`; `return`, early or not; state setter calls;
 `ref.current` writes, including `+=` and `++`; `setInterval`, `setTimeout` and their clears; `updateVector` calls;
+`scrollTo(ref.current, {x, y})`, whose position a `const` keeps (`const {y, maxY} = scrollTo(list.current)`);
 [native module](../api/hooks.md#nativemodule) calls; `console.log`, `warn` and `error`; and `.start()` or `.stop()`
 on any `Animated` animation or composition. `while` and `try` are not lowered, and a
 `break` in a `switch` must end its case.

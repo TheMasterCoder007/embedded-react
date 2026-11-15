@@ -67,6 +67,19 @@ export function updateText(handle, text) {
 }
 
 /**
+ * Scrolls a <ScrollView> and returns where it landed. The offset is clamped to the scroll range, and an
+ * axis left out stays where it is, so scrollTo(handle) only reads the position.
+ * @param {number} handle    The node handle from a ref on a <ScrollView/>.
+ * @param {object} [offset]  {x, y} in pixels.
+ * @returns {{x: number, y: number, maxX: number, maxY: number} | undefined} The offset and the largest
+ *                           offset on each axis, or undefined when the handle is not a ScrollView.
+ */
+export function scrollTo(handle, offset) {
+  if (handle == null) return undefined;
+  return NativeUI.scrollTo(handle, offset?.x, offset?.y);
+}
+
+/**
  * Customizes the on-screen software keyboard's appearance and/or layout. Only effective when the engine was
  * built with the keyboard enabled (ERUI_ONSCREEN_KEYBOARD=1); a no-op otherwise. The config is a plain
  * object of colors/sizes plus an optional `layers` array; omit `layers` to keep the built-in QWERTY:

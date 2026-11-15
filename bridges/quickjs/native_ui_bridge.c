@@ -4504,6 +4504,53 @@ static JSValue js_has_pending_layout_animation(JSContext* ctx, JSValueConst this
 }
 
 /**
+ * @brief NativeUI.scrollTo(handle, x, y) — scrolls a ScrollView and reports where it landed.
+ *
+ * An axis left out (or NaN) stays where it is, so scrollTo(handle) only reads.
+ *
+ * @param[in] ctx   QuickJS context.
+ * @param[in] this  JS this (unused).
+ * @param[in] argc  Argument count.
+ * @param[in] argv  argv[0] = node handle, argv[1] = x, argv[2] = y.
+ *
+ * @return {x, y, maxX, maxY} after clamping, or JS_UNDEFINED if the handle is not a ScrollView.
+ */
+static JSValue js_scroll_to(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
+    double x = NAN;
+    double y = NAN;
+    if (argc > 1 && JS_ToFloat64(ctx, &x, argv[1]) != 0)
+    {
+        return JS_EXCEPTION;
+    }
+    if (argc > 2 && JS_ToFloat64(ctx, &y, argv[2]) != 0)
+    {
+        return JS_EXCEPTION;
+    }
+
+    er_scroll_view_set_offset(node, (float)x, (float)y);
+
+    /* The scroll runs onScroll, which may have destroyed the node. */
+    ERScrollOffset offset;
+    if (!er_scroll_view_get_offset(node_arg(ctx, argv[0]), &offset))
+    {
+        return JS_UNDEFINED;
+    }
+    JSValue result = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, result, "x", JS_NewFloat64(ctx, (double)offset.x));
+    JS_SetPropertyStr(ctx, result, "y", JS_NewFloat64(ctx, (double)offset.y));
+    JS_SetPropertyStr(ctx, result, "maxX", JS_NewFloat64(ctx, (double)offset.max_x));
+    JS_SetPropertyStr(ctx, result, "maxY", JS_NewFloat64(ctx, (double)offset.max_y));
+    return result;
+}
+
+/**
  * @brief NativeUI.animValueCreate(initial) — creates a standalone animatable value.
  *
  * @param[in] ctx   QuickJS context.
@@ -5075,6 +5122,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "maxVectorPaints", JS_NewInt32(ctx, VEC_BRIDGE_MAX_PAINTS));
     JS_SetPropertyStr(ctx, native_ui, "maxVectorGrads", JS_NewInt32(ctx, VEC_BRIDGE_MAX_GRADS));
     JS_SetPropertyStr(ctx, native_ui, "setEvent", JS_NewCFunction(ctx, js_set_event, "setEvent", 3));
+    JS_SetPropertyStr(ctx, native_ui, "scrollTo", JS_NewCFunction(ctx, js_scroll_to, "scrollTo", 3));
     JS_SetPropertyStr(ctx, native_ui, "commit", JS_NewCFunction(ctx, js_commit, "commit", 0));
     JS_SetPropertyStr(ctx, native_ui, "setBatcher", JS_NewCFunction(ctx, js_set_batcher, "setBatcher", 1));
 #if ER_PERF_STATS

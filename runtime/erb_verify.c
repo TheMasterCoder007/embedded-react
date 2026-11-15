@@ -2512,6 +2512,13 @@ static bool check_operands(const FunctionContext* context, uint32_t program_coun
                     BAD("VDIRTY registers");
             }
             break;
+        case ERB_OP_SCROLLAT:
+            for (uint32_t register_index = operand_b; register_index < (uint32_t)operand_b + 4u; register_index++)
+            {
+                if (!reg_is(context, register_index, ERB_TYPE_FLOAT))
+                    BAD("SCROLLAT registers");
+            }
+            break;
         case ERB_OP_EVT:
         {
             const uint8_t type = operand_b < ERB_EVENT_FIELD_COUNT_ ? event_field_type(context->kind, operand_b) : 0u;

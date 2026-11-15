@@ -67,10 +67,8 @@ if (bytecodeMode && !existsSync(compileExe)) {
   process.exit(2);
 }
 
-const tests = readdirSync(here).filter(
-  fileName =>
-    fileName.endsWith('.runtime.test.jsx') ||
-    fileName.endsWith('.runtime.test.js'),
+const tests = readdirSync(here).filter(fileName =>
+  /\.runtime\.test\.(jsx?|tsx?)$/.test(fileName),
 );
 if (tests.length === 0) {
   console.log('No runtime tests found.');
@@ -83,7 +81,7 @@ let failed = 0;
 for (const test of tests) {
   const bundle = path.join(
     outputDirectory,
-    test.replace(/\.jsx?$/, '.bundle.js'),
+    test.replace(/\.[jt]sx?$/, '.bundle.js'),
   );
   await build({
     entryPoints: [path.join(here, test)],
