@@ -23,6 +23,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Engine: a view that draws nothing itself no longer repaints its box when it only moves or resizes.
 - Engine: a transform with a scale of exactly 1 and no rotation is drawn as a plain offset, and keeps its shadow.
+- Engine: a node whose only transform is a scale of exactly 1 is skipped like an untransformed one when a repaint
+  does not touch it.
 
 ### Removed
 

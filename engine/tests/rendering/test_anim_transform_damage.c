@@ -27,6 +27,7 @@
  * test_opacity_equiv.c asserts for static prop mutations, here for an animated transform.
  */
 
+#include "er_node_internal.h"
 #include "er_scene.h"
 #include "native_renderer.h"
 #include "renderer_internal.h"
@@ -461,7 +462,9 @@ static int run_lift(TestCtx* test_context)
         }
     }
 
-    /* At rest on an explicit scale of 1. */
+    /* At rest on an explicit scale of 1: no transform, so the damage clip can prune the card. */
+    if (card->has_transform || !card->subtree_prunable)
+        return fail("a card resting at scale 1 still counts as transformed");
     child_props.background_color = 0xFFFF8800U;
     er_node_set_props(child, &child_props);
     s_blend_count = 0;

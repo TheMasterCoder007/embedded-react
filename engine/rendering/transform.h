@@ -445,6 +445,25 @@ void er_transform_source_end_blit(int source_x,
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
+ * @brief Whether a node's transform fields hold anything but the identity.
+ *
+ * A scale of 0 is unset and a scale of 1 is where a scale animation rests: neither is a transform, so a
+ * node holding only those is painted, pruned and hit-tested like an untransformed one.
+ *
+ * @param[in] node  Node to inspect.
+ *
+ * @return true when a translate, scale, rotation or perspective is set.
+ */
+static inline bool er_node_transform_is_set(const ERNode* node)
+{
+    const bool scaled_x = node->transform_scale_x != 0.0f && node->transform_scale_x != 1.0f;
+    const bool scaled_y = node->transform_scale_y != 0.0f && node->transform_scale_y != 1.0f;
+    return node->transform_translate_x != 0.0f || node->transform_translate_y != 0.0f || scaled_x || scaled_y
+           || node->transform_rotate_z != 0.0f || node->transform_rotate_x != 0.0f || node->transform_rotate_y != 0.0f
+           || node->transform_perspective != 0.0f;
+}
+
+/**
  * @brief Whether a node carries a transform the plain-offset fast path cannot express.
  *
  * True for scale/rotate/skew (and, in 3D builds, rotateX/rotateY/perspective) — the transforms that are

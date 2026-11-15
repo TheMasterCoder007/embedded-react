@@ -3982,10 +3982,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
     node->transform_rotate_x = er_nan_or(props->transform_rotate_x, 0.0f);
     node->transform_rotate_y = er_nan_or(props->transform_rotate_y, 0.0f);
     node->transform_perspective = er_nan_or(props->transform_perspective, 0.0f);
-    node->has_transform =
-        (node->transform_translate_x != 0.0f || node->transform_translate_y != 0.0f || node->transform_scale_x != 0.0f
-         || node->transform_scale_y != 0.0f || node->transform_rotate_z != 0.0f || node->transform_rotate_x != 0.0f
-         || node->transform_rotate_y != 0.0f || node->transform_perspective != 0.0f);
+    node->has_transform = er_node_transform_is_set(node);
 
     /* Copy type-specific visual props. */
     switch (node->type)
