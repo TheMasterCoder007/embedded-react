@@ -396,6 +396,81 @@ static int check_clipping_container_still_damages(void)
     return matches_full_repaint("a shrunk clipping container differs from a full repaint");
 }
 
+/* A box pushed out of a clipper and brought back by a reflow repaints, though nothing else covers its spot. */
+static int check_clipped_out_child_returns(void)
+{
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = ROOT_COLOR;
+    root_props.overflow = ER_OVERFLOW_HIDDEN;
+    er_node_set_props(root, &root_props);
+
+    ERNode* spacer = add_box(root, SCREEN, 0, 0U);
+    ERNode* column = add_box(root, SCREEN, ER_LAYOUT_AUTO, 0U);
+    ERNode* first_row = add_box(column, SCREEN, 100, 0U);
+    add_box(first_row, KID_SIZE, KID_SIZE, ROW_COLOR);
+    ERNode* second_row = add_box(column, SCREEN, 100, 0U);
+    ERNode* second_kid = add_box(second_row, KID_SIZE, KID_SIZE, ROW_COLOR);
+    ERProps kid_props = props_default();
+    kid_props.width = KID_SIZE;
+    kid_props.height = KID_SIZE;
+    kid_props.margin_left = 100;
+    kid_props.background_color = ROW_COLOR;
+    er_node_set_props(second_kid, &kid_props);
+    er_tree_set_root(root);
+    settle();
+
+    ERProps spacer_props = props_default();
+    spacer_props.width = SCREEN;
+    spacer_props.height = 100; /* the second row is now below the clip */
+    er_node_set_props(spacer, &spacer_props);
+    er_commit();
+    er_commit();
+
+    spacer_props.height = 0;
+    er_node_set_props(spacer, &spacer_props);
+    er_commit();
+    if (s_framebuffer[110 * SCREEN + 110] != ROW_COLOR)
+        return fail("a box brought back inside its clipper by a reflow was not repainted");
+    if (matches_full_repaint("a returned clipped-out box differs from a full repaint") != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count != 0)
+        return fail("the returned box re-damaged on the following idle commit");
+    return EXIT_SUCCESS;
+}
+
+/* A border in a transparent colour draws nothing; one in a visible colour does. */
+static int check_border_colour_decides(void)
+{
+    ERNode* column = NULL;
+    ERProps column_props = props_default();
+    column_props.border_width = 2;
+    build_column(column_props, 0, NULL, &column);
+    settle();
+    append_row_below_screen(column);
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count != 0)
+        return fail("a container with a transparent border grew off-screen and repainted");
+
+    column_props.border_color = 0xFFFFFFFFU;
+    build_column(column_props, 0, NULL, &column);
+    settle();
+    append_row_below_screen(column);
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count == 0)
+        return fail("a container with a visible border grew without repainting");
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
     static const EmbeddedRenderBackend k_backend = {.fill_rect = fb_fill};
@@ -410,6 +485,8 @@ int main(void)
         check_painted_container_still_damages,
         check_transparent_container_moves,
         check_clipping_container_still_damages,
+        check_clipped_out_child_returns,
+        check_border_colour_decides,
     };
 
     for (size_t case_index = 0; case_index < sizeof(cases) / sizeof(cases[0]); case_index++)
