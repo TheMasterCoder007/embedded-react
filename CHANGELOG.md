@@ -10,6 +10,10 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Changed
+
+- Engine: a view that draws nothing itself no longer repaints its box when it only moves or resizes.
+
 ### Removed
 
 - Engine: the unused `ERUI_FONT_SIZES` build option.
