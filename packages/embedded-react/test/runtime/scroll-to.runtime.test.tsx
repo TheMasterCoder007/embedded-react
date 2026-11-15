@@ -82,4 +82,27 @@ check(scrollTo(-1, {y: 10}) === undefined, 'a bad handle returns undefined');
 
 check(scrollTo(null, {y: 10}) === undefined, 'a null ref returns undefined');
 
+// An onScroll that unmounts the list: the scroll's own node is gone by the time its position is read.
+let gone: NodeHandle | null = null;
+const unmounting = createRoot({width: screen.width, height: screen.height});
+const Unmounting = ({shown}: {shown: boolean}) => (
+  <View>
+    {shown && (
+      <ScrollView
+        ref={(handle: NodeHandle | null) => {
+          if (handle != null) gone = handle;
+        }}
+        style={{width: 200, height: 200}}
+        onScroll={() => unmounting.render(<Unmounting shown={false} />)}>
+        <View style={{width: 200, height: 500}} />
+      </ScrollView>
+    )}
+  </View>
+);
+unmounting.render(<Unmounting shown={true} />);
+check(
+  scrollTo(gone, {y: 50}) === undefined,
+  'a list its own onScroll unmounted returns undefined',
+);
+
 report('scroll-to');

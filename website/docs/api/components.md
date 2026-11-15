@@ -137,9 +137,14 @@ const list = useRef(null);
 const showRow = index => {
   const {y} = scrollTo(list.current);
   if (index * 48 < y) scrollTo(list.current, {y: index * 48});
-  else if (index * 48 + 48 > y + 240) scrollTo(list.current, {y: index * 48 - 192});
+  else if (index * 48 + 48 > y + 240)
+    scrollTo(list.current, {y: index * 48 - 192});
 };
 <ScrollView ref={list} style={{height: 240}}>
+  {rows.map(r => (
+    <Row key={r.id} {...r} />
+  ))}
+</ScrollView>;
 ```
 
 It scrolls whichever axis overflows: lay the content out with `flexDirection: 'row'` for a

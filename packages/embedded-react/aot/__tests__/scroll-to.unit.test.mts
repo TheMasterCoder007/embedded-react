@@ -119,6 +119,14 @@ describe('scrollTo in a package', () => {
     expect(scrollsOf(program)).toEqual(['SCROLL', 'SCROLLAT']);
   });
 
+  it('takes the last of an axis written twice, as JS does', () => {
+    const twice = compile(appOf('scrollTo(list.current, {y: 7, y: 120});'));
+    const once = compile(appOf('scrollTo(list.current, {y: 120});'));
+    const first = compile(appOf('scrollTo(list.current, {y: 7});'));
+    expect(twice.program).toEqual(once.program);
+    expect(twice.program).not.toEqual(first.program);
+  });
+
   it('refuses a handle that is not a node ref’s current', () => {
     expect(failure(appOf('scrollTo(list, {y: 1});'))).toMatch(
       /takes the `\.current` of a node ref/,

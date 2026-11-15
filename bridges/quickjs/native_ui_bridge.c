@@ -4532,8 +4532,9 @@ static JSValue js_scroll_to(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
     er_scroll_view_set_offset(node, (float)x, (float)y);
 
+    /* The scroll runs onScroll, which may have destroyed the node. */
     ERScrollOffset offset;
-    if (!er_scroll_view_get_offset(node, &offset))
+    if (!er_scroll_view_get_offset(node_arg(ctx, argv[0]), &offset))
     {
         return JS_UNDEFINED;
     }

@@ -71,17 +71,16 @@ function axisOf(
   axis: 'x' | 'y',
   environment: Env,
 ): IrExpr | null {
-  for (const property of offset.properties) {
-    if (
-      property.type === 'ObjectProperty' &&
-      !property.computed &&
-      property.key.type === 'Identifier' &&
-      property.key.name === axis
-    ) {
-      return lowerExpr(property.value as t.Expression, environment);
-    }
-  }
-  return null;
+  // The last of a key written twice is the one JS keeps.
+  const property = offset.properties.findLast(
+    candidate =>
+      candidate.type === 'ObjectProperty' &&
+      candidate.key.type === 'Identifier' &&
+      candidate.key.name === axis,
+  ) as t.ObjectProperty | undefined;
+  return property
+    ? lowerExpr(property.value as t.Expression, environment)
+    : null;
 }
 
 /**
