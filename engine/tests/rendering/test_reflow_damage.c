@@ -24,7 +24,8 @@
  *   - a layout prop change that moves one child repaints that child's old and new spots, not the
  *     whole container that was re-measured,
  *   - an appearance change still damages the full box (the split must not lose real changes),
- *   - and the moved-child frame is pixel-identical to a full repaint of the same scene.
+ *   - the moved-child frame is pixel-identical to a full repaint of the same scene,
+ *   - and a container that paints nothing and does not clip adds no damage when it moves or resizes.
  */
 
 #include "er_scene.h"
@@ -40,6 +41,10 @@
 #define BAR_HEIGHT 60
 #define KID_SIZE 20
 #define OPACITY_OPAQUE 255U
+#define ROW_HEIGHT 250
+#define SPACER_HEIGHT 30
+#define ROOT_COLOR 0xFF101010U
+#define ROW_COLOR 0xFF2060C0U
 
 static uint32_t s_framebuffer[SCREEN * SCREEN];
 static int s_fill_count;
@@ -249,6 +254,148 @@ static int check_pixel_equivalence(void)
     return EXIT_SUCCESS;
 }
 
+static ERNode* add_box(ERNode* parent, int16_t width, int16_t height, uint32_t background)
+{
+    ERNode* box = er_node_create(ER_NODE_VIEW);
+    ERProps box_props = props_default();
+    box_props.width = width;
+    box_props.height = height;
+    box_props.background_color = background;
+    er_node_set_props(box, &box_props);
+    er_tree_append_child(parent, box);
+    return box;
+}
+
+/** @brief root(200x200) → spacer(optional) → column(auto height) → one row taller than the screen. */
+static void build_column(ERProps column_props, int16_t spacer_height, ERNode** out_spacer, ERNode** out_column)
+{
+    er_reset();
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps root_props = props_default();
+    root_props.width = SCREEN;
+    root_props.height = SCREEN;
+    root_props.background_color = ROOT_COLOR;
+    er_node_set_props(root, &root_props);
+
+    ERNode* spacer = spacer_height > 0 ? add_box(root, SCREEN, spacer_height, 0U) : NULL;
+
+    ERNode* column = er_node_create(ER_NODE_VIEW);
+    column_props.width = SCREEN;
+    er_node_set_props(column, &column_props);
+    er_tree_append_child(root, column);
+
+    add_box(column, SCREEN, ROW_HEIGHT, ROW_COLOR);
+    er_tree_set_root(root);
+    if (out_spacer)
+        *out_spacer = spacer;
+    *out_column = column;
+}
+
+static void append_row_below_screen(ERNode* column)
+{
+    add_box(column, SCREEN, 40, 0xFFC02020U);
+}
+
+/* A transparent column that grows below the screen repaints nothing. */
+static int check_transparent_container_grows_free(void)
+{
+    ERNode* column = NULL;
+    build_column(props_default(), 0, NULL, &column);
+    settle();
+    if (s_fill_count != 0)
+        return fail("the settled column scene was not idle to begin with");
+
+    for (int appended = 0; appended < 3; appended++)
+    {
+        append_row_below_screen(column);
+        s_fill_count = 0;
+        er_commit();
+        if (s_fill_count != 0)
+            return fail("a transparent container that grew off-screen repainted");
+    }
+
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count != 0)
+        return fail("the grown container re-damaged on the following idle commit");
+    return EXIT_SUCCESS;
+}
+
+/* A column with a background has pixels of its own, so growing still damages its box. */
+static int check_painted_container_still_damages(void)
+{
+    ERNode* column = NULL;
+    ERProps column_props = props_default();
+    column_props.background_color = 0xFF204020U;
+    build_column(column_props, 0, NULL, &column);
+    settle();
+
+    append_row_below_screen(column);
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count == 0)
+        return fail("a container with a background grew without repainting");
+    return EXIT_SUCCESS;
+}
+
+static int matches_full_repaint(const char* message)
+{
+    static uint32_t incremental[SCREEN * SCREEN];
+    memcpy(incremental, s_framebuffer, sizeof(incremental));
+    memset(s_framebuffer, 0, sizeof(s_framebuffer));
+    er_force_full_repaint();
+    er_commit();
+    return memcmp(incremental, s_framebuffer, sizeof(incremental)) == 0 ? EXIT_SUCCESS : fail(message);
+}
+
+/* Pushing a transparent column down moves its rows; they repaint and the frame stays right. */
+static int check_transparent_container_moves(void)
+{
+    ERNode* spacer = NULL;
+    ERNode* column = NULL;
+    build_column(props_default(), SPACER_HEIGHT, &spacer, &column);
+    settle();
+
+    ERProps spacer_props = props_default();
+    spacer_props.width = SCREEN;
+    spacer_props.height = SPACER_HEIGHT * 2;
+    er_node_set_props(spacer, &spacer_props);
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count == 0)
+        return fail("rows moved with their transparent container and nothing repainted");
+    if (s_framebuffer[(SPACER_HEIGHT + 10) * SCREEN + 10] != ROOT_COLOR)
+        return fail("the moved rows left a trail");
+    if (matches_full_repaint("a moved transparent container differs from a full repaint") != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+
+    s_fill_count = 0;
+    er_commit();
+    if (s_fill_count != 0)
+        return fail("the moved container re-damaged on the following idle commit");
+    return EXIT_SUCCESS;
+}
+
+/* A transparent column that clips its rows uncovers pixels when it shrinks, so it still damages. */
+static int check_clipping_container_still_damages(void)
+{
+    ERNode* column = NULL;
+    ERProps column_props = props_default();
+    column_props.height = 150;
+    column_props.overflow = ER_OVERFLOW_HIDDEN;
+    build_column(column_props, 0, NULL, &column);
+    settle();
+
+    column_props.width = SCREEN;
+    column_props.height = 100;
+    er_node_set_props(column, &column_props);
+    er_commit();
+    if (s_framebuffer[120 * SCREEN + 10] != ROOT_COLOR)
+        return fail("a shrunk clipping container left its old rows on screen");
+    return matches_full_repaint("a shrunk clipping container differs from a full repaint");
+}
+
 int main(void)
 {
     static const EmbeddedRenderBackend k_backend = {.fill_rect = fb_fill};
@@ -259,6 +406,10 @@ int main(void)
         check_moved_child_only,
         check_visual_change_still_damages,
         check_pixel_equivalence,
+        check_transparent_container_grows_free,
+        check_painted_container_still_damages,
+        check_transparent_container_moves,
+        check_clipping_container_still_damages,
     };
 
     for (size_t case_index = 0; case_index < sizeof(cases) / sizeof(cases[0]); case_index++)

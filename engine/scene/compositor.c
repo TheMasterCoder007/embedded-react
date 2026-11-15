@@ -1074,6 +1074,25 @@ static bool node_clips_children(const ERNode* node)
 }
 
 /**
+ * @brief True when @p node draws no pixels of its own and does not clip its children.
+ *
+ * Moving or resizing such a node changes nothing on screen by itself; its children report their own moves.
+ */
+static bool node_paints_nothing(const ERNode* node)
+{
+    if (node->type != ER_NODE_VIEW && node->type != ER_NODE_PRESSABLE)
+        return false;
+    if (node_clips_children(node))
+        return false;
+    const ERViewProps* view_props = &node->props.view;
+    return (view_props->background_color >> 24) == 0U && view_props->gradient_type == ER_GRADIENT_NONE
+           && view_props->border_width <= 0 && view_props->border_left_width <= 0 && view_props->border_top_width <= 0
+           && view_props->border_right_width <= 0 && view_props->border_bottom_width <= 0
+           && view_props->opacity == ER_ALPHA_OPAQUE && !(view_props->shadow_opacity > 0.0f)
+           && view_props->elevation == 0U;
+}
+
+/**
  * @brief Offset from a node's border-box origin to the origin its vec_dirty_* rect is measured from.
  *
  * The two rects are stored in different spaces, and both land on screen through this. An ER_NODE_VECTOR
@@ -6115,6 +6134,16 @@ void er_commit(void)
             if (scrim_modal)
             {
                 modal_scrim_damage(node, &damage, render_left, render_top, render_right, render_bottom);
+                continue;
+            }
+            if (!node->source_dirty && node_paints_nothing(node))
+            {
+                /* Only moved or resized, with no pixels of its own: record the new rect and add no damage. */
+                node->last_paint_rect.x = (int16_t)rect_x;
+                node->last_paint_rect.y = (int16_t)rect_y;
+                node->last_paint_rect.width = (int16_t)rect_width;
+                node->last_paint_rect.height = (int16_t)rect_height;
+                node->last_paint_untransformed = true;
                 continue;
             }
             /* Everything below measures this node in plain layout-minus-scroll space. Under a
