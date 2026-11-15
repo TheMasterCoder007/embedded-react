@@ -487,26 +487,35 @@ export function lowerEventHandler(
   state: StateTable,
 ): string {
   const handlerExpression = attrExpr(attribute);
-  const layout = (attribute.name as t.JSXIdentifier).name === 'onLayout';
+  const eventName = (attribute.name as t.JSXIdentifier).name;
+  // The events whose data only their own handler reads.
+  const carries =
+    eventName === 'onLayout'
+      ? 'layout'
+      : eventName === 'onScroll'
+        ? 'scroll'
+        : null;
+  const carried = {layout: carries === 'layout', scroll: carries === 'scroll'};
   if (
     handlerExpression.type === 'Identifier' &&
     environment.callbacks?.has(handlerExpression.name)
   ) {
     // A useCallback compiles to one shared handler, namespaced by cbPrefix so each child instance gets its own.
-    // Its onLayout use gets a handler of its own, since only that event carries the layout rect. The key's
-    // `layout:` and the name's `layout_callback_` can't come from an identifier, so they never meet another callback.
+    // Its onLayout or onScroll use gets a handler of its own, since only that event carries the layout rect or the
+    // offset. The key's `layout:` and the name's `layout_callback_` can't come from an identifier, so they never
+    // meet another callback.
     const callbackKey = `${environment.callbackPrefix ?? ''}${handlerExpression.name}`;
-    const emittedKey = layout ? `layout:${callbackKey}` : callbackKey;
+    const emittedKey = carries ? `${carries}:${callbackKey}` : callbackKey;
     let handlerName = output.emittedCallbacks.get(emittedKey);
     if (!handlerName) {
-      handlerName = `${layout ? 'layout_callback_' : 'callback_'}${callbackKey}`;
+      handlerName = `${carries ? `${carries}_callback_` : 'callback_'}${callbackKey}`;
       output.emittedCallbacks.set(emittedKey, handlerName);
       output.handlers.push({
         kind: 'callback',
         name: handlerName,
         callback: lowerHandler(
           environment.callbacks.get(handlerExpression.name)!,
-          {...environment, layout},
+          {...environment, ...carried},
           state,
           output,
         ),
@@ -528,7 +537,7 @@ export function lowerEventHandler(
       name: handlerName,
       callback: lowerHandler(
         callbackProp.node,
-        {...callbackProp.environment, layout},
+        {...callbackProp.environment, ...carried},
         callbackProp.state,
         output,
       ),
@@ -539,7 +548,7 @@ export function lowerEventHandler(
       name: handlerName,
       callback: lowerHandler(
         handlerExpression,
-        {...environment, layout},
+        {...environment, ...carried},
         state,
         output,
       ),

@@ -206,7 +206,7 @@ const CONVERSIONS: Record<string, string> = {
   'int64>double': 'LTOD',
 };
 
-/** The event field each touch field, and what a <Dial> passes, reads. */
+/** The event field each touch or scroll field, and what a <Dial> passes, reads. */
 const EVENT_FIELDS: Record<string, number> = {
   x: EventField.x,
   y: EventField.y,
@@ -214,6 +214,8 @@ const EVENT_FIELDS: Record<string, number> = {
   dy: EventField.dy,
   vx: EventField.vx,
   vy: EventField.vy,
+  scrollX: EventField.scrollX,
+  scrollY: EventField.scrollY,
   value: EventField.value,
   value_start: EventField.valueStart,
 };
@@ -357,7 +359,7 @@ export class Codegen {
       case 'event':
         return expression.field === 'changed_text'
           ? 'string'
-          : ['vx', 'vy', 'value', 'value_start'].includes(expression.field)
+          : expression.type.kind === 'float'
             ? 'float'
             : 'int';
       case 'gesture':

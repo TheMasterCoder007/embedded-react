@@ -1680,6 +1680,20 @@ export const binarySource = (
 });
 
 /**
+ * An onScroll handler read a touch field, which a scroll event doesn't carry.
+ *
+ * @param field  The field read.
+ *
+ * @returns The error to throw.
+ */
+function scrollTouchError(field: string): Error {
+  return aotError(
+    `AOT: an onScroll event carries no touch, so it has no "${field}"`,
+    'read e.scrollX / e.scrollY — the offset is all a scroll event has.',
+  );
+}
+
+/**
  * Whether `node` is the handler's event, or its `nativeEvent` as React Native code reads it.
  *
  * @param node  The expression.
@@ -2523,6 +2537,7 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         environment.event === object.name &&
         (prop === 'x' || prop === 'y' || prop === 'dx' || prop === 'dy')
       ) {
+        if (environment.scroll) throw scrollTouchError(prop);
         return fixed({kind: 'event', field: prop, type: INT});
       }
 
@@ -2532,6 +2547,22 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
         environment.event === object.name &&
         (prop === 'vx' || prop === 'vy')
       ) {
+        if (environment.scroll) throw scrollTouchError(prop);
+        return fixed({kind: 'event', field: prop, type: FLOAT});
+      }
+
+      // `<event>.scrollX / .scrollY` — where an onScroll handler's ScrollView is now.
+      if (
+        object.type === 'Identifier' &&
+        environment.event === object.name &&
+        (prop === 'scrollX' || prop === 'scrollY')
+      ) {
+        if (!environment.scroll) {
+          throw aotError(
+            'AOT: only an onScroll event carries a scroll offset',
+            'read e.scrollX / e.scrollY inside an onScroll handler, or ask with scrollTo(ref.current).',
+          );
+        }
         return fixed({kind: 'event', field: prop, type: FLOAT});
       }
 
@@ -2583,7 +2614,7 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
         "in a handler or dynamic expression you can read state, `ref.current`, a list item's " +
-          'field (`item.title`, `items[i].title`), event fields (e.x / e.y / e.dx / e.dy / e.vx / e.vy / e.layout.*), and ' +
+          'field (`item.title`, `items[i].title`), event fields (e.x / e.y / e.dx / e.dy / e.vx / e.vy / e.scrollX / e.scrollY / e.layout.*), and ' +
           'Math.PI — other member access must be a compile-time constant.',
       );
     }

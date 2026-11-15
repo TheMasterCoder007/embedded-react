@@ -94,7 +94,7 @@ const PAINT = {
  */
 const SAMPLES = {
   View: {props: HOST},
-  ScrollView: {props: HOST},
+  ScrollView: {props: {...HOST, onScroll: `onScroll=${HANDLER}`}},
   Pressable: {
     props: {
       ...HOST,
@@ -430,7 +430,7 @@ describe('declared element props', () => {
     expect(() => gen('<Button title="go" style={{margin: 2}} />')).toThrow(
       /prop "style" is not supported[\s\S]*hint: a Button takes no style/,
     );
-    expect(() => gen('<ScrollView onScroll={() => setN(1)} />')).toThrow(
+    expect(() => gen('<View onScroll={() => setN(1)} />')).toThrow(
       /prop "onScroll" is not supported/,
     );
     expect(() =>

@@ -2823,6 +2823,19 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
     );
     lowering.slots.arena.eventQueue(animations.entries + 2 * ends);
   }
+  // A scrollTo in a function fires onScroll, which waits in the queue until the function ends.
+  if (
+    functions.some(
+      programFunction =>
+        programFunction.kind === ENGINE_VALUES.get('ER_EVENT_SCROLL'),
+    )
+  ) {
+    let scrolls = 0;
+    for (const programFunction of functions) {
+      scrolls += countOps(programFunction, ['SCROLL']);
+    }
+    lowering.slots.arena.eventQueue(scrolls);
+  }
   const {regions, bytes} = lowering.slots.arena.regions(stackCells(functions));
 
   // Host values, by name, for erb_input_find().
