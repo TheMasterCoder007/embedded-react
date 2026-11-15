@@ -1219,6 +1219,24 @@ const SCENARIOS: Scenario[] = [
     taps: '120,156 180,174',
     flowA: true,
   },
+  // Chips wrapping, a row that wraps by state, and one wrapping in reverse.
+  {name: 'wrap', file: fixture('wrap'), screen: PORTRAIT, flowA: true},
+  // the first button, which stops the middle row wrapping
+  {
+    name: 'wrap-off',
+    file: fixture('wrap'),
+    screen: PORTRAIT,
+    taps: '36,32',
+    flowA: true,
+  },
+  // ask, whose alert's three buttons take a line each
+  {
+    name: 'wrap-alert',
+    file: fixture('wrap'),
+    screen: PORTRAIT,
+    taps: '100,32',
+    flowA: true,
+  },
   // A spinner's angle moves with the clock, so two frames apart differ.
   {name: 'activity', file: fixture('activity'), screen: PORTRAIT},
   {

@@ -364,7 +364,7 @@ function lowerDynamicStyleValue(
     throw aotError(
       `AOT: a state-driven value for style "${key}" is not supported (static only)`,
       `state-driven styles supported: colors, opacity, sizes/margins/padding, and the ` +
-        `layout enums (flexDirection, alignItems, alignSelf, justifyContent, position, ` +
+        `layout enums (flexDirection, flexWrap, alignItems, alignSelf, justifyContent, position, ` +
         `display). Make "${key}" static, or drive the change another way.`,
     );
   }

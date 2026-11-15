@@ -216,7 +216,7 @@ list row; work it out for the whole list in a `useMemo` instead.
 - Static or state-driven is decided per style key, so constants and state can share one inline
   object. A state-driven value works on colors, `opacity`, sizes, margins, padding, `gap`,
   `flexGrow`/`flexShrink`, border radii, `borderWidth`, `zIndex`, `fontSize`, `lineHeight`,
-  `letterSpacing` and the enums `flexDirection`, `alignItems`, `alignSelf`, `justifyContent`,
+  `letterSpacing` and the enums `flexDirection`, `flexWrap`, `alignItems`, `alignSelf`, `justifyContent`,
   `position` and `display`. `flex`, `flexBasis`, `left`/`top`/`right`/`bottom` and `fontWeight` must
   be constants.
 - A state-driven enum style (`display`, `flexDirection` and the like) must be a string literal or a

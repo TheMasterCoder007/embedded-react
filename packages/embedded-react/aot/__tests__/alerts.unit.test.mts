@@ -131,7 +131,7 @@ describe('Alert.alert', () => {
       "          <View style={{backgroundColor: '#ffffff', borderRadius: 4, padding: 16, gap: 8, width: Math.min(280, screen.width - 32)}}>\n" +
       "            <Text style={{color: '#000000', fontWeight: 'bold'}}>{'Reset?'}</Text>\n" +
       "            <Text style={{color: '#444444'}}>{'It is at ' + count + '.'}</Text>\n" +
-      "            <View style={{flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8}}>\n" +
+      "            <View style={{flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8, marginTop: 8}}>\n" +
       '              <Pressable onPress={() => { setActive(0); setCount(0); }}>\n' +
       "                <Text style={{color: '#2196F3', fontWeight: '500', padding: 8}}>{'Reset'}</Text>\n" +
       '              </Pressable>\n' +
@@ -162,6 +162,38 @@ describe('Alert.alert', () => {
       ]);
       expect(textsOf(dialog)).toEqual(['Saved', 'OK']);
     }
+  });
+
+  it('leaves out a title or a message known to be empty, as Alert.js does', () => {
+    for (const call of [
+      "Alert.alert('', '');",
+      'Alert.alert(undefined, null);',
+      "Alert.alert(EMPTY, EMPTY + '');",
+    ]) {
+      const dialog = dialogOf(appOf(call, '', "const EMPTY = '';"));
+      expect(typesOf(dialog)).toEqual([
+        'MODAL',
+        'VIEW',
+        'VIEW',
+        'PRESSABLE',
+        'TEXT',
+      ]);
+    }
+  });
+
+  it("is not mistaken for the app's own bindings", () => {
+    const source = appOf(
+      "alert$show(); setAlert$active(alert$active + 1); Alert.alert('Saved');",
+      '  const [alert$active, setAlert$active] = useState(7);\n' +
+        '  const alert$show = () => { setCount(count + 1); };',
+    );
+    const app = lower(source);
+    expect(textsOf(nodesOf(app.root).slice(3))).toEqual(['Saved', 'OK']);
+    // The app's state and the hidden one are two slots.
+    expect(
+      app.state.filter(record => record.name === 'alert$active').length,
+    ).toBe(1);
+    expect(app.state.length).toBe(3);
   });
 
   it('makes a cancelable alert a press target around a sheet that is one too', () => {
@@ -278,9 +310,6 @@ describe('Alert.alert', () => {
         ),
       ),
     ).toContain("an alert's handler takes no arguments");
-    expect(failure(appOf('Alert.alert();'))).toContain(
-      'Alert.alert needs a title',
-    );
   });
 
   it('refuses any other use of Alert', () => {

@@ -45,12 +45,13 @@ import type {Env, ScalarState, Scope, StateTable} from './types.mts';
 /** The package Alert is imported from. */
 const PACKAGE = 'embedded-react';
 
-/** What a call is rewritten to, which no app can name. */
-export const ALERT_CALL = 'alert$show';
+// None of these is a name JS allows, so no binding of the app's can be mistaken for one.
+/** What a call is rewritten to. */
+export const ALERT_CALL = '#Alert.alert';
 
 /** The hidden state: the number of the alert that is up, or 0. */
-const ACTIVE = 'alert$active';
-const SET_ACTIVE = 'setAlert$active';
+const ACTIVE = '#alert';
+const SET_ACTIVE = '#setAlert';
 
 // Alert.js's styles. Flow B's <Modal> already fills the root and centres its content.
 const FILL_STYLE = {
@@ -74,6 +75,7 @@ const TITLE_STYLE = {color: '#000000', fontWeight: 'bold'};
 const MESSAGE_STYLE = {color: '#444444'};
 const BUTTONS_STYLE = {
   flexDirection: 'row',
+  flexWrap: 'wrap',
   justifyContent: 'flex-end',
   gap: 8,
   marginTop: 8,
@@ -324,6 +326,25 @@ const isAbsent = (node: t.Node | undefined): boolean =>
   (node.type === 'Identifier' && node.name === 'undefined');
 
 /**
+ * Whether a title or a message draws nothing, as Alert.js's hasText has it: left out, or known to be empty.
+ *
+ * @param node  The argument.
+ * @param scope  Compile-time constants in reach.
+ *
+ * @returns Whether its Text is left out.
+ */
+function isEmpty(node: t.Node | undefined, scope: Scope): boolean {
+  if (isAbsent(node)) return true;
+  try {
+    const value = evalStatic(node!, scope);
+    return value === '' || value === null || value === undefined;
+  } catch (error) {
+    rethrowFoldLimit(error);
+    return false; // worked out at run time
+  }
+}
+
+/**
  * The fields of an object argument, by name.
  *
  * @param node  The argument.
@@ -506,7 +527,7 @@ function closingHandler(handler: t.Expression | null): t.Expression {
  * @param number  The call's number.
  * @param scope  Compile-time constants in reach.
  *
- * @returns `alert$active === number && <Modal>…</Modal>`, and every part of it the app wrote.
+ * @returns `active === number && <Modal>…</Modal>`, and every part of it the app wrote.
  */
 function dialogOf(
   call: t.CallExpression,
@@ -521,9 +542,6 @@ function dialogOf(
         argument,
       );
     }
-  }
-  if (isAbsent(title)) {
-    throw located(aotError('AOT: Alert.alert needs a title'), call);
   }
 
   const from = {loc: call.loc} as t.JSXElement;
@@ -577,12 +595,12 @@ function dialogOf(
     shorthand: false,
   });
 
-  const sheetChildren: t.JSXElement[] = [
-    text(TITLE_STYLE, title as t.Expression),
-  ];
-  if (!isAbsent(message)) {
-    sheetChildren.push(text(MESSAGE_STYLE, message as t.Expression));
-  }
+  const shown = [title, message].map(part =>
+    isEmpty(part, scope) ? null : (part as t.Expression),
+  );
+  const sheetChildren: t.JSXElement[] = [];
+  if (shown[0]) sheetChildren.push(text(TITLE_STYLE, shown[0]));
+  if (shown[1]) sheetChildren.push(text(MESSAGE_STYLE, shown[1]));
   sheetChildren.push(
     elementOf(
       'View',
@@ -660,8 +678,7 @@ function dialogOf(
       loc: call.loc,
     },
     parts: [
-      title,
-      ...(isAbsent(message) ? [] : [message]),
+      ...shown,
       ...buttons.flatMap(button => [button.text, button.onPress]),
       onDismiss,
     ].filter((part): part is t.Expression => part != null),
