@@ -40,6 +40,7 @@ const SIDE_EFFECT_CALLS = new Set([
   'clearInterval',
   'clearTimeout',
   'updateVector',
+  'scrollTo',
 ]);
 
 /** The sets a `return` in an updater makes. */

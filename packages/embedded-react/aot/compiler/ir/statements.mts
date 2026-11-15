@@ -304,6 +304,18 @@ export interface IrUpdateVector {
   dirty: IrExpr[] | null;
 }
 
+/** `scrollTo(ref.current, {x, y})`: scrolls the ScrollView a ref is on, and reads where it landed. */
+export interface IrScrollTo {
+  kind: 'scrollTo';
+  /** The node ref's slot. */
+  node: string;
+  /** The offset on each axis, or null for one that stays where it is. */
+  x: IrExpr | null;
+  y: IrExpr | null;
+  /** The locals its position is kept in: x, y, and the largest offset on each axis. */
+  results?: string[];
+}
+
 /** `console.log(…)`, `warn` or `error`: one line for the host's log. */
 export interface IrLog {
   kind: 'log';
@@ -364,6 +376,7 @@ export type IrStmt = {
   | IrSortItems
   | IrFillOrder
   | IrSplitItems
+  | IrScrollTo
   | IrWriteRef
   | IrStepRef
   | IrStopAnimations

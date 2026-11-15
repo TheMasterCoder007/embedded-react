@@ -6792,6 +6792,34 @@ void er_tick(uint32_t delta_ms)
     s_now_ms += delta_ms;
 }
 
+/**
+ * @brief Largest offset a scroller accepts on each axis: content size minus viewport size, floored at 0.
+ *
+ * @param[in]  node   ScrollView or FlatList node.
+ * @param[out] max_x  Largest horizontal offset.
+ * @param[out] max_y  Largest vertical offset.
+ */
+static void scroll_max_offset(const ERNode* node, float* max_x, float* max_y)
+{
+    *max_x = (float)(node->scroll_content_width - node->computed.width);
+    *max_y = (float)(node->scroll_content_height - node->computed.height);
+    if (*max_x < 0.0f)
+        *max_x = 0.0f;
+    if (*max_y < 0.0f)
+        *max_y = 0.0f;
+}
+
+bool er_scroll_view_get_offset(const ERNode* node, ERScrollOffset* out)
+{
+    if (!node || !out || (node->type != ER_NODE_SCROLL_VIEW && node->type != ER_NODE_FLAT_LIST))
+        return false;
+
+    out->x = node->scroll_offset_x;
+    out->y = node->scroll_offset_y;
+    scroll_max_offset(node, &out->max_x, &out->max_y);
+    return true;
+}
+
 void er_scroll_view_set_offset(ERNode* node, float x, float y)
 {
     if (!node || (node->type != ER_NODE_SCROLL_VIEW && node->type != ER_NODE_FLAT_LIST))
@@ -6801,14 +6829,9 @@ void er_scroll_view_set_offset(ERNode* node, float x, float y)
     x = er_nan_or(x, node->scroll_offset_x);
     y = er_nan_or(y, node->scroll_offset_y);
 
-    /* Clamp to valid scroll range.  The maximum offset is content_size − viewport_size,
-     * floored at 0 so we never scroll past the start or beyond the end. */
-    float max_x = (float)(node->scroll_content_width - node->computed.width);
-    float max_y = (float)(node->scroll_content_height - node->computed.height);
-    if (max_x < 0.0f)
-        max_x = 0.0f;
-    if (max_y < 0.0f)
-        max_y = 0.0f;
+    float max_x;
+    float max_y;
+    scroll_max_offset(node, &max_x, &max_y);
 
     if (x < 0.0f)
         x = 0.0f;

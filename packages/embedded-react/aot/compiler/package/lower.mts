@@ -122,7 +122,12 @@ import type {
 } from '../ir/functions.mts';
 import {MAX_NATIVE_EVENTS} from '../native-modules.mts';
 import type {IrPanResponder, IrPanRole} from '../ir/pan-responder.mts';
-import type {IrCallback, IrStmt, IrUpdateVector} from '../ir/statements.mts';
+import type {
+  IrCallback,
+  IrScrollTo,
+  IrStmt,
+  IrUpdateVector,
+} from '../ir/statements.mts';
 import type {
   IrBranch,
   IrChild,
@@ -394,24 +399,27 @@ function stringNativeCalls(
   }
 }
 
+/** An updateVector or scrollTo call, and where it is in the source. */
+type NodeCall = Extract<IrStmt, IrUpdateVector | IrScrollTo>;
+
 /**
- * Every updateVector call a statement list makes.
+ * Every updateVector and scrollTo call a statement list makes.
  *
  * @param statements  The statements.
  * @param found  Collects the calls.
  */
-function updateVectors(statements: IrStmt[], found: IrUpdateVector[]): void {
+function nodeCalls(statements: IrStmt[], found: NodeCall[]): void {
   for (const statement of statements) {
-    if (statement.kind === 'updateVector') {
+    if (statement.kind === 'updateVector' || statement.kind === 'scrollTo') {
       found.push(statement);
     } else if (statement.kind === 'if') {
-      updateVectors(statement.consequent, found);
-      updateVectors(statement.alternate ?? [], found);
+      nodeCalls(statement.consequent, found);
+      nodeCalls(statement.alternate ?? [], found);
     } else if (statement.kind === 'block') {
-      updateVectors(statement.body, found);
+      nodeCalls(statement.body, found);
     } else if (statement.kind === 'loop') {
-      updateVectors(statement.body, found);
-      updateVectors(statement.step, found);
+      nodeCalls(statement.body, found);
+      nodeCalls(statement.step, found);
     }
   }
 }
@@ -973,21 +981,42 @@ function planSlots(
     node.wiring.some(
       wire => wire.kind === 'event' && wire.event === 'ER_EVENT_CHANGE_TEXT',
     );
-  // An updateVector call draws on the node its ref holds: the last one built with it.
-  const calls: IrUpdateVector[] = [];
+  // An updateVector call draws on the node its ref holds, and a scrollTo call scrolls it: the last one built with
+  // the ref.
+  const calls: NodeCall[] = [];
   for (const body of bodies(app)) {
-    updateVectors(body, calls);
+    nodeCalls(body, calls);
   }
-  const drawnRefs = new Set(calls.map(call => call.node));
+  const callOf = new Map(calls.map(call => [call.node, call]));
   const refNodes = new Map<string, IrNode>();
   for (const node of nodes) {
     for (const wire of node.wiring) {
-      if (wire.kind === 'ref' && drawnRefs.has(wire.slot)) {
+      if (wire.kind === 'ref' && callOf.has(wire.slot)) {
         refNodes.set(wire.slot, node);
       }
     }
   }
-  const drawnOn = new Set(refNodes.values());
+  const drawnOn = new Map(
+    [...refNodes].map(([ref, node]) => [
+      node,
+      callOf.get(ref)!.kind === 'scrollTo' ? 'scrollTo' : 'updateVector',
+    ]),
+  );
+  for (const call of calls) {
+    if (call.kind !== 'scrollTo') continue;
+    const node = refNodes.get(call.node);
+    if (
+      node?.type !== 'ER_NODE_SCROLL_VIEW' &&
+      node?.type !== 'ER_NODE_FLAT_LIST'
+    ) {
+      const error = aotError(
+        'AOT: scrollTo() takes a ref that is on a <ScrollView>',
+        'put ref={…} on the <ScrollView> to scroll, and pass its `.current`.',
+      );
+      locateError(error, node?.location ?? call.location);
+      throw error;
+    }
+  }
   const reached = (node: IrNode): boolean =>
     isStateDriven(node) ||
     isSetOnce(node) ||
@@ -1025,7 +1054,10 @@ function planSlots(
           notYetAt('onChangeText in a list row', node.location);
         }
         if (drawnOn.has(node)) {
-          notYetAt('updateVector on a node in a list row', node.location);
+          notYetAt(
+            `${drawnOn.get(node)} on a node in a list row`,
+            node.location,
+          );
         }
         // Every row's first node, when the first row's is an anchor, so the rows can still share a template.
         if (reached(node) || (anchoring && place === 0)) {
@@ -1045,7 +1077,9 @@ function planSlots(
   for (const node of nodes) {
     if (drawnOn.has(node) && places.has(node)) {
       const error = aotError(
-        'AOT: updateVector draws on a node a conditional builds and destroys',
+        drawnOn.get(node) === 'scrollTo'
+          ? 'AOT: scrollTo scrolls a node a conditional builds and destroys'
+          : 'AOT: updateVector draws on a node a conditional builds and destroys',
         'keep the node built and show it with visible={…} instead.',
       );
       locateError(error, node.location);

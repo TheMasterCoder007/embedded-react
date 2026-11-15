@@ -1053,6 +1053,52 @@ static void test_templates(void)
     CHECK(s_status == ERB_ERROR_STALE_NODE, "a debug package stops on a BUILD before a stale handle");
 }
 
+/** @brief A helper that scrolls the root to y 250, keeping x, then gives field @p field of where it is. */
+static uint16_t scroll_helper(uint8_t field)
+{
+    const uint8_t types[] = {ERB_TYPE_NODE,
+                             ERB_TYPE_PAIR,
+                             ERB_TYPE_FLOAT,
+                             ERB_TYPE_FLOAT,
+                             ERB_TYPE_FLOAT,
+                             ERB_TYPE_FLOAT,
+                             ERB_TYPE_FLOAT,
+                             ERB_TYPE_FLOAT};
+    const uint32_t code[] = {
+        OP_ABX(LOADK, 2, add_const(NAN)),
+        OP_ABX(LOADK, 3, add_const(250.0f)),
+        OP_ABX(GET64, 0, SLOT_ROOT),
+        OP_ABC(SCROLL, 0, 2, 3),
+        OP_ABC(SCROLLAT, 0, 4, 0),
+        OP_ABC(RET, 4u + field, 0, 0),
+    };
+    return helper(types, 8, 0, ERB_TYPE_FLOAT, code, 6);
+}
+
+static void test_scroll(void)
+{
+    base();
+    uint16_t fields[4];
+    for (uint8_t field = 0; field < 4; field++)
+    {
+        fields[field] = scroll_helper(field);
+    }
+    CHECK(load(), "loads");
+    ERNode* root = slot_node(SLOT_ROOT, 0);
+    CHECK(as_float(call(fields[1], 0, 0)) == 0.0f && as_float(call(fields[3], 0, 0)) == 0.0f,
+          "SCROLLAT on a node that doesn't scroll reads zeros");
+
+    /* A scroller whose content is 200 px taller than it. */
+    root->type = ER_NODE_SCROLL_VIEW;
+    root->scroll_content_width = root->computed.width;
+    root->scroll_content_height = (int16_t)(root->computed.height + 200);
+    CHECK(as_float(call(fields[1], 0, 0)) == 200.0f, "SCROLL clamps to the range, and SCROLLAT reads where it landed");
+    CHECK(as_float(call(fields[0], 0, 0)) == 0.0f, "an axis given NaN stays where it is");
+    CHECK(as_float(call(fields[2], 0, 0)) == 0.0f && as_float(call(fields[3], 0, 0)) == 200.0f,
+          "with the largest offset on each axis");
+    root->type = ER_NODE_VIEW;
+}
+
 /**
  * @brief Adds a timing animation on the node in SLOT_ROOT, and a helper that starts it.
  *
@@ -1905,6 +1951,7 @@ int main(void)
     test_split();
     test_props();
     test_templates();
+    test_scroll();
     test_stale_animation_target();
     test_vectors();
     test_events_and_inputs();

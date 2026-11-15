@@ -1761,6 +1761,30 @@ extern "C"
     void er_scroll_view_set_offset(ERNode* node, float x, float y);
 
     /**
+     * @brief Where a ScrollView is scrolled to, and how far it can go.
+     */
+    typedef struct
+    {
+        float x;     /**< Horizontal scroll offset in pixels. */
+        float y;     /**< Vertical scroll offset in pixels. */
+        float max_x; /**< Largest horizontal offset er_scroll_view_set_offset() accepts. */
+        float max_y; /**< Largest vertical offset er_scroll_view_set_offset() accepts. */
+    } ERScrollOffset;
+
+    /**
+     * @brief Reads the scroll offset of a ScrollView node and its scroll range.
+     *
+     * The range comes from the last er_commit(): content added since then is not counted until the
+     * next one.
+     *
+     * @param[in]  node  ScrollView node to read.
+     * @param[out] out   Receives the offset and the largest offset on each axis.
+     *
+     * @return true if @p node is a ScrollView and @p out was written.
+     */
+    bool er_scroll_view_get_offset(const ERNode* node, ERScrollOffset* out);
+
+    /**
      * @brief Registers an event handler on a node.
      *
      * Replaces any previously registered handler for the same event type.

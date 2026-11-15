@@ -1159,6 +1159,24 @@ export function updateText(
   text: string | number,
 ): void;
 
+/** Where a `<ScrollView>` is scrolled to, and the largest offset it accepts on each axis. */
+export interface ScrollPosition {
+  x: number;
+  y: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * Scrolls a `<ScrollView>` and returns where it landed, or `undefined` when the handle is not a
+ * ScrollView. The offset is clamped to the scroll range, and an axis left out stays where it is, so
+ * `scrollTo(handle)` only reads the position. The range is as of the last render.
+ */
+export function scrollTo(
+  handle: NodeHandle | null | undefined,
+  offset?: {x?: number; y?: number},
+): ScrollPosition | undefined;
+
 /** One key in a `setKeyboardConfig` layer. `char` types it; `layer` switches layer; `backspace`/`done` act. */
 export interface KeyboardKey {
   char?: string;

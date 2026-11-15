@@ -1907,6 +1907,25 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
                 }
                 break;
             }
+            case ERB_OP_SCROLLAT:
+            {
+                /* A node that doesn't scroll reads as zeros. */
+                ERScrollOffset offset = {0};
+                ERNode* node = erb_rt_node(&registers[operand_a]);
+                if (!node)
+                {
+                    status = stale();
+                }
+                else
+                {
+                    er_scroll_view_get_offset(node, &offset);
+                }
+                set_float(&registers[operand_b], offset.x);
+                set_float(&registers[operand_b + 1], offset.y);
+                set_float(&registers[operand_b + 2], offset.max_x);
+                set_float(&registers[operand_b + 3], offset.max_y);
+                break;
+            }
             case ERB_OP_BLUR:
                 er_text_input_blur();
                 break;

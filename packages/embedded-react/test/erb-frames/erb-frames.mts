@@ -1189,6 +1189,30 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '120,120',
   },
+  // down, then read: the scroll moved the list, and the read shows where.
+  {
+    name: 'scroll-to-down',
+    file: fixture('scroll-to'),
+    screen: PORTRAIT,
+    taps: '32,48 132,48',
+    flowA: true,
+  },
+  // end: the offset clamps to the range, which the text shows.
+  {
+    name: 'scroll-to-end',
+    file: fixture('scroll-to'),
+    screen: PORTRAIT,
+    taps: '82,48',
+    flowA: true,
+  },
+  // end, then up twice: each scroll is worked out from a read.
+  {
+    name: 'scroll-to-up',
+    file: fixture('scroll-to'),
+    screen: PORTRAIT,
+    taps: '82,48 182,48 182,48',
+    flowA: true,
+  },
   {name: 'flat-list', file: fixture('flat-list'), screen: PORTRAIT},
   // A row added, then a press on it.
   {

@@ -82,6 +82,7 @@ import {
   narrowed,
   tagTestOf,
 } from './tagged-records.mts';
+import {unkeptScrollError} from './scroll-to.mts';
 import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
@@ -2576,7 +2577,8 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
       // A field of a record a native method returns, read where it can't be kept.
       let root: t.Node = node;
       while (root.type === 'MemberExpression') root = root.object;
-      const unkept = unkeptRecordError(root, environment);
+      const unkept =
+        unkeptRecordError(root, environment) ?? unkeptScrollError(root);
       if (unkept) throw unkept;
       throw aotError(
         'AOT: unsupported member expression in a dynamic context',
@@ -2598,6 +2600,8 @@ function sourceOf(node: t.Node, environment: Env): IrSource {
     }
     case 'CallExpression': {
       const callee = node.callee;
+      const unkeptScroll = unkeptScrollError(node);
+      if (unkeptScroll) throw unkeptScroll;
       // `Sensors.read(channel)`: a native method's result.
       const nativeCallee = nativeCalleeOf(node, environment);
       if (nativeCallee) {

@@ -14,7 +14,7 @@ Every host component accepts these, on top of its own.
 | ------------------------------------------------------------ | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `style`                                                      | style object or array | See [Styles](./styles.md). Arrays and falsy entries are flattened, as in React Native                                                                                                        |
 | `visible`                                                    | `boolean`             | `false` prunes the subtree from layout, rendering and hit-testing without unmounting it; the nodes and their React state stay. A `display` in `style` wins over it                           |
-| `ref`                                                        | `Ref<NodeHandle>`     | Receives the engine node handle, for [`updateVector`/`updateText`](#imperative-updates)                                                                                                      |
+| `ref`                                                        | `Ref<NodeHandle>`     | Receives the engine node handle, for [`updateVector`, `updateText` and `scrollTo`](#imperative-updates)                                                                                      |
 | `onLayout`                                                   | `(e) => void`         | `e.nativeEvent.layout` (also `e.layout`) is `{x, y, width, height}` relative to the parent, before any scroll offset or transform, after the commit that laid it out                         |
 | `onTouchStart`, `onTouchMove`, `onTouchEnd`, `onTouchCancel` | `(e) => void`         | Raw touches. They bubble from the node that was hit up through its ancestors, whatever the responder system decides. `onTouchCancel` fires when a sequence is abandoned rather than finished |
 
@@ -128,6 +128,19 @@ screen.
 | Prop       | Type          | Notes                              |
 | ---------- | ------------- | ---------------------------------- |
 | `onScroll` | `(e) => void` | `e.scrollX`, `e.scrollY` in pixels |
+
+To scroll from code, pass a ref's handle to [`scrollTo`](#imperative-updates):
+
+```jsx
+const list = useRef(null);
+// bring row `index` (each 48 px tall) into a 240 px viewport
+const showRow = index => {
+  const {y} = scrollTo(list.current);
+  if (index * 48 < y) scrollTo(list.current, {y: index * 48});
+  else if (index * 48 + 48 > y + 240) scrollTo(list.current, {y: index * 48 - 192});
+};
+<ScrollView ref={list} style={{height: 240}}>
+```
 
 It scrolls whichever axis overflows: lay the content out with `flexDirection: 'row'` for a
 horizontal scroller. There is no `horizontal` prop. Scrolling has momentum, and a granted gesture
@@ -476,6 +489,11 @@ updateVector(
   `[x, y, w, h]`, in node-local pixels, limits the repaint to that region.
 - **`updateText(handle, text)`** sets a `<Text>` node's content without touching its style. A later
   React render reverts it cleanly.
+- **`scrollTo(handle, {x, y}?)`** scrolls a `<ScrollView>` and returns `{x, y, maxX, maxY}`: where it
+  landed after clamping, and the largest offset on each axis. An axis left out stays where it is, so
+  `scrollTo(handle)` only reads. It fires `onScroll` when the offset changes.
+  **Flow B:** pass the ref's `.current` and an object literal, and keep the position in a `const` before reading
+  it.
 - **`setKeyboardConfig(config?)`** replaces the on-screen keyboard's layout and colours
   (`panelColor`, `keyColor`, `keyActiveColor`, `labelColor`, `fontSize`, `rowHeight`, `keyGap`,
   `keyRadius`, `gridColumns`, and `layers` as rows of keys with `char`, `label`, `layer`, `backspace`,

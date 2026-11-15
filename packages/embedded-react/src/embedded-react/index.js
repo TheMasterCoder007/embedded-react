@@ -46,7 +46,12 @@ export {TouchableOpacity} from './TouchableOpacity.js';
 export {FlatList} from './FlatList.js';
 export {ImageBackground} from './ImageBackground.js';
 export {SectionList} from './SectionList.js';
-export {updateVector, updateText, setKeyboardConfig} from './imperative.js';
+export {
+  updateVector,
+  updateText,
+  scrollTo,
+  setKeyboardConfig,
+} from './imperative.js';
 export {StyleSheet} from './StyleSheet.js';
 export {Platform} from './Platform.js';
 export {Dimensions, useWindowDimensions} from './Dimensions.js';

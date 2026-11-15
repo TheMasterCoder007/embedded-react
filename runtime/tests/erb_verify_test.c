@@ -1013,6 +1013,18 @@ static void test_bytecode(void)
         set_code_types(FUNCTION_TIMER, types, 2, code, 3);
         EXPECT(ERB_ERROR_BYTECODE, "BUILD of the root template");
     }
+    {
+        const uint8_t types[] = {
+            ERB_TYPE_NODE, ERB_TYPE_PAIR, ERB_TYPE_FLOAT, ERB_TYPE_FLOAT, ERB_TYPE_FLOAT, ERB_TYPE_FLOAT};
+        const uint32_t code[] = {OP_ABC(SCROLLAT, 0, 2, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 6, code, 2);
+        EXPECT(ERB_OK, "a scroll position read into four floats");
+        const uint32_t short_code[] = {OP_ABC(SCROLLAT, 0, 3, 0), OP_ABC(RET, 0, 0, 0)};
+        base();
+        set_code_types(FUNCTION_TIMER, types, 6, short_code, 2);
+        EXPECT(ERB_ERROR_BYTECODE, "a scroll position read past the frame");
+    }
 }
 
 static void test_control_flow(void)

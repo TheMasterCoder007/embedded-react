@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 15u
+#define ERB_FORMAT_MINOR 16u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -836,7 +836,9 @@ enum
     /* Native modules, since minor 13 */                                                                               \
     X(CALLNS,   ERB_F_ABX, 2, 0, ERBO_R, ERBO_K, ERBO_X)  /* CALLN with a string result, into string slot ext */  \
     /* Logging, since minor 15 */                                                                                      \
-    X(FMTLOG,   ERB_F_ABC, 1, 0, ERBO_X, ERBO_X, ERBO_X)  /* to the host's log, as one line */
+    X(FMTLOG,   ERB_F_ABC, 1, 0, ERBO_X, ERBO_X, ERBO_X)  /* to the host's log, as one line */                         \
+    /* Scrolling, since minor 16 */                                                                                    \
+    X(SCROLLAT, ERB_F_ABC, 1, 0, ERBO_N, ERBO_F, ERBO_X)  /* B .. B + 3 = node A's scroll x, y, max x, max y */
 /* clang-format on */
 
 /** @brief Opcodes. 0 is never an instruction. */

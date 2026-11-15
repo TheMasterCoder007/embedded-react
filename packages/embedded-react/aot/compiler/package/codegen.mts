@@ -59,6 +59,7 @@ import type {
   IrSplitItems,
   IrFilterItems,
   IrRemoveItem,
+  IrScrollTo,
   IrSetRow,
   IrSortItems,
   IrStmt,
@@ -1791,7 +1792,45 @@ export class Codegen {
         return;
       case 'updateVector':
         updateVector(this, statement, this.program.vectors);
+        return;
+      case 'scrollTo':
+        this.scrollTo(statement);
     }
+  }
+
+  /**
+   * Scrolls the ScrollView a ref is on, then keeps where it landed for the locals that read it.
+   *
+   * @param statement  The call.
+   */
+  private scrollTo(statement: IrScrollTo): void {
+    const {builder} = this;
+    const handle = required(
+      this.program.vectors.refNodes.get(statement.node),
+      'the node a scrollTo scrolls',
+    );
+    const kept = statement.results?.map(() => builder.register('float'));
+    this.scoped(() => {
+      const node = builder.register('node');
+      builder.abx('GET64', node.index, handle.index);
+      if (statement.x || statement.y) {
+        // An axis left out is NaN, which the engine keeps where it is.
+        const axis = (value: IrExpr | null): Register =>
+          value ? this.valueAs(value, 'float') : this.load('float', NaN);
+        const x = axis(statement.x);
+        builder.abc('SCROLL', node.index, x.index, axis(statement.y).index);
+      }
+      if (kept) {
+        const position = builder.consecutive(kept.map(() => 'float'));
+        builder.abc('SCROLLAT', node.index, position[0].index);
+        position.forEach((value, index) =>
+          builder.abc('MOVE', kept[index].index, value.index),
+        );
+      }
+    });
+    statement.results?.forEach((name, index) =>
+      this.locals.set(name, {register: kept![index]}),
+    );
   }
 
   /**

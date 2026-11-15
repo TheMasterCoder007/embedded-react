@@ -106,6 +106,11 @@ import {
   vectorPaintOf,
   DEFAULT_MITER_LIMIT,
 } from './svg.mts';
+import {
+  isScrollToCall,
+  lowerScrollTo,
+  SCROLL_POSITION_FIELDS,
+} from './scroll-to.mts';
 import {armedFlag} from './ir/functions.mts';
 import type * as t from '@babel/types';
 import type {Out} from './out.mts';
@@ -2268,6 +2273,11 @@ function lowerHandlerExprImpl(
     return [lowerUpdateVector(expression, environment, context)];
   }
 
+  // scrollTo(ref.current, {x, y}) — scrolls a ScrollView, its position dropped.
+  if (isScrollToCall(expression)) {
+    return [lowerScrollTo(expression as t.CallExpression, environment)];
+  }
+
   // setInterval / setTimeout(cb, ms) → register a host-tick timer (the returned id is discarded here).
   if (
     expression.type === 'CallExpression' &&
@@ -2674,14 +2684,11 @@ export function lowerStmts(
         }
         const declarator = entry;
 
-        // A native method's record: its values kept in locals, then declared as an object of them, or a field.
-        const recordRoot = nativeRecordRootOf(declarator.init, environment);
+        // A native method's record, or scrollTo's: its values kept in locals, then declared as an object of them,
+        // or a field.
+        const recordRoot = recordRootOf(declarator.init, environment);
         if (recordRoot) {
-          const kept = keepNativeRecord(
-            recordRoot.call,
-            recordRoot.callee,
-            environment,
-          );
+          const kept = recordRoot.keep(environment);
           lowered.push(kept.statement);
           environment = kept.environment;
           queue.unshift({
@@ -3104,7 +3111,7 @@ export function lowerStmts(
     // setLat(Gps.fix().lat): kept first, then passed by its name.
     let expression = statement.expression;
     const keptRoot = (argument: t.Node, index: number) => {
-      const recordRoot = nativeRecordRootOf(argument, environment);
+      const recordRoot = recordRootOf(argument, environment);
       return recordRoot &&
         (recordRoot.call !== argument ||
           takesRecord(
@@ -3123,11 +3130,7 @@ export function lowerStmts(
       const callArguments = expression.arguments.map((argument, index) => {
         const recordRoot = keptRoot(argument, index);
         if (!recordRoot) return argument;
-        const kept = keepNativeRecord(
-          recordRoot.call,
-          recordRoot.callee,
-          environment,
-        );
+        const kept = recordRoot.keep(environment);
         lowered.push(kept.statement);
         environment = kept.environment;
         return recordRoot.replaced({
@@ -3380,25 +3383,34 @@ export function lowerEffect(
   output.dependencyEffects.push(dependencyEffect);
 }
 
+/** A call whose record is kept in locals before the statement that reads it. */
+interface RecordRoot {
+  call: t.CallExpression;
+  /** Keeps the record, and binds it to a name no JS binding has. */
+  keep: (environment: Env) => {
+    statement: IrStmt;
+    name: string;
+    environment: Env;
+  };
+  /** The expression with the call replaced by another. */
+  replaced: (by: t.Expression) => t.Expression;
+}
+
 /**
- * The native call that returns a record at the root of an expression: the call itself, or the record a field read
- * starts from, `Gps.fix().place.lat`.
+ * The call that returns a record at the root of an expression, a native method's or scrollTo's: the call itself,
+ * or the record a field read starts from, `Gps.fix().place.lat`.
  *
  * @param node  The expression.
  * @param environment  The expression environment.
  *
- * @returns The call and its callee, and the expression with the call replaced by another; or null.
+ * @returns The call, or null.
  */
-function nativeRecordRootOf(
+function recordRootOf(
   node: t.Node | null | undefined,
   environment: Env,
-): {
-  call: t.CallExpression;
-  callee: NonNullable<ReturnType<typeof nativeRecordCallOf>>;
-  replaced: (by: t.Expression) => t.Expression;
-} | null {
+): RecordRoot | null {
   if (node?.type === 'MemberExpression') {
-    const root = nativeRecordRootOf(node.object, environment);
+    const root = recordRootOf(node.object, environment);
     return (
       root && {
         ...root,
@@ -3406,11 +3418,20 @@ function nativeRecordRootOf(
       }
     );
   }
+  if (isScrollToCall(node)) {
+    const call = node as t.CallExpression;
+    return {
+      call,
+      keep: inEnvironment => keepScrollPosition(call, inEnvironment),
+      replaced: by => by,
+    };
+  }
   const callee = nativeRecordCallOf(node, environment);
   return (
     callee && {
       call: node as t.CallExpression,
-      callee,
+      keep: inEnvironment =>
+        keepNativeRecord(node as t.CallExpression, callee, inEnvironment),
       replaced: by => by,
     }
   );
@@ -3473,6 +3494,37 @@ function keepNativeRecord(
     environment: {
       ...environment,
       constants: {...environment.constants, [name]: tree},
+    },
+  };
+}
+
+/**
+ * Scrolls with scrollTo, keeping the position it returns in locals, and binds the position to a name no JS binding
+ * has, as an object of them.
+ *
+ * @param node  The call.
+ * @param environment  The expression environment.
+ *
+ * @returns The call, the name, and the environment that binds it.
+ */
+function keepScrollPosition(
+  node: t.CallExpression,
+  environment: Env,
+): {statement: IrStmt; name: string; environment: Env} {
+  const name = `#record${keptRecords++}`;
+  const results = SCROLL_POSITION_FIELDS.map(field => `${name}_${field}`);
+  const position = Object.fromEntries(
+    SCROLL_POSITION_FIELDS.map((field, index) => [
+      field,
+      new RuntimeLeaf({name: results[index], slotKind: 'float'}),
+    ]),
+  );
+  return {
+    statement: lowerScrollTo(node, environment, results),
+    name,
+    environment: {
+      ...environment,
+      constants: {...environment.constants, [name]: position},
     },
   };
 }
