@@ -33,6 +33,7 @@ import type {
 } from './ir/functions.mts';
 import type {IrPanResponder} from './ir/pan-responder.mts';
 import type {IrVectorData} from './ir/vectors.mts';
+import type {AlertSite} from './alerts.mts';
 import type {
   AnimRecord,
   FunctionNode,
@@ -107,6 +108,10 @@ export class Out {
   panCount = 0;
   /** Every PanResponder a node spreads, lowered once each. */
   readonly panResponders: IrPanResponder[] = [];
+  /** The hidden state naming the alert that is up, in an app that raises one. */
+  alertState: ScalarState | null = null;
+  /** Every Alert.alert lowered so far, whose dialogs are built under the root last. */
+  readonly alertSites: AlertSite[] = [];
   /** The module's function components, by name, for inlining. */
   readonly components: Map<string, FunctionNode>;
   /** The parsed module, for the passes that scan it again. */

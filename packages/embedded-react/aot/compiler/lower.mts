@@ -63,6 +63,7 @@ import {collectNativeModules, optionalModulesOf} from './native-modules.mts';
 import type {NativeModule} from './native-modules.mts';
 import {inlineCustomHooks} from './custom-hooks.mts';
 import {rewriteWindowDimensions} from './window-dimensions.mts';
+import {alertState, emitAlertDialogs, rewriteAlerts} from './alerts.mts';
 import {Out} from './out.mts';
 import type {BlockStatement} from '@babel/types';
 import type {ResolvedOptions} from './options.mts';
@@ -308,6 +309,7 @@ function lowerProgram(
   });
   normalizeUndefined(ast);
   rewriteWindowDimensions(ast);
+  const raisesAlerts = rewriteAlerts(ast);
   inlineCustomHooks(ast);
   refuseHiddenContexts(ast);
   const shadowedClock = findShadowedClockCalls(ast);
@@ -429,6 +431,11 @@ function lowerProgram(
   for (const name of state.byName.keys()) {
     delete scope[name];
   }
+  const activeAlert = raisesAlerts ? alertState() : null;
+  if (activeAlert) {
+    state.byName.set(activeAlert.name, activeAlert);
+    state.bySetter.set(activeAlert.setter!, activeAlert);
+  }
 
   // Collect the component's other hooks, plus the file's helpers and child components.
   const rootJSX = findReturnJSX(component.body as BlockStatement, scope);
@@ -513,6 +520,7 @@ function lowerProgram(
   const output = new Out(components, ast.program);
   output.release = Boolean(options.release);
   output.optionalModules = optionalModulesOf(nativeModules);
+  output.alertState = activeAlert;
   const keyboard = lowerKeyboardConfig(ast.program); // a module-level setKeyboardConfig({...})
   const root = emitNode(rootJSX, scope, output, environment, state);
 
@@ -530,6 +538,9 @@ function lowerProgram(
   for (const call of collectNativeEvents(component.body)) {
     lowerNativeEvent(call, environment, state, output);
   }
+
+  // Every alert raised is known by now, so their dialogs go under the root, after everything else.
+  emitAlertDialogs(root, output);
 
   // An update exists only when something has to be re-applied after a state change, or a list filtered or sorted
   // in render rebuilt.

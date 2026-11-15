@@ -158,7 +158,7 @@ built with `+`, a template literal or the string helpers above; `if` and
 `else`; `switch`; `for` and `for…of` loops with `break` and `continue`; `return`, early or not; state setter calls;
 `ref.current` writes, including `+=` and `++`; `setInterval`, `setTimeout` and their clears; `updateVector` calls;
 `scrollTo(ref.current, {x, y})`, whose position a `const` keeps (`const {y, maxY} = scrollTo(list.current)`);
-[native module](../api/hooks.md#nativemodule) calls; `console.log`, `warn` and `error`; and `.start()` or `.stop()`
+[native module](../api/hooks.md#nativemodule) calls; `Alert.alert`; `console.log`, `warn` and `error`; and `.start()` or `.stop()`
 on any `Animated` animation or composition. `while` and `try` are not lowered, and a
 `break` in a `switch` must end its case.
 
@@ -184,6 +184,11 @@ on any `Animated` animation or composition. `while` and `try` are not lowered, a
   they do in Flow A: the arguments printed as a string `+` prints them, with a space between. Numbers, booleans and
   strings print; an object or a list doesn't. A line is cut at 255 bytes, firmware with no hook drops it, and a
   `--release` package leaves the calls out.
+- [`Alert.alert(title, message, buttons, options)`](../api/components.md#alert) builds its dialog where it is
+  called, so `buttons` is written out as an array there, and a button's `style` and `cancelable` are constants. The
+  dialog is drawn after the handler returns: its title, message, labels and handlers read state, props and
+  constants, not the handler's own locals or its event. A second alert replaces the one showing. Each call inside a
+  list row builds a dialog per row, about half a kilobyte of flash each.
 - A native method takes `Int`, `number` and `boolean` arguments. An `Int` parameter takes only a whole number, so
   pass `Math.round(x)` for a fraction. Its result is kept in state like any value: a float result needs a float
   state, `useState(0.0)`. Strings and objects aren't passed yet, and a call in render is refused.

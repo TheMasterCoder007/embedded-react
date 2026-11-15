@@ -323,7 +323,7 @@ Alert.alert('Delete log?', 'This cannot be undone.', [
 
 React Native's `Alert.alert(title, message, buttons, options)`, drawn as a stock dialog on a
 [`<Modal>`](#modal): a white sheet centred over a dimmed app, with the buttons in a row along the
-bottom. For a dialog you style yourself, use `<Modal>` directly. **Flow A only.**
+bottom. For a dialog you style yourself, use `<Modal>` directly.
 
 | Argument  | Type                       | Notes                                                  |
 | --------- | -------------------------- | ------------------------------------------------------ |
@@ -335,6 +335,10 @@ bottom. For a dialog you style yourself, use `<Modal>` directly. **Flow A only.*
 A button's `style` is `'default'`, `'cancel'` or `'destructive'`; `'destructive'` draws its label in
 red and `'cancel'` looks like `'default'`. An alert raised while another is showing waits its turn.
 The dialog costs scene nodes only while it is up: five, plus two per button.
+
+**Flow B:** the dialog is built at compile time, where the call is, so `buttons` must be written out
+there and nothing in it can read the handler's own locals. An alert raised while another is showing
+replaces it. See [Handlers](../guides/aot-subset.md#handlers).
 
 ## Dial
 

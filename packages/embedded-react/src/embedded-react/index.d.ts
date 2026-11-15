@@ -820,11 +820,10 @@ export interface AlertOptions {
   onDismiss?: () => void;
 }
 
-/** Flow A only. */
 export const Alert: {
   /**
    * Shows a stock dialog over the app. With no buttons it gets a single "OK". A second alert waits
-   * until the first is closed.
+   * until the first is closed; in Flow B it replaces the first.
    */
   alert(
     title: string,
