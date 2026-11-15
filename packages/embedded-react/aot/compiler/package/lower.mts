@@ -1256,7 +1256,7 @@ function handlerFunction(
     throw new Error(`AOT internal: no handler for "${name}"`);
   }
   const readsInput = eventName === 'ER_EVENT_CHANGE_TEXT';
-  // One per ScrollView, so the runtime can tell whose scroll is waiting.
+  // One per ScrollView, in a row too, so the runtime can tell whose scroll is waiting.
   const scrolls = eventName === 'ER_EVENT_SCROLL';
   const made: Omit<HandlerFunction, 'index'> = {
     callback: then?.callback ?? {body: [], updatesState: false},
@@ -1270,7 +1270,7 @@ function handlerFunction(
   };
   // Compared by code alone, so where each handler is in the source doesn't keep two apart.
   const key = inRow
-    ? `row ${JSON.stringify({...handlerBody({...made, index: NONE}, lowering), debug: undefined})}`
+    ? `row ${scrolls ? `${node.id} ` : ''}${JSON.stringify({...handlerBody({...made, index: NONE}, lowering), debug: undefined})}`
     : `${name} ${eventName}${readsInput || scrolls ? ` ${node.id}` : ''}`;
   const existing = lowering.handlers.get(key);
   if (existing) {

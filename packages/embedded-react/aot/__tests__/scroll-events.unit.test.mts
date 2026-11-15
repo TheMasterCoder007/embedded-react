@@ -105,6 +105,18 @@ describe('onScroll in a package', () => {
     expect(two).toBeGreaterThan(one);
   });
 
+  it('gives two ScrollViews in a list row a handler each', () => {
+    const list = '<ScrollView onScroll={event => setAt(event.scrollY)} />';
+    const functionsOf = (row: string) =>
+      compile(
+        appOf(
+          `{rows.map(row => <View key={row.id}>${row}</View>)}`,
+          'const [rows, setRows] = useState([{id: 1}]);',
+        ),
+      ).tables.find(table => table.id === Table.functions)!.bytes[0];
+    expect(functionsOf(list + list)).toBeGreaterThan(functionsOf(list));
+  });
+
   it('refuses a scroll offset outside an onScroll handler', () => {
     expect(
       failure(appOf('<Pressable onPress={event => setAt(event.scrollY)} />')),
