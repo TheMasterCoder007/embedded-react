@@ -100,10 +100,9 @@ option(ERUI_PERF_STATS "Force-enable per-frame timing split + resource counters 
 # FULL: full 2D affine (scale/rotate/shear) via scratch-buffer back-projection.
 # Set to FULL on desktop or any target that can afford the scratch RAM.
 set(ERUI_TRANSFORMS "TRANSLATE_ONLY" CACHE STRING "FULL or TRANSLATE_ONLY")
-set(ERUI_FONT_SIZES "7" CACHE STRING "Number of pre-rasterized font sizes")
 set(ERUI_MAX_NODES "512" CACHE STRING "Scene graph node pool size")
 set(ERUI_MAX_OPACITY_DEPTH "4" CACHE STRING "Maximum nested offscreen-composite layers")
-set(ERUI_RENDER_WORKERS "1" CACHE STRING "Max render workers (multi-core scaffolding; >1 sizes per-worker contexts, no effect until the parallel commit lands)")
+set(ERUI_RENDER_WORKERS "1" CACHE STRING "Max render workers for multi-core rendering; each worker above 1 adds per-worker buffers, and the host must install workers to use them")
 set(ERUI_SCRATCH_WIDTH "240" CACHE STRING "Scratch buffer width in pixels (max compositable node width)")
 set(ERUI_SCRATCH_HEIGHT "240" CACHE STRING "Transform-source scratch height in pixels (max transformable node height)")
 set(ERUI_SCRATCH_BAND_HEIGHT "${ERUI_SCRATCH_HEIGHT}" CACHE STRING "Opacity-composite strip height; smaller = less RAM, taller fades render in multiple band passes")
@@ -178,7 +177,6 @@ target_compile_definitions(embedded-react PUBLIC
         ERUI_ONSCREEN_KEYBOARD=$<BOOL:${ERUI_ONSCREEN_KEYBOARD}>
         ERUI_VECTOR_EDGE_CACHE=$<BOOL:${ERUI_VECTOR_EDGE_CACHE}>
         ERUI_TRANSFORMS_${ERUI_TRANSFORMS}=1
-        ERUI_FONT_SIZES=${ERUI_FONT_SIZES}
         ERUI_MAX_NODES=${ERUI_MAX_NODES}
         ERUI_MAX_OPACITY_DEPTH=${ERUI_MAX_OPACITY_DEPTH}
         ERUI_RENDER_WORKERS=${ERUI_RENDER_WORKERS}

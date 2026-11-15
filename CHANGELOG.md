@@ -10,6 +10,9 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Removed
+
+- Engine: the unused `ERUI_FONT_SIZES` build option.
 
 ## [0.21.0] - 2026-11-14
 ### Added

@@ -67,7 +67,6 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     ERUI_GRADIENT_CONIC=1
     ERUI_ONSCREEN_KEYBOARD=1
     ERUI_TRANSFORMS_TRANSLATE_ONLY=1
-    ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=42           # the thermostat's 41 and one spare; each slot is ~1.4 KB of .bss
     ERUI_MAX_OPACITY_DEPTH=1
     ERUI_SCRATCH_WIDTH=8
