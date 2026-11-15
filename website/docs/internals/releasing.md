@@ -26,18 +26,19 @@ otherwise, because a tag cut on a feature branch would publish off-branch code.
 
 What `sync-version` keeps in step:
 
-| File                                                         | What carries the version                                                                                           |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `packages/embedded-react/package.json`, `package-lock.json`  | The `embedded-react` package                                                                                       |
-| `create-embedded-react/package.json`                         | The scaffolder                                                                                                     |
-| `demos/*/package.json`                                       | Each demo's `embedded-react` dependency (the scaffolder's templates carry a placeholder it fills at scaffold time) |
-| `library.json`                                               | PlatformIO                                                                                                         |
-| `engine/idf_component.yml`                                   | The engine's ESP-IDF component                                                                                     |
-| `runtime/idf_component.yml`                                  | The runtime's ESP-IDF component, and the engine version it depends on                                              |
-| `engine/include/er_version.h`                                | The engine's own version                                                                                           |
-| `README.md`, `website/docs/getting-started/installation.mdx` | The CMake, ESP-IDF and PlatformIO install pins                                                                     |
-| `website/package.json`                                       | The engine the playground runs                                                                                     |
-| `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                |
+| File                                                         | What carries the version                                                                                                   |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `packages/embedded-react/package.json`, `package-lock.json`  | The `embedded-react` package                                                                                               |
+| `create-embedded-react/package.json`                         | The scaffolder                                                                                                             |
+| `demos/*/package.json`                                       | Each demo's `embedded-react` dependency (the scaffolder's templates carry a placeholder it fills at scaffold time)         |
+| `library.json`                                               | PlatformIO                                                                                                                 |
+| `engine/idf_component.yml`                                   | The engine's ESP-IDF component                                                                                             |
+| `runtime/idf_component.yml`                                  | The runtime's ESP-IDF component, and the engine version it depends on                                                      |
+| `engine/include/er_version.h`                                | The engine's own version                                                                                                   |
+| `README.md`, `website/docs/getting-started/installation.mdx` | The CMake, ESP-IDF and PlatformIO install pins                                                                             |
+| `website/package.json`                                       | The engine the playground runs, and the Node floor (also in `package-lock.json`), copied from the `embedded-react` package |
+| `website/docs/**/*.md`, `*.mdx`                              | Any `"embedded-react": "^x.y.z"` pin in an example `package.json`                                                          |
+| `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                        |
 
 `node tools/sync-version.mjs --check` fails if any of them drifts, and CI runs it on every push,
 so a hand-edited version cannot land. A listed file or package folder that's missing, or a version or
