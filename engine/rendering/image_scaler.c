@@ -629,6 +629,16 @@ void er_image_load_rgb565(const char* name, const void* rgb565_pixels, int width
     image_registry_store(name, rgb565_pixels, width, height, ER_IMAGE_RGB565);
 }
 
+void er_image_load_argb8888(const char* name, const void* argb_pixels, int width, int height, bool opaque)
+{
+    image_registry_store_known(name, argb_pixels, width, height, ER_IMAGE_ARGB8888, opaque);
+}
+
+bool er_image_unload(const char* name)
+{
+    return image_registry_remove(name);
+}
+
 bool er_image_exists(const char* name)
 {
     return name && image_registry_get(name) != NULL;

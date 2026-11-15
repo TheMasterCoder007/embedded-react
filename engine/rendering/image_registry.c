@@ -62,7 +62,31 @@ static bool scan_opaque(const void* pixels, int width, int height, ERImageFormat
     return true;
 }
 
-bool image_registry_store(const char* name, const void* pixels, int width, int height, ERImageFormat format)
+/** @brief Finds the slot holding a name, or NULL. */
+static ImageEntry* find_entry(const char* name)
+{
+    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
+    {
+        if (s_entries[entry_index].in_use && strncmp(s_entries[entry_index].name, name, IMAGE_NAME_MAX) == 0)
+            return &s_entries[entry_index];
+    }
+    return NULL;
+}
+
+/** @brief Finds the first free slot, or NULL when the registry is full. */
+static ImageEntry* find_free_entry(void)
+{
+    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
+    {
+        if (!s_entries[entry_index].in_use)
+            return &s_entries[entry_index];
+    }
+    return NULL;
+}
+
+/** @brief Validates and stores an image; `known_opaque` NULL means scan the pixels. */
+static bool
+store_entry(const char* name, const void* pixels, int width, int height, ERImageFormat format, const bool* known_opaque)
 {
     if (!name || !pixels || width <= 0 || height <= 0)
         return false;
@@ -83,40 +107,50 @@ bool image_registry_store(const char* name, const void* pixels, int width, int h
         return false;
     }
 
-    int free_slot = -1;
-    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
+    ImageEntry* entry = find_entry(name);
+    if (!entry)
     {
-        if (s_entries[entry_index].in_use && strncmp(s_entries[entry_index].name, name, IMAGE_NAME_MAX) == 0)
+        entry = find_free_entry();
+        if (!entry)
         {
-            s_entries[entry_index].pixels = pixels;
-            s_entries[entry_index].width = width;
-            s_entries[entry_index].height = height;
-            s_entries[entry_index].format = (uint8_t)format;
-            s_entries[entry_index].opaque = scan_opaque(pixels, width, height, format);
-            return true;
+            ERUI_WARN_ONCE("embedded-react image: registry full (%d slots) - \"%s\" and later images will not draw; "
+                           "raise ERUI_IMAGE_REGISTRY_MAX.\n",
+                           (int)ERUI_IMAGE_REGISTRY_MAX,
+                           name);
+            return false;
         }
-        if (!s_entries[entry_index].in_use && free_slot < 0)
-            free_slot = entry_index;
+        strncpy(entry->name, name, IMAGE_NAME_MAX);
+        entry->name[IMAGE_NAME_MAX] = '\0';
     }
 
-    if (free_slot < 0)
-    {
-        ERUI_WARN_ONCE("embedded-react image: registry full (%d slots) - \"%s\" and later images will not draw; "
-                       "raise ERUI_IMAGE_REGISTRY_MAX.\n",
-                       (int)ERUI_IMAGE_REGISTRY_MAX,
-                       name);
-        return false;
-    }
-
-    ImageEntry* entry = &s_entries[free_slot];
-    strncpy(entry->name, name, IMAGE_NAME_MAX);
-    entry->name[IMAGE_NAME_MAX] = '\0';
     entry->pixels = pixels;
     entry->width = width;
     entry->height = height;
     entry->format = (uint8_t)format;
-    entry->opaque = scan_opaque(pixels, width, height, format);
+    /* RGB565 has no alpha, whatever the caller says. */
+    entry->opaque =
+        (known_opaque && format != ER_IMAGE_RGB565) ? *known_opaque : scan_opaque(pixels, width, height, format);
     entry->in_use = true;
+    return true;
+}
+
+bool image_registry_store(const char* name, const void* pixels, int width, int height, ERImageFormat format)
+{
+    return store_entry(name, pixels, width, height, format, NULL);
+}
+
+bool image_registry_store_known(
+    const char* name, const void* pixels, int width, int height, ERImageFormat format, bool opaque)
+{
+    return store_entry(name, pixels, width, height, format, &opaque);
+}
+
+bool image_registry_remove(const char* name)
+{
+    ImageEntry* entry = name ? find_entry(name) : NULL;
+    if (!entry)
+        return false;
+    memset(entry, 0, sizeof(*entry));
     return true;
 }
 
@@ -133,10 +167,5 @@ const ImageEntry* image_registry_get(const char* name)
 {
     if (!name || name[0] == '\0')
         return NULL;
-    for (int entry_index = 0; entry_index < (int)ERUI_IMAGE_REGISTRY_MAX; entry_index++)
-    {
-        if (s_entries[entry_index].in_use && strncmp(s_entries[entry_index].name, name, IMAGE_NAME_MAX) == 0)
-            return &s_entries[entry_index];
-    }
-    return NULL;
+    return find_entry(name);
 }
