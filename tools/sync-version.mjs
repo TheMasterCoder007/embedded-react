@@ -24,7 +24,7 @@
 // stage precisely those — one source of truth, so the writer and the release commit can never disagree.
 // To release: edit VERSION, run this, commit, tag vX.Y.Z.
 
-import {readFileSync, writeFileSync, existsSync} from 'node:fs';
+import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve} from 'node:path';
 
@@ -158,6 +158,37 @@ const gitTagRead = text => GIT_TAG_PIN.exec(text)?.[2];
 const gitTagWrite = (text, version) =>
   text.replace(GIT_TAG_PIN, `$1${version}`);
 
+// Docs pages that show an app's package.json pin `embedded-react` too. Every page with a pin is found
+// by looking, so a new guide needs no entry here.
+const DOCS_DIR = 'website/docs';
+const GENERATED_DOCS = ['changelog.md', 'roadmap.md']; // copied in by website/scripts/sync-repo-docs.mjs
+const DOC_PIN = /("embedded-react":\s*"[\^~]?)(\d+\.\d+\.\d+)/g;
+const docPinRead = text => {
+  const versions = [...text.matchAll(DOC_PIN)].map(match => match[2]);
+  if (!versions.length) return undefined;
+  return versions.every(version => version === versions[0])
+    ? versions[0]
+    : `${versions[0]} (pins disagree)`;
+};
+const docPinWrite = (text, version) => text.replace(DOC_PIN, `$1${version}`);
+const docPinManifests = () =>
+  readdirSync(resolve(ROOT, DOCS_DIR), {recursive: true})
+    .map(file => file.replaceAll('\\', '/'))
+    .filter(file => /\.mdx?$/.test(file) && !GENERATED_DOCS.includes(file))
+    .sort()
+    .map(file => `${DOCS_DIR}/${file}`)
+    .filter(
+      path =>
+        docPinRead(readFileSync(resolve(ROOT, path), 'utf8')) !== undefined,
+    )
+    .map(path => ({path, read: docPinRead, write: docPinWrite}));
+
+// The website installs the published package, so it needs the same Node floor.
+const NODE_FLOOR_SOURCE = 'packages/embedded-react/package.json';
+const NODE_FLOOR_COPY = 'website/package.json';
+const nodeFloor = path =>
+  JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')).engines?.node;
+
 // Version-bearing manifests — each independently published artifact, the engine's C header, the README
 // install pins, and the example fetch-template tags.
 const MANIFESTS = [
@@ -228,6 +259,7 @@ const MANIFESTS = [
     read: gitTagRead,
     write: gitTagWrite,
   },
+  ...docPinManifests(),
 ];
 
 // LICENSE + NOTICE: each independently published artifact (the npm packages; the engine as a CMake /
@@ -255,9 +287,11 @@ const legalMirrors = () =>
  */
 export function versionedFiles() {
   return [
-    'VERSION',
-    ...MANIFESTS.map(manifest => manifest.path),
-    ...legalMirrors(),
+    ...new Set([
+      'VERSION',
+      ...MANIFESTS.map(manifest => manifest.path),
+      ...legalMirrors(),
+    ]),
   ];
 }
 
@@ -358,6 +392,24 @@ function main() {
     }
   }
 
+  // The website's Node floor.
+  const wantFloor = nodeFloor(NODE_FLOOR_SOURCE);
+  const haveFloor = nodeFloor(NODE_FLOOR_COPY);
+  if (haveFloor !== wantFloor) {
+    if (check) {
+      drift.push({
+        file: NODE_FLOOR_COPY,
+        found: `engines.node is ${haveFloor ?? '(missing)'}, ${NODE_FLOOR_SOURCE} has ${wantFloor}`,
+      });
+    } else {
+      const path = resolve(ROOT, NODE_FLOOR_COPY);
+      const manifest = JSON.parse(readFileSync(path, 'utf8'));
+      manifest.engines = {...manifest.engines, node: wantFloor};
+      writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
+      wrote.push(`${NODE_FLOOR_COPY} (engines.node)`);
+    }
+  }
+
   // Per-package LICENSE + NOTICE mirrors.
   for (const dir of PACKAGE_DIRS) {
     for (const legalFile of LEGAL_FILES) {
@@ -382,7 +434,7 @@ function main() {
   if (check) {
     if (drift.length) {
       console.error(
-        `Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE):`,
+        `Drift from the repo-root source of truth (VERSION=${version}, LICENSE, NOTICE, Node floor):`,
       );
       for (const entry of drift)
         console.error(`  ${entry.file}: ${entry.found}`);

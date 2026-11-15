@@ -36,7 +36,8 @@ What `sync-version` keeps in step:
 | `runtime/idf_component.yml`                                  | The runtime's ESP-IDF component, and the engine version it depends on                                              |
 | `engine/include/er_version.h`                                | The engine's own version                                                                                           |
 | `README.md`, `website/docs/getting-started/installation.mdx` | The CMake, ESP-IDF and PlatformIO install pins                                                                     |
-| `website/package.json`                                       | The engine the playground runs                                                                                     |
+| `website/package.json`                                       | The engine the playground runs, and the Node floor, copied from the `embedded-react` package                       |
+| `website/docs/**/*.md`, `*.mdx`                              | Any `"embedded-react": "^x.y.z"` pin in an example `package.json`                                                  |
 | `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                |
 
 `node tools/sync-version.mjs --check` fails if any of them drifts, and CI runs it on every push,
