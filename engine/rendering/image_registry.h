@@ -63,7 +63,7 @@ typedef struct
     int width;                     /**< Image width in pixels. */
     int height;                    /**< Image height in pixels. */
     uint8_t format;                /**< Pixel layout of buf (ERImageFormat). */
-    bool opaque;                   /**< Every pixel is fully opaque (scanned at registration). */
+    bool opaque;                   /**< Every pixel is fully opaque (scanned or given at registration). */
     bool in_use;                   /**< True when this slot holds a valid entry. */
 } ImageEntry;
 
@@ -96,6 +96,32 @@ void image_registry_init(void);
  *         (unknown format, misaligned RGB565 buffer, non-positive dimensions, NULL name/pixels).
  */
 bool image_registry_store(const char* name, const void* pixels, int width, int height, ERImageFormat format);
+
+/**
+ * @brief Stores or replaces an image whose opacity the caller already knows, skipping the pixel scan.
+ *
+ * Same rules as image_registry_store(). `opaque` is ignored for RGB565, which is always opaque.
+ *
+ * @param[in] name    Null-terminated asset name (max IMAGE_NAME_MAX characters).
+ * @param[in] pixels  Pixel data in the given format; caller must keep it live.
+ * @param[in] width   Image width in pixels.
+ * @param[in] height  Image height in pixels.
+ * @param[in] format  Pixel layout of pixels.
+ * @param[in] opaque  True when every pixel is fully opaque.
+ *
+ * @return true on success, false if the registry is full or the arguments are invalid.
+ */
+bool image_registry_store_known(
+    const char* name, const void* pixels, int width, int height, ERImageFormat format, bool opaque);
+
+/**
+ * @brief Removes an image, freeing its slot.
+ *
+ * @param[in] name  Null-terminated asset name.
+ *
+ * @return true when the name was registered.
+ */
+bool image_registry_remove(const char* name);
 
 /**
  * @brief Retrieves a registered image entry by name.

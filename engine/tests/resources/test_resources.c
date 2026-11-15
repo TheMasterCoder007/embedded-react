@@ -170,6 +170,56 @@ static int test_image_replace(void)
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Tests: Image registry unload + known opacity
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/**
+ * @brief Verifies er_image_unload frees a slot and er_image_load_argb8888 takes the caller's opacity.
+ *
+ * @return 0 on success, 1 on failure.
+ */
+static int test_image_unload_and_known_opacity(void)
+{
+    image_registry_init();
+
+    static const uint32_t opaque_pixels[1] = {0xFF112233U};
+    static const uint32_t translucent_pixels[1] = {0x80102030U};
+    static const uint16_t rgb565_pixels[1] = {0xF800U};
+
+    /* The flag is stored as given, not checked against the pixels. */
+    er_image_load_argb8888("cover", translucent_pixels, 1, 1, true);
+    const ImageEntry* entry = image_registry_get("cover");
+    CHECK(entry && entry->format == ER_IMAGE_ARGB8888 && entry->opaque, "known: opaque flag taken from the caller");
+    er_image_load_argb8888("cover", opaque_pixels, 1, 1, false);
+    entry = image_registry_get("cover");
+    CHECK(entry && entry->pixels == opaque_pixels && !entry->opaque, "known: replace takes the new flag");
+    CHECK(image_registry_store_known("bg565", rgb565_pixels, 1, 1, ER_IMAGE_RGB565, false)
+              && image_registry_get("bg565")->opaque,
+          "known: RGB565 stays opaque");
+
+    CHECK(er_image_unload("cover"), "unload: a registered name is removed");
+    CHECK(!er_image_exists("cover") && er_image_exists("bg565"), "unload: only that name is gone");
+    CHECK(image_registry_in_use() == 1U, "unload: the slot is free");
+    CHECK(!er_image_unload("cover") && !er_image_unload("never") && !er_image_unload(NULL),
+          "unload: an unknown name is a no-op");
+
+    /* A full registry takes a new name once one is unloaded. */
+    image_registry_init();
+    char name[16];
+    for (int slot_index = 0; slot_index < (int)ERUI_IMAGE_REGISTRY_MAX; slot_index++)
+    {
+        snprintf(name, sizeof(name), "img%d", slot_index);
+        er_image_load(name, opaque_pixels, 1, 1);
+    }
+    CHECK(!image_registry_store("next", opaque_pixels, 1, 1, ER_IMAGE_ARGB8888), "unload: full registry refuses");
+    CHECK(er_image_unload("img0"), "unload: from a full registry");
+    CHECK(image_registry_store("next", opaque_pixels, 1, 1, ER_IMAGE_ARGB8888), "unload: the freed slot is reused");
+    CHECK(image_registry_in_use() == ERUI_IMAGE_REGISTRY_MAX, "unload: registry is full again");
+
+    return s_fail;
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Tests: Image registry format + opacity scan
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -376,6 +426,7 @@ static int test_font_register_public(void)
 int main(void)
 {
     (void)test_image_replace();
+    (void)test_image_unload_and_known_opacity();
     (void)test_image_format_and_opacity();
     (void)test_font_registry_replace();
     (void)test_font_blob_reuse();

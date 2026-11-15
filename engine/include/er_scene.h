@@ -1341,11 +1341,38 @@ extern "C"
     void er_image_load_rgb565(const char* name, const void* rgb565_pixels, int width, int height);
 
     /**
+     * @brief Registers a premultiplied ARGB8888 image whose opacity the caller already knows.
+     *
+     * Same ownership and replacement rules as er_image_load(), without its scan of every pixel. For
+     * images made at runtime, where the decoder knows whether it produced any alpha. Passing
+     * opaque = true for pixels that aren't all opaque draws them wrong.
+     *
+     * @param[in] name         Null-terminated image asset name.
+     * @param[in] argb_pixels  Pointer to the premultiplied ARGB8888 pixel data (row-major).
+     * @param[in] width        Image width in pixels.
+     * @param[in] height       Image height in pixels.
+     * @param[in] opaque       True when every pixel's alpha is 255.
+     */
+    void er_image_load_argb8888(const char* name, const void* argb_pixels, int width, int height, bool opaque);
+
+    /**
+     * @brief Unregisters one image and frees its slot.
+     *
+     * The engine stops reading the pixels once this returns, so the caller may free them. An Image
+     * node still using the name draws nothing the next time it repaints.
+     *
+     * @param[in] name  Null-terminated image asset name.
+     *
+     * @return true when the name was registered.
+     */
+    bool er_image_unload(const char* name);
+
+    /**
      * @brief Reports whether an image is registered under a name.
      *
      * @param[in] name  Null-terminated image asset name.
      *
-     * @return true when er_image_load() or er_image_load_rgb565() registered it.
+     * @return true when one of the er_image_load functions registered it.
      */
     bool er_image_exists(const char* name);
 

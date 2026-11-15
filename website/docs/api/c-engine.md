@@ -125,6 +125,11 @@ which carries its pixel size). These reference the bytes in place, so flash-resi
 RAM; `er_font_load(name, buf, len)` instead copies a font blob into the `ERUI_FONT_POOL_BYTES` pool.
 A Flow B package and a Flow A container register their packs on load.
 
+An image made at runtime, such as a decoded cover or avatar, goes through
+`er_image_load_argb8888(name, argb, w, h, opaque)`, which takes the opacity from the caller instead of
+scanning every pixel. `er_image_unload(name)` frees the slot, after which the pixels can be freed;
+`er_image_clear()` unregisters every image.
+
 ## Time
 
 The engine has one clock, advanced by the host: `embedded_renderer_tick(dt_ms)` moves it and runs

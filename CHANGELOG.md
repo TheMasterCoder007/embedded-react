@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Engine: `er_image_unload()` frees a registered image's slot, and `er_image_load_argb8888()` registers an image
+  without scanning its pixels for opacity.
+
 ### Changed
 
 - Engine: a view that draws nothing itself no longer repaints its box when it only moves or resizes.
