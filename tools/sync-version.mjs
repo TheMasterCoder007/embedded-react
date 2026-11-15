@@ -185,9 +185,16 @@ const docPinManifests = () =>
 
 // The website installs the published package, so it needs the same Node floor.
 const NODE_FLOOR_SOURCE = 'packages/embedded-react/package.json';
-const NODE_FLOOR_COPY = 'website/package.json';
 const nodeFloor = path =>
   JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')).engines?.node;
+// The lockfile repeats its package's engines, under the root entry.
+const NODE_FLOOR_COPIES = [
+  {path: 'website/package.json', rootPackage: manifest => manifest},
+  {
+    path: 'website/package-lock.json',
+    rootPackage: lockfile => lockfile.packages[''],
+  },
+];
 
 // Version-bearing manifests — each independently published artifact, the engine's C header, the README
 // install pins, and the example fetch-template tags.
@@ -394,19 +401,21 @@ function main() {
 
   // The website's Node floor.
   const wantFloor = nodeFloor(NODE_FLOOR_SOURCE);
-  const haveFloor = nodeFloor(NODE_FLOOR_COPY);
-  if (haveFloor !== wantFloor) {
+  for (const copy of NODE_FLOOR_COPIES) {
+    const path = resolve(ROOT, copy.path);
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    const rootPackage = copy.rootPackage(manifest);
+    const haveFloor = rootPackage.engines?.node;
+    if (haveFloor === wantFloor) continue;
     if (check) {
       drift.push({
-        file: NODE_FLOOR_COPY,
+        file: copy.path,
         found: `engines.node is ${haveFloor ?? '(missing)'}, ${NODE_FLOOR_SOURCE} has ${wantFloor}`,
       });
     } else {
-      const path = resolve(ROOT, NODE_FLOOR_COPY);
-      const manifest = JSON.parse(readFileSync(path, 'utf8'));
-      manifest.engines = {...manifest.engines, node: wantFloor};
+      rootPackage.engines = {...rootPackage.engines, node: wantFloor};
       writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
-      wrote.push(`${NODE_FLOOR_COPY} (engines.node)`);
+      wrote.push(`${copy.path} (engines.node)`);
     }
   }
 
