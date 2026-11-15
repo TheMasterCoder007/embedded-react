@@ -395,7 +395,10 @@ bool er_transform_is_translate_only(const ERNode* node)
     if (node->transform_rotate_x != 0.0f || node->transform_rotate_y != 0.0f || node->transform_perspective != 0.0f)
         return false;
 #endif
-    return node->transform_scale_x == 0.0f && node->transform_scale_y == 0.0f && node->transform_rotate_z == 0.0f;
+    /* 0 is unset and 1 is where a scale animation rests: both are the identity. */
+    const bool unscaled_x = node->transform_scale_x == 0.0f || node->transform_scale_x == 1.0f;
+    const bool unscaled_y = node->transform_scale_y == 0.0f || node->transform_scale_y == 1.0f;
+    return unscaled_x && unscaled_y && node->transform_rotate_z == 0.0f;
 }
 
 #if ERUI_3D_TRANSFORMS

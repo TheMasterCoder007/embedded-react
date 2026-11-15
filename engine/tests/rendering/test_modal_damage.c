@@ -496,10 +496,9 @@ int main(void)
      * modal_scrim_shown for the node's lifetime. How the rect was measured says nothing about how far
      * the backdrop reaches, so both branches route a changed modal to the same handling now.
      *
-     * The transform is scale 1.0 on purpose. That is where a zoom entrance SETTLES, and
-     * er_transform_is_translate_only() reads only 0.0 as "unset" — so the modal sits on the transformed
-     * branch permanently, with no animation in flight. The size is one pixel over the transform source
-     * so the scratch capture fails and the backdrop is filled straight to the framebuffer, scissored to
+     * The scale is a real one, so the modal sits on the transformed branch with no animation in flight
+     * (scale 1 is the identity and would not). The size is one pixel over the transform source so the
+     * scratch capture fails and the backdrop is filled straight to the framebuffer, scissored to
      * whatever damage this pre-pass produced: the configuration where damage alone decides the scrim. */
     er_reset();
     build_scene();
@@ -507,8 +506,8 @@ int main(void)
     s_modal_props.top = 200;
     s_modal_props.width = (int16_t)(ERUI_TRANSFORM_WIDTH + 1);
     s_modal_props.height = (int16_t)(ERUI_TRANSFORM_HEIGHT + 1);
-    s_modal_props.transform_scale_x = 1.0f;
-    s_modal_props.transform_scale_y = 1.0f;
+    s_modal_props.transform_scale_x = 1.05f;
+    s_modal_props.transform_scale_y = 1.05f;
     s_modal_props.modal_visible = 0;
     er_node_set_props(s_modal, &s_modal_props);
     frame_distinct();

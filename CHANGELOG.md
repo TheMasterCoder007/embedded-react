@@ -22,6 +22,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Changed
 
 - Engine: a view that draws nothing itself no longer repaints its box when it only moves or resizes.
+- Engine: a transform with a scale of exactly 1 and no rotation is drawn as a plain offset, and keeps its shadow.
 
 ### Removed
 

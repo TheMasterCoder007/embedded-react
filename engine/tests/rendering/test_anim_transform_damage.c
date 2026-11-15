@@ -62,6 +62,12 @@ typedef struct
 } TestCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Variables: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+static int s_blend_count; /* blend_rect calls: a capture blends back out row by row, a plain paint fills */
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private — backend stubs
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -171,6 +177,7 @@ static void copy_cb(const void* source, int stride, int x, int y, int width, int
  */
 static void blend_cb(const void* source, int stride, uint8_t alpha, int x, int y, int width, int height, void* ctx)
 {
+    s_blend_count++;
     TestCtx* test_context = ctx;
     for (int row = 0; row < height; row++)
     {
@@ -339,6 +346,136 @@ static int run_slide(TestCtx* test_context, bool with_fade)
     return EXIT_SUCCESS;
 }
 
+#if ERUI_TRANSFORMS_FULL
+
+/**
+ * @brief Compares the incremental frame just committed against a full repaint of the same state.
+ *
+ * @param[in,out] test_context  TestCtx owning the framebuffer; left holding the incremental frame.
+ *
+ * @return true when the two frames match.
+ */
+static bool matches_full_repaint(TestCtx* test_context)
+{
+    static uint32_t incremental[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+    memcpy(incremental, test_context->framebuffer, sizeof(incremental));
+
+    memset(test_context->framebuffer, 0, sizeof(incremental));
+    er_force_full_repaint();
+    er_commit();
+
+    const bool same = memcmp(incremental, test_context->framebuffer, sizeof(incremental)) == 0;
+    memcpy(test_context->framebuffer, incremental, sizeof(incremental));
+    return same;
+}
+
+/**
+ * @brief Lifts a card to scale 1.2 and back to 1 on the native driver, then recolours its child at rest.
+ *
+ * Scale 1 is the identity: the card at rest is painted like an untransformed one, shadow included, and a
+ * repaint inside it never goes through the transform scratch.
+ *
+ * @param[in,out] test_context  TestCtx owning the framebuffer.
+ *
+ * @return EXIT_SUCCESS on pass, EXIT_FAILURE on the first failed assertion.
+ */
+static int run_lift(TestCtx* test_context)
+{
+    er_reset();
+    memset(test_context->framebuffer, 0, sizeof(uint32_t) * FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT);
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps root_props = props_default();
+    root_props.width = FRAMEBUFFER_WIDTH;
+    root_props.height = FRAMEBUFFER_HEIGHT;
+    root_props.background_color = 0xFF101010U;
+    er_node_set_props(root, &root_props);
+
+    ERNode* card = er_node_create(ER_NODE_VIEW);
+    ERProps card_props = props_default();
+    card_props.position = ER_POSITION_ABSOLUTE;
+    card_props.left = 130;
+    card_props.top = 30;
+    card_props.width = 60;
+    card_props.height = 60;
+    card_props.background_color = 0xFF4DA3FFU;
+    card_props.shadow_color = 0xFF000000U;
+    card_props.shadow_opacity = 0.8f;
+    card_props.shadow_radius = 6;
+    card_props.shadow_offset_x = 3;
+    card_props.shadow_offset_y = 3;
+    er_node_set_props(card, &card_props);
+
+    ERNode* child = er_node_create(ER_NODE_VIEW);
+    ERProps child_props = props_default();
+    child_props.position = ER_POSITION_ABSOLUTE;
+    child_props.left = 10;
+    child_props.top = 10;
+    child_props.width = 20;
+    child_props.height = 20;
+    child_props.background_color = 0xFF3DDC84U;
+    er_node_set_props(child, &child_props);
+
+    er_tree_append_child(card, child);
+    er_tree_append_child(root, card);
+    er_tree_set_root(root);
+    er_force_full_repaint();
+    er_commit();
+
+    /* What the same recolour costs before the card has any scale. */
+    child_props.background_color = 0xFFCC44CCU;
+    er_node_set_props(child, &child_props);
+    s_blend_count = 0;
+    er_commit();
+    const int unscaled_blend_count = s_blend_count;
+
+    ERAnimationConfig config = {0};
+    config.type = ER_ANIMATION_TIMING;
+    config.duration_ms = ANIMATION_MS;
+    config.easing = ER_EASE_LINEAR;
+
+    ERAnimationValueHandle lift_x = er_animation_value_create(1.0f);
+    ERAnimationValueHandle lift_y = er_animation_value_create(1.0f);
+    er_animation_value_bind(lift_x, card, ER_PROP_SCALE_X);
+    er_animation_value_bind(lift_y, card, ER_PROP_SCALE_Y);
+
+    static const float k_targets[] = {1.2f, 1.0f};
+    for (size_t target_index = 0; target_index < sizeof(k_targets) / sizeof(k_targets[0]); target_index++)
+    {
+        er_animation_value_animate(lift_x, k_targets[target_index], &config);
+        er_animation_value_animate(lift_y, k_targets[target_index], &config);
+        for (int frame_index = 0; frame_index < FRAMES; frame_index++)
+        {
+            embedded_renderer_tick(FRAME_MS);
+            er_commit();
+            if (!matches_full_repaint(test_context))
+            {
+                char message[160];
+                snprintf(message,
+                         sizeof(message),
+                         "scale to %.1f: frame %d differs from a full repaint of the same state",
+                         (double)k_targets[target_index],
+                         frame_index);
+                return fail(message);
+            }
+        }
+    }
+
+    /* At rest on an explicit scale of 1. */
+    child_props.background_color = 0xFFFF8800U;
+    er_node_set_props(child, &child_props);
+    s_blend_count = 0;
+    er_commit();
+    if (s_blend_count != unscaled_blend_count)
+        return fail("a repaint inside a card resting at scale 1 went through the transform scratch");
+    if (!matches_full_repaint(test_context))
+        return fail("a repaint inside a card resting at scale 1 differs from a full repaint");
+
+    return EXIT_SUCCESS;
+}
+
+#endif /* ERUI_TRANSFORMS_FULL */
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -359,6 +496,10 @@ int main(void)
         return EXIT_FAILURE;
     if (run_slide(&test_context, true) != EXIT_SUCCESS)
         return EXIT_FAILURE;
+#if ERUI_TRANSFORMS_FULL
+    if (run_lift(&test_context) != EXIT_SUCCESS)
+        return EXIT_FAILURE;
+#endif
 
     return EXIT_SUCCESS;
 }
