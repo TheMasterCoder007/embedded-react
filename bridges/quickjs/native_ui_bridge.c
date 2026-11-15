@@ -4518,7 +4518,11 @@ static JSValue js_has_pending_layout_animation(JSContext* ctx, JSValueConst this
 static JSValue js_scroll_to(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
     (void)this_val;
-    ERNode* node = argc > 0 ? node_arg(ctx, argv[0]) : NULL;
+    if (argc < 1)
+    {
+        return JS_UNDEFINED;
+    }
+    ERNode* node = node_arg(ctx, argv[0]);
     double x = NAN;
     double y = NAN;
     if (argc > 1 && JS_ToFloat64(ctx, &x, argv[1]) != 0)

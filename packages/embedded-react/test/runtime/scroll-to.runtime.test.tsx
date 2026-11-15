@@ -81,6 +81,12 @@ check(
 check(scrollTo(-1, {y: 10}) === undefined, 'a bad handle returns undefined');
 
 check(scrollTo(null, {y: 10}) === undefined, 'a null ref returns undefined');
+check(
+  (
+    globalThis as unknown as {NativeUI: {scrollTo(): unknown}}
+  ).NativeUI.scrollTo() === undefined,
+  'the bridge method with no handle returns undefined',
+);
 
 // An onScroll that unmounts the list: the scroll's own node is gone by the time its position is read.
 let gone: NodeHandle | null = null;
