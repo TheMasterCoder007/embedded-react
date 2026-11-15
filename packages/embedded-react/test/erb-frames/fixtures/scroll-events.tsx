@@ -1,5 +1,5 @@
 // onScroll on a ScrollView: the offset kept in state by an inline handler and by a useCallback a second list
-// shares, moving an indicator and hiding a header, from a drag and from a scrollTo.
+// shares, moving an indicator and hiding a header, from a drag and from a scrollTo in a loop.
 import {useCallback, useRef, useState} from 'react';
 import {
   Pressable,
@@ -30,7 +30,9 @@ export function App() {
       <Pressable
         style={styles.button}
         onPress={() => {
-          scrollTo(list.current, {y: 130});
+          for (let step = 1; step <= 2; step++) {
+            scrollTo(list.current, {y: step * 65});
+          }
         }}>
         <Text style={styles.label}>jump</Text>
       </Pressable>

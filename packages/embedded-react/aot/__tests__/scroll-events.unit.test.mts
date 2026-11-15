@@ -15,7 +15,7 @@
  */
 import {describe, expect, it} from 'vitest';
 import {compilePackage} from '../compile.mts';
-import {EVENT_SIZE} from '../compiler/package/format.mts';
+import {EVENT_SIZE, Table} from '../compiler/package/format.mts';
 import type {CompileOptions} from '../compiler/options.mts';
 
 // onScroll on a ScrollView: what compiles and what the compiler refuses. That the handler sees the offsets Flow A's
@@ -90,6 +90,19 @@ describe('onScroll in a package', () => {
       '<ScrollView ref={list} onScroll={() => setAt(1)} />',
     );
     expect(heard - arenaOf('<ScrollView ref={list} />')).toBe(EVENT_SIZE);
+  });
+
+  it('gives each ScrollView its own handler, so the runtime can tell them apart', () => {
+    const body = 'const moved = useCallback(() => setAt(1), []);';
+    const functionsOf = (elements: string) =>
+      compile(appOf(elements, body)).tables.find(
+        table => table.id === Table.functions,
+      )!.bytes[0];
+    const one = functionsOf('<ScrollView onScroll={moved} />');
+    const two = functionsOf(
+      '<ScrollView onScroll={moved} /><ScrollView onScroll={moved} />',
+    );
+    expect(two).toBeGreaterThan(one);
   });
 
   it('refuses a scroll offset outside an onScroll handler', () => {

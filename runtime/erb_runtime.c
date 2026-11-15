@@ -659,6 +659,32 @@ static ErbStatus queue_insert(uint32_t position, const ErbEvent* event)
     return ERB_OK;
 }
 
+/**
+ * @brief Gives a waiting scroll event of the same handler the newer offset, so a ScrollView scrolled many times
+ * in one run takes one place in the queue. A scroll handler is one function per node.
+ *
+ * @return true when one was waiting.
+ */
+static bool queue_replace_scroll(const ErbEvent* event)
+{
+    if (event->kind != ERB_EVENT_CALL
+        || erb_function(&g_erb.program, event->function)[ERB_FUNCTION_KIND_AT] != ER_EVENT_SCROLL)
+    {
+        return false;
+    }
+    for (uint32_t index = s_queue_effects; index < s_queue_count; index++)
+    {
+        ErbEvent* waiting = queue_record(index);
+        if (waiting->kind == ERB_EVENT_CALL && waiting->function == event->function
+            && waiting->instance == event->instance)
+        {
+            *waiting = *event;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void queue_pop(ErbEvent* event)
 {
     *event = *queue_record(0);
@@ -766,7 +792,10 @@ static void dispatch(const ErbEvent* event)
     }
     if (g_erb.in_vm)
     {
-        queue_insert(s_queue_count, event);
+        if (!queue_replace_scroll(event))
+        {
+            queue_insert(s_queue_count, event);
+        }
         return;
     }
     if (run_event(event) != ERB_OK)
