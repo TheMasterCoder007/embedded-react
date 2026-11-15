@@ -26,8 +26,8 @@ add_test(NAME rendering_opacity_equiv COMMAND test_opacity_equiv)
 add_executable(test_anim_transform_damage test_anim_transform_damage.c)
 target_link_libraries(test_anim_transform_damage PRIVATE embedded-react)
 # test_anim_transform_damage needs engine/core for renderer_internal.h (er_force_full_repaint, the
-# reference frame it compares each animated frame against).
-target_include_directories(test_anim_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+# reference frame it compares each animated frame against) and engine/scene for er_node_internal.h.
+target_include_directories(test_anim_transform_damage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_anim_transform_damage COMMAND test_anim_transform_damage)
 
 add_executable(test_parallel test_parallel.c)

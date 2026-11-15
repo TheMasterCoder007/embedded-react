@@ -445,10 +445,7 @@ static bool read_color_value(const ERNode* node, ERAnimationProp prop, uint32_t*
 static void update_has_transform(ERNode* node)
 {
     const bool had_transform = node->has_transform;
-    node->has_transform =
-        (node->transform_translate_x != 0.0f || node->transform_translate_y != 0.0f || node->transform_scale_x != 0.0f
-         || node->transform_scale_y != 0.0f || node->transform_rotate_z != 0.0f || node->transform_rotate_x != 0.0f
-         || node->transform_rotate_y != 0.0f || node->transform_perspective != 0.0f);
+    node->has_transform = er_node_transform_is_set(node);
     /* The compositor caches prune and cull flags derived from this one, normally refreshed by a layout pass
      * an animation-only frame skips. Nothing moved, so ask for the bounds refresh alone: when a transform
      * appears or goes, and when one turns complex (a rotate or scale joining a translate) while the cached
