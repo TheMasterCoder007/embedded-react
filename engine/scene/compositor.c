@@ -88,6 +88,7 @@ static uint8_t s_keyboard_layer = 0; /**< Active key layer index into the (defau
 static ERKeyboardListener s_keyboard_listener = NULL; /**< Told when the keyboard shows or hides. */
 static void* s_keyboard_listener_data = NULL;
 static bool s_keyboard_shown = false; /**< What the listener was last told. */
+static int s_focus_changes = 0; /**< er_text_input_focus() calls under way; the listener is told after the outermost. */
 static void keyboard_notify(void);
 static int s_keyboard_avoid_y = 0; /**< Pixels the whole scene is shifted UP so a focused input clears the keyboard
                                    (0 when no keyboard / input already visible). Applied in render_tree +
@@ -4295,7 +4296,7 @@ void er_node_set_props(ERNode* node, const ERProps* props)
 static void keyboard_notify(void)
 {
     const bool shown = er_keyboard_active();
-    if (shown == s_keyboard_shown)
+    if (s_focus_changes > 0 || shown == s_keyboard_shown)
         return;
     s_keyboard_shown = shown;
     if (s_keyboard_listener)
@@ -4313,6 +4314,7 @@ void er_text_input_focus(ERNode* node)
     if (node && node->type != ER_NODE_TEXT_INPUT)
         return;
 
+    s_focus_changes++;
     s_keyboard_dirty = true; /* focus is changing → repaint the on-screen keyboard strip (show or hide) */
     s_keyboard_layer = 0;    /* a freshly focused input starts on the lowercase layer */
 
@@ -4320,6 +4322,10 @@ void er_text_input_focus(ERNode* node)
     if (s_focused_input_tag != ER_INVALID_TAG)
     {
         ERNode* previous = er_get_node(s_focused_input_tag);
+        /* Cleared before the handler runs: a blur from inside it finds nothing focused, and a focus it gives
+         * another input is not undone. */
+        s_focused_input_tag = ER_INVALID_TAG;
+        const ERNodeRef requested = er_node_ref(node);
         if (previous)
         {
             previous->is_focused = false;
@@ -4331,11 +4337,15 @@ void er_text_input_focus(ERNode* node)
                 handler->callback(previous, &data, handler->user_data);
             }
         }
-        s_focused_input_tag = ER_INVALID_TAG;
+        /* The handler may have destroyed the node, or focused an input itself: its focus stands. */
+        node = er_node_deref(requested);
+        if (s_focused_input_tag != ER_INVALID_TAG)
+            node = NULL;
     }
 
     if (!node)
     {
+        s_focus_changes--;
         keyboard_notify();
         return;
     }
@@ -4350,6 +4360,7 @@ void er_text_input_focus(ERNode* node)
         EREventData data = {0};
         handler->callback(node, &data, handler->user_data);
     }
+    s_focus_changes--;
     keyboard_notify();
 }
 

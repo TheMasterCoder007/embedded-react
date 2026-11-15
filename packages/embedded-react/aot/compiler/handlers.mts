@@ -28,6 +28,7 @@ import {
 import type {AotError, SourcePosition} from './diagnostics.mts';
 import {evalStatic, foldScope, RuntimeLeaf} from './static-eval.mts';
 import {ALERT_CALL, raiseAlert, withAlertBase} from './alerts.mts';
+import {KEYBOARD_DISMISS_CALL} from './keyboard-dismiss.mts';
 import {fieldsUnder} from './list-items.mts';
 import {
   lowerNativeCall,
@@ -2297,22 +2298,9 @@ function lowerHandlerExprImpl(
   // Keyboard.dismiss() — blurs the focused TextInput.
   if (
     expression.type === 'CallExpression' &&
-    expression.callee.type === 'MemberExpression' &&
-    !expression.callee.computed &&
-    expression.callee.object.type === 'Identifier' &&
-    expression.callee.object.name === 'Keyboard' &&
-    expression.callee.property.type === 'Identifier'
+    expression.callee.type === 'Identifier' &&
+    expression.callee.name === KEYBOARD_DISMISS_CALL
   ) {
-    const method = expression.callee.property.name;
-    if (method !== 'dismiss' || expression.arguments.length) {
-      throw aotError(
-        method === 'dismiss'
-          ? 'AOT: Keyboard.dismiss() takes no arguments'
-          : `AOT: Keyboard.${method}() is not in the subset`,
-        'Keyboard.dismiss() is the one Keyboard call a package has; to follow the keyboard, set state in the ' +
-          "<TextInput>'s onFocus and onBlur.",
-      );
-    }
     return [{kind: 'dismissKeyboard'}];
   }
 

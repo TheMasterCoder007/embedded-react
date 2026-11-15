@@ -1928,6 +1928,8 @@ extern "C"
      *
      * Blurs any previously focused input, marks the node dirty to draw the cursor,
      * and fires ER_EVENT_FOCUS on the new node and ER_EVENT_BLUR on the old one.
+     * The old node has lost the focus by the time its blur handler runs, so the handler may blur again
+     * to no effect. A focus the handler gives an input itself stands, in place of this one.
      *
      * @param[in] node  TextInput node to focus, or NULL to only blur.
      */

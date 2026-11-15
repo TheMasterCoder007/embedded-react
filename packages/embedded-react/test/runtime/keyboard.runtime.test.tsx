@@ -36,7 +36,11 @@ const App = ({second}: {second: boolean}) => (
     <TextInput
       style={{width: 100, height: 30}}
       onFocus={() => log.push('focus 1')}
-      onBlur={() => log.push('blur 1')}
+      onBlur={() => {
+        log.push('blur 1');
+        // The input has already lost the focus, so this must not blur it again.
+        Keyboard.dismiss();
+      }}
     />
     {second && (
       <TextInput

@@ -104,6 +104,27 @@ describe('Keyboard.dismiss() in a package', () => {
     expect(blursOf(program)).toBe(1);
   });
 
+  it('follows the import, by whatever name', () => {
+    const renamed = appOf('K.dismiss();').replace(
+      '{Keyboard,',
+      '{Keyboard as K,',
+    );
+    expect(blursOf(compile(renamed).program)).toBe(1);
+  });
+
+  it('leaves a local named Keyboard alone', () => {
+    const hidden = appOf(
+      'const Keyboard = count; setCount(Keyboard + 1);',
+    ).replace('{Keyboard, ', '{');
+    expect(blursOf(compile(hidden).program)).toBe(0);
+  });
+
+  it('refuses Keyboard passed around', () => {
+    expect(failure(appOf('const board = Keyboard; setCount(1);'))).toMatch(
+      /Keyboard has only Keyboard\.dismiss\(\)/,
+    );
+  });
+
   it('refuses an argument', () => {
     expect(failure(appOf('Keyboard.dismiss(true);'))).toMatch(
       /Keyboard\.dismiss\(\) takes no arguments/,
