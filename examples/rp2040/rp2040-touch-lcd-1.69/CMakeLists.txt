@@ -94,7 +94,6 @@ target_compile_definitions(er_engine PUBLIC
     ERUI_GRADIENT=0
     ERUI_ONSCREEN_KEYBOARD=0
     ERUI_TRANSFORMS_TRANSLATE_ONLY=1
-    ERUI_FONT_SIZES=7
     ERUI_MAX_NODES=48  # two-page pager (watch face + level page) is 40 nodes; each node is ~1.3 KB of .bss
                        # (plus per-node layout work-arrays), so keep this trimmed to fit beside the framebuffer
     ERUI_MAX_OPACITY_DEPTH=1
