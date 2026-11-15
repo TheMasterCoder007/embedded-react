@@ -128,11 +128,6 @@ Still to do:
 
 ### Open API decisions
 
-- **Gradient style key.** Gradients are an engine primitive with no React Native prop;
-  the key is `backgroundGradient`
-  ([#108](https://github.com/TheMasterCoder007/embedded-react/issues/108)). Still open: its
-  shape, `{colors, angle?, positions?}` or the CSS-modelled `{type, angle?, to?, stops}`
-  recorded on #108.
 - **Non-native-driver animation.** Decide whether to support `Animated` without
   `useNativeDriver` (needs a JS-side rAF loop calling `setValue` each frame) or require
   `useNativeDriver: true`.
@@ -170,9 +165,6 @@ highest-impact first.
   sorted child order instead of descending the whole tree every frame.
 - **Cache blurred shadow buffers** keyed on geometry (shadows are fully re-blurred every
   repaint).
-- **Gradient color LUT.** Precompute a 256-entry premultiplied LUT from the stops instead
-  of evaluating per pixel, and rasterize only the rows and columns inside the clip
-  (`render_linear()` evaluates the whole box even for a small damage rect).
 - **Cache / DDA-step scaled images** instead of re-sampling (per-pixel division) every
   repaint.
 - **Resolve `BitmapFont*` once** when text props are set and cache on the node (currently

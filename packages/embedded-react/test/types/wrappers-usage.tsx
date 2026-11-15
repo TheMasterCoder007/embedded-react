@@ -55,7 +55,22 @@ const sections: SectionListData<Contact, Group>[] = [
 
 export function WrapperUsage() {
   return (
-    <View style={{flex: 1}}>
+    <View
+      style={{
+        flex: 1,
+        backgroundImage: 'linear-gradient(to bottom right, #0f172a, #38bdf8)',
+      }}>
+      <View
+        style={{
+          backgroundImage: [
+            {
+              type: 'linear-gradient',
+              direction: '45deg',
+              colorStops: [{color: 'red', positions: ['10%']}, {color: 'blue'}],
+            },
+          ],
+        }}
+      />
       <Button
         title="Save"
         color="#2196F3"

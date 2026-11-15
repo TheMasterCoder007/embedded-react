@@ -23,6 +23,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - `Keyboard`: `dismiss()` in both flows, and in Flow A the show and hide events, `isVisible()` and `metrics()`.
 - Engine: `er_keyboard_set_listener()` reports when the on-screen keyboard shows and hides, and
   `er_keyboard_get_frame()` reads the strip it covers.
+- The `backgroundImage` style, as React Native takes it: one `linear-gradient()` or `radial-gradient(circle, ...)`
+  behind a View, as a CSS string or a gradient object, in both flows.
+- Engine: `gradient_corner` runs a linear View gradient to a corner of its box, whatever the aspect ratio. The
+  engine ABI is now 2.
 
 ### Changed
 
@@ -30,6 +34,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Engine: a transform with a scale of exactly 1 and no rotation is drawn as a plain offset, and keeps its shadow.
 - Engine: a node whose only transform is a scale of exactly 1 is skipped like an untransformed one when a repaint
   does not touch it.
+- Engine: View gradients interpolate premultiplied, are dithered against banding, and build only the pixels inside
+  the repainted rect.
 
 ### Removed
 

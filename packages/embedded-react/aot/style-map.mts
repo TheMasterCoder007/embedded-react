@@ -18,6 +18,10 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
+import {
+  BACKGROUND_MAX_STOPS,
+  parseBackgroundImage,
+} from '../src/embedded-react/background-image.mts';
 import {NAMED_COLORS} from '../src/embedded-react/named-colors.js';
 import {numberProblem} from './compiler/check.mts';
 import type {
@@ -457,6 +461,45 @@ const KEYS: Record<string, StyleLowering> = {
   backgroundColor: color => [
     {field: 'background_color', value: parseColorValue(color)},
   ],
+  // One gradient, as Flow A reads it. Every field is written, so a later backgroundImage replaces an earlier one
+  // whole.
+  backgroundImage: image => {
+    const result = parseBackgroundImage(image);
+    if (result.problem !== undefined) {
+      throw new Error(result.problem);
+    }
+
+    const {gradient} = result;
+
+    return [
+      {
+        field: 'gradient_type',
+        value:
+          gradient.type === 'radial'
+            ? 'ER_GRADIENT_RADIAL'
+            : 'ER_GRADIENT_LINEAR',
+      },
+      {field: 'gradient_corner', value: gradient.corner},
+      {field: 'gradient_angle', value: gradient.angle},
+      {field: 'gradient_stop_count', value: gradient.stops.length},
+      ...Array.from(
+        {length: BACKGROUND_MAX_STOPS},
+        (_, index): StaticAssign[] => {
+          const stop = gradient.stops[index];
+          return [
+            {
+              field: `gradient_stops[${index}].color`,
+              value: stop ? parseColorValue(stop.color) : 0,
+            },
+            {
+              field: `gradient_stops[${index}].position`,
+              value: stop ? stop.offset : 0,
+            },
+          ];
+        },
+      ).flat(),
+    ];
+  },
   borderRadius: radius => [{field: 'border_radius', value: dimension(radius)}],
   // Per-corner radii; the engine reads 0 in one of these as "use borderRadius" (same as Flow A).
   borderTopLeftRadius: radius => [

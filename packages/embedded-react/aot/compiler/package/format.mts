@@ -29,7 +29,7 @@ export const FORMAT_MAJOR = 1;
 export const FORMAT_MINOR = 16;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
-export const ENGINE_ABI = 1;
+export const ENGINE_ABI = 2;
 
 export const PACKAGE_TAG = 'erb';
 
@@ -522,7 +522,7 @@ export interface AbiProp {
   max?: number;
 }
 
-/** The props with ids 1 to 150, in id order, as erb_props.c lists them, with each enum's largest value. */
+/** The props with ids 1 to 151, in id order, as erb_props.c lists them, with each enum's largest value. */
 const PROPS_IN_ORDER: [field: string, kind: PropKindName, max?: number][] = [
   ['left', 'i16'],
   ['top', 'i16'],
@@ -674,6 +674,7 @@ const PROPS_IN_ORDER: [field: string, kind: PropKindName, max?: number][] = [
   ['gradient_stops[1].position', 'float'],
   ['gradient_stops[2].position', 'float'],
   ['gradient_stops[3].position', 'float'],
+  ['gradient_corner', 'enum', 4],
 ];
 
 /** Span props start at this id, SPAN_STRIDE ids per span. */

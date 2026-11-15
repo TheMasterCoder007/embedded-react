@@ -40,8 +40,53 @@ The [Layout](../concepts/layout.md) page explains the solver and where it differ
 | Property          | Notes                                                                                                                                             |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backgroundColor` | Animatable. **Flow B:** the alpha of a `View` background is ignored (opaque fill); pre-mix a tint                                                 |
+| `backgroundImage` | One gradient, as a CSS string or an array of one gradient object. See [Gradients](#gradients)                                                     |
 | `opacity`         | 0 to 1, animatable. Below 1 the subtree composites through offscreen scratch; keep such nodes small                                               |
 | `pointerEvents`   | `'auto' \| 'none' \| 'box-none' \| 'box-only'`. A style entry here (React Native also allows it as a prop), because that is what the engine reads |
+
+### Gradients
+
+`backgroundImage` paints one gradient behind a `View`, `ScrollView`, `Pressable`, `TouchableOpacity` or
+`Modal`, clipped to its `borderRadius`. It takes React Native's two forms: a CSS string, or an array of
+one gradient object.
+
+```jsx
+const styles = StyleSheet.create({
+  hero: {
+    backgroundColor: '#0f172a', // what firmware without ERUI_GRADIENT paints
+    backgroundImage: 'linear-gradient(to bottom right, #0f172a, #38bdf8 70%)',
+  },
+  glow: {
+    backgroundImage: [
+      {
+        type: 'radial-gradient',
+        shape: 'circle',
+        colorStops: [
+          {color: '#fde047'},
+          {color: '#451a03', positions: ['100%']},
+        ],
+      },
+    ],
+  },
+});
+```
+
+- **Linear.** `linear-gradient(<direction>, <stops>)`. The direction is an angle (`45deg`, also `rad`,
+  `grad` and `turn`; 0 points to the top and 90 to the right) or `to` a side or corner, and defaults to
+  `to bottom`. A corner follows the box as in CSS: the two other corners share the middle color whatever
+  the aspect ratio.
+- **Radial.** `radial-gradient(circle, <stops>)`: a circle from the center to the farthest corner. An
+  ellipse, another size or another position is not drawn. Needs `ERUI_GRADIENT_RADIAL`, which the ESP32
+  examples build without; there it paints the `backgroundColor`.
+- **Stops.** Two to four, each a color with an optional percentage from 0% to 100%. A stop without one
+  is spaced evenly, a position below an earlier one is raised to it, and a color with two positions
+  counts as two stops. Colors interpolate premultiplied, so a fade to transparent keeps its hue.
+
+A value outside this (several gradients, a `url()`, a fifth stop, a length in pixels) is dropped with a
+console warning in Flow A, and the node paints its `backgroundColor`. Gradients need a build with
+`ERUI_GRADIENT`; without it the node also paints its `backgroundColor`, so set both.
+
+**Flow B:** `backgroundImage` must be static, and a value the engine does not draw is a compile error.
 
 ## Borders
 
@@ -121,7 +166,7 @@ border widths and colors, `transformOrigin`, `fontFamily`, `fontStyle`, `textAli
 It also rejects a key the engine does not draw on that element, which Flow A ignores without a word.
 The layout keys and `transform` work everywhere. `backgroundColor`, the borders and `opacity` work on
 `View`, `ScrollView`, `Pressable`, `TouchableOpacity` and `Modal`, and on `TextInput` without the
-per-corner radii. `borderRadius`, the per-corner radii and `opacity` work on `Image`. `color`,
+per-corner radii. `backgroundImage` works on the first five. `borderRadius`, the per-corner radii and `opacity` work on `Image`. `color`,
 `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing` and `opacity` work on `Text`;
 `TextInput` takes `color` and `fontSize`, and `ActivityIndicator` takes `color` as its tint. A nested
 `<Text>` span takes `color`, `fontSize`, `fontWeight` and `letterSpacing` only.

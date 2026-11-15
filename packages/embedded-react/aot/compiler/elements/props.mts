@@ -123,6 +123,7 @@ const SHADOW_STYLE = [
 const VIEW_STYLE = [
   ...SHADOW_STYLE,
   'backgroundColor',
+  'backgroundImage',
   'borderRadius',
   'borderTopLeftRadius',
   'borderTopRightRadius',

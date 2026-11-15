@@ -23,6 +23,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # When configured standalone (not add_subdirectory'd by an example), pull in the
 # engine so the embedded-react target exists for linking.
 if (NOT TARGET embedded-react)
+    # A standalone build (CI) is the test harness: it draws gradients, as the simulators do, so the runtime
+    # tests can read a backgroundImage's pixels.
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        set(ERUI_GRADIENT ON CACHE BOOL "" FORCE)
+        set(ERUI_GRADIENT_RADIAL ON CACHE BOOL "" FORCE)
+    endif ()
     add_subdirectory(
             ${CMAKE_CURRENT_SOURCE_DIR}/../../engine
             ${CMAKE_CURRENT_BINARY_DIR}/engine

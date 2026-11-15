@@ -3873,7 +3873,15 @@ static void copy_view_shadow_and_gradient(ERNode* node, const ERProps* props)
     node->props.view.shadow_opacity = props->shadow_opacity;
     node->props.view.shadow_radius = props->shadow_radius;
     node->props.view.elevation = props->elevation;
-    node->props.view.gradient_type = props->gradient_type;
+    /* A type this build does not draw behind a view leaves it its background_color. */
+#if ERUI_GRADIENT_RADIAL
+    const bool gradient_drawn =
+        (props->gradient_type == ER_GRADIENT_LINEAR || props->gradient_type == ER_GRADIENT_RADIAL);
+#else
+    const bool gradient_drawn = (props->gradient_type == ER_GRADIENT_LINEAR);
+#endif
+    node->props.view.gradient_type = gradient_drawn ? props->gradient_type : (uint8_t)ER_GRADIENT_NONE;
+    node->props.view.gradient_corner = props->gradient_corner;
     node->props.view.gradient_angle = props->gradient_angle;
     node->props.view.gradient_stop_count = props->gradient_stop_count;
     for (int stop_index = 0; stop_index < ER_GRADIENT_MAX_STOPS; stop_index++)
