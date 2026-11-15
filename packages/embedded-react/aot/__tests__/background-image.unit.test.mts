@@ -19,7 +19,7 @@ import {compilePackage} from '../compile.mts';
 import {lowerStyle} from '../style-map.mts';
 
 const IMPORTS = `import {useState} from 'react';
-import {View, Text, ScrollView, Pressable} from 'embedded-react';
+import {View, Text, ScrollView, Pressable, Modal} from 'embedded-react';
 `;
 
 /** The package an app compiles to. */
@@ -99,14 +99,30 @@ describe('backgroundImage', () => {
     );
   });
 
-  it('compiles on a View, a ScrollView and a Pressable', () => {
-    for (const tag of ['View', 'ScrollView', 'Pressable']) {
+  it('compiles on a View, a ScrollView, a Pressable and a Modal', () => {
+    for (const tag of [
+      'View',
+      'ScrollView',
+      'Pressable',
+      'Modal visible={on}',
+    ]) {
       expect(() =>
         programOf(
           styled("{backgroundImage: 'linear-gradient(red, blue)'}", tag),
         ),
       ).not.toThrow();
     }
+  });
+
+  it("changes a Modal's package", () => {
+    expect(
+      programOf(
+        styled(
+          "{backgroundImage: 'linear-gradient(red, blue)'}",
+          'Modal visible={on}',
+        ),
+      ),
+    ).not.toEqual(programOf(styled('{}', 'Modal visible={on}')));
   });
 
   it('refuses it on a Text', () => {
