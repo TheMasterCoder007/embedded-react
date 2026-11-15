@@ -63,6 +63,7 @@ export const EVENT_TYPES: Record<string, string> = {
   onTouchMove: 'ER_EVENT_TOUCH_MOVE',
   onTouchEnd: 'ER_EVENT_TOUCH_END',
   onLayout: 'ER_EVENT_LAYOUT',
+  onScroll: 'ER_EVENT_SCROLL',
 };
 
 /** Style keys every node lays out by, and `transform`, which every node draws through. */
@@ -191,13 +192,18 @@ const SVG_PAINT = [
   'strokeGradient',
 ];
 
+/** The events every host node takes; only a ScrollView scrolls. */
+const HOST_EVENTS = Object.keys(EVENT_TYPES).filter(
+  name => name !== 'onScroll',
+);
+
 /** The attributes every host node lowers: style, visibility, a node ref, and its events. */
 const HOST_PROPS = [
   'style',
   'visible',
   'ref',
   'delayLongPress',
-  ...Object.keys(EVENT_TYPES),
+  ...HOST_EVENTS,
 ];
 
 /** Why the engine's TextInput refuses a React Native prop it has no field for. */
@@ -220,12 +226,10 @@ const ELEMENTS: Record<string, ElementSpec> = {
   ),
   ScrollView: element(
     'ScrollView',
-    HOST_PROPS,
+    [...HOST_PROPS, 'onScroll'],
     [...LAYOUT_STYLE, ...VIEW_STYLE],
     'nodes',
     {
-      onScroll:
-        'scroll events are not lowered yet. Read the position another way, or keep this screen Flow A only.',
       horizontal:
         "the engine's ScrollView scrolls vertically; lay a horizontal strip out with flexDirection: 'row'.",
     },
@@ -434,9 +438,7 @@ const ELEMENTS: Record<string, ElementSpec> = {
     {
       visible:
         'wrap it: <View visible={…}><Svg …/></View> — the View carries the hide and the whole subtree goes with it.',
-      ...Object.fromEntries(
-        Object.keys(EVENT_TYPES).map(name => [name, SVG_EVENT]),
-      ),
+      ...Object.fromEntries(HOST_EVENTS.map(name => [name, SVG_EVENT])),
     },
   ),
 };

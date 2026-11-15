@@ -1213,6 +1213,32 @@ const SCENARIOS: Scenario[] = [
     taps: '82,48 182,48 182,48',
     flowA: true,
   },
+  // A scrollTo fires onScroll: the text and the indicator follow, and the header hides.
+  {
+    name: 'scroll-events-jump',
+    file: fixture('scroll-events'),
+    screen: PORTRAIT,
+    taps: '30,80',
+    flowA: true,
+  },
+  // A drag fires it on every step. Each drag runs past the end, where both flows stop.
+  {
+    name: 'scroll-events-dragged',
+    file: fixture('scroll-events'),
+    screen: PORTRAIT,
+    taps: '50,255>50,0',
+    settle: 1000,
+    flowA: true,
+  },
+  // The second list's handler is a useCallback.
+  {
+    name: 'scroll-events-strip',
+    file: fixture('scroll-events'),
+    screen: PORTRAIT,
+    taps: '168,255>168,0',
+    settle: 1000,
+    flowA: true,
+  },
   {name: 'flat-list', file: fixture('flat-list'), screen: PORTRAIT},
   // A row added, then a press on it.
   {

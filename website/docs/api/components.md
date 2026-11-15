@@ -129,6 +129,11 @@ screen.
 | ---------- | ------------- | ---------------------------------- |
 | `onScroll` | `(e) => void` | `e.scrollX`, `e.scrollY` in pixels |
 
+`onScroll` fires on every step of a drag or fling, and when `scrollTo` moves the content, so keep its handler
+small.
+
+**Flow B:** an `onScroll` handler reads `e.scrollX` and `e.scrollY` only, and a `useCallback` works as one.
+
 To scroll from code, pass a ref's handle to [`scrollTo`](#imperative-updates):
 
 ```jsx

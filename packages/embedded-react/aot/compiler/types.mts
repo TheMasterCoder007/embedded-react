@@ -444,6 +444,8 @@ export interface Env {
   event?: string | null;
   /** The handler is an onLayout handler, so its event carries the layout rect. */
   layout?: boolean;
+  /** The handler is an onScroll handler, so its event carries the scroll offset and no touch. */
+  scroll?: boolean;
   /** A PanResponder callback's gestureState parameter, and the responder it belongs to. */
   gesture?: string | null;
   pan?: PanResponderRecord | null;

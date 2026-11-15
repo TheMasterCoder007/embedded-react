@@ -17,6 +17,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Engine: `er_scroll_view_get_offset()` reads a ScrollView's offset and scroll range.
 - `scrollTo(handle, {x, y})` scrolls a ScrollView from a ref and returns where it landed, in both flows. Packages
   are now format minor 16.
+- Flow B: `onScroll` on a ScrollView, with `e.scrollX` and `e.scrollY`.
 
 ### Changed
 

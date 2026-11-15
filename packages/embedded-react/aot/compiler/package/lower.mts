@@ -1216,8 +1216,8 @@ function constantProps(node: IrNode, lowering: Lowering): ProgramPropEntry[] {
 
 /**
  * The handler function an event on a node runs, made the first time. A handler bound to two events is one
- * function per event, since a function's kind is the event it is entered with, and an onChangeText one per
- * input, since it reads its own. Each row has its own handler; rows whose handlers have the same
+ * function per event, since a function's kind is the event it is entered with, an onChangeText one per
+ * input, since it reads its own, and an onScroll one per ScrollView. Each row has its own handler; rows whose handlers have the same
  * code share one function, so they can share a template.
  *
  * @param name  The handler.
@@ -1256,6 +1256,8 @@ function handlerFunction(
     throw new Error(`AOT internal: no handler for "${name}"`);
   }
   const readsInput = eventName === 'ER_EVENT_CHANGE_TEXT';
+  // One per ScrollView, in a row too, so the runtime can tell whose scroll is waiting.
+  const scrolls = eventName === 'ER_EVENT_SCROLL';
   const made: Omit<HandlerFunction, 'index'> = {
     callback: then?.callback ?? {body: [], updatesState: false},
     fade: handler.kind === 'pressFade' ? handler.fade : null,
@@ -1268,8 +1270,8 @@ function handlerFunction(
   };
   // Compared by code alone, so where each handler is in the source doesn't keep two apart.
   const key = inRow
-    ? `row ${JSON.stringify({...handlerBody({...made, index: NONE}, lowering), debug: undefined})}`
-    : `${name} ${eventName}${readsInput ? ` ${node.id}` : ''}`;
+    ? `row ${scrolls ? `${node.id} ` : ''}${JSON.stringify({...handlerBody({...made, index: NONE}, lowering), debug: undefined})}`
+    : `${name} ${eventName}${readsInput || scrolls ? ` ${node.id}` : ''}`;
   const existing = lowering.handlers.get(key);
   if (existing) {
     return existing.index;
@@ -2822,6 +2824,20 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
       ),
     );
     lowering.slots.arena.eventQueue(animations.entries + 2 * ends);
+  }
+  // A scrollTo in a function fires onScroll, which waits in the queue until the function ends. The runtime keeps
+  // one waiting event per ScrollView, and each scrollTo scrolls one, so a loop needs no more room.
+  if (
+    functions.some(
+      programFunction =>
+        programFunction.kind === ENGINE_VALUES.get('ER_EVENT_SCROLL'),
+    )
+  ) {
+    let scrolls = 0;
+    for (const programFunction of functions) {
+      scrolls += countOps(programFunction, ['SCROLL']);
+    }
+    lowering.slots.arena.eventQueue(scrolls);
   }
   const {regions, bytes} = lowering.slots.arena.regions(stackCells(functions));
 

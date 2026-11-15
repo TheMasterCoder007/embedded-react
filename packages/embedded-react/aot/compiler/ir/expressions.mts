@@ -76,6 +76,8 @@ export type EventField =
   | 'dy'
   | 'vx'
   | 'vy'
+  | 'scrollX'
+  | 'scrollY'
   | 'value'
   | 'value_start'
   | 'changed_text';
@@ -161,7 +163,7 @@ export interface IrItemPresent extends IrTyped {
   fields: ItemField[];
 }
 
-/** A touch field of the handler's event (`e.x`, `e.vx` …). */
+/** A touch or scroll field of the handler's event (`e.x`, `e.vx`, `e.scrollY` …). */
 export interface IrEvent extends IrTyped {
   kind: 'event';
   field: EventField;
