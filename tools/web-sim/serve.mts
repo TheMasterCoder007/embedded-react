@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-// serve.mjs — minimal static server for the WASM simulator host page.
+// serve.mts — minimal static server for the WASM simulator host page.
 //
-//   node tools/web-sim/serve.mjs [--port 3333]
+//   node tools/web-sim/serve.mts [--port 3333]
 //
 // Serves tools/web-sim/ with the correct application/wasm MIME so the browser streams + compiles the
 // module. W3 grows this into the dev server (esbuild watch + websocket hot-reload). For now it is just a
@@ -35,7 +35,7 @@ const DEFAULT_PORT = 3333;
 const PORT =
   portIndex >= 0 ? parseInt(process.argv[portIndex + 1], 10) : DEFAULT_PORT;
 
-const MIME = {
+const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -47,7 +47,7 @@ const MIME = {
 const server = createServer(async (request, response) => {
   try {
     const urlPath = decodeURIComponent(
-      new URL(request.url, 'http://localhost').pathname,
+      new URL(request.url!, 'http://localhost').pathname,
     );
     const relativePath =
       urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
@@ -70,5 +70,5 @@ const server = createServer(async (request, response) => {
 
 server.listen(PORT, () => {
   console.log(`embedded-react WASM sim → http://localhost:${PORT}/`);
-  console.log('(build first with: node tools/web-sim/build.mjs)');
+  console.log('(build first with: node tools/web-sim/build.mts)');
 });

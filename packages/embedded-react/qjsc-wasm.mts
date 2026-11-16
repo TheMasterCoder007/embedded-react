@@ -60,7 +60,7 @@ export async function compileToBytecode(
   const loader = resolve(simDir, 'embedded-react.cjs');
   if (!existsSync(loader)) {
     throw new Error(
-      `prebuilt simulator module not found at ${loader} (a published package ships it; from source run tools/web-sim/build.mjs)`,
+      `prebuilt simulator module not found at ${loader} (a published package ships it; from source run tools/web-sim/build.mts)`,
     );
   }
   const require = createRequire(import.meta.url);

@@ -48,7 +48,7 @@ const executable = resolve(
 
 if (!existsSync(resolve(simDirectory, 'embedded-react.cjs'))) {
   console.error(
-    `Prebuilt sim wasm not found at ${simDirectory}/embedded-react.cjs\n  Build it: node tools/web-sim/build.mjs`,
+    `Prebuilt sim wasm not found at ${simDirectory}/embedded-react.cjs\n  Build it: node tools/web-sim/build.mts`,
   );
   process.exit(2);
 }

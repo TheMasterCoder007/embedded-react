@@ -21,7 +21,7 @@
 // files once for a static export (buildApp). useState survives a hot reload via the Babel persist transform.
 //
 // Used by the consumer CLI (cli.mts → `npx embedded-react dev` / `export`) and the repo dev loop
-// (tools/web-sim/dev.mjs). The only differences are paths, passed in here.
+// (tools/web-sim/dev.mts). The only differences are paths, passed in here.
 
 import {createServer} from 'node:http';
 import type {Server, ServerResponse} from 'node:http';

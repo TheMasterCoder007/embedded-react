@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+// @ts-check
+
 // sync-templates.mjs — stage the repo's demo apps (../demos) into this package's templates/ so they ship
 // as `create-embedded-react --template <name>` starters. npm can only publish files INSIDE the package
 // dir, and the demos live at the repo root, so they must be COPIED in. templates/ is generated (gitignored)
@@ -58,7 +60,12 @@ const SKIP_DIRS = new Set([
 ]);
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
 
-/** Recursively copy src → dst, skipping build/junk and renaming .gitignore → gitignore for publish. */
+/**
+ * Recursively copy src → dst, skipping build/junk and renaming .gitignore → gitignore for publish.
+ *
+ * @param {string} source
+ * @param {string} destination
+ */
 function copyDir(source, destination) {
   mkdirSync(destination, {recursive: true});
   for (const name of readdirSync(source)) {
@@ -79,6 +86,9 @@ function copyDir(source, destination) {
 /**
  * Copies in the packages a demo depends on by a `file:` path outside its folder, such as the watch face's device
  * package, and points the template's package.json at the copies.
+ *
+ * @param {string} demoDirectory
+ * @param {string} templateDirectory
  */
 function stageLocalPackages(demoDirectory, templateDirectory) {
   const manifestPath = join(templateDirectory, 'package.json');

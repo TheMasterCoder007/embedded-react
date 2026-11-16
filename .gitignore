@@ -31,7 +31,7 @@ node_modules/
 # WASM simulator build output — the .wasm/.js are built (locally or by CI) and shipped prebuilt in the
 # npm package, never committed (mirrors how dist/ is handled). See tools/web-sim/README.md.
 tools/web-sim/public/
-# Prebuilt sim assets staged into the npm package by build.mjs (shipped via the package's files whitelist).
+# Prebuilt sim assets staged into the npm package by build.mts (shipped via the package's files whitelist).
 packages/embedded-react/sim/
 
 # OS

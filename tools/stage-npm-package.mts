@@ -15,7 +15,7 @@
  */
 
 /*
- * stage-npm-package.mjs — copy the embedded-react npm package into packages/embedded-react/dist/npm-package with
+ * stage-npm-package.mts — copy the embedded-react npm package into packages/embedded-react/dist/npm-package with
  * its TypeScript compiled to JavaScript, ready for `npm pack <dir>` / `npm publish <dir>`.
  *
  * Part of the package is written in TypeScript (.mts). In the repo Node runs those files directly by
@@ -23,7 +23,7 @@
  * package lives. So the published package ships JavaScript: each .mts file becomes a .mjs file, and every
  * relative import of a .mts file is rewritten to name the .mjs. So are the `bin` and `files` of its package.json.
  *
- *   node tools/stage-npm-package.mjs      prints the staged directory
+ *   node tools/stage-npm-package.mts      prints the staged directory
  *
  * Needs the package's dev dependencies installed (npm ci in packages/embedded-react) for the TypeScript compiler.
  */
@@ -48,8 +48,14 @@ export const STAGE = resolve(PACKAGE_DIR, 'dist/npm-package');
 
 const MODULE_FILE = /\.(m?js|mts)$/;
 
+type TypeScript = typeof import('typescript');
+
 /** The source with each relative import of a .mts file pointed at its .mjs. */
-function retargetImports(typescript, source, fileName) {
+function retargetImports(
+  typescript: TypeScript,
+  source: string,
+  fileName: string,
+): string {
   // preProcessFile is TypeScript's own import scanner: static imports, re-exports and import() calls.
   const {importedFiles} = typescript.preProcessFile(source, true, true);
   let result = source;
@@ -81,12 +87,12 @@ function retargetImports(typescript, source, fileName) {
 }
 
 /** Stages the package and returns the directory. */
-export function stageNpmPackage() {
-  const typescript = createRequire(join(PACKAGE_DIR, 'package.json'))(
-    'typescript',
-  );
+export function stageNpmPackage(): string {
+  const typescript: TypeScript = createRequire(
+    join(PACKAGE_DIR, 'package.json'),
+  )('typescript');
   // Exactly the files `npm pack` would ship (the `files` whitelist, plus package.json, README, LICENSE).
-  const [{files}] = JSON.parse(
+  const [{files}]: [{files: {path: string}[]}] = JSON.parse(
     execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
       cwd: PACKAGE_DIR,
       encoding: 'utf8',
@@ -139,8 +145,10 @@ export function stageNpmPackage() {
 
   // The staged package.json names the compiled files, so `npm pack` ships them and the bin runs.
   const manifestPath = join(STAGE, 'package.json');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  const compiledName = name => name.replace(/\.mts$/, '.mjs');
+  const manifest: {bin: Record<string, string>; files: string[]} = JSON.parse(
+    readFileSync(manifestPath, 'utf8'),
+  );
+  const compiledName = (name: string) => name.replace(/\.mts$/, '.mjs');
   manifest.bin = Object.fromEntries(
     Object.entries(manifest.bin).map(([command, file]) => [
       command,

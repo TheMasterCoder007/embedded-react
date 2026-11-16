@@ -19,7 +19,7 @@
  *
  * The repo ships LOCKSTEP: the engine, the `embedded-react` npm package, the
  * ESP-IDF component, and the PlatformIO library all share ONE version. The SINGLE SOURCE OF TRUTH is the
- * repo-root `VERSION` file; this header is regenerated from it by `tools/sync-version.mjs`
+ * repo-root `VERSION` file; this header is regenerated from it by `tools/sync-version.mts`
  * (`npm run version:sync`). DO NOT EDIT BY HAND — bump VERSION and re-sync instead.
  *
  * A Flow B package carries its own format version, which the runtime checks when it loads the package.

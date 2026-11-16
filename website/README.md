@@ -11,6 +11,6 @@ npm run typecheck
 ```
 
 `docs/changelog.md` and `docs/roadmap.md` are generated from the repo-root `CHANGELOG.md` and `ROADMAP.md`
-before every start/build (`scripts/sync-repo-docs.mjs`) and are not committed. Edit the root files.
+before every start/build (`scripts/sync-repo-docs.mts`) and are not committed. Edit the root files.
 
 Pages live in `docs/`, the sidebar order in `sidebars.ts`, and site-wide settings in `docusaurus.config.ts`.

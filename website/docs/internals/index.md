@@ -17,7 +17,7 @@ rules that keep the engine portable.
   conventions learned from the four backends that run on hardware.
 - [Testing](./testing.md): engine CTest suites, the bridge's unit, runtime and bytecode tiers, the
   AOT smoke tests, the parity harness, and what CI runs.
-- [Releasing](./releasing.md): one lockstep version, `release.mjs`, the tag-gated publish workflow,
+- [Releasing](./releasing.md): one lockstep version, `release.mts`, the tag-gated publish workflow,
   and how the docs site follows a release.
 - [Contributing](./contributing.md): the engine invariants, documentation conventions, and code
   style.

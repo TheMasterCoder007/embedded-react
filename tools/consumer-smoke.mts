@@ -15,18 +15,18 @@
  */
 
 /*
- * consumer-smoke.mjs — pack the npm package, install it into a throwaway project, and run the consumer
+ * consumer-smoke.mts — pack the npm package, install it into a throwaway project, and run the consumer
  * build commands. This guards the bugs the repo's own tests can't see, because they only surface once the
  * package is PACKED and INSTALLED elsewhere: a file missing from the `files` whitelist, ESM-vs-CJS module
  * resolution, and the QuickJS bytecode compile through the prebuilt wasm. (Every consumer regression this
  * project hit — persist-transform recursion, the missing `.cjs`, the un-terminated bytecode buffer — would
  * have been caught here.)
  *
- *   node tools/consumer-smoke.mjs
+ *   node tools/consumer-smoke.mts
  *
  * Flow A (app.erpkg) runs only when the prebuilt sim wasm is present (build it first with
- * tools/web-sim/build.mjs); the AOT path (a Flow B app.erpkg) and the TypeScript-template typecheck always run.
- * Packs the staged package (tools/stage-npm-package.mjs), so it needs `npm ci` in packages/embedded-react.
+ * tools/web-sim/build.mts); the AOT path (a Flow B app.erpkg) and the TypeScript-template typecheck always run.
+ * Packs the staged package (tools/stage-npm-package.mts), so it needs `npm ci` in packages/embedded-react.
  * Exits non-zero on any failure.
  */
 
@@ -41,25 +41,25 @@ import {
 import {tmpdir} from 'node:os';
 import {resolve, dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {stageNpmPackage} from './stage-npm-package.mjs';
+import {stageNpmPackage} from './stage-npm-package.mts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const PACKAGE_DIR = resolve(ROOT, 'packages/embedded-react');
 const SCAFFOLDER_DIR = resolve(ROOT, 'create-embedded-react');
 
-const run = (command, args, cwd) =>
+const run = (command: string, args: string[], cwd: string) =>
   execFileSync(command, args, {
     stdio: 'inherit',
     cwd,
     shell: process.platform === 'win32',
   });
-const capture = (command, args, cwd) =>
+const capture = (command: string, args: string[], cwd: string) =>
   execFileSync(command, args, {
     encoding: 'utf8',
     cwd,
     shell: process.platform === 'win32',
   });
-const ok = (condition, message) => {
+const ok = (condition: boolean, message: string) => {
   console.log(`${condition ? '✓' : '✗'} ${message}`);
   if (!condition) process.exitCode = 1;
 };
@@ -111,7 +111,7 @@ if (hasWasm) {
   );
 } else {
   console.log(
-    '• skipping Flow A — no prebuilt wasm (run node tools/web-sim/build.mjs to include it)',
+    '• skipping Flow A — no prebuilt wasm (run node tools/web-sim/build.mts to include it)',
   );
 }
 
@@ -191,7 +191,9 @@ ok(
 const scaffolderPack = JSON.parse(
   capture('npm', ['pack', '--dry-run', '--json'], SCAFFOLDER_DIR),
 )[0];
-const scaffolderFiles = (scaffolderPack.files || []).map(entry => entry.path);
+const scaffolderFiles: string[] = (scaffolderPack.files || []).map(
+  (entry: {path: string}) => entry.path,
+);
 ok(
   scaffolderFiles.some(path => path.startsWith('template-typescript/')),
   'create-embedded-react publishes the TypeScript template (files whitelist)',
@@ -249,7 +251,7 @@ if (hasWasm) {
 //     prepack (sync-templates), so the staged files appear in scaffolderFiles; forgetting `templates/` in the scaffolder's
 //     "files" ships a scaffolder whose --template demos are missing.
 ok(
-  scaffolderFiles.some(p => p.startsWith('templates/thermostat/')),
+  scaffolderFiles.some(path => path.startsWith('templates/thermostat/')),
   'create-embedded-react publishes the thermostat demo template (files whitelist)',
 );
 

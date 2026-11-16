@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-// dev.mjs — the repo's WASM-simulator dev loop over the bundled demos (demos/<demo>).
+// dev.mts — the repo's WASM-simulator dev loop over the bundled demos (demos/<demo>).
 //
-//   node tools/web-sim/dev.mjs [demo] [--port 3333]
+//   node tools/web-sim/dev.mts [demo] [--port 3333]
 //
 // A thin wrapper over the shared dev server (packages/embedded-react/sim-server.mts) — the same core the shipped
 // `npx embedded-react dev` CLI uses — pointed at a repo demo + the locally built module in public/. Build the
-// module once first: `node tools/web-sim/build.mjs`. See tools/web-sim/README.md.
+// module once first: `node tools/web-sim/build.mts`. See tools/web-sim/README.md.
 
 import {existsSync} from 'node:fs';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -44,22 +44,20 @@ const demo =
   'watch-face';
 
 const demoDir = resolve(REPO, 'demos', demo);
-const {demoFile} = await import(
-  pathToFileURL(resolve(PACKAGE_DIR, 'aot/demo-file.mts')).href
-);
+const {demoFile} =
+  await import('../../packages/embedded-react/aot/demo-file.mts');
 const entry = demoFile(demoDir, 'index');
 if (!existsSync(entry)) {
   console.error(`Demo "${demo}" not found (expected ${entry}).`);
   process.exit(1);
 }
 if (!existsSync(resolve(PUBLIC, 'embedded-react.wasm'))) {
-  console.error('No built module — run `node tools/web-sim/build.mjs` first.');
+  console.error('No built module — run `node tools/web-sim/build.mts` first.');
   process.exit(1);
 }
 
-const {runDevServer} = await import(
-  pathToFileURL(resolve(PACKAGE_DIR, 'sim-server.mts')).href
-);
+const {runDevServer} =
+  await import('../../packages/embedded-react/sim-server.mts');
 
 await runDevServer({
   entry,

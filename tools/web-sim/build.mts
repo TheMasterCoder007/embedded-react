@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-// build.mjs — compile embedded-react.{js,wasm} via Emscripten + CMake.
+// build.mts — compile embedded-react.{js,wasm} via Emscripten + CMake.
 //
-//   node tools/web-sim/build.mjs            configure (if needed) + build to tools/web-sim/public/
-//   node tools/web-sim/build.mjs --debug    Debug build (-O0 -g, assertions)
-//   node tools/web-sim/build.mjs --clean    wipe the CMake build dir first
+//   node tools/web-sim/build.mts            configure (if needed) + build to tools/web-sim/public/
+//   node tools/web-sim/build.mts --debug    Debug build (-O0 -g, assertions)
+//   node tools/web-sim/build.mts --clean    wipe the CMake build dir first
 //
 // Uses the CMake project in tools/web-sim/CMakeLists.txt, which reuses bridges/quickjs (engine + QuickJS-ng +
 // er_runtime + bridge) so the module runs Flow A (QuickJS inside WASM). The .wasm is app-agnostic — built once
@@ -47,8 +47,8 @@ const debug = process.argv.includes('--debug');
 const clean = process.argv.includes('--clean');
 const buildType = debug ? 'Debug' : 'Release';
 
-const run = cmd => execSync(cmd, {stdio: 'inherit', cwd: HERE});
-const has = command => {
+const run = (cmd: string) => execSync(cmd, {stdio: 'inherit', cwd: HERE});
+const has = (command: string) => {
   try {
     execSync(
       process.platform === 'win32'
@@ -65,7 +65,7 @@ const has = command => {
 };
 
 /** Pick a generator that doesn't need MSVC: Ninja if present, else MinGW Makefiles on Windows, else default. */
-function pickGenerator() {
+function pickGenerator(): string | null {
   if (has('ninja')) return 'Ninja';
   if (process.platform === 'win32') return 'MinGW Makefiles';
   return null; // CMake default (Unix Makefiles on Linux/macOS)
@@ -75,7 +75,7 @@ function pickGenerator() {
 const TOOLCHAIN_RELATIVE_PATH = 'cmake/Modules/Platform/Emscripten.cmake';
 
 /** Resolve symlinks where we can; a path that doesn't exist comes back unchanged. */
-const real = filePath => {
+const real = (filePath: string) => {
   try {
     return realpathSync(filePath);
   } catch {
@@ -91,7 +91,7 @@ const real = filePath => {
  * `libexec/emcc`, so neither the PATH entry nor its realpath is the directory holding `cmake/`. Probe
  * the usual neighbors (emsdk's `upstream/emscripten`, Homebrew's `../libexec`) as well.
  */
-function toolchainNear(dir) {
+function toolchainNear(dir: string | null | undefined): string | null {
   if (!dir) return null;
   for (const base of new Set([dir, real(dir)])) {
     for (const candidate of [
@@ -108,7 +108,7 @@ function toolchainNear(dir) {
 }
 
 /** First non-empty line of `cmd`'s stdout, or null if it fails. */
-function firstLine(cmd) {
+function firstLine(cmd: string): string | null {
   try {
     const output = execSync(cmd, {
       encoding: 'utf8',
@@ -126,7 +126,7 @@ function firstLine(cmd) {
  * Locate the Emscripten CMake toolchain file: $EMSCRIPTEN_ROOT (explicit override), then the emsdk
  * layout under $EMSDK, then emcc's own idea of its root, then `emcc` on PATH.
  */
-function findToolchain() {
+function findToolchain(): string | null {
   const forced = process.env.EMSCRIPTEN_ROOT;
   if (forced) {
     const toolchainPath = toolchainNear(forced);
@@ -163,7 +163,7 @@ if (!toolchain) {
     'Install + activate emsdk: https://emscripten.org/docs/getting_started/downloads.html',
   );
   console.error(
-    'Or point at an install you already have:  EMSCRIPTEN_ROOT="$(em-config EMSCRIPTEN_ROOT)" node tools/web-sim/build.mjs',
+    'Or point at an install you already have:  EMSCRIPTEN_ROOT="$(em-config EMSCRIPTEN_ROOT)" node tools/web-sim/build.mts',
   );
   process.exit(1);
 }
@@ -208,7 +208,7 @@ try {
     `cmake -S "${HERE}" -B "${BUILD_DIR}" ${generatorArg}-DCMAKE_TOOLCHAIN_FILE="${toolchainArg}" -DCMAKE_BUILD_TYPE=${buildType}`,
   );
   run(`cmake --build "${BUILD_DIR}" -j`);
-} catch (error) {
+} catch (error: any) {
   console.error('\nbuild failed (see output above).');
   process.exit(error.status || 1);
 }
@@ -216,7 +216,7 @@ try {
 // Stage a .cjs copy alongside the .js: the host page loads the .js as a classic <script>, but the npm
 // package is "type": "module", so Node would treat the .js as ESM and the emscripten CommonJS export
 // would never run. `embedded-react build` requires the .cjs (forced CommonJS) to compile bytecode in Node.
-const stage = dir => {
+const stage = (dir: string) => {
   copyFileSync(
     resolve(BUILD_DIR, 'embedded-react.js'),
     resolve(dir, 'embedded-react.js'),
@@ -246,5 +246,5 @@ console.log(
   '✓ built embedded-react.{js,wasm} → tools/web-sim/public/ + packages/embedded-react/sim/',
 );
 console.log(
-  '  repo preview: node tools/web-sim/dev.mjs [demo]   ·   consumer CLI: npx embedded-react dev',
+  '  repo preview: node tools/web-sim/dev.mts [demo]   ·   consumer CLI: npx embedded-react dev',
 );

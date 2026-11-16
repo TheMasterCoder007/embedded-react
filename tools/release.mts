@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-// release.mjs — cut a lockstep release in one step: bump VERSION → sync every artifact (manifests +
+// release.mts — cut a lockstep release in one step: bump VERSION → sync every artifact (manifests +
 // README pins) → stamp the CHANGELOG → commit → tag.
 //
-//   node tools/release.mjs 0.3.0             bump, sync, stamp changelog, commit "release: v0.3.0", tag v0.3.0
-//   node tools/release.mjs 0.3.0 --dry-run   print the plan; change nothing (no file writes, no git)
+//   node tools/release.mts 0.3.0             bump, sync, stamp changelog, commit "release: v0.3.0", tag v0.3.0
+//   node tools/release.mts 0.3.0 --dry-run   print the plan; change nothing (no file writes, no git)
 //
 // Then:  git push --follow-tags     → the release workflow gates (tag == VERSION) and publishes all channels.
 //
@@ -31,7 +31,7 @@ import {execFileSync} from 'node:child_process';
 import {readFileSync, writeFileSync, existsSync} from 'node:fs';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve} from 'node:path';
-import {missingTargets, versionedFiles} from './sync-version.mjs';
+import {missingTargets, versionedFiles} from './sync-version.mts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -48,10 +48,10 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  * @return true if the file was changed.
  */
 export function stampChangelog(
-  version,
-  date,
+  version: string,
+  date: string,
   changelogPath = resolve(ROOT, 'CHANGELOG.md'),
-) {
+): boolean {
   if (!existsSync(changelogPath)) return false;
   let text = readFileSync(changelogPath, 'utf8');
   const escapedVersion = version.replace(/\./g, '\\.');
@@ -87,29 +87,29 @@ async function main() {
   const version = args.find(arg => /^\d+\.\d+\.\d+$/.test(arg));
   if (!version) {
     console.error(
-      'usage: node tools/release.mjs <MAJOR.MINOR.PATCH> [--dry-run]',
+      'usage: node tools/release.mts <MAJOR.MINOR.PATCH> [--dry-run]',
     );
     process.exit(2);
   }
   const tag = `v${version}`;
   const date = new Date().toISOString().slice(0, 10);
 
-  // The files the version bump touches (sync-version.mjs writes these) + the changelog. Added explicitly
+  // The files the version bump touches (sync-version.mts writes these) + the changelog. Added explicitly
   // (never `git add -A`) so unrelated working-tree changes are never swept into the release commit.
   const FILES = versionedFiles();
 
-  const git = (...gitArgs) =>
+  const git = (...gitArgs: string[]) =>
     execFileSync('git', gitArgs, {cwd: ROOT, stdio: 'inherit'});
-  const gitOut = (...gitArgs) =>
+  const gitOut = (...gitArgs: string[]) =>
     execFileSync('git', gitArgs, {cwd: ROOT, encoding: 'utf8'}).trim();
-  const gitTry = (...gitArgs) => {
+  const gitTry = (...gitArgs: string[]) => {
     try {
       return gitOut(...gitArgs);
     } catch {
       return '';
     }
   };
-  const node = (...nodeArgs) =>
+  const node = (...nodeArgs: string[]) =>
     execFileSync(process.execPath, nodeArgs, {cwd: ROOT, stdio: 'inherit'});
 
   // Preconditions (checked even in dry-run so the preview is honest).
@@ -148,7 +148,7 @@ async function main() {
   const missing = missingTargets();
   if (missing.length) {
     console.error(
-      `listed in tools/sync-version.mjs but not found: ${missing.join(', ')}`,
+      `listed in tools/sync-version.mts but not found: ${missing.join(', ')}`,
     );
     process.exit(1);
   }
@@ -170,7 +170,7 @@ async function main() {
     process.exit(0);
   }
 
-  node(resolve(ROOT, 'tools/sync-version.mjs'), '--set', version); // 1. bump + sync (VERSION, manifests, README)
+  node(resolve(ROOT, 'tools/sync-version.mts'), '--set', version); // 1. bump + sync (VERSION, manifests, README)
   const stamped = stampChangelog(version, date); // 2. promote the changelog's Unreleased section
   git('add', ...FILES, ...(stamped ? ['CHANGELOG.md'] : [])); // 3. stage only the version files (+ changelog)
   // 4. Commit the bump — unless nothing is staged (re-tagging the already-released current commit).
@@ -188,7 +188,7 @@ async function main() {
   );
 }
 
-// Run only when invoked directly (`node tools/release.mjs ...`), not when imported (e.g. by a test).
+// Run only when invoked directly (`node tools/release.mts ...`), not when imported (e.g. by a test).
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
