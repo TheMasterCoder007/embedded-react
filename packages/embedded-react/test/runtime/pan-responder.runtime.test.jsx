@@ -21,9 +21,9 @@
 // rejected, and multi-finger touches fold into one gesture.
 //
 // Touches come from the runner's __touch(phase, x, y[, finger]): 0 down / 1 move / 2 up / 3 cancel.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, ScrollView, PanResponder} from 'embedded-react';
-import {NativeUI} from '../../src/native-ui.js';
+import {NativeUI} from '../../src/native-ui.mts';
 import {check, report} from './harness.js';
 
 const root = createRoot({width: screen.width, height: screen.height});

@@ -1,0 +1,254 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {describe, it, expect} from 'vitest';
+import {
+  buildProps,
+  flattenStyle,
+  isEventProp,
+  PASSTHROUGH,
+  resolveImageSource,
+} from '../props.mts';
+
+describe('flattenStyle', () => {
+  it('merges a plain style object', () => {
+    const output = {};
+    flattenStyle({width: 10, height: 20}, output);
+    expect(output).toEqual({width: 10, height: 20});
+  });
+
+  it('flattens nested arrays, later entries winning', () => {
+    const output = {};
+    flattenStyle([{a: 1}, [{b: 2}, {a: 3}]], output);
+    expect(output).toEqual({a: 3, b: 2});
+  });
+
+  it('ignores null / undefined / false', () => {
+    const output = {};
+    flattenStyle(null, output);
+    flattenStyle(undefined, output);
+    flattenStyle(false, output);
+    expect(output).toEqual({});
+  });
+});
+
+describe('buildProps', () => {
+  it('flattens style into the flat bag', () => {
+    expect(buildProps('View', {style: {width: 10, height: 20}})).toEqual({
+      width: 10,
+      height: 20,
+    });
+  });
+
+  it('copies passthrough props alongside style', () => {
+    expect(
+      buildProps('Image', {style: {width: 5}, resizeMode: 'cover'}),
+    ).toEqual({
+      width: 5,
+      resizeMode: 'cover',
+    });
+  });
+
+  it('does not copy unknown top-level props', () => {
+    expect(
+      buildProps('View', {style: {}, foo: 'bar', onPress: () => {}}),
+    ).toEqual({});
+  });
+
+  it('honors <Svg width/height> as direct props (react-native-svg convention, Flow A↔B parity)', () => {
+    expect(buildProps('Svg', {width: 180, height: 180})).toEqual({
+      width: 180,
+      height: 180,
+    });
+  });
+
+  it('does not treat width/height as direct props on a non-Svg element', () => {
+    expect(buildProps('View', {width: 180, height: 180})).toEqual({});
+  });
+
+  it('an explicit style width/height wins over the <Svg> direct prop', () => {
+    expect(
+      buildProps('Svg', {width: 180, height: 180, style: {width: 200}}),
+    ).toEqual({
+      width: 200,
+      height: 180,
+    });
+  });
+
+  it('passes a style display straight through (the subtree page-cache switch)', () => {
+    expect(buildProps('View', {style: {display: 'none'}})).toEqual({
+      display: 'none',
+    });
+  });
+
+  it('maps visible={false} on a non-Modal to display:none', () => {
+    expect(buildProps('View', {style: {}, visible: false})).toEqual({
+      display: 'none',
+    });
+  });
+
+  it('maps visible={true} on a non-Modal to display:flex', () => {
+    expect(buildProps('Pressable', {style: {}, visible: true})).toEqual({
+      display: 'flex',
+    });
+  });
+
+  it('an explicit style display wins over visible', () => {
+    expect(
+      buildProps('View', {style: {display: 'none'}, visible: true}),
+    ).toEqual({display: 'none'});
+  });
+
+  it("leaves visible alone on a <Modal> (it is that node's own show/hide prop)", () => {
+    expect(buildProps('Modal', {style: {}, visible: false})).toEqual({
+      visible: false,
+    });
+  });
+
+  it('forwards a <Modal backdropColor> prop, as Flow B and React Native take it', () => {
+    expect(
+      buildProps('Modal', {style: {}, visible: true, backdropColor: '#000000'}),
+    ).toEqual({visible: true, backdropColor: '#000000'});
+  });
+
+  it('forwards a <TextInput secureTextEntry> prop', () => {
+    expect(
+      buildProps('TextInput', {style: {}, value: 'pw', secureTextEntry: true}),
+    ).toEqual({value: 'pw', secureTextEntry: true});
+  });
+
+  it('resolves an <Image source> string to imageName', () => {
+    expect(buildProps('Image', {style: {}, source: 'wx_sun'})).toEqual({
+      imageName: 'wx_sun',
+    });
+  });
+
+  it('resolves an <Image source={{uri}}> to imageName', () => {
+    expect(buildProps('Image', {style: {}, source: {uri: 'logo'}})).toEqual({
+      imageName: 'logo',
+    });
+  });
+
+  it('an explicit imageName wins over source', () => {
+    expect(
+      buildProps('Image', {style: {}, imageName: 'a', source: 'b'}),
+    ).toEqual({imageName: 'a'});
+  });
+
+  it('ignores an unresolvable source (e.g. a numeric require id)', () => {
+    expect(buildProps('Image', {style: {}, source: 7})).toEqual({});
+  });
+
+  it('uses a string child as Text content', () => {
+    expect(buildProps('Text', {children: 'hi'})).toEqual({text: 'hi'});
+  });
+
+  it('stringifies a numeric Text child', () => {
+    expect(buildProps('Text', {children: 42})).toEqual({text: '42'});
+  });
+
+  it('does not set text for a non-Text node', () => {
+    expect(buildProps('View', {children: 'hi'})).toEqual({});
+  });
+
+  it('concatenates multi-child Text into the node text (interpolation)', () => {
+    expect(buildProps('Text', {children: ['a', 'b']})).toEqual({text: 'ab'});
+  });
+
+  it('PASSTHROUGH is a non-empty list of strings', () => {
+    expect(PASSTHROUGH.length).toBeGreaterThan(0);
+    expect(PASSTHROUGH.every(key => typeof key === 'string')).toBe(true);
+  });
+
+  it('an explicit flatStyle is used verbatim instead of re-flattening props.style', () => {
+    // host-config passes the style it already flattened (splitAnimatedStyle's output) to avoid a
+    // second recursive flattening per commit; buildProps must trust that value over props.style.
+    const viaStyle = buildProps('View', {style: [{width: 10}, {height: 20}]});
+    const viaFlatStyle = buildProps('View', {}, {width: 10, height: 20});
+    expect(viaFlatStyle).toEqual(viaStyle);
+
+    // props.style is ignored entirely when flatStyle is supplied — proves the flatten was skipped,
+    // not merely that the two happen to agree.
+    expect(buildProps('View', {style: {width: 999}}, {width: 10})).toEqual({
+      width: 10,
+    });
+  });
+
+  it('Text content flattens against the supplied flatStyle, not props.style', () => {
+    const viaStyle = buildProps('Text', {
+      style: {color: 'red'},
+      children: 'hi',
+    });
+    const viaFlatStyle = buildProps('Text', {children: 'hi'}, {color: 'red'});
+    expect(viaFlatStyle).toEqual(viaStyle);
+  });
+});
+
+describe('resolveImageSource', () => {
+  it('passes through a bare name string (also what the image import resolves to)', () => {
+    expect(resolveImageSource('wx_sun')).toBe('wx_sun');
+  });
+  it('reads { uri } objects', () => {
+    expect(resolveImageSource({uri: 'logo'})).toBe('logo');
+  });
+  it('returns null for unresolvable values', () => {
+    expect(resolveImageSource(null)).toBe(null);
+    expect(resolveImageSource(undefined)).toBe(null);
+    expect(resolveImageSource(42)).toBe(null);
+    expect(resolveImageSource({})).toBe(null);
+  });
+});
+
+describe('isEventProp', () => {
+  it('detects onPress with a function', () => {
+    expect(isEventProp('onPress', () => {})).toBe(true);
+  });
+
+  it('rejects on* with a non-function value', () => {
+    expect(isEventProp('onPress', 5)).toBe(false);
+  });
+
+  it('rejects keys whose third char is lowercase (e.g. "only")', () => {
+    expect(isEventProp('only', () => {})).toBe(false);
+  });
+
+  it('rejects short keys', () => {
+    expect(isEventProp('on', () => {})).toBe(false);
+  });
+});
+
+describe('<Dial> props', () => {
+  it('passes the arc widget props through and resolves a knobImage asset source', () => {
+    const output = buildProps('Dial', {
+      value: 7,
+      startAngle: 90,
+      sweepAngle: 180,
+      segments: 4,
+      cap: 'round',
+      knob: 'image',
+      knobImage: 'knob.png',
+    });
+    expect(output).toEqual({
+      value: 7,
+      startAngle: 90,
+      sweepAngle: 180,
+      segments: 4,
+      cap: 'round',
+      knob: 'image',
+      knobImage: 'knob.png',
+    });
+  });
+});

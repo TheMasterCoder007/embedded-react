@@ -18,7 +18,7 @@
 // present (the simulator's state preservation), and falls back to plain useState (the default) when
 // it isn't (a device). Mounts real React through the reconciler; "reload" is modeled as unmount +
 // remount, which re-runs the useState initializer just like a fresh context after a hot reload.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {usePersistentState, View} from 'embedded-react';
 import {check, report} from './harness.js';
 

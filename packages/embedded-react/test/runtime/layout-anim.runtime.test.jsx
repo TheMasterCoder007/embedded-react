@@ -20,7 +20,7 @@
 // NativeUI.hasPendingLayoutAnimation() reports a config armed for the *next* commit — true right
 // after configureNext(), then consumed (cleared) by the commit — and the final computed layout is
 // correct. We also confirm a layout change with no configureNext arms nothing.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {LayoutAnimation} from 'embedded-react';
 import {check, report} from './harness.js';

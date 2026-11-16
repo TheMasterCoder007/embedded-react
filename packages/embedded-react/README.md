@@ -71,7 +71,7 @@ build one of the apps in `demos/` against the in-repo library, `npm test` runs t
 
 ```
 src/embedded-react/   the public package surface (components, StyleSheet, Animated, PanResponder, hooks)
-src/host-config.js    the react-reconciler host config → NativeUI.* (the C bridge)
+src/host-config.mts   the react-reconciler host config → NativeUI.* (the C bridge)
 aot/                  the Flow B JSX→package compiler
 assets/               build-time bakers: images, fonts, SVG, the ERPK container writer
 cli.mts, sim-server.mts   the `embedded-react` CLI and the shared simulator dev server

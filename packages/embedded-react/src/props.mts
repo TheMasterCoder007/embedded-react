@@ -1,0 +1,368 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Pure prop-marshalling helpers. No engine / NativeUI dependency, so these are unit-testable in
+// plain Node (see src/__tests__/props.unit.test.ts). The host config wires them to NativeUI.
+
+import {parseBackgroundImage} from './embedded-react/background-image.mts';
+import type {BackgroundGradient} from './embedded-react/background-image.mts';
+
+/** A host element's props, or the flat bag of them the bridge takes. */
+export type HostProps = Record<string, any>;
+
+/** A flattened style. */
+export type Style = Record<string, any>;
+
+/** A run of a <Text>'s content and the style it draws in. */
+interface TextSegment {
+  text: string;
+  style: Style;
+}
+
+// Top-level props NativeUI understands directly (not part of `style`). Everything else style-ish is
+// expected inside props.style. Event handlers (on*) are routed separately via setEvent.
+export const PASSTHROUGH = [
+  'delayLongPress',
+  'numberOfLines',
+  'ellipsizeMode',
+  'value',
+  'placeholder',
+  'placeholderTextColor',
+  'editable',
+  'secureTextEntry',
+  'animating',
+  'visible',
+  'backdropColor', // <Modal>'s scrim, as React Native takes it (the style key works too)
+  'resizeMode',
+  'tintColor',
+  'imageName',
+  // Switch colours.
+  'trackColor',
+  'thumbColor',
+  // <Dial> (the native arc widget, ER_NODE_ARC).
+  'min',
+  'max',
+  'startAngle',
+  'sweepAngle',
+  'step',
+  'gapAngle',
+  'thickness',
+  'bandThickness',
+  'knobSize',
+  'knobBorderWidth',
+  'indicatorColor',
+  'bandColor',
+  'knobColor',
+  'knobBorderColor',
+  'segments',
+  'cap',
+  'knob',
+  'knobImage',
+  'adjustable',
+  'range',
+  'valueStart',
+  'minSpan',
+  'indicatorGradient',
+];
+
+/**
+ * Flattens RN-style `style` (object or nested array) into the `output` object.
+ */
+export function flattenStyle(style: unknown, output: Style): void {
+  if (!style) return;
+  if (Array.isArray(style)) {
+    for (const entry of style) flattenStyle(entry, output);
+  } else {
+    Object.assign(output, style);
+  }
+}
+
+/** Flattens a style (object/array) into a fresh plain object. */
+export function flattenStyleObj(style: unknown): Style {
+  const flattened: Style = {};
+  flattenStyle(style, flattened);
+  return flattened;
+}
+
+// Style fields the engine honors per inline text span (everything else inherits from the node).
+const SPAN_STYLE_KEYS = [
+  'color',
+  'fontSize',
+  'fontWeight',
+  'fontStyle',
+  'textDecorationLine',
+  'letterSpacing',
+];
+
+/**
+ * True when a <Text>'s children can be flattened inline — i.e. every leaf is a string/number or a
+ * nested <Text> element. A non-Text element (View, a component) makes it false, so the reconciler
+ * falls back to mounting children as separate instances.
+ */
+export function isTextContent(children: any): boolean {
+  if (children == null || children === false || children === true) return true;
+  if (typeof children === 'string' || typeof children === 'number') return true;
+  if (Array.isArray(children)) return children.every(isTextContent);
+  // A React element: only nested <Text> participates in inline flattening (type is the 'Text' tag).
+  if (children && children.props !== undefined) return children.type === 'Text';
+  return false;
+}
+
+/**
+ * Walks a <Text>'s children into an ordered list of { text, style } segments. Primitive siblings
+ * share the parent's (base) style object by reference; a nested <Text> with its own style produces
+ * a new merged style object. Adjacent segments with the same style reference are coalesced — so
+ * plain interpolation like `Hi {name}` collapses to a single segment (no spans needed).
+ */
+export function flattenTextChildren(
+  children: any,
+  baseStyle: Style,
+): TextSegment[] {
+  const segments: TextSegment[] = [];
+  const push = (text: string, style: Style) => {
+    if (text === '') return;
+    const last = segments[segments.length - 1];
+    if (last && last.style === style) last.text += text;
+    else segments.push({text, style});
+  };
+  const walk = (node: any, style: Style) => {
+    if (node == null || node === false || node === true) return;
+    if (typeof node === 'string' || typeof node === 'number') {
+      push(String(node), style);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, style);
+      return;
+    }
+    if (node && node.props !== undefined) {
+      // Nested <Text>: merge its style over the inherited one (new object only when it has style,
+      // so an unstyled nested <Text> keeps the same reference and still coalesces with siblings).
+      const merged = node.props.style
+        ? Object.assign({}, style, flattenStyleObj(node.props.style))
+        : style;
+      walk(node.props.children, merged);
+    }
+  };
+  walk(children, baseStyle);
+  return segments;
+}
+
+/**
+ * Builds the inline-span array for a <Text> (for NativeUI.setTextSpans). Returns [] when the content
+ * is uniformly the base style (plain text — no spans needed); otherwise one span per styled segment,
+ * each carrying only the span-relevant style keys (the engine inherits the rest from the node).
+ */
+export function buildTextSpans(
+  props: HostProps,
+  flatStyle?: Style,
+): HostProps[] {
+  if (!isTextContent(props.children)) return [];
+  const baseStyle = flatStyle || flattenStyleObj(props.style);
+  const segments = flattenTextChildren(props.children, baseStyle);
+  if (!segments.some(segment => segment.style !== baseStyle)) return [];
+  return segments.map(segment => {
+    const span: HostProps = {text: segment.text};
+    for (const key of SPAN_STYLE_KEYS) {
+      if (segment.style && segment.style[key] !== undefined)
+        span[key] = segment.style[key];
+    }
+    return span;
+  });
+}
+
+/**
+ * Builds the flat prop bag NativeUI.setProps expects: resolved style + passthrough props + text.
+ */
+/**
+ * Resolves an <Image source> to the engine asset name (the string registered via er_image_load and
+ * stored on the node as imageName). Accepts a bare name string — which is also what the bundler's
+ * image plugin turns `import logo from './logo.png'` into (the file's basename) — or an RN-style
+ * { uri } object. Returns null for anything unresolvable (e.g., a numeric require() id).
+ */
+export function resolveImageSource(source: any): string | null {
+  if (typeof source === 'string') return source;
+  if (source && typeof source === 'object' && typeof source.uri === 'string')
+    return source.uri;
+  return null;
+}
+
+// Gradient strings already read, and the problems already warned about.
+const backgroundImages = new Map<string, BackgroundGradient>();
+const BACKGROUND_IMAGES_MAX = 32;
+const backgroundProblems = new Set<string>();
+
+/**
+ * Reads a `backgroundImage` style into the gradient the bridge takes, or undefined (with one warning) for a
+ * value the engine does not draw.
+ */
+export function resolveBackgroundImage(
+  value: unknown,
+): BackgroundGradient | undefined {
+  const cached = typeof value === 'string' ? backgroundImages.get(value) : null;
+  if (cached) return cached;
+  const {gradient, problem} = parseBackgroundImage(value);
+  if (problem) {
+    if (!backgroundProblems.has(problem)) {
+      backgroundProblems.add(problem);
+      console.warn(`embedded-react: backgroundImage: ${problem}`);
+    }
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    if (backgroundImages.size >= BACKGROUND_IMAGES_MAX)
+      backgroundImages.clear();
+    backgroundImages.set(value, gradient!);
+  }
+  return gradient;
+}
+
+export function buildProps(
+  type: string,
+  props: HostProps,
+  flatStyle?: Style,
+): HostProps {
+  const flat: HostProps = flatStyle ? {...flatStyle} : {};
+  if (!flatStyle) flattenStyle(props.style, flat);
+  // A <Dial> keeps the engine's gradient fields for its indicatorGradient.
+  if (flat.backgroundImage != null) {
+    flat.backgroundImage =
+      type === 'Dial'
+        ? undefined
+        : resolveBackgroundImage(flat.backgroundImage);
+  }
+  for (const key of PASSTHROUGH) {
+    if (props[key] !== undefined) flat[key] = props[key];
+  }
+  // <Svg> takes width/height as DIRECT props (the react-native-svg convention) — the engine sizes the
+  // vector node from them. Fold them into the resolved style (an explicit style width/height still wins)
+  // so Flow A matches the Flow B AOT, which reads svg.props.width/height directly (aot/compiler/svg.mts emitSvgBox).
+  if (type === 'Svg') {
+    if (flat.width === undefined && props.width !== undefined)
+      flat.width = props.width;
+    if (flat.height === undefined && props.height !== undefined)
+      flat.height = props.height;
+  }
+  // <Image source={...}> resolves to the engine asset name unless imageName was set explicitly.
+  if (flat.imageName === undefined && props.source != null) {
+    const name = resolveImageSource(props.source);
+    if (name != null) flat.imageName = name;
+  }
+  // <Dial knobImage={require(...)}> takes an asset source like <Image source>; a plain string is an
+  // asset name already.
+  if (
+    type === 'Dial' &&
+    props.knobImage != null &&
+    typeof props.knobImage !== 'string'
+  ) {
+    const name = resolveImageSource(props.knobImage);
+    flat.knobImage = name != null ? name : undefined;
+  }
+  // `visible` is the Modal's own show/hide prop (it maps to ERProps.modal_visible). On every other
+  // component it used to be silently inert; it now means the same thing as `display`, so a subtree can
+  // be pruned from layout, raster and hit-testing without unmounting it. An explicit style `display`
+  // wins, so the two spellings can't disagree.
+  if (type !== 'Modal' && flat.visible !== undefined) {
+    if (flat.display === undefined)
+      flat.display = flat.visible ? 'flex' : 'none';
+    delete flat.visible;
+  }
+  // <Text> content: flatten string/number/nested-<Text> children into the node's full-text string.
+  // The engine renders this when no spans are set; with spans (buildTextSpans) it carries the same
+  // text for the plain-text fallback. Non-flattenable children fall back to mounted child instances.
+  if (type === 'Text' && isTextContent(props.children)) {
+    const baseStyle = flatStyle || flattenStyleObj(props.style);
+    flat.text = flattenTextChildren(props.children, baseStyle)
+      .map(segment => segment.text)
+      .join('');
+  }
+  return flat;
+}
+
+// Bail-out depth for deepEqualProps. Real host props are shallow (style ≈ 2 levels, a nested-<Text>
+// span or <Svg> shape tree ≈ 3 levels per element); anything deeper is pathological and bails to
+// "changed", whose worst case is a redundant re-apply — exactly the pre-diff behavior.
+const DEEP_EQUAL_MAX_DEPTH = 24;
+
+/**
+ * Deep value equality for host-prop diffing (the reconciler's prepareUpdate). Re-renders recreate
+ * prop objects every time, so identity alone can't tell "nothing changed" — this compares by value:
+ * primitives via Object.is, arrays elementwise, React elements by type and props (keys don't affect a
+ * flattened <Text>/<Svg> subtree's output), and plain objects key-by-key. Class instances (e.g.,
+ * Animated.Value) compare by IDENTITY only: a fresh instance must read as changed, so it gets bound
+ * to the node, while the same instance is already bound and can be skipped.
+ */
+export function deepEqualProps(left: any, right: any, depth = 0): boolean {
+  if (Object.is(left, right)) return true;
+  if (depth >= DEEP_EQUAL_MAX_DEPTH) return false;
+  if (
+    typeof left !== 'object' ||
+    typeof right !== 'object' ||
+    left === null ||
+    right === null
+  )
+    return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (
+      !Array.isArray(left) ||
+      !Array.isArray(right) ||
+      left.length !== right.length
+    )
+      return false;
+    for (let index = 0; index < left.length; index++) {
+      if (!deepEqualProps(left[index], right[index], depth + 1)) return false;
+    }
+    return true;
+  }
+  // React elements: equal when they render the same host output — same type, same props.
+  if (left.$$typeof !== right.$$typeof) return false;
+  if (left.$$typeof !== undefined) {
+    return (
+      left.type === right.type &&
+      deepEqualProps(left.props, right.props, depth + 1)
+    );
+  }
+  // Plain objects only; class instances fall through to "changed" (identity already ruled equal out).
+  const leftPrototype = Object.getPrototypeOf(left);
+  const rightPrototype = Object.getPrototypeOf(right);
+  if (
+    (leftPrototype !== null && leftPrototype !== Object.prototype) ||
+    (rightPrototype !== null && rightPrototype !== Object.prototype)
+  )
+    return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (const key of leftKeys) {
+    if (!Object.prototype.hasOwnProperty.call(right, key)) return false;
+    if (!deepEqualProps(left[key], right[key], depth + 1)) return false;
+  }
+  return true;
+}
+
+/**
+ * True for an `onXxx` prop whose value is a function (an event handler to route via setEvent).
+ */
+export function isEventProp(key: string, value: unknown): boolean {
+  return (
+    key.length > 2 &&
+    key[0] === 'o' &&
+    key[1] === 'n' &&
+    key[2] >= 'A' &&
+    key[2] <= 'Z' &&
+    typeof value === 'function'
+  );
+}

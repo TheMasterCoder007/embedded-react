@@ -21,7 +21,7 @@
 // @runtime-stderr: createNode: node pool full, raise ERUI_MAX_NODES
 // @runtime-stderr: createNode: node pool full, raise ERUI_MAX_NODES
 // @runtime-stderr: createNode: node pool full, raise ERUI_MAX_NODES
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

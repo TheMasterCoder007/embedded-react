@@ -27,7 +27,7 @@ import {nativeMockFiles, readNativeFiles} from '../compiler/native-files.mts';
 import {
   nativeModule,
   useNativeEvent,
-} from '../../src/embedded-react/nativeModule.js';
+} from '../../src/embedded-react/nativeModule.mts';
 
 // Native modules in Flow A: the bundler gives nativeModule() each method's and event's signature, and nativeModule()
 // looks each one up in the bridge's __erNative, or in the simulators runs the module's mock. Whether the bridge calls
@@ -84,7 +84,7 @@ async function mount(element: unknown) {
     {},
     {get: () => () => 0},
   );
-  const {hostConfig} = await import('../../src/host-config.js');
+  const {hostConfig} = await import('../../src/host-config.mts');
   const reconciler = Reconciler(hostConfig as never);
   const root = reconciler.createContainer(
     {},

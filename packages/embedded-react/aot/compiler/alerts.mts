@@ -53,7 +53,7 @@ export const ALERT_CALL = '#Alert.alert';
 const ACTIVE = '#alert';
 const SET_ACTIVE = '#setAlert';
 
-// Alert.js's styles. Flow B's <Modal> already fills the root and centres its content.
+// Alert.mts's styles. Flow B's <Modal> already fills the root and centres its content.
 const FILL_STYLE = {
   position: 'absolute',
   left: 0,
@@ -326,7 +326,7 @@ const isAbsent = (node: t.Node | undefined): boolean =>
   (node.type === 'Identifier' && node.name === 'undefined');
 
 /**
- * Whether a title or a message draws nothing, as Alert.js's hasText has it: left out, or known to be empty.
+ * Whether a title or a message draws nothing, as Alert.mts's hasText has it: left out, or known to be empty.
  *
  * @param node  The argument.
  * @param scope  Compile-time constants in reach.
@@ -521,7 +521,7 @@ function closingHandler(handler: t.Expression | null): t.Expression {
 }
 
 /**
- * The dialog Alert.js draws for a call, shown while the hidden state holds the call's number.
+ * The dialog Alert.mts draws for a call, shown while the hidden state holds the call's number.
  *
  * @param call  The call.
  * @param number  The call's number.

@@ -15,7 +15,7 @@
  */
 
 // Runtime e2e for `display: 'none'` — the page-cache primitive, end to end through the real bridge
-// and C engine (props.js -> NativeUI.setProps -> apply_props -> ERProps.display -> layout).
+// and C engine (props.mts -> NativeUI.setProps -> apply_props -> ERProps.display -> layout).
 //
 // The point of the prop is what it does NOT do: unmount. So this contrasts it with the conditional
 // render (`{show && <Page/>}`) it replaces. Both hide the page; only display:none keeps the React
@@ -29,7 +29,7 @@
 //     never fires, and its useState survives,
 //   - `visible={false}` is the same switch under the other spelling,
 //   - and on a <Modal>, `visible` still means the Modal's own show/hide — not the generic alias.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Text, Modal} from 'embedded-react';
 import {useState, useEffect} from 'react';
 import {check, report} from './harness.js';

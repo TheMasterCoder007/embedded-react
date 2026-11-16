@@ -1,0 +1,141 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// SectionList — a thin API-compat wrapper over <ScrollView>, NOT a virtualized list. It is <FlatList>
+// with a header and a footer around each group:
+//
+//   <SectionList sections={[{title: 'A', data: ['ant']}]}
+//                renderSectionHeader={({section}) => <Header title={section.title} />}
+//                renderItem={({item}) => <Row item={item} />} />
+//     renders the same tree as
+//   <ScrollView><Header title="A" /><Row item="ant" /></ScrollView>
+//
+// Header, rows and footer are FLAT SIBLINGS, as in RN — no wrapper node per section — so a section
+// costs exactly the nodes it draws. Nothing sticks: `stickySectionHeadersEnabled` needs a scroll
+// listener re-laying the header out every frame, which is the per-event JS cost Flow A can least
+// afford.
+//
+// Everything the FlatList section of the README says about the node budget applies here and then
+// some: a section adds its header and footer on top of its rows, and every one of them mounts and
+// stays mounted. Size `sections x (1 + rows) x nodes-per-row` against ERUI_MAX_NODES before writing
+// the screen.
+//
+// Flow B builds the same tree, unrolling the sections at build time (aot/compiler/elements/section-list.mts).
+import {createElement} from 'react';
+import {ScrollView} from './components.mts';
+import {pushKeyedChild} from './list-child.mts';
+import {createPropWarner, RN_PLATFORM_NO_OPS} from './warn-props.mts';
+import type {ReactNode} from 'react';
+import type {SectionListProps} from './index.d.ts';
+
+/** The props this honours. The rest are virtualization / platform knobs with no meaning on a panel. */
+const SUPPORTED = [
+  'sections',
+  'renderItem',
+  'renderSectionHeader',
+  'renderSectionFooter',
+  'keyExtractor',
+  'style',
+];
+
+const warnUnsupportedProps = createPropWarner(
+  'SectionList',
+  SUPPORTED,
+  'it is a thin <ScrollView> alias with no virtualization and no sticky headers. For separators, ' +
+    'list headers/footers or onEndReached, use <ScrollView> + .map directly.',
+  RN_PLATFORM_NO_OPS,
+);
+
+/**
+ * Renders `sections` into a <ScrollView>, each as an optional header, its rows, and an optional footer.
+ *
+ * Row keys are namespaced by section (`<section>:<row>`), because the rows of every section end up as
+ * siblings of one another — an index or an id that is only unique WITHIN a section would collide.
+ *
+ * Missing props render an empty scroller. Anything else on a section (RN's convention is `title`) is
+ * yours, and reaches the render callbacks. A section's own `renderItem` and `keyExtractor` win for that
+ * section, as in RN; a row's key defaults to the one `renderItem` already set, else the index. `style`
+ * goes to the ScrollView untouched.
+ */
+export function SectionList(props: SectionListProps<any, any> = {}) {
+  const {
+    sections,
+    renderItem,
+    renderSectionHeader,
+    renderSectionFooter,
+    keyExtractor,
+    style,
+  } = props;
+
+  warnUnsupportedProps(props);
+
+  const children: ReactNode[] = [];
+  if (Array.isArray(sections)) {
+    for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+      const section = sections[sectionIndex];
+      if (section === null || typeof section !== 'object') continue;
+      const sectionKey =
+        section.key === null || section.key === undefined
+          ? String(sectionIndex)
+          : String(section.key);
+
+      if (typeof renderSectionHeader === 'function')
+        pushKeyedChild(
+          children,
+          renderSectionHeader({section}),
+          () => `${sectionKey}:$header`,
+        );
+
+      const rowRenderer =
+        typeof section.renderItem === 'function'
+          ? section.renderItem
+          : renderItem;
+      const rowKey =
+        typeof section.keyExtractor === 'function'
+          ? section.keyExtractor
+          : keyExtractor;
+      if (Array.isArray(section.data) && typeof rowRenderer === 'function') {
+        for (let index = 0; index < section.data.length; index++) {
+          const item = section.data[index];
+          const row = rowRenderer({item, index, section});
+          // Built lazily, so keyExtractor never runs for a row that rendered nothing or for a raw
+          // string — see pushKeyedChild.
+          pushKeyedChild(children, row, element => {
+            const key = rowKey
+              ? String(rowKey(item, index))
+              : element.key !== null && element.key !== undefined
+                ? element.key
+                : String(index);
+            return `${sectionKey}:${key}`;
+          });
+        }
+      }
+
+      if (typeof renderSectionFooter === 'function')
+        pushKeyedChild(
+          children,
+          renderSectionFooter({section}),
+          () => `${sectionKey}:$footer`,
+        );
+    }
+  }
+
+  return createElement(
+    ScrollView,
+    style === undefined ? null : {style},
+    children,
+  );
+}

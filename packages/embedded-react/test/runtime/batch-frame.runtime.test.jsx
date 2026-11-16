@@ -21,10 +21,10 @@
 //
 // Commits are counted through __layoutPasses(): every update below resizes a node, so a commit that
 // runs pays a layout pass and one that is coalesced away does not.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {useState} from 'react';
-import {NativeUI} from '../../src/native-ui.js';
+import {NativeUI} from '../../src/native-ui.mts';
 import {check, report} from './harness.js';
 
 const root = createRoot({width: screen.width, height: screen.height});

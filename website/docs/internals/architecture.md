@@ -73,9 +73,9 @@ engine's neutrality is an implementation choice that keeps the two flows honest 
 
 **The npm package** (`packages/embedded-react/src/`) is what an app imports. `embedded-react/` holds the
 public surface: the component tags, `StyleSheet`, `Animated`, `PanResponder`, `AppRegistry`, the
-hooks. Beside it, `host-config.js` is the `react-reconciler` host config that turns React's
-`createInstance`/`appendChild`/`commitUpdate` into `NativeUI.*` calls, `renderer.js` creates the
-root, and `props.js` flattens styles into the prop bag the bridge reads. The `assets/` folder holds
+hooks. Beside it, `host-config.mts` is the `react-reconciler` host config that turns React's
+`createInstance`/`appendChild`/`commitUpdate` into `NativeUI.*` calls, `renderer.mts` creates the
+root, and `props.mts` flattens styles into the prop bag the bridge reads. The `assets/` folder holds
 the build-time bakers (images to premultiplied ARGB, fonts to bitmap glyphs, SVG to an op-tape) and
 the container writer. `cli.mts` and `sim-server.mts` are the `dev`/`export`/`build` commands.
 

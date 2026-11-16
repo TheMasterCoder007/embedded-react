@@ -17,7 +17,7 @@
 // Runtime e2e: React keyed-list reordering must drive the engine's node moves (insertBefore /
 // appendChild) correctly. Renders a keyed list, re-renders it reversed, and reads each item's
 // computed y via onLayout to assert the order reversed. Runs in the QuickJS + engine host.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

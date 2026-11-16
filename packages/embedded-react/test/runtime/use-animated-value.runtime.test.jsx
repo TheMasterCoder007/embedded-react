@@ -17,7 +17,7 @@
 // Runtime e2e: useAnimatedValue returns a render-stable Animated.Value backed by the engine's
 // native driver, and frees the engine-side value slot when its component unmounts (the value pool is
 // fixed-size, so the unmount cleanup is what keeps mounting/unmounting components from leaking slots).
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {Animated, Easing, useAnimatedValue, View} from 'embedded-react';
 import {check, report} from './harness.js';
 

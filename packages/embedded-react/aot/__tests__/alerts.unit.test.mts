@@ -82,7 +82,7 @@ const eventsOf = (node: IrNode) =>
   node.wiring.flatMap(wire => (wire.kind === 'event' ? [wire.event] : []));
 
 describe('Alert.alert', () => {
-  it('builds the dialog Alert.js draws', () => {
+  it('builds the dialog Alert.mts draws', () => {
     const dialog = dialogOf(
       appOf(
         "Alert.alert('Delete?', 'It is gone for good.', [" +
@@ -164,7 +164,7 @@ describe('Alert.alert', () => {
     }
   });
 
-  it('leaves out a title or a message known to be empty, as Alert.js does', () => {
+  it('leaves out a title or a message known to be empty, as Alert.mts does', () => {
     for (const call of [
       "Alert.alert('', '');",
       'Alert.alert(undefined, null);',

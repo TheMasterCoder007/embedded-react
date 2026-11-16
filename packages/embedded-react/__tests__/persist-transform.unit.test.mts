@@ -35,7 +35,7 @@ describe('shouldPersist', () => {
   it('does NOT transform dependencies in node_modules (the bug)', () => {
     expect(
       shouldPersist(
-        '/home/me/my-app/node_modules/embedded-react/src/embedded-react/usePersistentState.js',
+        '/home/me/my-app/node_modules/embedded-react/src/embedded-react/usePersistentState.mjs',
         root,
       ),
     ).toBe(false);

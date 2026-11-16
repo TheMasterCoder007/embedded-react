@@ -16,7 +16,7 @@
 
 // Runtime e2e: scrollTo() scrolls the ScrollView behind a ref, clamps to the scroll range,
 // fires onScroll, and returns where the offset landed.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, ScrollView, scrollTo} from 'embedded-react';
 import type {NodeHandle} from 'embedded-react';
 import {check, report} from './harness.js';

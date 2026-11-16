@@ -16,7 +16,7 @@
 
 // Runtime e2e: onLayout reports x/y relative to the parent, as React Native does, and carries the
 // rect at e.nativeEvent.layout as well as e.layout. Runs in the QuickJS + engine host.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

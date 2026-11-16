@@ -18,7 +18,7 @@
 // buildProps -> the bridge, lays out at its style size, and re-renders without crashing. The headless
 // harness has no images registered (er_image_load is C-side), so the engine's "unknown name renders
 // nothing" path is exercised — pixels aren't observable from JS, so we assert layout + no-crash.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Image} from 'embedded-react';
 import {check, report} from './harness.js';
 

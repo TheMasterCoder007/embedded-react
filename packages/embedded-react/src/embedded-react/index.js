@@ -39,29 +39,29 @@ export {
   Line,
   G,
   Arc,
-} from './components.js';
-export {Pressable} from './Pressable.js';
-export {Button} from './Button.js';
-export {TouchableOpacity} from './TouchableOpacity.js';
-export {FlatList} from './FlatList.js';
-export {ImageBackground} from './ImageBackground.js';
-export {SectionList} from './SectionList.js';
+} from './components.mts';
+export {Pressable} from './Pressable.mts';
+export {Button} from './Button.mts';
+export {TouchableOpacity} from './TouchableOpacity.mts';
+export {FlatList} from './FlatList.mts';
+export {ImageBackground} from './ImageBackground.mts';
+export {SectionList} from './SectionList.mts';
 export {
   updateVector,
   updateText,
   scrollTo,
   setKeyboardConfig,
-} from './imperative.js';
-export {StyleSheet} from './StyleSheet.js';
-export {Platform} from './Platform.js';
-export {Dimensions, useWindowDimensions} from './Dimensions.js';
-export {AppRegistry} from './AppRegistry.js';
-export {Alert} from './Alert.js';
-export {Keyboard} from './Keyboard.js';
-export {Animated, useAnimatedValue} from './Animated.js';
-export {PanResponder} from './PanResponder.js';
-export {usePersistentState} from './usePersistentState.js';
-export {useHostValue} from './useHostValue.js';
-export {nativeModule, useNativeEvent} from './nativeModule.js';
-export {Easing} from './Easing.js';
-export {LayoutAnimation} from './LayoutAnimation.js';
+} from './imperative.mts';
+export {StyleSheet} from './StyleSheet.mts';
+export {Platform} from './Platform.mts';
+export {Dimensions, useWindowDimensions} from './Dimensions.mts';
+export {AppRegistry} from './AppRegistry.mts';
+export {Alert} from './Alert.mts';
+export {Keyboard} from './Keyboard.mts';
+export {Animated, useAnimatedValue} from './Animated.mts';
+export {PanResponder} from './PanResponder.mts';
+export {usePersistentState} from './usePersistentState.mts';
+export {useHostValue} from './useHostValue.mts';
+export {nativeModule, useNativeEvent} from './nativeModule.mts';
+export {Easing} from './Easing.mts';
+export {LayoutAnimation} from './LayoutAnimation.mts';

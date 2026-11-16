@@ -21,7 +21,7 @@
 //
 // The node's position is the probe: translateX moves the node's hit box, so where a touch lands says
 // which value (if any) is driving the prop, through the real engine rather than a recorded call.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Dial, Animated} from 'embedded-react';
 import {check, report} from './harness.js';
 

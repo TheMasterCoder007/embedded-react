@@ -21,7 +21,7 @@
 //   • a <Switch> toggle delivers onValueChange as a BOOLEAN through the same event,
 //   • an Animated.Value as `value` binds natively (no crash, no prop marshalling of the object),
 //   • re-renders with new props (colour / segments / gradient) don't crash.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Dial, Switch, Animated, Easing} from 'embedded-react';
 import {check, report} from './harness.js';
 

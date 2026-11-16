@@ -19,7 +19,7 @@
 // which truncates toward zero, so any layout built from a scale factor drew a pixel off in Flow A only:
 // the thermostat's 320x480 dial came out 223 px wide against the AOT's 224, and its centre readout sat a
 // row high, which is what issue #187 saw. The numbers below are that dial's real geometry (S = 284/320).
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

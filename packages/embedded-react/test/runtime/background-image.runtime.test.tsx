@@ -15,7 +15,7 @@
  */
 
 // Runtime e2e: a `backgroundImage` style through the real bridge and engine, read back as pixels.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

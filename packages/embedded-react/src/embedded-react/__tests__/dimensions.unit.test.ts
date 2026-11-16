@@ -15,7 +15,7 @@
  */
 
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {Dimensions, useWindowDimensions} from '../Dimensions.js';
+import {Dimensions, useWindowDimensions} from '../Dimensions.mts';
 
 afterEach(() => {
   vi.unstubAllGlobals();

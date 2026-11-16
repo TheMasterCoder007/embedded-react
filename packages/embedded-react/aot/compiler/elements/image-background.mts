@@ -51,7 +51,7 @@ const ABSOLUTE_FILL = {
 
 /**
  * <ImageBackground style imageStyle imageRef …imageProps>children</ImageBackground> → the tree
- * ImageBackground.js renders: a <View> holding an <Image> that fills it, then the children. `style` and `ref`
+ * ImageBackground.mts renders: a <View> holding an <Image> that fills it, then the children. `style` and `ref`
  * go to the View, every other prop to the Image.
  *
  * @param element  The <ImageBackground>, its props already checked.
