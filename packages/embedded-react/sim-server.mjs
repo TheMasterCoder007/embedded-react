@@ -35,21 +35,13 @@ const HERE = dirname(
 );
 const require = createRequire(import.meta.url);
 const esbuild = require('esbuild');
-const {bakeAssetPack} = await import(
-  pathToFileURL(resolve(HERE, 'assets/index.mjs')).href
-);
-const {resolveFontJobs} = await import(
-  pathToFileURL(resolve(HERE, 'assets/font-config.mjs')).href
-);
-const {analyzeFontSizes, fontSizeSignature, warnFontSizes} = await import(
-  pathToFileURL(resolve(HERE, 'assets/font-sizes.mjs')).href
-);
-const {textSignature, warnMissingGlyphs} = await import(
-  pathToFileURL(resolve(HERE, 'assets/glyph-coverage.mjs')).href
-);
-const {registerSvgVectorLoader} = await import(
-  pathToFileURL(resolve(HERE, 'assets/svg-loader.mjs')).href
-);
+const {bakeAssetPack} = await import('./assets/index.mts');
+const {resolveFontJobs} = await import('./assets/font-config.mts');
+const {analyzeFontSizes, fontSizeSignature, warnFontSizes} =
+  await import('./assets/font-sizes.mts');
+const {textSignature, warnMissingGlyphs} =
+  await import('./assets/glyph-coverage.mts');
+const {registerSvgVectorLoader} = await import('./assets/svg-loader.mts');
 const {transformPersist, shouldPersist} = await import(
   pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href
 );

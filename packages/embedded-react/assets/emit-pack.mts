@@ -16,7 +16,7 @@
 
 // ERPK — a binary asset pack for the simulator's runtime loader (see tools/simulator/README.md).
 //
-// Produced from the SAME JS bakers (bake-image.mjs / bake-font.mjs) as the device's baked C, so the
+// Produced from the SAME JS bakers (bake-image.mts / bake-font.mts) as the device's baked C, so the
 // simulator renders pixel-identical images and fonts. The sim host (tools/simulator/asset_pack.c)
 // loads this at runtime and calls er_image_load / er_font_register, so assets hot-reload without a
 // sim rebuild. Little-endian (the simulator is x86). Format:
@@ -37,6 +37,9 @@
 // no alignment machinery, so whether an image's pixels landed word-aligned in flash was an accident
 // of the name strings — it varied build to build. Parsers still accept v1 packs from older tooling.
 
+import type {BakedFont, GlyphInfo} from './bake-font.mts';
+import type {BakedImage} from './bake-image.mts';
+
 const INT8_MIN = -128;
 const INT8_MAX = 127;
 const PIXEL_ALIGNMENT = 4;
@@ -45,39 +48,37 @@ const FORMAT_RGB565 = 1;
 
 /** Accumulates little-endian binary chunks. */
 class Writer {
-  constructor() {
-    this.chunks = [];
-  }
-  u8(value) {
+  chunks: Buffer[] = [];
+  u8(value: number): void {
     const buffer = Buffer.alloc(1);
     buffer.writeUInt8(value & 0xff, 0);
     this.chunks.push(buffer);
   }
-  i8(value) {
+  i8(value: number): void {
     const buffer = Buffer.alloc(1);
     buffer.writeInt8(Math.max(INT8_MIN, Math.min(INT8_MAX, value | 0)), 0);
     this.chunks.push(buffer);
   }
-  u16(value) {
+  u16(value: number): void {
     const buffer = Buffer.alloc(2);
     buffer.writeUInt16LE(value & 0xffff, 0);
     this.chunks.push(buffer);
   }
-  u32(value) {
+  u32(value: number): void {
     const buffer = Buffer.alloc(4);
     buffer.writeUInt32LE(value >>> 0, 0);
     this.chunks.push(buffer);
   }
-  str(text) {
+  str(text: string): void {
     const buffer = Buffer.from(text, 'utf8');
     this.u16(buffer.length);
     this.chunks.push(buffer);
   }
-  bytes(data) {
+  bytes(data: Uint8Array): void {
     this.chunks.push(Buffer.from(data));
   }
   /** Zero-pads so the next write lands on an n-byte boundary from the pack start. */
-  align(alignment) {
+  align(alignment: number): void {
     const length = this.chunks.reduce(
       (total, chunk) => total + chunk.length,
       0,
@@ -85,13 +86,13 @@ class Writer {
     const padding = (alignment - (length % alignment)) % alignment;
     if (padding) this.chunks.push(Buffer.alloc(padding));
   }
-  done() {
+  done(): Buffer {
     return Buffer.concat(this.chunks);
   }
 }
 
 /** Writes one glyph record (9 bytes). */
-function writeGlyph(writer, glyph) {
+function writeGlyph(writer: Writer, glyph: GlyphInfo): void {
   writer.u32(glyph.bitmapOffset);
   writer.u8(glyph.width);
   writer.u8(glyph.height);
@@ -103,17 +104,22 @@ function writeGlyph(writer, glyph) {
 /**
  * Serializes baked images + fonts into an ERPK pack.
  *
- * @param {object} opts
- * @param {Array<object>} [opts.images]  Results of bakeImage().
- * @param {Array<object>} [opts.fonts]   Results of bakeFont().
- * @returns {Buffer} The pack bytes.
+ * @returns The pack bytes.
  */
-export function emitAssetPack({images = [], fonts = []}) {
+export function emitAssetPack({
+  images = [],
+  fonts = [],
+}: {
+  images?: BakedImage[];
+  fonts?: BakedFont[];
+}): Buffer {
   // Emit in a locale-independent sorted order: the discovery maps upstream are filled by esbuild
   // onLoad callbacks in whatever order the bundler visits files, which varies run to run — and an
   // unstable pack means unstable in-flash addresses and non-reproducible builds.
-  const byName = key => (left, right) =>
-    left[key] < right[key] ? -1 : left[key] > right[key] ? 1 : 0;
+  const byName =
+    <Key extends string>(key: Key) =>
+    (left: Record<Key, string>, right: Record<Key, string>) =>
+      left[key] < right[key] ? -1 : left[key] > right[key] ? 1 : 0;
   images = [...images].sort(byName('name'));
   fonts = [...fonts].sort(byName('family'));
 

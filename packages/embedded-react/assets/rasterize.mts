@@ -23,6 +23,30 @@
 // pixelSize), so xOffset is the glyph's left bearing from the pen and yOffset is the distance from
 // the line box top (y = 0) down to the top of the glyph ink.
 
+import type {Path, PathCommand} from 'opentype.js';
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+/** A glyph's coverage bitmap and where it sits against the pen. */
+export interface Raster {
+  width: number;
+  height: number;
+  xOffset: number;
+  yOffset: number;
+  /** Row-major, 0 to 255 per pixel. */
+  coverage: Uint8Array;
+}
+
+export interface RasterizeOptions {
+  /** Supersample factor per axis (coverage levels = ss*ss). Default 4. */
+  ss?: number;
+  /** Bézier subdivision steps. Default 12. */
+  steps?: number;
+}
+
 const DEFAULT_SUPERSAMPLE = 4;
 const DEFAULT_CURVE_STEPS = 12;
 const COVERAGE_MAX = 255;
@@ -31,13 +55,13 @@ const SAMPLE_CENTER = 0.5;
 /**
  * Flattens opentype path commands into closed contours of {x, y} points.
  *
- * @param {Array} commands  opentype.js Path commands (M/L/Q/C/Z).
- * @param {number} steps    Subdivision steps per Bézier curve.
- * @returns {Array<Array<{x:number,y:number}>>} One point array per contour.
+ * @param commands  opentype.js Path commands (M/L/Q/C/Z).
+ * @param steps     Subdivision steps per Bézier curve.
+ * @returns One point array per contour.
  */
-function flattenCommands(commands, steps) {
-  const contours = [];
-  let contour = null;
+function flattenCommands(commands: PathCommand[], steps: number): Point[][] {
+  const contours: Point[][] = [];
+  let contour: Point[] | null = null;
   let currentX = 0;
   let currentY = 0;
   let startX = 0;
@@ -49,14 +73,14 @@ function flattenCommands(commands, steps) {
       currentX = startX = command.x;
       currentY = startY = command.y;
     } else if (command.type === 'L') {
-      contour.push({x: command.x, y: command.y});
+      contour!.push({x: command.x, y: command.y});
       currentX = command.x;
       currentY = command.y;
     } else if (command.type === 'Q') {
       for (let step = 1; step <= steps; step++) {
         const t = step / steps;
         const oneMinusT = 1 - t;
-        contour.push({
+        contour!.push({
           x:
             oneMinusT * oneMinusT * currentX +
             2 * oneMinusT * t * command.x1 +
@@ -73,7 +97,7 @@ function flattenCommands(commands, steps) {
       for (let step = 1; step <= steps; step++) {
         const t = step / steps;
         const oneMinusT = 1 - t;
-        contour.push({
+        contour!.push({
           x:
             oneMinusT * oneMinusT * oneMinusT * currentX +
             3 * oneMinusT * oneMinusT * t * command.x1 +
@@ -103,14 +127,13 @@ function flattenCommands(commands, steps) {
 /**
  * Rasterizes a glyph path to an 8-bit coverage bitmap (0-255 per pixel).
  *
- * @param {object} path        opentype.js Path (from glyph.getPath(0, baseline, pixelSize)).
- * @param {object} [opts]
- * @param {number} [opts.ss]    Supersample factor per axis (coverage levels = ss*ss). Default 4.
- * @param {number} [opts.steps] Bézier subdivision steps. Default 12.
- * @returns {{width:number,height:number,xOffset:number,yOffset:number,coverage:Uint8Array}}
- *          An empty (width 0, height 0) result for whitespace / glyphs with no ink.
+ * @param path  opentype.js Path (from glyph.getPath(0, baseline, pixelSize)).
+ * @returns An empty (width 0, height 0) result for whitespace / glyphs with no ink.
  */
-export function rasterize(path, opts = {}) {
+export function rasterize(
+  path: Pick<Path, 'commands'>,
+  opts: RasterizeOptions = {},
+): Raster {
   const supersample = opts.ss || DEFAULT_SUPERSAMPLE;
   const steps = opts.steps || DEFAULT_CURVE_STEPS;
   const contours = flattenCommands(path.commands, steps);

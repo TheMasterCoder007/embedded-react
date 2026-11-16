@@ -30,7 +30,7 @@
  * never breaks an older loader. The caller must place the container at a 4-byte-aligned base (a flash
  * linker section or a malloc'd buffer both are).
  *
- * The writer is packages/embedded-react/assets/emit-container.mjs.
+ * The writer is packages/embedded-react/assets/emit-container.mts.
  */
 
 #include <stddef.h>
@@ -134,7 +134,7 @@ const char* er_container_status_name(ErContainerStatus status);
  * by each of them, because a divergence does not fail loudly — a frame or container simply stops loading
  * with a CRC mismatch and nothing says why.
  *
- * The JS side (packages/embedded-react/assets/emit-container.mjs, which hotreload/protocol.mjs imports) is the
+ * The JS side (packages/embedded-react/assets/emit-container.mts, which hotreload/protocol.mjs imports) is the
  * other copy and cannot share this one; it carries a note pointing back here, and container.unit.test.js
  * pins both to the standard "123456789" -> 0xCBF43926 check vector.
  *

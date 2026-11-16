@@ -18,7 +18,8 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {parseColor, parsePath} from '../../src/embedded-react/svg-ops.js';
+import {parseColor, parsePath} from '../../src/embedded-react/svg-ops.mts';
+import type {ColorInput} from '../../src/embedded-react/svg-ops.mts';
 import {
   aotError,
   constantText,
@@ -1627,8 +1628,8 @@ function imperativeShape(
     }
   };
   const paint = vectorPaintOf([
-    parseColor(paintValue('fill', 'none')),
-    parseColor(paintValue('stroke', 'none')),
+    parseColor(paintValue('fill', 'none') as ColorInput),
+    parseColor(paintValue('stroke', 'none') as ColorInput),
     svgNum(paintValue('strokeWidth', 1), 1),
     svgNum(paintValue('miter', DEFAULT_MITER_LIMIT), DEFAULT_MITER_LIMIT),
     CAP_MAP[paintValue('cap', 'butt') as string] ?? 0,

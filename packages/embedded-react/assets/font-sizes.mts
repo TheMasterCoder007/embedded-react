@@ -29,8 +29,66 @@
 // What folding can't see is a size that only exists at runtime: a prop, state, a computed key. Those
 // are reported rather than guessed at, because the runtime result is a silent snap, not an error.
 import {parse} from '@babel/parser';
-import {BUILTIN_SIZES} from './bake-font.mjs';
-import {BUILTIN_FAMILY} from './glyph-coverage.mjs';
+import type {ParserOptions} from '@babel/parser';
+import type {
+  File,
+  Identifier,
+  MemberExpression,
+  Node,
+  ObjectProperty,
+  VariableDeclarator,
+} from '@babel/types';
+import {BUILTIN_SIZES} from './bake-font.mts';
+import {BUILTIN_FAMILY} from './glyph-coverage.mts';
+
+/** A `fontSize` expression that could not be resolved at build time, and how often it appears. */
+export interface DynamicSize {
+  expr: string;
+  count: number;
+}
+
+/** The sizes an app's text renders at. */
+export interface FontSizeUsage {
+  /** Ascending, de-duplicated. */
+  sizes: number[];
+  dynamic: DynamicSize[];
+}
+
+/** A font, as far as the size check reads one: a bakeFont() result, or the job that produced it. */
+export interface SizedFont {
+  family: string;
+  sizes?: readonly (number | {pixelSize: number})[];
+}
+
+/** A size the app uses that a family is not baked at. */
+export interface SizeGap {
+  size: number;
+  family: string;
+  /** The baked size that renders instead. */
+  snapsTo: number;
+  baked: number[];
+}
+
+/** A family baked past the engine's per-family limit: the sizes that register and the ones that never do. */
+export interface DroppedSizes {
+  family: string;
+  registered: number[];
+  ignored: number[];
+}
+
+/** An object or array whose properties are candidate lists. */
+interface Scale {
+  properties: Map<string, FoldedValue[]>;
+}
+
+type FoldedValue = number | Scale;
+
+/** The names a program binds to a constant, and the names a scale is handed down under. */
+interface FoldScope {
+  environment: Map<string, FoldedValue[]>;
+  bindings: Map<string, Node[]>;
+  resolving: Set<string>;
+}
 
 /** Sizes one family may register before the engine starts dropping them (FONT_FAMILY_MAX_SIZES). */
 const MAX_BAKED_SIZES = 16;
@@ -56,7 +114,7 @@ const LITERAL_SIZE = /\bfontSize\s*:\s*(\d+(?:\.\d+)?)/g;
 // Unresolved fontSize expressions are reported up to this many characters.
 const SNIPPET_MAX_LENGTH = 48;
 
-const PARSER_OPTIONS = {
+const PARSER_OPTIONS: ParserOptions = {
   sourceType: 'unambiguous', // an IIFE bundle is a script; an app entry is a module
   errorRecovery: true,
   // Same pair the AOT parser uses: the TS plugin is harmless on plain JS/JSX and lets a .tsx app
@@ -81,23 +139,24 @@ const NON_NODE_KEYS = new Set([
 ]);
 
 /** Depth-first visit of every AST node under `node`, in source order. */
-function walk(node, visit) {
+function walk(node: unknown, visit: (node: Node) => void): void {
   if (Array.isArray(node)) {
     for (const item of node) walk(item, visit);
     return;
   }
-  if (!node || typeof node !== 'object' || typeof node.type !== 'string')
-    return;
-  visit(node);
-  for (const key of Object.keys(node)) {
+  if (!node || typeof node !== 'object') return;
+  const fields = node as Record<string, unknown>;
+  if (typeof fields.type !== 'string') return;
+  visit(node as Node);
+  for (const key of Object.keys(fields)) {
     if (NON_NODE_KEYS.has(key)) continue;
-    const child = node[key];
+    const child = fields[key];
     if (child && typeof child === 'object') walk(child, visit);
   }
 }
 
 /** Static name of a non-computed property key, or null when the key isn't a fixed string. */
-function keyName(node) {
+function keyName(node: ObjectProperty): string | null {
   if (node.computed) return null;
   const key = node.key;
   if (!key) return null;
@@ -111,22 +170,23 @@ function keyName(node) {
 
 // A folded value is either a number or a Scale: an object/array whose properties are themselves
 // candidate lists, so `TYPE.title` is a lookup and a ternary is a union.
-const scale = properties => ({properties});
-const isScale = value =>
+const scale = (properties: Map<string, FoldedValue[]>): Scale => ({properties});
+const isScale = (value: FoldedValue): value is Scale =>
   value !== null &&
   typeof value === 'object' &&
   value.properties instanceof Map;
 
 /** Trims a candidate list to the fan-out budget, dropping duplicates first. */
-const cap = values =>
+const cap = <Value,>(values: Value[]): Value[] =>
   values.length > MAX_CANDIDATES
     ? [...new Set(values)].slice(0, MAX_CANDIDATES)
     : values;
 
 /** The numbers in a candidate list (a Scale is not a size). */
-const numbers = values => values.filter(value => typeof value === 'number');
+const numbers = (values: FoldedValue[]): number[] =>
+  values.filter(value => typeof value === 'number');
 
-const ARITHMETIC = {
+const ARITHMETIC: Record<string, (left: number, right: number) => number> = {
   '+': (left, right) => left + right,
   '-': (left, right) => left - right,
   '*': (left, right) => left * right,
@@ -137,7 +197,7 @@ const ARITHMETIC = {
 
 // Rounding is how a ratio-based scale lands on whole pixels (Math.round(base * 1.25)); min/max is
 // how it gets clamped. Anything else on Math is left unresolved rather than guessed.
-const MATH_FUNCTIONS = {
+const MATH_FUNCTIONS: Record<string, (...values: number[]) => number> = {
   round: Math.round,
   floor: Math.floor,
   ceil: Math.ceil,
@@ -149,14 +209,19 @@ const MATH_FUNCTIONS = {
 /**
  * Statically evaluates an expression to the values it can take.
  *
- * @param {object} node     Expression AST node.
- * @param {object} scope    Fold scope from buildScope().
- * @param {number} [depth]  Recursion guard.
- * @returns {any[]} Candidate values (numbers and/or Scales); empty when nothing can be resolved.
+ * @param node   Expression AST node.
+ * @param scope  Fold scope from buildScope().
+ * @param depth  Recursion guard.
+ * @returns Candidate values (numbers and/or Scales); empty when nothing can be resolved.
  */
-function evaluate(node, scope, depth = 0) {
+function evaluate(
+  node: Node | null | undefined,
+  scope: FoldScope,
+  depth = 0,
+): FoldedValue[] {
   if (!node || depth > MAX_DEPTH) return [];
-  const evaluateChild = child => evaluate(child, scope, depth + 1);
+  const evaluateChild = (child: Node | null | undefined) =>
+    evaluate(child, scope, depth + 1);
 
   switch (node.type) {
     case 'NumericLiteral':
@@ -185,7 +250,7 @@ function evaluate(node, scope, depth = 0) {
       if (!operation) return [];
       const left = numbers(evaluateChild(node.left));
       const right = numbers(evaluateChild(node.right));
-      const results = [];
+      const results: number[] = [];
       for (const leftValue of left)
         for (const rightValue of right)
           results.push(operation(leftValue, rightValue));
@@ -207,7 +272,7 @@ function evaluate(node, scope, depth = 0) {
         : cap([...evaluateChild(node.left), ...evaluateChild(node.right)]);
 
     case 'ObjectExpression': {
-      const properties = new Map();
+      const properties = new Map<string, FoldedValue[]>();
       for (const property of node.properties) {
         if (property.type === 'SpreadElement') {
           for (const base of evaluateChild(property.argument).filter(isScale))
@@ -225,7 +290,7 @@ function evaluate(node, scope, depth = 0) {
     }
 
     case 'ArrayExpression': {
-      const properties = new Map();
+      const properties = new Map<string, FoldedValue[]>();
       node.elements.forEach((element, index) => {
         if (!element || element.type === 'SpreadElement') return;
         const values = evaluateChild(element);
@@ -238,7 +303,7 @@ function evaluate(node, scope, depth = 0) {
       const objects = evaluateChild(node.object).filter(isScale);
       if (!objects.length) return [];
       const key = memberKey(node, scope, depth);
-      const results = [];
+      const results: FoldedValue[] = [];
       for (const object of objects) {
         // An unresolvable key (`TYPE[variant]`) still narrows things to one scale, and every entry
         // in it is something the app can reach — take the lot rather than nothing.
@@ -284,10 +349,10 @@ function evaluate(node, scope, depth = 0) {
 }
 
 /** Cartesian product of per-argument candidate lists, clipped to the fan-out budget. */
-function combine(lists) {
-  let rows = [[]];
+function combine(lists: number[][]): number[][] {
+  let rows: number[][] = [[]];
   for (const list of lists) {
-    const next = [];
+    const next: number[][] = [];
     for (const row of rows)
       for (const value of list) {
         if (next.length >= MAX_CANDIDATES) break;
@@ -299,7 +364,11 @@ function combine(lists) {
 }
 
 /** Property name a member expression reads, resolving a computed key when it folds to a constant. */
-function memberKey(node, scope, depth) {
+function memberKey(
+  node: MemberExpression,
+  scope: FoldScope,
+  depth: number,
+): string | null {
   if (!node.computed)
     return node.property.type === 'Identifier' ? node.property.name : null;
   if (node.property.type === 'StringLiteral') return node.property.value;
@@ -316,7 +385,7 @@ function memberKey(node, scope, depth) {
  * down — see buildScope() — and that is resolved on demand, so the bindings of the thousands of
  * names a bundle contains are only ever evaluated for the handful a fontSize actually reads.
  */
-function lookup(name, scope, depth) {
+function lookup(name: string, scope: FoldScope, depth: number): FoldedValue[] {
   const known = scope.environment.get(name);
   if (known !== undefined) return known; // a memoized "nothing" is an answer, not a miss
   const bound = scope.bindings.get(name);
@@ -345,14 +414,13 @@ function lookup(name, scope, depth) {
  * this to the "pass the scale down" pattern it is for. A name passed different scales in different
  * places resolves to all of them, which over-bakes at worst; declared names always win.
  *
- * @param {object} ast  Parsed program.
- * @returns {{environment: Map<string,any[]>, bindings: Map<string,object[]>, resolving: Set<string>}}
+ * @param ast  Parsed program.
  */
-function buildScope(ast) {
-  const declarations = [];
-  const counts = new Map();
-  const bindings = new Map();
-  const bind = (name, node) => {
+function buildScope(ast: File): FoldScope {
+  const declarations: VariableDeclarator[] = [];
+  const counts = new Map<string, number>();
+  const bindings = new Map<string, Node[]>();
+  const bind = (name: string, node: Node) => {
     if (node.type !== 'Identifier' && node.type !== 'MemberExpression') return;
     const list = bindings.get(name);
     if (list) list.push(node);
@@ -385,15 +453,15 @@ function buildScope(ast) {
   // binding consulted mid-fold could cache an answer taken from a half-built environment. Two passes,
   // so a scale that reads a constant declared below it still folds; a third would only help a chain
   // that deep, which no type scale is.
-  const scope = {
+  const scope: FoldScope = {
     environment: new Map(),
     bindings: new Map(),
     resolving: new Set(),
   };
   for (let pass = 0; pass < 2; pass++) {
     for (const declaration of declarations) {
-      const name = declaration.id.name;
-      if (counts.get(name) > 1) continue;
+      const name = (declaration.id as Identifier).name;
+      if (counts.get(name)! > 1) continue;
       const values = evaluate(declaration.init, scope);
       if (values.length) scope.environment.set(name, values);
     }
@@ -407,7 +475,7 @@ function buildScope(ast) {
 /*--- Discovery ----------------------------------------------------------------------------------*/
 
 /** Rounds a folded value to a bakeable pixel size, or null when it isn't one. */
-function toPixelSize(value) {
+function toPixelSize(value: number): number | null {
   const pixelSize = Math.round(value);
   return Number.isFinite(pixelSize) &&
     pixelSize >= MIN_PX &&
@@ -417,16 +485,16 @@ function toPixelSize(value) {
 }
 
 /** One-line, length-capped rendering of the expression behind an unresolved fontSize. */
-function snippet(source, node) {
-  const raw = source.slice(node.start, node.end).replace(/\s+/g, ' ').trim();
+function snippet(source: string, node: Node): string {
+  const raw = source.slice(node.start!, node.end!).replace(/\s+/g, ' ').trim();
   return raw.length > SNIPPET_MAX_LENGTH
     ? `${raw.slice(0, SNIPPET_MAX_LENGTH - 1)}…`
     : raw;
 }
 
 /** Literal-only discovery, for a source the parser rejected. */
-function scanLiterals(source) {
-  const sizes = new Set();
+function scanLiterals(source: string): FontSizeUsage {
+  const sizes = new Set<number>();
   for (const match of source.matchAll(LITERAL_SIZE)) {
     const pixelSize = toPixelSize(Number(match[1]));
     if (pixelSize !== null) sizes.add(pixelSize);
@@ -438,11 +506,10 @@ function scanLiterals(source) {
  * Finds the pixel sizes an app's text renders at, folding constants so a token-driven scale is
  * discovered rather than missed.
  *
- * @param {string} source  JS/JSX/TSX source: a bundle, a chunk, or a single app entry.
- * @returns {{sizes: number[], dynamic: Array<{expr:string, count:number}>}} Ascending de-duplicated
- *          sizes, plus the `fontSize` expressions that could not be resolved at build time.
+ * @param source  JS/JSX/TSX source: a bundle, a chunk, or a single app entry.
+ * @returns The sizes, plus the `fontSize` expressions that could not be resolved at build time.
  */
-export function analyzeFontSizes(source) {
+export function analyzeFontSizes(source: string): FontSizeUsage {
   if (!source) return {sizes: [], dynamic: []};
   let ast;
   try {
@@ -452,8 +519,8 @@ export function analyzeFontSizes(source) {
   }
 
   const scope = buildScope(ast);
-  const sizes = new Set();
-  const dynamic = new Map(); // expression text → occurrences
+  const sizes = new Set<number>();
+  const dynamic = new Map<string, number>(); // expression text → occurrences
   walk(ast.program, node => {
     if (node.type !== 'ObjectProperty' || keyName(node) !== 'fontSize') return;
     // A value that resolves but can't be baked (0, negative, past the engine's uint8 pixel_size) is
@@ -490,10 +557,12 @@ export function analyzeFontSizes(source) {
  * re-bake never happens. Sizes that resolve and sizes that don't both count — swapping a constant
  * for a runtime value changes what is reported without changing what is baked.
  *
- * @param {{sizes:number[], dynamic:Array<{expr:string}>}} used  analyzeFontSizes() result.
- * @returns {string} Sizes and unresolved expressions, joined.
+ * @param used  analyzeFontSizes() result.
+ * @returns Sizes and unresolved expressions, joined.
  */
-export function fontSizeSignature(used) {
+export function fontSizeSignature(
+  used: Partial<FontSizeUsage> | null | undefined,
+): string {
   const {sizes = [], dynamic = []} = used ?? {};
   return `${sizes.join(',')}|${dynamic.map(entry => entry.expr).join('\u0000')}`;
 }
@@ -501,10 +570,10 @@ export function fontSizeSignature(used) {
 /*--- Coverage check -----------------------------------------------------------------------------*/
 
 /** Pixel sizes a bakeFont() result — or the job that produced it — covers. */
-function bakedSizes(font) {
+function bakedSizes(font: SizedFont): number[] {
   return (font.sizes ?? [])
     .map(size => (typeof size === 'number' ? size : size?.pixelSize))
-    .filter(pixelSize => Number.isFinite(pixelSize));
+    .filter((pixelSize): pixelSize is number => Number.isFinite(pixelSize));
 }
 
 /**
@@ -512,11 +581,14 @@ function bakedSizes(font) {
  * Mirrors pick_closest() in engine/font/font_registry.c, including the clamp the text renderer
  * applies to the requested size first.
  *
- * @param {number[]} baked  Sizes the family is baked at (non-empty).
- * @param {number} wanted   The size the app asked for.
- * @returns {number} The size that actually renders.
+ * @param baked   Sizes the family is baked at (non-empty).
+ * @param wanted  The size the app asked for.
+ * @returns The size that actually renders.
  */
-export function pickBakedSize(baked, wanted) {
+export function pickBakedSize(
+  baked: readonly number[],
+  wanted: number,
+): number {
   const target = Math.min(Math.max(wanted, RENDER_MIN_PX), RENDER_MAX_PX);
   let best = baked[0];
   for (const size of baked.slice(1)) {
@@ -538,21 +610,23 @@ export function pickBakedSize(baked, wanted) {
  * each imported font when there are any (they all render the app's text, and a family missing a size
  * is the bug worth reporting), the engine's built-in font when there are none.
  *
- * @param {object} opts
- * @param {number[]} [opts.sizes]       Sizes the app uses (from analyzeFontSizes).
- * @param {Array<object>} [opts.fonts]  bakeFont() results or jobs; empty means built-in font only.
- * @returns {{gaps: Array<{size:number, family:string, snapsTo:number, baked:number[]}>,
- *          dropped: Array<{family:string, registered:number[], ignored:number[]}>}} `gaps` are sizes
- *          that will snap; `dropped` splits a family baked past the engine's per-family limit into
- *          the sizes that register and the ones that never do.
+ * @returns `gaps` are sizes that will snap; `dropped` are the families baked past the engine's limit.
  */
-export function findSizeGaps({sizes = [], fonts = []}) {
+export function findSizeGaps({
+  sizes = [],
+  fonts = [],
+}: {
+  /** Sizes the app uses (from analyzeFontSizes). */
+  sizes?: number[];
+  /** bakeFont() results or jobs; empty means built-in font only. */
+  fonts?: SizedFont[];
+}): {gaps: SizeGap[]; dropped: DroppedSizes[]} {
   const checked = fonts.length
     ? fonts.map(font => ({family: font.family, baked: bakedSizes(font)}))
     : [{family: BUILTIN_FAMILY, baked: [...BUILTIN_SIZES]}];
 
-  const gaps = [];
-  const dropped = [];
+  const gaps: SizeGap[] = [];
+  const dropped: DroppedSizes[] = [];
   for (const {family, baked} of checked) {
     if (!baked.length) continue;
     // Registration stops at the limit, so anything past it is not merely unbaked but unreachable.
@@ -578,30 +652,34 @@ export function findSizeGaps({sizes = [], fonts = []}) {
 const MAX_LISTED = 8;
 
 /** `[a, b, c]` as an assets.config.js `sizes` line would spell it. */
-const sizeList = sizes =>
+const sizeList = (sizes: Iterable<number>) =>
   `[${[...sizes].sort((left, right) => left - right).join(', ')}]`;
 
 /** A family name as a valid object key (a family is a file basename — `Inter-Regular` needs quotes). */
-const configKey = family =>
+const configKey = (family: string) =>
   /^[A-Za-z_$][\w$]*$/.test(family) ? family : JSON.stringify(family);
 
 /**
  * Renders the size check as a developer-facing warning, ending with the change that fixes it.
  *
- * @param {object} opts
- * @param {Array<object>} [opts.gaps]     From findSizeGaps().
- * @param {Array<object>} [opts.dropped]  From findSizeGaps().
- * @param {Array<object>} [opts.dynamic]  From analyzeFontSizes().
- * @param {Array<object>} [opts.fonts]    The same fonts, for the suggested config line.
- * @returns {string} The warning text (empty when there is nothing to report).
+ * @returns The warning text (empty when there is nothing to report).
  */
 export function formatFontSizeReport({
   gaps = [],
   dropped = [],
   dynamic = [],
   fonts = [],
-}) {
-  const blocks = [];
+}: {
+  /** From findSizeGaps(). */
+  gaps?: SizeGap[];
+  /** From findSizeGaps(). */
+  dropped?: DroppedSizes[];
+  /** From analyzeFontSizes(). */
+  dynamic?: DynamicSize[];
+  /** The same fonts, for the suggested config line. */
+  fonts?: SizedFont[];
+}): string {
+  const blocks: string[] = [];
 
   if (gaps.length) {
     const lines = gaps
@@ -649,7 +727,7 @@ export function formatFontSizeReport({
 }
 
 /** The config (or design) change that closes a set of gaps. */
-function gapFix(gaps, fonts) {
+function gapFix(gaps: SizeGap[], fonts: SizedFont[]): string {
   if (!fonts.length) {
     return (
       `  fix: the built-in font is baked at ${sizeList(BUILTIN_SIZES)} — use one of those sizes, or ` +
@@ -670,19 +748,26 @@ function gapFix(gaps, fonts) {
   return `  fix: assets.config.js → fonts: {${perFamily.join(', ')}}`;
 }
 
-let lastWarning = null; // dev loops re-bake on every save — don't reprint an unchanged warning
+let lastWarning: string | null = null; // dev loops re-bake on every save — don't reprint an unchanged warning
 
 /**
  * Checks size coverage and warns. Repeats are suppressed while the warning is unchanged, so a
  * watch/hot-reload loop reports each gap once rather than on every save.
  *
- * @param {object} opts
- * @param {{sizes:number[], dynamic:Array<object>}} opts.used  analyzeFontSizes() result.
- * @param {Array<object>} [opts.fonts]  bakeFont() results or jobs; empty means built-in font only.
- * @param {Function} [opts.log]         Sink for the warning (default console.warn).
- * @returns {{gaps:Array<object>, dropped:Array<object>}} What was found (both empty when clean).
+ * @returns What was found (both empty when clean).
  */
-export function warnFontSizes({used, fonts = [], log = console.warn}) {
+export function warnFontSizes({
+  used,
+  fonts = [],
+  log = console.warn,
+}: {
+  /** analyzeFontSizes() result. */
+  used: Partial<FontSizeUsage> | null | undefined;
+  /** bakeFont() results or jobs; empty means built-in font only. */
+  fonts?: SizedFont[];
+  /** Sink for the warning. */
+  log?: (text: string) => void;
+}): {gaps: SizeGap[]; dropped: DroppedSizes[]} {
   const {sizes = [], dynamic = []} = used ?? {};
   const {gaps, dropped} = findSizeGaps({sizes, fonts});
   const text = formatFontSizeReport({gaps, dropped, dynamic, fonts});

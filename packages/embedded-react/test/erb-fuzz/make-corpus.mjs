@@ -30,7 +30,7 @@ import {
   packPackage,
   readNativeFiles,
 } from '../../aot/compile.mts';
-import {bakeAssetPackBytes} from '../../assets/index.mjs';
+import {bakeAssetPackBytes} from '../../assets/index.mts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '../../../..');

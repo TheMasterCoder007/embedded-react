@@ -20,7 +20,7 @@
 // bytecode (so the device never ships the parser or source text), bake the imported images/fonts into
 // an ERPK pack, and wrap both — with a QuickJS version stamp and an integrity CRC — into a single
 // .erpkg. That one file is "the config": load it with er_runtime_load_container() on the desktop, or
-// upload it to a device's config region. See packages/embedded-react/assets/emit-container.mjs for the
+// upload it to a device's config region. See packages/embedded-react/assets/emit-container.mts for the
 // format, and er_runtime.h for the loader.
 //
 //   npm run pack                 # default demo (thermostat)
@@ -39,14 +39,14 @@ import {
   writeFileSync,
   mkdirSync,
 } from 'node:fs';
-import {bakeImage} from './assets/bake-image.mjs';
-import {bakeFont} from './assets/bake-font.mjs';
-import {resolveFontJobs} from './assets/font-config.mjs';
-import {analyzeFontSizes, warnFontSizes} from './assets/font-sizes.mjs';
-import {warnMissingGlyphs} from './assets/glyph-coverage.mjs';
-import {emitAssetPack} from './assets/emit-pack.mjs';
-import {emitContainer} from './assets/emit-container.mjs';
-import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
+import {bakeImage} from './assets/bake-image.mts';
+import {bakeFont} from './assets/bake-font.mts';
+import {resolveFontJobs} from './assets/font-config.mts';
+import {analyzeFontSizes, warnFontSizes} from './assets/font-sizes.mts';
+import {warnMissingGlyphs} from './assets/glyph-coverage.mts';
+import {emitAssetPack} from './assets/emit-pack.mts';
+import {emitContainer} from './assets/emit-container.mts';
+import {registerSvgVectorLoader} from './assets/svg-loader.mts';
 import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';

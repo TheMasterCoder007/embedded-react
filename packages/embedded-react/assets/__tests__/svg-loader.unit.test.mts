@@ -19,7 +19,7 @@ import {build} from 'esbuild';
 import {existsSync, mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {registerSvgVectorLoader} from '../svg-loader.mjs';
+import {registerSvgVectorLoader} from '../svg-loader.mts';
 
 // `assets` (optional) = a Map the loader registers raster-fallback PNGs into (name -> png path), mirroring a
 // real bundler's image collection. When omitted, the loader has no raster fallback (vector-only).

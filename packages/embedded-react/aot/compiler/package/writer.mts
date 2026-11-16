@@ -23,7 +23,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {crc32} from '../../../assets/emit-container.mjs';
+import {crc32} from '../../../assets/emit-container.mts';
 import {checksTable} from './checks.mts';
 import {
   DEBUG_ENTRY_SIZE,

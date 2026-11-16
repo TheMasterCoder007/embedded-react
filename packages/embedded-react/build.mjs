@@ -30,10 +30,10 @@ import {build} from 'esbuild';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename} from 'node:path';
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
-import {bakeAssets} from './assets/index.mjs';
-import {resolveFontJobs} from './assets/font-config.mjs';
-import {analyzeFontSizes} from './assets/font-sizes.mjs';
-import {registerSvgVectorLoader} from './assets/svg-loader.mjs';
+import {bakeAssets} from './assets/index.mts';
+import {resolveFontJobs} from './assets/font-config.mts';
+import {analyzeFontSizes} from './assets/font-sizes.mts';
+import {registerSvgVectorLoader} from './assets/svg-loader.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 

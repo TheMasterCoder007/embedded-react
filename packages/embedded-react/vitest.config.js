@@ -23,7 +23,7 @@ export default defineConfig({
     // under aot/ (JSX → package).
     include: [
       'src/**/__tests__/**/*.unit.test.{js,jsx,ts}',
-      'assets/**/__tests__/**/*.unit.test.{js,jsx}',
+      'assets/**/__tests__/**/*.unit.test.mts',
       'aot/**/__tests__/**/*.unit.test.{js,mjs,mts}',
       'hotreload/**/__tests__/**/*.unit.test.{js,mjs}', // on-device hot-reload transport framing
       '__tests__/**/*.unit.test.{js,mjs}', // package-root dev tooling (sim-server / persist transform)

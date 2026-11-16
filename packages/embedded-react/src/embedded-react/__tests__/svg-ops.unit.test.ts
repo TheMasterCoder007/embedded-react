@@ -30,7 +30,7 @@ import {
   GRAD_MAX_STOPS,
   GRAD_LINEAR,
   PAINT_STRIDE,
-} from '../svg-ops.js';
+} from '../svg-ops.mts';
 
 // Opcodes mirror er_scene.h.
 const SHAPE = 0;

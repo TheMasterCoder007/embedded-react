@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {GRAD_MAX_STOPS} from '../../src/embedded-react/svg-ops.js';
+import {GRAD_MAX_STOPS} from '../../src/embedded-react/svg-ops.mts';
 import {aotError, currentLoc, locateError} from './diagnostics.mts';
 import type {AotError, SourcePosition} from './diagnostics.mts';
 

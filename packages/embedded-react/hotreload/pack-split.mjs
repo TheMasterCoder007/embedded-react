@@ -119,7 +119,7 @@ function makeAssetPlugin({images, fonts, persist, projectRoot}) {
     name: 'embedded-react-assets',
     async setup(build) {
       const {registerSvgVectorLoader} =
-        await import('../assets/svg-loader.mjs');
+        await import('../assets/svg-loader.mts');
       const {shouldPersist, transformPersist} =
         await import('../persist-transform.mjs');
       const {loadAppFile, loadDependencyFile} =
@@ -192,13 +192,13 @@ export async function bundleAppSource({
 
 /** Bake the discovered images/fonts into an ERPK asset pack (or null if there are none). */
 async function bakeAssets({images, fonts, source, projectRoot}) {
-  const {bakeImage} = await import('../assets/bake-image.mjs');
-  const {bakeFont} = await import('../assets/bake-font.mjs');
-  const {resolveFontJobs} = await import('../assets/font-config.mjs');
+  const {bakeImage} = await import('../assets/bake-image.mts');
+  const {bakeFont} = await import('../assets/bake-font.mts');
+  const {resolveFontJobs} = await import('../assets/font-config.mts');
   const {analyzeFontSizes, warnFontSizes} =
-    await import('../assets/font-sizes.mjs');
-  const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mjs');
-  const {emitAssetPack} = await import('../assets/emit-pack.mjs');
+    await import('../assets/font-sizes.mts');
+  const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mts');
+  const {emitAssetPack} = await import('../assets/emit-pack.mts');
 
   const usedSizes = analyzeFontSizes(source);
 
@@ -293,7 +293,7 @@ export function emitAppFrame({appBytecode, assetPack}) {
 
 // emitBootContainer/emitAppFrame are async (emit() dynamically imports the emitter) — callers await them.
 async function emit(options) {
-  const {emitContainer} = await import('../assets/emit-container.mjs');
+  const {emitContainer} = await import('../assets/emit-container.mts');
   return emitContainer({...options, qjsTag: QJS_TAG});
 }
 

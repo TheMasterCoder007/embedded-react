@@ -18,8 +18,8 @@
 // (a literal, a token scale, a responsive ternary, a scale handed down as a prop), which are
 // honestly reported as unreadable, and what the coverage check says about the sizes that are.
 import {describe, it, expect, vi} from 'vitest';
-import {BUILTIN_SIZES} from '../bake-font.mjs';
-import {BUILTIN_FAMILY} from '../glyph-coverage.mjs';
+import {BUILTIN_SIZES} from '../bake-font.mts';
+import {BUILTIN_FAMILY} from '../glyph-coverage.mts';
 import {
   analyzeFontSizes,
   findSizeGaps,
@@ -27,7 +27,7 @@ import {
   formatFontSizeReport,
   pickBakedSize,
   warnFontSizes,
-} from '../font-sizes.mjs';
+} from '../font-sizes.mts';
 
 const sizes = source => analyzeFontSizes(source).sizes;
 const dynamic = source =>

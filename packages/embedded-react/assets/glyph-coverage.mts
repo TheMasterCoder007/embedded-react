@@ -27,7 +27,40 @@ import {
   ASCII_LAST,
   BUILTIN_EXTRAS,
   loadGlyphProbe,
-} from './bake-font.mjs';
+} from './bake-font.mts';
+
+/** A font, as far as the coverage check reads one: a bakeFont() result, or the built-in font's stand-in. */
+export interface CoverageFont {
+  family: string;
+  /** The font file; absent for the built-in font. */
+  path?: string;
+  sizes?: {first: number; last: number; extras: {codepoint: number}[]}[];
+}
+
+/** A character the app renders that a font in the bake has no glyph for. */
+export interface MissingGlyph {
+  codepoint: number;
+  char: string;
+  /** A short excerpt of the text it was found in. */
+  sample: string;
+  /** Families whose bake lacks it. */
+  missingFrom: string[];
+  /** Those of `missingFrom` whose file has no glyph for it at all, so baking it there can't help. */
+  noGlyphIn: string[];
+}
+
+export interface ScanOptions {
+  /** Also read JSX element text. Set it for unbundled `.jsx`: a bundler has already turned element text into
+   *  string literals, and on bundled output the extra pass would only misread `a > b` comparisons. */
+  jsx?: boolean;
+}
+
+export interface CoverageCheck extends ScanOptions {
+  /** App/bundle JS to scan for rendered text. */
+  source: string;
+  /** bakeFont() results; empty means built-in font only. */
+  fonts?: CoverageFont[];
+}
 
 /** Name used for the engine's fallback font in warnings (it has no family of its own). */
 export const BUILTIN_FAMILY = 'the built-in font';
@@ -42,13 +75,26 @@ const EXCERPT_CONTEXT = 12; // characters shown either side of the one found
 const LITERALS =
   /\/\/[^\n]*|\/\*[\s\S]*?\*\/|'(?:[^'\\\n]|\\[\s\S])*'|"(?:[^"\\\n]|\\[\s\S])*"|`(?:[^`\\]|\\[\s\S])*`/g;
 
-const SIMPLE_ESCAPES = {n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v'};
+const SIMPLE_ESCAPES: Record<string, string> = {
+  n: '\n',
+  t: '\t',
+  r: '\r',
+  b: '\b',
+  f: '\f',
+  v: '\v',
+};
 
 /** Resolves the \u{...}, \uXXXX, \xNN and simple escapes a bundler emits back to characters. */
-function decodeEscapes(body) {
+function decodeEscapes(body: string): string {
   return body.replace(
     /\\u\{([0-9a-fA-F]{1,6})\}|\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\([\s\S])/g,
-    (_match, braced, unicode, hex, other) => {
+    (
+      _match: string,
+      braced: string | undefined,
+      unicode: string | undefined,
+      hex: string | undefined,
+      other: string,
+    ) => {
       if (braced !== undefined) {
         const codepoint = parseInt(braced, 16);
         return codepoint <= MAX_CODEPOINT
@@ -64,7 +110,7 @@ function decodeEscapes(body) {
 }
 
 /** Invisible/formatting characters that are never baked and never render — not worth warning about. */
-function ignorable(codepoint) {
+function ignorable(codepoint: number): boolean {
   return (
     (codepoint >= 0x7f && codepoint <= 0x9f) || // DEL + C1 controls
     (codepoint >= 0x200b && codepoint <= 0x200f) || // zero-width + bidi marks
@@ -81,19 +127,18 @@ const JSX_TEXT = />([^<>{}]+)</g;
 /**
  * Collects every non-ASCII character that appears in the app's rendered text.
  *
- * @param {string} source  JS source (a bundle, a chunk, or a single component file).
- * @param {object} [opts]
- * @param {boolean} [opts.jsx]  Also read JSX element text. Set it for unbundled `.jsx` — a bundler
- *        has already turned element text into string literals, and on bundled output the extra
- *        pass would only misread `a > b` comparisons.
- * @returns {Map<number, string>} Codepoint → a short excerpt of the text it was found in.
+ * @param source  JS source (a bundle, a chunk, or a single component file).
+ * @returns Codepoint → a short excerpt of the text it was found in.
  */
-export function scanTextCodepoints(source, {jsx = false} = {}) {
-  const found = new Map();
-  const collect = text => {
+export function scanTextCodepoints(
+  source: string,
+  {jsx = false}: ScanOptions = {},
+): Map<number, string> {
+  const found = new Map<number, string>();
+  const collect = (text: string) => {
     let offset = 0;
     for (const character of text) {
-      const codepoint = character.codePointAt(0);
+      const codepoint = character.codePointAt(0)!;
       if (
         codepoint > ASCII_LAST &&
         !ignorable(codepoint) &&
@@ -118,18 +163,18 @@ export function scanTextCodepoints(source, {jsx = false} = {}) {
  * Compact signature of the non-ASCII characters a source renders. Watch loops fold this into their
  * "did the asset inputs change?" key so new text is re-checked, not just new fonts.
  *
- * @param {string} source  JS source to scan.
- * @param {object} [opts]   Passed through to scanTextCodepoints (e.g. `{jsx: true}`).
- * @returns {string} Sorted codepoints, comma-joined.
+ * @param source  JS source to scan.
+ * @param opts    Passed through to scanTextCodepoints (e.g. `{jsx: true}`).
+ * @returns Sorted codepoints, comma-joined.
  */
-export function textSignature(source, opts) {
+export function textSignature(source: string, opts?: ScanOptions): string {
   return [...scanTextCodepoints(source, opts).keys()]
     .sort((left, right) => left - right)
     .join(',');
 }
 
 /** A one-line, printable window of `text` around the character at `at` (a UTF-16 index). */
-function excerpt(text, at, length) {
+function excerpt(text: string, at: number, length: number): string {
   const start = Math.max(0, at - EXCERPT_CONTEXT);
   const end = Math.min(text.length, at + length + EXCERPT_CONTEXT);
   const body = text
@@ -141,9 +186,9 @@ function excerpt(text, at, length) {
 }
 
 /** The set of codepoints a baked font can render: the dense ASCII range plus its baked extras. */
-function coverageOf(baked) {
+function coverageOf(baked: CoverageFont): Set<number> {
   const size = baked.sizes?.[0];
-  const covered = new Set();
+  const covered = new Set<number>();
   const first = size ? size.first : ASCII_FIRST;
   const last = size ? size.last : ASCII_LAST;
   for (let codepoint = first; codepoint <= last; codepoint++)
@@ -153,7 +198,7 @@ function coverageOf(baked) {
 }
 
 /** The engine's fallback font, shaped like a bakeFont() result so both go through one code path. */
-function builtinFont() {
+function builtinFont(): CoverageFont {
   return {
     family: BUILTIN_FAMILY,
     sizes: [
@@ -174,15 +219,13 @@ function builtinFont() {
  * character the app's own font lacks is exactly the bug worth reporting); with none, the engine's
  * built-in fallback is checked instead.
  *
- * @param {object} opts
- * @param {string} opts.source            App/bundle JS to scan for rendered text.
- * @param {Array<object>} [opts.fonts]    bakeFont() results; empty means built-in font only.
- * @param {boolean} [opts.jsx]            Source is unbundled JSX — read element text too.
- * @returns {Array<{codepoint:number, char:string, sample:string, missingFrom:string[],
- *          noGlyphIn:string[]}>} Sorted by codepoint. `noGlyphIn` narrows `missingFrom` to the
- *          fonts whose file has no glyph for the character at all — baking it there can't help.
+ * @returns Sorted by codepoint.
  */
-export function findMissingGlyphs({source, fonts = [], jsx = false}) {
+export function findMissingGlyphs({
+  source,
+  fonts = [],
+  jsx = false,
+}: CoverageCheck): MissingGlyph[] {
   const checked = fonts.length ? fonts : [builtinFont()];
   const coverage = checked.map(font => ({
     family: font.family,
@@ -190,15 +233,15 @@ export function findMissingGlyphs({source, fonts = [], jsx = false}) {
     covered: coverageOf(font),
   }));
   // Opened lazily and only for a font with a gap: most builds have none and pay nothing.
-  const probes = new Map();
-  const hasGlyph = (font, codepoint) => {
+  const probes = new Map<string, (codepoint: number) => boolean>();
+  const hasGlyph = (font: {path?: string}, codepoint: number) => {
     if (!font.path) return true; // the built-in font's coverage is its bake, nothing more to ask
     if (!probes.has(font.path))
       probes.set(font.path, loadGlyphProbe(font.path));
-    return probes.get(font.path)(codepoint);
+    return probes.get(font.path)!(codepoint);
   };
 
-  const missing = [];
+  const missing: MissingGlyph[] = [];
   for (const [codepoint, sample] of scanTextCodepoints(source, {jsx})) {
     const gaps = coverage.filter(entry => !entry.covered.has(codepoint));
     if (!gaps.length) continue;
@@ -221,11 +264,14 @@ const MAX_LISTED = 12;
  * Renders findMissingGlyphs() output as a developer-facing warning, ending with the config change
  * that fixes it.
  *
- * @param {Array<object>} missing   Result of findMissingGlyphs().
- * @param {Array<object>} [fonts]   The same bakeFont() results, for the suggested config line.
- * @returns {string} The warning text (empty when nothing is missing).
+ * @param missing  Result of findMissingGlyphs().
+ * @param fonts    The same bakeFont() results, for the suggested config line.
+ * @returns The warning text (empty when nothing is missing).
  */
-export function formatMissingGlyphs(missing, fonts = []) {
+export function formatMissingGlyphs(
+  missing: MissingGlyph[],
+  fonts: {family: string}[] = [],
+): string {
   if (!missing.length) return '';
   const lines = missing.slice(0, MAX_LISTED).map(glyph => {
     const hex = glyph.codepoint
@@ -274,25 +320,23 @@ export function formatMissingGlyphs(missing, fonts = []) {
   );
 }
 
-let lastWarning = null; // dev loops re-bake on every save — don't reprint an unchanged warning
+let lastWarning: string | null = null; // dev loops re-bake on every save — don't reprint an unchanged warning
 
 /**
  * Checks glyph coverage and warns. Repeats are suppressed while the warning is unchanged, so a
  * watch/hot-reload loop reports each gap once rather than on every save.
  *
- * @param {object} opts
- * @param {string} opts.source          App/bundle JS to scan for rendered text.
- * @param {Array<object>} [opts.fonts]  bakeFont() results; empty means built-in font only.
- * @param {boolean} [opts.jsx]          Source is unbundled JSX — read element text too.
- * @param {Function} [opts.log]         Sink for the warning (default console.warn).
- * @returns {Array<object>} The missing-glyph records (empty when coverage is complete).
+ * @returns The missing-glyph records (empty when coverage is complete).
  */
 export function warnMissingGlyphs({
   source,
   fonts = [],
   jsx = false,
   log = console.warn,
-}) {
+}: CoverageCheck & {
+  /** Sink for the warning. */
+  log?: (text: string) => void;
+}): MissingGlyph[] {
   const missing = findMissingGlyphs({source, fonts, jsx});
   const text = formatMissingGlyphs(missing, fonts);
   if (text && text !== lastWarning) log(text);

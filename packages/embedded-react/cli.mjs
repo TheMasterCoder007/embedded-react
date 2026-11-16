@@ -429,10 +429,10 @@ async function compileAppPackage(
 ) {
   const {compilePackage, bakeSvgArtifacts, packPackage, readNativeFiles} =
     await import('./aot/compile.mts');
-  const {bakeAssetPackBytes} = await import('./assets/index.mjs');
-  const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mjs');
+  const {bakeAssetPackBytes} = await import('./assets/index.mts');
+  const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mts');
   const {analyzeFontSizes, warnFontSizes} =
-    await import('./assets/font-sizes.mjs');
+    await import('./assets/font-sizes.mts');
   const appDir = dirname(appPath);
   const source = readFileSync(appPath, 'utf8');
   // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.

@@ -83,9 +83,9 @@ import {
 } from 'node:fs';
 import {basename, resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {bakeAssetPackBytes} from '../assets/index.mjs';
-import {warnMissingGlyphs} from '../assets/glyph-coverage.mjs';
-import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mjs';
+import {bakeAssetPackBytes} from '../assets/index.mts';
+import {warnMissingGlyphs} from '../assets/glyph-coverage.mts';
+import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mts';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';

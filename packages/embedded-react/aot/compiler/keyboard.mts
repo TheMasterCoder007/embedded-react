@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {parseColor} from '../../src/embedded-react/svg-ops.js';
+import {parseColor} from '../../src/embedded-react/svg-ops.mts';
 import {aotError, withLoc} from './diagnostics.mts';
 import {evalStatic} from './static-eval.mts';
 import type * as t from '@babel/types';

@@ -27,7 +27,7 @@ import {spawnSync} from 'node:child_process';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {crc32} from './assets/emit-container.mjs';
+import {crc32} from './assets/emit-container.mts';
 
 export const SLOT_HEADER_BYTES = 4096; // bytes before the package: one erase sector
 const SLOT_HEADER_PAGE_BYTES = 256; // the part of it that is written

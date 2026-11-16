@@ -1,5 +1,5 @@
 {
-  "//": "Typecheck the Flow B compiler (aot/). Its .mts files are checked strictly; a .mjs file is read only for the types it exports, unless it opts in with // @ts-check. Node runs the .mts files directly by stripping their types, so only erasable syntax is allowed (no enums, namespaces or parameter properties), a relative import names the real file (./x.mts), and a type-only import is written `import type`. The JavaScript the compiler imports from assets/ and src/ is listed so this project (composite, for the references in tsconfig.json) can read it. Run with `npm run typecheck`.",
+  "//": "Typecheck the Flow B compiler (aot/) and the asset bakers (assets/). Its .mts files are checked strictly; a .mjs file is read only for the types it exports, unless it opts in with // @ts-check. Node runs the .mts files directly by stripping their types, so only erasable syntax is allowed (no enums, namespaces or parameter properties), a relative import names the real file (./x.mts), and a type-only import is written `import type`. The asset bakers (assets/) and svg-ops are checked the same way. The JavaScript the compiler imports from src/ is listed so this project (composite, for the references in tsconfig.json) can read it. Run with `npm run typecheck`.",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2023"],
@@ -22,10 +22,10 @@
     "aot/**/*.mjs",
     "test/erb-frames/*.mts",
     "test/erb-frames/*.d.ts",
-    "assets/**/*.mjs",
+    "assets/**/*.mts",
     "src/embedded-react/background-image.mts",
     "src/embedded-react/named-colors.js",
-    "src/embedded-react/svg-ops.js",
+    "src/embedded-react/svg-ops.mts",
     "src/embedded-react/warn-props.js"
   ],
   "exclude": ["**/__tests__/**"]

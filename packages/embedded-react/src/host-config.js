@@ -29,7 +29,7 @@ import {
   warnVectorCaps,
   scaleVectorArtifact,
   encodeVectorGradients,
-} from './embedded-react/svg-ops.js';
+} from './embedded-react/svg-ops.mts';
 import {splitAnimatedStyle} from './embedded-react/split-style.js';
 
 // --- Animated bindings ---------------------------------------------------------------------------
