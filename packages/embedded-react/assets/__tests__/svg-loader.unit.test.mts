@@ -75,6 +75,7 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
     await expect(bundleWithSvg('<svg><path d="M0 0"')).rejects.toThrow(); // malformed XML
   });
 
+  // The timeout: resvg loads the system fonts to draw text, which can take a cold CI runner over 5 s.
   it('falls back to a raster image artifact when the SVG uses unsupported features', async () => {
     const assets = new Map();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -92,7 +93,7 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
     expect(assets.has('icon')).toBe(true);
     expect(assets.get('icon')).toMatch(/\.png$/);
     expect(existsSync(assets.get('icon'))).toBe(true);
-  });
+  }, 30000);
 
   it('warns when an unsupported SVG has no raster fallback, and still bakes the vector subset', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

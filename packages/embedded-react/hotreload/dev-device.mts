@@ -25,37 +25,59 @@
 // as a PackageTransfer, and the app starts over, since a package's state doesn't carry across yet.
 
 import {relative} from 'node:path';
-import {PackageTransfer} from './package-transfer.mjs';
-import {packApp, emitAppFrame} from './pack-split.mjs';
-import {SerialUploader, listSerialPorts} from './uploader.mjs';
-import {watchTree} from './watch-tree.mjs';
+import {PackageTransfer} from './package-transfer.mts';
+import type {TransferOutcome} from './package-transfer.mts';
+import {packApp, emitAppFrame} from './pack-split.mts';
+import {SerialUploader, listSerialPorts} from './uploader.mts';
+import {watchTree} from './watch-tree.mts';
 
 const BYTES_PER_KB = 1024;
 const WATCH_DEBOUNCE_MS = 120;
 const LIVENESS_CHECKS = 30;
 const LIVENESS_INTERVAL_MS = 100;
 
-const kb = bytes => `${(bytes / BYTES_PER_KB).toFixed(1)} KB`;
+const kb = (bytes: number) => `${(bytes / BYTES_PER_KB).toFixed(1)} KB`;
+
+/** A push's terminal status, or 'senderr' when the write itself failed. */
+type PushOutcome = TransferOutcome | 'senderr';
+
+/** What the loop needs: the Flow A paths, or compilePackage for Flow B. */
+export type DeviceDevOptions = {
+  entry: string;
+  projectRoot: string;
+  /** The serial port's path. */
+  device: string;
+  label: string;
+} & (
+  | {
+      libSrc: string;
+      nodePaths: string[];
+      simDir: string;
+      compilePackage?: undefined;
+    }
+  | {
+      libSrc?: undefined;
+      nodePaths?: undefined;
+      simDir?: undefined;
+      /** Flow B: builds the package to send. Throws to report a build error. */
+      compilePackage: () => Promise<Buffer>;
+    }
+);
 
 /** Debounce: coalesce a burst of file events (editors often write several) into one rebuild. */
-function debounce(callback, delayMs) {
-  let timer = null;
-  return (...args) => {
+function debounce(callback: () => void, delayMs: number): () => void {
+  let timer: NodeJS.Timeout | null = null;
+  return () => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      callback(...args);
+      callback();
     }, delayMs);
   };
 }
 
 /**
  * Run the device hot-reload dev loop until interrupted.
- *
- * @param {object}   options
- * @param {string}   options.entry, options.projectRoot, options.libSrc, options.simDir, options.label, options.device
- * @param {string[]} options.nodePaths
- * @param {() => Promise<Buffer>} [options.compilePackage]  Flow B: builds the package to send. Throws to report a build error.
  */
 export async function runDeviceDevServer({
   entry,
@@ -66,22 +88,22 @@ export async function runDeviceDevServer({
   device,
   label,
   compilePackage,
-}) {
+}: DeviceDevOptions): Promise<void> {
   // Each push ends with exactly one terminal line in the device's log stream:
   //   "hot reload: ok (...)"     → loaded and running
   //   "hot reload: <reason>"     → loaded but the container was rejected (an app/runtime error)
   //   "dropped frame: <reason>"  → the upload was corrupt / overran the device's RX buffer (transport)
   // We watch for it to gate the next send (so a second push can't land while the device is still
   // applying — which would overrun its RX buffer and corrupt that frame) and to resend after a drop.
-  let settleOutcome = null;
+  let settleOutcome: ((outcome: PushOutcome) => void) | null = null;
   // Track whether the board is alive at all (any log line) and whether a hot-reload RECEIVER is actually
   // running (it prints a "hot reload: …" or "dropped frame: …" line per frame). Firmware built WITHOUT
   // ER_HOTRELOAD still prints normal logs but never those — that's how we flag a disabled build below.
   let sawAnyLog = false;
   let sawReceiverAck = false;
   let closing = false; // set on Ctrl-C so we don't surface errors from a write canceled by the shutdown
-  let transfer = null;
-  const onDeviceLog = line => {
+  let transfer: PackageTransfer | null = null;
+  const onDeviceLog = (line: string) => {
     if (closing) return;
     sawAnyLog = true;
     if (/dropped frame/i.test(line) || /(hot|erb) reload:/i.test(line))
@@ -106,7 +128,7 @@ export async function runDeviceDevServer({
 
   try {
     await uploader.open();
-  } catch (error) {
+  } catch (error: any) {
     console.error(`✗ ${error.message}`);
     const ports = await listSerialPorts();
     if (ports.length) {
@@ -136,9 +158,9 @@ export async function runDeviceDevServer({
   /** Resolves with the device's terminal status ('ok' | 'rejected' | 'dropped' | 'timeout') for the
    * push currently in flight. */
   const nextOutcome = (timeoutMs = APPLY_TIMEOUT_MS) =>
-    new Promise(resolve => {
+    new Promise<PushOutcome>(resolve => {
       let done = false;
-      const finish = outcome => {
+      const finish = (outcome: PushOutcome) => {
         if (done) return;
         done = true;
         settleOutcome = null;
@@ -151,13 +173,13 @@ export async function runDeviceDevServer({
 
   /** Send a container and wait for the device to apply it, resending on a transport drop/timeout. */
   const sendAndConfirm = async (
-    container,
+    container: Buffer,
     {
       timeoutMs = APPLY_TIMEOUT_MS,
       maxResends = MAX_RESENDS,
       probe = false,
     } = {},
-  ) => {
+  ): Promise<PushOutcome> => {
     for (let attempt = 0; ; attempt++) {
       const outcome = nextOutcome(timeoutMs);
       uploader.send(container).catch(error => {
@@ -183,19 +205,22 @@ export async function runDeviceDevServer({
   let triedToSend = false; // a first save that doesn't build says nothing about the board
 
   /** One Flow B cycle: compile a package, send it and report how it went. */
-  const reloadPackage = async ({probe}) => {
+  const reloadPackage = async (
+    compilePackage: () => Promise<Buffer>,
+    {probe}: {probe: boolean},
+  ) => {
     const started = Date.now();
     let packageData;
     try {
       packageData = await compilePackage();
-    } catch (error) {
+    } catch (error: any) {
       console.error(`✗ build failed: ${error.message}`);
       return;
     }
     triedToSend = true;
-    const result = await transfer
+    const result = await transfer!
       .send(packageData, probe ? {beginTimeoutMs: PROBE_TIMEOUT_MS} : {})
-      .catch(error => {
+      .catch((error): PushOutcome => {
         if (!closing) console.error(`✗ send failed: ${error.message}`);
         return 'senderr';
       });
@@ -223,7 +248,7 @@ export async function runDeviceDevServer({
       do {
         queued = false;
         if (compilePackage) {
-          await reloadPackage({probe: firstSend});
+          await reloadPackage(compilePackage, {probe: firstSend});
           firstSend = false;
           continue;
         }
@@ -244,7 +269,7 @@ export async function runDeviceDevServer({
           });
           bytecodeLength = app.bytecodeLen;
           assetsLength = app.assetsLen;
-        } catch (error) {
+        } catch (error: any) {
           console.error(`✗ build failed: ${error.message}`);
           continue;
         }
@@ -294,7 +319,7 @@ export async function runDeviceDevServer({
   }
 
   const onChange = debounce(reloadCycle, WATCH_DEBOUNCE_MS);
-  const onWatchEvent = (_event, file) => {
+  const onWatchEvent = (_event: string, file: string | null) => {
     if (!file) return;
     // Ignore churn that can't affect the bundle (build output, deps, VCS, editor temp files).
     if (/(^|\/)(node_modules|dist|\.git)(\/|$)/.test(file)) return;

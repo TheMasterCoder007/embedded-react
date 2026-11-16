@@ -80,12 +80,54 @@ const UF2_FAMILY_AT = 28;
 const UF2_PAYLOAD_AT = 32;
 const UF2_MAGIC_END_AT = 508;
 
+/** Where a slot sits in flash, and how much it holds. */
+export interface Slot {
+  address: number;
+  bytes: number;
+}
+
+export type Board =
+  | {tool: 'esptool'; chip: string; slots: Slot[]}
+  | {tool: 'picotool'; slots: Slot[]};
+
+/** What a tool's run came to, as spawnSync reports it. */
+export interface ToolResult {
+  status: number | null;
+  stdout?: string | null;
+  stderr?: string | null;
+  error?: NodeJS.ErrnoException;
+}
+
+export type RunTool = (
+  command: string,
+  args: string[],
+  inherit: boolean,
+  timeoutMs?: number,
+) => ToolResult;
+
+interface ToolOptions {
+  run: RunTool;
+  /** How to get the tool, for when it isn't found. */
+  install: string;
+  inherit?: boolean;
+  timeoutMs?: number;
+}
+
+/** How a board's flash is read and written. */
+interface FlashAccess {
+  begin(): void;
+  read(address: number, bytes: number, file: string): void;
+  slots(scratchDir: string): Slot[];
+  write(address: number, file: string): void;
+  finish(): void;
+}
+
 /**
  * Where each board example keeps its slots. An ESP32 board's `flash` reads them from the partition table on the
  * board instead, so this is what `pack` prints for it. Keep it in step with the example's partitions.csv or
- * CMakeLists.txt: flash.unit.test.mjs checks that it is.
+ * CMakeLists.txt: flash.unit.test.mts checks that it is.
  */
-export const BOARDS = {
+export const BOARDS: Record<string, Board> = {
   'esp32-2432s028r': {
     tool: 'esptool',
     chip: 'esp32',
@@ -111,11 +153,11 @@ export const BOARDS = {
   },
 };
 
-const hex = value => `0x${value.toString(16)}`;
+const hex = (value: number) => `0x${value.toString(16)}`;
 
 /** The board for a --board value; throws naming the ones there are. */
-export function boardByName(name) {
-  const board = BOARDS[name];
+export function boardByName(name: string | undefined): Board {
+  const board = name ? BOARDS[name] : undefined;
   if (!board) {
     throw new Error(
       `${name ? `Unknown board "${name}"` : 'No board given'}: pass --board with one of ${Object.keys(BOARDS).join(', ')}.`,
@@ -125,7 +167,7 @@ export function boardByName(name) {
 }
 
 /** Checks the bytes are a whole Flow B package, so a stale or Flow A file never reaches a slot. */
-export function checkPackage(bytes) {
+export function checkPackage(bytes: Buffer): void {
   if (
     bytes.length < CONTAINER_TAG_AT + CONTAINER_TAG_LENGTH_BYTES ||
     bytes.toString('latin1', 0, CONTAINER_MAGIC_BYTES) !== CONTAINER_MAGIC
@@ -152,7 +194,7 @@ export function checkPackage(bytes) {
 }
 
 /** Whether the bytes are a whole Flow B package. */
-function isWholePackage(bytes) {
+function isWholePackage(bytes: Buffer): boolean {
   try {
     checkPackage(bytes);
     return true;
@@ -162,7 +204,7 @@ function isWholePackage(bytes) {
 }
 
 /** A slot's header page. */
-export function slotHeader(packageLength, sequence) {
+export function slotHeader(packageLength: number, sequence: number): Buffer {
   const header = Buffer.alloc(SLOT_HEADER_PAGE_BYTES, ERASED_BYTE);
   header.writeUInt32LE(SLOT_MAGIC, SLOT_MAGIC_AT);
   header.writeUInt32LE(sequence, SLOT_SEQUENCE_AT);
@@ -175,14 +217,17 @@ export function slotHeader(packageLength, sequence) {
 }
 
 /** A slot's whole image: the header in its sector, then the package. */
-export function slotImage(packageBytes, sequence) {
+export function slotImage(packageBytes: Buffer, sequence: number): Buffer {
   const headerSector = Buffer.alloc(SLOT_HEADER_BYTES, ERASED_BYTE);
   slotHeader(packageBytes.length, sequence).copy(headerSector);
   return Buffer.concat([headerSector, packageBytes]);
 }
 
 /** What a slot's first bytes say: its sequence and package length, or null when it has no valid header. */
-export function readSlotHeader(bytes, slotBytes) {
+export function readSlotHeader(
+  bytes: Buffer,
+  slotBytes: number,
+): {sequence: number; packageBytes: number} | null {
   if (
     bytes.length < SLOT_HEADER_CHECKED_BYTES + SLOT_HEADER_CRC_BYTES ||
     bytes.readUInt32LE(SLOT_MAGIC_AT) !== SLOT_MAGIC ||
@@ -199,7 +244,10 @@ export function readSlotHeader(bytes, slotBytes) {
 }
 
 /** A slot's sequence from its first bytes, or null when it has no valid header. */
-export function readSlotSequence(bytes, slotBytes) {
+export function readSlotSequence(
+  bytes: Buffer,
+  slotBytes: number,
+): number | null {
   return readSlotHeader(bytes, slotBytes)?.sequence ?? null;
 }
 
@@ -207,7 +255,11 @@ export function readSlotSequence(bytes, slotBytes) {
  * Picks the slot for a new package from the two slots' sequences (null for none): the one that isn't the
  * newest, with the next sequence. The firmware makes the same choice (erb_package_slots_boot).
  */
-export function pickSlot([first, second]) {
+export function pickSlot([first, second]: (number | null)[]): {
+  slot: number;
+  sequence: number;
+  lastGood: number | null;
+} {
   // A signed difference, so the order survives the sequence wrapping.
   const secondIsNewer =
     second !== null && (first === null || (second - first) << 0 > 0);
@@ -224,9 +276,9 @@ export function pickSlot([first, second]) {
 /**
  * Runs of bytes as UF2 blocks, in the order given, for a drag-and-drop onto an RP2040 in BOOTSEL mode.
  *
- * @param {{address: number, bytes: Buffer}[]} runs  What to write where.
+ * @param runs  What to write where.
  */
-export function uf2(runs) {
+export function uf2(runs: {address: number; bytes: Buffer}[]): Buffer {
   const pages = runs.flatMap(({address, bytes}) =>
     Array.from(
       {length: Math.ceil(bytes.length / UF2_PAYLOAD_BYTES)},
@@ -264,8 +316,8 @@ export function uf2(runs) {
 }
 
 /** The package slots in an ESP32 partition table's bytes, or null when the firmware on the board has none. */
-export function slotsFromPartitionTable(table) {
-  const slots = [null, null];
+export function slotsFromPartitionTable(table: Buffer): Slot[] | null {
+  const slots: (Slot | null)[] = [null, null];
   for (
     let at = 0;
     at + ESP_PARTITION_ENTRY_BYTES <= table.length;
@@ -284,11 +336,15 @@ export function slotsFromPartitionTable(table) {
       };
     }
   }
-  return slots.every(Boolean) ? slots : null;
+  return slots.every(Boolean) ? (slots as Slot[]) : null;
 }
 
 /** Runs the first of a tool's names that exists; throws with its output when it fails. */
-function runTool(names, args, {run, install, inherit = false, timeoutMs}) {
+function runTool(
+  names: string[],
+  args: string[],
+  {run, install, inherit = false, timeoutMs}: ToolOptions,
+): void {
   for (const name of names) {
     const result = run(name, args, inherit, timeoutMs);
     if (result.error?.code === 'ENOENT') continue;
@@ -303,17 +359,25 @@ function runTool(names, args, {run, install, inherit = false, timeoutMs}) {
   throw new Error(`${names[0]} wasn't found. ${install}`);
 }
 
-const sleepMs = ms =>
+const sleepMs = (ms: number) =>
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
-const defaultRun = (command, args, inherit, timeoutMs) =>
+const defaultRun: RunTool = (command, args, inherit, timeoutMs) =>
   spawnSync(command, args, {
     encoding: 'utf8',
     stdio: inherit ? 'inherit' : 'pipe',
     timeout: timeoutMs,
   });
 
-const espAccess = ({chip, port, run}) => {
+const espAccess = ({
+  chip,
+  port,
+  run,
+}: {
+  chip: string;
+  port?: string;
+  run: RunTool;
+}): FlashAccess => {
   const names = process.env.ESPTOOL
     ? [process.env.ESPTOOL]
     : ['esptool', 'esptool.py'];
@@ -323,7 +387,7 @@ const espAccess = ({chip, port, run}) => {
     install: 'Export ESP-IDF first (. $IDF_PATH/export.sh), or set ESPTOOL.',
   };
   // The underscored commands: esptool 4 takes only these, and esptool 5 still does.
-  const read = (address, bytes, file) =>
+  const read = (address: number, bytes: number, file: string) =>
     runTool(
       names,
       [...common, 'read_flash', hex(address), hex(bytes), file],
@@ -352,7 +416,15 @@ const espAccess = ({chip, port, run}) => {
   };
 };
 
-const picoAccess = ({board, run, sleep}) => {
+const picoAccess = ({
+  board,
+  run,
+  sleep,
+}: {
+  board: Board;
+  run: RunTool;
+  sleep: (ms: number) => unknown;
+}): FlashAccess => {
   const names = process.env.PICOTOOL ? [process.env.PICOTOOL] : ['picotool'];
   const options = {
     run,
@@ -361,10 +433,10 @@ const picoAccess = ({board, run, sleep}) => {
   };
   // libusb on macOS can deadlock as the board detaches, leaving picotool stuck after the reboot worked. What comes
   // next shows whether it did, so a reboot that outlives the timeout isn't a failure.
-  const reboot = args => {
+  const reboot = (args: string[]) => {
     try {
       runTool(names, args, {...options, timeoutMs: PICO_REBOOT_TIMEOUT_MS});
-    } catch (error) {
+    } catch (error: any) {
       if (error.code !== 'ETIMEDOUT') throw error;
     }
   };
@@ -406,8 +478,6 @@ const picoAccess = ({board, run, sleep}) => {
 /**
  * Writes a package's slot image to a file, for a line or a drag-and-drop. Nothing here knows what the board holds,
  * so it is for an empty board, or a slot and sequence you already know.
- *
- * @returns {{file: string, address: number, sequence: number, slot: string}}
  */
 export function packSlot({
   packageBytes,
@@ -416,7 +486,14 @@ export function packSlot({
   slotName = 'a',
   sequence = 1,
   outDir,
-}) {
+}: {
+  packageBytes: Buffer;
+  board: Board;
+  boardName?: string;
+  slotName?: string;
+  sequence?: number;
+  outDir: string;
+}): {file: string; address: number; sequence: number; slot: string} {
   const slot = SLOT_NAMES.indexOf(slotName);
   if (slot < 0) throw new Error(`--slot takes a or b, got: ${slotName}`);
   // 0 is valid: it is what comes after the sequence wraps.
@@ -449,8 +526,6 @@ export function packSlot({
 
 /**
  * Writes a package to a board: reads its slots, and writes the one that isn't the newest.
- *
- * @returns {{address: number, sequence: number, slot: string, lastGood: string|null}}
  */
 export function flashSlot({
   packageBytes,
@@ -459,7 +534,14 @@ export function flashSlot({
   run = defaultRun,
   log = () => {},
   sleep = sleepMs,
-}) {
+}: {
+  packageBytes: Buffer;
+  board: Board;
+  port?: string;
+  run?: RunTool;
+  log?: (line: string) => void;
+  sleep?: (ms: number) => unknown;
+}): {address: number; sequence: number; slot: string; lastGood: string | null} {
   checkPackage(packageBytes);
   const access =
     board.tool === 'picotool'
@@ -485,7 +567,7 @@ export function flashSlot({
       const file = join(scratchDir, 'newest.bin');
       access.read(
         slots[lastGood].address + SLOT_HEADER_BYTES,
-        headers[lastGood].packageBytes,
+        headers[lastGood]!.packageBytes,
         file,
       );
       if (!isWholePackage(readFileSync(file))) {

@@ -74,7 +74,7 @@ src/embedded-react/   the public package surface (components, StyleSheet, Animat
 src/host-config.js    the react-reconciler host config → NativeUI.* (the C bridge)
 aot/                  the Flow B JSX→package compiler
 assets/               build-time bakers: images, fonts, SVG, the ERPK container writer
-cli.mjs, sim-server.mjs   the `embedded-react` CLI and the shared simulator dev server
+cli.mts, sim-server.mts   the `embedded-react` CLI and the shared simulator dev server
 sim/                  the prebuilt engine .wasm the simulator runs
 test/runtime/         end-to-end tests that run inside QuickJS + the real engine
 ```

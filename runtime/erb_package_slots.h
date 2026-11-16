@@ -26,7 +26,7 @@
  * the newest sequence is the active one, and the other is staging, where the next package goes. A package that fails to
  * load is given up on and the other slot runs, so the last good package stays until a new one passes verification.
  *
- * The writers are packages/embedded-react/flash.mjs and, on the board, erb_package_reload.h. The board maps the slots
+ * The writers are packages/embedded-react/flash.mts and, on the board, erb_package_reload.h. The board maps the slots
  * and gives the functions that change them.
  */
 

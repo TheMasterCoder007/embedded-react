@@ -39,7 +39,7 @@ pico_sdk_init()
 
 # --- Package slots --------------------------------------------------------------------------------
 # Two 512 KB slots above the firmware, in the 2 MB the Pico SDK assumes of this board's flash. Keep these in
-# step with packages/embedded-react/flash.mjs. stack_guard.ld fails the link if the firmware reaches them.
+# step with packages/embedded-react/flash.mts. stack_guard.ld fails the link if the firmware reaches them.
 set(ER_PACKAGE_SLOT_A_OFFSET 0x100000)
 set(ER_PACKAGE_SLOT_B_OFFSET 0x180000)
 set(ER_PACKAGE_SLOT_BYTES 0x80000)

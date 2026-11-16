@@ -53,18 +53,22 @@ const DEFAULT_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
 
 /** Frame message types (room to grow: ping/ack/reset later without a version bump). */
 export const MSG_LOAD_CONTAINER = 1;
-export const MSG_PACKAGE_BEGIN = 2; // Flow B: see package-transfer.mjs
+export const MSG_PACKAGE_BEGIN = 2; // Flow B: see package-transfer.mts
 export const MSG_PACKAGE_CHUNK = 3;
+
+export type FrameHandler = (payload: Buffer, meta: {type: number}) => void;
 
 /**
  * Encodes an .erpkg into an ERHR transport frame ready to write to the device's byte stream.
  *
- * @param {Buffer|Uint8Array} erpkg  The ERCF container bytes (from emitContainer).
- * @param {object}            [opts]
- * @param {number}            [opts.type]  Message type (default MSG_LOAD_CONTAINER).
- * @returns {Buffer} The framed bytes (16-byte header + payload).
+ * @param erpkg  The ERCF container bytes (from emitContainer).
+ * @param options.type  Message type (default MSG_LOAD_CONTAINER).
+ * @returns The framed bytes (16-byte header + payload).
  */
-export function encodeFrame(erpkg, {type = MSG_LOAD_CONTAINER} = {}) {
+export function encodeFrame(
+  erpkg: Uint8Array,
+  {type = MSG_LOAD_CONTAINER}: {type?: number} = {},
+): Buffer {
   if (!erpkg || !erpkg.length)
     throw new Error('encodeFrame: payload (.erpkg) is required');
   const payload = Buffer.from(erpkg);
@@ -86,19 +90,40 @@ export function encodeFrame(erpkg, {type = MSG_LOAD_CONTAINER} = {}) {
  * Emits via the callbacks passed to the constructor; tolerant of leading/interleaved non-frame bytes.
  */
 export class FrameDecoder {
+  onFrame: FrameHandler;
+  onError: (reason: string) => void;
+  maxPayload: number;
+  _state: 'scan' | 'header' | 'payload' = 'scan';
+  _window: Buffer = Buffer.alloc(MAGIC_BYTES);
+  _windowLength = 0;
+  _header: Buffer = Buffer.alloc(ERHR_HEADER_SIZE);
+  _headerReceived = MAGIC_BYTES;
+  _payloadLength = 0;
+  _payloadCrc = 0;
+  _type = 0;
+  _payload: Buffer | null = null;
+  _payloadReceived = 0;
+
   /**
-   * @param {object}   handlers
-   * @param {(payload: Buffer, meta: {type: number}) => void} [handlers.onFrame]  A complete, CRC-valid frame.
-   * @param {(reason: string) => void}                        [handlers.onError]  A framed payload failed validation.
+   * @param handlers.onFrame  A complete, CRC-valid frame.
+   * @param handlers.onError  A framed payload failed validation.
    */
-  constructor({onFrame, onError, maxPayload = DEFAULT_MAX_PAYLOAD_BYTES} = {}) {
+  constructor({
+    onFrame,
+    onError,
+    maxPayload = DEFAULT_MAX_PAYLOAD_BYTES,
+  }: {
+    onFrame?: FrameHandler;
+    onError?: (reason: string) => void;
+    maxPayload?: number;
+  } = {}) {
     this.onFrame = onFrame || (() => {});
     this.onError = onError || (() => {});
     this.maxPayload = maxPayload; // guard against a coincidental "ERHR" in noise claiming a huge length
     this._reset();
   }
 
-  _reset() {
+  _reset(): void {
     this._state = 'scan'; // scan magic → header → payload
     this._window = Buffer.alloc(MAGIC_BYTES); // rolling 4-byte window for magic resync
     this._windowLength = 0;
@@ -112,12 +137,12 @@ export class FrameDecoder {
   }
 
   /** Feed a chunk of received bytes. May complete zero, one, or several frames. */
-  push(chunk) {
+  push(chunk: Uint8Array): void {
     const data = Buffer.from(chunk);
     for (let index = 0; index < data.length; index++) this._byte(data[index]);
   }
 
-  _byte(byte) {
+  _byte(byte: number): void {
     if (this._state === 'scan') {
       // Slide the byte into a 4-byte window; a full match transitions to header collection. This
       // naturally handles partial matches and overlaps without backtracking.
@@ -166,10 +191,10 @@ export class FrameDecoder {
       this._state = 'payload';
       return;
     }
-    // payload
-    this._payload[this._payloadReceived++] = byte;
+    const payload = this._payload!;
+    payload[this._payloadReceived++] = byte;
     if (this._payloadReceived < this._payloadLength) return;
-    const actualCrc = crc32(this._payload);
+    const actualCrc = crc32(payload);
     if (actualCrc !== this._payloadCrc) {
       this.onError(
         `payload CRC mismatch (got ${actualCrc.toString(16)}, want ${this._payloadCrc.toString(16)})`,
@@ -177,7 +202,6 @@ export class FrameDecoder {
       this._reset();
       return;
     }
-    const payload = this._payload;
     const type = this._type;
     this._reset();
     this.onFrame(payload, {type});

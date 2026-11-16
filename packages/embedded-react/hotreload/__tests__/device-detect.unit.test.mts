@@ -23,7 +23,7 @@ import {
   preferCalloutPath,
   ESP_USB_JTAG_VID,
   ESP_USB_JTAG_PID,
-} from '../uploader.mjs';
+} from '../uploader.mts';
 
 describe('device auto-detect', () => {
   it('exposes the ESP32 USB-Serial-JTAG id constants', () => {

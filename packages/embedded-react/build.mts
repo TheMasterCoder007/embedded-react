@@ -27,11 +27,13 @@
 // Outputs are always dist/app.bundle.js + dist/assets.generated.{c,h} — the single "active" app the
 // example hosts pick up.
 import {build} from 'esbuild';
+import type {Plugin} from 'esbuild';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename} from 'node:path';
 import {existsSync, readdirSync, readFileSync} from 'node:fs';
 import {bakeAssets} from './assets/index.mts';
 import {resolveFontJobs} from './assets/font-config.mts';
+import type {AssetsConfig} from './assets/font-config.mts';
 import {analyzeFontSizes} from './assets/font-sizes.mts';
 import {registerSvgVectorLoader} from './assets/svg-loader.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
@@ -64,9 +66,9 @@ if (!existsSync(entry)) {
 // (font) is intercepted here. The import resolves to the asset's NAME (its file basename) — the
 // string an <Image source>/imageName looks up, or the family a fontFamily uses — and the path is
 // recorded, so it gets baked below. Only what the app imports is baked.
-const images = new Map(); // name -> path
-const fonts = new Map(); // family -> path
-const assetPlugin = {
+const images = new Map<string, string>(); // name -> path
+const fonts = new Map<string, string>(); // family -> path
+const assetPlugin: Plugin = {
   name: 'embedded-react-assets',
   setup(pluginBuild) {
     // The demo's own files give its native modules their signatures, and so do a package's.
@@ -140,7 +142,7 @@ const usedSizes = analyzeFontSizes(bundleSource);
 // Optional per-demo overrides: demos/<demo>/assets.config.js
 //   export default { fonts: { 'Family': { sizes: [..], bpp: 4, glyphs: 'ascii'|'common'|[cps],
 //                                         extraGlyphs: '°±' } } }
-let config = {};
+let config: AssetsConfig = {};
 const configPath = resolve(demoDir, 'assets.config.js');
 if (existsSync(configPath)) {
   config = (await import(pathToFileURL(configPath).href)).default || {};

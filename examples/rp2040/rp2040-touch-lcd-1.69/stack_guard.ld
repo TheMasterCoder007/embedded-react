@@ -9,4 +9,4 @@ ASSERT(__end__ + __framebuffer_bytes <= __StackOneBottom - __stack_guard_bytes,
 
 /* The package slots start above the firmware, so the firmware must end below them. */
 ASSERT(__flash_binary_end <= ORIGIN(FLASH) + __package_slots_offset,
-       "the firmware reaches into the package slots: move them in CMakeLists.txt and flash.mjs")
+       "the firmware reaches into the package slots: move them in CMakeLists.txt and flash.mts")

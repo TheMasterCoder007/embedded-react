@@ -17,7 +17,7 @@
 // create-embedded-react — scaffolds a new embedded-react app.
 //
 // Usage (from packages/embedded-react):  npm run create -- <name>
-//        or from anywhere:          node packages/embedded-react/create-embedded-react.mjs <name>
+//        or from anywhere:          node packages/embedded-react/create-embedded-react.mts <name>
 //
 // Generates demos/<name>/ (App.jsx + index.jsx + package.json + README + assets/) wired to the repo's
 // build/sim tooling, so the new app runs immediately:  cd demos/<name> && npm run sim
@@ -103,8 +103,8 @@ AppRegistry.registerComponent('${name}', () => App);
       private: true,
       description: `embedded-react app "${name}" — run the simulator (hot reload) or build the bundle from here.`,
       scripts: {
-        sim: `node ../../packages/embedded-react/sim.mjs ${name}`,
-        build: `node ../../packages/embedded-react/build.mjs ${name}`,
+        sim: `node ../../packages/embedded-react/sim.mts ${name}`,
+        build: `node ../../packages/embedded-react/build.mts ${name}`,
       },
     },
     null,

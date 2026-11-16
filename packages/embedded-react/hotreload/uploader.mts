@@ -21,13 +21,19 @@
 // on everyone who just wants the simulator or the AOT path. The first time you upload to a device, the
 // CLI asks you to `npm i serialport` if it isn't present.
 
-import {encodeFrame} from './protocol.mjs';
+import type {SerialPort} from 'serialport';
+import {encodeFrame} from './protocol.mts';
+
+/** An entry of `SerialPort.list()`. */
+export type SerialPortInfo = Awaited<
+  ReturnType<typeof SerialPort.list>
+>[number];
 
 const DEFAULT_BAUD = 460800;
 const PACED_CHUNK_BYTES = 16 * 1024;
 
 /** Loads the `serialport` package, with a friendly message if it isn't installed. */
-async function loadSerialPort() {
+async function loadSerialPort(): Promise<typeof import('serialport')> {
   try {
     return await import('serialport');
   } catch {
@@ -42,13 +48,29 @@ async function loadSerialPort() {
 /**
  * Opens a serial port and streams hot-reload uploads to it.
  *
- * @param {object}   options
- * @param {string}   options.device          Port path (e.g. /dev/tty.usbmodem1234 or COM5).
- * @param {number}   [options.baud]          Baud rate. Ignored by true USB-CDC links, required by UART bridges.
- * @param {(line: string) => void} [options.onLog]  Called with each line the device prints back.
+ * @param options.device  Port path (e.g. /dev/tty.usbmodem1234 or COM5).
+ * @param options.baud    Baud rate. Ignored by true USB-CDC links, required by UART bridges.
+ * @param options.onLog   Called with each line the device prints back.
  */
 export class SerialUploader {
-  constructor({device, baud = DEFAULT_BAUD, onLog, paced = true} = {}) {
+  device: string;
+  baud: number;
+  onLog: (line: string) => void;
+  paced: boolean;
+  _port: SerialPort | null;
+  _pendingLine: string;
+
+  constructor({
+    device,
+    baud = DEFAULT_BAUD,
+    onLog,
+    paced = true,
+  }: {
+    device?: string;
+    baud?: number;
+    onLog?: (line: string) => void;
+    paced?: boolean;
+  } = {}) {
     if (!device) throw new Error('SerialUploader: device path is required');
     this.device = device;
     this.baud = baud;
@@ -64,22 +86,23 @@ export class SerialUploader {
   }
 
   /** Opens the port. Resolves once it is ready to accept writes. */
-  async open() {
+  async open(): Promise<void> {
     const {SerialPort} = await loadSerialPort();
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       this._port = new SerialPort(
         {path: this.device, baudRate: this.baud},
         error => (error ? reject(error) : resolve()),
       );
     });
+    const port = this._port!;
     // Surface device logs line-by-line (the data arriving between/around our uploads).
-    this._port.on('data', chunk => this._onData(chunk));
-    this._port.on('error', error =>
+    port.on('data', (chunk: Buffer) => this._onData(chunk));
+    port.on('error', (error: Error) =>
       this.onLog(`[serial error] ${error.message}`),
     );
   }
 
-  _onData(chunk) {
+  _onData(chunk: Buffer): void {
     this._pendingLine += chunk.toString('utf8');
     let newline;
     while ((newline = this._pendingLine.indexOf('\n')) >= 0) {
@@ -89,15 +112,15 @@ export class SerialUploader {
     }
   }
 
-  _write(data) {
+  _write(data: Buffer): Promise<void> {
     return new Promise((resolve, reject) =>
-      this._port.write(data, error => (error ? reject(error) : resolve())),
+      this._port!.write(data, error => (error ? reject(error) : resolve())),
     );
   }
 
-  _drain() {
+  _drain(): Promise<void> {
     return new Promise((resolve, reject) =>
-      this._port.drain(error => (error ? reject(error) : resolve())),
+      this._port!.drain(error => (error ? reject(error) : resolve())),
     );
   }
 
@@ -111,10 +134,10 @@ export class SerialUploader {
    *
    * Fast path (paced=false): stream the whole frame in one write, relying on the link's own back-pressure.
    *
-   * @param {Buffer|Uint8Array} erpkg  Container bytes (from packAppContainer).
-   * @returns {Promise<number>} The number of framed bytes written.
+   * @param erpkg  Container bytes (from packAppContainer).
+   * @returns The number of framed bytes written.
    */
-  async send(erpkg) {
+  async send(erpkg: Uint8Array): Promise<number> {
     if (!this._port) throw new Error('SerialUploader: call open() first');
     const frame = encodeFrame(erpkg);
 
@@ -132,26 +155,25 @@ export class SerialUploader {
   }
 
   /** Writes a frame that is already encoded, for a transfer that waits for a reply to each. */
-  async writeFrame(frame) {
+  async writeFrame(frame: Buffer): Promise<void> {
     if (!this._port) throw new Error('SerialUploader: call open() first');
     await this._write(frame);
     await this._drain();
   }
 
   /** Closes the port. */
-  async close() {
-    if (!this._port) return;
-    await new Promise(resolve => this._port.close(() => resolve()));
+  async close(): Promise<void> {
+    const port = this._port;
+    if (!port) return;
+    await new Promise<void>(resolve => port.close(() => resolve()));
     this._port = null;
   }
 }
 
 /**
  * Lists serial ports, best-effort, to help the user pick a --device. Returns [] if serialport is absent.
- *
- * @returns {Promise<Array<{path: string, manufacturer?: string}>>}
  */
-export async function listSerialPorts() {
+export async function listSerialPorts(): Promise<SerialPortInfo[]> {
   try {
     const {SerialPort} = await loadSerialPort();
     return await SerialPort.list();
@@ -166,10 +188,13 @@ export async function listSerialPorts() {
 export const ESP_USB_JTAG_VID = '303a';
 export const ESP_USB_JTAG_PID = '1001';
 
-const hex = value => (value == null ? '' : String(value).toLowerCase());
+const hex = (value: string | null | undefined) =>
+  value == null ? '' : String(value).toLowerCase();
 
 /** True if a `SerialPort.list()` entry is an ESP32-S3/C3 native USB-Serial-JTAG port. */
-export function isEspJtagPort(port) {
+export function isEspJtagPort(
+  port: Pick<SerialPortInfo, 'vendorId' | 'productId'> | null | undefined,
+): boolean {
   return (
     hex(port?.vendorId) === ESP_USB_JTAG_VID &&
     hex(port?.productId) === ESP_USB_JTAG_PID
@@ -181,7 +206,7 @@ export function isEspJtagPort(port) {
  * `/dev/cu.*` (call-out, the one to use for an outgoing link). `SerialPort.list()` reports the tty.* side;
  * map it to cu.* on darwin so an auto-detected port opens without hanging. No-op elsewhere.
  */
-export function preferCalloutPath(path) {
+export function preferCalloutPath(path: string): string {
   if (process.platform === 'darwin' && path && path.startsWith('/dev/tty.')) {
     return `/dev/cu.${path.slice('/dev/tty.'.length)}`;
   }
@@ -191,19 +216,21 @@ export function preferCalloutPath(path) {
 /**
  * Enumerate serial ports and pick out the ESP32 USB-Serial-JTAG candidates for auto-detecting `--device`.
  * Distinguishes "serialport not installed" from "installed but nothing matched" so the CLI can advise.
- *
- * @returns {Promise<{matches: object[], all: object[], serialportMissing: boolean}>}
  */
-export async function detectDevicePorts() {
-  let SerialPort;
+export async function detectDevicePorts(): Promise<{
+  matches: SerialPortInfo[];
+  all: SerialPortInfo[];
+  serialportMissing: boolean;
+}> {
+  let SerialPortClass: typeof SerialPort;
   try {
-    ({SerialPort} = await import('serialport'));
+    ({SerialPort: SerialPortClass} = await import('serialport'));
   } catch {
     return {matches: [], all: [], serialportMissing: true};
   }
-  let all = [];
+  let all: SerialPortInfo[] = [];
   try {
-    all = await SerialPort.list();
+    all = await SerialPortClass.list();
   } catch {
     all = [];
   }

@@ -36,7 +36,7 @@ import {
   slotImage,
   slotsFromPartitionTable,
   uf2,
-} from '../flash.mjs';
+} from '../flash.mts';
 
 const examples = resolve(
   dirname(fileURLToPath(import.meta.url)),

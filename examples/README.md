@@ -26,5 +26,5 @@ with their simulator mocks, and the C headers generated from them (`include/`), 
 repository's root with this checkout's CLI:
 
 ```bash
-node packages/embedded-react/cli.mjs native-header examples/device --out examples/device/include
+node packages/embedded-react/cli.mts native-header examples/device --out examples/device/include
 ```

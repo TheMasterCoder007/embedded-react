@@ -30,10 +30,11 @@ import {dirname, resolve, basename, relative} from 'node:path';
 import {existsSync, readFileSync, statSync} from 'node:fs';
 import {bakeAssetPack} from './assets/index.mts';
 import {resolveFontJobs} from './assets/font-config.mts';
+import type {AssetsConfig} from './assets/font-config.mts';
 import {analyzeFontSizes, fontSizeSignature} from './assets/font-sizes.mts';
 import {textSignature} from './assets/glyph-coverage.mts';
 import {registerSvgVectorLoader} from './assets/svg-loader.mts';
-import {transformPersist} from './persist-transform.mjs';
+import {transformPersist} from './persist-transform.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 
@@ -74,8 +75,9 @@ if (!existsSync(simulatorBinary)) {
   process.exit(1);
 }
 
-const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
-const mtime = filePath => {
+const assetName = (filePath: string) =>
+  basename(filePath).replace(/\.[^.]+$/, '');
+const mtime = (filePath: string) => {
   try {
     return statSync(filePath).mtimeMs;
   } catch {
@@ -85,16 +87,16 @@ const mtime = filePath => {
 
 // Asset discovery: imports are recorded per build (cleared on onStart), then baked into the pack in
 // onEnd. The bundle still references the baked names (the import resolves to the file basename).
-const images = new Map(); // name -> path
-const fonts = new Map(); // family -> path
-let lastAssetSignature = null; // skip re-baking the pack on pure-JS saves (font rasterization is the cost)
+const images = new Map<string, string>(); // name -> path
+const fonts = new Map<string, string>(); // family -> path
+let lastAssetSignature: string | null = null; // skip re-baking the pack on pure-JS saves (font rasterization is the cost)
 
 async function bakePack() {
   // Font sizes: bake exactly the sizes the bundle uses, constants folded (engine has no rasterizer).
   const bundleSource = readFileSync(bundlePath, 'utf8');
   const usedSizes = analyzeFontSizes(bundleSource);
 
-  let assetsConfig = {};
+  let assetsConfig: AssetsConfig = {};
   const assetsConfigPath = resolve(demoDir, 'assets.config.js');
   if (existsSync(assetsConfigPath))
     assetsConfig =
@@ -148,7 +150,7 @@ async function bakePack() {
     console.log(
       `  assets → ${summary.images} image(s), ${summary.fonts} font size(s), ${summary.bytes} B → dist/assets.pack`,
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error(`  asset bake failed: ${error.message}`);
   }
 }
@@ -188,7 +190,7 @@ const buildContext = await context({
                 ),
               {mocks: true},
             );
-          } catch (error) {
+          } catch (error: any) {
             return {errors: [{text: `persist transform: ${error.message}`}]};
           }
         });

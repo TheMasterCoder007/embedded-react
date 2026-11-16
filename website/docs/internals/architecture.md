@@ -77,7 +77,7 @@ hooks. Beside it, `host-config.js` is the `react-reconciler` host config that tu
 `createInstance`/`appendChild`/`commitUpdate` into `NativeUI.*` calls, `renderer.js` creates the
 root, and `props.js` flattens styles into the prop bag the bridge reads. The `assets/` folder holds
 the build-time bakers (images to premultiplied ARGB, fonts to bitmap glyphs, SVG to an op-tape) and
-the container writer. `cli.mjs` and `sim-server.mjs` are the `dev`/`export`/`build` commands.
+the container writer. `cli.mts` and `sim-server.mts` are the `dev`/`export`/`build` commands.
 
 **The QuickJS bridge** (`bridges/quickjs/`) is C. `native_ui_bridge.c` publishes the `NativeUI`
 object into a QuickJS context and forwards each method to the engine, interning prop names and

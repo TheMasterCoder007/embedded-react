@@ -18,7 +18,7 @@
 //
 //   node tools/web-sim/bundle-app.mjs [demo]      → tools/web-sim/public/app.js   (default: watch-face)
 //
-// One-shot esbuild (the same config tools/simulator's sim.mjs uses): bundles demos/<demo>/index.jsx (or .tsx) with
+// One-shot esbuild (the same config tools/simulator's sim.mts uses): bundles demos/<demo>/index.jsx (or .tsx) with
 // React + the reconciler + the embedded-react library into a single IIFE the host page fetches and hands to
 // er_web_load_source (Flow A). W2 targets asset-free demos (the built-in font renders text); imported
 // images/fonts + an asset pack + esbuild --watch hot reload land in W3.

@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-// parity.mjs — Flow A ↔ Flow B render-parity harness (Phase 12).
+// parity.mts — Flow A ↔ Flow B render-parity harness (Phase 12).
 //
 // Renders the SAME demo through BOTH compile paths and asserts the framebuffers match pixel-for-pixel:
 //
-//   Flow A (interpreted): pack-container.mjs bundles demos/<demo>/index.jsx, precompiles it to QuickJS
+//   Flow A (interpreted): pack-container.mts bundles demos/<demo>/index.jsx, precompiles it to QuickJS
 //                         bytecode and bakes its images/fonts into dist/app.erpkg → the QuickJS desktop
 //                         host (examples/linux) renders that headlessly (ER_SHOT) to a BMP.
 //   Flow B (AOT):         aot/compile.mts compiles demos/<demo>/App.jsx → dist/app.erpkg, and the AOT host
@@ -53,7 +53,7 @@ import {fileURLToPath} from 'node:url';
 import {dirname, resolve, join} from 'node:path';
 import {readFileSync, mkdirSync, existsSync} from 'node:fs';
 
-import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
+import {findCompileBin, compileBinHelp} from './compile-bin.mts';
 
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(PACKAGE_DIR, '../..');
@@ -71,7 +71,7 @@ const FLOW_B_EXE = join(
 const FLOW_B_BUILD = join(ROOT, 'examples/linux-aot/build');
 // Flow A's pack and Flow B's compile both write here, each read before the other runs.
 const CONTAINER = join(PACKAGE_DIR, 'dist/app.erpkg');
-const PACK_MJS = join(PACKAGE_DIR, 'pack-container.mjs');
+const PACK_MJS = join(PACKAGE_DIR, 'pack-container.mts');
 const AOT_COMPILER = join(PACKAGE_DIR, 'aot/compile.mts');
 const OUT_DIR = join(PACKAGE_DIR, 'dist/parity');
 
@@ -90,7 +90,38 @@ const RGB_BYTES = 3;
 
 // Scenarios. `screen` is the board size both paths render at; `taps` (optional) is the shared interaction
 // in physical pixels, "x,y x,y …" (same string handed to ER_TAPS and ER_AOT_TAPS).
-const SCENARIOS = [
+interface Scenario {
+  demo: string;
+  name: string;
+  screen: {width: number; height: number};
+  taps?: string;
+}
+
+/** Tightly-packed RGB (3 bytes/pixel), top row first. */
+interface RgbImage {
+  width: number;
+  height: number;
+  pixels: Buffer;
+}
+
+type DiffResult =
+  | {ok: false; reason: string}
+  | {
+      ok: boolean;
+      reason?: undefined;
+      differingPixels: number;
+      total: number;
+      fraction: number;
+      maxDelta: number;
+      boundingBox: {
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
+      } | null;
+    };
+
+const SCENARIOS: Scenario[] = [
   // Watch face at its native RP2040 panel — an asset-free View/Text pager, so its initial frame is a clean
   // base-render parity check (the swipe is a touch-drag, which the tap harness can't drive).
   {demo: 'watch-face', name: 'watch-face', screen: {width: 240, height: 280}},
@@ -113,7 +144,11 @@ const ANSI = {
 };
 
 /** Runs a command, inheriting stdio for build/compile steps; throws on failure. */
-function run(command, args, environment) {
+function run(
+  command: string,
+  args: string[],
+  environment?: Record<string, string>,
+): void {
   execFileSync(command, args, {
     stdio: 'inherit',
     env: {...process.env, ...environment},
@@ -121,7 +156,7 @@ function run(command, args, environment) {
 }
 
 /** Reads a 24/32-bpp BMP into { width, height, pixels } with pixels as tightly-packed RGB (3 bytes/pixel), top-row first. */
-function readBMP(path) {
+function readBMP(path: string): RgbImage {
   const bmp = readFileSync(path);
   const pixelDataOffset = bmp.readUInt32LE(BMP_PIXEL_DATA_OFFSET_AT);
   const width = bmp.readInt32LE(BMP_WIDTH_AT);
@@ -147,7 +182,7 @@ function readBMP(path) {
 }
 
 /** Pixel-diffs two RGB images. Returns { ok, differingPixels, total, fraction, maxDelta, boundingBox|null, reason? }. */
-function diffImages(imageA, imageB) {
+function diffImages(imageA: RgbImage, imageB: RgbImage): DiffResult {
   if (imageA.width !== imageB.width || imageA.height !== imageB.height) {
     return {
       ok: false,
@@ -191,7 +226,7 @@ function diffImages(imageA, imageB) {
 }
 
 /** Renders one scenario through both flows and diffs them. Returns the diff result. */
-function runScenario(scenario) {
+function runScenario(scenario: Scenario): DiffResult {
   const shotPathA = join(OUT_DIR, `${scenario.name}.flowA.bmp`);
   const shotPathB = join(OUT_DIR, `${scenario.name}.flowB.bmp`);
   const screenEnv = {
@@ -226,7 +261,7 @@ function runScenario(scenario) {
   for (const [flow, image] of [
     ['A', imageA],
     ['B', imageB],
-  ]) {
+  ] as const) {
     if (
       image.width !== scenario.screen.width ||
       image.height !== scenario.screen.height
@@ -242,7 +277,7 @@ function runScenario(scenario) {
   return diffImages(imageA, imageB);
 }
 
-function main() {
+function main(): void {
   const filter = process.argv[2];
   const scenarios = filter
     ? SCENARIOS.filter(
@@ -283,7 +318,7 @@ function main() {
     let result;
     try {
       result = runScenario(scenario);
-    } catch (error) {
+    } catch (error: any) {
       console.log(
         `${ANSI.red}✗ ${scenario.name}: harness error — ${error.message}${ANSI.reset}\n`,
       );
@@ -297,13 +332,13 @@ function main() {
       );
     } else {
       failures++;
-      if (result.reason) {
+      if (result.reason !== undefined) {
         console.log(
           `${ANSI.red}✗ ${scenario.name}: ${result.reason}${ANSI.reset}\n`,
         );
       } else {
         const percent = (result.fraction * 100).toFixed(4);
-        const boundingBox = result.boundingBox;
+        const boundingBox = result.boundingBox!;
         console.log(
           `${ANSI.red}✗ ${scenario.name}${ANSI.reset}  ${result.differingPixels}/${result.total} px differ (${percent}% > ${(MAX_DIFF_FRACTION * 100).toFixed(2)}%), ` +
             `maxΔ=${result.maxDelta}, bbox=(${boundingBox.minX},${boundingBox.minY})-(${boundingBox.maxX},${boundingBox.maxY})\n` +

@@ -27,23 +27,17 @@ import {pathToFileURL} from 'node:url';
 import {basename, resolve} from 'node:path';
 import {existsSync, mkdirSync, readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import type {Plugin} from 'esbuild';
+import type {AssetsConfig} from '../assets/font-config.mts';
+import type {PackAppOptions} from './pack-split.mts';
 
 const require = createRequire(import.meta.url);
 
-// QuickJS release the bytecode container targets — MUST match cli.mjs's QJS_TAG and the device loader.
+// QuickJS release the bytecode container targets — MUST match cli.mts's QJS_TAG and the device loader.
 const QJS_TAG = 'v0.15.0';
 
 /**
  * Bundle + compile + bake an app into an ERCF container Buffer.
- *
- * @param {object}   options
- * @param {string}   options.entry        App entry (index.jsx/tsx).
- * @param {string}   options.projectRoot  Project cwd (for assets.config.js + persist scoping).
- * @param {string}   options.libSrc       Path to the embedded-react library entry (aliased as 'embedded-react').
- * @param {string[]} options.nodePaths    esbuild nodePaths (package + project node_modules).
- * @param {string}   options.simDir       Dir holding the prebuilt sim wasm (used to compile bytecode).
- * @param {boolean}  [options.persist]    Apply the useState→persist transform (dev hot reload preserves state).
- * @returns {Promise<{container: Buffer, bytecodeLen: number, assetsLen: number}>}
  */
 export async function packAppContainer({
   entry,
@@ -53,8 +47,12 @@ export async function packAppContainer({
   simDir,
   persist = false,
   strip = false,
-}) {
-  const esbuild = require('esbuild');
+}: PackAppOptions): Promise<{
+  container: Buffer;
+  bytecodeLen: number;
+  assetsLen: number;
+}> {
+  const esbuild: typeof import('esbuild') = require('esbuild');
   const {bakeImage} = await import('../assets/bake-image.mts');
   const {bakeFont} = await import('../assets/bake-font.mts');
   const {resolveFontJobs} = await import('../assets/font-config.mts');
@@ -64,18 +62,24 @@ export async function packAppContainer({
   const {emitAssetPack} = await import('../assets/emit-pack.mts');
   const {emitContainer} = await import('../assets/emit-container.mts');
   const {registerSvgVectorLoader} = await import('../assets/svg-loader.mts');
-  const {compileToBytecode} = await import('../qjsc-wasm.mjs');
+  const {compileToBytecode} = await import('../qjsc-wasm.mts');
 
-  const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
-  const images = new Map();
-  const fonts = new Map();
+  const assetName = (filePath: string) =>
+    basename(filePath).replace(/\.[^.]+$/, '');
+  const images = new Map<string, string>();
+  const fonts = new Map<string, string>();
 
   // Optionally apply the persist transform to the app's own source (not deps) so plain useState survives
   // a live reload on-device, matching the simulator. The device must have install_persist=true.
-  let persistHooks = null;
+  let persistHooks: {
+    transformPersist: (code: string, moduleId: string) => string;
+    shouldPersist: (path: string, projectRoot: string) => boolean;
+    relative: (from: string, to: string) => string;
+    normalizedProjectRoot: string;
+  } | null = null;
   if (persist) {
     const {transformPersist, shouldPersist} =
-      await import('../persist-transform.mjs');
+      await import('../persist-transform.mts');
     const {relative} = await import('node:path');
     const normalizedProjectRoot = projectRoot.replace(/\\/g, '/');
     persistHooks = {
@@ -86,7 +90,7 @@ export async function packAppContainer({
     };
   }
 
-  const assetPlugin = {
+  const assetPlugin: Plugin = {
     name: 'embedded-react-assets',
     setup(build) {
       if (persistHooks) {
@@ -112,7 +116,7 @@ export async function packAppContainer({
               ),
               loader,
             };
-          } catch (error) {
+          } catch (error: any) {
             return {errors: [{text: `persist transform: ${error.message}`}]};
           }
         });
@@ -162,7 +166,7 @@ export async function packAppContainer({
   const bytecode = await compileToBytecode(bundleSource, simDir, {strip});
 
   const usedSizes = analyzeFontSizes(bundleSource);
-  let config = {};
+  let config: AssetsConfig = {};
   const configPath = resolve(projectRoot, 'assets.config.js');
   if (existsSync(configPath))
     config = (await import(pathToFileURL(configPath).href)).default || {};

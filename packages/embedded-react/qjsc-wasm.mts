@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// qjsc-wasm.mjs — compile a JS bundle to QuickJS bytecode using the prebuilt simulator `.wasm` (the SAME
+// qjsc-wasm.mts — compile a JS bundle to QuickJS bytecode using the prebuilt simulator `.wasm` (the SAME
 // QuickJS that runs the app in the browser sim), so `embedded-react build` produces a device-ready
 // bytecode container with NO native toolchain. The module is built with `-sENVIRONMENT=web,node`, so the
 // same artifact that powers `dev` loads under Node here.
@@ -27,22 +27,34 @@ import {existsSync} from 'node:fs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const UINT32_BYTES = 4;
 
+/** The part of the simulator's Emscripten module the compile uses. */
+interface SimModule {
+  HEAPU8: Uint8Array;
+  _malloc(bytes: number): number;
+  _free(pointer: number): void;
+  cwrap(
+    name: string,
+    returnType: string,
+    argumentTypes: string[],
+  ): (...args: number[]) => number;
+}
+
 /**
  * Compile JS source to a QuickJS bytecode blob via the prebuilt sim module.
  *
- * @param {string} jsSource  The bundled app (esbuild IIFE output).
- * @param {string} [simDir]  Dir holding embedded-react.{js,wasm} (defaults to the package's sim/).
- * @param {{strip?: boolean}} [options]  strip: true drops the embedded source text + debug tables
+ * @param jsSource  The bundled app (esbuild IIFE output).
+ * @param simDir  Dir holding embedded-react.{js,wasm} (defaults to the package's sim/).
+ * @param options  strip: true drops the embedded source text + debug tables
  *   (release/device — ~8x smaller blob); default false keeps them so dev-loop stack traces have
  *   line numbers. (A sim .wasm built before the strip parameter existed ignores it and always
  *   keeps debug info.)
- * @returns {Promise<Buffer>} The bytecode bytes.
+ * @returns The bytecode bytes.
  */
 export async function compileToBytecode(
-  jsSource,
-  simDir = resolve(HERE, 'sim'),
-  {strip = false} = {},
-) {
+  jsSource: string,
+  simDir: string = resolve(HERE, 'sim'),
+  {strip = false}: {strip?: boolean} = {},
+): Promise<Buffer> {
   // The .cjs (not .js): this package is "type": "module", so Node would load the emscripten .js as ESM and
   // its CommonJS factory export would never run. The .cjs is the same module forced to CommonJS for Node.
   const loader = resolve(simDir, 'embedded-react.cjs');
@@ -52,7 +64,7 @@ export async function compileToBytecode(
     );
   }
   const require = createRequire(import.meta.url);
-  const factory = require(loader); // forced CommonJS → MODULARIZE factory
+  const factory: () => Promise<SimModule> = require(loader); // forced CommonJS → MODULARIZE factory
   const Module = await factory();
 
   const bytes = new TextEncoder().encode(jsSource);

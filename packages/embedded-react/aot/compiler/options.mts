@@ -44,7 +44,7 @@ export interface CompileOptions {
   /** A panel to keep a layout for. The fallbacks for this and the caps below are listed on resolveOptions. */
   screen?: Screen | null;
   /** The sizes a package keeps layouts for. Overrides screen. With neither, a package has every layout. */
-  screens?: Screen[];
+  screens?: Screen[] | null;
   /** Rows a list state holds. */
   listCap?: number;
   /** Characters per string buffer. */

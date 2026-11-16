@@ -22,7 +22,7 @@
  * USB-Serial-JTAG console, or a UART).
  *
  * This is the device-side mirror of the host's ERHR transport frame (packages/embedded-react/hotreload/
- * protocol.mjs). It is a transport-agnostic, allocation-free state machine: you feed it whatever bytes
+ * protocol.mts). It is a transport-agnostic, allocation-free state machine: you feed it whatever bytes
  * arrive on your channel, and it scans for the frame magic, parses the header, collects the payload
  * into a caller-provided staging buffer, and verifies the transport CRC. When a complete, intact frame
  * is ready, the caller hands the payload (an .erpkg / ERCF container) to its loader — for a QuickJS app,
@@ -37,7 +37,7 @@
  * task that owns the runtime/frame loop. If you parse on a separate RX task, signal the frame-loop task
  * to apply (see the ESP32-S3 example).
  *
- * Wire format (little-endian) — see protocol.mjs for the authoritative description:
+ * Wire format (little-endian) — see protocol.mts for the authoritative description:
  *   magic "ERHR" (4) | proto_version u8 (=1) | message_type u8 | flags u16 | payload_len u32 | crc u32
  *   then payload_len bytes of .erpkg. The CRC is CRC-32/IEEE over the payload (same polynomial as the
  *   ERCF container's own CRC), so a truncated/corrupt transfer is caught before the runtime is touched.
@@ -48,7 +48,7 @@
 #include <stdint.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
- - Wire constants (keep in lockstep with protocol.mjs)
+ - Wire constants (keep in lockstep with protocol.mts)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 #define ER_HOTRELOAD_HEADER_SIZE 16u

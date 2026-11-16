@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-// compile-bin.mjs — finds the QuickJS bytecode precompiler (er-bridge-quickjs-compile).
+// compile-bin.mts — finds the QuickJS bytecode precompiler (er-bridge-quickjs-compile).
 //
-// pack-container.mjs needs it to turn a bundle into the bytecode a container carries, and parity.mjs
+// pack-container.mts needs it to turn a bundle into the bytecode a container carries, and parity.mts
 // preflights it because Flow A renders from a packed container. Both look in the same build dirs and
 // honour the same ER_COMPILE_BIN override, so the search lives here instead of in each caller.
 
@@ -41,7 +41,7 @@ const SEARCH_DIRS = [
  * used to sail through every caller's check and only fail later, deep in a build, as a bare ENOENT
  * from spawn. Returning null instead routes it to compileBinHelp(), which names the real problem.
  */
-export function findCompileBin() {
+export function findCompileBin(): string | null {
   const override = process.env.ER_COMPILE_BIN;
   if (override) {
     return existsSync(override) ? override : null;
@@ -54,7 +54,7 @@ export function findCompileBin() {
 }
 
 /** What to print when findCompileBin() comes back null — a bad override is a different problem. */
-export function compileBinHelp() {
+export function compileBinHelp(): string {
   const override = process.env.ER_COMPILE_BIN;
   if (override) {
     return (

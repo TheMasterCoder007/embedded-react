@@ -22,6 +22,7 @@
 // per-directory watcher that also picks up directories created after startup.
 
 import {watch, readdirSync, statSync} from 'node:fs';
+import type {FSWatcher} from 'node:fs';
 import {join} from 'node:path';
 
 // Directories never worth watching (build output, deps, VCS/tool caches). Skipping them keeps the watcher
@@ -29,15 +30,20 @@ import {join} from 'node:path';
 const IGNORED_DIRECTORY =
   /^(node_modules|dist|build|out|coverage|\.git|\.hg|\.svn|\.next|\.cache)$/;
 
+export type WatchListener = (
+  eventType: string,
+  filename: string | null,
+) => void;
+
+export interface TreeWatcher {
+  close(): void;
+}
+
 /**
  * Recursively watch `root`, calling `onEvent(eventType, filename)` on any change beneath it. Uses the
  * native recursive watcher where the platform supports it, else a per-directory fallback.
- *
- * @param {string} root
- * @param {(eventType: string, filename: string|null) => void} onEvent
- * @returns {{close: () => void}}
  */
-export function watchTree(root, onEvent) {
+export function watchTree(root: string, onEvent: WatchListener): TreeWatcher {
   try {
     const watcher = watch(root, {recursive: true}, onEvent);
     return {close: () => watcher.close()};
@@ -51,15 +57,14 @@ export function watchTree(root, onEvent) {
  * Per-directory recursive watcher: one non-recursive `fs.watch` per directory under `root`, plus hooks for
  * directories created later. This is what makes `src/**` edits fire on platforms without native recursion.
  * Exported for direct testing (so the fallback can be exercised even where native recursion works).
- *
- * @param {string} root
- * @param {(eventType: string, filename: string|null) => void} onEvent
- * @returns {{close: () => void}}
  */
-export function watchTreePolyfill(root, onEvent) {
-  const watchers = new Map(); // absolute directory path -> FSWatcher
+export function watchTreePolyfill(
+  root: string,
+  onEvent: WatchListener,
+): TreeWatcher {
+  const watchers = new Map<string, FSWatcher>(); // absolute directory path -> FSWatcher
 
-  const watchDirectory = directory => {
+  const watchDirectory = (directory: string) => {
     if (watchers.has(directory)) return;
     let watcher;
     try {
@@ -80,7 +85,7 @@ export function watchTreePolyfill(root, onEvent) {
     watchers.set(directory, watcher);
   };
 
-  const scan = directory => {
+  const scan = (directory: string) => {
     watchDirectory(directory);
     let entries;
     try {

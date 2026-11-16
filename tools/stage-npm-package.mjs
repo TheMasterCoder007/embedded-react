@@ -21,7 +21,7 @@
  * Part of the package is written in TypeScript (.mts). In the repo Node runs those files directly by
  * stripping their types, but it refuses to for a file under node_modules, which is where an installed
  * package lives. So the published package ships JavaScript: each .mts file becomes a .mjs file, and every
- * relative import of a .mts file is rewritten to name the .mjs.
+ * relative import of a .mts file is rewritten to name the .mjs. So are the `bin` and `files` of its package.json.
  *
  *   node tools/stage-npm-package.mjs      prints the staged directory
  *
@@ -31,6 +31,7 @@
 import {execFileSync} from 'node:child_process';
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -134,6 +135,24 @@ export function stageNpmPackage() {
     writeFileSync(file.replace(/\.mts$/, '.mjs'), outputText);
     unlinkSync(file);
     compiled++;
+  }
+
+  // The staged package.json names the compiled files, so `npm pack` ships them and the bin runs.
+  const manifestPath = join(STAGE, 'package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const compiledName = name => name.replace(/\.mts$/, '.mjs');
+  manifest.bin = Object.fromEntries(
+    Object.entries(manifest.bin).map(([command, file]) => [
+      command,
+      compiledName(file),
+    ]),
+  );
+  manifest.files = manifest.files.map(compiledName);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  for (const file of Object.values(manifest.bin)) {
+    if (!existsSync(join(STAGE, file))) {
+      throw new Error(`the bin ${file} was not staged`);
+    }
   }
 
   // Nothing may still point at TypeScript: an installed package cannot load it.

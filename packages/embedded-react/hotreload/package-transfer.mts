@@ -24,7 +24,7 @@ import {
   MSG_PACKAGE_BEGIN,
   MSG_PACKAGE_CHUNK,
   encodeFrame,
-} from './protocol.mjs';
+} from './protocol.mts';
 
 const CHUNK_OFFSET_BYTES = 4;
 const BEGIN_RESEND_MS = 1000; // a board that is resetting, or holding a boot error on screen, misses a begin
@@ -33,11 +33,17 @@ const CHUNK_TIMEOUT_MS = 2000;
 const CHUNK_RESENDS = 5;
 const LOAD_TIMEOUT_MS = 15000; // checking a large package from flash takes a slow board a few seconds
 
+export type TransferReply =
+  | {kind: 'ready' | 'got'; value: number}
+  | {kind: 'dropped' | 'ok' | 'rejected'};
+
+export type TransferOutcome = 'ok' | 'rejected' | 'dropped' | 'timeout';
+
 const READY_LINE = /erb reload: ready (\d+)/;
 const GOT_LINE = /erb reload: got (\d+)/;
 
 /** What a line from the device says, or null when it is only a log. */
-export function parseReply(line) {
+export function parseReply(line: string): TransferReply | null {
   const readyMatch = READY_LINE.exec(line);
   if (readyMatch) return {kind: 'ready', value: Number(readyMatch[1])};
   const gotMatch = GOT_LINE.exec(line);
@@ -49,14 +55,18 @@ export function parseReply(line) {
 }
 
 /** The frame that starts a package. */
-export function beginFrame(packageBytes) {
+export function beginFrame(packageBytes: number): Buffer {
   const payload = Buffer.alloc(CHUNK_OFFSET_BYTES);
   payload.writeUInt32LE(packageBytes, 0);
   return encodeFrame(payload, {type: MSG_PACKAGE_BEGIN});
 }
 
 /** The frame for the bytes of @p packageData at @p offset. */
-export function chunkFrame(packageData, offset, chunkBytes) {
+export function chunkFrame(
+  packageData: Buffer,
+  offset: number,
+  chunkBytes: number,
+): Buffer {
   const chunk = packageData.subarray(offset, offset + chunkBytes);
   const payload = Buffer.alloc(CHUNK_OFFSET_BYTES + chunk.length);
   payload.writeUInt32LE(offset, 0);
@@ -65,9 +75,16 @@ export function chunkFrame(packageData, offset, chunkBytes) {
 }
 
 export class PackageTransfer {
+  write: (frame: Buffer) => Promise<unknown>;
+  beginResendMs: number;
+  chunkTimeoutMs: number;
+  chunkResends: number;
+  loadTimeoutMs: number;
+  _replies: TransferReply[];
+  _wake: (() => void) | null;
+
   /**
-   * @param {object} options
-   * @param {(frame: Buffer) => Promise<unknown>} options.write  Writes a frame to the device.
+   * @param options.write  Writes a frame to the device.
    */
   constructor({
     write,
@@ -75,6 +92,12 @@ export class PackageTransfer {
     chunkTimeoutMs = CHUNK_TIMEOUT_MS,
     chunkResends = CHUNK_RESENDS,
     loadTimeoutMs = LOAD_TIMEOUT_MS,
+  }: {
+    write: (frame: Buffer) => Promise<unknown>;
+    beginResendMs?: number;
+    chunkTimeoutMs?: number;
+    chunkResends?: number;
+    loadTimeoutMs?: number;
   }) {
     this.write = write;
     this.beginResendMs = beginResendMs;
@@ -86,7 +109,7 @@ export class PackageTransfer {
   }
 
   /** Takes a line from the device. Returns true when it is part of the transfer and not worth showing. */
-  onLine(line) {
+  onLine(line: string): boolean {
     const reply = parseReply(line);
     if (!reply) return false;
     this._replies.push(reply);
@@ -95,9 +118,9 @@ export class PackageTransfer {
   }
 
   /** The next reply, or null after @p timeoutMs. */
-  async _nextReply(timeoutMs) {
+  async _nextReply(timeoutMs: number): Promise<TransferReply | null> {
     if (!this._replies.length) {
-      await new Promise(resolve => {
+      await new Promise<void>(resolve => {
         const timer = setTimeout(resolve, timeoutMs);
         this._wake = () => {
           clearTimeout(timer);
@@ -110,7 +133,10 @@ export class PackageTransfer {
   }
 
   /** Starts the package on the device. Returns its chunk size, or the outcome when it never got that far. */
-  async _begin(packageData, timeoutMs) {
+  async _begin(
+    packageData: Buffer,
+    timeoutMs: number,
+  ): Promise<{chunkBytes: number} | {outcome: 'rejected' | 'timeout'}> {
     const deadline = Date.now() + timeoutMs;
     const frame = beginFrame(packageData.length);
     while (Date.now() < deadline) {
@@ -129,15 +155,15 @@ export class PackageTransfer {
   /**
    * Sends one package and waits for the device to load it.
    *
-   * @param {Buffer} packageData
-   * @param {object} [options]
-   * @param {number} [options.beginTimeoutMs]  How long a device may take to answer at all.
-   * @returns {Promise<'ok'|'rejected'|'dropped'|'timeout'>}
+   * @param options.beginTimeoutMs  How long a device may take to answer at all.
    */
-  async send(packageData, {beginTimeoutMs = BEGIN_TIMEOUT_MS} = {}) {
+  async send(
+    packageData: Buffer,
+    {beginTimeoutMs = BEGIN_TIMEOUT_MS}: {beginTimeoutMs?: number} = {},
+  ): Promise<TransferOutcome> {
     this._replies = [];
     const begun = await this._begin(packageData, beginTimeoutMs);
-    if (begun.outcome) return begun.outcome;
+    if ('outcome' in begun) return begun.outcome;
     const {chunkBytes} = begun;
 
     let offset = 0;
@@ -163,7 +189,9 @@ export class PackageTransfer {
   }
 
   /** What the device said about a chunk: its offset, 'ok', 'rejected', 'dropped', or null for nothing. */
-  async _awaitChunkReply() {
+  async _awaitChunkReply(): Promise<
+    number | 'ok' | 'rejected' | 'dropped' | null
+  > {
     const waitUntil = Date.now() + this.chunkTimeoutMs;
     for (;;) {
       const reply = await this._nextReply(waitUntil - Date.now());

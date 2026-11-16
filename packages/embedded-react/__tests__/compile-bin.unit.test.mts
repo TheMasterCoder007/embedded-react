@@ -20,7 +20,7 @@
 
 import {afterEach, describe, expect, it} from 'vitest';
 import {fileURLToPath} from 'node:url';
-import {findCompileBin, compileBinHelp} from '../compile-bin.mjs';
+import {findCompileBin, compileBinHelp} from '../compile-bin.mts';
 
 const THIS_FILE = fileURLToPath(import.meta.url);
 
