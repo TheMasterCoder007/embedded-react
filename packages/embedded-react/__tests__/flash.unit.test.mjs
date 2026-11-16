@@ -22,7 +22,7 @@ import {fileURLToPath} from 'node:url';
 import {
   emitContainer,
   emitPackageContainer,
-} from '../assets/emit-container.mjs';
+} from '../assets/emit-container.mts';
 import {
   BOARDS,
   SLOT_HEADER_BYTES,

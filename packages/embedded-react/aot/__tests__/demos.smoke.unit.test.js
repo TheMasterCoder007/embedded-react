@@ -26,7 +26,7 @@ import {
   readNativeFiles,
 } from '../compile.mts';
 import {demoFile} from '../demo-file.mts';
-import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mjs';
+import {analyzeFontSizes, findSizeGaps} from '../../assets/font-sizes.mts';
 
 // Regression guard: the demos must keep compiling end-to-end (no thrown "AOT: …"). This is the cheap counterpart to
 // a full compile-and-screenshot harness — it would have caught any compiler change that broke a demo's lowering

@@ -21,7 +21,7 @@ import {describe, it, expect} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {bakeFont, BUILTIN_EXTRAS} from '../bake-font.mjs';
+import {bakeFont, BUILTIN_EXTRAS} from '../bake-font.mts';
 import {
   BUILTIN_FAMILY,
   findMissingGlyphs,
@@ -29,7 +29,7 @@ import {
   scanTextCodepoints,
   textSignature,
   warnMissingGlyphs,
-} from '../glyph-coverage.mjs';
+} from '../glyph-coverage.mts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INTER = resolve(here, '../../../../assets/fonts/Inter-Regular.ttf');

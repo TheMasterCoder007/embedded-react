@@ -34,7 +34,7 @@ import {
   DYN_FIELDS,
   parseColorValue,
 } from '../style-map.mts';
-import {parseColor} from '../../src/embedded-react/svg-ops.js';
+import {parseColor} from '../../src/embedded-react/svg-ops.mts';
 import {aotError, checkEngineString} from './diagnostics.mts';
 import {
   at,

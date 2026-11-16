@@ -20,7 +20,7 @@
 //
 // What is declared here is what the RUNTIME honors. The sources of truth are the bridge's prop and event
 // tables (`k_prop_names` / `event_type_from_name` in bridges/quickjs/native_ui_bridge.c), the top-level
-// prop list (`PASSTHROUGH` in src/props.js), and the SVG compiler (src/embedded-react/svg-ops.js). A prop
+// prop list (`PASSTHROUGH` in src/props.js), and the SVG compiler (src/embedded-react/svg-ops.mts). A prop
 // the engine ignores is deliberately absent, so a name that typechecks is a name that reaches the engine.
 // `npm test` runs a parity test over those tables to keep it that way.
 //

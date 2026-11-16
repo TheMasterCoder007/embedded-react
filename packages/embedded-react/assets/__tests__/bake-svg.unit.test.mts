@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {svgToVector} from '../bake-svg.mjs';
+import {svgToVector} from '../bake-svg.mts';
 
 const SHAPE = 0;
 const MOVE = 1;

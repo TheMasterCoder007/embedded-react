@@ -26,7 +26,63 @@
 //   bpp 8 → 1 byte/px, raw coverage
 import fs from 'node:fs';
 import opentype from 'opentype.js';
-import {rasterize} from './rasterize.mjs';
+import {rasterize} from './rasterize.mts';
+
+/** Codepoints as a config spells them: a number, the characters themselves, or a list of either. */
+export type GlyphSpec = number | string | readonly (number | string)[];
+
+/** A font to bake. */
+export interface FontJob {
+  /** Path to the .ttf/.otf file. */
+  path: string;
+  /** Family name to register under (used by fontFamily lookups). */
+  family: string;
+  /** Pixel sizes to bake. */
+  sizes: readonly number[];
+  /** Bits per pixel (default 4). */
+  bpp?: number;
+  /** Glyph coverage beyond ASCII: 'ascii', a named set, or explicit codepoints (default 'ascii'). */
+  glyphs?: string | readonly (number | string)[];
+  /** Per-app additions on top of `glyphs`. */
+  extraGlyphs?: GlyphSpec;
+}
+
+/** One glyph, as the engine's GlyphInfo. */
+export interface GlyphInfo {
+  bitmapOffset: number;
+  width: number;
+  height: number;
+  xOffset: number;
+  yOffset: number;
+  advance: number;
+}
+
+/** A glyph outside the dense range. */
+export interface ExtraGlyph {
+  codepoint: number;
+  info: GlyphInfo;
+}
+
+/** A font at one pixel size, as the engine's BitmapFont. */
+export interface BakedFontSize {
+  pixelSize: number;
+  lineHeight: number;
+  baseline: number;
+  /** The dense range's first and last codepoints. */
+  first: number;
+  last: number;
+  bpp: number;
+  dense: GlyphInfo[];
+  extras: ExtraGlyph[];
+  bitmap: number[];
+}
+
+/** A baked font, ready for the emitters. */
+export interface BakedFont {
+  family: string;
+  path: string;
+  sizes: BakedFontSize[];
+}
 
 /** Default dense glyph range: printable ASCII (0x20..0x7E). */
 export const ASCII_FIRST = 0x20;
@@ -58,12 +114,12 @@ const SYMBOLS_COMMON = [
   0x2248, 0x2260, 0x2264, 0x2265, 0x25a0, 0x25cf, 0x25c6, 0x2605, 0x2606,
   0x2713, 0x2717,
 ];
-const SYMBOLS_GREEK = [];
+const SYMBOLS_GREEK: number[] = [];
 for (let codepoint = 0x0391; codepoint <= 0x03a9; codepoint++)
   if (codepoint !== 0x03a2) SYMBOLS_GREEK.push(codepoint); // uppercase (skip gap)
 for (let codepoint = 0x03b1; codepoint <= 0x03c9; codepoint++)
   SYMBOLS_GREEK.push(codepoint); // lowercase
-const SYMBOL_SETS = {
+const SYMBOL_SETS: Record<string, number[]> = {
   none: [],
   minimal: SYMBOLS_MINIMAL,
   common: SYMBOLS_COMMON,
@@ -74,7 +130,7 @@ const SYMBOL_SETS = {
 };
 
 // The engine's built-in font (engine/font/font_data.c) covers printable ASCII plus these. It is its
-// own list, not an alias of a named set: build-builtin-font.mjs bakes from it and the coverage check
+// own list, not an alias of a named set: build-builtin-font.mts bakes from it and the coverage check
 // reports against it, so the two can never drift — while the named sets stay free to evolve.
 // Changing it changes the engine's fallback font; re-run `npm run build:builtin-font` if you do.
 export const BUILTIN_EXTRAS = Object.freeze([
@@ -88,7 +144,7 @@ export const BUILTIN_EXTRAS = Object.freeze([
 
 /**
  * Pixel sizes the engine's built-in font is baked at (engine/font/font_data.c). Like BUILTIN_EXTRAS
- * this is the single source of truth: build-builtin-font.mjs bakes from it and the build-time size
+ * this is the single source of truth: build-builtin-font.mts bakes from it and the build-time size
  * check reports against it, so an app rendering at some other size is told what it will snap to.
  * Changing it changes the engine's fallback font; re-run `npm run build:builtin-font` if you do.
  */
@@ -98,16 +154,18 @@ export const BUILTIN_SIZES = Object.freeze([10, 12, 16, 20, 24, 32, 48]);
  * Normalizes one codepoint list: numbers are codepoints, a string contributes every character in
  * it — so `'°±'` and `[0x00b0, 0x00b1]` mean the same thing.
  *
- * @param {number|string|Array<number|string>|undefined} spec
- * @param {string} field  Config field name, for error messages.
- * @returns {number[]} Codepoints, unsorted and possibly duplicated.
+ * @param field  Config field name, for error messages.
+ * @returns Codepoints, unsorted and possibly duplicated.
  */
-function toCodepoints(spec, field) {
+function toCodepoints(
+  spec: GlyphSpec | null | undefined,
+  field: string,
+): number[] {
   if (spec === undefined || spec === null) return [];
-  const codepoints = [];
+  const codepoints: number[] = [];
   for (const item of Array.isArray(spec) ? spec : [spec]) {
     if (typeof item === 'string') {
-      for (const character of item) codepoints.push(character.codePointAt(0));
+      for (const character of item) codepoints.push(character.codePointAt(0)!);
     } else if (
       typeof item === 'number' &&
       Number.isInteger(item) &&
@@ -130,12 +188,15 @@ function toCodepoints(spec, field) {
  * `glyphs` picks the baseline: 'ascii' (none), a named set, or an explicit list. `extraGlyphs` adds
  * the per-app characters no named set can cover, as codepoints or as the characters themselves.
  *
- * @param {string|Array<number|string>|undefined} glyphs      'ascii', a named set, or explicit codepoints.
- * @param {number|string|Array<number|string>} [extraGlyphs]  Per-app additions, on top of `glyphs`.
- * @returns {number[]} Sorted extra codepoints outside the dense ASCII range.
+ * @param glyphs       'ascii', a named set, or explicit codepoints.
+ * @param extraGlyphs  Per-app additions, on top of `glyphs`.
+ * @returns Sorted extra codepoints outside the dense ASCII range.
  */
-export function resolveExtras(glyphs, extraGlyphs) {
-  let codepoints;
+export function resolveExtras(
+  glyphs: FontJob['glyphs'],
+  extraGlyphs?: GlyphSpec,
+): number[] {
+  let codepoints: number[];
   if (!glyphs || glyphs === 'ascii') codepoints = [];
   else if (typeof glyphs === 'string') {
     if (!SYMBOL_SETS[glyphs])
@@ -163,11 +224,11 @@ export function resolveExtras(glyphs, extraGlyphs) {
  * The coverage check uses it to tell a missing bake ("add it to extraGlyphs") apart from a font that
  * simply cannot draw the character ("pick a different font").
  *
- * @param {string} path  Path to the .ttf/.otf file.
- * @returns {(codepoint:number)=>boolean} Always true if the file can't be read, so a probe failure never
+ * @param path  Path to the .ttf/.otf file.
+ * @returns Always true if the file can't be read, so a probe failure never
  *          turns into a misleading claim about the font.
  */
-export function loadGlyphProbe(path) {
+export function loadGlyphProbe(path: string): (codepoint: number) => boolean {
   try {
     const font = opentype.parse(fs.readFileSync(path).buffer);
     return codepoint =>
@@ -180,14 +241,19 @@ export function loadGlyphProbe(path) {
 /**
  * Packs an 8-bit coverage bitmap (one byte per pixel) into the engine's per-row bpp layout.
  *
- * @param {Uint8Array} coverage  Row-major coverage, width*height bytes.
- * @param {number} width         Glyph width in pixels.
- * @param {number} height        Glyph height in pixels.
- * @param {number} bpp           Bits per pixel (1, 2, 4, or 8).
- * @returns {number[]} Packed bytes (row-major, each row padded to a whole byte).
+ * @param coverage  Row-major coverage, width*height bytes.
+ * @param width     Glyph width in pixels.
+ * @param height    Glyph height in pixels.
+ * @param bpp       Bits per pixel (1, 2, 4, or 8).
+ * @returns Packed bytes (row-major, each row padded to a whole byte).
  */
-function packCoverage(coverage, width, height, bpp) {
-  const packed = [];
+function packCoverage(
+  coverage: Uint8Array,
+  width: number,
+  height: number,
+  bpp: number,
+): number[] {
+  const packed: number[] = [];
   if (bpp === BITS_PER_BYTE) {
     for (let pixel = 0; pixel < width * height; pixel++)
       packed.push(coverage[pixel]);
@@ -220,16 +286,23 @@ function packCoverage(coverage, width, height, bpp) {
 /**
  * Rasterizes a single codepoint into a glyph record + appended bitmap bytes.
  *
- * @returns {{glyph:object, bytes:number[]}|null} null when the font has no glyph for the codepoint.
+ * @returns null when the font has no glyph for the codepoint.
  */
-function bakeGlyph(font, codepoint, pixelSize, baseline, scale, bpp) {
+function bakeGlyph(
+  font: opentype.Font,
+  codepoint: number,
+  pixelSize: number,
+  baseline: number,
+  scale: number,
+  bpp: number,
+): {glyph: GlyphInfo; bytes: number[]} | null {
   if (
     font.charToGlyphIndex(String.fromCodePoint(codepoint)) === 0 &&
     codepoint !== SPACE_CODEPOINT
   )
     return null;
   const glyph = font.charToGlyph(String.fromCodePoint(codepoint));
-  const advance = Math.round(glyph.advanceWidth * scale);
+  const advance = Math.round(glyph.advanceWidth! * scale);
   const supersample = bpp === BITS_PER_BYTE ? SUPERSAMPLE_8BPP : SUPERSAMPLE;
   const steps = Math.max(
     MIN_CURVE_STEPS,
@@ -245,7 +318,7 @@ function bakeGlyph(font, codepoint, pixelSize, baseline, scale, bpp) {
       `glyph U+${codepoint.toString(16)} is ${raster.width}x${raster.height}px — exceeds the uint8 glyph limit`,
     );
   }
-  const glyphRecord = {
+  const glyphRecord: GlyphInfo = {
     bitmapOffset: 0, // filled in by the caller once the running offset is known
     width: raster.width,
     height: raster.height,
@@ -263,15 +336,8 @@ function bakeGlyph(font, codepoint, pixelSize, baseline, scale, bpp) {
 /**
  * Bakes one font into per-size BitmapFont data.
  *
- * @param {object} opts
- * @param {string} opts.path    Path to the .ttf/.otf file.
- * @param {string} opts.family  Family name to register under (used by fontFamily lookups).
- * @param {number[]} opts.sizes Pixel sizes to bake.
- * @param {number} [opts.bpp]   Bits per pixel (default 4).
- * @param {string|Array<number|string>} [opts.glyphs] Extra glyph coverage beyond ASCII (default 'ascii').
- * @param {number|string|Array<number|string>} [opts.extraGlyphs] Per-app additions on top of `glyphs`.
- * @returns {{family:string, path:string, sizes:Array<object>}} Baked data ready for the C emitter.
- *          Extras the font file has no glyph for are silently absent from each size's `extras`.
+ * @returns Baked data ready for the emitters. Extras the font file has no glyph for are silently absent
+ *          from each size's `extras`.
  */
 export function bakeFont({
   path,
@@ -280,20 +346,20 @@ export function bakeFont({
   bpp = DEFAULT_BPP,
   glyphs = 'ascii',
   extraGlyphs,
-}) {
+}: FontJob): BakedFont {
   if (!SUPPORTED_BPP.includes(bpp))
     throw new Error(`bpp must be 1, 2, 4, or 8 (got ${bpp})`);
   const font = opentype.parse(fs.readFileSync(path).buffer);
   const extraCodepoints = resolveExtras(glyphs, extraGlyphs);
 
-  const bakedSizes = [];
+  const bakedSizes: BakedFontSize[] = [];
   for (const pixelSize of sizes) {
     const scale = pixelSize / font.unitsPerEm;
     const baseline = Math.round(font.ascender * scale);
     const lineHeight = baseline + Math.round(-font.descender * scale);
 
-    const bitmap = [];
-    const dense = [];
+    const bitmap: number[] = [];
+    const dense: GlyphInfo[] = [];
     for (let codepoint = ASCII_FIRST; codepoint <= ASCII_LAST; codepoint++) {
       const bakedGlyph = bakeGlyph(
         font,
@@ -319,7 +385,7 @@ export function bakeFont({
       dense.push(bakedGlyph.glyph);
     }
 
-    const extras = [];
+    const extras: ExtraGlyph[] = [];
     for (const codepoint of extraCodepoints) {
       const bakedGlyph = bakeGlyph(
         font,

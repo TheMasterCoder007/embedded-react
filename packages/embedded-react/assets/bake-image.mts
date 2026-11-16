@@ -21,6 +21,27 @@
 import fs from 'node:fs';
 import {PNG} from 'pngjs';
 
+/** A baked image's pixel format. */
+export type ImageFormat = 'argb8888' | 'rgb565';
+
+/** An image to bake. */
+export interface ImageJob {
+  /** Path to the source image. */
+  path: string;
+  /** Asset name an <Image source>/imageName looks up. */
+  name: string;
+  format?: ImageFormat;
+}
+
+/** A baked image: premultiplied ARGB8888 words, or RGB565. */
+export interface BakedImage {
+  name: string;
+  width: number;
+  height: number;
+  format: ImageFormat;
+  pixels: Uint32Array | Uint16Array;
+}
+
 const RGBA_BYTES = 4;
 const CHANNEL_MAX = 255;
 const CHANNEL_ROUND = 127;
@@ -34,18 +55,15 @@ const RGB565_GREEN_MAX = 63;
  * 16-bit RGB565 instead — half the flash and half the source-read bandwidth on every repaint,
  * meant for opaque full-screen backgrounds. RGB565 has no alpha channel, so a source image with
  * any non-opaque pixel is rejected with an error rather than silently dropping its transparency.
- *
- * @param {object} opts
- * @param {string} opts.path      Path to the source image.
- * @param {string} opts.name      Asset name an <Image source>/imageName looks up.
- * @param {string} [opts.format]  'argb8888' (default) or 'rgb565'.
- * @returns {{name:string, width:number, height:number, format:'argb8888'|'rgb565',
- *            pixels:Uint32Array|Uint16Array}}
  */
-export function bakeImage({path, name, format = 'argb8888'}) {
+export function bakeImage({
+  path,
+  name,
+  format = 'argb8888',
+}: ImageJob): BakedImage {
   if (!/\.png$/i.test(path)) {
     throw new Error(
-      `image "${path}": only PNG is supported by the baker (convert to PNG, or extend bake-image.mjs)`,
+      `image "${path}": only PNG is supported by the baker (convert to PNG, or extend bake-image.mts)`,
     );
   }
   if (format !== 'argb8888' && format !== 'rgb565') {

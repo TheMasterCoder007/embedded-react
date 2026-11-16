@@ -912,7 +912,7 @@ static void test_svg_native_parity(void)
 /** @brief The <Circle> tape (MOVE, ARC 0..2PI, CLOSE) routes — including its redundant leading MOVE. */
 static void test_svg_circle_route(void)
 {
-    /* Exactly what svg-ops.js / the AOT emit for <Circle cx=100 cy=100 r=60>. */
+    /* Exactly what svg-ops.mts / the AOT emit for <Circle cx=100 cy=100 r=60>. */
     const float tape[] = {ER_VECTOR_OP_SHAPE,
                           0.0f,
                           ER_VECTOR_OP_MOVE,

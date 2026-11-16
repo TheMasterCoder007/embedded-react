@@ -48,6 +48,16 @@
 // guarantees it). Loaders bounds-walk every section and dispatch only on types they know, so old
 // loaders skip the padding section untouched — no format version bump.
 
+/** A section's type and its bytes. */
+type Section = [type: number, data: Uint8Array];
+
+/** Where a section's data starts in a container. */
+export interface PlacedSection {
+  type: number;
+  offset: number;
+  bytes: number;
+}
+
 const FORMAT_VERSION = 1;
 
 const HEADER_BYTES = 12; // magic + format_version + crc32
@@ -71,10 +81,10 @@ export const SECTION_VENDOR_BYTECODE = 3;
  * container, the hot-reload transport frame that carries it, and the device's verification of both).
  * hotreload/protocol.mjs imports this rather than keeping its own.
  *
- * @param {Buffer|Uint8Array} data  Bytes to checksum.
- * @returns {number} The CRC as an unsigned 32-bit integer.
+ * @param data  Bytes to checksum.
+ * @returns The CRC as an unsigned 32-bit integer.
  */
-export function crc32(data) {
+export function crc32(data: Uint8Array): number {
   let crc = CRC32_INVERT;
   for (let index = 0; index < data.length; index++) {
     crc ^= data[index];
@@ -85,30 +95,28 @@ export function crc32(data) {
   return (crc ^ CRC32_INVERT) >>> 0;
 }
 
-/** Accumulates little-endian binary chunks (mirrors emit-pack.mjs's Writer). */
+/** Accumulates little-endian binary chunks (mirrors emit-pack.mts's Writer). */
 class Writer {
-  constructor() {
-    this.chunks = [];
-  }
-  u16(value) {
+  chunks: Buffer[] = [];
+  u16(value: number): void {
     const buffer = Buffer.alloc(2);
     buffer.writeUInt16LE(value & 0xffff, 0);
     this.chunks.push(buffer);
   }
-  u32(value) {
+  u32(value: number): void {
     const buffer = Buffer.alloc(4);
     buffer.writeUInt32LE(value >>> 0, 0);
     this.chunks.push(buffer);
   }
-  str(text) {
+  str(text: string): void {
     const buffer = Buffer.from(text, 'utf8');
     this.u16(buffer.length);
     this.chunks.push(buffer);
   }
-  bytes(data) {
+  bytes(data: Uint8Array): void {
     this.chunks.push(Buffer.from(data));
   }
-  done() {
+  done(): Buffer {
     return Buffer.concat(this.chunks);
   }
 }
@@ -116,17 +124,24 @@ class Writer {
 /**
  * Serializes a compiled app + assets into an ERCF container.
  *
- * @param {object} opts
- * @param {Buffer|Uint8Array} opts.bytecode        QuickJS bytecode blob (.qbc) for the app — required.
- * @param {Buffer|Uint8Array} [opts.vendorBytecode] QuickJS bytecode for the vendor chunk (react + reconciler
- *                                                  + lib). When present, the loader runs it BEFORE the app
- *                                                  (it installs the module registry the app require()s). Omit
- *                                                  for a monolithic app — output is then byte-identical to before.
- * @param {Buffer|Uint8Array} [opts.assetPack]     ERPK asset pack bytes; omitted/empty → no asset section.
- * @param {string} opts.qjsTag                     QuickJS release tag the bytecode targets (e.g. "v0.15.0").
- * @returns {Buffer} The container bytes.
+ * @returns The container bytes.
  */
-export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
+export function emitContainer({
+  bytecode,
+  vendorBytecode,
+  assetPack,
+  qjsTag,
+}: {
+  /** QuickJS bytecode blob (.qbc) for the app. */
+  bytecode: Uint8Array;
+  /** QuickJS bytecode for the vendor chunk (react + reconciler + lib). When present, the loader runs it BEFORE
+   *  the app (it installs the module registry the app require()s). Omit for a monolithic app. */
+  vendorBytecode?: Uint8Array | null;
+  /** ERPK asset pack bytes; omitted/empty → no asset section. */
+  assetPack?: Uint8Array | null;
+  /** QuickJS release tag the bytecode targets (e.g. "v0.15.0"). */
+  qjsTag: string;
+}): Buffer {
   if (!bytecode || !bytecode.length)
     throw new Error('emitContainer: bytecode is required');
   if (!qjsTag) throw new Error('emitContainer: qjsTag is required');
@@ -134,7 +149,7 @@ export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
   // Build the body (everything after the crc32 field) first, then prepend magic+version+crc.
   const body = new Writer();
   body.str(qjsTag);
-  const sections = [];
+  const sections: Section[] = [];
   // Order matters: vendor runs first (registers modules), assets register, then the app runs last.
   if (vendorBytecode && vendorBytecode.length)
     sections.push([SECTION_VENDOR_BYTECODE, vendorBytecode]);
@@ -145,7 +160,7 @@ export function emitContainer({bytecode, vendorBytecode, assetPack, qjsTag}) {
   // 4-align the asset pack's first byte relative to the container (see the alignment contract above)
   // by inserting a type-0 padding section ahead of it when the layout calls for one. Walk the layout
   // once to place pads, then write — section_count must already include them.
-  const paddedSections = [];
+  const paddedSections: Section[] = [];
   let offset =
     HEADER_BYTES +
     TAG_LENGTH_BYTES +
@@ -189,26 +204,32 @@ export const SECTION_DEBUG = 5;
  * Serializes a Flow B package into an ERCF container tagged `erb`: the asset pack, the program, then the debug
  * table. Every section starts 4-aligned in the container, since the runtime reads each in place.
  *
- * @param {object} opts
- * @param {Uint8Array} opts.program               The program section (aot/compiler/package/writer.mts).
- * @param {Uint8Array} [opts.assetPack]           ERPK asset pack bytes; omitted/empty → no asset section.
- * @param {Uint8Array} [opts.debug]               The debug section; omitted for a release build.
- * @returns {{bytes: Buffer, sections: Array<{type:number, offset:number, bytes:number}>}} The container, and
- *          where each non-padding section's data starts in it.
+ * @returns The container, and where each non-padding section's data starts in it.
  */
-export function emitPackageContainer({program, assetPack, debug}) {
+export function emitPackageContainer({
+  program,
+  assetPack,
+  debug,
+}: {
+  /** The program section (aot/compiler/package/writer.mts). */
+  program: Uint8Array;
+  /** ERPK asset pack bytes; omitted/empty → no asset section. */
+  assetPack?: Uint8Array | null;
+  /** The debug section; omitted for a release build. */
+  debug?: Uint8Array | null;
+}): {bytes: Buffer; sections: PlacedSection[]} {
   if (!program || !program.length)
     throw new Error('emitPackageContainer: program is required');
 
   const tag = 'erb';
-  const sections = [];
+  const sections: Section[] = [];
   if (assetPack && assetPack.length)
     sections.push([SECTION_ASSET_PACK, assetPack]);
   sections.push([SECTION_PROGRAM, program]);
   if (debug && debug.length) sections.push([SECTION_DEBUG, debug]);
 
-  const paddedSections = [];
-  const placed = [];
+  const paddedSections: Section[] = [];
+  const placed: PlacedSection[] = [];
   let offset =
     HEADER_BYTES +
     TAG_LENGTH_BYTES +

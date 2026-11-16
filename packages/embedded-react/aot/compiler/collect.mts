@@ -1499,7 +1499,7 @@ export async function bakeSvgArtifacts(
 
   // Load the baker only when there is something to bake.
   const {svgToVector, svgToRaster, writeRasterPng} =
-    await import('../../assets/bake-svg.mjs');
+    await import('../../assets/bake-svg.mts');
 
   // Read each imported file and bake it to a vector op-tape.
   const artifacts: Record<string, SvgArtifact> = {};

@@ -28,7 +28,7 @@ import {
   SECTION_DEBUG,
   SECTION_PROGRAM,
   emitPackageContainer,
-} from '../../../assets/emit-container.mjs';
+} from '../../../assets/emit-container.mts';
 import {lowerApp} from '../lower.mts';
 import {FLAG_DEBUG, Resource, Table} from './format.mts';
 import {lowerPackage} from './lower.mts';

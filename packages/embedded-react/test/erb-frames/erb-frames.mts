@@ -54,7 +54,7 @@ import {
   readNativeFiles,
   resourceReport,
 } from '../../aot/compile.mts';
-import {bakeAssetPackBytes} from '../../assets/index.mjs';
+import {bakeAssetPackBytes} from '../../assets/index.mts';
 import type {Screen} from '../../aot/compiler/options.mts';
 
 /** A panel size, in pixels. */

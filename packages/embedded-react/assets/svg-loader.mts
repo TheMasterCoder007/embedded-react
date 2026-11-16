@@ -25,19 +25,24 @@
 // Shared by every Flow A bundler so the .svg handling lives in one place.
 import {readFileSync} from 'node:fs';
 import {basename} from 'node:path';
-import {svgToVector, svgToRaster, writeRasterPng} from './bake-svg.mjs';
+import type {PluginBuild} from 'esbuild';
+import {svgToVector, svgToRaster, writeRasterPng} from './bake-svg.mts';
 
-const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
+const assetName = (filePath: string) =>
+  basename(filePath).replace(/\.[^.]+$/, '');
 
 /**
  * Registers a `.svg` onLoad on an esbuild build.
  *
- * @param {import('esbuild').PluginBuild} build  The esbuild build passed to a plugin's setup().
- * @param {(name:string, pngPath:string)=>void} [addRasterAsset]  Registers a rasterized-SVG PNG into the
+ * @param build  The esbuild build passed to a plugin's setup().
+ * @param addRasterAsset  Registers a rasterized-SVG PNG into the
  *        bundler's image collection (same mechanism as `import x from './x.png'`). When omitted, an SVG that
  *        needs raster fallback is baked as a (lossy) vector and a warning notes the dropped content.
  */
-export function registerSvgVectorLoader(build, addRasterAsset) {
+export function registerSvgVectorLoader(
+  build: PluginBuild,
+  addRasterAsset?: (name: string, pngPath: string) => void,
+): void {
   build.onLoad({filter: /\.svg$/i}, async args => {
     try {
       const svg = readFileSync(args.path, 'utf8');
@@ -72,7 +77,7 @@ export function registerSvgVectorLoader(build, addRasterAsset) {
       return {
         errors: [
           {
-            text: `embedded-react: failed to bake SVG ${args.path}: ${error.message}`,
+            text: `embedded-react: failed to bake SVG ${args.path}: ${(error as Error).message}`,
           },
         ],
       };

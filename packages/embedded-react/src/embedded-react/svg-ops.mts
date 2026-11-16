@@ -23,8 +23,107 @@
 // paint. The opcodes below MUST stay in sync with er_scene.h.
 
 import {NAMED_COLORS} from './named-colors.js';
+import type {
+  ArcProps,
+  CircleProps,
+  EllipseProps,
+  GProps,
+  LineProps,
+  PathProps,
+  RectProps,
+  SvgPaintProps,
+  SvgProps,
+  VectorGradient,
+  VectorShape,
+} from './index.d.ts';
 
-// Op-tape vocabulary — exported so the build-time SVG baker (assets/bake-svg.mjs) can reuse it without
+/** A gradient stop with its color packed to ARGB8888. */
+export interface PackedStop {
+  color: number;
+  offset: number;
+}
+
+/** A gradient as the bridge takes it, its geometry in the op-tape's coordinates. */
+export interface PackedGradient {
+  type: number;
+  stops: PackedStop[];
+  ax?: number;
+  ay?: number;
+  bx?: number;
+  by?: number;
+  r?: number;
+}
+
+/** What NativeUI.setVectorOps takes: the op-tape, the paint table and the gradient table. */
+export interface VectorTape {
+  ops: number[];
+  paints: number[];
+  gradients: PackedGradient[];
+}
+
+/** A baked .svg: a tape at its intrinsic size. */
+export interface VectorArtifact {
+  ops: number[];
+  paints: number[];
+  gradients?: PackedGradient[];
+  width: number;
+  height: number;
+}
+
+/** A color as a prop gives it: a CSS string, a packed ARGB8888, or nothing. */
+export type ColorInput = string | number | null | undefined | false;
+
+/** Scale then translate, per axis. */
+interface Transform {
+  scaleX: number;
+  scaleY: number;
+  translateX: number;
+  translateY: number;
+}
+
+/** One command letter of a `d` string and the numbers after it. */
+interface PathToken {
+  command: string;
+  values: number[];
+}
+
+/** A parsed `d` string, and its ops under the last transform applied to them. */
+interface PathEntry {
+  ops: number[];
+  lastTransform: (Transform & {ops: number[]}) | null;
+}
+
+type PaintProp = keyof SvgPaintProps;
+
+/** A shape's paint with every prop resolved. */
+type ResolvedPaint = Required<
+  Omit<SvgPaintProps, 'fillGradient' | 'strokeGradient'>
+> & {
+  fillGradient: VectorGradient | null;
+  strokeGradient: VectorGradient | null;
+};
+
+/** Every prop a shape or <G> inside an <Svg> can carry. */
+type ShapeProps = GProps &
+  PathProps &
+  CircleProps &
+  EllipseProps &
+  RectProps &
+  LineProps &
+  ArcProps;
+
+/** A component function, as a React element's type. */
+type ComponentType = ((...parameters: never[]) => unknown) & {
+  displayName?: string;
+};
+
+/** A React element, as far as flattenSvg reads one. */
+interface SvgElement {
+  type: string | symbol | ComponentType;
+  props: ShapeProps;
+}
+
+// Op-tape vocabulary — exported so the build-time SVG baker (assets/bake-svg.mts) can reuse it without
 // duplicating the encoding (and without pulling its SVG-parser dependency into this runtime module).
 export const VOP_SHAPE = 0;
 export const VOP_MOVE = 1;
@@ -38,8 +137,8 @@ export const VOP_CLOSE = 6;
 // 4/3 * (sqrt(2) - 1). Used by rounded-rect corners.
 export const KAPPA = 0.5522847498307936;
 
-export const CAP = {butt: 0, round: 1, square: 2};
-export const JOIN = {miter: 0, round: 1, bevel: 2};
+export const CAP: Record<string, number> = {butt: 0, round: 1, square: 2};
+export const JOIN: Record<string, number> = {miter: 0, round: 1, bevel: 2};
 
 // Paint record width in the flat paint table: [fill, stroke, strokeWidth, miter, cap, join, fillRule,
 // fillGradient, strokeGradient]. fillGradient/strokeGradient are 1-based indices into the gradient table (0 = solid). MUST
@@ -77,8 +176,12 @@ const SHAPE_HEADER_LENGTH = 2;
 const PAINT_STROKE_WIDTH_SLOT = 2;
 
 /** Linearly interpolates two straight-alpha ARGB8888 colors, per channel. */
-function lerpArgb(fromColor, toColor, fraction) {
-  const channel = shift => {
+function lerpArgb(
+  fromColor: number,
+  toColor: number,
+  fraction: number,
+): number {
+  const channel = (shift: number) => {
     const fromChannel = (fromColor >>> shift) & 0xff;
     const toChannel = (toColor >>> shift) & 0xff;
     return (
@@ -95,7 +198,7 @@ function lerpArgb(fromColor, toColor, fraction) {
 }
 
 /** Gradient color at `position` (stops ascending by offset; clamps to the endpoint colors). */
-function evalStopsAt(stops, position) {
+function evalStopsAt(stops: PackedStop[], position: number): number {
   if (!stops.length) return 0;
   if (position <= stops[0].offset) return stops[0].color >>> 0;
   const last = stops[stops.length - 1];
@@ -116,11 +219,11 @@ function evalStopsAt(stops, position) {
 }
 
 /** Reduces a stop list to at most `maxStops` entries, resampling evenly across the stop range when it's over. */
-function capStops(stops, maxStops) {
+function capStops(stops: PackedStop[], maxStops: number): PackedStop[] {
   if (stops.length <= maxStops) return stops;
   const firstOffset = stops[0].offset;
   const lastOffset = stops[stops.length - 1].offset;
-  const resampled = [];
+  const resampled: PackedStop[] = [];
   for (let index = 0; index < maxStops; index++) {
     const offset =
       maxStops === 1
@@ -133,8 +236,10 @@ function capStops(stops, maxStops) {
 
 /** Encodes gradient descriptors into the flat float array NativeUI.setVectorOps takes (GRAD_STRIDE/gradient).
  *  A gradient with more than GRAD_MAX_STOPS stops is resampled down (not truncated) so it still ramps right. */
-export function encodeVectorGradients(gradients) {
-  const encoded = [];
+export function encodeVectorGradients(
+  gradients: readonly PackedGradient[] | null | undefined,
+): number[] {
+  const encoded: number[] = [];
   if (!gradients) return encoded;
   for (const gradient of gradients) {
     const stops = capStops(gradient.stops || [], GRAD_MAX_STOPS);
@@ -155,20 +260,20 @@ export function encodeVectorGradients(gradients) {
 }
 
 // The shared named colors plus SVG's `none`; everything else goes through hex/rgb parsing.
-const SVG_NAMED_COLORS = Object.freeze(
+const SVG_NAMED_COLORS: Readonly<Record<string, number>> = Object.freeze(
   Object.assign(Object.create(null), NAMED_COLORS, {none: 0}),
 );
 
 // Cache string->uint32 results: a theme reuses a handful of color strings, so on a continuous drag
 // (which recompiles the dial every move) this turns repeated hex parsing into a Map lookup.
-const _colorCache = new Map();
+const _colorCache = new Map<string, number>();
 
 /**
  * Parses a CSS color string to a uint32 ARGB8888. Returns 0 (fully transparent) for none/transparent/
  * null, so the engine treats it as "no fill"/"no stroke". Accepts #rgb, #rgba, #rrggbb, #rrggbbaa,
  * rgb()/rgba(), and the named colors above. String results are memoised (see _colorCache).
  */
-export function parseColor(color) {
+export function parseColor(color: ColorInput): number {
   if (color == null || color === false) return 0;
   if (typeof color === 'number') return color >>> 0;
   const cached = _colorCache.get(color);
@@ -178,7 +283,7 @@ export function parseColor(color) {
   return parsed;
 }
 
-function parseColorString(color) {
+function parseColorString(color: string): number {
   let text = String(color).trim().toLowerCase();
   if (text in SVG_NAMED_COLORS) return SVG_NAMED_COLORS[text] >>> 0;
   if (text[0] === '#') {
@@ -225,12 +330,12 @@ function parseColorString(color) {
 const PATH_RE = /([MmLlHhVvCcSsQqTtAaZz])|(-?\d*\.?\d+(?:[eE][-+]?\d+)?)/g;
 
 /** Tokenizes a `d` string into {command, values[]} groups (one per command letter). */
-function tokenizePath(d) {
-  const commands = [];
+function tokenizePath(d: string): PathToken[] {
+  const commands: PathToken[] = [];
   const pattern = PATH_RE;
   pattern.lastIndex = 0;
   let match;
-  let current = null;
+  let current: PathToken | null = null;
   while ((match = pattern.exec(d)) !== null) {
     if (match[1]) {
       current = {command: match[1], values: []};
@@ -243,8 +348,18 @@ function tokenizePath(d) {
 }
 
 /** Converts an SVG elliptical arc (endpoint form) to a list of cubic bezier segments. */
-function arcToCubics(x0, y0, rx, ry, rotationDegrees, largeArc, sweep, x, y) {
-  const cubics = [];
+function arcToCubics(
+  x0: number,
+  y0: number,
+  rx: number,
+  ry: number,
+  rotationDegrees: number,
+  largeArc: number,
+  sweep: number,
+  x: number,
+  y: number,
+): number[][] {
+  const cubics: number[][] = [];
   if (rx === 0 || ry === 0) {
     cubics.push([x0, y0, x, y, x, y]); // degenerate -> straight line as a cubic
     return cubics;
@@ -288,7 +403,12 @@ function arcToCubics(x0, y0, rx, ry, rotationDegrees, largeArc, sweep, x, y) {
     cosRotation * primeCenterX - sinRotation * primeCenterY + (x0 + x) / 2;
   const cy =
     sinRotation * primeCenterX + cosRotation * primeCenterY + (y0 + y) / 2;
-  const angleBetween = (fromX, fromY, toX, toY) => {
+  const angleBetween = (
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+  ) => {
     const dot = fromX * toX + fromY * toY;
     const lengthProduct =
       Math.sqrt((fromX * fromX + fromY * fromY) * (toX * toX + toY * toY)) || 1;
@@ -357,7 +477,7 @@ function arcToCubics(x0, y0, rx, ry, rotationDegrees, largeArc, sweep, x, y) {
  *
  * Results are cached by `d` string, so the returned array is SHARED — read it, never mutate it.
  */
-export function parsePath(d) {
+export function parsePath(d: string): number[] {
   return pathEntry(d).ops;
 }
 
@@ -368,7 +488,7 @@ export function parsePath(d) {
 // the budget on its own is never stored, so nothing can push it over; an entry also holds one
 // transformed copy (see lastTransform), so the real footprint is ~2x the op budget. The bridge caps a single
 // <Svg> at 1024 ops and 16 shapes, so this holds several screens' worth.
-const PATH_CACHE = new Map();
+const PATH_CACHE = new Map<string, PathEntry>();
 const PATH_CACHE_MAX_OPS = 4096;
 const PATH_CACHE_MAX_ENTRIES = 128;
 let _pathCacheOps = 0;
@@ -376,7 +496,7 @@ let _pathCacheOps = 0;
 /** Cache record for one `d` string: `ops` are the parsed path ops, `lastTransform` the last transform applied
  *  to them (see transformCached). Coerces its key, so a non-string `d` still hits the cache instead
  *  of keying a fresh entry off object identity every call. */
-function pathEntry(d) {
+function pathEntry(d: unknown): PathEntry {
   const key = typeof d === 'string' ? d : String(d);
   const hit = PATH_CACHE.get(key);
   if (hit !== undefined) {
@@ -386,7 +506,7 @@ function pathEntry(d) {
     PATH_CACHE.set(key, hit);
     return hit;
   }
-  const entry = {ops: parsePathUncached(key), lastTransform: null};
+  const entry: PathEntry = {ops: parsePathUncached(key), lastTransform: null};
   // A path that alone exceeds the whole budget is parsed but not stored: caching it would blow the
   // bound it is measured against, and at that size it is already past the bridge's per-<Svg> op cap.
   if (entry.ops.length > PATH_CACHE_MAX_OPS) return entry;
@@ -396,21 +516,21 @@ function pathEntry(d) {
     _pathCacheOps > PATH_CACHE_MAX_OPS ||
     PATH_CACHE.size > PATH_CACHE_MAX_ENTRIES
   ) {
-    const oldest = PATH_CACHE.keys().next().value;
-    _pathCacheOps -= PATH_CACHE.get(oldest).ops.length;
+    const oldest = PATH_CACHE.keys().next().value!;
+    _pathCacheOps -= PATH_CACHE.get(oldest)!.ops.length;
     PATH_CACHE.delete(oldest);
   }
   return entry;
 }
 
 /** Drops every cached path. Only for tests that measure parse work. */
-export function clearPathCache() {
+export function clearPathCache(): void {
   PATH_CACHE.clear();
   _pathCacheOps = 0;
 }
 
-function parsePathUncached(d) {
-  const ops = [];
+function parsePathUncached(d: string): number[] {
+  const ops: number[] = [];
   const tokens = tokenizePath(d);
   let currentX = 0;
   let currentY = 0;
@@ -425,8 +545,8 @@ function parsePathUncached(d) {
     const values = token.values;
     const absoluteCommand = command.toUpperCase();
     let index = 0;
-    const resolveX = value => (relative ? currentX + value : value);
-    const resolveY = value => (relative ? currentY + value : value);
+    const resolveX = (value: number) => (relative ? currentX + value : value);
+    const resolveY = (value: number) => (relative ? currentY + value : value);
     if (absoluteCommand === 'M') {
       // First pair is moveto; later pairs are implicit linetos.
       currentX = resolveX(values[index++]);
@@ -574,12 +694,13 @@ function parsePathUncached(d) {
 
 // --- Primitive shapes -> path ops ----------------------------------------------------------------
 
-function num(value, fallback) {
-  const parsed = typeof value === 'number' ? value : parseFloat(value);
+function num(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === 'number' ? value : parseFloat(value as string);
   return isNaN(parsed) ? fallback : parsed;
 }
 
-function circleOps(props) {
+function circleOps(props: CircleProps): number[] {
   const cx = num(props.cx, 0);
   const cy = num(props.cy, 0);
   const r = num(props.r, 0);
@@ -601,7 +722,7 @@ function circleOps(props) {
 
 /** An ellipse as a `d` string: an arc-free path of four cubic Béziers (kappa) once parsePath lowers
  *  the two `A` commands. Returned as a string so it goes through the same parse cache as <Path d>. */
-function ellipsePathD(props) {
+function ellipsePathD(props: EllipseProps): string {
   const cx = num(props.cx, 0);
   const cy = num(props.cy, 0);
   const rx = num(props.rx, 0);
@@ -616,7 +737,12 @@ function ellipsePathD(props) {
  * corners, and each radius is clamped to half its own side. Returns [rx, ry] — [0, 0] for a
  * square-cornered rect. Exported so the AOT and the SVG baker apply the same rules.
  */
-export function rectRadii(rxAttr, ryAttr, width, height) {
+export function rectRadii(
+  rxAttr: unknown,
+  ryAttr: unknown,
+  width: number,
+  height: number,
+): [number, number] {
   let rx = num(rxAttr, -1);
   let ry = num(ryAttr, -1);
   if (rx < 0) rx = ry; // rx omitted -> ry
@@ -632,7 +758,14 @@ export function rectRadii(rxAttr, ryAttr, width, height) {
  * exactly the preceding line's endpoint — an arc recomputes that point from cos/sin and can miss the
  * engine's exact-equality join dedupe by a ULP, which spikes the miter join on a stroked rect.
  */
-function rectOpsXY(x, y, width, height, rx, ry) {
+function rectOpsXY(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  rx: number,
+  ry: number,
+): number[] {
   if (rx <= 0 || ry <= 0)
     return [
       VOP_MOVE,
@@ -705,7 +838,7 @@ function rectOpsXY(x, y, width, height, rx, ry) {
   ];
 }
 
-function rectOps(props) {
+function rectOps(props: RectProps): number[] {
   const x = num(props.x, 0);
   const y = num(props.y, 0);
   const width = num(props.width, 0);
@@ -714,7 +847,7 @@ function rectOps(props) {
   return rectOpsXY(x, y, width, height, rx, ry);
 }
 
-function lineOps(props) {
+function lineOps(props: LineProps): number[] {
   return [
     VOP_MOVE,
     num(props.x1, 0),
@@ -728,7 +861,13 @@ function lineOps(props) {
 // Arc convenience: angles in DEGREES, clockwise from 12 o'clock (the gauge/dial convention). Emits a
 // native VOP_ARC (no d-string regex / bezier conversion), so it is cheap enough to rebuild every drag
 // frame — the key to fast imperative updates.
-function arcOpsCW(cx, cy, r, startDegrees, endDegrees) {
+function arcOpsCW(
+  cx: number,
+  cy: number,
+  r: number,
+  startDegrees: number,
+  endDegrees: number,
+): number[] {
   // The engine's arc angle runs from +X (cos/sin); top-clockwise => subtract 90°.
   const startRadians =
     ((startDegrees - TWELVE_OCLOCK_DEGREES) * Math.PI) / HALF_TURN_DEGREES;
@@ -753,11 +892,11 @@ function arcOpsCW(cx, cy, r, startDegrees, endDegrees) {
 // Reused output buffers — shapesToVector is on the drag hot path and its result is consumed
 // synchronously by NativeUI.setVectorOps, so growing fresh arrays (plus per-shape arrays + spreads)
 // every move is pure GC. Push directly into these instead.
-const _vectorOps = [];
-const _vectorPaints = [];
-const _vectorGradients = [];
+const _vectorOps: number[] = [];
+const _vectorPaints: number[] = [];
+const _vectorGradients: PackedGradient[] = [];
 
-export function shapesToVector(shapes) {
+export function shapesToVector(shapes: readonly VectorShape[]): VectorTape {
   const ops = _vectorOps;
   const paints = _vectorPaints;
   const gradients = _vectorGradients;
@@ -850,8 +989,8 @@ export function shapesToVector(shapes) {
       parseColor(shape.stroke),
       num(shape.strokeWidth, DEFAULT_STROKE_WIDTH),
       num(shape.miter, DEFAULT_MITER_LIMIT),
-      CAP[shape.cap] ?? CAP.butt,
-      JOIN[shape.join] ?? JOIN.miter,
+      CAP[shape.cap!] ?? CAP.butt,
+      JOIN[shape.join!] ?? JOIN.miter,
       shape.fillRule === 'evenodd' ? FILL_RULE_EVEN_ODD : FILL_RULE_NONZERO,
       shape.fillGradient ? pushGrad(gradients, shape.fillGradient) : 0,
       shape.strokeGradient ? pushGrad(gradients, shape.strokeGradient) : 0,
@@ -861,7 +1000,10 @@ export function shapesToVector(shapes) {
 }
 
 /** Appends a gradient descriptor (normalizing string stop colours) and returns its 1-based index. */
-function pushGrad(gradients, gradient) {
+function pushGrad(
+  gradients: PackedGradient[],
+  gradient: VectorGradient,
+): number {
   gradients.push({
     type: gradient.type,
     ax: gradient.ax,
@@ -880,7 +1022,7 @@ function pushGrad(gradients, gradient) {
 
 // --- Flatten an <Svg> subtree --------------------------------------------------------------------
 
-const PAINT_DEFAULT = {
+const PAINT_DEFAULT: ResolvedPaint = {
   fill: 'black',
   stroke: 'none',
   strokeWidth: DEFAULT_STROKE_WIDTH,
@@ -893,19 +1035,23 @@ const PAINT_DEFAULT = {
 };
 
 /** The props that make up a shape's paint; a <G> or the <Svg> itself passes them down. */
-export const PAINT_PROPS = Object.keys(PAINT_DEFAULT);
+export const PAINT_PROPS = Object.keys(PAINT_DEFAULT) as PaintProp[];
 
-function mergePaint(base, props) {
-  const merged = {...base};
+function mergePaint(base: ResolvedPaint, props: SvgPaintProps): ResolvedPaint {
+  const merged: Record<string, unknown> = {...base};
   for (const key of PAINT_PROPS)
     if (props[key] != null) merged[key] = props[key];
-  return merged;
+  return merged as ResolvedPaint;
 }
 
 /** Maps the resolved paint to the PAINT_STRIDE-number record [fill, stroke, strokeWidth, miter, cap, join, rule,
  *  fillGradient, strokeGradient]. Any gradient descriptor is appended to `gradients` and referenced by its
  *  1-BASED index (0 = solid), the same encoding shapesToVector uses. */
-function paintRecord(paint, scale, gradients) {
+function paintRecord(
+  paint: ResolvedPaint,
+  scale: number,
+  gradients: PackedGradient[],
+): number[] {
   return [
     parseColor(paint.fill),
     parseColor(paint.stroke),
@@ -924,12 +1070,12 @@ function paintRecord(paint, scale, gradients) {
 }
 
 /** Applies a {scaleX, scaleY, translateX, translateY} transform to a path-op array (no leading SHAPE op). */
-function transformOps(ops, transform) {
-  const transformed = [];
+function transformOps(ops: readonly number[], transform: Transform): number[] {
+  const transformed: number[] = [];
   let index = 0;
-  const mapX = coordinate =>
+  const mapX = (coordinate: number) =>
     coordinate * transform.scaleX + transform.translateX;
-  const mapY = coordinate =>
+  const mapY = (coordinate: number) =>
     coordinate * transform.scaleY + transform.translateY;
   while (index < ops.length) {
     const opcode = ops[index++];
@@ -974,7 +1120,7 @@ function transformOps(ops, transform) {
  * never moves between commits, so an untouched shape costs a compare instead of a rebuild. The same
  * `d` drawn under several different transforms just misses and pays the full transform.
  */
-function transformCached(entry, transform) {
+function transformCached(entry: PathEntry, transform: Transform): number[] {
   const lastTransform = entry.lastTransform;
   if (
     lastTransform &&
@@ -995,7 +1141,7 @@ function transformCached(entry, transform) {
   return transformedOps;
 }
 
-function isElement(child) {
+function isElement(child: any): child is SvgElement {
   return (
     child &&
     typeof child === 'object' &&
@@ -1010,7 +1156,7 @@ const REACT_FRAGMENT = Symbol.for('react.fragment');
 
 /** Children JSX produces for "draw nothing": a bare `{cond && <Path/>}` that failed, a hole in a
  *  list, and the whitespace JSX leaves between elements. Skipped without a word. */
-function isEmptyChild(child) {
+function isEmptyChild(child: unknown): boolean {
   return (
     child == null ||
     typeof child === 'boolean' ||
@@ -1034,7 +1180,7 @@ let _warnedSvgChild = false;
  * or an array of them) straight into children, where the walk sees it. Having it return an array does
  * nothing for `<Needle/>`: that form is never invoked at all.
  */
-function warnSvgChild(child) {
+function warnSvgChild(child: unknown): void {
   if (_warnedSvgChild) return;
   _warnedSvgChild = true;
   const description = !isElement(child)
@@ -1060,13 +1206,13 @@ function warnSvgChild(child) {
  * `gradients` and is referenced 1-based from its paint record. Returns empty arrays when there is
  * nothing to draw.
  */
-export function flattenSvg(props) {
-  const ops = [];
-  const paints = [];
-  const gradients = [];
+export function flattenSvg(props: SvgProps): VectorTape {
+  const ops: number[] = [];
+  const paints: number[] = [];
+  const gradients: PackedGradient[] = [];
 
   // Root transform from viewBox vs width/height.
-  let root = {scaleX: 1, scaleY: 1, translateX: 0, translateY: 0};
+  let root: Transform = {scaleX: 1, scaleY: 1, translateX: 0, translateY: 0};
   if (props.viewBox && props.width && props.height) {
     const viewBox = String(props.viewBox)
       .trim()
@@ -1087,7 +1233,11 @@ export function flattenSvg(props) {
   // One child at a time, recursing through the wrappers, JSX inserts around shapes: an array (every
   // `{shapes.map(...)}`, and arrays of arrays when those nest) and a fragment, either of which can
   // sit anywhere a shape can. Both are transparent — they carry no paint and no transform.
-  const walk = (child, paint, transform) => {
+  const walk = (
+    child: unknown,
+    paint: ResolvedPaint,
+    transform: Transform,
+  ): void => {
     if (isEmptyChild(child)) return;
     if (Array.isArray(child)) {
       for (const item of child) walk(item, paint, transform);
@@ -1111,12 +1261,12 @@ export function flattenSvg(props) {
       };
       return walk(childProps.children, merged, childTransform);
     }
-    if (!SVG_TAGS.includes(child.type)) return warnSvgChild(child);
+    if (!SVG_TAGS.includes(child.type as string)) return warnSvgChild(child);
 
     // Path/Ellipse geometry comes from a `d` string and is cached (parse + transform) by that string;
     // the primitives build a fixed handful of numbers, which is cheaper than any cache lookup.
-    let entry = null;
-    let shapeOps = null;
+    let entry: PathEntry | null = null;
+    let shapeOps: number[] | null = null;
     if (child.type === 'Path' && childProps.d)
       entry = pathEntry(childProps.d); // pathEntry coerces the key
     else if (child.type === 'Ellipse')
@@ -1156,8 +1306,12 @@ export function flattenSvg(props) {
 // --- Imported SVG artifacts (<Svg source>) -------------------------------------------------------
 
 /** Scales a full op-tape (with SHAPE headers) by (scaleX, scaleY): coordinates only, paint indices untouched. */
-function scaleTape(ops, scaleX, scaleY) {
-  const scaled = [];
+function scaleTape(
+  ops: readonly number[],
+  scaleX: number,
+  scaleY: number,
+): number[] {
+  const scaled: number[] = [];
   let index = 0;
   while (index < ops.length) {
     const opcode = ops[index++];
@@ -1201,7 +1355,11 @@ function scaleTape(ops, scaleX, scaleY) {
  * size to a target box, also scaling stroke widths. Returns the original arrays untouched when no scaling
  * is needed (the common <Svg source> case where the box equals the intrinsic size).
  */
-export function scaleVectorArtifact(artifact, targetWidth, targetHeight) {
+export function scaleVectorArtifact(
+  artifact: VectorArtifact,
+  targetWidth: number,
+  targetHeight: number,
+): VectorTape {
   const scaleX = artifact.width ? targetWidth / artifact.width : 1;
   const scaleY = artifact.height ? targetHeight / artifact.height : 1;
   const sourceGradients = artifact.gradients || [];
@@ -1249,21 +1407,21 @@ let _warnedVectorGradients = false;
  * the developer's console. Pass the live caps from NativeUI.maxVectorOps / maxVectorPaints / maxVectorGrads
  * (undefined on an older bridge => no-op).
  *
- * @param {number} opsLength         Op-tape length (flat float count).
- * @param {number} paintsLength      Paint-table length (PAINT_STRIDE numbers per shape).
- * @param {number} maxOps            Bridge op-tape cap (NativeUI.maxVectorOps).
- * @param {number} maxPaints         Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
- * @param {number} [gradientsLength] Gradient count (number of gradients referenced by the shapes).
- * @param {number} [maxGradients]    Bridge gradient cap (NativeUI.maxVectorGrads).
+ * @param opsLength        Op-tape length (flat float count).
+ * @param paintsLength     Paint-table length (PAINT_STRIDE numbers per shape).
+ * @param maxOps           Bridge op-tape cap (NativeUI.maxVectorOps).
+ * @param maxPaints        Bridge paint cap, in SHAPES (NativeUI.maxVectorPaints).
+ * @param gradientsLength  Gradient count (number of gradients referenced by the shapes).
+ * @param maxGradients     Bridge gradient cap (NativeUI.maxVectorGrads).
  */
 export function warnVectorCaps(
-  opsLength,
-  paintsLength,
-  maxOps,
-  maxPaints,
-  gradientsLength,
-  maxGradients,
-) {
+  opsLength: number,
+  paintsLength: number,
+  maxOps: number,
+  maxPaints: number,
+  gradientsLength?: number,
+  maxGradients?: number,
+): void {
   if (!_warnedVectorOps && maxOps > 0 && opsLength > maxOps) {
     _warnedVectorOps = true;
     console.warn(
@@ -1282,8 +1440,8 @@ export function warnVectorCaps(
   }
   if (
     !_warnedVectorGradients &&
-    maxGradients > 0 &&
-    gradientsLength > maxGradients
+    maxGradients! > 0 &&
+    gradientsLength! > maxGradients!
   ) {
     _warnedVectorGradients = true;
     console.warn(

@@ -55,15 +55,15 @@ export async function packAppContainer({
   strip = false,
 }) {
   const esbuild = require('esbuild');
-  const {bakeImage} = await import('../assets/bake-image.mjs');
-  const {bakeFont} = await import('../assets/bake-font.mjs');
-  const {resolveFontJobs} = await import('../assets/font-config.mjs');
+  const {bakeImage} = await import('../assets/bake-image.mts');
+  const {bakeFont} = await import('../assets/bake-font.mts');
+  const {resolveFontJobs} = await import('../assets/font-config.mts');
   const {analyzeFontSizes, warnFontSizes} =
-    await import('../assets/font-sizes.mjs');
-  const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mjs');
-  const {emitAssetPack} = await import('../assets/emit-pack.mjs');
-  const {emitContainer} = await import('../assets/emit-container.mjs');
-  const {registerSvgVectorLoader} = await import('../assets/svg-loader.mjs');
+    await import('../assets/font-sizes.mts');
+  const {warnMissingGlyphs} = await import('../assets/glyph-coverage.mts');
+  const {emitAssetPack} = await import('../assets/emit-pack.mts');
+  const {emitContainer} = await import('../assets/emit-container.mts');
+  const {registerSvgVectorLoader} = await import('../assets/svg-loader.mts');
   const {compileToBytecode} = await import('../qjsc-wasm.mjs');
 
   const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');

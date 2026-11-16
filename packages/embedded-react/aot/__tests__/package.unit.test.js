@@ -19,7 +19,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {crc32} from '../../assets/emit-container.mjs';
+import {crc32} from '../../assets/emit-container.mts';
 import {
   bakePackage,
   compilePackage,

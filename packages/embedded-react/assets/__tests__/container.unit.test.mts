@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// Unit tests for the ERCF config-container emitter (emit-container.mjs). These lock down the on-disk
+// Unit tests for the ERCF config-container emitter (emit-container.mts). These lock down the on-disk
 // format and — crucially — that the JS CRC-32 matches the C reader's er_crc32() (runtime/er_container.c), so
 // a container packed here verifies on a device instead of being rejected as corrupt.
 import {describe, it, expect} from 'vitest';
@@ -25,7 +25,7 @@ import {
   SECTION_BYTECODE,
   SECTION_ASSET_PACK,
   SECTION_VENDOR_BYTECODE,
-} from '../emit-container.mjs';
+} from '../emit-container.mts';
 
 const MAGIC_BYTES = 4;
 

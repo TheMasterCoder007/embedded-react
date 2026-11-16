@@ -34,7 +34,7 @@ import {
   SECTION_BYTECODE,
   SECTION_ASSET_PACK,
   SECTION_VENDOR_BYTECODE,
-} from '../../assets/emit-container.mjs';
+} from '../../assets/emit-container.mts';
 
 const PACKAGE_DIRECTORY = resolve(import.meta.dirname, '../..'); // .../packages/embedded-react
 const REPO = resolve(PACKAGE_DIRECTORY, '../..');

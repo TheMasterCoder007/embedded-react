@@ -23,16 +23,16 @@ import os from 'node:os';
 import fs from 'node:fs';
 import {resolve, dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {rasterize} from '../rasterize.mjs';
-import {bakeImage} from '../bake-image.mjs';
+import {rasterize} from '../rasterize.mts';
+import {bakeImage} from '../bake-image.mts';
 import {
   bakeFont,
   resolveExtras,
   ASCII_FIRST,
   ASCII_LAST,
-} from '../bake-font.mjs';
-import {emitAssetsC} from '../emit-c.mjs';
-import {emitAssetPack} from '../emit-pack.mjs';
+} from '../bake-font.mts';
+import {emitAssetsC} from '../emit-c.mts';
+import {emitAssetPack} from '../emit-pack.mts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INTER = resolve(here, '../../../../assets/fonts/Inter-Regular.ttf');

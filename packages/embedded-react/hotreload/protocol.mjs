@@ -35,9 +35,9 @@
 //   payload        bytes[payload_len]   — the .erpkg (ERCF container)
 //
 // The mirror of this lives in the firmware parser (runtime/er_hotreload.c); the two MUST stay
-// byte-compatible. crc32 is shared with emit-container.mjs so all three CRCs are the one algorithm.
+// byte-compatible. crc32 is shared with emit-container.mts so all three CRCs are the one algorithm.
 
-import {crc32} from '../assets/emit-container.mjs';
+import {crc32} from '../assets/emit-container.mts';
 
 export const ERHR_MAGIC = 'ERHR';
 export const ERHR_PROTO_VERSION = 1;

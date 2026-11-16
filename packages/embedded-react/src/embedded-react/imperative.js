@@ -25,7 +25,7 @@ import {
   shapesToVector,
   warnVectorCaps,
   encodeVectorGradients,
-} from './svg-ops.js';
+} from './svg-ops.mts';
 
 /**
  * Imperatively sets an <Svg> node's geometry from primitive shape descriptors (see shapesToVector).

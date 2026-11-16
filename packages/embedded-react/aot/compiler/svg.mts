@@ -35,7 +35,9 @@ import {
   VOP_MOVE,
   VOP_QUAD,
   VOP_SHAPE,
-} from '../../src/embedded-react/svg-ops.js';
+} from '../../src/embedded-react/svg-ops.mts';
+import type {ColorInput} from '../../src/embedded-react/svg-ops.mts';
+import type {SvgNumber} from '../../src/embedded-react/index.d.ts';
 import {aotError, currentLoc} from './diagnostics.mts';
 import {
   bootSlotOf,
@@ -518,7 +520,7 @@ function svgAttrs(
 
 /**
  * Lowers a `{ type, ax, ay, bx, by, r, stops: [{ color, offset }] }` gradient descriptor — the SAME shape
- * Flow A's svg-ops.js takes. Every geometry field and every stop may be static or state-driven; `type` and the
+ * Flow A's svg-ops.mts takes. Every geometry field and every stop may be static or state-driven; `type` and the
  * stop COUNT must be static, since they decide the emitted table's shape.
  *
  * Conic gradients carry the sweep's start angle in `r` (radians, clockwise from the top), so a dial whose
@@ -621,7 +623,8 @@ function lowerGradient(
     try {
       color = {
         kind: 'static',
-        argb: parseColor(evalDrawing(stopProps.color, scope)) >>> 0,
+        argb:
+          parseColor(evalDrawing(stopProps.color, scope) as ColorInput) >>> 0,
       };
     } catch (error) {
       if (error instanceof SvgScreenError) throw error;
@@ -734,7 +737,10 @@ function lowerShapePaint(
           kind: 'state',
           value: lowerColorValue(attributeValue.node, environment),
         }
-      : {kind: 'static', argb: parseColor(attributeValue ?? fallback) >>> 0};
+      : {
+          kind: 'static',
+          argb: parseColor((attributeValue ?? fallback) as ColorInput) >>> 0,
+        };
 
   const strokeWidth: IrTapeValue = isDynamicAttr(attributes.strokeWidth)
     ? {kind: 'float', value: attributes.strokeWidth.value!}
@@ -1616,8 +1622,8 @@ function emitSvgStatic(
   if (scaled) return scaled;
   const {ops, paints, gradients} = flattenSvg({
     ...svgElement.props,
-    width: buildValueOf(svgElement.props.width),
-    height: buildValueOf(svgElement.props.height),
+    width: buildValueOf(svgElement.props.width) as SvgNumber,
+    height: buildValueOf(svgElement.props.height) as SvgNumber,
   });
   const nodeId = `n${output.allocateNodeId()}`;
   const tables: IrVectorTables = {

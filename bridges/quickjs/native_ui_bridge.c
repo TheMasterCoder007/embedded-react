@@ -3897,7 +3897,7 @@ _Static_assert(VEC_BRIDGE_MAX_PAINTS >= ERUI_VECTOR_PAINTS_MAX,
                "VEC_BRIDGE_MAX_PAINTS must be >= ERUI_VECTOR_PAINTS_MAX");
 _Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADIENTS_MAX,
                "VEC_BRIDGE_MAX_GRADS must be >= ERUI_VECTOR_GRADIENTS_MAX");
-/* JS paint record (kept in sync with svg-ops.js PAINT_STRIDE): the 7 base fields + fill_gradient + stroke_gradient. */
+/* JS paint record (kept in sync with svg-ops.mts PAINT_STRIDE): the 7 base fields + fill_gradient + stroke_gradient. */
 #define VEC_PAINT_FILL 0
 #define VEC_PAINT_STROKE 1
 #define VEC_PAINT_STROKE_WIDTH 2
@@ -3908,7 +3908,7 @@ _Static_assert(VEC_BRIDGE_MAX_GRADS >= ERUI_VECTOR_GRADIENTS_MAX,
 #define VEC_PAINT_FILL_GRADIENT 7
 #define VEC_PAINT_STROKE_GRADIENT 8
 #define VEC_PAINT_STRIDE 9
-/* JS gradient record (kept in sync with svg-ops.js encodeVectorGradients):
+/* JS gradient record (kept in sync with svg-ops.mts encodeVectorGradients):
  * [type, stop_count, (color, position) × ER_VECTOR_GRADIENT_MAX_STOPS, ax, ay, bx, by, r]. */
 #define VEC_GRADIENT_TYPE 0
 #define VEC_GRADIENT_STOP_COUNT 1
@@ -5246,7 +5246,7 @@ void er_bridge_install(JSContext* ctx)
     JS_SetPropertyStr(ctx, native_ui, "keyboardFrame", JS_NewCFunction(ctx, js_keyboard_frame, "keyboardFrame", 0));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 5));
     /* Expose the bridge-side vector caps so the JS layer can warn when an <Svg> exceeds them — the bridge
-     * silently truncates the op-tape / paint table otherwise (see warnVectorCaps in svg-ops.js). */
+     * silently truncates the op-tape / paint table otherwise (see warnVectorCaps in svg-ops.mts). */
     JS_SetPropertyStr(ctx, native_ui, "maxVectorOps", JS_NewInt32(ctx, VEC_BRIDGE_MAX_OPS));
     JS_SetPropertyStr(ctx, native_ui, "maxVectorPaints", JS_NewInt32(ctx, VEC_BRIDGE_MAX_PAINTS));
     JS_SetPropertyStr(ctx, native_ui, "maxVectorGrads", JS_NewInt32(ctx, VEC_BRIDGE_MAX_GRADS));

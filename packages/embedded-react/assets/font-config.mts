@@ -18,6 +18,16 @@
 // bake fonts (build, pack, sim, sim-server, hot-reload app/split chunks); they share this so a
 // config field means the same thing in every one of them.
 
+import type {FontJob} from './bake-font.mts';
+
+/** One family's entry in the `fonts` block of assets.config.js. */
+export interface FontConfig {
+  sizes?: number[];
+  bpp?: number;
+  glyphs?: FontJob['glyphs'];
+  extraGlyphs?: FontJob['extraGlyphs'];
+}
+
 /** Fallback pixel size when no fontSize could be discovered and the config pins none. */
 const DEFAULT_SIZE = 16;
 
@@ -27,13 +37,16 @@ const DEFAULT_BPP = 4;
 /**
  * Resolves discovered font imports against their per-project config.
  *
- * @param {Map<string,string>} fonts        Discovered imports: family → .ttf/.otf path.
- * @param {object} [fontConfig]             assets.config.js `fonts` block, keyed by family.
- * @param {number[]} [discoveredSizes]      Sizes the bundle uses (font-sizes.mjs analyzeFontSizes).
- * @returns {Array<{path:string, family:string, sizes:number[], bpp:number, glyphs:any,
- *          extraGlyphs:any}>} One bakeFont() job per imported font.
+ * @param fonts            Discovered imports: family → .ttf/.otf path.
+ * @param fontConfig       assets.config.js `fonts` block, keyed by family.
+ * @param discoveredSizes  Sizes the bundle uses (font-sizes.mts analyzeFontSizes).
+ * @returns One bakeFont() job per imported font.
  */
-export function resolveFontJobs(fonts, fontConfig = {}, discoveredSizes = []) {
+export function resolveFontJobs(
+  fonts: Map<string, string>,
+  fontConfig: Record<string, FontConfig> = {},
+  discoveredSizes: number[] = [],
+): FontJob[] {
   return [...fonts.entries()].map(([family, path]) => {
     const familyConfig = fontConfig[family] || {};
     return {

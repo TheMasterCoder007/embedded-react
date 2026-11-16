@@ -19,7 +19,7 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import {NAMED_COLORS} from '../named-colors.js';
-import {parseColor} from '../svg-ops.js';
+import {parseColor} from '../svg-ops.mts';
 import {parseColorValue} from '../../../aot/style-map.mts';
 
 // Flow A styles (the bridge), SVG paint and Flow B must resolve a name to the same color.

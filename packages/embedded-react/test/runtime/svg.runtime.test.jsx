@@ -23,7 +23,7 @@ import {useRef} from 'react';
 import {createRoot} from '../../src/renderer.js';
 import {View, Svg, Path, Circle, Line, updateVector} from 'embedded-react';
 import {NativeUI} from '../../src/native-ui.js';
-import {PAINT_STRIDE} from '../../src/embedded-react/svg-ops.js';
+import {PAINT_STRIDE} from '../../src/embedded-react/svg-ops.mts';
 import {check, report} from './harness.js';
 
 const layouts = {};
