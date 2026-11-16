@@ -26,7 +26,6 @@
 #include "erb_internal.h"
 #include "erb_props.h"
 
-#include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdio.h>
@@ -623,6 +622,34 @@ static void put_char(char* buffer, size_t capacity, size_t* length, char charact
     {
         buffer[(*length)++] = character;
     }
+}
+
+/**
+ * @brief An integer in decimal. Written by hand because the small C libraries firmware links (newlib-nano) leave
+ *        64-bit conversions out of printf, which then prints the "ld" of "%lld" in place of the number.
+ */
+static const char* integer_text(char* buffer, size_t capacity, int64_t value)
+{
+    char reversed[NUMBER_TEXT_SIZE];
+    size_t count = 0;
+    uint64_t magnitude = value < 0 ? 0u - (uint64_t)value : (uint64_t)value;
+    do
+    {
+        reversed[count++] = (char)('0' + (char)(magnitude % 10u));
+        magnitude /= 10u;
+    } while (magnitude != 0u);
+
+    size_t length = 0;
+    if (value < 0)
+    {
+        put_char(buffer, capacity, &length, '-');
+    }
+    while (count > 0u)
+    {
+        put_char(buffer, capacity, &length, reversed[--count]);
+    }
+    buffer[length] = '\0';
+    return buffer;
 }
 
 /**
@@ -1683,12 +1710,10 @@ ERB_VM_HOT ErbStatus erb_vm_run(uint16_t function, const int32_t* arguments, int
             case ERB_OP_FMTL:
             {
                 char text[NUMBER_TEXT_SIZE];
-                snprintf(text,
-                         sizeof(text),
-                         "%" PRId64,
-                         ERB_OP(word) == ERB_OP_FMTI ? (int64_t)registers[operand_a]
-                                                     : get_int64(&registers[operand_a]));
-                format_append(text);
+                format_append(integer_text(text,
+                                           sizeof(text),
+                                           ERB_OP(word) == ERB_OP_FMTI ? (int64_t)registers[operand_a]
+                                                                       : get_int64(&registers[operand_a])));
                 break;
             }
             case ERB_OP_FMTF:

@@ -598,6 +598,31 @@ static uint16_t log_helper(bool with_hook)
     return function;
 }
 
+/** @brief Integers are written out by hand, so they print on a C library whose printf has no 64-bit conversions. */
+static void test_integer_text(void)
+{
+    base();
+    const uint8_t wide_types[] = {ERB_TYPE_INT64, ERB_TYPE_PAIR};
+    const uint32_t wide_code[] = {OP_ABC(FMTL, 0, 0, 0), OP_ABC(FMTLOG, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
+    const uint8_t narrow_types[] = {ERB_TYPE_INT};
+    const uint32_t narrow_code[] = {OP_ABC(FMTI, 0, 0, 0), OP_ABC(FMTLOG, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
+    const uint16_t wide = helper(wide_types, 2, 2, 0, wide_code, 3);
+    const uint16_t narrow = helper(narrow_types, 1, 1, 0, narrow_code, 3);
+    CHECK(load(), "a package that prints integers loads");
+
+    s_log[0] = '\0';
+    call64(wide, INT64_MIN, 0);
+    call64(wide, INT64_MAX, 0);
+    call64(wide, 1700000000000LL, 0);
+    CHECK(strcmp(s_log, "-9223372036854775808\n9223372036854775807\n1700000000000\n") == 0,
+          "FMTL prints the 64-bit limits and a timestamp");
+    s_log[0] = '\0';
+    call(narrow, 0, 0);
+    call(narrow, INT32_MIN, 0);
+    call(narrow, 480, 0);
+    CHECK(strcmp(s_log, "0\n-2147483648\n480\n") == 0, "FMTI prints zero, the smallest 32-bit value and a size");
+}
+
 static void test_log(void)
 {
     call(log_helper(true), 0, 0);
@@ -1945,6 +1970,7 @@ int main(void)
     test_native_records();
     test_optional_modules();
     test_text();
+    test_integer_text();
     test_log();
     test_string_helpers();
     test_lists();

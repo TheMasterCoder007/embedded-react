@@ -10,6 +10,10 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Fixed
+
+- Flow B: an integer in a text printed as `ld` on firmware linked against newlib-nano, whose printf has no 64-bit
+  conversions. The VM now writes integers out itself.
 
 ## [0.22.0] - 2026-11-16
 ### Added
