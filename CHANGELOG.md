@@ -46,6 +46,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 ### Fixed
 
 - Engine: a scaled or tinted image wider than `ERUI_MAX_IMAGE_ROW_PIXELS` is drawn whole.
+- Flow A: a `for...of` or spread over a string no longer hangs the ESP32-S3.
 
 ## [0.21.0] - 2026-11-14
 ### Added
