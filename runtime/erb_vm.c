@@ -46,6 +46,15 @@
 /** @brief From here on, toFixed prints a number as String() does. */
 #define FIXED_LIMIT 1e21f
 
+/**
+ * @brief toFixed's fixed-point working number, in 32-bit words. The fraction reaches down to the smallest float's
+ *        lowest bit (2^-149), and the whole part holds anything below FIXED_LIMIT (under 2^70) in at most
+ *        FIXED_WHOLE_DIGITS digits.
+ */
+#define FIXED_FRACTION_WORDS 5u
+#define FIXED_WHOLE_WORDS 3u
+#define FIXED_WHOLE_DIGITS 22u
+
 /** @brief The most significant digits a float needs to read back as itself. */
 #define FLOAT_ROUND_TRIP_DIGITS 9
 
@@ -735,24 +744,10 @@ static const char* float_text(char* buffer, size_t capacity, float value)
     return buffer;
 }
 
-/** @brief Whether @p value lies exactly halfway between two numbers of @p digits decimals. */
-static bool is_half(float value, uint32_t digits)
-{
-    int exponent;
-    int32_t significand = (int32_t)ldexpf(frexpf(value, &exponent), FLOAT_SIGNIFICAND_BITS);
-    exponent -= FLOAT_SIGNIFICAND_BITS;
-    while ((significand & 1) == 0)
-    {
-        significand /= 2;
-        exponent++;
-    }
-    return exponent == -(int)digits - 1;
-}
-
 /**
- * @brief A float as toFixed(@p digits) prints it. printf rounds a value that is exactly halfway to even, where JS
- *        rounds it away from zero, so such a value is printed with one more decimal, which it holds exactly, and
- *        rounded up by hand.
+ * @brief A float as toFixed(@p digits) prints it: its exact value, rounded to @p digits decimals with a half going
+ *        away from zero. Worked out in whole numbers, because the small C libraries firmware links (newlib-nano)
+ *        leave floats out of printf unless the firmware asks for them, and printf rounds a half to even.
  */
 static const char* fixed_text(char* buffer, size_t capacity, float value, uint32_t digits)
 {
@@ -760,21 +755,78 @@ static const char* fixed_text(char* buffer, size_t capacity, float value, uint32
     {
         return float_text(buffer, capacity, value);
     }
-    if (value == 0.0f)
+
+    /* The magnitude is significand * 2^exponent. It is laid out as a fixed-point number, least significant word
+       first: the low words hold the fraction and the high words the whole part. */
+    uint32_t words[FIXED_FRACTION_WORDS + FIXED_WHOLE_WORDS] = {0};
+    if (value != 0.0f)
     {
-        snprintf(buffer, capacity, "%.*f", (int)digits, 0.0);
-        return buffer;
-    }
-    if (!is_half(value, digits))
-    {
-        snprintf(buffer, capacity, "%.*f", (int)digits, (double)value);
-        return buffer;
+        int exponent;
+        uint32_t significand = (uint32_t)ldexpf(frexpf(fabsf(value), &exponent), FLOAT_SIGNIFICAND_BITS);
+        int shift = exponent - FLOAT_SIGNIFICAND_BITS + (int)(FIXED_FRACTION_WORDS * 32u);
+        if (shift < 0)
+        {
+            /* A subnormal: the bits that would fall off the end are zeros. */
+            significand >>= (uint32_t)-shift;
+            shift = 0;
+        }
+        const uint64_t spread = (uint64_t)significand << ((uint32_t)shift % 32u);
+        words[(uint32_t)shift / 32u] = (uint32_t)spread;
+        words[(uint32_t)shift / 32u + 1u] = (uint32_t)(spread >> 32);
     }
 
-    snprintf(buffer, capacity, "%.*f", (int)digits + 1, (double)value);
-    size_t length = strlen(buffer) - (digits == 0u ? 2u : 1u);
+    /* The whole part, by dividing it by ten until nothing is left. */
+    char whole[FIXED_WHOLE_DIGITS];
+    size_t whole_count = 0;
+    bool whole_left;
+    do
+    {
+        uint32_t remainder = 0;
+        whole_left = false;
+        for (size_t index = FIXED_FRACTION_WORDS + FIXED_WHOLE_WORDS; index-- > FIXED_FRACTION_WORDS;)
+        {
+            const uint64_t part = ((uint64_t)remainder << 32) | words[index];
+            words[index] = (uint32_t)(part / 10u);
+            remainder = (uint32_t)(part % 10u);
+            whole_left |= words[index] != 0u;
+        }
+        whole[whole_count++] = (char)('0' + (char)remainder);
+    } while (whole_left && whole_count < FIXED_WHOLE_DIGITS);
+
+    size_t length = 0;
+    if (value < 0.0f)
+    {
+        put_char(buffer, capacity, &length, '-');
+    }
+    const size_t first = length;
+    while (whole_count > 0u)
+    {
+        put_char(buffer, capacity, &length, whole[--whole_count]);
+    }
+
+    /* The decimals, by multiplying the fraction by ten: each digit is what carries out of it. */
+    if (digits > 0u)
+    {
+        put_char(buffer, capacity, &length, '.');
+    }
+    for (uint32_t digit = 0; digit < digits; digit++)
+    {
+        uint32_t carry = 0;
+        for (size_t index = 0; index < FIXED_FRACTION_WORDS; index++)
+        {
+            const uint64_t part = (uint64_t)words[index] * 10u + carry;
+            words[index] = (uint32_t)part;
+            carry = (uint32_t)(part >> 32);
+        }
+        put_char(buffer, capacity, &length, (char)('0' + (char)carry));
+    }
     buffer[length] = '\0';
-    const size_t first = buffer[0] == '-' ? 1u : 0u;
+
+    /* What is left of the fraction is a half or more when its top bit is set: round the text up. */
+    if ((words[FIXED_FRACTION_WORDS - 1u] & 0x80000000u) == 0u)
+    {
+        return buffer;
+    }
     for (size_t index = length; index-- > first;)
     {
         if (buffer[index] == '.')
@@ -788,8 +840,11 @@ static const char* fixed_text(char* buffer, size_t capacity, float value, uint32
         }
         buffer[index] = '0';
     }
-    memmove(buffer + first + 1u, buffer + first, length - first + 1u);
-    buffer[first] = '1';
+    if (length + 1u < capacity)
+    {
+        memmove(buffer + first + 1u, buffer + first, length - first + 1u);
+        buffer[first] = '1';
+    }
     return buffer;
 }
 
