@@ -400,8 +400,6 @@ clip_box(int x, int y, int width, int height, int* first_column, int* end_column
         if (clip_y + clip_height - y < *end_row)
             *end_row = clip_y + clip_height - y;
     }
-    if (*end_column - *first_column > ERUI_MAX_IMAGE_ROW_PIXELS)
-        *end_column = *first_column + ERUI_MAX_IMAGE_ROW_PIXELS;
     return *end_column > *first_column && *end_row > *first_row;
 }
 
@@ -487,13 +485,19 @@ static void render_linear(const ERViewProps* view_props, int x, int y, int width
     {
         int32_t position = (int32_t)lroundf(((float)row * direction_y - min_projection) * scale) + first_column * step;
         const uint8_t* dither = k_dither[(y + row) & 7];
+        /* A row wider than the buffer goes out a buffer at a time. */
+        int chunk_column = first_column;
         for (int column = first_column; column < end_column; column++, position += step)
         {
-            pixels[column - first_column] = ramp_color(&ramp,
+            pixels[column - chunk_column] = ramp_color(&ramp,
                                                        (position + half) >> (RAMP_STEP_BITS - 16),
                                                        (uint32_t)dither[(x + column) & 7] << (RAMP_FRACTION_BITS - 6));
+            if (column + 1 - chunk_column == ERUI_MAX_IMAGE_ROW_PIXELS || column + 1 == end_column)
+            {
+                mask_blit_row(&mask, pixels, x, y + row, row, chunk_column, column + 1);
+                chunk_column = column + 1;
+            }
         }
-        mask_blit_row(&mask, pixels, x, y + row, row, first_column, end_column);
     }
 }
 
@@ -534,15 +538,20 @@ static void render_radial(const ERViewProps* view_props, int x, int y, int width
     for (int row = first_row; row < end_row; row++)
     {
         const float distance_y_squared = ((float)row - center_y) * ((float)row - center_y);
+        int chunk_column = first_column;
         for (int column = first_column; column < end_column; column++)
         {
             const float distance_x_squared = ((float)column - center_x) * ((float)column - center_x);
-            pixels[column - first_column] =
+            pixels[column - chunk_column] =
                 ramp_color(&ramp,
                            (int32_t)(sqrtf(distance_x_squared + distance_y_squared) * scale + 0.5f),
                            dither_at(x + column, y + row));
+            if (column + 1 - chunk_column == ERUI_MAX_IMAGE_ROW_PIXELS || column + 1 == end_column)
+            {
+                mask_blit_row(&mask, pixels, x, y + row, row, chunk_column, column + 1);
+                chunk_column = column + 1;
+            }
         }
-        mask_blit_row(&mask, pixels, x, y + row, row, first_column, end_column);
     }
 }
 
