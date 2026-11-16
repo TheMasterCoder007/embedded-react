@@ -571,6 +571,104 @@ static void test_text(void)
     CHECK(strlen(s_log) == logged, "once per place");
 }
 
+/**
+ * @brief What toFixed(@p digits) should print for @p value: the host printf's exact expansion of the float, cut to
+ *        @p digits decimals and rounded up by hand when what was cut is a half or more.
+ */
+static const char* fixed_expected(char* text, size_t capacity, float value, uint32_t digits)
+{
+    /* A float has at most 149 decimals, so this many print it exactly. */
+    snprintf(text, capacity, "%.160f", (double)value);
+    char* point = strchr(text, '.');
+    const bool up = point[1u + digits] >= '5';
+    size_t length = (size_t)(point - text) + (digits > 0u ? 1u + digits : 0u);
+    text[length] = '\0';
+    const size_t first = text[0] == '-' ? 1u : 0u;
+    for (size_t index = length; up && index-- > first;)
+    {
+        if (text[index] == '.')
+        {
+            continue;
+        }
+        if (text[index] != '9')
+        {
+            text[index]++;
+            return text;
+        }
+        text[index] = '0';
+    }
+    if (up)
+    {
+        memmove(text + first + 1u, text + first, length - first + 1u);
+        text[first] = '1';
+    }
+    return text;
+}
+
+/** @brief toFixed is worked out in whole numbers, so it prints on a C library whose printf has no floats. */
+static void test_fixed_text(void)
+{
+    static const uint8_t DIGITS[] = {0, 1, 2, 6, ERB_FIXED_DIGITS_MAX};
+    enum
+    {
+        DIGITS_COUNT = sizeof(DIGITS),
+        RANDOM_COUNT = 2000
+    };
+    static const float EDGES[] = {0.0f,   0.5f,      1.5f,    2.5f,        -2.5f,       0.125f,        0.375f,
+                                  0.045f, 0.999999f, 9.9999f, 99.995f,     -0.004f,     1e-45f,        1.17549435e-38f,
+                                  1e-7f,  0.1f,      1.005f,  16777216.0f, 123456.789f, 4294967296.0f, 9.9999998e20f,
+                                  -1e20f, 1e20f,     0.95f,   -0.95f,      999.5f,      -999.5f,       0.3f};
+    base();
+    const uint8_t types[] = {ERB_TYPE_FLOAT};
+    uint16_t functions[DIGITS_COUNT];
+    uint32_t code[DIGITS_COUNT][3];
+    for (size_t index = 0; index < DIGITS_COUNT; index++)
+    {
+        code[index][0] = OP_ABC(FMTFX, 0, DIGITS[index], 0);
+        code[index][1] = OP_ABC(FMTLOG, 0, 0, 0);
+        code[index][2] = OP_ABC(RET, 0, 0, 0);
+        functions[index] = helper(types, 1, 1, 0, code[index], 3);
+    }
+    CHECK(load(), "a package that prints fixed decimals loads");
+
+    uint32_t wrong = 0;
+    uint32_t random = 0x2545F491u;
+    for (size_t round = 0; round < sizeof(EDGES) / sizeof(EDGES[0]) + RANDOM_COUNT; round++)
+    {
+        float value;
+        if (round < sizeof(EDGES) / sizeof(EDGES[0]))
+        {
+            value = EDGES[round];
+        }
+        else
+        {
+            random = random * 1664525u + 1013904223u;
+            memcpy(&value, &random, sizeof(value));
+            if (value != value || isinf(value) || fabsf(value) >= 1e21f)
+            {
+                continue;
+            }
+        }
+        for (size_t index = 0; index < DIGITS_COUNT; index++)
+        {
+            char expected[256];
+            fixed_expected(expected, sizeof(expected), value, DIGITS[index]);
+            s_log[0] = '\0';
+            call(functions[index], bits(value), 0);
+            const size_t length = strlen(s_log);
+            if (length == 0u || s_log[length - 1u] != '\n' || strlen(expected) != length - 1u
+                || strncmp(s_log, expected, length - 1u) != 0)
+            {
+                if (wrong++ == 0u)
+                {
+                    printf("toFixed(%u) of %.9g: got %swant %s\n", DIGITS[index], (double)value, s_log, expected);
+                }
+            }
+        }
+    }
+    CHECK(wrong == 0u, "toFixed prints every float's exact value, rounded half away from zero");
+}
+
 /** @brief Loads a helper that logs "count 7", then sets the label to "count". @return The helper. */
 static uint16_t log_helper(bool with_hook)
 {
@@ -596,6 +694,31 @@ static uint16_t log_helper(bool with_hook)
     CHECK(load(), "a package that logs loads");
     s_log[0] = '\0';
     return function;
+}
+
+/** @brief Integers are written out by hand, so they print on a C library whose printf has no 64-bit conversions. */
+static void test_integer_text(void)
+{
+    base();
+    const uint8_t wide_types[] = {ERB_TYPE_INT64, ERB_TYPE_PAIR};
+    const uint32_t wide_code[] = {OP_ABC(FMTL, 0, 0, 0), OP_ABC(FMTLOG, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
+    const uint8_t narrow_types[] = {ERB_TYPE_INT};
+    const uint32_t narrow_code[] = {OP_ABC(FMTI, 0, 0, 0), OP_ABC(FMTLOG, 0, 0, 0), OP_ABC(RET, 0, 0, 0)};
+    const uint16_t wide = helper(wide_types, 2, 2, 0, wide_code, 3);
+    const uint16_t narrow = helper(narrow_types, 1, 1, 0, narrow_code, 3);
+    CHECK(load(), "a package that prints integers loads");
+
+    s_log[0] = '\0';
+    call64(wide, INT64_MIN, 0);
+    call64(wide, INT64_MAX, 0);
+    call64(wide, 1700000000000LL, 0);
+    CHECK(strcmp(s_log, "-9223372036854775808\n9223372036854775807\n1700000000000\n") == 0,
+          "FMTL prints the 64-bit limits and a timestamp");
+    s_log[0] = '\0';
+    call(narrow, 0, 0);
+    call(narrow, INT32_MIN, 0);
+    call(narrow, 480, 0);
+    CHECK(strcmp(s_log, "0\n-2147483648\n480\n") == 0, "FMTI prints zero, the smallest 32-bit value and a size");
 }
 
 static void test_log(void)
@@ -1945,6 +2068,8 @@ int main(void)
     test_native_records();
     test_optional_modules();
     test_text();
+    test_integer_text();
+    test_fixed_text();
     test_log();
     test_string_helpers();
     test_lists();
