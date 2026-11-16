@@ -17,10 +17,7 @@
 // Runtime e2e: a `backgroundImage` style through the real bridge and engine, read back as pixels.
 import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
-import {check, report} from './harness.js';
-
-declare function __pixel(x: number, y: number): number;
-declare const screen: {width: number; height: number};
+import {check, report} from './harness.ts';
 
 const WIDTH = 200;
 const HEIGHT = 80;

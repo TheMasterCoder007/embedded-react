@@ -4,7 +4,7 @@
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).
 #   bridge  — the QuickJS bridge: build against the pinned QuickJS + the JS heap-accounting/GC test,
 #             in both the native and the bare-metal allocator configurations, each followed by the runtime
-#             tests (test/runtime/*.runtime.test.jsx) in the headless harness, from source and as bytecode.
+#             tests (test/runtime/*.runtime.test.tsx) in the headless harness, from source and as bytecode.
 #   erb-frames — compile each scenario to a Flow B package, run its taps in a headless host, and require the
 #             scenario's golden image.
 #   erb-fuzz — mutate real Flow B packages, load them and run what passes, under ASan and UBSan.
@@ -159,7 +159,7 @@ jobs:
         run: ctest --test-dir bridges/quickjs/build-ci --output-on-failure
       - name: Smoke
         run: ./bridges/quickjs/build-ci/er-bridge-quickjs-smoke
-      # The runtime tests: each test/runtime/*.runtime.test.jsx is bundled with esbuild and run by the headless
+      # The runtime tests: each test/runtime/*.runtime.test.tsx is bundled with esbuild and run by the headless
       # harness this build made (er-bridge-quickjs-runtest), so the reconciler drives the real engine. The
       # bytecode pass runs the same bundles precompiled, through the load path MCU hosts use.
       - uses: actions/setup-node@v4

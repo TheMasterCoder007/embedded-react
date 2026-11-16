@@ -25,7 +25,7 @@
  *   2. the app-only frame mounts against the STILL-RESIDENT vendor (require() resolves with no re-eval);
  *   3. usePersistentState survives the soft reload (the seeded value is read back by the new app).
  *
- * Usage: er-bridge-quickjs-splittest <boot.erpkg> <reloaded.erpkg>  (containers built by split-roundtrip.mjs)
+ * Usage: er-bridge-quickjs-splittest <boot.erpkg> <reloaded.erpkg>  (containers built by split-roundtrip.mts)
  */
 
 #include "er_hotreload.h"

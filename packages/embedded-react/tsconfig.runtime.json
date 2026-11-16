@@ -1,0 +1,24 @@
+{
+  "//": "Typecheck the runtime tests (test/runtime) against the shipped public types, the way an app is. Their runner and the split round trip are in tsconfig.aot.json, since they run under Node.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "composite": true,
+    "baseUrl": ".",
+    "paths": {"embedded-react": ["./src/embedded-react/index.d.ts"]}
+  },
+  "include": [
+    "src/**/*.mts",
+    "test/runtime/*.ts",
+    "test/runtime/*.tsx",
+    "test/runtime/split-fixtures/*.tsx"
+  ],
+  "exclude": ["**/__tests__/**"]
+}

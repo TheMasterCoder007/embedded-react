@@ -182,7 +182,7 @@ endif ()
 # ---------------------------------------------------------------------------
 # Split round-trip harness — loads a vendor/app SPLIT boot container then an app-only frame (no reset),
 # verifying the resident vendor is reused and usePersistentState survives. The desktop proof of the device
-# hot-reload mechanism. Driven by `node test/runtime/split-roundtrip.mjs` in packages/embedded-react.
+# hot-reload mechanism. Driven by `node test/runtime/split-roundtrip.mts` in packages/embedded-react.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_SPLITTEST "Build the vendor/app split round-trip harness" ON)
 

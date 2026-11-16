@@ -19,11 +19,7 @@
 //
 // Touches come from the runner's __touch(phase, x, y): 0 down / 2 up.
 import {Alert, AppRegistry, Pressable} from 'embedded-react';
-import {check, report} from './harness.js';
-
-declare const screen: {width: number; height: number};
-declare function __touch(phase: number, x: number, y: number): void;
-declare const NativeUI: {tick(milliseconds: number): void};
+import {check, report} from './harness.ts';
 
 const tap = (x: number, y: number) => {
   __touch(0, x, y);

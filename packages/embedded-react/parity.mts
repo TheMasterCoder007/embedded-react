@@ -58,7 +58,7 @@ import {findCompileBin, compileBinHelp} from './compile-bin.mts';
 const PACKAGE_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(PACKAGE_DIR, '../..');
 
-// CMake only appends .exe on Windows, so the harness has to ask (same as test/runtime/run.mjs).
+// CMake only appends .exe on Windows, so the harness has to ask (same as test/runtime/run.mts).
 const EXE_SUFFIX = process.platform === 'win32' ? '.exe' : '';
 const FLOW_A_EXE = join(
   ROOT,

@@ -68,7 +68,7 @@
     "aot:smoke": "node aot/screenshot-smoke.mjs",
     "erb:frames": "node test/erb-frames/erb-frames.mts",
     "erb:frames:record": "node test/erb-frames/erb-frames.mts --record",
-    "erb:corpus": "node test/erb-fuzz/make-corpus.mjs",
+    "erb:corpus": "node test/erb-fuzz/make-corpus.mts",
     "parity": "node parity.mts",
     "version:sync": "node ../../tools/sync-version.mts",
     "version:check": "node ../../tools/sync-version.mts --check",
@@ -79,10 +79,10 @@
     "create": "node create-embedded-react.mts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:runtime": "node test/runtime/run.mjs",
-    "test:bytecode": "node test/runtime/run.mjs --bytecode",
-    "test:split": "node test/runtime/split-roundtrip.mjs",
-    "typecheck": "tsc -p tsconfig.types.json && tsc -p tsconfig.aot.json && tsc -p tsconfig.frames.json"
+    "test:runtime": "node test/runtime/run.mts",
+    "test:bytecode": "node test/runtime/run.mts --bytecode",
+    "test:split": "node test/runtime/split-roundtrip.mts",
+    "typecheck": "tsc -p tsconfig.types.json && tsc -p tsconfig.aot.json && tsc -p tsconfig.frames.json && tsc -p tsconfig.runtime.json"
   },
   "dependencies": {
     "@babel/code-frame": "^7.29.7",

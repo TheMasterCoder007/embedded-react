@@ -18,10 +18,7 @@
 // keyboard the show and hide events fire once each as the focus comes and goes.
 import {createRoot} from '../../src/renderer.mts';
 import {View, TextInput, Keyboard} from 'embedded-react';
-import {check, report} from './harness.js';
-
-declare const screen: {width: number; height: number};
-declare function __touch(phase: number, x: number, y: number): void;
+import {check, report} from './harness.ts';
 
 const log: string[] = [];
 

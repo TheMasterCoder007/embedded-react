@@ -418,7 +418,7 @@ int main(int argc, char** argv)
         er_bridge_pump(ctx);
     }
 
-    /* Read globalThis.__runtime_failed (the harness.js failure counter). */
+    /* Read globalThis.__runtime_failed (the harness.ts failure counter). */
     if (status == 0)
     {
         JSValue global = JS_GetGlobalObject(ctx);
