@@ -1,4 +1,4 @@
-# CI — runs on every PR + push to master. Fast, display-free checks (parity.mjs opens real SDL
+# CI — runs on every PR + push to master. Fast, display-free checks (parity.mts opens real SDL
 # windows, so it stays a dev-machine check, not CI). Six independent jobs:
 #   js      — the npm package: 210+ vitest unit tests + the version/LICENSE/NOTICE drift gate.
 #   engine  — the C99 engine: configure, build, and run the host ctests (no MCU, no SDL).

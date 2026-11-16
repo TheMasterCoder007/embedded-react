@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-// Unit tests for the simulator's persist transform (../../persist-transform.mjs): it rewrites the
+// Unit tests for the simulator's persist transform (../../persist-transform.mts): it rewrites the
 // app's `useState` into the persisting helper, keyed stably by component + hook order, and only
 // touches the real (imported) useState.
 import {describe, it, expect} from 'vitest';
-import {transformPersist} from '../../persist-transform.mjs';
+import {transformPersist} from '../../persist-transform.mts';
 
 describe('transformPersist', () => {
   it('rewrites imported useState to the persisting helper, keyed by component + order', () => {

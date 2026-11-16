@@ -15,7 +15,7 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {shouldPersist, transformPersist} from '../persist-transform.mjs';
+import {shouldPersist, transformPersist} from '../persist-transform.mts';
 
 // Regression guard for the "works in the repo, crashes after publish" stack overflow: the persist
 // transform must rewrite ONLY the consumer's own app files, never anything in node_modules. In a

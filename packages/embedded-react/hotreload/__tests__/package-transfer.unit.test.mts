@@ -20,12 +20,12 @@ import {
   beginFrame,
   chunkFrame,
   parseReply,
-} from '../package-transfer.mjs';
+} from '../package-transfer.mts';
 import {
   FrameDecoder,
   MSG_PACKAGE_BEGIN,
   MSG_PACKAGE_CHUNK,
-} from '../protocol.mjs';
+} from '../protocol.mts';
 
 const CHUNK_BYTES = 256;
 const PACKAGE_BYTES = CHUNK_BYTES * 3 + 10;

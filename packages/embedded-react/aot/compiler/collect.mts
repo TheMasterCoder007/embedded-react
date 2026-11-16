@@ -1478,7 +1478,7 @@ export function collectSvgImports(
 /**
  * Bakes a Flow B app's <Svg source> imports → { assetName: artifact } via the SAME baker Flow A's esbuild
  * .svg loader uses (svgToVector). This is the I/O half (reads .svg files) kept OUT of the pure compilePackage;
- * both CLI entries (aot/compile.mts and the consumer cli.mjs) call it and hand the result to options.svgArtifacts.
+ * both CLI entries (aot/compile.mts and the consumer cli.mts) call it and hand the result to options.svgArtifacts.
  *
  * @param source  App.jsx source text.
  * @param baseDirectory  Directory the import paths are resolved against (the app's dir).

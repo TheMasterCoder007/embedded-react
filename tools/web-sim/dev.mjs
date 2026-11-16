@@ -18,7 +18,7 @@
 //
 //   node tools/web-sim/dev.mjs [demo] [--port 3333]
 //
-// A thin wrapper over the shared dev server (packages/embedded-react/sim-server.mjs) — the same core the shipped
+// A thin wrapper over the shared dev server (packages/embedded-react/sim-server.mts) — the same core the shipped
 // `npx embedded-react dev` CLI uses — pointed at a repo demo + the locally built module in public/. Build the
 // module once first: `node tools/web-sim/build.mjs`. See tools/web-sim/README.md.
 
@@ -58,7 +58,7 @@ if (!existsSync(resolve(PUBLIC, 'embedded-react.wasm'))) {
 }
 
 const {runDevServer} = await import(
-  pathToFileURL(resolve(PACKAGE_DIR, 'sim-server.mjs')).href
+  pathToFileURL(resolve(PACKAGE_DIR, 'sim-server.mts')).href
 );
 
 await runDevServer({

@@ -25,15 +25,27 @@
 // or renaming it, shifts that component's keys and resets its state — press R in the sim for a clean
 // reset any time.
 import {transformSync} from '@babel/core';
+import type {NodePath, PluginObj, PluginPass} from '@babel/core';
+import type * as BabelTypes from '@babel/types';
+import type {ParserPlugin} from '@babel/parser';
+// @ts-expect-error The package ships no types.
 import syntaxJsx from '@babel/plugin-syntax-jsx';
 
+interface PersistState extends PluginPass {
+  /** The next useState index in each component. */
+  erCounters: Map<string, number>;
+  erUsed: boolean;
+  opts: {moduleId: string};
+}
+
 /** Best-effort name of the function/component enclosing a path (for a stable, readable key). */
-function enclosingName(path) {
+function enclosingName(path: NodePath): string {
   const functionPath = path.getFunctionParent();
   if (!functionPath) return '_';
-  if (functionPath.node.id && functionPath.node.id.name)
-    return functionPath.node.id.name; // function Foo() {}
-  const parent = functionPath.parentPath && functionPath.parentPath.node;
+  // Read loosely: only some kinds of function and parent have these fields.
+  const functionNode: any = functionPath.node;
+  if (functionNode.id && functionNode.id.name) return functionNode.id.name; // function Foo() {}
+  const parent: any = functionPath.parentPath && functionPath.parentPath.node;
   if (parent) {
     if (parent.type === 'VariableDeclarator' && parent.id && parent.id.name)
       return parent.id.name; // const Foo = () =>
@@ -49,7 +61,11 @@ function enclosingName(path) {
 }
 
 /** Babel plugin: useState(init) → __erPersistState("key", init), importing the helper when used. */
-function persistPlugin({types}) {
+function persistPlugin({
+  types,
+}: {
+  types: typeof BabelTypes;
+}): PluginObj<PersistState> {
   return {
     name: 'er-persist-usestate',
     visitor: {
@@ -79,7 +95,7 @@ function persistPlugin({types}) {
         // Only rewrite the real useState (an imported binding from react / embedded-react).
         const binding = path.scope.getBinding('useState');
         if (!binding || binding.kind !== 'module') return;
-        const declaration =
+        const declaration: any =
           binding.path.parentPath && binding.path.parentPath.node;
         const source =
           declaration && declaration.source && declaration.source.value;
@@ -111,11 +127,13 @@ function persistPlugin({types}) {
  * Excluding `node_modules` is what keeps the helper (and react) untransformed in a published install,
  * not just in the monorepo (where the library happens to sit outside the demo's project root).
  *
- * @param {string} absolutePath           Absolute path of the module esbuild is loading.
- * @param {string} projectRootNormalized  Project root, forward-slash normalized.
- * @returns {boolean}
+ * @param absolutePath           Absolute path of the module esbuild is loading.
+ * @param projectRootNormalized  Project root, forward-slash normalized.
  */
-export function shouldPersist(absolutePath, projectRootNormalized) {
+export function shouldPersist(
+  absolutePath: string,
+  projectRootNormalized: string,
+): boolean {
   const normalizedPath = absolutePath.replace(/\\/g, '/');
   return (
     normalizedPath.startsWith(projectRootNormalized) &&
@@ -127,18 +145,18 @@ export function shouldPersist(absolutePath, projectRootNormalized) {
  * Applies the persist transform to a module's source.
  *
  * TypeScript entries (.ts/.tsx) are parsed with the `typescript` plugin enabled; the type syntax is
- * preserved in the output and stripped downstream by esbuild's ts/tsx loader (see sim-server.mjs).
+ * preserved in the output and stripped downstream by esbuild's ts/tsx loader (see sim-server.mts).
  *
- * @param {string} code      Module source (JSX and/or TypeScript allowed).
- * @param {string} moduleId  Stable module identifier (used in keys; e.g. a path relative to the app).
- * @returns {string} Transformed source (JSX/TS preserved for esbuild to handle).
+ * @param code      Module source (JSX and/or TypeScript allowed).
+ * @param moduleId  Stable module identifier (used in keys; e.g. a path relative to the app).
+ * @returns Transformed source (JSX/TS preserved for esbuild to handle).
  */
-export function transformPersist(code, moduleId) {
+export function transformPersist(code: string, moduleId: string): string {
   // Enable the babel parser plugins this module's extension needs. `.tsx` is jsx+typescript; `.ts` is
   // typescript-only (the jsx plugin would misparse `<T>` type assertions); everything else is jsx.
   const isTs = /\.tsx?$/.test(moduleId);
   const isTsx = /\.tsx$/.test(moduleId);
-  const parserPlugins = isTsx
+  const parserPlugins: ParserPlugin[] = isTsx
     ? ['jsx', 'typescript']
     : isTs
       ? ['typescript']
@@ -152,5 +170,5 @@ export function transformPersist(code, moduleId) {
     // syntaxJsx only enables jsx parsing; for ts/tsx we drive the parser via parserOpts above instead.
     plugins: [...(isTs ? [] : [syntaxJsx]), [persistPlugin, {moduleId}]],
   });
-  return result.code;
+  return result!.code!;
 }

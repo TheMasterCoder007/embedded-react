@@ -16,7 +16,7 @@
 
 // pack-split — build the vendor/app SPLIT of a Flow A app, for incremental hot reload.
 //
-// The monolithic packer (pack-app.mjs) inlines react + react-reconciler + the embedded-react library
+// The monolithic packer (pack-app.mts) inlines react + react-reconciler + the embedded-react library
 // together with the user's source into one ~1 MB bytecode blob. But the framework half never changes
 // when you edit your app, so re-shipping and re-parsing it on every save is pure waste. pack-split cuts
 // the bundle along the one seam that matters:
@@ -37,10 +37,36 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {basename, dirname, resolve, relative} from 'node:path';
 import {existsSync, statSync} from 'node:fs';
+import type {BuildOptions, Plugin} from 'esbuild';
+import type {AssetsConfig} from '../assets/font-config.mts';
 
 const require = createRequire(import.meta.url);
+const loadEsbuild = (): typeof import('esbuild') => require('esbuild');
 
-// QuickJS release the bytecode container targets — MUST match cli.mjs's QJS_TAG, pack-app.mjs, and the
+/** Asset name → file path, as the bundle's imports found them. */
+type AssetPaths = Map<string, string>;
+
+export interface PackVendorOptions {
+  /** embedded-react library entry (aliased as 'embedded-react'). */
+  libSrc: string;
+  /** esbuild nodePaths (package + project node_modules). */
+  nodePaths: string[];
+  /** Dir holding the prebuilt sim wasm (used to compile bytecode). */
+  simDir: string;
+  /** Drop the source text and debug tables from the bytecode. */
+  strip?: boolean;
+}
+
+export interface PackAppOptions extends PackVendorOptions {
+  /** App entry (index.jsx/tsx). */
+  entry: string;
+  /** Project cwd (for assets.config.js + persist scoping). */
+  projectRoot: string;
+  /** Apply the useState→persist transform (dev hot reload preserves state). */
+  persist?: boolean;
+}
+
+// QuickJS release the bytecode container targets — MUST match cli.mts's QJS_TAG, pack-app.mts, and the
 // device loader.
 const QJS_TAG = 'v0.15.0';
 
@@ -51,25 +77,26 @@ export const VENDOR_EXTERNALS = [
   'embedded-react',
 ];
 
-const esbuildCommon = nodePaths => ({
-  bundle: true,
-  format: 'iife',
-  platform: 'neutral',
-  target: 'es2020',
-  jsx: 'automatic',
-  nodePaths,
-  define: {'process.env.NODE_ENV': '"production"'},
-  legalComments: 'none',
-  logLevel: 'silent',
-  write: false,
-});
+const esbuildCommon = (nodePaths: string[]) =>
+  ({
+    bundle: true,
+    format: 'iife',
+    platform: 'neutral',
+    target: 'es2020',
+    jsx: 'automatic',
+    nodePaths,
+    define: {'process.env.NODE_ENV': '"production"'},
+    legalComments: 'none',
+    logLevel: 'silent',
+    write: false,
+  }) satisfies BuildOptions;
 
 /**
  * The vendor chunk's synthetic entry source: import the shared deps, register them in a runtime module
  * registry, and install the `require()` shim the app chunk resolves through. esbuild's `__require` helper
  * (emitted for the app chunk's external imports) finds this global `require` at runtime.
  */
-function vendorEntrySource() {
+function vendorEntrySource(): string {
   return `import * as React from 'react';
 import * as JsxRuntime from 'react/jsx-runtime';
 import * as EmbeddedReact from 'embedded-react';
@@ -88,13 +115,13 @@ globalThis.require = function (id) {
 /**
  * Bundle the vendor chunk (react + reconciler + embedded-react lib) to a self-contained IIFE source.
  *
- * @param {object}   options
- * @param {string}   options.libSrc     embedded-react library entry (aliased as 'embedded-react').
- * @param {string[]} options.nodePaths  esbuild nodePaths (package + project node_modules).
- * @returns {Promise<string>} The bundled JS source.
+ * @returns The bundled JS source.
  */
-export async function bundleVendorSource({libSrc, nodePaths}) {
-  const esbuild = require('esbuild');
+export async function bundleVendorSource({
+  libSrc,
+  nodePaths,
+}: Pick<PackVendorOptions, 'libSrc' | 'nodePaths'>): Promise<string> {
+  const esbuild = loadEsbuild();
   const result = await esbuild.build({
     ...esbuildCommon(nodePaths),
     stdin: {
@@ -113,15 +140,26 @@ export async function bundleVendorSource({libSrc, nodePaths}) {
  * imports become bare string names (the bytes live in the ERPK pack). The app's own source gives its native modules
  * their signatures and, when persist is on, gets the useState→persist transform so state survives a live reload.
  */
-function makeAssetPlugin({images, fonts, persist, projectRoot}) {
-  const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
+function makeAssetPlugin({
+  images,
+  fonts,
+  persist,
+  projectRoot,
+}: {
+  images: AssetPaths;
+  fonts: AssetPaths;
+  persist: boolean;
+  projectRoot: string;
+}): Plugin {
+  const assetName = (filePath: string) =>
+    basename(filePath).replace(/\.[^.]+$/, '');
   return {
     name: 'embedded-react-assets',
     async setup(build) {
       const {registerSvgVectorLoader} =
         await import('../assets/svg-loader.mts');
       const {shouldPersist, transformPersist} =
-        await import('../persist-transform.mjs');
+        await import('../persist-transform.mts');
       const {loadAppFile, loadDependencyFile} =
         await import('../aot/app-file-loader.mts');
       const normalizedProjectRoot = projectRoot.replace(/\\/g, '/');
@@ -133,14 +171,14 @@ function makeAssetPlugin({images, fonts, persist, projectRoot}) {
           return await loadAppFile(
             args.path,
             persist
-              ? source =>
+              ? (source: string) =>
                   transformPersist(
                     source,
                     relative(projectRoot, args.path).replace(/\\/g, '/'),
                   )
               : undefined,
           );
-        } catch (error) {
+        } catch (error: any) {
           return {errors: [{text: `persist transform: ${error.message}`}]};
         }
       });
@@ -176,10 +214,17 @@ export async function bundleAppSource({
   projectRoot,
   nodePaths,
   persist = false,
-}) {
-  const esbuild = require('esbuild');
-  const images = new Map();
-  const fonts = new Map();
+}: Pick<
+  PackAppOptions,
+  'entry' | 'projectRoot' | 'nodePaths' | 'persist'
+>): Promise<{
+  source: string;
+  images: AssetPaths;
+  fonts: AssetPaths;
+}> {
+  const esbuild = loadEsbuild();
+  const images: AssetPaths = new Map();
+  const fonts: AssetPaths = new Map();
 
   const result = await esbuild.build({
     ...esbuildCommon(nodePaths),
@@ -191,7 +236,17 @@ export async function bundleAppSource({
 }
 
 /** Bake the discovered images/fonts into an ERPK asset pack (or null if there are none). */
-async function bakeAssets({images, fonts, source, projectRoot}) {
+async function bakeAssets({
+  images,
+  fonts,
+  source,
+  projectRoot,
+}: {
+  images: AssetPaths;
+  fonts: AssetPaths;
+  source: string;
+  projectRoot: string;
+}): Promise<Buffer | null> {
   const {bakeImage} = await import('../assets/bake-image.mts');
   const {bakeFont} = await import('../assets/bake-font.mts');
   const {resolveFontJobs} = await import('../assets/font-config.mts');
@@ -202,7 +257,7 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
 
   const usedSizes = analyzeFontSizes(source);
 
-  let config = {};
+  let config: AssetsConfig = {};
   const configPath = resolve(projectRoot, 'assets.config.js');
   if (existsSync(configPath))
     config =
@@ -232,11 +287,14 @@ async function bakeAssets({images, fonts, source, projectRoot}) {
 /**
  * Compile the vendor chunk to a QuickJS bytecode blob. Built once per dev session (it changes only when a
  * dependency changes), so the per-edit reload never re-ships it.
- *
- * @returns {Promise<{bytecode: Buffer, bytecodeLen: number}>}
  */
-export async function packVendor({libSrc, nodePaths, simDir, strip = false}) {
-  const {compileToBytecode} = await import('../qjsc-wasm.mjs');
+export async function packVendor({
+  libSrc,
+  nodePaths,
+  simDir,
+  strip = false,
+}: PackVendorOptions): Promise<{bytecode: Buffer; bytecodeLen: number}> {
+  const {compileToBytecode} = await import('../qjsc-wasm.mts');
   const source = await bundleVendorSource({libSrc, nodePaths});
   const bytecode = await compileToBytecode(source, simDir, {strip});
   return {bytecode, bytecodeLen: bytecode.length};
@@ -245,19 +303,21 @@ export async function packVendor({libSrc, nodePaths, simDir, strip = false}) {
 /**
  * Compile the app chunk to a QuickJS bytecode blob and bake its assets. This is the only thing rebuilt on
  * each save — and the only thing a hot-reload frame carries.
- *
- * @returns {Promise<{bytecode: Buffer, assetPack: Buffer|null, bytecodeLen: number, assetsLen: number}>}
  */
 export async function packApp({
   entry,
   projectRoot,
-  libSrc,
   nodePaths,
   simDir,
   persist = false,
   strip = false,
-}) {
-  const {compileToBytecode} = await import('../qjsc-wasm.mjs');
+}: PackAppOptions): Promise<{
+  bytecode: Buffer;
+  assetPack: Buffer | null;
+  bytecodeLen: number;
+  assetsLen: number;
+}> {
+  const {compileToBytecode} = await import('../qjsc-wasm.mts');
   const {source, images, fonts} = await bundleAppSource({
     entry,
     projectRoot,
@@ -279,7 +339,15 @@ export async function packApp({
  * (installs the registry + require shim), registers assets, then runs the app. Used by `embedded-react
  * build` so the same firmware/artifact serves both production and hot reload.
  */
-export function emitBootContainer({vendorBytecode, appBytecode, assetPack}) {
+export function emitBootContainer({
+  vendorBytecode,
+  appBytecode,
+  assetPack,
+}: {
+  vendorBytecode: Uint8Array;
+  appBytecode: Uint8Array;
+  assetPack?: Uint8Array | null;
+}): Promise<Buffer> {
   return emit({bytecode: appBytecode, vendorBytecode, assetPack});
 }
 
@@ -287,12 +355,22 @@ export function emitBootContainer({vendorBytecode, appBytecode, assetPack}) {
  * Assemble a hot-reload APP frame: the app chunk + its assets, NO vendor. The device keeps the resident
  * vendor and swaps just the app (soft reset). This is the ~64 KB that travels on each save.
  */
-export function emitAppFrame({appBytecode, assetPack}) {
+export function emitAppFrame({
+  appBytecode,
+  assetPack,
+}: {
+  appBytecode: Uint8Array;
+  assetPack?: Uint8Array | null;
+}): Promise<Buffer> {
   return emit({bytecode: appBytecode, assetPack});
 }
 
 // emitBootContainer/emitAppFrame are async (emit() dynamically imports the emitter) — callers await them.
-async function emit(options) {
+async function emit(options: {
+  bytecode: Uint8Array;
+  vendorBytecode?: Uint8Array;
+  assetPack?: Uint8Array | null;
+}): Promise<Buffer> {
   const {emitContainer} = await import('../assets/emit-container.mts');
   return emitContainer({...options, qjsTag: QJS_TAG});
 }

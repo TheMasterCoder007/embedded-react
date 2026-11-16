@@ -23,7 +23,7 @@ import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
 import {realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {watchTreePolyfill} from '../watch-tree.mjs';
+import {watchTreePolyfill} from '../watch-tree.mts';
 
 const sleep = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds));

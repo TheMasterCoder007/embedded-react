@@ -29,6 +29,7 @@
 // Prereq: the bytecode precompiler (er-bridge-quickjs-compile) must be built. This script searches the
 // usual build dirs and tells you how to build it if it's missing (override with ER_COMPILE_BIN).
 import {build} from 'esbuild';
+import type {Plugin} from 'esbuild';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {dirname, resolve, basename} from 'node:path';
@@ -42,12 +43,13 @@ import {
 import {bakeImage} from './assets/bake-image.mts';
 import {bakeFont} from './assets/bake-font.mts';
 import {resolveFontJobs} from './assets/font-config.mts';
+import type {AssetsConfig} from './assets/font-config.mts';
 import {analyzeFontSizes, warnFontSizes} from './assets/font-sizes.mts';
 import {warnMissingGlyphs} from './assets/glyph-coverage.mts';
 import {emitAssetPack} from './assets/emit-pack.mts';
 import {emitContainer} from './assets/emit-container.mts';
 import {registerSvgVectorLoader} from './assets/svg-loader.mts';
-import {findCompileBin, compileBinHelp} from './compile-bin.mjs';
+import {findCompileBin, compileBinHelp} from './compile-bin.mts';
 import {loadAppFile, loadDependencyFile} from './aot/app-file-loader.mts';
 import {demoFile} from './aot/demo-file.mts';
 
@@ -84,10 +86,10 @@ if (!compileBin) {
   process.exit(1);
 }
 
-// --- Bundle the app (same import-driven asset discovery as build.mjs) ---------------------------
-const images = new Map(); // name -> path
-const fonts = new Map(); // family -> path
-const assetPlugin = {
+// --- Bundle the app (same import-driven asset discovery as build.mts) ---------------------------
+const images = new Map<string, string>(); // name -> path
+const fonts = new Map<string, string>(); // family -> path
+const assetPlugin: Plugin = {
   name: 'embedded-react-assets',
   setup(pluginBuild) {
     // The demo's own files give its native modules their signatures, and so do a package's.
@@ -157,11 +159,11 @@ if (compileResult.status !== 0) {
 }
 const bytecode = readFileSync(bytecodePath);
 
-// --- Bake imported assets into an ERPK pack (same sizing rules as build.mjs / sim.mjs) ----------
+// --- Bake imported assets into an ERPK pack (same sizing rules as build.mts / sim.mts) ----------
 const bundleSource = readFileSync(bundlePath, 'utf8');
 const usedSizes = analyzeFontSizes(bundleSource);
 
-let config = {};
+let config: AssetsConfig = {};
 const configPath = resolve(demoDir, 'assets.config.js');
 if (existsSync(configPath))
   config = (await import(pathToFileURL(configPath).href)).default || {};
@@ -193,7 +195,8 @@ const container = emitContainer({bytecode, assetPack, qjsTag: QUICKJS_TAG});
 const outPath = resolve(distDir, 'app.erpkg');
 writeFileSync(outPath, container);
 
-const kb = byteCount => `${(byteCount / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
+const kb = (byteCount: number) =>
+  `${(byteCount / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
 console.log(
   `Packed config -> dist/app.erpkg (${kb(container.length)})\n` +
     `  qjs ${QUICKJS_TAG} · bytecode ${kb(bytecode.length)}` +

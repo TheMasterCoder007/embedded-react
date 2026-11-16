@@ -19,6 +19,7 @@
 // config field means the same thing in every one of them.
 
 import type {FontJob} from './bake-font.mts';
+import type {ImageFormat} from './bake-image.mts';
 
 /** One family's entry in the `fonts` block of assets.config.js. */
 export interface FontConfig {
@@ -26,6 +27,12 @@ export interface FontConfig {
   bpp?: number;
   glyphs?: FontJob['glyphs'];
   extraGlyphs?: FontJob['extraGlyphs'];
+}
+
+/** A project's assets.config.js. */
+export interface AssetsConfig {
+  fonts?: Record<string, FontConfig>;
+  images?: Record<string, {format?: ImageFormat}>;
 }
 
 /** Fallback pixel size when no fontSize could be discovered and the config pins none. */

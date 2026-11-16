@@ -14,27 +14,30 @@
  * limitations under the License.
  */
 
-// sim-server.mjs — the shared WASM-simulator bundler + dev server.
+// sim-server.mts — the shared WASM-simulator bundler + dev server.
 //
 // esbuild-bundles a JSX app → app.js, bakes its imported images/fonts → assets.pack, and either (a) serves
 // the prebuilt embedded-react.{js,wasm} host page with live hot reload (runDevServer), or (b) produces those
 // files once for a static export (buildApp). useState survives a hot reload via the Babel persist transform.
 //
-// Used by the consumer CLI (cli.mjs → `npx embedded-react dev` / `export`) and the repo dev loop
+// Used by the consumer CLI (cli.mts → `npx embedded-react dev` / `export`) and the repo dev loop
 // (tools/web-sim/dev.mjs). The only differences are paths, passed in here.
 
 import {createServer} from 'node:http';
+import type {Server, ServerResponse} from 'node:http';
 import {readFile} from 'node:fs/promises';
 import {existsSync, readFileSync, statSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {basename, dirname, extname, relative, resolve} from 'node:path';
+import type {BuildContext, BuildOptions} from 'esbuild';
+import type {AssetsConfig} from './assets/font-config.mts';
 
 const HERE = dirname(
   new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'),
 );
 const require = createRequire(import.meta.url);
-const esbuild = require('esbuild');
+const esbuild: typeof import('esbuild') = require('esbuild');
 const {bakeAssetPack} = await import('./assets/index.mts');
 const {resolveFontJobs} = await import('./assets/font-config.mts');
 const {analyzeFontSizes, fontSizeSignature, warnFontSizes} =
@@ -42,9 +45,8 @@ const {analyzeFontSizes, fontSizeSignature, warnFontSizes} =
 const {textSignature, warnMissingGlyphs} =
   await import('./assets/glyph-coverage.mts');
 const {registerSvgVectorLoader} = await import('./assets/svg-loader.mts');
-const {transformPersist, shouldPersist} = await import(
-  pathToFileURL(resolve(HERE, 'persist-transform.mjs')).href
-);
+const {transformPersist, shouldPersist} =
+  await import('./persist-transform.mts');
 const {loadAppFile, loadDependencyFile} =
   await import('./aot/app-file-loader.mts');
 
@@ -57,14 +59,15 @@ const REACT_PIN = Object.fromEntries(
     .filter(([, pinPath]) => existsSync(pinPath)),
 );
 
-const MIME = {
+const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.wasm': 'application/wasm',
   '.pack': 'application/octet-stream',
 };
-const assetName = filePath => basename(filePath).replace(/\.[^.]+$/, '');
-const mtime = filePath => {
+const assetName = (filePath: string) =>
+  basename(filePath).replace(/\.[^.]+$/, '');
+const mtime = (filePath: string) => {
   try {
     return statSync(filePath).mtimeMs;
   } catch {
@@ -72,16 +75,18 @@ const mtime = filePath => {
   }
 };
 
+/** What one app bundle is built from, and where it goes. */
+export interface BundleOptions {
+  entry: string;
+  projectRoot: string;
+  libSrc: string;
+  nodePaths: string[];
+  outDir: string;
+}
+
 /**
  * Build the esbuild config + asset baker for one app bundle. Owns its own asset-discovery state, so it is
  * safe to use for either a one-shot build or a watching context.
- *
- * @param {object}        o
- * @param {string}        o.entry, o.projectRoot, o.libSrc, o.outDir
- * @param {string[]}      o.nodePaths
- * @param {boolean}       [o.persist]    Apply the useState→persist transform (dev hot reload). Default true.
- * @param {() => void}    [o.onRebuilt]  Called after each successful build + asset bake (e.g. broadcast reload).
- * @returns {{ options: object, bundlePath: string, packPath: string }}
  */
 function createBundle({
   entry,
@@ -91,19 +96,24 @@ function createBundle({
   outDir,
   persist = true,
   onRebuilt,
-}) {
+}: BundleOptions & {
+  /** Apply the useState→persist transform (dev hot reload). Default true. */
+  persist?: boolean;
+  /** Called after each successful build + asset bake (e.g. broadcast reload). */
+  onRebuilt?: () => void;
+}): {options: BuildOptions; bundlePath: string; packPath: string} {
   const bundlePath = resolve(outDir, 'app.js');
   const packPath = resolve(outDir, 'assets.pack');
   const projectRootNormalized = projectRoot.replace(/\\/g, '/');
-  const images = new Map();
-  const fonts = new Map();
-  let lastAssetSignature = null;
+  const images = new Map<string, string>();
+  const fonts = new Map<string, string>();
+  let lastAssetSignature: string | null = null;
 
   async function bakePack() {
     const bundleSource = readFileSync(bundlePath, 'utf8');
     const usedSizes = analyzeFontSizes(bundleSource);
 
-    let assetsConfig = {};
+    let assetsConfig: AssetsConfig = {};
     const assetsConfigPath = resolve(projectRoot, 'assets.config.js');
     if (existsSync(assetsConfigPath))
       assetsConfig =
@@ -162,12 +172,12 @@ function createBundle({
       console.log(
         `  assets → ${summary.images} image(s), ${summary.fonts} font size(s), ${summary.bytes} B`,
       );
-    } catch (error) {
+    } catch (error: any) {
       console.error(`  asset bake failed: ${error.message}`);
     }
   }
 
-  const options = {
+  const options: BuildOptions = {
     entryPoints: [entry],
     bundle: true,
     format: 'iife',
@@ -198,7 +208,7 @@ function createBundle({
               return await loadAppFile(
                 loadArgs.path,
                 persist
-                  ? source =>
+                  ? (source: string) =>
                       transformPersist(
                         source,
                         relative(projectRoot, loadArgs.path).replace(
@@ -209,7 +219,7 @@ function createBundle({
                   : undefined,
                 {mocks: true},
               );
-            } catch (error) {
+            } catch (error: any) {
               return {errors: [{text: `persist transform: ${error.message}`}]};
             }
           });
@@ -261,7 +271,7 @@ export async function buildApp({
   libSrc,
   nodePaths,
   outDir,
-}) {
+}: BundleOptions): Promise<void> {
   const {options} = createBundle({
     entry,
     projectRoot,
@@ -275,11 +285,6 @@ export async function buildApp({
 
 /**
  * Run the simulator dev server: watch + bundle + bake + serve + hot reload.
- *
- * @param {object}   o
- * @param {string}   o.entry, o.projectRoot, o.libSrc, o.indexHtml, o.simDir, o.outDir, o.label
- * @param {string[]} o.nodePaths
- * @param {number}   o.port
  */
 export async function runDevServer({
   entry,
@@ -291,8 +296,13 @@ export async function runDevServer({
   outDir,
   port,
   label,
-}) {
-  const clients = new Set();
+}: BundleOptions & {
+  indexHtml: string;
+  simDir: string;
+  port: number;
+  label: string;
+}): Promise<{ctx: BuildContext; server: Server}> {
+  const clients = new Set<ServerResponse>();
   const broadcastReload = () => {
     for (const response of clients) response.write('data: reload\n\n');
   };
@@ -316,7 +326,7 @@ export async function runDevServer({
 
   // Serve the host page; embedded-react.{js,wasm} from simDir, the freshly bundled app.js/assets.pack from
   // outDir. The page references ./public/<name>. window.__erHot is injected so the page connects to /reload.
-  const send = async (response, file) => {
+  const send = async (response: ServerResponse, file: string) => {
     try {
       const body = await readFile(file);
       response
@@ -331,7 +341,7 @@ export async function runDevServer({
   };
   const server = createServer(async (request, response) => {
     const path = decodeURIComponent(
-      new URL(request.url, 'http://localhost').pathname,
+      new URL(request.url!, 'http://localhost').pathname,
     );
     if (path === '/reload') {
       response.writeHead(200, {
@@ -372,7 +382,7 @@ export async function runDevServer({
     response.writeHead(404).end('not found');
   });
 
-  await new Promise(onListening => server.listen(port, onListening));
+  await new Promise<void>(onListening => server.listen(port, onListening));
   console.log(`embedded-react WASM sim → http://localhost:${port}/`);
   console.log(`watching ${label} — edit & save to hot-reload. Ctrl-C to quit.`);
 

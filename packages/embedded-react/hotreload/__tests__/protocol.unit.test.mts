@@ -22,7 +22,7 @@ import {
   FrameDecoder,
   MSG_LOAD_CONTAINER,
   encodeFrame,
-} from '../protocol.mjs';
+} from '../protocol.mts';
 
 /** Collect frames + errors a decoder emits while fed the given chunks. */
 function drive(chunks) {

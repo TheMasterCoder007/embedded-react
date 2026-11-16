@@ -79,7 +79,7 @@ export const SECTION_VENDOR_BYTECODE = 3;
  * CRC-32/IEEE (zlib polynomial 0xEDB88320), computed without a lookup table to match er_crc32() in
  * runtime/er_container.c byte-for-byte — the one checksum of the whole delivery pipeline (this
  * container, the hot-reload transport frame that carries it, and the device's verification of both).
- * hotreload/protocol.mjs imports this rather than keeping its own.
+ * hotreload/protocol.mts imports this rather than keeping its own.
  *
  * @param data  Bytes to checksum.
  * @returns The CRC as an unsigned 32-bit integer.

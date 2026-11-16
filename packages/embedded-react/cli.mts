@@ -34,15 +34,24 @@ import {
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {basename, dirname, relative, resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-import {buildApp, runDevServer} from './sim-server.mjs';
+import {buildApp, runDevServer} from './sim-server.mts';
 import {
   packVendor,
   packApp,
   emitBootContainer,
-} from './hotreload/pack-split.mjs';
-import {runDeviceDevServer} from './hotreload/dev-device.mjs';
-import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mjs';
-import {boardByName, flashSlot, packSlot} from './flash.mjs';
+} from './hotreload/pack-split.mts';
+import {runDeviceDevServer} from './hotreload/dev-device.mts';
+import {detectDevicePorts, preferCalloutPath} from './hotreload/uploader.mts';
+import {boardByName, flashSlot, packSlot} from './flash.mts';
+import type {AssetsConfig} from './assets/font-config.mts';
+import type {Screen} from './aot/compiler/options.mts';
+
+/** Where a flag sits in the arguments, and its value. */
+interface FlagValue<Value> {
+  value: Value;
+  index: number;
+  valueIndex: number;
+}
 
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
 
@@ -98,7 +107,7 @@ Usage:
 }
 
 /** Locate the package's prebuilt simulator assets (the .wasm ships with this package). */
-function simDirOrExit() {
+function simDirOrExit(): string {
   const simDir = resolve(PACKAGE_ROOT, 'sim');
   if (!existsSync(resolve(simDir, 'embedded-react.wasm'))) {
     console.error(
@@ -113,13 +122,13 @@ function simDirOrExit() {
 }
 
 const libSrc = () => resolve(PACKAGE_ROOT, 'src/embedded-react/index.js');
-const nodePaths = cwd => [
+const nodePaths = (cwd: string) => [
   resolve(PACKAGE_ROOT, 'node_modules'),
   resolve(cwd, 'node_modules'),
 ];
 
 /** Resolve the app entry: an explicit arg, else common conventions, else package.json "main"/"source". */
-function resolveEntry(cwd, explicit) {
+function resolveEntry(cwd: string, explicit?: string | null): string {
   if (explicit) {
     const entryPath = resolve(cwd, explicit);
     if (!existsSync(entryPath)) {
@@ -162,7 +171,7 @@ function resolveEntry(cwd, explicit) {
   process.exit(1);
 }
 
-function optValue(args, flag) {
+function optValue(args: string[], flag: string): FlagValue<string> | null {
   const flagIndex = args.indexOf(flag);
   if (flagIndex < 0) return null;
   const value = args[flagIndex + 1];
@@ -175,7 +184,10 @@ function optValue(args, flag) {
 }
 
 /** Like optValue, but the value is OPTIONAL: `--flag` alone → {value: null}; `--flag x` → {value: 'x'}. */
-function optFlagMaybeValue(args, flag) {
+function optFlagMaybeValue(
+  args: string[],
+  flag: string,
+): FlagValue<string | null> | null {
   const flagIndex = args.indexOf(flag);
   if (flagIndex < 0) return null;
   const nextArg = args[flagIndex + 1];
@@ -188,7 +200,7 @@ function optFlagMaybeValue(args, flag) {
 }
 
 /** A token that names a serial port rather than an app entry file (so `--device App.jsx` isn't a port). */
-const looksLikeDevicePath = token =>
+const looksLikeDevicePath = (token: string) =>
   /^(\/dev\/|com\d|\\\\\.\\)/i.test(token) ||
   /(tty|usbmodem|usbserial|cu\.)/i.test(token);
 
@@ -199,7 +211,9 @@ const looksLikeDevicePath = token =>
  * explicit path. Prints an actionable message and exits when the serialport is missing, nothing matches, or
  * it's ambiguous.
  */
-async function resolveDevicePortOrExit(explicit) {
+async function resolveDevicePortOrExit(
+  explicit: string | null,
+): Promise<string> {
   if (explicit && explicit !== 'auto') return preferCalloutPath(explicit);
 
   const {matches, all, serialportMissing} = await detectDevicePorts();
@@ -261,7 +275,7 @@ async function resolveDevicePortOrExit(explicit) {
   process.exit(1);
 }
 
-async function dev(args) {
+async function dev(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const deviceOption = optFlagMaybeValue(args, '--device');
   const aot = args.includes('--aot');
@@ -356,7 +370,7 @@ async function dev(args) {
   });
 }
 
-async function exportApp(args) {
+async function exportApp(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const outIndex = args.indexOf('--out');
   const outDir = resolve(
@@ -394,7 +408,7 @@ async function exportApp(args) {
 }
 
 /** Resolve the root component file for the AOT compiler (App.jsx), distinct from the registry entry. */
-function resolveAppComponent(cwd, explicit) {
+function resolveAppComponent(cwd: string, explicit?: string | null): string {
   if (explicit) {
     const entryPath = resolve(cwd, explicit);
     if (!existsSync(entryPath)) {
@@ -423,9 +437,12 @@ function resolveAppComponent(cwd, explicit) {
  * Throws with the reason, so a watch loop can carry on past a bad save.
  */
 async function compileAppPackage(
-  cwd,
-  appPath,
-  {screens = null, release = false} = {},
+  cwd: string,
+  appPath: string,
+  {
+    screens = null,
+    release = false,
+  }: {screens?: Screen[] | null; release?: boolean} = {},
 ) {
   const {compilePackage, bakeSvgArtifacts, packPackage, readNativeFiles} =
     await import('./aot/compile.mts');
@@ -451,7 +468,7 @@ async function compileAppPackage(
 
   // Optional per-image overrides (same file the JS flows read): assets.config.js
   //   export default { images: { 'bg': { format: 'rgb565' } } }
-  let assetsConfig = {};
+  let assetsConfig: AssetsConfig = {};
   const assetsConfigPath = resolve(cwd, 'assets.config.js');
   if (existsSync(assetsConfigPath))
     assetsConfig =
@@ -489,18 +506,18 @@ async function compileAppPackage(
  * (app.erpkg.c) to link into the firmware.
  */
 async function buildAot(
-  cwd,
-  explicit,
-  outDir,
-  screens,
+  cwd: string,
+  explicit: string | undefined,
+  outDir: string,
+  screens: Screen[] | null,
   {release = false, bake = false} = {},
-) {
+): Promise<void> {
   const {bakePackage, resourceReport} = await import('./aot/compile.mts');
   const appPath = resolveAppComponent(cwd, explicit);
   let compiled;
   try {
     compiled = await compileAppPackage(cwd, appPath, {screens, release});
-  } catch (error) {
+  } catch (error: any) {
     console.error(
       error && error.aotLoc ? error.message : error?.message || String(error),
     );
@@ -534,7 +551,11 @@ async function buildAot(
  * this for production and hot-reloads it. The loader still accepts a plain monolithic container, so older
  * artifacts keep booting unchanged.
  */
-async function buildContainer(cwd, explicit, outDir) {
+async function buildContainer(
+  cwd: string,
+  explicit: string | undefined,
+  outDir: string,
+): Promise<void> {
   const simDir = simDirOrExit();
   const entry = resolveEntry(cwd, explicit);
   const librarySource = libSrc();
@@ -564,7 +585,8 @@ async function buildContainer(cwd, explicit, outDir) {
 
   const outPath = resolve(outDir, 'app.erpkg');
   writeFileSync(outPath, container);
-  const kb = byteCount => `${(byteCount / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
+  const kb = (byteCount: number) =>
+    `${(byteCount / BYTES_PER_KILOBYTE).toFixed(1)} KB`;
   console.log(
     `✓ Flow A → ${relative(cwd, outPath) || 'app.erpkg'} (${kb(container.length)}; qjs ${QUICKJS_TAG}, ` +
       `vendor ${kb(vendor.bytecodeLen)} + app ${kb(app.bytecodeLen)}` +
@@ -583,7 +605,7 @@ async function buildContainer(cwd, explicit, outDir) {
  * `embedded-react build [--aot [--release] [--bake]] [entry] [--out dir] [--screen WxH[,WxH…]]` — produce the
  * device artifact.
  */
-async function build(args) {
+async function build(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const aot = args.includes('--aot');
   const release = args.includes('--release');
@@ -601,7 +623,7 @@ async function build(args) {
   // --screen <WxH> (AOT only): the panels to keep layouts for, comma-separated. Optional: a package has every
   // layout without it. Flow A reads the screen from the host at runtime.
   const screenIndex = args.indexOf('--screen');
-  let screens = null;
+  let screens: Screen[] | null = null;
   if (screenIndex >= 0) {
     if (!aot) {
       console.error(
@@ -622,13 +644,13 @@ async function build(args) {
       process.exit(1);
     }
     screens = sizes.map(size => ({
-      width: Number(size[1]),
-      height: Number(size[2]),
+      width: Number(size![1]),
+      height: Number(size![2]),
     }));
   }
 
   // Consume the flag VALUES so they aren't mistaken for the entry (which is a bare, non-`--` token).
-  const consumed = new Set();
+  const consumed = new Set<number>();
   if (outIndex >= 0) consumed.add(outIndex + 1);
   if (screenIndex >= 0) consumed.add(screenIndex + 1);
   const explicit = args.find(
@@ -641,7 +663,7 @@ async function build(args) {
 }
 
 /** Reads the package a `pack` or `flash` names, or dist/app.erpkg; exits saying how to build one when it's missing. */
-function readPackageOrExit(cwd, explicit) {
+function readPackageOrExit(cwd: string, explicit?: string): Buffer {
   const path = resolve(cwd, explicit ?? 'dist/app.erpkg');
   if (!existsSync(path)) {
     console.error(
@@ -653,8 +675,8 @@ function readPackageOrExit(cwd, explicit) {
 }
 
 /** The bare arguments, once the values of the listed flags are set aside. */
-function bareArgs(args, flagsWithValues) {
-  const consumed = new Set();
+function bareArgs(args: string[], flagsWithValues: string[]): string[] {
+  const consumed = new Set<number>();
   for (const flag of flagsWithValues) {
     const flagIndex = args.indexOf(flag);
     if (flagIndex >= 0) consumed.add(flagIndex + 1);
@@ -665,7 +687,7 @@ function bareArgs(args, flagsWithValues) {
 }
 
 /** `embedded-react pack [package] --board <name> [--slot a|b] [--sequence n] [--out dir]` */
-function pack(args) {
+function pack(args: string[]): void {
   const cwd = process.cwd();
   const boardName = optValue(args, '--board')?.value;
   const outDir = resolve(cwd, optValue(args, '--out')?.value ?? 'dist');
@@ -690,14 +712,14 @@ function pack(args) {
     console.log(
       `✓ Slot ${packed.slot}, sequence ${packed.sequence} → ${relative(cwd, packed.file)}, for flash address 0x${packed.address.toString(16)}`,
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error(error.message);
     process.exit(1);
   }
 }
 
 /** `embedded-react flash [package] --board <name> [--port p]` */
-function flash(args) {
+function flash(args: string[]): void {
   const cwd = process.cwd();
   const boardName = optValue(args, '--board')?.value;
   try {
@@ -715,14 +737,14 @@ function flash(args) {
           ? `, and slot ${written.lastGood} stays as the last good package.`
           : '.'),
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error(error.message);
     process.exit(1);
   }
 }
 
 /** `embedded-react native-header <package or file> [--out dir]` */
-async function nativeHeader(args) {
+async function nativeHeader(args: string[]): Promise<void> {
   const cwd = process.cwd();
   const outDir = resolve(cwd, optValue(args, '--out')?.value ?? '.');
   const [target] = bareArgs(args, ['--out']);
@@ -746,7 +768,7 @@ async function nativeHeader(args) {
         `✓ ${header.module} → ${relative(cwd, resolve(outDir, header.file))}`,
       );
     }
-  } catch (error) {
+  } catch (error: any) {
     const where = error?.aotLoc
       ? `${shownFile}:${error.aotLoc.line}:${error.aotLoc.column + 1}: `
       : '';

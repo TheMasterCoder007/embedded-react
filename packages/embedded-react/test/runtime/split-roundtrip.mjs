@@ -28,7 +28,7 @@ import {
   packApp,
   emitBootContainer,
   emitAppFrame,
-} from '../../hotreload/pack-split.mjs';
+} from '../../hotreload/pack-split.mts';
 
 const here = dirname(fileURLToPath(import.meta.url)); // .../embedded-react/test/runtime
 const jsRoot = resolve(here, '../..'); // .../embedded-react

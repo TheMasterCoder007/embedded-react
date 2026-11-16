@@ -27,7 +27,7 @@ import {
   bundleAppSource,
   emitBootContainer,
   emitAppFrame,
-} from '../pack-split.mjs';
+} from '../pack-split.mts';
 import {
   emitContainer,
   crc32,

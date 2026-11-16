@@ -15,7 +15,7 @@
  */
 
 // Asset baking orchestrator: turns the images and fonts an app imports into a single generated C
-// translation unit (assets.generated.c + .h) exposing er_register_assets(). Invoked by build.mjs
+// translation unit (assets.generated.c + .h) exposing er_register_assets(). Invoked by build.mts
 // after bundling; the example firmware compiles the .c and calls er_register_assets() at boot.
 import fs from 'node:fs';
 import path from 'node:path';

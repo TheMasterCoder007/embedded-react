@@ -103,7 +103,7 @@ describe('embedded-react build --aot', () => {
     try {
       const cliPath = resolve(
         demosDirectory,
-        '../packages/embedded-react/cli.mjs',
+        '../packages/embedded-react/cli.mts',
       );
       const built = spawnSync(
         process.execPath,

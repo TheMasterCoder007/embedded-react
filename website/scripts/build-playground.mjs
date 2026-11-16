@@ -121,7 +121,7 @@ for (const {id, directory} of demos) {
     execFileSync(
       process.execPath,
       [
-        join(packageDirectory, 'cli.mjs'),
+        join(packageDirectory, 'cli.mts'),
         'export',
         join(directory, entry),
         '--out',

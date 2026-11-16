@@ -134,7 +134,7 @@ ok(
   existsSync(resolve(projectDir, 'dist-aot/app.erpkg')),
   'embedded-react build --aot (the starter) → dist-aot/app.erpkg',
 );
-// `pack` works offline, so the published flash.mjs and its imports are checked here too.
+// `pack` works offline, so the published flash and its imports are checked here too.
 run(
   'npx',
   [
