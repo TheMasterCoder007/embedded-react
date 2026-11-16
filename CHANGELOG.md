@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+
+## [0.22.1] - 2026-11-16
 ### Fixed
 
 - Flow B: an integer in a text printed as `ld` on firmware linked against newlib-nano, whose printf has no 64-bit
@@ -1696,7 +1698,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.22.1...HEAD
+[0.22.1]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.19.0...v0.20.0
