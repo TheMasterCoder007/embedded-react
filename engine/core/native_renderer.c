@@ -754,6 +754,7 @@ void embedded_renderer_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y
     /* The app under the error screen gets no input. */
     if (er_error_screen_active())
         return;
+    er_display_point_to_logical(&x, &y);
     er_input_queue_touch(finger_id, phase, x, y);
 }
 

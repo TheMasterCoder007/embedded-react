@@ -213,3 +213,7 @@ add_executable(test_screen_bounds test_screen_bounds.c)
 target_link_libraries(test_screen_bounds PRIVATE embedded-react)
 target_include_directories(test_screen_bounds PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../scene)
 add_test(NAME rendering_screen_bounds COMMAND test_screen_bounds)
+
+add_executable(test_display_rotation test_display_rotation.c)
+target_link_libraries(test_display_rotation PRIVATE embedded-react)
+add_test(NAME rendering_display_rotation COMMAND test_display_rotation)

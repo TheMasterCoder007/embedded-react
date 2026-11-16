@@ -1251,6 +1251,77 @@ extern "C"
     void er_display_present(void);
 
     /**
+     * @brief How far the app's picture is turned, clockwise, to fit the panel as it is mounted.
+     */
+    typedef enum
+    {
+        ER_ROTATION_0 = 0,     /**< The app draws in the panel's own orientation (the default). */
+        ER_ROTATION_90 = 90,   /**< Turned a quarter clockwise: the app is panel_height wide. */
+        ER_ROTATION_180 = 180, /**< Upside down: same size as the panel. */
+        ER_ROTATION_270 = 270, /**< Turned a quarter anticlockwise: the app is panel_height wide. */
+    } ERDisplayRotation;
+
+    /**
+     * @brief Sets how the panel is mounted, so the app can be drawn in another orientation than the panel scans.
+     *
+     * Call once at init, before the backend comes up. The app's (logical) size is the panel's size, swapped at
+     * 90 and 270: a 480×1280 panel mounted at 90 runs a 1280×480 app. With it set:
+     *  - er_get_display_size() returns the logical size, for `screen` and `Dimensions`;
+     *  - embedded_renderer_touch() takes panel coordinates and turns them into logical ones;
+     *  - er_get_dirty_rect() and er_get_dirty_rects() report panel coordinates;
+     *  - er_rotate_copy() copies a panel rect out of a logical-shape buffer, turned.
+     * The engine still draws in logical coordinates, so a backend renders into a logical-shape buffer and
+     * presents with er_rotate_copy(). Setting it forces a full repaint; er_reset() keeps it.
+     *
+     * @param[in] rotation      One of the ER_ROTATION_* values.
+     * @param[in] panel_width   The panel's width as it scans, in pixels.
+     * @param[in] panel_height  The panel's height as it scans, in pixels.
+     *
+     * @return true when set; false, with the setting unchanged, for another angle or a size below 1.
+     */
+    bool er_set_display_rotation(ERDisplayRotation rotation, int panel_width, int panel_height);
+
+    /**
+     * @brief Returns the rotation set by er_set_display_rotation() (ER_ROTATION_0 by default).
+     *
+     * @return The current rotation.
+     */
+    ERDisplayRotation er_get_display_rotation(void);
+
+    /**
+     * @brief Returns the size the app draws at: the panel size, swapped at 90 and 270.
+     *
+     * @param[out] width   Logical width in pixels. May be NULL.
+     * @param[out] height  Logical height in pixels. May be NULL.
+     *
+     * @return true once er_set_display_rotation() has set a size; false (and 0 x 0) before.
+     */
+    bool er_get_display_size(int* width, int* height);
+
+    /**
+     * @brief Copies a panel rect out of a logical-shape buffer into the panel's buffer, turned by the rotation.
+     *
+     * The shared present step for a backend that renders logically: pass each rect er_get_dirty_rects() reports
+     * and the panel's buffer receives exactly those pixels. 90 and 270 work in strips a few pixels wide so both
+     * buffers stay in cache. At ER_ROTATION_0 it is a plain row copy. Both buffers use the same pixel format,
+     * any of 1 to 4 bytes per pixel, and any row stride.
+     *
+     * @param[in]  source                    The logical-shape buffer, at logical (0, 0).
+     * @param[in]  source_stride_bytes       Bytes from one source row to the next.
+     * @param[out] destination               The panel's buffer, at panel (0, 0).
+     * @param[in]  destination_stride_bytes  Bytes from one destination row to the next.
+     * @param[in]  bytes_per_pixel           Pixel size in bytes, 1 to 4.
+     * @param[in]  panel_rect                Rect to copy, in panel coordinates; clipped to the panel. NULL copies
+     *                                       the whole panel.
+     */
+    void er_rotate_copy(const void* source,
+                        int source_stride_bytes,
+                        void* destination,
+                        int destination_stride_bytes,
+                        int bytes_per_pixel,
+                        const ERRect* panel_rect);
+
+    /**
      * @brief Returns how many times er_commit() has actually run the layout pass.
      *
      * Increments once per commit that recomputes layout, and stays unchanged on commits that take

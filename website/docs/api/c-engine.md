@@ -76,6 +76,11 @@ A page-flipping display tells the engine how many buffers it rotates with
 `er_set_display_buffer_count(n)` (read back with `er_get_display_buffer_count()`) and reports each
 flip with `er_display_present()`; the engine then replays damage into every buffer so none is stale.
 
+A panel mounted against its scan direction sets `er_set_display_rotation(rotation, panel_w,
+panel_h)` once at init, with `ER_ROTATION_0`, `_90`, `_180` or `_270`. The app then runs at
+`er_get_display_size()`, the panel size swapped at 90 and 270. Touches and dirty rects are in panel
+coordinates, and `er_rotate_copy()` presents a rect from a logical-shape buffer, turned.
+
 ## Events and input
 
 `er_event_set(node, type, fn, user_data)` registers a handler for one event type on a node: press,

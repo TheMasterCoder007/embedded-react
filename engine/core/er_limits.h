@@ -39,7 +39,8 @@
  * @brief Opacity-composite scratch width in pixels (the widest node that can be captured offscreen).
  *
  * rendering/scratch_pool.c owns the allocation; rendering/shadow.c and rendering/transform.c size their own
- * working buffers to match and refuse anything larger.
+ * working buffers to match and refuse anything larger. Like every width here, it is in the app's (logical)
+ * frame, which is the panel's height on a panel mounted at 90 or 270.
  */
 #ifndef ERUI_SCRATCH_WIDTH
 #define ERUI_SCRATCH_WIDTH 240
@@ -74,7 +75,7 @@
  * @brief Static row-buffer width for the per-row rasterizers.
  *
  * rendering/image_scaler.c and rendering/gradient.c both assemble one row here, and both draw a wider row a
- * buffer at a time, so this sizes scratch memory and not what can be drawn.
+ * buffer at a time, so this sizes scratch memory and not what can be drawn. A logical width, as above.
  */
 #ifndef ERUI_MAX_IMAGE_ROW_PIXELS
 #define ERUI_MAX_IMAGE_ROW_PIXELS 800
