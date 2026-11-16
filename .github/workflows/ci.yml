@@ -68,16 +68,18 @@ jobs:
         run: cmake --build engine/build-ci-grad
       - name: Test (gradients enabled)
         run: ctest --test-dir engine/build-ci-grad --output-on-failure
-      # The gradient test again with a row buffer narrower than its 64-pixel framebuffer, so every row is drawn in
-      # chunks.
+      # The gradient and stretched-image tests again with a row buffer narrower than what they draw, so every row
+      # is drawn in chunks.
       - name: Configure (gradients, narrow row buffer)
         run: >
           cmake -S engine -B engine/build-ci-grad-narrow
           -DERUI_GRADIENT=ON -DERUI_GRADIENT_RADIAL=ON -DERUI_MAX_IMAGE_ROW_PIXELS=48
       - name: Build (gradients, narrow row buffer)
-        run: cmake --build engine/build-ci-grad-narrow --target test_gradient
+        run: cmake --build engine/build-ci-grad-narrow --target test_gradient test_content_padding
       - name: Test (gradients, narrow row buffer)
-        run: ctest --test-dir engine/build-ci-grad-narrow -R rendering_gradient --output-on-failure
+        run: >
+          ctest --test-dir engine/build-ci-grad-narrow -R "rendering_(gradient|content_padding)"
+          --output-on-failure
       # Third pass with two render workers. The multi-worker code (hook-backed worker ids, the
       # pthread fork-join in tests/rendering/test_parallel.c, per-worker context isolation) compiles
       # out of the default single-worker build above, so it is ONLY exercised here — without this

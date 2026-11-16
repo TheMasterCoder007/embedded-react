@@ -175,6 +175,17 @@ describe('parseBackgroundImage: objects', () => {
     ).toEqual(gradientOf('linear-gradient(45deg, red 20% 40%, blue)'));
   });
 
+  it('defaults to top to bottom without a direction', () => {
+    expect(
+      gradientOf([
+        {
+          type: 'linear-gradient',
+          colorStops: [{color: 'red'}, {color: 'blue'}],
+        },
+      ]),
+    ).toEqual(gradientOf('linear-gradient(red, blue)'));
+  });
+
   it('reads a radial circle', () => {
     expect(
       gradientOf([

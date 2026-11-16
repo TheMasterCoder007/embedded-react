@@ -573,45 +573,49 @@ static void render_region(const ImageEntry* image,
         return;
     }
 
-    /* General path: scale and/or tint via a one-row scratch buffer. */
-    const int capped_width =
-        (destination_width <= ERUI_MAX_IMAGE_ROW_PIXELS) ? destination_width : ERUI_MAX_IMAGE_ROW_PIXELS;
+    /* General path: scale and/or tint via a one-row scratch buffer, a buffer at a time for a wider row. */
     int visible_x0, visible_y0, visible_x1, visible_y1;
     if (!visible_part(destination_x,
                       destination_y,
-                      capped_width,
+                      destination_width,
                       destination_height,
                       &visible_x0,
                       &visible_y0,
                       &visible_x1,
                       &visible_y1))
         return;
-    const int visible_width = visible_x1 - visible_x0;
     for (int row = visible_y0; row < visible_y1; row++)
     {
-        for (int column = visible_x0; column < visible_x1; column++)
+        for (int chunk_x = visible_x0; chunk_x < visible_x1; chunk_x += ERUI_MAX_IMAGE_ROW_PIXELS)
         {
+            const int chunk_width =
+                (visible_x1 - chunk_x) < ERUI_MAX_IMAGE_ROW_PIXELS ? (visible_x1 - chunk_x) : ERUI_MAX_IMAGE_ROW_PIXELS;
+            for (int chunk_column = 0; chunk_column < chunk_width; chunk_column++)
+            {
+                /* Sampled against the whole destination width, so the chunks join without a seam. */
+                const int column = chunk_x + chunk_column;
 #if ERUI_BILINEAR_SCALE
-            /* Fractional source coords with half-pixel alignment for correct up-sampling. */
-            const float sample_x =
-                (float)source_x + ((float)column + 0.5f) * (float)source_width / (float)destination_width - 0.5f;
-            const float sample_y =
-                (float)source_y + ((float)row + 0.5f) * (float)source_height / (float)destination_height - 0.5f;
-            uint32_t pixel =
-                bilinear_sample(image, source_x, source_y, source_width, source_height, sample_x, sample_y);
+                /* Fractional source coords with half-pixel alignment for correct up-sampling. */
+                const float sample_x =
+                    (float)source_x + ((float)column + 0.5f) * (float)source_width / (float)destination_width - 0.5f;
+                const float sample_y =
+                    (float)source_y + ((float)row + 0.5f) * (float)source_height / (float)destination_height - 0.5f;
+                uint32_t pixel =
+                    bilinear_sample(image, source_x, source_y, source_width, source_height, sample_x, sample_y);
 #else
-            const int source_row = source_y + (row * source_height) / destination_height;
-            const int source_column = source_x + (column * source_width) / destination_width;
-            uint32_t pixel = fetch_px(image, source_column, source_row);
+                const int source_row = source_y + (row * source_height) / destination_height;
+                const int source_column = source_x + (column * source_width) / destination_width;
+                uint32_t pixel = fetch_px(image, source_column, source_row);
 #endif
-            if (image->opaque)
-                pixel |= ARGB_OPAQUE_ALPHA; /* squash bilinear float dust so the row stays exactly opaque */
-            if (has_tint)
-                pixel = apply_tint(pixel, tint_red, tint_green, tint_blue);
-            irow()[column - visible_x0] = pixel;
+                if (image->opaque)
+                    pixel |= ARGB_OPAQUE_ALPHA; /* squash bilinear float dust so the row stays exactly opaque */
+                if (has_tint)
+                    pixel = apply_tint(pixel, tint_red, tint_green, tint_blue);
+                irow()[chunk_column] = pixel;
+            }
+            /* Tint preserves alpha, so an opaque image stays opaque through every branch above. */
+            emit_row(mask, irow(), image->opaque, destination_x + chunk_x, destination_y + row, chunk_width);
         }
-        /* Tint preserves alpha, so an opaque image stays opaque through every branch above. */
-        emit_row(mask, irow(), image->opaque, destination_x + visible_x0, destination_y + row, visible_width);
     }
 }
 

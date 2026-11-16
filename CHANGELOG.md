@@ -41,6 +41,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - Engine: the unused `ERUI_FONT_SIZES` build option.
 
+### Fixed
+
+- Engine: a scaled or tinted image wider than `ERUI_MAX_IMAGE_ROW_PIXELS` is drawn whole.
+
 ## [0.21.0] - 2026-11-14
 ### Added
 
