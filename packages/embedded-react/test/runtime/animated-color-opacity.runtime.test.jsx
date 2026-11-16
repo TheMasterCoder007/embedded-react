@@ -17,7 +17,7 @@
 // An animated color reaches the node only through an interpolation onto colors, and animated
 // opacity fades a Text as it does a View. Both are read back from the framebuffer.
 import {createRef} from 'react';
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {Animated, Text, View} from 'embedded-react';
 import {check, report} from './harness.js';
 

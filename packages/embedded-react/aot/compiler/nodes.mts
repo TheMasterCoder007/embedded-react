@@ -351,7 +351,7 @@ function opacityLiteralOrThrow(
 /**
  * Lowers <TouchableOpacity>'s press feedback: a Pressable node plus one synthetic animated value bound to its
  * opacity. Press-in snaps it to activeOpacity, press-out fades it back to whatever the style asks for. Flow A
- * builds the same thing out of hooks (TouchableOpacity.js); here the feedback runs on the engine's native
+ * builds the same thing out of hooks (TouchableOpacity.mts); here the feedback runs on the engine's native
  * driver with no JS on the device at all. Returns the value's bind, and the two fades for the event loop to
  * fold into its press handlers.
  *

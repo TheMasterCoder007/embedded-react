@@ -19,7 +19,7 @@
 // that rewrite could get wrong — statement-order semantics (flex shorthand vs. explicit overrides),
 // the shared static s_prop_slots scratch table not leaking a previous call's values into a later
 // sparse object, and unrecognized keys being ignored rather than crashing.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

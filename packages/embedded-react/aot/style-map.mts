@@ -22,7 +22,7 @@ import {
   BACKGROUND_MAX_STOPS,
   parseBackgroundImage,
 } from '../src/embedded-react/background-image.mts';
-import {NAMED_COLORS} from '../src/embedded-react/named-colors.js';
+import {NAMED_COLORS} from '../src/embedded-react/named-colors.mts';
 import {numberProblem} from './compiler/check.mts';
 import type {
   EngineName,

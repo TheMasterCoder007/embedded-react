@@ -16,7 +16,7 @@
 
 // Runtime e2e: Keyboard.dismiss() blurs the focused TextInput, and in a build with the on-screen
 // keyboard the show and hide events fire once each as the focus comes and goes.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, TextInput, Keyboard} from 'embedded-react';
 import {check, report} from './harness.js';
 

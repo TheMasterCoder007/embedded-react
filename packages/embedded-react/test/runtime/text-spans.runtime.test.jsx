@@ -18,7 +18,7 @@
 // the reconciler (the node owns its subtree — no separate child nodes) and re-render correctly.
 // Span styling itself isn't observable from JS, so we assert: it renders (onLayout fires), and the
 // measured width tracks the text length across re-renders.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Text} from 'embedded-react';
 import {check, report} from './harness.js';
 

@@ -1,0 +1,624 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import {DefaultEventPriority} from 'react-reconciler/constants.js';
+import {NativeUI} from './native-ui.mts';
+import {
+  buildProps,
+  buildTextSpans,
+  deepEqualProps,
+  isEventProp,
+  isTextContent,
+} from './props.mts';
+import {
+  flattenSvg,
+  PAINT_PROPS,
+  warnVectorCaps,
+  scaleVectorArtifact,
+  encodeVectorGradients,
+} from './embedded-react/svg-ops.mts';
+import {splitAnimatedStyle} from './embedded-react/split-style.mts';
+import type {Bindable, Binding} from './embedded-react/split-style.mts';
+import type {VectorArtifact} from './embedded-react/svg-ops.mts';
+import type {SvgProps} from './embedded-react/index.d.ts';
+import type {HostProps, Style} from './props.mts';
+import type {HostConfig} from 'react-reconciler';
+
+/** A raster `<Svg source>`: the image the .svg was baked to. */
+interface RasterArtifact {
+  kind: 'raster';
+  name: string;
+  width: number;
+  height: number;
+}
+
+/** What commitUpdate must apply again. */
+interface UpdatePayload {
+  props: boolean;
+  spans: boolean;
+  events: boolean;
+  vector: boolean;
+}
+
+// An instance is its node handle; a failed create is a negative number.
+export type EngineHostConfig = HostConfig<
+  string,
+  HostProps,
+  number,
+  number,
+  number,
+  never,
+  never,
+  number,
+  object,
+  UpdatePayload,
+  never,
+  ReturnType<typeof setTimeout>,
+  -1
+>;
+
+// --- Animated bindings ---------------------------------------------------------------------------
+// A bound prop is owned by the engine from then on: it re-pushes the animated value over the static
+// props of every later setProps (er_animation_reapply_bound), which is what keeps a re-render from jumping
+// a running animation back to its declared value. Nothing in React says "this prop stopped being
+// animated", so the binding has to be released explicitly or it keeps writing the prop forever — and a
+// prop that swapped Animated.Values ends up written by both. Instances are bare node handles with no
+// JS object to hang state on, so what we bound is remembered here: handle → (prop → animated value).
+const boundValues = new Map<number, Map<string, Bindable>>();
+
+/**
+ * True when two animated values bind a prop the same way, so a re-render can leave the live binding
+ * alone. Identity settles an Animated.Value; an interpolation is a throwaway object that
+ * `value.interpolate(...)` rebuilds on every render, so it answers __bindEq for itself.
+ */
+function sameBinding(
+  previous: Bindable | undefined,
+  next: Bindable | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (previous == null || next == null) return false;
+  return typeof previous.__bindEq === 'function' && previous.__bindEq(next);
+}
+
+/** The value `bindings` (from splitAnimatedStyle) drives `prop` with, or undefined if none does. */
+function bindingFor(bindings: Binding[], prop: string): Bindable | undefined {
+  for (const binding of bindings) {
+    if (binding.prop === prop) return binding.value;
+  }
+  return undefined;
+}
+
+/**
+ * Releases the bindings a node has that its new props no longer ask for — a prop that went back to a
+ * static value, or moved to a different Animated.Value.
+ *
+ * Runs BEFORE the node's setProps, and that order is the whole point: setProps re-pushes every value
+ * still bound to the node over the static props it just wrote, so a binding released afterwards would
+ * leave its last animated float sitting on the node instead of the value React just set.
+ */
+function releaseStaleBindings(handle: number, bindings: Binding[]): void {
+  const bound = boundValues.get(handle);
+  if (bound === undefined) return;
+  for (const [prop, value] of bound) {
+    if (sameBinding(value, bindingFor(bindings, prop))) continue;
+    NativeUI.animUnbind(handle, prop);
+    bound.delete(prop);
+  }
+  if (bound.size === 0) boundValues.delete(handle);
+}
+
+/**
+ * Binds the props that aren't already bound to the value asking for them. The engine ignores a
+ * duplicate bind, but the bridge crossing to find that out isn't free on an MCU.
+ */
+function applyBindings(handle: number, bindings: Binding[]): void {
+  if (bindings.length === 0) return;
+  let bound = boundValues.get(handle);
+  for (const binding of bindings) {
+    if (
+      bound !== undefined &&
+      sameBinding(bound.get(binding.prop), binding.value)
+    )
+      continue;
+    binding.value.__bind(handle, binding.prop);
+    if (bound === undefined) {
+      bound = new Map();
+      boundValues.set(handle, bound);
+    }
+    bound.set(binding.prop, binding.value);
+  }
+}
+
+/**
+ * Forgets what a handle was bound to. The engine releases the bindings itself when a node is destroyed
+ * (er_animation_unbind_node), so this only drops our record — but it has to happen, or the map keeps a
+ * record for every destroyed node. Called on destroy for the node React hands us, and again from
+ * detachDeletedInstance because destroyNode reclaims a whole SUBTREE in C — React never hands
+ * removeChild the descendants, and detaching is where it names them.
+ */
+function forgetBindings(handle: number): void {
+  boundValues.delete(handle);
+}
+
+// --- Failed creates ------------------------------------------------------------------------------
+// createNode returns 0 when the node pool is full. React creates children before their parent, so the
+// children of a parent that did not fit are never attached to anything, and removing that parent frees
+// nothing in C. Each failed create gets its own negative instance (the bridge ignores handles <= 0), and
+// the children appended to it are kept here so they are freed when it is deleted.
+const FAILED_CREATE = 0; // createNode's handle when the pool is full
+const orphansOf = new Map<number, Set<number>>(); // failed instance → Set of child handles
+let nextFailedInstance = -1;
+
+/** Records `child` as held by `parent` when `parent` is a failed create. */
+function adoptIfOrphan(parent: number, child: number): void {
+  if (parent >= 0 || child <= 0) return;
+  let orphans = orphansOf.get(parent);
+  if (orphans === undefined) {
+    orphans = new Set();
+    orphansOf.set(parent, orphans);
+  }
+  orphans.add(child);
+}
+
+/** Frees the children a failed create was holding. */
+function freeOrphans(instance: number): void {
+  const orphans = orphansOf.get(instance);
+  if (orphans === undefined) return;
+  orphansOf.delete(instance);
+  for (const child of orphans) {
+    NativeUI.destroyNode(child);
+    forgetBindings(child);
+  }
+}
+
+/**
+ * Applies a node's resolved props, binding any Animated.Value found in its `style` to the matching
+ * node prop (native driver). This makes animated styles work on ANY host element — `<Pressable
+ * style={{ transform: [{ scale: v }] }}>` binds without an Animated.* wrapper — which is what the
+ * Flow B AOT compiler does too, so the two render paths stay in parity (and what an Animated.* wrapper
+ * relies on: it forwards its style untouched and is bound here like any other element).
+ *
+ * Returns the resolved flat style so a paired applyTextSpans call can reuse it instead of
+ * re-flattening props.style from scratch — style flattening (recursive array walk and object merge)
+ * is one of the costlier steps in commitUpdate's JS-side work on a bytecode-interpreted MCU target.
+ */
+function applyProps(type: string, handle: number, props: HostProps): Style {
+  const {staticStyle, bindings} = splitAnimatedStyle(props.style);
+  // <Dial value={animatedValue}>: the value is a native-driver binding (ER_PROP_ARC_VALUE), not a prop —
+  // the engine ramps it with no JS per frame and damages only the swept sliver.
+  if (type === 'Dial') {
+    if (props.value && props.value.__animated) {
+      bindings.push({prop: 'value', value: props.value});
+      props = {...props, value: undefined};
+    }
+    if (props.valueStart && props.valueStart.__animated) {
+      bindings.push({prop: 'valueStart', value: props.valueStart});
+      props = {...props, valueStart: undefined};
+    }
+  }
+  releaseStaleBindings(handle, bindings);
+  NativeUI.setProps(handle, buildProps(type, props, staticStyle));
+  applyBindings(handle, bindings);
+  return staticStyle;
+}
+
+/**
+ * Applies inline-styled text spans for a <Text> node (no-op for other types). buildTextSpans returns
+ * [] for uniform text, which reverts the node to plain-text rendering — so this also clears stale
+ * spans when a Text changes from styled-runs to a single style across renders. `flatStyle`, when
+ * given, is the already-resolved style from a paired applyProps call on the same props (avoids a
+ * second full flattening of props.style).
+ */
+function applyTextSpans(
+  type: string,
+  handle: number,
+  props: HostProps,
+  flatStyle?: Style,
+): void {
+  if (type === 'Text')
+    NativeUI.setTextSpans(handle, buildTextSpans(props, flatStyle));
+}
+
+/** Resolves an <Svg>'s render-box dimension from style/props, falling back to the source's intrinsic size. */
+function svgBoxSize(
+  props: HostProps,
+  dimension: 'width' | 'height',
+  intrinsic: number | undefined,
+): number | undefined {
+  const styleSize =
+    props.style && typeof props.style[dimension] === 'number'
+      ? props.style[dimension]
+      : undefined;
+  const propSize =
+    typeof props[dimension] === 'number' ? props[dimension] : undefined;
+  return styleSize ?? propSize ?? intrinsic;
+}
+
+/**
+ * A `<Svg source={imported}>` whose imported .svg fell back to a RASTER image at build time (the SVG used
+ * features the vector baker can't represent). Returns the artifact, or null for a vector/declarative
+ * Svg. Such a Svg is rendered as an IMAGE node, not a vector node — `props.source.kind` is the discriminator
+ * (an imported artifact's kind is fixed at build time, so it never flips for a given element).
+ */
+function rasterSvgArtifact(
+  type: string,
+  props: HostProps,
+): RasterArtifact | null {
+  const source = props && props.source;
+  return type === 'Svg' && source && source.kind === 'raster' ? source : null;
+}
+
+/** Maps a raster `<Svg source>` to equivalent `<Image>` props: the baked asset name + the resolved box size. */
+function rasterImageProps(
+  props: HostProps,
+  artifact: RasterArtifact,
+): HostProps {
+  const width = svgBoxSize(props, 'width', artifact.width);
+  const height = svgBoxSize(props, 'height', artifact.height);
+  return {
+    ...props,
+    source: artifact.name,
+    style: {...(props.style || {}), width, height},
+  };
+}
+
+/**
+ * Sets an <Svg>'s vector op-tape. Two sources, source prop wins:
+ *   <Svg source={imported}>  — an imported .svg's baked artifact ({kind:'vector', ops, paints, width,
+ *                              height}); we scale its op-tape from intrinsic px to the node's box.
+ *   <Svg><Path/>...</Svg>    — declarative children flattened here (the Svg owns its subtree; React does
+ *                              not mount the shape children, so we compile them on create + every update).
+ */
+function applyVectorOps(type: string, handle: number, props: HostProps): void {
+  if (type !== 'Svg') return;
+  let ops;
+  let paints;
+  let gradients;
+  const source = props.source;
+  if (source && source.kind === 'vector' && Array.isArray(source.ops)) {
+    ({ops, paints, gradients} = scaleVectorArtifact(
+      source,
+      svgBoxSize(props, 'width', source.width)!,
+      svgBoxSize(props, 'height', source.height)!,
+    ));
+  } else {
+    ({ops, paints, gradients} = flattenSvg(props));
+  }
+  warnVectorCaps(
+    ops.length,
+    paints.length,
+    NativeUI.maxVectorOps,
+    NativeUI.maxVectorPaints,
+    gradients ? gradients.length : 0,
+    NativeUI.maxVectorGrads,
+  );
+  NativeUI.setVectorOps(
+    handle,
+    ops,
+    paints,
+    gradients && gradients.length
+      ? encodeVectorGradients(gradients)
+      : undefined,
+  );
+}
+
+/**
+ * True when a `<Svg source={vectorArtifact}>`'s resolved render box changed between renders — the
+ * one style-driven input to the op-tape (the tape is scaled from the artifact's intrinsic px to the
+ * box, see scaleVectorArtifact). A style change that leaves the box alone (a position move during a
+ * drag, a color tweak) does not need the tape re-uploaded.
+ */
+function svgSourceBoxChanged(
+  prevProps: HostProps,
+  nextProps: HostProps,
+): boolean {
+  const source = nextProps.source;
+  const intrinsicWidth =
+    source && source.kind === 'vector' ? source.width : undefined;
+  const intrinsicHeight =
+    source && source.kind === 'vector' ? source.height : undefined;
+  return (
+    svgBoxSize(prevProps, 'width', intrinsicWidth) !==
+      svgBoxSize(nextProps, 'width', intrinsicWidth) ||
+    svgBoxSize(prevProps, 'height', intrinsicHeight) !==
+      svgBoxSize(nextProps, 'height', intrinsicHeight)
+  );
+}
+
+/**
+ * Diffs a re-rendered host element's props and returns what commitUpdate must re-apply — or null
+ * when nothing observable changed, which makes React skip the commit entirely (no Update effect, no
+ * bridge traffic). Re-marshaling props across the JS->C bridge is the dominant cost of a Flow A
+ * re-render, and a parent's state change re-renders every non-memoized child with identical props,
+ * so the null case is the common one on interactive screens.
+ *
+ * The payload is a set of section flags, so a partial change re-applies only its section:
+ *   props  — NativeUI.setProps (resolved style + passthrough props + text)
+ *   spans  — inline text spans (<Text> only; derived from children + style)
+ *   vector — the <Svg> op-tape upload (flattenSvg/scaleVectorArtifact + setVectorOps)
+ *   events — on* handler registration (an inline closure has a new identity every render and must be
+ *            re-stored — its captures went stale — but that alone shouldn't re-serialize the props)
+ *
+ * The vector flag tracks the op-tape's actual inputs. A source artifact tape depends on the source
+ * reference and the resolved box; a declarative <Svg><Path/></Svg> tape depends on the shape
+ * children, viewBox, the direct width/height props, and its own paint props, which cascade to its
+ * shapes (flattenSvg never reads style). So a position-only style move of either kind — the
+ * interactive-drag hot path — skips the upload.
+ *
+ * Props buildProps never reads still set the props flag when they change — conservative, and only
+ * paid when such a value actually changed.
+ */
+function diffUpdate(
+  type: string,
+  prevProps: HostProps,
+  nextProps: HostProps,
+): UpdatePayload | null {
+  let props = false;
+  let spans = false;
+  let events = false;
+  let vector = false;
+  const diffKey = (key: string) => {
+    const previousValue = prevProps[key];
+    const nextValue = nextProps[key];
+    if (Object.is(previousValue, nextValue)) return;
+    if (isEventProp(key, previousValue) || isEventProp(key, nextValue)) {
+      events = true;
+      return;
+    }
+    switch (key) {
+      case 'children':
+        // Only subtree-owning types render children through their OWN props (shouldSetTextContent);
+        // everywhere else children are separate host instances React mutates directly.
+        if (type === 'Text') {
+          if (!deepEqualProps(previousValue, nextValue)) {
+            props = true; // flat.text is built from children
+            spans = true;
+          }
+        } else if (type === 'Svg') {
+          if (!deepEqualProps(previousValue, nextValue)) vector = true;
+        }
+        return;
+      case 'style':
+        if (!deepEqualProps(previousValue, nextValue)) {
+          props = true;
+          if (type === 'Text') spans = true;
+          if (type === 'Svg' && nextProps.source)
+            vector = vector || svgSourceBoxChanged(prevProps, nextProps);
+        }
+        return;
+      case 'source':
+        props = true; // imageName (Image / raster Svg fallback)
+        if (type === 'Svg') vector = true; // artifact swap → new tape
+        return;
+      case 'width':
+      case 'height':
+      case 'viewBox':
+        if (type === 'Svg') {
+          props = true; // width/height fold into the resolved style box
+          vector = true; // and drive the tape's root transform / artifact scale
+          return;
+        }
+      // fall through: on other types these are ordinary (ignored or passthrough) props
+      default:
+        if (!deepEqualProps(previousValue, nextValue)) {
+          props = true;
+          // A source tape ignores root paint.
+          if (
+            type === 'Svg' &&
+            !nextProps.source &&
+            (PAINT_PROPS as string[]).includes(key)
+          )
+            vector = true;
+        }
+    }
+  };
+  for (const key in prevProps) diffKey(key);
+  for (const key in nextProps) {
+    if (!Object.prototype.hasOwnProperty.call(prevProps, key)) diffKey(key);
+  }
+  return props || spans || events || vector
+    ? {props, spans, events, vector}
+    : null;
+}
+
+/**
+ * Registers/clears on* event handlers. A handler present in old but not new props is cleared.
+ */
+function applyEvents(
+  handle: number,
+  prevProps: HostProps | null,
+  nextProps: HostProps,
+): void {
+  if (prevProps) {
+    for (const key in prevProps) {
+      if (
+        isEventProp(key, prevProps[key]) &&
+        !(nextProps && isEventProp(key, nextProps[key]))
+      ) {
+        NativeUI.setEvent(handle, key, null);
+      }
+    }
+  }
+  for (const key in nextProps) {
+    if (isEventProp(key, nextProps[key])) {
+      NativeUI.setEvent(handle, key, nextProps[key]);
+    }
+  }
+}
+
+// There are no portals, and the typings leave `now` out.
+type Implemented = Omit<EngineHostConfig, 'preparePortalMount'> & {
+  now?(): number;
+};
+
+export const hostConfig: Implemented = {
+  supportsMutation: true,
+  supportsPersistence: false,
+  supportsHydration: false,
+  isPrimaryRenderer: true,
+  noTimeout: -1,
+  warnsIfNotActing: false,
+
+  // --- Context (we carry none) ---
+  getRootHostContext() {
+    return {};
+  },
+  getChildHostContext(parentContext) {
+    return parentContext;
+  },
+  getPublicInstance(instance) {
+    return instance;
+  },
+
+  // --- Commit lifecycle ---
+  // These two bracket React's mutation phase exactly, which is the only place the reconciler touches
+  // the bridge — so on an instrumented build they are what makes the marshaling bucket cover the JS
+  // glue (applyProps, style flattening) and not just the NativeUI calls it ends up making.
+  prepareForCommit() {
+    NativeUI.perfMarshalBegin?.();
+    return null;
+  },
+  resetAfterCommit() {
+    NativeUI.perfMarshalEnd?.();
+    NativeUI.commit();
+  },
+
+  // --- Creation ---
+  createInstance(type, props) {
+    // A raster-fallback <Svg source> becomes a real Image node (the SVG was rasterized at build time).
+    const raster = rasterSvgArtifact(type, props);
+    if (raster) {
+      const handle = NativeUI.createNode('Image');
+      if (handle === FAILED_CREATE) return nextFailedInstance--;
+      applyProps('Image', handle, rasterImageProps(props, raster));
+      applyEvents(handle, null, props);
+      return handle;
+    }
+    const handle = NativeUI.createNode(type);
+    if (handle === FAILED_CREATE) return nextFailedInstance--;
+    const flatStyle = applyProps(type, handle, props);
+    applyTextSpans(type, handle, props, flatStyle);
+    applyVectorOps(type, handle, props);
+    applyEvents(handle, null, props);
+    return handle;
+  },
+  createTextInstance(text) {
+    // Raw text is only legal inside <Text> (handled via shouldSetTextContent). This fallback
+    // wraps stray text in a Text node so it still renders rather than crashing.
+    const handle = NativeUI.createNode('Text');
+    NativeUI.setProps(handle, {text: String(text)});
+    return handle;
+  },
+  appendInitialChild(parent, child) {
+    NativeUI.appendChild(parent, child);
+    adoptIfOrphan(parent, child);
+  },
+  finalizeInitialChildren() {
+    return false;
+  },
+  shouldSetTextContent(type, props) {
+    // Own the whole subtree for any flattenable <Text> (strings, interpolation, nested <Text>): React
+    // skips mounting children and we render them via the node's text + spans. Non-flattenable content
+    // (e.g. a <View> inside <Text>) returns false, falling back to mounted child instances.
+    // <Svg> also owns its subtree: the shape children are flattened into the vector op-tape
+    // (applyVectorOps), never mounted as host nodes.
+    return type === 'Svg' || (type === 'Text' && isTextContent(props.children));
+  },
+
+  // --- Mutation ---
+  appendChild(parent, child) {
+    NativeUI.appendChild(parent, child);
+    adoptIfOrphan(parent, child);
+  },
+  appendChildToContainer(container, child) {
+    NativeUI.appendChild(container, child);
+  },
+  insertBefore(parent, child, beforeChild) {
+    NativeUI.insertBefore(parent, child, beforeChild);
+    adoptIfOrphan(parent, child);
+  },
+  insertInContainerBefore(container, child, beforeChild) {
+    NativeUI.insertBefore(container, child, beforeChild);
+  },
+  removeChild(parent, child) {
+    NativeUI.removeChild(parent, child);
+    orphansOf.get(parent)?.delete(child);
+    NativeUI.destroyNode(child);
+    forgetBindings(child);
+  },
+  removeChildFromContainer(container, child) {
+    NativeUI.removeChild(container, child);
+    NativeUI.destroyNode(child);
+    forgetBindings(child);
+  },
+  clearContainer() {
+    // Children are removed individually via removeChildFromContainer.
+  },
+  prepareUpdate(instance, type, oldProps, newProps) {
+    // Runs in the render phase. null → React schedules no Update effect and commitUpdate never
+    // fires for this node — the win that makes an unchanged re-render bridge-free.
+    return diffUpdate(type, oldProps, newProps);
+  },
+  commitUpdate(instance, payload, type, prevProps, nextProps) {
+    const raster = rasterSvgArtifact(type, nextProps);
+    if (raster) {
+      // The Svg instance is an Image node (raster fallback); re-apply as image props, never vector ops.
+      if (payload.props)
+        applyProps('Image', instance, rasterImageProps(nextProps, raster));
+      if (payload.events) applyEvents(instance, prevProps, nextProps);
+      return;
+    }
+    // payload.spans is only ever set alongside payload.props for Text nodes (see diffUpdate), so
+    // flatStyle is defined whenever applyTextSpans actually needs it.
+    let flatStyle;
+    if (payload.props) flatStyle = applyProps(type, instance, nextProps);
+    if (payload.spans) applyTextSpans(type, instance, nextProps, flatStyle);
+    if (payload.vector) applyVectorOps(type, instance, nextProps);
+    if (payload.events) applyEvents(instance, prevProps, nextProps);
+  },
+  commitTextUpdate(textInstance, _oldText, newText) {
+    NativeUI.setProps(textInstance, {text: String(newText)});
+  },
+
+  // --- Misc required hooks (no-ops for our renderer) ---
+  detachDeletedInstance(instance) {
+    // Called for every host instance in a deleted subtree, including failed creates below its top.
+    if (instance < 0) freeOrphans(instance);
+    else forgetBindings(instance);
+  },
+  getCurrentEventPriority() {
+    return DefaultEventPriority;
+  },
+  getInstanceFromNode() {
+    return null;
+  },
+  beforeActiveInstanceBlur() {},
+  afterActiveInstanceBlur() {},
+  prepareScopeUpdate() {},
+  getInstanceFromScope() {
+    return null;
+  },
+
+  // --- Scheduling ---
+  scheduleTimeout: (callback, delay) => setTimeout(callback, delay),
+  cancelTimeout: timeoutId => clearTimeout(timeoutId),
+  supportsMicrotasks: true,
+  scheduleMicrotask:
+    typeof queueMicrotask === 'function'
+      ? queueMicrotask
+      : callback => Promise.resolve().then(callback),
+  now: () => NativeUI.now(),
+};

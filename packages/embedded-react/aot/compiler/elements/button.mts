@@ -39,7 +39,7 @@ import type {EmitOptions, Env, Scope, StateTable} from '../types.mts';
  - Constants
  ---------------------------------------------------------------------------------------------------------------------*/
 
-// Button.js's styles. Flow B has no textAlign, so the Pressable centres the label instead.
+// Button.mts's styles. Flow B has no textAlign, so the Pressable centres the label instead.
 const BUTTON_STYLE = {
   backgroundColor: '#2196F3',
   borderRadius: 2,
@@ -54,7 +54,7 @@ const TEXT_DISABLED_STYLE = {color: '#a1a1a1'};
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * <Button title onPress color disabled /> → the tree Button.js renders: a styled <Pressable> around one <Text>.
+ * <Button title onPress color disabled /> → the tree Button.mts renders: a styled <Pressable> around one <Text>.
  *
  * @param element  The <Button>, its props already checked.
  * @param scope  Compile-time constants in reach.
@@ -157,7 +157,7 @@ export function emitButton(
 }
 
 /**
- * A title as Button.js draws it, `title == null ? '' : String(title)`: worked out now when it folds, else
+ * A title as Button.mts draws it, `title == null ? '' : String(title)`: worked out now when it folds, else
  * `String(title)`, so a boolean draws as "true" or "false" rather than nothing. No value worked out at run time
  * is null, so only a ternary's branches can be, and each is worked out on its own.
  *

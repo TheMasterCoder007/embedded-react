@@ -21,9 +21,9 @@
 // through either path have to paint the same pixels. __pixel() reads the framebuffer back, so a fast
 // path that mis-read length, byte offset or stride would show up as ink in the wrong place.
 import {useRef} from 'react';
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Svg} from 'embedded-react';
-import {NativeUI} from '../../src/native-ui.js';
+import {NativeUI} from '../../src/native-ui.mts';
 import {check, report} from './harness.js';
 
 const VOP_SHAPE = 0;

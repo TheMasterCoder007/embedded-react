@@ -20,9 +20,9 @@
 // a flick `onTouchEnd={e => e.vx > 0.4 && next()}`, with no recogniser and no clock.
 //
 // Touches come from the runner's __touch(phase, x, y[, finger]): 0 down / 1 move / 2 up / 3 cancel.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
-import {NativeUI} from '../../src/native-ui.js';
+import {NativeUI} from '../../src/native-ui.mts';
 import {check, report} from './harness.js';
 
 const root = createRoot({width: screen.width, height: screen.height});

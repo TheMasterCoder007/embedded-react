@@ -77,8 +77,8 @@ const texts = (node: MockNode) =>
 
 async function mountApp() {
   const {createElement} = (await import('react')).default;
-  const {AppRegistry} = await import('../AppRegistry.js');
-  const {Alert} = await import('../Alert.js');
+  const {AppRegistry} = await import('../AppRegistry.mts');
+  const {Alert} = await import('../Alert.mts');
   AppRegistry.registerComponent('demo', () => () => createElement('View', {}));
   return Alert;
 }
@@ -172,7 +172,7 @@ describe('Alert', () => {
   });
 
   it('shows an alert raised before the app is registered', async () => {
-    const {Alert} = await import('../Alert.js');
+    const {Alert} = await import('../Alert.mts');
     Alert.alert('Early');
     await settle();
     await mountApp();

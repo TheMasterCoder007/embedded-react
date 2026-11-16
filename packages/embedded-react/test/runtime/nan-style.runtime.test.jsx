@@ -19,7 +19,7 @@
 // transform component is ignored. Built with -fsanitize=float-cast-overflow, the runner also catches a cast
 // that still sees one.
 import {useRef} from 'react';
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {
   Animated,
   Svg,

@@ -22,7 +22,7 @@
 // shapes to path ops, bakes viewBox + <G> translate/scale into coordinates, and resolves inherited
 // paint. The opcodes below MUST stay in sync with er_scene.h.
 
-import {NAMED_COLORS} from './named-colors.js';
+import {NAMED_COLORS} from './named-colors.mts';
 import type {
   ArcProps,
   CircleProps,

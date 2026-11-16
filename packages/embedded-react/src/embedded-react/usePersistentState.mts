@@ -1,0 +1,84 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// usePersistentState — a useState that survives the simulator's hot reload (see
+// tools/simulator/README.md). The simulator's build transform (persist-transform.mts) rewrites the app's plain `useState`
+// into this helper, so persistence is transparent — you normally never call this directly; it's also
+// exported for explicit use. Outside the simulator (e.g., on a device, where the host doesn't install
+// `__erPersist`) it is exactly useState, so the same app code runs everywhere.
+//
+// Values must be JSON-serializable (numbers, strings, booleans, plain objects/arrays). The simulator
+// resets the persisted state when you press R (manual reload) or restart it.
+import {useState, useCallback} from 'react';
+
+declare global {
+  /** The simulator's store of persisted state, as JSON by key. */
+  var __erPersist:
+    | {
+        get(key: string): string | undefined;
+        set(key: string, value: string): void;
+      }
+    | undefined;
+}
+
+/**
+ * Drop-in useState that persists across simulator reloads, keyed by a stable string.
+ *
+ * `key` is a stable identity for this piece of state, unique within the app. `initial` is the value, or a
+ * lazy initializer, used when nothing is persisted.
+ */
+export function usePersistentState<S>(
+  key: string,
+  initial: S | (() => S),
+): [S, (value: S | ((previous: S) => S)) => void] {
+  const [value, setValue] = useState<S>(() => {
+    const store = globalThis.__erPersist;
+    if (store) {
+      const stored = store.get(key);
+      if (stored !== undefined) {
+        try {
+          return JSON.parse(stored);
+        } catch {
+          /* corrupt/incompatible — fall back to initial */
+        }
+      }
+    }
+    return typeof initial === 'function' ? (initial as () => S)() : initial;
+  });
+
+  const setPersistedValue = useCallback(
+    (next: S | ((previous: S) => S)) => {
+      setValue(previous => {
+        const resolved =
+          typeof next === 'function'
+            ? (next as (previous: S) => S)(previous)
+            : next;
+        const store = globalThis.__erPersist;
+        if (store) {
+          try {
+            store.set(key, JSON.stringify(resolved));
+          } catch {
+            /* unserializable value — skip persistence, keep the in-memory state */
+          }
+        }
+        return resolved;
+      });
+    },
+    [key],
+  );
+
+  return [value, setPersistedValue];
+}

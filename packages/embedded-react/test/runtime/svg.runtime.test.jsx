@@ -20,9 +20,9 @@
 // NativeUI.setVectorOps -> er_node_set_vector_ops -> er_vector_render (the rasterizer runs).
 // Pixels aren't observable from JS, so we assert layout + no-crash across renders.
 import {useRef} from 'react';
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View, Svg, Path, Circle, Line, updateVector} from 'embedded-react';
-import {NativeUI} from '../../src/native-ui.js';
+import {NativeUI} from '../../src/native-ui.mts';
 import {PAINT_STRIDE} from '../../src/embedded-react/svg-ops.mts';
 import {check, report} from './harness.js';
 

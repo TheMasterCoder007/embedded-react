@@ -637,7 +637,7 @@ static bool parse_css_color(const char* text, uint32_t* out)
         return parse_rgb_func(text, out);
     }
 
-    /* Must match NAMED_COLORS in packages/embedded-react/src/embedded-react/named-colors.js. */
+    /* Must match NAMED_COLORS in packages/embedded-react/src/embedded-react/named-colors.mts. */
     static const struct
     {
         const char* name;

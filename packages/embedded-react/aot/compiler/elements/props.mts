@@ -18,7 +18,7 @@
  - Imports
  ---------------------------------------------------------------------------------------------------------------------*/
 
-import {RN_PLATFORM_NO_OPS} from '../../../src/embedded-react/warn-props.js';
+import {RN_PLATFORM_NO_OPS} from '../../../src/embedded-react/warn-props.mts';
 import {isStyleKey} from '../../style-map.mts';
 import {aotError} from '../diagnostics.mts';
 import type * as t from '@babel/types';

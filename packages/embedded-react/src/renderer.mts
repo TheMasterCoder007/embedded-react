@@ -1,0 +1,99 @@
+/*
+ * Copyright 2026 Cory Lamming
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Public renderer API: createRoot(...).render(<App/>).
+//
+// The container is a real engine View node set as the scene root; React children mount into it.
+// We use LegacyRoot (synchronous) mode so the initial render flushes without depending on the
+// async scheduler/timers — the host's frame loop then paints whatever the tree became.
+import Reconciler from 'react-reconciler';
+import {hostConfig} from './host-config.mts';
+import type {EngineHostConfig} from './host-config.mts';
+import {NativeUI} from './native-ui.mts';
+import type {HostProps} from './props.mts';
+import type {ReactNode} from 'react';
+
+// The typings ask for a portal hook, and for a second batchedUpdates argument React does not need.
+type Typed = Reconciler.Reconciler<number, number, number, never, number>;
+type Renderer = Omit<Typed, 'batchedUpdates'> & {
+  batchedUpdates<Result>(callback: () => Result, argument?: undefined): Result;
+};
+
+const reconciler = Reconciler(hostConfig as EngineHostConfig) as Renderer;
+
+const LegacyRoot = 0;
+
+// Host-initiated updates — a native event, a timer, a promise continuation — are outside any React
+// batch, so in LegacyRoot mode each setState renders and commits on its own: three animations
+// ticking on the same frame cost three renders and three engine commits to paint one frame. The
+// bridge runs the frame pump — and each native event — inside this wrapper, which puts everything a
+// frame does in one batch and leaves it as one render and one commit. Installed here rather than at
+// createRoot() so the reconciler that batches is the one that renders.
+// On an instrumented build the batcher is also where the JS phase's split gets drawn (er_perf.h):
+// `callback(firstArgument, secondArgument)` is the callback, and whatever batchedUpdates does around it is React's render. That
+// boundary is only visible from here — React flushes when it decides to, not reliably at the batch
+// call the C side can see — so marking it in C measured the call overhead and left reconcile at ~0.
+// The instrumented wrapper is chosen ONCE, here, so an ordinary build runs the plain one.
+NativeUI.setBatcher?.(
+  NativeUI.perfRenderBegin
+    ? (callback, firstArgument, secondArgument) => {
+        NativeUI.perfRenderBegin!();
+        try {
+          return reconciler.batchedUpdates(() => {
+            NativeUI.perfCallbackBegin!();
+            try {
+              return callback(firstArgument, secondArgument);
+            } finally {
+              NativeUI.perfCallbackEnd!();
+            }
+          });
+        } finally {
+          NativeUI.perfRenderEnd!();
+        }
+      }
+    : (callback, firstArgument, secondArgument) =>
+        reconciler.batchedUpdates(() =>
+          callback(firstArgument, secondArgument),
+        ),
+);
+
+/**
+ * Creates a root bound to a screen-sized container node.
+ *
+ * `containerProps` are the container View's props (e.g. width/height/backgroundColor).
+ */
+export function createRoot(containerProps?: HostProps) {
+  const container = NativeUI.createNode('View');
+  NativeUI.setProps(container, containerProps || {});
+  NativeUI.setRoot(container);
+
+  const fiberRoot = reconciler.createContainer(
+    container, // containerInfo — our root node handle
+    LegacyRoot,
+    null, // hydration callbacks
+    false, // isStrictMode
+    null, // concurrentUpdatesByDefaultOverride
+    '', // identifierPrefix
+    error => console.error('react recoverable error:', error),
+    null, // transitionCallbacks
+  );
+
+  return {
+    render(element: ReactNode) {
+      reconciler.updateContainer(element, fiberRoot, null, null);
+    },
+  };
+}

@@ -18,7 +18,7 @@
 // string into ERProps' float field instead of dropping it on the floor, and the engine resolves it
 // against the containing block. It used to reach a numeric-only reader that ignored strings, so a
 // percent-positioned node silently stacked in the corner. Expected rects come from `yoga-layout`.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

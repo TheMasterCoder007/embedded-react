@@ -52,7 +52,7 @@ beforeEach(async () => {
     keyboardFrame: () => frame,
   };
   vi.resetModules();
-  ({Keyboard} = await import('../Keyboard.js'));
+  ({Keyboard} = await import('../Keyboard.mts'));
 });
 
 describe('Keyboard', () => {

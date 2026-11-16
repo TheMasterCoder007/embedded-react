@@ -74,7 +74,7 @@ const SECTIONS_HINT =
 
 /**
  * <SectionList sections renderItem renderSectionHeader renderSectionFooter style /> → a <ScrollView> holding each
- * section's header, rows and footer as flat siblings, as SectionList.js renders it. The sections are unrolled at
+ * section's header, rows and footer as flat siblings, as SectionList.mts renders it. The sections are unrolled at
  * build time; each section's rows are a `.map` over its data, so a data that is list state is a pool of rows.
  * keyExtractor is ignored (no reconciler).
  *

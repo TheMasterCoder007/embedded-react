@@ -17,7 +17,7 @@
 // Runtime e2e: with §2 timers + job-queue pumping in place, React's passive effects (useEffect)
 // must flush. Passive effects are scheduled (not run during the commit), so they only run once the
 // host pumps — which NativeUI.tick does. This is the concrete payoff of wiring the scheduler clock.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {useEffect, useState} from 'react';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';

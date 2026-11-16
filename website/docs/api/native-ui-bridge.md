@@ -9,7 +9,7 @@ object, `NativeUI`, that the C bridge installs into the QuickJS context; each me
 what a render costs and what the host has to provide.
 
 ```text
-React reconciler  →  host-config.js  →  NativeUI.*  →  native_ui_bridge.c  →  er_scene.h
+React reconciler  →  host-config.mts  →  NativeUI.*  →  native_ui_bridge.c  →  er_scene.h
 ```
 
 ## The JavaScript side

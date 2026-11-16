@@ -18,7 +18,7 @@
 // the ARGB a CSS color parsed to — so a commit that repeats the same style doesn't re-parse it. This
 // is the churn those caches have to survive: values that keep changing, more distinct colors than the
 // cache has room for, and equal text arriving as a different string object each render.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {View} from 'embedded-react';
 import {check, report} from './harness.js';
 

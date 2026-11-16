@@ -16,7 +16,7 @@
 
 import {describe, expect, it, vi} from 'vitest';
 import {parseBackgroundImage} from '../background-image.mts';
-import {buildProps} from '../../props.js';
+import {buildProps} from '../../props.mts';
 
 const gradientOf = (value: unknown) => {
   const {gradient, problem} = parseBackgroundImage(value);

@@ -21,7 +21,7 @@
 // scroller as ordered siblings.
 //
 // Touches come from the runner's __touch(phase, x, y[, finger]): 0 down / 1 move / 2 up / 3 cancel.
-import {createRoot} from '../../src/renderer.js';
+import {createRoot} from '../../src/renderer.mts';
 import {Button, ImageBackground, SectionList, Text, View} from 'embedded-react';
 import {check, report} from './harness.js';
 
