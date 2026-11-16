@@ -95,6 +95,12 @@ foreach (qjs_aux qjs_exe qjsc run-test262 api-test lre-test function_source unic
     endif ()
 endforeach ()
 
+# quickjs.c passes a uint32_t through an int*. Where int32_t is `long` (32-bit newlib targets) those may not
+# alias, and an optimized build then loops forever on a for...of over a string.
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(qjs PRIVATE -fno-strict-aliasing)
+endif ()
+
 # A rename that collides with a local can still compile and pass the plain build, so a shadow has to warn.
 # CI makes it an error with ER_BRIDGE_WERROR_SHADOW. CFLAGS can't, as it would reach QuickJS's own shadows.
 option(ER_BRIDGE_WERROR_SHADOW "Make a shadow in the bridge an error" OFF)

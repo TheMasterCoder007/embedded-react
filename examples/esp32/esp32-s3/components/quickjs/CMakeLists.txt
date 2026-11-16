@@ -26,6 +26,9 @@ idf_component_register(
 target_compile_definitions(${COMPONENT_LIB} PRIVATE _GNU_SOURCE QJS_DISABLE_PARSER)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE
+    # quickjs.c passes a uint32_t through an int*. On xtensa those are `unsigned long` and `int`, which may not
+    # alias, so at -O2 the string iterator never advanced and a for...of over a string never ended.
+    -fno-strict-aliasing
     -Wno-error
     -Wno-format
     -Wno-unused-variable
