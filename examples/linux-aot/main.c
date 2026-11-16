@@ -301,13 +301,17 @@ int main(int argc, char** argv)
                 click_y = SDL_atoi(value);
             }
         }
+        /* The click point is in the window, as the app reads; the touch goes in at the panel point under it. */
+        int panel_click_x = click_x;
+        int panel_click_y = click_y;
+        er_sdl_window_point_to_panel(&panel_click_x, &panel_click_y);
         er_commit(); /* compute layout + hit areas before injecting taps so the first one lands */
         for (int click = 0; click < clicks; click++)
         {
-            embedded_renderer_touch(0, ER_TOUCH_DOWN, click_x, click_y);
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, panel_click_x, panel_click_y);
             er_commit();
             embedded_renderer_tick(FRAME_MS);
-            embedded_renderer_touch(0, ER_TOUCH_UP, click_x, click_y);
+            embedded_renderer_touch(0, ER_TOUCH_UP, panel_click_x, panel_click_y);
             er_commit();
             embedded_renderer_tick(FRAME_MS);
         }
@@ -346,9 +350,10 @@ int main(int argc, char** argv)
                     {
                         break;
                     }
-                    const int tap_x = SDL_atoi(cursor);
+                    int tap_x = SDL_atoi(cursor);
                     char* comma = SDL_strchr(cursor, ',');
-                    const int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+                    int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+                    er_sdl_window_point_to_panel(&tap_x, &tap_y);
                     embedded_renderer_touch(0, ER_TOUCH_DOWN, tap_x, tap_y);
                     er_commit();
                     embedded_renderer_tick(FRAME_MS);
@@ -395,7 +400,7 @@ int main(int argc, char** argv)
         }
         if (hold_ms > 0)
         {
-            embedded_renderer_touch(0, ER_TOUCH_DOWN, click_x, click_y);
+            embedded_renderer_touch(0, ER_TOUCH_DOWN, panel_click_x, panel_click_y);
             for (int elapsed = 0; elapsed < hold_ms; elapsed += FRAME_MS)
             {
                 er_commit();

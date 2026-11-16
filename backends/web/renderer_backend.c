@@ -328,15 +328,27 @@ void er_web_demo_scene(void)
 EMSCRIPTEN_KEEPALIVE
 int er_web_resize(int screen_width, int screen_height, int rotation)
 {
-    if (screen_width <= 0 || screen_height <= 0 || !set_rotation(screen_width, screen_height, rotation))
+    if (screen_width <= 0 || screen_height <= 0)
         return 0;
+    uint8_t* rgba = malloc((size_t)screen_width * (size_t)screen_height * RGBA_BYTES_PER_PIXEL);
+    if (!rgba)
+        return 0;
+    const ERDisplayRotation previous_rotation = er_get_display_rotation();
+    if (!set_rotation(screen_width, screen_height, rotation))
+    {
+        free(rgba);
+        return 0;
+    }
     if (!er_software_backend_resize(screen_width, screen_height))
+    {
+        /* The old buffers are kept, so put back the rotation they were made for. */
+        set_rotation(s_width, s_height, previous_rotation);
+        free(rgba);
         return 0;
+    }
 
-    uint8_t* resized = realloc(s_rgba, (size_t)screen_width * (size_t)screen_height * RGBA_BYTES_PER_PIXEL);
-    if (!resized)
-        return 0; /* old buffer kept; software framebuffer already resized but stays consistent on next resize */
-    s_rgba = resized;
+    free(s_rgba);
+    s_rgba = rgba;
     s_width = screen_width;
     s_height = screen_height;
 

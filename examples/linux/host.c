@@ -475,7 +475,7 @@ void er_host_screenshot(ErHost* host, const char* path)
 {
     er_host_settle(SCREENSHOT_SETTLE_FRAMES); /* let React mount + the scene render + any intro animation settle */
 
-    /* Optional taps (physical panel pixels, parity with linux-aot's ER_AOT_TAPS): tap each + re-settle. */
+    /* Optional taps in physical window pixels, as the screenshot shows them: tap each + re-settle. */
     const char* cursor = SDL_getenv("ER_TAPS");
     while (cursor && *cursor)
     {
@@ -483,9 +483,10 @@ void er_host_screenshot(ErHost* host, const char* path)
             cursor++;
         if (!*cursor)
             break;
-        const int tap_x = SDL_atoi(cursor);
+        int tap_x = SDL_atoi(cursor);
         const char* comma = SDL_strchr(cursor, ',');
-        const int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+        int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+        er_sdl_window_point_to_panel(&tap_x, &tap_y);
         embedded_renderer_touch(0, ER_TOUCH_DOWN, tap_x, tap_y);
         embedded_renderer_touch(0, ER_TOUCH_UP, tap_x, tap_y);
         er_host_settle(TAP_SETTLE_FRAMES);

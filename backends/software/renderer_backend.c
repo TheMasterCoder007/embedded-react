@@ -306,28 +306,34 @@ static void free_panel(void)
 }
 
 /**
- * @brief Points the panel at the framebuffer at 0 degrees, or allocates one of the turned shape.
+ * @brief Allocates a panel buffer for a framebuffer of this size when the rotation needs its own.
  *
- * @return true on success; false on allocation failure (the panel is then unset).
+ * @param[in]  framebuffer_width   Framebuffer width in pixels.
+ * @param[in]  framebuffer_height  Framebuffer height in pixels.
+ * @param[out] panel               The new buffer, or NULL at 0 degrees (the panel is the framebuffer).
+ * @return false on allocation failure.
  */
-static bool setup_panel(void)
+static bool allocate_panel(int framebuffer_width, int framebuffer_height, uint32_t** panel)
 {
-    free_panel();
-    const ERDisplayRotation rotation = er_get_display_rotation();
-    if (rotation == ER_ROTATION_0)
-    {
-        s_ctx.panel = s_ctx.framebuffer;
-        s_ctx.panel_width = s_ctx.framebuffer_width;
-        s_ctx.panel_height = s_ctx.framebuffer_height;
+    *panel = NULL;
+    if (er_get_display_rotation() == ER_ROTATION_0)
         return true;
-    }
+    *panel = malloc((size_t)framebuffer_width * (size_t)framebuffer_height * sizeof(uint32_t));
+    return *panel != NULL;
+}
+
+/**
+ * @brief Makes @p panel the panel, or the framebuffer when it is NULL, and sets the panel's size.
+ *
+ * @param[in] panel  A buffer from allocate_panel(); the backend owns it from here.
+ */
+static void attach_panel(uint32_t* panel)
+{
+    const ERDisplayRotation rotation = er_get_display_rotation();
     const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
-    s_ctx.panel = malloc((size_t)s_ctx.framebuffer_width * (size_t)s_ctx.framebuffer_height * sizeof(uint32_t));
-    if (!s_ctx.panel)
-        return false;
+    s_ctx.panel = panel ? panel : s_ctx.framebuffer;
     s_ctx.panel_width = swapped ? s_ctx.framebuffer_height : s_ctx.framebuffer_width;
     s_ctx.panel_height = swapped ? s_ctx.framebuffer_width : s_ctx.framebuffer_height;
-    return true;
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -339,18 +345,19 @@ bool er_software_backend_init(int framebuffer_width, int framebuffer_height)
     if (framebuffer_width <= 0 || framebuffer_height <= 0)
         return false;
 
+    uint32_t* panel = NULL;
+    if (!allocate_panel(framebuffer_width, framebuffer_height, &panel))
+        return false;
     s_ctx.framebuffer = malloc((size_t)framebuffer_width * (size_t)framebuffer_height * sizeof(uint32_t));
     if (!s_ctx.framebuffer)
+    {
+        free(panel);
         return false;
+    }
 
     s_ctx.framebuffer_width = framebuffer_width;
     s_ctx.framebuffer_height = framebuffer_height;
-    if (!setup_panel())
-    {
-        free(s_ctx.framebuffer);
-        s_ctx.framebuffer = NULL;
-        return false;
-    }
+    attach_panel(panel);
     er_software_clear(OPAQUE_BLACK); /* opaque black, like a freshly-cleared panel */
 
     s_backend.fill_rect = fill_rect_cb;
@@ -381,18 +388,24 @@ bool er_software_backend_resize(int framebuffer_width, int framebuffer_height)
     if (framebuffer_width <= 0 || framebuffer_height <= 0)
         return false;
 
+    /* Both buffers are allocated before anything changes, so a failure leaves the old ones in place. */
+    uint32_t* panel = NULL;
+    if (!allocate_panel(framebuffer_width, framebuffer_height, &panel))
+        return false;
     uint32_t* resized =
         realloc(s_ctx.framebuffer, (size_t)framebuffer_width * (size_t)framebuffer_height * sizeof(uint32_t));
     if (!resized)
-        return false; /* old framebuffer is left intact on failure */
+    {
+        free(panel);
+        return false;
+    }
 
-    if (s_ctx.panel == s_ctx.framebuffer)
-        s_ctx.panel = resized; /* setup_panel() must not free the realloc'd block */
+    if (s_ctx.panel != s_ctx.framebuffer)
+        free(s_ctx.panel);
     s_ctx.framebuffer = resized;
     s_ctx.framebuffer_width = framebuffer_width;
     s_ctx.framebuffer_height = framebuffer_height;
-    if (!setup_panel())
-        return false;
+    attach_panel(panel);
     er_software_clear(OPAQUE_BLACK);
     return true;
 }
