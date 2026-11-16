@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 
+// @ts-check
+
 // create-embedded-react — scaffold a fresh embedded-react app.
 //
 //   npm create embedded-react@latest my-app                       # minimal starter
@@ -243,12 +245,18 @@ if (existsSync(destinationDir) && readdirSync(destinationDir).length) {
 }
 
 const TEXT_FILE = /\.(jsx?|tsx?|json|md)$/;
+/** @param {string} text */
 const subst = text =>
   text
     .replaceAll('__APP_NAME__', packageName)
     .replaceAll('__ER_VERSION__', `^${embeddedReactVersion}`);
 
-/** Copy template → dest, substituting placeholders in text files and restoring the dotfile name. */
+/**
+ * Copy template → dest, substituting placeholders in text files and restoring the dotfile name.
+ *
+ * @param {string} source
+ * @param {string} destination
+ */
 function copyDir(source, destination) {
   mkdirSync(destination, {recursive: true});
   for (const name of readdirSync(source)) {
@@ -270,6 +278,8 @@ function copyDir(source, destination) {
  * Normalize the scaffolded package.json: adopt the project name, reset the version, mark it private, and
  * pin embedded-react to this scaffolder's version (lockstep). This is what makes a demo — a real project
  * with its own name and a concrete dependency version — into a fresh <my-app> starter.
+ *
+ * @param {string} dir
  */
 function finalizePackageJson(dir) {
   const packageJsonPath = join(dir, 'package.json');
@@ -286,6 +296,9 @@ function finalizePackageJson(dir) {
 /**
  * Copies in the packages the template depends on by a `file:` path outside its folder, and points the project at the
  * copies. A published template has them already (sync-templates.mjs); a demo scaffolded straight from a clone doesn't.
+ *
+ * @param {string} templateDirectory
+ * @param {string} projectDirectory
  */
 function copyLocalPackages(templateDirectory, projectDirectory) {
   const packageJsonPath = join(projectDirectory, 'package.json');

@@ -1,4 +1,4 @@
-# Release — fires on a pushed version tag (vX.Y.Z, made by `node tools/release.mjs X.Y.Z`). Gates that the
+# Release — fires on a pushed version tag (vX.Y.Z, made by `node tools/release.mts X.Y.Z`). Gates that the
 # the committed version matches the tag, re-runs the fast checks, then publishes the SAME version to all channels.
 # Each publisher step is gated, so you can enable channels incrementally.
 #
@@ -46,13 +46,13 @@ jobs:
           # token exchange silently fails and npm falls back to static auth (→ ENEEDAUTH / E404).
 
       # The release gate: the committed VERSION + every synced artifact must equal the tag (minus the 'v').
-      # `node tools/release.mjs` makes this true by construction; this catches a hand-made / mismatched tag.
+      # `node tools/release.mts` makes this true by construction; this catches a hand-made / mismatched tag.
       - name: Gate — tag matches committed version
-        run: node tools/sync-version.mjs --check "${GITHUB_REF_NAME#v}"
+        run: node tools/sync-version.mts --check "${GITHUB_REF_NAME#v}"
 
       # Gate: the tagged commit must be on master. This workflow fires on the TAG, not a branch, so without
       # this a tag cut on a feature branch would publish off-branch code (and dangle once the branch is
-      # squash/rebase-merged). release.mjs also refuses to run off the default branch; this is the
+      # squash/rebase-merged). release.mts also refuses to run off the default branch; this is the
       # server-side net that also catches a hand-made or force-pushed tag.
       - name: Gate — released commit is on master
         run: |
@@ -82,7 +82,7 @@ jobs:
 
       # Build the prebuilt WASM simulator (engine + QuickJS + backends → embedded-react.{js,wasm}) and stage
       # it into the npm package's sim/ dir so `npx embedded-react dev` ships ready-to-run — consumers need no
-      # Emscripten. Only when publishing npm (it's a few-minute emsdk build). build.mjs derives the toolchain
+      # Emscripten. Only when publishing npm (it's a few-minute emsdk build). build.mts derives the toolchain
       # from $EMSDK and uses Unix Makefiles on Linux.
       - name: Set up Emscripten
         if: ${{ vars.PUBLISH_NPM == 'true' }}
@@ -91,14 +91,14 @@ jobs:
           version: 4.0.13
       - name: Build + stage the prebuilt WASM simulator
         if: ${{ vars.PUBLISH_NPM == 'true' }}
-        run: node tools/web-sim/build.mjs
+        run: node tools/web-sim/build.mts
 
       # Gate the publish on the packaged consumer flow: pack → install into a throwaway app → build the
       # device artifact both ways. Reuses the wasm staged above, so this is the cheap, last line of defense
       # against shipping a package that fails the moment a real user runs `embedded-react build`.
       - name: Consumer smoke (pack + install + build)
         if: ${{ vars.PUBLISH_NPM == 'true' }}
-        run: node tools/consumer-smoke.mjs
+        run: node tools/consumer-smoke.mts
 
       # --- Channel 1: npm (OIDC Trusted Publishing — no token; provenance is automatic) ---
       # Enable by setting repo variable PUBLISH_NPM=true AFTER configuring the trusted publisher on npmjs.com.
@@ -117,9 +117,9 @@ jobs:
             echo "$pkg@$ver already published — skipping"
           else
             # Publish the staged copy: the same files, with the TypeScript compiled to JavaScript, since an
-            # installed package cannot run TypeScript (tools/stage-npm-package.mjs). Assigned first, so a
+            # installed package cannot run TypeScript (tools/stage-npm-package.mts). Assigned first, so a
             # failed staging stops the step instead of publishing an empty path.
-            staged=$(node ../../tools/stage-npm-package.mjs)
+            staged=$(node ../../tools/stage-npm-package.mts)
             npm publish "$staged" --provenance --access public
           fi
 

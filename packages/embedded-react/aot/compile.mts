@@ -66,7 +66,7 @@
  *   compiler/check.mts           the typing and check passes — what lowering recorded, run in order
  *   compiler/package/*.mts       the package backend: the IR as a Flow B program, its container and report
  *
- * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mjs
+ * The compiler is TypeScript (.mts), which Node runs by stripping the types. tools/stage-npm-package.mts
  * compiles it to JavaScript for the npm package.
  */
 

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-// bundle-app.mjs — bundle a demo's JSX into a Flow A app bundle for the WASM simulator.
+// bundle-app.mts — bundle a demo's JSX into a Flow A app bundle for the WASM simulator.
 //
-//   node tools/web-sim/bundle-app.mjs [demo]      → tools/web-sim/public/app.js   (default: watch-face)
+//   node tools/web-sim/bundle-app.mts [demo]      → tools/web-sim/public/app.js   (default: watch-face)
 //
 // One-shot esbuild (the same config tools/simulator's sim.mts uses): bundles demos/<demo>/index.jsx (or .tsx) with
 // React + the reconciler + the embedded-react library into a single IIFE the host page fetches and hands to
@@ -24,7 +24,7 @@
 // images/fonts + an asset pack + esbuild --watch hot reload land in W3.
 
 import {createRequire} from 'node:module';
-import {fileURLToPath, pathToFileURL} from 'node:url';
+import {fileURLToPath} from 'node:url';
 import {dirname, resolve} from 'node:path';
 import {existsSync, mkdirSync} from 'node:fs';
 
@@ -34,15 +34,13 @@ const PACKAGE_DIR = resolve(REPO, 'packages/embedded-react'); // where esbuild +
 
 // esbuild + react + the reconciler are installed in the JS package, not here — resolve from there.
 const require = createRequire(resolve(PACKAGE_DIR, 'package.json'));
-const {build} = require('esbuild');
+const {build}: typeof import('esbuild') = require('esbuild');
 const demo = process.argv[2] || process.env.DEMO || 'watch-face';
 const demoDir = resolve(REPO, 'demos', demo);
-const {demoFile} = await import(
-  pathToFileURL(resolve(PACKAGE_DIR, 'aot/demo-file.mts')).href
-);
-const {loadAppFile, loadDependencyFile} = await import(
-  pathToFileURL(resolve(PACKAGE_DIR, 'aot/app-file-loader.mts')).href
-);
+const {demoFile} =
+  await import('../../packages/embedded-react/aot/demo-file.mts');
+const {loadAppFile, loadDependencyFile} =
+  await import('../../packages/embedded-react/aot/app-file-loader.mts');
 const entry = demoFile(demoDir, 'index');
 const outfile = resolve(HERE, 'public', 'app.js');
 
@@ -83,7 +81,7 @@ try {
     logLevel: 'info',
   });
   console.log(`✓ bundled demos/${demo} → tools/web-sim/public/app.js`);
-} catch (error) {
+} catch (error: any) {
   console.error(`bundle failed: ${error.message}`);
   process.exit(1);
 }

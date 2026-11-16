@@ -13,10 +13,10 @@
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc",
-    "sync": "node scripts/sync-repo-docs.mjs",
+    "sync": "node scripts/sync-repo-docs.mts",
     "prestart": "npm run sync && npm run playground",
     "prebuild": "npm run sync && npm run playground",
-    "playground": "node scripts/build-playground.mjs"
+    "playground": "node scripts/build-playground.mts"
   },
   "dependencies": {
     "@codemirror/lang-javascript": "6.2.5",

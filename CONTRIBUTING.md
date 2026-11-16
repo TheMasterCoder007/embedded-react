@@ -17,7 +17,7 @@ The short version:
   repository root (`npm install`, then `npm run format`). Every function carries a description,
   its parameters and its return value; comments say what the code does, not its history.
 - **Changes that need more than code.** A user-facing change gets a bullet under `## [Unreleased]`
-  in `CHANGELOG.md`; a version-bearing file goes through `tools/sync-version.mjs`; a new prop needs
+  in `CHANGELOG.md`; a version-bearing file goes through `tools/sync-version.mts`; a new prop needs
   the bridge tables, the type declarations and the AOT compiler to agree; a new engine feature needs
   a CTest case; a change that affects a board is checked on that board and says so in the pull
   request.

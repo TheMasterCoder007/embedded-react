@@ -41,7 +41,7 @@ jobs:
       - run: npx vitest run
       - run: npm run typecheck
       - name: Version + LICENSE/NOTICE in sync with VERSION
-        run: node ../../tools/sync-version.mjs --check
+        run: node ../../tools/sync-version.mts --check
 
   engine:
     name: Engine build + ctests
@@ -279,9 +279,9 @@ jobs:
         with:
           version: 4.0.13
       - name: Build the prebuilt WASM simulator
-        run: node tools/web-sim/build.mjs
+        run: node tools/web-sim/build.mts
       - name: Install the package's dependencies
         working-directory: packages/embedded-react
         run: npm ci
       - name: Pack → install → build (Flow A + AOT)
-        run: node tools/consumer-smoke.mjs
+        run: node tools/consumer-smoke.mts

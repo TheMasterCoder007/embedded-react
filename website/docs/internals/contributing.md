@@ -55,7 +55,7 @@ files, checked strictly by `npm run typecheck`. Node runs them as they are by st
 so running the compiler or the JS tests from source needs Node 22.18 or later, and only erasable
 syntax is allowed: no `enum`, `namespace` or parameter properties, a relative import names the real
 file (`./switch.mts`), and a type-only import is written `import type`. The published package ships
-JavaScript: `tools/stage-npm-package.mjs` compiles the `.mts` files when a release packs it.
+JavaScript: `tools/stage-npm-package.mts` compiles the `.mts` files when a release packs it.
 
 ## Documentation conventions
 
@@ -92,7 +92,7 @@ round goes stale the moment the code moves; the git log has the history.
 - **Anything user-facing gets a changelog bullet** under `## [Unreleased]`, short and high level,
   before the change is finished. See [Releasing](./releasing.md).
 - **Anything that changes a version-bearing file** (a manifest, an install pin) must go through
-  `sync-version.mjs`; CI checks for drift.
+  `sync-version.mts`; CI checks for drift.
 - **A new prop or event** needs the bridge's tables, the package's type declarations and the AOT
   compiler to agree; `npm test` has a parity test over the tables, and the AOT either lowers the
   prop or rejects it by name.

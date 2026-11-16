@@ -5,7 +5,7 @@
       "name": "wasm-sim",
       "runtimeExecutable": "node",
       "runtimeArgs": [
-        "tools/web-sim/serve.mjs",
+        "tools/web-sim/serve.mts",
         "--port",
         "3333"
       ],
@@ -24,7 +24,7 @@
       "name": "thermostat-websim",
       "runtimeExecutable": "node",
       "runtimeArgs": [
-        "tools/web-sim/dev.mjs",
+        "tools/web-sim/dev.mts",
         "thermostat",
         "--port",
         "3336"
@@ -35,7 +35,7 @@
       "name": "watch-face-websim",
       "runtimeExecutable": "node",
       "runtimeArgs": [
-        "tools/web-sim/dev.mjs",
+        "tools/web-sim/dev.mts",
         "watch-face",
         "--port",
         "3337"

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-// sync-version.mjs — propagate the repo-root VERSION (the single source of truth) into every artifact that
+// sync-version.mts — propagate the repo-root VERSION (the single source of truth) into every artifact that
 // carries a version, so the LOCKSTEP ship (engine + npm + ESP-IDF + PlatformIO) never drifts.
 //
-//   node tools/sync-version.mjs           # write VERSION into all targets
-//   node tools/sync-version.mjs --check   # verify all targets already match VERSION (CI gate; non-zero on drift)
+//   node tools/sync-version.mts           # write VERSION into all targets
+//   node tools/sync-version.mts --check   # verify all targets already match VERSION (CI gate; non-zero on drift)
 //
-// The exact set of files a version bump touches is exported as versionedFiles() so tools/release.mjs can
+// The exact set of files a version bump touches is exported as versionedFiles() so tools/release.mts can
 // stage precisely those — one source of truth, so the writer and the release commit can never disagree.
 // To release: edit VERSION, run this, commit, tag vX.Y.Z.
 
@@ -32,13 +32,20 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION_FILE = resolve(ROOT, 'VERSION');
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 
+/** One file that carries the version: how to read it back and how to write it. */
+interface Manifest {
+  path: string;
+  read: (text: string) => string | undefined;
+  write: (text: string, version: string) => string;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Targets: the single source of truth for which files carry the version
  ---------------------------------------------------------------------------------------------------------------------*/
 
 // JSON manifests — the "version" field (preserve 2-space formatting + trailing newline).
-const jsonRead = text => JSON.parse(text).version;
-const jsonWrite = (text, version) => {
+const jsonRead = (text: string) => JSON.parse(text).version;
+const jsonWrite = (text: string, version: string) => {
   const manifest = JSON.parse(text);
   manifest.version = version;
   return JSON.stringify(manifest, null, 2) + '\n';
@@ -48,7 +55,7 @@ const jsonWrite = (text, version) => {
 // and `packages[""].version` — and drift if only `npm install` ever touches them. Sync both. (A
 // JSON.parse → re-stringify roundtrip of an npm-written lockfile is byte-identical, so the only change
 // is the version lines.)
-const lockRead = text => {
+const lockRead = (text: string) => {
   const lockfile = JSON.parse(text);
   const topVersion = lockfile.version;
   const packageVersion = lockfile.packages?.['']?.version;
@@ -56,7 +63,7 @@ const lockRead = text => {
     return `${topVersion} (lockfile versions disagree)`;
   return packageVersion || topVersion;
 };
-const lockWrite = (text, version) => {
+const lockWrite = (text: string, version: string) => {
   const lockfile = JSON.parse(text);
   lockfile.version = version;
   if (lockfile.packages && lockfile.packages[''])
@@ -66,26 +73,26 @@ const lockWrite = (text, version) => {
 
 // idf_component.yml — a `version: "x"` line (regex, no YAML dependency).
 const YAML_VERSION = /^version:\s*["']?([^"'\n]+)["']?\s*$/m;
-const yamlRead = text => YAML_VERSION.exec(text)?.[1]?.trim();
-const yamlWrite = (text, version) =>
+const yamlRead = (text: string) => YAML_VERSION.exec(text)?.[1]?.trim();
+const yamlWrite = (text: string, version: string) =>
   text.replace(YAML_VERSION, `version: "${version}"`);
 
 // The runtime's idf_component.yml also pins the engine component, which ships at the same version.
 const YAML_ENGINE_PIN = /(embedded-react:\s*\n\s*version:\s*")(\d+\.\d+\.\d+)/;
-const runtimeYamlRead = text => {
+const runtimeYamlRead = (text: string) => {
   const own = yamlRead(text);
   const engine = YAML_ENGINE_PIN.exec(text)?.[2];
   if (!own || !engine) return undefined;
   return engine === own ? own : `${own} (engine pin is ${engine})`;
 };
-const runtimeYamlWrite = (text, version) =>
+const runtimeYamlWrite = (text: string, version: string) =>
   yamlWrite(text, version).replace(YAML_ENGINE_PIN, `$1${version}`);
 
 // er_version.h — the C single-source-of-truth header; regenerate the macro block.
 const HEADER_VERSION = /#define ER_VERSION_STRING "([^"]+)"/;
-const headerRead = text => HEADER_VERSION.exec(text)?.[1];
-const headerWrite = (text, version) => {
-  const [, major, minor, patch] = SEMVER.exec(version);
+const headerRead = (text: string) => HEADER_VERSION.exec(text)?.[1];
+const headerWrite = (text: string, version: string) => {
+  const [, major, minor, patch] = SEMVER.exec(version)!;
   return text
     .replace(
       /#define ER_VERSION_MAJOR \d+/,
@@ -115,7 +122,7 @@ const README_PINS = [
   /(embedded-react-runtime\^)(\d+\.\d+\.\d+)/g, // ESP-IDF add-dependency, Flow B
   /(embedded-react\.git#v)(\d+\.\d+\.\d+)/g, // PlatformIO lib_deps
 ];
-const readmeRead = text => {
+const readmeRead = (text: string) => {
   const found = README_PINS.map(pattern =>
     pattern.global
       ? [...text.matchAll(pattern)].map(match => match[2])
@@ -127,7 +134,7 @@ const readmeRead = text => {
     ? versions[0]
     : `${versions[0]} (install pins disagree)`;
 };
-const readmeWrite = (text, version) =>
+const readmeWrite = (text: string, version: string) =>
   README_PINS.reduce(
     (updated, pattern) => updated.replace(pattern, `$1${version}`),
     text,
@@ -137,11 +144,11 @@ const readmeWrite = (text, version) =>
 // `create-embedded-react --template <name>` starters ship. Each pins `embedded-react` in dependencies;
 // keep it in lockstep so a checked-out demo installs the matching release. (The scaffolder re-pins to its
 // own version at scaffold time, but the source pin must not drift, or --check fails.)
-const depPinRead = dependency => text => {
+const depPinRead = (dependency: string) => (text: string) => {
   const pin = JSON.parse(text).dependencies?.[dependency];
   return pin ? pin.replace(/^[\^~]/, '') : undefined;
 };
-const depPinWrite = dependency => (text, version) => {
+const depPinWrite = (dependency: string) => (text: string, version: string) => {
   const manifest = JSON.parse(text);
   if (manifest.dependencies?.[dependency])
     manifest.dependencies[dependency] = `^${version}`;
@@ -154,25 +161,26 @@ const depPinWrite = dependency => (text, version) => {
 // `GIT_TAG <space> vX.Y.Z` form (the embedded_react declare) — NOT QuickJS's `GIT_TAG ${QUICKJS_GIT_TAG}`
 // (no literal version) — so the QuickJS pin is left untouched.
 const GIT_TAG_PIN = /(GIT_TAG\s+v)(\d+\.\d+\.\d+)/;
-const gitTagRead = text => GIT_TAG_PIN.exec(text)?.[2];
-const gitTagWrite = (text, version) =>
+const gitTagRead = (text: string) => GIT_TAG_PIN.exec(text)?.[2];
+const gitTagWrite = (text: string, version: string) =>
   text.replace(GIT_TAG_PIN, `$1${version}`);
 
 // Docs pages that show an app's package.json pin `embedded-react` too. Every page with a pin is found
 // by looking, so a new guide needs no entry here.
 const DOCS_DIR = 'website/docs';
-const GENERATED_DOCS = ['changelog.md', 'roadmap.md']; // copied in by website/scripts/sync-repo-docs.mjs
+const GENERATED_DOCS = ['changelog.md', 'roadmap.md']; // copied in by website/scripts/sync-repo-docs.mts
 const DOC_PIN = /("embedded-react":\s*"[\^~]?)(\d+\.\d+\.\d+)/g;
-const docPinRead = text => {
+const docPinRead = (text: string) => {
   const versions = [...text.matchAll(DOC_PIN)].map(match => match[2]);
   if (!versions.length) return undefined;
   return versions.every(version => version === versions[0])
     ? versions[0]
     : `${versions[0]} (pins disagree)`;
 };
-const docPinWrite = (text, version) => text.replace(DOC_PIN, `$1${version}`);
+const docPinWrite = (text: string, version: string) =>
+  text.replace(DOC_PIN, `$1${version}`);
 const docPinManifests = () =>
-  readdirSync(resolve(ROOT, DOCS_DIR), {recursive: true})
+  readdirSync(resolve(ROOT, DOCS_DIR), {recursive: true, encoding: 'utf8'})
     .map(file => file.replaceAll('\\', '/'))
     .filter(file => /\.mdx?$/.test(file) && !GENERATED_DOCS.includes(file))
     .sort()
@@ -185,20 +193,20 @@ const docPinManifests = () =>
 
 // The website installs the published package, so it needs the same Node floor.
 const NODE_FLOOR_SOURCE = 'packages/embedded-react/package.json';
-const nodeFloor = path =>
+const nodeFloor = (path: string) =>
   JSON.parse(readFileSync(resolve(ROOT, path), 'utf8')).engines?.node;
 // The lockfile repeats its package's engines, under the root entry.
 const NODE_FLOOR_COPIES = [
-  {path: 'website/package.json', rootPackage: manifest => manifest},
+  {path: 'website/package.json', rootPackage: (manifest: any) => manifest},
   {
     path: 'website/package-lock.json',
-    rootPackage: lockfile => lockfile.packages[''],
+    rootPackage: (lockfile: any) => lockfile.packages[''],
   },
 ];
 
 // Version-bearing manifests — each independently published artifact, the engine's C header, the README
 // install pins, and the example fetch-template tags.
-const MANIFESTS = [
+const MANIFESTS: Manifest[] = [
   {
     path: 'packages/embedded-react/package.json',
     read: jsonRead,
@@ -244,8 +252,9 @@ const MANIFESTS = [
   // hash until then, so it is updated by hand afterwards; pull requests run `npm ci` to catch it).
   {
     path: 'website/package.json',
-    read: text => JSON.parse(text).devDependencies?.['embedded-react'],
-    write: (text, version) => {
+    read: (text: string) =>
+      JSON.parse(text).devDependencies?.['embedded-react'],
+    write: (text: string, version: string) => {
       const manifest = JSON.parse(text);
       manifest.devDependencies['embedded-react'] = version;
       return JSON.stringify(manifest, null, 2) + '\n';
@@ -287,12 +296,12 @@ const legalMirrors = () =>
 
 /**
  * @brief The complete set of repo-relative files a version bump touches: the VERSION file, every
- *        version-bearing manifest, and each package's mirrored LICENSE/NOTICE. tools/release.mjs imports
+ *        version-bearing manifest, and each package's mirrored LICENSE/NOTICE. tools/release.mts imports
  *        this so it stages exactly the files this script writes — the two can never drift apart.
  *
  * @return Array of repo-root-relative paths.
  */
-export function versionedFiles() {
+export function versionedFiles(): string[] {
   return [
     ...new Set([
       'VERSION',
@@ -309,7 +318,7 @@ export function versionedFiles() {
  *
  * @return Array of descriptions, each starting with a repo-root-relative path; empty when everything is there.
  */
-export function missingTargets() {
+export function missingTargets(): string[] {
   const missing = ['VERSION', ...LEGAL_FILES, ...PACKAGE_DIRS].filter(
     path => !existsSync(resolve(ROOT, path)),
   );
@@ -354,7 +363,7 @@ function main() {
   // Checked before anything is written, so a failed --set leaves the tree as it was.
   const missing = missingTargets();
   if (missing.length) {
-    console.error('Listed in tools/sync-version.mjs but not found:');
+    console.error('Listed in tools/sync-version.mts but not found:');
     for (const path of missing) console.error(`  ${path}`);
     console.error('If one moved or was reworded, update that file to match.');
     process.exit(1);
@@ -373,8 +382,8 @@ function main() {
     process.exit(2);
   }
 
-  const drift = []; // { file, found } when --check finds a mismatch
-  const wrote = [];
+  const drift: {file: string; found: string | undefined}[] = []; // { file, found } when --check finds a mismatch
+  const wrote: string[] = [];
 
   // In `--check <tag>` mode the VERSION file itself must equal the tag (catches the "forgot to bump" case).
   if (check && versionArg) {
@@ -447,7 +456,7 @@ function main() {
       );
       for (const entry of drift)
         console.error(`  ${entry.file}: ${entry.found}`);
-      console.error('Run `node tools/sync-version.mjs` and commit.');
+      console.error('Run `node tools/sync-version.mts` and commit.');
       process.exit(1);
     }
     console.log(`✓ all artifacts at ${version}; LICENSE + NOTICE in sync`);
@@ -458,6 +467,6 @@ function main() {
   }
 }
 
-// Run only when executed directly (`node tools/sync-version.mjs ...`), not when imported (release.mjs).
+// Run only when executed directly (`node tools/sync-version.mts ...`), not when imported (release.mts).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
   main();

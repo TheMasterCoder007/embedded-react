@@ -6,7 +6,7 @@
 # edit reloads by re-evaluating a new bundle string with no wasm rebuild — the .wasm is built once and shipped
 # prebuilt in the npm package. See tools/web-sim/README.md.
 #
-# Build via tools/web-sim/build.mjs (which wraps emcmake), or directly:
+# Build via tools/web-sim/build.mts (which wraps emcmake), or directly:
 #   emcmake cmake -S tools/web-sim -B tools/web-sim/build -DCMAKE_BUILD_TYPE=Release
 #   cmake --build tools/web-sim/build
 # ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@ cmake_minimum_required(VERSION 3.16)
 project(embedded-react-websim C)
 
 if (NOT EMSCRIPTEN)
-    message(FATAL_ERROR "Configure with emcmake (Emscripten). See tools/web-sim/build.mjs.")
+    message(FATAL_ERROR "Configure with emcmake (Emscripten). See tools/web-sim/build.mts.")
 endif ()
 
 # Capable, desktop-class engine feature set so the browser preview is faithful (matches tools/simulator).

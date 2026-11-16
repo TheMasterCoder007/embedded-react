@@ -87,7 +87,11 @@ await esbuild.build({
 // static export (the same bake the simulator does), of which only the pack is kept.
 const SOURCE_FILE = /\.(jsx?|tsx?)$/;
 const SKIPPED_NAMES = new Set(['node_modules', 'dist', 'sim-export', 'assets']);
-const walk = (directory, baseDirectory = directory, collected = {}) => {
+const walk = (
+  directory: string,
+  baseDirectory = directory,
+  collected: Record<string, string> = {},
+) => {
   for (const name of readdirSync(directory)) {
     if (SKIPPED_NAMES.has(name)) continue;
     const entryPath = join(directory, name);

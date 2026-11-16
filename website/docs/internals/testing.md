@@ -135,7 +135,7 @@ harness packs one.
 
 ## Consumer smoke
 
-`node tools/consumer-smoke.mjs` packs the npm package, installs it into a throwaway project, and
+`node tools/consumer-smoke.mts` packs the npm package, installs it into a throwaway project, and
 runs the consumer commands: the AOT build, the TypeScript template's typecheck, and (when the
 prebuilt wasm is present) the Flow A container build. It guards the bugs the repository's own tests
 cannot see because they only appear once the package is packed and installed elsewhere: a file

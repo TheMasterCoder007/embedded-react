@@ -17,12 +17,12 @@ build the module (`emcc` on PATH, `$EMSDK`, or `em-config`; a Homebrew `emscript
 `EMSCRIPTEN_ROOT="$(em-config EMSCRIPTEN_ROOT)"` overrides the detection).
 
 ```bash
-node tools/web-sim/build.mjs          # once → public/embedded-react.{js,wasm}; also stages the package's sim/
-node tools/web-sim/dev.mjs [demo]     # watch + bake assets + hot reload → http://localhost:3333/  (default: watch-face)
+node tools/web-sim/build.mts          # once → public/embedded-react.{js,wasm}; also stages the package's sim/
+node tools/web-sim/dev.mts [demo]     # watch + bake assets + hot reload → http://localhost:3333/  (default: watch-face)
 ```
 
-`build.mjs --debug` builds `-O0 -g` with assertions. For a static preview of an already-built bundle:
-`node tools/web-sim/bundle-app.mjs [demo]` then `node tools/web-sim/serve.mjs`. The prebuilt wasm goes
+`build.mts --debug` builds `-O0 -g` with assertions. For a static preview of an already-built bundle:
+`node tools/web-sim/bundle-app.mts [demo]` then `node tools/web-sim/serve.mts`. The prebuilt wasm goes
 stale after engine changes; rebuild it.
 
 ## Layout
@@ -30,9 +30,9 @@ stale after engine changes; rebuild it.
 | File | Role |
 |---|---|
 | `CMakeLists.txt` | Emscripten build: engine + QuickJS bridge + `backends/software` + `backends/web` → the wasm module |
-| `build.mjs` | drives `cmake` with the Emscripten toolchain → `public/`, and stages the package's `sim/` |
-| `dev.mjs` | the repo dev loop over `demos/`: a thin wrapper over the shared `packages/embedded-react/sim-server.mts` |
-| `bundle-app.mjs`, `serve.mjs` | one-shot bundle and a static server, for previewing a prebuilt bundle |
+| `build.mts` | drives `cmake` with the Emscripten toolchain → `public/`, and stages the package's `sim/` |
+| `dev.mts` | the repo dev loop over `demos/`: a thin wrapper over the shared `packages/embedded-react/sim-server.mts` |
+| `bundle-app.mts`, `serve.mts` | one-shot bundle and a static server, for previewing a prebuilt bundle |
 | `index.html` | the host page: loads the module, fetches `app.js`/`assets.pack`, rAF pump → `putImageData`, pointer → touch, SSE reload |
 | `public/` | build output (gitignored) |
 

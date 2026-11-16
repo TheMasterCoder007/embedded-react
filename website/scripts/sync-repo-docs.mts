@@ -41,7 +41,7 @@ for (const {source, output, title, slug} of pages) {
     '  format: md', // CommonMark, not MDX: the root files use raw <tags> and HTML comments freely.
     '---',
     '',
-    `<!-- Generated from ${source} by scripts/sync-repo-docs.mjs. Edit the root file, not this one. -->`,
+    `<!-- Generated from ${source} by scripts/sync-repo-docs.mts. Edit the root file, not this one. -->`,
     '',
   ].join('\n');
   writeFileSync(resolve(siteDirectory, output), frontMatter + body);

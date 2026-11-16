@@ -1,11 +1,11 @@
 ---
 title: 'Releasing'
-description: 'One lockstep version, release.mjs, the tag-gated publish workflow, and how the docs site follows a release.'
+description: 'One lockstep version, release.mts, the tag-gated publish workflow, and how the docs site follows a release.'
 ---
 
 Every artifact ships at one version: the npm package and the scaffolder, the source bundle on
 GitHub, the two ESP-IDF components, the PlatformIO library, and the version pins in the READMEs and
-this site. The single source of truth is the repo-root `VERSION` file, and `tools/sync-version.mjs`
+this site. The single source of truth is the repo-root `VERSION` file, and `tools/sync-version.mts`
 propagates it everywhere it needs to appear.
 
 ## Cutting a release
@@ -13,11 +13,11 @@ propagates it everywhere it needs to appear.
 Day to day, add notes under `## [Unreleased]` in `CHANGELOG.md` as changes land. A release then is:
 
 ```bash
-node tools/release.mjs 0.15.0            # on master, nothing staged
+node tools/release.mts 0.15.0            # on master, nothing staged
 git push --follow-tags
 ```
 
-`release.mjs` does five things, in order: sets `VERSION`; runs `sync-version.mjs --set`, which
+`release.mts` does five things, in order: sets `VERSION`; runs `sync-version.mts --set`, which
 writes the version into every manifest and pin (twenty-four files at the time of writing); stamps the
 changelog, promoting `## [Unreleased]` to `## [0.15.0] - <date>` with a compare link; commits
 exactly those files as `release: v0.15.0`, never sweeping in unrelated changes; and tags `v0.15.0`.
@@ -40,10 +40,10 @@ What `sync-version` keeps in step:
 | `website/docs/**/*.md`, `*.mdx`                              | Any `"embedded-react": "^x.y.z"` pin in an example `package.json`                                                          |
 | `examples/{esp32,rp2040}/*/CMakeLists.txt`                   | The `FetchContent` tag a copied-out example fetches                                                                        |
 
-`node tools/sync-version.mjs --check` fails if any of them drifts, and CI runs it on every push,
+`node tools/sync-version.mts --check` fails if any of them drifts, and CI runs it on every push,
 so a hand-edited version cannot land. A listed file or package folder that's missing, or a version or
 install pin that's no longer in the expected form, fails every mode before anything is written. When
-you move a file or reword an install line, update `sync-version.mjs` to match.
+you move a file or reword an install line, update `sync-version.mts` to match.
 
 ## The publish workflow
 
@@ -73,7 +73,7 @@ silently and npm fall back to asking for a token.
 The site deploys from `master` on any push that touches `website/`, the changelog, the roadmap or
 the starter template, so documentation goes live when it merges, not when a release is cut. The one
 thing that ties it to releases is the playground, which runs the published `embedded-react` at the
-version `website/package.json` pins. `release.mjs` bumps that pin in the release commit; the docs
+version `website/package.json` pins. `release.mts` bumps that pin in the release commit; the docs
 workflow then waits for that version to appear on npm (the publish runs in parallel from the same
 push) before installing and building. The lockfile cannot carry the hash of an unpublished tarball,
 so that push uses `npm install` and the lockfile is left one release behind. Pull requests use
