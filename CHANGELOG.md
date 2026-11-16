@@ -15,6 +15,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Engine: `er_set_display_rotation()` runs the app at 90, 180 or 270 degrees to a panel mounted against its
   scan direction. Touches and dirty rects are in panel coordinates, and `er_rotate_copy()` presents a rect from
   a logical-shape buffer.
+- Simulators and desktop hosts take a display rotation (`ER_ROTATION`, or the web simulator's rotate control and
+  `?rotation=`), so a rotated panel can be checked off-device. The SDL and software backends present through
+  `er_rotate_copy()`.
+- Flow A and Flow B take `screen` from `er_get_display_size()` when the host leaves the size at 0.
 
 ## [0.22.1] - 2026-11-16
 ### Fixed

@@ -18,6 +18,7 @@
 #include "native_renderer.h"
 #include "sdl_backend.h"
 #include <SDL2/SDL.h>
+#include <stdlib.h>
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Configuration
@@ -52,6 +53,15 @@
 #define DIRTY_OVERLAY_GREEN 220
 #define DIRTY_OVERLAY_BLUE 0
 
+/** @brief Dirty rects a rotated present asks for; more collapse to their bounds. */
+#define PRESENT_RECTS_MAX 16
+
+/** @brief Bytes per ARGB8888 pixel. */
+#define BYTES_PER_PIXEL 4
+
+/** @brief A quarter turn in degrees, for SDL_RenderCopyEx() to show the panel as it is mounted. */
+#define MOUNT_ANGLE_QUARTER 90.0
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -68,6 +78,13 @@ typedef struct
     int scratch_width;                 /**< Width of the scratch texture in pixels. */
     int scratch_height;                /**< Height of the scratch texture in pixels. */
     SDL_BlendMode premultiplied_blend; /**< Custom blend mode for premultiplied ARGB sources. */
+    ERDisplayRotation rotation;        /**< The display rotation at init. */
+    SDL_Texture* panel;                /**< The panel as it scans; NULL at 0 degrees, where it is the framebuffer. */
+    uint32_t* logical_pixels;          /**< CPU copy of the framebuffer, read back for er_rotate_copy(). */
+    uint32_t* panel_pixels;            /**< CPU copy of the panel, what er_rotate_copy() writes. */
+    int panel_width;                   /**< Panel width as it scans. */
+    int panel_height;                  /**< Panel height as it scans. */
+    bool painted;                      /**< Something was drawn since the last present. */
 #if ER_LCD_BANDED
     SDL_Texture* band; /**< Small render-target strip buffer (framebuffer_width × ER_LCD_BANDED_ROWS). */
     SDL_Rect strip;    /**< Screen-space rect of the strip currently being rendered. */
@@ -109,6 +126,7 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int width, int height, voi
     uint8_t blue = (uint8_t)(argb);
     SDL_Rect rect = {x, y, width, height};
 
+    context->painted = true;
     SDL_SetRenderDrawBlendMode(context->renderer, alpha == ALPHA_OPAQUE ? SDL_BLENDMODE_NONE : SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(context->renderer, red, green, blue, alpha);
     SDL_RenderFillRect(context->renderer, &rect);
@@ -134,6 +152,7 @@ static void copy_rect_cb(const void* source, int source_stride_bytes, int x, int
     SDL_Rect source_rect = {0, 0, width, height};
     SDL_Rect destination_rect = {x, y, width, height};
 
+    context->painted = true;
     SDL_UpdateTexture(context->scratch, &source_rect, source, source_stride_bytes);
     SDL_SetTextureColorMod(context->scratch, CHANNEL_MAX, CHANNEL_MAX, CHANNEL_MAX);
     SDL_SetTextureAlphaMod(context->scratch, ALPHA_OPAQUE);
@@ -163,6 +182,7 @@ static void blend_rect_cb(
     SDL_Rect source_rect = {0, 0, width, height};
     SDL_Rect destination_rect = {x, y, width, height};
 
+    context->painted = true;
     SDL_UpdateTexture(context->scratch, &source_rect, source, source_stride_bytes);
     /* Scaling both color and alpha channels by the same factor preserves premultiplied invariant. */
     SDL_SetTextureColorMod(context->scratch, alpha, alpha, alpha);
@@ -194,6 +214,7 @@ static void copy_rect_fmt_cb(
     SDL_Rect source_rect = {0, 0, width, height};
     SDL_Rect destination_rect = {x, y, width, height};
 
+    context->painted = true;
     if (format == ER_IMAGE_RGB565)
     {
         SDL_UpdateTexture(context->scratch565, &source_rect, source, source_stride_bytes);
@@ -224,6 +245,7 @@ static void copy_rect_fmt_cb(
 static void band_begin_cb(int x, int y, int width, int height, void* ctx)
 {
     SDLCtx* context = ctx;
+    context->painted = true;
     context->strip.x = x;
     context->strip.y = y;
     context->strip.w = width;
@@ -254,6 +276,161 @@ static void band_flush_cb(void* ctx)
     SDL_RenderCopy(context->renderer, context->band, &source_rect, &context->strip);
 }
 #endif /* ER_LCD_BANDED */
+
+/**
+ * @brief Turns a panel rect into the window rect that shows it, undoing the display rotation.
+ *
+ * @param[in] panel  Rect in panel coordinates.
+ *
+ * @return The same pixels in window (logical) coordinates.
+ */
+static SDL_Rect panel_rect_to_window(const ERRect* panel)
+{
+    SDL_Rect window = {panel->x, panel->y, panel->width, panel->height};
+    switch (s_ctx.rotation)
+    {
+        case ER_ROTATION_90:
+            window.x = panel->y;
+            window.y = s_ctx.panel_width - (panel->x + panel->width);
+            window.w = panel->height;
+            window.h = panel->width;
+            break;
+        case ER_ROTATION_180:
+            window.x = s_ctx.panel_width - (panel->x + panel->width);
+            window.y = s_ctx.panel_height - (panel->y + panel->height);
+            break;
+        case ER_ROTATION_270:
+            window.x = s_ctx.panel_height - (panel->y + panel->height);
+            window.y = panel->x;
+            window.w = panel->height;
+            window.h = panel->width;
+            break;
+        default:
+            break;
+    }
+    return window;
+}
+
+/**
+ * @brief Brings the panel texture up to date with what the last commit painted, through er_rotate_copy().
+ *
+ * Each dirty rect (panel space) is read back from the framebuffer texture as the logical rect that shows it,
+ * copied turned into the panel buffer, then uploaded. Must run while the framebuffer is the render target.
+ */
+static void update_panel(void)
+{
+    if (!s_ctx.painted)
+        return;
+    s_ctx.painted = false;
+
+    const int logical_stride = s_ctx.scratch_width * BYTES_PER_PIXEL;
+    const int panel_stride = s_ctx.panel_width * BYTES_PER_PIXEL;
+    ERRect rects[PRESENT_RECTS_MAX];
+    const int rect_count = er_get_dirty_rects(rects, PRESENT_RECTS_MAX);
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+    {
+        ERRect rect = rects[rect_index];
+        const int right = SDL_min(rect.x + rect.width, s_ctx.panel_width);
+        const int bottom = SDL_min(rect.y + rect.height, s_ctx.panel_height);
+        rect.x = SDL_max(rect.x, 0);
+        rect.y = SDL_max(rect.y, 0);
+        rect.width = right - rect.x;
+        rect.height = bottom - rect.y;
+        if (rect.width <= 0 || rect.height <= 0)
+            continue;
+
+        const SDL_Rect logical = panel_rect_to_window(&rect);
+        SDL_RenderReadPixels(s_ctx.renderer,
+                             &logical,
+                             SDL_PIXELFORMAT_ARGB8888,
+                             s_ctx.logical_pixels + (size_t)logical.y * (size_t)s_ctx.scratch_width + logical.x,
+                             logical_stride);
+        er_rotate_copy(s_ctx.logical_pixels, logical_stride, s_ctx.panel_pixels, panel_stride, BYTES_PER_PIXEL, &rect);
+        const SDL_Rect upload = {rect.x, rect.y, rect.width, rect.height};
+        SDL_UpdateTexture(s_ctx.panel,
+                          &upload,
+                          s_ctx.panel_pixels + (size_t)rect.y * (size_t)s_ctx.panel_width + rect.x,
+                          panel_stride);
+    }
+}
+
+/** @brief Draws the panel texture turned the way the panel is mounted, so the window shows the app upright. */
+static void draw_panel_mounted(void)
+{
+    /* Each turn is about the destination's top-left corner, placed so the panel lands exactly on the
+     * window's pixel grid. */
+    const SDL_Point corner = {0, 0};
+    SDL_Rect destination = {0, 0, s_ctx.panel_width, s_ctx.panel_height};
+    switch (s_ctx.rotation)
+    {
+        case ER_ROTATION_90:
+            destination.y = s_ctx.panel_width;
+            SDL_RenderCopyEx(
+                s_ctx.renderer, s_ctx.panel, NULL, &destination, -MOUNT_ANGLE_QUARTER, &corner, SDL_FLIP_NONE);
+            break;
+        case ER_ROTATION_180:
+            SDL_RenderCopyEx(s_ctx.renderer,
+                             s_ctx.panel,
+                             NULL,
+                             &destination,
+                             0.0,
+                             NULL,
+                             (SDL_RendererFlip)(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL));
+            break;
+        case ER_ROTATION_270:
+            destination.x = s_ctx.panel_height;
+            SDL_RenderCopyEx(
+                s_ctx.renderer, s_ctx.panel, NULL, &destination, MOUNT_ANGLE_QUARTER, &corner, SDL_FLIP_NONE);
+            break;
+        default:
+            break;
+    }
+}
+
+/** @brief Frees the panel texture and buffers. */
+static void destroy_panel(void)
+{
+    if (s_ctx.panel)
+    {
+        SDL_DestroyTexture(s_ctx.panel);
+        s_ctx.panel = NULL;
+    }
+    free(s_ctx.logical_pixels);
+    s_ctx.logical_pixels = NULL;
+    free(s_ctx.panel_pixels);
+    s_ctx.panel_pixels = NULL;
+}
+
+/**
+ * @brief Sets up the panel texture and buffers when the display is rotated.
+ *
+ * @return true at 0 degrees or once set up; false on a failed allocation.
+ */
+static bool create_panel(void)
+{
+    s_ctx.rotation = er_get_display_rotation();
+    const bool swapped = s_ctx.rotation == ER_ROTATION_90 || s_ctx.rotation == ER_ROTATION_270;
+    s_ctx.panel_width = swapped ? s_ctx.scratch_height : s_ctx.scratch_width;
+    s_ctx.panel_height = swapped ? s_ctx.scratch_width : s_ctx.scratch_height;
+    if (s_ctx.rotation == ER_ROTATION_0)
+        return true;
+
+    const size_t pixel_count = (size_t)s_ctx.scratch_width * (size_t)s_ctx.scratch_height;
+    s_ctx.logical_pixels = malloc(pixel_count * sizeof(uint32_t));
+    s_ctx.panel_pixels = malloc(pixel_count * sizeof(uint32_t));
+    s_ctx.panel = SDL_CreateTexture(
+        s_ctx.renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, s_ctx.panel_width, s_ctx.panel_height);
+    if (!s_ctx.logical_pixels || !s_ctx.panel_pixels || !s_ctx.panel)
+    {
+        destroy_panel();
+        return false;
+    }
+    SDL_SetTextureBlendMode(s_ctx.panel, SDL_BLENDMODE_NONE);
+    for (size_t index = 0; index < pixel_count; index++)
+        s_ctx.panel_pixels[index] = 0xFF000000U; /* opaque black, like the cleared framebuffer */
+    SDL_UpdateTexture(s_ctx.panel, NULL, s_ctx.panel_pixels, s_ctx.panel_width * BYTES_PER_PIXEL);
+    return true;
+}
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
@@ -304,6 +481,15 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int framebuffer_width, int fram
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, ALPHA_OPAQUE);
     SDL_RenderClear(renderer);
 
+    if (!create_panel())
+    {
+        SDL_DestroyTexture(s_ctx.framebuffer);
+        s_ctx.framebuffer = NULL;
+        SDL_DestroyTexture(s_ctx.scratch);
+        s_ctx.scratch = NULL;
+        return false;
+    }
+
     s_backend.fill_rect = fill_rect_cb;
     s_backend.copy_rect = copy_rect_cb;
     s_backend.blend_rect = blend_rect_cb;
@@ -328,6 +514,7 @@ bool er_sdl_backend_init(SDL_Renderer* renderer, int framebuffer_width, int fram
         renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, framebuffer_width, ER_LCD_BANDED_ROWS);
     if (!s_ctx.band)
     {
+        destroy_panel();
         SDL_DestroyTexture(s_ctx.framebuffer);
         s_ctx.framebuffer = NULL;
         SDL_DestroyTexture(s_ctx.scratch);
@@ -356,11 +543,18 @@ void er_sdl_present(void)
     if (!s_ctx.renderer)
         return;
 
-    /* Composite the persistent framebuffer onto the screen, then flip. */
+    /* Rotated, the panel texture is brought up to date from the framebuffer before the target changes. */
+    if (s_ctx.panel)
+        update_panel();
+
+    /* Composite the persistent framebuffer (or the panel, as it is mounted) onto the screen, then flip. */
     SDL_SetRenderTarget(s_ctx.renderer, NULL);
     SDL_SetRenderDrawColor(s_ctx.renderer, 0, 0, 0, ALPHA_OPAQUE);
     SDL_RenderClear(s_ctx.renderer);
-    SDL_RenderCopy(s_ctx.renderer, s_ctx.framebuffer, NULL, NULL);
+    if (s_ctx.panel)
+        draw_panel_mounted();
+    else
+        SDL_RenderCopy(s_ctx.renderer, s_ctx.framebuffer, NULL, NULL);
 
     /* Optional dirty-rect diagnostic overlay: yellow outline of repainted region. */
     if (s_show_dirty_overlay)
@@ -368,11 +562,12 @@ void er_sdl_present(void)
         ERRect dirty_rect;
         if (er_get_dirty_rect(&dirty_rect))
         {
+            const SDL_Rect window_rect = panel_rect_to_window(&dirty_rect);
             SDL_Rect overlay_rect = {
-                (int)((float)dirty_rect.x / s_dirty_scale),
-                (int)((float)dirty_rect.y / s_dirty_scale),
-                (int)((float)dirty_rect.width / s_dirty_scale),
-                (int)((float)dirty_rect.height / s_dirty_scale),
+                (int)((float)window_rect.x / s_dirty_scale),
+                (int)((float)window_rect.y / s_dirty_scale),
+                (int)((float)window_rect.w / s_dirty_scale),
+                (int)((float)window_rect.h / s_dirty_scale),
             };
             SDL_SetRenderDrawBlendMode(s_ctx.renderer, SDL_BLENDMODE_NONE);
             SDL_SetRenderDrawColor(
@@ -387,8 +582,33 @@ void er_sdl_present(void)
     SDL_SetRenderTarget(s_ctx.renderer, s_ctx.framebuffer);
 }
 
+void er_sdl_window_point_to_panel(int* x, int* y)
+{
+    const int window_x = *x;
+    const int window_y = *y;
+    switch (s_ctx.rotation)
+    {
+        case ER_ROTATION_90:
+            *x = s_ctx.panel_width - 1 - window_y;
+            *y = window_x;
+            break;
+        case ER_ROTATION_180:
+            *x = s_ctx.panel_width - 1 - window_x;
+            *y = s_ctx.panel_height - 1 - window_y;
+            break;
+        case ER_ROTATION_270:
+            *x = window_y;
+            *y = s_ctx.panel_height - 1 - window_x;
+            break;
+        default:
+            break;
+    }
+}
+
 void er_sdl_backend_destroy(void)
 {
+    destroy_panel();
+    s_ctx.rotation = ER_ROTATION_0;
 #if ER_LCD_BANDED
     if (s_ctx.band)
     {

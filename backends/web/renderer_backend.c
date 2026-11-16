@@ -57,9 +57,9 @@
  - Variables: Private
  ---------------------------------------------------------------------------------------------------------------------*/
 
-static uint8_t* s_rgba;     /**< Canvas-facing RGBA buffer (R,G,B,A), screen_width * screen_height * 4 bytes. */
-static int s_width;         /**< Framebuffer width in pixels. */
-static int s_height;        /**< Framebuffer height in pixels. */
+static uint8_t* s_rgba;     /**< Canvas-facing RGBA buffer (R,G,B,A) of the panel as it scans, 4 bytes a pixel. */
+static int s_width;         /**< App (logical) width in pixels. */
+static int s_height;        /**< App (logical) height in pixels. */
 static char* s_source;      /**< Private copy of the loaded app bundle (for hot reload + resize); NUL-terminated. */
 static int s_source_length; /**< Byte length of s_source. */
 static bool s_app_loaded;   /**< An app bundle has been evaluated at least once. */
@@ -70,19 +70,14 @@ static uint8_t* s_pack;     /**< Private copy of the latest asset pack (engine r
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * @brief Builds the er_runtime configuration for a given board size.
- *
- * @param[in] width  Screen width exposed to JS as screen.width.
- * @param[in] height  Screen height exposed to JS as screen.height.
+ * @brief Builds the er_runtime configuration. The screen size is left unset: it comes from the display.
  *
  * @return A populated ErRuntimeConfig (by value).
  */
-static ErRuntimeConfig runtime_cfg(int width, int height)
+static ErRuntimeConfig runtime_cfg(void)
 {
     ErRuntimeConfig config;
     memset(&config, 0, sizeof config);
-    config.screen_width = width;
-    config.screen_height = height;
     config.screen_scale = 1.0f;
     config.install_persist = true; /* usePersistentState survives a hot reload (dev loop); plain useState on a device */
     config.log = NULL;             /* console.* -> stdout, which Emscripten routes to the browser console */
@@ -107,21 +102,22 @@ static void run_app_or_demo(void)
 }
 
 /**
- * @brief Converts the software ARGB8888 framebuffer into the RGBA present buffer.
+ * @brief Brings the panel up to date and converts it into the RGBA present buffer.
  *
  * Canvas ImageData expects bytes in R,G,B,A order; the engine framebuffer is 0xAARRGGBB words. The frame is
- * opaque, so alpha is forced to 0xFF.
+ * opaque, so alpha is forced to 0xFF. The page turns the panel back the way it is mounted.
  */
 static void present(void)
 {
-    const uint32_t* framebuffer = er_software_framebuffer();
-    if (!framebuffer || !s_rgba)
+    er_software_present();
+    const uint32_t* panel = er_software_panel();
+    if (!panel || !s_rgba)
         return;
 
     const size_t pixel_count = (size_t)s_width * (size_t)s_height;
     for (size_t index = 0; index < pixel_count; index++)
     {
-        const uint32_t pixel = framebuffer[index];
+        const uint32_t pixel = panel[index];
         uint8_t* output = s_rgba + index * RGBA_BYTES_PER_PIXEL;
         output[0] = (uint8_t)(pixel >> 16); /* R */
         output[1] = (uint8_t)(pixel >> 8);  /* G */
@@ -142,14 +138,30 @@ static void props_init(ERProps* props)
     er_props_default(props);
 }
 
+/**
+ * @brief Sets the display rotation for an app of the given size: the panel is that size, turned.
+ *
+ * @param[in] screen_width   App width in pixels.
+ * @param[in] screen_height  App height in pixels.
+ * @param[in] rotation       0, 90, 180 or 270.
+ *
+ * @return true when set; false for another angle.
+ */
+static bool set_rotation(int screen_width, int screen_height, int rotation)
+{
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
+    return er_set_display_rotation(
+        (ERDisplayRotation)rotation, swapped ? screen_height : screen_width, swapped ? screen_width : screen_height);
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public (exported ABI)
  ---------------------------------------------------------------------------------------------------------------------*/
 
 EMSCRIPTEN_KEEPALIVE
-int er_web_init(int screen_width, int screen_height)
+int er_web_init(int screen_width, int screen_height, int rotation)
 {
-    if (screen_width <= 0 || screen_height <= 0)
+    if (screen_width <= 0 || screen_height <= 0 || !set_rotation(screen_width, screen_height, rotation))
         return 0;
     if (!er_software_backend_init(screen_width, screen_height))
         return 0;
@@ -165,7 +177,7 @@ int er_web_init(int screen_width, int screen_height)
 
     /* Boot the portable QuickJS host core (bridge + console + screen + persist). The render backend must
        already be set, which it is. */
-    ErRuntimeConfig config = runtime_cfg(screen_width, screen_height);
+    ErRuntimeConfig config = runtime_cfg();
     if (!er_runtime_init(&config))
     {
         free(s_rgba);
@@ -314,9 +326,9 @@ void er_web_demo_scene(void)
 }
 
 EMSCRIPTEN_KEEPALIVE
-int er_web_resize(int screen_width, int screen_height)
+int er_web_resize(int screen_width, int screen_height, int rotation)
 {
-    if (screen_width <= 0 || screen_height <= 0)
+    if (screen_width <= 0 || screen_height <= 0 || !set_rotation(screen_width, screen_height, rotation))
         return 0;
     if (!er_software_backend_resize(screen_width, screen_height))
         return 0;
@@ -332,7 +344,7 @@ int er_web_resize(int screen_width, int screen_height)
        the on-device responsive-layout path. The engine pools are reset so nodes don't leak across resizes. */
     er_runtime_shutdown();
     er_reset();
-    ErRuntimeConfig config = runtime_cfg(screen_width, screen_height);
+    ErRuntimeConfig config = runtime_cfg();
     er_runtime_init(&config);
     run_app_or_demo();
     return 1;
@@ -401,11 +413,11 @@ const uint8_t* er_web_framebuffer(void)
 EMSCRIPTEN_KEEPALIVE
 int er_web_framebuffer_width(void)
 {
-    return s_width;
+    return er_software_panel_width();
 }
 
 EMSCRIPTEN_KEEPALIVE
 int er_web_framebuffer_height(void)
 {
-    return s_height;
+    return er_software_panel_height();
 }

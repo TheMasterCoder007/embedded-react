@@ -319,6 +319,34 @@ static void test_screen(void)
     s_config.screen_height = TPKG_SCREEN;
 }
 
+/** @brief A size left at 0 is the engine's display size, turned by its rotation. */
+static void test_screen_from_display(void)
+{
+    base();
+    const uint8_t types[] = {ERB_TYPE_INT};
+    const uint32_t boot[] = {
+        OP_ABX(SCREEN, 0, 1),
+        OP_ABX(SET32, 0, SLOT_COUNT),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    tpkg_set_code(&s_package_spec, FUNCTION_BOOT, types, 1, boot, 3);
+    static const uint32_t any_size[] = {ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_END};
+    s_package_spec.check_words = any_size;
+    s_package_spec.check_word_count = 2u;
+    s_package_spec.panel_checks[0] = 0u;
+    s_config.screen_width = 0;
+    s_config.screen_height = 0;
+    CHECK(er_set_display_rotation(ER_ROTATION_90, 123, 321), "a 123x321 panel mounted at 90");
+    CHECK(load(), "a package loads with the size left unset");
+    CHECK(slot_int(SLOT_COUNT) == 123, "SCREEN reads the turned height");
+    ERNode* root = slot_node(SLOT_ROOT, 0);
+    CHECK(root && root->layout.width == 321 && root->layout.height == 123, "the root fills the turned panel");
+    erb_unload();
+    er_set_display_rotation(ER_ROTATION_0, TPKG_SCREEN, TPKG_SCREEN);
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
+}
+
 static void test_int_arithmetic(void)
 {
     base();
@@ -2059,6 +2087,7 @@ int main(void)
     embedded_renderer_set_backend(&backend);
 
     test_screen();
+    test_screen_from_display();
     test_int_arithmetic();
     test_int64_arithmetic();
     test_float_rules();

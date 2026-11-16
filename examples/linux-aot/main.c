@@ -126,6 +126,24 @@ static int to_px(int logical, float scale)
     return (int)((float)logical * scale + 0.5f);
 }
 
+/** @brief Reads ER_ROTATION (0, 90, 180 or 270); anything else is 0. */
+static ERDisplayRotation env_rotation(void)
+{
+    const int degrees = env_int("ER_ROTATION", 0);
+    return degrees == ER_ROTATION_90 || degrees == ER_ROTATION_180 || degrees == ER_ROTATION_270
+               ? (ERDisplayRotation)degrees
+               : ER_ROTATION_0;
+}
+
+/** @brief Forwards a mouse point to the engine as a touch, in panel coordinates. */
+static void mouse_touch(ERTouchPhase phase, int window_x, int window_y, float scale)
+{
+    int x = to_px(window_x, scale);
+    int y = to_px(window_y, scale);
+    er_sdl_window_point_to_panel(&x, &y);
+    embedded_renderer_touch(0, phase, x, y);
+}
+
 /**
  * @brief Entry point: bring up SDL + the engine, load the package once, run the frame loop.
  *
@@ -155,8 +173,9 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    /* Framebuffer size. The parity harness sets it through ER_AOT_SCREEN_W/H, the same vars that name the
-       panel a package keeps its layout for in the AOT compiler. */
+    /* Window (app) size. The parity harness sets it through ER_AOT_SCREEN_W/H, the same vars that name the
+       panel a package keeps its layout for in the AOT compiler. ER_ROTATION=90|180|270 puts a panel mounted
+       that way behind the window, its size the window's turned. */
     const int screen_width = env_int("ER_AOT_SCREEN_W", SCREEN_WIDTH_DEFAULT);
     const int screen_height = env_int("ER_AOT_SCREEN_H", SCREEN_HEIGHT_DEFAULT);
 
@@ -193,6 +212,10 @@ int main(int argc, char** argv)
     SDL_GetRendererOutputSize(renderer, &physical_width, &physical_height);
     const float scale = (float)physical_width / (float)screen_width;
 
+    const ERDisplayRotation rotation = env_rotation();
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
+    er_set_display_rotation(
+        rotation, swapped ? physical_height : physical_width, swapped ? physical_width : physical_height);
     if (!er_sdl_backend_init(renderer, physical_width, physical_height))
     {
         SDL_Log("er_sdl_backend_init failed");
@@ -206,13 +229,11 @@ int main(int argc, char** argv)
        no RTC would call this once it learns the time (SNTP, GPS). */
     erb_set_wall_clock((int64_t)time(NULL) * MS_PER_SECOND);
 
-    /* Verify the package and build its scene graph at this window's size. One that fails shows the error
-       screen, as a board does, and a headless run fails. */
+    /* Verify the package and build its scene graph at the display's size, which the runtime takes from the
+       engine. One that fails shows the error screen, as a board does, and a headless run fails. */
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_width = (uint16_t)physical_width,
-        .screen_height = (uint16_t)physical_height,
         .log = log_line,
         .natives = desktop_natives,
         .native_count = desktop_native_count,
@@ -423,15 +444,15 @@ int main(int argc, char** argv)
             }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
-                embedded_renderer_touch(0, ER_TOUCH_DOWN, to_px(event.button.x, scale), to_px(event.button.y, scale));
+                mouse_touch(ER_TOUCH_DOWN, event.button.x, event.button.y, scale);
             }
             else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT)
             {
-                embedded_renderer_touch(0, ER_TOUCH_UP, to_px(event.button.x, scale), to_px(event.button.y, scale));
+                mouse_touch(ER_TOUCH_UP, event.button.x, event.button.y, scale);
             }
             else if (event.type == SDL_MOUSEMOTION && (event.motion.state & SDL_BUTTON_LMASK))
             {
-                embedded_renderer_touch(0, ER_TOUCH_MOVE, to_px(event.motion.x, scale), to_px(event.motion.y, scale));
+                mouse_touch(ER_TOUCH_MOVE, event.motion.x, event.motion.y, scale);
             }
         }
 

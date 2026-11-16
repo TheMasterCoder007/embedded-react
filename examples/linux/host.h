@@ -25,6 +25,7 @@
  * + reload.
  */
 
+#include "er_scene.h"
 #include "erb_native.h"
 
 #include <stdbool.h>
@@ -41,11 +42,13 @@ struct SDL_Renderer;
 /** @brief Window configuration passed to er_host_start. */
 typedef struct
 {
-    const char* title;        /**< Window title (NULL → a default). */
-    int width;                /**< Logical window width in pixels. */
-    int height;               /**< Logical window height in pixels. */
-    bool persist;             /**< Install __erPersist so usePersistentState survives reload (simulator only). */
-    const ErbNative* natives; /**< Native modules the app may use (NULL = none; the simulator runs mocks). */
+    const char* title;          /**< Window title (NULL → a default). */
+    int width;                  /**< Logical window width in pixels: the app's width. */
+    int height;                 /**< Logical window height in pixels. */
+    ERDisplayRotation rotation; /**< How the panel behind the window is mounted (its size is the window's,
+                                     swapped at 90 and 270). The window shows it as mounted: the app upright. */
+    bool persist;               /**< Install __erPersist so usePersistentState survives reload (simulator only). */
+    const ErbNative* natives;   /**< Native modules the app may use (NULL = none; the simulator runs mocks). */
     uint16_t native_count;
 } ErHostConfig;
 
@@ -57,8 +60,8 @@ typedef struct
 {
     struct SDL_Window* window;     /**< SDL window. */
     struct SDL_Renderer* renderer; /**< SDL renderer backing the engine's SDL backend. */
-    int physical_width;            /**< Framebuffer width in physical pixels. */
-    int physical_height;           /**< Framebuffer height in physical pixels. */
+    int physical_width;            /**< Framebuffer (app) width in physical pixels. */
+    int physical_height;           /**< Framebuffer (app) height in physical pixels. */
     float dpi_scale;               /**< Physical/logical pixel ratio (HiDPI input scaling). */
     bool running;                  /**< Cleared when quit (window close / ESC) is requested. */
     bool reload_requested;         /**< Set when the reload key (R) is pressed; the simulator acts on it. */
@@ -144,6 +147,13 @@ void er_host_show_error(ErHost* host);
 void er_host_clear_persist(void);
 
 /**
+ * @brief Reads the ER_ROTATION env var (0, 90, 180 or 270), for a driver's ErHostConfig.rotation.
+ *
+ * @return The rotation it names; ER_ROTATION_0 when unset or not one of the four.
+ */
+ERDisplayRotation er_host_env_rotation(void);
+
+/**
  * @brief Scales a logical SDL input coordinate to physical framebuffer pixels.
  *
  * @param[in] host     Started host.
@@ -154,8 +164,8 @@ void er_host_clear_persist(void);
 int er_host_event_px(const ErHost* host, int logical);
 
 /**
- * @brief Processes one frame: drains SDL events (input → engine touch, quit/ESC), pumps the JS job
- *        queue + timers, commits, presents, and advances the engine clock.
+ * @brief Processes one frame: drains SDL events (input → engine touch in panel coordinates, quit/ESC),
+ *        pumps the JS job queue + timers, commits, presents, and advances the engine clock.
  *
  * @param[in] host  Started host with an app loaded.
  *

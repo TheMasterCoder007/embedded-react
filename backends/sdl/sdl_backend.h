@@ -42,8 +42,13 @@ extern "C"
      * after er_sdl_backend_destroy(). Requires SDL 2.0.6 or later
      * (SDL_ComposeCustomBlendMode).
      *
+     * Under er_set_display_rotation(), set before this call, the framebuffer is the app's (logical)
+     * shape. A third texture then holds the panel as it scans: er_sdl_present() copies each commit's
+     * dirty rects into it through er_rotate_copy() and draws it turned the way the panel is mounted,
+     * so the window shows the app upright.
+     *
      * @param[in] renderer  SDL2 renderer to draw into. Must outlive the backend.
-     * @param[in] framebuffer_width      Framebuffer width in pixels (must be > 0).
+     * @param[in] framebuffer_width      Framebuffer width in pixels (must be > 0), the app's width.
      * @param[in] framebuffer_height      Framebuffer height in pixels (must be > 0).
      *
      * @return true on success, false if either texture could not be created.
@@ -73,6 +78,17 @@ extern "C"
      *                    on non-HiDPI displays.
      */
     void er_sdl_set_show_dirty_rect(bool enable, float scale);
+
+    /**
+     * @brief Turns a point in the window into the panel point under it, for embedded_renderer_touch().
+     *
+     * The window shows the panel as it is mounted, so a mouse point is turned into the panel's own
+     * coordinates, as a touch controller on the glass reports them. Unchanged at 0 degrees.
+     *
+     * @param[in,out] x  X coordinate: window pixels in, panel pixels out.
+     * @param[in,out] y  Y coordinate: window pixels in, panel pixels out.
+     */
+    void er_sdl_window_point_to_panel(int* x, int* y);
 
     /**
      * @brief Destroys the SDL2 backend and frees its scratch texture.

@@ -75,7 +75,8 @@ enum
 /** @brief Configuration for er_runtime_init (and re-applied on er_runtime_reset). */
 typedef struct
 {
-    int screen_width;                          /**< `screen.width` exposed to JS (framebuffer pixels). */
+    int screen_width;                          /**< `screen.width` exposed to JS (framebuffer pixels); 0 takes
+                                                    er_get_display_size(). */
     int screen_height;                         /**< `screen.height`. */
     float screen_scale;                        /**< `screen.scale` (DPI); <= 0 is treated as 1.0. */
     bool install_persist;                      /**< Expose `__erPersist` so usePersistentState survives a reload

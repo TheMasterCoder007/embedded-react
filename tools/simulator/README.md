@@ -18,3 +18,4 @@ cd packages/embedded-react && npm run sim -- thermostat
 
 `npm run sim` runs esbuild in watch mode and launches the simulator, reading `demos/<name>/index.jsx`
 directly against the in-repo library. Press R for a clean reset that also forgets persisted state.
+`ER_ROTATION=90` (or 180, 270) runs it behind a panel mounted that way, the app upright in the window.

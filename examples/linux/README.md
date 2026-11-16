@@ -25,6 +25,6 @@ examples/linux/build/embedded-react-desktop                # runs the container 
 ```
 
 The build copies `dist/app.erpkg` into the slot next to the executable; pass a path to run a specific
-`.erpkg`, `.qbc` or `.js` instead. The mouse is forwarded as touch; ESC quits. `host.c` is the complete
-Flow A host in one file, a thin layer over `er_runtime`, and is shared with the SDL simulator in
-`tools/simulator`.
+`.erpkg`, `.qbc` or `.js` instead. The mouse is forwarded as touch; ESC quits. `ER_ROTATION=90` (or
+180, 270) runs it behind a panel mounted that way. `host.c` is the complete Flow A host in one file, a
+thin layer over `er_runtime`, and is shared with the SDL simulator in `tools/simulator`.

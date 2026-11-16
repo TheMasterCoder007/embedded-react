@@ -83,10 +83,12 @@ int main(int argc, char** argv)
         screen_height = SDL_atoi(value);
     }
 
+    /* ER_ROTATION=90|180|270 puts a panel mounted that way behind the window; ER_W/ER_H stay the app's size. */
     const ErHostConfig config = {
         .title = "embedded-react — desktop demo",
         .width = screen_width,
         .height = screen_height,
+        .rotation = er_host_env_rotation(),
         .natives = desktop_natives,
         .native_count = desktop_native_count,
     };

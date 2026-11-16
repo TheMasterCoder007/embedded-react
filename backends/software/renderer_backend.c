@@ -16,6 +16,7 @@
 
 #include "software_backend.h"
 
+#include "er_scene.h"
 #include "native_renderer.h"
 
 #include <stdlib.h>
@@ -33,6 +34,12 @@
 /** @brief Opaque black, the color a freshly-cleared framebuffer holds. */
 #define OPAQUE_BLACK 0xFF000000U
 
+/** @brief Dirty rects er_software_present() asks for; more collapse to their bounds. */
+#define PRESENT_RECTS_MAX 16
+
+/** @brief Bytes per framebuffer pixel. */
+#define BYTES_PER_PIXEL ((int)sizeof(uint32_t))
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Types: Private
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -46,6 +53,10 @@ typedef struct
                                row-major. */
     int framebuffer_width;  /**< Framebuffer width in pixels. */
     int framebuffer_height; /**< Framebuffer height in pixels. */
+    uint32_t* panel;        /**< The panel's buffer: the framebuffer itself at 0 degrees, else its own. */
+    int panel_width;        /**< Panel width as it scans. */
+    int panel_height;       /**< Panel height as it scans. */
+    bool painted;           /**< Something was drawn since the last er_software_present(). */
 } SoftCtx;
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -159,6 +170,7 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int width, int height, voi
     const uint32_t alpha = (argb >> 24) & 0xFFU;
     if (alpha == 0U || !clip_rect(&x, &y, &width, &height, NULL, NULL))
         return;
+    context->painted = true;
 
     if (alpha == ALPHA_OPAQUE)
     {
@@ -202,6 +214,7 @@ static void copy_rect_cb(const void* source, int source_stride_bytes, int x, int
     int source_x = 0, source_y = 0;
     if (!source || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
+    context->painted = true;
 
     const uint8_t* source_bytes = (const uint8_t*)source;
     for (int row = 0; row < height; row++)
@@ -259,6 +272,7 @@ static void blend_rect_cb(
     const uint32_t global_alpha = alpha;
     if (!source || global_alpha == 0U || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
+    context->painted = true;
 
     const uint8_t* source_bytes = (const uint8_t*)source;
     for (int row = 0; row < height; row++)
@@ -281,6 +295,41 @@ static void blend_rect_cb(
     }
 }
 
+/** @brief Frees the panel's buffer when it is not the framebuffer. */
+static void free_panel(void)
+{
+    if (s_ctx.panel != s_ctx.framebuffer)
+        free(s_ctx.panel);
+    s_ctx.panel = NULL;
+    s_ctx.panel_width = 0;
+    s_ctx.panel_height = 0;
+}
+
+/**
+ * @brief Points the panel at the framebuffer at 0 degrees, or allocates one of the turned shape.
+ *
+ * @return true on success; false on allocation failure (the panel is then unset).
+ */
+static bool setup_panel(void)
+{
+    free_panel();
+    const ERDisplayRotation rotation = er_get_display_rotation();
+    if (rotation == ER_ROTATION_0)
+    {
+        s_ctx.panel = s_ctx.framebuffer;
+        s_ctx.panel_width = s_ctx.framebuffer_width;
+        s_ctx.panel_height = s_ctx.framebuffer_height;
+        return true;
+    }
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
+    s_ctx.panel = malloc((size_t)s_ctx.framebuffer_width * (size_t)s_ctx.framebuffer_height * sizeof(uint32_t));
+    if (!s_ctx.panel)
+        return false;
+    s_ctx.panel_width = swapped ? s_ctx.framebuffer_height : s_ctx.framebuffer_width;
+    s_ctx.panel_height = swapped ? s_ctx.framebuffer_width : s_ctx.framebuffer_height;
+    return true;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -296,6 +345,12 @@ bool er_software_backend_init(int framebuffer_width, int framebuffer_height)
 
     s_ctx.framebuffer_width = framebuffer_width;
     s_ctx.framebuffer_height = framebuffer_height;
+    if (!setup_panel())
+    {
+        free(s_ctx.framebuffer);
+        s_ctx.framebuffer = NULL;
+        return false;
+    }
     er_software_clear(OPAQUE_BLACK); /* opaque black, like a freshly-cleared panel */
 
     s_backend.fill_rect = fill_rect_cb;
@@ -314,6 +369,7 @@ bool er_software_backend_init(int framebuffer_width, int framebuffer_height)
 
 void er_software_backend_destroy(void)
 {
+    free_panel();
     free(s_ctx.framebuffer);
     s_ctx.framebuffer = NULL;
     s_ctx.framebuffer_width = 0;
@@ -330,9 +386,13 @@ bool er_software_backend_resize(int framebuffer_width, int framebuffer_height)
     if (!resized)
         return false; /* old framebuffer is left intact on failure */
 
+    if (s_ctx.panel == s_ctx.framebuffer)
+        s_ctx.panel = resized; /* setup_panel() must not free the realloc'd block */
     s_ctx.framebuffer = resized;
     s_ctx.framebuffer_width = framebuffer_width;
     s_ctx.framebuffer_height = framebuffer_height;
+    if (!setup_panel())
+        return false;
     er_software_clear(OPAQUE_BLACK);
     return true;
 }
@@ -344,6 +404,43 @@ void er_software_clear(uint32_t argb)
     const size_t pixel_count = (size_t)s_ctx.framebuffer_width * (size_t)s_ctx.framebuffer_height;
     for (size_t index = 0; index < pixel_count; index++)
         s_ctx.framebuffer[index] = argb;
+    if (s_ctx.panel && s_ctx.panel != s_ctx.framebuffer)
+        for (size_t index = 0; index < pixel_count; index++)
+            s_ctx.panel[index] = argb;
+}
+
+void er_software_present(void)
+{
+    if (!s_ctx.painted || !s_ctx.panel || s_ctx.panel == s_ctx.framebuffer)
+    {
+        s_ctx.painted = false;
+        return;
+    }
+    s_ctx.painted = false;
+    ERRect rects[PRESENT_RECTS_MAX];
+    const int rect_count = er_get_dirty_rects(rects, PRESENT_RECTS_MAX);
+    for (int rect_index = 0; rect_index < rect_count; rect_index++)
+        er_rotate_copy(s_ctx.framebuffer,
+                       s_ctx.framebuffer_width * BYTES_PER_PIXEL,
+                       s_ctx.panel,
+                       s_ctx.panel_width * BYTES_PER_PIXEL,
+                       BYTES_PER_PIXEL,
+                       &rects[rect_index]);
+}
+
+uint32_t* er_software_panel(void)
+{
+    return s_ctx.panel;
+}
+
+int er_software_panel_width(void)
+{
+    return s_ctx.panel_width;
+}
+
+int er_software_panel_height(void)
+{
+    return s_ctx.panel_height;
 }
 
 uint32_t* er_software_framebuffer(void)

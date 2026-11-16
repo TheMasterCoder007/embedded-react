@@ -1939,6 +1939,18 @@ bool erb_load(const void* package, size_t package_bytes, const ErbConfig* config
 {
     ErbError local;
     ErbError* out = error ? error : &local;
+    /* A size left at 0 comes from the engine's display, turned by its rotation. */
+    ErbConfig sized;
+    if (config && (config->screen_width == 0 || config->screen_height == 0))
+    {
+        int display_width = 0;
+        int display_height = 0;
+        er_get_display_size(&display_width, &display_height);
+        sized = *config;
+        sized.screen_width = (uint16_t)display_width;
+        sized.screen_height = (uint16_t)display_height;
+        config = &sized;
+    }
     if (config)
     {
         s_screen_width = config->screen_width;

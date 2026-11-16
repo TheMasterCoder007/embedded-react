@@ -38,12 +38,16 @@ extern "C"
     /**
      * @brief Brings up the software backend and allocates the RGBA present buffer.
      *
-     * @param[in] screen_width  Board width in pixels (> 0).
-     * @param[in] screen_height  Board height in pixels (> 0).
+     * The board shows the app upright; @p rotation says how the panel behind it is mounted, so the panel is
+     * the board's size turned and the present buffer holds it as it scans.
+     *
+     * @param[in] screen_width  Board (app) width in pixels (> 0).
+     * @param[in] screen_height  Board (app) height in pixels (> 0).
+     * @param[in] rotation  Display rotation: 0, 90, 180 or 270.
      *
      * @return 1 on success, 0 on failure.
      */
-    int er_web_init(int screen_width, int screen_height);
+    int er_web_init(int screen_width, int screen_height, int rotation);
 
     /**
      * @brief Builds a static demo scene (W1 fallback when no app bundle has been loaded).
@@ -97,19 +101,20 @@ extern "C"
     const uint8_t* er_web_compile_bytecode(const char* source, int length, int* out_length, int strip);
 
     /**
-     * @brief Changes the board size at runtime and rebuilds the scene to fit (responsive preview).
+     * @brief Changes the board size or rotation at runtime and rebuilds the scene to fit (responsive preview).
      *
      * Resizes the framebuffer + present buffer, resets the engine pools, and rebuilds the current scene at
      * the new dimensions. In W1 that scene is er_web_demo_scene(); in W2+ the loaded app re-runs with the
-     * new screen size (the on-device "responsive layout" path). The host must resize its canvas to match
-     * (er_web_framebuffer_width/height).
+     * new screen size (the on-device "responsive layout" path). The host must resize its canvas to the board
+     * and its panel image to er_web_framebuffer_width/height.
      *
-     * @param[in] screen_width  New board width in pixels (> 0).
-     * @param[in] screen_height  New board height in pixels (> 0).
+     * @param[in] screen_width  New board (app) width in pixels (> 0).
+     * @param[in] screen_height  New board (app) height in pixels (> 0).
+     * @param[in] rotation  Display rotation: 0, 90, 180 or 270.
      *
      * @return 1 on success, 0 on failure (the previous size is kept).
      */
-    int er_web_resize(int screen_width, int screen_height);
+    int er_web_resize(int screen_width, int screen_height, int rotation);
 
     /**
      * @brief Advances the engine one frame and refreshes the RGBA present buffer.
@@ -121,11 +126,11 @@ extern "C"
     void er_web_pump(int delta_ms);
 
     /**
-     * @brief Delivers a pointer event to the engine in framebuffer pixels.
+     * @brief Delivers a pointer event to the engine in panel pixels, as a touch controller reports them.
      *
      * @param[in] phase  0 = down, 1 = move, 2 = up, 3 = cancel (ERTouchPhase order).
-     * @param[in] x      X coordinate in framebuffer pixels.
-     * @param[in] y      Y coordinate in framebuffer pixels.
+     * @param[in] x      X coordinate in panel pixels.
+     * @param[in] y      Y coordinate in panel pixels.
      */
     void er_web_touch(int phase, int x, int y);
 
@@ -146,21 +151,22 @@ extern "C"
     void er_web_clear_persist(void);
 
     /**
-     * @brief Returns the RGBA present buffer (screen_width * screen_height * 4 bytes, R,G,B,A order).
+     * @brief Returns the RGBA present buffer: the panel as it scans, 4 bytes a pixel in R,G,B,A order.
      *
-     * The host wraps this as an ImageData and putImageData()s it to the canvas. Valid after er_web_init().
+     * The host wraps this as an ImageData and draws it turned the way the panel is mounted. Valid after
+     * er_web_init().
      *
      * @return Pointer to the RGBA buffer, or NULL before init.
      */
     const uint8_t* er_web_framebuffer(void);
 
     /**
-     * @brief Returns the framebuffer width in pixels (0 before init).
+     * @brief Returns the present buffer's (panel's) width in pixels (0 before init).
      */
     int er_web_framebuffer_width(void);
 
     /**
-     * @brief Returns the framebuffer height in pixels (0 before init).
+     * @brief Returns the present buffer's (panel's) height in pixels (0 before init).
      */
     int er_web_framebuffer_height(void);
 
