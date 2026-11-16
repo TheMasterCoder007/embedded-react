@@ -70,7 +70,7 @@ modules it uses:
 
 ```json title="package.json"
 "dependencies": {
-  "embedded-react": "^0.21.0",
+  "embedded-react": "^0.22.0",
   "example-device": "file:./device"
 }
 ```

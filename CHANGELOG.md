@@ -10,6 +10,8 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+
+## [0.22.0] - 2026-11-16
 ### Added
 
 - Engine: `er_image_unload()` frees a registered image's slot, and `er_image_load_argb8888()` registers an image
@@ -1688,7 +1690,8 @@ Initial public release.
 - Versioning foundation with a single source of truth propagated to every artifact.
 - The first publish to npm as embedded-react.
 
-[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/TheMasterCoder007/embedded-react/compare/v0.18.0...v0.19.0
