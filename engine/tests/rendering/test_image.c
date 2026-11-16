@@ -1012,5 +1012,76 @@ int main(void)
         }
     }
 
+    /* -----------------------------------------------------------------------
+     * A scaled image as wide as the framebuffer, plain and tinted, reaches the
+     * last column with every column sampled from the right source column. CI
+     * runs this with a row buffer narrower than the image, so the row is drawn
+     * in chunks. Each source column has its own alpha, which a tint keeps.
+     * ---------------------------------------------------------------------- */
+    {
+        enum
+        {
+            WIDE_SOURCE_WIDTH = FRAMEBUFFER_WIDTH / 2,
+            WIDE_SOURCE_HEIGHT = 2,
+        };
+        static uint32_t image_wide[WIDE_SOURCE_WIDTH * WIDE_SOURCE_HEIGHT];
+        for (int source_row = 0; source_row < WIDE_SOURCE_HEIGHT; source_row++)
+            for (int source_column = 0; source_column < WIDE_SOURCE_WIDTH; source_column++)
+            {
+                const uint32_t alpha = 8u + (uint32_t)source_column * 7u;
+                image_wide[source_row * WIDE_SOURCE_WIDTH + source_column] = alpha * 0x01010101u;
+            }
+        er_image_load("wide", image_wide, WIDE_SOURCE_WIDTH, WIDE_SOURCE_HEIGHT);
+
+        static const struct
+        {
+            uint32_t tint;
+            uint32_t color_mask; /* Channels the drawn pixel keeps at its alpha. */
+            const char* what;
+        } k_cases[] = {
+            {0u, 0xFFFFFFFFu, "scaled"},
+            {0xFF0000u, 0xFFFF0000u, "scaled tinted"},
+        };
+        for (size_t case_index = 0; case_index < sizeof(k_cases) / sizeof(k_cases[0]); case_index++)
+        {
+            reset(&test_context);
+            er_reset();
+
+            ERNode* root = er_node_create(ER_NODE_VIEW);
+            ERProps root_props = props_default();
+            root_props.width = FRAMEBUFFER_WIDTH;
+            root_props.height = FRAMEBUFFER_HEIGHT;
+            er_node_set_props(root, &root_props);
+
+            ERNode* image_node = er_node_create(ER_NODE_IMAGE);
+            ERProps image_props = props_default();
+            image_props.width = FRAMEBUFFER_WIDTH;
+            image_props.height = WIDE_SOURCE_HEIGHT * 2;
+            strncpy(image_props.image_name, "wide", ER_IMAGE_NAME_MAX);
+            image_props.resize_mode = ER_RESIZE_STRETCH;
+            image_props.tint_color = k_cases[case_index].tint;
+            er_node_set_props(image_node, &image_props);
+
+            er_tree_append_child(root, image_node);
+            er_tree_set_root(root);
+            er_commit();
+
+            for (int y = 0; y < WIDE_SOURCE_HEIGHT * 2; y++)
+                for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
+                {
+                    const uint32_t expected = image_wide[x / 2] & k_cases[case_index].color_mask;
+                    if (px(&test_context, x, y) != expected)
+                    {
+                        fprintf(stderr, "FAIL: wide %s image: wrong pixel at (%d,%d)\n", k_cases[case_index].what, x, y);
+                        return EXIT_FAILURE;
+                    }
+                }
+
+            er_tree_remove_child(root, image_node);
+            er_node_destroy(image_node);
+            er_node_destroy(root);
+        }
+    }
+
     return EXIT_SUCCESS;
 }
