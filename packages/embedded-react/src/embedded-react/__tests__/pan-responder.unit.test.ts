@@ -22,7 +22,7 @@ import {PanResponder} from '../PanResponder.mts';
 // the raw touchStart, then negotiation asks the should-set queries and grants; each move dispatches
 // responderMove to the owner then re-negotiates; touch-up bubbles touchEnd then responderRelease.
 // The events carry engine payloads: x/y absolute, dx/dy CUMULATIVE FROM TOUCH-DOWN (the module
-// re-anchors them at the grant). The real engine path is covered by pan-responder.runtime.test.jsx;
+// re-anchors them at the grant). The real engine path is covered by pan-responder.runtime.test.tsx;
 // this file pins the state machine. Velocity reads performance.now() — the engine's clock on device —
 // so the tests drive a stub of it.
 

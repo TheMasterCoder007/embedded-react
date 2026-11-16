@@ -1110,7 +1110,44 @@ export type NativeMock<T> =
 export const Easing: {readonly [K in EasingName]: K} & {
   bezier(x1: number, y1: number, x2: number, y2: number): BezierEasing;
 };
-export const LayoutAnimation: Record<string, unknown>;
+
+// --- LayoutAnimation -------------------------------------------------------
+
+/** One phase of a layout animation. */
+export interface LayoutAnimationPhase {
+  type?: string;
+  property?: string;
+  springDamping?: number;
+}
+
+/** A layout animation, in React Native's shape. The engine tweens position; `update.type` picks the curve. */
+export interface LayoutAnimationConfig {
+  /** Default 300. */
+  duration?: number;
+  type?: string;
+  create?: LayoutAnimationPhase;
+  update?: LayoutAnimationPhase;
+  delete?: LayoutAnimationPhase;
+}
+
+export const LayoutAnimation: {
+  /** Animates the layout changes of the next commit. Call it right before the state update that moves things. */
+  configureNext(config?: LayoutAnimationConfig | null, done?: () => void): void;
+  create(
+    duration: number,
+    type?: string,
+    creationProp?: string,
+  ): LayoutAnimationConfig;
+  Types: Record<
+    'spring' | 'linear' | 'easeInEaseOut' | 'easeIn' | 'easeOut' | 'keyboard',
+    string
+  >;
+  Properties: Record<'opacity' | 'scaleX' | 'scaleY' | 'scaleXY', string>;
+  Presets: Record<'easeInEaseOut' | 'linear' | 'spring', LayoutAnimationConfig>;
+  easeInEaseOut(done?: () => void): void;
+  linear(done?: () => void): void;
+  spring(done?: () => void): void;
+};
 
 // --- PanResponder ----------------------------------------------------------
 

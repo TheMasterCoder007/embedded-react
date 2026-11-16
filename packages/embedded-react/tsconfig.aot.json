@@ -1,5 +1,5 @@
 {
-  "//": "Typecheck the Flow B compiler (aot/), the asset bakers (assets/), hot reload (hotreload/), the package-root scripts, the runtime (src/) and the repo tools (tools/). Its .mts files are checked strictly; a .mjs file is read only for the types it exports, unless it opts in with // @ts-check. Node runs the .mts files directly by stripping their types, so only erasable syntax is allowed (no enums, namespaces or parameter properties), a relative import names the real file (./x.mts), and a type-only import is written `import type`. The runtime in src/ is checked the same way. The tools load esbuild and typescript from this package, so `paths` points their types here. Run with `npm run typecheck`.",
+  "//": "Typecheck the Flow B compiler (aot/), the asset bakers (assets/), hot reload (hotreload/), the package-root scripts, the runtime (src/), the test runners and the repo tools (tools/). Its .mts files are checked strictly; a .mjs file is read only for the types it exports, unless it opts in with // @ts-check. Node runs the .mts files directly by stripping their types, so only erasable syntax is allowed (no enums, namespaces or parameter properties), a relative import names the real file (./x.mts), and a type-only import is written `import type`. The runtime in src/ is checked the same way. The tools load esbuild and typescript from this package, so `paths` points their types here. Run with `npm run typecheck`.",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2023"],
@@ -27,6 +27,8 @@
     "aot/**/*.mjs",
     "test/erb-frames/*.mts",
     "test/erb-frames/*.d.ts",
+    "test/runtime/*.mts",
+    "test/erb-fuzz/*.mts",
     "assets/**/*.mts",
     "hotreload/**/*.mts",
     "*.mts",

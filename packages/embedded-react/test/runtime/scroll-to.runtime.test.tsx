@@ -19,9 +19,7 @@
 import {createRoot} from '../../src/renderer.mts';
 import {View, ScrollView, scrollTo} from 'embedded-react';
 import type {NodeHandle} from 'embedded-react';
-import {check, report} from './harness.js';
-
-declare const screen: {width: number; height: number};
+import {check, report} from './harness.ts';
 
 const handles: {list: NodeHandle | null; row: NodeHandle | null} = {
   list: null,

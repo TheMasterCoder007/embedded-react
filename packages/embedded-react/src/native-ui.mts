@@ -44,7 +44,7 @@ export interface NativeUIBridge {
   setTextSpans(node: number, spans: HostProps[]): void;
   setVectorOps(
     node: number,
-    ops: number[],
+    ops: number[] | Float32Array,
     paints: number[],
     gradients?: number[],
     dirtyRect?: number[],
@@ -55,6 +55,8 @@ export interface NativeUIBridge {
   removeChild(parent: number, child: number): void;
   commit(): void;
   now(): number;
+  // Advances the engine clock and pumps timers, jobs and a frame.
+  tick(milliseconds: number): void;
   scrollTo(node: number, x?: number, y?: number): ScrollPosition | undefined;
 
   animValueCreate(initial: number): number;
@@ -77,6 +79,7 @@ export interface NativeUIBridge {
   animStop(animation: number): void;
   animUnbind(node: number, prop: string): void;
   configureNextLayoutAnimation(config: HostProps): void;
+  hasPendingLayoutAnimation(): boolean;
 
   keyboardFrame(): KeyboardFrame | undefined;
   setKeyboardListener(listener: (shown: boolean) => void): void;
