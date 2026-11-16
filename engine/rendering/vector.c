@@ -61,7 +61,7 @@
 #define ERUI_VECTOR_MAX_EDGES 2048 /**< Edges submitted to one rasterize pass. */
 #endif
 #ifndef ERUI_VECTOR_MAX_ROW
-#define ERUI_VECTOR_MAX_ROW 1024 /**< Max node width in px (coverage row buffer). */
+#define ERUI_VECTOR_MAX_ROW 1024 /**< Max node width in logical px (coverage row buffer). */
 #endif
 #ifndef ERUI_VECTOR_SORT_BUCKETS
 #define ERUI_VECTOR_SORT_BUCKETS                                                                                       \

@@ -94,6 +94,16 @@ the flip decision on a box the backend accumulates across every paint since the 
 commit: in Flow A the reconciler commits inside the pump, so by the host's own commit that damage
 is already consumed.
 
+**A panel mounted against its scan direction.** `er_set_display_rotation(ER_ROTATION_90, panel_w,
+panel_h)` at init, before the backend comes up, runs the app in the turned (logical) size: a 480×1280
+panel at 90 runs a 1280×480 app, and `er_get_display_size()` gives the size to hand the app. The
+engine still draws in logical coordinates, so render into a buffer of the logical shape and present
+each dirty rect with `er_rotate_copy()`, which copies it into the panel's buffer turned, in strips
+that keep both buffers in cache. `er_get_dirty_rects()` reports panel coordinates, so the same rects
+feed the copy and the flush. `embedded_renderer_touch()` takes panel coordinates too, so the touch
+driver passes points through as it reads them. 180 keeps the panel's shape and stride. An SPI
+controller that can turn its own address window (MADCTL) needs none of this.
+
 ## Lessons from the four that run on hardware
 
 - **Premultiplied sources and hardware blenders.** DMA2D's blender takes straight-alpha foregrounds;

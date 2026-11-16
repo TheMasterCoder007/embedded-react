@@ -6818,7 +6818,10 @@ bool er_get_dirty_rect(ERRect* out)
     if (out)
     {
         if (s_has_dirty)
+        {
             *out = s_dirty_rect;
+            er_display_rect_to_panel(out);
+        }
         else
         {
             out->x = 0;
@@ -6838,12 +6841,16 @@ int er_get_dirty_rects(ERRect* out, int max_rects)
     if (count <= max_rects)
     {
         for (int rect_index = 0; rect_index < count; rect_index++)
+        {
             out[rect_index] = s_last_paint_set.rects[rect_index];
+            er_display_rect_to_panel(&out[rect_index]);
+        }
         return count;
     }
     /* Caller's buffer is too small: collapse to the covering bounding box so the guarantee ("the
      * returned rects cover every modified pixel") holds no matter what capacity was passed. */
     er_damage_set_bounds(&s_last_paint_set, &out[0]);
+    er_display_rect_to_panel(&out[0]);
     return 1;
 }
 

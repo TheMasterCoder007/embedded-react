@@ -10,6 +10,11 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Engine: `er_set_display_rotation()` runs the app at 90, 180 or 270 degrees to a panel mounted against its
+  scan direction. Touches and dirty rects are in panel coordinates, and `er_rotate_copy()` presents a rect from
+  a logical-shape buffer.
 
 ## [0.22.1] - 2026-11-16
 ### Fixed

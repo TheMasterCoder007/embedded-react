@@ -6,6 +6,7 @@ set(EMBEDDED_REACT_SOURCES
         # core: backend glue, frame tick
         core/native_renderer.c
         core/er_parallel.c
+        core/er_display.c
 
         # scene: node pool, tree, render pass, hit-testing, disjoint damage set
         scene/arc_widget.c

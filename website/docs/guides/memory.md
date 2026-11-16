@@ -36,6 +36,9 @@ RAM** on a PSRAM board, because the scanline loops touch them per pixel:
 | `ERUI_VECTOR_MAX_ROW`                             | 1024    | The widest vector node, in pixels                              |
 | `ERUI_ARC_MAX_RADIUS`, `ERUI_ARC_SPAN_CACHE`      | 255, 8  | The arc widget's shared span cache, about 4 KB at the defaults |
 
+Widths are in the app's frame. On a panel mounted at 90 or 270 (`er_set_display_rotation()`), a
+screen-wide node is as wide as the panel is tall.
+
 Turn the perf overlay on and its `VEC n/8 IMG n/128` line shows the pools filling; a screen missing an
 asset reads as a full image pool.
 
