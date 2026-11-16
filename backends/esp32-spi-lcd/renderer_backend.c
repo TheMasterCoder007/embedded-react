@@ -90,6 +90,20 @@
 #define ER_SPI_LCD_SWAP_BGR 0
 #endif
 
+/**
+ * @brief 1 = ordered dither where ARGB8888 is reduced to RGB565, so a slow colour change shows no steps.
+ * 0 = truncate. Has no effect on the RGB332 path.
+ */
+#ifndef ER_LCD_DITHER
+#define ER_LCD_DITHER 0
+#endif
+
+#if ER_LCD_DITHER && !ER_SPI_LCD_FB332
+#define LCD_DITHER_ACTIVE 1
+#else
+#define LCD_DITHER_ACTIVE 0
+#endif
+
 static const char* TAG = "er-spi-lcd";
 
 /** @brief Full scale of an 8-bit color channel. */
@@ -206,6 +220,56 @@ static inline fbpx_t fb_store_565(uint16_t rgb)
     return (fbpx_t)__builtin_bswap16(bgr);
 #endif
 }
+#endif
+
+/*
+ * Ordered dither for the 8-bit to RGB565 step. dither_argb() moves a pixel's channels so that the
+ * plain truncating pack in fb_store() lands on the dithered level.
+ *
+ * Per channel: v - (v >> 5) + threshold for red and blue (threshold 0 to 7), v - (v >> 6) + threshold
+ * for green (0 to 3). The subtraction keeps the sum within 8 bits, and takes a value fb_load() returned
+ * back to its own level whatever the threshold, so pixels already in the framebuffer are stable.
+ */
+#if LCD_DITHER_ACTIVE
+
+/** @brief Side of the threshold matrix, a power of two. */
+#define DITHER_SIZE 4
+
+/** @brief A 0 to 15 matrix entry as the three channel thresholds, in ARGB8888 channel positions. */
+#define DITHER_CELL(level) ((((level) >> 1) << 16) | (((level) >> 2) << 8) | ((level) >> 1))
+
+/** @brief The matrix entries with the lowest and the highest thresholds. */
+#define DITHER_LOWEST DITHER_CELL(0U)
+#define DITHER_HIGHEST DITHER_CELL(15U)
+
+static const uint32_t k_dither[DITHER_SIZE][DITHER_SIZE] = {
+    {DITHER_CELL(0U), DITHER_CELL(8U), DITHER_CELL(2U), DITHER_CELL(10U)},
+    {DITHER_CELL(12U), DITHER_CELL(4U), DITHER_CELL(14U), DITHER_CELL(6U)},
+    {DITHER_CELL(3U), DITHER_CELL(11U), DITHER_CELL(1U), DITHER_CELL(9U)},
+    {DITHER_CELL(15U), DITHER_CELL(7U), DITHER_CELL(13U), DITHER_CELL(5U)},
+};
+
+/** @brief Applies packed channel thresholds to a pixel. */
+static inline uint32_t dither_apply(uint32_t argb, uint32_t thresholds)
+{
+    return argb - ((argb >> 5) & 0x00070007U) - ((argb >> 6) & 0x00000300U) + thresholds;
+}
+
+/** @brief Dithers a pixel for its place on the screen, so a partial repaint lands on the same pattern. */
+static inline uint32_t dither_argb(uint32_t argb, int screen_x, int screen_y)
+{
+    return dither_apply(argb, k_dither[screen_y & (DITHER_SIZE - 1)][screen_x & (DITHER_SIZE - 1)]);
+}
+
+#else
+
+static inline uint32_t dither_argb(uint32_t argb, int screen_x, int screen_y)
+{
+    (void)screen_x;
+    (void)screen_y;
+    return argb;
+}
+
 #endif
 
 /**
@@ -329,7 +393,39 @@ static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ct
     const uint32_t premultiplied_blue = ((argb & 0xFFU) * alpha + CHANNEL_ROUND) / CHANNEL_MAX;
     const uint32_t source_pixel =
         (alpha << 24) | (premultiplied_red << 16) | (premultiplied_green << 8) | premultiplied_blue;
+    const int screen_y = s_lcd.strip_y + y; /* banded: y is strip-local */
+#if LCD_DITHER_ACTIVE
+    /* A colour between two RGB565 levels fills as a pattern of both. */
+    const fbpx_t opaque_pixel = fb_store(dither_apply(argb, DITHER_LOWEST));
+    if (alpha == ALPHA_OPAQUE && fb_store(dither_apply(argb, DITHER_HIGHEST)) != opaque_pixel)
+    {
+        for (int row = 0; row < height; row++)
+        {
+            fbpx_t* destination_row = s_lcd.framebuffer + (size_t)(y + row) * s_lcd.width + x;
+            fbpx_t pattern[DITHER_SIZE]; /* the row's four pixels, starting at x */
+            for (int phase = 0; phase < DITHER_SIZE; phase++)
+            {
+                pattern[phase] = fb_store(dither_argb(argb, x + phase, screen_y + row));
+            }
+            int column = 0;
+            for (; column + DITHER_SIZE <= width; column += DITHER_SIZE)
+            {
+                destination_row[column] = pattern[0];
+                destination_row[column + 1] = pattern[1];
+                destination_row[column + 2] = pattern[2];
+                destination_row[column + 3] = pattern[3];
+            }
+            for (; column < width; column++)
+            {
+                destination_row[column] = pattern[column & (DITHER_SIZE - 1)];
+            }
+        }
+        mark_dirty(x, y, width, height);
+        return;
+    }
+#else
     const fbpx_t opaque_pixel = fb_store(ARGB_OPAQUE_ALPHA | (argb & 0x00FFFFFFU));
+#endif
 
     for (int row = 0; row < height; row++)
     {
@@ -345,7 +441,8 @@ static void fill_cb(uint32_t argb, int x, int y, int width, int height, void* ct
         {
             for (int column = 0; column < width; column++)
             {
-                destination_row[column] = fb_store(over_premul(fb_load(destination_row[column]), source_pixel));
+                destination_row[column] = fb_store(dither_argb(
+                    over_premul(fb_load(destination_row[column]), source_pixel), x + column, screen_y + row));
             }
         }
     }
@@ -363,6 +460,7 @@ static void copy_cb(const void* source, int source_stride_bytes, int x, int y, i
     }
     const int skip_x = x - original_x;
     const int skip_y = y - original_y;
+    const int screen_y = s_lcd.strip_y + y; /* banded: y is strip-local */
     for (int row = 0; row < height; row++)
     {
         const uint32_t* source_row =
@@ -370,7 +468,8 @@ static void copy_cb(const void* source, int source_stride_bytes, int x, int y, i
         fbpx_t* destination_row = s_lcd.framebuffer + (size_t)(y + row) * s_lcd.width + x;
         for (int column = 0; column < width; column++)
         {
-            destination_row[column] = fb_store(over_premul(fb_load(destination_row[column]), source_row[column]));
+            destination_row[column] = fb_store(dither_argb(
+                over_premul(fb_load(destination_row[column]), source_row[column]), x + column, screen_y + row));
         }
     }
     mark_dirty(x, y, width, height);
@@ -394,6 +493,7 @@ static void copy_fmt_cb(
     }
     const int skip_x = x - original_x;
     const int skip_y = y - original_y;
+    const int screen_y = s_lcd.strip_y + y; /* banded: y is strip-local */
     if (format == ER_IMAGE_RGB565)
     {
         for (int row = 0; row < height; row++)
@@ -420,7 +520,8 @@ static void copy_fmt_cb(
             fbpx_t* destination_row = s_lcd.framebuffer + (size_t)(y + row) * s_lcd.width + x;
             for (int column = 0; column < width; column++)
             {
-                destination_row[column] = fb_store(source_row[column]); /* opaque contract: no alpha inspection */
+                /* opaque contract: no alpha inspection */
+                destination_row[column] = fb_store(dither_argb(source_row[column], x + column, screen_y + row));
             }
         }
     }
@@ -443,6 +544,7 @@ blend_cb(const void* source, int source_stride_bytes, uint8_t alpha, int x, int 
     }
     const int skip_x = x - original_x;
     const int skip_y = y - original_y;
+    const int screen_y = s_lcd.strip_y + y; /* banded: y is strip-local */
     const uint32_t global_alpha = alpha;
     for (int row = 0; row < height; row++)
     {
@@ -456,9 +558,11 @@ blend_cb(const void* source, int source_stride_bytes, uint8_t alpha, int x, int 
             const uint32_t source_red = (((source_pixel >> 16) & 0xFFU) * global_alpha + CHANNEL_ROUND) / CHANNEL_MAX;
             const uint32_t source_green = (((source_pixel >> 8) & 0xFFU) * global_alpha + CHANNEL_ROUND) / CHANNEL_MAX;
             const uint32_t source_blue = ((source_pixel & 0xFFU) * global_alpha + CHANNEL_ROUND) / CHANNEL_MAX;
-            destination_row[column] =
-                fb_store(over_premul(fb_load(destination_row[column]),
-                                     (source_alpha << 24) | (source_red << 16) | (source_green << 8) | source_blue));
+            destination_row[column] = fb_store(
+                dither_argb(over_premul(fb_load(destination_row[column]),
+                                        (source_alpha << 24) | (source_red << 16) | (source_green << 8) | source_blue),
+                            x + column,
+                            screen_y + row));
         }
     }
     mark_dirty(x, y, width, height);

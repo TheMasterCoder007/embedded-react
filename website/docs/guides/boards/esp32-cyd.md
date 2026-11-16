@@ -131,6 +131,7 @@ in the backend component's `CMakeLists.txt`; change one, rebuild, reflash.
 | Text or image is mirrored             | Toggle `BOARD_LCD_MIRROR_X` or `_Y`                                                                                                                |
 | Faint lines or glitches               | Lower `LCD_PCLK_HZ` (40 MHz by default; try 30 or 26)                                                                                              |
 | Grey renders green, blue renders pink | The panel wants its colour bytes swapped: `ER_SPI_LCD_SWAP_BGR=1` in the backend's `CMakeLists.txt` (already on for this unit)                     |
+| A shallow gradient shows steps        | Build with `idf.py -DER_LCD_DITHER=1`, which dithers the 16-bit colour (off by default)                                                            |
 | Taps land in the wrong place          | Recalibrate: log the raw values in `board_touch_read`, tap the four corners, set `TOUCH_X_MIN/MAX`, `TOUCH_Y_MIN/MAX` and the `TOUCH_FLIP_*` flags |
 | Older v1/v2 board (ILI9341)           | Swap `esp_lcd_new_panel_st7789` for `esp_lcd_new_panel_ili9341` in `board.c`; the pins are identical                                               |
 

@@ -19,3 +19,10 @@ idf_component_register(
 # the two color bytes swapped AND red/blue in BGR order. Verified on-device (without it, gray renders
 # pastel-green and blue renders pink). A panel-specific quirk, so it lives here, not in the engine.
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_LCD_BANDED=1 ER_LCD_BANDED_ROWS=40 ER_SPI_LCD_SWAP_BGR=1)
+
+# Ordered dither where ARGB8888 is reduced to RGB565, so a slow colour change shows no steps: 1 = on,
+# 0 = off (default). Build with -DER_LCD_DITHER=1 to compare.
+if(NOT DEFINED ER_LCD_DITHER)
+    set(ER_LCD_DITHER 0)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ER_LCD_DITHER=${ER_LCD_DITHER})
