@@ -17,6 +17,7 @@
 #include "er_scene.h"
 #include "native_renderer.h"
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -535,6 +536,207 @@ int main(void)
             return fail("per-corner radius: the square bottom-left corner was clipped");
         if (((px(&test_context, FRAMEBUFFER_WIDTH - 1, FRAMEBUFFER_HEIGHT - 1) >> 24) & 0xFFu) == 0)
             return fail("per-corner radius: the square bottom-right corner was clipped");
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 8: a corner direction follows the box.
+     *
+     * On a box that is not square, a fixed 45° puts the two other corners on different colours. A corner
+     * direction puts them both on the middle one.
+     * ----------------------------------------------------------------------- */
+    {
+        const int box_height = 24;
+
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = (int16_t)box_height;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_corner = ER_GRADIENT_CORNER_BOTTOM_RIGHT;
+        props.gradient_angle = 90.0f; /* ignored */
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFF000000;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = 0xFFC86432;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
+
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
+        er_commit();
+
+        if (px(&test_context, 0, 0) != 0xFF000000)
+            return fail("corner: the top left is not the first stop");
+        if (px(&test_context, FRAMEBUFFER_WIDTH - 1, box_height - 1) != 0xFFC86432)
+            return fail("corner: the bottom right is not the last stop");
+        const uint32_t top_right = px(&test_context, FRAMEBUFFER_WIDTH - 1, 0);
+        const uint32_t bottom_left = px(&test_context, 0, box_height - 1);
+        for (int shift = 0; shift <= 16; shift += 8)
+        {
+            const int difference = (int)((top_right >> shift) & 0xFFu) - (int)((bottom_left >> shift) & 0xFFu);
+            if (difference < -1 || difference > 1)
+                return fail("corner: the two other corners differ");
+        }
+        const int middle_red = (int)((top_right >> 16) & 0xFFu);
+        if (middle_red < 99 || middle_red > 101)
+            return fail("corner: the two other corners are not the middle colour");
+
+        /* The opposite corner runs the same ramp backwards. */
+        props.gradient_corner = ER_GRADIENT_CORNER_TOP_LEFT;
+        er_node_set_props(root, &props);
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
+        er_commit();
+        if (px(&test_context, 0, 0) != 0xFFC86432
+            || px(&test_context, FRAMEBUFFER_WIDTH - 1, box_height - 1) != 0xFF000000)
+            return fail("corner: to the top left did not reverse the ramp");
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 9: stops interpolate premultiplied.
+     *
+     * Red fading to a transparent blue stays red all the way: the blue stop has no colour to give.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 90.0f;
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFFFF0000;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = 0x000000FF;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
+
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
+        er_commit();
+
+        for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
+        {
+            const uint32_t pixel = px(&test_context, x, 5);
+            if ((pixel & 0xFFFFu) != 0u)
+                return fail("premultiplied: the transparent stop's blue leaked into the fade");
+            if (((pixel >> 16) & 0xFFu) != (pixel >> 24))
+                return fail("premultiplied: the red did not fade with the alpha");
+        }
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 10: a shallow ramp is dithered.
+     *
+     * Eight levels over 64 columns would be eight flat bands. Dithered, a column mixes the two levels beside
+     * its exact value, and no pixel is more than one level out.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.gradient_type = ER_GRADIENT_LINEAR;
+        props.gradient_angle = 90.0f;
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFF000000;
+        props.gradient_stops[0].position = 0.0f;
+        props.gradient_stops[1].color = 0xFF080808;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
+
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
+        er_commit();
+
+        int mixed_columns = 0;
+        for (int x = 0; x < FRAMEBUFFER_WIDTH; x++)
+        {
+            const float exact = 8.0f * (float)x / (float)(FRAMEBUFFER_WIDTH - 1);
+            bool mixed = false;
+            for (int y = 0; y < FRAMEBUFFER_HEIGHT; y++)
+            {
+                const int level = (int)(px(&test_context, x, y) & 0xFFu);
+                if ((float)level < exact - 1.0f || (float)level > exact + 1.0f)
+                    return fail("dither: a pixel is more than one level from the ramp");
+                if (level != (int)(px(&test_context, x, 0) & 0xFFu))
+                    mixed = true;
+            }
+            if (mixed)
+                mixed_columns++;
+        }
+        if (mixed_columns < FRAMEBUFFER_WIDTH / 2)
+            return fail("dither: the ramp is still banded");
+        for (int y = 0; y < FRAMEBUFFER_HEIGHT; y++)
+        {
+            if (px(&test_context, 0, y) != 0xFF000000 || px(&test_context, FRAMEBUFFER_WIDTH - 1, y) != 0xFF080808)
+                return fail("dither: an end of the ramp is not its stop's colour");
+        }
+
+        /* -------------------------------------------------------------------
+         * Test 11: a partial repaint paints the same pixels.
+         *
+         * A small child changes colour and goes away again. Each time only its rect is repainted, which
+         * has to land on the pattern the full repaint drew.
+         * ------------------------------------------------------------------- */
+        static uint32_t full_frame[FRAMEBUFFER_WIDTH * FRAMEBUFFER_HEIGHT];
+        memcpy(full_frame, test_context.framebuffer, sizeof(full_frame));
+
+        ERNode* child = er_node_create(ER_NODE_VIEW);
+        ERProps child_props;
+        memset(&child_props, 0, sizeof(child_props));
+        child_props.right = child_props.bottom = ER_LAYOUT_AUTO;
+        child_props.min_width = child_props.max_width = ER_LAYOUT_AUTO;
+        child_props.min_height = child_props.max_height = ER_LAYOUT_AUTO;
+        child_props.flex_basis = ER_LAYOUT_AUTO;
+        child_props.position = ER_POSITION_ABSOLUTE;
+        child_props.left = 13;
+        child_props.top = 21;
+        child_props.width = 9;
+        child_props.height = 7;
+        child_props.opacity = OPACITY_OPAQUE;
+        child_props.background_color = 0xFFFF0000;
+        er_node_set_props(child, &child_props);
+        er_tree_append_child(root, child);
+        er_commit();
+        if (px(&test_context, 15, 23) != 0xFFFF0000)
+            return fail("partial repaint: the child did not paint");
+
+        test_context.blend_calls = 0;
+        er_tree_remove_child(root, child);
+        er_node_destroy(child);
+        er_commit();
+        if (memcmp(full_frame, test_context.framebuffer, sizeof(full_frame)) != 0)
+            return fail("partial repaint: the repainted rect differs from the full repaint");
+        /* The damage is the child's seven rows and a small margin. */
+        if (test_context.blend_calls > 16)
+            return fail("partial repaint: rows outside the damage were blitted");
+    }
+
+    /* -----------------------------------------------------------------------
+     * Test 12: a type that is not drawn behind a view leaves the background_color.
+     * ----------------------------------------------------------------------- */
+    {
+        ERProps props;
+        memset(&props, 0, sizeof(props));
+        props.left = props.top = props.right = props.bottom = ER_LAYOUT_AUTO;
+        props.width = FRAMEBUFFER_WIDTH;
+        props.height = FRAMEBUFFER_HEIGHT;
+        props.opacity = OPACITY_OPAQUE;
+        props.background_color = 0xFF336699;
+        props.gradient_type = ER_GRADIENT_CONIC;
+        props.gradient_stop_count = 2;
+        props.gradient_stops[0].color = 0xFFFF0000;
+        props.gradient_stops[1].color = 0xFF0000FF;
+        props.gradient_stops[1].position = 1.0f;
+        er_node_set_props(root, &props);
+
+        memset(test_context.framebuffer, 0, sizeof(test_context.framebuffer));
+        er_commit();
+        if (px(&test_context, FRAMEBUFFER_WIDTH / 2, FRAMEBUFFER_HEIGHT / 2) != 0xFF336699)
+            return fail("undrawn type: the background_color did not paint");
     }
 
 #else /* ERUI_GRADIENT == 0 */

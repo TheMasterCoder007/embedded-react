@@ -123,6 +123,7 @@ const SHADOW_STYLE = [
 const VIEW_STYLE = [
   ...SHADOW_STYLE,
   'backgroundColor',
+  'backgroundImage',
   'borderRadius',
   'borderTopLeftRadius',
   'borderTopRightRadius',
@@ -163,7 +164,7 @@ const BOX_STYLE = [
 ];
 
 /** What the engine draws a Modal's own box with. */
-const MODAL_STYLE = [...BOX_STYLE, ...SHADOW_STYLE];
+const MODAL_STYLE = [...BOX_STYLE, ...SHADOW_STYLE, 'backgroundImage'];
 
 /** What the engine draws a TextInput with. */
 const TEXT_INPUT_STYLE = [...BOX_STYLE, 'color', 'fontSize'];

@@ -17,6 +17,8 @@
 // Pure prop-marshalling helpers. No engine / NativeUI dependency, so these are unit-testable in
 // plain Node (see src/__tests__/props.unit.test.js). The host config wires them to NativeUI.
 
+import {parseBackgroundImage} from './embedded-react/background-image.mts';
+
 // Top-level props NativeUI understands directly (not part of `style`). Everything else style-ish is
 // expected inside props.style. Event handlers (on*) are routed separately via setEvent.
 export const PASSTHROUGH = [
@@ -179,9 +181,44 @@ export function resolveImageSource(source) {
   return null;
 }
 
+// Gradient strings already read, and the problems already warned about.
+const backgroundImages = new Map();
+const BACKGROUND_IMAGES_MAX = 32;
+const backgroundProblems = new Set();
+
+/**
+ * Reads a `backgroundImage` style into the gradient the bridge takes, or undefined (with one warning) for a
+ * value the engine does not draw.
+ */
+export function resolveBackgroundImage(value) {
+  const cached = typeof value === 'string' ? backgroundImages.get(value) : null;
+  if (cached) return cached;
+  const {gradient, problem} = parseBackgroundImage(value);
+  if (problem) {
+    if (!backgroundProblems.has(problem)) {
+      backgroundProblems.add(problem);
+      console.warn(`embedded-react: backgroundImage: ${problem}`);
+    }
+    return undefined;
+  }
+  if (typeof value === 'string') {
+    if (backgroundImages.size >= BACKGROUND_IMAGES_MAX)
+      backgroundImages.clear();
+    backgroundImages.set(value, gradient);
+  }
+  return gradient;
+}
+
 export function buildProps(type, props, flatStyle) {
   const flat = flatStyle ? {...flatStyle} : {};
   if (!flatStyle) flattenStyle(props.style, flat);
+  // A <Dial> keeps the engine's gradient fields for its indicatorGradient.
+  if (flat.backgroundImage != null) {
+    flat.backgroundImage =
+      type === 'Dial'
+        ? undefined
+        : resolveBackgroundImage(flat.backgroundImage);
+  }
   for (const key of PASSTHROUGH) {
     if (props[key] !== undefined) flat[key] = props[key];
   }

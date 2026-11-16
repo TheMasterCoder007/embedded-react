@@ -136,6 +136,7 @@ const SCENARIOS: Scenario[] = [
     taps: '120,240',
   },
   {name: 'style', file: fixture('style'), screen: PORTRAIT},
+  {name: 'gradient', file: fixture('gradient'), screen: PORTRAIT, flowA: true},
   {name: 'shadow', file: fixture('shadow'), screen: PORTRAIT, flowA: true},
   // The button, whose shadow follows state.
   {

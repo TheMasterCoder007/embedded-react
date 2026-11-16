@@ -202,6 +202,7 @@ static const ErbPropInfo s_props[] = {
     [148] = {offsetof(ERProps, gradient_stops[1].position), ERB_PROP_KIND_FLOAT, ERB_NO_ANIMATION, 0},
     [149] = {offsetof(ERProps, gradient_stops[2].position), ERB_PROP_KIND_FLOAT, ERB_NO_ANIMATION, 0},
     [150] = {offsetof(ERProps, gradient_stops[3].position), ERB_PROP_KIND_FLOAT, ERB_NO_ANIMATION, 0},
+    [151] = {offsetof(ERProps, gradient_corner), ERB_PROP_KIND_ENUM, ERB_NO_ANIMATION, ER_GRADIENT_CORNER_TOP_LEFT},
     SPAN_PROPS(0)
     SPAN_PROPS(1)
     SPAN_PROPS(2)

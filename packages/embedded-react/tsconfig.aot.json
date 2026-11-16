@@ -23,6 +23,7 @@
     "test/erb-frames/*.mts",
     "test/erb-frames/*.d.ts",
     "assets/**/*.mjs",
+    "src/embedded-react/background-image.mts",
     "src/embedded-react/named-colors.js",
     "src/embedded-react/svg-ops.js",
     "src/embedded-react/warn-props.js"

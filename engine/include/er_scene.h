@@ -111,7 +111,7 @@ extern "C"
  * Bump ER_ABI when a prop, node type, event, animated property or enum value is added. Raise ER_ABI_MIN when
  * one is removed or changes meaning. The prop ids a package names are listed in runtime/erb_props.c.
  */
-#define ER_ABI 1
+#define ER_ABI 2
 #define ER_ABI_MIN 1
 
     /*----------------------------------------------------------------------------------------------------------------------
@@ -470,6 +470,21 @@ extern "C"
         ER_GRADIENT_RADIAL = 2, /**< Radial gradient from the rect centre outward (requires ERUI_GRADIENT_RADIAL). */
         ER_GRADIENT_CONIC = 3,  /**< Conic/angular gradient (VECTOR fills only; requires ERUI_GRADIENT_CONIC). */
     } ERGradientType;
+
+    /**
+     * @brief The corner a linear View gradient runs to.
+     *
+     * A corner direction follows the box: the two other corners share the middle colour whatever the aspect
+     * ratio, as CSS `to bottom right` does. It is resolved from the laid-out size, so gradient_angle is ignored.
+     */
+    typedef enum
+    {
+        ER_GRADIENT_CORNER_NONE = 0,         /**< gradient_angle sets the direction (default). */
+        ER_GRADIENT_CORNER_TOP_RIGHT = 1,    /**< From the bottom left to the top right. */
+        ER_GRADIENT_CORNER_BOTTOM_RIGHT = 2, /**< From the top left to the bottom right. */
+        ER_GRADIENT_CORNER_BOTTOM_LEFT = 3,  /**< From the top right to the bottom left. */
+        ER_GRADIENT_CORNER_TOP_LEFT = 4,     /**< From the bottom right to the top left. */
+    } ERGradientCorner;
 
     /**
      * @brief One color stop in a gradient.
@@ -860,6 +875,7 @@ extern "C"
 
         /* --- Gradient (View-family; requires ERUI_GRADIENT at build time) --- */
         uint8_t gradient_type;       /**< ERGradientType — default ER_GRADIENT_NONE. */
+        uint8_t gradient_corner;     /**< ERGradientCorner — default ER_GRADIENT_CORNER_NONE. Linear only. */
         float gradient_angle;        /**< Angle in degrees: 0 = top→bottom, 90 = left→right. */
         uint8_t gradient_stop_count; /**< Number of valid entries in gradient_stops [0–ER_GRADIENT_MAX_STOPS]. */
         ERGradientStop gradient_stops[ER_GRADIENT_MAX_STOPS]; /**< Color stops in order of ascending position. */

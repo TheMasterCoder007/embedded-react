@@ -75,9 +75,35 @@ export type StyleValue =
   | number
   | AnimatedNode
   | TransformStyle[]
+  | BackgroundImageValue[]
   | ShadowOffset
   | TransformOrigin
   | undefined;
+
+/** A color stop of a gradient. Each position is a percentage such as `'40%'`; two paint the color across a band. */
+export interface GradientColorStop {
+  color: string;
+  positions?: string[];
+}
+
+/**
+ * A gradient in React Native's object form. `direction` is an angle (`'45deg'`) or `to` a side or corner
+ * (`'to bottom right'`), and defaults to `'to bottom'`. A radial gradient is a circle from the center to the
+ * farthest corner.
+ */
+export type BackgroundImageValue =
+  | {
+      type: 'linear-gradient';
+      direction?: string;
+      colorStops: GradientColorStop[];
+    }
+  | {
+      type: 'radial-gradient';
+      shape: 'circle';
+      size?: 'farthest-corner';
+      position?: 'center';
+      colorStops: GradientColorStop[];
+    };
 
 /** A single style object. Properties mirror the React Native subset the engine supports. */
 export interface ViewStyle {
@@ -158,6 +184,12 @@ export interface ViewStyle {
 
   // Paint.
   backgroundColor?: string | AnimatedNode;
+  /**
+   * One gradient of two to four stops behind a View, ScrollView or Pressable: a CSS `linear-gradient()` or
+   * `radial-gradient(circle, ...)` string, or an array of one gradient object. Firmware built without
+   * `ERUI_GRADIENT` paints `backgroundColor` instead.
+   */
+  backgroundImage?: string | BackgroundImageValue[];
   opacity?: number | AnimatedNode;
 
   // Border.
