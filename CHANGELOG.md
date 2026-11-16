@@ -25,6 +25,8 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `er_keyboard_get_frame()` reads the strip it covers.
 - The `backgroundImage` style, as React Native takes it: one `linear-gradient()` or `radial-gradient(circle, ...)`
   behind a View, as a CSS string or a gradient object, in both flows.
+- `backends/esp32-spi-lcd` and `backends/pico-spi-lcd`: built with `ER_LCD_DITHER=1`, they dither down to RGB565, so
+  a shallow gradient or a fade shows no steps. Off by default.
 - Engine: `gradient_corner` runs a linear View gradient to a corner of its box, whatever the aspect ratio. The
   engine ABI is now 2.
 

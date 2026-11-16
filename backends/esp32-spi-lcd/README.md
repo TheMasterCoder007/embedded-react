@@ -8,6 +8,9 @@ the panel's own GRAM retains everything else. Full 16-bit color at a fraction of
 Without it (the source default, `ER_LCD_BANDED=0`) it keeps a full framebuffer, RGB565 or RGB332
 with `ER_SPI_LCD_FB8=1`, for boards with a big enough block.
 
+`ER_LCD_DITHER=1` adds an ordered dither where colours are reduced to RGB565, so a shallow gradient or
+a fade shows no steps. It is off by default.
+
 **Docs:** [ESP32 CYD guide](https://embedded-react.dev/guides/boards/esp32-cyd#how-it-fits-without-psram)
 (how it fits, tuning, the `ER_SPI_LCD_SWAP_BGR` panel-order flag) and
 [Writing a backend](https://embedded-react.dev/internals/writing-a-backend#optional-extensions) for

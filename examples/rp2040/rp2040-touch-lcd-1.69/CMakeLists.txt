@@ -207,6 +207,13 @@ target_link_options(embedded-react-watch PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/stack_guard.ld"
 )
 
+# Ordered dither in the backend where ARGB8888 is reduced to RGB565, so a slow colour change shows no steps:
+# 1 = on, 0 = off (default). Build with -DER_LCD_DITHER=1 to compare.
+if(NOT DEFINED ER_LCD_DITHER)
+    set(ER_LCD_DITHER 0)
+endif()
+target_compile_definitions(embedded-react-watch PRIVATE ER_LCD_DITHER=${ER_LCD_DITHER})
+
 # Bring-up debug aids (see main.c): -DER_BOARD_DEBUG=1 waits for USB + heartbeat-logs; =2 also holds
 # a color-bar test pattern at boot.
 if(DEFINED ER_BOARD_DEBUG)
