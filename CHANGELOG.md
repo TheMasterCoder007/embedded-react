@@ -27,6 +27,9 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - esp32-lcd: `er_esp32_lcd_backend_init(panel)` takes its size and rotation from `er_set_display_rotation()`, and
   present turns through `er_rotate_copy()`. The overlay is only sent again after a capture or where the app draws
   over it. The S3 example sets the rotation on the engine and passes touches through as read.
+- dma2d: the backend takes its size from `er_set_display_rotation()`. A rotated panel draws into a logical-shape
+  `render_buffer`, and the new `er_dma2d_backend_present()` copies each frame's damage into the LTDC framebuffer
+  turned and cleans the D-cache. It replaces `er_dma2d_backend_take_dirty()`.
 
 ## [0.22.1] - 2026-11-16
 ### Fixed

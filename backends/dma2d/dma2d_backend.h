@@ -36,9 +36,15 @@
  * drops into a bare-metal loop, an RTOS task, or firmware that owns the peripheral behind a
  * service interface.
  *
+ * The size comes from the engine: call er_set_display_rotation() with the panel's size first.
+ *
  * Double/triple-buffered LTDC panels: see README.md — call er_set_display_buffer_count() once
  * at init, flip buffers with er_dma2d_backend_set_framebuffer(), and report each flip with
  * er_display_present().
+ *
+ * Rotated panels: the engine draws into `render_buffer`, a buffer of the logical shape, and
+ * er_dma2d_backend_present() copies each frame's damage into the framebuffer turned. Scan-out is
+ * single-buffered then.
  */
 
 #include <stdbool.h>
@@ -65,19 +71,24 @@ extern "C"
     /**
      * @brief Configuration for er_dma2d_backend_init.
      *
-     * Only `dma2d`, `framebuffer`, `width`, `height` and `format` are required; every hook may be
-     * NULL. `stride_pixels` of 0 means tightly packed (== width).
+     * Only `dma2d`, `framebuffer` and `format` are required, plus `render_buffer` when the display is
+     * rotated; every hook may be NULL. A stride of 0 means tightly packed.
      */
     typedef struct
     {
         volatile void* dma2d; /**< DMA2D peripheral. The register layout is common to all STM32 families with DMA2D. */
 
-        void* framebuffer;               /**< Initial render target (the OFF-screen buffer on page-flipped panels). */
-        int width;                       /**< Framebuffer width in pixels. */
-        int height;                      /**< Framebuffer height in pixels. */
-        int stride_pixels;               /**< Row pitch in pixels (>= width); 0 = tightly packed. LTDC framebuffers
-                                              are commonly padded to a 64-byte row boundary. */
-        ErDma2dFramebufferFormat format; /**< Framebuffer pixel format. */
+        void* framebuffer;               /**< The framebuffer the LTDC scans, at the panel's size (the OFF-screen
+                                              buffer on page-flipped panels). */
+        int stride_pixels;               /**< Framebuffer row pitch in pixels (>= panel width); 0 = tightly
+                                              packed. LTDC framebuffers are commonly padded to a 64-byte row. */
+        ErDma2dFramebufferFormat format; /**< Pixel format of the framebuffer and the render buffer. */
+
+        void* render_buffer;      /**< Buffer of the logical shape the engine draws into, copied to the
+                                       framebuffer by er_dma2d_backend_present(). Required when the display is
+                                       rotated; NULL draws straight into the framebuffer. A second LTDC
+                                       framebuffer works when it holds logical height x render stride pixels. */
+        int render_stride_pixels; /**< Render buffer row pitch in pixels (>= logical width); 0 = tightly packed. */
 
         /*------------------------------------------------------------------------------------------------
          - Optional hooks. With `start`/`wait_complete` NULL the backend starts transfers itself and
@@ -118,7 +129,8 @@ extern "C"
      *
      * @param[in] config  Backend configuration (copied).
      *
-     * @return true on success; false on a bad config (no peripheral/framebuffer, non-positive size).
+     * @return true on success; false on a bad config (no peripheral or framebuffer, a stride too narrow,
+     *         no render buffer at a rotation other than 0) or when no display size is set.
      */
     bool er_dma2d_backend_init(const ErDma2dBackendConfig* config);
 
@@ -126,13 +138,14 @@ extern "C"
      * @brief Retargets rendering to another framebuffer (page flip on double/triple-buffered LTDC).
      *
      * Waits for any in-flight transfer into the old buffer first. Call between er_commit() calls,
-     * then er_display_present() to advance the engine's damage rotation.
+     * then er_display_present() to advance the engine's damage rotation. With a render buffer this
+     * only changes where er_dma2d_backend_present() copies to.
      *
-     * @param[in] framebuffer  The new render target (same size/format as configured).
+     * @param[in] framebuffer  The new framebuffer (same size/format as configured).
      */
     void er_dma2d_backend_set_framebuffer(void* framebuffer);
 
-    /** @brief Returns the current render target framebuffer. */
+    /** @brief Returns the current framebuffer. */
     void* er_dma2d_backend_framebuffer(void);
 
     /**
@@ -144,16 +157,18 @@ extern "C"
     void er_dma2d_backend_wait(void);
 
     /**
-     * @brief Returns and clears the dirty bounding box accumulated since the previous call.
+     * @brief Finishes the frame: waits for the DMA2D, then takes and clears the dirty box.
      *
-     * The box covers every pixel this backend wrote (DMA2D or CPU). Useful for partial LTDC
-     * updates or diagnostics; er_get_dirty_rect() reports the same information engine-side.
+     * The box covers every pixel drawn since the previous call (DMA2D or CPU), across commits. With a
+     * render buffer it is copied into the framebuffer, turned by the display rotation, and the D-cache
+     * is cleaned over what was written. Call once per frame, before a flip.
      *
-     * @param[out] x,y,width,height  The dirty rectangle (untouched when the function returns false).
+     * @param[out] x,y,width,height  The rect in panel coordinates (untouched when it returns false). Each
+     *                               may be NULL.
      *
      * @return true if anything was drawn since the last call.
      */
-    bool er_dma2d_backend_take_dirty(int* x, int* y, int* width, int* height);
+    bool er_dma2d_backend_present(int* x, int* y, int* width, int* height);
 
     /** @brief Unregisters nothing (the engine keeps its backend pointer) but clears internal state. */
     void er_dma2d_backend_destroy(void);
