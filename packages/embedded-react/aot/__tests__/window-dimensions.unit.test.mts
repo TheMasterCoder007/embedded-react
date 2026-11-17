@@ -16,6 +16,9 @@
 
 import {describe, expect, it} from 'vitest';
 import {compilePackage} from '../compile.mts';
+import {resolveOptions} from '../compiler/options.mts';
+import {compilePanel} from '../compiler/package/assemble.mts';
+import {FunctionKind} from '../compiler/package/format.mts';
 
 const IMPORTS = `import {useState, useMemo} from 'react';
 import {View, Text, Pressable, Dimensions, useWindowDimensions} from 'embedded-react';
@@ -24,6 +27,44 @@ import {View, Text, Pressable, Dimensions, useWindowDimensions} from 'embedded-r
 /** The package an app compiles to. */
 const programOf = (body: string): Uint8Array =>
   compilePackage(`${IMPORTS}${body}`).program;
+
+/** How many resize functions an app's program has. */
+const resizeFunctionsOf = (body: string): number =>
+  compilePanel(
+    `${IMPORTS}${body}`,
+    resolveOptions({screen: {width: 240, height: 320}}),
+  ).program.functions.filter(({kind}) => kind === FunctionKind.resize).length;
+
+describe('a screen size that changes while the app runs', () => {
+  it('gives an app that reads the size one resize function', () => {
+    expect(
+      resizeFunctionsOf(`
+export function App() {
+  const {width} = useWindowDimensions();
+  const [count, setCount] = useState(width);
+  return (
+    <Pressable onPress={() => setCount(count + 1)} style={{width: width / 2}}>
+      <Text>{count}</Text>
+    </Pressable>
+  );
+}`),
+    ).toBe(1);
+  });
+
+  it('gives an app that reads no size none', () => {
+    expect(
+      resizeFunctionsOf(`
+export function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <Pressable onPress={() => setCount(count + 1)} style={{width: 40}}>
+      <Text>{count}</Text>
+    </Pressable>
+  );
+}`),
+    ).toBe(0);
+  });
+});
 
 describe('the panel size read the React Native way', () => {
   it('compiles useWindowDimensions() as it does the screen global', () => {

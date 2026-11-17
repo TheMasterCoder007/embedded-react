@@ -35,7 +35,7 @@
 #define ERB_FORMAT_MAJOR 1u
 
 /** @brief Additions within the major. A package's minor may be at most this. */
-#define ERB_FORMAT_MINOR 16u
+#define ERB_FORMAT_MINOR 17u
 
 /** @brief The minor whose table directory names each table's panel. Before it, every table is every panel's. */
 #define ERB_FORMAT_MINOR_PANELS 4u
@@ -57,6 +57,9 @@
  * 12 bytes. Before it, every import is required and a native events table isn't read.
  */
 #define ERB_FORMAT_MINOR_OPTIONAL 12u
+
+/** @brief The minor whose packages can take a new screen size while they run (ERB_FUNCTION_KIND_RESIZE). */
+#define ERB_FORMAT_MINOR_RESIZE 17u
 
 /** @brief The container tag of a Flow B package. */
 #define ERB_TAG "erb"
@@ -468,6 +471,7 @@ enum
     ERB_FUNCTION_KIND_HELPER = 0x84,
     ERB_FUNCTION_KIND_ANIMATION_DONE = 0x85,
     ERB_FUNCTION_KIND_NATIVE_EVENT = 0x86, /**< Entered with the event's arguments. Since minor 11. */
+    ERB_FUNCTION_KIND_RESIZE = 0x87,       /**< Works the screen's boot values out again. Since minor 17. */
 };
 
 /** @brief Constant prop value kinds (each ABI prop has one; see erb_props.c). */

@@ -213,6 +213,26 @@ void erb_unload(void);
 /** @brief Advances the app's timers. Call each frame, before er_commit(). */
 void erb_tick(uint32_t elapsed_ms);
 
+/**
+ * @brief Gives the running app a new screen size with its state kept, after a live rotation
+ *        (er_set_display_rotation()) or a window resize.
+ *
+ * It works for a size that picks the layout already running. `screen` and `useWindowDimensions()` read the new
+ * size, the root and er_set_screen_bounds() take it, and what the app worked out from the size is worked out and
+ * set again. State, lists, timers and animations are left as they are, and mount effects don't run again.
+ *
+ * Call it from the frame-loop task, between frames. A hot reload loads at the size in its own ErbConfig, so leave
+ * that at 0 on a board that turns.
+ *
+ * @param[in] width   The app's new width; 0 takes er_get_display_size().
+ * @param[in] height  The app's new height.
+ *
+ * @return false, with the app left as it was, when the size picks another layout or the package was built before
+ *         format minor 17: load the package again for the new size. Also false when no app runs (an error screen
+ *         that is up takes the size), when there is no size to take, and from inside a native call.
+ */
+bool erb_set_screen_size(int width, int height);
+
 /** @brief True while an app is loaded and has not stopped with a fault. */
 bool erb_running(void);
 

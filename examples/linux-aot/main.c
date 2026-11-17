@@ -26,6 +26,8 @@
  * This is the desktop proxy for a no-PSRAM MCU: no JS heap, no interpreter, a fixed static footprint.
  *
  *   embedded-react-desktop-aot [package.erpkg]    defaults to packages/embedded-react/dist/app.erpkg
+ *
+ * T turns the panel a quarter turn while the app runs.
  */
 
 #define SDL_MAIN_HANDLED
@@ -67,6 +69,10 @@
 #define PATH_BYTES 512
 
 #define SCREENSHOT_BITS_PER_PIXEL 32
+
+/** @brief What the T key turns the panel by, in degrees, and a full turn. */
+#define QUARTER_TURN 90
+#define FULL_TURN 360
 
 /** @brief The firmware's arena. */
 static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
@@ -145,6 +151,46 @@ static void mouse_touch(ERTouchPhase phase, int window_x, int window_y, float sc
 }
 
 /**
+ * @brief Turns the panel a quarter turn while the app runs, as examples/linux's er_host_set_rotation() does.
+ *
+ * @param[in]     window    The window, which swaps its sides.
+ * @param[in,out] rotation  The display rotation.
+ * @param[in,out] width     The app's width in pixels.
+ * @param[in,out] height    The app's height in pixels.
+ *
+ * @return false when the backend can't take the turn, with everything left as it was.
+ */
+static bool turn_panel(SDL_Window* window, ERDisplayRotation* rotation, int* width, int* height)
+{
+    /* The panel as it scans, which a turn leaves alone. */
+    const ERDisplayRotation turned = (ERDisplayRotation)(((int)*rotation + QUARTER_TURN) % FULL_TURN);
+    const bool was_swapped = *rotation == ER_ROTATION_90 || *rotation == ER_ROTATION_270;
+    const int panel_width = was_swapped ? *height : *width;
+    const int panel_height = was_swapped ? *width : *height;
+    if (!er_set_display_rotation(turned, panel_width, panel_height))
+    {
+        return false;
+    }
+    /* The window first: the backend's new textures are made for the window as it will be. */
+    int window_width = 0;
+    int window_height = 0;
+    SDL_GetWindowSize(window, &window_width, &window_height);
+    SDL_SetWindowSize(window, window_height, window_width);
+    if (!er_sdl_backend_resize(*height, *width))
+    {
+        SDL_SetWindowSize(window, window_width, window_height);
+        er_set_display_rotation(*rotation, panel_width, panel_height);
+        er_sdl_backend_resize(*width, *height);
+        return false;
+    }
+    const int turned_width = *height;
+    *height = *width;
+    *width = turned_width;
+    *rotation = turned;
+    return true;
+}
+
+/**
  * @brief Entry point: bring up SDL + the engine, load the package once, run the frame loop.
  *
  * @param[in] argc  The argument count.
@@ -212,7 +258,7 @@ int main(int argc, char** argv)
     SDL_GetRendererOutputSize(renderer, &physical_width, &physical_height);
     const float scale = (float)physical_width / (float)screen_width;
 
-    const ERDisplayRotation rotation = env_rotation();
+    ERDisplayRotation rotation = env_rotation();
     const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
     er_set_display_rotation(
         rotation, swapped ? physical_height : physical_width, swapped ? physical_width : physical_height);
@@ -440,12 +486,17 @@ int main(int argc, char** argv)
     uint32_t previous_ticks = start_ticks;
     while (running)
     {
+        bool turn_requested = false;
         SDL_Event event;
         while (SDL_PollEvent(&event))
         {
             if (event.type == SDL_QUIT || (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE))
             {
                 running = false;
+            }
+            else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_t && !event.key.repeat)
+            {
+                turn_requested = true;
             }
             else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
             {
@@ -460,6 +511,22 @@ int main(int argc, char** argv)
                 mouse_touch(ER_TOUCH_MOVE, event.motion.x, event.motion.y, scale);
             }
         }
+
+        /* Live rotation (T key): the running layout takes the new size with its state kept. A size that picks
+           another layout, or a package built before it could resize, is loaded again. */
+        if (turn_requested && turn_panel(window, &rotation, &physical_width, &physical_height))
+        {
+            SDL_Log("panel turned to %d", (int)rotation);
+            ErbError turn_error;
+            if (!erb_set_screen_size(0, 0) && !erb_load(package, package_bytes, &config, &turn_error))
+            {
+                char message[MESSAGE_BYTES];
+                erb_error_message(&turn_error, message, sizeof(message));
+                SDL_Log("the package didn't load: %s", message);
+                erb_show_error(&turn_error);
+            }
+        }
+        turn_requested = false;
 
         er_commit();
         er_sdl_present();

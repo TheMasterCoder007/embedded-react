@@ -378,8 +378,10 @@ subscription with `remove()`. A value read from `screen` or `Dimensions.get()` o
 not read again, so size a layout that has to follow the turn from the hook.
 
 **Flow B:** both are worked out at boot exactly as `screen` is, so a breakpoint written with either
-one behaves the same. A package is compiled for its sizes, so there is no `change` event and the size
-is fixed while the app runs.
+one behaves the same. The firmware changes the size with `erb_set_screen_size()`: what reads the size, `screen`
+included, is worked out and set again, state is kept, and an effect that depends on the size runs. There
+is no `change` event. A size that picks another of the package's layouts isn't taken live, and the firmware
+loads the package again.
 
 ## Timers and time
 

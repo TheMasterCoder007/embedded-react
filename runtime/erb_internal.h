@@ -105,6 +105,7 @@ typedef struct
     uint16_t root_template;
     uint16_t boot_function;
     uint16_t update_function;
+    uint16_t resize_function; /**< Its ERB_FUNCTION_KIND_RESIZE function, or ERB_NONE. */
 
     const uint8_t* table[ERB_TABLE_COUNT_];
     uint32_t table_length[ERB_TABLE_COUNT_];
@@ -348,6 +349,13 @@ typedef enum
  */
 bool erb_verify(
     const void* package, size_t package_bytes, const ErbConfig* config, ErbProgram* program, ErbError* error);
+
+/**
+ * @brief Whether the panel a verified program runs is still the one a screen size picks.
+ *
+ * @return false when the size picks another panel, or none.
+ */
+bool erb_verify_same_panel(const ErbProgram* program, uint16_t width, uint16_t height);
 
 /** @brief The VM's arithmetic, for a layout check: an ERB_MATH_ function, its int conversion and its whole-number
  * division (an ERB_CHECK_OP_IDIV_ mode). */

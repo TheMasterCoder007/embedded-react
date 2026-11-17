@@ -22,9 +22,10 @@
  *   erb-frames <out.raw> <width> <height> <package.erpkg | app.js> [taps [settle_ms]]
  *
  * taps is "x,y x,y ...": each is a press and release, with a 16 ms tick after each half. "x,y>x2,y2" is a drag
- * instead: a press at x,y, DRAG_STEPS moves to x2,y2 with a tick after each, and a release there. The frame is
- * written as width * height ARGB8888 words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when
- * it is left out), so a scenario can take its frame in the middle of an animation. Both flows get the same probe
+ * instead: a press at x,y, DRAG_STEPS moves to x2,y2 with a tick after each, and a release there. "@WxH" gives the
+ * running app a new screen size, and the frame is then that size. The frame is written as width * height ARGB8888
+ * words, little-endian, after the taps and a settle of settle_ms (SETTLE_MS when it is left out), so a scenario can
+ * take its frame in the middle of an animation. Both flows get the same probe
  * native module, which the native-calls and native-events scenarios call. Its events are posted at the start of a
  * frame, as a board's frame loop posts them.
  */
@@ -71,6 +72,13 @@ static uint32_t s_arena[ARENA_BYTES / sizeof(uint32_t)];
 
 /** @brief The app is a Flow A bundle rather than a Flow B package. */
 static bool s_flow_a;
+
+/** @brief The app's size, which an "@WxH" changes. */
+static int s_width;
+static int s_height;
+
+/** @brief An "@WxH" the app didn't take. */
+static bool s_resize_refused;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - The probe module, which the native-calls, native-events, native-strings and native-records scenarios call. It packs
@@ -379,7 +387,21 @@ static void frame(void)
     er_commit();
 }
 
-/** @brief Runs the taps and drags in @p taps ("x,y x,y>x2,y2 ..."). */
+/** @brief Gives the framebuffer and the running app a new size. */
+static void resize(int width, int height)
+{
+    if (!er_software_backend_resize(width, height)
+        || !(s_flow_a ? er_runtime_set_screen_size(width, height) : erb_set_screen_size(width, height)))
+    {
+        s_resize_refused = true;
+        return;
+    }
+    s_width = width;
+    s_height = height;
+    frame();
+}
+
+/** @brief Runs the taps, drags and resizes in @p taps ("x,y x,y>x2,y2 @WxH ..."). */
 static void run_taps(const char* taps)
 {
     const char* cursor = taps;
@@ -388,6 +410,12 @@ static void run_taps(const char* taps)
         int x;
         int y;
         int characters_read;
+        if (sscanf(cursor, " @%dx%d%n", &x, &y, &characters_read) == 2)
+        {
+            cursor += characters_read;
+            resize(x, y);
+            continue;
+        }
         if (sscanf(cursor, " %d,%d%n", &x, &y, &characters_read) != 2)
         {
             break;
@@ -518,11 +546,18 @@ int main(int argc, char** argv)
     }
     const size_t path_length = strlen(argv[4]);
     s_flow_a = path_length > 3 && strcmp(argv[4] + path_length - 3, ".js") == 0;
+    s_width = width;
+    s_height = height;
     const int status = s_flow_a ? run_flow_a(package, package_bytes, width, height, taps, settle_ms)
                                 : run_flow_b(package, package_bytes, width, height, taps, settle_ms);
     if (status != 0)
     {
         return status;
+    }
+    if (s_resize_refused)
+    {
+        fprintf(stderr, "the app didn't take a new size\n");
+        return EXIT_APP_FAILED;
     }
 
     FILE* frame_file = fopen(frame_path, "wb");
@@ -531,7 +566,7 @@ int main(int argc, char** argv)
         fprintf(stderr, "can't write %s\n", frame_path);
         return EXIT_HOST_FAILED;
     }
-    fwrite(er_software_framebuffer(), sizeof(uint32_t), (size_t)width * (size_t)height, frame_file);
+    fwrite(er_software_framebuffer(), sizeof(uint32_t), (size_t)s_width * (size_t)s_height, frame_file);
     fclose(frame_file);
     return 0;
 }

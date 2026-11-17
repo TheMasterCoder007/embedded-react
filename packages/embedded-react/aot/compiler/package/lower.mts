@@ -273,6 +273,8 @@ interface Lowering {
   requested: Slot | null;
   /** Set only at load: it guards the props the update sets once, and runs the update's first pass. */
   once: Slot | null;
+  /** Toggled by the resize function, so the update sets again what reads the screen's size. */
+  resized: Slot | null;
   effects: EffectSlots;
   /** The function each dep-driven effect checks its deps in, and each mount effect's. */
   effectFunctions: {checks: number[]; mounts: number[]};
@@ -702,6 +704,7 @@ function planSlots(
   | 'inputText'
   | 'requested'
   | 'once'
+  | 'resized'
   | 'effects'
 > {
   const {output} = app;
@@ -1136,6 +1139,11 @@ function planSlots(
     )
       ? arena.track(arena.slot(ValueType.bool))
       : null;
+  const resized = app.boot.slots.some(
+    bootSlot => bootSlot.initializer.kind === 'screen',
+  )
+    ? arena.track(arena.slot(ValueType.bool))
+    : null;
 
   // The mount effects run each dep-driven effect first, so its checks wait for the last of them.
   const checksQueued = output.dependencyEffects.length
@@ -1167,6 +1175,7 @@ function planSlots(
     inputText,
     requested,
     once,
+    resized,
     effects: {copies, checksQueued, mountNext},
   };
 }
@@ -1886,14 +1895,15 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
         nodeHandle(codegen, node, lowering),
       ),
     );
-  // Set again when a state it reads changed; what reads something no state write flags (a ref, the clock) is
-  // set on every pass.
+  // Set again when a state it reads changed, or the screen's size did; what reads something no state write flags
+  // (a ref, the clock) is set on every pass.
+  const {resized} = lowering;
   const whenRead = (reads: StateReads, lower: () => void): void => {
     const bits = reads
       ? [...reads].map(state => stateSlotOf(state, lowering.slots))
       : [];
     if (bits.length && bits.every(slot => slot.flags & SlotFlag.tracked)) {
-      whenDirty(builder, bits, lower);
+      whenDirty(builder, resized ? [...bits, resized] : bits, lower);
     } else {
       lower();
     }
@@ -1955,13 +1965,24 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
   const builtOnce = drawings.filter(
     ({node}) => !updatedVectorOf(node) && atRoot(node),
   );
-  if (rootSetOnce.length || rootPools.length || builtOnce.length) {
+  const buildRows = (): void =>
+    rootPools.forEach(pool => buildPool(codegen, pool, lowering));
+  const setRootOnce = (): void => {
+    rootSetOnce.forEach(node =>
+      located(node, () => setNode(codegen, node, lowering)),
+    );
+    builtOnce.forEach(({node, vector}) => draw(node, vector));
+  };
+  if (resized && (rootSetOnce.length || builtOnce.length)) {
+    // The rows are built once; what reads the screen's size is set again when it changes.
+    if (rootPools.length) {
+      whenDirty(builder, [lowering.once!], buildRows);
+    }
+    whenDirty(builder, [lowering.once!, resized], setRootOnce);
+  } else if (rootSetOnce.length || rootPools.length || builtOnce.length) {
     whenDirty(builder, [lowering.once!], () => {
-      rootPools.forEach(pool => buildPool(codegen, pool, lowering));
-      rootSetOnce.forEach(node =>
-        located(node, () => setNode(codegen, node, lowering)),
-      );
-      builtOnce.forEach(({node, vector}) => draw(node, vector));
+      buildRows();
+      setRootOnce();
     });
   }
 
@@ -1981,6 +2002,26 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
         whileBuilt(codegen, places.get(node), () => draw(node, vector)),
       );
     }
+  }
+
+  // What a built branch set once, set again when the screen's size changes.
+  const branchSetOnce = setOnce.filter(node => !atRoot(node));
+  const branchBuiltOnce = drawings.filter(
+    ({node}) => !updatedVectorOf(node) && !atRoot(node),
+  );
+  if (resized && (branchSetOnce.length || branchBuiltOnce.length)) {
+    whenDirty(builder, [resized], () => {
+      branchSetOnce.forEach(node =>
+        located(node, () =>
+          whileBuilt(codegen, places.get(node), () =>
+            setNode(codegen, node, lowering),
+          ),
+        ),
+      );
+      branchBuiltOnce.forEach(({node, vector}) =>
+        whileBuilt(codegen, places.get(node), () => draw(node, vector)),
+      );
+    });
   }
 
   // The branches picked that aren't built, outer ones first: each built with its rows, then all of its props.
@@ -2575,6 +2616,73 @@ function appendInitialItems(
 }
 
 /**
+ * Works a boot value out and sets its slot.
+ *
+ * @param bootSlot  The value.
+ * @param codegen  The function's codegen.
+ * @param lowering  The program being lowered.
+ */
+function setBootValue(
+  bootSlot: IrBootSlot,
+  codegen: Codegen,
+  lowering: Lowering,
+): void {
+  const {builder} = codegen;
+  const slot = lowering.slots.boot.get(bootSlot)!;
+  const {initializer} = bootSlot;
+  codegen.scoped(() => {
+    if (initializer.kind === 'screen') {
+      const size = builder.register('int');
+      builder.abx(
+        'SCREEN',
+        size.index,
+        initializer.dimension === 'width' ? 0 : 1,
+      );
+      codegen.set(slot, size);
+    } else if (initializer.kind === 'native') {
+      const available = builder.register('bool');
+      builder.abx('AVAIL', available.index, initializer.module);
+      codegen.set(slot, available);
+    } else {
+      codegen.set(slot, codegen.value(initializer.expression));
+    }
+  });
+}
+
+/**
+ * The resize function, which the runtime runs when the screen's size changes while the app runs: the boot values
+ * worked out again, and the update asked to set what reads them. State and lists are left as they are.
+ *
+ * @param bootSlots  The values.
+ * @param lowering  The program being lowered.
+ *
+ * @returns The function, or null when the app reads no screen size.
+ */
+function resizeFunction(
+  bootSlots: IrBootSlot[],
+  lowering: Lowering,
+): ProgramFunction | null {
+  const {resized} = lowering;
+  if (!resized) {
+    return null;
+  }
+  const builder = new FunctionBuilder(FunctionKind.resize, 'the screen size');
+  const codegen = new Codegen(builder, lowering.slots, {inDoubles: true});
+  for (const bootSlot of bootSlots) {
+    if (bootSlot.initializer.kind !== 'native') {
+      setBootValue(bootSlot, codegen, lowering);
+    }
+  }
+  codegen.scoped(() => {
+    const flag = builder.register('bool');
+    builder.abx('GET32', flag.index, resized.index);
+    builder.abc('NOT', flag.index, flag.index);
+    builder.abx('SET32', flag.index, resized.index);
+  });
+  return builder.finish();
+}
+
+/**
  * The boot function: the values worked out from the panel size, in double precision, and
  * each list's first items.
  *
@@ -2601,25 +2709,7 @@ function bootFunction(
     appendInitialItems(list, codegen, lowering);
   }
   for (const bootSlot of bootSlots) {
-    const slot = lowering.slots.boot.get(bootSlot)!;
-    const {initializer} = bootSlot;
-    codegen.scoped(() => {
-      if (initializer.kind === 'screen') {
-        const size = builder.register('int');
-        builder.abx(
-          'SCREEN',
-          size.index,
-          initializer.dimension === 'width' ? 0 : 1,
-        );
-        codegen.set(slot, size);
-      } else if (initializer.kind === 'native') {
-        const available = builder.register('bool');
-        builder.abx('AVAIL', available.index, initializer.module);
-        codegen.set(slot, available);
-      } else {
-        codegen.set(slot, codegen.value(initializer.expression));
-      }
-    });
+    setBootValue(bootSlot, codegen, lowering);
   }
 
   // A state that starts at a value worked out at boot, after every value it can read.
@@ -2813,6 +2903,11 @@ export function lowerPackage(app: IrApp, options: ResolvedOptions): Program {
   const update = updateFunction(lowering);
   const bootIndex = boot ? functions.push(boot) - 1 : NONE;
   const updateIndex = update ? functions.push(update) - 1 : NONE;
+  // The runtime finds the resize function by its kind.
+  const resize = resizeFunction(app.boot.slots, lowering);
+  if (resize) {
+    functions.push(resize);
+  }
 
   // A completion that arrives while a function runs waits in the queue: each running tree's, and each one a
   // single function's starts and stops can end at once.

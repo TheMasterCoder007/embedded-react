@@ -71,6 +71,10 @@ interface Scenario {
   everySize?: boolean;
   listCap?: number;
   taps?: string;
+  /** The size the taps leave the app at, when they resize it. */
+  resized?: Size;
+  /** The scenario whose golden image the frame must match, when it isn't its own. */
+  sameAs?: string;
   settle?: number;
   release?: boolean;
   /** Also run the app as a Flow A bundle, whose frame must match the same golden image. */
@@ -107,7 +111,7 @@ const everySize = (name: string, file: string, sizes: Size[]): Scenario[] =>
     everySize: true,
   }));
 
-// `taps` is "x,y x,y ..."; "x,y>x2,y2" is a drag. `settle` is how many ms the host runs after the last tap before it
+// `taps` is "x,y x,y ..."; "x,y>x2,y2" is a drag, and "@WxH" gives the running app a new screen size. `settle` is how many ms the host runs after the last tap before it
 // takes the frame (500 when it is left out), so a scenario can sample an animation as it runs. `release` builds the
 // package for release, without its debug table.
 const SCENARIOS: Scenario[] = [
@@ -1392,6 +1396,43 @@ const SCENARIOS: Scenario[] = [
     screen: PORTRAIT,
     taps: '120,82 120,82 120,122',
   },
+  // Buttons: count, show. Two counts and the branch shown, on a screen that starts wide and one that starts tall.
+  {
+    name: 'resize-wide',
+    file: fixture('resize'),
+    screen: [320, 240],
+    everySize: true,
+    taps: '32,20 32,20 84,20',
+  },
+  {
+    name: 'resize-tall',
+    file: fixture('resize'),
+    screen: PORTRAIT,
+    everySize: true,
+    taps: '32,20 32,20 84,20',
+  },
+  // The same taps on the tall screen, which then turns wide: the frame is the one the wide screen started with.
+  {
+    name: 'resize-turned',
+    file: fixture('resize'),
+    screen: PORTRAIT,
+    everySize: true,
+    taps: '32,20 32,20 84,20 @320x240',
+    resized: [320, 240],
+    sameAs: 'resize-wide',
+    flowA: true,
+  },
+  // A turn in the middle of the taps and one back: the branch is built while the screen is wide.
+  {
+    name: 'resize-turned-back',
+    file: fixture('resize'),
+    screen: PORTRAIT,
+    everySize: true,
+    taps: '32,20 @320x240 32,20 84,20 @240x320',
+    resized: PORTRAIT,
+    sameAs: 'resize-tall',
+    flowA: true,
+  },
 ];
 
 /** Runs a command, throwing with its output when it fails. */
@@ -1599,23 +1640,25 @@ function compareScenario(
   ]);
 
   const frame = readFrame(framePath);
-  const goldenPath = join(GOLDEN_DIR, `${scenario.name}.png`);
-  if (record) {
+  const frameSize = scenario.resized ?? scenario.screen;
+  const goldenName = scenario.sameAs ?? scenario.name;
+  const goldenPath = join(GOLDEN_DIR, `${goldenName}.png`);
+  if (record && !scenario.sameAs) {
     mkdirSync(GOLDEN_DIR, {recursive: true});
-    writePng(goldenPath, frame, scenario.screen);
+    writePng(goldenPath, frame, frameSize);
     return null;
   }
   const outputs = join(OUT_DIR, outputName);
-  const golden = readGolden(goldenPath, scenario.screen);
+  const golden = readGolden(goldenPath, frameSize);
   if (!golden) {
-    writePng(`${outputs}.frame.png`, frame, scenario.screen);
-    return `no ${width}x${height} golden image at ${goldenPath}; record it with npm run erb:frames:record ${scenario.name}`;
+    writePng(`${outputs}.frame.png`, frame, frameSize);
+    return `no ${frameSize.join('x')} golden image at ${goldenPath}; record it with npm run erb:frames:record ${goldenName}`;
   }
   const {differing, marks} = diffFrames(golden, frame);
   if (differing) {
-    writePng(`${outputs}.golden.png`, golden, scenario.screen);
-    writePng(`${outputs}.frame.png`, frame, scenario.screen);
-    writePng(`${outputs}.diff.png`, marks, scenario.screen);
+    writePng(`${outputs}.golden.png`, golden, frameSize);
+    writePng(`${outputs}.frame.png`, frame, frameSize);
+    writePng(`${outputs}.diff.png`, marks, frameSize);
     return `${differing} of ${frame.length} pixels differ from the golden image; see ${outputs}.{golden,frame,diff}.png`;
   }
   return null;
