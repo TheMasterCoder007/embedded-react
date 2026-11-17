@@ -401,7 +401,21 @@ static void resize(int width, int height)
     frame();
 }
 
-/** @brief Runs the taps, drags and resizes in @p taps ("x,y x,y>x2,y2 @WxH ..."). */
+/** @brief Sets the wall clock on the running app, as a board that learns the time after the load does. */
+static void set_clock(void)
+{
+    if (s_flow_a)
+    {
+        er_runtime_set_wall_clock(WALL_CLOCK_MS);
+    }
+    else
+    {
+        erb_set_wall_clock(WALL_CLOCK_MS);
+    }
+    frame();
+}
+
+/** @brief Runs the taps, drags, resizes and clock sets in @p taps ("x,y x,y>x2,y2 @WxH !clock ..."). */
 static void run_taps(const char* taps)
 {
     const char* cursor = taps;
@@ -414,6 +428,13 @@ static void run_taps(const char* taps)
         {
             cursor += characters_read;
             resize(x, y);
+            continue;
+        }
+        characters_read = 0;
+        if (sscanf(cursor, " !clock%n", &characters_read) == 0 && characters_read)
+        {
+            cursor += characters_read;
+            set_clock();
             continue;
         }
         if (sscanf(cursor, " %d,%d%n", &x, &y, &characters_read) != 2)

@@ -70,6 +70,7 @@ interface Scenario {
   /** Build with no sizes named. */
   everySize?: boolean;
   listCap?: number;
+  /** Taps and drags (`x,y`, `x,y>x2,y2`), resizes (`@WxH`) and wall clock sets (`!clock`), in order. */
   taps?: string;
   /** The size the taps leave the app at, when they resize it. */
   resized?: Size;
@@ -1431,6 +1432,24 @@ const SCENARIOS: Scenario[] = [
     taps: '32,20 @320x240 32,20 84,20 @240x320',
     resized: PORTRAIT,
     sameAs: 'resize-tall',
+    flowA: true,
+  },
+  // Buttons: add, show. Rows, a branch of rows, props set once, a drawing and effects that count their runs.
+  {
+    name: 'clock',
+    file: fixture('clock'),
+    screen: PORTRAIT,
+    listCap: 4,
+    taps: '32,20 84,20',
+  },
+  // The wall clock set after the load, after a tap and with the branch built: the frame is the same.
+  {
+    name: 'clock-set',
+    file: fixture('clock'),
+    screen: PORTRAIT,
+    listCap: 4,
+    taps: '!clock 32,20 !clock 84,20 !clock',
+    sameAs: 'clock',
     flowA: true,
   },
 ];
