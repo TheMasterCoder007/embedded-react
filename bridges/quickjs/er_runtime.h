@@ -381,6 +381,21 @@ void er_runtime_pump(void);
 bool er_runtime_native_post(int native, const int32_t* arguments);
 
 /**
+ * @brief Gives the running app a new screen size without restarting it, as after a live rotation
+ *        (er_set_display_rotation()) or a window resize.
+ *
+ * Sets `screen`, then tells the app: the root takes the new size, `Dimensions` fires `change`, and components
+ * that read `useWindowDimensions()` render again. State is kept. A later er_runtime_reset() keeps the size too.
+ * Call it from the task that owns the runtime, between frames.
+ *
+ * @param[in] width   `screen.width`; 0 takes er_get_display_size().
+ * @param[in] height  `screen.height`.
+ *
+ * @return false before er_runtime_init(), or when there is no size to take.
+ */
+bool er_runtime_set_screen_size(int width, int height);
+
+/**
  * @brief Tears the runtime back to a clean slate for a reload: frees the JS context, resets the engine
  *        scene (er_reset), and brings up a fresh context with the bridge + globals reinstalled.
  *

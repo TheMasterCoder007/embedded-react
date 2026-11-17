@@ -432,6 +432,34 @@ static bool create_panel(void)
     return true;
 }
 
+/** @brief Frees every texture and buffer the context holds. */
+static void destroy_textures(void)
+{
+    destroy_panel();
+#if ER_LCD_BANDED
+    if (s_ctx.band)
+    {
+        SDL_DestroyTexture(s_ctx.band);
+        s_ctx.band = NULL;
+    }
+#endif
+    if (s_ctx.framebuffer)
+    {
+        SDL_DestroyTexture(s_ctx.framebuffer);
+        s_ctx.framebuffer = NULL;
+    }
+    if (s_ctx.scratch)
+    {
+        SDL_DestroyTexture(s_ctx.scratch);
+        s_ctx.scratch = NULL;
+    }
+    if (s_ctx.scratch565)
+    {
+        SDL_DestroyTexture(s_ctx.scratch565);
+        s_ctx.scratch565 = NULL;
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -605,31 +633,81 @@ void er_sdl_window_point_to_panel(int* x, int* y)
     }
 }
 
-void er_sdl_backend_destroy(void)
+bool er_sdl_backend_resize(int framebuffer_width, int framebuffer_height)
 {
-    destroy_panel();
-    s_ctx.rotation = ER_ROTATION_0;
+    SDL_Renderer* renderer = s_ctx.renderer;
+    if (!renderer || framebuffer_width <= 0 || framebuffer_height <= 0)
+        return false;
+
+    /* The new textures are made before the old ones go, so a failure leaves the backend as it was. The target is
+       let go of first: SDL's software renderer draws to the window after a window resize until it is set again. */
+    const SDLCtx old = s_ctx;
+    SDL_SetRenderTarget(renderer, NULL);
+    s_ctx.framebuffer = NULL;
+    s_ctx.scratch = NULL;
+    s_ctx.scratch565 = NULL;
+    s_ctx.panel = NULL;
+    s_ctx.logical_pixels = NULL;
+    s_ctx.panel_pixels = NULL;
+    s_ctx.scratch_width = framebuffer_width;
+    s_ctx.scratch_height = framebuffer_height;
 #if ER_LCD_BANDED
-    if (s_ctx.band)
+    s_ctx.band = NULL;
+#endif
+
+    s_ctx.scratch = SDL_CreateTexture(
+        renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, framebuffer_width, framebuffer_height);
+    s_ctx.framebuffer = SDL_CreateTexture(
+        renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, framebuffer_width, framebuffer_height);
+    bool created = s_ctx.scratch && s_ctx.framebuffer && create_panel();
+#if ER_LCD_BANDED
+    if (created)
     {
-        SDL_DestroyTexture(s_ctx.band);
-        s_ctx.band = NULL;
+        s_ctx.band = SDL_CreateTexture(
+            renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, framebuffer_width, ER_LCD_BANDED_ROWS);
+        created = s_ctx.band != NULL;
     }
 #endif
-    if (s_ctx.framebuffer)
+    if (!created)
     {
-        SDL_DestroyTexture(s_ctx.framebuffer);
-        s_ctx.framebuffer = NULL;
+        destroy_textures();
+        s_ctx = old;
+        SDL_SetRenderTarget(renderer, s_ctx.framebuffer);
+        return false;
     }
-    if (s_ctx.scratch)
+    SDL_SetTextureBlendMode(s_ctx.scratch, s_ctx.premultiplied_blend);
+    SDL_SetTextureBlendMode(s_ctx.framebuffer, SDL_BLENDMODE_NONE);
+#if ER_LCD_BANDED
+    SDL_SetTextureBlendMode(s_ctx.band, SDL_BLENDMODE_NONE);
+#endif
+
+    /* As at init, the RGB565 path is optional. */
+    s_backend.copy_rect_format = NULL;
+    if (old.scratch565)
     {
-        SDL_DestroyTexture(s_ctx.scratch);
-        s_ctx.scratch = NULL;
+        s_ctx.scratch565 = SDL_CreateTexture(
+            renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, framebuffer_width, framebuffer_height);
+        if (s_ctx.scratch565)
+        {
+            SDL_SetTextureBlendMode(s_ctx.scratch565, SDL_BLENDMODE_NONE);
+            s_backend.copy_rect_format = copy_rect_fmt_cb;
+        }
     }
-    if (s_ctx.scratch565)
-    {
-        SDL_DestroyTexture(s_ctx.scratch565);
-        s_ctx.scratch565 = NULL;
-    }
+
+    const SDLCtx resized = s_ctx;
+    s_ctx = old;
+    destroy_textures();
+    s_ctx = resized;
+
+    SDL_SetRenderTarget(renderer, s_ctx.framebuffer);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, ALPHA_OPAQUE);
+    SDL_RenderClear(renderer);
+    return true;
+}
+
+void er_sdl_backend_destroy(void)
+{
+    destroy_textures();
+    s_ctx.rotation = ER_ROTATION_0;
     s_ctx.renderer = NULL;
 }

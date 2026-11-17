@@ -18,3 +18,16 @@ export function HalfWidth() {
 
 // @ts-expect-error -- only 'window' and 'screen' name a size
 Dimensions.get('display');
+
+// A change hands over both sizes, and the subscription removes the listener.
+const subscription = Dimensions.addEventListener(
+  'change',
+  ({window, screen}) => {
+    const widest: number = Math.max(window.width, screen.width);
+    void widest;
+  },
+);
+subscription.remove();
+
+// @ts-expect-error -- 'change' is the only event
+Dimensions.addEventListener('resize', () => {});

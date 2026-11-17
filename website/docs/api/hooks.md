@@ -370,9 +370,16 @@ The React Native way to read the same size, for code shared with a phone app. Bo
 `fontScale` are always 1, since a panel has no pixel-density or font setting. `'window'` and
 `'screen'` are the same size.
 
-The size is fixed while the app runs, so `useWindowDimensions()` never re-renders and there is no
-`Dimensions.addEventListener`. **Flow B:** both are worked out at boot exactly as `screen` is, so a
-breakpoint written with either one behaves the same.
+The firmware can change the size while the app runs, for a panel that rotates live
+(`er_runtime_set_screen_size()`), and so can a simulator resize. The app keeps its state: the root
+takes the new size, a component that reads `useWindowDimensions()` renders again, and
+`Dimensions.addEventListener('change', handler)` calls `handler({window, screen})`. It returns a
+subscription with `remove()`. A value read from `screen` or `Dimensions.get()` outside a render is
+not read again, so size a layout that has to follow the turn from the hook.
+
+**Flow B:** both are worked out at boot exactly as `screen` is, so a breakpoint written with either
+one behaves the same. A package is compiled for its sizes, so there is no `change` event and the size
+is fixed while the app runs.
 
 ## Timers and time
 

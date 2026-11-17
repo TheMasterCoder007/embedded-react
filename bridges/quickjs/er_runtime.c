@@ -156,16 +156,22 @@ static void install_console(JSContext* ctx)
     JS_FreeValue(ctx, global);
 }
 
-/** @brief Injects the `screen` global ({ width, height, scale }). */
+/** @brief Injects the `screen` global ({ width, height, scale }), or gives the one there the config's size. */
 static void install_screen(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue screen = JS_NewObject(ctx);
+    JSValue screen = JS_GetPropertyStr(ctx, global, "screen");
+    if (!JS_IsObject(screen))
+    {
+        JS_FreeValue(ctx, screen);
+        screen = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "screen", JS_DupValue(ctx, screen));
+    }
 
     JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, s_config.screen_width));
     JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, s_config.screen_height));
     JS_SetPropertyStr(ctx, screen, "scale", JS_NewFloat64(ctx, (double)s_config.screen_scale));
-    JS_SetPropertyStr(ctx, global, "screen", screen);
+    JS_FreeValue(ctx, screen);
     JS_FreeValue(ctx, global);
 }
 
@@ -1147,6 +1153,31 @@ bool er_runtime_reset(void)
     er_reset();
     install_globals();
     return s_ctx != NULL;
+}
+
+bool er_runtime_set_screen_size(int width, int height)
+{
+    if (!s_ctx)
+    {
+        return false;
+    }
+    if (width <= 0 || height <= 0)
+    {
+        er_get_display_size(&width, &height);
+    }
+    if (width <= 0 || height <= 0)
+    {
+        return false;
+    }
+    if (width == s_config.screen_width && height == s_config.screen_height)
+    {
+        return true;
+    }
+    s_config.screen_width = width;
+    s_config.screen_height = height;
+    install_screen(s_ctx);
+    er_bridge_screen_changed(s_ctx);
+    return true;
 }
 
 bool er_runtime_gc_accounting_ok(void)

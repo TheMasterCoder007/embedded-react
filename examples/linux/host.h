@@ -65,6 +65,8 @@ typedef struct
     float dpi_scale;               /**< Physical/logical pixel ratio (HiDPI input scaling). */
     bool running;                  /**< Cleared when quit (window close / ESC) is requested. */
     bool reload_requested;         /**< Set when the reload key (R) is pressed; the simulator acts on it. */
+    bool turn_requested;           /**< Set when the turn key (T) is pressed; the simulator acts on it. */
+    ERDisplayRotation rotation;    /**< How the panel behind the window is mounted now. */
     uint32_t previous_ticks;       /**< SDL_GetTicks() at the previous frame, for the tick delta. */
 } ErHost;
 
@@ -152,6 +154,19 @@ void er_host_clear_persist(void);
  * @return The rotation it names; ER_ROTATION_0 when unset or not one of the four.
  */
 ERDisplayRotation er_host_env_rotation(void);
+
+/**
+ * @brief Turns the panel behind the window while the app runs, as a device that rotates live does.
+ *
+ * The panel keeps its shape, so a quarter turn swaps the app's size: the window takes the new shape and the app
+ * lays out again with its state kept (er_runtime_set_screen_size()).
+ *
+ * @param[in] host      Started host.
+ * @param[in] rotation  How the panel is mounted from now on.
+ *
+ * @return true on success; false, with everything as it was, when the backend could not take the new size.
+ */
+bool er_host_set_rotation(ErHost* host, ERDisplayRotation rotation);
 
 /**
  * @brief Scales a logical SDL input coordinate to physical framebuffer pixels.

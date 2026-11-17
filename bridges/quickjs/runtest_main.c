@@ -289,6 +289,28 @@ static JSValue rt_set_wall_clock(JSContext* ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+/**
+ * @brief __setScreen(width, height): gives `screen` a new size and tells the app, as
+ *        er_runtime_set_screen_size() does. The framebuffer stays as it is. Test runner only.
+ */
+static JSValue rt_set_screen(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    int32_t width = 0, height = 0;
+    if (argc < 2 || JS_ToInt32(ctx, &width, argv[0]) < 0 || JS_ToInt32(ctx, &height, argv[1]) < 0)
+    {
+        return JS_EXCEPTION;
+    }
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue screen = JS_GetPropertyStr(ctx, global, "screen");
+    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, width));
+    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, height));
+    JS_FreeValue(ctx, screen);
+    JS_FreeValue(ctx, global);
+    er_bridge_screen_changed(ctx);
+    return JS_UNDEFINED;
+}
+
 static void rt_install_globals(JSContext* ctx)
 {
     JSValue global = JS_GetGlobalObject(ctx);
@@ -297,6 +319,7 @@ static void rt_install_globals(JSContext* ctx)
     JS_SetPropertyStr(ctx, global, "__dirtyRect", JS_NewCFunction(ctx, rt_dirty_rect, "__dirtyRect", 0));
     JS_SetPropertyStr(ctx, global, "__pixel", JS_NewCFunction(ctx, rt_pixel, "__pixel", 2));
     JS_SetPropertyStr(ctx, global, "__setWallClock", JS_NewCFunction(ctx, rt_set_wall_clock, "__setWallClock", 1));
+    JS_SetPropertyStr(ctx, global, "__setScreen", JS_NewCFunction(ctx, rt_set_screen, "__setScreen", 2));
 
     JSValue console = JS_NewObject(ctx);
     JSValue log = JS_NewCFunction(ctx, rt_console_log, "log", 1);

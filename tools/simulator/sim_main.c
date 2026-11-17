@@ -25,6 +25,7 @@
  *
  * Usage: embedded-react-simulator <path-to-app.bundle.js>
  * ER_ROTATION=90, 180 or 270 renders through a panel mounted that way; the window shows the app upright.
+ * T turns the panel a quarter turn while the app runs, as a device that rotates live does.
  */
 
 #define SDL_MAIN_HANDLED
@@ -43,6 +44,10 @@
 /** @brief The window's logical size. */
 #define SIM_WINDOW_WIDTH 800
 #define SIM_WINDOW_HEIGHT 600
+
+/** @brief The T key's turn, and a full one, in degrees. */
+#define SIM_QUARTER_TURN 90
+#define SIM_FULL_TURN 360
 
 /** @brief A prime that mixes the modification time into a file's signature. */
 #define SIM_SIGNATURE_PRIME 1000003u
@@ -114,7 +119,7 @@ int main(int argc, char** argv)
     {
         er_host_show_error(&host);
     }
-    SDL_Log("simulator watching %s — edit & save to reload, or press R", app_path);
+    SDL_Log("simulator watching %s — edit & save to reload, or press R; T turns the panel", app_path);
 
     uint64_t last_bundle_signature = file_signature(app_path);
     uint64_t last_pack_signature = pack_path ? file_signature(pack_path) : 0;
@@ -132,6 +137,18 @@ int main(int argc, char** argv)
             er_host_clear_persist();
             do_reload = true;
             SDL_Log("manual reload (state reset)");
+        }
+
+        /* Live rotation (T key): the app keeps running and lays out at its new size. */
+        if (host.turn_requested)
+        {
+            host.turn_requested = false;
+            const ERDisplayRotation turned =
+                (ERDisplayRotation)(((int)host.rotation + SIM_QUARTER_TURN) % SIM_FULL_TURN);
+            if (er_host_set_rotation(&host, turned))
+            {
+                SDL_Log("panel turned to %d", (int)turned);
+            }
         }
 
         /* File-watch: poll the bundle and the asset pack periodically. */

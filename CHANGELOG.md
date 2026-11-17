@@ -19,6 +19,10 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `?rotation=`), so a rotated panel can be checked off-device. The SDL and software backends present through
   `er_rotate_copy()`.
 - Flow A and Flow B take `screen` from `er_get_display_size()` when the host leaves the size at 0.
+- Flow A: `er_runtime_set_screen_size()` gives a running app a new screen size with its state kept, for a panel
+  that rotates live. `Dimensions.addEventListener('change', ...)` fires and `useWindowDimensions()` renders again.
+- The simulators resize and rotate without restarting the app. The SDL simulator turns the panel a quarter turn
+  on T, and the SDL backend gains `er_sdl_backend_resize()`.
 - Engine: `er_display_rect_to_panel()` turns a logical rect into the panel rect it lands on, for a backend that
   tracks its own damage.
 

@@ -56,6 +56,21 @@ extern "C"
     bool er_sdl_backend_init(SDL_Renderer* renderer, int framebuffer_width, int framebuffer_height);
 
     /**
+     * @brief Gives the backend a new framebuffer size while the app runs, for a window resize or a live
+     *        rotation. The engine keeps its scene, images and fonts.
+     *
+     * Call er_set_display_rotation() first with the new panel size, as for er_sdl_backend_init(): the backend
+     * takes its rotation from it, and it makes the next commit repaint in full. A failure leaves the old
+     * textures in place, so put the old rotation back. Resize the window before this call, not after.
+     *
+     * @param[in] framebuffer_width   The app's new width in pixels (must be > 0).
+     * @param[in] framebuffer_height  The app's new height in pixels (must be > 0).
+     *
+     * @return true on success; false before init or when a texture could not be created.
+     */
+    bool er_sdl_backend_resize(int framebuffer_width, int framebuffer_height);
+
+    /**
      * @brief Composites the persistent framebuffer onto the screen and presents it.
      *
      * Blits the internal render-target texture to the SDL renderer, then calls

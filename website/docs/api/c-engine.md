@@ -84,6 +84,13 @@ coordinates, and `er_rotate_copy()` presents a rect from a logical-shape buffer,
 `ErRuntimeConfig` and Flow B's `ErbConfig` take their screen size from `er_get_display_size()` when
 it is left at 0.
 
+`er_set_display_rotation()` can be called again while the app runs. A half turn (0 to 180) keeps the
+app's size, so nothing else is needed. A quarter turn swaps it: in Flow A, call
+`er_runtime_set_screen_size(0, 0)` next and the app lays out at the new size with its state kept. The
+backend has to follow too, since its logical buffer changes shape. A board that turns live sizes
+`ERUI_SCRATCH_WIDTH`, `ERUI_MAX_IMAGE_ROW_PIXELS` and `ERUI_VECTOR_MAX_ROW` for the panel's longer
+side.
+
 ## Events and input
 
 `er_event_set(node, type, fn, user_data)` registers a handler for one event type on a node: press,

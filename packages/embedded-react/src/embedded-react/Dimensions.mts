@@ -15,8 +15,55 @@
  */
 
 // Dimensions — RN analog over the host-injected `screen` global. A panel has no pixel-density or font
-// setting, so `scale` and `fontScale` are 1, and 'window' and 'screen' are the same size.
-import type {Dimensions as PublicDimensions} from './index.d.ts';
+// setting, so `scale` and `fontScale` are 1, and 'window' and 'screen' are the same size. The host can change
+// the size while the app runs (a live rotation, a simulator resize), which fires 'change'.
+import {useSyncExternalStore} from 'react';
+import {NativeUI} from '../native-ui.mts';
+import type {
+  Dimensions as PublicDimensions,
+  DimensionsChange,
+  ScaledSize,
+} from './index.d.ts';
+
+const listeners = new Set<(sizes: DimensionsChange) => void>();
+
+let subscribed = false;
+// The size last read, kept so the hook gets the same object until the size changes.
+let current: ScaledSize | null = null;
+
+function currentSize(): ScaledSize {
+  if (
+    !current ||
+    current.width !== screen.width ||
+    current.height !== screen.height
+  ) {
+    current = {
+      width: screen.width,
+      height: screen.height,
+      scale: 1,
+      fontScale: 1,
+    };
+  }
+
+  return current;
+}
+
+function onScreenChange(): void {
+  const size = currentSize();
+  // A copy, so a listener can remove itself.
+  for (const listener of [...listeners]) {
+    listener({window: size, screen: size});
+  }
+}
+
+function subscribe(listener: (sizes: DimensionsChange) => void): () => void {
+  if (!subscribed) {
+    NativeUI.setScreenListener?.(onScreenChange);
+    subscribed = true;
+  }
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
 
 export const Dimensions: typeof PublicDimensions = {
   get(dimension) {
@@ -24,16 +71,19 @@ export const Dimensions: typeof PublicDimensions = {
       throw new Error(`Dimensions.get: no dimension named "${dimension}"`);
     }
 
-    return {
-      width: screen.width,
-      height: screen.height,
-      scale: 1,
-      fontScale: 1,
-    };
+    return {...currentSize()};
+  },
+
+  addEventListener(type, handler) {
+    if (type !== 'change') {
+      throw new Error(`Dimensions.addEventListener: no event named "${type}"`);
+    }
+
+    return {remove: subscribe(handler)};
   },
 };
 
-// The panel's size. It is fixed while the app runs, so this never re-renders.
-export function useWindowDimensions() {
-  return Dimensions.get('window');
+// The panel's size. A component that reads it renders again when the size changes.
+export function useWindowDimensions(): ScaledSize {
+  return useSyncExternalStore(subscribe, currentSize);
 }
