@@ -24,6 +24,7 @@
  * desktop. Unlike the demo, a JS error doesn't exit: the window stays up and reloads once you fix it.
  *
  * Usage: embedded-react-simulator <path-to-app.bundle.js>
+ * ER_ROTATION=90, 180 or 270 renders through a panel mounted that way; the window shows the app upright.
  */
 
 #define SDL_MAIN_HANDLED
@@ -87,8 +88,14 @@ int main(int argc, char** argv)
     const char* app_path = argv[1];
     const char* pack_path = argc > 2 ? argv[2] : NULL;
 
+    /* ER_ROTATION=90|180|270 puts a panel mounted that way behind the window. */
     const ErHostConfig host_config = {
-        "embedded-react — simulator", SIM_WINDOW_WIDTH, SIM_WINDOW_HEIGHT, /*persist=*/true};
+        .title = "embedded-react — simulator",
+        .width = SIM_WINDOW_WIDTH,
+        .height = SIM_WINDOW_HEIGHT,
+        .rotation = er_host_env_rotation(),
+        .persist = true,
+    };
     ErHost host;
     if (!er_host_start(&host_config, &host))
     {

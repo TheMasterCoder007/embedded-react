@@ -207,6 +207,19 @@ bool er_host_start(const ErHostConfig* config, ErHost* host)
     SDL_GetRendererOutputSize(host->renderer, &host->physical_width, &host->physical_height);
     host->dpi_scale = (float)host->physical_width / (float)config->width;
 
+    /* The window shows the panel as it is mounted, so the panel is the window turned. Then the backend in the
+       app's shape, and a runtime that takes its `screen` from the engine. */
+    const bool swapped = config->rotation == ER_ROTATION_90 || config->rotation == ER_ROTATION_270;
+    if (!er_set_display_rotation(config->rotation,
+                                 swapped ? host->physical_height : host->physical_width,
+                                 swapped ? host->physical_width : host->physical_height))
+    {
+        SDL_Log("er_set_display_rotation failed: %d", (int)config->rotation);
+        SDL_DestroyRenderer(host->renderer);
+        SDL_DestroyWindow(host->window);
+        SDL_Quit();
+        return false;
+    }
     if (!er_sdl_backend_init(host->renderer, host->physical_width, host->physical_height))
     {
         SDL_Log("er_sdl_backend_init failed");
@@ -218,8 +231,6 @@ bool er_host_start(const ErHostConfig* config, ErHost* host)
 
     /* Boot the portable QuickJS host core: bridge + console (→ stdout) + screen [+ __erPersist]. */
     const ErRuntimeConfig runtime_config = {
-        .screen_width = host->physical_width,
-        .screen_height = host->physical_height,
         .screen_scale = host->dpi_scale,
         .install_persist = config->persist,
         .log = NULL, /* stdout */
@@ -349,9 +360,40 @@ void er_host_show_error(ErHost* host)
     er_runtime_show_error(); /* the next er_host_step commit paints it */
 }
 
+ERDisplayRotation er_host_env_rotation(void)
+{
+    const char* value = SDL_getenv("ER_ROTATION");
+    const int degrees = value ? SDL_atoi(value) : 0;
+    switch (degrees)
+    {
+        case ER_ROTATION_90:
+        case ER_ROTATION_180:
+        case ER_ROTATION_270:
+            return (ERDisplayRotation)degrees;
+        default:
+            return ER_ROTATION_0;
+    }
+}
+
 int er_host_event_px(const ErHost* host, int logical)
 {
     return (int)((float)logical * host->dpi_scale + 0.5f);
+}
+
+/**
+ * @brief Forwards a mouse point to the engine as a touch, in panel coordinates.
+ *
+ * @param[in] host      Started host.
+ * @param[in] phase     Touch phase.
+ * @param[in] window_x  X in logical window pixels, from the SDL event.
+ * @param[in] window_y  Y in logical window pixels.
+ */
+static void host_touch(const ErHost* host, ERTouchPhase phase, int window_x, int window_y)
+{
+    int x = er_host_event_px(host, window_x);
+    int y = er_host_event_px(host, window_y);
+    er_sdl_window_point_to_panel(&x, &y);
+    embedded_renderer_touch(0, phase, x, y);
 }
 
 bool er_host_step(ErHost* host)
@@ -375,18 +417,15 @@ bool er_host_step(ErHost* host)
         }
         else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
         {
-            embedded_renderer_touch(
-                0, ER_TOUCH_DOWN, er_host_event_px(host, event.button.x), er_host_event_px(host, event.button.y));
+            host_touch(host, ER_TOUCH_DOWN, event.button.x, event.button.y);
         }
         else if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT)
         {
-            embedded_renderer_touch(
-                0, ER_TOUCH_UP, er_host_event_px(host, event.button.x), er_host_event_px(host, event.button.y));
+            host_touch(host, ER_TOUCH_UP, event.button.x, event.button.y);
         }
         else if (event.type == SDL_MOUSEMOTION && (event.motion.state & SDL_BUTTON_LMASK))
         {
-            embedded_renderer_touch(
-                0, ER_TOUCH_MOVE, er_host_event_px(host, event.motion.x), er_host_event_px(host, event.motion.y));
+            host_touch(host, ER_TOUCH_MOVE, event.motion.x, event.motion.y);
         }
     }
 
@@ -436,7 +475,7 @@ void er_host_screenshot(ErHost* host, const char* path)
 {
     er_host_settle(SCREENSHOT_SETTLE_FRAMES); /* let React mount + the scene render + any intro animation settle */
 
-    /* Optional taps (physical pixels, parity with linux-aot's ER_AOT_TAPS): tap each + re-settle. */
+    /* Optional taps in physical window pixels, as the screenshot shows them: tap each + re-settle. */
     const char* cursor = SDL_getenv("ER_TAPS");
     while (cursor && *cursor)
     {
@@ -444,9 +483,10 @@ void er_host_screenshot(ErHost* host, const char* path)
             cursor++;
         if (!*cursor)
             break;
-        const int tap_x = SDL_atoi(cursor);
+        int tap_x = SDL_atoi(cursor);
         const char* comma = SDL_strchr(cursor, ',');
-        const int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+        int tap_y = comma ? SDL_atoi(comma + 1) : 0;
+        er_sdl_window_point_to_panel(&tap_x, &tap_y);
         embedded_renderer_touch(0, ER_TOUCH_DOWN, tap_x, tap_y);
         embedded_renderer_touch(0, ER_TOUCH_UP, tap_x, tap_y);
         er_host_settle(TAP_SETTLE_FRAMES);

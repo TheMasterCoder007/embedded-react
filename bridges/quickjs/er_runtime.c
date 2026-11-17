@@ -28,7 +28,7 @@
 #include "er_assets.h"        /* er_assets_load_pack (ERPK asset section of the container) */
 #include "er_error_screen.h"  /* the error screen JS errors and load failures show */
 #include "er_js_alloc.h"      /* default JS-heap allocator with working GC size accounting */
-#include "er_scene.h"         /* er_reset */
+#include "er_scene.h"         /* er_reset, er_get_display_size */
 #include "native_ui_bridge.h" /* er_bridge_install / _pump / _run_bytecode / _now_ms */
 
 #include <stdint.h>
@@ -791,6 +791,11 @@ bool er_runtime_init(const ErRuntimeConfig* config)
     if (s_config.screen_scale <= 0.0f)
     {
         s_config.screen_scale = 1.0f;
+    }
+    /* A size left at 0 comes from the engine's display, turned by its rotation. */
+    if (s_config.screen_width <= 0 || s_config.screen_height <= 0)
+    {
+        er_get_display_size(&s_config.screen_width, &s_config.screen_height);
     }
     /* Back to the optimistic default before anything can fail: this outlives the runtime it describes,
        and a verdict from a PREVIOUS runtime must not survive into an init that never got to probe. */

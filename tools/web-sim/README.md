@@ -33,7 +33,7 @@ stale after engine changes; rebuild it.
 | `build.mts` | drives `cmake` with the Emscripten toolchain → `public/`, and stages the package's `sim/` |
 | `dev.mts` | the repo dev loop over `demos/`: a thin wrapper over the shared `packages/embedded-react/sim-server.mts` |
 | `bundle-app.mts`, `serve.mts` | one-shot bundle and a static server, for previewing a prebuilt bundle |
-| `index.html` | the host page: loads the module, fetches `app.js`/`assets.pack`, rAF pump → `putImageData`, pointer → touch, SSE reload |
+| `index.html` | the host page: loads the module, fetches `app.js`/`assets.pack`, rAF pump → `putImageData` (the panel turned back when `?rotation=` is set), pointer → touch in panel coordinates, SSE reload |
 | `public/` | build output (gitignored) |
 
 The exported C ABI is `backends/web/web_backend.h`. The desktop SDL simulator in `../simulator` is

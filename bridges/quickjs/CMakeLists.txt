@@ -232,6 +232,26 @@ if (ER_BRIDGE_QUICKJS_HANDLETEST)
 endif ()
 
 # ---------------------------------------------------------------------------
+# Screen test: a size the host leaves unset comes from the engine's display. Needs the parser.
+# ---------------------------------------------------------------------------
+option(ER_BRIDGE_QUICKJS_SCREENTEST "Build the screen test" ON)
+
+if (ER_BRIDGE_QUICKJS_LITE AND ER_BRIDGE_QUICKJS_SCREENTEST)
+    message(STATUS "er-bridge-quickjs-screentest skipped (ER_BRIDGE_QUICKJS_LITE build has no parser)")
+    set(ER_BRIDGE_QUICKJS_SCREENTEST OFF)
+endif ()
+
+if (ER_BRIDGE_QUICKJS_SCREENTEST)
+    add_executable(er-bridge-quickjs-screentest screentest_main.c)
+    target_link_libraries(er-bridge-quickjs-screentest PRIVATE er-bridge-quickjs)
+
+    if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+        enable_testing()
+        add_test(NAME screen-size COMMAND er-bridge-quickjs-screentest)
+    endif ()
+endif ()
+
+# ---------------------------------------------------------------------------
 # Error screen test: a JS exception nothing caught shows the engine's error screen. Needs the parser.
 # ---------------------------------------------------------------------------
 option(ER_BRIDGE_QUICKJS_ERRORTEST "Build the error screen test" ON)

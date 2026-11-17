@@ -40,7 +40,8 @@ cmake -S tools/simulator -B tools/simulator/build && cmake --build tools/simulat
 
 The SDL simulator is the maintainers' tool: it runs the real C engine natively, so it works under
 gdb and lldb, and it shows JavaScript errors on the error screen. Press **R** for a clean reset that
-also forgets persisted state.
+also forgets persisted state. `ER_ROTATION=90 npm run sim -- thermostat` runs it behind a panel
+mounted at 90 degrees (or 180, 270).
 
 ## On the device
 

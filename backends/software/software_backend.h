@@ -36,6 +36,10 @@ extern "C"
      *
      * The engine repaints only each commit's damage region, so the framebuffer persists between frames and
      * stands in for a panel's GRAM. Initialised to opaque black.
+     *
+     * Under er_set_display_rotation() the framebuffer is the app's (logical) shape and a separate panel buffer
+     * holds the picture as the panel scans: er_software_present() copies each commit's dirty rects into it
+     * through er_rotate_copy(). At 0 degrees the panel buffer is the framebuffer.
      */
 
     /**
@@ -44,7 +48,9 @@ extern "C"
      * Calls embedded_renderer_set_backend() internally (which also brings up the font subsystem), so it must
      * be called once before any rendering. The framebuffer is cleared to opaque black.
      *
-     * @param[in] framebuffer_width  Framebuffer width in pixels (> 0).
+     * Set the display rotation first: the panel buffer takes its shape from it.
+     *
+     * @param[in] framebuffer_width  Framebuffer width in pixels (> 0), the app's (logical) width.
      * @param[in] framebuffer_height  Framebuffer height in pixels (> 0).
      *
      * @return true on success; false on invalid size or allocation failure.
@@ -61,10 +67,10 @@ extern "C"
     /**
      * @brief Resizes the framebuffer in place (for a runtime board-size change).
      *
-     * Reallocates the framebuffer to @p framebuffer_width x @p framebuffer_height and clears it to opaque black. The
-     * backend stays registered (the context pointer is unchanged), so the engine keeps rendering through it. Call
-     * er_reset() afterwards before rebuilding the scene at the new size. Must be called after a successful
-     * er_software_backend_init().
+     * Reallocates the framebuffer to @p framebuffer_width x @p framebuffer_height, and the panel buffer to the
+     * current display rotation, and clears them to opaque black. The backend stays registered (the context
+     * pointer is unchanged), so the engine keeps rendering through it. Call er_reset() afterwards before
+     * rebuilding the scene at the new size. Must be called after a successful er_software_backend_init().
      *
      * @param[in] framebuffer_width  New framebuffer width in pixels (> 0).
      * @param[in] framebuffer_height  New framebuffer height in pixels (> 0).
@@ -74,7 +80,32 @@ extern "C"
     bool er_software_backend_resize(int framebuffer_width, int framebuffer_height);
 
     /**
-     * @brief Clears the entire framebuffer to a solid straight-alpha ARGB8888 color.
+     * @brief Copies what the last commit painted into the panel buffer, turned by the display rotation.
+     *
+     * Call after each er_commit(). A no-op at 0 degrees, where the panel buffer is the framebuffer, and after a
+     * commit that drew nothing.
+     */
+    void er_software_present(void);
+
+    /**
+     * @brief Returns the panel buffer (ARGB8888, row-major, no padding), as the panel scans.
+     *
+     * @return The framebuffer at 0 degrees, else the buffer er_software_present() fills; NULL before init.
+     */
+    uint32_t* er_software_panel(void);
+
+    /**
+     * @brief Returns the panel width in pixels (0 before init).
+     */
+    int er_software_panel_width(void);
+
+    /**
+     * @brief Returns the panel height in pixels (0 before init).
+     */
+    int er_software_panel_height(void);
+
+    /**
+     * @brief Clears the entire framebuffer, and the panel buffer, to a solid straight-alpha ARGB8888 color.
      *
      * @param[in] argb  Fill color (the alpha is stored as-is; pass 0xFF000000 for opaque black).
      */
