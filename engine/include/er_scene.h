@@ -1299,6 +1299,16 @@ extern "C"
     bool er_get_display_size(int* width, int* height);
 
     /**
+     * @brief Turns a logical rect into the panel rect it lands on, under the display rotation.
+     *
+     * For a backend that tracks its own damage in logical coordinates: the result is the rect to pass to
+     * er_rotate_copy() and to flush.
+     *
+     * @param[in,out] rect  Rect: logical in, panel out.
+     */
+    void er_display_rect_to_panel(ERRect* rect);
+
+    /**
      * @brief Copies a panel rect out of a logical-shape buffer into the panel's buffer, turned by the rotation.
      *
      * The shared present step for a backend that renders logically: pass each rect er_get_dirty_rects() reports

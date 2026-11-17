@@ -378,9 +378,10 @@ static void run_app(void)
 
     /* Bring up the RGB panel and draw to it; fall back to the no-op backend if it fails so the JS
        stack still runs (and logs why) over UART. */
+    set_display_rotation();
     esp_lcd_panel_handle_t panel = NULL;
     const bool panel_up = board_display_init(&panel);
-    const bool display = panel_up && er_esp32_lcd_backend_init(panel, SCREEN_WIDTH, SCREEN_HEIGHT, ER_DISPLAY_ROTATION);
+    const bool display = panel_up && er_esp32_lcd_backend_init(panel);
     if (display)
     {
         ESP_LOGI(TAG, "display backend active");
@@ -452,9 +453,7 @@ static void run_app(void)
 
     /* Boot the portable QuickJS host core with the JS heap in PSRAM and the stack guard set. */
     const ErRuntimeConfig runtime_config = {
-        .screen_width = SCREEN_WIDTH,
-        .screen_height = SCREEN_HEIGHT,
-        .screen_scale = 1.0f,
+        .screen_scale = 1.0f, /* the size comes from the engine's display */
         /* With hot reload wired (Phase 4), install the persist store so usePersistentState survives a
            live reload — the same behavior as the desktop simulator. Off when hot reload is compiled out. */
         .install_persist = (ER_HOTRELOAD != 0),
@@ -551,7 +550,6 @@ static void run_app(void)
             bool pressed = false;
             if (board_touch_read(&touch_x, &touch_y, &pressed))
             {
-                remap_touch(&touch_x, &touch_y); /* physical panel coords -> logical (rotated) app coords */
                 if (pressed)
                 {
                     embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, touch_x, touch_y);
@@ -596,16 +594,17 @@ static void run_app(void)
         const int64_t commit_end_us = esp_timer_get_time();
 #if ER_PERF_OVERLAY
         /* Render the overlay text only when the metrics change (~twice a second; glyph rendering is the
-           expensive part) and snapshot that region. The backend then re-composites the snapshot on top
-           of EVERY present (a cheap RGB565 copy), so the overlay stays flicker-free over the
-           double-buffered panel without per-frame text rendering, and as its own tight region so it
-           never enlarges the app's per-frame dirty box. */
+           expensive part) and snapshot that region. The backend then puts the snapshot back wherever the
+           app draws over it and sends each capture as its own tight region, so the overlay stays
+           flicker-free without per-frame text rendering and never enlarges the app's dirty box. */
         if (display && perf_overlay_refresh(frame_start_us))
         {
             int overlay_x = 0, overlay_y = 0, overlay_width = 0, overlay_height = 0;
+            int screen_width = 0, screen_height = 0;
+            er_get_display_size(&screen_width, &screen_height);
             er_esp32_lcd_overlay_begin(); /* save the app dirty box; capture restores it */
-            er_perf_overlay_draw(SCREEN_WIDTH,
-                                 SCREEN_HEIGHT,
+            er_perf_overlay_draw(screen_width,
+                                 screen_height,
                                  s_perf_lines,
                                  s_perf_line_count,
                                  &overlay_x,

@@ -19,6 +19,14 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `?rotation=`), so a rotated panel can be checked off-device. The SDL and software backends present through
   `er_rotate_copy()`.
 - Flow A and Flow B take `screen` from `er_get_display_size()` when the host leaves the size at 0.
+- Engine: `er_display_rect_to_panel()` turns a logical rect into the panel rect it lands on, for a backend that
+  tracks its own damage.
+
+### Changed
+
+- esp32-lcd: `er_esp32_lcd_backend_init(panel)` takes its size and rotation from `er_set_display_rotation()`, and
+  present turns through `er_rotate_copy()`. The overlay is only sent again after a capture or where the app draws
+  over it. The S3 example sets the rotation on the engine and passes touches through as read.
 
 ## [0.22.1] - 2026-11-16
 ### Fixed

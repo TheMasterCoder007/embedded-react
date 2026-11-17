@@ -565,13 +565,6 @@ void er_input_queue_touch(uint8_t finger_id, ERTouchPhase phase, int x, int y);
 void er_display_point_to_logical(int* x, int* y);
 
 /**
- * @brief Turns a logical rect into the panel rect it lands on, under the display rotation.
- *
- * @param[in,out] rect  Rect: logical in, panel out.
- */
-void er_display_rect_to_panel(ERRect* rect);
-
-/**
  * @brief Dispatches every finger's parked touch-move (the frame boundary for input).
  *
  * Called at the top of er_commit(), and by the QuickJS bridge at the top of its frame pump so a

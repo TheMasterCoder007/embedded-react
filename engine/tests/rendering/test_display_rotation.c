@@ -20,7 +20,8 @@
  *   - er_rotate_copy() puts every logical pixel where the panel shows it, at 1 to 4 bytes per pixel,
  *     for the whole panel and for a clipped rect with odd edges that spans several strips,
  *   - a touch at a panel point presses the node drawn there,
- *   - er_get_dirty_rect() and er_get_dirty_rects() report the logical damage turned into panel space.
+ *   - er_get_dirty_rect() and er_get_dirty_rects() report the logical damage turned into panel space,
+ *   - er_display_rect_to_panel() turns a logical rect the same way.
  */
 
 #include "er_scene.h"
@@ -442,6 +443,29 @@ static int check_dirty_rects(void)
 }
 
 /**
+ * @brief Checks er_display_rect_to_panel() turns a rect off every edge into the panel rect its corners land on.
+ *
+ * @return EXIT_SUCCESS on pass.
+ */
+static int check_rect_to_panel(void)
+{
+    static const ERRect logical_rects[] = {{0, 0, 1, 1}, {3, 5, 17, 9}, {LOGICAL_WIDTH - 7, LOGICAL_HEIGHT - 2, 7, 2}};
+    for (int rotation_index = 0; rotation_index < ROTATION_COUNT; rotation_index++)
+    {
+        const ERDisplayRotation rotation = s_rotations[rotation_index];
+        set_rotation(rotation);
+        for (size_t rect_index = 0; rect_index < sizeof(logical_rects) / sizeof(logical_rects[0]); rect_index++)
+        {
+            ERRect panel_rect = logical_rects[rect_index];
+            er_display_rect_to_panel(&panel_rect);
+            if (!rects_equal(panel_rect, logical_rect_to_panel(rotation, logical_rects[rect_index])))
+                return fail("er_display_rect_to_panel() is not the rect its corners land on", rotation);
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
+/**
  * @brief Fill callback that draws nothing; the checks read the engine's reports, not pixels.
  */
 static void fill_nothing(uint32_t argb, int x, int y, int width, int height, void* ctx)
@@ -464,7 +488,7 @@ int main(void)
     embedded_renderer_set_backend(&backend);
 
     if (check_setting() != EXIT_SUCCESS || check_rotate_copy() != EXIT_SUCCESS || check_touch() != EXIT_SUCCESS
-        || check_dirty_rects() != EXIT_SUCCESS)
+        || check_dirty_rects() != EXIT_SUCCESS || check_rect_to_panel() != EXIT_SUCCESS)
         return EXIT_FAILURE;
     printf("display rotation: all checks passed\n");
     return EXIT_SUCCESS;

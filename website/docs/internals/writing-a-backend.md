@@ -100,7 +100,8 @@ panel at 90 runs a 1280×480 app, and `er_get_display_size()` gives the size to 
 engine still draws in logical coordinates, so render into a buffer of the logical shape and present
 each dirty rect with `er_rotate_copy()`, which copies it into the panel's buffer turned, in strips
 that keep both buffers in cache. `er_get_dirty_rects()` reports panel coordinates, so the same rects
-feed the copy and the flush. `embedded_renderer_touch()` takes panel coordinates too, so the touch
+feed the copy and the flush. A backend that keeps its own logical damage box turns it with
+`er_display_rect_to_panel()`. `embedded_renderer_touch()` takes panel coordinates too, so the touch
 driver passes points through as it reads them. 180 keeps the panel's shape and stride. An SPI
 controller that can turn its own address window (MADCTL) needs none of this.
 

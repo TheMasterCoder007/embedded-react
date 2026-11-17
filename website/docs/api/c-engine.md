@@ -79,7 +79,8 @@ flip with `er_display_present()`; the engine then replays damage into every buff
 A panel mounted against its scan direction sets `er_set_display_rotation(rotation, panel_w,
 panel_h)` once at init, with `ER_ROTATION_0`, `_90`, `_180` or `_270`. The app then runs at
 `er_get_display_size()`, the panel size swapped at 90 and 270. Touches and dirty rects are in panel
-coordinates, and `er_rotate_copy()` presents a rect from a logical-shape buffer, turned. Flow A's
+coordinates, and `er_rotate_copy()` presents a rect from a logical-shape buffer, turned;
+`er_display_rect_to_panel()` turns a logical rect for a backend that tracks its own damage. Flow A's
 `ErRuntimeConfig` and Flow B's `ErbConfig` take their screen size from `er_get_display_size()` when
 it is left at 0.
 
