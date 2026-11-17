@@ -112,7 +112,8 @@ Three optional extensions cover hardware that the basic contract would waste:
   row copy.
 - **Multiple display buffers.** A page-flipping panel tells the engine how many buffers it
   rotates through, and the engine replays each frame's damage into every buffer so none is left
-  stale.
+  stale. A backend that can read its buffers provides `buffer_sync`, and the engine has it copy what
+  a buffer missed from the one shown last, so a change is rendered once.
 
 [Writing a backend](../internals/writing-a-backend.md) covers the conventions in detail, including
 the one that bites most often: dirty rectangles use an inclusive minimum corner and an exclusive

@@ -158,7 +158,7 @@ extern "C"
     /**
      * @brief Axis-aligned rectangle used for clipping and layout.
      */
-    typedef struct
+    typedef struct ERRect
     {
         int x;      /**< Left edge in pixels. */
         int y;      /**< Top edge in pixels. */
@@ -1221,6 +1221,11 @@ extern "C"
      * engine advances to the next buffer; the debt model then converges regardless of how many commits fall
      * between presents. After init, er_reset(), a backend swap, or any event that forces a full repaint, every
      * buffer owes a full frame, so each repaints the whole screen the next time it is rendered.
+     *
+     * A backend that can read its buffers sets EmbeddedRenderBackend.buffer_sync. The engine then has it copy
+     * the debt from the buffer presented last and renders only the commit's own damage, so a change is
+     * rendered once, not once per buffer. A commit that changes nothing still copies, and paints nothing.
+     * er_get_dirty_rect() and er_get_dirty_rects() report the commit's own damage, not what was copied.
      *
      * The host renders through the normal render backend, pointing get-framebuffer at the off-screen buffer,
      * then flips (and calls er_display_present()) — no third "canonical" buffer and no host-side convergence

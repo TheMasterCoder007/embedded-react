@@ -36,6 +36,14 @@ Per frame: `er_commit()`, then `er_dma2d_backend_present(&x, &y, &w, &h)`, which
 and reports whether anything was painted. On a page-flipped panel, flip when it returns true, point at
 the next buffer with `er_dma2d_backend_set_framebuffer()`, and call `er_display_present()`.
 
+A page-flipped panel renders each change once. At its next commit the backend copies what the
+off-screen buffer missed from the buffer set before it (one M2M transfer per rect, at any rotation
+with a band buffer), and the engine renders only the new damage. The copy is not reported by
+`er_dma2d_backend_present()`, so a commit that changes nothing causes no flip. Wait for a flip to
+take effect before the next commit. With `cache_clean` and
+`cache_clean_invalidate` set, the copy cleans its source and invalidates its destination. A render
+buffer is single-buffered and does not copy.
+
 ## Rotated panels
 
 A 480×1280 panel mounted as a 1280×480 bar runs a 1280×480 app, and the picture is turned on its

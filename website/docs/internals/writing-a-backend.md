@@ -104,6 +104,26 @@ the flip decision on a box the backend accumulates across every paint since the 
 only the most recent commit: in Flow A the reconciler commits inside the pump, so by the host's own
 commit that damage is already consumed.
 
+**Page-flip copy.** Repainting the debt renders every change once per buffer. A backend that can
+read its buffers provides `buffer_sync(rects, count, ctx)` instead: copy those rects from the buffer
+presented last (the target before the last `er_display_present()`) into the buffer about to be
+drawn. The engine calls it at the start of the buffer's first commit, then renders only that
+commit's own damage. A commit that changes nothing copies and paints nothing, so a one-off change
+costs one render and one flip. The rects are logical and never overlap. What the commit is about to
+repaint is left out of them, so an animation that changes the same area every frame is not copied
+and then repainted.
+
+- Do not count the copy as painting: it must not grow the box the flip decision reads, or every
+  change causes a second flip.
+- The flip must have taken effect before the next commit, as it must without the hook: the copy
+  reads the buffer on screen and writes the one that just left it.
+- `er_get_dirty_rect()` and `er_get_dirty_rects()` report the commit's own damage, not what was
+  copied.
+- Anything drawn outside a commit, such as the perf overlay, is not in the debt. Redraw it into each
+  buffer, as before.
+
+Without the hook the engine re-renders the debt, as above.
+
 **A panel mounted against its scan direction.** `er_set_display_rotation(ER_ROTATION_90, panel_w,
 panel_h)` at init, before the backend comes up, runs the app in the turned (logical) size: a 480×1280
 panel at 90 runs a 1280×480 app, and `er_get_display_size()` gives the size to hand the app. The

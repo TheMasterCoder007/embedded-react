@@ -19,7 +19,8 @@
  * formats. The peripheral is a block of plain memory and every op stays on the CPU.
  *   - each framebuffer holds the whole scene, turned, once it has been rendered into,
  *   - a change costs strips of its own damage rect, not of the full width, each within the pixel budget,
- *   - the other framebuffer gets what it missed on its next commit, and the scene then settles,
+ *   - the other framebuffer gets what it missed by a copy, at its next commit,
+ *   - a commit that changes nothing paints nothing,
  *   - er_dma2d_backend_present() reports the painted box only when something was painted.
  */
 
@@ -307,22 +308,27 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     int back = 0;
     ERRect painted = {0, 0, 0, 0};
 
-    /* Both buffers start with the whole scene, in full-width strips. */
-    for (int buffer = 0; buffer < FRAMEBUFFER_COUNT; buffer++)
-    {
-        s_strip_count = 0;
-        er_commit();
-        if (s_strip_count != (LOGICAL_HEIGHT * LOGICAL_WIDTH + BAND_PIXELS - 1) / BAND_PIXELS)
-            return fail("a full repaint did not take the fewest full-width strips", rotation, format);
-        if (!er_dma2d_backend_present(&painted.x, &painted.y, &painted.width, &painted.height) || painted.x != 0
-            || painted.y != 0 || painted.width != panel_width || painted.height != panel_height)
-            return fail("a full repaint did not report the whole panel", rotation, format);
-        if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
-            return fail("a full repaint left a wrong pixel", rotation, format);
-        back ^= 1;
-        er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
-        er_display_present();
-    }
+    /* The first buffer gets the whole scene, in full-width strips. */
+    s_strip_count = 0;
+    er_commit();
+    if (s_strip_count != (LOGICAL_HEIGHT * LOGICAL_WIDTH + BAND_PIXELS - 1) / BAND_PIXELS)
+        return fail("a full repaint did not take the fewest full-width strips", rotation, format);
+    if (!er_dma2d_backend_present(&painted.x, &painted.y, &painted.width, &painted.height) || painted.x != 0
+        || painted.y != 0 || painted.width != panel_width || painted.height != panel_height)
+        return fail("a full repaint did not report the whole panel", rotation, format);
+    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
+        return fail("a full repaint left a wrong pixel", rotation, format);
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
+    er_display_present();
+
+    /* Nothing changes: the second buffer is copied whole, not rendered. */
+    s_strip_count = 0;
+    er_commit();
+    if (s_strip_count != 0 || er_dma2d_backend_present(NULL, NULL, NULL, NULL))
+        return fail("the second buffer was rendered with nothing changed", rotation, format);
+    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
+        return fail("the second buffer was not copied whole", rotation, format);
 
     /* The tall box changes: one strip of its own rect, in this buffer only. */
     set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR_CHANGED);
@@ -343,42 +349,50 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
     er_display_present();
 
-    /* The small box changes: this buffer gets it and the tall box it missed, as two rects. */
+    /* The small box changes: it is banded alone, and the tall box this buffer missed is copied over. */
     set_box(small, &s_small_box, small_margin_top, SMALL_COLOR_CHANGED);
     s_strip_count = 0;
     er_commit();
-    if (!strips_are_rect_sized() || !strips_cover(&s_tall_box) || !strips_cover(&s_small_box))
-        return fail("the two changes were not banded as their own rects", rotation, format);
-    er_dma2d_backend_present(NULL, NULL, NULL, NULL);
+    if (!strips_are_rect_sized() || !strips_cover(&s_small_box) || strips_cover(&s_tall_box))
+        return fail("the small box was not banded on its own rect", rotation, format);
+    if (!er_dma2d_backend_present(&painted.x, &painted.y, &painted.width, &painted.height)
+        || painted.width * painted.height > 2 * s_small_box.width * s_small_box.height)
+        return fail("the copied rect was reported as painted", rotation, format);
     if (!framebuffer_matches(
             s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR_CHANGED))
         return fail("the buffer rendered after the second change is wrong", rotation, format);
-    back ^= 1;
-    er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
-    er_display_present();
-
-    /* Nothing changes: this buffer gets the small box it missed. */
-    s_strip_count = 0;
-    er_commit();
-    if (!strips_are_rect_sized() || !strips_cover(&s_small_box) || strips_cover(&s_tall_box))
-        return fail("the missed change was not replayed on its own rect", rotation, format);
-    er_dma2d_backend_present(NULL, NULL, NULL, NULL);
     if (!framebuffer_matches(
-            s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR_CHANGED))
-        return fail("the buffer rendered after the replay is wrong", rotation, format);
+            s_framebuffers[back ^ 1], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR))
+        return fail("the buffer on screen was written to by the copy", rotation, format);
     back ^= 1;
     er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
     er_display_present();
 
-    /* Both buffers are current. */
+    /* Nothing changes: the small box this buffer missed is copied over, and nothing is painted. */
     s_strip_count = 0;
     er_commit();
     if (s_strip_count != 0 || er_dma2d_backend_present(NULL, NULL, NULL, NULL))
-        return fail("a settled scene still painted", rotation, format);
+        return fail("a commit with no change still painted", rotation, format);
+    if (!framebuffer_matches(
+            s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR_CHANGED))
+        return fail("a commit with no change did not copy what the buffer missed", rotation, format);
+
+    /* The tall box changes back: it is banded alone. */
+    set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR);
+    s_strip_count = 0;
+    er_commit();
+    if (!strips_are_rect_sized() || !strips_cover(&s_tall_box) || strips_cover(&s_small_box))
+        return fail("the tall box was not banded alone after a copy", rotation, format);
+    er_dma2d_backend_present(NULL, NULL, NULL, NULL);
+    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR_CHANGED))
+        return fail("the buffer rendered after the copy is wrong", rotation, format);
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
+    er_display_present();
 
     /* A backend with no flush hook has nowhere to send strips, so its budget is ignored. */
     s_recording_backend.band_flush = NULL;
-    set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR);
+    set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR_CHANGED);
     s_strip_count = 0;
     er_commit();
     if (s_strip_count != 0)

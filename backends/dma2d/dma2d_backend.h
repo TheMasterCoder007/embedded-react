@@ -40,7 +40,8 @@
  *
  * Double/triple-buffered LTDC panels: see README.md — call er_set_display_buffer_count() once
  * at init, flip buffers with er_dma2d_backend_set_framebuffer(), and report each flip with
- * er_display_present().
+ * er_display_present(). What a buffer missed is copied from the one set before it, so a change is
+ * rendered once.
  *
  * Rotated panels, one of:
  *  - `band_buffer`: the engine draws each damage rect in strips into a small buffer, and each strip is
@@ -152,6 +153,7 @@ extern "C"
      * Waits for any in-flight transfer into the old buffer first. Call between er_commit() calls,
      * then er_display_present() to advance the engine's damage rotation. With a band buffer this
      * changes where strips land; with a render buffer, where er_dma2d_backend_present() copies to.
+     * The buffer it replaces becomes the source for bringing the new one up to date.
      *
      * @param[in] framebuffer  The new framebuffer (same size/format as configured).
      */
