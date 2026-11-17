@@ -386,7 +386,8 @@ bool er_runtime_native_post(int native, const int32_t* arguments);
  *
  * Sets `screen`, then tells the app: the root takes the new size, `Dimensions` fires `change`, and components
  * that read `useWindowDimensions()` render again. State is kept. A later er_runtime_reset() keeps the size too.
- * Call it from the task that owns the runtime, between frames.
+ * An error screen that is up takes the new size. The runtime sets no er_set_screen_bounds(), so a host that set
+ * its own sets them again. Call it from the task that owns the runtime, between frames.
  *
  * @param[in] width   `screen.width`; 0 takes er_get_display_size().
  * @param[in] height  `screen.height`.

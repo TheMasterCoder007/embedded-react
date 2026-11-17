@@ -50,6 +50,18 @@ extern "C"
     bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel);
 
     /**
+     * @brief Takes a new rotation while the app runs, after er_set_display_rotation() with the same panel size.
+     *
+     * The canonical framebuffer takes the new logical shape and is cleared, and the next present sends the whole
+     * screen. An overlay goes until its next capture. In Flow A, call er_runtime_set_screen_size(0, 0) next so the
+     * app lays out at its new size.
+     *
+     * @return false before init, in direct mode, or when the panel size changed; the backend is then as it was, so
+     *         put the old rotation back.
+     */
+    bool er_esp32_lcd_backend_rotation_changed(void);
+
+    /**
      * @brief Flushes the painted (dirty) region of the framebuffer to the panel.
      *
      * Call once per frame after er_commit(). The engine does not auto-present — it only paints into

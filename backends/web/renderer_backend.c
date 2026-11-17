@@ -17,7 +17,6 @@
 #include "web_backend.h"
 
 #include "er_assets.h"
-#include "er_error_screen.h"
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "native_renderer.h"
@@ -342,8 +341,6 @@ int er_web_resize(int screen_width, int screen_height, int rotation)
     if (s_app_loaded)
     {
         er_runtime_set_screen_size(screen_width, screen_height);
-        if (er_error_screen_active())
-            er_runtime_show_error();
     }
     else
     {

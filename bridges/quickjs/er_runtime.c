@@ -1176,6 +1176,7 @@ bool er_runtime_set_screen_size(int width, int height)
     s_config.screen_width = width;
     s_config.screen_height = height;
     install_screen(s_ctx);
+    er_error_screen_resize(width, height);
     er_bridge_screen_changed(s_ctx);
     return true;
 }

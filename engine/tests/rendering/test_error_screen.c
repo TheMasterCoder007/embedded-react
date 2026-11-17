@@ -46,6 +46,8 @@ typedef struct
 {
     int operation_count;
     int full_screen_error_fills;
+    int last_error_fill_width;
+    int last_error_fill_height;
     int scene_fills;
     int band_begins;
     int band_flushes;
@@ -73,6 +75,11 @@ static void record_fill(uint32_t argb, int x, int y, int width, int height, void
     if (argb == ERROR_BACKGROUND && x == 0 && width == SCREEN_WIDTH && height > 0)
     {
         s_recorded.full_screen_error_fills += (y == 0 && height == SCREEN_HEIGHT) ? 1 : 0;
+    }
+    if (argb == ERROR_BACKGROUND && x == 0 && y == 0)
+    {
+        s_recorded.last_error_fill_width = width;
+        s_recorded.last_error_fill_height = height;
     }
     if (argb == SCENE_COLOR)
     {
@@ -252,6 +259,23 @@ static void test_paints_without_a_scene(void)
     er_error_screen_hide();
 }
 
+static void test_takes_a_new_size(void)
+{
+    use_backend(0);
+    build_scene();
+    er_error_screen_resize(SCREEN_HEIGHT, SCREEN_WIDTH);
+    CHECK(!er_error_screen_active(), "a resize with no error up shows none");
+
+    er_error_screen_show(SCREEN_WIDTH, SCREEN_HEIGHT, &s_screen);
+    commit();
+    er_error_screen_resize(SCREEN_HEIGHT, SCREEN_WIDTH);
+    commit();
+    CHECK(s_recorded.last_error_fill_width == SCREEN_HEIGHT && s_recorded.last_error_fill_height == SCREEN_WIDTH,
+          "a resized error fills its new size");
+    CHECK(s_recorded.operation_count > 1, "and draws its text again");
+    er_error_screen_hide();
+}
+
 static void test_paints_each_display_buffer(void)
 {
     use_backend(0);
@@ -319,6 +343,7 @@ int main(void)
     test_paints_over_the_scene();
     test_ends_a_gesture_in_progress();
     test_paints_without_a_scene();
+    test_takes_a_new_size();
     test_paints_each_display_buffer();
     test_paints_in_bands();
     test_fault_record();

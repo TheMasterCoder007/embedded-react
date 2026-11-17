@@ -20,6 +20,7 @@
  * source).
  */
 
+#include "er_error_screen.h"
 #include "er_runtime.h"
 #include "er_scene.h"
 #include "host_harness.h"
@@ -126,6 +127,14 @@ static void test_live_size(void)
     CHECK(er_set_display_rotation(ER_ROTATION_90, PANEL_WIDTH, PANEL_HEIGHT), "the panel turns");
     CHECK(er_runtime_set_screen_size(0, 0), "an unset size");
     CHECK(changes_are("100x50,240x320"), "is the display's, turned");
+
+    /* An error screen that is up follows. */
+    er_runtime_show_message("Stopped", "for the test", NULL);
+    CHECK(er_set_display_rotation(ER_ROTATION_0, PANEL_WIDTH, PANEL_HEIGHT), "the panel turns back");
+    CHECK(er_runtime_set_screen_size(0, 0), "a size under an error screen");
+    CHECK(er_error_screen_active(), "leaves it up");
+    CHECK(er_set_display_rotation(ER_ROTATION_90, PANEL_WIDTH, PANEL_HEIGHT), "the panel turns again");
+    CHECK(er_runtime_set_screen_size(0, 0), "and the size follows");
 
     /* A reset comes back at the new size. */
     CHECK(er_runtime_reset(), "er_runtime_reset");

@@ -21,6 +21,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 - Flow A and Flow B take `screen` from `er_get_display_size()` when the host leaves the size at 0.
 - Flow A: `er_runtime_set_screen_size()` gives a running app a new screen size with its state kept, for a panel
   that rotates live. `Dimensions.addEventListener('change', ...)` fires and `useWindowDimensions()` renders again.
+- esp32-lcd: `er_esp32_lcd_backend_rotation_changed()` takes a new rotation while the app runs.
 - The simulators resize and rotate without restarting the app. The SDL simulator turns the panel a quarter turn
   on T, and the SDL backend gains `er_sdl_backend_resize()`.
 - Engine: `er_display_rect_to_panel()` turns a logical rect into the panel rect it lands on, for a backend that
