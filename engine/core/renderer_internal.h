@@ -252,6 +252,33 @@ void er_push_clip_reset(void);
 void er_set_band(int origin_y, int height);
 
 /**
+ * @brief Reports whether the backend bands by pixel budget: band_pixels with both strip hooks.
+ *
+ * Without band_begin and band_flush the strips would have nowhere to go, so band_pixels is then ignored.
+ *
+ * @param[in] backend  Backend to test; may be NULL.
+ *
+ * @return true when damage rects are drawn through strips of their own.
+ */
+static inline bool er_backend_bands_by_pixels(const EmbeddedRenderBackend* backend)
+{
+    return backend && backend->band_pixels > 0 && backend->band_begin && backend->band_flush;
+}
+
+/**
+ * @brief Sets a band strip narrower than the screen: er_set_band() plus a column range.
+ *
+ * Blits are clamped to the strip's columns too, and reach the backend strip-local in both axes, so its
+ * band buffer is a plain width x height surface.
+ *
+ * @param[in] origin_x  Screen-space left column of the strip.
+ * @param[in] origin_y  Screen-space top row of the strip.
+ * @param[in] width     Strip width in columns; 0 leaves columns alone, as er_set_band() does.
+ * @param[in] height    Strip height in rows; 0 disables banding.
+ */
+void er_set_band_rect(int origin_x, int origin_y, int width, int height);
+
+/**
  * @brief Reports the active band strip, if any (used by render_tree to cull subtrees off-strip).
  *
  * @param[out] origin_y  Strip top (may be NULL).
@@ -260,6 +287,19 @@ void er_set_band(int origin_y, int height);
  * @return true if a band strip is active (height > 0); false in full-framebuffer mode.
  */
 bool er_band_active(int* origin_y, int* height);
+
+/**
+ * @brief Reports the rows a draw can reach while a band strip is being emitted.
+ *
+ * False when no strip is active, or when draws are being captured into a scratch layer, which must stay whole.
+ * A renderer that works row by row can skip the rows outside [@p top, @p bottom).
+ *
+ * @param[out] top     First screen row of the strip.
+ * @param[out] bottom  One past the strip's last screen row.
+ *
+ * @return true when only those rows reach the backend.
+ */
+bool er_band_emit_rows(int* top, int* bottom);
 
 /**
  * @brief Reads the current (top-most) scissor clip rectangle.

@@ -110,6 +110,21 @@ extern "C"
         /** @brief Copy a fully opaque src in the given format into the framebuffer (replace). */
         void (*copy_rect_format)(
             const void* src, int src_stride_bytes, ERImageFormat fmt, int x, int y, int w, int h, void* ctx);
+
+        /*------------------------------------------------------------------------------------------------
+         - Banded rendering by pixel budget (optional). For a backend whose band buffer can take a strip
+           of any shape, such as one that copies strips into a framebuffer. With band_pixels > 0 the
+           engine bands each damage rect on its own: a strip is as wide as its rect and as tall as fits
+           in band_pixels, so a small change costs its own area and a narrow rect takes few strips.
+           band_begin() gets the strip's rect, and the blit callbacks get coordinates local to the strip
+           in BOTH axes, so the band buffer is a plain `w x h` surface with a row pitch of `w`.
+           band_begin() need not clear the buffer: the engine draws every pixel of each strip.
+           band_pixels must be at least the screen width; band_height is ignored. Both band_begin()
+           and band_flush() are required: without them band_pixels is ignored.
+         ------------------------------------------------------------------------------------------------*/
+
+        /** @brief Pixels in the band buffer; > 0 enables banded rendering with strips of any shape. */
+        int band_pixels;
     } EmbeddedRenderBackend;
 
     /**

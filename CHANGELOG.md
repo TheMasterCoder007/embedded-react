@@ -10,6 +10,12 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- dma2d: a rotated panel page-flips. With `band_buffer` and `band_pixels` the engine draws through a small
+  band buffer, so both LTDC framebuffers stay scan buffers.
+- Engine: a backend that sets `band_pixels` gets each damage rect banded on its own, in strips of any shape
+  that fit the budget. `er_rotate_copy_strip()` turns a strip into the panel's buffer.
 
 ## [0.23.0] - 2026-11-17
 ### Added

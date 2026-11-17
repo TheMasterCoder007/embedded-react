@@ -3083,6 +3083,15 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                     if (clip_y + clip_height < clip_bottom)
                         clip_bottom = clip_y + clip_height;
                 }
+                /* A band strip only takes its own rows, so the others aren't rasterized. */
+                int band_top, band_bottom;
+                if (er_band_emit_rows(&band_top, &band_bottom))
+                {
+                    if (band_top > clip_top)
+                        clip_top = band_top;
+                    if (band_bottom < clip_bottom)
+                        clip_bottom = band_bottom;
+                }
                 /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
                  * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
                 er_vector_render_slot(
@@ -5693,6 +5702,95 @@ static void render_slice_job(int worker, void* arg)
     er_pop_clip_rect();
 }
 
+/** @brief What a strip shows where the scene draws nothing. */
+#define BAND_BLANK_COLOR 0xFF000000U
+
+/** @brief How far below the root a node that fills a rect is looked for. */
+#define BAND_FILL_SEARCH_DEPTH 4
+
+/**
+ * @brief Reports whether the node, or a plain view under it, fills the rect with opaque pixels.
+ *
+ * Only looks through views that sit still, at full opacity, with the rect inside their box, so nothing between
+ * the root and the node that fills can clip, move or fade it.
+ *
+ * @param[in] node   Node to test, with its subtree.
+ * @param[in] rect   Screen rect.
+ * @param[in] depth  Levels left to look through.
+ *
+ * @return true when every pixel of the rect is drawn opaque.
+ */
+static bool subtree_fills_rect(const ERNode* node, const ERRect* rect, int depth)
+{
+    if (node_covers_opaque(node, 0, 0, rect->x, rect->y, rect->width, rect->height))
+        return true;
+    if (depth <= 0 || node->type != ER_NODE_VIEW || node->layout.display == ER_DISPLAY_NONE || node->subtree_hidden
+        || node->has_transform || node->transform_translate_x != 0 || node->transform_translate_y != 0
+        || node->props.view.opacity != ER_ALPHA_OPAQUE)
+        return false;
+    if (rect->x < node->animated.x || rect->y < node->animated.y
+        || rect->x + rect->width > node->animated.x + node->animated.width
+        || rect->y + rect->height > node->animated.y + node->animated.height)
+        return false;
+    for (const ERNode* child = er_node_first_child(node); child; child = er_node_next_sibling(child))
+        if (subtree_fills_rect(child, rect, depth - 1))
+            return true;
+    return false;
+}
+
+/** @brief Reports whether the backend renders through a band buffer. */
+static bool backend_is_banded(const EmbeddedRenderBackend* backend)
+{
+    return backend && (backend->band_height > 0 || er_backend_bands_by_pixels(backend));
+}
+
+/** @brief Most rows a strip of the given width may have: what fits the pixel budget, or band_height. */
+static int band_strip_rows(const EmbeddedRenderBackend* backend, int strip_width)
+{
+    if (!er_backend_bands_by_pixels(backend))
+        return backend->band_height;
+    const int rows = strip_width > 0 ? backend->band_pixels / strip_width : 0;
+    return rows > 0 ? rows : 1;
+}
+
+/**
+ * @brief Renders one rect of the scene in strips cut to the backend's pixel budget.
+ *
+ * The rect is the clip for all its strips; each strip narrows the backend emit to its own rows, so
+ * transform and opacity sources stay whole across a seam.
+ */
+static void render_rect_banded(const EmbeddedRenderBackend* backend, ERNode* root, const ERRect* rect)
+{
+    const int strip_rows = band_strip_rows(backend, rect->width);
+    const int rect_bottom = rect->y + rect->height;
+    /* The band buffer holds the last strip, so a rect the scene doesn't fill is blanked first. */
+    const bool scene_fills_rect = subtree_fills_rect(root, rect, BAND_FILL_SEARCH_DEPTH);
+    er_push_clip_rect(rect->x, rect->y, rect->width, rect->height);
+    for (int strip_top = rect->y; strip_top < rect_bottom; strip_top += strip_rows)
+    {
+        const int strip_height = rect_bottom - strip_top < strip_rows ? rect_bottom - strip_top : strip_rows;
+        if (backend->band_begin)
+        {
+            ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
+            backend->band_begin(rect->x, strip_top, rect->width, strip_height, backend->context);
+            ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
+        }
+        er_set_band_rect(rect->x, strip_top, rect->width, strip_height);
+        if (!scene_fills_rect)
+            er_blit_fill(BAND_BLANK_COLOR, rect->x, strip_top, rect->width, strip_height);
+        render_tree(root, true, false, 0, s_keyboard_avoid_y);
+        er_keyboard_draw((int)root->computed.width, (int)root->computed.height);
+        if (backend->band_flush)
+        {
+            ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_BLIT);
+            backend->band_flush(backend->context);
+            ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
+        }
+    }
+    er_set_band(0, 0);
+    er_pop_clip_rect();
+}
+
 /**
  * @brief er_commit() while the error screen is up: paints it into each display buffer once, in strips on a
  *        banded backend, and reports the whole screen as this commit's repaint.
@@ -5712,12 +5810,12 @@ static void commit_error_screen(void)
     int screen_height = 0;
     er_error_screen_size(&screen_width, &screen_height);
     const EmbeddedRenderBackend* backend = er_backend();
-    if (backend && backend->band_height > 0)
+    if (backend_is_banded(backend))
     {
-        for (int strip_top = 0; strip_top < screen_height; strip_top += backend->band_height)
+        const int strip_rows = band_strip_rows(backend, screen_width);
+        for (int strip_top = 0; strip_top < screen_height; strip_top += strip_rows)
         {
-            const int strip_height =
-                screen_height - strip_top < backend->band_height ? screen_height - strip_top : backend->band_height;
+            const int strip_height = screen_height - strip_top < strip_rows ? screen_height - strip_top : strip_rows;
             if (backend->band_begin)
                 backend->band_begin(0, strip_top, screen_width, strip_height, backend->context);
             er_set_band(strip_top, strip_height);
@@ -5897,7 +5995,7 @@ void er_commit(void)
      * change tracking is possible — so a change in one corner and another in the opposite corner
      * repaint two small areas, not the span between them. The set (with its bounding box in rb_*)
      * then drives EITHER per-rect damage-clipped render_tree passes (full-framebuffer backend) OR a
-     * per-strip banded render over the set's dirty row ranges (backend->band_height > 0). */
+     * per-strip banded render over the set's dirty row ranges, or over each rect (a banded backend). */
     int render_left = root->computed.x;
     int render_top = root->computed.y;
     int render_right = render_left + root->computed.width;
@@ -6473,7 +6571,23 @@ void er_commit(void)
     ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_RENDER);
 
     const EmbeddedRenderBackend* backend = er_backend();
-    if (backend && backend->band_height > 0)
+    if (er_backend_bands_by_pixels(backend))
+    {
+        /* Banded render by pixel budget: each damage rect is banded on its own, in strips as wide as
+         * the rect and as tall as fits the budget, so a small change costs its own area. The rects are
+         * pairwise disjoint, as on the retained path. A full repaint is the root rect. */
+        if (!nothing_dirty && render_full)
+        {
+            const ERRect full_rect = {render_left, render_top, render_right - render_left, render_bottom - render_top};
+            render_rect_banded(backend, root, &full_rect);
+        }
+        else if (!nothing_dirty)
+        {
+            for (uint8_t rect_index = 0U; rect_index < damage.count; rect_index++)
+                render_rect_banded(backend, root, &damage.rects[rect_index]);
+        }
+    }
+    else if (backend && backend->band_height > 0)
     {
         /* Banded render: split the repaint region into horizontal strips no taller than the band
          * buffer. Each strip is fully recomposited (parent_dirty = true) into the backend's band buffer

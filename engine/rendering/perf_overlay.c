@@ -39,6 +39,43 @@
 #define ER_PERF_MAX_LINES 16
 
 /*----------------------------------------------------------------------------------------------------------------------
+ - Functions: Private
+ ---------------------------------------------------------------------------------------------------------------------*/
+
+/** @brief Draws the panel: its background, then one line of text per row. */
+static void draw_panel(int panel_x,
+                       int panel_y,
+                       int panel_width,
+                       int panel_height,
+                       const char* const* lines,
+                       int line_count,
+                       int line_height)
+{
+    /* Opaque background, over whatever the app drew. */
+    er_blit_fill(ER_PERF_BACKGROUND, panel_x, panel_y, panel_width, panel_height);
+
+    /* One render call per line so each sits on its own baseline. */
+    for (int line_index = 0; line_index < line_count; line_index++)
+    {
+        if (!lines[line_index])
+        {
+            continue;
+        }
+        ERTextRenderParams params;
+        memset(&params, 0, sizeof(params));
+        params.text = lines[line_index];
+        params.clip.x = panel_x + ER_PERF_PADDING;
+        params.clip.y = panel_y + ER_PERF_PADDING + line_index * line_height;
+        params.clip.width = panel_width - ER_PERF_PADDING * 2;
+        params.clip.height = line_height;
+        params.color = ER_PERF_FOREGROUND;
+        params.font_size = (uint8_t)ER_PERF_FONT_SIZE;
+        params.font_family = NULL;
+        er_text_render(&params);
+    }
+}
+
+/*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
 
@@ -121,28 +158,32 @@ void er_perf_overlay_draw(int screen_width,
     if (out_height)
         *out_height = panel_height;
 
-    /* Opaque background, composited over whatever the app drew. */
-    er_blit_fill(ER_PERF_BACKGROUND, panel_x, panel_y, panel_width, panel_height);
-
-    /* One render call per line so each sits on its own baseline. */
-    for (int line_index = 0; line_index < line_count; line_index++)
+    const EmbeddedRenderBackend* backend = er_backend();
+    if (!er_backend_bands_by_pixels(backend))
     {
-        if (!lines[line_index])
-        {
-            continue;
-        }
-        ERTextRenderParams params;
-        memset(&params, 0, sizeof(params));
-        params.text = lines[line_index];
-        params.clip.x = panel_x + ER_PERF_PADDING;
-        params.clip.y = panel_y + ER_PERF_PADDING + line_index * line_height;
-        params.clip.width = panel_width - ER_PERF_PADDING * 2;
-        params.clip.height = line_height;
-        params.color = ER_PERF_FOREGROUND;
-        params.font_size = (uint8_t)ER_PERF_FONT_SIZE;
-        params.font_family = NULL;
-        er_text_render(&params);
+        draw_panel(panel_x, panel_y, panel_width, panel_height, lines, line_count, line_height);
+        return;
     }
+
+    /* No strip is open after a commit, so the panel goes through strips of its own. It is opaque, so
+     * a strip needs nothing from beneath it. */
+    const int left = panel_x < 0 ? 0 : panel_x;
+    const int top = panel_y < 0 ? 0 : panel_y;
+    const int right = panel_x + panel_width > screen_width ? screen_width : panel_x + panel_width;
+    const int bottom = panel_y + panel_height > screen_height ? screen_height : panel_y + panel_height;
+    if (right <= left || bottom <= top)
+        return;
+    const int budget_rows = backend->band_pixels / (right - left);
+    const int strip_rows = budget_rows > 0 ? budget_rows : 1;
+    for (int strip_top = top; strip_top < bottom; strip_top += strip_rows)
+    {
+        const int strip_height = bottom - strip_top < strip_rows ? bottom - strip_top : strip_rows;
+        backend->band_begin(left, strip_top, right - left, strip_height, backend->context);
+        er_set_band_rect(left, strip_top, right - left, strip_height);
+        draw_panel(panel_x, panel_y, panel_width, panel_height, lines, line_count, line_height);
+        backend->band_flush(backend->context);
+    }
+    er_set_band(0, 0);
 }
 
 #else /* ER_PERF_OVERLAY == 0 : compiled out */

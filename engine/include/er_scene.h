@@ -1332,6 +1332,29 @@ extern "C"
                         const ERRect* panel_rect);
 
     /**
+     * @brief er_rotate_copy() from a source that holds only part of the logical screen, such as a band buffer.
+     *
+     * The panel rect must lie inside what the source holds.
+     *
+     * @param[in]  source                    The buffer; its first pixel is logical (source_x, source_y).
+     * @param[in]  source_stride_bytes       Bytes from one source row to the next.
+     * @param[in]  source_x                  Logical X of the source's first pixel.
+     * @param[in]  source_y                  Logical Y of the source's first pixel.
+     * @param[out] destination               The panel's buffer, at panel (0, 0).
+     * @param[in]  destination_stride_bytes  Bytes from one destination row to the next.
+     * @param[in]  bytes_per_pixel           Pixel size in bytes, 1 to 4.
+     * @param[in]  panel_rect                Rect to copy, in panel coordinates; clipped to the panel.
+     */
+    void er_rotate_copy_strip(const void* source,
+                              int source_stride_bytes,
+                              int source_x,
+                              int source_y,
+                              void* destination,
+                              int destination_stride_bytes,
+                              int bytes_per_pixel,
+                              const ERRect* panel_rect);
+
+    /**
      * @brief Returns how many times er_commit() has actually run the layout pass.
      *
      * Increments once per commit that recomputes layout, and stays unchanged on commits that take

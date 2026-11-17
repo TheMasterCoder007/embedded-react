@@ -59,10 +59,12 @@ typedef struct
 {
     ErDma2dBackendConfig config;
     ErDma2dRegs* regs;
-    uint8_t* target;         /**< Where the engine draws: the render buffer, or the framebuffer without one. */
-    int width;               /**< Target width in pixels (the logical width). */
-    int height;              /**< Target height in pixels (the logical height). */
+    uint8_t* target;         /**< Where the engine draws: the band buffer, the render buffer, or the framebuffer. */
+    int width;               /**< Target width in pixels: the logical width, or the open strip's (0 with none open). */
+    int height;              /**< Target height in pixels: the logical height, or the open strip's. */
     int stride_pixels;       /**< Target row pitch in pixels. */
+    bool banded;             /**< The engine draws strips into the band buffer. */
+    int strip_x, strip_y;    /**< Logical origin of the open strip. */
     uint8_t* framebuffer;    /**< The framebuffer the LTDC scans. */
     int panel_stride_pixels; /**< Framebuffer row pitch in pixels. */
     int bytes_per_pixel;     /**< Bytes per pixel, the same in both buffers. */
@@ -221,7 +223,14 @@ static void mark_dirty(int x, int y, int width, int height)
         s_ctx.dirty_y_end = y + height;
 }
 
-/** @brief Clips a rectangle to the framebuffer, advancing the source origin to match. */
+/** @brief Notes a rectangle a draw callback wrote. A strip is noted whole when it begins. */
+static void mark_drawn(int x, int y, int width, int height)
+{
+    if (!s_ctx.banded)
+        mark_dirty(x, y, width, height);
+}
+
+/** @brief Clips a rectangle to the target, advancing the source origin to match. */
 static bool clip_rect(int* x, int* y, int* width, int* height, int* source_x, int* source_y)
 {
     int clipped_x = *x, clipped_y = *y, clipped_width = *width, clipped_height = *height, offset_x = 0, offset_y = 0;
@@ -455,7 +464,7 @@ static void fill_rect_cb(uint32_t argb, int x, int y, int width, int height, voi
     if (alpha == 0U || !clip_rect(&x, &y, &width, &height, NULL, NULL))
         return;
 
-    mark_dirty(x, y, width, height);
+    mark_drawn(x, y, width, height);
     wait_pending(); /* single transfer context; also fences before any CPU access below */
 
     if (alpha == ALPHA_OPAQUE && (width * height) >= s_ctx.config.min_dma_pixels)
@@ -484,7 +493,7 @@ static void copy_rect_cb(const void* source, int source_stride_bytes, int x, int
     if (!source || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    mark_dirty(x, y, width, height);
+    mark_drawn(x, y, width, height);
     wait_pending();
 
     const uint8_t* source_bytes = (const uint8_t*)source;
@@ -542,7 +551,7 @@ static void copy_rect_fmt_cb(
     if (!source || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    mark_dirty(x, y, width, height);
+    mark_drawn(x, y, width, height);
     wait_pending();
 
     const int source_bytes_per_pixel = (format == ER_IMAGE_RGB565) ? RGB565_BYTES : ARGB8888_BYTES;
@@ -618,7 +627,7 @@ static void blend_rect_cb(
     if (!source || alpha == 0U || !clip_rect(&x, &y, &width, &height, &source_x, &source_y))
         return;
 
-    mark_dirty(x, y, width, height);
+    mark_drawn(x, y, width, height);
     wait_pending();
     cpu_copy_blend((const uint8_t*)source, source_stride_bytes, alpha, source_x, source_y, x, y, width, height);
 }
@@ -627,6 +636,43 @@ static void wait_cb(void* ctx)
 {
     (void)ctx;
     wait_pending();
+}
+
+/** @brief Opens a strip: the band buffer becomes a width x height target, cleared to black. */
+static void band_begin_cb(int x, int y, int width, int height, void* ctx)
+{
+    wait_pending();
+    if (width <= 0 || height <= 0 || width * height > s_ctx.config.band_pixels)
+    {
+        s_ctx.width = s_ctx.height = 0;
+        return;
+    }
+    s_ctx.strip_x = x;
+    s_ctx.strip_y = y;
+    s_ctx.width = width;
+    s_ctx.height = height;
+    s_ctx.stride_pixels = width;
+    mark_dirty(x, y, width, height);
+}
+
+/** @brief Closes the strip: copies it, turned, into the framebuffer. The D-cache is cleaned at present. */
+static void band_flush_cb(void* ctx)
+{
+    (void)ctx;
+    if (s_ctx.width <= 0 || s_ctx.height <= 0)
+        return;
+    wait_pending();
+    ERRect rect = {s_ctx.strip_x, s_ctx.strip_y, s_ctx.width, s_ctx.height};
+    er_display_rect_to_panel(&rect);
+    er_rotate_copy_strip(s_ctx.target,
+                         s_ctx.stride_pixels * s_ctx.bytes_per_pixel,
+                         s_ctx.strip_x,
+                         s_ctx.strip_y,
+                         s_ctx.framebuffer,
+                         s_ctx.panel_stride_pixels * s_ctx.bytes_per_pixel,
+                         s_ctx.bytes_per_pixel,
+                         &rect);
+    s_ctx.width = s_ctx.height = 0; /* nothing draws between strips */
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -639,7 +685,10 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     if (!config || !config->dma2d || !config->framebuffer || !er_get_display_size(&logical_width, &logical_height))
         return false;
     const ERDisplayRotation rotation = er_get_display_rotation();
-    if (rotation != ER_ROTATION_0 && !config->render_buffer)
+    const bool banded = config->band_buffer != NULL;
+    if (banded && (config->render_buffer || config->band_pixels < logical_width))
+        return false;
+    if (rotation != ER_ROTATION_0 && !config->render_buffer && !banded)
         return false;
     const int panel_width =
         (rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270) ? logical_height : logical_width;
@@ -655,10 +704,19 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     s_ctx.regs = (ErDma2dRegs*)config->dma2d;
     s_ctx.framebuffer = (uint8_t*)config->framebuffer;
     s_ctx.panel_stride_pixels = panel_stride_pixels;
-    s_ctx.target = config->render_buffer ? (uint8_t*)config->render_buffer : s_ctx.framebuffer;
-    s_ctx.width = logical_width;
-    s_ctx.height = logical_height;
-    s_ctx.stride_pixels = config->render_buffer ? render_stride_pixels : panel_stride_pixels;
+    s_ctx.banded = banded;
+    if (banded)
+    {
+        /* width and height stay 0 until a strip opens */
+        s_ctx.target = (uint8_t*)config->band_buffer;
+    }
+    else
+    {
+        s_ctx.target = config->render_buffer ? (uint8_t*)config->render_buffer : s_ctx.framebuffer;
+        s_ctx.width = logical_width;
+        s_ctx.height = logical_height;
+        s_ctx.stride_pixels = config->render_buffer ? render_stride_pixels : panel_stride_pixels;
+    }
     s_ctx.bytes_per_pixel = (config->format == ER_DMA2D_FRAMEBUFFER_RGB565)   ? RGB565_BYTES
                             : (config->format == ER_DMA2D_FRAMEBUFFER_RGB888) ? RGB888_BYTES
                                                                               : ARGB8888_BYTES;
@@ -674,6 +732,12 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     s_backend.blend_rect = blend_rect_cb;
     s_backend.wait = wait_cb;
     s_backend.context = &s_ctx;
+    if (banded)
+    {
+        s_backend.band_pixels = config->band_pixels;
+        s_backend.band_begin = band_begin_cb;
+        s_backend.band_flush = band_flush_cb;
+    }
 
     embedded_renderer_set_backend(&s_backend);
     return true;
@@ -685,7 +749,7 @@ void er_dma2d_backend_set_framebuffer(void* framebuffer)
         return;
     wait_pending();
     s_ctx.framebuffer = (uint8_t*)framebuffer;
-    if (!s_ctx.config.render_buffer)
+    if (!s_ctx.config.render_buffer && !s_ctx.banded)
         s_ctx.target = s_ctx.framebuffer;
 }
 
@@ -717,13 +781,13 @@ bool er_dma2d_backend_present(int* x, int* y, int* width, int* height)
                        s_ctx.panel_stride_pixels * s_ctx.bytes_per_pixel,
                        s_ctx.bytes_per_pixel,
                        &rect);
-        /* The LTDC reads memory, not the CPU's cache. */
-        if (s_ctx.config.cache_clean)
-        {
-            const uint8_t* first = panel_at(rect.x, rect.y);
-            const uint8_t* last = panel_at(rect.x + rect.width, rect.y + rect.height - 1);
-            s_ctx.config.cache_clean(first, (size_t)(last - first));
-        }
+    }
+    /* The LTDC reads memory, not the CPU's cache. */
+    if ((s_ctx.config.render_buffer || s_ctx.banded) && s_ctx.config.cache_clean)
+    {
+        const uint8_t* first = panel_at(rect.x, rect.y);
+        const uint8_t* last = panel_at(rect.x + rect.width, rect.y + rect.height - 1);
+        s_ctx.config.cache_clean(first, (size_t)(last - first));
     }
 
     if (x)

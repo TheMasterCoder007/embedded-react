@@ -88,8 +88,11 @@ typedef struct
      * opacity) source rendering, which must always be complete or a transformed node split across a
      * strip seam shows an anti-aliasing gap. Each backend blit is clamped to these rows and its Y
      * translated to the 0-origin band buffer. band_height == 0 disables both (the classic
-     * full-framebuffer path). */
+     * full-framebuffer path). A strip narrower than the screen sets band_width too: blits are then
+     * clamped to its columns and X is strip-local as well. */
+    int band_origin_x;
     int band_origin_y;
+    int band_width;
     int band_height;
 
     /* Scratch redirect: when scratch_buffer is non-NULL all blit calls write into it. */
@@ -458,8 +461,68 @@ void er_push_clip_reset(void)
 
 void er_set_band(int origin_y, int height)
 {
+    er_set_band_rect(0, origin_y, 0, height);
+}
+
+void er_set_band_rect(int origin_x, int origin_y, int width, int height)
+{
+    rc()->band_origin_x = width > 0 ? origin_x : 0;
     rc()->band_origin_y = origin_y;
+    rc()->band_width = width;
     rc()->band_height = height;
+}
+
+/**
+ * @brief Clamps a backend blit to the active band strip and makes it strip-local.
+ *
+ * @param[in,out] x,y,width,height  The blit: screen space in, strip-local out.
+ * @param[out]    skipped_columns   Source columns clamped off the left (may be NULL).
+ * @param[out]    skipped_rows      Source rows clamped off the top (may be NULL).
+ *
+ * @return false when nothing of the blit is inside the strip.
+ */
+static inline bool band_clamp(int* x, int* y, int* width, int* height, int* skipped_columns, int* skipped_rows)
+{
+    const NRCtx* context = rc();
+    int columns = 0;
+    int rows = 0;
+    if (context->band_height > 0)
+    {
+        const int top = context->band_origin_y;
+        const int bottom = top + context->band_height;
+        if (*y < top)
+        {
+            rows = top - *y;
+            *height -= rows;
+            *y = top;
+        }
+        if (*y + *height > bottom)
+            *height = bottom - *y;
+        if (*height <= 0)
+            return false;
+        if (context->band_width > 0)
+        {
+            const int left = context->band_origin_x;
+            const int right = left + context->band_width;
+            if (*x < left)
+            {
+                columns = left - *x;
+                *width -= columns;
+                *x = left;
+            }
+            if (*x + *width > right)
+                *width = right - *x;
+            if (*width <= 0)
+                return false;
+        }
+        *x -= context->band_origin_x;
+        *y -= top;
+    }
+    if (skipped_columns)
+        *skipped_columns = columns;
+    if (skipped_rows)
+        *skipped_rows = rows;
+    return true;
 }
 
 bool er_band_active(int* origin_y, int* height)
@@ -469,6 +532,15 @@ bool er_band_active(int* origin_y, int* height)
     if (height)
         *height = rc()->band_height;
     return rc()->band_height > 0;
+}
+
+bool er_band_emit_rows(int* top, int* bottom)
+{
+    if (rc()->band_height <= 0 || rc()->scratch_buffer)
+        return false;
+    *top = rc()->band_origin_y;
+    *bottom = rc()->band_origin_y + rc()->band_height;
+    return true;
 }
 
 bool er_get_clip_rect(int* x, int* y, int* width, int* height)
@@ -540,21 +612,10 @@ void er_blit_fill(uint32_t argb, int x, int y, int width, int height)
     }
     if (g_backend && g_backend->fill_rect)
     {
-        if (rc()->band_height > 0)
-        {
-            const int top = rc()->band_origin_y, bottom = rc()->band_origin_y + rc()->band_height;
-            if (y < top)
-            {
-                height -= top - y;
-                y = top;
-            }
-            if (y + height > bottom)
-                height = bottom - y;
-            if (height <= 0)
-                return;
-        }
+        if (!band_clamp(&x, &y, &width, &height, NULL, NULL))
+            return;
         ER_BLIT_PERF_BEGIN();
-        g_backend->fill_rect(argb, x, y - rc()->band_origin_y, width, height, g_backend->context);
+        g_backend->fill_rect(argb, x, y, width, height, g_backend->context);
         ER_BLIT_PERF_END(width, height);
     }
 }
@@ -584,23 +645,14 @@ void er_blit_copy(const void* source, int stride, int x, int y, int width, int h
     }
     if (g_backend && g_backend->copy_rect)
     {
-        if (rc()->band_height > 0)
-        {
-            const int top = rc()->band_origin_y, bottom = rc()->band_origin_y + rc()->band_height;
-            if (y < top)
-            {
-                const int skipped_rows = top - y;
-                source = (const uint8_t*)source + (size_t)skipped_rows * (size_t)stride;
-                height -= skipped_rows;
-                y = top;
-            }
-            if (y + height > bottom)
-                height = bottom - y;
-            if (height <= 0)
-                return;
-        }
+        int skipped_columns = 0;
+        int skipped_rows = 0;
+        if (!band_clamp(&x, &y, &width, &height, &skipped_columns, &skipped_rows))
+            return;
+        source = (const uint8_t*)source + (size_t)skipped_rows * (size_t)stride
+                 + (size_t)skipped_columns * ER_ARGB8888_PIXEL_BYTES;
         ER_BLIT_PERF_BEGIN();
-        g_backend->copy_rect(source, stride, x, y - rc()->band_origin_y, width, height, g_backend->context);
+        g_backend->copy_rect(source, stride, x, y, width, height, g_backend->context);
         ER_BLIT_PERF_END(width, height);
     }
 }
@@ -626,23 +678,14 @@ bool er_blit_copy_fmt(const void* source, int stride, ERImageFormat format, int 
         return true; /* fully clipped: nothing to draw */
     source = (const uint8_t*)source + (size_t)(y - original_y) * (size_t)stride
              + (size_t)(x - original_x) * (size_t)bytes_per_pixel;
-    if (rc()->band_height > 0)
-    {
-        const int top = rc()->band_origin_y, bottom = rc()->band_origin_y + rc()->band_height;
-        if (y < top)
-        {
-            const int skipped_rows = top - y;
-            source = (const uint8_t*)source + (size_t)skipped_rows * (size_t)stride;
-            height -= skipped_rows;
-            y = top;
-        }
-        if (y + height > bottom)
-            height = bottom - y;
-        if (height <= 0)
-            return true;
-    }
+    int skipped_columns = 0;
+    int skipped_rows = 0;
+    if (!band_clamp(&x, &y, &width, &height, &skipped_columns, &skipped_rows))
+        return true;
+    source = (const uint8_t*)source + (size_t)skipped_rows * (size_t)stride
+             + (size_t)skipped_columns * (size_t)bytes_per_pixel;
     ER_BLIT_PERF_BEGIN();
-    g_backend->copy_rect_format(source, stride, format, x, y - rc()->band_origin_y, width, height, g_backend->context);
+    g_backend->copy_rect_format(source, stride, format, x, y, width, height, g_backend->context);
     ER_BLIT_PERF_END(width, height);
     return true;
 }
@@ -670,23 +713,14 @@ void er_blit_blend(const void* source, int stride, uint8_t alpha, int x, int y, 
     }
     if (g_backend && g_backend->blend_rect)
     {
-        if (rc()->band_height > 0)
-        {
-            const int top = rc()->band_origin_y, bottom = rc()->band_origin_y + rc()->band_height;
-            if (y < top)
-            {
-                const int skipped_rows = top - y;
-                source = (const uint8_t*)source + (size_t)skipped_rows * (size_t)stride;
-                height -= skipped_rows;
-                y = top;
-            }
-            if (y + height > bottom)
-                height = bottom - y;
-            if (height <= 0)
-                return;
-        }
+        int skipped_columns = 0;
+        int skipped_rows = 0;
+        if (!band_clamp(&x, &y, &width, &height, &skipped_columns, &skipped_rows))
+            return;
+        source = (const uint8_t*)source + (size_t)skipped_rows * (size_t)stride
+                 + (size_t)skipped_columns * ER_ARGB8888_PIXEL_BYTES;
         ER_BLIT_PERF_BEGIN();
-        g_backend->blend_rect(source, stride, alpha, x, y - rc()->band_origin_y, width, height, g_backend->context);
+        g_backend->blend_rect(source, stride, alpha, x, y, width, height, g_backend->context);
         ER_BLIT_PERF_END(width, height);
     }
 }
@@ -729,7 +763,9 @@ void embedded_renderer_set_backend(const EmbeddedRenderBackend* backend)
         NRCtx* context = &s_worker_contexts[worker];
         context->clip_depth = 0;
         context->clip_overflow = 0;
+        context->band_origin_x = 0;
         context->band_origin_y = 0;
+        context->band_width = 0;
         context->band_height = 0;
         context->scratch_buffer = NULL;
         context->draw_alpha = ER_ALPHA_OPAQUE;
