@@ -1045,6 +1045,14 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel)
         }
     }
 
+    /* The copy path flips between two framebuffers, each two presents stale, which the previous
+     * damage box covers. A third goes unused there. */
+    if (!s_lcd.direct && s_lcd.panel_framebuffer_count > DOUBLE_BUFFER_COUNT)
+    {
+        s_lcd.panel_framebuffer_count = DOUBLE_BUFFER_COUNT;
+        s_lcd.panel_framebuffers[2] = NULL;
+    }
+
     if (s_lcd.direct)
     {
         /* All panel framebuffers start as the composite target; clear them to opaque black. */
