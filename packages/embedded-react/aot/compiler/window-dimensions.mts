@@ -100,7 +100,7 @@ export function rewriteWindowDimensions(ast: t.File): void {
         ) {
           const error = aotError(
             "AOT: Dimensions has only get('window') and get('screen')",
-            'the panel size is fixed while the app runs, so there is nothing else to read or listen to.',
+            'read the size in render, or in an effect that depends on it: both follow a size change.',
           );
           if (path.node.loc) {
             error.aotLoc = path.node.loc.start;

@@ -347,6 +347,93 @@ static void test_screen_from_display(void)
     s_config.screen_height = TPKG_SCREEN;
 }
 
+/** @brief A resize function that reads the width into SLOT_COUNT, where the boot function reads the height. */
+static void resizable(void)
+{
+    base();
+    const uint8_t types[] = {ERB_TYPE_INT};
+    const uint32_t boot[] = {
+        OP_ABX(SCREEN, 0, 1),
+        OP_ABX(SET32, 0, SLOT_COUNT),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    tpkg_set_code(&s_package_spec, FUNCTION_BOOT, types, 1, boot, 3);
+    const uint32_t resize[] = {
+        OP_ABX(SCREEN, 0, 0),
+        OP_ABX(SET32, 0, SLOT_COUNT),
+        OP_ABC(RET, 0, 0, 0),
+    };
+    tpkg_function(&s_package_spec, ERB_FUNCTION_KIND_RESIZE, 0, 0, types, 1, resize, 3);
+    s_config.screen_width = 321;
+    s_config.screen_height = 123;
+}
+
+/** @brief A new size the running layout takes: SCREEN, the root and the resize function follow, with no reboot. */
+static void test_screen_resize(void)
+{
+    static const uint32_t any_size[] = {ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_END};
+    resizable();
+    s_package_spec.check_words = any_size;
+    s_package_spec.check_word_count = 2u;
+    s_package_spec.panel_checks[0] = 0u;
+    CHECK(!erb_set_screen_size(123, 321), "no app to resize before a load");
+    CHECK(load(), "a resizable package loads");
+    CHECK(slot_int(SLOT_COUNT) == 123, "boot read the height");
+    CHECK(erb_set_screen_size(321, 123), "the size it has");
+    CHECK(slot_int(SLOT_COUNT) == 123, "the same size runs nothing");
+    CHECK(erb_set_screen_size(200, 300), "a new size");
+    CHECK(slot_int(SLOT_COUNT) == 200, "the resize function ran, and boot didn't");
+    ERNode* root = slot_node(SLOT_ROOT, 0);
+    CHECK(root && root->layout.width == 200 && root->layout.height == 300, "the root fills the new size");
+    CHECK(erb_running(), "the app still runs");
+    CHECK(!erb_set_screen_size(40000, 300), "a size past a panel's range");
+
+    CHECK(er_set_display_rotation(ER_ROTATION_90, 150, 250), "a 150x250 panel mounted at 90");
+    CHECK(erb_set_screen_size(0, 0), "a size left at 0");
+    CHECK(slot_int(SLOT_COUNT) == 250, "the display's turned width");
+    er_set_display_rotation(ER_ROTATION_0, TPKG_SCREEN, TPKG_SCREEN);
+    erb_unload();
+
+    /* A package with nothing worked out from the size has no resize function. */
+    base();
+    s_package_spec.check_words = any_size;
+    s_package_spec.check_word_count = 2u;
+    s_package_spec.panel_checks[0] = 0u;
+    CHECK(load(), "a package with no resize function loads");
+    CHECK(erb_set_screen_size(200, 300), "it takes a new size");
+    root = slot_node(SLOT_ROOT, 0);
+    CHECK(root && root->layout.width == 200 && root->layout.height == 300, "its root fills the new size");
+    erb_unload();
+}
+
+/** @brief A size the running layout doesn't take, or a package from before minor 17, leaves the app as it was. */
+static void test_screen_resize_refused(void)
+{
+    /* The base package's check takes its own size only. */
+    resizable();
+    s_config.screen_width = TPKG_SCREEN;
+    s_config.screen_height = TPKG_SCREEN;
+    CHECK(load(), "a package for one size loads");
+    CHECK(!erb_set_screen_size(TPKG_SCREEN + 1, TPKG_SCREEN), "a size its layout doesn't take");
+    CHECK(slot_int(SLOT_COUNT) == TPKG_SCREEN, "the resize function didn't run");
+    ERNode* root = slot_node(SLOT_ROOT, 0);
+    CHECK(root && root->layout.width == TPKG_SCREEN, "the root kept its size");
+    CHECK(erb_running(), "the app still runs");
+    erb_unload();
+
+    static const uint32_t any_size[] = {ERB_CHECK_OP_WIDTH, ERB_CHECK_OP_END};
+    base();
+    s_package_spec.minor = ERB_FORMAT_MINOR_RESIZE - 1u;
+    s_package_spec.check_words = any_size;
+    s_package_spec.check_word_count = 2u;
+    s_package_spec.panel_checks[0] = 0u;
+    CHECK(load(), "a minor 16 package loads");
+    CHECK(!erb_set_screen_size(200, 300), "a package from before resizing");
+    root = slot_node(SLOT_ROOT, 0);
+    CHECK(root && root->layout.width == TPKG_SCREEN, "its root kept its size");
+    erb_unload();
+}
+
 static void test_int_arithmetic(void)
 {
     base();
@@ -2088,6 +2175,8 @@ int main(void)
 
     test_screen();
     test_screen_from_display();
+    test_screen_resize();
+    test_screen_resize_refused();
     test_int_arithmetic();
     test_int64_arithmetic();
     test_float_rules();

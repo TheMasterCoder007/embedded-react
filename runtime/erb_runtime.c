@@ -93,6 +93,7 @@ static uint32_t s_queue_effects; /**< Effects at the front of the queue, run bef
 static bool s_fault_pending;
 static uint16_t s_screen_width; /**< The panel size from the last erb_load(), for the error screen. */
 static uint16_t s_screen_height;
+static ERNode* s_root; /**< The running app's root node. */
 static uint16_t s_anim_generation;
 static uint16_t s_tree[ERB_MAX_ANIM_TREE];
 static uint8_t s_tree_parent[ERB_MAX_ANIM_TREE];
@@ -1066,6 +1067,17 @@ static void bind(ERNode* node, const uint8_t* record, uint32_t instance)
     }
 }
 
+/** @brief Sets the root's props. It fills the real panel, which the layout was not compiled for. */
+static void size_root(ERNode* root)
+{
+    const ErbProgram* program = &g_erb.program;
+    const uint16_t first = erb_u16(erb_template(program, program->root_template) + ERB_TEMPLATE_FIRST_NODE_AT);
+    erb_rt_props(erb_u16(program->nodes + first * ERB_NODE_SIZE + ERB_NODE_PROPS_AT));
+    g_erb_props.width = (int16_t)g_erb.config.screen_width;
+    g_erb_props.height = (int16_t)g_erb.config.screen_height;
+    er_node_set_props(root, &g_erb_props);
+}
+
 ErbStatus erb_rt_build(uint16_t template_index, ERNode* parent, ERNode* before, int32_t instance, ERNode** out)
 {
     const ErbProgram* program = &g_erb.program;
@@ -1084,14 +1096,15 @@ ErbStatus erb_rt_build(uint16_t template_index, ERNode* parent, ERNode* before, 
         {
             return erb_rt_fault(ERB_ERROR_OUT_OF_NODES, "the engine's node pool is empty", NULL, ERB_NONE, 0u);
         }
-        erb_rt_props(erb_u16(record + ERB_NODE_PROPS_AT));
-        /* The root fills the real panel, which the layout was not compiled for. */
         if (index == 0u && template_index == program->root_template)
         {
-            g_erb_props.width = (int16_t)g_erb.config.screen_width;
-            g_erb_props.height = (int16_t)g_erb.config.screen_height;
+            size_root(node);
         }
-        er_node_set_props(node, &g_erb_props);
+        else
+        {
+            erb_rt_props(erb_u16(record + ERB_NODE_PROPS_AT));
+            er_node_set_props(node, &g_erb_props);
+        }
 
         const uint16_t handle = erb_u16(record + ERB_NODE_HANDLE_AT);
         if (handle != ERB_NONE)
@@ -1790,6 +1803,7 @@ static void teardown(void)
         er_font_clear();
         memset(g_erb.arena, 0, g_erb.program.arena_bytes);
     }
+    s_root = NULL;
     s_queue_head = 0;
     s_queue_count = 0;
     s_queue_effects = 0;
@@ -1926,6 +1940,7 @@ static ErbStatus start(const ErbConfig* config)
         return status;
     }
     er_tree_set_root(root);
+    s_root = root;
     while (s_queue_count && !g_erb.faulted)
     {
         ErbEvent next;
@@ -2006,6 +2021,60 @@ void erb_tick(uint32_t elapsed_ms)
     {
         handle_fault();
     }
+}
+
+bool erb_set_screen_size(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+    {
+        er_get_display_size(&width, &height);
+    }
+    if (width <= 0 || height <= 0 || width > INT16_MAX || height > INT16_MAX)
+    {
+        return false;
+    }
+    if (!erb_running())
+    {
+        /* An error screen that is up takes the size, as the next one will. */
+        s_screen_width = (uint16_t)width;
+        s_screen_height = (uint16_t)height;
+        er_error_screen_resize(width, height);
+        return false;
+    }
+    if (g_erb.in_vm)
+    {
+        return false;
+    }
+    if (width == g_erb.config.screen_width && height == g_erb.config.screen_height)
+    {
+        return true;
+    }
+    if (g_erb.program.format_minor < ERB_FORMAT_MINOR_RESIZE
+        || !erb_verify_same_panel(&g_erb.program, (uint16_t)width, (uint16_t)height))
+    {
+        return false;
+    }
+
+    g_erb.config.screen_width = (uint16_t)width;
+    g_erb.config.screen_height = (uint16_t)height;
+    s_screen_width = (uint16_t)width;
+    s_screen_height = (uint16_t)height;
+    er_set_screen_bounds(width, height);
+    size_root(s_root);
+    if (g_erb.program.resize_function != ERB_NONE)
+    {
+        /* The values worked out from the size, then the update sets what reads them. */
+        ErbEvent event;
+        memset(&event, 0, sizeof(event));
+        event.kind = ERB_EVENT_CALL;
+        event.function = g_erb.program.resize_function;
+        dispatch(&event);
+        if (s_fault_pending)
+        {
+            handle_fault();
+        }
+    }
+    return erb_running();
 }
 
 /*----------------------------------------------------------------------------------------------------------------------

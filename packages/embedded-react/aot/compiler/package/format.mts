@@ -26,7 +26,7 @@
  ---------------------------------------------------------------------------------------------------------------------*/
 
 export const FORMAT_MAJOR = 1;
-export const FORMAT_MINOR = 16;
+export const FORMAT_MINOR = 17;
 
 /** The engine ABI level the package is built against (er_scene.h's ER_ABI). */
 export const ENGINE_ABI = 2;
@@ -242,6 +242,7 @@ export const FunctionKind = {
   helper: 0x84,
   animationDone: 0x85,
   nativeEvent: 0x86,
+  resize: 0x87,
 } as const;
 
 /** Event data fields EVT reads. */

@@ -86,7 +86,9 @@ it is left at 0.
 
 `er_set_display_rotation()` can be called again while the app runs. A half turn (0 to 180) keeps the
 app's size, so nothing else is needed. A quarter turn swaps it: in Flow A, call
-`er_runtime_set_screen_size(0, 0)` next and the app lays out at the new size with its state kept. The
+`er_runtime_set_screen_size(0, 0)` next and the app lays out at the new size with its state kept. In
+Flow B, call `erb_set_screen_size(0, 0)`, and `erb_load()` again when it returns false: the new size
+picks another of the package's layouts, which starts over. The
 backend has to follow too, since its logical buffer changes shape: esp32-lcd does on
 `er_esp32_lcd_backend_rotation_changed()`, called between the two. A board that turns live sizes
 `ERUI_SCRATCH_WIDTH`, `ERUI_MAX_IMAGE_ROW_PIXELS` and `ERUI_VECTOR_MAX_ROW` for the panel's longer

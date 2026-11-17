@@ -199,7 +199,8 @@ The codes these records hold, as `runtime/erb_format.h` defines them:
 - **Value types**, for slots and registers: int (1), bool (2), float (3), int64 (4), double (5),
   string (6), enum (7), node (8), anim (9); slots also have animated value (10) and list (11). In the
   `types` table, 0 marks the second cell of a 64-bit register.
-- **Slot flags**: bit 0 tracked (has a dirty bit), bit 1 written only by the boot function.
+- **Slot flags**: bit 0 tracked (has a dirty bit), bit 1 written only by the boot function and the resize
+  function.
 - **Arena regions** (`kind`, and what `count` is): slots (1), dirty bits (2, the bit count; kept twice,
   live and the pass's copy), string buffers (3), list pools (4), node handles (5), timers (6, 16 bytes
   each), running animations (7, 20 bytes each), register stack (8, cells), tape scratch (9, floats),
@@ -210,8 +211,8 @@ The codes these records hold, as `runtime/erb_format.h` defines them:
   interpolation). A color prop takes only an interpolation onto colors, as the engine binds one.
 - **Function kinds**: below `0x40`, a handler for that `EREventType`; `0x40` plus an
   `ERResponderQuery`, a query (returns a bool); then timer (`0x80`), effect (`0x81`), update
-  (`0x82`), boot (`0x83`), helper (`0x84`), animation done (`0x85`) and native event (`0x86`, since
-  minor 11). Only a helper can be called. An entry point takes no parameters, except a handler's or
+  (`0x82`), boot (`0x83`), helper (`0x84`), animation done (`0x85`), native event (`0x86`, since
+  minor 11) and resize (`0x87`, since minor 17; a panel has at most one). Only a helper can be called. An entry point takes no parameters, except a handler's or
   query's one int, the row instance it was built for, and a native event handler's values, in its
   event's types. `params` counts register cells.
 - **Inputs** are sorted by name, so names are unique, and the runtime can search them.
@@ -619,6 +620,24 @@ app is gone. A failure there (a `TRAP` in the boot function, or nodes the engine
 step 5 should prevent) tears down what was built and shows the error screen; it doesn't bring the old
 app back.
 
+### A new screen size
+
+`erb_set_screen_size(width, height)` gives the running app a new size with its state kept, for a panel that
+rotates live or a window that is resized. It runs the layout checks for the new size first. When they pick the
+panel that is running:
+
+1. `SCREEN` reads the new size, and `er_set_screen_bounds()` and the root node take it.
+2. The panel's resize function runs, if it has one. It works the values `SCREEN` gives out again, as the boot
+   function did, and toggles a tracked slot of its own. It appends no list items, sets no state that starts at a
+   boot value and reads no `AVAIL`.
+3. The update runs. That slot's dirty bit guards the props and drawings that read only boot values, and is
+   one of the bits that guard everything else the update sets, so all of it is set again. A dep-driven effect
+   whose deps changed runs, and mount effects don't.
+
+An app that reads no screen size has no resize function, and only step 1 happens. When the checks pick another
+panel, or none, or the package is older than minor 17, the call returns false and changes nothing, and the
+firmware loads the package again with `erb_load()`, which starts the app over at the new size.
+
 **Teardown**, for a reload or a failed load: cancel the timers, stop the animations, destroy the
 animated values and the nodes (`er_reset`), clear the image and font registries, and clear the arena.
 Two pieces this needed from the engine and asset loader:
@@ -658,7 +677,7 @@ build a package that breaks one rule and check it is rejected with that reason.
 | Interps   | An animated-value slot; 2 to `ER_INTERPOLATE_MAX_POINTS` points; known flags and extrapolation modes                                                                                                                                                                           | bad animation                      |
 | Anims     | A known kind and easing; a group's children are later records and no child has two parents; at most `ERUI_MAX_GROUP_ENTRIES` children; the target a `node` or `anim` slot; the prop animatable                                                                                 | bad animation                      |
 | Tapes     | Each tape's floats parse as ops with their argument counts and fit `ERUI_VECTOR_TAPE_MAX`; paint and gradient counts within the firmware's caps; every paint, gradient and stop index in range; 2 to `ER_VECTOR_GRADIENT_MAX_STOPS` stops                                      | bad vector tape                    |
-| Functions | Code in bounds; register count and types valid; parameters and result typed; ends in `RET` or `TRAP`, so it can't run off its end                                                                                                                                              | bad function                       |
+| Functions | Code in bounds; register count and types valid; parameters and result typed; ends in `RET` or `TRAP`, so it can't run off its end; at most one resize function                                                                                                                 | bad function                       |
 | Code      | Every opcode known to this format; every register operand below the frame size and of the type the opcode takes; `int64`, `double` and `node` registers on an even cell                                                                                                        | bad bytecode                       |
 | Code      | Every slot, constant, string, enum, prop, template, animation, tape and import index in range, and of the kind the opcode takes; `SET` only to writable slots; an enum write from the slot's own set                                                                           | bad bytecode                       |
 | Code      | Branch targets inside the function, on an instruction; only `LOOP` branches backward, on a counter set by `LOOPSET` with a constant bound and written by nothing else                                                                                                          | bad control flow                   |
@@ -804,6 +823,7 @@ options. The runtime reads them at load time, so each is set once; its image nam
 
 `erb_input_find("steps")` looks an input up once, and `erb_input_set_int()` (or `_bool`, `_float`,
 `_string`) sets it after that. `erb_set_wall_clock()` sets the time `Date.now()` starts from.
+`erb_set_screen_size()` gives the running app [a new screen size](#a-new-screen-size).
 
 ### Package slots
 

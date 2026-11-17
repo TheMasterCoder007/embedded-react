@@ -796,6 +796,9 @@ static void test_functions(void)
     EXPECT(ERB_ERROR_FUNCTION, "a query that returns nothing");
     base()->functions[FUNCTION_TIMER].kind = 0x70u;
     EXPECT(ERB_ERROR_FUNCTION, "an unknown function kind");
+    base()->functions[FUNCTION_TIMER].kind = ERB_FUNCTION_KIND_RESIZE;
+    s_package_spec.functions[FUNCTION_EFFECT].kind = ERB_FUNCTION_KIND_RESIZE;
+    EXPECT(ERB_ERROR_FUNCTION, "two resize functions");
     base()->panels[0].boot_function = FUNCTION_TIMER;
     EXPECT(ERB_ERROR_FUNCTION, "a panel's boot function that isn't one");
     base()->panels[0].update_function = 40u;
@@ -935,6 +938,10 @@ static void test_bytecode(void)
         base();
         set_code_types(FUNCTION_TIMER, types, 1, code, 3);
         EXPECT(ERB_ERROR_BYTECODE, "a boot-only slot written outside boot");
+        base();
+        set_code_types(FUNCTION_TIMER, types, 1, code, 3);
+        s_package_spec.functions[FUNCTION_TIMER].kind = ERB_FUNCTION_KIND_RESIZE;
+        EXPECT(ERB_OK, "a boot-only slot written by the resize function");
     }
     {
         const uint8_t types[] = {ERB_TYPE_ENUM};

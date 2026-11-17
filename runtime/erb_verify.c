@@ -576,11 +576,12 @@ static bool find_checks(
  * @return false, having filled @p error, when a check is malformed or no panel takes the screen.
  */
 static bool pick_panel(const ErbConfig* config,
-                       ErbProgram* program,
+                       const ErbProgram* program,
                        uint16_t panel_count,
                        uint32_t need_count,
                        uint16_t table_count,
                        bool has_checks,
+                       uint16_t* panel,
                        ErbError* error)
 {
     const uint8_t* section = program->section;
@@ -617,7 +618,7 @@ static bool pick_panel(const ErbConfig* config,
         }
         if (passes && !picked)
         {
-            program->panel = index;
+            *panel = index;
             picked = true;
         }
     }
@@ -628,6 +629,27 @@ static bool pick_panel(const ErbConfig* config,
     error->needed = config->screen_width;
     error->available = config->screen_height;
     return fail(error, ERB_ERROR_NO_PANEL, "no layout takes the screen size");
+}
+
+bool erb_verify_same_panel(const ErbProgram* program, uint16_t width, uint16_t height)
+{
+    const uint8_t* section = program->section;
+    ErbConfig config;
+    memset(&config, 0, sizeof(config));
+    config.screen_width = width;
+    config.screen_height = height;
+    ErbError error;
+    memset(&error, 0, sizeof(error));
+    uint16_t panel = ERB_NONE;
+    return pick_panel(&config,
+                      program,
+                      erb_u16(section + ERB_HEADER_PANEL_COUNT_AT),
+                      erb_u16(section + ERB_HEADER_NEED_COUNT_AT),
+                      erb_u16(section + ERB_HEADER_TABLE_COUNT_AT),
+                      program->format_minor >= ERB_FORMAT_MINOR_CHECKS,
+                      &panel,
+                      &error)
+           && panel == program->panel;
 }
 
 static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError* error)
@@ -668,7 +690,7 @@ static bool check_header(const ErbConfig* config, ErbProgram* program, ErbError*
 
     /* Step 4: the panel for this screen. */
     const bool has_checks = minor >= ERB_FORMAT_MINOR_CHECKS;
-    if (!pick_panel(config, program, panel_count, need_count, table_count, has_checks, error))
+    if (!pick_panel(config, program, panel_count, need_count, table_count, has_checks, &program->panel, error))
     {
         return false;
     }
@@ -1209,8 +1231,7 @@ static bool is_entry_kind(uint8_t kind)
 {
     return kind < ER_EVENT_TYPE_COUNT_
            || (kind >= ERB_FUNCTION_KIND_QUERY && kind < ERB_FUNCTION_KIND_QUERY + ER_RESPONDER_QUERY_COUNT)
-           || (kind >= ERB_FUNCTION_KIND_TIMER && kind <= ERB_FUNCTION_KIND_NATIVE_EVENT
-               && kind != ERB_FUNCTION_KIND_HELPER);
+           || (kind >= ERB_FUNCTION_KIND_TIMER && kind <= ERB_FUNCTION_KIND_RESIZE && kind != ERB_FUNCTION_KIND_HELPER);
 }
 
 static bool check_functions(ErbProgram* program, ErbError* error)
@@ -1230,6 +1251,7 @@ static bool check_functions(ErbProgram* program, ErbError* error)
     {
         return fail(error, ERB_ERROR_FUNCTION, "more functions than ERB_MAX_FUNCTIONS");
     }
+    program->resize_function = ERB_NONE;
     for (uint32_t index = 0; index < program->function_count; index++)
     {
         const uint8_t* function = erb_function(program, index);
@@ -1270,6 +1292,14 @@ static bool check_functions(ErbProgram* program, ErbError* error)
         if (!is_entry_kind(kind) && kind != ERB_FUNCTION_KIND_HELPER)
         {
             return fail(error, ERB_ERROR_FUNCTION, "function kind");
+        }
+        if (kind == ERB_FUNCTION_KIND_RESIZE)
+        {
+            if (program->resize_function != ERB_NONE)
+            {
+                return fail(error, ERB_ERROR_FUNCTION, "more than one resize function");
+            }
+            program->resize_function = (uint16_t)index;
         }
         /* Entry points take nothing but a handler's instance index, and only queries return (a bool). A native
          * event's handler takes the event's arguments, checked against the event in check_native_events(). */
@@ -2032,10 +2062,12 @@ static const uint8_t* slot_of(const FunctionContext* context, uint32_t index, ui
     return slot[ERB_SLOT_TYPE_AT] == type ? slot : NULL;
 }
 
-/** @brief A slot code may write: not boot-only, unless this is the boot function. */
+/** @brief A slot code may write: not boot-only, unless this is the boot function or the resize function. */
 static bool writable(const FunctionContext* context, const uint8_t* slot)
 {
-    return slot && (!(slot[ERB_SLOT_FLAGS_AT] & ERB_SLOT_BOOT_ONLY) || context->kind == ERB_FUNCTION_KIND_BOOT);
+    return slot
+           && (!(slot[ERB_SLOT_FLAGS_AT] & ERB_SLOT_BOOT_ONLY) || context->kind == ERB_FUNCTION_KIND_BOOT
+               || context->kind == ERB_FUNCTION_KIND_RESIZE);
 }
 
 /** @brief The type EVT gives for a field, or 0 when this kind of function isn't entered with it. */
