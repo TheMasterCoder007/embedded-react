@@ -185,8 +185,6 @@ static void load_package(bool touch)
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
-        .screen_width = SCREEN_WIDTH,
-        .screen_height = SCREEN_HEIGHT,
         .natives = native_modules,
         .native_count = native_module_count,
         .log = host_log,
@@ -241,9 +239,10 @@ static void load_package(bool touch)
 /** @brief Boots the panel + engine, loads the package, then drives the frame loop. */
 static void run_app(void)
 {
+    set_display_rotation();
     esp_lcd_panel_handle_t panel = NULL;
     const bool panel_up = board_display_init(&panel);
-    if (!panel_up || !er_esp32_lcd_backend_init(panel, SCREEN_WIDTH, SCREEN_HEIGHT, ER_DISPLAY_ROTATION))
+    if (!panel_up || !er_esp32_lcd_backend_init(panel))
     {
         /* Say so until someone reads the log: the console may not be back yet. */
         for (;;)
@@ -284,7 +283,6 @@ static void run_app(void)
             bool pressed = false;
             if (board_touch_read(&touch_x, &touch_y, &pressed))
             {
-                remap_touch(&touch_x, &touch_y);
                 if (pressed)
                 {
                     embedded_renderer_touch(0, touch_down ? ER_TOUCH_MOVE : ER_TOUCH_DOWN, touch_x, touch_y);

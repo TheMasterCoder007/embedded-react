@@ -38,21 +38,16 @@ extern "C"
      * buffer and converts at present. The caller owns the panel (init it first — pins, timings, reset,
      * backlight) and must keep it alive for the backend's lifetime.
      *
-     * Whole-screen rotation: pass the LOGICAL width/height the engine renders into (the size the app
-     * lays out at and `screen` reports) plus a rotation of 0/90/180/270 degrees clockwise. The canonical
-     * framebuffer is the logical size; present maps it onto the physical panel with the rotation (a plain
-     * row copy at 0°, a transpose at 90/270°, a row-reverse at 180°). For 90/270° the logical size is the
-     * panel's height×width (e.g. 480×800 logical on an 800×480 panel = a portrait UI). The host must also
-     * report the logical size to the app and remap touch coordinates by the inverse rotation.
+     * The size and rotation come from the engine: call er_set_display_rotation() with the panel's size
+     * first. The canonical framebuffer has the logical shape, and present turns it onto the panel with
+     * er_rotate_copy(). Direct mode needs rotation 0.
      *
-     * @param[in] panel     An initialised esp_lcd panel handle (e.g. an RGB panel).
-     * @param[in] width     Logical (engine) width in pixels.
-     * @param[in] height    Logical (engine) height in pixels.
-     * @param[in] rotation  Clockwise display rotation in degrees: 0, 90, 180, or 270.
+     * @param[in] panel  An initialised esp_lcd panel handle (e.g. an RGB panel).
      *
-     * @return true on success; false on a bad rotation or a framebuffer allocation failure.
+     * @return true on success; false when no display size is set, the panel has no framebuffer, or an
+     *         allocation fails.
      */
-    bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height, int rotation);
+    bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel);
 
     /**
      * @brief Flushes the painted (dirty) region of the framebuffer to the panel.
@@ -73,10 +68,10 @@ extern "C"
      * @brief Snapshots a rectangle of the framebuffer as the persistent "overlay" region.
      *
      * Captures the given rect (already composited in the framebuffer, e.g. the perf overlay) into an
-     * internal RGB565 cache. Every subsequent er_esp32_lcd_present() re-composites that cache on top
-     * of the panel, so a small always-on overlay can be drawn (expensively) just a couple of times a
-     * second yet stay flicker-free over a double-buffered panel — without enlarging the app's per-frame
-     * dirty region. Pass w<=0 or h<=0 to disable re-compositing.
+     * internal cache. er_esp32_lcd_present() puts that cache back on top wherever the app draws over
+     * it, and sends a fresh capture to every panel framebuffer, so a small always-on overlay can be
+     * drawn (expensively) just a couple of times a second yet stay flicker-free over a double-buffered
+     * panel — without enlarging the app's per-frame dirty region. Pass w<=0 or h<=0 to disable it.
      *
      * @param[in] x  Left edge of the overlay rect in framebuffer pixels.
      * @param[in] y  Top edge of the overlay rect.

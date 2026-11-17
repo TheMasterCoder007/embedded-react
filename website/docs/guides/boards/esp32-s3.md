@@ -126,6 +126,11 @@ a frame never waits on the display. This example asks the panel for one framebuf
 copy path: the engine draws into a separate canonical framebuffer that is copied to the panel on
 present. A rotated panel or an ARGB8888 build always takes the copy path.
 
+To mount the panel turned, set `ER_DISPLAY_ROTATION` (0, 90, 180 or 270) in `main/CMakeLists.txt`. The
+host hands it to `er_set_display_rotation()` before the backend comes up; the backend reads it from the
+engine and turns each region onto the panel with `er_rotate_copy()`, and the touch driver passes its
+points through as read. At 90 and 270 the app runs at 480×800.
+
 ## Adapting the example to another board
 
 Two pieces are board-specific. `main/board.c` and `board.h` bring up _this_ panel and touch

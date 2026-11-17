@@ -34,14 +34,17 @@
  *     Full-precision intermediate (no per-blend banding); useful as an A/B reference or on hosts
  *     that are not PSRAM-bandwidth-bound.
  *
- * DIRECT MODE (ER_LCD_DIRECT, default 1): when the canonical format is RGB565, rotation is 0, and
- * the panel exposes 2–3 rotating framebuffers, the engine composites STRAIGHT into the panel
+ * DIRECT MODE (ER_LCD_DIRECT, default 1): when the canonical format is RGB565, the display rotation
+ * is 0, and the panel exposes 2–3 rotating framebuffers, the engine composites STRAIGHT into the panel
  * framebuffers — no canonical framebuffer and no present copy. The engine's multi-buffer damage
  * replay (er_set_display_buffer_count / er_display_present) repaints whatever each buffer missed
  * while the others were displayed. Present is then just a cache writeback of the dirty window plus
  * a buffer flip; with three framebuffers (num_fbs=3) there is always a swapped-out buffer ready to
  * draw into, so the flip never blocks. The canonical-framebuffer path below remains for rotated configs,
- * ARGB8888 canonical builds, and single-framebuffer (copy mode) panels.
+ * ARGB8888 canonical builds, and single-framebuffer panels.
+ *
+ * ROTATION is the engine's (er_set_display_rotation): the canonical framebuffer has the logical shape,
+ * and present turns each region into the panel framebuffer with er_rotate_copy().
  *
  * Board specifics (RGB timings, pins, the CH422G expander for reset/backlight) live in the host that
  * creates the panel — this file only needs the panel handle.
@@ -150,18 +153,6 @@ static inline uint32_t fb_load(fbpx_t pixel)
     return ARGB_OPAQUE_ALPHA | (red << 16) | (green << 8) | blue;
 }
 
-/** @brief Emits n canonical pixels to an RGB565 output row — a straight copy (already 565). */
-static inline void fb_to_565_row(uint16_t* destination, const fbpx_t* source, int count)
-{
-    memcpy(destination, source, (size_t)count * sizeof(uint16_t));
-}
-
-/** @brief Converts one canonical pixel to RGB565 (already 565 — identity). Used by rotated present. */
-static inline uint16_t fb_to_565_px(fbpx_t pixel)
-{
-    return (uint16_t)pixel;
-}
-
 #define FB_CLEAR_PX ((fbpx_t)0x0000) /* opaque black */
 
 #else /* ARGB8888 canonical */
@@ -178,7 +169,7 @@ static inline uint32_t fb_load(fbpx_t pixel)
     return pixel;
 }
 
-/** @brief Converts one ARGB8888 canonical pixel to RGB565. Used by rotated present. */
+/** @brief Converts one ARGB8888 canonical pixel to RGB565. */
 static inline uint16_t fb_to_565_px(fbpx_t pixel)
 {
     const uint16_t red = (uint16_t)(((pixel >> 16) & 0xF8U) << 8);
@@ -211,35 +202,36 @@ typedef struct
     esp_lcd_panel_handle_t panel;
     int width;        /**< Logical (canonical framebuffer) width — what the engine composites into. */
     int height;       /**< Logical (canonical framebuffer) height. */
-    int panel_width;  /**< Physical panel width (= width/height swapped for 90/270). */
-    int panel_height; /**< Physical panel height. */
-    int rotation;     /**< Clockwise display rotation: 0, 90, 180, or 270. */
+    int panel_width;  /**< Panel width as it scans (= width/height swapped for 90/270). */
+    int panel_height; /**< Panel height as it scans. */
     fbpx_t*
         framebuffer; /**< Composite target: the canonical framebuffer, or (direct mode) the back panel framebuffer. */
-    uint16_t* panel_framebuffers[TRIPLE_BUFFER_COUNT]; /**< The panel's rotating RGB565 framebuffers;
-                                                          panel_framebuffers[0] == NULL = copy mode. */
-    int panel_framebuffer_count; /**< Number of panel framebuffers in panel_framebuffers (2 or 3; 0 in copy mode). */
+#if !ER_LCD_FB_RGB565
+    uint16_t* shadow; /**< Logical-shape RGB565 copy of the canonical framebuffer, what er_rotate_copy() reads. */
+#endif
+    uint16_t* panel_framebuffers[TRIPLE_BUFFER_COUNT]; /**< The panel's RGB565 framebuffers. */
+    int panel_framebuffer_count; /**< Number of panel framebuffers (1 to 3); 1 = present draws the live one. */
     int back;                    /**< Index of the off-screen framebuffer to draw next. */
-    uint16_t* line;              /**< RGB565 staging buffer (copy mode only, when double buffering is unavailable). */
     bool direct;                 /**< Direct mode: the engine composites straight into the panel framebuffers and the
                                       engine's multi-buffer damage replay keeps them all current — no canonical framebuffer,
                                       no present copy. Requires RGB565 canonical format, rotation 0, and 2+ panel framebuffers. */
     SemaphoreHandle_t flip_done; /**< Given at each frame boundary: all earlier flips have taken effect. */
     int pending_flips;           /**< Flips requested since the last confirmed frame boundary. */
-    /* Current dirty box: inclusive min corner, EXCLUSIVE max corner (matches ERRect). dirty_x_end <= dirty_x0
-     * means "empty". The panel's own draw_bitmap window is exclusive too; the inclusive locals in
-     * present() exist only because rot_box()/present_region() work in inclusive corners. */
+    /* Current dirty box, logical: inclusive min corner, EXCLUSIVE max corner (matches ERRect).
+     * dirty_x_end <= dirty_x0 means "empty". */
     int dirty_x0, dirty_y0, dirty_x_end, dirty_y_end;
     /* Previous present's dirty box: unioned in so the back buffer (two presents stale) catches up. */
-    int previous_dirty_x0, previous_dirty_y0, previous_dirty_x_end, previous_dirty_y_end;
+    ERRect previous_damage;
+    bool previous_has_damage;
     int present_count; /**< First two presents draw full-screen to initialise both framebuffers. */
-    /* Persistent overlay: an RGB565 snapshot (see er_esp32_lcd_overlay_capture) re-composited on top
-     * of every present, so a small always-on overlay stays consistent across both framebuffers and is
-     * flushed as its own tight region — not unioned into (and ballooning) the app's dirty box. */
-    uint16_t* overlay_cache;
+    /* Persistent overlay: a snapshot (see er_esp32_lcd_overlay_capture) stamped back wherever the app
+     * draws over it, and presented as its own tight region after each capture — not unioned into (and
+     * ballooning) the app's dirty box. */
+    fbpx_t* overlay_cache;
     int overlay_capacity; /**< Allocated capacity of overlay_cache in pixels. */
     int overlay_x, overlay_y, overlay_width, overlay_height;
     bool overlay_active;
+    int overlay_presents_due; /**< Panel framebuffers still missing the last capture. */
     /* Saved dirty box around an overlay draw (er_esp32_lcd_overlay_begin): drawing the overlay into
      * the framebuffer to snapshot it must not leave the overlay's rect in the APP dirty box, or it
      * would balloon the app's per-frame flush (overlay corner unioned with far-away app damage). */
@@ -332,82 +324,92 @@ static void mark_dirty(int x, int y, int width, int height)
     taskEXIT_CRITICAL(&s_blit_mux);
 }
 
-/** @brief Maps a logical (canonical-framebuffer) pixel to its physical (panel) position under the rotation. */
-static inline void rot_point(int logical_x, int logical_y, int* physical_x, int* physical_y)
+/** @brief Moves the dirty box into @p box (logical) and empties it; false when it was empty. */
+static bool take_dirty(ERRect* box)
 {
-    switch (s_lcd.rotation)
-    {
-        case 90:
-            *physical_x = s_lcd.panel_width - 1 - logical_y;
-            *physical_y = logical_x;
-            break;
-        case 180:
-            *physical_x = s_lcd.panel_width - 1 - logical_x;
-            *physical_y = s_lcd.panel_height - 1 - logical_y;
-            break;
-        case 270:
-            *physical_x = logical_y;
-            *physical_y = s_lcd.panel_height - 1 - logical_x;
-            break;
-        default:
-            *physical_x = logical_x;
-            *physical_y = logical_y;
-            break;
-    }
+    const bool has_damage = s_lcd.dirty_x_end > s_lcd.dirty_x0 && s_lcd.dirty_y_end > s_lcd.dirty_y0;
+    box->x = s_lcd.dirty_x0;
+    box->y = s_lcd.dirty_y0;
+    box->width = s_lcd.dirty_x_end - s_lcd.dirty_x0;
+    box->height = s_lcd.dirty_y_end - s_lcd.dirty_y0;
+    s_lcd.dirty_x0 = s_lcd.width;
+    s_lcd.dirty_y0 = s_lcd.height;
+    s_lcd.dirty_x_end = 0;
+    s_lcd.dirty_y_end = 0;
+    return has_damage;
 }
 
-/** @brief Maps a logical box (inclusive) to its physical bounding box (still axis-aligned). */
-static void
-rot_box(int x0, int y0, int x1, int y1, int* physical_x0, int* physical_y0, int* physical_x1, int* physical_y1)
+/** @brief Grows @p into to cover @p rect; an empty @p into (width 0) becomes @p rect. */
+static void union_rect(ERRect* into, const ERRect* rect)
 {
-    int first_x, first_y, second_x, second_y;
-    rot_point(x0, y0, &first_x, &first_y);
-    rot_point(x1, y1, &second_x, &second_y);
-    *physical_x0 = first_x < second_x ? first_x : second_x;
-    *physical_y0 = first_y < second_y ? first_y : second_y;
-    *physical_x1 = first_x > second_x ? first_x : second_x;
-    *physical_y1 = first_y > second_y ? first_y : second_y;
+    if (into->width <= 0 || into->height <= 0)
+    {
+        *into = *rect;
+        return;
+    }
+    const int right = into->x + into->width > rect->x + rect->width ? into->x + into->width : rect->x + rect->width;
+    const int bottom =
+        into->y + into->height > rect->y + rect->height ? into->y + into->height : rect->y + rect->height;
+    into->x = into->x < rect->x ? into->x : rect->x;
+    into->y = into->y < rect->y ? into->y : rect->y;
+    into->width = right - into->x;
+    into->height = bottom - into->y;
+}
+
+/** @brief The overlay's rect, logical. */
+static ERRect overlay_rect(void)
+{
+    const ERRect rect = {s_lcd.overlay_x, s_lcd.overlay_y, s_lcd.overlay_width, s_lcd.overlay_height};
+    return rect;
+}
+
+/** @brief Reports whether the app region covers any of the overlay, so it drew over it. */
+static bool region_covers_overlay(const ERRect* region)
+{
+    return s_lcd.overlay_active && region->width > 0 && region->height > 0
+           && region->x < s_lcd.overlay_x + s_lcd.overlay_width && s_lcd.overlay_x < region->x + region->width
+           && region->y < s_lcd.overlay_y + s_lcd.overlay_height && s_lcd.overlay_y < region->y + region->height;
+}
+
+/** @brief Stamps the overlay snapshot back over the framebuffer, where the app may have drawn since. */
+static void stamp_overlay(void)
+{
+    for (int row = 0; row < s_lcd.overlay_height; row++)
+    {
+        memcpy(s_lcd.framebuffer + (size_t)(s_lcd.overlay_y + row) * s_lcd.width + s_lcd.overlay_x,
+               s_lcd.overlay_cache + (size_t)row * s_lcd.overlay_width,
+               (size_t)s_lcd.overlay_width * sizeof(fbpx_t));
+    }
 }
 
 /**
- * @brief Writes the logical region [x0..x1]x[y0..y1] of the canonical framebuffer into a physical 565 buffer.
+ * @brief Copies a logical region of the canonical framebuffer into a panel framebuffer, turned.
  *
- * destination has row stride destination_stride pixels, and its element (0,0) is physical
- * (destination_origin_x, destination_origin_y). At 0° this is the fast per-row 565 copy; otherwise each pixel is placed
- * at its rotated physical position.
+ * @param[out]    destination  The panel framebuffer.
+ * @param[in]     region       The region, logical.
+ * @param[in,out] bounds       Grown to cover the region's panel rect.
  */
-static void present_region(uint16_t* destination,
-                           int destination_stride,
-                           int destination_origin_x,
-                           int destination_origin_y,
-                           int x0,
-                           int y0,
-                           int x1,
-                           int y1)
+static void present_region(uint16_t* destination, const ERRect* region, ERRect* bounds)
 {
-    if (s_lcd.rotation == 0)
+#if ER_LCD_FB_RGB565
+    const uint16_t* source = s_lcd.framebuffer;
+#else
+    for (int row = 0; row < region->height; row++)
     {
-        const int region_width = x1 - x0 + 1;
-        for (int logical_y = y0; logical_y <= y1; logical_y++)
-        {
-            const fbpx_t* source_row = s_lcd.framebuffer + (size_t)logical_y * s_lcd.width + x0;
-            uint16_t* output_row = destination + (size_t)(logical_y - destination_origin_y) * destination_stride
-                                   + (x0 - destination_origin_x);
-            fb_to_565_row(output_row, source_row, region_width);
-        }
-        return;
+        const size_t offset = (size_t)(region->y + row) * s_lcd.width + region->x;
+        fb_to_565_row(s_lcd.shadow + offset, s_lcd.framebuffer + offset, region->width);
     }
-    for (int logical_y = y0; logical_y <= y1; logical_y++)
-    {
-        const fbpx_t* source_row = s_lcd.framebuffer + (size_t)logical_y * s_lcd.width;
-        for (int logical_x = x0; logical_x <= x1; logical_x++)
-        {
-            int physical_x, physical_y;
-            rot_point(logical_x, logical_y, &physical_x, &physical_y);
-            destination[(size_t)(physical_y - destination_origin_y) * destination_stride
-                        + (physical_x - destination_origin_x)] = fb_to_565_px(source_row[logical_x]);
-        }
-    }
+    const uint16_t* source = s_lcd.shadow;
+#endif
+    ERRect panel_rect = *region;
+    er_display_rect_to_panel(&panel_rect);
+    er_rotate_copy(source,
+                   s_lcd.width * (int)sizeof(uint16_t),
+                   destination,
+                   s_lcd.panel_width * (int)sizeof(uint16_t),
+                   (int)sizeof(uint16_t),
+                   &panel_rect);
+    union_rect(bounds, &panel_rect);
 }
 
 /**
@@ -482,32 +484,6 @@ static inline uint32_t over_premul(uint32_t destination, uint32_t source_pixel)
     const uint32_t green = source_green + (destination_green * inverse_alpha + CHANNEL_ROUND) / CHANNEL_MAX;
     const uint32_t blue = source_blue + (destination_blue * inverse_alpha + CHANNEL_ROUND) / CHANNEL_MAX;
     return ARGB_OPAQUE_ALPHA | (red << 16) | (green << 8) | blue;
-}
-
-/** @brief Composites the cached RGB565 overlay (logical coords) onto the physical panel buffer. */
-static void blit_overlay(uint16_t* destination)
-{
-    if (s_lcd.rotation == 0)
-    {
-        for (int row = 0; row < s_lcd.overlay_height; row++)
-        {
-            const uint16_t* source_row = s_lcd.overlay_cache + (size_t)row * s_lcd.overlay_width;
-            uint16_t* output_row = destination + (size_t)(s_lcd.overlay_y + row) * s_lcd.panel_width + s_lcd.overlay_x;
-            memcpy(output_row, source_row, (size_t)s_lcd.overlay_width * sizeof(uint16_t));
-        }
-        return;
-    }
-    for (int row = 0; row < s_lcd.overlay_height; row++)
-    {
-        const int logical_y = s_lcd.overlay_y + row;
-        const uint16_t* source_row = s_lcd.overlay_cache + (size_t)row * s_lcd.overlay_width;
-        for (int column = 0; column < s_lcd.overlay_width; column++)
-        {
-            int physical_x, physical_y;
-            rot_point(s_lcd.overlay_x + column, logical_y, &physical_x, &physical_y);
-            destination[(size_t)physical_y * s_lcd.panel_width + physical_x] = source_row[column];
-        }
-    }
 }
 
 /*----------------------------------------------------------------------------------------------------------------------
@@ -791,47 +767,32 @@ bool er_esp32_lcd_pie_enabled(void)
 /** @brief Pushes the painted (dirty) region to the panel, re-compositing the overlay. */
 void er_esp32_lcd_present(void)
 {
+    ERRect damage;
+    const bool has_damage = take_dirty(&damage);
+
     if (s_lcd.direct)
     {
         /* Direct mode: the engine composited straight into the back panel framebuffer, and its
          * multi-buffer damage replay already repainted everything this buffer missed while it was
          * off-screen — the dirty box therefore covers every pixel written since this buffer was
-         * last flipped, and is exactly the cache-writeback window draw_bitmap needs. */
-        bool has_damage = (s_lcd.dirty_x_end > s_lcd.dirty_x0 && s_lcd.dirty_y_end > s_lcd.dirty_y0);
-        int x0 = s_lcd.dirty_x0, y0 = s_lcd.dirty_y0, x1 = s_lcd.dirty_x_end - 1, y1 = s_lcd.dirty_y_end - 1;
-        s_lcd.dirty_x0 = s_lcd.width;
-        s_lcd.dirty_y0 = s_lcd.height;
-        s_lcd.dirty_x_end = 0;
-        s_lcd.dirty_y_end = 0;
-        if (!has_damage && !s_lcd.overlay_active)
+         * last flipped, and is exactly the cache-writeback window draw_bitmap needs. Rotation is 0,
+         * so logical and panel coordinates agree. */
+        const bool overlay_due = s_lcd.overlay_active && s_lcd.overlay_presents_due > 0;
+        if (!has_damage && !overlay_due)
         {
             return; /* nothing changed: no flip, and the engine's buffer ring must not advance */
         }
-
-        uint16_t* destination_framebuffer = (uint16_t*)s_lcd.framebuffer;
-        /* Re-stamp the persistent overlay onto this buffer (its own tight region). */
-        if (s_lcd.overlay_active)
+        ERRect flush = has_damage ? damage : (ERRect){0, 0, 0, 0};
+        if (overlay_due || (has_damage && region_covers_overlay(&damage)))
         {
             flip_gate(); /* the stamp writes the back buffer too */
-            blit_overlay(destination_framebuffer);
-            if (!has_damage)
-            {
-                x0 = s_lcd.overlay_x;
-                y0 = s_lcd.overlay_y;
-                x1 = s_lcd.overlay_x + s_lcd.overlay_width - 1;
-                y1 = s_lcd.overlay_y + s_lcd.overlay_height - 1;
-            }
-            else
-            {
-                if (s_lcd.overlay_x < x0)
-                    x0 = s_lcd.overlay_x;
-                if (s_lcd.overlay_y < y0)
-                    y0 = s_lcd.overlay_y;
-                if (s_lcd.overlay_x + s_lcd.overlay_width - 1 > x1)
-                    x1 = s_lcd.overlay_x + s_lcd.overlay_width - 1;
-                if (s_lcd.overlay_y + s_lcd.overlay_height - 1 > y1)
-                    y1 = s_lcd.overlay_y + s_lcd.overlay_height - 1;
-            }
+            stamp_overlay();
+        }
+        if (overlay_due)
+        {
+            const ERRect overlay = overlay_rect();
+            union_rect(&flush, &overlay);
+            s_lcd.overlay_presents_due--;
         }
 
         /* A frame boundary confirms every earlier flip: drain the grant (if any) BEFORE queuing
@@ -845,7 +806,8 @@ void er_esp32_lcd_present(void)
          * and switches the scan-out buffer at the next frame boundary. The next frame's first
          * write into the new back buffer gates on flip_gate() — with three framebuffers that
          * effectively never blocks; with two it waits up to one refresh. */
-        esp_lcd_panel_draw_bitmap(s_lcd.panel, x0, y0, x1 + 1, y1 + 1, destination_framebuffer);
+        esp_lcd_panel_draw_bitmap(
+            s_lcd.panel, flush.x, flush.y, flush.x + flush.width, flush.y + flush.height, s_lcd.framebuffer);
         s_lcd.pending_flips++;
         s_lcd.back = (s_lcd.back + 1) % s_lcd.panel_framebuffer_count;
         s_lcd.framebuffer = (fbpx_t*)s_lcd.panel_framebuffers[s_lcd.back];
@@ -853,174 +815,66 @@ void er_esp32_lcd_present(void)
         return;
     }
 
-    const bool double_buffered = (s_lcd.panel_framebuffers[0] != NULL);
-    /* First two presents in double-buffer mode draw the whole frame so both framebuffers start valid. */
-    const bool full_frame = double_buffered && s_lcd.present_count < INITIAL_FULL_PRESENTS;
+    const bool page_flips = s_lcd.panel_framebuffer_count > 1;
+    /* First two presents with page flips draw the whole frame so both framebuffers start valid. */
+    const bool full_frame = page_flips && s_lcd.present_count < INITIAL_FULL_PRESENTS;
 
-    /* App dirty region to push. In double-buffer mode the back framebuffer is two presents stale, so
-     * union the current and previous dirty boxes; in copy mode draw_bitmap writes the live framebuffer,
-     * so only the current box is needed. */
-    bool has_damage = false;
-    int x0 = 0, y0 = 0, x1 = -1, y1 = -1;
+    /* App region to push. With page flips the back framebuffer is two presents stale, so union the
+     * current and previous dirty boxes; with one framebuffer present draws the live one, so only the
+     * current box is needed. */
+    ERRect region = {0, 0, 0, 0};
     if (full_frame)
     {
-        x0 = 0;
-        y0 = 0;
-        x1 = s_lcd.width - 1;
-        y1 = s_lcd.height - 1;
-        has_damage = true;
+        region = (ERRect){0, 0, s_lcd.width, s_lcd.height};
+        s_lcd.present_count++;
     }
     else
     {
-        if (s_lcd.dirty_x_end > s_lcd.dirty_x0 && s_lcd.dirty_y_end > s_lcd.dirty_y0)
+        if (has_damage)
         {
-            x0 = s_lcd.dirty_x0;
-            y0 = s_lcd.dirty_y0;
-            x1 = s_lcd.dirty_x_end - 1;
-            y1 = s_lcd.dirty_y_end - 1;
-            has_damage = true;
+            region = damage;
         }
-        if (double_buffered && s_lcd.previous_dirty_x_end > s_lcd.previous_dirty_x0
-            && s_lcd.previous_dirty_y_end > s_lcd.previous_dirty_y0)
+        if (page_flips && s_lcd.previous_has_damage)
         {
-            if (!has_damage)
-            {
-                x0 = s_lcd.previous_dirty_x0;
-                y0 = s_lcd.previous_dirty_y0;
-                x1 = s_lcd.previous_dirty_x_end - 1;
-                y1 = s_lcd.previous_dirty_y_end - 1;
-                has_damage = true;
-            }
-            else
-            {
-                if (s_lcd.previous_dirty_x0 < x0)
-                    x0 = s_lcd.previous_dirty_x0;
-                if (s_lcd.previous_dirty_y0 < y0)
-                    y0 = s_lcd.previous_dirty_y0;
-                if (s_lcd.previous_dirty_x_end - 1 > x1)
-                    x1 = s_lcd.previous_dirty_x_end - 1;
-                if (s_lcd.previous_dirty_y_end - 1 > y1)
-                    y1 = s_lcd.previous_dirty_y_end - 1;
-            }
+            union_rect(&region, &s_lcd.previous_damage);
         }
     }
+    s_lcd.previous_damage = damage;
+    s_lcd.previous_has_damage = has_damage;
 
-    /* Roll current → previous, then reset the current box (we've captured everything we need above). */
-    s_lcd.previous_dirty_x0 = s_lcd.dirty_x0;
-    s_lcd.previous_dirty_y0 = s_lcd.dirty_y0;
-    s_lcd.previous_dirty_x_end = s_lcd.dirty_x_end;
-    s_lcd.previous_dirty_y_end = s_lcd.dirty_y_end;
-    s_lcd.dirty_x0 = s_lcd.width;
-    s_lcd.dirty_y0 = s_lcd.height;
-    s_lcd.dirty_x_end = 0;
-    s_lcd.dirty_y_end = 0;
-    if (full_frame)
-    {
-        s_lcd.present_count++;
-    }
-    /* Present when the app changed, OR there's an overlay to keep current on this frame's buffer. */
-    if (!has_damage && !s_lcd.overlay_active)
+    const bool has_region = region.width > 0 && region.height > 0;
+    const bool overlay_due = s_lcd.overlay_active && s_lcd.overlay_presents_due > 0;
+    if (!has_region && !overlay_due)
     {
         return;
     }
 
-    if (double_buffered)
+    uint16_t* destination = s_lcd.panel_framebuffers[page_flips ? s_lcd.back : 0];
+    ERRect bounds = {0, 0, 0, 0}; /* panel coordinates */
+    /* Where the app drew over the overlay, put it back before the region goes out. */
+    if (region_covers_overlay(&region))
     {
-        uint16_t* destination_framebuffer = s_lcd.panel_framebuffers[s_lcd.back];
-        /* App region: map the logical dirty region into the off-screen panel framebuffer with the
-         * configured rotation (a plain 565→565 row copy at 0°). */
-        if (has_damage)
-        {
-            present_region(destination_framebuffer, s_lcd.panel_width, 0, 0, x0, y0, x1, y1);
-        }
-        /* Overlay: re-composite the cached RGB565 panel on top (its own tight region — not unioned
-         * into the app's dirty box, so a small corner overlay never enlarges the app flush). */
-        if (s_lcd.overlay_active)
-        {
-            blit_overlay(destination_framebuffer);
-        }
-        /* draw_bitmap bounds are PHYSICAL panel coords: rotate the app + overlay logical boxes and
-         * union them (the per-region writes above stay tight). */
-        int bounds_x0 = s_lcd.panel_width, bounds_y0 = s_lcd.panel_height, bounds_x1 = -1, bounds_y1 = -1;
-        if (has_damage)
-        {
-            rot_box(x0, y0, x1, y1, &bounds_x0, &bounds_y0, &bounds_x1, &bounds_y1);
-        }
-        if (s_lcd.overlay_active)
-        {
-            int overlay_x0, overlay_y0, overlay_x1, overlay_y1;
-            rot_box(s_lcd.overlay_x,
-                    s_lcd.overlay_y,
-                    s_lcd.overlay_x + s_lcd.overlay_width - 1,
-                    s_lcd.overlay_y + s_lcd.overlay_height - 1,
-                    &overlay_x0,
-                    &overlay_y0,
-                    &overlay_x1,
-                    &overlay_y1);
-            if (overlay_x0 < bounds_x0)
-                bounds_x0 = overlay_x0;
-            if (overlay_y0 < bounds_y0)
-                bounds_y0 = overlay_y0;
-            if (overlay_x1 > bounds_x1)
-                bounds_x1 = overlay_x1;
-            if (overlay_y1 > bounds_y1)
-                bounds_y1 = overlay_y1;
-        }
-        esp_lcd_panel_draw_bitmap(
-            s_lcd.panel, bounds_x0, bounds_y0, bounds_x1 + 1, bounds_y1 + 1, destination_framebuffer);
-        s_lcd.back ^= 1;
+        stamp_overlay();
     }
-    else
+    if (has_region)
     {
-        /* Copy mode: pack the (rotated) region row-tight into the staging buffer; draw_bitmap copies it
-         * into the live framebuffer at the physical bounding box. */
-        if (has_damage)
-        {
-            int physical_x0, physical_y0, physical_x1, physical_y1;
-            rot_box(x0, y0, x1, y1, &physical_x0, &physical_y0, &physical_x1, &physical_y1);
-            present_region(s_lcd.line, physical_x1 - physical_x0 + 1, physical_x0, physical_y0, x0, y0, x1, y1);
-            esp_lcd_panel_draw_bitmap(
-                s_lcd.panel, physical_x0, physical_y0, physical_x1 + 1, physical_y1 + 1, s_lcd.line);
-        }
-        if (s_lcd.overlay_active)
-        {
-            if (s_lcd.rotation == 0)
-            {
-                esp_lcd_panel_draw_bitmap(s_lcd.panel,
-                                          s_lcd.overlay_x,
-                                          s_lcd.overlay_y,
-                                          s_lcd.overlay_x + s_lcd.overlay_width,
-                                          s_lcd.overlay_y + s_lcd.overlay_height,
-                                          s_lcd.overlay_cache);
-            }
-            else
-            {
-                int physical_x0, physical_y0, physical_x1, physical_y1;
-                rot_box(s_lcd.overlay_x,
-                        s_lcd.overlay_y,
-                        s_lcd.overlay_x + s_lcd.overlay_width - 1,
-                        s_lcd.overlay_y + s_lcd.overlay_height - 1,
-                        &physical_x0,
-                        &physical_y0,
-                        &physical_x1,
-                        &physical_y1);
-                const int physical_box_width = physical_x1 - physical_x0 + 1;
-                for (int row = 0; row < s_lcd.overlay_height; row++)
-                {
-                    const int logical_y = s_lcd.overlay_y + row;
-                    const uint16_t* source_row = s_lcd.overlay_cache + (size_t)row * s_lcd.overlay_width;
-                    for (int column = 0; column < s_lcd.overlay_width; column++)
-                    {
-                        int physical_x, physical_y;
-                        rot_point(s_lcd.overlay_x + column, logical_y, &physical_x, &physical_y);
-                        s_lcd.line[(size_t)(physical_y - physical_y0) * physical_box_width
-                                   + (physical_x - physical_x0)] = source_row[column];
-                    }
-                }
-                esp_lcd_panel_draw_bitmap(
-                    s_lcd.panel, physical_x0, physical_y0, physical_x1 + 1, physical_y1 + 1, s_lcd.line);
-            }
-        }
+        present_region(destination, &region, &bounds);
+    }
+    /* A fresh capture goes out as its own tight region, not unioned into the app's, so a small corner
+     * overlay never enlarges the app copy. */
+    if (overlay_due)
+    {
+        const ERRect overlay = overlay_rect();
+        present_region(destination, &overlay, &bounds);
+        s_lcd.overlay_presents_due--;
+    }
+    /* draw_bitmap with a panel-owned buffer copies nothing: it writes the cache back over the window
+     * and, with page flips, switches the scan-out buffer at the next frame boundary. */
+    esp_lcd_panel_draw_bitmap(
+        s_lcd.panel, bounds.x, bounds.y, bounds.x + bounds.width, bounds.y + bounds.height, destination);
+    if (page_flips)
+    {
+        s_lcd.back ^= 1;
     }
 }
 
@@ -1033,7 +887,7 @@ void er_esp32_lcd_overlay_begin(void)
     s_lcd.saved_dirty_y_end = s_lcd.dirty_y_end;
 }
 
-/** @brief Snapshots a framebuffer rect as the persistent overlay re-composited on every present. */
+/** @brief Snapshots a framebuffer rect as the persistent overlay kept on top of the app. */
 void er_esp32_lcd_overlay_capture(int x, int y, int width, int height)
 {
     if (width <= 0 || height <= 0 || !clip_rect(&x, &y, &width, &height))
@@ -1050,7 +904,7 @@ void er_esp32_lcd_overlay_capture(int x, int y, int width, int height)
     const int pixel_count = width * height;
     if (pixel_count > s_lcd.overlay_capacity)
     {
-        uint16_t* new_cache = (uint16_t*)heap_caps_malloc((size_t)pixel_count * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        fbpx_t* new_cache = (fbpx_t*)heap_caps_malloc((size_t)pixel_count * sizeof(fbpx_t), MALLOC_CAP_SPIRAM);
         if (!new_cache)
         {
             s_lcd.overlay_active = false;
@@ -1065,15 +919,16 @@ void er_esp32_lcd_overlay_capture(int x, int y, int width, int height)
     }
     for (int row = 0; row < height; row++)
     {
-        const fbpx_t* source_row = s_lcd.framebuffer + (size_t)(y + row) * s_lcd.width + x;
-        uint16_t* output_row = s_lcd.overlay_cache + (size_t)row * width;
-        fb_to_565_row(output_row, source_row, width);
+        memcpy(s_lcd.overlay_cache + (size_t)row * width,
+               s_lcd.framebuffer + (size_t)(y + row) * s_lcd.width + x,
+               (size_t)width * sizeof(fbpx_t));
     }
     s_lcd.overlay_x = x;
     s_lcd.overlay_y = y;
     s_lcd.overlay_width = width;
     s_lcd.overlay_height = height;
     s_lcd.overlay_active = true;
+    s_lcd.overlay_presents_due = s_lcd.panel_framebuffer_count > 1 ? s_lcd.panel_framebuffer_count : 1;
 
     /* Roll the dirty box back to its pre-overlay state: the overlay's rect is composited every present
      * from the cache, so it must not stay in (and balloon) the app's per-frame dirty region. */
@@ -1102,34 +957,33 @@ frame_buf_complete_cb(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_even
     return higher_priority_woken == pdTRUE;
 }
 
-bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int height, int rotation)
+bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel)
 {
-    if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270)
+    int width = 0;
+    int height = 0;
+    if (!er_get_display_size(&width, &height))
     {
-        ESP_LOGE(TAG, "invalid rotation %d (must be 0/90/180/270)", rotation);
+        ESP_LOGE(TAG, "no display size: call er_set_display_rotation() first");
         return false;
     }
+    const ERDisplayRotation rotation = er_get_display_rotation();
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
     s_lcd.panel = panel;
     s_lcd.width = width; /* logical (canonical framebuffer) */
     s_lcd.height = height;
-    s_lcd.rotation = rotation;
-    /* Physical panel size = logical with width/height swapped for 90/270. */
-    s_lcd.panel_width = (rotation == 90 || rotation == 270) ? height : width;
-    s_lcd.panel_height = (rotation == 90 || rotation == 270) ? width : height;
+    s_lcd.panel_width = swapped ? height : width;
+    s_lcd.panel_height = swapped ? width : height;
     s_lcd.dirty_x0 = width;
     s_lcd.dirty_y0 = height;
     s_lcd.dirty_x_end = 0;
     s_lcd.dirty_y_end = 0;
-    s_lcd.previous_dirty_x0 = width;
-    s_lcd.previous_dirty_y0 = height;
-    s_lcd.previous_dirty_x_end = 0;
-    s_lcd.previous_dirty_y_end = 0;
+    s_lcd.previous_has_damage = false;
     s_lcd.present_count = 0;
     s_lcd.overlay_active = false;
 
     /* Tear-free path: if the panel exposes rotating framebuffers (num_fbs 2 or 3), draw the
-     * off-screen one and let draw_bitmap swap it in at vsync. Otherwise fall back to a staging
-     * buffer that draw_bitmap copies into the live framebuffer (single-buffered; can tear). */
+     * off-screen one and let draw_bitmap swap it in at vsync. With one, present draws the live
+     * framebuffer (can tear). */
     void* framebuffer0 = NULL;
     void* framebuffer1 = NULL;
     void* framebuffer2 = NULL;
@@ -1147,33 +1001,28 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
         s_lcd.panel_framebuffer_count = DOUBLE_BUFFER_COUNT;
         framebuffer2 = NULL;
     }
-    if (s_lcd.panel_framebuffer_count > 0)
+    else if (esp_lcd_rgb_panel_get_frame_buffer(panel, 1, &framebuffer0) == ESP_OK && framebuffer0)
     {
-        s_lcd.panel_framebuffers[0] = (uint16_t*)framebuffer0;
-        s_lcd.panel_framebuffers[1] = (uint16_t*)framebuffer1;
-        s_lcd.panel_framebuffers[2] = (uint16_t*)framebuffer2;
-        s_lcd.back = 1; /* fb0 is displayed first; draw into fb1 */
-        s_lcd.line = NULL;
+        s_lcd.panel_framebuffer_count = 1;
+        framebuffer1 = NULL;
+        framebuffer2 = NULL;
     }
     else
     {
-        s_lcd.panel_framebuffers[0] = NULL;
-        s_lcd.panel_framebuffers[1] = NULL;
-        s_lcd.panel_framebuffers[2] = NULL;
-        s_lcd.line = (uint16_t*)heap_caps_malloc((size_t)width * height * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-        if (!s_lcd.line)
-        {
-            ESP_LOGE(TAG, "staging buffer alloc failed");
-            return false;
-        }
+        ESP_LOGE(TAG, "the panel has no framebuffer");
+        return false;
     }
+    s_lcd.panel_framebuffers[0] = (uint16_t*)framebuffer0;
+    s_lcd.panel_framebuffers[1] = (uint16_t*)framebuffer1;
+    s_lcd.panel_framebuffers[2] = (uint16_t*)framebuffer2;
+    s_lcd.back = s_lcd.panel_framebuffer_count > 1 ? 1 : 0; /* with page flips fb0 shows first; draw into fb1 */
 
     /* Direct mode: composite straight into the panel framebuffers. Needs the canonical format to BE
-     * the panel format (RGB565), an identity rotation (blits land at panel coordinates), and both
-     * panel framebuffers. The engine's multi-buffer damage replay repaints whatever each buffer
+     * the panel format (RGB565), an identity rotation (blits land at panel coordinates), and two or
+     * more panel framebuffers. The engine's multi-buffer damage replay repaints whatever each buffer
      * missed while the other was displayed, so no canonical framebuffer is required at all. */
-    s_lcd.direct =
-        (ER_LCD_DIRECT != 0) && (ER_LCD_FB_RGB565 != 0) && rotation == 0 && s_lcd.panel_framebuffers[0] != NULL;
+    s_lcd.direct = (ER_LCD_DIRECT != 0) && (ER_LCD_FB_RGB565 != 0) && rotation == ER_ROTATION_0
+                   && s_lcd.panel_framebuffer_count > 1;
 
     if (s_lcd.direct)
     {
@@ -1224,6 +1073,16 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
         {
             s_lcd.framebuffer[index] = FB_CLEAR_PX;
         }
+#if !ER_LCD_FB_RGB565
+        s_lcd.shadow = (uint16_t*)heap_caps_malloc((size_t)width * height * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (!s_lcd.shadow)
+        {
+            ESP_LOGE(TAG, "RGB565 shadow alloc failed");
+            heap_caps_free(s_lcd.framebuffer);
+            s_lcd.framebuffer = NULL;
+            return false;
+        }
+#endif
     }
 
     static EmbeddedRenderBackend backend;
@@ -1251,7 +1110,7 @@ bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel, int width, int heig
              height,
              s_lcd.panel_width,
              s_lcd.panel_height,
-             rotation,
+             (int)rotation,
              s_lcd.direct ? "DIRECT to panel fbs," : "canonical fb",
              s_lcd.direct       ? "no canonical fb"
              : ER_LCD_FB_RGB565 ? "RGB565"

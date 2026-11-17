@@ -117,32 +117,6 @@ void er_display_point_to_logical(int* x, int* y)
     }
 }
 
-void er_display_rect_to_panel(ERRect* rect)
-{
-    const ERRect logical = *rect;
-    switch (s_rotation)
-    {
-        case ER_ROTATION_90:
-            rect->x = s_panel_width - (logical.y + logical.height);
-            rect->y = logical.x;
-            rect->width = logical.height;
-            rect->height = logical.width;
-            break;
-        case ER_ROTATION_180:
-            rect->x = s_panel_width - (logical.x + logical.width);
-            rect->y = s_panel_height - (logical.y + logical.height);
-            break;
-        case ER_ROTATION_270:
-            rect->x = logical.y;
-            rect->y = s_panel_height - (logical.x + logical.width);
-            rect->width = logical.height;
-            rect->height = logical.width;
-            break;
-        default:
-            break;
-    }
-}
-
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -173,6 +147,32 @@ bool er_get_display_size(int* width, int* height)
     if (height)
         *height = swapped ? s_panel_width : s_panel_height;
     return s_panel_width > 0;
+}
+
+void er_display_rect_to_panel(ERRect* rect)
+{
+    const ERRect logical = *rect;
+    switch (s_rotation)
+    {
+        case ER_ROTATION_90:
+            rect->x = s_panel_width - (logical.y + logical.height);
+            rect->y = logical.x;
+            rect->width = logical.height;
+            rect->height = logical.width;
+            break;
+        case ER_ROTATION_180:
+            rect->x = s_panel_width - (logical.x + logical.width);
+            rect->y = s_panel_height - (logical.y + logical.height);
+            break;
+        case ER_ROTATION_270:
+            rect->x = logical.y;
+            rect->y = s_panel_height - (logical.x + logical.width);
+            rect->width = logical.height;
+            rect->height = logical.width;
+            break;
+        default:
+            break;
+    }
 }
 
 void er_rotate_copy(const void* source,

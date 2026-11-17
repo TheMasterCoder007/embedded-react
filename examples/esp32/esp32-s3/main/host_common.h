@@ -24,20 +24,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. The panel is physically BOARD_LCD_WIDTH ×
-   BOARD_LCD_HEIGHT (800×480); for 90/270 the LOGICAL screen the app renders into is the swap (480×800,
-   a portrait UI). The backend maps logical→physical at present; touch is remapped by the inverse. */
+/* Whole-screen rotation (clockwise): 0 / 90 / 180 / 270. The panel is BOARD_LCD_WIDTH × BOARD_LCD_HEIGHT
+   (800×480); at 90/270 the app runs at 480×800, a portrait UI. */
 #ifndef ER_DISPLAY_ROTATION
 #define ER_DISPLAY_ROTATION 0
-#endif
-
-/* Logical screen the app sizes its root from (`screen` global) — panel size, swapped for 90/270. */
-#if (ER_DISPLAY_ROTATION == 90) || (ER_DISPLAY_ROTATION == 270)
-#define SCREEN_WIDTH BOARD_LCD_HEIGHT
-#define SCREEN_HEIGHT BOARD_LCD_WIDTH
-#else
-#define SCREEN_WIDTH BOARD_LCD_WIDTH
-#define SCREEN_HEIGHT BOARD_LCD_HEIGHT
 #endif
 
 /* Target frame period for the adaptive pacer (~50 fps, just above the RGB panel's ~51 Hz refresh).
@@ -45,8 +35,8 @@
  * work allows. The real win needs fine ticks — see CONFIG_FREERTOS_HZ=1000 in sdkconfig.defaults. */
 #define ER_TARGET_FRAME_MS 20U
 
-/** @brief Remaps a physical (panel) touch point to logical (app) coords by the inverse rotation. */
-void remap_touch(int* x, int* y);
+/** @brief Tells the engine how the panel is mounted. Call before the backend and the runtime come up. */
+void set_display_rotation(void);
 
 /**
  * @brief Keeps the error screen up until the panel is tapped or 10 s pass, then takes it down.

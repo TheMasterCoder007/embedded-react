@@ -34,25 +34,11 @@ static const char* TAG = "embedded-react";
 /** @brief Longest the error screen is held at boot; a tap ends it sooner. */
 #define ERROR_HOLD_MS 10000U
 
-void remap_touch(int* x, int* y)
+void set_display_rotation(void)
 {
-    const int physical_x = *x, physical_y = *y;
-    switch (ER_DISPLAY_ROTATION)
+    if (!er_set_display_rotation((ERDisplayRotation)ER_DISPLAY_ROTATION, BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT))
     {
-        case 90:
-            *x = physical_y;
-            *y = BOARD_LCD_WIDTH - 1 - physical_x;
-            break;
-        case 180:
-            *x = BOARD_LCD_WIDTH - 1 - physical_x;
-            *y = BOARD_LCD_HEIGHT - 1 - physical_y;
-            break;
-        case 270:
-            *x = BOARD_LCD_HEIGHT - 1 - physical_y;
-            *y = physical_x;
-            break;
-        default:
-            break;
+        ESP_LOGE(TAG, "bad ER_DISPLAY_ROTATION %d (must be 0/90/180/270)", ER_DISPLAY_ROTATION);
     }
 }
 
@@ -99,7 +85,10 @@ void show_reset_fault(bool touch)
     }
     ERFaultRecord record;
     er_fault_record(&record, reason, 0u, 0u);
-    er_fault_show_recorded(&record, SCREEN_WIDTH, SCREEN_HEIGHT);
+    int width = 0;
+    int height = 0;
+    er_get_display_size(&width, &height);
+    er_fault_show_recorded(&record, width, height);
     hold_error_screen(touch);
     ESP_LOGE(TAG, "restarted after a fault: %s", reason); /* after the hold: the console is back by now */
 }
