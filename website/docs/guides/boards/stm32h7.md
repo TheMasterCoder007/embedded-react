@@ -125,7 +125,7 @@ init, and report flips:
 er_set_display_buffer_count(2);              /* 2 = double buffer, 3 = triple */
 
 /* each frame: */
-er_commit();                                 /* repaints this buffer's damage debt */
+er_commit();                                 /* copies what this buffer missed, renders the change */
 if (er_dma2d_backend_present(&x, &y, &w, &h)) {   /* waits for the blits */
     show_buffer(back);                       /* your flip: LTDC address swap at vblank */
     back ^= 1;
@@ -137,8 +137,13 @@ if (er_dma2d_backend_present(&x, &y, &w, &h)) {   /* waits for the blits */
 Base the flip decision on `er_dma2d_backend_present()`, which accumulates every paint since the
 last flip, not on `er_get_dirty_rect()`, which covers only the most recent commit: in Flow A the
 reconciler commits inside the pump, so by the host's own commit that damage is already consumed and
-the frame would be stranded in the off-screen buffer. The engine repaints enough each commit that
-whichever buffer is the target ends up fully correct.
+the frame would be stranded in the off-screen buffer.
+
+A change is rendered once. Before a commit paints, the backend copies what the off-screen buffer
+missed from the buffer on screen, one DMA2D transfer per rect, and the engine renders only the new
+damage. A commit that changes nothing paints nothing, so `er_dma2d_backend_present()` returns false
+and there is no second flip. Flip only when it returns true, and let the flip take effect (vblank)
+before the next commit: the copy reads the buffer on screen.
 
 ### A panel mounted against its scan direction
 

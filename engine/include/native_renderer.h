@@ -39,6 +39,8 @@ extern "C"
         ER_IMAGE_RGB565 = 1,   /**< 16-bit RGB565, 2 bytes per pixel; inherently fully opaque. */
     } ERImageFormat;
 
+    struct ERRect; /* er_scene.h */
+
     /**
      * @brief Platform-supplied rendering callbacks.
      *
@@ -125,6 +127,21 @@ extern "C"
 
         /** @brief Pixels in the band buffer; > 0 enables banded rendering with strips of any shape. */
         int band_pixels;
+
+        /*------------------------------------------------------------------------------------------------
+         - Page-flip copy (optional). With er_set_display_buffer_count() above 1, the buffer about to be
+           drawn is missing every change made since it was last drawn. With this hook the engine has the
+           backend copy those rects from the buffer presented last, then renders only the commit's own
+           changes. A commit that changes nothing then paints nothing, so a one-off change is rendered
+           once, not once per buffer. The backend owns the buffers and picks the source: the one that
+           was the target before the last er_display_present(). Rects are logical and never overlap;
+           a whole-screen copy is one rect. The copy must not count as painting: the host flips, and
+           calls er_display_present(), only after a commit that painted. Leave NULL when the buffers
+           cannot be read back: the engine then re-renders what each buffer missed.
+         ------------------------------------------------------------------------------------------------*/
+
+        /** @brief Copy these rects from the buffer presented last into the buffer about to be drawn. */
+        void (*buffer_sync)(const struct ERRect* rects, int count, void* ctx);
     } EmbeddedRenderBackend;
 
     /**

@@ -6461,7 +6461,52 @@ void er_commit(void)
      * (2) render the CURRENT buffer over its full debt (bringing it current) and clear it. er_display_present()
      * advances s_current_buffer at each flip, so a buffer's debt accumulates exactly the commits it missed while a
      * different buffer was on screen — converging regardless of how many commits fall between presents. */
-    if (s_display_buffer_count > 1)
+    /* The current buffer holds every earlier commit, so only this commit's own damage needs painting. */
+    bool buffer_is_current = false;
+    const EmbeddedRenderBackend* sync_backend = er_backend();
+    if (s_display_buffer_count > 1 && sync_backend && sync_backend->buffer_sync && (nothing_dirty || !render_full))
+    {
+        /* The backend can copy between buffers. The buffer presented last is a valid source when it owes
+         * nothing: it was drawn up to date before its flip, and no commit has painted since. */
+        ERDamageSlot* debt = &s_buffer_debt[s_current_buffer];
+        const ERDamageSlot* presented =
+            &s_buffer_debt[(s_current_buffer + s_display_buffer_count - 1) % s_display_buffer_count];
+        const bool owes_nothing = !debt->full && debt->set.count == 0U;
+        const bool source_is_current = !presented->full && presented->set.count == 0U;
+        buffer_is_current = owes_nothing || source_is_current;
+        if (buffer_is_current && !nothing_dirty)
+        {
+            if (!owes_nothing)
+            {
+                const ERRect screen_rect = {(int)root->computed.x,
+                                            (int)root->computed.y,
+                                            (int)root->computed.width,
+                                            (int)root->computed.height};
+                ER_PERF_RASTER_END(ER_PERF_RASTER_PREPASS);
+                ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_SYNC);
+                if (debt->full)
+                    sync_backend->buffer_sync(&screen_rect, 1, sync_backend->context);
+                else
+                    sync_backend->buffer_sync(debt->set.rects, (int)debt->set.count, sync_backend->context);
+                ER_PERF_RASTER_END(ER_PERF_RASTER_SYNC);
+                ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_PREPASS);
+                debt->full = false;
+                er_damage_set_clear(&debt->set);
+            }
+            /* The other buffers miss this commit's damage. */
+            for (int buffer = 0; buffer < s_display_buffer_count; buffer++)
+                if (buffer != s_current_buffer && !s_buffer_debt[buffer].full)
+                    for (uint8_t rect_index = 0U; rect_index < damage.count; rect_index++)
+                        er_damage_set_add(&s_buffer_debt[buffer].set,
+                                          damage.rects[rect_index].x,
+                                          damage.rects[rect_index].y,
+                                          damage.rects[rect_index].width,
+                                          damage.rects[rect_index].height);
+        }
+        /* Nothing dirty: the debt stays, and is copied at the next commit that paints. */
+    }
+
+    if (s_display_buffer_count > 1 && !buffer_is_current)
     {
         /* (1) Fold this commit's own damage into every buffer's debt. nothing_dirty is checked first because
          * render_full defaults to true and is left true in the nothing-changed case (there it means "nothing",
@@ -6704,8 +6749,9 @@ void er_commit(void)
         /* Single buffer: rely on the propagated dirty flags inside the clip (parent_dirty = false) so only
          * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
          * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
-         * the stale buffer needs them all repainted. Matches the banded path, which always recomposites. */
-        const bool full_recomposite = (s_display_buffer_count > 1);
+         * the stale buffer needs them all repainted. Matches the banded path, which always recomposites.
+         * A buffer brought up to date by a copy is painted as a single buffer is. */
+        const bool full_recomposite = (s_display_buffer_count > 1) && !buffer_is_current;
 
         if (nothing_dirty)
         {
@@ -6868,7 +6914,8 @@ void er_commit(void)
      *   - a full repaint, which may have no source-dirty node at all (a re-installed framebuffer, a
      *     reset) yet still paints every pixel of the root — it would otherwise report nothing;
      *   - multi-buffer, where the buffer is brought current over its whole replayed debt, so a host
-     *     using the rect for a secondary transfer must see that, not just this frame's changes.
+     *     using the rect for a secondary transfer must see that, not just this frame's changes. What
+     *     buffer_sync copied is not part of it.
      * rb_* is exactly what s_last_paint_set recorded above, so the two accessors agree by construction.
      * A damage-clipped single-buffer commit keeps the tight source_dirty union. */
     if (!nothing_dirty)

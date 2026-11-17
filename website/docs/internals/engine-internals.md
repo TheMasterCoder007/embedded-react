@@ -117,7 +117,8 @@ for write amplification), and the vector and image pool usage.
 RASTER splits further (`ERPerfFrame.raster_us`): `PREPASS` (the node-pool walk, scales with
 `ERUI_MAX_NODES`, runs even when nothing changed), `RENDER` (`C` on the overlay: compositing, scales
 with damage area),
-`BLIT` (the backend callbacks, write bandwidth) and `SWEEP` (the post-paint flag sweep). JS splits
+`BLIT` (the backend callbacks, write bandwidth), `SWEEP` (the post-paint flag sweep) and `SYNC` (the
+backend's page-flip copy, not shown on the overlay). JS splits
 too (`ERPerfFrame.js_us`, marked by the QuickJS bridge): `DISPATCH` (touches, timers, microtasks and
 the handlers they run), `RECONCILE` (React's render), `MARSHAL` (the `NativeUI` calls per changed
 node) and `COMMIT` (the `er_commit()` the batch closes with, which `frame_end` subtracts from the JS
@@ -134,7 +135,7 @@ er_runtime_pump();
 er_perf_phase_end(ER_PERF_PHASE_JS);
 er_commit();                               /* times LAYOUT + RASTER itself */
 er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
-er_display_present();
+present_frame();                           /* your flush, or a flip when the commit painted */
 er_perf_phase_end(ER_PERF_PHASE_PRESENT);
 er_perf_frame_end();
 ```

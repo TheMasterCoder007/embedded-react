@@ -224,6 +224,12 @@ target_link_libraries(test_dma2d_band PRIVATE embedded-react)
 target_include_directories(test_dma2d_band PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../backends/dma2d ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_dma2d_band COMMAND test_dma2d_band)
 
+# test_buffer_sync needs engine/core for renderer_internal.h (er_force_full_repaint).
+add_executable(test_buffer_sync test_buffer_sync.c)
+target_link_libraries(test_buffer_sync PRIVATE embedded-react)
+target_include_directories(test_buffer_sync PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_buffer_sync COMMAND test_buffer_sync)
+
 # test_perf_overlay_band builds the overlay itself, switched on, whatever the engine was built with.
 add_executable(test_perf_overlay_band test_perf_overlay_band.c ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering/perf_overlay.c)
 target_compile_definitions(test_perf_overlay_band PRIVATE ER_PERF_OVERLAY=1)

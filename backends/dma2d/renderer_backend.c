@@ -59,17 +59,20 @@ typedef struct
 {
     ErDma2dBackendConfig config;
     ErDma2dRegs* regs;
-    uint8_t* target;         /**< Where the engine draws: the band buffer, the render buffer, or the framebuffer. */
-    int width;               /**< Target width in pixels: the logical width, or the open strip's (0 with none open). */
-    int height;              /**< Target height in pixels: the logical height, or the open strip's. */
-    int stride_pixels;       /**< Target row pitch in pixels. */
-    bool banded;             /**< The engine draws strips into the band buffer. */
-    int strip_x, strip_y;    /**< Logical origin of the open strip. */
-    uint8_t* framebuffer;    /**< The framebuffer the LTDC scans. */
-    int panel_stride_pixels; /**< Framebuffer row pitch in pixels. */
-    int bytes_per_pixel;     /**< Bytes per pixel, the same in both buffers. */
-    bool pending;            /**< A DMA2D transfer was started and not yet waited on. */
-    int dirty_x0, dirty_y0;  /**< Logical dirty box, inclusive min corner. */
+    uint8_t* target;      /**< Where the engine draws: the band buffer, the render buffer, or the framebuffer. */
+    int width;            /**< Target width in pixels: the logical width, or the open strip's (0 with none open). */
+    int height;           /**< Target height in pixels: the logical height, or the open strip's. */
+    int stride_pixels;    /**< Target row pitch in pixels. */
+    bool banded;          /**< The engine draws strips into the band buffer. */
+    int strip_x, strip_y; /**< Logical origin of the open strip. */
+    uint8_t* framebuffer; /**< The framebuffer the LTDC scans. */
+    uint8_t* previous_framebuffer; /**< The framebuffer drawn before the last flip; NULL before the first. */
+    int panel_width;               /**< Framebuffer width in pixels. */
+    int panel_height;              /**< Framebuffer height in pixels. */
+    int panel_stride_pixels;       /**< Framebuffer row pitch in pixels. */
+    int bytes_per_pixel;           /**< Bytes per pixel, the same in both buffers. */
+    bool pending;                  /**< A DMA2D transfer was started and not yet waited on. */
+    int dirty_x0, dirty_y0;        /**< Logical dirty box, inclusive min corner. */
     int dirty_x_end,
         dirty_y_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dirty_x_end <= dirty_x0 means empty. */
 } Dma2dCtx;
@@ -675,6 +678,73 @@ static void band_flush_cb(void* ctx)
     s_ctx.width = s_ctx.height = 0; /* nothing draws between strips */
 }
 
+/**
+ * @brief Copies rects from the framebuffer drawn before the last flip into the current one.
+ *
+ * Both are panel-shaped, so a rect is turned to panel coordinates and copied as it is. The dirty box
+ * is left alone: a copy changes nothing on screen and must not cause a flip.
+ */
+static void buffer_sync_cb(const ERRect* rects, int count, void* ctx)
+{
+    (void)ctx;
+    if (!s_ctx.previous_framebuffer || s_ctx.previous_framebuffer == s_ctx.framebuffer)
+        return;
+
+    const size_t bytes_per_pixel = (size_t)s_ctx.bytes_per_pixel;
+    const size_t row_bytes = (size_t)s_ctx.panel_stride_pixels * bytes_per_pixel;
+    for (int rect_index = 0; rect_index < count; rect_index++)
+    {
+        ERRect rect = rects[rect_index];
+        er_display_rect_to_panel(&rect);
+        if (rect.x < 0)
+        {
+            rect.width += rect.x;
+            rect.x = 0;
+        }
+        if (rect.y < 0)
+        {
+            rect.height += rect.y;
+            rect.y = 0;
+        }
+        if (rect.x + rect.width > s_ctx.panel_width)
+            rect.width = s_ctx.panel_width - rect.x;
+        if (rect.y + rect.height > s_ctx.panel_height)
+            rect.height = s_ctx.panel_height - rect.y;
+        if (rect.width <= 0 || rect.height <= 0)
+            continue;
+
+        const size_t offset = (size_t)rect.y * row_bytes + (size_t)rect.x * bytes_per_pixel;
+        const size_t span_bytes = (size_t)(rect.height - 1) * row_bytes + (size_t)rect.width * bytes_per_pixel;
+        const uint8_t* source = s_ctx.previous_framebuffer + offset;
+        uint8_t* destination = s_ctx.framebuffer + offset;
+
+        wait_pending();
+        if ((rect.width * rect.height) >= s_ctx.config.min_dma_pixels)
+        {
+            cache_clean_rows(source, span_bytes);
+            if (s_ctx.config.cache_clean_invalidate)
+                s_ctx.config.cache_clean_invalidate(destination, span_bytes);
+            s_ctx.regs->CR = DMA2D_CR_MODE_M2M;
+            s_ctx.regs->FGMAR = (uint32_t)(uintptr_t)source;
+            s_ctx.regs->FGOR = (uint32_t)(s_ctx.panel_stride_pixels - rect.width);
+            s_ctx.regs->FGPFCCR = (uint32_t)s_ctx.config.format;
+            s_ctx.regs->OPFCCR = (uint32_t)s_ctx.config.format;
+            s_ctx.regs->OMAR = (uint32_t)(uintptr_t)destination;
+            s_ctx.regs->OOR = (uint32_t)(s_ctx.panel_stride_pixels - rect.width);
+            s_ctx.regs->NLR = ((uint32_t)rect.width << DMA2D_NLR_PL_SHIFT) | (uint32_t)rect.height;
+            launch(DMA2D_CR_MODE_M2M);
+            continue;
+        }
+
+        for (int row = 0; row < rect.height; row++)
+            memcpy(destination + (size_t)row * row_bytes,
+                   source + (size_t)row * row_bytes,
+                   (size_t)rect.width * bytes_per_pixel);
+        /* The LTDC reads memory, and this rect is outside the dirty box present cleans. */
+        cache_clean_rows(destination, span_bytes);
+    }
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -703,6 +773,8 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     s_ctx.config = *config;
     s_ctx.regs = (ErDma2dRegs*)config->dma2d;
     s_ctx.framebuffer = (uint8_t*)config->framebuffer;
+    s_ctx.panel_width = panel_width;
+    s_ctx.panel_height = (rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270) ? logical_width : logical_height;
     s_ctx.panel_stride_pixels = panel_stride_pixels;
     s_ctx.banded = banded;
     if (banded)
@@ -732,6 +804,9 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     s_backend.blend_rect = blend_rect_cb;
     s_backend.wait = wait_cb;
     s_backend.context = &s_ctx;
+    /* A render buffer is single-buffered: there is no second framebuffer to copy from. */
+    if (!config->render_buffer)
+        s_backend.buffer_sync = buffer_sync_cb;
     if (banded)
     {
         s_backend.band_pixels = config->band_pixels;
@@ -748,6 +823,8 @@ void er_dma2d_backend_set_framebuffer(void* framebuffer)
     if (!framebuffer)
         return;
     wait_pending();
+    if ((uint8_t*)framebuffer != s_ctx.framebuffer)
+        s_ctx.previous_framebuffer = s_ctx.framebuffer;
     s_ctx.framebuffer = (uint8_t*)framebuffer;
     if (!s_ctx.config.render_buffer && !s_ctx.banded)
         s_ctx.target = s_ctx.framebuffer;

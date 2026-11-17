@@ -160,6 +160,8 @@ extern "C"
         ER_PERF_RASTER_SWEEP,       /**< Post-paint bookkeeping: the dirty-flag sweep over the node pool
                                          and the per-worker dirty-rect merge. Like PREPASS, an
                                          ERUI_MAX_NODES-proportional floor. */
+        ER_PERF_RASTER_SYNC,        /**< Page-flip copy: the backend's buffer_sync, bringing the buffer
+                                         about to be drawn up to date from the one presented last. */
         ER_PERF_RASTER_COUNT
     } ERPerfRasterSubphase;
 

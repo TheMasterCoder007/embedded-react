@@ -75,6 +75,8 @@ host can flush one transfer window per region. `er_layout_pass_count()` and
 A page-flipping display tells the engine how many buffers it rotates with
 `er_set_display_buffer_count(n)` (read back with `er_get_display_buffer_count()`) and reports each
 flip with `er_display_present()`; the engine then replays damage into every buffer so none is stale.
+With the backend's `buffer_sync` hook the missed damage is copied from the buffer shown last, not
+rendered again.
 
 A panel mounted against its scan direction sets `er_set_display_rotation(rotation, panel_w,
 panel_h)` once at init, with `ER_ROTATION_0`, `_90`, `_180` or `_270`. The app then runs at
@@ -158,7 +160,8 @@ due animations. `er_now_ms()` and `er_now_ms64()` read it; JavaScript's `perform
 
 `native_renderer.h` declares `EmbeddedRenderBackend`: `fill_rect`, `copy_rect`, `blend_rect`,
 `wait`, `frame_ready` and a `context` pointer, plus the optional banded rendering (`band_height` or
-`band_pixels`, `band_begin`, `band_flush`) and format-aware copy (`copy_rect_format`) extensions. A multicore host
+`band_pixels`, `band_begin`, `band_flush`), format-aware copy (`copy_rect_format`) and page-flip copy
+(`buffer_sync`) extensions. A multicore host
 also passes its render threads with `embedded_renderer_set_workers()` and calls
 `er_render_worker_execute(k)` on worker `k` when dispatched (only with `ERUI_RENDER_WORKERS` above 1).
 [Engine and backends](../concepts/engine-and-backends.md) explains the contract and
