@@ -273,6 +273,8 @@ interface Lowering {
   requested: Slot | null;
   /** Set only at load: it guards the props the update sets once, and runs the update's first pass. */
   once: Slot | null;
+  /** Set until the update's first pass has built the rows outside the branches, so no later pass builds them. */
+  rowsPending: Slot | null;
   /** Toggled by the resize function, so the update sets again what reads the screen's size. */
   resized: Slot | null;
   effects: EffectSlots;
@@ -704,6 +706,7 @@ function planSlots(
   | 'inputText'
   | 'requested'
   | 'once'
+  | 'rowsPending'
   | 'resized'
   | 'effects'
 > {
@@ -1144,6 +1147,10 @@ function planSlots(
   )
     ? arena.track(arena.slot(ValueType.bool))
     : null;
+  // A value, not a dirty bit: the host can set every bit on a running app.
+  const rowsPending = pools.some(pool => !pool.within)
+    ? arena.slot(ValueType.bool, 1)
+    : null;
 
   // The mount effects run each dep-driven effect first, so its checks wait for the last of them.
   const checksQueued = output.dependencyEffects.length
@@ -1175,6 +1182,7 @@ function planSlots(
     inputText,
     requested,
     once,
+    rowsPending,
     resized,
     effects: {copies, checksQueued, mountNext},
   };
@@ -1965,25 +1973,35 @@ function updateFunction(lowering: Lowering): ProgramFunction | null {
   const builtOnce = drawings.filter(
     ({node}) => !updatedVectorOf(node) && atRoot(node),
   );
-  const buildRows = (): void =>
-    rootPools.forEach(pool => buildPool(codegen, pool, lowering));
+  const buildRows = (): void => {
+    const {rowsPending} = lowering;
+    if (!rowsPending) {
+      return;
+    }
+    codegen.scoped(() => {
+      const skip = builder.label();
+      const pending = builder.register('bool');
+      builder.abx('GET32', pending.index, rowsPending.index);
+      builder.branch('JF', skip, pending);
+      rootPools.forEach(pool => buildPool(codegen, pool, lowering));
+      setConstant(codegen, rowsPending, 0);
+      builder.place(skip);
+    });
+  };
   const setRootOnce = (): void => {
     rootSetOnce.forEach(node =>
       located(node, () => setNode(codegen, node, lowering)),
     );
     builtOnce.forEach(({node, vector}) => draw(node, vector));
   };
-  if (resized && (rootSetOnce.length || builtOnce.length)) {
-    // The rows are built once; what reads the screen's size is set again when it changes.
-    if (rootPools.length) {
-      whenDirty(builder, [lowering.once!], buildRows);
-    }
-    whenDirty(builder, [lowering.once!, resized], setRootOnce);
-  } else if (rootSetOnce.length || rootPools.length || builtOnce.length) {
-    whenDirty(builder, [lowering.once!], () => {
-      buildRows();
-      setRootOnce();
-    });
+  buildRows();
+  if (rootSetOnce.length || builtOnce.length) {
+    // What reads the screen's size is set again when it changes.
+    whenDirty(
+      builder,
+      resized ? [lowering.once!, resized] : [lowering.once!],
+      setRootOnce,
+    );
   }
 
   // The nodes, then the drawings, each only while its branch is built.

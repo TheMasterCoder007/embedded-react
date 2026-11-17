@@ -39,6 +39,11 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
   `render_buffer`, and the new `er_dma2d_backend_present()` copies each frame's damage into the LTDC framebuffer
   turned and cleans the D-cache. It replaces `er_dma2d_backend_take_dirty()`.
 
+### Fixed
+
+- Flow B: `erb_set_wall_clock()` on a running app no longer builds list rows a second time. Packages need a
+  rebuild.
+
 ## [0.22.1] - 2026-11-16
 ### Fixed
 
