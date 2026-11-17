@@ -223,3 +223,11 @@ target_link_libraries(test_dma2d_band PRIVATE embedded-react)
 # test_dma2d_band builds the DMA2D backend for the host and needs engine/core for renderer_internal.h (er_backend).
 target_include_directories(test_dma2d_band PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../backends/dma2d ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_dma2d_band COMMAND test_dma2d_band)
+
+# test_perf_overlay_band builds the overlay itself, switched on, whatever the engine was built with.
+add_executable(test_perf_overlay_band test_perf_overlay_band.c ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering/perf_overlay.c)
+target_compile_definitions(test_perf_overlay_band PRIVATE ER_PERF_OVERLAY=1)
+target_link_libraries(test_perf_overlay_band PRIVATE embedded-react)
+target_include_directories(test_perf_overlay_band PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../core
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../text)
+add_test(NAME rendering_perf_overlay_band COMMAND test_perf_overlay_band)

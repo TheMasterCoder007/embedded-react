@@ -5741,13 +5741,13 @@ static bool subtree_fills_rect(const ERNode* node, const ERRect* rect, int depth
 /** @brief Reports whether the backend renders through a band buffer. */
 static bool backend_is_banded(const EmbeddedRenderBackend* backend)
 {
-    return backend && (backend->band_height > 0 || backend->band_pixels > 0);
+    return backend && (backend->band_height > 0 || er_backend_bands_by_pixels(backend));
 }
 
 /** @brief Most rows a strip of the given width may have: what fits the pixel budget, or band_height. */
 static int band_strip_rows(const EmbeddedRenderBackend* backend, int strip_width)
 {
-    if (backend->band_pixels <= 0)
+    if (!er_backend_bands_by_pixels(backend))
         return backend->band_height;
     const int rows = strip_width > 0 ? backend->band_pixels / strip_width : 0;
     return rows > 0 ? rows : 1;
@@ -6571,7 +6571,7 @@ void er_commit(void)
     ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_RENDER);
 
     const EmbeddedRenderBackend* backend = er_backend();
-    if (backend && backend->band_pixels > 0)
+    if (er_backend_bands_by_pixels(backend))
     {
         /* Banded render by pixel budget: each damage rect is banded on its own, in strips as wide as
          * the rect and as tall as fits the budget, so a small change costs its own area. The rects are

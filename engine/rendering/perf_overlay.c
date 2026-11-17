@@ -159,7 +159,7 @@ void er_perf_overlay_draw(int screen_width,
         *out_height = panel_height;
 
     const EmbeddedRenderBackend* backend = er_backend();
-    if (!backend || backend->band_pixels <= 0)
+    if (!er_backend_bands_by_pixels(backend))
     {
         draw_panel(panel_x, panel_y, panel_width, panel_height, lines, line_count, line_height);
         return;
@@ -178,12 +178,10 @@ void er_perf_overlay_draw(int screen_width,
     for (int strip_top = top; strip_top < bottom; strip_top += strip_rows)
     {
         const int strip_height = bottom - strip_top < strip_rows ? bottom - strip_top : strip_rows;
-        if (backend->band_begin)
-            backend->band_begin(left, strip_top, right - left, strip_height, backend->context);
+        backend->band_begin(left, strip_top, right - left, strip_height, backend->context);
         er_set_band_rect(left, strip_top, right - left, strip_height);
         draw_panel(panel_x, panel_y, panel_width, panel_height, lines, line_count, line_height);
-        if (backend->band_flush)
-            backend->band_flush(backend->context);
+        backend->band_flush(backend->context);
     }
     er_set_band(0, 0);
 }

@@ -119,7 +119,8 @@ extern "C"
            band_begin() gets the strip's rect, and the blit callbacks get coordinates local to the strip
            in BOTH axes, so the band buffer is a plain `w x h` surface with a row pitch of `w`.
            band_begin() need not clear the buffer: the engine draws every pixel of each strip.
-           band_pixels must be at least the screen width; band_height is ignored.
+           band_pixels must be at least the screen width; band_height is ignored. Both band_begin()
+           and band_flush() are required: without them band_pixels is ignored.
          ------------------------------------------------------------------------------------------------*/
 
         /** @brief Pixels in the band buffer; > 0 enables banded rendering with strips of any shape. */

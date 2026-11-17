@@ -181,8 +181,8 @@ The band buffer is a pixel budget, not a shape. A strip is as wide as its damage
 fits the budget, so a 200-wide change renders as 200×256 in one strip and a small change costs its own
 area. It must hold at least one logical row: 1280 pixels, 2.5 KB at RGB565. The 1280×40 above is
 102 KB (154 KB at RGB888), against 1.2 MB for a third framebuffer. A bigger budget means fewer strips
-on a big repaint, and each strip walks the scene once. Put it in internal RAM (AXI SRAM or DTCM), not
-SDRAM, and align it to 4 bytes. The D-cache is cleaned over the frame's box in
+on a big repaint, and each strip walks the scene once. Put it in AXI SRAM, not SDRAM,
+and align it to 4 bytes. DTCM won't do: the DMA2D can't reach it. The D-cache is cleaned over the frame's box in
 `er_dma2d_backend_present()`, so call it before every flip.
 
 **A render buffer** is a whole buffer of the app's shape for the engine to draw into, presented each

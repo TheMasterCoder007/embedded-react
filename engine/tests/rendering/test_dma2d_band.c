@@ -376,6 +376,14 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     if (s_strip_count != 0 || er_dma2d_backend_present(NULL, NULL, NULL, NULL))
         return fail("a settled scene still painted", rotation, format);
 
+    /* A backend with no flush hook has nowhere to send strips, so its budget is ignored. */
+    s_recording_backend.band_flush = NULL;
+    set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR);
+    s_strip_count = 0;
+    er_commit();
+    if (s_strip_count != 0)
+        return fail("a backend without a flush hook was still given strips", rotation, format);
+
     er_node_destroy(root);
     er_dma2d_backend_destroy();
     return EXIT_SUCCESS;

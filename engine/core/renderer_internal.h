@@ -252,6 +252,20 @@ void er_push_clip_reset(void);
 void er_set_band(int origin_y, int height);
 
 /**
+ * @brief Reports whether the backend bands by pixel budget: band_pixels with both strip hooks.
+ *
+ * Without band_begin and band_flush the strips would have nowhere to go, so band_pixels is then ignored.
+ *
+ * @param[in] backend  Backend to test; may be NULL.
+ *
+ * @return true when damage rects are drawn through strips of their own.
+ */
+static inline bool er_backend_bands_by_pixels(const EmbeddedRenderBackend* backend)
+{
+    return backend && backend->band_pixels > 0 && backend->band_begin && backend->band_flush;
+}
+
+/**
  * @brief Sets a band strip narrower than the screen: er_set_band() plus a column range.
  *
  * Blits are clamped to the strip's columns too, and reach the backend strip-local in both axes, so its
