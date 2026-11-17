@@ -46,12 +46,13 @@ framebuffer turned, then cleans the D-cache over what it wrote:
 er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* before the backend */
 
 ErDma2dBackendConfig cfg = {
-    .dma2d                = (void*)0x52001000,
-    .framebuffer          = fb0,             /* 480×1280, what the LTDC scans */
-    .format               = ER_DMA2D_FRAMEBUFFER_RGB565,
-    .render_buffer        = fb1,             /* 1280×480, what the engine draws into */
-    .render_stride_pixels = 1280,
-    .cache_clean          = clean_dcache,
+    .dma2d                  = (void*)0x52001000,
+    .framebuffer            = fb0,           /* 480×1280, what the LTDC scans */
+    .format                 = ER_DMA2D_FRAMEBUFFER_RGB565,
+    .render_buffer          = fb1,           /* 1280×480, what the engine draws into */
+    .render_stride_pixels   = 1280,
+    .cache_clean            = clean_dcache,  /* both, when the buffers are cacheable */
+    .cache_clean_invalidate = clean_invalidate_dcache,
 };
 er_dma2d_backend_init(&cfg);
 

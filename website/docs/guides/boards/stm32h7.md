@@ -150,12 +150,13 @@ up, give the backend a buffer of the app's shape to draw into, and present each 
 er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* panel size as it scans */
 
 ErDma2dBackendConfig cfg = {
-    .dma2d                = (void*)0x52001000,
-    .framebuffer          = fb0,              /* 480×1280: what the LTDC scans */
-    .format               = ER_DMA2D_FRAMEBUFFER_RGB565,
-    .render_buffer        = fb1,              /* 1280×480: what the engine draws into */
-    .render_stride_pixels = 1280,
-    .cache_clean          = clean_dcache,     /* SCB_CleanDCache_by_Addr when fb0 is cacheable */
+    .dma2d                  = (void*)0x52001000,
+    .framebuffer            = fb0,                      /* 480×1280: what the LTDC scans */
+    .format                 = ER_DMA2D_FRAMEBUFFER_RGB565,
+    .render_buffer          = fb1,                      /* 1280×480: what the engine draws into */
+    .render_stride_pixels   = 1280,
+    .cache_clean            = clean_dcache,             /* SCB_CleanDCache_by_Addr */
+    .cache_clean_invalidate = clean_invalidate_dcache,  /* SCB_CleanInvalidateDCache_by_Addr */
 };
 er_dma2d_backend_init(&cfg);
 
@@ -169,10 +170,12 @@ runtime takes that size from the engine. The touch controller reports points on 
 and the driver passes them to `embedded_renderer_touch()` as read: the engine turns them.
 
 The present copies only the frame's damage, in strips 16 pixels wide so the reads and the writes
-both stay in cache. The second LTDC framebuffer works as the render buffer when it holds 480 rows
-of the render stride (a tightly packed one always does). That leaves the LTDC scanning `fb0` alone,
-so keep `er_set_display_buffer_count()` at 1; a copy can land while the panel scans that area.
-180 degrees keeps the panel's shape and takes the same path.
+both stay in cache. On cacheable SDRAM both cache hooks are needed: the DMA2D writes `fb1` before
+the CPU reads it, and the CPU writes `fb0` before the LTDC reads it. The second LTDC framebuffer
+works as the render buffer when it holds 480 rows of the render stride (a tightly packed one always
+does). That leaves the LTDC scanning `fb0` alone, so keep `er_set_display_buffer_count()` at 1; a
+copy can land while the panel scans that area. 180 degrees keeps the panel's shape and takes the
+same path.
 
 ## Which flow
 

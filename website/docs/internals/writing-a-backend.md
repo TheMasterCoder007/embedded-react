@@ -89,10 +89,10 @@ or two presents ago, so plain incremental damage would leave the rest of it stal
 `er_set_display_buffer_count(2)` (or 3) once at init and `er_display_present()` after each flip; the
 engine keeps a damage debt per buffer and repaints enough each commit that whichever buffer is the
 target ends up fully correct, with no canonical third buffer and no host-side convergence copy. Base
-the flip decision on a box the backend accumulates across every paint since the last flip (the
-`dma2d` backend's `er_dma2d_backend_present()`), not on `er_get_dirty_rect()`, which covers only the most recent
-commit: in Flow A the reconciler commits inside the pump, so by the host's own commit that damage
-is already consumed.
+the flip decision on a box the backend accumulates across every paint since the last flip, as
+`er_dma2d_backend_present()` does in the `dma2d` backend, not on `er_get_dirty_rect()`, which covers
+only the most recent commit: in Flow A the reconciler commits inside the pump, so by the host's own
+commit that damage is already consumed.
 
 **A panel mounted against its scan direction.** `er_set_display_rotation(ER_ROTATION_90, panel_w,
 panel_h)` at init, before the backend comes up, runs the app in the turned (logical) size: a 480×1280
