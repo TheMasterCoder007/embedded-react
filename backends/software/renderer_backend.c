@@ -392,6 +392,7 @@ bool er_software_backend_resize(int framebuffer_width, int framebuffer_height)
     uint32_t* panel = NULL;
     if (!allocate_panel(framebuffer_width, framebuffer_height, &panel))
         return false;
+    uint32_t* old_panel = s_ctx.panel != s_ctx.framebuffer ? s_ctx.panel : NULL;
     uint32_t* resized =
         realloc(s_ctx.framebuffer, (size_t)framebuffer_width * (size_t)framebuffer_height * sizeof(uint32_t));
     if (!resized)
@@ -400,8 +401,7 @@ bool er_software_backend_resize(int framebuffer_width, int framebuffer_height)
         return false;
     }
 
-    if (s_ctx.panel != s_ctx.framebuffer)
-        free(s_ctx.panel);
+    free(old_panel);
     s_ctx.framebuffer = resized;
     s_ctx.framebuffer_width = framebuffer_width;
     s_ctx.framebuffer_height = framebuffer_height;
