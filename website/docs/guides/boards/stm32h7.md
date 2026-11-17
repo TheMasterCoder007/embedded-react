@@ -66,11 +66,11 @@ builds against bare CMSIS or a HAL project alike.
 ```c
 #include "dma2d_backend.h"
 
+er_set_display_rotation(ER_ROTATION_0, 800, 480);   /* the panel's size, as it scans */
+
 ErDma2dBackendConfig cfg = {
     .dma2d         = (void*)0x52001000,      /* H7 (F4/F7: 0x4002B000) */
     .framebuffer   = fb0,
-    .width         = 800,
-    .height        = 480,
     .stride_pixels = 800,                    /* LTDC rows often pad to 64 bytes */
     .format        = ER_DMA2D_FRAMEBUFFER_RGB888,     /* or ARGB8888, RGB565 */
     /* optional: interrupt-driven start/wait owned elsewhere (else the backend polls TCIF) */
@@ -126,8 +126,7 @@ er_set_display_buffer_count(2);              /* 2 = double buffer, 3 = triple */
 
 /* each frame: */
 er_commit();                                 /* repaints this buffer's damage debt */
-if (er_dma2d_backend_take_dirty(&x, &y, &w, &h)) {
-    er_dma2d_backend_wait();                 /* fence: blits done before the flip */
+if (er_dma2d_backend_present(&x, &y, &w, &h)) {   /* waits for the blits */
     show_buffer(back);                       /* your flip: LTDC address swap at vblank */
     back ^= 1;
     er_dma2d_backend_set_framebuffer(fb[back]);
@@ -135,11 +134,45 @@ if (er_dma2d_backend_take_dirty(&x, &y, &w, &h)) {
 }
 ```
 
-Base the flip decision on `er_dma2d_backend_take_dirty()`, which accumulates every paint since the
+Base the flip decision on `er_dma2d_backend_present()`, which accumulates every paint since the
 last flip, not on `er_get_dirty_rect()`, which covers only the most recent commit: in Flow A the
 reconciler commits inside the pump, so by the host's own commit that damage is already consumed and
 the frame would be stranded in the off-screen buffer. The engine repaints enough each commit that
 whichever buffer is the target ends up fully correct.
+
+### A panel mounted against its scan direction
+
+A 480×1280 panel mounted as a 1280×480 bar scans its rows along the bar's short side, so the app
+runs at 1280×480 and the picture is turned on the way out. Tell the engine before the backend comes
+up, give the backend a buffer of the app's shape to draw into, and present each frame:
+
+```c
+er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* panel size as it scans */
+
+ErDma2dBackendConfig cfg = {
+    .dma2d                = (void*)0x52001000,
+    .framebuffer          = fb0,              /* 480×1280: what the LTDC scans */
+    .format               = ER_DMA2D_FRAMEBUFFER_RGB565,
+    .render_buffer        = fb1,              /* 1280×480: what the engine draws into */
+    .render_stride_pixels = 1280,
+    .cache_clean          = clean_dcache,     /* SCB_CleanDCache_by_Addr when fb0 is cacheable */
+};
+er_dma2d_backend_init(&cfg);
+
+/* each frame: */
+er_commit();
+er_dma2d_backend_present(NULL, NULL, NULL, NULL);   /* copies the damage into fb0, turned */
+```
+
+`screen` and `Dimensions` report 1280×480; with `screen_width` and `screen_height` left at 0, the
+runtime takes that size from the engine. The touch controller reports points on the 480×1280 glass,
+and the driver passes them to `embedded_renderer_touch()` as read: the engine turns them.
+
+The present copies only the frame's damage, in strips 16 pixels wide so the reads and the writes
+both stay in cache. The second LTDC framebuffer works as the render buffer when it holds 480 rows
+of the render stride (a tightly packed one always does). That leaves the LTDC scanning `fb0` alone,
+so keep `er_set_display_buffer_count()` at 1; a copy can land while the panel scans that area.
+180 degrees keeps the panel's shape and takes the same path.
 
 ## Which flow
 

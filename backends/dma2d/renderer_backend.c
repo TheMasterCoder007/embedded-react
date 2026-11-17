@@ -16,6 +16,7 @@
 
 #include "dma2d_backend.h"
 
+#include "er_scene.h"
 #include "native_renderer.h"
 
 #include <string.h>
@@ -58,11 +59,15 @@ typedef struct
 {
     ErDma2dBackendConfig config;
     ErDma2dRegs* regs;
-    uint8_t* framebuffer;
-    int bytes_per_pixel;    /**< Bytes per framebuffer pixel. */
-    int stride_pixels;      /**< Row pitch in pixels. */
-    bool pending;           /**< A DMA2D transfer was started and not yet waited on. */
-    int dirty_x0, dirty_y0; /**< Dirty box, inclusive min corner. */
+    uint8_t* target;         /**< Where the engine draws: the render buffer, or the framebuffer without one. */
+    int width;               /**< Target width in pixels (the logical width). */
+    int height;              /**< Target height in pixels (the logical height). */
+    int stride_pixels;       /**< Target row pitch in pixels. */
+    uint8_t* framebuffer;    /**< The framebuffer the LTDC scans. */
+    int panel_stride_pixels; /**< Framebuffer row pitch in pixels. */
+    int bytes_per_pixel;     /**< Bytes per pixel, the same in both buffers. */
+    bool pending;            /**< A DMA2D transfer was started and not yet waited on. */
+    int dirty_x0, dirty_y0;  /**< Logical dirty box, inclusive min corner. */
     int dirty_x_end,
         dirty_y_end; /**< Dirty box, EXCLUSIVE max corner (matches ERRect); dirty_x_end <= dirty_x0 means empty. */
 } Dma2dCtx;
@@ -235,10 +240,10 @@ static bool clip_rect(int* x, int* y, int* width, int* height, int* source_x, in
         clipped_height += clipped_y;
         clipped_y = 0;
     }
-    if (clipped_x + clipped_width > s_ctx.config.width)
-        clipped_width = s_ctx.config.width - clipped_x;
-    if (clipped_y + clipped_height > s_ctx.config.height)
-        clipped_height = s_ctx.config.height - clipped_y;
+    if (clipped_x + clipped_width > s_ctx.width)
+        clipped_width = s_ctx.width - clipped_x;
+    if (clipped_y + clipped_height > s_ctx.height)
+        clipped_height = s_ctx.height - clipped_y;
     if (clipped_width <= 0 || clipped_height <= 0)
         return false;
 
@@ -274,10 +279,17 @@ static void wait_pending(void)
     s_ctx.pending = false;
 }
 
-/** @brief Address of framebuffer pixel (x, y). */
+/** @brief Address of target pixel (x, y). */
 static inline uint8_t* fb_at(int x, int y)
 {
-    return s_ctx.framebuffer + ((size_t)y * (size_t)s_ctx.stride_pixels + (size_t)x) * (size_t)s_ctx.bytes_per_pixel;
+    return s_ctx.target + ((size_t)y * (size_t)s_ctx.stride_pixels + (size_t)x) * (size_t)s_ctx.bytes_per_pixel;
+}
+
+/** @brief Address of framebuffer pixel (x, y), in panel coordinates. */
+static inline uint8_t* panel_at(int x, int y)
+{
+    return s_ctx.framebuffer
+           + ((size_t)y * (size_t)s_ctx.panel_stride_pixels + (size_t)x) * (size_t)s_ctx.bytes_per_pixel;
 }
 
 /** @brief Cleans CPU-written lines the DMA2D is about to read (rows [addr, addr + span)). */
@@ -287,7 +299,7 @@ static void cache_clean_rows(const void* address, size_t bytes)
         s_ctx.config.cache_clean(address, bytes);
 }
 
-/** @brief Cleans+invalidates framebuffer rows the DMA2D is about to overwrite. */
+/** @brief Cleans+invalidates target rows the DMA2D is about to overwrite. */
 static void cache_prepare_dst(int x, int y, int width, int height)
 {
     if (!s_ctx.config.cache_clean_invalidate)
@@ -623,16 +635,30 @@ static void wait_cb(void* ctx)
 
 bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
 {
-    if (!config || !config->dma2d || !config->framebuffer || config->width <= 0 || config->height <= 0)
+    int logical_width = 0, logical_height = 0;
+    if (!config || !config->dma2d || !config->framebuffer || !er_get_display_size(&logical_width, &logical_height))
         return false;
-    if (config->stride_pixels != 0 && config->stride_pixels < config->width)
+    const ERDisplayRotation rotation = er_get_display_rotation();
+    if (rotation != ER_ROTATION_0 && !config->render_buffer)
+        return false;
+    const int panel_width =
+        (rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270) ? logical_height : logical_width;
+    const int panel_stride_pixels = config->stride_pixels > 0 ? config->stride_pixels : panel_width;
+    if (panel_stride_pixels < panel_width)
+        return false;
+    const int render_stride_pixels = config->render_stride_pixels > 0 ? config->render_stride_pixels : logical_width;
+    if (config->render_buffer && render_stride_pixels < logical_width)
         return false;
 
     memset(&s_ctx, 0, sizeof(s_ctx));
     s_ctx.config = *config;
     s_ctx.regs = (ErDma2dRegs*)config->dma2d;
     s_ctx.framebuffer = (uint8_t*)config->framebuffer;
-    s_ctx.stride_pixels = config->stride_pixels > 0 ? config->stride_pixels : config->width;
+    s_ctx.panel_stride_pixels = panel_stride_pixels;
+    s_ctx.target = config->render_buffer ? (uint8_t*)config->render_buffer : s_ctx.framebuffer;
+    s_ctx.width = logical_width;
+    s_ctx.height = logical_height;
+    s_ctx.stride_pixels = config->render_buffer ? render_stride_pixels : panel_stride_pixels;
     s_ctx.bytes_per_pixel = (config->format == ER_DMA2D_FRAMEBUFFER_RGB565)   ? RGB565_BYTES
                             : (config->format == ER_DMA2D_FRAMEBUFFER_RGB888) ? RGB888_BYTES
                                                                               : ARGB8888_BYTES;
@@ -659,6 +685,8 @@ void er_dma2d_backend_set_framebuffer(void* framebuffer)
         return;
     wait_pending();
     s_ctx.framebuffer = (uint8_t*)framebuffer;
+    if (!s_ctx.config.render_buffer)
+        s_ctx.target = s_ctx.framebuffer;
 }
 
 void* er_dma2d_backend_framebuffer(void)
@@ -671,19 +699,41 @@ void er_dma2d_backend_wait(void)
     wait_pending();
 }
 
-bool er_dma2d_backend_take_dirty(int* x, int* y, int* width, int* height)
+bool er_dma2d_backend_present(int* x, int* y, int* width, int* height)
 {
+    wait_pending();
     if (s_ctx.dirty_x_end <= s_ctx.dirty_x0)
         return false;
-    if (x)
-        *x = s_ctx.dirty_x0;
-    if (y)
-        *y = s_ctx.dirty_y0;
-    if (width)
-        *width = s_ctx.dirty_x_end - s_ctx.dirty_x0;
-    if (height)
-        *height = s_ctx.dirty_y_end - s_ctx.dirty_y0;
+    ERRect rect = {
+        s_ctx.dirty_x0, s_ctx.dirty_y0, s_ctx.dirty_x_end - s_ctx.dirty_x0, s_ctx.dirty_y_end - s_ctx.dirty_y0};
     s_ctx.dirty_x0 = s_ctx.dirty_y0 = s_ctx.dirty_x_end = s_ctx.dirty_y_end = 0;
+    er_display_rect_to_panel(&rect);
+
+    if (s_ctx.config.render_buffer)
+    {
+        er_rotate_copy(s_ctx.target,
+                       s_ctx.stride_pixels * s_ctx.bytes_per_pixel,
+                       s_ctx.framebuffer,
+                       s_ctx.panel_stride_pixels * s_ctx.bytes_per_pixel,
+                       s_ctx.bytes_per_pixel,
+                       &rect);
+        /* The LTDC reads memory, not the CPU's cache. */
+        if (s_ctx.config.cache_clean)
+        {
+            const uint8_t* first = panel_at(rect.x, rect.y);
+            const uint8_t* last = panel_at(rect.x + rect.width, rect.y + rect.height - 1);
+            s_ctx.config.cache_clean(first, (size_t)(last - first));
+        }
+    }
+
+    if (x)
+        *x = rect.x;
+    if (y)
+        *y = rect.y;
+    if (width)
+        *width = rect.width;
+    if (height)
+        *height = rect.height;
     return true;
 }
 
