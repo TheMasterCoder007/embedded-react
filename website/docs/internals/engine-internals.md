@@ -135,10 +135,13 @@ er_runtime_pump();
 er_perf_phase_end(ER_PERF_PHASE_JS);
 er_commit();                               /* times LAYOUT + RASTER itself */
 er_perf_phase_begin(ER_PERF_PHASE_PRESENT);
-present_frame();                           /* your flush, or a flip when the commit painted */
+present_frame();                           /* yours: see below */
 er_perf_phase_end(ER_PERF_PHASE_PRESENT);
 er_perf_frame_end();
 ```
+
+`present_frame()` stands for the host's own present: the backend's flush to the panel. On a
+page-flipped panel it is the flip and `er_display_present()`, only when the commit painted.
 
 `er_perf_overlay_lines()` formats it for `er_perf_overlay_draw()`:
 
