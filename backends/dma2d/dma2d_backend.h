@@ -42,9 +42,13 @@
  * at init, flip buffers with er_dma2d_backend_set_framebuffer(), and report each flip with
  * er_display_present().
  *
- * Rotated panels: the engine draws into `render_buffer`, a buffer of the logical shape, and
- * er_dma2d_backend_present() copies each frame's damage into the framebuffer turned. Scan-out is
- * single-buffered then.
+ * Rotated panels, one of:
+ *  - `band_buffer`: the engine draws each damage rect in strips into a small buffer, and each strip is
+ *    copied into the framebuffer turned. Every LTDC framebuffer stays a scan buffer, so the panel
+ *    page-flips as an unrotated one does.
+ *  - `render_buffer`: the engine draws into a whole buffer of the logical shape, and
+ *    er_dma2d_backend_present() copies each frame's damage into the framebuffer turned. Scan-out is
+ *    single-buffered when the second LTDC framebuffer is the render buffer.
  */
 
 #include <stdbool.h>
@@ -71,8 +75,8 @@ extern "C"
     /**
      * @brief Configuration for er_dma2d_backend_init.
      *
-     * Only `dma2d`, `framebuffer` and `format` are required, plus `render_buffer` when the display is
-     * rotated; every hook may be NULL. A stride of 0 means tightly packed.
+     * Only `dma2d`, `framebuffer` and `format` are required, plus `band_buffer` or `render_buffer` when the
+     * display is rotated; every hook may be NULL. A stride of 0 means tightly packed.
      */
     typedef struct
     {
@@ -85,10 +89,17 @@ extern "C"
         ErDma2dFramebufferFormat format; /**< Pixel format of the framebuffer and the render buffer. */
 
         void* render_buffer;      /**< Buffer of the logical shape the engine draws into, copied to the
-                                       framebuffer by er_dma2d_backend_present(). Required when the display is
-                                       rotated; NULL draws straight into the framebuffer. A second LTDC
-                                       framebuffer works when it holds logical height x render stride pixels. */
+                                       framebuffer by er_dma2d_backend_present(). NULL draws straight into the
+                                       framebuffer, or through `band_buffer`. A second LTDC framebuffer works
+                                       when it holds logical height x render stride pixels. */
         int render_stride_pixels; /**< Render buffer row pitch in pixels (>= logical width); 0 = tightly packed. */
+
+        void* band_buffer; /**< Buffer of `band_pixels` pixels in the framebuffer format, aligned to 4 bytes.
+                                The engine draws each damage rect into it in strips, and each strip is copied
+                                into the framebuffer turned, so a rotated panel page-flips with no render
+                                buffer. Not with `render_buffer`. Best in fast internal RAM. */
+        int band_pixels;   /**< Size of the band buffer in pixels (>= logical width). A strip is as wide as
+                                its damage rect and as tall as fits, so more pixels means fewer strips. */
 
         /*------------------------------------------------------------------------------------------------
          - Optional hooks. With `start`/`wait_complete` NULL the backend starts transfers itself and
@@ -130,7 +141,8 @@ extern "C"
      * @param[in] config  Backend configuration (copied).
      *
      * @return true on success; false on a bad config (no peripheral or framebuffer, a stride too narrow,
-     *         no render buffer at a rotation other than 0) or when no display size is set.
+     *         no band or render buffer at a rotation other than 0, both of them, a band buffer smaller
+     *         than one logical row) or when no display size is set.
      */
     bool er_dma2d_backend_init(const ErDma2dBackendConfig* config);
 
@@ -138,8 +150,8 @@ extern "C"
      * @brief Retargets rendering to another framebuffer (page flip on double/triple-buffered LTDC).
      *
      * Waits for any in-flight transfer into the old buffer first. Call between er_commit() calls,
-     * then er_display_present() to advance the engine's damage rotation. With a render buffer this
-     * only changes where er_dma2d_backend_present() copies to.
+     * then er_display_present() to advance the engine's damage rotation. With a band buffer this
+     * changes where strips land; with a render buffer, where er_dma2d_backend_present() copies to.
      *
      * @param[in] framebuffer  The new framebuffer (same size/format as configured).
      */
@@ -160,8 +172,8 @@ extern "C"
      * @brief Finishes the frame: waits for the DMA2D, then takes and clears the dirty box.
      *
      * The box covers every pixel drawn since the previous call (DMA2D or CPU), across commits. With a
-     * render buffer it is copied into the framebuffer, turned by the display rotation, and the D-cache
-     * is cleaned over what was written. Call once per frame, before a flip.
+     * render buffer it is copied into the framebuffer, turned by the display rotation. With a band or
+     * render buffer the D-cache is cleaned over the box. Call once per frame, before a flip.
      *
      * @param[out] x,y,width,height  The rect in panel coordinates (untouched when it returns false). Each
      *                               may be NULL.

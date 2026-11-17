@@ -144,7 +144,49 @@ whichever buffer is the target ends up fully correct.
 
 A 480×1280 panel mounted as a 1280×480 bar scans its rows along the bar's short side, so the app
 runs at 1280×480 and the picture is turned on the way out. Tell the engine before the backend comes
-up, give the backend a buffer of the app's shape to draw into, and present each frame:
+up, then pick one of two ways to turn it.
+
+**A band buffer** keeps both LTDC framebuffers as scan buffers, so the panel page-flips as an
+unrotated one does. The engine draws each damage rect in strips into a small buffer, and the backend
+copies each strip into the off-screen framebuffer turned:
+
+```c
+er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* before the backend */
+er_set_display_buffer_count(2);
+
+static uint16_t band[1280 * 40];             /* internal RAM; 102 KB at RGB565 */
+
+ErDma2dBackendConfig cfg = {
+    .dma2d                  = (void*)0x52001000,
+    .framebuffer            = fb[back],      /* 480×1280, the off-screen one */
+    .format                 = ER_DMA2D_FRAMEBUFFER_RGB565,
+    .band_buffer            = band,
+    .band_pixels            = 1280 * 40,
+    .cache_clean            = clean_dcache,  /* both, when the buffers are cacheable */
+    .cache_clean_invalidate = clean_invalidate_dcache,
+};
+er_dma2d_backend_init(&cfg);
+
+/* each frame: */
+er_commit();                                 /* strips land in fb[back], turned */
+if (er_dma2d_backend_present(&x, &y, &w, &h)) {
+    show_buffer(back);                       /* your flip, at vblank */
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(fb[back]);
+    er_display_present();
+}
+```
+
+The band buffer is a pixel budget, not a shape. A strip is as wide as its damage rect and as tall as
+fits the budget, so a 200-wide change renders as 200×256 in one strip and a small change costs its own
+area. It must hold at least one logical row: 1280 pixels, 2.5 KB at RGB565. The 1280×40 above is
+102 KB (154 KB at RGB888), against 1.2 MB for a third framebuffer. A bigger budget means fewer strips
+on a big repaint, and each strip walks the scene once. Put it in internal RAM (AXI SRAM or DTCM), not
+SDRAM, and align it to 4 bytes. The D-cache is cleaned over the frame's box in
+`er_dma2d_backend_present()`, so call it before every flip.
+
+**A render buffer** is a whole buffer of the app's shape for the engine to draw into, presented each
+frame:
 
 ```c
 er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* panel size as it scans */

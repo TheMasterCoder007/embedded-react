@@ -252,6 +252,19 @@ void er_push_clip_reset(void);
 void er_set_band(int origin_y, int height);
 
 /**
+ * @brief Sets a band strip narrower than the screen: er_set_band() plus a column range.
+ *
+ * Blits are clamped to the strip's columns too, and reach the backend strip-local in both axes, so its
+ * band buffer is a plain width x height surface.
+ *
+ * @param[in] origin_x  Screen-space left column of the strip.
+ * @param[in] origin_y  Screen-space top row of the strip.
+ * @param[in] width     Strip width in columns; 0 leaves columns alone, as er_set_band() does.
+ * @param[in] height    Strip height in rows; 0 disables banding.
+ */
+void er_set_band_rect(int origin_x, int origin_y, int width, int height);
+
+/**
  * @brief Reports the active band strip, if any (used by render_tree to cull subtrees off-strip).
  *
  * @param[out] origin_y  Strip top (may be NULL).

@@ -182,6 +182,19 @@ void er_rotate_copy(const void* source,
                     int bytes_per_pixel,
                     const ERRect* panel_rect)
 {
+    er_rotate_copy_strip(
+        source, source_stride_bytes, 0, 0, destination, destination_stride_bytes, bytes_per_pixel, panel_rect);
+}
+
+void er_rotate_copy_strip(const void* source,
+                          int source_stride_bytes,
+                          int source_x,
+                          int source_y,
+                          void* destination,
+                          int destination_stride_bytes,
+                          int bytes_per_pixel,
+                          const ERRect* panel_rect)
+{
     if (!source || !destination || bytes_per_pixel < 1 || bytes_per_pixel > MAX_BYTES_PER_PIXEL)
         return;
 
@@ -215,6 +228,8 @@ void er_rotate_copy(const void* source,
     const ptrdiff_t source_stride = source_stride_bytes;
     const ptrdiff_t destination_stride = destination_stride_bytes;
     const ptrdiff_t pixel_bytes = bytes_per_pixel;
+    /* Byte offset of logical (0, 0) from the source's first pixel. */
+    const ptrdiff_t source_origin = -(source_y * source_stride + source_x * pixel_bytes);
 
     if (s_rotation == ER_ROTATION_0 || s_rotation == ER_ROTATION_180)
     {
@@ -224,7 +239,7 @@ void er_rotate_copy(const void* source,
             if (s_rotation == ER_ROTATION_0)
             {
                 memcpy(destination_row,
-                       source_bytes + panel_y * source_stride + rect.x * pixel_bytes,
+                       source_bytes + (source_origin + panel_y * source_stride + rect.x * pixel_bytes),
                        (size_t)rect.width * (size_t)bytes_per_pixel);
                 continue;
             }
@@ -232,7 +247,7 @@ void er_rotate_copy(const void* source,
             const int logical_x = s_panel_width - 1 - rect.x;
             const int logical_y = s_panel_height - 1 - panel_y;
             copy_stepped_span(destination_row,
-                              source_bytes + logical_y * source_stride + logical_x * pixel_bytes,
+                              source_bytes + (source_origin + logical_y * source_stride + logical_x * pixel_bytes),
                               -pixel_bytes,
                               rect.width,
                               bytes_per_pixel);
@@ -254,7 +269,7 @@ void er_rotate_copy(const void* source,
             int logical_y = panel_y;
             er_display_point_to_logical(&logical_x, &logical_y);
             copy_stepped_span(destination_bytes + panel_y * destination_stride + strip_x * pixel_bytes,
-                              source_bytes + logical_y * source_stride + logical_x * pixel_bytes,
+                              source_bytes + (source_origin + logical_y * source_stride + logical_x * pixel_bytes),
                               source_step,
                               strip_width,
                               bytes_per_pixel);

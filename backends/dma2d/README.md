@@ -38,9 +38,51 @@ the next buffer with `er_dma2d_backend_set_framebuffer()`, and call `er_display_
 
 ## Rotated panels
 
-A 480×1280 panel mounted as a 1280×480 bar runs a 1280×480 app. The engine draws into a buffer of
-that logical shape, and `er_dma2d_backend_present()` copies each frame's damage into the scanned
-framebuffer turned, then cleans the D-cache over what it wrote:
+A 480×1280 panel mounted as a 1280×480 bar runs a 1280×480 app, and the picture is turned on its
+way into the framebuffer. There are two ways to do it.
+
+### Band buffer: page-flipped
+
+The engine draws each damage rect in strips into a small band buffer, and the backend copies each
+strip into the off-screen framebuffer turned. Both LTDC framebuffers stay scan buffers, so the panel
+flips as an unrotated one does:
+
+```c
+er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* before the backend */
+er_set_display_buffer_count(2);
+
+static uint16_t band[1280 * 40];             /* internal RAM; 102 KB at RGB565 */
+
+ErDma2dBackendConfig cfg = {
+    .dma2d                  = (void*)0x52001000,
+    .framebuffer            = fb[back],      /* 480×1280, the off-screen one */
+    .format                 = ER_DMA2D_FRAMEBUFFER_RGB565,
+    .band_buffer            = band,
+    .band_pixels            = 1280 * 40,
+    .cache_clean            = clean_dcache,  /* both, when the buffers are cacheable */
+    .cache_clean_invalidate = clean_invalidate_dcache,
+};
+er_dma2d_backend_init(&cfg);
+
+/* each frame: */
+er_commit();                                 /* strips land in fb[back], turned */
+if (er_dma2d_backend_present(&x, &y, &w, &h)) {
+    show_buffer(back);                       /* your flip, at vblank */
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(fb[back]);
+    er_display_present();
+}
+```
+
+The band buffer is a pixel budget, not a shape: a strip is as wide as its damage rect and as tall as
+fits, so a 200-wide change renders as 200×256 in one strip, and a small change costs its own area. It
+must hold at least one logical row (1280 pixels here). More pixels means fewer strips for a big
+repaint; each strip walks the scene once. Keep it in internal RAM and aligned to 4 bytes.
+
+### Render buffer
+
+The engine draws into a whole buffer of the logical shape, and `er_dma2d_backend_present()` copies
+each frame's damage into the scanned framebuffer turned, then cleans the D-cache over what it wrote:
 
 ```c
 er_set_display_rotation(ER_ROTATION_90, 480, 1280);   /* before the backend */
@@ -63,8 +105,9 @@ er_dma2d_backend_present(NULL, NULL, NULL, NULL);
 
 The second LTDC framebuffer can be the render buffer when it holds 480 rows of the render stride,
 which a tightly packed one always does. The LTDC then scans `fb0` alone, so the copy lands in the
-buffer on screen; leave the buffer count at 1. Touch drivers pass panel points to
-`embedded_renderer_touch()` as they read them.
+buffer on screen and can tear; leave the buffer count at 1.
+
+Either way, touch drivers pass panel points to `embedded_renderer_touch()` as they read them.
 
 ## Build
 

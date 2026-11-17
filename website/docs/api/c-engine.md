@@ -157,8 +157,8 @@ due animations. `er_now_ms()` and `er_now_ms64()` read it; JavaScript's `perform
 ## The backend struct
 
 `native_renderer.h` declares `EmbeddedRenderBackend`: `fill_rect`, `copy_rect`, `blend_rect`,
-`wait`, `frame_ready` and a `context` pointer, plus the optional banded rendering (`band_height`,
-`band_begin`, `band_flush`) and format-aware copy (`copy_rect_format`) extensions. A multicore host
+`wait`, `frame_ready` and a `context` pointer, plus the optional banded rendering (`band_height` or
+`band_pixels`, `band_begin`, `band_flush`) and format-aware copy (`copy_rect_format`) extensions. A multicore host
 also passes its render threads with `embedded_renderer_set_workers()` and calls
 `er_render_worker_execute(k)` on worker `k` when dispatched (only with `ERUI_RENDER_WORKERS` above 1).
 [Engine and backends](../concepts/engine-and-backends.md) explains the contract and
