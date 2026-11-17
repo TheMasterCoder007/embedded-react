@@ -448,6 +448,58 @@ static void union_dirty_rect(int x, int y, int width, int height)
     cc()->dirty_rect.height = (new_bottom > bottom ? new_bottom : bottom) - cc()->dirty_rect.y;
 }
 
+/** @brief Most rects one buffer_sync call is given once the commit's own damage is cut out of the debt. */
+#define SYNC_RECTS_MAX (2 * ER_DAMAGE_RECTS_MAX)
+
+/**
+ * @brief Cuts a set of damage rects out of a list of rects, in place.
+ *
+ * @param[in,out] rects  The rects to cut, with room for SYNC_RECTS_MAX; replaced by the pieces left over.
+ * @param[in]     count  Number of rects on entry.
+ * @param[in]     cut    The rects to remove.
+ *
+ * @return The number of pieces left, or -1 when they do not fit (then @p rects is not usable).
+ */
+static int rects_subtract(ERRect* rects, int count, const ERDamageSet* cut)
+{
+    static ERRect s_pieces[SYNC_RECTS_MAX];
+    for (uint8_t cut_index = 0U; cut_index < cut->count; cut_index++)
+    {
+        const ERRect* hole = &cut->rects[cut_index];
+        const int hole_right = hole->x + hole->width;
+        const int hole_bottom = hole->y + hole->height;
+        int piece_count = 0;
+        for (int rect_index = 0; rect_index < count; rect_index++)
+        {
+            const ERRect rect = rects[rect_index];
+            const int right = rect.x + rect.width;
+            const int bottom = rect.y + rect.height;
+            /* Up to four pieces: the rows above and below the hole, then what is left beside it. */
+            if (piece_count + 4 > SYNC_RECTS_MAX)
+                return -1;
+            if (hole->x >= right || hole_right <= rect.x || hole->y >= bottom || hole_bottom <= rect.y)
+            {
+                s_pieces[piece_count++] = rect;
+                continue;
+            }
+            const int middle_top = hole->y > rect.y ? hole->y : rect.y;
+            const int middle_bottom = hole_bottom < bottom ? hole_bottom : bottom;
+            if (hole->y > rect.y)
+                s_pieces[piece_count++] = (ERRect){rect.x, rect.y, rect.width, hole->y - rect.y};
+            if (hole_bottom < bottom)
+                s_pieces[piece_count++] = (ERRect){rect.x, hole_bottom, rect.width, bottom - hole_bottom};
+            if (hole->x > rect.x)
+                s_pieces[piece_count++] = (ERRect){rect.x, middle_top, hole->x - rect.x, middle_bottom - middle_top};
+            if (hole_right < right)
+                s_pieces[piece_count++] =
+                    (ERRect){hole_right, middle_top, right - hole_right, middle_bottom - middle_top};
+        }
+        count = piece_count;
+        memcpy(rects, s_pieces, (size_t)count * sizeof(ERRect));
+    }
+    return count;
+}
+
 void er_force_full_repaint(void)
 {
     s_force_full_repaint = true;
@@ -6463,6 +6515,8 @@ void er_commit(void)
      * different buffer was on screen — converging regardless of how many commits fall between presents. */
     /* The current buffer holds every earlier commit, so only this commit's own damage needs painting. */
     bool buffer_is_current = false;
+    /* Part of what the buffer missed was left for this commit's damage rects to repaint whole. */
+    bool sync_trimmed = false;
     const EmbeddedRenderBackend* sync_backend = er_backend();
     if (s_display_buffer_count > 1 && sync_backend && sync_backend->buffer_sync && (nothing_dirty || !render_full))
     {
@@ -6474,27 +6528,60 @@ void er_commit(void)
         const bool owes_nothing = !debt->full && debt->set.count == 0U;
         const bool source_is_current = !presented->full && presented->set.count == 0U;
         buffer_is_current = owes_nothing || source_is_current;
-        if (buffer_is_current && !nothing_dirty)
+        if (buffer_is_current)
         {
+            /* Copied even when nothing is dirty: a host that flips for its own drawing shows this buffer. */
             if (!owes_nothing)
             {
                 const ERRect screen_rect = {(int)root->computed.x,
                                             (int)root->computed.y,
                                             (int)root->computed.width,
                                             (int)root->computed.height};
+                /* What this commit repaints is not copied first: an animation would pay for the same
+                 * pixels twice a frame. Those rects are then repainted whole, since the buffer is stale
+                 * under them. */
+                static ERRect s_sync_rects[SYNC_RECTS_MAX];
+                int sync_count = debt->full ? 1 : (int)debt->set.count;
+                if (debt->full)
+                    s_sync_rects[0] = screen_rect;
+                else
+                    memcpy(s_sync_rects, debt->set.rects, (size_t)sync_count * sizeof(ERRect));
+                if (!nothing_dirty)
+                {
+                    const int cut_count = rects_subtract(s_sync_rects, sync_count, &damage);
+                    uint32_t debt_area = 0U;
+                    uint32_t left_area = 0U;
+                    for (int rect_index = 0; rect_index < sync_count; rect_index++)
+                        debt_area += (uint32_t)(debt->full ? screen_rect.width * screen_rect.height
+                                                           : debt->set.rects[rect_index].width
+                                                                 * debt->set.rects[rect_index].height);
+                    for (int rect_index = 0; rect_index < cut_count; rect_index++)
+                        left_area += (uint32_t)(s_sync_rects[rect_index].width * s_sync_rects[rect_index].height);
+                    if (cut_count >= 0 && left_area < debt_area)
+                    {
+                        sync_count = cut_count;
+                        sync_trimmed = true;
+                    }
+                    else if (debt->full)
+                    {
+                        s_sync_rects[0] = screen_rect;
+                    }
+                    else
+                    {
+                        memcpy(s_sync_rects, debt->set.rects, (size_t)sync_count * sizeof(ERRect));
+                    }
+                }
                 ER_PERF_RASTER_END(ER_PERF_RASTER_PREPASS);
                 ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_SYNC);
-                if (debt->full)
-                    sync_backend->buffer_sync(&screen_rect, 1, sync_backend->context);
-                else
-                    sync_backend->buffer_sync(debt->set.rects, (int)debt->set.count, sync_backend->context);
+                if (sync_count > 0)
+                    sync_backend->buffer_sync(s_sync_rects, sync_count, sync_backend->context);
                 ER_PERF_RASTER_END(ER_PERF_RASTER_SYNC);
                 ER_PERF_RASTER_BEGIN(ER_PERF_RASTER_PREPASS);
                 debt->full = false;
                 er_damage_set_clear(&debt->set);
             }
             /* The other buffers miss this commit's damage. */
-            for (int buffer = 0; buffer < s_display_buffer_count; buffer++)
+            for (int buffer = 0; buffer < s_display_buffer_count && !nothing_dirty; buffer++)
                 if (buffer != s_current_buffer && !s_buffer_debt[buffer].full)
                     for (uint8_t rect_index = 0U; rect_index < damage.count; rect_index++)
                         er_damage_set_add(&s_buffer_debt[buffer].set,
@@ -6503,7 +6590,6 @@ void er_commit(void)
                                           damage.rects[rect_index].width,
                                           damage.rects[rect_index].height);
         }
-        /* Nothing dirty: the debt stays, and is copied at the next commit that paints. */
     }
 
     if (s_display_buffer_count > 1 && !buffer_is_current)
@@ -6750,8 +6836,9 @@ void er_commit(void)
          * the changed nodes repaint. Multi-buffer replay must instead FULLY recomposite the clipped region
          * (parent_dirty = true) — the replayed history covers nodes with no live dirty flag this frame, and
          * the stale buffer needs them all repainted. Matches the banded path, which always recomposites.
-         * A buffer brought up to date by a copy is painted as a single buffer is. */
-        const bool full_recomposite = (s_display_buffer_count > 1) && !buffer_is_current;
+         * A buffer brought up to date by a copy is painted as a single buffer is, unless part of the
+         * copy was left out for this commit to repaint. */
+        const bool full_recomposite = (s_display_buffer_count > 1) && (!buffer_is_current || sync_trimmed);
 
         if (nothing_dirty)
         {

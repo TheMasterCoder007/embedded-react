@@ -19,7 +19,7 @@
  * formats. The peripheral is a block of plain memory and every op stays on the CPU.
  *   - each framebuffer holds the whole scene, turned, once it has been rendered into,
  *   - a change costs strips of its own damage rect, not of the full width, each within the pixel budget,
- *   - the other framebuffer gets what it missed by a copy, at its next commit that paints,
+ *   - the other framebuffer gets what it missed by a copy, at its next commit,
  *   - a commit that changes nothing paints nothing,
  *   - er_dma2d_backend_present() reports the painted box only when something was painted.
  */
@@ -322,13 +322,15 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
     er_display_present();
 
-    /* Nothing changes: the second buffer is not rendered. It is copied whole at the next change. */
+    /* Nothing changes: the second buffer is copied whole, not rendered. */
     s_strip_count = 0;
     er_commit();
     if (s_strip_count != 0 || er_dma2d_backend_present(NULL, NULL, NULL, NULL))
         return fail("the second buffer was rendered with nothing changed", rotation, format);
+    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
+        return fail("the second buffer was not copied whole", rotation, format);
 
-    /* The tall box changes: the whole scene is copied over, then one strip of the box's own rect. */
+    /* The tall box changes: one strip of its own rect, in this buffer only. */
     set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR_CHANGED);
     s_strip_count = 0;
     er_commit();
@@ -366,15 +368,16 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
     er_display_present();
 
-    /* Nothing changes: nothing is painted, so there is no flip. The copy waits. */
+    /* Nothing changes: the small box this buffer missed is copied over, and nothing is painted. */
     s_strip_count = 0;
     er_commit();
     if (s_strip_count != 0 || er_dma2d_backend_present(NULL, NULL, NULL, NULL))
         return fail("a commit with no change still painted", rotation, format);
-    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR))
-        return fail("a commit with no change wrote to the buffer", rotation, format);
+    if (!framebuffer_matches(
+            s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR_CHANGED))
+        return fail("a commit with no change did not copy what the buffer missed", rotation, format);
 
-    /* The tall box changes back: this buffer gets the small box by copy first. */
+    /* The tall box changes back: it is banded alone. */
     set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR);
     s_strip_count = 0;
     er_commit();

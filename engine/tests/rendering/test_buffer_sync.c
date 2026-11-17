@@ -17,13 +17,14 @@
 /*
  * Page-flipped buffers brought up to date by a copy: EmbeddedRenderBackend.buffer_sync.
  *
- * A software backend draws into two or three buffers and flips only after a commit that painted. One
- * script of changes runs three ways:
+ * A software backend draws into two or three buffers. One script of changes runs three ways:
  *   - one buffer, fully repainted at every step: the reference picture of each step,
- *   - page-flipped with buffer_sync: the buffer just drawn must equal the reference at every step,
+ *   - page-flipped with buffer_sync: the buffer about to be shown must equal the reference at every step,
  *   - page-flipped without it: the same, with each change replayed into the other buffer as before.
- * With buffer_sync a one-off change is rendered once, the commit after it paints nothing, and the next
- * change copies what the buffer missed and renders only its own damage.
+ * Each page-flipped run is made twice: by a host that flips only after a commit that painted, and by one
+ * that flips every frame, as a host drawing an overlay outside the commit does.
+ * With buffer_sync a one-off change is rendered once. The commit after it copies what its buffer missed
+ * and paints nothing, and the next change renders only its own damage.
  */
 
 #include "er_scene.h"
@@ -63,6 +64,7 @@ static const ERRect s_opaque_box = {6, 6, 20, 20};
 static const ERRect s_glass_box = {16, 16, 24, 20};
 static const ERRect s_corner_box = {44, 46, 16, 12};
 static const ERRect s_corner_box_moved = {40, 44, 16, 12};
+static const ERRect s_corner_box_moved_again = {36, 42, 16, 12};
 
 /** @brief The steps of the script, in order. */
 typedef enum
@@ -85,6 +87,10 @@ typedef enum
     STEP_AFTER_RESET_AGAIN,
     STEP_NEW_BUFFERS, /**< The host swaps in buffers holding junk: nothing to copy from. */
     STEP_AFTER_NEW_BUFFERS,
+    STEP_REPEAT_FIRST, /**< The same box changes twice running: nothing to copy the second time. */
+    STEP_REPEAT_SECOND,
+    STEP_SLIDE_FIRST, /**< A box moves a little twice running: only what it left behind is copied. */
+    STEP_SLIDE_SECOND,
     STEP_COUNT
 } Step;
 
@@ -352,6 +358,16 @@ static void apply_step(Step step)
             er_reset();
             build_scene();
             break;
+        case STEP_REPEAT_FIRST:
+        case STEP_REPEAT_SECOND:
+            set_box(s_opaque, &s_opaque_box, step == STEP_REPEAT_FIRST ? OPAQUE_BOX_COLOR_CHANGED : OPAQUE_BOX_COLOR);
+            break;
+        case STEP_SLIDE_FIRST:
+        case STEP_SLIDE_SECOND:
+            set_box(s_corner,
+                    step == STEP_SLIDE_FIRST ? &s_corner_box_moved : &s_corner_box_moved_again,
+                    CORNER_BOX_COLOR_CHANGED);
+            break;
         case STEP_NEW_BUFFERS:
             fill_buffers_with_junk();
             s_back = 0;
@@ -450,9 +466,11 @@ static void run_reference(void)
 /**
  * @brief Runs the script page-flipped, checking the buffer just drawn at every step.
  *
+ * @param[in] flip_every_frame  Flip after every commit, not only after one that painted.
+ *
  * @return EXIT_SUCCESS on pass.
  */
-static int run_page_flipped(int buffer_count, bool with_sync)
+static int run_page_flipped(int buffer_count, bool with_sync, bool flip_every_frame)
 {
     begin_run(buffer_count, with_sync);
     for (int step = 0; step < STEP_COUNT; step++)
@@ -464,28 +482,35 @@ static int run_page_flipped(int buffer_count, bool with_sync)
 
         if (!with_sync && s_sync_calls != 0)
             return fail("a backend with no hook was asked to copy", buffer_count, with_sync, step);
-        if (step == STEP_IDLE && with_sync && (painted || s_sync_calls != 0))
-            return fail("a commit with no change painted or copied", buffer_count, with_sync, step);
+        if (step == STEP_IDLE && with_sync && painted)
+            return fail("a commit with no change painted", buffer_count, with_sync, step);
         if (step == STEP_IDLE && !with_sync && !painted)
             return fail("the change was not replayed into the other buffer", buffer_count, with_sync, step);
         if (step != STEP_IDLE && !painted)
             return fail("a change painted nothing", buffer_count, with_sync, step);
-        if (painted && !buffer_matches_reference(s_buffers[s_back], (Step)step))
+        /* Painted or not, this buffer is current: a host may show it. */
+        if (!buffer_matches_reference(s_buffers[s_back], (Step)step))
             return fail("the buffer just drawn is not the reference picture", buffer_count, with_sync, step);
 
-        if (with_sync && step == STEP_RECOLOR_CORNER)
+        if (with_sync && step == STEP_IDLE)
         {
-            /* The buffer missed the opaque box: that is copied, and only the corner box is rendered. */
+            /* The buffer missed the opaque box: that is copied, with nothing rendered. */
             bool copied_opaque_box = false;
             for (int rect_index = 0; rect_index < s_sync_rect_count && rect_index < SYNC_RECTS_MAX; rect_index++)
                 copied_opaque_box = copied_opaque_box || rects_intersect(&s_sync_rects[rect_index], &s_opaque_box);
             if (s_sync_calls != 1 || !copied_opaque_box)
                 return fail("the missed change was not copied", buffer_count, with_sync, step);
-            if (rects_intersect(&paint, &s_opaque_box))
-                return fail("the missed change was rendered again", buffer_count, with_sync, step);
             const bool copied_whole = s_sync_rects[0].width == s_logical_width;
             if (buffer_count == 2 && copied_whole)
                 return fail("one missed box was copied as the whole screen", buffer_count, with_sync, step);
+        }
+        if (with_sync && step == STEP_RECOLOR_CORNER)
+        {
+            /* Only the corner box is rendered. A buffer that was not flipped away has nothing to copy. */
+            if (rects_intersect(&paint, &s_opaque_box))
+                return fail("the missed change was rendered again", buffer_count, with_sync, step);
+            if (!flip_every_frame && s_sync_calls != 0)
+                return fail("a buffer already copied into was copied into again", buffer_count, with_sync, step);
         }
         if (with_sync && step == STEP_BURST_SECOND && s_sync_calls != 0)
             return fail("a second commit into the same buffer copied again", buffer_count, with_sync, step);
@@ -493,10 +518,18 @@ static int run_page_flipped(int buffer_count, bool with_sync)
             && (step == STEP_AFTER_FULL_REPAINT || step == STEP_AFTER_ROTATE || step == STEP_AFTER_RESET
                 || step == STEP_AFTER_NEW_BUFFERS))
         {
-            /* The buffer owes the whole screen: one rect, then only the change is rendered. */
-            if (s_sync_calls != 1 || s_sync_rect_count != 1 || s_sync_rects[0].x != 0 || s_sync_rects[0].y != 0
-                || s_sync_rects[0].width != s_logical_width || s_sync_rects[0].height != s_logical_height)
-                return fail("a whole-screen debt was not copied as one rect", buffer_count, with_sync, step);
+            /* The buffer owes the whole screen: all of it but the box about to be repainted is copied. */
+            int copied_pixels = 0;
+            bool copied_changed_box = false;
+            for (int rect_index = 0; rect_index < s_sync_rect_count && rect_index < SYNC_RECTS_MAX; rect_index++)
+            {
+                copied_pixels += s_sync_rects[rect_index].width * s_sync_rects[rect_index].height;
+                copied_changed_box = copied_changed_box || rects_intersect(&s_sync_rects[rect_index], &s_opaque_box);
+            }
+            const int screen_pixels = s_logical_width * s_logical_height;
+            const int box_pixels = s_opaque_box.width * s_opaque_box.height;
+            if (s_sync_calls != 1 || copied_changed_box || copied_pixels < screen_pixels - 2 * box_pixels)
+                return fail("a whole-screen debt was not copied around the change", buffer_count, with_sync, step);
             if (painted_whole)
                 return fail("the whole screen was rendered after a whole-screen copy", buffer_count, with_sync, step);
         }
@@ -504,8 +537,20 @@ static int run_page_flipped(int buffer_count, bool with_sync)
             && (!painted_whole || s_sync_calls != 0))
             return fail("a full repaint was not rendered whole", buffer_count, with_sync, step);
 
-        /* A host flips only after a commit that painted. The first commit of the burst is not shown. */
-        if (painted && step != STEP_BURST_FIRST)
+        if (with_sync && step == STEP_REPEAT_SECOND && s_sync_rect_count != 0)
+            return fail("a box about to be repainted was copied first", buffer_count, with_sync, step);
+        if (with_sync && step == STEP_SLIDE_SECOND && buffer_count == 2)
+        {
+            /* The buffer missed the first move. This move repaints most of that, so little is copied. */
+            int copied_pixels = 0;
+            for (int rect_index = 0; rect_index < s_sync_rect_count && rect_index < SYNC_RECTS_MAX; rect_index++)
+                copied_pixels += s_sync_rects[rect_index].width * s_sync_rects[rect_index].height;
+            if (copied_pixels == 0 || copied_pixels >= s_corner_box.width * s_corner_box.height)
+                return fail("a moving box was not copied as what it left behind", buffer_count, with_sync, step);
+        }
+
+        /* The first commit of the burst is not shown. */
+        if ((painted || flip_every_frame) && step != STEP_BURST_FIRST)
             present();
     }
     return EXIT_SUCCESS;
@@ -520,9 +565,10 @@ int main(void)
     run_reference();
     for (int buffer_count = 2; buffer_count <= BUFFERS_MAX; buffer_count++)
     {
-        if (run_page_flipped(buffer_count, true) != EXIT_SUCCESS
-            || run_page_flipped(buffer_count, false) != EXIT_SUCCESS)
-            return EXIT_FAILURE;
+        for (int flip_every_frame = 0; flip_every_frame <= 1; flip_every_frame++)
+            if (run_page_flipped(buffer_count, true, flip_every_frame != 0) != EXIT_SUCCESS
+                || run_page_flipped(buffer_count, false, flip_every_frame != 0) != EXIT_SUCCESS)
+                return EXIT_FAILURE;
     }
     printf("PASS: page-flipped buffers are brought up to date by a copy\n");
     return EXIT_SUCCESS;

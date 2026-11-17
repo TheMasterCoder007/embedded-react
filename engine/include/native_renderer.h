@@ -132,12 +132,13 @@ extern "C"
          - Page-flip copy (optional). With er_set_display_buffer_count() above 1, the buffer about to be
            drawn is missing every change made since it was last drawn. With this hook the engine has the
            backend copy those rects from the buffer presented last, then renders only the commit's own
-           changes. A commit that changes nothing then paints nothing, so a one-off change is rendered
-           once, not once per buffer. The backend owns the buffers and picks the source: the one that
-           was the target before the last er_display_present(). Rects are logical and never overlap;
-           a whole-screen copy is one rect. The copy must not count as painting: the host flips, and
-           calls er_display_present(), only after a commit that painted. Leave NULL when the buffers
-           cannot be read back: the engine then re-renders what each buffer missed.
+           changes. A commit that changes nothing copies and paints nothing, so a one-off change is
+           rendered once, not once per buffer. The backend owns the buffers and picks the source: the
+           one that was the target before the last er_display_present(). Rects are logical and never
+           overlap. What the commit is about to repaint is left out of them, so an animation is not
+           copied and then repainted. The copy must not count as painting, or every change would
+           cause a second flip. Leave NULL when the buffers cannot be read back: the
+           engine then re-renders what each buffer missed.
          ------------------------------------------------------------------------------------------------*/
 
         /** @brief Copy these rects from the buffer presented last into the buffer about to be drawn. */

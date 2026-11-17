@@ -107,13 +107,14 @@ commit that damage is already consumed.
 **Page-flip copy.** Repainting the debt renders every change once per buffer. A backend that can
 read its buffers provides `buffer_sync(rects, count, ctx)` instead: copy those rects from the buffer
 presented last (the target before the last `er_display_present()`) into the buffer about to be
-drawn. The engine calls it before a commit paints, then renders only that commit's own damage. A
-commit that changes nothing paints nothing and copies nothing, so a one-off change costs one render
-and one flip. The rects are logical and never overlap, and a whole-screen copy is one rect.
+drawn. The engine calls it at the start of the buffer's first commit, then renders only that
+commit's own damage. A commit that changes nothing copies and paints nothing, so a one-off change
+costs one render and one flip. The rects are logical and never overlap. What the commit is about to
+repaint is left out of them, so an animation that changes the same area every frame is not copied
+and then repainted.
 
-- Do not count the copy as painting: it must not grow the box the flip decision reads.
-- Flip, and call `er_display_present()`, only after a commit that painted. A flip without one shows a
-  buffer that has not been copied into yet.
+- Do not count the copy as painting: it must not grow the box the flip decision reads, or every
+  change causes a second flip.
 - The flip must have taken effect before the next commit, as it must without the hook: the copy
   reads the buffer on screen and writes the one that just left it.
 - `er_get_dirty_rect()` and `er_get_dirty_rects()` report the commit's own damage, not what was

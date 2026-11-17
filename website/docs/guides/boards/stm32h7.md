@@ -139,11 +139,11 @@ last flip, not on `er_get_dirty_rect()`, which covers only the most recent commi
 reconciler commits inside the pump, so by the host's own commit that damage is already consumed and
 the frame would be stranded in the off-screen buffer.
 
-A change is rendered once. Before a commit paints, the backend copies what the off-screen buffer
-missed from the buffer on screen, one DMA2D transfer per rect, and the engine renders only the new
-damage. A commit that changes nothing paints nothing, so `er_dma2d_backend_present()` returns false
-and there is no second flip. Flip only when it returns true, and let the flip take effect (vblank)
-before the next commit: the copy reads the buffer on screen.
+A change is rendered once. At its next commit the backend copies what the off-screen buffer missed
+from the buffer on screen, one DMA2D transfer per rect, and the engine renders only the new damage.
+A commit that changes nothing paints nothing, so `er_dma2d_backend_present()` returns false and
+there is no second flip. Let a flip take effect (vblank) before the next commit: the copy reads the
+buffer on screen.
 
 ### A panel mounted against its scan direction
 

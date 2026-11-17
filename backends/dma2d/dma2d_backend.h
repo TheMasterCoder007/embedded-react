@@ -41,7 +41,7 @@
  * Double/triple-buffered LTDC panels: see README.md — call er_set_display_buffer_count() once
  * at init, flip buffers with er_dma2d_backend_set_framebuffer(), and report each flip with
  * er_display_present(). What a buffer missed is copied from the one set before it, so a change is
- * rendered once. Flip only after er_dma2d_backend_present() returns true.
+ * rendered once.
  *
  * Rotated panels, one of:
  *  - `band_buffer`: the engine draws each damage rect in strips into a small buffer, and each strip is
