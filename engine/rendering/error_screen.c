@@ -239,6 +239,16 @@ void er_error_screen_show(int screen_width, int screen_height, const ERErrorScre
     er_force_full_repaint();
 }
 
+void er_error_screen_resize(int screen_width, int screen_height)
+{
+    if (s_active)
+    {
+        s_screen_width = screen_width > 0 ? screen_width : 0;
+        s_screen_height = screen_height > 0 ? screen_height : 0;
+        er_force_full_repaint();
+    }
+}
+
 void er_error_screen_hide(void)
 {
     if (s_active)

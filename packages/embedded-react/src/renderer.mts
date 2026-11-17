@@ -95,5 +95,9 @@ export function createRoot(containerProps?: HostProps) {
     render(element: ReactNode) {
       reconciler.updateContainer(element, fiberRoot, null, null);
     },
+    // Changes the container View's props, such as its size.
+    setContainerProps(props: HostProps) {
+      NativeUI.setProps(container, props);
+    },
   };
 }

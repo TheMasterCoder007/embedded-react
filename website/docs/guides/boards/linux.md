@@ -74,7 +74,8 @@ input, `er_commit()`, present and tick.
 Both hosts, and the SDL simulator, take `ER_ROTATION=90` (or 180, 270) to run behind a panel mounted
 that way, as `er_set_display_rotation()` sets it on a board. The window keeps its size and shows the
 app upright, the frames go to the panel through `er_rotate_copy()`, and the mouse reaches the engine
-in the panel's coordinates.
+in the panel's coordinates. In the simulator, **T** turns the panel a quarter turn while the app runs
+(`er_host_set_rotation()`): the window takes the app's new shape and the app keeps its state.
 
 Both desktop hosts register the watch face demo's `chip` [native module](../native-modules.md), from
 `examples/linux/desktop_natives.c`, so its package loads and the parity harness can compare the two flows. The [CYD](./esp32-cyd.md) and [RP2040](./rp2040.md) firmware

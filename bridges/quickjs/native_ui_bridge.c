@@ -3848,6 +3848,32 @@ static JSValue js_set_keyboard_listener(JSContext* ctx, JSValueConst this_val, i
     return JS_UNDEFINED;
 }
 
+/** @brief JS object whose slot 0 holds the NativeUI.setScreenListener callback; owned as the keyboard's is. */
+static JSValue s_screen_slots = JS_UNDEFINED;
+
+/** @brief JS `setScreenListener(fn)` — fn() runs after the host changes the `screen` size. */
+static JSValue js_set_screen_listener(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
+{
+    (void)this_val;
+    const bool has_listener = argc >= 1 && JS_IsFunction(ctx, argv[0]);
+    JS_SetPropertyUint32(ctx, s_screen_slots, 0, has_listener ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED);
+    return JS_UNDEFINED;
+}
+
+void er_bridge_screen_changed(JSContext* ctx)
+{
+    if (!ctx || ctx != s_bridge_ctx || !JS_IsObject(s_screen_slots))
+    {
+        return;
+    }
+    JSValue listener = JS_GetPropertyUint32(ctx, s_screen_slots, 0);
+    if (JS_IsFunction(ctx, listener))
+    {
+        er_bridge_dispatch(ctx, listener, 0, NULL, "screen listener");
+    }
+    JS_FreeValue(ctx, listener);
+}
+
 /** @brief JS `dismissKeyboard()` — takes the focus from the focused TextInput, which hides the keyboard. */
 static JSValue js_dismiss_keyboard(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv)
 {
@@ -5243,6 +5269,8 @@ void er_bridge_install(JSContext* ctx)
                       JS_NewCFunction(ctx, js_set_keyboard_listener, "setKeyboardListener", 1));
     JS_SetPropertyStr(
         ctx, native_ui, "dismissKeyboard", JS_NewCFunction(ctx, js_dismiss_keyboard, "dismissKeyboard", 0));
+    JS_SetPropertyStr(
+        ctx, native_ui, "setScreenListener", JS_NewCFunction(ctx, js_set_screen_listener, "setScreenListener", 1));
     JS_SetPropertyStr(ctx, native_ui, "keyboardFrame", JS_NewCFunction(ctx, js_keyboard_frame, "keyboardFrame", 0));
     JS_SetPropertyStr(ctx, native_ui, "setVectorOps", JS_NewCFunction(ctx, js_set_vector_ops, "setVectorOps", 5));
     /* Expose the bridge-side vector caps so the JS layer can warn when an <Svg> exceeds them — the bridge
@@ -5328,6 +5356,11 @@ void er_bridge_install(JSContext* ctx)
     s_keyboard_slots = keyboard_slots;
     JS_SetPropertyStr(ctx, native_ui, "__er_keyboard_slots", keyboard_slots);
     er_keyboard_set_listener(keyboard_listener, NULL);
+
+    /* The screen listener's slot; same ownership trick. */
+    JSValue screen_slots = JS_NewObject(ctx);
+    s_screen_slots = screen_slots;
+    JS_SetPropertyStr(ctx, native_ui, "__er_screen_slots", screen_slots);
 
     /* JS_SetPropertyStr takes ownership of native_ui; no separate free needed. */
     JS_SetPropertyStr(ctx, global, "NativeUI", native_ui);

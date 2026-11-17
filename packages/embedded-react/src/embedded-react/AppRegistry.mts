@@ -19,12 +19,13 @@
 //
 // In React Native the native side calls runApplication when the activity starts. Our host model is
 // "running the bundle IS starting the app", so registerComponent mounts immediately into a root
-// sized from the host-injected `screen` global. (A host-driven runApplication can be split out
-// later when the C host owns app lifecycle.)
+// sized from the host-injected `screen` global, which it follows when the host changes it. (A host-driven
+// runApplication can be split out later when the C host owns app lifecycle.)
 import {createElement, Fragment} from 'react';
 import type {ComponentType} from 'react';
 import {createRoot} from '../renderer.mts';
 import {AlertHost} from './Alert.mts';
+import {Dimensions} from './Dimensions.mts';
 
 let registered: {appKey: string; Component: ComponentType} | null = null;
 // The mounted root is created ONCE and reused on every subsequent registration. On a full reload, the
@@ -56,7 +57,14 @@ export const AppRegistry = {
   runApplication(appKey?: string): void {
     if (!registered) return;
     if (appKey && appKey !== registered.appKey) return;
-    if (!root) root = createRoot({width: screen.width, height: screen.height});
+    if (!root) {
+      const mounted = createRoot({width: screen.width, height: screen.height});
+      root = mounted;
+      // The root follows the screen. This all runs in one batch, so the app never draws at the old size.
+      Dimensions.addEventListener('change', ({window}) =>
+        mounted.setContainerProps({width: window.width, height: window.height}),
+      );
+    }
     // The alert host comes after the app, so an alert draws over it.
     root.render(
       createElement(

@@ -84,6 +84,14 @@ coordinates, and `er_rotate_copy()` presents a rect from a logical-shape buffer,
 `ErRuntimeConfig` and Flow B's `ErbConfig` take their screen size from `er_get_display_size()` when
 it is left at 0.
 
+`er_set_display_rotation()` can be called again while the app runs. A half turn (0 to 180) keeps the
+app's size, so nothing else is needed. A quarter turn swaps it: in Flow A, call
+`er_runtime_set_screen_size(0, 0)` next and the app lays out at the new size with its state kept. The
+backend has to follow too, since its logical buffer changes shape: esp32-lcd does on
+`er_esp32_lcd_backend_rotation_changed()`, called between the two. A board that turns live sizes
+`ERUI_SCRATCH_WIDTH`, `ERUI_MAX_IMAGE_ROW_PIXELS` and `ERUI_VECTOR_MAX_ROW` for the panel's longer
+side.
+
 ## Events and input
 
 `er_event_set(node, type, fn, user_data)` registers a handler for one event type on a node: press,
@@ -165,7 +173,8 @@ split, and counts repainted pixels and pool usage; `perf_overlay.h` draws it on 
 `er_error_screen.h` draws one full-screen panel for any failure an app causes, in both flows: a title,
 the reason, the amounts involved, the source line, a hint, and a detail such as a stack trace.
 `er_error_screen_show()` copies the text, and while it is up `er_commit()` paints it with fills and the
-built-in font instead of the scene and drops touch input. `er_error_screen_hide()` gives the scene back.
+built-in font instead of the scene and drops touch input. `er_error_screen_hide()` gives the scene back, and `er_error_screen_resize()` gives a showing one a new
+size after the display changes.
 Flow A's `er_runtime_show_error()` and Flow B's `erb_show_error()` both use it.
 
 A fault in native code can't draw when it happens. The firmware keeps an `ERFaultRecord` in RAM the

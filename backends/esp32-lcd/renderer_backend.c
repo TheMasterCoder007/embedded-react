@@ -957,6 +957,38 @@ frame_buf_complete_cb(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_even
     return higher_priority_woken == pdTRUE;
 }
 
+bool er_esp32_lcd_backend_rotation_changed(void)
+{
+    int width = 0;
+    int height = 0;
+    /* A turn keeps the panel, so the canonical framebuffer holds the new shape as it is. Direct mode has none. */
+    if (!s_lcd.panel || s_lcd.direct || !er_get_display_size(&width, &height)
+        || width * height != s_lcd.width * s_lcd.height)
+    {
+        return false;
+    }
+    const ERDisplayRotation rotation = er_get_display_rotation();
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
+    s_lcd.width = width;
+    s_lcd.height = height;
+    s_lcd.panel_width = swapped ? height : width;
+    s_lcd.panel_height = swapped ? width : height;
+    for (size_t index = 0; index < (size_t)width * height; index++)
+    {
+        s_lcd.framebuffer[index] = FB_CLEAR_PX;
+    }
+    /* The whole screen goes out again, to every panel framebuffer, and the overlay waits for its next capture. */
+    s_lcd.dirty_x0 = 0;
+    s_lcd.dirty_y0 = 0;
+    s_lcd.dirty_x_end = width;
+    s_lcd.dirty_y_end = height;
+    s_lcd.previous_has_damage = false;
+    s_lcd.present_count = 0;
+    s_lcd.overlay_active = false;
+    s_lcd.overlay_presents_due = 0;
+    return true;
+}
+
 bool er_esp32_lcd_backend_init(esp_lcd_panel_handle_t panel)
 {
     int width = 0;

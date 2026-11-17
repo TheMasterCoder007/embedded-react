@@ -829,12 +829,26 @@ export interface ScaledSize {
   fontScale: number;
 }
 
+/** What a `change` listener receives: the new size, under both names. */
+export interface DimensionsChange {
+  window: ScaledSize;
+  screen: ScaledSize;
+}
+
 export const Dimensions: {
   /** The panel's size. 'window' and 'screen' are the same on a panel. */
   get(dimension: 'window' | 'screen'): ScaledSize;
+  /**
+   * Runs `handler` when the host changes the size while the app runs: a live rotation, or a simulator resize.
+   * Flow A only: a Flow B package is compiled for its sizes.
+   */
+  addEventListener(
+    type: 'change',
+    handler: (sizes: DimensionsChange) => void,
+  ): {remove(): void};
 };
 
-/** The panel's size. It is fixed while the app runs. */
+/** The panel's size. A component that reads it renders again when the size changes. */
 export function useWindowDimensions(): ScaledSize;
 
 // --- Alert -----------------------------------------------------------------

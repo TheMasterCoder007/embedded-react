@@ -247,6 +247,7 @@ bool er_host_start(const ErHostConfig* config, ErHost* host)
         return false;
     }
 
+    host->rotation = config->rotation;
     host->running = true;
     host->previous_ticks = SDL_GetTicks();
     return true;
@@ -375,6 +376,43 @@ ERDisplayRotation er_host_env_rotation(void)
     }
 }
 
+bool er_host_set_rotation(ErHost* host, ERDisplayRotation rotation)
+{
+    /* The panel as it scans, which a turn leaves alone, and the app's size once it is turned. */
+    const bool was_swapped = host->rotation == ER_ROTATION_90 || host->rotation == ER_ROTATION_270;
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
+    const int panel_width = was_swapped ? host->physical_height : host->physical_width;
+    const int panel_height = was_swapped ? host->physical_width : host->physical_height;
+    const int width = swapped ? panel_height : panel_width;
+    const int height = swapped ? panel_width : panel_height;
+
+    if (!er_set_display_rotation(rotation, panel_width, panel_height))
+    {
+        return false;
+    }
+    /* The window first: the backend's new textures are made for the window as it will be. */
+    int window_width = 0;
+    int window_height = 0;
+    SDL_GetWindowSize(host->window, &window_width, &window_height);
+    if (swapped != was_swapped)
+    {
+        SDL_SetWindowSize(host->window, window_height, window_width);
+    }
+    if (!er_sdl_backend_resize(width, height))
+    {
+        SDL_SetWindowSize(host->window, window_width, window_height);
+        er_set_display_rotation(host->rotation, panel_width, panel_height);
+        er_sdl_backend_resize(host->physical_width, host->physical_height);
+        return false;
+    }
+    host->rotation = rotation;
+    host->physical_width = width;
+    host->physical_height = height;
+
+    er_runtime_set_screen_size(width, height);
+    return true;
+}
+
 int er_host_event_px(const ErHost* host, int logical)
 {
     return (int)((float)logical * host->dpi_scale + 0.5f);
@@ -414,6 +452,10 @@ bool er_host_step(ErHost* host)
         else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_r)
         {
             host->reload_requested = true; /* the simulator acts on this; the demo ignores it */
+        }
+        else if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_t)
+        {
+            host->turn_requested = true; /* likewise */
         }
         else if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT)
         {

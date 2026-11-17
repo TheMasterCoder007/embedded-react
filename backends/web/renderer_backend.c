@@ -86,21 +86,6 @@ static ErRuntimeConfig runtime_cfg(void)
     return config;
 }
 
-/** @brief Runs the stored app bundle (redbox on JS error), or the static fallback scene if none is loaded. */
-static void run_app_or_demo(void)
-{
-    if (s_source)
-    {
-        if (!er_runtime_load_source(s_source, (size_t)s_source_length, "<app>"))
-            er_runtime_show_error();
-        s_app_loaded = true;
-    }
-    else
-    {
-        er_web_demo_scene();
-    }
-}
-
 /**
  * @brief Brings the panel up to date and converts it into the RGBA present buffer.
  *
@@ -194,7 +179,7 @@ void er_web_load_source(const char* source, int length)
     if (!source || length <= 0)
         return;
 
-    /* Keep a private copy so a hot reload (er_web_reset) or a resize can re-run the same app. */
+    /* Keep a private copy so a hot reload (er_web_reset) can re-run the same app. */
     char* copy = malloc((size_t)length + 1U);
     if (!copy)
         return;
@@ -352,13 +337,16 @@ int er_web_resize(int screen_width, int screen_height, int rotation)
     s_width = screen_width;
     s_height = screen_height;
 
-    /* Re-init the runtime at the new screen size so the app re-runs responsively (new screen.width/height) —
-       the on-device responsive-layout path. The engine pools are reset so nodes don't leak across resizes. */
-    er_runtime_shutdown();
-    er_reset();
-    ErRuntimeConfig config = runtime_cfg();
-    er_runtime_init(&config);
-    run_app_or_demo();
+    /* The app keeps running and lays out at the new size, as it does on a device that rotates live. */
+    if (s_app_loaded)
+    {
+        er_runtime_set_screen_size(screen_width, screen_height);
+    }
+    else
+    {
+        er_reset();
+        er_web_demo_scene();
+    }
     return 1;
 }
 

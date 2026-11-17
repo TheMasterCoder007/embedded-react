@@ -99,6 +99,15 @@ extern "C"
      */
     void er_error_screen_show(int screen_width, int screen_height, const ERErrorScreen* screen);
 
+    /**
+     * @brief Gives a showing error screen a new size, with the same text, after the display changes size. Does
+     *        nothing when none is up.
+     *
+     * @param[in] screen_width   The new width in pixels.
+     * @param[in] screen_height  The new height in pixels.
+     */
+    void er_error_screen_resize(int screen_width, int screen_height);
+
     /** @brief Takes the error screen down; the next er_commit() repaints the whole scene. */
     void er_error_screen_hide(void);
 

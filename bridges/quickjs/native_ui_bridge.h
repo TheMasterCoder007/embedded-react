@@ -111,6 +111,15 @@ extern "C"
     void er_bridge_dispatch(JSContext* ctx, JSValueConst callback, int argc, JSValueConst* argv, const char* where);
 
     /**
+     * @brief Tells the app the `screen` global has a new size: runs the NativeUI.setScreenListener callback, as
+     *        er_bridge_dispatch() runs a handler. er_runtime_set_screen_size() calls it; only a host that installs
+     *        its own `screen` needs to.
+     *
+     * @param[in] ctx  Context the bridge was installed into (NULL is a no-op).
+     */
+    void er_bridge_screen_changed(JSContext* ctx);
+
+    /**
      * @brief The engine clock as 64 bits (`er_now_ms64`), so it keeps counting past the 32-bit wrap at
      *        ~49.7 days of uptime.
      *
