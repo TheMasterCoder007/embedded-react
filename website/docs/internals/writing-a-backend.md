@@ -82,7 +82,8 @@ copies them into a framebuffer. Set `band_pixels` in place of `band_height`. The
 each damage rect on its own: a strip is as wide as its rect and as tall as fits in `band_pixels`, so
 a small change costs its own area and a narrow rect takes few strips. `band_begin` gets the strip's
 rect, and the blit calls arrive strip-local in **both** axes, so the band buffer is a plain `w × h`
-surface with a row pitch of `w`. `band_pixels` must be at least the screen width. `dma2d` uses this
+surface with a row pitch of `w`. `band_begin` need not clear it: the engine draws every pixel of
+each strip. `band_pixels` must be at least the screen width. `dma2d` uses this
 to page-flip a rotated panel.
 
 **Format-aware copy.** Provide `copy_rect_format(src, stride, fmt, x, y, w, h)` and the engine hands

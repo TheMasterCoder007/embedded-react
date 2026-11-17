@@ -50,7 +50,9 @@
 #define UNTOUCHED_BYTE 0xEEU
 #define OPACITY_OPAQUE 255U
 #define ROTATION_COUNT 4
-#define FORMAT_COUNT 2
+#define FORMAT_COUNT 3
+#define BLACK 0xFF000000U
+#define STALE_PIXEL 0xEEEEEEEEU
 
 #define ROOT_COLOR 0xFF102030U
 #define TALL_COLOR 0xFF3366FFU
@@ -68,8 +70,11 @@ static const ERRect s_small_box = {60, 38, 16, 8};
 
 static const ERDisplayRotation s_rotations[ROTATION_COUNT] = {
     ER_ROTATION_0, ER_ROTATION_90, ER_ROTATION_180, ER_ROTATION_270};
-static const ErDma2dFramebufferFormat s_formats[FORMAT_COUNT] = {ER_DMA2D_FRAMEBUFFER_ARGB8888,
-                                                                 ER_DMA2D_FRAMEBUFFER_RGB565};
+static const ErDma2dFramebufferFormat s_formats[FORMAT_COUNT] = {
+    ER_DMA2D_FRAMEBUFFER_ARGB8888, ER_DMA2D_FRAMEBUFFER_RGB888, ER_DMA2D_FRAMEBUFFER_RGB565};
+
+/** @brief What shows where no box is: the root's color, or black under a root with no background. */
+static uint32_t s_backdrop_color;
 
 static uint32_t s_dma2d_registers[DMA2D_REGISTER_COUNT];
 static uint32_t s_band_buffer[BAND_PIXELS];
@@ -163,6 +168,8 @@ static void logical_to_panel(ERDisplayRotation rotation, int logical_x, int logi
 /** @brief The color as the framebuffer stores it. */
 static uint32_t stored_color(ErDma2dFramebufferFormat format, uint32_t argb)
 {
+    if (format == ER_DMA2D_FRAMEBUFFER_RGB888)
+        return argb & 0x00FFFFFFU;
     if (format != ER_DMA2D_FRAMEBUFFER_RGB565)
         return argb;
     const uint32_t red = (argb >> 16) & 0xFFU;
@@ -179,11 +186,12 @@ static bool framebuffer_matches(const uint8_t* framebuffer,
                                 uint32_t tall_color,
                                 uint32_t small_color)
 {
-    const int bytes_per_pixel = format == ER_DMA2D_FRAMEBUFFER_RGB565 ? 2 : 4;
+    const int bytes_per_pixel =
+        format == ER_DMA2D_FRAMEBUFFER_RGB565 ? 2 : (format == ER_DMA2D_FRAMEBUFFER_RGB888 ? 3 : 4);
     for (int logical_y = 0; logical_y < LOGICAL_HEIGHT; logical_y++)
         for (int logical_x = 0; logical_x < LOGICAL_WIDTH; logical_x++)
         {
-            uint32_t color = ROOT_COLOR;
+            uint32_t color = s_backdrop_color;
             if (rect_contains(&s_tall_box, logical_x, logical_y))
                 color = tall_color;
             else if (rect_contains(&s_small_box, logical_x, logical_y))
@@ -238,10 +246,15 @@ static bool strips_cover(const ERRect* box)
 /**
  * @brief Runs the two-buffer scenario at one rotation and pixel format.
  *
+ * @param[in] root_color  The root's background, or 0 for a root that leaves the strips to be blanked.
+ *
  * @return EXIT_SUCCESS on pass.
  */
-static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat format)
+static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat format, uint32_t root_color)
 {
+    s_backdrop_color = root_color ? root_color : BLACK;
+    for (int pixel = 0; pixel < BAND_PIXELS; pixel++)
+        s_band_buffer[pixel] = STALE_PIXEL;
     const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
     const int panel_width = swapped ? LOGICAL_HEIGHT : LOGICAL_WIDTH;
     const int panel_height = swapped ? LOGICAL_WIDTH : LOGICAL_HEIGHT;
@@ -280,7 +293,7 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     ERProps root_props = props_default();
     root_props.width = LOGICAL_WIDTH;
     root_props.height = LOGICAL_HEIGHT;
-    root_props.background_color = ROOT_COLOR;
+    root_props.background_color = root_color;
     er_node_set_props(root, &root_props);
     ERNode* tall = er_node_create(ER_NODE_VIEW);
     ERNode* small = er_node_create(ER_NODE_VIEW);
@@ -376,8 +389,12 @@ int main(void)
 {
     for (int rotation_index = 0; rotation_index < ROTATION_COUNT; rotation_index++)
         for (int format_index = 0; format_index < FORMAT_COUNT; format_index++)
-            if (check_page_flip(s_rotations[rotation_index], s_formats[format_index]) != EXIT_SUCCESS)
+        {
+            /* Once under a root that fills the screen, once under one with no background. */
+            if (check_page_flip(s_rotations[rotation_index], s_formats[format_index], ROOT_COLOR) != EXIT_SUCCESS
+                || check_page_flip(s_rotations[rotation_index], s_formats[format_index], 0U) != EXIT_SUCCESS)
                 return EXIT_FAILURE;
+        }
     printf("PASS: DMA2D band mode page-flips two buffers at every rotation\n");
     return EXIT_SUCCESS;
 }

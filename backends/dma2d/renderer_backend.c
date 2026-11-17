@@ -653,7 +653,6 @@ static void band_begin_cb(int x, int y, int width, int height, void* ctx)
     s_ctx.height = height;
     s_ctx.stride_pixels = width;
     mark_dirty(x, y, width, height);
-    fill_rect_cb(ARGB_OPAQUE_ALPHA, 0, 0, width, height, ctx);
 }
 
 /** @brief Closes the strip: copies it, turned, into the framebuffer. The D-cache is cleaned at present. */

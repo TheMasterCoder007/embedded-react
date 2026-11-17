@@ -534,6 +534,15 @@ bool er_band_active(int* origin_y, int* height)
     return rc()->band_height > 0;
 }
 
+bool er_band_emit_rows(int* top, int* bottom)
+{
+    if (rc()->band_height <= 0 || rc()->scratch_buffer)
+        return false;
+    *top = rc()->band_origin_y;
+    *bottom = rc()->band_origin_y + rc()->band_height;
+    return true;
+}
+
 bool er_get_clip_rect(int* x, int* y, int* width, int* height)
 {
     if (rc()->clip_depth == 0)

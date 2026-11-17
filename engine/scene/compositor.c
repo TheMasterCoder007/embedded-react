@@ -3083,6 +3083,15 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                     if (clip_y + clip_height < clip_bottom)
                         clip_bottom = clip_y + clip_height;
                 }
+                /* A band strip only takes its own rows, so the others aren't rasterized. */
+                int band_top, band_bottom;
+                if (er_band_emit_rows(&band_top, &band_bottom))
+                {
+                    if (band_top > clip_top)
+                        clip_top = band_top;
+                    if (band_bottom < clip_bottom)
+                        clip_bottom = band_bottom;
+                }
                 /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
                  * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
                 er_vector_render_slot(
@@ -5693,6 +5702,42 @@ static void render_slice_job(int worker, void* arg)
     er_pop_clip_rect();
 }
 
+/** @brief What a strip shows where the scene draws nothing. */
+#define BAND_BLANK_COLOR 0xFF000000U
+
+/** @brief How far below the root a node that fills a rect is looked for. */
+#define BAND_FILL_SEARCH_DEPTH 4
+
+/**
+ * @brief Reports whether the node, or a plain view under it, fills the rect with opaque pixels.
+ *
+ * Only looks through views that sit still, at full opacity, with the rect inside their box, so nothing between
+ * the root and the node that fills can clip, move or fade it.
+ *
+ * @param[in] node   Node to test, with its subtree.
+ * @param[in] rect   Screen rect.
+ * @param[in] depth  Levels left to look through.
+ *
+ * @return true when every pixel of the rect is drawn opaque.
+ */
+static bool subtree_fills_rect(const ERNode* node, const ERRect* rect, int depth)
+{
+    if (node_covers_opaque(node, 0, 0, rect->x, rect->y, rect->width, rect->height))
+        return true;
+    if (depth <= 0 || node->type != ER_NODE_VIEW || node->layout.display == ER_DISPLAY_NONE || node->subtree_hidden
+        || node->has_transform || node->transform_translate_x != 0 || node->transform_translate_y != 0
+        || node->props.view.opacity != ER_ALPHA_OPAQUE)
+        return false;
+    if (rect->x < node->animated.x || rect->y < node->animated.y
+        || rect->x + rect->width > node->animated.x + node->animated.width
+        || rect->y + rect->height > node->animated.y + node->animated.height)
+        return false;
+    for (const ERNode* child = er_node_first_child(node); child; child = er_node_next_sibling(child))
+        if (subtree_fills_rect(child, rect, depth - 1))
+            return true;
+    return false;
+}
+
 /** @brief Reports whether the backend renders through a band buffer. */
 static bool backend_is_banded(const EmbeddedRenderBackend* backend)
 {
@@ -5718,6 +5763,8 @@ static void render_rect_banded(const EmbeddedRenderBackend* backend, ERNode* roo
 {
     const int strip_rows = band_strip_rows(backend, rect->width);
     const int rect_bottom = rect->y + rect->height;
+    /* The band buffer holds the last strip, so a rect the scene doesn't fill is blanked first. */
+    const bool scene_fills_rect = subtree_fills_rect(root, rect, BAND_FILL_SEARCH_DEPTH);
     er_push_clip_rect(rect->x, rect->y, rect->width, rect->height);
     for (int strip_top = rect->y; strip_top < rect_bottom; strip_top += strip_rows)
     {
@@ -5729,6 +5776,8 @@ static void render_rect_banded(const EmbeddedRenderBackend* backend, ERNode* roo
             ER_PERF_RASTER_END(ER_PERF_RASTER_BLIT);
         }
         er_set_band_rect(rect->x, strip_top, rect->width, strip_height);
+        if (!scene_fills_rect)
+            er_blit_fill(BAND_BLANK_COLOR, rect->x, strip_top, rect->width, strip_height);
         render_tree(root, true, false, 0, s_keyboard_avoid_y);
         er_keyboard_draw((int)root->computed.width, (int)root->computed.height);
         if (backend->band_flush)

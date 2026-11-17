@@ -79,6 +79,14 @@ static void copy_stepped_span(
             for (int pixel = 0; pixel < pixel_count; pixel++, destination += 2, source += source_step)
                 memcpy(destination, source, 2);
             break;
+        case 3:
+            for (int pixel = 0; pixel < pixel_count; pixel++, destination += 3, source += source_step)
+            {
+                destination[0] = source[0];
+                destination[1] = source[1];
+                destination[2] = source[2];
+            }
+            break;
         case 4:
             for (int pixel = 0; pixel < pixel_count; pixel++, destination += 4, source += source_step)
                 memcpy(destination, source, 4);

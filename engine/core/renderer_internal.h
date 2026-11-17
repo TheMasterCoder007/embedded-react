@@ -275,6 +275,19 @@ void er_set_band_rect(int origin_x, int origin_y, int width, int height);
 bool er_band_active(int* origin_y, int* height);
 
 /**
+ * @brief Reports the rows a draw can reach while a band strip is being emitted.
+ *
+ * False when no strip is active, or when draws are being captured into a scratch layer, which must stay whole.
+ * A renderer that works row by row can skip the rows outside [@p top, @p bottom).
+ *
+ * @param[out] top     First screen row of the strip.
+ * @param[out] bottom  One past the strip's last screen row.
+ *
+ * @return true when only those rows reach the backend.
+ */
+bool er_band_emit_rows(int* top, int* bottom);
+
+/**
  * @brief Reads the current (top-most) scissor clip rectangle.
  *
  * @param[out] x       Left edge (may be NULL).
