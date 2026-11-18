@@ -211,17 +211,11 @@ static void noop_blend(const void* source, int stride, uint8_t alpha, int x, int
     (void)ctx;
 }
 
+/* Headless: nothing to blit into, so every other hook stays NULL. */
 static const EmbeddedRenderBackend k_noop_backend = {
-    noop_fill,
-    noop_copy,
-    noop_blend,
-    NULL,
-    NULL,
-    NULL, /* fill / copy / blend / wait / frame_ready / context */
-    0,    /* band_height: 0 = classic full-framebuffer path */
-    NULL,
-    NULL, /* band_begin / band_flush (unused without banding) */
-    NULL  /* copy_rect_format (headless: nothing to blit into) */
+    .fill_rect = noop_fill,
+    .copy_rect = noop_copy,
+    .blend_rect = noop_blend,
 };
 
 /*----------------------------------------------------------------------------------------------------------------------

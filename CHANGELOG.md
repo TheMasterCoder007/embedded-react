@@ -19,6 +19,7 @@ See [Releasing](https://embedded-react.dev/internals/releasing) for the release 
 
 - dma2d: the page-flip copy no longer tears the picture on some boards. The backend waits for the copy
   before the engine renders.
+- ESP32-S3 example: the Flow A firmware builds again.
 
 ## [0.24.0] - 2026-11-17
 ### Added
