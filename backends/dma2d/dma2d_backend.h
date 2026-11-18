@@ -41,7 +41,7 @@
  * Double/triple-buffered LTDC panels: see README.md — call er_set_display_buffer_count() once
  * at init, flip buffers with er_dma2d_backend_set_framebuffer(), and report each flip with
  * er_display_present(). What a buffer missed is copied from the one set before it, so a change is
- * rendered once.
+ * rendered once. With `no_buffer_sync` the engine renders it again.
  *
  * Rotated panels, one of:
  *  - `band_buffer`: the engine draws each damage rect in strips into a small buffer, and each strip is
@@ -126,10 +126,14 @@ extern "C"
 
         void* user; /**< Forwarded to start/wait_complete. */
 
-        uint32_t dead_time; /**< AHB dead-time cycles between DMA2D accesses (AMTCR), so large blits
-                                 don't monopolize the bus against the LTDC. 0 disables. */
-        int min_dma_pixels; /**< Ops smaller than this many pixels stay on the CPU (register setup
-                                 costs more than a tiny blit). 0 = a sensible default. */
+        uint32_t dead_time;  /**< AHB dead-time cycles between DMA2D accesses (AMTCR), so large blits
+                                  don't monopolize the bus against the LTDC. 0 disables. */
+        int min_dma_pixels;  /**< Ops smaller than this many pixels stay on the CPU (register setup
+                                  costs more than a tiny blit). 0 = a sensible default. */
+        bool no_buffer_sync; /**< Render what a page-flipped framebuffer missed again, in place of copying
+                                  it from the one set before it. The copy reads the buffer the LTDC is
+                                  scanning and shares the SDRAM bus with it: set this if the picture
+                                  shifts sideways for a frame. */
     } ErDma2dBackendConfig;
 
     /*----------------------------------------------------------------------------------------------------------------------

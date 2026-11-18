@@ -20,6 +20,8 @@
  *   - each framebuffer holds the whole scene, turned, once it has been rendered into,
  *   - a change costs strips of its own damage rect, not of the full width, each within the pixel budget,
  *   - the other framebuffer gets what it missed by a copy, at its next commit,
+ *   - with `no_buffer_sync` it is rendered again, in strips,
+ *   - a copy by the DMA2D has finished when the backend returns,
  *   - a commit that changes nothing paints nothing,
  *   - er_dma2d_backend_present() reports the painted box only when something was painted.
  */
@@ -85,6 +87,9 @@ static EmbeddedRenderBackend s_recording_backend;
 static const EmbeddedRenderBackend* s_dma2d_backend;
 static ERRect s_strips[STRIPS_MAX];
 static int s_strip_count;
+
+static int s_transfers_started;
+static bool s_transfer_running;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -282,6 +287,8 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     config.render_buffer = NULL;
     if (!er_dma2d_backend_init(&config))
         return fail("the band config was refused", rotation, format);
+    if (!er_backend()->buffer_sync)
+        return fail("the backend does not copy by default", rotation, format);
 
     /* Record each strip on its way to the backend. */
     s_dma2d_backend = er_backend();
@@ -403,6 +410,147 @@ static int check_page_flip(ERDisplayRotation rotation, ErDma2dFramebufferFormat 
     return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Runs two buffers with `no_buffer_sync`: what a buffer missed is rendered again.
+ *
+ * @return EXIT_SUCCESS on pass.
+ */
+static int check_page_flip_rendered(ERDisplayRotation rotation, ErDma2dFramebufferFormat format)
+{
+    s_backdrop_color = ROOT_COLOR;
+    const bool swapped = rotation == ER_ROTATION_90 || rotation == ER_ROTATION_270;
+    const int panel_width = swapped ? LOGICAL_HEIGHT : LOGICAL_WIDTH;
+    const int panel_height = swapped ? LOGICAL_WIDTH : LOGICAL_HEIGHT;
+    const int stride_pixels = panel_width + STRIDE_PADDING_PIXELS;
+
+    memset(s_framebuffers, UNTOUCHED_BYTE, sizeof(s_framebuffers));
+    er_set_display_rotation(rotation, panel_width, panel_height);
+
+    ErDma2dBackendConfig config = {0};
+    config.dma2d = s_dma2d_registers;
+    config.framebuffer = s_framebuffers[0];
+    config.stride_pixels = stride_pixels;
+    config.format = format;
+    config.band_buffer = s_band_buffer;
+    config.band_pixels = BAND_PIXELS;
+    config.min_dma_pixels = INT_MAX;
+    config.no_buffer_sync = true;
+    if (!er_dma2d_backend_init(&config))
+        return fail("the band config with no_buffer_sync was refused", rotation, format);
+    if (er_backend()->buffer_sync)
+        return fail("the backend copies with no_buffer_sync set", rotation, format);
+
+    s_dma2d_backend = er_backend();
+    s_recording_backend = *s_dma2d_backend;
+    s_recording_backend.band_begin = record_band_begin;
+    embedded_renderer_set_backend(&s_recording_backend);
+    er_set_display_buffer_count(FRAMEBUFFER_COUNT);
+
+    ERNode* root = er_node_create(ER_NODE_VIEW);
+    ERProps root_props = props_default();
+    root_props.width = LOGICAL_WIDTH;
+    root_props.height = LOGICAL_HEIGHT;
+    root_props.background_color = ROOT_COLOR;
+    er_node_set_props(root, &root_props);
+    ERNode* tall = er_node_create(ER_NODE_VIEW);
+    ERNode* small = er_node_create(ER_NODE_VIEW);
+    set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR);
+    set_box(small, &s_small_box, s_small_box.y - (s_tall_box.y + s_tall_box.height), SMALL_COLOR);
+    er_tree_append_child(root, tall);
+    er_tree_append_child(root, small);
+    er_tree_set_root(root);
+
+    int back = 0;
+    er_commit();
+    if (!er_dma2d_backend_present(NULL, NULL, NULL, NULL)
+        || !framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
+        return fail("the first buffer is wrong with no_buffer_sync", rotation, format);
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
+    er_display_present();
+
+    /* Nothing changes: the second buffer is rendered whole, and reported. */
+    s_strip_count = 0;
+    er_commit();
+    if (s_strip_count == 0 || !er_dma2d_backend_present(NULL, NULL, NULL, NULL))
+        return fail("the second buffer was not rendered with no_buffer_sync", rotation, format);
+    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
+        return fail("the second buffer is wrong with no_buffer_sync", rotation, format);
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
+    er_display_present();
+
+    /* The tall box changes in one buffer, then is rendered again in the other. */
+    set_box(tall, &s_tall_box, s_tall_box.y, TALL_COLOR_CHANGED);
+    er_commit();
+    er_dma2d_backend_present(NULL, NULL, NULL, NULL);
+    if (!framebuffer_matches(s_framebuffers[back ^ 1], rotation, format, stride_pixels, TALL_COLOR, SMALL_COLOR))
+        return fail("the buffer on screen was written to with no_buffer_sync", rotation, format);
+    back ^= 1;
+    er_dma2d_backend_set_framebuffer(s_framebuffers[back]);
+    er_display_present();
+    s_strip_count = 0;
+    er_commit();
+    if (!strips_are_rect_sized() || !strips_cover(&s_tall_box) || strips_cover(&s_small_box))
+        return fail("the missed change was not rendered on its own rect", rotation, format);
+    if (!er_dma2d_backend_present(NULL, NULL, NULL, NULL))
+        return fail("the missed change was rendered and not reported", rotation, format);
+    if (!framebuffer_matches(s_framebuffers[back], rotation, format, stride_pixels, TALL_COLOR_CHANGED, SMALL_COLOR))
+        return fail("the missed change was rendered wrong", rotation, format);
+
+    er_node_destroy(root);
+    er_dma2d_backend_destroy();
+    return EXIT_SUCCESS;
+}
+
+static void transfer_start(void* user)
+{
+    (void)user;
+    s_transfers_started++;
+    s_transfer_running = true;
+}
+
+static void transfer_wait(void* user)
+{
+    (void)user;
+    s_transfer_running = false;
+}
+
+/**
+ * @brief Has the DMA2D copy a rect from one framebuffer to the other, through the host's start and wait hooks.
+ *
+ * @return EXIT_SUCCESS on pass.
+ */
+static int check_copy_waits(void)
+{
+    const ERDisplayRotation rotation = ER_ROTATION_0;
+    const ErDma2dFramebufferFormat format = ER_DMA2D_FRAMEBUFFER_RGB888;
+    er_set_display_rotation(rotation, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+    ErDma2dBackendConfig config = {0};
+    config.dma2d = s_dma2d_registers;
+    config.framebuffer = s_framebuffers[0];
+    config.format = format;
+    config.min_dma_pixels = 1; /* every copy goes to the DMA2D */
+    config.start = transfer_start;
+    config.wait_complete = transfer_wait;
+    if (!er_dma2d_backend_init(&config))
+        return fail("the config with transfer hooks was refused", rotation, format);
+    er_dma2d_backend_set_framebuffer(s_framebuffers[1]);
+
+    const ERRect rects[] = {s_tall_box, s_small_box};
+    s_transfers_started = 0;
+    s_transfer_running = false;
+    er_backend()->buffer_sync(rects, 2, er_backend()->context);
+    if (s_transfers_started != 2)
+        return fail("the copy did not start one transfer per rect", rotation, format);
+    if (s_transfer_running)
+        return fail("the backend returned with a copy still running", rotation, format);
+
+    er_dma2d_backend_destroy();
+    return EXIT_SUCCESS;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -414,9 +562,12 @@ int main(void)
         {
             /* Once under a root that fills the screen, once under one with no background. */
             if (check_page_flip(s_rotations[rotation_index], s_formats[format_index], ROOT_COLOR) != EXIT_SUCCESS
-                || check_page_flip(s_rotations[rotation_index], s_formats[format_index], 0U) != EXIT_SUCCESS)
+                || check_page_flip(s_rotations[rotation_index], s_formats[format_index], 0U) != EXIT_SUCCESS
+                || check_page_flip_rendered(s_rotations[rotation_index], s_formats[format_index]) != EXIT_SUCCESS)
                 return EXIT_FAILURE;
         }
+    if (check_copy_waits() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
     printf("PASS: DMA2D band mode page-flips two buffers at every rotation\n");
     return EXIT_SUCCESS;
 }

@@ -10,6 +10,15 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- dma2d: `no_buffer_sync` in the config turns the page-flip copy off, and the engine renders what each
+  buffer missed again.
+
+### Fixed
+
+- dma2d: the page-flip copy no longer tears the picture on some boards. The backend waits for the copy
+  before the engine renders.
 
 ## [0.24.0] - 2026-11-17
 ### Added

@@ -145,6 +145,11 @@ A commit that changes nothing paints nothing, so `er_dma2d_backend_present()` re
 there is no second flip. Let a flip take effect (vblank) before the next commit: the copy reads the
 buffer on screen.
 
+The copy shares the SDRAM bus with the LTDC, which is scanning the buffer it reads. If the picture
+shifts sideways for a frame on a page change, set `.no_buffer_sync = true` in the config. The engine
+then renders what each buffer missed again, and `er_dma2d_backend_present()` reports it, so a change
+flips twice.
+
 ### A panel mounted against its scan direction
 
 A 480×1280 panel mounted as a 1280×480 bar scans its rows along the bar's short side, so the app
