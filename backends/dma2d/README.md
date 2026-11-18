@@ -45,7 +45,7 @@ take effect before the next commit. With `cache_clean` and
 buffer is single-buffered and does not copy.
 
 The copy reads the buffer the LTDC is scanning and shares the SDRAM bus with it. The backend waits
-for each transfer, so nothing else is on the bus while it runs. If the picture still shifts sideways
+for each transfer, so the engine does not render while it runs. If the picture still shifts sideways
 for a frame when a large area changes, set `.no_buffer_sync = true`: the engine then renders what
 each buffer missed again, once per buffer.
 

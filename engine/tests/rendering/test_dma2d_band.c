@@ -21,6 +21,7 @@
  *   - a change costs strips of its own damage rect, not of the full width, each within the pixel budget,
  *   - the other framebuffer gets what it missed by a copy, at its next commit,
  *   - with `no_buffer_sync` it is rendered again, in strips,
+ *   - a copy by the DMA2D has finished when the backend returns,
  *   - a commit that changes nothing paints nothing,
  *   - er_dma2d_backend_present() reports the painted box only when something was painted.
  */
@@ -86,6 +87,9 @@ static EmbeddedRenderBackend s_recording_backend;
 static const EmbeddedRenderBackend* s_dma2d_backend;
 static ERRect s_strips[STRIPS_MAX];
 static int s_strip_count;
+
+static int s_transfers_started;
+static bool s_transfer_running;
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Private
@@ -499,6 +503,54 @@ static int check_page_flip_rendered(ERDisplayRotation rotation, ErDma2dFramebuff
     return EXIT_SUCCESS;
 }
 
+static void transfer_start(void* user)
+{
+    (void)user;
+    s_transfers_started++;
+    s_transfer_running = true;
+}
+
+static void transfer_wait(void* user)
+{
+    (void)user;
+    s_transfer_running = false;
+}
+
+/**
+ * @brief Has the DMA2D copy a rect from one framebuffer to the other, through the host's start and wait hooks.
+ *
+ * @return EXIT_SUCCESS on pass.
+ */
+static int check_copy_waits(void)
+{
+    const ERDisplayRotation rotation = ER_ROTATION_0;
+    const ErDma2dFramebufferFormat format = ER_DMA2D_FRAMEBUFFER_RGB888;
+    er_set_display_rotation(rotation, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+    ErDma2dBackendConfig config = {0};
+    config.dma2d = s_dma2d_registers;
+    config.framebuffer = s_framebuffers[0];
+    config.format = format;
+    config.min_dma_pixels = 1; /* every copy goes to the DMA2D */
+    config.start = transfer_start;
+    config.wait_complete = transfer_wait;
+    if (!er_dma2d_backend_init(&config))
+        return fail("the config with transfer hooks was refused", rotation, format);
+    er_dma2d_backend_set_framebuffer(s_framebuffers[1]);
+
+    const ERRect rects[] = {s_tall_box, s_small_box};
+    s_transfers_started = 0;
+    s_transfer_running = false;
+    er_backend()->buffer_sync(rects, 2, er_backend()->context);
+    if (s_transfers_started != 2)
+        return fail("the copy did not start one transfer per rect", rotation, format);
+    if (s_transfer_running)
+        return fail("the backend returned with a copy still running", rotation, format);
+
+    er_dma2d_backend_destroy();
+    return EXIT_SUCCESS;
+}
+
 /*----------------------------------------------------------------------------------------------------------------------
  - Functions: Public
  ---------------------------------------------------------------------------------------------------------------------*/
@@ -514,6 +566,8 @@ int main(void)
                 || check_page_flip_rendered(s_rotations[rotation_index], s_formats[format_index]) != EXIT_SUCCESS)
                 return EXIT_FAILURE;
         }
+    if (check_copy_waits() != EXIT_SUCCESS)
+        return EXIT_FAILURE;
     printf("PASS: DMA2D band mode page-flips two buffers at every rotation\n");
     return EXIT_SUCCESS;
 }
