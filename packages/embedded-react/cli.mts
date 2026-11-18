@@ -433,7 +433,7 @@ function resolveAppComponent(cwd: string, explicit?: string | null): string {
 }
 
 /**
- * Compiles the App component with what goes into the build: its package file and its image jobs.
+ * Compiles the App component with what goes into the build: its package file and its image and font jobs.
  * Throws with the reason, so a watch loop can carry on past a bad save.
  */
 async function compileAppPackage(
@@ -446,10 +446,7 @@ async function compileAppPackage(
 ) {
   const {compilePackage, bakeSvgArtifacts, packPackage, readNativeFiles} =
     await import('./aot/compile.mts');
-  const {bakeAssetPackBytes} = await import('./assets/index.mts');
-  const {warnMissingGlyphs} = await import('./assets/glyph-coverage.mts');
-  const {analyzeFontSizes, warnFontSizes} =
-    await import('./assets/font-sizes.mts');
+  const {bakePackageAssets} = await import('./aot/package-assets.mts');
   const appDir = dirname(appPath);
   const source = readFileSync(appPath, 'utf8');
   // Bake <Svg source> .svg imports → vector artifacts (incl. gradients), then compile with them in hand.
@@ -466,8 +463,8 @@ async function compileAppPackage(
     release,
   });
 
-  // Optional per-image overrides (same file the JS flows read): assets.config.js
-  //   export default { images: { 'bg': { format: 'rgb565' } } }
+  // Optional per-asset overrides (same file the JS flows read): assets.config.js
+  //   export default { images: { 'bg': { format: 'rgb565' } }, fonts: { 'Manrope-Light': { sizes: [64, 72] } } }
   let assetsConfig: AssetsConfig = {};
   const assetsConfigPath = resolve(cwd, 'assets.config.js');
   if (existsSync(assetsConfigPath))
@@ -477,27 +474,14 @@ async function compileAppPackage(
           `${pathToFileURL(assetsConfigPath).href}?t=${statSync(assetsConfigPath).mtimeMs}`
         )
       ).default || {};
-  const imageConfig = assetsConfig.images || {};
-
-  const imageJobs = result.images.map(image => ({
-    name: image.name,
-    path: resolve(appDir, image.importPath),
-    format: imageConfig[image.name]?.format,
-  }));
-  for (const job of imageJobs) {
-    if (!existsSync(job.path)) {
-      throw new Error(`<Image> asset "${job.name}" not found at ${job.path}`);
-    }
-  }
-  // Flow B renders everything in the engine's built-in font (no font imports) — check the app's text
-  // and its font sizes against what that font actually covers.
-  warnMissingGlyphs({source, jsx: true});
-  warnFontSizes({used: analyzeFontSizes(source)});
-  const file = packPackage(
+  const {assetPack, imageJobs, fontJobs} = bakePackageAssets(
     result,
-    imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
+    source,
+    appDir,
+    assetsConfig,
   );
-  return {result, file, imageJobs};
+  const file = packPackage(result, assetPack);
+  return {result, file, imageJobs, fontJobs};
 }
 
 /**
@@ -523,7 +507,11 @@ async function buildAot(
     );
     process.exit(1);
   }
-  const {result, file, imageJobs} = compiled;
+  const {result, file, imageJobs, fontJobs} = compiled;
+  const fontSizes = fontJobs.reduce(
+    (total, font) => total + font.sizes.length,
+    0,
+  );
   const displayDir = relative(cwd, outDir) || '.';
   const name = bake ? 'app.erpkg.c' : 'app.erpkg';
   writeFileSync(
@@ -531,8 +519,13 @@ async function buildAot(
     bake ? bakePackage(file.bytes) : file.bytes,
   );
   console.log(
-    `✓ Flow B package → ${displayDir}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s))`,
+    `✓ Flow B package → ${displayDir}/${name} (${release ? 'release' : 'debug'}, ${imageJobs.length} image(s), ${fontSizes} font size(s))`,
   );
+  for (const font of fontJobs) {
+    console.log(
+      `  font ${font.family} at ${font.sizes.join(', ')} px, ${font.bpp} bpp`,
+    );
+  }
   if (release) {
     writeFileSync(resolve(outDir, 'app.erdbg'), result.debug);
     console.log(

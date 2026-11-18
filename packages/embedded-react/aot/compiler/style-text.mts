@@ -31,6 +31,7 @@ import {
   lowerStyle,
   isStyleKey,
   STYLE_KEYS,
+  FONT_FAMILY_KEY,
   DYN_FIELDS,
   parseColorValue,
 } from '../style-map.mts';
@@ -56,7 +57,7 @@ import type * as t from '@babel/types';
 import type {BootValue} from './boot.mts';
 import type {Interpolation} from './animations.mts';
 import type {AotError} from './diagnostics.mts';
-import type {IrPropValue} from './ir/nodes.mts';
+import type {IrFontFamily, IrPropValue} from './ir/nodes.mts';
 import type {IrText, IrTextPart} from './ir/text.mts';
 import type {ElementSpec} from './elements/props.mts';
 import type {
@@ -81,11 +82,13 @@ export interface AnimBind {
   interpolation?: Interpolation;
 }
 
-/** An element's merged style: constant field writes, state-driven ones, and animated-value binds. */
+/** An element's merged style: constant field writes, state-driven ones, animated-value binds and its font. */
 export interface StyleAssigns {
   staticAssigns: StaticAssign[];
   dynamicAssigns: DynAssign[];
   binds: AnimBind[];
+  /** The last `fontFamily` written, or null for the built-in font. */
+  fontFamily: IrFontFamily | null;
 }
 
 /** One inline segment of a multi-span <Text>: its text, and the constant for each ERTextSpan field. */
@@ -293,6 +296,48 @@ export function lowerEnumValue(
     'AOT: a state-driven enum style must be a string literal or a ternary of them',
     "e.g. flexDirection: wide ? 'row' : 'column'",
   );
+}
+
+/**
+ * A static `fontFamily` value as a font: a family's name, or '' for the built-in font.
+ *
+ * @param value  The folded value.
+ *
+ * @returns The font; null for the built-in one.
+ */
+function staticFontFamily(value: unknown): IrFontFamily | null {
+  if (typeof value !== 'string') {
+    throw aotError(
+      'AOT: style "fontFamily" must be a font\'s family name',
+      "import the font file and use its name: import Manrope from './Manrope.ttf' → fontFamily: Manrope.",
+    );
+  }
+
+  checkEngineString(value, 'ER_FONT_FAMILY_MAX', `font family "${value}"`);
+  return value === '' ? null : {kind: 'static', name: value};
+}
+
+/**
+ * Lowers a state-driven `fontFamily`: a string, such as a ternary of imported fonts.
+ *
+ * @param valueNode  The value expression.
+ * @param environment  The expression environment.
+ *
+ * @returns The font.
+ */
+function dynamicFontFamily(valueNode: t.Node, environment: Env): IrFontFamily {
+  const value = lowerExpr(valueNode, environment);
+  if (shapeOf(value) !== 'string') {
+    throw at(
+      aotError(
+        'AOT: a state-driven "fontFamily" must be a string',
+        'pick between imported fonts: fontFamily: big ? ManropeLight : ManropeMedium.',
+      ),
+      valueNode,
+    );
+  }
+
+  return {kind: 'value', value};
 }
 
 /**
@@ -608,6 +653,7 @@ export function collectStyleAssigns(
     {constant: PropConstant} | {value: IrPropValue}
   >();
   const binds: AnimBind[] = []; // animated values bound to node properties (native driver)
+  let fontFamily: IrFontFamily | null = null;
 
   // A size in pixels and its percentage twin are one style key, so a later write of either replaces both.
   const setField = (
@@ -793,6 +839,28 @@ export function collectStyleAssigns(
           }
         }
 
+        // A font family is a string, so it has no ERProps number to fold to.
+        if (key === FONT_FAMILY_KEY) {
+          let family: unknown;
+          let isStatic = true;
+          try {
+            family = evalStatic(
+              prop.value,
+              withUndefined(scope),
+              bootValues === 'fold' ? 'fold' : 'strict',
+            );
+          } catch {
+            isStatic = false;
+          }
+
+          if (isStatic && (family === undefined || family === null)) continue;
+          checkStyleKey(spec, key, prop);
+          fontFamily = isStatic
+            ? staticFontFamily(family)
+            : dynamicFontFamily(prop.value, environment);
+          continue;
+        }
+
         // Only a failed fold falls back to the dynamic path, so an unknown key is not misreported as state-driven.
         let staticValue: {value: unknown} | null;
         let readsBoot = false;
@@ -874,6 +942,11 @@ export function collectStyleAssigns(
       if (styleValue === undefined || styleValue === null) continue;
 
       checkStyleKey(spec, styleKey, expression);
+      if (styleKey === FONT_FAMILY_KEY) {
+        fontFamily = staticFontFamily(styleValue);
+        continue;
+      }
+
       for (const assign of lowerStyleChecked(styleKey, styleValue)) {
         setField(assign.field, {constant: assign.value});
       }
@@ -903,7 +976,7 @@ export function collectStyleAssigns(
     }
   }
 
-  return {staticAssigns, dynamicAssigns, binds};
+  return {staticAssigns, dynamicAssigns, binds, fontFamily};
 }
 
 /**

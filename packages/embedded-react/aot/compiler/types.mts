@@ -342,6 +342,18 @@ export interface AssetImport {
   importPath: string;
 }
 
+/** The sizes an app's text is drawn at in one font family. */
+export interface FontUse {
+  /** The family's name; '' is the built-in font. */
+  family: string;
+  /** The imported font file, source-relative; null for the built-in font or a family the firmware registers. */
+  importPath: string | null;
+  /** The sizes known at build time, ascending. */
+  sizes: number[];
+  /** Some text in the family takes its size from state, so the sizes above are not all of them. */
+  openSizes: boolean;
+}
+
 /** A `useEffect(fn, deps)` call. The deps are checked when the effect is compiled. */
 export interface EffectRecord {
   functionNode: FunctionNode;
@@ -416,6 +428,8 @@ export interface Env {
   helpers: Map<string, FunctionNode>;
   /** Imported images: asset name → source-relative path. */
   imageNames: Map<string, string>;
+  /** Imported fonts: family name → source-relative path. */
+  fontFamilies: Map<string, string>;
   /** <Svg source> imports, by local name. */
   svgImports: Map<string, AssetImport>;
   svgArtifacts: Record<string, SvgArtifact>;

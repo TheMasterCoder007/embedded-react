@@ -47,6 +47,7 @@
 #include "freertos/task.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 static const char* TAG = "embedded-react";
 
@@ -56,6 +57,41 @@ static const char* TAG = "embedded-react";
 #endif
 
 static uint32_t s_arena[ERB_ARENA_BYTES / sizeof(uint32_t)];
+
+/**
+ * @brief Room for the tables of the fonts a package brings: fonts (one per family and size), their glyphs (95 each
+ *        for ASCII) and extra glyphs. 12 B a glyph; the bitmaps stay in flash. 0 fonts leaves the storage out.
+ *        Taken from the heap at boot: as static data it would use the RAM FreeRTOS starts its first tasks from.
+ */
+#ifndef ERB_FONT_COUNT
+#define ERB_FONT_COUNT 4
+#endif
+#ifndef ERB_GLYPH_COUNT
+#define ERB_GLYPH_COUNT (ERB_FONT_COUNT * 95)
+#endif
+#ifndef ERB_EXTRA_GLYPH_COUNT
+#define ERB_EXTRA_GLYPH_COUNT 16
+#endif
+
+#if ERB_FONT_COUNT > 0
+static ErAssetsStorage s_font_storage;
+
+/** @brief Reserves the font tables. With no room for them, a package with fonts is rejected at load. */
+static void font_storage_init(void)
+{
+    s_font_storage.fonts = calloc(ERB_FONT_COUNT, sizeof(BitmapFont));
+    s_font_storage.glyphs = calloc(ERB_GLYPH_COUNT, sizeof(GlyphInfo));
+    s_font_storage.extras = calloc(ERB_EXTRA_GLYPH_COUNT, sizeof(ExtraGlyph));
+    if (!s_font_storage.fonts || !s_font_storage.glyphs || !s_font_storage.extras)
+    {
+        ESP_LOGE(TAG, "no RAM for the font tables: a package with fonts won't load");
+        return;
+    }
+    s_font_storage.font_count = ERB_FONT_COUNT;
+    s_font_storage.glyph_count = ERB_GLYPH_COUNT;
+    s_font_storage.extra_count = ERB_EXTRA_GLYPH_COUNT;
+}
+#endif
 
 /** @brief Longest a rejected package's reason stays on screen before the last good one runs; a tap ends it sooner. */
 #define REJECTED_HOLD_MS 10000U
@@ -143,10 +179,16 @@ static void load_package(bool touch)
 {
     ErbPackageSlots slots;
     erb_package_slots_esp32_open(&slots);
+#if ERB_FONT_COUNT > 0
+    font_storage_init();
+#endif
 
     const ErbConfig config = {
         .arena = s_arena,
         .arena_bytes = sizeof(s_arena),
+#if ERB_FONT_COUNT > 0
+        .fonts = &s_font_storage,
+#endif
         .screen_width = BOARD_LCD_WIDTH,
         .screen_height = BOARD_LCD_HEIGHT,
         .natives = native_modules,

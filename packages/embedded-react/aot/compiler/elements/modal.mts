@@ -174,6 +174,7 @@ export function emitModal(
     placeholder: null,
     text: null,
     image: null,
+    fontFamily: null,
     spans: null,
     children: [],
     wiring: [

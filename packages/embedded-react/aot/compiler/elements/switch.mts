@@ -198,6 +198,7 @@ export function emitSwitch(
     placeholder: null,
     text: null,
     image: null,
+    fontFamily: null,
     spans: null,
     children: [],
     wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),

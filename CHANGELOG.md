@@ -10,6 +10,15 @@ ESP-IDF Component Registry, PlatformIO) — a single version drives every artifa
 See [Releasing](https://embedded-react.dev/internals/releasing) for the release process.
 
 ## [Unreleased]
+### Added
+
+- Flow B: `fontFamily` with an imported font. `build --aot` bakes each font at the sizes its text uses and
+  puts it in the package.
+- Flow B board examples reserve storage for a package's font tables (`ERB_FONT_COUNT`).
+
+### Changed
+
+- Flow B: the font-size check reports against the family a text uses.
 
 ## [0.24.1] - 2026-11-18
 ### Added

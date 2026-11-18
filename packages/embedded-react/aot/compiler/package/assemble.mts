@@ -35,17 +35,18 @@ import {lowerPackage} from './lower.mts';
 import {writeDebug, writeProgram} from './writer.mts';
 import type {ResolvedOptions} from '../options.mts';
 import type {IrBootAssumption} from '../ir/boot.mts';
-import type {AssetImport} from '../types.mts';
+import type {AssetImport, FontUse} from '../types.mts';
 import type {Program, ProgramPanel, TableSize} from './writer.mts';
 
 /*----------------------------------------------------------------------------------------------------------------------
  - Interfaces
  ---------------------------------------------------------------------------------------------------------------------*/
 
-/** One panel's program, and the images it shows. */
+/** One panel's program, and the images and fonts it shows. */
 export interface PanelProgram {
   program: Program;
   images: AssetImport[];
+  fonts: FontUse[];
   /** What the compile assumed of its panel, which is the layout's check. */
   assumptions: IrBootAssumption[];
 }
@@ -64,6 +65,8 @@ export interface PackageResult {
   tables: TableSize[];
   /** The image imports the package's asset pack has to hold. */
   images: AssetImport[];
+  /** The fonts its text is drawn in, over every panel; the pack holds the imported ones at their sizes. */
+  fonts: FontUse[];
 }
 
 /** A finished package. */
@@ -111,12 +114,13 @@ export function compilePanel(
   return {
     program: lowerPackage(app, options),
     images: app.images,
+    fonts: app.fonts,
     assumptions: app.boot.assumptions,
   };
 }
 
 /**
- * Writes the program section for every panel, and its debug section. The asset pack holds each image any
+ * Writes the program section for every panel, and its debug section. The asset pack holds each image and font any
  * panel shows, so each panel needs room to register all of them.
  *
  * @param panels  Each panel's program, in the order the package lists them.
@@ -135,6 +139,18 @@ export function assemblePackage(
       panels.flatMap(panel => panel.images).map(image => [image.name, image]),
     ).values(),
   ];
+  // A family is drawn at every size any panel draws it at.
+  const fonts = new Map<string, FontUse>();
+  for (const font of panels.flatMap(panel => panel.fonts)) {
+    const merged = fonts.get(font.family);
+    fonts.set(font.family, {
+      ...font,
+      sizes: [...new Set([...(merged?.sizes ?? []), ...font.sizes])].sort(
+        (left, right) => left - right,
+      ),
+      openSizes: font.openSizes || (merged?.openSizes ?? false),
+    });
+  }
   const programs = panels.map(({program}) => ({
     ...program,
     flags: release ? program.flags & ~FLAG_DEBUG : program.flags,
@@ -153,6 +169,7 @@ export function assemblePackage(
     panels: programs.map(program => program.panels[0]),
     tables: written.tables,
     images,
+    fonts: [...fonts.values()],
   };
 }
 

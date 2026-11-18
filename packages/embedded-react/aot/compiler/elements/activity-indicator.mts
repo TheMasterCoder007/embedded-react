@@ -183,6 +183,7 @@ export function emitActivityIndicator(
     placeholder: null,
     text: null,
     image: null,
+    fontFamily: null,
     spans: null,
     children: [],
     wiring: [

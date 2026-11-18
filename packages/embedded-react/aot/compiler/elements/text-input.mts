@@ -29,6 +29,7 @@ import {evalStatic} from '../static-eval.mts';
 import {lowerExpr, lowerText} from '../expressions.mts';
 import {isFn} from '../collect.mts';
 import {attrExpr, collectStyleAssigns} from '../style-text.mts';
+import {recordFontUse} from '../fonts.mts';
 import {lowerValueHandler} from '../handlers.mts';
 import {
   checkInterpolations,
@@ -84,12 +85,13 @@ export function emitTextInput(
   const nodeId = `n${output.allocateNodeId()}`;
 
   // collect style assignments
-  const {staticAssigns, dynamicAssigns, binds} = collectStyleAssigns(
-    element.openingElement,
-    scope,
-    environment,
-    elementSpec('TextInput')!,
-  );
+  const {staticAssigns, dynamicAssigns, binds, fontFamily} =
+    collectStyleAssigns(
+      element.openingElement,
+      scope,
+      environment,
+      elementSpec('TextInput')!,
+    );
 
   // process element attributes
   let valueNode: t.Node | null = null;
@@ -172,10 +174,12 @@ export function emitTextInput(
     placeholder,
     text,
     image: null,
+    fontFamily,
     spans: null,
     children: [],
     wiring: binds.map((bind, index) => ({kind: 'bind', bind, index})),
   };
+  recordFontUse(node, output);
 
   // Compile onChangeText into an ER_EVENT_CHANGE_TEXT handler that receives the edited text.
   if (onChangeFunction) {

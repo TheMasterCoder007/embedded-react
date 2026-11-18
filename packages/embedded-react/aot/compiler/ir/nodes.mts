@@ -85,6 +85,10 @@ export type IrPropValue =
 export type IrImageName =
   {kind: 'static'; name: string} | {kind: 'value'; value: IrExpr};
 
+/** The font a text is drawn in: a family known at build time, or a string read from state. */
+export type IrFontFamily =
+  {kind: 'static'; name: string} | {kind: 'value'; value: IrExpr};
+
 /** Something wired onto a node once it exists, in the order the element wires it. */
 export type IrWire =
   /** An animated value the native driver moves; `index` numbers its interpolation table. */
@@ -121,6 +125,8 @@ export interface IrNode {
   /** A <Text>'s body, or a <TextInput>'s value. */
   text: IrText | null;
   image: IrImageName | null;
+  /** A <Text>'s or <TextInput>'s font family, or null for the built-in font. */
+  fontFamily: IrFontFamily | null;
   /** A <Text> with nested <Text> children draws these inline spans instead of a body. */
   spans: TextSpan[] | null;
   wiring: IrWire[];
@@ -173,7 +179,7 @@ export type IrBranch = IrElement | IrConditional | null;
  ---------------------------------------------------------------------------------------------------------------------*/
 
 /**
- * Whether any of a node's props, text, or image is a runtime value rather than a constant.
+ * Whether any of a node's props, text, image or font family is a runtime value rather than a constant.
  *
  * @param node  The node.
  *
@@ -182,7 +188,8 @@ export type IrBranch = IrElement | IrConditional | null;
 export const hasRuntimeProps = (node: IrNode): boolean =>
   (node.text?.parts.some(part => part.kind !== 'literal') ?? false) ||
   node.stateProps.length > 0 ||
-  node.image?.kind === 'value';
+  node.image?.kind === 'value' ||
+  node.fontFamily?.kind === 'value';
 
 /**
  * Whether state drives any of a node's props, text or image, so it keeps a handle and the update sets its

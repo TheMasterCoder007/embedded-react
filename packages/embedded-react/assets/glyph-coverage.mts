@@ -60,6 +60,8 @@ export interface CoverageCheck extends ScanOptions {
   source: string;
   /** bakeFont() results; empty means built-in font only. */
   fonts?: CoverageFont[];
+  /** Check the built-in font beside the imported ones, for an app that draws with both. */
+  withBuiltin?: boolean;
 }
 
 /** Name used for the engine's fallback font in warnings (it has no family of its own). */
@@ -225,8 +227,10 @@ export function findMissingGlyphs({
   source,
   fonts = [],
   jsx = false,
+  withBuiltin = false,
 }: CoverageCheck): MissingGlyph[] {
-  const checked = fonts.length ? fonts : [builtinFont()];
+  const checked =
+    fonts.length && !withBuiltin ? fonts : [...fonts, builtinFont()];
   const coverage = checked.map(font => ({
     family: font.family,
     path: font.path,
@@ -332,12 +336,13 @@ export function warnMissingGlyphs({
   source,
   fonts = [],
   jsx = false,
+  withBuiltin = false,
   log = console.warn,
 }: CoverageCheck & {
   /** Sink for the warning. */
   log?: (text: string) => void;
 }): MissingGlyph[] {
-  const missing = findMissingGlyphs({source, fonts, jsx});
+  const missing = findMissingGlyphs({source, fonts, jsx, withBuiltin});
   const text = formatMissingGlyphs(missing, fonts);
   if (text && text !== lastWarning) log(text);
   lastWarning = text || null;

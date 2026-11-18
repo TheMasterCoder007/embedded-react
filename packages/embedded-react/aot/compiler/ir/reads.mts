@@ -563,6 +563,10 @@ function nodeFound(node: IrNode): ReadsFound {
     readExpr(node.image.value, found);
   }
 
+  if (node.fontFamily?.kind === 'value') {
+    readExpr(node.fontFamily.value, found);
+  }
+
   return found;
 }
 

@@ -147,6 +147,7 @@ const IMAGE_STYLE = [
 /** What the engine draws a Text with. */
 const TEXT_STYLE = [
   'color',
+  'fontFamily',
   'fontSize',
   'fontWeight',
   'lineHeight',
@@ -167,7 +168,7 @@ const BOX_STYLE = [
 const MODAL_STYLE = [...BOX_STYLE, ...SHADOW_STYLE, 'backgroundImage'];
 
 /** What the engine draws a TextInput with. */
-const TEXT_INPUT_STYLE = [...BOX_STYLE, 'color', 'fontSize'];
+const TEXT_INPUT_STYLE = [...BOX_STYLE, 'color', 'fontFamily', 'fontSize'];
 
 /** The style keys the engine animates on a View, ScrollView, Pressable or Modal; `transform` animates anywhere. */
 const VIEW_ANIMATED = ['opacity', 'backgroundColor', 'transform'];

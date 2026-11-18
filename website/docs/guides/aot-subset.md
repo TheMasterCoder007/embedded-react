@@ -224,8 +224,11 @@ list row; work it out for the whole list in a `useMemo` instead.
 - A state-driven enum style (`display`, `flexDirection` and the like) must be a string literal or a
   ternary of literals. `display: page === 'home' ? 'flex' : 'none'` compiles; `visible={bool}` takes
   any boolean.
-- `fontFamily`, `textAlign` and `overflow` are not in the subset. Text uses the built-in font; center it with a
-  wrapping `View` and `alignItems: 'center'`.
+- `fontFamily` takes an imported font (`import Manrope from './Manrope-Light.ttf'`), on a `Text` and a
+  `TextInput`. It can follow state as a ternary of imported fonts, and every imported font is then baked
+  at that text's sizes. A weight is its own file and its own family.
+- `textAlign` and `overflow` are not in the subset. Center text with a wrapping `View` and
+  `alignItems: 'center'`.
 
 ## Text
 
@@ -252,9 +255,10 @@ work in text and wherever else a string is built: a string state's setter, a lis
   local). Put one built in place into a `const` first.
 - A ternary in text still can't build a string in a branch, so `{ready ? t.toFixed(1) : '--'}` is refused.
 
-Text can only show glyphs the built-in font bakes: printable ASCII plus a fixed symbol set. `×`,
-`•`, `−`, `–` and `—` are there; `·` and `✕` are not, and render as `?`. The build warns about any
-character it cannot find. See [Assets](../concepts/assets.md).
+Text can only show glyphs its font bakes. The built-in font has printable ASCII plus a fixed symbol
+set: `×`, `•`, `−`, `–` and `—` are there; `·` and `✕` are not, and render as `?`. An imported font
+has ASCII plus what `assets.config.js` adds. The build warns about any character it cannot find. See
+[Assets](../concepts/assets.md).
 
 ## Animation
 

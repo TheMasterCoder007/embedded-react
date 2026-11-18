@@ -82,10 +82,8 @@ import {
   readdirSync,
 } from 'node:fs';
 import {basename, resolve, dirname} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {bakeAssetPackBytes} from '../assets/index.mts';
-import {warnMissingGlyphs} from '../assets/glyph-coverage.mts';
-import {analyzeFontSizes, warnFontSizes} from '../assets/font-sizes.mts';
+import {fileURLToPath, pathToFileURL} from 'node:url';
+import {bakePackageAssets} from './package-assets.mts';
 import {formatAotError} from './compiler/diagnostics.mts';
 import {resolveOptions} from './compiler/options.mts';
 import {bakeSvgArtifacts} from './compiler/collect.mts';
@@ -368,31 +366,25 @@ if (
     process.exit(1);
   }
 
-  // Locate the images the app imports; each importPath is source-relative to the demo's App.jsx.
-  const imageJobs = result.images.map(image => ({
-    name: image.name,
-    path: resolve(demosDirectory, demo, image.importPath),
-  }));
-
-  // Stop on an imported image that is not on disk.
-  for (const job of imageJobs) {
-    if (!existsSync(job.path)) {
-      console.error(
-        `AOT: <Image> asset "${job.name}" not found at ${job.path}`,
-      );
-      process.exit(1);
-    }
+  // The package carries its images and imported fonts as an asset pack; each importPath is relative to App.jsx.
+  const assetsConfigPath = resolve(demosDirectory, demo, 'assets.config.js');
+  const assetsConfig = existsSync(assetsConfigPath)
+    ? (await import(pathToFileURL(assetsConfigPath).href)).default || {}
+    : {};
+  let assetPack: Uint8Array | undefined;
+  try {
+    ({assetPack} = bakePackageAssets(
+      result,
+      source,
+      resolve(demosDirectory, demo),
+      assetsConfig,
+    ));
+  } catch (error: any) {
+    console.error(error?.message || String(error));
+    process.exit(1);
   }
 
-  // Flow B renders all text in the built-in font, so check the app's glyphs and font sizes against it.
-  warnMissingGlyphs({source: source, jsx: true});
-  warnFontSizes({used: analyzeFontSizes(source)});
-
-  // The package carries its images as an asset pack.
-  const file = packPackage(
-    result,
-    imageJobs.length ? bakeAssetPackBytes({images: imageJobs}) : undefined,
-  );
+  const file = packPackage(result, assetPack);
   mkdirSync(distDirectory, {recursive: true});
   writeFileSync(resolve(distDirectory, 'app.erpkg'), file.bytes);
   console.log(`AOT: compiled demo "${demo}" -> dist/app.erpkg`);

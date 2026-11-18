@@ -91,7 +91,7 @@ interface FoldScope {
 }
 
 /** Sizes one family may register before the engine starts dropping them (FONT_FAMILY_MAX_SIZES). */
-const MAX_BAKED_SIZES = 16;
+export const MAX_BAKED_SIZES = 16;
 
 /** Bounds of the engine's uint8 BitmapFont.pixel_size — a folded value outside them isn't a size. */
 const MIN_PX = 1;
@@ -608,22 +608,33 @@ export function pickBakedSize(
  *
  * Which fonts are checked follows what the app can draw with, the same way the glyph check does it:
  * each imported font when there are any (they all render the app's text, and a family missing a size
- * is the bug worth reporting), the engine's built-in font when there are none.
+ * is the bug worth reporting), the engine's built-in font when there are none. A build that knows which
+ * family draws each size passes `usedBy`, and each font is then checked against its own sizes.
  *
  * @returns `gaps` are sizes that will snap; `dropped` are the families baked past the engine's limit.
  */
 export function findSizeGaps({
   sizes = [],
   fonts = [],
+  usedBy,
 }: {
   /** Sizes the app uses (from analyzeFontSizes). */
   sizes?: number[];
   /** bakeFont() results or jobs; empty means built-in font only. */
   fonts?: SizedFont[];
+  /** The sizes each family draws, the built-in font's under BUILTIN_FAMILY; replaces `sizes`. */
+  usedBy?: ReadonlyMap<string, readonly number[]>;
 }): {gaps: SizeGap[]; dropped: DroppedSizes[]} {
-  const checked = fonts.length
-    ? fonts.map(font => ({family: font.family, baked: bakedSizes(font)}))
-    : [{family: BUILTIN_FAMILY, baked: [...BUILTIN_SIZES]}];
+  const imported = fonts.map(font => ({
+    family: font.family,
+    baked: bakedSizes(font),
+  }));
+  const builtin = {family: BUILTIN_FAMILY, baked: [...BUILTIN_SIZES]};
+  const checked = usedBy
+    ? [...imported, ...(usedBy.has(BUILTIN_FAMILY) ? [builtin] : [])]
+    : fonts.length
+      ? imported
+      : [builtin];
 
   const gaps: SizeGap[] = [];
   const dropped: DroppedSizes[] = [];
@@ -637,7 +648,7 @@ export function findSizeGaps({
         registered: live,
         ignored: baked.slice(MAX_BAKED_SIZES),
       });
-    for (const size of sizes)
+    for (const size of usedBy ? (usedBy.get(family) ?? []) : sizes)
       if (!live.includes(size))
         gaps.push({
           size,
@@ -728,11 +739,13 @@ export function formatFontSizeReport({
 
 /** The config (or design) change that closes a set of gaps. */
 function gapFix(gaps: SizeGap[], fonts: SizedFont[]): string {
-  if (!fonts.length) {
-    return (
+  const fixes: string[] = [];
+  const builtinGaps = gaps.filter(gap => gap.family === BUILTIN_FAMILY);
+  if (builtinGaps.length) {
+    fixes.push(
       `  fix: the built-in font is baked at ${sizeList(BUILTIN_SIZES)} — use one of those sizes, or ` +
-      `import a .ttf/.otf\n       and bake your own (assets.config.js → fonts: ` +
-      `{<Family>: {sizes: ${sizeList(new Set(gaps.map(gap => gap.size)))}}})`
+        `import a .ttf/.otf\n       and bake your own (assets.config.js → fonts: ` +
+        `{<Family>: {sizes: ${sizeList(new Set(builtinGaps.map(gap => gap.size)))}}})`,
     );
   }
   const perFamily = fonts
@@ -745,7 +758,10 @@ function gapFix(gaps: SizeGap[], fonts: SizedFont[]): string {
       return `${configKey(font.family)}: {sizes: ${sizeList(wanted)}}`;
     })
     .filter(Boolean);
-  return `  fix: assets.config.js → fonts: {${perFamily.join(', ')}}`;
+  if (perFamily.length) {
+    fixes.push(`  fix: assets.config.js → fonts: {${perFamily.join(', ')}}`);
+  }
+  return fixes.join('\n');
 }
 
 let lastWarning: string | null = null; // dev loops re-bake on every save — don't reprint an unchanged warning
@@ -759,17 +775,20 @@ let lastWarning: string | null = null; // dev loops re-bake on every save — do
 export function warnFontSizes({
   used,
   fonts = [],
+  usedBy,
   log = console.warn,
 }: {
   /** analyzeFontSizes() result. */
   used: Partial<FontSizeUsage> | null | undefined;
   /** bakeFont() results or jobs; empty means built-in font only. */
   fonts?: SizedFont[];
+  /** The sizes each family draws (see findSizeGaps); replaces the sizes in `used`. */
+  usedBy?: ReadonlyMap<string, readonly number[]>;
   /** Sink for the warning. */
   log?: (text: string) => void;
 }): {gaps: SizeGap[]; dropped: DroppedSizes[]} {
   const {sizes = [], dynamic = []} = used ?? {};
-  const {gaps, dropped} = findSizeGaps({sizes, fonts});
+  const {gaps, dropped} = findSizeGaps({sizes, fonts, usedBy});
   const text = formatFontSizeReport({gaps, dropped, dynamic, fonts});
   if (text && text !== lastWarning) log(text);
   lastWarning = text || null;

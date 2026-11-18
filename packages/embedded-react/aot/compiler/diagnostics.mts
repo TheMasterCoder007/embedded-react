@@ -74,6 +74,7 @@ export const ENGINE_STRING_MAX = {
   ER_SPAN_TEXT_MAX: 63,
   ER_PLACEHOLDER_MAX: 63,
   ER_IMAGE_NAME_MAX: 63,
+  ER_FONT_FAMILY_MAX: 31,
 } as const;
 
 /**

@@ -23,6 +23,7 @@ import type {Out} from '../out.mts';
 import type {
   AnimRecord,
   AssetImport,
+  FontUse,
   RefRecord,
   StateRecord,
 } from '../types.mts';
@@ -48,6 +49,8 @@ export interface IrApp {
   root: IrElement;
   /** The image imports the app reaches, which the CLI bakes. */
   images: AssetImport[];
+  /** The fonts the app's text is drawn in and the sizes of each, which the CLI bakes the imported ones at. */
+  fonts: FontUse[];
   /** The values the build works out from the panel size, and what the build assumed of the panel. */
   boot: IrBoot;
   /** The values lowering recorded for the check pass, in order. */
