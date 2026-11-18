@@ -733,6 +733,8 @@ static void buffer_sync_cb(const ERRect* rects, int count, void* ctx)
             s_ctx.regs->OOR = (uint32_t)(s_ctx.panel_stride_pixels - rect.width);
             s_ctx.regs->NLR = ((uint32_t)rect.width << DMA2D_NLR_PL_SHIFT) | (uint32_t)rect.height;
             launch(DMA2D_CR_MODE_M2M);
+            /* Rendering during the copy puts the CPU on the SDRAM bus too, and the LTDC underruns. */
+            wait_pending();
             continue;
         }
 
@@ -805,7 +807,7 @@ bool er_dma2d_backend_init(const ErDma2dBackendConfig* config)
     s_backend.wait = wait_cb;
     s_backend.context = &s_ctx;
     /* A render buffer is single-buffered: there is no second framebuffer to copy from. */
-    if (!config->render_buffer)
+    if (!config->no_buffer_sync && !config->render_buffer)
         s_backend.buffer_sync = buffer_sync_cb;
     if (banded)
     {
