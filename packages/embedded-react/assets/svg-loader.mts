@@ -17,16 +17,19 @@
 // esbuild loader for `import logo from './logo.svg'`. Two outcomes, decided at bake time:
 //   - VECTOR: the SVG is fully representable as the engine's op-tape — bake it and INLINE a
 //     {kind:'vector', ops, paints, gradients, width, height} artifact (small numeric data) into the bundle.
-//   - RASTER: the SVG uses features the vector baker can't represent (text, mask, filter, use,
+//   - RASTER: the SVG uses features the vector baker can't represent (mask, filter, use,
 //     pattern, …). We warn, rasterize the whole SVG via resvg to a PNG, register that PNG through the
 //     bundler's normal image pipeline (a small `addRasterAsset(name, pngPath)` callback), and inline a
 //     {kind:'raster', name, width, height} artifact. A <Svg source> renders kind:'vector' as a vector node
 //     and kind:'raster' as an image node (host-config), so the fallback is transparent to the app.
+// Text bakes to outlines from a font file beside the .svg, in a `fonts` folder next to it, or imported by
+// the file that imports the .svg.
 // Shared by every Flow A bundler so the .svg handling lives in one place.
 import {readFileSync} from 'node:fs';
-import {basename} from 'node:path';
+import {basename, dirname, resolve} from 'node:path';
 import type {PluginBuild} from 'esbuild';
 import {svgToVector, svgToRaster, writeRasterPng} from './bake-svg.mts';
+import {importedFonts, svgFontSearch} from './svg-text.mts';
 
 const assetName = (filePath: string) =>
   basename(filePath).replace(/\.[^.]+$/, '');
@@ -43,10 +46,35 @@ export function registerSvgVectorLoader(
   build: PluginBuild,
   addRasterAsset?: (name: string, pngPath: string) => void,
 ): void {
+  // The files that import each .svg; their font imports serve its text.
+  const importers = new Map<string, Set<string>>();
+  build.onResolve({filter: /\.svg$/i}, args => {
+    if (args.importer && args.path.startsWith('.')) {
+      const svgPath = resolve(args.resolveDir, args.path);
+      if (!importers.has(svgPath)) importers.set(svgPath, new Set());
+      importers.get(svgPath)!.add(args.importer);
+    }
+    return undefined;
+  });
+
   build.onLoad({filter: /\.svg$/i}, async args => {
     try {
       const svg = readFileSync(args.path, 'utf8');
-      const {dropped = [], ...vector} = await svgToVector(svg);
+      const fonts = new Map<string, string>();
+      if (/<text\b/.test(svg)) {
+        for (const importer of importers.get(args.path) ?? []) {
+          const imported = importedFonts(
+            readFileSync(importer, 'utf8'),
+            dirname(importer),
+          );
+          for (const [family, path] of imported) fonts.set(family, path);
+        }
+      }
+      const {
+        dropped = [],
+        fonts: rasterFonts,
+        ...vector
+      } = await svgToVector(svg, svgFontSearch(args.path, fonts));
       if (dropped.length) {
         const features = dropped.join(', ');
         if (addRasterAsset) {
@@ -55,7 +83,7 @@ export function registerSvgVectorLoader(
               `it as a fallback image. (Raster loses scalability and costs RAM; simplify the SVG to keep it a ` +
               `live vector.)`,
           );
-          const {width, height, png} = await svgToRaster(svg);
+          const {width, height, png} = await svgToRaster(svg, rasterFonts);
           const name = assetName(args.path);
           addRasterAsset(name, writeRasterPng(name, png));
           return {

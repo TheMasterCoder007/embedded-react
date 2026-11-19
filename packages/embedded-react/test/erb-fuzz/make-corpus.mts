@@ -26,6 +26,7 @@ import {fileURLToPath} from 'node:url';
 
 import {
   bakeSvgArtifacts,
+  bakeSvgTextPaths,
   compilePackage,
   packPackage,
   readNativeFiles,
@@ -77,8 +78,11 @@ const SEEDS: Seed[] = [
 
 /** Compiles one seed to its package's bytes. */
 async function compileSeed(seed: Seed): Promise<Uint8Array> {
-  const source = readFileSync(seed.file, 'utf8');
   const sourceDirectory = dirname(seed.file);
+  const source = bakeSvgTextPaths(
+    readFileSync(seed.file, 'utf8'),
+    sourceDirectory,
+  );
   const packaged = compilePackage(source, seed.name, {
     filename: seed.file,
     listCap: seed.listCap,

@@ -36,6 +36,8 @@ export type IrCheckSubject =
   | {kind: 'interpolationPoints'; count: number}
   /** The inline segments of a <Text>, and the most the engine draws. */
   | {kind: 'textSpans'; count: number; max: number}
+  /** The values in one <Svg>'s tape. */
+  | {kind: 'vectorTape'; count: number; max: number}
   /** The stops of an <Svg> shape's gradient, by the attribute that holds it. */
   | {kind: 'gradientStops'; attribute: string; count: number}
   /** The stops a <Dial indicatorGradient> has. */
@@ -169,6 +171,15 @@ export function checkProblem(subject: IrCheckSubject): AotError | null {
             `combine adjacent plain-text segments, or end the sentence right after a styled ` +
               `<Text> (e.g. "A <b>B</b> C <b>D</b>" is 4). If your engine build raised ` +
               `ER_TEXT_MAX_SPANS, set ER_AOT_MAX_TEXT_SPANS to match when running the AOT.`,
+          )
+        : null;
+    case 'vectorTape':
+      return subject.count > subject.max
+        ? aotError(
+            `AOT: an <Svg> draws ${subject.count} tape values but the engine holds at most ${subject.max}`,
+            'simplify the drawing, or split it over several <Svg>s; outlined text is the costly part. If ' +
+              'your engine build raised ERUI_VECTOR_TAPE_MAX, set ER_AOT_VECTOR_TAPE_MAX to match when ' +
+              'running the AOT.',
           )
         : null;
     case 'gradientStops':

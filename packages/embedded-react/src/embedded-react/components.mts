@@ -40,6 +40,8 @@ export const Ellipse = 'Ellipse';
 export const Rect = 'Rect';
 export const Line = 'Line';
 export const G = 'G';
+// Text drawn as glyph outlines. The build bakes it to a path, so it reaches the device with a `d`.
+export const SvgText = 'SvgText';
 // Arc convenience primitive (not a standard SVG element): a circular arc given a center, radius, and
 // start/end angles in DEGREES clockwise from 12 o'clock. Flattens to a native arc op — cheap to update.
 export const Arc = 'Arc';

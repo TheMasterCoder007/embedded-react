@@ -15,7 +15,21 @@
  */
 
 import {describe, it, expect} from 'vitest';
-import {svgToVector} from '../bake-svg.mts';
+import {dirname, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {PNG} from 'pngjs';
+import {svgToRaster, svgToVector} from '../bake-svg.mts';
+
+// Inter-Regular.ttf and Inter-Bold.ttf.
+const FONTS = {
+  imports: new Map(),
+  directories: [
+    resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../../../assets/fonts',
+    ),
+  ],
+};
 
 const SHAPE = 0;
 const MOVE = 1;
@@ -273,11 +287,11 @@ describe('svgToVector — dropped-feature detection (raster-fallback trigger)', 
     expect(artifact.dropped).toEqual([]);
   });
 
-  it('flags unsupported visual elements (text/image/use) but not metadata/defs/gradients', async () => {
+  it('flags unsupported visual elements (image/use) but not metadata/defs/gradients', async () => {
     const artifact = await svgToVector(
-      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><text x="0" y="9">hi</text></svg>',
+      '<svg viewBox="0 0 10 10"><title>t</title><defs></defs><rect width="10" height="10"/><image href="a.png"/></svg>',
     );
-    expect(artifact.dropped).toEqual(['text']); // title/defs ignored; rect baked; text recorded
+    expect(artifact.dropped).toEqual(['image']); // title/defs ignored; rect baked; image recorded
   });
 
   it('flags a filter/mask/clip-path applied to an otherwise-bakeable shape', async () => {
@@ -369,5 +383,185 @@ describe('svgToVector — <rect rx/ry>', () => {
       10,
       CLOSE,
     ]);
+  });
+});
+
+describe('svgToVector — text', () => {
+  const text = (attributes, content = 'N') =>
+    svgToVector(
+      `<svg viewBox="0 0 100 100"><text font-family="Inter" font-size="20" ${attributes}>${content}</text></svg>`,
+      FONTS,
+    );
+
+  // The x and y extent of a tape's coordinates.
+  function bounds(ops) {
+    const args = {
+      [SHAPE]: 1,
+      [MOVE]: 2,
+      [LINE]: 2,
+      [QUAD]: 4,
+      [CUBIC]: 6,
+      [CLOSE]: 0,
+    };
+    const xs = [];
+    const ys = [];
+    let index = 0;
+    while (index < ops.length) {
+      const opcode = ops[index++];
+      if (opcode !== SHAPE) {
+        for (let offset = 0; offset < args[opcode]; offset += 2) {
+          xs.push(ops[index + offset]);
+          ys.push(ops[index + offset + 1]);
+        }
+      }
+      index += args[opcode];
+    }
+    return {
+      left: Math.min(...xs),
+      right: Math.max(...xs),
+      top: Math.min(...ys),
+      bottom: Math.max(...ys),
+    };
+  }
+
+  it('bakes text to one filled shape of glyph outlines, with nothing dropped', async () => {
+    const artifact = await text('x="10" y="50" fill="red"');
+    expect(artifact.dropped).toEqual([]);
+    expect(
+      opcodes(artifact.ops).filter(opcode => opcode === SHAPE),
+    ).toHaveLength(1);
+    expect(artifact.paints[0]).toBe(RED);
+    const box = bounds(artifact.ops);
+    expect(box.left).toBeGreaterThanOrEqual(10);
+    expect(box.bottom).toBeCloseTo(50, 0); // an N sits on the baseline
+    expect(box.top).toBeGreaterThan(30); // and is under one font-size tall
+  });
+
+  it('honours text-anchor', async () => {
+    const start = bounds((await text('x="50" y="50"')).ops);
+    const middle = bounds(
+      (await text('x="50" y="50" text-anchor="middle"')).ops,
+    );
+    const end = bounds((await text('x="50" y="50" text-anchor="end"')).ops);
+    expect(start.left).toBeGreaterThanOrEqual(50);
+    expect((middle.left + middle.right) / 2).toBeCloseTo(50, 0);
+    expect(end.right).toBeLessThanOrEqual(50);
+  });
+
+  it('honours font-size and letter-spacing', async () => {
+    const small = bounds((await text('x="0" y="50"', 'NN')).ops);
+    const large = bounds((await text('x="0" y="50" font-size="40"', 'NN')).ops);
+    const spaced = bounds(
+      (await text('x="0" y="50" letter-spacing="10"', 'NN')).ops,
+    );
+    expect(large.bottom - large.top).toBeCloseTo(
+      2 * (small.bottom - small.top),
+      1,
+    );
+    expect(spaced.right - small.right).toBeCloseTo(10, 1);
+  });
+
+  it("honours font-weight with the family's file for that weight", async () => {
+    const regular = await text('x="0" y="50"');
+    const bold = await text('x="0" y="50" font-weight="bold"');
+    expect(bold.ops).not.toEqual(regular.ops);
+    await expect(text('x="0" y="50" font-weight="300"')).rejects.toThrow(
+      /no font for font-family "Inter" at weight 300: looked for Inter-Light, Inter/,
+    );
+  });
+
+  it('honours a transform on the element', async () => {
+    const turned = bounds(
+      (await text('x="50" y="50" transform="rotate(90 50 50)"')).ops,
+    );
+    // The baseline now runs down the page, with the glyph to its right.
+    expect(turned.left).toBeCloseTo(50, 0);
+    expect(turned.top).toBeGreaterThanOrEqual(50);
+  });
+
+  it('lays a tspan out after the text before it, as its own shape when its paint differs', async () => {
+    const artifact = await text('x="0" y="50"', 'N<tspan fill="red">N</tspan>');
+    expect(
+      opcodes(artifact.ops).filter(opcode => opcode === SHAPE),
+    ).toHaveLength(2);
+    expect(artifact.paints[9]).toBe(RED);
+    const same = await text('x="0" y="50"', 'N<tspan>N</tspan>');
+    expect(opcodes(same.ops).filter(opcode => opcode === SHAPE)).toHaveLength(
+      1,
+    );
+    expect(bounds(same.ops).right).toBeCloseTo(bounds(artifact.ops).right, 3);
+  });
+
+  it('collapses whitespace around and inside the text', async () => {
+    const plain = await text('x="0" y="50"', 'N N');
+    const padded = await text('x="0" y="50"', '\n  N \n  N  ');
+    expect(padded.ops).toEqual(plain.ops);
+  });
+
+  it('fails with the family when no font file matches', async () => {
+    await expect(
+      svgToVector(
+        '<svg><text font-family="Nope, sans-serif">N</text></svg>',
+        FONTS,
+      ),
+    ).rejects.toThrow(
+      /no font for font-family "Nope": looked for Nope, Nope-Regular/,
+    );
+    await expect(
+      svgToVector('<svg><text>N</text></svg>', FONTS),
+    ).rejects.toThrow(/needs a font-family/);
+  });
+
+  it('fails when the font lacks a character', async () => {
+    await expect(text('x="0" y="50"', '日')).rejects.toThrow(
+      /Inter\.ttf has no glyph for "日"|has no glyph for "日"/,
+    );
+  });
+
+  it('leaves text it cannot lay out to the raster fallback', async () => {
+    expect((await text('x="0" y="50" rotate="20"')).dropped).toEqual([
+      'text rotate',
+    ]);
+    expect((await text('x="0 12" y="50"', 'NN')).dropped).toEqual([
+      'text x list',
+    ]);
+    expect(
+      (await text('', '<textPath href="#p">N</textPath>')).dropped,
+    ).toEqual(['textPath']);
+  });
+
+  it('checks the font and glyphs of text it leaves to the raster fallback', async () => {
+    await expect(
+      svgToVector(
+        '<svg><text font-family="Nope" rotate="20">N</text></svg>',
+        FONTS,
+      ),
+    ).rejects.toThrow(/no font for font-family "Nope"/);
+    await expect(text('x="0" y="50" rotate="20"', '日')).rejects.toThrow(
+      /has no glyph for "日"/,
+    );
+  });
+
+  it("draws the raster fallback with the text's own font files, not the machine's", async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">' +
+      '<text x="4" y="30" font-family="Inter" font-size="30" rotate="20">N</text></svg>';
+    const artifact = await svgToVector(svg, FONTS);
+    expect(artifact.dropped).toEqual(['text rotate']);
+    expect(artifact.fonts.files).toEqual([
+      resolve(FONTS.directories[0], 'Inter-Regular.ttf'),
+    ]);
+
+    // How many pixels a render inked.
+    const inked = async fonts => {
+      const {data} = PNG.sync.read((await svgToRaster(svg, fonts)).png);
+      let count = 0;
+      for (let index = 3; index < data.length; index += 4) {
+        if (data[index] > 0) count++;
+      }
+      return count;
+    };
+    expect(await inked(artifact.fonts)).toBeGreaterThan(50);
+    expect(await inked(undefined)).toBe(0);
   });
 });

@@ -272,6 +272,7 @@ export interface Caps {
   listStrCap: number;
   maxTextSpans: number;
   maxTimers: number;
+  maxVectorTape: number;
 }
 
 /**

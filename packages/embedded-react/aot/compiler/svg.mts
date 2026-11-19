@@ -177,7 +177,7 @@ function checkShape(child: t.JSXElement): void {
     throw at(
       aotError(
         `AOT: <${tag ?? 'this element'}> is not a shape an <Svg> draws`,
-        'an <Svg> draws Path, Circle, Ellipse, Rect, Line and Arc, grouped by G. A component is not ' +
+        'an <Svg> draws Path, Circle, Ellipse, Rect, Line, Arc and SvgText, grouped by G. A component is not ' +
           'rendered inside one: inline its shapes.',
       ),
       child,
@@ -386,12 +386,27 @@ export function checkVectorPaints(paints: IrVectorPaint[]): void {
 }
 
 /**
+ * Refuses a tape longer than the engine holds for one <Svg>, which the board would reject at load.
+ *
+ * @param count  The tape's values.
+ * @param environment  The compile's environment.
+ */
+function checkTapeSize(count: number, environment: Env): void {
+  check({
+    kind: 'vectorTape',
+    count,
+    max: environment.caps.maxVectorTape,
+  });
+}
+
+/**
  * Refuses baked tables holding a number that isn't finite, in the order the tables are written: the ops, the
  * paints, then each gradient's kept stops, and geometry. An empty tape has no tables to check.
  *
  * @param tables  The drawing.
+ * @param environment  The compile's environment.
  */
-function checkVectorTables(tables: IrVectorTables): void {
+function checkVectorTables(tables: IrVectorTables, environment: Env): void {
   if (!tables.ops.length) return;
   for (const word of tables.ops) {
     checkNumber(word);
@@ -406,6 +421,7 @@ function checkVectorTables(tables: IrVectorTables): void {
       checkNumber(field || 0);
     }
   }
+  checkTapeSize(tables.ops.length, environment);
 }
 
 /**
@@ -1560,6 +1576,7 @@ function emitSvgScaled(
     tapeNumber(0.5),
   ]);
   const nodeId = `n${output.allocateNodeId()}`;
+  checkTapeSize(tape.length, environment);
   const vector: IrStateDrivenVector = {
     id: output.svgCount++,
     locals: [
@@ -1639,7 +1656,7 @@ function emitSvgStatic(
     paints: paintsOf(paints),
     gradients,
   };
-  checkVectorTables(tables);
+  checkVectorTables(tables, environment);
   output.vectors.push({kind: 'tables', tables});
 
   // Create the vector node and point it at the tables.
@@ -1796,7 +1813,7 @@ function emitSvgSource(
     paints: paintsOf(scaled.paints),
     gradients: scaled.gradients || [],
   };
-  checkVectorTables(tables);
+  checkVectorTables(tables, environment);
   output.vectors.push({kind: 'tables', tables});
 
   // Create the vector node and point it at the tables.
@@ -1883,6 +1900,7 @@ function emitSvgDynamic(
           when: shapeGradient.when,
         }
       : {index: 0, when: null};
+  checkTapeSize(tape.length, environment);
   const vector: IrStateDrivenVector = {
     id: svgId,
     locals,

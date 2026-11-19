@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" font-family="Inter" font-size="12" text-anchor="middle">
+  <circle cx="50" cy="50" r="46" fill="#101820" stroke="#607080" stroke-width="2"/>
+  <text x="50" y="18" font-weight="bold" fill="#ff5040">N</text>
+  <text x="50" y="18" fill="#ffffff" transform="rotate(90 50 50)">E</text>
+  <g fill="#ffffff">
+    <text x="50" y="18" transform="rotate(180 50 50)">S</text>
+    <text x="50" y="18" transform="rotate(270 50 50)">W</text>
+  </g>
+  <text x="50" y="54" font-size="9" letter-spacing="1" fill="#a0b0c0">
+    1<tspan fill="#ff5040" font-weight="bold">2</tspan>
+    <tspan x="50" dy="10" font-size="6">t</tspan>
+  </text>
+</svg>

@@ -49,6 +49,7 @@ import {loadAppFile, loadDependencyFile} from '../../aot/app-file-loader.mts';
 
 import {
   bakeSvgArtifacts,
+  bakeSvgTextPaths,
   compilePackage,
   packPackage,
   readNativeFiles,
@@ -1404,6 +1405,13 @@ const SCENARIOS: Scenario[] = [
   {name: 'sizes', file: fixture('sizes'), screen: PORTRAIT},
   {name: 'svg-paint', file: fixture('svg-paint'), screen: PORTRAIT},
   {name: 'svg-source', file: fixture('svg-source'), screen: PORTRAIT},
+  // Text baked to outlines: inline, which Flow A draws the same, and from a .svg file.
+  {name: 'svg-text', file: fixture('svg-text'), screen: PORTRAIT, flowA: true},
+  {
+    name: 'svg-text-source',
+    file: fixture('svg-text-source'),
+    screen: PORTRAIT,
+  },
   {name: 'hooks', file: fixture('hooks'), screen: PORTRAIT},
   {
     name: 'hooks-taps',
@@ -1562,8 +1570,11 @@ function diffFrames(
 async function compileScenario(
   scenario: Scenario,
 ): Promise<{packagePath: string; report: string[]}> {
-  const source = readFileSync(scenario.file, 'utf8');
   const sourceDirectory = dirname(scenario.file);
+  const source = bakeSvgTextPaths(
+    readFileSync(scenario.file, 'utf8'),
+    sourceDirectory,
+  );
   const size = ([width, height]: Size): Screen => ({width, height});
   const packaged = compilePackage(source, scenario.name, {
     filename: scenario.file,

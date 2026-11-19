@@ -15,8 +15,8 @@
  */
 
 /*
- * Flow A's esbuild loader for an app's own files. It gives each nativeModule() call its methods' signatures, which
- * the bundle's erased types can't, and in the simulators its mock, then runs the bundler's own transform when it has
+ * Flow A's esbuild loader for an app's own files. It bakes each <SvgText> to outlines and gives each nativeModule()
+ * call its methods' signatures, which the bundle's erased types can't, and in the simulators its mock, then runs the bundler's own transform when it has
  * one. esbuild runs one onLoad per file, so a bundler that transforms the app's files calls this from its own, and
  * loadDependencyFile for every other file, since a package may declare native modules too.
  */
@@ -53,11 +53,16 @@ export async function loadAppFile(
   let contents = source;
   // A mock added later rebuilds the app.
   const watchFiles: string[] = [];
-  if (/\bnativeModule\b/.test(source)) {
-    const {addNativeSignatures} = await import('./compiler/native-modules.mts');
-    const {nativeMockFiles, readNativeFiles} =
-      await import('./compiler/native-files.mts');
-    try {
+  try {
+    if (/\bSvgText\b/.test(source)) {
+      const {bakeSvgTextElements} = await import('./svg-text-elements.mts');
+      contents = bakeSvgTextElements(source, dirname(path));
+    }
+    if (/\bnativeModule\b/.test(source)) {
+      const {addNativeSignatures} =
+        await import('./compiler/native-modules.mts');
+      const {nativeMockFiles, readNativeFiles} =
+        await import('./compiler/native-files.mts');
       let mocks: Map<string, string | null> | undefined;
       if (options.mocks) {
         mocks = new Map();
@@ -76,31 +81,31 @@ export async function loadAppFile(
         }
       }
       contents = addNativeSignatures(
-        source,
+        contents,
         readNativeFiles(source, dirname(path)),
         mocks,
       );
-    } catch (error) {
-      const aotError = error as AotError & {code?: string};
-      // A syntax error is esbuild's to report.
-      if (aotError.code !== 'BABEL_PARSER_SYNTAX_ERROR') {
-        if (!aotError.message?.startsWith('AOT:')) throw error;
-        return {
-          errors: [
-            {
-              text: aotError.message.replace(/^AOT: /, ''),
-              location: aotError.aotLoc
-                ? {
-                    file: path,
-                    line: aotError.aotLoc.line,
-                    column: aotError.aotLoc.column,
-                  }
-                : null,
-              notes: aotError.aotHint ? [{text: aotError.aotHint}] : [],
-            },
-          ],
-        };
-      }
+    }
+  } catch (error) {
+    const aotError = error as AotError & {code?: string};
+    // A syntax error is esbuild's to report.
+    if (aotError.code !== 'BABEL_PARSER_SYNTAX_ERROR') {
+      if (!aotError.message?.startsWith('AOT:')) throw error;
+      return {
+        errors: [
+          {
+            text: aotError.message.replace(/^AOT: /, ''),
+            location: aotError.aotLoc
+              ? {
+                  file: path,
+                  line: aotError.aotLoc.line,
+                  column: aotError.aotLoc.column,
+                }
+              : null,
+            notes: aotError.aotHint ? [{text: aotError.aotHint}] : [],
+          },
+        ],
+      };
     }
   }
   if (transform) {

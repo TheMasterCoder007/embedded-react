@@ -16,21 +16,39 @@
 
 import {describe, it, expect, vi} from 'vitest';
 import {build} from 'esbuild';
-import {existsSync, mkdtempSync, writeFileSync} from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {registerSvgVectorLoader} from '../svg-loader.mts';
 
 // `assets` (optional) = a Map the loader registers raster-fallback PNGs into (name -> png path), mirroring a
 // real bundler's image collection. When omitted, the loader has no raster fallback (vector-only).
+const FONTS = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../../../assets/fonts',
+);
+
+// `fonts` (optional) = font files copied in before the build: path in the app → file in assets/fonts.
 async function bundleWithSvg(
   svg,
   {
     entry = `import icon from './icon.svg'; globalThis.__icon = icon;`,
     assets,
+    fonts = {},
   } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), 'svgld-'));
+  for (const [path, file] of Object.entries(fonts)) {
+    mkdirSync(dirname(join(directory, path)), {recursive: true});
+    copyFileSync(join(FONTS, file), join(directory, path));
+  }
   writeFileSync(join(directory, 'icon.svg'), svg);
   writeFileSync(join(directory, 'entry.js'), entry);
   const addRaster = assets ? (name, path) => assets.set(name, path) : undefined;
@@ -43,7 +61,13 @@ async function bundleWithSvg(
     plugins: [
       {
         name: 'svg',
-        setup: pluginBuild => registerSvgVectorLoader(pluginBuild, addRaster),
+        setup: pluginBuild => {
+          registerSvgVectorLoader(pluginBuild, addRaster);
+          pluginBuild.onLoad({filter: /\.ttf$/}, () => ({
+            contents: 'module.exports = "font";',
+            loader: 'js',
+          }));
+        },
       },
     ],
   });
@@ -75,12 +99,11 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
     await expect(bundleWithSvg('<svg><path d="M0 0"')).rejects.toThrow(); // malformed XML
   });
 
-  // The timeout: resvg loads the system fonts to draw text, which can take a cold CI runner over 5 s.
   it('falls back to a raster image artifact when the SVG uses unsupported features', async () => {
     const assets = new Map();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const artifact = await bundleWithSvg(
-      '<svg viewBox="0 0 20 20" width="20" height="20"><text x="2" y="10">hi</text></svg>',
+      '<svg viewBox="0 0 20 20" width="20" height="20"><rect width="9" height="9" mask="url(#m)"/></svg>',
       {assets},
     );
     warn.mockRestore();
@@ -97,18 +120,48 @@ describe('svg-loader (esbuild .svg → inline vector artifact)', () => {
 
   it('warns when an unsupported SVG has no raster fallback, and still bakes the vector subset', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    // No `assets` map → no raster fallback available; the <text> is dropped, the <rect> still bakes.
+    // No `assets` map → no raster fallback available; the <image> is dropped, the <rect> still bakes.
     const artifact = await bundleWithSvg(
-      '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="lime"/><text>x</text></svg>',
+      '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="lime"/><image href="a.png"/></svg>',
     );
     const warned = warn.mock.calls.some(
       call =>
         /unsupported SVG feature/.test(String(call[0])) &&
-        /text/.test(String(call[0])),
+        /image/.test(String(call[0])),
     );
     warn.mockRestore();
     const art = evalArtifact(artifact);
     expect(art.kind).toBe('vector'); // degrades to the vector subset (the rect)
-    expect(warned).toBe(true); // but the dropped <text> is surfaced, not silent
+    expect(warned).toBe(true); // but the dropped <image> is surfaced, not silent
+  });
+
+  const LABEL =
+    '<svg viewBox="0 0 40 20"><text x="2" y="14" font-family="Inter" font-size="12">N</text></svg>';
+
+  it('bakes text from a font file in the fonts folder beside the .svg', async () => {
+    const artifact = evalArtifact(
+      await bundleWithSvg(LABEL, {
+        fonts: {'fonts/Inter.ttf': 'Inter-Regular.ttf'},
+      }),
+    );
+    expect(artifact.kind).toBe('vector');
+    expect(artifact.ops.length).toBeGreaterThan(2);
+  });
+
+  it('bakes text from a font the importing file imports', async () => {
+    const artifact = evalArtifact(
+      await bundleWithSvg(LABEL, {
+        fonts: {'type/Inter.ttf': 'Inter-Regular.ttf'},
+        entry: `import Inter from './type/Inter.ttf'; import icon from './icon.svg'; globalThis.__icon = icon;`,
+      }),
+    );
+    expect(artifact.kind).toBe('vector');
+    expect(artifact.ops.length).toBeGreaterThan(2);
+  });
+
+  it('fails the build with the family when its font is missing', async () => {
+    await expect(bundleWithSvg(LABEL)).rejects.toThrow(
+      /no font for font-family "Inter"/,
+    );
   });
 });

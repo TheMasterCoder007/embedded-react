@@ -41,6 +41,7 @@ beforeEach(() => {
     'ER_AOT_LIST_STR_CAP',
     'ER_AOT_MAX_TEXT_SPANS',
     'ER_AOT_MAX_TIMERS',
+    'ER_AOT_VECTOR_TAPE_MAX',
   ]) {
     vi.stubEnv(name, undefined);
   }
