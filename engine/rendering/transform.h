@@ -485,10 +485,24 @@ static inline bool er_node_has_complex_transform(const ERNode* node)
 }
 
 /**
+ * @brief Whether an `<Image>` can be sampled through a matrix: every resize mode but `repeat`, with square corners.
+ *
+ * @param[in] node  An ER_NODE_IMAGE node.
+ */
+static inline bool er_image_node_samples_directly(const ERNode* node)
+{
+    const ERImageProps* image = &node->props.image;
+    return image->resize_mode != ER_RESIZE_REPEAT && image->border_top_left_radius <= 0
+           && image->border_top_right_radius <= 0 && image->border_bottom_right_radius <= 0
+           && image->border_bottom_left_radius <= 0;
+}
+
+/**
  * @brief Whether a node paints its own transform, with no capture and so at any size.
  *
- * An `<Svg>` under a 2D transform: its rasteriser takes the matrix. The damage pre-pass, the render pass and
- * hit-testing all ask this, so they agree on which nodes need the transform source and which never do.
+ * An `<Svg>` under a 2D transform: its rasteriser takes the matrix. An `<Image>` under one: its asset is
+ * sampled through the inverse matrix, unless it tiles or has rounded corners. The damage pre-pass, the render
+ * pass and hit-testing all ask this, so they agree on which nodes need the transform source and which never do.
  * A 3D transform still goes through the capture.
  *
  * @param[in] node  Node to inspect.
@@ -498,7 +512,9 @@ static inline bool er_node_has_complex_transform(const ERNode* node)
 static inline bool er_node_transforms_directly(const ERNode* node)
 {
 #if ERUI_TRANSFORMS_FULL
-    if (node->type != ER_NODE_VECTOR || !er_node_has_complex_transform(node))
+    const bool direct_type =
+        node->type == ER_NODE_VECTOR || (node->type == ER_NODE_IMAGE && er_image_node_samples_directly(node));
+    if (!direct_type || !er_node_has_complex_transform(node))
         return false;
 #if ERUI_3D_TRANSFORMS
     if (er_transform_is_3d(node))

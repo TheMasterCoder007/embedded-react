@@ -168,6 +168,14 @@ target_include_directories(test_vector_transform PRIVATE ${CMAKE_CURRENT_SOURCE_
         ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
 add_test(NAME rendering_vector_transform COMMAND test_vector_transform)
 
+add_executable(test_image_transform test_image_transform.c)
+target_link_libraries(test_image_transform PRIVATE embedded-react)
+# test_image_transform needs engine/rendering for image_scaler.h (a private engine header), engine/scene for the
+# er_node_internal.h it pulls in, and engine/core for renderer_internal.h (er_force_full_repaint).
+target_include_directories(test_image_transform PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../rendering
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../scene ${CMAKE_CURRENT_SOURCE_DIR}/../../core)
+add_test(NAME rendering_image_transform COMMAND test_image_transform)
+
 add_executable(test_display_none test_display_none.c)
 target_link_libraries(test_display_none PRIVATE embedded-react)
 add_test(NAME rendering_display_none COMMAND test_display_none)

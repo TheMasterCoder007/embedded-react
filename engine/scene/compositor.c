@@ -374,9 +374,9 @@ typedef struct
                                         below it is in SOURCE space and reaches the screen only through that
                                         ancestor's inverse-map blit. */
     ERRect transform_capture_destination; /**< Where that blit writes — the ancestor's transformed screen AABB. */
-    bool vector_transform_active;         /**< The node about to be painted transforms directly, through the matrix
+    bool direct_transform_active;         /**< The node about to be painted transforms directly, through the matrix
                                         below. Consumed by its paint. */
-    ERVectorTransform vector_transform;
+    ERVectorTransform direct_transform;
 } CompCtx;
 
 static CompCtx s_composite_contexts[ERUI_RENDER_WORKERS];
@@ -2729,7 +2729,7 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
                 if (er_node_transforms_directly(node))
                 {
                     doing_direct = true;
-                    ERVectorTransform* direct = &cc()->vector_transform;
+                    ERVectorTransform* direct = &cc()->direct_transform;
                     direct->a = matrix_a;
                     direct->b = matrix_b;
                     direct->c = matrix_c;
@@ -2987,10 +2987,10 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
         const uint8_t saved_alpha = er_get_draw_alpha();
         if (node_opacity < ER_ALPHA_OPAQUE && should_render)
             er_set_draw_alpha((uint8_t)((uint32_t)saved_alpha * node_opacity / ER_ALPHA_OPAQUE));
-        cc()->vector_transform_active = doing_direct;
+        cc()->direct_transform_active = doing_direct;
         render_node_content(
             node, needs_paint, occluded, box_x, box_y, width, height, child_translate_x, child_translate_y);
-        cc()->vector_transform_active = false;
+        cc()->direct_transform_active = false;
         er_set_draw_alpha(saved_alpha);
     }
 
@@ -3036,6 +3036,41 @@ static void render_tree(ERNode* node, bool parent_dirty, bool occluded, int tran
         cc()->tile_active = saved_tile_active;
         cc()->transform_capturing = outer_capturing;
         cc()->transform_capture_destination = outer_destination;
+    }
+}
+
+/**
+ * @brief Narrows a node's screen bounds to the active scissor and, in a band strip, to the strip's rows.
+ *
+ * For the renderers that work row by row from a clip box, so they skip what cannot reach the backend.
+ *
+ * @param[in,out] left    Left edge.
+ * @param[in,out] top     Top edge.
+ * @param[in,out] right   Right edge (exclusive).
+ * @param[in,out] bottom  Bottom edge (exclusive).
+ */
+static void clip_to_damage(int* left, int* top, int* right, int* bottom)
+{
+    int clip_x, clip_y, clip_width, clip_height;
+    if (er_get_clip_rect(&clip_x, &clip_y, &clip_width, &clip_height))
+    {
+        if (clip_x > *left)
+            *left = clip_x;
+        if (clip_y > *top)
+            *top = clip_y;
+        if (clip_x + clip_width < *right)
+            *right = clip_x + clip_width;
+        if (clip_y + clip_height < *bottom)
+            *bottom = clip_y + clip_height;
+    }
+    /* A band strip only takes its own rows, so the others aren't rasterized. */
+    int band_top, band_bottom;
+    if (er_band_emit_rows(&band_top, &band_bottom))
+    {
+        if (band_top > *top)
+            *top = band_top;
+        if (band_bottom < *bottom)
+            *bottom = band_bottom;
     }
 }
 
@@ -3138,6 +3173,48 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
              * it to the border box, the silhouette a background with those radii would fill. */
             int image_x = box_x, image_y = box_y, image_width = width, image_height = height;
             er_layout_content_box(&node->layout, &image_x, &image_y, &image_width, &image_height);
+#if ERUI_TRANSFORMS_FULL
+            if (cc()->direct_transform_active)
+            {
+                /* A transformed node samples its asset through the matrix, inside its content box's
+                 * screen bounds. */
+                const ERVectorTransform* transform = &cc()->direct_transform;
+                cc()->direct_transform_active = false;
+                int clip_left, clip_top, bounds_width, bounds_height;
+                er_transform_aabb(image_x,
+                                  image_y,
+                                  image_width,
+                                  image_height,
+                                  transform->a,
+                                  transform->b,
+                                  transform->c,
+                                  transform->d,
+                                  transform->translate_x,
+                                  transform->translate_y,
+                                  &clip_left,
+                                  &clip_top,
+                                  &bounds_width,
+                                  &bounds_height);
+                int clip_right = clip_left + bounds_width, clip_bottom = clip_top + bounds_height;
+                clip_to_damage(&clip_left, &clip_top, &clip_right, &clip_bottom);
+                er_image_render_transformed(&node->props.image,
+                                            image_x,
+                                            image_y,
+                                            image_width,
+                                            image_height,
+                                            transform->inverse_a,
+                                            transform->inverse_b,
+                                            transform->inverse_c,
+                                            transform->inverse_d,
+                                            transform->inverse_translate_x,
+                                            transform->inverse_translate_y,
+                                            clip_left,
+                                            clip_top,
+                                            clip_right,
+                                            clip_bottom);
+                break;
+            }
+#endif
             const ERRect box = {box_x, box_y, width, height};
             er_image_render(&node->props.image, image_x, image_y, image_width, image_height, &box);
             break;
@@ -3163,8 +3240,8 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                     clip_bottom = vector_y + vector_height;
                 /* A transformed node paints through its matrix: the rasterizer clips ink to the turned
                  * content box, and the clip here is that box's screen bounds. */
-                ERVectorTransform* transform = cc()->vector_transform_active ? &cc()->vector_transform : NULL;
-                cc()->vector_transform_active = false;
+                ERVectorTransform* transform = cc()->direct_transform_active ? &cc()->direct_transform : NULL;
+                cc()->direct_transform_active = false;
                 if (transform)
                 {
                     transform->box_x0 = (float)clip_left;
@@ -3189,27 +3266,7 @@ static ER_NOINLINE void paint_node(ERNode* node, int box_x, int box_y, int width
                     clip_right = clip_left + bounds_width;
                     clip_bottom = clip_top + bounds_height;
                 }
-                int clip_x, clip_y, clip_width, clip_height;
-                if (er_get_clip_rect(&clip_x, &clip_y, &clip_width, &clip_height))
-                {
-                    if (clip_x > clip_left)
-                        clip_left = clip_x;
-                    if (clip_y > clip_top)
-                        clip_top = clip_y;
-                    if (clip_x + clip_width < clip_right)
-                        clip_right = clip_x + clip_width;
-                    if (clip_y + clip_height < clip_bottom)
-                        clip_bottom = clip_y + clip_height;
-                }
-                /* A band strip only takes its own rows, so the others aren't rasterized. */
-                int band_top, band_bottom;
-                if (er_band_emit_rows(&band_top, &band_bottom))
-                {
-                    if (band_top > clip_top)
-                        clip_top = band_top;
-                    if (band_bottom < clip_bottom)
-                        clip_bottom = band_bottom;
-                }
+                clip_to_damage(&clip_left, &clip_top, &clip_right, &clip_bottom);
                 /* Slot-keyed entry: an unchanged node replays its cached edge lists instead of
                  * re-tessellating the tape (ERUI_VECTOR_EDGE_CACHE). */
                 er_vector_render_slot(

@@ -48,7 +48,9 @@ buffer first; a render pass never allocates.
   It cannot be banded (a rotation reads across the whole source), so it caps the largest node you
   can rotate or scale. Damage inside a transformed subtree is whole-node: a change to one child
   repaints the node's entire transformed box. An `<Svg>` under a 2D transform does not use it: the
-  vector rasteriser applies the matrix to the shapes' edges and clips them to the turned box.
+  vector rasteriser applies the matrix to the shapes' edges and clips them to the turned box. Nor does an
+  `<Image>` under a 2D transform, unless it tiles or has rounded corners: each screen pixel is mapped back through the inverse
+  matrix and the asset is sampled bilinearly in place, a row at a time.
 - **Shadow plane**: `ERUI_SCRATCH_WIDTH × ERUI_SCRATCH_HEIGHT` bytes of coverage (`ERUI_SHADOWS` only).
 - **Fade cache** (optional, `ERUI_FADE_CACHE_WIDTH` and `ERUI_FADE_CACHE_HEIGHT`): keeps the last translucent group's composite so
   a pure opacity animation is one blend per frame instead of a re-render, roughly double the frame

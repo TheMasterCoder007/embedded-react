@@ -42,4 +42,51 @@
  */
 void er_image_render(const ERImageProps* props, int x, int y, int width, int height, const ERRect* box);
 
+#if ERUI_TRANSFORMS_FULL
+
+/**
+ * @brief Renders an Image node's bitmap through the node's affine transform, with no transform buffer.
+ *
+ * Each screen pixel is mapped back through the inverse matrix and the asset is sampled bilinearly in place.
+ * The resize mode sets the source crop and the rectangle it fills, as in er_image_render(), and the tint
+ * applies per sample. The image fades over one pixel at its edges. Output goes out a row at a time, so the
+ * node can be any size.
+ *
+ * `repeat` and rounded corners are not drawn here: er_node_transforms_directly() keeps those on the
+ * transform buffer.
+ *
+ * @param[in] props                Image node props carrying the asset name, resize_mode and tint_color.
+ * @param[in] x                    Content box left edge, in layout space.
+ * @param[in] y                    Content box top edge.
+ * @param[in] width                Content box width.
+ * @param[in] height               Content box height.
+ * @param[in] inverse_a            Inverse matrix [0,0], screen to layout.
+ * @param[in] inverse_b            Inverse matrix [1,0].
+ * @param[in] inverse_c            Inverse matrix [0,1].
+ * @param[in] inverse_d            Inverse matrix [1,1].
+ * @param[in] inverse_translate_x  Inverse translation X.
+ * @param[in] inverse_translate_y  Inverse translation Y.
+ * @param[in] clip_x0              Screen clip left edge: the node's screen bounds within the damage clip.
+ * @param[in] clip_y0              Screen clip top edge.
+ * @param[in] clip_x1              Screen clip right edge (exclusive).
+ * @param[in] clip_y1              Screen clip bottom edge (exclusive).
+ */
+void er_image_render_transformed(const ERImageProps* props,
+                                 int x,
+                                 int y,
+                                 int width,
+                                 int height,
+                                 float inverse_a,
+                                 float inverse_b,
+                                 float inverse_c,
+                                 float inverse_d,
+                                 float inverse_translate_x,
+                                 float inverse_translate_y,
+                                 int clip_x0,
+                                 int clip_y0,
+                                 int clip_x1,
+                                 int clip_y1);
+
+#endif /* ERUI_TRANSFORMS_FULL */
+
 #endif
