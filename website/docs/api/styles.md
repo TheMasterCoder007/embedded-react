@@ -102,8 +102,8 @@ style={{transform: [{rotate: '45deg'}, {scale: pulse}], transformOrigin: [0.5, 1
 ```
 
 `transform` is an array of `{scale}`, `{scaleX}`, `{scaleY}`, `{translateX}`, `{translateY}`,
-`{rotate}`, `{rotateX}`, `{rotateY}`, `{rotateZ}` or `{perspective}`. Rotations are CSS angle strings
-(`'45deg'`, `'0.5rad'`). Every axis except `perspective` can be an `Animated.Value`; `scale` binds
+`{rotate}`, `{rotateX}`, `{rotateY}`, `{rotateZ}` or `{perspective}`. A rotation is a CSS angle string
+(`'45deg'`, `'0.5rad'`) or a number of degrees. Every axis except `perspective` can be an `Animated.Value`; `scale` binds
 both axes at once. `transformOrigin` is a fractional `[x, y]` pivot in 0 to 1, default the centre.
 `rotateX`/`rotateY`/`perspective` need a build with `ERUI_3D_TRANSFORMS`.
 

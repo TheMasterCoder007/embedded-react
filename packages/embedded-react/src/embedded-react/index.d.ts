@@ -51,7 +51,7 @@ export type TransformOrigin = [number, number];
 
 /**
  * One transform entry. Every axis except `perspective` can be driven by an animated value; `scale` binds
- * both axes at once. Rotations are CSS angle strings ('45deg', '0.5rad').
+ * both axes at once. A rotation is a CSS angle string ('45deg', '0.5rad') or a number of degrees.
  */
 export type TransformStyle =
   | {scale: number | AnimatedNode}
@@ -59,10 +59,10 @@ export type TransformStyle =
   | {scaleY: number | AnimatedNode}
   | {translateX: number | AnimatedNode}
   | {translateY: number | AnimatedNode}
-  | {rotate: string | AnimatedNode}
-  | {rotateX: string | AnimatedNode}
-  | {rotateY: string | AnimatedNode}
-  | {rotateZ: string | AnimatedNode}
+  | {rotate: string | number | AnimatedNode}
+  | {rotateX: string | number | AnimatedNode}
+  | {rotateY: string | number | AnimatedNode}
+  | {rotateZ: string | number | AnimatedNode}
   | {perspective: number};
 
 /**
