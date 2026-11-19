@@ -57,6 +57,9 @@ import {
   DEFAULT_FONT_SIZE,
   anchorOffset,
   baselineShift,
+  checkGlyphs,
+  fontFamilyName,
+  fontFile,
   parseFontFamilies,
   parseFontWeight,
   parseLetterSpacing,
@@ -66,6 +69,7 @@ import {
   runOps,
 } from './svg-text.mts';
 import type {FontSearch, TextAnchor, TextRun} from './svg-text.mts';
+import type opentype from 'opentype.js';
 
 /** A 2D affine matrix [a, b, c, d, e, f]. */
 export type Matrix = readonly [number, number, number, number, number, number];
@@ -95,6 +99,15 @@ export interface BakedSvg extends VectorArtifact {
   gradients: PackedGradient[];
   /** SVG features the op-tape can't represent, sorted. */
   dropped: string[];
+  /** The fonts its text uses, for a raster fallback to draw the same ones. */
+  fonts: RasterFonts;
+}
+
+/** The font files a rasterized SVG draws its text with. */
+export interface RasterFonts {
+  files: string[];
+  /** The family the first one names itself, which stands in for every family the SVG asks for. */
+  family: string;
 }
 
 const HALF_TURN_DEGREES = 180;
@@ -619,6 +632,7 @@ export async function svgToVector(
     'conicGradient',
   ]);
   const dropped = new Set<string>();
+  const usedFonts = new Set<opentype.Font>();
 
   /** Appends one shape: its paint record and its ops, moved by @p matrix. */
   const emitShape = (
@@ -712,8 +726,6 @@ export async function svgToVector(
     const items: TextItem[] = [];
     const droppedBefore = dropped.size;
     textItems(node, paint, items);
-    // Text this baker cannot lay out leaves the whole file to the raster fallback.
-    if (dropped.size > droppedBefore) return;
 
     // XML whitespace collapses to single spaces, and none leads or trails the element.
     const preserve = (node.attributes || {})['xml:space'] === 'preserve';
@@ -729,6 +741,20 @@ export async function svgToVector(
       }
     }
     if (lastText && !preserve) lastText.text = lastText.text.replace(/ $/, '');
+
+    // Every run's font and glyphs are checked, whichever way the file ends up drawn.
+    for (const item of items) {
+      if (!('text' in item) || !item.text) continue;
+      const font = resolveFont(
+        parseFontFamilies(item.paint['font-family']),
+        parseFontWeight(item.paint['font-weight']),
+        fonts,
+      );
+      checkGlyphs(font, item.text);
+      usedFonts.add(font);
+    }
+    // Text this baker cannot lay out leaves the whole file to the raster fallback.
+    if (dropped.size > droppedBefore) return;
 
     const shapes: Array<{paint: Paint; ops: number[]}> = [];
     let penX = 0;
@@ -841,7 +867,18 @@ export async function svgToVector(
   };
 
   walk(root, rootMatrix, resolvePaint(attributes, DEFAULT_PAINT));
-  return {ops, paints, gradients, width, height, dropped: [...dropped].sort()};
+  return {
+    ops,
+    paints,
+    gradients,
+    width,
+    height,
+    dropped: [...dropped].sort(),
+    fonts: {
+      files: [...usedFonts].map(fontFile),
+      family: usedFonts.size ? fontFamilyName([...usedFonts][0]) : '',
+    },
+  };
 }
 
 /**
@@ -851,10 +888,13 @@ export async function svgToVector(
  * (bake-image → asset pack), and a <Svg source> whose artifact is {kind:'raster'} renders it as an image.
  *
  * @param svgString  The SVG document.
+ * @param fonts  The fonts svgToVector found for its text. Text is drawn with these and never with the build
+ *               machine's own fonts, so the image is the same wherever it is built.
  * @returns Rendered size and PNG bytes.
  */
 export async function svgToRaster(
   svgString: string,
+  fonts: RasterFonts = {files: [], family: ''},
 ): Promise<{width: number; height: number; png: Buffer}> {
   const {Resvg} = await import('@resvg/resvg-js');
   // resvg (usvg) requires the SVG namespace; svgson (the vector baker) is lenient and many hand-authored
@@ -862,7 +902,14 @@ export async function svgToRaster(
   let svg = String(svgString);
   if (!/<svg\b[^>]*\sxmlns\s*=/i.test(svg))
     svg = svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
-  const resvg = new Resvg(svg, {background: 'rgba(0,0,0,0)'}); // transparent so it composites
+  const resvg = new Resvg(svg, {
+    background: 'rgba(0,0,0,0)', // transparent so it composites
+    font: {
+      loadSystemFonts: false,
+      fontFiles: fonts.files,
+      defaultFontFamily: fonts.family,
+    },
+  });
   const rendered = resvg.render();
   const png = rendered.asPng();
   const {width, height} = rendered;

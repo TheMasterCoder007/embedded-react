@@ -1545,17 +1545,17 @@ export async function bakeSvgArtifacts(
 
     // Rasterize an SVG the vector baker cannot fully draw to a PNG, so it renders as an Image instead of dropping.
     const svgText = readFileSync(svgPath, 'utf8');
-    const artifact = (await svgToVector(
+    const {fonts: rasterFonts, ...artifact} = await svgToVector(
       svgText,
       svgFontSearch(svgPath, importedFonts(source, baseDirectory)),
-    )) as VectorArtifact;
+    );
     if (artifact.dropped && artifact.dropped.length) {
       console.warn(
         `embedded-react: ${svgImport.name}.svg uses unsupported SVG feature(s) [${artifact.dropped.join(', ')}] — ` +
           `rasterising it as a fallback image (Flow B bakes the PNG into the package). Simplify the SVG ` +
           `to keep it a live vector.`,
       );
-      const {width, height, png} = await svgToRaster(svgText);
+      const {width, height, png} = await svgToRaster(svgText, rasterFonts);
       artifacts[svgImport.name] = {
         kind: 'raster',
         name: svgImport.name,

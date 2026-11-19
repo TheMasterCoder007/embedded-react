@@ -525,7 +525,7 @@ In an `.svg` file, `<text>` and `<tspan>` bake the same way and honour `x`, `y`,
 beside the `.svg`, in a `fonts` folder next to it, or imported by the file that imports the `.svg`.
 The build fails, naming the family, when it finds no file or the font lacks a character. Kerning
 is applied; ligatures are not. A file with `<textPath>`, per-glyph positions, `rotate` or
-`textLength` falls back to a raster.
+`textLength` falls back to a raster. The raster is drawn with the same font files, never the build machine's fonts.
 
 Outlines are large: a glyph takes roughly 40 to 250 of the 1024 tape values an `<Svg>` holds by default
 (`ERUI_VECTOR_TAPE_MAX`), so a dial's cardinal letters fit and a sentence does not. In Flow B a drawing over the

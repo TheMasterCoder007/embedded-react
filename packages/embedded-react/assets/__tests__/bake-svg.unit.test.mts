@@ -17,7 +17,8 @@
 import {describe, it, expect} from 'vitest';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {svgToVector} from '../bake-svg.mts';
+import {PNG} from 'pngjs';
+import {svgToRaster, svgToVector} from '../bake-svg.mts';
 
 // Inter-Regular.ttf and Inter-Bold.ttf.
 const FONTS = {
@@ -527,5 +528,40 @@ describe('svgToVector — text', () => {
     expect(
       (await text('', '<textPath href="#p">N</textPath>')).dropped,
     ).toEqual(['textPath']);
+  });
+
+  it('checks the font and glyphs of text it leaves to the raster fallback', async () => {
+    await expect(
+      svgToVector(
+        '<svg><text font-family="Nope" rotate="20">N</text></svg>',
+        FONTS,
+      ),
+    ).rejects.toThrow(/no font for font-family "Nope"/);
+    await expect(text('x="0" y="50" rotate="20"', '日')).rejects.toThrow(
+      /has no glyph for "日"/,
+    );
+  });
+
+  it("draws the raster fallback with the text's own font files, not the machine's", async () => {
+    const svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">' +
+      '<text x="4" y="30" font-family="Inter" font-size="30" rotate="20">N</text></svg>';
+    const artifact = await svgToVector(svg, FONTS);
+    expect(artifact.dropped).toEqual(['text rotate']);
+    expect(artifact.fonts.files).toEqual([
+      resolve(FONTS.directories[0], 'Inter-Regular.ttf'),
+    ]);
+
+    // How many pixels a render inked.
+    const inked = async fonts => {
+      const {data} = PNG.sync.read((await svgToRaster(svg, fonts)).png);
+      let count = 0;
+      for (let index = 3; index < data.length; index += 4) {
+        if (data[index] > 0) count++;
+      }
+      return count;
+    };
+    expect(await inked(artifact.fonts)).toBeGreaterThan(50);
+    expect(await inked(undefined)).toBe(0);
   });
 });

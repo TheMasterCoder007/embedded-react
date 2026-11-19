@@ -90,7 +90,7 @@ function loadFont(path: string): opentype.Font {
       bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
     );
     fontCache.set(path, font);
-    fontFiles.set(font, basename(path));
+    fontFiles.set(font, path);
   }
   return font;
 }
@@ -196,12 +196,42 @@ export function resolveFont(
   );
 }
 
-function checkGlyphs(run: TextRun): void {
-  for (const character of run.text) {
-    if (character !== ' ' && run.font.charToGlyphIndex(character) === 0) {
-      const file = fontFiles.get(run.font) ?? 'the font';
+/** The file a font was read from. */
+export function fontFile(font: opentype.Font): string {
+  return fontFiles.get(font) ?? '';
+}
+
+/** A font's name table: each name by language. */
+type NameTable = Record<string, Record<string, string> | undefined>;
+
+/** The family a font names itself, which is how a rasterizer finds it. */
+export function fontFamilyName(font: opentype.Font): string {
+  // The names sit on the table itself or under a platform, by the font and the parser's version.
+  const names = font.names as unknown as Record<string, NameTable | undefined>;
+  const tables = [
+    font.names as unknown as NameTable,
+    names.windows,
+    names.unicode,
+    names.macintosh,
+  ];
+  for (const table of tables) {
+    const family = table?.preferredFamily?.en ?? table?.fontFamily?.en;
+    if (family) return family;
+  }
+  return '';
+}
+
+/**
+ * Checks a font has every character of a text.
+ *
+ * @throws Naming the font's file and the character it lacks.
+ */
+export function checkGlyphs(font: opentype.Font, text: string): void {
+  for (const character of text) {
+    if (character !== ' ' && font.charToGlyphIndex(character) === 0) {
+      const file = basename(fontFile(font)) || 'the font';
       throw new Error(
-        `${file} has no glyph for ${JSON.stringify(character)} in SVG text ${JSON.stringify(run.text)}`,
+        `${file} has no glyph for ${JSON.stringify(character)} in SVG text ${JSON.stringify(text)}`,
       );
     }
   }
@@ -238,7 +268,7 @@ export function runAdvance(run: TextRun): number {
  * @throws When the font lacks one of the run's characters.
  */
 export function runOps(run: TextRun, x: number, y: number): number[] {
-  checkGlyphs(run);
+  checkGlyphs(run.font, run.text);
   const ops: number[] = [];
   layoutRun(run, (glyph, offset) => {
     for (const command of glyph.getPath(x + offset, y, run.fontSize).commands) {

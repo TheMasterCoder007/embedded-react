@@ -70,10 +70,11 @@ export function registerSvgVectorLoader(
           for (const [family, path] of imported) fonts.set(family, path);
         }
       }
-      const {dropped = [], ...vector} = await svgToVector(
-        svg,
-        svgFontSearch(args.path, fonts),
-      );
+      const {
+        dropped = [],
+        fonts: rasterFonts,
+        ...vector
+      } = await svgToVector(svg, svgFontSearch(args.path, fonts));
       if (dropped.length) {
         const features = dropped.join(', ');
         if (addRasterAsset) {
@@ -82,7 +83,7 @@ export function registerSvgVectorLoader(
               `it as a fallback image. (Raster loses scalability and costs RAM; simplify the SVG to keep it a ` +
               `live vector.)`,
           );
-          const {width, height, png} = await svgToRaster(svg);
+          const {width, height, png} = await svgToRaster(svg, rasterFonts);
           const name = assetName(args.path);
           addRasterAsset(name, writeRasterPng(name, png));
           return {
